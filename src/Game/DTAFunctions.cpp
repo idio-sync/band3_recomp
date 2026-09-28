@@ -5,6 +5,9 @@
 #include <cstring>
 
 #include "generated/band3_init.h"
+#include "src/Net/events.h"
+
+extern "C" void DataNode__Evaluate(PPCContext& ctx, uint8_t* base);
 
 // symbol --> func handler mapping for custom dta functions
 static std::unordered_map<uint32_t, PPCFunc*> g_custom_dta_funcs;
@@ -51,6 +54,48 @@ static void ExitHandler(PPCContext& ctx, uint8_t* base) {
     rex::system::kernel_state()->TerminateTitle();
 }
 
+// evaluates argument `index` of a DTA call and returns it as a string if it is a
+// symbol or string, otherwise nullptr
+static const char* ArgString(PPCContext& ctx, uint8_t* base, uint32_t args_addr, int index) {
+    auto* args = reinterpret_cast<const band3::DataArray*>(REX_RAW_ADDR(args_addr));
+    if (index >= static_cast<short>(args->mSize)) return nullptr;
+
+    PPCContext eval = ctx;
+    eval.r3.u64 = args->mNodes + index * sizeof(band3::DataNode);
+    DataNode__Evaluate(eval, base);
+    auto* n = reinterpret_cast<const band3::DataNode*>(REX_RAW_ADDR(eval.r3.u32));
+
+    uint32_t str = 0;
+    if (n->type == band3::kDataSymbol) str = n->value;
+    else if (n->type == band3::kDataString) str = REX_LOAD_U32(n->value);
+    return str ? reinterpret_cast<const char*>(REX_RAW_ADDR(str)) : nullptr;
+}
+
+// {rb3e_send_event_string id data}: sends mod data (used by RB3 Deluxe) as an
+// RB3E network event, like RB3E's own command; returns 1 if sent, 0 if rejected
+static void SendEventStringHandler(PPCContext& ctx, uint8_t* base) {
+    uint32_t ret = ctx.r3.u32;
+    uint32_t args = ctx.r4.u32;
+    band3::events::ModData mod{};
+    int32_t result = 0;
+
+    const char* id = ArgString(ctx, base, args, 1);
+    const char* data = ArgString(ctx, base, args, 2);
+    if (!id || strlen(id) > sizeof(mod.identify_value) ||
+        !data || strlen(data) > sizeof(mod.string)) {
+        REXLOG_WARN("rb3e_send_event_string: expects an id of up to 10 chars and data of up to 240");
+    } else {
+        memcpy(mod.identify_value, id, strlen(id));
+        memcpy(mod.string, data, strlen(data));
+        band3::events::Send(band3::events::kDxData, &mod, sizeof(mod));
+        result = 1;
+    }
+
+    REX_STORE_U32(ret, result);
+    REX_STORE_U32(ret + 4, band3::kDataInt);
+    ctx.r3.u64 = ret;
+}
+
 // register our custom DTA funcs after the game itself inits most of the DTA functions
 extern "C" void __imp__DataInitFuncs(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(DataInitFuncs) {
@@ -60,5 +105,8 @@ extern "C" REX_FUNC(DataInitFuncs) {
 	// this will usually just crash things but this way we can properly handle this so in the future we can add a proper "Exit Game" button to main menu
 	RegisterDTAFunc(ctx, base, "exit", ExitHandler);
 	
+	// RB3Enhanced's command for mods to send their own network events
+	RegisterDTAFunc(ctx, base, "rb3e_send_event_string", SendEventStringHandler);
+
 	// custom functions should go here
 }

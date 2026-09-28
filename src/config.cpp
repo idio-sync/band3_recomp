@@ -61,6 +61,12 @@ void LoadConfig(const char* path) {
         reader.GetBoolean("graphics", "disable_even_odd_rendering", g_config.disable_even_odd_rendering);
     g_config.username =
         reader.Get("profile", "username", g_config.username);
+    g_config.events_enabled =
+        reader.GetBoolean("events", "enabled", g_config.events_enabled);
+    g_config.events_target =
+        reader.Get("events", "target", g_config.events_target);
+    g_config.events_port =
+        reader.GetInteger("events", "port", g_config.events_port);
     g_config.main_heap_size =
         reader.GetInteger("memory", "main_heap_size", g_config.main_heap_size);
     g_config.char_heap_size =

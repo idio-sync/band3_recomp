@@ -21,3 +21,8 @@ else()
 endif()
 
 rexglue_setup_target(band3 GPU_PLUGINS xenos)
+
+# UDP sockets for the RB3E network events (src/Net/events.cpp)
+if(WIN32)
+    target_link_libraries(band3 PRIVATE ws2_32)
+endif()

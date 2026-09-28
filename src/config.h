@@ -24,6 +24,9 @@ struct Config {
     long main_heap_size = 0;
     long char_heap_size = 0;
     std::string username;
+    bool events_enabled = false;
+    std::string events_target = "255.255.255.255";
+    long events_port = 21070;
     long max_queued_frames = 3;
     bool debug_overlay = true;
     bool native_math = true;

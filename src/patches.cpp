@@ -6,6 +6,7 @@
 #include <set>
 #include "generated/band3_init.h"
 #include "config.h"
+#include "src/Net/events.h"
 #include <random>
 #include <cstdio>
 
@@ -152,13 +153,20 @@ extern "C" REX_FUNC(SongMgr__IsDemo)
 //Set venue from ini hook, reloads the entire config when setvenue is called, sure
 //also doesnt clear allocations for previous strings. Bad? Maybe!
 extern "C" void __imp__MetaPerformer__SetVenue(PPCContext& ctx, uint8_t* base);
+// reports the venue actually being set (r4 = venue Symbol) as an RB3E event
+static void SetVenueAndReport(PPCContext& ctx, uint8_t* base) {
+    if (band3::events::Enabled() && ctx.r4.u32)
+        band3::events::SendString(band3::events::kVenueName,
+                                  reinterpret_cast<const char*>(base + ctx.r4.u32));
+    __imp__MetaPerformer__SetVenue(ctx, base);
+}
 extern "C" REX_FUNC(MetaPerformer__SetVenue)
 {
     band3::LoadConfig();
     const std::string& forced = band3::GetConfig().forced_venue;
 
     if (forced.empty() || forced == "false") {
-        __imp__MetaPerformer__SetVenue(ctx, base);
+        SetVenueAndReport(ctx, base);
         return;
     }
 
@@ -197,7 +205,7 @@ extern "C" REX_FUNC(MetaPerformer__SetVenue)
         }
 
         if (items.empty()) {
-            __imp__MetaPerformer__SetVenue(ctx, base);
+            SetVenueAndReport(ctx, base);
             return;
         }
 
@@ -237,7 +245,7 @@ extern "C" REX_FUNC(MetaPerformer__SetVenue)
     }
 
     ctx.r4.u64 = str_guest;
-    __imp__MetaPerformer__SetVenue(ctx, base);
+    SetVenueAndReport(ctx, base);
 }
 
 //force this import so dlc can load through its roundabout way
