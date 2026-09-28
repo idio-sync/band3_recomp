@@ -1,11 +1,15 @@
 #include <rex/hook.h>
 #include <rex/system/xmemory.h>
 #include <rex/types.h>
+#include <algorithm>
 #include <cstdint>
+#include <string>
+#include "src/Net/discord.h"
 #include "src/Net/events.h"
 
-// Sends game state as RB3Enhanced network events, from the same hook points
-// and with the same data as RB3E (source/rb3enhanced.c, source/GameHooks.c).
+// Reports game state to the RB3Enhanced network events and Discord presence,
+// from the same hook points and with the same data as RB3E (source/rb3enhanced.c,
+// source/GameHooks.c).
 // Addresses and struct offsets are RB3E's Xbox 360 TU5 ones (include/ports_xbox360.h,
 // include/rb3/*.h), which match this project's function map.
 
@@ -63,16 +67,24 @@ void SendState(uint8_t in_game) {
     band3::events::Send(band3::events::kState, &in_game, sizeof(in_game));
 }
 
-// sends a game String's contents; String::length excludes the terminator
-void SendGameString(uint8_t* base, band3::events::EventType type, uint32_t string_addr) {
+// copies a game String; String::length excludes the terminator
+std::string ReadGameString(uint8_t* base, uint32_t string_addr) {
     uint32_t length = Load32(base, string_addr + kString_Length);
     uint32_t buf = Load32(base, string_addr + kString_Buf);
-    if (buf) band3::events::Send(type, GuestStr(base, buf), length);
+    if (!buf) return {};
+    return std::string(GuestStr(base, buf), std::min<uint32_t>(length, 1024));
 }
 
-void SendSongInfo(const PPCContext& ctx, uint8_t* base) {
+struct SongInfo {
+    std::string shortname;
+    std::string title;
+    std::string artist;
+};
+
+SongInfo ReadSongInfo(const PPCContext& ctx, uint8_t* base) {
+    SongInfo song;
     uint32_t meta_performer = Load32(base, kTheMetaPerformerPtr);
-    if (!meta_performer) return;
+    if (!meta_performer) return song;
 
     // MetaPerformer::GetSongShortname(Symbol* out, MetaPerformer*)
     PPCContext call = CallContext(ctx, 0x100);
@@ -81,9 +93,8 @@ void SendSongInfo(const PPCContext& ctx, uint8_t* base) {
     call.r4.u64 = meta_performer;
     MetaPerformer__GetSongShortname(call, base);
     uint32_t shortname = Load32(base, out);
-    if (!shortname) return;
-
-    band3::events::SendString(band3::events::kSongShortname, GuestStr(base, shortname));
+    if (!shortname) return song;
+    song.shortname = GuestStr(base, shortname);
 
     // BandSongMgr::GetSongIDFromShortname(BandSongMgr*, Symbol, int fail)
     call = CallContext(ctx, 0x100);
@@ -99,30 +110,30 @@ void SendSongInfo(const PPCContext& ctx, uint8_t* base) {
     call.r4.u64 = song_id;
     BandSongMgr__Data(call, base);
     uint32_t metadata = call.r3.u32;
-    if (!metadata) return;
+    if (!metadata) return song;
 
-    SendGameString(base, band3::events::kSongName, metadata + kSongMetadata_Title);
-    SendGameString(base, band3::events::kSongArtist, metadata + kSongMetadata_Artist);
+    song.title = ReadGameString(base, metadata + kSongMetadata_Title);
+    song.artist = ReadGameString(base, metadata + kSongMetadata_Artist);
+    return song;
 }
 
-void SendBandInfo(const PPCContext& ctx, uint8_t* base) {
+band3::events::BandInfo ReadBandInfo(const PPCContext& ctx, uint8_t* base) {
     band3::events::BandInfo info{};
     uint32_t user_mgr = Load32(base, kTheBandUserMgrPtr);
-    if (user_mgr) {
-        for (uint32_t slot = 0; slot < 4; slot++) {
-            // BandUserMgr::GetBandUserFromSlot(BandUserMgr*, int slot) -> BandUser*
-            PPCContext call = CallContext(ctx, 0x100);
-            call.r3.u64 = user_mgr;
-            call.r4.u64 = slot;
-            BandUserMgr__GetBandUserFromSlot(call, base);
-            uint32_t user = call.r3.u32;
-            if (!user) continue;
-            info.member_exists[slot] = 1;
-            info.difficulty[slot] = static_cast<uint8_t>(Load32(base, user + kBandUser_Difficulty));
-            info.track_type[slot] = static_cast<uint8_t>(Load32(base, user + kBandUser_TrackType));
-        }
+    if (!user_mgr) return info;
+    for (uint32_t slot = 0; slot < 4; slot++) {
+        // BandUserMgr::GetBandUserFromSlot(BandUserMgr*, int slot) -> BandUser*
+        PPCContext call = CallContext(ctx, 0x100);
+        call.r3.u64 = user_mgr;
+        call.r4.u64 = slot;
+        BandUserMgr__GetBandUserFromSlot(call, base);
+        uint32_t user = call.r3.u32;
+        if (!user) continue;
+        info.member_exists[slot] = 1;
+        info.difficulty[slot] = static_cast<uint8_t>(Load32(base, user + kBandUser_Difficulty));
+        info.track_type[slot] = static_cast<uint8_t>(Load32(base, user + kBandUser_TrackType));
     }
-    band3::events::Send(band3::events::kBandInfo, &info, sizeof(info));
+    return info;
 }
 
 }
@@ -136,10 +147,21 @@ extern "C" REX_FUNC(StageKit__SetState)
 
 extern "C" REX_FUNC(Game____ct)
 {
-    if (band3::events::Enabled()) {
-        SendSongInfo(ctx, base);
-        SendBandInfo(ctx, base);
-        SendState(1);
+    bool events = band3::events::Enabled();
+    bool discord = band3::discord::Enabled();
+    if (events || discord) {
+        SongInfo song = ReadSongInfo(ctx, base);
+        band3::events::BandInfo band = ReadBandInfo(ctx, base);
+
+        if (events) {
+            using namespace band3::events;
+            if (!song.shortname.empty()) SendString(kSongShortname, song.shortname.c_str());
+            if (!song.title.empty()) Send(kSongName, song.title.data(), song.title.size());
+            if (!song.artist.empty()) Send(kSongArtist, song.artist.data(), song.artist.size());
+            Send(kBandInfo, &band, sizeof(band));
+            SendState(1);
+        }
+        band3::discord::SetPlaying(song.title, song.artist, band);
     }
     __imp__Game____ct(ctx, base);
 }
@@ -149,6 +171,7 @@ extern "C" REX_FUNC(Game____dt)
     SendState(0);
     // the game can leave LEDs on after the score screen; turn everything off
     SendStagekit(0x00, 0xFF);
+    band3::discord::SetMenus();
     __imp__Game____dt(ctx, base);
 }
 

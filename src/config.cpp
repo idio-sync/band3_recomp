@@ -67,6 +67,8 @@ void LoadConfig(const char* path) {
         reader.Get("events", "target", g_config.events_target);
     g_config.events_port =
         reader.GetInteger("events", "port", g_config.events_port);
+    g_config.discord_enabled =
+        reader.GetBoolean("discord", "enabled", g_config.discord_enabled);
     g_config.main_heap_size =
         reader.GetInteger("memory", "main_heap_size", g_config.main_heap_size);
     g_config.char_heap_size =

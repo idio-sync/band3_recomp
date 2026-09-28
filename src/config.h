@@ -27,6 +27,7 @@ struct Config {
     bool events_enabled = false;
     std::string events_target = "255.255.255.255";
     long events_port = 21070;
+    bool discord_enabled = false;
     long max_queued_frames = 3;
     bool debug_overlay = true;
     bool native_math = true;

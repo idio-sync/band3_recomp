@@ -12,6 +12,7 @@
 #include <imgui.h>
 
 #include "config.h"
+#include "Net/discord.h"
 
 class DebugOverlayDialog : public rex::ui::ImGuiDialog {
  public:
@@ -69,6 +70,11 @@ class Band3App : public rex::ReXApp {
   void OnPostSetup() override {
     rex::cvar::SetFlagByName("log_level", band3::GetConfig().log_level);
     rex::cvar::SetFlagByName("audio_maxqframes", std::to_string(band3::GetConfig().max_queued_frames));
+    band3::discord::Start();
+  }
+
+  void OnShutdown() override {
+    band3::discord::Stop();
   }
 
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
@@ -87,5 +93,4 @@ class Band3App : public rex::ReXApp {
   // Override virtual hooks for customization:
   // void OnPostInitLogging() override {}
   // void OnLoadXexImage(std::string& xex_image) override {}
-  // void OnShutdown() override {}
 };
