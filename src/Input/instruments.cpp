@@ -248,18 +248,19 @@ Gamepad360 EncodeProGuitar(const ProGuitarInputs& in) {
     auto color = [&](Fret f) -> uint16_t { return in.colors[f] ? 1 : 0; };
 
     // low E, A and D frets across both triggers, left trigger as the low byte
-    uint16_t triggers = static_cast<uint16_t>(fret(kLowE) | fret(kA) << 5 | fret(kD) << 10);
+    uint16_t triggers = static_cast<uint16_t>(fret(kStringLowE) | fret(kStringA) << 5 |
+                                              fret(kStringD) << 10);
     g.left_trigger = static_cast<uint8_t>(triggers & 0xFF);
     g.right_trigger = static_cast<uint8_t>(triggers >> 8);
 
-    uint16_t lx = static_cast<uint16_t>(fret(kG) | fret(kB) << 5 | fret(kHighE) << 10 |
-                                        (in.solo ? 0x8000 : 0));
-    uint16_t ly = static_cast<uint16_t>(velocity(kLowE) | color(kGreen) << 7 |
-                                        velocity(kA) << 8 | color(kRed) << 15);
-    uint16_t rx = static_cast<uint16_t>(velocity(kD) | color(kYellow) << 7 |
-                                        velocity(kG) << 8 | color(kBlue) << 15);
-    uint16_t ry = static_cast<uint16_t>(velocity(kB) | color(kOrange) << 7 |
-                                        velocity(kHighE) << 8);
+    uint16_t lx = static_cast<uint16_t>(fret(kStringG) | fret(kStringB) << 5 |
+                                        fret(kStringHighE) << 10 | (in.solo ? 0x8000 : 0));
+    uint16_t ly = static_cast<uint16_t>(velocity(kStringLowE) | color(kGreen) << 7 |
+                                        velocity(kStringA) << 8 | color(kRed) << 15);
+    uint16_t rx = static_cast<uint16_t>(velocity(kStringD) | color(kYellow) << 7 |
+                                        velocity(kStringG) << 8 | color(kBlue) << 15);
+    uint16_t ry = static_cast<uint16_t>(velocity(kStringB) | color(kOrange) << 7 |
+                                        velocity(kStringHighE) << 8);
 
     g.thumb_lx = static_cast<int16_t>(lx);
     g.thumb_ly = static_cast<int16_t>(ly);

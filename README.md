@@ -79,6 +79,27 @@ Prerequisites
    ninja -C out/build/linux-amd64-release
    ```
 
+## Checks
+
+These run on every push (`.github/workflows/ci.yml`) and don't need the game.
+
+Unit tests (no SDK needed):
+
+```
+cmake -S tests -B out/tests
+cmake --build out/tests
+ctest --test-dir out/tests --output-on-failure
+```
+
+Compile check: compiles everything in `src/` against the ReXGlue SDK without codegen,
+using a stand-in for `generated/band3_init.h`. On Windows, run it from a Visual Studio
+developer prompt:
+
+```
+cmake -S tools/compile_check -B out/compile_check -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_PREFIX_PATH=<path to the rexglue SDK>
+cmake --build out/compile_check
+```
+
 ## Settings
 
 Press **F4** in game to open the settings menu. band3's own options are under the

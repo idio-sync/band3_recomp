@@ -95,7 +95,9 @@ struct KeysInputs {
     bool overdrive = false;
 };
 
-enum GuitarString { kLowE, kA, kD, kG, kB, kHighE, kStringCount };
+enum GuitarString {
+    kStringLowE, kStringA, kStringD, kStringG, kStringB, kStringHighE, kStringCount
+};
 inline constexpr int kMaxProFret = 22;
 
 struct ProGuitarInputs {

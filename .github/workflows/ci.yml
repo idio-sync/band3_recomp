@@ -1,0 +1,100 @@
+# Checks that need neither the game nor codegen: the unit tests, and a compile
+# of everything in src/ against the ReXGlue SDK with a stand-in for the
+# generated header (tools/compile_check). Linking and running the game still
+# need a local build with the game's default.xex.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # match find_package(rexglue ...) in generated/rexglue.cmake
+  REXGLUE_SDK_VERSION: 0.10.0
+
+jobs:
+  unit-tests:
+    name: Unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S tests -B out/tests -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build out/tests --config Release
+      - name: Test
+        run: ctest --test-dir out/tests -C Release --output-on-failure
+
+  compile-check:
+    name: Compile check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            sdk: linux-amd64
+          - os: windows-latest
+            sdk: win-amd64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache ReXGlue SDK
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: .ci-sdk
+          key: rexglue-sdk-${{ env.REXGLUE_SDK_VERSION }}-${{ matrix.sdk }}
+
+      - name: Download ReXGlue SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o sdk.zip "https://github.com/rexglue/rexglue-sdk/releases/download/v${REXGLUE_SDK_VERSION}/rexglue-sdk-${REXGLUE_SDK_VERSION}-${{ matrix.sdk }}.zip"
+          mkdir -p .ci-sdk
+          unzip -q sdk.zip -d .ci-sdk
+          rm sdk.zip
+
+      - name: Locate SDK
+        run: |
+          config=$(find .ci-sdk -path '*/lib/cmake/rexglue/rexglueConfig.cmake' | head -n 1)
+          test -n "$config" || { echo "rexglueConfig.cmake not found in the SDK zip"; exit 1; }
+          root=$(cd "$(dirname "$config")/../../.." && (pwd -W 2>/dev/null || pwd))
+          echo "REXGLUE_SDK_ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        # xcb and wayland headers are included by the SDK's window headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang libstdc++-14-dev libxcb1-dev libx11-dev libwayland-dev
+
+      - name: Install Ninja
+        if: runner.os == 'Windows'
+        run: choco install ninja --no-progress -y
+
+      - name: Set up MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        run: >
+          cmake -S tools/compile_check -B out/compile_check -G Ninja
+          -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_PREFIX_PATH="$REXGLUE_SDK_ROOT"
+
+      - name: Build
+        run: cmake --build out/compile_check -- -k 0
