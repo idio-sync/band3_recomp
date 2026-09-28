@@ -24,8 +24,9 @@ static int64_t EffectiveHeap(int64_t size, int64_t default_size) {
 // Band3/Game
 
 REXCVAR_DEFINE_INT32(controller_type, 7, "Band3/Game",
-    "Controller type the game sees: -1 = don't override, 1 = vocals, 7 = guitar, 8 = drums. "
-    "Real Xbox 360 instruments: use -1 with input_backend = xinput")
+    "Instrument gamepads and the keyboard play as: -1 = don't override, 1 = vocals, "
+    "7 = guitar, 8 = drums. Instruments that report their own type (Xbox 360 instruments "
+    "with input_backend = xinput, the virtual instrument) keep it")
     .range(-1, 255)
     .lifecycle(Lifecycle::kRequiresRestart);
 
@@ -135,6 +136,19 @@ REXCVAR_DEFINE_BOOL(log_shake_timing, false, "Band3/Debug",
     "Log the game's frame time against the wall clock once a second while the camera "
     "shake runs")
     .debug_only();
+
+REXCVAR_DEFINE_BOOL(virtual_instrument, false, "Band3/Debug",
+    "Connect a virtual Xbox 360 instrument, played from the Instrument Lab (F6)");
+
+REXCVAR_DEFINE_STRING(virtual_instrument_type, "guitar", "Band3/Debug",
+    "Which instrument the virtual instrument is: guitar, drums, keys, pro_guitar_mustang "
+    "or pro_guitar_squier. Changing it unplugs the instrument for a moment")
+    .allowed({"guitar", "drums", "keys", "pro_guitar_mustang", "pro_guitar_squier"});
+
+REXCVAR_DEFINE_INT32(virtual_instrument_player, 2, "Band3/Debug",
+    "Player slot the virtual instrument connects as, 1-4. Other controllers keep their "
+    "order around it")
+    .range(1, 4);
 
 namespace band3::settings {
 

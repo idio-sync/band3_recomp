@@ -7,6 +7,7 @@
 #include "generated/band3_init.h"
 #include "config.h"
 #include "settings.h"
+#include "src/Input/instruments.h"
 #include "src/Net/events.h"
 #include "src/Game/Symbol.h"
 #include <random>
@@ -14,9 +15,14 @@
 
 static std::set<size_t> g_consumed_args;
 
+// r11 is the subtype ReadSingleXinputJoypad just read from the device's
+// capabilities. Only devices RB3 wouldn't take as an instrument (gamepads, the
+// keyboard) are overridden, so instruments that report their own type keep it.
 void ControllerHook(PPCRegister& r11) {
     long overrideType = band3::settings::Startup().controller_type;
-    if (overrideType != -1) r11.u64 = overrideType;
+    if (overrideType == -1) return;
+    if (band3::input::IsRb3InstrumentSubtype(static_cast<uint8_t>(r11.u64))) return;
+    r11.u64 = overrideType;
 }
 
 void UpdateArkHook(PPCRegister& r4) {

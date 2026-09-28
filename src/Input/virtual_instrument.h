@@ -1,0 +1,86 @@
+#pragma once
+#include <atomic>
+#include <chrono>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string_view>
+#include <utility>
+#include <vector>
+#include <rex/system/interfaces/input.h>
+#include "instruments.h"
+
+// A virtual Xbox 360 instrument that the Instrument Lab (F6) plays, for checking
+// how RB3 reads each instrument without the hardware. It shows up as its own
+// controller, on the player slot virtual_instrument_player, while the
+// virtual_instrument setting is on.
+
+namespace band3::input {
+
+enum class InstrumentKind { kGuitar, kDrums, kKeys, kProGuitarMustang, kProGuitarSquier };
+
+inline constexpr InstrumentKind kInstrumentKinds[] = {
+    InstrumentKind::kGuitar, InstrumentKind::kDrums, InstrumentKind::kKeys,
+    InstrumentKind::kProGuitarMustang, InstrumentKind::kProGuitarSquier,
+};
+
+// the virtual_instrument_type value for a kind, and back
+const char* InstrumentKindId(InstrumentKind kind);
+std::optional<InstrumentKind> ParseInstrumentKind(std::string_view id);
+const char* InstrumentKindLabel(InstrumentKind kind);
+
+Caps360 CapsFor(InstrumentKind kind);
+
+struct InstrumentInputs {
+    GuitarInputs guitar;
+    DrumInputs drums;
+    KeysInputs keys;
+    ProGuitarInputs pro_guitar;
+};
+
+Gamepad360 Encode(InstrumentKind kind, const InstrumentInputs& in);
+
+// What the virtual instrument is pressing. The Lab changes it on the UI thread
+// and the driver reads it on guest threads.
+class VirtualInstrument {
+public:
+    // long enough for RB3 to see a hit on at least a couple of polls
+    static constexpr std::chrono::milliseconds kPulseLength{60};
+
+    static VirtualInstrument& Get();
+
+    InstrumentKind kind() const { return kind_.load(); }
+    // sets virtual_instrument_type, which unplugs and replugs the instrument
+    void SetKind(InstrumentKind kind);
+
+    // what is held down, without pulses
+    InstrumentInputs Held();
+    void SetHeld(const InstrumentInputs& in);
+
+    // applies a change for a moment, like a drum hit or a plucked string
+    void Pulse(std::function<void(InstrumentInputs&)> change,
+               std::chrono::milliseconds length = kPulseLength);
+
+    // what is held plus the pulses still running
+    InstrumentInputs Current();
+
+private:
+    friend void InitVirtualInstrument();
+
+    using Clock = std::chrono::steady_clock;
+
+    std::mutex mutex_;
+    InstrumentInputs held_;
+    std::vector<std::pair<Clock::time_point, std::function<void(InstrumentInputs&)>>> pulses_;
+    std::atomic<InstrumentKind> kind_{InstrumentKind::kGuitar};
+};
+
+// Follows virtual_instrument_type from here on. Call once, after the settings load.
+void InitVirtualInstrument();
+
+// The SDK's input system plus the virtual instrument's driver, with player slots
+// that make room for it. For RuntimeConfig::input_factory.
+std::unique_ptr<rex::system::IInputSystem> CreateInputSystem(bool tool_mode);
+
+}

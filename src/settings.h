@@ -36,6 +36,9 @@ REXCVAR_DECLARE(bool, debug_overlay);
 REXCVAR_DECLARE(bool, native_math);
 REXCVAR_DECLARE(bool, native_camera_shake);
 REXCVAR_DECLARE(bool, log_shake_timing);
+REXCVAR_DECLARE(bool, virtual_instrument);
+REXCVAR_DECLARE(std::string, virtual_instrument_type);
+REXCVAR_DECLARE(int32_t, virtual_instrument_player);
 
 namespace band3::settings {
 

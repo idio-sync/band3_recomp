@@ -9,10 +9,13 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/ui/imgui_dialog.h>
+#include <rex/ui/keybinds.h>
 #include <imgui.h>
 
 #include "config.h"
 #include "settings.h"
+#include "Input/instrument_lab.h"
+#include "Input/virtual_instrument.h"
 #include "Net/discord.h"
 
 // always attached, and draws nothing while debug_overlay is off, so the
@@ -39,6 +42,7 @@ class Band3App : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
   std::unique_ptr<DebugOverlayDialog> debug_overlay_;
+  std::unique_ptr<band3::input::InstrumentLabDialog> instrument_lab_;
 
   static std::unique_ptr<rex::ui::WindowedApp> Create(
       rex::ui::WindowedAppContext& ctx) {
@@ -76,6 +80,7 @@ class Band3App : public rex::ReXApp {
 
     band3::AddSettingArgs();
     band3::settings::Init();
+    band3::input::InitVirtualInstrument();
   }
 
   // GPU emulation is a plugin (rexgpu-xenos) that the SDK leaves off unless
@@ -84,6 +89,8 @@ class Band3App : public rex::ReXApp {
     if (config.gpu_plugin.empty()) {
       config.gpu_plugin = "xenos";
     }
+    // the SDK's input drivers plus the Instrument Lab's virtual instrument
+    config.input_factory = band3::input::CreateInputSystem;
   }
 
   void OnPostSetup() override {
@@ -91,6 +98,7 @@ class Band3App : public rex::ReXApp {
   }
 
   void OnShutdown() override {
+    rex::ui::UnregisterBind("bind_instrument_lab");
     band3::discord::Stop();
   }
 
@@ -98,8 +106,13 @@ class Band3App : public rex::ReXApp {
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
     if (drawer) {
       debug_overlay_ = std::make_unique<DebugOverlayDialog>(drawer);
+      instrument_lab_ = std::make_unique<band3::input::InstrumentLabDialog>(drawer);
+      rex::ui::RegisterBind("bind_instrument_lab", "F6", "Toggle the Instrument Lab", [this] {
+        if (instrument_lab_) instrument_lab_->Toggle();
+      });
     } else {
       debug_overlay_.reset();
+      instrument_lab_.reset();
     }
   }
 

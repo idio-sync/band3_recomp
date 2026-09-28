@@ -94,6 +94,13 @@ Any setting can also be passed on the command line, e.g. `--forced_venue=arena_0
 set in more than one place, the command line wins over `band3.toml`, which wins over
 `band3_config.ini`.
 
+### Instrument Lab
+
+Press **F6** to open the Instrument Lab. It connects a virtual Xbox 360 instrument
+(guitar, drums, keys, or a Mustang or Squier pro guitar) as its own player (player 2
+by default) and plays it with the mouse, showing the exact data it sends. It is a tool
+for checking how the game reads each instrument without the hardware.
+
 ## Notes
 
 - This project is in an early state and may not build or run correctly in all applications.
