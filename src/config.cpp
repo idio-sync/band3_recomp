@@ -86,6 +86,8 @@ void LoadConfig(const char* path) {
         reader.GetBoolean("debug", "native_math", g_config.native_math);
     g_config.native_camera_shake =
         reader.GetBoolean("debug", "native_camera_shake", g_config.native_camera_shake);
+    g_config.log_shake_timing =
+        reader.GetBoolean("debug", "log_shake_timing", g_config.log_shake_timing);
     g_config.log_level =
         reader.Get("debug", "log_level", g_config.log_level);
 

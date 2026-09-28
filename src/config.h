@@ -33,6 +33,7 @@ struct Config {
     bool debug_overlay = true;
     bool native_math = true;
     bool native_camera_shake = true;
+    bool log_shake_timing = false;
     std::string log_level = "info";
     std::string game_data_root = "assets";
 };

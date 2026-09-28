@@ -2,23 +2,44 @@
 
 #include "generated/band3_init.h"
 #include "src/config.h"
+#include <rex/logging.h>
+#include <algorithm>
 #include <chrono>
 
-static float GetRealFpsScale() {
+// [debug] log_shake_timing: once a second, compares the game time the shake saw
+// with the wall clock. A ratio near 1 means TaskMgr::DeltaSeconds tracks real frame
+// time; near refresh_rate / 60 means it counts fixed 60 Hz steps per frame.
+static void LogShakeTiming(float dt) {
 	using clock = std::chrono::steady_clock;
-	static clock::time_point last_frame_time = clock::now();
-	static float cached_fps = 1.0f;
+	static clock::time_point window_start = clock::now();
+	static clock::time_point last_call = window_start;
+	static double game_time = 0.0;
+	static int frames = 0;
 
 	auto now = clock::now();
-	float elapsed = std::chrono::duration<float>(now - last_frame_time).count();
-
-	if (elapsed > 0.001f) {
-		if (elapsed > 0.1f) elapsed = 0.1f;
-		cached_fps = elapsed * 60.0f;
-		last_frame_time = now;
+	// several shots can shake in one frame; count each frame's delta once
+	if (std::chrono::duration<double>(now - last_call).count() > 0.001) {
+		game_time += dt;
+		frames++;
 	}
+	last_call = now;
 
-	return cached_fps;
+	double wall = std::chrono::duration<double>(now - window_start).count();
+	if (wall >= 1.0) {
+		REXLOG_INFO("Camera shake timing: {} frames, game {:.3f} s, wall {:.3f} s, ratio {:.2f}",
+			frames, game_time, wall, game_time / wall);
+		window_start = now;
+		game_time = 0.0;
+		frames = 0;
+	}
+}
+
+// how many 60 Hz frames this frame stands for; the original steps the shake once
+// per frame and assumes 60 of them a second. dt is the game's own frame delta, so
+// it is shared by every shot in a frame and 0 while paused (the shake then skips).
+static float FrameScale(float dt) {
+	if (band3::GetConfig().log_shake_timing) LogShakeTiming(dt);
+	return std::clamp(dt * 60.0f, 0.0f, 4.0f);
 }
 
 extern "C" void __imp__CamShot__Shake(PPCContext& ctx, uint8_t* base);
@@ -52,9 +73,6 @@ extern "C" REX_FUNC(CamShot__Shake) {
 	REX_FUNC_PROLOGUE();
 	PPCRegister temp{};
 	uint32_t ea{};
-
-	// get real clock delta
-	float fps_local = GetRealFpsScale();
 
 	// mflr r12
 	ctx.r12.u64 = ctx.lr;
@@ -90,6 +108,8 @@ extern "C" REX_FUNC(CamShot__Shake) {
 	// bl TaskMgr::DeltaSeconds
 	ctx.lr = 0x824BDBB8;
 	TaskMgr__DeltaSeconds(ctx, base);
+	// declared before the first goto so no jump skips its initialization
+	const float frame_scale = FrameScale(float(ctx.f1.f64));
 
 	// lis r11,-32256
 	ctx.r11.s64 = -2113929216;
@@ -135,7 +155,7 @@ extern "C" REX_FUNC(CamShot__Shake) {
 	// fcmpu cr6,f1,f29
 	ctx.fpscr.disableFlushMode();
 
-	ctx.cr6.compare(ctx.f1.f64, ctx.f29.f64 * double(fps_local));
+	ctx.cr6.compare(ctx.f1.f64, ctx.f29.f64 * double(frame_scale));
 
 	// bge cr6,0x824bdc9c
 	if (!ctx.cr6.lt) goto loc_824BDC9C;
@@ -435,8 +455,9 @@ loc_824BDDB0:
 	ctx.fpscr.disableFlushMode();
 	ctx.f30.f64 = double(float(ctx.f31.f64 / ctx.f0.f64));
 
-	// override fps with wall-clock-based value
-	ctx.f30.f64 = double(fps_local);
+	// scale the game's own step (which accounts for RndPostProc's emulated FPS)
+	// by the real frame time
+	ctx.f30.f64 = double(float(ctx.f30.f64 * frame_scale));
 
 	// lwz r8,368(r31)
 	ctx.r8.u64 = REX_LOAD_U32(ctx.r31.u32 + 368);
@@ -480,7 +501,7 @@ loc_824BDDB0:
 	temp.u32 = REX_LOAD_U32(ctx.r6.u32 + k[4]);
 	ctx.f31.f64 = double(temp.f32);
 
-	ctx.f31.f64 = double(float(ctx.f31.f64) * fps_local);
+	ctx.f31.f64 = double(float(ctx.f31.f64) * frame_scale);
 
 	// fmuls f9,f9,f30
 	ctx.f9.f64 = double(float(ctx.f9.f64 * ctx.f30.f64));
