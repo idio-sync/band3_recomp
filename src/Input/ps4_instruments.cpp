@@ -50,8 +50,9 @@ struct GuitarLayout {
 };
 
 constexpr GuitarLayout kPs4Guitar{5, 6, 43, 44, 45, 46, 47};
-// the PS5 report moves the buttons to the DualSense's place; its pickup offset
-// is assumed from the PS4 one, as PlasticBand-Unity does
+// the PS5 report moves the buttons to the DualSense's place. PlasticBand's doc
+// lists no pickup byte; 40 is where PlasticBand-Unity assumes it and where
+// Santroller's emulated PS5 guitars (which RB4 on a PS5 accepts) put it
 constexpr GuitarLayout kPs5Guitar{8, 9, 40, 41, 42, 43, 44};
 
 std::optional<Gamepad360> TranslateGuitar(std::span<const uint8_t> bytes,
@@ -87,7 +88,11 @@ std::optional<Gamepad360> TranslateGuitar(std::span<const uint8_t> bytes,
     return EncodeGuitar(in);
 }
 
-// 1-255, hardest at the top, to band3's 1-127; 0 is no hit
+// 1-255, harder hits higher, to band3's 1-127; 0 is no hit. The direction and
+// range agree across PlasticBand-Unity (passes these through, where it inverts
+// PS3 velocities), Santroller (its emulated PS4 kits send the sensor reading as
+// a full byte) and RB4InstrumentMapper (inverts the RB4 kits' velocity to make
+// the 360's).
 uint8_t Velocity(uint8_t raw) {
     if (raw == 0) return 0;
     return static_cast<uint8_t>(std::clamp((raw + 1) / 2, 1, 127));
