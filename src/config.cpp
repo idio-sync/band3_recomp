@@ -19,10 +19,13 @@ static bool g_args_initialized = false;
 const Config& GetConfig() { return g_config; }
 
 void LoadConfig(const char* path) {
+    // inih keeps parsing past a bad line, so only a missing file loses the settings;
+    // either way the defaults below still apply and the args are still injected
     INIReader reader(path);
-    if (reader.ParseError() != 0) {
-        REXLOG_WARN("Failed to load {}: {}", path, reader.ParseErrorMessage());
-        return;
+    if (reader.ParseError() == -1) {
+        REXLOG_WARN("Failed to open {}, using defaults", path);
+    } else if (reader.ParseError() != 0) {
+        REXLOG_WARN("{}: {}; the other settings still apply", path, reader.ParseErrorMessage());
     }
 
     g_config.controller_type =
@@ -100,6 +103,11 @@ void LoadConfig(const char* path) {
     // Rock Band 3 DX identifier
     g_args.push_back("-define");
     g_args.push_back("MHX_PC");
+}
+
+std::string ReadForcedVenue(const char* path) {
+    INIReader reader(path);
+    return reader.Get("venue", "forced_venue", g_config.forced_venue);
 }
 
 const std::vector<std::string>& GetArgs() {

@@ -48,6 +48,8 @@ Symbol::Symbol(PPCContext& ctx, uint8_t* base, const char* name) {
 }
 
 uint32_t Symbol::value(uint8_t* base) const {
+    // construction failed; don't read guest address 0
+    if (!guest_addr_) return 0;
     return __builtin_bswap32(
         *reinterpret_cast<uint32_t*>(base + guest_addr_));
 }

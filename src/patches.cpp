@@ -7,6 +7,7 @@
 #include "generated/band3_init.h"
 #include "config.h"
 #include "src/Net/events.h"
+#include "src/Game/Symbol.h"
 #include <random>
 #include <cstdio>
 
@@ -150,8 +151,7 @@ extern "C" REX_FUNC(SongMgr__IsDemo)
     return;
 }
 
-//Set venue from ini hook, reloads the entire config when setvenue is called, sure
-//also doesnt clear allocations for previous strings. Bad? Maybe!
+//Set venue from ini hook, re-reads forced_venue from the ini each time so it can be changed mid-game
 extern "C" void __imp__MetaPerformer__SetVenue(PPCContext& ctx, uint8_t* base);
 // reports the venue actually being set (r4 = venue Symbol) as an RB3E event
 static void SetVenueAndReport(PPCContext& ctx, uint8_t* base) {
@@ -162,8 +162,7 @@ static void SetVenueAndReport(PPCContext& ctx, uint8_t* base) {
 }
 extern "C" REX_FUNC(MetaPerformer__SetVenue)
 {
-    band3::LoadConfig();
-    const std::string& forced = band3::GetConfig().forced_venue;
+    const std::string forced = band3::ReadForcedVenue();
 
     if (forced.empty() || forced == "false") {
         SetVenueAndReport(ctx, base);
@@ -233,18 +232,15 @@ extern "C" REX_FUNC(MetaPerformer__SetVenue)
         }
     }
 
-    static std::string cached;
-    static uint32_t str_guest = 0;
-
-    if (cached != resolved) {
-        cached = resolved;
-        auto* mem = rex::system::kernel_memory();
-        str_guest = mem->SystemHeapAlloc(static_cast<uint32_t>(cached.size() + 1), 1);
-        std::memcpy(base + str_guest, cached.c_str(), cached.size() + 1);
-        REXLOG_INFO("Forcing venue to \"{}\"", cached);
+    // Symbols compare by pointer, so the venue has to be interned in the game's table
+    uint32_t venue_sym = band3::Symbol(ctx, base, resolved.c_str()).value(base);
+    if (!venue_sym) {
+        SetVenueAndReport(ctx, base);
+        return;
     }
 
-    ctx.r4.u64 = str_guest;
+    REXLOG_INFO("Forcing venue to \"{}\"", resolved);
+    ctx.r4.u64 = venue_sym;
     SetVenueAndReport(ctx, base);
 }
 

@@ -40,6 +40,10 @@ struct Config {
 const Config& GetConfig();
 void LoadConfig(const char* path = "band3_config.ini");
 
+// re-reads only [venue] forced_venue, so it can be changed while the game runs;
+// falls back to the value loaded at startup
+std::string ReadForcedVenue(const char* path = "band3_config.ini");
+
 const std::vector<std::string>& GetArgs();
 
 }

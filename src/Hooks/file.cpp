@@ -3,6 +3,7 @@
 #include <rex/logging.h>
 #include <filesystem>
 #include <system_error>
+#include "src/config.h"
 
 using namespace rex::ppc;
 
@@ -40,16 +41,18 @@ extern "C" REX_FUNC(NewFile) {
 
                 bool exists = std::filesystem::exists(sanitized, ec);
 
-                if (!exists && sanitized.begin() != sanitized.end() && *sanitized.begin() != "assets") {
-                    exists = std::filesystem::exists(std::filesystem::path("assets") / sanitized, ec);
+                const std::filesystem::path root(band3::GetConfig().game_data_root);
+                if (!exists && !root.empty() && sanitized.begin() != sanitized.end() &&
+                    *sanitized.begin() != *root.begin()) {
+                    exists = std::filesystem::exists(root / sanitized, ec);
                 }
 
-
+                // ARK opens are nearly every file, so only loose-file overrides log at info
                 if (exists) {
                     REXLOG_INFO("NewFile: {} [flags={:#x}]", cc, flags);
                     ctx.r4.u64 = flags | 0x10000;
                 } else {
-                    REXLOG_INFO("NewFile: {} (ARK) [flags={:#x}]", cc, flags);
+                    REXLOG_DEBUG("NewFile: {} (ARK) [flags={:#x}]", cc, flags);
                 }
             } catch (...) {
                 REXLOG_WARN("NewFile: exception processing path at {:08X}", cc_addr);
