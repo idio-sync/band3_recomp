@@ -1,6 +1,7 @@
 /generated/
 /assets/
 /out/
+/.rexglue-sdk/
 *.bat
 
 # Prerequisites
