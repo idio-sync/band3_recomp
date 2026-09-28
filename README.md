@@ -37,7 +37,7 @@ Prerequisites
    From the root of the repository in Command Prompt, run:
 
    ```
-   rexglue codegen band3_config.toml
+   rexglue codegen band3_manifest.toml
    cmake --preset win-amd64-release
    cmake --build --preset win-amd64-release
    ```
@@ -74,7 +74,7 @@ Prerequisites
    From the root of the repository, run:
 
    ```
-   rexglue codegen band3_config.toml
+   rexglue codegen band3_manifest.toml
    cmake --preset=linux-amd64-release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
    ninja -C out/build/linux-amd64-release
    ```
