@@ -43,7 +43,14 @@ class Band3App : public rex::ReXApp {
 
   void OnConfigurePaths(rex::PathConfig& paths) override {
     band3::LoadConfig();
-    paths.game_data_root = band3::GetConfig().game_data_root;
+    auto& cfg = band3::GetConfig();
+    paths.game_data_root = cfg.game_data_root;
+
+    // runs before the window is created, so the size applies at startup
+    if (cfg.width > 0 && cfg.height > 0) {
+      rex::cvar::SetFlagByName("window_width", std::to_string(cfg.width));
+      rex::cvar::SetFlagByName("window_height", std::to_string(cfg.height));
+    }
   }
 
   void OnPostSetup() override {
