@@ -2,11 +2,21 @@
 
 Early recompilation of Rock Band 3 (title update 5). Playable, but just barely.
 
+This is a fork of [ihatecompvir/band3_recomp](https://github.com/ihatecompvir/band3_recomp).
+It targets ReXGlue SDK 0.10 and adds:
+
+- An in-game settings menu (F4) backed by cvars, saved to `band3.toml`
+- Per-device controller types, an SDL/XInput `input_backend` option, and an Instrument Lab (F6)
+- RB3Enhanced-compatible network events (Stage Kit lighting, song/venue info) over UDP
+- Native Discord Rich Presence
+- A `refresh_rate` option for high-refresh monitors
+- Unit tests, a compile check, and CI
+
 ## Prerequisites
 
 Before building, ensure you have the following:
 
-- [rexglue-sdk](https://github.com/rexglue/rexglue-sdk/releases)
+- [rexglue-sdk](https://github.com/rexglue/rexglue-sdk/releases) v0.10.0
 - A copy of Rock Band 3 (Xbox 360) with Title Update 5 (TU5) XEX
 
 ## Building
@@ -22,7 +32,7 @@ Prerequisites
 
 1. Clone the repository:
    ```
-   git clone https://github.com/ihatecompvir/band3_recomp
+   git clone https://github.com/idio-sync/band3_recomp
    cd band3_recomp
    ```
 
@@ -59,7 +69,7 @@ Prerequisites
 
 2. Clone the repository:
    ```
-   git clone https://github.com/ihatecompvir/band3_recomp
+   git clone https://github.com/idio-sync/band3_recomp
    cd band3_recomp
    ```
 
