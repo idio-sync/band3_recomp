@@ -97,7 +97,8 @@ void ApplyLegacyIni(const char* path) {
         // an empty value is how the ini leaves a setting at its default
         if (value.empty() || (s.zero_is_unset && value == "0")) continue;
 
-        // band3.toml, the environment and the command line all win over the ini
+        // band3.toml, the environment, the command line and the Steam Deck
+        // defaults all win over the ini
         if (rex::cvar::GetFlagSource(s.cvar) != rex::cvar::Source::kDefault) {
             overridden++;
             continue;
@@ -126,7 +127,8 @@ void ApplyLegacyIni(const char* path) {
 
     REXLOG_INFO("{}: applied {} settings", path, applied);
     if (overridden > 0) {
-        REXLOG_INFO("{}: {} settings are set elsewhere (band3.toml or the command line) "
+        REXLOG_INFO("{}: {} settings are set elsewhere (band3.toml, the command line or the "
+                    "Steam Deck defaults) "
                     "and override it", path, overridden);
     }
 }

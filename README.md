@@ -118,6 +118,11 @@ graphics, audio and input settings. Settings marked as needing a restart take ef
 the next time the game starts; the others apply immediately, or from the next time the
 game loads what they affect (for example, a forced venue applies from the next venue load).
 
+Without a keyboard, hold both stick clicks on a controller for a second to open the
+settings menu, or both stick clicks and the left bumper for the Instrument Lab. The same
+chord closes them. `menu_shortcut` (Band3 → Game) turns this off. It reads controllers
+through SDL, so it doesn't work with `input_backend = xinput`.
+
 **Save to config** writes the changed settings to `band3.toml` next to the executable.
 Any setting can also be passed on the command line, e.g. `--forced_venue=arena_04`.
 
@@ -165,6 +170,18 @@ The Instrument Lab's **MIDI drums** tab (F6) shows what each note you hit played
 The kit has no menu buttons, so as in RPCS3: hi-hat pedal three times then snare is Start,
 then the rim is Select, and then kick holds the kick for the song category menu (snare or
 floor tom lets go). Turn these off with `midi_drums_combos`.
+
+### Steam Deck
+
+On a Steam Deck, band3 starts fullscreen and letterboxed (the game is 16:9, the screen
+16:10), with vsync on and the FPS counter off, since Steam's performance overlay does
+that job. These only fill in settings that `band3.toml` and the command line leave unset,
+but they win over `band3_config.ini`, whose window settings are for a desktop. Turn
+`steam_deck_defaults` off (Band3 → Game, then restart) to go back to the ini's.
+
+band3 recognises a Deck from the `SteamDeck=1` Steam sets, or on Linux from the Deck's
+hardware ids. Keep `resolution_scale` at 1: the Deck's screen can't show more than the
+console's 720p, and scaling costs a lot of GPU time. The log warns when it's higher.
 
 ## Notes
 

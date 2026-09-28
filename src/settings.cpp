@@ -85,6 +85,15 @@ REXCVAR_DEFINE_BOOL(hid_instruments, false, "Band3/Game",
     "MIDI Pro Adapter in drum mode) through their USB dongles, as Xbox 360 instruments")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(menu_shortcut, true, "Band3/Game",
+    "Open menus from a controller: hold both stick clicks for a second for this settings "
+    "menu, or both stick clicks and the left bumper for the Instrument Lab");
+
+REXCVAR_DEFINE_BOOL(steam_deck_defaults, true, "Band3/Game",
+    "On a Steam Deck, start fullscreen and letterboxed with vsync on and the FPS counter "
+    "off, unless band3.toml or the command line set those")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 // Band3/MIDI drums
 
 REXCVAR_DEFINE_BOOL(midi_drums, false, "Band3/MIDI drums",

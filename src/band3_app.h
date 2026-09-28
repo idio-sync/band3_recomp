@@ -14,8 +14,10 @@
 
 #include "config.h"
 #include "settings.h"
+#include "steam_deck.h"
 #include "Input/input_system.h"
 #include "Input/instrument_lab.h"
+#include "Input/menu_shortcut_dialog.h"
 #include "Input/virtual_instrument.h"
 #include "Net/discord.h"
 
@@ -44,6 +46,7 @@ class Band3App : public rex::ReXApp {
   using rex::ReXApp::ReXApp;
   std::unique_ptr<DebugOverlayDialog> debug_overlay_;
   std::unique_ptr<band3::input::InstrumentLabDialog> instrument_lab_;
+  std::unique_ptr<band3::input::MenuShortcutDialog> menu_shortcut_;
 
   static std::unique_ptr<rex::ui::WindowedApp> Create(
       rex::ui::WindowedAppContext& ctx) {
@@ -64,6 +67,8 @@ class Band3App : public rex::ReXApp {
   // the window and input system don't exist yet, so everything set here applies
   // at startup
   void OnPostInitLogging() override {
+    // before the ini, so a desktop ini's window settings don't undo them
+    band3::steam_deck::ApplyDefaults();
     band3::ApplyLegacyIni();
 
     // band3 keeps a shorter audio queue than the SDK's 64 unless told otherwise
@@ -111,10 +116,29 @@ class Band3App : public rex::ReXApp {
       rex::ui::RegisterBind("bind_instrument_lab", "F6", "Toggle the Instrument Lab", [this] {
         if (instrument_lab_) instrument_lab_->Toggle();
       });
+      // deferred: opening the settings menu adds a dialog, and this runs while
+      // the dialogs draw
+      menu_shortcut_ = std::make_unique<band3::input::MenuShortcutDialog>(
+          drawer, [this](band3::input::MenuShortcutAction action) {
+            const char* bind = action == band3::input::MenuShortcutAction::kSettings
+                                   ? "bind_settings"
+                                   : "bind_instrument_lab";
+            app_context().CallInUIThreadDeferred([this, bind] { PressBind(bind); });
+          });
     } else {
       debug_overlay_.reset();
       instrument_lab_.reset();
+      menu_shortcut_.reset();
     }
+  }
+
+  // presses whatever key a bind is set to, so the menu shortcut follows a
+  // rebound F4 or F6 (the SDK keeps its settings menu to itself)
+  void PressBind(const char* bind) {
+    const auto key = rex::ui::ParseVirtualKey(rex::cvar::GetFlagByName(bind));
+    if (key == rex::ui::VirtualKey::kNone || !window()) return;
+    rex::ui::KeyEvent e(window(), key, 0, false, false, false, false, false);
+    rex::ui::ProcessKeyEvent(e);
   }
 
   // Override virtual hooks for customization:

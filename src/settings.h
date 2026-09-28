@@ -18,6 +18,8 @@ REXCVAR_DECLARE(std::string, username);
 REXCVAR_DECLARE(int32_t, main_heap_size);
 REXCVAR_DECLARE(int32_t, char_heap_size);
 REXCVAR_DECLARE(bool, hid_instruments);
+REXCVAR_DECLARE(bool, menu_shortcut);
+REXCVAR_DECLARE(bool, steam_deck_defaults);
 
 // Band3/MIDI drums
 REXCVAR_DECLARE(bool, midi_drums);
