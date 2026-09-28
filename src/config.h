@@ -7,6 +7,7 @@ namespace band3 {
 
 struct Config {
     long controller_type = 7;
+    std::string input_backend;
     long sync = -1;
     long refresh_rate = 0;
     std::string forced_venue = "false";

@@ -53,6 +53,19 @@ class Band3App : public rex::ReXApp {
       rex::cvar::SetFlagByName("window_height", std::to_string(cfg.height));
     }
 
+    // the input system is created after this, so the backend applies at startup;
+    // an input_backend set in band3.toml is loaded later and takes precedence
+    if (!cfg.input_backend.empty()) {
+#ifndef _WIN32
+      if (cfg.input_backend == "xinput") {
+        REXLOG_WARN("input_backend = xinput is Windows-only, keeping the default");
+      } else
+#endif
+      if (!rex::cvar::SetFlagByName("input_backend", cfg.input_backend)) {
+        REXLOG_WARN("Unknown input_backend '{}', keeping the default", cfg.input_backend);
+      }
+    }
+
     // guest vblank rate; with [rnd] sync on, the game draws one frame per vblank
     if (cfg.refresh_rate > 0) {
       rex::cvar::SetFlagByName("video_mode_refresh_rate", std::to_string(cfg.refresh_rate));

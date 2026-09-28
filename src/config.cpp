@@ -27,6 +27,8 @@ void LoadConfig(const char* path) {
 
     g_config.controller_type =
         reader.GetInteger("controller", "type", g_config.controller_type);
+    g_config.input_backend =
+        reader.Get("controller", "input_backend", g_config.input_backend);
     g_config.sync =
         reader.GetInteger("rnd", "sync", g_config.sync);
     g_config.refresh_rate =
