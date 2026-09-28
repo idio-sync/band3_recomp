@@ -8,7 +8,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-#include <rex/system/interfaces/input.h>
+#include <rex/input/input_driver.h>
 #include "instruments.h"
 
 // A virtual Xbox 360 instrument that the Instrument Lab (F6) plays, for checking
@@ -79,8 +79,8 @@ private:
 // Follows virtual_instrument_type from here on. Call once, after the settings load.
 void InitVirtualInstrument();
 
-// The SDK's input system plus the virtual instrument's driver, with player slots
-// that make room for it. For RuntimeConfig::input_factory.
-std::unique_ptr<rex::system::IInputSystem> CreateInputSystem(bool tool_mode);
+// the driver that connects the virtual instrument while virtual_instrument is on
+std::unique_ptr<rex::input::InputDriver> CreateVirtualInstrumentDriver();
+bool IsVirtualInstrument(const rex::input::DeviceInfo& device);
 
 }

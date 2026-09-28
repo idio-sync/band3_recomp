@@ -28,6 +28,24 @@ inline constexpr uint8_t kSubtypeProGuitar = 25;
 // whether RB3 treats a device reporting this subtype as an instrument
 bool IsRb3InstrumentSubtype(uint8_t subtype);
 
+// XINPUT_GAMEPAD button bits
+namespace xbox {
+inline constexpr uint16_t kDpadUp = 0x0001;
+inline constexpr uint16_t kDpadDown = 0x0002;
+inline constexpr uint16_t kDpadLeft = 0x0004;
+inline constexpr uint16_t kDpadRight = 0x0008;
+inline constexpr uint16_t kStart = 0x0010;
+inline constexpr uint16_t kBack = 0x0020;
+inline constexpr uint16_t kLeftThumb = 0x0040;
+inline constexpr uint16_t kRightThumb = 0x0080;
+inline constexpr uint16_t kLeftShoulder = 0x0100;
+inline constexpr uint16_t kRightShoulder = 0x0200;
+inline constexpr uint16_t kButtonA = 0x1000;
+inline constexpr uint16_t kButtonB = 0x2000;
+inline constexpr uint16_t kButtonX = 0x4000;
+inline constexpr uint16_t kButtonY = 0x8000;
+}
+
 // XINPUT_GAMEPAD in host byte order
 struct Gamepad360 {
     uint16_t buttons = 0;
@@ -113,12 +131,14 @@ struct ProGuitarInputs {
 
 enum class ProGuitarModel { kMustang, kSquier };
 
-// RB2-or-later wireless guitar
-Caps360 GuitarCaps();
+// an RB2-or-later wireless guitar, or with rb2 = false an RB1-style guitar
+// (no auto-calibration sensors)
+Caps360 GuitarCaps(bool rb2 = true);
 Gamepad360 EncodeGuitar(const GuitarInputs& in);
 
-// RB2-or-later drum kit, so cymbals and velocities are read
-Caps360 DrumCaps();
+// an RB2-or-later drum kit, so cymbals and velocities are read, or with
+// rb2 = false an RB1 kit (no pad/cymbal flags, no velocity)
+Caps360 DrumCaps(bool rb2 = true);
 Gamepad360 EncodeDrums(const DrumInputs& in);
 
 // RB3 keytar

@@ -132,6 +132,17 @@ Press **F6** to open the Instrument Lab. It connects a virtual Xbox 360 instrume
 by default) and plays it with the mouse, showing the exact data it sends. It is a tool
 for checking how the game reads each instrument without the hardware.
 
+### PS3 and Wii instruments (experimental)
+
+Turn on `hid_instruments` (F4, Band3 → Game, then restart) to play PS3 and Wii Rock Band
+guitars and drum kits through their USB dongles, including a PS3 or Wii MIDI Pro Adapter
+in drum mode. They show up as Xbox 360 instruments, each as its own player. This is new
+and hasn't been tried on every model yet; if one misbehaves, the log (`logs/` next to the
+executable) says which device was found.
+
+On Linux the dongles need to be readable by your user; install
+`tools/linux/70-band3-rock-band-instruments.rules` as described at the top of that file.
+
 ## Notes
 
 - This project is in an early state and may not build or run correctly in all applications.

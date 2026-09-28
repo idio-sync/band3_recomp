@@ -17,6 +17,7 @@ REXCVAR_DECLARE(std::string, forced_venue);
 REXCVAR_DECLARE(std::string, username);
 REXCVAR_DECLARE(int32_t, main_heap_size);
 REXCVAR_DECLARE(int32_t, char_heap_size);
+REXCVAR_DECLARE(bool, hid_instruments);
 
 // Band3/Graphics
 REXCVAR_DECLARE(bool, disable_approximate_lights);

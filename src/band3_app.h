@@ -14,6 +14,7 @@
 
 #include "config.h"
 #include "settings.h"
+#include "Input/input_system.h"
 #include "Input/instrument_lab.h"
 #include "Input/virtual_instrument.h"
 #include "Net/discord.h"
@@ -89,7 +90,7 @@ class Band3App : public rex::ReXApp {
     if (config.gpu_plugin.empty()) {
       config.gpu_plugin = "xenos";
     }
-    // the SDK's input drivers plus the Instrument Lab's virtual instrument
+    // the SDK's input drivers plus band3's (virtual and PS3/Wii instruments)
     config.input_factory = band3::input::CreateInputSystem;
   }
 

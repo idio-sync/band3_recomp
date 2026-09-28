@@ -16,7 +16,9 @@ get_filename_component(BAND3_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 add_executable(band3_tests
     main.cpp
     instruments_test.cpp
+    ps3_instruments_test.cpp
     ${BAND3_ROOT}/src/Input/instruments.cpp
+    ${BAND3_ROOT}/src/Input/ps3_instruments.cpp
 )
 target_include_directories(band3_tests PRIVATE
     ${BAND3_ROOT}

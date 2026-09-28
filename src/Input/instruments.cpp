@@ -5,20 +5,7 @@ namespace band3::input {
 
 namespace {
 
-constexpr uint16_t kDpadUp = 0x0001;
-constexpr uint16_t kDpadDown = 0x0002;
-constexpr uint16_t kDpadLeft = 0x0004;
-constexpr uint16_t kDpadRight = 0x0008;
-constexpr uint16_t kStart = 0x0010;
-constexpr uint16_t kBack = 0x0020;
-constexpr uint16_t kLeftThumb = 0x0040;
-constexpr uint16_t kRightThumb = 0x0080;
-constexpr uint16_t kLeftShoulder = 0x0100;
-constexpr uint16_t kRightShoulder = 0x0200;
-constexpr uint16_t kButtonA = 0x1000;
-constexpr uint16_t kButtonB = 0x2000;
-constexpr uint16_t kButtonX = 0x4000;
-constexpr uint16_t kButtonY = 0x8000;
+using namespace xbox;
 
 constexpr uint16_t kCapsWireless = 0x0002;
 // RB2-and-later drum kits set this; RB3 reads it as "RB2 drums"
@@ -72,9 +59,10 @@ bool IsRb3InstrumentSubtype(uint8_t subtype) {
 
 // Guitar
 
-Caps360 GuitarCaps() {
+Caps360 GuitarCaps(bool rb2) {
     // wireless with sThumbRX >= 0x100 reads as an RB2-or-later guitar. sThumbLX
     // must not be 0x1BAD, which would make RB3 query it as a MIDI Pro Adapter.
+    if (!rb2) return BaseCaps(kSubtypeGuitar, 0);
     Caps360 c = BaseCaps(kSubtypeGuitar, kCapsWireless);
     c.gamepad.thumb_rx = 0x0200;
     return c;
@@ -109,9 +97,15 @@ Gamepad360 EncodeGuitar(const GuitarInputs& in) {
 
 // Drums
 
-Caps360 DrumCaps() {
+Caps360 DrumCaps(bool rb2) {
     // force feedback marks RB2-or-later kits; sThumbLX 0x1BAD would be a MIDI
-    // Pro Adapter
+    // Pro Adapter. RB1 kits report all-zero trigger and stick capabilities.
+    if (!rb2) {
+        Caps360 c = BaseCaps(kSubtypeDrums, 0);
+        c.gamepad.left_trigger = 0;
+        c.gamepad.right_trigger = 0;
+        return c;
+    }
     Caps360 c = BaseCaps(kSubtypeDrums, kCapsForceFeedback | kCapsWireless);
     c.gamepad.thumb_rx = 0x0200;
     return c;

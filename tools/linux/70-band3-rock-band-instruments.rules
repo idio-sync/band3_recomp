@@ -1,0 +1,10 @@
+# Lets band3 read PS3 and Wii Rock Band instrument dongles (the hid_instruments
+# setting) as the logged-in user. Install with:
+#   sudo cp 70-band3-rock-band-instruments.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# then replug the dongles.
+
+# PS3: guitar, drums, MIDI Pro Adapter (drums)
+KERNEL=="hidraw*", ATTRS{idVendor}=="12ba", ATTRS{idProduct}=="0200|0210|0218", TAG+="uaccess"
+# Wii: guitars (RB1, RB2+), drums (RB1, RB2+), MIDI Pro Adapter (drums)
+KERNEL=="hidraw*", ATTRS{idVendor}=="1bad", ATTRS{idProduct}=="0004|3010|0005|3110|3138", TAG+="uaccess"

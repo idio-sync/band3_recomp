@@ -3,11 +3,10 @@
 #include <cstring>
 #include <string>
 #include <rex/cvar.h>
-#include <rex/input/device_assignment.h>
 #include <rex/input/input_driver.h>
-#include <rex/input/input_system.h>
 #include <rex/logging.h>
 #include "src/settings.h"
+#include "xinput_state.h"
 
 namespace band3::input {
 
@@ -15,7 +14,6 @@ using rex::X_RESULT;
 using rex::X_STATUS;
 using rex::input::DeviceId;
 using rex::input::DeviceInfo;
-using rex::input::kMaxGuestUsers;
 
 const char* InstrumentKindId(InstrumentKind kind) {
     switch (kind) {
@@ -119,7 +117,7 @@ void InitVirtualInstrument() {
 
 namespace {
 
-// identifies the virtual instrument to PlayerAssignment
+// identifies the virtual instrument to the player assignment
 constexpr const char* kVirtualGuid = "band3-virtual-instrument";
 // clear of the SDK drivers' ids (SDL counts up from 1, MnK and NOP use 0x4D4E4B00
 // and 0x4E4F5000)
@@ -181,7 +179,7 @@ public:
         }
         if (out_state) {
             out_state->packet_number = packet_number_;
-            Store(g, out_state->gamepad);
+            StoreGamepad(g, out_state->gamepad);
         }
         return X_ERROR_SUCCESS;
     }
@@ -190,14 +188,7 @@ public:
                                    rex::input::X_INPUT_CAPABILITIES* out_caps) override {
         std::lock_guard<std::mutex> lock(mutex_);
         if (id == DeviceId::kInvalid || id != id_) return X_ERROR_DEVICE_NOT_CONNECTED;
-        if (out_caps) {
-            const Caps360 caps = CapsFor(kind_);
-            std::memset(out_caps, 0, sizeof(*out_caps));
-            out_caps->type = 0x01;  // XINPUT_DEVTYPE_GAMEPAD
-            out_caps->sub_type = caps.sub_type;
-            out_caps->flags = caps.flags;
-            Store(caps.gamepad, out_caps->gamepad);
-        }
+        if (out_caps) StoreCaps(CapsFor(kind_), *out_caps);
         return X_ERROR_SUCCESS;
     }
 
@@ -214,16 +205,6 @@ public:
     }
 
 private:
-    static void Store(const Gamepad360& g, rex::input::X_INPUT_GAMEPAD& out) {
-        out.buttons = g.buttons;
-        out.left_trigger = g.left_trigger;
-        out.right_trigger = g.right_trigger;
-        out.thumb_lx = g.thumb_lx;
-        out.thumb_ly = g.thumb_ly;
-        out.thumb_rx = g.thumb_rx;
-        out.thumb_ry = g.thumb_ry;
-    }
-
     // RefreshDevices runs on whichever guest thread polls
     std::mutex mutex_;
     DeviceId id_ = DeviceId::kInvalid;
@@ -235,53 +216,14 @@ private:
     uint32_t packet_number_ = 0;
 };
 
-// The SDK's SlotAssignment, plus a fixed slot for the virtual instrument: it
-// feeds virtual_instrument_player, the keyboard and other synthetic devices feed
-// player 1, and real pads take the other slots in the order they connected. The
-// slot stays reserved while virtual_instrument is on, including the moment a
-// type change leaves the instrument unplugged, so real pads never shift under it.
-class PlayerAssignment final : public rex::input::DeviceAssignment {
-public:
-    void OnDevicesChanged(const std::vector<DeviceInfo>& devices) override {
-        for (auto& user : users_) user.clear();
-
-        const bool reserved = REXCVAR_GET(virtual_instrument);
-        const uint32_t instrument_user = static_cast<uint32_t>(
-            std::clamp<int32_t>(REXCVAR_GET(virtual_instrument_player), 1, kMaxGuestUsers) - 1);
-
-        for (const auto& device : devices) {
-            if (device.guid == kVirtualGuid) {
-                users_[instrument_user].push_back(device.id);
-                continue;
-            }
-            if (device.synthetic) {
-                users_[0].push_back(device.id);
-                continue;
-            }
-            uint32_t user = device.ordinal;
-            if (reserved && user >= instrument_user) user++;
-            if (user < kMaxGuestUsers) users_[user].push_back(device.id);
-        }
-    }
-
-    void DevicesForUser(uint32_t user_index, std::vector<DeviceId>& out) const override {
-        out.clear();
-        if (user_index < kMaxGuestUsers) out = users_[user_index];
-    }
-
-private:
-    std::vector<std::vector<DeviceId>> users_ = std::vector<std::vector<DeviceId>>(kMaxGuestUsers);
-};
-
 }
 
-std::unique_ptr<rex::system::IInputSystem> CreateInputSystem(bool tool_mode) {
-    auto input = rex::input::CreateDefaultInputSystem(tool_mode);
-    if (!tool_mode) {
-        input->AddDriver(std::make_unique<VirtualInstrumentDriver>());
-        input->SetDeviceAssignment(std::make_unique<PlayerAssignment>());
-    }
-    return input;
+std::unique_ptr<rex::input::InputDriver> CreateVirtualInstrumentDriver() {
+    return std::make_unique<VirtualInstrumentDriver>();
+}
+
+bool IsVirtualInstrument(const rex::input::DeviceInfo& device) {
+    return device.guid == kVirtualGuid;
 }
 
 }
