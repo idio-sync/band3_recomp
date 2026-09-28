@@ -67,6 +67,10 @@ void LoadConfig(const char* path) {
         reader.GetInteger("audio", "max_queued_frames", g_config.max_queued_frames);
     g_config.debug_overlay =
         reader.GetBoolean("debug", "overlay", g_config.debug_overlay);
+    g_config.native_math =
+        reader.GetBoolean("debug", "native_math", g_config.native_math);
+    g_config.native_camera_shake =
+        reader.GetBoolean("debug", "native_camera_shake", g_config.native_camera_shake);
     g_config.log_level =
         reader.Get("debug", "log_level", g_config.log_level);
 

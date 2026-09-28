@@ -1,5 +1,17 @@
 #include <cmath>
 #include <rex/hook.h>
+#include "src/config.h"
+
+// Like REX_HOOK, but runs the recompiled original when [debug] native_math is off.
+#define BAND3_MATH_HOOK(subroutine, function)                         \
+  extern "C" void __imp__##subroutine(PPCContext& ctx, uint8_t* base); \
+  extern "C" REX_FUNC(subroutine) {                                     \
+    if (!band3::GetConfig().native_math) {                              \
+      __imp__##subroutine(ctx, base);                                   \
+      return;                                                           \
+    }                                                                   \
+    rex::ppc::HostToGuestFunction<function>(ctx, base);                 \
+  }
 
 // native replacements for recompiled PPC math functions
 
@@ -25,7 +37,7 @@ static void Normalize_Vector3(mapped_f32 src, mapped_f32 dst) {
 	dst[2] = z * inv;
 }
 
-REX_HOOK(_Normalize_Vector3, Normalize_Vector3)
+BAND3_MATH_HOOK(_Normalize_Vector3, Normalize_Vector3)
 
 static void Normalize_Matrix3(mapped_f32 src, mapped_f32 dst) {
 	Normalize_Vector3(src + 4, dst + 4);
@@ -52,7 +64,7 @@ static void Normalize_Matrix3(mapped_f32 src, mapped_f32 dst) {
 	Normalize_Vector3(dst + 8, dst + 8);
 }
 
-REX_HOOK(_Normalize_Matrix3, Normalize_Matrix3)
+BAND3_MATH_HOOK(_Normalize_Matrix3, Normalize_Matrix3)
 
 // Multiply(Matrix3* A, Matrix3* B, Matrix3* C)
 static void Multiply_Matrix3(mapped_f32 src_a, mapped_f32 src_b, mapped_f32 dst) {
@@ -72,7 +84,7 @@ static void Multiply_Matrix3(mapped_f32 src_a, mapped_f32 src_b, mapped_f32 dst)
 	}
 }
 
-REX_HOOK(_Multiply_Matrix3, Multiply_Matrix3)
+BAND3_MATH_HOOK(_Multiply_Matrix3, Multiply_Matrix3)
 
 
 static void Interp_Vector3(mapped_f32 a, mapped_f32 b, f64 t, mapped_f32 dst) {
@@ -101,7 +113,12 @@ static void Interp_Vector3(mapped_f32 a, mapped_f32 b, f64 t, mapped_f32 dst) {
 
 // Using REX_HOOK_RAW because REX_HOOK maps the registers wrong in this case.
 // I think it tries to use f3 instead of f1.
+extern "C" void __imp___Interp_Vector3(PPCContext& ctx, uint8_t* base);
 REX_HOOK_RAW(_Interp_Vector3) {
+	if (!band3::GetConfig().native_math) {
+		__imp___Interp_Vector3(ctx, base);
+		return;
+	}
 	mapped_f32 a = mapped_f32(rex::memory::GuestPtr<be_f32*>(base, ctx.r3.u32), ctx.r3.u32);
 	mapped_f32 b = mapped_f32(rex::memory::GuestPtr<be_f32*>(base, ctx.r4.u32), ctx.r4.u32);
 	f64 t = f64(ctx.f1.f64);
@@ -110,14 +127,14 @@ REX_HOOK_RAW(_Interp_Vector3) {
 	Interp_Vector3(a, b, t, dst);
 }
 
-REX_HOOK(_acos, static_cast<f64(*)(f64)>(std::acos));
-REX_HOOK(_asin, static_cast<f64(*)(f64)>(std::asin));
-REX_HOOK(_atan, static_cast<f64(*)(f64)>(std::atan));
-REX_HOOK(_atan2, static_cast<f64(*)(f64,f64)>(std::atan2));
-REX_HOOK(_cos, static_cast<f64(*)(f64)>(std::cos));
-REX_HOOK(_floor, static_cast<f64(*)(f64)>(std::floor));
-REX_HOOK(_fmod, static_cast<f64(*)(f64,f64)>(std::fmod));
-REX_HOOK(_pow, static_cast<f64(*)(f64,f64)>(std::pow));
-REX_HOOK(_sin, static_cast<f64(*)(f64)>(std::sin));
-REX_HOOK(_tan, static_cast<f64(*)(f64)>(std::tan));
+BAND3_MATH_HOOK(_acos, static_cast<f64(*)(f64)>(std::acos));
+BAND3_MATH_HOOK(_asin, static_cast<f64(*)(f64)>(std::asin));
+BAND3_MATH_HOOK(_atan, static_cast<f64(*)(f64)>(std::atan));
+BAND3_MATH_HOOK(_atan2, static_cast<f64(*)(f64,f64)>(std::atan2));
+BAND3_MATH_HOOK(_cos, static_cast<f64(*)(f64)>(std::cos));
+BAND3_MATH_HOOK(_floor, static_cast<f64(*)(f64)>(std::floor));
+BAND3_MATH_HOOK(_fmod, static_cast<f64(*)(f64,f64)>(std::fmod));
+BAND3_MATH_HOOK(_pow, static_cast<f64(*)(f64,f64)>(std::pow));
+BAND3_MATH_HOOK(_sin, static_cast<f64(*)(f64)>(std::sin));
+BAND3_MATH_HOOK(_tan, static_cast<f64(*)(f64)>(std::tan));
 

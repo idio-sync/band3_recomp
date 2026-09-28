@@ -25,6 +25,8 @@ struct Config {
     std::string username;
     long max_queued_frames = 3;
     bool debug_overlay = true;
+    bool native_math = true;
+    bool native_camera_shake = true;
     std::string log_level = "info";
     std::string game_data_root = "assets";
 };

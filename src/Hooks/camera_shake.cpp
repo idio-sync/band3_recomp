@@ -1,6 +1,7 @@
 // frame-rate independent camera shake
 
 #include "generated/band3_init.h"
+#include "src/config.h"
 #include <chrono>
 
 static float GetRealFpsScale() {
@@ -20,8 +21,34 @@ static float GetRealFpsScale() {
 	return cached_fps;
 }
 
+extern "C" void __imp__CamShot__Shake(PPCContext& ctx, uint8_t* base);
+
+// The float constants CamShot::Shake loads sit at different addresses in the disc
+// and TU5 xex (same code, shifted data). Read each displacement from the game's own
+// lfs/lfd instruction instead of hard-coding one version's offsets.
+static constexpr uint32_t kCamShotShakeAddr = 0x824BDB80;
+// instruction indices of the constant loads within CamShot::Shake
+static constexpr uint32_t kConstLoadIndices[] = {26, 35, 41, 130, 160, 162};
+
+static bool ReadConstOffsets(uint8_t* base, int32_t (&out)[6]) {
+	for (size_t i = 0; i < 6; i++) {
+		uint32_t insn = REX_LOAD_U32(kCamShotShakeAddr + kConstLoadIndices[i] * 4);
+		uint32_t opcode = insn >> 26;
+		if (opcode != 48 && opcode != 50) { // lfs / lfd
+			return false;
+		}
+		out[i] = static_cast<int16_t>(insn & 0xFFFF);
+	}
+	return true;
+}
+
 // fragile shitty hack, replace this with a proper CamShot::Shake impl in the future
 extern "C" REX_FUNC(CamShot__Shake) {
+	int32_t k[6];
+	if (!band3::GetConfig().native_camera_shake || !ReadConstOffsets(base, k)) {
+		__imp__CamShot__Shake(ctx, base);
+		return;
+	}
 	REX_FUNC_PROLOGUE();
 	PPCRegister temp{};
 	uint32_t ea{};
@@ -92,8 +119,8 @@ extern "C" REX_FUNC(CamShot__Shake) {
 	// lfs f12,80(r1)
 	temp.u32 = REX_LOAD_U32(ctx.r1.u32 + 80);
 	ctx.f12.f64 = double(temp.f32);
-	// lfs f0,12200(r10)
-	temp.u32 = REX_LOAD_U32(ctx.r10.u32 + 12200);
+	// lfs f0,k0(r10)
+	temp.u32 = REX_LOAD_U32(ctx.r10.u32 + k[0]);
 	ctx.f0.f64 = double(temp.f32);
 	// lfs f13,84(r1)
 	temp.u32 = REX_LOAD_U32(ctx.r1.u32 + 84);
@@ -116,8 +143,8 @@ extern "C" REX_FUNC(CamShot__Shake) {
 	ctx.r11.s64 = -2113601536;
 	// fmr f1,f30
 	ctx.f1.f64 = ctx.f30.f64;
-	// lfs f2,-26392(r11)
-	temp.u32 = REX_LOAD_U32(ctx.r11.u32 + -26392);
+	// lfs f2,k1(r11)
+	temp.u32 = REX_LOAD_U32(ctx.r11.u32 + k[1]);
 	ctx.f2.f64 = double(temp.f32);
 	// bl RandomFloat(min, max)
 	ctx.lr = 0x824BDC14;
@@ -133,8 +160,8 @@ extern "C" REX_FUNC(CamShot__Shake) {
 	// fmuls f26,f1,f28
 	ctx.fpscr.disableFlushMode();
 	ctx.f26.f64 = double(float(ctx.f1.f64 * ctx.f28.f64));
-	// lfs f0,-27928(r11)
-	temp.u32 = REX_LOAD_U32(ctx.r11.u32 + -27928);
+	// lfs f0,k2(r11)
+	temp.u32 = REX_LOAD_U32(ctx.r11.u32 + k[2]);
 	ctx.f0.f64 = double(temp.f32);
 	// fadds f1,f29,f0
 	ctx.f1.f64 = double(float(ctx.f29.f64 + ctx.f0.f64));
@@ -367,9 +394,9 @@ loc_824BDD54:
 	ctx.r11.s64 = -2113863680;
 	// cmplwi r3,0
 	ctx.cr0.compare<uint32_t>(ctx.r3.u32, 0, ctx.xer);
-	// lfs f31,28108(r11)
+	// lfs f31,k3(r11)
 	ctx.fpscr.disableFlushMode();
-	temp.u32 = REX_LOAD_U32(ctx.r11.u32 + 28108);
+	temp.u32 = REX_LOAD_U32(ctx.r11.u32 + k[3]);
 	ctx.f31.f64 = double(temp.f32);
 	// beq 0x824bddac
 	if (ctx.cr0.eq) goto loc_824BDDAC;
@@ -449,16 +476,16 @@ loc_824BDDB0:
 	ctx.f11.f64 = double(temp.f32);
 	// fmuls f11,f11,f30
 	ctx.f11.f64 = double(float(ctx.f11.f64 * ctx.f30.f64));
-	// lfs f31,6704(r6)
-	temp.u32 = REX_LOAD_U32(ctx.r6.u32 + 6704);
+	// lfs f31,k4(r6)
+	temp.u32 = REX_LOAD_U32(ctx.r6.u32 + k[4]);
 	ctx.f31.f64 = double(temp.f32);
 
 	ctx.f31.f64 = double(float(ctx.f31.f64) * fps_local);
 
 	// fmuls f9,f9,f30
 	ctx.f9.f64 = double(float(ctx.f9.f64 * ctx.f30.f64));
-	// lfd f1,32008(r5)
-	ctx.f1.u64 = REX_LOAD_U64(ctx.r5.u32 + 32008);
+	// lfd f1,k5(r5)
+	ctx.f1.u64 = REX_LOAD_U64(ctx.r5.u32 + k[5]);
 	// fmuls f10,f10,f30
 	ctx.f10.f64 = double(float(ctx.f10.f64 * ctx.f30.f64));
 	// fadds f13,f13,f11
