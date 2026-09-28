@@ -29,6 +29,8 @@ void LoadConfig(const char* path) {
         reader.GetInteger("controller", "type", g_config.controller_type);
     g_config.sync =
         reader.GetInteger("rnd", "sync", g_config.sync);
+    g_config.refresh_rate =
+        reader.GetInteger("rnd", "refresh_rate", g_config.refresh_rate);
     g_config.forced_venue =
         reader.Get("venue", "forced_venue", g_config.forced_venue);
     g_config.fullscreen =

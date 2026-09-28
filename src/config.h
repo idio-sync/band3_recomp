@@ -8,6 +8,7 @@ namespace band3 {
 struct Config {
     long controller_type = 7;
     long sync = -1;
+    long refresh_rate = 0;
     std::string forced_venue = "false";
     bool fullscreen = false;
     long width = 1280;

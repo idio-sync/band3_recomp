@@ -51,6 +51,11 @@ class Band3App : public rex::ReXApp {
       rex::cvar::SetFlagByName("window_width", std::to_string(cfg.width));
       rex::cvar::SetFlagByName("window_height", std::to_string(cfg.height));
     }
+
+    // guest vblank rate; with [rnd] sync on, the game draws one frame per vblank
+    if (cfg.refresh_rate > 0) {
+      rex::cvar::SetFlagByName("video_mode_refresh_rate", std::to_string(cfg.refresh_rate));
+    }
   }
 
   // GPU emulation is a plugin (rexgpu-xenos) that the SDK leaves off unless
