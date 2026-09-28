@@ -53,6 +53,14 @@ class Band3App : public rex::ReXApp {
     }
   }
 
+  // GPU emulation is a plugin (rexgpu-xenos) that the SDK leaves off unless
+  // named; keep any gpu_plugin the user set in band3.toml
+  void OnPreSetup(rex::RuntimeConfig& config) override {
+    if (config.gpu_plugin.empty()) {
+      config.gpu_plugin = "xenos";
+    }
+  }
+
   void OnPostSetup() override {
     rex::cvar::SetFlagByName("log_level", band3::GetConfig().log_level);
     rex::cvar::SetFlagByName("audio_maxqframes", std::to_string(band3::GetConfig().max_queued_frames));
@@ -73,7 +81,6 @@ class Band3App : public rex::ReXApp {
 
   // Override virtual hooks for customization:
   // void OnPostInitLogging() override {}
-  // void OnPreSetup(rex::RuntimeConfig& config) override {}
   // void OnLoadXexImage(std::string& xex_image) override {}
   // void OnShutdown() override {}
 };
