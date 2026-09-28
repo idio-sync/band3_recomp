@@ -132,12 +132,17 @@ Press **F6** to open the Instrument Lab. It connects a virtual Xbox 360 instrume
 by default) and plays it with the mouse, showing the exact data it sends. It is a tool
 for checking how the game reads each instrument without the hardware.
 
-### PS3 and Wii instruments (experimental)
+### PlayStation and Wii instruments (experimental)
 
-Turn on `hid_instruments` (F4, Band3 → Game, then restart) to play PS3 and Wii Rock Band
-guitars and drum kits through their USB dongles, including a PS3 or Wii MIDI Pro Adapter
-in drum mode. They show up as Xbox 360 instruments, each as its own player. This is new
-and hasn't been tried on every model yet. The Instrument Lab's **Connected instruments**
+Turn on `hid_instruments` (F4, Band3 → Game, then restart) to play Rock Band guitars and
+drum kits through their USB dongles:
+
+- PS3 and Wii guitars and drum kits, and a PS3 or Wii MIDI Pro Adapter in drum mode
+- PS4 guitars (MadCatz Stratocaster, PDP Jaguar) and drum kits (MadCatz, PDP)
+- PDP Riffmaster and CRKD Gibson SG, in PS4 or PS5 mode
+
+They show up as Xbox 360 instruments, each as its own player. This is new and hasn't been
+tried on every model yet. The Instrument Lab's **Connected instruments**
 tab (F6) shows each one's raw reports next to what the game receives; if one misbehaves,
 press **Save a 5 second capture** while playing the part that goes wrong, and include the
 file it writes to `logs/` (next to the executable) with the report.

@@ -52,7 +52,7 @@ TEST_CASE("guitar strum, whammy, tilt and pickup") {
     CHECK(u16(EncodeGuitar(in).thumb_rx) == 0x8000);  // released
     in.whammy = 1.0f;
     CHECK(EncodeGuitar(in).thumb_rx == 32767);
-    in.tilt = true;
+    in.tilt = 1.0f;
     CHECK(EncodeGuitar(in).thumb_ry == 32767);
     in.pickup = 0x40;
     CHECK(EncodeGuitar(in).left_trigger == 0x40);

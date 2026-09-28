@@ -81,8 +81,8 @@ REXCVAR_DEFINE_INT32(char_heap_size, 0, "Band3/Game",
     .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(hid_instruments, false, "Band3/Game",
-    "Experimental: play PS3 and Wii Rock Band guitars and drum kits (and the MIDI Pro "
-    "Adapter in drum mode) through their USB dongles, as Xbox 360 instruments")
+    "Experimental: play PS3, Wii, PS4 and PS5 Rock Band guitars and drum kits (and the "
+    "MIDI Pro Adapter in drum mode) through their USB dongles, as Xbox 360 instruments")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 // Band3/Graphics

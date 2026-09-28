@@ -17,10 +17,13 @@ add_executable(band3_tests
     main.cpp
     instruments_test.cpp
     ps3_instruments_test.cpp
+    ps4_instruments_test.cpp
     hid_capture_test.cpp
     ${BAND3_ROOT}/src/Input/hid_capture.cpp
+    ${BAND3_ROOT}/src/Input/hid_instrument_types.cpp
     ${BAND3_ROOT}/src/Input/instruments.cpp
     ${BAND3_ROOT}/src/Input/ps3_instruments.cpp
+    ${BAND3_ROOT}/src/Input/ps4_instruments.cpp
 )
 # instrument captures replayed by hid_capture_test.cpp
 target_compile_definitions(band3_tests PRIVATE

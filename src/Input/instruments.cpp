@@ -91,7 +91,7 @@ Gamepad360 EncodeGuitar(const GuitarInputs& in) {
     // -32768 released to 32767 fully pressed
     float w = std::clamp(in.whammy, 0.0f, 1.0f);
     g.thumb_rx = static_cast<int16_t>(-32768 + static_cast<int>(w * 65535.0f));
-    g.thumb_ry = in.tilt ? 32767 : 0;
+    g.thumb_ry = static_cast<int16_t>(std::clamp(in.tilt, 0.0f, 1.0f) * 32767.0f);
     return g;
 }
 

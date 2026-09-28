@@ -19,7 +19,7 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include "hid_capture.h"
-#include "ps3_instruments.h"
+#include "hid_instrument_types.h"
 #include "xinput_state.h"
 
 namespace band3::input {
@@ -39,8 +39,12 @@ constexpr const char* kGuidPrefix = "band3-hid:";
 constexpr std::chrono::milliseconds kScanInterval{1000};
 // a reader wakes at least this often to notice shutdown
 constexpr int kReadTimeoutMs = 100;
-// every instrument here is from one of these vendors
-constexpr uint16_t kVendors[] = {0x12BA, 0x1BAD};
+// the vendors of every known instrument, to enumerate by
+std::set<uint16_t> KnownVendors() {
+    std::set<uint16_t> vendors;
+    for (const auto& known : KnownHidInstruments()) vendors.insert(known.vendor);
+    return vendors;
+}
 
 // set while a HID driver is running, for IsSdlCopyOfHidInstrument
 std::atomic<bool> g_active{false};
@@ -86,20 +90,20 @@ void SaveCapture(const HidCapture& capture) {
 }
 
 const char* NameOf(uint16_t vendor, uint16_t product) {
-    for (const auto& known : KnownPs3Instruments()) {
+    for (const auto& known : KnownHidInstruments()) {
         if (known.vendor == vendor && known.product == product) return known.name;
     }
     return "Rock Band instrument";
 }
 
 struct Device {
-    Device(DeviceId id, Ps3Instrument instrument, uint16_t vendor, uint16_t product,
+    Device(DeviceId id, HidInstrumentType instrument, uint16_t vendor, uint16_t product,
            uint16_t release, std::string path, std::string name, SDL_hid_device* handle)
         : id(id), instrument(instrument), vendor(vendor), product(product), release(release),
           path(std::move(path)), name(std::move(name)), handle(handle), translator(instrument) {}
 
     const DeviceId id;
-    const Ps3Instrument instrument;
+    const HidInstrumentType instrument;
     const uint16_t vendor;
     const uint16_t product;
     const uint16_t release;
@@ -122,7 +126,7 @@ struct Device {
     HidCapture capture;
 
     // reader thread only
-    Ps3InstrumentTranslator translator;
+    HidInstrumentTranslator translator;
 };
 
 class HidInstrumentDriver final : public rex::input::InputDriver {
@@ -177,7 +181,7 @@ public:
         std::lock_guard<std::mutex> lock(devices_mutex_);
         Device* device = Find(id);
         if (!device) return X_ERROR_DEVICE_NOT_CONNECTED;
-        if (out_caps) StoreCaps(Ps3InstrumentCaps(device->instrument), *out_caps);
+        if (out_caps) StoreCaps(HidInstrumentCaps(device->instrument), *out_caps);
         return X_ERROR_SUCCESS;
     }
 
@@ -272,12 +276,13 @@ private:
 
     // opens every known instrument that isn't open yet
     void Scan() {
-        for (uint16_t vendor : kVendors) {
+        static const std::set<uint16_t> vendors = KnownVendors();
+        for (uint16_t vendor : vendors) {
             SDL_hid_device_info* list = SDL_hid_enumerate(vendor, 0);
             for (SDL_hid_device_info* info = list; info; info = info->next) {
                 if (!info->path) continue;
                 const auto instrument =
-                    IdentifyPs3Instrument(info->vendor_id, info->product_id, info->release_number);
+                    IdentifyHidInstrument(info->vendor_id, info->product_id, info->release_number);
                 if (!instrument || IsOpen(info->path)) continue;
 
                 SDL_hid_device* handle = SDL_hid_open_path(info->path);
@@ -305,7 +310,7 @@ private:
         return false;
     }
 
-    void Open(Ps3Instrument instrument, uint16_t vendor, uint16_t product, uint16_t release,
+    void Open(HidInstrumentType instrument, uint16_t vendor, uint16_t product, uint16_t release,
               const char* path, SDL_hid_device* handle) {
         auto device = std::make_unique<Device>(static_cast<DeviceId>(kDeviceIdBase + ++generation_),
                                                instrument, vendor, product, release, path,
@@ -459,7 +464,7 @@ bool IsSdlCopyOfHidInstrument(const DeviceInfo& device) {
     Uint16 vendor = 0, product = 0, version = 0, crc = 0;
     SDL_GetJoystickGUIDInfo(SDL_StringToGUID(device.guid.c_str()), &vendor, &product, &version,
                             &crc);
-    for (const auto& known : KnownPs3Instruments()) {
+    for (const auto& known : KnownHidInstruments()) {
         if (known.vendor == vendor && known.product == product) return true;
     }
     return false;

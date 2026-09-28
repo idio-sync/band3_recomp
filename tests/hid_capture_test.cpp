@@ -9,7 +9,7 @@
 #include <string>
 #include "rb3_reference.h"
 #include "src/Input/hid_capture.h"
-#include "src/Input/ps3_instruments.h"
+#include "src/Input/hid_instrument_types.h"
 
 using namespace band3::input;
 using namespace rb3;
@@ -72,10 +72,10 @@ TEST_CASE("every saved capture replays through the translator") {
         const auto capture = ParseHidCapture(ReadFile(entry.path()));
         REQUIRE(capture.has_value());
         const auto instrument =
-            IdentifyPs3Instrument(capture->vendor, capture->product, capture->release);
+            IdentifyHidInstrument(capture->vendor, capture->product, capture->release);
         REQUIRE(instrument.has_value());
 
-        Ps3InstrumentTranslator translator(*instrument);
+        HidInstrumentTranslator translator(*instrument);
         for (const auto& report : capture->reports) {
             CAPTURE(report.ms);
             CHECK(translator.Translate(report.bytes).has_value());
@@ -91,7 +91,7 @@ TEST_CASE("the synthetic drum capture hits the red pad, then the yellow cymbal")
     REQUIRE(capture.has_value());
     REQUIRE(capture->reports.size() == 5);
 
-    Ps3InstrumentTranslator translator(Ps3Instrument::kDrums);
+    HidInstrumentTranslator translator(HidInstrumentType::kPs3Drums);
     std::vector<Gamepad360> states;
     for (const auto& report : capture->reports) states.push_back(*translator.Translate(report.bytes));
 

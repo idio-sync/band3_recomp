@@ -82,7 +82,8 @@ void DrawGuitar(GuitarInputs& g) {
     ImGui::SameLine();
     g.strum_down = HoldButton("Strum down");
     ImGui::SliderFloat("Whammy", &g.whammy, 0.0f, 1.0f);
-    ImGui::Checkbox("Tilt", &g.tilt);
+    bool tilted = g.tilt >= 1.0f;
+    if (ImGui::Checkbox("Tilt", &tilted)) g.tilt = tilted ? 1.0f : 0.0f;
     int pickup = g.pickup;
     if (ImGui::SliderInt("Pickup switch", &pickup, 0, 255)) g.pickup = static_cast<uint8_t>(pickup);
 }
@@ -226,11 +227,11 @@ void DrawConnectedInstruments() {
 
         ImGui::PushID(header);
         ImGui::Text("Reads as %s, release %04X, %llu reports",
-                    Ps3InstrumentLabel(status.instrument), status.release,
+                    HidInstrumentTypeLabel(status.instrument), status.release,
                     static_cast<unsigned long long>(status.report_count));
         ImGui::TextDisabled("Last report");
         DrawHex(status.last_report);
-        DrawCaps(Ps3InstrumentCaps(status.instrument));
+        DrawCaps(HidInstrumentCaps(status.instrument));
         DrawState(status.state);
         if (status.capturing) {
             ImGui::TextUnformatted("Capturing...");

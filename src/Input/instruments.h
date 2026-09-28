@@ -88,7 +88,8 @@ struct GuitarInputs {
     bool strum_up = false;
     bool strum_down = false;
     float whammy = 0.0f;  // 0 = released, 1 = fully pressed
-    bool tilt = false;
+    // 0 = level, 1 = straight up; RB3 decides what counts as tilted
+    float tilt = 0.0f;
     uint8_t pickup = 0;
 };
 

@@ -6,10 +6,11 @@
 #include <vector>
 #include <rex/input/input_driver.h>
 #include "instruments.h"
-#include "ps3_instruments.h"
+#include "hid_instrument_types.h"
 
-// PS3 and Wii Rock Band instruments, read straight from their USB dongles with
-// SDL's HID API and reported as Xbox 360 instruments (see ps3_instruments.h).
+// PlayStation and Wii Rock Band instruments (hid_instrument_types.h lists them),
+// read straight from their USB dongles with SDL's HID API and reported as Xbox
+// 360 instruments.
 // Turned on by the hid_instruments setting. On Linux the dongles' hidraw nodes
 // need to be readable, which usually takes a udev rule.
 
@@ -36,7 +37,7 @@ struct HidInstrumentStatus {
     uint16_t vendor = 0;
     uint16_t product = 0;
     uint16_t release = 0;
-    Ps3Instrument instrument = Ps3Instrument::kGuitar;
+    HidInstrumentType instrument = HidInstrumentType::kPs3Guitar;
     uint64_t report_count = 0;
     std::vector<uint8_t> last_report;
     Gamepad360 state;
