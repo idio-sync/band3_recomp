@@ -96,7 +96,7 @@ using a stand-in for `generated/band3_init.h`. On Windows, run it from a Visual 
 developer prompt:
 
 ```
-cmake -S tools/compile_check -B out/compile_check -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_PREFIX_PATH=<path to the rexglue SDK>
+cmake -S tools/compile_check -B out/compile_check -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_PREFIX_PATH=<path to the rexglue SDK>
 cmake --build out/compile_check
 ```
 

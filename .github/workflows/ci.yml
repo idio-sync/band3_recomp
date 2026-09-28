@@ -93,6 +93,7 @@ jobs:
       - name: Configure
         run: >
           cmake -S tools/compile_check -B out/compile_check -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
           -DCMAKE_PREFIX_PATH="$REXGLUE_SDK_ROOT"
 

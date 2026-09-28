@@ -162,7 +162,8 @@ public:
         info.id = id_;
         info.name = std::string("band3 virtual ") + InstrumentKindLabel(kind_);
         info.guid = kVirtualGuid;
-        info.subtype = CapsFor(kind_).sub_type;
+        // RB3 reads the subtype from GetDeviceCapabilities; DeviceInfo only has
+        // a subtype field in some SDK builds, so it is left to them
         // synthetic devices never take a physical ordinal, so real pads keep
         // theirs while it comes and goes; PlayerAssignment places it by its guid
         info.synthetic = true;

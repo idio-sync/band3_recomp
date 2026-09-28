@@ -4,18 +4,19 @@
 # linked; this only proves the sources compile.
 #
 #   cmake -S tools/compile_check -B out/compile_check -G Ninja \
+#         -DCMAKE_BUILD_TYPE=Release \
 #         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
 #         -DCMAKE_PREFIX_PATH=<path to the rexglue SDK>
 #   cmake --build out/compile_check
+#
+# Pass the build type: Windows toolchains default an unset one to Debug, which
+# also turns on the SDK's profiling (Tracy) definitions.
 
 cmake_minimum_required(VERSION 3.25)
 project(band3_compile_check LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
-endif()
 
 get_filename_component(BAND3_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 
