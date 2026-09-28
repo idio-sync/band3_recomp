@@ -4,6 +4,7 @@
 #include <rex/input/device_assignment.h>
 #include <rex/input/input_system.h>
 #include "hid_instruments.h"
+#include "midi_drums_driver.h"
 #include "src/settings.h"
 #include "virtual_instrument.h"
 
@@ -77,6 +78,7 @@ std::unique_ptr<rex::system::IInputSystem> CreateInputSystem(bool tool_mode) {
     };
     add(CreateVirtualInstrumentDriver());
     if (REXCVAR_GET(hid_instruments)) add(CreateHidInstrumentDriver());
+    if (REXCVAR_GET(midi_drums)) add(CreateMidiDrumsDriver());
 
     input->SetDeviceAssignment(std::make_unique<PlayerAssignment>());
     return input;

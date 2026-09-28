@@ -150,6 +150,22 @@ file it writes to `logs/` (next to the executable) with the report.
 On Linux the dongles need to be readable by your user; install
 `tools/linux/70-band3-rock-band-instruments.rules` as described at the top of that file.
 
+### MIDI drum kits
+
+Turn on `midi_drums` (F4, Band3 → MIDI drums, then restart) to play an electronic drum kit
+over MIDI as a Rock Band pro drum kit, without a MIDI Pro Adapter. It uses the first MIDI
+input unless `midi_drums_device` names one (or part of one's name), and picks up a kit
+plugged in after the game starts.
+
+Notes follow the MIDI Pro Adapter's layout, as in RPCS3: snare 38, toms 48/45/41, hi-hat
+42/46, ride 51, crash 49, kick 36, hi-hat pedal 44 (the second pedal). Change any of them
+with `midi_drums_notes`, e.g. `44=Kick,40=Snare`, the same format as RPCS3's overrides.
+The Instrument Lab's **MIDI drums** tab (F6) shows what each note you hit played.
+
+The kit has no menu buttons, so as in RPCS3: hi-hat pedal three times then snare is Start,
+then the rim is Select, and then kick holds the kick for the song category menu (snare or
+floor tom lets go). Turn these off with `midi_drums_combos`.
+
 ## Notes
 
 - This project is in an early state and may not build or run correctly in all applications.

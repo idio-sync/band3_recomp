@@ -6,6 +6,7 @@
 #include <imgui.h>
 #include <rex/cvar.h>
 #include "hid_instruments.h"
+#include "midi_drums_driver.h"
 #include "virtual_instrument.h"
 #include "src/settings.h"
 
@@ -250,6 +251,62 @@ void DrawConnectedInstruments() {
                        "went wrong.");
 }
 
+void DrawMidiDrums() {
+    if (!REXCVAR_GET(midi_drums)) {
+        ImGui::TextWrapped("MIDI drum kits are read when the midi_drums setting is on (F4, "
+                           "Band3 > MIDI drums). It takes a restart.");
+        return;
+    }
+    const MidiDrumsStatus status = GetMidiDrumsStatus();
+    if (!status.running) {
+        ImGui::TextWrapped("midi_drums is on but MIDI input isn't running: restart if it was "
+                           "just turned on, otherwise the log says why it didn't start.");
+        return;
+    }
+
+    if (!status.port.empty()) {
+        ImGui::Text("Playing %s", status.port.c_str());
+    } else {
+        const std::string& wanted = REXCVAR_GET(midi_drums_device);
+        ImGui::Text("Waiting for %s", wanted.empty() ? "a MIDI input" : wanted.c_str());
+    }
+    ImGui::TextDisabled("MIDI inputs");
+    if (status.ports.empty()) ImGui::TextUnformatted("(none found)");
+    for (const auto& port : status.ports) ImGui::BulletText("%s", port.c_str());
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Last notes, newest first");
+    if (status.recent.empty()) {
+        ImGui::TextUnformatted("(nothing yet; hit a pad)");
+    } else if (ImGui::BeginTable("notes", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("Note");
+        ImGui::TableSetupColumn("Velocity");
+        ImGui::TableSetupColumn("Plays", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+        for (auto it = status.recent.rbegin(); it != status.recent.rend(); ++it) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%u", it->note);
+            ImGui::TableNextColumn();
+            ImGui::Text("%u", it->velocity);
+            ImGui::TableNextColumn();
+            if (it->part == midi_drums::Part::kNone) {
+                ImGui::TextDisabled("not mapped");
+            } else if (it->velocity < status.min_velocity) {
+                ImGui::TextDisabled("%s, too quiet", midi_drums::PartName(it->part));
+            } else if (it->combo) {
+                ImGui::Text("%s, completing the %s combo", midi_drums::PartName(it->part),
+                            it->combo);
+            } else {
+                ImGui::TextUnformatted(midi_drums::PartName(it->part));
+            }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextWrapped("To change what a note plays, set midi_drums_notes (F4), e.g. "
+                       "44=Kick,40=Snare. It takes a restart.");
+}
+
 }
 
 void InstrumentLabDialog::OnDraw(ImGuiIO&) {
@@ -279,6 +336,10 @@ void InstrumentLabDialog::OnDraw(ImGuiIO&) {
         }
         if (ImGui::BeginTabItem("Connected instruments")) {
             DrawConnectedInstruments();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("MIDI drums")) {
+            DrawMidiDrums();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

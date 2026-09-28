@@ -85,6 +85,37 @@ REXCVAR_DEFINE_BOOL(hid_instruments, false, "Band3/Game",
     "MIDI Pro Adapter in drum mode) through their USB dongles, as Xbox 360 instruments")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+// Band3/MIDI drums
+
+REXCVAR_DEFINE_BOOL(midi_drums, false, "Band3/MIDI drums",
+    "Play a MIDI drum kit as a Rock Band pro drum kit, without a MIDI Pro Adapter")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(midi_drums_device, "", "Band3/MIDI drums",
+    "MIDI input port to play, or part of its name. Empty uses the first one")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(midi_drums_notes, "", "Band3/MIDI drums",
+    "Note overrides as note=Part, comma separated (e.g. 44=Kick,40=Snare), in RPCS3's "
+    "format. Parts: Kick, HihatPedal, Snare, SnareRim, HiTom, LowTom, FloorTom, Hihat, "
+    "Ride, Crash, None")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_INT32(midi_drums_pulse_ms, 30, "Band3/MIDI drums",
+    "How long each hit is held, in milliseconds")
+    .range(1, 100)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_INT32(midi_drums_min_velocity, 10, "Band3/MIDI drums",
+    "Quieter hits than this (1-127) are ignored")
+    .range(1, 127)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(midi_drums_combos, true, "Band3/MIDI drums",
+    "Menu buttons from the kit: hi-hat pedal three times, then snare for Start, rim for "
+    "Select, or kick to hold the kick (RB3's song category menu)")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 // Band3/Graphics
 
 REXCVAR_DEFINE_BOOL(disable_approximate_lights, true, "Band3/Graphics",

@@ -26,3 +26,7 @@ rexglue_setup_target(band3 GPU_PLUGINS xenos)
 if(WIN32)
     target_link_libraries(band3 PRIVATE ws2_32)
 endif()
+
+# MIDI input for MIDI drum kits (src/Input/midi_drums_driver.cpp)
+include(cmake/rtmidi.cmake)
+band3_setup_rtmidi(band3 ${CMAKE_CURRENT_SOURCE_DIR}/src/ThirdParty/rtmidi/RtMidi.cpp)

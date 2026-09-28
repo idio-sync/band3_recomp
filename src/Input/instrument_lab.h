@@ -9,8 +9,9 @@ namespace band3::input {
 // - Virtual instrument: plays the virtual instrument with the mouse and shows
 //   the exact report and capabilities it sends, to check how RB3 reads each
 //   instrument
-// - Connected instruments: each PS3/Wii instrument the HID driver has open, its
-//   raw reports next to what band3 sends, and a button to save a capture
+// - Connected instruments: each instrument the HID driver has open, its raw
+//   reports next to what band3 sends, and a button to save a capture
+// - MIDI drums: the MIDI port being played and what each recent note played
 class InstrumentLabDialog : public rex::ui::ImGuiDialog {
 public:
     explicit InstrumentLabDialog(rex::ui::ImGuiDrawer* imgui_drawer)

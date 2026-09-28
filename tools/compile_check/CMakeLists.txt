@@ -71,3 +71,7 @@ target_include_directories(band3_compile_check PRIVATE
     "${BAND3_ROOT}/src"
 )
 target_link_libraries(band3_compile_check PRIVATE rex::runtime)
+
+# the same MIDI backend as the real build
+include(${BAND3_ROOT}/cmake/rtmidi.cmake)
+band3_setup_rtmidi(band3_compile_check ${BAND3_ROOT}/src/ThirdParty/rtmidi/RtMidi.cpp)

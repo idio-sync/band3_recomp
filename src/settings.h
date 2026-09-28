@@ -19,6 +19,14 @@ REXCVAR_DECLARE(int32_t, main_heap_size);
 REXCVAR_DECLARE(int32_t, char_heap_size);
 REXCVAR_DECLARE(bool, hid_instruments);
 
+// Band3/MIDI drums
+REXCVAR_DECLARE(bool, midi_drums);
+REXCVAR_DECLARE(std::string, midi_drums_device);
+REXCVAR_DECLARE(std::string, midi_drums_notes);
+REXCVAR_DECLARE(int32_t, midi_drums_pulse_ms);
+REXCVAR_DECLARE(int32_t, midi_drums_min_velocity);
+REXCVAR_DECLARE(bool, midi_drums_combos);
+
 // Band3/Graphics
 REXCVAR_DECLARE(bool, disable_approximate_lights);
 REXCVAR_DECLARE(bool, disable_hair_shader);
