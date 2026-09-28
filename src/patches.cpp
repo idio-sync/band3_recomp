@@ -1,5 +1,6 @@
 #include <rex/system/kernel_state.h>
 #include <rex/logging.h>
+#include <atomic>
 #include <cstring>
 #include <vector>
 #include <string_view>
@@ -15,13 +16,53 @@
 
 static std::set<size_t> g_consumed_args;
 
+namespace {
+
+const char* SubtypeName(uint8_t subtype) {
+    using namespace band3::input;
+    switch (subtype) {
+    case kSubtypeGamepad: return "gamepad";
+    case kSubtypeGuitar: return "guitar";
+    case kSubtypeGuitarAlternate: return "guitar";
+    case kSubtypeDrums: return "drums";
+    case kSubtypeGuitarBass: return "bass";
+    case kSubtypeKeytar: return "keytar";
+    case kSubtypeProGuitar: return "pro guitar";
+    default: return "unknown";
+    }
+}
+
+// Logs each subtype the first time RB3 reads it, and what it plays as, so a
+// report from a new setup (a Steam Deck, Steam Input, SDL's view of an Xbox 360
+// instrument) says whether the instrument's own type reached the game.
+// ReadSingleXinputJoypad runs every poll, so each value is logged once.
+std::atomic<uint64_t> g_logged_subtypes[4];
+
+void LogSubtypeOnce(uint8_t subtype, long played_as) {
+    const uint64_t bit = uint64_t{1} << (subtype % 64);
+    if (g_logged_subtypes[subtype / 64].fetch_or(bit) & bit) return;
+    if (played_as == subtype) {
+        REXLOG_INFO("A controller reports type {} ({}); kept", subtype, SubtypeName(subtype));
+    } else {
+        REXLOG_INFO("A controller reports type {} ({}); playing as {} ({}), from controller_type",
+                    subtype, SubtypeName(subtype), played_as,
+                    SubtypeName(static_cast<uint8_t>(played_as)));
+    }
+}
+
+}
+
 // r11 is the subtype ReadSingleXinputJoypad just read from the device's
 // capabilities. Only devices RB3 wouldn't take as an instrument (gamepads, the
 // keyboard) are overridden, so instruments that report their own type keep it.
 void ControllerHook(PPCRegister& r11) {
+    const auto subtype = static_cast<uint8_t>(r11.u64);
     long overrideType = band3::settings::Startup().controller_type;
-    if (overrideType == -1) return;
-    if (band3::input::IsRb3InstrumentSubtype(static_cast<uint8_t>(r11.u64))) return;
+    if (overrideType == -1 || band3::input::IsRb3InstrumentSubtype(subtype)) {
+        LogSubtypeOnce(subtype, subtype);
+        return;
+    }
+    LogSubtypeOnce(subtype, overrideType);
     r11.u64 = overrideType;
 }
 

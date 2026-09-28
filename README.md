@@ -183,6 +183,16 @@ band3 recognises a Deck from the `SteamDeck=1` Steam sets, or on Linux from the 
 hardware ids. Keep `resolution_scale` at 1: the Deck's screen can't show more than the
 console's 720p, and scaling costs a lot of GPU time. The log warns when it's higher.
 
+Instruments on a Deck:
+
+- The Deck has one USB-C port, so more than one instrument or dongle needs a hub.
+- For PlayStation and Wii dongles, install the udev rules above from Desktop Mode. SteamOS
+  has no password for `sudo` until you set one with `passwd`.
+- The log says what type each controller reports and what it plays as (for example
+  "A controller reports type 1 (gamepad); playing as 7 (guitar)"). If an instrument
+  shows up as a gamepad, turn off Steam Input for band3 (its controller settings in
+  Steam) and try again, and include the log line if you report it.
+
 ## Notes
 
 - This project is in an early state and may not build or run correctly in all applications.
