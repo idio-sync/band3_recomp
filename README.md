@@ -137,8 +137,10 @@ for checking how the game reads each instrument without the hardware.
 Turn on `hid_instruments` (F4, Band3 → Game, then restart) to play PS3 and Wii Rock Band
 guitars and drum kits through their USB dongles, including a PS3 or Wii MIDI Pro Adapter
 in drum mode. They show up as Xbox 360 instruments, each as its own player. This is new
-and hasn't been tried on every model yet; if one misbehaves, the log (`logs/` next to the
-executable) says which device was found.
+and hasn't been tried on every model yet. The Instrument Lab's **Connected instruments**
+tab (F6) shows each one's raw reports next to what the game receives; if one misbehaves,
+press **Save a 5 second capture** while playing the part that goes wrong, and include the
+file it writes to `logs/` (next to the executable) with the report.
 
 On Linux the dongles need to be readable by your user; install
 `tools/linux/70-band3-rock-band-instruments.rules` as described at the top of that file.

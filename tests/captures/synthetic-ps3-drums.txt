@@ -1,0 +1,12 @@
+# band3 HID capture
+# Synthetic: written by hand from PlasticBand's PS3/Wii drum layout, not recorded
+# from hardware. A red pad hit, then a yellow cymbal hit, with rests between.
+device: PS3 Rock Band drums
+usb: 12BA:0210
+release: 0200
+---
+0 00 00 08 7f 7f 7f 7f 00 00 00 00 00 00 00 00 00 00 00 00 00 02 00 02 00 02 00 02
+16 04 04 08 7f 7f 7f 7f 00 00 00 00 00 20 00 00 00 00 00 00 00 02 00 02 00 02 00 02
+33 00 00 08 7f 7f 7f 7f 00 00 00 00 00 00 00 00 00 00 00 00 00 02 00 02 00 02 00 02
+50 08 08 00 7f 7f 7f 7f 00 00 00 00 10 00 00 00 00 00 00 00 00 02 00 02 00 02 00 02
+66 00 00 08 7f 7f 7f 7f 00 00 00 00 00 00 00 00 00 00 00 00 00 02 00 02 00 02 00 02

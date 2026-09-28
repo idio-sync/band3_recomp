@@ -1,12 +1,16 @@
 #pragma once
 #include <cstdint>
 #include <rex/ui/imgui_dialog.h>
+#include "virtual_instrument.h"
 
 namespace band3::input {
 
-// The Instrument Lab: plays the virtual instrument with the mouse and shows the
-// exact report and capabilities it sends, to check how RB3 reads each
-// instrument. Toggled with bind_instrument_lab (F6).
+// The Instrument Lab (bind_instrument_lab, F6). Its tabs:
+// - Virtual instrument: plays the virtual instrument with the mouse and shows
+//   the exact report and capabilities it sends, to check how RB3 reads each
+//   instrument
+// - Connected instruments: each PS3/Wii instrument the HID driver has open, its
+//   raw reports next to what band3 sends, and a button to save a capture
 class InstrumentLabDialog : public rex::ui::ImGuiDialog {
 public:
     explicit InstrumentLabDialog(rex::ui::ImGuiDrawer* imgui_drawer)
@@ -18,6 +22,8 @@ protected:
     void OnDraw(ImGuiIO& io) override;
 
 private:
+    void DrawVirtualInstrument(InstrumentInputs& in);
+
     bool visible_ = false;
     int velocity_ = 100;
 };

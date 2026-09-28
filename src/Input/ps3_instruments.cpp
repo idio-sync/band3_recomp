@@ -82,6 +82,15 @@ std::optional<Ps3Instrument> IdentifyPs3Instrument(uint16_t vendor, uint16_t pro
     return std::nullopt;
 }
 
+const char* Ps3InstrumentLabel(Ps3Instrument instrument) {
+    switch (instrument) {
+    case Ps3Instrument::kGuitar: return "a guitar";
+    case Ps3Instrument::kDrumsRb1: return "an RB1 drum kit (no cymbals or velocity)";
+    case Ps3Instrument::kDrums: return "a drum kit";
+    }
+    return "an instrument";
+}
+
 Caps360 Ps3InstrumentCaps(Ps3Instrument instrument) {
     switch (instrument) {
     case Ps3Instrument::kGuitar: return GuitarCaps(false);

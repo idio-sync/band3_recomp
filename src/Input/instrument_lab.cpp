@@ -1,8 +1,11 @@
 #include "instrument_lab.h"
+#include <chrono>
 #include <cstdio>
 #include <string>
+#include <vector>
 #include <imgui.h>
 #include <rex/cvar.h>
+#include "hid_instruments.h"
 #include "virtual_instrument.h"
 #include "src/settings.h"
 
@@ -160,17 +163,90 @@ void DrawProGuitar(ProGuitarInputs& g, InstrumentKind kind, uint8_t velocity) {
     ImGui::Checkbox("Solo", &g.solo);
 }
 
-void DrawReport(InstrumentKind kind) {
-    const Caps360 caps = CapsFor(kind);
-    const Gamepad360 g = Encode(kind, VirtualInstrument::Get().Current());
-    auto u16 = [](int16_t v) { return static_cast<unsigned>(static_cast<uint16_t>(v)); };
+unsigned U16(int16_t v) { return static_cast<uint16_t>(v); }
+
+void DrawCaps(const Caps360& caps) {
     ImGui::TextDisabled("Capabilities");
     ImGui::Text("subtype %u  flags %04X  LX %04X  LY %04X  RX %04X", caps.sub_type, caps.flags,
-                u16(caps.gamepad.thumb_lx), u16(caps.gamepad.thumb_ly), u16(caps.gamepad.thumb_rx));
+                U16(caps.gamepad.thumb_lx), U16(caps.gamepad.thumb_ly),
+                U16(caps.gamepad.thumb_rx));
+}
+
+void DrawState(const Gamepad360& g) {
     ImGui::TextDisabled("Sending");
     ImGui::Text("buttons %04X  LT %02X  RT %02X  LX %04X  LY %04X  RX %04X  RY %04X", g.buttons,
-                g.left_trigger, g.right_trigger, u16(g.thumb_lx), u16(g.thumb_ly),
-                u16(g.thumb_rx), u16(g.thumb_ry));
+                g.left_trigger, g.right_trigger, U16(g.thumb_lx), U16(g.thumb_ly),
+                U16(g.thumb_rx), U16(g.thumb_ry));
+}
+
+void DrawReport(InstrumentKind kind) {
+    DrawCaps(CapsFor(kind));
+    DrawState(Encode(kind, VirtualInstrument::Get().Current()));
+}
+
+// a raw report as rows of 16 hex bytes, each row led by its offset
+void DrawHex(const std::vector<uint8_t>& bytes) {
+    if (bytes.empty()) {
+        ImGui::TextDisabled("(no reports yet)");
+        return;
+    }
+    char line[96];
+    for (size_t row = 0; row < bytes.size(); row += 16) {
+        int n = std::snprintf(line, sizeof(line), "%02zu:", row);
+        for (size_t i = row; i < bytes.size() && i < row + 16; i++) {
+            n += std::snprintf(line + n, sizeof(line) - n, " %02x", bytes[i]);
+        }
+        ImGui::TextUnformatted(line);
+    }
+}
+
+void DrawConnectedInstruments() {
+    if (!REXCVAR_GET(hid_instruments)) {
+        ImGui::TextWrapped("PS3 and Wii Rock Band instruments are read when the hid_instruments "
+                           "setting is on (F4, Band3 > Game). It takes a restart.");
+        return;
+    }
+    if (!HidInstrumentsActive()) {
+        ImGui::TextWrapped("hid_instruments is on but the HID reader isn't running: restart if "
+                           "it was just turned on, otherwise the log says why it didn't start.");
+        return;
+    }
+
+    const auto statuses = HidInstrumentStatuses();
+    if (statuses.empty()) {
+        ImGui::TextWrapped("No PS3 or Wii instruments found. Plug in a dongle; it shows up "
+                           "within a second or so.");
+    }
+    for (const auto& status : statuses) {
+        char header[160];
+        std::snprintf(header, sizeof(header), "%s (%04X:%04X)##%llx", status.name.c_str(),
+                      status.vendor, status.product,
+                      static_cast<unsigned long long>(status.id));
+        if (!ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen)) continue;
+
+        ImGui::PushID(header);
+        ImGui::Text("Reads as %s, release %04X, %llu reports",
+                    Ps3InstrumentLabel(status.instrument), status.release,
+                    static_cast<unsigned long long>(status.report_count));
+        ImGui::TextDisabled("Last report");
+        DrawHex(status.last_report);
+        DrawCaps(Ps3InstrumentCaps(status.instrument));
+        DrawState(status.state);
+        if (status.capturing) {
+            ImGui::TextUnformatted("Capturing...");
+        } else if (ImGui::Button("Save a 5 second capture")) {
+            StartHidCapture(status.id, std::chrono::seconds(5));
+        }
+        ImGui::PopID();
+        ImGui::Spacing();
+    }
+
+    ImGui::Separator();
+    const std::string message = LastHidCaptureMessage();
+    if (!message.empty()) ImGui::TextWrapped("%s", message.c_str());
+    ImGui::TextWrapped("A capture records the raw reports while you play whatever misbehaves, "
+                       "into the logs folder next to the executable. Send it along with what "
+                       "went wrong.");
 }
 
 }
@@ -192,6 +268,28 @@ void InstrumentLabDialog::OnDraw(ImGuiIO&) {
         instrument.SetHeld(in);
         return;
     }
+
+    bool virtual_tab = false;
+    if (ImGui::BeginTabBar("tabs")) {
+        if (ImGui::BeginTabItem("Virtual instrument")) {
+            virtual_tab = true;
+            DrawVirtualInstrument(in);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Connected instruments")) {
+            DrawConnectedInstruments();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    // held buttons only last while their tab is showing
+    if (!virtual_tab) ReleaseHeldButtons(in);
+    instrument.SetHeld(in);
+    ImGui::End();
+}
+
+void InstrumentLabDialog::DrawVirtualInstrument(InstrumentInputs& in) {
+    auto& instrument = VirtualInstrument::Get();
 
     bool connected = REXCVAR_GET(virtual_instrument);
     if (ImGui::Checkbox("Connected", &connected)) {
@@ -244,11 +342,8 @@ void InstrumentLabDialog::OnDraw(ImGuiIO&) {
         break;
     }
 
-    instrument.SetHeld(in);
-
     ImGui::Separator();
     DrawReport(kind);
-    ImGui::End();
 }
 
 }

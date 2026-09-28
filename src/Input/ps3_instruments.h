@@ -36,6 +36,9 @@ std::span<const Ps3InstrumentId> KnownPs3Instruments();
 std::optional<Ps3Instrument> IdentifyPs3Instrument(uint16_t vendor, uint16_t product,
                                                    uint16_t release);
 
+// for the Instrument Lab
+const char* Ps3InstrumentLabel(Ps3Instrument instrument);
+
 // what the instrument reports itself as to RB3. Guitars read as RB1-style
 // guitars, since the 360's auto-calibration sensors don't exist on them.
 Caps360 Ps3InstrumentCaps(Ps3Instrument instrument);

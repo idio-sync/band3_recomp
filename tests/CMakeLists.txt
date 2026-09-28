@@ -17,8 +17,14 @@ add_executable(band3_tests
     main.cpp
     instruments_test.cpp
     ps3_instruments_test.cpp
+    hid_capture_test.cpp
+    ${BAND3_ROOT}/src/Input/hid_capture.cpp
     ${BAND3_ROOT}/src/Input/instruments.cpp
     ${BAND3_ROOT}/src/Input/ps3_instruments.cpp
+)
+# instrument captures replayed by hid_capture_test.cpp
+target_compile_definitions(band3_tests PRIVATE
+    BAND3_CAPTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/captures"
 )
 target_include_directories(band3_tests PRIVATE
     ${BAND3_ROOT}
