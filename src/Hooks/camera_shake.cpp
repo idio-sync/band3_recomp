@@ -1,12 +1,12 @@
 // frame-rate independent camera shake
 
 #include "generated/band3_init.h"
-#include "src/config.h"
+#include "src/settings.h"
 #include <rex/logging.h>
 #include <algorithm>
 #include <chrono>
 
-// [debug] log_shake_timing: once a second, compares the game time the shake saw
+// log_shake_timing: once a second, compares the game time the shake saw
 // with the wall clock. A ratio near 1 means TaskMgr::DeltaSeconds tracks real frame
 // time; near refresh_rate / 60 means it counts fixed 60 Hz steps per frame.
 static void LogShakeTiming(float dt) {
@@ -38,7 +38,7 @@ static void LogShakeTiming(float dt) {
 // per frame and assumes 60 of them a second. dt is the game's own frame delta, so
 // it is shared by every shot in a frame and 0 while paused (the shake then skips).
 static float FrameScale(float dt) {
-	if (band3::GetConfig().log_shake_timing) LogShakeTiming(dt);
+	if (REXCVAR_GET(log_shake_timing)) LogShakeTiming(dt);
 	return std::clamp(dt * 60.0f, 0.0f, 4.0f);
 }
 
@@ -66,7 +66,7 @@ static bool ReadConstOffsets(uint8_t* base, int32_t (&out)[6]) {
 // fragile shitty hack, replace this with a proper CamShot::Shake impl in the future
 extern "C" REX_FUNC(CamShot__Shake) {
 	int32_t k[6];
-	if (!band3::GetConfig().native_camera_shake || !ReadConstOffsets(base, k)) {
+	if (!band3::settings::Startup().native_camera_shake || !ReadConstOffsets(base, k)) {
 		__imp__CamShot__Shake(ctx, base);
 		return;
 	}

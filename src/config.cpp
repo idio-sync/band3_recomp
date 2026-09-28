@@ -1,4 +1,5 @@
 #include "config.h"
+#include "settings.h"
 #include "ThirdParty/inih/INIReader.h"
 #include <rex/logging.h>
 
@@ -12,93 +13,133 @@
 
 namespace band3 {
 
-static Config g_config;
 static std::vector<std::string> g_args;
 static bool g_args_initialized = false;
+static std::string g_game_data_root;
 
-const Config& GetConfig() { return g_config; }
+namespace {
 
-void LoadConfig(const char* path) {
-    // inih keeps parsing past a bad line, so only a missing file loses the settings;
-    // either way the defaults below still apply and the args are still injected
+// where each ini key lands; the SDK's own cvars (window, refresh rate, audio,
+// log level, input backend) take the ini's values directly
+struct IniSetting {
+    const char* section;
+    const char* key;
+    const char* cvar;
+    // the ini documents 0 as "don't override" for these
+    bool zero_is_unset = false;
+};
+
+constexpr IniSetting kIniSettings[] = {
+    {"controller", "type", "controller_type"},
+    {"controller", "input_backend", "input_backend"},
+    {"rnd", "sync", "rnd_sync"},
+    {"rnd", "refresh_rate", "video_mode_refresh_rate", true},
+    {"venue", "forced_venue", "forced_venue"},
+    {"window", "fullscreen", "fullscreen"},
+    {"window", "width", "window_width", true},
+    {"window", "height", "window_height", true},
+    {"game", "fast_start", "fast_start"},
+    {"game", "disable_metamusic", "disable_metamusic"},
+    {"game", "lang", "lang"},
+    {"graphics", "disable_approximate_lights", "disable_approximate_lights"},
+    {"graphics", "disable_hair_shader", "disable_hair_shader"},
+    {"graphics", "fullbright", "fullbright"},
+    {"graphics", "compress_character_textures", "compress_character_textures"},
+    {"graphics", "disable_even_odd_rendering", "disable_even_odd_rendering"},
+    {"profile", "username", "username"},
+    {"events", "enabled", "events_enabled"},
+    {"events", "target", "events_target"},
+    {"events", "port", "events_port"},
+    {"discord", "enabled", "discord_enabled"},
+    {"audio", "max_queued_frames", "audio_maxqframes"},
+    {"memory", "main_heap_size", "main_heap_size"},
+    {"memory", "char_heap_size", "char_heap_size"},
+    {"debug", "overlay", "debug_overlay"},
+    {"debug", "log_level", "log_level"},
+    {"debug", "native_math", "native_math"},
+    {"debug", "native_camera_shake", "native_camera_shake"},
+    {"debug", "log_shake_timing", "log_shake_timing"},
+};
+
+// inih keeps quotes, and the ini has always shown paths in them
+std::string Unquote(std::string value) {
+    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+        return value.substr(1, value.size() - 2);
+    }
+    return value;
+}
+
+}
+
+std::string ReadIniGameDataRoot(const char* path) {
+    INIReader reader(path);
+    // [game] is where band3_config.ini documents it; [paths] kept for older inis
+    std::string root = Unquote(
+        reader.Get("game", "game_data_root", reader.Get("paths", "game_data_root", "")));
+    return root.empty() ? "assets" : root;
+}
+
+void ApplyLegacyIni(const char* path) {
+    // inih keeps parsing past a bad line, so only a missing file loses the settings
     INIReader reader(path);
     if (reader.ParseError() == -1) {
-        REXLOG_WARN("Failed to open {}, using defaults", path);
-    } else if (reader.ParseError() != 0) {
+        REXLOG_DEBUG("No {}, using band3.toml and defaults", path);
+        return;
+    }
+    if (reader.ParseError() != 0) {
         REXLOG_WARN("{}: {}; the other settings still apply", path, reader.ParseErrorMessage());
     }
 
-    g_config.controller_type =
-        reader.GetInteger("controller", "type", g_config.controller_type);
-    g_config.input_backend =
-        reader.Get("controller", "input_backend", g_config.input_backend);
-    g_config.sync =
-        reader.GetInteger("rnd", "sync", g_config.sync);
-    g_config.refresh_rate =
-        reader.GetInteger("rnd", "refresh_rate", g_config.refresh_rate);
-    g_config.forced_venue =
-        reader.Get("venue", "forced_venue", g_config.forced_venue);
-    g_config.fullscreen =
-        reader.GetBoolean("window", "fullscreen", g_config.fullscreen);
-    g_config.width =
-        reader.GetInteger("window", "width", g_config.width);
-    g_config.height =
-        reader.GetInteger("window", "height", g_config.height);
-    g_config.fast_start =
-        reader.GetBoolean("game", "fast_start", g_config.fast_start);
-    g_config.disable_metamusic =
-        reader.GetBoolean("game", "disable_metamusic", g_config.disable_metamusic);
-    // [game] is where band3_config.ini documents it; [paths] kept for older inis
-    g_config.game_data_root =
-        reader.Get("game", "game_data_root",
-                   reader.Get("paths", "game_data_root", g_config.game_data_root));
-    g_config.lang =
-        reader.Get("game", "lang", g_config.lang);
-    g_config.disable_approximate_lights =
-        reader.GetBoolean("graphics", "disable_approximate_lights", g_config.disable_approximate_lights);
-    g_config.disable_hair_shader =
-        reader.GetBoolean("graphics", "disable_hair_shader", g_config.disable_hair_shader);
-    g_config.compress_character_textures =
-        reader.GetBoolean("graphics", "compress_character_textures", g_config.compress_character_textures);
-    g_config.fullbright =
-        reader.GetBoolean("graphics", "fullbright", g_config.fullbright);
-    g_config.disable_even_odd_rendering =
-        reader.GetBoolean("graphics", "disable_even_odd_rendering", g_config.disable_even_odd_rendering);
-    g_config.username =
-        reader.Get("profile", "username", g_config.username);
-    g_config.events_enabled =
-        reader.GetBoolean("events", "enabled", g_config.events_enabled);
-    g_config.events_target =
-        reader.Get("events", "target", g_config.events_target);
-    g_config.events_port =
-        reader.GetInteger("events", "port", g_config.events_port);
-    g_config.discord_enabled =
-        reader.GetBoolean("discord", "enabled", g_config.discord_enabled);
-    g_config.main_heap_size =
-        reader.GetInteger("memory", "main_heap_size", g_config.main_heap_size);
-    g_config.char_heap_size =
-        reader.GetInteger("memory", "char_heap_size", g_config.char_heap_size);
-    g_config.max_queued_frames =
-        reader.GetInteger("audio", "max_queued_frames", g_config.max_queued_frames);
-    g_config.debug_overlay =
-        reader.GetBoolean("debug", "overlay", g_config.debug_overlay);
-    g_config.native_math =
-        reader.GetBoolean("debug", "native_math", g_config.native_math);
-    g_config.native_camera_shake =
-        reader.GetBoolean("debug", "native_camera_shake", g_config.native_camera_shake);
-    g_config.log_shake_timing =
-        reader.GetBoolean("debug", "log_shake_timing", g_config.log_shake_timing);
-    g_config.log_level =
-        reader.Get("debug", "log_level", g_config.log_level);
+    int applied = 0;
+    int overridden = 0;
+    for (const auto& s : kIniSettings) {
+        std::string value = Unquote(reader.Get(s.section, s.key, ""));
+        // an empty value is how the ini leaves a setting at its default
+        if (value.empty() || (s.zero_is_unset && value == "0")) continue;
 
-    // Inject config-driven args into the command line
+        // band3.toml, the environment and the command line all win over the ini
+        if (rex::cvar::GetFlagSource(s.cvar) != rex::cvar::Source::kDefault) {
+            overridden++;
+            continue;
+        }
+
+        const auto* info = rex::cvar::GetFlagInfo(s.cvar);
+        if (!info) {
+            REXLOG_WARN("{}: [{}] {} has no matching setting '{}'", path, s.section, s.key, s.cvar);
+            continue;
+        }
+        // the ini takes inih's true/yes/on/1 spellings
+        if (info->type == rex::cvar::FlagType::Boolean) {
+            value = reader.GetBoolean(s.section, s.key, false) ? "true" : "false";
+        }
+
+        if (!rex::cvar::SetFlagByName(s.cvar, value)) {
+            REXLOG_WARN("{}: [{}] {} = {} is not valid, keeping {}", path, s.section, s.key,
+                        value, rex::cvar::GetFlagByName(s.cvar));
+            continue;
+        }
+        applied++;
+    }
+
+    // loading the ini is not a change waiting on a restart
+    rex::cvar::ClearPendingRestartFlags();
+
+    REXLOG_INFO("{}: applied {} settings", path, applied);
+    if (overridden > 0) {
+        REXLOG_INFO("{}: {} settings are set elsewhere (band3.toml or the command line) "
+                    "and override it", path, overridden);
+    }
+}
+
+void AddSettingArgs() {
     GetArgs();
-    if (g_config.fast_start) {
+    if (REXCVAR_GET(fast_start)) {
         g_args.push_back("-fast");
     }
-    if (!g_config.lang.empty()) {
+    const std::string& lang = REXCVAR_GET(lang);
+    if (!lang.empty()) {
         g_args.push_back("-lang");
-        g_args.push_back(g_config.lang);
+        g_args.push_back(lang);
     }
 
     // hard defines for various usecases
@@ -107,10 +148,8 @@ void LoadConfig(const char* path) {
     g_args.push_back("MHX_PC");
 }
 
-std::string ReadForcedVenue(const char* path) {
-    INIReader reader(path);
-    return reader.Get("venue", "forced_venue", g_config.forced_venue);
-}
+const std::string& GameDataRoot() { return g_game_data_root; }
+void SetGameDataRoot(std::string root) { g_game_data_root = std::move(root); }
 
 const std::vector<std::string>& GetArgs() {
     if (!g_args_initialized) {

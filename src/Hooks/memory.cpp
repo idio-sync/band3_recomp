@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <cstring>
 #include "generated/band3_init.h"
-#include "src/config.h"
+#include "src/settings.h"
 #include "src/Game/DataNode.h"
 #include "src/Game/DataArray.h"
 
@@ -20,13 +20,14 @@ extern "C" REX_FUNC(AddHeap)
         auto* first = reinterpret_cast<const band3::DataNode*>(REX_RAW_ADDR(nodes_addr));
         if (first->type == band3::kDataSymbol) {
             const char* name = reinterpret_cast<const char*>(REX_RAW_ADDR(first->value));
-            auto& cfg = band3::GetConfig();
-            if (cfg.main_heap_size > 0 && strcmp(name, "main") == 0) {
-                REXLOG_INFO("Overriding main heap size: {:#x} -> {:#x}", ctx.r4.u32, cfg.main_heap_size);
-                ctx.r4.u32 = static_cast<uint32_t>(cfg.main_heap_size);
-            } else if (cfg.char_heap_size > 0 && strcmp(name, "char") == 0) {
-                REXLOG_INFO("Overriding char heap size: {:#x} -> {:#x}", ctx.r4.u32, cfg.char_heap_size);
-                ctx.r4.u32 = static_cast<uint32_t>(cfg.char_heap_size);
+            const int32_t main_heap = band3::settings::Startup().main_heap_size;
+            const int32_t char_heap = band3::settings::Startup().char_heap_size;
+            if (main_heap > 0 && strcmp(name, "main") == 0) {
+                REXLOG_INFO("Overriding main heap size: {:#x} -> {:#x}", ctx.r4.u32, main_heap);
+                ctx.r4.u32 = static_cast<uint32_t>(main_heap);
+            } else if (char_heap > 0 && strcmp(name, "char") == 0) {
+                REXLOG_INFO("Overriding char heap size: {:#x} -> {:#x}", ctx.r4.u32, char_heap);
+                ctx.r4.u32 = static_cast<uint32_t>(char_heap);
             }
         }
     }

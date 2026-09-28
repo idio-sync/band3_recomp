@@ -29,7 +29,7 @@
 #include <mutex>
 #include <thread>
 #include <rex/logging.h>
-#include "src/config.h"
+#include "src/settings.h"
 
 namespace band3::discord {
 
@@ -481,7 +481,7 @@ bool Enabled() {
 }
 
 void Start() {
-    if (g_started || !band3::GetConfig().discord_enabled) return;
+    if (g_started || !band3::settings::Startup().discord_enabled) return;
     g_stop = false;
     g_started = true;
     SetMenus();

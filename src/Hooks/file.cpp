@@ -41,7 +41,7 @@ extern "C" REX_FUNC(NewFile) {
 
                 bool exists = std::filesystem::exists(sanitized, ec);
 
-                const std::filesystem::path root(band3::GetConfig().game_data_root);
+                const std::filesystem::path root(band3::GameDataRoot());
                 if (!exists && !root.empty() && sanitized.begin() != sanitized.end() &&
                     *sanitized.begin() != *root.begin()) {
                     exists = std::filesystem::exists(root / sanitized, ec);

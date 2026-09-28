@@ -6,6 +6,7 @@
 #include <set>
 #include "generated/band3_init.h"
 #include "config.h"
+#include "settings.h"
 #include "src/Net/events.h"
 #include "src/Game/Symbol.h"
 #include <random>
@@ -14,7 +15,7 @@
 static std::set<size_t> g_consumed_args;
 
 void ControllerHook(PPCRegister& r11) {
-    long overrideType = band3::GetConfig().controller_type;
+    long overrideType = band3::settings::Startup().controller_type;
     if (overrideType != -1) r11.u64 = overrideType;
 }
 
@@ -86,14 +87,14 @@ extern "C" REX_FUNC(OptionStr)
 	ctx.r3.u64 = defaultPtr;
 }
 
-// Rnd::PreInit - override vsync from ini
+// Rnd::PreInit - override vsync from the rnd_sync setting
 extern "C" void __imp__Rnd__PreInit(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(Rnd__PreInit)
 {
 	uint32_t rnd_this = static_cast<uint32_t>(ctx.r3.u64);
 	__imp__Rnd__PreInit(ctx, base);
 
-	long sync = band3::GetConfig().sync;
+	long sync = band3::settings::Startup().rnd_sync;
 	if (sync >= 0) {
 		// TODO:
 		// get a proper Rnd structure instead of this pointer math
@@ -118,25 +119,25 @@ extern "C" REX_FUNC(PlatformMgr__SetDiskError)
 extern "C" void __imp__MetaMusic__Load(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(MetaMusic__Load)
 {
-    if (band3::GetConfig().disable_metamusic) return;
+    if (band3::settings::Startup().disable_metamusic) return;
     __imp__MetaMusic__Load(ctx, base);
 }
 extern "C" void __imp__MetaMusic__Poll(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(MetaMusic__Poll)
 {
-    if (band3::GetConfig().disable_metamusic) return;
+    if (band3::settings::Startup().disable_metamusic) return;
     __imp__MetaMusic__Poll(ctx, base);
 }
 extern "C" void __imp__MetaMusic__Start(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(MetaMusic__Start)
 {
-    if (band3::GetConfig().disable_metamusic) return;
+    if (band3::settings::Startup().disable_metamusic) return;
     __imp__MetaMusic__Start(ctx, base);
 }
 extern "C" void __imp__MetaMusic__Loaded(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(MetaMusic__Loaded)
 {
-    if (band3::GetConfig().disable_metamusic) {
+    if (band3::settings::Startup().disable_metamusic) {
         ctx.r3.u64 = 1;
         return;
     }
@@ -151,7 +152,7 @@ extern "C" REX_FUNC(SongMgr__IsDemo)
     return;
 }
 
-//Set venue from ini hook, re-reads forced_venue from the ini each time so it can be changed mid-game
+//Set venue from the forced_venue setting, read each time so it can be changed mid-game
 extern "C" void __imp__MetaPerformer__SetVenue(PPCContext& ctx, uint8_t* base);
 // reports the venue actually being set (r4 = venue Symbol) as an RB3E event
 static void SetVenueAndReport(PPCContext& ctx, uint8_t* base) {
@@ -162,7 +163,7 @@ static void SetVenueAndReport(PPCContext& ctx, uint8_t* base) {
 }
 extern "C" REX_FUNC(MetaPerformer__SetVenue)
 {
-    const std::string forced = band3::ReadForcedVenue();
+    const std::string forced = band3::settings::ForcedVenue();
 
     if (forced.empty() || forced == "false") {
         SetVenueAndReport(ctx, base);

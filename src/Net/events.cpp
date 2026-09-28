@@ -20,7 +20,7 @@
 #include <cstring>
 #include <mutex>
 #include <rex/logging.h>
-#include "src/config.h"
+#include "src/settings.h"
 
 namespace band3::events {
 
@@ -51,7 +51,8 @@ bool g_send_warned = false;
 
 // opens the socket and resolves the target; called with g_mutex held
 bool OpenSocket() {
-    const auto& cfg = band3::GetConfig();
+    const auto& startup = band3::settings::Startup();
+    const std::string& target = startup.events_target;
 
 #ifdef _WIN32
     WSADATA wsa;
@@ -80,9 +81,9 @@ bool OpenSocket() {
 
     g_dest = {};
     g_dest.sin_family = AF_INET;
-    g_dest.sin_port = htons(static_cast<uint16_t>(cfg.events_port));
-    if (inet_pton(AF_INET, cfg.events_target.c_str(), &g_dest.sin_addr) != 1) {
-        REXLOG_WARN("Events: invalid target '{}', broadcasting instead", cfg.events_target);
+    g_dest.sin_port = htons(static_cast<uint16_t>(startup.events_port));
+    if (inet_pton(AF_INET, target.c_str(), &g_dest.sin_addr) != 1) {
+        REXLOG_WARN("Events: invalid target '{}', broadcasting instead", target);
         g_dest.sin_addr.s_addr = htonl(INADDR_BROADCAST);
     }
 
@@ -118,7 +119,7 @@ void SendLocked(EventType type, const void* data, size_t size) {
 }
 
 bool Enabled() {
-    return band3::GetConfig().events_enabled;
+    return REXCVAR_GET(events_enabled);
 }
 
 void SendString(EventType type, const char* str) {

@@ -1,49 +1,29 @@
 #pragma once
-#include <cstdint>
 #include <string>
 #include <vector>
 
+// band3_config.ini predates the cvars in settings.h. It is still read, but only
+// fills in settings that band3.toml, the environment and the command line leave
+// unset, so anything saved from the F4 menu takes precedence over it.
+
 namespace band3 {
 
-struct Config {
-    long controller_type = 7;
-    std::string input_backend;
-    long sync = -1;
-    long refresh_rate = 0;
-    std::string forced_venue = "false";
-    bool fullscreen = false;
-    long width = 1280;
-    long height = 720;
-    bool fast_start = false;
-    std::string lang;
-    bool disable_metamusic = false;
-    bool disable_approximate_lights = true;
-    bool disable_hair_shader = false;
-    bool fullbright = false;
-    bool compress_character_textures = false;
-    bool disable_even_odd_rendering = false;
-    long main_heap_size = 0;
-    long char_heap_size = 0;
-    std::string username;
-    bool events_enabled = false;
-    std::string events_target = "255.255.255.255";
-    long events_port = 21070;
-    bool discord_enabled = false;
-    long max_queued_frames = 3;
-    bool debug_overlay = true;
-    bool native_math = true;
-    bool native_camera_shake = true;
-    bool log_shake_timing = false;
-    std::string log_level = "info";
-    std::string game_data_root = "assets";
-};
+inline constexpr const char* kLegacyIniPath = "band3_config.ini";
 
-const Config& GetConfig();
-void LoadConfig(const char* path = "band3_config.ini");
+// the ini's game data root, or "assets"; paths are fixed before the other
+// settings load, so this one is read on its own
+std::string ReadIniGameDataRoot(const char* path = kLegacyIniPath);
 
-// re-reads only [venue] forced_venue, so it can be changed while the game runs;
-// falls back to the value loaded at startup
-std::string ReadForcedVenue(const char* path = "band3_config.ini");
+// copies the ini's values onto the cvars nothing else has set
+void ApplyLegacyIni(const char* path = kLegacyIniPath);
+
+// adds the game arguments the settings drive (-fast, -lang) to GetArgs();
+// call once, after the settings are loaded
+void AddSettingArgs();
+
+// the game data root the runtime was started with
+const std::string& GameDataRoot();
+void SetGameDataRoot(std::string root);
 
 const std::vector<std::string>& GetArgs();
 

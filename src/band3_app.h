@@ -12,8 +12,11 @@
 #include <imgui.h>
 
 #include "config.h"
+#include "settings.h"
 #include "Net/discord.h"
 
+// always attached, and draws nothing while debug_overlay is off, so the
+// setting can be flipped in F4
 class DebugOverlayDialog : public rex::ui::ImGuiDialog {
  public:
   explicit DebugOverlayDialog(rex::ui::ImGuiDrawer* imgui_drawer)
@@ -21,6 +24,7 @@ class DebugOverlayDialog : public rex::ui::ImGuiDialog {
 
  protected:
   void OnDraw(ImGuiIO& io) override {
+    if (!REXCVAR_GET(debug_overlay)) return;
     ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(220, 60), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.5f);
@@ -42,34 +46,36 @@ class Band3App : public rex::ReXApp {
         PPCImageConfig));
   }
 
+  // paths are fixed before band3.toml loads, so the game data root is the one
+  // setting read here; --game_data_root on the command line wins over the ini
   void OnConfigurePaths(rex::PathConfig& paths) override {
-    band3::LoadConfig();
-    auto& cfg = band3::GetConfig();
-    paths.game_data_root = cfg.game_data_root;
+    if (rex::cvar::GetFlagSource("game_data_root") == rex::cvar::Source::kDefault) {
+      paths.game_data_root = band3::ReadIniGameDataRoot();
+    }
+    band3::SetGameDataRoot(paths.game_data_root.string());
+  }
 
-    // runs before the window is created, so the size applies at startup
-    if (cfg.width > 0 && cfg.height > 0) {
-      rex::cvar::SetFlagByName("window_width", std::to_string(cfg.width));
-      rex::cvar::SetFlagByName("window_height", std::to_string(cfg.height));
+  // band3.toml, the environment and the command line are applied by now, and
+  // the window and input system don't exist yet, so everything set here applies
+  // at startup
+  void OnPostInitLogging() override {
+    band3::ApplyLegacyIni();
+
+    // band3 keeps a shorter audio queue than the SDK's 64 unless told otherwise
+    if (rex::cvar::GetFlagSource("audio_maxqframes") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("audio_maxqframes", "3");
+      rex::cvar::ClearPendingRestartFlags();
     }
 
-    // the input system is created after this, so the backend applies at startup;
-    // an input_backend set in band3.toml is loaded later and takes precedence
-    if (!cfg.input_backend.empty()) {
 #ifndef _WIN32
-      if (cfg.input_backend == "xinput") {
-        REXLOG_WARN("input_backend = xinput is Windows-only, keeping the default");
-      } else
+    if (rex::cvar::GetFlagByName("input_backend") == "xinput") {
+      REXLOG_WARN("input_backend = xinput is Windows-only, using sdl");
+      rex::cvar::SetFlagByName("input_backend", "sdl");
+    }
 #endif
-      if (!rex::cvar::SetFlagByName("input_backend", cfg.input_backend)) {
-        REXLOG_WARN("Unknown input_backend '{}', keeping the default", cfg.input_backend);
-      }
-    }
 
-    // guest vblank rate; with [rnd] sync on, the game draws one frame per vblank
-    if (cfg.refresh_rate > 0) {
-      rex::cvar::SetFlagByName("video_mode_refresh_rate", std::to_string(cfg.refresh_rate));
-    }
+    band3::AddSettingArgs();
+    band3::settings::Init();
   }
 
   // GPU emulation is a plugin (rexgpu-xenos) that the SDK leaves off unless
@@ -81,8 +87,6 @@ class Band3App : public rex::ReXApp {
   }
 
   void OnPostSetup() override {
-    rex::cvar::SetFlagByName("log_level", band3::GetConfig().log_level);
-    rex::cvar::SetFlagByName("audio_maxqframes", std::to_string(band3::GetConfig().max_queued_frames));
     band3::discord::Start();
   }
 
@@ -90,13 +94,9 @@ class Band3App : public rex::ReXApp {
     band3::discord::Stop();
   }
 
+  // the SDK applies the fullscreen cvar to the window itself
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
-    auto& cfg = band3::GetConfig();
-    if (cfg.fullscreen) {
-      window()->SetFullscreen(true);
-    }
-
-    if (cfg.debug_overlay && drawer) {
+    if (drawer) {
       debug_overlay_ = std::make_unique<DebugOverlayDialog>(drawer);
     } else {
       debug_overlay_.reset();

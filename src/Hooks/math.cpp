@@ -1,12 +1,12 @@
 #include <cmath>
 #include <rex/hook.h>
-#include "src/config.h"
+#include "src/settings.h"
 
-// Like REX_HOOK, but runs the recompiled original when [debug] native_math is off.
+// Like REX_HOOK, but runs the recompiled original when native_math is off.
 #define BAND3_MATH_HOOK(subroutine, function)                         \
   extern "C" void __imp__##subroutine(PPCContext& ctx, uint8_t* base); \
   extern "C" REX_FUNC(subroutine) {                                     \
-    if (!band3::GetConfig().native_math) {                              \
+    if (!REXCVAR_GET(native_math)) {                              \
       __imp__##subroutine(ctx, base);                                   \
       return;                                                           \
     }                                                                   \
@@ -115,7 +115,7 @@ static void Interp_Vector3(mapped_f32 a, mapped_f32 b, f64 t, mapped_f32 dst) {
 // I think it tries to use f3 instead of f1.
 extern "C" void __imp___Interp_Vector3(PPCContext& ctx, uint8_t* base);
 REX_HOOK_RAW(_Interp_Vector3) {
-	if (!band3::GetConfig().native_math) {
+	if (!REXCVAR_GET(native_math)) {
 		__imp___Interp_Vector3(ctx, base);
 		return;
 	}
