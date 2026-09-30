@@ -1,0 +1,26 @@
+# Rock Band 3 Deluxe code caves
+#
+# Included after band3_config.toml, so these rows replace its rows at the same
+# address. Rock Band 3 Deluxe patches the TU5 default.xex with branches into code
+# caves; each cave needs a function entry here, and so does every place it
+# branches back to.
+#
+# The rows carry no size on purpose. Codegen then finds where each function ends
+# from the image it is given, so the same rows fit both executables: against
+# vanilla TU5 the functions keep their full bodies (an entry point declared
+# inside a function leaves that function's code as it was), and the cave rows
+# are unused copies of code that is already there.
+
+[functions]
+# Deluxe replaces PlatformMgr::SetDiskError with a blr and puts a cave after it
+0x82516320 = { name = "PlatformMgr__SetDiskError" }
+
+# DataSet branches to the cave at 0x8275D6E0 instead of `mr r4,r30`. The cave
+# checks the DataNode it was given and either resumes the assignment at
+# 0x8275D6E4 or skips to the epilogue at 0x8275D6F0. Those two points are in
+# the middle of DataSet, so they are functions of their own here, sharing the
+# registers DataSet set up.
+0x82516324 = { name = "rb3dx_DataSet_cave", share_registers = true }
+0x8275D670 = { name = "DataSet" }
+0x8275D6E4 = { name = "rb3dx_DataSet_resume", share_registers = true }
+0x8275D6F0 = { name = "rb3dx_DataSet_exit", share_registers = true }
