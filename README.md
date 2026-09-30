@@ -16,7 +16,11 @@ It targets ReXGlue SDK 0.10 and adds:
 
 Before building, ensure you have the following:
 
-- [rexglue-sdk](https://github.com/rexglue/rexglue-sdk/releases) v0.10.0
+- [rexglue-sdk nightly 0.10.0.15-dev.g5cf287f](https://github.com/rexglue/rexglue-sdk/releases/tag/nightly-20260925-5cf287f4) (nightly-20260925-5cf287f4). The
+  plain v0.10.0 release isn't enough: band3 needs this nightly's XInput changes. Unpack
+  the zip for your platform and put the folder inside it (`win-amd64`, `linux-amd64`, ...)
+  at `.rexglue-sdk` in the repository root, where the CMake presets look for it, so that
+  `.rexglue-sdk/include/rex/version.h` exists.
 - A copy of Rock Band 3 (Xbox 360) with Title Update 5 (TU5) XEX
 
 ## Building
@@ -24,7 +28,7 @@ Before building, ensure you have the following:
 ### Windows
 
 Prerequisites
-   - [rexglue-sdk](https://github.com/rexglue/rexglue-sdk/releases)
+   - [rexglue-sdk nightly-20260925-5cf287f4](https://github.com/rexglue/rexglue-sdk/releases/tag/nightly-20260925-5cf287f4), in `.rexglue-sdk` (see above)
    - Visual Studio with "Desktop development with C++" installed
    - cmake
    - ninja
@@ -60,7 +64,7 @@ Prerequisites
    - cmake
    - ninja
    - clang
-   - [rexglue-sdk](https://github.com/rexglue/rexglue-sdk/releases)
+   - [rexglue-sdk nightly-20260925-5cf287f4](https://github.com/rexglue/rexglue-sdk/releases/tag/nightly-20260925-5cf287f4), in `.rexglue-sdk` (see above)
 
 1. Install required packages:
    ```
