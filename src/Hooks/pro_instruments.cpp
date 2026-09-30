@@ -7,6 +7,7 @@
 #include "generated/band3_init.h"
 #include "src/Input/input_system.h"
 #include "src/Input/instruments.h"
+#include "src/Input/pro_instrument_status.h"
 #include "src/Input/xinput_state.h"
 
 // Pro Keys and Pro Guitar. RB3 reads a keytar's keys and a pro guitar's frets
@@ -28,6 +29,8 @@ using rex::X_RESULT;
 
 // JoypadData::mProGuitarData, read as ProKeysData by the keyboard
 constexpr uint32_t kJoypadData_ProData = 0x34;
+// JoypadData::mType, the JoypadType the Poll functions pick pads by
+constexpr uint32_t kJoypadData_Type = 0x6C;
 // kNumJoypads; pad n reads XInput player n
 constexpr uint32_t kNumJoypads = 4;
 
@@ -39,26 +42,39 @@ PPCContext CallContext(const PPCContext& ctx) {
     return call;
 }
 
+bool IsProSubtype(uint8_t subtype) {
+    return subtype == kSubtypeProGuitar || subtype == kSubtypeKeytar;
+}
+
 // Writes the pro data of every pad whose instrument reports `subtype`. Pads
-// that are anything else keep what the game read.
+// that are anything else keep what the game read. Records each pad for the
+// Instrument Lab, leaving the other hook's pads to it.
 void FillProData(PPCContext& ctx, uint8_t* base, uint8_t subtype) {
     rex::input::InputSystem* input = GameInputSystem();
     if (!input) return;
 
     for (uint32_t pad = 0; pad < kNumJoypads; pad++) {
         rex::input::X_INPUT_CAPABILITIES caps{};
-        if (input->GetCapabilities(pad, 0, &caps) != X_ERROR_SUCCESS) continue;
-        if (caps.sub_type != subtype) continue;
-        rex::input::X_INPUT_STATE state{};
-        if (input->GetState(pad, &state) != X_ERROR_SUCCESS) continue;
-        const ProData data = EncodeProData(LoadGamepad(state.gamepad));
+        const bool connected = input->GetCapabilities(pad, 0, &caps) == X_ERROR_SUCCESS;
+        const bool mine = connected && caps.sub_type == subtype;
+        if (connected && !mine && IsProSubtype(caps.sub_type)) continue;
 
         PPCContext call = CallContext(ctx);
         call.r3.u64 = pad;
         JoypadGetPadData(call, base);
         const uint32_t pad_data = call.r3.u32;
         if (!pad_data) continue;
+        const uint32_t game_type = REX_LOAD_U32(pad_data + kJoypadData_Type);
+
+        rex::input::X_INPUT_STATE state{};
+        if (!mine || input->GetState(pad, &state) != X_ERROR_SUCCESS) {
+            RecordProPad(static_cast<int>(pad), connected, connected ? caps.sub_type : 0,
+                         game_type, nullptr);
+            continue;
+        }
+        const ProData data = EncodeProData(LoadGamepad(state.gamepad));
         std::memcpy(REX_RAW_ADDR(pad_data + kJoypadData_ProData), data.data(), data.size());
+        RecordProPad(static_cast<int>(pad), true, caps.sub_type, game_type, &data);
     }
 }
 

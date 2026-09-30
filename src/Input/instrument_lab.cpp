@@ -7,7 +7,9 @@
 #include <rex/cvar.h>
 #include "hid_instruments.h"
 #include "midi_drums_driver.h"
+#include "pro_instrument_status.h"
 #include "virtual_instrument.h"
+#include "src/Audio/usb_mic_capture.h"
 #include "src/settings.h"
 
 namespace band3::input {
@@ -307,6 +309,142 @@ void DrawMidiDrums() {
                        "44=Kick,40=Snare. It takes a restart.");
 }
 
+// the JoypadTypes whose pro data RB3 reads (UsbMidiGuitar::Poll and
+// UsbMidiKeyboard::Poll, for the Xbox types)
+bool GameReadsProData(uint32_t game_type) {
+    return game_type == 30 || game_type == 31 || game_type == 32 || game_type == 34;
+}
+
+void DrawProInstruments() {
+    if (!ProPadsPolled()) {
+        ImGui::TextWrapped("The game hasn't polled its controllers yet; this fills in once it's "
+                           "running.");
+        return;
+    }
+    ImGui::TextWrapped("RB3 reads Pro Keys and Pro Guitar from 16 bytes per player, which band3 "
+                       "writes for keytars and pro guitars. The game only reads them for a "
+                       "player it sees as one of those, so check that column first.");
+
+    const auto pads = ProPadStatuses();
+    if (ImGui::BeginTable("pro", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("Player");
+        ImGui::TableSetupColumn("Instrument");
+        ImGui::TableSetupColumn("Game sees");
+        ImGui::TableSetupColumn("Bytes band3 wrote", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+        for (int pad = 0; pad < kProPads; pad++) {
+            const ProPadStatus& s = pads[pad];
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%d", pad + 1);
+
+            ImGui::TableNextColumn();
+            if (!s.connected) {
+                ImGui::TextDisabled("none");
+            } else if (s.subtype == kSubtypeKeytar) {
+                ImGui::TextUnformatted("keytar");
+            } else if (s.subtype == kSubtypeProGuitar) {
+                ImGui::TextUnformatted("pro guitar");
+            } else {
+                ImGui::Text("subtype %u", s.subtype);
+            }
+
+            ImGui::TableNextColumn();
+            if (const char* name = JoypadTypeName(s.game_type)) {
+                ImGui::Text("%s (%u)", name, s.game_type);
+            } else {
+                ImGui::Text("type %u", s.game_type);
+            }
+
+            ImGui::TableNextColumn();
+            if (!s.writing) {
+                ImGui::TextDisabled("not written");
+                continue;
+            }
+            char hex[64];
+            int n = 0;
+            for (uint8_t b : s.data) n += std::snprintf(hex + n, sizeof(hex) - n, "%02x ", b);
+            ImGui::TextUnformatted(hex);
+            if (!GameReadsProData(s.game_type)) {
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                   "the game doesn't read these for this type");
+            }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextWrapped("Bytes 0-9 are the instrument's triggers and sticks. If the game sees the "
+                       "right type and the keys or frets are still wrong, send these bytes "
+                       "along with what you pressed.");
+}
+
+void DrawMicrophones() {
+    if (!REXCVAR_GET(usb_mics)) {
+        ImGui::TextWrapped("Microphones are used when the usb_mics setting is on (F4, Band3 > "
+                           "Microphones). It takes a restart.");
+        return;
+    }
+    const audio::UsbMicStatus status = audio::GetUsbMicStatus();
+    if (!status.running) {
+        ImGui::TextWrapped("usb_mics is on but recording isn't running: restart if it was just "
+                           "turned on, otherwise the log says why it didn't start.");
+        return;
+    }
+    if (status.test_tone > 0) {
+        ImGui::Text("Singing a %d Hz test tone into mic slot 1", status.test_tone);
+    }
+
+    if (ImGui::BeginTable("mics", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("Slot");
+        ImGui::TableSetupColumn("Recording", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Game thread");
+        ImGui::TableSetupColumn("Connected");
+        ImGui::TableSetupColumn("Audio fed");
+        ImGui::TableHeadersRow();
+        for (int i = 0; i < audio::usb_mic::kSlots; i++) {
+            const audio::UsbMicSlotStatus& s = status.slots[i];
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%d", i + 1);
+            ImGui::TableNextColumn();
+            if (s.device.empty()) {
+                ImGui::TextDisabled("nothing");
+            } else {
+                ImGui::TextUnformatted(s.device.c_str());
+            }
+            ImGui::TableNextColumn();
+            if (s.thread) {
+                ImGui::TextUnformatted("running");
+            } else {
+                ImGui::TextDisabled("not started");
+            }
+            ImGui::TableNextColumn();
+            if (s.connected) {
+                ImGui::TextUnformatted("yes");
+            } else if (s.refusals > 0) {
+                ImGui::Text("waiting (%llu tries)", static_cast<unsigned long long>(s.refusals));
+            } else {
+                ImGui::TextDisabled("no");
+            }
+            ImGui::TableNextColumn();
+            // 16-bit samples
+            ImGui::Text("%.1f s", static_cast<double>(s.bytes_fed) /
+                                      (audio::usb_mic::kSampleRate * 2));
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::TextDisabled("Recording devices");
+    if (status.test_tone > 0) {
+        ImGui::TextUnformatted("(not listed while the test tone plays)");
+    } else if (status.devices.empty()) {
+        ImGui::TextUnformatted("(none found)");
+    }
+    for (const auto& device : status.devices) ImGui::BulletText("%s", device.c_str());
+    ImGui::TextWrapped("The game starts a thread for each slot along with its audio. Waiting "
+                       "means the game hasn't set the slot up yet, which should happen by the "
+                       "time vocals are picked; audio fed then climbs while a song plays.");
+}
+
 }
 
 void InstrumentLabDialog::OnDraw(ImGuiIO&) {
@@ -340,6 +478,14 @@ void InstrumentLabDialog::OnDraw(ImGuiIO&) {
         }
         if (ImGui::BeginTabItem("MIDI drums")) {
             DrawMidiDrums();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Pro instruments")) {
+            DrawProInstruments();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Microphones")) {
+            DrawMicrophones();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

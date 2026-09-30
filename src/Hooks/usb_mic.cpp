@@ -96,6 +96,7 @@ void Feed(PPCContext& ctx, uint8_t* base, uint32_t dev, int slot) {
         call.r4.u64 = buffer;
         call.r5.u64 = length;
         ExternalMicClientMgr__AddAudio(call, base);
+        NoteUsbMicFed(slot, length);
         if (length < pcm.size()) return;
     }
 }
@@ -120,6 +121,7 @@ extern "C" REX_FUNC(ExternalMicThreadEntry)
     }
     const int slot = static_cast<int>(dev);
     REXLOG_DEBUG("USB mics: mic slot {} thread started", slot + 1);
+    NoteUsbMicThread(slot);
 
     Slot state;
     bool reported_refusal = false;
@@ -129,6 +131,7 @@ extern "C" REX_FUNC(ExternalMicThreadEntry)
         case Action::kConnect: {
             const bool accepted = Connect(ctx, base, dev);
             state.Connected(accepted, now);
+            NoteUsbMicConnect(slot, accepted);
             if (accepted) {
                 REX_STORE_U8(mic + kExternalMic_Connected, 1);
                 REXLOG_INFO("USB mics: the game connected mic slot {}", slot + 1);
@@ -147,6 +150,7 @@ extern "C" REX_FUNC(ExternalMicThreadEntry)
             Disconnect(ctx, base, dev);
             REX_STORE_U8(mic + kExternalMic_Connected, 0);
             state.Disconnected();
+            NoteUsbMicDisconnect(slot);
             REXLOG_INFO("USB mics: mic slot {} disconnected", slot + 1);
             break;
         case Action::kWait:
@@ -158,6 +162,7 @@ extern "C" REX_FUNC(ExternalMicThreadEntry)
     if (state.connected()) {
         Disconnect(ctx, base, dev);
         REX_STORE_U8(mic + kExternalMic_Connected, 0);
+        NoteUsbMicDisconnect(slot);
     }
     ctx.r3.u64 = 0;
 }

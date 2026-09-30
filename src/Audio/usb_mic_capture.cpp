@@ -54,6 +54,7 @@ public:
         if (tone > 0) {
             std::lock_guard<std::mutex> lock(mutex_);
             tone_.emplace(static_cast<double>(tone), Clock::now());
+            tone_hz_ = tone;
             running_ = true;
             REXLOG_INFO("USB mics: singing a {} Hz test tone into mic slot 1", tone);
             return true;
@@ -113,6 +114,31 @@ public:
         if (!running_) return false;
         if (tone_) return slot == 0;
         return slots_[slot].stream != nullptr;
+    }
+
+    // the game side's progress, reported by Hooks/usb_mic.cpp
+    template <typename F>
+    void UpdateGameSide(int slot, F update) {
+        if (slot < 0 || slot >= kSlots) return;
+        std::lock_guard<std::mutex> lock(mutex_);
+        update(game_side_[slot]);
+    }
+
+    UsbMicStatus Status() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        UsbMicStatus status;
+        status.running = running_;
+        status.test_tone = tone_ ? tone_hz_ : 0;
+        status.devices = device_names_;
+        for (int i = 0; i < kSlots; i++) {
+            status.slots[i] = game_side_[i];
+            if (tone_) {
+                if (i == 0) status.slots[i].device = "test tone";
+            } else if (slots_[i].stream) {
+                status.slots[i].device = slots_[i].name;
+            }
+        }
+        return status;
     }
 
     size_t Read(int slot, std::span<uint8_t> out) {
@@ -178,6 +204,8 @@ private:
     void Scan() {
         const std::vector<Device> devices = ListDevices();
         std::lock_guard<std::mutex> lock(mutex_);
+        device_names_.clear();
+        for (const auto& d : devices) device_names_.push_back(d.name);
         for (int i = 0; i < kSlots; i++) {
             MicSlot& slot = slots_[i];
             if (slot.stream) {
@@ -252,6 +280,10 @@ private:
     bool running_ = false;
     std::array<MicSlot, kSlots> slots_{};
     std::optional<ToneSource> tone_;
+    int tone_hz_ = 0;
+    std::vector<std::string> device_names_;
+    // device stays empty here; Status fills it in
+    std::array<UsbMicSlotStatus, kSlots> game_side_{};
 };
 
 // lives for the whole run: the game's mic threads may still read it while
@@ -277,5 +309,26 @@ bool UsbMicsRunning() { return GetCapture().Running(); }
 bool UsbMicReady(int slot) { return GetCapture().Ready(slot); }
 
 size_t ReadUsbMic(int slot, std::span<uint8_t> out) { return GetCapture().Read(slot, out); }
+
+void NoteUsbMicThread(int slot) {
+    GetCapture().UpdateGameSide(slot, [](UsbMicSlotStatus& s) { s.thread = true; });
+}
+
+void NoteUsbMicConnect(int slot, bool accepted) {
+    GetCapture().UpdateGameSide(slot, [accepted](UsbMicSlotStatus& s) {
+        s.connected = accepted;
+        if (!accepted) s.refusals++;
+    });
+}
+
+void NoteUsbMicDisconnect(int slot) {
+    GetCapture().UpdateGameSide(slot, [](UsbMicSlotStatus& s) { s.connected = false; });
+}
+
+void NoteUsbMicFed(int slot, size_t bytes) {
+    GetCapture().UpdateGameSide(slot, [bytes](UsbMicSlotStatus& s) { s.bytes_fed += bytes; });
+}
+
+UsbMicStatus GetUsbMicStatus() { return GetCapture().Status(); }
 
 }

@@ -143,7 +143,9 @@ RB3 reads a keytar's keys and a pro guitar's frets and strings through an Xbox 3
 call that ReXGlue doesn't implement, so band3 hands the game that data itself, for any
 keytar or pro guitar the input system reports: the Instrument Lab's, or a real one on
 Windows with `input_backend = xinput`. This hasn't been run against the game yet; the
-Instrument Lab's keys and pro guitars are the way to check it. Keep the SDK's stick
+Instrument Lab's keys and pro guitars are the way to check it, and its **Pro instruments**
+tab shows, per player, the instrument type the game sees and the bytes band3 gave it. Keep
+the SDK's stick
 deadzones (`left_stick_deadzone_percentage`, `right_stick_deadzone_percentage`) at 0,
 since these instruments send their keys and frets in the stick values.
 
@@ -191,8 +193,9 @@ are picked up.
 
 This hasn't been run against the game yet. To check the game hears a mic slot without a
 microphone, set `usb_mic_test_tone` to a pitch in Hz (e.g. 220): the first slot then sings
-that steady tone, which the vocal track's pitch arrow should hold. The log reports each
-step (`USB mics: ...`); set `log_level` to debug to also see the game setting up its slots.
+that steady tone, which the vocal track's pitch arrow should hold. The Instrument Lab's
+**Microphones** tab (F6) shows what records each slot, whether the game has connected it and
+how much audio it has taken; the log reports the same steps (`USB mics: ...`).
 
 ### Steam Deck
 
