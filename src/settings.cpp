@@ -199,6 +199,10 @@ REXCVAR_DEFINE_BOOL(log_shake_timing, false, "Band3/Debug",
     "shake runs")
     .debug_only();
 
+REXCVAR_DEFINE_BOOL(autoplay, false, "Band3/Debug",
+    "The game plays every part itself, from the next song start: for repeatable profiling "
+    "runs and for checking a song without playing it");
+
 REXCVAR_DEFINE_BOOL(virtual_instrument, false, "Band3/Debug",
     "Connect a virtual Xbox 360 instrument, played from the Instrument Lab (F6)");
 
