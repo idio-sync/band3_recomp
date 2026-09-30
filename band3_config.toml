@@ -26411,7 +26411,7 @@ strcpy_s                = 0x8282B0B8
 0x8257C430 = { name = "rex_sub_8257C430", size = 0x28 }
 0x8257C458 = { name = "rex_sub_8257C458", size = 0x28 }
 0x8257C480 = { name = "MetaPerformer__NumSongs", size = 0x14 }
-0x8257C498 = { name = "MetaPerformer__GetSongShortname", size = 0x80 }
+0x8257C498 = { name = "MetaPerformer__Song", size = 0x80 }
 0x8257C518 = { name = "MetaPerformer__SongsID", size = 0x60 }
 0x8257C578 = { name = "MetaPerformer__HasSong", size = 0x4C }
 0x8257C5C8 = { name = "MetaPerformer__GetCompletedSong", size = 0xC8 }
@@ -36290,7 +36290,7 @@ strcpy_s                = 0x8282B0B8
 0x82682A48 = { name = "BandUserMgr__GetLocalUser", size = 0x38 }
 0x82682A80 = { name = "BandUserMgr__GetRemoteUser", size = 0x34 }
 0x82682AB8 = { name = "BandUserMgr__GetBandUser", size = 0xA8 }
-0x82682B60 = { name = "BandUserMgr__GetBandUserFromSlot", size = 0x64 }
+0x82682B60 = { name = "BandUserMgr__GetUserFromSlot", size = 0x64 }
 0x82682BC8 = { name = "BandUserMgr__GetNumParticipants", size = 0x80 }
 0x82682C48 = { name = "BandUserMgr__IsMultiplayerGame", size = 0x38 }
 0x82682C80 = { name = "BandUserMgr__GetNumLocalPlayers", size = 0x88 }
@@ -42977,7 +42977,7 @@ strcpy_s                = 0x8282B0B8
 0x8274B000 = { name = "DataNode__Str", size = 0x3C }
 0x8274B040 = { name = "DataNode__Float", size = 0x48 }
 0x8274B088 = { name = "DataNode__GetObj", size = 0x6C }
-0x8274B0F8 = { name = "DataNode___value", size = 0x24 }
+0x8274B0F8 = { name = "DataNode__Int", size = 0x24 }
 0x8274B120 = { name = "DataNode__NotNull", size = 0x7C }
 0x8274B1A0 = { name = "DataVarExists", size = 0x48 }
 0x8274B1E8 = { name = "DataVarName", size = 0x68 }

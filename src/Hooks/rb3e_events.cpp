@@ -18,10 +18,10 @@ extern "C" void __imp__Game____ct(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__Game____dt(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__PresenceMgr__UpdatePresence(PPCContext& ctx, uint8_t* base);
 
-REX_EXTERN(MetaPerformer__GetSongShortname);
+REX_EXTERN(MetaPerformer__Song);
 REX_EXTERN(BandSongMgr__GetSongIDFromShortname);
 REX_EXTERN(BandSongMgr__Data);
-REX_EXTERN(BandUserMgr__GetBandUserFromSlot);
+REX_EXTERN(BandUserMgr__GetUserFromSlot);
 
 namespace {
 
@@ -86,12 +86,12 @@ SongInfo ReadSongInfo(const PPCContext& ctx, uint8_t* base) {
     uint32_t meta_performer = Load32(base, kTheMetaPerformerPtr);
     if (!meta_performer) return song;
 
-    // MetaPerformer::GetSongShortname(Symbol* out, MetaPerformer*)
+    // MetaPerformer::Song(Symbol* out, MetaPerformer*)
     PPCContext call = CallContext(ctx, 0x100);
     uint32_t out = call.r1.u32 + 0x80;
     call.r3.u64 = out;
     call.r4.u64 = meta_performer;
-    MetaPerformer__GetSongShortname(call, base);
+    MetaPerformer__Song(call, base);
     uint32_t shortname = Load32(base, out);
     if (!shortname) return song;
     song.shortname = GuestStr(base, shortname);
@@ -122,11 +122,11 @@ band3::events::BandInfo ReadBandInfo(const PPCContext& ctx, uint8_t* base) {
     uint32_t user_mgr = Load32(base, kTheBandUserMgrPtr);
     if (!user_mgr) return info;
     for (uint32_t slot = 0; slot < 4; slot++) {
-        // BandUserMgr::GetBandUserFromSlot(BandUserMgr*, int slot) -> BandUser*
+        // BandUserMgr::GetUserFromSlot(BandUserMgr*, int slot) -> BandUser*
         PPCContext call = CallContext(ctx, 0x100);
         call.r3.u64 = user_mgr;
         call.r4.u64 = slot;
-        BandUserMgr__GetBandUserFromSlot(call, base);
+        BandUserMgr__GetUserFromSlot(call, base);
         uint32_t user = call.r3.u32;
         if (!user) continue;
         info.member_exists[slot] = 1;

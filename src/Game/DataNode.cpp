@@ -40,12 +40,13 @@ static inline uint32_t literal_str(uint8_t* base, uint32_t addr) {
 // --- DataNode functions ---
 
 // DataNode* DataNode::Var() const
+// Retail folds this with DataArrayPtr::operator DataArray*: both are lwz r3,0(r3); blr.
 extern "C" REX_FUNC(DataNode__Var) {
     ctx.r3.u64 = node(base, ctx.r3.u32)->value;
 }
 
-// int DataNode::_value() const
-extern "C" REX_FUNC(DataNode___value) {
+// int DataNode::Int(const DataArray*) const
+extern "C" REX_FUNC(DataNode__Int) {
     ctx.r3.u64 = node(base, evaluate(ctx, base))->value;
 }
 
