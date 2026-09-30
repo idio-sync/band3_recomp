@@ -223,6 +223,17 @@ Instruments on a Deck:
   shows up as a gamepad, turn off Steam Input for band3 (its controller settings in
   Steam) and try again, and include the log line if you report it.
 
+### Profiling
+
+Profiling is compiled into every build except Release. Build the `relwithdebinfo` preset
+(e.g. `cmake --preset win-amd64-relwithdebinfo`, then
+`cmake --build --preset win-amd64-relwithdebinfo`) and connect the
+[Tracy](https://github.com/wolfpld/tracy) 0.13.1 profiler to the running game. Next to the
+SDK's own zones, band3 marks RB3's engine systems (`RB3 Game::Poll`,
+`RB3 WorldCrowd::DrawShowing`, `RB3 DxRnd::DoPostProcess` and so on), so a capture shows
+where each frame goes. For captures that can be compared, turn on `autoplay`
+(Band3 → Debug) and play the same song in the same venue each time.
+
 ## Notes
 
 - This project is in an early state and may not build or run correctly in all applications.
