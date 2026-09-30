@@ -9,7 +9,8 @@
 
 // Reports game state to the RB3Enhanced network events and Discord presence,
 // from the same hook points and with the same data as RB3E (source/rb3enhanced.c,
-// source/GameHooks.c).
+// source/GameHooks.c), and also from PresenceMgr::SetSongID, for a song that
+// starts without a new Game.
 // Addresses and struct offsets are RB3E's Xbox 360 TU5 ones (include/ports_xbox360.h,
 // include/rb3/*.h), which match this project's function map.
 
@@ -17,9 +18,11 @@ extern "C" void __imp__StageKit__SetState(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__Game____ct(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__Game____dt(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__PresenceMgr__UpdatePresence(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__PresenceMgr__SetSongID(PPCContext& ctx, uint8_t* base);
 
 REX_EXTERN(MetaPerformer__Song);
 REX_EXTERN(BandSongMgr__GetSongIDFromShortname);
+REX_EXTERN(BandSongMgr__GetShortNameFromSongID);
 REX_EXTERN(BandSongMgr__Data);
 REX_EXTERN(BandUserMgr__GetUserFromSlot);
 
@@ -76,11 +79,30 @@ std::string ReadGameString(uint8_t* base, uint32_t string_addr) {
 }
 
 struct SongInfo {
+    int32_t id = 0;
     std::string shortname;
     std::string title;
     std::string artist;
 };
 
+// the song last reported, so GamePanel::Enter's SetSongID (below) only reports
+// one Game's constructor hasn't; 0 while none is
+int32_t g_reported_song = 0;
+
+// title and artist from BandSongMgr::Data(BandSongMgr*, int song_id) -> SongMetadata*
+void ReadSongMetadata(const PPCContext& ctx, uint8_t* base, SongInfo& song) {
+    PPCContext call = CallContext(ctx, 0x100);
+    call.r3.u64 = kTheSongMgr;
+    call.r4.u64 = static_cast<uint32_t>(song.id);
+    BandSongMgr__Data(call, base);
+    uint32_t metadata = call.r3.u32;
+    if (!metadata) return;
+
+    song.title = ReadGameString(base, metadata + kSongMetadata_Title);
+    song.artist = ReadGameString(base, metadata + kSongMetadata_Artist);
+}
+
+// the song MetaPerformer has picked
 SongInfo ReadSongInfo(const PPCContext& ctx, uint8_t* base) {
     SongInfo song;
     uint32_t meta_performer = Load32(base, kTheMetaPerformerPtr);
@@ -102,19 +124,39 @@ SongInfo ReadSongInfo(const PPCContext& ctx, uint8_t* base) {
     call.r4.u64 = shortname;
     call.r5.u64 = 1;
     BandSongMgr__GetSongIDFromShortname(call, base);
-    uint32_t song_id = call.r3.u32;
+    song.id = call.r3.s32;
 
-    // BandSongMgr::Data(BandSongMgr*, int song_id) -> SongMetadata*
-    call = CallContext(ctx, 0x100);
-    call.r3.u64 = kTheSongMgr;
-    call.r4.u64 = song_id;
-    BandSongMgr__Data(call, base);
-    uint32_t metadata = call.r3.u32;
-    if (!metadata) return song;
-
-    song.title = ReadGameString(base, metadata + kSongMetadata_Title);
-    song.artist = ReadGameString(base, metadata + kSongMetadata_Artist);
+    ReadSongMetadata(ctx, base, song);
     return song;
+}
+
+// the song with ID `id`; empty when the song manager doesn't know it
+SongInfo ReadSongInfoById(const PPCContext& ctx, uint8_t* base, int32_t id) {
+    SongInfo song;
+    song.id = id;
+
+    // BandSongMgr::GetShortNameFromSongID(Symbol* out, BandSongMgr*, int id, bool fail),
+    // not failing: an unknown ID gives the empty symbol
+    PPCContext call = CallContext(ctx, 0x100);
+    uint32_t out = call.r1.u32 + 0x80;
+    call.r3.u64 = out;
+    call.r4.u64 = kTheSongMgr;
+    call.r5.u64 = static_cast<uint32_t>(id);
+    call.r6.u64 = 0;
+    BandSongMgr__GetShortNameFromSongID(call, base);
+    const char* shortname = GuestStr(base, Load32(base, out));
+    if (!shortname || !*shortname) return song;
+    song.shortname = shortname;
+
+    ReadSongMetadata(ctx, base, song);
+    return song;
+}
+
+void SendSong(const SongInfo& song) {
+    using namespace band3::events;
+    if (!song.shortname.empty()) SendString(kSongShortname, song.shortname.c_str());
+    if (!song.title.empty()) Send(kSongName, song.title.data(), song.title.size());
+    if (!song.artist.empty()) Send(kSongArtist, song.artist.data(), song.artist.size());
 }
 
 band3::events::BandInfo ReadBandInfo(const PPCContext& ctx, uint8_t* base) {
@@ -155,13 +197,12 @@ extern "C" REX_FUNC(Game____ct)
 
         if (events) {
             using namespace band3::events;
-            if (!song.shortname.empty()) SendString(kSongShortname, song.shortname.c_str());
-            if (!song.title.empty()) Send(kSongName, song.title.data(), song.title.size());
-            if (!song.artist.empty()) Send(kSongArtist, song.artist.data(), song.artist.size());
+            SendSong(song);
             Send(kBandInfo, &band, sizeof(band));
             SendState(1);
         }
         band3::discord::SetPlaying(song.title, song.artist, band);
+        g_reported_song = song.id;
     }
     __imp__Game____ct(ctx, base);
 }
@@ -172,7 +213,28 @@ extern "C" REX_FUNC(Game____dt)
     // the game can leave LEDs on after the score screen; turn everything off
     SendStagekit(0x00, 0xFF);
     band3::discord::SetMenus();
+    g_reported_song = 0;
     __imp__Game____dt(ctx, base);
+}
+
+// PresenceMgr::SetSongID(this, int id), which GamePanel::Enter calls with the
+// song being entered (the Xbox 360 build only). Game's constructor has reported
+// it already when the song got a Game of its own; this reports any it hasn't.
+extern "C" REX_FUNC(PresenceMgr__SetSongID)
+{
+    const int32_t id = ctx.r4.s32;
+    const bool events = band3::events::Enabled();
+    const bool discord = band3::discord::Enabled();
+    // song IDs below 1 are "any", "random" and "invalid"
+    if ((events || discord) && id > 0 && id != g_reported_song) {
+        SongInfo song = ReadSongInfoById(ctx, base, id);
+        if (!song.shortname.empty()) {
+            if (events) SendSong(song);
+            band3::discord::SetPlaying(song.title, song.artist, ReadBandInfo(ctx, base));
+            g_reported_song = id;
+        }
+    }
+    __imp__PresenceMgr__SetSongID(ctx, base);
 }
 
 // the game updates presence on screen changes; report the new screen's name
