@@ -61,6 +61,8 @@ SECTION_RE = re.compile(r'^\s*\[')
 REXCRT_RE = re.compile(r'^\s*([A-Za-z_]\w*)\s*=\s*(0x[0-9A-Fa-f]+)')
 IDENT_RE = re.compile(r'[A-Za-z_]\w*')
 DECL_RE = re.compile(r'\b([A-Za-z_]\w*)\s*\(')
+# object-like macros too: ucrt's `#define sys_nerr _sys_nerr` rewrites a same-named declaration
+MACRO_RE = re.compile(r'^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)', re.M)
 
 MAX_NAME_LEN = 120
 THUNK_SIZE = 4
@@ -114,12 +116,16 @@ def find_undname():
 
 
 def host_header_dirs():
-    """MSVC, UCRT and ReXGlue SDK include dirs, for names a new extern "C" symbol must not shadow."""
+    """MSVC, Windows SDK and ReXGlue SDK include dirs, for names a new extern "C" symbol must not shadow."""
     dirs = [os.path.join(REPO, '.rexglue-sdk', 'include')]
     pf86 = os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)')
-    dirs += glob.glob(os.path.join(pf86, 'Microsoft Visual Studio', '*', '*', 'VC',
-                                   'Tools', 'MSVC', '*', 'include'))
-    dirs += glob.glob(os.path.join(pf86, 'Windows Kits', '10', 'Include', '*', 'ucrt'))
+    pf = os.environ.get('ProgramFiles', r'C:\Program Files')
+    for root in (pf86, pf):
+        dirs += glob.glob(os.path.join(root, 'Microsoft Visual Studio', '*', '*', 'VC',
+                                       'Tools', 'MSVC', '*', 'include'))
+    # um and shared carry the Win32 API (CreateFileA, SetFocus, ...) that windows.h pulls in
+    for sub in ('ucrt', 'um', 'shared'):
+        dirs += glob.glob(os.path.join(pf86, 'Windows Kits', '10', 'Include', '*', sub))
     return [d for d in dirs if os.path.isdir(d)]
 
 
@@ -370,8 +376,13 @@ def main():
     referenced = {int(a, 16) for a in referenced}
     src_idents = collect_identifiers([os.path.join(REPO, 'src'), os.path.join(REPO, 'tests')],
                                      IDENT_RE, ('.c', '.cpp', '.h', '.hpp', '.inl'))
-    host_idents = collect_identifiers(host_header_dirs(), DECL_RE, ('.h', '.hpp', '.inl', ''))
-    reserved = CPP_KEYWORDS | src_idents | host_idents
+    host_dirs = host_header_dirs()
+    host_idents = (collect_identifiers(host_dirs, DECL_RE, ('.h', '.hpp', '.inl', ''))
+                   | collect_identifiers(host_dirs, MACRO_RE, ('.h', '.hpp', '.inl', '')))
+    # DEFINE_REX_FUNC(X) also emits __imp__X, which is the import symbol of a
+    # host `_X` (callnewh would collide with ucrt's _callnewh at link time)
+    import_clashes = {n[1:] for n in host_idents if n.startswith('_') and len(n) > 1}
+    reserved = CPP_KEYWORDS | src_idents | host_idents | import_clashes
 
     # the addresses this run names: the anonymous ones, and with --refresh
     # also those it named before, except where src/ or tests/ use the name
@@ -395,7 +406,10 @@ def main():
                 continue
             dem = demangled[mangled]
             ident = to_identifier(dem)
-            if ident and overloaded[ident] == 1 and classify(cur, ident, dem, addr) == 'disagree':
+            # a current name that shadows a host declaration is taken over too,
+            # so it picks up the rb3_ prefix below even where it agrees with the decomp
+            if ident and overloaded[ident] == 1 and (classify(cur, ident, dem, addr) == 'disagree'
+                                                     or cur in reserved):
                 managed.add(addr)
                 adopted.append(addr)
     taken = fixed_names | {n for a, (_, n, _) in funcs.items() if a not in managed}
