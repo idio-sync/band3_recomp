@@ -16,9 +16,20 @@ decomp: every address that was anonymous before the first import
 rb3-xenon no longer establishes one. Names that src/ or tests/ use are kept
 either way, and listed when the decomp now disagrees.
 
+With --adopt it also replaces hand-written names the decomp disagrees with
+outright, for functions over 0x10 bytes that src/ and tests/ don't use. Smaller
+functions are left alone: the linker folds identical tiny bodies, so both names
+are often right. So are overloads (operator>>, PropSync<T>, ...), whose
+decomp name only tells them apart with an address suffix while the
+hand-written one usually says which it is (BinStream__ReadVector3).
+
 Skipped on purpose:
   - rows rb3-xenon itself marks as unestablished (_denylist, _icf_arbitrary,
     _bijection_arbitrary) or null, and names mapped to more than one address
+  - names that mention a class declared only in the decomp's Dance Central 3
+    subsystems (src/system/hamobj, flow, gesture), which RB3 doesn't contain:
+    rb3-xenon was partly seeded from the DC3 decomp, and such a name (mostly
+    an STL template instance's element type) is a guess
   - 4-byte functions: single-branch thunks are byte-identical to each other,
     so their names are guesses (see _single_branch_thunk_misnames_comment)
   - rex_sub_ names referenced from src/ or tests/, and [rexcrt] addresses
@@ -27,6 +38,7 @@ Usage:
   python tools/import_rb3xenon_names.py --map <rb3-xenon>/scripts/target_symbol_map.json
   python tools/import_rb3xenon_names.py --map ... --apply
   python tools/import_rb3xenon_names.py --map ... --refresh --apply
+  python tools/import_rb3xenon_names.py --map ... --refresh --adopt --apply
 
 Without --apply it only writes the report. After --apply, rerun
 `rexglue codegen band3_manifest.toml` and rebuild.
@@ -52,6 +64,8 @@ DECL_RE = re.compile(r'\b([A-Za-z_]\w*)\s*\(')
 
 MAX_NAME_LEN = 120
 THUNK_SIZE = 4
+# --adopt leaves functions this small alone (see above)
+FOLDABLE_SIZE = 0x10
 
 # band3_config.toml as it was before the first import (ce5bf36); the addresses
 # anonymous there are the ones this tool names, and --refresh keeps current
@@ -222,6 +236,41 @@ def is_placeholder(name, addr):
             or f'{addr:08X}' in name.upper() or 'Function_' in name)
 
 
+DC3_ONLY_DIRS = ('hamobj', 'flow', 'gesture')
+CLASS_DECL_RE = re.compile(r'^\s*(?:class|struct)\s+([A-Za-z_]\w*)\s*(?::|\{)', re.M)
+
+
+def dc3_only_classes(map_path):
+    """Classes the decomp declares only under its Dance Central 3 subsystems."""
+    system = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(map_path))), 'src', 'system')
+    dc3, elsewhere = set(), set()
+    for dirpath, _, files in os.walk(os.path.join(system, '..')):
+        rel = os.path.relpath(dirpath, system).replace(os.sep, '/')
+        in_dc3 = rel.split('/')[0] in DC3_ONLY_DIRS
+        for f in files:
+            if not f.endswith(('.h', '.hpp')):
+                continue
+            try:
+                text = open(os.path.join(dirpath, f), encoding='utf-8', errors='ignore').read()
+            except OSError:
+                continue
+            (dc3 if in_dc3 else elsewhere).update(CLASS_DECL_RE.findall(text))
+    return dc3 - elsewhere
+
+
+def classify(cur, ident, dem, addr):
+    """How an existing name compares with the decomp's."""
+    if normalize(cur) == normalize(ident):
+        return 'agree'
+    if is_placeholder(cur, addr):
+        return 'placeholder'
+    if spelling_variant(cur, dem):
+        return 'variant'
+    if normalize(cur.split('__')[-1]) == normalize(ident.split('__')[-1]):
+        return 'scope'
+    return 'disagree'
+
+
 def baseline_anonymous(ref, config_path):
     """Addresses that were anonymous in the config at git `ref`."""
     rel = os.path.relpath(os.path.abspath(config_path), REPO).replace(os.sep, '/')
@@ -247,6 +296,8 @@ def main():
     ap.add_argument('--apply', action='store_true', help='rewrite band3_config.toml')
     ap.add_argument('--refresh', action='store_true',
                     help='also update names this tool imported earlier to the decomp\'s current ones')
+    ap.add_argument('--adopt', action='store_true',
+                    help='replace hand-written names the decomp disagrees with (over 0x10 bytes, unused by src/)')
     ap.add_argument('--baseline-ref', default=BASELINE_REF,
                     help='git ref of the config before the first import (default %(default)s)')
     args = ap.parse_args()
@@ -306,6 +357,13 @@ def main():
 
     demangled = demangle_all(undname, set(candidates.values()))
 
+    dc3_classes = dc3_only_classes(args.map)
+    if dc3_classes:
+        dc3_re = re.compile(r'\b(' + '|'.join(sorted(map(re.escape, dc3_classes))) + r')\b')
+        for addr in [a for a, m in candidates.items() if dc3_re.search(demangled[m])]:
+            del candidates[addr]
+            excluded['names a Dance Central 3 class RB3 does not contain'] += 1
+
     # --- names the new extern "C" symbols must not collide with ---
     referenced = collect_identifiers([os.path.join(REPO, 'src'), os.path.join(REPO, 'tests')],
                                      re.compile(r'\brex_sub_([0-9A-Fa-f]{8})\b'), ())
@@ -328,6 +386,18 @@ def main():
                 kept_in_use.append(addr)
             else:
                 managed.add(addr)
+    adopted = []
+    if args.adopt:
+        overloaded = Counter(to_identifier(demangled[m]) for m in candidates.values())
+        for addr, mangled in candidates.items():
+            _, cur, size = funcs[addr]
+            if addr in managed or size <= FOLDABLE_SIZE or cur in src_idents:
+                continue
+            dem = demangled[mangled]
+            ident = to_identifier(dem)
+            if ident and overloaded[ident] == 1 and classify(cur, ident, dem, addr) == 'disagree':
+                managed.add(addr)
+                adopted.append(addr)
     taken = fixed_names | {n for a, (_, n, _) in funcs.items() if a not in managed}
 
     desired = {}        # managed addr -> name from the decomp
@@ -348,13 +418,14 @@ def main():
             skipped['no usable identifier'].append((addr, dem))
             continue
         if addr not in managed:
-            if normalize(cur) == normalize(ident):
+            kind = classify(cur, ident, dem, addr)
+            if kind == 'agree':
                 agree.append(addr)
-            elif is_placeholder(cur, addr):
+            elif kind == 'placeholder':
                 placeholder_named.append((addr, cur, dem))
-            elif spelling_variant(cur, dem):
+            elif kind == 'variant':
                 variants.append((addr, cur, dem))
-            elif normalize(cur.split('__')[-1]) == normalize(ident.split('__')[-1]):
+            elif kind == 'scope':
                 scope_differs.append((addr, cur, dem))
             else:
                 disagree.append((addr, cur, dem, size))
@@ -382,11 +453,15 @@ def main():
             desired[addr] = f'{ident}_{addr:08X}'
             suffixed += 1
 
-    # every managed address ends up with its decomp name, or anonymous
-    final = {a: desired.get(a, f'rex_sub_{a:08X}') for a in managed}
+    # every managed address ends up with its decomp name, or anonymous; an
+    # adopted hand-written name the decomp can't replace stays as it is
+    adopted_set = set(adopted)
+    final = {a: desired.get(a, funcs[a][1] if a in adopted_set else f'rex_sub_{a:08X}')
+             for a in managed}
     renames = {a: n for a, n in final.items() if n != funcs[a][1]}
     named = [a for a in renames if a in anonymous]
-    updated = [a for a in renames if a not in anonymous and a in desired]
+    adopted = [a for a in renames if a in adopted_set]
+    updated = [a for a in renames if a not in anonymous and a not in adopted_set and a in desired]
     withdrawn = [a for a in renames if a not in anonymous and a not in desired]
 
     all_names = Counter(taken) + Counter(final.values())
@@ -413,6 +488,8 @@ def main():
     r.append(f'- band3_config functions: {len(funcs)}, anonymous before: {anon_before}')
     r.append(f'- **Named: {len(named)}** anonymous functions ({suffixed} address-suffixed for '
              f'uniqueness, {len(prefixed)} prefixed `rb3_` to avoid host/src/keyword clashes)')
+    if args.adopt:
+        r.append(f'- **Adopted: {len(adopted)}** hand-written names replaced by the decomp\'s')
     if args.refresh:
         r.append(f'- Refresh against `{args.baseline_ref}`: **{len(updated)} earlier imports updated** '
                  f'to the decomp\'s current name, **{len(withdrawn)} withdrawn** (back to rex_sub_), '
@@ -452,6 +529,12 @@ def main():
     r.append('|---|---|---|')
     for addr, cur, dem in placeholder_named:
         r.append(f'| 0x{addr:08X} | `{cur}` | `{dem}` |')
+    if args.adopt:
+        r.append('\n## Hand-written names replaced (--adopt)\n')
+        r.append('| Address | Size | Was | Now |')
+        r.append('|---|---|---|---|')
+        for addr in sorted(adopted):
+            r.append(f'| 0x{addr:08X} | 0x{funcs[addr][2]:X} | `{funcs[addr][1]}` | `{renames[addr]}` |')
     if args.refresh:
         r.append('\n## Earlier imports updated\n')
         r.append('| Address | Was | Now |')
@@ -492,6 +575,8 @@ def main():
 
     refreshed = (f'; refreshed {len(updated)}, withdrew {len(withdrawn)}, kept {len(kept_in_use)} in use'
                  if args.refresh else '')
+    if args.adopt:
+        refreshed += f'; adopted {len(adopted)}'
     print(f'named {len(named)} of {anon_before} anonymous functions{refreshed}'
           f'{"" if args.apply else " (dry run)"}; '
           f'{len(disagree)} disagreements, {len(scope_differs)} scope differences; report: {args.report}')
