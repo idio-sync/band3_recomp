@@ -22,10 +22,13 @@ add_executable(band3_tests
     midi_drums_test.cpp
     menu_shortcut_test.cpp
     usb_mic_test.cpp
+    game_status_test.cpp
+    ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Input/hid_capture.cpp
     ${BAND3_ROOT}/src/Input/hid_instrument_types.cpp
     ${BAND3_ROOT}/src/Input/instruments.cpp
+    ${BAND3_ROOT}/src/Input/joypad_lag_status.cpp
     ${BAND3_ROOT}/src/Input/menu_shortcut.cpp
     ${BAND3_ROOT}/src/Input/midi_drums.cpp
     ${BAND3_ROOT}/src/Input/ps3_instruments.cpp

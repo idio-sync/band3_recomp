@@ -6,9 +6,11 @@
 #include <imgui.h>
 #include <rex/cvar.h>
 #include "hid_instruments.h"
+#include "joypad_lag_status.h"
 #include "midi_drums_driver.h"
 #include "pro_instrument_status.h"
 #include "virtual_instrument.h"
+#include "src/Audio/mic_mapping_status.h"
 #include "src/Audio/usb_mic_capture.h"
 #include "src/settings.h"
 
@@ -377,7 +379,7 @@ void DrawProInstruments() {
                        "along with what you pressed.");
 }
 
-void DrawMicrophones() {
+void DrawUsbMics() {
     if (!REXCVAR_GET(usb_mics)) {
         ImGui::TextWrapped("Microphones are used when the usb_mics setting is on (F4, Band3 > "
                            "Microphones). It takes a restart.");
@@ -445,6 +447,97 @@ void DrawMicrophones() {
                        "time vocals are picked; audio fed then climbs while a song plays.");
 }
 
+void DrawMicMapping() {
+    ImGui::SeparatorText("Which mic each player sings through");
+    const audio::MicMapping mapping = audio::GetMicMapping();
+    if (!mapping.seen) {
+        ImGui::TextWrapped("The game hasn't assigned its mics yet. It does when a mic connects "
+                           "or disconnects, or players join.");
+        return;
+    }
+    ImGui::Text("Mics the game has:");
+    if (mapping.mics.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("none");
+    }
+    for (const audio::MicMappingMic& mic : mapping.mics) {
+        ImGui::SameLine();
+        ImGui::Text(mic.locked ? "%d (held)" : "%d (free)", mic.id);
+    }
+
+    if (ImGui::BeginTable("mic_players", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("Player");
+        ImGui::TableSetupColumn("Sings through");
+        ImGui::TableSetupColumn("Asked for", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+        for (size_t i = 0; i < mapping.players.size(); i++) {
+            const audio::MicMappingPlayer& p = mapping.players[i];
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%zu", i + 1);
+            ImGui::TableNextColumn();
+            if (p.actual < 0) {
+                ImGui::TextDisabled("no mic");
+            } else {
+                ImGui::Text("mic %d", p.actual);
+            }
+            ImGui::TableNextColumn();
+            if (p.preferred < 0) {
+                ImGui::TextDisabled("any");
+            } else {
+                ImGui::Text("mic %d", p.preferred);
+            }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextWrapped("These are the game's mic IDs. A mic that is connected and fed but held "
+                       "by no player is one the game has but gives to nobody.");
+}
+
+void DrawMicrophones() {
+    DrawUsbMics();
+    DrawMicMapping();
+}
+
+void DrawLag() {
+    if (!ProPadsPolled()) {
+        ImGui::TextWrapped("The game hasn't polled its controllers yet; this fills in once it's "
+                           "running.");
+        return;
+    }
+    ImGui::TextWrapped("The extra lag, in ms, RB3 builds in for each player's controller type, "
+                       "on top of calibration. band3's instruments reach the game as Xbox ones, "
+                       "so they get the Xbox hardware's numbers.");
+
+    const auto pads = ProPadStatuses();
+    if (ImGui::BeginTable("lag", 1 + kLagContexts,
+                          ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("Player");
+        for (int c = 0; c < kLagContexts; c++) ImGui::TableSetupColumn(LagContextName(c));
+        ImGui::TableHeadersRow();
+        for (int pad = 0; pad < kProPads; pad++) {
+            const ProPadStatus& s = pads[pad];
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (const char* name = JoypadTypeName(s.game_type)) {
+                ImGui::Text("%d: %s", pad + 1, name);
+            } else {
+                ImGui::Text("%d: type %u", pad + 1, s.game_type);
+            }
+            const auto row = JoypadLag(s.game_type);
+            for (int c = 0; c < kLagContexts; c++) {
+                ImGui::TableNextColumn();
+                if (row) {
+                    ImGui::Text("%.0f", (*row)[c]);
+                } else {
+                    ImGui::TextDisabled("-");
+                }
+            }
+        }
+        ImGui::EndTable();
+    }
+}
+
 }
 
 void InstrumentLabDialog::OnDraw(ImGuiIO&) {
@@ -486,6 +579,10 @@ void InstrumentLabDialog::OnDraw(ImGuiIO&) {
         }
         if (ImGui::BeginTabItem("Microphones")) {
             DrawMicrophones();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Lag")) {
+            DrawLag();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
