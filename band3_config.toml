@@ -50665,7 +50665,7 @@ strcpy_s                = 0x8282B0B8
 0x8282B0B8 = { name = "rex_sub_8282B0B8", size = 0xB4 }
 0x8282B170 = { name = "rb3_malloc", size = 0xC8 }
 0x8282B360 = { name = "_modf", size = 0x130 }
-0x8282B490 = { name = "rb3_sin", size = 0xE0 }
+0x8282B490 = { name = "_sin", size = 0xE0 }
 0x8282B570 = { name = "_cos", size = 0xE0 }
 0x8282B650 = { name = "_floor", size = 0x3C }
 0x8282B690 = { name = "rb3_qsort", size = 0x384 }
