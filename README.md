@@ -201,6 +201,17 @@ that steady tone, which the vocal track's pitch arrow should hold. The Instrumen
 **Microphones** tab (F6) shows what records each slot, whether the game has connected it and
 how much audio it has taken; the log reports the same steps (`USB mics: ...`).
 
+### Controller lag
+
+On top of calibration, RB3 builds in extra lag for each controller type, from the Xbox
+hardware's own delay (45 ms for an Xbox guitar, 36 ms for Xbox drums). band3's PlayStation,
+Wii and MIDI instruments reach the game as Xbox ones, so they get those numbers too. The
+Instrument Lab's **Lag** tab (F6) shows, per player, the type the game sees and the lag it
+uses. `joypad_lag` (Band3 → Game, then restart) changes it per type, as `type=ms`, comma
+separated: `5=20,8=30` gives Xbox guitars 20 ms and Xbox drums 30 ms. `type=ms/video/audio`
+also sets the lag the calibration tests assume, and a blank part keeps the game's number
+(`8=/30/`). It's per type, so a real Xbox instrument of the same type changes too.
+
 ### Steam Deck
 
 On a Steam Deck, band3 starts fullscreen and letterboxed (the game is 16:9, the screen

@@ -52,6 +52,17 @@ BAND3_PROFILE_ZONE(WorldCrowd__DrawShowing, "RB3 WorldCrowd::DrawShowing")
 BAND3_PROFILE_ZONE(UIManager__Poll, "RB3 UIManager::Poll")
 BAND3_PROFILE_ZONE(UIManager__Draw, "RB3 UIManager::Draw")
 BAND3_PROFILE_ZONE(Synth360__Poll, "RB3 Synth360::Poll")
+BAND3_PROFILE_ZONE(MasterAudio__FillSwing, "RB3 MasterAudio::FillSwing")
+BAND3_PROFILE_ZONE(SongPreview__Poll, "RB3 SongPreview::Poll")
+// the singer's audio, per chunk the mics hand over
+BAND3_PROFILE_ZONE(VoiceBeat__Analyze, "RB3 VoiceBeat::Analyze")
+
+// loading and the network, where the menus hitch
+BAND3_PROFILE_ZONE(CDRead, "RB3 CDRead")
+BAND3_PROFILE_ZONE(HDCache__OpenFiles, "RB3 HDCache::OpenFiles")
+BAND3_PROFILE_ZONE(CacheXbox__ThreadGetFileSize, "RB3 CacheXbox::ThreadGetFileSize")
+BAND3_PROFILE_ZONE(NetCacheMgr__Poll, "RB3 NetCacheMgr::Poll")
+BAND3_PROFILE_ZONE(HttpGet__Poll, "RB3 HttpGet::Poll")
 
 // drawing stages
 BAND3_PROFILE_ZONE(DxRnd__BeginDrawing, "RB3 DxRnd::BeginDrawing")

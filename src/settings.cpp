@@ -94,6 +94,12 @@ REXCVAR_DEFINE_BOOL(steam_deck_defaults, true, "Band3/Game",
     "off, unless band3.toml or the command line set those")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_STRING(joypad_lag, "", "Band3/Game",
+    "Change the extra lag the game builds in per controller type, as type=ms, comma "
+    "separated (e.g. 5=20,8=30). type=ms/video/audio also sets the calibration tests' lag; "
+    "a blank part keeps the game's. The Instrument Lab's Lag tab shows each player's type")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 // Band3/MIDI drums
 
 REXCVAR_DEFINE_BOOL(midi_drums, false, "Band3/MIDI drums",

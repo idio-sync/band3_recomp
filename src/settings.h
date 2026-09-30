@@ -20,6 +20,7 @@ REXCVAR_DECLARE(int32_t, char_heap_size);
 REXCVAR_DECLARE(bool, hid_instruments);
 REXCVAR_DECLARE(bool, menu_shortcut);
 REXCVAR_DECLARE(bool, steam_deck_defaults);
+REXCVAR_DECLARE(std::string, joypad_lag);
 
 // Band3/MIDI drums
 REXCVAR_DECLARE(bool, midi_drums);

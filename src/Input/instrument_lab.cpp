@@ -507,9 +507,12 @@ void DrawLag() {
     }
     ImGui::TextWrapped("The extra lag, in ms, RB3 builds in for each player's controller type, "
                        "on top of calibration. band3's instruments reach the game as Xbox ones, "
-                       "so they get the Xbox hardware's numbers.");
+                       "so they get the Xbox hardware's numbers unless joypad_lag (F4, Band3 > "
+                       "Game) changes them, by the type number shown here. The game sets these "
+                       "at startup.");
 
     const auto pads = ProPadStatuses();
+    bool overridden = false;
     if (ImGui::BeginTable("lag", 1 + kLagContexts,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("Player");
@@ -520,22 +523,29 @@ void DrawLag() {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             if (const char* name = JoypadTypeName(s.game_type)) {
-                ImGui::Text("%d: %s", pad + 1, name);
+                ImGui::Text("%d: %s (%u)", pad + 1, name, s.game_type);
             } else {
                 ImGui::Text("%d: type %u", pad + 1, s.game_type);
             }
-            const auto row = JoypadLag(s.game_type);
+            const auto lag = JoypadLagFor(s.game_type);
             for (int c = 0; c < kLagContexts; c++) {
                 ImGui::TableNextColumn();
-                if (row) {
-                    ImGui::Text("%.0f", (*row)[c]);
-                } else {
+                if (!lag) {
                     ImGui::TextDisabled("-");
+                } else if (lag->used[c] != lag->game[c]) {
+                    overridden = true;
+                    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%.0f*", lag->used[c]);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("joypad_lag; the game's is %.0f", lag->game[c]);
+                    }
+                } else {
+                    ImGui::Text("%.0f", lag->used[c]);
                 }
             }
         }
         ImGui::EndTable();
     }
+    if (overridden) ImGui::TextDisabled("* set by joypad_lag");
 }
 
 }
