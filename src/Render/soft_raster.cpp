@@ -1,0 +1,260 @@
+#include "src/Render/soft_raster.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <unordered_set>
+
+// See soft_raster.h.
+
+namespace band3::render {
+namespace {
+
+constexpr float kNearW = 1e-3f;
+constexpr uint32_t kClearColor = 0xff202020u;
+
+// a vertex after the view-projection, with what the pixels interpolate
+struct ClipVert {
+    float p[4];  // clip x, y, z, w
+    float uv[2];
+    float n[3];
+    float c[4];
+};
+
+ClipVert Lerp(const ClipVert& a, const ClipVert& b, float t) {
+    ClipVert r;
+    for (int i = 0; i < 4; i++) r.p[i] = a.p[i] + (b.p[i] - a.p[i]) * t;
+    for (int i = 0; i < 2; i++) r.uv[i] = a.uv[i] + (b.uv[i] - a.uv[i]) * t;
+    for (int i = 0; i < 3; i++) r.n[i] = a.n[i] + (b.n[i] - a.n[i]) * t;
+    for (int i = 0; i < 4; i++) r.c[i] = a.c[i] + (b.c[i] - a.c[i]) * t;
+    return r;
+}
+
+void Point(const float p[3], const Mat4& m, float out[3]) {
+    for (int c = 0; c < 3; c++)
+        out[c] = p[0] * m.m[0][c] + p[1] * m.m[1][c] + p[2] * m.m[2][c] + m.m[3][c];
+}
+
+void Dir(const float d[3], const Mat4& m, float out[3]) {
+    for (int c = 0; c < 3; c++) out[c] = d[0] * m.m[0][c] + d[1] * m.m[1][c] + d[2] * m.m[2][c];
+}
+
+struct Target {
+    uint32_t w, h;
+    std::vector<uint32_t>& color;
+    std::vector<float>& depth;  // 1/w, larger is nearer, 0 is cleared
+};
+
+struct DrawState {
+    const DrawItem* item;
+    const Texture* tex;
+    int blend;
+    bool z_test;
+    bool z_equal_passes;
+    bool z_write;
+    bool lighting;
+};
+
+const float kLight[3] = {0.39f, -0.59f, 0.71f};  // Milo is z up
+
+void Shade(const DrawState& ds, const float uv[2], const float n[3], const float vc[4],
+           float out[4]) {
+    const DrawItem& it = *ds.item;
+    for (int i = 0; i < 4; i++) out[i] = it.color[i];
+    if (ds.tex) {
+        const float u = uv[0] - std::floor(uv[0]), v = uv[1] - std::floor(uv[1]);
+        const uint32_t x = std::min(uint32_t(u * float(ds.tex->width)), ds.tex->width - 1);
+        const uint32_t y = std::min(uint32_t(v * float(ds.tex->height)), ds.tex->height - 1);
+        const uint32_t t = ds.tex->rgba[size_t(y) * ds.tex->width + x];
+        for (int i = 0; i < 4; i++) out[i] *= float((t >> (8 * i)) & 0xff) / 255.0f;
+    }
+    if (it.prelit) {
+        for (int i = 0; i < 3; i++) out[i] *= vc[i];
+    } else if (ds.lighting) {
+        const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        float d = 0.0f;
+        if (len > 1e-6f) d = (n[0] * kLight[0] + n[1] * kLight[1] + n[2] * kLight[2]) / len;
+        const float l = 0.4f + 0.6f * std::max(0.0f, d);
+        for (int i = 0; i < 3; i++) out[i] *= l;
+    }
+}
+
+uint32_t Blend(int mode, const float s[4], uint32_t dst) {
+    float d[4];
+    for (int i = 0; i < 4; i++) d[i] = float((dst >> (8 * i)) & 0xff) / 255.0f;
+    float o[3];
+    const float a = std::clamp(s[3], 0.0f, 1.0f);
+    for (int i = 0; i < 3; i++) {
+        switch (mode) {
+            case 2: o[i] = d[i] + s[i]; break;                    // Add
+            case 3: o[i] = s[i] * a + d[i] * (1.0f - a); break;  // SrcAlpha
+            case 4: o[i] = d[i] + s[i] * a; break;               // SrcAlphaAdd
+            case 5: o[i] = d[i] - s[i]; break;                   // Subtract
+            case 6: o[i] = d[i] * s[i]; break;                   // Multiply
+            default: o[i] = s[i]; break;                         // Src
+        }
+    }
+    uint32_t r = 0xff000000u;
+    for (int i = 0; i < 3; i++)
+        r |= uint32_t(std::clamp(o[i], 0.0f, 1.0f) * 255.0f + 0.5f) << (8 * i);
+    return r;
+}
+
+void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const DrawState& ds,
+               Target& t, RasterStats& st) {
+    const ClipVert* v[3] = {&a, &b, &c};
+    float sx[3], sy[3], iw[3];
+    for (int i = 0; i < 3; i++) {
+        iw[i] = 1.0f / v[i]->p[3];
+        sx[i] = (v[i]->p[0] * iw[i] * 0.5f + 0.5f) * float(t.w);
+        sy[i] = (0.5f - v[i]->p[1] * iw[i] * 0.5f) * float(t.h);
+    }
+    const float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sy[1] - sy[0]) * (sx[2] - sx[0]);
+    if (!(std::fabs(area) > 1e-9f)) return;
+    const float min_x = std::max(0.0f, std::floor(std::min({sx[0], sx[1], sx[2]})));
+    const float max_x = std::min(float(t.w - 1), std::ceil(std::max({sx[0], sx[1], sx[2]})));
+    const float min_y = std::max(0.0f, std::floor(std::min({sy[0], sy[1], sy[2]})));
+    const float max_y = std::min(float(t.h - 1), std::ceil(std::max({sy[0], sy[1], sy[2]})));
+    if (min_x > max_x || min_y > max_y) return;
+    st.triangles++;
+    const float inv_area = 1.0f / area;
+    const DrawItem& it = *ds.item;
+
+    for (int y = int(min_y); y <= int(max_y); y++) {
+        const float py = float(y) + 0.5f;
+        for (int x = int(min_x); x <= int(max_x); x++) {
+            const float px = float(x) + 0.5f;
+            const float l0 = ((sx[2] - sx[1]) * (py - sy[1]) - (sy[2] - sy[1]) * (px - sx[1])) * inv_area;
+            const float l1 = ((sx[0] - sx[2]) * (py - sy[2]) - (sy[0] - sy[2]) * (px - sx[2])) * inv_area;
+            const float l2 = 1.0f - l0 - l1;
+            if (l0 < 0 || l1 < 0 || l2 < 0) continue;
+            const float z = l0 * iw[0] + l1 * iw[1] + l2 * iw[2];
+            const size_t idx = size_t(y) * t.w + x;
+            if (ds.z_test) {
+                const float d = t.depth[idx];
+                if (ds.z_equal_passes ? z < d * 0.9999f : z <= d) continue;
+            }
+            const float q0 = l0 * iw[0] / z, q1 = l1 * iw[1] / z, q2 = l2 * iw[2] / z;
+            float uv[2], n[3], vc[4];
+            for (int i = 0; i < 2; i++) uv[i] = q0 * a.uv[i] + q1 * b.uv[i] + q2 * c.uv[i];
+            for (int i = 0; i < 3; i++) n[i] = q0 * a.n[i] + q1 * b.n[i] + q2 * c.n[i];
+            for (int i = 0; i < 4; i++) vc[i] = q0 * a.c[i] + q1 * b.c[i] + q2 * c.c[i];
+            float col[4];
+            Shade(ds, uv, n, vc, col);
+            if (it.alpha_cut && col[3] * 255.0f < float(it.alpha_threshold)) continue;
+            if (ds.blend != 0) t.color[idx] = Blend(ds.blend, col, t.color[idx]);
+            if (ds.z_write) t.depth[idx] = z;
+            st.pixels++;
+        }
+    }
+}
+
+// clips against w = kNearW, then draws the fan
+void ClipAndRaster(const ClipVert& a, const ClipVert& b, const ClipVert& c,
+                   const DrawState& ds, Target& t, RasterStats& st) {
+    if (a.p[3] >= kNearW && b.p[3] >= kNearW && c.p[3] >= kNearW) {
+        RasterTri(a, b, c, ds, t, st);
+        return;
+    }
+    const ClipVert* in[3] = {&a, &b, &c};
+    ClipVert poly[4];
+    int n = 0;
+    for (int i = 0; i < 3; i++) {
+        const ClipVert& cur = *in[i];
+        const ClipVert& nxt = *in[(i + 1) % 3];
+        const bool cur_in = cur.p[3] >= kNearW, nxt_in = nxt.p[3] >= kNearW;
+        if (cur_in) poly[n++] = cur;
+        if (cur_in != nxt_in) {
+            const float tt = (kNearW - cur.p[3]) / (nxt.p[3] - cur.p[3]);
+            poly[n++] = Lerp(cur, nxt, tt);
+        }
+    }
+    for (int i = 1; i + 1 < n; i++) RasterTri(poly[0], poly[i], poly[i + 1], ds, t, st);
+}
+
+void DrawOne(const DrawItem& it, const RasterOptions& o, Target& t, RasterStats& st,
+             std::vector<ClipVert>& cv) {
+    const Geometry& g = *it.geom;
+    const bool skinned = o.skinning && !it.bones.empty();
+    cv.resize(g.verts.size());
+    for (size_t i = 0; i < g.verts.size(); i++) {
+        const Vertex& v = g.verts[i];
+        float wp[3] = {0, 0, 0}, wn[3] = {0, 0, 0};
+        if (skinned) {
+            float total = 0;
+            for (int k = 0; k < 4; k++) {
+                const float w = v.weight[k];
+                if (w <= 0) continue;
+                const Mat4& b = it.bones[v.bone[k] < it.bones.size() ? v.bone[k] : 0];
+                float p[3], n[3];
+                Point(v.pos, b, p);
+                Dir(v.nrm, b, n);
+                for (int c = 0; c < 3; c++) {
+                    wp[c] += p[c] * w;
+                    wn[c] += n[c] * w;
+                }
+                total += w;
+            }
+            if (total <= 0) {
+                Point(v.pos, it.bones[0], wp);
+                Dir(v.nrm, it.bones[0], wn);
+            }
+        } else {
+            Point(v.pos, it.world, wp);
+            Dir(v.nrm, it.world, wn);
+        }
+        ClipVert& c = cv[i];
+        for (int col = 0; col < 4; col++)
+            c.p[col] = wp[0] * it.view_proj.m[0][col] + wp[1] * it.view_proj.m[1][col] +
+                       wp[2] * it.view_proj.m[2][col] + it.view_proj.m[3][col];
+        c.uv[0] = v.uv[0];
+        c.uv[1] = v.uv[1];
+        for (int k = 0; k < 3; k++) c.n[k] = wn[k];
+        for (int k = 0; k < 4; k++) c.c[k] = float((v.color >> (8 * k)) & 0xff) / 255.0f;
+    }
+
+    DrawState ds;
+    ds.item = &it;
+    ds.tex = o.textures && it.tex ? it.tex.get() : nullptr;
+    ds.blend = o.blending ? it.blend : 1;
+    ds.lighting = o.lighting;
+    switch (it.z_mode) {
+        case 0: ds.z_test = false; ds.z_equal_passes = false; ds.z_write = false; break;
+        case 2: ds.z_test = true; ds.z_equal_passes = true; ds.z_write = false; break;
+        case 3: ds.z_test = false; ds.z_equal_passes = false; ds.z_write = true; break;
+        case 4: ds.z_test = true; ds.z_equal_passes = true; ds.z_write = true; break;
+        default: ds.z_test = true; ds.z_equal_passes = false; ds.z_write = true; break;
+    }
+    if (!o.blending) {
+        ds.z_test = true;
+        ds.z_write = true;
+    }
+    for (size_t i = 0; i + 2 < g.indices.size(); i += 3)
+        ClipAndRaster(cv[g.indices[i]], cv[g.indices[i + 1]], cv[g.indices[i + 2]], ds, t, st);
+    st.draws++;
+}
+
+}  // namespace
+
+RasterStats Rasterize(const FrameCapture& frame, const RasterOptions& o,
+                      std::vector<uint32_t>& rgba) {
+    const auto start = std::chrono::steady_clock::now();
+    RasterStats st;
+    rgba.assign(size_t(o.width) * o.height, kClearColor);
+    std::vector<float> depth(size_t(o.width) * o.height, 0.0f);
+    Target t{o.width, o.height, rgba, depth};
+    std::vector<ClipVert> cv;
+    std::unordered_set<uint32_t> cams_seen;
+    uint32_t last_cam = 0;
+    for (const DrawItem& it : frame.draws) {
+        if (o.clear_depth_per_camera && it.cam != last_cam && cams_seen.insert(it.cam).second)
+            std::fill(depth.begin(), depth.end(), 0.0f);
+        last_cam = it.cam;
+        DrawOne(it, o, t, st, cv);
+    }
+    st.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                .count();
+    return st;
+}
+
+}  // namespace band3::render

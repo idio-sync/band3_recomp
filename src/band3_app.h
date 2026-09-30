@@ -21,6 +21,7 @@
 #include "Input/menu_shortcut_dialog.h"
 #include "Input/virtual_instrument.h"
 #include "Net/discord.h"
+#include "Render/native_view.h"
 
 // always attached, and draws nothing while debug_overlay is off, so the
 // setting can be flipped in F4
@@ -48,6 +49,8 @@ class Band3App : public rex::ReXApp {
   std::unique_ptr<DebugOverlayDialog> debug_overlay_;
   std::unique_ptr<band3::input::InstrumentLabDialog> instrument_lab_;
   std::unique_ptr<band3::input::MenuShortcutDialog> menu_shortcut_;
+  // the native view, see src/Render/native_view.h
+  std::unique_ptr<band3::render::NativeViewDialog> native_view_;
 
   static std::unique_ptr<rex::ui::WindowedApp> Create(
       rex::ui::WindowedAppContext& ctx) {
@@ -104,10 +107,13 @@ class Band3App : public rex::ReXApp {
   void OnPostSetup() override {
     band3::discord::Start();
     band3::audio::StartUsbMics();
+    band3::render::StartDumpIfRequested();
   }
 
   void OnShutdown() override {
     rex::ui::UnregisterBind("bind_instrument_lab");
+    rex::ui::UnregisterBind("bind_native_view");
+    band3::render::StopNativeView();
     band3::discord::Stop();
     band3::audio::StopUsbMics();
   }
@@ -119,6 +125,11 @@ class Band3App : public rex::ReXApp {
       instrument_lab_ = std::make_unique<band3::input::InstrumentLabDialog>(drawer);
       rex::ui::RegisterBind("bind_instrument_lab", "F6", "Toggle the Instrument Lab", [this] {
         if (instrument_lab_) instrument_lab_->Toggle();
+      });
+      native_view_ = std::make_unique<band3::render::NativeViewDialog>(
+          drawer, [this] { return immediate_drawer(); });
+      rex::ui::RegisterBind("bind_native_view", "F7", "Toggle the native view (experimental)", [this] {
+        if (native_view_) native_view_->Toggle();
       });
       // deferred: opening the settings menu adds a dialog, and this runs while
       // the dialogs draw
@@ -133,6 +144,7 @@ class Band3App : public rex::ReXApp {
       debug_overlay_.reset();
       instrument_lab_.reset();
       menu_shortcut_.reset();
+      native_view_.reset();
     }
   }
 
