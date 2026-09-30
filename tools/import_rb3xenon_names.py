@@ -10,6 +10,12 @@ renames [functions] entries that are still anonymous rex_sub_XXXXXXXX.
 It never changes a name someone already chose. Where both sides name the
 same address it reports agreement or disagreement instead.
 
+With --refresh it also keeps the names it imported earlier in step with the
+decomp: every address that was anonymous before the first import
+(BASELINE_REF) gets rb3-xenon's current name, or goes back to rex_sub_ when
+rb3-xenon no longer establishes one. Names that src/ or tests/ use are kept
+either way, and listed when the decomp now disagrees.
+
 Skipped on purpose:
   - rows rb3-xenon itself marks as unestablished (_denylist, _icf_arbitrary,
     _bijection_arbitrary) or null, and names mapped to more than one address
@@ -20,6 +26,7 @@ Skipped on purpose:
 Usage:
   python tools/import_rb3xenon_names.py --map <rb3-xenon>/scripts/target_symbol_map.json
   python tools/import_rb3xenon_names.py --map ... --apply
+  python tools/import_rb3xenon_names.py --map ... --refresh --apply
 
 Without --apply it only writes the report. After --apply, rerun
 `rexglue codegen band3_manifest.toml` and rebuild.
@@ -45,6 +52,10 @@ DECL_RE = re.compile(r'\b([A-Za-z_]\w*)\s*\(')
 
 MAX_NAME_LEN = 120
 THUNK_SIZE = 4
+
+# band3_config.toml as it was before the first import (ce5bf36); the addresses
+# anonymous there are the ones this tool names, and --refresh keeps current
+BASELINE_REF = 'ce5bf36~1'
 
 OPERATORS = {
     '=': 'assign', '==': 'eq', '!=': 'ne', '<': 'lt', '>': 'gt', '<=': 'le',
@@ -211,6 +222,22 @@ def is_placeholder(name, addr):
             or f'{addr:08X}' in name.upper() or 'Function_' in name)
 
 
+def baseline_anonymous(ref, config_path):
+    """Addresses that were anonymous in the config at git `ref`."""
+    rel = os.path.relpath(os.path.abspath(config_path), REPO).replace(os.sep, '/')
+    try:
+        text = subprocess.run(['git', '-C', REPO, 'show', f'{ref}:{rel}'],
+                              capture_output=True, text=True, check=True, encoding='utf-8').stdout
+    except (OSError, subprocess.CalledProcessError) as e:
+        sys.exit(f'--refresh needs the baseline config {ref}:{rel} from git ({e})')
+    anonymous = set()
+    for line in text.split('\n'):
+        m = FUNC_RE.match(line)
+        if m and m.group(2) == f'rex_sub_{int(m.group(1), 16):08X}':
+            anonymous.add(int(m.group(1), 16))
+    return anonymous
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--map', required=True, help='rb3-xenon scripts/target_symbol_map.json')
@@ -218,6 +245,10 @@ def main():
     ap.add_argument('--report', default=os.path.join(REPO, 'out', 'research', 'rb3xenon_names_report.md'))
     ap.add_argument('--undname', default=None, help='path to undname.exe (auto-detected)')
     ap.add_argument('--apply', action='store_true', help='rewrite band3_config.toml')
+    ap.add_argument('--refresh', action='store_true',
+                    help='also update names this tool imported earlier to the decomp\'s current ones')
+    ap.add_argument('--baseline-ref', default=BASELINE_REF,
+                    help='git ref of the config before the first import (default %(default)s)')
     args = ap.parse_args()
 
     undname = args.undname or find_undname()
@@ -229,7 +260,8 @@ def main():
         lines = f.read().split('\n')
     funcs = {}          # addr -> (line index, name, size)
     rexcrt_addrs = set()
-    taken = set()
+    # names outside [functions] that function names must not reuse
+    fixed_names = set()
     section = None
     for i, line in enumerate(lines):
         if SECTION_RE.match(line):
@@ -239,17 +271,16 @@ def main():
             m = REXCRT_RE.match(line)
             if m:
                 rexcrt_addrs.add(int(m.group(2), 16))
-                taken.add(m.group(1))
+                fixed_names.add(m.group(1))
         elif section == '[functions]':
             m = FUNC_RE.match(line)
             if m:
                 addr = int(m.group(1), 16)
                 funcs[addr] = (i, m.group(2), int(m.group(3), 16))
-                taken.add(m.group(2))
         elif section == '[[midasm_hook]]':
             m = re.match(r'^\s*name\s*=\s*"([^"]+)"', line)
             if m:
-                taken.add(m.group(1))
+                fixed_names.add(m.group(1))
 
     # --- rb3-xenon map ---
     with open(args.map, encoding='utf-8') as f:
@@ -284,13 +315,31 @@ def main():
     host_idents = collect_identifiers(host_header_dirs(), DECL_RE, ('.h', '.hpp', '.inl', ''))
     reserved = CPP_KEYWORDS | src_idents | host_idents
 
-    renames = {}        # addr -> new name
+    # the addresses this run names: the anonymous ones, and with --refresh
+    # also those it named before, except where src/ or tests/ use the name
+    anonymous = {a for a, (_, n, _) in funcs.items() if n == f'rex_sub_{a:08X}'}
+    managed = set(anonymous)
+    kept_in_use = []
+    if args.refresh:
+        for addr in baseline_anonymous(args.baseline_ref, args.config) & set(funcs):
+            if addr in anonymous:
+                continue
+            if funcs[addr][1] in src_idents:
+                kept_in_use.append(addr)
+            else:
+                managed.add(addr)
+    taken = fixed_names | {n for a, (_, n, _) in funcs.items() if a not in managed}
+
+    desired = {}        # managed addr -> name from the decomp
     skipped = defaultdict(list)
     agree, variants, scope_differs, disagree, placeholder_named = [], [], [], [], []
     prefixed = []
-    for addr, mangled in sorted(candidates.items()):
-        dem = demangled[mangled]
+    for addr in sorted(set(candidates) | managed):
         _, cur, size = funcs[addr]
+        mangled = candidates.get(addr)
+        if mangled is None:
+            continue
+        dem = demangled[mangled]
         if dem == mangled and mangled.startswith('?'):
             skipped['undname could not demangle'].append((addr, mangled))
             continue
@@ -298,7 +347,7 @@ def main():
         if not ident:
             skipped['no usable identifier'].append((addr, dem))
             continue
-        if cur != f'rex_sub_{addr:08X}':
+        if addr not in managed:
             if normalize(cur) == normalize(ident):
                 agree.append(addr)
             elif is_placeholder(cur, addr):
@@ -322,21 +371,29 @@ def main():
                 ident = 'rb3_' + ident.lstrip('_')
             if len(ident) > MAX_NAME_LEN:
                 ident = ident[:MAX_NAME_LEN].rstrip('_')
-            renames[addr] = ident
+            desired[addr] = ident
 
     # Overloads and template instantiations collapse to the same identifier;
     # suffix every member of a clash with its address so names stay unique and stable.
-    counts = Counter(renames.values())
+    counts = Counter(desired.values())
     suffixed = 0
-    for addr, ident in renames.items():
+    for addr, ident in desired.items():
         if counts[ident] > 1 or ident in taken:
-            renames[addr] = f'{ident}_{addr:08X}'
+            desired[addr] = f'{ident}_{addr:08X}'
             suffixed += 1
-    final = Counter(renames.values())
-    dupes = [n for n, c in final.items() if c > 1 or n in taken]
+
+    # every managed address ends up with its decomp name, or anonymous
+    final = {a: desired.get(a, f'rex_sub_{a:08X}') for a in managed}
+    renames = {a: n for a, n in final.items() if n != funcs[a][1]}
+    named = [a for a in renames if a in anonymous]
+    updated = [a for a in renames if a not in anonymous and a in desired]
+    withdrawn = [a for a in renames if a not in anonymous and a not in desired]
+
+    all_names = Counter(taken) + Counter(final.values())
+    dupes = [n for n, c in all_names.items() if c > 1 and n not in fixed_names]
     if dupes:
         sys.exit(f'internal error: {len(dupes)} non-unique names, e.g. {dupes[:5]}')
-    bad = [n for n in renames.values() if not re.fullmatch(r'[A-Za-z_]\w*', n)]
+    bad = [n for n in final.values() if not re.fullmatch(r'[A-Za-z_]\w*', n)]
     if bad:
         sys.exit(f'internal error: invalid identifiers, e.g. {bad[:5]}')
 
@@ -348,14 +405,18 @@ def main():
                                 capture_output=True, text=True, check=True).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         pass
-    anon_before = sum(1 for a, (_, n, _) in funcs.items() if n == f'rex_sub_{a:08X}')
+    anon_before = len(anonymous)
     r = []
     r.append('# rb3-xenon name import report\n')
     r.append(f'- rb3-xenon commit: `{commit or "unknown"}`')
     r.append(f'- Map rows with a name: {len(rows)}; usable as function names: {len(candidates)}')
     r.append(f'- band3_config functions: {len(funcs)}, anonymous before: {anon_before}')
-    r.append(f'- **Renamed: {len(renames)}** ({suffixed} address-suffixed for uniqueness, '
-             f'{len(prefixed)} prefixed `rb3_` to avoid host/src/keyword clashes)')
+    r.append(f'- **Named: {len(named)}** anonymous functions ({suffixed} address-suffixed for '
+             f'uniqueness, {len(prefixed)} prefixed `rb3_` to avoid host/src/keyword clashes)')
+    if args.refresh:
+        r.append(f'- Refresh against `{args.baseline_ref}`: **{len(updated)} earlier imports updated** '
+                 f'to the decomp\'s current name, **{len(withdrawn)} withdrawn** (back to rex_sub_), '
+                 f'{len(kept_in_use)} kept because src/ or tests/ use them')
     r.append(f'- Already named, agree: {len(agree)}; spelling variants: {len(variants)}; '
              f'same method, different scope: {len(scope_differs)}; '
              f'**disagree: {len(disagree)}**; existing name is a placeholder: {len(placeholder_named)}')
@@ -391,9 +452,27 @@ def main():
     r.append('|---|---|---|')
     for addr, cur, dem in placeholder_named:
         r.append(f'| 0x{addr:08X} | `{cur}` | `{dem}` |')
+    if args.refresh:
+        r.append('\n## Earlier imports updated\n')
+        r.append('| Address | Was | Now |')
+        r.append('|---|---|---|')
+        for addr in sorted(updated):
+            r.append(f'| 0x{addr:08X} | `{funcs[addr][1]}` | `{renames[addr]}` |')
+        r.append('\n## Earlier imports withdrawn (rb3-xenon no longer establishes a name)\n')
+        r.append('| Address | Was |')
+        r.append('|---|---|')
+        for addr in sorted(withdrawn):
+            r.append(f'| 0x{addr:08X} | `{funcs[addr][1]}` |')
+        r.append('\n## Kept because src/ or tests/ use them\n')
+        r.append('| Address | band3_config | rb3-xenon |')
+        r.append('|---|---|---|')
+        for addr in sorted(kept_in_use):
+            mangled = candidates.get(addr)
+            dem = demangled.get(mangled, '(none)') if mangled else '(none)'
+            r.append(f'| 0x{addr:08X} | `{funcs[addr][1]}` | `{dem}` |')
     r.append('\n## Prefixed names\n')
     for addr, ident in prefixed:
-        r.append(f'- `0x{addr:08X}` {ident} -> {renames[addr]}')
+        r.append(f'- `0x{addr:08X}` {ident} -> {final[addr]}')
     os.makedirs(os.path.dirname(args.report), exist_ok=True)
     with open(args.report, 'w', encoding='utf-8') as f:
         f.write('\n'.join(r) + '\n')
@@ -401,7 +480,8 @@ def main():
     with open(tsv, 'w', encoding='utf-8') as f:
         f.write('address\tsize\tnew_name\tdemangled\n')
         for addr in sorted(renames):
-            f.write(f'0x{addr:08X}\t0x{funcs[addr][2]:X}\t{renames[addr]}\t{demangled[candidates[addr]]}\n')
+            dem = demangled[candidates[addr]] if addr in candidates else '(withdrawn)'
+            f.write(f'0x{addr:08X}\t0x{funcs[addr][2]:X}\t{renames[addr]}\t{dem}\n')
 
     if args.apply:
         for addr, ident in renames.items():
@@ -410,7 +490,9 @@ def main():
         with open(args.config, 'w', encoding='utf-8', newline='') as f:
             f.write('\n'.join(lines))
 
-    print(f'renamed {len(renames)} of {anon_before} anonymous functions'
+    refreshed = (f'; refreshed {len(updated)}, withdrew {len(withdrawn)}, kept {len(kept_in_use)} in use'
+                 if args.refresh else '')
+    print(f'named {len(named)} of {anon_before} anonymous functions{refreshed}'
           f'{"" if args.apply else " (dry run)"}; '
           f'{len(disagree)} disagreements, {len(scope_differs)} scope differences; report: {args.report}')
 
