@@ -100,6 +100,10 @@ REXCVAR_DEFINE_STRING(joypad_lag, "", "Band3/Game",
     "a blank part keeps the game's. The Instrument Lab's Lag tab shows each player's type")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(autosave, true, "Band3/Game",
+    "Let the game autosave profiles, after songs and setlist edits. Off, they're only saved "
+    "from the options menu, e.g. to test with autoplay without touching your profile");
+
 // Band3/MIDI drums
 
 REXCVAR_DEFINE_BOOL(midi_drums, false, "Band3/MIDI drums",

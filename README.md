@@ -243,7 +243,9 @@ Profiling is compiled into every build except Release. Build the `relwithdebinfo
 SDK's own zones, band3 marks RB3's engine systems (`RB3 Game::Poll`,
 `RB3 WorldCrowd::DrawShowing`, `RB3 DxRnd::DoPostProcess` and so on), so a capture shows
 where each frame goes. For captures that can be compared, turn on `autoplay`
-(Band3 → Debug) and play the same song in the same venue each time.
+(Band3 → Debug) and play the same song in the same venue each time. Turning `autosave`
+off (Band3 → Game) keeps those runs out of your profile; it then only saves from the
+options menu.
 
 ## Notes
 
