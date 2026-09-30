@@ -231,6 +231,19 @@ Caps360 ProGuitarCaps(ProGuitarModel model) {
     return c;
 }
 
+ProData EncodeProData(const Gamepad360& g) {
+    ProData d{};
+    d[0] = g.left_trigger;
+    d[1] = g.right_trigger;
+    const int16_t sticks[] = {g.thumb_lx, g.thumb_ly, g.thumb_rx, g.thumb_ry};
+    for (int i = 0; i < 4; i++) {
+        const auto v = static_cast<uint16_t>(sticks[i]);
+        d[2 + i * 2] = static_cast<uint8_t>(v & 0xFF);
+        d[3 + i * 2] = static_cast<uint8_t>(v >> 8);
+    }
+    return d;
+}
+
 Gamepad360 EncodeProGuitar(const ProGuitarInputs& in) {
     Gamepad360 g;
     g.buttons = NavButtons(in.nav);

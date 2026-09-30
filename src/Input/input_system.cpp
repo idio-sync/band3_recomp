@@ -69,6 +69,10 @@ private:
 
 }
 
+namespace {
+rex::input::InputSystem* g_game_input = nullptr;
+}
+
 std::unique_ptr<rex::system::IInputSystem> CreateInputSystem(bool tool_mode) {
     auto input = rex::input::CreateDefaultInputSystem(tool_mode);
     if (tool_mode) return input;
@@ -81,7 +85,10 @@ std::unique_ptr<rex::system::IInputSystem> CreateInputSystem(bool tool_mode) {
     if (REXCVAR_GET(midi_drums)) add(CreateMidiDrumsDriver());
 
     input->SetDeviceAssignment(std::make_unique<PlayerAssignment>());
+    g_game_input = input.get();
     return input;
 }
+
+rex::input::InputSystem* GameInputSystem() { return g_game_input; }
 
 }

@@ -226,3 +226,80 @@ TEST_CASE("pro guitar capabilities pick the model") {
     CHECK((u16(ProGuitarCaps(ProGuitarModel::kSquier).gamepad.thumb_ly) & 0xFFF0) == 0x1530);
     CHECK((u16(ProGuitarCaps(ProGuitarModel::kMustang).gamepad.thumb_ly) & 0xFFF0) == 0x1430);
 }
+
+TEST_CASE("pro data is the report from the left trigger on, little-endian") {
+    Gamepad360 g;
+    g.left_trigger = 0x11;
+    g.right_trigger = 0x22;
+    g.thumb_lx = static_cast<int16_t>(0x4433);
+    g.thumb_ly = static_cast<int16_t>(0x6655);
+    g.thumb_rx = static_cast<int16_t>(0x8877);
+    g.thumb_ry = static_cast<int16_t>(0xAA99);
+    const ProData d = EncodeProData(g);
+    const ProData expected = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+                              0x99, 0xAA, 0, 0, 0, 0, 0, 0};
+    CHECK(d == expected);
+}
+
+TEST_CASE("Pro Keys reach RB3's keyboard poll") {
+    KeysInputs in;
+    in.keys[0] = 100;   // C1
+    in.keys[7] = 50;
+    in.keys[12] = 90;
+    in.keys[24] = 127;  // C3
+    in.overdrive = true;
+    const ProKeysRead r = ReadProKeys(EncodeProData(EncodeKeys(in)));
+
+    for (int k = 0; k < kKeyCount; k++) {
+        CAPTURE(k);
+        CHECK(r.pressed[k] == (in.keys[k] != 0));
+        CHECK(r.velocity[k] == in.keys[k]);
+    }
+    // the overdrive button is the sustain bit; an empty pedal port reads as the
+    // pedal fully back, not stomped
+    CHECK(r.sustain);
+    CHECK_FALSE(r.stomp_pedal);
+    CHECK(r.expression_pedal == 127);
+}
+
+TEST_CASE("Pro Keys past five held keys have no velocity slot") {
+    KeysInputs in;
+    for (int k = 0; k < 6; k++) in.keys[k] = static_cast<uint8_t>(10 + k);
+    const ProKeysRead r = ReadProKeys(EncodeProData(EncodeKeys(in)));
+    for (int k = 0; k < 5; k++) CHECK(r.velocity[k] == 10 + k);
+    CHECK(r.pressed[5]);
+    CHECK(r.velocity[5] == 0);
+    CHECK_FALSE(r.sustain);
+}
+
+TEST_CASE("Pro Guitar reaches RB3's guitar poll") {
+    ProGuitarInputs in;
+    in.frets = {3, 17, 22, 0, 12, 21};         // low E to high E
+    in.velocities = {10, 20, 30, 40, 50, 127};
+    in.colors[kGreen] = true;
+    in.colors[kYellow] = true;
+    in.colors[kOrange] = true;
+    in.solo = true;
+    const ProGuitarRead r = ReadProGuitar(EncodeProData(EncodeProGuitar(in)));
+
+    // the game numbers strings from high E (0) to low E (5)
+    for (int s = 0; s < kStringCount; s++) {
+        CAPTURE(s);
+        CHECK(r.fret[5 - s] == in.frets[s]);
+        CHECK(r.velocity[5 - s] == in.velocities[s]);
+    }
+    for (int f = 0; f < kFretCount; f++) {
+        CAPTURE(f);
+        CHECK(r.fret_down[f] == in.colors[f]);
+    }
+    CHECK(r.solo);
+}
+
+TEST_CASE("an idle Pro Guitar reads as open, silent strings") {
+    const ProGuitarRead r = ReadProGuitar(EncodeProData(EncodeProGuitar({})));
+    for (int j = 0; j < 6; j++) {
+        CHECK(r.fret[j] == 0);
+        CHECK(r.velocity[j] == 0);
+    }
+    CHECK_FALSE(r.solo);
+}

@@ -137,6 +137,16 @@ Press **F6** to open the Instrument Lab. It connects a virtual Xbox 360 instrume
 by default) and plays it with the mouse, showing the exact data it sends. It is a tool
 for checking how the game reads each instrument without the hardware.
 
+### Pro Keys and Pro Guitar (untested)
+
+RB3 reads a keytar's keys and a pro guitar's frets and strings through an Xbox 360 system
+call that ReXGlue doesn't implement, so band3 hands the game that data itself, for any
+keytar or pro guitar the input system reports: the Instrument Lab's, or a real one on
+Windows with `input_backend = xinput`. This hasn't been run against the game yet; the
+Instrument Lab's keys and pro guitars are the way to check it. Keep the SDK's stick
+deadzones (`left_stick_deadzone_percentage`, `right_stick_deadzone_percentage`) at 0,
+since these instruments send their keys and frets in the stick values.
+
 ### PlayStation and Wii instruments (experimental)
 
 Turn on `hid_instruments` (F4, Band3 → Game, then restart) to play Rock Band guitars and

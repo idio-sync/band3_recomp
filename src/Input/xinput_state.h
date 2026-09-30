@@ -3,8 +3,8 @@
 #include <rex/input/input.h>
 #include "instruments.h"
 
-// Copies band3's host-order instrument state into the guest's big-endian XInput
-// structs, for the input drivers.
+// Copies band3's host-order instrument state to and from the guest's big-endian
+// XInput structs.
 
 namespace band3::input {
 
@@ -16,6 +16,18 @@ inline void StoreGamepad(const Gamepad360& g, rex::input::X_INPUT_GAMEPAD& out) 
     out.thumb_ly = g.thumb_ly;
     out.thumb_rx = g.thumb_rx;
     out.thumb_ry = g.thumb_ry;
+}
+
+inline Gamepad360 LoadGamepad(const rex::input::X_INPUT_GAMEPAD& in) {
+    Gamepad360 g;
+    g.buttons = in.buttons;
+    g.left_trigger = in.left_trigger;
+    g.right_trigger = in.right_trigger;
+    g.thumb_lx = in.thumb_lx;
+    g.thumb_ly = in.thumb_ly;
+    g.thumb_rx = in.thumb_rx;
+    g.thumb_ry = in.thumb_ry;
+    return g;
 }
 
 inline void StoreCaps(const Caps360& caps, rex::input::X_INPUT_CAPABILITIES& out) {

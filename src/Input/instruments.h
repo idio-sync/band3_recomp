@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 // Rock Band instruments in the form an Xbox 360 reports them, which is the only
@@ -149,5 +150,17 @@ Gamepad360 EncodeKeys(const KeysInputs& in);
 // Mustang (buttons, 17 frets) or Squier (strings, 22 frets)
 Caps360 ProGuitarCaps(ProGuitarModel model);
 Gamepad360 EncodeProGuitar(const ProGuitarInputs& in);
+
+// The 16 bytes RB3 reads Pro Keys and Pro Guitar from: JoypadData's
+// mProGuitarData, which UsbMidiKeyboard::Poll reads as ProKeysData and
+// UsbMidiGuitar::Poll as ProGuitarData (rb3-xenon, src/system/os). They are an
+// Xbox 360 instrument's report from the left trigger on, in its little-endian
+// wire order, which the XInput state holds the first ten bytes of; the rest
+// (accelerometer, hand placement, connected accessories) stay zero. RB3 gets
+// them from XamInputRawState, which ReXGlue doesn't implement, so band3 writes
+// them itself (Hooks/pro_instruments.cpp).
+inline constexpr size_t kProDataSize = 16;
+using ProData = std::array<uint8_t, kProDataSize>;
+ProData EncodeProData(const Gamepad360& g);
 
 }
