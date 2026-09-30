@@ -29,6 +29,11 @@ REXCVAR_DECLARE(int32_t, midi_drums_pulse_ms);
 REXCVAR_DECLARE(int32_t, midi_drums_min_velocity);
 REXCVAR_DECLARE(bool, midi_drums_combos);
 
+// Band3/Microphones
+REXCVAR_DECLARE(bool, usb_mics);
+REXCVAR_DECLARE(std::string, usb_mic_devices);
+REXCVAR_DECLARE(int32_t, usb_mic_test_tone);
+
 // Band3/Graphics
 REXCVAR_DECLARE(bool, disable_approximate_lights);
 REXCVAR_DECLARE(bool, disable_hair_shader);

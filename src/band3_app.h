@@ -15,6 +15,7 @@
 #include "config.h"
 #include "settings.h"
 #include "steam_deck.h"
+#include "Audio/usb_mic_capture.h"
 #include "Input/input_system.h"
 #include "Input/instrument_lab.h"
 #include "Input/menu_shortcut_dialog.h"
@@ -99,13 +100,16 @@ class Band3App : public rex::ReXApp {
     config.input_factory = band3::input::CreateInputSystem;
   }
 
+  // before the game starts, so its mic threads find the microphones running
   void OnPostSetup() override {
     band3::discord::Start();
+    band3::audio::StartUsbMics();
   }
 
   void OnShutdown() override {
     rex::ui::UnregisterBind("bind_instrument_lab");
     band3::discord::Stop();
+    band3::audio::StopUsbMics();
   }
 
   // the SDK applies the fullscreen cvar to the window itself

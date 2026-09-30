@@ -62138,7 +62138,7 @@ strcpy_s                = 0x8282B0B8
 0x82B67260 = { name = "rex_sub_82B67260", size = 0x1C }
 0x82B67288 = { name = "rex_sub_82B67288", size = 0x514 }
 0x82B6779C = { name = "rex_sub_82B6779C", size = 0x20 }
-0x82B677C0 = { name = "rex_sub_82B677C0", size = 0x4 }
+0x82B677C0 = { name = "ExternalMicThreadEntry", size = 0x4 }
 0x82B677C8 = { name = "ExternalMic__ct", size = 0x88 }
 0x82B67850 = { name = "ExternalMicClientMgr__Terminate", size = 0x74 }
 0x82B678C8 = { name = "ExternalMic__Terminate", size = 0x80 }

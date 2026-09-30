@@ -21,6 +21,8 @@ add_executable(band3_tests
     hid_capture_test.cpp
     midi_drums_test.cpp
     menu_shortcut_test.cpp
+    usb_mic_test.cpp
+    ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Input/hid_capture.cpp
     ${BAND3_ROOT}/src/Input/hid_instrument_types.cpp
     ${BAND3_ROOT}/src/Input/instruments.cpp

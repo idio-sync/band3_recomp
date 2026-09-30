@@ -125,6 +125,23 @@ REXCVAR_DEFINE_BOOL(midi_drums_combos, true, "Band3/MIDI drums",
     "Select, or kick to hold the kick (RB3's song category menu)")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+// Band3/Microphones
+
+REXCVAR_DEFINE_BOOL(usb_mics, false, "Band3/Microphones",
+    "Experimental: sing through microphones on this PC, as Xbox 360 USB microphones")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(usb_mic_devices, "", "Band3/Microphones",
+    "Microphones to sing through, or part of their names, comma separated, one per mic "
+    "slot (up to 4). Empty uses the system's default recording device")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_INT32(usb_mic_test_tone, 0, "Band3/Microphones",
+    "Sing a steady tone at this pitch in Hz into the first mic slot instead of using "
+    "microphones, to check that the game hears it. 0 = off")
+    .range(0, 2000)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 // Band3/Graphics
 
 REXCVAR_DEFINE_BOOL(disable_approximate_lights, true, "Band3/Graphics",

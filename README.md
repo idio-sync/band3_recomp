@@ -171,6 +171,19 @@ The kit has no menu buttons, so as in RPCS3: hi-hat pedal three times then snare
 then the rim is Select, and then kick holds the kick for the song category menu (snare or
 floor tom lets go). Turn these off with `midi_drums_combos`.
 
+### Microphones (experimental, untested)
+
+Turn on `usb_mics` (F4, Band3 → Microphones, then restart) to sing through microphones on
+this PC as Xbox 360 USB microphones. The first mic slot uses the system's default
+recording device unless `usb_mic_devices` names microphones (or parts of their names),
+comma separated, one per slot, for harmonies. Microphones plugged in after the game starts
+are picked up.
+
+This hasn't been run against the game yet. To check the game hears a mic slot without a
+microphone, set `usb_mic_test_tone` to a pitch in Hz (e.g. 220): the first slot then sings
+that steady tone, which the vocal track's pitch arrow should hold. The log reports each
+step (`USB mics: ...`); set `log_level` to debug to also see the game setting up its slots.
+
 ### Steam Deck
 
 On a Steam Deck, band3 starts fullscreen and letterboxed (the game is 16:9, the screen
