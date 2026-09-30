@@ -25,6 +25,8 @@ rexglue_setup_target(band3 GPU_PLUGINS xenos)
 # UDP sockets for the RB3E network events (src/Net/events.cpp)
 if(WIN32)
     target_link_libraries(band3 PRIVATE ws2_32)
+    # symbol map, to resolve the frames src/crash_trace.cpp logs
+    target_link_options(band3 PRIVATE "LINKER:/MAP:${CMAKE_BINARY_DIR}/band3.map")
 endif()
 
 # MIDI input for MIDI drum kits (src/Input/midi_drums_driver.cpp)
