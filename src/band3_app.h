@@ -14,6 +14,7 @@
 
 #include "config.h"
 #include "game_writes.h"
+#include "paths.h"
 #include "settings.h"
 #include "steam_deck.h"
 #include "Audio/usb_mic_capture.h"
@@ -62,19 +63,33 @@ class Band3App : public rex::ReXApp {
         PPCImageConfig));
   }
 
-  // paths are fixed before band3.toml loads, so the game data root is the one
-  // setting read here; --game_data_root on the command line wins over the ini
+  // paths are fixed before band3.toml loads, so band3_config.ini's are the ones
+  // read here, relative to its folder; the command line wins over the ini
   void OnConfigurePaths(rex::PathConfig& paths) override {
-    if (rex::cvar::GetFlagSource("game_data_root") == rex::cvar::Source::kDefault) {
-      paths.game_data_root = band3::ReadIniGameDataRoot();
+    const auto anchor = band3::IniAnchor();
+    auto from_ini = [&](const char* cvar, const std::string& value, std::filesystem::path& out) {
+      if (rex::cvar::GetFlagSource(cvar) != rex::cvar::Source::kDefault || value.empty()) return false;
+      out = band3::paths::Resolve(value, anchor);
+      return true;
+    };
+    from_ini("game_data_root", band3::ReadIniGameDataRoot(), paths.game_data_root);
+    const bool user_set = from_ini("user_data_root", band3::ReadIniString("user_data_root"),
+                                   paths.user_data_root);
+    const bool cache_set = from_ini("cache_root", band3::ReadIniString("cache_root"), paths.cache_root);
+    // the SDK put the cache in the default user data folder; keep it with the new one
+    if (user_set && !cache_set && rex::cvar::GetFlagSource("cache_root") == rex::cvar::Source::kDefault) {
+      paths.cache_root = paths.user_data_root / "cache";
     }
-    band3::SetGameDataRoot(paths.game_data_root.string());
+    band3::SetGameDataRoot(paths.game_data_root);
   }
 
   // band3.toml, the environment and the command line are applied by now, and
   // the window and input system don't exist yet, so everything set here applies
   // at startup
   void OnPostInitLogging() override {
+    REXLOG_INFO("Folders: game data {}, user data {}, cache {} (ini: {})",
+                rex::path_to_utf8(game_data_root()), rex::path_to_utf8(user_data_root()),
+                rex::path_to_utf8(cache_root()), rex::path_to_utf8(band3::LegacyIniPath()));
     // before the ini, so a desktop ini's window settings don't undo them
     band3::steam_deck::ApplyDefaults();
     band3::ApplyLegacyIni();
