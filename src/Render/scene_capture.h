@@ -118,11 +118,22 @@ struct Texture {
 //   matrix, c104 fade colour, c106 detail normal, c107/c108 shadow colour and
 //   direction, c109..c111 colour xfm, c119 refraction, c124 tone mapping,
 //   c131..c133 colour mod, c221..c223 point light cube xfm
+// Then NgSpotlightDrawer's (out/research/spotlight_survey.md 1 and 3), kept
+// for its cones (ShaderType 2) and DrawRect blurs (shader 1) only and zero in
+// every other draw's state, where they'd be stale and split equal states:
+//   cones: c10 eye, c25 apex (w 1/length), c26 axis (w length), c27 eye -
+//   apex, c28 (w cos^2 of the half angle), c30 camera forward (w -f.eye),
+//   c86..c88 cross-section, c89 depth range, c127 fog (and c90 colour, kept
+//   already); blurs: c31..c35 taps' uv offsets, c47..c51 their weights
 inline constexpr uint16_t kShadeRegs[] = {
     0,  1,  2,  5,  7,  13, 14, 15, 16, 17, 18, 19, 20,  21,  22,  23,  24,  40,  41,  42,
     43, 47, 48, 49, 53, 54, 55, 63, 64, 65, 66, 67, 68,  69,  80,  81,  82,  83,  84,  85,
-    90, 91, 95, 96, 97, 104, 106, 107, 108, 109, 110, 111, 119, 124, 131, 132, 133, 221, 222, 223};
+    90, 91, 95, 96, 97, 104, 106, 107, 108, 109, 110, 111, 119, 124, 131, 132, 133, 221, 222, 223,
+    10, 25, 26, 27, 28, 30, 86, 87, 88, 89, 127, 31, 32, 33, 34, 35, 50, 51};
 inline constexpr int kNumShadeRegs = int(sizeof(kShadeRegs) / sizeof(kShadeRegs[0]));
+// kShadeRegs from here on are the spotlight drawer's
+inline constexpr int kFirstSpotShadeReg = 60;
+static_assert(kShadeRegs[kFirstSpotShadeReg] == 10, "the spotlight's registers follow the 60 others");
 
 // where register `reg` is in kShadeRegs, or -1 if it isn't kept
 constexpr int ShadeRegIndex(int reg) {
@@ -269,6 +280,24 @@ inline bool Culls(uint8_t cull, bool clockwise) {
 // are, the quads in them too (soft_raster.h's PlanPasses).
 inline bool DrawnToBackBuffer(const DrawItem& d) { return d.target == 0 && d.rect_shader < 0; }
 
+// RndTex::Type of NgSpotlightDrawer's targets: the depth volume its cones
+// add up in (640x360) and the density map its fog proxy's particles draw
+// (320x180), both drawn after post-processing starts, for the composite
+inline constexpr uint32_t kTexTypeDepthVolume = 0xA2;
+inline constexpr uint32_t kTexTypeDensityMap = 0x122;
+
+// A spotlight's cone: NgSpotlightDrawer::RenderConeDefs draws the beam's
+// proxy mesh (no material) with ShaderType 2, kDepthVolumeShader, into the
+// depth volume, adding up the light along the view ray inside the cone
+// (shaders/spot_model.hlsli). The capture keeps it as a mesh draw with blend
+// Add, no depth, its cull mode, tex the cross-section texture (s11) if the
+// shader samples it, and the cone's numbers in its shade state's spotlight
+// registers.
+inline constexpr int32_t kDepthVolumeShader = 2;
+inline bool IsSpotCone(const DrawItem& d, const ShadeInputs* s) {
+    return s && s->shader_type == kDepthVolumeShader && d.rect_shader < 0;
+}
+
 // A stretch of FrameCapture::draws that went to one target: the back buffer,
 // or a texture between DxTex::MakeDrawTarget and FinishDrawTarget (a texture
 // pass), which FinishDrawTarget resolves into the texture as a new version.
@@ -351,7 +380,7 @@ struct FrameCapture {
     // made by a pass in the capture (own or carried), by a pass left out above
     // because all its draws were too (rt_filtered: for their draw mode, as
     // shadow maps' and the velocity buffer's are, or for having no material
-    // or geometry the capture draws, as the spotlights' depth volume's), or
+    // or geometry the capture draws), or
     // by none it has (rt_missing: recorded in a frame whose passes weren't
     // kept, made before band3 saw it, or drawn by something band3 doesn't
     // record), so rt_missing 0 means none is missing that the capture could

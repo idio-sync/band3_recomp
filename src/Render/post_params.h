@@ -65,8 +65,9 @@ struct PostParams {
 // were given, to pin their taps.
 struct PostConsts {
     uint32_t valid = 0;  // FinishPostProcess ran this frame
-    // c6 bloom colour, c15 half pixel, c24 DOF, c91 overlay, c92..c94 the
-    // colour matrix, c112/c113 noise, c122 velocity blur, c127 overlay
+    // c6 bloom colour, c15 half pixel, c24 DOF, c91 spotlights (x the
+    // gain), c92..c94 the colour matrix, c112/c113 noise, c122 velocity
+    // blur, c127 spotlights (x + y * density)
     float c6[4] = {}, c15[4] = {}, c24[4] = {}, c91[4] = {};
     float c92[3][4] = {};
     float c112[4] = {}, c113[4] = {}, c122[4] = {}, c127[4] = {};
@@ -83,6 +84,12 @@ struct PostConsts {
     // first direction)
     uint32_t bloom_survey = 0;
     float bloom_offsets[15][4] = {}, bloom_weights[15][4] = {};
+    // TheShaderMgr + 0x25, below flags' range: NgSpotlightDrawer::RenderScene
+    // sets it each frame it runs, and it turns on the composite's spotlight
+    // term (option bit 51), rgb += s12.rgb * (c127.x + c127.y * s5.r) * c91.x
+    // with s12 the blurred depth volume and s5 the density map
+    // (out/research/spotlight_survey.md 2); 0 in captures from before
+    uint32_t spot_flag = 0;
 };
 
 // TheShaderMgr's flag bytes, as PostConsts::flags indexes them
@@ -91,6 +98,8 @@ inline constexpr int kPostFlagDof = 0x26 - kPostFlagBase;
 inline constexpr int kPostFlagBloom = 0x27 - kPostFlagBase;
 inline constexpr int kPostFlagGlare = 0x28 - kPostFlagBase;
 inline constexpr int kPostFlagColorXfm = 0x2A - kPostFlagBase;
+// and PostConsts::spot_flag's, before them
+inline constexpr int kPostFlagSpot = 0x25;
 
 // Hmx::Color::Pack, as the retail code does it: each channel times 255,
 // truncated (fctiwz, which saturates), its low byte; red lowest

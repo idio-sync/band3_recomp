@@ -41,6 +41,7 @@ extern "C" void __imp__DxTex__MakeDrawTarget(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxTex__FinishDrawTarget(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxCam__Select(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxTex__SyncBitmap(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__NgSpotlightDrawer__BlurRT_824D24D0(PPCContext& ctx, uint8_t* base);
 
 namespace band3::render {
 namespace {
@@ -114,7 +115,6 @@ constexpr uint32_t kDxTex_Format = 0x74;
 constexpr uint32_t kDxTex_Texture = 0x78;
 constexpr uint32_t kTexType_NoZ = 0x20;
 constexpr uint32_t kTexType_ShadowMap = 0x42;
-constexpr uint32_t kTexType_DepthVolume = 0xA2;
 // RndCam (rndobj/Cam.h)
 constexpr uint32_t kCam_ScreenRect = 0x2cc;  // Hmx::Rect, 0..1 of the target
 constexpr uint32_t kCam_TargetTex = 0x2dc + 8;
@@ -188,8 +188,19 @@ constexpr uint32_t kDOFOverride_BlurWidthScale = 0x82C70440 + 0x18;
 constexpr uint32_t kCam_Near = 0x2b4;
 constexpr uint32_t kCam_Far = 0x2b8;
 constexpr uint32_t kCam_ZRange = 0x2c4;
-// TheShaderMgr, whose flags at +0x26.. say what the composite does
+// TheShaderMgr, whose flags at +0x25.. say what the composite does
 constexpr uint32_t kShaderMgrHolder = 0x82C76CE0;
+// NgSpotlightDrawer's shared resources (CheckRTs; out/research/
+// spotlight_survey.md 1): a pointer to them, and the depth volume's DxTex
+// at +8
+constexpr uint32_t kSpotSharedHolder = 0x82CC77D4;
+constexpr uint32_t kSpotShared_DepthVolume = 8;
+// the sampler of the cone shader's cross-section texture, and the PS
+// register whose x weighs it (0 or 1: 0 doesn't sample it)
+constexpr uint32_t kSpotXsecSampler = 11;
+constexpr int kSpotXsecWeightReg = 86;
+// DxRnd::DrawRect's ShaderType for a blur
+constexpr int32_t kRectShaderBlur = 1;
 
 constexpr uint32_t kMaxBufferBytes = 64u << 20;
 constexpr uint32_t kMaxTextureSize = 4096;
@@ -1054,9 +1065,12 @@ int32_t InternShade(FrameCapture& fc, ShadeIndex& index, ShadeState&& shade, Fil
 
 // What the draw just made had its shader read, from the device's constant
 // shadow: the hooks run after the draw, and DxMesh::DrawShowing sets the
-// constants per material pass, so these are its last pass's. The index of an
-// equal state already in the sink, or of a new one; -1 without a device.
-int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat) {
+// constants per material pass, so these are its last pass's. The spotlight
+// drawer's registers are kept for its cones (ShaderType 2) and, `blur`, a
+// DrawRect blur's taps, and zeroed for the rest. `mat` 0 for a draw without a
+// material (a cone). The index of an equal state already in the sink, or of
+// a new one; -1 without a device.
+int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool blur = false) {
     FrameCapture& fc = sink.fc;
     const uint32_t dev = g.U32(kD3DDeviceHolder);
     if (!dev) return -1;
@@ -1073,20 +1087,28 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat) {
             in.ps[r][c] = g.F32(dev + kDev_PixelShaderF + kShadeRegs[r] * 16 + c * 4);
         }
     }
+    if (in.shader_type != kDepthVolumeShader && !blur) {
+        for (int r = kFirstSpotShadeReg; r < kNumShadeRegs; r++) {
+            std::memset(in.vs[r], 0, sizeof(in.vs[r]));
+            std::memset(in.ps[r], 0, sizeof(in.ps[r]));
+        }
+    }
     in.mat = mat;
-    in.next_pass = g.U32(mat + kMat_NextPass);
-    in.use_environ = g.U8(mat + kMat_UseEnviron);
-    in.intensify = g.U8(mat + kMat_Intensify);
-    in.per_pixel_lit = g.U8(mat + kMat_PerPixelLit);
-    in.alpha_write = g.U8(mat + kMat_AlphaWrite);
-    in.shader_variation = int32_t(g.U32(mat + kMat_ShaderVariation));
-    in.mat_diffuse_base = TexBase(g, g.U32(mat + kMat_DiffuseTex));
+    if (mat) {
+        in.next_pass = g.U32(mat + kMat_NextPass);
+        in.use_environ = g.U8(mat + kMat_UseEnviron);
+        in.intensify = g.U8(mat + kMat_Intensify);
+        in.per_pixel_lit = g.U8(mat + kMat_PerPixelLit);
+        in.alpha_write = g.U8(mat + kMat_AlphaWrite);
+        in.shader_variation = int32_t(g.U32(mat + kMat_ShaderVariation));
+        in.mat_diffuse_base = TexBase(g, g.U32(mat + kMat_DiffuseTex));
+    }
     auto fetch = [&](uint32_t sampler, uint32_t out[6]) {
         for (int i = 0; i < 6; i++) out[i] = g.U32(dev + kDev_TextureFetch + sampler * 24 + i * 4);
     };
     if (in.Option(shader_opt::kDiffuseMap)) fetch(0, in.fetch_diffuse);
     for (int m = 0; m < kNumShadeMaps; m++) {
-        if (kMat_Map[m]) {
+        if (kMat_Map[m] && mat) {
             in.mat_maps[m] = g.U32(mat + kMat_Map[m]);
             // RndCubeTex isn't a DxTex
             if (m != kMapEnviron) in.mat_map_base[m] = TexBase(g, in.mat_maps[m]);
@@ -1102,9 +1124,11 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat) {
 
 // a draw of `geometry` with material `mat`, for the current camera;
 // sample_texture false leaves its diffuse texture out (a mip downsample's,
-// which is the texture it's drawing)
+// which is the texture it's drawing); blur: a DrawRect blur, whose taps its
+// shade state keeps
 DrawItem MakeItem(const Guest& g, State& s, Sink& sink, uint32_t mat, uint32_t owner,
-                  std::shared_ptr<const Geometry> geometry, bool sample_texture = true) {
+                  std::shared_ptr<const Geometry> geometry, bool sample_texture = true,
+                  bool blur = false) {
     DrawItem item;
     item.geom = std::move(geometry);
     item.world = Identity();
@@ -1120,7 +1144,7 @@ DrawItem MakeItem(const Guest& g, State& s, Sink& sink, uint32_t mat, uint32_t o
     item.target = sink.target;
     const uint32_t tex = g.U32(mat + kMat_DiffuseTex);
     if (tex && sample_texture) item.tex = CaptureTexture(g, s, sink, tex);
-    item.shade = CaptureShade(g, s, sink, mat);
+    item.shade = CaptureShade(g, s, sink, mat, blur);
     return item;
 }
 
@@ -1150,11 +1174,56 @@ bool MeshParts(const Guest& g, FrameCapture& fc, uint32_t mesh, uint32_t& mat,
     return true;
 }
 
+// A spotlight's cone (scene_capture.h's IsSpotCone), drawn while the depth
+// volume's pass is open: NgSpotlightDrawer::RenderConeDefs draws the beam's
+// proxy mesh through DxMesh::DrawShowing with no material, ShaderType 2 and
+// the device set up by hand (blend ONE ONE, no Z test or write, cull as
+// RndShader's override left it). Its cross-section texture is s11, when PS
+// c86.x says the shader samples it.
+void CaptureSpotCone(const Guest& g, State& s, Sink& sink, uint32_t mesh) {
+    FrameCapture& fc = sink.fc;
+    uint32_t geom = g.U32(mesh + kMesh_GeomOwner);
+    if (!geom) geom = mesh;
+    std::shared_ptr<const Geometry> geometry = CaptureGeometry(g, geom, fc);
+    if (!geometry || geometry->indices.empty()) {
+        fc.skipped_no_geom++;
+        return;
+    }
+    DrawItem item;
+    item.geom = std::move(geometry);
+    item.world = ReadXfm(g, mesh + kMesh_WorldXfm);
+    item.view_proj = ViewProj(g, s);
+    for (float& c : item.color) c = 1.0f;
+    item.blend = 2;   // kBlendAdd
+    item.z_mode = 0;  // kZModeDisable
+    item.prelit = true;
+    item.alpha_cut = false;
+    item.alpha_threshold = 0;
+    item.cam = s.cam;
+    item.mesh = mesh;
+    item.target = sink.target;
+    item.cull = CaptureCull(g);
+    if (const uint32_t dev = g.U32(kD3DDeviceHolder);
+        dev && g.F32(dev + kDev_PixelShaderF + kSpotXsecWeightReg * 16) > 0) {
+        uint32_t f[6];
+        for (int i = 0; i < 6; i++)
+            f[i] = g.U32(dev + kDev_TextureFetch + kSpotXsecSampler * 24 + i * 4);
+        if (f[1]) item.tex = CaptureMap(g, f, fc);
+    }
+    item.shade = CaptureShade(g, s, sink, 0);
+    PushDraw(s, sink, std::move(item));
+}
+
 void CaptureMesh(uint8_t* base, uint32_t mesh) {
     State& s = S();
     const Guest g{base};
     std::optional<Sink> sink;
     if (!Target(g, s, sink)) return;
+    if (sink->target && s.open.rec && s.open.rec->pass.tex_type == kTexTypeDepthVolume &&
+        g_shader_type == kDepthVolumeShader) {
+        CaptureSpotCone(g, s, *sink, mesh);
+        return;
+    }
     uint32_t mat;
     std::shared_ptr<const Geometry> geometry;
     if (!MeshParts(g, sink->fc, mesh, mat, geometry)) return;
@@ -1324,7 +1393,8 @@ void CaptureRect(uint8_t* base, uint32_t rnd, uint32_t rect_ptr, uint32_t mat, i
 
     DrawItem item;
     if (mat) {
-        item = MakeItem(g, s, *sink, mat, mat, std::move(geom), mip == 0);
+        item = MakeItem(g, s, *sink, mat, mat, std::move(geom), mip == 0,
+                        shader == kRectShaderBlur);
         if (mip) item.shade = -1;
     } else {
         item.geom = std::move(geom);
@@ -1425,7 +1495,7 @@ void CameraSelected(const Guest& g, uint32_t cam) {
     p.clear_flags = 0;
     if ((type & 2) && !(type & kTexType_NoZ)) p.clear_flags |= 0x30;
     if (type != kTexType_ShadowMap) p.clear_flags |= 0x0f;
-    p.clear_color = type == kTexType_DepthVolume ? 0xFF000000u : 0;
+    p.clear_color = type == kTexTypeDepthVolume ? 0xFF000000u : 0;
     p.clear_z = g.F32(type == kTexType_ShadowMap ? kClearDepthShadow : kClearDepth);
     const float size[4] = {float(p.width), float(p.height), float(p.width), float(p.height)};
     for (int i = 0; i < 4; i++) p.viewport[i] = g.F32(cam + kCam_ScreenRect + i * 4) * size[i];
@@ -1473,8 +1543,7 @@ void AddCounts(FrameCapture& to, const FrameCapture& from) {
 
 // whether a pass drew nothing the capture keeps because every draw it made
 // was left out: for its draw mode (shadow casters, velocity), or for having no
-// material or geometry the capture draws (the spotlights' depth volume's,
-// NgSpotlightDrawer::RenderScene: out/research/m3_survey.md 1)
+// material or geometry the capture draws
 bool AllLeftOut(const FrameCapture& content) {
     const uint32_t left_out = content.skipped_shadow + content.skipped_velocity +
                               content.skipped_draw_mode + content.skipped_no_geom;
@@ -1658,8 +1727,10 @@ void ReadPostConsts(const Guest& g, PostConsts& pc) {
     ReadPsConst(g, dev, 113, pc.c113);
     ReadPsConst(g, dev, 122, pc.c122);
     ReadPsConst(g, dev, 127, pc.c127);
-    if (const uint32_t sm = g.U32(kShaderMgrHolder))
+    if (const uint32_t sm = g.U32(kShaderMgrHolder)) {
         for (int i = 0; i < int(sizeof(pc.flags)); i++) pc.flags[i] = g.U8(sm + kPostFlagBase + i);
+        pc.spot_flag = g.U8(sm + kPostFlagSpot);
+    }
 }
 
 // a blur's taps, c31.. (offsets) and c47.. (weights), after it set them
@@ -2053,6 +2124,33 @@ extern "C" REX_FUNC(Bloom_Blur) {
     if (pc.bloom_survey) return;
     pc.bloom_survey = 1;
     ReadBlurTaps<15>(Guest{base}, pc.bloom_offsets, pc.bloom_weights);
+}
+
+// NgSpotlightDrawer::BlurRT_824D24D0: one direction of the depth volume's
+// blur (across, then down: BlurRT_824D3EC8 calls it twice). It binds the
+// depth volume's EDRAM surface with D3DDevice_SetRenderTarget, draws a
+// DrawRect over it sampling the texture and resolves it back, with no
+// DxTex::MakeDrawTarget or FinishDrawTarget: recorded as a pass into the
+// depth volume of its own (no clear), a version each, so its DrawRect lands
+// there rather than in the back buffer's draws.
+extern "C" REX_FUNC(NgSpotlightDrawer__BlurRT_824D24D0) {
+    if (!Active()) {
+        __imp__NgSpotlightDrawer__BlurRT_824D24D0(ctx, base);
+        return;
+    }
+    uint32_t tex = 0;
+    {
+        std::lock_guard lock(g_state_mutex);
+        const Guest g{base};
+        if (const uint32_t shared = g.U32(kSpotSharedHolder))
+            tex = g.U32(shared + kSpotShared_DepthVolume);
+        if (tex) BeginPass(g, tex);
+    }
+    __imp__NgSpotlightDrawer__BlurRT_824D24D0(ctx, base);
+    if (!tex) return;
+    std::lock_guard lock(g_state_mutex);
+    RecordTimer timer;
+    EndPass(tex);
 }
 
 extern "C" REX_FUNC(DxRnd__Present) {

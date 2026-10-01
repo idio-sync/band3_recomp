@@ -45,6 +45,11 @@ static_assert(sizeof(PostPass) == 25 * 16, "PostPass is float4s and uint4s only,
 inline constexpr uint32_t kGameWidth = 1280;
 inline constexpr uint32_t kGameHeight = 720;
 
+// RasterOptions::post_only's bit for the composite's spotlight term
+// (spot_model.h, PostConsts::spot_flag), which isn't drawn yet: alone, it
+// leaves every other effect off
+inline constexpr uint kPostSpot = 16u;
+
 // a level 4x smaller than `size`, as RB3 makes them (integer, at least 1)
 inline uint32_t Quarter(uint32_t size) { return size >= 4 ? size / 4 : 1; }
 

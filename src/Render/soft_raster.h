@@ -17,7 +17,9 @@
 // versions right (the crowd's impostor is drawn eight times a frame, each
 // sampled in between). Texture targets keep alpha: impostors are alpha-cut
 // against the clear's 0, and outfit layers blend by it. Mips aren't sampled:
-// every texture is read nearest at level 0, on the GPU too.
+// every texture is read nearest at level 0, on the GPU too. The spotlights'
+// cones shade by spot_model.h instead, reading the world's depth where they
+// are on the screen, and the depth volume's blurs blur it in place.
 //
 // The back buffer's draws are split at post_boundary, as RB3 draws them: the
 // world's go to a scene target, which keeps alpha as RB3's back buffer does
@@ -93,7 +95,9 @@ struct PassRun {
 // The frame's back-buffer stretches, and the texture passes that something
 // drawn after them samples (by texture, any version: a pass that clears hides
 // the ones before it), but none from post-processing on, which isn't drawn
-// yet. A capture without passes is one back-buffer stretch.
+// yet, other than the spotlights' (the depth volume's cones and blurs, and
+// the density map its cones read: spot_model.h), which post-processing
+// samples. A capture without passes is one back-buffer stretch.
 std::vector<PassRun> PlanPasses(const FrameCapture& frame, const RasterOptions& options);
 
 // a texture pass's draws but FinishDrawTarget's mip downsamples: the

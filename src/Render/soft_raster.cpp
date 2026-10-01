@@ -2,6 +2,7 @@
 
 #include "src/Render/post_model.h"
 #include "src/Render/shade_model.h"
+#include "src/Render/spot_model.h"
 
 #include <algorithm>
 #include <chrono>
@@ -74,6 +75,11 @@ struct Target {
     // the picture's, once the scene is resolved into it: a copy of it as the
     // resolve left it, w x h, which REFRACT_WORLD draws read (RefractsWorld)
     const uint32_t* behind = nullptr;
+    // a texture pass's: the scene's depth (1/w), scene_w x scene_h, which a
+    // spotlight's cone reads where its pixel is on the screen (the game's s9,
+    // the world's depth: the cones draw after it, before the overlay's)
+    const float* scene_depth = nullptr;
+    uint32_t scene_w = 0, scene_h = 0;
     // the viewport (clip space -1..1 maps to x..x+w, y..y+h), and the pixels
     // it covers, which is all a triangle can reach
     float vx = 0, vy = 0, vw = 0, vh = 0;
@@ -104,6 +110,12 @@ TexView View(const Texture* t) {
 
 struct DrawState {
     int32_t index;  // in the frame's draws
+    // a spotlight's cone (IsSpotCone) shades with these instead of `shade`:
+    // its tex is the cross-section texture, density the density map drawn
+    // before it (none: 0)
+    bool spot = false;
+    spot::SpotParams spot_params;
+    TexView density;
     TexView tex;
     TexView spec_map;  // none unless shade samples it
     TexView glow;
@@ -125,6 +137,57 @@ void Texel(const TexView& t, const float uv[2], float out[4]) {
     const uint32_t y = std::min(uint32_t(v * float(t.h)), t.h - 1);
     const uint32_t c = t.px[size_t(y) * t.w + x];
     for (int i = 0; i < 4; i++) out[i] = float((c >> (8 * i)) & 0xff) / 255.0f;
+}
+
+// the texel at u, v (0..1), nearest, clamped to the edge
+void TexelClamped(const TexView& t, float u, float v, float out[4]) {
+    const uint32_t x = std::min(uint32_t(std::clamp(u, 0.0f, 1.0f) * float(t.w)), t.w - 1);
+    const uint32_t y = std::min(uint32_t(std::clamp(v, 0.0f, 1.0f) * float(t.h)), t.h - 1);
+    const uint32_t c = t.px[size_t(y) * t.w + x];
+    for (int i = 0; i < 4; i++) out[i] = float((c >> (8 * i)) & 0xff) / 255.0f;
+}
+
+// bilinear at u, v (0..1), clamped to the edge: the linear clamp sampler the
+// spotlight drawer sets for its density map and its blurs' taps
+void SampleLinear(const TexView& t, float u, float v, float out[4]) {
+    const float x = u * float(t.w) - 0.5f, y = v * float(t.h) - 0.5f;
+    const float fx = std::floor(x), fy = std::floor(y);
+    const float tx = x - fx, ty = y - fy;
+    auto at = [&](float px, float py, int c) {
+        const int xi = std::clamp(int(px), 0, int(t.w) - 1);
+        const int yi = std::clamp(int(py), 0, int(t.h) - 1);
+        return float((t.px[size_t(yi) * t.w + xi] >> (8 * c)) & 0xff) / 255.0f;
+    };
+    for (int c = 0; c < 4; c++) {
+        const float top = at(fx, fy, c) + (at(fx + 1, fy, c) - at(fx, fy, c)) * tx;
+        const float bottom = at(fx, fy + 1, c) + (at(fx + 1, fy + 1, c) - at(fx, fy + 1, c)) * tx;
+        out[c] = top + (bottom - top) * ty;
+    }
+}
+
+// A spotlight cone's colour at pixel x, y of the depth volume, wp the
+// proxy's world position there and w its clip w (spot_model.hlsli's
+// SpotCone). The shader takes where the pixel is on the screen from its clip
+// position, and reads the scene's depth there point-sampled, the density
+// map bilinear.
+void SpotPixel(const DrawState& ds, const Target& t, int x, int y, const float wp[3], float w,
+               float out[4]) {
+    const float u = (float(x) + 0.5f - t.vx) / t.vw, v = (float(y) + 0.5f - t.vy) / t.vh;
+    float inv_w = 0;
+    if (t.scene_depth) {
+        const uint32_t sx = std::min(uint32_t(std::clamp(u, 0.0f, 1.0f) * float(t.scene_w)),
+                                     t.scene_w - 1);
+        const uint32_t sy = std::min(uint32_t(std::clamp(v, 0.0f, 1.0f) * float(t.scene_h)),
+                                     t.scene_h - 1);
+        inv_w = t.scene_depth[size_t(sy) * t.scene_w + sx];
+    }
+    const spot::SpotParams& sp = ds.spot_params;
+    float texel[4] = {1, 1, 1, 1};
+    if (ds.tex.px) TexelClamped(ds.tex, spot::SpotGoboCoordCpu(sp, wp), 0.0f, texel);
+    float density[4] = {0, 0, 0, 0};
+    if (ds.density.px) SampleLinear(ds.density, u, v, density);
+    spot::SpotConeCpu(sp, wp, w, spot::SpotSceneDepthCpu(sp, inv_w), texel[0], density[1], out);
+    out[3] = 0;
 }
 
 // pixel x, y's colour; the picture behind it is the one at x, y, the
@@ -256,7 +319,10 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
                 for (int i = 0; i < 3; i++) la[i] = q0 * a.la[i] + q1 * b.la[i] + q2 * c.la[i];
             }
             float col[4];
-            Shade(ds, x, y, uv, n, vc, wp, 1.0f / z, ao, ld, la, col);
+            if (ds.spot)
+                SpotPixel(ds, t, x, y, wp, 1.0f / z, col);
+            else
+                Shade(ds, x, y, uv, n, vc, wp, 1.0f / z, ao, ld, la, col);
             if (shade::AlphaCutCpu(ds.shade, col[3])) continue;
             // Dest draws no colour, but may still write the scene's alpha
             if (ds.blend != 0 || ds.alpha == AlphaRule::kMax) {
@@ -357,13 +423,17 @@ TexView Diffuse(const DrawItem& it, const RasterOptions& o, const RtTargets& rts
 }
 
 void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const RasterOptions& o,
-             const RtTargets& rts, Target& t, RasterStats& st, std::vector<ClipVert>& cv) {
+             const RtTargets& rts, Target& t, RasterStats& st, std::vector<ClipVert>& cv,
+             const TexView& density = {}) {
     const Geometry& g = *it.geom;
     const bool skinned = o.skinning && !it.bones.empty();
     DrawState ds;
     ds.index = index;
     ds.cull = o.culling ? it.cull : 0;
     ds.tex = Diffuse(it, o, rts, t, st);
+    // a cone shades only into a texture: the depth volume
+    ds.spot = t.tex_obj && IsSpotCone(it, state) && spot::PackSpot(*state, t.w, t.h, ds.spot_params);
+    if (ds.spot) ds.density = density;
     shade::PackShade(it, state, o, ds.tex.px != nullptr, ds.shade);
     if (ds.shade.flags.x & shade::kShadeSpecMap)
         ds.spec_map = View(state->maps[kMapSpecular].get());
@@ -453,6 +523,62 @@ bool Drawable(const DrawItem& it) {
     return it.geom && !it.geom->verts.empty() && it.geom->indices.size() >= 3;
 }
 
+// the depth volume's blur taps (NgSpotlightDrawer::BlurRT_824D24D0): 5, their
+// uv offsets in PS c31.., their weights (per channel) in c47..
+constexpr int kSpotBlurTaps = 5;
+
+// Whether a pass's draw is a DrawRect blur of the depth volume into itself,
+// with the taps its shade state kept (none in captures from before them)
+bool SpotBlur(const DrawItem& it, const ShadeState* s, const Pass& p) {
+    if (it.rect_shader != 1 || !s || p.tex_type != kTexTypeDepthVolume || !it.tex ||
+        it.tex->tex_obj != p.tex_obj)
+        return false;
+    float weights = 0;
+    for (int i = 0; i < kSpotBlurTaps; i++) weights += s->Ps(47 + i)[0];
+    return weights > 0;
+}
+
+// The blur into the target it samples, as the game does it in place by a
+// resolve: each pixel of its rect the taps' weighted sum of the target as it
+// was before it (bilinear, clamped; whole texels apart, so point), at the
+// quad's uv plus each tap's offset, blended by its material.
+void SpotBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o, Target& t,
+                  RasterStats& st) {
+    const std::vector<uint32_t> before = t.color;
+    const TexView src{t.w, t.h, before.data()};
+    const int x0 = std::clamp(int(std::floor(it.rect[0])), 0, int(t.w));
+    const int y0 = std::clamp(int(std::floor(it.rect[1])), 0, int(t.h));
+    const int x1 = std::clamp(int(std::ceil(it.rect[0] + it.rect[2])), x0, int(t.w));
+    const int y1 = std::clamp(int(std::ceil(it.rect[1] + it.rect[3])), y0, int(t.h));
+    if (it.rect[2] <= 0 || it.rect[3] <= 0) return;
+    const int blend = o.blending ? it.blend : 1;
+    for (int y = y0; y < y1; y++) {
+        const float v = (float(y) + 0.5f - it.rect[1]) / it.rect[3];
+        for (int x = x0; x < x1; x++) {
+            const float u = (float(x) + 0.5f - it.rect[0]) / it.rect[2];
+            float sum[4] = {0, 0, 0, 0};
+            for (int i = 0; i < kSpotBlurTaps; i++) {
+                const float* off = s.Ps(31 + i);
+                const float* weight = s.Ps(47 + i);
+                float tap[4];
+                SampleLinear(src, u + off[0], v + off[1], tap);
+                for (int c = 0; c < 4; c++) sum[c] += tap[c] * weight[c];
+            }
+            const size_t idx = size_t(y) * t.w + x;
+            t.color[idx] = Blend(blend, sum, t.color[idx], AlphaRule::kColorFactors);
+            st.pixels++;
+        }
+    }
+    st.draws++;
+}
+
+// NgSpotlightDrawer's targets: drawn after post-processing starts, for the
+// composite, so kept when something wants them though the rest of
+// post-processing's passes aren't
+bool SpotTarget(const Pass& p) {
+    return p.tex_type == kTexTypeDepthVolume || p.tex_type == kTexTypeDensityMap;
+}
+
 // PlanPasses, with `also` (a DxTex, 0 none) wanted whatever samples it,
 // even after post-processing starts: at the frame's end, and its pass of
 // `also_version` (0 none) too
@@ -488,11 +614,19 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
         const bool wanted = also && p.tex_obj == also;
         if (!o.texture_passes || !p.width || !p.height) continue;
         if (!needed.count(p.tex_obj) && !(wanted && p.version == also_version)) continue;
-        if (first >= f.post_boundary && !wanted) continue;
+        if (first >= f.post_boundary && !wanted && !SpotTarget(p)) continue;
         // what it drew over isn't seen
         if (p.clear_flags & 0x0f) needed.erase(p.tex_obj);
         runs.push_back({&p, first, end});
         samples(first, end, true);
+        // the cones read the density map drawn before them
+        if (p.tex_type == kTexTypeDepthVolume) {
+            for (size_t j = i; j-- > 0;) {
+                if (f.passes[j].tex_type != kTexTypeDensityMap) continue;
+                needed.insert(f.passes[j].tex_obj);
+                break;
+            }
+        }
     }
     std::reverse(runs.begin(), runs.end());
     return runs;
@@ -559,6 +693,8 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     std::vector<ClipVert> cv;
     std::unordered_set<uint32_t> cams_seen;
     uint32_t last_cam = 0;
+    // the density map the spotlights' cones read: the last drawn
+    uint32_t density = 0;
     for (const PassRun& run : Plan(frame, o, stop, stop_version)) {
         if (!run.pass) {
             for (uint32_t i = run.first; i < run.end; i++) {
@@ -593,16 +729,28 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         rtt.alpha = TargetAlpha::kTexture;
         rtt.tex_obj = p.tex_obj;
         rtt.no_z = (p.tex_type & kTexTypeNoZ) != 0;
+        rtt.scene_depth = depth.data();
+        rtt.scene_w = o.width;
+        rtt.scene_h = o.height;
+        if (p.tex_type == kTexTypeDensityMap) density = p.tex_obj;
+        TexView density_view;
+        if (auto d = rts.find(density); density && d != rts.end() && p.tex_obj != density)
+            density_view = {d->second.w, d->second.h, d->second.color.data()};
         for (uint32_t i = run.first; i < run.end; i++) {
             const DrawItem& it = frame.draws[i];
             if (!DrawnInTexturePass(it) || !Drawable(it)) continue;
+            const ShadeState* state = shade::ShadeOf(frame, it);
+            if (SpotBlur(it, state, p)) {
+                SpotBlurDraw(it, *state, o, rtt, st);
+                continue;
+            }
             // the camera's viewport; DrawRect's quads are in the target's
             // pixels, over all of it
             if (it.rect_shader < 0 && p.viewport[2] > 0 && p.viewport[3] > 0)
                 rtt.SetViewport(p.viewport[0], p.viewport[1], p.viewport[2], p.viewport[3]);
             else
                 rtt.SetViewport(0, 0, float(rt.w), float(rt.h));
-            DrawOne(it, int32_t(i), shade::ShadeOf(frame, it), o, rts, rtt, st, cv);
+            DrawOne(it, int32_t(i), state, o, rts, rtt, st, cv, density_view);
         }
         st.passes++;
         if (stop && p.tex_obj == stop && p.version == stop_version) break;
