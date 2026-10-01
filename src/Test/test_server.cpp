@@ -207,6 +207,8 @@ public:
         out.gpu_path = path.string();
         out.gpu_ms = stats.ms;
         out.gpu_wait_ms = stats.wait_ms;
+        out.gpu_passes = stats.passes;
+        out.gpu_rt_missing = stats.rt_missing;
     }
 
     std::string NativeViewOn(uint32_t width, uint32_t height) override {

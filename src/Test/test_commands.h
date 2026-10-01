@@ -45,6 +45,10 @@ struct CaptureInfo {
     std::string gpu_error;
     double gpu_ms = 0;       // the whole GPU frame
     double gpu_wait_ms = 0;  // of that, from submitting it to having the picture
+    // the texture passes it drew, and its draws that sampled a render target
+    // nothing had drawn (transparent black)
+    uint32_t gpu_passes = 0;
+    uint32_t gpu_rt_missing = 0;
 };
 
 // the live native view (`native_view on`): F7's renderer without its window,

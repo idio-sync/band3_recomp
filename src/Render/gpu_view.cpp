@@ -103,13 +103,21 @@ bool Skinned(const DrawItem& it, const RasterOptions& o) {
     return o.skinning && !it.bones.empty();
 }
 
+// whether a draw of `run` is drawn (soft_raster.h's PassRun)
+bool DrawnIn(const PassRun& run, const DrawItem& it) {
+    return (run.pass ? DrawnInTexturePass(it) : DrawnToBackBuffer(it)) && Drawable(it);
+}
+
 // soft_raster.cpp's depth rules for a draw, which pick its pipeline
 struct DepthRules {
     bool test, equal_passes, write;
     int Key() const { return int(test) | int(equal_passes) << 1 | int(write) << 2; }
 };
 
-DepthRules RulesFor(const DrawItem& it, const RasterOptions& o) {
+// `no_z`: into a texture without a depth buffer, where nothing tests or
+// writes depth
+DepthRules RulesFor(const DrawItem& it, const RasterOptions& o, bool no_z) {
+    if (no_z) return {false, false, false};
     DepthRules r;
     switch (it.z_mode) {
         case 0: r = {false, false, false}; break;
@@ -180,6 +188,7 @@ struct GpuRenderer::Impl {
     bool warm = false;
     SDL_GPUSampler* sampler = nullptr;
     SDL_GPUTexture* white = nullptr;     // bound for untextured draws, which don't read it
+    SDL_GPUTexture* black = nullptr;     // transparent: a render target nothing has drawn
     SDL_GPUBuffer* no_bones = nullptr;   // one identity bone, bound when nothing is skinned
 
     SDL_GPUTexture* color = nullptr;
@@ -243,6 +252,22 @@ struct GpuRenderer::Impl {
     uint64_t serial = 0;
     bool texture_failure_logged = false;
 
+    // A texture pass's target, by DxTex: RGBA8 with the texture's mips, a 2D
+    // array of one layer so draws sample it through the same binding as any
+    // texture, and a depth buffer. Kept between frames, so a render target a
+    // frame samples but doesn't draw is what was drawn last; let go when no
+    // frame has drawn or sampled it for kEvictAfter frames, and made again
+    // when its size changes.
+    struct Rt {
+        SDL_GPUTexture* color = nullptr;
+        SDL_GPUTexture* depth = nullptr;
+        uint32_t w = 0, h = 0, levels = 1;
+        bool drawn = false;  // by a pass, this frame or before
+        uint64_t used = 0;
+    };
+    std::unordered_map<uint32_t, Rt> rts;
+    bool rt_failure_logged = false;
+
     // a frame's work, kept between frames so a frame allocates nothing once
     // they've grown
     std::vector<Mesh*> to_pool, to_arena;
@@ -257,6 +282,13 @@ struct GpuRenderer::Impl {
     std::vector<uint32_t> bone_base;  // per draw, where its bones start
     std::vector<shade::ShadeParams> shades;  // per draw
     std::vector<uint32_t> cams_seen;
+    // per draw, what its diffuse texture samples
+    enum Source : uint8_t { kSourceNone, kSourceTexture, kSourceRt, kSourceBlack };
+    std::vector<uint8_t> diffuse_source;
+    // per run, a texture pass's: drawn (it has a target), and whether that
+    // starts cleared
+    enum : uint8_t { kRunDrawn = 1, kRunClearColor = 2, kRunClearDepth = 4 };
+    std::vector<uint8_t> run_clear;
 
     bool StartVideo(const char* driver);
     void StopVideo();
@@ -264,7 +296,8 @@ struct GpuRenderer::Impl {
     // stop_video: on the UI thread only, as SDL wants
     void Release(bool stop_video);
     SDL_GPUShader* MakeShader(SDL_GPUShaderFormat format, SDL_GPUShaderStage stage);
-    SDL_GPUGraphicsPipeline* Pipeline(int blend, const DepthRules& rules);
+    // `alpha`: into a texture, which keeps alpha
+    SDL_GPUGraphicsPipeline* Pipeline(int blend, const DepthRules& rules, bool alpha);
     // makes every pipeline a frame can ask for and the upload buffer's usual
     // size, so no frame stalls making them
     void Prewarm();
@@ -283,6 +316,10 @@ struct GpuRenderer::Impl {
     // a layer of its size class's array for `tx`, growing the array if full
     bool PlaceTexture(Tex& tx);
     void LetTextureGo(Tex& tx);
+    // the target for texture pass `p`, made (again) at its size; null if it
+    // couldn't be
+    Rt* TargetFor(const Pass& p);
+    void ReleaseRt(Rt& rt);
     bool Render(const FrameCapture& frame, const RasterOptions& o,
                 std::vector<uint32_t>& rgba, GpuStats& stats);
     void Evict();
@@ -392,6 +429,7 @@ bool GpuRenderer::Impl::Create() {
     ti.layer_count_or_depth = 1;
     ti.num_levels = 1;
     white = SDL_CreateGPUTexture(device, &ti);
+    black = SDL_CreateGPUTexture(device, &ti);
 
     SDL_GPUBufferCreateInfo bi{};
     bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
@@ -400,20 +438,21 @@ bool GpuRenderer::Impl::Create() {
 
     SDL_GPUTransferBufferCreateInfo tbi{};
     tbi.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    tbi.size = 256;
+    tbi.size = kTextureOffsetAlign * 2;
     SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(device, &tbi);
-    if (!sampler || !white || !no_bones || !tb) {
+    if (!sampler || !white || !black || !no_bones || !tb) {
         REXLOG_WARN("native view gpu: couldn't make its sampler and buffers ({})",
                     SDL_GetError());
         if (tb) SDL_ReleaseGPUTransferBuffer(device, tb);
         return false;
     }
     auto* p = static_cast<uint8_t*>(SDL_MapGPUTransferBuffer(device, tb, false));
-    const uint32_t white_px = 0xffffffffu;
+    const uint32_t white_px = 0xffffffffu, black_px = 0;
     Mat4 identity{};
     for (int i = 0; i < 4; i++) identity.m[i][i] = 1.0f;
     if (p) {
         std::memcpy(p, &white_px, 4);
+        std::memcpy(p + kTextureOffsetAlign, &black_px, 4);
         std::memcpy(p + 16, &identity, sizeof(identity));
         SDL_UnmapGPUTransferBuffer(device, tb);
     }
@@ -425,6 +464,10 @@ bool GpuRenderer::Impl::Create() {
         SDL_GPUTextureRegion dst{};
         dst.texture = white;
         dst.w = dst.h = dst.d = 1;
+        SDL_UploadToGPUTexture(copy, &src, &dst, false);
+        // a texture's upload starts kTextureOffsetAlign into the buffer
+        src.offset = kTextureOffsetAlign;
+        dst.texture = black;
         SDL_UploadToGPUTexture(copy, &src, &dst, false);
         SDL_GPUTransferBufferLocation bsrc{tb, 16};
         SDL_GPUBufferRegion bdst{no_bones, 0, sizeof(Mat4)};
@@ -448,11 +491,13 @@ void GpuRenderer::Impl::Release(bool stop_video) {
             ReleaseBuffer(*b);
         for (auto& [k, a] : tex_arrays)
             if (a.texture) SDL_ReleaseGPUTexture(device, a.texture);
+        for (auto& [k, rt] : rts) ReleaseRt(rt);
         for (auto& [k, p] : pipelines) SDL_ReleaseGPUGraphicsPipeline(device, p);
         if (vertex_shader) SDL_ReleaseGPUShader(device, vertex_shader);
         if (pixel_shader) SDL_ReleaseGPUShader(device, pixel_shader);
         if (sampler) SDL_ReleaseGPUSampler(device, sampler);
         if (white) SDL_ReleaseGPUTexture(device, white);
+        if (black) SDL_ReleaseGPUTexture(device, black);
         if (no_bones) SDL_ReleaseGPUBuffer(device, no_bones);
         if (color) SDL_ReleaseGPUTexture(device, color);
         if (depth) SDL_ReleaseGPUTexture(device, depth);
@@ -463,21 +508,23 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     meshes.clear();
     textures.clear();
     tex_arrays.clear();
+    rts.clear();
     arena_vert_count = arena_index_count = 0;
     pipelines.clear();
     warm = false;
     device = nullptr;
     vertex_shader = pixel_shader = nullptr;
     sampler = nullptr;
-    white = color = depth = nullptr;
+    white = black = color = depth = nullptr;
     no_bones = nullptr;
     readback = upload = nullptr;
     width = height = upload_size = 0;
     if (stop_video) StopVideo();
 }
 
-SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules& rules) {
-    const int key = blend << 3 | rules.Key();
+SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules& rules,
+                                                     bool alpha) {
+    const int key = int(alpha) << 6 | blend << 3 | rules.Key();
     if (auto it = pipelines.find(key); it != pipelines.end()) return it->second;
 
     // scene_capture.h's Vertex as it is, 56 bytes
@@ -493,40 +540,53 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     };
     SDL_GPUColorTargetDescription target{};
     target.format = kColorFormat;
-    // Blend() in soft_raster.cpp. Alpha is never written: it stays the
-    // clear's 1, as the CPU's picture has it, so the readback is the picture.
-    // The target clamps the colour to 0-1 before blending, which only Multiply
-    // above 1 notices; SrcAlpha's scaling happens in the shader (kPremultiply)
+    // Blend() in soft_raster.cpp. The back buffer's alpha is never written:
+    // it stays the clear's 1, as the CPU's picture has it, so the readback is
+    // the picture. A texture's blends alpha by the colour's factors, as D3D9
+    // does without separate alpha blending. The target clamps the colour to
+    // 0-1 before blending, which only Multiply above 1 notices; SrcAlpha's
+    // scaling happens in the shader (kPremultiply), to the colour only
     SDL_GPUColorTargetBlendState& bs = target.blend_state;
     bs.enable_color_write_mask = true;
-    bs.color_write_mask = blend == kBlendDest ? SDL_GPUColorComponentFlags(0)
-                                              : SDL_GPUColorComponentFlags(
-                                                    SDL_GPU_COLORCOMPONENT_R |
-                                                    SDL_GPU_COLORCOMPONENT_G |
-                                                    SDL_GPU_COLORCOMPONENT_B);
+    SDL_GPUColorComponentFlags mask =
+        SDL_GPU_COLORCOMPONENT_R | SDL_GPU_COLORCOMPONENT_G | SDL_GPU_COLORCOMPONENT_B;
+    if (alpha) mask |= SDL_GPU_COLORCOMPONENT_A;
+    bs.color_write_mask = blend == kBlendDest ? SDL_GPUColorComponentFlags(0) : mask;
     bs.color_blend_op = SDL_GPU_BLENDOP_ADD;
     bs.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
     bs.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
     bs.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
-    auto factors = [&](SDL_GPUBlendFactor src, SDL_GPUBlendFactor dst) {
+    // colour factors, then alpha's
+    auto factors = [&](SDL_GPUBlendFactor src, SDL_GPUBlendFactor dst, SDL_GPUBlendFactor src_a,
+                       SDL_GPUBlendFactor dst_a) {
         bs.enable_blend = true;
         bs.src_color_blendfactor = src;
         bs.dst_color_blendfactor = dst;
+        bs.src_alpha_blendfactor = src_a;
+        bs.dst_alpha_blendfactor = dst_a;
     };
     switch (blend) {
         case kBlendAdd:
-        case kBlendSrcAlphaAdd:  // the shader has scaled it by alpha
-            factors(SDL_GPU_BLENDFACTOR_ONE, SDL_GPU_BLENDFACTOR_ONE);
+            factors(SDL_GPU_BLENDFACTOR_ONE, SDL_GPU_BLENDFACTOR_ONE, SDL_GPU_BLENDFACTOR_ONE,
+                    SDL_GPU_BLENDFACTOR_ONE);
+            break;
+        case kBlendSrcAlphaAdd:  // the shader has scaled the colour by alpha
+            factors(SDL_GPU_BLENDFACTOR_ONE, SDL_GPU_BLENDFACTOR_ONE,
+                    SDL_GPU_BLENDFACTOR_SRC_ALPHA, SDL_GPU_BLENDFACTOR_ONE);
             break;
         case kBlendSrcAlpha:  // likewise
-            factors(SDL_GPU_BLENDFACTOR_ONE, SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA);
+            factors(SDL_GPU_BLENDFACTOR_ONE, SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+                    SDL_GPU_BLENDFACTOR_SRC_ALPHA, SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA);
             break;
         case kBlendSubtract:  // dst - src
-            factors(SDL_GPU_BLENDFACTOR_ONE, SDL_GPU_BLENDFACTOR_ONE);
+            factors(SDL_GPU_BLENDFACTOR_ONE, SDL_GPU_BLENDFACTOR_ONE, SDL_GPU_BLENDFACTOR_ONE,
+                    SDL_GPU_BLENDFACTOR_ONE);
             bs.color_blend_op = SDL_GPU_BLENDOP_REVERSE_SUBTRACT;
+            bs.alpha_blend_op = SDL_GPU_BLENDOP_REVERSE_SUBTRACT;
             break;
         case kBlendMultiply:
-            factors(SDL_GPU_BLENDFACTOR_DST_COLOR, SDL_GPU_BLENDFACTOR_ZERO);
+            factors(SDL_GPU_BLENDFACTOR_DST_COLOR, SDL_GPU_BLENDFACTOR_ZERO,
+                    SDL_GPU_BLENDFACTOR_DST_ALPHA, SDL_GPU_BLENDFACTOR_ZERO);
             break;
         default:  // Src, and Dest, which writes no colour
             break;
@@ -568,8 +628,9 @@ void GpuRenderer::Impl::Prewarm() {
     constexpr DepthRules kRules[] = {{false, false, false}, {true, true, false},
                                      {false, false, true},  {true, true, true},
                                      {true, false, true}};
-    for (int blend = kBlendDest; blend <= kBlendMultiply; blend++)
-        for (const DepthRules& r : kRules) Pipeline(blend, r);
+    for (int alpha = 0; alpha < 2; alpha++)
+        for (int blend = kBlendDest; blend <= kBlendMultiply; blend++)
+            for (const DepthRules& r : kRules) Pipeline(blend, r, alpha != 0);
     if (upload_size < kInitialUploadBytes) {
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
         SDL_GPUTransferBufferCreateInfo tbi{};
@@ -721,6 +782,59 @@ const GpuRenderer::Impl::Tex* GpuRenderer::Impl::TextureFor(const Texture* t) {
     return it != textures.end() && it->second.array ? &it->second : nullptr;
 }
 
+GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p) {
+    Rt& rt = rts[p.tex_obj];
+    rt.used = serial;
+    // the texture's mips (FinishDrawTarget's downsamples), down to 1x1 at most
+    uint32_t levels = 1;
+    if (p.num_mips > 1) {
+        uint32_t chain = 1;
+        for (uint32_t s = std::max(p.width, p.height); s > 1; s >>= 1) chain++;
+        levels = std::min(p.num_mips, chain);
+    }
+    if (rt.color && rt.w == p.width && rt.h == p.height && rt.levels == levels) return &rt;
+    ReleaseRt(rt);
+    SDL_GPUTextureCreateInfo ti{};
+    ti.type = SDL_GPU_TEXTURETYPE_2D_ARRAY;
+    ti.format = kColorFormat;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+    ti.width = p.width;
+    ti.height = p.height;
+    ti.layer_count_or_depth = 1;
+    ti.num_levels = levels;
+    rt.color = SDL_CreateGPUTexture(device, &ti);
+    ti.type = SDL_GPU_TEXTURETYPE_2D;
+    ti.format = kDepthFormat;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+    ti.num_levels = 1;
+    rt.depth = SDL_CreateGPUTexture(device, &ti);
+    if (!rt.color || !rt.depth) {
+        if (!rt_failure_logged) {
+            rt_failure_logged = true;
+            REXLOG_WARN("native view gpu: no {}x{} render target ({}); what samples it draws "
+                        "transparent black",
+                        p.width, p.height, SDL_GetError());
+        }
+        ReleaseRt(rt);
+        rts.erase(p.tex_obj);
+        return nullptr;
+    }
+    rt.w = p.width;
+    rt.h = p.height;
+    rt.levels = levels;
+    return &rt;
+}
+
+void GpuRenderer::Impl::ReleaseRt(Rt& rt) {
+    // SDL lets them go once the frames using them are done
+    if (rt.color) SDL_ReleaseGPUTexture(device, rt.color);
+    if (rt.depth) SDL_ReleaseGPUTexture(device, rt.depth);
+    rt.color = rt.depth = nullptr;
+    rt.w = rt.h = 0;
+    rt.levels = 1;
+    rt.drawn = false;
+}
+
 bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     if (color && w == width && h == height) return true;
     if (color) SDL_ReleaseGPUTexture(device, color);
@@ -772,44 +886,87 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     frame_bones.clear();
     bone_base.assign(frame.draws.size(), 0);
     shades.resize(frame.draws.size());
+    diffuse_source.assign(frame.draws.size(), kSourceNone);
+    const std::vector<PassRun> runs = PlanPasses(frame, o);
+    run_clear.assign(runs.size(), 0);
     uint32_t pool_vert_count = 0, pool_index_count = 0;
-    for (size_t d = 0; d < frame.draws.size(); d++) {
-        const DrawItem& it = frame.draws[d];
-        if (!DrawnToBackBuffer(it) || !Drawable(it)) continue;
-        Mesh& m = meshes[it.geom.get()];
-        if (!m.keep) {
-            m.keep = it.geom;
-            m.first = serial;
+    for (size_t r = 0; r < runs.size(); r++) {
+        const PassRun& run = runs[r];
+        // a texture pass's target, cleared where its camera cleared it and
+        // where nothing has drawn it yet (transparent black, as on the CPU)
+        Rt* target = nullptr;
+        if (run.pass) {
+            target = TargetFor(*run.pass);
+            if (!target) continue;
+            const bool fresh = !target->drawn;
+            run_clear[r] = kRunDrawn;
+            if ((run.pass->clear_flags & 0x0f) || fresh) run_clear[r] |= kRunClearColor;
+            if ((run.pass->clear_flags & 0x30) || fresh) run_clear[r] |= kRunClearDepth;
+            st.passes++;
         }
-        if (m.used != serial) {
-            m.used = serial;
-            if (m.in_arena) {
-                // already there
-            } else if (m.first != serial) {
-                // the last frame drew it too (Evict lets go of pool geometry
-                // a frame doesn't draw), from its pool: it stays
-                m.pool_vertex = m.first_vertex;
-                m.pool_index = m.first_index;
-                to_arena.push_back(&m);
-            } else {
-                m.first_vertex = pool_vert_count;
-                m.first_index = pool_index_count;
-                pool_vert_count += uint32_t(it.geom->verts.size());
-                pool_index_count += IndexSlots(*it.geom);
-                to_pool.push_back(&m);
+        for (size_t d = run.first; d < run.end; d++) {
+            const DrawItem& it = frame.draws[d];
+            if (!DrawnIn(run, it)) continue;
+            Mesh& m = meshes[it.geom.get()];
+            if (!m.keep) {
+                m.keep = it.geom;
+                m.first = serial;
             }
+            if (m.used != serial) {
+                m.used = serial;
+                if (m.in_arena) {
+                    // already there
+                } else if (m.first != serial) {
+                    // the last frame drew it too (Evict lets go of pool
+                    // geometry a frame doesn't draw), from its pool: it stays
+                    m.pool_vertex = m.first_vertex;
+                    m.pool_index = m.first_index;
+                    to_arena.push_back(&m);
+                } else {
+                    m.first_vertex = pool_vert_count;
+                    m.first_index = pool_index_count;
+                    pool_vert_count += uint32_t(it.geom->verts.size());
+                    pool_index_count += IndexSlots(*it.geom);
+                    to_pool.push_back(&m);
+                }
+            }
+            if (Skinned(it, o)) {
+                bone_base[d] = uint32_t(frame_bones.size());
+                frame_bones.insert(frame_bones.end(), it.bones.begin(), it.bones.end());
+            }
+            // what the diffuse texture is, as soft_raster.cpp's Diffuse() has
+            // it: a render target is its pass's target if one has drawn it (by
+            // this frame's runs before this one, or an earlier frame's), else
+            // guest pixels if kept and wanted, else transparent black; a target
+            // never samples itself
+            uint8_t& source = diffuse_source[d];
+            if (o.textures && it.tex) {
+                const Texture& tex = *it.tex;
+                if (o.texture_passes && IsPassTarget(&tex)) {
+                    auto f = rts.find(tex.tex_obj);
+                    const bool self = run.pass && run.pass->tex_obj == tex.tex_obj;
+                    if (!self && f != rts.end() && f->second.drawn) {
+                        source = kSourceRt;
+                        f->second.used = serial;
+                    } else if (!self && o.rt_guest_pixels && !tex.rgba.empty()) {
+                        source = kSourceTexture;
+                    } else {
+                        source = kSourceBlack;
+                        st.rt_missing++;
+                    }
+                } else if (!tex.tex_obj || o.rt_guest_pixels) {
+                    source = kSourceTexture;
+                }
+                if (source == kSourceTexture) UseTexture(it.tex);
+            }
+            // textured or not is settled when it draws, once the texture has
+            // its layer; the maps are the shade's
+            const ShadeState* state = shade::ShadeOf(frame, it);
+            shade::PackShade(it, state, o, false, shades[d]);
+            if (shades[d].flags.x & shade::kShadeSpecMap) UseTexture(state->maps[kMapSpecular]);
+            if (shades[d].flags.x & shade::kShadeGlow) UseTexture(state->maps[kMapGlow]);
         }
-        if (Skinned(it, o)) {
-            bone_base[d] = uint32_t(frame_bones.size());
-            frame_bones.insert(frame_bones.end(), it.bones.begin(), it.bones.end());
-        }
-        if (o.textures) UseTexture(it.tex);
-        // textured or not is settled when it draws, once the texture has its
-        // layer; the maps are the shade's
-        const ShadeState* state = shade::ShadeOf(frame, it);
-        shade::PackShade(it, state, o, false, shades[d]);
-        if (shades[d].flags.x & shade::kShadeSpecMap) UseTexture(state->maps[kMapSpecular]);
-        if (shades[d].flags.x & shade::kShadeGlow) UseTexture(state->maps[kMapGlow]);
+        if (target) target->drawn = true;
     }
     if (!PlaceInArena()) return false;
 
@@ -962,60 +1119,63 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         SDL_EndGPUCopyPass(copy);
     }
 
-    // a pass per stretch of draws between depth clears, as Rasterize() clears
-    // depth when a camera it hasn't seen yet starts drawing
-    SDL_GPUColorTargetInfo ct{};
-    ct.texture = color;
-    ct.clear_color = {kClearGrey, kClearGrey, kClearGrey, 1.0f};
-    ct.load_op = SDL_GPU_LOADOP_CLEAR;
-    ct.store_op = SDL_GPU_STOREOP_STORE;
-    SDL_GPUDepthStencilTargetInfo dt{};
-    dt.texture = depth;
-    dt.clear_depth = 0.0f;
-    dt.load_op = SDL_GPU_LOADOP_CLEAR;
-    dt.store_op = SDL_GPU_STOREOP_STORE;
-    dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-    dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+    // The runs in order, a render pass each stretch: the back buffer's, split
+    // where Rasterize() clears depth (a camera it hasn't seen yet starts
+    // drawing) and resumed after each texture pass; each texture pass into
+    // its target, then its mips made
     SDL_GPUBuffer* bone_buffer = bone_bytes ? bones.buffer : no_bones;
     SDL_GPURenderPass* pass = nullptr;
-    bool pass_drew = false;
     // what's bound in the pass, so a draw binds only what changes
     SDL_GPUGraphicsPipeline* bound = nullptr;
     SDL_GPUBuffer* bound_verts = nullptr;
     SDL_GPUTexture* bound_tex[kNumSlots] = {};
-    auto begin_pass = [&] {
+    float bound_viewport[4] = {};
+    auto begin_pass = [&](const SDL_GPUColorTargetInfo& ct,
+                          const SDL_GPUDepthStencilTargetInfo& dt) {
         pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
         SDL_BindGPUVertexStorageBuffers(pass, 0, &bone_buffer, 1);
-        pass_drew = false;
         bound = nullptr;
         bound_verts = nullptr;
         std::fill(std::begin(bound_tex), std::end(bound_tex), nullptr);
+        std::fill(std::begin(bound_viewport), std::end(bound_viewport), 0.0f);
     };
-    begin_pass();
-    cams_seen.clear();
-    uint32_t last_cam = 0;
-    for (size_t d = 0; d < frame.draws.size(); d++) {
+    auto end_pass = [&] {
+        if (pass) SDL_EndGPURenderPass(pass);
+        pass = nullptr;
+    };
+
+    // the back buffer: cleared to the CPU's grey the first time, its depth
+    // whenever a new camera starts
+    bool back_begun = false;
+    bool depth_fresh = false;  // the open pass's depth is cleared and untouched
+    auto begin_back = [&](bool clear_depth) {
+        SDL_GPUColorTargetInfo ct{};
+        ct.texture = color;
+        ct.clear_color = {kClearGrey, kClearGrey, kClearGrey, 1.0f};
+        ct.load_op = back_begun ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
+        ct.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPUDepthStencilTargetInfo dt{};
+        dt.texture = depth;
+        dt.clear_depth = 0.0f;
+        clear_depth |= !back_begun;
+        dt.load_op = clear_depth ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
+        dt.store_op = SDL_GPU_STOREOP_STORE;
+        dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+        dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        begin_pass(ct, dt);
+        back_begun = true;
+        depth_fresh = clear_depth;
+    };
+
+    // one draw into the open pass; `no_z` a texture without a depth buffer
+    auto draw = [&](size_t d, bool into_texture, bool no_z) {
         const DrawItem& it = frame.draws[d];
-        if (!DrawnToBackBuffer(it)) continue;
-        if (o.clear_depth_per_camera && it.cam != last_cam &&
-            std::find(cams_seen.begin(), cams_seen.end(), it.cam) == cams_seen.end()) {
-            cams_seen.push_back(it.cam);
-            if (pass_drew) {
-                SDL_EndGPURenderPass(pass);
-                ct.load_op = SDL_GPU_LOADOP_LOAD;
-                begin_pass();
-            }
-        }
-        last_cam = it.cam;
-        if (!Drawable(it)) {
-            st.skipped++;
-            continue;
-        }
         const Mesh& m = meshes[it.geom.get()];
-        SDL_GPUGraphicsPipeline* pipeline = Pipeline(BlendFor(it, o), RulesFor(it, o));
+        const int blend = BlendFor(it, o);
+        SDL_GPUGraphicsPipeline* pipeline = Pipeline(blend, RulesFor(it, o, no_z), into_texture);
         if (!pipeline) {
             st.skipped++;
-            continue;
+            return;
         }
         if (pipeline != bound) {
             SDL_BindGPUGraphicsPipeline(pass, pipeline);
@@ -1030,23 +1190,41 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             bound_verts = verts;
         }
 
-        // the textures the shade samples, where they have a layer; a map
-        // that couldn't have one is left out, as if the capture had none
+        // the textures the shade samples: a layer of a size class's array,
+        // or a render target's own; a map that couldn't have a layer is left
+        // out, as if the capture had none
+        struct Sampled {
+            SDL_GPUTexture* texture = nullptr;
+            uint32_t layer = 0, w = 0, h = 0;
+        };
+        auto layer_of = [&](const Texture* t) {
+            const Tex* tx = TextureFor(t);
+            return tx ? Sampled{tx->array->texture, tx->layer, t->width, t->height} : Sampled{};
+        };
         shade::ShadeParams& sp = shades[d];
         const ShadeState* state = shade::ShadeOf(frame, it);
-        const Tex* tex[kNumSlots] = {o.textures ? TextureFor(it.tex.get()) : nullptr, nullptr,
-                                     nullptr};
-        if (tex[kSlotDiffuse]) sp.flags.x |= shade::kShadeTextured;
+        Sampled tex[kNumSlots];
+        switch (diffuse_source[d]) {
+            case kSourceTexture: tex[kSlotDiffuse] = layer_of(it.tex.get()); break;
+            case kSourceRt: {
+                const Rt& rt = rts[it.tex->tex_obj];
+                tex[kSlotDiffuse] = {rt.color, 0, rt.w, rt.h};
+                break;
+            }
+            case kSourceBlack: tex[kSlotDiffuse] = {black, 0, 1, 1}; break;
+            default: break;
+        }
+        if (tex[kSlotDiffuse].texture) sp.flags.x |= shade::kShadeTextured;
         if (sp.flags.x & shade::kShadeSpecMap) {
-            tex[kSlotSpecular] = TextureFor(state->maps[kMapSpecular].get());
-            if (!tex[kSlotSpecular]) sp.flags.x &= ~shade::kShadeSpecMap;
+            tex[kSlotSpecular] = layer_of(state->maps[kMapSpecular].get());
+            if (!tex[kSlotSpecular].texture) sp.flags.x &= ~shade::kShadeSpecMap;
         }
         if (sp.flags.x & shade::kShadeGlow) {
-            tex[kSlotGlow] = TextureFor(state->maps[kMapGlow].get());
-            if (!tex[kSlotGlow]) sp.flags.x &= ~shade::kShadeGlow;
+            tex[kSlotGlow] = layer_of(state->maps[kMapGlow].get());
+            if (!tex[kSlotGlow].texture) sp.flags.x &= ~shade::kShadeGlow;
         }
         for (int s = 0; s < kNumSlots; s++) {
-            SDL_GPUTexture* sampled = tex[s] ? tex[s]->array->texture : white;
+            SDL_GPUTexture* sampled = tex[s].texture ? tex[s].texture : white;
             if (sampled == bound_tex[s]) continue;
             const SDL_GPUTextureSamplerBinding ts{sampled, sampler};
             SDL_BindGPUFragmentSamplers(pass, uint32_t(s), &ts, 1);
@@ -1063,24 +1241,91 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         vu.shade = sp;
         SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
-        const int blend = BlendFor(it, o);
         PixelUniforms pu{};
         pu.shade = sp;
         for (int s = 0; s < kNumSlots; s++) {
-            if (!tex[s]) continue;
-            pu.tex_layer[s] = tex[s]->layer;
-            pu.tex_size[s][0] = tex[s]->keep->width;
-            pu.tex_size[s][1] = tex[s]->keep->height;
+            if (!tex[s].texture) continue;
+            pu.tex_layer[s] = tex[s].layer;
+            pu.tex_size[s][0] = tex[s].w;
+            pu.tex_size[s][1] = tex[s].h;
         }
         pu.flags[0] = blend == kBlendSrcAlpha || blend == kBlendSrcAlphaAdd ? kPremultiply : 0;
         SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
 
         SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
                                      m.first_index, int32_t(m.first_vertex), 0);
-        pass_drew = true;
         st.draws++;
+    };
+
+    cams_seen.clear();
+    uint32_t last_cam = 0;
+    for (size_t r = 0; r < runs.size(); r++) {
+        const PassRun& run = runs[r];
+        if (!run.pass) {
+            for (size_t d = run.first; d < run.end; d++) {
+                const DrawItem& it = frame.draws[d];
+                if (!DrawnToBackBuffer(it)) continue;
+                bool clear_depth = false;
+                if (o.clear_depth_per_camera && it.cam != last_cam &&
+                    std::find(cams_seen.begin(), cams_seen.end(), it.cam) == cams_seen.end()) {
+                    cams_seen.push_back(it.cam);
+                    clear_depth = true;
+                }
+                last_cam = it.cam;
+                if (!Drawable(it)) {
+                    st.skipped++;
+                    continue;
+                }
+                if (pass && clear_depth && !depth_fresh) end_pass();
+                if (!pass) begin_back(clear_depth);
+                draw(d, false, false);
+                depth_fresh = false;
+            }
+            continue;
+        }
+        if (!(run_clear[r] & kRunDrawn)) continue;
+        end_pass();
+        const Pass& p = *run.pass;
+        const Rt& rt = rts[p.tex_obj];
+        const bool no_z = (p.tex_type & kTexTypeNoZ) != 0;
+        SDL_GPUColorTargetInfo ct{};
+        ct.texture = rt.color;
+        const uint32_t c = (p.clear_flags & 0x0f) ? ArgbToRgba(p.clear_color) : 0;
+        ct.clear_color = {float(c & 0xff) / 255.0f, float(c >> 8 & 0xff) / 255.0f,
+                          float(c >> 16 & 0xff) / 255.0f, float(c >> 24) / 255.0f};
+        ct.load_op = (run_clear[r] & kRunClearColor) ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
+        ct.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPUDepthStencilTargetInfo dt{};
+        dt.texture = rt.depth;
+        dt.clear_depth = 0.0f;
+        dt.load_op = no_z || (run_clear[r] & kRunClearDepth) ? SDL_GPU_LOADOP_CLEAR
+                                                             : SDL_GPU_LOADOP_LOAD;
+        dt.store_op = no_z ? SDL_GPU_STOREOP_DONT_CARE : SDL_GPU_STOREOP_STORE;
+        dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+        dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        begin_pass(ct, dt);
+        for (size_t d = run.first; d < run.end; d++) {
+            const DrawItem& it = frame.draws[d];
+            if (!DrawnIn(run, it)) continue;
+            // the camera's viewport; DrawRect's quads are in the target's
+            // pixels, over all of it (soft_raster.cpp likewise)
+            float vp[4] = {0, 0, float(rt.w), float(rt.h)};
+            if (it.rect_shader < 0 && p.viewport[2] > 0 && p.viewport[3] > 0)
+                std::copy(std::begin(p.viewport), std::end(p.viewport), vp);
+            if (!std::equal(std::begin(vp), std::end(vp), bound_viewport)) {
+                const SDL_GPUViewport v{vp[0], vp[1], vp[2], vp[3], 0.0f, 1.0f};
+                SDL_SetGPUViewport(pass, &v);
+                std::copy(std::begin(vp), std::end(vp), bound_viewport);
+            }
+            draw(d, true, no_z);
+        }
+        end_pass();
+        // in place of FinishDrawTarget's downsamples
+        if (rt.levels > 1) SDL_GenerateMipmapsForGPUTexture(cmd, rt.color);
     }
-    SDL_EndGPURenderPass(pass);
+    // the back buffer cleared, if nothing drew to it
+    if (!back_begun) begin_back(true);
+    end_pass();
 
     SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
     SDL_GPUTextureRegion src{};
@@ -1140,6 +1385,15 @@ void GpuRenderer::Impl::Evict() {
         }
         LetTextureGo(it->second);
         it = textures.erase(it);
+    }
+    // a render target no frame has drawn or sampled for a while
+    for (auto it = rts.begin(); it != rts.end();) {
+        if (it->second.used + kEvictAfter >= serial) {
+            ++it;
+            continue;
+        }
+        ReleaseRt(it->second);
+        it = rts.erase(it);
     }
     // an array whose textures have all gone goes after a while
     for (auto it = tex_arrays.begin(); it != tex_arrays.end();) {

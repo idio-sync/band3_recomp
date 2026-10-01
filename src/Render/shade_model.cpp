@@ -75,6 +75,9 @@ namespace {
 
 void Copy(const float* from, float4& to) { to = {from[0], from[1], from[2], from[3]}; }
 
+// RndShader's ShaderType for the material shader (ShadeInputs::shader_type)
+constexpr int32_t kStandardShader = 18;
+
 }  // namespace
 
 void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, bool textured,
@@ -87,6 +90,15 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     sp.alpha_cut.x = float(it.alpha_threshold);
     sp.texgen[0] = {1, 0, 0, 0};
     sp.texgen[1] = {0, 1, 0, 0};
+    if (it.rect_shader >= 0 && (!s || s->shader_type != kStandardShader)) {
+        // a DrawRect quad drawn with one of DxRnd's own shaders (blurs,
+        // downsamples, the movie's) or no material: the texture times the
+        // colour DrawRect gave its vertices. Those with a material's shader
+        // (the outfit layers, TexBlender) are shaded as it says, below.
+        sp.color = {1, 1, 1, 1};
+        f |= kShadePrelit;
+        return;
+    }
     if (!s || o.legacy_light) {
         Copy(it.color, sp.color);
         if (it.prelit) f |= kShadePrelit;
@@ -121,7 +133,10 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     const bool particles = s->shader_type == 14;
     if (s->Option(kPrelit)) f |= kShadePrelit;
     if (s->Option(kIntensify)) f |= kShadeIntensify;
-    if (s->Option(kPseudoHdr)) f |= kShadePseudoHdr;
+    // the luminance in alpha is for the back buffer's bloom: RB3's shaders
+    // keep alpha into a texture ("not the main target", out/research/
+    // m3_design.md 3), where it's the impostor's cut-out and a layer's blend
+    if (s->Option(kPseudoHdr) && !it.target) f |= kShadePseudoHdr;
     const bool maps = o.textures;
     if (s->Option(kGlowMap) && maps && s->maps[kMapGlow]) f |= kShadeGlow;
     switch (s->OptionBits(kFadeOut, 2)) {

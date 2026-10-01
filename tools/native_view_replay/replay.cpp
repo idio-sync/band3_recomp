@@ -4,6 +4,8 @@
 //                               [--compare <screenshot.png> [--image <native.png>]]
 //                               [--diff <native.png>] [--mesh <hex>]
 //                               [--dump-tex <draw>] [--shade <draw>]
+//                               [--dump-rt <hex>[:<version>]]
+//                               [--rt-none | --rt-guest]
 //                               [--no-tex] [--no-blend] [--transpose]
 //                               [--no-skinned | --only-skinned] [--unskinned]
 //                               [--legacy-light | --no-light] [--pick X,Y]
@@ -17,8 +19,16 @@
 // its shader was given (option word, shade, ambient c1, the box map's sum,
 // point lights in the option word / with a colour); a draw into a texture or a
 // DrawRect quad says so. --shade prints all of one draw's ShadeState. A
-// capture with shades also gets a summary of them. Draws into textures and
-// DrawRect quads aren't drawn yet.
+// capture with shades also gets a summary of them.
+// The texture passes the frame samples are drawn as the native view draws
+// them (soft_raster.h), each into a target of its own; a render target no
+// pass drew samples what guest memory held, where the capture kept it, else
+// transparent black. --rt-none never uses guest memory's pixels (a capture
+// with readback drawn the native way only), --rt-guest draws no texture
+// passes and samples guest memory's pixels alone (as before them).
+// --dump-rt writes what the texture pass target with that DxTex holds (alpha
+// shown as black) after the pass making that version of it (its last without
+// one), drawn on the CPU, to out.png, and its alpha as grey to out.alpha.png.
 // --compare draws the frame at the size of a harness `capture` screenshot and
 // writes the two side by side (game left, native right), with their mean
 // difference; with --image the native side is that PNG instead (a harness
@@ -356,6 +366,7 @@ int main(int argc, char** argv) {
     bool transpose = false, per_cam = false, list = false, no_skinned = false, only_skinned = false;
     std::string compare, image, diff_with;
     long mesh_filter = -1, dump_tex = -1, shade_draw = -1;
+    uint32_t dump_rt = 0, dump_rt_version = 0;
     int pick_x = -1, pick_y = -1;
     long cam_filter = -1;
     for (int i = 3; i < argc; i++) {
@@ -369,6 +380,13 @@ int main(int argc, char** argv) {
         else if (a == "--mesh" && i + 1 < argc) mesh_filter = std::strtol(argv[++i], nullptr, 16);
         else if (a == "--dump-tex" && i + 1 < argc) dump_tex = std::strtol(argv[++i], nullptr, 0);
         else if (a == "--shade" && i + 1 < argc) shade_draw = std::strtol(argv[++i], nullptr, 0);
+        else if (a == "--dump-rt" && i + 1 < argc) {
+            char* end = nullptr;
+            dump_rt = uint32_t(std::strtoul(argv[++i], &end, 16));
+            if (end && *end == ':') dump_rt_version = uint32_t(std::strtoul(end + 1, nullptr, 0));
+        }
+        else if (a == "--rt-none") o.rt_guest_pixels = false;
+        else if (a == "--rt-guest") o.texture_passes = false;
         else if (a == "--pick" && i + 1 < argc) std::sscanf(argv[++i], "%d,%d", &pick_x, &pick_y);
         else if (a == "--no-blend") o.blending = false;
         else if (a == "--no-tex") o.textures = false;
@@ -503,6 +521,36 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (dump_rt) {
+        std::vector<uint32_t> px;
+        uint32_t w = 0, h = 0;
+        RasterStats rs;
+        if (!RasterizeTarget(*fc, o, dump_rt, dump_rt_version, px, w, h, &rs)) {
+            std::fprintf(stderr, "no pass in the capture draws %08X\n", dump_rt);
+            return 1;
+        }
+        // colour over black where it's transparent, as the texture's alpha
+        // says, and the alpha on its own
+        std::vector<uint32_t> alpha(px.size());
+        size_t opaque = 0;
+        for (size_t i = 0; i < px.size(); i++) {
+            const uint32_t a = px[i] >> 24;
+            alpha[i] = a | a << 8 | a << 16 | 0xff000000u;
+            if (a >= 0x80) opaque++;
+        }
+        for (uint32_t& p : px) p |= 0xff000000u;
+        std::string alpha_path = argv[2];
+        alpha_path = alpha_path.substr(0, alpha_path.size() - 4) + ".alpha.png";
+        WritePng(argv[2], px, w, h);
+        WritePng(alpha_path, alpha, w, h);
+        std::printf("%s (and %s): %08X, %ux%u, %.1f%% of it alpha >= 0.5; %u texture passes, %u "
+                    "draws, %u sampled a render target nothing drew, %.1f ms\n",
+                    argv[2], alpha_path.c_str(), dump_rt, w, h,
+                    100.0 * double(opaque) / double(px.size()), rs.passes, rs.draws,
+                    rs.rt_missing, rs.ms);
+        return 0;
+    }
+
     if (dump_tex >= 0) {
         if (size_t(dump_tex) >= fc->draws.size() || !fc->draws[dump_tex].tex) {
             std::fprintf(stderr, "draw %ld has no texture\n", dump_tex);
@@ -522,22 +570,27 @@ int main(int argc, char** argv) {
     }
 
     auto render = [&](const std::string& path, long only_cam) {
+        // the back buffer's draws filtered out are left empty, so the passes'
+        // draw numbers stay right; the texture passes' are all kept
         FrameCapture f = *fc;
-        f.draws.clear();
-        for (const DrawItem& d : fc->draws) {
-            if (only_cam >= 0 && d.cam != uint32_t(only_cam)) continue;
-            if (no_skinned && !d.bones.empty()) continue;
-            if (mesh_filter >= 0 && d.mesh != uint32_t(mesh_filter)) continue;
-            if (only_skinned && d.bones.empty()) continue;
-            DrawItem c = d;
+        for (DrawItem& c : f.draws) {
+            if (!DrawnToBackBuffer(c)) continue;
+            if ((only_cam >= 0 && c.cam != uint32_t(only_cam)) ||
+                (no_skinned && !c.bones.empty()) ||
+                (mesh_filter >= 0 && c.mesh != uint32_t(mesh_filter)) ||
+                (only_skinned && c.bones.empty())) {
+                c.geom = std::make_shared<Geometry>();
+                continue;
+            }
             if (transpose) c.view_proj = Transpose(c.view_proj);
-            f.draws.push_back(std::move(c));
         }
         std::vector<uint32_t> rgba;
         const RasterStats rs = Rasterize(f, o, rgba);
         WritePng(path, rgba, o.width, o.height);
-        std::printf("%s: %u draws, %u tris, %u pixels, %.1f ms\n", path.c_str(), rs.draws,
-                    rs.triangles, rs.pixels, rs.ms);
+        std::printf("%s: %u draws (%u texture passes, %u sampled a render target nothing drew), "
+                    "%u tris, %u pixels, %.1f ms\n",
+                    path.c_str(), rs.draws, rs.passes, rs.rt_missing, rs.triangles, rs.pixels,
+                    rs.ms);
     };
     // the frame drawn on the CPU at a size, with the options above
     auto rasterize_at = [&](uint32_t w, uint32_t h, std::vector<uint32_t>& out) {
@@ -573,8 +626,9 @@ int main(int argc, char** argv) {
             drawn = image;
         } else {
             const RasterStats rs = rasterize_at(sw, sh, native);
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "%u draws, %.1f ms", rs.draws, rs.ms);
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%u draws, %u texture passes, %u rt missing, %.1f ms",
+                          rs.draws, rs.passes, rs.rt_missing, rs.ms);
             drawn = buf;
         }
         const uint32_t hw = sw / 2, hh = sh / 2;
@@ -619,10 +673,10 @@ int main(int argc, char** argv) {
             }
             if (most > 8) differ++;
         }
-        std::printf("%s: cpu, %u draws, %.1f ms; against %s: mean difference %.2f of 255, "
-                    "%.2f%% of pixels off by more than 8\n",
-                    argv[2], rs.draws, rs.ms, diff_with.c_str(), diff / (double(cpu.size()) * 3),
-                    100.0 * double(differ) / double(cpu.size()));
+        std::printf("%s: cpu, %u draws, %u texture passes, %u rt missing, %.1f ms; against %s: "
+                    "mean difference %.2f of 255, %.2f%% of pixels off by more than 8\n",
+                    argv[2], rs.draws, rs.passes, rs.rt_missing, rs.ms, diff_with.c_str(),
+                    diff / (double(cpu.size()) * 3), 100.0 * double(differ) / double(cpu.size()));
         return 0;
     }
     render(argv[2], cam_filter);

@@ -396,6 +396,8 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
         std::snprintf(ms, sizeof(ms), ",\"gpu_ms\":%.1f,\"gpu_wait_ms\":%.1f", info.gpu_ms,
                       info.gpu_wait_ms);
         fields += ms;
+        fields += ",\"gpu_passes\":" + std::to_string(info.gpu_passes);
+        fields += ",\"gpu_rt_missing\":" + std::to_string(info.gpu_rt_missing);
     } else if (!info.gpu_error.empty()) {
         fields += ",\"gpu_error\":";
         AppendJsonString(fields, info.gpu_error);

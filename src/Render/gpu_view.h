@@ -18,7 +18,9 @@
 // video driver, so it makes no windows and leaves the game's alone.
 //
 // It draws what Rasterize() does, the same way: every blend mode, skinning on
-// the GPU, depth as 1/w.
+// the GPU, depth as 1/w, and the texture passes the frame samples, each into a
+// render target of its own (kept between frames, by DxTex) between stretches of
+// the back buffer's draws, with the texture's mips made after it.
 
 namespace band3::render {
 
@@ -26,6 +28,8 @@ struct GpuStats {
     uint32_t draws = 0;
     uint32_t skipped = 0;   // draws it couldn't do (no geometry, or no pipeline)
     uint32_t uploads = 0;   // meshes and textures sent to the GPU this frame
+    uint32_t passes = 0;    // texture passes drawn
+    uint32_t rt_missing = 0;  // draws that sampled a render target nothing had drawn
     double ms = 0;          // the whole frame: uploads, drawing and reading back
     double wait_ms = 0;     // of that, from submitting to having the picture
 };

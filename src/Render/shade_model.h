@@ -36,7 +36,9 @@ static_assert(sizeof(ShadeParams) == 26 * 16, "ShadeParams is float4s only, as H
 // with options.legacy_light, it's the placeholder from before; options.lighting
 // off draws the game's shading unlit. `textured`: the draw has a diffuse
 // texture the backend samples. The maps (specular, glow) are flagged when the
-// option word samples them and the capture decoded them.
+// option word samples them and the capture decoded them. A DrawRect quad that
+// DxRnd drew with a shader of its own is its texture times its vertex colour;
+// a draw into a texture keeps its alpha (no PSEUDO_HDR luminance).
 void PackShade(const DrawItem& item, const ShadeState* state, const RasterOptions& options,
                bool textured, ShadeParams& out);
 

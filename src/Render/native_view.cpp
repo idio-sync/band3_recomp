@@ -54,17 +54,20 @@ std::string Describe(const FrameCapture& fc, const std::string& drawn) {
 }
 
 std::string DescribeRaster(const RasterStats& rs) {
-    char buf[160];
-    std::snprintf(buf, sizeof(buf), "raster: %u draws, %u tris on screen, %u pixels, %.1f ms\n",
-                  rs.draws, rs.triangles, rs.pixels, rs.ms);
+    char buf[200];
+    std::snprintf(buf, sizeof(buf),
+                  "raster: %u draws (%u texture passes), %u tris on screen, %u pixels, %.1f ms; "
+                  "%u sampled a render target nothing drew\n",
+                  rs.draws, rs.passes, rs.triangles, rs.pixels, rs.ms, rs.rt_missing);
     return buf;
 }
 
 std::string DescribeGpu(const GpuStats& gs) {
-    char buf[160];
+    char buf[240];
     std::snprintf(buf, sizeof(buf),
-                  "gpu: %u draws (%u not drawn yet), %u uploads, %.1f ms (%.1f ms after submit)\n",
-                  gs.draws, gs.skipped, gs.uploads, gs.ms, gs.wait_ms);
+                  "gpu: %u draws (%u texture passes, %u not drawn yet), %u uploads, %.1f ms "
+                  "(%.1f ms after submit); %u sampled a render target nothing drew\n",
+                  gs.draws, gs.passes, gs.skipped, gs.uploads, gs.ms, gs.wait_ms, gs.rt_missing);
     return buf;
 }
 

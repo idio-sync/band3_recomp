@@ -218,8 +218,9 @@ struct DrawItem {
     int32_t mip_level = 0;
 };
 
-// What the renderers draw of a capture, for now: the back buffer's mesh
-// draws. Texture passes and DrawRect quads are recorded for what comes next.
+// What the renderers draw into the back buffer: its mesh draws. Its DrawRect
+// quads (the post copy, flares, the movie) aren't drawn yet; texture passes
+// are, the quads in them too (soft_raster.h's PlanPasses).
 inline bool DrawnToBackBuffer(const DrawItem& d) { return d.target == 0 && d.rect_shader < 0; }
 
 // A stretch of FrameCapture::draws that went to one target: the back buffer,
