@@ -1,5 +1,6 @@
 #include "src/Render/gpu_view.h"
 
+#include "src/Render/post_model.h"
 #include "src/Render/shade_model.h"
 #include "src/Render/shaders/mesh_shaders.gen.h"
 #include "src/Render/shaders/post_shaders.gen.h"
@@ -21,6 +22,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstring>
+#include <initializer_list>
 #include <iterator>
 #include <mutex>
 #include <string>
@@ -191,15 +193,23 @@ struct GpuRenderer::Impl {
     SDL_GPUDevice* device = nullptr;
     SDL_GPUShader* vertex_shader = nullptr;
     SDL_GPUShader* pixel_shader = nullptr;
-    // post.hlsl's: the full-screen triangle and the resolve, the scene into
-    // the picture
+    // post.hlsl's: the full-screen triangle; the resolve, the scene into the
+    // picture as it is; and post-processing's downsample, blur and composite
     SDL_GPUShader* fullscreen_shader = nullptr;
     SDL_GPUShader* resolve_shader = nullptr;
+    SDL_GPUShader* downsample_shader = nullptr;
+    SDL_GPUShader* blur_shader = nullptr;
+    SDL_GPUShader* composite_shader = nullptr;
     SDL_GPUGraphicsPipeline* resolve_pipeline = nullptr;
+    SDL_GPUGraphicsPipeline* downsample_pipeline = nullptr;
+    SDL_GPUGraphicsPipeline* blur_pipeline = nullptr;
+    SDL_GPUGraphicsPipeline* composite_pipeline = nullptr;
     // by blend mode and DepthRules::Key, all made before the first frame
     std::unordered_map<int, SDL_GPUGraphicsPipeline*> pipelines;
     bool warm = false;
     SDL_GPUSampler* sampler = nullptr;
+    // linear and clamping, as RB3 samples its post-processing levels
+    SDL_GPUSampler* linear_sampler = nullptr;
     SDL_GPUTexture* white = nullptr;     // bound for untextured draws, which don't read it
     SDL_GPUTexture* black = nullptr;     // transparent: a render target nothing has drawn
     SDL_GPUBuffer* no_bones = nullptr;   // one identity bone, bound when nothing is skinned
@@ -216,6 +226,13 @@ struct GpuRenderer::Impl {
     SDL_GPUTexture* no_depth = nullptr;
     SDL_GPUTransferBuffer* readback = nullptr;
     uint32_t width = 0, height = 0;
+    // post-processing's levels (post_model.h), RGBA8 as the 360's: the DOF's
+    // at a quarter of the picture's size, bloom's at a quarter, a sixteenth
+    // and a sixty-fourth, and one of each size for a blur's first direction
+    SDL_GPUTexture* post_dof = nullptr;
+    SDL_GPUTexture* post_bloom[3] = {};
+    SDL_GPUTexture* post_tmp[3] = {};
+    uint32_t post_w[3] = {}, post_h[3] = {};
 
     // Everything a frame sends goes through this one transfer buffer and one
     // copy pass. It's mapped cycling, so a frame never waits on an earlier one
@@ -322,7 +339,9 @@ struct GpuRenderer::Impl {
                               const unsigned char* spirv, size_t spirv_size, const char* entry,
                               uint32_t samplers, uint32_t storage_buffers, uint32_t uniforms);
     SDL_GPUGraphicsPipeline* Pipeline(int blend, const DepthRules& rules, AlphaMode alpha);
-    SDL_GPUGraphicsPipeline* MakeResolvePipeline();
+    // a full-screen pass's pipeline: post.hlsl's triangle and `pixel`, into RGBA8
+    SDL_GPUGraphicsPipeline* MakeFullscreenPipeline(SDL_GPUShader* pixel, const char* name);
+    void ReleaseTargets();
     // makes every pipeline a frame can ask for and the upload buffer's usual
     // size, so no frame stalls making them
     void Prewarm();
@@ -404,19 +423,20 @@ SDL_GPUShader* GpuRenderer::Impl::MakeShader(SDL_GPUShaderFormat format,
     return s;
 }
 
-SDL_GPUGraphicsPipeline* GpuRenderer::Impl::MakeResolvePipeline() {
+SDL_GPUGraphicsPipeline* GpuRenderer::Impl::MakeFullscreenPipeline(SDL_GPUShader* pixel,
+                                                                    const char* name) {
     SDL_GPUColorTargetDescription target{};
     target.format = kColorFormat;
     SDL_GPUGraphicsPipelineCreateInfo pi{};
     pi.vertex_shader = fullscreen_shader;
-    pi.fragment_shader = resolve_shader;
+    pi.fragment_shader = pixel;
     pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
     pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
     pi.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
     pi.target_info.color_target_descriptions = &target;
     pi.target_info.num_color_targets = 1;
     SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(device, &pi);
-    if (!p) REXLOG_WARN("native view gpu: no resolve pipeline ({})", SDL_GetError());
+    if (!p) REXLOG_WARN("native view gpu: no {} pipeline ({})", name, SDL_GetError());
     return p;
 }
 
@@ -459,9 +479,24 @@ bool GpuRenderer::Impl::Create() {
     resolve_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kResolvePixelDxbc,
                                 sizeof(kResolvePixelDxbc), kResolvePixelSpirv,
                                 sizeof(kResolvePixelSpirv), "PSResolve", 2, 0, 1);
-    if (!vertex_shader || !pixel_shader || !fullscreen_shader || !resolve_shader) return false;
-    resolve_pipeline = MakeResolvePipeline();
-    if (!resolve_pipeline) return false;
+    downsample_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kDownsamplePixelDxbc,
+                                   sizeof(kDownsamplePixelDxbc), kDownsamplePixelSpirv,
+                                   sizeof(kDownsamplePixelSpirv), "PSDownsample", 1, 0, 1);
+    blur_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kBlurPixelDxbc,
+                             sizeof(kBlurPixelDxbc), kBlurPixelSpirv, sizeof(kBlurPixelSpirv),
+                             "PSBlur", 1, 0, 1);
+    composite_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kCompositePixelDxbc,
+                                  sizeof(kCompositePixelDxbc), kCompositePixelSpirv,
+                                  sizeof(kCompositePixelSpirv), "PSComposite", 6, 0, 1);
+    if (!vertex_shader || !pixel_shader || !fullscreen_shader || !resolve_shader ||
+        !downsample_shader || !blur_shader || !composite_shader)
+        return false;
+    resolve_pipeline = MakeFullscreenPipeline(resolve_shader, "resolve");
+    downsample_pipeline = MakeFullscreenPipeline(downsample_shader, "downsample");
+    blur_pipeline = MakeFullscreenPipeline(blur_shader, "blur");
+    composite_pipeline = MakeFullscreenPipeline(composite_shader, "composite");
+    if (!resolve_pipeline || !downsample_pipeline || !blur_pipeline || !composite_pipeline)
+        return false;
     // the scene's depth, read after the world's draws: D32 the resolve samples
     // where the device can (Direct3D 12 and Vulkan both should)
     depth_sampled = SDL_GPUTextureSupportsFormat(
@@ -477,6 +512,10 @@ bool GpuRenderer::Impl::Create() {
     si.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
     si.address_mode_u = si.address_mode_v = si.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
     sampler = SDL_CreateGPUSampler(device, &si);
+    si.min_filter = si.mag_filter = SDL_GPU_FILTER_LINEAR;
+    si.address_mode_u = si.address_mode_v = si.address_mode_w =
+        SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    linear_sampler = SDL_CreateGPUSampler(device, &si);
 
     SDL_GPUTextureCreateInfo ti{};
     ti.type = SDL_GPU_TEXTURETYPE_2D_ARRAY;
@@ -501,7 +540,7 @@ bool GpuRenderer::Impl::Create() {
     tbi.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
     tbi.size = kTextureOffsetAlign * 2;
     SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(device, &tbi);
-    if (!sampler || !white || !black || !no_depth || !no_bones || !tb) {
+    if (!sampler || !linear_sampler || !white || !black || !no_depth || !no_bones || !tb) {
         REXLOG_WARN("native view gpu: couldn't make its sampler and buffers ({})",
                     SDL_GetError());
         if (tb) SDL_ReleaseGPUTransferBuffer(device, tb);
@@ -554,20 +593,19 @@ void GpuRenderer::Impl::Release(bool stop_video) {
             if (a.texture) SDL_ReleaseGPUTexture(device, a.texture);
         for (auto& [k, rt] : rts) ReleaseRt(rt);
         for (auto& [k, p] : pipelines) SDL_ReleaseGPUGraphicsPipeline(device, p);
-        if (resolve_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, resolve_pipeline);
-        if (vertex_shader) SDL_ReleaseGPUShader(device, vertex_shader);
-        if (pixel_shader) SDL_ReleaseGPUShader(device, pixel_shader);
-        if (fullscreen_shader) SDL_ReleaseGPUShader(device, fullscreen_shader);
-        if (resolve_shader) SDL_ReleaseGPUShader(device, resolve_shader);
+        for (SDL_GPUGraphicsPipeline* p :
+             {resolve_pipeline, downsample_pipeline, blur_pipeline, composite_pipeline})
+            if (p) SDL_ReleaseGPUGraphicsPipeline(device, p);
+        for (SDL_GPUShader* sh : {vertex_shader, pixel_shader, fullscreen_shader, resolve_shader,
+                                  downsample_shader, blur_shader, composite_shader})
+            if (sh) SDL_ReleaseGPUShader(device, sh);
         if (sampler) SDL_ReleaseGPUSampler(device, sampler);
+        if (linear_sampler) SDL_ReleaseGPUSampler(device, linear_sampler);
         if (white) SDL_ReleaseGPUTexture(device, white);
         if (black) SDL_ReleaseGPUTexture(device, black);
         if (no_depth) SDL_ReleaseGPUTexture(device, no_depth);
-        if (scene) SDL_ReleaseGPUTexture(device, scene);
         if (no_bones) SDL_ReleaseGPUBuffer(device, no_bones);
-        if (color) SDL_ReleaseGPUTexture(device, color);
-        if (depth) SDL_ReleaseGPUTexture(device, depth);
-        if (readback) SDL_ReleaseGPUTransferBuffer(device, readback);
+        ReleaseTargets();
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
         SDL_DestroyGPUDevice(device);
     }
@@ -580,13 +618,15 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     warm = false;
     device = nullptr;
     vertex_shader = pixel_shader = fullscreen_shader = resolve_shader = nullptr;
-    resolve_pipeline = nullptr;
-    sampler = nullptr;
-    white = black = no_depth = scene = color = depth = nullptr;
+    downsample_shader = blur_shader = composite_shader = nullptr;
+    resolve_pipeline = downsample_pipeline = blur_pipeline = composite_pipeline = nullptr;
+    sampler = linear_sampler = nullptr;
+    white = black = no_depth = nullptr;
+    ReleaseTargets();  // released above: forgets them
     depth_sampled = false;
     no_bones = nullptr;
-    readback = upload = nullptr;
-    width = height = upload_size = 0;
+    upload = nullptr;
+    upload_size = 0;
     if (stop_video) StopVideo();
 }
 
@@ -918,15 +958,23 @@ void GpuRenderer::Impl::ReleaseRt(Rt& rt) {
     rt.drawn = false;
 }
 
-bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
-    if (color && w == width && h == height) return true;
-    if (scene) SDL_ReleaseGPUTexture(device, scene);
-    if (color) SDL_ReleaseGPUTexture(device, color);
-    if (depth) SDL_ReleaseGPUTexture(device, depth);
-    if (readback) SDL_ReleaseGPUTransferBuffer(device, readback);
-    scene = color = depth = nullptr;
+// the frame's targets, at the picture's size; with no device, only forgets them
+void GpuRenderer::Impl::ReleaseTargets() {
+    if (device) {
+        for (SDL_GPUTexture* t : {scene, color, depth, post_dof, post_bloom[0], post_bloom[1],
+                                  post_bloom[2], post_tmp[0], post_tmp[1], post_tmp[2]})
+            if (t) SDL_ReleaseGPUTexture(device, t);
+        if (readback) SDL_ReleaseGPUTransferBuffer(device, readback);
+    }
+    scene = color = depth = post_dof = nullptr;
+    for (int k = 0; k < 3; k++) post_bloom[k] = post_tmp[k] = nullptr;
     readback = nullptr;
     width = height = 0;
+}
+
+bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
+    if (color && w == width && h == height) return true;
+    ReleaseTargets();
 
     SDL_GPUTextureCreateInfo ti{};
     ti.type = SDL_GPU_TEXTURETYPE_2D;
@@ -947,7 +995,24 @@ bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     tbi.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
     tbi.size = w * h * 4;
     readback = SDL_CreateGPUTransferBuffer(device, &tbi);
-    if (!scene || !color || !depth || !readback) {
+    // post-processing's levels, each a quarter of the one before
+    ti.format = kColorFormat;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    bool levels = true;
+    for (int k = 0; k < 3; k++) {
+        post_w[k] = post::Quarter(k ? post_w[k - 1] : w);
+        post_h[k] = post::Quarter(k ? post_h[k - 1] : h);
+        ti.width = post_w[k];
+        ti.height = post_h[k];
+        post_bloom[k] = SDL_CreateGPUTexture(device, &ti);
+        post_tmp[k] = SDL_CreateGPUTexture(device, &ti);
+        levels &= post_bloom[k] && post_tmp[k];
+        if (k == 0) {
+            post_dof = SDL_CreateGPUTexture(device, &ti);
+            levels &= post_dof != nullptr;
+        }
+    }
+    if (!scene || !color || !depth || !readback || !levels) {
         REXLOG_WARN("native view gpu: no {}x{} target ({})", w, h, SDL_GetError());
         return false;
     }
@@ -1257,8 +1322,80 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         depth_fresh = clear_depth;
     };
 
-    // the scene into the picture, at post_boundary or the frame's end (where
-    // post-processing will go), or the view of the scene target asked for
+    // one of post.hlsl's full-screen passes: `pipeline` into all of `target`
+    // (w x h), reading `sources` at t0, t1... with `params`
+    auto fullscreen = [&](SDL_GPUTexture* target, uint32_t w, uint32_t h,
+                          SDL_GPUGraphicsPipeline* pipeline,
+                          std::initializer_list<SDL_GPUTexture*> sources, post::PostPass& params) {
+        params.target = {float(w), float(h), 1.0f / float(w), 1.0f / float(h)};
+        SDL_GPUColorTargetInfo ct{};
+        ct.texture = target;
+        ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
+        ct.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
+        SDL_BindGPUGraphicsPipeline(rp, pipeline);
+        SDL_GPUTextureSamplerBinding tb[6];
+        uint32_t n = 0;
+        for (SDL_GPUTexture* t : sources) tb[n++] = {t, linear_sampler};
+        SDL_BindGPUFragmentSamplers(rp, 0, tb, n);
+        SDL_PushGPUFragmentUniformData(cmd, 0, &params, sizeof(params));
+        SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+        SDL_EndGPURenderPass(rp);
+    };
+    SDL_GPUTexture* const scene_depth = depth_sampled ? depth : no_depth;
+
+    // RB3's post-processing (post_model.h), the passes RunPost runs on the
+    // CPU, into the RGBA8 levels: the DOF's, then bloom's, then the composite
+    // into the picture
+    post::PostPlan post_plan;
+    const bool post_on =
+        o.post && o.view == RasterView::kFinal && post::PlanPost(frame, o.post_only, post_plan);
+    auto post_process = [&] {
+        post::PostPass p = post_plan.composite;
+        const uint32_t flags = p.flags.x;
+        // the 4x downsample (or the bright pass) of `src`, sw x sh, into
+        // `dst` at level k's size
+        auto downsample = [&](SDL_GPUTexture* src, uint32_t sw, uint32_t sh, SDL_GPUTexture* dst,
+                              int k, bool bright) {
+            p.mode = {0, bright ? 1u : 0u, 0, 0};
+            p.half_pixel = {0.5f / float(sw), 0.5f / float(sh), 0, 0};
+            fullscreen(dst, post_w[k], post_h[k], downsample_pipeline, {src}, p);
+        };
+        // `level` (level k's size) blurred across into k's spare, then down
+        // back into it
+        auto blur = [&](SDL_GPUTexture* level, int k, const post::float4* across,
+                        const post::float4* down, uint32_t taps) {
+            p.mode = {0, 0, taps, 0};
+            std::copy(across, across + taps, p.taps);
+            fullscreen(post_tmp[k], post_w[k], post_h[k], blur_pipeline, {level}, p);
+            std::copy(down, down + taps, p.taps);
+            fullscreen(level, post_w[k], post_h[k], blur_pipeline, {post_tmp[k]}, p);
+        };
+        if (flags & post::kPostDof) {
+            downsample(scene, width, height, post_dof, 0, false);
+            blur(post_dof, 0, post_plan.dof_taps[0], post_plan.dof_taps[1], 8);
+        }
+        if (flags & (post::kPostBloom | post::kPostGlare)) {
+            // glare has level 0 only
+            const int levels = (flags & post::kPostBloom) ? 3 : 1;
+            for (int k = 0; k < levels; k++) {
+                if (k)
+                    downsample(post_bloom[k - 1], post_w[k - 1], post_h[k - 1], post_bloom[k], k,
+                               false);
+                else
+                    downsample(scene, width, height, post_bloom[0], 0, true);
+                blur(post_bloom[k], k, post_plan.bloom_taps[k][0], post_plan.bloom_taps[k][1], 15);
+            }
+        }
+        // the levels an effect that's off didn't draw are bound all the same,
+        // and not read
+        p.mode = {0, 0, 0, 0};
+        fullscreen(color, width, height, composite_pipeline,
+                   {scene, scene_depth, post_dof, post_bloom[0], post_bloom[1], post_bloom[2]}, p);
+    };
+
+    // the scene into the picture, at post_boundary or the frame's end:
+    // post-processed, or as it is, or the view of the scene target asked for
     auto resolve = [&] {
         end_pass();
         // the scene cleared, if nothing drew to it
@@ -1266,19 +1403,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             begin_back(true);
             end_pass();
         }
-        SDL_GPUColorTargetInfo ct{};
-        ct.texture = color;
-        ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
-        ct.store_op = SDL_GPU_STOREOP_STORE;
-        SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
-        SDL_BindGPUGraphicsPipeline(rp, resolve_pipeline);
-        const SDL_GPUTextureSamplerBinding tb[2] = {{scene, sampler},
-                                                    {depth_sampled ? depth : no_depth, sampler}};
-        SDL_BindGPUFragmentSamplers(rp, 0, tb, 2);
-        const uint32_t view[4] = {uint32_t(o.view), 0, 0, 0};
-        SDL_PushGPUFragmentUniformData(cmd, 0, view, sizeof(view));
-        SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
-        SDL_EndGPURenderPass(rp);
+        if (post_on) {
+            post_process();
+        } else {
+            post::PostPass p{};
+            p.mode = {uint32_t(o.view), 0, 0, 0};
+            fullscreen(color, width, height, resolve_pipeline, {scene, scene_depth}, p);
+        }
         resolved = true;
     };
 

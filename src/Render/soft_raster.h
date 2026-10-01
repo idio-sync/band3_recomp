@@ -24,7 +24,9 @@
 // (the bloom weight PSEUDO_HDR shaders write, WritesSceneAlpha below; cleared
 // to 0) and whose depth stays readable; at the boundary it's resolved into the
 // picture, where post-processing goes, and the overlay's draws (track, HUD) go
-// on top. For now the resolve is a copy (alpha made opaque).
+// on top. The resolve is RB3's post-processing (post_model.h), run on the
+// scene target's colour, alpha and depth, or a copy (alpha made opaque) on
+// frames without it or with RasterOptions::post off.
 
 namespace band3::render {
 
@@ -55,6 +57,12 @@ struct RasterOptions {
     // transparent black; off, they're never used (texture_passes off then
     // draws render targets untextured)
     bool rt_guest_pixels = true;
+    // RB3's post-processing at post_boundary (post_model.h): depth of field,
+    // bloom and the colour matrix, as the frame set them; off, the scene as
+    // it is
+    bool post = true;
+    // with post, only these of its effects (post_model.h's kPost bits), 0 all
+    uint32_t post_only = 0;
     RasterView view = RasterView::kFinal;
 };
 

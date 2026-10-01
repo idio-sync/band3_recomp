@@ -1,5 +1,6 @@
 #include "src/Render/soft_raster.h"
 
+#include "src/Render/post_model.h"
 #include "src/Render/shade_model.h"
 
 #include <algorithm>
@@ -471,11 +472,19 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     Target overlay{o.width, o.height, rgba, depth, ids};
     overlay.SetViewport(0, 0, float(o.width), float(o.height));
     Target* back = &world;
+    post::PostPlan post_plan;
+    const bool post_on =
+        o.post && o.view == RasterView::kFinal && post::PlanPost(frame, o.post_only, post_plan);
     // the scene into the picture, at post_boundary (or the frame's end):
-    // where post-processing will go. A view of the scene target ends the
-    // frame there.
+    // post-processed, or as it is. A view of the scene target ends the frame
+    // there.
     auto resolve = [&] {
         back = &overlay;
+        if (post_on) {
+            // the depth buffer has 1/w, as RunPost wants it
+            post::RunPost(post_plan, scene, depth, o.width, o.height, rgba);
+            return;
+        }
         for (size_t i = 0; i < pixels; i++) {
             const uint32_t c = scene[i];
             uint32_t g;

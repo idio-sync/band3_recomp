@@ -11,6 +11,7 @@
 //                               [--legacy-light | --no-light] [--pick X,Y]
 //                               [--dump-alpha <png>] [--dump-depth <png>]
 //                               [--view alpha|depth]
+//                               [--no-post | --post-only xfm|dof|bloom]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
 // and inside the frustum with the matrix as captured and transposed (the back
@@ -53,11 +54,15 @@
 // RasterView), where the world's draws left them; --view alpha|depth does the
 // same for the picture the other options draw (--diff against a capture's
 // <name>.gpu.alpha.png or .gpu.depth.png, say).
+// RB3's post-processing (post_model.h: depth of field, bloom or glare, the
+// colour matrix) is applied as the frame set it; --no-post leaves the scene
+// as it is, --post-only applies one effect alone (bloom covers glare), to
+// see what each contributes.
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
-//     src/Render/soft_raster.cpp src/Render/shade_model.cpp src/Render/capture_file.cpp
-//     src/Render/png_writer.cpp -o out/native_view_replay.exe
+//     src/Render/soft_raster.cpp src/Render/shade_model.cpp src/Render/post_model.cpp
+//     src/Render/capture_file.cpp src/Render/png_writer.cpp -o out/native_view_replay.exe
 
 #include <algorithm>
 #include <cmath>
@@ -70,6 +75,7 @@
 
 #include "src/Render/capture_file.h"
 #include "src/Render/png_writer.h"
+#include "src/Render/post_model.h"
 #include "src/Render/post_params.h"
 #include "src/Render/soft_raster.h"
 
@@ -518,6 +524,18 @@ int main(int argc, char** argv) {
         else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%ux%u", &o.width, &o.height);
         else if (a == "--dump-alpha" && i + 1 < argc) dump_alpha = argv[++i];
         else if (a == "--dump-depth" && i + 1 < argc) dump_depth = argv[++i];
+        else if (a == "--no-post") o.post = false;
+        else if (a == "--post-only" && i + 1 < argc) {
+            const std::string e = argv[++i];
+            o.post_only = e == "xfm"   ? post::kPostXfm
+                          : e == "dof" ? post::kPostDof
+                          : e == "bloom" ? post::kPostBloom | post::kPostGlare
+                                         : 0;
+            if (!o.post_only) {
+                std::fprintf(stderr, "--post-only takes xfm, dof or bloom\n");
+                return 2;
+            }
+        }
         else if (a == "--view" && i + 1 < argc) {
             const std::string v = argv[++i];
             o.view = v == "alpha"   ? RasterView::kSceneAlpha

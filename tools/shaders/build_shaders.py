@@ -3,7 +3,7 @@
   python tools/shaders/build_shaders.py
 
 Compiles src/Render/shaders/mesh.hlsl (and the shade*.hlsli it includes) and
-post.hlsl twice each: DXBC (fxc, shader model 5.1) for SDL_gpu's Direct3D 12
+post.hlsl (and the post*.hlsli it includes) twice each: DXBC (fxc, shader model 5.1) for SDL_gpu's Direct3D 12
 backend and SPIR-V (dxc) for its Vulkan backend, checks the SPIR-V (spirv-val,
 and spirv-cross --reflect for the descriptor sets SDL_gpu expects), and writes
 src/Render/shaders/mesh_shaders.gen.h and post_shaders.gen.h with the bytes, so
@@ -40,8 +40,17 @@ SHADERS = [
     ("post.hlsl", "post_shaders.gen.h", [
         ("kFullscreenVertex", "VSFullscreen", "vs_5_1", "vs_6_0", set()),
         ("kResolvePixel", "PSResolve", "ps_5_1", "ps_6_0",
-         {("ubos", "PostUniforms", 3, 0), ("textures", "scene_tex", 2, 0),
+         {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0),
           ("textures", "depth_tex", 2, 1)}),
+        ("kDownsamplePixel", "PSDownsample", "ps_5_1", "ps_6_0",
+         {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0)}),
+        ("kBlurPixel", "PSBlur", "ps_5_1", "ps_6_0",
+         {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0)}),
+        ("kCompositePixel", "PSComposite", "ps_5_1", "ps_6_0",
+         {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0),
+          ("textures", "depth_tex", 2, 1), ("textures", "dof_tex", 2, 2),
+          ("textures", "bloom0_tex", 2, 3), ("textures", "bloom1_tex", 2, 4),
+          ("textures", "bloom2_tex", 2, 5)}),
     ]),
 ]
 

@@ -21,8 +21,9 @@
 // the GPU, depth as 1/w, and the texture passes the frame samples, each into a
 // render target of its own (kept between frames, by DxTex) between stretches of
 // the back buffer's draws, with the texture's mips made after it; and the
-// world's draws into a scene target whose alpha and depth the resolve, a
-// full-screen pass (shaders/post.hlsl), reads before the overlay's draws.
+// world's draws into a scene target whose colour, alpha and depth RB3's
+// post-processing (post_model.h), full-screen passes (shaders/post.hlsl),
+// reads into the picture before the overlay's draws.
 
 namespace band3::render {
 
