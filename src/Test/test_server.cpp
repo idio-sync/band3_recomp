@@ -1,0 +1,347 @@
+#include "test_server.h"
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <ctime>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <thread>
+#include <vector>
+#include <rex/cvar.h>
+#include <rex/filesystem.h>
+#include <rex/logging.h>
+#include <rex/runtime.h>
+#include <rex/ui/presenter.h>
+#include <rex/ui/window.h>
+#include <rex/ui/windowed_app_context.h>
+#include "src/Input/virtual_instrument.h"
+#include "src/Render/png_writer.h"
+#include "src/settings.h"
+#include "game_state.h"
+#include "test_commands.h"
+
+namespace band3::test {
+
+namespace {
+
+#ifdef _WIN32
+using socket_t = SOCKET;
+constexpr socket_t kNoSocket = INVALID_SOCKET;
+void CloseSocket(socket_t s) { closesocket(s); }
+#else
+using socket_t = int;
+constexpr socket_t kNoSocket = -1;
+void CloseSocket(socket_t s) { close(s); }
+#endif
+
+// how often the server thread looks up from its sockets to see if it should stop
+constexpr std::chrono::milliseconds kStopCheck{200};
+// longer than any command could want, so one can't grow without bound
+constexpr size_t kMaxLine = 4096;
+
+int32_t g_port = 0;
+
+// the game, as the commands see it
+class GameTarget final : public TestTarget {
+public:
+    GameTarget(rex::Runtime* runtime, rex::ui::WindowedAppContext* app_context,
+               rex::ui::Window* window, const std::atomic<bool>& stopping)
+        : runtime_(runtime), app_context_(app_context), window_(window), stopping_(stopping) {}
+
+    input::InstrumentKind Kind() override { return input::VirtualInstrument::Get().kind(); }
+
+    void SetKind(input::InstrumentKind kind) override {
+        OnUIThread([kind] { input::VirtualInstrument::Get().SetKind(kind); });
+    }
+
+    input::InstrumentInputs Held() override { return input::VirtualInstrument::Get().Held(); }
+
+    void SetHeld(const input::InstrumentInputs& in) override {
+        input::VirtualInstrument::Get().SetHeld(in);
+    }
+
+    void Pulse(std::function<void(input::InstrumentInputs&)> change,
+               std::chrono::milliseconds length) override {
+        input::VirtualInstrument::Get().Pulse(std::move(change), length);
+    }
+
+    GameStateSnapshot State() override { return GameState::Get().Snapshot(); }
+
+    std::string Screenshot(const std::string& name, ScreenshotInfo& out) override {
+        auto* graphics = runtime_ ? runtime_->graphics_system() : nullptr;
+        rex::ui::Presenter* presenter = graphics ? graphics->presenter() : nullptr;
+        if (!presenter) return "there is no picture to capture (no presenter)";
+        rex::ui::RawImage image;
+        if (!presenter->CaptureGuestOutput(image) || !image.width || !image.height) {
+            return "the game hasn't drawn a frame yet";
+        }
+
+        // R8 G8 B8 X8 rows to RGBA, R in the low byte
+        std::vector<uint32_t> rgba(size_t(image.width) * image.height);
+        for (uint32_t y = 0; y < image.height; y++) {
+            const uint8_t* row = image.data.data() + y * image.stride;
+            for (uint32_t x = 0; x < image.width; x++) {
+                const uint8_t* p = row + x * 4;
+                rgba[size_t(y) * image.width + x] =
+                    p[0] | (p[1] << 8) | (p[2] << 16) | 0xFF000000u;
+            }
+        }
+
+        const std::filesystem::path dir = rex::filesystem::GetExecutableFolder() / "screenshots";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        const std::filesystem::path path = dir / ((name.empty() ? TimestampName() : name) + ".png");
+        if (!render::WritePng(path.string(), rgba, image.width, image.height)) {
+            return "couldn't write " + path.string();
+        }
+        out.path = path.string();
+        out.width = image.width;
+        out.height = image.height;
+        return {};
+    }
+
+    std::string SetSetting(std::string_view name, std::string_view value) override {
+        const rex::cvar::FlagEntry* info = rex::cvar::GetFlagInfo(name);
+        if (!info || !info->category.starts_with("Band3/")) {
+            return std::string(name) + " isn't a Band3 setting";
+        }
+        bool set = false;
+        OnUIThread([&] { set = rex::cvar::SetFlagByName(name, value); });
+        if (!set) return std::string(name) + " doesn't take " + std::string(value);
+        return {};
+    }
+
+    void Quit() override {
+        rex::ui::Window* window = window_;
+        app_context_->CallInUIThreadDeferred([window] { window->RequestClose(); });
+    }
+
+    bool Cancelled() override { return stopping_.load(); }
+
+    Clock::time_point Now() override { return Clock::now(); }
+
+    void Sleep(std::chrono::milliseconds length) override {
+        // in steps, so shutting down doesn't wait out a long press
+        const auto end = Clock::now() + length;
+        while (!stopping_.load()) {
+            const auto now = Clock::now();
+            if (now >= end) break;
+            std::this_thread::sleep_for(std::min<Clock::duration>(end - now, kStopCheck));
+        }
+    }
+
+private:
+    // cvars and their change callbacks belong to the UI thread
+    void OnUIThread(const std::function<void()>& function) {
+        app_context_->CallInUIThreadSynchronous(function);
+    }
+
+    static std::string TimestampName() {
+        const auto now = std::chrono::system_clock::now();
+        const std::time_t t = std::chrono::system_clock::to_time_t(now);
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now.time_since_epoch()).count() % 1000;
+        std::tm tm{};
+#ifdef _WIN32
+        localtime_s(&tm, &t);
+#else
+        localtime_r(&t, &tm);
+#endif
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%Y%m%d-%H%M%S", &tm);
+        return std::string(buf) + "-" + std::to_string(ms);
+    }
+
+    rex::Runtime* runtime_;
+    rex::ui::WindowedAppContext* app_context_;
+    rex::ui::Window* window_;
+    const std::atomic<bool>& stopping_;
+};
+
+bool SendAll(socket_t s, const std::string& data) {
+    size_t sent = 0;
+    while (sent < data.size()) {
+        const int n = send(s, data.data() + sent, static_cast<int>(data.size() - sent), 0);
+        if (n <= 0) return false;
+        sent += static_cast<size_t>(n);
+    }
+    return true;
+}
+
+// waits up to kStopCheck for either socket to be readable; which one, or neither
+enum class Ready { kNone, kListener, kClient, kError };
+Ready WaitReadable(socket_t listener, socket_t client) {
+    fd_set read;
+    FD_ZERO(&read);
+    FD_SET(listener, &read);
+    if (client != kNoSocket) FD_SET(client, &read);
+    timeval timeout{0, static_cast<long>(kStopCheck.count() * 1000)};
+#ifdef _WIN32
+    const int nfds = 0;  // ignored on Windows
+#else
+    const int nfds = std::max(listener, client) + 1;
+#endif
+    const int n = select(nfds, &read, nullptr, nullptr, &timeout);
+    if (n < 0) return Ready::kError;
+    if (n == 0) return Ready::kNone;
+    if (client != kNoSocket && FD_ISSET(client, &read)) return Ready::kClient;
+    return Ready::kListener;
+}
+
+class Server {
+public:
+    static Server& Get() {
+        static Server server;
+        return server;
+    }
+
+    void Start(rex::Runtime* runtime, rex::ui::WindowedAppContext* app_context,
+               rex::ui::Window* window) {
+        if (thread_.joinable()) return;
+#ifdef _WIN32
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+            REXLOG_WARN("Test server: WSAStartup failed, the server is off");
+            return;
+        }
+#endif
+        listener_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (listener_ == kNoSocket) {
+            REXLOG_WARN("Test server: couldn't make a socket, the server is off");
+            return;
+        }
+#ifndef _WIN32
+        // so a restarted game can take the port straight back
+        int reuse = 1;
+        setsockopt(listener_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+#endif
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(static_cast<uint16_t>(g_port));
+        // this machine only
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (bind(listener_, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0 ||
+            listen(listener_, 1) != 0) {
+            REXLOG_WARN("Test server: port {} is in use or unavailable, the server is off",
+                        g_port);
+            CloseSocket(listener_);
+            listener_ = kNoSocket;
+            return;
+        }
+        target_ = std::make_unique<GameTarget>(runtime, app_context, window, stopping_);
+        stopping_ = false;
+        thread_ = std::thread([this] { Run(); });
+        REXLOG_INFO("Test server: listening on 127.0.0.1:{}", g_port);
+    }
+
+    void Stop() {
+        if (!thread_.joinable()) return;
+        stopping_ = true;
+        thread_.join();
+        CloseSocket(listener_);
+        listener_ = kNoSocket;
+        target_.reset();
+    }
+
+private:
+    void Run() {
+        socket_t client = kNoSocket;
+        std::string pending;
+        while (!stopping_) {
+            const Ready ready = WaitReadable(listener_, client);
+            if (ready == Ready::kError) {
+                REXLOG_WARN("Test server: select failed, the server stops");
+                break;
+            }
+            if (ready == Ready::kListener) {
+                socket_t accepted = accept(listener_, nullptr, nullptr);
+                if (accepted == kNoSocket) continue;
+                if (client != kNoSocket) {
+                    SendAll(accepted, "{\"ok\":false,\"error\":\"another client is connected\"}\n");
+                    CloseSocket(accepted);
+                    continue;
+                }
+                client = accepted;
+                pending.clear();
+                REXLOG_INFO("Test server: client connected");
+                continue;
+            }
+            if (ready != Ready::kClient) continue;
+
+            char buf[1024];
+            const int n = recv(client, buf, sizeof(buf), 0);
+            if (n <= 0) {
+                Disconnect(client);
+                continue;
+            }
+            pending.append(buf, static_cast<size_t>(n));
+            size_t newline;
+            while ((newline = pending.find('\n')) != std::string::npos) {
+                const std::string line = pending.substr(0, newline);
+                pending.erase(0, newline + 1);
+                if (!SendAll(client, RunCommand(line, *target_) + "\n")) {
+                    Disconnect(client);
+                    break;
+                }
+            }
+            if (client != kNoSocket && pending.size() > kMaxLine) {
+                SendAll(client, "{\"ok\":false,\"error\":\"line too long\"}\n");
+                Disconnect(client);
+            }
+        }
+        if (client != kNoSocket) Disconnect(client);
+    }
+
+    // a client that goes away can't leave anything held down
+    void Disconnect(socket_t& client) {
+        CloseSocket(client);
+        client = kNoSocket;
+        target_->SetHeld({});
+        REXLOG_INFO("Test server: client disconnected");
+    }
+
+    socket_t listener_ = kNoSocket;
+    std::thread thread_;
+    std::atomic<bool> stopping_{false};
+    std::unique_ptr<GameTarget> target_;
+};
+
+}
+
+bool Enabled() { return g_port > 0; }
+
+void Init() {
+    g_port = REXCVAR_GET(test_port);
+    if (!Enabled()) return;
+    // the commands play the virtual instrument, as player 1
+    rex::cvar::SetFlagByName("virtual_instrument", "true");
+    rex::cvar::SetFlagByName("virtual_instrument_player", "1");
+}
+
+void StartServer(rex::Runtime* runtime, rex::ui::WindowedAppContext* app_context,
+                 rex::ui::Window* window) {
+    if (Enabled()) Server::Get().Start(runtime, app_context, window);
+}
+
+void StopServer() { Server::Get().Stop(); }
+
+}

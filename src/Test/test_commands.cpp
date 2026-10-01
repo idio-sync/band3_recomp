@@ -248,6 +248,7 @@ std::string Wait(TestTarget& target, const std::vector<std::string_view>& args,
     GameStateSnapshot state = target.State();
     const uint64_t start_frame = state.frame;
     while (!ConditionHolds(condition, state, start_frame)) {
+        if (target.Cancelled()) return Error(target, "the test server is shutting down");
         if (target.Now() - start >= timeout) {
             return Error(target, "timed out after " + std::to_string(timeout.count()) +
                                      " ms waiting for " + std::string(args[1]));

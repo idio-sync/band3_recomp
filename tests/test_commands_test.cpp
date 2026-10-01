@@ -35,6 +35,7 @@ public:
     std::vector<std::pair<std::string, std::string>> settings_set;
     std::string screenshot_name;
     bool quit = false;
+    bool cancelled = false;
     int kind_changes = 0;
 
     InstrumentKind Kind() override { return kind; }
@@ -64,6 +65,7 @@ public:
         return {};
     }
     void Quit() override { quit = true; }
+    bool Cancelled() override { return cancelled; }
     Clock::time_point Now() override { return now; }
     void Sleep(std::chrono::milliseconds length) override {
         now += length;
@@ -241,6 +243,17 @@ TEST_CASE("wait's default timeout is 30 s, expect's is 5 s") {
     CHECK_FALSE(Ok(RunCommand("expect in_game timeout=250ms", game)));
     CHECK(game.slept >= 250ms);
     CHECK(game.slept < 350ms);
+}
+
+TEST_CASE("wait gives up when the harness shuts down") {
+    FakeGame game;
+    game.on_sleep = [](FakeGame& g) {
+        if (g.slept >= 300ms) g.cancelled = true;
+    };
+    const std::string reply = RunCommand("wait in_game", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(Has(reply, "shutting down"));
+    CHECK(game.slept < 400ms);
 }
 
 TEST_CASE("wait conditions") {

@@ -39,6 +39,8 @@ public:
     // a Band3 setting only; returns an error, or empty
     virtual std::string SetSetting(std::string_view name, std::string_view value) = 0;
     virtual void Quit() = 0;
+    // the harness is shutting down: a wait gives up
+    virtual bool Cancelled() = 0;
 
     virtual Clock::time_point Now() = 0;
     virtual void Sleep(std::chrono::milliseconds length) = 0;

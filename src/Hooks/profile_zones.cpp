@@ -21,8 +21,8 @@
         __imp__##function(ctx, base);                                          \
     }
 
-// the frame
-BAND3_PROFILE_ZONE(App__DrawRegular, "RB3 App::DrawRegular")
+// the frame (App::DrawRegular's zone is in frame_counter.cpp, which hooks it in
+// every build)
 BAND3_PROFILE_ZONE(TaskMgr__Poll, "RB3 TaskMgr::Poll")
 
 // game logic and players
