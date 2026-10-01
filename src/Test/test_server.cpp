@@ -27,6 +27,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
@@ -214,6 +215,18 @@ public:
         out.gpu_wait_ms = stats.wait_ms;
         out.gpu_passes = stats.passes;
         out.gpu_rt_missing = stats.rt_missing;
+        // and its scene target's alpha and depth, as grey, beside it
+        // (<name>.gpu.alpha.png, .gpu.depth.png): what replay's --dump-alpha
+        // and --dump-depth show of the CPU's
+        for (auto [view, suffix] : {std::pair{render::RasterView::kSceneAlpha, ".gpu.alpha.png"},
+                                    std::pair{render::RasterView::kSceneDepth, ".gpu.depth.png"}}) {
+            options.view = view;
+            render::GpuStats view_stats;
+            if (!render::GpuRenderer::Get().RenderFrame(frame, options, rgba, view_stats)) break;
+            render::WritePng(
+                (rex::filesystem::GetExecutableFolder() / "screenshots" / (file + suffix)).string(),
+                rgba, options.width, options.height);
+        }
     }
 
     std::string NativeViewOn(uint32_t width, uint32_t height) override {

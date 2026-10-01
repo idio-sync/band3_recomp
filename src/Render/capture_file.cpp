@@ -21,8 +21,12 @@
 //         of maps they were saved with, matched by register on load
 //   DRAW  draws
 //   PASS  passes
-// A section newer than this reader skips if it's SHAD, PASS or FRAM (the file
-// loads without it) and fails the load if it's GEOM, TEXS or DRAW.
+//   POST  what post-processing was set to do and the constants RB3's composite
+//         drew with (post_params.h), each as its size and its bytes: the
+//         structs only grow at the end, so a file with other sizes keeps the
+//         fields both have (a file without it: none read)
+// A section newer than this reader skips if it's SHAD, PASS, FRAM or POST (the
+// file loads without it) and fails the load if it's GEOM, TEXS or DRAW.
 //
 // Versions 1 and 2 still load: 1 is frame, geometry, textures and draws; 2
 // adds the draws' ShadeStates, kept as their ShadeInputs were in memory (so
@@ -50,6 +54,7 @@ constexpr uint32_t kSecTextures = FourCC("TEXS");
 constexpr uint32_t kSecShades = FourCC("SHAD");
 constexpr uint32_t kSecDraws = FourCC("DRAW");
 constexpr uint32_t kSecPasses = FourCC("PASS");
+constexpr uint32_t kSecPost = FourCC("POST");
 // the versions this build writes and reads
 constexpr uint32_t kFrameVersion = 1;
 constexpr uint32_t kGeometryVersion = 1;
@@ -57,6 +62,7 @@ constexpr uint32_t kTexturesVersion = 1;
 constexpr uint32_t kShadesVersion = 1;
 constexpr uint32_t kDrawsVersion = 1;
 constexpr uint32_t kPassesVersion = 1;
+constexpr uint32_t kPostVersion = 1;
 
 // TEXS: where a texture's pixels are
 constexpr int32_t kOwnPixels = -1;  // they follow
@@ -159,7 +165,7 @@ void PutShade(Writer& w, const ShadeInputs& s) {
     w.Put(s.use_environ);
     w.Put(s.intensify);
     w.Put(s.per_pixel_lit);
-    w.Put(s.pad0);
+    w.Put(s.alpha_write);
     w.Put(s.shader_variation);
     w.Raw(s.mat_maps, sizeof(s.mat_maps));
     w.Raw(s.mat_map_base, sizeof(s.mat_map_base));
@@ -188,7 +194,7 @@ void GetShade(Reader& r, ShadeInputs& s, const std::vector<uint32_t>& regs, uint
     s.use_environ = r.Get<uint8_t>();
     s.intensify = r.Get<uint8_t>();
     s.per_pixel_lit = r.Get<uint8_t>();
-    s.pad0 = r.Get<uint8_t>();
+    s.alpha_write = r.Get<uint8_t>();
     s.shader_variation = r.Get<int32_t>();
     const uint32_t keep = std::min<uint32_t>(maps, kNumShadeMaps);
     auto per_map = [&](auto* out, size_t each) {
@@ -203,6 +209,17 @@ void GetShade(Reader& r, ShadeInputs& s, const std::vector<uint32_t>& regs, uint
     s.mat_diffuse_base = r.Get<uint32_t>();
     r.Raw(s.fetch_diffuse, sizeof(s.fetch_diffuse));
     per_map(s.fetch, sizeof(s.fetch[0]));
+}
+
+// a struct that only grows at the end, saved as its size and bytes: the
+// fields both builds have, the rest left as they are
+template <typename T>
+void GetGrown(Reader& r, T& out) {
+    uint32_t size;
+    if (!r.Count(size, 1)) return;
+    std::vector<uint8_t> bytes(size);
+    r.Raw(bytes.data(), size);
+    if (r.ok) std::memcpy(&out, bytes.data(), std::min<size_t>(size, sizeof(T)));
 }
 
 // FRAM's counts, in their order: only ever appended to
@@ -460,6 +477,13 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     }
     w.End(sec);
 
+    sec = w.Begin(kSecPost, kPostVersion);
+    w.Put<uint32_t>(uint32_t(sizeof(PostParams)));
+    w.Put(fc.post);
+    w.Put<uint32_t>(uint32_t(sizeof(PostConsts)));
+    w.Put(fc.post_consts);
+    w.End(sec);
+
     const std::string tmp = path + ".tmp";
     FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) return false;
@@ -505,6 +529,7 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                                : id == kSecShades   ? kShadesVersion
                                : id == kSecDraws    ? kDrawsVersion
                                : id == kSecPasses   ? kPassesVersion
+                               : id == kSecPost     ? kPostVersion
                                                     : 0;
         if (version > known || version == 0) {
             if (core) return nullptr;
@@ -651,6 +676,9 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                 p.name.resize(len);
                 r.Raw(p.name.data(), len);
             }
+        } else if (id == kSecPost) {
+            GetGrown(r, fc->post);
+            GetGrown(r, fc->post_consts);
         }
         if (!r.ok) return nullptr;
         r.pos = next;

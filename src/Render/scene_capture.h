@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "src/Render/post_params.h"
+
 // Experimental: records what RB3 draws each frame, read straight out of guest
 // memory, so the native view (native_view.cpp) can draw it without the
 // emulated GPU: the back buffer's draws, and the passes RB3 renders into
@@ -152,7 +154,10 @@ struct ShadeInputs {
     uint8_t use_environ;  // +0x99: lit at all
     uint8_t intensify;
     uint8_t per_pixel_lit;
-    uint8_t pad0;
+    // +0x9c: it writes alpha into the back buffer whatever its shader (the
+    // back buffer's alpha is otherwise written by PSEUDO_HDR shaders alone);
+    // 0 in captures from before
+    uint8_t alpha_write;
     int32_t shader_variation;  // +0x118: 0 none, 1 skin, 2 hair
     uint32_t mat_maps[kNumShadeMaps];  // its DxTex (RndCubeTex for environ) pointers
     // their textures' base addresses, and the diffuse texture's, physical as
@@ -265,6 +270,12 @@ struct FrameCapture {
     static constexpr uint32_t kNoPost = ~0u;
     uint32_t post_boundary = kNoPost;
     uint32_t proc_cmds = 0;
+    // what post-processing was set to do (read at DoPostProcess, valid 0 if
+    // it didn't run or the capture is from before), and the constants RB3's
+    // composite drew with (on frames that post-process); a composed frame
+    // has its post frame's, which post-processes the world it shows
+    PostParams post;
+    PostConsts post_consts;
     // With even/odd rendering a frame that draws no world (proc_cmds 2)
     // presents the last one that did, so its capture has that frame's world
     // in front of its own draws from post_boundary on (frame_compose.h):

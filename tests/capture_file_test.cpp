@@ -1,10 +1,12 @@
 // Checks the native view's capture files (src/Render/capture_file.cpp): a frame
-// with shades and their maps, passes and render targets' versions comes back
-// as it was saved; a section from a newer build is skipped or refused as it
-// should be, and geometry from a smaller Vertex keeps what both have; files
-// from before passes (B3CAP002) and before shades (B3CAP001) still load.
+// with shades and their maps, passes, render targets' versions and its
+// post-processing comes back as it was saved; a section from a newer build is
+// skipped or refused as it should be, and geometry from a smaller Vertex (or
+// post-processing from a smaller PostParams) keeps what both have; files from
+// before passes (B3CAP002) and before shades (B3CAP001) still load.
 
 #include <doctest/doctest.h>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -575,4 +577,68 @@ TEST_CASE("a capture from before passes (B3CAP002) still loads, with its shades"
     REQUIRE(back->shades.size() == 1);
     CHECK(back->shades[0].Ps(124)[2] == 3.5f);
     CHECK(back->shades[0].maps[kMapGlow] == back->draws[0].tex);
+}
+
+TEST_CASE("a capture keeps its post-processing, and one from before has none") {
+    FrameCapture fc = MakePassFrame();
+    fc.post.valid = 1;
+    fc.post.proc = 0x31F00000;
+    fc.post.xfm[1][2] = 0.25f;
+    fc.post.saturation = -60;
+    fc.post.bloom_intensity = 1.5f;
+    fc.post.dof_enabled = 1;
+    fc.post.dof_focal = 210.5f;
+    fc.post.cam_far = 5000;
+    fc.post_consts.valid = 1;
+    fc.post_consts.c24[1] = -3.5f;
+    fc.post_consts.flags[kPostFlagColorXfm] = 1;
+    fc.post_consts.dof_survey = 1;
+    fc.post_consts.dof_offsets[7][1] = 0.009f;
+    fc.shades[0].alpha_write = 1;
+    const std::string path = TempPath("band3_capture_file_post_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    REQUIRE(back);
+    CHECK(std::memcmp(&back->post, &fc.post, sizeof(PostParams)) == 0);
+    CHECK(std::memcmp(&back->post_consts, &fc.post_consts, sizeof(PostConsts)) == 0);
+    CHECK(back->shades[0].alpha_write == 1);
+
+    // without the section, as builds before it wrote: nothing read
+    std::vector<uint8_t> data = ReadAll(path);
+    const size_t post = FindSection(data, "POST");
+    REQUIRE(post != std::string::npos);
+    uint64_t size;
+    std::memcpy(&size, data.data() + post + 8, 8);
+    data.erase(data.begin() + std::ptrdiff_t(post),
+               data.begin() + std::ptrdiff_t(post + 16 + size_t(size)));
+    WriteAll(path, data);
+    back = LoadCapture(path);
+    REQUIRE(back);
+    CHECK(back->post.valid == 0);
+    CHECK(back->post.color_mod == 1.0f);
+    CHECK(back->post_consts.valid == 0);
+    CHECK(back->draws.size() == fc.draws.size());
+
+    // from a build whose PostParams was smaller: the fields both have
+    REQUIRE(SaveCapture(path, fc));
+    data = ReadAll(path);
+    const size_t at = FindSection(data, "POST");
+    REQUIRE(at != std::string::npos);
+    std::memcpy(&size, data.data() + at + 8, 8);
+    const uint32_t shorter = uint32_t(offsetof(PostParams, dof));
+    std::memcpy(data.data() + at + 16, &shorter, 4);
+    const size_t cut = sizeof(PostParams) - shorter;
+    data.erase(data.begin() + std::ptrdiff_t(at + 20 + shorter),
+               data.begin() + std::ptrdiff_t(at + 20 + sizeof(PostParams)));
+    size -= cut;
+    std::memcpy(data.data() + at + 8, &size, 8);
+    WriteAll(path, data);
+    back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    CHECK(back->post.saturation == -60.0f);
+    CHECK(back->post.bloom_intensity == 1.5f);
+    CHECK(back->post.dof_focal == 0.0f);
+    CHECK(back->post.cam_far == 0.0f);
+    CHECK(back->post_consts.c24[1] == -3.5f);
 }

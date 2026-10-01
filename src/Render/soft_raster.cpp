@@ -13,7 +13,7 @@
 namespace band3::render {
 namespace {
 
-constexpr float kNearW = 1e-3f;
+// the picture's clear; the scene target's is the same with alpha 0
 constexpr uint32_t kClearColor = 0xff202020u;
 // what a render target nothing has drawn samples as
 constexpr uint32_t kTransparentBlack = 0;
@@ -51,14 +51,21 @@ void Dir(const float d[3], const Mat4& m, float out[3]) {
     for (int c = 0; c < 3; c++) out[c] = d[0] * m.m[0][c] + d[1] * m.m[1][c] + d[2] * m.m[2][c];
 }
 
+// what a target does with alpha: the picture keeps it 1, a texture blends
+// it by the colour's factors, the scene target as RB3's back buffer does
+// (WritesSceneAlpha)
+enum class TargetAlpha { kOpaque, kTexture, kScene };
+
+// what a draw does with its target's alpha: Blend()
+enum class AlphaRule { kOpaque, kColorFactors, kKeep, kMax };
+
 struct Target {
     uint32_t w, h;
     std::vector<uint32_t>& color;
     std::vector<float>& depth;  // 1/w, larger is nearer, 0 is cleared
     std::vector<int32_t>* ids;  // the draw that last wrote each pixel, if wanted
-    // a texture pass's: alpha is written (the back buffer's stays 1), and
-    // the texture it draws into, which its draws can't sample
-    bool alpha = false;
+    TargetAlpha alpha = TargetAlpha::kOpaque;
+    // a texture pass's: the texture it draws into, which its draws can't sample
     uint32_t tex_obj = 0;
     bool no_z = false;  // no depth buffer: nothing tests or writes depth
     // the viewport (clip space -1..1 maps to x..x+w, y..y+h), and the pixels
@@ -97,6 +104,7 @@ struct DrawState {
     shade::ShadeParams shade;
     bool per_vertex;  // kShadePerVertex: ClipVert's ld and la are set
     int blend;
+    AlphaRule alpha;
     bool z_test;
     bool z_equal_passes;
     bool z_write;
@@ -120,9 +128,11 @@ void Shade(const DrawState& ds, const float uv[2], const float n[3], const float
     shade::ShadePixelCpu(ds.shade, wp, n, vc, texel, spec_map, glow, depth, ld, la, out);
 }
 
-// `alpha`: a texture target's, which blends alpha by the colour's factors
-// (gpu_view.cpp's pipelines); else it's 1
-uint32_t Blend(int mode, const float s[4], uint32_t dst, bool alpha) {
+// The colour by the material's blend mode (Dest keeps it), and alpha by
+// `alpha`: 1, blended by the colour's factors (a texture's, as gpu_view.cpp's
+// pipelines do), kept, or RB3's back buffer's ONE ONE MAX, the larger of the
+// two where the mode blends (any but Src, which Blend() draws other modes as)
+uint32_t Blend(int mode, const float s[4], uint32_t dst, AlphaRule alpha) {
     float d[4];
     for (int i = 0; i < 4; i++) d[i] = float((dst >> (8 * i)) & 0xff) / 255.0f;
     float o[4];
@@ -134,18 +144,27 @@ uint32_t Blend(int mode, const float s[4], uint32_t dst, bool alpha) {
             case 4: o[i] = d[i] + s[i] * a; break;               // SrcAlphaAdd
             case 5: o[i] = d[i] - s[i]; break;                   // Subtract
             case 6: o[i] = d[i] * s[i]; break;                   // Multiply
+            case 0: o[i] = d[i]; break;                          // Dest
             default: o[i] = s[i]; break;                         // Src
         }
     }
-    switch (mode) {
-        case 2: o[3] = d[3] + a; break;
-        case 3: o[3] = a * a + d[3] * (1.0f - a); break;
-        case 4: o[3] = d[3] + a * a; break;
-        case 5: o[3] = d[3] - a; break;
-        case 6: o[3] = d[3] * a; break;
-        default: o[3] = a; break;
+    switch (alpha) {
+        case AlphaRule::kOpaque: o[3] = 1.0f; break;
+        case AlphaRule::kKeep: o[3] = d[3]; break;
+        case AlphaRule::kMax:
+            o[3] = mode < 0 || mode == 1 || mode > 6 ? a : std::max(a, d[3]);
+            break;
+        case AlphaRule::kColorFactors:
+            switch (mode) {
+                case 2: o[3] = d[3] + a; break;
+                case 3: o[3] = a * a + d[3] * (1.0f - a); break;
+                case 4: o[3] = d[3] + a * a; break;
+                case 5: o[3] = d[3] - a; break;
+                case 6: o[3] = d[3] * a; break;
+                default: o[3] = a; break;
+            }
+            break;
     }
-    if (!alpha) o[3] = 1.0f;
     uint32_t r = 0;
     for (int i = 0; i < 4; i++)
         r |= uint32_t(std::clamp(o[i], 0.0f, 1.0f) * 255.0f + 0.5f) << (8 * i);
@@ -210,9 +229,10 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
             float col[4];
             Shade(ds, uv, n, vc, wp, 1.0f / z, ld, la, col);
             if (shade::AlphaCutCpu(ds.shade, col[3])) continue;
-            if (ds.blend != 0) {
-                t.color[idx] = Blend(ds.blend, col, t.color[idx], t.alpha);
-                if (t.ids) (*t.ids)[idx] = ds.index;
+            // Dest draws no colour, but may still write the scene's alpha
+            if (ds.blend != 0 || ds.alpha == AlphaRule::kMax) {
+                t.color[idx] = Blend(ds.blend, col, t.color[idx], ds.alpha);
+                if (t.ids && ds.blend != 0) (*t.ids)[idx] = ds.index;
             }
             if (ds.z_write) t.depth[idx] = z;
             st.pixels++;
@@ -358,6 +378,13 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     }
 
     ds.blend = o.blending ? it.blend : 1;
+    switch (t.alpha) {
+        case TargetAlpha::kOpaque: ds.alpha = AlphaRule::kOpaque; break;
+        case TargetAlpha::kTexture: ds.alpha = AlphaRule::kColorFactors; break;
+        case TargetAlpha::kScene:
+            ds.alpha = WritesSceneAlpha(state) ? AlphaRule::kMax : AlphaRule::kKeep;
+            break;
+    }
     switch (it.z_mode) {
         case 0: ds.z_test = false; ds.z_equal_passes = false; ds.z_write = false; break;
         case 2: ds.z_test = true; ds.z_equal_passes = true; ds.z_write = false; break;
@@ -431,11 +458,38 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                 uint32_t stop_version) {
     const auto start = std::chrono::steady_clock::now();
     RasterStats st;
-    rgba.assign(size_t(o.width) * o.height, kClearColor);
-    if (ids) ids->assign(size_t(o.width) * o.height, -1);
-    std::vector<float> depth(size_t(o.width) * o.height, 0.0f);
-    Target t{o.width, o.height, rgba, depth, ids};
-    t.SetViewport(0, 0, float(o.width), float(o.height));
+    const size_t pixels = size_t(o.width) * o.height;
+    rgba.assign(pixels, kClearColor);
+    if (ids) ids->assign(pixels, -1);
+    std::vector<float> depth(pixels, 0.0f);
+    // the world's draws into the scene target, cleared with alpha 0; the
+    // overlay's into the picture, over the depth the world left
+    std::vector<uint32_t> scene(pixels, kClearColor & 0x00ffffffu);
+    Target world{o.width, o.height, scene, depth, ids};
+    world.alpha = TargetAlpha::kScene;
+    world.SetViewport(0, 0, float(o.width), float(o.height));
+    Target overlay{o.width, o.height, rgba, depth, ids};
+    overlay.SetViewport(0, 0, float(o.width), float(o.height));
+    Target* back = &world;
+    // the scene into the picture, at post_boundary (or the frame's end):
+    // where post-processing will go. A view of the scene target ends the
+    // frame there.
+    auto resolve = [&] {
+        back = &overlay;
+        for (size_t i = 0; i < pixels; i++) {
+            const uint32_t c = scene[i];
+            uint32_t g;
+            switch (o.view) {
+                case RasterView::kSceneAlpha: g = c >> 24; break;
+                case RasterView::kSceneDepth:
+                    // the depth buffer has 1/w
+                    g = uint32_t(DepthViewGrey(depth[i] * kNearW) * 255.0f + 0.5f);
+                    break;
+                default: rgba[i] = c | 0xff000000u; continue;
+            }
+            rgba[i] = g | g << 8 | g << 16 | 0xff000000u;
+        }
+    };
     std::vector<ClipVert> cv;
     std::unordered_set<uint32_t> cams_seen;
     uint32_t last_cam = 0;
@@ -444,12 +498,14 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             for (uint32_t i = run.first; i < run.end; i++) {
                 const DrawItem& it = frame.draws[i];
                 if (!DrawnToBackBuffer(it)) continue;
+                if (back == &world && i >= frame.post_boundary) resolve();
+                if (back == &overlay && o.view != RasterView::kFinal) break;
                 if (o.clear_depth_per_camera && it.cam != last_cam &&
                     cams_seen.insert(it.cam).second)
                     std::fill(depth.begin(), depth.end(), 0.0f);
                 last_cam = it.cam;
                 if (!Drawable(it)) continue;
-                DrawOne(it, int32_t(i), shade::ShadeOf(frame, it), o, rts, t, st, cv);
+                DrawOne(it, int32_t(i), shade::ShadeOf(frame, it), o, rts, *back, st, cv);
             }
             continue;
         }
@@ -468,7 +524,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             std::fill(rt.color.begin(), rt.color.end(), ArgbToRgba(p.clear_color));
         if (p.clear_flags & 0x30) std::fill(rt.depth.begin(), rt.depth.end(), 0.0f);
         Target rtt{rt.w, rt.h, rt.color, rt.depth, nullptr};
-        rtt.alpha = true;
+        rtt.alpha = TargetAlpha::kTexture;
         rtt.tex_obj = p.tex_obj;
         rtt.no_z = (p.tex_type & kTexTypeNoZ) != 0;
         for (uint32_t i = run.first; i < run.end; i++) {
@@ -485,6 +541,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         st.passes++;
         if (stop && p.tex_obj == stop && p.version == stop_version) break;
     }
+    if (back == &world) resolve();
     st.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                 .count();
     return st;

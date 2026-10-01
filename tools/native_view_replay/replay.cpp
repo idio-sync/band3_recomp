@@ -9,6 +9,8 @@
 //                               [--no-tex] [--no-blend] [--transpose]
 //                               [--no-skinned | --only-skinned] [--unskinned]
 //                               [--legacy-light | --no-light] [--pick X,Y]
+//                               [--dump-alpha <png>] [--dump-depth <png>]
+//                               [--view alpha|depth]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
 // and inside the frustum with the matrix as captured and transposed (the back
@@ -39,6 +41,18 @@
 // with the placeholder lighting from before the game's shading, --no-light
 // with none (every material unlit). --pick draws the frame at --size and
 // prints the draw that last wrote pixel X,Y, its colour and its shade.
+// Every capture prints a "post:" line, what post-processing was set to do at
+// DxRnd::DoPostProcess (post_params.h: boundary, colour matrix, bloom, DOF,
+// the world camera), and a "check:" line setting it against the constants
+// RB3's composite drew with (the colour matrix times the modulation against
+// c92..c94, c24 recomputed from the DOF fields, c6 from the bloom colour, the
+// matrix rebuilt from hue..levels; each with the post flag that says whether
+// the composite used it), then the DOF and bloom blurs' taps if captured.
+// --dump-alpha and --dump-depth draw the frame on the CPU at --size and write
+// the scene target's alpha (the bloom weight) or depth as grey (soft_raster.h's
+// RasterView), where the world's draws left them; --view alpha|depth does the
+// same for the picture the other options draw (--diff against a capture's
+// <name>.gpu.alpha.png or .gpu.depth.png, say).
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
@@ -56,6 +70,7 @@
 
 #include "src/Render/capture_file.h"
 #include "src/Render/png_writer.h"
+#include "src/Render/post_params.h"
 #include "src/Render/soft_raster.h"
 
 using namespace band3::render;
@@ -331,6 +346,88 @@ void PrintPassSummary(const FrameCapture& fc) {
         std::printf("composed: no, the world is the frame's own\n");
 }
 
+// the largest difference between two runs of floats
+float MaxDiff(const float* a, const float* b, int n) {
+    float most = 0;
+    for (int i = 0; i < n; i++) most = std::max(most, std::fabs(a[i] - b[i]));
+    return most;
+}
+
+// What post-processing was set to do (the "post:" line), against what RB3's
+// composite drew with (the "check:" line), and the blurs' taps
+void PrintPost(const FrameCapture& fc) {
+    const PostParams& p = fc.post;
+    if (!p.valid) {
+        std::printf("post: none read (no DoPostProcess this frame, or a capture from before)\n");
+        return;
+    }
+    float rows[3][4];
+    ModulatedXfm(p, rows);
+    std::printf("post: boundary %u, proc_cmds %u, proc %08X%s%s; xfm %s, mod %.4f, rows "
+                "[%.4f %.4f %.4f | %.4f] [%.4f %.4f %.4f | %.4f] [%.4f %.4f %.4f | %.4f] "
+                "(hue %.1f sat %.1f light %.1f contrast %.1f bright %.1f); bloom colour %.3f %.3f "
+                "%.3f %.3f threshold %.3f intensity %.3f%s%s; DOF %s focal %.2f blurDepth %.4f "
+                "min %.4f max %.4f (z scale %.6f bias %.6f, width scale %.3f); cam %08X near %.3f "
+                "far %.1f zrange %.3f..%.3f; emulate_fps %.1f\n",
+                fc.post_boundary, fc.proc_cmds, p.proc, p.overridden ? " (override)" : "",
+                p.disabled ? " disabled" : "", ColorXfmEnabled(p) ? "enabled" : "off",
+                p.color_mod, rows[0][0], rows[0][1], rows[0][2], rows[0][3], rows[1][0],
+                rows[1][1], rows[1][2], rows[1][3], rows[2][0], rows[2][1], rows[2][2], rows[2][3],
+                p.hue, p.saturation, p.lightness, p.contrast, p.brightness, p.bloom_color[0],
+                p.bloom_color[1], p.bloom_color[2], p.bloom_color[3], p.bloom_threshold,
+                p.bloom_intensity, p.bloom_glare ? " glare" : "", p.bloom_streak ? " streak" : "",
+                p.dof_enabled ? "on" : "off", p.dof_focal, p.dof_blur_depth, p.dof_min_blur,
+                p.dof_max_blur, p.dof_scale, p.dof_bias, p.blur_width_scale, p.cam, p.cam_near,
+                p.cam_far, p.cam_zrange[0], p.cam_zrange[1], p.emulate_fps);
+
+    const PostConsts& c = fc.post_consts;
+    float rebuilt[3][3], rebuilt_v[3];
+    AdjustColorXfm(p, rebuilt, rebuilt_v);
+    const float rebuilt_diff = std::max(MaxDiff(&rebuilt[0][0], &p.xfm[0][0], 9),
+                                        MaxDiff(rebuilt_v, p.xfm_offset, 3));
+    if (!c.valid) {
+        std::printf("check: no composite constants (FinishPostProcess didn't run this frame); "
+                    "matrix rebuilt from hue..levels off by %.6f\n",
+                    rebuilt_diff);
+        return;
+    }
+    float dof[4], bloom[4];
+    DofConstants(p, dof);
+    BloomConstant(p, bloom);
+    std::printf("check: flags DOF %u bloom %u glare %u xfm %u (ColorXfmEnabled %u); matrix*mod "
+                "vs c92..c94 off by %.6f; c24 recomputed %.6f %.6f %.4f %.4f vs captured %.6f "
+                "%.6f %.4f %.4f, off by %.6f; c6 bloom colour*intensity %.4f %.4f %.4f vs "
+                "captured %.4f %.4f %.4f, off by %.6f; matrix rebuilt from hue..levels off by "
+                "%.6f\n",
+                c.flags[kPostFlagDof], c.flags[kPostFlagBloom], c.flags[kPostFlagGlare],
+                c.flags[kPostFlagColorXfm], unsigned(ColorXfmEnabled(p)),
+                MaxDiff(&rows[0][0], &c.c92[0][0], 12), dof[0], dof[1], dof[2], dof[3],
+                c.c24[0], c.c24[1], c.c24[2], c.c24[3], MaxDiff(dof, c.c24, 4), bloom[0],
+                bloom[1], bloom[2], c.c6[0], c.c6[1], c.c6[2], MaxDiff(bloom, c.c6, 3),
+                rebuilt_diff);
+    std::printf("  c92..c94 captured [%.4f %.4f %.4f | %.4f] [%.4f %.4f %.4f | %.4f] [%.4f %.4f "
+                "%.4f | %.4f]\n",
+                c.c92[0][0], c.c92[0][1], c.c92[0][2], c.c92[0][3], c.c92[1][0], c.c92[1][1],
+                c.c92[1][2], c.c92[1][3], c.c92[2][0], c.c92[2][1], c.c92[2][2], c.c92[2][3]);
+    std::printf("  flags 0x26..0x3F:");
+    for (uint8_t f : c.flags) std::printf(" %02X", f);
+    std::printf("; c15 %.6f %.6f %.6f %.6f\n", c.c15[0], c.c15[1], c.c15[2], c.c15[3]);
+    if (c.dof_survey) {
+        std::printf("  DOF blur taps (c31..c38 xy, weight c47..c54 x):");
+        for (int i = 0; i < 8; i++)
+            std::printf(" (%.5f %.5f %.4f)", c.dof_offsets[i][0], c.dof_offsets[i][1],
+                        c.dof_weights[i][0]);
+        std::printf("\n");
+    }
+    if (c.bloom_survey) {
+        std::printf("  bloom blur taps (c31..c45 xy, weight c47..c61 x):");
+        for (int i = 0; i < 15; i++)
+            std::printf(" (%.5f %.5f %.5f)", c.bloom_offsets[i][0], c.bloom_offsets[i][1],
+                        c.bloom_weights[i][0]);
+        std::printf("\n");
+    }
+}
+
 void PrintPasses(const FrameCapture& fc) {
     for (size_t i = 0; i < fc.passes.size(); i++) {
         const Pass& p = fc.passes[i];
@@ -373,7 +470,7 @@ int main(int argc, char** argv) {
     }
     RasterOptions o;
     bool transpose = false, per_cam = false, list = false, no_skinned = false, only_skinned = false;
-    std::string compare, image, diff_with;
+    std::string compare, image, diff_with, dump_alpha, dump_depth;
     long mesh_filter = -1, dump_tex = -1, shade_draw = -1;
     uint32_t dump_rt = 0, dump_rt_version = 0;
     int pick_x = -1, pick_y = -1;
@@ -406,6 +503,14 @@ int main(int argc, char** argv) {
         else if (a == "--unskinned") o.skinning = false;
         else if (a == "--cam" && i + 1 < argc) cam_filter = std::strtol(argv[++i], nullptr, 0);
         else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%ux%u", &o.width, &o.height);
+        else if (a == "--dump-alpha" && i + 1 < argc) dump_alpha = argv[++i];
+        else if (a == "--dump-depth" && i + 1 < argc) dump_depth = argv[++i];
+        else if (a == "--view" && i + 1 < argc) {
+            const std::string v = argv[++i];
+            o.view = v == "alpha"   ? RasterView::kSceneAlpha
+                     : v == "depth" ? RasterView::kSceneDepth
+                                    : RasterView::kFinal;
+        }
     }
 
     // per-camera diagnostics, both matrix orders
@@ -437,6 +542,7 @@ int main(int argc, char** argv) {
     std::printf("frame %llu, %zu draws (%zu of them meshes to the back buffer), %zu cameras\n",
                 (unsigned long long)fc->frame, fc->draws.size(), drawn, cams.size());
     PrintPassSummary(*fc);
+    PrintPost(*fc);
     if (list) PrintPasses(*fc);
     for (uint32_t cam : order) {
         const CamStats& cs = cams[cam];
@@ -528,6 +634,34 @@ int main(int argc, char** argv) {
                             s->OptionBits(shader_opt::kNumPoint, 2), PointsLit(*s));
             }
         }
+    }
+
+    // the scene target's alpha or depth as grey, and how much of it is lit
+    auto dump_view = [&](const std::string& path, RasterView view) {
+        RasterOptions vo = o;
+        vo.view = view;
+        std::vector<uint32_t> px;
+        const RasterStats rs = Rasterize(*fc, vo, px);
+        WritePng(path, px, vo.width, vo.height);
+        size_t lit = 0, bright = 0;
+        double sum = 0;
+        for (uint32_t c : px) {
+            const uint32_t g = c & 0xff;
+            sum += g;
+            if (g) lit++;
+            if (g >= 0x80) bright++;
+        }
+        const double n = double(px.size());
+        std::printf("%s: scene %s, %ux%u: %.1f%% of pixels above 0, %.1f%% at 0.5 or more, mean "
+                    "%.1f of 255; %u draws, %.1f ms\n",
+                    path.c_str(), view == RasterView::kSceneAlpha ? "alpha" : "depth", vo.width,
+                    vo.height, 100.0 * double(lit) / n, 100.0 * double(bright) / n, sum / n,
+                    rs.draws, rs.ms);
+    };
+    if (!dump_alpha.empty() || !dump_depth.empty()) {
+        if (!dump_alpha.empty()) dump_view(dump_alpha, RasterView::kSceneAlpha);
+        if (!dump_depth.empty()) dump_view(dump_depth, RasterView::kSceneDepth);
+        return 0;
     }
 
     if (dump_rt) {

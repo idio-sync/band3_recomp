@@ -2,6 +2,7 @@
 
 #include "src/Render/shade_model.h"
 #include "src/Render/shaders/mesh_shaders.gen.h"
+#include "src/Render/shaders/post_shaders.gen.h"
 
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_gpu.h>
@@ -88,6 +89,13 @@ enum : int {
     kBlendSubtract = 5,
     kBlendMultiply = 6,
 };
+
+// What a draw's pipeline does with its target's alpha: leaves it (the
+// picture's stays the resolve's 1, and a world draw that doesn't write it
+// keeps the scene's), blends it by the colour's factors (into a texture), or
+// as RB3's back buffer does (WritesSceneAlpha: ONE ONE MAX where it blends)
+enum class AlphaMode { kNone, kTexture, kScene };
+constexpr int kNumAlphaModes = 3;
 
 int BlendFor(const DrawItem& it, const RasterOptions& o) {
     // Blend() draws any other value as Src
@@ -183,6 +191,11 @@ struct GpuRenderer::Impl {
     SDL_GPUDevice* device = nullptr;
     SDL_GPUShader* vertex_shader = nullptr;
     SDL_GPUShader* pixel_shader = nullptr;
+    // post.hlsl's: the full-screen triangle and the resolve, the scene into
+    // the picture
+    SDL_GPUShader* fullscreen_shader = nullptr;
+    SDL_GPUShader* resolve_shader = nullptr;
+    SDL_GPUGraphicsPipeline* resolve_pipeline = nullptr;
     // by blend mode and DepthRules::Key, all made before the first frame
     std::unordered_map<int, SDL_GPUGraphicsPipeline*> pipelines;
     bool warm = false;
@@ -191,8 +204,16 @@ struct GpuRenderer::Impl {
     SDL_GPUTexture* black = nullptr;     // transparent: a render target nothing has drawn
     SDL_GPUBuffer* no_bones = nullptr;   // one identity bone, bound when nothing is skinned
 
+    // The world's draws go to the scene target (its alpha the bloom weight),
+    // which the resolve reads into the picture, `color`; the overlay's go on
+    // top of that. The depth buffer is both's, and readable by the resolve
+    // where the device can sample D32 (depth_sampled); where it can't, the
+    // resolve reads no_depth, which is 0 (nothing drew).
+    SDL_GPUTexture* scene = nullptr;
     SDL_GPUTexture* color = nullptr;
     SDL_GPUTexture* depth = nullptr;
+    bool depth_sampled = false;
+    SDL_GPUTexture* no_depth = nullptr;
     SDL_GPUTransferBuffer* readback = nullptr;
     uint32_t width = 0, height = 0;
 
@@ -295,9 +316,13 @@ struct GpuRenderer::Impl {
     bool Create();
     // stop_video: on the UI thread only, as SDL wants
     void Release(bool stop_video);
-    SDL_GPUShader* MakeShader(SDL_GPUShaderFormat format, SDL_GPUShaderStage stage);
-    // `alpha`: into a texture, which keeps alpha
-    SDL_GPUGraphicsPipeline* Pipeline(int blend, const DepthRules& rules, bool alpha);
+    // one of the generated shaders, in `format` (DXBC or SPIR-V)
+    SDL_GPUShader* MakeShader(SDL_GPUShaderFormat format, SDL_GPUShaderStage stage,
+                              const unsigned char* dxbc, size_t dxbc_size,
+                              const unsigned char* spirv, size_t spirv_size, const char* entry,
+                              uint32_t samplers, uint32_t storage_buffers, uint32_t uniforms);
+    SDL_GPUGraphicsPipeline* Pipeline(int blend, const DepthRules& rules, AlphaMode alpha);
+    SDL_GPUGraphicsPipeline* MakeResolvePipeline();
     // makes every pipeline a frame can ask for and the upload buffer's usual
     // size, so no frame stalls making them
     void Prewarm();
@@ -359,29 +384,40 @@ void GpuRenderer::Impl::StopVideo() {
 }
 
 SDL_GPUShader* GpuRenderer::Impl::MakeShader(SDL_GPUShaderFormat format,
-                                             SDL_GPUShaderStage stage) {
-    const bool vs = stage == SDL_GPU_SHADERSTAGE_VERTEX;
+                                             SDL_GPUShaderStage stage,
+                                             const unsigned char* dxbc, size_t dxbc_size,
+                                             const unsigned char* spirv, size_t spirv_size,
+                                             const char* entry, uint32_t samplers,
+                                             uint32_t storage_buffers, uint32_t uniforms) {
     SDL_GPUShaderCreateInfo info{};
-    if (format == SDL_GPU_SHADERFORMAT_DXBC) {
-        info.code = vs ? shaders::kMeshVertexDxbc : shaders::kMeshPixelDxbc;
-        info.code_size = vs ? sizeof(shaders::kMeshVertexDxbc) : sizeof(shaders::kMeshPixelDxbc);
-    } else {
-        info.code = vs ? shaders::kMeshVertexSpirv : shaders::kMeshPixelSpirv;
-        info.code_size =
-            vs ? sizeof(shaders::kMeshVertexSpirv) : sizeof(shaders::kMeshPixelSpirv);
-    }
-    info.entrypoint = vs ? "VSMain" : "PSMain";
+    const bool is_dxbc = format == SDL_GPU_SHADERFORMAT_DXBC;
+    info.code = is_dxbc ? dxbc : spirv;
+    info.code_size = is_dxbc ? dxbc_size : spirv_size;
+    info.entrypoint = entry;
     info.format = format;
     info.stage = stage;
-    info.num_samplers = vs ? 0 : kNumSlots;
-    info.num_storage_buffers = vs ? 1 : 0;
-    info.num_uniform_buffers = 1;
+    info.num_samplers = samplers;
+    info.num_storage_buffers = storage_buffers;
+    info.num_uniform_buffers = uniforms;
     SDL_GPUShader* s = SDL_CreateGPUShader(device, &info);
-    if (!s) {
-        REXLOG_WARN("native view gpu: the {} shader didn't load ({})", vs ? "vertex" : "pixel",
-                    SDL_GetError());
-    }
+    if (!s) REXLOG_WARN("native view gpu: the shader {} didn't load ({})", entry, SDL_GetError());
     return s;
+}
+
+SDL_GPUGraphicsPipeline* GpuRenderer::Impl::MakeResolvePipeline() {
+    SDL_GPUColorTargetDescription target{};
+    target.format = kColorFormat;
+    SDL_GPUGraphicsPipelineCreateInfo pi{};
+    pi.vertex_shader = fullscreen_shader;
+    pi.fragment_shader = resolve_shader;
+    pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+    pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+    pi.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+    pi.target_info.color_target_descriptions = &target;
+    pi.target_info.num_color_targets = 1;
+    SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(device, &pi);
+    if (!p) REXLOG_WARN("native view gpu: no resolve pipeline ({})", SDL_GetError());
+    return p;
 }
 
 bool GpuRenderer::Impl::Create() {
@@ -410,9 +446,30 @@ bool GpuRenderer::Impl::Create() {
         REXLOG_WARN("native view gpu: the device takes no shader format band3 has");
         return false;
     }
-    vertex_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_VERTEX);
-    pixel_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT);
-    if (!vertex_shader || !pixel_shader) return false;
+    using namespace shaders;
+    vertex_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_VERTEX, kMeshVertexDxbc,
+                               sizeof(kMeshVertexDxbc), kMeshVertexSpirv,
+                               sizeof(kMeshVertexSpirv), "VSMain", 0, 1, 1);
+    pixel_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kMeshPixelDxbc,
+                              sizeof(kMeshPixelDxbc), kMeshPixelSpirv, sizeof(kMeshPixelSpirv),
+                              "PSMain", kNumSlots, 0, 1);
+    fullscreen_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_VERTEX, kFullscreenVertexDxbc,
+                                   sizeof(kFullscreenVertexDxbc), kFullscreenVertexSpirv,
+                                   sizeof(kFullscreenVertexSpirv), "VSFullscreen", 0, 0, 0);
+    resolve_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kResolvePixelDxbc,
+                                sizeof(kResolvePixelDxbc), kResolvePixelSpirv,
+                                sizeof(kResolvePixelSpirv), "PSResolve", 2, 0, 1);
+    if (!vertex_shader || !pixel_shader || !fullscreen_shader || !resolve_shader) return false;
+    resolve_pipeline = MakeResolvePipeline();
+    if (!resolve_pipeline) return false;
+    // the scene's depth, read after the world's draws: D32 the resolve samples
+    // where the device can (Direct3D 12 and Vulkan both should)
+    depth_sampled = SDL_GPUTextureSupportsFormat(
+        device, kDepthFormat, SDL_GPU_TEXTURETYPE_2D,
+        SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    if (!depth_sampled)
+        REXLOG_WARN("native view gpu: the device can't sample a D32 depth buffer; the scene's "
+                    "depth reads as 0");
 
     // nearest and wrapping, as Shade() samples
     SDL_GPUSamplerCreateInfo si{};
@@ -430,6 +487,10 @@ bool GpuRenderer::Impl::Create() {
     ti.num_levels = 1;
     white = SDL_CreateGPUTexture(device, &ti);
     black = SDL_CreateGPUTexture(device, &ti);
+    // a plain 2D texture, as the resolve's depth binding is; its texel is
+    // never filled, so a depth of 0 (or whatever the driver gives)
+    ti.type = SDL_GPU_TEXTURETYPE_2D;
+    no_depth = SDL_CreateGPUTexture(device, &ti);
 
     SDL_GPUBufferCreateInfo bi{};
     bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
@@ -440,7 +501,7 @@ bool GpuRenderer::Impl::Create() {
     tbi.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
     tbi.size = kTextureOffsetAlign * 2;
     SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(device, &tbi);
-    if (!sampler || !white || !black || !no_bones || !tb) {
+    if (!sampler || !white || !black || !no_depth || !no_bones || !tb) {
         REXLOG_WARN("native view gpu: couldn't make its sampler and buffers ({})",
                     SDL_GetError());
         if (tb) SDL_ReleaseGPUTransferBuffer(device, tb);
@@ -493,11 +554,16 @@ void GpuRenderer::Impl::Release(bool stop_video) {
             if (a.texture) SDL_ReleaseGPUTexture(device, a.texture);
         for (auto& [k, rt] : rts) ReleaseRt(rt);
         for (auto& [k, p] : pipelines) SDL_ReleaseGPUGraphicsPipeline(device, p);
+        if (resolve_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, resolve_pipeline);
         if (vertex_shader) SDL_ReleaseGPUShader(device, vertex_shader);
         if (pixel_shader) SDL_ReleaseGPUShader(device, pixel_shader);
+        if (fullscreen_shader) SDL_ReleaseGPUShader(device, fullscreen_shader);
+        if (resolve_shader) SDL_ReleaseGPUShader(device, resolve_shader);
         if (sampler) SDL_ReleaseGPUSampler(device, sampler);
         if (white) SDL_ReleaseGPUTexture(device, white);
         if (black) SDL_ReleaseGPUTexture(device, black);
+        if (no_depth) SDL_ReleaseGPUTexture(device, no_depth);
+        if (scene) SDL_ReleaseGPUTexture(device, scene);
         if (no_bones) SDL_ReleaseGPUBuffer(device, no_bones);
         if (color) SDL_ReleaseGPUTexture(device, color);
         if (depth) SDL_ReleaseGPUTexture(device, depth);
@@ -513,9 +579,11 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     pipelines.clear();
     warm = false;
     device = nullptr;
-    vertex_shader = pixel_shader = nullptr;
+    vertex_shader = pixel_shader = fullscreen_shader = resolve_shader = nullptr;
+    resolve_pipeline = nullptr;
     sampler = nullptr;
-    white = black = color = depth = nullptr;
+    white = black = no_depth = scene = color = depth = nullptr;
+    depth_sampled = false;
     no_bones = nullptr;
     readback = upload = nullptr;
     width = height = upload_size = 0;
@@ -523,7 +591,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
 }
 
 SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules& rules,
-                                                     bool alpha) {
+                                                     AlphaMode alpha) {
     const int key = int(alpha) << 6 | blend << 3 | rules.Key();
     if (auto it = pipelines.find(key); it != pipelines.end()) return it->second;
 
@@ -540,18 +608,21 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     };
     SDL_GPUColorTargetDescription target{};
     target.format = kColorFormat;
-    // Blend() in soft_raster.cpp. The back buffer's alpha is never written:
-    // it stays the clear's 1, as the CPU's picture has it, so the readback is
-    // the picture. A texture's blends alpha by the colour's factors, as D3D9
-    // does without separate alpha blending. The target clamps the colour to
-    // 0-1 before blending, which only Multiply above 1 notices; SrcAlpha's
-    // scaling happens in the shader (kPremultiply), to the colour only
+    // Blend() in soft_raster.cpp. The picture's alpha is never written after
+    // the resolve's 1, as the CPU's picture has it, so the readback is the
+    // picture. A texture's blends alpha by the colour's factors; the scene's,
+    // where the draw writes it, is ONE ONE MAX (AlphaMode). The target clamps
+    // the colour to 0-1 before blending, which only Multiply above 1 notices;
+    // SrcAlpha's scaling happens in the shader (kPremultiply), to the colour
+    // only
     SDL_GPUColorTargetBlendState& bs = target.blend_state;
     bs.enable_color_write_mask = true;
     SDL_GPUColorComponentFlags mask =
         SDL_GPU_COLORCOMPONENT_R | SDL_GPU_COLORCOMPONENT_G | SDL_GPU_COLORCOMPONENT_B;
-    if (alpha) mask |= SDL_GPU_COLORCOMPONENT_A;
-    bs.color_write_mask = blend == kBlendDest ? SDL_GPUColorComponentFlags(0) : mask;
+    if (blend == kBlendDest) mask = 0;
+    if (alpha == AlphaMode::kTexture && blend != kBlendDest) mask |= SDL_GPU_COLORCOMPONENT_A;
+    if (alpha == AlphaMode::kScene) mask |= SDL_GPU_COLORCOMPONENT_A;
+    bs.color_write_mask = mask;
     bs.color_blend_op = SDL_GPU_BLENDOP_ADD;
     bs.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
     bs.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
@@ -591,6 +662,18 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
         default:  // Src, and Dest, which writes no colour
             break;
     }
+    // the scene's alpha, where a draw writes it: the larger of the two
+    // wherever RB3 blends (any mode but Src), the draw's own where it doesn't
+    if (alpha == AlphaMode::kScene && blend != kBlendSrc) {
+        if (blend == kBlendDest) {
+            bs.enable_blend = true;
+            bs.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+            bs.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+        }
+        bs.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+        bs.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+        bs.alpha_blend_op = SDL_GPU_BLENDOP_MAX;
+    }
 
     SDL_GPUGraphicsPipelineCreateInfo pi{};
     pi.vertex_shader = vertex_shader;
@@ -628,9 +711,9 @@ void GpuRenderer::Impl::Prewarm() {
     constexpr DepthRules kRules[] = {{false, false, false}, {true, true, false},
                                      {false, false, true},  {true, true, true},
                                      {true, false, true}};
-    for (int alpha = 0; alpha < 2; alpha++)
+    for (int alpha = 0; alpha < kNumAlphaModes; alpha++)
         for (int blend = kBlendDest; blend <= kBlendMultiply; blend++)
-            for (const DepthRules& r : kRules) Pipeline(blend, r, alpha != 0);
+            for (const DepthRules& r : kRules) Pipeline(blend, r, AlphaMode(alpha));
     if (upload_size < kInitialUploadBytes) {
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
         SDL_GPUTransferBufferCreateInfo tbi{};
@@ -837,10 +920,11 @@ void GpuRenderer::Impl::ReleaseRt(Rt& rt) {
 
 bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     if (color && w == width && h == height) return true;
+    if (scene) SDL_ReleaseGPUTexture(device, scene);
     if (color) SDL_ReleaseGPUTexture(device, color);
     if (depth) SDL_ReleaseGPUTexture(device, depth);
     if (readback) SDL_ReleaseGPUTransferBuffer(device, readback);
-    color = depth = nullptr;
+    scene = color = depth = nullptr;
     readback = nullptr;
     width = height = 0;
 
@@ -853,14 +937,17 @@ bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     ti.format = kColorFormat;
     ti.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
     color = SDL_CreateGPUTexture(device, &ti);
+    ti.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    scene = SDL_CreateGPUTexture(device, &ti);
     ti.format = kDepthFormat;
     ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+    if (depth_sampled) ti.usage |= SDL_GPU_TEXTUREUSAGE_SAMPLER;
     depth = SDL_CreateGPUTexture(device, &ti);
     SDL_GPUTransferBufferCreateInfo tbi{};
     tbi.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
     tbi.size = w * h * 4;
     readback = SDL_CreateGPUTransferBuffer(device, &tbi);
-    if (!color || !depth || !readback) {
+    if (!scene || !color || !depth || !readback) {
         REXLOG_WARN("native view gpu: no {}x{} target ({})", w, h, SDL_GetError());
         return false;
     }
@@ -1144,14 +1231,17 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         pass = nullptr;
     };
 
-    // the back buffer: cleared to the CPU's grey the first time, its depth
-    // whenever a new camera starts
+    // the back buffer: the world's draws into the scene target, cleared to
+    // the CPU's grey (alpha 0) the first time, and the overlay's into the
+    // picture once the resolve has filled it; depth cleared the first time
+    // and whenever a new camera starts
     bool back_begun = false;
+    bool resolved = false;
     bool depth_fresh = false;  // the open pass's depth is cleared and untouched
     auto begin_back = [&](bool clear_depth) {
         SDL_GPUColorTargetInfo ct{};
-        ct.texture = color;
-        ct.clear_color = {kClearGrey, kClearGrey, kClearGrey, 1.0f};
+        ct.texture = resolved ? color : scene;
+        ct.clear_color = {kClearGrey, kClearGrey, kClearGrey, 0.0f};
         ct.load_op = back_begun ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
         ct.store_op = SDL_GPU_STOREOP_STORE;
         SDL_GPUDepthStencilTargetInfo dt{};
@@ -1167,12 +1257,37 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         depth_fresh = clear_depth;
     };
 
+    // the scene into the picture, at post_boundary or the frame's end (where
+    // post-processing will go), or the view of the scene target asked for
+    auto resolve = [&] {
+        end_pass();
+        // the scene cleared, if nothing drew to it
+        if (!back_begun) {
+            begin_back(true);
+            end_pass();
+        }
+        SDL_GPUColorTargetInfo ct{};
+        ct.texture = color;
+        ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
+        ct.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
+        SDL_BindGPUGraphicsPipeline(rp, resolve_pipeline);
+        const SDL_GPUTextureSamplerBinding tb[2] = {{scene, sampler},
+                                                    {depth_sampled ? depth : no_depth, sampler}};
+        SDL_BindGPUFragmentSamplers(rp, 0, tb, 2);
+        const uint32_t view[4] = {uint32_t(o.view), 0, 0, 0};
+        SDL_PushGPUFragmentUniformData(cmd, 0, view, sizeof(view));
+        SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+        SDL_EndGPURenderPass(rp);
+        resolved = true;
+    };
+
     // one draw into the open pass; `no_z` a texture without a depth buffer
-    auto draw = [&](size_t d, bool into_texture, bool no_z) {
+    auto draw = [&](size_t d, AlphaMode alpha, bool no_z) {
         const DrawItem& it = frame.draws[d];
         const Mesh& m = meshes[it.geom.get()];
         const int blend = BlendFor(it, o);
-        SDL_GPUGraphicsPipeline* pipeline = Pipeline(blend, RulesFor(it, o, no_z), into_texture);
+        SDL_GPUGraphicsPipeline* pipeline = Pipeline(blend, RulesFor(it, o, no_z), alpha);
         if (!pipeline) {
             st.skipped++;
             return;
@@ -1265,6 +1380,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             for (size_t d = run.first; d < run.end; d++) {
                 const DrawItem& it = frame.draws[d];
                 if (!DrawnToBackBuffer(it)) continue;
+                if (!resolved && d >= frame.post_boundary) resolve();
+                if (resolved && o.view != RasterView::kFinal) break;
                 bool clear_depth = false;
                 if (o.clear_depth_per_camera && it.cam != last_cam &&
                     std::find(cams_seen.begin(), cams_seen.end(), it.cam) == cams_seen.end()) {
@@ -1278,7 +1395,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 }
                 if (pass && clear_depth && !depth_fresh) end_pass();
                 if (!pass) begin_back(clear_depth);
-                draw(d, false, false);
+                AlphaMode alpha = AlphaMode::kNone;
+                if (!resolved && WritesSceneAlpha(shade::ShadeOf(frame, it)))
+                    alpha = AlphaMode::kScene;
+                draw(d, alpha, false);
                 depth_fresh = false;
             }
             continue;
@@ -1317,14 +1437,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 SDL_SetGPUViewport(pass, &v);
                 std::copy(std::begin(vp), std::end(vp), bound_viewport);
             }
-            draw(d, true, no_z);
+            draw(d, AlphaMode::kTexture, no_z);
         }
         end_pass();
         // in place of FinishDrawTarget's downsamples
         if (rt.levels > 1) SDL_GenerateMipmapsForGPUTexture(cmd, rt.color);
     }
-    // the back buffer cleared, if nothing drew to it
-    if (!back_begun) begin_back(true);
+    if (!resolved) resolve();
     end_pass();
 
     SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
@@ -1353,7 +1472,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         REXLOG_WARN("native view gpu: couldn't read the frame back ({})", SDL_GetError());
         return false;
     }
-    // alpha is the clear's 0xff throughout: no pipeline writes it
+    // alpha is the resolve's 0xff throughout: no pipeline after it writes it
     rgba.resize(size_t(width) * height);
     std::memcpy(rgba.data(), px, rgba.size() * sizeof(uint32_t));
     SDL_UnmapGPUTransferBuffer(device, readback);

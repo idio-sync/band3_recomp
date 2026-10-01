@@ -34,6 +34,9 @@ extern "C" void __imp__DxRnd__DrawRect_82733538(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxRnd__MakeDrawTarget(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxRnd__DoPostProcess(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__RndTex__dt(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__DxRnd__FinishPostProcess(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__NgDOFProc__DoPost(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__Bloom_Blur(PPCContext& ctx, uint8_t* base);
 // DxTex::MakeDrawTarget, DxTex::FinishDrawTarget, DxCam::Select and
 // DxTex::SyncBitmap, which band3_config.toml leaves unnamed
 extern "C" void __imp__rex_sub_82733D20(PPCContext& ctx, uint8_t* base);
@@ -76,6 +79,7 @@ constexpr uint32_t kMat_Intensify = 0x98;
 constexpr uint32_t kMat_UseEnviron = 0x99;
 constexpr uint32_t kMat_Prelit = 0x9a;
 constexpr uint32_t kMat_AlphaCut = 0x9b;
+constexpr uint32_t kMat_AlphaWrite = 0x9c;
 constexpr uint32_t kMat_AlphaThreshold = 0xa0;
 constexpr uint32_t kMat_NextPass = 0xa4 + 8;
 constexpr uint32_t kMat_Fur = 0x104 + 8;
@@ -153,6 +157,36 @@ constexpr uint32_t kDev_TextureFetch = 0x480;  // 26 of 24 bytes
 constexpr uint32_t kDev_VertexShaderF = 0x780;
 constexpr uint32_t kDev_PixelShaderF = 0x1780;
 constexpr uint32_t kEnvironCurrent = 0x82CC0280;  // RndEnviron::sCurrent
+// post-processing (out/research/m4_postproc.md 1, 2 and 6): TheRnd's
+// mDisablePostProc, its mPostProcOverride (a PostProcessor, which is the
+// proc + 0x28) and its copy of the world camera (a pointer)
+constexpr uint32_t kRnd_DisablePostProc = 0x105;
+constexpr uint32_t kRnd_PostProcOverride = 0x124;
+constexpr uint32_t kRnd_WorldCam = 0xa4;
+constexpr uint32_t kPostProcessor = 0x28;
+constexpr uint32_t kPostProcCurrent = 0x82CC27F0;  // RndPostProc::sCurrent
+constexpr uint32_t kPostProc_BloomColor = 0x30;
+constexpr uint32_t kPostProc_BloomThreshold = 0x40;
+constexpr uint32_t kPostProc_BloomIntensity = 0x44;
+constexpr uint32_t kPostProc_BloomGlare = 0x48;
+constexpr uint32_t kPostProc_BloomStreak = 0x49;
+constexpr uint32_t kPostProc_Hue = 0x64;  // then saturation, lightness, contrast, brightness
+constexpr uint32_t kPostProc_LevelInLo = 0x78;
+constexpr uint32_t kPostProc_LevelInHi = 0x88;
+constexpr uint32_t kPostProc_LevelOutLo = 0x98;
+constexpr uint32_t kPostProc_LevelOutHi = 0xa8;
+constexpr uint32_t kPostProc_Xfm = 0xb8;  // rows 0x10 apart, then the translation
+constexpr uint32_t kPostProc_ColorMod = 0x12c;
+constexpr uint32_t kPostProc_EmulateFps = 0x168;
+constexpr uint32_t kDOFProcHolder = 0x82CC6368;  // TheDOFProc
+constexpr uint32_t kDOF_Enabled = 0x2c;
+constexpr uint32_t kDOF_Scale = 0x30;  // then bias, focal, blur depth, min and max blur
+constexpr uint32_t kDOFOverride_BlurWidthScale = 0x82C70440 + 0x18;
+constexpr uint32_t kCam_Near = 0x2b4;
+constexpr uint32_t kCam_Far = 0x2b8;
+constexpr uint32_t kCam_ZRange = 0x2c4;
+// TheShaderMgr, whose flags at +0x26.. say what the composite does
+constexpr uint32_t kShaderMgrHolder = 0x82C76CE0;
 
 constexpr uint32_t kMaxBufferBytes = 64u << 20;
 constexpr uint32_t kMaxTextureSize = 4096;
@@ -1015,6 +1049,7 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat) {
     in.use_environ = g.U8(mat + kMat_UseEnviron);
     in.intensify = g.U8(mat + kMat_Intensify);
     in.per_pixel_lit = g.U8(mat + kMat_PerPixelLit);
+    in.alpha_write = g.U8(mat + kMat_AlphaWrite);
     in.shader_variation = int32_t(g.U32(mat + kMat_ShaderVariation));
     in.mat_diffuse_base = TexBase(g, g.U32(mat + kMat_DiffuseTex));
     auto fetch = [&](uint32_t sampler, uint32_t out[6]) {
@@ -1467,6 +1502,91 @@ void CarryPasses(State& s, FrameCapture& fc) {
     if (fc.post_boundary != FrameCapture::kNoPost) fc.post_boundary += shift;
 }
 
+// What post-processing is set to do, at DxRnd::DoPostProcess: the proc
+// Rnd::DoPostProcess runs (TheRnd's override, alone, else the current one),
+// TheDOFProc and TheRnd's copy of the world camera. Every pointer may be null
+// (menus without a proc, a frame before the first world).
+void ReadPostParams(const Guest& g, PostParams& p) {
+    p = PostParams{};
+    const uint32_t rnd = g.U32(kDrawModeHolder);
+    if (!rnd) return;
+    p.valid = 1;
+    p.disabled = g.U8(rnd + kRnd_DisablePostProc);
+    const uint32_t over = g.U32(rnd + kRnd_PostProcOverride);
+    p.overridden = over != 0;
+    p.proc = over ? over - kPostProcessor : g.U32(kPostProcCurrent);
+    if (const uint32_t proc = p.proc) {
+        for (int r = 0; r < 3; r++) {
+            for (int c = 0; c < 3; c++) p.xfm[r][c] = g.F32(proc + kPostProc_Xfm + r * 0x10 + c * 4);
+            p.xfm_offset[r] = g.F32(proc + kPostProc_Xfm + 0x30 + r * 4);
+        }
+        p.color_mod = g.F32(proc + kPostProc_ColorMod);
+        float* params[] = {&p.hue, &p.saturation, &p.lightness, &p.contrast, &p.brightness};
+        for (int i = 0; i < 5; i++) *params[i] = g.F32(proc + kPostProc_Hue + i * 4);
+        for (int c = 0; c < 4; c++) {
+            p.level_in_lo[c] = g.F32(proc + kPostProc_LevelInLo + c * 4);
+            p.level_in_hi[c] = g.F32(proc + kPostProc_LevelInHi + c * 4);
+            p.level_out_lo[c] = g.F32(proc + kPostProc_LevelOutLo + c * 4);
+            p.level_out_hi[c] = g.F32(proc + kPostProc_LevelOutHi + c * 4);
+            p.bloom_color[c] = g.F32(proc + kPostProc_BloomColor + c * 4);
+        }
+        p.bloom_threshold = g.F32(proc + kPostProc_BloomThreshold);
+        p.bloom_intensity = g.F32(proc + kPostProc_BloomIntensity);
+        p.bloom_glare = g.U8(proc + kPostProc_BloomGlare);
+        p.bloom_streak = g.U8(proc + kPostProc_BloomStreak);
+        p.emulate_fps = g.F32(proc + kPostProc_EmulateFps);
+    }
+    if (const uint32_t dof = g.U32(kDOFProcHolder)) {
+        p.dof = dof;
+        p.dof_enabled = g.U8(dof + kDOF_Enabled);
+        float* fields[] = {&p.dof_scale,      &p.dof_bias,     &p.dof_focal,
+                           &p.dof_blur_depth, &p.dof_min_blur, &p.dof_max_blur};
+        for (int i = 0; i < 6; i++) *fields[i] = g.F32(dof + kDOF_Scale + i * 4);
+    }
+    p.blur_width_scale = g.F32(kDOFOverride_BlurWidthScale);
+    if (const uint32_t cam = g.U32(rnd + kRnd_WorldCam)) {
+        p.cam = cam;
+        p.cam_near = g.F32(cam + kCam_Near);
+        p.cam_far = g.F32(cam + kCam_Far);
+        p.cam_zrange[0] = g.F32(cam + kCam_ZRange);
+        p.cam_zrange[1] = g.F32(cam + kCam_ZRange + 4);
+    }
+}
+
+// pixel shader constant `reg` from the device's shadow
+void ReadPsConst(const Guest& g, uint32_t dev, int reg, float out[4]) {
+    for (int c = 0; c < 4; c++) out[c] = g.F32(dev + kDev_PixelShaderF + reg * 16 + c * 4);
+}
+
+// What the composite is about to draw with, at DxRnd::FinishPostProcess
+void ReadPostConsts(const Guest& g, PostConsts& pc) {
+    const uint32_t dev = g.U32(kD3DDeviceHolder);
+    if (!dev) return;
+    pc.valid = 1;
+    ReadPsConst(g, dev, 6, pc.c6);
+    ReadPsConst(g, dev, 15, pc.c15);
+    ReadPsConst(g, dev, 24, pc.c24);
+    ReadPsConst(g, dev, 91, pc.c91);
+    for (int r = 0; r < 3; r++) ReadPsConst(g, dev, 92 + r, pc.c92[r]);
+    ReadPsConst(g, dev, 112, pc.c112);
+    ReadPsConst(g, dev, 113, pc.c113);
+    ReadPsConst(g, dev, 122, pc.c122);
+    ReadPsConst(g, dev, 127, pc.c127);
+    if (const uint32_t sm = g.U32(kShaderMgrHolder))
+        for (int i = 0; i < int(sizeof(pc.flags)); i++) pc.flags[i] = g.U8(sm + kPostFlagBase + i);
+}
+
+// a blur's taps, c31.. (offsets) and c47.. (weights), after it set them
+template <int N>
+void ReadBlurTaps(const Guest& g, float offsets[N][4], float weights[N][4]) {
+    const uint32_t dev = g.U32(kD3DDeviceHolder);
+    if (!dev) return;
+    for (int i = 0; i < N; i++) {
+        ReadPsConst(g, dev, 31 + i, offsets[i]);
+        ReadPsConst(g, dev, 47 + i, weights[i]);
+    }
+}
+
 // A request takes the next frame whose capture shows the world the game's
 // picture of it does: with even/odd rendering a post frame, composed with the
 // world frame before it, and without, any (frame_compose.h). A frame that
@@ -1760,7 +1880,8 @@ extern "C" REX_FUNC(rex_sub_82734A28) {
 }
 
 // DxRnd::DoPostProcess, at its start: where the frame's post-processing
-// begins in its draws, and what ProcCommands asked of the frame
+// begins in its draws, what ProcCommands asked of the frame, and what its
+// post-processing is set to do
 extern "C" REX_FUNC(DxRnd__DoPostProcess) {
     SCOPE_profile_cpu_f("RB3 DxRnd::DoPostProcess");
     if (g_enabled.load(std::memory_order_relaxed)) {
@@ -1768,9 +1889,52 @@ extern "C" REX_FUNC(DxRnd__DoPostProcess) {
         if (fc.post_boundary == FrameCapture::kNoPost) {
             fc.post_boundary = uint32_t(fc.draws.size());
             fc.proc_cmds = REX_LOAD_U32(ctx.r3.u32 + kRnd_ProcCmds);
+            ReadPostParams(Guest{base}, fc.post);
         }
     }
     __imp__DxRnd__DoPostProcess(ctx, base);
+}
+
+// DxRnd::FinishPostProcess, at its start, on frames that post-process: the
+// composite's constants and TheShaderMgr's flags are set, and it's about to
+// draw
+extern "C" REX_FUNC(DxRnd__FinishPostProcess) {
+    if (g_enabled.load(std::memory_order_relaxed)) {
+        FrameCapture& fc = *S().building;
+        if (!fc.post_consts.valid) {
+            const Guest g{base};
+            ReadPostConsts(g, fc.post_consts);
+            // RndPostProc::DoPost has moved the flicker on since DoPostProcess
+            // began (UpdateColorModulation), and the composite scales by this
+            if (fc.post.valid && fc.post.proc)
+                fc.post.color_mod = g.F32(fc.post.proc + kPostProc_ColorMod);
+        }
+    }
+    __imp__DxRnd__FinishPostProcess(ctx, base);
+}
+
+// NgDOFProc::DoPost (r3 the proc + 0x28), after it: its last blur's taps,
+// if it was on (they're stale otherwise)
+extern "C" REX_FUNC(NgDOFProc__DoPost) {
+    const uint32_t dof = ctx.r3.u32 - kPostProcessor;
+    __imp__NgDOFProc__DoPost(ctx, base);
+    if (!g_enabled.load(std::memory_order_relaxed)) return;
+    PostConsts& pc = S().building->post_consts;
+    const Guest g{base};
+    if (pc.dof_survey || !g.U8(dof + kDOF_Enabled)) return;
+    pc.dof_survey = 1;
+    ReadBlurTaps<8>(g, pc.dof_offsets, pc.dof_weights);
+}
+
+// Bloom_Blur (NgPostProc::DoBloom's 15-tap blurs), after the frame's first:
+// level 0's taps
+extern "C" REX_FUNC(Bloom_Blur) {
+    __imp__Bloom_Blur(ctx, base);
+    if (!g_enabled.load(std::memory_order_relaxed)) return;
+    PostConsts& pc = S().building->post_consts;
+    if (pc.bloom_survey) return;
+    pc.bloom_survey = 1;
+    ReadBlurTaps<15>(Guest{base}, pc.bloom_offsets, pc.bloom_weights);
 }
 
 extern "C" REX_FUNC(DxRnd__Present) {

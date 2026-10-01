@@ -2,12 +2,13 @@
 
   python tools/shaders/build_shaders.py
 
-Compiles src/Render/shaders/mesh.hlsl (and the shade*.hlsli it includes) twice: DXBC (fxc, shader model 5.1) for
-SDL_gpu's Direct3D 12 backend and SPIR-V (dxc) for its Vulkan backend, checks
-the SPIR-V (spirv-val, and spirv-cross --reflect for the descriptor sets SDL_gpu
-expects), and writes src/Render/shaders/mesh_shaders.gen.h with the bytes, so
-building band3 needs none of these tools. Run it after changing mesh.hlsl and
-check in the header.
+Compiles src/Render/shaders/mesh.hlsl (and the shade*.hlsli it includes) and
+post.hlsl twice each: DXBC (fxc, shader model 5.1) for SDL_gpu's Direct3D 12
+backend and SPIR-V (dxc) for its Vulkan backend, checks the SPIR-V (spirv-val,
+and spirv-cross --reflect for the descriptor sets SDL_gpu expects), and writes
+src/Render/shaders/mesh_shaders.gen.h and post_shaders.gen.h with the bytes, so
+building band3 needs none of these tools. Run it after changing a shader and
+check in the headers.
 
 Finds fxc in the Windows 10 SDK and dxc, spirv-val and spirv-cross in the Vulkan
 SDK (VULKAN_SDK, or C:/VulkanSDK/<newest>); FXC, DXC, SPIRV_VAL and SPIRV_CROSS
@@ -24,22 +25,25 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SHADER_DIR = os.path.join(REPO, "src", "Render", "shaders")
-SOURCE = os.path.join(SHADER_DIR, "mesh.hlsl")
-HEADER = os.path.join(SHADER_DIR, "mesh_shaders.gen.h")
-
-# (array name stem, entry point, fxc profile, dxc profile)
-STAGES = [
-    ("kMeshVertex", "VSMain", "vs_5_1", "vs_6_0"),
-    ("kMeshPixel", "PSMain", "ps_5_1", "ps_6_0"),
+# Each shader file: its header, and its stages as (array name stem, entry
+# point, fxc profile, dxc profile, what spirv-cross --reflect must report).
+# SDL_gpu's sets are 0 vertex resources, 1 vertex uniforms, 2 pixel resources,
+# 3 pixel uniforms.
+SHADERS = [
+    ("mesh.hlsl", "mesh_shaders.gen.h", [
+        ("kMeshVertex", "VSMain", "vs_5_1", "vs_6_0",
+         {("ubos", "VertexUniforms", 1, 0), ("ssbos", "bones", 0, 0)}),
+        ("kMeshPixel", "PSMain", "ps_5_1", "ps_6_0",
+         {("ubos", "PixelUniforms", 3, 0), ("textures", "tex", 2, 0),
+          ("textures", "spec_tex", 2, 1), ("textures", "glow_tex", 2, 2)}),
+    ]),
+    ("post.hlsl", "post_shaders.gen.h", [
+        ("kFullscreenVertex", "VSFullscreen", "vs_5_1", "vs_6_0", set()),
+        ("kResolvePixel", "PSResolve", "ps_5_1", "ps_6_0",
+         {("ubos", "PostUniforms", 3, 0), ("textures", "scene_tex", 2, 0),
+          ("textures", "depth_tex", 2, 1)}),
+    ]),
 ]
-
-# what spirv-cross --reflect must report, per stage: SDL_gpu's sets are 0 vertex
-# resources, 1 vertex uniforms, 2 pixel resources, 3 pixel uniforms
-EXPECTED_BINDINGS = {
-    "VSMain": {("ubos", "VertexUniforms", 1, 0), ("ssbos", "bones", 0, 0)},
-    "PSMain": {("ubos", "PixelUniforms", 3, 0), ("textures", "tex", 2, 0),
-               ("textures", "spec_tex", 2, 1), ("textures", "glow_tex", 2, 2)},
-}
 
 
 def find_tool(env, names, patterns):
@@ -73,7 +77,7 @@ def run(command):
     return result.stdout
 
 
-def check_reflection(entry, reflect_json):
+def check_reflection(entry, expected, reflect_json):
     data = json.loads(reflect_json)
     found = set()
     for kind in ("ubos", "ssbos", "textures", "separate_images", "separate_samplers"):
@@ -81,7 +85,6 @@ def check_reflection(entry, reflect_json):
             # dxc names a cbuffer's block type.<name>
             name = item["name"].removeprefix("type.")
             found.add((kind, name, item.get("set"), item.get("binding")))
-    expected = EXPECTED_BINDINGS[entry]
     if found != expected:
         sys.exit(f"build_shaders: {entry}'s SPIR-V bindings are {sorted(found)}, "
                  f"SDL_gpu wants {sorted(expected)}")
@@ -106,40 +109,44 @@ def main():
     spirv_cross = find_tool("SPIRV_CROSS", ["spirv-cross"],
                             [os.path.join(b, "spirv-cross" + exe) for b in sdk])
 
-    arrays = []
-    with tempfile.TemporaryDirectory() as tmp:
-        for stem, entry, fxc_profile, dxc_profile in STAGES:
-            dxbc = os.path.join(tmp, entry + ".dxbc")
-            run([fxc, "/nologo", "/O3", "/Qstrip_debug", "/Qstrip_reflect",
-                 "/T", fxc_profile, "/E", entry, "/Fo", dxbc, SOURCE])
-            spirv = os.path.join(tmp, entry + ".spv")
-            run([dxc, "-spirv", "-fspv-target-env=vulkan1.1", "-O3",
-                 "-T", dxc_profile, "-E", entry, "-Fo", spirv, SOURCE])
-            run([spirv_val, "--target-env", "vulkan1.1", spirv])
-            check_reflection(entry, run([spirv_cross, spirv, "--reflect"]))
-            with open(dxbc, "rb") as f:
-                arrays.append(c_array(stem + "Dxbc", f.read()))
-            with open(spirv, "rb") as f:
-                arrays.append(c_array(stem + "Spirv", f.read()))
-            print(f"{entry}: {os.path.getsize(dxbc)} bytes DXBC, "
-                  f"{os.path.getsize(spirv)} bytes SPIR-V")
+    for source_name, header_name, stages in SHADERS:
+        source = os.path.join(SHADER_DIR, source_name)
+        header_path = os.path.join(SHADER_DIR, header_name)
+        arrays = []
+        with tempfile.TemporaryDirectory() as tmp:
+            for stem, entry, fxc_profile, dxc_profile, expected in stages:
+                dxbc = os.path.join(tmp, entry + ".dxbc")
+                run([fxc, "/nologo", "/O3", "/Qstrip_debug", "/Qstrip_reflect",
+                     "/T", fxc_profile, "/E", entry, "/Fo", dxbc, source])
+                spirv = os.path.join(tmp, entry + ".spv")
+                run([dxc, "-spirv", "-fspv-target-env=vulkan1.1", "-O3",
+                     "-T", dxc_profile, "-E", entry, "-Fo", spirv, source])
+                run([spirv_val, "--target-env", "vulkan1.1", spirv])
+                check_reflection(entry, expected, run([spirv_cross, spirv, "--reflect"]))
+                with open(dxbc, "rb") as f:
+                    arrays.append(c_array(stem + "Dxbc", f.read()))
+                with open(spirv, "rb") as f:
+                    arrays.append(c_array(stem + "Spirv", f.read()))
+                print(f"{entry}: {os.path.getsize(dxbc)} bytes DXBC, "
+                      f"{os.path.getsize(spirv)} bytes SPIR-V")
 
-    header = "\n".join([
-        "// Generated by tools/shaders/build_shaders.py from mesh.hlsl; don't edit.",
-        "// DXBC (shader model 5.1) for SDL_gpu's Direct3D 12 backend, SPIR-V for its",
-        "// Vulkan backend. Entry points VSMain and PSMain.",
-        "#pragma once",
-        "",
-        "namespace band3::render::shaders {",
-        "",
-        "\n\n".join(arrays),
-        "",
-        "}  // namespace band3::render::shaders",
-        "",
-    ])
-    with open(HEADER, "w", newline="\n") as f:
-        f.write(header)
-    print(f"wrote {os.path.relpath(HEADER, REPO)}")
+        entries = " and ".join(stage[1] for stage in stages)
+        header = "\n".join([
+            f"// Generated by tools/shaders/build_shaders.py from {source_name}; don't edit.",
+            "// DXBC (shader model 5.1) for SDL_gpu's Direct3D 12 backend, SPIR-V for its",
+            f"// Vulkan backend. Entry points {entries}.",
+            "#pragma once",
+            "",
+            "namespace band3::render::shaders {",
+            "",
+            "\n\n".join(arrays),
+            "",
+            "}  // namespace band3::render::shaders",
+            "",
+        ])
+        with open(header_path, "w", newline="\n") as f:
+            f.write(header)
+        print(f"wrote {os.path.relpath(header_path, REPO)}")
 
 
 if __name__ == "__main__":

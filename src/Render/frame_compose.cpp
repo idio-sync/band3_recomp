@@ -74,6 +74,9 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
     fc.proc_cmds = frame.proc_cmds;
     fc.composed = 1;
     fc.world_frame = world.game_frame;
+    // post-processing as the post frame ran it, on the world it presents
+    fc.post = frame.post;
+    fc.post_consts = frame.post_consts;
 
     // shades: the world's, then the frame's
     fc.shades.reserve(world.shades.size() + frame.shades.size());

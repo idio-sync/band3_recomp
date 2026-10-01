@@ -197,3 +197,18 @@ TEST_CASE("a render check pairs the game's picture with a frame that shows its w
     CHECK_FALSE(DrawsWorld(fc));
     CHECK_FALSE(PresentsCapturedWorld(fc));
 }
+
+TEST_CASE("a composed frame has its post frame's post-processing") {
+    FrameCapture world = WorldFrame();
+    FrameCapture post = PostFrame();
+    world.post.valid = post.post.valid = 1;
+    world.post.saturation = -10;
+    post.post.saturation = -80;
+    post.post_consts.valid = 1;
+    post.post_consts.c24[0] = 4.0f;
+    auto fc = ComposeFrame(world, post);
+    REQUIRE(fc);
+    CHECK(fc->post.saturation == -80.0f);
+    CHECK(fc->post_consts.valid == 1);
+    CHECK(fc->post_consts.c24[0] == 4.0f);
+}

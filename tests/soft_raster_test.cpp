@@ -1,9 +1,12 @@
 // Checks that src/Render/soft_raster.cpp draws a capture's texture passes:
 // a pass's DrawRect quad into a texture, sampled by a back-buffer draw after
 // it, each draw seeing the version drawn before it, and a render target that
-// nothing drew sampling transparent black.
+// nothing drew sampling transparent black; and that the world's draws, those
+// before post_boundary, leave their alpha (the bloom weight) and depth in the
+// scene target as RB3's back buffer has them, under the overlay's.
 
 #include <doctest/doctest.h>
+#include <cstring>
 #include <memory>
 #include <vector>
 #include "src/Render/soft_raster.h"
@@ -179,4 +182,101 @@ TEST_CASE("a texture target keeps alpha: cleared 0, drawn by the colour's blend"
     // a = 0.5 * 0.5 + 0 * 0.5, the colour white * 0.5
     CHECK((tex[5] >> 24) == 64);
     CHECK((tex[5] & 0xff) == 128);
+}
+
+namespace {
+
+// an unlit material's shade, its colour the vertex colour's (PRELIT), with
+// PSEUDO_HDR if `hdr`: alpha then the luminance by c7's weights
+ShadeState FlatShade(bool hdr) {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = 18;
+    s.options = 1ull << shader_opt::kPrelit;
+    if (hdr) s.options |= 1ull << shader_opt::kPseudoHdr;
+    for (int c = 0; c < 4; c++) {
+        s.ps[ShadeRegIndex(0)][c] = 1.0f;  // colour
+        s.ps[ShadeRegIndex(1)][c] = 1.0f;  // ambient
+    }
+    // SetBloomColor's weights for a threshold of 1
+    const float bloom[4] = {0.3f, 0.59f, 0.11f, 1.0f};
+    for (int c = 0; c < 4; c++) s.ps[ShadeRegIndex(7)][c] = bloom[c];
+    s.vs[ShadeRegIndex(20)][0] = 1.0f;  // the texture transform, identity
+    s.vs[ShadeRegIndex(21)][1] = 1.0f;
+    return s;
+}
+
+DrawItem Shaded(float x0, float x1, uint32_t color, int32_t shade, int blend) {
+    DrawItem d = Item(Quad(x0, x1, color), 0);
+    d.shade = shade;
+    d.blend = blend;
+    return d;
+}
+
+uint32_t Alpha(uint32_t c) { return c >> 24; }
+
+}  // namespace
+
+TEST_CASE("the world's alpha is the bloom weight PSEUDO_HDR draws write, kept by the rest") {
+    // red, PSEUDO_HDR: alpha 0.3 everywhere; green without it over the left
+    // half keeps that; blue PSEUDO_HDR added over the right half leaves the
+    // larger, red's; then the overlay's white over the left quarter
+    FrameCapture f;
+    f.shades = {FlatShade(true), FlatShade(false)};
+    f.draws = {Shaded(-1, 1, 0xff0000ffu, 0, 1), Shaded(-1, 0, 0xff00ff00u, 1, 1),
+               Shaded(0, 1, 0xffff0000u, 0, 2), Shaded(-1, -0.5f, 0xffffffffu, 1, 1)};
+    f.passes = {BackBuffer(0, 4)};
+    f.post_boundary = 3;
+    std::vector<uint32_t> rgba;
+    Rasterize(f, Small(), rgba);
+    // the picture: opaque, the overlay over the world
+    CHECK(rgba[1 * 8 + 0] == 0xffffffffu);
+    CHECK(rgba[1 * 8 + 2] == kGreen);
+    CHECK(rgba[1 * 8 + 6] == 0xffff00ffu);  // red plus blue
+
+    RasterOptions o = Small();
+    o.view = RasterView::kSceneAlpha;
+    Rasterize(f, o, rgba);
+    // 0.3 * 255, under the overlay too (it isn't in the scene), and grey
+    CHECK(Alpha(rgba[1 * 8 + 0]) == 0xff);
+    CHECK((rgba[1 * 8 + 0] & 0xff) == 77);
+    CHECK((rgba[1 * 8 + 2] & 0xff) == 77);
+    CHECK((rgba[1 * 8 + 6] & 0xff) == 77);
+    CHECK(((rgba[1 * 8 + 6] >> 8) & 0xff) == 77);
+
+    // a draw that writes it without blending (Src) leaves its own, smaller
+    f.draws[2].blend = 1;
+    Rasterize(f, o, rgba);
+    CHECK((rgba[1 * 8 + 6] & 0xff) == 28);  // 0.11 * 255
+    // and a material that asks writes alpha without PSEUDO_HDR: green's own 1
+    f.shades[1].alpha_write = 1;
+    Rasterize(f, o, rgba);
+    CHECK((rgba[1 * 8 + 2] & 0xff) == 255);
+
+    // a scene nothing drew is the clear's alpha 0
+    FrameCapture empty;
+    Rasterize(empty, o, rgba);
+    CHECK(rgba[9] == 0xff000000u);
+}
+
+TEST_CASE("the world's depth is readable where it left it, before the overlay") {
+    FrameCapture f;
+    f.shades = {FlatShade(false)};
+    DrawItem world = Shaded(-1, 0, 0xff0000ffu, 0, 1);
+    world.z_mode = 1;  // tested and written, at w 1
+    DrawItem overlay = Shaded(0, 1, 0xff00ff00u, 0, 1);
+    overlay.z_mode = 1;
+    overlay.cam = 2;  // a camera of its own, which clears depth
+    f.draws = {world, overlay};
+    f.passes = {BackBuffer(0, 2)};
+    f.post_boundary = 1;
+    RasterOptions o = Small();
+    o.view = RasterView::kSceneDepth;
+    std::vector<uint32_t> rgba;
+    Rasterize(f, o, rgba);
+    // w 1 is near: white; where the world drew nothing, black
+    CHECK(rgba[1 * 8 + 1] == 0xffffffffu);
+    CHECK(rgba[1 * 8 + 6] == 0xff000000u);
+    CHECK(DepthViewGrey(kNearW / 4096.0f) == 0.0f);
+    CHECK(DepthViewGrey(kNearW / 256.0f) == doctest::Approx(0.5f));
 }

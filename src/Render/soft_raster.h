@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -16,8 +18,20 @@
 // sampled in between). Texture targets keep alpha: impostors are alpha-cut
 // against the clear's 0, and outfit layers blend by it. Mips aren't sampled:
 // every texture is read nearest at level 0, on the GPU too.
+//
+// The back buffer's draws are split at post_boundary, as RB3 draws them: the
+// world's go to a scene target, which keeps alpha as RB3's back buffer does
+// (the bloom weight PSEUDO_HDR shaders write, WritesSceneAlpha below; cleared
+// to 0) and whose depth stays readable; at the boundary it's resolved into the
+// picture, where post-processing goes, and the overlay's draws (track, HUD) go
+// on top. For now the resolve is a copy (alpha made opaque).
 
 namespace band3::render {
+
+// What a renderer hands back: the picture, or, to check the scene target, its
+// alpha or its depth as grey (DepthViewGrey) where the world's draws left them
+// at post_boundary, without the overlay
+enum class RasterView { kFinal, kSceneAlpha, kSceneDepth };
 
 struct RasterOptions {
     uint32_t width = 640;
@@ -41,6 +55,7 @@ struct RasterOptions {
     // transparent black; off, they're never used (texture_passes off then
     // draws render targets untextured)
     bool rt_guest_pixels = true;
+    RasterView view = RasterView::kFinal;
 };
 
 struct RasterStats {
@@ -78,6 +93,30 @@ inline bool DrawnInTexturePass(const DrawItem& d) { return d.mip_level == 0; }
 // target
 inline bool IsPassTarget(const Texture* t) {
     return t && t->tex_obj && IsPassTargetType(t->tex_type);
+}
+
+// Whether a world draw writes the scene target's alpha. RB3 writes the back
+// buffer's alpha only with a PSEUDO_HDR shader (its bloom weight) or a
+// material that asks (alpha_write; SetColorWriteMask, rb3-xenon
+// rndobj/Shader.cpp), and blends it apart from the colour, ONE ONE MAX
+// (DxRnd::SetDefaultRenderStates, Mat_NG.cpp's SetBasicState): a draw that
+// blends leaves the larger of its alpha and what's there, one that doesn't
+// (Src) its own. Into a texture its alpha is written always (Offscreen); the
+// renderers blend that by the colour's factors.
+inline bool WritesSceneAlpha(const ShadeState* s) {
+    return s && (s->Option(shader_opt::kPseudoHdr) || s->alpha_write);
+}
+
+// the renderers' depth, kNearW / w (w the clip w, larger is nearer, 0 where
+// nothing drew), as RasterView::kSceneDepth shows it: grey falling off with
+// log2 of the distance, white to w 16, black from w 4096 and where nothing
+// drew (a venue's cameras see from about 100 to a few thousand)
+inline constexpr float kNearW = 1e-3f;
+inline float DepthViewGrey(float depth) {
+    if (!(depth > 0)) return 0;
+    const float w = kNearW / depth;
+    const float g = 1.0f - (std::log2(std::max(w, 1.0f)) - 4.0f) / 8.0f;
+    return std::clamp(g, 0.0f, 1.0f);
 }
 
 // RndTex::Type's kRenderedNoZ bit: the texture has no depth buffer
