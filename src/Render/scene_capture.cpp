@@ -17,6 +17,8 @@
 extern "C" void __imp__RndCam__Select(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxMesh__DrawShowing(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxRnd__Present(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__DxMultiMesh__DrawShowing(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__DxParticleSys__DrawParticles(PPCContext& ctx, uint8_t* base);
 
 namespace band3::render {
 namespace {
@@ -53,6 +55,19 @@ constexpr uint32_t kMat_Prelit = 0x9a;
 constexpr uint32_t kMat_AlphaCut = 0x9b;
 constexpr uint32_t kMat_AlphaThreshold = 0xa0;
 constexpr uint32_t kMat_Fur = 0x104 + 8;
+// RndMultiMesh (rndobj/MultiMesh.h)
+constexpr uint32_t kMultiMesh_Mesh = 0x24 + 8;    // ObjPtr<RndMesh>
+constexpr uint32_t kMultiMesh_Instances = 0x30;  // std::list<Instance>
+constexpr uint32_t kMaxInstances = 10000;
+// RndParticleSys and RndParticle (rndobj/Part.h), from the full object
+constexpr uint32_t kPart_Active = 0x100;
+constexpr uint32_t kPart_NumActive = 0x104;
+constexpr uint32_t kPart_Mat = 0x1d4 + 8;  // ObjPtr<RndMat>
+constexpr uint32_t kParticle_Color = 0x0;
+constexpr uint32_t kParticle_Pos = 0x20;
+constexpr uint32_t kParticle_Size = 0x48;
+constexpr uint32_t kParticle_Next = 0x5c;
+constexpr uint32_t kMaxParticles = 16000;  // four verts each, u16 indices
 // DxTex (rnddx9/Tex.h)
 constexpr uint32_t kDxTex_Texture = 0x78;
 // RndCam (rndobj/Cam.h)
@@ -563,31 +578,17 @@ std::shared_ptr<const Texture> CaptureTexture(const Guest& g, uint32_t tex_obj,
     return tex;
 }
 
-void CaptureMesh(uint8_t* base, uint32_t mesh) {
-    State& s = S();
-    FrameCapture& fc = *s.building;
-    const Guest g{base};
-
+// false (and counted) unless the current camera draws to the back buffer
+// outside the velocity pass
+bool ToBackBuffer(const Guest& g, State& s, FrameCapture& fc) {
     if (!s.cam || !s.cam_backbuffer) {
         fc.skipped_target++;
-        return;
+        return false;
     }
     const uint32_t holder = g.U32(kDrawModeHolder);
     if (holder && g.U32(holder + kDrawMode) == kDrawModeVelocity) {
         fc.skipped_velocity++;
-        return;
-    }
-    const uint32_t mat = g.U32(mesh + kMesh_Mat);
-    uint32_t geom = g.U32(mesh + kMesh_GeomOwner);
-    if (!geom) geom = mesh;
-    if (!mat || g.U32(mat + kMat_Fur)) {
-        fc.skipped_no_geom++;
-        return;
-    }
-    auto geometry = CaptureGeometry(g, geom, fc);
-    if (!geometry || geometry->indices.empty()) {
-        fc.skipped_no_geom++;
-        return;
+        return false;
     }
     if (!s.vp_valid) {
         s.vp = ReadMatrix4(g, s.cam + kCam_ViewProj);
@@ -597,11 +598,58 @@ void CaptureMesh(uint8_t* base, uint32_t mesh) {
         fc.cams++;
         s.cam_counted = true;
     }
+    return true;
+}
 
+// a draw of `geometry` with material `mat`, for the current camera
+DrawItem MakeItem(const Guest& g, State& s, FrameCapture& fc, uint32_t mat, uint32_t owner,
+                  std::shared_ptr<const Geometry> geometry) {
     DrawItem item;
     item.geom = std::move(geometry);
-    item.world = ReadXfm(g, mesh + kMesh_WorldXfm);
+    item.world = Identity();
     item.view_proj = s.vp;
+    for (int i = 0; i < 4; i++) item.color[i] = g.F32(mat + kMat_Color + i * 4);
+    item.blend = int(g.U32(mat + kMat_Blend));
+    item.z_mode = int(g.U32(mat + kMat_ZMode));
+    item.prelit = g.U8(mat + kMat_Prelit) != 0;
+    item.alpha_cut = g.U8(mat + kMat_AlphaCut) != 0;
+    item.alpha_threshold = int(g.U32(mat + kMat_AlphaThreshold));
+    item.cam = s.cam;
+    item.mesh = owner;
+    const uint32_t tex = g.U32(mat + kMat_DiffuseTex);
+    if (tex) item.tex = CaptureTexture(g, tex, fc);
+    return item;
+}
+
+// the mesh's material and geometry, or false (and counted) if it draws nothing
+bool MeshParts(const Guest& g, FrameCapture& fc, uint32_t mesh, uint32_t& mat,
+               std::shared_ptr<const Geometry>& geometry) {
+    mat = g.U32(mesh + kMesh_Mat);
+    uint32_t geom = g.U32(mesh + kMesh_GeomOwner);
+    if (!geom) geom = mesh;
+    if (!mat || g.U32(mat + kMat_Fur)) {
+        fc.skipped_no_geom++;
+        return false;
+    }
+    geometry = CaptureGeometry(g, geom, fc);
+    if (!geometry || geometry->indices.empty()) {
+        fc.skipped_no_geom++;
+        return false;
+    }
+    return true;
+}
+
+void CaptureMesh(uint8_t* base, uint32_t mesh) {
+    State& s = S();
+    FrameCapture& fc = *s.building;
+    const Guest g{base};
+    if (!ToBackBuffer(g, s, fc)) return;
+    uint32_t mat;
+    std::shared_ptr<const Geometry> geometry;
+    if (!MeshParts(g, fc, mesh, mat, geometry)) return;
+
+    DrawItem item = MakeItem(g, s, fc, mat, mesh, std::move(geometry));
+    item.world = ReadXfm(g, mesh + kMesh_WorldXfm);
     const uint32_t bones = g.U32(mesh + kMesh_BonesBegin);
     const uint32_t bones_end = g.U32(mesh + kMesh_BonesEnd);
     if (bones && bones_end > bones) {
@@ -615,16 +663,77 @@ void CaptureMesh(uint8_t* base, uint32_t mesh) {
                                   : Identity();
         }
     }
-    for (int i = 0; i < 4; i++) item.color[i] = g.F32(mat + kMat_Color + i * 4);
-    item.blend = int(g.U32(mat + kMat_Blend));
-    item.z_mode = int(g.U32(mat + kMat_ZMode));
-    item.prelit = g.U8(mat + kMat_Prelit) != 0;
-    item.alpha_cut = g.U8(mat + kMat_AlphaCut) != 0;
-    item.alpha_threshold = int(g.U32(mat + kMat_AlphaThreshold));
-    item.cam = s.cam;
-    item.mesh = mesh;
-    const uint32_t tex = g.U32(mat + kMat_DiffuseTex);
-    if (tex) item.tex = CaptureTexture(g, tex, fc);
+    fc.draws.push_back(std::move(item));
+}
+
+// DxMultiMesh draws its mesh once per instance, instanced, without going
+// through the mesh's DrawShowing; one draw per instance here
+void CaptureMultiMesh(uint8_t* base, uint32_t multimesh) {
+    State& s = S();
+    FrameCapture& fc = *s.building;
+    const Guest g{base};
+    const uint32_t mesh = g.U32(multimesh + kMultiMesh_Mesh);
+    if (!mesh || !ToBackBuffer(g, s, fc)) return;
+    uint32_t mat;
+    std::shared_ptr<const Geometry> geometry;
+    if (!MeshParts(g, fc, mesh, mat, geometry)) return;
+
+    const DrawItem proto = MakeItem(g, s, fc, mat, mesh, std::move(geometry));
+    // std::list with its sentinel node inline: next at +0, the Instance at +8
+    const uint32_t head = multimesh + kMultiMesh_Instances;
+    uint32_t n = 0;
+    for (uint32_t node = g.U32(head); node && node != head && n < kMaxInstances;
+         node = g.U32(node), n++) {
+        DrawItem item = proto;
+        item.world = ReadXfm(g, node + 8);
+        fc.draws.push_back(std::move(item));
+    }
+    fc.multimesh_instances += n;
+}
+
+// DxParticleSys's vertex fill: one camera-facing quad per active particle
+void CaptureParticles(uint8_t* base, uint32_t sys) {
+    State& s = S();
+    FrameCapture& fc = *s.building;
+    const Guest g{base};
+    const uint32_t mat = g.U32(sys + kPart_Mat);
+    if (!mat || !g.U32(sys + kPart_NumActive) || !ToBackBuffer(g, s, fc)) return;
+
+    // the camera's right (x) and up (z) axes; Milo cameras look down +y
+    const Mat4 cam = ReadXfm(g, s.cam + kTrans_WorldXfm);
+    auto geom = std::make_shared<Geometry>();
+    uint32_t n = 0;
+    for (uint32_t p = g.U32(sys + kPart_Active); p && n < kMaxParticles;
+         p = g.U32(p + kParticle_Next), n++) {
+        float pos[3], col[4];
+        for (int i = 0; i < 3; i++) pos[i] = g.F32(p + kParticle_Pos + i * 4);
+        for (int i = 0; i < 4; i++)
+            col[i] = std::clamp(g.F32(p + kParticle_Color + i * 4), 0.0f, 1.0f);
+        const float half = g.F32(p + kParticle_Size) * 0.5f;
+        uint32_t rgba = 0;
+        for (int i = 0; i < 4; i++) rgba |= uint32_t(col[i] * 255.0f + 0.5f) << (8 * i);
+        const float corner[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+        const float uv[4][2] = {{0, 1}, {1, 1}, {1, 0}, {0, 0}};
+        const uint16_t first = uint16_t(geom->verts.size());
+        for (int k = 0; k < 4; k++) {
+            Vertex v{};
+            for (int i = 0; i < 3; i++) {
+                v.pos[i] = pos[i] + (cam.m[0][i] * corner[k][0] + cam.m[2][i] * corner[k][1]) * half;
+                v.nrm[i] = -cam.m[1][i];
+            }
+            v.uv[0] = uv[k][0];
+            v.uv[1] = uv[k][1];
+            v.color = rgba;
+            geom->verts.push_back(v);
+        }
+        geom->indices.insert(geom->indices.end(),
+                             {first, uint16_t(first + 1), uint16_t(first + 2), first,
+                              uint16_t(first + 2), uint16_t(first + 3)});
+    }
+    if (geom->indices.empty()) return;
+    fc.particles += n;
+    DrawItem item = MakeItem(g, s, fc, mat, sys, std::move(geom));
+    item.prelit = true;  // the particle colour is the vertex colour
     fc.draws.push_back(std::move(item));
 }
 
@@ -675,6 +784,20 @@ extern "C" REX_FUNC(DxMesh__DrawShowing) {
     __imp__DxMesh__DrawShowing(ctx, base);
     if (!g_enabled.load(std::memory_order_relaxed)) return;
     CaptureMesh(base, mesh);
+}
+
+extern "C" REX_FUNC(DxMultiMesh__DrawShowing) {
+    const uint32_t multimesh = ctx.r3.u32;
+    __imp__DxMultiMesh__DrawShowing(ctx, base);
+    if (!g_enabled.load(std::memory_order_relaxed)) return;
+    CaptureMultiMesh(base, multimesh);
+}
+
+extern "C" REX_FUNC(DxParticleSys__DrawParticles) {
+    const uint32_t sys = ctx.r3.u32;
+    __imp__DxParticleSys__DrawParticles(ctx, base);
+    if (!g_enabled.load(std::memory_order_relaxed)) return;
+    CaptureParticles(base, sys);
 }
 
 extern "C" REX_FUNC(DxRnd__Present) {

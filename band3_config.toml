@@ -42507,7 +42507,7 @@ strcpy_s                = 0x8282B0B8
 0x8273F188 = { name = "DxMultiMesh__Shutdown", size = 0x5C }
 0x8273F1E8 = { name = "rex_sub_8273F1E8", size = 0x188 }
 0x8273F370 = { name = "rex_sub_8273F370", size = 0x29C }
-0x8273F610 = { name = "rex_sub_8273F610", size = 0x78 }
+0x8273F610 = { name = "DxMultiMesh__DrawShowing", size = 0x78 }
 0x8273F690 = { name = "DxMultiMesh__ct", size = 0x10C }
 0x8273F79C = { name = "rex_sub_8273F79C", size = 0x44 }
 0x8273F7E0 = { name = "rex_sub_8273F7E0", size = 0x44 }
@@ -42582,7 +42582,7 @@ strcpy_s                = 0x8282B0B8
 0x8274090C = { name = "rex_sub_8274090C", size = 0x44 }
 0x82740950 = { name = "rex_sub_82740950", size = 0x44 }
 0x82740998 = { name = "DxParticleSys__vbase_destructor", size = 0x6C }
-0x82740A08 = { name = "rex_sub_82740A08", size = 0x224 }
+0x82740A08 = { name = "DxParticleSys__DrawParticles", size = 0x224 }
 0x82740C30 = { name = "DxParticleSys__SetType_82740C30", size = 0xC }
 0x82740C48 = { name = "rex_sub_82740C48", size = 0x70 }
 0x82740CB8 = { name = "rex_sub_82740CB8", size = 0x28 }

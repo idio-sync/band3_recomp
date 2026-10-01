@@ -69,7 +69,7 @@ void Shade(const DrawState& ds, const float uv[2], const float n[3], const float
         for (int i = 0; i < 4; i++) out[i] *= float((t >> (8 * i)) & 0xff) / 255.0f;
     }
     if (it.prelit) {
-        for (int i = 0; i < 3; i++) out[i] *= vc[i];
+        for (int i = 0; i < 4; i++) out[i] *= vc[i];
     } else if (ds.lighting) {
         const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
         float d = 0.0f;

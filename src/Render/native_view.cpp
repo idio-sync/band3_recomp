@@ -28,15 +28,17 @@ std::string Describe(const FrameCapture& fc, const RasterStats& rs) {
         verts += uint32_t(d.geom->verts.size());
         tris += uint32_t(d.geom->indices.size() / 3);
     }
-    char buf[512];
+    char buf[640];
     std::snprintf(buf, sizeof(buf),
                   "frame %llu: %zu draws (%u skinned, %u verts, %u tris) from %u cameras\n"
                   "skipped: %u render-target, %u velocity, %u no geometry; %u mutable\n"
+                  "%u multimesh instances, %u particles\n"
                   "textures: %u decoded, %u other formats; cache hits geom %u tex %u\n"
                   "raster: %u draws, %u tris on screen, %u pixels, %.1f ms\n",
                   static_cast<unsigned long long>(fc.frame), fc.draws.size(), skinned, verts,
                   tris, fc.cams, fc.skipped_target, fc.skipped_velocity, fc.skipped_no_geom,
-                  fc.mutable_meshes, fc.textured, fc.untextured_format, fc.geom_cached,
+                  fc.mutable_meshes, fc.multimesh_instances, fc.particles, fc.textured,
+                  fc.untextured_format, fc.geom_cached,
                   fc.tex_cached, rs.draws, rs.triangles, rs.pixels, rs.ms);
     std::string s = buf;
     for (auto& [k, n] : blends) s += "  " + k + ": " + std::to_string(n) + "\n";

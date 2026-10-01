@@ -40,7 +40,8 @@ struct Texture {
     uint32_t format = 0;         // Xenos TextureFormat, for the stats
 };
 
-// one DxMesh::DrawShowing that reached the back buffer (first material pass)
+// one mesh draw that reached the back buffer (first material pass): a
+// DxMesh::DrawShowing, one DxMultiMesh instance, or a particle system's quads
 struct DrawItem {
     std::shared_ptr<const Geometry> geom;
     std::shared_ptr<const Texture> tex;
@@ -65,6 +66,8 @@ struct FrameCapture {
     uint32_t skipped_velocity = 0; // motion blur velocity pass
     uint32_t skipped_no_geom = 0;  // no material, buffers or faces
     uint32_t mutable_meshes = 0;   // drawn from CPU verts
+    uint32_t multimesh_instances = 0;
+    uint32_t particles = 0;
     uint32_t textured = 0;
     uint32_t untextured_format = 0; // texture present in a format not decoded
     uint32_t geom_cached = 0;
