@@ -59,6 +59,8 @@ constexpr IniSetting kIniSettings[] = {
     {"game", "rb3e_mode", "rb3e_mode"},
     {"game", "song_speed", "song_speed"},
     {"game", "track_speed", "track_speed"},
+    {"game", "unlock_clothing", "unlock_clothing"},
+    {"game", "gold_on_all_difficulties", "gold_on_all_difficulties"},
     {"audio", "max_queued_frames", "audio_maxqframes"},
     {"memory", "main_heap_size", "main_heap_size"},
     {"memory", "char_heap_size", "char_heap_size"},

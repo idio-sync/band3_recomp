@@ -361,6 +361,11 @@ Mode (green and orange, red and blue swapped), Gem Color Shuffle (gems drawn in 
 colours), Gem Shuffle (each chord's lanes shuffled) and Double Bass (expert drums play
 the 2x bass pedal notes).
 
+Two of RB3E's options are settings too (Band3 → Game, both off by default):
+`unlock_clothing` unlocks every piece of clothing, tattoo and face paint and the video
+venues without earning them, and `gold_on_all_difficulties` lets gold stars be earned
+below expert, from the next song.
+
 ### Steam Deck
 
 On a Steam Deck, band3 starts fullscreen and letterboxed (the game is 16:9, the screen

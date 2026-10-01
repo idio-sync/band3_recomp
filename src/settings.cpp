@@ -116,6 +116,14 @@ REXCVAR_DEFINE_DOUBLE(track_speed, 1.0, "Band3/Game",
     "twice as far apart. Applies from the next song")
     .range(0.1, 10.0);
 
+REXCVAR_DEFINE_BOOL(unlock_clothing, false, "Band3/Game",
+    "Unlock every piece of clothing, tattoo and face paint for your characters, and the "
+    "video venues, without earning them (RB3Enhanced's UnlockClothing)");
+
+REXCVAR_DEFINE_BOOL(gold_on_all_difficulties, false, "Band3/Game",
+    "Let gold stars be earned on every difficulty, not only expert "
+    "(RB3Enhanced's AllowGoldOnAllDifficulties). Applies from the next song");
+
 // Band3/MIDI drums
 
 REXCVAR_DEFINE_BOOL(midi_drums, false, "Band3/MIDI drums",
