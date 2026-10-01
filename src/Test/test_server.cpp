@@ -23,6 +23,7 @@
 #include <ctime>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -73,21 +74,32 @@ public:
                rex::ui::Window* window, const std::atomic<bool>& stopping)
         : runtime_(runtime), app_context_(app_context), window_(window), stopping_(stopping) {}
 
-    input::InstrumentKind Kind() override { return input::VirtualInstrument::Get().kind(); }
-
-    void SetKind(input::InstrumentKind kind) override {
-        OnUIThread([kind] { input::VirtualInstrument::Get().SetKind(kind); });
+    std::optional<input::InstrumentKind> Kind(int player) override {
+        const auto& instrument = input::VirtualInstrument::ForPlayer(player);
+        if (!instrument.plugged()) return std::nullopt;
+        return instrument.kind();
     }
 
-    input::InstrumentInputs Held() override { return input::VirtualInstrument::Get().Held(); }
-
-    void SetHeld(const input::InstrumentInputs& in) override {
-        input::VirtualInstrument::Get().SetHeld(in);
+    // the settings' instrument changes through the settings, on the UI thread
+    void Plug(int player, input::InstrumentKind kind) override {
+        OnUIThread([player, kind] { input::VirtualInstrument::ForPlayer(player).Plug(kind); });
     }
 
-    void Pulse(std::function<void(input::InstrumentInputs&)> change,
+    void Unplug(int player) override {
+        OnUIThread([player] { input::VirtualInstrument::ForPlayer(player).Unplug(); });
+    }
+
+    input::InstrumentInputs Held(int player) override {
+        return input::VirtualInstrument::ForPlayer(player).Held();
+    }
+
+    void SetHeld(int player, const input::InstrumentInputs& in) override {
+        input::VirtualInstrument::ForPlayer(player).SetHeld(in);
+    }
+
+    void Pulse(int player, std::function<void(input::InstrumentInputs&)> change,
                std::chrono::milliseconds length) override {
-        input::VirtualInstrument::Get().Pulse(std::move(change), length);
+        input::VirtualInstrument::ForPlayer(player).Pulse(std::move(change), length);
     }
 
     GameStateSnapshot State() override { return GameState::Get().Snapshot(); }
@@ -343,7 +355,7 @@ private:
     void Disconnect(socket_t& client) {
         CloseSocket(client);
         client = kNoSocket;
-        target_->SetHeld({});
+        ReleaseAllPlayers(*target_);
         REXLOG_INFO("Test server: client disconnected");
     }
 

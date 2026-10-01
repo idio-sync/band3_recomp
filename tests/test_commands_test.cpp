@@ -2,7 +2,9 @@
 // stand-in for the game whose clock only moves when the commands sleep.
 
 #include <doctest/doctest.h>
+#include <array>
 #include <chrono>
+#include <optional>
 #include <functional>
 #include <string>
 #include <utility>
@@ -18,15 +20,28 @@ namespace input = band3::input;
 
 namespace {
 
+struct PulseRecord {
+    InstrumentInputs pressed;
+    std::chrono::milliseconds length;
+};
+
+struct FakePlayer {
+    std::optional<InstrumentKind> kind;
+    InstrumentInputs held;
+    std::vector<PulseRecord> pulses;
+    int plugs = 0;
+};
+
 class FakeGame final : public TestTarget {
 public:
-    InstrumentKind kind = InstrumentKind::kGuitar;
-    InstrumentInputs held;
-    struct PulseRecord {
-        InstrumentInputs pressed;
-        std::chrono::milliseconds length;
-    };
-    std::vector<PulseRecord> pulses;
+    // player 1 starts plugged in as a guitar, as in the game
+    std::array<FakePlayer, 4> players{FakePlayer{InstrumentKind::kGuitar, {}, {}, 0}};
+    FakePlayer& player(int n) { return players[n - 1]; }
+    // player 1's, which most tests drive
+    std::optional<InstrumentKind>& kind = players[0].kind;
+    InstrumentInputs& held = players[0].held;
+    std::vector<PulseRecord>& pulses = players[0].pulses;
+    int& kind_changes = players[0].plugs;
     GameStateSnapshot state;
     // run on every sleep, to change the state as time passes
     std::function<void(FakeGame&)> on_sleep;
@@ -40,20 +55,20 @@ public:
     uint32_t pad_packet = 0;
     bool pad_connected = true;
     int pad_player = 0;
-    int kind_changes = 0;
 
-    InstrumentKind Kind() override { return kind; }
-    void SetKind(InstrumentKind k) override {
-        kind = k;
-        kind_changes++;
+    std::optional<InstrumentKind> Kind(int p) override { return player(p).kind; }
+    void Plug(int p, InstrumentKind k) override {
+        player(p).kind = k;
+        player(p).plugs++;
     }
-    InstrumentInputs Held() override { return held; }
-    void SetHeld(const InstrumentInputs& in) override { held = in; }
-    void Pulse(std::function<void(InstrumentInputs&)> change,
+    void Unplug(int p) override { player(p).kind.reset(); }
+    InstrumentInputs Held(int p) override { return player(p).held; }
+    void SetHeld(int p, const InstrumentInputs& in) override { player(p).held = in; }
+    void Pulse(int p, std::function<void(InstrumentInputs&)> change,
                std::chrono::milliseconds length) override {
         InstrumentInputs pressed;
         change(pressed);
-        pulses.push_back({pressed, length});
+        player(p).pulses.push_back({pressed, length});
     }
     GameStateSnapshot State() override { return state; }
     std::string Screenshot(const std::string& name, ScreenshotInfo& out) override {
@@ -124,7 +139,7 @@ TEST_CASE("state reports the game state and the instrument") {
     CHECK(Has(reply, "\"shortname\":\"ruby\""));
     CHECK(Has(reply, "\"name\":\"Ruby\""));
     CHECK(Has(reply, "\"frame\":42"));
-    CHECK(Has(reply, "\"instrument\":\"drums\""));
+    CHECK(Has(reply, "\"instruments\":[\"drums\",null,null,null]"));
     CHECK(Has(reply, "{\"exists\":true,\"difficulty\":3,\"track\":2}"));
 }
 
@@ -353,6 +368,103 @@ TEST_CASE("pad reports what the game reads from a player") {
 
     game.pad_connected = false;
     CHECK(Has(RunCommand("pad 2", game), "\"connected\":false"));
+}
+
+TEST_CASE("a pN prefix sends a controller command to that player") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("p2 instrument drums", game)));
+    CHECK(game.player(2).kind == InstrumentKind::kDrums);
+    CHECK(game.player(1).kind == InstrumentKind::kGuitar);
+
+    CHECK(Ok(RunCommand("p2 hit red_pad 90", game)));
+    REQUIRE(game.player(2).pulses.size() == 1);
+    CHECK(game.player(2).pulses[0].pressed.drums.pads[input::kRedPad] == 90);
+    CHECK(game.player(1).pulses.empty());
+
+    CHECK(Ok(RunCommand("p1 press green", game)));
+    CHECK(game.player(1).pulses.size() == 1);
+    CHECK(game.player(2).pulses.size() == 1);
+}
+
+TEST_CASE("hold and release act on their own player only") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("p3 instrument guitar", game)));
+    CHECK(Ok(RunCommand("hold green", game)));
+    CHECK(Ok(RunCommand("p3 hold green+orange", game)));
+    CHECK(Ok(RunCommand("p3 release all", game)));
+    CHECK(game.player(1).held.guitar.frets[input::kGreen]);
+    CHECK_FALSE(game.player(3).held.guitar.frets[input::kGreen]);
+    CHECK(Ok(RunCommand("p3 axis whammy 1", game)));
+    CHECK(game.player(3).held.guitar.whammy == doctest::Approx(1.0f));
+    CHECK(game.player(1).held.guitar.whammy == doctest::Approx(0.0f));
+}
+
+TEST_CASE("driving a player with nothing plugged in says how to plug one in") {
+    FakeGame game;
+    for (const char* line : {"p3 press green", "p3 hold green", "p3 release all",
+                             "p3 hit red_pad", "p3 axis whammy 0.5"}) {
+        const std::string reply = RunCommand(line, game);
+        CHECK_FALSE(Ok(reply));
+        CHECK(Has(reply, "player 3 has no virtual instrument"));
+        CHECK(Has(reply, "p3 instrument"));
+    }
+}
+
+TEST_CASE("an input the player's instrument lacks names the player") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("p2 instrument drums", game)));
+    const std::string reply = RunCommand("p2 press green", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(Has(reply, "player 2"));
+    CHECK(Has(reply, "green"));
+}
+
+TEST_CASE("unplug takes a player's instrument out") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("p2 instrument keys", game)));
+    CHECK(Ok(RunCommand("p2 hold key3", game)));
+    CHECK(Ok(RunCommand("p2 unplug", game)));
+    CHECK_FALSE(game.player(2).kind.has_value());
+    CHECK(game.player(2).held.keys.keys[3] == 0);
+    // already empty: nothing to do
+    CHECK(Ok(RunCommand("p2 unplug", game)));
+    CHECK(Ok(RunCommand("unplug", game)));
+    CHECK_FALSE(game.player(1).kind.has_value());
+}
+
+TEST_CASE("state lists every player's instrument") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("p3 instrument squier", game)));
+    CHECK(Has(RunCommand("state", game), "\"instruments\":[\"guitar\",null,\"squier\",null]"));
+}
+
+TEST_CASE("a bad or misplaced player prefix is an error") {
+    FakeGame game;
+    for (const char* line : {"p0 press green", "p5 press green", "px press green", "p2",
+                             "p2 state", "p2 wait in_game", "p2 expect menus",
+                             "p2 screenshot", "p2 set autoplay true", "p2 quit"}) {
+        CHECK_FALSE(Ok(RunCommand(line, game)));
+    }
+    CHECK_FALSE(game.quit);
+    CHECK(game.slept == 0ms);
+}
+
+TEST_CASE("pad takes a player as an argument or a prefix, not both") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("p3 pad", game)));
+    CHECK(game.pad_player == 3);
+    CHECK_FALSE(Ok(RunCommand("p3 pad 2", game)));
+}
+
+TEST_CASE("releasing everything lets go on every player, instruments stay plugged in") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("p2 instrument guitar", game)));
+    CHECK(Ok(RunCommand("hold green", game)));
+    CHECK(Ok(RunCommand("p2 hold red", game)));
+    ReleaseAllPlayers(game);
+    CHECK_FALSE(game.player(1).held.guitar.frets[input::kGreen]);
+    CHECK_FALSE(game.player(2).held.guitar.frets[input::kRed]);
+    CHECK(game.player(2).kind == InstrumentKind::kGuitar);
 }
 
 TEST_CASE("quit asks the game to close") {

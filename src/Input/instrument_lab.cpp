@@ -94,7 +94,7 @@ void DrawGuitar(GuitarInputs& g) {
 }
 
 void DrawDrums(uint8_t velocity) {
-    auto& instrument = VirtualInstrument::Get();
+    auto& instrument = VirtualInstrument::FromSettings();
     ImGui::TextDisabled("Hits");
     for (int p = 0; p < kPadCount; p++) {
         if (p > 0) ImGui::SameLine();
@@ -139,7 +139,7 @@ void DrawKeys(KeysInputs& k, uint8_t velocity) {
 }
 
 void DrawProGuitar(ProGuitarInputs& g, InstrumentKind kind, uint8_t velocity) {
-    auto& instrument = VirtualInstrument::Get();
+    auto& instrument = VirtualInstrument::FromSettings();
     const int max_fret = kind == InstrumentKind::kProGuitarMustang ? kMustangFrets : kMaxProFret;
     ImGui::TextDisabled("Fret held on each string (0 = open), then pluck");
     for (int s = 0; s < kStringCount; s++) {
@@ -187,7 +187,7 @@ void DrawState(const Gamepad360& g) {
 
 void DrawReport(InstrumentKind kind) {
     DrawCaps(CapsFor(kind));
-    DrawState(Encode(kind, VirtualInstrument::Get().Current()));
+    DrawState(Encode(kind, VirtualInstrument::FromSettings().Current()));
 }
 
 // a raw report as rows of 16 hex bytes, each row led by its offset
@@ -551,7 +551,7 @@ void DrawLag() {
 }
 
 void InstrumentLabDialog::OnDraw(ImGuiIO&) {
-    auto& instrument = VirtualInstrument::Get();
+    auto& instrument = VirtualInstrument::FromSettings();
     // the Lab's buttons are held only while its Virtual instrument tab shows: let
     // go of them once when it stops showing, and otherwise leave the instrument
     // to whatever else plays it (the test harness)
@@ -615,7 +615,7 @@ void InstrumentLabDialog::OnDraw(ImGuiIO&) {
 }
 
 void InstrumentLabDialog::DrawVirtualInstrument(InstrumentInputs& in) {
-    auto& instrument = VirtualInstrument::Get();
+    auto& instrument = VirtualInstrument::FromSettings();
 
     bool connected = REXCVAR_GET(virtual_instrument);
     if (ImGui::Checkbox("Connected", &connected)) {

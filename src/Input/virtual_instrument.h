@@ -1,32 +1,49 @@
 #pragma once
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <utility>
 #include <vector>
 #include <rex/input/input_driver.h>
 #include "instrument_kind.h"
+#include "player_slots.h"
 
-// A virtual Xbox 360 instrument that the Instrument Lab (F6) plays, for checking
-// how RB3 reads each instrument without the hardware. It shows up as its own
-// controller, on the player slot virtual_instrument_player, while the
-// virtual_instrument setting is on.
+// Virtual Xbox 360 instruments, one per player, for checking how RB3 reads each
+// instrument without the hardware. Each plugged-in one shows up as its own
+// controller on its player.
+//
+// The settings describe one of them, the Instrument Lab's (F6): virtual_instrument
+// plugs it into player virtual_instrument_player as virtual_instrument_type. The
+// test harness plugs in the others (players it isn't using) directly.
 
 namespace band3::input {
 
-// What the virtual instrument is pressing. The Lab changes it on the UI thread
-// and the driver reads it on guest threads.
+// What a virtual instrument is pressing. The Lab and the test harness change it
+// on their threads and the driver reads it on guest threads.
 class VirtualInstrument {
 public:
     // long enough for RB3 to see a hit on at least a couple of polls
     static constexpr std::chrono::milliseconds kPulseLength{60};
 
-    static VirtualInstrument& Get();
+    // player 1-4's
+    static VirtualInstrument& ForPlayer(int player);
+    // the one the settings describe, on virtual_instrument_player: the Lab's
+    static VirtualInstrument& FromSettings();
 
+    int player() const { return player_; }
+    bool plugged() const { return plugged_.load(); }
     InstrumentKind kind() const { return kind_.load(); }
-    // sets virtual_instrument_type, which unplugs and replugs the instrument
+
+    // Plugs it in as `kind`, or replugs it as that kind; a kind change unplugs
+    // it for a moment. The settings' instrument goes through the settings, so
+    // call these on the UI thread.
+    void Plug(InstrumentKind kind);
+    void Unplug();
+    // a new kind for a plugged-in or unplugged instrument alike
     void SetKind(InstrumentKind kind);
 
     // what is held down, without pulses
@@ -45,17 +62,29 @@ private:
 
     using Clock = std::chrono::steady_clock;
 
+    bool FromTheSettings() const;
+    // the settings' values, on the instruments; never writes the settings, so
+    // the change callbacks can call it
+    static void ApplySettings(bool enabled, std::string_view type, int player);
+
+    int player_ = 0;
     std::mutex mutex_;
     InstrumentInputs held_;
     std::vector<std::pair<Clock::time_point, std::function<void(InstrumentInputs&)>>> pulses_;
+    std::atomic<bool> plugged_{false};
     std::atomic<InstrumentKind> kind_{InstrumentKind::kGuitar};
 };
 
-// Follows virtual_instrument_type from here on. Call once, after the settings load.
+// Follows the virtual_instrument settings from here on. Call once, after the
+// settings load.
 void InitVirtualInstrument();
 
-// the driver that connects the virtual instrument while virtual_instrument is on
+// the players kept for virtual instruments: plugged in, or replugging
+std::array<bool, kPlayers> VirtualInstrumentPlayers();
+
+// the driver that connects every plugged-in virtual instrument
 std::unique_ptr<rex::input::InputDriver> CreateVirtualInstrumentDriver();
-bool IsVirtualInstrument(const rex::input::DeviceInfo& device);
+// the player a device is the virtual instrument of, or 0
+int VirtualInstrumentPlayer(const rex::input::DeviceInfo& device);
 
 }

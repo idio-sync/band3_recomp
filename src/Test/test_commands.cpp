@@ -22,6 +22,7 @@ constexpr std::chrono::milliseconds kExpectTimeout = 5s;
 // about a frame
 constexpr std::chrono::milliseconds kWaitPoll = 16ms;
 constexpr uint8_t kDefaultVelocity = 100;
+constexpr int kPlayerCount = 4;
 
 std::vector<std::string_view> Words(std::string_view line) {
     std::vector<std::string_view> words;
@@ -77,7 +78,7 @@ void AppendJsonString(std::string& out, std::string_view text) {
     out += '"';
 }
 
-std::string StateJson(const GameStateSnapshot& s, input::InstrumentKind kind) {
+std::string StateJson(const GameStateSnapshot& s, TestTarget& target) {
     std::string out = "{\"screen\":";
     AppendJsonString(out, s.screen);
     out += ",\"in_game\":";
@@ -100,16 +101,23 @@ std::string StateJson(const GameStateSnapshot& s, input::InstrumentKind kind) {
         out += ",\"track\":" + std::to_string(m.track_type) + "}";
     }
     out += "],\"frame\":" + std::to_string(s.frame);
-    out += ",\"instrument\":";
-    AppendJsonString(out, InstrumentName(kind));
-    out += '}';
+    out += ",\"instruments\":[";
+    for (int player = 1; player <= kPlayerCount; player++) {
+        if (player > 1) out += ',';
+        if (auto kind = target.Kind(player)) {
+            AppendJsonString(out, InstrumentName(*kind));
+        } else {
+            out += "null";
+        }
+    }
+    out += "]}";
     return out;
 }
 
 std::string Error(TestTarget& target, std::string_view message) {
     std::string out = "{\"ok\":false,\"error\":";
     AppendJsonString(out, message);
-    out += ",\"state\":" + StateJson(target.State(), target.Kind()) + "}";
+    out += ",\"state\":" + StateJson(target.State(), target) + "}";
     return out;
 }
 
@@ -124,21 +132,33 @@ std::string Ok(std::string_view fields = {}) {
 }
 
 std::string OkWithState(TestTarget& target, const GameStateSnapshot& state) {
-    return Ok("\"state\":" + StateJson(state, target.Kind()));
+    return Ok("\"state\":" + StateJson(state, target));
 }
 
+// the player a controller command is for, and that player's instrument
+struct Controller {
+    int player;
+    input::InstrumentKind kind;
+
+    // an input error, naming whose instrument it is
+    std::string Mention(const std::string& error) const {
+        return "player " + std::to_string(player) + ": " + error;
+    }
+};
+
 // applies every name in `list` to `in` at `value`; an error, or empty
-std::string ApplyInputs(TestTarget& target, InstrumentInputs& in, std::string_view list,
+std::string ApplyInputs(const Controller& c, InstrumentInputs& in, std::string_view list,
                         uint8_t value) {
     for (const std::string& name : SplitInputs(list)) {
         if (name.empty()) return "empty input name in " + std::string(list);
-        std::string error = SetInput(target.Kind(), in, name, value);
-        if (!error.empty()) return error;
+        std::string error = SetInput(c.kind, in, name, value);
+        if (!error.empty()) return c.Mention(error);
     }
     return {};
 }
 
-std::string Press(TestTarget& target, const std::vector<std::string_view>& args) {
+std::string Press(TestTarget& target, const Controller& c,
+                  const std::vector<std::string_view>& args) {
     if (args.size() < 2 || args.size() > 3) return Error(target, "usage: press <inputs> [ms]");
     std::chrono::milliseconds length = kPressLength;
     if (args.size() == 3) {
@@ -148,19 +168,20 @@ std::string Press(TestTarget& target, const std::vector<std::string_view>& args)
     }
     // checked on a copy, so a bad name presses nothing
     InstrumentInputs check;
-    if (std::string error = ApplyInputs(target, check, args[1], kDefaultVelocity); !error.empty())
+    if (std::string error = ApplyInputs(c, check, args[1], kDefaultVelocity); !error.empty())
         return Error(target, error);
 
-    const input::InstrumentKind kind = target.Kind();
+    const input::InstrumentKind kind = c.kind;
     const std::string list(args[1]);
-    target.Pulse([kind, list](InstrumentInputs& in) {
+    target.Pulse(c.player, [kind, list](InstrumentInputs& in) {
         for (const std::string& name : SplitInputs(list)) SetInput(kind, in, name, kDefaultVelocity);
     }, length);
     target.Sleep(length + kReleaseGap);
     return Ok();
 }
 
-std::string Hit(TestTarget& target, const std::vector<std::string_view>& args) {
+std::string Hit(TestTarget& target, const Controller& c,
+                const std::vector<std::string_view>& args) {
     if (args.size() < 2 || args.size() > 4)
         return Error(target, "usage: hit <target> [velocity] [fret]");
     int velocity = kDefaultVelocity;
@@ -176,56 +197,67 @@ std::string Hit(TestTarget& target, const std::vector<std::string_view>& args) {
         fret = *f;
     }
     InstrumentInputs check;
-    const input::InstrumentKind kind = target.Kind();
+    const input::InstrumentKind kind = c.kind;
     const std::string name(args[1]);
     if (std::string error = SetInput(kind, check, name, static_cast<uint8_t>(velocity),
                                      static_cast<uint8_t>(fret));
         !error.empty())
-        return Error(target, error);
+        return Error(target, c.Mention(error));
 
-    target.Pulse([kind, name, velocity, fret](InstrumentInputs& in) {
+    target.Pulse(c.player, [kind, name, velocity, fret](InstrumentInputs& in) {
         SetInput(kind, in, name, static_cast<uint8_t>(velocity), static_cast<uint8_t>(fret));
     }, kPressLength);
     target.Sleep(kPressLength + kReleaseGap);
     return Ok();
 }
 
-std::string Hold(TestTarget& target, const std::vector<std::string_view>& args, bool down) {
+std::string Hold(TestTarget& target, const Controller& c,
+                 const std::vector<std::string_view>& args, bool down) {
     if (args.size() != 2) {
         return Error(target, down ? "usage: hold <inputs>" : "usage: release <inputs>|all");
     }
     if (!down && args[1] == "all") {
-        target.SetHeld({});
+        target.SetHeld(c.player, {});
         return Ok();
     }
-    InstrumentInputs held = target.Held();
-    if (std::string error = ApplyInputs(target, held, args[1], down ? kDefaultVelocity : 0);
+    InstrumentInputs held = target.Held(c.player);
+    if (std::string error = ApplyInputs(c, held, args[1], down ? kDefaultVelocity : 0);
         !error.empty())
         return Error(target, error);
-    target.SetHeld(held);
+    target.SetHeld(c.player, held);
     return Ok();
 }
 
-std::string Axis(TestTarget& target, const std::vector<std::string_view>& args) {
+std::string Axis(TestTarget& target, const Controller& c,
+                 const std::vector<std::string_view>& args) {
     if (args.size() != 3) return Error(target, "usage: axis whammy|tilt <0..1>");
     auto value = ParseNumber<float>(args[2]);
     if (!value) return Error(target, "bad axis value " + std::string(args[2]));
-    InstrumentInputs held = target.Held();
-    if (std::string error = SetAxis(target.Kind(), held, args[1], *value); !error.empty())
-        return Error(target, error);
-    target.SetHeld(held);
+    InstrumentInputs held = target.Held(c.player);
+    if (std::string error = SetAxis(c.kind, held, args[1], *value); !error.empty())
+        return Error(target, c.Mention(error));
+    target.SetHeld(c.player, held);
     return Ok();
 }
 
-std::string Instrument(TestTarget& target, const std::vector<std::string_view>& args) {
+std::string Instrument(TestTarget& target, int player,
+                       const std::vector<std::string_view>& args) {
     if (args.size() != 2) return Error(target, "usage: instrument guitar|drums|keys|mustang|squier");
     auto kind = ParseInstrumentName(args[1]);
     if (!kind) return Error(target, "no instrument " + std::string(args[1]));
-    if (*kind != target.Kind()) {
-        target.SetHeld({});
-        target.SetKind(*kind);
+    if (target.Kind(player) != kind) {
+        target.SetHeld(player, {});
+        target.Plug(player, *kind);
+        // long enough for the replug and for RB3 to see it connect
         target.Sleep(kReplugWait);
     }
+    return Ok();
+}
+
+std::string Unplug(TestTarget& target, int player, const std::vector<std::string_view>& args) {
+    if (args.size() != 1) return Error(target, "usage: unplug");
+    target.SetHeld(player, {});
+    if (target.Kind(player)) target.Unplug(player);
     return Ok();
 }
 
@@ -259,12 +291,14 @@ std::string Wait(TestTarget& target, const std::vector<std::string_view>& args,
     return OkWithState(target, state);
 }
 
-std::string Pad(TestTarget& target, const std::vector<std::string_view>& args) {
+std::string Pad(TestTarget& target, std::optional<int> prefix,
+                const std::vector<std::string_view>& args) {
     if (args.size() > 2) return Error(target, "usage: pad [player]");
-    int player = 1;
+    int player = prefix.value_or(1);
     if (args.size() == 2) {
+        if (prefix) return Error(target, "pad takes a player or a prefix, not both");
         auto p = ParseNumber<int>(args[1]);
-        if (!p || *p < 1 || *p > 4) return Error(target, "player is 1 to 4");
+        if (!p || *p < 1 || *p > kPlayerCount) return Error(target, "player is 1 to 4");
         player = *p;
     }
     input::Gamepad360 pad;
@@ -384,18 +418,48 @@ bool ConditionHolds(const Condition& condition, const GameStateSnapshot& state,
 }
 
 std::string RunCommand(std::string_view line, TestTarget& target) {
-    const std::vector<std::string_view> args = Words(line);
+    std::vector<std::string_view> args = Words(line);
     if (args.empty()) return Error(target, "empty command");
+
+    // pN: the player a controller command is for, player 1 without one
+    std::optional<int> prefix;
+    const bool verb_first = args[0] == "press" || args[0] == "pad";
+    if (!verb_first && args[0].size() <= 3 && args[0].starts_with("p")) {
+        auto player = ParseNumber<int>(args[0].substr(1));
+        if (!player || *player < 1 || *player > kPlayerCount) {
+            return Error(target, "no player " + std::string(args[0]) + " (p1 to p4)");
+        }
+        if (args.size() == 1) return Error(target, std::string(args[0]) + " needs a command");
+        prefix = *player;
+        args.erase(args.begin());
+    }
     const std::string_view verb = args[0];
+    const int player = prefix.value_or(1);
+
+    if (verb == "pad") return Pad(target, prefix, args);
+    if (verb == "instrument") return Instrument(target, player, args);
+    if (verb == "unplug") return Unplug(target, player, args);
+    if (verb == "press" || verb == "hit" || verb == "hold" || verb == "release" ||
+        verb == "axis") {
+        auto kind = target.Kind(player);
+        if (!kind) {
+            const std::string p = std::to_string(player);
+            return Error(target, "player " + p + " has no virtual instrument (p" + p +
+                                     " instrument <kind> plugs one in)");
+        }
+        const Controller c{player, *kind};
+        if (verb == "press") return Press(target, c, args);
+        if (verb == "hit") return Hit(target, c, args);
+        if (verb == "hold") return Hold(target, c, args, true);
+        if (verb == "release") return Hold(target, c, args, false);
+        return Axis(target, c, args);
+    }
+    if (prefix) {
+        return Error(target, std::string(verb) + " isn't for one player; leave out the p" +
+                                 std::to_string(player));
+    }
 
     if (verb == "state") return OkWithState(target, target.State());
-    if (verb == "pad") return Pad(target, args);
-    if (verb == "press") return Press(target, args);
-    if (verb == "hit") return Hit(target, args);
-    if (verb == "hold") return Hold(target, args, true);
-    if (verb == "release") return Hold(target, args, false);
-    if (verb == "axis") return Axis(target, args);
-    if (verb == "instrument") return Instrument(target, args);
     if (verb == "wait") return Wait(target, args, kWaitTimeout);
     if (verb == "expect") return Wait(target, args, kExpectTimeout);
     if (verb == "screenshot") return Screenshot(target, args);
@@ -405,6 +469,12 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
         return Ok();
     }
     return Error(target, "no command " + std::string(verb));
+}
+
+void ReleaseAllPlayers(TestTarget& target) {
+    for (int player = 1; player <= kPlayerCount; player++) {
+        if (target.Kind(player)) target.SetHeld(player, {});
+    }
 }
 
 }

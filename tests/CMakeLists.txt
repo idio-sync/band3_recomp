@@ -23,6 +23,7 @@ add_executable(band3_tests
     menu_shortcut_test.cpp
     usb_mic_test.cpp
     game_status_test.cpp
+    player_slots_test.cpp
     test_commands_test.cpp
     test_inputs_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
@@ -34,6 +35,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/joypad_lag_status.cpp
     ${BAND3_ROOT}/src/Input/menu_shortcut.cpp
     ${BAND3_ROOT}/src/Input/midi_drums.cpp
+    ${BAND3_ROOT}/src/Input/player_slots.cpp
     ${BAND3_ROOT}/src/Input/ps3_instruments.cpp
     ${BAND3_ROOT}/src/Input/ps4_instruments.cpp
     ${BAND3_ROOT}/src/Test/game_state.cpp
