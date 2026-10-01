@@ -1,4 +1,4 @@
-# band3 recompiled
+# slopband3 - AI Assisted band3 recompile experiment
 
 Early recompilation of Rock Band 3 (title update 5). Playable, but just barely.
 
