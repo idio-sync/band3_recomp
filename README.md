@@ -156,7 +156,9 @@ folders `content_folders` names (Band3 → Game, or `[game]` in `band3_config.in
 is installed or unpacked, and band3 never writes there. Separate folders with `|`;
 subfolders count, and a relative folder is relative to the ini's folder (`songs` beside it
 by default). Changes apply at the next launch. A network folder works, but a local one is
-safer for audio: a song streams from its package while it plays.
+safer for audio: a song streams from its package while it plays. A custom song whose
+`song_id` is text instead of a number gets the number RB3Enhanced gives it (the text's
+CRC-32 mod 9999999, plus 2130000000), so IDs agree with RB3Enhanced's.
 
 ### Instrument Lab
 
