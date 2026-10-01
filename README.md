@@ -167,7 +167,8 @@ when a client disconnects.
 
 | Command | |
 |---|---|
-| `instrument guitar\|drums\|keys\|mustang\|squier` | what player 1 is |
+| `instrument guitar\|drums\|keys\|mustang\|squier` | plugs in player 1's instrument, or replugs it as another |
+| `unplug` | takes it out |
 | `press <inputs> [ms]` | press and let go (100 ms); join inputs with `+` |
 | `hold <inputs>`, `release <inputs>\|all` | |
 | `hit <pad\|cymbal\|keyN\|string> [velocity] [fret]` | drums, keys `key0`-`key24`, pro guitar strings `low_e a_str d_str g_str b_str high_e` |
@@ -178,6 +179,13 @@ when a client disconnects.
 | `screenshot [name]` | |
 | `set <setting> <value>` | Band3 settings only |
 | `quit` | |
+
+Each player can have a virtual instrument: start a controller command with `p2`,
+`p3` or `p4` for that player's (`p2 instrument drums`, `p2 hit red_pad`, `pad 2`);
+without one it's player 1's. `state` lists every player's instrument.
+`tests/game/multiplayer.b3t` plays a two-player song; it currently crashes the game
+while the song loads (an unhandled guest read of address 0 on the main thread), as
+any song with more than one player does.
 
 Every instrument has `a b x y start back up down left right`; guitars add `green red
 yellow blue orange strum_up strum_down solo`, drums `red_pad yellow_pad blue_pad

@@ -1,0 +1,33 @@
+# Two players play a song together on autoplay: guitar and bass.
+# Starts on the main menu (main_hub_screen), with player 1 joined.
+# Currently fails: band3 crashes while a song with more than one player loads
+# (unhandled guest read of address 0 on the main thread, 2026-09-30).
+
+p2 instrument guitar
+wait frames=60
+p2 press start
+wait frames=90
+set autoplay true
+# Play Now, Quickplay, Choose Songs
+press green
+wait frames=60
+press green
+wait frames=60
+press green
+wait screen=song_select_screen timeout=30s
+wait frames=60
+# past the 123 heading to 20th Century Boy
+press down
+press down
+wait frames=30
+press green
+wait screen=part_difficulty_screen timeout=30s
+wait frames=90
+# player 1 Guitar, player 2 Bass
+press green
+p2 press down
+p2 press green
+wait in_game timeout=60s
+expect song=20thcenturyboy
+wait frames=600 timeout=60s
+screenshot multiplayer-song
