@@ -35,6 +35,11 @@ static const uint kShadeRefract = 1048576u;
 // ENABLE_AO with a point light: the point lights' occlusion is the vertex
 // colour's directional (SH) visibility toward each, AoShVertex, per vertex
 static const uint kShadeAoSh = 2097152u;
+// NUM_PROJ, the projected light (kFakeSpot), per pixel: s5's alpha, sampled
+// where ProjUv puts the pixel, darkens the light by the multiply form
+// (PROJ_MULTIPLY, the stage's shadows), or masks the gobo's (s10) light added
+static const uint kShadeProjMultiply = 4194304u;
+static const uint kShadeProjGobo = 8388608u;
 
 // Register names are the game shaders' (scene_capture.h's kShadeRegs), PS
 // unless VS is said.
@@ -55,4 +60,7 @@ struct ShadeParams {
     float4 fade[3];        // c53, c54 (left and right planes), c55 (end, 1/(end - start), max)
     float4 fade_color;     // c104
     float4 alpha_cut;      // x: the threshold, 0-255, as RndMat keeps it
+    float4 proj[3];        // c95..c97: the projected light's map uv = (c95 P, c96 P) / c97 P
+    float4 proj_dir;       // c66: toward it
+    float4 proj_color;     // c69
 };

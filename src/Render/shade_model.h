@@ -30,7 +30,7 @@ struct uint4 {
 
 #include "src/Render/shaders/shade_params.hlsli"
 
-static_assert(sizeof(ShadeParams) == 26 * 16, "ShadeParams is float4s only, as HLSL packs it");
+static_assert(sizeof(ShadeParams) == 31 * 16, "ShadeParams is float4s only, as HLSL packs it");
 
 // What a draw shades with. Without a ShadeState (a capture from before them),
 // with options.legacy_light, it's the placeholder from before; options.lighting
@@ -48,11 +48,13 @@ inline const ShadeState* ShadeOf(const FrameCapture& frame, const DrawItem& item
                                                                          : nullptr;
 }
 
-// shade.hlsli's TexGen, AoSh*, Light and ShadePixel, on the CPU; the AoSh
-// ones are per vertex (AoShVertexCpu's two are the ao_sh the pixels take
+// shade.hlsli's TexGen, AoSh*, ProjUv, Light and ShadePixel, on the CPU; the
+// AoSh ones are per vertex (AoShVertexCpu's two are the ao_sh the pixels take
 // interpolated), as is LightVertexCpu, for kShadePerVertex, whose pixels take
-// its two colours interpolated
+// its two colours interpolated. ShadePixelCpu's proj and gobo are the
+// projected light's texels at ProjUvCpu (null: 0).
 void TexGenUv(const ShadeParams& sp, const float uv[2], float out[2]);
+void ProjUvCpu(const ShadeParams& sp, const float p[3], float out[2]);
 void AoShDirectionCpu(const float vc[4], float out[3]);
 float AoShRatioCpu(const ShadeParams& sp, uint light, const float p[3], const float n[3],
                    const float dir[3], float r);
@@ -63,7 +65,8 @@ void LightVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], c
 void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], const float vc[4],
                    const float texel[4], const float spec_map[4], const float glow[4],
                    const float behind[4], float depth, const float ao_sh[2],
-                   const float vertex_diffuse[3], const float vertex_added[3], float out[4]);
+                   const float vertex_diffuse[3], const float vertex_added[3], float out[4],
+                   const float proj[4] = nullptr, const float gobo[4] = nullptr);
 bool AlphaCutCpu(const ShadeParams& sp, float alpha);
 
 }  // namespace band3::render::shade

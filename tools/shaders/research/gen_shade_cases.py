@@ -1,7 +1,9 @@
 """Reference values for tests/shade_model_test.cpp, from the M2 research's Python
 models of the game's shaders (fam3.py standard, skin2.py skin, hair3.py hair),
 which were checked against the game's microcode. The models are plain maths, so
-this needs no shader dump; it prints kCases' entries."""
+this needs no shader dump; it prints kCases' entries. The projected light's
+cases also give c66, c69 and its two texels (s5, s10), which the others leave
+out (zero)."""
 import sys, os, random, math
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hyp import norm, sat
@@ -43,8 +45,17 @@ def ao_of(vc, s):
 
 cases = []
 def add(name, family, flags, seed, npt, ao=None, specmap=False, glow=False, intens=False,
-        prelit=False, rim=False, spec=True, zero_c2=False):
+        prelit=False, rim=False, spec=True, zero_c2=False, proj=False, gobo=False):
     c, P, eye, N, vc, t = make(seed, npt)
+    if proj:
+        # drawn after make()'s, so the other cases keep their numbers
+        # toward it from about where the surface faces, so that it counts
+        d = norm([N[k] + random.uniform(-0.6, 0.6) for k in range(3)])
+        c[66] = [round(x, 3) for x in d] + [0.0]
+        c[69] = r4(0.3, 1.0); c[69][3] = 1.0
+        # s5's alpha: much of it for the multiply, little for the gobo it masks
+        t['tf5'] = r4(0.0, 0.6) if gobo else r4(0.4, 1.0)
+        t['tf10'] = r4(0.0, 1.0)
     if zero_c2:
         c[2][0] = c[2][1] = c[2][2] = 0.0
         c[19] = [0, 0, 0, 1]
@@ -64,7 +75,7 @@ def add(name, family, flags, seed, npt, ao=None, specmap=False, glow=False, inte
     if not glow:
         c[5][0] = 0.0
     if family == 'standard':
-        o = dict(nmap=False, detail=False, rim=rim, rimmap=False, hair=False, proj=False,
+        o = dict(nmap=False, detail=False, rim=rim, rimmap=False, hair=False, proj=proj, gobo=gobo,
                  npt=npt, spec=spec, glow=glow, intens=intens, tex=True, specmap=specmap,
                  col='vc' if prelit else ('ao' if ao is not None else 'none'), aoreg=4,
                  shadow=0, shall=False, env=None, rimnz=False)
@@ -84,7 +95,7 @@ def add(name, family, flags, seed, npt, ao=None, specmap=False, glow=False, inte
     a_tex = tex[3] * (c[5][1] if intens else 1)
     alpha = a_tex * c[1][3] * (vc[3] if prelit else c[0][3])
     cases.append(dict(name=name, flags=flags, npt=npt, c=c, P=P, eye=eye, N=N, vc=vc, t=t,
-                      ao=ao or 0.0, rgb=rgb, alpha=alpha))
+                      ao=ao or 0.0, rgb=rgb, alpha=alpha, proj=proj))
 
 add('standard: two points, box, specular', 'standard', ['Lit', 'Box', 'Specular', 'Textured'], 1, 2)
 add('standard: AO, one point, specular map, glow, intensify', 'standard',
@@ -101,6 +112,14 @@ add('skin: rim, AO, specular map', 'skin',
 add('skin: plain', 'skin', ['Lit', 'Box', 'Specular', 'Skin', 'Textured'], 7, 1)
 add('hair: no specular colour (its strands need the tangent)', 'hair',
     ['Lit', 'Box', 'Specular', 'SpecMap', 'Hair', 'Textured'], 8, 2, specmap=True, zero_c2=True)
+add('standard: projected light, multiply, AO, rim', 'standard',
+    ['Lit', 'Box', 'Specular', 'Rim', 'AO', 'ProjMultiply', 'Textured'], 9, 1, ao=1.2, rim=True,
+    proj=True)
+add('standard: projected light, multiply, prelit, two points', 'standard',
+    ['Lit', 'Box', 'Specular', 'Prelit', 'ProjMultiply', 'Textured'], 10, 2, prelit=True,
+    proj=True)
+add('standard: projected light, gobo, AO, two points', 'standard',
+    ['Lit', 'Box', 'Specular', 'AO', 'ProjGobo', 'Textured'], 11, 2, ao=0.9, proj=True, gobo=True)
 
 def lit(x):
     s = '%.9g' % x
@@ -119,5 +138,10 @@ for cs in cases:
     out.append('     {%s},' % ', '.join(f4(c[k]) for k in regs))
     out.append('     %s, %s, %s, %s, %s,' % (f4(cs['P']), f4(cs['eye']), f4(cs['N']), f4(cs['vc']), lit(cs['ao'])))
     out.append('     %s, %s, %s,' % (f4(cs['t']['tf0']), f4(cs['t']['tf2']), f4(cs['t']['tf3'])))
-    out.append('     %s, %s},' % (f4(cs['rgb']), lit(cs['alpha'])))
+    if cs['proj']:
+        out.append('     %s, %s,' % (f4(cs['rgb']), lit(cs['alpha'])))
+        out.append('     %s, %s, %s, %s},' % (f4(c[66]), f4(c[69]), f4(cs['t']['tf5']),
+                                             f4(cs['t']['tf10'])))
+    else:
+        out.append('     %s, %s},' % (f4(cs['rgb']), lit(cs['alpha'])))
 print('\n'.join(out))

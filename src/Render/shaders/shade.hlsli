@@ -12,7 +12,8 @@
 // the reference, and tests/shade_model_test.cpp checks this against them.
 // Left out: normal maps (the capture has no tangents), the environment cube
 // (not decoded), the shadow buffer (k_24_8; read as lit), the projected light
-// and the hair's strand highlight (it needs the tangent).
+// of a vertex-lit material and the hair's strand highlight (it needs the
+// tangent).
 
 float3 Xyz(float4 v) { return float3(v.x, v.y, v.z); }
 
@@ -41,6 +42,17 @@ float3 BoxSpecular(SHADE_IN(ShadeParams) sp, float3 r, float p) {
     return Xyz(sp.box[0]) * PowSat(saturate(r.x), p) + Xyz(sp.box[1]) * PowSat(saturate(-r.x), p) +
            Xyz(sp.box[2]) * PowSat(saturate(r.y), p) + Xyz(sp.box[3]) * PowSat(saturate(-r.y), p) +
            Xyz(sp.box[4]) * PowSat(saturate(r.z), p) + Xyz(sp.box[5]) * PowSat(saturate(-r.z), p);
+}
+
+// Where the projected light's maps (s5, s10) are read at world position p:
+// PS c95..c97 projectively, as the game's pixel shaders do it (B8FEEA37CC970356
+// instrs 4-8, a reciprocal and a multiply), unguarded behind the light. The
+// backends sample there bilinearly, clamped to a transparent black border, as
+// every capture's s5 fetch constant says.
+float2 ProjUv(SHADE_IN(ShadeParams) sp, float3 p) {
+    const float4 q = float4(p.x, p.y, p.z, 1.0f);
+    const float iw = 1.0f / dot(sp.proj[2], q);
+    return float2(dot(sp.proj[0], q) * iw, dot(sp.proj[1], q) * iw);
 }
 
 // true if alpha test throws the pixel away
@@ -96,9 +108,11 @@ struct Lighting {
 
 // p is the world position, n the world normal (any length), vc the vertex
 // colour, spec_map the specular map's texel (1 where sp doesn't sample it),
-// ao_sh the AoShVertex (interpolated, in a pixel)
+// ao_sh the AoShVertex (interpolated, in a pixel), proj and gobo the
+// projected light's maps' texels at ProjUv (s5 and s10; per pixel only, and
+// unread where sp doesn't sample them)
 Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 spec_map,
-               float2 ao_sh) {
+               float2 ao_sh, float4 proj, float4 gobo) {
     const uint f = sp.flags.x;
     const bool skin = (f & kShadeSkin) != 0u;
     const bool hair = (f & kShadeHair) != 0u;
@@ -145,7 +159,27 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
     }
 
     const float3 zero = float3(0.0f, 0.0f, 0.0f);
-    float3 lights = zero;  // the point lights' diffuse
+    const float3 one = float3(1.0f, 1.0f, 1.0f);
+
+    // The projected light (NUM_PROJ; m2_shader_ucode.md 5, fam3.py). The
+    // multiply form darkens the box map, the point lights, their specular
+    // and the rim by up to 0.75 c69 where s5's alpha is, as far as the
+    // surface faces it, but not the ambient c1. The gobo form adds c69 times
+    // s10's colour where s5's alpha leaves it, occluded by the VS's ao.y:
+    // light 1's (SH, with two) or aoA (B3ACFB8F2C183C5B, 7928EF7EADF085F6).
+    float3 proj_mul = one;
+    float3 proj_add = zero;
+    if ((f & (kShadeProjMultiply | kShadeProjGobo)) != 0u) {
+        const float facing = saturate(dot(N, Xyz(sp.proj_dir)));
+        if ((f & kShadeProjMultiply) != 0u) {
+            proj_mul = one - Xyz(sp.proj_color) * (0.75f * proj.w * facing);
+        } else {
+            const float ao_proj = sp.flags.y >= 2u ? ao_1 : ao_a;
+            proj_add = Xyz(sp.proj_color) * Xyz(gobo) * ((1.0f - proj.w) * facing * ao_proj);
+        }
+    }
+
+    float3 lights = proj_add;  // the point lights' diffuse, and the gobo's
     float3 lights_spec = zero;
     float3 lights_rim = zero;
     for (uint i = 0u; i < 2u; i++) {
@@ -154,7 +188,7 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
         const float d = sqrt(dot(to_light, to_light));
         const float3 L = to_light / max(d, 1e-6f);
         const float att = saturate(d * sp.point_pos[i].w + sp.point_color[i].w);
-        const float3 lc = Xyz(sp.point_color[i]) * (att * (i == 0u ? ao_0 : ao_1));
+        const float3 lc = Xyz(sp.point_color[i]) * proj_mul * (att * (i == 0u ? ao_0 : ao_1));
         const float nl = dot(N, L);
         if (skin || hair) {
             lights = lights + lc * saturate(wrap_a * nl + wrap_b);
@@ -179,8 +213,7 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
 
     const float3 c0 = Xyz(sp.color);
     const float3 c1 = Xyz(sp.ambient);
-    const float3 one = float3(1.0f, 1.0f, 1.0f);
-    const float3 box_n = box ? Box(sp, N) : zero;
+    const float3 box_n = box ? Box(sp, N) * proj_mul : zero;
     const float rim_a = PowSat((1.0f - vn) * up, sp.rim.w);
     Lighting l;
     if (skin) {
@@ -196,7 +229,7 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
     l.added = zero;
 
     if ((f & kShadeSpecular) != 0u) {
-        const float3 box_r = box ? BoxSpecular(sp, R, power) : zero;
+        const float3 box_r = box ? BoxSpecular(sp, R, power) * proj_mul : zero;
         if (skin) {
             const float fs = (1.0f - vn) * up;
             l.added = spec_color * (lights_spec + box_r * (fs * fs * spec_norm * ao_a));
@@ -209,7 +242,7 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
     }
     if (rim && !skin && !hair) {
         // rgb = diffuse base (1 + 0.3 rim) + 0.7 rim
-        const float3 rim_box = box ? Box(sp, -V) * (rim_a * ao_a) : zero;
+        const float3 rim_box = box ? Box(sp, -V) * proj_mul * (rim_a * ao_a) : zero;
         const float3 r = Xyz(sp.rim) * (rim_box + lights_rim);
         l.diffuse = l.diffuse * (one + r * 0.3f);
         l.added = l.added + r * 0.7f;
@@ -221,11 +254,12 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
 // world normal, vc its vertex colour, depth its clip w; texel, spec_map and
 // glow are the maps' texels where sp samples them (1 where it doesn't), behind
 // the post-processed picture at the pixel for kShadeRefract; ao_sh is the
-// interpolated AoShVertex, vertex the interpolated Lighting of a vertex-lit
+// interpolated AoShVertex, proj and gobo the projected light's maps' texels
+// at ProjUv (Light's), vertex the interpolated Lighting of a vertex-lit
 // material's vertices.
 float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 texel,
                   float4 spec_map, float4 glow, float4 behind, float depth, float2 ao_sh,
-                  Lighting vertex) {
+                  float4 proj, float4 gobo, Lighting vertex) {
     const uint f = sp.flags.x;
     // REFRACT_WORLD's pixel shader (FC53125B5EB914F8): the texture's rgb
     // times the picture behind it, alpha the texture's. The game nudges where
@@ -267,7 +301,7 @@ float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float
         alpha = base_alpha * col.w;
     } else {
         Lighting l = vertex;
-        if ((f & kShadePerVertex) == 0u) l = Light(sp, p, n, vc, spec_map, ao_sh);
+        if ((f & kShadePerVertex) == 0u) l = Light(sp, p, n, vc, spec_map, ao_sh, proj, gobo);
         rgb = base * l.diffuse + l.added;
         alpha = base_alpha * sp.ambient.w * ((f & kShadePrelit) != 0u ? vc.w : sp.color.w);
     }

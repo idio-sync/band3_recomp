@@ -29,11 +29,13 @@ struct Case {
     float tex[4], spec_map[4], glow[4];
     float rgb[3];
     float alpha;
+    // the projected light's: c66, c69 and its texels (s5, s10); 0 without it
+    float c66[4], c69[4], proj[4], gobo[4];
 };
 
 // Made from the models (fam3.model, skin2.skin, hair3.hair) by
 // tools/shaders/research/gen_shade_cases.py, with no normal or
-// environment map, shadow or projected light. The hair's case has no
+// environment map or shadow. The hair's case has no
 // specular colour, as its strand highlight needs the tangent the capture
 // doesn't keep, so only its box highlight is compared.
 const Case kCases[] = {
@@ -85,6 +87,27 @@ const Case kCases[] = {
      {20.13f, -28.0f, -25.61f}, {-292.85f, -497.03f, 153.37f}, {-0.153f, -0.246f, 0.669f}, {0.891f, 0.175f, 0.396f, 0.166f}, 0.0f,
      {0.697f, 0.977f, 0.282f, 0.79f}, {0.37f, 0.112f, 0.788f, 0.408f}, {0.17f, 0.436f, 0.232f, 0.41f},
      {0.854856211f, 1.56413291f, 0.186218695f}, 0.05069904f},
+    {"standard: projected light, multiply, AO, rim",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadeRim | kShadeAO | kShadeProjMultiply | kShadeTextured, 1,
+     {{0.57f, 0.499f, 0.311f, 0.893f}, {0.003f, 0.201f, 0.359f, 0.032f}, {0.643f, 0.693f, 0.233f, 21.7f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.78f, 0.326f, 0.39f, 2.52f}, {169.53f, 36.17f, 243.55f, -0.002829f}, {0.0f, 0.0f, 0.0f, 0.0f}, {1.568f, 0.473f, 0.795f, 1.726f}, {0.0f, 0.0f, 0.0f, 1.0f}, {0.033f, 0.227f, 0.295f, 0.014f}, {0.255f, 0.544f, 0.067f, 0.358f}, {0.073f, 0.347f, 0.537f, 0.122f}, {0.005f, 0.05f, 0.324f, 0.01f}, {0.051f, 0.298f, 0.553f, 0.252f}, {0.239f, 0.383f, 0.056f, 0.348f}},
+     {-32.74f, 10.89f, 45.83f}, {-267.5f, -433.48f, 221.28f}, {-0.701f, -0.463f, 0.99f}, {0.998f, 0.121f, 0.705f, 0.951f}, 1.2f,
+     {0.313f, 0.65f, 0.139f, 0.429f}, {0.707f, 0.631f, 0.797f, 0.178f}, {0.347f, 0.864f, 0.584f, 0.451f},
+     {0.0698156981f, 0.220943757f, 0.0525876545f}, 0.012259104f,
+     {-0.602f, 0.088f, 0.794f, 0.0f}, {0.313f, 0.86f, 0.53f, 1.0f}, {0.528f, 0.666f, 0.595f, 0.453f}, {0.63f, 0.103f, 0.784f, 0.025f}},
+    {"standard: projected light, multiply, prelit, two points",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadePrelit | kShadeProjMultiply | kShadeTextured, 2,
+     {{0.657f, 0.543f, 0.662f, 0.365f}, {0.325f, 0.329f, 0.261f, 0.064f}, {0.617f, 0.462f, 0.4f, 29.9f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.888f, 0.683f, 0.505f, 3.02f}, {-17.27f, 74.34f, 215.46f, -0.00395f}, {-198.38f, -146.41f, 285.25f, -0.003114f}, {1.605f, 1.97f, 1.948f, 1.044f}, {0.922f, 1.827f, 0.834f, 1.436f}, {0.039f, 0.351f, 0.506f, 0.094f}, {0.135f, 0.248f, 0.022f, 0.298f}, {0.491f, 0.395f, 0.32f, 0.513f}, {0.09f, 0.34f, 0.225f, 0.361f}, {0.068f, 0.465f, 0.058f, 0.1f}, {0.484f, 0.569f, 0.26f, 0.248f}},
+     {-25.45f, -22.53f, 11.73f}, {-192.92f, -564.16f, 191.15f}, {-0.67f, 0.297f, 0.642f}, {0.778f, 0.48f, 0.348f, 0.435f}, 0.0f,
+     {0.105f, 0.741f, 0.398f, 0.387f}, {0.172f, 0.503f, 0.625f, 0.452f}, {0.87f, 0.673f, 0.241f, 0.525f},
+     {0.787364763f, 0.855996175f, 0.406831899f}, 0.01077408f,
+     {-0.209f, 0.379f, 0.902f, 0.0f}, {0.344f, 0.643f, 0.623f, 1.0f}, {0.652f, 0.751f, 0.723f, 0.694f}, {0.166f, 0.441f, 0.969f, 0.415f}},
+    {"standard: projected light, gobo, AO, two points",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadeAO | kShadeProjGobo | kShadeTextured, 2,
+     {{0.562f, 0.648f, 0.939f, 0.573f}, {0.203f, 0.235f, 0.074f, 0.205f}, {0.704f, 0.834f, 0.275f, 4.54f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.755f, 0.234f, 0.986f, 2.96f}, {46.23f, -137.0f, 53.75f, -0.002431f}, {-23.79f, 136.97f, 179.78f, -0.002192f}, {0.401f, 0.623f, 0.711f, 1.464f}, {1.15f, 1.426f, 1.077f, 1.998f}, {0.597f, 0.504f, 0.425f, 0.189f}, {0.138f, 0.173f, 0.042f, 0.46f}, {0.24f, 0.508f, 0.232f, 0.575f}, {0.508f, 0.0f, 0.126f, 0.546f}, {0.282f, 0.588f, 0.238f, 0.044f}, {0.378f, 0.467f, 0.162f, 0.052f}},
+     {-16.74f, 46.41f, 25.8f}, {-229.2f, -526.08f, 120.21f}, {-0.88f, 0.594f, -0.645f}, {0.559f, 0.447f, 0.191f, 0.732f}, 0.9f,
+     {0.218f, 0.679f, 0.205f, 0.479f}, {0.292f, 0.343f, 0.974f, 0.823f}, {0.304f, 0.885f, 0.211f, 0.394f},
+     {0.1460358f, 0.349260071f, 0.087071521f}, 0.056265735f,
+     {-0.317f, 0.533f, -0.784f, 0.0f}, {0.993f, 0.449f, 0.481f, 1.0f}, {0.197f, 0.178f, 0.044f, 0.054f}, {0.583f, 0.243f, 0.601f, 0.372f}},
 };
 
 void Set(float4& to, const float* from) { to = {from[0], from[1], from[2], from[3]}; }
@@ -106,6 +129,8 @@ ShadeParams ParamsFor(const Case& c) {
     for (int i = 0; i < 6; i++) Set(sp.box[i], c.c[10 + i]);
     sp.eye = {c.eye[0], c.eye[1], c.eye[2], 1};
     sp.ao.x = c.ao;
+    Set(sp.proj_dir, c.c66);
+    Set(sp.proj_color, c.c69);
     return sp;
 }
 
@@ -144,12 +169,13 @@ TEST_CASE("shading matches the game's shader models, per pixel and per vertex") 
         const ShadeParams sp = ParamsFor(c);
         float out[4];
         ShadePixelCpu(sp, c.p, c.n, c.vc, c.tex, c.spec_map, c.glow, one, 100.0f, no_sh, zero,
-                      zero, out);
+                      zero, out, c.proj, c.gobo);
         CheckColour(c, out);
 
         // a vertex-lit material's vertex gives its pixel the same colour, at
-        // the vertex; its specular map is per pixel only
-        if (c.flags & kShadeSpecMap) continue;
+        // the vertex; its specular map and the projected light are per pixel
+        // only
+        if (c.flags & (kShadeSpecMap | kShadeProjMultiply | kShadeProjGobo)) continue;
         ShadeParams pv = sp;
         pv.flags.x |= kShadePerVertex;
         float diffuse[3], added[3];
@@ -297,6 +323,53 @@ TEST_CASE("SH occlusion dims each point light by its own; without it light 1 tak
     CHECK(out[0] == doctest::Approx(0.7522525f + 0.5641895f));
 }
 
+TEST_CASE("the projected light: where its maps are read, and its two forms") {
+    ShadeParams sp{};
+    // uv = (c95 P, c96 P) / c97 P: P = (1, 2, 3) gives (2, 5) / 4
+    sp.proj[0] = {1, 0, 0, 1};
+    sp.proj[1] = {0, 1, 1, 0};
+    sp.proj[2] = {0, 0, 1, 1};
+    const float at[3] = {1, 2, 3};
+    float uv[2];
+    ProjUvCpu(sp, at, uv);
+    CHECK(uv[0] == doctest::Approx(0.5f));
+    CHECK(uv[1] == doctest::Approx(1.25f));
+
+    // a white light straight above, unattenuated, a white material with
+    // ambient 0.25, the projected light's colour 0.8 from above too
+    sp.flags.x = kShadeModel | kShadeLit | kShadeProjMultiply | kShadeTextured;
+    sp.flags.y = 1;
+    sp.color = {1, 1, 1, 1};
+    sp.ambient = {0.25f, 0.25f, 0.25f, 1};
+    sp.point_pos[0] = {0, 0, 10, 0};
+    sp.point_color[0] = {1, 1, 1, 1};
+    sp.eye = {0, -10, 10, 1};
+    sp.proj_dir = {0, 0, 1, 0};
+    sp.proj_color = {0.8f, 0.8f, 0.8f, 1};
+    const float p[3] = {0, 0, 0}, n[3] = {0, 0, 1}, vc[4] = {1, 1, 1, 1};
+    const float one[4] = {1, 1, 1, 1}, zero[4] = {0, 0, 0, 0}, no_sh[2] = {1, 1};
+    const float proj[4] = {0, 0, 0, 0.5f}, gobo[4] = {0.5f, 0.25f, 1, 1};
+    float out[4];
+    // multiply: the light times 1 - 0.75 0.8 0.5 = 0.7, the ambient as it was
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, no_sh, zero, zero, out, proj, gobo);
+    CHECK(out[0] == doctest::Approx(0.25f + 0.7f));
+    // a surface it doesn't face isn't darkened
+    sp.proj_dir = {0, 0, -1, 0};
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, no_sh, zero, zero, out, proj, gobo);
+    CHECK(out[0] == doctest::Approx(1.25f));
+    // the gobo adds 0.8 s10 (1 - 0.5) where it faces, under the light's
+    sp.proj_dir = {0, 0, 1, 0};
+    sp.flags.x = kShadeModel | kShadeLit | kShadeProjGobo | kShadeTextured;
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, no_sh, zero, zero, out, proj, gobo);
+    CHECK(out[0] == doctest::Approx(1.25f + 0.2f));
+    CHECK(out[1] == doctest::Approx(1.25f + 0.1f));
+    CHECK(out[2] == doctest::Approx(1.25f + 0.4f));
+    // and nothing without the flags, whatever the texels
+    sp.flags.x = kShadeModel | kShadeLit | kShadeTextured;
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, no_sh, zero, zero, out, proj, gobo);
+    CHECK(out[0] == doctest::Approx(1.25f));
+}
+
 TEST_CASE("PackShade takes each term from the option word, not stale registers") {
     using namespace shader_opt;
     DrawItem it{};
@@ -343,6 +416,31 @@ TEST_CASE("PackShade takes each term from the option word, not stale registers")
     PackShade(it, &s, o, false, sp);
     CHECK(Has(sp, kShadeSpecMap));
     CHECK(Has(sp, kShadeGlow));
+
+    // the projected light, per pixel, where its map was decoded: the
+    // multiply form with PROJ_MULTIPLY, else the gobo's, which needs s10 too
+    s = MakeState(Bit(kRealLights) | Bit(kPerPixel) | (uint64_t(1) << kNumProj) |
+                  Bit(kProjLightMultiply));
+    s.ps[ShadeRegIndex(95)][3] = 7.0f;
+    s.ps[ShadeRegIndex(69)][0] = 0.75f;
+    PackShade(it, &s, o, true, sp);
+    CHECK_FALSE(Has(sp, (kShadeProjMultiply | kShadeProjGobo)));
+    s.maps[kMapProjected] = map;
+    PackShade(it, &s, o, true, sp);
+    CHECK(Has(sp, kShadeProjMultiply));
+    CHECK_FALSE(Has(sp, kShadeProjGobo));
+    CHECK(sp.proj[0].w == 7.0f);
+    CHECK(sp.proj_color.x == 0.75f);
+    s.options &= ~Bit(kProjLightMultiply);
+    PackShade(it, &s, o, true, sp);
+    CHECK_FALSE(Has(sp, (kShadeProjMultiply | kShadeProjGobo)));
+    s.maps[kMapGobo] = map;
+    PackShade(it, &s, o, true, sp);
+    CHECK(Has(sp, kShadeProjGobo));
+    CHECK_FALSE(Has(sp, kShadeProjMultiply));
+    s.options &= ~Bit(kPerPixel);  // vertex-lit: left out
+    PackShade(it, &s, o, true, sp);
+    CHECK_FALSE(Has(sp, (kShadeProjMultiply | kShadeProjGobo)));
 
     // no light bits: unlit, with the ambient it was given
     s = MakeState(Bit(kDiffuseMap));

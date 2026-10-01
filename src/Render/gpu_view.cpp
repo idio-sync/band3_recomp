@@ -83,11 +83,11 @@ void ClipOffset(const DrawItem& it, float vw, float vh, float out[4]) {
 
 struct PixelUniforms {
     shade::ShadeParams shade;
-    uint32_t tex_layer[4];    // diffuse, specular map, glow map
-    uint32_t tex_size[3][4];  // each one's own width and height
+    uint32_t tex_layer[8];    // diffuse, specular map, glow map, projected light, gobo
+    uint32_t tex_size[5][4];  // each one's own width and height
     uint32_t flags[4];        // x: kPremultiply
 };
-static_assert(sizeof(PixelUniforms) == sizeof(shade::ShadeParams) + 80);
+static_assert(sizeof(PixelUniforms) == sizeof(shade::ShadeParams) + 128);
 
 // mesh.hlsl's pixel_flags.x
 enum : uint32_t { kPremultiply = 1 };
@@ -103,9 +103,17 @@ static_assert(sizeof(SpotUniforms) == sizeof(spot::SpotParams) + 32);
 // the textures a draw samples, in mesh.hlsl's sampler order: the maps, which
 // PixelUniforms sizes, then the picture behind (kShadeRefract); a spotlight's
 // cone reads two more, the scene's depth and the density map
-enum { kSlotDiffuse, kSlotSpecular, kSlotGlow, kSlotBehind, kNumSlots };
+enum {
+    kSlotDiffuse,
+    kSlotSpecular,
+    kSlotGlow,
+    kSlotProjected,
+    kSlotGobo,
+    kSlotBehind,
+    kNumSlots
+};
 enum { kSlotSceneDepth = kNumSlots, kSlotDensity, kNumSpotSlots };
-static_assert(kSlotBehind == 3, "PixelUniforms has tex_size for the three maps");
+static_assert(kSlotBehind == 5, "PixelUniforms has tex_size for the five maps");
 
 // RndMat::Blend, the modes Blend() in soft_raster.cpp draws (Screen, Lighten
 // and Darken, which NgMat sets no state for, as Src, as it does)
@@ -1240,6 +1248,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             shade::PackShade(it, state, o, false, shades[d]);
             if (shades[d].flags.x & shade::kShadeSpecMap) UseTexture(state->maps[kMapSpecular]);
             if (shades[d].flags.x & shade::kShadeGlow) UseTexture(state->maps[kMapGlow]);
+            if (shades[d].flags.x & (shade::kShadeProjMultiply | shade::kShadeProjGobo))
+                UseTexture(state->maps[kMapProjected]);
+            if (shades[d].flags.x & shade::kShadeProjGobo) UseTexture(state->maps[kMapGobo]);
         }
         if (target) {
             target->drawn = true;
@@ -1637,6 +1648,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         if (sp.flags.x & shade::kShadeGlow) {
             tex[kSlotGlow] = layer_of(state->maps[kMapGlow].get());
             if (!tex[kSlotGlow].texture) sp.flags.x &= ~shade::kShadeGlow;
+        }
+        if (sp.flags.x & (shade::kShadeProjMultiply | shade::kShadeProjGobo)) {
+            tex[kSlotProjected] = layer_of(state->maps[kMapProjected].get());
+            if (sp.flags.x & shade::kShadeProjGobo)
+                tex[kSlotGobo] = layer_of(state->maps[kMapGobo].get());
+            if (!tex[kSlotProjected].texture ||
+                ((sp.flags.x & shade::kShadeProjGobo) && !tex[kSlotGobo].texture))
+                sp.flags.x &= ~(shade::kShadeProjMultiply | shade::kShadeProjGobo);
         }
         // REFRACT_WORLD reads the picture behind it: into the picture, once
         // the resolve has kept a copy of it

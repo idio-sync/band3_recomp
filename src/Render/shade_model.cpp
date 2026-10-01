@@ -66,7 +66,7 @@ void LightVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], c
                     const float ao_sh[2], float diffuse[3], float added[3]) {
     const Lighting l = Light(sp, float3{p[0], p[1], p[2]}, float3{n[0], n[1], n[2]},
                              float4{vc[0], vc[1], vc[2], vc[3]}, float4{1, 1, 1, 1},
-                             float2{ao_sh[0], ao_sh[1]});
+                             float2{ao_sh[0], ao_sh[1]}, float4{0, 0, 0, 0}, float4{0, 0, 0, 0});
     diffuse[0] = l.diffuse.x;
     diffuse[1] = l.diffuse.y;
     diffuse[2] = l.diffuse.z;
@@ -75,19 +75,31 @@ void LightVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], c
     added[2] = l.added.z;
 }
 
+void ProjUvCpu(const ShadeParams& sp, const float p[3], float out[2]) {
+    const float2 uv = ProjUv(sp, float3{p[0], p[1], p[2]});
+    out[0] = uv.x;
+    out[1] = uv.y;
+}
+
 void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], const float vc[4],
                    const float texel[4], const float spec_map[4], const float glow[4],
                    const float behind[4], float depth, const float ao_sh[2],
-                   const float vertex_diffuse[3], const float vertex_added[3], float out[4]) {
+                   const float vertex_diffuse[3], const float vertex_added[3], float out[4],
+                   const float proj[4], const float gobo[4]) {
     const Lighting vertex{float3{vertex_diffuse[0], vertex_diffuse[1], vertex_diffuse[2]},
                           float3{vertex_added[0], vertex_added[1], vertex_added[2]}};
+    const float none[4] = {0, 0, 0, 0};
+    if (!proj) proj = none;
+    if (!gobo) gobo = none;
     const float4 r = ShadePixel(sp, float3{p[0], p[1], p[2]}, float3{n[0], n[1], n[2]},
                                 float4{vc[0], vc[1], vc[2], vc[3]},
                                 float4{texel[0], texel[1], texel[2], texel[3]},
                                 float4{spec_map[0], spec_map[1], spec_map[2], spec_map[3]},
                                 float4{glow[0], glow[1], glow[2], glow[3]},
                                 float4{behind[0], behind[1], behind[2], behind[3]}, depth,
-                                float2{ao_sh[0], ao_sh[1]}, vertex);
+                                float2{ao_sh[0], ao_sh[1]},
+                                float4{proj[0], proj[1], proj[2], proj[3]},
+                                float4{gobo[0], gobo[1], gobo[2], gobo[3]}, vertex);
     out[0] = r.x;
     out[1] = r.y;
     out[2] = r.z;
@@ -152,6 +164,9 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     Copy(s->Ps(63), sp.rim);
     for (int i = 0; i < 3; i++) Copy(s->Ps(53 + i), sp.fade[i]);
     Copy(s->Ps(104), sp.fade_color);
+    for (int i = 0; i < 3; i++) Copy(s->Ps(95 + i), sp.proj[i]);
+    Copy(s->Ps(66), sp.proj_dir);
+    Copy(s->Ps(69), sp.proj_color);
 
     // Registers the option word doesn't use may hold anything from an earlier
     // draw, so every term is the option word's
@@ -203,6 +218,20 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     // vertex colour's SH, none of those without one (out/research/
     // parity_diag_ao_refract.md)
     if (s->Option(kEnableAO) && sp.flags.y >= 1) f |= kShadeAoSh;
+    // the projected light, where its maps were decoded: the multiply form
+    // reads s5 alone, the gobo s10 too. The 18 pixel shaders the dumps have
+    // that read it (c95) all light per pixel (fam3.py matches each); a
+    // vertex-lit material's is left out. The multiply form's s5 is a texture
+    // RB3 draws (the shadows' silhouettes, blurred), whose drawing the
+    // capture leaves out: the capture's copy is guest memory's, right only
+    // with --readback_resolve=full (stale otherwise, nearly empty).
+    if (s->OptionBits(kNumProj, 2) != 0 && s->Option(kPerPixel) && maps &&
+        s->maps[kMapProjected]) {
+        if (s->Option(kProjLightMultiply))
+            f |= kShadeProjMultiply;
+        else if (s->maps[kMapGobo])
+            f |= kShadeProjGobo;
+    }
     if (s->Option(kRimLight)) f |= kShadeRim;
     if (s->Option(kRimLightUnder)) f |= kShadeRimUnder;
     switch (s->OptionBits(kCustomVariation, 2)) {

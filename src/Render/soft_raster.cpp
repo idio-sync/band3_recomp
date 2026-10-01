@@ -119,6 +119,8 @@ struct DrawState {
     TexView tex;
     TexView spec_map;  // none unless shade samples it
     TexView glow;
+    TexView proj;  // the projected light's s5 and s10, likewise
+    TexView gobo;
     TexView behind;  // the target's behind, for kShadeRefract
     shade::ShadeParams shade;
     bool per_vertex;  // kShadePerVertex: ClipVert's ld and la are set
@@ -177,6 +179,28 @@ void SampleLinear(const TexView& t, float u, float v, float out[4]) {
     }
 }
 
+// bilinear at u, v (0..1), outside the texture a transparent black border:
+// the projected light's maps' sampler (their fetch constants clamp to a black
+// border, filter linear); mesh.hlsl's ProjTexel does the same arithmetic
+void SampleBorder(const TexView& t, float u, float v, float out[4]) {
+    for (int c = 0; c < 4; c++) out[c] = 0;
+    // beyond 2 every tap is the border; NaN (on the light's plane) is too
+    if (!(std::fabs(u) < 2.0f && std::fabs(v) < 2.0f)) return;
+    const float x = u * float(t.w) - 0.5f, y = v * float(t.h) - 0.5f;
+    const float fx = std::floor(x), fy = std::floor(y);
+    const float tx = x - fx, ty = y - fy;
+    auto at = [&](int xi, int yi, int c) {
+        if (xi < 0 || yi < 0 || xi >= int(t.w) || yi >= int(t.h)) return 0.0f;
+        return float((t.px[size_t(yi) * t.w + xi] >> (8 * c)) & 0xff) / 255.0f;
+    };
+    const int x0 = int(fx), y0 = int(fy);
+    for (int c = 0; c < 4; c++) {
+        const float top = at(x0, y0, c) + (at(x0 + 1, y0, c) - at(x0, y0, c)) * tx;
+        const float bottom = at(x0, y0 + 1, c) + (at(x0 + 1, y0 + 1, c) - at(x0, y0 + 1, c)) * tx;
+        out[c] = top + (bottom - top) * ty;
+    }
+}
+
 // A spotlight cone's colour at pixel x, y of the depth volume, wp the
 // proxy's world position there and w its clip w (spot_model.hlsli's
 // SpotCone). The shader takes where the pixel is on the screen from its clip
@@ -217,8 +241,15 @@ void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3
         const uint32_t c = ds.behind.px[size_t(y) * ds.behind.w + x];
         for (int i = 0; i < 4; i++) behind[i] = float((c >> (8 * i)) & 0xff) / 255.0f;
     }
+    float proj[4] = {0, 0, 0, 0}, gobo[4] = {0, 0, 0, 0};
+    if (ds.proj.px) {
+        float puv[2];
+        shade::ProjUvCpu(ds.shade, wp, puv);
+        SampleBorder(ds.proj, puv[0], puv[1], proj);
+        if (ds.gobo.px) SampleBorder(ds.gobo, puv[0], puv[1], gobo);
+    }
     shade::ShadePixelCpu(ds.shade, wp, n, vc, texel, spec_map, glow, behind, depth, ao, ld, la,
-                         out);
+                         out, proj, gobo);
 }
 
 // The colour by the material's blend mode (Dest keeps it), and alpha by
@@ -452,6 +483,9 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     if (ds.shade.flags.x & shade::kShadeSpecMap)
         ds.spec_map = View(state->maps[kMapSpecular].get());
     if (ds.shade.flags.x & shade::kShadeGlow) ds.glow = View(state->maps[kMapGlow].get());
+    if (ds.shade.flags.x & (shade::kShadeProjMultiply | shade::kShadeProjGobo))
+        ds.proj = View(state->maps[kMapProjected].get());
+    if (ds.shade.flags.x & shade::kShadeProjGobo) ds.gobo = View(state->maps[kMapGobo].get());
     ds.per_vertex = (ds.shade.flags.x & shade::kShadePerVertex) != 0;
     // REFRACT_WORLD reads the picture behind it: in the picture, once resolved
     if (ds.shade.flags.x & shade::kShadeRefract) {
