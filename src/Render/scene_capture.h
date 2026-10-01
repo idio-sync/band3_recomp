@@ -303,7 +303,8 @@ inline constexpr uint32_t kTexTypeShadowMap = 0x42;
 // RB3's draw modes (TheRnd's), as DrawItem::draw_mode keeps them: 0 the colour
 // pass, 1 a shadow map's depth (RndShadowMap::PrepShadow), 3 NgLight's shadow
 // casters into its own texture (NgLight::RenderShadows, no camera: its draws'
-// view_proj is the VS's c4..c7, which it uploads itself), 6 the soft particles
+// view_proj is the VS's c4..c7, which it uploads itself; their shader has no
+// lights and no DIFFUSE_MAP: white silhouettes), 6 the soft particles
 // (IsSoftParticle), 7 a reflection's mirrored scene. rb3-xenon numbers those
 // from NgLight's on one higher than retail does.
 inline constexpr uint8_t kDrawModeNormal = 0;
@@ -350,6 +351,21 @@ inline const Texture* ShadowMapOf(const ShadeState* s) {
     if (!s || !s->Option(shader_opt::kShadowBuffer)) return nullptr;
     const Texture* t = s->maps[kMapProjected].get();
     return t && t->tex_obj && t->tex_type == kTexTypeShadowMap ? t : nullptr;
+}
+
+// The projected light's map (s5 of a NUM_PROJ draw lit per pixel: the
+// renderers leave a vertex-lit one's out) when it's a texture RB3 draws, as
+// the capture kept it (its identity and version), or null: NgLight's shadow,
+// which NgLight::RenderShadows draws each frame into its 256x256 rendered-noz
+// texture from the shadow casters (draw mode 3) and blurs twice in place
+// (soft_raster.h's ShadowCasterPass, spot::SpotBlur)
+inline const Texture* ProjectedTargetOf(const ShadeState* s) {
+    if (!s || !s->OptionBits(shader_opt::kNumProj, 2) || !s->Option(shader_opt::kPerPixel))
+        return nullptr;
+    const Texture* t = s->maps[kMapProjected].get();
+    return t && t->tex_obj && IsPassTargetType(t->tex_type) && t->tex_type != kTexTypeShadowMap
+               ? t
+               : nullptr;
 }
 
 // A stretch of FrameCapture::draws that went to one target: the back buffer,

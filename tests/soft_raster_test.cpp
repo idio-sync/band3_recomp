@@ -10,8 +10,10 @@
 // left it; that a mesh's edges land on the pixels the game's do (D3D9's
 // pixel centres), a DrawRect quad's on D3D10's; and that a soft particle
 // fades by the scene's depth behind it, and the soft-particle buffer's blur
-// takes its taps from the other surface; and that a shadow map's pass draws
-// depth alone, which a SHADOW_BUFFER draw after it reads.
+// takes its taps from the other surface; that a shadow map's pass draws
+// depth alone, which a SHADOW_BUFFER draw after it reads; and that NgLight's
+// shadow is its casters' white silhouettes, cleared first and blurred twice
+// in place, which the projected light's draws read.
 
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -19,6 +21,7 @@
 #include <memory>
 #include <vector>
 #include "src/Render/soft_raster.h"
+#include "src/Render/spot_model.h"
 
 using namespace band3::render;
 
@@ -730,6 +733,190 @@ TEST_CASE("a shadow map's pass draws depth, which a SHADOW_BUFFER draw after it 
     CHECK(tex[4 + 0] == 0xff000000u);  // pixel 0: z -0.5, clipped
     CHECK(tex[4 + 2] == 0xff808080u);  // pixel 2: z 0.5
     CHECK(tex[4 + 3] == 0xff000000u);  // pixel 3: z 1, no nearer than the clear
+}
+
+namespace {
+
+constexpr uint32_t kLightTex = 0x2261B598;  // NgLight's mShadowRT, 8x4 here
+
+// a texture of NgLight's shadow, as a draw's s5 or a blur's quad keeps it
+std::shared_ptr<Texture> LightShadow(uint32_t version) {
+    auto t = std::make_shared<Texture>();
+    t->width = 8;
+    t->height = 4;
+    t->tex_obj = kLightTex;
+    t->tex_type = 0x22;
+    t->version = version;
+    return t;
+}
+
+// NgLight::RenderShadows' pass, as the capture records it: no camera, so no
+// clear and no viewport
+Pass LightPass(uint32_t first, uint32_t version) {
+    Pass p = SoftPass(kLightTex, first, 0, version);
+    p.viewport[2] = p.viewport[3] = 0;
+    return p;
+}
+
+// a shadow caster's shade in draw mode 3: the standard shader with no
+// options (RndShaderStandard::CalcShaderOpts), its material's brown colour
+// half transparent in c0
+ShadeState CasterShade() {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = 18;
+    const float c0[4] = {0.51f, 0.42f, 0.23f, 0.5f};
+    for (int c = 0; c < 4; c++) {
+        s.ps[ShadeRegIndex(0)][c] = s.vs[ShadeRegIndex(0)][c] = c0[c];
+        s.ps[ShadeRegIndex(1)][c] = s.vs[ShadeRegIndex(1)][c] = 1.0f;
+    }
+    s.vs[ShadeRegIndex(20)][0] = 1.0f;
+    s.vs[ShadeRegIndex(21)][1] = 1.0f;
+    return s;
+}
+
+// BlurShadowRT's taps into the 8x4 shadow: a texel apart, across or down,
+// weights .1 .25 .3 .25 .1
+ShadeState LightBlurShade(bool down) {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = 1;
+    const float weights[5] = {0.1f, 0.25f, 0.3f, 0.25f, 0.1f};
+    for (int i = 0; i < 5; i++) {
+        float* off = s.ps[ShadeRegIndex(31 + i)];
+        off[down ? 1 : 0] = float(i - 2) / (down ? 4.0f : 8.0f);
+        off[2] = off[3] = 1;
+        for (int c = 0; c < 4; c++) s.ps[ShadeRegIndex(47 + i)][c] = weights[i];
+    }
+    return s;
+}
+
+// A lit PROJ_MULTIPLY material reading the shadow as its s5 (`map`, null
+// none): white, ambient 0.25, a light far above of 0.5, the projected light
+// white from above, its uv the world position's (x, -y) from 0..1 over the
+// picture's -1..1
+ShadeState ProjectedShade(std::shared_ptr<Texture> map) {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = 18;
+    s.options = 1ull << shader_opt::kRealLights | 1ull << shader_opt::kPerPixel |
+                1ull << shader_opt::kNumPoint | 1ull << shader_opt::kNumProj |
+                1ull << shader_opt::kProjLightMultiply;
+    auto set = [&](int reg, float x, float y, float z, float w) {
+        float* r = s.ps[ShadeRegIndex(reg)];
+        r[0] = x;
+        r[1] = y;
+        r[2] = z;
+        r[3] = w;
+    };
+    set(0, 1, 1, 1, 1);
+    set(1, 0.25f, 0.25f, 0.25f, 1);
+    set(64, 0, 0, 1e5f, 0);
+    set(67, 0.5f, 0.5f, 0.5f, 1);
+    set(66, 0, 0, 1, 0);
+    set(69, 1, 1, 1, 1);
+    set(95, 0.5f, 0, 0, 0.5f);
+    set(96, 0, -0.5f, 0, 0.5f);
+    set(97, 0, 0, 0, 1);
+    s.vs[ShadeRegIndex(20)][0] = 1.0f;
+    s.vs[ShadeRegIndex(21)][1] = 1.0f;
+    s.maps[kMapProjected] = std::move(map);
+    return s;
+}
+
+}  // namespace
+
+TEST_CASE("NgLight's shadow: its casters' silhouettes, blurred twice, darken the projected light") {
+    // the shadow pass: a caster over the left half, its material's texture
+    // and colour, in draw mode 3; two in-place blurs, across then down; the
+    // back buffer's projected light over all of the picture, reading the
+    // last version. Before them a pass that filled the shadow red.
+    FrameCapture f;
+    f.shades = {CasterShade(), LightBlurShade(false), LightBlurShade(true),
+                ProjectedShade(LightShadow(4))};
+    DrawItem fill = Fill(kRed);
+    fill.target = kLightTex;
+    DrawItem caster = Item(Quad(-1, 0, 0xff0000ffu), kLightTex);
+    caster.draw_mode = kDrawModeShadowCasters;
+    caster.shade = 0;
+    caster.prelit = false;
+    caster.tex = std::make_shared<Texture>(Texture{1, 1, {kGreen}});
+    DrawItem blurs[2];
+    for (int k = 0; k < 2; k++) {
+        blurs[k] = Item(Quad(-1, 1, 0xffffffffu), kLightTex);
+        blurs[k].rect_shader = 1;
+        blurs[k].rect[2] = 8;
+        blurs[k].rect[3] = 4;
+        blurs[k].tex = LightShadow(2 + uint32_t(k));
+        blurs[k].shade = 1 + k;
+    }
+    auto up = std::make_shared<Geometry>(*Quad(-1, 1, 0xffffffffu));
+    for (Vertex& v : up->verts) v.nrm[2] = 1.0f;
+    DrawItem lit = Item(up, 0);
+    lit.prelit = false;
+    lit.shade = 3;
+    f.draws = {fill, caster, blurs[0], blurs[1], lit};
+    Pass filled = LightPass(0, 1);
+    filled.clear_flags = 0x0f;
+    f.passes = {filled, LightPass(1, 2), LightPass(2, 3), LightPass(3, 4), BackBuffer(4, 1)};
+    REQUIRE(spot::SpotBlur(blurs[0], &f.shades[1], f.passes[2]));
+    CHECK(ShadowCasterPass(f, f.passes[1]));
+    CHECK_FALSE(ShadowCasterPass(f, f.passes[2]));
+    // NgLight clears it though no camera does: what the red pass drew isn't
+    // seen, so it isn't drawn
+    CHECK(PassClearFlags(f, f.passes[1]) == 0x0f);
+    const std::vector<PassRun> runs = PlanPasses(f, Small());
+    REQUIRE(runs.size() == 4);
+    CHECK(runs[0].pass == &f.passes[1]);
+
+    // the casters: opaque white whatever their texture and colour, over
+    // transparent black
+    std::vector<uint32_t> tex;
+    uint32_t w = 0, h = 0;
+    REQUIRE(RasterizeTarget(f, Small(), kLightTex, 2, tex, w, h));
+    REQUIRE(w == 8);
+    for (int x = 0; x < 8; x++) CHECK(tex[1 * 8 + x] == (x < 4 ? 0xffffffffu : 0u));
+    // blurred across: x takes texels x-2..x+2 (clamped), .1 .25 .3 .25 .1
+    REQUIRE(RasterizeTarget(f, Small(), kLightTex, 3, tex, w, h));
+    const float kernel[5] = {0.1f, 0.25f, 0.3f, 0.25f, 0.1f};
+    uint32_t across[8];
+    for (int x = 0; x < 8; x++) {
+        float want = 0;
+        for (int k = 0; k < 5; k++) want += std::clamp(x - 2 + k, 0, 7) < 4 ? kernel[k] : 0.0f;
+        CAPTURE(x);
+        across[x] = tex[2 * 8 + x];
+        CHECK(std::abs(int(Alpha(across[x])) - int(want * 255 + 0.5f)) <= 1);
+        CHECK((across[x] & 0xff) == Alpha(across[x]));
+    }
+    // and down, which a shadow the same all the way down keeps
+    REQUIRE(RasterizeTarget(f, Small(), kLightTex, 4, tex, w, h));
+    for (int x = 0; x < 8; x++) CHECK(tex[0 * 8 + x] == across[x]);
+
+    // the picture: pixel x samples the shadow at texel x - 0.5, bilinear;
+    // where its alpha is 1 the light is 1 - 0.75 of itself (0.25 + 0.5 x
+    // 0.25), where it's 0 all of it (0.25 + 0.5)
+    std::vector<uint32_t> rgba;
+    RasterStats st = Rasterize(f, Small(), rgba);
+    CHECK(st.passes == 3);
+    CHECK(st.rt_missing == 0);
+    CHECK(std::abs(int(rgba[1 * 8 + 1] & 0xff) - 96) <= 1);
+    CHECK(std::abs(int(rgba[1 * 8 + 7] & 0xff) - 191) <= 1);
+    const float a = (float(Alpha(across[3])) + float(Alpha(across[4]))) / 2 / 255;
+    CHECK(std::abs(int(rgba[1 * 8 + 4] & 0xff) - int((0.25f + 0.5f * (1 - 0.75f * a)) * 255 + 0.5f)) <=
+          1);
+
+    // a version no pass here drew (the frame before's) reads guest memory's
+    // pixels where they're kept (here none of it shadowed), else leaves the
+    // light out, counted as missing
+    auto guest = LightShadow(9);
+    guest->rgba.assign(8 * 4, 0x00ffffffu);
+    f.shades[3] = ProjectedShade(guest);
+    Rasterize(f, Small(), rgba);
+    CHECK(std::abs(int(rgba[1 * 8 + 1] & 0xff) - 191) <= 1);
+    f.shades[3] = ProjectedShade(LightShadow(9));
+    st = Rasterize(f, Small(), rgba);
+    CHECK(st.rt_missing == 1);
+    CHECK(std::abs(int(rgba[1 * 8 + 1] & 0xff) - 191) <= 1);
 }
 
 TEST_CASE("the display gamma ramp maps each value as the presenter shows it") {

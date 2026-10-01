@@ -24,7 +24,10 @@
 // buffer's blurs take their taps from one surface into the other. A shadow
 // map's pass (kTexTypeShadowMap) draws depth alone, clip z/w less than what's
 // there (cleared to 1), into a float buffer of its target's, which the
-// SHADOW_BUFFER draws after it read (RasterOptions::self_shadow).
+// SHADOW_BUFFER draws after it read (RasterOptions::self_shadow). NgLight's
+// shadow (scene_capture.h's ProjectedTargetOf) is drawn as RB3 draws it: its
+// casters' silhouettes into its texture (ShadowCasterPass), blurred twice in
+// place (spot::SpotBlur); the projected light's draws read that as their s5.
 //
 // The back buffer's draws are split at post_boundary, as RB3 draws them: the
 // world's go to a scene target, which keeps alpha as RB3's back buffer does
@@ -113,8 +116,9 @@ struct PassRun {
 };
 // The frame's back-buffer stretches, and the texture passes that something
 // drawn after them samples (by texture, any version: a pass that clears hides
-// the ones before it), as its diffuse texture or, with self_shadow, as its
-// shadow map (ShadowMapOf), but none from post-processing on, which isn't
+// the ones before it), as its diffuse texture, as its projected light's map
+// (ProjectedTargetOf) or, with self_shadow, as its shadow map (ShadowMapOf),
+// but none from post-processing on, which isn't
 // drawn yet, other than the spotlights' (the depth volume's cones and blurs,
 // and the density map its cones read: spot_model.h), the soft particles' (the
 // particles into the first surface, its blur into the second and back),
@@ -136,13 +140,25 @@ inline constexpr int kSoftBlurTaps = 5;
 bool SoftBlur(const FrameCapture& frame, const DrawItem& d, const ShadeInputs* state,
               const Pass& p);
 
-// a texture pass's draws but FinishDrawTarget's mip downsamples (the
-// renderers make mips themselves, or sample level 0) and NgLight's shadow
-// casters (draw mode 3), which aren't drawn yet: what samples its texture
-// reads guest memory's pixels, as before the capture kept them
-inline bool DrawnInTexturePass(const DrawItem& d) {
-    return d.mip_level == 0 && d.draw_mode != kDrawModeShadowCasters;
+// a texture pass's draws but FinishDrawTarget's mip downsamples: the
+// renderers make mips themselves, or sample level 0
+inline bool DrawnInTexturePass(const DrawItem& d) { return d.mip_level == 0; }
+
+// Whether pass p is NgLight::RenderShadows' pass of its shadow casters (its
+// draws in draw mode 3): no camera selects it, so the capture has no clear
+// for it, but SetAndClearShadowViewport clears it to transparent black
+// (PassClearFlags) before the casters draw their silhouettes into it, opaque
+// white (shade_model.cpp's PackShade), untextured (SamplesDiffuse), culled
+// and blended as each says
+bool ShadowCasterPass(const FrameCapture& frame, const Pass& p);
+// the D3DCLEAR bits pass p starts with: its camera's, or a shadow caster
+// pass's colour clear (Pass::clear_color is then 0, transparent black)
+inline uint32_t PassClearFlags(const FrameCapture& frame, const Pass& p) {
+    return p.clear_flags | (ShadowCasterPass(frame, p) ? 0x0fu : 0u);
 }
+// whether a draw samples its diffuse texture: not a shadow caster, whose
+// shader has no DIFFUSE_MAP though its material has a texture
+inline bool SamplesDiffuse(const DrawItem& d) { return d.draw_mode != kDrawModeShadowCasters; }
 
 // a texture that texture passes draw, which a renderer samples from its own
 // target

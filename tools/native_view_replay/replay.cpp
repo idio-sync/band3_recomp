@@ -3,7 +3,7 @@
 //   replay <file.cap> <out.png> [--size WxH] [--cam N] [--per-cam] [--list]
 //                               [--compare <screenshot.png> [--image <native.png>]]
 //                               [--diff <native.png>] [--crop x,y,w,h] [--mesh <hex>]
-//                               [--dump-tex <draw>] [--shade <draw>]
+//                               [--dump-tex <draw>[:<map>]] [--shade <draw>]
 //                               [--dump-rt <hex>[:<version>]]
 //                               [--rt-none | --rt-guest]
 //                               [--no-tex] [--no-blend] [--no-cull] [--no-shadow] [--transpose]
@@ -35,6 +35,12 @@
 // --dump-rt writes what the texture pass target with that DxTex holds (alpha
 // shown as black) after the pass making that version of it (its last without
 // one), drawn on the CPU, to out.png, and its alpha as grey to out.alpha.png.
+// --dump-tex writes a draw's diffuse texture as the capture kept it (guest
+// memory's pixels, for a render target), or with :<map> one of its shade's
+// maps (normal, specular, glow, projected, gobo...: --shade's names), and its
+// alpha likewise: --dump-tex <draw>:projected of a projected light's draw is
+// guest memory's copy of NgLight's shadow (right with --readback_resolve=full),
+// to set against --dump-rt of it, which the CPU draws.
 // --compare draws the frame at the size of a harness `capture` screenshot and
 // writes the two side by side (game left, native right), with their mean
 // difference; with --image the native side is that PNG instead (a harness
@@ -796,6 +802,7 @@ int main(int argc, char** argv) {
     std::string compare, image, diff_with, dump_alpha, dump_depth, dump_bloom;
     Crop crop;
     long mesh_filter = -1, dump_tex = -1, shade_draw = -1;
+    int dump_map = -1;  // --dump-tex's :<map>, -1 the diffuse texture
     uint32_t dump_rt = 0, dump_rt_version = 0;
     int pick_x = -1, pick_y = -1;
     long cam_filter = -1;
@@ -815,7 +822,18 @@ int main(int argc, char** argv) {
             }
         }
         else if (a == "--mesh" && i + 1 < argc) mesh_filter = std::strtol(argv[++i], nullptr, 16);
-        else if (a == "--dump-tex" && i + 1 < argc) dump_tex = std::strtol(argv[++i], nullptr, 0);
+        else if (a == "--dump-tex" && i + 1 < argc) {
+            char* end = nullptr;
+            dump_tex = std::strtol(argv[++i], &end, 0);
+            if (end && *end == ':') {
+                for (int m = 0; m < kNumShadeMaps; m++)
+                    if (std::strcmp(end + 1, kMapNames[m]) == 0) dump_map = m;
+                if (dump_map < 0) {
+                    std::fprintf(stderr, "--dump-tex's map is one of --shade's names\n");
+                    return 2;
+                }
+            }
+        }
         else if (a == "--shade" && i + 1 < argc) shade_draw = std::strtol(argv[++i], nullptr, 0);
         else if (a == "--dump-rt" && i + 1 < argc) {
             char* end = nullptr;
@@ -1091,20 +1109,37 @@ int main(int argc, char** argv) {
     }
 
     if (dump_tex >= 0) {
-        if (size_t(dump_tex) >= fc->draws.size() || !fc->draws[dump_tex].tex) {
-            std::fprintf(stderr, "draw %ld has no texture\n", dump_tex);
+        const DrawItem* d = size_t(dump_tex) < fc->draws.size() ? &fc->draws[dump_tex] : nullptr;
+        const ShadeState* s = d ? ShadeOf(*fc, *d) : nullptr;
+        const Texture* tp = !d              ? nullptr
+                            : dump_map >= 0 ? (s ? s->maps[dump_map].get() : nullptr)
+                                            : d->tex.get();
+        if (!tp) {
+            std::fprintf(stderr, "draw %ld has no %s\n", dump_tex,
+                         dump_map >= 0 ? kMapNames[dump_map] : "texture");
             return 1;
         }
-        const Texture& t = *fc->draws[dump_tex].tex;
+        const Texture& t = *tp;
         if (t.rgba.empty()) {
             std::fprintf(stderr, "draw %ld samples render target %08X version %u, kept without "
                          "pixels\n", dump_tex, t.tex_obj, t.version);
             return 1;
         }
-        std::vector<uint32_t> px = t.rgba;
-        for (uint32_t& p : px) p |= 0xff000000u;  // alpha off, to see the colour
+        // alpha off, to see the colour, and on its own as grey
+        std::vector<uint32_t> px = t.rgba, alpha(t.rgba.size());
+        for (size_t i = 0; i < px.size(); i++) {
+            const uint32_t a = px[i] >> 24;
+            alpha[i] = a | a << 8 | a << 16 | 0xff000000u;
+            px[i] |= 0xff000000u;
+        }
+        std::string alpha_path = argv[2];
+        alpha_path = alpha_path.substr(0, alpha_path.size() - 4) + ".alpha.png";
         WritePng(argv[2], px, t.width, t.height);
-        std::printf("%s: %ux%u format %u\n", argv[2], t.width, t.height, t.format);
+        WritePng(alpha_path, alpha, t.width, t.height);
+        std::printf("%s (and %s): %ux%u format %u", argv[2], alpha_path.c_str(), t.width,
+                    t.height, t.format);
+        if (t.tex_obj) std::printf(", render target %08X version %u", t.tex_obj, t.version);
+        std::printf("\n");
         return 0;
     }
 

@@ -3,8 +3,9 @@
 // shading itself is shade.hlsli, which the CPU compiles too, from the same
 // ShadeParams (shade_model.cpp packs them); a spotlight's cone shades by
 // spot_model.hlsli instead (PSSpotCone), from SpotParams (spot_model.cpp),
-// and a soft particle is a mesh's shading faded by the scene's depth
-// (PSSoftParticle).
+// a soft particle is a mesh's shading faded by the scene's depth
+// (PSSoftParticle), and a shadow map's draws write their depth alone
+// (PSShadowDepth).
 //
 // Registers follow SDL_gpu's layout (SDL_CreateGPUShader in SDL_gpu.h): vertex
 // resources in space0, vertex uniforms in space1, pixel resources in space2,
@@ -39,7 +40,9 @@ VK_BINDING(0, 1) cbuffer VertexUniforms : register(b0, space1) {
     uint skinned;     // bones[bone_base..] place the vertex instead of world
     uint bone_base;
     uint bone_count;
-    uint vertex_pad;
+    // into a shadow map (PSShadowDepth): the clip z is the depth, as the
+    // game's device has it, not kNearW / w
+    uint shadow_depth;
     // added to the clip position's x, y times its w: (1/width, -1/height) of
     // the viewport, half a pixel right and down, for a draw on D3D9's pixel
     // centres (soft_raster.cpp's PixelCentre); 0 for DrawRect's quads
@@ -71,6 +74,11 @@ VK_SAMPLER VK_BINDING(4, 2) SamplerState gobo_sampler : register(s4, space2);
 // soft_raster.cpp does
 VK_SAMPLER VK_BINDING(5, 2) Texture2D<float4> behind_tex : register(t5, space2);
 VK_SAMPLER VK_BINDING(5, 2) SamplerState behind_sampler : register(s5, space2);
+// the shadow map kShadeShadow reads, its depth (clip z/w) as its pass left it
+// (an R32_FLOAT target of its own; the 1x1 stand-in otherwise), four texels
+// read as they are (shade.hlsli's ShadowTaps)
+VK_SAMPLER VK_BINDING(6, 2) Texture2D<float> shadow_tex : register(t6, space2);
+VK_SAMPLER VK_BINDING(6, 2) SamplerState shadow_sampler : register(s6, space2);
 
 // pixel_flags.x
 // SrcAlpha and SrcAlphaAdd: the colour leaves already scaled by its alpha,
@@ -82,7 +90,9 @@ VK_BINDING(0, 3) cbuffer PixelUniforms : register(b0, space3) {
     // the diffuse texture's, the specular map's, the glow map's and the
     // projected light's ([0].xyzw), the gobo's ([1].x)
     uint4 tex_layer[2];
-    uint4 tex_size[5];  // and their own sizes (xy), in that order; their layers may be bigger
+    // and their own sizes (xy), in that order (their layers may be bigger),
+    // then the shadow map's
+    uint4 tex_size[6];
     uint4 pixel_flags;
 };
 
@@ -102,12 +112,12 @@ VK_BINDING(1, 3) cbuffer SpotUniforms : register(b1, space3) {
 // and what it reads besides its cross-section texture (tex): the scene's
 // depth as the world's draws left it (kNearW / w, 0 where nothing drew) and
 // the density map (a texture pass's target, an array of one layer). The
-// slots after the mesh's six, which PSMain doesn't read; PSSoftParticle reads
-// the scene's depth.
-VK_SAMPLER VK_BINDING(6, 2) Texture2D<float> scene_depth_tex : register(t6, space2);
-VK_SAMPLER VK_BINDING(6, 2) SamplerState scene_depth_sampler : register(s6, space2);
-VK_SAMPLER VK_BINDING(7, 2) Texture2DArray<float4> density_tex : register(t7, space2);
-VK_SAMPLER VK_BINDING(7, 2) SamplerState density_sampler : register(s7, space2);
+// slots after the mesh's seven, which PSMain doesn't read; PSSoftParticle
+// reads the scene's depth.
+VK_SAMPLER VK_BINDING(7, 2) Texture2D<float> scene_depth_tex : register(t7, space2);
+VK_SAMPLER VK_BINDING(7, 2) SamplerState scene_depth_sampler : register(s7, space2);
+VK_SAMPLER VK_BINDING(8, 2) Texture2DArray<float4> density_tex : register(t8, space2);
+VK_SAMPLER VK_BINDING(8, 2) SamplerState density_sampler : register(s8, space2);
 
 // soft_raster.cpp's near plane: w below it is clipped
 static const float kNearW = 1e-3;
@@ -174,8 +184,10 @@ PixelIn VSMain(VertexIn v) {
     PixelIn o;
     // depth is kNearW / w, the CPU's 1/w scaled: z/w interpolates as 1/w does,
     // larger is nearer, the near plane is w = kNearW and there's no far plane,
-    // whatever depth range the game's projection has
-    o.pos = float4(clip.xy, kNearW, clip.w);
+    // whatever depth range the game's projection has. Into a shadow map it's
+    // the clip z, whose z/w the map keeps and its pass's LESS test compares,
+    // clipped at 0 as the game's device clips it (soft_raster.cpp likewise)
+    o.pos = float4(clip.xy, shadow_depth != 0u ? clip.z : kNearW, clip.w);
     o.uv = TexGen(vs_shade, v.uv);
     o.nrm = wn;
     o.color = v.color;
@@ -246,10 +258,20 @@ float4 MeshColor(PixelIn i) {
     Lighting vertex;
     vertex.diffuse = i.light_diffuse;
     vertex.added = i.light_added;
-    // the shadow buffer isn't read here yet: gpu_view.cpp takes kShadeShadow
-    // off, and every pixel is lit
+    // the shadow buffer: the four texels ShadowTaps picks, by their integer
+    // coordinates (clamped to the map), as soft_raster.cpp's ShadowLitCpu
+    // reads them
+    float lit = 1.0;
+    if ((f & kShadeShadow) != 0u) {
+        const ShadowTapSet t = ShadowTaps(ShadowCoord(ps_shade, i.wpos), float2(tex_size[5].xy));
+        const float4 stored = float4(shadow_tex.Load(int3(int(t.x.x), int(t.y.x), 0)),
+                                     shadow_tex.Load(int3(int(t.x.y), int(t.y.y), 0)),
+                                     shadow_tex.Load(int3(int(t.x.z), int(t.y.z), 0)),
+                                     shadow_tex.Load(int3(int(t.x.w), int(t.y.w), 0)));
+        lit = ShadowLit(t, stored);
+    }
     return ShadePixel(ps_shade, i.wpos, i.nrm, i.color, texel, spec_map, glow, behind, i.depth,
-                      i.ao_sh, proj, gobo, 1.0, vertex);
+                      i.ao_sh, proj, gobo, lit, vertex);
 }
 
 float4 FinishMesh(float4 c) {
@@ -262,6 +284,13 @@ float4 FinishMesh(float4 c) {
 }
 
 float4 PSMain(PixelIn i) : SV_Target0 { return FinishMesh(MeshColor(i)); }
+
+// A shadow map's draw (RndShadowMap::PrepShadow's, draw mode 1) into its
+// R32_FLOAT target: the depth its pass's LESS test kept, clip z/w, which
+// SV_Position's z is (VSMain's shadow_depth; the viewport's depth range is
+// 0..1), at the pixel's centre, the game's sample (clip_offset); soft_raster.cpp
+// interpolates the same z/w across the screen
+float PSShadowDepth(PixelIn i) : SV_Target0 { return i.pos.z; }
 
 // Where a texture pass's pixel is on the screen, 0..1 across its viewport:
 // SV_Position is the pixel's centre, half a pixel past where the game's

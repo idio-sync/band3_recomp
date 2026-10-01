@@ -498,11 +498,12 @@ using RtTargets = std::unordered_map<uint32_t, RtTarget>;
 // and wanted, else transparent black (counted); the target being drawn can't
 // sample itself, so it's black too. Without texture passes, a render target
 // is its guest pixels if wanted. A texture without pixels (a render target
-// kept without them, or a format that isn't decoded) draws untextured.
+// kept without them, or a format that isn't decoded) draws untextured, as
+// does a draw whose shader doesn't sample it (SamplesDiffuse).
 TexView Diffuse(const DrawItem& it, const RasterOptions& o, const RtTargets& rts,
                 const Target& t, RasterStats& st) {
     static constexpr uint32_t kBlack = kTransparentBlack;
-    if (!o.textures || !it.tex) return {};
+    if (!o.textures || !it.tex || !SamplesDiffuse(it)) return {};
     const Texture& tex = *it.tex;
     if (o.texture_passes && IsPassTarget(&tex)) {
         if (tex.tex_obj != t.tex_obj) {
@@ -515,6 +516,28 @@ TexView Diffuse(const DrawItem& it, const RasterOptions& o, const RtTargets& rts
     }
     if (tex.tex_obj && !o.rt_guest_pixels) return {};
     return View(&tex);
+}
+
+// The projected light's s5. A texture RB3 draws (ProjectedTargetOf: NgLight's
+// shadow) is its target as its passes left it, where the last of them made
+// the version the draw reads, else guest memory's pixels if they're kept and
+// wanted, else none (counted); without texture passes, its guest pixels if
+// wanted. Any other is the capture's decoded map. None leaves the projected
+// light out, as gpu_view.cpp does.
+TexView Projected(const ShadeState* state, const RasterOptions& o, const RtTargets& rts,
+                  const Target& t, RasterStats& st) {
+    const Texture* map = state->maps[kMapProjected].get();
+    const Texture* rt = ProjectedTargetOf(state);
+    if (!rt) return View(map);
+    if (o.texture_passes) {
+        if (auto f = rts.find(rt->tex_obj); f != rts.end() && rt->tex_obj != t.tex_obj &&
+                                            f->second.version == rt->version)
+            return {f->second.w, f->second.h, f->second.color.data()};
+        if (o.rt_guest_pixels && !rt->rgba.empty()) return View(rt);
+        st.rt_missing++;
+        return {};
+    }
+    return o.rt_guest_pixels ? View(rt) : TexView{};
 }
 
 void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const RasterOptions& o,
@@ -537,9 +560,15 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     if (ds.shade.flags.x & shade::kShadeSpecMap)
         ds.spec_map = View(state->maps[kMapSpecular].get());
     if (ds.shade.flags.x & shade::kShadeGlow) ds.glow = View(state->maps[kMapGlow].get());
-    if (ds.shade.flags.x & (shade::kShadeProjMultiply | shade::kShadeProjGobo))
-        ds.proj = View(state->maps[kMapProjected].get());
-    if (ds.shade.flags.x & shade::kShadeProjGobo) ds.gobo = View(state->maps[kMapGobo].get());
+    if (ds.shade.flags.x & (shade::kShadeProjMultiply | shade::kShadeProjGobo)) {
+        ds.proj = Projected(state, o, rts, t, st);
+        if (ds.shade.flags.x & shade::kShadeProjGobo)
+            ds.gobo = View(state->maps[kMapGobo].get());
+        if (!ds.proj.px || ((ds.shade.flags.x & shade::kShadeProjGobo) && !ds.gobo.px)) {
+            ds.shade.flags.x &= ~(shade::kShadeProjMultiply | shade::kShadeProjGobo);
+            ds.proj = ds.gobo = {};
+        }
+    }
     // the shadow map, as the pass that made the version it reads left it; one
     // the frame drew no pass of, or another version of since, leaves it lit
     if (ds.shade.flags.x & shade::kShadeShadow) {
@@ -643,8 +672,8 @@ bool Drawable(const DrawItem& it) {
 // A DrawRect blur's taps (shader 1: c31.. their uv offsets, c47.. their
 // weights per channel) from `src` into its rect of `t`: each pixel the taps'
 // weighted sum, bilinear and clamped, at the quad's uv plus each tap's
-// offset, blended by its material. The spotlights' blur reads its own
-// target as it was (spot::SpotBlur: whole texels apart, so point), the soft
+// offset, blended by its material. The spotlights' blur and NgLight's read
+// their own target as it was (spot::SpotBlur: whole texels apart, so point), the soft
 // particles' the other surface (SoftBlur: half-texel taps, so bilinear).
 void TapBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o,
                  const TexView& src, Target& t, RasterStats& st) {
@@ -721,11 +750,15 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
         for (uint32_t d = first; d < end; d++) {
             const DrawItem& it = f.draws[d];
             if (texture ? !DrawnInTexturePass(it) : !DrawnToBackBuffer(it)) continue;
-            if (o.textures && IsPassTarget(it.tex.get())) needed.insert(it.tex->tex_obj);
+            if (o.textures && IsPassTarget(it.tex.get()) && SamplesDiffuse(it))
+                needed.insert(it.tex->tex_obj);
+            const ShadeState* state = shade::ShadeOf(f, it);
+            // the projected light's s5, NgLight's shadow
+            if (o.textures)
+                if (const Texture* map = ProjectedTargetOf(state)) needed.insert(map->tex_obj);
             // a SHADOW_BUFFER draw's shadow map (s5)
             if (o.self_shadow)
-                if (const Texture* map = ShadowMapOf(shade::ShadeOf(f, it)))
-                    needed.insert(map->tex_obj);
+                if (const Texture* map = ShadowMapOf(state)) needed.insert(map->tex_obj);
         }
     };
     for (size_t i = f.passes.size(); i-- > 0;) {
@@ -747,7 +780,7 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
             !shadow_map)
             continue;
         // what it drew over isn't seen: a shadow map's clear is its depth's
-        if ((p.clear_flags & 0x0f) || (shadow_map && (p.clear_flags & 0x30)))
+        if ((PassClearFlags(f, p) & 0x0f) || (shadow_map && (p.clear_flags & 0x30)))
             needed.erase(p.tex_obj);
         runs.push_back({&p, first, end});
         samples(first, end, true);
@@ -853,7 +886,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         }
         // into the texture's own target, made at its size (again if that
         // changed) and cleared as DxCam::Select cleared it; one no camera
-        // cleared starts transparent black
+        // cleared (or NgLight cleared: PassClearFlags) starts transparent black
         const Pass& p = *run.pass;
         RtTarget& rt = rts[p.tex_obj];
         const bool shadow_map = p.tex_type == kTexTypeShadowMap;
@@ -866,7 +899,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         }
         // a shadow map's depth: nothing drawn is as far as it goes
         if (shadow_map && rt.zw.empty()) rt.zw.assign(size_t(rt.w) * rt.h, 1.0f);
-        if (p.clear_flags & 0x0f)
+        if (PassClearFlags(frame, p) & 0x0f)
             std::fill(rt.color.begin(), rt.color.end(), ArgbToRgba(p.clear_color));
         if (p.clear_flags & 0x30) {
             std::fill(rt.depth.begin(), rt.depth.end(), 0.0f);
@@ -932,6 +965,14 @@ bool SoftBlur(const FrameCapture& f, const DrawItem& d, const ShadeInputs* s, co
     float weights = 0;
     for (int i = 0; i < kSoftBlurTaps; i++) weights += s->Ps(47 + i)[0];
     return weights > 0;
+}
+
+bool ShadowCasterPass(const FrameCapture& f, const Pass& p) {
+    if (!p.tex_obj) return false;
+    const size_t end = std::min<size_t>(size_t(p.first_draw) + p.draw_count, f.draws.size());
+    for (size_t d = p.first_draw; d < end; d++)
+        if (f.draws[d].draw_mode == kDrawModeShadowCasters) return true;
+    return false;
 }
 
 std::vector<PassRun> PlanPasses(const FrameCapture& frame, const RasterOptions& options) {

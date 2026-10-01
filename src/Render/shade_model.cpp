@@ -213,6 +213,17 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     // draw, so every term is the option word's
     const bool particles = s->shader_type == 14;
     if (s->Option(kPrelit)) f |= kShadePrelit;
+    // NgLight's shadow casters (draw mode 3), whose shader's options are
+    // SKINNED alone (RndShaderStandard::CalcShaderOpts): untextured (the
+    // renderers bind no diffuse texture: SamplesDiffuse), unlit and opaque
+    // white whatever the material's colour, as guest memory's copies of the
+    // shadow have them (r = g = b = a, with c0 brown); the projected light
+    // reads its alpha alone
+    if (it.draw_mode == kDrawModeShadowCasters) {
+        f &= ~(kShadeTextured | kShadePrelit);
+        sp.color = sp.ambient = {1, 1, 1, 1};
+        return;
+    }
     if (s->Option(kIntensify)) f |= kShadeIntensify;
     // the backend takes it off where it has no picture to read (before the
     // resolve, or into a texture)
@@ -263,9 +274,9 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     // reads s5 alone, the gobo s10 too. The 18 pixel shaders the dumps have
     // that read it (c95) all light per pixel (fam3.py matches each); a
     // vertex-lit material's is left out. The multiply form's s5 is a texture
-    // RB3 draws (the shadows' silhouettes, blurred), whose drawing the
-    // capture leaves out: the capture's copy is guest memory's, right only
-    // with --readback_resolve=full (stale otherwise, nearly empty).
+    // RB3 draws (NgLight's shadow: its casters' silhouettes, blurred), which
+    // the backends draw too (scene_capture.h's ProjectedTargetOf) and drop
+    // the flags where they have neither that nor guest memory's copy.
     if (s->OptionBits(kNumProj, 2) != 0 && s->Option(kPerPixel) && maps &&
         s->maps[kMapProjected]) {
         if (s->Option(kProjLightMultiply))

@@ -28,9 +28,14 @@
 // and the depth volume's blurs blur a copy of it into it with post.hlsl's
 // blur; the soft particles (scene_capture.h's IsSoftParticle) by
 // PSSoftParticle, which fades them by that depth, and their buffer's blurs
-// blur a copy of one surface into the other. The display's gamma ramp
-// (gamma_ramp.h) goes over the finished picture last, by shaders/gamma.hlsl's
-// pass, which the frame is read back from.
+// blur a copy of one surface into the other. A shadow map's pass draws its
+// depth (clip z/w) into an R32_FLOAT target of its own by PSShadowDepth, LESS
+// against a depth buffer, and the SHADOW_BUFFER draws after it read four of
+// its texels (soft_raster.h's RasterOptions::self_shadow); NgLight's shadow,
+// its casters' silhouettes blurred twice in place, is a texture pass like
+// the depth volume's, which the projected light's draws read as their s5.
+// The display's gamma ramp (gamma_ramp.h) goes over the finished picture
+// last, by shaders/gamma.hlsl's pass, which the frame is read back from.
 
 namespace band3::render {
 
