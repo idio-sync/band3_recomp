@@ -4,12 +4,10 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <optional>
-#include <string_view>
 #include <utility>
 #include <vector>
 #include <rex/input/input_driver.h>
-#include "instruments.h"
+#include "instrument_kind.h"
 
 // A virtual Xbox 360 instrument that the Instrument Lab (F6) plays, for checking
 // how RB3 reads each instrument without the hardware. It shows up as its own
@@ -17,29 +15,6 @@
 // virtual_instrument setting is on.
 
 namespace band3::input {
-
-enum class InstrumentKind { kGuitar, kDrums, kKeys, kProGuitarMustang, kProGuitarSquier };
-
-inline constexpr InstrumentKind kInstrumentKinds[] = {
-    InstrumentKind::kGuitar, InstrumentKind::kDrums, InstrumentKind::kKeys,
-    InstrumentKind::kProGuitarMustang, InstrumentKind::kProGuitarSquier,
-};
-
-// the virtual_instrument_type value for a kind, and back
-const char* InstrumentKindId(InstrumentKind kind);
-std::optional<InstrumentKind> ParseInstrumentKind(std::string_view id);
-const char* InstrumentKindLabel(InstrumentKind kind);
-
-Caps360 CapsFor(InstrumentKind kind);
-
-struct InstrumentInputs {
-    GuitarInputs guitar;
-    DrumInputs drums;
-    KeysInputs keys;
-    ProGuitarInputs pro_guitar;
-};
-
-Gamepad360 Encode(InstrumentKind kind, const InstrumentInputs& in);
 
 // What the virtual instrument is pressing. The Lab changes it on the UI thread
 // and the driver reads it on guest threads.

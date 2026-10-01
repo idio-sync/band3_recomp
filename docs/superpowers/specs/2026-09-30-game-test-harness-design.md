@@ -56,13 +56,13 @@ Controller:
 | `instrument guitar\|drums\|keys\|mustang\|squier` | Which virtual instrument player 1 is (replugs it). |
 | `press <inputs> [ms]` | Press and let go, default 100 ms. `+` joins inputs: `press green+red+strum_down`. |
 | `hold <inputs>` / `release <inputs>\|all` | Hold until released. |
-| `hit <target> [velocity] [fret]` | Drum pads and cymbals, keys 0-24, pro guitar strings. Velocity defaults to 100. |
+| `hit <target> [velocity] [fret]` | Drum pads and cymbals, keys, pro guitar strings (fret 0-22). Velocity defaults to 100. |
 | `axis whammy\|tilt <0..1>` | Guitar analog inputs. |
 
 Input names: every instrument has `a b x y start back up down left right`;
 guitar `green red yellow blue orange strum_up strum_down solo`; drums
 `red_pad yellow_pad blue_pad green_pad yellow_cym blue_cym green_cym kick kick2`;
-keys `overdrive`; pro guitar strings `low_e a d g b high_e` for `hit`. An input
+keys `overdrive`; pro guitar strings `low_e a_str d_str g_str b_str high_e` for `hit`, keys `key0`-`key24`. An input
 the current instrument lacks is an error.
 
 Observation:
