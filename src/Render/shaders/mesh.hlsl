@@ -186,7 +186,7 @@ PixelIn VSMain(VertexIn v) {
     o.light_added = float3(0, 0, 0);
     if ((vs_shade.flags.x & kShadePerVertex) != 0u) {
         const Lighting l = Light(vs_shade, wp, wn, v.color, float4(1, 1, 1, 1), o.ao_sh,
-                                 float4(0, 0, 0, 0), float4(0, 0, 0, 0));
+                                 float4(0, 0, 0, 0), float4(0, 0, 0, 0), 1.0);
         o.light_diffuse = l.diffuse;
         o.light_added = l.added;
     }
@@ -246,8 +246,10 @@ float4 MeshColor(PixelIn i) {
     Lighting vertex;
     vertex.diffuse = i.light_diffuse;
     vertex.added = i.light_added;
+    // the shadow buffer isn't read here yet: gpu_view.cpp takes kShadeShadow
+    // off, and every pixel is lit
     return ShadePixel(ps_shade, i.wpos, i.nrm, i.color, texel, spec_map, glow, behind, i.depth,
-                      i.ao_sh, proj, gobo, vertex);
+                      i.ao_sh, proj, gobo, 1.0, vertex);
 }
 
 float4 FinishMesh(float4 c) {

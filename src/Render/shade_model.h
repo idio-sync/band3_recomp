@@ -30,7 +30,7 @@ struct uint4 {
 
 #include "src/Render/shaders/shade_params.hlsli"
 
-static_assert(sizeof(ShadeParams) == 31 * 16, "ShadeParams is float4s only, as HLSL packs it");
+static_assert(sizeof(ShadeParams) == 37 * 16, "ShadeParams is float4s only, as HLSL packs it");
 
 // What a draw shades with. Without a ShadeState (a capture from before them),
 // with options.legacy_light, it's the placeholder from before; options.lighting
@@ -48,13 +48,27 @@ inline const ShadeState* ShadeOf(const FrameCapture& frame, const DrawItem& item
                                                                          : nullptr;
 }
 
-// shade.hlsli's TexGen, AoSh*, ProjUv, Light and ShadePixel, on the CPU; the
-// AoSh ones are per vertex (AoShVertexCpu's two are the ao_sh the pixels take
-// interpolated), as is LightVertexCpu, for kShadePerVertex, whose pixels take
-// its two colours interpolated. ShadePixelCpu's proj and gobo are the
-// projected light's texels at ProjUvCpu (null: 0).
+// shade.hlsli's TexGen, AoSh*, ProjUv, Shadow*, Light and ShadePixel, on the
+// CPU; the AoSh ones are per vertex (AoShVertexCpu's two are the ao_sh the
+// pixels take interpolated), as is LightVertexCpu, for kShadePerVertex, whose
+// pixels take its two colours interpolated. ShadePixelCpu's proj and gobo are
+// the projected light's texels at ProjUvCpu (null: 0), lit the shadow
+// buffer's ShadowLitCpu (unread without kShadeShadow).
 void TexGenUv(const ShadeParams& sp, const float uv[2], float out[2]);
 void ProjUvCpu(const ShadeParams& sp, const float p[3], float out[2]);
+void ShadowCoordCpu(const ShadeParams& sp, const float p[3], float out[4]);
+// ShadowTaps of coordinate s (ShadowCoordCpu's) in a w x h map: the texels'
+// columns and rows, their weights, and the pixel's depth
+struct ShadowTapsCpu {
+    int x[4], y[4];
+    float weight[4];
+    float depth;
+};
+ShadowTapsCpu ShadowTapsOf(const float s[4], uint32_t w, uint32_t h);
+// ShadowLit at world position p, its taps read from a w x h map of depths
+// (clip z/w, row by row)
+float ShadowLitCpu(const ShadeParams& sp, const float p[3], const float* depth, uint32_t w,
+                   uint32_t h);
 void AoShDirectionCpu(const float vc[4], float out[3]);
 float AoShRatioCpu(const ShadeParams& sp, uint light, const float p[3], const float n[3],
                    const float dir[3], float r);
@@ -66,7 +80,8 @@ void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], co
                    const float texel[4], const float spec_map[4], const float glow[4],
                    const float behind[4], float depth, const float ao_sh[2],
                    const float vertex_diffuse[3], const float vertex_added[3], float out[4],
-                   const float proj[4] = nullptr, const float gobo[4] = nullptr);
+                   const float proj[4] = nullptr, const float gobo[4] = nullptr,
+                   float lit = 1.0f);
 bool AlphaCutCpu(const ShadeParams& sp, float alpha);
 // shade.hlsli's SoftFade, of the scene depth SoftSceneDepth gives for
 // inv_w (1/w, 0 where nothing drew) with the camera's far plane: a soft

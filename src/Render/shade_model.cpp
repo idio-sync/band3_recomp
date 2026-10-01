@@ -22,6 +22,8 @@ float dot(float4 a, float4 b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w *
 float saturate(float v) { return std::clamp(v, 0.0f, 1.0f); }
 float3 saturate(float3 v) { return {saturate(v.x), saturate(v.y), saturate(v.z)}; }
 float max(float a, float b) { return a > b ? a : b; }
+float min(float a, float b) { return a < b ? a : b; }
+float floor(float v) { return std::floor(v); }
 float sqrt(float v) { return std::sqrt(v); }
 float rsqrt(float v) { return 1.0f / std::sqrt(v); }
 float pow(float x, float p) { return std::pow(x, p); }
@@ -66,7 +68,8 @@ void LightVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], c
                     const float ao_sh[2], float diffuse[3], float added[3]) {
     const Lighting l = Light(sp, float3{p[0], p[1], p[2]}, float3{n[0], n[1], n[2]},
                              float4{vc[0], vc[1], vc[2], vc[3]}, float4{1, 1, 1, 1},
-                             float2{ao_sh[0], ao_sh[1]}, float4{0, 0, 0, 0}, float4{0, 0, 0, 0});
+                             float2{ao_sh[0], ao_sh[1]}, float4{0, 0, 0, 0}, float4{0, 0, 0, 0},
+                             1.0f);
     diffuse[0] = l.diffuse.x;
     diffuse[1] = l.diffuse.y;
     diffuse[2] = l.diffuse.z;
@@ -81,11 +84,42 @@ void ProjUvCpu(const ShadeParams& sp, const float p[3], float out[2]) {
     out[1] = uv.y;
 }
 
+void ShadowCoordCpu(const ShadeParams& sp, const float p[3], float out[4]) {
+    const float4 s = ShadowCoord(sp, float3{p[0], p[1], p[2]});
+    out[0] = s.x;
+    out[1] = s.y;
+    out[2] = s.z;
+    out[3] = s.w;
+}
+
+ShadowTapsCpu ShadowTapsOf(const float s[4], uint32_t w, uint32_t h) {
+    const ShadowTapSet t = ShadowTaps(float4{s[0], s[1], s[2], s[3]}, float2{float(w), float(h)});
+    ShadowTapsCpu out;
+    const float xs[4] = {t.x.x, t.x.y, t.x.z, t.x.w}, ys[4] = {t.y.x, t.y.y, t.y.z, t.y.w};
+    const float ws[4] = {t.weight.x, t.weight.y, t.weight.z, t.weight.w};
+    for (int k = 0; k < 4; k++) {
+        out.x[k] = int(xs[k]);
+        out.y[k] = int(ys[k]);
+        out.weight[k] = ws[k];
+    }
+    out.depth = t.depth;
+    return out;
+}
+
+float ShadowLitCpu(const ShadeParams& sp, const float p[3], const float* depth, uint32_t w,
+                   uint32_t h) {
+    const ShadowTapSet t = ShadowTaps(ShadowCoord(sp, float3{p[0], p[1], p[2]}),
+                                      float2{float(w), float(h)});
+    auto at = [&](float x, float y) { return depth[size_t(y) * w + size_t(x)]; };
+    return ShadowLit(t, float4{at(t.x.x, t.y.x), at(t.x.y, t.y.y), at(t.x.z, t.y.z),
+                               at(t.x.w, t.y.w)});
+}
+
 void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], const float vc[4],
                    const float texel[4], const float spec_map[4], const float glow[4],
                    const float behind[4], float depth, const float ao_sh[2],
                    const float vertex_diffuse[3], const float vertex_added[3], float out[4],
-                   const float proj[4], const float gobo[4]) {
+                   const float proj[4], const float gobo[4], float lit) {
     const Lighting vertex{float3{vertex_diffuse[0], vertex_diffuse[1], vertex_diffuse[2]},
                           float3{vertex_added[0], vertex_added[1], vertex_added[2]}};
     const float none[4] = {0, 0, 0, 0};
@@ -99,7 +133,7 @@ void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], co
                                 float4{behind[0], behind[1], behind[2], behind[3]}, depth,
                                 float2{ao_sh[0], ao_sh[1]},
                                 float4{proj[0], proj[1], proj[2], proj[3]},
-                                float4{gobo[0], gobo[1], gobo[2], gobo[3]}, vertex);
+                                float4{gobo[0], gobo[1], gobo[2], gobo[3]}, lit, vertex);
     out[0] = r.x;
     out[1] = r.y;
     out[2] = r.z;
@@ -171,6 +205,9 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     for (int i = 0; i < 3; i++) Copy(s->Ps(95 + i), sp.proj[i]);
     Copy(s->Ps(66), sp.proj_dir);
     Copy(s->Ps(69), sp.proj_color);
+    for (int i = 0; i < 4; i++) Copy(s->Vs(40 + i), sp.shadow[i]);
+    Copy(s->Ps(107), sp.shadow_color);
+    Copy(s->Ps(108), sp.shadow_dir);
 
     // Registers the option word doesn't use may hold anything from an earlier
     // draw, so every term is the option word's
@@ -236,6 +273,12 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
         else if (s->maps[kMapGobo])
             f |= kShadeProjGobo;
     }
+    // the shadow buffer, where s5 is the shadow map the capture has the pass
+    // of: the backend drops the flag where it hasn't drawn it. Every pixel
+    // shader the dumps have that reads it (c107) lights per pixel; a
+    // vertex-lit material's is left out.
+    if (s->Option(kPerPixel) && o.self_shadow && o.texture_passes && ShadowMapOf(s))
+        f |= kShadeShadow;
     if (s->Option(kRimLight)) f |= kShadeRim;
     if (s->Option(kRimLightUnder)) f |= kShadeRimUnder;
     switch (s->OptionBits(kCustomVariation, 2)) {

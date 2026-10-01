@@ -226,7 +226,11 @@ struct ShadeInputs {
 
 struct ShadeState : ShadeInputs {
     // the maps' mip 0 (2D only), null where none was bound, it's a cube or its
-    // format isn't decoded
+    // format isn't decoded. s5 (kMapProjected) bound to a texture RB3 draws
+    // at runtime (its fetch constant's base is one a texture pass draws: the
+    // shadow map, NgLight's shadow) is that texture's identity and version
+    // instead (Texture::tex_obj), with guest memory's pixels as a diffuse
+    // render target has them.
     std::shared_ptr<const Texture> maps[kNumShadeMaps];
 };
 
@@ -269,6 +273,9 @@ struct DrawItem {
     // (none) for draws whose geometry band3 builds (particles, DrawRect
     // quads), whose winding isn't the game's, and in captures from before.
     uint8_t cull = 0;
+    // TheRnd's draw mode when it drew (kDrawMode*): 0 in captures from before
+    // it, which kept the colour passes' alone
+    uint8_t draw_mode = 0;
 };
 
 inline constexpr uint8_t kCullFront = 1, kCullBack = 2, kCullFrontIsCw = 4;
@@ -283,6 +290,25 @@ inline bool Culls(uint8_t cull, bool clockwise) {
 // quads (the post copy, flares, the movie) aren't drawn yet; texture passes
 // are, the quads in them too (soft_raster.h's PlanPasses).
 inline bool DrawnToBackBuffer(const DrawItem& d) { return d.target == 0 && d.rect_shader < 0; }
+
+// RndTex::Type of RndShadowMap's texture, the character self-shadow's 512x512
+// depth (out/research/m3_render_targets.md 1.6): RndShadowMap::PrepShadow
+// selects its light camera, which clears its depth to 1 (no colour), draws
+// the character in draw mode 1 (shader kShadowmapShader, SKINNED alone, cull
+// D3DCULL_CCW: back faces) and selects the world camera again, whose
+// RndCam::Select resolves the depth into it; the character's SHADOW_BUFFER
+// draws read it as s5 right after (ShadowMapOf)
+inline constexpr uint32_t kTexTypeShadowMap = 0x42;
+
+// RB3's draw modes (TheRnd's), as DrawItem::draw_mode keeps them: 0 the colour
+// pass, 1 a shadow map's depth (RndShadowMap::PrepShadow), 3 NgLight's shadow
+// casters into its own texture (NgLight::RenderShadows, no camera: its draws'
+// view_proj is the VS's c4..c7, which it uploads itself), 6 the soft particles
+// (IsSoftParticle), 7 a reflection's mirrored scene. rb3-xenon numbers those
+// from NgLight's on one higher than retail does.
+inline constexpr uint8_t kDrawModeNormal = 0;
+inline constexpr uint8_t kDrawModeShadowDepth = 1;
+inline constexpr uint8_t kDrawModeShadowCasters = 3;
 
 // RndTex::Type of NgSpotlightDrawer's targets: the depth volume its cones
 // add up in (640x360) and the density map its fog proxy's particles draw
@@ -315,6 +341,15 @@ inline constexpr int32_t kParticleShader = 14;
 inline bool IsSoftParticle(const DrawItem& d, const ShadeInputs* s) {
     return s && s->shader_type == kParticleShader && s->Option(shader_opt::kSoftParticles) &&
            d.rect_shader < 0;
+}
+
+// The shadow map a SHADOW_BUFFER draw reads (s5, kTexTypeShadowMap) as the
+// capture kept it, its identity and version, or null: none, a capture from
+// before (s5 was then guest memory's k_24_8, not decoded), or not one
+inline const Texture* ShadowMapOf(const ShadeState* s) {
+    if (!s || !s->Option(shader_opt::kShadowBuffer)) return nullptr;
+    const Texture* t = s->maps[kMapProjected].get();
+    return t && t->tex_obj && t->tex_type == kTexTypeShadowMap ? t : nullptr;
 }
 
 // A stretch of FrameCapture::draws that went to one target: the back buffer,
@@ -379,7 +414,9 @@ struct FrameCapture {
     uint32_t cams = 0;             // camera selects that drew to the back buffer
     uint32_t skipped_target = 0;   // draws for a camera with a target, but no texture pass open
     uint32_t skipped_velocity = 0; // motion blur velocity pass
-    uint32_t skipped_shadow = 0;   // shadow passes (draw modes 1 and 3)
+    // draws in a shadow's draw mode (1, 3) outside its pass: none expected
+    // (Target keeps 1 in a shadow map's pass, 3 in any texture pass)
+    uint32_t skipped_shadow = 0;
     uint32_t skipped_draw_mode = 0; // other passes that aren't the colour one
     uint32_t skipped_no_geom = 0;  // no material, buffers or faces
     uint32_t mutable_meshes = 0;   // drawn from CPU verts
@@ -394,16 +431,17 @@ struct FrameCapture {
     uint32_t maps_cube = 0;
     uint32_t maps_other_format = 0;
     // texture passes: drawn this frame, carried in from earlier frames, and
-    // left out for drawing nothing the capture keeps (shadow maps: draw modes
-    // 1 and 3 aren't recorded)
+    // left out for drawing nothing the capture keeps (the velocity buffer's:
+    // draw mode 5 isn't recorded)
     uint32_t passes_own = 0;
     uint32_t passes_carried = 0;
     uint32_t passes_empty = 0;
-    // diffuse textures that are pass targets, by (texture, version) sampled:
-    // made by a pass in the capture (own or carried), by a pass left out above
-    // because all its draws were too (rt_filtered: for their draw mode, as
-    // shadow maps' and the velocity buffer's are, or for having no material
-    // or geometry the capture draws), or
+    // diffuse textures that are pass targets (and s5 kept as one: the shadow
+    // map, NgLight's), by (texture, version) sampled: made by a pass in the
+    // capture (own or carried), by a pass left out above because all its
+    // draws were too (rt_filtered: for their draw mode, as the velocity
+    // buffer's are, or for having no material or geometry the capture
+    // draws), or
     // by none it has (rt_missing: recorded in a frame whose passes weren't
     // kept, made before band3 saw it, or drawn by something band3 doesn't
     // record), so rt_missing 0 means none is missing that the capture could

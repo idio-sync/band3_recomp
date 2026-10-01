@@ -10,7 +10,8 @@
 // left it; that a mesh's edges land on the pixels the game's do (D3D9's
 // pixel centres), a DrawRect quad's on D3D10's; and that a soft particle
 // fades by the scene's depth behind it, and the soft-particle buffer's blur
-// takes its taps from the other surface.
+// takes its taps from the other surface; and that a shadow map's pass draws
+// depth alone, which a SHADOW_BUFFER draw after it reads.
 
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -586,6 +587,149 @@ TEST_CASE("a soft particle fades by the scene's depth behind it; its buffer blur
         CAPTURE(x);
         CHECK(float(tex[2 * 8 + x] & 0xff) == doctest::Approx(want).epsilon(0.01));
     }
+}
+
+namespace {
+
+constexpr uint32_t kShadowTex = 0x2251A0C0;
+
+// RndShadowMap's pass into its 4x4 shadow map: a quad over all of it at
+// clip z 0.5 (w 1), drawn in draw mode 1, cleared to depth 1 as DxCam::Select
+// clears it
+DrawItem ShadowCaster() {
+    auto g = std::make_shared<Geometry>(*Quad(-1, 1, 0xffffffffu));
+    for (Vertex& v : g->verts) v.pos[2] = 0.5f;
+    DrawItem d = Item(g, kShadowTex);
+    d.draw_mode = kDrawModeShadowDepth;
+    d.z_mode = 1;
+    return d;
+}
+
+Pass ShadowPass(uint32_t first, uint32_t version) {
+    Pass p;
+    p.tex_obj = kShadowTex;
+    p.first_draw = first;
+    p.draw_count = 1;
+    p.width = p.height = 4;
+    p.tex_type = kTexTypeShadowMap;
+    p.clear_flags = 0x30;
+    p.clear_z = 1.0f;
+    p.viewport[2] = 4;
+    p.viewport[3] = 4;
+    p.version = version;
+    return p;
+}
+
+// A lit SHADOW_BUFFER material: white, ambient 0.25, a light far above of
+// 0.5 (N.L 1 to a hair), the light camera looking down (c108 -z) and c107
+// (1, 0.5, 0). Its shadow coordinate is (0.5, 0.5, depth, 1) everywhere:
+// the map's middle, the four taps all in the caster's quad.
+ShadeState ShadowedShade(float depth, uint32_t version) {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = 18;
+    s.options = 1ull << shader_opt::kRealLights | 1ull << shader_opt::kPerPixel |
+                1ull << shader_opt::kShadowBuffer | 1ull << shader_opt::kNumPoint;
+    auto set = [&](float (&bank)[kNumShadeRegs][4], int reg, float x, float y, float z, float w) {
+        float* r = bank[ShadeRegIndex(reg)];
+        r[0] = x;
+        r[1] = y;
+        r[2] = z;
+        r[3] = w;
+    };
+    set(s.ps, 0, 1, 1, 1, 1);
+    set(s.ps, 1, 0.25f, 0.25f, 0.25f, 1);
+    set(s.ps, 64, 0, 0, 1e5f, 0);
+    set(s.ps, 67, 0.5f, 0.5f, 0.5f, 1);
+    set(s.ps, 107, 1, 0.5f, 0, 0);
+    set(s.ps, 108, 0, 0, -1, 1);
+    set(s.vs, 20, 1, 0, 0, 0);
+    set(s.vs, 21, 0, 1, 0, 0);
+    set(s.vs, 40, 0, 0, 0, 0.5f);
+    set(s.vs, 41, 0, 0, 0, 0.5f);
+    set(s.vs, 42, 0, 0, 0, depth);
+    set(s.vs, 43, 0, 0, 0, 1);
+    auto map = std::make_shared<Texture>();
+    map->width = map->height = 4;
+    map->tex_obj = kShadowTex;
+    map->tex_type = kTexTypeShadowMap;
+    map->version = version;
+    s.maps[kMapProjected] = map;
+    return s;
+}
+
+// the back buffer's draw of it, over all of the picture, facing up
+DrawItem Shadowed() {
+    auto g = std::make_shared<Geometry>(*Quad(-1, 1, 0xffffffffu));
+    for (Vertex& v : g->verts) v.nrm[2] = 1.0f;
+    DrawItem d = Item(g, 0);
+    d.prelit = false;
+    d.shade = 0;
+    return d;
+}
+
+}  // namespace
+
+TEST_CASE("a shadow map's pass draws depth, which a SHADOW_BUFFER draw after it reads") {
+    FrameCapture f;
+    f.shades = {ShadowedShade(0.75f, 1)};
+    f.draws = {ShadowCaster(), Shadowed()};
+    f.passes = {ShadowPass(0, 1), BackBuffer(1, 1)};
+    std::vector<uint32_t> rgba;
+    RasterStats st = Rasterize(f, Small(), rgba);
+    CHECK(st.passes == 1);
+    // behind the caster: the light, 0.5, times 1 - 0.75 c107 (0.25, 0.625,
+    // 1), over the ambient 0.25
+    auto channel = [&](int c) { return int((rgba[1 * 8 + 3] >> (8 * c)) & 0xff); };
+    CHECK(std::abs(channel(0) - 96) <= 1);   // 0.375
+    CHECK(std::abs(channel(1) - 143) <= 1);  // 0.5625
+    CHECK(std::abs(channel(2) - 191) <= 1);  // 0.75
+    const uint32_t shadowed = rgba[1 * 8 + 3];
+    for (uint32_t c : rgba) CHECK(c == shadowed);
+
+    // in front of it: lit, as without the shadow map
+    f.shades = {ShadowedShade(0.25f, 1)};
+    Rasterize(f, Small(), rgba);
+    const uint32_t lit = rgba[1 * 8 + 3];
+    CHECK(std::abs(int(lit & 0xff) - 191) <= 1);
+    CHECK((lit & 0xff) == ((lit >> 16) & 0xff));
+    f.shades = {ShadowedShade(0.75f, 1)};
+    RasterOptions o = Small();
+    o.self_shadow = false;
+    st = Rasterize(f, o, rgba);
+    CHECK(st.passes == 0);
+    CHECK(rgba[1 * 8 + 3] == lit);
+
+    // a version of the map no pass here drew (the character's before): lit
+    f.shades = {ShadowedShade(0.75f, 7)};
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 3] == lit);
+
+    // the map itself: the caster's depth, 0.5, as grey; where it's culled
+    // (its cull mode drops clockwise triangles, which Quad's are) the clear
+    std::vector<uint32_t> tex;
+    uint32_t w = 0, h = 0;
+    REQUIRE(RasterizeTarget(f, Small(), kShadowTex, 1, tex, w, h));
+    CHECK(w == 4);
+    CHECK(tex[5] == 0xff808080u);
+    f.draws[0].cull = kCullBack;
+    REQUIRE(RasterizeTarget(f, Small(), kShadowTex, 1, tex, w, h));
+    CHECK(tex[5] == 0xff000000u);
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 3] == lit);
+
+    // a caster partly in front of the light camera's near plane (z < 0) is
+    // cut there, as the device clips it, not stored nearer than anything:
+    // the quad from z -0.5 on the left to 1.5 on the right holds 0..1 in the
+    // middle (pixel x samples z -0.5 + x / 2)
+    auto slope = std::make_shared<Geometry>(*f.draws[0].geom);
+    for (Vertex& v : slope->verts) v.pos[2] = v.pos[0] < 0 ? -0.5f : 1.5f;
+    f.draws[0].geom = slope;
+    f.draws[0].cull = 0;
+    REQUIRE(RasterizeTarget(f, Small(), kShadowTex, 1, tex, w, h));
+    CHECK(tex[4 + 0] == 0xff000000u);  // pixel 0: z -0.5, clipped
+    CHECK(tex[4 + 2] == 0xff808080u);  // pixel 2: z 0.5
+    CHECK(tex[4 + 3] == 0xff000000u);  // pixel 3: z 1, no nearer than the clear
 }
 
 TEST_CASE("the display gamma ramp maps each value as the presenter shows it") {

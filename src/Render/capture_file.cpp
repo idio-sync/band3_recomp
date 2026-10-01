@@ -22,7 +22,8 @@
 //   SHAD  shade states field by field, with the register list and the number
 //         of maps they were saved with, matched by register on load
 //   DRAW  draws; version 2 adds each one's cull mode (a version 1 file's
-//         draws cull nothing)
+//         draws cull nothing), version 3 its draw mode (an older file's are
+//         all 0, the colour pass's: it kept no others)
 //   PASS  passes
 //   POST  what post-processing was set to do and the constants RB3's composite
 //         drew with (post_params.h), each as its size and its bytes: the
@@ -68,7 +69,7 @@ constexpr uint32_t kFrameVersion = 1;
 constexpr uint32_t kGeometryVersion = 1;
 constexpr uint32_t kTexturesVersion = 1;
 constexpr uint32_t kShadesVersion = 1;
-constexpr uint32_t kDrawsVersion = 2;
+constexpr uint32_t kDrawsVersion = 3;
 constexpr uint32_t kPassesVersion = 1;
 constexpr uint32_t kPostVersion = 1;
 constexpr uint32_t kGammaVersion = 1;
@@ -471,6 +472,7 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
         w.Raw(d.rect, sizeof(d.rect));
         w.Put<int32_t>(d.mip_level);
         w.Put<uint8_t>(d.cull);
+        w.Put<uint8_t>(d.draw_mode);
     }
     w.End(sec);
 
@@ -681,6 +683,7 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                 r.Raw(d.rect, sizeof(d.rect));
                 d.mip_level = r.Get<int32_t>();
                 if (version >= 2) d.cull = r.Get<uint8_t>();
+                if (version >= 3) d.draw_mode = r.Get<uint8_t>();
                 if (!r.ok) return nullptr;
             }
             have_draws = true;

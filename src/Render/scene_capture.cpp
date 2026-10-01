@@ -120,7 +120,6 @@ constexpr uint32_t kTex_NumMips = 0x64;
 constexpr uint32_t kDxTex_Format = 0x74;
 constexpr uint32_t kDxTex_Texture = 0x78;
 constexpr uint32_t kTexType_NoZ = 0x20;
-constexpr uint32_t kTexType_ShadowMap = 0x42;
 // RndCam (rndobj/Cam.h)
 constexpr uint32_t kCam_ScreenRect = 0x2cc;  // Hmx::Rect, 0..1 of the target
 constexpr uint32_t kCam_TargetTex = 0x2dc + 8;
@@ -148,12 +147,9 @@ constexpr uint32_t kD3DBaseTexture_Fetch = 0x1c;
 // 7 (WorldReflection::DrawShowing, the mirrored scene through a copy of the
 // current camera, so to the back buffer).
 // rb3-xenon's Rnd::Mode numbers NgLight's (kDrawOcclusion) and those after it
-// one higher than retail does.
+// one higher than retail does. scene_capture.h has 0, 1 and 3.
 constexpr uint32_t kDrawModeHolder = 0x82C76B68;  // TheRnd*
 constexpr uint32_t kDrawMode = 0xfc;
-constexpr uint32_t kDrawModeNormal = 0;
-constexpr uint32_t kDrawModeShadowDepth = 1;
-constexpr uint32_t kDrawModeShadowCasters = 3;
 constexpr uint32_t kDrawModeVelocity = 5;
 constexpr uint32_t kDrawModeSoftParticles = 6;
 constexpr uint32_t kDrawModeReflection = 7;
@@ -163,6 +159,10 @@ constexpr uint32_t kDrawModeReflection = 7;
 constexpr uint32_t kD3DDeviceHolder = 0x82E04CFC;
 constexpr uint32_t kDev_TextureFetch = 0x480;  // 26 of 24 bytes
 constexpr uint32_t kDev_VertexShaderF = 0x780;
+// the view-projection DxCam::Select uploads (kVS_ViewProjMatrix), which
+// NgLight::SetShadowTransforms sets itself for its camera-less pass: VS
+// c4..c7, the matrix's columns
+constexpr uint32_t kVsViewProj = 4;
 constexpr uint32_t kDev_PixelShaderF = 0x1780;
 // its PA_SU_SC_MODE_CNTL, whose low bits RndRenderState::SetCullMode sets
 // (the XDK's D3DDevice_SetRenderState_CullMode, sub_828502B8)
@@ -615,6 +615,9 @@ uint64_t RtKey(uint32_t tex, uint32_t version) { return uint64_t(tex) << 32 | ve
 // what's known of a texture that passes draw into
 struct RtState {
     uint32_t version = 0;  // its passes resolved since it was made
+    // its texture's base address, physical (TexBase), as a fetch constant
+    // that binds it has it: what tells s5 bound to it (CaptureShade)
+    uint32_t base = 0;
     uint64_t made_frame = ~0ull;  // the game frame of its last pass
     // its passes in a row each within kRepeatFrames of the one before
     uint32_t repeats = 0;
@@ -635,6 +638,7 @@ struct Sink {
     ShadeIndex& shades;
     std::vector<uint64_t>& samples;
     uint32_t target;  // 0 the frame's back buffer
+    uint8_t draw_mode = kDrawModeNormal;  // TheRnd's, for DrawItem::draw_mode
 };
 
 // the texture pass the game is drawing, between DxTex::MakeDrawTarget and
@@ -927,10 +931,28 @@ std::shared_ptr<const Texture> CaptureTexture(const Guest& g, State& s, Sink& si
     return tex;
 }
 
+// the view-projection the device's VS has (kVsViewProj), its columns read
+// back into rows
+Mat4 DeviceViewProj(const Guest& g) {
+    Mat4 m = Identity();
+    const uint32_t dev = g.U32(kD3DDeviceHolder);
+    if (!dev) return m;
+    for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++)
+            m.m[r][c] = g.F32(dev + kDev_VertexShaderF + (kVsViewProj + c) * 16 + r * 4);
+    return m;
+}
+
 // The camera's view-projection, read the first time a draw needs it after a
 // camera select: DxCam::Select writes it after RndCam::Select. Identity
-// without a camera.
+// without a camera. A texture pass no camera selected (NgLight's shadow, which
+// uploads its own) draws with the device's.
 const Mat4& ViewProj(const Guest& g, State& s) {
+    if (s.open.tex && s.open.rec && !s.open.rec->pass.cam) {
+        s.vp = DeviceViewProj(g);
+        s.vp_valid = false;  // a camera's again after
+        return s.vp;
+    }
     if (!s.vp_valid) {
         s.vp = s.cam ? ReadMatrix4(g, s.cam + kCam_ViewProj) : Identity();
         s.vp_valid = true;
@@ -943,8 +965,10 @@ const Mat4& ViewProj(const Guest& g, State& s) {
 // the frame's back buffer while capturing, if the current camera draws there;
 // and only in a colour pass, the normal one or a reflection's, or, for a
 // particle system (`particles`), the soft-particle buffer's pass into its
-// surface (draw mode 6: IsSoftParticle). Other draws there (a mesh child of
-// RndSoftParticles; none seen) are left out.
+// surface (draw mode 6: IsSoftParticle), or a shadow's: draw mode 1 into a
+// shadow map's pass (RndShadowMap's depth), 3 into any (NgLight's casters).
+// Other draws there (a mesh child of RndSoftParticles; none seen) are left
+// out. The sink says which mode it was.
 bool Target(const Guest& g, State& s, std::optional<Sink>& sink, bool particles = false) {
     if (s.open.tex) {
         if (!s.open.record) return false;
@@ -964,7 +988,11 @@ bool Target(const Guest& g, State& s, std::optional<Sink>& sink, bool particles 
     const uint32_t mode = holder ? g.U32(holder + kDrawMode) : kDrawModeNormal;
     const bool soft = mode == kDrawModeSoftParticles && particles && s.soft_surface &&
                       s.open.tex == s.soft_surface;
-    if (mode != kDrawModeNormal && mode != kDrawModeReflection && !soft) {
+    const bool shadow_depth = mode == kDrawModeShadowDepth && s.open.tex && s.open.rec &&
+                              s.open.rec->pass.tex_type == kTexTypeShadowMap;
+    const bool casters = mode == kDrawModeShadowCasters && s.open.tex;
+    if (mode != kDrawModeNormal && mode != kDrawModeReflection && !soft && !shadow_depth &&
+        !casters) {
         if (mode == kDrawModeVelocity) {
             fc.skipped_velocity++;
         } else if (mode == kDrawModeShadowDepth || mode == kDrawModeShadowCasters) {
@@ -978,6 +1006,7 @@ bool Target(const Guest& g, State& s, std::optional<Sink>& sink, bool particles 
         fc.cams++;
         s.cam_counted = true;
     }
+    sink->draw_mode = uint8_t(mode);
     return true;
 }
 
@@ -996,6 +1025,7 @@ void PushDraw(State& s, Sink& sink, DrawItem&& item) {
     } else if (!g_enabled.load(std::memory_order_relaxed)) {
         g_rec_draws.fetch_add(1, std::memory_order_relaxed);
     }
+    item.draw_mode = sink.draw_mode;
     fc.draws.push_back(std::move(item));
 }
 
@@ -1064,16 +1094,27 @@ std::shared_ptr<const Texture> CaptureMap(const Guest& g, const uint32_t f[6],
     return tex;
 }
 
-// `shade`'s index in fc.shades, which gets it if no equal one is there yet;
-// fill_maps decodes a new one's maps
+// a map kept as a render target's identity (Texture::tex_obj), or null
+const Texture* RtMap(const std::shared_ptr<const Texture>& t) {
+    return t && t->tex_obj ? t.get() : nullptr;
+}
+
+// `shade`'s index in fc.shades, which gets it if no equal one is there yet:
+// the same inputs, and the same render targets' versions where it has some
+// as maps already (the same inputs can read another version of one: each
+// character's shadow map); fill_maps decodes a new one's other maps
 template <typename FillMaps>
 int32_t InternShade(FrameCapture& fc, ShadeIndex& index, ShadeState&& shade, FillMaps fill_maps) {
     const ShadeInputs& in = shade;
     const uint64_t hash = HashBytes(&in, sizeof(in));
     auto [first, last] = index.equal_range(hash);
     for (auto it = first; it != last; ++it) {
-        const ShadeInputs& other = fc.shades[it->second];
-        if (std::memcmp(&other, &in, sizeof(in)) == 0) return it->second;
+        const ShadeState& other = fc.shades[it->second];
+        if (std::memcmp(static_cast<const ShadeInputs*>(&other), &in, sizeof(in)) != 0) continue;
+        bool same_rts = true;
+        for (int m = 0; m < kNumShadeMaps; m++)
+            same_rts &= RtMap(other.maps[m]) == RtMap(shade.maps[m]);
+        if (same_rts) return it->second;
     }
     fill_maps(shade);
     const int32_t i = int32_t(fc.shades.size());
@@ -1139,9 +1180,19 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
         if (MapSampled(in, m)) fetch(kShadeMapSampler[m], in.fetch[m]);
     }
 
+    // s5 bound to a texture a pass draws (the shadow map, NgLight's shadow):
+    // its identity and the version it has now, as a diffuse render target's,
+    // and a sample the capture has to have the pass of
+    if (const uint32_t base = in.fetch[kMapProjected][1] & 0xfffff000u) {
+        for (const auto& [tex, rt] : s.rts) {
+            if (rt.base != base) continue;
+            shade.maps[kMapProjected] = CaptureTexture(g, s, sink, tex);
+            break;
+        }
+    }
     return InternShade(fc, sink.shades, std::move(shade), [&](ShadeState& st) {
         for (int m = 0; m < kNumShadeMaps; m++)
-            if (st.fetch[m][1]) st.maps[m] = CaptureMap(g, st.fetch[m], fc);
+            if (st.fetch[m][1] && !st.maps[m]) st.maps[m] = CaptureMap(g, st.fetch[m], fc);
     });
 }
 
@@ -1165,8 +1216,10 @@ DrawItem MakeItem(const Guest& g, State& s, Sink& sink, uint32_t mat, uint32_t o
     item.cam = s.cam;
     item.mesh = owner;
     item.target = sink.target;
+    // (a shadow map's depth samples nothing: kShadowmapShader has SKINNED alone)
     const uint32_t tex = g.U32(mat + kMat_DiffuseTex);
-    if (tex && sample_texture) item.tex = CaptureTexture(g, s, sink, tex);
+    if (tex && sample_texture && sink.draw_mode != kDrawModeShadowDepth)
+        item.tex = CaptureTexture(g, s, sink, tex);
     item.shade = CaptureShade(g, s, sink, mat, blur);
     return item;
 }
@@ -1485,7 +1538,8 @@ void BeginPass(const Guest& g, uint32_t tex) {
     if (s.open.tex) DropOpenPass(s);
     const bool capturing = g_enabled.load(std::memory_order_relaxed);
     if (!capturing) g_rec_passes.fetch_add(1, std::memory_order_relaxed);
-    const RtState& rt = s.rts[tex];
+    RtState& rt = s.rts[tex];
+    rt.base = TexBase(g, tex);
     const bool regular = RecentlyMade(rt, s.game_frame) && rt.repeats >= 1;
     s.open.tex = tex;
     s.open.record = capturing || !regular;
@@ -1517,9 +1571,9 @@ void CameraSelected(const Guest& g, uint32_t cam) {
     p.cam = cam;
     p.clear_flags = 0;
     if ((type & 2) && !(type & kTexType_NoZ)) p.clear_flags |= 0x30;
-    if (type != kTexType_ShadowMap) p.clear_flags |= 0x0f;
+    if (type != kTexTypeShadowMap) p.clear_flags |= 0x0f;
     p.clear_color = type == kTexTypeDepthVolume ? 0xFF000000u : 0;
-    p.clear_z = g.F32(type == kTexType_ShadowMap ? kClearDepthShadow : kClearDepth);
+    p.clear_z = g.F32(type == kTexTypeShadowMap ? kClearDepthShadow : kClearDepth);
     const float size[4] = {float(p.width), float(p.height), float(p.width), float(p.height)};
     for (int i = 0; i < 4; i++) p.viewport[i] = g.F32(cam + kCam_ScreenRect + i * 4) * size[i];
     // a select clears what was drawn so far
@@ -1565,8 +1619,8 @@ void AddCounts(FrameCapture& to, const FrameCapture& from) {
 }
 
 // whether a pass drew nothing the capture keeps because every draw it made
-// was left out: for its draw mode (shadow casters, velocity), or for having no
-// material or geometry the capture draws
+// was left out: for its draw mode (velocity), or for having no material or
+// geometry the capture draws
 bool AllLeftOut(const FrameCapture& content) {
     const uint32_t left_out = content.skipped_shadow + content.skipped_velocity +
                               content.skipped_draw_mode + content.skipped_no_geom;
@@ -1575,9 +1629,9 @@ bool AllLeftOut(const FrameCapture& content) {
 
 // DxTex::FinishDrawTarget: `tex` is resolved, a new version of it. A recorded
 // pass becomes its last, and the capturing frame's next pass; one that drew
-// nothing kept (a shadow map's) is left out, though one whose draws were all
-// left out is still its last, so a capture sampling it counts it as such
-// (rt_filtered) rather than missing.
+// nothing kept (the velocity buffer's) is left out, though one whose draws
+// were all left out is still its last, so a capture sampling it counts it as
+// such (rt_filtered) rather than missing.
 void EndPass(uint32_t tex) {
     State& s = S();
     if (s.open.tex != tex) DropOpenPass(s);
@@ -1595,7 +1649,7 @@ void EndPass(uint32_t tex) {
     if (!recorded) return;
     rec->pass.version = rt.version;
     rec->pass.draw_count = uint32_t(rec->content.draws.size());
-    // what it left out (shadow casters, velocity) counts in the frame either way
+    // what it left out (velocity) counts in the frame either way
     if (capturing) AddCounts(*s.building, rec->content);
     if (rec->content.draws.empty()) {
         if (capturing) s.building->passes_empty++;

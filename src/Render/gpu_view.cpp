@@ -1725,6 +1725,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             tex[kSlotGlow] = layer_of(state->maps[kMapGlow].get());
             if (!tex[kSlotGlow].texture) sp.flags.x &= ~shade::kShadeGlow;
         }
+        // (no shadow map to read: RenderFrame plans none)
+        sp.flags.x &= ~shade::kShadeShadow;
         if (sp.flags.x & (shade::kShadeProjMultiply | shade::kShadeProjGobo)) {
             tex[kSlotProjected] = layer_of(state->maps[kMapProjected].get());
             if (sp.flags.x & shade::kShadeProjGobo)
@@ -2111,7 +2113,11 @@ bool GpuRenderer::RenderFrame(const FrameCapture& frame, const RasterOptions& op
     if (!impl_->warm) impl_->Prewarm();
     const auto start = std::chrono::steady_clock::now();
     stats = GpuStats{};
-    if (!impl_->Render(frame, options, rgba, stats)) {
+    // the characters' self-shadows aren't drawn on the GPU yet: no shadow
+    // map's pass, every SHADOW_BUFFER draw lit, as the CPU draws them without
+    RasterOptions o = options;
+    o.self_shadow = false;
+    if (!impl_->Render(frame, o, rgba, stats)) {
         // whatever went wrong would go wrong every frame; the CPU takes over
         REXLOG_WARN("native view gpu: giving up for this session, the native view draws on "
                     "the CPU");

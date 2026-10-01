@@ -6,7 +6,7 @@
 //                               [--dump-tex <draw>] [--shade <draw>]
 //                               [--dump-rt <hex>[:<version>]]
 //                               [--rt-none | --rt-guest]
-//                               [--no-tex] [--no-blend] [--no-cull] [--transpose]
+//                               [--no-tex] [--no-blend] [--no-cull] [--no-shadow] [--transpose]
 //                               [--no-skinned | --only-skinned] [--unskinned]
 //                               [--legacy-light | --no-light] [--pick X,Y]
 //                               [--dump-alpha <png>] [--dump-depth <png>]
@@ -50,8 +50,15 @@
 // lighting from before the game's shading, --no-light with none (every
 // material unlit). --no-cull draws both sides of every
 // triangle, as the native view did before it culled as the game does (the
-// cull mode --list prints, scene_capture.h's DrawItem::cull). --pick draws the frame at --size and
-// prints the draw that last wrote pixel X,Y, its colour and its shade.
+// cull mode --list prints, scene_capture.h's DrawItem::cull). --no-shadow draws
+// the characters without their self-shadows (RasterOptions::self_shadow): no
+// shadow map's pass, every SHADOW_BUFFER draw lit. --list's "shadow:" lines
+// check the captured shadow maps: each SHADOW_BUFFER draw's s5 is the version
+// of the shadow map whose pass came last before it, and its VS c40..c43 are
+// that pass's view-projection times the texture's (u = .5x + .5009765625w, v =
+// -.5y + .5009765625w), as RB3's CheckShadow makes them, with its draw modes,
+// cull modes and options. --pick draws the frame at --size and prints the
+// draw that last wrote pixel X,Y, its colour and its shade.
 // Every capture prints a "post:" line, what post-processing was set to do at
 // DxRnd::DoPostProcess (post_params.h: boundary, colour matrix, bloom, DOF,
 // the world camera), and a "check:" line setting it against the constants
@@ -306,10 +313,12 @@ bool SameColor(const float* a, const float* b) {
 // size and base address
 std::string FetchString(const uint32_t f[6]) {
     if (!f[1]) return "-";
-    char buf[96];
-    std::snprintf(buf, sizeof(buf), "fmt %u dim %u %ux%u base %08X", f[1] & 0x3f,
+    char buf[128];
+    // the clamp modes (0 wrap, 2 the edge, 6 the border...) are dword 0's
+    // bits 10-12 and 13-15
+    std::snprintf(buf, sizeof(buf), "fmt %u dim %u %ux%u base %08X clamp %u,%u", f[1] & 0x3f,
                   (f[5] >> 9) & 3, (f[2] & 0x1fff) + 1, ((f[2] >> 13) & 0x1fff) + 1,
-                  f[1] & 0xfffff000u);
+                  f[1] & 0xfffff000u, (f[0] >> 10) & 7, (f[0] >> 13) & 7);
     return buf;
 }
 
@@ -418,7 +427,11 @@ void PrintShade(const FrameCapture& fc, size_t draw) {
         std::printf("  s%-2u %s: bound %s, material %08X (base %08X)", kShadeMapSampler[m],
                     kMapNames[m], FetchString(s->fetch[m]).c_str(), s->mat_maps[m],
                     s->mat_map_base[m]);
-        if (s->maps[m]) std::printf(", decoded %ux%u", s->maps[m]->width, s->maps[m]->height);
+        if (const Texture* t = s->maps[m].get(); t && t->tex_obj)
+            std::printf(", render target %08X type 0x%X version %u%s", t->tex_obj, t->tex_type,
+                        t->version, t->rgba.empty() ? "" : " (guest pixels)");
+        else if (t)
+            std::printf(", decoded %ux%u", t->width, t->height);
         std::printf("\n");
     }
 }
@@ -455,6 +468,11 @@ void PrintPassSummary(const FrameCapture& fc) {
                 fc.passes.size(), textures, carried, (unsigned long long)fc.game_frame,
                 fc.rt_sampled, fc.rt_missing, fc.rt_filtered, fc.rt_snapshots, fc.passes_empty,
                 fc.passes_unbalanced);
+    std::printf("draws left out: skipped_shadow %u (shadow draw modes outside their passes), "
+                "skipped_velocity %u, skipped_draw_mode %u, skipped_no_geom %u, "
+                "skipped_target %u\n",
+                fc.skipped_shadow, fc.skipped_velocity, fc.skipped_draw_mode, fc.skipped_no_geom,
+                fc.skipped_target);
     // the render targets draws sample that no pass here made
     std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, size_t>> missing;
     for (const DrawItem& d : fc.draws) {
@@ -628,12 +646,42 @@ void PrintPost(const FrameCapture& fc) {
     }
 }
 
+// a pass's draws by draw mode (DrawItem::draw_mode) other than the colour
+// pass's, and their cull modes and shaders' options: " mode 1 x12 (cull 6,
+// SKINNED)"
+std::string DrawModes(const FrameCapture& fc, const Pass& p) {
+    std::map<int, std::pair<size_t, std::map<std::string, size_t>>> modes;
+    const uint32_t end = std::min<uint32_t>(p.first_draw + p.draw_count, uint32_t(fc.draws.size()));
+    for (uint32_t d = p.first_draw; d < end; d++) {
+        const DrawItem& it = fc.draws[d];
+        if (!it.draw_mode) continue;
+        auto& m = modes[it.draw_mode];
+        m.first++;
+        const ShadeState* s = ShadeOf(fc, it);
+        m.second["cull " + std::to_string(it.cull) + ", " +
+                 (s ? OptionString(s->options) : std::string("no shade"))]++;
+    }
+    std::string out;
+    for (const auto& [mode, m] : modes) {
+        out += " mode " + std::to_string(mode) + " x" + std::to_string(m.first) + " (";
+        bool first = true;
+        for (const auto& [what, n] : m.second) {
+            if (!first) out += "; ";
+            first = false;
+            out += what + (m.second.size() > 1 ? " x" + std::to_string(n) : "");
+        }
+        out += ")";
+    }
+    return out;
+}
+
 void PrintPasses(const FrameCapture& fc) {
     for (size_t i = 0; i < fc.passes.size(); i++) {
         const Pass& p = fc.passes[i];
         const uint32_t end = p.first_draw + p.draw_count;
         if (!p.tex_obj) {
-            std::printf("pass %3zu back buffer draws %u..%u\n", i, p.first_draw, end);
+            std::printf("pass %3zu back buffer draws %u..%u%s\n", i, p.first_draw, end,
+                        DrawModes(fc, p).c_str());
             continue;
         }
         uint32_t rects = 0, mips = 0;
@@ -646,14 +694,88 @@ void PrintPasses(const FrameCapture& fc) {
             std::snprintf(clear, sizeof(clear), "clear %02X to %08X z %.0f", p.clear_flags,
                           p.clear_color, p.clear_z);
         std::printf("pass %3zu texture %08X %s %ux%u mips %u, draws %u..%u (%u rects, %u mip), "
-                    "%s, viewport %.0f,%.0f %.0fx%.0f, cam %08X, version %u, frame %llu%s: %s\n",
+                    "%s, viewport %.0f,%.0f %.0fx%.0f, cam %08X, version %u, frame %llu%s: %s%s\n",
                     i, p.tex_obj, TexTypeName(p.tex_type), p.width, p.height, p.num_mips,
                     p.first_draw, end, rects, mips, clear, p.viewport[0], p.viewport[1],
                     p.viewport[2], p.viewport[3], p.cam, p.version,
                     (unsigned long long)p.from_frame,
                     Carried(fc, p) ? " (carried)" : "",
-                    p.name.empty() ? "-" : p.name.c_str());
+                    p.name.empty() ? "-" : p.name.c_str(), DrawModes(fc, p).c_str());
     }
+}
+
+// The "shadow:" lines: each SHADOW_BUFFER draw's s5 against the shadow maps'
+// passes, and its VS c40..c43 against the view-projection the pass that made
+// its version drew with, times the texture's matrix (RB3's CheckShadow); and
+// the shadow maps' passes' draws (their draw modes, cull modes, options).
+void PrintShadowCheck(const FrameCapture& fc) {
+    using namespace shader_opt;
+    // the texture's: u = .5x + .5009765625w, v = -.5y + .5009765625w, z, w
+    Mat4 t{};
+    t.m[0][0] = 0.5f;
+    t.m[1][1] = -0.5f;
+    t.m[2][2] = 1.0f;
+    t.m[3][0] = t.m[3][1] = 0.5009765625f;
+    t.m[3][3] = 1.0f;
+    size_t buffer_draws = 0, as_map = 0, other_s5 = 0, no_s5 = 0, just_before = 0, made = 0;
+    float worst = 0, worst_rel = 0;
+    float worst_col[4] = {};  // by column: u, v, z, w
+    size_t checked = 0;
+    size_t worst_draw = 0;
+    for (size_t d = 0; d < fc.draws.size(); d++) {
+        const ShadeState* s = ShadeOf(fc, fc.draws[d]);
+        if (!s || !s->Option(kShadowBuffer)) continue;
+        buffer_draws++;
+        const Texture* map = ShadowMapOf(s);
+        if (!map) {
+            if (s->maps[kMapProjected]) other_s5++;
+            else no_s5++;
+            continue;
+        }
+        as_map++;
+        // the pass that made its version, and the last shadow map pass before the draw
+        const Pass* maker = nullptr;
+        const Pass* last = nullptr;
+        for (const Pass& p : fc.passes) {
+            if (p.tex_obj == map->tex_obj && p.version == map->version) maker = &p;
+            if (p.tex_type == kTexTypeShadowMap && p.first_draw + p.draw_count <= d) last = &p;
+        }
+        if (!maker) continue;
+        made++;
+        if (maker == last) just_before++;
+        if (!maker->draw_count) continue;
+        const Mat4& vp = fc.draws[maker->first_draw].view_proj;
+        for (int i = 0; i < 4; i++) {
+            const float* c = s->Vs(40 + i);
+            for (int r = 0; r < 4; r++) {
+                float want = 0;
+                for (int k = 0; k < 4; k++) want += vp.m[r][k] * t.m[k][i];
+                const float diff = std::fabs(c[r] - want);
+                if (diff > worst) worst_draw = d;
+                worst = std::max(worst, diff);
+                worst_col[i] = std::max(worst_col[i], diff);
+                worst_rel = std::max(worst_rel, diff / std::max(1.0f, std::fabs(want)));
+            }
+        }
+        checked++;
+    }
+    size_t map_passes = 0, map_draws = 0;
+    for (const Pass& p : fc.passes) {
+        if (p.tex_type != kTexTypeShadowMap) continue;
+        map_passes++;
+        map_draws += p.draw_count;
+    }
+    if (!buffer_draws && !map_passes) return;
+    std::printf("shadow: %zu shadow map passes, %zu draws; %zu SHADOW_BUFFER draws: s5 the shadow "
+                "map %zu (of those, made by a pass here %zu, by the shadow map pass just before "
+                "it %zu), s5 something else %zu, none %zu\n",
+                map_passes, map_draws, buffer_draws, as_map, made, just_before, other_s5, no_s5);
+    if (checked)
+        std::printf("shadow: c40..c43 against the maker pass's view_proj x T over %zu draws: off "
+                    "by up to %.6f (%.2e relative; u %.6f v %.6f z %.6f w %.6f), the most at "
+                    "draw %zu\n",
+                    checked, worst, worst_rel, worst_col[0], worst_col[1], worst_col[2],
+                    worst_col[3], worst_draw);
 }
 
 }  // namespace
@@ -705,6 +827,7 @@ int main(int argc, char** argv) {
         else if (a == "--pick" && i + 1 < argc) std::sscanf(argv[++i], "%d,%d", &pick_x, &pick_y);
         else if (a == "--no-blend") o.blending = false;
         else if (a == "--no-cull") o.culling = false;
+        else if (a == "--no-shadow") o.self_shadow = false;
         else if (a == "--no-tex") o.textures = false;
         else if (a == "--legacy-light") o.legacy_light = true;
         else if (a == "--no-light") o.lighting = false;
@@ -778,7 +901,10 @@ int main(int argc, char** argv) {
     PrintPassSummary(*fc);
     PrintPost(*fc);
     PrintGamma(*fc, list);
-    if (list) PrintPasses(*fc);
+    if (list) {
+        PrintPasses(*fc);
+        PrintShadowCheck(*fc);
+    }
     for (uint32_t cam : order) {
         const CamStats& cs = cams[cam];
         std::printf("  cam 0x%08X: %d draws, %d sampled verts | as captured: %d front %d inside"
@@ -851,6 +977,7 @@ int main(int argc, char** argv) {
                     std::printf("rect shader %d [%.1f %.1f %.1f %.1f] ", d.rect_shader, d.rect[0],
                                 d.rect[1], d.rect[2], d.rect[3]);
                 if (d.mip_level) std::printf("mip %d ", d.mip_level);
+                if (d.draw_mode) std::printf("draw mode %u ", unsigned(d.draw_mode));
                 std::printf("\n");
             }
             if (d.tex && d.tex->tex_obj)

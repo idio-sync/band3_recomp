@@ -62,15 +62,21 @@ void CountRenderTargets(const FrameCapture& fc, const std::vector<uint64_t>& lef
     const std::set<uint64_t> all_left_out(left_out.begin(), left_out.end());
     missing = 0;
     filtered.clear();
-    for (const DrawItem& d : fc.draws) {
-        if (!d.tex || !d.tex->tex_obj || !IsPassTargetType(d.tex->tex_type)) continue;
-        const uint64_t key = RtKey(d.tex->tex_obj, d.tex->version);
-        if (!seen.insert(key).second || made.count(key)) continue;
+    auto count = [&](const Texture* t) {
+        if (!t || !t->tex_obj || !IsPassTargetType(t->tex_type)) return;
+        const uint64_t key = RtKey(t->tex_obj, t->version);
+        if (!seen.insert(key).second || made.count(key)) return;
         if (all_left_out.count(key)) {
             filtered.push_back(key);
         } else {
             missing++;
         }
+    };
+    for (const DrawItem& d : fc.draws) {
+        count(d.tex.get());
+        // s5 kept as a render target (the shadow map, NgLight's shadow)
+        if (d.shade >= 0 && size_t(d.shade) < fc.shades.size())
+            count(fc.shades[d.shade].maps[kMapProjected].get());
     }
     sampled = uint32_t(seen.size());
 }

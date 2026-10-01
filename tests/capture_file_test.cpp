@@ -4,8 +4,9 @@
 // skipped or refused as it should be, and geometry from a smaller Vertex (or
 // post-processing from a smaller PostParams) keeps what both have; files from
 // before passes (B3CAP002) and before shades (B3CAP001) still load, and draws
-// from before their cull mode was kept cull nothing, and files from before the
-// display gamma ramp was kept have none.
+// from before their cull mode was kept cull nothing, those from before their
+// draw mode was kept are the colour pass's, and files from before the display
+// gamma ramp was kept have none.
 
 #include <doctest/doctest.h>
 #include <cstddef>
@@ -690,44 +691,84 @@ TEST_CASE("a capture keeps its post-processing, and one from before has none") {
     CHECK(back->post_consts.c24[1] == -3.5f);
 }
 
-TEST_CASE("a capture keeps each draw's cull mode, and one from before culls nothing") {
+TEST_CASE("a capture keeps each draw's cull and draw modes; one from before has none") {
     FrameCapture fc = MakePassFrame();
     fc.draws[3].cull = kCullBack;                   // D3DCULL_CW, RndMat's cull
     fc.draws[4].cull = kCullBack | kCullFrontIsCw;  // D3DCULL_CCW, a reflection's
+    fc.draws[1].draw_mode = kDrawModeShadowDepth;
+    fc.draws[2].draw_mode = kDrawModeShadowCasters;
     const std::string path = TempPath("band3_capture_file_cull_test.cap");
     REQUIRE(SaveCapture(path, fc));
     auto back = LoadCapture(path);
     REQUIRE(back);
     REQUIRE(back->draws.size() == fc.draws.size());
-    for (size_t i = 0; i < fc.draws.size(); i++) CHECK(back->draws[i].cull == fc.draws[i].cull);
-
-    // DRAW as builds before culling wrote it, version 1: each draw one byte
-    // shorter, without its cull mode at the end
-    std::vector<uint8_t> data = ReadAll(path);
-    const size_t at = FindSection(data, "DRAW");
-    REQUIRE(at != std::string::npos);
-    data[at + 4] = 1;
-    uint64_t size;
-    std::memcpy(&size, data.data() + at + 8, 8);
-    size_t pos = at + 16 + 4;  // past the draw count
     for (size_t i = 0; i < fc.draws.size(); i++) {
-        uint32_t bones;
-        std::memcpy(&bones, data.data() + pos + 4 + 4 + 2 * sizeof(Mat4), 4);
-        pos += 4 + 4 + 2 * sizeof(Mat4) + 4 + bones * sizeof(Mat4) + 16 + 4 + 4 + 1 + 1 + 4 +
-               4 + 4 + 4 + 4 + 4 + 16 + 4;
-        data.erase(data.begin() + std::ptrdiff_t(pos));  // its cull mode
-        size--;
+        CHECK(back->draws[i].cull == fc.draws[i].cull);
+        CHECK(back->draws[i].draw_mode == fc.draws[i].draw_mode);
     }
-    CHECK(pos == at + 16 + size_t(size));
-    std::memcpy(data.data() + at + 8, &size, 8);
-    WriteAll(path, data);
-    back = LoadCapture(path);
+
+    // DRAW as older builds wrote it: version 2 without each draw's draw mode
+    // at its end, version 1 without its cull mode before that either
+    const std::vector<uint8_t> saved = ReadAll(path);
+    for (uint8_t version : {uint8_t(2), uint8_t(1)}) {
+        CAPTURE(int(version));
+        std::vector<uint8_t> data = saved;
+        const size_t at = FindSection(data, "DRAW");
+        REQUIRE(at != std::string::npos);
+        data[at + 4] = version;
+        const size_t cut = version == 2 ? 1 : 2;
+        uint64_t size;
+        std::memcpy(&size, data.data() + at + 8, 8);
+        size_t pos = at + 16 + 4;  // past the draw count
+        for (size_t i = 0; i < fc.draws.size(); i++) {
+            uint32_t bones;
+            std::memcpy(&bones, data.data() + pos + 4 + 4 + 2 * sizeof(Mat4), 4);
+            pos += 4 + 4 + 2 * sizeof(Mat4) + 4 + bones * sizeof(Mat4) + 16 + 4 + 4 + 1 + 1 + 4 +
+                   4 + 4 + 4 + 4 + 4 + 16 + 4 + 2 - cut;
+            // its draw mode, and its cull mode
+            data.erase(data.begin() + std::ptrdiff_t(pos),
+                       data.begin() + std::ptrdiff_t(pos + cut));
+            size -= cut;
+        }
+        CHECK(pos == at + 16 + size_t(size));
+        std::memcpy(data.data() + at + 8, &size, 8);
+        WriteAll(path, data);
+        back = LoadCapture(path);
+        REQUIRE(back);
+        REQUIRE(back->draws.size() == fc.draws.size());
+        for (size_t i = 0; i < fc.draws.size(); i++) {
+            CHECK(back->draws[i].cull == (version == 2 ? fc.draws[i].cull : 0));
+            CHECK(back->draws[i].draw_mode == 0);
+        }
+        CHECK(back->draws[4].tex);
+        CHECK(back->passes.size() == 3);
+    }
+    std::remove(path.c_str());
+}
+
+TEST_CASE("a shade's s5 as a render target keeps its identity and version, without pixels") {
+    // a SHADOW_BUFFER draw's shadow map, as scene_capture.cpp keeps it: the
+    // texture RB3 draws, the version it read
+    FrameCapture fc = MakePassFrame();
+    auto map = std::make_shared<Texture>();
+    map->width = map->height = 512;
+    map->tex_obj = 0x2251A0C0;
+    map->tex_type = kTexTypeShadowMap;
+    map->version = 41;
+    fc.shades[0].options = 1ull << shader_opt::kShadowBuffer;
+    fc.shades[0].maps[kMapProjected] = map;
+    const std::string path = TempPath("band3_capture_file_shadow_map_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
     std::remove(path.c_str());
     REQUIRE(back);
-    REQUIRE(back->draws.size() == fc.draws.size());
-    for (const DrawItem& d : back->draws) CHECK(d.cull == 0);
-    CHECK(back->draws[4].tex);
-    CHECK(back->passes.size() == 3);
+    REQUIRE(back->shades.size() == 1);
+    const Texture* got = ShadowMapOf(&back->shades[0]);
+    REQUIRE(got);
+    CHECK(got->tex_obj == 0x2251A0C0);
+    CHECK(got->version == 41);
+    CHECK(got->width == 512);
+    CHECK(got->rgba.empty());
 }
 
 TEST_CASE("a capture keeps its display gamma ramp, and one from before has none") {

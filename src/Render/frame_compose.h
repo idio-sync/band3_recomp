@@ -68,10 +68,11 @@ inline bool PresentsCapturedWorld(const FrameCapture& fc) {
 // out (a post frame has none of the world's to draw).
 std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const FrameCapture& frame);
 
-// render targets the frame's draws sample, by (texture, version), and of
-// those no pass in it made, the ones in `left_out` (made by a pass whose draws
-// were all left out: FrameCapture::rt_filtered_keys) and how many others:
-// FrameCapture::rt_sampled, rt_filtered_keys and rt_missing
+// render targets the frame's draws sample (as their diffuse texture, or as
+// s5: the shadow map), by (texture, version), and of those no pass in it
+// made, the ones in `left_out` (made by a pass whose draws were all left out:
+// FrameCapture::rt_filtered_keys) and how many others: FrameCapture::
+// rt_sampled, rt_filtered_keys and rt_missing
 void CountRenderTargets(const FrameCapture& fc, const std::vector<uint64_t>& left_out,
                         uint32_t& sampled, uint32_t& missing, std::vector<uint64_t>& filtered);
 

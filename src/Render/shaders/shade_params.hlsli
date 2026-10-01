@@ -40,6 +40,11 @@ static const uint kShadeAoSh = 2097152u;
 // (PROJ_MULTIPLY, the stage's shadows), or masks the gobo's (s10) light added
 static const uint kShadeProjMultiply = 4194304u;
 static const uint kShadeProjGobo = 8388608u;
+// SHADOW_BUFFER, the character's self-shadow, per pixel: the shadow map
+// (s5, a depth the backend drew natively), read where ShadowCoord puts the
+// pixel, darkens the point lights (shade.hlsli's ShadowLit); set only where
+// the backend has that map
+static const uint kShadeShadow = 16777216u;
 
 // Register names are the game shaders' (scene_capture.h's kShadeRegs), PS
 // unless VS is said.
@@ -63,4 +68,7 @@ struct ShadeParams {
     float4 proj[3];        // c95..c97: the projected light's map uv = (c95 P, c96 P) / c97 P
     float4 proj_dir;       // c66: toward it
     float4 proj_color;     // c69
+    float4 shadow[4];      // VS c40..c43: the shadow map's coordinate S = (c40 P, .., c43 P)
+    float4 shadow_color;   // c107: 1 - the shadow's colour
+    float4 shadow_dir;     // c108: the light camera's forward
 };

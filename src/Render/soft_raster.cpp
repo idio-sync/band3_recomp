@@ -68,6 +68,9 @@ struct Target {
     std::vector<uint32_t>& color;
     std::vector<float>& depth;  // 1/w, larger is nearer, 0 is cleared
     std::vector<int32_t>* ids;  // the draw that last wrote each pixel, if wanted
+    // a shadow map's pass: its depth, clip z/w (0 near, cleared to 1), which
+    // its draws write where they're nearer, and nothing else
+    float* zw = nullptr;
     TargetAlpha alpha = TargetAlpha::kOpaque;
     // a texture pass's: the texture it draws into, which its draws can't sample
     uint32_t tex_obj = 0;
@@ -126,6 +129,11 @@ struct DrawState {
     TexView glow;
     TexView proj;  // the projected light's s5 and s10, likewise
     TexView gobo;
+    // kShadeShadow: the shadow map's depth (clip z/w) as its pass left it
+    const float* shadow = nullptr;
+    uint32_t shadow_w = 0, shadow_h = 0;
+    // into a shadow map (Target::zw): depth alone
+    bool depth_only = false;
     TexView behind;  // the target's behind, for kShadeRefract
     shade::ShadeParams shade;
     bool per_vertex;  // kShadePerVertex: ClipVert's ld and la are set
@@ -270,8 +278,10 @@ void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3
         SampleBorder(ds.proj, puv[0], puv[1], proj);
         if (ds.gobo.px) SampleBorder(ds.gobo, puv[0], puv[1], gobo);
     }
+    const float lit =
+        ds.shadow ? shade::ShadowLitCpu(ds.shade, wp, ds.shadow, ds.shadow_w, ds.shadow_h) : 1.0f;
     shade::ShadePixelCpu(ds.shade, wp, n, vc, texel, spec_map, glow, behind, depth, ao, ld, la,
-                         out, proj, gobo);
+                         out, proj, gobo, lit);
 }
 
 // The colour by the material's blend mode (Dest keeps it), and alpha by
@@ -365,8 +375,15 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
             const float l2 = ((sx[1] - sx[0]) * (py - sy[0]) - (sy[1] - sy[0]) * (px - sx[0])) * inv_area;
             if (l0 < 0 || l1 < 0 || l2 < 0) continue;
             if ((l0 == 0 && !own0) || (l1 == 0 && !own1) || (l2 == 0 && !own2)) continue;
-            const float z = l0 * iw[0] + l1 * iw[1] + l2 * iw[2];
             const size_t idx = size_t(y) * t.w + x;
+            if (ds.depth_only) {
+                // clip z/w, which runs straight across the screen; LESS
+                const float zw = l0 * a.p[2] * iw[0] + l1 * b.p[2] * iw[1] + l2 * c.p[2] * iw[2];
+                if (zw < t.zw[idx]) t.zw[idx] = zw;
+                st.pixels++;
+                continue;
+            }
+            const float z = l0 * iw[0] + l1 * iw[1] + l2 * iw[2];
             if (ds.z_test) {
                 const float d = t.depth[idx];
                 if (ds.z_equal_passes ? z < d * 0.9999f : z <= d) continue;
@@ -409,9 +426,13 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
 // float edge functions lose the pixel position altogether (stripes and blocks
 // across the screen); clipped to the band, no corner is more than a few
 // thousand pixels out. The band's planes pass through the eye, so clipping to
-// them moves no pixel: they only cut away what's off screen anyway.
+// them moves no pixel: they only cut away what's off screen anyway. A depth
+// draw (a shadow map's) is clipped at z 0 too, the light camera's near plane,
+// as the game's device clips it: its depth isn't 1/w but clip z/w, and what's
+// in front of that plane would be stored nearer than anything.
 constexpr float kGuard = 8.0f;
 constexpr int kClipPlanes = 5;
+constexpr int kDepthClipPlanes = kClipPlanes + 1;
 
 float PlaneDist(const ClipVert& v, int plane) {
     switch (plane) {
@@ -419,27 +440,30 @@ float PlaneDist(const ClipVert& v, int plane) {
         case 1: return kGuard * v.p[3] - v.p[0];
         case 2: return kGuard * v.p[3] + v.p[0];
         case 3: return kGuard * v.p[3] - v.p[1];
-        default: return kGuard * v.p[3] + v.p[1];
+        case 4: return kGuard * v.p[3] + v.p[1];
+        default: return v.p[2];
     }
 }
 
-// clips against the near plane and the guard band, then draws the fan
+// clips against the near plane and the guard band (and z 0, a depth draw),
+// then draws the fan
 void ClipAndRaster(const ClipVert& a, const ClipVert& b, const ClipVert& c,
                    const DrawState& ds, Target& t, RasterStats& st) {
+    const int planes = ds.depth_only ? kDepthClipPlanes : kClipPlanes;
     uint32_t outside = 0;
-    for (int p = 0; p < kClipPlanes; p++)
+    for (int p = 0; p < planes; p++)
         if (PlaneDist(a, p) < 0 || PlaneDist(b, p) < 0 || PlaneDist(c, p) < 0) outside |= 1u << p;
     if (!outside) {
         RasterTri(a, b, c, ds, t, st);
         return;
     }
     // each plane adds at most one corner
-    ClipVert buf[2][3 + kClipPlanes];
+    ClipVert buf[2][3 + kDepthClipPlanes];
     buf[0][0] = a;
     buf[0][1] = b;
     buf[0][2] = c;
     int n = 3, cur_buf = 0;
-    for (int p = 0; p < kClipPlanes && n >= 3; p++) {
+    for (int p = 0; p < planes && n >= 3; p++) {
         if (!(outside & (1u << p))) continue;
         const ClipVert* in = buf[cur_buf];
         ClipVert* out = buf[cur_buf ^ 1];
@@ -458,11 +482,14 @@ void ClipAndRaster(const ClipVert& a, const ClipVert& b, const ClipVert& c,
     for (int i = 1; i + 1 < n; i++) RasterTri(poly[0], poly[i], poly[i + 1], ds, t, st);
 }
 
-// a texture pass's target, kept for the frame
+// a texture pass's target, kept for the frame: what its passes have drawn,
+// up to the one that made `version`
 struct RtTarget {
     uint32_t w = 0, h = 0;
     std::vector<uint32_t> color;
     std::vector<float> depth;
+    std::vector<float> zw;  // a shadow map's depth (Target::zw); empty for the rest
+    uint32_t version = 0;
 };
 using RtTargets = std::unordered_map<uint32_t, RtTarget>;
 
@@ -513,6 +540,21 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     if (ds.shade.flags.x & (shade::kShadeProjMultiply | shade::kShadeProjGobo))
         ds.proj = View(state->maps[kMapProjected].get());
     if (ds.shade.flags.x & shade::kShadeProjGobo) ds.gobo = View(state->maps[kMapGobo].get());
+    // the shadow map, as the pass that made the version it reads left it; one
+    // the frame drew no pass of, or another version of since, leaves it lit
+    if (ds.shade.flags.x & shade::kShadeShadow) {
+        const Texture* map = ShadowMapOf(state);
+        const auto f = map ? rts.find(map->tex_obj) : rts.end();
+        if (f != rts.end() && !f->second.zw.empty() && f->second.version == map->version &&
+            map->tex_obj != t.tex_obj) {
+            ds.shadow = f->second.zw.data();
+            ds.shadow_w = f->second.w;
+            ds.shadow_h = f->second.h;
+        } else {
+            ds.shade.flags.x &= ~shade::kShadeShadow;
+        }
+    }
+    ds.depth_only = t.zw != nullptr;
     ds.per_vertex = (ds.shade.flags.x & shade::kShadePerVertex) != 0;
     // REFRACT_WORLD reads the picture behind it: in the picture, once resolved
     if (ds.shade.flags.x & shade::kShadeRefract) {
@@ -676,11 +718,14 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
         if (post_plan.composite.flags.x & post::kPostSoft) needed.insert(post_plan.soft);
     }
     auto samples = [&](uint32_t first, uint32_t end, bool texture) {
-        if (!o.textures) return;
         for (uint32_t d = first; d < end; d++) {
             const DrawItem& it = f.draws[d];
             if (texture ? !DrawnInTexturePass(it) : !DrawnToBackBuffer(it)) continue;
-            if (IsPassTarget(it.tex.get())) needed.insert(it.tex->tex_obj);
+            if (o.textures && IsPassTarget(it.tex.get())) needed.insert(it.tex->tex_obj);
+            // a SHADOW_BUFFER draw's shadow map (s5)
+            if (o.self_shadow)
+                if (const Texture* map = ShadowMapOf(shade::ShadeOf(f, it)))
+                    needed.insert(map->tex_obj);
         }
     };
     for (size_t i = f.passes.size(); i-- > 0;) {
@@ -693,11 +738,17 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
             continue;
         }
         const bool wanted = also && p.tex_obj == also;
+        const bool shadow_map = p.tex_type == kTexTypeShadowMap;
         if (!o.texture_passes || !p.width || !p.height) continue;
+        if (shadow_map && !o.self_shadow && !wanted) continue;
         if (!needed.count(p.tex_obj) && !(wanted && p.version == also_version)) continue;
-        if (first >= f.post_boundary && !wanted && !SpotTarget(p) && !SoftTarget(f, p)) continue;
-        // what it drew over isn't seen
-        if (p.clear_flags & 0x0f) needed.erase(p.tex_obj);
+        // (a shadow map is drawn for the character after it, wherever that is)
+        if (first >= f.post_boundary && !wanted && !SpotTarget(p) && !SoftTarget(f, p) &&
+            !shadow_map)
+            continue;
+        // what it drew over isn't seen: a shadow map's clear is its depth's
+        if ((p.clear_flags & 0x0f) || (shadow_map && (p.clear_flags & 0x30)))
+            needed.erase(p.tex_obj);
         runs.push_back({&p, first, end});
         samples(first, end, true);
         // the cones read the density map drawn before them
@@ -805,16 +856,25 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         // cleared starts transparent black
         const Pass& p = *run.pass;
         RtTarget& rt = rts[p.tex_obj];
+        const bool shadow_map = p.tex_type == kTexTypeShadowMap;
         if (rt.w != p.width || rt.h != p.height) {
             rt.w = p.width;
             rt.h = p.height;
             rt.color.assign(size_t(rt.w) * rt.h, kTransparentBlack);
             rt.depth.assign(size_t(rt.w) * rt.h, 0.0f);
+            rt.zw.clear();
         }
+        // a shadow map's depth: nothing drawn is as far as it goes
+        if (shadow_map && rt.zw.empty()) rt.zw.assign(size_t(rt.w) * rt.h, 1.0f);
         if (p.clear_flags & 0x0f)
             std::fill(rt.color.begin(), rt.color.end(), ArgbToRgba(p.clear_color));
-        if (p.clear_flags & 0x30) std::fill(rt.depth.begin(), rt.depth.end(), 0.0f);
+        if (p.clear_flags & 0x30) {
+            std::fill(rt.depth.begin(), rt.depth.end(), 0.0f);
+            std::fill(rt.zw.begin(), rt.zw.end(), p.clear_z);
+        }
+        rt.version = p.version;
         Target rtt{rt.w, rt.h, rt.color, rt.depth, nullptr};
+        if (shadow_map) rtt.zw = rt.zw.data();
         rtt.alpha = TargetAlpha::kTexture;
         rtt.tex_obj = p.tex_obj;
         rtt.no_z = (p.tex_type & kTexTypeNoZ) != 0;
@@ -904,6 +964,14 @@ bool RasterizeTarget(const FrameCapture& frame, const RasterOptions& options, ui
     rgba = it->second.color;
     width = it->second.w;
     height = it->second.h;
+    // a shadow map's depth, near white to far (or nothing) black, opaque
+    if (!it->second.zw.empty()) {
+        for (size_t i = 0; i < rgba.size(); i++) {
+            const float g = 1.0f - std::clamp(it->second.zw[i], 0.0f, 1.0f);
+            const uint32_t v = uint32_t(g * 255.0f + 0.5f);
+            rgba[i] = v | v << 8 | v << 16 | 0xff000000u;
+        }
+    }
     return true;
 }
 

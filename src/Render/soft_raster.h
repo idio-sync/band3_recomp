@@ -21,7 +21,10 @@
 // cones shade by spot_model.h instead, reading the world's depth where they
 // are on the screen, and the depth volume's blurs blur it in place; the soft
 // particles (scene_capture.h's IsSoftParticle) fade by that depth, and their
-// buffer's blurs take their taps from one surface into the other.
+// buffer's blurs take their taps from one surface into the other. A shadow
+// map's pass (kTexTypeShadowMap) draws depth alone, clip z/w less than what's
+// there (cleared to 1), into a float buffer of its target's, which the
+// SHADOW_BUFFER draws after it read (RasterOptions::self_shadow).
 //
 // The back buffer's draws are split at post_boundary, as RB3 draws them: the
 // world's go to a scene target, which keeps alpha as RB3's back buffer does
@@ -65,6 +68,11 @@ struct RasterOptions {
     // transparent black; off, they're never used (texture_passes off then
     // draws render targets untextured)
     bool rt_guest_pixels = true;
+    // RB3's character self-shadows: the shadow maps (scene_capture.h's
+    // kTexTypeShadowMap) drawn, their depth alone, and read by the
+    // SHADOW_BUFFER draws after them (shade.hlsli's ShadowLit); off, those
+    // draws are lit, as before the capture kept the maps
+    bool self_shadow = true;
     // RB3's post-processing at post_boundary (post_model.h): depth of field,
     // bloom and the colour matrix, as the frame set them; off, the scene as
     // it is
@@ -105,12 +113,14 @@ struct PassRun {
 };
 // The frame's back-buffer stretches, and the texture passes that something
 // drawn after them samples (by texture, any version: a pass that clears hides
-// the ones before it), but none from post-processing on, which isn't drawn
-// yet, other than the spotlights' (the depth volume's cones and blurs, and
-// the density map its cones read: spot_model.h) and the soft particles' (the
+// the ones before it), as its diffuse texture or, with self_shadow, as its
+// shadow map (ShadowMapOf), but none from post-processing on, which isn't
+// drawn yet, other than the spotlights' (the depth volume's cones and blurs,
+// and the density map its cones read: spot_model.h), the soft particles' (the
 // particles into the first surface, its blur into the second and back),
 // which the composite's terms sample where they're on (post_model.h's
-// PlanPost). A capture without passes is one back-buffer stretch.
+// PlanPost), and shadow maps (for a character in the overlay). A capture
+// without passes is one back-buffer stretch.
 std::vector<PassRun> PlanPasses(const FrameCapture& frame, const RasterOptions& options);
 
 // Whether pass p's draw is RndSoftParticleBuffer::BlurSurface's: a DrawRect
@@ -126,9 +136,13 @@ inline constexpr int kSoftBlurTaps = 5;
 bool SoftBlur(const FrameCapture& frame, const DrawItem& d, const ShadeInputs* state,
               const Pass& p);
 
-// a texture pass's draws but FinishDrawTarget's mip downsamples: the
-// renderers make mips themselves, or sample level 0
-inline bool DrawnInTexturePass(const DrawItem& d) { return d.mip_level == 0; }
+// a texture pass's draws but FinishDrawTarget's mip downsamples (the
+// renderers make mips themselves, or sample level 0) and NgLight's shadow
+// casters (draw mode 3), which aren't drawn yet: what samples its texture
+// reads guest memory's pixels, as before the capture kept them
+inline bool DrawnInTexturePass(const DrawItem& d) {
+    return d.mip_level == 0 && d.draw_mode != kDrawModeShadowCasters;
+}
 
 // a texture that texture passes draw, which a renderer samples from its own
 // target
@@ -178,8 +192,9 @@ inline uint32_t ArgbToRgba(uint32_t c) {
 // Draws `frame` on the CPU as Rasterize() does up to the pass that makes
 // `version` of the texture `tex_obj` (0: to the frame's end, its last), and
 // gives back what that texture's target holds then (RGBA8, the pass's size,
-// alpha kept): what native_view_replay's --dump-rt shows. False if no pass in
-// the capture draws it.
+// alpha kept; a shadow map's depth as opaque grey, white at its near plane
+// to black at its far one): what native_view_replay's --dump-rt shows. False
+// if no pass in the capture draws it.
 bool RasterizeTarget(const FrameCapture& frame, const RasterOptions& options, uint32_t tex_obj,
                      uint32_t version, std::vector<uint32_t>& rgba, uint32_t& width,
                      uint32_t& height, RasterStats* stats = nullptr);

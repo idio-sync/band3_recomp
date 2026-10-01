@@ -11,9 +11,8 @@
 // (tools/shaders/research: fam3.py standard, skin2.py skin, hair3.py hair) are
 // the reference, and tests/shade_model_test.cpp checks this against them.
 // Left out: normal maps (the capture has no tangents), the environment cube
-// (not decoded), the shadow buffer (k_24_8; read as lit), the projected light
-// of a vertex-lit material and the hair's strand highlight (it needs the
-// tangent).
+// (not decoded), the projected light and the shadow buffer of a vertex-lit
+// material and the hair's strand highlight (it needs the tangent).
 
 float3 Xyz(float4 v) { return float3(v.x, v.y, v.z); }
 
@@ -53,6 +52,62 @@ float2 ProjUv(SHADE_IN(ShadeParams) sp, float3 p) {
     const float4 q = float4(p.x, p.y, p.z, 1.0f);
     const float iw = 1.0f / dot(sp.proj[2], q);
     return float2(dot(sp.proj[0], q) * iw, dot(sp.proj[1], q) * iw);
+}
+
+// The shadow buffer (SHADOW_BUFFER, kShadeShadow; out/research/
+// m2_shader_ucode.md 5, the game's A46F95815504AFE1): RndShadowMap::PrepShadow
+// draws the character's depth (clip z/w, 0 near, cleared to 1) from a light
+// camera into a 512x512 map, and its pixels read s5 there. The coordinate is
+// the VS's c40..c43 times the world position, which hold the light camera's
+// view-projection times the texture's (u = .5x + .5009765625w, v = -.5y +
+// .5009765625w, as the captures have them: half a texel on, so the taps'
+// bilinear centre is the texel the map drew at that pixel, on D3D9's pixel
+// centres), and the pixel shader divides it by its w.
+float4 ShadowCoord(SHADE_IN(ShadeParams) sp, float3 p) {
+    const float4 q = float4(p.x, p.y, p.z, 1.0f);
+    return float4(dot(sp.shadow[0], q), dot(sp.shadow[1], q), dot(sp.shadow[2], q),
+                  dot(sp.shadow[3], q));
+}
+
+// The four texels the game's shader reads, point-sampled at uv half a texel
+// up-left, up-right, down-left and down-right (instrs 6-9), and the bilinear
+// weights getWeights2D gives them (instr 10, 20): x = u size - 0.5, the taps
+// floor(x) and floor(x) + 1, clamped to the map, weighted by x's fraction;
+// likewise y. depth is the pixel's own, S.z / S.w.
+struct ShadowTapSet {
+    float4 x;       // columns: i, i + 1, i, i + 1
+    float4 y;       // rows: j, j, j + 1, j + 1
+    float4 weight;  // (1 - fx)(1 - fy), fx (1 - fy), (1 - fx) fy, fx fy
+    float depth;
+};
+
+ShadowTapSet ShadowTaps(float4 s, float2 size) {
+    const float iw = 1.0f / s.w;
+    const float x = s.x * iw * size.x - 0.5f;
+    const float y = s.y * iw * size.y - 0.5f;
+    const float i = floor(x);
+    const float j = floor(y);
+    const float fx = x - i;
+    const float fy = y - j;
+    // clamped as floats, so a NaN (a pixel on the light's plane) lands on 0
+    const float i0 = min(max(i, 0.0f), size.x - 1.0f);
+    const float i1 = min(max(i + 1.0f, 0.0f), size.x - 1.0f);
+    const float j0 = min(max(j, 0.0f), size.y - 1.0f);
+    const float j1 = min(max(j + 1.0f, 0.0f), size.y - 1.0f);
+    ShadowTapSet t;
+    t.x = float4(i0, i1, i0, i1);
+    t.y = float4(j0, j0, j1, j1);
+    t.weight = float4((1.0f - fx) * (1.0f - fy), fx * (1.0f - fy), (1.0f - fx) * fy, fx * fy);
+    t.depth = s.z * iw;
+    return t;
+}
+
+// How lit the pixel is, 0..1: each tap lit where the depth the map holds
+// there is at or behind the pixel's (sge, instr 17), weighted (instr 22)
+float ShadowLit(ShadowTapSet t, float4 stored) {
+    const float4 lit = float4(stored.x >= t.depth ? 1.0f : 0.0f, stored.y >= t.depth ? 1.0f : 0.0f,
+                              stored.z >= t.depth ? 1.0f : 0.0f, stored.w >= t.depth ? 1.0f : 0.0f);
+    return dot(t.weight, lit);
 }
 
 // true if alpha test throws the pixel away
@@ -110,9 +165,10 @@ struct Lighting {
 // colour, spec_map the specular map's texel (1 where sp doesn't sample it),
 // ao_sh the AoShVertex (interpolated, in a pixel), proj and gobo the
 // projected light's maps' texels at ProjUv (s5 and s10; per pixel only, and
-// unread where sp doesn't sample them)
+// unread where sp doesn't sample them), lit the shadow buffer's ShadowLit
+// (per pixel only, unread without kShadeShadow)
 Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 spec_map,
-               float2 ao_sh, float4 proj, float4 gobo) {
+               float2 ao_sh, float4 proj, float4 gobo, float lit) {
     const uint f = sp.flags.x;
     const bool skin = (f & kShadeSkin) != 0u;
     const bool hair = (f & kShadeHair) != 0u;
@@ -179,6 +235,18 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
         }
     }
 
+    // The shadow buffer (A46F95815504AFE1 instrs 15-29): where the map has
+    // the character nearer the light than the pixel, every point light, its
+    // specular and its rim are darkened by up to 0.75 c107 (1 - the shadow's
+    // colour), as far as the surface faces away from the light camera's
+    // forward c108; not the ambient, the box map or the projected light's
+    // gobo.
+    float3 shadow = one;
+    if ((f & kShadeShadow) != 0u) {
+        const float away = saturate(-dot(N, Xyz(sp.shadow_dir)));
+        shadow = one - Xyz(sp.shadow_color) * (0.75f * away * (1.0f - lit));
+    }
+
     float3 lights = proj_add;  // the point lights' diffuse, and the gobo's
     float3 lights_spec = zero;
     float3 lights_rim = zero;
@@ -188,7 +256,8 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
         const float d = sqrt(dot(to_light, to_light));
         const float3 L = to_light / max(d, 1e-6f);
         const float att = saturate(d * sp.point_pos[i].w + sp.point_color[i].w);
-        const float3 lc = Xyz(sp.point_color[i]) * proj_mul * (att * (i == 0u ? ao_0 : ao_1));
+        const float3 lc =
+            Xyz(sp.point_color[i]) * proj_mul * shadow * (att * (i == 0u ? ao_0 : ao_1));
         const float nl = dot(N, L);
         if (skin || hair) {
             lights = lights + lc * saturate(wrap_a * nl + wrap_b);
@@ -255,11 +324,11 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
 // glow are the maps' texels where sp samples them (1 where it doesn't), behind
 // the post-processed picture at the pixel for kShadeRefract; ao_sh is the
 // interpolated AoShVertex, proj and gobo the projected light's maps' texels
-// at ProjUv (Light's), vertex the interpolated Lighting of a vertex-lit
-// material's vertices.
+// at ProjUv (Light's), lit the shadow buffer's ShadowLit (Light's), vertex the
+// interpolated Lighting of a vertex-lit material's vertices.
 float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 texel,
                   float4 spec_map, float4 glow, float4 behind, float depth, float2 ao_sh,
-                  float4 proj, float4 gobo, Lighting vertex) {
+                  float4 proj, float4 gobo, float lit, Lighting vertex) {
     const uint f = sp.flags.x;
     // REFRACT_WORLD's pixel shader (FC53125B5EB914F8): the texture's rgb
     // times the picture behind it, alpha the texture's. The game nudges where
@@ -301,7 +370,8 @@ float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float
         alpha = base_alpha * col.w;
     } else {
         Lighting l = vertex;
-        if ((f & kShadePerVertex) == 0u) l = Light(sp, p, n, vc, spec_map, ao_sh, proj, gobo);
+        if ((f & kShadePerVertex) == 0u)
+            l = Light(sp, p, n, vc, spec_map, ao_sh, proj, gobo, lit);
         rgb = base * l.diffuse + l.added;
         alpha = base_alpha * sp.ambient.w * ((f & kShadePrelit) != 0u ? vc.w : sp.color.w);
     }

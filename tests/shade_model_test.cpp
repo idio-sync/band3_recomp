@@ -2,8 +2,9 @@
 // src/Render/shaders/shade.hlsli on the CPU, as mesh.hlsl does on the GPU)
 // against the M2 research's Python models of the game's own shaders
 // (tools/shaders/research: fam3.py, skin2.py and hair3.py, checked there
-// against the shaders' microcode), the SH occlusion and REFRACT_WORLD's
-// picture behind against hand-worked numbers, PackShade's reading of the
+// against the shaders' microcode), the SH occlusion, REFRACT_WORLD's
+// picture behind and the shadow buffer's taps, their weights and its
+// darkening against hand-worked numbers, PackShade's reading of the
 // option word, the particle quad's corners (scene_capture.h's
 // ParticleCorner) against the particle VS's instructions, and a soft
 // particle's fade (SoftFade) against the soft particle pixel shader's maths.
@@ -33,11 +34,13 @@ struct Case {
     float alpha;
     // the projected light's: c66, c69 and its texels (s5, s10); 0 without it
     float c66[4], c69[4], proj[4], gobo[4];
+    // the shadow buffer's: c107, c108 and how lit the pixel is (ShadowLit)
+    float c107[4], c108[4], lit;
 };
 
 // Made from the models (fam3.model, skin2.skin, hair3.hair) by
 // tools/shaders/research/gen_shade_cases.py, with no normal or
-// environment map or shadow. The hair's case has no
+// environment map. The hair's cases have no
 // specular colour, as its strand highlight needs the tangent the capture
 // doesn't keep, so only its box highlight is compared.
 const Case kCases[] = {
@@ -110,6 +113,38 @@ const Case kCases[] = {
      {0.218f, 0.679f, 0.205f, 0.479f}, {0.292f, 0.343f, 0.974f, 0.823f}, {0.304f, 0.885f, 0.211f, 0.394f},
      {0.1460358f, 0.349260071f, 0.087071521f}, 0.056265735f,
      {-0.317f, 0.533f, -0.784f, 0.0f}, {0.993f, 0.449f, 0.481f, 1.0f}, {0.197f, 0.178f, 0.044f, 0.054f}, {0.583f, 0.243f, 0.601f, 0.372f}},
+    {"standard: in shadow, two points, rim, AO",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadeRim | kShadeAO | kShadeShadow | kShadeTextured, 2,
+     {{0.58f, 0.726f, 0.733f, 0.314f}, {0.004f, 0.15f, 0.11f, 0.324f}, {0.752f, 0.681f, 0.647f, 6.07f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.33f, 0.925f, 0.247f, 1.22f}, {74.78f, -65.2f, 151.15f, -0.001862f}, {194.85f, 178.69f, 78.13f, -0.002708f}, {0.332f, 0.403f, 1.856f, 1.091f}, {0.53f, 0.831f, 1.356f, 1.697f}, {0.031f, 0.103f, 0.489f, 0.24f}, {0.251f, 0.358f, 0.286f, 0.231f}, {0.018f, 0.436f, 0.58f, 0.586f}, {0.398f, 0.214f, 0.218f, 0.414f}, {0.404f, 0.068f, 0.141f, 0.218f}, {0.307f, 0.486f, 0.3f, 0.017f}},
+     {32.26f, -6.98f, 1.9f}, {-166.7f, -471.83f, 177.65f}, {0.544f, -0.795f, 0.1f}, {0.178f, 0.696f, 0.037f, 0.277f}, 0.8f,
+     {0.41f, 0.673f, 0.147f, 0.513f}, {0.288f, 0.354f, 0.529f, 0.963f}, {0.481f, 0.956f, 0.168f, 0.924f},
+     {0.0562764826f, 0.222771904f, 0.155415046f}, 0.052190568f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.938f, 0.305f, 0.488f, 0.0f}, {-0.835f, 0.498f, 0.234f, 1.0f}, 0.0f},
+    {"standard: shadow buffer, lit, prelit",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadePrelit | kShadeShadow | kShadeTextured, 1,
+     {{0.407f, 0.748f, 0.747f, 0.879f}, {0.074f, 0.092f, 0.059f, 0.09f}, {0.787f, 0.304f, 0.625f, 10.25f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.87f, 0.687f, 0.212f, 1.44f}, {148.51f, 123.9f, 251.51f, -0.001885f}, {0.0f, 0.0f, 0.0f, 0.0f}, {1.566f, 1.914f, 1.649f, 1.85f}, {0.0f, 0.0f, 0.0f, 1.0f}, {0.479f, 0.591f, 0.415f, 0.333f}, {0.449f, 0.081f, 0.406f, 0.266f}, {0.106f, 0.122f, 0.314f, 0.152f}, {0.276f, 0.363f, 0.237f, 0.078f}, {0.295f, 0.141f, 0.141f, 0.117f}, {0.22f, 0.044f, 0.391f, 0.572f}},
+     {-11.03f, 21.89f, 43.3f}, {-274.07f, -557.48f, 261.22f}, {0.676f, 0.278f, -0.68f}, {0.413f, 0.868f, 0.886f, 0.803f}, 0.0f,
+     {0.283f, 0.868f, 0.437f, 0.745f}, {0.223f, 0.974f, 0.643f, 0.75f}, {0.212f, 0.617f, 0.581f, 0.591f},
+     {0.0707980007f, 0.371282512f, 0.232116921f}, 0.05384115f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.507f, 0.415f, 0.779f, 0.0f}, {-0.865f, -0.005f, 0.501f, 1.0f}, 1.0f},
+    {"skin: in shadow, rim, AO, two points",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadeRim | kShadeAO | kShadeSkin | kShadeShadow | kShadeTextured, 2,
+     {{0.285f, 0.762f, 0.722f, 0.952f}, {0.108f, 0.102f, 0.294f, 0.263f}, {0.442f, 0.747f, 0.517f, 5.32f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.921f, 0.486f, 0.408f, 2.89f}, {-140.12f, 20.53f, 216.0f, -0.00376f}, {191.2f, -38.53f, 297.61f, -0.002663f}, {1.408f, 0.509f, 0.873f, 1.204f}, {1.333f, 1.783f, 1.468f, 1.589f}, {0.38f, 0.109f, 0.057f, 0.525f}, {0.308f, 0.116f, 0.272f, 0.131f}, {0.479f, 0.3f, 0.061f, 0.491f}, {0.054f, 0.168f, 0.017f, 0.444f}, {0.068f, 0.315f, 0.056f, 0.288f}, {0.411f, 0.321f, 0.273f, 0.291f}},
+     {-6.3f, 9.54f, -40.51f}, {-15.29f, -529.12f, 273.09f}, {0.878f, -0.867f, -0.713f}, {0.703f, 0.571f, 0.019f, 0.705f}, 1.0f,
+     {0.95f, 0.481f, 0.413f, 0.612f}, {0.945f, 0.337f, 0.372f, 0.27f}, {0.628f, 0.469f, 0.256f, 0.388f},
+     {0.160197328f, 0.195285027f, 0.133171351f}, 0.153230112f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.71f, 0.498f, 0.955f, 0.0f}, {-0.705f, 0.315f, 0.635f, 1.0f}, 0.0f},
+    {"hair: in shadow, two points",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadeSpecMap | kShadeHair | kShadeShadow | kShadeTextured, 2,
+     {{0.972f, 0.209f, 0.789f, 0.326f}, {0.395f, 0.007f, 0.352f, 0.273f}, {0.0f, 0.0f, 0.0f, 21.83f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.411f, 0.383f, 0.886f, 3.39f}, {-110.64f, 169.94f, 177.84f, -0.003418f}, {27.85f, 172.09f, 211.39f, -0.002762f}, {1.074f, 1.014f, 0.434f, 1.36f}, {1.768f, 1.992f, 1.133f, 1.019f}, {0.084f, 0.103f, 0.563f, 0.414f}, {0.431f, 0.172f, 0.297f, 0.532f}, {0.06f, 0.07f, 0.028f, 0.281f}, {0.504f, 0.333f, 0.241f, 0.301f}, {0.108f, 0.569f, 0.212f, 0.141f}, {0.187f, 0.495f, 0.191f, 0.543f}},
+     {-16.38f, -5.85f, -42.58f}, {244.48f, -361.15f, 194.89f}, {-0.769f, -0.015f, -0.248f}, {0.84f, 0.928f, 0.741f, 0.287f}, 0.0f,
+     {0.137f, 0.905f, 0.95f, 0.243f}, {0.55f, 0.533f, 0.979f, 0.139f}, {0.062f, 0.844f, 0.57f, 0.462f},
+     {0.138381038f, 0.0892702304f, 0.625476427f}, 0.021626514f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.479f, 0.359f, 0.306f, 0.0f}, {0.912f, 0.105f, 0.396f, 1.0f}, 0.0f},
 };
 
 void Set(float4& to, const float* from) { to = {from[0], from[1], from[2], from[3]}; }
@@ -133,6 +168,8 @@ ShadeParams ParamsFor(const Case& c) {
     sp.ao.x = c.ao;
     Set(sp.proj_dir, c.c66);
     Set(sp.proj_color, c.c69);
+    Set(sp.shadow_color, c.c107);
+    Set(sp.shadow_dir, c.c108);
     return sp;
 }
 
@@ -171,13 +208,14 @@ TEST_CASE("shading matches the game's shader models, per pixel and per vertex") 
         const ShadeParams sp = ParamsFor(c);
         float out[4];
         ShadePixelCpu(sp, c.p, c.n, c.vc, c.tex, c.spec_map, c.glow, one, 100.0f, no_sh, zero,
-                      zero, out, c.proj, c.gobo);
+                      zero, out, c.proj, c.gobo, c.lit);
         CheckColour(c, out);
 
         // a vertex-lit material's vertex gives its pixel the same colour, at
-        // the vertex; its specular map and the projected light are per pixel
-        // only
-        if (c.flags & (kShadeSpecMap | kShadeProjMultiply | kShadeProjGobo)) continue;
+        // the vertex; its specular map, the projected light and the shadow
+        // buffer are per pixel only
+        if (c.flags & (kShadeSpecMap | kShadeProjMultiply | kShadeProjGobo | kShadeShadow))
+            continue;
         ShadeParams pv = sp;
         pv.flags.x |= kShadePerVertex;
         float diffuse[3], added[3];
@@ -372,6 +410,122 @@ TEST_CASE("the projected light: where its maps are read, and its two forms") {
     CHECK(out[0] == doctest::Approx(1.25f));
 }
 
+TEST_CASE("the shadow buffer's taps: four texels around the coordinate, bilinear, clamped") {
+    // S = (u w, v w, z w, w): the coordinate is divided by its w
+    const float w = 2.0f;
+    // u 0.3 in 8 texels: x = 2.4 - 0.5 = 1.9, taps 1 and 2, fx 0.9; v 0.5 in 4:
+    // y = 1.5, taps 1 and 2, fy 0.5
+    const float s[4] = {0.3f * w, 0.5f * w, 0.6f * w, w};
+    ShadowTapsCpu t = ShadowTapsOf(s, 8, 4);
+    CHECK(t.x[0] == 1);
+    CHECK(t.x[1] == 2);
+    CHECK(t.x[2] == 1);
+    CHECK(t.x[3] == 2);
+    CHECK(t.y[0] == 1);
+    CHECK(t.y[1] == 1);
+    CHECK(t.y[2] == 2);
+    CHECK(t.y[3] == 2);
+    CHECK(t.weight[0] == doctest::Approx(0.1f * 0.5f));
+    CHECK(t.weight[1] == doctest::Approx(0.9f * 0.5f));
+    CHECK(t.weight[2] == doctest::Approx(0.1f * 0.5f));
+    CHECK(t.weight[3] == doctest::Approx(0.9f * 0.5f));
+    CHECK(t.depth == doctest::Approx(0.6f));
+
+    // at the map's edges the taps outside it are the edge's, their weights
+    // as they were: x -0.3 (u 0.025) takes 0 twice; y 3.7 (v 1.05) 3 twice
+    const float edge[4] = {0.025f, 1.05f, 0.5f, 1.0f};
+    t = ShadowTapsOf(edge, 8, 4);
+    CHECK(t.x[0] == 0);
+    CHECK(t.x[1] == 0);
+    CHECK(t.y[0] == 3);
+    CHECK(t.y[2] == 3);
+    CHECK(t.weight[0] == doctest::Approx(0.3f * 0.3f));
+    CHECK(t.weight[1] == doctest::Approx(0.7f * 0.3f));
+    CHECK(t.weight[3] == doctest::Approx(0.7f * 0.7f));
+    // far outside, every tap is a corner's
+    const float out[4] = {-5.0f, 9.0f, 0.5f, 1.0f};
+    t = ShadowTapsOf(out, 8, 4);
+    for (int k = 0; k < 4; k++) {
+        CHECK(t.x[k] == 0);
+        CHECK(t.y[k] == 3);
+    }
+
+    // how lit: a map whose left half holds the caster at 0.4, the right
+    // nothing (1); a pixel at depth 0.6 whose taps straddle the edge
+    // (texels 3 and 4 of 8, fx 0.25) is lit by the right taps' weight
+    std::vector<float> depth(8 * 4, 1.0f);
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 4; x++) depth[size_t(y) * 8 + x] = 0.4f;
+    ShadeParams sp{};
+    // S = (x, y, z, 1): world x straight to u, y to v, z to depth
+    sp.shadow[0] = {1, 0, 0, 0};
+    sp.shadow[1] = {0, 1, 0, 0};
+    sp.shadow[2] = {0, 0, 1, 0};
+    sp.shadow[3] = {0, 0, 0, 1};
+    const float p[3] = {(3.25f + 0.5f) / 8.0f, 0.5f, 0.6f};
+    CHECK(ShadowLitCpu(sp, p, depth.data(), 8, 4) == doctest::Approx(0.25f));
+    // nearer than the caster: lit whatever the taps
+    const float near_p[3] = {p[0], p[1], 0.3f};
+    CHECK(ShadowLitCpu(sp, near_p, depth.data(), 8, 4) == 1.0f);
+    // at the caster's depth: lit too (the game's sge)
+    const float at_p[3] = {p[0], p[1], 0.4f};
+    CHECK(ShadowLitCpu(sp, at_p, depth.data(), 8, 4) == 1.0f);
+    // wholly over it, behind: none
+    const float in_p[3] = {1.5f / 8.0f, 0.5f, 0.6f};
+    CHECK(ShadowLitCpu(sp, in_p, depth.data(), 8, 4) == 0.0f);
+}
+
+TEST_CASE("the shadow buffer darkens the point lights by 0.75 c107 as the surface faces away") {
+    // a white light straight above, unattenuated, a white material with
+    // ambient 0.25; the light camera looking down (c108 -z), c107 (1, 0.5, 0)
+    ShadeParams sp{};
+    sp.flags.x = kShadeModel | kShadeLit | kShadeShadow | kShadeSpecular | kShadeTextured;
+    sp.flags.y = 1;
+    sp.color = {1, 1, 1, 1};
+    sp.ambient = {0.25f, 0.25f, 0.25f, 1};
+    sp.specular = {0, 0, 0, 8};
+    sp.point_pos[0] = {0, 0, 10, 0};
+    sp.point_color[0] = {1, 1, 1, 1};
+    sp.eye = {0, -10, 10, 1};
+    sp.shadow_color = {1, 0.5f, 0, 0};
+    sp.shadow_dir = {0, 0, -1, 1};
+    const float p[3] = {0, 0, 0}, n[3] = {0, 0, 1}, vc[4] = {1, 1, 1, 1};
+    const float one[4] = {1, 1, 1, 1}, zero[4] = {0, 0, 0, 0}, no_sh[2] = {1, 1};
+    float out[4];
+    // in shadow: the light times 1 - 0.75 c107, the ambient as it was
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, no_sh, zero, zero, out, zero, zero,
+                  0.0f);
+    CHECK(out[0] == doctest::Approx(0.25f + 0.25f));
+    CHECK(out[1] == doctest::Approx(0.25f + 0.625f));
+    CHECK(out[2] == doctest::Approx(0.25f + 1.0f));
+    // half lit: half of that
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, no_sh, zero, zero, out, zero, zero,
+                  0.5f);
+    CHECK(out[0] == doctest::Approx(0.25f + 0.625f));
+    // lit, or without the flag: as without a shadow
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, no_sh, zero, zero, out, zero, zero,
+                  1.0f);
+    CHECK(out[0] == doctest::Approx(1.25f));
+    sp.flags.x &= ~kShadeShadow;
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, no_sh, zero, zero, out, zero, zero,
+                  0.0f);
+    CHECK(out[0] == doctest::Approx(1.25f));
+    // a surface facing along the light camera's forward isn't darkened
+    sp.flags.x |= kShadeShadow;
+    sp.shadow_dir = {0, 0, 1, 1};
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, no_sh, zero, zero, out, zero, zero,
+                  0.0f);
+    CHECK(out[0] == doctest::Approx(1.25f));
+    // the coordinate: VS c40..c43 dotted with the position
+    sp.shadow[0] = {1, 2, 3, 4};
+    sp.shadow[3] = {0, 0, 0, 2};
+    const float at[3] = {1, 1, 1};
+    float s[4];
+    ShadowCoordCpu(sp, at, s);
+    CHECK(s[0] == 10.0f);
+    CHECK(s[3] == 2.0f);
+}
+
 TEST_CASE("PackShade takes each term from the option word, not stale registers") {
     using namespace shader_opt;
     DrawItem it{};
@@ -443,6 +597,37 @@ TEST_CASE("PackShade takes each term from the option word, not stale registers")
     s.options &= ~Bit(kPerPixel);  // vertex-lit: left out
     PackShade(it, &s, o, true, sp);
     CHECK_FALSE(Has(sp, (kShadeProjMultiply | kShadeProjGobo)));
+
+    // the shadow buffer, per pixel, where s5 is a shadow map the capture kept
+    // as a render target: its registers, VS c40..c43, PS c107 and c108
+    s = MakeState(Bit(kRealLights) | Bit(kPerPixel) | (uint64_t(1) << kNumPoint) |
+                  Bit(kShadowBuffer));
+    s.vs[ShadeRegIndex(41)][3] = 0.25f;
+    s.ps[ShadeRegIndex(107)][1] = 0.75f;
+    s.ps[ShadeRegIndex(108)][2] = -1.0f;
+    PackShade(it, &s, o, true, sp);
+    CHECK_FALSE(Has(sp, kShadeShadow));  // no map
+    s.maps[kMapProjected] = map;         // a loaded texture: not one
+    PackShade(it, &s, o, true, sp);
+    CHECK_FALSE(Has(sp, kShadeShadow));
+    auto shadow_map = std::make_shared<Texture>();
+    shadow_map->tex_obj = 0x2251A0C0;
+    shadow_map->tex_type = kTexTypeShadowMap;
+    shadow_map->version = 3;
+    s.maps[kMapProjected] = shadow_map;
+    PackShade(it, &s, o, true, sp);
+    CHECK(Has(sp, kShadeShadow));
+    CHECK_FALSE(Has(sp, (kShadeProjMultiply | kShadeProjGobo)));
+    CHECK(sp.shadow[1].w == 0.25f);
+    CHECK(sp.shadow_color.y == 0.75f);
+    CHECK(sp.shadow_dir.z == -1.0f);
+    RasterOptions no_shadow;
+    no_shadow.self_shadow = false;
+    PackShade(it, &s, no_shadow, true, sp);
+    CHECK_FALSE(Has(sp, kShadeShadow));
+    s.options &= ~Bit(kPerPixel);  // vertex-lit: left out
+    PackShade(it, &s, o, true, sp);
+    CHECK_FALSE(Has(sp, kShadeShadow));
 
     // no light bits: unlit, with the ambient it was given
     s = MakeState(Bit(kDiffuseMap));
