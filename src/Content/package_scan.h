@@ -10,6 +10,8 @@
 namespace band3::content {
 
 inline constexpr uint32_t kRb3TitleId = 0x45410914;
+// the titles whose packages RB3 reads: its own, Rock Band's and Rock Band 2's
+inline constexpr uint32_t kRb3TitleIds[] = {kRb3TitleId, 0x45410829, 0x45410869};
 
 struct PackageHeader {
     uint32_t magic = 0;          // 'CON ', 'LIVE' or 'PIRS'
@@ -30,10 +32,11 @@ inline constexpr size_t kHeaderBytes = 0x511;
 
 std::optional<PackageHeader> ParsePackageHeader(std::span<const uint8_t> bytes);
 
-// every package for title_id in folders and their subfolders, one per content
-// ID (the first found); `problems` gets one line per folder that couldn't be
-// read, naming the folder
+// every package for one of title_ids in folders and their subfolders, one per
+// content ID (the first found, in the folders' order); the folders are scanned
+// at once, a thread each. `problems` gets one line per folder or subfolder
+// that couldn't be read, naming it; the rest of the folder is still read
 std::vector<Package> ScanFolders(const std::vector<std::filesystem::path>& folders,
-                                 uint32_t title_id, std::vector<std::string>* problems);
+                                 std::span<const uint32_t> title_ids, std::vector<std::string>* problems);
 
 }

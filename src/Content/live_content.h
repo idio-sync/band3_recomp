@@ -2,7 +2,6 @@
 // RB3 lists them with its own content and opens each package file where it is,
 // so nothing is installed or unpacked (see content_hooks.cpp)
 #pragma once
-#include <chrono>
 #include <string_view>
 #include <vector>
 #include "package_scan.h"
@@ -17,11 +16,13 @@ namespace band3::content {
 // before the game starts
 void StartLiveContent(rex::filesystem::VirtualFileSystem* vfs);
 
-// band3's packages, once the scan is done (waits for it, up to `timeout`;
-// empty if it isn't done by then)
-const std::vector<Package>& LivePackages(std::chrono::milliseconds timeout);
+// band3's packages, for RB3's listings: calls wait for the scan until a minute
+// after the first call; after that none waits, and one made while the scan is
+// still running gets none (the first with a warning)
+const std::vector<Package>& LivePackages();
 
-// the package named file_name (its content ID), if it is one of band3's
+// the package named file_name (its content ID), if it is one of band3's and the
+// scan is done
 const Package* FindLivePackage(std::string_view file_name);
 
 // mounts package as root_name: (as XamContentCreateEx does); false if it won't mount

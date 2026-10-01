@@ -4,6 +4,7 @@
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <vector>
 #include "src/Content/package_scan.h"
 
@@ -75,14 +76,48 @@ TEST_CASE("scanning keeps one of each RB3 package and skips the rest") {
     Write(root / "a" / "Song_rb3con", song);
     Write(root / "a" / "sub" / "Song copy", song);              // same content ID: once
     Write(root / "a" / "Other", MakeHeader("CON ", 1, kRb3TitleId, 0x40, u"Other"));
-    Write(root / "a" / "rb2_song", MakeHeader("CON ", 1, 0x45410869, 0x70, u"RB2"));  // other title
+    Write(root / "a" / "rb2_song", MakeHeader("CON ", 2, 0x45410869, 0x70, u"RB2"));  // RB3 reads RB2's
+    Write(root / "a" / "forza", MakeHeader("CON ", 2, 0x4D5307E6, 0x90, u"Car"));      // another game's
     Write(root / "a" / "notes.txt", std::vector<uint8_t>(10, 'x'));                    // junk
     std::vector<std::string> problems;
-    auto found = ScanFolders({root / "a", root / "missing"}, kRb3TitleId, &problems);
-    REQUIRE(found.size() == 2);
-    CHECK(found[0].header.display_name != found[1].header.display_name);
+    auto found = ScanFolders({root / "a", root / "missing"}, kRb3TitleIds, &problems);
+    REQUIRE(found.size() == 3);
+    std::set<std::u16string> names;
+    for (const auto& package : found) names.insert(package.header.display_name);
+    CHECK(names == std::set<std::u16string>{u"Song", u"Other", u"RB2"});
     // the missing folder is reported by name; junk and the other title aren't problems
     REQUIRE(problems.size() == 1);
     CHECK(problems[0].find("missing") != std::string::npos);
     fs::remove_all(root);
 }
+
+TEST_CASE("the first folder listed wins a content ID found in two") {
+    const fs::path root = fs::temp_directory_path() / "band3_scan_order_test";
+    fs::remove_all(root);
+    Write(root / "first" / "song", MakeHeader("CON ", 1, kRb3TitleId, 0x10, u"First"));
+    Write(root / "second" / "song", MakeHeader("CON ", 1, kRb3TitleId, 0x10, u"Second"));
+    Write(root / "second" / "other", MakeHeader("CON ", 1, kRb3TitleId, 0x40, u"Other"));
+    auto found = ScanFolders({root / "first", root / "second"}, kRb3TitleIds, nullptr);
+    REQUIRE(found.size() == 2);
+    CHECK(found[0].header.display_name == u"First");
+    CHECK(found[1].header.display_name == u"Other");
+    fs::remove_all(root);
+}
+
+#ifdef _WIN32
+TEST_CASE("a subfolder that can't be listed is a problem, and the rest of its folder is still read") {
+    // a path past MAX_PATH can be made through \\?\ but not listed without it
+    const fs::path root = fs::temp_directory_path() / "band3_scan_long_test";
+    const fs::path long_root = L"\\\\?\\" + root.wstring();
+    fs::remove_all(long_root);
+    fs::create_directories(long_root / "a" / "0deep" / std::wstring(240, L'x'));
+    Write(root / "a" / "z_song", MakeHeader("CON ", 1, kRb3TitleId, 0x10, u"After"));
+    std::vector<std::string> problems;
+    auto found = ScanFolders({root / "a"}, kRb3TitleIds, &problems);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].header.display_name == u"After");
+    REQUIRE(problems.size() == 1);
+    CHECK(problems[0].find("0deep") != std::string::npos);
+    fs::remove_all(long_root);
+}
+#endif

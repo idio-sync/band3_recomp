@@ -76,6 +76,10 @@ target_include_directories(band3_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty
 )
 
+# src/Content/package_scan.cpp scans folders on threads of its own
+find_package(Threads REQUIRED)
+target_link_libraries(band3_tests PRIVATE Threads::Threads)
+
 if(MSVC)
     target_compile_options(band3_tests PRIVATE /W4)
 else()

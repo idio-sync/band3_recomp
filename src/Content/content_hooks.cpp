@@ -1,5 +1,4 @@
 #include "content_hooks.h"
-#include <chrono>
 #include <string>
 #include <rex/hook.h>
 #include <rex/logging.h>
@@ -75,12 +74,12 @@ extern "C" REX_FUNC(XContentCreateCrossTitleEnumerator) {
     auto e = REX_KERNEL_OBJECTS()->LookupObject<Enumerator>(REX_LOAD_U32(handle_out));
     if (!e || e->item_size() != sizeof(XCONTENT_AGGREGATE_DATA)) return;
     size_t n = 0;
-    for (const auto& package : band3::content::LivePackages(std::chrono::seconds(15))) {
+    for (const auto& package : band3::content::LivePackages()) {
         if (package.header.content_type != type) continue;
         auto* item = e->AppendItem();
         item->device_id = static_cast<uint32_t>(DummyDeviceId::HDD);
         item->content_type = static_cast<rex::system::XContentType>(type);
-        item->title_id = band3::content::kRb3TitleId;
+        item->title_id = package.header.title_id;  // RB3's, or Rock Band's or Rock Band 2's
         item->xuid = 0;
         item->set_display_name(package.header.display_name);
         item->set_file_name(package.header.content_id);

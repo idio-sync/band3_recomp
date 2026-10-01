@@ -1,11 +1,13 @@
 #include "live_content.h"
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <fmt/format.h>
 #include <rex/filesystem.h>
 #include <rex/filesystem/devices/stfs_container_device.h>
@@ -27,7 +29,10 @@ struct Scan {
     std::mutex mutex;
     std::condition_variable cv;
     bool done = false;
+    bool late = false;  // the listings' wait ran out first
     std::vector<Package> packages;
+    // packages by content ID (upper-case hex, as the headers give it)
+    std::unordered_map<std::string, const Package*> by_id;
 };
 
 Scan& TheScan() {
@@ -49,11 +54,20 @@ std::string Lower(std::string_view s) {
     return out;
 }
 
+std::string Upper(std::string_view s) {
+    std::string out(s);
+    std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+        return static_cast<char>(c >= 'a' && c <= 'z' ? c - 'a' + 'A' : c);
+    });
+    return out;
+}
+
 void Finish(std::vector<Package> packages) {
     auto& scan = TheScan();
     {
         std::lock_guard lock(scan.mutex);
         scan.packages = std::move(packages);
+        for (const auto& package : scan.packages) scan.by_id[package.header.content_id] = &package;
         scan.done = true;
     }
     scan.cv.notify_all();
@@ -71,17 +85,16 @@ void RunScan(std::string setting) {
         names += rex::path_to_utf8(folders.back());
     }
 
-    std::vector<std::string> problems;
-    auto packages = ScanFolders(folders, kRb3TitleId, &problems);
-    // no songs folder is how band3 ships, so only an unchanged default stays quiet
-    const bool quiet = setting == "songs";
-    for (const auto& problem : problems) {
-        if (quiet) {
-            REXLOG_DEBUG("content: {}", problem);
-        } else {
-            REXLOG_WARN("content: {}", problem);
-        }
+    // no songs folder is how band3 ships, so that alone, for an unchanged default, stays quiet
+    std::error_code ec;
+    if (setting == "songs" && folders.size() == 1 && !std::filesystem::is_directory(folders[0], ec)) {
+        REXLOG_DEBUG("content: no folder {}", names);
+        folders.clear();
     }
+
+    std::vector<std::string> problems;
+    auto packages = ScanFolders(folders, kRb3TitleIds, &problems);
+    for (const auto& problem : problems) REXLOG_WARN("content: {}", problem);
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - start)
                         .count();
@@ -109,28 +122,41 @@ void StartLiveContent(rex::filesystem::VirtualFileSystem* vfs) {
     // an unreachable network share can take tens of seconds to give up on
     std::thread(RunScan, REXCVAR_GET(content_folders)).detach();
 #else
-    // listing packages the game then couldn't open would do no good: the
-    // XamContentCreateEx override that opens them is Windows-only
+    // listing packages the game then couldn't close would do no good: they open
+    // through the XContentCrossTitleCreate override, but the XamContentClose
+    // override that closes them needs the SDK's own export, found only on Windows
     REXLOG_INFO("content: content folders need Windows for now, not reading {}",
                 REXCVAR_GET(content_folders));
     Finish({});
 #endif
 }
 
-const std::vector<Package>& LivePackages(std::chrono::milliseconds timeout) {
+const std::vector<Package>& LivePackages() {
     static const std::vector<Package> kNone;
+    // a big library on a slow network folder can take longer than this, and the
+    // game waits on each listing
+    static const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
     auto& scan = TheScan();
     std::unique_lock lock(scan.mutex);
     // the packages never change once done, so the reference stays good
-    return scan.cv.wait_for(lock, timeout, [&] { return scan.done; }) ? scan.packages : kNone;
+    if (scan.cv.wait_until(lock, deadline, [&] { return scan.done; })) return scan.packages;
+    if (!scan.late) {
+        scan.late = true;
+        REXLOG_WARN("content: scanning the content folders took longer than 60 s, so their "
+                    "packages aren't listed this session");
+    }
+    return kNone;
 }
 
 const Package* FindLivePackage(std::string_view file_name) {
-    const auto name = Lower(file_name);
-    for (const auto& package : LivePackages(std::chrono::milliseconds(0))) {
-        if (Lower(package.header.content_id) == name) return &package;
+    auto& scan = TheScan();
+    {
+        std::lock_guard lock(scan.mutex);
+        if (!scan.done) return nullptr;
     }
-    return nullptr;
+    // done, so the index no longer changes
+    auto it = scan.by_id.find(Upper(file_name));
+    return it == scan.by_id.end() ? nullptr : it->second;
 }
 
 bool MountLivePackage(const Package& package, std::string_view root_name) {
