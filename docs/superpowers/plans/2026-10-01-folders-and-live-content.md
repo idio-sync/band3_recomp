@@ -35,7 +35,7 @@ cmd /c "out\b3env.cmd cmake --preset win-amd64-release"            # after addin
 cmd /c "out\b3env.cmd cmake --build out/tests" ; cmd /c "out\b3env.cmd ctest --test-dir out/tests --output-on-failure"
 ```
 
-`out/tests` is already configured. Never run `cmake --preset` from a bare shell. Changing `band3_config.toml` needs codegen first: `.\.rexglue-sdk\bin\rexglue.exe codegen band3_manifest.toml` (~2 minutes; it rewrites `band3_manifest.toml` with LF endings: `git checkout -- band3_manifest.toml` afterwards if that's its only change). No task in this plan needs codegen.
+`out/tests` is already configured. Never run `cmake --preset` from a bare shell. Every build runs codegen, which rewrites `band3_manifest.toml` with LF line endings: run `git checkout -- band3_manifest.toml` before committing (never commit that file). Changing `band3_config.toml` needs codegen first: `.\.rexglue-sdk\bin\rexglue.exe codegen band3_manifest.toml` (~2 minutes; it rewrites `band3_manifest.toml` with LF endings: `git checkout -- band3_manifest.toml` afterwards if that's its only change). No task in this plan needs codegen.
 
 Game runs: `python tools/band3ctl.py launch --fresh --user-data out/<name> -- --log_file=<absolute path>.log` then `python tools/band3ctl.py run tests/game/boot.b3t` to reach the main menu on Rock Band 3 Deluxe (`assets/default.xex` is Deluxe). `python tools/band3ctl.py quit` when done. The HTTP server (`-- --http_enabled=true`, port 21070) answers `GET /list_songs` (every song's shortname, title, artist) and `GET /song_<id>` (one song by ID): use it to prove songs are in the library. Before launching, make sure no other `band3.exe` is running (`tasklist /FI "IMAGENAME eq band3.exe"`).
 
