@@ -18,6 +18,7 @@
 #include "settings.h"
 #include "steam_deck.h"
 #include "Audio/usb_mic_capture.h"
+#include "Content/content_hooks.h"
 #include "Input/input_system.h"
 #include "Input/instrument_lab.h"
 #include "Input/menu_shortcut_dialog.h"
@@ -127,6 +128,14 @@ class Band3App : public rex::ReXApp {
   // and its first file opens find game:\ writable
   void OnPostSetup() override {
     band3::MountGameWrites(*runtime());
+#ifdef _WIN32
+    // band3's content overrides hand saves to the SDK's own exports; without
+    // them the first save would fail, so fail here instead
+    if (!band3::content::ResolveSdkContentExports()) {
+      REXLOG_ERROR("content: the SDK's content exports are missing, can't continue");
+      std::abort();
+    }
+#endif
     band3::discord::Start();
     band3::audio::StartUsbMics();
     band3::render::StartDumpIfRequested();
