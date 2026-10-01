@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <rex/cvar.h>
 
 // band3's settings, as rex cvars: F4 edits them in game and "Save to config"
@@ -98,6 +99,11 @@ const StartupSettings& Startup();
 // Copies of the string settings that can change in F4 while the game reads
 // them; read these instead of REXCVAR_GET, which would race with the UI thread.
 std::string ForcedVenue();
+
+// Forces a venue for this session only, as RB3E's rb3e_set_venue does: the
+// forced_venue setting (and band3.toml) keeps its value, and changing it in F4
+// replaces this.
+void SetSessionVenue(std::string_view venue);
 std::string Username();
 
 }

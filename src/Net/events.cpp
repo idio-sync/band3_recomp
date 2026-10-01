@@ -41,8 +41,6 @@ constexpr uint8_t kPlatformUnknown = 0xFF;  // RB3E_PLATFORM_UNKNOWN
 constexpr size_t kHeaderSize = 8;
 constexpr size_t kMaxPayload = 0xFF;        // RB3E_EVENTS_MAXPACKET
 
-constexpr char kBuildTag[] = "band3_recomp";
-
 std::mutex g_mutex;
 socket_t g_socket = kNoSocket;
 sockaddr_in g_dest{};

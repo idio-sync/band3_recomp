@@ -334,6 +334,7 @@ void Init() {
 
 const StartupSettings& Startup() { return g_startup; }
 std::string ForcedVenue() { return g_forced_venue.Get(); }
+void SetSessionVenue(std::string_view venue) { g_forced_venue.Set(venue); }
 std::string Username() { return g_username.Get(); }
 
 }

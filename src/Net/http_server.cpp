@@ -40,6 +40,7 @@
 #include "http_game.h"
 #include "http_page.h"
 #include "http_request.h"
+#include "local_address.h"
 
 namespace band3::http {
 
@@ -242,28 +243,6 @@ void SetTimeouts(socket_t s) {
 #endif
 }
 
-// this machine's address on the local network, for the log; the UDP socket's
-// connect only picks a route, nothing is sent
-std::string LocalAddress() {
-    socket_t s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (s == kNoSocket) return {};
-    sockaddr_in remote{};
-    remote.sin_family = AF_INET;
-    remote.sin_port = htons(53);
-    inet_pton(AF_INET, "8.8.8.8", &remote.sin_addr);
-    std::string out;
-    sockaddr_in local{};
-    socklen_t length = sizeof(local);
-    if (connect(s, reinterpret_cast<const sockaddr*>(&remote), sizeof(remote)) == 0 &&
-        getsockname(s, reinterpret_cast<sockaddr*>(&local), &length) == 0) {
-        char addr[INET_ADDRSTRLEN] = {};
-        inet_ntop(AF_INET, &local.sin_addr, addr, sizeof(addr));
-        out = addr;
-    }
-    CloseSocket(s);
-    return out;
-}
-
 class Server {
 public:
     static Server& Get() {
@@ -316,7 +295,7 @@ public:
         // on every address, the one other devices reach it at
         std::string shown = startup.http_address;
         if (addr.sin_addr.s_addr == htonl(INADDR_ANY)) {
-            const std::string local = LocalAddress();
+            const std::string local = band3::net::LocalAddress();
             shown = local.empty() ? "localhost" : local;
         }
         REXLOG_INFO("Web server: listening on {}:{}, open http://{}:{}/",

@@ -2,8 +2,8 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 #include <rex/types.h>
-#include <algorithm>
 #include <cstring>
+#include "src/Game/SongMgr.h"
 #include "src/Game/Symbol.h"
 #include "src/Net/http_game.h"
 
@@ -12,9 +12,6 @@
 // addresses and struct offsets (include/ports_xbox360.h, include/rb3/*.h).
 // Every function here runs on the game thread, from http::RunGameJobs.
 
-REX_EXTERN(BandSongMgr__Data);
-REX_EXTERN(BandSongMgr__GetRankedSongs);
-REX_EXTERN(BandSongMgr__GetSongIDFromShortname);
 REX_EXTERN(Object__Find_UIPanel_);
 REX_EXTERN(MusicLibrary__TryToSetHighlight);
 REX_EXTERN(RockCentralGateway__ExecuteConfig);
@@ -24,22 +21,12 @@ namespace band3::http::game {
 namespace {
 
 // globals
-constexpr uint32_t kTheSongMgr = 0x82DFE7B4;          // BandSongMgr object
 constexpr uint32_t kTheMusicLibraryPtr = 0x82DFD3A8;  // MusicLibrary*
 constexpr uint32_t kMainDirPtr = 0x82E054B8;          // ObjectDir::sMainDir
 constexpr uint32_t kRockCentralGateway = 0x82CC8F60;  // RockCentralGateway object
 
 // struct offsets
-constexpr uint32_t kSongMetadata_Shortname = 0x2C;  // Symbol
-constexpr uint32_t kSongMetadata_Origin = 0x38;     // Symbol
-constexpr uint32_t kSongMetadata_Title = 0x4C;      // String {vtable, length, buf}
-constexpr uint32_t kSongMetadata_Artist = 0x58;     // String
-constexpr uint32_t kSongMetadata_Album = 0x64;      // String
-constexpr uint32_t kString_Length = 0x4;
-constexpr uint32_t kString_Buf = 0x8;
 constexpr uint32_t kUIPanel_IsUp = 0x20;
-constexpr uint32_t kVector_Begin = 0x0;
-constexpr uint32_t kVector_End = 0x4;
 
 // MusicLibrary's SongNodeType for a song (2 is an artist or origin heading,
 // 3 an album)
@@ -52,10 +39,6 @@ uint32_t Load32(uint8_t* base, uint32_t addr) {
     return *rex::memory::GuestPtr<rex::be<uint32_t>*>(base, addr);
 }
 
-const char* GuestStr(uint8_t* base, uint32_t addr) {
-    return addr ? rex::memory::GuestPtr<const char*>(base, addr) : nullptr;
-}
-
 // context for calling a guest function from the hook: a stack below the
 // hooked function's frame, with the caller's r13 (as band3::Symbol does)
 PPCContext CallContext(const PPCContext& ctx, uint32_t reserve) {
@@ -65,74 +48,23 @@ PPCContext CallContext(const PPCContext& ctx, uint32_t reserve) {
     return call;
 }
 
-std::string ReadSymbol(uint8_t* base, uint32_t symbol_addr) {
-    const char* str = GuestStr(base, Load32(base, symbol_addr));
-    return str ? std::string(str) : std::string();
+SongInfo ToInfo(const songs::Song& song) {
+    return {song.shortname, song.title, song.artist, song.album, song.origin};
 }
-
-// copies a game String; String::length excludes the terminator
-std::string ReadString(uint8_t* base, uint32_t string_addr) {
-    const uint32_t length = Load32(base, string_addr + kString_Length);
-    const uint32_t buf = Load32(base, string_addr + kString_Buf);
-    if (!buf) return {};
-    return std::string(GuestStr(base, buf), std::min<uint32_t>(length, 1024));
-}
-
-// BandSongMgr::Data(BandSongMgr*, int id) -> SongMetadata*, null for a song it
-// doesn't have
-std::optional<SongInfo> ReadSong(PPCContext& ctx, uint8_t* base, int32_t id) {
-    PPCContext call = CallContext(ctx, 0x100);
-    call.r3.u64 = kTheSongMgr;
-    call.r4.u64 = static_cast<uint32_t>(id);
-    BandSongMgr__Data(call, base);
-    const uint32_t metadata = call.r3.u32;
-    if (!metadata) return std::nullopt;
-
-    SongInfo song;
-    song.shortname = ReadSymbol(base, metadata + kSongMetadata_Shortname);
-    song.origin = ReadSymbol(base, metadata + kSongMetadata_Origin);
-    song.title = ReadString(base, metadata + kSongMetadata_Title);
-    song.artist = ReadString(base, metadata + kSongMetadata_Artist);
-    song.album = ReadString(base, metadata + kSongMetadata_Album);
-    return song;
-}
-
-// the guest vector<int> GetRankedSongs fills, kept for the session as RB3E
-// keeps its own: the function clears it first, and its storage is the game's
-uint32_t g_ranked_songs = 0;
 
 }
 
 std::optional<SongInfo> Song(PPCContext& ctx, uint8_t* base, int32_t id) {
-    return ReadSong(ctx, base, id);
+    if (auto song = songs::Get(ctx, base, id)) return ToInfo(*song);
+    return std::nullopt;
 }
 
 std::vector<SongInfo> RankedSongs(PPCContext& ctx, uint8_t* base) {
-    if (!g_ranked_songs) {
-        g_ranked_songs = rex::system::kernel_memory()->SystemHeapAlloc(12, 4);
-        if (!g_ranked_songs) return {};
-        std::memset(base + g_ranked_songs, 0, 12);
+    std::vector<SongInfo> out;
+    for (const int32_t id : songs::RankedIds(ctx, base)) {
+        if (auto song = songs::Get(ctx, base, id)) out.push_back(ToInfo(*song));
     }
-
-    // BandSongMgr::GetRankedSongs(BandSongMgr*, vector<int>*, bool demos, bool restricted)
-    PPCContext call = CallContext(ctx, 0x100);
-    call.r3.u64 = kTheSongMgr;
-    call.r4.u64 = g_ranked_songs;
-    call.r5.u64 = 0;
-    call.r6.u64 = 0;
-    BandSongMgr__GetRankedSongs(call, base);
-
-    const uint32_t begin = Load32(base, g_ranked_songs + kVector_Begin);
-    const uint32_t end = Load32(base, g_ranked_songs + kVector_End);
-    std::vector<SongInfo> songs;
-    if (!begin || end <= begin) return songs;
-    const uint32_t count = (end - begin) / 4;
-    songs.reserve(count);
-    for (uint32_t i = 0; i < count; i++) {
-        const auto id = static_cast<int32_t>(Load32(base, begin + i * 4));
-        if (auto song = ReadSong(ctx, base, id)) songs.push_back(std::move(*song));
-    }
-    return songs;
+    return out;
 }
 
 JumpResult JumpToSong(PPCContext& ctx, uint8_t* base, const std::string& shortname) {
@@ -158,13 +90,7 @@ JumpResult JumpToSong(PPCContext& ctx, uint8_t* base, const std::string& shortna
     const uint32_t symbol = band3::Symbol(ctx, base, shortname.c_str()).value(base);
     if (!symbol) return JumpResult::kUnknownSong;
 
-    // BandSongMgr::GetSongIDFromShortname(BandSongMgr*, Symbol, bool fail)
-    call = CallContext(ctx, 0x400);
-    call.r3.u64 = kTheSongMgr;
-    call.r4.u64 = symbol;
-    call.r5.u64 = 0;
-    BandSongMgr__GetSongIDFromShortname(call, base);
-    if (call.r3.s32 <= 0) return JumpResult::kUnknownSong;
+    if (!songs::IdFromShortname(ctx, base, symbol)) return JumpResult::kUnknownSong;
 
     // MusicLibrary::TryToSetHighlight(MusicLibrary*, Symbol, SongNodeType, bool)
     call = CallContext(ctx, 0x400);
