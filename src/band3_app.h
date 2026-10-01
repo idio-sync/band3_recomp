@@ -119,6 +119,8 @@ class Band3App : public rex::ReXApp {
     rex::ui::UnregisterBind("bind_instrument_lab");
     rex::ui::UnregisterBind("bind_native_view");
     band3::render::StopNativeView();
+    // the F7 window's worker would draw on the CPU once the GPU is gone
+    native_view_.reset();
     band3::render::GpuRenderer::Get().Shutdown();
     band3::discord::Stop();
     band3::audio::StopUsbMics();

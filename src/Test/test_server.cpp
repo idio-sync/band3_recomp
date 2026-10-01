@@ -165,9 +165,15 @@ public:
 
     // the native view's GPU backend draws the same frame, as <name>.gpu.png,
     // after the game has gone on so it isn't held any longer; the capture
-    // stands without it
+    // stands without it, and with native_view_backend = cpu there's no GPU
+    // device to make
     void GpuCapture(const render::FrameCapture& frame, const std::string& file,
                     CaptureInfo& out) {
+        if (REXCVAR_GET(native_view_backend) != "gpu") {
+            out.gpu_error = "native_view_backend is " + REXCVAR_GET(native_view_backend) +
+                            ", so no GPU drawing";
+            return;
+        }
         bool ready = false;
         // SDL starts video on the main thread only
         OnUIThread([&] { ready = render::GpuRenderer::Get().Init(); });

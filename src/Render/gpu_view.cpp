@@ -49,7 +49,7 @@ constexpr uint32_t kTextureOffsetAlign = 512;
 constexpr uint32_t kMinArenaBytes = 4u << 20;
 // the upload buffer's first size, which holds a song's usual frame: making it
 // bigger later costs a frame several milliseconds
-constexpr uint32_t kInitialUploadBytes = 16u << 20;
+constexpr uint32_t kInitialUploadBytes = 32u << 20;
 
 // mesh.hlsl's cbuffers, as they lie in memory
 struct VertexUniforms {
@@ -284,7 +284,9 @@ struct GpuRenderer::Impl {
 // otherwise used for audio and HID only
 bool GpuRenderer::Impl::StartVideo(const char* driver) {
     if (driver) {
-        SDL_SetHint(SDL_HINT_VIDEO_DRIVER, driver);
+        // over an SDL_VIDEO_DRIVER in the environment, which would otherwise
+        // win and could make this copy open windows
+        SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, driver, SDL_HINT_OVERRIDE);
     } else {
         SDL_ResetHint(SDL_HINT_VIDEO_DRIVER);
 #ifdef _WIN32
