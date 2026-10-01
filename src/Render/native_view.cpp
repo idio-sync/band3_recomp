@@ -282,6 +282,8 @@ void NativeViewDialog::OnDraw(ImGuiIO& io) {
         ImGui::SameLine();
         changed |= ImGui::Checkbox("Lighting", &options_.lighting);
         ImGui::SameLine();
+        changed |= ImGui::Checkbox("Placeholder light", &options_.legacy_light);
+        ImGui::SameLine();
         changed |= ImGui::Checkbox("Skinning", &options_.skinning);
         ImGui::SameLine();
         changed |= ImGui::Checkbox("Blending", &options_.blending);

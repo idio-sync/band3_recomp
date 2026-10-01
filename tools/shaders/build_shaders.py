@@ -2,7 +2,7 @@
 
   python tools/shaders/build_shaders.py
 
-Compiles src/Render/shaders/mesh.hlsl twice: DXBC (fxc, shader model 5.1) for
+Compiles src/Render/shaders/mesh.hlsl (and the shade*.hlsli it includes) twice: DXBC (fxc, shader model 5.1) for
 SDL_gpu's Direct3D 12 backend and SPIR-V (dxc) for its Vulkan backend, checks
 the SPIR-V (spirv-val, and spirv-cross --reflect for the descriptor sets SDL_gpu
 expects), and writes src/Render/shaders/mesh_shaders.gen.h with the bytes, so
@@ -37,7 +37,8 @@ STAGES = [
 # resources, 1 vertex uniforms, 2 pixel resources, 3 pixel uniforms
 EXPECTED_BINDINGS = {
     "VSMain": {("ubos", "VertexUniforms", 1, 0), ("ssbos", "bones", 0, 0)},
-    "PSMain": {("ubos", "PixelUniforms", 3, 0), ("textures", "tex", 2, 0)},
+    "PSMain": {("ubos", "PixelUniforms", 3, 0), ("textures", "tex", 2, 0),
+               ("textures", "spec_tex", 2, 1), ("textures", "glow_tex", 2, 2)},
 }
 
 

@@ -1,5 +1,6 @@
 #include "src/Render/gpu_view.h"
 
+#include "src/Render/shade_model.h"
 #include "src/Render/shaders/mesh_shaders.gen.h"
 
 #include <SDL3/SDL_error.h>
@@ -59,22 +60,23 @@ struct VertexUniforms {
     uint32_t bone_base;
     uint32_t bone_count;
     uint32_t pad;
+    shade::ShadeParams shade;
 };
-static_assert(sizeof(VertexUniforms) == 144);
+static_assert(sizeof(VertexUniforms) == 144 + sizeof(shade::ShadeParams));
 
 struct PixelUniforms {
-    float color[4];
-    uint32_t flags;
-    float alpha_threshold;
-    uint32_t tex_layer;
-    uint32_t pad;
-    uint32_t tex_size[2];
-    uint32_t pad2[2];
+    shade::ShadeParams shade;
+    uint32_t tex_layer[4];    // diffuse, specular map, glow map
+    uint32_t tex_size[3][4];  // each one's own width and height
+    uint32_t flags[4];        // x: kPremultiply
 };
-static_assert(sizeof(PixelUniforms) == 48);
+static_assert(sizeof(PixelUniforms) == sizeof(shade::ShadeParams) + 80);
 
-// mesh.hlsl's flags
-enum : uint32_t { kTextured = 1, kPrelit = 2, kLighting = 4, kAlphaCut = 8, kPremultiply = 16 };
+// mesh.hlsl's pixel_flags.x
+enum : uint32_t { kPremultiply = 1 };
+
+// the textures a draw samples, in mesh.hlsl's sampler order
+enum { kSlotDiffuse, kSlotSpecular, kSlotGlow, kNumSlots };
 
 // RndMat::Blend, the modes Blend() in soft_raster.cpp draws
 enum : int {
@@ -253,6 +255,7 @@ struct GpuRenderer::Impl {
     std::vector<ArrayCopy> array_copies;  // arrays that grew, old into new
     std::vector<Mat4> frame_bones;
     std::vector<uint32_t> bone_base;  // per draw, where its bones start
+    std::vector<shade::ShadeParams> shades;  // per draw
     std::vector<uint32_t> cams_seen;
 
     bool StartVideo(const char* driver);
@@ -272,6 +275,11 @@ struct GpuRenderer::Impl {
     // places this frame's new arena meshes, rebuilding the arena if they
     // don't fit; false if it couldn't grow
     bool PlaceInArena();
+    // marks `t` drawn this frame, giving it a layer and queueing its upload
+    // if it's new
+    void UseTexture(const std::shared_ptr<const Texture>& t);
+    // the layer `t` has, or null (none, or it couldn't have one)
+    const Tex* TextureFor(const Texture* t);
     // a layer of its size class's array for `tx`, growing the array if full
     bool PlaceTexture(Tex& tx);
     void LetTextureGo(Tex& tx);
@@ -328,7 +336,7 @@ SDL_GPUShader* GpuRenderer::Impl::MakeShader(SDL_GPUShaderFormat format,
     info.entrypoint = vs ? "VSMain" : "PSMain";
     info.format = format;
     info.stage = stage;
-    info.num_samplers = vs ? 0 : 1;
+    info.num_samplers = vs ? 0 : kNumSlots;
     info.num_storage_buffers = vs ? 1 : 0;
     info.num_uniform_buffers = 1;
     SDL_GPUShader* s = SDL_CreateGPUShader(device, &info);
@@ -696,6 +704,23 @@ void GpuRenderer::Impl::LetTextureGo(Tex& tx) {
     tx.array = nullptr;
 }
 
+void GpuRenderer::Impl::UseTexture(const std::shared_ptr<const Texture>& t) {
+    if (!t || !t->width || !t->height || t->rgba.size() != size_t(t->width) * t->height) return;
+    Tex& tx = textures[t.get()];
+    if (!tx.keep) {
+        tx.keep = t;
+        tx.first = serial;
+        if (PlaceTexture(tx)) new_textures.push_back(&tx);
+    }
+    tx.used = serial;
+}
+
+const GpuRenderer::Impl::Tex* GpuRenderer::Impl::TextureFor(const Texture* t) {
+    if (!t) return nullptr;
+    auto it = textures.find(t);
+    return it != textures.end() && it->second.array ? &it->second : nullptr;
+}
+
 bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     if (color && w == width && h == height) return true;
     if (color) SDL_ReleaseGPUTexture(device, color);
@@ -746,6 +771,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     array_copies.clear();
     frame_bones.clear();
     bone_base.assign(frame.draws.size(), 0);
+    shades.resize(frame.draws.size());
     uint32_t pool_vert_count = 0, pool_index_count = 0;
     for (size_t d = 0; d < frame.draws.size(); d++) {
         const DrawItem& it = frame.draws[d];
@@ -777,16 +803,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             bone_base[d] = uint32_t(frame_bones.size());
             frame_bones.insert(frame_bones.end(), it.bones.begin(), it.bones.end());
         }
-        const Texture* t = o.textures ? it.tex.get() : nullptr;
-        if (t && t->width && t->height && t->rgba.size() == size_t(t->width) * t->height) {
-            Tex& tx = textures[t];
-            if (!tx.keep) {
-                tx.keep = it.tex;
-                tx.first = serial;
-                if (PlaceTexture(tx)) new_textures.push_back(&tx);
-            }
-            tx.used = serial;
-        }
+        if (o.textures) UseTexture(it.tex);
+        // textured or not is settled when it draws, once the texture has its
+        // layer; the maps are the shade's
+        const ShadeState* state = shade::ShadeOf(frame, it);
+        shade::PackShade(it, state, o, false, shades[d]);
+        if (shades[d].flags.x & shade::kShadeSpecMap) UseTexture(state->maps[kMapSpecular]);
+        if (shades[d].flags.x & shade::kShadeGlow) UseTexture(state->maps[kMapGlow]);
     }
     if (!PlaceInArena()) return false;
 
@@ -959,14 +982,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // what's bound in the pass, so a draw binds only what changes
     SDL_GPUGraphicsPipeline* bound = nullptr;
     SDL_GPUBuffer* bound_verts = nullptr;
-    SDL_GPUTexture* bound_tex = nullptr;
+    SDL_GPUTexture* bound_tex[kNumSlots] = {};
     auto begin_pass = [&] {
         pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
         SDL_BindGPUVertexStorageBuffers(pass, 0, &bone_buffer, 1);
         pass_drew = false;
         bound = nullptr;
         bound_verts = nullptr;
-        bound_tex = nullptr;
+        std::fill(std::begin(bound_tex), std::end(bound_tex), nullptr);
     };
     begin_pass();
     cams_seen.clear();
@@ -1006,16 +1029,27 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             bound_verts = verts;
         }
 
-        const Tex* tex = nullptr;
-        if (o.textures && it.tex) {
-            auto t = textures.find(it.tex.get());
-            if (t != textures.end() && t->second.array) tex = &t->second;
+        // the textures the shade samples, where they have a layer; a map
+        // that couldn't have one is left out, as if the capture had none
+        shade::ShadeParams& sp = shades[d];
+        const ShadeState* state = shade::ShadeOf(frame, it);
+        const Tex* tex[kNumSlots] = {o.textures ? TextureFor(it.tex.get()) : nullptr, nullptr,
+                                     nullptr};
+        if (tex[kSlotDiffuse]) sp.flags.x |= shade::kShadeTextured;
+        if (sp.flags.x & shade::kShadeSpecMap) {
+            tex[kSlotSpecular] = TextureFor(state->maps[kMapSpecular].get());
+            if (!tex[kSlotSpecular]) sp.flags.x &= ~shade::kShadeSpecMap;
         }
-        SDL_GPUTexture* sampled = tex ? tex->array->texture : white;
-        if (sampled != bound_tex) {
+        if (sp.flags.x & shade::kShadeGlow) {
+            tex[kSlotGlow] = TextureFor(state->maps[kMapGlow].get());
+            if (!tex[kSlotGlow]) sp.flags.x &= ~shade::kShadeGlow;
+        }
+        for (int s = 0; s < kNumSlots; s++) {
+            SDL_GPUTexture* sampled = tex[s] ? tex[s]->array->texture : white;
+            if (sampled == bound_tex[s]) continue;
             const SDL_GPUTextureSamplerBinding ts{sampled, sampler};
-            SDL_BindGPUFragmentSamplers(pass, 0, &ts, 1);
-            bound_tex = sampled;
+            SDL_BindGPUFragmentSamplers(pass, uint32_t(s), &ts, 1);
+            bound_tex[s] = sampled;
         }
 
         VertexUniforms vu{};
@@ -1026,19 +1060,18 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             vu.bone_base = bone_base[d];
             vu.bone_count = uint32_t(it.bones.size());
         }
+        vu.shade = sp;
         SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
         const int blend = BlendFor(it, o);
         PixelUniforms pu{};
-        std::copy(std::begin(it.color), std::end(it.color), pu.color);
-        pu.flags = (tex ? kTextured : 0) | (it.prelit ? kPrelit : 0) |
-                   (o.lighting ? kLighting : 0) | (it.alpha_cut ? kAlphaCut : 0) |
-                   (blend == kBlendSrcAlpha || blend == kBlendSrcAlphaAdd ? kPremultiply : 0);
-        pu.alpha_threshold = float(it.alpha_threshold);
-        if (tex) {
-            pu.tex_layer = tex->layer;
-            pu.tex_size[0] = tex->keep->width;
-            pu.tex_size[1] = tex->keep->height;
+        pu.shade = sp;
+        for (int s = 0; s < kNumSlots; s++) {
+            if (!tex[s]) continue;
+            pu.tex_layer[s] = tex[s]->layer;
+            pu.tex_size[s][0] = tex[s]->keep->width;
+            pu.tex_size[s][1] = tex[s]->keep->height;
         }
+        pu.flags[0] = blend == kBlendSrcAlpha || blend == kBlendSrcAlphaAdd ? kPremultiply : 0;
         SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
 
         SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,

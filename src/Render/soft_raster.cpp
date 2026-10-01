@@ -1,5 +1,7 @@
 #include "src/Render/soft_raster.h"
 
+#include "src/Render/shade_model.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -19,6 +21,10 @@ struct ClipVert {
     float uv[2];
     float n[3];
     float c[4];
+    float wp[3];  // world position
+    // a vertex-lit material's Lighting (shade.hlsli), diffuse and added
+    float ld[3];
+    float la[3];
 };
 
 ClipVert Lerp(const ClipVert& a, const ClipVert& b, float t) {
@@ -27,6 +33,9 @@ ClipVert Lerp(const ClipVert& a, const ClipVert& b, float t) {
     for (int i = 0; i < 2; i++) r.uv[i] = a.uv[i] + (b.uv[i] - a.uv[i]) * t;
     for (int i = 0; i < 3; i++) r.n[i] = a.n[i] + (b.n[i] - a.n[i]) * t;
     for (int i = 0; i < 4; i++) r.c[i] = a.c[i] + (b.c[i] - a.c[i]) * t;
+    for (int i = 0; i < 3; i++) r.wp[i] = a.wp[i] + (b.wp[i] - a.wp[i]) * t;
+    for (int i = 0; i < 3; i++) r.ld[i] = a.ld[i] + (b.ld[i] - a.ld[i]) * t;
+    for (int i = 0; i < 3; i++) r.la[i] = a.la[i] + (b.la[i] - a.la[i]) * t;
     return r;
 }
 
@@ -43,40 +52,38 @@ struct Target {
     uint32_t w, h;
     std::vector<uint32_t>& color;
     std::vector<float>& depth;  // 1/w, larger is nearer, 0 is cleared
+    std::vector<int32_t>* ids;  // the draw that last wrote each pixel, if wanted
 };
 
 struct DrawState {
-    const DrawItem* item;
+    int32_t index;  // in the frame's draws
     const Texture* tex;
+    const Texture* spec_map;  // null unless shade samples it
+    const Texture* glow;
+    shade::ShadeParams shade;
+    bool per_vertex;  // kShadePerVertex: ClipVert's ld and la are set
     int blend;
     bool z_test;
     bool z_equal_passes;
     bool z_write;
-    bool lighting;
 };
 
-const float kLight[3] = {0.39f, -0.59f, 0.71f};  // Milo is z up
+// nearest texel, wrapping; mesh.hlsl's Texel does the same arithmetic
+void Texel(const Texture& t, const float uv[2], float out[4]) {
+    const float u = uv[0] - std::floor(uv[0]), v = uv[1] - std::floor(uv[1]);
+    const uint32_t x = std::min(uint32_t(u * float(t.width)), t.width - 1);
+    const uint32_t y = std::min(uint32_t(v * float(t.height)), t.height - 1);
+    const uint32_t c = t.rgba[size_t(y) * t.width + x];
+    for (int i = 0; i < 4; i++) out[i] = float((c >> (8 * i)) & 0xff) / 255.0f;
+}
 
 void Shade(const DrawState& ds, const float uv[2], const float n[3], const float vc[4],
-           float out[4]) {
-    const DrawItem& it = *ds.item;
-    for (int i = 0; i < 4; i++) out[i] = it.color[i];
-    if (ds.tex) {
-        const float u = uv[0] - std::floor(uv[0]), v = uv[1] - std::floor(uv[1]);
-        const uint32_t x = std::min(uint32_t(u * float(ds.tex->width)), ds.tex->width - 1);
-        const uint32_t y = std::min(uint32_t(v * float(ds.tex->height)), ds.tex->height - 1);
-        const uint32_t t = ds.tex->rgba[size_t(y) * ds.tex->width + x];
-        for (int i = 0; i < 4; i++) out[i] *= float((t >> (8 * i)) & 0xff) / 255.0f;
-    }
-    if (it.prelit) {
-        for (int i = 0; i < 4; i++) out[i] *= vc[i];
-    } else if (ds.lighting) {
-        const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
-        float d = 0.0f;
-        if (len > 1e-6f) d = (n[0] * kLight[0] + n[1] * kLight[1] + n[2] * kLight[2]) / len;
-        const float l = 0.4f + 0.6f * std::max(0.0f, d);
-        for (int i = 0; i < 3; i++) out[i] *= l;
-    }
+           const float wp[3], float depth, const float ld[3], const float la[3], float out[4]) {
+    float texel[4] = {1, 1, 1, 1}, spec_map[4] = {1, 1, 1, 1}, glow[4] = {0, 0, 0, 0};
+    if (ds.tex) Texel(*ds.tex, uv, texel);
+    if (ds.spec_map) Texel(*ds.spec_map, uv, spec_map);
+    if (ds.glow) Texel(*ds.glow, uv, glow);
+    shade::ShadePixelCpu(ds.shade, wp, n, vc, texel, spec_map, glow, depth, ld, la, out);
 }
 
 uint32_t Blend(int mode, const float s[4], uint32_t dst) {
@@ -118,7 +125,6 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
     if (min_x > max_x || min_y > max_y) return;
     st.triangles++;
     const float inv_area = 1.0f / area;
-    const DrawItem& it = *ds.item;
 
     for (int y = int(min_y); y <= int(max_y); y++) {
         const float py = float(y) + 0.5f;
@@ -135,14 +141,23 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
                 if (ds.z_equal_passes ? z < d * 0.9999f : z <= d) continue;
             }
             const float q0 = l0 * iw[0] / z, q1 = l1 * iw[1] / z, q2 = l2 * iw[2] / z;
-            float uv[2], n[3], vc[4];
+            float uv[2], n[3], vc[4], wp[3];
             for (int i = 0; i < 2; i++) uv[i] = q0 * a.uv[i] + q1 * b.uv[i] + q2 * c.uv[i];
             for (int i = 0; i < 3; i++) n[i] = q0 * a.n[i] + q1 * b.n[i] + q2 * c.n[i];
             for (int i = 0; i < 4; i++) vc[i] = q0 * a.c[i] + q1 * b.c[i] + q2 * c.c[i];
+            for (int i = 0; i < 3; i++) wp[i] = q0 * a.wp[i] + q1 * b.wp[i] + q2 * c.wp[i];
+            float ld[3] = {0, 0, 0}, la[3] = {0, 0, 0};
+            if (ds.per_vertex) {
+                for (int i = 0; i < 3; i++) ld[i] = q0 * a.ld[i] + q1 * b.ld[i] + q2 * c.ld[i];
+                for (int i = 0; i < 3; i++) la[i] = q0 * a.la[i] + q1 * b.la[i] + q2 * c.la[i];
+            }
             float col[4];
-            Shade(ds, uv, n, vc, col);
-            if (it.alpha_cut && col[3] * 255.0f < float(it.alpha_threshold)) continue;
-            if (ds.blend != 0) t.color[idx] = Blend(ds.blend, col, t.color[idx]);
+            Shade(ds, uv, n, vc, wp, 1.0f / z, ld, la, col);
+            if (shade::AlphaCutCpu(ds.shade, col[3])) continue;
+            if (ds.blend != 0) {
+                t.color[idx] = Blend(ds.blend, col, t.color[idx]);
+                if (t.ids) (*t.ids)[idx] = ds.index;
+            }
             if (ds.z_write) t.depth[idx] = z;
             st.pixels++;
         }
@@ -204,10 +219,17 @@ void ClipAndRaster(const ClipVert& a, const ClipVert& b, const ClipVert& c,
     for (int i = 1; i + 1 < n; i++) RasterTri(poly[0], poly[i], poly[i + 1], ds, t, st);
 }
 
-void DrawOne(const DrawItem& it, const RasterOptions& o, Target& t, RasterStats& st,
-             std::vector<ClipVert>& cv) {
+void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const RasterOptions& o,
+             Target& t, RasterStats& st, std::vector<ClipVert>& cv) {
     const Geometry& g = *it.geom;
     const bool skinned = o.skinning && !it.bones.empty();
+    DrawState ds;
+    ds.index = index;
+    ds.tex = o.textures && it.tex ? it.tex.get() : nullptr;
+    shade::PackShade(it, state, o, ds.tex != nullptr, ds.shade);
+    ds.spec_map = ds.shade.flags.x & shade::kShadeSpecMap ? state->maps[kMapSpecular].get() : nullptr;
+    ds.glow = ds.shade.flags.x & shade::kShadeGlow ? state->maps[kMapGlow].get() : nullptr;
+    ds.per_vertex = (ds.shade.flags.x & shade::kShadePerVertex) != 0;
     cv.resize(g.verts.size());
     for (size_t i = 0; i < g.verts.size(); i++) {
         const Vertex& v = g.verts[i];
@@ -239,17 +261,14 @@ void DrawOne(const DrawItem& it, const RasterOptions& o, Target& t, RasterStats&
         for (int col = 0; col < 4; col++)
             c.p[col] = wp[0] * it.view_proj.m[0][col] + wp[1] * it.view_proj.m[1][col] +
                        wp[2] * it.view_proj.m[2][col] + it.view_proj.m[3][col];
-        c.uv[0] = v.uv[0];
-        c.uv[1] = v.uv[1];
+        shade::TexGenUv(ds.shade, v.uv, c.uv);
         for (int k = 0; k < 3; k++) c.n[k] = wn[k];
+        for (int k = 0; k < 3; k++) c.wp[k] = wp[k];
         for (int k = 0; k < 4; k++) c.c[k] = float((v.color >> (8 * k)) & 0xff) / 255.0f;
+        if (ds.per_vertex) shade::LightVertexCpu(ds.shade, wp, wn, c.c, c.ld, c.la);
     }
 
-    DrawState ds;
-    ds.item = &it;
-    ds.tex = o.textures && it.tex ? it.tex.get() : nullptr;
     ds.blend = o.blending ? it.blend : 1;
-    ds.lighting = o.lighting;
     switch (it.z_mode) {
         case 0: ds.z_test = false; ds.z_equal_passes = false; ds.z_write = false; break;
         case 2: ds.z_test = true; ds.z_equal_passes = true; ds.z_write = false; break;
@@ -269,20 +288,22 @@ void DrawOne(const DrawItem& it, const RasterOptions& o, Target& t, RasterStats&
 }  // namespace
 
 RasterStats Rasterize(const FrameCapture& frame, const RasterOptions& o,
-                      std::vector<uint32_t>& rgba) {
+                      std::vector<uint32_t>& rgba, std::vector<int32_t>* ids) {
     const auto start = std::chrono::steady_clock::now();
     RasterStats st;
     rgba.assign(size_t(o.width) * o.height, kClearColor);
+    if (ids) ids->assign(size_t(o.width) * o.height, -1);
     std::vector<float> depth(size_t(o.width) * o.height, 0.0f);
-    Target t{o.width, o.height, rgba, depth};
+    Target t{o.width, o.height, rgba, depth, ids};
     std::vector<ClipVert> cv;
     std::unordered_set<uint32_t> cams_seen;
     uint32_t last_cam = 0;
-    for (const DrawItem& it : frame.draws) {
+    for (size_t i = 0; i < frame.draws.size(); i++) {
+        const DrawItem& it = frame.draws[i];
         if (o.clear_depth_per_camera && it.cam != last_cam && cams_seen.insert(it.cam).second)
             std::fill(depth.begin(), depth.end(), 0.0f);
         last_cam = it.cam;
-        DrawOne(it, o, t, st, cv);
+        DrawOne(it, int32_t(i), shade::ShadeOf(frame, it), o, t, st, cv);
     }
     st.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                 .count();

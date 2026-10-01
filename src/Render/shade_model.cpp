@@ -1,0 +1,162 @@
+#include "src/Render/shade_model.h"
+
+#include <algorithm>
+#include <cmath>
+
+// See shade_model.h.
+
+namespace band3::render::shade {
+namespace {
+
+// HLSL's operators and functions, for shade.hlsli: only what it uses
+float3 operator+(float3 a, float3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+float3 operator-(float3 a, float3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+float3 operator*(float3 a, float3 b) { return {a.x * b.x, a.y * b.y, a.z * b.z}; }
+float3 operator*(float3 a, float s) { return {a.x * s, a.y * s, a.z * s}; }
+float3 operator/(float3 a, float s) { return {a.x / s, a.y / s, a.z / s}; }
+float3 operator-(float3 a) { return {-a.x, -a.y, -a.z}; }
+float4 operator*(float4 a, float4 b) { return {a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w}; }
+
+float dot(float3 a, float3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+float dot(float4 a, float4 b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
+float saturate(float v) { return std::clamp(v, 0.0f, 1.0f); }
+float3 saturate(float3 v) { return {saturate(v.x), saturate(v.y), saturate(v.z)}; }
+float max(float a, float b) { return a > b ? a : b; }
+float sqrt(float v) { return std::sqrt(v); }
+float rsqrt(float v) { return 1.0f / std::sqrt(v); }
+float pow(float x, float p) { return std::pow(x, p); }
+float lerp(float a, float b, float t) { return a + (b - a) * t; }
+float3 lerp(float3 a, float3 b, float t) { return a + (b - a) * t; }
+
+#define SHADE_IN(T) const T&
+#include "src/Render/shaders/shade.hlsli"
+#undef SHADE_IN
+
+}  // namespace
+
+void TexGenUv(const ShadeParams& sp, const float uv[2], float out[2]) {
+    const float2 r = TexGen(sp, float2{uv[0], uv[1]});
+    out[0] = r.x;
+    out[1] = r.y;
+}
+
+void LightVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], const float vc[4],
+                    float diffuse[3], float added[3]) {
+    const Lighting l = Light(sp, float3{p[0], p[1], p[2]}, float3{n[0], n[1], n[2]},
+                             float4{vc[0], vc[1], vc[2], vc[3]}, float4{1, 1, 1, 1});
+    diffuse[0] = l.diffuse.x;
+    diffuse[1] = l.diffuse.y;
+    diffuse[2] = l.diffuse.z;
+    added[0] = l.added.x;
+    added[1] = l.added.y;
+    added[2] = l.added.z;
+}
+
+void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], const float vc[4],
+                   const float texel[4], const float spec_map[4], const float glow[4],
+                   float depth, const float vertex_diffuse[3], const float vertex_added[3],
+                   float out[4]) {
+    const Lighting vertex{float3{vertex_diffuse[0], vertex_diffuse[1], vertex_diffuse[2]},
+                          float3{vertex_added[0], vertex_added[1], vertex_added[2]}};
+    const float4 r = ShadePixel(sp, float3{p[0], p[1], p[2]}, float3{n[0], n[1], n[2]},
+                                float4{vc[0], vc[1], vc[2], vc[3]},
+                                float4{texel[0], texel[1], texel[2], texel[3]},
+                                float4{spec_map[0], spec_map[1], spec_map[2], spec_map[3]},
+                                float4{glow[0], glow[1], glow[2], glow[3]}, depth, vertex);
+    out[0] = r.x;
+    out[1] = r.y;
+    out[2] = r.z;
+    out[3] = r.w;
+}
+
+bool AlphaCutCpu(const ShadeParams& sp, float alpha) { return AlphaCut(sp, alpha); }
+
+namespace {
+
+void Copy(const float* from, float4& to) { to = {from[0], from[1], from[2], from[3]}; }
+
+}  // namespace
+
+void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, bool textured,
+               ShadeParams& sp) {
+    using namespace shader_opt;
+    sp = ShadeParams{};
+    uint& f = sp.flags.x;
+    if (textured) f |= kShadeTextured;
+    if (it.alpha_cut) f |= kShadeAlphaCut;
+    sp.alpha_cut.x = float(it.alpha_threshold);
+    sp.texgen[0] = {1, 0, 0, 0};
+    sp.texgen[1] = {0, 1, 0, 0};
+    if (!s || o.legacy_light) {
+        Copy(it.color, sp.color);
+        if (it.prelit) f |= kShadePrelit;
+        if (o.lighting) f |= kShadeLegacyLight;
+        return;
+    }
+
+    f |= kShadeModel;
+    // the pixel shader's registers (c0 is premultiplied for PreMultAlpha,
+    // unlike the material's colour), but the texture transform and the
+    // occlusion's strength, which only the vertex shader has
+    Copy(s->Ps(0), sp.color);
+    Copy(s->Ps(1), sp.ambient);
+    Copy(s->Ps(2), sp.specular);
+    Copy(s->Ps(5), sp.emissive);
+    Copy(s->Ps(7), sp.bloom);
+    sp.eye = {s->eye[0], s->eye[1], s->eye[2], 1};
+    sp.ao.x = s->Vs(24)[0];
+    Copy(s->Vs(20), sp.texgen[0]);
+    Copy(s->Vs(21), sp.texgen[1]);
+    for (int i = 0; i < 2; i++) {
+        Copy(s->Ps(64 + i), sp.point_pos[i]);
+        Copy(s->Ps(67 + i), sp.point_color[i]);
+    }
+    for (int i = 0; i < 6; i++) Copy(s->Ps(80 + i), sp.box[i]);
+    Copy(s->Ps(63), sp.rim);
+    for (int i = 0; i < 3; i++) Copy(s->Ps(53 + i), sp.fade[i]);
+    Copy(s->Ps(104), sp.fade_color);
+
+    // Registers the option word doesn't use may hold anything from an earlier
+    // draw, so every term is the option word's
+    const bool particles = s->shader_type == 14;
+    if (s->Option(kPrelit)) f |= kShadePrelit;
+    if (s->Option(kIntensify)) f |= kShadeIntensify;
+    if (s->Option(kPseudoHdr)) f |= kShadePseudoHdr;
+    const bool maps = o.textures;
+    if (s->Option(kGlowMap) && maps && s->maps[kMapGlow]) f |= kShadeGlow;
+    switch (s->OptionBits(kFadeOut, 2)) {
+        case 1: f |= kShadeFadeAlpha; break;
+        case 2: f |= kShadeFadeColor; break;
+        default: break;
+    }
+    if (particles) {
+        // colour = vertex colour times c0 (the particle VS), no ambient
+        sp.ambient = {1, 1, 1, 1};
+    }
+    const bool lit = !particles && (s->Option(kRealLights) || s->Option(kApproxLights));
+    if (!o.lighting || !lit) {
+        // unlit; lighting off draws lit materials so too, with no ambient
+        if (!o.lighting) sp.ambient = {1, 1, 1, 1};
+        return;
+    }
+    f |= kShadeLit;
+    if (!s->Option(kPerPixel)) f |= kShadePerVertex;
+    // a box map of black (band3's disable_approximate_lights, the default)
+    // adds nothing, and its specular is the costly part on the CPU
+    bool box_lit = false;
+    for (const float4& face : sp.box) box_lit |= face.x != 0 || face.y != 0 || face.z != 0;
+    if (s->Option(kApproxLights) && box_lit) f |= kShadeBox;
+    if (s->Option(kRealLights)) sp.flags.y = std::min<uint>(s->OptionBits(kNumPoint, 2), 2);
+    if (s->Option(kSpecular)) f |= kShadeSpecular;
+    if (s->Option(kSpecularMap) && maps && s->maps[kMapSpecular]) f |= kShadeSpecMap;
+    if (s->Option(kEnableAO)) f |= kShadeAO;
+    if (s->Option(kRimLight)) f |= kShadeRim;
+    if (s->Option(kRimLightUnder)) f |= kShadeRimUnder;
+    switch (s->OptionBits(kCustomVariation, 2)) {
+        case 1: f |= kShadeSkin; break;
+        case 2: f |= kShadeHair; break;
+        default: break;
+    }
+}
+
+}  // namespace band3::render::shade

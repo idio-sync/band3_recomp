@@ -6,6 +6,7 @@
 //                               [--dump-tex <draw>] [--shade <draw>]
 //                               [--no-tex] [--no-blend] [--transpose]
 //                               [--no-skinned | --only-skinned] [--unskinned]
+//                               [--legacy-light | --no-light] [--pick X,Y]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
 // and inside the frustum with the matrix as captured and transposed. --list
@@ -18,12 +19,15 @@
 // difference; with --image the native side is that PNG instead (a harness
 // capture's <name>.gpu.png, the GPU backend's picture). --diff draws the frame
 // on the CPU at that PNG's size into out.png and prints their mean difference,
-// to check the GPU backend against the CPU's reference.
+// to check the GPU backend against the CPU's reference. --legacy-light draws
+// with the placeholder lighting from before the game's shading, --no-light
+// with none (every material unlit). --pick draws the frame at --size and
+// prints the draw that last wrote pixel X,Y, its colour and its shade.
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
-//     src/Render/soft_raster.cpp src/Render/capture_file.cpp src/Render/png_writer.cpp
-//     -o out/native_view_replay.exe
+//     src/Render/soft_raster.cpp src/Render/shade_model.cpp src/Render/capture_file.cpp
+//     src/Render/png_writer.cpp -o out/native_view_replay.exe
 
 #include <algorithm>
 #include <cmath>
@@ -270,6 +274,7 @@ int main(int argc, char** argv) {
     bool transpose = false, per_cam = false, list = false, no_skinned = false, only_skinned = false;
     std::string compare, image, diff_with;
     long mesh_filter = -1, dump_tex = -1, shade_draw = -1;
+    int pick_x = -1, pick_y = -1;
     long cam_filter = -1;
     for (int i = 3; i < argc; i++) {
         const std::string a = argv[i];
@@ -282,8 +287,11 @@ int main(int argc, char** argv) {
         else if (a == "--mesh" && i + 1 < argc) mesh_filter = std::strtol(argv[++i], nullptr, 16);
         else if (a == "--dump-tex" && i + 1 < argc) dump_tex = std::strtol(argv[++i], nullptr, 0);
         else if (a == "--shade" && i + 1 < argc) shade_draw = std::strtol(argv[++i], nullptr, 0);
+        else if (a == "--pick" && i + 1 < argc) std::sscanf(argv[++i], "%d,%d", &pick_x, &pick_y);
         else if (a == "--no-blend") o.blending = false;
         else if (a == "--no-tex") o.textures = false;
+        else if (a == "--legacy-light") o.legacy_light = true;
+        else if (a == "--no-light") o.lighting = false;
         else if (a == "--no-skinned") no_skinned = true;
         else if (a == "--only-skinned") only_skinned = true;
         else if (a == "--unskinned") o.skinning = false;
@@ -325,6 +333,33 @@ int main(int argc, char** argv) {
         PrintMat(cs.vp);
     }
     PrintShadeSummary(*fc);
+
+    if (pick_x >= 0 && pick_y >= 0) {
+        if (uint32_t(pick_x) >= o.width || uint32_t(pick_y) >= o.height) {
+            std::fprintf(stderr, "%d,%d is outside %ux%u\n", pick_x, pick_y, o.width, o.height);
+            return 1;
+        }
+        // the last draw to write it, then while that one blends, the one
+        // before it (drawn again without it), down to an opaque one
+        FrameCapture f = *fc;
+        std::vector<uint32_t> rgba;
+        std::vector<int32_t> ids;
+        const size_t at = size_t(pick_y) * o.width + pick_x;
+        for (int layer = 0; layer < 8; layer++) {
+            Rasterize(f, o, rgba, &ids);
+            if (layer == 0) WritePng(argv[2], rgba, o.width, o.height);
+            const uint32_t c = rgba[at];
+            const int32_t id = ids[at];
+            std::printf("pixel %d,%d: draw %d, colour %u %u %u\n", pick_x, pick_y, id, c & 0xff,
+                        (c >> 8) & 0xff, (c >> 16) & 0xff);
+            if (id < 0) break;
+            PrintShade(f, size_t(id));
+            if (f.draws[id].blend == 1 || !o.blending) break;
+            // keep the indices the original frame's: an empty draw draws nothing
+            f.draws[id].geom = std::make_shared<Geometry>();
+        }
+        return 0;
+    }
 
     if (shade_draw >= 0) {
         if (size_t(shade_draw) >= fc->draws.size()) {
