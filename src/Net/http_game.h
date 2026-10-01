@@ -23,6 +23,12 @@ enum class JumpResult { kJumped, kNotInLibrary, kUnknownSong };
 // highlights the song in the Music Library, when the song select panel is up
 JumpResult JumpToSong(PPCContext& ctx, uint8_t* base, const std::string& shortname);
 
+// the song's album art as the game reads it for the Music Library (its
+// .png_xbox, album_art.h decodes it); nullopt when the song has none or no
+// song has this shortname
+std::optional<std::string> AlbumArtFile(PPCContext& ctx, uint8_t* base,
+                                        const std::string& shortname);
+
 // runs DTA through RockCentralGateway::ExecuteConfig, as RB3E's /execute does
 void ExecuteScript(PPCContext& ctx, uint8_t* base, const std::string& script);
 

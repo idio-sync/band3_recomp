@@ -33,12 +33,13 @@ enum class Endpoint {
     kJump,       // /jump?shortname=   select a song in the Music Library
     kExecute,    // /execute?script=   run a DTA script (http_allow_scripts)
     kJsonRpc,    // /jsonrpc           discordrp.json from the game data root
+    kAlbumArt,   // /album_art?shortname=  a song's album art (band3's, not RB3E's)
 };
 
 struct Route {
     Endpoint endpoint = Endpoint::kNotFound;
     int32_t song_id = 0;   // kSong
-    std::string argument;  // kJump's shortname, kExecute's script, decoded
+    std::string argument;  // kJump's and kAlbumArt's shortname, kExecute's script, decoded
 };
 
 // RB3E matches the decoded target, so /jump?shortname=a%26b jumps to "a&b"
@@ -63,7 +64,8 @@ std::string FormatSong(const SongInfo& song, bool section);
 // can all be UTF-8.
 std::string ToUtf8(std::string_view text);
 
+// not cached unless max_age (seconds) says for how long
 std::string Response(int status, std::string_view content_type, std::string_view body,
-                     bool cors);
+                     bool cors, int max_age = 0);
 
 }

@@ -34,4 +34,9 @@ std::vector<int32_t> RankedIds(PPCContext& ctx, uint8_t* base);
 // shortname's Symbol (its interned string's guest address)
 int32_t IdFromShortname(PPCContext& ctx, uint8_t* base, uint32_t symbol);
 
+// where the song's album art is, as SongMgr::GetAlbumArtPath gives it to the
+// Music Library (before the game adds gen/ and _xbox); empty when the song
+// has none or no song has this shortname
+std::string AlbumArtPath(PPCContext& ctx, uint8_t* base, uint32_t symbol);
+
 }

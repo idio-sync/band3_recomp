@@ -31,12 +31,14 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include "src/config.h"
 #include "src/game_writes.h"
 #include "src/settings.h"
+#include "album_art.h"
 #include "http_game.h"
 #include "http_page.h"
 #include "http_request.h"
@@ -136,6 +138,63 @@ std::string Busy(bool cors) {
     return Response(503, kText, "The game is busy, try again", cors);
 }
 
+// Album art sent so far, as JPEGs by shortname, so a page scrolled back and
+// forth reads each song's art from the game once. A song without any isn't
+// kept: the song manager may not have finished loading when it was asked.
+// About 15 KB each; past kMaxArt, the oldest go first.
+constexpr size_t kMaxArt = 512;
+// browsers keep it for this long (seconds) before asking again
+constexpr int kArtMaxAge = 3600;
+std::mutex g_art_mutex;
+std::unordered_map<std::string, std::string> g_art;
+std::deque<std::string> g_art_order;
+// Reading one takes the game thread about half a millisecond, and a page asks
+// for a screenful at once, so they're read one at a time: one a frame at most.
+std::mutex g_art_read_mutex;
+
+std::optional<std::string> CachedArt(const std::string& shortname) {
+    std::lock_guard lock(g_art_mutex);
+    const auto it = g_art.find(shortname);
+    if (it == g_art.end()) return std::nullopt;
+    return it->second;
+}
+
+void CacheArt(const std::string& shortname, const std::string& jpeg) {
+    std::lock_guard lock(g_art_mutex);
+    if (!g_art.emplace(shortname, jpeg).second) return;
+    g_art_order.push_back(shortname);
+    if (g_art_order.size() > kMaxArt) {
+        g_art.erase(g_art_order.front());
+        g_art_order.pop_front();
+    }
+}
+
+// the song's album art as a JPEG; nullopt for a song without any, or when the
+// game is busy (`busy` says which)
+std::optional<std::string> AlbumArt(const std::string& shortname, bool& busy) {
+    busy = false;
+    if (auto jpeg = CachedArt(shortname)) return jpeg;
+    std::lock_guard lock(g_art_read_mutex);
+    // another request may have read it while this one waited
+    if (auto jpeg = CachedArt(shortname)) return jpeg;
+    std::optional<std::string> file;
+    if (!RunOnGameThread([&file, &shortname](PPCContext& ctx, uint8_t* base) {
+            file = game::AlbumArtFile(ctx, base, shortname);
+        })) {
+        busy = true;
+        return std::nullopt;
+    }
+    // decoded here, so the game thread only reads the file
+    std::optional<Image> image = file ? DecodeXboxBitmap(*file) : std::nullopt;
+    if (!image) {
+        if (file) REXLOG_DEBUG("Web server: {}'s album art isn't DXT1 or DXT5", shortname);
+        return std::nullopt;
+    }
+    std::string jpeg = EncodeJpeg(*image);
+    CacheArt(shortname, jpeg);
+    return jpeg;
+}
+
 std::string Handle(const Request& request) {
     const bool cors = REXCVAR_GET(http_allow_cors);
     if (request.method != "GET") return Response(405, kText, "Only GET is supported", cors);
@@ -207,6 +266,14 @@ std::string Handle(const Request& request) {
                 return Response(200, "application/json", *json, cors);
             }
             break;
+        }
+        case Endpoint::kAlbumArt: {
+            bool busy = false;
+            if (auto jpeg = AlbumArt(route.argument, busy)) {
+                return Response(200, "image/jpeg", *jpeg, cors, kArtMaxAge);
+            }
+            if (busy) return Busy(cors);
+            return Response(404, kText, "No album art for that shortname", cors);
         }
         case Endpoint::kNotFound:
             break;

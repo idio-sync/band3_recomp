@@ -310,8 +310,8 @@ Turn on `http_enabled` (F4, Band3 → Integrations, then restart) and band3 serv
 page on port 21070 (`http_port`) to this PC and the local network (`http_address`
 127.0.0.1 keeps it to this PC). The log says where to open it
 (`Web server: listening on 0.0.0.0:21070, open http://192.168.1.20:21070/`).
-The page lists the song library, searchable and sortable, and **Select** highlights a
-song in the game's Music Library, which has to be open. Windows asks once whether to
+The page lists the song library with each song's album art, searchable and sortable, and
+**Select** highlights a song in the game's Music Library, which has to be open. Windows asks once whether to
 let band3 through the firewall; allow it on private networks for other devices to
 reach it.
 
@@ -325,6 +325,12 @@ It answers RB3Enhanced's API, so RB3E's page and tools written for it work too:
 | `/jump?shortname=<name>` | selects the song in the Music Library: 409 when it isn't open, 404 for a shortname no song has |
 | `/execute?script=<dta>` | runs a DTA script, only with `http_allow_scripts` on (anyone on the network could run any script, so it's off by default) |
 | `/jsonrpc` | `discordrp.json` at `game:\`, which Rock Band 3 Deluxe writes for Discord presence tools |
+
+band3 adds one of its own, which RB3E doesn't have:
+
+| Endpoint | |
+|---|---|
+| `/album_art?shortname=<name>` | the song's album art as a JPEG, read as the game reads it for the Music Library (from the ARK, or a loose file that replaces it); 404 when the song has none, or no song has that shortname |
 
 `http_allow_cors` adds `Access-Control-Allow-Origin: *`, for pages served from somewhere
 else. Requests wait for the game's next frame, and get a 503 if it doesn't come within 5 s.

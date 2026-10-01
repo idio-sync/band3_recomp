@@ -115,6 +115,9 @@ Route MatchRoute(std::string_view target) {
     } else if (path.starts_with("/execute?script=")) {
         route.endpoint = Endpoint::kExecute;
         route.argument = path.substr(16);
+    } else if (path.starts_with("/album_art?shortname=")) {
+        route.endpoint = Endpoint::kAlbumArt;
+        route.argument = path.substr(21);
     }
     return route;
 }
@@ -148,7 +151,7 @@ std::string ToUtf8(std::string_view text) {
 }
 
 std::string Response(int status, std::string_view content_type, std::string_view body,
-                     bool cors) {
+                     bool cors, int max_age) {
     std::string out = "HTTP/1.1 " + std::to_string(status) + " " +
                       std::string(StatusText(status)) + "\r\n";
     out += "Server: band3\r\n";
@@ -156,7 +159,8 @@ std::string Response(int status, std::string_view content_type, std::string_view
     out += content_type;
     out += "\r\n";
     out += "Content-Length: " + std::to_string(body.size()) + "\r\n";
-    out += "Cache-Control: no-store\r\n";
+    out += max_age > 0 ? "Cache-Control: max-age=" + std::to_string(max_age) + "\r\n"
+                       : std::string("Cache-Control: no-store\r\n");
     if (cors) out += "Access-Control-Allow-Origin: *\r\n";
     out += "Connection: close\r\n\r\n";
     out += body;

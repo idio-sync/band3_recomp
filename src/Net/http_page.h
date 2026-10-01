@@ -3,8 +3,9 @@
 
 // The web server's page (http_server.h): the song library, searchable, with a
 // button that selects a song in the game's Music Library. It uses RB3E's
-// endpoints only, so RB3E's own page (rb3e_index.html in the game data root)
-// can replace it, and this one works against RB3E too. Nothing loads from
+// endpoints, so RB3E's own page (rb3e_index.html in the game data root) can
+// replace it, and this one works against RB3E too; album art, band3's own
+// /album_art, shows only when the server says it's band3. Nothing loads from
 // outside the server: the logo and favicon are band3.ico's 32x32 image, as a
 // PNG data URI (redo them if the icon changes).
 
@@ -61,6 +62,12 @@ li {
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
   margin-bottom: 6px;
 }
+/* album art, from band3's /album_art; a plain tile for a song without any */
+.art {
+  flex: none; width: 48px; height: 48px; border-radius: 6px; overflow: hidden;
+  background: var(--tag);
+}
+.art img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .info { flex: 1; min-width: 0; }
 .title, .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .title { font-weight: 600; }
@@ -153,8 +160,24 @@ function filter() {
   showMore();
 }
 
+// only band3 has /album_art; against RB3E the rows go without
+let hasArt = false;
+function art(s) {
+  const tile = document.createElement("div");
+  tile.className = "art";
+  const img = document.createElement("img");
+  img.alt = "";
+  img.loading = "lazy";
+  img.decoding = "async";
+  img.onerror = () => img.remove();
+  img.src = "/album_art?shortname=" + encodeURIComponent(s.shortname);
+  tile.append(img);
+  return tile;
+}
+
 function row(s) {
   const li = document.createElement("li");
+  if (hasArt) li.append(art(s));
   const info = document.createElement("div");
   info.className = "info";
   const title = document.createElement("div");
@@ -211,6 +234,7 @@ async function load() {
   try {
     const r = await fetch("/list_songs");
     if (!r.ok) throw new Error(await r.text());
+    hasArt = r.headers.get("Server") === "band3";
     songs = parseSongs(await r.text());
     filter();
   } catch (e) {

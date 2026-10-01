@@ -13,12 +13,16 @@
 REX_EXTERN(BandSongMgr__Data);
 REX_EXTERN(BandSongMgr__GetRankedSongs);
 REX_EXTERN(BandSongMgr__GetSongIDFromShortname);
+REX_EXTERN(BandSongMetadata__HasAlbumArt);
+REX_EXTERN(SongMgr__GetAlbumArtPath);
 
 namespace band3::songs {
 
 namespace {
 
 constexpr uint32_t kTheSongMgr = 0x82DFE7B4;  // BandSongMgr object
+// SongMgr*, which the Music Library's song nodes pass to GetAlbumArtPath
+constexpr uint32_t kTheSongMgrPtr = 0x82C72BA8;
 
 // BandSongMetadata
 constexpr uint32_t kSongMetadata_Shortname = 0x2C;  // Symbol
@@ -124,6 +128,33 @@ int32_t IdFromShortname(PPCContext& ctx, uint8_t* base, uint32_t symbol) {
     call.r5.u64 = 0;
     BandSongMgr__GetSongIDFromShortname(call, base);
     return std::max(call.r3.s32, 0);
+}
+
+std::string AlbumArtPath(PPCContext& ctx, uint8_t* base, uint32_t symbol) {
+    const int32_t id = IdFromShortname(ctx, base, symbol);
+    if (!id) return {};
+    PPCContext call = CallContext(ctx, 0x100);
+    call.r3.u64 = kTheSongMgr;
+    call.r4.u64 = static_cast<uint32_t>(id);
+    BandSongMgr__Data(call, base);
+    const uint32_t metadata = call.r3.u32;
+    if (!metadata) return {};
+
+    // BandSongMetadata::HasAlbumArt(BandSongMetadata*) -> bool
+    call = CallContext(ctx, 0x100);
+    call.r3.u64 = metadata;
+    BandSongMetadata__HasAlbumArt(call, base);
+    if (!(call.r3.u32 & 0xFF)) return {};
+
+    // SongMgr::GetAlbumArtPath(SongMgr*, Symbol) -> const char*
+    const uint32_t song_mgr = Load32(base, kTheSongMgrPtr);
+    if (!song_mgr) return {};
+    call = CallContext(ctx, 0x400);
+    call.r3.u64 = song_mgr;
+    call.r4.u64 = symbol;
+    SongMgr__GetAlbumArtPath(call, base);
+    const char* path = GuestStr(base, call.r3.u32);
+    return path ? std::string(path) : std::string();
 }
 
 }

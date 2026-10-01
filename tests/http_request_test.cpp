@@ -50,6 +50,11 @@ TEST_CASE("targets pick RB3E's endpoints") {
     const Route script = MatchRoute("/execute?script=%7Bprint%20hi%7D");
     CHECK(script.endpoint == Endpoint::kExecute);
     CHECK(script.argument == "{print hi}");
+
+    const Route art = MatchRoute("/album_art?shortname=gimmeshelter%26co");
+    CHECK(art.endpoint == Endpoint::kAlbumArt);
+    CHECK(art.argument == "gimmeshelter&co");
+    CHECK(MatchRoute("/album_art").endpoint == Endpoint::kNotFound);
 }
 
 TEST_CASE("songs are written as RB3E writes them") {
@@ -87,4 +92,12 @@ TEST_CASE("replies carry their length, type and CORS when asked") {
     CHECK(cors.starts_with("HTTP/1.1 409 Conflict\r\n"));
     CHECK(cors.find("Access-Control-Allow-Origin: *\r\n") != std::string::npos);
     CHECK(cors.find("Content-Length: 0\r\n") != std::string::npos);
+}
+
+TEST_CASE("replies aren't cached unless they say for how long") {
+    CHECK(Response(200, "text/plain", "OK", false).find("Cache-Control: no-store\r\n") !=
+          std::string::npos);
+    const std::string art = Response(200, "image/jpeg", "x", false, 3600);
+    CHECK(art.find("Cache-Control: max-age=3600\r\n") != std::string::npos);
+    CHECK(art.find("no-store") == std::string::npos);
 }

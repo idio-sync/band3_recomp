@@ -3,8 +3,11 @@
 #include <rex/system/xmemory.h>
 #include <rex/types.h>
 #include <cstring>
+#include <rex/logging.h>
+#include "src/Game/File.h"
 #include "src/Game/SongMgr.h"
 #include "src/Game/Symbol.h"
+#include "src/Net/album_art.h"
 #include "src/Net/http_game.h"
 
 // The game's side of the web server: the same calls RB3Enhanced makes for it
@@ -34,6 +37,10 @@ constexpr uint32_t kSongNode = 4;
 
 // longer than any shortname; Symbol takes up to 255
 constexpr size_t kMaxShortname = 255;
+
+// RB3's album art is 43 KB (256x256 DXT1 and its mipmaps); this leaves room
+// for a custom song's 1024x1024 DXT5
+constexpr size_t kMaxAlbumArt = 2 * 1024 * 1024;
 
 uint32_t Load32(uint8_t* base, uint32_t addr) {
     return *rex::memory::GuestPtr<rex::be<uint32_t>*>(base, addr);
@@ -100,6 +107,18 @@ JumpResult JumpToSong(PPCContext& ctx, uint8_t* base, const std::string& shortna
     call.r6.u64 = 1;
     MusicLibrary__TryToSetHighlight(call, base);
     return JumpResult::kJumped;
+}
+
+std::optional<std::string> AlbumArtFile(PPCContext& ctx, uint8_t* base,
+                                        const std::string& shortname) {
+    if (shortname.empty() || shortname.size() > kMaxShortname) return std::nullopt;
+    const uint32_t symbol = band3::Symbol(ctx, base, shortname.c_str()).value(base);
+    if (!symbol) return std::nullopt;
+    const std::string path = songs::AlbumArtPath(ctx, base, symbol);
+    if (path.empty()) return std::nullopt;
+    const std::string file = XboxBitmapPath(path);
+    REXLOG_DEBUG("Web server: album art for {} is {}", shortname, file);
+    return files::ReadAll(ctx, base, file, kMaxAlbumArt);
 }
 
 void ExecuteScript(PPCContext& ctx, uint8_t* base, const std::string& script) {
