@@ -56,6 +56,7 @@ constexpr IniSetting kIniSettings[] = {
     {"http", "address", "http_address"},
     {"http", "allow_cors", "http_allow_cors"},
     {"http", "allow_scripts", "http_allow_scripts"},
+    {"game", "rb3e_mode", "rb3e_mode"},
     {"audio", "max_queued_frames", "audio_maxqframes"},
     {"memory", "main_heap_size", "main_heap_size"},
     {"memory", "char_heap_size", "char_heap_size"},

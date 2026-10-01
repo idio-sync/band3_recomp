@@ -54,6 +54,7 @@ REXCVAR_DECLARE(int32_t, http_port);
 REXCVAR_DECLARE(std::string, http_address);
 REXCVAR_DECLARE(bool, http_allow_cors);
 REXCVAR_DECLARE(bool, http_allow_scripts);
+REXCVAR_DECLARE(bool, rb3e_mode);
 
 // Band3/Debug
 REXCVAR_DECLARE(bool, debug_overlay);
@@ -92,6 +93,7 @@ struct StartupSettings {
     bool http_enabled;
     int32_t http_port;
     std::string http_address;
+    bool rb3e_mode;
     bool native_camera_shake;
 };
 const StartupSettings& Startup();

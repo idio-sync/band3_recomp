@@ -213,6 +213,12 @@ REXCVAR_DEFINE_BOOL(http_allow_scripts, false, "Band3/Integrations",
     "Let the web server's /execute run DTA scripts sent to it. Anyone on the local network "
     "could then run any script in the game");
 
+REXCVAR_DEFINE_BOOL(rb3e_mode, false, "Band3/Integrations",
+    "Tell the game's scripts RB3Enhanced is running (they see RB3E and RB3E_HAS_VERSION "
+    "defined), so Rock Band 3 Deluxe turns on its RB3E features. Some of those aren't in "
+    "band3 yet: its extra modifiers do nothing, and clearing the song cache fails")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 // Band3/Debug
 
 REXCVAR_DEFINE_BOOL(debug_overlay, true, "Band3/Debug",
@@ -325,6 +331,7 @@ void Init() {
         .http_enabled = REXCVAR_GET(http_enabled),
         .http_port = REXCVAR_GET(http_port),
         .http_address = REXCVAR_GET(http_address),
+        .rb3e_mode = REXCVAR_GET(rb3e_mode),
         .native_camera_shake = REXCVAR_GET(native_camera_shake),
     };
 

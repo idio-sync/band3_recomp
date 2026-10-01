@@ -343,6 +343,15 @@ value), `rb3e_local_ip`, `rb3e_api_version` (0, the RB3E API band3 follows),
 log that band3 can't do that yet and return 0. With `http_allow_scripts` on, the web
 server's `/execute` runs them, e.g. `{print_debug {rb3e_get_song_name 1009}}`.
 
+Rock Band 3 Deluxe only uses them when its scripts see `RB3E` defined, as RB3E's
+loader does. Turn on `rb3e_mode` (Band3 → Integrations, then restart) for band3 to
+define `RB3E` and `RB3E_HAS_VERSION`: Deluxe then shows its RB3E version line,
+offers its party mode (which shows this PC's address for the web page above) and
+looks songs up through these functions. It also shows RB3E features band3 doesn't
+have yet: RB3E's extra modifiers do nothing, and its "Clear and reboot game" after
+a Deluxe update fails, since band3 can't delete the song cache or relaunch itself
+yet. It's off by default until those are in.
+
 ### Steam Deck
 
 On a Steam Deck, band3 starts fullscreen and letterboxed (the game is 16:9, the screen
