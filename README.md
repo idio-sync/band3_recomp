@@ -183,9 +183,9 @@ when a client disconnects.
 Each player can have a virtual instrument: start a controller command with `p2`,
 `p3` or `p4` for that player's (`p2 instrument drums`, `p2 hit red_pad`, `pad 2`);
 without one it's player 1's. `state` lists every player's instrument.
-`tests/game/multiplayer.b3t` plays a two-player song; it currently crashes the game
-while the song loads (an unhandled guest read of address 0 on the main thread), as
-any song with more than one player does.
+`tests/game/multiplayer.b3t` plays a two-player song. Players 2-4 aren't signed in,
+so RB3 asks each to choose a profile when they join a song: No Profile plays as a
+guest.
 
 Every instrument has `a b x y start back up down left right`; guitars add `green red
 yellow blue orange strum_up strum_down solo`, drums `red_pad yellow_pad blue_pad

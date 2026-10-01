@@ -1,7 +1,7 @@
 # Two players play a song together on autoplay: guitar and bass.
 # Starts on the main menu (main_hub_screen), with player 1 joined.
-# Currently fails: band3 crashes while a song with more than one player loads
-# (unhandled guest read of address 0 on the main thread, 2026-09-30).
+# This crashed band3 while the song loaded until XNetRandom gave real random
+# bytes (src/Hooks/xnet_random.cpp): every player had player 1's user guid.
 
 p2 instrument guitar
 wait frames=60
@@ -23,9 +23,16 @@ wait frames=30
 press green
 wait screen=part_difficulty_screen timeout=30s
 wait frames=90
-# player 1 Guitar, player 2 Bass
+# player 1: Guitar, Expert
 press green
-p2 press down
+wait frames=30
+press green
+# player 2 isn't signed in: No Profile, to play as a guest
+p2 press green
+wait frames=60
+# player 2: Bass (offered first, as player 1 has guitar), its default difficulty
+p2 press green
+wait frames=60
 p2 press green
 wait in_game timeout=60s
 expect song=20thcenturyboy
