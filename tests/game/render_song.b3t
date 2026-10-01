@@ -1,0 +1,48 @@
+# Plays a song on autoplay and pairs the game's frame with the native view's at
+# points through it, for render checks:
+#   out/native_view_replay.exe screenshots/<name>.cap side.png --compare screenshots/<name>.png
+# Starts where boot.b3t leaves Rock Band 3 Deluxe (on a fresh profile).
+
+# Deluxe can't save its settings to band3's read-only game folder: I Understand
+wait screen=dx_settings_error_screen timeout=30s
+wait frames=60
+press green
+# back to the welcome hint underneath it, whose first choice customizes the
+# band; back out of that to the main menu
+wait screen=hint_rb3_welcome_screen timeout=30s
+wait frames=60
+press green
+wait screen=manage_band_screen timeout=30s
+wait frames=60
+press red
+wait screen=main_hub_screen timeout=30s
+wait frames=60
+set autoplay true
+# Play Now, Quickplay, Choose Songs
+press green
+wait frames=60
+press green
+wait frames=60
+press green
+wait screen=song_select_screen timeout=30s
+wait frames=60
+# past the 123 heading to 20th Century Boy
+press down
+press down
+wait frames=30
+press green
+wait screen=part_difficulty_screen timeout=30s
+wait frames=90
+# Guitar, Expert
+press green
+wait frames=30
+press green
+wait in_game timeout=60s
+expect song=20thcenturyboy
+capture render-song-start
+wait frames=600 timeout=60s
+capture render-song-10s
+wait frames=900 timeout=60s
+capture render-song-25s
+wait frames=900 timeout=60s
+capture render-song-40s
