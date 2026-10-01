@@ -17,14 +17,14 @@
 // owns the game window. The device lives in band3's copy, on SDL's offscreen
 // video driver, so it makes no windows and leaves the game's alone.
 //
-// So far it draws rigid, opaque (Src blend) meshes; blended and skinned draws
-// are left out and counted.
+// It draws what Rasterize() does, the same way: every blend mode, skinning on
+// the GPU, depth as 1/w.
 
 namespace band3::render {
 
 struct GpuStats {
     uint32_t draws = 0;
-    uint32_t skipped = 0;   // draws it can't do yet
+    uint32_t skipped = 0;   // draws it couldn't do (no geometry, or no pipeline)
     uint32_t uploads = 0;   // meshes and textures sent to the GPU this frame
     double ms = 0;          // the whole frame: uploads, drawing and reading back
     double wait_ms = 0;     // of that, from submitting to having the picture

@@ -35,19 +35,28 @@ VK_BINDING(0, 1) cbuffer VertexUniforms : register(b0, space1) {
 // as raw views, so a ByteAddressBuffer reads them as they are
 VK_BINDING(0, 0) ByteAddressBuffer bones : register(t0, space0);
 
-VK_SAMPLER VK_BINDING(0, 2) Texture2D<float4> tex : register(t0, space2);
+// Textures share arrays by size class, a texture to a layer, in its corner
+// (gpu_view.cpp). The sampler is SDL_gpu's pairing; the shader reads texels
+// itself, as Shade() does
+VK_SAMPLER VK_BINDING(0, 2) Texture2DArray<float4> tex : register(t0, space2);
 VK_SAMPLER VK_BINDING(0, 2) SamplerState tex_sampler : register(s0, space2);
 
 static const uint kTextured = 1;
 static const uint kPrelit = 2;
 static const uint kLighting = 4;
 static const uint kAlphaCut = 8;
+// SrcAlpha and SrcAlphaAdd: the colour leaves already scaled by its alpha,
+// which the blend can't clamp first (gpu_view.cpp's pipelines)
+static const uint kPremultiply = 16;
 
 VK_BINDING(0, 3) cbuffer PixelUniforms : register(b0, space3) {
     float4 mat_color;
     uint flags;
     float alpha_threshold;  // 0-255, as RndMat keeps it
-    float2 pixel_pad;
+    uint tex_layer;
+    uint pixel_pad;
+    uint2 tex_size;  // the texture's own; its layer may be bigger
+    uint2 pixel_pad2;
 };
 
 // soft_raster.cpp's near plane: w below it is clipped
@@ -113,7 +122,12 @@ PixelIn VSMain(VertexIn v) {
 
 float4 PSMain(PixelIn i) : SV_Target0 {
     float4 c = mat_color;
-    if (flags & kTextured) c *= tex.SampleLevel(tex_sampler, i.uv, 0);
+    if (flags & kTextured) {
+        // Shade()'s nearest texel, wrapping, by the same arithmetic
+        const float2 f = i.uv - floor(i.uv);
+        const uint2 t = min(uint2(f * float2(tex_size)), tex_size - 1);
+        c *= tex.Load(int4(t, tex_layer, 0));
+    }
     if (flags & kPrelit) {
         c *= i.color;
     } else if (flags & kLighting) {
@@ -122,5 +136,9 @@ float4 PSMain(PixelIn i) : SV_Target0 {
         c.rgb *= 0.4 + 0.6 * max(0, d);
     }
     if ((flags & kAlphaCut) && c.a * 255 < alpha_threshold) discard;
+    // Blend() in soft_raster.cpp clamps alpha, never the colour, before
+    // scaling by it; a UNORM target clamps what reaches the blender, so the
+    // scaling happens here, where colour above 1 still counts
+    if (flags & kPremultiply) c.rgb *= saturate(c.a);
     return c;
 }
