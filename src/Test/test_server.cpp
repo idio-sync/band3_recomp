@@ -150,7 +150,8 @@ public:
         const std::string file = name.empty() ? TimestampName() : name;
         std::string shot_error;
         auto frame = render::CaptureHeldFrame(
-            [&] { shot_error = Screenshot(file, out.screenshot); }, std::chrono::seconds(5));
+            [&] { shot_error = Screenshot(file, out.screenshot); }, std::chrono::seconds(5),
+            std::chrono::milliseconds(150), &out.held_fallback);
         if (!frame) return "the game didn't finish a frame to capture in 5 s";
         if (!shot_error.empty()) return shot_error;
         const std::filesystem::path path =
@@ -168,6 +169,7 @@ public:
         out.passes_carried = frame->passes_carried;
         out.rt_sampled = frame->rt_sampled;
         out.rt_missing = frame->rt_missing;
+        out.rt_filtered = frame->rt_filtered;
         out.rt_fallback = render::RtFallbackGuest() ? "guest" : "none";
         out.proc_cmds = render::ProcKnown(*frame) ? int64_t(frame->proc_cmds) : -1;
         out.composed = frame->composed != 0;

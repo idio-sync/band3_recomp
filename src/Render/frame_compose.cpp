@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <set>
 #include <utility>
+#include <vector>
 
 // See frame_compose.h.
 
@@ -53,15 +54,23 @@ void AddCounts(FrameCapture& to, const FrameCapture& from) {
 
 }  // namespace
 
-void CountRenderTargets(const FrameCapture& fc, uint32_t& sampled, uint32_t& missing) {
+void CountRenderTargets(const FrameCapture& fc, const std::vector<uint64_t>& left_out,
+                        uint32_t& sampled, uint32_t& missing, std::vector<uint64_t>& filtered) {
     std::set<uint64_t> made, seen;
     for (const Pass& p : fc.passes)
         if (p.tex_obj) made.insert(RtKey(p.tex_obj, p.version));
+    const std::set<uint64_t> all_left_out(left_out.begin(), left_out.end());
     missing = 0;
+    filtered.clear();
     for (const DrawItem& d : fc.draws) {
         if (!d.tex || !d.tex->tex_obj || !IsPassTargetType(d.tex->tex_type)) continue;
         const uint64_t key = RtKey(d.tex->tex_obj, d.tex->version);
-        if (seen.insert(key).second && !made.count(key)) missing++;
+        if (!seen.insert(key).second || made.count(key)) continue;
+        if (all_left_out.count(key)) {
+            filtered.push_back(key);
+        } else {
+            missing++;
+        }
     }
     sampled = uint32_t(seen.size());
 }
@@ -102,7 +111,11 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
         if (p.from_frame >= world.game_frame) fc.passes_own++;
         else fc.passes_carried++;
     }
-    CountRenderTargets(fc, fc.rt_sampled, fc.rt_missing);
+    // a target whose pass's draws were all left out, in either frame
+    std::vector<uint64_t> left_out = world.rt_filtered_keys;
+    left_out.insert(left_out.end(), frame.rt_filtered_keys.begin(), frame.rt_filtered_keys.end());
+    CountRenderTargets(fc, left_out, fc.rt_sampled, fc.rt_missing, fc.rt_filtered_keys);
+    fc.rt_filtered = uint32_t(fc.rt_filtered_keys.size());
     return out;
 }
 

@@ -51,6 +51,11 @@ public:
     std::string screenshot_name;
     std::string capture_name;
     bool gpu_works = true;
+    // what the capture is: a composed post frame, or the frame a capture
+    // took when none came (held_fallback)
+    bool capture_composed = true;
+    int64_t capture_proc_cmds = 2;
+    bool capture_fell_back = false;
     NativeViewStats view;
     bool quit = false;
     bool cancelled = false;
@@ -94,9 +99,11 @@ public:
         out.passes_carried = 9;
         out.rt_sampled = 14;
         out.rt_missing = 1;
+        out.rt_filtered = 3;
         out.rt_fallback = "none";
-        out.proc_cmds = 2;
-        out.composed = true;
+        out.proc_cmds = capture_proc_cmds;
+        out.composed = capture_composed;
+        out.held_fallback = capture_fell_back;
         out.game_frame = 2401;
         out.world_frame = 2400;
         if (gpu_works) {
@@ -384,10 +391,11 @@ TEST_CASE("capture names the screenshot and the native capture alike") {
     CHECK(Has(reply, "\"capture\":\"screenshots/venue_1.cap\""));
     CHECK(Has(reply, "\"frame\":42"));
     CHECK(Has(reply, "\"draws\":345,\"skipped_shadow\":12,\"skipped_pass\":3"));
-    CHECK(Has(reply, "\"passes\":30,\"passes_carried\":9,\"rt_sampled\":14,\"rt_missing\":1"));
+    CHECK(Has(reply, "\"passes\":30,\"passes_carried\":9,\"rt_sampled\":14,\"rt_missing\":1,"
+                     "\"rt_filtered\":3"));
     CHECK(Has(reply, "\"rt_fallback\":\"none\""));
     CHECK(Has(reply, "\"proc_cmds\":2,\"composed\":true,\"game_frame\":2401,"
-                     "\"world_frame\":2400"));
+                     "\"world_frame\":2400,\"held_fallback\":false"));
     CHECK(Has(reply, "\"gpu\":\"screenshots/venue_1.gpu.png\""));
     CHECK(Has(reply, "\"gpu_ms\":4.2,\"gpu_wait_ms\":1.0"));
 
@@ -399,6 +407,36 @@ TEST_CASE("capture names the screenshot and the native capture alike") {
     CHECK_FALSE(Ok(RunCommand("capture a b", game)));
     CHECK(game.capture_name == "unchanged");
     CHECK_FALSE(Ok(RunCommand("p2 capture", game)));
+}
+
+TEST_CASE("capture with composed fails unless the capture is a composed post frame") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("capture eo_1 composed", game)));
+    CHECK(game.capture_name == "eo_1");
+
+    // the capture fell back to a world frame of its own: written, but a failure
+    game.capture_composed = false;
+    game.capture_proc_cmds = 1;
+    game.capture_fell_back = true;
+    std::string reply = RunCommand("capture eo_2 composed", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(game.capture_name == "eo_2");
+    CHECK(Has(reply, "proc_cmds 1, composed false, held_fallback true"));
+    // without composed the same capture is fine, and says it fell back
+    reply = RunCommand("capture eo_3", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"held_fallback\":true"));
+
+    // a whole frame (even/odd rendering off) isn't a composed one either
+    game.capture_proc_cmds = 7;
+    game.capture_fell_back = false;
+    CHECK_FALSE(Ok(RunCommand("capture eo_4 composed", game)));
+
+    game.capture_name = "unchanged";
+    CHECK_FALSE(Ok(RunCommand("capture eo_5 composd", game)));
+    CHECK_FALSE(Ok(RunCommand("capture eo_5 composed x", game)));
+    CHECK_FALSE(Ok(RunCommand("capture ../evil composed", game)));
+    CHECK(game.capture_name == "unchanged");
 }
 
 TEST_CASE("capture still succeeds without the GPU picture, and says why") {

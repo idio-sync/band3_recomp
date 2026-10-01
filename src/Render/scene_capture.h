@@ -22,7 +22,9 @@
 // drawing it again carries a copy (Pass::from_frame). Without it, a capture
 // has only the passes drawn while capture is on, and counts the rest it
 // samples as missing (FrameCapture::rt_missing); the hooks then cost an
-// early-out each.
+// early-out each. RB3 draws on its splash thread at boot and on its main
+// thread after, and frees textures on either, so what the hooks keep is
+// behind a mutex they take past their early-outs.
 //
 // Offsets are rb3-xenon's (src/system/rndobj, src/system/rnddx9), checked
 // against the recompiled DxMesh::DrawShowing, DxMesh::OnSync and
@@ -307,11 +309,20 @@ struct FrameCapture {
     uint32_t passes_carried = 0;
     uint32_t passes_empty = 0;
     // diffuse textures that are pass targets, by (texture, version) sampled:
-    // made by a pass in the capture (own or carried), or by none it has
-    // (rt_missing: recorded in a frame whose passes weren't kept, made before
-    // band3 saw it, or a pass left out above)
+    // made by a pass in the capture (own or carried), by a pass left out above
+    // because all its draws were too (rt_filtered: for their draw mode, as
+    // shadow maps' and the velocity buffer's are, or for having no material
+    // or geometry the capture draws, as the spotlights' depth volume's), or
+    // by none it has (rt_missing: recorded in a frame whose passes weren't
+    // kept, made before band3 saw it, or drawn by something band3 doesn't
+    // record), so rt_missing 0 means none is missing that the capture could
+    // have had
     uint32_t rt_sampled = 0;
     uint32_t rt_missing = 0;
+    uint32_t rt_filtered = 0;
+    // the rt_filtered ones, as texture << 32 | version, for counting them
+    // again over a composed frame (frame_compose.h) and for replay's --list
+    std::vector<uint64_t> rt_filtered_keys;
     // back-buffer snapshots and device textures sampled (refraction's
     // pre-process buffer), which no pass makes
     uint32_t rt_snapshots = 0;
@@ -350,9 +361,12 @@ void ReleaseCapture();
 // `settle` for the emulated GPU to show it, runs `while_held` (a screenshot of
 // the same frame) and lets the game go on. The game is never held more than
 // three seconds. Null, without running while_held, if no frame came in time.
+// If none of the 30 frames after the request was such a frame, it takes the
+// last of them all the same, and says so in `fell_back`.
 std::shared_ptr<const FrameCapture> CaptureHeldFrame(
     const std::function<void()>& while_held, std::chrono::milliseconds timeout,
-    std::chrono::milliseconds settle = std::chrono::milliseconds(150));
+    std::chrono::milliseconds settle = std::chrono::milliseconds(150),
+    bool* fell_back = nullptr);
 
 // the latest complete frame, composed with the world before it if it drew
 // none (frame_compose.h), or null before the first

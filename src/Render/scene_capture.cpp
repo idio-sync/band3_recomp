@@ -557,7 +557,11 @@ std::shared_ptr<Texture> DecodeTexture(const Guest& g, const uint32_t f[6]) {
 }
 
 // ---------------------------------------------------------------------------
-// capture state, touched only from the game's render thread
+// capture state, touched by the hooks under g_state_mutex: RB3 draws on more
+// than one thread, though never on two at once (at boot its splash thread
+// draws the loading movie, into a texture too, while the main thread loads
+// and frees textures, and the main thread draws from the main menu on), and
+// frees textures on whichever thread lets go of them
 
 struct GeomEntry {
     uint64_t key;
@@ -590,7 +594,9 @@ struct RtState {
     // its passes in a row each within kRepeatFrames of the one before
     uint32_t repeats = 0;
     // its last two recorded passes (a texture drawn every frame is sampled
-    // before it's drawn again too), null where the pass wasn't recorded
+    // before it's drawn again too), null where the pass wasn't recorded or
+    // drew nothing; one whose draws were all left out (AllLeftOut) is kept,
+    // with none
     std::shared_ptr<const PassRecord> last, before;
     // the Texture a capture's draws sampled it as last, and the guest pixels
     // that has (native_view_rt_fallback guest)
@@ -629,9 +635,11 @@ struct State {
     std::unordered_map<uint32_t, GeomEntry> geoms;
     std::unordered_map<uint32_t, TexEntry> texs;      // by D3D texture
     std::unordered_map<uint32_t, TexEntry> map_texs;  // by base address
-    // the building frame's shades, and the render targets it sampled
+    // the building frame's shades, the render targets it sampled, and those
+    // its own passes made whose draws were all left out (AllLeftOut)
     ShadeIndex shades;
     std::vector<uint64_t> samples;
+    std::unordered_set<uint64_t> left_out;
     OpenPass open;
     // by DxTex, every texture a pass has drawn into since it was made
     std::unordered_map<uint32_t, RtState> rts;
@@ -647,13 +655,23 @@ State& S() {
     return state;
 }
 
+// State's, taken by each hook once it's past its early-out, so a game that
+// never uses the native view doesn't take it but at the frame's end; never
+// held across a call into the game (a hook's __imp__, which can reach other
+// hooks: FinishDrawTarget's mip DrawRects, DxCam::Select's RndCam::Select) or
+// while the game is held for a render check (HoldIfRequested)
+std::mutex g_state_mutex;
+
 std::atomic<bool> g_enabled{false};
 // a texture pass is open and its draws are recorded (State::open.record), so
-// the draw hooks record even while capture is off
-bool g_pass_recording = false;
-// RndShader::Cache's last option word and ShaderType
-uint64_t g_shader_options = 0;
-int32_t g_shader_type = -1;
+// the draw hooks record even while capture is off; written under
+// g_state_mutex, read before it by their early-outs
+std::atomic<bool> g_pass_recording{false};
+// RndShader::Cache's last option word and ShaderType, per thread: a draw's
+// shader is the last one its own thread cached (the main thread may load
+// while the splash thread draws)
+thread_local uint64_t g_shader_options = 0;
+thread_local int32_t g_shader_type = -1;
 // native_view_rt_fallback, kept by its change callback
 std::atomic<bool> g_rt_fallback_guest{true};
 // native_view_record_targets: texture passes are recorded while capture is
@@ -666,6 +684,11 @@ bool Active() {
     return g_enabled.load(std::memory_order_relaxed) ||
            g_record_targets.load(std::memory_order_relaxed);
 }
+// whether the draw hooks do: while capturing, and inside a recorded pass
+bool Recording() {
+    return g_enabled.load(std::memory_order_relaxed) ||
+           g_pass_recording.load(std::memory_order_relaxed);
+}
 // PassRecordingStats, written on the game's render thread
 std::atomic<uint64_t> g_rec_passes{0}, g_rec_recorded{0}, g_rec_draws{0}, g_rec_ns{0};
 
@@ -673,7 +696,9 @@ std::atomic<uint64_t> g_rec_passes{0}, g_rec_recorded{0}, g_rec_draws{0}, g_rec_
 // recorded, so the clock is read for little more than its own draws
 class RecordTimer {
  public:
-    RecordTimer() : on_(g_pass_recording && !g_enabled.load(std::memory_order_relaxed)) {
+    RecordTimer()
+        : on_(g_pass_recording.load(std::memory_order_relaxed) &&
+              !g_enabled.load(std::memory_order_relaxed)) {
         if (on_) start_ = std::chrono::steady_clock::now();
     }
     ~RecordTimer() {
@@ -700,6 +725,7 @@ struct HeldRequest {
     int waited = 0;   // frames looked at so far
     size_t most = 0;  // the most draws a frame had so far
     std::shared_ptr<const FrameCapture> frame;
+    bool fell_back = false;  // none was one it waited for: frame is the last it saw
     bool released = true;
 };
 HeldRequest g_held;
@@ -1306,7 +1332,7 @@ std::string ReadName(const Guest& g, uint32_t p) {
 void DropOpenPass(State& s) {
     if (s.open.tex) s.building->passes_unbalanced++;
     s.open = OpenPass{};
-    g_pass_recording = false;
+    g_pass_recording.store(false, std::memory_order_relaxed);
 }
 
 // a world frame is composed with the frames after it that draw none for this
@@ -1338,7 +1364,7 @@ void BeginPass(const Guest& g, uint32_t tex) {
     const bool regular = RecentlyMade(rt, s.game_frame) && rt.repeats >= 1;
     s.open.tex = tex;
     s.open.record = capturing || !regular;
-    g_pass_recording = s.open.record;
+    g_pass_recording.store(s.open.record, std::memory_order_relaxed);
     if (!s.open.record) return;
     if (!capturing) g_rec_recorded.fetch_add(1, std::memory_order_relaxed);
     s.open.rec = std::make_shared<PassRecord>();
@@ -1413,9 +1439,21 @@ void AddCounts(FrameCapture& to, const FrameCapture& from) {
     to.rt_snapshots += from.rt_snapshots;
 }
 
+// whether a pass drew nothing the capture keeps because every draw it made
+// was left out: for its draw mode (shadow casters, velocity), or for having no
+// material or geometry the capture draws (the spotlights' depth volume's,
+// NgSpotlightDrawer::RenderScene: out/research/m3_survey.md 1)
+bool AllLeftOut(const FrameCapture& content) {
+    const uint32_t left_out = content.skipped_shadow + content.skipped_velocity +
+                              content.skipped_draw_mode + content.skipped_no_geom;
+    return content.draws.empty() && left_out > 0;
+}
+
 // DxTex::FinishDrawTarget: `tex` is resolved, a new version of it. A recorded
 // pass becomes its last, and the capturing frame's next pass; one that drew
-// nothing kept (a shadow map's) is left out.
+// nothing kept (a shadow map's) is left out, though one whose draws were all
+// left out is still its last, so a capture sampling it counts it as such
+// (rt_filtered) rather than missing.
 void EndPass(uint32_t tex) {
     State& s = S();
     if (s.open.tex != tex) DropOpenPass(s);
@@ -1429,7 +1467,7 @@ void EndPass(uint32_t tex) {
     std::shared_ptr<PassRecord> rec = std::move(s.open.rec);
     const bool recorded = s.open.record;
     s.open = OpenPass{};
-    g_pass_recording = false;
+    g_pass_recording.store(false, std::memory_order_relaxed);
     if (!recorded) return;
     rec->pass.version = rt.version;
     rec->pass.draw_count = uint32_t(rec->content.draws.size());
@@ -1437,6 +1475,12 @@ void EndPass(uint32_t tex) {
     if (capturing) AddCounts(*s.building, rec->content);
     if (rec->content.draws.empty()) {
         if (capturing) s.building->passes_empty++;
+        if (AllLeftOut(rec->content)) {
+            // kept for the frame too: later passes into the same texture can
+            // push it out of last and before (NgLight's shadow, then its blurs)
+            if (capturing) s.left_out.insert(RtKey(tex, rt.version));
+            rt.last = std::move(rec);
+        }
         return;
     }
     rt.last = rec;
@@ -1455,7 +1499,7 @@ void ForgetTexture(uint32_t tex) {
 
 // Passes in front of the frame's own for the render targets it samples that
 // it didn't draw itself, from their textures' last passes; and what's
-// sampled and missing counted.
+// sampled, missing and made by a pass whose draws were all left out counted.
 void CarryPasses(State& s, FrameCapture& fc) {
     std::unordered_set<uint64_t> have;
     for (const Pass& p : fc.passes)
@@ -1468,6 +1512,11 @@ void CarryPasses(State& s, FrameCapture& fc) {
     for (size_t i = 0; i < todo.size(); i++) {
         const uint64_t key = todo[i];
         if (have.count(key)) continue;
+        if (s.left_out.count(key)) {
+            fc.rt_filtered++;
+            fc.rt_filtered_keys.push_back(key);
+            continue;
+        }
         const PassRecord* found = nullptr;
         if (auto it = s.rts.find(uint32_t(key >> 32)); it != s.rts.end()) {
             for (const PassRecord* rec : {it->second.last.get(), it->second.before.get()})
@@ -1475,6 +1524,11 @@ void CarryPasses(State& s, FrameCapture& fc) {
         }
         if (!found) {
             fc.rt_missing++;
+            continue;
+        }
+        if (found->content.draws.empty()) {
+            fc.rt_filtered++;
+            fc.rt_filtered_keys.push_back(key);
             continue;
         }
         carried.push_back(found);
@@ -1614,13 +1668,16 @@ void HoldIfRequested(const std::shared_ptr<const FrameCapture>& frame) {
     if (!take && ++g_held.waited <= kMaxFramesToWait) return;
     g_held.armed = false;
     g_held.frame = frame;
+    g_held.fell_back = !take;
     g_held.released = false;
     g_held.cv.notify_all();
     g_held.cv.wait_for(lock, kMaxHold, [] { return g_held.released; });
     g_held.released = true;
 }
 
-void FinishFrame() {
+// The frame's end, under g_state_mutex: the frame captured, for
+// HoldIfRequested once that's let go, or null while capture is off
+std::shared_ptr<const FrameCapture> FinishFrame() {
     State& s = S();
     // passes close within the frame they start in
     if (s.open.tex) DropOpenPass(s);
@@ -1633,12 +1690,13 @@ void FinishFrame() {
         }
         s.shades.clear();
         s.samples.clear();
+        s.left_out.clear();
         // nothing watches textures until capture or recording is on again, so
         // what's known of them would go stale (an address reused, say)
         if (!g_record_targets.load(std::memory_order_relaxed) && !s.rts.empty()) s.rts.clear();
         s.captured_last = false;
         s.last_world.reset();
-        return;
+        return nullptr;
     }
     s.building->frame = ++s.frame;
     s.building->game_frame = game_frame;
@@ -1665,12 +1723,13 @@ void FinishFrame() {
     s.building = std::make_shared<FrameCapture>();
     s.shades.clear();
     s.samples.clear();
-    HoldIfRequested(done);
+    s.left_out.clear();
     s.cam_counted = false;
     // a venue change leaves stale entries behind; start over now and then
     if (s.geoms.size() > 50000) s.geoms.clear();
     if (s.texs.size() > 20000) s.texs.clear();
     if (s.map_texs.size() > 20000) s.map_texs.clear();
+    return done;
 }
 
 }  // namespace
@@ -1687,7 +1746,8 @@ void ReleaseCapture() {
 
 std::shared_ptr<const FrameCapture> CaptureHeldFrame(const std::function<void()>& while_held,
                                                      std::chrono::milliseconds timeout,
-                                                     std::chrono::milliseconds settle) {
+                                                     std::chrono::milliseconds settle,
+                                                     bool* fell_back) {
     const bool was_on = g_enabled.load();
     AcquireCapture();
     std::unique_lock lock(g_held.mutex);
@@ -1698,6 +1758,7 @@ std::shared_ptr<const FrameCapture> CaptureHeldFrame(const std::function<void()>
     g_held.frame.reset();
     const bool got = g_held.cv.wait_for(lock, timeout, [] { return g_held.frame != nullptr; });
     std::shared_ptr<const FrameCapture> frame = g_held.frame;
+    if (fell_back) *fell_back = got && g_held.fell_back;
     g_held.armed = false;
     g_held.frame.reset();
     lock.unlock();
@@ -1743,32 +1804,34 @@ namespace {
 // string's storage on the UI thread); registered at the first frame, once the
 // cvars exist
 void TrackSettings() {
-    static bool tracking = false;
-    if (tracking) return;
-    tracking = true;
-    g_rt_fallback_guest.store(rex::cvar::GetFlagByName("native_view_rt_fallback") != "none");
-    rex::cvar::RegisterChangeCallback("native_view_rt_fallback",
-                                      [](std::string_view, std::string_view v) {
-                                          g_rt_fallback_guest.store(v != "none");
-                                      });
-    g_record_targets.store(REXCVAR_GET(native_view_record_targets));
-    rex::cvar::RegisterChangeCallback("native_view_record_targets",
-                                      [](std::string_view, std::string_view v) {
-                                          g_record_targets.store(v == "true" || v == "1");
-                                      });
+    static std::once_flag tracking;
+    std::call_once(tracking, [] {
+        g_rt_fallback_guest.store(rex::cvar::GetFlagByName("native_view_rt_fallback") != "none");
+        rex::cvar::RegisterChangeCallback("native_view_rt_fallback",
+                                          [](std::string_view, std::string_view v) {
+                                              g_rt_fallback_guest.store(v != "none");
+                                          });
+        g_record_targets.store(REXCVAR_GET(native_view_record_targets));
+        rex::cvar::RegisterChangeCallback("native_view_record_targets",
+                                          [](std::string_view, std::string_view v) {
+                                              g_record_targets.store(v == "true" || v == "1");
+                                          });
+    });
 }
 
 }  // namespace
 
 // The hooks below do nothing but an early-out unless capture is on or
 // native_view_record_targets is (Active), so a game that never uses the
-// native view pays next to nothing for them.
+// native view pays next to nothing for them. Past it, each takes
+// g_state_mutex around its own work, never around the game's function.
 
 extern "C" REX_FUNC(RndCam__Select) {
     const uint32_t cam = ctx.r3.u32;
     __imp__RndCam__Select(ctx, base);
     // kept while capture is off too if texture passes are recorded then
     if (!Active()) return;
+    std::lock_guard lock(g_state_mutex);
     State& s = S();
     if (cam != s.cam) s.cam_counted = false;
     s.cam = cam;
@@ -1781,7 +1844,8 @@ extern "C" REX_FUNC(RndCam__Select) {
 extern "C" REX_FUNC(DxMesh__DrawShowing) {
     const uint32_t mesh = ctx.r3.u32;
     __imp__DxMesh__DrawShowing(ctx, base);
-    if (!g_enabled.load(std::memory_order_relaxed) && !g_pass_recording) return;
+    if (!Recording()) return;
+    std::lock_guard lock(g_state_mutex);
     RecordTimer timer;
     CaptureMesh(base, mesh);
 }
@@ -1789,7 +1853,8 @@ extern "C" REX_FUNC(DxMesh__DrawShowing) {
 extern "C" REX_FUNC(DxMultiMesh__DrawShowing) {
     const uint32_t multimesh = ctx.r3.u32;
     __imp__DxMultiMesh__DrawShowing(ctx, base);
-    if (!g_enabled.load(std::memory_order_relaxed) && !g_pass_recording) return;
+    if (!Recording()) return;
+    std::lock_guard lock(g_state_mutex);
     RecordTimer timer;
     CaptureMultiMesh(base, multimesh);
 }
@@ -1797,7 +1862,8 @@ extern "C" REX_FUNC(DxMultiMesh__DrawShowing) {
 extern "C" REX_FUNC(DxParticleSys__DrawParticles) {
     const uint32_t sys = ctx.r3.u32;
     __imp__DxParticleSys__DrawParticles(ctx, base);
-    if (!g_enabled.load(std::memory_order_relaxed) && !g_pass_recording) return;
+    if (!Recording()) return;
+    std::lock_guard lock(g_state_mutex);
     RecordTimer timer;
     CaptureParticles(base, sys);
 }
@@ -1809,7 +1875,8 @@ extern "C" REX_FUNC(DxRnd__DrawRect_82733538) {
     const uint32_t rnd = ctx.r3.u32, rect = ctx.r4.u32, mat = ctx.r5.u32, color = ctx.r7.u32;
     const int32_t shader = ctx.r6.s32;
     __imp__DxRnd__DrawRect_82733538(ctx, base);
-    if (!g_enabled.load(std::memory_order_relaxed) && !g_pass_recording) return;
+    if (!Recording()) return;
+    std::lock_guard lock(g_state_mutex);
     RecordTimer timer;
     CaptureRect(base, rnd, rect, mat, shader, color);
 }
@@ -1832,6 +1899,7 @@ extern "C" REX_FUNC(rex_sub_82733D20) {
     const uint32_t tex = ctx.r3.u32;
     __imp__rex_sub_82733D20(ctx, base);
     if (!Active()) return;
+    std::lock_guard lock(g_state_mutex);
     BeginPass(Guest{base}, tex);
 }
 
@@ -1844,9 +1912,13 @@ extern "C" REX_FUNC(rex_sub_82735490) {
         __imp__rex_sub_82735490(ctx, base);
         return;
     }
-    State& s = S();
-    if (s.open.tex == tex) s.open.in_finish = true;
+    {
+        std::lock_guard lock(g_state_mutex);
+        State& s = S();
+        if (s.open.tex == tex) s.open.in_finish = true;
+    }
     __imp__rex_sub_82735490(ctx, base);
+    std::lock_guard lock(g_state_mutex);
     RecordTimer timer;
     EndPass(tex);
 }
@@ -1856,7 +1928,9 @@ extern "C" REX_FUNC(rex_sub_82735490) {
 // is dropped
 extern "C" REX_FUNC(DxRnd__MakeDrawTarget) {
     __imp__DxRnd__MakeDrawTarget(ctx, base);
-    if (Active() && S().open.tex) DropOpenPass(S());
+    if (!Active()) return;
+    std::lock_guard lock(g_state_mutex);
+    if (S().open.tex) DropOpenPass(S());
 }
 
 // DxCam::Select (0x8273DE28, unnamed): RndCam::Select, then its target or the
@@ -1864,18 +1938,28 @@ extern "C" REX_FUNC(DxRnd__MakeDrawTarget) {
 extern "C" REX_FUNC(rex_sub_8273DE28) {
     const uint32_t cam = ctx.r3.u32;
     __imp__rex_sub_8273DE28(ctx, base);
-    if (Active()) CameraSelected(Guest{base}, cam);
+    if (!Active()) return;
+    std::lock_guard lock(g_state_mutex);
+    CameraSelected(Guest{base}, cam);
 }
 
 // RndTex::~RndTex, and DxTex::SyncBitmap (0x82734A28, unnamed), which makes
-// the D3D texture again: what the texture's passes made is gone
+// the D3D texture again: what the texture's passes made is gone. On whatever
+// thread lets go of it: at boot the main thread's loading, while the splash
+// thread draws.
 extern "C" REX_FUNC(RndTex__dt) {
-    if (Active()) ForgetTexture(ctx.r3.u32);
+    if (Active()) {
+        std::lock_guard lock(g_state_mutex);
+        ForgetTexture(ctx.r3.u32);
+    }
     __imp__RndTex__dt(ctx, base);
 }
 
 extern "C" REX_FUNC(rex_sub_82734A28) {
-    if (Active()) ForgetTexture(ctx.r3.u32);
+    if (Active()) {
+        std::lock_guard lock(g_state_mutex);
+        ForgetTexture(ctx.r3.u32);
+    }
     __imp__rex_sub_82734A28(ctx, base);
 }
 
@@ -1885,6 +1969,7 @@ extern "C" REX_FUNC(rex_sub_82734A28) {
 extern "C" REX_FUNC(DxRnd__DoPostProcess) {
     SCOPE_profile_cpu_f("RB3 DxRnd::DoPostProcess");
     if (g_enabled.load(std::memory_order_relaxed)) {
+        std::lock_guard lock(g_state_mutex);
         FrameCapture& fc = *S().building;
         if (fc.post_boundary == FrameCapture::kNoPost) {
             fc.post_boundary = uint32_t(fc.draws.size());
@@ -1900,6 +1985,7 @@ extern "C" REX_FUNC(DxRnd__DoPostProcess) {
 // draw
 extern "C" REX_FUNC(DxRnd__FinishPostProcess) {
     if (g_enabled.load(std::memory_order_relaxed)) {
+        std::lock_guard lock(g_state_mutex);
         FrameCapture& fc = *S().building;
         if (!fc.post_consts.valid) {
             const Guest g{base};
@@ -1919,6 +2005,7 @@ extern "C" REX_FUNC(NgDOFProc__DoPost) {
     const uint32_t dof = ctx.r3.u32 - kPostProcessor;
     __imp__NgDOFProc__DoPost(ctx, base);
     if (!g_enabled.load(std::memory_order_relaxed)) return;
+    std::lock_guard lock(g_state_mutex);
     PostConsts& pc = S().building->post_consts;
     const Guest g{base};
     if (pc.dof_survey || !g.U8(dof + kDOF_Enabled)) return;
@@ -1931,6 +2018,7 @@ extern "C" REX_FUNC(NgDOFProc__DoPost) {
 extern "C" REX_FUNC(Bloom_Blur) {
     __imp__Bloom_Blur(ctx, base);
     if (!g_enabled.load(std::memory_order_relaxed)) return;
+    std::lock_guard lock(g_state_mutex);
     PostConsts& pc = S().building->post_consts;
     if (pc.bloom_survey) return;
     pc.bloom_survey = 1;
@@ -1941,5 +2029,12 @@ extern "C" REX_FUNC(DxRnd__Present) {
     SCOPE_profile_cpu_f("RB3 DxRnd::Present");
     __imp__DxRnd__Present(ctx, base);
     TrackSettings();
-    FinishFrame();
+    std::shared_ptr<const FrameCapture> done;
+    {
+        std::lock_guard lock(g_state_mutex);
+        done = FinishFrame();
+    }
+    // held without the lock, which a texture let go of on another thread
+    // meanwhile takes
+    if (done) HoldIfRequested(done);
 }

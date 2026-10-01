@@ -9,7 +9,8 @@
 # draws those passes itself.
 #   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true
 # Each capture's reply says proc_cmds 2 and composed true, with the world
-# frame it has (world_frame, the game frame before its own).
+# frame it has (world_frame, the game frame before its own); `composed` makes
+# the capture fail if it isn't (it fell back to another frame: held_fallback).
 
 # Deluxe can't save its settings to band3's read-only game folder: I Understand
 wait screen=dx_settings_error_screen timeout=30s
@@ -53,10 +54,10 @@ wait frames=30
 press green
 wait in_game timeout=60s
 expect song=20thcenturyboy
-capture render-song-eo-start
+capture render-song-eo-start composed
 wait frames=600 timeout=60s
-capture render-song-eo-10s
+capture render-song-eo-10s composed
 wait frames=900 timeout=60s
-capture render-song-eo-25s
+capture render-song-eo-25s composed
 wait frames=900 timeout=60s
-capture render-song-eo-40s
+capture render-song-eo-40s composed

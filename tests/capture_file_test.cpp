@@ -228,6 +228,8 @@ FrameCapture MakePassFrame() {
     fc.proc_cmds = 7;
     fc.rt_sampled = 3;
     fc.rt_missing = 1;
+    fc.rt_filtered = 1;
+    fc.rt_filtered_keys = {uint64_t(0x20D00000) << 32 | 12};
     fc.passes_carried = 1;
     fc.passes_own = 2;
     auto geom = MakeTriangle();
@@ -321,6 +323,8 @@ TEST_CASE("a capture keeps its passes and which render target version each draw 
     CHECK(back->proc_cmds == 7);
     CHECK(back->rt_sampled == 3);
     CHECK(back->rt_missing == 1);
+    CHECK(back->rt_filtered == 1);
+    CHECK(back->rt_filtered_keys == std::vector<uint64_t>{uint64_t(0x20D00000) << 32 | 12});
     CHECK(back->passes_carried == 1);
     CHECK(back->passes_own == 2);
 
@@ -430,8 +434,45 @@ TEST_CASE("a capture says whose world it has, and one from before that says its 
     CHECK(back->composed == 1);
     CHECK(back->world_frame == 2399);
 
-    // FRAM as builds before composition wrote it: a count fewer, and no
-    // world frame after them
+    // FRAM as builds before composition wrote it: two counts fewer (composed
+    // and rt_filtered), and no world frame or filtered render targets (one)
+    // after them
+    std::vector<uint8_t> data = ReadAll(path);
+    const size_t fram = FindSection(data, "FRAM");
+    REQUIRE(fram != std::string::npos);
+    uint64_t size;
+    std::memcpy(&size, data.data() + fram + 8, 8);
+    const size_t counts_at = fram + 16 + 8 + 8 + 4 + 4;
+    uint32_t counts;
+    std::memcpy(&counts, data.data() + counts_at, 4);
+    counts -= 2;
+    std::memcpy(data.data() + counts_at, &counts, 4);
+    const size_t end = fram + 16 + size_t(size);
+    const size_t cut = 4 + 4 + 8 + 4 + 8;
+    data.erase(data.begin() + std::ptrdiff_t(end - cut), data.begin() + std::ptrdiff_t(end));
+    size -= cut;
+    std::memcpy(data.data() + fram + 8, &size, 8);
+    WriteAll(path, data);
+    back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    CHECK(back->composed == 0);
+    CHECK(back->world_frame == 2400);
+    CHECK(back->rt_missing == 1);
+    CHECK(back->rt_filtered == 0);
+    CHECK(back->rt_filtered_keys.empty());
+    CHECK(back->draws.size() == 7);
+}
+
+TEST_CASE("a capture from before filtered render targets has none") {
+    FrameCapture fc = MakePassFrame();
+    fc.composed = 1;
+    fc.world_frame = 2399;
+    const std::string path = TempPath("band3_capture_file_filtered_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+
+    // FRAM as builds before them wrote it: a count fewer (rt_filtered), and
+    // nothing after the world frame
     std::vector<uint8_t> data = ReadAll(path);
     const size_t fram = FindSection(data, "FRAM");
     REQUIRE(fram != std::string::npos);
@@ -443,17 +484,21 @@ TEST_CASE("a capture says whose world it has, and one from before that says its 
     counts--;
     std::memcpy(data.data() + counts_at, &counts, 4);
     const size_t end = fram + 16 + size_t(size);
+    // the keys (a count and one), then the rt_filtered count before the world frame
     data.erase(data.begin() + std::ptrdiff_t(end - 12), data.begin() + std::ptrdiff_t(end));
-    size -= 12;
+    const size_t count_at = end - 12 - 8 - 4;
+    data.erase(data.begin() + std::ptrdiff_t(count_at), data.begin() + std::ptrdiff_t(count_at + 4));
+    size -= 16;
     std::memcpy(data.data() + fram + 8, &size, 8);
     WriteAll(path, data);
-    back = LoadCapture(path);
+    auto back = LoadCapture(path);
     std::remove(path.c_str());
     REQUIRE(back);
-    CHECK(back->composed == 0);
-    CHECK(back->world_frame == 2400);
+    CHECK(back->composed == 1);
+    CHECK(back->world_frame == 2399);
     CHECK(back->rt_missing == 1);
-    CHECK(back->draws.size() == 7);
+    CHECK(back->rt_filtered == 0);
+    CHECK(back->rt_filtered_keys.empty());
 }
 
 TEST_CASE("a capture's geometry loads from a build whose Vertex was smaller") {

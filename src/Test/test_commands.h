@@ -32,12 +32,15 @@ struct CaptureInfo {
     uint32_t skipped_shadow = 0;
     uint32_t skipped_pass = 0;
     // texture passes: the capture's own and those carried in from earlier
-    // frames; render targets its draws sample, those no pass it has made
+    // frames; render targets its draws sample, those made by a pass whose
+    // draws were all left out (rt_filtered: shadow maps, the velocity buffer,
+    // the spotlights' depth volume), those no pass it has made otherwise
     // (rt_missing), and native_view_rt_fallback ("guest" or "none")
     uint32_t passes = 0;
     uint32_t passes_carried = 0;
     uint32_t rt_sampled = 0;
     uint32_t rt_missing = 0;
+    uint32_t rt_filtered = 0;
     std::string rt_fallback;
     // what the frame drew: ProcCounter's proc_cmds (7 everything; with
     // even/odd rendering 1 the world, 2 post-processing; -1 unknown), whether
@@ -47,6 +50,9 @@ struct CaptureInfo {
     bool composed = false;
     uint64_t game_frame = 0;
     uint64_t world_frame = 0;
+    // no frame whose world the game's picture shows came within the frames
+    // the capture waits (CaptureHeldFrame), so it took the last one anyway
+    bool held_fallback = false;
     // the native view's GPU backend drawing the same capture, at the
     // screenshot's size: its PNG, or why there's none
     std::string gpu_path;

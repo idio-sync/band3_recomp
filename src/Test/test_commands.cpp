@@ -367,9 +367,18 @@ std::string Screenshot(TestTarget& target, const std::vector<std::string_view>& 
     return Ok(fields);
 }
 
+// `capture [name] [composed]`: with `composed`, the reply is a failure unless
+// the capture is a post frame composed with the world frame before it
+// (proc_cmds 2), as every one is meant to be with even/odd rendering on; its
+// files are written either way
 std::string Capture(TestTarget& target, const std::vector<std::string_view>& args) {
+    const bool want_composed = args.size() == 3 && args[2] == "composed";
+    if (args.size() > 3 || (args.size() == 3 && !want_composed))
+        return Error(target, "usage: capture [name] [composed]");
+    std::vector<std::string_view> name_args = args;
+    if (want_composed) name_args.pop_back();
     std::string name;
-    if (std::string error = FileNameArg(target, args, name); !error.empty()) return error;
+    if (std::string error = FileNameArg(target, name_args, name); !error.empty()) return error;
     CaptureInfo info;
     if (std::string error = target.Capture(name, info); !error.empty())
         return Error(target, error);
@@ -387,12 +396,20 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
     fields += ",\"passes_carried\":" + std::to_string(info.passes_carried);
     fields += ",\"rt_sampled\":" + std::to_string(info.rt_sampled);
     fields += ",\"rt_missing\":" + std::to_string(info.rt_missing);
+    fields += ",\"rt_filtered\":" + std::to_string(info.rt_filtered);
     fields += ",\"rt_fallback\":";
     AppendJsonString(fields, info.rt_fallback);
     fields += ",\"proc_cmds\":" + std::to_string(info.proc_cmds);
     fields += std::string(",\"composed\":") + (info.composed ? "true" : "false");
     fields += ",\"game_frame\":" + std::to_string(info.game_frame);
     fields += ",\"world_frame\":" + std::to_string(info.world_frame);
+    fields += std::string(",\"held_fallback\":") + (info.held_fallback ? "true" : "false");
+    if (want_composed && !(info.composed && info.proc_cmds == 2)) {
+        return Error(target, "capture " + name + " isn't a post frame composed with the world "
+                                 "before it: proc_cmds " + std::to_string(info.proc_cmds) +
+                                 ", composed " + (info.composed ? "true" : "false") +
+                                 ", held_fallback " + (info.held_fallback ? "true" : "false"));
+    }
     if (!info.gpu_path.empty()) {
         fields += ",\"gpu\":";
         AppendJsonString(fields, info.gpu_path);

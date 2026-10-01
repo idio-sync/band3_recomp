@@ -40,14 +40,15 @@ std::string Describe(const FrameCapture& fc, const std::string& drawn) {
                   "%u multimesh instances, %u particles\n"
                   "textures: %u decoded, %u other formats; cache hits geom %u tex %u\n"
                   "texture passes: %u drawn, %u carried, %u empty, %u unbalanced; render "
-                  "targets sampled %u, missing %u; snapshots %u\n",
+                  "targets sampled %u, missing %u, their pass's draws left out %u; "
+                  "snapshots %u\n",
                   static_cast<unsigned long long>(fc.frame), fc.draws.size(), skinned, verts,
                   tris, fc.cams, fc.skipped_target, fc.skipped_velocity, fc.skipped_shadow,
                   fc.skipped_draw_mode, fc.skipped_no_geom,
                   fc.mutable_meshes, fc.multimesh_instances, fc.particles, fc.textured,
                   fc.untextured_format, fc.geom_cached, fc.tex_cached, fc.passes_own,
                   fc.passes_carried, fc.passes_empty, fc.passes_unbalanced, fc.rt_sampled,
-                  fc.rt_missing, fc.rt_snapshots);
+                  fc.rt_missing, fc.rt_filtered, fc.rt_snapshots);
     std::string s = buf;
     // even/odd rendering: a post frame's capture has the world frame's world
     if (fc.composed) {

@@ -12,7 +12,9 @@
 // and size, so a reader skips what it doesn't know and a struct can grow
 // without every older file going unreadable:
 //   FRAM  frame numbers, post-processing boundary and counts (a counted list),
-//         then the world's frame (a file without it: the frame's own)
+//         then the world's frame (a file without it: the frame's own), then
+//         the render targets rt_filtered counts (a counted list; a file
+//         without it: none)
 //   GEOM  geometry, with the vertex's size: Vertex only ever grows at the end,
 //         so a file with another size keeps the fields both have
 //   TEXS  textures, with render targets' identity; one whose pixels another
@@ -239,6 +241,7 @@ constexpr NamedCount kFrameCounts[] = {
     {&FrameCapture::passes_empty},   {&FrameCapture::rt_sampled},
     {&FrameCapture::rt_missing},     {&FrameCapture::rt_snapshots},
     {&FrameCapture::passes_unbalanced}, {&FrameCapture::composed},
+    {&FrameCapture::rt_filtered},
 };
 
 // B3CAP001 and B3CAP002, after the magic
@@ -386,6 +389,8 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     w.Put<uint32_t>(uint32_t(std::size(kFrameCounts)));
     for (const NamedCount& c : kFrameCounts) w.Put<uint32_t>(fc.*c.field);
     w.Put<uint64_t>(fc.world_frame);
+    w.Put<uint32_t>(uint32_t(fc.rt_filtered_keys.size()));
+    for (uint64_t k : fc.rt_filtered_keys) w.Put<uint64_t>(k);
     w.End(sec);
 
     sec = w.Begin(kSecGeometry, kGeometryVersion);
@@ -551,6 +556,12 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
             }
             fc->world_frame = r.end - r.pos >= sizeof(uint64_t) ? r.Get<uint64_t>()
                                                                  : fc->game_frame;
+            if (r.end - r.pos >= sizeof(uint32_t)) {
+                uint32_t keys;
+                if (!r.Count(keys, sizeof(uint64_t))) return nullptr;
+                fc->rt_filtered_keys.resize(keys);
+                for (uint64_t& k : fc->rt_filtered_keys) k = r.Get<uint64_t>();
+            }
         } else if (id == kSecGeometry) {
             const uint32_t stride = r.Get<uint32_t>();
             uint32_t count;

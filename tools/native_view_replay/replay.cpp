@@ -300,6 +300,12 @@ const char* TexTypeName(uint32_t type) {
     }
 }
 
+// whether a pass was carried in from a frame before the capture's: a
+// composed capture's own are its world frame's as well as its frame's
+bool Carried(const FrameCapture& fc, const Pass& p) {
+    return p.from_frame < (fc.composed ? fc.world_frame : fc.game_frame);
+}
+
 // the passes' numbers in a line, and where post-processing starts
 void PrintPassSummary(const FrameCapture& fc) {
     if (fc.passes.empty()) return;
@@ -307,13 +313,13 @@ void PrintPassSummary(const FrameCapture& fc) {
     for (const Pass& p : fc.passes) {
         if (!p.tex_obj) continue;
         textures++;
-        if (p.from_frame != fc.game_frame) carried++;
+        if (Carried(fc, p)) carried++;
     }
     std::printf("passes: %zu (%zu into textures, %zu of them carried from earlier frames); game "
-                "frame %llu; render targets sampled %u, missing %u; snapshots %u; empty passes "
-                "left out %u, unbalanced %u\n",
+                "frame %llu; render targets sampled %u, missing %u, their pass's draws all left "
+                "out %u; snapshots %u; empty passes left out %u, unbalanced %u\n",
                 fc.passes.size(), textures, carried, (unsigned long long)fc.game_frame,
-                fc.rt_sampled, fc.rt_missing, fc.rt_snapshots, fc.passes_empty,
+                fc.rt_sampled, fc.rt_missing, fc.rt_filtered, fc.rt_snapshots, fc.passes_empty,
                 fc.passes_unbalanced);
     // the render targets draws sample that no pass here made
     std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, size_t>> missing;
@@ -328,9 +334,15 @@ void PrintPassSummary(const FrameCapture& fc) {
             m.second++;
         }
     }
-    for (const auto& [key, m] : missing)
-        std::printf("  no pass for %08X version %u (%s), sampled by %zu draws\n", key.first,
-                    key.second, TexTypeName(m.first), m.second);
+    for (const auto& [key, m] : missing) {
+        const uint64_t k = uint64_t(key.first) << 32 | key.second;
+        const bool left_out = std::find(fc.rt_filtered_keys.begin(), fc.rt_filtered_keys.end(),
+                                        k) != fc.rt_filtered_keys.end();
+        std::printf("  no pass for %08X version %u (%s), sampled by %zu draws%s\n", key.first,
+                    key.second, TexTypeName(m.first), m.second,
+                    left_out ? ": its pass's draws were all left out (draw mode, no geometry)"
+                             : "");
+    }
     if (fc.post_boundary == FrameCapture::kNoPost)
         std::printf("post-processing: none this frame\n");
     else
@@ -451,7 +463,7 @@ void PrintPasses(const FrameCapture& fc) {
                     p.first_draw, end, rects, mips, clear, p.viewport[0], p.viewport[1],
                     p.viewport[2], p.viewport[3], p.cam, p.version,
                     (unsigned long long)p.from_frame,
-                    p.from_frame != fc.game_frame ? " (carried)" : "",
+                    Carried(fc, p) ? " (carried)" : "",
                     p.name.empty() ? "-" : p.name.c_str());
     }
 }
@@ -459,7 +471,8 @@ void PrintPasses(const FrameCapture& fc) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 3) {
+    // an option where the output belongs would be taken for its name
+    if (argc < 3 || std::strncmp(argv[2], "--", 2) == 0) {
         std::fprintf(stderr, "usage: replay <file.cap> <out.png> [options]\n");
         return 2;
     }

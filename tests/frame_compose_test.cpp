@@ -166,9 +166,44 @@ TEST_CASE("render targets sampled are counted by version") {
                 Draw(3, 0, -1, Target(kImpostor, 3)), Draw(4, 0, -1, Target(kImpostor, 4))};
     fc.passes = {MakePass(kImpostor, 0, 1, 3, 1), MakePass(0, 1, 3, 0, 1)};
     uint32_t sampled = 0, missing = 0;
-    CountRenderTargets(fc, sampled, missing);
+    std::vector<uint64_t> filtered;
+    CountRenderTargets(fc, {}, sampled, missing, filtered);
     CHECK(sampled == 2);
     CHECK(missing == 1);
+    CHECK(filtered.empty());
+}
+
+TEST_CASE("a render target whose pass's draws were all left out isn't counted missing") {
+    FrameCapture fc;
+    fc.draws = {Draw(1, 0, -1, Target(kGone, 2)), Draw(2, 0, -1, Target(kGone, 2)),
+                Draw(3, 0, -1, Target(kDof, 5))};
+    fc.passes = {MakePass(0, 0, 3, 0, 1)};
+    uint32_t sampled = 0, missing = 0;
+    std::vector<uint64_t> filtered;
+    // kGone's version 2 was a shadow map's pass; another version of it isn't
+    const std::vector<uint64_t> left_out = {uint64_t(kGone) << 32 | 2, uint64_t(kGone) << 32 | 1};
+    CountRenderTargets(fc, left_out, sampled, missing, filtered);
+    CHECK(sampled == 2);
+    CHECK(missing == 1);
+    CHECK(filtered == std::vector<uint64_t>{uint64_t(kGone) << 32 | 2});
+}
+
+TEST_CASE("a composed frame counts the targets either frame left out as filtered") {
+    FrameCapture world = WorldFrame();
+    FrameCapture post = PostFrame();
+    // the overlay's target nothing made was a pass whose draws were all left
+    // out in the post frame
+    post.rt_filtered_keys = {uint64_t(kGone) << 32 | 2};
+    post.rt_filtered = 1;
+    // and the world frame left one out that the composed frame doesn't sample
+    world.rt_filtered_keys = {uint64_t(kDof) << 32 | 9};
+    world.rt_filtered = 1;
+    auto fc = ComposeFrame(world, post);
+    REQUIRE(fc);
+    CHECK(fc->rt_sampled == 3);
+    CHECK(fc->rt_missing == 0);
+    CHECK(fc->rt_filtered == 1);
+    CHECK(fc->rt_filtered_keys == std::vector<uint64_t>{uint64_t(kGone) << 32 | 2});
 }
 
 TEST_CASE("a render check pairs the game's picture with a frame that shows its world") {
