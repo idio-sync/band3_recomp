@@ -1,7 +1,8 @@
 // Experimental: draws a native view capture (BAND3_NATIVE_VIEW_DUMP) offline.
 //
 //   replay <file.cap> <out.png> [--size WxH] [--cam N] [--per-cam] [--list]
-//                               [--compare <screenshot.png>]
+//                               [--compare <screenshot.png>] [--mesh <hex>]
+//                               [--dump-tex <draw>]
 //                               [--no-tex] [--no-blend] [--transpose]
 //                               [--no-skinned | --only-skinned] [--unskinned]
 //
@@ -78,6 +79,7 @@ int main(int argc, char** argv) {
     RasterOptions o;
     bool transpose = false, per_cam = false, list = false, no_skinned = false, only_skinned = false;
     std::string compare;
+    long mesh_filter = -1, dump_tex = -1;
     long cam_filter = -1;
     for (int i = 3; i < argc; i++) {
         const std::string a = argv[i];
@@ -85,6 +87,8 @@ int main(int argc, char** argv) {
         else if (a == "--per-cam") per_cam = true;
         else if (a == "--list") list = true;
         else if (a == "--compare" && i + 1 < argc) compare = argv[++i];
+        else if (a == "--mesh" && i + 1 < argc) mesh_filter = std::strtol(argv[++i], nullptr, 16);
+        else if (a == "--dump-tex" && i + 1 < argc) dump_tex = std::strtol(argv[++i], nullptr, 0);
         else if (a == "--no-blend") o.blending = false;
         else if (a == "--no-tex") o.textures = false;
         else if (a == "--no-skinned") no_skinned = true;
@@ -144,12 +148,26 @@ int main(int argc, char** argv) {
                     for (int k = 0; k < 2; k++) { lo[k] = std::min(lo[k], c4[k] / c4[3]); hi[k] = std::max(hi[k], c4[k] / c4[3]); }
                 }
             }
-            std::printf("#%3zu mesh %08X v%5zu t%5zu bones %2zu blend %d z %d tex %s%ux%u | local [%.1f %.1f %.1f]..[%.1f %.1f %.1f] | ndc x %.2f..%.2f y %.2f..%.2f front %d | col %.2f %.2f %.2f %.2f\n",
+            std::printf("#%3zu mesh %08X v%5zu t%5zu bones %2zu blend %d z %d cut %d/%d prelit %d tex %s%ux%u fmt %u | local [%.1f %.1f %.1f]..[%.1f %.1f %.1f] | ndc x %.2f..%.2f y %.2f..%.2f front %d | col %.2f %.2f %.2f %.2f\n",
                 i, d.mesh, d.geom->verts.size(), d.geom->indices.size() / 3, d.bones.size(), d.blend, d.z_mode,
-                d.tex ? "" : "-", d.tex ? d.tex->width : 0, d.tex ? d.tex->height : 0,
+                int(d.alpha_cut), d.alpha_threshold, int(d.prelit),
+                d.tex ? "" : "-", d.tex ? d.tex->width : 0, d.tex ? d.tex->height : 0, d.tex ? d.tex->format : 0,
                 mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], lo[0], hi[0], lo[1], hi[1], front,
                 d.color[0], d.color[1], d.color[2], d.color[3]);
         }
+    }
+
+    if (dump_tex >= 0) {
+        if (size_t(dump_tex) >= fc->draws.size() || !fc->draws[dump_tex].tex) {
+            std::fprintf(stderr, "draw %ld has no texture\n", dump_tex);
+            return 1;
+        }
+        const Texture& t = *fc->draws[dump_tex].tex;
+        std::vector<uint32_t> px = t.rgba;
+        for (uint32_t& p : px) p |= 0xff000000u;  // alpha off, to see the colour
+        WritePng(argv[2], px, t.width, t.height);
+        std::printf("%s: %ux%u format %u\n", argv[2], t.width, t.height, t.format);
+        return 0;
     }
 
     auto render = [&](const std::string& path, long only_cam) {
@@ -158,6 +176,7 @@ int main(int argc, char** argv) {
         for (const DrawItem& d : fc->draws) {
             if (only_cam >= 0 && d.cam != uint32_t(only_cam)) continue;
             if (no_skinned && !d.bones.empty()) continue;
+            if (mesh_filter >= 0 && d.mesh != uint32_t(mesh_filter)) continue;
             if (only_skinned && d.bones.empty()) continue;
             DrawItem c = d;
             if (transpose) c.view_proj = Transpose(c.view_proj);

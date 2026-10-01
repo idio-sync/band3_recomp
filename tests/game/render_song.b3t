@@ -1,7 +1,10 @@
 # Plays a song on autoplay and pairs the game's frame with the native view's at
 # points through it, for render checks:
 #   out/native_view_replay.exe screenshots/<name>.cap side.png --compare screenshots/<name>.png
-# Starts where boot.b3t leaves Rock Band 3 Deluxe (on a fresh profile).
+# Starts where boot.b3t leaves Rock Band 3 Deluxe (on a fresh profile). Launch
+# with full readback, or the textures RB3 renders at runtime (characters' outfits,
+# the crowd) never reach guest memory and the native view reads garbage:
+#   python tools/band3ctl.py launch --fresh -- --readback_resolve=full
 
 # Deluxe can't save its settings to band3's read-only game folder: I Understand
 wait screen=dx_settings_error_screen timeout=30s
@@ -18,6 +21,12 @@ press red
 wait screen=main_hub_screen timeout=30s
 wait frames=60
 set autoplay true
+# the same venue every run, so captures compare across runs
+set forced_venue arena_04
+# every frame draws everything: otherwise RB3 draws a second camera (the
+# arena's video screens) to the back buffer on alternate frames and resolves
+# it to a texture, which the native view can't tell from the main view yet
+set disable_even_odd_rendering true
 # Play Now, Quickplay, Choose Songs
 press green
 wait frames=60
