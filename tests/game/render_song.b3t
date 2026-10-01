@@ -5,6 +5,11 @@
 # with full readback, or the textures RB3 renders at runtime (characters' outfits,
 # the crowd) never reach guest memory and the native view reads garbage:
 #   python tools/band3ctl.py launch --fresh -- --readback_resolve=full
+# For the passes RB3 draws into those textures in the capture too (outfits are
+# composed once, in the main menu, so recording has to be on from launch), add
+# --native_view_record_targets=true; without readback, that alone:
+#   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true --readback_resolve=full
+#   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true
 
 # Deluxe can't save its settings to band3's read-only game folder: I Understand
 wait screen=dx_settings_error_screen timeout=30s

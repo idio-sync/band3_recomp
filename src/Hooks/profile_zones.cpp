@@ -67,8 +67,8 @@ BAND3_PROFILE_ZONE(HttpGet__Poll, "RB3 HttpGet::Poll")
 // drawing stages
 BAND3_PROFILE_ZONE(DxRnd__BeginDrawing, "RB3 DxRnd::BeginDrawing")
 BAND3_PROFILE_ZONE(DxRnd__DoWorldEnd, "RB3 DxRnd::DoWorldEnd")
-BAND3_PROFILE_ZONE(DxRnd__DoPostProcess, "RB3 DxRnd::DoPostProcess")
 BAND3_PROFILE_ZONE(RndPostProc__DoPost, "RB3 RndPostProc::DoPost")
-// DxRnd::Present is zoned in src/Render/scene_capture.cpp, which hooks it
+// DxRnd::DoPostProcess and DxRnd::Present are zoned in src/Render/scene_capture.cpp,
+// which hooks them
 
 #endif

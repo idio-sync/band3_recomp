@@ -9,11 +9,16 @@
 //                               [--legacy-light | --no-light] [--pick X,Y]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
-// and inside the frustum with the matrix as captured and transposed. --list
-// prints every draw: its mesh, sizes, material and where it lands on screen,
-// and what its shader was given (option word, shade, ambient c1, the box map's
-// sum, point lights in the option word / with a colour); --shade prints all of
-// one draw's ShadeState. A capture with shades also gets a summary of them.
+// and inside the frustum with the matrix as captured and transposed (the back
+// buffer's mesh draws, which are what's drawn). --list prints the passes (the
+// back buffer's and those into textures: target, name, size, clear, draws,
+// version, the frame it was drawn in) with where post-processing starts, then
+// every draw: its mesh, sizes, material and where it lands on screen, and what
+// its shader was given (option word, shade, ambient c1, the box map's sum,
+// point lights in the option word / with a colour); a draw into a texture or a
+// DrawRect quad says so. --shade prints all of one draw's ShadeState. A
+// capture with shades also gets a summary of them. Draws into textures and
+// DrawRect quads aren't drawn yet.
 // --compare draws the frame at the size of a harness `capture` screenshot and
 // writes the two side by side (game left, native right), with their mean
 // difference; with --image the native side is that PNG instead (a harness
@@ -258,6 +263,83 @@ void PrintShade(const FrameCapture& fc, size_t draw) {
     }
 }
 
+const char* TexTypeName(uint32_t type) {
+    switch (type) {
+        case 0x2: return "rendered";
+        case 0x22: return "rendered-noz";
+        case 0x42: return "shadow-map";
+        case 0xA2: return "depth-volume";
+        case 0x122: return "density";
+        default: return "other";
+    }
+}
+
+// the passes' numbers in a line, and where post-processing starts
+void PrintPassSummary(const FrameCapture& fc) {
+    if (fc.passes.empty()) return;
+    size_t textures = 0, carried = 0;
+    for (const Pass& p : fc.passes) {
+        if (!p.tex_obj) continue;
+        textures++;
+        if (p.from_frame != fc.game_frame) carried++;
+    }
+    std::printf("passes: %zu (%zu into textures, %zu of them carried from earlier frames); game "
+                "frame %llu; render targets sampled %u, missing %u; snapshots %u; empty passes "
+                "left out %u, unbalanced %u\n",
+                fc.passes.size(), textures, carried, (unsigned long long)fc.game_frame,
+                fc.rt_sampled, fc.rt_missing, fc.rt_snapshots, fc.passes_empty,
+                fc.passes_unbalanced);
+    // the render targets draws sample that no pass here made
+    std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, size_t>> missing;
+    for (const DrawItem& d : fc.draws) {
+        if (!d.tex || !d.tex->tex_obj || !IsPassTargetType(d.tex->tex_type)) continue;
+        bool made = false;
+        for (const Pass& p : fc.passes)
+            made |= p.tex_obj == d.tex->tex_obj && p.version == d.tex->version;
+        if (!made) {
+            auto& m = missing[{d.tex->tex_obj, d.tex->version}];
+            m.first = d.tex->tex_type;
+            m.second++;
+        }
+    }
+    for (const auto& [key, m] : missing)
+        std::printf("  no pass for %08X version %u (%s), sampled by %zu draws\n", key.first,
+                    key.second, TexTypeName(m.first), m.second);
+    if (fc.post_boundary == FrameCapture::kNoPost)
+        std::printf("post-processing: none this frame\n");
+    else
+        std::printf("post-processing: from draw %u, proc_cmds %u\n", fc.post_boundary,
+                    fc.proc_cmds);
+}
+
+void PrintPasses(const FrameCapture& fc) {
+    for (size_t i = 0; i < fc.passes.size(); i++) {
+        const Pass& p = fc.passes[i];
+        const uint32_t end = p.first_draw + p.draw_count;
+        if (!p.tex_obj) {
+            std::printf("pass %3zu back buffer draws %u..%u\n", i, p.first_draw, end);
+            continue;
+        }
+        uint32_t rects = 0, mips = 0;
+        for (uint32_t d = p.first_draw; d < end && d < fc.draws.size(); d++) {
+            if (fc.draws[d].rect_shader >= 0) rects++;
+            if (fc.draws[d].mip_level) mips++;
+        }
+        char clear[64] = "no clear";
+        if (p.clear_flags)
+            std::snprintf(clear, sizeof(clear), "clear %02X to %08X z %.0f", p.clear_flags,
+                          p.clear_color, p.clear_z);
+        std::printf("pass %3zu texture %08X %s %ux%u mips %u, draws %u..%u (%u rects, %u mip), "
+                    "%s, viewport %.0f,%.0f %.0fx%.0f, cam %08X, version %u, frame %llu%s: %s\n",
+                    i, p.tex_obj, TexTypeName(p.tex_type), p.width, p.height, p.num_mips,
+                    p.first_draw, end, rects, mips, clear, p.viewport[0], p.viewport[1],
+                    p.viewport[2], p.viewport[3], p.cam, p.version,
+                    (unsigned long long)p.from_frame,
+                    p.from_frame != fc.game_frame ? " (carried)" : "",
+                    p.name.empty() ? "-" : p.name.c_str());
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -302,7 +384,10 @@ int main(int argc, char** argv) {
     // per-camera diagnostics, both matrix orders
     std::map<uint32_t, CamStats> cams;
     std::vector<uint32_t> order;
+    size_t drawn = 0;
     for (const DrawItem& d : fc->draws) {
+        if (!DrawnToBackBuffer(d)) continue;
+        drawn++;
         auto [it, fresh] = cams.try_emplace(d.cam);
         if (fresh) order.push_back(d.cam);
         CamStats& cs = it->second;
@@ -322,8 +407,10 @@ int main(int argc, char** argv) {
             }
         }
     }
-    std::printf("frame %llu, %zu draws, %zu cameras\n", (unsigned long long)fc->frame,
-                fc->draws.size(), cams.size());
+    std::printf("frame %llu, %zu draws (%zu of them meshes to the back buffer), %zu cameras\n",
+                (unsigned long long)fc->frame, fc->draws.size(), drawn, cams.size());
+    PrintPassSummary(*fc);
+    if (list) PrintPasses(*fc);
     for (uint32_t cam : order) {
         const CamStats& cs = cams[cam];
         std::printf("  cam 0x%08X: %d draws, %d sampled verts | as captured: %d front %d inside"
@@ -386,6 +473,19 @@ int main(int argc, char** argv) {
                     for (int k = 0; k < 2; k++) { lo[k] = std::min(lo[k], c4[k] / c4[3]); hi[k] = std::max(hi[k], c4[k] / c4[3]); }
                 }
             }
+            if (d.target || d.rect_shader >= 0) {
+                std::printf("      ");
+                if (d.target) std::printf("into %08X ", d.target);
+                if (d.rect_shader >= 0)
+                    std::printf("rect shader %d [%.1f %.1f %.1f %.1f] ", d.rect_shader, d.rect[0],
+                                d.rect[1], d.rect[2], d.rect[3]);
+                if (d.mip_level) std::printf("mip %d ", d.mip_level);
+                std::printf("\n");
+            }
+            if (d.tex && d.tex->tex_obj)
+                std::printf("      samples render target %08X type 0x%X version %u%s\n",
+                            d.tex->tex_obj, d.tex->tex_type, d.tex->version,
+                            d.tex->rgba.empty() ? " (no pixels)" : " (guest pixels)");
             std::printf("#%3zu mesh %08X v%5zu t%5zu bones %2zu blend %d z %d cut %d/%d prelit %d tex %s%ux%u fmt %u | local [%.1f %.1f %.1f]..[%.1f %.1f %.1f] | ndc x %.2f..%.2f y %.2f..%.2f front %d | col %.2f %.2f %.2f %.2f\n",
                 i, d.mesh, d.geom->verts.size(), d.geom->indices.size() / 3, d.bones.size(), d.blend, d.z_mode,
                 int(d.alpha_cut), d.alpha_threshold, int(d.prelit),
@@ -409,6 +509,11 @@ int main(int argc, char** argv) {
             return 1;
         }
         const Texture& t = *fc->draws[dump_tex].tex;
+        if (t.rgba.empty()) {
+            std::fprintf(stderr, "draw %ld samples render target %08X version %u, kept without "
+                         "pixels\n", dump_tex, t.tex_obj, t.version);
+            return 1;
+        }
         std::vector<uint32_t> px = t.rgba;
         for (uint32_t& p : px) p |= 0xff000000u;  // alpha off, to see the colour
         WritePng(argv[2], px, t.width, t.height);

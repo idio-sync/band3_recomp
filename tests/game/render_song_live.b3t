@@ -7,6 +7,9 @@
 #   python tools/band3ctl.py launch --fresh -- --readback_resolve=full
 #   python tools/band3ctl.py run tests/game/boot.b3t
 #   python tools/band3ctl.py run tests/game/render_song_live.b3t
+# Add --native_view_record_targets=true to the launch for the texture passes
+# too (render_song.b3t says why); `native_view stats` then shows what
+# recording them costs while the view is off (rt_recording).
 
 # Deluxe can't save its settings to band3's read-only game folder: I Understand
 wait screen=dx_settings_error_screen timeout=30s

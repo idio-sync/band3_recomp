@@ -775,7 +775,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     uint32_t pool_vert_count = 0, pool_index_count = 0;
     for (size_t d = 0; d < frame.draws.size(); d++) {
         const DrawItem& it = frame.draws[d];
-        if (!Drawable(it)) continue;
+        if (!DrawnToBackBuffer(it) || !Drawable(it)) continue;
         Mesh& m = meshes[it.geom.get()];
         if (!m.keep) {
             m.keep = it.geom;
@@ -996,6 +996,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     uint32_t last_cam = 0;
     for (size_t d = 0; d < frame.draws.size(); d++) {
         const DrawItem& it = frame.draws[d];
+        if (!DrawnToBackBuffer(it)) continue;
         if (o.clear_depth_per_camera && it.cam != last_cam &&
             std::find(cams_seen.begin(), cams_seen.end(), it.cam) == cams_seen.end()) {
             cams_seen.push_back(it.cam);

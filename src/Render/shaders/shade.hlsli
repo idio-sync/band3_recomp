@@ -8,11 +8,11 @@
 //
 // The maths is out/research/m2_shader_ucode.md's, which read it from the
 // game's shader microcode and checked it by running them; its Python models
-// (out/research/m2_shaders/tools: fam3.py standard, skin2.py skin, hair3.py
-// hair) are the reference, and tests/shade_model_test.cpp checks this against
-// them. Left out: normal maps (the capture has no tangents), the environment
-// cube (not decoded), the shadow buffer (k_24_8; read as lit), the projected
-// light and the hair's strand highlight (it needs the tangent).
+// (tools/shaders/research: fam3.py standard, skin2.py skin, hair3.py hair) are
+// the reference, and tests/shade_model_test.cpp checks this against them.
+// Left out: normal maps (the capture has no tangents), the environment cube
+// (not decoded), the shadow buffer (k_24_8; read as lit), the projected light
+// and the hair's strand highlight (it needs the tangent).
 
 float3 Xyz(float4 v) { return float3(v.x, v.y, v.z); }
 

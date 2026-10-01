@@ -383,6 +383,12 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
     fields += ",\"draws\":" + std::to_string(info.draws);
     fields += ",\"skipped_shadow\":" + std::to_string(info.skipped_shadow);
     fields += ",\"skipped_pass\":" + std::to_string(info.skipped_pass);
+    fields += ",\"passes\":" + std::to_string(info.passes);
+    fields += ",\"passes_carried\":" + std::to_string(info.passes_carried);
+    fields += ",\"rt_sampled\":" + std::to_string(info.rt_sampled);
+    fields += ",\"rt_missing\":" + std::to_string(info.rt_missing);
+    fields += ",\"rt_fallback\":";
+    AppendJsonString(fields, info.rt_fallback);
     if (!info.gpu_path.empty()) {
         fields += ",\"gpu\":";
         AppendJsonString(fields, info.gpu_path);
@@ -435,6 +441,14 @@ std::string NativeViewJson(const NativeViewStats& s) {
     out += ",\"skipped_busy\":" + std::to_string(s.skipped_busy);
     out += ",\"ms\":" + Distribution(s.frame_ms);
     out += ",\"wait_ms\":" + Distribution(s.wait_ms);
+    std::snprintf(buf, sizeof(buf),
+                  ",\"rt_recording\":{\"on\":%s,\"passes\":%llu,\"recorded\":%llu,",
+                  s.rt_on ? "true" : "false", static_cast<unsigned long long>(s.rt_passes),
+                  static_cast<unsigned long long>(s.rt_recorded));
+    out += buf;
+    std::snprintf(buf, sizeof(buf), "\"draws\":%llu,\"ms\":%.2f}",
+                  static_cast<unsigned long long>(s.rt_draws), s.rt_ms);
+    out += buf;
     out += '}';
     return out;
 }

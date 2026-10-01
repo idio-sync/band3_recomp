@@ -31,6 +31,14 @@ struct CaptureInfo {
     // shadow casters, and the others (velocity and the rest)
     uint32_t skipped_shadow = 0;
     uint32_t skipped_pass = 0;
+    // texture passes: the capture's own and those carried in from earlier
+    // frames; render targets its draws sample, those no pass it has made
+    // (rt_missing), and native_view_rt_fallback ("guest" or "none")
+    uint32_t passes = 0;
+    uint32_t passes_carried = 0;
+    uint32_t rt_sampled = 0;
+    uint32_t rt_missing = 0;
+    std::string rt_fallback;
     // the native view's GPU backend drawing the same capture, at the
     // screenshot's size: its PNG, or why there's none
     std::string gpu_path;
@@ -59,6 +67,14 @@ struct NativeViewStats {
     // having the picture
     std::vector<double> frame_ms;
     std::vector<double> wait_ms;
+    // the texture passes recorded while capture was off, in the same time:
+    // whether that's on (native_view_record_targets), passes the game drew,
+    // those recorded, their draws, and the game thread's time recording them
+    bool rt_on = false;
+    uint64_t rt_passes = 0;
+    uint64_t rt_recorded = 0;
+    uint64_t rt_draws = 0;
+    double rt_ms = 0;
 };
 
 class TestTarget {

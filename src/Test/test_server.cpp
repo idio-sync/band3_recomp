@@ -159,6 +159,14 @@ public:
         out.draws = uint32_t(frame->draws.size());
         out.skipped_shadow = frame->skipped_shadow;
         out.skipped_pass = frame->skipped_velocity + frame->skipped_draw_mode;
+        uint32_t texture_passes = 0;
+        for (const render::Pass& p : frame->passes)
+            if (p.tex_obj) texture_passes++;
+        out.passes = texture_passes;
+        out.passes_carried = frame->passes_carried;
+        out.rt_sampled = frame->rt_sampled;
+        out.rt_missing = frame->rt_missing;
+        out.rt_fallback = render::RtFallbackGuest() ? "guest" : "none";
         GpuCapture(*frame, file, out);
         return {};
     }
@@ -228,9 +236,15 @@ public:
             out.frame_ms = std::move(live.ms);
             out.wait_ms = std::move(live.wait_ms);
         }
+        const render::PassRecordingStats rec = render::GetPassRecordingStats();
         std::lock_guard lock(measure_mutex_);
         out.seconds = std::chrono::duration<double>(Clock::now() - measure_start_).count();
         out.game_frames = GameState::Get().Snapshot().frame - measure_frame_;
+        out.rt_on = rec.on;
+        out.rt_passes = rec.passes - measure_rec_.passes;
+        out.rt_recorded = rec.passes_recorded - measure_rec_.passes_recorded;
+        out.rt_draws = rec.draws_recorded - measure_rec_.draws_recorded;
+        out.rt_ms = rec.ms - measure_rec_.ms;
         return out;
     }
 
@@ -311,9 +325,11 @@ private:
     // the game's frame rate is measured from the last native_view on or off
     void StartMeasuring() {
         const uint64_t frame = GameState::Get().Snapshot().frame;
+        const render::PassRecordingStats rec = render::GetPassRecordingStats();
         std::lock_guard lock(measure_mutex_);
         measure_start_ = Clock::now();
         measure_frame_ = frame;
+        measure_rec_ = rec;
     }
 
     rex::Runtime* runtime_;
@@ -323,6 +339,7 @@ private:
     std::mutex measure_mutex_;
     Clock::time_point measure_start_ = Clock::now();
     uint64_t measure_frame_ = 0;
+    render::PassRecordingStats measure_rec_;
 };
 
 bool SendAll(socket_t s, const std::string& data) {

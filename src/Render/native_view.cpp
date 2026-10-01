@@ -32,18 +32,22 @@ std::string Describe(const FrameCapture& fc, const std::string& drawn) {
         verts += uint32_t(d.geom->verts.size());
         tris += uint32_t(d.geom->indices.size() / 3);
     }
-    char buf[640];
+    char buf[1024];
     std::snprintf(buf, sizeof(buf),
                   "frame %llu: %zu draws (%u skinned, %u verts, %u tris) from %u cameras\n"
                   "skipped: %u render-target, %u velocity, %u shadow, %u other pass, "
                   "%u no geometry; %u mutable\n"
                   "%u multimesh instances, %u particles\n"
-                  "textures: %u decoded, %u other formats; cache hits geom %u tex %u\n",
+                  "textures: %u decoded, %u other formats; cache hits geom %u tex %u\n"
+                  "texture passes: %u drawn, %u carried, %u empty, %u unbalanced; render "
+                  "targets sampled %u, missing %u; snapshots %u\n",
                   static_cast<unsigned long long>(fc.frame), fc.draws.size(), skinned, verts,
                   tris, fc.cams, fc.skipped_target, fc.skipped_velocity, fc.skipped_shadow,
                   fc.skipped_draw_mode, fc.skipped_no_geom,
                   fc.mutable_meshes, fc.multimesh_instances, fc.particles, fc.textured,
-                  fc.untextured_format, fc.geom_cached, fc.tex_cached);
+                  fc.untextured_format, fc.geom_cached, fc.tex_cached, fc.passes_own,
+                  fc.passes_carried, fc.passes_empty, fc.passes_unbalanced, fc.rt_sampled,
+                  fc.rt_missing, fc.rt_snapshots);
     std::string s = buf + drawn;
     for (auto& [k, n] : blends) s += "  " + k + ": " + std::to_string(n) + "\n";
     return s;

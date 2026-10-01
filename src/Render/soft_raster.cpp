@@ -225,7 +225,9 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     const bool skinned = o.skinning && !it.bones.empty();
     DrawState ds;
     ds.index = index;
-    ds.tex = o.textures && it.tex ? it.tex.get() : nullptr;
+    // a render target kept without pixels (native_view_rt_fallback none)
+    // draws untextured, as one in a format that isn't decoded does
+    ds.tex = o.textures && it.tex && !it.tex->rgba.empty() ? it.tex.get() : nullptr;
     shade::PackShade(it, state, o, ds.tex != nullptr, ds.shade);
     ds.spec_map = ds.shade.flags.x & shade::kShadeSpecMap ? state->maps[kMapSpecular].get() : nullptr;
     ds.glow = ds.shade.flags.x & shade::kShadeGlow ? state->maps[kMapGlow].get() : nullptr;
@@ -300,6 +302,7 @@ RasterStats Rasterize(const FrameCapture& frame, const RasterOptions& o,
     uint32_t last_cam = 0;
     for (size_t i = 0; i < frame.draws.size(); i++) {
         const DrawItem& it = frame.draws[i];
+        if (!DrawnToBackBuffer(it)) continue;
         if (o.clear_depth_per_camera && it.cam != last_cam && cams_seen.insert(it.cam).second)
             std::fill(depth.begin(), depth.end(), 0.0f);
         last_cam = it.cam;

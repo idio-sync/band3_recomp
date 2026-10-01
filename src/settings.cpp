@@ -237,6 +237,19 @@ REXCVAR_DEFINE_STRING(native_view_backend, "gpu", "Band3/Debug",
     "rasterizer. The GPU falls back to the CPU when it can't start")
     .allowed({"cpu", "gpu"});
 
+REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Debug",
+    "Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, "
+    "for the native view (experimental), even while it's off: some are drawn once, in the "
+    "main menu, and a later capture needs them. Costs a little game-thread time while "
+    "characters load; turn it on at launch (--native_view_record_targets=true)");
+
+REXCVAR_DEFINE_STRING(native_view_rt_fallback, "guest", "Band3/Debug",
+    "What the native view's capture keeps of a texture RB3 draws at runtime (outfits, the "
+    "crowd, blurs): guest also decodes what guest memory holds, right only with "
+    "--readback_resolve=full; none keeps only which texture and version it is, for the "
+    "texture passes the capture records")
+    .allowed({"guest", "none"});
+
 namespace band3::settings {
 
 namespace {

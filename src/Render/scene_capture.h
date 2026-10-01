@@ -4,15 +4,29 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
-// Experimental: records what RB3 draws to the back buffer each frame, read
-// straight out of guest memory, so the native view (native_view.cpp) can draw
-// it without the emulated GPU.
+// Experimental: records what RB3 draws each frame, read straight out of guest
+// memory, so the native view (native_view.cpp) can draw it without the
+// emulated GPU: the back buffer's draws, and the passes RB3 renders into
+// textures (outfit composites, crowd impostors, blurs and the rest) between
+// DxTex::MakeDrawTarget and FinishDrawTarget, in the order it drew them.
+//
+// With native_view_record_targets (off by default), texture passes are
+// recorded even while capture is off, cheaply: RB3 makes some once (a band's
+// outfits, in the main menu) and samples them for the rest of the session, so
+// each texture's last pass is kept and a capture that samples it without
+// drawing it again carries a copy (Pass::from_frame). Without it, a capture
+// has only the passes drawn while capture is on, and counts the rest it
+// samples as missing (FrameCapture::rt_missing); the hooks then cost an
+// early-out each.
 //
 // Offsets are rb3-xenon's (src/system/rndobj, src/system/rnddx9), checked
 // against the recompiled DxMesh::DrawShowing, DxMesh::OnSync and
-// DxMesh::SetTransforms.
+// DxMesh::SetTransforms; the texture passes' against DxTex::MakeDrawTarget,
+// FinishDrawTarget, DxCam::Select and DxRnd::DrawRect
+// (out/research/m3_render_targets.md, m3_survey.md).
 
 namespace band3::render {
 
@@ -35,11 +49,30 @@ struct Geometry {
     std::vector<uint16_t> indices;  // triangle list
 };
 
+// RndTex::Type (tex+0x48) values that make a texture's pixels something RB3
+// draws at runtime rather than loads: kRendered and what's built on it
+// (0x22 NoZ, 0x42 shadow map, 0xA2, 0x122), back-buffer snapshots (8, 0x18)
+// and device textures (0x1000, DxRnd's pre and post buffers)
+inline bool IsRenderedType(uint32_t type) {
+    return (type & 2) || (type & 8) || type == 0x1000;
+}
+// of those, the ones texture passes draw into
+inline bool IsPassTargetType(uint32_t type) { return (type & 2) != 0; }
+
 struct Texture {
     uint32_t width = 0;
     uint32_t height = 0;
     std::vector<uint32_t> rgba;  // R in the low byte
     uint32_t format = 0;         // Xenos TextureFormat, for the stats
+    // A texture RB3 draws at runtime (IsRenderedType): its DxTex, its type and
+    // the version a draw sampled, how many of its passes had resolved by then
+    // (0 none since it was made); the pass that made it is the one with the
+    // same tex_obj and version. Its rgba is empty unless native_view_rt_fallback
+    // is guest, which decodes what guest memory holds (right only with
+    // --readback_resolve=full, and not always then). All 0 for a loaded texture.
+    uint32_t tex_obj = 0;
+    uint32_t tex_type = 0;
+    uint32_t version = 0;
 };
 
 // The float constant registers a ShadeState keeps, the same numbers from the
@@ -153,8 +186,8 @@ struct ShadeState : ShadeInputs {
     std::shared_ptr<const Texture> maps[kNumShadeMaps];
 };
 
-// one mesh draw that reached the back buffer (first material pass): a
-// DxMesh::DrawShowing, one DxMultiMesh instance, or a particle system's quads
+// one draw (first material pass): a DxMesh::DrawShowing, one DxMultiMesh
+// instance, a particle system's quads, or a DxRnd::DrawRect quad
 struct DrawItem {
     std::shared_ptr<const Geometry> geom;
     std::shared_ptr<const Texture> tex;
@@ -170,14 +203,69 @@ struct DrawItem {
     uint32_t cam;
     uint32_t mesh;
     int32_t shade = -1;  // in FrameCapture::shades; -1 none (a capture from before them)
+    // the texture its pass draws into (Pass::tex_obj), 0 for the back buffer
+    uint32_t target = 0;
+    // A DxRnd::DrawRect quad: its ShaderType (6 colour fills, 3 mip
+    // downsample, 1 blur, 4 DOF, 11 movie, 16 the post copy...), -1 for a mesh
+    // draw. Its geometry is the quad in clip space (z 0, w 1, uv 0..1 from the
+    // top left, the vertex colour DrawRect gives it) with world and view_proj
+    // identity, and rect the rectangle in the target's pixels (x, y, w, h).
+    int32_t rect_shader = -1;
+    float rect[4] = {};
+    // a FinishDrawTarget mip downsample: the level it makes (1, 2...) from the
+    // one before, in its pass's texture; it samples nothing else, so a renderer
+    // can build the mips itself instead. 0 for any other draw.
+    int32_t mip_level = 0;
+};
+
+// What the renderers draw of a capture, for now: the back buffer's mesh
+// draws. Texture passes and DrawRect quads are recorded for what comes next.
+inline bool DrawnToBackBuffer(const DrawItem& d) { return d.target == 0 && d.rect_shader < 0; }
+
+// A stretch of FrameCapture::draws that went to one target: the back buffer,
+// or a texture between DxTex::MakeDrawTarget and FinishDrawTarget (a texture
+// pass), which FinishDrawTarget resolves into the texture as a new version.
+// Passes don't nest in RB3, so a frame's are one after another.
+struct Pass {
+    uint32_t tex_obj = 0;  // the DxTex drawn into; 0 the back buffer
+    uint32_t first_draw = 0;
+    uint32_t draw_count = 0;
+    // the texture's size, type, mip count and D3DFORMAT (tex+0x4c, +0x50,
+    // +0x48, +0x64, +0x74); 0 for the back buffer
+    uint32_t width = 0, height = 0, tex_type = 0, num_mips = 0, format = 0;
+    // what DxCam::Select cleared it to, as D3DCLEAR bits (0x0f colour, 0x30
+    // depth and stencil), 0 if no camera did (those that bind it themselves
+    // clear it their own way, or not at all)
+    uint32_t clear_flags = 0;
+    uint32_t clear_color = 0;  // D3DCOLOR, ARGB
+    float clear_z = 0;
+    // x, y, w, h in the target's pixels: the camera's screen rect times its
+    // size; w 0 when no camera set one
+    float viewport[4] = {};
+    uint32_t cam = 0;  // the camera that selected it, 0 none
+    uint32_t version = 0;  // the texture's version this pass made
+    // the game frame it was drawn in (Present count): the capture's own, or an
+    // earlier one for a pass carried in because the capture samples its output
+    uint64_t from_frame = 0;
+    std::string name;  // the texture's name (Hmx::Object), often empty
 };
 
 struct FrameCapture {
     uint64_t frame = 0;
+    uint64_t game_frame = 0;  // Present calls before this frame's
     std::vector<DrawItem> draws;
     std::vector<ShadeState> shades;  // the draws' distinct ones
+    // the draws' passes in the order they were drawn, carried ones first; none
+    // in a capture from before them (all its draws are the back buffer's)
+    std::vector<Pass> passes;
+    // DxRnd::DoPostProcess: the first draw after post-processing started
+    // (kNoPost if it didn't this frame), and TheRnd's ProcCommands then (1
+    // world, 2 post, 7 all; even/odd rendering alternates 1 and 2)
+    static constexpr uint32_t kNoPost = ~0u;
+    uint32_t post_boundary = kNoPost;
+    uint32_t proc_cmds = 0;
     uint32_t cams = 0;             // camera selects that drew to the back buffer
-    uint32_t skipped_target = 0;   // mesh draws into render targets
+    uint32_t skipped_target = 0;   // draws for a camera with a target, but no texture pass open
     uint32_t skipped_velocity = 0; // motion blur velocity pass
     uint32_t skipped_shadow = 0;   // shadow passes (draw modes 1 and 3)
     uint32_t skipped_draw_mode = 0; // other passes that aren't the colour one
@@ -193,7 +281,41 @@ struct FrameCapture {
     uint32_t maps_decoded = 0;
     uint32_t maps_cube = 0;
     uint32_t maps_other_format = 0;
+    // texture passes: drawn this frame, carried in from earlier frames, and
+    // left out for drawing nothing the capture keeps (shadow maps: draw modes
+    // 1 and 3 aren't recorded)
+    uint32_t passes_own = 0;
+    uint32_t passes_carried = 0;
+    uint32_t passes_empty = 0;
+    // diffuse textures that are pass targets, by (texture, version) sampled:
+    // made by a pass in the capture (own or carried), or by none it has
+    // (rt_missing: recorded in a frame whose passes weren't kept, made before
+    // band3 saw it, or a pass left out above)
+    uint32_t rt_sampled = 0;
+    uint32_t rt_missing = 0;
+    // back-buffer snapshots and device textures sampled (refraction's
+    // pre-process buffer), which no pass makes
+    uint32_t rt_snapshots = 0;
+    // passes that didn't pair up (a Make while one was open, a Finish of
+    // another texture, a frame ending inside one): dropped
+    uint32_t passes_unbalanced = 0;
 };
+
+// What the texture-pass recording has done and cost since the game started,
+// while capture was off (its always-on part, native_view_record_targets, `on`
+// now): passes the game drew, those it
+// recorded (the rest were into textures drawn regularly, every frame or every
+// other, which a capture draws again itself), their draws, and the game
+// thread's time in that recording (the hooks of passes it skips aren't timed:
+// a lookup each).
+struct PassRecordingStats {
+    bool on = false;
+    uint64_t passes = 0;
+    uint64_t passes_recorded = 0;
+    uint64_t draws_recorded = 0;
+    double ms = 0;
+};
+PassRecordingStats GetPassRecordingStats();
 
 // capture costs a little every frame, so it only runs while something wants
 // it: each Acquire is matched by a Release
@@ -212,5 +334,9 @@ std::shared_ptr<const FrameCapture> CaptureHeldFrame(
 
 // the latest complete frame, or null before the first
 std::shared_ptr<const FrameCapture> LatestCapture();
+
+// native_view_rt_fallback: whether render targets' textures carry the pixels
+// guest memory holds too ("guest", the default) or only their identity ("none")
+bool RtFallbackGuest();
 
 }  // namespace band3::render
