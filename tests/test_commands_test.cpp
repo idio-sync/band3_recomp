@@ -87,6 +87,8 @@ public:
         out.capture_path = file + ".cap";
         out.frame = 42;
         out.draws = 345;
+        out.skipped_shadow = 12;
+        out.skipped_pass = 3;
         if (gpu_works) {
             out.gpu_path = file + ".gpu.png";
             out.gpu_ms = 4.24;
@@ -360,7 +362,7 @@ TEST_CASE("capture names the screenshot and the native capture alike") {
     CHECK(Has(reply, "\"path\":\"screenshots/venue_1.png\""));
     CHECK(Has(reply, "\"capture\":\"screenshots/venue_1.cap\""));
     CHECK(Has(reply, "\"frame\":42"));
-    CHECK(Has(reply, "\"draws\":345"));
+    CHECK(Has(reply, "\"draws\":345,\"skipped_shadow\":12,\"skipped_pass\":3"));
     CHECK(Has(reply, "\"gpu\":\"screenshots/venue_1.gpu.png\""));
     CHECK(Has(reply, "\"gpu_ms\":4.2,\"gpu_wait_ms\":1.0"));
 

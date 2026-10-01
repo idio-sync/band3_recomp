@@ -66,6 +66,8 @@ struct FrameCapture {
     uint32_t cams = 0;             // camera selects that drew to the back buffer
     uint32_t skipped_target = 0;   // mesh draws into render targets
     uint32_t skipped_velocity = 0; // motion blur velocity pass
+    uint32_t skipped_shadow = 0;   // shadow passes (draw modes 1 and 3)
+    uint32_t skipped_draw_mode = 0; // other passes that aren't the colour one
     uint32_t skipped_no_geom = 0;  // no material, buffers or faces
     uint32_t mutable_meshes = 0;   // drawn from CPU verts
     uint32_t multimesh_instances = 0;

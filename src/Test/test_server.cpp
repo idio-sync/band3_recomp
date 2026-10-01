@@ -155,6 +155,8 @@ public:
         out.capture_path = path.string();
         out.frame = frame->frame;
         out.draws = uint32_t(frame->draws.size());
+        out.skipped_shadow = frame->skipped_shadow;
+        out.skipped_pass = frame->skipped_velocity + frame->skipped_draw_mode;
         GpuCapture(*frame, file, out);
         return {};
     }

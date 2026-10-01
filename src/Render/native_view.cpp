@@ -34,11 +34,13 @@ std::string Describe(const FrameCapture& fc, const std::string& drawn) {
     char buf[640];
     std::snprintf(buf, sizeof(buf),
                   "frame %llu: %zu draws (%u skinned, %u verts, %u tris) from %u cameras\n"
-                  "skipped: %u render-target, %u velocity, %u no geometry; %u mutable\n"
+                  "skipped: %u render-target, %u velocity, %u shadow, %u other pass, "
+                  "%u no geometry; %u mutable\n"
                   "%u multimesh instances, %u particles\n"
                   "textures: %u decoded, %u other formats; cache hits geom %u tex %u\n",
                   static_cast<unsigned long long>(fc.frame), fc.draws.size(), skinned, verts,
-                  tris, fc.cams, fc.skipped_target, fc.skipped_velocity, fc.skipped_no_geom,
+                  tris, fc.cams, fc.skipped_target, fc.skipped_velocity, fc.skipped_shadow,
+                  fc.skipped_draw_mode, fc.skipped_no_geom,
                   fc.mutable_meshes, fc.multimesh_instances, fc.particles, fc.textured,
                   fc.untextured_format, fc.geom_cached, fc.tex_cached);
     std::string s = buf + drawn;

@@ -26,6 +26,10 @@ struct CaptureInfo {
     std::string capture_path;
     uint64_t frame = 0;  // the native view's frame number
     uint32_t draws = 0;
+    // draws left out because their pass isn't the back buffer's colour:
+    // shadow casters, and the others (velocity and the rest)
+    uint32_t skipped_shadow = 0;
+    uint32_t skipped_pass = 0;
     // the native view's GPU backend drawing the same capture, at the
     // screenshot's size: its PNG, or why there's none
     std::string gpu_path;

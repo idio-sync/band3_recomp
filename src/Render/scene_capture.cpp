@@ -81,10 +81,22 @@ constexpr uint32_t kD3DVertexBuffer_Fetch = 0x18;
 constexpr uint32_t kD3DIndexBuffer_Address = 0x18;
 constexpr uint32_t kD3DIndexBuffer_Size = 0x1c;
 constexpr uint32_t kD3DBaseTexture_Fetch = 0x1c;
-// DxMesh::DrawShowing draws through RndVelocityBuffer when this is 5
-constexpr uint32_t kDrawModeHolder = 0x82C76B68;
+// TheRnd's draw mode, which a pass sets while it draws. Retail sets 1
+// (RndShadowMap::PrepShadow, into the shadow map), 3 (NgLight::RenderShadows:
+// shadow casters into its shadow texture, which it makes the draw target itself,
+// with no camera, so the camera still says back buffer), 5
+// (RndVelocityBuffer::Draw; DxMesh::DrawShowing draws through it), 6
+// (RndSoftParticleBuffer::DoPost) and 7 (WorldReflection::DrawShowing, the
+// mirrored scene through a copy of the current camera, so to the back buffer).
+// rb3-xenon's Rnd::Mode numbers NgLight's (kDrawOcclusion) and those after it
+// one higher than retail does.
+constexpr uint32_t kDrawModeHolder = 0x82C76B68;  // TheRnd*
 constexpr uint32_t kDrawMode = 0xfc;
+constexpr uint32_t kDrawModeNormal = 0;
+constexpr uint32_t kDrawModeShadowDepth = 1;
+constexpr uint32_t kDrawModeShadowCasters = 3;
 constexpr uint32_t kDrawModeVelocity = 5;
+constexpr uint32_t kDrawModeReflection = 7;
 
 constexpr uint32_t kMaxBufferBytes = 64u << 20;
 constexpr uint32_t kMaxTextureSize = 4096;
@@ -603,16 +615,23 @@ std::shared_ptr<const Texture> CaptureTexture(const Guest& g, uint32_t tex_obj,
     return tex;
 }
 
-// false (and counted) unless the current camera draws to the back buffer
-// outside the velocity pass
+// false (and counted) unless the current camera draws to the back buffer, in
+// a colour pass: the normal one or a reflection's
 bool ToBackBuffer(const Guest& g, State& s, FrameCapture& fc) {
     if (!s.cam || !s.cam_backbuffer) {
         fc.skipped_target++;
         return false;
     }
     const uint32_t holder = g.U32(kDrawModeHolder);
-    if (holder && g.U32(holder + kDrawMode) == kDrawModeVelocity) {
-        fc.skipped_velocity++;
+    const uint32_t mode = holder ? g.U32(holder + kDrawMode) : kDrawModeNormal;
+    if (mode != kDrawModeNormal && mode != kDrawModeReflection) {
+        if (mode == kDrawModeVelocity) {
+            fc.skipped_velocity++;
+        } else if (mode == kDrawModeShadowDepth || mode == kDrawModeShadowCasters) {
+            fc.skipped_shadow++;
+        } else {
+            fc.skipped_draw_mode++;
+        }
         return false;
     }
     if (!s.vp_valid) {

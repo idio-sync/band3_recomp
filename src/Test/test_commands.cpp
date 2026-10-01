@@ -378,6 +378,8 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
     AppendJsonString(fields, info.capture_path);
     fields += ",\"frame\":" + std::to_string(info.frame);
     fields += ",\"draws\":" + std::to_string(info.draws);
+    fields += ",\"skipped_shadow\":" + std::to_string(info.skipped_shadow);
+    fields += ",\"skipped_pass\":" + std::to_string(info.skipped_pass);
     if (!info.gpu_path.empty()) {
         fields += ",\"gpu\":";
         AppendJsonString(fields, info.gpu_path);
