@@ -22,6 +22,7 @@
 #include "Input/virtual_instrument.h"
 #include "Net/discord.h"
 #include "Render/native_view.h"
+#include "Test/test_server.h"
 
 // always attached, and draws nothing while debug_overlay is off, so the
 // setting can be flipped in F4
@@ -91,6 +92,7 @@ class Band3App : public rex::ReXApp {
     band3::AddSettingArgs();
     band3::settings::Init();
     band3::input::InitVirtualInstrument();
+    band3::test::Init();
   }
 
   // GPU emulation is a plugin (rexgpu-xenos) that the SDK leaves off unless
@@ -108,9 +110,11 @@ class Band3App : public rex::ReXApp {
     band3::discord::Start();
     band3::audio::StartUsbMics();
     band3::render::StartDumpIfRequested();
+    band3::test::StartServer(runtime(), &app_context(), window());
   }
 
   void OnShutdown() override {
+    band3::test::StopServer();
     rex::ui::UnregisterBind("bind_instrument_lab");
     rex::ui::UnregisterBind("bind_native_view");
     band3::render::StopNativeView();

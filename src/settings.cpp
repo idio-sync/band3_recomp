@@ -226,6 +226,12 @@ REXCVAR_DEFINE_INT32(virtual_instrument_player, 2, "Band3/Debug",
     "order around it")
     .range(1, 4);
 
+REXCVAR_DEFINE_INT32(test_port, 0, "Band3/Debug",
+    "Take test harness commands on this local TCP port (0 = off), for tools/band3ctl.py. "
+    "Connects the virtual instrument as player 1")
+    .range(0, 65535)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 namespace band3::settings {
 
 namespace {

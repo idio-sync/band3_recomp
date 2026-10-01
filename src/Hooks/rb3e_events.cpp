@@ -2,12 +2,16 @@
 #include <rex/system/xmemory.h>
 #include <rex/types.h>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <string>
 #include "src/Net/discord.h"
 #include "src/Net/events.h"
+#include "src/Test/game_state.h"
+#include "src/Test/test_server.h"
 
-// Reports game state to the RB3Enhanced network events and Discord presence,
+// Reports game state to the RB3Enhanced network events, Discord presence and the
+// test harness,
 // from the same hook points and with the same data as RB3E (source/rb3enhanced.c,
 // source/GameHooks.c), and also from PresenceMgr::SetSongID, for a song that
 // starts without a new Game.
@@ -159,6 +163,18 @@ void SendSong(const SongInfo& song) {
     if (!song.artist.empty()) Send(kSongArtist, song.artist.data(), song.artist.size());
 }
 
+void RecordSong(const SongInfo& song) {
+    band3::test::GameState::Get().SetSong(song.title, song.artist, song.shortname);
+}
+
+void RecordBand(const band3::events::BandInfo& info) {
+    std::array<band3::test::BandMember, 4> band{};
+    for (size_t i = 0; i < band.size(); i++) {
+        band[i] = {info.member_exists[i] != 0, info.difficulty[i], info.track_type[i]};
+    }
+    band3::test::GameState::Get().SetBand(band);
+}
+
 band3::events::BandInfo ReadBandInfo(const PPCContext& ctx, uint8_t* base) {
     band3::events::BandInfo info{};
     uint32_t user_mgr = Load32(base, kTheBandUserMgrPtr);
@@ -191,9 +207,16 @@ extern "C" REX_FUNC(Game____ct)
 {
     bool events = band3::events::Enabled();
     bool discord = band3::discord::Enabled();
-    if (events || discord) {
+    bool test = band3::test::Enabled();
+    if (events || discord || test) {
         SongInfo song = ReadSongInfo(ctx, base);
         band3::events::BandInfo band = ReadBandInfo(ctx, base);
+
+        if (test) {
+            RecordSong(song);
+            RecordBand(band);
+            band3::test::GameState::Get().SetInGame(true);
+        }
 
         if (events) {
             using namespace band3::events;
@@ -210,6 +233,7 @@ extern "C" REX_FUNC(Game____ct)
 extern "C" REX_FUNC(Game____dt)
 {
     SendState(0);
+    band3::test::GameState::Get().SetInGame(false);
     // the game can leave LEDs on after the score screen; turn everything off
     SendStagekit(0x00, 0xFF);
     band3::discord::SetMenus();
@@ -225,11 +249,13 @@ extern "C" REX_FUNC(PresenceMgr__SetSongID)
     const int32_t id = ctx.r4.s32;
     const bool events = band3::events::Enabled();
     const bool discord = band3::discord::Enabled();
+    const bool test = band3::test::Enabled();
     // song IDs below 1 are "any", "random" and "invalid"
-    if ((events || discord) && id > 0 && id != g_reported_song) {
+    if ((events || discord || test) && id > 0 && id != g_reported_song) {
         SongInfo song = ReadSongInfoById(ctx, base, id);
         if (!song.shortname.empty()) {
             if (events) SendSong(song);
+            if (test) RecordSong(song);
             band3::discord::SetPlaying(song.title, song.artist, ReadBandInfo(ctx, base));
             g_reported_song = id;
         }
@@ -240,10 +266,15 @@ extern "C" REX_FUNC(PresenceMgr__SetSongID)
 // the game updates presence on screen changes; report the new screen's name
 extern "C" REX_FUNC(PresenceMgr__UpdatePresence)
 {
-    if (band3::events::Enabled()) {
+    const bool events = band3::events::Enabled();
+    const bool test = band3::test::Enabled();
+    if (events || test) {
         uint32_t screen = Load32(base, kTheBandUI + kBandUI_CurrentScreen);
         uint32_t name = screen ? Load32(base, screen + kUIScreen_Name) : 0;
-        if (name) band3::events::SendString(band3::events::kScreenName, GuestStr(base, name));
+        if (name && events) {
+            band3::events::SendString(band3::events::kScreenName, GuestStr(base, name));
+        }
+        if (name && test) band3::test::GameState::Get().SetScreen(GuestStr(base, name));
     }
     __imp__PresenceMgr__UpdatePresence(ctx, base);
 }
