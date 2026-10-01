@@ -59,6 +59,8 @@ SHADERS = [
          {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0)}),
         ("kBlurPixel", "PSBlur", "ps_5_1", "ps_6_0",
          {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0)}),
+        ("kGlarePixel", "PSGlare", "ps_5_1", "ps_6_0",
+         {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0)}),
         ("kCompositePixel", "PSComposite", "ps_5_1", "ps_6_0",
          {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0),
           ("textures", "depth_tex", 2, 1), ("textures", "dof_tex", 2, 2),

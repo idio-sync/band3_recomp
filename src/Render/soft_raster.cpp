@@ -758,7 +758,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             // the depth buffer has 1/w, as RunPost wants it
             post::RunPost(post_plan, scene, depth, o.width, o.height,
                           image(post_plan.spot_volume), image(post_plan.spot_density),
-                          image(post_plan.soft), rgba);
+                          image(post_plan.soft), rgba, o.post_bloom0);
         } else {
             for (size_t i = 0; i < pixels; i++) {
                 const uint32_t c = scene[i];

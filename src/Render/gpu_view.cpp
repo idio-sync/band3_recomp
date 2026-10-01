@@ -254,15 +254,18 @@ struct GpuRenderer::Impl {
     SDL_GPUShader* spot_shader = nullptr;
     SDL_GPUShader* soft_shader = nullptr;
     // post.hlsl's: the full-screen triangle; the resolve, the scene into the
-    // picture as it is; and post-processing's downsample, blur and composite
+    // picture as it is; and post-processing's downsample, blur, glare pass
+    // and composite
     SDL_GPUShader* fullscreen_shader = nullptr;
     SDL_GPUShader* resolve_shader = nullptr;
     SDL_GPUShader* downsample_shader = nullptr;
     SDL_GPUShader* blur_shader = nullptr;
+    SDL_GPUShader* glare_shader = nullptr;
     SDL_GPUShader* composite_shader = nullptr;
     SDL_GPUGraphicsPipeline* resolve_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* downsample_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* blur_pipeline = nullptr;
+    SDL_GPUGraphicsPipeline* glare_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* composite_pipeline = nullptr;
     // gamma.hlsl's: the display gamma ramp over the finished picture
     SDL_GPUShader* gamma_shader = nullptr;
@@ -591,6 +594,9 @@ bool GpuRenderer::Impl::Create() {
     blur_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kBlurPixelDxbc,
                              sizeof(kBlurPixelDxbc), kBlurPixelSpirv, sizeof(kBlurPixelSpirv),
                              "PSBlur", 1, 0, 1);
+    glare_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kGlarePixelDxbc,
+                              sizeof(kGlarePixelDxbc), kGlarePixelSpirv, sizeof(kGlarePixelSpirv),
+                              "PSGlare", 1, 0, 1);
     composite_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kCompositePixelDxbc,
                                   sizeof(kCompositePixelDxbc), kCompositePixelSpirv,
                                   sizeof(kCompositePixelSpirv), "PSComposite", 9, 0, 1);
@@ -598,16 +604,17 @@ bool GpuRenderer::Impl::Create() {
                               sizeof(kGammaPixelDxbc), kGammaPixelSpirv, sizeof(kGammaPixelSpirv),
                               "PSGamma", 1, 0, 1);
     if (!vertex_shader || !pixel_shader || !spot_shader || !soft_shader || !fullscreen_shader ||
-        !resolve_shader || !downsample_shader || !blur_shader || !composite_shader ||
-        !gamma_shader)
+        !resolve_shader || !downsample_shader || !blur_shader || !glare_shader ||
+        !composite_shader || !gamma_shader)
         return false;
     resolve_pipeline = MakeFullscreenPipeline(resolve_shader, "resolve");
     downsample_pipeline = MakeFullscreenPipeline(downsample_shader, "downsample");
     blur_pipeline = MakeFullscreenPipeline(blur_shader, "blur");
+    glare_pipeline = MakeFullscreenPipeline(glare_shader, "glare");
     composite_pipeline = MakeFullscreenPipeline(composite_shader, "composite");
     gamma_pipeline = MakeFullscreenPipeline(gamma_shader, "gamma");
-    if (!resolve_pipeline || !downsample_pipeline || !blur_pipeline || !composite_pipeline ||
-        !gamma_pipeline)
+    if (!resolve_pipeline || !downsample_pipeline || !blur_pipeline || !glare_pipeline ||
+        !composite_pipeline || !gamma_pipeline)
         return false;
     // the scene's depth, read after the world's draws: D32 the resolve samples
     // where the device can (Direct3D 12 and Vulkan both should)
@@ -708,11 +715,11 @@ void GpuRenderer::Impl::Release(bool stop_video) {
         for (auto& [k, rt] : rts) ReleaseRt(rt);
         for (auto& [k, p] : pipelines) SDL_ReleaseGPUGraphicsPipeline(device, p);
         for (SDL_GPUGraphicsPipeline* p : {resolve_pipeline, downsample_pipeline, blur_pipeline,
-                                           composite_pipeline, gamma_pipeline})
+                                           glare_pipeline, composite_pipeline, gamma_pipeline})
             if (p) SDL_ReleaseGPUGraphicsPipeline(device, p);
         for (SDL_GPUShader* sh : {vertex_shader, pixel_shader, spot_shader, soft_shader,
                                   fullscreen_shader, resolve_shader, downsample_shader,
-                                  blur_shader, composite_shader, gamma_shader})
+                                  blur_shader, glare_shader, composite_shader, gamma_shader})
             if (sh) SDL_ReleaseGPUShader(device, sh);
         if (sampler) SDL_ReleaseGPUSampler(device, sampler);
         if (linear_sampler) SDL_ReleaseGPUSampler(device, linear_sampler);
@@ -734,8 +741,9 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     device = nullptr;
     vertex_shader = pixel_shader = spot_shader = soft_shader = fullscreen_shader = nullptr;
     resolve_shader = nullptr;
-    downsample_shader = blur_shader = composite_shader = gamma_shader = nullptr;
-    resolve_pipeline = downsample_pipeline = blur_pipeline = composite_pipeline = nullptr;
+    downsample_shader = blur_shader = glare_shader = composite_shader = gamma_shader = nullptr;
+    resolve_pipeline = downsample_pipeline = blur_pipeline = glare_pipeline = nullptr;
+    composite_pipeline = nullptr;
     gamma_pipeline = nullptr;
     sampler = linear_sampler = nullptr;
     white = black = no_depth = nullptr;
@@ -1579,6 +1587,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             downsample(scene, width, height, post_dof, 0, false);
             blur(post_dof, 0, post_plan.dof_taps[0], post_plan.dof_taps[1], 8);
         }
+        // the level 0 the composite reads
+        SDL_GPUTexture* bloom0 = post_bloom[0];
         if (flags & (post::kPostBloom | post::kPostGlare)) {
             // glare has level 0 only
             const int levels = (flags & post::kPostBloom) ? 3 : 1;
@@ -1589,6 +1599,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 else
                     downsample(scene, width, height, post_bloom[0], 0, true);
                 blur(post_bloom[k], k, post_plan.bloom_taps[k][0], post_plan.bloom_taps[k][1], 15);
+            }
+            // and its glare pass, into level 0's spare
+            if (flags & post::kPostGlare) {
+                p.mode = {0, 0, 0, 0};
+                fullscreen(post_tmp[0], post_w[0], post_h[0], glare_pipeline, {post_bloom[0]}, p);
+                bloom0 = post_tmp[0];
             }
         }
         // the spotlights' depth volume and density map, and the soft-particle
@@ -1603,7 +1619,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // and not read
         p.mode = {0, 0, 0, 0};
         fullscreen(color, width, height, composite_pipeline,
-                   {scene, scene_depth, post_dof, post_bloom[0], post_bloom[1], post_bloom[2],
+                   {scene, scene_depth, post_dof, bloom0, post_bloom[1], post_bloom[2],
                     drawn_now(post_plan.spot_volume), drawn_now(post_plan.spot_density),
                     drawn_now(post_plan.soft)},
                    p);

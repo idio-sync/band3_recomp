@@ -10,6 +10,7 @@
 //                               [--no-skinned | --only-skinned] [--unskinned]
 //                               [--legacy-light | --no-light] [--pick X,Y]
 //                               [--dump-alpha <png>] [--dump-depth <png>]
+//                               [--dump-bloom <png>]
 //                               [--view alpha|depth]
 //                               [--no-post | --post-only xfm|dof|bloom|spot|soft]
 //                               [--no-gamma | --gamma-from <other.cap>]
@@ -63,6 +64,11 @@
 // RasterView), where the world's draws left them; --view alpha|depth does the
 // same for the picture the other options draw (--diff against a capture's
 // <name>.gpu.alpha.png or .gpu.depth.png, say).
+// --dump-bloom draws the frame on the CPU at --size and writes bloom's level
+// 0 (a quarter of it each way) as the composite read it, after glare's pass on
+// a glare frame: at the game's 1280x720, against --dump-tex of the glare
+// pass's draw (--list's "rect shader 25"), whose guest pixels are what that
+// pass left in the level (right in captures taken with --readback_resolve=full).
 // RB3's post-processing (post_model.h: depth of field, bloom or glare, the
 // spotlights' depth volume, the colour matrix) is applied as the frame set
 // it; --no-post leaves the scene as it is, --post-only applies one effect
@@ -665,7 +671,7 @@ int main(int argc, char** argv) {
     }
     RasterOptions o;
     bool transpose = false, per_cam = false, list = false, no_skinned = false, only_skinned = false;
-    std::string compare, image, diff_with, dump_alpha, dump_depth;
+    std::string compare, image, diff_with, dump_alpha, dump_depth, dump_bloom;
     Crop crop;
     long mesh_filter = -1, dump_tex = -1, shade_draw = -1;
     uint32_t dump_rt = 0, dump_rt_version = 0;
@@ -709,6 +715,7 @@ int main(int argc, char** argv) {
         else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%ux%u", &o.width, &o.height);
         else if (a == "--dump-alpha" && i + 1 < argc) dump_alpha = argv[++i];
         else if (a == "--dump-depth" && i + 1 < argc) dump_depth = argv[++i];
+        else if (a == "--dump-bloom" && i + 1 < argc) dump_bloom = argv[++i];
         else if (a == "--no-post") o.post = false;
         else if (a == "--no-gamma") o.gamma = false;
         else if (a == "--gamma-from" && i + 1 < argc) {
@@ -905,6 +912,21 @@ int main(int argc, char** argv) {
                     vo.height, 100.0 * double(lit) / n, 100.0 * double(bright) / n, sum / n,
                     rs.draws, rs.ms);
     };
+    if (!dump_bloom.empty()) {
+        std::vector<uint32_t> px, level;
+        RasterOptions bo = o;
+        bo.post_bloom0 = &level;
+        Rasterize(*fc, bo, px);
+        if (level.empty()) {
+            std::fprintf(stderr, "the frame has no bloom or glare\n");
+            return 1;
+        }
+        for (uint32_t& c : level) c |= 0xff000000u;  // alpha off, as --dump-tex
+        WritePng(dump_bloom, level, post::Quarter(bo.width), post::Quarter(bo.height));
+        std::printf("%s: bloom level 0, %ux%u\n", dump_bloom.c_str(), post::Quarter(bo.width),
+                    post::Quarter(bo.height));
+        return 0;
+    }
     if (!dump_alpha.empty() || !dump_depth.empty()) {
         if (!dump_alpha.empty()) dump_view(dump_alpha, RasterView::kSceneAlpha);
         if (!dump_depth.empty()) dump_view(dump_depth, RasterView::kSceneDepth);

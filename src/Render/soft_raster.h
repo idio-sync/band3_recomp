@@ -71,6 +71,9 @@ struct RasterOptions {
     bool post = true;
     // with post, only these of its effects (post_model.h's kPost bits), 0 all
     uint32_t post_only = 0;
+    // with post, if given: bloom's level 0 as the composite read it
+    // (post_model.h's RunPost), to check it against the game's
+    std::vector<uint32_t>* post_bloom0 = nullptr;
     // the display gamma ramp the frame was shown through (FrameCapture::
     // gamma, gamma_ramp.h), last, over the overlay too, as the screen and the
     // harness's screenshot have it; off, the picture as RB3 drew it. Not

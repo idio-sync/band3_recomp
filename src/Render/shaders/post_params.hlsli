@@ -11,7 +11,8 @@
 // m4_shader_check.md, spotlight_survey.md 2, softparticle_survey.md 1)
 static const uint kPostDof = 1u;    // depth of field: the blurred scene, by c24 and the depth
 static const uint kPostBloom = 2u;  // bloom's three levels, screen-blended by c6
-static const uint kPostGlare = 4u;  // glare: half of bloom's level 0 times c6, added
+// glare: half of bloom's level 0 (after its glare pass) times c6, added
+static const uint kPostGlare = 4u;
 static const uint kPostXfm = 8u;    // the colour matrix, c92..c94
 // the spotlights' depth volume, added by the density map's red (spot)
 static const uint kPostSpot = 16u;

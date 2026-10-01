@@ -11,8 +11,8 @@
 // models (out/research/m4_shader_check.md, m4_shaders/check_post.py): the
 // composite 63306D35 and its variants (the spotlights' term from 0F105E2D,
 // 6EF4844D and F7E2A8FB), the bright pass F920AF5C, the 4x downsample
-// 38448F55. What the composite leaves out: noise and velocity blur, which
-// nothing draws natively yet.
+// 38448F55, the glare pass 2789C57F. What the composite leaves out: noise and
+// velocity blur, which nothing draws natively yet.
 
 float3 PostXyz(float4 v) { return float3(v.x, v.y, v.z); }
 
@@ -31,6 +31,46 @@ float2 QuadTap(float2 uv, float4 half_pixel, int i) {
 float4 Quad(float4 a, float4 b, float4 c, float4 d, bool bright) {
     if (bright) return (a * a.w + b * b.w + c * c.w + d * d.w) * 0.25f;
     return (a + b + c + d) * 0.25f;
+}
+
+// The glare pass (kBloomGlareShader, bloom_glare's PS 2789C57F87CFFD5D),
+// which NgPostProc::DoBloom draws over bloom's blurred level 0 when glare is
+// on, and which the composite then adds: kGlareTaps taps of the level from
+// the pixel's uv toward the picture's centre, GlareStep apart, so the last is
+// 0.9 of the way to the uv mirrored through the centre (a ghost of the
+// bright parts across it). Each tap is weighted by GlareWeight at its uv and
+// taken as 1 / (1 - weight * texel); the output is GlareOut of their sum,
+// rgb, alpha 1. For a dim level that's about 2 * the weighted taps' mean.
+// Its count is the loop constant i31 (10) in the shader's definitions.
+static const int kGlareTaps = 10;
+
+// how far apart its taps are, from the pixel's uv: 0.1 * (1 - 2 uv)
+float2 GlareStep(float2 uv) {
+    return float2((1.0f - 2.0f * uv.x) * 0.1f, (1.0f - 2.0f * uv.y) * 0.1f);
+}
+
+// a tap's weight at its uv: (1 - 4 r^2)^2, r its distance from the centre in
+// uv, 0 from r = 0.5 out
+float GlareWeight(float2 at) {
+    const float dx = at.x - 0.5f;
+    const float dy = at.y - 0.5f;
+    const float w = 1.0f - 4.0f * min(dx * dx + dy * dy, 0.25f);
+    return w * w;
+}
+
+// a tap's term. The shader takes the reciprocal as it is, which is infinite
+// only at the centre of a white texel (weight 1): there the output saturates
+// either way, and the max keeps it finite
+float3 GlareTerm(float3 texel, float weight) {
+    return float3(1.0f / max(1.0f - weight * texel.x, 1e-6f),
+                  1.0f / max(1.0f - weight * texel.y, 1e-6f),
+                  1.0f / max(1.0f - weight * texel.z, 1e-6f));
+}
+
+// the output from the taps' terms summed: 2 - 20 / sum, 0 for a black level,
+// saturated as the 8-bit target keeps it (the shader leaves that to it)
+float3 GlareOut(float3 sum) {
+    return saturate(float3(2.0f - 20.0f / sum.x, 2.0f - 20.0f / sum.y, 2.0f - 20.0f / sum.z));
 }
 
 // What the game's depth texture (s9) holds where the native depth is inv_w,
