@@ -40,6 +40,7 @@
 #include "src/Input/virtual_instrument.h"
 #include "src/Input/xinput_state.h"
 #include "src/Render/capture_file.h"
+#include "src/Render/gpu_view.h"
 #include "src/Render/png_writer.h"
 #include "src/Render/scene_capture.h"
 #include "src/settings.h"
@@ -154,7 +155,40 @@ public:
         out.capture_path = path.string();
         out.frame = frame->frame;
         out.draws = uint32_t(frame->draws.size());
+        GpuCapture(*frame, file, out);
         return {};
+    }
+
+    // the native view's GPU backend draws the same frame, as <name>.gpu.png,
+    // after the game has gone on so it isn't held any longer; the capture
+    // stands without it
+    void GpuCapture(const render::FrameCapture& frame, const std::string& file,
+                    CaptureInfo& out) {
+        bool ready = false;
+        // SDL starts video on the main thread only
+        OnUIThread([&] { ready = render::GpuRenderer::Get().Init(); });
+        if (!ready) {
+            out.gpu_error = "no GPU device for the native view (see the log)";
+            return;
+        }
+        render::RasterOptions options;
+        options.width = out.screenshot.width;
+        options.height = out.screenshot.height;
+        std::vector<uint32_t> rgba;
+        render::GpuStats stats;
+        if (!render::GpuRenderer::Get().RenderFrame(frame, options, rgba, stats)) {
+            out.gpu_error = "the GPU didn't draw the frame (see the log)";
+            return;
+        }
+        const std::filesystem::path path =
+            rex::filesystem::GetExecutableFolder() / "screenshots" / (file + ".gpu.png");
+        if (!render::WritePng(path.string(), rgba, options.width, options.height)) {
+            out.gpu_error = "couldn't write " + path.string();
+            return;
+        }
+        out.gpu_path = path.string();
+        out.gpu_ms = stats.ms;
+        out.gpu_wait_ms = stats.wait_ms;
     }
 
     std::string SetSetting(std::string_view name, std::string_view value) override {

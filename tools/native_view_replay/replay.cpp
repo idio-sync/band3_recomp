@@ -1,7 +1,8 @@
 // Experimental: draws a native view capture (BAND3_NATIVE_VIEW_DUMP) offline.
 //
 //   replay <file.cap> <out.png> [--size WxH] [--cam N] [--per-cam] [--list]
-//                               [--compare <screenshot.png>] [--mesh <hex>]
+//                               [--compare <screenshot.png> [--image <native.png>]]
+//                               [--diff <native.png>] [--mesh <hex>]
 //                               [--dump-tex <draw>]
 //                               [--no-tex] [--no-blend] [--transpose]
 //                               [--no-skinned | --only-skinned] [--unskinned]
@@ -11,7 +12,10 @@
 // prints every draw: its mesh, sizes, material and where it lands on screen.
 // --compare draws the frame at the size of a harness `capture` screenshot and
 // writes the two side by side (game left, native right), with their mean
-// difference.
+// difference; with --image the native side is that PNG instead (a harness
+// capture's <name>.gpu.png, the GPU backend's picture). --diff draws the frame
+// on the CPU at that PNG's size into out.png and prints their mean difference,
+// to check the GPU backend against the CPU's reference.
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
@@ -78,7 +82,7 @@ int main(int argc, char** argv) {
     }
     RasterOptions o;
     bool transpose = false, per_cam = false, list = false, no_skinned = false, only_skinned = false;
-    std::string compare;
+    std::string compare, image, diff_with;
     long mesh_filter = -1, dump_tex = -1;
     long cam_filter = -1;
     for (int i = 3; i < argc; i++) {
@@ -87,6 +91,8 @@ int main(int argc, char** argv) {
         else if (a == "--per-cam") per_cam = true;
         else if (a == "--list") list = true;
         else if (a == "--compare" && i + 1 < argc) compare = argv[++i];
+        else if (a == "--image" && i + 1 < argc) image = argv[++i];
+        else if (a == "--diff" && i + 1 < argc) diff_with = argv[++i];
         else if (a == "--mesh" && i + 1 < argc) mesh_filter = std::strtol(argv[++i], nullptr, 16);
         else if (a == "--dump-tex" && i + 1 < argc) dump_tex = std::strtol(argv[++i], nullptr, 0);
         else if (a == "--no-blend") o.blending = false;
@@ -188,6 +194,15 @@ int main(int argc, char** argv) {
         std::printf("%s: %u draws, %u tris, %u pixels, %.1f ms\n", path.c_str(), rs.draws,
                     rs.triangles, rs.pixels, rs.ms);
     };
+    // the frame drawn on the CPU at a size, with the options above
+    auto rasterize_at = [&](uint32_t w, uint32_t h, std::vector<uint32_t>& out) {
+        o.width = w;
+        o.height = h;
+        FrameCapture f = *fc;
+        if (transpose)
+            for (DrawItem& d : f.draws) d.view_proj = Transpose(d.view_proj);
+        return Rasterize(f, o, out);
+    };
     if (!compare.empty()) {
         // the game's own frame (a harness `capture`) left, the native one right,
         // both at half the screenshot's size
@@ -197,13 +212,26 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "can't read %s (only PNGs band3 wrote)\n", compare.c_str());
             return 1;
         }
-        o.width = sw;
-        o.height = sh;
-        FrameCapture f = *fc;
-        if (transpose)
-            for (DrawItem& d : f.draws) d.view_proj = Transpose(d.view_proj);
         std::vector<uint32_t> native;
-        const RasterStats rs = Rasterize(f, o, native);
+        std::string drawn;
+        if (!image.empty()) {
+            uint32_t iw = 0, ih = 0;
+            if (!ReadPng(image, native, iw, ih)) {
+                std::fprintf(stderr, "can't read %s (only PNGs band3 wrote)\n", image.c_str());
+                return 1;
+            }
+            if (iw != sw || ih != sh) {
+                std::fprintf(stderr, "%s is %ux%u, the screenshot %ux%u\n", image.c_str(), iw,
+                             ih, sw, sh);
+                return 1;
+            }
+            drawn = image;
+        } else {
+            const RasterStats rs = rasterize_at(sw, sh, native);
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%u draws, %.1f ms", rs.draws, rs.ms);
+            drawn = buf;
+        }
         const uint32_t hw = sw / 2, hh = sh / 2;
         std::vector<uint32_t> side(size_t(hw) * 2 * hh);
         double diff = 0;
@@ -218,8 +246,38 @@ int main(int argc, char** argv) {
             }
         }
         WritePng(argv[2], side, hw * 2, hh);
-        std::printf("%s: game | native, %u draws, %.1f ms; mean difference %.1f of 255\n",
-                    argv[2], rs.draws, rs.ms, diff / (double(hw) * hh * 3));
+        std::printf("%s: game | native, %s; mean difference %.1f of 255\n", argv[2],
+                    drawn.c_str(), diff / (double(hw) * hh * 3));
+        return 0;
+    }
+    if (!diff_with.empty()) {
+        // another picture of this capture (the GPU backend's) against the
+        // CPU's, every pixel
+        std::vector<uint32_t> other;
+        uint32_t w = 0, h = 0;
+        if (!ReadPng(diff_with, other, w, h)) {
+            std::fprintf(stderr, "can't read %s (only PNGs band3 wrote)\n", diff_with.c_str());
+            return 1;
+        }
+        std::vector<uint32_t> cpu;
+        const RasterStats rs = rasterize_at(w, h, cpu);
+        WritePng(argv[2], cpu, w, h);
+        double diff = 0;
+        size_t differ = 0;
+        for (size_t i = 0; i < cpu.size(); i++) {
+            int most = 0;
+            for (int c = 0; c < 3; c++) {
+                const int d = std::abs(int((cpu[i] >> (8 * c)) & 0xff) -
+                                       int((other[i] >> (8 * c)) & 0xff));
+                diff += d;
+                most = std::max(most, d);
+            }
+            if (most > 8) differ++;
+        }
+        std::printf("%s: cpu, %u draws, %.1f ms; against %s: mean difference %.2f of 255, "
+                    "%.2f%% of pixels off by more than 8\n",
+                    argv[2], rs.draws, rs.ms, diff_with.c_str(), diff / (double(cpu.size()) * 3),
+                    100.0 * double(differ) / double(cpu.size()));
         return 0;
     }
     render(argv[2], cam_filter);

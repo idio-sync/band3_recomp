@@ -26,6 +26,12 @@ struct CaptureInfo {
     std::string capture_path;
     uint64_t frame = 0;  // the native view's frame number
     uint32_t draws = 0;
+    // the native view's GPU backend drawing the same capture, at the
+    // screenshot's size: its PNG, or why there's none
+    std::string gpu_path;
+    std::string gpu_error;
+    double gpu_ms = 0;       // the whole GPU frame
+    double gpu_wait_ms = 0;  // of that, from submitting it to having the picture
 };
 
 class TestTarget {

@@ -378,6 +378,17 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
     AppendJsonString(fields, info.capture_path);
     fields += ",\"frame\":" + std::to_string(info.frame);
     fields += ",\"draws\":" + std::to_string(info.draws);
+    if (!info.gpu_path.empty()) {
+        fields += ",\"gpu\":";
+        AppendJsonString(fields, info.gpu_path);
+        char ms[64];
+        std::snprintf(ms, sizeof(ms), ",\"gpu_ms\":%.1f,\"gpu_wait_ms\":%.1f", info.gpu_ms,
+                      info.gpu_wait_ms);
+        fields += ms;
+    } else if (!info.gpu_error.empty()) {
+        fields += ",\"gpu_error\":";
+        AppendJsonString(fields, info.gpu_error);
+    }
     return Ok(fields);
 }
 

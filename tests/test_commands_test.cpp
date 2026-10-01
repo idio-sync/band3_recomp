@@ -50,6 +50,7 @@ public:
     std::vector<std::pair<std::string, std::string>> settings_set;
     std::string screenshot_name;
     std::string capture_name;
+    bool gpu_works = true;
     bool quit = false;
     bool cancelled = false;
     input::Gamepad360 pad;
@@ -86,6 +87,13 @@ public:
         out.capture_path = file + ".cap";
         out.frame = 42;
         out.draws = 345;
+        if (gpu_works) {
+            out.gpu_path = file + ".gpu.png";
+            out.gpu_ms = 4.24;
+            out.gpu_wait_ms = 1.04;
+        } else {
+            out.gpu_error = "no GPU device";
+        }
         return {};
     }
     std::string SetSetting(std::string_view name, std::string_view value) override {
@@ -353,6 +361,8 @@ TEST_CASE("capture names the screenshot and the native capture alike") {
     CHECK(Has(reply, "\"capture\":\"screenshots/venue_1.cap\""));
     CHECK(Has(reply, "\"frame\":42"));
     CHECK(Has(reply, "\"draws\":345"));
+    CHECK(Has(reply, "\"gpu\":\"screenshots/venue_1.gpu.png\""));
+    CHECK(Has(reply, "\"gpu_ms\":4.2,\"gpu_wait_ms\":1.0"));
 
     CHECK(Ok(RunCommand("capture", game)));
     CHECK(game.capture_name == "");
@@ -362,6 +372,16 @@ TEST_CASE("capture names the screenshot and the native capture alike") {
     CHECK_FALSE(Ok(RunCommand("capture a b", game)));
     CHECK(game.capture_name == "unchanged");
     CHECK_FALSE(Ok(RunCommand("p2 capture", game)));
+}
+
+TEST_CASE("capture still succeeds without the GPU picture, and says why") {
+    FakeGame game;
+    game.gpu_works = false;
+    const std::string reply = RunCommand("capture venue_1", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"capture\":\"screenshots/venue_1.cap\""));
+    CHECK(Has(reply, "\"gpu_error\":\"no GPU device\""));
+    CHECK_FALSE(Has(reply, "\"gpu\":"));
 }
 
 TEST_CASE("set passes the setting on, keeping spaces in the value") {
