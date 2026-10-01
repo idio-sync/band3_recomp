@@ -37,12 +37,10 @@ extern "C" void __imp__RndTex__dt(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxRnd__FinishPostProcess(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__NgDOFProc__DoPost(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__Bloom_Blur(PPCContext& ctx, uint8_t* base);
-// DxTex::MakeDrawTarget, DxTex::FinishDrawTarget, DxCam::Select and
-// DxTex::SyncBitmap, which band3_config.toml leaves unnamed
-extern "C" void __imp__rex_sub_82733D20(PPCContext& ctx, uint8_t* base);
-extern "C" void __imp__rex_sub_82735490(PPCContext& ctx, uint8_t* base);
-extern "C" void __imp__rex_sub_8273DE28(PPCContext& ctx, uint8_t* base);
-extern "C" void __imp__rex_sub_82734A28(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__DxTex__MakeDrawTarget(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__DxTex__FinishDrawTarget(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__DxCam__Select(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__DxTex__SyncBitmap(PPCContext& ctx, uint8_t* base);
 
 namespace band3::render {
 namespace {
@@ -1906,23 +1904,22 @@ extern "C" REX_FUNC(RndShader__Cache) {
     __imp__RndShader__Cache(ctx, base);
 }
 
-// DxTex::MakeDrawTarget (0x82733D20, unnamed in band3_config.toml): binds
-// the texture r3 as the render target
-extern "C" REX_FUNC(rex_sub_82733D20) {
+// DxTex::MakeDrawTarget: binds the texture r3 as the render target
+extern "C" REX_FUNC(DxTex__MakeDrawTarget) {
     const uint32_t tex = ctx.r3.u32;
-    __imp__rex_sub_82733D20(ctx, base);
+    __imp__DxTex__MakeDrawTarget(ctx, base);
     if (!Active()) return;
     std::lock_guard lock(g_state_mutex);
     BeginPass(Guest{base}, tex);
 }
 
-// DxTex::FinishDrawTarget (0x82735490, unnamed): resolves r3, then builds
-// its mips with DrawRect downsamples, which belong to its pass
-// (a pass left open when capture goes off is dropped at the frame's end)
-extern "C" REX_FUNC(rex_sub_82735490) {
+// DxTex::FinishDrawTarget: resolves r3, then builds its mips with DrawRect
+// downsamples, which belong to its pass (a pass left open when capture goes
+// off is dropped at the frame's end)
+extern "C" REX_FUNC(DxTex__FinishDrawTarget) {
     const uint32_t tex = ctx.r3.u32;
     if (!Active()) {
-        __imp__rex_sub_82735490(ctx, base);
+        __imp__DxTex__FinishDrawTarget(ctx, base);
         return;
     }
     {
@@ -1930,7 +1927,7 @@ extern "C" REX_FUNC(rex_sub_82735490) {
         State& s = S();
         if (s.open.tex == tex) s.open.in_finish = true;
     }
-    __imp__rex_sub_82735490(ctx, base);
+    __imp__DxTex__FinishDrawTarget(ctx, base);
     std::lock_guard lock(g_state_mutex);
     RecordTimer timer;
     EndPass(tex);
@@ -1946,20 +1943,19 @@ extern "C" REX_FUNC(DxRnd__MakeDrawTarget) {
     if (S().open.tex) DropOpenPass(S());
 }
 
-// DxCam::Select (0x8273DE28, unnamed): RndCam::Select, then its target or the
-// back buffer bound, its viewport set and a target cleared
-extern "C" REX_FUNC(rex_sub_8273DE28) {
+// DxCam::Select: RndCam::Select, then its target or the back buffer bound,
+// its viewport set and a target cleared
+extern "C" REX_FUNC(DxCam__Select) {
     const uint32_t cam = ctx.r3.u32;
-    __imp__rex_sub_8273DE28(ctx, base);
+    __imp__DxCam__Select(ctx, base);
     if (!Active()) return;
     std::lock_guard lock(g_state_mutex);
     CameraSelected(Guest{base}, cam);
 }
 
-// RndTex::~RndTex, and DxTex::SyncBitmap (0x82734A28, unnamed), which makes
-// the D3D texture again: what the texture's passes made is gone. On whatever
-// thread lets go of it: at boot the main thread's loading, while the splash
-// thread draws.
+// RndTex::~RndTex, and DxTex::SyncBitmap, which makes the D3D texture again:
+// what the texture's passes made is gone. On whatever thread lets go of it:
+// at boot the main thread's loading, while the splash thread draws.
 extern "C" REX_FUNC(RndTex__dt) {
     if (Active()) {
         std::lock_guard lock(g_state_mutex);
@@ -1968,12 +1964,12 @@ extern "C" REX_FUNC(RndTex__dt) {
     __imp__RndTex__dt(ctx, base);
 }
 
-extern "C" REX_FUNC(rex_sub_82734A28) {
+extern "C" REX_FUNC(DxTex__SyncBitmap) {
     if (Active()) {
         std::lock_guard lock(g_state_mutex);
         ForgetTexture(ctx.r3.u32);
     }
-    __imp__rex_sub_82734A28(ctx, base);
+    __imp__DxTex__SyncBitmap(ctx, base);
 }
 
 // DxRnd::DoPostProcess, at its start: where the frame's post-processing

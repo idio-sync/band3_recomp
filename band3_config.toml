@@ -15784,7 +15784,7 @@ strcpy_s                = 0x8282B0B8
 0x8242EC80 = { name = "RndPostProc__Select", size = 0x70 }
 0x8242ECF0 = { name = "RndPostProc__Unselect", size = 0x50 }
 0x8242ED40 = { name = "RndPostProc__Reset", size = 0x4C }
-0x8242ED90 = { name = "rex_sub_8242ED90", size = 0xC }
+0x8242ED90 = { name = "RndPostProc__Current", size = 0xC }
 0x8242EDA0 = { name = "RndPostProc__BlendPrevious", size = 0x38 }
 0x8242EDD8 = { name = "RndPostProc__BloomIntensity", size = 0x8 }
 0x8242EDE0 = { name = "RndPostProc__UpdateBlendPrevious", size = 0x5C }
@@ -21368,9 +21368,9 @@ strcpy_s                = 0x8282B0B8
 0x824F2F20 = { name = "Rand__Float", size = 0x40 }
 0x824F2F60 = { name = "rb3_RandomInt", size = 0x2C }
 0x824F2F90 = { name = "RandomInt", size = 0x6C }
-0x824F3000 = { name = "rex_sub_824F3000", size = 0x4C }
+0x824F3000 = { name = "RandomFloat", size = 0x4C }
 0x824F3050 = { name = "Rand__Gaussian", size = 0x110 }
-0x824F3160 = { name = "rex_sub_824F3160", size = 0x6C }
+0x824F3160 = { name = "RandomFloat_Range", size = 0x6C }
 0x824F31D0 = { name = "CSHA1__Transform", size = 0x16E0 }
 0x824F48B0 = { name = "CSHA1__Update", size = 0xE4 }
 0x824F4998 = { name = "CSHA1__Final", size = 0x138 }
@@ -21379,7 +21379,7 @@ strcpy_s                = 0x8282B0B8
 0x824F4C88 = { name = "op_shr_824F4C88", size = 0x34 }
 0x824F4CC0 = { name = "CSHA1__ct", size = 0x54 }
 0x824F4D18 = { name = "CSHA1__dt", size = 0x4C }
-0x824F4D68 = { name = "rex_sub_824F4D68", size = 0xA8 }
+0x824F4D68 = { name = "Sine", size = 0xA8 }
 0x824F4E10 = { name = "FastSin", size = 0x64 }
 0x824F4E78 = { name = "TrigTableInit", size = 0xBC }
 0x824F4F38 = { name = "DataSin", size = 0x58 }
@@ -42140,7 +42140,7 @@ strcpy_s                = 0x8282B0B8
 0x82733C48 = { name = "rex_sub_82733C48", size = 0x28 }
 0x82733C70 = { name = "SampleMarker__ct", size = 0x40 }
 0x82733CB0 = { name = "XGSurfaceSize", size = 0x70 }
-0x82733D20 = { name = "rex_sub_82733D20", size = 0xA8 }
+0x82733D20 = { name = "DxTex__MakeDrawTarget", size = 0xA8 }
 0x82733DC8 = { name = "DxTex__TexelsLock", size = 0x68 }
 0x82733E30 = { name = "DxTex__SwapMovieSurface", size = 0x30 }
 0x82733E60 = { name = "DxTex__Select", size = 0xA4 }
@@ -42161,13 +42161,13 @@ strcpy_s                = 0x8282B0B8
 0x8273497C = { name = "rex_sub_8273497C", size = 0x20 }
 0x827349A0 = { name = "DxTex__GetMovieSurface", size = 0x34 }
 0x827349D8 = { name = "DxTex__GetRT", size = 0x48 }
-0x82734A28 = { name = "rex_sub_82734A28", size = 0x66C }
+0x82734A28 = { name = "DxTex__SyncBitmap", size = 0x66C }
 0x82735094 = { name = "rex_sub_82735094", size = 0x28 }
 0x827350BC = { name = "rex_sub_827350BC", size = 0x28 }
 0x827350E8 = { name = "DxTex__SetDeviceTex", size = 0x74 }
 0x82735160 = { name = "DxTex__LockBitmap", size = 0x298 }
 0x827353F8 = { name = "DxTex__UnlockBitmap", size = 0x98 }
-0x82735490 = { name = "rex_sub_82735490", size = 0x44 }
+0x82735490 = { name = "DxTex__FinishDrawTarget", size = 0x44 }
 0x827354D8 = { name = "DxRnd__AutoRelease", size = 0x5C }
 0x82735538 = { name = "DxRnd__AutoDelete", size = 0x98 }
 0x827355D0 = { name = "DxTex__ResetSurfaces", size = 0xC0 }
@@ -42454,7 +42454,7 @@ strcpy_s                = 0x8282B0B8
 0x8273DD60 = { name = "DxCam__ProjectZ", size = 0x68 }
 0x8273DDC8 = { name = "DxCam__SetType_8273DDC8", size = 0xC }
 0x8273DDD8 = { name = "DxCam__sdtor", size = 0x50 }
-0x8273DE28 = { name = "rex_sub_8273DE28", size = 0x210 }
+0x8273DE28 = { name = "DxCam__Select", size = 0x210 }
 0x8273E038 = { name = "rex_sub_8273E038", size = 0x4 }
 0x8273E040 = { name = "rex_sub_8273E040", size = 0x4 }
 0x8273E048 = { name = "DxMovie__StreamReadFinish", size = 0x48 }
