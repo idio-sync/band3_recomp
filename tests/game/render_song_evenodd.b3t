@@ -16,11 +16,7 @@
 # frame it has (world_frame, the game frame before its own); `composed` makes
 # the capture fail if it isn't (it fell back to another frame: held_fallback).
 
-# Deluxe can't save its settings to band3's read-only game folder: I Understand
-wait screen=dx_settings_error_screen timeout=30s
-wait frames=60
-press green
-# back to the welcome hint underneath it, whose first choice customizes the
+# the welcome hint, whose first choice customizes the
 # band; back out of that to the main menu
 wait screen=hint_rb3_welcome_screen timeout=30s
 wait frames=60

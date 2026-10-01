@@ -12,11 +12,7 @@
 # recording them costs while the view is off (rt_recording).
 # --test_random_seed=<n> gives the same band every run (render_song.b3t).
 
-# Deluxe can't save its settings to band3's read-only game folder: I Understand
-wait screen=dx_settings_error_screen timeout=30s
-wait frames=60
-press green
-# back to the welcome hint underneath it, whose first choice customizes the
+# the welcome hint, whose first choice customizes the
 # band; back out of that to the main menu
 wait screen=hint_rb3_welcome_screen timeout=30s
 wait frames=60

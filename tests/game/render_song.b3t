@@ -13,11 +13,7 @@
 # little). With 21, Futurama's Fry, a cel-shaded Deluxe character, plays
 # guitar: he is in render-song-25s.
 
-# Deluxe can't save its settings to band3's read-only game folder: I Understand
-wait screen=dx_settings_error_screen timeout=30s
-wait frames=60
-press green
-# back to the welcome hint underneath it, whose first choice customizes the
+# the welcome hint, whose first choice customizes the
 # band; back out of that to the main menu
 wait screen=hint_rb3_welcome_screen timeout=30s
 wait frames=60
