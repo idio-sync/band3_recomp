@@ -11,12 +11,8 @@
 
 # the game has connected mic slot 1 and takes its audio
 expect mic=1
-# Deluxe can't save its settings to band3's read-only game folder: I Understand
-wait screen=dx_settings_error_screen timeout=30s
-wait frames=60
-press green
-# back to the welcome hint underneath it, whose first choice customizes the
-# band; back out of that to the main menu
+# the welcome hint boot.b3t leaves up, whose first choice customizes the band;
+# back out of that to the main menu
 wait screen=hint_rb3_welcome_screen timeout=30s
 wait frames=60
 press green
