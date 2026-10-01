@@ -21,6 +21,7 @@
 #include "Input/menu_shortcut_dialog.h"
 #include "Input/virtual_instrument.h"
 #include "Net/discord.h"
+#include "Render/gpu_view.h"
 #include "Render/native_view.h"
 #include "Test/test_server.h"
 
@@ -118,6 +119,7 @@ class Band3App : public rex::ReXApp {
     rex::ui::UnregisterBind("bind_instrument_lab");
     rex::ui::UnregisterBind("bind_native_view");
     band3::render::StopNativeView();
+    band3::render::GpuRenderer::Get().Shutdown();
     band3::discord::Stop();
     band3::audio::StopUsbMics();
   }

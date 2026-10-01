@@ -59,6 +59,7 @@ REXCVAR_DECLARE(bool, virtual_instrument);
 REXCVAR_DECLARE(std::string, virtual_instrument_type);
 REXCVAR_DECLARE(int32_t, virtual_instrument_player);
 REXCVAR_DECLARE(int32_t, test_port);
+REXCVAR_DECLARE(std::string, native_view_backend);
 
 namespace band3::settings {
 

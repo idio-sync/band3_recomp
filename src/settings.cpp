@@ -232,6 +232,11 @@ REXCVAR_DEFINE_INT32(test_port, 0, "Band3/Debug",
     .range(0, 65535)
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_STRING(native_view_backend, "gpu", "Band3/Debug",
+    "What draws the native view (F7, experimental): gpu, or cpu for the reference "
+    "rasterizer. The GPU falls back to the CPU when it can't start")
+    .allowed({"cpu", "gpu"});
+
 namespace band3::settings {
 
 namespace {

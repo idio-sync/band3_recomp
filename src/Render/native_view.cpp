@@ -1,7 +1,9 @@
 #include "src/Render/native_view.h"
 
 #include "src/Render/capture_file.h"
+#include "src/Render/gpu_view.h"
 #include "src/Render/png_writer.h"
+#include "src/settings.h"
 
 #include <imgui.h>
 #include <rex/logging.h>
@@ -19,7 +21,8 @@
 
 namespace band3::render {
 namespace {
-std::string Describe(const FrameCapture& fc, const RasterStats& rs) {
+// `drawn`: what drew it, the last line
+std::string Describe(const FrameCapture& fc, const std::string& drawn) {
     std::map<std::string, int> blends;
     uint32_t skinned = 0, verts = 0, tris = 0;
     for (const DrawItem& d : fc.draws) {
@@ -33,16 +36,29 @@ std::string Describe(const FrameCapture& fc, const RasterStats& rs) {
                   "frame %llu: %zu draws (%u skinned, %u verts, %u tris) from %u cameras\n"
                   "skipped: %u render-target, %u velocity, %u no geometry; %u mutable\n"
                   "%u multimesh instances, %u particles\n"
-                  "textures: %u decoded, %u other formats; cache hits geom %u tex %u\n"
-                  "raster: %u draws, %u tris on screen, %u pixels, %.1f ms\n",
+                  "textures: %u decoded, %u other formats; cache hits geom %u tex %u\n",
                   static_cast<unsigned long long>(fc.frame), fc.draws.size(), skinned, verts,
                   tris, fc.cams, fc.skipped_target, fc.skipped_velocity, fc.skipped_no_geom,
                   fc.mutable_meshes, fc.multimesh_instances, fc.particles, fc.textured,
-                  fc.untextured_format, fc.geom_cached,
-                  fc.tex_cached, rs.draws, rs.triangles, rs.pixels, rs.ms);
-    std::string s = buf;
+                  fc.untextured_format, fc.geom_cached, fc.tex_cached);
+    std::string s = buf + drawn;
     for (auto& [k, n] : blends) s += "  " + k + ": " + std::to_string(n) + "\n";
     return s;
+}
+
+std::string DescribeRaster(const RasterStats& rs) {
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "raster: %u draws, %u tris on screen, %u pixels, %.1f ms\n",
+                  rs.draws, rs.triangles, rs.pixels, rs.ms);
+    return buf;
+}
+
+std::string DescribeGpu(const GpuStats& gs) {
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "gpu: %u draws (%u not drawn yet), %u uploads, %.1f ms (%.1f ms after submit)\n",
+                  gs.draws, gs.skipped, gs.uploads, gs.ms, gs.wait_ms);
+    return buf;
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +98,13 @@ class Renderer {
         options_changed_ = true;
     }
 
+    // the GPU when the device is there, else the CPU
+    void SetGpu(bool gpu) {
+        std::lock_guard lock(mutex_);
+        options_changed_ |= gpu_ != gpu;
+        gpu_ = gpu;
+    }
+
     void SetDumpPath(std::string path) {
         std::lock_guard lock(mutex_);
         dump_path_ = std::move(path);
@@ -108,11 +131,12 @@ class Renderer {
         while (true) {
             RasterOptions o;
             std::string dump;
-            bool changed;
+            bool changed, gpu;
             {
                 std::lock_guard lock(mutex_);
                 if (stop_) return;
                 o = options_;
+                gpu = gpu_;
                 changed = options_changed_;
                 options_changed_ = false;
                 dump = dump_path_;
@@ -133,15 +157,20 @@ class Renderer {
                     std::snprintf(name, sizeof(name), ".%03u.cap", dump_count_++ % 60);
                     SaveCapture(dump + name, *cap);
                     if (FILE* f = std::fopen((dump + name + ".txt").c_str(), "w")) {
-                        std::fputs(Describe(*cap, RasterStats{}).c_str(), f);
+                        std::fputs(Describe(*cap, {}).c_str(), f);
                         std::fclose(f);
                     }
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 continue;
             }
-            const RasterStats rs = Rasterize(*cap, o, rgba);
-            const std::string stats = Describe(*cap, rs);
+            // RenderFrame fails (and stays failed) without a device, and the
+            // CPU draws instead
+            GpuStats gs;
+            const std::string stats =
+                gpu && GpuRenderer::Get().RenderFrame(*cap, o, rgba, gs)
+                    ? Describe(*cap, DescribeGpu(gs))
+                    : Describe(*cap, DescribeRaster(Rasterize(*cap, o, rgba)));
             {
                 std::lock_guard lock(mutex_);
                 image_ = rgba;
@@ -158,6 +187,7 @@ class Renderer {
     int users_ = 0;
     bool stop_ = false;
     RasterOptions options_;
+    bool gpu_ = false;
     bool options_changed_ = false;
     std::string dump_path_;
     std::vector<uint32_t> image_;
@@ -178,10 +208,16 @@ NativeViewDialog::~NativeViewDialog() {
     if (visible_) Renderer::Get().RemoveUser();
 }
 
+bool NativeViewDialog::WantsGpu() {
+    // here, on the UI thread, where SDL wants its video started
+    return REXCVAR_GET(native_view_backend) == "gpu" && GpuRenderer::Get().Init();
+}
+
 void NativeViewDialog::Toggle() {
     visible_ = !visible_;
     if (visible_) {
         Renderer::Get().SetOptions(options_);
+        Renderer::Get().SetGpu(WantsGpu());
         Renderer::Get().AddUser();
     } else {
         Renderer::Get().RemoveUser();
@@ -213,6 +249,16 @@ void NativeViewDialog::OnDraw(ImGuiIO& io) {
             changed = true;
         }
         if (changed) Renderer::Get().SetOptions(options_);
+        // native_view_backend, which F4 can change too
+        int backend = REXCVAR_GET(native_view_backend) == "gpu" ? 1 : 0;
+        if (ImGui::Combo("Backend", &backend, "CPU\0GPU\0"))
+            rex::cvar::SetFlagByName("native_view_backend", backend ? "gpu" : "cpu");
+        const bool gpu = WantsGpu();
+        Renderer::Get().SetGpu(gpu);
+        if (backend == 1 && !gpu) {
+            ImGui::SameLine();
+            ImGui::TextUnformatted("(no GPU device, drawing on the CPU; see the log)");
+        }
 
         std::vector<uint32_t> rgba;
         uint32_t w = 0, h = 0;

@@ -30,6 +30,9 @@ class NativeViewDialog : public rex::ui::ImGuiDialog {
     void OnDraw(ImGuiIO& io) override;
 
  private:
+    // native_view_backend is gpu and the device starts (on the first call)
+    static bool WantsGpu();
+
     DrawerGetter drawer_;
     bool visible_ = false;
     RasterOptions options_;
