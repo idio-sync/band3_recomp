@@ -1,7 +1,10 @@
 #include "test_commands.h"
+#include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cstdio>
 #include <optional>
+#include <utility>
 #include <vector>
 #include "test_inputs.h"
 
@@ -394,6 +397,81 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
     return Ok(fields);
 }
 
+// mean, median, 95th percentile and worst of `ms`, nearest rank
+std::string Distribution(std::vector<double> ms) {
+    double mean = 0, p50 = 0, p95 = 0, max = 0;
+    if (!ms.empty()) {
+        std::sort(ms.begin(), ms.end());
+        for (double m : ms) mean += m;
+        mean /= double(ms.size());
+        auto rank = [&](double p) {
+            const size_t i = static_cast<size_t>(std::ceil(p * double(ms.size())));
+            return ms[std::clamp<size_t>(i, 1, ms.size()) - 1];
+        };
+        p50 = rank(0.5);
+        p95 = rank(0.95);
+        max = ms.back();
+    }
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "{\"mean\":%.2f,\"p50\":%.2f,\"p95\":%.2f,\"max\":%.2f}", mean,
+                  p50, p95, max);
+    return buf;
+}
+
+std::string NativeViewJson(const NativeViewStats& s) {
+    std::string out = "\"stats\":{\"on\":";
+    out += s.on ? "true" : "false";
+    out += ",\"backend\":";
+    AppendJsonString(out, s.backend);
+    out += ",\"width\":" + std::to_string(s.width);
+    out += ",\"height\":" + std::to_string(s.height);
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), ",\"seconds\":%.1f,\"game_frames\":%llu,\"game_fps\":%.1f",
+                  s.seconds, static_cast<unsigned long long>(s.game_frames),
+                  s.seconds > 0 ? double(s.game_frames) / s.seconds : 0.0);
+    out += buf;
+    out += ",\"captured\":" + std::to_string(s.captured);
+    out += ",\"rendered\":" + std::to_string(s.rendered);
+    out += ",\"skipped_busy\":" + std::to_string(s.skipped_busy);
+    out += ",\"ms\":" + Distribution(s.frame_ms);
+    out += ",\"wait_ms\":" + Distribution(s.wait_ms);
+    out += '}';
+    return out;
+}
+
+// "1280x720"
+std::optional<std::pair<uint32_t, uint32_t>> ParseSize(std::string_view text) {
+    const size_t x = text.find('x');
+    if (x == std::string_view::npos) return std::nullopt;
+    auto w = ParseNumber<uint32_t>(text.substr(0, x));
+    auto h = ParseNumber<uint32_t>(text.substr(x + 1));
+    if (!w || !h || *w < 16 || *h < 16 || *w > 7680 || *h > 4320) return std::nullopt;
+    return std::pair{*w, *h};
+}
+
+std::string NativeView(TestTarget& target, const std::vector<std::string_view>& args) {
+    const std::string_view what = args.size() >= 2 ? args[1] : std::string_view{};
+    if (what == "on" && args.size() <= 3) {
+        std::pair<uint32_t, uint32_t> size{1280, 720};
+        if (args.size() == 3) {
+            auto parsed = ParseSize(args[2]);
+            if (!parsed) return Error(target, "a native view size is <width>x<height>, 16x16 up");
+            size = *parsed;
+        }
+        if (std::string error = target.NativeViewOn(size.first, size.second); !error.empty())
+            return Error(target, error);
+        return Ok(NativeViewJson(target.NativeView()));
+    }
+    if (what == "off" && args.size() == 2) {
+        // what it measured, before off starts over
+        const NativeViewStats stats = target.NativeView();
+        target.NativeViewOff();
+        return Ok(NativeViewJson(stats));
+    }
+    if (what == "stats" && args.size() == 2) return Ok(NativeViewJson(target.NativeView()));
+    return Error(target, "usage: native_view on [<width>x<height>]|off|stats");
+}
+
 std::string Set(TestTarget& target, std::string_view line,
                 const std::vector<std::string_view>& args) {
     if (args.size() < 3) return Error(target, "usage: set <setting> <value>");
@@ -503,6 +581,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "screenshot") return Screenshot(target, args);
     if (verb == "capture") return Capture(target, args);
     if (verb == "set") return Set(target, line, args);
+    if (verb == "native_view") return NativeView(target, args);
     if (verb == "quit") {
         target.Quit();
         return Ok();

@@ -69,6 +69,21 @@ class RunScriptTest(unittest.TestCase):
         self.assertEqual(result.reply["error"], "timed out")
         self.assertEqual(conn.sent, ["state", "wait in_game", "screenshot fail-boot-line4"])
 
+    def test_replies_with_stats_are_reported(self):
+        class StatsConnection(FakeConnection):
+            def command(self, line):
+                reply = super().command(line)
+                if line == "native_view stats":
+                    reply["stats"] = {"rendered": 3}
+                return reply
+
+        reported = []
+        result = band3ctl.run_script(
+            StatsConnection(), [(1, "state"), (2, "native_view stats")], "live",
+            lambda number, command, reply: reported.append((number, command, reply["stats"])))
+        self.assertTrue(result.passed)
+        self.assertEqual(reported, [(2, "native_view stats", {"rendered": 3})])
+
     def test_failure_screenshot_names_are_plain(self):
         conn = FakeConnection(failing={"state"})
         band3ctl.run_script(conn, [(2, "state")], "my script.v2")

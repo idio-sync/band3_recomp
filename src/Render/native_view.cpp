@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -112,6 +113,30 @@ class Renderer {
         dump_path_ = std::move(path);
     }
 
+    // the live view's numbers start over, from the next frame captured, and
+    // are kept while `measure`; the window alone keeps none
+    void ResetLiveStats(bool measure) {
+        auto cap = LatestCapture();
+        std::lock_guard lock(mutex_);
+        live_measuring_ = measure;
+        live_ = LiveViewStats{};
+        live_base_ = live_last_ = cap ? cap->frame : 0;
+        live_drew_gpu_.reset();
+    }
+
+    LiveViewStats LiveStats() {
+        auto cap = LatestCapture();
+        std::lock_guard lock(mutex_);
+        LiveViewStats s = live_;
+        s.gpu = live_drew_gpu_.value_or(gpu_);
+        s.width = options_.width;
+        s.height = options_.height;
+        // capturing stops with the last user, and the frame number with it
+        if (users_ > 0 && cap && cap->frame > live_base_) s.captured = cap->frame - live_base_;
+        else s.captured = live_last_ - live_base_;
+        return s;
+    }
+
     // copies the newest picture if it is newer than `frame`
     bool Take(uint64_t& frame, std::vector<uint32_t>& rgba, uint32_t& w, uint32_t& h,
               std::string& stats) {
@@ -169,12 +194,23 @@ class Renderer {
             // RenderFrame fails (and stays failed) without a device, and the
             // CPU draws instead
             GpuStats gs;
+            RasterStats rs;
+            const bool drew_gpu = gpu && GpuRenderer::Get().RenderFrame(*cap, o, rgba, gs);
+            if (!drew_gpu) rs = Rasterize(*cap, o, rgba);
             const std::string stats =
-                gpu && GpuRenderer::Get().RenderFrame(*cap, o, rgba, gs)
-                    ? Describe(*cap, DescribeGpu(gs))
-                    : Describe(*cap, DescribeRaster(Rasterize(*cap, o, rgba)));
+                Describe(*cap, drew_gpu ? DescribeGpu(gs) : DescribeRaster(rs));
             {
                 std::lock_guard lock(mutex_);
+                // a capture from before the numbers started over (one left
+                // from the last time, or redrawn for new options) isn't counted
+                if (live_measuring_ && cap->frame > live_last_) {
+                    live_.skipped_busy += cap->frame - live_last_ - 1;
+                    live_last_ = cap->frame;
+                    live_.rendered++;
+                    live_.ms.push_back(drew_gpu ? gs.ms : rs.ms);
+                    if (drew_gpu) live_.wait_ms.push_back(gs.wait_ms);
+                }
+                live_drew_gpu_ = drew_gpu;
                 image_ = rgba;
                 image_w_ = o.width;
                 image_h_ = o.height;
@@ -197,9 +233,17 @@ class Renderer {
     uint64_t image_serial_ = 0;
     uint32_t dump_count_ = 0;
     std::string stats_;
+    // the live view's numbers; captures numbered up to live_base_ came before
+    // they started, and live_last_ is the newest one counted
+    bool live_measuring_ = false;
+    LiveViewStats live_;
+    uint64_t live_base_ = 0, live_last_ = 0;
+    std::optional<bool> live_drew_gpu_;
 };
 
 bool g_dumping = false;
+std::mutex g_live_mutex;
+bool g_live = false;
 
 }  // namespace
 
@@ -297,11 +341,41 @@ void StartDumpIfRequested() {
     Renderer::Get().AddUser();
 }
 
+void StartLiveView(uint32_t width, uint32_t height) {
+    std::lock_guard lock(g_live_mutex);
+    RasterOptions o;
+    o.width = width;
+    o.height = height;
+    Renderer::Get().SetOptions(o);
+    // here, on the UI thread, where SDL wants its video started
+    Renderer::Get().SetGpu(REXCVAR_GET(native_view_backend) == "gpu" &&
+                           GpuRenderer::Get().Init());
+    Renderer::Get().ResetLiveStats(true);
+    if (!g_live) Renderer::Get().AddUser();
+    g_live = true;
+}
+
+void StopLiveView() {
+    std::lock_guard lock(g_live_mutex);
+    if (!g_live) return;
+    g_live = false;
+    Renderer::Get().ResetLiveStats(false);
+    Renderer::Get().RemoveUser();
+}
+
+bool LiveViewOn() {
+    std::lock_guard lock(g_live_mutex);
+    return g_live;
+}
+
+LiveViewStats GetLiveViewStats() { return Renderer::Get().LiveStats(); }
+
 void StopNativeView() {
     if (g_dumping) {
         g_dumping = false;
         Renderer::Get().RemoveUser();
     }
+    StopLiveView();
 }
 
 }  // namespace band3::render

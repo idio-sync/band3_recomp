@@ -13,7 +13,7 @@ band3 started with --test_port=<port> takes one command per line on
 Commands joined with ; share one connection, which `hold` needs: band3 lets go
 of everything held when a client disconnects. `run` replays a .b3t script: harness commands one per line, # comments. It
 stops at the first command that fails, saves a screenshot of the moment, and
-exits 1. The commands are listed in the README's Test harness section.
+exits 1. It prints the replies that carry measurements (`native_view`'s stats). The commands are listed in the README's Test harness section.
 
 Standard library only.
 """
@@ -67,14 +67,20 @@ class ScriptResult:
     reply: dict = field(default_factory=dict)
 
 
-def run_script(conn, commands, name):
-    """Sends each command in turn; stops at the first failure and screenshots it."""
+def run_script(conn, commands, name, report=None):
+    """Sends each command in turn; stops at the first failure and screenshots it.
+
+    A reply with measurements in it (`stats`, from `native_view`) goes to
+    report(line number, command, reply) as well, for the script's reader.
+    """
     for number, command in commands:
         reply = conn.command(command)
         if not reply.get("ok"):
             safe = re.sub(r"[^A-Za-z0-9_-]", "_", name)
             conn.command(f"screenshot fail-{safe}-line{number}")
             return ScriptResult(False, number, command, reply)
+        if report and "stats" in reply:
+            report(number, command, reply)
     return ScriptResult(True)
 
 
@@ -158,7 +164,10 @@ def run(args):
     conn = connect(args.port)
     try:
         started = time.monotonic()
-        result = run_script(conn, commands, name)
+        result = run_script(
+            conn, commands, name,
+            lambda number, command, reply: print(
+                f"{args.script}:{number}: {command}: {json.dumps(reply['stats'])}"))
     finally:
         conn.close()
     if result.passed:

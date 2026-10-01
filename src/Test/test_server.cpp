@@ -23,6 +23,7 @@
 #include <ctime>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -41,6 +42,7 @@
 #include "src/Input/xinput_state.h"
 #include "src/Render/capture_file.h"
 #include "src/Render/gpu_view.h"
+#include "src/Render/native_view.h"
 #include "src/Render/png_writer.h"
 #include "src/Render/scene_capture.h"
 #include "src/settings.h"
@@ -193,6 +195,39 @@ public:
         out.gpu_wait_ms = stats.wait_ms;
     }
 
+    std::string NativeViewOn(uint32_t width, uint32_t height) override {
+        // the GPU device starts on the UI thread
+        OnUIThread([&] { render::StartLiveView(width, height); });
+        StartMeasuring();
+        return {};
+    }
+
+    void NativeViewOff() override {
+        render::StopLiveView();
+        StartMeasuring();
+    }
+
+    NativeViewStats NativeView() override {
+        NativeViewStats out;
+        out.on = render::LiveViewOn();
+        render::LiveViewStats live = render::GetLiveViewStats();
+        // while it's off, only the game is measured
+        if (out.on) {
+            out.backend = live.gpu ? "gpu" : "cpu";
+            out.width = live.width;
+            out.height = live.height;
+            out.captured = live.captured;
+            out.rendered = live.rendered;
+            out.skipped_busy = live.skipped_busy;
+            out.frame_ms = std::move(live.ms);
+            out.wait_ms = std::move(live.wait_ms);
+        }
+        std::lock_guard lock(measure_mutex_);
+        out.seconds = std::chrono::duration<double>(Clock::now() - measure_start_).count();
+        out.game_frames = GameState::Get().Snapshot().frame - measure_frame_;
+        return out;
+    }
+
     std::string SetSetting(std::string_view name, std::string_view value) override {
         const rex::cvar::FlagEntry* info = rex::cvar::GetFlagInfo(name);
         if (!info || !info->category.starts_with("Band3/")) {
@@ -267,10 +302,21 @@ private:
         return std::string(buf) + "-" + std::to_string(ms);
     }
 
+    // the game's frame rate is measured from the last native_view on or off
+    void StartMeasuring() {
+        const uint64_t frame = GameState::Get().Snapshot().frame;
+        std::lock_guard lock(measure_mutex_);
+        measure_start_ = Clock::now();
+        measure_frame_ = frame;
+    }
+
     rex::Runtime* runtime_;
     rex::ui::WindowedAppContext* app_context_;
     rex::ui::Window* window_;
     const std::atomic<bool>& stopping_;
+    std::mutex measure_mutex_;
+    Clock::time_point measure_start_ = Clock::now();
+    uint64_t measure_frame_ = 0;
 };
 
 bool SendAll(socket_t s, const std::string& data) {

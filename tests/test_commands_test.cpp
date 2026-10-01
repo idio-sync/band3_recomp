@@ -51,6 +51,7 @@ public:
     std::string screenshot_name;
     std::string capture_name;
     bool gpu_works = true;
+    NativeViewStats view;
     bool quit = false;
     bool cancelled = false;
     input::Gamepad360 pad;
@@ -103,6 +104,17 @@ public:
         settings_set.emplace_back(name, value);
         return {};
     }
+    std::string NativeViewOn(uint32_t width, uint32_t height) override {
+        if (width > 4000) return "no GPU target that big";
+        view = NativeViewStats{};
+        view.on = true;
+        view.backend = "gpu";
+        view.width = width;
+        view.height = height;
+        return {};
+    }
+    void NativeViewOff() override { view = NativeViewStats{}; }
+    NativeViewStats NativeView() override { return view; }
     void Quit() override { quit = true; }
     bool Cancelled() override { return cancelled; }
     bool ReadPad(int player, input::Gamepad360& out, uint32_t& packet) override {
@@ -384,6 +396,70 @@ TEST_CASE("capture still succeeds without the GPU picture, and says why") {
     CHECK(Has(reply, "\"capture\":\"screenshots/venue_1.cap\""));
     CHECK(Has(reply, "\"gpu_error\":\"no GPU device\""));
     CHECK_FALSE(Has(reply, "\"gpu\":"));
+}
+
+TEST_CASE("native_view on starts the live view at a size, 1280x720 without one") {
+    FakeGame game;
+    std::string reply = RunCommand("native_view on", game);
+    CHECK(Ok(reply));
+    CHECK(game.view.on);
+    CHECK(game.view.width == 1280);
+    CHECK(game.view.height == 720);
+    CHECK(Has(reply, "\"stats\":{\"on\":true,\"backend\":\"gpu\",\"width\":1280,\"height\":720"));
+
+    CHECK(Ok(RunCommand("native_view on 640x360", game)));
+    CHECK(game.view.width == 640);
+    CHECK(game.view.height == 360);
+
+    for (const char* bad : {"native_view on 640", "native_view on 0x0", "native_view on x720",
+                            "native_view on 640x360x2", "native_view on 640x360 more",
+                            "native_view", "native_view sideways", "native_view stats now"}) {
+        CAPTURE(bad);
+        CHECK_FALSE(Ok(RunCommand(bad, game)));
+    }
+    CHECK(game.view.width == 640);
+
+    reply = RunCommand("native_view on 5000x720", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(Has(reply, "no GPU target that big"));
+    CHECK_FALSE(Ok(RunCommand("p2 native_view on", game)));
+}
+
+TEST_CASE("native_view stats reports what the live view drew and how long it took") {
+    FakeGame game;
+    REQUIRE(Ok(RunCommand("native_view on 1280x720", game)));
+    game.view.seconds = 40;
+    game.view.game_frames = 2392;
+    game.view.captured = 2392;
+    game.view.rendered = 20;
+    game.view.skipped_busy = 2372;
+    // 1 to 20 ms: the median is 10, the 95th percentile 19
+    for (int ms = 20; ms >= 1; ms--) game.view.frame_ms.push_back(ms);
+    game.view.wait_ms.assign(20, 1.5);
+    const std::string reply = RunCommand("native_view stats", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"seconds\":40.0,\"game_frames\":2392,\"game_fps\":59.8"));
+    CHECK(Has(reply, "\"captured\":2392,\"rendered\":20,\"skipped_busy\":2372"));
+    CHECK(Has(reply, "\"ms\":{\"mean\":10.50,\"p50\":10.00,\"p95\":19.00,\"max\":20.00}"));
+    CHECK(Has(reply, "\"wait_ms\":{\"mean\":1.50,\"p50\":1.50,\"p95\":1.50,\"max\":1.50}"));
+}
+
+TEST_CASE("native_view off reports the run it ends, then measures the game without it") {
+    FakeGame game;
+    REQUIRE(Ok(RunCommand("native_view on", game)));
+    game.view.rendered = 7;
+    game.view.frame_ms = {4.0};
+    const std::string reply = RunCommand("native_view off", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"on\":true"));
+    CHECK(Has(reply, "\"rendered\":7"));
+    CHECK_FALSE(game.view.on);
+
+    // nothing drawn yet: zeros, not a division by zero
+    const std::string stats = RunCommand("native_view stats", game);
+    CHECK(Has(stats, "\"on\":false,\"backend\":\"\",\"width\":0"));
+    CHECK(Has(stats, "\"game_fps\":0.0"));
+    CHECK(Has(stats, "\"ms\":{\"mean\":0.00,\"p50\":0.00,\"p95\":0.00,\"max\":0.00}"));
 }
 
 TEST_CASE("set passes the setting on, keeping spaces in the value") {
