@@ -6,13 +6,19 @@
 #include <unordered_map>
 #include <vector>
 
-// See capture_file.h. Host byte order, same machine only.
+// See capture_file.h. Host byte order, same machine only. Version 2 adds the
+// draws' ShadeStates, kept as their ShadeInputs are in memory, and their maps
+// among the textures; version 1 files still load, without them.
 
 namespace band3::render {
 namespace {
 
-constexpr char kMagic[8] = {'B', '3', 'C', 'A', 'P', '0', '0', '1'};
+constexpr char kMagic[8] = {'B', '3', 'C', 'A', 'P', '0', '0', '2'};
+constexpr char kMagicV1[8] = {'B', '3', 'C', 'A', 'P', '0', '0', '1'};
 constexpr uint32_t kMaxSavedTexture = 512;
+// a ShadeState's maps are kept smaller: at 512 they made a song's captures
+// half again as big
+constexpr uint32_t kMaxSavedMap = 256;
 
 struct Writer {
     std::vector<uint8_t> out;
@@ -47,9 +53,9 @@ struct Reader {
     }
 };
 
-Texture Downsample(const Texture& t) {
+Texture Downsample(const Texture& t, uint32_t most) {
     uint32_t step = 1;
-    while (t.width / step > kMaxSavedTexture || t.height / step > kMaxSavedTexture) step *= 2;
+    while (t.width / step > most || t.height / step > most) step *= 2;
     if (step == 1) return t;
     Texture r;
     r.format = t.format;
@@ -62,19 +68,56 @@ Texture Downsample(const Texture& t) {
     return r;
 }
 
+uint64_t PixelHash(const Texture& t) {
+    uint64_t h = 1469598103934665603ull ^ t.width ^ (uint64_t(t.height) << 20) ^
+                 (uint64_t(t.format) << 40);
+    for (uint32_t p : t.rgba) h = (h ^ p) * 1099511628211ull;
+    return h;
+}
+
 }  // namespace
 
 bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     std::unordered_map<const Geometry*, uint32_t> geoms;
     std::unordered_map<const Texture*, uint32_t> texs;
     std::vector<const Geometry*> geom_list;
-    std::vector<const Texture*> tex_list;
+    struct Saved {
+        const Texture* tex;
+        uint32_t most;  // the largest it's kept at
+    };
+    std::vector<Saved> tex_list;
+    // a map with the same pixels as a texture already kept (the material's
+    // colour texture as its specular map, say) is kept once, at the larger size
+    std::unordered_multimap<uint64_t, uint32_t> by_pixels;
+    auto add_tex = [&](const Texture* t, uint32_t most) {
+        if (!t) return;
+        if (auto it = texs.find(t); it != texs.end()) {
+            tex_list[it->second].most = std::max(tex_list[it->second].most, most);
+            return;
+        }
+        const uint64_t hash = PixelHash(*t);
+        auto [first, last] = by_pixels.equal_range(hash);
+        for (auto it = first; it != last; ++it) {
+            Saved& other = tex_list[it->second];
+            if (other.tex->width == t->width && other.tex->height == t->height &&
+                other.tex->format == t->format && other.tex->rgba == t->rgba) {
+                other.most = std::max(other.most, most);
+                texs.emplace(t, it->second);
+                return;
+            }
+        }
+        const uint32_t index = uint32_t(tex_list.size());
+        texs.emplace(t, index);
+        by_pixels.emplace(hash, index);
+        tex_list.push_back({t, most});
+    };
     for (const DrawItem& d : fc.draws) {
         if (geoms.emplace(d.geom.get(), uint32_t(geom_list.size())).second)
             geom_list.push_back(d.geom.get());
-        if (d.tex && texs.emplace(d.tex.get(), uint32_t(tex_list.size())).second)
-            tex_list.push_back(d.tex.get());
+        add_tex(d.tex.get(), kMaxSavedTexture);
     }
+    for (const ShadeState& s : fc.shades)
+        for (const auto& m : s.maps) add_tex(m.get(), kMaxSavedMap);
 
     Writer w;
     w.Raw(kMagic, sizeof(kMagic));
@@ -87,12 +130,19 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
         w.Raw(g->indices.data(), g->indices.size() * sizeof(uint16_t));
     }
     w.Put<uint32_t>(uint32_t(tex_list.size()));
-    for (const Texture* t : tex_list) {
-        const Texture s = Downsample(*t);
+    for (const Saved& t : tex_list) {
+        const Texture s = Downsample(*t.tex, t.most);
         w.Put<uint32_t>(s.width);
         w.Put<uint32_t>(s.height);
         w.Put<uint32_t>(s.format);
         w.Raw(s.rgba.data(), s.rgba.size() * sizeof(uint32_t));
+    }
+    w.Put<uint32_t>(uint32_t(sizeof(ShadeInputs)));
+    w.Put<uint32_t>(uint32_t(kNumShadeMaps));
+    w.Put<uint32_t>(uint32_t(fc.shades.size()));
+    for (const ShadeState& s : fc.shades) {
+        w.Put<ShadeInputs>(s);
+        for (const auto& m : s.maps) w.Put<int32_t>(m ? int32_t(texs[m.get()]) : -1);
     }
     w.Put<uint32_t>(uint32_t(fc.draws.size()));
     for (const DrawItem& d : fc.draws) {
@@ -110,6 +160,7 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
         w.Put<int32_t>(d.alpha_threshold);
         w.Put<uint32_t>(d.cam);
         w.Put<uint32_t>(d.mesh);
+        w.Put<int32_t>(d.shade);
     }
 
     const std::string tmp = path + ".tmp";
@@ -133,7 +184,8 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
     Reader r{data};
     char magic[8];
     r.Raw(magic, sizeof(magic));
-    if (std::memcmp(magic, kMagic, sizeof(magic)) != 0) return nullptr;
+    const bool v1 = std::memcmp(magic, kMagicV1, sizeof(magic)) == 0;
+    if (!v1 && std::memcmp(magic, kMagic, sizeof(magic)) != 0) return nullptr;
     auto fc = std::make_shared<FrameCapture>();
     fc->frame = r.Get<uint64_t>();
     std::vector<std::shared_ptr<const Geometry>> geoms(r.Get<uint32_t>());
@@ -155,6 +207,22 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
         r.Raw(tex->rgba.data(), tex->rgba.size() * sizeof(uint32_t));
         t = std::move(tex);
     }
+    if (!v1) {
+        // a file from a build with other registers or maps isn't read
+        const uint32_t inputs_size = r.Get<uint32_t>();
+        const uint32_t num_maps = r.Get<uint32_t>();
+        if (inputs_size != sizeof(ShadeInputs) || num_maps != uint32_t(kNumShadeMaps))
+            return nullptr;
+        fc->shades.resize(r.Get<uint32_t>());
+        for (ShadeState& s : fc->shades) {
+            static_cast<ShadeInputs&>(s) = r.Get<ShadeInputs>();
+            for (auto& m : s.maps) {
+                const int32_t ti = r.Get<int32_t>();
+                if (ti >= int32_t(texs.size())) return nullptr;
+                if (ti >= 0) m = texs[ti];
+            }
+        }
+    }
     fc->draws.resize(r.Get<uint32_t>());
     for (DrawItem& d : fc->draws) {
         const uint32_t gi = r.Get<uint32_t>();
@@ -174,6 +242,8 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
         d.alpha_threshold = r.Get<int32_t>();
         d.cam = r.Get<uint32_t>();
         d.mesh = r.Get<uint32_t>();
+        d.shade = v1 ? -1 : r.Get<int32_t>();
+        if (d.shade >= int32_t(fc->shades.size())) return nullptr;
     }
     return r.ok ? fc : nullptr;
 }

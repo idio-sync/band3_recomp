@@ -22,6 +22,7 @@ extern "C" void __imp__DxMesh__DrawShowing(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxRnd__Present(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxMultiMesh__DrawShowing(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxParticleSys__DrawParticles(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__RndShader__Cache(PPCContext& ctx, uint8_t* base);
 
 namespace band3::render {
 namespace {
@@ -54,10 +55,19 @@ constexpr uint32_t kMat_Blend = 0x28;
 constexpr uint32_t kMat_Color = 0x2c;
 constexpr uint32_t kMat_ZMode = 0x3c;
 constexpr uint32_t kMat_DiffuseTex = 0x8c + 8;
+constexpr uint32_t kMat_Intensify = 0x98;
+constexpr uint32_t kMat_UseEnviron = 0x99;
 constexpr uint32_t kMat_Prelit = 0x9a;
 constexpr uint32_t kMat_AlphaCut = 0x9b;
 constexpr uint32_t kMat_AlphaThreshold = 0xa0;
+constexpr uint32_t kMat_NextPass = 0xa4 + 8;
 constexpr uint32_t kMat_Fur = 0x104 + 8;
+constexpr uint32_t kMat_ShaderVariation = 0x118;
+constexpr uint32_t kMat_PerPixelLit = 0x11d;
+// each ShadeMap's ObjPtr in the material (pointer at +8), 0 for the
+// environment's (projected light, shadow buffer)
+constexpr uint32_t kMat_Map[kNumShadeMaps] = {0xd4 + 8,  0xec + 8, 0xe0 + 8, 0xf8 + 8,
+                                              0,         0,        0x164 + 8, 0x148 + 8};
 // RndMultiMesh (rndobj/MultiMesh.h)
 constexpr uint32_t kMultiMesh_Mesh = 0x24 + 8;    // ObjPtr<RndMesh>
 constexpr uint32_t kMultiMesh_Instances = 0x30;  // std::list<Instance>
@@ -97,6 +107,14 @@ constexpr uint32_t kDrawModeShadowDepth = 1;
 constexpr uint32_t kDrawModeShadowCasters = 3;
 constexpr uint32_t kDrawModeVelocity = 5;
 constexpr uint32_t kDrawModeReflection = 7;
+// the D3D device (TheDxRnd + 0x1c4) and its constant shadow, which
+// DxShaderMgr::SetVConstant/SetPConstant and SetTexture write
+// (rb3-xenon xdk/d3d9i/d3d9.h D3DDevice::m_Constants)
+constexpr uint32_t kD3DDeviceHolder = 0x82E04CFC;
+constexpr uint32_t kDev_TextureFetch = 0x480;  // 26 of 24 bytes
+constexpr uint32_t kDev_VertexShaderF = 0x780;
+constexpr uint32_t kDev_PixelShaderF = 0x1780;
+constexpr uint32_t kEnvironCurrent = 0x82CC0280;  // RndEnviron::sCurrent
 
 constexpr uint32_t kMaxBufferBytes = 64u << 20;
 constexpr uint32_t kMaxTextureSize = 4096;
@@ -351,6 +369,7 @@ bool GetFormatInfo(uint32_t format, FormatInfo& info) {
         case 18: info = {4, 8}; return true;   // k_DXT1
         case 19: info = {4, 16}; return true;  // k_DXT2_3
         case 20: info = {4, 16}; return true;  // k_DXT4_5
+        case 49: info = {4, 16}; return true;  // k_DXN
         default: return false;
     }
 }
@@ -388,6 +407,15 @@ void DecodeBlock(uint32_t format, const uint8_t* b, Rgba out[16]) {
             uint8_t a[16];
             DecodeDxt5Alpha(b, a);
             for (int i = 0; i < 16; i++) out[i].c[3] = a[i];
+            break;
+        }
+        case 49: {
+            // two DXT5 alpha blocks, x then y, as Xenia reads it (BC5); normal
+            // maps' tangent-space x and y
+            uint8_t x[16], y[16];
+            DecodeDxt5Alpha(b, x);
+            DecodeDxt5Alpha(b + 8, y);
+            for (int i = 0; i < 16; i++) out[i] = Rgba{{x[i], y[i], 0, 255}};
             break;
         }
     }
@@ -478,7 +506,10 @@ struct State {
     Mat4 vp{};
     uint64_t frame = 0;
     std::unordered_map<uint32_t, GeomEntry> geoms;
-    std::unordered_map<uint32_t, TexEntry> texs;
+    std::unordered_map<uint32_t, TexEntry> texs;      // by D3D texture
+    std::unordered_map<uint32_t, TexEntry> map_texs;  // by base address
+    // the building frame's shades, by a hash of their inputs
+    std::unordered_multimap<uint64_t, int32_t> shades;
 };
 
 State& S() {
@@ -487,6 +518,9 @@ State& S() {
 }
 
 std::atomic<bool> g_enabled{false};
+// RndShader::Cache's last option word and ShaderType, while capturing
+uint64_t g_shader_options = 0;
+int32_t g_shader_type = -1;
 // what has capture on: the native view, the dump, a held-frame request
 std::mutex g_users_mutex;
 int g_users = 0;
@@ -589,24 +623,31 @@ std::shared_ptr<const Geometry> CaptureGeometry(const Guest& g, uint32_t geom,
     return out;
 }
 
+// the texture fetch constant `f` describes, decoded again only when it or its
+// first bytes changed; empty rgba if its format isn't decoded
+std::shared_ptr<const Texture> DecodeCached(const Guest& g, const uint32_t f[6], uint32_t where,
+                                            std::unordered_map<uint32_t, TexEntry>& cache,
+                                            FrameCapture& fc) {
+    const uint32_t base_address = f[1] & 0xfffff000u;
+    const uint8_t* src = base_address ? GpuHost(g, base_address) : nullptr;
+    const uint64_t key = Key({f[0], f[1], f[2], f[3], f[5], src ? Fnv(src, 64) : 0});
+    auto it = cache.find(where);
+    if (it != cache.end() && it->second.key == key) {
+        fc.tex_cached++;
+        return it->second.tex;
+    }
+    std::shared_ptr<const Texture> tex = DecodeTexture(g, f);
+    cache[where] = TexEntry{key, tex};
+    return tex;
+}
+
 std::shared_ptr<const Texture> CaptureTexture(const Guest& g, uint32_t tex_obj,
                                               FrameCapture& fc) {
     const uint32_t d3d = g.U32(tex_obj + kDxTex_Texture);
     if (!d3d) return nullptr;
     uint32_t f[6];
     for (int i = 0; i < 6; i++) f[i] = g.U32(d3d + kD3DBaseTexture_Fetch + i * 4);
-    const uint32_t base_address = f[1] & 0xfffff000u;
-    const uint8_t* src = base_address ? GpuHost(g, base_address) : nullptr;
-    const uint64_t key = Key({f[0], f[1], f[2], f[3], f[5], src ? Fnv(src, 64) : 0});
-    auto it = S().texs.find(d3d);
-    std::shared_ptr<const Texture> tex;
-    if (it != S().texs.end() && it->second.key == key) {
-        fc.tex_cached++;
-        tex = it->second.tex;
-    } else {
-        tex = DecodeTexture(g, f);
-        S().texs[d3d] = TexEntry{key, tex};
-    }
+    std::shared_ptr<const Texture> tex = DecodeCached(g, f, d3d, S().texs, fc);
     if (tex->rgba.empty()) {
         fc.untextured_format++;
         return nullptr;
@@ -645,6 +686,125 @@ bool ToBackBuffer(const Guest& g, State& s, FrameCapture& fc) {
     return true;
 }
 
+// an address in a texture's header as the device's fetch constants have it
+// once the texture is set: physical, the CPU's 0xE0000000 view 0x1000 on (see
+// GpuHost)
+uint32_t GpuPhysical(uint32_t address) {
+    if (address < 0xA0000000u) return address;
+    return (address & 0x1FFFFFFFu) + (address >= 0xE0000000u ? 0x1000u : 0);
+}
+
+// the physical base address of a DxTex's texture, 0 without one
+uint32_t TexBase(const Guest& g, uint32_t tex_obj) {
+    const uint32_t d3d = tex_obj ? g.U32(tex_obj + kDxTex_Texture) : 0;
+    const uint32_t base = d3d ? g.U32(d3d + kD3DBaseTexture_Fetch + 4) & 0xfffff000u : 0;
+    return base ? GpuPhysical(base) : 0;
+}
+
+// whether a shader with these options samples the map (ShaderOptions.cpp's
+// macros; the samplers per rb3-xenon Mat_NG.cpp and Env_NG.cpp)
+bool MapSampled(const ShadeInputs& in, int map) {
+    using namespace shader_opt;
+    const bool proj = in.OptionBits(kNumProj, 2) != 0;
+    switch (map) {
+        case kMapNormal: return in.Option(kNormalMap);
+        case kMapSpecular: return in.Option(kSpecularMap);
+        case kMapGlow: return in.Option(kGlowMap);
+        case kMapEnviron: return in.Option(kEnvironMap);
+        case kMapProjected: return proj || in.Option(kShadowBuffer);
+        case kMapGobo: return proj && !in.Option(kProjLightMultiply);
+        case kMapDetailNormal: return in.Option(kNormDetail);
+        case kMapRim: return in.Option(kRimLightMap);
+        default: return false;
+    }
+}
+
+uint64_t HashBytes(const void* p, size_t n) {
+    const auto* b = static_cast<const uint8_t*>(p);
+    uint64_t h = 1469598103934665603ull;
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        uint64_t w;
+        std::memcpy(&w, b + i, 8);
+        h = (h ^ w) * 1099511628211ull;
+        h ^= h >> 29;
+    }
+    for (; i < n; i++) h = (h ^ b[i]) * 1099511628211ull;
+    return h;
+}
+
+// a 2D map the device has bound, decoded (and counted), or null for a cube or
+// a format not decoded
+std::shared_ptr<const Texture> CaptureMap(const Guest& g, const uint32_t f[6],
+                                          FrameCapture& fc) {
+    const uint32_t dimension = (f[5] >> 9) & 3;
+    if (dimension == 3) {
+        fc.maps_cube++;
+        return nullptr;
+    }
+    std::shared_ptr<const Texture> tex = DecodeCached(g, f, f[1] & 0xfffff000u, S().map_texs, fc);
+    if (!tex || tex->rgba.empty()) {
+        fc.maps_other_format++;
+        return nullptr;
+    }
+    fc.maps_decoded++;
+    return tex;
+}
+
+// What the draw just made had its shader read, from the device's constant
+// shadow: the hooks run after the draw, and DxMesh::DrawShowing sets the
+// constants per material pass, so these are its last pass's. The index of an
+// equal state already in the frame, or of a new one; -1 without a device.
+int32_t CaptureShade(const Guest& g, State& s, FrameCapture& fc, uint32_t mat) {
+    const uint32_t dev = g.U32(kD3DDeviceHolder);
+    if (!dev) return -1;
+    ShadeState shade;
+    ShadeInputs& in = shade;
+    std::memset(&in, 0, sizeof(in));
+    in.options = g_shader_options;
+    in.shader_type = g_shader_type;
+    in.env = g.U32(kEnvironCurrent);
+    for (int i = 0; i < 3; i++) in.eye[i] = g.F32(s.cam + kTrans_WorldXfm + 0x30 + i * 4);
+    for (int r = 0; r < kNumShadeRegs; r++) {
+        for (int c = 0; c < 4; c++) {
+            in.vs[r][c] = g.F32(dev + kDev_VertexShaderF + kShadeRegs[r] * 16 + c * 4);
+            in.ps[r][c] = g.F32(dev + kDev_PixelShaderF + kShadeRegs[r] * 16 + c * 4);
+        }
+    }
+    in.mat = mat;
+    in.next_pass = g.U32(mat + kMat_NextPass);
+    in.use_environ = g.U8(mat + kMat_UseEnviron);
+    in.intensify = g.U8(mat + kMat_Intensify);
+    in.per_pixel_lit = g.U8(mat + kMat_PerPixelLit);
+    in.shader_variation = int32_t(g.U32(mat + kMat_ShaderVariation));
+    in.mat_diffuse_base = TexBase(g, g.U32(mat + kMat_DiffuseTex));
+    auto fetch = [&](uint32_t sampler, uint32_t out[6]) {
+        for (int i = 0; i < 6; i++) out[i] = g.U32(dev + kDev_TextureFetch + sampler * 24 + i * 4);
+    };
+    if (in.Option(shader_opt::kDiffuseMap)) fetch(0, in.fetch_diffuse);
+    for (int m = 0; m < kNumShadeMaps; m++) {
+        if (kMat_Map[m]) {
+            in.mat_maps[m] = g.U32(mat + kMat_Map[m]);
+            // RndCubeTex isn't a DxTex
+            if (m != kMapEnviron) in.mat_map_base[m] = TexBase(g, in.mat_maps[m]);
+        }
+        if (MapSampled(in, m)) fetch(kShadeMapSampler[m], in.fetch[m]);
+    }
+
+    const uint64_t hash = HashBytes(&in, sizeof(in));
+    auto [first, last] = s.shades.equal_range(hash);
+    for (auto it = first; it != last; ++it) {
+        const ShadeInputs& other = fc.shades[it->second];
+        if (std::memcmp(&other, &in, sizeof(in)) == 0) return it->second;
+    }
+    for (int m = 0; m < kNumShadeMaps; m++)
+        if (in.fetch[m][1]) shade.maps[m] = CaptureMap(g, in.fetch[m], fc);
+    const int32_t index = int32_t(fc.shades.size());
+    fc.shades.push_back(std::move(shade));
+    s.shades.emplace(hash, index);
+    return index;
+}
+
 // a draw of `geometry` with material `mat`, for the current camera
 DrawItem MakeItem(const Guest& g, State& s, FrameCapture& fc, uint32_t mat, uint32_t owner,
                   std::shared_ptr<const Geometry> geometry) {
@@ -662,6 +822,7 @@ DrawItem MakeItem(const Guest& g, State& s, FrameCapture& fc, uint32_t mat, uint
     item.mesh = owner;
     const uint32_t tex = g.U32(mat + kMat_DiffuseTex);
     if (tex) item.tex = CaptureTexture(g, tex, fc);
+    item.shade = CaptureShade(g, s, fc, mat);
     return item;
 }
 
@@ -809,6 +970,7 @@ void FinishFrame() {
     State& s = S();
     if (!g_enabled.load(std::memory_order_relaxed)) {
         if (!s.building->draws.empty()) s.building = std::make_shared<FrameCapture>();
+        s.shades.clear();
         return;
     }
     s.building->frame = ++s.frame;
@@ -818,11 +980,13 @@ void FinishFrame() {
         g_latest = done;
     }
     s.building = std::make_shared<FrameCapture>();
+    s.shades.clear();
     HoldIfRequested(done);
     s.cam_counted = false;
     // a venue change leaves stale entries behind; start over now and then
     if (s.geoms.size() > 50000) s.geoms.clear();
     if (s.texs.size() > 20000) s.texs.clear();
+    if (s.map_texs.size() > 20000) s.map_texs.clear();
 }
 
 }  // namespace
@@ -906,6 +1070,18 @@ extern "C" REX_FUNC(DxParticleSys__DrawParticles) {
     __imp__DxParticleSys__DrawParticles(ctx, base);
     if (!g_enabled.load(std::memory_order_relaxed)) return;
     CaptureParticles(base, sys);
+}
+
+// RndShader::Cache(type, options): r4 is the ShaderType, r5 the 64-bit
+// option word, by value. The last one before a draw is the one it drew with
+// (native_view_replay's shade summary checks the word's DIFFUSE_MAP and PRELIT
+// against the material). Called for every shader, so kept to two stores.
+extern "C" REX_FUNC(RndShader__Cache) {
+    if (g_enabled.load(std::memory_order_relaxed)) {
+        g_shader_options = ctx.r5.u64;
+        g_shader_type = ctx.r4.s32;
+    }
+    __imp__RndShader__Cache(ctx, base);
 }
 
 extern "C" REX_FUNC(DxRnd__Present) {

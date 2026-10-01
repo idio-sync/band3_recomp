@@ -26,6 +26,7 @@ add_executable(band3_tests
     player_slots_test.cpp
     test_commands_test.cpp
     test_inputs_test.cpp
+    capture_file_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Input/hid_capture.cpp
@@ -38,6 +39,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/player_slots.cpp
     ${BAND3_ROOT}/src/Input/ps3_instruments.cpp
     ${BAND3_ROOT}/src/Input/ps4_instruments.cpp
+    ${BAND3_ROOT}/src/Render/capture_file.cpp
     ${BAND3_ROOT}/src/Test/game_state.cpp
     ${BAND3_ROOT}/src/Test/test_commands.cpp
     ${BAND3_ROOT}/src/Test/test_inputs.cpp
@@ -45,6 +47,10 @@ add_executable(band3_tests
 # instrument captures replayed by hid_capture_test.cpp
 target_compile_definitions(band3_tests PRIVATE
     BAND3_CAPTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/captures"
+)
+# capture_file.cpp saves with fopen, as band3's own build lets it
+set_source_files_properties(${BAND3_ROOT}/src/Render/capture_file.cpp PROPERTIES
+    COMPILE_DEFINITIONS _CRT_SECURE_NO_WARNINGS
 )
 target_include_directories(band3_tests PRIVATE
     ${BAND3_ROOT}
