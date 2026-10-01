@@ -1,8 +1,8 @@
 #include <rex/hook.h>
-#include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 #include <rex/types.h>
 #include <cstring>
+#include "src/Game/Script.h"
 #include "src/Game/SongMgr.h"
 #include "src/Game/Symbol.h"
 #include "src/Net/http_game.h"
@@ -14,7 +14,6 @@
 
 REX_EXTERN(Object__Find_UIPanel_);
 REX_EXTERN(MusicLibrary__TryToSetHighlight);
-REX_EXTERN(RockCentralGateway__ExecuteConfig);
 
 namespace band3::http::game {
 
@@ -23,7 +22,6 @@ namespace {
 // globals
 constexpr uint32_t kTheMusicLibraryPtr = 0x82DFD3A8;  // MusicLibrary*
 constexpr uint32_t kMainDirPtr = 0x82E054B8;          // ObjectDir::sMainDir
-constexpr uint32_t kRockCentralGateway = 0x82CC8F60;  // RockCentralGateway object
 
 // struct offsets
 constexpr uint32_t kUIPanel_IsUp = 0x20;
@@ -103,19 +101,7 @@ JumpResult JumpToSong(PPCContext& ctx, uint8_t* base, const std::string& shortna
 }
 
 void ExecuteScript(PPCContext& ctx, uint8_t* base, const std::string& script) {
-    auto* memory = rex::system::kernel_memory();
-    const auto size = static_cast<uint32_t>(script.size() + 1);
-    const uint32_t text = memory->SystemHeapAlloc(size, 4);
-    if (!text) return;
-    std::memcpy(base + text, script.c_str(), size);
-
-    // RockCentralGateway::ExecuteConfig(RockCentralGateway*, const char* dta)
-    PPCContext call = CallContext(ctx, 0x100);
-    call.r3.u64 = kRockCentralGateway;
-    call.r4.u64 = text;
-    RockCentralGateway__ExecuteConfig(call, base);
-
-    memory->SystemHeapFree(text);
+    RunScript(ctx, base, script);
 }
 
 }

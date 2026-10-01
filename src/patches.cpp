@@ -10,6 +10,7 @@
 #include "settings.h"
 #include "src/Input/instruments.h"
 #include "src/Net/events.h"
+#include "src/Game/Modifiers.h"
 #include "src/Game/Symbol.h"
 #include "src/Test/game_state.h"
 #include "src/Test/test_server.h"
@@ -237,6 +238,14 @@ extern "C" REX_FUNC(MetaPerformer__SetVenue)
     const std::string forced = band3::settings::ForcedVenue();
 
     if (forced.empty() || forced == "false") {
+        // RB3E's black background modifier: venue "none", the track over black;
+        // a forced venue still wins, as on RB3E
+        if (band3::modifiers::Active(ctx, base, "mod_black_background")) {
+            if (const uint32_t none = band3::modifiers::Intern(ctx, base, "none")) {
+                REXLOG_INFO("Black background modifier: no venue");
+                ctx.r4.u64 = none;
+            }
+        }
         SetVenueAndReport(ctx, base);
         return;
     }

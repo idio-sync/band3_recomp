@@ -349,10 +349,15 @@ Rock Band 3 Deluxe only uses them when its scripts see `RB3E` defined, as RB3E's
 loader does. Turn on `rb3e_mode` (Band3 → Integrations, then restart) for band3 to
 define `RB3E` and `RB3E_HAS_VERSION`: Deluxe then shows its RB3E version line,
 offers its party mode (which shows this PC's address for the web page above) and
-looks songs up through these functions. It also shows RB3E features band3 doesn't
-have yet: RB3E's extra modifiers do nothing, and its "Clear and reboot game" after
-a Deluxe update fails, since band3 can't delete the song cache or relaunch itself
-yet. It's off by default until those are in.
+looks songs up through these functions. Its "Clear and reboot game" after a Deluxe
+update fails, though, since band3 can't delete the song cache or relaunch itself yet,
+so `rb3e_mode` is off by default until it can.
+
+band3 also adds RB3E's six modifiers to the game's (Options → Modifiers, and Deluxe's
+menus), with or without `rb3e_mode`: Black Background (no venue), Force HOPOs, Mirror
+Mode (green and orange, red and blue swapped), Gem Color Shuffle (gems drawn in random
+colours), Gem Shuffle (each chord's lanes shuffled) and Double Bass (expert drums play
+the 2x bass pedal notes).
 
 ### Steam Deck
 

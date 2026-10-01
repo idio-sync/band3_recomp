@@ -227,8 +227,8 @@ REXCVAR_DEFINE_BOOL(http_allow_scripts, false, "Band3/Integrations",
 
 REXCVAR_DEFINE_BOOL(rb3e_mode, false, "Band3/Integrations",
     "Tell the game's scripts RB3Enhanced is running (they see RB3E and RB3E_HAS_VERSION "
-    "defined), so Rock Band 3 Deluxe turns on its RB3E features. Some of those aren't in "
-    "band3 yet: its extra modifiers do nothing, and clearing the song cache fails")
+    "defined), so Rock Band 3 Deluxe turns on its RB3E features. One isn't in band3 yet: "
+    "clearing the song cache and rebooting after a Deluxe update fails")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 // Band3/Debug
