@@ -47,6 +47,9 @@ constexpr uint32_t kRowPitchAlign = 256;
 constexpr uint32_t kTextureOffsetAlign = 512;
 // the arena's least size; it's made half again as big as it needs
 constexpr uint32_t kMinArenaBytes = 4u << 20;
+// the upload buffer's first size, which holds a song's usual frame: making it
+// bigger later costs a frame several milliseconds
+constexpr uint32_t kInitialUploadBytes = 16u << 20;
 
 // mesh.hlsl's cbuffers, as they lie in memory
 struct VertexUniforms {
@@ -170,8 +173,9 @@ struct GpuRenderer::Impl {
     SDL_GPUDevice* device = nullptr;
     SDL_GPUShader* vertex_shader = nullptr;
     SDL_GPUShader* pixel_shader = nullptr;
-    // by blend mode and DepthRules::Key, made the first time a draw needs one
+    // by blend mode and DepthRules::Key, all made before the first frame
     std::unordered_map<int, SDL_GPUGraphicsPipeline*> pipelines;
+    bool warm = false;
     SDL_GPUSampler* sampler = nullptr;
     SDL_GPUTexture* white = nullptr;     // bound for untextured draws, which don't read it
     SDL_GPUBuffer* no_bones = nullptr;   // one identity bone, bound when nothing is skinned
@@ -258,6 +262,9 @@ struct GpuRenderer::Impl {
     void Release(bool stop_video);
     SDL_GPUShader* MakeShader(SDL_GPUShaderFormat format, SDL_GPUShaderStage stage);
     SDL_GPUGraphicsPipeline* Pipeline(int blend, const DepthRules& rules);
+    // makes every pipeline a frame can ask for and the upload buffer's usual
+    // size, so no frame stalls making them
+    void Prewarm();
     bool EnsureTargets(uint32_t w, uint32_t h);
     // grows `b` to hold `bytes`; what it held is lost when it grows
     bool Reserve(Buffer& b, SDL_GPUBufferUsageFlags usage, uint32_t bytes);
@@ -448,6 +455,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     tex_arrays.clear();
     arena_vert_count = arena_index_count = 0;
     pipelines.clear();
+    warm = false;
     device = nullptr;
     vertex_shader = pixel_shader = nullptr;
     sampler = nullptr;
@@ -541,6 +549,29 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     if (!p) REXLOG_WARN("native view gpu: no pipeline ({})", SDL_GetError());
     pipelines[key] = p;
     return p;
+}
+
+void GpuRenderer::Impl::Prewarm() {
+    warm = true;
+    const auto start = std::chrono::steady_clock::now();
+    // RulesFor's, with blending on and off
+    constexpr DepthRules kRules[] = {{false, false, false}, {true, true, false},
+                                     {false, false, true},  {true, true, true},
+                                     {true, false, true}};
+    for (int blend = kBlendDest; blend <= kBlendMultiply; blend++)
+        for (const DepthRules& r : kRules) Pipeline(blend, r);
+    if (upload_size < kInitialUploadBytes) {
+        if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
+        SDL_GPUTransferBufferCreateInfo tbi{};
+        tbi.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        tbi.size = kInitialUploadBytes;
+        upload = SDL_CreateGPUTransferBuffer(device, &tbi);
+        upload_size = upload ? tbi.size : 0;
+    }
+    REXLOG_INFO("native view gpu: {} pipelines and a {} MB upload buffer in {:.1f} ms",
+                pipelines.size(), upload_size >> 20,
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                          start).count());
 }
 
 bool GpuRenderer::Impl::Reserve(Buffer& b, SDL_GPUBufferUsageFlags usage, uint32_t bytes) {
@@ -1114,6 +1145,8 @@ bool GpuRenderer::RenderFrame(const FrameCapture& frame, const RasterOptions& op
                               std::vector<uint32_t>& rgba, GpuStats& stats) {
     std::lock_guard lock(impl_->mutex);
     if (!impl_->device) return false;
+    // before the clock starts: it's the device's setting up, not a frame's
+    if (!impl_->warm) impl_->Prewarm();
     const auto start = std::chrono::steady_clock::now();
     stats = GpuStats{};
     if (!impl_->Render(frame, options, rgba, stats)) {
