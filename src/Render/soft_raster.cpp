@@ -29,6 +29,7 @@ struct ClipVert {
     // a vertex-lit material's Lighting (shade.hlsli), diffuse and added
     float ld[3];
     float la[3];
+    float ao[2];  // the point lights' AoShVertex
 };
 
 ClipVert Lerp(const ClipVert& a, const ClipVert& b, float t) {
@@ -40,6 +41,7 @@ ClipVert Lerp(const ClipVert& a, const ClipVert& b, float t) {
     for (int i = 0; i < 3; i++) r.wp[i] = a.wp[i] + (b.wp[i] - a.wp[i]) * t;
     for (int i = 0; i < 3; i++) r.ld[i] = a.ld[i] + (b.ld[i] - a.ld[i]) * t;
     for (int i = 0; i < 3; i++) r.la[i] = a.la[i] + (b.la[i] - a.la[i]) * t;
+    for (int i = 0; i < 2; i++) r.ao[i] = a.ao[i] + (b.ao[i] - a.ao[i]) * t;
     return r;
 }
 
@@ -69,6 +71,9 @@ struct Target {
     // a texture pass's: the texture it draws into, which its draws can't sample
     uint32_t tex_obj = 0;
     bool no_z = false;  // no depth buffer: nothing tests or writes depth
+    // the picture's, once the scene is resolved into it: a copy of it as the
+    // resolve left it, w x h, which REFRACT_WORLD draws read (RefractsWorld)
+    const uint32_t* behind = nullptr;
     // the viewport (clip space -1..1 maps to x..x+w, y..y+h), and the pixels
     // it covers, which is all a triangle can reach
     float vx = 0, vy = 0, vw = 0, vh = 0;
@@ -102,6 +107,7 @@ struct DrawState {
     TexView tex;
     TexView spec_map;  // none unless shade samples it
     TexView glow;
+    TexView behind;  // the target's behind, for kShadeRefract
     shade::ShadeParams shade;
     bool per_vertex;  // kShadePerVertex: ClipVert's ld and la are set
     int blend;
@@ -121,19 +127,32 @@ void Texel(const TexView& t, const float uv[2], float out[4]) {
     for (int i = 0; i < 4; i++) out[i] = float((c >> (8 * i)) & 0xff) / 255.0f;
 }
 
-void Shade(const DrawState& ds, const float uv[2], const float n[3], const float vc[4],
-           const float wp[3], float depth, const float ld[3], const float la[3], float out[4]) {
+// pixel x, y's colour; the picture behind it is the one at x, y, the
+// target's size (mesh.hlsl reads it at SV_Position likewise)
+void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3],
+           const float vc[4], const float wp[3], float depth, const float ao[2],
+           const float ld[3], const float la[3], float out[4]) {
     float texel[4] = {1, 1, 1, 1}, spec_map[4] = {1, 1, 1, 1}, glow[4] = {0, 0, 0, 0};
+    float behind[4] = {1, 1, 1, 1};
     if (ds.tex.px) Texel(ds.tex, uv, texel);
     if (ds.spec_map.px) Texel(ds.spec_map, uv, spec_map);
     if (ds.glow.px) Texel(ds.glow, uv, glow);
-    shade::ShadePixelCpu(ds.shade, wp, n, vc, texel, spec_map, glow, depth, ld, la, out);
+    if (ds.behind.px) {
+        const uint32_t c = ds.behind.px[size_t(y) * ds.behind.w + x];
+        for (int i = 0; i < 4; i++) behind[i] = float((c >> (8 * i)) & 0xff) / 255.0f;
+    }
+    shade::ShadePixelCpu(ds.shade, wp, n, vc, texel, spec_map, glow, behind, depth, ao, ld, la,
+                         out);
 }
 
 // The colour by the material's blend mode (Dest keeps it), and alpha by
 // `alpha`: 1, blended by the colour's factors (a texture's, as gpu_view.cpp's
 // pipelines do), kept, or RB3's back buffer's ONE ONE MAX, the larger of the
-// two where the mode blends (any but Src, which Blend() draws other modes as)
+// two where the mode blends (any but Src, which Blend() draws other modes as).
+// RndMat's Screen, Lighten and Darken (8..10) are drawn as Src too: NgMat's
+// SetupShader sets no blend state for them (rb3-xenon Mat_NG.cpp's switch
+// falls to default, and the second one asserts), so on the 360 they never
+// appear.
 uint32_t Blend(int mode, const float s[4], uint32_t dst, AlphaRule alpha) {
     float d[4];
     for (int i = 0; i < 4; i++) d[i] = float((dst >> (8 * i)) & 0xff) / 255.0f;
@@ -146,15 +165,18 @@ uint32_t Blend(int mode, const float s[4], uint32_t dst, AlphaRule alpha) {
             case 4: o[i] = d[i] + s[i] * a; break;               // SrcAlphaAdd
             case 5: o[i] = d[i] - s[i]; break;                   // Subtract
             case 6: o[i] = d[i] * s[i]; break;                   // Multiply
-            case 0: o[i] = d[i]; break;                          // Dest
-            default: o[i] = s[i]; break;                         // Src
+            // PreMultAlpha, ONE INVSRCALPHA: the colour comes scaled by alpha
+            // (c0 by SetupShader's PreMultiplyAlpha, the texture as it is)
+            case 7: o[i] = s[i] + d[i] * (1.0f - a); break;
+            case 0: o[i] = d[i]; break;  // Dest
+            default: o[i] = s[i]; break;  // Src
         }
     }
     switch (alpha) {
         case AlphaRule::kOpaque: o[3] = 1.0f; break;
         case AlphaRule::kKeep: o[3] = d[3]; break;
         case AlphaRule::kMax:
-            o[3] = mode < 0 || mode == 1 || mode > 6 ? a : std::max(a, d[3]);
+            o[3] = mode < 0 || mode == 1 || mode > 7 ? a : std::max(a, d[3]);
             break;
         case AlphaRule::kColorFactors:
             switch (mode) {
@@ -163,6 +185,7 @@ uint32_t Blend(int mode, const float s[4], uint32_t dst, AlphaRule alpha) {
                 case 4: o[3] = d[3] + a * a; break;
                 case 5: o[3] = d[3] - a; break;
                 case 6: o[3] = d[3] * a; break;
+                case 7: o[3] = a + d[3] * (1.0f - a); break;
                 default: o[3] = a; break;
             }
             break;
@@ -225,13 +248,15 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
             for (int i = 0; i < 3; i++) n[i] = q0 * a.n[i] + q1 * b.n[i] + q2 * c.n[i];
             for (int i = 0; i < 4; i++) vc[i] = q0 * a.c[i] + q1 * b.c[i] + q2 * c.c[i];
             for (int i = 0; i < 3; i++) wp[i] = q0 * a.wp[i] + q1 * b.wp[i] + q2 * c.wp[i];
+            float ao[2];
+            for (int i = 0; i < 2; i++) ao[i] = q0 * a.ao[i] + q1 * b.ao[i] + q2 * c.ao[i];
             float ld[3] = {0, 0, 0}, la[3] = {0, 0, 0};
             if (ds.per_vertex) {
                 for (int i = 0; i < 3; i++) ld[i] = q0 * a.ld[i] + q1 * b.ld[i] + q2 * c.ld[i];
                 for (int i = 0; i < 3; i++) la[i] = q0 * a.la[i] + q1 * b.la[i] + q2 * c.la[i];
             }
             float col[4];
-            Shade(ds, uv, n, vc, wp, 1.0f / z, ld, la, col);
+            Shade(ds, x, y, uv, n, vc, wp, 1.0f / z, ao, ld, la, col);
             if (shade::AlphaCutCpu(ds.shade, col[3])) continue;
             // Dest draws no colour, but may still write the scene's alpha
             if (ds.blend != 0 || ds.alpha == AlphaRule::kMax) {
@@ -344,42 +369,59 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
         ds.spec_map = View(state->maps[kMapSpecular].get());
     if (ds.shade.flags.x & shade::kShadeGlow) ds.glow = View(state->maps[kMapGlow].get());
     ds.per_vertex = (ds.shade.flags.x & shade::kShadePerVertex) != 0;
+    // REFRACT_WORLD reads the picture behind it: in the picture, once resolved
+    if (ds.shade.flags.x & shade::kShadeRefract) {
+        if (t.behind)
+            ds.behind = {t.w, t.h, t.behind};
+        else
+            ds.shade.flags.x &= ~shade::kShadeRefract;
+    }
+    const bool ao_sh = (ds.shade.flags.x & shade::kShadeAoSh) != 0;
     cv.resize(g.verts.size());
     for (size_t i = 0; i < g.verts.size(); i++) {
         const Vertex& v = g.verts[i];
-        float wp[3] = {0, 0, 0}, wn[3] = {0, 0, 0};
+        ClipVert& c = cv[i];
+        for (int k = 0; k < 4; k++) c.c[k] = float((v.color >> (8 * k)) & 0xff) / 255.0f;
+        // the vertex colour's SH direction turns as the normal does
+        float dir[3] = {0, 0, 0};
+        if (ao_sh) shade::AoShDirectionCpu(c.c, dir);
+        float wp[3] = {0, 0, 0}, wn[3] = {0, 0, 0}, wd[3] = {0, 0, 0};
         if (skinned) {
             float total = 0;
             for (int k = 0; k < 4; k++) {
                 const float w = v.weight[k];
                 if (w <= 0) continue;
                 const Mat4& b = it.bones[v.bone[k] < it.bones.size() ? v.bone[k] : 0];
-                float p[3], n[3];
+                float p[3], n[3], d[3] = {0, 0, 0};
                 Point(v.pos, b, p);
                 Dir(v.nrm, b, n);
-                for (int c = 0; c < 3; c++) {
-                    wp[c] += p[c] * w;
-                    wn[c] += n[c] * w;
+                if (ao_sh) Dir(dir, b, d);
+                for (int j = 0; j < 3; j++) {
+                    wp[j] += p[j] * w;
+                    wn[j] += n[j] * w;
+                    wd[j] += d[j] * w;
                 }
                 total += w;
             }
             if (total <= 0) {
                 Point(v.pos, it.bones[0], wp);
                 Dir(v.nrm, it.bones[0], wn);
+                if (ao_sh) Dir(dir, it.bones[0], wd);
             }
         } else {
             Point(v.pos, it.world, wp);
             Dir(v.nrm, it.world, wn);
+            if (ao_sh) Dir(dir, it.world, wd);
         }
-        ClipVert& c = cv[i];
         for (int col = 0; col < 4; col++)
             c.p[col] = wp[0] * it.view_proj.m[0][col] + wp[1] * it.view_proj.m[1][col] +
                        wp[2] * it.view_proj.m[2][col] + it.view_proj.m[3][col];
         shade::TexGenUv(ds.shade, v.uv, c.uv);
         for (int k = 0; k < 3; k++) c.n[k] = wn[k];
         for (int k = 0; k < 3; k++) c.wp[k] = wp[k];
-        for (int k = 0; k < 4; k++) c.c[k] = float((v.color >> (8 * k)) & 0xff) / 255.0f;
-        if (ds.per_vertex) shade::LightVertexCpu(ds.shade, wp, wn, c.c, c.ld, c.la);
+        c.ao[0] = c.ao[1] = 1.0f;
+        if (ao_sh) shade::AoShVertexCpu(ds.shade, wp, wn, wd, c.c, c.ao);
+        if (ds.per_vertex) shade::LightVertexCpu(ds.shade, wp, wn, c.c, c.ao, c.ld, c.la);
     }
 
     ds.blend = o.blending ? it.blend : 1;
@@ -476,6 +518,13 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     Target overlay{o.width, o.height, rgba, depth, ids};
     overlay.SetViewport(0, 0, float(o.width), float(o.height));
     Target* back = &world;
+    // the picture as the resolve leaves it, kept if an overlay draw reads it
+    std::vector<uint32_t> behind;
+    bool refracts = false;
+    for (size_t i = frame.post_boundary; i < frame.draws.size() && !refracts; i++) {
+        const DrawItem& it = frame.draws[i];
+        refracts = DrawnToBackBuffer(it) && RefractsWorld(shade::ShadeOf(frame, it));
+    }
     post::PostPlan post_plan;
     const bool post_on =
         o.post && o.view == RasterView::kFinal && post::PlanPost(frame, o.post_only, post_plan);
@@ -487,20 +536,24 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         if (post_on) {
             // the depth buffer has 1/w, as RunPost wants it
             post::RunPost(post_plan, scene, depth, o.width, o.height, rgba);
-            return;
-        }
-        for (size_t i = 0; i < pixels; i++) {
-            const uint32_t c = scene[i];
-            uint32_t g;
-            switch (o.view) {
-                case RasterView::kSceneAlpha: g = c >> 24; break;
-                case RasterView::kSceneDepth:
-                    // the depth buffer has 1/w
-                    g = uint32_t(DepthViewGrey(depth[i] * kNearW) * 255.0f + 0.5f);
-                    break;
-                default: rgba[i] = c | 0xff000000u; continue;
+        } else {
+            for (size_t i = 0; i < pixels; i++) {
+                const uint32_t c = scene[i];
+                uint32_t g;
+                switch (o.view) {
+                    case RasterView::kSceneAlpha: g = c >> 24; break;
+                    case RasterView::kSceneDepth:
+                        // the depth buffer has 1/w
+                        g = uint32_t(DepthViewGrey(depth[i] * kNearW) * 255.0f + 0.5f);
+                        break;
+                    default: rgba[i] = c | 0xff000000u; continue;
+                }
+                rgba[i] = g | g << 8 | g << 16 | 0xff000000u;
             }
-            rgba[i] = g | g << 8 | g << 16 | 0xff000000u;
+        }
+        if (refracts) {
+            behind = rgba;
+            overlay.behind = behind.data();
         }
     };
     std::vector<ClipVert> cv;

@@ -35,7 +35,8 @@ SHADERS = [
          {("ubos", "VertexUniforms", 1, 0), ("ssbos", "bones", 0, 0)}),
         ("kMeshPixel", "PSMain", "ps_5_1", "ps_6_0",
          {("ubos", "PixelUniforms", 3, 0), ("textures", "tex", 2, 0),
-          ("textures", "spec_tex", 2, 1), ("textures", "glow_tex", 2, 2)}),
+          ("textures", "spec_tex", 2, 1), ("textures", "glow_tex", 2, 2),
+          ("textures", "behind_tex", 2, 3)}),
     ]),
     ("post.hlsl", "post_shaders.gen.h", [
         ("kFullscreenVertex", "VSFullscreen", "vs_5_1", "vs_6_0", set()),

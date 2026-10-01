@@ -26,7 +26,9 @@
 // picture, where post-processing goes, and the overlay's draws (track, HUD) go
 // on top. The resolve is RB3's post-processing (post_model.h), run on the
 // scene target's colour, alpha and depth, or a copy (alpha made opaque) on
-// frames without it or with RasterOptions::post off.
+// frames without it or with RasterOptions::post off. An overlay draw that
+// reads the picture behind it (RefractsWorld) reads a copy of it as the
+// resolve left it.
 
 namespace band3::render {
 
@@ -115,6 +117,13 @@ inline bool IsPassTarget(const Texture* t) {
 inline bool WritesSceneAlpha(const ShadeState* s) {
     return s && (s->Option(shader_opt::kPseudoHdr) || s->alpha_write);
 }
+
+// Whether a draw's shader is REFRACT_WORLD (option bit 46, which shader_opt
+// doesn't name; the score box's glass): its texture times the picture behind
+// it. Drawn over the overlay, that's DxRnd::GetCurrentFrameTex's
+// PostProcessTexture, the picture as DoPostProcess left it (SavePostBuffer)
+// before the overlay's draws, which the renderers keep a copy of for it.
+inline bool RefractsWorld(const ShadeState* s) { return s && ((s->options >> 46) & 1); }
 
 // the renderers' depth, kNearW / w (w the clip w, larger is nearer, 0 where
 // nothing drew), as RasterView::kSceneDepth shows it: grey falling off with

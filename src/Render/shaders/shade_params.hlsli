@@ -28,6 +28,13 @@ static const uint kShadeAlphaCut = 131072u;
 static const uint kShadeLegacyLight = 262144u;
 // no PER_PIXEL: lit per vertex, Light() in the vertex shader
 static const uint kShadePerVertex = 524288u;
+// REFRACT_WORLD (option bit 46): the texture's rgb times the picture behind
+// the pixel as post-processing left it (soft_raster.h's RefractsWorld); set
+// only where the backend has that (an overlay draw, after the resolve)
+static const uint kShadeRefract = 1048576u;
+// ENABLE_AO with a point light: the point lights' occlusion is the vertex
+// colour's directional (SH) visibility toward each, AoShVertex, per vertex
+static const uint kShadeAoSh = 2097152u;
 
 // Register names are the game shaders' (scene_capture.h's kShadeRegs), PS
 // unless VS is said.
@@ -39,7 +46,7 @@ struct ShadeParams {
     float4 emissive;       // c5: x glow multiplier, y intensify
     float4 bloom;          // c7, the luminance weights PSEUDO_HDR writes alpha with
     float4 eye;            // the camera's world position
-    float4 ao;             // x: VS c24, the occlusion's strength
+    float4 ao;             // x: VS c24, the occlusion's strength (both kinds)
     float4 texgen[2];      // VS c20, c21: u' = dot(row0.xyw, (u, v, 1)), v' likewise
     float4 point_pos[2];   // c64, c65: position, 1/(falloff - range)
     float4 point_color[2]; // c67, c68: colour, range/(range - falloff)

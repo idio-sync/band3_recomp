@@ -78,10 +78,13 @@ static_assert(sizeof(PixelUniforms) == sizeof(shade::ShadeParams) + 80);
 // mesh.hlsl's pixel_flags.x
 enum : uint32_t { kPremultiply = 1 };
 
-// the textures a draw samples, in mesh.hlsl's sampler order
-enum { kSlotDiffuse, kSlotSpecular, kSlotGlow, kNumSlots };
+// the textures a draw samples, in mesh.hlsl's sampler order: the maps, which
+// PixelUniforms sizes, then the picture behind (kShadeRefract)
+enum { kSlotDiffuse, kSlotSpecular, kSlotGlow, kSlotBehind, kNumSlots };
+static_assert(kSlotBehind == 3, "PixelUniforms has tex_size for the three maps");
 
-// RndMat::Blend, the modes Blend() in soft_raster.cpp draws
+// RndMat::Blend, the modes Blend() in soft_raster.cpp draws (Screen, Lighten
+// and Darken, which NgMat sets no state for, as Src, as it does)
 enum : int {
     kBlendDest = 0,
     kBlendSrc = 1,
@@ -90,7 +93,9 @@ enum : int {
     kBlendSrcAlphaAdd = 4,
     kBlendSubtract = 5,
     kBlendMultiply = 6,
+    kBlendPreMultAlpha = 7,
 };
+static_assert(kBlendPreMultAlpha < 8, "Pipeline()'s key keeps the mode in 3 bits");
 
 // What a draw's pipeline does with its target's alpha: leaves it (the
 // picture's stays the resolve's 1, and a world draw that doesn't write it
@@ -114,7 +119,7 @@ CullWinding CullFor(const DrawItem& it, const RasterOptions& o) {
 
 int BlendFor(const DrawItem& it, const RasterOptions& o) {
     // Blend() draws any other value as Src
-    if (!o.blending || it.blend < kBlendDest || it.blend > kBlendMultiply) return kBlendSrc;
+    if (!o.blending || it.blend < kBlendDest || it.blend > kBlendPreMultAlpha) return kBlendSrc;
     return it.blend;
 }
 
@@ -236,6 +241,9 @@ struct GpuRenderer::Impl {
     SDL_GPUTexture* scene = nullptr;
     SDL_GPUTexture* color = nullptr;
     SDL_GPUTexture* depth = nullptr;
+    // a copy of `color` as the resolve left it, for the overlay's
+    // REFRACT_WORLD draws (RefractsWorld), made on frames that have one
+    SDL_GPUTexture* behind = nullptr;
     bool depth_sampled = false;
     SDL_GPUTexture* no_depth = nullptr;
     SDL_GPUTransferBuffer* readback = nullptr;
@@ -715,6 +723,10 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
             factors(SDL_GPU_BLENDFACTOR_DST_COLOR, SDL_GPU_BLENDFACTOR_ZERO,
                     SDL_GPU_BLENDFACTOR_DST_ALPHA, SDL_GPU_BLENDFACTOR_ZERO);
             break;
+        case kBlendPreMultAlpha:  // ONE INVSRCALPHA: the colour comes scaled by alpha
+            factors(SDL_GPU_BLENDFACTOR_ONE, SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+                    SDL_GPU_BLENDFACTOR_ONE, SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA);
+            break;
         default:  // Src, and Dest, which writes no colour
             break;
     }
@@ -776,7 +788,7 @@ void GpuRenderer::Impl::Prewarm() {
                                      {true, false, true}};
     for (CullWinding cull : {CullWinding::kNone, CullWinding::kClockwise})
         for (int alpha = 0; alpha < kNumAlphaModes; alpha++)
-            for (int blend = kBlendDest; blend <= kBlendMultiply; blend++)
+            for (int blend = kBlendDest; blend <= kBlendPreMultAlpha; blend++)
                 for (const DepthRules& r : kRules) Pipeline(blend, r, AlphaMode(alpha), cull);
     if (upload_size < kInitialUploadBytes) {
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
@@ -985,12 +997,13 @@ void GpuRenderer::Impl::ReleaseRt(Rt& rt) {
 // the frame's targets, at the picture's size; with no device, only forgets them
 void GpuRenderer::Impl::ReleaseTargets() {
     if (device) {
-        for (SDL_GPUTexture* t : {scene, color, depth, post_dof, post_bloom[0], post_bloom[1],
-                                  post_bloom[2], post_tmp[0], post_tmp[1], post_tmp[2]})
+        for (SDL_GPUTexture* t : {scene, color, depth, behind, post_dof, post_bloom[0],
+                                  post_bloom[1], post_bloom[2], post_tmp[0], post_tmp[1],
+                                  post_tmp[2]})
             if (t) SDL_ReleaseGPUTexture(device, t);
         if (readback) SDL_ReleaseGPUTransferBuffer(device, readback);
     }
-    scene = color = depth = post_dof = nullptr;
+    scene = color = depth = behind = post_dof = nullptr;
     for (int k = 0; k < 3; k++) post_bloom[k] = post_tmp[k] = nullptr;
     readback = nullptr;
     width = height = 0;
@@ -1011,6 +1024,8 @@ bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     color = SDL_CreateGPUTexture(device, &ti);
     ti.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
     scene = SDL_CreateGPUTexture(device, &ti);
+    ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    behind = SDL_CreateGPUTexture(device, &ti);
     ti.format = kDepthFormat;
     ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
     if (depth_sampled) ti.usage |= SDL_GPU_TEXTUREUSAGE_SAMPLER;
@@ -1036,7 +1051,7 @@ bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
             levels &= post_dof != nullptr;
         }
     }
-    if (!scene || !color || !depth || !readback || !levels) {
+    if (!scene || !color || !depth || !behind || !readback || !levels) {
         REXLOG_WARN("native view gpu: no {}x{} target ({})", w, h, SDL_GetError());
         return false;
     }
@@ -1424,6 +1439,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                    {scene, scene_depth, post_dof, post_bloom[0], post_bloom[1], post_bloom[2]}, p);
     };
 
+    // whether an overlay draw reads the picture behind it, for which the
+    // resolve keeps a copy of it
+    bool refracts = false;
+    for (size_t d = frame.post_boundary; d < frame.draws.size() && !refracts; d++) {
+        const DrawItem& it = frame.draws[d];
+        refracts = DrawnToBackBuffer(it) && RefractsWorld(shade::ShadeOf(frame, it));
+    }
+
     // the scene into the picture, at post_boundary or the frame's end:
     // post-processed, or as it is, or the view of the scene target asked for
     auto resolve = [&] {
@@ -1439,6 +1462,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             post::PostPass p{};
             p.mode = {uint32_t(o.view), 0, 0, 0};
             fullscreen(color, width, height, resolve_pipeline, {scene, scene_depth}, p);
+        }
+        if (refracts) {
+            SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+            const SDL_GPUTextureLocation from{color, 0, 0, 0, 0, 0};
+            const SDL_GPUTextureLocation to{behind, 0, 0, 0, 0, 0};
+            SDL_CopyGPUTextureToTexture(copy, &from, &to, width, height, 1, false);
+            SDL_EndGPUCopyPass(copy);
         }
         resolved = true;
     };
@@ -1501,8 +1531,18 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             tex[kSlotGlow] = layer_of(state->maps[kMapGlow].get());
             if (!tex[kSlotGlow].texture) sp.flags.x &= ~shade::kShadeGlow;
         }
+        // REFRACT_WORLD reads the picture behind it: into the picture, once
+        // the resolve has kept a copy of it
+        if (sp.flags.x & shade::kShadeRefract) {
+            if (resolved && refracts && alpha != AlphaMode::kTexture)
+                tex[kSlotBehind] = {behind, 0, width, height};
+            else
+                sp.flags.x &= ~shade::kShadeRefract;
+        }
         for (int s = 0; s < kNumSlots; s++) {
-            SDL_GPUTexture* sampled = tex[s].texture ? tex[s].texture : white;
+            // behind's binding is a plain 2D texture; no_depth is one
+            SDL_GPUTexture* sampled =
+                tex[s].texture ? tex[s].texture : s == kSlotBehind ? no_depth : white;
             if (sampled == bound_tex[s]) continue;
             const SDL_GPUTextureSamplerBinding ts{sampled, sampler};
             SDL_BindGPUFragmentSamplers(pass, uint32_t(s), &ts, 1);
@@ -1521,7 +1561,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
         PixelUniforms pu{};
         pu.shade = sp;
-        for (int s = 0; s < kNumSlots; s++) {
+        for (int s = 0; s < kSlotBehind; s++) {
             if (!tex[s].texture) continue;
             pu.tex_layer[s] = tex[s].layer;
             pu.tex_size[s][0] = tex[s].w;

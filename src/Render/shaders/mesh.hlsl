@@ -51,6 +51,11 @@ VK_SAMPLER VK_BINDING(1, 2) Texture2DArray<float4> spec_tex : register(t1, space
 VK_SAMPLER VK_BINDING(1, 2) SamplerState spec_sampler : register(s1, space2);
 VK_SAMPLER VK_BINDING(2, 2) Texture2DArray<float4> glow_tex : register(t2, space2);
 VK_SAMPLER VK_BINDING(2, 2) SamplerState glow_sampler : register(s2, space2);
+// a copy of the picture as the resolve left it, for kShadeRefract (a 1x1
+// stand-in for the others): read at the pixel's own position, as Shade() in
+// soft_raster.cpp does
+VK_SAMPLER VK_BINDING(3, 2) Texture2D<float4> behind_tex : register(t3, space2);
+VK_SAMPLER VK_BINDING(3, 2) SamplerState behind_sampler : register(s3, space2);
 
 // pixel_flags.x
 // SrcAlpha and SrcAlphaAdd: the colour leaves already scaled by its alpha,
@@ -87,6 +92,7 @@ struct PixelIn {
     float depth : TEXCOORD4;           // clip w
     float3 light_diffuse : TEXCOORD5;  // a vertex-lit draw's Lighting
     float3 light_added : TEXCOORD6;
+    float2 ao_sh : TEXCOORD7;          // the point lights' AoShVertex
 };
 
 float4x4 Bone(uint i) {
@@ -96,7 +102,9 @@ float4x4 Bone(uint i) {
 }
 
 PixelIn VSMain(VertexIn v) {
-    float3 wp = 0, wn = 0;
+    // the vertex colour's SH direction turns as the normal does
+    const float3 dir = AoShDirection(v.color);
+    float3 wp = 0, wn = 0, wd = 0;
     if (skinned != 0) {
         float total = 0;
         [unroll] for (int k = 0; k < 4; k++) {
@@ -105,16 +113,19 @@ PixelIn VSMain(VertexIn v) {
             const float4x4 b = Bone(v.bone[k] < bone_count ? v.bone[k] : 0);
             wp += mul(float4(v.pos, 1), b).xyz * w;
             wn += mul(float4(v.nrm, 0), b).xyz * w;
+            wd += mul(float4(dir, 0), b).xyz * w;
             total += w;
         }
         if (total <= 0) {
             const float4x4 b = Bone(0);
             wp = mul(float4(v.pos, 1), b).xyz;
             wn = mul(float4(v.nrm, 0), b).xyz;
+            wd = mul(float4(dir, 0), b).xyz;
         }
     } else {
         wp = mul(float4(v.pos, 1), world).xyz;
         wn = mul(float4(v.nrm, 0), world).xyz;
+        wd = mul(float4(dir, 0), world).xyz;
     }
     const float4 clip = mul(float4(wp, 1), view_proj);
     PixelIn o;
@@ -127,10 +138,11 @@ PixelIn VSMain(VertexIn v) {
     o.color = v.color;
     o.wpos = wp;
     o.depth = clip.w;
+    o.ao_sh = AoShVertex(vs_shade, wp, wn, wd, v.color);
     o.light_diffuse = float3(0, 0, 0);
     o.light_added = float3(0, 0, 0);
     if ((vs_shade.flags.x & kShadePerVertex) != 0u) {
-        const Lighting l = Light(vs_shade, wp, wn, v.color, float4(1, 1, 1, 1));
+        const Lighting l = Light(vs_shade, wp, wn, v.color, float4(1, 1, 1, 1), o.ao_sh);
         o.light_diffuse = l.diffuse;
         o.light_added = l.added;
     }
@@ -152,10 +164,14 @@ float4 PSMain(PixelIn i) : SV_Target0 {
     if ((f & kShadeTextured) != 0u) texel = Texel(tex, i.uv, tex_layer.x, tex_size[0].xy);
     if ((f & kShadeSpecMap) != 0u) spec_map = Texel(spec_tex, i.uv, tex_layer.y, tex_size[1].xy);
     if ((f & kShadeGlow) != 0u) glow = Texel(glow_tex, i.uv, tex_layer.z, tex_size[2].xy);
+    // SV_Position is the pixel's centre: its integer part is the pixel
+    float4 behind = float4(1, 1, 1, 1);
+    if ((f & kShadeRefract) != 0u) behind = behind_tex.Load(int3(int2(i.pos.xy), 0));
     Lighting vertex;
     vertex.diffuse = i.light_diffuse;
     vertex.added = i.light_added;
-    float4 c = ShadePixel(ps_shade, i.wpos, i.nrm, i.color, texel, spec_map, glow, i.depth, vertex);
+    float4 c = ShadePixel(ps_shade, i.wpos, i.nrm, i.color, texel, spec_map, glow, behind,
+                          i.depth, i.ao_sh, vertex);
     if (AlphaCut(ps_shade, c.a)) discard;
     // Blend() in soft_raster.cpp clamps alpha, never the colour, before
     // scaling by it; a UNORM target clamps what reaches the blender, so the

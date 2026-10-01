@@ -2,8 +2,9 @@
 // src/Render/shaders/shade.hlsli on the CPU, as mesh.hlsl does on the GPU)
 // against the M2 research's Python models of the game's own shaders
 // (tools/shaders/research: fam3.py, skin2.py and hair3.py, checked there
-// against the shaders' microcode), and PackShade's reading of the option
-// word.
+// against the shaders' microcode), the SH occlusion and REFRACT_WORLD's
+// picture behind against hand-worked numbers, and PackShade's reading of the
+// option word.
 
 #include <doctest/doctest.h>
 #include <cmath>
@@ -136,11 +137,13 @@ bool Has(const ShadeParams& sp, uint32_t bits) { return (sp.flags.x & bits) != 0
 }  // namespace
 
 TEST_CASE("shading matches the game's shader models, per pixel and per vertex") {
-    const float zero[3] = {0, 0, 0};
+    const float zero[3] = {0, 0, 0}, one[4] = {1, 1, 1, 1};
+    const float no_sh[2] = {1, 1};
     for (const Case& c : kCases) {
         const ShadeParams sp = ParamsFor(c);
         float out[4];
-        ShadePixelCpu(sp, c.p, c.n, c.vc, c.tex, c.spec_map, c.glow, 100.0f, zero, zero, out);
+        ShadePixelCpu(sp, c.p, c.n, c.vc, c.tex, c.spec_map, c.glow, one, 100.0f, no_sh, zero,
+                      zero, out);
         CheckColour(c, out);
 
         // a vertex-lit material's vertex gives its pixel the same colour, at
@@ -149,8 +152,9 @@ TEST_CASE("shading matches the game's shader models, per pixel and per vertex") 
         ShadeParams pv = sp;
         pv.flags.x |= kShadePerVertex;
         float diffuse[3], added[3];
-        LightVertexCpu(pv, c.p, c.n, c.vc, diffuse, added);
-        ShadePixelCpu(pv, c.p, c.n, c.vc, c.tex, c.spec_map, c.glow, 100.0f, diffuse, added, out);
+        LightVertexCpu(pv, c.p, c.n, c.vc, no_sh, diffuse, added);
+        ShadePixelCpu(pv, c.p, c.n, c.vc, c.tex, c.spec_map, c.glow, one, 100.0f, no_sh, diffuse,
+                      added, out);
         CheckColour(c, out);
     }
 }
@@ -163,7 +167,7 @@ TEST_CASE("unlit materials are colour, ambient, vertex colour if prelit, and tex
     const float p[3] = {0, 0, 0}, n[3] = {0, 0, 1}, vc[4] = {1.0f, 1.0f, 0.5f, 0.5f};
     const float tex[4] = {0.5f, 0.5f, 1.0f, 1.0f}, one[4] = {1, 1, 1, 1}, zero[4] = {0, 0, 0, 0};
     float out[4];
-    ShadePixelCpu(sp, p, n, vc, tex, one, zero, 1.0f, zero, zero, out);
+    ShadePixelCpu(sp, p, n, vc, tex, one, zero, one, 1.0f, one, zero, zero, out);
     CHECK(out[0] == doctest::Approx(0.25f));
     CHECK(out[1] == doctest::Approx(0.25f));
     CHECK(out[2] == doctest::Approx(0.125f));
@@ -174,10 +178,122 @@ TEST_CASE("unlit materials are colour, ambient, vertex colour if prelit, and tex
     sp.fade[0] = sp.fade[1] = {0, 0, 0, 1};
     sp.fade[2] = {100.0f, 0.1f, 1.0f, 0.0f};
     sp.fade_color = {1, 0, 0, 0};
-    ShadePixelCpu(sp, p, n, vc, tex, one, zero, 95.0f, zero, zero, out);  // half way
+    ShadePixelCpu(sp, p, n, vc, tex, one, zero, one, 95.0f, one, zero, zero, out);  // half way
     CHECK(out[0] == doctest::Approx(0.625f));
     CHECK(out[1] == doctest::Approx(0.125f));
     CHECK(out[3] == doctest::Approx(0.25f));
+
+    // REFRACT_WORLD: the texture's rgb times the picture behind it, alpha the
+    // texture's; the picture isn't read without the flag
+    sp.flags.x = kShadeModel | kShadePrelit | kShadeTextured | kShadeRefract;
+    const float behind[4] = {0.5f, 1.0f, 0.0f, 0.25f};
+    ShadePixelCpu(sp, p, n, vc, tex, one, zero, behind, 1.0f, one, zero, zero, out);
+    CHECK(out[0] == doctest::Approx(0.125f));
+    CHECK(out[1] == doctest::Approx(0.25f));
+    CHECK(out[2] == doctest::Approx(0.0f));
+    CHECK(out[3] == doctest::Approx(0.25f));
+    sp.flags.x &= ~kShadeRefract;
+    ShadePixelCpu(sp, p, n, vc, tex, one, zero, behind, 1.0f, one, zero, zero, out);
+    CHECK(out[0] == doctest::Approx(0.25f));
+}
+
+TEST_CASE("SH occlusion: light 0's visibility over a bare surface's, from the vertex colour") {
+    ShadeParams sp{};
+    sp.flags.x = kShadeModel | kShadeLit | kShadeAO | kShadeAoSh;
+    sp.flags.y = 1;
+    sp.point_pos[0] = {0, 0, 10, 0};
+    sp.ao.x = 1.0f;
+    const float p[3] = {0, 0, 0}, up[3] = {0, 0, 1}, down[3] = {0, 0, -1};
+
+    // the linear terms are alpha, green and blue, from 0..1 to -1..1
+    const float vc[4] = {0.2f, 0.75f, 0.25f, 1.0f};
+    float dir[3];
+    AoShDirectionCpu(vc, dir);
+    CHECK(dir[0] == doctest::Approx(1.0f));
+    CHECK(dir[1] == doctest::Approx(0.5f));
+    CHECK(dir[2] == doctest::Approx(-0.5f));
+
+    // L = +z: vis = 0.282095 0.6 + 0.488603 0.5 = 0.4135585, bare =
+    // 2.356194 (0.079577 + 0.238732) = 0.7499978
+    const float half_up[3] = {0, 0, 0.5f};
+    CHECK(AoShRatioCpu(sp, 0, p, up, half_up, 0.6f) == doctest::Approx(0.551413f).epsilon(1e-5));
+    const float vc_up[4] = {0.6f, 0.5f, 0.75f, 0.5f};  // the same as a vertex colour
+    AoShDirectionCpu(vc_up, dir);
+    float ao[2];
+    AoShVertexCpu(sp, p, up, dir, vc_up, ao);
+    CHECK(ao[0] == doctest::Approx(0.551413f).epsilon(1e-5));
+    CHECK(ao[1] == 1.0f);  // one light
+    sp.ao.x = 2.0f;  // 1 + 2 (ratio - 1)
+    AoShVertexCpu(sp, p, up, dir, vc_up, ao);
+    CHECK(ao[0] == doctest::Approx(0.102826f).epsilon(1e-4));
+    sp.ao.x = 1.0f;
+
+    // a second light has its own, toward it: below, facing away
+    sp.flags.y = 2;
+    sp.point_pos[1] = {0, 0, -10, 0};
+    AoShVertexCpu(sp, p, up, dir, vc_up, ao);
+    CHECK(ao[0] == doctest::Approx(0.551413f).epsilon(1e-5));
+    CHECK(ao[1] == 1.0f);  // bare < 0 toward it
+    sp.flags.y = 1;
+
+    // facing away, bare is 2.356194 (0.079577 - 0.238732) < 0: no occlusion
+    CHECK(AoShRatioCpu(sp, 0, p, down, half_up, 0.6f) == 1.0f);
+
+    // vertex colour (1, 1, 1, 1), its terms (1, 1, 1) turned away from the
+    // light, which the normal faces (a light at the camera): vis = 0.282095 -
+    // 0.488603 sqrt(3) < 0, so the ratio is below 0 and light 0 is gone
+    const float s3 = 1.0f / std::sqrt(3.0f);
+    sp.point_pos[0] = {-10 * s3, -10 * s3, -10 * s3, 0};
+    const float toward[3] = {-s3, -s3, -s3}, ones[3] = {1, 1, 1};
+    const float white[4] = {1, 1, 1, 1};
+    CHECK(AoShRatioCpu(sp, 0, p, toward, ones, 1.0f) ==
+          doctest::Approx(-0.752256f).epsilon(1e-4));
+    AoShVertexCpu(sp, p, toward, ones, white, ao);
+    CHECK(ao[0] == 0.0f);
+    sp.ao.x = 2.0f;
+    AoShVertexCpu(sp, p, toward, ones, white, ao);
+    CHECK(ao[0] == 0.0f);
+
+    // without the flag it's 1
+    sp.flags.x &= ~kShadeAoSh;
+    AoShVertexCpu(sp, p, toward, ones, white, ao);
+    CHECK(ao[0] == 1.0f);
+}
+
+TEST_CASE("SH occlusion dims each point light by its own; without it light 1 takes aoA") {
+    // two white lights straight above, unattenuated, a white material with no
+    // ambient: each light adds its occlusion
+    ShadeParams sp{};
+    sp.flags.x = kShadeModel | kShadeLit | kShadeAO | kShadeAoSh | kShadeTextured;
+    sp.flags.y = 1;
+    sp.color = {1, 1, 1, 1};
+    sp.ambient = {0, 0, 0, 1};
+    sp.ao.x = 1.0f;
+    for (int i = 0; i < 2; i++) {
+        sp.point_pos[i] = {0, 0, 10, 0};
+        sp.point_color[i] = {1, 1, 1, 1};
+    }
+    sp.eye = {0, -10, 10, 1};
+    const float p[3] = {0, 0, 0}, n[3] = {0, 0, 1}, vc[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+    const float one[4] = {1, 1, 1, 1}, zero[4] = {0, 0, 0, 0};
+    const float ao_sh[2] = {0.25f, 0.5f};
+    float out[4];
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, ao_sh, zero, zero, out);
+    CHECK(out[0] == doctest::Approx(0.25f));
+    // the second light by its own
+    sp.flags.y = 2;
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, ao_sh, zero, zero, out);
+    CHECK(out[0] == doctest::Approx(0.75f));
+    // a vertex-lit material's vertex takes them too
+    sp.flags.x |= kShadePerVertex;
+    float diffuse[3], added[3];
+    LightVertexCpu(sp, p, n, vc, ao_sh, diffuse, added);
+    CHECK(diffuse[0] == doctest::Approx(0.75f));
+    // without the flag, the plain: light 0 aoD, 1 + (1.504505 0.5 - 1), and
+    // light 1 aoA, 1 + (1.128379 0.5 - 1)
+    sp.flags.x &= ~(kShadeAoSh | kShadePerVertex);
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, ao_sh, zero, zero, out);
+    CHECK(out[0] == doctest::Approx(0.7522525f + 0.5641895f));
 }
 
 TEST_CASE("PackShade takes each term from the option word, not stale registers") {
@@ -194,7 +310,24 @@ TEST_CASE("PackShade takes each term from the option word, not stale registers")
     CHECK(Has(sp, kShadeLit));
     CHECK(Has(sp, kShadeTextured));
     CHECK(sp.flags.y == 1);
-    CHECK_FALSE(Has(sp, (kShadeBox | kShadeSpecular | kShadeAO | kShadePerVertex)));
+    CHECK_FALSE(Has(sp, (kShadeBox | kShadeSpecular | kShadeAO | kShadeAoSh | kShadePerVertex |
+                         kShadeRefract)));
+
+    // AO with a point light is the SH kind; without one, the plain
+    s.options |= Bit(kEnableAO);
+    PackShade(it, &s, o, true, sp);
+    CHECK(Has(sp, kShadeAO));
+    CHECK(Has(sp, kShadeAoSh));
+    s = MakeState(Bit(kApproxLights) | Bit(kEnableAO));
+    PackShade(it, &s, o, true, sp);
+    CHECK(Has(sp, kShadeAO));
+    CHECK_FALSE(Has(sp, kShadeAoSh));
+
+    // REFRACT_WORLD, option bit 46, on an unlit material (the score box's)
+    s = MakeState(Bit(kDiffuseMap) | Bit(46));
+    PackShade(it, &s, o, true, sp);
+    CHECK(Has(sp, kShadeRefract));
+    CHECK_FALSE(Has(sp, kShadeLit));
 
     // vertex-lit without PER_PIXEL; maps only where the capture decoded them
     s = MakeState(Bit(kApproxLights) | Bit(kSpecular) | Bit(kSpecularMap) | Bit(kGlowMap));

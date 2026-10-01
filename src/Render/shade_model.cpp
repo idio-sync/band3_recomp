@@ -40,10 +40,33 @@ void TexGenUv(const ShadeParams& sp, const float uv[2], float out[2]) {
     out[1] = r.y;
 }
 
+void AoShDirectionCpu(const float vc[4], float out[3]) {
+    const float3 d = AoShDirection(float4{vc[0], vc[1], vc[2], vc[3]});
+    out[0] = d.x;
+    out[1] = d.y;
+    out[2] = d.z;
+}
+
+float AoShRatioCpu(const ShadeParams& sp, uint light, const float p[3], const float n[3],
+                   const float dir[3], float r) {
+    return AoShRatio(sp, light, float3{p[0], p[1], p[2]}, float3{n[0], n[1], n[2]},
+                     float3{dir[0], dir[1], dir[2]}, r);
+}
+
+void AoShVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], const float dir[3],
+                   const float vc[4], float out[2]) {
+    const float2 ao = AoShVertex(sp, float3{p[0], p[1], p[2]}, float3{n[0], n[1], n[2]},
+                                 float3{dir[0], dir[1], dir[2]},
+                                 float4{vc[0], vc[1], vc[2], vc[3]});
+    out[0] = ao.x;
+    out[1] = ao.y;
+}
+
 void LightVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], const float vc[4],
-                    float diffuse[3], float added[3]) {
+                    const float ao_sh[2], float diffuse[3], float added[3]) {
     const Lighting l = Light(sp, float3{p[0], p[1], p[2]}, float3{n[0], n[1], n[2]},
-                             float4{vc[0], vc[1], vc[2], vc[3]}, float4{1, 1, 1, 1});
+                             float4{vc[0], vc[1], vc[2], vc[3]}, float4{1, 1, 1, 1},
+                             float2{ao_sh[0], ao_sh[1]});
     diffuse[0] = l.diffuse.x;
     diffuse[1] = l.diffuse.y;
     diffuse[2] = l.diffuse.z;
@@ -54,15 +77,17 @@ void LightVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], c
 
 void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], const float vc[4],
                    const float texel[4], const float spec_map[4], const float glow[4],
-                   float depth, const float vertex_diffuse[3], const float vertex_added[3],
-                   float out[4]) {
+                   const float behind[4], float depth, const float ao_sh[2],
+                   const float vertex_diffuse[3], const float vertex_added[3], float out[4]) {
     const Lighting vertex{float3{vertex_diffuse[0], vertex_diffuse[1], vertex_diffuse[2]},
                           float3{vertex_added[0], vertex_added[1], vertex_added[2]}};
     const float4 r = ShadePixel(sp, float3{p[0], p[1], p[2]}, float3{n[0], n[1], n[2]},
                                 float4{vc[0], vc[1], vc[2], vc[3]},
                                 float4{texel[0], texel[1], texel[2], texel[3]},
                                 float4{spec_map[0], spec_map[1], spec_map[2], spec_map[3]},
-                                float4{glow[0], glow[1], glow[2], glow[3]}, depth, vertex);
+                                float4{glow[0], glow[1], glow[2], glow[3]},
+                                float4{behind[0], behind[1], behind[2], behind[3]}, depth,
+                                float2{ao_sh[0], ao_sh[1]}, vertex);
     out[0] = r.x;
     out[1] = r.y;
     out[2] = r.z;
@@ -133,6 +158,9 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     const bool particles = s->shader_type == 14;
     if (s->Option(kPrelit)) f |= kShadePrelit;
     if (s->Option(kIntensify)) f |= kShadeIntensify;
+    // the backend takes it off where it has no picture to read (before the
+    // resolve, or into a texture)
+    if (RefractsWorld(s)) f |= kShadeRefract;
     // the luminance in alpha is for the back buffer's bloom: RB3's shaders
     // keep alpha into a texture ("not the main target", out/research/
     // m3_design.md 3), where it's the impostor's cut-out and a layer's blend
@@ -165,6 +193,10 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     if (s->Option(kSpecular)) f |= kShadeSpecular;
     if (s->Option(kSpecularMap) && maps && s->maps[kMapSpecular]) f |= kShadeSpecMap;
     if (s->Option(kEnableAO)) f |= kShadeAO;
+    // every AO shader the dumps have with a point light occludes it by the
+    // vertex colour's SH, none of those without one (out/research/
+    // parity_diag_ao_refract.md)
+    if (s->Option(kEnableAO) && sp.flags.y >= 1) f |= kShadeAoSh;
     if (s->Option(kRimLight)) f |= kShadeRim;
     if (s->Option(kRimLightUnder)) f |= kShadeRimUnder;
     switch (s->OptionBits(kCustomVariation, 2)) {

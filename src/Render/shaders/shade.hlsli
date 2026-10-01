@@ -48,6 +48,43 @@ bool AlphaCut(SHADE_IN(ShadeParams) sp, float alpha) {
     return (sp.flags.x & kShadeAlphaCut) != 0u && alpha * 255.0f < sp.alpha_cut.x;
 }
 
+// The AO the game's shaders with a point light have (kShadeAoSh; out/
+// research/m2_shader_ucode.md 3): the vertex colour holds the occlusion as
+// spherical harmonics, red the constant term and alpha, green and blue the
+// linear ones along x, y and z, and each point light is dimmed by what's
+// visible toward it over what a bare surface would see (a second light by
+// its own: VS 59D4812E2C2329A3, DFA2CEAD6EF11301). Their vertex shaders work
+// it out per vertex and their pixels take it interpolated, as the backends
+// do.
+//
+// The linear terms, in the mesh's own space. The backends turn them into the
+// world as they do the normal (by the bones, or world), and don't normalise
+// either: the game dots both raw with the light turned into the mesh's space
+// by the transposed world matrix, which comes to the same.
+float3 AoShDirection(float4 vc) {
+    return float3(vc.w * 2.0f - 1.0f, vc.y * 2.0f - 1.0f, vc.z * 2.0f - 1.0f);
+}
+
+// visible over bare toward point light i from p, n and dir turned as above,
+// r the vertex colour's red; 1 where bare is 0 or less
+float AoShRatio(SHADE_IN(ShadeParams) sp, uint i, float3 p, float3 n, float3 dir, float r) {
+    const float3 L = SafeNormalize(Xyz(sp.point_pos[i]) - p);
+    const float vis = 0.282095f * r + 0.488603f * dot(dir, L);
+    const float bare = 2.356194f * (0.079577f + 0.238732f * dot(n, L));
+    return bare > 0.0f ? vis / bare : 1.0f;
+}
+
+// the point lights' occlusion at a vertex, for Light's ao_sh: x light 0's,
+// y light 1's; 1 without kShadeAoSh or the light
+float2 AoShVertex(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 dir, float4 vc) {
+    float2 ao = float2(1.0f, 1.0f);
+    if ((sp.flags.x & kShadeAoSh) == 0u) return ao;
+    ao.x = saturate(1.0f + sp.ao.x * (AoShRatio(sp, 0u, p, n, dir, vc.x) - 1.0f));
+    if (sp.flags.y >= 2u)
+        ao.y = saturate(1.0f + sp.ao.x * (AoShRatio(sp, 1u, p, n, dir, vc.x) - 1.0f));
+    return ao;
+}
+
 // A lit material's light at a point: its colour is base * diffuse + added,
 // base the texture. The per-pixel shaders work it out per pixel; the
 // vertex-lit ones (no PER_PIXEL) per vertex, and their pixels add up the
@@ -58,8 +95,10 @@ struct Lighting {
 };
 
 // p is the world position, n the world normal (any length), vc the vertex
-// colour, spec_map the specular map's texel (1 where sp doesn't sample it)
-Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 spec_map) {
+// colour, spec_map the specular map's texel (1 where sp doesn't sample it),
+// ao_sh the AoShVertex (interpolated, in a pixel)
+Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 spec_map,
+               float2 ao_sh) {
     const uint f = sp.flags.x;
     const bool skin = (f & kShadeSkin) != 0u;
     const bool hair = (f & kShadeHair) != 0u;
@@ -72,12 +111,19 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
     const float up = 0.5f * N.z + 0.5f;    // world Z is up
 
     // ambient occlusion from the vertex colour's red: point light 0 gets the
-    // stronger aoD, the rest of the light aoA
+    // stronger aoD, the rest of the light aoA; with a point light, the point
+    // lights get their directional ones
     float ao_a = 1.0f;
-    float ao_d = 1.0f;
+    float ao_0 = 1.0f;  // point light 0's
+    float ao_1 = 1.0f;  // point light 1's
     if ((f & kShadeAO) != 0u) {
         ao_a = saturate(1.0f + sp.ao.x * (1.128379f * vc.x - 1.0f));
-        ao_d = saturate(1.0f + sp.ao.x * (1.504505f * vc.x - 1.0f));
+        ao_0 = saturate(1.0f + sp.ao.x * (1.504505f * vc.x - 1.0f));
+        ao_1 = ao_a;
+        if ((f & kShadeAoSh) != 0u) {
+            ao_0 = ao_sh.x;
+            ao_1 = ao_sh.y;
+        }
     }
 
     float power = sp.specular.w;
@@ -108,7 +154,7 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
         const float d = sqrt(dot(to_light, to_light));
         const float3 L = to_light / max(d, 1e-6f);
         const float att = saturate(d * sp.point_pos[i].w + sp.point_color[i].w);
-        const float3 lc = Xyz(sp.point_color[i]) * (att * (i == 0u ? ao_d : ao_a));
+        const float3 lc = Xyz(sp.point_color[i]) * (att * (i == 0u ? ao_0 : ao_1));
         const float nl = dot(N, L);
         if (skin || hair) {
             lights = lights + lc * saturate(wrap_a * nl + wrap_b);
@@ -173,11 +219,21 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
 
 // One pixel's colour and alpha. p is its world position, n its interpolated
 // world normal, vc its vertex colour, depth its clip w; texel, spec_map and
-// glow are the maps' texels where sp samples them (1 where it doesn't);
-// vertex is the interpolated Lighting of a vertex-lit material's vertices.
+// glow are the maps' texels where sp samples them (1 where it doesn't), behind
+// the post-processed picture at the pixel for kShadeRefract; ao_sh is the
+// interpolated AoShVertex, vertex the interpolated Lighting of a vertex-lit
+// material's vertices.
 float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 texel,
-                  float4 spec_map, float4 glow, float depth, Lighting vertex) {
+                  float4 spec_map, float4 glow, float4 behind, float depth, float2 ao_sh,
+                  Lighting vertex) {
     const uint f = sp.flags.x;
+    // REFRACT_WORLD's pixel shader (FC53125B5EB914F8): the texture's rgb
+    // times the picture behind it, alpha the texture's. The game nudges where
+    // it reads the picture by a second map (s1 * 2 - 1, times c119.w); that's
+    // left out, so it reads straight behind.
+    if ((f & kShadeRefract) != 0u) {
+        texel = float4(texel.x * behind.x, texel.y * behind.y, texel.z * behind.z, texel.w);
+    }
     if ((f & kShadeModel) == 0u) {
         // the placeholder from before: colour times texture, times the vertex
         // colour if prelit, else a fixed light from above (Milo is z up)
@@ -211,7 +267,7 @@ float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float
         alpha = base_alpha * col.w;
     } else {
         Lighting l = vertex;
-        if ((f & kShadePerVertex) == 0u) l = Light(sp, p, n, vc, spec_map);
+        if ((f & kShadePerVertex) == 0u) l = Light(sp, p, n, vc, spec_map, ao_sh);
         rgb = base * l.diffuse + l.added;
         alpha = base_alpha * sp.ambient.w * ((f & kShadePrelit) != 0u ? vc.w : sp.color.w);
     }

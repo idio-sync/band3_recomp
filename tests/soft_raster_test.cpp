@@ -3,8 +3,11 @@
 // it, each draw seeing the version drawn before it, and a render target that
 // nothing drew sampling transparent black; and that the world's draws, those
 // before post_boundary, leave their alpha (the bloom weight) and depth in the
-// scene target as RB3's back buffer has them, under the overlay's; and that a
-// draw culls the triangles its cull mode says (an outline's near side).
+// scene target as RB3's back buffer has them, under the overlay's; that a
+// draw culls the triangles its cull mode says (an outline's near side);
+// that PreMultAlpha (blend 7) blends as RB3 sets it, ONE INVSRCALPHA; and
+// that a REFRACT_WORLD draw over the overlay reads the picture as the resolve
+// left it.
 
 #include <doctest/doctest.h>
 #include <cstring>
@@ -185,6 +188,48 @@ TEST_CASE("a texture target keeps alpha: cleared 0, drawn by the colour's blend"
     CHECK((tex[5] & 0xff) == 128);
 }
 
+TEST_CASE("PreMultAlpha adds its colour as it is over what's there, by 1 - alpha") {
+    // RndMat's blend 7, ONE INVSRCALPHA, as the outfit layers draw: green
+    // already scaled by its half alpha, over red on the texture's left half
+    // and the clear's transparent black on its right
+    constexpr uint32_t kHalfGreen = 0x80004000u;  // G 64, alpha 128
+    FrameCapture f;
+    DrawItem red = Item(Quad(-1, 0, kRed), kTex);
+    red.rect_shader = 6;
+    DrawItem layer = Fill(kHalfGreen);
+    layer.blend = 7;
+    f.draws = {red, layer, Sample(-1, 1, 1)};
+    Pass pass = TexturePass(0, 1);
+    pass.draw_count = 2;
+    f.passes = {pass, BackBuffer(2, 1)};
+    std::vector<uint32_t> tex;
+    uint32_t w = 0, h = 0;
+    REQUIRE(RasterizeTarget(f, Small(), kTex, 1, tex, w, h));
+    // over red: red * (1 - 0.5) plus the green, alpha 0.5 + 1 * 0.5
+    CHECK((tex[1 * 4 + 1] & 0xff) == 127);
+    CHECK(((tex[1 * 4 + 1] >> 8) & 0xff) == 64);
+    CHECK((tex[1 * 4 + 1] >> 24) == 255);
+    // over nothing: the green as it is (not scaled again), alpha its own
+    CHECK((tex[1 * 4 + 3] & 0xffffff) == 0x004000u);
+    CHECK((tex[1 * 4 + 3] >> 24) == 128);
+
+    // the same into the back buffer; Screen, Lighten and Darken (8..10),
+    // which NgMat sets no blend state for, draw as Src
+    FrameCapture b;
+    DrawItem over = Item(Quad(-1, 1, kHalfGreen), 0);
+    over.blend = 7;
+    b.draws = {Item(Quad(-1, 1, kRed), 0), over};
+    b.passes = {BackBuffer(0, 2)};
+    std::vector<uint32_t> rgba;
+    Rasterize(b, Small(), rgba);
+    CHECK(rgba[1 * 8 + 1] == 0xff00407fu);
+    for (int mode = 8; mode <= 10; mode++) {
+        b.draws[1].blend = mode;
+        Rasterize(b, Small(), rgba);
+        CHECK(rgba[1 * 8 + 1] == 0xff004000u);
+    }
+}
+
 namespace {
 
 // an unlit material's shade, its colour the vertex colour's (PRELIT), with
@@ -315,4 +360,42 @@ TEST_CASE("a draw culls the side its cull mode says, as the game's device did") 
     drawn(o, kCullBack, left, right);
     CHECK(left);
     CHECK(right);
+}
+
+TEST_CASE("PreMultAlpha keeps the larger of the two alphas in the scene, as it blends") {
+    // RB3's back buffer blends alpha ONE ONE MAX wherever the colour blends:
+    // a PreMultAlpha layer that writes alpha (alpha_write) 1/16 over red's
+    // PSEUDO_HDR 0.3 leaves 0.3
+    FrameCapture f;
+    f.shades = {FlatShade(true), FlatShade(false)};
+    f.shades[1].alpha_write = 1;
+    f.draws = {Shaded(-1, 1, 0xff0000ffu, 0, 1), Shaded(-1, 1, 0x10ff0000u, 1, 7)};
+    f.passes = {BackBuffer(0, 2)};
+    f.post_boundary = 2;
+    RasterOptions o = Small();
+    o.view = RasterView::kSceneAlpha;
+    std::vector<uint32_t> rgba;
+    Rasterize(f, o, rgba);
+    CHECK((rgba[1 * 8 + 1] & 0xff) == 77);  // 0.3 * 255
+}
+
+TEST_CASE("a REFRACT_WORLD draw in the overlay is its colour times the picture behind it") {
+    // the world red; the overlay green over all of it, then a half grey
+    // REFRACT_WORLD quad, which reads the picture as the resolve left it
+    // (red), not the green drawn over it since
+    FrameCapture f;
+    f.shades = {FlatShade(false), FlatShade(false)};
+    f.shades[1].options |= 1ull << 46;
+    f.draws = {Shaded(-1, 1, kRed, 0, 1), Shaded(-1, 1, kGreen, 0, 1),
+               Shaded(-1, 1, 0xff808080u, 1, 1)};
+    f.passes = {BackBuffer(0, 3)};
+    f.post_boundary = 1;
+    std::vector<uint32_t> rgba;
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 3] == 0xff000080u);  // red 255 * 128 / 255
+
+    // in the world, before the resolve, it draws as it is
+    f.post_boundary = 3;
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 3] == 0xff808080u);
 }

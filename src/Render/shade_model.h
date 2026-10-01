@@ -48,15 +48,22 @@ inline const ShadeState* ShadeOf(const FrameCapture& frame, const DrawItem& item
                                                                          : nullptr;
 }
 
-// shade.hlsli's TexGen, Light and ShadePixel, on the CPU; LightVertexCpu is
-// for kShadePerVertex, whose pixels take its two colours interpolated
+// shade.hlsli's TexGen, AoSh*, Light and ShadePixel, on the CPU; the AoSh
+// ones are per vertex (AoShVertexCpu's two are the ao_sh the pixels take
+// interpolated), as is LightVertexCpu, for kShadePerVertex, whose pixels take
+// its two colours interpolated
 void TexGenUv(const ShadeParams& sp, const float uv[2], float out[2]);
+void AoShDirectionCpu(const float vc[4], float out[3]);
+float AoShRatioCpu(const ShadeParams& sp, uint light, const float p[3], const float n[3],
+                   const float dir[3], float r);
+void AoShVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], const float dir[3],
+                   const float vc[4], float out[2]);
 void LightVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], const float vc[4],
-                    float diffuse[3], float added[3]);
+                    const float ao_sh[2], float diffuse[3], float added[3]);
 void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], const float vc[4],
                    const float texel[4], const float spec_map[4], const float glow[4],
-                   float depth, const float vertex_diffuse[3], const float vertex_added[3],
-                   float out[4]);
+                   const float behind[4], float depth, const float ao_sh[2],
+                   const float vertex_diffuse[3], const float vertex_added[3], float out[4]);
 bool AlphaCutCpu(const ShadeParams& sp, float alpha);
 
 }  // namespace band3::render::shade
