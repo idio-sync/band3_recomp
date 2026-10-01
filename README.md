@@ -170,6 +170,14 @@ Render checks of the native view launch with `-- --native_view_record_targets=tr
 textures): RB3 composes a band's outfits once, in the main menu, so the passes it
 draws into textures have to be recorded from launch, before any capture. It's off by
 default, so a game that never uses the native view doesn't pay for it.
+A fresh profile's band is made up at random, so each launch has different characters;
+`--test_random_seed=<n>` (0, the default, is off) seeds RB3's random numbers with `n`
+instead of the clock, so the same seed gives the same band on every launch (and on
+every machine) and another seed another band. It fixes who is in the band and the song's
+shot categories, but not every frame: animations and particles draw random numbers as
+the frame timing gives, so poses and camera angles still vary a little between runs.
+With `--test_random_seed=21`, Futurama's Fry (a cel-shaded Deluxe character) plays
+guitar in the render songs below, in their 25 s capture.
 `tests/game/render_song.b3t` plays a song with even/odd rendering off (every frame
 draws everything) and captures four points through it; `render_song_evenodd.b3t` does
 the same with it on, as the game ships, where a frame draws the world and the next

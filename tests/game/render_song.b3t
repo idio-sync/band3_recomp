@@ -8,6 +8,10 @@
 # With full readback too, guest memory's copies of those textures (garbage
 # without it) are there to compare against (replay's --rt-guest):
 #   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true --readback_resolve=full
+# A fresh profile's band is random; add --test_random_seed=<n> to the launch
+# for the same band every run (the poses and camera angles still vary a
+# little). With 21, Futurama's Fry, a cel-shaded Deluxe character, plays
+# guitar: he is in render-song-25s.
 
 # Deluxe can't save its settings to band3's read-only game folder: I Understand
 wait screen=dx_settings_error_screen timeout=30s

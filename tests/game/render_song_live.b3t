@@ -10,6 +10,7 @@
 # Add --native_view_record_targets=true to the launch for the texture passes
 # too (render_song.b3t says why); `native_view stats` then shows what
 # recording them costs while the view is off (rt_recording).
+# --test_random_seed=<n> gives the same band every run (render_song.b3t).
 
 # Deluxe can't save its settings to band3's read-only game folder: I Understand
 wait screen=dx_settings_error_screen timeout=30s

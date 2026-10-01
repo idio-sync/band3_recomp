@@ -8,6 +8,10 @@
 # composed once, in the main menu), and without full readback: the native view
 # draws those passes itself.
 #   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true
+# A fresh profile's band is random; add --test_random_seed=<n> to the launch
+# for the same band every run (the poses and camera angles still vary a
+# little). With 21, Futurama's Fry, a cel-shaded Deluxe character, plays
+# guitar: he is in render-song-eo-25s.
 # Each capture's reply says proc_cmds 2 and composed true, with the world
 # frame it has (world_frame, the game frame before its own); `composed` makes
 # the capture fail if it isn't (it fell back to another frame: held_fallback).
