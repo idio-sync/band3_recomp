@@ -13,6 +13,7 @@
 #include <imgui.h>
 
 #include "config.h"
+#include "game_writes.h"
 #include "settings.h"
 #include "steam_deck.h"
 #include "Audio/usb_mic_capture.h"
@@ -107,7 +108,9 @@ class Band3App : public rex::ReXApp {
   }
 
   // before the game starts, so its mic threads find the microphones running
+  // and its first file opens find game:\ writable
   void OnPostSetup() override {
+    band3::MountGameWrites(*runtime());
     band3::discord::Start();
     band3::audio::StartUsbMics();
     band3::render::StartDumpIfRequested();

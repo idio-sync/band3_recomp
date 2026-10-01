@@ -134,6 +134,13 @@ Any setting can also be passed on the command line, e.g. `--forced_venue=arena_0
 set in more than one place, the command line wins over `band3.toml`, which wins over
 `band3_config.ini`.
 
+Files the game writes to its own folder (`game:\`) go to `game` in the user data root
+(`Documents\band3\game` on Windows, or under `--user_data_root`), and the game reads them
+back from there; `assets` is never written. Rock Band 3 Deluxe keeps its settings,
+modifiers and playlists there (`dx_settings.dta`, `dx_playlist.dta` and so on), so
+deleting that folder resets them. Test runs have their own user data, so they don't
+change yours.
+
 ### Instrument Lab
 
 Press **F6** to open the Instrument Lab. It connects a virtual Xbox 360 instrument
