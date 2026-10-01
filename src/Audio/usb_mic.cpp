@@ -18,6 +18,25 @@ char Lower(char c) { return static_cast<char>(std::tolower(static_cast<unsigned 
 
 }
 
+float GainRatio(float gain) {
+    const float g = std::clamp(gain, 0.0f, 1.0f);
+    // a straight line through (0, kMinGainRatio) and (kNormalGain, 1), as
+    // processGain interpolates between the device's limits; written around 1
+    // so kNormalGain gives exactly unity
+    return 1.0f + (1.0f - kMinGainRatio) * (g / kNormalGain - 1.0f);
+}
+
+void ApplyGain(std::span<uint8_t> pcm, float ratio) {
+    if (ratio == 1.0f) return;
+    for (size_t i = 0; i + 1 < pcm.size(); i += 2) {
+        const auto sample = static_cast<int16_t>(static_cast<uint16_t>(pcm[i] << 8 | pcm[i + 1]));
+        const long scaled = std::clamp(std::lround(sample * ratio), -32768L, 32767L);
+        const auto bits = static_cast<uint16_t>(static_cast<int16_t>(scaled));
+        pcm[i] = static_cast<uint8_t>(bits >> 8);
+        pcm[i + 1] = static_cast<uint8_t>(bits);
+    }
+}
+
 std::vector<std::string> ParseDeviceList(std::string_view list) {
     std::vector<std::string> names;
     if (Trim(list).empty()) return names;

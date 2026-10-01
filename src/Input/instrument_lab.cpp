@@ -1,5 +1,6 @@
 #include "instrument_lab.h"
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -395,12 +396,13 @@ void DrawUsbMics() {
         ImGui::Text("Singing a %d Hz test tone into mic slot 1", status.test_tone);
     }
 
-    if (ImGui::BeginTable("mics", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+    if (ImGui::BeginTable("mics", 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("Slot");
         ImGui::TableSetupColumn("Recording", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Game thread");
         ImGui::TableSetupColumn("Connected");
         ImGui::TableSetupColumn("Audio fed");
+        ImGui::TableSetupColumn("Gain");
         ImGui::TableHeadersRow();
         for (int i = 0; i < audio::usb_mic::kSlots; i++) {
             const audio::UsbMicSlotStatus& s = status.slots[i];
@@ -431,6 +433,12 @@ void DrawUsbMics() {
             // 16-bit samples
             ImGui::Text("%.1f s", static_cast<double>(s.bytes_fed) /
                                       (audio::usb_mic::kSampleRate * 2));
+            ImGui::TableNextColumn();
+            if (s.connected) {
+                ImGui::Text("%+.1f dB", 20.0 * std::log10(s.gain));
+            } else {
+                ImGui::TextDisabled("-");
+            }
         }
         ImGui::EndTable();
     }
@@ -444,7 +452,9 @@ void DrawUsbMics() {
     for (const auto& device : status.devices) ImGui::BulletText("%s", device.c_str());
     ImGui::TextWrapped("The game starts a thread for each slot along with its audio. Waiting "
                        "means the game hasn't set the slot up yet, which should happen by the "
-                       "time vocals are picked; audio fed then climbs while a song plays.");
+                       "time vocals are picked; audio fed then climbs while a song plays. "
+                       "Gain is the game's mic gain applied to the audio: 0 dB in normal "
+                       "play, lower during tambourine sections.");
 }
 
 void DrawMicMapping() {

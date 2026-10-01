@@ -33,6 +33,26 @@ constexpr size_t kMaxChunk = 2048;
 constexpr std::chrono::milliseconds kMaxBacklog{250};
 constexpr size_t kMaxBacklogBytes = kSampleRate * 2 * kMaxBacklog.count() / 1000;
 
+// The game sets a mic's gain from 0 to 1 (MicXbox::SetGain), and
+// ExternalMic::processGain turns it into the microphone's own gain, between the
+// lowest and highest the device reports (XMicGetGain, a ratio). A PC
+// microphone has no such control here, so band3 scales the samples instead,
+// over the range of the RB microphones the game knows, and pinned so the gain
+// ProfileMgr::UpdateMicLevels gives a generic USB mic plays at the level the PC
+// records.
+//
+// ratio_sliders in sound.dta, HX_XBOX generic_usb
+constexpr float kNormalGain = 0.225f;
+// min_gain of rb2_logitech_usb in mic_types (default.dta), about -6 dB;
+// TambourineManager turns the gain to 0 during tambourine sections
+constexpr float kMinGainRatio = 0.501187f;
+
+// the ratio to scale samples by for the game's gain
+float GainRatio(float gain);
+
+// scales big-endian samples by `ratio`, clipping at full scale
+void ApplyGain(std::span<uint8_t> pcm, float ratio);
+
 // usb_mic_devices: names, or parts of names, comma separated, in slot order.
 // Blank entries are kept, so ",Yeti" leaves slot 1 empty.
 std::vector<std::string> ParseDeviceList(std::string_view list);

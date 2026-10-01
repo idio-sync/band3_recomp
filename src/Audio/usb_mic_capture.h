@@ -36,6 +36,7 @@ void NoteUsbMicThread(int slot);
 void NoteUsbMicConnect(int slot, bool accepted);
 void NoteUsbMicDisconnect(int slot);
 void NoteUsbMicFed(int slot, size_t bytes);
+void NoteUsbMicGain(int slot, float ratio);
 
 struct UsbMicSlotStatus {
     // what records the slot; empty while nothing does
@@ -48,6 +49,8 @@ struct UsbMicSlotStatus {
     uint64_t refusals = 0;
     // audio handed to the game (ExternalMicClientMgr::AddAudio)
     uint64_t bytes_fed = 0;
+    // what the audio is scaled by for the game's mic gain (usb_mic::GainRatio)
+    float gain = 1.0f;
 };
 
 struct UsbMicStatus {

@@ -3,8 +3,10 @@
 #include <rex/types.h>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <thread>
 #include "generated/band3_init.h"
 #include "src/Audio/usb_mic.h"
@@ -14,7 +16,8 @@
 // Replaces the thread RB3 runs for each mic slot while usb_mics is on (see
 // Audio/usb_mic.h). The game's thread reads the XMic library; this one connects
 // the slot when a microphone feeds it and hands the game its audio the way
-// ExternalMic::dataReady does. Structures and calls are from rb3-xenon's
+// ExternalMic::dataReady does, at the gain the game asks for, as
+// ExternalMic::processGain does. Structures and calls are from rb3-xenon's
 // src/system/synth_xbox/ExternalMic.cpp and Mic.cpp.
 
 extern "C" void __imp__ExternalMicThreadEntry(PPCContext& ctx, uint8_t* base);
@@ -22,6 +25,7 @@ REX_EXTERN(ExternalMicClientMgr__GetMasterForIndex);
 REX_EXTERN(ExternalMicClientProxy__OnMicConnected);
 REX_EXTERN(ExternalMicClientMgr__AddAudio);
 REX_EXTERN(ExternalMicClientMgr__OnMicDisconnected);
+REX_EXTERN(ExternalMicClientMgr__GetRequiredGain);
 
 namespace {
 
@@ -83,13 +87,22 @@ void Disconnect(PPCContext& ctx, uint8_t* base, uint32_t dev) {
     ExternalMicClientMgr__OnMicDisconnected(call, base);
 }
 
+// ExternalMicClientMgr::GetRequiredGain(dev), the slot's MicXbox gain (0-1)
+float RequiredGain(PPCContext& ctx, uint8_t* base, uint32_t dev) {
+    PPCContext call = CallContext(ctx);
+    call.r3.u64 = dev;
+    ExternalMicClientMgr__GetRequiredGain(call, base);
+    return static_cast<float>(call.f1.f64);
+}
+
 // ExternalMicClientMgr::AddAudio(dev, buffer, length), for all the audio ready
-void Feed(PPCContext& ctx, uint8_t* base, uint32_t dev, int slot) {
+void Feed(PPCContext& ctx, uint8_t* base, uint32_t dev, int slot, float ratio) {
     const uint32_t buffer = ctx.r1.u32 - kAudioBuffer;
     std::array<uint8_t, kMaxChunk> pcm;
     while (true) {
         const size_t length = ReadUsbMic(slot, pcm);
         if (length == 0) return;
+        ApplyGain(std::span(pcm).first(length), ratio);
         std::memcpy(REX_RAW_ADDR(buffer), pcm.data(), length);
         PPCContext call = CallContext(ctx);
         call.r3.u64 = dev;
@@ -125,6 +138,8 @@ extern "C" REX_FUNC(ExternalMicThreadEntry)
 
     Slot state;
     bool reported_refusal = false;
+    // processGain's mLastGain, so a change is logged once
+    float last_gain = -1.0f;
     while (!REX_LOAD_U8(mic + kExternalMic_Quit)) {
         const auto now = Clock::now();
         switch (state.Next(UsbMicReady(slot), now)) {
@@ -143,13 +158,23 @@ extern "C" REX_FUNC(ExternalMicThreadEntry)
             }
             break;
         }
-        case Action::kFeed:
-            Feed(ctx, base, dev, slot);
+        case Action::kFeed: {
+            const float gain = RequiredGain(ctx, base, dev);
+            const float ratio = GainRatio(gain);
+            if (gain != last_gain) {
+                REXLOG_DEBUG("USB mics: the game set mic slot {}'s gain to {:.3f} ({:+.1f} dB)",
+                             slot + 1, gain, 20.0 * std::log10(ratio));
+                NoteUsbMicGain(slot, ratio);
+                last_gain = gain;
+            }
+            Feed(ctx, base, dev, slot, ratio);
             break;
+        }
         case Action::kDisconnect:
             Disconnect(ctx, base, dev);
             REX_STORE_U8(mic + kExternalMic_Connected, 0);
             state.Disconnected();
+            last_gain = -1.0f;
             NoteUsbMicDisconnect(slot);
             REXLOG_INFO("USB mics: mic slot {} disconnected", slot + 1);
             break;

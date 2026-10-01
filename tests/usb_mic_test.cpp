@@ -128,3 +128,53 @@ TEST_CASE("a slot disconnects when its microphone goes, and reconnects when it's
     CHECK(slot.Next(false, t0 + 1s) == Action::kWait);
     CHECK(slot.Next(true, t0 + 1s) == Action::kConnect);
 }
+
+TEST_CASE("the gain a generic USB mic gets in play leaves its level alone") {
+    CHECK(GainRatio(kNormalGain) == 1.0f);
+}
+
+TEST_CASE("gain follows the game's 0-1 setting across an RB microphone's range") {
+    // tambourine sections turn the gain to 0: quieter, never silent
+    CHECK(GainRatio(0.0f) == doctest::Approx(kMinGainRatio));
+    CHECK(GainRatio(1.0f) > 2.0f);
+    CHECK(GainRatio(0.1f) < GainRatio(0.2f));
+    CHECK(GainRatio(0.5f) < GainRatio(0.6f));
+    // MicXbox::SetGain clamps to 0-1
+    CHECK(GainRatio(-1.0f) == GainRatio(0.0f));
+    CHECK(GainRatio(2.0f) == GainRatio(1.0f));
+}
+
+TEST_CASE("gain scales big-endian samples and clips at full scale") {
+    const auto pcm = [](std::initializer_list<int16_t> samples) {
+        std::vector<uint8_t> out;
+        for (int16_t s : samples) {
+            const auto bits = static_cast<uint16_t>(s);
+            out.push_back(static_cast<uint8_t>(bits >> 8));
+            out.push_back(static_cast<uint8_t>(bits));
+        }
+        return out;
+    };
+
+    SUBCASE("unity leaves the bytes as they are") {
+        auto buf = pcm({1234, -1234, 32767, -32768});
+        const auto before = buf;
+        ApplyGain(buf, 1.0f);
+        CHECK(buf == before);
+    }
+
+    SUBCASE("halving") {
+        auto buf = pcm({1000, -1000, 3});
+        ApplyGain(buf, 0.5f);
+        CHECK(SampleAt(buf, 0) == 500);
+        CHECK(SampleAt(buf, 1) == -500);
+        CHECK(SampleAt(buf, 2) == 2);
+    }
+
+    SUBCASE("boosting clips instead of wrapping") {
+        auto buf = pcm({20000, -20000, 100});
+        ApplyGain(buf, 2.0f);
+        CHECK(SampleAt(buf, 0) == 32767);
+        CHECK(SampleAt(buf, 1) == -32768);
+        CHECK(SampleAt(buf, 2) == 200);
+    }
+}

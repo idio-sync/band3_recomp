@@ -329,6 +329,10 @@ void NoteUsbMicFed(int slot, size_t bytes) {
     GetCapture().UpdateGameSide(slot, [bytes](UsbMicSlotStatus& s) { s.bytes_fed += bytes; });
 }
 
+void NoteUsbMicGain(int slot, float ratio) {
+    GetCapture().UpdateGameSide(slot, [ratio](UsbMicSlotStatus& s) { s.gain = ratio; });
+}
+
 UsbMicStatus GetUsbMicStatus() { return GetCapture().Status(); }
 
 }
