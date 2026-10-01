@@ -42,6 +42,12 @@ SHADERS = [
          {("ubos", "PixelUniforms", 3, 0), ("ubos", "SpotUniforms", 3, 1),
           ("textures", "tex", 2, 0), ("textures", "scene_depth_tex", 2, 6),
           ("textures", "density_tex", 2, 7)}),
+        ("kSoftPixel", "PSSoftParticle", "ps_5_1", "ps_6_0",
+         {("ubos", "PixelUniforms", 3, 0), ("ubos", "SpotUniforms", 3, 1),
+          ("textures", "tex", 2, 0), ("textures", "spec_tex", 2, 1),
+          ("textures", "glow_tex", 2, 2), ("textures", "proj_tex", 2, 3),
+          ("textures", "gobo_tex", 2, 4), ("textures", "behind_tex", 2, 5),
+          ("textures", "scene_depth_tex", 2, 6)}),
     ]),
     ("post.hlsl", "post_shaders.gen.h", [
         ("kFullscreenVertex", "VSFullscreen", "vs_5_1", "vs_6_0", set()),
@@ -57,7 +63,7 @@ SHADERS = [
           ("textures", "depth_tex", 2, 1), ("textures", "dof_tex", 2, 2),
           ("textures", "bloom0_tex", 2, 3), ("textures", "bloom1_tex", 2, 4),
           ("textures", "bloom2_tex", 2, 5), ("textures", "volume_tex", 2, 6),
-          ("textures", "density_tex", 2, 7)}),
+          ("textures", "density_tex", 2, 7), ("textures", "soft_tex", 2, 8)}),
     ]),
 ]
 

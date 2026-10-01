@@ -7,10 +7,13 @@
 // draw culls the triangles its cull mode says (an outline's near side);
 // that PreMultAlpha (blend 7) blends as RB3 sets it, ONE INVSRCALPHA; that
 // a REFRACT_WORLD draw over the overlay reads the picture as the resolve
-// left it; and that a mesh's edges land on the pixels the game's do (D3D9's
-// pixel centres), a DrawRect quad's on D3D10's.
+// left it; that a mesh's edges land on the pixels the game's do (D3D9's
+// pixel centres), a DrawRect quad's on D3D10's; and that a soft particle
+// fades by the scene's depth behind it, and the soft-particle buffer's blur
+// takes its taps from the other surface.
 
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -441,4 +444,146 @@ TEST_CASE("a mesh's edges land on the game's pixels, D3D9's; a DrawRect quad's o
     REQUIRE(RasterizeTarget(r, Small(), kTex, 1, tex, w, h));
     CHECK(tex[1 * 4 + 0] == kRed);
     CHECK(tex[1 * 4 + 1] == 0);
+}
+
+namespace {
+
+constexpr uint32_t kSoft0 = 0x2387D148, kSoft1 = 0x2387D1F8;
+
+// a view-projection that puts world (x w, y w, w) at clip (x, y) with clip
+// w = w: a quad's view depth
+Mat4 Perspective() {
+    Mat4 m{};
+    m.m[0][0] = m.m[1][1] = 1.0f;
+    m.m[2][3] = 1.0f;
+    return m;
+}
+
+// Quad(x0, x1) at view depth w, through Perspective()
+std::shared_ptr<const Geometry> QuadAt(float x0, float x1, float w, uint32_t color) {
+    auto g = std::make_shared<Geometry>(*Quad(x0, x1, color));
+    for (Vertex& v : g->verts) {
+        v.pos[0] *= w;
+        v.pos[1] *= w;
+        v.pos[2] = w;
+    }
+    return g;
+}
+
+// a soft particle's shade: the particle shader (unlit, the vertex colour
+// times VS c0 and c1) with option bit 45, and the camera's range in PS c89
+ShadeState SoftShade() {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = kParticleShader;
+    s.options = 1ull << shader_opt::kPrelit | 1ull << shader_opt::kSoftParticles;
+    for (int c = 0; c < 4; c++) {
+        s.vs[ShadeRegIndex(0)][c] = 1.0f;
+        s.vs[ShadeRegIndex(1)][c] = 1.0f;
+    }
+    const float c89[4] = {10, 10000, 1.0f / 0.9f, 0.1f / 0.9f};
+    for (int c = 0; c < 4; c++) s.ps[ShadeRegIndex(89)][c] = c89[c];
+    s.vs[ShadeRegIndex(20)][0] = 1.0f;
+    s.vs[ShadeRegIndex(21)][1] = 1.0f;
+    return s;
+}
+
+// BlurSurface's first pass's taps into an 8x4 surface: -1.5..2.5 texels
+// across, half a texel down, weights .1 .25 .3 .25 .1
+ShadeState SoftBlurShade() {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = 1;
+    const float weights[5] = {0.1f, 0.25f, 0.3f, 0.25f, 0.1f};
+    for (int i = 0; i < 5; i++) {
+        s.ps[ShadeRegIndex(31 + i)][0] = (float(i) - 1.5f) / 8.0f;
+        s.ps[ShadeRegIndex(31 + i)][1] = 0.5f / 4.0f;
+        for (int c = 0; c < 4; c++) s.ps[ShadeRegIndex(47 + i)][c] = weights[i];
+    }
+    return s;
+}
+
+Pass SoftPass(uint32_t tex, uint32_t first, uint32_t clear, uint32_t version) {
+    Pass p;
+    p.tex_obj = tex;
+    p.first_draw = first;
+    p.draw_count = 1;
+    p.width = 8;
+    p.height = 4;
+    p.tex_type = 0x22;
+    p.clear_flags = clear;
+    p.version = version;
+    p.viewport[2] = 8;
+    p.viewport[3] = 4;
+    return p;
+}
+
+}  // namespace
+
+TEST_CASE("a soft particle fades by the scene's depth behind it; its buffer blurs across") {
+    // the world: an opaque quad over the left half at view depth 100; then,
+    // after post-processing starts, RndSoftParticleBuffer's pass: a white
+    // particle over all of its 8x4 surface at depth 76, SrcAlphaAdd
+    FrameCapture f;
+    f.shades = {FlatShade(false), SoftShade(), SoftBlurShade()};
+    DrawItem world = Shaded(-1, 0, 0xffffffffu, 0, 1);
+    world.geom = QuadAt(-1, 0, 100, 0xffffffffu);
+    world.view_proj = Perspective();
+    world.z_mode = 1;
+    DrawItem particle = Item(QuadAt(-1, 1, 76, 0xffffffffu), kSoft0);
+    particle.view_proj = Perspective();
+    particle.shade = 1;
+    particle.blend = 4;
+    particle.z_mode = 2;
+    // BlurSurface's first pass: the first surface across into the second
+    DrawItem blur = Item(Quad(-1, 1, 0xffffffffu), kSoft1);
+    blur.rect_shader = 1;
+    blur.rect[2] = 8;
+    blur.rect[3] = 4;
+    blur.shade = 2;
+    auto src = std::make_shared<Texture>();
+    src->width = 8;
+    src->height = 4;
+    src->tex_obj = kSoft0;
+    src->tex_type = 0x22;
+    src->version = 1;
+    blur.tex = src;
+    f.draws = {world, particle, blur};
+    f.passes = {BackBuffer(0, 1), SoftPass(kSoft0, 1, 0x0f, 1), SoftPass(kSoft1, 2, 0, 1)};
+    f.post_boundary = 1;
+    f.post_consts.soft_surface[0] = kSoft0;
+    f.post_consts.soft_surface[1] = kSoft1;
+    REQUIRE(IsSoftParticle(particle, &f.shades[1]));
+
+    // in front of the world by 24 of the fade's 48: half its alpha, which
+    // SrcAlphaAdd scales the white by; where the world drew nothing (the far
+    // plane) all of it. The surface's pixel x reads the scene's depth at x
+    // of the 8 across.
+    std::vector<uint32_t> tex;
+    uint32_t w = 0, h = 0;
+    REQUIRE(RasterizeTarget(f, Small(), kSoft0, 1, tex, w, h));
+    REQUIRE(w == 8);
+    for (int x = 0; x < 8; x++) {
+        CAPTURE(x);
+        // (128 but for float rounding at exactly half)
+        const int r = int(tex[1 * 8 + x] & 0xff);
+        if (x < 4)
+            CHECK((r == 127 || r == 128));
+        else
+            CHECK(r == 255);
+    }
+
+    // the blur: taps half a texel apart from the texels' centres, so each
+    // pixel takes .05 .175 .275 .275 .175 .05 of texels x-2..x+3 (clamped)
+    REQUIRE(RasterizeTarget(f, Small(), kSoft1, 1, tex, w, h));
+    const float kernel[6] = {0.05f, 0.175f, 0.275f, 0.275f, 0.175f, 0.05f};
+    for (int x = 0; x < 8; x++) {
+        float want = 0;
+        for (int k = 0; k < 6; k++) {
+            const int t = std::clamp(x - 2 + k, 0, 7);
+            want += kernel[k] * (t < 4 ? 128.0f : 255.0f);
+        }
+        CAPTURE(x);
+        CHECK(float(tex[2 * 8 + x] & 0xff) == doctest::Approx(want).epsilon(0.01));
+    }
 }

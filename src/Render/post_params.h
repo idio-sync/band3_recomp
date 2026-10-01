@@ -90,6 +90,12 @@ struct PostConsts {
     // with s12 the blurred depth volume and s5 the density map
     // (out/research/spotlight_survey.md 2); 0 in captures from before
     uint32_t spot_flag = 0;
+    // RndSoftParticleBuffer's two 320x180 surfaces (its PostProcessor + 4 and
+    // + 8, DxTex), read when its DoPost runs: the particles draw into [0],
+    // its blur goes [0] -> [1] -> [0], and the composite adds [0] (s4) where
+    // TheShaderMgr + 0x3F is set (out/research/softparticle_survey.md 1); 0
+    // when DoPost didn't run, and in captures from before
+    uint32_t soft_surface[2] = {};
 };
 
 // TheShaderMgr's flag bytes, as PostConsts::flags indexes them
@@ -98,6 +104,7 @@ inline constexpr int kPostFlagDof = 0x26 - kPostFlagBase;
 inline constexpr int kPostFlagBloom = 0x27 - kPostFlagBase;
 inline constexpr int kPostFlagGlare = 0x28 - kPostFlagBase;
 inline constexpr int kPostFlagColorXfm = 0x2A - kPostFlagBase;
+inline constexpr int kPostFlagSoft = 0x3F - kPostFlagBase;
 // and PostConsts::spot_flag's, before them
 inline constexpr int kPostFlagSpot = 0x25;
 

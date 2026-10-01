@@ -26,7 +26,9 @@
 // reads into the picture before the overlay's draws. The spotlights' cones
 // (spot_model.h) shade by mesh.hlsl's PSSpotCone, reading the scene's depth,
 // and the depth volume's blurs blur a copy of it into it with post.hlsl's
-// blur.
+// blur; the soft particles (scene_capture.h's IsSoftParticle) by
+// PSSoftParticle, which fades them by that depth, and their buffer's blurs
+// blur a copy of one surface into the other.
 
 namespace band3::render {
 

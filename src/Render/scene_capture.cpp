@@ -42,6 +42,7 @@ extern "C" void __imp__DxTex__FinishDrawTarget(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxCam__Select(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxTex__SyncBitmap(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__NgSpotlightDrawer__BlurRT_824D24D0(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__RndSoftParticleBuffer__DoPost(PPCContext& ctx, uint8_t* base);
 
 namespace band3::render {
 namespace {
@@ -138,8 +139,9 @@ constexpr uint32_t kD3DBaseTexture_Fetch = 0x1c;
 // shadow casters into its shadow texture, which it makes the draw target itself,
 // with no camera, so the camera still says back buffer), 5
 // (RndVelocityBuffer::Draw; DxMesh::DrawShowing draws through it), 6
-// (RndSoftParticleBuffer::DoPost) and 7 (WorldReflection::DrawShowing, the
-// mirrored scene through a copy of the current camera, so to the back buffer).
+// (RndSoftParticleBuffer::DoPost: its queued particles into its surface) and
+// 7 (WorldReflection::DrawShowing, the mirrored scene through a copy of the
+// current camera, so to the back buffer).
 // rb3-xenon's Rnd::Mode numbers NgLight's (kDrawOcclusion) and those after it
 // one higher than retail does.
 constexpr uint32_t kDrawModeHolder = 0x82C76B68;  // TheRnd*
@@ -148,6 +150,7 @@ constexpr uint32_t kDrawModeNormal = 0;
 constexpr uint32_t kDrawModeShadowDepth = 1;
 constexpr uint32_t kDrawModeShadowCasters = 3;
 constexpr uint32_t kDrawModeVelocity = 5;
+constexpr uint32_t kDrawModeSoftParticles = 6;
 constexpr uint32_t kDrawModeReflection = 7;
 // the D3D device (TheDxRnd + 0x1c4) and its constant shadow, which
 // DxShaderMgr::SetVConstant/SetPConstant and SetTexture write
@@ -201,6 +204,9 @@ constexpr uint32_t kSpotXsecSampler = 11;
 constexpr int kSpotXsecWeightReg = 86;
 // DxRnd::DrawRect's ShaderType for a blur
 constexpr int32_t kRectShaderBlur = 1;
+// RndSoftParticleBuffer::DoPost's r3 is the buffer's PostProcessor (+0x28),
+// its two surfaces' DxTex at +4 and +8 (out/research/softparticle_survey.md 1)
+constexpr uint32_t kSoftPost_Surfaces = 4;
 
 constexpr uint32_t kMaxBufferBytes = 64u << 20;
 constexpr uint32_t kMaxTextureSize = 4096;
@@ -662,6 +668,9 @@ struct State {
     // the last frame captured whole that drew the world, for the frames after
     // it that don't (frame_compose.h)
     std::shared_ptr<const FrameCapture> last_world;
+    // while RndSoftParticleBuffer::DoPost runs: the surface it draws its
+    // particles into (0 otherwise)
+    uint32_t soft_surface = 0;
 };
 
 State& S() {
@@ -927,8 +936,11 @@ const Mat4& ViewProj(const Guest& g, State& s) {
 // Where a draw goes, or false (and counted) if it isn't recorded: into the
 // texture pass the game has open while one is (whatever the camera), else into
 // the frame's back buffer while capturing, if the current camera draws there;
-// and only in a colour pass, the normal one or a reflection's.
-bool Target(const Guest& g, State& s, std::optional<Sink>& sink) {
+// and only in a colour pass, the normal one or a reflection's, or, for a
+// particle system (`particles`), the soft-particle buffer's pass into its
+// surface (draw mode 6: IsSoftParticle). Other draws there (a mesh child of
+// RndSoftParticles; none seen) are left out.
+bool Target(const Guest& g, State& s, std::optional<Sink>& sink, bool particles = false) {
     if (s.open.tex) {
         if (!s.open.record) return false;
         PassRecord& rec = *s.open.rec;
@@ -945,7 +957,9 @@ bool Target(const Guest& g, State& s, std::optional<Sink>& sink) {
     FrameCapture& fc = sink->fc;
     const uint32_t holder = g.U32(kDrawModeHolder);
     const uint32_t mode = holder ? g.U32(holder + kDrawMode) : kDrawModeNormal;
-    if (mode != kDrawModeNormal && mode != kDrawModeReflection) {
+    const bool soft = mode == kDrawModeSoftParticles && particles && s.soft_surface &&
+                      s.open.tex == s.soft_surface;
+    if (mode != kDrawModeNormal && mode != kDrawModeReflection && !soft) {
         if (mode == kDrawModeVelocity) {
             fc.skipped_velocity++;
         } else if (mode == kDrawModeShadowDepth || mode == kDrawModeShadowCasters) {
@@ -1067,9 +1081,10 @@ int32_t InternShade(FrameCapture& fc, ShadeIndex& index, ShadeState&& shade, Fil
 // shadow: the hooks run after the draw, and DxMesh::DrawShowing sets the
 // constants per material pass, so these are its last pass's. The spotlight
 // drawer's registers are kept for its cones (ShaderType 2) and, `blur`, a
-// DrawRect blur's taps, and zeroed for the rest. `mat` 0 for a draw without a
-// material (a cone). The index of an equal state already in the sink, or of
-// a new one; -1 without a device.
+// DrawRect blur's taps, c89 (the camera's depth range) for a soft particle,
+// and zeroed for the rest. `mat` 0 for a draw without a material (a cone).
+// The index of an equal state already in the sink, or of a new one; -1
+// without a device.
 int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool blur = false) {
     FrameCapture& fc = sink.fc;
     const uint32_t dev = g.U32(kD3DDeviceHolder);
@@ -1088,7 +1103,10 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
         }
     }
     if (in.shader_type != kDepthVolumeShader && !blur) {
+        const bool soft =
+            in.shader_type == kParticleShader && in.Option(shader_opt::kSoftParticles);
         for (int r = kFirstSpotShadeReg; r < kNumShadeRegs; r++) {
+            if (soft && kShadeRegs[r] == 89) continue;
             std::memset(in.vs[r], 0, sizeof(in.vs[r]));
             std::memset(in.ps[r], 0, sizeof(in.ps[r]));
         }
@@ -1281,7 +1299,7 @@ void CaptureParticles(uint8_t* base, uint32_t sys) {
     const Guest g{base};
     const uint32_t mat = g.U32(sys + kPart_Mat);
     std::optional<Sink> sink;
-    if (!mat || !g.U32(sys + kPart_NumActive) || !s.cam || !Target(g, s, sink)) return;
+    if (!mat || !g.U32(sys + kPart_NumActive) || !s.cam || !Target(g, s, sink, true)) return;
 
     // the camera's right (x) and up (z) axes; Milo cameras look down +y. The
     // quad's own are VS c47 and c48, which DxParticleSys::DrawShowing sets
@@ -2151,6 +2169,36 @@ extern "C" REX_FUNC(NgSpotlightDrawer__BlurRT_824D24D0) {
     std::lock_guard lock(g_state_mutex);
     RecordTimer timer;
     EndPass(tex);
+}
+
+// RndSoftParticleBuffer::DoPost (r3 its PostProcessor): clears its first
+// surface through the world camera's Select (a texture pass), draws the
+// particle systems RndSoftParticles queued into it in draw mode 6, which
+// Target lets through for that pass, then blurs it into the second surface
+// and back with two DrawRect passes. Its surfaces go in the frame's
+// PostConsts for the composite.
+extern "C" REX_FUNC(RndSoftParticleBuffer__DoPost) {
+    if (!Active()) {
+        __imp__RndSoftParticleBuffer__DoPost(ctx, base);
+        return;
+    }
+    {
+        std::lock_guard lock(g_state_mutex);
+        const Guest g{base};
+        State& s = S();
+        const uint32_t post = ctx.r3.u32;
+        const uint32_t surfaces[2] = {g.U32(post + kSoftPost_Surfaces),
+                                      g.U32(post + kSoftPost_Surfaces + 4)};
+        s.soft_surface = surfaces[0];
+        if (g_enabled.load(std::memory_order_relaxed)) {
+            PostConsts& pc = s.building->post_consts;
+            pc.soft_surface[0] = surfaces[0];
+            pc.soft_surface[1] = surfaces[1];
+        }
+    }
+    __imp__RndSoftParticleBuffer__DoPost(ctx, base);
+    std::lock_guard lock(g_state_mutex);
+    S().soft_surface = 0;
 }
 
 extern "C" REX_FUNC(DxRnd__Present) {

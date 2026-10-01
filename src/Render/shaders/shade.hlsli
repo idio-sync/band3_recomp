@@ -322,3 +322,19 @@ float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float
     }
     return float4(rgb.x, rgb.y, rgb.z, alpha);
 }
+
+// A soft particle (scene_capture.h's IsSoftParticle; the game's pixel shader
+// 66C00A7A56838997, out/research/softparticle_survey.md 2) is the particle's
+// colour with its alpha times SoftFade: it fades out over the last 48 units
+// of view depth before it meets the scene behind it. The game reads that
+// scene depth back from its depth buffer (s9, point-sampled where the pixel
+// is on the screen) by the camera's range, c89:
+//   Zs = near far / (far - ((1 - s9) c89.z - c89.w) (far - near)),
+// which is the view depth the scene was drawn at, and the far plane where
+// nothing drew. The native depth is 1/w (inv_w, 0 where nothing drew).
+float SoftSceneDepth(float far_plane, float inv_w) {
+    return inv_w > 0.0f ? 1.0f / inv_w : far_plane;
+}
+
+// scene_depth SoftSceneDepth's, w the particle's own view depth (clip w)
+float SoftFade(float scene_depth, float w) { return saturate((scene_depth - w) / 48.0f); }

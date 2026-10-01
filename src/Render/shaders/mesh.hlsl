@@ -2,7 +2,9 @@
 // (gpu_view.cpp). It draws what soft_raster.cpp draws, the same way: the
 // shading itself is shade.hlsli, which the CPU compiles too, from the same
 // ShadeParams (shade_model.cpp packs them); a spotlight's cone shades by
-// spot_model.hlsli instead (PSSpotCone), from SpotParams (spot_model.cpp).
+// spot_model.hlsli instead (PSSpotCone), from SpotParams (spot_model.cpp),
+// and a soft particle is a mesh's shading faded by the scene's depth
+// (PSSoftParticle).
 //
 // Registers follow SDL_gpu's layout (SDL_CreateGPUShader in SDL_gpu.h): vertex
 // resources in space0, vertex uniforms in space1, pixel resources in space2,
@@ -88,7 +90,9 @@ VK_BINDING(0, 3) cbuffer PixelUniforms : register(b0, space3) {
 // (the pixel's place on the screen, at which it reads the scene's depth and
 // the density map) and the scene depth's size. A second uniform buffer, so
 // PixelUniforms stays the mesh's: the cone takes its cross-section texture's
-// layer and size, and the alpha cut, from there.
+// layer and size, and the alpha cut, from there. A soft particle
+// (PSSoftParticle) takes the viewport and size from it too, and the camera's
+// far plane from spot.depth_range (the same c89), the rest of `spot` unused.
 VK_BINDING(1, 3) cbuffer SpotUniforms : register(b1, space3) {
     SpotParams spot;
     float4 spot_viewport;  // x, y, 1/width, 1/height
@@ -98,7 +102,8 @@ VK_BINDING(1, 3) cbuffer SpotUniforms : register(b1, space3) {
 // and what it reads besides its cross-section texture (tex): the scene's
 // depth as the world's draws left it (kNearW / w, 0 where nothing drew) and
 // the density map (a texture pass's target, an array of one layer). The
-// slots after the mesh's six, which PSMain doesn't read.
+// slots after the mesh's six, which PSMain doesn't read; PSSoftParticle reads
+// the scene's depth.
 VK_SAMPLER VK_BINDING(6, 2) Texture2D<float> scene_depth_tex : register(t6, space2);
 VK_SAMPLER VK_BINDING(6, 2) SamplerState scene_depth_sampler : register(s6, space2);
 VK_SAMPLER VK_BINDING(7, 2) Texture2DArray<float4> density_tex : register(t7, space2);
@@ -216,7 +221,9 @@ float4 ProjTexel(Texture2DArray<float4> t, float2 uv, uint layer, uint2 size) {
     return top + (bottom - top) * w.y;
 }
 
-float4 PSMain(PixelIn i) : SV_Target0 {
+// What a mesh's pixel shades to (shade.hlsli's ShadePixel), before the alpha
+// cut and the blend's premultiply (FinishMesh)
+float4 MeshColor(PixelIn i) {
     const uint f = ps_shade.flags.x;
     float4 texel = float4(1, 1, 1, 1);
     float4 spec_map = float4(1, 1, 1, 1);
@@ -239,8 +246,11 @@ float4 PSMain(PixelIn i) : SV_Target0 {
     Lighting vertex;
     vertex.diffuse = i.light_diffuse;
     vertex.added = i.light_added;
-    float4 c = ShadePixel(ps_shade, i.wpos, i.nrm, i.color, texel, spec_map, glow, behind,
-                          i.depth, i.ao_sh, proj, gobo, vertex);
+    return ShadePixel(ps_shade, i.wpos, i.nrm, i.color, texel, spec_map, glow, behind, i.depth,
+                      i.ao_sh, proj, gobo, vertex);
+}
+
+float4 FinishMesh(float4 c) {
     if (AlphaCut(ps_shade, c.a)) discard;
     // Blend() in soft_raster.cpp clamps alpha, never the colour, before
     // scaling by it; a UNORM target clamps what reaches the blender, so the
@@ -249,18 +259,29 @@ float4 PSMain(PixelIn i) : SV_Target0 {
     return c;
 }
 
+float4 PSMain(PixelIn i) : SV_Target0 { return FinishMesh(MeshColor(i)); }
+
+// Where a texture pass's pixel is on the screen, 0..1 across its viewport:
+// SV_Position is the pixel's centre, half a pixel past where the game's
+// sampled it (VSMain's clip_offset)
+float2 ScreenUv(float4 pos) { return (pos.xy - 0.5 - spot_viewport.xy) * spot_viewport.zw; }
+
+// the scene's depth there (1/w, 0 where nothing drew), nearest, clamped:
+// soft_raster.cpp's SceneInvW
+float SceneInvW(float2 uv) {
+    const uint2 size = spot_sizes.xy;
+    const uint2 at = min(uint2(saturate(uv) * float2(size)), size - 1);
+    return scene_depth_tex.Load(int3(at, 0)) / kNearW;
+}
+
 // What a spotlight's cone adds to the depth volume at a pixel of its proxy,
 // as soft_raster.cpp's SpotPixel works it out: the scene's depth read at the
 // pixel's place on the screen (nearest, clamped), the cross-section texture
 // at SpotGoboCoord's (nearest, clamped; 1 untextured), the density map
 // bilinear. Alpha 0, which the Add pipeline leaves as the clear's.
 float4 PSSpotCone(PixelIn i) : SV_Target0 {
-    // SV_Position is the pixel's centre, half a pixel past where the game's
-    // sampled it (VSMain's clip_offset)
-    const float2 uv = (i.pos.xy - 0.5 - spot_viewport.xy) * spot_viewport.zw;
-    const uint2 size = spot_sizes.xy;
-    const uint2 at = min(uint2(saturate(uv) * float2(size)), size - 1);
-    const float inv_w = scene_depth_tex.Load(int3(at, 0)) / kNearW;
+    const float2 uv = ScreenUv(i.pos);
+    const float inv_w = SceneInvW(uv);
     float xsec = 1.0;
     if ((ps_shade.flags.x & kShadeTextured) != 0u) {
         const uint2 tsize = tex_size[0].xy;
@@ -273,4 +294,14 @@ float4 PSSpotCone(PixelIn i) : SV_Target0 {
     const float3 c =
         SpotCone(spot, i.wpos, i.depth, SpotSceneDepth(spot, inv_w), xsec, density);
     return float4(c, 0.0);
+}
+
+// A soft particle (scene_capture.h's IsSoftParticle) into the soft-particle
+// buffer: shaded as PSMain shades it, its alpha faded by the scene's depth
+// where its pixel is on the screen (shade.hlsli's SoftFade), as
+// soft_raster.cpp's SoftPixelFade does
+float4 PSSoftParticle(PixelIn i) : SV_Target0 {
+    float4 c = MeshColor(i);
+    c.a *= SoftFade(SoftSceneDepth(spot.depth_range.y, SceneInvW(ScreenUv(i.pos))), i.depth);
+    return FinishMesh(c);
 }

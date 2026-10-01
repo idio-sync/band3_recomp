@@ -68,5 +68,9 @@ void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], co
                    const float vertex_diffuse[3], const float vertex_added[3], float out[4],
                    const float proj[4] = nullptr, const float gobo[4] = nullptr);
 bool AlphaCutCpu(const ShadeParams& sp, float alpha);
+// shade.hlsli's SoftFade, of the scene depth SoftSceneDepth gives for
+// inv_w (1/w, 0 where nothing drew) with the camera's far plane: a soft
+// particle's alpha scale at view depth w
+float SoftFadeCpu(float far_plane, float inv_w, float w);
 
 }  // namespace band3::render::shade

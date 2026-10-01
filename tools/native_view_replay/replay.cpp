@@ -11,7 +11,7 @@
 //                               [--legacy-light | --no-light] [--pick X,Y]
 //                               [--dump-alpha <png>] [--dump-depth <png>]
 //                               [--view alpha|depth]
-//                               [--no-post | --post-only xfm|dof|bloom|spot]
+//                               [--no-post | --post-only xfm|dof|bloom|spot|soft]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
 // and inside the frustum with the matrix as captured and transposed (the back
@@ -68,7 +68,10 @@
 // alone (bloom covers glare), to see what each contributes.
 // The spotlights' passes (spot_model.h) show in --list as passes into the
 // depth-volume and density textures, the cones as "cone" draws; --dump-rt
-// of the depth volume draws them on the CPU.
+// of the depth volume draws them on the CPU. The soft particles' show as
+// "soft" draws (scene_capture.h's IsSoftParticle) in the pass into the
+// soft-particle buffer's first surface, before its two blurs; --dump-rt of
+// that surface draws them, and --post-only soft adds the buffer alone.
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
@@ -543,19 +546,21 @@ void PrintPost(const FrameCapture& fc) {
     for (uint8_t f : c.flags) std::printf(" %02X", f);
     std::printf("; c15 %.6f %.6f %.6f %.6f\n", c.c15[0], c.c15[1], c.c15[2], c.c15[3]);
     // the spotlights' term (s12 * (c127.x + c127.y * s5.x) * c91.x,
-    // TheShaderMgr +0x25: out/research/spotlight_survey.md 2), and what the
-    // native composite leaves out: velocity blur (s10 * c122), soft particles
-    // (s4, +0x3F) and noise (c112, c113) (out/research/m4_design.md)
+    // TheShaderMgr +0x25: out/research/spotlight_survey.md 2), the soft
+    // particles' (s4, +0x3F, the buffer's first surface: softparticle_survey.md
+    // 1), and what the native composite leaves out: velocity blur (s10 *
+    // c122) and noise (c112, c113) (out/research/m4_design.md)
     const auto flag = [&](int offset) { return unsigned(c.flags[offset - kPostFlagBase]); };
     std::printf("  spotlights: +0x25 %02X c127 %.4f %.4f %.4f %.4f c91 %.4f %.4f %.4f %.4f\n",
                 c.spot_flag, c.c127[0], c.c127[1], c.c127[2], c.c127[3], c.c91[0], c.c91[1],
                 c.c91[2], c.c91[3]);
-    std::printf("  left out: velocity +0x38 %02X +0x39 %02X c122 %.4f %.4f %.4f %.4f; soft "
-                "particles +0x3F %02X; noise +0x2D %02X c112 %.4f %.4f %.4f %.4f c113 %.4f "
-                "%.4f %.4f %.4f\n",
-                flag(0x38), flag(0x39), c.c122[0], c.c122[1], c.c122[2], c.c122[3], flag(0x3F),
-                flag(0x2D), c.c112[0], c.c112[1], c.c112[2], c.c112[3], c.c113[0], c.c113[1],
-                c.c113[2], c.c113[3]);
+    std::printf("  soft particles: +0x3F %02X, surfaces %08X %08X\n", flag(0x3F),
+                c.soft_surface[0], c.soft_surface[1]);
+    std::printf("  left out: velocity +0x38 %02X +0x39 %02X c122 %.4f %.4f %.4f %.4f; noise "
+                "+0x2D %02X c112 %.4f %.4f %.4f %.4f c113 %.4f %.4f %.4f %.4f\n",
+                flag(0x38), flag(0x39), c.c122[0], c.c122[1], c.c122[2], c.c122[3], flag(0x2D),
+                c.c112[0], c.c112[1], c.c112[2], c.c112[3], c.c113[0], c.c113[1], c.c113[2],
+                c.c113[3]);
     if (c.dof_survey) {
         std::printf("  DOF blur taps (c31..c38 xy, weight c47..c54 x):");
         for (int i = 0; i < 8; i++)
@@ -666,9 +671,10 @@ int main(int argc, char** argv) {
                           : e == "dof"   ? post::kPostDof
                           : e == "bloom" ? post::kPostBloom | post::kPostGlare
                           : e == "spot"  ? post::kPostSpot
+                          : e == "soft"  ? post::kPostSoft
                                          : 0;
             if (!o.post_only) {
-                std::fprintf(stderr, "--post-only takes xfm, dof, bloom or spot\n");
+                std::fprintf(stderr, "--post-only takes xfm, dof, bloom, spot or soft\n");
                 return 2;
             }
         }
@@ -778,6 +784,7 @@ int main(int argc, char** argv) {
                 std::printf("      ");
                 if (d.target) std::printf("into %08X ", d.target);
                 if (IsSpotCone(d, shade)) std::printf("cone ");
+                if (IsSoftParticle(d, shade)) std::printf("soft ");
                 if (d.rect_shader >= 0)
                     std::printf("rect shader %d [%.1f %.1f %.1f %.1f] ", d.rect_shader, d.rect[0],
                                 d.rect[1], d.rect[2], d.rect[3]);

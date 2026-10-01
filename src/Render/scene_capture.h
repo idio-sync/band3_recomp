@@ -125,6 +125,8 @@ struct Texture {
 //   apex, c28 (w cos^2 of the half angle), c30 camera forward (w -f.eye),
 //   c86..c88 cross-section, c89 depth range, c127 fog (and c90 colour, kept
 //   already); blurs: c31..c35 taps' uv offsets, c47..c51 their weights
+// (the soft-particle buffer's blurs too, and c89 for its particles, which
+// fade by the scene's depth: IsSoftParticle)
 inline constexpr uint16_t kShadeRegs[] = {
     0,  1,  2,  5,  7,  13, 14, 15, 16, 17, 18, 19, 20,  21,  22,  23,  24,  40,  41,  42,
     43, 47, 48, 49, 53, 54, 55, 63, 64, 65, 66, 67, 68,  69,  80,  81,  82,  83,  84,  85,
@@ -167,7 +169,8 @@ inline constexpr int kPerPixel = 0, kSpecularMap = 1, kSpecular = 2, kEnvironMap
                      kNormDetail = 24, kFadeOut = 26, kNumProj = 28, kCustomVariation = 30,
                      kColorMod = 32, kRimLight = 37, kEnableAO = 38, kToneMapping = 39,
                      kNumPoint = 40, kEnvironMapFalloff = 43, kProjLightMultiply = 44,
-                     kPointCubeTex = 48, kEnvironMapSpecMask = 49, kIntensify = 53;
+                     kSoftParticles = 45, kPointCubeTex = 48, kEnvironMapSpecMask = 49,
+                     kIntensify = 53;
 }  // namespace shader_opt
 
 // What a draw's shader was given, read from the D3D device's constant shadow
@@ -296,6 +299,21 @@ inline constexpr uint32_t kTexTypeDensityMap = 0x122;
 inline constexpr int32_t kDepthVolumeShader = 2;
 inline bool IsSpotCone(const DrawItem& d, const ShadeInputs* s) {
     return s && s->shader_type == kDepthVolumeShader && d.rect_shader < 0;
+}
+
+// A soft particle: RndSoftParticleBuffer::DoPost draws the particle systems
+// RndSoftParticles queued during the world's draws into its 320x180 surface
+// (PostConsts::soft_surface), after post-processing starts, through the
+// usual DxParticleSys::DrawParticles but in draw mode 6, where
+// RndShaderParticles::CalcShaderOpts adds option bit 45. That shader fades
+// the particle's alpha by how far in front of the scene's depth it is
+// (shaders/shade.hlsli's SoftFade), reading the camera's range from PS c89,
+// which its shade state keeps. The buffer is blurred and the composite adds
+// it (post_model.h).
+inline constexpr int32_t kParticleShader = 14;
+inline bool IsSoftParticle(const DrawItem& d, const ShadeInputs* s) {
+    return s && s->shader_type == kParticleShader && s->Option(shader_opt::kSoftParticles) &&
+           d.rect_shader < 0;
 }
 
 // A stretch of FrameCapture::draws that went to one target: the back buffer,

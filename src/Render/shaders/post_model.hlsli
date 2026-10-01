@@ -11,8 +11,8 @@
 // models (out/research/m4_shader_check.md, m4_shaders/check_post.py): the
 // composite 63306D35 and its variants (the spotlights' term from 0F105E2D,
 // 6EF4844D and F7E2A8FB), the bright pass F920AF5C, the 4x downsample
-// 38448F55. What the composite leaves out: soft particles (s4), noise and
-// velocity blur, which nothing draws natively yet.
+// 38448F55. What the composite leaves out: noise and velocity blur, which
+// nothing draws natively yet.
 
 float3 PostXyz(float4 v) { return float3(v.x, v.y, v.z); }
 
@@ -57,15 +57,18 @@ float DofAmount(float4 c24, float depth) {
 
 // The composite's colour, from the scene, its DOF blur, the depth texture's
 // value, bloom's three levels, the spotlights' depth volume and the density
-// map's red, all at the pixel: the DOF lerp, then bloom screen-blended (or
-// glare added), then the spotlights' volume added (by c127 and the density,
-// times c91.x), then the colour matrix, saturated once at the end (its alpha
-// isn't the picture's)
+// map's red, and the soft-particle buffer, all at the pixel: the DOF lerp,
+// then the soft particles added (63306D35, 0F105E2D: not blurred by the DOF,
+// and not in bloom's bright pass, which reads the scene), then bloom
+// screen-blended (or glare added), then the spotlights' volume added (by
+// c127 and the density, times c91.x), then the colour matrix, saturated once
+// at the end (its alpha isn't the picture's)
 float3 Composite(POST_IN(PostPass) p, float4 scene, float4 dof, float depth, float3 l0, float3 l1,
-                 float3 l2, float3 volume, float density) {
+                 float3 l2, float3 volume, float density, float3 soft) {
     const uint f = p.flags.x;
     float3 rgb = PostXyz(scene);
     if ((f & kPostDof) != 0u) rgb = lerp(rgb, PostXyz(dof), DofAmount(p.c24, depth));
+    if ((f & kPostSoft) != 0u) rgb = rgb + soft;
     const float3 c6 = PostXyz(p.c6);
     if ((f & kPostBloom) != 0u) {
         const float3 b = (l0 + l1 + l2) * c6;

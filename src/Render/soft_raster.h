@@ -19,7 +19,9 @@
 // against the clear's 0, and outfit layers blend by it. Mips aren't sampled:
 // every texture is read nearest at level 0, on the GPU too. The spotlights'
 // cones shade by spot_model.h instead, reading the world's depth where they
-// are on the screen, and the depth volume's blurs blur it in place.
+// are on the screen, and the depth volume's blurs blur it in place; the soft
+// particles (scene_capture.h's IsSoftParticle) fade by that depth, and their
+// buffer's blurs take their taps from one surface into the other.
 //
 // The back buffer's draws are split at post_boundary, as RB3 draws them: the
 // world's go to a scene target, which keeps alpha as RB3's back buffer does
@@ -96,10 +98,24 @@ struct PassRun {
 // drawn after them samples (by texture, any version: a pass that clears hides
 // the ones before it), but none from post-processing on, which isn't drawn
 // yet, other than the spotlights' (the depth volume's cones and blurs, and
-// the density map its cones read: spot_model.h), which the composite's
-// spotlight term samples where it's on (post_model.h's PlanPost). A capture
-// without passes is one back-buffer stretch.
+// the density map its cones read: spot_model.h) and the soft particles' (the
+// particles into the first surface, its blur into the second and back),
+// which the composite's terms sample where they're on (post_model.h's
+// PlanPost). A capture without passes is one back-buffer stretch.
 std::vector<PassRun> PlanPasses(const FrameCapture& frame, const RasterOptions& options);
+
+// Whether pass p's draw is RndSoftParticleBuffer::BlurSurface's: a DrawRect
+// blur (shader 1) into one of its surfaces (PostConsts::soft_surface) from
+// the other, with the taps its shade state kept (c31.. their uv offsets,
+// c47.. their weights): across ([0] into [1]), then down ([1] back into
+// [0]), at -1.5..2.5 texels along and 0.5 across, weights .1 .25 .3 .25 .1
+// (out/research/softparticle_survey.md 1). The taps fall between texels,
+// so they're bilinear, and the two passes move the buffer a texel right and
+// down, as the game's do. The renderers draw it from the source surface's
+// target with the taps, rather than as a quad sampling it.
+inline constexpr int kSoftBlurTaps = 5;
+bool SoftBlur(const FrameCapture& frame, const DrawItem& d, const ShadeInputs* state,
+              const Pass& p);
 
 // a texture pass's draws but FinishDrawTarget's mip downsamples: the
 // renderers make mips themselves, or sample level 0

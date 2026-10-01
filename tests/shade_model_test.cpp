@@ -4,10 +4,12 @@
 // (tools/shaders/research: fam3.py, skin2.py and hair3.py, checked there
 // against the shaders' microcode), the SH occlusion and REFRACT_WORLD's
 // picture behind against hand-worked numbers, PackShade's reading of the
-// option word, and the particle quad's corners (scene_capture.h's
-// ParticleCorner) against the particle VS's instructions.
+// option word, the particle quad's corners (scene_capture.h's
+// ParticleCorner) against the particle VS's instructions, and a soft
+// particle's fade (SoftFade) against the soft particle pixel shader's maths.
 
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include "src/Render/shade_model.h"
@@ -546,4 +548,53 @@ TEST_CASE("particle quads are built as the particle VS builds them") {
             for (int i = 0; i < 3; i++) CHECK(out[i] == doctest::Approx(ref[i]).epsilon(1e-4));
         }
     }
+}
+
+// The soft particle pixel shader (66C00A7A56838997, out/research/
+// softparticle_survey.md 2) reads the scene's depth from s9, the D3D depth
+// the camera's projection gave it (post_model's GameDepth: 1 - z, z the near
+// and far planes mapped into the camera's z range), back to view depth by
+// c89 = (near, far, 1/(zmax-zmin), zmin/(zmax-zmin)), and fades the alpha by
+// sat((Zs - w) * c254.z), c254.z = 1/48. SoftFade takes the native depth
+// (1/w) instead, which should be the same view depth.
+TEST_CASE("a soft particle fades as the game's shader does") {
+    uint32_t seed = 4242;
+    auto rnd = [&](double lo, double hi) {
+        seed = seed * 1664525u + 1013904223u;
+        return lo + (hi - lo) * double(seed >> 8) / double(1u << 24);
+    };
+    int none = 0, part = 0, full = 0;
+    for (int trial = 0; trial < 2000; trial++) {
+        const double near_plane = rnd(1, 20), far_plane = rnd(1000, 20000);
+        const double zmin = rnd(0, 0.2), zmax = rnd(0.8, 1);
+        const double c89[4] = {near_plane, far_plane, 1 / (zmax - zmin), zmin / (zmax - zmin)};
+        // the scene's view depth, and the particle's around it
+        const double scene = rnd(near_plane, far_plane);
+        const double w = scene + rnd(-120, 60);
+        const double z = (far_plane - far_plane * near_plane / scene) / (far_plane - near_plane) *
+                             (zmax - zmin) + zmin;
+        const double s9 = 1 - z;
+        const double zs = c89[0] * c89[1] /
+                          (c89[1] - ((1 - s9) * c89[2] - c89[3]) * (c89[1] - c89[0]));
+        const double want = std::clamp((zs - w) * (1.0 / 48.0), 0.0, 1.0);
+        const float got = SoftFadeCpu(float(far_plane), float(1 / scene), float(w));
+        CHECK(got == doctest::Approx(want).epsilon(2e-4));
+        if (want <= 0) none++;
+        else if (want >= 1) full++;
+        else part++;
+    }
+    // every case: hidden behind the scene, fading, and clear of it
+    CHECK(none > 100);
+    CHECK(part > 100);
+    CHECK(full > 100);
+
+    // where nothing drew the game's depth is the clear's 0, which with zmax 1
+    // reads back as the far plane, as 1/w's 0 does
+    const double near_plane = 10, far_plane = 10000, zmin = 0.1, zmax = 1;
+    const double zs = near_plane * far_plane /
+                      (far_plane - ((1 - 0.0) / (zmax - zmin) - zmin / (zmax - zmin)) *
+                                       (far_plane - near_plane));
+    CHECK(zs == doctest::Approx(far_plane));
+    CHECK(SoftFadeCpu(float(far_plane), 0.0f, float(far_plane - 24)) == doctest::Approx(0.5f));
+    CHECK(SoftFadeCpu(float(far_plane), 0.0f, 500.0f) == 1.0f);
 }

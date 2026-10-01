@@ -116,6 +116,11 @@ struct DrawState {
     bool spot = false;
     spot::SpotParams spot_params;
     TexView density;
+    // a soft particle (IsSoftParticle) shades as `shade` says, its alpha
+    // faded by the scene's depth behind it (SoftPixelFade); soft_far is the
+    // camera's far plane (PS c89.y), the depth where nothing drew
+    bool soft = false;
+    float soft_far = 0;
     TexView tex;
     TexView spec_map;  // none unless shade samples it
     TexView glow;
@@ -201,6 +206,19 @@ void SampleBorder(const TexView& t, float u, float v, float out[4]) {
     }
 }
 
+// The scene's depth (1/w, 0 where nothing drew) where a texture pass's pixel
+// u, v (0..1 across its viewport) is on the screen, point-sampled: the game
+// reads its depth texture there (s9) for the spotlights' cones and the soft
+// particles, which draw after the world into targets of their own sizes
+float SceneInvW(const Target& t, float u, float v) {
+    if (!t.scene_depth) return 0;
+    const uint32_t sx =
+        std::min(uint32_t(std::clamp(u, 0.0f, 1.0f) * float(t.scene_w)), t.scene_w - 1);
+    const uint32_t sy =
+        std::min(uint32_t(std::clamp(v, 0.0f, 1.0f) * float(t.scene_h)), t.scene_h - 1);
+    return t.scene_depth[size_t(sy) * t.scene_w + sx];
+}
+
 // A spotlight cone's colour at pixel x, y of the depth volume, wp the
 // proxy's world position there and w its clip w (spot_model.hlsli's
 // SpotCone). The shader takes where the pixel is on the screen from its clip
@@ -210,14 +228,7 @@ void SpotPixel(const DrawState& ds, const Target& t, int x, int y, const float w
                float out[4]) {
     const float u = (float(x) + ds.centre - t.vx) / t.vw;
     const float v = (float(y) + ds.centre - t.vy) / t.vh;
-    float inv_w = 0;
-    if (t.scene_depth) {
-        const uint32_t sx = std::min(uint32_t(std::clamp(u, 0.0f, 1.0f) * float(t.scene_w)),
-                                     t.scene_w - 1);
-        const uint32_t sy = std::min(uint32_t(std::clamp(v, 0.0f, 1.0f) * float(t.scene_h)),
-                                     t.scene_h - 1);
-        inv_w = t.scene_depth[size_t(sy) * t.scene_w + sx];
-    }
+    const float inv_w = SceneInvW(t, u, v);
     const spot::SpotParams& sp = ds.spot_params;
     float texel[4] = {1, 1, 1, 1};
     if (ds.tex.px) TexelClamped(ds.tex, spot::SpotGoboCoordCpu(sp, wp), 0.0f, texel);
@@ -225,6 +236,17 @@ void SpotPixel(const DrawState& ds, const Target& t, int x, int y, const float w
     if (ds.density.px) SampleLinear(ds.density, u, v, density);
     spot::SpotConeCpu(sp, wp, w, spot::SpotSceneDepthCpu(sp, inv_w), texel[0], density[1], out);
     out[3] = 0;
+}
+
+// A soft particle's alpha scale at pixel x, y of the soft-particle buffer, w
+// its clip w there (shade.hlsli's SoftFade): the scene's depth read where the
+// pixel is on the screen, as SpotPixel reads it. For the 320x180 buffer of a
+// 1280x720 picture that's the depth at (4x, 4y), the texel the game's
+// shader reads.
+float SoftPixelFade(const DrawState& ds, const Target& t, int x, int y, float w) {
+    const float u = (float(x) + ds.centre - t.vx) / t.vw;
+    const float v = (float(y) + ds.centre - t.vy) / t.vh;
+    return shade::SoftFadeCpu(ds.soft_far, SceneInvW(t, u, v), w);
 }
 
 // pixel x, y's colour; the picture behind it is the one at x, y, the
@@ -363,10 +385,12 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
                 for (int i = 0; i < 3; i++) la[i] = q0 * a.la[i] + q1 * b.la[i] + q2 * c.la[i];
             }
             float col[4];
-            if (ds.spot)
+            if (ds.spot) {
                 SpotPixel(ds, t, x, y, wp, 1.0f / z, col);
-            else
+            } else {
                 Shade(ds, x, y, uv, n, vc, wp, 1.0f / z, ao, ld, la, col);
+                if (ds.soft) col[3] *= SoftPixelFade(ds, t, x, y, 1.0f / z);
+            }
             if (shade::AlphaCutCpu(ds.shade, col[3])) continue;
             // Dest draws no colour, but may still write the scene's alpha
             if (ds.blend != 0 || ds.alpha == AlphaRule::kMax) {
@@ -479,6 +503,9 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     // a cone shades only into a texture: the depth volume
     ds.spot = t.tex_obj && IsSpotCone(it, state) && spot::PackSpot(*state, t.w, t.h, ds.spot_params);
     if (ds.spot) ds.density = density;
+    // a soft particle fades only into a texture: the soft-particle buffer
+    ds.soft = t.tex_obj && IsSoftParticle(it, state);
+    if (ds.soft) ds.soft_far = state->Ps(89)[1];
     shade::PackShade(it, state, o, ds.tex.px != nullptr, ds.shade);
     if (ds.shade.flags.x & shade::kShadeSpecMap)
         ds.spec_map = View(state->maps[kMapSpecular].get());
@@ -571,14 +598,14 @@ bool Drawable(const DrawItem& it) {
     return it.geom && !it.geom->verts.empty() && it.geom->indices.size() >= 3;
 }
 
-// The blur into the target it samples (spot::SpotBlur), as the game does it
-// in place by a resolve: each pixel of its rect the taps' weighted sum of the
-// target as it was before it (bilinear, clamped; whole texels apart, so
-// point), at the quad's uv plus each tap's offset, blended by its material.
-void SpotBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o, Target& t,
-                  RasterStats& st) {
-    const std::vector<uint32_t> before = t.color;
-    const TexView src{t.w, t.h, before.data()};
+// A DrawRect blur's taps (shader 1: c31.. their uv offsets, c47.. their
+// weights per channel) from `src` into its rect of `t`: each pixel the taps'
+// weighted sum, bilinear and clamped, at the quad's uv plus each tap's
+// offset, blended by its material. The spotlights' blur reads its own
+// target as it was (spot::SpotBlur: whole texels apart, so point), the soft
+// particles' the other surface (SoftBlur: half-texel taps, so bilinear).
+void TapBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o,
+                 const TexView& src, Target& t, RasterStats& st) {
     const int x0 = std::clamp(int(std::floor(it.rect[0])), 0, int(t.w));
     const int y0 = std::clamp(int(std::floor(it.rect[1])), 0, int(t.h));
     const int x1 = std::clamp(int(std::ceil(it.rect[0] + it.rect[2])), x0, int(t.w));
@@ -605,11 +632,24 @@ void SpotBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& 
     st.draws++;
 }
 
-// NgSpotlightDrawer's targets: drawn after post-processing starts, for the
-// composite, so kept when something wants them though the rest of
-// post-processing's passes aren't
+// The blur into the target it samples (spot::SpotBlur), as the game does it
+// in place by a resolve: from a copy of the target as it was before it
+void SpotBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o, Target& t,
+                  RasterStats& st) {
+    const std::vector<uint32_t> before = t.color;
+    TapBlurDraw(it, s, o, {t.w, t.h, before.data()}, t, st);
+}
+
+
+// NgSpotlightDrawer's targets and RndSoftParticleBuffer's surfaces: drawn
+// after post-processing starts, for the composite, so kept when something
+// wants them though the rest of post-processing's passes aren't
 bool SpotTarget(const Pass& p) {
     return p.tex_type == kTexTypeDepthVolume || p.tex_type == kTexTypeDensityMap;
+}
+bool SoftTarget(const FrameCapture& f, const Pass& p) {
+    return p.tex_obj && (p.tex_obj == f.post_consts.soft_surface[0] ||
+                         p.tex_obj == f.post_consts.soft_surface[1]);
 }
 
 // PlanPasses, with `also` (a DxTex, 0 none) wanted whatever samples it,
@@ -628,11 +668,13 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
     std::unordered_set<uint32_t> needed;
     if (also) needed.insert(also);
     // the composite's spotlight term reads the depth volume (and through its
-    // cones the density map) at the frame's end
+    // cones the density map) at the frame's end, its soft particles' term
+    // the soft-particle surface
     post::PostPlan post_plan;
-    if (o.post && o.view == RasterView::kFinal && post::PlanPost(f, o.post_only, post_plan) &&
-        (post_plan.composite.flags.x & post::kPostSpot))
-        needed.insert(post_plan.spot_volume);
+    if (o.post && o.view == RasterView::kFinal && post::PlanPost(f, o.post_only, post_plan)) {
+        if (post_plan.composite.flags.x & post::kPostSpot) needed.insert(post_plan.spot_volume);
+        if (post_plan.composite.flags.x & post::kPostSoft) needed.insert(post_plan.soft);
+    }
     auto samples = [&](uint32_t first, uint32_t end, bool texture) {
         if (!o.textures) return;
         for (uint32_t d = first; d < end; d++) {
@@ -653,7 +695,7 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
         const bool wanted = also && p.tex_obj == also;
         if (!o.texture_passes || !p.width || !p.height) continue;
         if (!needed.count(p.tex_obj) && !(wanted && p.version == also_version)) continue;
-        if (first >= f.post_boundary && !wanted && !SpotTarget(p)) continue;
+        if (first >= f.post_boundary && !wanted && !SpotTarget(p) && !SoftTarget(f, p)) continue;
         // what it drew over isn't seen
         if (p.clear_flags & 0x0f) needed.erase(p.tex_obj);
         runs.push_back({&p, first, end});
@@ -715,7 +757,8 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             };
             // the depth buffer has 1/w, as RunPost wants it
             post::RunPost(post_plan, scene, depth, o.width, o.height,
-                          image(post_plan.spot_volume), image(post_plan.spot_density), rgba);
+                          image(post_plan.spot_volume), image(post_plan.spot_density),
+                          image(post_plan.soft), rgba);
         } else {
             for (size_t i = 0; i < pixels; i++) {
                 const uint32_t c = scene[i];
@@ -790,6 +833,18 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                 SpotBlurDraw(it, *state, o, rtt, st);
                 continue;
             }
+            if (SoftBlur(frame, it, state, p)) {
+                // the other surface as its pass left it (transparent black,
+                // counted, if none did)
+                static constexpr uint32_t kBlack = kTransparentBlack;
+                TexView src{1, 1, &kBlack};
+                if (auto s = rts.find(it.tex->tex_obj); s != rts.end())
+                    src = {s->second.w, s->second.h, s->second.color.data()};
+                else
+                    st.rt_missing++;
+                TapBlurDraw(it, *state, o, src, rtt, st);
+                continue;
+            }
             // the camera's viewport; DrawRect's quads are in the target's
             // pixels, over all of it
             if (it.rect_shader < 0 && p.viewport[2] > 0 && p.viewport[3] > 0)
@@ -808,6 +863,16 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
 }
 
 }  // namespace
+
+bool SoftBlur(const FrameCapture& f, const DrawItem& d, const ShadeInputs* s, const Pass& p) {
+    const uint32_t* surface = f.post_consts.soft_surface;
+    if (d.rect_shader != 1 || !s || !p.tex_obj || !d.tex || d.tex->tex_obj == p.tex_obj ||
+        (p.tex_obj != surface[0] && p.tex_obj != surface[1]))
+        return false;
+    float weights = 0;
+    for (int i = 0; i < kSoftBlurTaps; i++) weights += s->Ps(47 + i)[0];
+    return weights > 0;
+}
 
 std::vector<PassRun> PlanPasses(const FrameCapture& frame, const RasterOptions& options) {
     return Plan(frame, options, 0, 0);

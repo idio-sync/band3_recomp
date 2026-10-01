@@ -108,6 +108,10 @@ void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], co
 
 bool AlphaCutCpu(const ShadeParams& sp, float alpha) { return AlphaCut(sp, alpha); }
 
+float SoftFadeCpu(float far_plane, float inv_w, float w) {
+    return SoftFade(SoftSceneDepth(far_plane, inv_w), w);
+}
+
 namespace {
 
 void Copy(const float* from, float4& to) { to = {from[0], from[1], from[2], from[3]}; }
