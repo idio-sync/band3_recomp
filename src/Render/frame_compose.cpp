@@ -86,6 +86,8 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
     // post-processing as the post frame ran it, on the world it presents
     fc.post = frame.post;
     fc.post_consts = frame.post_consts;
+    // and the gamma ramp the presenter applied to it
+    fc.gamma = frame.gamma;
 
     // shades: the world's, then the frame's
     fc.shades.reserve(world.shades.size() + frame.shades.size());

@@ -881,7 +881,15 @@ std::vector<PassRun> PlanPasses(const FrameCapture& frame, const RasterOptions& 
 RasterStats Rasterize(const FrameCapture& frame, const RasterOptions& o,
                       std::vector<uint32_t>& rgba, std::vector<int32_t>* ids) {
     RtTargets rts;
-    return Run(frame, o, rgba, ids, rts, 0, 0);
+    RasterStats st = Run(frame, o, rgba, ids, rts, 0, 0);
+    // the presenter's last step, after the overlay
+    if (o.gamma && o.view == RasterView::kFinal) {
+        const auto start = std::chrono::steady_clock::now();
+        ApplyGamma(frame.gamma, rgba);
+        st.ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                           start).count();
+    }
+    return st;
 }
 
 bool RasterizeTarget(const FrameCapture& frame, const RasterOptions& options, uint32_t tex_obj,

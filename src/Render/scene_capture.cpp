@@ -2,6 +2,10 @@
 
 #include <rex/cvar.h>
 #include <rex/dbg.h>
+#include <rex/graphics/command_processor.h>
+#include <rex/graphics/graphics_system.h>
+#include <rex/logging.h>
+#include <rex/runtime.h>
 #include <rex/system/kernel_state.h>
 
 #include <algorithm>
@@ -13,6 +17,7 @@
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -1796,6 +1801,103 @@ void HoldIfRequested(const std::shared_ptr<const FrameCapture>& frame) {
     g_held.released = true;
 }
 
+// whether each channel of the table never falls as the input rises, as any
+// gamma curve's doesn't: what tells a ramp read through the SDK's headers
+// from one read at the wrong place
+bool PlausibleTable(const GammaRamp& g) {
+    for (int c = 0; c < 3; c++)
+        for (int v = 1; v < 256; v++)
+            if (TableChannel(g.table[v], c) < TableChannel(g.table[v - 1], c)) return false;
+    return TableChannel(g.table[255], 0) != 0;
+}
+
+// The command processor's ramps, which its header keeps for its backends
+// (protected): reached through a pointer to the member, as a class derived
+// from it may take one. Never made.
+struct GammaRampAccess : rex::graphics::CommandProcessor {
+    static const rex::graphics::reg::DC_LUT_30_COLOR* Table(
+        const rex::graphics::CommandProcessor& cp) {
+        return (cp.*&GammaRampAccess::gamma_ramp_256_entry_table)();
+    }
+    static const rex::graphics::reg::DC_LUT_PWL_DATA* Pwl(
+        const rex::graphics::CommandProcessor& cp) {
+        return (cp.*&GammaRampAccess::gamma_ramp_pwl_rgb)();
+    }
+};
+
+// The display gamma ramp the presenter applies (gamma_ramp.h): the command
+// processor's copy of the DC_LUT registers, which the guest writes at a swap
+// after setting a ramp, and DC_LUT_RW_MODE for which of the two it wrote. Read
+// through the SDK headers' inline accessors, so right only while the GPU
+// plugin is built from the same headers: a table that doesn't look like a
+// gamma curve is taken as misread, logged once, and left out (kNone), as is
+// one never written. Under g_state_mutex.
+GammaRamp ReadDisplayGamma() {
+    static bool warned = false;
+    auto warn = [](const char* why) {
+        if (warned) return;
+        warned = true;
+        REXLOG_WARN("native view: no display gamma ramp ({}); captures are drawn without one",
+                    why);
+    };
+    GammaRamp g;
+    rex::system::KernelState* kernel = rex::system::kernel_state();
+    rex::Runtime* runtime = kernel ? kernel->emulator() : nullptr;
+    auto* graphics = runtime ? dynamic_cast<rex::graphics::GraphicsSystem*>(
+                                   runtime->graphics_system())
+                             : nullptr;
+    const rex::graphics::CommandProcessor* cp =
+        graphics ? graphics->command_processor() : nullptr;
+    if (!cp) {
+        warn("no command processor");
+        return g;
+    }
+    const rex::graphics::reg::DC_LUT_30_COLOR* table = GammaRampAccess::Table(*cp);
+    const rex::graphics::reg::DC_LUT_PWL_DATA* pwl = GammaRampAccess::Pwl(*cp);
+    for (int i = 0; i < 256; i++) g.table[i] = table[i].value;
+    for (int i = 0; i < 128 * 3; i++) g.pwl[i / 3][i % 3] = pwl[i].value;
+    const uint32_t rw_mode =
+        graphics->register_file()->values[rex::graphics::XE_GPU_REG_DC_LUT_RW_MODE];
+    if (rw_mode & 1) {
+        bool written = false;
+        for (const auto& step : g.pwl)
+            for (uint32_t v : step) written |= v != 0;
+        if (written) g.mode = GammaRamp::kPwl;
+        else warn("the PWL ramp is unwritten");
+        return g;
+    }
+    if (std::all_of(std::begin(g.table), std::end(g.table), [](uint32_t v) { return v == 0; })) {
+        warn("the table is unwritten");
+        return g;
+    }
+    if (!PlausibleTable(g)) {
+        warn("the table read isn't a gamma curve");
+        return g;
+    }
+    g.mode = GammaRamp::kTable;
+    return g;
+}
+
+// logs the ramp when it differs from the last one read (it's set at boot and
+// by the game's settings, so normally once)
+void LogGammaIfChanged(const GammaRamp& g) {
+    static GammaRamp last;
+    static bool logged = false;
+    if (logged && g == last) return;
+    logged = true;
+    last = g;
+    uint8_t lut[3][256];
+    GammaLut(g, lut);
+    std::string curve;
+    for (int v : {0, 4, 8, 16, 32, 64, 96, 128, 192, 255})
+        curve += fmt::format(" {}:{}/{}/{}", v, lut[0][v], lut[1][v], lut[2][v]);
+    REXLOG_INFO("native view: display gamma ramp {} (value: shown r/g/b){}",
+                g.mode == GammaRamp::kTable ? "table"
+                : g.mode == GammaRamp::kPwl ? "pwl"
+                                            : "none",
+                curve);
+}
+
 // The frame's end, under g_state_mutex: the frame captured, for
 // HoldIfRequested once that's let go, or null while capture is off
 std::shared_ptr<const FrameCapture> FinishFrame() {
@@ -1822,6 +1924,8 @@ std::shared_ptr<const FrameCapture> FinishFrame() {
     s.building->frame = ++s.frame;
     s.building->game_frame = game_frame;
     s.building->world_frame = game_frame;
+    s.building->gamma = ReadDisplayGamma();
+    LogGammaIfChanged(s.building->gamma);
     CarryPasses(s, *s.building);
     std::shared_ptr<const FrameCapture> done = s.building;
     // With even/odd rendering, a frame that drew the world is kept for the

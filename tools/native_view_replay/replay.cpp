@@ -12,6 +12,7 @@
 //                               [--dump-alpha <png>] [--dump-depth <png>]
 //                               [--view alpha|depth]
 //                               [--no-post | --post-only xfm|dof|bloom|spot|soft]
+//                               [--no-gamma | --gamma-from <other.cap>]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
 // and inside the frustum with the matrix as captured and transposed (the back
@@ -72,6 +73,12 @@
 // "soft" draws (scene_capture.h's IsSoftParticle) in the pass into the
 // soft-particle buffer's first surface, before its two blurs; --dump-rt of
 // that surface draws them, and --post-only soft adds the buffer alone.
+// The display's gamma ramp (gamma_ramp.h), which the presenter applies to the
+// game's picture and so to a harness screenshot, goes over the native picture
+// last, as captured; every capture prints a "gamma:" line, which ramp and what
+// it shows a few values as, and --list the whole ramp. --no-gamma leaves it
+// off, --gamma-from draws with another capture's (one from before captures
+// kept it has none: it's drawn as RB3 drew it).
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
@@ -486,6 +493,44 @@ float MaxDiff(const float* a, const float* b, int n) {
     return most;
 }
 
+// The display gamma ramp (the "gamma:" line): which, and what a few 8-bit
+// values show as through it; with `all`, every entry, 10-bit
+void PrintGamma(const FrameCapture& fc, bool all) {
+    const GammaRamp& g = fc.gamma;
+    if (g.mode == GammaRamp::kNone) {
+        std::printf("gamma: none (a capture from before the ramp was kept, or it wasn't read): "
+                    "drawn as RB3 drew it\n");
+        return;
+    }
+    uint8_t lut[3][256];
+    GammaLut(g, lut);
+    std::printf("gamma: %s; value: shown r/g/b", g.mode == GammaRamp::kTable ? "table" : "pwl");
+    for (int v : {0, 1, 2, 4, 8, 16, 32, 64, 96, 128, 192, 255})
+        std::printf(" %d:%u/%u/%u", v, lut[0][v], lut[1][v], lut[2][v]);
+    int differ = 0;
+    for (int c = 0; c < 3; c++)
+        for (int v = 0; v < 256; v++) differ += lut[c][v] != v;
+    std::printf("; %d of 768 values change\n", differ);
+    if (!all) return;
+    if (g.mode == GammaRamp::kTable) {
+        std::printf("  table (10-bit r/g/b by 8-bit value):\n");
+        for (int v = 0; v < 256; v++) {
+            if (v % 8 == 0) std::printf("   %3d:", v);
+            std::printf(" %4u/%4u/%4u", TableChannel(g.table[v], 0), TableChannel(g.table[v], 1),
+                        TableChannel(g.table[v], 2));
+            if (v % 8 == 7) std::printf("\n");
+        }
+    } else {
+        std::printf("  pwl (base+delta, 10.6 fixed point, r g b by step of 8 10-bit values):\n");
+        for (int i = 0; i < 128; i++) {
+            std::printf("   %3d:", i);
+            for (int c = 0; c < 3; c++)
+                std::printf(" %04X+%04X", g.pwl[i][c] & 0xffff, g.pwl[i][c] >> 16);
+            std::printf("\n");
+        }
+    }
+}
+
 // What post-processing was set to do (the "post:" line), against what RB3's
 // composite drew with (the "check:" line), and the blurs' taps
 void PrintPost(const FrameCapture& fc) {
@@ -665,6 +710,15 @@ int main(int argc, char** argv) {
         else if (a == "--dump-alpha" && i + 1 < argc) dump_alpha = argv[++i];
         else if (a == "--dump-depth" && i + 1 < argc) dump_depth = argv[++i];
         else if (a == "--no-post") o.post = false;
+        else if (a == "--no-gamma") o.gamma = false;
+        else if (a == "--gamma-from" && i + 1 < argc) {
+            const auto other = LoadCapture(argv[++i]);
+            if (!other) {
+                std::fprintf(stderr, "can't load %s\n", argv[i]);
+                return 1;
+            }
+            fc->gamma = other->gamma;
+        }
         else if (a == "--post-only" && i + 1 < argc) {
             const std::string e = argv[++i];
             o.post_only = e == "xfm"     ? post::kPostXfm
@@ -716,6 +770,7 @@ int main(int argc, char** argv) {
                 (unsigned long long)fc->frame, fc->draws.size(), drawn, cams.size());
     PrintPassSummary(*fc);
     PrintPost(*fc);
+    PrintGamma(*fc, list);
     if (list) PrintPasses(*fc);
     for (uint32_t cam : order) {
         const CamStats& cs = cams[cam];

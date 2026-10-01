@@ -1,8 +1,10 @@
 #include "src/Render/gpu_view.h"
 
+#include "src/Render/gamma_ramp.h"
 #include "src/Render/post_model.h"
 #include "src/Render/shade_model.h"
 #include "src/Render/spot_model.h"
+#include "src/Render/shaders/gamma_shaders.gen.h"
 #include "src/Render/shaders/mesh_shaders.gen.h"
 #include "src/Render/shaders/post_shaders.gen.h"
 
@@ -262,6 +264,9 @@ struct GpuRenderer::Impl {
     SDL_GPUGraphicsPipeline* downsample_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* blur_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* composite_pipeline = nullptr;
+    // gamma.hlsl's: the display gamma ramp over the finished picture
+    SDL_GPUShader* gamma_shader = nullptr;
+    SDL_GPUGraphicsPipeline* gamma_pipeline = nullptr;
     // by blend mode, DepthRules::Key, AlphaMode, CullWinding and PixelKind,
     // all made before the first frame
     std::unordered_map<int, SDL_GPUGraphicsPipeline*> pipelines;
@@ -285,6 +290,9 @@ struct GpuRenderer::Impl {
     // a copy of `color` as the resolve left it, for the overlay's
     // REFRACT_WORLD draws (RefractsWorld), made on frames that have one
     SDL_GPUTexture* behind = nullptr;
+    // the finished picture through the frame's gamma ramp, read back in place
+    // of `color` on frames that have one
+    SDL_GPUTexture* graded = nullptr;
     bool depth_sampled = false;
     SDL_GPUTexture* no_depth = nullptr;
     SDL_GPUTransferBuffer* readback = nullptr;
@@ -586,14 +594,20 @@ bool GpuRenderer::Impl::Create() {
     composite_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kCompositePixelDxbc,
                                   sizeof(kCompositePixelDxbc), kCompositePixelSpirv,
                                   sizeof(kCompositePixelSpirv), "PSComposite", 9, 0, 1);
+    gamma_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kGammaPixelDxbc,
+                              sizeof(kGammaPixelDxbc), kGammaPixelSpirv, sizeof(kGammaPixelSpirv),
+                              "PSGamma", 1, 0, 1);
     if (!vertex_shader || !pixel_shader || !spot_shader || !soft_shader || !fullscreen_shader ||
-        !resolve_shader || !downsample_shader || !blur_shader || !composite_shader)
+        !resolve_shader || !downsample_shader || !blur_shader || !composite_shader ||
+        !gamma_shader)
         return false;
     resolve_pipeline = MakeFullscreenPipeline(resolve_shader, "resolve");
     downsample_pipeline = MakeFullscreenPipeline(downsample_shader, "downsample");
     blur_pipeline = MakeFullscreenPipeline(blur_shader, "blur");
     composite_pipeline = MakeFullscreenPipeline(composite_shader, "composite");
-    if (!resolve_pipeline || !downsample_pipeline || !blur_pipeline || !composite_pipeline)
+    gamma_pipeline = MakeFullscreenPipeline(gamma_shader, "gamma");
+    if (!resolve_pipeline || !downsample_pipeline || !blur_pipeline || !composite_pipeline ||
+        !gamma_pipeline)
         return false;
     // the scene's depth, read after the world's draws: D32 the resolve samples
     // where the device can (Direct3D 12 and Vulkan both should)
@@ -693,12 +707,12 @@ void GpuRenderer::Impl::Release(bool stop_video) {
             if (a.texture) SDL_ReleaseGPUTexture(device, a.texture);
         for (auto& [k, rt] : rts) ReleaseRt(rt);
         for (auto& [k, p] : pipelines) SDL_ReleaseGPUGraphicsPipeline(device, p);
-        for (SDL_GPUGraphicsPipeline* p :
-             {resolve_pipeline, downsample_pipeline, blur_pipeline, composite_pipeline})
+        for (SDL_GPUGraphicsPipeline* p : {resolve_pipeline, downsample_pipeline, blur_pipeline,
+                                           composite_pipeline, gamma_pipeline})
             if (p) SDL_ReleaseGPUGraphicsPipeline(device, p);
         for (SDL_GPUShader* sh : {vertex_shader, pixel_shader, spot_shader, soft_shader,
                                   fullscreen_shader, resolve_shader, downsample_shader,
-                                  blur_shader, composite_shader})
+                                  blur_shader, composite_shader, gamma_shader})
             if (sh) SDL_ReleaseGPUShader(device, sh);
         if (sampler) SDL_ReleaseGPUSampler(device, sampler);
         if (linear_sampler) SDL_ReleaseGPUSampler(device, linear_sampler);
@@ -720,8 +734,9 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     device = nullptr;
     vertex_shader = pixel_shader = spot_shader = soft_shader = fullscreen_shader = nullptr;
     resolve_shader = nullptr;
-    downsample_shader = blur_shader = composite_shader = nullptr;
+    downsample_shader = blur_shader = composite_shader = gamma_shader = nullptr;
     resolve_pipeline = downsample_pipeline = blur_pipeline = composite_pipeline = nullptr;
+    gamma_pipeline = nullptr;
     sampler = linear_sampler = nullptr;
     white = black = no_depth = nullptr;
     ReleaseTargets();  // released above: forgets them
@@ -1089,13 +1104,13 @@ void GpuRenderer::Impl::ReleaseRt(Rt& rt) {
 // the frame's targets, at the picture's size; with no device, only forgets them
 void GpuRenderer::Impl::ReleaseTargets() {
     if (device) {
-        for (SDL_GPUTexture* t : {scene, color, depth, behind, post_dof, post_bloom[0],
+        for (SDL_GPUTexture* t : {scene, color, depth, behind, graded, post_dof, post_bloom[0],
                                   post_bloom[1], post_bloom[2], post_tmp[0], post_tmp[1],
                                   post_tmp[2], spot_scratch.texture, soft_scratch.texture})
             if (t) SDL_ReleaseGPUTexture(device, t);
         if (readback) SDL_ReleaseGPUTransferBuffer(device, readback);
     }
-    scene = color = depth = behind = post_dof = nullptr;
+    scene = color = depth = behind = graded = post_dof = nullptr;
     spot_scratch = soft_scratch = Scratch{};
     for (int k = 0; k < 3; k++) post_bloom[k] = post_tmp[k] = nullptr;
     readback = nullptr;
@@ -1114,8 +1129,10 @@ bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     ti.num_levels = 1;
     ti.format = kColorFormat;
     ti.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
-    color = SDL_CreateGPUTexture(device, &ti);
+    graded = SDL_CreateGPUTexture(device, &ti);
+    // the gamma ramp's pass reads the picture
     ti.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    color = SDL_CreateGPUTexture(device, &ti);
     scene = SDL_CreateGPUTexture(device, &ti);
     ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
     behind = SDL_CreateGPUTexture(device, &ti);
@@ -1144,7 +1161,7 @@ bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
             levels &= post_dof != nullptr;
         }
     }
-    if (!scene || !color || !depth || !behind || !readback || !levels) {
+    if (!scene || !color || !depth || !behind || !graded || !readback || !levels) {
         REXLOG_WARN("native view gpu: no {}x{} target ({})", w, h, SDL_GetError());
         return false;
     }
@@ -1939,9 +1956,36 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     if (!resolved) resolve();
     end_pass();
 
+    // the display's gamma ramp over all of it, as the presenter applies it
+    // (gamma_ramp.h), by the CPU's lookup: each value's entry, red in the low
+    // byte, four to a uint4
+    SDL_GPUTexture* finished = color;
+    if (o.gamma && o.view == RasterView::kFinal && frame.gamma.mode != GammaRamp::kNone) {
+        uint8_t lut[3][256];
+        GammaLut(frame.gamma, lut);
+        if (!IsIdentity(lut)) {
+            uint32_t packed[256];
+            for (int v = 0; v < 256; v++)
+                packed[v] = uint32_t(lut[0][v]) | uint32_t(lut[1][v]) << 8 |
+                            uint32_t(lut[2][v]) << 16;
+            SDL_GPUColorTargetInfo ct{};
+            ct.texture = graded;
+            ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
+            ct.store_op = SDL_GPU_STOREOP_STORE;
+            SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
+            SDL_BindGPUGraphicsPipeline(rp, gamma_pipeline);
+            const SDL_GPUTextureSamplerBinding tb{color, sampler};
+            SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
+            SDL_PushGPUFragmentUniformData(cmd, 0, packed, sizeof(packed));
+            SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+            SDL_EndGPURenderPass(rp);
+            finished = graded;
+        }
+    }
+
     SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
     SDL_GPUTextureRegion src{};
-    src.texture = color;
+    src.texture = finished;
     src.w = width;
     src.h = height;
     src.d = 1;

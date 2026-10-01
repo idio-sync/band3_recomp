@@ -311,6 +311,9 @@ void NativeViewDialog::OnDraw(ImGuiIO& io) {
         ImGui::SameLine();
         // RB3's depth of field, bloom and colour matrix (post_model.h)
         changed |= ImGui::Checkbox("Post-processing", &options_.post);
+        ImGui::SameLine();
+        // the display's gamma ramp, as the game's own picture has it (gamma_ramp.h)
+        changed |= ImGui::Checkbox("Gamma ramp", &options_.gamma);
         int size = options_.width >= 1280 ? 2 : options_.width >= 960 ? 1 : 0;
         if (ImGui::Combo("Size", &size, "640x360\0960x540\01280x720\0")) {
             const uint32_t widths[] = {640, 960, 1280};

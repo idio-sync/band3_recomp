@@ -28,8 +28,12 @@
 //         drew with (post_params.h), each as its size and its bytes: the
 //         structs only grow at the end, so a file with other sizes keeps the
 //         fields both have (a file without it: none read)
-// A section newer than this reader skips if it's SHAD, PASS, FRAM or POST (the
-// file loads without it) and fails the load if it's GEOM, TEXS or DRAW.
+//   GAMA  the display gamma ramp (gamma_ramp.h): which applies, the 256-entry
+//         table and the PWL ramp (a file without it: none, the picture as RB3
+//         drew it)
+// A section newer than this reader skips if it's SHAD, PASS, FRAM, POST or
+// GAMA (the file loads without it) and fails the load if it's GEOM, TEXS or
+// DRAW.
 //
 // Versions 1 and 2 still load: 1 is frame, geometry, textures and draws; 2
 // adds the draws' ShadeStates, kept as their ShadeInputs were in memory (so
@@ -58,6 +62,7 @@ constexpr uint32_t kSecShades = FourCC("SHAD");
 constexpr uint32_t kSecDraws = FourCC("DRAW");
 constexpr uint32_t kSecPasses = FourCC("PASS");
 constexpr uint32_t kSecPost = FourCC("POST");
+constexpr uint32_t kSecGamma = FourCC("GAMA");
 // the versions this build writes and reads
 constexpr uint32_t kFrameVersion = 1;
 constexpr uint32_t kGeometryVersion = 1;
@@ -66,6 +71,7 @@ constexpr uint32_t kShadesVersion = 1;
 constexpr uint32_t kDrawsVersion = 2;
 constexpr uint32_t kPassesVersion = 1;
 constexpr uint32_t kPostVersion = 1;
+constexpr uint32_t kGammaVersion = 1;
 
 // TEXS: where a texture's pixels are
 constexpr int32_t kOwnPixels = -1;  // they follow
@@ -491,6 +497,12 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     w.Put(fc.post_consts);
     w.End(sec);
 
+    sec = w.Begin(kSecGamma, kGammaVersion);
+    w.Put<uint32_t>(fc.gamma.mode);
+    w.Raw(fc.gamma.table, sizeof(fc.gamma.table));
+    w.Raw(fc.gamma.pwl, sizeof(fc.gamma.pwl));
+    w.End(sec);
+
     const std::string tmp = path + ".tmp";
     FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) return false;
@@ -537,6 +549,7 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                                : id == kSecDraws    ? kDrawsVersion
                                : id == kSecPasses   ? kPassesVersion
                                : id == kSecPost     ? kPostVersion
+                               : id == kSecGamma    ? kGammaVersion
                                                     : 0;
         if (version > known || version == 0) {
             if (core) return nullptr;
@@ -693,6 +706,11 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
         } else if (id == kSecPost) {
             GetGrown(r, fc->post);
             GetGrown(r, fc->post_consts);
+        } else if (id == kSecGamma) {
+            fc->gamma.mode = r.Get<uint32_t>();
+            r.Raw(fc->gamma.table, sizeof(fc->gamma.table));
+            r.Raw(fc->gamma.pwl, sizeof(fc->gamma.pwl));
+            if (fc->gamma.mode > GammaRamp::kPwl) return nullptr;
         }
         if (!r.ok) return nullptr;
         r.pos = next;

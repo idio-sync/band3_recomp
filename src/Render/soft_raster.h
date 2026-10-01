@@ -32,7 +32,8 @@
 // scene target's colour, alpha and depth, or a copy (alpha made opaque) on
 // frames without it or with RasterOptions::post off. An overlay draw that
 // reads the picture behind it (RefractsWorld) reads a copy of it as the
-// resolve left it.
+// resolve left it. The display's gamma ramp (gamma_ramp.h) goes over the
+// finished picture.
 
 namespace band3::render {
 
@@ -70,6 +71,11 @@ struct RasterOptions {
     bool post = true;
     // with post, only these of its effects (post_model.h's kPost bits), 0 all
     uint32_t post_only = 0;
+    // the display gamma ramp the frame was shown through (FrameCapture::
+    // gamma, gamma_ramp.h), last, over the overlay too, as the screen and the
+    // harness's screenshot have it; off, the picture as RB3 drew it. Not
+    // applied to the scene target's views.
+    bool gamma = true;
     RasterView view = RasterView::kFinal;
 };
 

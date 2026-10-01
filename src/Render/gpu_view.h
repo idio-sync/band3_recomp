@@ -28,7 +28,9 @@
 // and the depth volume's blurs blur a copy of it into it with post.hlsl's
 // blur; the soft particles (scene_capture.h's IsSoftParticle) by
 // PSSoftParticle, which fades them by that depth, and their buffer's blurs
-// blur a copy of one surface into the other.
+// blur a copy of one surface into the other. The display's gamma ramp
+// (gamma_ramp.h) goes over the finished picture last, by shaders/gamma.hlsl's
+// pass, which the frame is read back from.
 
 namespace band3::render {
 

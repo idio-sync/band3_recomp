@@ -587,3 +587,78 @@ TEST_CASE("a soft particle fades by the scene's depth behind it; its buffer blur
         CHECK(float(tex[2 * 8 + x] & 0xff) == doctest::Approx(want).epsilon(0.01));
     }
 }
+
+TEST_CASE("the display gamma ramp maps each value as the presenter shows it") {
+    // RB3's sort of table: 10-bit, lifting the darks (a pow under 1), red
+    // apart from green and blue to tell the channels apart
+    GammaRamp g;
+    g.mode = GammaRamp::kTable;
+    for (uint32_t v = 0; v < 256; v++) {
+        const uint32_t lift = std::min<uint32_t>(1023, v * 1023 / 255 + (v < 128 ? 24 : 0));
+        const uint32_t red = 1023 - (255 - v) * 1023 / 255;
+        g.table[v] = red << 20 | lift << 10 | lift;
+    }
+    uint8_t lut[3][256];
+    GammaLut(g, lut);
+    // 10 bits to 8 as CaptureGuestOutput: v * 255/1023 + 0.5, truncated
+    CHECK(lut[1][0] == 6);  // 24 -> 5.98 + .5
+    CHECK(lut[1][1] == 7);  // 28 -> 6.98 + .5
+    CHECK(lut[1][128] == 128);
+    CHECK(lut[2][4] == lut[1][4]);
+    for (int v = 0; v < 256; v++) CHECK(lut[0][v] == v);
+    CHECK_FALSE(IsIdentity(lut));
+    CHECK(Unorm10To8(0x48) == 18);  // 17.95
+    CHECK(Unorm10To8(1023) == 255);
+    CHECK(Unorm10To8(2) == 0);  // 0.4985
+
+    // D3D's PWL ramp for a 10-bit front buffer before a game sets its own
+    // (register_table.inc): base step << 9, delta 8, identity but for its
+    // last step, flat at 1023, where 254 (1019 in 10 bits) lands
+    GammaRamp pwl;
+    pwl.mode = GammaRamp::kPwl;
+    for (uint32_t i = 0; i < 128; i++)
+        for (int c = 0; c < 3; c++) pwl.pwl[i][c] = 0x200u << 16 | i << 9;
+    pwl.pwl[127][0] = pwl.pwl[127][1] = pwl.pwl[127][2] = 0x0000FFC0;
+    GammaLut(pwl, lut);
+    for (int c = 0; c < 3; c++)
+        for (int v = 0; v < 256; v++) CHECK(lut[c][v] == (v == 254 ? 255 : v));
+
+    // over the finished picture, overlay and all, the CPU's and so the GPU's
+    // (gamma.hlsl's pass reads the same lookup)
+    FrameCapture f;
+    f.draws.push_back(Item(Quad(-1, 0, 0xff804020u), 0));
+    f.post_boundary = 1;
+    f.draws.push_back(Item(Quad(0, 1, 0xff000001u), 0));
+    f.gamma = g;
+    std::vector<uint32_t> raw, graded;
+    RasterOptions o = Small();
+    o.gamma = false;
+    Rasterize(f, o, raw);
+    o.gamma = true;
+    Rasterize(f, o, graded);
+    REQUIRE(raw.size() == graded.size());
+    GammaLut(g, lut);
+    for (size_t i = 0; i < raw.size(); i++) {
+        const uint32_t c = raw[i];
+        const uint32_t want = lut[0][c & 0xff] | lut[1][c >> 8 & 0xff] << 8 |
+                              lut[2][c >> 16 & 0xff] << 16 | (c & 0xff000000u);
+        CAPTURE(i);
+        CHECK(graded[i] == want);
+    }
+    CHECK(graded[0] != raw[0]);
+    CHECK(graded[7] != raw[7]);
+
+    // not on views of the scene target, and nothing from a capture from
+    // before the ramp was kept
+    o.view = RasterView::kSceneAlpha;
+    std::vector<uint32_t> a, b;
+    Rasterize(f, o, a);
+    o.gamma = false;
+    Rasterize(f, o, b);
+    CHECK(a == b);
+    o.view = RasterView::kFinal;
+    o.gamma = true;
+    f.gamma = GammaRamp{};
+    Rasterize(f, o, graded);
+    CHECK(graded == raw);
+}

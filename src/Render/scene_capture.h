@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "src/Render/gamma_ramp.h"
 #include "src/Render/post_params.h"
 
 // Experimental: records what RB3 draws each frame, read straight out of guest
@@ -371,6 +372,10 @@ struct FrameCapture {
     // the world is the frame's own: world_frame is its game_frame.
     uint32_t composed = 0;
     uint64_t world_frame = 0;
+    // the display gamma ramp the presenter applied to the game's picture of
+    // it (gamma_ramp.h), read at the frame's end; kNone in captures from
+    // before it, and where it couldn't be read
+    GammaRamp gamma;
     uint32_t cams = 0;             // camera selects that drew to the back buffer
     uint32_t skipped_target = 0;   // draws for a camera with a target, but no texture pass open
     uint32_t skipped_velocity = 0; // motion blur velocity pass

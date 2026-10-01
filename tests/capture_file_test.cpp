@@ -4,7 +4,8 @@
 // skipped or refused as it should be, and geometry from a smaller Vertex (or
 // post-processing from a smaller PostParams) keeps what both have; files from
 // before passes (B3CAP002) and before shades (B3CAP001) still load, and draws
-// from before their cull mode was kept cull nothing.
+// from before their cull mode was kept cull nothing, and files from before the
+// display gamma ramp was kept have none.
 
 #include <doctest/doctest.h>
 #include <cstddef>
@@ -727,4 +728,40 @@ TEST_CASE("a capture keeps each draw's cull mode, and one from before culls noth
     for (const DrawItem& d : back->draws) CHECK(d.cull == 0);
     CHECK(back->draws[4].tex);
     CHECK(back->passes.size() == 3);
+}
+
+TEST_CASE("a capture keeps its display gamma ramp, and one from before has none") {
+    FrameCapture fc = MakePassFrame();
+    fc.gamma.mode = GammaRamp::kTable;
+    for (uint32_t v = 0; v < 256; v++) {
+        const uint32_t ten = v * 1023 / 255;
+        fc.gamma.table[v] = ten << 20 | (ten / 2) << 10 | v;
+    }
+    fc.gamma.pwl[127][2] = 0x0400FBC0;
+    const std::string path = TempPath("band3_capture_file_gamma_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    REQUIRE(back);
+    CHECK(back->gamma == fc.gamma);
+
+    // without the section, as builds before it wrote: none, which draws the
+    // picture as it is
+    std::vector<uint8_t> data = ReadAll(path);
+    const size_t at = FindSection(data, "GAMA");
+    REQUIRE(at != std::string::npos);
+    uint64_t size;
+    std::memcpy(&size, data.data() + at + 8, 8);
+    data.erase(data.begin() + std::ptrdiff_t(at),
+               data.begin() + std::ptrdiff_t(at + 16 + size_t(size)));
+    WriteAll(path, data);
+    back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    CHECK(back->gamma.mode == GammaRamp::kNone);
+    CHECK(back->gamma == GammaRamp{});
+    CHECK(back->draws.size() == fc.draws.size());
+    std::vector<uint32_t> rgba = {0xff102030u, 0x80fefdfcu};
+    const std::vector<uint32_t> before = rgba;
+    ApplyGamma(back->gamma, rgba);
+    CHECK(rgba == before);
 }
