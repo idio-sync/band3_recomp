@@ -223,7 +223,24 @@ struct DrawItem {
     // one before, in its pass's texture; it samples nothing else, so a renderer
     // can build the mips itself instead. 0 for any other draw.
     int32_t mip_level = 0;
+    // Its cull mode, as the device had it after the draw: the low bits of
+    // Xenos' PA_SU_SC_MODE_CNTL (kCullFront, kCullBack, kCullFrontIsCw;
+    // D3DCULL_CW is 2, D3DCULL_CCW 6). RndMat's cull flag sets D3DCULL_CW and
+    // RndShader::CheckForceCull overrides it (CCW for reflections, which
+    // mirror). Outlines are drawn with it: a cel-shaded character's slightly
+    // larger copy with its faces turned inward, whose near side it culls. 0
+    // (none) for draws whose geometry band3 builds (particles, DrawRect
+    // quads), whose winding isn't the game's, and in captures from before.
+    uint8_t cull = 0;
 };
+
+inline constexpr uint8_t kCullFront = 1, kCullBack = 2, kCullFrontIsCw = 4;
+// whether a draw with this cull mode drops a triangle whose corners go
+// clockwise on the screen (y down) or, `clockwise` false, counter-clockwise
+inline bool Culls(uint8_t cull, bool clockwise) {
+    const bool front = clockwise == ((cull & kCullFrontIsCw) != 0);
+    return (cull & (front ? kCullFront : kCullBack)) != 0;
+}
 
 // What the renderers draw into the back buffer: its mesh draws. Its DrawRect
 // quads (the post copy, flares, the movie) aren't drawn yet; texture passes

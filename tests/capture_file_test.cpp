@@ -3,7 +3,8 @@
 // post-processing comes back as it was saved; a section from a newer build is
 // skipped or refused as it should be, and geometry from a smaller Vertex (or
 // post-processing from a smaller PostParams) keeps what both have; files from
-// before passes (B3CAP002) and before shades (B3CAP001) still load.
+// before passes (B3CAP002) and before shades (B3CAP001) still load, and draws
+// from before their cull mode was kept cull nothing.
 
 #include <doctest/doctest.h>
 #include <cstddef>
@@ -686,4 +687,44 @@ TEST_CASE("a capture keeps its post-processing, and one from before has none") {
     CHECK(back->post.dof_focal == 0.0f);
     CHECK(back->post.cam_far == 0.0f);
     CHECK(back->post_consts.c24[1] == -3.5f);
+}
+
+TEST_CASE("a capture keeps each draw's cull mode, and one from before culls nothing") {
+    FrameCapture fc = MakePassFrame();
+    fc.draws[3].cull = kCullBack;                   // D3DCULL_CW, RndMat's cull
+    fc.draws[4].cull = kCullBack | kCullFrontIsCw;  // D3DCULL_CCW, a reflection's
+    const std::string path = TempPath("band3_capture_file_cull_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    REQUIRE(back);
+    REQUIRE(back->draws.size() == fc.draws.size());
+    for (size_t i = 0; i < fc.draws.size(); i++) CHECK(back->draws[i].cull == fc.draws[i].cull);
+
+    // DRAW as builds before culling wrote it, version 1: each draw one byte
+    // shorter, without its cull mode at the end
+    std::vector<uint8_t> data = ReadAll(path);
+    const size_t at = FindSection(data, "DRAW");
+    REQUIRE(at != std::string::npos);
+    data[at + 4] = 1;
+    uint64_t size;
+    std::memcpy(&size, data.data() + at + 8, 8);
+    size_t pos = at + 16 + 4;  // past the draw count
+    for (size_t i = 0; i < fc.draws.size(); i++) {
+        uint32_t bones;
+        std::memcpy(&bones, data.data() + pos + 4 + 4 + 2 * sizeof(Mat4), 4);
+        pos += 4 + 4 + 2 * sizeof(Mat4) + 4 + bones * sizeof(Mat4) + 16 + 4 + 4 + 1 + 1 + 4 +
+               4 + 4 + 4 + 4 + 4 + 16 + 4;
+        data.erase(data.begin() + std::ptrdiff_t(pos));  // its cull mode
+        size--;
+    }
+    CHECK(pos == at + 16 + size_t(size));
+    std::memcpy(data.data() + at + 8, &size, 8);
+    WriteAll(path, data);
+    back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    REQUIRE(back->draws.size() == fc.draws.size());
+    for (const DrawItem& d : back->draws) CHECK(d.cull == 0);
+    CHECK(back->draws[4].tex);
+    CHECK(back->passes.size() == 3);
 }

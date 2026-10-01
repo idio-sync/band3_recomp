@@ -156,6 +156,9 @@ constexpr uint32_t kD3DDeviceHolder = 0x82E04CFC;
 constexpr uint32_t kDev_TextureFetch = 0x480;  // 26 of 24 bytes
 constexpr uint32_t kDev_VertexShaderF = 0x780;
 constexpr uint32_t kDev_PixelShaderF = 0x1780;
+// its PA_SU_SC_MODE_CNTL, whose low bits RndRenderState::SetCullMode sets
+// (the XDK's D3DDevice_SetRenderState_CullMode, sub_828502B8)
+constexpr uint32_t kDev_ModeCntl = 0x2948;
 constexpr uint32_t kEnvironCurrent = 0x82CC0280;  // RndEnviron::sCurrent
 // post-processing (out/research/m4_postproc.md 1, 2 and 6): TheRnd's
 // mDisablePostProc, its mPostProcOverride (a PostProcessor, which is the
@@ -1121,6 +1124,14 @@ DrawItem MakeItem(const Guest& g, State& s, Sink& sink, uint32_t mat, uint32_t o
     return item;
 }
 
+// the cull mode the draw just made had (DrawItem::cull): DxMesh::DrawShowing
+// sets it per material pass, so its last pass's
+uint8_t CaptureCull(const Guest& g) {
+    const uint32_t dev = g.U32(kD3DDeviceHolder);
+    return dev ? uint8_t(g.U32(dev + kDev_ModeCntl) & (kCullFront | kCullBack | kCullFrontIsCw))
+               : 0;
+}
+
 // the mesh's material and geometry, or false (and counted) if it draws nothing
 bool MeshParts(const Guest& g, FrameCapture& fc, uint32_t mesh, uint32_t& mat,
                std::shared_ptr<const Geometry>& geometry) {
@@ -1150,6 +1161,7 @@ void CaptureMesh(uint8_t* base, uint32_t mesh) {
 
     DrawItem item = MakeItem(g, s, *sink, mat, mesh, std::move(geometry));
     item.world = ReadXfm(g, mesh + kMesh_WorldXfm);
+    item.cull = CaptureCull(g);
     const uint32_t bones = g.U32(mesh + kMesh_BonesBegin);
     const uint32_t bones_end = g.U32(mesh + kMesh_BonesEnd);
     if (bones && bones_end > bones) {
@@ -1178,7 +1190,8 @@ void CaptureMultiMesh(uint8_t* base, uint32_t multimesh) {
     std::shared_ptr<const Geometry> geometry;
     if (!MeshParts(g, sink->fc, mesh, mat, geometry)) return;
 
-    const DrawItem proto = MakeItem(g, s, *sink, mat, mesh, std::move(geometry));
+    DrawItem proto = MakeItem(g, s, *sink, mat, mesh, std::move(geometry));
+    proto.cull = CaptureCull(g);
     // std::list with its sentinel node inline: next at +0, the Instance at +8
     const uint32_t head = multimesh + kMultiMesh_Instances;
     uint32_t n = 0;

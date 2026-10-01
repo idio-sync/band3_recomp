@@ -6,7 +6,7 @@
 //                               [--dump-tex <draw>] [--shade <draw>]
 //                               [--dump-rt <hex>[:<version>]]
 //                               [--rt-none | --rt-guest]
-//                               [--no-tex] [--no-blend] [--transpose]
+//                               [--no-tex] [--no-blend] [--no-cull] [--transpose]
 //                               [--no-skinned | --only-skinned] [--unskinned]
 //                               [--legacy-light | --no-light] [--pick X,Y]
 //                               [--dump-alpha <png>] [--dump-depth <png>]
@@ -40,7 +40,9 @@
 // on the CPU at that PNG's size into out.png and prints their mean difference,
 // to check the GPU backend against the CPU's reference. --legacy-light draws
 // with the placeholder lighting from before the game's shading, --no-light
-// with none (every material unlit). --pick draws the frame at --size and
+// with none (every material unlit). --no-cull draws both sides of every
+// triangle, as the native view did before it culled as the game does (the
+// cull mode --list prints, scene_capture.h's DrawItem::cull). --pick draws the frame at --size and
 // prints the draw that last wrote pixel X,Y, its colour and its shade.
 // Every capture prints a "post:" line, what post-processing was set to do at
 // DxRnd::DoPostProcess (post_params.h: boundary, colour matrix, bloom, DOF,
@@ -525,6 +527,7 @@ int main(int argc, char** argv) {
         else if (a == "--rt-guest") o.texture_passes = false;
         else if (a == "--pick" && i + 1 < argc) std::sscanf(argv[++i], "%d,%d", &pick_x, &pick_y);
         else if (a == "--no-blend") o.blending = false;
+        else if (a == "--no-cull") o.culling = false;
         else if (a == "--no-tex") o.textures = false;
         else if (a == "--legacy-light") o.legacy_light = true;
         else if (a == "--no-light") o.lighting = false;
@@ -661,9 +664,9 @@ int main(int argc, char** argv) {
                 std::printf("      samples render target %08X type 0x%X version %u%s\n",
                             d.tex->tex_obj, d.tex->tex_type, d.tex->version,
                             d.tex->rgba.empty() ? " (no pixels)" : " (guest pixels)");
-            std::printf("#%3zu mesh %08X v%5zu t%5zu bones %2zu blend %d z %d cut %d/%d prelit %d tex %s%ux%u fmt %u | local [%.1f %.1f %.1f]..[%.1f %.1f %.1f] | ndc x %.2f..%.2f y %.2f..%.2f front %d | col %.2f %.2f %.2f %.2f\n",
+            std::printf("#%3zu mesh %08X v%5zu t%5zu bones %2zu blend %d z %d cull %u cut %d/%d prelit %d tex %s%ux%u fmt %u | local [%.1f %.1f %.1f]..[%.1f %.1f %.1f] | ndc x %.2f..%.2f y %.2f..%.2f front %d | col %.2f %.2f %.2f %.2f\n",
                 i, d.mesh, d.geom->verts.size(), d.geom->indices.size() / 3, d.bones.size(), d.blend, d.z_mode,
-                int(d.alpha_cut), d.alpha_threshold, int(d.prelit),
+                unsigned(d.cull), int(d.alpha_cut), d.alpha_threshold, int(d.prelit),
                 d.tex ? "" : "-", d.tex ? d.tex->width : 0, d.tex ? d.tex->height : 0, d.tex ? d.tex->format : 0,
                 mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], lo[0], hi[0], lo[1], hi[1], front,
                 d.color[0], d.color[1], d.color[2], d.color[3]);

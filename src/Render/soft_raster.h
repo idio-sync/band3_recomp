@@ -48,6 +48,7 @@ struct RasterOptions {
     bool legacy_light = false;
     bool skinning = true;
     bool blending = true;   // off draws every material opaque
+    bool culling = true;    // off draws both sides of every triangle (DrawItem::cull)
     bool clear_depth_per_camera = true;
     // the texture passes the frame samples drawn natively, and sampled; off,
     // a render target is what guest memory held of it, or nothing

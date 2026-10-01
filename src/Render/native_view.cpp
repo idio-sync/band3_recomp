@@ -305,6 +305,8 @@ void NativeViewDialog::OnDraw(ImGuiIO& io) {
         ImGui::SameLine();
         changed |= ImGui::Checkbox("Blending", &options_.blending);
         ImGui::SameLine();
+        changed |= ImGui::Checkbox("Culling", &options_.culling);
+        ImGui::SameLine();
         changed |= ImGui::Checkbox("Clear depth per camera", &options_.clear_depth_per_camera);
         ImGui::SameLine();
         // RB3's depth of field, bloom and colour matrix (post_model.h)

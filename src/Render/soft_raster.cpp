@@ -109,6 +109,7 @@ struct DrawState {
     bool z_test;
     bool z_equal_passes;
     bool z_write;
+    uint8_t cull;  // DrawItem::cull, 0 with RasterOptions::culling off
 };
 
 // nearest texel, wrapping; mesh.hlsl's Texel does the same arithmetic
@@ -183,6 +184,8 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
     }
     const float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sy[1] - sy[0]) * (sx[2] - sx[0]);
     if (!(std::fabs(area) > 1e-9f)) return;
+    // y runs down the screen, so a positive area goes clockwise
+    if (ds.cull && Culls(ds.cull, area > 0)) return;
     const float min_x = std::max(float(t.x0), std::floor(std::min({sx[0], sx[1], sx[2]})));
     const float max_x = std::min(float(t.x1 - 1), std::ceil(std::max({sx[0], sx[1], sx[2]})));
     const float min_y = std::max(float(t.y0), std::floor(std::min({sy[0], sy[1], sy[2]})));
@@ -334,6 +337,7 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     const bool skinned = o.skinning && !it.bones.empty();
     DrawState ds;
     ds.index = index;
+    ds.cull = o.culling ? it.cull : 0;
     ds.tex = Diffuse(it, o, rts, t, st);
     shade::PackShade(it, state, o, ds.tex.px != nullptr, ds.shade);
     if (ds.shade.flags.x & shade::kShadeSpecMap)

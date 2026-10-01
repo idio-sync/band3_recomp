@@ -99,6 +99,19 @@ enum : int {
 enum class AlphaMode { kNone, kTexture, kScene };
 constexpr int kNumAlphaModes = 3;
 
+// the triangles a draw's pipeline culls, by their winding on the screen
+// (DrawItem::cull): what soft_raster.cpp's RasterTri drops
+enum class CullWinding { kNone, kClockwise, kCounterClockwise, kAll };
+
+CullWinding CullFor(const DrawItem& it, const RasterOptions& o) {
+    if (!o.culling || !it.cull) return CullWinding::kNone;
+    const bool cw = Culls(it.cull, true), ccw = Culls(it.cull, false);
+    return cw && ccw ? CullWinding::kAll
+           : cw      ? CullWinding::kClockwise
+           : ccw     ? CullWinding::kCounterClockwise
+                     : CullWinding::kNone;
+}
+
 int BlendFor(const DrawItem& it, const RasterOptions& o) {
     // Blend() draws any other value as Src
     if (!o.blending || it.blend < kBlendDest || it.blend > kBlendMultiply) return kBlendSrc;
@@ -339,7 +352,8 @@ struct GpuRenderer::Impl {
                               const unsigned char* dxbc, size_t dxbc_size,
                               const unsigned char* spirv, size_t spirv_size, const char* entry,
                               uint32_t samplers, uint32_t storage_buffers, uint32_t uniforms);
-    SDL_GPUGraphicsPipeline* Pipeline(int blend, const DepthRules& rules, AlphaMode alpha);
+    SDL_GPUGraphicsPipeline* Pipeline(int blend, const DepthRules& rules, AlphaMode alpha,
+                                      CullWinding cull);
     // a full-screen pass's pipeline: post.hlsl's triangle and `pixel`, into RGBA8
     SDL_GPUGraphicsPipeline* MakeFullscreenPipeline(SDL_GPUShader* pixel, const char* name);
     void ReleaseTargets();
@@ -633,8 +647,8 @@ void GpuRenderer::Impl::Release(bool stop_video) {
 }
 
 SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules& rules,
-                                                     AlphaMode alpha) {
-    const int key = int(alpha) << 6 | blend << 3 | rules.Key();
+                                                     AlphaMode alpha, CullWinding cull) {
+    const int key = int(cull) << 8 | int(alpha) << 6 | blend << 3 | rules.Key();
     if (auto it = pipelines.find(key); it != pipelines.end()) return it->second;
 
     // scene_capture.h's Vertex as it is, 56 bytes
@@ -725,9 +739,14 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     pi.vertex_input_state.vertex_attributes = attributes;
     pi.vertex_input_state.num_vertex_attributes = uint32_t(std::size(attributes));
     pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-    // the CPU culls nothing; clipping at depth 1 is its near plane (mesh.hlsl)
+    // the culling RasterTri does: SDL's winding is the screen's, as D3D's is;
+    // clipping at depth 1 is the CPU's near plane (mesh.hlsl)
     pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-    pi.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+    pi.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+    pi.rasterizer_state.cull_mode = cull == CullWinding::kClockwise ? SDL_GPU_CULLMODE_BACK
+                                    : cull == CullWinding::kCounterClockwise
+                                        ? SDL_GPU_CULLMODE_FRONT
+                                        : SDL_GPU_CULLMODE_NONE;
     pi.rasterizer_state.enable_depth_clip = true;
     // depth is larger-is-nearer, cleared to 0. A draw that writes without
     // testing tests "always", since a pipeline that doesn't test can't write
@@ -749,13 +768,16 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
 void GpuRenderer::Impl::Prewarm() {
     warm = true;
     const auto start = std::chrono::steady_clock::now();
-    // RulesFor's, with blending on and off
+    // RulesFor's, with blending on and off, culling nothing or what RndMat's
+    // cull flag does (D3DCULL_CW); the reflections' counter-clockwise culling
+    // is made when it's first drawn
     constexpr DepthRules kRules[] = {{false, false, false}, {true, true, false},
                                      {false, false, true},  {true, true, true},
                                      {true, false, true}};
-    for (int alpha = 0; alpha < kNumAlphaModes; alpha++)
-        for (int blend = kBlendDest; blend <= kBlendMultiply; blend++)
-            for (const DepthRules& r : kRules) Pipeline(blend, r, AlphaMode(alpha));
+    for (CullWinding cull : {CullWinding::kNone, CullWinding::kClockwise})
+        for (int alpha = 0; alpha < kNumAlphaModes; alpha++)
+            for (int blend = kBlendDest; blend <= kBlendMultiply; blend++)
+                for (const DepthRules& r : kRules) Pipeline(blend, r, AlphaMode(alpha), cull);
     if (upload_size < kInitialUploadBytes) {
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
         SDL_GPUTransferBufferCreateInfo tbi{};
@@ -1426,7 +1448,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         const DrawItem& it = frame.draws[d];
         const Mesh& m = meshes[it.geom.get()];
         const int blend = BlendFor(it, o);
-        SDL_GPUGraphicsPipeline* pipeline = Pipeline(blend, RulesFor(it, o, no_z), alpha);
+        const CullWinding cull = CullFor(it, o);
+        if (cull == CullWinding::kAll) return;  // culls both sides: draws nothing
+        SDL_GPUGraphicsPipeline* pipeline = Pipeline(blend, RulesFor(it, o, no_z), alpha, cull);
         if (!pipeline) {
             st.skipped++;
             return;

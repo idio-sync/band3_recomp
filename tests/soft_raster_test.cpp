@@ -3,7 +3,8 @@
 // it, each draw seeing the version drawn before it, and a render target that
 // nothing drew sampling transparent black; and that the world's draws, those
 // before post_boundary, leave their alpha (the bloom weight) and depth in the
-// scene target as RB3's back buffer has them, under the overlay's.
+// scene target as RB3's back buffer has them, under the overlay's; and that a
+// draw culls the triangles its cull mode says (an outline's near side).
 
 #include <doctest/doctest.h>
 #include <cstring>
@@ -279,4 +280,39 @@ TEST_CASE("the world's depth is readable where it left it, before the overlay") 
     CHECK(rgba[1 * 8 + 6] == 0xff000000u);
     CHECK(DepthViewGrey(kNearW / 4096.0f) == 0.0f);
     CHECK(DepthViewGrey(kNearW / 256.0f) == doctest::Approx(0.5f));
+}
+
+TEST_CASE("a draw culls the side its cull mode says, as the game's device did") {
+    // Quad's triangles go clockwise on the screen; the right half's are turned
+    // around, counter-clockwise
+    auto turned = std::make_shared<Geometry>(*Quad(0, 1, kGreen));
+    turned->indices = {0, 2, 1, 0, 3, 2};
+    FrameCapture f;
+    f.draws = {Item(Quad(-1, 0, kRed), 0), Item(turned, 0)};
+    f.passes = {BackBuffer(0, 2)};
+    std::vector<uint32_t> rgba;
+    auto drawn = [&](const RasterOptions& o, uint8_t cull, bool& left, bool& right) {
+        for (DrawItem& d : f.draws) d.cull = cull;
+        Rasterize(f, o, rgba);
+        left = rgba[1 * 8 + 1] == kRed;
+        right = rgba[1 * 8 + 6] == kGreen;
+    };
+    bool left, right;
+    drawn(Small(), 0, left, right);
+    CHECK(left);
+    CHECK(right);
+    // D3DCULL_CW, what RndMat's cull flag sets: the clockwise ones go
+    drawn(Small(), kCullBack, left, right);
+    CHECK_FALSE(left);
+    CHECK(right);
+    // D3DCULL_CCW, a reflection's
+    drawn(Small(), kCullBack | kCullFrontIsCw, left, right);
+    CHECK(left);
+    CHECK_FALSE(right);
+    // culling off draws both sides, as the native view did before it culled
+    RasterOptions o = Small();
+    o.culling = false;
+    drawn(o, kCullBack, left, right);
+    CHECK(left);
+    CHECK(right);
 }
