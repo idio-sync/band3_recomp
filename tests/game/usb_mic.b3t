@@ -1,0 +1,66 @@
+# Sings a song's vocals through band3's USB mics and checks the game scores it.
+# The test tone stands in for a singer: a steady pitch in mic slot 1, which the
+# game hears as an Xbox 360 USB microphone. Starts where boot.b3t leaves Rock
+# Band 3 Deluxe (on a fresh profile):
+#   python tools/band3ctl.py launch --fresh -- --usb_mics=true --usb_mic_test_tone=220
+#   python tools/band3ctl.py run tests/game/boot.b3t
+#   python tools/band3ctl.py run tests/game/usb_mic.b3t
+# With a microphone instead (--usb_mics=true "--usb_mic_devices=<part of its
+# name>"), everything up to the song checks it; scoring then needs someone
+# singing.
+
+# the game has connected mic slot 1 and takes its audio
+expect mic=1
+# Deluxe can't save its settings to band3's read-only game folder: I Understand
+wait screen=dx_settings_error_screen timeout=30s
+wait frames=60
+press green
+# back to the welcome hint underneath it, whose first choice customizes the
+# band; back out of that to the main menu
+wait screen=hint_rb3_welcome_screen timeout=30s
+wait frames=60
+press green
+wait screen=manage_band_screen timeout=30s
+wait frames=60
+press red
+wait screen=main_hub_screen timeout=30s
+wait frames=60
+# every point is the mic's
+set autoplay false
+# Play Now, Quickplay, Choose Songs
+press green
+wait frames=60
+press green
+wait frames=60
+press green
+wait screen=song_select_screen timeout=30s
+wait frames=60
+# past the 123 heading to 20th Century Boy
+press down
+press down
+wait frames=30
+press green
+wait screen=part_difficulty_screen timeout=30s
+wait frames=90
+# Guitar, Bass, Keys, then Solo (vocals), which the game offers only with a
+# mic connected; without one this lands elsewhere and nothing scores
+press down
+wait frames=20
+press down
+wait frames=20
+press down
+wait frames=30
+screenshot usb-mic-part
+# Solo, its default difficulty
+press green
+wait frames=60
+press green
+wait in_game timeout=60s
+expect song=20thcenturyboy
+# the tone matches the first phrases' pitch closely enough to score in the
+# song's first 20 s
+wait score>=1 timeout=60s
+expect mic=1
+# the scoreboard shows the points a moment later
+wait frames=60
+screenshot usb-mic-scored

@@ -189,6 +189,19 @@ TEST_CASE("state reports the game state and the instrument") {
     CHECK(Has(reply, "\"frame\":42"));
     CHECK(Has(reply, "\"instruments\":[\"drums\",null,null,null]"));
     CHECK(Has(reply, "{\"exists\":true,\"difficulty\":3,\"track\":2}"));
+    CHECK(Has(reply, "\"score\":0"));
+    // no USB mics recording, so no mic slots
+    CHECK_FALSE(Has(reply, "\"mics\""));
+}
+
+TEST_CASE("state reports the score and the USB mic slots") {
+    FakeGame game;
+    game.state.score = 3000;
+    game.state.mics = {{"test tone", true, 64000}, {}, {}, {}};
+    const std::string reply = RunCommand("state", game);
+    CHECK(Has(reply, "\"score\":3000"));
+    CHECK(Has(reply, "\"mics\":[{\"device\":\"test tone\",\"connected\":true,\"fed\":64000},"
+                     "{\"device\":\"\",\"connected\":false,\"fed\":0},"));
 }
 
 TEST_CASE("press pulses every joined input for the time asked, then waits for the release") {
@@ -336,10 +349,16 @@ TEST_CASE("wait conditions") {
     s.song_shortname = "ruby";
     s.frame = 110;
 
-    auto holds = [&](std::string_view text, uint64_t start_frame = 100) {
+    s.score = 2500;
+    s.mics = {{"Yeti", true, 9000}, {"Blue", false, 0}, {}, {}};
+    GameStateSnapshot start = s;
+    start.frame = 100;
+    start.mics[0].bytes_fed = 4000;
+
+    auto holds = [&](std::string_view text) {
         auto parsed = ParseCondition(text);
         REQUIRE(std::holds_alternative<Condition>(parsed));
-        return ConditionHolds(std::get<Condition>(parsed), s, start_frame);
+        return ConditionHolds(std::get<Condition>(parsed), s, start);
     };
     CHECK(holds("screen=song_select_screen"));
     CHECK_FALSE(holds("screen=song_select"));
@@ -351,10 +370,40 @@ TEST_CASE("wait conditions") {
     CHECK_FALSE(holds("song=rubyx"));
     CHECK(holds("frames=10"));
     CHECK_FALSE(holds("frames=11"));
+    CHECK(holds("score>=2500"));
+    CHECK_FALSE(holds("score>=2501"));
+    // connected and fed since the wait began
+    CHECK(holds("mic=1"));
+    // not connected
+    CHECK_FALSE(holds("mic=2"));
+    start.mics[0].bytes_fed = 9000;
+    // connected, but fed nothing since
+    CHECK_FALSE(holds("mic=1"));
+    s.mics.clear();
+    // no USB mics recording
+    CHECK_FALSE(holds("mic=1"));
 
     CHECK(std::holds_alternative<std::string>(ParseCondition("screen")));
     CHECK(std::holds_alternative<std::string>(ParseCondition("frames=many")));
     CHECK(std::holds_alternative<std::string>(ParseCondition("loud")));
+    CHECK(std::holds_alternative<std::string>(ParseCondition("score>=lots")));
+    CHECK(std::holds_alternative<std::string>(ParseCondition("mic=0")));
+    CHECK(std::holds_alternative<std::string>(ParseCondition("mic=5")));
+}
+
+TEST_CASE("wait mic= waits for the slot to be fed while it waits") {
+    FakeGame game;
+    game.state.mics = {{"test tone", true, 1000}, {}, {}, {}};
+    game.on_sleep = [](FakeGame& g) {
+        if (g.slept >= 100ms) g.state.mics[0].bytes_fed = 1640;
+    };
+    CHECK(Ok(RunCommand("wait mic=1", game)));
+    CHECK(game.slept >= 100ms);
+
+    // audio fed before the wait isn't enough
+    FakeGame idle;
+    idle.state.mics = {{"test tone", true, 1000}, {}, {}, {}};
+    CHECK_FALSE(Ok(RunCommand("expect mic=1 timeout=1s", idle)));
 }
 
 TEST_CASE("a bad wait condition or timeout is an error, not a wait") {
@@ -674,6 +723,11 @@ TEST_CASE("the game state counts frames and keeps the latest of everything") {
     CHECK(s.frame == 2);
 
     // leaving the song keeps what it was, for the results screen
+    state.SetScore(4200);
     state.SetInGame(false);
     CHECK(state.Snapshot().song_shortname == "ruby");
+    CHECK(state.Snapshot().score == 4200);
+    // the next song starts its score over
+    state.SetInGame(true);
+    CHECK(state.Snapshot().score == 0);
 }

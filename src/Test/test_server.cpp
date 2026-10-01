@@ -37,6 +37,7 @@
 #include <rex/ui/window.h>
 #include <rex/ui/windowed_app_context.h>
 #include <rex/input/input_system.h>
+#include "src/Audio/usb_mic_capture.h"
 #include "src/Input/input_lock.h"
 #include "src/Input/input_system.h"
 #include "src/Input/virtual_instrument.h"
@@ -109,7 +110,15 @@ public:
         input::VirtualInstrument::ForPlayer(player).Pulse(std::move(change), length);
     }
 
-    GameStateSnapshot State() override { return GameState::Get().Snapshot(); }
+    GameStateSnapshot State() override {
+        GameStateSnapshot state = GameState::Get().Snapshot();
+        if (audio::UsbMicsRunning()) {
+            for (const audio::UsbMicSlotStatus& slot : audio::GetUsbMicStatus().slots) {
+                state.mics.push_back({slot.device, slot.connected, slot.bytes_fed});
+            }
+        }
+        return state;
+    }
 
     std::string Screenshot(const std::string& name, ScreenshotInfo& out) override {
         auto* graphics = runtime_ ? runtime_->graphics_system() : nullptr;

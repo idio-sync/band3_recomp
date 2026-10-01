@@ -26,6 +26,8 @@ constexpr std::chrono::milliseconds kExpectTimeout = 5s;
 constexpr std::chrono::milliseconds kWaitPoll = 16ms;
 constexpr uint8_t kDefaultVelocity = 100;
 constexpr int kPlayerCount = 4;
+// ExternalMic::Init makes four
+constexpr int kMicSlots = 4;
 
 std::vector<std::string_view> Words(std::string_view line) {
     std::vector<std::string_view> words;
@@ -104,6 +106,20 @@ std::string StateJson(const GameStateSnapshot& s, TestTarget& target) {
         out += ",\"track\":" + std::to_string(m.track_type) + "}";
     }
     out += "],\"frame\":" + std::to_string(s.frame);
+    out += ",\"score\":" + std::to_string(s.score);
+    if (!s.mics.empty()) {
+        out += ",\"mics\":[";
+        for (size_t i = 0; i < s.mics.size(); i++) {
+            const MicSlot& mic = s.mics[i];
+            if (i) out += ',';
+            out += "{\"device\":";
+            AppendJsonString(out, mic.device);
+            out += ",\"connected\":";
+            out += mic.connected ? "true" : "false";
+            out += ",\"fed\":" + std::to_string(mic.bytes_fed) + "}";
+        }
+        out += ']';
+    }
     out += ",\"instruments\":[";
     for (int player = 1; player <= kPlayerCount; player++) {
         if (player > 1) out += ',';
@@ -280,9 +296,9 @@ std::string Wait(TestTarget& target, const std::vector<std::string_view>& args,
 
     const Condition& condition = std::get<Condition>(parsed);
     const auto start = target.Now();
-    GameStateSnapshot state = target.State();
-    const uint64_t start_frame = state.frame;
-    while (!ConditionHolds(condition, state, start_frame)) {
+    const GameStateSnapshot start_state = target.State();
+    GameStateSnapshot state = start_state;
+    while (!ConditionHolds(condition, state, start_state)) {
         if (target.Cancelled()) return Error(target, "the test server is shutting down");
         if (target.Now() - start >= timeout) {
             return Error(target, "timed out after " + std::to_string(timeout.count()) +
@@ -544,9 +560,19 @@ std::variant<Condition, std::string> ParseCondition(std::string_view text) {
         if (!n) return "frames= takes a number";
         c.kind = Condition::Kind::kFrames;
         c.frames = *n;
+    } else if (text.starts_with("score>=")) {
+        auto n = ParseNumber<int64_t>(text.substr(7));
+        if (!n) return "score>= takes a number";
+        c.kind = Condition::Kind::kScore;
+        c.score = *n;
+    } else if (text.starts_with("mic=")) {
+        auto n = ParseNumber<int>(text.substr(4));
+        if (!n || *n < 1 || *n > kMicSlots) return "mic= takes a mic slot, 1 to 4";
+        c.kind = Condition::Kind::kMic;
+        c.mic = *n;
     } else {
         return "no condition " + std::string(text) +
-               " (screen=, screen~, in_game, menus, song=, frames=)";
+               " (screen=, screen~, in_game, menus, song=, frames=, score>=, mic=)";
     }
     if ((c.kind == Condition::Kind::kScreen || c.kind == Condition::Kind::kScreenContains ||
          c.kind == Condition::Kind::kSong) &&
@@ -557,7 +583,7 @@ std::variant<Condition, std::string> ParseCondition(std::string_view text) {
 }
 
 bool ConditionHolds(const Condition& condition, const GameStateSnapshot& state,
-                    uint64_t start_frame) {
+                    const GameStateSnapshot& start) {
     switch (condition.kind) {
     case Condition::Kind::kScreen: return state.screen == condition.text;
     case Condition::Kind::kScreenContains:
@@ -565,7 +591,15 @@ bool ConditionHolds(const Condition& condition, const GameStateSnapshot& state,
     case Condition::Kind::kInGame: return state.in_game;
     case Condition::Kind::kMenus: return !state.in_game;
     case Condition::Kind::kSong: return state.song_shortname == condition.text;
-    case Condition::Kind::kFrames: return state.frame - start_frame >= condition.frames;
+    case Condition::Kind::kFrames: return state.frame - start.frame >= condition.frames;
+    case Condition::Kind::kScore: return state.score >= condition.score;
+    case Condition::Kind::kMic: {
+        // connected, and handed the game audio since the wait began
+        const size_t slot = static_cast<size_t>(condition.mic - 1);
+        if (slot >= state.mics.size() || !state.mics[slot].connected) return false;
+        const uint64_t fed_before = slot < start.mics.size() ? start.mics[slot].bytes_fed : 0;
+        return state.mics[slot].bytes_fed > fed_before;
+    }
     }
     return false;
 }

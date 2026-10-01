@@ -138,17 +138,19 @@ public:
 };
 
 struct Condition {
-    enum class Kind { kScreen, kScreenContains, kInGame, kMenus, kSong, kFrames };
+    enum class Kind { kScreen, kScreenContains, kInGame, kMenus, kSong, kFrames, kScore, kMic };
     Kind kind = Kind::kInGame;
     std::string text;
     uint64_t frames = 0;
+    int64_t score = 0;
+    int mic = 0;  // mic slot 1-4
 };
 
 // a wait condition, or what's wrong with it
 std::variant<Condition, std::string> ParseCondition(std::string_view text);
-// start_frame: the frame count when the wait began
+// start: the state when the wait began
 bool ConditionHolds(const Condition& condition, const GameStateSnapshot& state,
-                    uint64_t start_frame);
+                    const GameStateSnapshot& start);
 
 // runs one command; the reply is one line of JSON, without the newline
 std::string RunCommand(std::string_view line, TestTarget& target);

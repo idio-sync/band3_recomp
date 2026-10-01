@@ -16,6 +16,8 @@ void GameState::SetScreen(std::string screen) {
 void GameState::SetInGame(bool in_game) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.in_game = in_game;
+    // a new song starts its score over
+    if (in_game) state_.score = 0;
 }
 
 void GameState::SetSong(std::string name, std::string artist, std::string shortname) {
@@ -33,6 +35,11 @@ void GameState::SetVenue(std::string venue) {
 void GameState::SetBand(const std::array<BandMember, 4>& band) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.band = band;
+}
+
+void GameState::SetScore(int64_t score) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.score = score;
 }
 
 void GameState::CountFrame() {
