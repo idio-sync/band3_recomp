@@ -4,7 +4,9 @@
 #include <rex/types.h>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include "generated/band3_init.h"
+#include "src/Input/input_lock.h"
 #include "src/Input/input_system.h"
 #include "src/Input/instruments.h"
 #include "src/Input/pro_instrument_status.h"
@@ -55,7 +57,11 @@ void FillProData(PPCContext& ctx, uint8_t* base, uint8_t subtype) {
 
     for (uint32_t pad = 0; pad < kNumJoypads; pad++) {
         rex::input::X_INPUT_CAPABILITIES caps{};
-        const bool connected = input->GetCapabilities(pad, 0, &caps) == X_ERROR_SUCCESS;
+        bool connected;
+        {
+            std::lock_guard<std::recursive_mutex> lock(InputLock());
+            connected = input->GetCapabilities(pad, 0, &caps) == X_ERROR_SUCCESS;
+        }
         const bool mine = connected && caps.sub_type == subtype;
         if (connected && !mine && IsProSubtype(caps.sub_type)) continue;
 
@@ -67,7 +73,12 @@ void FillProData(PPCContext& ctx, uint8_t* base, uint8_t subtype) {
         const uint32_t game_type = REX_LOAD_U32(pad_data + kJoypadData_Type);
 
         rex::input::X_INPUT_STATE state{};
-        if (!mine || input->GetState(pad, &state) != X_ERROR_SUCCESS) {
+        bool have_state = false;
+        if (mine) {
+            std::lock_guard<std::recursive_mutex> lock(InputLock());
+            have_state = input->GetState(pad, &state) == X_ERROR_SUCCESS;
+        }
+        if (!have_state) {
             RecordProPad(static_cast<int>(pad), connected, connected ? caps.sub_type : 0,
                          game_type, nullptr);
             continue;
