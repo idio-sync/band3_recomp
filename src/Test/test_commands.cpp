@@ -389,6 +389,10 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
     fields += ",\"rt_missing\":" + std::to_string(info.rt_missing);
     fields += ",\"rt_fallback\":";
     AppendJsonString(fields, info.rt_fallback);
+    fields += ",\"proc_cmds\":" + std::to_string(info.proc_cmds);
+    fields += std::string(",\"composed\":") + (info.composed ? "true" : "false");
+    fields += ",\"game_frame\":" + std::to_string(info.game_frame);
+    fields += ",\"world_frame\":" + std::to_string(info.world_frame);
     if (!info.gpu_path.empty()) {
         fields += ",\"gpu\":";
         AppendJsonString(fields, info.gpu_path);

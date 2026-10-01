@@ -41,6 +41,7 @@
 #include "src/Input/virtual_instrument.h"
 #include "src/Input/xinput_state.h"
 #include "src/Render/capture_file.h"
+#include "src/Render/frame_compose.h"
 #include "src/Render/gpu_view.h"
 #include "src/Render/native_view.h"
 #include "src/Render/png_writer.h"
@@ -167,6 +168,10 @@ public:
         out.rt_sampled = frame->rt_sampled;
         out.rt_missing = frame->rt_missing;
         out.rt_fallback = render::RtFallbackGuest() ? "guest" : "none";
+        out.proc_cmds = render::ProcKnown(*frame) ? int64_t(frame->proc_cmds) : -1;
+        out.composed = frame->composed != 0;
+        out.game_frame = frame->game_frame;
+        out.world_frame = frame->world_frame;
         GpuCapture(*frame, file, out);
         return {};
     }

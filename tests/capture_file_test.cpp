@@ -415,6 +415,45 @@ TEST_CASE("a capture loads without a section a newer build wrote, unless it's on
     std::remove(path.c_str());
 }
 
+TEST_CASE("a capture says whose world it has, and one from before that says its own") {
+    FrameCapture fc = MakePassFrame();
+    fc.proc_cmds = 2;
+    fc.composed = 1;
+    fc.world_frame = 2399;
+    const std::string path = TempPath("band3_capture_file_composed_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    REQUIRE(back);
+    CHECK(back->proc_cmds == 2);
+    CHECK(back->composed == 1);
+    CHECK(back->world_frame == 2399);
+
+    // FRAM as builds before composition wrote it: a count fewer, and no
+    // world frame after them
+    std::vector<uint8_t> data = ReadAll(path);
+    const size_t fram = FindSection(data, "FRAM");
+    REQUIRE(fram != std::string::npos);
+    uint64_t size;
+    std::memcpy(&size, data.data() + fram + 8, 8);
+    const size_t counts_at = fram + 16 + 8 + 8 + 4 + 4;
+    uint32_t counts;
+    std::memcpy(&counts, data.data() + counts_at, 4);
+    counts--;
+    std::memcpy(data.data() + counts_at, &counts, 4);
+    const size_t end = fram + 16 + size_t(size);
+    data.erase(data.begin() + std::ptrdiff_t(end - 12), data.begin() + std::ptrdiff_t(end));
+    size -= 12;
+    std::memcpy(data.data() + fram + 8, &size, 8);
+    WriteAll(path, data);
+    back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    CHECK(back->composed == 0);
+    CHECK(back->world_frame == 2400);
+    CHECK(back->rt_missing == 1);
+    CHECK(back->draws.size() == 7);
+}
+
 TEST_CASE("a capture's geometry loads from a build whose Vertex was smaller") {
     const FrameCapture fc = MakePassFrame();
     const std::string path = TempPath("band3_capture_file_stride_test.cap");

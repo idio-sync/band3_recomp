@@ -265,6 +265,13 @@ struct FrameCapture {
     static constexpr uint32_t kNoPost = ~0u;
     uint32_t post_boundary = kNoPost;
     uint32_t proc_cmds = 0;
+    // With even/odd rendering a frame that draws no world (proc_cmds 2)
+    // presents the last one that did, so its capture has that frame's world
+    // in front of its own draws from post_boundary on (frame_compose.h):
+    // composed 1, and world_frame that frame's game_frame. Otherwise 0, and
+    // the world is the frame's own: world_frame is its game_frame.
+    uint32_t composed = 0;
+    uint64_t world_frame = 0;
     uint32_t cams = 0;             // camera selects that drew to the back buffer
     uint32_t skipped_target = 0;   // draws for a camera with a target, but no texture pass open
     uint32_t skipped_velocity = 0; // motion blur velocity pass
@@ -323,9 +330,12 @@ PassRecordingStats GetPassRecordingStats();
 void AcquireCapture();
 void ReleaseCapture();
 
-// For a render check: waits for the next full frame captured (RB3 alternates
-// them with overlay-only frames; the request learns the difference over two
-// frames), holds the game at the end of it, waits
+// For a render check: waits for the next frame captured whose world is the one
+// the game's picture of it shows (frame_compose.h's PresentsCapturedWorld:
+// with even/odd rendering, a post frame composed with the world frame before
+// it; without, any whole frame; for frames that don't say, as some menus'
+// don't, one that draws about as much as the couple of frames before it),
+// holds the game at the end of it, waits
 // `settle` for the emulated GPU to show it, runs `while_held` (a screenshot of
 // the same frame) and lets the game go on. The game is never held more than
 // three seconds. Null, without running while_held, if no frame came in time.
@@ -333,7 +343,8 @@ std::shared_ptr<const FrameCapture> CaptureHeldFrame(
     const std::function<void()>& while_held, std::chrono::milliseconds timeout,
     std::chrono::milliseconds settle = std::chrono::milliseconds(150));
 
-// the latest complete frame, or null before the first
+// the latest complete frame, composed with the world before it if it drew
+// none (frame_compose.h), or null before the first
 std::shared_ptr<const FrameCapture> LatestCapture();
 
 // native_view_rt_fallback: whether render targets' textures carry the pixels

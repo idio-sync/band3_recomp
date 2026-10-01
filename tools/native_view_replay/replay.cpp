@@ -14,7 +14,8 @@
 // and inside the frustum with the matrix as captured and transposed (the back
 // buffer's mesh draws, which are what's drawn). --list prints the passes (the
 // back buffer's and those into textures: target, name, size, clear, draws,
-// version, the frame it was drawn in) with where post-processing starts, then
+// version, the frame it was drawn in) with where post-processing starts and
+// whether the world before it is another frame's (even/odd rendering), then
 // every draw: its mesh, sizes, material and where it lands on screen, and what
 // its shader was given (option word, shade, ambient c1, the box map's sum,
 // point lights in the option word / with a colour); a draw into a texture or a
@@ -320,6 +321,14 @@ void PrintPassSummary(const FrameCapture& fc) {
     else
         std::printf("post-processing: from draw %u, proc_cmds %u\n", fc.post_boundary,
                     fc.proc_cmds);
+    // even/odd rendering: a post frame's capture with the world frame's world
+    if (fc.composed)
+        std::printf("composed: the world (draws before %u) is game frame %llu's, the rest "
+                    "game frame %llu's\n",
+                    fc.post_boundary, (unsigned long long)fc.world_frame,
+                    (unsigned long long)fc.game_frame);
+    else
+        std::printf("composed: no, the world is the frame's own\n");
 }
 
 void PrintPasses(const FrameCapture& fc) {

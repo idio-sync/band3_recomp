@@ -19,6 +19,7 @@
 #include <unordered_set>
 
 #include "generated/band3_init.h"
+#include "src/Render/frame_compose.h"
 #include "src/settings.h"
 
 // See scene_capture.h.
@@ -600,6 +601,11 @@ struct State {
     OpenPass open;
     // by DxTex, every texture a pass has drawn into since it was made
     std::unordered_map<uint32_t, RtState> rts;
+    // capture was on at the last frame's end, so this frame's is whole
+    bool captured_last = false;
+    // the last frame captured whole that drew the world, for the frames after
+    // it that don't (frame_compose.h)
+    std::shared_ptr<const FrameCapture> last_world;
 };
 
 State& S() {
@@ -663,7 +669,8 @@ struct HeldRequest {
     bool released = true;
 };
 HeldRequest g_held;
-// frames looked at before choosing, to learn how many draws a full one has
+// frames that don't say what they drew (frame_compose.h's ProcKnown): looked
+// at before choosing, to learn how many draws a full one has
 constexpr int kFramesToLearn = 2;
 // after this many, any frame will do
 constexpr int kMaxFramesToWait = 30;
@@ -1267,6 +1274,10 @@ void DropOpenPass(State& s) {
     g_pass_recording = false;
 }
 
+// a world frame is composed with the frames after it that draw none for this
+// many frames (one, with even/odd rendering at 30 fps; two at 20)
+constexpr uint64_t kMaxWorldAge = 2;
+
 // a texture drawn into again within this many frames is drawn regularly:
 // every frame, or every other one with even/odd rendering on
 constexpr uint64_t kRepeatFrames = 2;
@@ -1456,10 +1467,14 @@ void CarryPasses(State& s, FrameCapture& fc) {
     if (fc.post_boundary != FrameCapture::kNoPost) fc.post_boundary += shift;
 }
 
-// RB3 alternates frames that draw the scene with ones that only redraw the
-// overlay (a handful of draws, sometimes from two cameras); a request learns
-// what a full frame draws over a couple of frames, then takes the next one
-// that draws about as much
+// A request takes the next frame whose capture shows the world the game's
+// picture of it does: with even/odd rendering a post frame, composed with the
+// world frame before it, and without, any (frame_compose.h). A frame that
+// doesn't say what it drew (no DoPostProcess: some menus', and builds from
+// before) is taken the old way: RB3 alternates frames that draw the scene
+// with ones that only redraw the overlay (a handful of draws, sometimes from
+// two cameras), so the request learns what a full frame draws over a couple
+// of frames, then takes the next one that draws about as much.
 void HoldIfRequested(const std::shared_ptr<const FrameCapture>& frame) {
     std::unique_lock lock(g_held.mutex);
     if (!g_held.armed) return;
@@ -1468,10 +1483,15 @@ void HoldIfRequested(const std::shared_ptr<const FrameCapture>& frame) {
         return;
     }
     const size_t draws = frame->draws.size();
-    const bool learning = g_held.waited < kFramesToLearn;
-    const bool full = draws > 0 && draws * 10 >= g_held.most * 9;
+    bool take;
+    if (ProcKnown(*frame)) {
+        take = PresentsCapturedWorld(*frame);
+    } else {
+        const bool learning = g_held.waited < kFramesToLearn;
+        take = !learning && draws > 0 && draws * 10 >= g_held.most * 9;
+    }
     g_held.most = std::max(g_held.most, draws);
-    if ((learning || !full) && ++g_held.waited <= kMaxFramesToWait) return;
+    if (!take && ++g_held.waited <= kMaxFramesToWait) return;
     g_held.armed = false;
     g_held.frame = frame;
     g_held.released = false;
@@ -1496,12 +1516,28 @@ void FinishFrame() {
         // nothing watches textures until capture or recording is on again, so
         // what's known of them would go stale (an address reused, say)
         if (!g_record_targets.load(std::memory_order_relaxed) && !s.rts.empty()) s.rts.clear();
+        s.captured_last = false;
+        s.last_world.reset();
         return;
     }
     s.building->frame = ++s.frame;
     s.building->game_frame = game_frame;
+    s.building->world_frame = game_frame;
     CarryPasses(s, *s.building);
     std::shared_ptr<const FrameCapture> done = s.building;
+    // With even/odd rendering, a frame that drew the world is kept for the
+    // ones after it that don't, which present it (frame_compose.h); one that
+    // began before capture was on has only part of it. The world is kept for a
+    // couple of frames, and dropped by a frame that doesn't say (menus).
+    const bool whole = s.captured_last;
+    s.captured_last = true;
+    if (!ProcKnown(*done)) {
+        s.last_world.reset();
+    } else if (DrawsWorld(*done)) {
+        s.last_world = whole ? done : nullptr;
+    } else if (s.last_world && s.last_world->game_frame + kMaxWorldAge >= game_frame) {
+        done = ComposeFrame(*s.last_world, *done);
+    }
     {
         std::lock_guard lock(g_latest_mutex);
         g_latest = done;

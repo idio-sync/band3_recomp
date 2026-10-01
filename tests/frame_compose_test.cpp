@@ -1,0 +1,199 @@
+// Checks src/Render/frame_compose.cpp: with even/odd rendering a post frame's
+// capture gets the world frame's world (its draws before post-processing,
+// in their passes) in front of its own overlay, keeps the texture passes its
+// overlay samples, leaves out what the world already has and its own draws
+// before post-processing, and counts render targets again; and which frames
+// a render check pairs with the game's picture.
+
+#include <doctest/doctest.h>
+#include <cstring>
+#include <memory>
+#include <vector>
+#include "src/Render/frame_compose.h"
+
+using namespace band3::render;
+
+namespace {
+
+constexpr uint32_t kImpostor = 0x20D00000, kPost = 0x20E00000, kComposite = 0x20EF6128,
+                   kDof = 0x20F00000, kGone = 0x21000000;
+
+std::shared_ptr<const Texture> Target(uint32_t tex_obj, uint32_t version) {
+    auto t = std::make_shared<Texture>();
+    t->tex_obj = tex_obj;
+    t->tex_type = 0x2;
+    t->version = version;
+    return t;
+}
+
+// a draw, `mesh` to tell it by, into `target` (0 the back buffer)
+DrawItem Draw(uint32_t mesh, uint32_t target = 0, int32_t shade = -1,
+              std::shared_ptr<const Texture> tex = nullptr) {
+    DrawItem d{};
+    d.mesh = mesh;
+    d.target = target;
+    d.shade = shade;
+    d.tex = std::move(tex);
+    return d;
+}
+
+Pass MakePass(uint32_t tex_obj, uint32_t first, uint32_t count, uint32_t version,
+              uint64_t from_frame) {
+    Pass p;
+    p.tex_obj = tex_obj;
+    p.first_draw = first;
+    p.draw_count = count;
+    p.version = version;
+    p.width = p.height = tex_obj ? 256 : 0;
+    p.from_frame = from_frame;
+    return p;
+}
+
+ShadeState Shade(int32_t type) {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = type;
+    return s;
+}
+
+// a world frame (proc_cmds 1): the crowd's impostor, the venue sampling it,
+// then its overlay and a post-processing pass
+FrameCapture WorldFrame() {
+    FrameCapture w;
+    w.frame = 20;
+    w.game_frame = 100;
+    w.world_frame = 100;
+    w.proc_cmds = kProcWorld;
+    w.draws = {Draw(1, kImpostor), Draw(2, 0, 0, Target(kImpostor, 3)), Draw(3, 0, 1),
+               Draw(4, 0, 1), Draw(5, kPost)};
+    w.passes = {MakePass(kImpostor, 0, 1, 3, 100), MakePass(0, 1, 3, 0, 100),
+                MakePass(kPost, 4, 1, 7, 100)};
+    w.post_boundary = 3;
+    w.shades = {Shade(18), Shade(12)};
+    w.skipped_shadow = 5;
+    w.passes_own = 2;
+    return w;
+}
+
+// the post frame after it (proc_cmds 2): a composite carried in for its
+// overlay, the impostor carried in too, a stray back-buffer draw before
+// post-processing, its overlay (one draw sampling a render target nothing
+// made), and depth of field
+FrameCapture PostFrame() {
+    FrameCapture p;
+    p.frame = 21;
+    p.game_frame = 101;
+    p.world_frame = 101;
+    p.proc_cmds = kProcPost;
+    p.draws = {Draw(10, kComposite), Draw(11, kImpostor), Draw(12),
+               Draw(13, 0, -1, Target(kGone, 2)), Draw(14, 0, 0, Target(kComposite, 1)),
+               Draw(15, kDof)};
+    p.passes = {MakePass(kComposite, 0, 1, 1, 50), MakePass(kImpostor, 1, 1, 3, 100),
+                MakePass(0, 2, 3, 0, 101), MakePass(kDof, 5, 1, 4, 101)};
+    p.post_boundary = 3;
+    p.shades = {Shade(14)};
+    p.skipped_shadow = 2;
+    p.skipped_velocity = 9;
+    return p;
+}
+
+std::vector<uint32_t> Meshes(const FrameCapture& fc) {
+    std::vector<uint32_t> out;
+    for (const DrawItem& d : fc.draws) out.push_back(d.mesh);
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("a post frame's capture gets the world frame's world in front of its overlay") {
+    const FrameCapture world = WorldFrame();
+    const FrameCapture post = PostFrame();
+    auto fc = ComposeFrame(world, post);
+    REQUIRE(fc);
+
+    // the world's draws before its post-processing, the composite's pass, then
+    // the post frame's from its post-processing on
+    CHECK(Meshes(*fc) == std::vector<uint32_t>{1, 2, 3, 10, 13, 14, 15});
+    CHECK(fc->post_boundary == 4);
+    REQUIRE(fc->passes.size() == 5);
+    CHECK(fc->passes[0].tex_obj == kImpostor);
+    CHECK(fc->passes[0].first_draw == 0);
+    CHECK(fc->passes[0].draw_count == 1);
+    // the back-buffer pass that ran on past the world's post-processing is cut
+    CHECK(fc->passes[1].tex_obj == 0);
+    CHECK(fc->passes[1].first_draw == 1);
+    CHECK(fc->passes[1].draw_count == 2);
+    CHECK(fc->passes[2].tex_obj == kComposite);
+    CHECK(fc->passes[2].first_draw == 3);
+    CHECK(fc->passes[3].tex_obj == 0);
+    CHECK(fc->passes[3].first_draw == 4);
+    CHECK(fc->passes[3].draw_count == 2);
+    CHECK(fc->passes[3].from_frame == 101);
+    CHECK(fc->passes[4].tex_obj == kDof);
+    CHECK(fc->passes[4].first_draw == 6);
+
+    // shades: the world's, then the post frame's, its draws pointing at theirs
+    REQUIRE(fc->shades.size() == 3);
+    CHECK(fc->shades[2].shader_type == 14);
+    CHECK(fc->draws[1].shade == 0);
+    CHECK(fc->draws[2].shade == 1);
+    CHECK(fc->draws[4].shade == -1);
+    CHECK(fc->draws[5].shade == 2);
+
+    CHECK(fc->frame == 21);
+    CHECK(fc->game_frame == 101);
+    CHECK(fc->proc_cmds == kProcPost);
+    CHECK(fc->composed == 1);
+    CHECK(fc->world_frame == 100);
+    CHECK(fc->skipped_shadow == 7);
+    CHECK(fc->skipped_velocity == 9);
+    // the impostor and depth of field drawn in the two frames, the composite
+    // from before
+    CHECK(fc->passes_own == 2);
+    CHECK(fc->passes_carried == 1);
+    // the impostor and the composite are there, the one nothing made isn't
+    CHECK(fc->rt_sampled == 3);
+    CHECK(fc->rt_missing == 1);
+
+    // the frames it's made from are as they were
+    CHECK(world.draws.size() == 5);
+    CHECK(post.draws[4].shade == 0);
+}
+
+TEST_CASE("render targets sampled are counted by version") {
+    FrameCapture fc;
+    fc.draws = {Draw(1, kImpostor), Draw(2, 0, -1, Target(kImpostor, 3)),
+                Draw(3, 0, -1, Target(kImpostor, 3)), Draw(4, 0, -1, Target(kImpostor, 4))};
+    fc.passes = {MakePass(kImpostor, 0, 1, 3, 1), MakePass(0, 1, 3, 0, 1)};
+    uint32_t sampled = 0, missing = 0;
+    CountRenderTargets(fc, sampled, missing);
+    CHECK(sampled == 2);
+    CHECK(missing == 1);
+}
+
+TEST_CASE("a render check pairs the game's picture with a frame that shows its world") {
+    FrameCapture fc;
+    // a frame that didn't run DoPostProcess doesn't say
+    CHECK_FALSE(ProcKnown(fc));
+    CHECK(DrawsWorld(fc));
+
+    fc.post_boundary = 0;
+    fc.proc_cmds = 7;  // even/odd rendering off: every frame
+    CHECK(ProcKnown(fc));
+    CHECK(DrawsWorld(fc));
+    CHECK(PresentsCapturedWorld(fc));
+
+    fc.proc_cmds = kProcWorld;  // presents the world before it
+    CHECK(DrawsWorld(fc));
+    CHECK_FALSE(PresentsCapturedWorld(fc));
+
+    fc.proc_cmds = kProcPost;  // presents the world before it, which it lacks
+    CHECK_FALSE(DrawsWorld(fc));
+    CHECK_FALSE(PresentsCapturedWorld(fc));
+    fc.composed = 1;  // until composed with it
+    CHECK(PresentsCapturedWorld(fc));
+
+    fc.proc_cmds = 0;  // neither, emulating a lower rate
+    CHECK_FALSE(DrawsWorld(fc));
+    CHECK_FALSE(PresentsCapturedWorld(fc));
+}

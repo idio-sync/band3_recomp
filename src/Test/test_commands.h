@@ -39,6 +39,14 @@ struct CaptureInfo {
     uint32_t rt_sampled = 0;
     uint32_t rt_missing = 0;
     std::string rt_fallback;
+    // what the frame drew: ProcCounter's proc_cmds (7 everything; with
+    // even/odd rendering 1 the world, 2 post-processing; -1 unknown), whether
+    // the capture has the world of the frame before (composed, for a frame
+    // that drew none) and the game frame that world is from
+    int64_t proc_cmds = -1;
+    bool composed = false;
+    uint64_t game_frame = 0;
+    uint64_t world_frame = 0;
     // the native view's GPU backend drawing the same capture, at the
     // screenshot's size: its PNG, or why there's none
     std::string gpu_path;

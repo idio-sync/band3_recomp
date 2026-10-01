@@ -1,13 +1,15 @@
-# Plays a song on autoplay and pairs the game's frame with the native view's at
-# points through it, for render checks:
+# render_song.b3t with RB3's even/odd rendering left on (it emulates 30 fps:
+# a frame draws the world, the next post-processes it and presents it with
+# its own overlay), pairing the game's frame with the native view's at the
+# same points through the song, for render checks:
 #   out/native_view_replay.exe screenshots/<name>.cap side.png --compare screenshots/<name>.png
 # Starts where boot.b3t leaves Rock Band 3 Deluxe (on a fresh profile). Launch
 # with the passes RB3 draws into textures recorded from the start (outfits are
-# composed once, in the main menu), which the native view draws itself:
+# composed once, in the main menu), and without full readback: the native view
+# draws those passes itself.
 #   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true
-# With full readback too, guest memory's copies of those textures (garbage
-# without it) are there to compare against (replay's --rt-guest):
-#   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true --readback_resolve=full
+# Each capture's reply says proc_cmds 2 and composed true, with the world
+# frame it has (world_frame, the game frame before its own).
 
 # Deluxe can't save its settings to band3's read-only game folder: I Understand
 wait screen=dx_settings_error_screen timeout=30s
@@ -26,10 +28,10 @@ wait frames=60
 set autoplay true
 # the same venue every run, so captures compare across runs
 set forced_venue arena_04
-# every frame draws everything, the world and its post-processing alike
-# (render_song_evenodd.b3t checks the game as it ships, which draws them by
-# turns)
-set disable_even_odd_rendering true
+# even/odd rendering stays on, as the game ships: frames draw the world and
+# post-process it by turns, and each capture is a post frame's with the world
+# frame's before it (src/Render/frame_compose.h), as the game presents it
+set disable_even_odd_rendering false
 # Play Now, Quickplay, Choose Songs
 press green
 wait frames=60
@@ -51,10 +53,10 @@ wait frames=30
 press green
 wait in_game timeout=60s
 expect song=20thcenturyboy
-capture render-song-start
+capture render-song-eo-start
 wait frames=600 timeout=60s
-capture render-song-10s
+capture render-song-eo-10s
 wait frames=900 timeout=60s
-capture render-song-25s
+capture render-song-eo-25s
 wait frames=900 timeout=60s
-capture render-song-40s
+capture render-song-eo-40s

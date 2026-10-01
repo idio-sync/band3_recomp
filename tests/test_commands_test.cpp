@@ -95,6 +95,10 @@ public:
         out.rt_sampled = 14;
         out.rt_missing = 1;
         out.rt_fallback = "none";
+        out.proc_cmds = 2;
+        out.composed = true;
+        out.game_frame = 2401;
+        out.world_frame = 2400;
         if (gpu_works) {
             out.gpu_path = file + ".gpu.png";
             out.gpu_ms = 4.24;
@@ -382,6 +386,8 @@ TEST_CASE("capture names the screenshot and the native capture alike") {
     CHECK(Has(reply, "\"draws\":345,\"skipped_shadow\":12,\"skipped_pass\":3"));
     CHECK(Has(reply, "\"passes\":30,\"passes_carried\":9,\"rt_sampled\":14,\"rt_missing\":1"));
     CHECK(Has(reply, "\"rt_fallback\":\"none\""));
+    CHECK(Has(reply, "\"proc_cmds\":2,\"composed\":true,\"game_frame\":2401,"
+                     "\"world_frame\":2400"));
     CHECK(Has(reply, "\"gpu\":\"screenshots/venue_1.gpu.png\""));
     CHECK(Has(reply, "\"gpu_ms\":4.2,\"gpu_wait_ms\":1.0"));
 

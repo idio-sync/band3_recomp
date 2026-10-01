@@ -48,7 +48,15 @@ std::string Describe(const FrameCapture& fc, const std::string& drawn) {
                   fc.untextured_format, fc.geom_cached, fc.tex_cached, fc.passes_own,
                   fc.passes_carried, fc.passes_empty, fc.passes_unbalanced, fc.rt_sampled,
                   fc.rt_missing, fc.rt_snapshots);
-    std::string s = buf + drawn;
+    std::string s = buf;
+    // even/odd rendering: a post frame's capture has the world frame's world
+    if (fc.composed) {
+        std::snprintf(buf, sizeof(buf), "world from game frame %llu, overlay from %llu\n",
+                      static_cast<unsigned long long>(fc.world_frame),
+                      static_cast<unsigned long long>(fc.game_frame));
+        s += buf;
+    }
+    s += drawn;
     for (auto& [k, n] : blends) s += "  " + k + ": " + std::to_string(n) + "\n";
     return s;
 }
