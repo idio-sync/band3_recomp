@@ -35,8 +35,10 @@ add_executable(band3_tests
     spot_model_test.cpp
     http_request_test.cpp
     paths_test.cpp
+    package_scan_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
+    ${BAND3_ROOT}/src/Content/package_scan.cpp
     ${BAND3_ROOT}/src/Input/hid_capture.cpp
     ${BAND3_ROOT}/src/Input/hid_instrument_types.cpp
     ${BAND3_ROOT}/src/Input/instrument_kind.cpp
