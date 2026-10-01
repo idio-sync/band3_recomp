@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "src/Render/frame_compose.h"
+
 // See post_model.h.
 
 namespace band3::render::post {
@@ -148,10 +150,22 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan) {
     const PostParams& p = frame.post;
     const PostConsts& c = frame.post_consts;
     if (!p.valid || p.disabled || !p.proc) return false;
-    // the flags the game's composite was picked by, where the capture has
-    // them; else as NgDOFProc::DoPost and NgPostProc::DoBloom would set them
+    // The game post-processes where FinishPostProcess runs, on frames whose
+    // ProcCommands has kProcPost (7, or 2 with even/odd rendering; a composed
+    // frame is its post frame), and the capture has the composite's constants
+    // there; a post frame without them drew no post, nor does a frame that
+    // does neither (0). A world frame (1) draws none either, but the next
+    // frame post-processes its world, by then with that frame's numbers: the
+    // live view shows world frames too, so they get the post worked out from
+    // their own PostParams, or the view would flicker between post and none.
+    const bool world_only =
+        (frame.proc_cmds & kProcWorld) && !(frame.proc_cmds & kProcPost);
+    if (!world_only && (!(frame.proc_cmds & kProcPost) || !c.valid)) return false;
+    const bool consts = !world_only;
+    // the flags the game's composite was picked by, or as NgDOFProc::DoPost
+    // and NgPostProc::DoBloom would set them
     uint32_t flags = 0;
-    if (c.valid) {
+    if (consts) {
         if (c.flags[kPostFlagDof]) flags |= kPostDof;
         if (c.flags[kPostFlagBloom]) flags |= kPostBloom;
         if (c.flags[kPostFlagGlare]) flags |= kPostGlare;
@@ -171,7 +185,7 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan) {
     PostPass& pass = plan.composite;
     pass.flags = {flags, 0, 0, 0};
     float c6[4], c24[4], rows[3][4];
-    if (c.valid) {
+    if (consts) {
         std::copy(std::begin(c.c6), std::end(c.c6), c6);
         std::copy(std::begin(c.c24), std::end(c.c24), c24);
         for (int j = 0; j < 3; j++) std::copy(std::begin(c.c92[j]), std::end(c.c92[j]), rows[j]);

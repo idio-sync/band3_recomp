@@ -24,9 +24,9 @@
 // The levels are 8-bit, as the 360's render targets are; the GPU's are RGBA8
 // and the CPU rounds each pass's output to 8 bits likewise. Both backends run
 // the same passes with the same numbers: PlanPost's PostPass and the taps
-// here, the per-pixel maths in post_model.hlsli. Values come from PostConsts
-// (what the game's composite drew with) where the capture has them, else are
-// worked out from PostParams as the game would.
+// here, the per-pixel maths in post_model.hlsli. The composite's values come
+// from PostConsts (what the game's composite drew with): a frame without them
+// drew no post-processing. The camera and the blurs' widths are PostParams'.
 
 namespace band3::render::post {
 
@@ -72,7 +72,8 @@ struct PostPlan {
 };
 
 // The frame's PostPlan, false if it post-processes nothing: its DoPostProcess
-// didn't run, or ran disabled, or with no effect on (the composite is then a
+// didn't run, or ran disabled, or its FinishPostProcess didn't (a world frame
+// with even/odd rendering), or the composite had no effect on (it's then a
 // copy). With `only` (kPost bits, 0 all) the effects outside it are left off,
 // to see each on its own.
 bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan);

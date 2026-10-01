@@ -120,13 +120,14 @@ public:
         settings_set.emplace_back(name, value);
         return {};
     }
-    std::string NativeViewOn(uint32_t width, uint32_t height) override {
+    std::string NativeViewOn(uint32_t width, uint32_t height, bool post) override {
         if (width > 4000) return "no GPU target that big";
         view = NativeViewStats{};
         view.on = true;
         view.backend = "gpu";
         view.width = width;
         view.height = height;
+        view.post = post;
         return {};
     }
     void NativeViewOff() override { view = NativeViewStats{}; }
@@ -505,14 +506,29 @@ TEST_CASE("native_view on starts the live view at a size, 1280x720 without one")
     CHECK(game.view.on);
     CHECK(game.view.width == 1280);
     CHECK(game.view.height == 720);
-    CHECK(Has(reply, "\"stats\":{\"on\":true,\"backend\":\"gpu\",\"width\":1280,\"height\":720"));
+    CHECK(Has(reply, "\"stats\":{\"on\":true,\"backend\":\"gpu\",\"width\":1280,\"height\":720,"
+                     "\"post\":true"));
 
     CHECK(Ok(RunCommand("native_view on 640x360", game)));
     CHECK(game.view.width == 640);
     CHECK(game.view.height == 360);
 
+    // without post-processing, at a size or the default
+    reply = RunCommand("native_view on 640x360 nopost", game);
+    CHECK(Ok(reply));
+    CHECK(game.view.width == 640);
+    CHECK_FALSE(game.view.post);
+    CHECK(Has(reply, "\"height\":360,\"post\":false"));
+    CHECK(Ok(RunCommand("native_view on nopost", game)));
+    CHECK(game.view.width == 1280);
+    CHECK_FALSE(game.view.post);
+    CHECK(Ok(RunCommand("native_view on 640x360", game)));
+    CHECK(game.view.post);
+
     for (const char* bad : {"native_view on 640", "native_view on 0x0", "native_view on x720",
                             "native_view on 640x360x2", "native_view on 640x360 more",
+                            "native_view on nopost 640x360", "native_view on 640x360 nopost more",
+                            "native_view on 640x360 more nopost",
                             "native_view", "native_view sideways", "native_view stats now"}) {
         CAPTURE(bad);
         CHECK_FALSE(Ok(RunCommand(bad, game)));

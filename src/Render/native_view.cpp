@@ -147,6 +147,7 @@ class Renderer {
         s.gpu = live_drew_gpu_.value_or(gpu_);
         s.width = options_.width;
         s.height = options_.height;
+        s.post = options_.post;
         // capturing stops with the last user, and the frame number with it
         if (users_ > 0 && cap && cap->frame > live_base_) s.captured = cap->frame - live_base_;
         else s.captured = live_last_ - live_base_;
@@ -362,11 +363,12 @@ void StartDumpIfRequested() {
     Renderer::Get().AddUser();
 }
 
-void StartLiveView(uint32_t width, uint32_t height) {
+void StartLiveView(uint32_t width, uint32_t height, bool post) {
     std::lock_guard lock(g_live_mutex);
     RasterOptions o;
     o.width = width;
     o.height = height;
+    o.post = post;
     Renderer::Get().SetOptions(o);
     // here, on the UI thread, where SDL wants its video started
     Renderer::Get().SetGpu(REXCVAR_GET(native_view_backend) == "gpu" &&

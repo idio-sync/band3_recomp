@@ -219,7 +219,7 @@ TEST_CASE("the composite is the game's composite shaders' maths") {
     }
 }
 
-TEST_CASE("PlanPost takes the composite's constants, or works them out") {
+TEST_CASE("PlanPost takes the composite's constants, on frames that drew post") {
     FrameCapture f;
     PostPlan plan{};
     CHECK_FALSE(PlanPost(f, 0, plan));  // no DoPostProcess read
@@ -230,10 +230,8 @@ TEST_CASE("PlanPost takes the composite's constants, or works them out") {
     f.post.cam_far = 10000;
     f.post.cam_zrange[0] = 0.1f;
     f.post.cam_zrange[1] = 1;
-    // nothing on: the composite would be a copy
-    CHECK_FALSE(PlanPost(f, 0, plan));
-
-    // worked out from the parameters: glare bloom, DOF, flicker
+    f.post_boundary = 0;
+    // parameters that would turn glare bloom, DOF and the colour matrix on
     f.post.bloom_intensity = 2;
     f.post.bloom_glare = 1;
     f.post.dof = 0x2000;
@@ -242,30 +240,60 @@ TEST_CASE("PlanPost takes the composite's constants, or works them out") {
     f.post.dof_bias = 0.8f;
     f.post.dof_max_blur = 1;
     f.post.color_mod = 0.5f;
-    REQUIRE(PlanPost(f, 0, plan));
-    CHECK(plan.composite.flags.x == (kPostGlare | kPostDof | kPostXfm));
-    CHECK(Near(plan.composite.c6.x, 2));
-    CHECK(Near(plan.composite.c24.x, 10, 1e-4f));
-    CHECK(Near(plan.composite.xfm[0].x, 0.5f));
-    CHECK(Near(plan.composite.camera.y, 10000));
-    CHECK(Near(plan.bloom_taps[2][0][0].x, -6.5f / 20, 1e-7f));  // level 2, 20 across
-    CHECK(Near(plan.bloom_taps[2][1][0].y, -6.5f / 11, 1e-7f));  // 11 down
-    REQUIRE(PlanPost(f, kPostDof, plan));
-    CHECK(plan.composite.flags.x == kPostDof);
 
-    // the composite's own, when the capture has them: its flags win
+    // without FinishPostProcess the game drew no post, whatever the
+    // parameters say: a frame that does neither, and a post frame whose
+    // FinishPostProcess didn't run
+    for (uint32_t proc_cmds : {0u, 2u, 7u}) {
+        f.proc_cmds = proc_cmds;
+        CHECK_FALSE(PlanPost(f, 0, plan));
+    }
+    // a world frame with even/odd rendering gets the post the next frame
+    // gives its world, worked out from its parameters
+    f.proc_cmds = 1;
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK((plan.composite.flags.x & (kPostDof | kPostGlare)) == (kPostDof | kPostGlare));
+    CHECK((plan.composite.flags.x & kPostBloom) == 0u);
+
+    // the composite's own, when it ran: its flags and constants
     f.post_consts.valid = 1;
     f.post_consts.flags[kPostFlagBloom] = 1;
+    f.post_consts.flags[kPostFlagColorXfm] = 1;
     f.post_consts.c6[0] = 0.25f;
+    f.post_consts.c24[0] = 10;
+    f.post_consts.c92[0][0] = 0.5f;
+    for (uint32_t proc_cmds : {7u, 2u}) {
+        f.proc_cmds = proc_cmds;
+        REQUIRE(PlanPost(f, 0, plan));
+        CHECK(plan.composite.flags.x == (kPostBloom | kPostXfm));
+        CHECK(Near(plan.composite.c6.x, 0.25f));
+        CHECK(Near(plan.composite.c24.x, 10));
+        CHECK(Near(plan.composite.xfm[0].x, 0.5f));
+        CHECK(Near(plan.composite.camera.y, 10000));
+        CHECK(Near(plan.bloom_taps[2][0][0].x, -6.5f / 20, 1e-7f));  // level 2, 20 across
+        CHECK(Near(plan.bloom_taps[2][1][0].y, -6.5f / 11, 1e-7f));  // 11 down
+    }
+    REQUIRE(PlanPost(f, kPostXfm, plan));
+    CHECK(plan.composite.flags.x == kPostXfm);
+    CHECK_FALSE(PlanPost(f, kPostDof, plan));  // the composite had no DOF
+
+    // constants on a frame without the post bit (none should be) aren't used:
+    // a world frame works its post out from its parameters
+    f.proc_cmds = 1;
     REQUIRE(PlanPost(f, 0, plan));
-    CHECK(plan.composite.flags.x == kPostBloom);
-    CHECK(Near(plan.composite.c6.x, 0.25f));
+    CHECK((plan.composite.flags.x & kPostGlare) != 0u);
+    CHECK_FALSE(Near(plan.composite.c6.x, 0.25f));
+    f.proc_cmds = 0;
+    CHECK_FALSE(PlanPost(f, 0, plan));
+    f.proc_cmds = 2;
 
     // DOF without the camera's planes can't read the depth
     f.post_consts.flags[kPostFlagDof] = 1;
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK(plan.composite.flags.x == (kPostDof | kPostBloom | kPostXfm));
     f.post.cam_far = 0;
     REQUIRE(PlanPost(f, 0, plan));
-    CHECK(plan.composite.flags.x == kPostBloom);
+    CHECK(plan.composite.flags.x == (kPostBloom | kPostXfm));
 
     f.post.disabled = 1;
     CHECK_FALSE(PlanPost(f, 0, plan));

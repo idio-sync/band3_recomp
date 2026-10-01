@@ -240,9 +240,9 @@ public:
         }
     }
 
-    std::string NativeViewOn(uint32_t width, uint32_t height) override {
+    std::string NativeViewOn(uint32_t width, uint32_t height, bool post) override {
         // the GPU device starts on the UI thread
-        OnUIThread([&] { render::StartLiveView(width, height); });
+        OnUIThread([&] { render::StartLiveView(width, height, post); });
         StartMeasuring();
         return {};
     }
@@ -261,6 +261,7 @@ public:
             out.backend = live.gpu ? "gpu" : "cpu";
             out.width = live.width;
             out.height = live.height;
+            out.post = live.post;
             out.captured = live.captured;
             out.rendered = live.rendered;
             out.skipped_busy = live.skipped_busy;

@@ -48,6 +48,7 @@ class NativeViewDialog : public rex::ui::ImGuiDialog {
 struct LiveViewStats {
     bool gpu = false;  // what drew the last frame, or would draw the next
     uint32_t width = 0, height = 0;
+    bool post = true;  // with RB3's post-processing (RasterOptions::post)
     uint64_t captured = 0;      // frames captured since it started
     uint64_t rendered = 0;      // of those, the ones drawn
     uint64_t skipped_busy = 0;  // and the ones it was still drawing another for
@@ -55,8 +56,9 @@ struct LiveViewStats {
     std::vector<double> wait_ms;  // GpuStats::wait_ms, the GPU's frames only
 };
 // starts it, or starts its numbers over at a new size if it's on; on the UI
-// thread, as the GPU device starts there
-void StartLiveView(uint32_t width, uint32_t height);
+// thread, as the GPU device starts there. `post` off leaves RB3's
+// post-processing out, to measure what it costs.
+void StartLiveView(uint32_t width, uint32_t height, bool post = true);
 // stops it, and capturing with it unless the window still wants it
 void StopLiveView();
 bool LiveViewOn();

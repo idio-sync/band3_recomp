@@ -470,6 +470,8 @@ std::string NativeViewJson(const NativeViewStats& s) {
     AppendJsonString(out, s.backend);
     out += ",\"width\":" + std::to_string(s.width);
     out += ",\"height\":" + std::to_string(s.height);
+    out += ",\"post\":";
+    out += s.post ? "true" : "false";
     char buf[96];
     std::snprintf(buf, sizeof(buf), ",\"seconds\":%.1f,\"game_frames\":%llu,\"game_fps\":%.1f",
                   s.seconds, static_cast<unsigned long long>(s.game_frames),
@@ -504,14 +506,19 @@ std::optional<std::pair<uint32_t, uint32_t>> ParseSize(std::string_view text) {
 
 std::string NativeView(TestTarget& target, const std::vector<std::string_view>& args) {
     const std::string_view what = args.size() >= 2 ? args[1] : std::string_view{};
-    if (what == "on" && args.size() <= 3) {
+    if (what == "on" && args.size() <= 4) {
         std::pair<uint32_t, uint32_t> size{1280, 720};
-        if (args.size() == 3) {
+        // nopost, last: without RB3's post-processing, to see what it costs
+        size_t end = args.size();
+        const bool post = !(end > 2 && args[end - 1] == "nopost");
+        if (!post) end--;
+        if (end == 4) return Error(target, "usage: native_view on [<width>x<height>] [nopost]");
+        if (end == 3) {
             auto parsed = ParseSize(args[2]);
             if (!parsed) return Error(target, "a native view size is <width>x<height>, 16x16 up");
             size = *parsed;
         }
-        if (std::string error = target.NativeViewOn(size.first, size.second); !error.empty())
+        if (std::string error = target.NativeViewOn(size.first, size.second, post); !error.empty())
             return Error(target, error);
         return Ok(NativeViewJson(target.NativeView()));
     }
@@ -522,7 +529,7 @@ std::string NativeView(TestTarget& target, const std::vector<std::string_view>& 
         return Ok(NativeViewJson(stats));
     }
     if (what == "stats" && args.size() == 2) return Ok(NativeViewJson(target.NativeView()));
-    return Error(target, "usage: native_view on [<width>x<height>]|off|stats");
+    return Error(target, "usage: native_view on [<width>x<height>] [nopost]|off|stats");
 }
 
 std::string Set(TestTarget& target, std::string_view line,

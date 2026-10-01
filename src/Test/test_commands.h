@@ -74,6 +74,7 @@ struct NativeViewStats {
     std::string backend;
     uint32_t width = 0;
     uint32_t height = 0;
+    bool post = true;          // with RB3's post-processing
     double seconds = 0;        // since `native_view on`, or `off` while it's off
     uint64_t game_frames = 0;  // the frames the game drew in that time
     uint64_t captured = 0;     // the game's frames the native view captured
@@ -121,9 +122,9 @@ public:
     // a Band3 setting only; returns an error, or empty
     virtual std::string SetSetting(std::string_view name, std::string_view value) = 0;
     // the live native view, drawing every frame the game captures at width x
-    // height as F7's window does, and its numbers, which on and off reset;
-    // on returns an error, or empty
-    virtual std::string NativeViewOn(uint32_t width, uint32_t height) = 0;
+    // height as F7's window does (without post-processing unless `post`), and
+    // its numbers, which on and off reset; on returns an error, or empty
+    virtual std::string NativeViewOn(uint32_t width, uint32_t height, bool post) = 0;
     virtual void NativeViewOff() = 0;
     virtual NativeViewStats NativeView() = 0;
     virtual void Quit() = 0;

@@ -430,6 +430,17 @@ void PrintPost(const FrameCapture& fc) {
     std::printf("  flags 0x26..0x3F:");
     for (uint8_t f : c.flags) std::printf(" %02X", f);
     std::printf("; c15 %.6f %.6f %.6f %.6f\n", c.c15[0], c.c15[1], c.c15[2], c.c15[3]);
+    // what the native composite leaves out: velocity blur (s10 * c122), the
+    // overlay (s12 * (c127.x + c127.y * s5.x) * c91.x) and noise (c112, c113)
+    // (out/research/m4_design.md)
+    const auto flag = [&](int offset) { return unsigned(c.flags[offset - kPostFlagBase]); };
+    std::printf("  left out: velocity +0x38 %02X +0x39 %02X c122 %.4f %.4f %.4f %.4f; overlay "
+                "+0x3F %02X c127 %.4f %.4f %.4f %.4f c91 %.4f %.4f %.4f %.4f; noise +0x2D %02X "
+                "c112 %.4f %.4f %.4f %.4f c113 %.4f %.4f %.4f %.4f\n",
+                flag(0x38), flag(0x39), c.c122[0], c.c122[1], c.c122[2], c.c122[3], flag(0x3F),
+                c.c127[0], c.c127[1], c.c127[2], c.c127[3], c.c91[0], c.c91[1], c.c91[2],
+                c.c91[3], flag(0x2D), c.c112[0], c.c112[1], c.c112[2], c.c112[3], c.c113[0],
+                c.c113[1], c.c113[2], c.c113[3]);
     if (c.dof_survey) {
         std::printf("  DOF blur taps (c31..c38 xy, weight c47..c54 x):");
         for (int i = 0; i < 8; i++)

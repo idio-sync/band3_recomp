@@ -218,7 +218,8 @@ struct GpuRenderer::Impl {
     // which the resolve reads into the picture, `color`; the overlay's go on
     // top of that. The depth buffer is both's, and readable by the resolve
     // where the device can sample D32 (depth_sampled); where it can't, the
-    // resolve reads no_depth, which is 0 (nothing drew).
+    // resolve reads no_depth, which is 0 (nothing drew), and post-processing
+    // leaves depth of field out.
     SDL_GPUTexture* scene = nullptr;
     SDL_GPUTexture* color = nullptr;
     SDL_GPUTexture* depth = nullptr;
@@ -504,7 +505,7 @@ bool GpuRenderer::Impl::Create() {
         SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
     if (!depth_sampled)
         REXLOG_WARN("native view gpu: the device can't sample a D32 depth buffer; the scene's "
-                    "depth reads as 0");
+                    "depth reads as 0 and post-processing has no depth of field");
 
     // nearest and wrapping, as Shade() samples
     SDL_GPUSamplerCreateInfo si{};
@@ -526,8 +527,7 @@ bool GpuRenderer::Impl::Create() {
     ti.num_levels = 1;
     white = SDL_CreateGPUTexture(device, &ti);
     black = SDL_CreateGPUTexture(device, &ti);
-    // a plain 2D texture, as the resolve's depth binding is; its texel is
-    // never filled, so a depth of 0 (or whatever the driver gives)
+    // a plain 2D texture, as the resolve's depth binding is: a depth of 0
     ti.type = SDL_GPU_TEXTURETYPE_2D;
     no_depth = SDL_CreateGPUTexture(device, &ti);
 
@@ -568,6 +568,8 @@ bool GpuRenderer::Impl::Create() {
         // a texture's upload starts kTextureOffsetAlign into the buffer
         src.offset = kTextureOffsetAlign;
         dst.texture = black;
+        SDL_UploadToGPUTexture(copy, &src, &dst, false);
+        dst.texture = no_depth;
         SDL_UploadToGPUTexture(copy, &src, &dst, false);
         SDL_GPUTransferBufferLocation bsrc{tb, 16};
         SDL_GPUBufferRegion bdst{no_bones, 0, sizeof(Mat4)};
@@ -1348,8 +1350,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // CPU, into the RGBA8 levels: the DOF's, then bloom's, then the composite
     // into the picture
     post::PostPlan post_plan;
-    const bool post_on =
+    bool post_on =
         o.post && o.view == RasterView::kFinal && post::PlanPost(frame, o.post_only, post_plan);
+    // depth of field blurs by the depth, which reads as 0 (all blurred)
+    // without a sampled one: left out then (Create warns of it, once)
+    if (post_on && !depth_sampled) {
+        post_plan.composite.flags.x &= ~post::kPostDof;
+        post_on = post_plan.composite.flags.x != 0;
+    }
     auto post_process = [&] {
         post::PostPass p = post_plan.composite;
         const uint32_t flags = p.flags.x;
