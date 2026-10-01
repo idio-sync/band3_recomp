@@ -31,6 +31,8 @@ private:
     void DrawVirtualInstrument(InstrumentInputs& in);
 
     bool visible_ = false;
+    // the Virtual instrument tab was showing last frame, so its buttons may be held
+    bool showing_virtual_ = false;
     int velocity_ = 100;
 };
 

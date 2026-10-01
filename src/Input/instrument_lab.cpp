@@ -552,22 +552,30 @@ void DrawLag() {
 
 void InstrumentLabDialog::OnDraw(ImGuiIO&) {
     auto& instrument = VirtualInstrument::Get();
-    InstrumentInputs in = instrument.Held();
+    // the Lab's buttons are held only while its Virtual instrument tab shows: let
+    // go of them once when it stops showing, and otherwise leave the instrument
+    // to whatever else plays it (the test harness)
+    auto stop_showing = [&] {
+        if (!showing_virtual_) return;
+        showing_virtual_ = false;
+        InstrumentInputs held = instrument.Held();
+        ReleaseHeldButtons(held);
+        instrument.SetHeld(held);
+    };
 
     if (!visible_) {
-        ReleaseHeldButtons(in);
-        instrument.SetHeld(in);
+        stop_showing();
         return;
     }
     ImGui::SetNextWindowSize(ImVec2(620, 0), ImGuiCond_FirstUseEver);
     // End pairs with every Begin, whatever Begin returns
     if (!ImGui::Begin("Instrument Lab", &visible_)) {
         ImGui::End();
-        ReleaseHeldButtons(in);
-        instrument.SetHeld(in);
+        stop_showing();
         return;
     }
 
+    InstrumentInputs in = instrument.Held();
     bool virtual_tab = false;
     if (ImGui::BeginTabBar("tabs")) {
         if (ImGui::BeginTabItem("Virtual instrument")) {
@@ -597,9 +605,12 @@ void InstrumentLabDialog::OnDraw(ImGuiIO&) {
         }
         ImGui::EndTabBar();
     }
-    // held buttons only last while their tab is showing
-    if (!virtual_tab) ReleaseHeldButtons(in);
-    instrument.SetHeld(in);
+    if (virtual_tab) {
+        showing_virtual_ = true;
+        instrument.SetHeld(in);
+    } else {
+        stop_showing();
+    }
     ImGui::End();
 }
 
