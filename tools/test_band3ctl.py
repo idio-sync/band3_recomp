@@ -26,6 +26,19 @@ class ParseScriptTest(unittest.TestCase):
                          [(1, "state"), (2, "quit")])
 
 
+class SplitCommandsTest(unittest.TestCase):
+    def test_one_command(self):
+        self.assertEqual(band3ctl.split_commands(["press", "green"]), ["press green"])
+
+    def test_semicolons_separate_commands(self):
+        self.assertEqual(
+            band3ctl.split_commands(["hold", "down;", "wait", "frames=90", ";release", "all"]),
+            ["hold down", "wait frames=90", "release all"])
+
+    def test_empty_pieces_are_dropped(self):
+        self.assertEqual(band3ctl.split_commands(["state;;", ";"]), ["state"])
+
+
 class FakeConnection:
     """Replies ok to everything except the commands in `failing`."""
 

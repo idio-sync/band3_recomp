@@ -8,8 +8,10 @@ band3 started with --test_port=<port> takes one command per line on
   python tools/band3ctl.py press green+strum_down
   python tools/band3ctl.py wait screen~main timeout=90s
   python tools/band3ctl.py run tests/game/boot.b3t
+  python tools/band3ctl.py "hold down; wait frames=90; release all"
 
-`run` replays a .b3t script: harness commands one per line, # comments. It
+Commands joined with ; share one connection, which `hold` needs: band3 lets go
+of everything held when a client disconnects. `run` replays a .b3t script: harness commands one per line, # comments. It
 stops at the first command that fails, saves a screenshot of the moment, and
 exits 1. The commands are listed in the README's Test harness section.
 
@@ -41,6 +43,11 @@ def parse_script(text):
         if line:
             commands.append((number, line))
     return commands
+
+
+def split_commands(words):
+    """Command-line words as harness commands, split at semicolons."""
+    return [c.strip() for c in " ".join(words).split(";") if c.strip()]
 
 
 def parse_reply(data):
@@ -195,13 +202,18 @@ def main(argv):
         rest = rest[2:] if rest[0] == "--port" else rest[1:]
     if rest and rest[0] not in known:
         port = parser.parse_args(port_args).port
+        # one connection for them all: band3 lets go of held inputs when a
+        # client disconnects, so `hold x; wait ...; release x` needs to share one
         conn = connect(port)
         try:
-            reply = conn.command(" ".join(rest))
+            for command in split_commands(rest):
+                reply = conn.command(command)
+                print(json.dumps(reply))
+                if not reply.get("ok"):
+                    return 1
         finally:
             conn.close()
-        print(json.dumps(reply))
-        return 0 if reply.get("ok") else 1
+        return 0
 
     args = parser.parse_args(argv)
     if args.action == "launch":

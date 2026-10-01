@@ -41,6 +41,9 @@ public:
     virtual void Quit() = 0;
     // the harness is shutting down: a wait gives up
     virtual bool Cancelled() = 0;
+    // what the game reads from player 1-4, as the input system gives it;
+    // false when nothing is connected there
+    virtual bool ReadPad(int player, input::Gamepad360& out, uint32_t& packet) = 0;
 
     virtual Clock::time_point Now() = 0;
     virtual void Sleep(std::chrono::milliseconds length) = 0;

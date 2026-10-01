@@ -70,6 +70,7 @@ Observation:
 | Command | Reply |
 |---|---|
 | `state` | `{screen, in_game, song:{name,artist,shortname}, venue, band, frame, instrument}` |
+| `pad [player]` | `{connected, buttons, lt, rt, lx, ly, rx, ry, packet}` as the input system gives the game (added while testing: the only way to see what a hold really sends) |
 | `screenshot [name]` | `{path, width, height}`, written to `screenshots/<name or timestamp>.png` |
 | `wait <condition> [timeout=30s]` | Returns once the condition holds, fails on timeout. |
 

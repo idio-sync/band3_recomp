@@ -259,6 +259,40 @@ std::string Wait(TestTarget& target, const std::vector<std::string_view>& args,
     return OkWithState(target, state);
 }
 
+std::string Pad(TestTarget& target, const std::vector<std::string_view>& args) {
+    if (args.size() > 2) return Error(target, "usage: pad [player]");
+    int player = 1;
+    if (args.size() == 2) {
+        auto p = ParseNumber<int>(args[1]);
+        if (!p || *p < 1 || *p > 4) return Error(target, "player is 1 to 4");
+        player = *p;
+    }
+    input::Gamepad360 pad;
+    uint32_t packet = 0;
+    if (!target.ReadPad(player, pad, packet)) return Ok("\"pad\":{\"connected\":false}");
+
+    // XINPUT_GAMEPAD's button bits, lowest first
+    static constexpr const char* kButtons[16] = {
+        "up", "down", "left", "right", "start", "back", "lstick", "rstick",
+        "lb", "rb", "guide", nullptr, "a", "b", "x", "y"};
+    std::string out = "\"pad\":{\"connected\":true,\"buttons\":[";
+    bool first = true;
+    for (int bit = 0; bit < 16; bit++) {
+        if (!(pad.buttons & (1u << bit)) || !kButtons[bit]) continue;
+        if (!first) out += ',';
+        AppendJsonString(out, kButtons[bit]);
+        first = false;
+    }
+    out += "],\"lt\":" + std::to_string(pad.left_trigger);
+    out += ",\"rt\":" + std::to_string(pad.right_trigger);
+    out += ",\"lx\":" + std::to_string(pad.thumb_lx);
+    out += ",\"ly\":" + std::to_string(pad.thumb_ly);
+    out += ",\"rx\":" + std::to_string(pad.thumb_rx);
+    out += ",\"ry\":" + std::to_string(pad.thumb_ry);
+    out += ",\"packet\":" + std::to_string(packet) + "}";
+    return Ok(out);
+}
+
 bool IsFileName(std::string_view name) {
     if (name.empty() || name.size() > 64) return false;
     for (char c : name) {
@@ -355,6 +389,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     const std::string_view verb = args[0];
 
     if (verb == "state") return OkWithState(target, target.State());
+    if (verb == "pad") return Pad(target, args);
     if (verb == "press") return Press(target, args);
     if (verb == "hit") return Hit(target, args);
     if (verb == "hold") return Hold(target, args, true);

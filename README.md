@@ -155,12 +155,15 @@ python tools/band3ctl.py press green+strum_down
 python tools/band3ctl.py wait screen=splash_screen timeout=60s
 python tools/band3ctl.py screenshot menu      # saved under screenshots/ next to the exe
 python tools/band3ctl.py run tests/game/boot.b3t
+python tools/band3ctl.py "hold up+orange; wait frames=60; pad; release all"
 ```
 
-`launch` starts the game minimized without taking focus, and gives it its own saves
-in `out/test_user_data`, so tests never touch your profile. A `.b3t` script is these
-commands one per line, with `#` comments; `run` stops at the first one that fails,
-saves a screenshot of the moment and exits 1.
+`launch` starts the game minimized without taking focus (`--show` to watch it), and
+gives it its own saves in `out/test_user_data`, so tests never touch your profile. A
+`.b3t` script is these commands one per line, with `#` comments; `run` stops at the
+first one that fails, saves a screenshot of the moment and exits 1. Commands joined
+with `;` share one connection, which `hold` needs: band3 lets go of everything held
+when a client disconnects.
 
 | Command | |
 |---|---|
@@ -170,6 +173,7 @@ saves a screenshot of the moment and exits 1.
 | `hit <pad\|cymbal\|keyN\|string> [velocity] [fret]` | drums, keys `key0`-`key24`, pro guitar strings `low_e a_str d_str g_str b_str high_e` |
 | `axis whammy\|tilt <0..1>` | |
 | `state` | |
+| `pad [player]` | the buttons, triggers and sticks the game reads from a player (1-4) |
 | `wait <condition> [timeout=30s]`, `expect <condition> [timeout=5s]` | `screen=`, `screen~` (contains), `in_game`, `menus`, `song=<shortname>`, `frames=<n>` |
 | `screenshot [name]` | |
 | `set <setting> <value>` | Band3 settings only |
@@ -178,7 +182,11 @@ saves a screenshot of the moment and exits 1.
 Every instrument has `a b x y start back up down left right`; guitars add `green red
 yellow blue orange strum_up strum_down solo`, drums `red_pad yellow_pad blue_pad
 green_pad yellow_cym blue_cym green_cym kick kick2`, keys `overdrive`. Presses during
-a screen transition are dropped, so wait for the screen you act on.
+a screen transition are dropped, so wait for the screen you act on (and give a dialog
+a moment to finish appearing). Submenus inside one screen (Play Now, Quickplay) don't
+change the screen name. A song counts as `in_game` until you leave its results, and
+`state` keeps the last song's details after that. Switching `instrument` reconnects
+it, so press Start to join again, as a player would.
 
 ### Pro Keys and Pro Guitar (untested)
 

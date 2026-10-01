@@ -1,4 +1,5 @@
-# Boots a fresh profile through the first-run prompts, then quits.
+# Boots a fresh profile through the first-run prompts, leaving the game running
+# for the next script.
 #   python tools/band3ctl.py launch --fresh
 #   python tools/band3ctl.py run tests/game/boot.b3t
 # The dx_ screens are Rock Band 3 Deluxe's; plain RB3 goes from the calibration
@@ -17,4 +18,3 @@ screenshot boot-dx-welcome
 press green
 wait screen=hint_rb3_welcome_screen timeout=30s
 screenshot boot-rb3-welcome
-quit

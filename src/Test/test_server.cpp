@@ -33,7 +33,11 @@
 #include <rex/ui/presenter.h>
 #include <rex/ui/window.h>
 #include <rex/ui/windowed_app_context.h>
+#include <rex/input/input_system.h>
+#include "src/Input/input_lock.h"
+#include "src/Input/input_system.h"
 #include "src/Input/virtual_instrument.h"
+#include "src/Input/xinput_state.h"
 #include "src/Render/png_writer.h"
 #include "src/settings.h"
 #include "game_state.h"
@@ -42,6 +46,8 @@
 namespace band3::test {
 
 namespace {
+
+using rex::X_RESULT;
 
 #ifdef _WIN32
 using socket_t = SOCKET;
@@ -124,6 +130,11 @@ public:
         if (!info || !info->category.starts_with("Band3/")) {
             return std::string(name) + " isn't a Band3 setting";
         }
+        // the SDK takes any word for a boolean, and anything but "true" is false
+        if (info->type == rex::cvar::FlagType::Boolean && value != "true" && value != "false" &&
+            value != "1" && value != "0") {
+            return std::string(name) + " is true or false";
+        }
         bool set = false;
         OnUIThread([&] { set = rex::cvar::SetFlagByName(name, value); });
         if (!set) return std::string(name) + " doesn't take " + std::string(value);
@@ -136,6 +147,23 @@ public:
     }
 
     bool Cancelled() override { return stopping_.load(); }
+
+    bool ReadPad(int player, input::Gamepad360& out, uint32_t& packet) override {
+        rex::input::InputSystem* system = input::GameInputSystem();
+        if (!system) return false;
+        rex::input::X_INPUT_STATE state{};
+        {
+            std::lock_guard<std::recursive_mutex> lock(input::InputLock());
+            // ForUI: the same read, without consuming the buttons a dialog took
+            if (system->GetStateForUI(static_cast<uint32_t>(player - 1), &state) !=
+                X_ERROR_SUCCESS) {
+                return false;
+            }
+        }
+        out = input::LoadGamepad(state.gamepad);
+        packet = state.packet_number;
+        return true;
+    }
 
     Clock::time_point Now() override { return Clock::now(); }
 

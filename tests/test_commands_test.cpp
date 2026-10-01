@@ -36,6 +36,10 @@ public:
     std::string screenshot_name;
     bool quit = false;
     bool cancelled = false;
+    input::Gamepad360 pad;
+    uint32_t pad_packet = 0;
+    bool pad_connected = true;
+    int pad_player = 0;
     int kind_changes = 0;
 
     InstrumentKind Kind() override { return kind; }
@@ -66,6 +70,12 @@ public:
     }
     void Quit() override { quit = true; }
     bool Cancelled() override { return cancelled; }
+    bool ReadPad(int player, input::Gamepad360& out, uint32_t& packet) override {
+        pad_player = player;
+        out = pad;
+        packet = pad_packet;
+        return pad_connected;
+    }
     Clock::time_point Now() override { return now; }
     void Sleep(std::chrono::milliseconds length) override {
         now += length;
@@ -321,6 +331,28 @@ TEST_CASE("set passes the setting on, keeping spaces in the value") {
     CHECK_FALSE(Ok(reply));
     CHECK(Has(reply, "isn't a Band3 setting"));
     CHECK_FALSE(Ok(RunCommand("set autoplay", game)));
+}
+
+TEST_CASE("pad reports what the game reads from a player") {
+    FakeGame game;
+    game.pad.buttons = input::xbox::kButtonA | input::xbox::kDpadUp;
+    game.pad.thumb_rx = -32768;
+    game.pad_packet = 77;
+    const std::string reply = RunCommand("pad", game);
+    CHECK(Ok(reply));
+    CHECK(game.pad_player == 1);
+    CHECK(Has(reply, "\"connected\":true"));
+    CHECK(Has(reply, "\"buttons\":[\"up\",\"a\"]"));
+    CHECK(Has(reply, "\"rx\":-32768"));
+    CHECK(Has(reply, "\"packet\":77"));
+
+    CHECK(Ok(RunCommand("pad 3", game)));
+    CHECK(game.pad_player == 3);
+    CHECK_FALSE(Ok(RunCommand("pad 5", game)));
+    CHECK_FALSE(Ok(RunCommand("pad one", game)));
+
+    game.pad_connected = false;
+    CHECK(Has(RunCommand("pad 2", game), "\"connected\":false"));
 }
 
 TEST_CASE("quit asks the game to close") {
