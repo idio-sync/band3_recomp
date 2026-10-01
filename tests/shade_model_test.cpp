@@ -1,9 +1,9 @@
 // Checks the native view's shading (src/Render/shade_model.cpp, which runs
 // src/Render/shaders/shade.hlsli on the CPU, as mesh.hlsl does on the GPU)
 // against the M2 research's Python models of the game's own shaders
-// (out/research/m2_shaders/tools: fam3.py, skin2.py and hair3.py, checked
-// there against the shaders' microcode), and PackShade's reading of the
-// option word.
+// (tools/shaders/research: fam3.py, skin2.py and hair3.py, checked there
+// against the shaders' microcode), and PackShade's reading of the option
+// word.
 
 #include <doctest/doctest.h>
 #include <cmath>
@@ -30,7 +30,7 @@ struct Case {
 };
 
 // Made from the models (fam3.model, skin2.skin, hair3.hair) by
-// out/research/m2_shaders/tools/gen_shade_cases.py, with no normal or
+// tools/shaders/research/gen_shade_cases.py, with no normal or
 // environment map, shadow or projected light. The hair's case has no
 // specular colour, as its strand highlight needs the tangent the capture
 // doesn't keep, so only its box highlight is compared.
