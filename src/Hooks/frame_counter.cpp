@@ -3,9 +3,11 @@
 #include <rex/types.h>
 #include <cstdint>
 #include "generated/band3_init.h"
+#include "src/Net/http_server.h"
 #include "src/Test/game_state.h"
 
-// Counts the frames RB3 draws, for the test harness's `wait frames=N`.
+// Counts the frames RB3 draws, for the test harness's `wait frames=N`, and runs
+// the game work the web server's requests wait on (src/Net/http_server.h).
 // App::DrawRegular runs once per frame; profiling builds also give it its zone
 // here, next to the others in profile_zones.cpp.
 
@@ -16,5 +18,6 @@ extern "C" REX_FUNC(App__DrawRegular)
     SCOPE_profile_cpu_f("RB3 App::DrawRegular");
 #endif
     band3::test::GameState::Get().CountFrame();
+    band3::http::RunGameJobs(ctx, base);
     __imp__App__DrawRegular(ctx, base);
 }

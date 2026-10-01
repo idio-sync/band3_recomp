@@ -32,6 +32,7 @@ add_executable(band3_tests
     frame_compose_test.cpp
     post_params_test.cpp
     post_model_test.cpp
+    http_request_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Input/hid_capture.cpp
@@ -44,6 +45,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/player_slots.cpp
     ${BAND3_ROOT}/src/Input/ps3_instruments.cpp
     ${BAND3_ROOT}/src/Input/ps4_instruments.cpp
+    ${BAND3_ROOT}/src/Net/http_request.cpp
     ${BAND3_ROOT}/src/Render/capture_file.cpp
     ${BAND3_ROOT}/src/Render/frame_compose.cpp
     ${BAND3_ROOT}/src/Render/post_model.cpp

@@ -1,0 +1,69 @@
+#pragma once
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+// The parts of the web server (http_server.h) that don't need a socket or the
+// game: reading a request, picking its endpoint and writing the replies, in
+// RB3Enhanced's formats (source/net_http_server.c in its repo), so its web page
+// and the tools written for it work unchanged.
+
+namespace band3::http {
+
+struct Request {
+    std::string method;
+    // as sent, still percent-encoded
+    std::string target;
+};
+
+// The request line of `head` (everything up to the blank line); nullopt when
+// it isn't "METHOD target HTTP/x".
+std::optional<Request> ParseRequest(std::string_view head);
+
+// %XX escapes decoded; '+' stays '+', as RB3E leaves it, since DTA scripts use it
+std::string UrlDecode(std::string_view text);
+
+enum class Endpoint {
+    kNotFound,
+    kIndex,      // /                  the web page
+    kSong,       // /song_<id>         one song's details
+    kListSongs,  // /list_songs        every song in the library
+    kJump,       // /jump?shortname=   select a song in the Music Library
+    kExecute,    // /execute?script=   run a DTA script (http_allow_scripts)
+    kJsonRpc,    // /jsonrpc           discordrp.json from the game data root
+};
+
+struct Route {
+    Endpoint endpoint = Endpoint::kNotFound;
+    int32_t song_id = 0;   // kSong
+    std::string argument;  // kJump's shortname, kExecute's script, decoded
+};
+
+// RB3E matches the decoded target, so /jump?shortname=a%26b jumps to "a&b"
+Route MatchRoute(std::string_view target);
+
+// one song, as /song_<id> and /list_songs report it
+struct SongInfo {
+    std::string shortname;
+    std::string title;
+    std::string artist;
+    std::string album;
+    std::string origin;
+};
+
+// RB3E's INI-style block: shortname=, title=, artist=, album=, origin=, each on
+// a line of its own, then a blank line. /list_songs puts a [shortname] line
+// before each.
+std::string FormatSong(const SongInfo& song, bool section);
+
+// The game's strings are UTF-8 for songs that say so and Latin-1 for the
+// rest; anything that isn't valid UTF-8 is taken as Latin-1, so the replies
+// can all be UTF-8.
+std::string ToUtf8(std::string_view text);
+
+std::string Response(int status, std::string_view content_type, std::string_view body,
+                     bool cors);
+
+}

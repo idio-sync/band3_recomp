@@ -8,6 +8,7 @@ It targets ReXGlue SDK 0.10 and adds:
 - An in-game settings menu (F4) backed by cvars, saved to `band3.toml`
 - Per-device controller types, an SDL/XInput `input_backend` option, and an Instrument Lab (F6)
 - RB3Enhanced-compatible network events (Stage Kit lighting, song/venue info) over UDP
+- RB3Enhanced's web page and API: browse the song library from a phone and pick the next song
 - Native Discord Rich Presence
 - A `refresh_rate` option for high-refresh monitors
 - Unit tests, a compile check, and CI
@@ -302,6 +303,33 @@ uses. `joypad_lag` (Band3 → Game, then restart) changes it per type, as `type=
 separated: `5=20,8=30` gives Xbox guitars 20 ms and Xbox drums 30 ms. `type=ms/video/audio`
 also sets the lag the calibration tests assume, and a blank part keeps the game's number
 (`8=/30/`). It's per type, so a real Xbox instrument of the same type changes too.
+
+### Web server
+
+Turn on `http_enabled` (F4, Band3 → Integrations, then restart) and band3 serves a web
+page on port 21070 (`http_port`) to this PC and the local network (`http_address`
+127.0.0.1 keeps it to this PC). The log says where to open it
+(`Web server: listening on 0.0.0.0:21070, open http://192.168.1.20:21070/`).
+The page lists the song library, searchable and sortable, and **Select** highlights a
+song in the game's Music Library, which has to be open. Windows asks once whether to
+let band3 through the firewall; allow it on private networks for other devices to
+reach it.
+
+It answers RB3Enhanced's API, so RB3E's page and tools written for it work too:
+
+| Endpoint | |
+|---|---|
+| `/` | the page; an `rb3e_index.html` at `game:\` replaces band3's |
+| `/list_songs` | every song, as `[shortname]` sections of `shortname=`, `title=`, `artist=`, `album=` and `origin=` lines |
+| `/song_<id>` | one song's lines, by song ID |
+| `/jump?shortname=<name>` | selects the song in the Music Library: 409 when it isn't open, 404 for a shortname no song has |
+| `/execute?script=<dta>` | runs a DTA script, only with `http_allow_scripts` on (anyone on the network could run any script, so it's off by default) |
+| `/jsonrpc` | `discordrp.json` at `game:\`, which Rock Band 3 Deluxe writes for Discord presence tools |
+
+`http_allow_cors` adds `Access-Control-Allow-Origin: *`, for pages served from somewhere
+else. Requests wait for the game's next frame, and get a 503 if it doesn't come within 5 s.
+Files at `game:\` are found as the game finds them: in the `game` folder of the user data
+root (see Settings above) first, then in the game data root.
 
 ### Steam Deck
 

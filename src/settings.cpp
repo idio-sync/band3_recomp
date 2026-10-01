@@ -191,6 +191,28 @@ REXCVAR_DEFINE_BOOL(discord_enabled, false, "Band3/Integrations",
     "Show the current song as Discord Rich Presence (needs the Discord desktop app)")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(http_enabled, false, "Band3/Integrations",
+    "Serve RB3Enhanced's web page and API to this PC and the local network: browse the "
+    "song library from a phone and select songs in the Music Library")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_INT32(http_port, 21070, "Band3/Integrations",
+    "TCP port the web server listens on (RB3Enhanced's is 21070)")
+    .range(1, 65535)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(http_address, "0.0.0.0", "Band3/Integrations",
+    "Address the web server listens on: 0.0.0.0 for the local network, 127.0.0.1 for this "
+    "PC only")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(http_allow_cors, false, "Band3/Integrations",
+    "Let web pages from other sites use the web server's API (Access-Control-Allow-Origin)");
+
+REXCVAR_DEFINE_BOOL(http_allow_scripts, false, "Band3/Integrations",
+    "Let the web server's /execute run DTA scripts sent to it. Anyone on the local network "
+    "could then run any script in the game");
+
 // Band3/Debug
 
 REXCVAR_DEFINE_BOOL(debug_overlay, true, "Band3/Debug",
@@ -300,6 +322,9 @@ void Init() {
         .events_target = REXCVAR_GET(events_target),
         .events_port = REXCVAR_GET(events_port),
         .discord_enabled = REXCVAR_GET(discord_enabled),
+        .http_enabled = REXCVAR_GET(http_enabled),
+        .http_port = REXCVAR_GET(http_port),
+        .http_address = REXCVAR_GET(http_address),
         .native_camera_shake = REXCVAR_GET(native_camera_shake),
     };
 

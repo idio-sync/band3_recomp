@@ -48,6 +48,11 @@ REXCVAR_DECLARE(bool, events_enabled);
 REXCVAR_DECLARE(std::string, events_target);
 REXCVAR_DECLARE(int32_t, events_port);
 REXCVAR_DECLARE(bool, discord_enabled);
+REXCVAR_DECLARE(bool, http_enabled);
+REXCVAR_DECLARE(int32_t, http_port);
+REXCVAR_DECLARE(std::string, http_address);
+REXCVAR_DECLARE(bool, http_allow_cors);
+REXCVAR_DECLARE(bool, http_allow_scripts);
 
 // Band3/Debug
 REXCVAR_DECLARE(bool, debug_overlay);
@@ -83,6 +88,9 @@ struct StartupSettings {
     std::string events_target;
     int32_t events_port;
     bool discord_enabled;
+    bool http_enabled;
+    int32_t http_port;
+    std::string http_address;
     bool native_camera_shake;
 };
 const StartupSettings& Startup();

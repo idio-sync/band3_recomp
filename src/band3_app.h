@@ -22,6 +22,7 @@
 #include "Input/menu_shortcut_dialog.h"
 #include "Input/virtual_instrument.h"
 #include "Net/discord.h"
+#include "Net/http_server.h"
 #include "Render/gpu_view.h"
 #include "Render/native_view.h"
 #include "Test/test_server.h"
@@ -115,9 +116,11 @@ class Band3App : public rex::ReXApp {
     band3::audio::StartUsbMics();
     band3::render::StartDumpIfRequested();
     band3::test::StartServer(runtime(), &app_context(), window());
+    band3::http::StartServer();
   }
 
   void OnShutdown() override {
+    band3::http::StopServer();
     band3::test::StopServer();
     rex::ui::UnregisterBind("bind_instrument_lab");
     rex::ui::UnregisterBind("bind_native_view");
