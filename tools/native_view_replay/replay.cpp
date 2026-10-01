@@ -789,6 +789,22 @@ int main(int argc, char** argv) {
                             (unsigned long long)s->options, s->shader_type, d.shade,
                             unsigned(s->use_environ), c1[0], c1[1], c1[2], c1[3], BoxSum(*s),
                             s->OptionBits(shader_opt::kNumPoint, 2), PointsLit(*s));
+                // particles: the quad axes' lengths (VS c47, c48) and the
+                // first quad's sides along them (corners 0 to 3, 0 to 1)
+                if (s->shader_type == 14 && d.geom->verts.size() >= 4) {
+                    auto len = [](const float* a, const float* b) {
+                        float sum = 0;
+                        for (int c = 0; c < 3; c++) sum += (a[c] - b[c]) * (a[c] - b[c]);
+                        return std::sqrt(sum);
+                    };
+                    const float zero[3] = {};
+                    const auto& q = d.geom->verts;
+                    std::printf("      particles: |c47| %.3f |c48| %.3f c49 %.2f %.2f %.2f %.2f "
+                                "| first quad %.2f x %.2f\n",
+                                len(s->Vs(47), zero), len(s->Vs(48), zero), s->Vs(49)[0],
+                                s->Vs(49)[1], s->Vs(49)[2], s->Vs(49)[3],
+                                len(q[3].pos, q[0].pos), len(q[1].pos, q[0].pos));
+                }
             }
         }
     }

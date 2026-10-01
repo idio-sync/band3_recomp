@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -52,6 +53,27 @@ struct Geometry {
     std::vector<Vertex> verts;
     std::vector<uint16_t> indices;  // triangle list
 };
+
+// Corner k (0..3) of a particle's quad, as RB3's particle VS builds it from
+// one vertex per particle (2E5F05321D973646, instrs 11-28 and 61-72): (u, v)
+// is (0,0) (0,1) (1,1) (1,0), X = (2u-1) size, Y = (2v-1) size, and
+//   P' = P + 2w (sin a R + cos a U) + (X cos a - Y sin a) R - (X sin a + Y cos a) U
+// with R and U VS c47 and c48 (the camera's right and up, each scaled on
+// its own: a quad can be narrower than it's wide), a the particle's angle
+// and w its swing arm. uv is (u, v), which VS c20/c21 transform as any
+// texgen does.
+inline void ParticleCorner(const float p[3], const float right[3], const float up[3], float size,
+                           float angle, float swing, int k, float out[3], float uv[2]) {
+    const float u = (k == 2 || k == 3) ? 1.0f : 0.0f;
+    const float v = (k == 1 || k == 2) ? 1.0f : 0.0f;
+    const float x = (2 * u - 1) * size, y = (2 * v - 1) * size;
+    const float sn = std::sin(angle), cs = std::cos(angle);
+    const float along_r = 2 * swing * sn + x * cs - y * sn;
+    const float along_u = 2 * swing * cs - (x * sn + y * cs);
+    for (int i = 0; i < 3; i++) out[i] = p[i] + along_r * right[i] + along_u * up[i];
+    uv[0] = u;
+    uv[1] = v;
+}
 
 // RndTex::Type (tex+0x48) values that make a texture's pixels something RB3
 // draws at runtime rather than loads: kRendered and what's built on it

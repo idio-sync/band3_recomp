@@ -3,8 +3,9 @@
 // against the M2 research's Python models of the game's own shaders
 // (tools/shaders/research: fam3.py, skin2.py and hair3.py, checked there
 // against the shaders' microcode), the SH occlusion and REFRACT_WORLD's
-// picture behind against hand-worked numbers, and PackShade's reading of the
-// option word.
+// picture behind against hand-worked numbers, PackShade's reading of the
+// option word, and the particle quad's corners (scene_capture.h's
+// ParticleCorner) against the particle VS's instructions.
 
 #include <doctest/doctest.h>
 #include <cmath>
@@ -349,12 +350,16 @@ TEST_CASE("PackShade takes each term from the option word, not stale registers")
     CHECK_FALSE(Has(sp, kShadeLit));
     CHECK(sp.ambient.x == 0.5f);
 
-    // particles: vertex colour times c0, no ambient
+    // particles: vertex colour times the VS's c1 and c0, not the PS's
     s = MakeState(Bit(kPrelit), 14);
+    s.vs[ShadeRegIndex(0)][0] = 0.25f;
+    s.vs[ShadeRegIndex(1)][1] = 1.5f;
     PackShade(it, &s, o, true, sp);
     CHECK_FALSE(Has(sp, kShadeLit));
     CHECK(Has(sp, kShadePrelit));
-    CHECK(sp.ambient.x == 1.0f);
+    CHECK(sp.color.x == 0.25f);
+    CHECK(sp.ambient.x == 0.5f);
+    CHECK(sp.ambient.y == 1.5f);
 
     // lighting off: lit materials unlit, ambient 1
     s = MakeState(Bit(kRealLights) | Bit(kApproxLights));
@@ -372,4 +377,75 @@ TEST_CASE("PackShade takes each term from the option word, not stale registers")
     o.legacy_light = true;
     PackShade(it, &s, o, true, sp);
     CHECK_FALSE(Has(sp, kShadeModel));
+}
+
+namespace {
+
+// The particle VS (2E5F05321D973646.ucode.vert) instrs 61-72 as written, with
+// its permuted registers: r4 = (Pz, Px, Py), r3 = (-, swing, angle, size),
+// r0.y = 2u - 1 and r0.x = 2v - 1 (instrs 22-28), c47 and c48 read .zxy
+void ParticleCornerUcode(const float p[3], const float c47[3], const float c48[3], float size,
+                         float angle, float swing, float u, float v, float out[3]) {
+    const float r4[3] = {p[2], p[0], p[1]};
+    float r0x = 2 * v - 1, r0y = 2 * u - 1;
+    // 61-63: the angle wrapped into [-pi, pi)
+    float a = angle * 0.15915493667125702f + 0.5f;
+    a = (a - std::floor(a)) * 6.2831854820251465f - 3.1415927410125732f;
+    // 64-66
+    float r2z = std::cos(a), r2w = std::sin(a);
+    const float x = r0y * size, y = r0x * size;
+    float r0[4] = {x * r2z, y * r2w, y * r2z, x * r2w};
+    // 67-68
+    r2z *= swing;
+    r2w *= swing;
+    r0[3] = r0[3] + r0[2];
+    const float r3x = r2z + r2z, r3y = r2w + r2w;
+    r2z = r0[0] - r0[1];
+    // 69-72
+    const float c47p[3] = {c47[2], c47[0], c47[1]}, c48p[3] = {c48[2], c48[0], c48[1]};
+    float t[3];
+    for (int i = 0; i < 3; i++) t[i] = r3y * c47p[i] + r4[i];
+    for (int i = 0; i < 3; i++) t[i] = r3x * c48p[i] + t[i];
+    for (int i = 0; i < 3; i++) t[i] = r2z * c47p[i] + t[i];
+    const float ty[3] = {t[1], t[2], t[0]};
+    for (int i = 0; i < 3; i++) out[i] = -r0[3] * c48[i] + ty[i];
+}
+
+}  // namespace
+
+TEST_CASE("particle quads are built as the particle VS builds them") {
+    // no angle or swing: a quad of 2 size |R| by 2 size |U|, v = 0 at +U
+    const float p[3] = {1, 2, 3}, r[3] = {0.5f, 0, 0}, u[3] = {0, 0, 0.25f};
+    const float want[4][3] = {{0, 2, 3.5f}, {0, 2, 2.5f}, {2, 2, 2.5f}, {2, 2, 3.5f}};
+    const float want_uv[4][2] = {{0, 0}, {0, 1}, {1, 1}, {1, 0}};
+    for (int k = 0; k < 4; k++) {
+        float out[3], uv[2];
+        ParticleCorner(p, r, u, 2, 0, 0, k, out, uv);
+        for (int i = 0; i < 3; i++) CHECK(out[i] == doctest::Approx(want[k][i]));
+        CHECK(uv[0] == want_uv[k][0]);
+        CHECK(uv[1] == want_uv[k][1]);
+    }
+
+    // against the instructions, over angles past +-pi, swing arms and axes
+    // that aren't the camera's
+    uint32_t seed = 12345;
+    auto rnd = [&](float lo, float hi) {
+        seed = seed * 1664525u + 1013904223u;
+        return lo + (hi - lo) * float(seed >> 8) / float(1u << 24);
+    };
+    for (int trial = 0; trial < 200; trial++) {
+        float pp[3], rr[3], uu[3];
+        for (int i = 0; i < 3; i++) {
+            pp[i] = rnd(-100, 100);
+            rr[i] = rnd(-1, 1);
+            uu[i] = rnd(-1, 1);
+        }
+        const float size = rnd(0, 10), angle = rnd(-20, 20), swing = rnd(-3, 3);
+        for (int k = 0; k < 4; k++) {
+            float out[3], uv[2], ref[3];
+            ParticleCorner(pp, rr, uu, size, angle, swing, k, out, uv);
+            ParticleCornerUcode(pp, rr, uu, size, angle, swing, uv[0], uv[1], ref);
+            for (int i = 0; i < 3; i++) CHECK(out[i] == doctest::Approx(ref[i]).epsilon(1e-4));
+        }
+    }
 }

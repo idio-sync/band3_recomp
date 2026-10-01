@@ -173,8 +173,14 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
         default: break;
     }
     if (particles) {
-        // colour = vertex colour times c0 (the particle VS), no ambient
-        sp.ambient = {1, 1, 1, 1};
+        // colour = vertex colour times VS c1 times c0 (the particle VS,
+        // 2E5F05321D973646 instrs 82 and 84; its PS is texture times that):
+        // c1 is the ambient colour the draw was given, which tints fog and
+        // smoke (the spotlight drawer's: green at the intro, blue in the
+        // arena, out/research/spotlight_survey.md 3). The VS's own registers,
+        // as the PS doesn't read them.
+        Copy(s->Vs(0), sp.color);
+        Copy(s->Vs(1), sp.ambient);
     }
     const bool lit = !particles && (s->Option(kRealLights) || s->Option(kApproxLights));
     if (!o.lighting || !lit) {

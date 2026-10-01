@@ -98,6 +98,8 @@ constexpr uint32_t kPart_Mat = 0x1d4 + 8;  // ObjPtr<RndMat>
 constexpr uint32_t kParticle_Color = 0x0;
 constexpr uint32_t kParticle_Pos = 0x20;
 constexpr uint32_t kParticle_Size = 0x48;
+constexpr uint32_t kParticle_Angle = 0x50;
+constexpr uint32_t kParticle_SwingArm = 0x54;
 constexpr uint32_t kParticle_Next = 0x5c;
 constexpr uint32_t kMaxParticles = 16000;  // four verts each, u16 indices
 // Hmx::Object's name (obj/Object.h)
@@ -1202,7 +1204,9 @@ void CaptureMultiMesh(uint8_t* base, uint32_t multimesh) {
     sink->fc.multimesh_instances += n;
 }
 
-// DxParticleSys's vertex fill: one camera-facing quad per active particle
+// DxParticleSys's vertex fill: one quad per active particle, built as the
+// particle VS builds it from the one vertex DrawParticles writes per particle
+// (position, colour, size, angle, swing arm: ParticleCorner)
 void CaptureParticles(uint8_t* base, uint32_t sys) {
     State& s = S();
     const Guest g{base};
@@ -1210,8 +1214,29 @@ void CaptureParticles(uint8_t* base, uint32_t sys) {
     std::optional<Sink> sink;
     if (!mat || !g.U32(sys + kPart_NumActive) || !s.cam || !Target(g, s, sink)) return;
 
-    // the camera's right (x) and up (z) axes; Milo cameras look down +y
+    // the camera's right (x) and up (z) axes; Milo cameras look down +y. The
+    // quad's own are VS c47 and c48, which DxParticleSys::DrawShowing sets
+    // before DrawParticles draws: the camera's axes as it transforms them,
+    // scaled by half, the up axis by a float of the system's too (+0x2c0),
+    // so c48 is 0.15..0.5 long where c47 is 0.5 in the draws seen. The
+    // camera's halved without a device.
     const Mat4 cam = ReadXfm(g, s.cam + kTrans_WorldXfm);
+    float right[3], up[3];
+    for (int i = 0; i < 3; i++) {
+        right[i] = cam.m[0][i] * 0.5f;
+        up[i] = cam.m[2][i] * 0.5f;
+    }
+    if (const uint32_t dev = g.U32(kD3DDeviceHolder)) {
+        for (int i = 0; i < 3; i++) {
+            right[i] = g.F32(dev + kDev_VertexShaderF + 47 * 16 + i * 4);
+            up[i] = g.F32(dev + kDev_VertexShaderF + 48 * 16 + i * 4);
+        }
+        // Not modelled, 0 in every draw seen: c49.x, set from the system's
+        // byte +0x2b8, which also has DrawParticles write the particle's
+        // velocity in place of its angle and swing arm, for the VS to stretch
+        // the quad along it (instrs 29-60), and c49.z, which clamps the
+        // stretched size on that path.
+    }
     auto geom = std::make_shared<Geometry>();
     uint32_t n = 0;
     for (uint32_t p = g.U32(sys + kPart_Active); p && n < kMaxParticles;
@@ -1220,20 +1245,16 @@ void CaptureParticles(uint8_t* base, uint32_t sys) {
         for (int i = 0; i < 3; i++) pos[i] = g.F32(p + kParticle_Pos + i * 4);
         for (int i = 0; i < 4; i++)
             col[i] = std::clamp(g.F32(p + kParticle_Color + i * 4), 0.0f, 1.0f);
-        const float half = g.F32(p + kParticle_Size) * 0.5f;
+        const float size = g.F32(p + kParticle_Size);
+        const float angle = g.F32(p + kParticle_Angle);
+        const float swing = g.F32(p + kParticle_SwingArm);
         uint32_t rgba = 0;
         for (int i = 0; i < 4; i++) rgba |= uint32_t(col[i] * 255.0f + 0.5f) << (8 * i);
-        const float corner[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
-        const float uv[4][2] = {{0, 1}, {1, 1}, {1, 0}, {0, 0}};
         const uint16_t first = uint16_t(geom->verts.size());
         for (int k = 0; k < 4; k++) {
             Vertex v{};
-            for (int i = 0; i < 3; i++) {
-                v.pos[i] = pos[i] + (cam.m[0][i] * corner[k][0] + cam.m[2][i] * corner[k][1]) * half;
-                v.nrm[i] = -cam.m[1][i];
-            }
-            v.uv[0] = uv[k][0];
-            v.uv[1] = uv[k][1];
+            ParticleCorner(pos, right, up, size, angle, swing, k, v.pos, v.uv);
+            for (int i = 0; i < 3; i++) v.nrm[i] = -cam.m[1][i];
             v.color = rgba;
             geom->verts.push_back(v);
         }
