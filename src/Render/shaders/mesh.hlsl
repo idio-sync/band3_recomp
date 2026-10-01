@@ -38,6 +38,10 @@ VK_BINDING(0, 1) cbuffer VertexUniforms : register(b0, space1) {
     uint bone_base;
     uint bone_count;
     uint vertex_pad;
+    // added to the clip position's x, y times its w: (1/width, -1/height) of
+    // the viewport, half a pixel right and down, for a draw on D3D9's pixel
+    // centres (soft_raster.cpp's PixelCentre); 0 for DrawRect's quads
+    float4 clip_offset;
     ShadeParams vs_shade;  // the texture's transform, and a vertex-lit draw's light
 };
 
@@ -151,7 +155,10 @@ PixelIn VSMain(VertexIn v) {
         wn = mul(float4(v.nrm, 0), world).xyz;
         wd = mul(float4(dir, 0), world).xyz;
     }
-    const float4 clip = mul(float4(wp, 1), view_proj);
+    float4 clip = mul(float4(wp, 1), view_proj);
+    // the pixel this pipeline samples at x + .5 then sees what the game's
+    // sampled at x
+    clip.xy += clip_offset.xy * clip.w;
     PixelIn o;
     // depth is kNearW / w, the CPU's 1/w scaled: z/w interpolates as 1/w does,
     // larger is nearer, the near plane is w = kNearW and there's no far plane,
@@ -210,7 +217,9 @@ float4 PSMain(PixelIn i) : SV_Target0 {
 // at SpotGoboCoord's (nearest, clamped; 1 untextured), the density map
 // bilinear. Alpha 0, which the Add pipeline leaves as the clear's.
 float4 PSSpotCone(PixelIn i) : SV_Target0 {
-    const float2 uv = (i.pos.xy - spot_viewport.xy) * spot_viewport.zw;
+    // SV_Position is the pixel's centre, half a pixel past where the game's
+    // sampled it (VSMain's clip_offset)
+    const float2 uv = (i.pos.xy - 0.5 - spot_viewport.xy) * spot_viewport.zw;
     const uint2 size = spot_sizes.xy;
     const uint2 at = min(uint2(saturate(uv) * float2(size)), size - 1);
     const float inv_w = scene_depth_tex.Load(int3(at, 0)) / kNearW;

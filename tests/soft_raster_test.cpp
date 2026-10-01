@@ -5,9 +5,10 @@
 // before post_boundary, leave their alpha (the bloom weight) and depth in the
 // scene target as RB3's back buffer has them, under the overlay's; that a
 // draw culls the triangles its cull mode says (an outline's near side);
-// that PreMultAlpha (blend 7) blends as RB3 sets it, ONE INVSRCALPHA; and
-// that a REFRACT_WORLD draw over the overlay reads the picture as the resolve
-// left it.
+// that PreMultAlpha (blend 7) blends as RB3 sets it, ONE INVSRCALPHA; that
+// a REFRACT_WORLD draw over the overlay reads the picture as the resolve
+// left it; and that a mesh's edges land on the pixels the game's do (D3D9's
+// pixel centres), a DrawRect quad's on D3D10's.
 
 #include <doctest/doctest.h>
 #include <cstring>
@@ -28,14 +29,16 @@ Mat4 Identity() {
     return m;
 }
 
-// a quad from x0 to x1 in clip space, full height, uv 0..1, in one colour
-std::shared_ptr<const Geometry> Quad(float x0, float x1, uint32_t color) {
+// a quad from x0 to x1 in clip space, full height unless y0 (its top) and
+// y1 say, uv 0..1, in one colour
+std::shared_ptr<const Geometry> Quad(float x0, float x1, uint32_t color, float y0 = 1,
+                                     float y1 = -1) {
     auto g = std::make_shared<Geometry>();
     const float corner[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
     for (const auto& c : corner) {
         Vertex v{};
         v.pos[0] = x0 + c[0] * (x1 - x0);
-        v.pos[1] = 1.0f - c[1] * 2.0f;
+        v.pos[1] = y0 + c[1] * (y1 - y0);
         v.uv[0] = c[0];
         v.uv[1] = c[1];
         v.color = color;
@@ -398,4 +401,44 @@ TEST_CASE("a REFRACT_WORLD draw in the overlay is its colour times the picture b
     f.post_boundary = 3;
     Rasterize(f, Small(), rgba);
     CHECK(rgba[1 * 8 + 3] == 0xff808080u);
+}
+
+TEST_CASE("a mesh's edges land on the game's pixels, D3D9's; a DrawRect quad's on D3D10's") {
+    // RB3's device samples pixel x at x (HalfPixelOffset off): a quad from
+    // the screen's left edge to x 2.25 and from y 1.25 down covers columns 0
+    // to 2 and rows 2 and 3, where D3D10's centres (x + .5) would give it
+    // columns 0 and 1 and rows 1 to 3
+    auto at = [](float px, float size) { return px / size * 2.0f - 1.0f; };
+    FrameCapture f;
+    f.draws = {Item(Quad(-1, at(2.25f, 8), kRed, 1.0f - 1.25f / 4 * 2, -1), 0)};
+    f.passes = {BackBuffer(0, 1)};
+    std::vector<uint32_t> rgba;
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[2 * 8 + 2] == kRed);
+    CHECK(rgba[2 * 8 + 3] != kRed);
+    CHECK(rgba[1 * 8 + 0] != kRed);
+    CHECK(rgba[3 * 8 + 0] == kRed);
+
+    // an edge on a pixel's centre is the right quad's only (the top-left
+    // rule: its left edge): two quads meeting at x 3 add there once
+    DrawItem left = Item(Quad(-1, at(3, 8), 0xff404040u), 0);
+    DrawItem right = Item(Quad(at(3, 8), 1, 0xff404040u), 0);
+    left.blend = right.blend = 2;  // Add, over the clear's grey 0x20
+    f.draws = {left, right};
+    f.passes = {BackBuffer(0, 2)};
+    Rasterize(f, Small(), rgba);
+    for (int x = 0; x < 8; x++) CHECK(rgba[1 * 8 + x] == 0xff606060u);
+
+    // DrawRect's quads sample at .5 (HalfPixelOffset on): a rect from 0 to
+    // 1.25 into the 4x4 texture is its first column only
+    FrameCapture r;
+    DrawItem rect = Item(Quad(-1, at(1.25f, 4), kRed), kTex);
+    rect.rect_shader = 6;
+    r.draws = {rect};
+    r.passes = {TexturePass(0, 1)};
+    std::vector<uint32_t> tex;
+    uint32_t w = 0, h = 0;
+    REQUIRE(RasterizeTarget(r, Small(), kTex, 1, tex, w, h));
+    CHECK(tex[1 * 4 + 0] == kRed);
+    CHECK(tex[1 * 4 + 1] == 0);
 }

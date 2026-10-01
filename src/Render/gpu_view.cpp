@@ -64,9 +64,22 @@ struct VertexUniforms {
     uint32_t bone_base;
     uint32_t bone_count;
     uint32_t pad;
+    float clip_offset[4];  // ClipOffset's
     shade::ShadeParams shade;
 };
-static_assert(sizeof(VertexUniforms) == 144 + sizeof(shade::ShadeParams));
+static_assert(sizeof(VertexUniforms) == 160 + sizeof(shade::ShadeParams));
+
+// What mesh.hlsl adds to a draw's clip x, y (times w) in a viewport vw x vh:
+// half a pixel right and down, so that the pixel SDL_gpu samples at its
+// centre, x + .5, sees what the game's device sampled at x, on D3D9's pixel
+// centres; none for DrawRect's quads, which RB3 draws on D3D10's
+// (soft_raster.cpp's PixelCentre)
+void ClipOffset(const DrawItem& it, float vw, float vh, float out[4]) {
+    const bool rect = it.rect_shader >= 0;
+    out[0] = rect ? 0.0f : 1.0f / vw;
+    out[1] = rect ? 0.0f : -1.0f / vh;
+    out[2] = out[3] = 0.0f;
+}
 
 struct PixelUniforms {
     shade::ShadeParams shade;
@@ -1431,6 +1444,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
         dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
         begin_pass(ct, dt);
+        // SDL_gpu's default viewport, all of the target, which the back
+        // buffer's draws keep
+        bound_viewport[2] = float(width);
+        bound_viewport[3] = float(height);
         back_begun = true;
         depth_fresh = clear_depth;
     };
@@ -1673,6 +1690,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             vu.bone_base = bone_base[d];
             vu.bone_count = uint32_t(it.bones.size());
         }
+        ClipOffset(it, bound_viewport[2], bound_viewport[3], vu.clip_offset);
         vu.shade = sp;
         SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
         PixelUniforms pu{};

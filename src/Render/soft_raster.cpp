@@ -128,7 +128,19 @@ struct DrawState {
     bool z_equal_passes;
     bool z_write;
     uint8_t cull;  // DrawItem::cull, 0 with RasterOptions::culling off
+    // where in a pixel it samples (PixelCentre)
+    float centre;
 };
+
+// Where a draw samples pixel x: at x + PixelCentre in the target's pixels
+// (the viewport maps clip -1..1 to its edges). RB3 draws with D3D9's pixel
+// centres, on the integers (the 360's HalfPixelOffset render state off,
+// PA_SU_VTX_CNTL's pix_center kD3DZero), but its DrawRect quads with the
+// state on, at .5 as D3D10's are (rb3-xenon rnddx9/Rnd.cpp's DrawRect): their
+// rects are in pixels, edge to edge. gpu_view.cpp moves a mesh draw's clip
+// position half a pixel right and down instead (mesh.hlsl's VSMain), which
+// lands it on the same pixels.
+float PixelCentre(const DrawItem& it) { return it.rect_shader >= 0 ? 0.5f : 0.0f; }
 
 // nearest texel, wrapping; mesh.hlsl's Texel does the same arithmetic
 void Texel(const TexView& t, const float uv[2], float out[4]) {
@@ -168,11 +180,12 @@ void SampleLinear(const TexView& t, float u, float v, float out[4]) {
 // A spotlight cone's colour at pixel x, y of the depth volume, wp the
 // proxy's world position there and w its clip w (spot_model.hlsli's
 // SpotCone). The shader takes where the pixel is on the screen from its clip
-// position, and reads the scene's depth there point-sampled, the density
-// map bilinear.
+// position, where the pixel samples it (DrawState::centre), and reads the
+// scene's depth there point-sampled, the density map bilinear.
 void SpotPixel(const DrawState& ds, const Target& t, int x, int y, const float wp[3], float w,
                float out[4]) {
-    const float u = (float(x) + 0.5f - t.vx) / t.vw, v = (float(y) + 0.5f - t.vy) / t.vh;
+    const float u = (float(x) + ds.centre - t.vx) / t.vw;
+    const float v = (float(y) + ds.centre - t.vy) / t.vh;
     float inv_w = 0;
     if (t.scene_depth) {
         const uint32_t sx = std::min(uint32_t(std::clamp(u, 0.0f, 1.0f) * float(t.scene_w)),
@@ -291,9 +304,9 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
     const bool own0 = owns(1, 2), own1 = owns(2, 0), own2 = owns(0, 1);
 
     for (int y = int(min_y); y <= int(max_y); y++) {
-        const float py = float(y) + 0.5f;
+        const float py = float(y) + ds.centre;
         for (int x = int(min_x); x <= int(max_x); x++) {
-            const float px = float(x) + 0.5f;
+            const float px = float(x) + ds.centre;
             const float l0 = ((sx[2] - sx[1]) * (py - sy[1]) - (sy[2] - sy[1]) * (px - sx[1])) * inv_area;
             const float l1 = ((sx[0] - sx[2]) * (py - sy[2]) - (sy[0] - sy[2]) * (px - sx[2])) * inv_area;
             const float l2 = ((sx[1] - sx[0]) * (py - sy[0]) - (sy[1] - sy[0]) * (px - sx[0])) * inv_area;
@@ -430,6 +443,7 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     DrawState ds;
     ds.index = index;
     ds.cull = o.culling ? it.cull : 0;
+    ds.centre = PixelCentre(it);
     ds.tex = Diffuse(it, o, rts, t, st);
     // a cone shades only into a texture: the depth volume
     ds.spot = t.tex_obj && IsSpotCone(it, state) && spot::PackSpot(*state, t.w, t.h, ds.spot_params);
