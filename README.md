@@ -341,17 +341,19 @@ value), `rb3e_local_ip`, `rb3e_api_version` (0, the RB3E API band3 follows),
 `rb3e_build_tag`, `rb3e_commit`, `rb3e_is_emulator` (1), `rb3e_send_event_string`,
 `rb3e_change_music_speed`, `rb3e_change_track_speed` and their `rb3e_get_` pairs (the
 `song_speed` and `track_speed` settings, for this session) and
-`print_debug`, which logs its argument. `rb3e_relaunch_game` and `rb3e_delete_songcache`
-log that band3 can't do that yet and return 0. With `http_allow_scripts` on, the web
+`print_debug`, which logs its argument. `rb3e_relaunch_game` starts band3 again with
+the same command line (a minimized test run stays minimized; the new one waits for this
+one to close) and closes this one. `rb3e_delete_songcache` deletes the song cache the
+game mounted (`songcache`, or Deluxe's `rbdxcache`, in the user data root) the next
+time band3 starts, since the game has it open. With `http_allow_scripts` on, the web
 server's `/execute` runs them, e.g. `{print_debug {rb3e_get_song_name 1009}}`.
 
 Rock Band 3 Deluxe only uses them when its scripts see `RB3E` defined, as RB3E's
 loader does. Turn on `rb3e_mode` (Band3 → Integrations, then restart) for band3 to
 define `RB3E` and `RB3E_HAS_VERSION`: Deluxe then shows its RB3E version line,
 offers its party mode (which shows this PC's address for the web page above) and
-looks songs up through these functions. Its "Clear and reboot game" after a Deluxe
-update fails, though, since band3 can't delete the song cache or relaunch itself yet,
-so `rb3e_mode` is off by default until it can.
+looks songs up through these functions, and its "Clear and reboot game" after a
+Deluxe update clears the song cache and restarts band3.
 
 band3 also adds RB3E's six modifiers to the game's (Options → Modifiers, and Deluxe's
 menus), with or without `rb3e_mode`: Black Background (no venue), Force HOPOs, Mirror

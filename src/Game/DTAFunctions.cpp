@@ -9,7 +9,9 @@
 
 #include "generated/band3_init.h"
 #include "src/Net/events.h"
+#include "src/Game/SongCache.h"
 #include "src/Net/local_address.h"
+#include "src/relaunch.h"
 #include "src/settings.h"
 #include "SongMgr.h"
 
@@ -170,23 +172,24 @@ static void CommitHandler(PPCContext& ctx, uint8_t* base) {
     ReturnSymbol(ctx, base, "unknown", "unknown");
 }
 
-// {rb3e_is_emulator}: 1 on Xenia and Dolphin, where RB3E leaves out what only
-// works on a console (relaunching the game, its content APIs). band3 isn't
-// one either.
+// {rb3e_is_emulator}: 1 on Xenia and Dolphin, RB3E's "not a console"; band3
+// isn't one either.
 static void IsEmulatorHandler(PPCContext& ctx, uint8_t* base) { ReturnInt(ctx, base, 1); }
 
-// {rb3e_relaunch_game}: RB3E restarts default.xex; band3 can't restart itself
-// yet, so it says so and returns 0, as RB3E does when it can't
+// {rb3e_relaunch_game}: starts band3 again and closes this one, as RB3E
+// relaunches the game's executable; returns 0 only when it couldn't
 static void RelaunchGameHandler(PPCContext& ctx, uint8_t* base) {
-    REXLOG_WARN("rb3e_relaunch_game: band3 can't relaunch the game yet; restart it yourself");
     ReturnInt(ctx, base, 0);
+    if (band3::relaunch::StartAgain()) {
+        // doesn't return on a guest thread
+        rex::system::kernel_state()->TerminateTitle();
+    }
 }
 
-// {rb3e_delete_songcache}: RB3E deletes the song cache it saw mounted; band3
-// doesn't track it yet, so nothing is deleted and it returns 0 (failed)
+// {rb3e_delete_songcache}: deletes the song cache the game mounted, at the
+// next start (the game has it open); 1 when there was one, as on RB3E
 static void DeleteSongCacheHandler(PPCContext& ctx, uint8_t* base) {
-    REXLOG_WARN("rb3e_delete_songcache: band3 can't delete the song cache yet");
-    ReturnInt(ctx, base, 0);
+    ReturnInt(ctx, base, band3::song_cache::RequestDelete() ? 1 : 0);
 }
 
 // {rb3e_get_song_count}: the songs in the library, as the Music Library counts

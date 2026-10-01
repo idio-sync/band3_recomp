@@ -14,9 +14,11 @@
 
 #include "config.h"
 #include "game_writes.h"
+#include "relaunch.h"
 #include "settings.h"
 #include "steam_deck.h"
 #include "Audio/usb_mic_capture.h"
+#include "Game/SongCache.h"
 #include "Input/input_system.h"
 #include "Input/instrument_lab.h"
 #include "Input/menu_shortcut_dialog.h"
@@ -75,6 +77,8 @@ class Band3App : public rex::ReXApp {
   // the window and input system don't exist yet, so everything set here applies
   // at startup
   void OnPostInitLogging() override {
+    // a relaunch (rb3e_relaunch_game) starts before the last run has closed
+    band3::relaunch::WaitForPrevious();
     // before the ini, so a desktop ini's window settings don't undo them
     band3::steam_deck::ApplyDefaults();
     band3::ApplyLegacyIni();
@@ -111,6 +115,8 @@ class Band3App : public rex::ReXApp {
   // before the game starts, so its mic threads find the microphones running
   // and its first file opens find game:\ writable
   void OnPostSetup() override {
+    // a song cache rb3e_delete_songcache marked, before the game mounts it
+    band3::song_cache::DeletePending(runtime()->user_data_root());
     band3::MountGameWrites(*runtime());
     band3::discord::Start();
     band3::audio::StartUsbMics();

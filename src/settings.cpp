@@ -227,8 +227,8 @@ REXCVAR_DEFINE_BOOL(http_allow_scripts, false, "Band3/Integrations",
 
 REXCVAR_DEFINE_BOOL(rb3e_mode, false, "Band3/Integrations",
     "Tell the game's scripts RB3Enhanced is running (they see RB3E and RB3E_HAS_VERSION "
-    "defined), so Rock Band 3 Deluxe turns on its RB3E features. One isn't in band3 yet: "
-    "clearing the song cache and rebooting after a Deluxe update fails")
+    "defined), so Rock Band 3 Deluxe turns on its RB3E features: its version line, party "
+    "mode, song lookups, and clearing the song cache and restarting after an update")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 // Band3/Debug
@@ -277,6 +277,10 @@ REXCVAR_DEFINE_INT32(test_random_seed, 0, "Band3/Debug",
     "profile gets the same band on every launch, for render checks")
     .range(0, 2147483647)
     .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_INT32(relaunch_wait_pid, 0, "Band3/Debug",
+    "Set by band3 when it relaunches itself (rb3e_relaunch_game): the new one waits for "
+    "this process to close before starting. Cleared once it has");
 
 REXCVAR_DEFINE_STRING(native_view_backend, "gpu", "Band3/Debug",
     "What draws the native view (F7, experimental): gpu, or cpu for the reference "

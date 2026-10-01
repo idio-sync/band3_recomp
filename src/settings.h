@@ -69,6 +69,7 @@ REXCVAR_DECLARE(std::string, virtual_instrument_type);
 REXCVAR_DECLARE(int32_t, virtual_instrument_player);
 REXCVAR_DECLARE(int32_t, test_port);
 REXCVAR_DECLARE(int32_t, test_random_seed);
+REXCVAR_DECLARE(int32_t, relaunch_wait_pid);
 REXCVAR_DECLARE(std::string, native_view_backend);
 REXCVAR_DECLARE(bool, native_view_record_targets);
 REXCVAR_DECLARE(std::string, native_view_rt_fallback);
