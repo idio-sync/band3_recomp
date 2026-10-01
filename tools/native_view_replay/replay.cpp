@@ -2,7 +2,7 @@
 //
 //   replay <file.cap> <out.png> [--size WxH] [--cam N] [--per-cam] [--list]
 //                               [--compare <screenshot.png> [--image <native.png>]]
-//                               [--diff <native.png>] [--mesh <hex>]
+//                               [--diff <native.png>] [--crop x,y,w,h] [--mesh <hex>]
 //                               [--dump-tex <draw>] [--shade <draw>]
 //                               [--dump-rt <hex>[:<version>]]
 //                               [--rt-none | --rt-guest]
@@ -38,9 +38,15 @@
 // difference; with --image the native side is that PNG instead (a harness
 // capture's <name>.gpu.png, the GPU backend's picture). --diff draws the frame
 // on the CPU at that PNG's size into out.png and prints their mean difference,
-// to check the GPU backend against the CPU's reference. --legacy-light draws
-// with the placeholder lighting from before the game's shading, --no-light
-// with none (every material unlit). --no-cull draws both sides of every
+// to check the GPU backend against the CPU's reference. Both follow it with a
+// "metrics:" line (out/research/parity_plan.md; tools/parity.py reads it): the
+// mean to three places, the % of pixels whose largest channel is off by more
+// than 8, 32 and 64, that difference's p50/p90/p99, the worst mean of a 4x4
+// grid's cells and the signed mean (native minus the reference, over RGB).
+// --crop x,y,w,h (in the compared PNG's pixels) measures that rectangle alone,
+// the mean too: a HUD element, say. --legacy-light draws with the placeholder
+// lighting from before the game's shading, --no-light with none (every
+// material unlit). --no-cull draws both sides of every
 // triangle, as the native view did before it culled as the game does (the
 // cull mode --list prints, scene_capture.h's DrawItem::cull). --pick draws the frame at --size and
 // prints the draw that last wrote pixel X,Y, its colour and its shade.
@@ -107,6 +113,104 @@ struct CamStats {
     int inside[2] = {0, 0};
     Mat4 vp;
 };
+
+// a rectangle of the compared pictures, in their pixels (--crop); w 0 is all
+struct Crop {
+    uint32_t x = 0, y = 0, w = 0, h = 0;
+};
+
+// How far a native picture is from a reference, over the pixels of `crop`
+// both have, every `step`th in x and y (--compare halves the screenshot):
+// the mean of |native - reference| over RGB, which the pictures' "mean
+// difference" lines print, and out/research/parity_plan.md's metrics
+struct DiffStats {
+    size_t pixels = 0;
+    double mean = 0;
+    double signed_mean = 0;            // native - reference, over RGB
+    double over8 = 0, over32 = 0, over64 = 0;  // % of pixels, by their largest channel
+    int p50 = 0, p90 = 0, p99 = 0;     // of the largest channel's difference
+    double worst_cell = 0;             // the worst of a 4x4 grid's cells' means
+    int worst_cx = 0, worst_cy = 0;
+};
+
+DiffStats Measure(const std::vector<uint32_t>& ref, const std::vector<uint32_t>& native,
+                  uint32_t width, uint32_t height, uint32_t step, Crop crop) {
+    if (!crop.w || !crop.h) crop = {0, 0, width, height};
+    // only the sampled pixels inside both the crop and the picture
+    const uint32_t x_end = std::min(crop.x + crop.w, width / step * step);
+    const uint32_t y_end = std::min(crop.y + crop.h, height / step * step);
+    const uint32_t x0 = (crop.x + step - 1) / step * step, y0 = (crop.y + step - 1) / step * step;
+    DiffStats s;
+    double sum = 0, signed_sum = 0;
+    size_t over[3] = {0, 0, 0};
+    size_t hist[256] = {};
+    double cell_sum[4][4] = {};
+    size_t cell_n[4][4] = {};
+    for (uint32_t y = y0; y < y_end; y += step) {
+        const uint32_t cy = std::min(3u, (y - crop.y) * 4 / crop.h);
+        for (uint32_t x = x0; x < x_end; x += step) {
+            const uint32_t cx = std::min(3u, (x - crop.x) * 4 / crop.w);
+            const uint32_t a = ref[size_t(y) * width + x], b = native[size_t(y) * width + x];
+            int most = 0, abs_sum = 0;
+            for (int c = 0; c < 3; c++) {
+                const int d = int((b >> (8 * c)) & 0xff) - int((a >> (8 * c)) & 0xff);
+                signed_sum += d;
+                abs_sum += std::abs(d);
+                most = std::max(most, std::abs(d));
+            }
+            sum += abs_sum;
+            cell_sum[cy][cx] += abs_sum;
+            cell_n[cy][cx]++;
+            hist[most]++;
+            if (most > 8) over[0]++;
+            if (most > 32) over[1]++;
+            if (most > 64) over[2]++;
+            s.pixels++;
+        }
+    }
+    if (!s.pixels) return s;
+    const double n = double(s.pixels);
+    s.mean = sum / (n * 3);
+    s.signed_mean = signed_sum / (n * 3);
+    s.over8 = 100.0 * double(over[0]) / n;
+    s.over32 = 100.0 * double(over[1]) / n;
+    s.over64 = 100.0 * double(over[2]) / n;
+    // the smallest difference that many of the pixels are within
+    auto percentile = [&](double p) {
+        size_t seen = 0;
+        for (int v = 0; v < 256; v++) {
+            seen += hist[v];
+            if (double(seen) >= p * n) return v;
+        }
+        return 255;
+    };
+    s.p50 = percentile(0.5);
+    s.p90 = percentile(0.9);
+    s.p99 = percentile(0.99);
+    for (int cy = 0; cy < 4; cy++) {
+        for (int cx = 0; cx < 4; cx++) {
+            if (!cell_n[cy][cx]) continue;
+            const double m = cell_sum[cy][cx] / (double(cell_n[cy][cx]) * 3);
+            if (m > s.worst_cell) {
+                s.worst_cell = m;
+                s.worst_cx = cx;
+                s.worst_cy = cy;
+            }
+        }
+    }
+    return s;
+}
+
+// the line after a "mean difference" one (tools/parity.py reads both)
+void PrintDiffStats(const DiffStats& s, const Crop& crop) {
+    std::printf("  metrics: %zu pixels", s.pixels);
+    if (crop.w && crop.h)
+        std::printf(" in crop %u,%u %ux%u", crop.x, crop.y, crop.w, crop.h);
+    std::printf("; mean %.3f; >8 %.2f%% >32 %.2f%% >64 %.2f%%; p50 %d p90 %d p99 %d; "
+                "worst cell %.2f (%d,%d of 4x4); signed %+.2f\n",
+                s.mean, s.over8, s.over32, s.over64, s.p50, s.p90, s.p99, s.worst_cell, s.worst_cx,
+                s.worst_cy, s.signed_mean);
+}
 
 void PrintMat(const Mat4& m) {
     for (int i = 0; i < 4; i++)
@@ -503,6 +607,7 @@ int main(int argc, char** argv) {
     RasterOptions o;
     bool transpose = false, per_cam = false, list = false, no_skinned = false, only_skinned = false;
     std::string compare, image, diff_with, dump_alpha, dump_depth;
+    Crop crop;
     long mesh_filter = -1, dump_tex = -1, shade_draw = -1;
     uint32_t dump_rt = 0, dump_rt_version = 0;
     int pick_x = -1, pick_y = -1;
@@ -515,6 +620,13 @@ int main(int argc, char** argv) {
         else if (a == "--compare" && i + 1 < argc) compare = argv[++i];
         else if (a == "--image" && i + 1 < argc) image = argv[++i];
         else if (a == "--diff" && i + 1 < argc) diff_with = argv[++i];
+        else if (a == "--crop" && i + 1 < argc) {
+            if (std::sscanf(argv[++i], "%u,%u,%u,%u", &crop.x, &crop.y, &crop.w, &crop.h) != 4 ||
+                !crop.w || !crop.h) {
+                std::fprintf(stderr, "--crop takes x,y,w,h\n");
+                return 2;
+            }
+        }
         else if (a == "--mesh" && i + 1 < argc) mesh_filter = std::strtol(argv[++i], nullptr, 16);
         else if (a == "--dump-tex" && i + 1 < argc) dump_tex = std::strtol(argv[++i], nullptr, 0);
         else if (a == "--shade" && i + 1 < argc) shade_draw = std::strtol(argv[++i], nullptr, 0);
@@ -821,20 +933,19 @@ int main(int argc, char** argv) {
         }
         const uint32_t hw = sw / 2, hh = sh / 2;
         std::vector<uint32_t> side(size_t(hw) * 2 * hh);
-        double diff = 0;
         for (uint32_t y = 0; y < hh; y++) {
             for (uint32_t x = 0; x < hw; x++) {
-                const uint32_t a = shot[size_t(y * 2) * sw + x * 2];
-                const uint32_t b = native[size_t(y * 2) * sw + x * 2];
-                side[size_t(y) * hw * 2 + x] = a | 0xff000000u;
-                side[size_t(y) * hw * 2 + hw + x] = b | 0xff000000u;
-                for (int c = 0; c < 3; c++)
-                    diff += std::abs(int((a >> (8 * c)) & 0xff) - int((b >> (8 * c)) & 0xff));
+                side[size_t(y) * hw * 2 + x] = shot[size_t(y * 2) * sw + x * 2] | 0xff000000u;
+                side[size_t(y) * hw * 2 + hw + x] =
+                    native[size_t(y * 2) * sw + x * 2] | 0xff000000u;
             }
         }
         WritePng(argv[2], side, hw * 2, hh);
+        // over the pixels the halved picture shows
+        const DiffStats ds = Measure(shot, native, sw, sh, 2, crop);
         std::printf("%s: game | native, %s; mean difference %.1f of 255\n", argv[2],
-                    drawn.c_str(), diff / (double(hw) * hh * 3));
+                    drawn.c_str(), ds.mean);
+        PrintDiffStats(ds, crop);
         return 0;
     }
     if (!diff_with.empty()) {
@@ -849,22 +960,13 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> cpu;
         const RasterStats rs = rasterize_at(w, h, cpu);
         WritePng(argv[2], cpu, w, h);
-        double diff = 0;
-        size_t differ = 0;
-        for (size_t i = 0; i < cpu.size(); i++) {
-            int most = 0;
-            for (int c = 0; c < 3; c++) {
-                const int d = std::abs(int((cpu[i] >> (8 * c)) & 0xff) -
-                                       int((other[i] >> (8 * c)) & 0xff));
-                diff += d;
-                most = std::max(most, d);
-            }
-            if (most > 8) differ++;
-        }
+        // the CPU's picture is the native one here: signed is it minus the PNG
+        const DiffStats ds = Measure(other, cpu, w, h, 1, crop);
         std::printf("%s: cpu, %u draws, %u texture passes, %u rt missing, %.1f ms; against %s: "
                     "mean difference %.2f of 255, %.2f%% of pixels off by more than 8\n",
                     argv[2], rs.draws, rs.passes, rs.rt_missing, rs.ms, diff_with.c_str(),
-                    diff / (double(cpu.size()) * 3), 100.0 * double(differ) / double(cpu.size()));
+                    ds.mean, ds.over8);
+        PrintDiffStats(ds, crop);
         return 0;
     }
     render(argv[2], cam_filter);
