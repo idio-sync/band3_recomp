@@ -105,8 +105,9 @@ REXCVAR_DEFINE_BOOL(autosave, true, "Band3/Game",
     "from the options menu, e.g. to test with autoplay without touching your profile");
 
 REXCVAR_DEFINE_STRING(content_folders, "songs", "Band3/Game",
-    "Folders RB3 reads DLC and custom songs from, without installing them, separated by '|'. "
-    "Subfolders count too. A relative folder is relative to band3_config.ini's folder")
+    "Folders RB3 reads DLC and custom songs from (Windows for now), without installing them, "
+    "separated by '|'. Subfolders count too. A relative folder is relative to "
+    "band3_config.ini's folder (or the working directory if there is no ini)")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 // Band3/MIDI drums

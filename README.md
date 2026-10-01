@@ -151,12 +151,15 @@ executable.
 
 ### DLC and custom songs
 
-band3 reads DLC and custom songs (Xbox 360 `CON` and `LIVE` packages) straight from the
-folders `content_folders` names (Band3 → Game, or `[game]` in `band3_config.ini`); nothing
-is installed or unpacked, and band3 never writes there. Separate folders with `|`;
+On Windows for now, band3 reads DLC and custom songs (Xbox 360 `CON`, `LIVE` and `PIRS`
+packages, Rock Band and Rock Band 2 DLC included, as RB3 reads them) straight from the
+folders `content_folders` names (Band3 → Game, or `[game]` in `band3_config.ini`);
+nothing is installed or unpacked, and band3 never writes there. Separate folders with `|`;
 subfolders count, and a relative folder is relative to the ini's folder (`songs` beside it
 by default). Changes apply at the next launch. A network folder works, but a local one is
-safer for audio: a song streams from its package while it plays. A custom song whose
+safer for audio: a song streams from its package while it plays. A local folder is also
+faster to read: a large library on a slow network folder can delay the song list on the
+first boot, and one that takes over a minute isn't listed that session. A custom song whose
 `song_id` is text instead of a number gets the number RB3Enhanced gives it (the text's
 CRC-32 mod 9999999, plus 2130000000), so IDs agree with RB3Enhanced's.
 
