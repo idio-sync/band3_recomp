@@ -27,7 +27,8 @@ namespace {
 
 using Export = void(PPCContext&, uint8_t*);
 
-// set before the game makes a content call: OnPostSetup aborts if any is missing
+// set before the game makes a content call: OnPostSetup aborts if any is missing;
+// called as (*p)(ctx, base), which tools/compile_check doesn't take for a guest call
 Export* g_sdk_create_ex = nullptr;
 Export* g_sdk_close = nullptr;
 Export* g_sdk_get_creator = nullptr;
@@ -196,7 +197,7 @@ extern "C" REX_FUNC(XContentCrossTitleCreate) {
 
 extern "C" REX_FUNC(__imp__XamContentCreateEnumerator) {
     const uint32_t user = ctx.r3.u32, device = ctx.r4.u32, type = ctx.r5.u32, flags = ctx.r6.u32;
-    g_sdk_create_enumerator(ctx, base);
+    (*g_sdk_create_enumerator)(ctx, base);
     REXLOG_DEBUG("content: XamContentCreateEnumerator user {} device {} type {} flags {:#x} -> {:#x}",
                  user, device, type, flags, ctx.r3.u32);
 }
@@ -213,7 +214,7 @@ extern "C" REX_FUNC(__imp__XamContentCreateEx) {
     }
     // the SDK's own mount won't replace band3's link for the root
     band3::content::UnmountLiveRoot(root_name);
-    g_sdk_create_ex(ctx, base);
+    (*g_sdk_create_ex)(ctx, base);
     REXLOG_DEBUG("content: CreateEx user {} root '{}' file '{}' type {} flags {:#x} -> {:#x}", user,
                  root_name, file, type, flags & 0xF, ctx.r3.u32);
 }
@@ -225,7 +226,7 @@ extern "C" REX_FUNC(__imp__XamContentClose) {
         REXLOG_DEBUG("content: closed {}", root_name);
         return;
     }
-    g_sdk_close(ctx, base);
+    (*g_sdk_close)(ctx, base);
     REXLOG_DEBUG("content: Close root '{}' -> {:#x}", root_name, ctx.r3.u32);
 }
 
@@ -238,7 +239,7 @@ extern "C" REX_FUNC(__imp__XamContentGetCreator) {
     }
     const std::string file = data ? data->file_name() : std::string();
     const uint32_t type = data ? static_cast<uint32_t>(data->content_type.get()) : 0;
-    g_sdk_get_creator(ctx, base);
+    (*g_sdk_get_creator)(ctx, base);
     REXLOG_DEBUG("content: GetCreator user {} file '{}' type {} -> {:#x}", user, file, type,
                  ctx.r3.u32);
 }
