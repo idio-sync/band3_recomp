@@ -149,26 +149,58 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
     }
 }
 
-// clips against w = kNearW, then draws the fan
+// The clip planes, as distances that are >= 0 inside: the near plane, then a
+// guard band kGuard times the screen's half-size each side. A triangle that
+// crosses the near plane projects up to ~1e9 pixels away, where RasterTri's
+// float edge functions lose the pixel position altogether (stripes and blocks
+// across the screen); clipped to the band, no corner is more than a few
+// thousand pixels out. The band's planes pass through the eye, so clipping to
+// them moves no pixel: they only cut away what's off screen anyway.
+constexpr float kGuard = 8.0f;
+constexpr int kClipPlanes = 5;
+
+float PlaneDist(const ClipVert& v, int plane) {
+    switch (plane) {
+        case 0: return v.p[3] - kNearW;
+        case 1: return kGuard * v.p[3] - v.p[0];
+        case 2: return kGuard * v.p[3] + v.p[0];
+        case 3: return kGuard * v.p[3] - v.p[1];
+        default: return kGuard * v.p[3] + v.p[1];
+    }
+}
+
+// clips against the near plane and the guard band, then draws the fan
 void ClipAndRaster(const ClipVert& a, const ClipVert& b, const ClipVert& c,
                    const DrawState& ds, Target& t, RasterStats& st) {
-    if (a.p[3] >= kNearW && b.p[3] >= kNearW && c.p[3] >= kNearW) {
+    uint32_t outside = 0;
+    for (int p = 0; p < kClipPlanes; p++)
+        if (PlaneDist(a, p) < 0 || PlaneDist(b, p) < 0 || PlaneDist(c, p) < 0) outside |= 1u << p;
+    if (!outside) {
         RasterTri(a, b, c, ds, t, st);
         return;
     }
-    const ClipVert* in[3] = {&a, &b, &c};
-    ClipVert poly[4];
-    int n = 0;
-    for (int i = 0; i < 3; i++) {
-        const ClipVert& cur = *in[i];
-        const ClipVert& nxt = *in[(i + 1) % 3];
-        const bool cur_in = cur.p[3] >= kNearW, nxt_in = nxt.p[3] >= kNearW;
-        if (cur_in) poly[n++] = cur;
-        if (cur_in != nxt_in) {
-            const float tt = (kNearW - cur.p[3]) / (nxt.p[3] - cur.p[3]);
-            poly[n++] = Lerp(cur, nxt, tt);
+    // each plane adds at most one corner
+    ClipVert buf[2][3 + kClipPlanes];
+    buf[0][0] = a;
+    buf[0][1] = b;
+    buf[0][2] = c;
+    int n = 3, cur_buf = 0;
+    for (int p = 0; p < kClipPlanes && n >= 3; p++) {
+        if (!(outside & (1u << p))) continue;
+        const ClipVert* in = buf[cur_buf];
+        ClipVert* out = buf[cur_buf ^ 1];
+        int m = 0;
+        for (int i = 0; i < n; i++) {
+            const ClipVert& cur = in[i];
+            const ClipVert& nxt = in[(i + 1) % n];
+            const float dc = PlaneDist(cur, p), dn = PlaneDist(nxt, p);
+            if (dc >= 0) out[m++] = cur;
+            if ((dc >= 0) != (dn >= 0)) out[m++] = Lerp(cur, nxt, dc / (dc - dn));
         }
+        n = m;
+        cur_buf ^= 1;
     }
+    const ClipVert* poly = buf[cur_buf];
     for (int i = 1; i + 1 < n; i++) RasterTri(poly[0], poly[i], poly[i + 1], ds, t, st);
 }
 
