@@ -9,9 +9,10 @@
 //
 // The formulas are the game's pixel shaders', run in an interpreter against
 // models (out/research/m4_shader_check.md, m4_shaders/check_post.py): the
-// composite 63306D35 and its variants, the bright pass F920AF5C, the 4x
-// downsample 38448F55. What the composite leaves out: soft particles (s4),
-// the overlay (s12), noise and velocity blur, which nothing draws natively yet.
+// composite 63306D35 and its variants (the spotlights' term from 0F105E2D,
+// 6EF4844D and F7E2A8FB), the bright pass F920AF5C, the 4x downsample
+// 38448F55. What the composite leaves out: soft particles (s4), noise and
+// velocity blur, which nothing draws natively yet.
 
 float3 PostXyz(float4 v) { return float3(v.x, v.y, v.z); }
 
@@ -55,11 +56,13 @@ float DofAmount(float4 c24, float depth) {
 }
 
 // The composite's colour, from the scene, its DOF blur, the depth texture's
-// value and bloom's three levels, all at the pixel: the DOF lerp, then bloom
-// screen-blended (or glare added), then the colour matrix, saturated once at
-// the end (its alpha isn't the picture's)
+// value, bloom's three levels, the spotlights' depth volume and the density
+// map's red, all at the pixel: the DOF lerp, then bloom screen-blended (or
+// glare added), then the spotlights' volume added (by c127 and the density,
+// times c91.x), then the colour matrix, saturated once at the end (its alpha
+// isn't the picture's)
 float3 Composite(POST_IN(PostPass) p, float4 scene, float4 dof, float depth, float3 l0, float3 l1,
-                 float3 l2) {
+                 float3 l2, float3 volume, float density) {
     const uint f = p.flags.x;
     float3 rgb = PostXyz(scene);
     if ((f & kPostDof) != 0u) rgb = lerp(rgb, PostXyz(dof), DofAmount(p.c24, depth));
@@ -70,6 +73,7 @@ float3 Composite(POST_IN(PostPass) p, float4 scene, float4 dof, float depth, flo
                      1.0f - (1.0f - rgb.z) * (1.0f - b.z));
     }
     if ((f & kPostGlare) != 0u) rgb = rgb + l0 * c6 * 0.5f;
+    if ((f & kPostSpot) != 0u) rgb = rgb + volume * (p.spot.x + p.spot.y * density) * p.spot.z;
     if ((f & kPostXfm) != 0u) {
         rgb = float3(dot(PostXyz(p.xfm[0]), rgb) + p.xfm[0].w,
                      dot(PostXyz(p.xfm[1]), rgb) + p.xfm[1].w,

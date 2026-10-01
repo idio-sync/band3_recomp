@@ -57,6 +57,15 @@ bool PackSpot(const ShadeInputs& s, uint32_t width, uint32_t height, SpotParams&
     return true;
 }
 
+bool SpotBlur(const DrawItem& d, const ShadeInputs* s, const Pass& p) {
+    if (d.rect_shader != 1 || !s || p.tex_type != kTexTypeDepthVolume || !d.tex ||
+        d.tex->tex_obj != p.tex_obj)
+        return false;
+    float weights = 0;
+    for (int i = 0; i < kSpotBlurTaps; i++) weights += s->Ps(47 + i)[0];
+    return weights > 0;
+}
+
 SpotRayCpu SpotRayOnCpu(const SpotParams& sp, const float p[3], float scene_depth) {
     const SpotSegment s = SpotRay(sp, Vec(p), scene_depth);
     return {{s.dir.x, s.dir.y, s.dir.z}, s.tn, s.tf, s.kind};

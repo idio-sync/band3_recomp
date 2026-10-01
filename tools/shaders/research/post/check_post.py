@@ -92,6 +92,51 @@ def m_glare_C6A009EA(c, uv, T):
     return out + [sat(scene[3])], {(s, u, v) for s in ('tf6', 'tf7')}
 
 
+# The spotlights' term (out/research/spotlight_survey.md 2), with TheShaderMgr
+# +0x25 set: the blurred depth volume (s12) times c127.x + c127.y * the density
+# map's red (s5), times c91.x, added after DOF, soft particles, bloom or glare,
+# before the colour matrix
+def spot_term(c, u, v, T):
+    vol, dens = T('tf12', u, v), T('tf5', u, v)
+    g = (c[127][0] + c[127][1] * dens[0]) * c[91][0]
+    return [vol[k] * g for k in range(3)]
+
+
+def m_spot_glare_0F105E2D(c, uv, T):
+    u, v = uv
+    scene, blur, soft, L0 = T('tf6', u, v), T('tf8', u, v), T('tf4', u, v), T('tf7', u, v)
+    a = dof_amount(c[24], T('tf9', u, v)[0])
+    s = spot_term(c, u, v, T)
+    rgb = [scene[k] + (blur[k] - scene[k]) * a + soft[k] + c[255][0] * L0[k] * c[6][k] + s[k]
+           for k in range(3)]
+    out = [sat(sum(c[92 + ch][k] * rgb[k] for k in range(3)) + c[92 + ch][3]) for ch in range(3)]
+    alpha = sat(scene[3] + (blur[3] - scene[3]) * a)
+    taps = {(t, u, v) for t in ('tf4', 'tf5', 'tf6', 'tf7', 'tf8', 'tf9', 'tf12')}
+    return out + [alpha], taps
+
+
+def m_spot_bloom_6EF4844D(c, uv, T):
+    u, v = uv
+    scene, blur = T('tf6', u, v), T('tf8', u, v)
+    L0, L1, L2 = T('tf7', u, v), T('tf11', u, v), T('tf15', u, v)
+    a = dof_amount(c[24], T('tf9', u, v)[0])
+    s = spot_term(c, u, v, T)
+    rgb = [scene[k] + (blur[k] - scene[k]) * a for k in range(3)]
+    rgb = [1 - (1 - rgb[k]) * (1 - (L0[k] + L1[k] + L2[k]) * c[6][k]) + s[k] for k in range(3)]
+    out = [sat(sum(c[92 + ch][k] * rgb[k] for k in range(3)) + c[92 + ch][3]) for ch in range(3)]
+    alpha = sat(scene[3] + (blur[3] - scene[3]) * a)
+    taps = {(t, u, v) for t in ('tf5', 'tf6', 'tf7', 'tf8', 'tf9', 'tf11', 'tf12', 'tf15')}
+    return out + [alpha], taps
+
+
+def m_spot_only_F7E2A8FB(c, uv, T):
+    u, v = uv
+    scene = T('tf6', u, v)
+    s = spot_term(c, u, v, T)
+    out = [sat(scene[k] + s[k]) for k in range(3)]   # no colour matrix
+    return out + [sat(scene[3])], {(t, u, v) for t in ('tf5', 'tf6', 'tf12')}
+
+
 def quad_taps(c, uv):
     dx, dy = 2 * c[15][0], 2 * c[15][1]
     u, v = uv
@@ -154,6 +199,10 @@ CASES = [
     ('C91275BBAA6E135D', 'composite DOF only', consts_composite, m_dof_only_C91275BB),
     ('2F002AB216A91268', 'composite bloom only', consts_composite, m_bloom_only_2F002AB2),
     ('C6A009EA1DF1BD57', 'composite glare', consts_composite, m_glare_C6A009EA),
+    ('0F105E2DF7BCC261', 'composite DOF+soft+glare+spot+xfm', consts_composite,
+     m_spot_glare_0F105E2D),
+    ('6EF4844DABAEC671', 'composite DOF+bloom+spot+xfm', consts_composite, m_spot_bloom_6EF4844D),
+    ('F7E2A8FB5982ED7D', 'composite spot only', consts_composite, m_spot_only_F7E2A8FB),
     ('F920AF5CD865655E', 'bright pass', consts_generic, m_bright_F920AF5C),
     ('38448F554B8CF69D', 'downsample 4x', consts_generic, m_down4_38448F55),
     ('0D31052586F96765', 'gaussian 15 taps', consts_generic, m_kernel(15)),

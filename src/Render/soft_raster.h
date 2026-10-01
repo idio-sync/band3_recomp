@@ -96,8 +96,9 @@ struct PassRun {
 // drawn after them samples (by texture, any version: a pass that clears hides
 // the ones before it), but none from post-processing on, which isn't drawn
 // yet, other than the spotlights' (the depth volume's cones and blurs, and
-// the density map its cones read: spot_model.h), which post-processing
-// samples. A capture without passes is one back-buffer stretch.
+// the density map its cones read: spot_model.h), which the composite's
+// spotlight term samples where it's on (post_model.h's PlanPost). A capture
+// without passes is one back-buffer stretch.
 std::vector<PassRun> PlanPasses(const FrameCapture& frame, const RasterOptions& options);
 
 // a texture pass's draws but FinishDrawTarget's mip downsamples: the

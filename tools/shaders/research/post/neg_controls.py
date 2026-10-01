@@ -20,6 +20,21 @@ def comp_noabs(c, uv, T):
     try: return cp.m_composite_63306D35(c, uv, T)
     finally: cp.dof_amount = real
 
+def spot_after_xfm(c, uv, T):        # the spotlights' term after the colour matrix, not before
+    no_spot = dict(c); no_spot[91] = [0.0] * 4
+    out, taps = cp.m_spot_bloom_6EF4844D(no_spot, uv, T)
+    s = cp.spot_term(c, uv[0], uv[1], T)
+    return [cp.sat(out[k] + s[k]) for k in range(3)] + [out[3]], taps
+
+def spot_green_density(c, uv, T):    # the density map's green, as the cones read it, not its red
+    real = cp.spot_term
+    def green(c, u, v, T):
+        vol, dens = T('tf12', u, v), T('tf5', u, v)
+        return [vol[k] * (c[127][0] + c[127][1] * dens[1]) * c[91][0] for k in range(3)]
+    cp.spot_term = green
+    try: return cp.m_spot_only_F7E2A8FB(c, uv, T)
+    finally: cp.spot_term = real
+
 def comp_w_negative(rng):           # c24.w < 0 (unreachable in-game): exposes the extra |.| before sat
     c = cp.consts_composite(rng); c[24][3] = -abs(c[24][3]) - 0.1; return c
 
@@ -28,6 +43,8 @@ cp.CASES = [
     ('F920AF5CD865655E', 'NEG bright taps +-1*c15', cp.consts_generic, bright_1x),
     ('63306D35C02782FB', 'NEG composite without |t|', cp.consts_composite, comp_noabs),
     ('63306D35C02782FB', 'EDGE composite c24.w<0', comp_w_negative, cp.m_composite_63306D35),
+    ('6EF4844DABAEC671', 'NEG spot term after the matrix', cp.consts_composite, spot_after_xfm),
+    ('F7E2A8FB5982ED7D', 'NEG spot density green', cp.consts_composite, spot_green_density),
 ]
 cp.main()
 

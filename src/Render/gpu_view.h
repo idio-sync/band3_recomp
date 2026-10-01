@@ -23,7 +23,10 @@
 // the back buffer's draws, with the texture's mips made after it; and the
 // world's draws into a scene target whose colour, alpha and depth RB3's
 // post-processing (post_model.h), full-screen passes (shaders/post.hlsl),
-// reads into the picture before the overlay's draws.
+// reads into the picture before the overlay's draws. The spotlights' cones
+// (spot_model.h) shade by mesh.hlsl's PSSpotCone, reading the scene's depth,
+// and the depth volume's blurs blur a copy of it into it with post.hlsl's
+// blur.
 
 namespace band3::render {
 

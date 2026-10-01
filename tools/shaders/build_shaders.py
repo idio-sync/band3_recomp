@@ -2,8 +2,8 @@
 
   python tools/shaders/build_shaders.py
 
-Compiles src/Render/shaders/mesh.hlsl (and the shade*.hlsli it includes) and
-post.hlsl (and the post*.hlsli it includes) twice each: DXBC (fxc, shader model 5.1) for SDL_gpu's Direct3D 12
+Compiles src/Render/shaders/mesh.hlsl (and the shade*.hlsli and spot*.hlsli it
+includes) and post.hlsl (and the post*.hlsli it includes) twice each: DXBC (fxc, shader model 5.1) for SDL_gpu's Direct3D 12
 backend and SPIR-V (dxc) for its Vulkan backend, checks the SPIR-V (spirv-val,
 and spirv-cross --reflect for the descriptor sets SDL_gpu expects), and writes
 src/Render/shaders/mesh_shaders.gen.h and post_shaders.gen.h with the bytes, so
@@ -37,6 +37,10 @@ SHADERS = [
          {("ubos", "PixelUniforms", 3, 0), ("textures", "tex", 2, 0),
           ("textures", "spec_tex", 2, 1), ("textures", "glow_tex", 2, 2),
           ("textures", "behind_tex", 2, 3)}),
+        ("kSpotPixel", "PSSpotCone", "ps_5_1", "ps_6_0",
+         {("ubos", "PixelUniforms", 3, 0), ("ubos", "SpotUniforms", 3, 1),
+          ("textures", "tex", 2, 0), ("textures", "scene_depth_tex", 2, 4),
+          ("textures", "density_tex", 2, 5)}),
     ]),
     ("post.hlsl", "post_shaders.gen.h", [
         ("kFullscreenVertex", "VSFullscreen", "vs_5_1", "vs_6_0", set()),
@@ -51,7 +55,8 @@ SHADERS = [
          {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0),
           ("textures", "depth_tex", 2, 1), ("textures", "dof_tex", 2, 2),
           ("textures", "bloom0_tex", 2, 3), ("textures", "bloom1_tex", 2, 4),
-          ("textures", "bloom2_tex", 2, 5)}),
+          ("textures", "bloom2_tex", 2, 5), ("textures", "volume_tex", 2, 6),
+          ("textures", "density_tex", 2, 7)}),
     ]),
 ]
 

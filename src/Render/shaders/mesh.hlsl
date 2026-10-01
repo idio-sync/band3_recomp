@@ -1,7 +1,8 @@
 // Experimental: the native view's mesh shader, for the GPU backend
 // (gpu_view.cpp). It draws what soft_raster.cpp draws, the same way: the
 // shading itself is shade.hlsli, which the CPU compiles too, from the same
-// ShadeParams (shade_model.cpp packs them).
+// ShadeParams (shade_model.cpp packs them); a spotlight's cone shades by
+// spot_model.hlsli instead (PSSpotCone), from SpotParams (spot_model.cpp).
 //
 // Registers follow SDL_gpu's layout (SDL_CreateGPUShader in SDL_gpu.h): vertex
 // resources in space0, vertex uniforms in space1, pixel resources in space2,
@@ -24,6 +25,9 @@
 #define SHADE_IN(T) T
 #include "shade_params.hlsli"
 #include "shade.hlsli"
+#define SPOT_IN(T) T
+#include "spot_params.hlsli"
+#include "spot_model.hlsli"
 
 // Milo's matrices are row vectors (v' = v * M), and the uniforms arrive as
 // they are in memory, so mul(v, M) with row_major needs no transpose.
@@ -68,6 +72,26 @@ VK_BINDING(0, 3) cbuffer PixelUniforms : register(b0, space3) {
     uint4 tex_size[3];  // and their own sizes (xy); their layers may be bigger
     uint4 pixel_flags;
 };
+
+// A spotlight's cone (PSSpotCone): its numbers, where its pass's viewport is
+// (the pixel's place on the screen, at which it reads the scene's depth and
+// the density map) and the scene depth's size. A second uniform buffer, so
+// PixelUniforms stays the mesh's: the cone takes its cross-section texture's
+// layer and size, and the alpha cut, from there.
+VK_BINDING(1, 3) cbuffer SpotUniforms : register(b1, space3) {
+    SpotParams spot;
+    float4 spot_viewport;  // x, y, 1/width, 1/height
+    uint4 spot_sizes;      // the scene depth's width and height (xy)
+};
+
+// and what it reads besides its cross-section texture (tex): the scene's
+// depth as the world's draws left it (kNearW / w, 0 where nothing drew) and
+// the density map (a texture pass's target, an array of one layer). The
+// slots after the mesh's four, which PSMain doesn't read.
+VK_SAMPLER VK_BINDING(4, 2) Texture2D<float> scene_depth_tex : register(t4, space2);
+VK_SAMPLER VK_BINDING(4, 2) SamplerState scene_depth_sampler : register(s4, space2);
+VK_SAMPLER VK_BINDING(5, 2) Texture2DArray<float4> density_tex : register(t5, space2);
+VK_SAMPLER VK_BINDING(5, 2) SamplerState density_sampler : register(s5, space2);
 
 // soft_raster.cpp's near plane: w below it is clipped
 static const float kNearW = 1e-3;
@@ -178,4 +202,28 @@ float4 PSMain(PixelIn i) : SV_Target0 {
     // scaling happens here, where colour above 1 still counts
     if ((pixel_flags.x & kPremultiply) != 0u) c.rgb *= saturate(c.a);
     return c;
+}
+
+// What a spotlight's cone adds to the depth volume at a pixel of its proxy,
+// as soft_raster.cpp's SpotPixel works it out: the scene's depth read at the
+// pixel's place on the screen (nearest, clamped), the cross-section texture
+// at SpotGoboCoord's (nearest, clamped; 1 untextured), the density map
+// bilinear. Alpha 0, which the Add pipeline leaves as the clear's.
+float4 PSSpotCone(PixelIn i) : SV_Target0 {
+    const float2 uv = (i.pos.xy - spot_viewport.xy) * spot_viewport.zw;
+    const uint2 size = spot_sizes.xy;
+    const uint2 at = min(uint2(saturate(uv) * float2(size)), size - 1);
+    const float inv_w = scene_depth_tex.Load(int3(at, 0)) / kNearW;
+    float xsec = 1.0;
+    if ((ps_shade.flags.x & kShadeTextured) != 0u) {
+        const uint2 tsize = tex_size[0].xy;
+        const float k = saturate(SpotGoboCoord(spot, i.wpos));
+        const uint2 t = min(uint2(uint(k * float(tsize.x)), 0), tsize - 1);
+        xsec = tex.Load(int4(t, tex_layer.x, 0)).x;
+    }
+    const float density = density_tex.SampleLevel(density_sampler, float3(uv, 0.0), 0).y;
+    if (AlphaCut(ps_shade, 0.0)) discard;
+    const float3 c =
+        SpotCone(spot, i.wpos, i.depth, SpotSceneDepth(spot, inv_w), xsec, density);
+    return float4(c, 0.0);
 }

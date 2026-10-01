@@ -179,6 +179,24 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan) {
     }
     // depth of field needs the world camera's planes to read the depth by
     if (!(p.cam_near > 0 && p.cam_far > p.cam_near)) flags &= ~kPostDof;
+    // The spotlights' term reads the depth volume NgSpotlightDrawer drew
+    // after DoPostProcess started (its last version: the blurs' in place),
+    // and the density map drawn before its cones. On world frames the
+    // drawer doesn't run (even/odd: post frames only), so they have none.
+    uint32_t spot_volume = 0, spot_density = 0;
+    if (consts && c.spot_flag) {
+        for (size_t i = frame.passes.size(); i-- > 0 && !spot_volume;) {
+            const Pass& v = frame.passes[i];
+            if (v.tex_type != kTexTypeDepthVolume || v.first_draw < frame.post_boundary) continue;
+            spot_volume = v.tex_obj;
+            for (size_t j = i; j-- > 0;) {
+                if (frame.passes[j].tex_type != kTexTypeDensityMap) continue;
+                spot_density = frame.passes[j].tex_obj;
+                break;
+            }
+        }
+        if (spot_volume) flags |= kPostSpot;
+    }
     if (only) flags &= only;
     if (!flags) return false;
 
@@ -198,6 +216,11 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan) {
     pass.c24 = Rgba(c24);
     for (int j = 0; j < 3; j++) pass.xfm[j] = Rgba(rows[j]);
     pass.camera = {p.cam_near, p.cam_far, p.cam_zrange[0], p.cam_zrange[1]};
+    if (flags & kPostSpot) {
+        pass.spot = {c.c127[0], c.c127[1], c.c91[0], 0};
+        plan.spot_volume = spot_volume;
+        plan.spot_density = spot_density;
+    }
 
     DofTaps(false, p.blur_width_scale, plan.dof_taps[0]);
     DofTaps(true, p.blur_width_scale, plan.dof_taps[1]);
@@ -213,7 +236,7 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan) {
 
 void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
              const std::vector<float>& depth, uint32_t width, uint32_t height,
-             std::vector<uint32_t>& out) {
+             const PostImage& volume, const PostImage& density, std::vector<uint32_t>& out) {
     const PostPass& pass = plan.composite;
     const uint32_t flags = pass.flags.x;
     Level src;
@@ -242,6 +265,18 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
         }
     }
 
+    // the spotlights' depth volume and density map, as they were drawn
+    Level spot[2];
+    if (flags & kPostSpot) {
+        const PostImage* images[2] = {&volume, &density};
+        for (int k = 0; k < 2; k++) {
+            const PostImage& image = *images[k];
+            if (!image.px || !image.w || !image.h) continue;
+            spot[k].Resize(image.w, image.h);
+            for (size_t i = 0; i < spot[k].px.size(); i++) spot[k].px[i] = Unpack(image.px[i]);
+        }
+    }
+
     out.resize(size_t(width) * height);
     const float4 none{0, 0, 0, 0};
     for (uint32_t y = 0; y < height; y++) {
@@ -257,8 +292,15 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
                     l[k] = {b.x, b.y, b.z};
                 }
             }
-            const float3 rgb =
-                Composite(pass, src.px[i], d, GameDepth(pass, depth[i]), l[0], l[1], l[2]);
+            float3 vol{0, 0, 0};
+            float dens = 0;
+            if (!spot[0].px.empty()) {
+                const float4 v = Sample(spot[0], uv);
+                vol = {v.x, v.y, v.z};
+            }
+            if (!spot[1].px.empty()) dens = Sample(spot[1], uv).x;
+            const float3 rgb = Composite(pass, src.px[i], d, GameDepth(pass, depth[i]), l[0], l[1],
+                                         l[2], vol, dens);
             out[i] = uint32_t(rgb.x * 255.0f + 0.5f) | uint32_t(rgb.y * 255.0f + 0.5f) << 8 |
                      uint32_t(rgb.z * 255.0f + 0.5f) << 16 | 0xff000000u;
         }
@@ -270,8 +312,10 @@ float GameDepthCpu(const PostPass& pass, float inv_w) { return GameDepth(pass, i
 float DofAmountCpu(const float c24[4], float depth) { return DofAmount(Rgba(c24), depth); }
 
 void CompositeCpu(const PostPass& pass, const float scene[4], const float dof[4], float depth,
-                  const float l0[3], const float l1[3], const float l2[3], float out[3]) {
-    const float3 r = Composite(pass, Rgba(scene), Rgba(dof), depth, Rgb(l0), Rgb(l1), Rgb(l2));
+                  const float l0[3], const float l1[3], const float l2[3], const float volume[3],
+                  float density, float out[3]) {
+    const float3 r = Composite(pass, Rgba(scene), Rgba(dof), depth, Rgb(l0), Rgb(l1), Rgb(l2),
+                               Rgb(volume), density);
     out[0] = r.x;
     out[1] = r.y;
     out[2] = r.z;

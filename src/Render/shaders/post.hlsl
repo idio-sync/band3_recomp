@@ -28,7 +28,9 @@
 // read texel for texel by the resolve and the composite, or the level a
 // downsample or blur reads, bilinear; t1 the scene's depth (kNearW / w,
 // larger is nearer, 0 where nothing drew); t2 the DOF's level; t3..t5
-// bloom's. The samplers are linear and clamp, as RB3 sets them.
+// bloom's; t6 the spotlights' depth volume and t7 their density map, render
+// targets of texture passes (gpu_view.cpp's, arrays of one layer). The
+// samplers are linear and clamp, as RB3 sets them.
 VK_SAMPLER VK_BINDING(0, 2) Texture2D<float4> color_tex : register(t0, space2);
 VK_SAMPLER VK_BINDING(0, 2) SamplerState color_sampler : register(s0, space2);
 VK_SAMPLER VK_BINDING(1, 2) Texture2D<float> depth_tex : register(t1, space2);
@@ -41,6 +43,10 @@ VK_SAMPLER VK_BINDING(4, 2) Texture2D<float4> bloom1_tex : register(t4, space2);
 VK_SAMPLER VK_BINDING(4, 2) SamplerState bloom1_sampler : register(s4, space2);
 VK_SAMPLER VK_BINDING(5, 2) Texture2D<float4> bloom2_tex : register(t5, space2);
 VK_SAMPLER VK_BINDING(5, 2) SamplerState bloom2_sampler : register(s5, space2);
+VK_SAMPLER VK_BINDING(6, 2) Texture2DArray<float4> volume_tex : register(t6, space2);
+VK_SAMPLER VK_BINDING(6, 2) SamplerState volume_sampler : register(s6, space2);
+VK_SAMPLER VK_BINDING(7, 2) Texture2DArray<float4> density_tex : register(t7, space2);
+VK_SAMPLER VK_BINDING(7, 2) SamplerState density_sampler : register(s7, space2);
 
 VK_BINDING(0, 3) cbuffer PostUniforms : register(b0, space3) {
     PostPass params;
@@ -115,5 +121,11 @@ float4 PSComposite(PostIn i) : SV_Target0 {
         l1 = bloom1_tex.SampleLevel(bloom1_sampler, uv, 0).rgb;
         l2 = bloom2_tex.SampleLevel(bloom2_sampler, uv, 0).rgb;
     }
-    return float4(Composite(params, scene, dof, depth, l0, l1, l2), 1.0);
+    float3 volume = 0.0;
+    float density = 0.0;
+    if ((f & kPostSpot) != 0u) {
+        volume = volume_tex.SampleLevel(volume_sampler, float3(uv, 0.0), 0).rgb;
+        density = density_tex.SampleLevel(density_sampler, float3(uv, 0.0), 0).r;
+    }
+    return float4(Composite(params, scene, dof, depth, l0, l1, l2, volume, density), 1.0);
 }

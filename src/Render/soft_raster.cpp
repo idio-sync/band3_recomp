@@ -523,25 +523,10 @@ bool Drawable(const DrawItem& it) {
     return it.geom && !it.geom->verts.empty() && it.geom->indices.size() >= 3;
 }
 
-// the depth volume's blur taps (NgSpotlightDrawer::BlurRT_824D24D0): 5, their
-// uv offsets in PS c31.., their weights (per channel) in c47..
-constexpr int kSpotBlurTaps = 5;
-
-// Whether a pass's draw is a DrawRect blur of the depth volume into itself,
-// with the taps its shade state kept (none in captures from before them)
-bool SpotBlur(const DrawItem& it, const ShadeState* s, const Pass& p) {
-    if (it.rect_shader != 1 || !s || p.tex_type != kTexTypeDepthVolume || !it.tex ||
-        it.tex->tex_obj != p.tex_obj)
-        return false;
-    float weights = 0;
-    for (int i = 0; i < kSpotBlurTaps; i++) weights += s->Ps(47 + i)[0];
-    return weights > 0;
-}
-
-// The blur into the target it samples, as the game does it in place by a
-// resolve: each pixel of its rect the taps' weighted sum of the target as it
-// was before it (bilinear, clamped; whole texels apart, so point), at the
-// quad's uv plus each tap's offset, blended by its material.
+// The blur into the target it samples (spot::SpotBlur), as the game does it
+// in place by a resolve: each pixel of its rect the taps' weighted sum of the
+// target as it was before it (bilinear, clamped; whole texels apart, so
+// point), at the quad's uv plus each tap's offset, blended by its material.
 void SpotBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o, Target& t,
                   RasterStats& st) {
     const std::vector<uint32_t> before = t.color;
@@ -557,7 +542,7 @@ void SpotBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& 
         for (int x = x0; x < x1; x++) {
             const float u = (float(x) + 0.5f - it.rect[0]) / it.rect[2];
             float sum[4] = {0, 0, 0, 0};
-            for (int i = 0; i < kSpotBlurTaps; i++) {
+            for (int i = 0; i < spot::kSpotBlurTaps; i++) {
                 const float* off = s.Ps(31 + i);
                 const float* weight = s.Ps(47 + i);
                 float tap[4];
@@ -594,6 +579,12 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
     // texture
     std::unordered_set<uint32_t> needed;
     if (also) needed.insert(also);
+    // the composite's spotlight term reads the depth volume (and through its
+    // cones the density map) at the frame's end
+    post::PostPlan post_plan;
+    if (o.post && o.view == RasterView::kFinal && post::PlanPost(f, o.post_only, post_plan) &&
+        (post_plan.composite.flags.x & post::kPostSpot))
+        needed.insert(post_plan.spot_volume);
     auto samples = [&](uint32_t first, uint32_t end, bool texture) {
         if (!o.textures) return;
         for (uint32_t d = first; d < end; d++) {
@@ -668,8 +659,15 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     auto resolve = [&] {
         back = &overlay;
         if (post_on) {
+            // the spotlights' passes, drawn before it (Plan keeps them)
+            auto image = [&](uint32_t tex_obj) {
+                const auto f = rts.find(tex_obj);
+                if (!tex_obj || f == rts.end()) return post::PostImage{};
+                return post::PostImage{f->second.color.data(), f->second.w, f->second.h};
+            };
             // the depth buffer has 1/w, as RunPost wants it
-            post::RunPost(post_plan, scene, depth, o.width, o.height, rgba);
+            post::RunPost(post_plan, scene, depth, o.width, o.height,
+                          image(post_plan.spot_volume), image(post_plan.spot_density), rgba);
         } else {
             for (size_t i = 0; i < pixels; i++) {
                 const uint32_t c = scene[i];
@@ -740,7 +738,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             const DrawItem& it = frame.draws[i];
             if (!DrawnInTexturePass(it) || !Drawable(it)) continue;
             const ShadeState* state = shade::ShadeOf(frame, it);
-            if (SpotBlur(it, state, p)) {
+            if (spot::SpotBlur(it, state, p)) {
                 SpotBlurDraw(it, *state, o, rtt, st);
                 continue;
             }

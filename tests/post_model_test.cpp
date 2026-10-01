@@ -2,10 +2,11 @@
 // post_model.hlsli on the CPU, as post.hlsl does on the GPU): the blurs' taps
 // against what the game gave its shaders, the native depth read as the game's
 // depth texture against the c24 the game's composite drew with, the
-// composite against the models of the game's composite shaders that
-// out/research/m4_shaders/check_post.py checked in an interpreter, and the
-// passes together on a plain picture. Captured numbers are from
-// render_song.b3t's 10s and render_song_evenodd.b3t's 25s (kept in out/m4).
+// composite (the spotlights' term too) against the models of the game's
+// composite shaders that tools/shaders/research/post/check_post.py checks in
+// an interpreter, and the passes together on a plain picture. Captured
+// numbers are from render_song.b3t's 10s and render_song_evenodd.b3t's 25s
+// (kept in out/m4), and its intro (out/parity_spot) for the spotlights.
 
 #include <doctest/doctest.h>
 #include <cmath>
@@ -28,11 +29,18 @@ float ModelDofAmount(const float c24[4], float depth) {
 }
 
 // One composite's inputs, and check_post.py's models of the variants the
-// native composite stands for (without soft particles and the overlay, which
-// it leaves out: their samplers read 0 here)
+// native composite stands for (without soft particles, which it leaves out:
+// their sampler reads 0 here). vol and dens are the spotlights' depth volume
+// and the density map's red, spot c127.x, c127.y and c91.x.
 struct Inputs {
     float scene[4], dof[4], depth, l0[3], l1[3], l2[3], c6[3], c24[4], rows[3][4];
+    float vol[3], dens, spot[3];
 };
+
+// the spotlights' term in channel k (check_post.py's spot_term)
+float SpotTerm(const Inputs& in, int k) {
+    return in.vol[k] * (in.spot[0] + in.spot[1] * in.dens) * in.spot[2];
+}
 
 // 63306D35: DOF, bloom (screen), colour matrix
 void Model63306D35(const Inputs& in, float out[3]) {
@@ -71,7 +79,38 @@ void Model0F105E2D(const Inputs& in, float out[3]) {
                       in.rows[ch][3]);
 }
 
-// deterministic inputs in check_post.py's ranges
+// 0F105E2D with the spotlights' term (+0x25): DOF, glare, spotlights, colour
+// matrix
+void Model0F105E2DSpot(const Inputs& in, float out[3]) {
+    const float a = ModelDofAmount(in.c24, in.depth);
+    float rgb[3];
+    for (int k = 0; k < 3; k++)
+        rgb[k] = in.scene[k] + (in.dof[k] - in.scene[k]) * a + 0.5f * in.l0[k] * in.c6[k] +
+                 SpotTerm(in, k);
+    for (int ch = 0; ch < 3; ch++)
+        out[ch] = Sat(in.rows[ch][0] * rgb[0] + in.rows[ch][1] * rgb[1] + in.rows[ch][2] * rgb[2] +
+                      in.rows[ch][3]);
+}
+// 6EF4844D: DOF, bloom (screen), spotlights, colour matrix
+void Model6EF4844D(const Inputs& in, float out[3]) {
+    const float a = ModelDofAmount(in.c24, in.depth);
+    float rgb[3];
+    for (int k = 0; k < 3; k++) {
+        rgb[k] = in.scene[k] + (in.dof[k] - in.scene[k]) * a;
+        rgb[k] = 1 - (1 - rgb[k]) * (1 - (in.l0[k] + in.l1[k] + in.l2[k]) * in.c6[k]) +
+                 SpotTerm(in, k);
+    }
+    for (int ch = 0; ch < 3; ch++)
+        out[ch] = Sat(in.rows[ch][0] * rgb[0] + in.rows[ch][1] * rgb[1] + in.rows[ch][2] * rgb[2] +
+                      in.rows[ch][3]);
+}
+// F7E2A8FB: spotlights only
+void ModelF7E2A8FB(const Inputs& in, float out[3]) {
+    for (int k = 0; k < 3; k++) out[k] = Sat(in.scene[k] + SpotTerm(in, k));
+}
+
+// deterministic inputs in check_post.py's ranges (the spotlights' gains
+// about the game's: c127 around 0.01, c91.x 32)
 Inputs MakeInputs(uint32_t seed) {
     uint32_t s = seed * 2654435761u + 1;
     auto next = [&](float lo, float hi) {
@@ -99,6 +138,11 @@ Inputs MakeInputs(uint32_t seed) {
     in.c24[3] = mx;
     for (int j = 0; j < 3; j++)
         for (int k = 0; k < 4; k++) in.rows[j][k] = next(-1, 1);
+    for (int k = 0; k < 3; k++) in.vol[k] = next(0, 1);
+    in.dens = next(0, 1);
+    in.spot[0] = next(0, 0.03f);
+    in.spot[1] = next(0, 0.03f);
+    in.spot[2] = next(0, 40);
     return in;
 }
 
@@ -109,6 +153,7 @@ PostPass PassFor(const Inputs& in, uint32_t flags) {
     p.c24 = {in.c24[0], in.c24[1], in.c24[2], in.c24[3]};
     for (int j = 0; j < 3; j++)
         p.xfm[j] = {in.rows[j][0], in.rows[j][1], in.rows[j][2], in.rows[j][3]};
+    p.spot = {in.spot[0], in.spot[1], in.spot[2], 0};
     return p;
 }
 
@@ -205,6 +250,11 @@ TEST_CASE("the composite is the game's composite shaders' maths") {
         {"2F002AB2 bloom", kPostBloom, Model2F002AB2},
         {"C6A009EA glare", kPostGlare, ModelC6A009EA},
         {"0F105E2D DOF glare xfm", kPostDof | kPostGlare | kPostXfm, Model0F105E2D},
+        {"0F105E2D DOF glare spot xfm", kPostDof | kPostGlare | kPostSpot | kPostXfm,
+         Model0F105E2DSpot},
+        {"6EF4844D DOF bloom spot xfm", kPostDof | kPostBloom | kPostSpot | kPostXfm,
+         Model6EF4844D},
+        {"F7E2A8FB spot", kPostSpot, ModelF7E2A8FB},
     };
     for (const Variant& v : variants) {
         CAPTURE(v.name);
@@ -213,7 +263,7 @@ TEST_CASE("the composite is the game's composite shaders' maths") {
             float want[3], got[3];
             v.model(in, want);
             CompositeCpu(PassFor(in, v.flags), in.scene, in.dof, in.depth, in.l0, in.l1, in.l2,
-                         got);
+                         in.vol, in.dens, got);
             for (int k = 0; k < 3; k++) CHECK(Near(got[k], want[k], 1e-5f));
         }
     }
@@ -299,6 +349,66 @@ TEST_CASE("PlanPost takes the composite's constants, on frames that drew post") 
     CHECK_FALSE(PlanPost(f, 0, plan));
 }
 
+TEST_CASE("PlanPost turns the spotlights' term on where the game's composite had it") {
+    // the intro of render_song.b3t: the composite's constants (c127, c91 as
+    // NgSpotlightDrawer left them) and the drawer's passes after the post
+    // boundary: the density map, the depth volume's cones, its two blurs
+    FrameCapture f;
+    f.post.valid = 1;
+    f.post.proc = 0x1000;
+    f.post_boundary = 81;
+    f.proc_cmds = 7;
+    f.post_consts.valid = 1;
+    f.post_consts.c127[0] = 0.01f;
+    f.post_consts.c127[1] = 0.0099f;
+    f.post_consts.c91[0] = 32;
+    f.post_consts.c91[1] = 10000;
+    auto pass = [&](uint32_t tex_obj, uint32_t tex_type, uint32_t first) {
+        Pass p;
+        p.tex_obj = tex_obj;
+        p.tex_type = tex_type;
+        p.first_draw = first;
+        p.draw_count = 1;
+        f.passes.push_back(p);
+    };
+    PostPlan plan{};
+    // without the flag (or before captures had it) there's no term
+    pass(0x241B7B38, kTexTypeDensityMap, 81);
+    pass(0x241B7A08, kTexTypeDepthVolume, 82);
+    pass(0x241B7A08, kTexTypeDepthVolume, 85);
+    pass(0x241B7A08, kTexTypeDepthVolume, 86);
+    CHECK_FALSE(PlanPost(f, 0, plan));
+    f.post_consts.spot_flag = 1;
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK(plan.composite.flags.x == kPostSpot);
+    CHECK(plan.spot_volume == 0x241B7A08u);
+    CHECK(plan.spot_density == 0x241B7B38u);
+    CHECK(Near(plan.composite.spot.x, 0.01f));
+    CHECK(Near(plan.composite.spot.y, 0.0099f));
+    CHECK(Near(plan.composite.spot.z, 32));
+    CHECK(plan.composite.spot.w == 0);
+    // alone, and left off
+    REQUIRE(PlanPost(f, kPostSpot, plan));
+    CHECK(plan.composite.flags.x == kPostSpot);
+    CHECK_FALSE(PlanPost(f, kPostXfm, plan));
+    // a depth volume from before the post boundary isn't the drawer's
+    // (nor is a frame without one); without a density map the term reads 0
+    f.passes.clear();
+    pass(0x241B7A08, kTexTypeDepthVolume, 40);
+    CHECK_FALSE(PlanPost(f, 0, plan));
+    pass(0x241B7A08, kTexTypeDepthVolume, 82);
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK(plan.spot_density == 0u);
+    // world frames (even/odd) have no drawer: no term
+    f.proc_cmds = 1;
+    f.post.cam_near = 10;
+    f.post.cam_far = 10000;
+    f.post.color_mod = 0.5f;
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK((plan.composite.flags.x & kPostSpot) == 0u);
+    CHECK(plan.spot_volume == 0u);
+}
+
 TEST_CASE("the passes on a plain picture: bloom of a flat colour is that colour") {
     // flat scene and depth: every level is the colour times its alpha (the
     // bright pass), blurs of a flat level are that level (the weights add up
@@ -320,7 +430,7 @@ TEST_CASE("the passes on a plain picture: bloom of a flat colour is that colour"
         BloomTaps(true, 180 >> (2 * k), plan.bloom_taps[k][1]);
     }
     std::vector<uint32_t> out;
-    RunPost(plan, scene, depth, w, h, out);
+    RunPost(plan, scene, depth, w, h, {}, {}, out);
     REQUIRE(out.size() == scene.size());
     const float alpha = float(a) / 255;
     const uint32_t in[3] = {r, g, b};
@@ -335,4 +445,37 @@ TEST_CASE("the passes on a plain picture: bloom of a flat colour is that colour"
         }
         CHECK((out[i] >> 24) == 0xff);
     }
+}
+
+TEST_CASE("the spotlights' term adds the depth volume by the density map's red") {
+    // a flat scene, depth volume and density map at sizes of their own (the
+    // game's are 640x360 and 320x180): every pixel is the scene plus the
+    // volume times (c127.x + c127.y * red) * c91.x, rounded to 8 bits once
+    const uint32_t w = 64, h = 36;
+    const uint32_t r = 40, g = 60, b = 20;
+    std::vector<uint32_t> scene(size_t(w) * h, r | g << 8 | b << 16);
+    std::vector<float> depth(scene.size(), 0.0f);
+    const uint32_t vol_px = 50 | 80 << 8 | 30 << 16 | 0xffu << 24;
+    const uint32_t dens_px = 150 | 200 << 8 | 0x99u << 24;
+    std::vector<uint32_t> vol(40 * 20, vol_px), dens(16 * 9, dens_px);
+    PostPlan plan{};
+    plan.composite.flags = {kPostSpot, 0, 0, 0};
+    plan.composite.spot = {0.01f, 0.0099f, 32, 0};
+    std::vector<uint32_t> out;
+    RunPost(plan, scene, depth, w, h, {vol.data(), 40, 20}, {dens.data(), 16, 9}, out);
+    REQUIRE(out.size() == scene.size());
+    const float gain = (0.01f + 0.0099f * 150.0f / 255.0f) * 32.0f;
+    const uint32_t in[3] = {r, g, b}, v[3] = {50, 80, 30};
+    for (size_t i : {size_t(0), out.size() / 2, out.size() - 1}) {
+        for (int k = 0; k < 3; k++) {
+            const float want = float(in[k]) / 255 + float(v[k]) / 255 * gain;
+            const float got = float(out[i] >> (8 * k) & 0xff) / 255;
+            CHECK(Near(got, Sat(want), 1.0f / 255));
+        }
+    }
+    // no density map: the term is c127.x's alone; no volume: none
+    RunPost(plan, scene, depth, w, h, {vol.data(), 40, 20}, {}, out);
+    CHECK(Near(float(out[0] & 0xff) / 255, float(r) / 255 + 50.0f / 255 * 0.01f * 32, 1.0f / 255));
+    RunPost(plan, scene, depth, w, h, {}, {}, out);
+    CHECK((out[0] & 0xffffffu) == (scene[0] & 0xffffffu));
 }

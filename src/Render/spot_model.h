@@ -14,10 +14,10 @@
 //     view ray inside the cone and in front of the scene, ONE ONE into 8 bits
 //     (shaders/spot_model.hlsli);
 //   two blurs of the depth volume in place, across then down, 5 taps each.
-// The composite then adds the blurred depth volume to the picture (not drawn
-// yet). PackSpot turns a cone's shade state into the numbers the cone shades
-// with (SpotParams); both backends shade from them with the same code,
-// spot_model.hlsli, which spot_model.cpp compiles as C++ for the CPU.
+// The composite then adds the blurred depth volume to the picture
+// (post_model.h). PackSpot turns a cone's shade state into the numbers the
+// cone shades with (SpotParams); both backends shade from them with the same
+// code, spot_model.hlsli, which spot_model.cpp compiles as C++ for the CPU.
 
 namespace band3::render::spot {
 
@@ -32,6 +32,16 @@ static_assert(sizeof(SpotParams) == 13 * 16, "SpotParams is float4s only, as HLS
 // A cone draw's SpotParams from its shade state's spotlight registers, for a
 // depth volume width x height; false if the state isn't a cone's
 bool PackSpot(const ShadeInputs& state, uint32_t width, uint32_t height, SpotParams& out);
+
+// the depth volume's blur taps (NgSpotlightDrawer::BlurRT_824D24D0): 5, their
+// uv offsets in PS c31.., their weights (per channel) in c47..
+inline constexpr int kSpotBlurTaps = 5;
+
+// Whether pass p's draw is a DrawRect blur of the depth volume into itself,
+// with the taps its shade state kept (none in captures from before them):
+// the renderers blur a copy of the target into it, as the game does in
+// place by a resolve, rather than draw a quad sampling what it draws
+bool SpotBlur(const DrawItem& d, const ShadeInputs* state, const Pass& p);
 
 // spot_model.hlsli's SpotRay, on the CPU: the stretch [tn, tf] of the view ray
 // through p inside the cone and its case (kSpot*, 0 a miss .. 4 the mirror
