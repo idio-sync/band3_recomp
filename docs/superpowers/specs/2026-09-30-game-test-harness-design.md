@@ -109,3 +109,48 @@ an automatic screenshot.
 - End to end: `tests/game/boot.b3t` launches, waits for the main menu, takes a
   screenshot and quits.
 - README section next to the Instrument Lab's.
+
+## Multiplayer (added 2026-09-30)
+
+Scripts drive up to four virtual instruments, one per player, to test local
+multiplayer: joining several players, a song with several parts, the band state
+per slot.
+
+Instruments:
+
+- `VirtualInstrument` becomes one per player (`VirtualInstrument::ForPlayer(n)`,
+  n = 1-4), each with its kind, held inputs, pulses and whether it is plugged in.
+- The settings (`virtual_instrument`, `_type`, `_player`) still describe one
+  instrument, the Instrument Lab's; the harness sets `_player` to 1, so that one is
+  the harness's player 1. Players 2-4 are plugged in by the harness only and never
+  reach the settings. The Lab moving its instrument onto a player the harness uses
+  takes that player over.
+- One driver reports every plugged-in instrument as its own device (own id, guid
+  tagged with the player). Each replugs on its own when its type changes.
+- The player assignment pins each virtual instrument to its player; real pads fill
+  the free slots in order; synthetic devices stay off player 1 while it has a
+  virtual instrument. The assignment's slot logic moves into a pure function so it
+  is unit tested.
+
+Commands:
+
+- `p1`-`p4` may start `instrument`, `press`, `hold`, `release`, `hit`, `axis` and
+  the new `unplug`; no prefix means player 1. A prefix on `state`, `wait`,
+  `expect`, `screenshot`, `set` or `quit` is an error. `pad` keeps its argument
+  (`pad 2`) and also takes the prefix (`p2 pad`).
+- `pN instrument <kind>` plugs player N in, or replugs it as that kind;
+  `pN unplug` removes it. Driving an empty player is an error that says how to
+  plug one in; input errors name the player.
+- `state` reports `instruments`: four entries, the kind or null, replacing
+  `instrument`.
+- A client disconnecting releases held inputs on every player; instruments stay
+  plugged in until unplugged or the session ends.
+
+Testing: unit tests for the prefix, per-player targeting, empty players,
+`instruments`, disconnect and the assignment; in game, three players (guitar,
+drums, keys) joined from the menu, a player's type changed without affecting the
+others, a three-part song on autoplay with `band` showing each member, and
+`tests/game/multiplayer.b3t` passing from a fresh launch.
+
+Out of scope: more than four players, players 2-4 in the Instrument Lab, online
+play, saving the extra instruments.
