@@ -19,6 +19,7 @@
 #include "steam_deck.h"
 #include "Audio/usb_mic_capture.h"
 #include "Content/content_hooks.h"
+#include "Content/live_content.h"
 #include "Input/input_system.h"
 #include "Input/instrument_lab.h"
 #include "Input/menu_shortcut_dialog.h"
@@ -136,6 +137,7 @@ class Band3App : public rex::ReXApp {
       std::abort();
     }
 #endif
+    band3::content::StartLiveContent(runtime()->file_system());
     band3::discord::Start();
     band3::audio::StartUsbMics();
     band3::render::StartDumpIfRequested();

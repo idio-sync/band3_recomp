@@ -44,6 +44,7 @@ constexpr IniSetting kIniSettings[] = {
     {"game", "fast_start", "fast_start"},
     {"game", "disable_metamusic", "disable_metamusic"},
     {"game", "lang", "lang"},
+    {"game", "content_folders", "content_folders"},
     {"graphics", "disable_approximate_lights", "disable_approximate_lights"},
     {"graphics", "disable_hair_shader", "disable_hair_shader"},
     {"graphics", "fullbright", "fullbright"},

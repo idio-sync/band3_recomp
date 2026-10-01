@@ -104,6 +104,11 @@ REXCVAR_DEFINE_BOOL(autosave, true, "Band3/Game",
     "Let the game autosave profiles, after songs and setlist edits. Off, they're only saved "
     "from the options menu, e.g. to test with autoplay without touching your profile");
 
+REXCVAR_DEFINE_STRING(content_folders, "songs", "Band3/Game",
+    "Folders RB3 reads DLC and custom songs from, without installing them, separated by '|'. "
+    "Subfolders count too. A relative folder is relative to band3_config.ini's folder")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 // Band3/MIDI drums
 
 REXCVAR_DEFINE_BOOL(midi_drums, false, "Band3/MIDI drums",

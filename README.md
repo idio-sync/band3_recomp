@@ -149,6 +149,15 @@ ini's folder, so `user_data_root = user_data` keeps everything band3 writes besi
 a portable install. band3 looks for the ini in its working directory, then beside the
 executable.
 
+### DLC and custom songs
+
+band3 reads DLC and custom songs (Xbox 360 `CON` and `LIVE` packages) straight from the
+folders `content_folders` names (Band3 → Game, or `[game]` in `band3_config.ini`); nothing
+is installed or unpacked, and band3 never writes there. Separate folders with `|`;
+subfolders count, and a relative folder is relative to the ini's folder (`songs` beside it
+by default). Changes apply at the next launch. A network folder works, but a local one is
+safer for audio: a song streams from its package while it plays.
+
 ### Instrument Lab
 
 Press **F6** to open the Instrument Lab. It connects a virtual Xbox 360 instrument
