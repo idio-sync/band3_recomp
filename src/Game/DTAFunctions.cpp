@@ -103,8 +103,7 @@ static void SendEventStringHandler(PPCContext& ctx, uint8_t* base) {
 }
 
 // RB3Enhanced's other script functions (source/DTAFunctions.c in its repo),
-// which RB3 Deluxe calls when it finds RB3E. All but the music and track
-// speed ones, which come with the speed setting itself.
+// which RB3 Deluxe calls when it finds RB3E.
 
 // the node argument `index` evaluates to, or nullptr past the end
 static const band3::DataNode* ArgNode(PPCContext& ctx, uint8_t* base, uint32_t args_addr,
@@ -250,6 +249,53 @@ static void SetVenueHandler(PPCContext& ctx, uint8_t* base) {
     ReturnInt(ctx, base, 1);
 }
 
+static void ReturnFloat(PPCContext& ctx, uint8_t* base, float value) {
+    Return(ctx, base, std::bit_cast<uint32_t>(value), band3::kDataFloat);
+}
+
+// the speed argument of rb3e_change_music_speed and rb3e_change_track_speed,
+// an int or a float; 1 for anything else or a speed that isn't above 0, as
+// RB3E falls back to 1 (and a track speed of 0 would divide by it)
+static double SpeedArg(PPCContext& ctx, uint8_t* base, const char* name) {
+    const band3::DataNode* n = ArgNode(ctx, base, ctx.r4.u32, 1);
+    double speed = 0;
+    if (n && n->type == band3::kDataFloat) {
+        speed = std::bit_cast<float>(static_cast<uint32_t>(n->value));
+    } else if (n && n->type == band3::kDataInt) {
+        speed = static_cast<int32_t>(static_cast<uint32_t>(n->value));
+    }
+    if (!(speed > 0)) {
+        REXLOG_WARN("{}: expects a speed above 0; using 1", name);
+        return 1.0;
+    }
+    return speed;
+}
+
+// {rb3e_change_music_speed speed}: the song speed for this session (the
+// song_speed setting keeps its value), from the next song; returns 1
+static void ChangeMusicSpeedHandler(PPCContext& ctx, uint8_t* base) {
+    const double speed = SpeedArg(ctx, base, "rb3e_change_music_speed");
+    REXLOG_INFO("rb3e_change_music_speed: {:.2f} for this session", speed);
+    band3::settings::SetSessionSongSpeed(speed);
+    ReturnInt(ctx, base, 1);
+}
+
+// {rb3e_change_track_speed speed}: likewise for the track speed
+static void ChangeTrackSpeedHandler(PPCContext& ctx, uint8_t* base) {
+    const double speed = SpeedArg(ctx, base, "rb3e_change_track_speed");
+    REXLOG_INFO("rb3e_change_track_speed: {:.2f} for this session", speed);
+    band3::settings::SetSessionTrackSpeed(speed);
+    ReturnInt(ctx, base, 1);
+}
+
+static void GetMusicSpeedHandler(PPCContext& ctx, uint8_t* base) {
+    ReturnFloat(ctx, base, static_cast<float>(band3::settings::SongSpeed()));
+}
+
+static void GetTrackSpeedHandler(PPCContext& ctx, uint8_t* base) {
+    ReturnFloat(ctx, base, static_cast<float>(band3::settings::TrackSpeed()));
+}
+
 // {rb3e_local_ip}: this PC's address on the local network, which Deluxe shows
 // with the web server's port for its party mode
 static void LocalIpHandler(PPCContext& ctx, uint8_t* base) {
@@ -284,6 +330,10 @@ extern "C" REX_FUNC(DataInitFuncs) {
 	RegisterDTAFunc(ctx, base, "rb3e_get_origin", GetOriginHandler);
 	RegisterDTAFunc(ctx, base, "rb3e_set_venue", SetVenueHandler);
 	RegisterDTAFunc(ctx, base, "rb3e_local_ip", LocalIpHandler);
+	RegisterDTAFunc(ctx, base, "rb3e_change_music_speed", ChangeMusicSpeedHandler);
+	RegisterDTAFunc(ctx, base, "rb3e_change_track_speed", ChangeTrackSpeedHandler);
+	RegisterDTAFunc(ctx, base, "rb3e_get_music_speed", GetMusicSpeedHandler);
+	RegisterDTAFunc(ctx, base, "rb3e_get_track_speed", GetTrackSpeedHandler);
 
 	// custom functions should go here
 }

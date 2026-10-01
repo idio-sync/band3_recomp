@@ -1,4 +1,5 @@
 #include "settings.h"
+#include <atomic>
 #include <mutex>
 #include <string_view>
 
@@ -103,6 +104,17 @@ REXCVAR_DEFINE_STRING(joypad_lag, "", "Band3/Game",
 REXCVAR_DEFINE_BOOL(autosave, true, "Band3/Game",
     "Let the game autosave profiles, after songs and setlist edits. Off, they're only saved "
     "from the options menu, e.g. to test with autoplay without touching your profile");
+
+REXCVAR_DEFINE_DOUBLE(song_speed, 1.0, "Band3/Game",
+    "Plays songs faster or slower: 1.5 is half again as fast, 0.75 three quarters. "
+    "Applies from the next song. A speed other than 1 that practice mode or Rock Band 3 "
+    "Deluxe's song speed sets is left as it is")
+    .range(0.1, 10.0);
+
+REXCVAR_DEFINE_DOUBLE(track_speed, 1.0, "Band3/Game",
+    "Scrolls the note highway faster or slower: 2 is twice as fast, with the notes "
+    "twice as far apart. Applies from the next song")
+    .range(0.1, 10.0);
 
 // Band3/MIDI drums
 
@@ -306,6 +318,8 @@ struct TrackedString {
 };
 
 TrackedString g_forced_venue;
+std::atomic<double> g_song_speed{1.0};
+std::atomic<double> g_track_speed{1.0};
 TrackedString g_username;
 StartupSettings g_startup{};
 
@@ -336,12 +350,24 @@ void Init() {
     };
 
     Track(g_forced_venue, "forced_venue");
+    g_song_speed = REXCVAR_GET(song_speed);
+    g_track_speed = REXCVAR_GET(track_speed);
+    rex::cvar::RegisterChangeCallback("song_speed", [](std::string_view, std::string_view) {
+        g_song_speed = REXCVAR_GET(song_speed);
+    });
+    rex::cvar::RegisterChangeCallback("track_speed", [](std::string_view, std::string_view) {
+        g_track_speed = REXCVAR_GET(track_speed);
+    });
     Track(g_username, "username");
 }
 
 const StartupSettings& Startup() { return g_startup; }
 std::string ForcedVenue() { return g_forced_venue.Get(); }
 void SetSessionVenue(std::string_view venue) { g_forced_venue.Set(venue); }
+double SongSpeed() { return g_song_speed; }
+double TrackSpeed() { return g_track_speed; }
+void SetSessionSongSpeed(double speed) { g_song_speed = speed; }
+void SetSessionTrackSpeed(double speed) { g_track_speed = speed; }
 std::string Username() { return g_username.Get(); }
 
 }

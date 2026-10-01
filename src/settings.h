@@ -23,6 +23,8 @@ REXCVAR_DECLARE(bool, menu_shortcut);
 REXCVAR_DECLARE(bool, steam_deck_defaults);
 REXCVAR_DECLARE(std::string, joypad_lag);
 REXCVAR_DECLARE(bool, autosave);
+REXCVAR_DECLARE(double, song_speed);
+REXCVAR_DECLARE(double, track_speed);
 
 // Band3/MIDI drums
 REXCVAR_DECLARE(bool, midi_drums);
@@ -106,6 +108,15 @@ std::string ForcedVenue();
 // forced_venue setting (and band3.toml) keeps its value, and changing it in F4
 // replaces this.
 void SetSessionVenue(std::string_view venue);
+
+// The song and track speed multipliers: song_speed and track_speed, or what a
+// script set for this session with rb3e_change_music_speed and
+// rb3e_change_track_speed (which, as on RB3E, aren't saved; changing the
+// setting in F4 replaces them). Guest threads read these.
+double SongSpeed();
+double TrackSpeed();
+void SetSessionSongSpeed(double speed);
+void SetSessionTrackSpeed(double speed);
 std::string Username();
 
 }
