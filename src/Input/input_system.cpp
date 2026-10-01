@@ -24,7 +24,10 @@ namespace {
 //   change leaves the instrument unplugged, so real pads never shift under it.
 // - SDL's copy of an instrument the HID driver reads is left out, and the other
 //   pads close up over its slot, as if it had never connected.
-// The keyboard and other synthetic devices feed player 1, as in the SDK.
+// The keyboard and other synthetic devices feed player 1, as in the SDK, unless
+// the virtual instrument has player 1: then it has the slot to itself, so a type
+// change empties the slot and RB3 reads the new type when it comes back (RB3
+// only reads a pad's type when its slot connects).
 class PlayerAssignment final : public rex::input::DeviceAssignment {
 public:
     void OnDevicesChanged(const std::vector<DeviceInfo>& devices) override {
@@ -46,7 +49,7 @@ public:
             }
             if (IsSdlCopyOfHidInstrument(device)) continue;
             if (device.synthetic) {
-                users_[0].push_back(device.id);
+                if (!(reserved && instrument_user == 0)) users_[0].push_back(device.id);
                 continue;
             }
             uint32_t user = device.ordinal;
