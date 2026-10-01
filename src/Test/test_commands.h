@@ -27,14 +27,14 @@ struct CaptureInfo {
     std::string capture_path;
     uint64_t frame = 0;  // the native view's frame number
     uint32_t draws = 0;
-    // draws left out because their pass isn't the back buffer's colour:
-    // shadow casters, and the others (velocity and the rest)
+    // draws left out: shadow-mode draws outside their own shadow pass (0 is
+    // expected), and the others (velocity and other unhandled draw modes)
     uint32_t skipped_shadow = 0;
     uint32_t skipped_pass = 0;
     // texture passes: the capture's own and those carried in from earlier
     // frames; render targets its draws sample, those made by a pass whose
-    // draws were all left out (rt_filtered: shadow maps, the velocity buffer,
-    // the spotlights' depth volume), those no pass it has made otherwise
+    // draws were all left out (rt_filtered: the velocity buffer, or draws
+    // with no material or geometry), those no pass it has made otherwise
     // (rt_missing), and native_view_rt_fallback ("guest" or "none")
     uint32_t passes = 0;
     uint32_t passes_carried = 0;
