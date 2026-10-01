@@ -337,15 +337,23 @@ bool IsFileName(std::string_view name) {
     return true;
 }
 
-std::string Screenshot(TestTarget& target, const std::vector<std::string_view>& args) {
-    if (args.size() > 2) return Error(target, "usage: screenshot [name]");
-    std::string name;
+// `<verb> [name]`'s name into `name`, or an error reply
+std::string FileNameArg(TestTarget& target, const std::vector<std::string_view>& args,
+                        std::string& name) {
+    if (args.size() > 2) return Error(target, "usage: " + std::string(args[0]) + " [name]");
     if (args.size() == 2) {
         if (!IsFileName(args[1])) {
-            return Error(target, "a screenshot name is up to 64 letters, digits, _ and -");
+            return Error(target, "a " + std::string(args[0]) +
+                                     " name is up to 64 letters, digits, _ and -");
         }
         name = args[1];
     }
+    return {};
+}
+
+std::string Screenshot(TestTarget& target, const std::vector<std::string_view>& args) {
+    std::string name;
+    if (std::string error = FileNameArg(target, args, name); !error.empty()) return error;
     ScreenshotInfo info;
     if (std::string error = target.Screenshot(name, info); !error.empty())
         return Error(target, error);
@@ -353,6 +361,23 @@ std::string Screenshot(TestTarget& target, const std::vector<std::string_view>& 
     AppendJsonString(fields, info.path);
     fields += ",\"width\":" + std::to_string(info.width);
     fields += ",\"height\":" + std::to_string(info.height);
+    return Ok(fields);
+}
+
+std::string Capture(TestTarget& target, const std::vector<std::string_view>& args) {
+    std::string name;
+    if (std::string error = FileNameArg(target, args, name); !error.empty()) return error;
+    CaptureInfo info;
+    if (std::string error = target.Capture(name, info); !error.empty())
+        return Error(target, error);
+    std::string fields = "\"path\":";
+    AppendJsonString(fields, info.screenshot.path);
+    fields += ",\"width\":" + std::to_string(info.screenshot.width);
+    fields += ",\"height\":" + std::to_string(info.screenshot.height);
+    fields += ",\"capture\":";
+    AppendJsonString(fields, info.capture_path);
+    fields += ",\"frame\":" + std::to_string(info.frame);
+    fields += ",\"draws\":" + std::to_string(info.draws);
     return Ok(fields);
 }
 
@@ -463,6 +488,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "wait") return Wait(target, args, kWaitTimeout);
     if (verb == "expect") return Wait(target, args, kExpectTimeout);
     if (verb == "screenshot") return Screenshot(target, args);
+    if (verb == "capture") return Capture(target, args);
     if (verb == "set") return Set(target, line, args);
     if (verb == "quit") {
         target.Quit();

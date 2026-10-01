@@ -20,6 +20,14 @@ struct ScreenshotInfo {
     uint32_t height = 0;
 };
 
+// a screenshot and the native view's capture of the same frame
+struct CaptureInfo {
+    ScreenshotInfo screenshot;
+    std::string capture_path;
+    uint64_t frame = 0;  // the native view's frame number
+    uint32_t draws = 0;
+};
+
 class TestTarget {
 public:
     using Clock = std::chrono::steady_clock;
@@ -40,6 +48,9 @@ public:
     virtual GameStateSnapshot State() = 0;
     // an empty name picks one; returns an error, or empty
     virtual std::string Screenshot(const std::string& name, ScreenshotInfo& out) = 0;
+    // a screenshot plus the native view's capture of that same frame, for
+    // render checks; an empty name picks one; returns an error, or empty
+    virtual std::string Capture(const std::string& name, CaptureInfo& out) = 0;
     // a Band3 setting only; returns an error, or empty
     virtual std::string SetSetting(std::string_view name, std::string_view value) = 0;
     virtual void Quit() = 0;

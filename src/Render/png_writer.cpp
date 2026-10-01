@@ -1,6 +1,7 @@
 #include "src/Render/png_writer.h"
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 // See png_writer.h.
@@ -88,6 +89,65 @@ bool WritePng(const std::string& path, const std::vector<uint32_t>& rgba, uint32
     std::fclose(f);
     std::remove(path.c_str());
     return std::rename(tmp.c_str(), path.c_str()) == 0;
+}
+
+namespace {
+
+uint32_t Be32(const std::string& s, size_t at) {
+    return (uint32_t(uint8_t(s[at])) << 24) | (uint32_t(uint8_t(s[at + 1])) << 16) |
+           (uint32_t(uint8_t(s[at + 2])) << 8) | uint32_t(uint8_t(s[at + 3]));
+}
+
+}  // namespace
+
+bool ReadPng(const std::string& path, std::vector<uint32_t>& rgba, uint32_t& w, uint32_t& h) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+    std::string data;
+    char buf[1 << 16];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) data.append(buf, n);
+    std::fclose(f);
+    if (data.size() < 8 || data.compare(0, 8, std::string("\x89PNG\r\n\x1a\n", 8)) != 0)
+        return false;
+
+    std::string z;
+    w = h = 0;
+    for (size_t at = 8; at + 12 <= data.size();) {
+        const uint32_t len = Be32(data, at);
+        const std::string type = data.substr(at + 4, 4);
+        if (at + 12 + len > data.size()) return false;
+        if (type == "IHDR") {
+            w = Be32(data, at + 8);
+            h = Be32(data, at + 12);
+            // 8-bit RGBA, no interlace
+            if (data[at + 16] != 8 || data[at + 17] != 6 || data[at + 20] != 0) return false;
+        } else if (type == "IDAT") {
+            z.append(data, at + 8, len);
+        }
+        at += 12 + len;
+    }
+    if (!w || !h || z.size() < 2) return false;
+
+    // stored deflate blocks only
+    std::string raw;
+    for (size_t at = 2; at + 5 <= z.size();) {
+        const bool last = z[at] & 1;
+        if ((uint8_t(z[at]) >> 1) & 3) return false;
+        const size_t len = uint8_t(z[at + 1]) | (size_t(uint8_t(z[at + 2])) << 8);
+        if (at + 5 + len > z.size()) return false;
+        raw.append(z, at + 5, len);
+        at += 5 + len;
+        if (last) break;
+    }
+    const size_t row = size_t(w) * 4 + 1;
+    if (raw.size() < row * h) return false;
+    rgba.resize(size_t(w) * h);
+    for (uint32_t y = 0; y < h; y++) {
+        if (raw[y * row] != 0) return false;  // filter none only
+        std::memcpy(&rgba[size_t(y) * w], raw.data() + y * row + 1, size_t(w) * 4);
+    }
+    return true;
 }
 
 }  // namespace band3::render

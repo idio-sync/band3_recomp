@@ -58,7 +58,7 @@ class Renderer {
     void AddUser() {
         std::lock_guard lock(mutex_);
         if (users_++ == 0) {
-            SetCaptureEnabled(true);
+            AcquireCapture();
             stop_ = false;
             thread_ = std::thread([this] { Run(); });
         }
@@ -69,7 +69,7 @@ class Renderer {
         {
             std::lock_guard lock(mutex_);
             if (users_ == 0 || --users_ > 0) return;
-            SetCaptureEnabled(false);
+            ReleaseCapture();
             stop_ = true;
             t = std::move(thread_);
         }

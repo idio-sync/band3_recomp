@@ -177,6 +177,7 @@ when a client disconnects.
 | `pad [player]` | the buttons, triggers and sticks the game reads from a player (1-4) |
 | `wait <condition> [timeout=30s]`, `expect <condition> [timeout=5s]` | `screen=`, `screen~` (contains), `in_game`, `menus`, `song=<shortname>`, `frames=<n>` |
 | `screenshot [name]` | |
+| `capture [name]` | a screenshot and the native view's capture (`.cap`) of the same full frame, for render checks: `out/native_view_replay.exe <name>.cap side.png --compare <name>.png` puts the two side by side |
 | `set <setting> <value>` | Band3 settings only |
 | `quit` | |
 

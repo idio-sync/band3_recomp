@@ -7,7 +7,10 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <condition_variable>
+#include <functional>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 
 #include "generated/band3_init.h"
@@ -472,6 +475,28 @@ State& S() {
 }
 
 std::atomic<bool> g_enabled{false};
+// what has capture on: the native view, the dump, a held-frame request
+std::mutex g_users_mutex;
+int g_users = 0;
+
+// a CaptureHeldFrame request, answered on the game's render thread
+struct HeldRequest {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool armed = false;
+    int skip = 0;     // frames begun before capture was on are partial
+    int waited = 0;   // frames looked at so far
+    size_t most = 0;  // the most draws a frame had so far
+    std::shared_ptr<const FrameCapture> frame;
+    bool released = true;
+};
+HeldRequest g_held;
+// frames looked at before choosing, to learn how many draws a full one has
+constexpr int kFramesToLearn = 2;
+// after this many, any frame will do
+constexpr int kMaxFramesToWait = 30;
+// the game is never held longer than this, even if the requester goes away
+constexpr std::chrono::seconds kMaxHold{3};
 std::mutex g_latest_mutex;
 std::shared_ptr<const FrameCapture> g_latest;
 
@@ -737,6 +762,30 @@ void CaptureParticles(uint8_t* base, uint32_t sys) {
     fc.draws.push_back(std::move(item));
 }
 
+// RB3 alternates frames that draw the scene with ones that only redraw the
+// overlay (a handful of draws, sometimes from two cameras); a request learns
+// what a full frame draws over a couple of frames, then takes the next one
+// that draws about as much
+void HoldIfRequested(const std::shared_ptr<const FrameCapture>& frame) {
+    std::unique_lock lock(g_held.mutex);
+    if (!g_held.armed) return;
+    if (g_held.skip > 0) {
+        g_held.skip--;
+        return;
+    }
+    const size_t draws = frame->draws.size();
+    const bool learning = g_held.waited < kFramesToLearn;
+    const bool full = draws > 0 && draws * 10 >= g_held.most * 9;
+    g_held.most = std::max(g_held.most, draws);
+    if ((learning || !full) && ++g_held.waited <= kMaxFramesToWait) return;
+    g_held.armed = false;
+    g_held.frame = frame;
+    g_held.released = false;
+    g_held.cv.notify_all();
+    g_held.cv.wait_for(lock, kMaxHold, [] { return g_held.released; });
+    g_held.released = true;
+}
+
 void FinishFrame() {
     State& s = S();
     if (!g_enabled.load(std::memory_order_relaxed)) {
@@ -744,11 +793,13 @@ void FinishFrame() {
         return;
     }
     s.building->frame = ++s.frame;
+    std::shared_ptr<const FrameCapture> done = s.building;
     {
         std::lock_guard lock(g_latest_mutex);
-        g_latest = s.building;
+        g_latest = done;
     }
     s.building = std::make_shared<FrameCapture>();
+    HoldIfRequested(done);
     s.cam_counted = false;
     // a venue change leaves stale entries behind; start over now and then
     if (s.geoms.size() > 50000) s.geoms.clear();
@@ -757,7 +808,45 @@ void FinishFrame() {
 
 }  // namespace
 
-void SetCaptureEnabled(bool on) { g_enabled.store(on); }
+void AcquireCapture() {
+    std::lock_guard lock(g_users_mutex);
+    if (g_users++ == 0) g_enabled.store(true);
+}
+
+void ReleaseCapture() {
+    std::lock_guard lock(g_users_mutex);
+    if (g_users > 0 && --g_users == 0) g_enabled.store(false);
+}
+
+std::shared_ptr<const FrameCapture> CaptureHeldFrame(const std::function<void()>& while_held,
+                                                     std::chrono::milliseconds timeout,
+                                                     std::chrono::milliseconds settle) {
+    const bool was_on = g_enabled.load();
+    AcquireCapture();
+    std::unique_lock lock(g_held.mutex);
+    g_held.armed = true;
+    g_held.skip = was_on ? 0 : 1;
+    g_held.waited = 0;
+    g_held.most = 0;
+    g_held.frame.reset();
+    const bool got = g_held.cv.wait_for(lock, timeout, [] { return g_held.frame != nullptr; });
+    std::shared_ptr<const FrameCapture> frame = g_held.frame;
+    g_held.armed = false;
+    g_held.frame.reset();
+    lock.unlock();
+    if (got) {
+        // the game is held at the end of the frame; give the GPU and presenter
+        // time to show it
+        std::this_thread::sleep_for(settle);
+        while_held();
+        lock.lock();
+        g_held.released = true;
+        g_held.cv.notify_all();
+        lock.unlock();
+    }
+    ReleaseCapture();
+    return got ? frame : nullptr;
+}
 
 std::shared_ptr<const FrameCapture> LatestCapture() {
     std::lock_guard lock(g_latest_mutex);

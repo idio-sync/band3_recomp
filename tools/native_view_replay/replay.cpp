@@ -1,12 +1,16 @@
 // Experimental: draws a native view capture (BAND3_NATIVE_VIEW_DUMP) offline.
 //
 //   replay <file.cap> <out.png> [--size WxH] [--cam N] [--per-cam] [--list]
+//                               [--compare <screenshot.png>]
 //                               [--no-tex] [--no-blend] [--transpose]
 //                               [--no-skinned | --only-skinned] [--unskinned]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
 // and inside the frustum with the matrix as captured and transposed. --list
 // prints every draw: its mesh, sizes, material and where it lands on screen.
+// --compare draws the frame at the size of a harness `capture` screenshot and
+// writes the two side by side (game left, native right), with their mean
+// difference.
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
@@ -73,12 +77,14 @@ int main(int argc, char** argv) {
     }
     RasterOptions o;
     bool transpose = false, per_cam = false, list = false, no_skinned = false, only_skinned = false;
+    std::string compare;
     long cam_filter = -1;
     for (int i = 3; i < argc; i++) {
         const std::string a = argv[i];
         if (a == "--transpose") transpose = true;
         else if (a == "--per-cam") per_cam = true;
         else if (a == "--list") list = true;
+        else if (a == "--compare" && i + 1 < argc) compare = argv[++i];
         else if (a == "--no-blend") o.blending = false;
         else if (a == "--no-tex") o.textures = false;
         else if (a == "--no-skinned") no_skinned = true;
@@ -163,6 +169,40 @@ int main(int argc, char** argv) {
         std::printf("%s: %u draws, %u tris, %u pixels, %.1f ms\n", path.c_str(), rs.draws,
                     rs.triangles, rs.pixels, rs.ms);
     };
+    if (!compare.empty()) {
+        // the game's own frame (a harness `capture`) left, the native one right,
+        // both at half the screenshot's size
+        std::vector<uint32_t> shot;
+        uint32_t sw = 0, sh = 0;
+        if (!ReadPng(compare, shot, sw, sh)) {
+            std::fprintf(stderr, "can't read %s (only PNGs band3 wrote)\n", compare.c_str());
+            return 1;
+        }
+        o.width = sw;
+        o.height = sh;
+        FrameCapture f = *fc;
+        if (transpose)
+            for (DrawItem& d : f.draws) d.view_proj = Transpose(d.view_proj);
+        std::vector<uint32_t> native;
+        const RasterStats rs = Rasterize(f, o, native);
+        const uint32_t hw = sw / 2, hh = sh / 2;
+        std::vector<uint32_t> side(size_t(hw) * 2 * hh);
+        double diff = 0;
+        for (uint32_t y = 0; y < hh; y++) {
+            for (uint32_t x = 0; x < hw; x++) {
+                const uint32_t a = shot[size_t(y * 2) * sw + x * 2];
+                const uint32_t b = native[size_t(y * 2) * sw + x * 2];
+                side[size_t(y) * hw * 2 + x] = a | 0xff000000u;
+                side[size_t(y) * hw * 2 + hw + x] = b | 0xff000000u;
+                for (int c = 0; c < 3; c++)
+                    diff += std::abs(int((a >> (8 * c)) & 0xff) - int((b >> (8 * c)) & 0xff));
+            }
+        }
+        WritePng(argv[2], side, hw * 2, hh);
+        std::printf("%s: game | native, %u draws, %.1f ms; mean difference %.1f of 255\n",
+                    argv[2], rs.draws, rs.ms, diff / (double(hw) * hh * 3));
+        return 0;
+    }
     render(argv[2], cam_filter);
     if (per_cam) {
         for (size_t i = 0; i < order.size(); i++) {

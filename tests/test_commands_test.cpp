@@ -49,6 +49,7 @@ public:
     std::chrono::milliseconds slept{0};
     std::vector<std::pair<std::string, std::string>> settings_set;
     std::string screenshot_name;
+    std::string capture_name;
     bool quit = false;
     bool cancelled = false;
     input::Gamepad360 pad;
@@ -76,6 +77,15 @@ public:
         out.path = "screenshots/" + (name.empty() ? std::string("auto") : name) + ".png";
         out.width = 1280;
         out.height = 720;
+        return {};
+    }
+    std::string Capture(const std::string& name, CaptureInfo& out) override {
+        capture_name = name;
+        const std::string file = "screenshots/" + (name.empty() ? std::string("auto") : name);
+        out.screenshot = {file + ".png", 1280, 720};
+        out.capture_path = file + ".cap";
+        out.frame = 42;
+        out.draws = 345;
         return {};
     }
     std::string SetSetting(std::string_view name, std::string_view value) override {
@@ -332,6 +342,26 @@ TEST_CASE("screenshot names are plain file names") {
     CHECK_FALSE(Ok(RunCommand("screenshot ../../evil", game)));
     CHECK_FALSE(Ok(RunCommand("screenshot C:evil", game)));
     CHECK(game.screenshot_name == "unchanged");
+}
+
+TEST_CASE("capture names the screenshot and the native capture alike") {
+    FakeGame game;
+    const std::string reply = RunCommand("capture venue_1", game);
+    CHECK(Ok(reply));
+    CHECK(game.capture_name == "venue_1");
+    CHECK(Has(reply, "\"path\":\"screenshots/venue_1.png\""));
+    CHECK(Has(reply, "\"capture\":\"screenshots/venue_1.cap\""));
+    CHECK(Has(reply, "\"frame\":42"));
+    CHECK(Has(reply, "\"draws\":345"));
+
+    CHECK(Ok(RunCommand("capture", game)));
+    CHECK(game.capture_name == "");
+
+    game.capture_name = "unchanged";
+    CHECK_FALSE(Ok(RunCommand("capture ../evil", game)));
+    CHECK_FALSE(Ok(RunCommand("capture a b", game)));
+    CHECK(game.capture_name == "unchanged");
+    CHECK_FALSE(Ok(RunCommand("p2 capture", game)));
 }
 
 TEST_CASE("set passes the setting on, keeping spaces in the value") {

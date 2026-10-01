@@ -39,7 +39,9 @@
 #include "src/Input/input_system.h"
 #include "src/Input/virtual_instrument.h"
 #include "src/Input/xinput_state.h"
+#include "src/Render/capture_file.h"
 #include "src/Render/png_writer.h"
+#include "src/Render/scene_capture.h"
 #include "src/settings.h"
 #include "game_state.h"
 #include "test_commands.h"
@@ -134,6 +136,24 @@ public:
         out.path = path.string();
         out.width = image.width;
         out.height = image.height;
+        return {};
+    }
+
+    // the game is held at the end of the captured frame while the screenshot
+    // is taken, so both are the same frame
+    std::string Capture(const std::string& name, CaptureInfo& out) override {
+        const std::string file = name.empty() ? TimestampName() : name;
+        std::string shot_error;
+        auto frame = render::CaptureHeldFrame(
+            [&] { shot_error = Screenshot(file, out.screenshot); }, std::chrono::seconds(5));
+        if (!frame) return "the game didn't finish a frame to capture in 5 s";
+        if (!shot_error.empty()) return shot_error;
+        const std::filesystem::path path =
+            rex::filesystem::GetExecutableFolder() / "screenshots" / (file + ".cap");
+        if (!render::SaveCapture(path.string(), *frame)) return "couldn't write " + path.string();
+        out.capture_path = path.string();
+        out.frame = frame->frame;
+        out.draws = uint32_t(frame->draws.size());
         return {};
     }
 

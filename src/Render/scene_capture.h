@@ -1,6 +1,8 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -74,8 +76,20 @@ struct FrameCapture {
     uint32_t tex_cached = 0;
 };
 
-// capture costs a little every frame, so it only runs while something wants it
-void SetCaptureEnabled(bool on);
+// capture costs a little every frame, so it only runs while something wants
+// it: each Acquire is matched by a Release
+void AcquireCapture();
+void ReleaseCapture();
+
+// For a render check: waits for the next full frame captured (RB3 alternates
+// them with overlay-only frames; the request learns the difference over two
+// frames), holds the game at the end of it, waits
+// `settle` for the emulated GPU to show it, runs `while_held` (a screenshot of
+// the same frame) and lets the game go on. The game is never held more than
+// three seconds. Null, without running while_held, if no frame came in time.
+std::shared_ptr<const FrameCapture> CaptureHeldFrame(
+    const std::function<void()>& while_held, std::chrono::milliseconds timeout,
+    std::chrono::milliseconds settle = std::chrono::milliseconds(150));
 
 // the latest complete frame, or null before the first
 std::shared_ptr<const FrameCapture> LatestCapture();
