@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -109,7 +110,12 @@ def launch(args):
         sys.exit(f"no band3 at {exe}")
     # band3 finds band3_config.ini and its game data (assets/) from here
     cwd = os.path.abspath(args.cwd)
-    command = [exe, f"--test_port={args.port}"] + args.extra
+    # its own saves and profile, so a test never touches the player's
+    user_data = os.path.abspath(args.user_data)
+    if args.fresh and os.path.isdir(user_data):
+        shutil.rmtree(user_data)
+    os.makedirs(user_data, exist_ok=True)
+    command = [exe, f"--test_port={args.port}", f"--user_data_root={user_data}"] + args.extra
     flags = 0
     startupinfo = None
     if os.name == "nt":
@@ -169,6 +175,10 @@ def main(argv):
     p.add_argument("--cwd", default=REPO,
                    help="where band3 runs from (finds band3_config.ini and assets/ there)")
     p.add_argument("--timeout", type=float, default=120)
+    p.add_argument("--user-data", default=os.path.join(REPO, "out", "test_user_data"),
+                   help="saves and profile for the test run, kept apart from the player's")
+    p.add_argument("--fresh", action="store_true",
+                   help="start from an empty --user-data, as a first boot (for scripts)")
     p.add_argument("--show", action="store_true",
                    help="open the window normally (by default it starts minimized, "
                         "without taking focus)")

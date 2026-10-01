@@ -1,0 +1,20 @@
+# Boots a fresh profile through the first-run prompts, then quits.
+#   python tools/band3ctl.py launch --fresh
+#   python tools/band3ctl.py run tests/game/boot.b3t
+# The dx_ screens are Rock Band 3 Deluxe's; plain RB3 goes from the calibration
+# prompt straight on. Wait for the screen you act on, not the one before it:
+# presses during a transition are dropped.
+
+wait screen=splash_screen timeout=120s
+press start
+wait screen=first_time_calibration timeout=30s
+# Continue, not Calibrate System
+press down
+press green
+wait screen=dx_welcome_screen timeout=30s
+screenshot boot-dx-welcome
+# Let's Rock!
+press green
+wait screen=hint_rb3_welcome_screen timeout=30s
+screenshot boot-rb3-welcome
+quit

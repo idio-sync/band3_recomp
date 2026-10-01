@@ -141,6 +141,45 @@ Press **F6** to open the Instrument Lab. It connects a virtual Xbox 360 instrume
 by default) and plays it with the mouse, showing the exact data it sends. It is a tool
 for checking how the game reads each instrument without the hardware.
 
+### Test harness
+
+`tools/band3ctl.py` drives a running band3 from a script or a terminal: it presses
+the virtual instrument's buttons, waits for screens, reads the game's state and takes
+screenshots. With `test_port` set, band3 takes its commands on that port, on this
+machine only, and connects the virtual instrument as player 1.
+
+```
+python tools/band3ctl.py launch --fresh       # start band3 minimized, on a fresh test profile
+python tools/band3ctl.py state                # screen, song, venue, band, frame count
+python tools/band3ctl.py press green+strum_down
+python tools/band3ctl.py wait screen=splash_screen timeout=60s
+python tools/band3ctl.py screenshot menu      # saved under screenshots/ next to the exe
+python tools/band3ctl.py run tests/game/boot.b3t
+```
+
+`launch` starts the game minimized without taking focus, and gives it its own saves
+in `out/test_user_data`, so tests never touch your profile. A `.b3t` script is these
+commands one per line, with `#` comments; `run` stops at the first one that fails,
+saves a screenshot of the moment and exits 1.
+
+| Command | |
+|---|---|
+| `instrument guitar\|drums\|keys\|mustang\|squier` | what player 1 is |
+| `press <inputs> [ms]` | press and let go (100 ms); join inputs with `+` |
+| `hold <inputs>`, `release <inputs>\|all` | |
+| `hit <pad\|cymbal\|keyN\|string> [velocity] [fret]` | drums, keys `key0`-`key24`, pro guitar strings `low_e a_str d_str g_str b_str high_e` |
+| `axis whammy\|tilt <0..1>` | |
+| `state` | |
+| `wait <condition> [timeout=30s]`, `expect <condition> [timeout=5s]` | `screen=`, `screen~` (contains), `in_game`, `menus`, `song=<shortname>`, `frames=<n>` |
+| `screenshot [name]` | |
+| `set <setting> <value>` | Band3 settings only |
+| `quit` | |
+
+Every instrument has `a b x y start back up down left right`; guitars add `green red
+yellow blue orange strum_up strum_down solo`, drums `red_pad yellow_pad blue_pad
+green_pad yellow_cym blue_cym green_cym kick kick2`, keys `overdrive`. Presses during
+a screen transition are dropped, so wait for the screen you act on.
+
 ### Pro Keys and Pro Guitar (untested)
 
 RB3 reads a keytar's keys and a pro guitar's frets and strings through an Xbox 360 system
