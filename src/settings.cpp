@@ -225,7 +225,7 @@ REXCVAR_DEFINE_BOOL(http_allow_scripts, false, "Band3/Integrations",
     "Let the web server's /execute run DTA scripts sent to it. Anyone on the local network "
     "could then run any script in the game");
 
-REXCVAR_DEFINE_BOOL(rb3e_mode, false, "Band3/Integrations",
+REXCVAR_DEFINE_BOOL(rb3e_mode, true, "Band3/Integrations",
     "Tell the game's scripts RB3Enhanced is running (they see RB3E and RB3E_HAS_VERSION "
     "defined), so Rock Band 3 Deluxe turns on its RB3E features: its version line, party "
     "mode, song lookups, and clearing the song cache and restarting after an update")
