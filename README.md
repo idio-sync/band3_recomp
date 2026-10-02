@@ -214,6 +214,7 @@ when a client disconnects.
 | `state` | the screen, song, venue, band, frame count, each player's instrument, the band's `score` (the song's scoreboard, 0 when a song starts) and, while `usb_mics` records, the `mics` slots: what records each, whether the game connected it and the bytes `fed` to it |
 | `pad [player]` | the buttons, triggers and sticks the game reads from a player (1-4) |
 | `wait <condition> [timeout=30s]`, `expect <condition> [timeout=5s]` | `screen=`, `screen~` (contains), `in_game`, `menus`, `song=<shortname>`, `frames=<n>`, `score>=<n>`, `mic=<slot>` (connected and fed audio since the wait began) |
+| `sleep <n>s\|<n>ms` | waits that long, up to 600 s: `frames=` counts the main thread's frames, which stand still while the boot logos play on RB3's splash thread |
 | `screenshot [name]` | |
 | `capture [name] [composed]` | a screenshot (`<name>.png`) and the native view's capture (`<name>.cap`) of the same full frame, and the native view's GPU backend drawing it (`<name>.gpu.png`), all under `screenshots/`. With `composed` it fails unless the capture is a post frame composed with the world frame before it (`proc_cmds` 2, `composed` true); its files are written either way. The reply's fields are under [Render checks](#render-checks) |
 | `native_view on [<width>x<height>] [nopost]\|off\|stats` | the native view live, as F7 draws it (same worker, same `native_view_backend`) but without its window, at 1280x720 unless given a size, and without RB3's post-processing with `nopost` (`post` in the reply), to see what it costs; `off` stops it and the capturing with it. Each reply has `stats`: the backend, frames `captured` and `rendered` since `on`, `skipped_busy` (captured while it was still drawing another), each drawn frame's time in `ms` (`mean`, `p50`, `p95`, `max`; on the GPU the whole frame, uploads and reading back included) and the part after submitting in `wait_ms`, and the game's own `game_frames` and `game_fps` since the last `on` or `off`, and `rt_recording`: whether `native_view_record_targets` is `on`, and the texture passes the game drew in that time while capture was off, how many of them were recorded (those into textures that aren't drawn every frame or every other), their draws, and the game thread's `ms` recording them. `off`'s reply is the run it ends; `run` prints replies with `stats`. `tests/game/render_song_live.b3t` measures a song with it |
@@ -294,6 +295,13 @@ post frame's, with the world frame's world in front of its overlay, as the game 
 it, and its `capture <name> composed` fails if it isn't. Launch that one without
 `--readback_resolve=full`. `render_song_live.b3t` measures the live view's cost with
 `native_view on`.
+
+`render_screens_boot.b3t`, `render_screens_menus.b3t` and `render_screens_song.b3t`, run
+in that order from a fresh launch (instead of `boot.b3t`), capture `screen-<kind>` on each
+kind of screen RB3 shows: the boot logos, the intro movie, the title, the first-run
+prompts, the band, closet and main menus, practice, the music library, a song's loading
+vignette, the song, its pause menu, a music-video venue, a controller's disconnect
+dialog and the results.
 
 Besides the back buffer's draws and the texture passes, a capture keeps the
 characters' shadow-map passes and NgLight's shadow casters, and the display's gamma

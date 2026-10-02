@@ -1,0 +1,94 @@
+# Plays two songs on autoplay from where render_screens_menus.b3t leaves
+# Rock Band 3 Deluxe (the main menu, the music library's cursor on 20th
+# Century Boy), pairing the game's frame with the native view's
+# (`capture screen-<kind>`) on each kind of screen a song brings: the music
+# library and the part and difficulty choice, the vignette the song loads
+# behind, the song, its pause menu, a music-video venue, the dialog a
+# disconnected controller brings up, and the results. Launch as
+# render_screens_boot.b3t says. Every frame draws everything here, as in
+# render_song.b3t.
+
+set autoplay true
+set disable_even_odd_rendering true
+# the same venue as render_song.b3t's
+set forced_venue arena_04
+set song_speed 1
+# Play Now, Quickplay, Choose Songs
+press green
+wait frames=60
+press green
+wait frames=60
+press green
+wait screen=song_select_screen timeout=30s
+wait frames=90
+capture screen-music-library
+# the cursor is still on 20th Century Boy, where practice left it
+press green
+wait screen=part_difficulty_screen timeout=30s
+wait frames=90
+capture screen-part-difficulty
+# Guitar, Expert
+press green
+wait frames=30
+press green
+# a vignette (tv<n>_<x>_screen) while the song loads
+wait screen~tv timeout=30s
+wait frames=60
+capture screen-song-loading
+wait screen=game_screen timeout=60s
+expect song=20thcenturyboy
+wait frames=600 timeout=60s
+capture screen-song
+# the pause menu, an overlay on the same screen
+press start
+wait frames=30
+capture screen-pause
+# Back to Music Library, the fifth of six, and yes to losing the progress
+press down
+press down
+press down
+press down
+wait frames=20
+press green
+wait frames=30
+press green
+wait screen=song_select_screen timeout=30s
+wait frames=60
+
+# The second song in a music-video venue, faster, with player 2 on guitar too
+# so a controller can go: RB3 then stops the song with a dialog. Player 1's
+# can't, as the keyboard takes its slot once its virtual instrument is out.
+set forced_venue video
+set song_speed 5
+p2 instrument guitar
+wait frames=60
+p2 press start
+wait frames=90
+# player 2 isn't signed in: No Profile, to play as a guest
+p2 press green
+wait frames=60
+press green
+wait screen=part_difficulty_screen timeout=30s
+wait frames=90
+# player 1: Guitar, Expert
+press green
+wait frames=30
+press green
+wait frames=60
+# player 2: Bass (offered first, as player 1 has guitar), its default difficulty
+p2 press green
+wait frames=60
+p2 press green
+wait screen=game_screen timeout=60s
+expect song=20thcenturyboy
+wait frames=600 timeout=60s
+capture screen-song-video
+p2 unplug
+wait frames=60
+capture screen-disconnect
+# plugged in again, the song counts in and goes on
+p2 instrument guitar
+# the results
+wait screen=coop_endgame_screen timeout=300s
+wait frames=120
+capture screen-results

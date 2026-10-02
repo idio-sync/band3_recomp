@@ -332,6 +332,28 @@ TEST_CASE("wait's default timeout is 30 s, expect's is 5 s") {
     CHECK(game.slept < 350ms);
 }
 
+TEST_CASE("sleep waits the wall-clock time asked, whatever the game does") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("sleep 2s", game)));
+    CHECK(game.slept == 2s);
+
+    game.slept = 0ms;
+    CHECK(Ok(RunCommand("sleep 250ms", game)));
+    CHECK(game.slept == 250ms);
+
+    game.slept = 0ms;
+    for (const char* bad : {"sleep", "sleep 2", "sleep two", "sleep 601s", "sleep 1s 2s"}) {
+        INFO(bad);
+        CHECK_FALSE(Ok(RunCommand(bad, game)));
+    }
+    CHECK(game.slept == 0ms);
+
+    game.cancelled = true;
+    const std::string reply = RunCommand("sleep 1s", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(Has(reply, "shutting down"));
+}
+
 TEST_CASE("wait gives up when the harness shuts down") {
     FakeGame game;
     game.on_sleep = [](FakeGame& g) {

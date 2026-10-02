@@ -22,6 +22,7 @@ constexpr std::chrono::milliseconds kReleaseGap = 50ms;
 constexpr std::chrono::milliseconds kReplugWait = 1000ms;
 constexpr std::chrono::milliseconds kWaitTimeout = 30s;
 constexpr std::chrono::milliseconds kExpectTimeout = 5s;
+constexpr std::chrono::milliseconds kMaxSleep = 600s;
 // about a frame
 constexpr std::chrono::milliseconds kWaitPoll = 16ms;
 constexpr uint8_t kDefaultVelocity = 100;
@@ -308,6 +309,19 @@ std::string Wait(TestTarget& target, const std::vector<std::string_view>& args,
         state = target.State();
     }
     return OkWithState(target, state);
+}
+
+// `sleep <n>s|<n>ms`: wall-clock time, for what `wait frames=` can't count.
+// At boot RB3's splash thread draws the logos while the main thread loads, and
+// the frame count (App::DrawRegular's) stands still until the intro movie.
+std::string SleepFor(TestTarget& target, const std::vector<std::string_view>& args) {
+    if (args.size() != 2) return Error(target, "usage: sleep <n>s|<n>ms");
+    auto length = ParseDuration(args[1]);
+    if (!length || *length > kMaxSleep)
+        return Error(target, "sleep takes 0 to 600 s, as 2s or 250ms");
+    target.Sleep(*length);
+    if (target.Cancelled()) return Error(target, "the test server is shutting down");
+    return Ok();
 }
 
 std::string Pad(TestTarget& target, std::optional<int> prefix,
@@ -656,6 +670,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "state") return OkWithState(target, target.State());
     if (verb == "wait") return Wait(target, args, kWaitTimeout);
     if (verb == "expect") return Wait(target, args, kExpectTimeout);
+    if (verb == "sleep") return SleepFor(target, args);
     if (verb == "screenshot") return Screenshot(target, args);
     if (verb == "capture") return Capture(target, args);
     if (verb == "set") return Set(target, line, args);
