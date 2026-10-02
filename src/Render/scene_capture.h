@@ -648,6 +648,83 @@ struct PassRecordingStats {
 };
 PassRecordingStats GetPassRecordingStats();
 
+// What capture costs the game's render thread, since the game started: each
+// kind of hook's time past its early-out (taking g_state_mutex aside), always
+// counted while the hooks work (capture on, or texture passes recorded); and
+// with native_view_capture_profile (Band3/Debug, off by default) the steps
+// inside them, each the time since the step before it ended, so they add up
+// to the hooks' time (rest: what no step names), at a clock read each. The
+// harness's `native_view stats` reports it per game frame (its `capture`).
+struct CaptureProfile {
+    enum Hook {
+        kHookMesh,       // DxMesh::DrawShowing and DrawFaces
+        kHookMultiMesh,  // DxMultiMesh::DrawShowing, its passes at SelectConfig
+        kHookParticles,  // DxParticleSys::DrawParticles
+        kHookRect,       // DxRnd::DrawRect
+        kHookPass,       // texture passes begun, ended, cleared and forgotten
+        kHookPresent,    // the frame's end: FinishFrame, publishing it
+        kHookOther,      // camera selects and post-processing's reads
+        kNumHooks
+    };
+    static constexpr const char* kHookNames[kNumHooks] = {
+        "mesh", "multimesh", "particles", "rect", "pass", "present", "other"};
+    enum Step {
+        kStepTarget,        // where a draw goes (Target)
+        kStepGeomHit,       // a vertex buffer's geometry found in the cache
+        kStepGeomMiss,      // and decoded (bytes: the Geometry's)
+        kStepGeomMutable,   // a mutable mesh's CPU verts, decoded each draw
+        kStepParticleGeom,  // a particle system's quads
+        kStepRectGeom,      // a DrawRect's quad
+        kStepItem,          // the material's fields, the view-projection
+        kStepTexLookup,     // a loaded texture's key hashed and found
+        kStepTexDecode,     // and decoded (bytes: its levels')
+        kStepTexRt,         // a render target's identity and version
+        kStepShadeRead,     // the shade's constants and fetch constants read
+        kStepShadeRtsScan,  // its maps bound to render targets looked for
+        kStepShadeIntern,   // hashed and compared with the frame's
+        kStepShadeFill,     // a new one's samplers and maps
+        kStepShadeStore,    // a new one kept
+        kStepBones,         // a skinned draw's bones (count: bones)
+        kStepPush,          // the draw added to its frame or pass
+        kStepPassAppend,    // a pass's draws and shades into the frame
+        kStepCarry,         // the passes a frame samples carried in
+        kStepCompose,       // a post frame composed with its world
+        kStepGamma,         // the display gamma ramp read
+        kStepPublish,       // the frame published (the one before let go)
+        kStepReset,         // the next frame started
+        kStepRest,          // the hooks' time no step names
+        kNumSteps
+    };
+    static constexpr const char* kStepNames[kNumSteps] = {
+        "target",      "geom_hit",    "geom_miss",      "geom_mutable",  "particle_geom",
+        "rect_geom",   "item",        "tex_lookup",     "tex_decode",    "tex_rt",
+        "shade_read",  "shade_rts_scan", "shade_intern", "shade_fill",   "shade_store",
+        "bones",       "push",        "pass_append",    "carry",         "compose",
+        "gamma",       "publish",     "reset",          "rest"};
+    uint64_t hook_ns[kNumHooks] = {};
+    uint64_t hook_calls[kNumHooks] = {};
+    uint64_t step_ns[kNumSteps] = {};
+    uint64_t step_calls[kNumSteps] = {};
+    bool steps_on = false;  // native_view_capture_profile, now
+    uint64_t frames = 0;    // the game's frames (Presents)
+    uint64_t captured = 0;  // of those, captured
+    // draws added (to frames and recorded passes alike), shade states kept
+    // new, the shared objects made (frames, geometry, textures, passes), and
+    // what the steps above count
+    uint64_t draws = 0;
+    uint64_t new_shades = 0;
+    uint64_t allocs = 0;
+    uint64_t geom_miss_bytes = 0;
+    uint64_t tex_decode_bytes = 0;
+    uint64_t bones = 0;
+    // the caches' sizes now: render targets known, geometry, loaded textures
+    // and maps
+    uint64_t rts = 0, geoms = 0, texs = 0, map_texs = 0;
+};
+CaptureProfile GetCaptureProfile();
+// what `now` counted since `before` (the sizes and steps_on are now's)
+CaptureProfile CaptureProfileSince(const CaptureProfile& now, const CaptureProfile& before);
+
 // capture costs a little every frame, so it only runs while something wants
 // it: each Acquire is matched by a Release
 void AcquireCapture();

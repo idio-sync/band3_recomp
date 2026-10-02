@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 #include "src/Input/instrument_kind.h"
@@ -106,6 +107,22 @@ struct NativeViewStats {
     uint64_t rt_recorded = 0;
     uint64_t rt_draws = 0;
     double rt_ms = 0;
+    // what capture cost the game's thread in the same time (scene_capture.h's
+    // CaptureProfile), reported per game frame: the game's frames and those
+    // captured, each kind of hook's milliseconds, the draws recorded, and
+    // with native_view_capture_profile on (`steps`) each step's milliseconds;
+    // then totals the reply divides by the frames (new shades, allocations,
+    // bytes decoded, bones) and the caches' sizes now
+    struct Capture {
+        uint64_t frames = 0;
+        uint64_t captured = 0;
+        std::vector<std::pair<std::string, double>> hooks_ms;
+        uint64_t draws = 0;
+        bool steps = false;
+        std::vector<std::pair<std::string, double>> steps_ms;
+        std::vector<std::pair<std::string, uint64_t>> counts;
+        std::vector<std::pair<std::string, uint64_t>> sizes;
+    } capture;
 };
 
 // The window's pacing (`present_stats`), since its numbers last started over:

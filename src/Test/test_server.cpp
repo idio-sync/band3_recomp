@@ -349,6 +349,7 @@ public:
             out.wait_ms = std::move(live.wait_ms);
         }
         const render::PassRecordingStats rec = render::GetPassRecordingStats();
+        const render::CaptureProfile profile = render::GetCaptureProfile();
         std::lock_guard lock(measure_mutex_);
         out.seconds = std::chrono::duration<double>(Clock::now() - measure_start_).count();
         out.game_frames = GameState::Get().Snapshot().frame - measure_frame_;
@@ -357,6 +358,7 @@ public:
         out.rt_recorded = rec.passes_recorded - measure_rec_.passes_recorded;
         out.rt_draws = rec.draws_recorded - measure_rec_.draws_recorded;
         out.rt_ms = rec.ms - measure_rec_.ms;
+        out.capture = CaptureCost(render::CaptureProfileSince(profile, measure_profile_));
         return out;
     }
 
@@ -481,10 +483,36 @@ private:
     void StartMeasuring() {
         const uint64_t frame = GameState::Get().Snapshot().frame;
         const render::PassRecordingStats rec = render::GetPassRecordingStats();
+        const render::CaptureProfile profile = render::GetCaptureProfile();
         std::lock_guard lock(measure_mutex_);
         measure_start_ = Clock::now();
         measure_frame_ = frame;
         measure_rec_ = rec;
+        measure_profile_ = profile;
+    }
+
+    // the capture's cost as native_view stats reports it, in milliseconds
+    static NativeViewStats::Capture CaptureCost(const render::CaptureProfile& p) {
+        using P = render::CaptureProfile;
+        NativeViewStats::Capture c;
+        c.frames = p.frames;
+        c.captured = p.captured;
+        for (int i = 0; i < P::kNumHooks; i++)
+            c.hooks_ms.emplace_back(P::kHookNames[i], double(p.hook_ns[i]) / 1e6);
+        c.draws = p.draws;
+        c.steps = p.steps_on;
+        for (int i = 0; i < P::kNumSteps; i++)
+            if (p.step_calls[i]) c.steps_ms.emplace_back(P::kStepNames[i], double(p.step_ns[i]) / 1e6);
+        c.counts = {{"new_shades", p.new_shades},
+                    {"allocs", p.allocs},
+                    {"geom_miss_bytes", p.geom_miss_bytes},
+                    {"tex_decode_bytes", p.tex_decode_bytes},
+                    {"bones", p.bones}};
+        for (int i = 0; i < P::kNumSteps; i++)
+            if (p.step_calls[i])
+                c.counts.emplace_back(std::string(P::kStepNames[i]) + "_n", p.step_calls[i]);
+        c.sizes = {{"rts", p.rts}, {"geoms", p.geoms}, {"texs", p.texs}, {"map_texs", p.map_texs}};
+        return c;
     }
 
     rex::Runtime* runtime_;
@@ -495,6 +523,7 @@ private:
     Clock::time_point measure_start_ = Clock::now();
     uint64_t measure_frame_ = 0;
     render::PassRecordingStats measure_rec_;
+    render::CaptureProfile measure_profile_;
 };
 
 bool SendAll(socket_t s, const std::string& data) {

@@ -658,6 +658,34 @@ TEST_CASE("native_view stats reports what the live view drew and how long it too
     CHECK(Has(reply, "\"rt_recording\":{\"on\":true,\"passes\":1200,\"recorded\":3,\"draws\":11,\"ms\":0.25}"));
 }
 
+TEST_CASE("native_view stats reports what capture cost the game's thread per frame") {
+    FakeGame game;
+    REQUIRE(Ok(RunCommand("native_view on", game)));
+    NativeViewStats::Capture& c = game.view.capture;
+    c.frames = 400;
+    c.captured = 398;
+    c.hooks_ms = {{"mesh", 800.0}, {"present", 200.0}};
+    c.draws = 100000;
+    c.steps = true;
+    c.steps_ms = {{"bones", 300.0}, {"rest", 4.0}};
+    c.counts = {{"new_shades", 120000}};
+    c.sizes = {{"rts", 12}};
+    const std::string reply = RunCommand("native_view stats", game);
+    CHECK(Ok(reply));
+    // 1000 ms over 400 frames, and 10 us over each of 100000 draws
+    CHECK(Has(reply, "\"capture\":{\"frames\":400,\"captured\":398,\"ms_per_frame\":{"
+                     "\"total\":2.500,\"mesh\":2.000,\"present\":0.500},"
+                     "\"draws_per_frame\":250.0,\"us_per_draw\":10.00,\"steps\":true,"
+                     "\"steps_ms_per_frame\":{\"bones\":0.750,\"rest\":0.010},"
+                     "\"per_frame\":{\"new_shades\":300.0},\"sizes\":{\"rts\":12}}"));
+
+    // no frames: zeros, not a division by zero
+    game.view.capture = NativeViewStats::Capture{};
+    CHECK(Has(RunCommand("native_view stats", game),
+              "\"capture\":{\"frames\":0,\"captured\":0,\"ms_per_frame\":{\"total\":0.000},"
+              "\"draws_per_frame\":0.0,\"us_per_draw\":0.00"));
+}
+
 TEST_CASE("native_view off reports the run it ends, then measures the game without it") {
     FakeGame game;
     REQUIRE(Ok(RunCommand("native_view on", game)));

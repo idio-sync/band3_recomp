@@ -369,6 +369,11 @@ REXCVAR_DEFINE_INT32(native_view_shadow_scale, 1, "Band3/Debug",
     "game's")
     .range(1, 4);
 
+REXCVAR_DEFINE_BOOL(native_view_capture_profile, false, "Band3/Debug",
+    "Time each step of the native view's capture on the game's thread (geometry, textures, "
+    "shade states, bones...) for the test harness's native_view stats, at a clock read per "
+    "step; its hooks' totals are timed either way");
+
 namespace band3::settings {
 
 namespace {

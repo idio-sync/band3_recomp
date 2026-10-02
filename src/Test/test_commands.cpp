@@ -537,6 +537,48 @@ std::string PresentStatsCommand(TestTarget& target, const std::vector<std::strin
     return Ok(PresentJson(target.Present(reset)));
 }
 
+// native_view stats' `capture`: what capture cost the game's thread, per game
+// frame (0 with no frames), and per draw recorded
+std::string CaptureCostJson(const NativeViewStats::Capture& c) {
+    const double frames = double(c.frames);
+    auto per_frame = [&](double v) { return frames > 0 ? v / frames : 0.0; };
+    char buf[96];
+    double total_ms = 0;
+    for (const auto& [name, ms] : c.hooks_ms) total_ms += ms;
+    std::string out = "{\"frames\":" + std::to_string(c.frames);
+    out += ",\"captured\":" + std::to_string(c.captured);
+    std::snprintf(buf, sizeof(buf), ",\"ms_per_frame\":{\"total\":%.3f", per_frame(total_ms));
+    out += buf;
+    for (const auto& [name, ms] : c.hooks_ms) {
+        std::snprintf(buf, sizeof(buf), ",\"%s\":%.3f", name.c_str(), per_frame(ms));
+        out += buf;
+    }
+    std::snprintf(buf, sizeof(buf), "},\"draws_per_frame\":%.1f,\"us_per_draw\":%.2f",
+                  per_frame(double(c.draws)), c.draws ? total_ms * 1000 / double(c.draws) : 0.0);
+    out += buf;
+    out += ",\"steps\":";
+    out += c.steps ? "true" : "false";
+    out += ",\"steps_ms_per_frame\":{";
+    for (size_t i = 0; i < c.steps_ms.size(); i++) {
+        std::snprintf(buf, sizeof(buf), "%s\"%s\":%.3f", i ? "," : "", c.steps_ms[i].first.c_str(),
+                      per_frame(c.steps_ms[i].second));
+        out += buf;
+    }
+    out += "},\"per_frame\":{";
+    for (size_t i = 0; i < c.counts.size(); i++) {
+        std::snprintf(buf, sizeof(buf), "%s\"%s\":%.1f", i ? "," : "", c.counts[i].first.c_str(),
+                      per_frame(double(c.counts[i].second)));
+        out += buf;
+    }
+    out += "},\"sizes\":{";
+    for (size_t i = 0; i < c.sizes.size(); i++) {
+        out += i ? "," : "";
+        out += "\"" + c.sizes[i].first + "\":" + std::to_string(c.sizes[i].second);
+    }
+    out += "}}";
+    return out;
+}
+
 std::string NativeViewJson(const NativeViewStats& s) {
     std::string out = "\"stats\":{\"on\":";
     out += s.on ? "true" : "false";
@@ -565,6 +607,7 @@ std::string NativeViewJson(const NativeViewStats& s) {
     std::snprintf(buf, sizeof(buf), "\"draws\":%llu,\"ms\":%.2f}",
                   static_cast<unsigned long long>(s.rt_draws), s.rt_ms);
     out += buf;
+    out += ",\"capture\":" + CaptureCostJson(s.capture);
     out += '}';
     return out;
 }
