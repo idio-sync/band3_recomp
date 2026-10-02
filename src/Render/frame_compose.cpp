@@ -1,6 +1,7 @@
 #include "src/Render/frame_compose.h"
 
 #include <algorithm>
+#include <iterator>
 #include <set>
 #include <utility>
 #include <vector>
@@ -48,7 +49,8 @@ void AddCounts(FrameCapture& to, const FrameCapture& from) {
           &FrameCapture::untextured_format, &FrameCapture::geom_cached, &FrameCapture::tex_cached,
           &FrameCapture::maps_decoded, &FrameCapture::maps_cube, &FrameCapture::maps_other_format,
           &FrameCapture::passes_empty, &FrameCapture::rt_snapshots,
-          &FrameCapture::passes_unbalanced})
+          &FrameCapture::passes_unbalanced, &FrameCapture::later_passes,
+          &FrameCapture::skipped_no_mat, &FrameCapture::faces_elsewhere})
         to.*f += from.*f;
 }
 
@@ -94,6 +96,13 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
     fc.post_consts = frame.post_consts;
     // and the gamma ramp the presenter applied to it
     fc.gamma = frame.gamma;
+    // the world's back buffer, cleared as the world frame cleared it, and its
+    // cameras, then the frame's others (the overlay's)
+    fc.has_clear_color = world.has_clear_color;
+    std::copy(std::begin(world.clear_color), std::end(world.clear_color), fc.clear_color);
+    fc.cameras = world.cameras;
+    for (const CameraView& c : frame.cameras)
+        if (!CameraOf(fc, c.cam)) fc.cameras.push_back(c);
 
     // shades: the world's, then the frame's
     fc.shades.reserve(world.shades.size() + frame.shades.size());

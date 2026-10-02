@@ -19,7 +19,13 @@ struct ScreenshotInfo {
     std::string path;
     uint32_t width = 0;
     uint32_t height = 0;
+    // what drew it: "emulated" (the emulated GPU's picture) or "native"
+    std::string renderer;
 };
+
+// which picture a screenshot takes: the one the window shows (the renderer
+// setting's), or either one whatever it is
+enum class ScreenshotSource { kWindow, kEmulated, kNative };
 
 // a screenshot and the native view's capture of the same frame
 struct CaptureInfo {
@@ -65,7 +71,7 @@ struct CaptureInfo {
     uint32_t gpu_rt_missing = 0;
 };
 
-// the live native view (`native_view on`): F7's renderer without its window,
+// the live native view (`native_view on`): F9's renderer without its window,
 // measured since it was last turned on or off
 struct NativeViewStats {
     bool on = false;
@@ -115,16 +121,22 @@ public:
 
     virtual GameStateSnapshot State() = 0;
     // an empty name picks one; returns an error, or empty
-    virtual std::string Screenshot(const std::string& name, ScreenshotInfo& out) = 0;
+    virtual std::string Screenshot(const std::string& name, ScreenshotSource source,
+                                   ScreenshotInfo& out) = 0;
     // a screenshot plus the native view's capture of that same frame, for
     // render checks; an empty name picks one; returns an error, or empty
     virtual std::string Capture(const std::string& name, CaptureInfo& out) = 0;
     // a Band3 setting only; returns an error, or empty
     virtual std::string SetSetting(std::string_view name, std::string_view value) = 0;
+    // presses the key a key bind (bind_settings, bind_instrument_lab...) is set
+    // to, as the window would, without the window having focus; returns an
+    // error, or empty
+    virtual std::string PressBind(std::string_view bind) = 0;
     // the live native view, drawing every frame the game captures at width x
-    // height as F7's window does (without post-processing unless `post`), and
-    // its numbers, which on and off reset; on returns an error, or empty
-    virtual std::string NativeViewOn(uint32_t width, uint32_t height, bool post) = 0;
+    // height as F9's window does (without post-processing unless `post`), and
+    // its numbers, which on and off reset; on returns an error, or empty.
+    // `sized`: the size was asked for, not the default
+    virtual std::string NativeViewOn(uint32_t width, uint32_t height, bool sized, bool post) = 0;
     virtual void NativeViewOff() = 0;
     virtual NativeViewStats NativeView() = 0;
     virtual void Quit() = 0;

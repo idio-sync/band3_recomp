@@ -1,616 +1,154 @@
 # slopband3 - An AI assisted band3_recomp experiment
 
-Recompilation of Rock Band 3 (title update 5/Deluxe) with extra features. Playable, still WIP.
+A static recompilation of Rock Band 3 (Xbox 360, Title Update 5, or Rock Band 3 Deluxe)
+into a native PC game, built on the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk).
+Playable, still a work in progress.
+
+![A full band playing 20th Century Boy under band3: guitar, drums and bass highways below the vocal track](docs/images/gameplay.jpg)
 
 This is a fork of [ihatecompvir/band3_recomp](https://github.com/ihatecompvir/band3_recomp).
-It targets ReXGlue SDK 0.10 and adds:
+Everything it adds was written with the help of AI, which did the vast majority of the
+work.
 
-- Multiplayer
-- Microphone functionality
-- An in-game settings menu (F4) backed by cvars, saved to `band3.toml`
-- Per-device controller types, an SDL/XInput `input_backend` option, and an Instrument Lab (F6)
-- RB3Enhanced-compatible network events (Stage Kit lighting, song/venue info) over UDP
-- RB3Enhanced's web page and API: browse the song library from a phone and pick the next song
-- Native Discord Rich Presence
-- A `refresh_rate` option for high-refresh monitors
-- Unit tests, a compile check, and CI
-- Configurable settings/save/DLC/custom song folder destinations
+You need your own copy of the game; no game files are included.
 
-All additions were created with the help of AI, doing the vast majority of the actual work 
+## Features
 
-## Prerequisites
+**Playing**
+- Local multiplayer: up to four players, each controller its own player
+- DLC and custom songs (`CON`/`LIVE`/`PIRS`) read straight from folders, nothing to install (Windows for now)
+- Rock Band 3 Deluxe support
+- High refresh rates (`refresh_rate`), a forced venue, song and highway speed
+- Steam Deck defaults: fullscreen, letterboxed, vsync
 
-Before building, ensure you have the following:
+**Instruments**
+- Xbox 360 instruments and gamepads, through SDL or XInput
+- PS3, Wii, PS4 and PS5 Rock Band guitars and drums through their USB dongles (experimental)
+- Electronic drum kits over MIDI, played as pro drums without a MIDI Pro Adapter
+- USB microphones, including harmonies (experimental)
+- Pro Keys and Pro Guitar data (untested)
+- Per-type controller lag, and the **Instrument Lab** (F6): a virtual instrument and a view of what the game reads from each one
 
-- [rexglue-sdk nightly 0.10.0.15-dev.g5cf287f](https://github.com/rexglue/rexglue-sdk/releases/tag/nightly-20260925-5cf287f4) (nightly-20260925-5cf287f4). The
-  plain v0.10.0 release isn't enough: band3 needs this nightly's XInput changes. Unpack
-  the zip for your platform and put the folder inside it (`win-amd64`, `linux-amd64`, ...)
-  at `.rexglue-sdk` in the repository root, where the CMake presets look for it, so that
-  `.rexglue-sdk/include/rex/version.h` exists.
-- A copy of Rock Band 3 (Xbox 360) with Title Update 5 (TU5) XEX or Rock Band 3 Deluxe XEX/patch 
+**Integrations** (RB3Enhanced-compatible)
+- Network events over UDP: Stage Kit lighting, song, band and venue info
+- A web page for browsing the song library from a phone and picking the next song, plus RB3Enhanced's web API
+- Searching [RhythmVerse](https://rhythmverse.co) for custom songs from that page, and downloading them into the game without a restart
+- RB3Enhanced's script functions, modifiers and unlock options, so Deluxe's RB3E features work
+- Discord Rich Presence
 
-## Building
+<img src="docs/images/web-song-browser.png" alt="band3's web song browser: the library with album art and part difficulties, and the song now playing" width="520">
 
-### Windows
+**Settings**
+- An in-game settings menu (F4, or both stick clicks), saved to `band3.toml`
+- Configurable save, cache and song folders, including a portable install
 
-Prerequisites
-   - [rexglue-sdk nightly-20260925-5cf287f4](https://github.com/rexglue/rexglue-sdk/releases/tag/nightly-20260925-5cf287f4), in `.rexglue-sdk` (see above)
-   - Visual Studio with "Desktop development with C++" installed
-   - cmake
-   - ninja
-   - clang
+**Development**
+- An experimental native renderer (F8 switches to it, F9 opens its debug view)
+- A scriptable test harness, render checks against the game's own picture, unit tests and CI
+- Tracy profiling zones on RB3's engine systems
 
-1. Clone the repository:
-   ```
-   git clone https://github.com/idio-sync/band3_recomp
-   cd band3_recomp
-   ```
+## Quick start
 
-2. Set up assets:
-   - Create an `assets` folder in the root of the repository
-   - Place the Rock Band 3 TU5 `default.xex` inside `assets`
-   - Place the Xbox `gen` folder inside `assets`
-     - The `gen` folder must contain both `main` and `patch` ARK files
-
-3. Build:
-
-   From the root of the repository in Command Prompt, run:
-
+1. Get the [ReXGlue SDK nightly-20260925-5cf287f4](https://github.com/rexglue/rexglue-sdk/releases/tag/nightly-20260925-5cf287f4)
+   and unpack its platform folder to `.rexglue-sdk` in the repository root.
+2. Put the game's `default.xex` and `gen` folder (with the `main` and `patch` ARKs) in `assets/`.
+3. Build (Windows, from a Visual Studio developer prompt):
    ```
    rexglue codegen band3_manifest.toml
    cmake --preset win-amd64-release
    cmake --build --preset win-amd64-release
    ```
 
-### Linux
+See [Building](docs/building.md) for the full requirements, the Linux steps, the checks
+CI runs and profiling.
 
-Prerequisites
-   - build-essential
-   - git
-   - cmake
-   - ninja
-   - clang
-   - [rexglue-sdk nightly-20260925-5cf287f4](https://github.com/rexglue/rexglue-sdk/releases/tag/nightly-20260925-5cf287f4), in `.rexglue-sdk` (see above)
+## Documentation
 
-1. Install required packages:
-   ```
-   sudo apt install build-essential git cmake ninja-build clang
-   ```
-
-2. Clone the repository:
-   ```
-   git clone https://github.com/idio-sync/band3_recomp
-   cd band3_recomp
-   ```
-
-3. Set up assets:
-   - Create an `assets` folder in the root of the repository
-   - Place the Rock Band 3 TU5 `default.xex` inside `assets`
-   - Place the Xbox `gen` folder inside `assets`
-     - The `gen` folder must contain both `main` and `patch` ARK files
-
-4. Build:
-
-   From the root of the repository, run:
-
-   ```
-   rexglue codegen band3_manifest.toml
-   cmake --preset=linux-amd64-release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-   ninja -C out/build/linux-amd64-release
-   ```
-
-## Checks
-
-These run on every push (`.github/workflows/ci.yml`) and don't need the game.
-
-Unit tests (no SDK needed):
-
-```
-cmake -S tests -B out/tests
-cmake --build out/tests
-ctest --test-dir out/tests --output-on-failure
-```
-
-Compile check: compiles everything in `src/` against the ReXGlue SDK without codegen,
-using a stand-in for `generated/band3_init.h`. On Windows, run it from a Visual Studio
-developer prompt:
-
-```
-cmake -S tools/compile_check -B out/compile_check -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_PREFIX_PATH=<path to the rexglue SDK>
-cmake --build out/compile_check
-```
-
-## Settings
-
-Press **F4** in game to open the settings menu. band3's own options are under the
-**Band3** categories (Game, Graphics, Integrations, Debug), next to the SDK's window,
-graphics, audio and input settings. Settings marked as needing a restart take effect
-the next time the game starts; the others apply immediately, or from the next time the
-game loads what they affect (for example, a forced venue applies from the next venue load).
-
-Without a keyboard, hold both stick clicks on a controller for a second to open the
-settings menu, or both stick clicks and the left bumper for the Instrument Lab. The same
-chord closes them. `menu_shortcut` (Band3 → Game) turns this off. It reads controllers
-through SDL, so it doesn't work with `input_backend = xinput`.
-
-**Save to config** writes the changed settings to `band3.toml` next to the executable.
-Any setting can also be passed on the command line, e.g. `--forced_venue=arena_04`.
-
-`band3_config.ini` is still read and documents every option. Where the same setting is
-set in more than one place, the command line wins over `band3.toml`, which wins over
-`band3_config.ini`.
-
-Files the game writes to its own folder (`game:\`) go to `game` in the user data root
-(`Documents\band3\game` on Windows, or under `--user_data_root`), and the game reads them
-back from there; `assets` is never written. Rock Band 3 Deluxe keeps its settings,
-modifiers and playlists there (`dx_settings.dta`, `dx_playlist.dta` and so on), so
-deleting that folder resets them. Test runs have their own user data, so they don't
-change yours.
-
-`band3_config.ini` can also move band3's other folders: `user_data_root` (saves, profiles
-and the `game` folder; `Documents\band3` by default) and `cache_root` (the shader cache;
-`cache` in the user data folder by default). A relative path there is relative to the
-ini's folder, so `user_data_root = user_data` keeps everything band3 writes beside it, for
-a portable install. band3 looks for the ini in its working directory, then beside the
-executable.
-
-### DLC and custom songs
-
-On Windows for now, band3 reads DLC and custom songs (Xbox 360 `CON`, `LIVE` and `PIRS`
-packages, Rock Band and Rock Band 2 DLC included, as RB3 reads them) straight from the
-folders `content_folders` names (Band3 → Game, or `[game]` in `band3_config.ini`);
-nothing is installed or unpacked, and band3 never writes there. Separate folders with `|`;
-subfolders count, and a relative folder is relative to the ini's folder (`songs` beside it
-by default). Changes apply at the next launch, except songs the web page's RhythmVerse tab
-downloads or finds added (below), which the game takes in as it runs; a song taken out
-stays listed until the next launch. A network folder works, but a local one is
-safer for audio: a song streams from its package while it plays. A local folder is also
-faster to read: a large library on a slow network folder can delay the song list on the
-first boot, and one that takes over a minute isn't listed that session. A custom song whose
-`song_id` is text instead of a number gets the number RB3Enhanced gives it (the text's
-CRC-32 mod 9999999, plus 2130000000), so IDs agree with RB3Enhanced's.
-
-### Instrument Lab
-
-Press **F6** to open the Instrument Lab. It connects a virtual Xbox 360 instrument
-(guitar, drums, keys, or a Mustang or Squier pro guitar) as its own player (player 2
-by default) and plays it with the mouse, showing the exact data it sends. It is a tool
-for checking how the game reads each instrument without the hardware.
-
-### Test harness
-
-`tools/band3ctl.py` drives a running band3 from a script or a terminal: it presses
-the virtual instrument's buttons, waits for screens, reads the game's state and takes
-screenshots. With `test_port` set, band3 takes its commands on that port, on this
-machine only, and connects the virtual instrument as player 1.
-
-```
-python tools/band3ctl.py launch --fresh       # start band3 minimized and muted, on a fresh test profile
-python tools/band3ctl.py state                # screen, song, venue, band, frame count
-python tools/band3ctl.py press green+strum_down
-python tools/band3ctl.py wait screen=splash_screen timeout=60s
-python tools/band3ctl.py screenshot menu      # saved under screenshots/ next to the exe
-python tools/band3ctl.py run tests/game/boot.b3t
-python tools/band3ctl.py "hold up+orange; wait frames=60; pad; release all"
-```
-
-`launch` starts the game minimized without taking focus (`--show` to watch it) and muted
-(`--sound` to hear it), and
-gives it its own saves in `out/test_user_data`, so tests never touch your profile. A
-`.b3t` script is these commands one per line, with `#` comments; `run` stops at the
-first one that fails, saves a screenshot of the moment and exits 1. Commands joined
-with `;` share one connection, which `hold` needs: band3 lets go of everything held
-when a client disconnects.
-
-`capture` and `native_view` check the native view's rendering; see
-[Render checks](#render-checks).
-
-| Command | |
+| | |
 |---|---|
-| `instrument guitar\|drums\|keys\|mustang\|squier` | plugs in player 1's instrument, or replugs it as another |
-| `unplug` | takes it out |
-| `press <inputs> [ms]` | press and let go (100 ms); join inputs with `+` |
-| `hold <inputs>`, `release <inputs>\|all` | |
-| `hit <pad\|cymbal\|keyN\|string> [velocity] [fret]` | drums, keys `key0`-`key24`, pro guitar strings `low_e a_str d_str g_str b_str high_e` |
-| `axis whammy\|tilt <0..1>` | |
-| `state` | the screen, song, venue, band, frame count, each player's instrument, the band's `score` (the song's scoreboard, 0 when a song starts) and, while `usb_mics` records, the `mics` slots: what records each, whether the game connected it and the bytes `fed` to it |
-| `pad [player]` | the buttons, triggers and sticks the game reads from a player (1-4) |
-| `wait <condition> [timeout=30s]`, `expect <condition> [timeout=5s]` | `screen=`, `screen~` (contains), `in_game`, `menus`, `song=<shortname>`, `frames=<n>`, `score>=<n>`, `mic=<slot>` (connected and fed audio since the wait began) |
-| `screenshot [name]` | |
-| `capture [name] [composed]` | a screenshot (`<name>.png`) and the native view's capture (`<name>.cap`) of the same full frame, and the native view's GPU backend drawing it (`<name>.gpu.png`), all under `screenshots/`. With `composed` it fails unless the capture is a post frame composed with the world frame before it (`proc_cmds` 2, `composed` true); its files are written either way. The reply's fields are under [Render checks](#render-checks) |
-| `native_view on [<width>x<height>] [nopost]\|off\|stats` | the native view live, as F7 draws it (same worker, same `native_view_backend`) but without its window, at 1280x720 unless given a size, and without RB3's post-processing with `nopost` (`post` in the reply), to see what it costs; `off` stops it and the capturing with it. Each reply has `stats`: the backend, frames `captured` and `rendered` since `on`, `skipped_busy` (captured while it was still drawing another), each drawn frame's time in `ms` (`mean`, `p50`, `p95`, `max`; on the GPU the whole frame, uploads and reading back included) and the part after submitting in `wait_ms`, and the game's own `game_frames` and `game_fps` since the last `on` or `off`, and `rt_recording`: whether `native_view_record_targets` is `on`, and the texture passes the game drew in that time while capture was off, how many of them were recorded (those into textures that aren't drawn every frame or every other), their draws, and the game thread's `ms` recording them. `off`'s reply is the run it ends; `run` prints replies with `stats`. `tests/game/render_song_live.b3t` measures a song with it |
-| `set <setting> <value>` | Band3 settings only |
-| `quit` | |
-
-Each player can have a virtual instrument: start a controller command with `p2`,
-`p3` or `p4` for that player's (`p2 instrument drums`, `p2 hit red_pad`, `pad 2`);
-without one it's player 1's. `state` lists every player's instrument.
-`tests/game/multiplayer.b3t` plays a two-player song. Players 2-4 aren't signed in,
-so RB3 asks each to choose a profile when they join a song: No Profile plays as a
-guest.
-
-`tests/game/usb_mic.b3t` sings a song's vocals through the USB mics' test tone (launch
-with `-- --usb_mics=true --usb_mic_test_tone=220`) and waits for the score to go up.
-
-Every instrument has `a b x y start back up down left right`; guitars add `green red
-yellow blue orange strum_up strum_down solo`, drums `red_pad yellow_pad blue_pad
-green_pad yellow_cym blue_cym green_cym kick kick2`, keys `overdrive`. Presses during
-a screen transition are dropped, so wait for the screen you act on (and give a dialog
-a moment to finish appearing). Submenus inside one screen (Play Now, Quickplay) don't
-change the screen name. A song counts as `in_game` until you leave its results, and
-`state` keeps the last song's details after that. Switching `instrument` reconnects
-it, so press Start to join again, as a player would.
-
-### Render checks
-
-The native view (F7, experimental) draws the game's frames itself, from a capture of
-what RB3 drew: on the GPU, or on a reference CPU rasterizer. It draws RB3's shading
-(point, box and projected lights, characters' self-shadows, normal and detail maps),
-its textures as the game's samplers read them (filtered, between mip levels, clamped
-or wrapped), the passes RB3 draws into textures (outfit composites, the crowd's
-impostors, shadow maps, NgLight's projected shadow, heads' normal maps, blurs), its
-post-processing (depth of field, bloom or glare, the spotlights' beams and haze, soft
-particles such as stage smoke, the colour matrix) and, last, the display's gamma ramp.
-Render checks set its picture against the game's.
-
-| Setting (Band3 → Debug) | |
-|---|---|
-| `native_view_backend` | `gpu` (the default) or `cpu`, the reference rasterizer. The GPU falls back to the CPU when it can't start |
-| `native_view_record_targets` | records the passes RB3 draws into textures all the time, even while the native view is off. Off by default, as it costs a little game-thread time while characters load. Render checks need it from launch: RB3 composes a band's outfits once, in the main menu |
-| `native_view_rt_fallback` | `guest` (the default) also keeps what guest memory holds of a texture RB3 draws, sampled where no recorded pass made it (right only with `--readback_resolve=full`); `none` keeps only which texture and version it is |
-| `native_view_normal_maps` | on (the default) shades normal and detail maps, live and in `capture`'s `.gpu.png`; off shades those materials with the vertex normal, to compare. Captures from before the capture kept the meshes' tangents have none either way |
-| `native_view_texture_filtering` | on (the default) samples textures as each draw's fetch constants say: bilinear or point, the mip level (or two, blended) by how far and at what angle the surface is, anisotropy, and wrapping, mirroring or clamping per axis, from the mip chains in guest memory (and a render target's own, made after its pass). As the game's own picture under band3 is drawn, the SDK's `anisotropic_override` (4:1 by default) applies to the samplers it would apply to there. Off reads every texture's nearest texel at full size, as before, to compare; captures from before the capture kept the samplers and mips are drawn so either way |
-
-Launch render checks with:
-
-```
-python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
-python tools/band3ctl.py run tests/game/boot.b3t
-python tools/band3ctl.py run tests/game/render_song.b3t
-```
-
-The native view doesn't need `--readback_resolve=full`. With it, guest memory holds
-right copies of what RB3 draws into textures (garbage otherwise), to compare against:
-replay's `--rt-guest` and `--dump-tex`.
-
-Also launch with `--async_shader_compilation=false`. With the emulated GPU's
-default asynchronous shader compilation, a draw whose pipeline isn't compiled yet is
-skipped, and RB3 composes each band member's outfits only once, in the main menu: the
-first composites it makes can come out empty and stay black for the session in the
-game's own picture (not the native view's), differently on each run.
-
-A fresh profile's band is made up at random, so each launch has different characters;
-`--test_random_seed=<n>` (0, the default, is off) seeds RB3's random numbers with `n`
-instead of the clock, so the same seed gives the same band on every launch (and on
-every machine) and another seed another band. It fixes who is in the band and the song's
-shot categories, but not every frame: animations and particles draw random numbers as
-the frame timing gives, so poses and camera angles still vary a little between runs.
-With `--test_random_seed=21`, Futurama's Fry (a cel-shaded Deluxe character) plays
-guitar in the render songs below, in their 25 s capture.
-
-`tests/game/render_song.b3t` plays a song with even/odd rendering off (every frame
-draws everything) and captures four points through it; `render_song_evenodd.b3t` does
-the same with it on, as the game ships, where a frame draws the world and the next
-post-processes it and presents it with its own overlay: there each capture is such a
-post frame's, with the world frame's world in front of its overlay, as the game shows
-it, and its `capture <name> composed` fails if it isn't. Launch that one without
-`--readback_resolve=full`. `render_song_live.b3t` measures the live view's cost with
-`native_view on`.
-
-Besides the back buffer's draws and the texture passes, a capture keeps the
-characters' shadow-map passes and NgLight's shadow casters, and the display's gamma
-ramp the game was shown through (the screenshot has it). `capture`'s reply:
-
-| Field | |
-|---|---|
-| `draws` | the draws the capture kept |
-| `skipped_pass` | draws left out for their draw mode: the velocity buffer's and other passes the native view doesn't draw |
-| `skipped_shadow` | shadow-map or shadow-caster draws outside their own pass; 0 expected |
-| `passes`, `passes_carried` | the texture passes in the capture, and those carried in from earlier frames (a band's outfits: there only with `native_view_record_targets` on from launch) |
-| `rt_sampled` | the render target versions the draws sample |
-| `rt_filtered` | of those, the ones whose pass drew nothing the capture keeps (the velocity buffer, or draws with no material or geometry) |
-| `rt_missing` | the others no pass in the capture made; 0 means none it could have had is missing |
-| `rt_fallback` | `native_view_rt_fallback` |
-| `proc_cmds` | what the frame drew: 7 everything; with even/odd rendering 1 the world, 2 post-processing; -1 unknown |
-| `composed`, `world_frame`, `game_frame` | the capture has the world of `world_frame` in front of the overlay of its own `game_frame` (a post frame, which shows the world frame before it) |
-| `held_fallback` | no such post frame came in 30 frames, so the capture took the last |
-| `gpu`, `gpu_ms`, `gpu_passes`, `gpu_rt_missing` | the GPU's `<name>.gpu.png` at the screenshot's size, its time, the texture passes it drew, and its draws that sampled a render target nothing had drawn (drawn transparent black). `gpu_error` instead when there's no GPU device or `native_view_backend` is `cpu` |
-
-With `native_view_texture_filtering` on, `<name>.gpu.nearest.png` is the GPU's drawing
-of the same capture with it off: the same frame without the game's samplers.
-
-Beside `<name>.gpu.png`, `<name>.gpu.alpha.png` and `<name>.gpu.depth.png` are the
-GPU's scene target where the world's draws left it, before the overlay: its alpha (the
-bloom weight RB3's shaders write) and its depth, as grey.
-
-`out/native_view_replay.exe <name>.cap out.png [options]` draws a capture on the CPU
-(`tools/native_view_replay/replay.cpp`; its header has the build command and every
-option). It prints a `post:` line (what post-processing was set to do), a `check:` line
-(whether the constants RB3's composite drew with agree) and a `gamma:` line (the ramp).
-`--compare` and `--diff` follow the mean difference with a `metrics:` line.
-
-| Replay option | |
-|---|---|
-| `--compare <name>.png [--image <name>.gpu.png]` | the game's screenshot and the CPU's drawing side by side, at the screenshot's size; with `--image`, that PNG (the GPU's) instead of the CPU's |
-| `--diff <name>.gpu.png` | the CPU's drawing against that PNG: the GPU checked against the CPU |
-| `--crop x,y,w,h` | measures that rectangle alone (a HUD element, say), in the compared PNG's pixels |
-| `--size WxH` | the size to draw at (640x360) when nothing sets it |
-| `--list` | the passes and every draw: mesh, material, where it lands, what its shader was given, its `cull` (2 `D3DCULL_CW`, 6 `D3DCULL_CCW`); and `shadow:` lines checking each self-shadowed draw's shadow map |
-| `--shade <draw>` | everything one draw's shader was given |
-| `--pick X,Y` | the draw that last wrote that pixel (at `--size`), its colour and shade |
-| `--dump-rt <DxTex hex>[:<version>]` | what that render target holds after its pass (`out.alpha.png` its alpha) |
-| `--dump-tex <draw>[:<map>][@<level>]` | a draw's diffuse texture as captured, or one of its shade's maps (`--shade`'s names: `normal`, `projected`...); with `@<level>`, that mip level of it. `--shade` prints each one's sampler and how many levels the capture kept |
-| `--dump-alpha <png>`, `--dump-depth <png>` | the scene target's alpha or depth, as the GPU's `.gpu.alpha.png` and `.gpu.depth.png` |
-| `--view alpha\|depth` | draws that view instead of the picture (with `--diff` against those PNGs) |
-| `--dump-bloom <png>` | bloom's first level as the composite read it, after glare's pass |
-| `--rt-none`, `--rt-guest` | never use guest memory's pixels for a render target; or draw no texture passes and use guest memory's alone |
-| `--no-post`, `--post-only xfm\|dof\|bloom\|spot\|soft` | no post-processing; or only the colour matrix, depth of field, bloom (and glare), the spotlights' beams or the soft particles |
-| `--no-gamma`, `--gamma-from <other.cap>` | no gamma ramp; or another capture's |
-| `--no-shadow` | characters without their self-shadows |
-| `--no-normal` | every material with its vertex normal, no normal or detail map |
-| `--nearest` | every texture's nearest texel at full size, not the game's samplers (`native_view_texture_filtering` off) |
-| `--no-cull` | both sides of every triangle |
-| `--legacy-light`, `--no-light` | the placeholder lighting from before RB3's shading; or every material unlit |
-
-F7's window has switches like these for the live view (lighting, culling,
-post-processing, the gamma ramp and others).
-
-`tools/parity.py` measures a set of captures against the game: copy `<name>.cap`,
-`<name>.png` and `<name>.gpu.png` from `screenshots/` into `out/parity`, then
-
-```
-python tools/parity.py                                  # the table for out/parity
-python tools/parity.py --set out/parity_other           # another set
-python tools/parity.py --baseline out/parity/baseline.json
-python tools/parity.py --replay-args=--no-gamma         # every replay run with these options too
-```
-
-Each capture gets a `cpu` row (the CPU's drawing against the game), a `gpu` row (the
-GPU's `.gpu.png` against the game) and a `gpu-cpu` row (the two against each other,
-ok at a mean of 0.5 or less), with both HUD crops' means (the score box, the track).
-The `cpu` and `gpu` rows are graded: Tier A (parity) is a mean of 8 or less, p50 4 or
-less, at most 5% of pixels off by more than 32, no 4x4 grid cell's mean over 20, both
-HUD crops 5 or less and a signed mean within 3; Tier B (acceptable) a mean of 12 or
-less and at most 12% off by more than 32. `--baseline` writes the numbers if the file
-is missing, and otherwise exits 1 if any capture's `cpu` or `gpu` mean got worse by
-more than 0.5 (`--write-baseline` saves over it). The `gpu` rows change only when the
-capture is taken again, not when replay is rebuilt, and numbers from different runs of
-the game aren't comparable: a baseline compares re-renders of the same captures.
-
-### Pro Keys and Pro Guitar (untested)
-
-RB3 reads a keytar's keys and a pro guitar's frets and strings through an Xbox 360 system
-call that ReXGlue doesn't implement, so band3 hands the game that data itself, for any
-keytar or pro guitar the input system reports: the Instrument Lab's, or a real one on
-Windows with `input_backend = xinput`. This hasn't been run against the game yet; the
-Instrument Lab's keys and pro guitars are the way to check it, and its **Pro instruments**
-tab shows, per player, the instrument type the game sees and the bytes band3 gave it. Keep
-the SDK's stick
-deadzones (`left_stick_deadzone_percentage`, `right_stick_deadzone_percentage`) at 0,
-since these instruments send their keys and frets in the stick values.
-
-### PlayStation and Wii instruments (experimental)
-
-Turn on `hid_instruments` (F4, Band3 → Game, then restart) to play Rock Band guitars and
-drum kits through their USB dongles:
-
-- PS3 and Wii guitars and drum kits, and a PS3 or Wii MIDI Pro Adapter in drum mode
-- PS4 guitars (MadCatz Stratocaster, PDP Jaguar) and drum kits (MadCatz, PDP)
-- PDP Riffmaster and CRKD Gibson SG, in PS4 or PS5 mode
-
-They show up as Xbox 360 instruments, each as its own player. This is new and hasn't been
-tried on every model yet. The Instrument Lab's **Connected instruments**
-tab (F6) shows each one's raw reports next to what the game receives; if one misbehaves,
-press **Save a 5 second capture** while playing the part that goes wrong, and include the
-file it writes to `logs/` (next to the executable) with the report.
-
-On Linux the dongles need to be readable by your user; install
-`tools/linux/70-band3-rock-band-instruments.rules` as described at the top of that file.
-
-### MIDI drum kits
-
-Turn on `midi_drums` (F4, Band3 → MIDI drums, then restart) to play an electronic drum kit
-over MIDI as a Rock Band pro drum kit, without a MIDI Pro Adapter. It uses the first MIDI
-input unless `midi_drums_device` names one (or part of one's name), and picks up a kit
-plugged in after the game starts.
-
-Notes follow the MIDI Pro Adapter's layout, as in RPCS3: snare 38, toms 48/45/41, hi-hat
-42/46, ride 51, crash 49, kick 36, hi-hat pedal 44 (the second pedal). Change any of them
-with `midi_drums_notes`, e.g. `44=Kick,40=Snare`, the same format as RPCS3's overrides.
-The Instrument Lab's **MIDI drums** tab (F6) shows what each note you hit played.
-
-The kit has no menu buttons, so as in RPCS3: hi-hat pedal three times then snare is Start,
-then the rim is Select, and then kick holds the kick for the song category menu (snare or
-floor tom lets go). Turn these off with `midi_drums_combos`.
-
-### Microphones (experimental)
-
-Turn on `usb_mics` (F4, Band3 → Microphones, then restart) to sing through microphones on
-this PC as Xbox 360 USB microphones. The first mic slot uses the system's default
-recording device unless `usb_mic_devices` names microphones (or parts of their names),
-comma separated, one per slot, for harmonies. Microphones plugged in after the game starts
-are picked up.
-
-The game connects the mic, offers the vocal parts (Solo, Harmony) and scores what it hears:
-`tests/game/usb_mic.b3t` sings a song's vocals with the test tone and checks the score goes
-up. A USB microphone records and connects the same way; singing into one hasn't been
-scored in a test yet. To check the game hears a mic slot without a microphone, set
-`usb_mic_test_tone` to a pitch in Hz (e.g. 220): the first slot then sings that steady
-tone, which the vocal track's pitch arrow holds. The Instrument Lab's **Microphones** tab
-(F6) shows what records each slot, whether the game has connected it and how much audio it
-has taken; the log reports the same steps (`USB mics: ...`).
-
-### Controller lag
-
-On top of calibration, RB3 builds in extra lag for each controller type, from the Xbox
-hardware's own delay (45 ms for an Xbox guitar, 36 ms for Xbox drums). band3's PlayStation,
-Wii and MIDI instruments reach the game as Xbox ones, so they get those numbers too. The
-Instrument Lab's **Lag** tab (F6) shows, per player, the type the game sees and the lag it
-uses. `joypad_lag` (Band3 → Game, then restart) changes it per type, as `type=ms`, comma
-separated: `5=20,8=30` gives Xbox guitars 20 ms and Xbox drums 30 ms. `type=ms/video/audio`
-also sets the lag the calibration tests assume, and a blank part keeps the game's number
-(`8=/30/`). It's per type, so a real Xbox instrument of the same type changes too.
-
-### Web server
-
-Turn on `http_enabled` (F4, Band3 → Integrations, then restart) and band3 serves a web
-page on port 21070 (`http_port`) to this PC and the local network (`http_address`
-127.0.0.1 keeps it to this PC). The log says where to open it
-(`Web server: listening on 0.0.0.0:21070, open http://192.168.1.20:21070/`).
-The page lists the song library with each song's album art and the difficulty of its
-parts, searchable and sortable, and **Select** highlights a song in the game's Music
-Library, which has to be open. **Filters** narrows it to songs with keys, pro parts or
-harmonies, under a difficulty for each part, or in some genres or decades (kept on that
-device); tapping a song shows its details, and **Random** picks one of those showing. A
-banner says what the game is doing: during a song, which, how far in, and the score. Windows asks once whether to
-let band3 through the firewall; allow it on private networks for other devices to
-reach it.
-
-It answers RB3Enhanced's API, so RB3E's page and tools written for it work too:
-
-| Endpoint | |
-|---|---|
-| `/` | the page; an `rb3e_index.html` at `game:\` replaces band3's |
-| `/list_songs` | every song, as `[shortname]` sections of `shortname=`, `title=`, `artist=`, `album=` and `origin=` lines |
-| `/song_<id>` | one song's lines, by song ID |
-| `/jump?shortname=<name>` | selects the song in the Music Library: 409 when it isn't open, 404 for a shortname no song has |
-| `/execute?script=<dta>` | runs a DTA script, only with `http_allow_scripts` on (anyone on the network could run any script, so it's off by default) |
-| `/jsonrpc` | `discordrp.json` at `game:\`, which Rock Band 3 Deluxe writes for Discord presence tools |
-
-band3 adds its own, which RB3E doesn't have:
-
-| Endpoint | |
-|---|---|
-| `/song_details` | every listed song's `genre` (as the Music Library names it), `year`, `length_ms`, `vocal_parts` and `tiers`, the difficulty of each part it has (`band`, `guitar`, `bass`, `drum`, `vocals`, `keys`, `real_guitar`, `real_bass`, `real_keys`) from 0 (Warmup) to 6 (Impossible), as JSON by shortname |
-| `/status` | what the game is doing, as JSON: `screen`, `in_library` (the Music Library is open, so `/jump` can select) and `playing`, during a song its `shortname`, `title`, `artist`, `score`, `position_ms` (null until the song starts) and `length_ms`, else null |
-| `/album_art?shortname=<name>` | the song's album art as a JPEG, read as the game reads it for the Music Library (from the ARK, or a loose file that replaces it); 404 when the song has none, or no song has that shortname |
-| `/rv/search?text=<text>&page=<n>` | a page of 25 of [RhythmVerse](https://rhythmverse.co)'s Rock Band 3 (Xbox) songs matching the text, or its newest without; JSON with `total`, `page`, `page_size` and `songs`, each with its `file_id`, details, `tiers` as `/song_details` gives them, `song_id`, `download` (RhythmVerse hosts it, so band3 can download it), `downloaded` (its file is in the content folders) and `in_library` (the game has a song with its song ID; null while the game is busy). Optional: `sort=` `newest`, `updated`, `downloads`, `title`, `artist` or `length`; `downloadable=1` for only what band3 can download (pages of 100, the rest left out); `has=` parts (`keys`, `real_guitar`...), `harmonies=1`, `genre=` RhythmVerse's genres (`metal,rock`), `decade=1990,2000`, and `cap=<part>:<tier>` for a part's difficulty at most |
-| `POST /rv/download` | downloads `{"file_id": "<id>"}` (JSON) from a search into the songs folder, or with `"update": true` the newer version of one band3 downloaded (search results' `update` is `available`), for the next launch: 404 for a song no search has found, 409 for one RhythmVerse doesn't host, or has nothing newer of |
-| `/rv/downloads` | this session's downloads as JSON: the `folder` they go to, and each one's `state` (`queued`, `downloading`, `done`, `failed`), `received`, `total`, `error` and `in_library` (the game has taken it in; null while the game is busy, or before any is done) |
-
-#### RhythmVerse
-
-The page's **RhythmVerse** tab searches [RhythmVerse](https://rhythmverse.co)'s custom
-songs for Rock Band 3 on Xbox, with their art, details and difficulties, sorted as you
-choose (newest, most downloaded, title...) and with **Filters** for the parts a song has,
-a part's difficulty at most, genre and decade, and **Downloadable only** (on at first),
-which leaves out what band3 can't download; they're kept on that device. It says which
-songs you have, however you got them. **In library**: the game has a song with its
-song ID (RhythmVerse's for the upload is the `song_id` in its `songs.dta`), whatever
-its file is called; **Select** then selects it in the Music Library, as on the Library
-tab. **Downloaded**: its file is in the content folders, under the name RhythmVerse gives
-it and at its size; **Not in game yet** until the game has taken it in. **Similar in
-library**: a song by its artist and title is in the game, another chart of it maybe.
-
-**Download** saves a song's package into a `rhythmverse` folder in the first of the
-content folders (`content_folders`; `songs\rhythmverse` unless you've changed it), and
-the game takes it in without a restart, as it took in songs bought from the Xbox store:
-band3 tells it new content is installed (the console's `XN_LIVE_CONTENT_INSTALLED`), and
-the game lists its content again at its next refresh, showing "Loading New Downloaded
-Content..." as it does. That's at once with the Music Library open (it keeps its place),
-once a song that's playing is over, and on the way into the Music Library from the main
-menu. Songs copied into the content folders by hand join the same way once a search has
-seen them (the folders' files are listed again a minute on). Only
-songs RhythmVerse hosts itself download this way; for those on other sites (MediaFire,
-Google Drive...), zipped ones and the official DLC, **Open** goes to the song's
-RhythmVerse page. A download that isn't a Rock Band package is thrown away.
-
-band3 keeps what it downloaded in `rhythmverse.json` in the download folder, with
-RhythmVerse's hashes of each upload, and when they change the song shows **Update
-available**. **Update** downloads the new version beside the old one as `<name>.pending`;
-the game has the old one open, so band3 puts the new one in its place when it next
-starts, keeping the old one beside it as `<name>.replaced` (nothing is deleted; clear
-them out when you like). Songs you got some other way aren't checked for updates. Turn
-`http_rhythmverse` off (`[http] rhythmverse = false`) to leave the tab out. RhythmVerse's
-API isn't documented, so a change on its side can break the tab until band3 follows.
-
-To work on the page without the game, `python tools/web_preview.py` serves it at
-http://127.0.0.1:21080/ with the songs, their details and album art read from the game
-data. The page comes from `src/Net/http_page.h` on every load, so an edit shows on a
-refresh, without a rebuild; **Select** can't work there, and `/status` says what
-`--status` (`menu`, `library` or `playing`) tells it to. Its RhythmVerse tab searches
-RhythmVerse, but its downloads are made up and save nothing.
-
-`http_allow_cors` adds `Access-Control-Allow-Origin: *`, for pages served from somewhere
-else. Requests wait for the game's next frame, and get a 503 if it doesn't come within 5 s.
-Files at `game:\` are found as the game finds them: in the `game` folder of the user data
-root (see Settings above) first, then in the game data root.
-
-### RB3Enhanced script functions
-
-band3 gives the game's scripts RB3Enhanced's functions, so mods written for RB3E (Rock
-Band 3 Deluxe among them) can call them: `rb3e_get_song_name`, `rb3e_get_artist`,
-`rb3e_get_album`, `rb3e_get_genre` and `rb3e_get_origin` (each takes a song ID),
-`rb3e_get_song_count`, `rb3e_set_venue` (for this session; `forced_venue` keeps its
-value), `rb3e_local_ip`, `rb3e_api_version` (0, the RB3E API band3 follows),
-`rb3e_build_tag`, `rb3e_commit`, `rb3e_is_emulator` (1), `rb3e_send_event_string`,
-`rb3e_change_music_speed`, `rb3e_change_track_speed` and their `rb3e_get_` pairs (the
-`song_speed` and `track_speed` settings, for this session) and
-`print_debug`, which logs its argument. `rb3e_relaunch_game` starts band3 again with
-the same command line (a minimized test run stays minimized; the new one waits for this
-one to close) and closes this one. `rb3e_delete_songcache` deletes the song cache the
-game mounted (`songcache`, or Deluxe's `rbdxcache`, in the user data root) the next
-time band3 starts, since the game has it open. With `http_allow_scripts` on, the web
-server's `/execute` runs them, e.g. `{print_debug {rb3e_get_song_name 1009}}`.
-
-Rock Band 3 Deluxe only uses them when its scripts see `RB3E` defined, as RB3E's
-loader does. With `rb3e_mode` (Band3 → Integrations; on unless you turn it off, then
-restart) band3 defines `RB3E` and `RB3E_HAS_VERSION`: Deluxe then shows its RB3E version line,
-offers its party mode (which shows this PC's address for the web page above) and
-looks songs up through these functions, and its "Clear and reboot game" after a
-Deluxe update clears the song cache and restarts band3.
-
-band3 also adds RB3E's six modifiers to the game's (Options → Modifiers, and Deluxe's
-menus), with or without `rb3e_mode`: Black Background (no venue), Force HOPOs, Mirror
-Mode (green and orange, red and blue swapped), Gem Color Shuffle (gems drawn in random
-colours), Gem Shuffle (each chord's lanes shuffled) and Double Bass (expert drums play
-the 2x bass pedal notes).
-
-As with RB3E, keys on guitar is always unlocked: the overshell's part list offers keys to
-a guitar without the career unlock. (RB3E's other always-on patches are already in: the
-8000-song limit, and the song blacklist, whose check TU5 itself no longer makes.)
-
-Two of RB3E's options are settings too (Band3 → Game, both off by default):
-`unlock_clothing` unlocks every piece of clothing, tattoo and face paint and the video
-venues without earning them, and `gold_on_all_difficulties` lets gold stars be earned
-below expert, from the next song.
-
-### Steam Deck
-
-On a Steam Deck, band3 starts fullscreen and letterboxed (the game is 16:9, the screen
-16:10), with vsync on and the FPS counter off, since Steam's performance overlay does
-that job. These only fill in settings that `band3.toml` and the command line leave unset,
-but they win over `band3_config.ini`, whose window settings are for a desktop. Turn
-`steam_deck_defaults` off (Band3 → Game, then restart) to go back to the ini's.
-
-band3 recognises a Deck from the `SteamDeck=1` Steam sets, or on Linux from the Deck's
-hardware ids. Keep `resolution_scale` at 1: the Deck's screen can't show more than the
-console's 720p, and scaling costs a lot of GPU time. The log warns when it's higher.
-
-Instruments on a Deck:
-
-- The Deck has one USB-C port, so more than one instrument or dongle needs a hub.
-- For PlayStation and Wii dongles, install the udev rules above from Desktop Mode. SteamOS
-  has no password for `sudo` until you set one with `passwd`.
-- The log says what type each controller reports and what it plays as (for example
-  "A controller reports type 1 (gamepad); playing as 7 (guitar)"). If an instrument
-  shows up as a gamepad, turn off Steam Input for band3 (its controller settings in
-  Steam) and try again, and include the log line if you report it.
-
-### Profiling
-
-Profiling is compiled into every build except Release. Build the `relwithdebinfo` preset
-(e.g. `cmake --preset win-amd64-relwithdebinfo`, then
-`cmake --build --preset win-amd64-relwithdebinfo`) and connect the
-[Tracy](https://github.com/wolfpld/tracy) 0.13.1 profiler to the running game. Next to the
-SDK's own zones, band3 marks RB3's engine systems (`RB3 Game::Poll`,
-`RB3 WorldCrowd::DrawShowing`, `RB3 DxRnd::DoPostProcess` and so on), so a capture shows
-where each frame goes. For captures that can be compared, turn on `autoplay`
-(Band3 → Debug) and play the same song in the same venue each time. Turning `autosave`
-off (Band3 → Game) keeps those runs out of your profile; it then only saves from the
-options menu.
-
-## Notes
-
-- This project is in an early state and may not build or run correctly in all applications.
-- Documentation will be improved as development progresses.
+| [Building](docs/building.md) | requirements, Windows and Linux builds, unit tests, compile check, profiling |
+| [Settings, folders and songs](docs/settings.md) | the F4 menu, config files, where band3 keeps things, DLC and custom songs, Steam Deck |
+| [Instruments and microphones](docs/instruments.md) | Instrument Lab, PlayStation/Wii dongles, MIDI drums, USB mics, pro instruments, controller lag |
+| [Integrations](docs/integrations.md) | network events, Discord, the web server and its API, RB3Enhanced and Deluxe compatibility |
+| [Test harness](docs/test-harness.md) | `band3ctl`: driving the game from scripts, and the game tests |
+| [Native renderer](docs/native-renderer.md) | the native renderer, render checks, capture replay and parity measurement |
+
+`band3_config.ini` documents every option band3 reads.
+
+## band3 and milo-native-engine
+
+[milo-native-engine](https://github.com/freeqaz/milo-native-engine) takes the other route
+to a native Rock Band 3: a port. Decompiled source (rb3-xenon's, for the Xbox 360 version)
+is rebuilt as native 64-bit C++ and linked against a shared engine that renders with WebGPU
+and provides audio, input and file access. band3 instead runs the game's own executable,
+statically recompiled.
+
+| | band3 | milo-native-engine |
+|---|---|---|
+| Game code | the Xbox 360 executable, recompiled from PowerPC; it runs in an emulated 32-bit address space, on ReXGlue's implementation of the Xbox kernel | the decompiled source, rebuilt as native 64-bit C++ |
+| What it needs | only the executable: every function runs, decompiled or not | a complete, working decompilation |
+| Rendering | a native renderer, which reproduces the game's own shaders and is checked against the game's picture pixel by pixel; it will replace the emulated Xbox 360 GPU\* | WebGPU, with shaders of its own |
+| Platforms | wherever ReXGlue runs: Windows and Linux | Windows, Linux, Mac and the web |
+| Pros | playable now; the whole game runs as it shipped, so gameplay, timing, DLC and Deluxe behave as on a 360; the picture aims to match the 360's exactly | runs anywhere, the web included; the game can be changed at the source; no emulation layer, and ordinary C++ to debug |
+| Cons | the emulated address space and kernel stay; changing the game means hooking recompiled functions; limited to ReXGlue's platforms | playable only once the decompilation is complete; the game behaves as the original only where the decompilation matches it; its own shaders don't reproduce the 360's picture |
+
+Both renderers replace the same part of RB3, its platform render layer (`DxRnd`, `DxMesh`,
+`DxTex`), and draw the same Milo meshes, materials and cameras. The difference is everything
+around them.
+
+\* Planned, not done. Today the native renderer is experimental and draws on top of the
+emulated GPU, which stays the default. Once it covers every screen, launching with
+`renderer = native` will leave the emulated GPU out entirely, and `emulated` will remain as
+a choice at launch.
+
+## Credits
+
+band3 stands on the work of these projects:
+
+**Recompilation**
+- [band3_recomp](https://github.com/ihatecompvir/band3_recomp) by ihatecompvir and its
+  contributors: the original Rock Band 3 recompilation this fork builds on.
+- [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk): the Xbox 360 recompiler and
+  runtime band3 is built with.
+
+**Decompilations**
+- [rb3-xenon](https://github.com/freeqaz/rb3-xenon) by freeqaz: a decompilation of the
+  same Xbox 360 TU5 executable. band3's function names are imported from its symbol map
+  (`tools/import_rb3xenon_names.py`), and its source is the reference for band3's hooks,
+  instrument handling and renderer.
+- [dc3-decomp](https://github.com/rjkiv/dc3-decomp), the MiloHax decompilation of Dance
+  Central 3: the source of rb3-xenon's Milo engine code.
+- [rb3](https://github.com/DarkRTA/rb3), the decompilation of the Wii version of Rock
+  Band 3: the source of rb3-xenon's game code.
+- [milo-native-engine](https://github.com/freeqaz/milo-native-engine) by freeqaz: a
+  reference for the native renderer.
+
+**Rock Band community**
+- [RB3Enhanced](https://github.com/RBEnhanced/RB3Enhanced): band3 follows its network
+  event format, web API, script functions, modifiers and custom song IDs.
+- [Rock Band 3 Deluxe](https://github.com/hmxmilohax/rock-band-3-deluxe) by MiloHax.
+- [PlasticBand](https://github.com/TheNathannator/PlasticBand) and
+  [PlasticBand-Unity](https://github.com/TheNathannator/PlasticBand-Unity) by
+  TheNathannator: the documentation behind band3's Xbox 360, PlayStation and Wii
+  instrument support.
+
+**Emulators**
+- [RPCS3](https://github.com/RPCS3/rpcs3): band3's MIDI drum support is adapted from its
+  emulated MIDI Pro Adapter.
+- [Xenia](https://github.com/xenia-canary/xenia-canary): the native renderer reads
+  textures, mip tails and the gamma ramp as Xenia does, and the shader research tools
+  read its ucode dumps.
+
+**Libraries**
+- [RtMidi](https://github.com/thestk/rtmidi) (MIDI input),
+  [inih](https://github.com/benhoyt/inih) (INI parsing),
+  [stb_image_write](https://github.com/nothings/stb) (album art),
+  [doctest](https://github.com/doctest/doctest) (unit tests),
+  [Tracy](https://github.com/wolfpld/tracy) (profiling), and SDL3 through the ReXGlue SDK.
+
+Rock Band 3 is a trademark of Harmonix Music Systems. This project is not affiliated with
+or endorsed by Harmonix, MTV Games or Microsoft.
+
+## License
+
+[GPL-2.0](LICENSE.md).

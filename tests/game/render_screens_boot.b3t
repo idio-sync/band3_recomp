@@ -1,0 +1,46 @@
+# Boots a fresh profile as boot.b3t does, pairing the game's frame with the
+# native view's (`capture screen-<kind>`) on each kind of screen it passes:
+# the boot logos, the intro movie, the title and the first-run prompts. The
+# first of three scripts that go through every kind of screen RB3 shows;
+# render_screens_menus.b3t and render_screens_song.b3t go on from here.
+#   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
+#   python tools/band3ctl.py run tests/game/render_screens_boot.b3t
+#   python tools/band3ctl.py run tests/game/render_screens_menus.b3t
+#   python tools/band3ctl.py run tests/game/render_screens_song.b3t
+# Launch with --fresh: the prompts are a first boot's, and the songs the later
+# scripts pick are where a fresh profile's music library has them. Even/odd
+# rendering stays on, as the game ships, so the menus' captures are post
+# frames composed with the world frame before them where RB3 draws by turns.
+# Captures are under screenshots/ next to the exe: <name>.png the game's,
+# <name>.cap the native view's capture, <name>.gpu.png its GPU drawing.
+
+# The boot logos: a Bink movie RB3's splash thread draws into a texture
+# (TexMovie) and shows on a mesh, while the main thread loads. The frame count
+# stands still meanwhile (it counts the main thread's frames), so this waits
+# by the clock, for a logo to be up.
+sleep 2s
+capture screen-boot-logos
+# the intro movie, a movie screen of its own
+wait screen=intro_movie_screen timeout=180s
+wait frames=240
+capture screen-intro-movie
+# the title (press start), over the city
+wait screen=splash_screen timeout=120s
+wait frames=120
+capture screen-title
+press start
+wait screen=first_time_calibration timeout=30s
+wait frames=60
+capture screen-calibration-prompt
+# Continue, not Calibrate System
+press down
+press green
+# the dx_ screens are Rock Band 3 Deluxe's
+wait screen=dx_welcome_screen timeout=30s
+wait frames=60
+capture screen-dx-welcome
+# Let's Rock!
+press green
+wait screen=hint_rb3_welcome_screen timeout=30s
+wait frames=60
+capture screen-rb3-welcome

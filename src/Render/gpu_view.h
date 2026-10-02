@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "src/Render/scene_capture.h"
@@ -39,7 +40,16 @@
 // its casters' silhouettes blurred twice in place, is a texture pass like
 // the depth volume's, which the projected light's draws read as their s5.
 // The display's gamma ramp (gamma_ramp.h) goes over the finished picture
-// last, by shaders/gamma.hlsl's pass, which the frame is read back from.
+// last, by shaders/gamma.hlsl's pass, into an output texture the frame is
+// read back from; without a ramp the same pass with an identity lookup,
+// which is exact for 8 bits, so every frame ends in it.
+//
+// For the native renderer's presentation (renderer = native) that pass writes
+// one of kOutputs textures the SDK's presenter samples where they are, no
+// readback: on Windows SDL_gpu's Direct3D 12 device is the SDK's own (one
+// device per adapter in a process), so the ID3D12Resource behind SDL's
+// texture, reached through SDL 3.4.14's private texture layout and checked
+// before use (CheckZeroCopy), is a texture the SDK's command list can read.
 
 namespace band3::render {
 
@@ -53,6 +63,17 @@ struct GpuStats {
     double wait_ms = 0;     // of that, from submitting to having the picture
 };
 
+// one of the presenter's output textures, as RenderFrameToOutput left it
+struct GpuOutput {
+    // the ID3D12Resource behind it, which the SDK's presenter can sample in
+    // place, or null where it can't (not Windows, or CheckZeroCopy failed)
+    void* d3d12_resource = nullptr;
+    uint32_t width = 0, height = 0;
+    // new each time the texture is made again, so a view made of an earlier
+    // one is known stale
+    uint64_t generation = 0;
+};
+
 class GpuRenderer {
  public:
     static GpuRenderer& Get();
@@ -64,16 +85,45 @@ class GpuRenderer {
     // whether Init made a device
     bool Ready();
     // Draws `frame` at options.width x options.height into rgba (R in the low
-    // byte, alpha 0xff). Any thread, one frame at a time. False without a
-    // device or if the GPU failed (logged).
+    // byte, alpha 0xff): into an output texture of its own, then read back.
+    // Any thread, one frame at a time. False without a device or if the GPU
+    // failed (logged).
     bool RenderFrame(const FrameCapture& frame, const RasterOptions& options,
                      std::vector<uint32_t>& rgba, GpuStats& stats);
+
+    // The presenter's output textures, which RenderFrameToOutput draws into
+    // and leaves on the GPU, finished (it waits for the GPU): output `slot`
+    // (0 to kOutputs - 1), made again at options' size if it isn't that size.
+    // native_view.cpp keeps the presenter from sampling a slot while it's
+    // drawn into (present_model.h's PresentSlots). False as RenderFrame.
+    static constexpr int kOutputs = 3;
+    bool RenderFrameToOutput(const FrameCapture& frame, const RasterOptions& options, int slot,
+                             GpuOutput& out, GpuStats& stats);
+    // reads output `slot` back as RenderFrame's rgba, at its size; false if
+    // it has no picture (or no device)
+    bool DownloadOutput(int slot, std::vector<uint32_t>& rgba, uint32_t& width,
+                        uint32_t& height);
+    // The SDK's ID3D12Device, which the outputs must live on for its presenter
+    // to sample them in place, or null when its presenter isn't Direct3D 12.
+    // On the UI thread, before CheckZeroCopy.
+    void SetPresentDevice(void* d3d12_device);
+    // Whether the outputs can be sampled in place (GpuOutput::d3d12_resource):
+    // on Windows, once the device has started, SDL's texture behind a test
+    // texture is checked once (its create info, its texture's container and
+    // index, its resource's device and description); every output made after
+    // is checked too, and the first that fails turns this off for the
+    // session. False and why not otherwise. Any thread; the first call waits
+    // for a frame being drawn.
+    bool CheckZeroCopy(std::string& why);
     // releases the device, on the UI thread at shutdown; RenderFrame fails after
     void Shutdown();
 
  private:
     GpuRenderer();
     ~GpuRenderer();
+    // a frame into output `slot` (-1 RenderFrame's own, read back into rgba)
+    bool Draw(const FrameCapture& frame, const RasterOptions& options, int slot,
+              std::vector<uint32_t>* rgba, GpuStats& stats);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

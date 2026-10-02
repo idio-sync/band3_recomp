@@ -22,6 +22,7 @@ constexpr std::chrono::milliseconds kReleaseGap = 50ms;
 constexpr std::chrono::milliseconds kReplugWait = 1000ms;
 constexpr std::chrono::milliseconds kWaitTimeout = 30s;
 constexpr std::chrono::milliseconds kExpectTimeout = 5s;
+constexpr std::chrono::milliseconds kMaxSleep = 600s;
 // about a frame
 constexpr std::chrono::milliseconds kWaitPoll = 16ms;
 constexpr uint8_t kDefaultVelocity = 100;
@@ -310,6 +311,19 @@ std::string Wait(TestTarget& target, const std::vector<std::string_view>& args,
     return OkWithState(target, state);
 }
 
+// `sleep <n>s|<n>ms`: wall-clock time, for what `wait frames=` can't count.
+// At boot RB3's splash thread draws the logos while the main thread loads, and
+// the frame count (App::DrawRegular's) stands still until the intro movie.
+std::string SleepFor(TestTarget& target, const std::vector<std::string_view>& args) {
+    if (args.size() != 2) return Error(target, "usage: sleep <n>s|<n>ms");
+    auto length = ParseDuration(args[1]);
+    if (!length || *length > kMaxSleep)
+        return Error(target, "sleep takes 0 to 600 s, as 2s or 250ms");
+    target.Sleep(*length);
+    if (target.Cancelled()) return Error(target, "the test server is shutting down");
+    return Ok();
+}
+
 std::string Pad(TestTarget& target, std::optional<int> prefix,
                 const std::vector<std::string_view>& args) {
     if (args.size() > 2) return Error(target, "usage: pad [player]");
@@ -370,16 +384,27 @@ std::string FileNameArg(TestTarget& target, const std::vector<std::string_view>&
     return {};
 }
 
+// `screenshot [emulated|native] [name]`: the picture the window shows, as the
+// renderer setting has it, or the one named
 std::string Screenshot(TestTarget& target, const std::vector<std::string_view>& args) {
+    ScreenshotSource source = ScreenshotSource::kWindow;
+    std::vector<std::string_view> name_args = args;
+    if (args.size() >= 2 && (args[1] == "emulated" || args[1] == "native")) {
+        source = args[1] == "native" ? ScreenshotSource::kNative : ScreenshotSource::kEmulated;
+        name_args.erase(name_args.begin() + 1);
+    }
     std::string name;
-    if (std::string error = FileNameArg(target, args, name); !error.empty()) return error;
+    if (name_args.size() > 2) return Error(target, "usage: screenshot [emulated|native] [name]");
+    if (std::string error = FileNameArg(target, name_args, name); !error.empty()) return error;
     ScreenshotInfo info;
-    if (std::string error = target.Screenshot(name, info); !error.empty())
+    if (std::string error = target.Screenshot(name, source, info); !error.empty())
         return Error(target, error);
     std::string fields = "\"path\":";
     AppendJsonString(fields, info.path);
     fields += ",\"width\":" + std::to_string(info.width);
     fields += ",\"height\":" + std::to_string(info.height);
+    fields += ",\"renderer\":";
+    AppendJsonString(fields, info.renderer);
     return Ok(fields);
 }
 
@@ -518,7 +543,8 @@ std::string NativeView(TestTarget& target, const std::vector<std::string_view>& 
             if (!parsed) return Error(target, "a native view size is <width>x<height>, 16x16 up");
             size = *parsed;
         }
-        if (std::string error = target.NativeViewOn(size.first, size.second, post); !error.empty())
+        if (std::string error = target.NativeViewOn(size.first, size.second, end == 3, post);
+            !error.empty())
             return Error(target, error);
         return Ok(NativeViewJson(target.NativeView()));
     }
@@ -542,6 +568,16 @@ std::string Set(TestTarget& target, std::string_view line,
         value.remove_suffix(1);
     if (std::string error = target.SetSetting(args[1], value); !error.empty())
         return Error(target, error);
+    return Ok();
+}
+
+// bind <name>: presses a key bind's key, e.g. `bind instrument_lab` for F6;
+// the bind_ prefix is optional
+std::string Bind(TestTarget& target, const std::vector<std::string_view>& args) {
+    if (args.size() != 2) return Error(target, "usage: bind <name>, e.g. bind instrument_lab");
+    std::string bind(args[1]);
+    if (!bind.starts_with("bind_")) bind = "bind_" + bind;
+    if (std::string error = target.PressBind(bind); !error.empty()) return Error(target, error);
     return Ok();
 }
 
@@ -656,9 +692,11 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "state") return OkWithState(target, target.State());
     if (verb == "wait") return Wait(target, args, kWaitTimeout);
     if (verb == "expect") return Wait(target, args, kExpectTimeout);
+    if (verb == "sleep") return SleepFor(target, args);
     if (verb == "screenshot") return Screenshot(target, args);
     if (verb == "capture") return Capture(target, args);
     if (verb == "set") return Set(target, line, args);
+    if (verb == "bind") return Bind(target, args);
     if (verb == "native_view") return NativeView(target, args);
     if (verb == "quit") {
         target.Quit();

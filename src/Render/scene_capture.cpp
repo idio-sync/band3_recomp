@@ -33,6 +33,8 @@
 
 extern "C" void __imp__RndCam__Select(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxMesh__DrawShowing(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__DxMesh__DrawFaces(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__RndShader__SelectConfig(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxRnd__Present(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxMultiMesh__DrawShowing(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxParticleSys__DrawParticles(PPCContext& ctx, uint8_t* base);
@@ -138,6 +140,9 @@ constexpr uint32_t kClearDepth = 0x82000D78;
 constexpr uint32_t kRnd_Width = 0x3c;
 constexpr uint32_t kRnd_Height = 0x40;
 constexpr uint32_t kRnd_ProcCmds = 0x16c;
+// its clear colour, four floats r g b a, which DxRnd::BeginDrawing clears the
+// back buffer to (out/research/n1_runtime_survey.md 3)
+constexpr uint32_t kRnd_ClearColor = 0x2c;
 // XDK D3D resources (rb3-xenon xdk/d3d9i/d3d9.h)
 constexpr uint32_t kD3DVertexBuffer_Fetch = 0x18;
 constexpr uint32_t kD3DIndexBuffer_Address = 0x18;
@@ -474,6 +479,28 @@ std::atomic<bool> g_pass_recording{false};
 // while the splash thread draws)
 thread_local uint64_t g_shader_options = 0;
 thread_local int32_t g_shader_type = -1;
+// The material RndShader::SelectConfig last selected on this thread (r3,
+// null for none): a material pass's, which DxMesh::DrawShowing selects
+// before each DrawFaces. Stored on every call, as it's one store.
+thread_local uint32_t g_selected_mat = 0;
+// The DxMesh::DrawShowing running on this thread (mesh 0 outside one) and
+// the passes it has drawn: each DxMesh::DrawFaces inside it is a pass, a
+// draw of its own (CaptureMesh)
+struct MeshDrawing {
+    uint32_t mesh = 0;
+    uint32_t passes = 0;
+};
+thread_local MeshDrawing g_mesh_drawing;
+// The DxMultiMesh::DrawShowing running on this thread (0 outside one), its
+// passes selected so far and the last one's material: DrawBatchedNewGfx draws
+// a pass's instances between one SelectConfig and the next, so a pass is
+// recorded at the next one's SelectConfig, and the last at the end
+struct MultiMeshDrawing {
+    uint32_t multimesh = 0;
+    uint32_t passes = 0;
+    uint32_t mat = 0;
+};
+thread_local MultiMeshDrawing g_multimesh_drawing;
 // native_view_rt_fallback, kept by its change callback
 std::atomic<bool> g_rt_fallback_guest{true};
 // the SDK's anisotropic_override, which the game's own picture is sampled
@@ -743,8 +770,12 @@ const Mat4& ViewProj(const Guest& g, State& s) {
 // surface (draw mode 6: IsSoftParticle), or a shadow's: draw mode 1 into a
 // shadow map's pass (RndShadowMap's depth), 3 into any (NgLight's casters).
 // Other draws there (a mesh child of RndSoftParticles; none seen) are left
-// out. The sink says which mode it was.
-bool Target(const Guest& g, State& s, std::optional<Sink>& sink, bool particles = false) {
+// out. The sink says which mode it was. A DrawRect quad (`rect`) goes to the
+// back buffer whatever the camera, outside a texture pass: it draws in the
+// target's pixels with no camera's transform, and RB3 draws its ScreenMasks
+// and post copy after a shadow map's camera was the last selected.
+bool Target(const Guest& g, State& s, std::optional<Sink>& sink, bool particles = false,
+            bool rect = false) {
     if (s.open.tex) {
         if (!s.open.record) return false;
         PassRecord& rec = *s.open.rec;
@@ -752,7 +783,7 @@ bool Target(const Guest& g, State& s, std::optional<Sink>& sink, bool particles 
     } else {
         if (!g_enabled.load(std::memory_order_relaxed)) return false;
         FrameCapture& fc = *s.building;
-        if (!s.cam || !s.cam_backbuffer) {
+        if (!rect && (!s.cam || !s.cam_backbuffer)) {
             fc.skipped_target++;
             return false;
         }
@@ -777,7 +808,7 @@ bool Target(const Guest& g, State& s, std::optional<Sink>& sink, bool particles 
         }
         return false;
     }
-    if (!sink->target && !s.cam_counted) {
+    if (!sink->target && s.cam_backbuffer && !s.cam_counted) {
         fc.cams++;
         s.cam_counted = true;
     }
@@ -899,8 +930,9 @@ int32_t InternShade(FrameCapture& fc, ShadeIndex& index, ShadeState&& shade, Fil
 }
 
 // What the draw just made had its shader read, from the device's constant
-// shadow: the hooks run after the draw, and DxMesh::DrawShowing sets the
-// constants per material pass, so these are its last pass's. The spotlight
+// shadow: the hooks run after the draw, and RndShader::SelectConfig sets the
+// constants per material pass, so a mesh's are read after each pass's
+// DrawFaces (and a multimesh's before the next pass's SelectConfig). The spotlight
 // drawer's registers are kept for its cones (ShaderType 2) and, `blur`, a
 // DrawRect blur's taps, c89 (the camera's depth range) for a soft particle,
 // and zeroed for the rest. `mat` 0 for a draw without a material (a cone).
@@ -1008,20 +1040,21 @@ DrawItem MakeItem(const Guest& g, State& s, Sink& sink, uint32_t mat, uint32_t o
     return item;
 }
 
-// the cull mode the draw just made had (DrawItem::cull): DxMesh::DrawShowing
-// sets it per material pass, so its last pass's
+// the cull mode the draw just made had (DrawItem::cull): RndShader::SelectConfig
+// sets it per material pass, so read as the constants are (CaptureShade)
 uint8_t CaptureCull(const Guest& g) {
     const uint32_t dev = g.U32(kD3DDeviceHolder);
     return dev ? uint8_t(g.U32(dev + kDev_ModeCntl) & (kCullFront | kCullBack | kCullFrontIsCw))
                : 0;
 }
 
-// the mesh's material and geometry, or false (and counted) if it draws nothing
-bool MeshParts(const Guest& g, FrameCapture& fc, uint32_t mesh, uint32_t& mat,
+// the mesh's geometry for a pass with material `mat`, or false (and counted)
+// if it draws nothing: no material (left out for now), fur, or no geometry
+bool MeshParts(const Guest& g, FrameCapture& fc, uint32_t mesh, uint32_t mat,
                std::shared_ptr<const Geometry>& geometry) {
-    mat = g.U32(mesh + kMesh_Mat);
     uint32_t geom = g.U32(mesh + kMesh_GeomOwner);
     if (!geom) geom = mesh;
+    if (!mat) fc.skipped_no_mat++;
     if (!mat || g.U32(mat + kMat_Fur)) {
         fc.skipped_no_geom++;
         return false;
@@ -1074,7 +1107,11 @@ void CaptureSpotCone(const Guest& g, State& s, Sink& sink, uint32_t mesh) {
     PushDraw(s, sink, std::move(item));
 }
 
-void CaptureMesh(uint8_t* base, uint32_t mesh) {
+// One material pass of DxMesh::DrawShowing (rb3-xenon rnddx9/Mesh.cpp), which
+// draws the mesh's faces once per pass: RndShader::SelectConfig(mat) then
+// DrawFaces, for its material and each NextPass after it (0 for the first:
+// pass counts them). `mat` is the pass's, null for a mesh without one.
+void CaptureMesh(uint8_t* base, uint32_t mesh, uint32_t mat, uint32_t pass) {
     State& s = S();
     const Guest g{base};
     std::optional<Sink> sink;
@@ -1084,9 +1121,9 @@ void CaptureMesh(uint8_t* base, uint32_t mesh) {
         CaptureSpotCone(g, s, *sink, mesh);
         return;
     }
-    uint32_t mat;
     std::shared_ptr<const Geometry> geometry;
     if (!MeshParts(g, sink->fc, mesh, mat, geometry)) return;
+    if (pass) sink->fc.later_passes++;
 
     DrawItem item = MakeItem(g, s, *sink, mat, mesh, std::move(geometry));
     item.world = ReadXfm(g, mesh + kMesh_WorldXfm);
@@ -1108,16 +1145,19 @@ void CaptureMesh(uint8_t* base, uint32_t mesh) {
 }
 
 // DxMultiMesh draws its mesh once per instance, instanced, without going
-// through the mesh's DrawShowing; one draw per instance here
-void CaptureMultiMesh(uint8_t* base, uint32_t multimesh) {
+// through the mesh's DrawShowing; one draw per instance here, for one
+// material pass (`mat`, and `pass` as CaptureMesh's): its
+// DrawBatchedNewGfx loops over them as DrawShowing does, SelectConfig then
+// its batches of instances
+void CaptureMultiMesh(uint8_t* base, uint32_t multimesh, uint32_t mat, uint32_t pass) {
     State& s = S();
     const Guest g{base};
     const uint32_t mesh = g.U32(multimesh + kMultiMesh_Mesh);
     std::optional<Sink> sink;
     if (!mesh || !Target(g, s, sink)) return;
-    uint32_t mat;
     std::shared_ptr<const Geometry> geometry;
     if (!MeshParts(g, sink->fc, mesh, mat, geometry)) return;
+    if (pass) sink->fc.later_passes++;
 
     DrawItem proto = MakeItem(g, s, *sink, mat, mesh, std::move(geometry));
     proto.cull = CaptureCull(g);
@@ -1131,6 +1171,34 @@ void CaptureMultiMesh(uint8_t* base, uint32_t multimesh) {
         PushDraw(s, *sink, std::move(item));
     }
     sink->fc.multimesh_instances += n;
+}
+
+// A DxMesh::DrawFaces outside a DrawShowing (RndTexBlender's, the velocity
+// buffer's), counted (faces_elsewhere) in the texture pass it draws into or
+// the frame, and not recorded; the velocity buffer's aren't counted, as its
+// DrawShowing's aren't recorded either. The first few are logged, with where
+// they draw.
+void CountFacesElsewhere(const Guest& g, uint32_t geom) {
+    State& s = S();
+    const uint32_t holder = g.U32(kDrawModeHolder);
+    const uint32_t mode = holder ? g.U32(holder + kDrawMode) : kDrawModeNormal;
+    if (mode == kDrawModeVelocity) return;
+    FrameCapture* fc = nullptr;
+    if (s.open.tex) {
+        if (s.open.record) fc = &s.open.rec->content;
+    } else if (g_enabled.load(std::memory_order_relaxed)) {
+        fc = s.building.get();
+    }
+    if (fc) fc->faces_elsewhere++;
+    static int logged = 0;
+    if (logged < 8) {
+        logged++;
+        REXLOG_INFO("native view: DxMesh::DrawFaces of {:08X} outside a DrawShowing, material "
+                    "{:08X}, draw mode {}, into {:08X} ({}), camera {:08X}{}",
+                    geom, g_selected_mat, mode, s.open.tex,
+                    s.open.tex && s.open.rec ? s.open.rec->pass.name : std::string(), s.cam,
+                    s.cam_backbuffer ? " (back buffer)" : "");
+    }
 }
 
 // DxParticleSys's vertex fill: one quad per active particle, built as the
@@ -1199,21 +1267,23 @@ void CaptureParticles(uint8_t* base, uint32_t sys) {
 }
 
 // DxRnd::DrawRect(this, Hmx::Rect* px, RndMat* mat, ShaderType, Color* color,
-// ...) (band3_recomp.31.cpp; out/research/m3_survey.md 3): a quad over the
-// rect (x, y, w, h in the bound target's pixels), coloured by the material's
-// colour unless it's prelit or there's none, else by `color`. The second and
-// third colours DrawRect can take for a gradient aren't kept. Its uv is 0..1
+// Color* color1, Color* color2) (band3_recomp.31.cpp; out/research/
+// m3_survey.md 3): a quad over the rect (x, y, w, h in the bound target's
+// pixels), coloured by the material's colour unless it's prelit or there's
+// none, else by `color`, or a gradient: from `color` on the left to color1 on
+// the right if there's a color1, else from the top to color2 at the bottom if
+// there's a color2 (rb3-xenon rnddx9/Rnd.cpp). Its uv is 0..1
 // from the top left, through the material's texture transform when its tex
 // gen is kTexGenXfmOrigin, as DrawRect works it out on the CPU (rb3-xenon
 // rnddx9/Rnd.cpp): u' = m.x.x u - m.y.x v + v.x, v' = m.y.y v - m.x.y u + v.y,
 // MakeTex3's matrix about the origin. The shader's texgen (VS c20/c21, which
 // the shade state keeps) transforms it again, as the game's VS does.
 void CaptureRect(uint8_t* base, uint32_t rnd, uint32_t rect_ptr, uint32_t mat, int32_t shader,
-                 uint32_t color_ptr) {
+                 uint32_t color_ptr, uint32_t color1_ptr, uint32_t color2_ptr) {
     State& s = S();
     const Guest g{base};
     std::optional<Sink> sink;
-    if (!rect_ptr || !Target(g, s, sink)) return;
+    if (!rect_ptr || !Target(g, s, sink, false, true)) return;
 
     // the bound target's size: the texture's, or its mip level's while
     // FinishDrawTarget builds them; else the screen's
@@ -1232,15 +1302,29 @@ void CaptureRect(uint8_t* base, uint32_t rnd, uint32_t rect_ptr, uint32_t mat, i
     float r[4];
     for (int i = 0; i < 4; i++) r[i] = g.F32(rect_ptr + i * 4);
 
-    float col[4] = {1, 1, 1, 1};
+    auto pack = [&](uint32_t color) {
+        float col[4] = {1, 1, 1, 1};
+        if (color)
+            for (int i = 0; i < 4; i++) col[i] = g.F32(color + i * 4);
+        uint32_t rgba = 0;
+        for (int i = 0; i < 4; i++)
+            rgba |= uint32_t(std::clamp(col[i], 0.0f, 1.0f) * 255.0f + 0.5f) << (8 * i);
+        return rgba;
+    };
+    // the corners' colours, in `corner`'s order: top left, top right, bottom
+    // right, bottom left
+    uint32_t rgba[4];
     if (mat && !g.U8(mat + kMat_Prelit)) {
-        for (int i = 0; i < 4; i++) col[i] = g.F32(mat + kMat_Color + i * 4);
-    } else if (color_ptr) {
-        for (int i = 0; i < 4; i++) col[i] = g.F32(color_ptr + i * 4);
+        std::fill(std::begin(rgba), std::end(rgba), pack(mat + kMat_Color));
+    } else {
+        const uint32_t c = pack(color_ptr);
+        std::fill(std::begin(rgba), std::end(rgba), c);
+        if (color1_ptr) {
+            rgba[1] = rgba[2] = pack(color1_ptr);
+        } else if (color2_ptr) {
+            rgba[2] = rgba[3] = pack(color2_ptr);
+        }
     }
-    uint32_t rgba = 0;
-    for (int i = 0; i < 4; i++)
-        rgba |= uint32_t(std::clamp(col[i], 0.0f, 1.0f) * 255.0f + 0.5f) << (8 * i);
     // the texture transform's rows x and y and its translation, identity
     // without one
     float xx = 1, xy = 0, yx = 0, yy = 1, tx = 0, ty = 0;
@@ -1254,14 +1338,15 @@ void CaptureRect(uint8_t* base, uint32_t rnd, uint32_t rect_ptr, uint32_t mat, i
     }
     auto geom = std::make_shared<Geometry>();
     const float corner[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
-    for (const auto& c : corner) {
+    for (int k = 0; k < 4; k++) {
+        const float* c = corner[k];
         Vertex v{};
         v.pos[0] = (r[0] + c[0] * r[2]) / tw * 2.0f - 1.0f;
         v.pos[1] = 1.0f - (r[1] + c[1] * r[3]) / th * 2.0f;
         v.nrm[2] = -1.0f;
         v.uv[0] = xx * c[0] - yx * c[1] + tx;
         v.uv[1] = yy * c[1] - xy * c[0] + ty;
-        v.color = rgba;
+        v.color = rgba[k];
         geom->verts.push_back(v);
     }
     geom->indices = {0, 1, 2, 0, 2, 3};
@@ -1380,6 +1465,39 @@ void CameraSelected(const Guest& g, uint32_t cam) {
     rec.samples.clear();
 }
 
+// A back-buffer camera RndCam::Select just selected, into the frame's
+// cameras (scene_capture.h's CameraView): its viewport as DxCam::SetViewport
+// works it out (rb3-xenon rnddx9/Cam.cpp; TheHiResScreen is never active) and
+// its z range. One selected again keeps what it has now.
+void RecordCamera(const Guest& g, State& s, uint32_t cam) {
+    const uint32_t rnd = g.U32(kDrawModeHolder);
+    if (!rnd) return;
+    CameraView v;
+    v.cam = cam;
+    v.target_w = g.U32(rnd + kRnd_Width);
+    v.target_h = g.U32(rnd + kRnd_Height);
+    float r[4];
+    for (int i = 0; i < 4; i++) r[i] = g.F32(cam + kCam_ScreenRect + i * 4);
+    const float x = std::min(1.0f, std::max(0.0f, r[0]));
+    const float y = std::min(1.0f, std::max(0.0f, r[1]));
+    const float x2 = std::min(1.0f, std::max(0.0f, r[0] + r[2]));
+    const float y2 = std::min(1.0f, std::max(0.0f, r[1] + r[3]));
+    const float width = float(v.target_w), height = float(v.target_h);
+    v.viewport[0] = float(uint32_t(width * x));
+    v.viewport[1] = float(uint32_t(height * y));
+    v.viewport[2] = float(uint32_t(width * std::max(0.0f, x2 - x)));
+    v.viewport[3] = float(uint32_t(height * std::max(0.0f, y2 - y)));
+    v.zrange[0] = g.F32(cam + kCam_ZRange);
+    v.zrange[1] = g.F32(cam + kCam_ZRange + 4);
+    std::vector<CameraView>& cams = s.building->cameras;
+    for (CameraView& c : cams) {
+        if (c.cam != cam) continue;
+        c = v;
+        return;
+    }
+    cams.push_back(v);
+}
+
 // `rec`'s draws, shades and samples to the end of `fc`
 void AppendPass(State& s, FrameCapture& fc, const PassRecord& rec) {
     std::vector<int32_t> remap(rec.content.shades.size());
@@ -1415,6 +1533,9 @@ void AddCounts(FrameCapture& to, const FrameCapture& from) {
     to.maps_cube += from.maps_cube;
     to.maps_other_format += from.maps_other_format;
     to.rt_snapshots += from.rt_snapshots;
+    to.later_passes += from.later_passes;
+    to.skipped_no_mat += from.skipped_no_mat;
+    to.faces_elsewhere += from.faces_elsewhere;
 }
 
 // whether a pass drew nothing the capture keeps because every draw it made
@@ -1753,7 +1874,7 @@ void LogGammaIfChanged(const GammaRamp& g) {
 
 // The frame's end, under g_state_mutex: the frame captured, for
 // HoldIfRequested once that's let go, or null while capture is off
-std::shared_ptr<const FrameCapture> FinishFrame() {
+std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
     State& s = S();
     // passes close within the frame they start in
     if (s.open.tex) DropOpenPass(s);
@@ -1779,6 +1900,11 @@ std::shared_ptr<const FrameCapture> FinishFrame() {
     s.building->world_frame = game_frame;
     s.building->gamma = ReadDisplayGamma();
     LogGammaIfChanged(s.building->gamma);
+    if (const Guest g{base}; const uint32_t rnd = g.U32(kDrawModeHolder)) {
+        s.building->has_clear_color = 1;
+        for (int i = 0; i < 4; i++)
+            s.building->clear_color[i] = g.F32(rnd + kRnd_ClearColor + i * 4);
+    }
     CarryPasses(s, *s.building);
     std::shared_ptr<const FrameCapture> done = s.building;
     // With even/odd rendering, a frame that drew the world is kept for the
@@ -1925,26 +2051,97 @@ extern "C" REX_FUNC(RndCam__Select) {
     s.cam = cam;
     s.vp_valid = false;
     s.cam_backbuffer = REX_LOAD_U32(cam + kCam_TargetTex) == 0;
+    if (s.cam_backbuffer && g_enabled.load(std::memory_order_relaxed))
+        RecordCamera(Guest{base}, s, cam);
 }
 
-// the draw hooks record while capturing, and inside a recorded texture pass
-// while not
+// The draw hooks record while capturing, and inside a recorded texture pass
+// while not.
+//
+// DxMesh::DrawShowing (band3_recomp.24.cpp) returns unless DxMesh::CanDraw;
+// in the velocity buffer's draw mode it queues the mesh and draws nothing;
+// else it sets the transforms and, for its material and each NextPass after
+// it (none for a fur material, whose DrawFur draws its shells), calls
+// RndShader::SelectConfig(mat, 18) and its geometry owner's DrawFaces
+// (DxMesh::DrawFaces, through the vtable), which draws the faces with the
+// device as that pass set it. Each DrawFaces is recorded as a draw of its own
+// (the DrawFaces hook); a DrawShowing that drew none is recorded as before
+// passes were, after it, for what Target and MeshParts count.
 extern "C" REX_FUNC(DxMesh__DrawShowing) {
     const uint32_t mesh = ctx.r3.u32;
+    const MeshDrawing outer = g_mesh_drawing;
+    g_mesh_drawing = MeshDrawing{mesh, 0};
     __imp__DxMesh__DrawShowing(ctx, base);
-    if (!Recording()) return;
+    const uint32_t passes = g_mesh_drawing.passes;
+    g_mesh_drawing = outer;
+    if (passes || !Recording()) return;
     std::lock_guard lock(g_state_mutex);
     RecordTimer timer;
-    CaptureMesh(base, mesh);
+    CaptureMesh(base, mesh, REX_LOAD_U32(mesh + kMesh_Mat), 0);
 }
 
-extern "C" REX_FUNC(DxMultiMesh__DrawShowing) {
-    const uint32_t multimesh = ctx.r3.u32;
-    __imp__DxMultiMesh__DrawShowing(ctx, base);
+// DxMesh::DrawFaces (r3 the geometry owner): one material pass of the
+// DxMesh::DrawShowing running, with g_selected_mat its material. Called
+// outside one too, by RndTexBlender (its blend meshes, into its texture,
+// after its own SelectConfig) and the velocity buffer: those are counted
+// (faces_elsewhere) and not recorded.
+extern "C" REX_FUNC(DxMesh__DrawFaces) {
+    const uint32_t geom = ctx.r3.u32;
+    __imp__DxMesh__DrawFaces(ctx, base);
+    const uint32_t mesh = g_mesh_drawing.mesh;
+    const uint32_t pass = mesh ? g_mesh_drawing.passes++ : 0;
     if (!Recording()) return;
     std::lock_guard lock(g_state_mutex);
     RecordTimer timer;
-    CaptureMultiMesh(base, multimesh);
+    if (mesh) {
+        CaptureMesh(base, mesh, g_selected_mat, pass);
+        return;
+    }
+    CountFacesElsewhere(Guest{base}, geom);
+}
+
+// DxMultiMesh::DrawShowing draws in the colour pass alone, through
+// DrawBatchedNewGfx, whose passes CaptureMultiMesh records: each at the next
+// pass's SelectConfig (the SelectConfig hook) and the last after it. One that
+// selected none (CanDraw false, another draw mode) is recorded as before
+// passes were, for what Target and MeshParts count.
+extern "C" REX_FUNC(DxMultiMesh__DrawShowing) {
+    const uint32_t multimesh = ctx.r3.u32;
+    const MultiMeshDrawing outer = g_multimesh_drawing;
+    g_multimesh_drawing = MultiMeshDrawing{multimesh, 0, 0};
+    __imp__DxMultiMesh__DrawShowing(ctx, base);
+    const MultiMeshDrawing drawn = g_multimesh_drawing;
+    g_multimesh_drawing = outer;
+    if (!Recording()) return;
+    std::lock_guard lock(g_state_mutex);
+    RecordTimer timer;
+    if (drawn.passes) {
+        CaptureMultiMesh(base, multimesh, drawn.mat, drawn.passes - 1);
+    } else {
+        const uint32_t mesh = REX_LOAD_U32(multimesh + kMultiMesh_Mesh);
+        CaptureMultiMesh(base, multimesh, mesh ? REX_LOAD_U32(mesh + kMesh_Mat) : 0, 0);
+    }
+}
+
+// RndShader::SelectConfig(mat, ShaderType, ...): selects the material pass's
+// shader and sets its constants (as the draw mode wants it: 17 for a shadow
+// map's depth, 22 velocity). Inside a DxMultiMesh::DrawShowing, the pass
+// before this one has drawn all its instances by now: recorded before its
+// device state is replaced.
+extern "C" REX_FUNC(RndShader__SelectConfig) {
+    const uint32_t mat = ctx.r3.u32;
+    MultiMeshDrawing& multi = g_multimesh_drawing;
+    if (multi.multimesh) {
+        if (multi.passes && Recording()) {
+            std::lock_guard lock(g_state_mutex);
+            RecordTimer timer;
+            CaptureMultiMesh(base, multi.multimesh, multi.mat, multi.passes - 1);
+        }
+        multi.passes++;
+        multi.mat = mat;
+    }
+    g_selected_mat = mat;
+    __imp__RndShader__SelectConfig(ctx, base);
 }
 
 extern "C" REX_FUNC(DxParticleSys__DrawParticles) {
@@ -1958,15 +2155,16 @@ extern "C" REX_FUNC(DxParticleSys__DrawParticles) {
 
 // DxRnd::DrawRect's shader variant, which the colour one (0x82732C70) and
 // Rnd::DrawRectScreen call too: r4 the Hmx::Rect, r5 the RndMat (or 0), r6
-// the ShaderType, r7 the colour
+// the ShaderType, r7 the colour, r8 and r9 a gradient's second colour (or 0)
 extern "C" REX_FUNC(DxRnd__DrawRect_82733538) {
     const uint32_t rnd = ctx.r3.u32, rect = ctx.r4.u32, mat = ctx.r5.u32, color = ctx.r7.u32;
+    const uint32_t color1 = ctx.r8.u32, color2 = ctx.r9.u32;
     const int32_t shader = ctx.r6.s32;
     __imp__DxRnd__DrawRect_82733538(ctx, base);
     if (!Recording()) return;
     std::lock_guard lock(g_state_mutex);
     RecordTimer timer;
-    CaptureRect(base, rnd, rect, mat, shader, color);
+    CaptureRect(base, rnd, rect, mat, shader, color, color1, color2);
 }
 
 // RndShader::Cache(type, options): r4 is the ShaderType, r5 the 64-bit
@@ -2175,7 +2373,7 @@ extern "C" REX_FUNC(DxRnd__Present) {
     std::shared_ptr<const FrameCapture> done;
     {
         std::lock_guard lock(g_state_mutex);
-        done = FinishFrame();
+        done = FinishFrame(base);
     }
     // held without the lock, which a texture let go of on another thread
     // meanwhile takes

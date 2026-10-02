@@ -7,6 +7,7 @@
 //                               [--dump-rt <hex>[:<version>]]
 //                               [--rt-none | --rt-guest]
 //                               [--no-tex] [--no-blend] [--no-cull] [--no-shadow] [--no-normal]
+//                               [--no-depth-clear]
 //                               [--nearest]
 //                               [--transpose]
 //                               [--no-skinned | --only-skinned] [--unskinned]
@@ -60,7 +61,13 @@
 // lighting from before the game's shading, --no-light with none (every
 // material unlit). --no-cull draws both sides of every
 // triangle, as the native view did before it culled as the game does (the
-// cull mode --list prints, scene_capture.h's DrawItem::cull). --no-shadow draws
+// cull mode --list prints, scene_capture.h's DrawItem::cull). --no-depth-clear
+// never clears the back buffer's depth between cameras in a capture from
+// before its cameras were kept (RasterOptions::clear_depth_per_camera; one
+// with them never does, and layers them by their z ranges). --list prints the
+// clear colour the back buffer starts as ("clear:") and the cameras ("camera"
+// lines: viewport, z range, the depth the renderers give each one's draws:
+// soft_raster.h's LayoutBackBuffer). --no-shadow draws
 // the characters without their self-shadows (RasterOptions::self_shadow): no
 // shadow map's pass, every SHADOW_BUFFER draw lit. --list's "shadow:" lines
 // check the captured shadow maps: each SHADOW_BUFFER draw's s5 is the version
@@ -537,6 +544,9 @@ void PrintPassSummary(const FrameCapture& fc) {
                 "skipped_target %u\n",
                 fc.skipped_shadow, fc.skipped_velocity, fc.skipped_draw_mode, fc.skipped_no_geom,
                 fc.skipped_target);
+    std::printf("material passes: after a mesh's first %u, without a material %u (left out, "
+                "in skipped_no_geom too); DrawFaces outside a DrawShowing %u\n",
+                fc.later_passes, fc.skipped_no_mat, fc.faces_elsewhere);
     // the render targets draws sample that no pass here made
     std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, size_t>> missing;
     for (const DrawItem& d : fc.draws) {
@@ -842,6 +852,54 @@ void PrintShadowCheck(const FrameCapture& fc) {
                     worst_col[3], worst_draw);
 }
 
+// The "clear:" line, TheRnd's clear colour the back buffer starts as, and
+// the "camera:" lines: the back buffer's cameras (FrameCapture::cameras),
+// each one's viewport, z range and draws, and how the renderers layer them
+// (soft_raster.h's LayoutBackBuffer): the reference camera's d = B + A/w,
+// and each camera's first draw's DepthMap
+void PrintCameras(const FrameCapture& fc) {
+    if (fc.has_clear_color)
+        std::printf("clear: %.3f %.3f %.3f %.3f (RGBA8 %08X)\n", fc.clear_color[0],
+                    fc.clear_color[1], fc.clear_color[2], fc.clear_color[3], ClearRgba(fc));
+    else
+        std::printf("clear: none kept (a capture from before it): 0xff202020\n");
+    if (fc.cameras.empty()) {
+        std::printf("cameras: none kept (a capture from before them): depth cleared per camera\n");
+        return;
+    }
+    const BackBufferLayout l = LayoutBackBuffer(fc);
+    std::printf("cameras: %zu; depth %s", fc.cameras.size(),
+                l.mapped ? "layered by z range" : "1/w (no perspective reference camera)");
+    if (l.mapped)
+        std::printf(", reference z = %.6f w + %.6f, zrange %.4f..%.4f: d = %.6f + %.6f / w",
+                    l.ref_proj[0], l.ref_proj[1], l.ref_zrange[0], l.ref_zrange[1], l.ref_b,
+                    l.ref_a);
+    std::printf("\n");
+    for (const CameraView& c : fc.cameras) {
+        size_t draws = 0, first = fc.draws.size();
+        for (size_t i = 0; i < fc.draws.size(); i++) {
+            const DrawItem& d = fc.draws[i];
+            if (d.cam != c.cam || d.target || d.rect_shader >= 0) continue;
+            if (!draws++) first = i;
+        }
+        std::printf("  camera %08X viewport %.0f,%.0f %.0fx%.0f of %ux%u, zrange %.4f..%.4f, %zu "
+                    "mesh draws",
+                    c.cam, c.viewport[0], c.viewport[1], c.viewport[2], c.viewport[3], c.target_w,
+                    c.target_h, c.zrange[0], c.zrange[1], draws);
+        if (draws) {
+            float vp[4];
+            DepthMap dm;
+            PlaceBackBufferDraw(l, fc, fc.draws[first], c.target_w, c.target_h, vp, dm);
+            const Mat4& m = fc.draws[first].view_proj;
+            std::printf(" from #%zu, depth (%.6f w + %.6f + %.6f z) / w; z column %.4f %.4f %.4f "
+                        "%.4f, w column %.4f %.4f %.4f %.4f",
+                        first, dm.p, dm.q, dm.r, m.m[0][2], m.m[1][2], m.m[2][2], m.m[3][2],
+                        m.m[0][3], m.m[1][3], m.m[2][3], m.m[3][3]);
+        }
+        std::printf("\n");
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -906,6 +964,7 @@ int main(int argc, char** argv) {
         else if (a == "--pick" && i + 1 < argc) std::sscanf(argv[++i], "%d,%d", &pick_x, &pick_y);
         else if (a == "--no-blend") o.blending = false;
         else if (a == "--no-cull") o.culling = false;
+        else if (a == "--no-depth-clear") o.clear_depth_per_camera = false;
         else if (a == "--no-shadow") o.self_shadow = false;
         else if (a == "--no-normal") o.normal_maps = false;
         else if (a == "--nearest") o.filtering = false;
@@ -956,7 +1015,7 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> order;
     size_t drawn = 0;
     for (const DrawItem& d : fc->draws) {
-        if (!DrawnToBackBuffer(d)) continue;
+        if (!DrawnToBackBuffer(d) || d.rect_shader >= 0) continue;
         drawn++;
         auto [it, fresh] = cams.try_emplace(d.cam);
         if (fresh) order.push_back(d.cam);
@@ -983,6 +1042,7 @@ int main(int argc, char** argv) {
     PrintPost(*fc);
     PrintGamma(*fc, list);
     if (list) {
+        PrintCameras(*fc);
         PrintPasses(*fc);
         PrintShadowCheck(*fc);
     }
@@ -1093,11 +1153,14 @@ int main(int argc, char** argv) {
                 d.color[0], d.color[1], d.color[2], d.color[3]);
             if (const ShadeState* s = shade) {
                 const float* c1 = s->Vs(1);
+                // the pass's material and the next pass's (a draw of its
+                // own in captures since passes were: the same mesh after)
                 std::printf("      opt %016llX type %d shade %d env %u | c1 %.2f %.2f %.2f %.2f "
-                            "| box %.2f | points %u/%d\n",
+                            "| box %.2f | points %u/%d | mat %08X next_pass %08X\n",
                             (unsigned long long)s->options, s->shader_type, d.shade,
                             unsigned(s->use_environ), c1[0], c1[1], c1[2], c1[3], BoxSum(*s),
-                            s->OptionBits(shader_opt::kNumPoint, 2), PointsLit(*s));
+                            s->OptionBits(shader_opt::kNumPoint, 2), PointsLit(*s), s->mat,
+                            s->next_pass);
                 // particles: the quad axes' lengths (VS c47, c48) and the
                 // first quad's sides along them (corners 0 to 3, 0 to 1)
                 if (s->shader_type == 14 && d.geom->verts.size() >= 4) {

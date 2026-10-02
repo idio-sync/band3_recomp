@@ -23,6 +23,7 @@ REXCVAR_DECLARE(bool, menu_shortcut);
 REXCVAR_DECLARE(bool, steam_deck_defaults);
 REXCVAR_DECLARE(std::string, joypad_lag);
 REXCVAR_DECLARE(bool, autosave);
+REXCVAR_DECLARE(bool, skip_profile_prompt);
 REXCVAR_DECLARE(double, song_speed);
 REXCVAR_DECLARE(double, track_speed);
 REXCVAR_DECLARE(bool, unlock_clothing);
@@ -48,6 +49,7 @@ REXCVAR_DECLARE(bool, disable_hair_shader);
 REXCVAR_DECLARE(bool, fullbright);
 REXCVAR_DECLARE(bool, compress_character_textures);
 REXCVAR_DECLARE(bool, disable_even_odd_rendering);
+REXCVAR_DECLARE(std::string, renderer);
 
 // Band3/Integrations
 REXCVAR_DECLARE(bool, events_enabled);
@@ -75,6 +77,7 @@ REXCVAR_DECLARE(int32_t, test_port);
 REXCVAR_DECLARE(int32_t, test_random_seed);
 REXCVAR_DECLARE(int32_t, relaunch_wait_pid);
 REXCVAR_DECLARE(std::string, native_view_backend);
+REXCVAR_DECLARE(bool, native_present_zero_copy);
 REXCVAR_DECLARE(bool, native_view_record_targets);
 REXCVAR_DECLARE(std::string, native_view_rt_fallback);
 REXCVAR_DECLARE(bool, native_view_normal_maps);

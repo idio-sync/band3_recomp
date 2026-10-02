@@ -1,4 +1,4 @@
-# Plays render_song.b3t's song on autoplay with the live native view on, F7's
+# Plays render_song.b3t's song on autoplay with the live native view on, F9's
 # renderer without its window, at 1280x720 on the native_view_backend (the GPU
 # by default), and prints its numbers: frames captured and drawn, each drawn
 # frame's time (mean, p50, p95, max ms), and the game's own frame rate with the

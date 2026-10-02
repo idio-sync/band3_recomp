@@ -3,13 +3,24 @@
 #include "src/Render/capture_file.h"
 #include "src/Render/gpu_view.h"
 #include "src/Render/png_writer.h"
+#include "src/Render/present_model.h"
 #include "src/settings.h"
 
 #include <imgui.h>
+#include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/ui/presenter.h>
+#include <rex/ui/ui_drawer.h>
+#include <rex/ui/window.h>
+#ifdef _WIN32
+#include <rex/ui/d3d12/d3d12_presenter.h>
+
+#include "src/Render/shaders/present_shaders.gen.h"
+#endif
 
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -37,7 +48,8 @@ std::string Describe(const FrameCapture& fc, const std::string& drawn) {
                   "frame %llu: %zu draws (%u skinned, %u verts, %u tris) from %u cameras\n"
                   "skipped: %u render-target, %u velocity, %u shadow, %u other pass, "
                   "%u no geometry; %u mutable\n"
-                  "%u multimesh instances, %u particles\n"
+                  "%u multimesh instances, %u particles; material passes after a mesh's "
+                  "first %u, without a material %u; DrawFaces outside a DrawShowing %u\n"
                   "textures: %u decoded, %u other formats; cache hits geom %u tex %u\n"
                   "texture passes: %u drawn, %u carried, %u empty, %u unbalanced; render "
                   "targets sampled %u, missing %u, their pass's draws left out %u; "
@@ -45,7 +57,8 @@ std::string Describe(const FrameCapture& fc, const std::string& drawn) {
                   static_cast<unsigned long long>(fc.frame), fc.draws.size(), skinned, verts,
                   tris, fc.cams, fc.skipped_target, fc.skipped_velocity, fc.skipped_shadow,
                   fc.skipped_draw_mode, fc.skipped_no_geom,
-                  fc.mutable_meshes, fc.multimesh_instances, fc.particles, fc.textured,
+                  fc.mutable_meshes, fc.multimesh_instances, fc.particles, fc.later_passes,
+                  fc.skipped_no_mat, fc.faces_elsewhere, fc.textured,
                   fc.untextured_format, fc.geom_cached, fc.tex_cached, fc.passes_own,
                   fc.passes_carried, fc.passes_empty, fc.passes_unbalanced, fc.rt_sampled,
                   fc.rt_missing, fc.rt_filtered, fc.rt_snapshots);
@@ -129,6 +142,88 @@ class Renderer {
         dump_path_ = std::move(path);
     }
 
+    // F9's window shows each frame's RGBA, which the presenter's zero-copy
+    // frames otherwise never have
+    void SetDialogOpen(bool open) {
+        std::lock_guard lock(mutex_);
+        dialog_open_ = open;
+    }
+
+    // The presenter (renderer = native) as a user. While it is one, its size
+    // is the size drawn at, whatever the window or the live view set; and on
+    // the zero-copy path each frame goes into one of the outputs (slots_),
+    // not into RGBA.
+    void StartPresent(uint32_t width, uint32_t height, bool zero_copy) {
+        {
+            std::lock_guard lock(mutex_);
+            if (present_) return;
+            present_ = true;
+            present_w_ = width;
+            present_h_ = height;
+            present_zero_copy_ = zero_copy;
+            options_changed_ = true;
+        }
+        AddUser();
+    }
+    void StopPresent() {
+        {
+            std::lock_guard lock(mutex_);
+            if (!present_) return;
+            present_ = false;
+            slots_.Forget();
+            settle_ = nullptr;
+            options_changed_ = true;
+        }
+        RemoveUser();
+    }
+    bool Presenting() {
+        std::lock_guard lock(mutex_);
+        return present_;
+    }
+    // the window's picture's size; the worker draws the next frame at it
+    void SetPresentSize(uint32_t width, uint32_t height) {
+        std::lock_guard lock(mutex_);
+        if (width == present_w_ && height == present_h_) return;
+        present_w_ = width;
+        present_h_ = height;
+        options_changed_ = true;
+    }
+    void SetPresentZeroCopy(bool zero_copy) {
+        std::lock_guard lock(mutex_);
+        options_changed_ |= present_zero_copy_ != zero_copy;
+        present_zero_copy_ = zero_copy;
+    }
+    // Direct3D 12: lets the worker learn that the GPU has finished every paint
+    // so far once paints have stopped (minimized), when no paint passes on a
+    // completed index: true once it has
+    void SetSettle(std::function<bool()> settle) {
+        std::lock_guard lock(mutex_);
+        settle_ = std::move(settle);
+    }
+    // A paint numbered `submission`, the GPU having finished those up to
+    // `completed`: the newest output to show, marked as sampled by it; false
+    // before the first
+    bool ShowNewest(uint64_t submission, uint64_t completed, int& slot, GpuOutput& out) {
+        std::lock_guard lock(mutex_);
+        slots_.Completed(completed);
+        last_paint_ = std::chrono::steady_clock::now();
+        slot = slots_.Newest();
+        if (slot < 0) return false;
+        slots_.Shown(slot, submission);
+        out = outputs_[slot];
+        return true;
+    }
+    // A screenshot: the next frame drawn is read back too, for Take, on the
+    // zero-copy path before it's published, so SDL never copies an output
+    // the SDK's queue may be sampling. Returns the serial Take passes.
+    uint64_t RequestImage() {
+        std::lock_guard lock(mutex_);
+        image_wanted_ = true;
+        // drawn again even if the game has no new frame (paused)
+        options_changed_ = true;
+        return image_serial_;
+    }
+
     // the live view's numbers start over, from the next frame captured, and
     // are kept while `measure`; the window alone keeps none
     void ResetLiveStats(bool measure) {
@@ -145,8 +240,8 @@ class Renderer {
         std::lock_guard lock(mutex_);
         LiveViewStats s = live_;
         s.gpu = live_drew_gpu_.value_or(gpu_);
-        s.width = options_.width;
-        s.height = options_.height;
+        s.width = present_ ? present_w_ : options_.width;
+        s.height = present_ ? present_h_ : options_.height;
         s.post = options_.post;
         // capturing stops with the last user, and the frame number with it
         if (users_ > 0 && cap && cap->frame > live_base_) s.captured = cap->frame - live_base_;
@@ -168,6 +263,10 @@ class Renderer {
     }
 
  private:
+    // how long paints must have stopped before the worker settles the slots
+    // they sampled itself: by then each paint's commands were long submitted
+    static constexpr std::chrono::milliseconds kPaintsStopped{250};
+
     void Run() {
         uint64_t last_frame = 0;
         auto last_dump = std::chrono::steady_clock::now() - std::chrono::seconds(10);
@@ -175,22 +274,40 @@ class Renderer {
         while (true) {
             RasterOptions o;
             std::string dump;
-            bool changed, gpu;
+            bool changed, gpu, zero_copy, want_rgba;
             {
                 std::lock_guard lock(mutex_);
                 if (stop_) return;
                 o = options_;
+                // the presenter's size wins over the window's and the live view's
+                if (present_) {
+                    o.width = present_w_;
+                    o.height = present_h_;
+                }
                 o.normal_maps = REXCVAR_GET(native_view_normal_maps);
                 o.filtering = REXCVAR_GET(native_view_texture_filtering);
                 gpu = gpu_;
+                dump = dump_path_;
+                zero_copy = present_ && present_zero_copy_ && gpu && dump.empty();
+                // RGBA for F9's window, a screenshot, the upload path and the CPU
+                want_rgba = !zero_copy || dialog_open_ || image_wanted_;
                 changed = options_changed_;
                 options_changed_ = false;
-                dump = dump_path_;
             }
             auto cap = LatestCapture();
             if (!cap || (cap->frame == last_frame && !changed)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 continue;
+            }
+            // an output no paint may still be sampling, or wait for one
+            int slot = -1;
+            if (zero_copy) {
+                slot = AcquireSlot();
+                if (slot < 0) {
+                    std::lock_guard lock(mutex_);
+                    options_changed_ |= changed;
+                    continue;
+                }
             }
             last_frame = cap->frame;
             // dumping saves captures for tools/native_view_replay and leaves
@@ -214,12 +331,37 @@ class Renderer {
             // CPU draws instead
             GpuStats gs;
             RasterStats rs;
-            const bool drew_gpu = gpu && GpuRenderer::Get().RenderFrame(*cap, o, rgba, gs);
-            if (!drew_gpu) rs = Rasterize(*cap, o, rgba);
+            GpuOutput out;
+            bool drew_gpu = false, drew_output = false;
+            if (slot >= 0) {
+                drew_output = GpuRenderer::Get().RenderFrameToOutput(*cap, o, slot, out, gs);
+                drew_gpu = drew_output;
+                // an output that failed the zero-copy checks is read back, and
+                // the drawer turns to uploading from the next paint
+                if (drew_output && (want_rgba || !out.d3d12_resource)) {
+                    uint32_t w = 0, h = 0;
+                    drew_gpu = GpuRenderer::Get().DownloadOutput(slot, rgba, w, h);
+                    want_rgba = true;
+                }
+            } else if (gpu) {
+                drew_gpu = GpuRenderer::Get().RenderFrame(*cap, o, rgba, gs);
+            }
+            if (!drew_gpu) {
+                rs = Rasterize(*cap, o, rgba);
+                want_rgba = true;
+            }
             const std::string stats =
                 Describe(*cap, drew_gpu ? DescribeGpu(gs) : DescribeRaster(rs));
             {
                 std::lock_guard lock(mutex_);
+                if (slot >= 0) {
+                    if (drew_output) {
+                        outputs_[slot] = out;
+                        slots_.Publish(slot);
+                    } else {
+                        slots_.Abandon(slot);
+                    }
+                }
                 // a capture from before the numbers started over (one left
                 // from the last time, or redrawn for new options) isn't counted
                 if (live_measuring_ && cap->frame > live_last_) {
@@ -230,13 +372,42 @@ class Renderer {
                     if (drew_gpu) live_.wait_ms.push_back(gs.wait_ms);
                 }
                 live_drew_gpu_ = drew_gpu;
-                image_ = rgba;
-                image_w_ = o.width;
-                image_h_ = o.height;
-                image_serial_++;
+                if (want_rgba) {
+                    image_ = rgba;
+                    image_w_ = o.width;
+                    image_h_ = o.height;
+                    image_serial_++;
+                    image_wanted_ = false;
+                }
                 stats_ = stats;
             }
         }
+    }
+
+    // A slot for the zero-copy path's next frame, or -1 after waiting a
+    // little for paints to finish with one (or to stop). Once paints have
+    // stopped for kPaintsStopped, the GPU is asked (settle_) whether it has
+    // finished them all, and then every slot they sampled is free.
+    int AcquireSlot() {
+        std::function<bool()> settle;
+        uint64_t last_used = 0;
+        {
+            std::lock_guard lock(mutex_);
+            const int slot = slots_.Acquire();
+            if (slot >= 0 || stop_) return slot;
+            if (settle_ && std::chrono::steady_clock::now() - last_paint_ >= kPaintsStopped &&
+                slots_.LastUsed() > slots_.CompletedIndex()) {
+                settle = settle_;
+                last_used = slots_.LastUsed();
+            }
+        }
+        if (settle && settle()) {
+            std::lock_guard lock(mutex_);
+            slots_.Completed(last_used);
+            return -1;  // taken next time round
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        return -1;
     }
 
     std::mutex mutex_;
@@ -246,12 +417,23 @@ class Renderer {
     RasterOptions options_;
     bool gpu_ = false;
     bool options_changed_ = false;
+    bool dialog_open_ = false;
     std::string dump_path_;
     std::vector<uint32_t> image_;
     uint32_t image_w_ = 0, image_h_ = 0;
     uint64_t image_serial_ = 0;
+    bool image_wanted_ = false;
     uint32_t dump_count_ = 0;
     std::string stats_;
+    // the presenter's: its size and path, the outputs' bookkeeping and what
+    // each holds, and when a paint last came
+    bool present_ = false;
+    uint32_t present_w_ = 1280, present_h_ = 720;
+    bool present_zero_copy_ = false;
+    PresentSlots slots_;
+    GpuOutput outputs_[PresentSlots::kCount];
+    std::chrono::steady_clock::time_point last_paint_{};
+    std::function<bool()> settle_;
     // the live view's numbers; captures numbered up to live_base_ came before
     // they started, and live_last_ is the newest one counted
     bool live_measuring_ = false;
@@ -259,6 +441,8 @@ class Renderer {
     uint64_t live_base_ = 0, live_last_ = 0;
     std::optional<bool> live_drew_gpu_;
 };
+static_assert(PresentSlots::kCount == GpuRenderer::kOutputs,
+              "a presenter slot is a gpu_view output");
 
 bool g_dumping = false;
 std::mutex g_live_mutex;
@@ -270,7 +454,9 @@ NativeViewDialog::NativeViewDialog(rex::ui::ImGuiDrawer* imgui_drawer, DrawerGet
     : rex::ui::ImGuiDialog(imgui_drawer), drawer_(std::move(drawer)) {}
 
 NativeViewDialog::~NativeViewDialog() {
-    if (visible_) Renderer::Get().RemoveUser();
+    if (!visible_) return;
+    Renderer::Get().SetDialogOpen(false);
+    Renderer::Get().RemoveUser();
 }
 
 bool NativeViewDialog::WantsGpu() {
@@ -280,6 +466,7 @@ bool NativeViewDialog::WantsGpu() {
 
 void NativeViewDialog::Toggle() {
     visible_ = !visible_;
+    Renderer::Get().SetDialogOpen(visible_);
     if (visible_) {
         Renderer::Get().SetOptions(options_);
         Renderer::Get().SetGpu(WantsGpu());
@@ -316,12 +503,20 @@ void NativeViewDialog::OnDraw(ImGuiIO& io) {
         ImGui::SameLine();
         // the display's gamma ramp, as the game's own picture has it (gamma_ramp.h)
         changed |= ImGui::Checkbox("Gamma ramp", &options_.gamma);
+        // the native renderer on the window owns the size while it draws
+        const bool presenting = Renderer::Get().Presenting();
+        ImGui::BeginDisabled(presenting);
         int size = options_.width >= 1280 ? 2 : options_.width >= 960 ? 1 : 0;
         if (ImGui::Combo("Size", &size, "640x360\0960x540\01280x720\0")) {
             const uint32_t widths[] = {640, 960, 1280};
             options_.width = widths[size];
             options_.height = options_.width * 9 / 16;
             changed = true;
+        }
+        ImGui::EndDisabled();
+        if (presenting) {
+            ImGui::SameLine();
+            ImGui::TextUnformatted("(renderer is native: the size follows the window)");
         }
         if (changed) Renderer::Get().SetOptions(options_);
         // native_view_backend, which F4 can change too
@@ -406,6 +601,460 @@ void StopNativeView() {
         Renderer::Get().RemoveUser();
     }
     StopLiveView();
+}
+
+// ---------------------------------------------------------------------------
+// the native renderer on the window (renderer = native)
+
+namespace {
+
+// the SDK's present_letterbox, which it reads where it paints; on if it isn't
+// there to read
+bool PresentLetterbox() {
+    return !rex::cvar::GetFlagInfo("present_letterbox") ||
+           rex::cvar::Query<bool>("present_letterbox");
+}
+
+#ifdef _WIN32
+using Microsoft::WRL::ComPtr;
+
+// Learns whether the GPU has finished every paint submitted so far: a fence
+// of band3's own, signalled on the SDK's direct queue behind them. Only a
+// signal, never a wait on that queue, which the emulated GPU submits to.
+// Shared with the worker (Renderer::SetSettle), which may still be calling
+// it while the drawer stops.
+class PaintFence {
+ public:
+    static std::shared_ptr<PaintFence> Create(ID3D12Device* device, ID3D12CommandQueue* queue) {
+        auto f = std::make_shared<PaintFence>();
+        f->queue_ = queue;
+        f->event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (!f->event_ || FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+                                                     IID_PPV_ARGS(&f->fence_))))
+            return nullptr;
+        return f;
+    }
+    ~PaintFence() {
+        if (event_) CloseHandle(event_);
+    }
+
+    // true once everything submitted before the call has finished, within
+    // `timeout`
+    bool Settle(DWORD timeout_ms) {
+        std::lock_guard lock(mutex_);
+        const UINT64 value = ++value_;
+        if (FAILED(queue_->Signal(fence_.Get(), value))) return false;
+        if (fence_->GetCompletedValue() < value &&
+            SUCCEEDED(fence_->SetEventOnCompletion(value, event_)))
+            WaitForSingleObject(event_, timeout_ms);
+        // the fence, not the event, which a wait that timed out leaves set
+        return fence_->GetCompletedValue() >= value;
+    }
+
+ private:
+    std::mutex mutex_;
+    ComPtr<ID3D12CommandQueue> queue_;
+    ComPtr<ID3D12Fence> fence_;
+    HANDLE event_ = nullptr;
+    UINT64 value_ = 0;
+};
+
+// The zero-copy path's drawing: present.hlsl's triangle over the presenter's
+// back buffer, on its own command list, sampling gpu_view's output through a
+// shader-visible heap of band3's own with a descriptor per output. The
+// presenter has bound its back buffer; the rest is set here, and the SDK's
+// immediate drawer (ImGui, z 64) sets its own after (the N2 kill test showed
+// it does).
+class D3D12Present {
+ public:
+    bool Init(const rex::ui::d3d12::D3D12Provider& provider) {
+        device_ = provider.GetDevice();
+        HRESULT hr;
+        {
+            // b0: PresentConstants, 8 values; t0: the frame, through the
+            // heap; s0: linear and clamping
+            D3D12_ROOT_PARAMETER params[2]{};
+            params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+            params[0].Constants.ShaderRegister = 0;
+            params[0].Constants.Num32BitValues = 8;
+            params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+            D3D12_DESCRIPTOR_RANGE range{};
+            range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+            range.NumDescriptors = 1;
+            params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            params[1].DescriptorTable.NumDescriptorRanges = 1;
+            params[1].DescriptorTable.pDescriptorRanges = &range;
+            params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+            D3D12_STATIC_SAMPLER_DESC sampler{};
+            sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+            sampler.AddressU = sampler.AddressV = sampler.AddressW =
+                D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            sampler.MaxLOD = D3D12_FLOAT32_MAX;
+            sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+            D3D12_ROOT_SIGNATURE_DESC rsd{};
+            rsd.NumParameters = 2;
+            rsd.pParameters = params;
+            rsd.NumStaticSamplers = 1;
+            rsd.pStaticSamplers = &sampler;
+            ComPtr<ID3DBlob> blob, errors;
+            hr = provider.SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &blob,
+                                                 &errors);
+            if (SUCCEEDED(hr))
+                hr = device_->CreateRootSignature(0, blob->GetBufferPointer(),
+                                                  blob->GetBufferSize(), IID_PPV_ARGS(&root_));
+            if (FAILED(hr)) {
+                REXLOG_WARN("native present: no root signature ({:#x}) {}", uint32_t(hr),
+                            errors ? static_cast<const char*>(errors->GetBufferPointer()) : "");
+                return false;
+            }
+        }
+        using namespace shaders;
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
+        pd.pRootSignature = root_.Get();
+        pd.VS = {kPresentVertexDxbc, sizeof(kPresentVertexDxbc)};
+        pd.PS = {kPresentPixelDxbc, sizeof(kPresentPixelDxbc)};
+        pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        pd.SampleMask = UINT_MAX;
+        pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        pd.RasterizerState.DepthClipEnable = TRUE;
+        pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        pd.NumRenderTargets = 1;
+        pd.RTVFormats[0] = rex::ui::d3d12::D3D12Presenter::kSwapChainFormat;
+        pd.SampleDesc.Count = 1;
+        hr = device_->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pipeline_));
+        if (FAILED(hr)) {
+            REXLOG_WARN("native present: no pipeline ({:#x})", uint32_t(hr));
+            return false;
+        }
+        D3D12_DESCRIPTOR_HEAP_DESC hd{};
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        hd.NumDescriptors = GpuRenderer::kOutputs;
+        hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        hr = device_->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap_));
+        if (FAILED(hr)) {
+            REXLOG_WARN("native present: no descriptor heap ({:#x})", uint32_t(hr));
+            return false;
+        }
+        descriptor_size_ = provider.GetViewDescriptorSize();
+        return true;
+    }
+
+    // output `slot`, holding `out`, into `rect` of the back buffer; black
+    // around it
+    void Draw(rex::ui::d3d12::D3D12UIDrawContext& ctx, const ImageRect& rect, int slot,
+              const GpuOutput& out) {
+        ID3D12GraphicsCommandList* cl = ctx.command_list();
+        const uint32_t w = ctx.render_target_width(), h = ctx.render_target_height();
+        if (!cl || !w || !h || !rect.w || !rect.h) return;
+        // A new texture in the slot: its view, made over the old one. No
+        // paint the GPU hasn't finished sampled the slot (the worker only
+        // draws into one it's done with, PresentSlots), so neither the old
+        // view nor the old texture, which it holds until now, is in use.
+        View& view = views_[slot];
+        if (view.generation != out.generation || !view.resource) {
+            view.resource = static_cast<ID3D12Resource*>(out.d3d12_resource);
+            view.generation = out.generation;
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+            sd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Texture2D.MipLevels = 1;
+            D3D12_CPU_DESCRIPTOR_HANDLE cpu = heap_->GetCPUDescriptorHandleForHeapStart();
+            cpu.ptr += SIZE_T(slot) * descriptor_size_;
+            device_->CreateShaderResourceView(view.resource.Get(), &sd, cpu);
+        }
+        D3D12_GPU_DESCRIPTOR_HANDLE gpu = heap_->GetGPUDescriptorHandleForHeapStart();
+        gpu.ptr += UINT64(slot) * descriptor_size_;
+        ID3D12DescriptorHeap* heaps[] = {heap_.Get()};
+        cl->SetDescriptorHeaps(1, heaps);
+        cl->SetGraphicsRootSignature(root_.Get());
+        cl->SetPipelineState(pipeline_.Get());
+        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        const D3D12_VIEWPORT viewport{0.0f, 0.0f, float(w), float(h), 0.0f, 1.0f};
+        cl->RSSetViewports(1, &viewport);
+        const D3D12_RECT scissor{0, 0, LONG(w), LONG(h)};
+        cl->RSSetScissorRects(1, &scissor);
+        // present.hlsl's PresentConstants
+        const float constants[8] = {float(rect.x),
+                                    float(rect.y),
+                                    float(rect.w),
+                                    float(rect.h),
+                                    float(out.width),
+                                    float(out.height),
+                                    out.width == rect.w && out.height == rect.h ? 1.0f : 0.0f,
+                                    0.0f};
+        cl->SetGraphicsRoot32BitConstants(0, 8, constants, 0);
+        cl->SetGraphicsRootDescriptorTable(1, gpu);
+        cl->DrawInstanced(3, 1, 0, 0);
+    }
+
+ private:
+    ID3D12Device* device_ = nullptr;
+    ComPtr<ID3D12RootSignature> root_;
+    ComPtr<ID3D12PipelineState> pipeline_;
+    ComPtr<ID3D12DescriptorHeap> heap_;
+    UINT descriptor_size_ = 0;
+    // each output's texture as its view was made, held while paints may
+    // sample it (SDL lets its own reference go when it makes the slot again)
+    struct View {
+        ComPtr<ID3D12Resource> resource;
+        uint64_t generation = 0;
+    };
+    View views_[GpuRenderer::kOutputs];
+};
+#endif
+
+// The UI drawer: always on the presenter at z 0, under ImGui (64), drawing
+// nothing while renderer is emulated. While native it owns the worker's size
+// (the window's picture's, LetterboxRect) and draws the newest frame each
+// paint, repeating it until a newer one comes: zero-copy on Direct3D 12, or
+// else uploaded through the SDK's immediate drawer.
+class NativePresentDrawer : public rex::ui::UIDrawer {
+ public:
+    using ImmediateGetter = std::function<rex::ui::ImmediateDrawer*()>;
+    NativePresentDrawer(rex::ui::Presenter* presenter, rex::ui::GraphicsProvider* provider,
+                        rex::ui::Window* window, ImmediateGetter immediate)
+        : presenter_(presenter), provider_(provider), window_(window),
+          immediate_(std::move(immediate)) {}
+
+    void Start() {
+#ifdef _WIN32
+        // The only graphics provider band3's SDK has on Windows is Direct3D
+        // 12's (rexruntime.dll exports no Vulkan), so it and the presenter
+        // are D3D12Provider and D3D12Presenter.
+        if (provider_) {
+            const auto& d3d12 = static_cast<const rex::ui::d3d12::D3D12Provider&>(*provider_);
+            GpuRenderer::Get().SetPresentDevice(d3d12.GetDevice());
+            auto present = std::make_unique<D3D12Present>();
+            if (present->Init(d3d12)) d3d12_ = std::move(present);
+            else d3d12_why_ = "its Direct3D 12 pipeline couldn't be made (see the log)";
+            fence_ = PaintFence::Create(d3d12.GetDevice(), d3d12.GetDirectQueue());
+        } else {
+            d3d12_why_ = "the SDK has no graphics provider";
+        }
+#else
+        (void)provider_;  // the immediate drawer is the provider's already
+#endif
+        presenter_->AddUIDrawerFromUIThread(this, 0);
+        // F4, F8 and the harness's `set` change it on the UI thread
+        rex::cvar::RegisterChangeCallback("renderer", [this](std::string_view, std::string_view v) {
+            Follow(v == "native");
+        });
+        Follow(REXCVAR_GET(renderer) == "native");
+    }
+
+    void Stop() {
+        rex::cvar::UnregisterChangeCallbacks("renderer");
+        presenter_->RemoveUIDrawerFromUIThread(this);
+        Follow(false);
+#ifdef _WIN32
+        // the GPU done with every paint that sampled an output before the
+        // textures they hold are let go (no paint runs now: this is the UI
+        // thread)
+        if (fence_ && drew_) fence_->Settle(2000);
+        d3d12_.reset();
+#endif
+        for (auto& t : textures_) t.reset();
+    }
+
+    // renderer, as it changes: the worker starts when it turns native, on the
+    // UI thread where the GPU device starts, and is let go when it turns
+    // emulated
+    void Follow(bool native) {
+        if (native == active_) return;
+        active_ = native;
+        if (!native) {
+            Renderer::Get().StopPresent();
+            REXLOG_INFO("native present: off, the emulated GPU's picture shows");
+            return;
+        }
+        UpdateGpu();
+        const bool zero_copy = ChoosePath();
+        // before the first paint, the window's size (minimized, a paint may
+        // not come for a while)
+        ImageRect rect = rect_;
+        if (!rect.w || !rect.h) {
+            const uint32_t w = window_ ? window_->GetActualPhysicalWidth() : 0;
+            const uint32_t h = window_ ? window_->GetActualPhysicalHeight() : 0;
+            rect = w && h ? LetterboxRect(w, h, PresentLetterbox()) : ImageRect{0, 0, 1280, 720};
+        }
+        Renderer::Get().StartPresent(rect.w, rect.h, zero_copy);
+#ifdef _WIN32
+        if (fence_) {
+            std::shared_ptr<PaintFence> fence = fence_;
+            Renderer::Get().SetSettle([fence] { return fence->Settle(50); });
+        }
+#endif
+        REXLOG_INFO("native present: on, drawing at {}x{}", rect.w, rect.h);
+    }
+
+    void Draw(rex::ui::UIDrawContext& context) override {
+        // read every paint, as well as followed as it changes
+        Follow(REXCVAR_GET(renderer) == "native");
+        if (!active_) return;
+        const uint32_t tw = context.render_target_width(), th = context.render_target_height();
+        if (!tw || !th) return;
+        rect_ = LetterboxRect(tw, th, PresentLetterbox());
+        Renderer::Get().SetPresentSize(rect_.w, rect_.h);
+        UpdateGpu();
+#ifdef _WIN32
+        if (ChoosePath()) {
+            auto& ctx = static_cast<rex::ui::d3d12::D3D12UIDrawContext&>(context);
+            int slot = -1;
+            GpuOutput out;
+            if (Renderer::Get().ShowNewest(ctx.submission_index_current(),
+                                           ctx.submission_index_completed(), slot, out) &&
+                out.d3d12_resource) {
+                d3d12_->Draw(ctx, rect_, slot, out);
+                drew_ = true;
+            }
+            return;
+        }
+#else
+        ChoosePath();
+#endif
+        DrawUploaded(context);
+    }
+
+ private:
+    // native_view_backend, which F4 can change: on the GPU when its device
+    // starts (here, on the UI thread), else on the CPU
+    void UpdateGpu() {
+        Renderer::Get().SetGpu(REXCVAR_GET(native_view_backend) == "gpu" &&
+                               GpuRenderer::Get().Init());
+    }
+
+    // zero-copy, or uploading and why; logged when it changes
+    bool ChoosePath() {
+        std::string why;
+        bool zero_copy = false;
+#ifdef _WIN32
+        if (!d3d12_) why = d3d12_why_;
+        else if (!REXCVAR_GET(native_present_zero_copy)) why = "native_present_zero_copy is off";
+        else if (REXCVAR_GET(native_view_backend) != "gpu") why = "native_view_backend is cpu";
+        else zero_copy = GpuRenderer::Get().CheckZeroCopy(why);
+#else
+        why = "zero-copy presentation is Direct3D 12 only";
+#endif
+        if (!path_logged_ || zero_copy != zero_copy_ || why != why_) {
+            if (zero_copy) REXLOG_INFO("native present: zero-copy");
+            else REXLOG_INFO("native present: uploading each frame ({})", why);
+            path_logged_ = true;
+        }
+        zero_copy_ = zero_copy;
+        why_ = why;
+        Renderer::Get().SetPresentZeroCopy(zero_copy);
+        return zero_copy;
+    }
+
+    // the upload path: the worker's newest RGBA as an immediate texture (two
+    // in turn, so the one a paint in flight reads isn't the one let go),
+    // drawn through the SDK's immediate drawer in rect_, black around it
+    void DrawUploaded(rex::ui::UIDrawContext& context) {
+        rex::ui::ImmediateDrawer* drawer = immediate_ ? immediate_() : nullptr;
+        if (!drawer) return;
+        uint32_t w = 0, h = 0;
+        std::string stats;
+        if (Renderer::Get().Take(upload_frame_, upload_, w, h, stats) && w && h) {
+            current_ ^= 1;
+            // the immediate drawer's textures are made from data only, so a
+            // new one each frame
+            textures_[current_] =
+                drawer->CreateTexture(w, h, rex::ui::ImmediateTextureFilter::kLinear, false,
+                                      reinterpret_cast<const uint8_t*>(upload_.data()));
+        }
+        rex::ui::ImmediateTexture* texture = textures_[current_].get();
+        if (!texture) return;
+        const float tw = float(context.render_target_width());
+        const float th = float(context.render_target_height());
+        const float x0 = float(rect_.x), y0 = float(rect_.y);
+        const float x1 = x0 + float(rect_.w), y1 = y0 + float(rect_.h);
+        // ImGui's colours: ABGR
+        constexpr uint32_t kBlack = 0xff000000u, kWhite = 0xffffffffu;
+        const rex::ui::ImmediateVertex v[12] = {
+            // black over all of it, the bars
+            {0, 0, 0, 0, kBlack}, {tw, 0, 0, 0, kBlack}, {tw, th, 0, 0, kBlack},
+            {0, 0, 0, 0, kBlack}, {tw, th, 0, 0, kBlack}, {0, th, 0, 0, kBlack},
+            // the picture
+            {x0, y0, 0, 0, kWhite}, {x1, y0, 1, 0, kWhite}, {x1, y1, 1, 1, kWhite},
+            {x0, y0, 0, 0, kWhite}, {x1, y1, 1, 1, kWhite}, {x0, y1, 0, 1, kWhite},
+        };
+        drawer->Begin(context, tw, th);
+        rex::ui::ImmediateDrawBatch batch;
+        batch.vertices = v;
+        batch.vertex_count = 12;
+        drawer->BeginDrawBatch(batch);
+        rex::ui::ImmediateDraw draw;
+        draw.primitive_type = rex::ui::ImmediatePrimitiveType::kTriangles;
+        draw.count = 6;
+        drawer->Draw(draw);
+        draw.base_vertex = 6;
+        draw.texture = texture;
+        drawer->Draw(draw);
+        drawer->EndDrawBatch();
+        drawer->End();
+    }
+
+    rex::ui::Presenter* presenter_;
+    rex::ui::GraphicsProvider* provider_;
+    rex::ui::Window* window_;
+    ImmediateGetter immediate_;
+    bool active_ = false;
+    // the picture's place in the back buffer at the last paint
+    ImageRect rect_;
+    bool path_logged_ = false;
+    bool zero_copy_ = false;
+    std::string why_;
+    // the upload path's
+    std::unique_ptr<rex::ui::ImmediateTexture> textures_[2];
+    int current_ = 0;
+    uint64_t upload_frame_ = 0;
+    std::vector<uint32_t> upload_;
+#ifdef _WIN32
+    std::unique_ptr<D3D12Present> d3d12_;
+    std::string d3d12_why_;
+    std::shared_ptr<PaintFence> fence_;
+    bool drew_ = false;  // a paint sampled an output
+#endif
+};
+
+std::unique_ptr<NativePresentDrawer> g_present;
+
+}  // namespace
+
+void StartNativePresent(rex::ui::Presenter* presenter, rex::ui::GraphicsProvider* provider,
+                        rex::ui::Window* window,
+                        std::function<rex::ui::ImmediateDrawer*()> immediate_drawer) {
+    if (g_present || !presenter) return;
+    g_present = std::make_unique<NativePresentDrawer>(presenter, provider, window,
+                                                      std::move(immediate_drawer));
+    g_present->Start();
+}
+
+void StopNativePresent() {
+    if (!g_present) return;
+    g_present->Stop();
+    g_present.reset();
+}
+
+bool NativePresenting() { return Renderer::Get().Presenting(); }
+
+std::string NativePresentedPicture(std::vector<uint32_t>& rgba, uint32_t& width,
+                                   uint32_t& height, std::chrono::milliseconds wait) {
+    if (!Renderer::Get().Presenting())
+        return "the native renderer isn't drawing the window (renderer is emulated)";
+    const auto deadline = std::chrono::steady_clock::now() + wait;
+    uint64_t frame = Renderer::Get().RequestImage();
+    std::string stats;
+    while (!Renderer::Get().Take(frame, rgba, width, height, stats)) {
+        if (std::chrono::steady_clock::now() >= deadline)
+            return "the native renderer hasn't drawn a frame in " +
+                   std::to_string(wait.count()) + " ms";
+        if (!Renderer::Get().Presenting()) return "the native renderer stopped (renderer is emulated)";
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return {};
 }
 
 }  // namespace band3::render

@@ -27,10 +27,11 @@ wait frames=90
 press green
 wait frames=30
 press green
-# player 2 isn't signed in: No Profile, to play as a guest
-p2 press green
 wait frames=60
-# player 2: Bass (offered first, as player 1 has guitar), its default difficulty
+# player 2: Bass (offered first, as player 1 has guitar), its default difficulty.
+# Player 2 isn't signed in, so joined as a guest: skip_profile_prompt (on by
+# default) answers RB3's Choose Profile with No Profile. With the prompt up,
+# the first press here would answer it and the song wouldn't start.
 p2 press green
 wait frames=60
 p2 press green
