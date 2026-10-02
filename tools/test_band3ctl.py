@@ -1,5 +1,6 @@
 """Tests for band3ctl.py's scripts, --config and window helpers: python tools/test_band3ctl.py"""
 
+import argparse
 import json
 import os
 import shutil
@@ -182,6 +183,41 @@ class PlaceConfigTest(unittest.TestCase):
             band3ctl.place_config(os.path.join(self.dir, "none.toml"), self.exe_folder)
         self.assertEqual(os.listdir(self.exe_folder), ["band3.toml"])
         self.assertEqual(read(self.target), "fullscreen = false\n")
+
+
+class ConfigProblemTest(unittest.TestCase):
+    def test_config_with_the_harness_is_fine(self):
+        self.assertIsNone(band3ctl.config_problem(launch_args(config="x.toml")))
+        self.assertIsNone(band3ctl.config_problem(launch_args(no_harness=True)))
+
+    def test_config_without_the_harness_is_refused(self):
+        problem = band3ctl.config_problem(launch_args(config="x.toml", no_harness=True))
+        self.assertIn("--no-harness", problem)
+
+    def test_launch_stops_before_touching_band3_toml(self):
+        folder = tempfile.mkdtemp()
+        try:
+            exe = os.path.join(folder, "band3.exe")
+            write(exe, "")
+            target = os.path.join(folder, "band3.toml")
+            write(target, PLAYERS_FILE)
+            source = os.path.join(folder, "test.toml")
+            write(source, "")
+            with self.assertRaises(SystemExit) as stopped:
+                band3ctl.launch(launch_args(exe=exe, config=source, no_harness=True))
+            self.assertIn("--no-harness", str(stopped.exception))
+            self.assertEqual(read(target), PLAYERS_FILE)
+            self.assertFalse(os.path.exists(target + ".band3ctl"))
+        finally:
+            shutil.rmtree(folder)
+
+
+PLAYERS_FILE = "fullscreen = false"
+
+
+def launch_args(exe="band3.exe", config=None, no_harness=False):
+    """What `launch` reads before it starts anything."""
+    return argparse.Namespace(exe=exe, config=config, no_harness=no_harness)
 
 
 def write(path, text):

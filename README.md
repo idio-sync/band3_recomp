@@ -39,7 +39,7 @@ You need your own copy of the game; no game files are included.
 <img src="docs/images/web-song-browser.png" alt="band3's web song browser: the library with album art and part difficulties, and the song now playing" width="520">
 
 **Settings**
-- A launcher: a setup screen for folders, graphics, audio, controllers and online features, shown on the first run (Shift at startup brings it back)
+- A launcher: a setup screen for folders, graphics, audio, controllers and online features, shown on the first run (Shift at startup brings it back on Windows)
 - An in-game settings menu (F4, or both stick clicks), saved to `band3.toml`
 - Configurable save, cache and song folders, including a portable install
 

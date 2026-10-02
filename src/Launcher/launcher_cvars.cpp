@@ -59,7 +59,9 @@ Environment ReadEnvironment(std::span<const Setting> table, const PathDefaults& 
             facts.registry_default = info->default_value;
             facts.deck_preset = steam_deck::Preset(setting.cvar);
             facts.ini = LegacyIniValue(setting.cvar);
-            facts.lock = LockFrom(rex::cvar::GetFlagSource(setting.cvar));
+            const rex::cvar::Source source = rex::cvar::GetFlagSource(setting.cvar);
+            facts.lock = LockFrom(source);
+            facts.from_config = source == rex::cvar::Source::kConfig;
         }
         env.cvars[std::string(setting.cvar)] = std::move(facts);
     }

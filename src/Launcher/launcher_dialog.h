@@ -56,8 +56,9 @@ public:
     LauncherDialog(rex::ui::ImGuiDrawer* imgui_drawer, LauncherHost host);
     ~LauncherDialog() override;
 
-    // settings changed since the last save; quitting asks first while there
-    // are. Reads the cvars only, so the window's close request can ask.
+    // settings changed since the last save, the startup box too; quitting
+    // asks first while there are. Reads the model only, so the window's close
+    // request can ask.
     bool HasUnsavedChanges() const;
 
     // the settings are still being edited: Play hasn't been pressed
@@ -113,6 +114,14 @@ private:
     void DrawJoypadLag(const Setting& s);
     void DrawWindowMode(const Setting& s);
     void DrawGameDataCheck();
+    // checks the game data folder again when it has changed, when a second
+    // has passed (the folder can appear or go while the launcher is open), or
+    // when `now` asks
+    void RefreshGameDataCheck(bool now);
+    // whether a song folder exists, from a check at most a few seconds old: a
+    // folder on a network share that doesn't answer can take seconds to say
+    // so, which mustn't happen every frame
+    bool FolderExists(const std::filesystem::path& folder);
 
     // a one-line text field over `value`, applied when the field is left (or
     // Enter is pressed): returns true then, with `value` the new text
@@ -128,10 +137,13 @@ private:
 
     // Play: asks first when the game data check fails, then Start()
     void Play();
-    // saves (with show_launcher from the footer's box), then moves on to the
-    // Starting frame; false if saving failed
-    bool Start();
-    // writes band3.toml and reports how it went in the footer
+    // saves, then starts the game; when saving fails, asks whether to play
+    // anyway with the settings as they are
+    void Start();
+    // moves on to the Starting frame
+    void Begin();
+    // writes band3.toml (show_launcher from the footer's box too) and reports
+    // how it went in the footer
     bool Save();
 
     LauncherHost host_;
@@ -147,15 +159,13 @@ private:
     // and the one hovered in this one so far
     std::string hovered_;
     std::string hovered_next_;
-    // the footer's "Show this screen at startup", unticked whatever
-    // show_launcher is: Play writes it
-    bool show_at_startup_ = false;
-
     // band3.toml couldn't be read when the launcher opened
     std::optional<std::string> config_problem_;
     // the last save's outcome, for the footer
     std::string save_message_;
     bool save_failed_ = false;
+    // why the last save failed, for the "Play anyway?" prompt
+    std::string save_error_;
     // what went wrong with a row's last change, shown under it until one goes
     // through: a value its cvar refused, or a folder dialog that didn't open
     std::map<std::string, std::string, std::less<>> row_problems_;
@@ -171,10 +181,20 @@ private:
     // the setting the pick is for
     std::string pick_target_;
 
-    // the last check of the game data folder, redone when the folder changes
+    // the last check of the game data folder (RefreshGameDataCheck)
     std::filesystem::path checked_root_;
     GameDataCheck check_;
     bool check_done_ = false;
+    std::chrono::steady_clock::time_point next_check_{};
+
+    // FolderExists' answers, and when each was found
+    struct FolderState {
+        bool exists = false;
+        std::chrono::steady_clock::time_point checked;
+    };
+    std::map<std::filesystem::path, FolderState> folder_states_;
+    // the song folder list they're for; a new list checks its folders again
+    std::string folder_states_for_;
 
     // frame pacing
     std::chrono::steady_clock::time_point last_frame_{};
@@ -184,6 +204,7 @@ private:
     // popups to open on the next frame (OpenPopup has to run inside the window)
     bool open_quit_prompt_ = false;
     bool open_play_prompt_ = false;
+    bool open_save_failed_prompt_ = false;
 };
 
 }

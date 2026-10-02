@@ -13,22 +13,6 @@ namespace band3::steam_deck {
 
 namespace {
 
-struct DeckDefault {
-    const char* cvar;
-    const char* value;
-};
-
-constexpr DeckDefault kDeckDefaults[] = {
-    // Game Mode shows the game fullscreen anyway; this covers Desktop Mode
-    {"fullscreen", "true"},
-    // the 16:9 game on the Deck's 16:10 screen
-    {"present_letterbox", "true"},
-    // one frame per refresh saves battery; the refresh rate stays the console's 60
-    {"rnd_sync", "1"},
-    // Steam's performance overlay does this job on a Deck
-    {"debug_overlay", "false"},
-};
-
 // scaling past the Deck's 1280x800 screen costs GPU time for detail it can't show
 constexpr const char* kResolutionScaleCvars[] = {
     "resolution_scale",
@@ -48,13 +32,6 @@ std::string ReadDmi(const char* name) {
 
 }
 
-std::optional<std::string> Preset(std::string_view cvar) {
-    for (const auto& d : kDeckDefaults) {
-        if (cvar == d.cvar) return d.value;
-    }
-    return std::nullopt;
-}
-
 bool IsSteamDeck() {
     const char* env = std::getenv("SteamDeck");
 #ifdef _WIN32
@@ -67,16 +44,20 @@ bool IsSteamDeck() {
 void ApplyDefaults() {
     if (!REXCVAR_GET(steam_deck_defaults) || !IsSteamDeck()) return;
 
-    int applied = 0;
-    for (const auto& d : kDeckDefaults) {
-        if (rex::cvar::GetFlagSource(d.cvar) != rex::cvar::Source::kDefault) continue;
-        if (rex::cvar::GetFlagByName(d.cvar) == d.value) continue;
-        if (!rex::cvar::SetFlagByName(d.cvar, d.value)) {
+    const int applied = ApplyPresets(
+        {
+            .set_elsewhere =
+                [](std::string_view cvar) {
+                    return rex::cvar::GetFlagSource(cvar) != rex::cvar::Source::kDefault;
+                },
+            // a value the cvar already has is set too: SetFlagByName records
+            // the source either way, which is what keeps the ini off it
+            .set = [](std::string_view cvar,
+                      std::string_view value) { return rex::cvar::SetFlagByName(cvar, value); },
+        },
+        [](const DeckDefault& d) {
             REXLOG_WARN("Steam Deck: couldn't set {} = {}", d.cvar, d.value);
-            continue;
-        }
-        applied++;
-    }
+        });
     // startup defaults are not changes waiting on a restart
     rex::cvar::ClearPendingRestartFlags();
     REXLOG_INFO("Steam Deck: applied {} defaults (steam_deck_defaults = false turns them off)",

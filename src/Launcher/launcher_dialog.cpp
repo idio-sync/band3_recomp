@@ -1,6 +1,7 @@
 #include "launcher_dialog.h"
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_error.h>
+#include <SDL3/SDL_events.h>
 #include <imgui.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
@@ -30,6 +31,7 @@ namespace {
 
 constexpr const char* kQuitPrompt = "Quit without saving?";
 constexpr const char* kPlayPrompt = "Play anyway?";
+constexpr const char* kSaveFailedPrompt = "Settings not saved";
 
 // the footer's description: the setting's name and three lines of small text
 float DescriptionHeight() { return Px(kSmallSize) * 4 + Px(2); }
@@ -172,7 +174,15 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
     {
         FontScope font(kBodySize);
         if (stage_ == Stage::kEditing) {
+#ifndef _WIN32
+            // the folder dialog goes through the xdg desktop portal off
+            // Windows, which may answer only while SDL's events are pumped,
+            // and nothing pumps them before the game runs. Unverified on
+            // Linux; harmless without video.
+            if (pick_) SDL_PumpEvents();
+#endif
             TakeFolderPick();
+            RefreshGameDataCheck(false);
             DrawPage(io);
         } else {
             DrawStarting(io);
@@ -566,16 +576,21 @@ void LauncherDialog::DrawPath(const Setting& s) {
     }
 }
 
-void LauncherDialog::DrawGameDataCheck() {
+void LauncherDialog::RefreshGameDataCheck(bool now) {
+    using Clock = std::chrono::steady_clock;
     const std::filesystem::path root =
         host_.game_data_root ? host_.game_data_root() : std::filesystem::path();
-    if (!check_done_ || root != checked_root_) {
-        checked_root_ = root;
-        check_ = CheckGameData(root);
-        check_done_ = true;
-    }
+    if (!now && check_done_ && root == checked_root_ && Clock::now() < next_check_) return;
+    checked_root_ = root;
+    check_ = CheckGameData(root);
+    check_done_ = true;
+    next_check_ = Clock::now() + std::chrono::seconds(1);
+}
+
+void LauncherDialog::DrawGameDataCheck() {
     FontScope font(kSmallSize);
-    const std::string shown = root.empty() ? "(not set)" : rex::path_to_utf8(root);
+    const std::string shown =
+        checked_root_.empty() ? "(not set)" : rex::path_to_utf8(checked_root_);
     ImGui::PushTextWrapPos(0);
     if (check_.ok) {
         ImGui::TextColored(kGood, "Found Rock Band 3 in %s", shown.c_str());
@@ -585,8 +600,24 @@ void LauncherDialog::DrawGameDataCheck() {
     ImGui::PopTextWrapPos();
 }
 
+bool LauncherDialog::FolderExists(const std::filesystem::path& folder) {
+    using Clock = std::chrono::steady_clock;
+    auto [it, added] = folder_states_.try_emplace(folder);
+    FolderState& state = it->second;
+    if (added || Clock::now() - state.checked >= std::chrono::seconds(3)) {
+        std::error_code ec;
+        state.exists = std::filesystem::is_directory(folder, ec);
+        state.checked = Clock::now();
+    }
+    return state.exists;
+}
+
 void LauncherDialog::DrawFolderList(const Setting& s) {
     const std::string value = model_.Value(s.cvar);
+    if (value != folder_states_for_) {
+        folder_states_.clear();
+        folder_states_for_ = value;
+    }
     std::vector<std::string> folders = paths::SplitList(value);
     auto join = [](const std::vector<std::string>& list) {
         std::string out;
@@ -610,8 +641,7 @@ void LauncherDialog::DrawFolderList(const Setting& s) {
         if (!resolved.has_filename() && resolved.has_relative_path()) {
             resolved = resolved.parent_path();
         }
-        std::error_code ec;
-        const bool exists = std::filesystem::is_directory(resolved, ec);
+        const bool exists = FolderExists(resolved);
         ImGui::AlignTextToFramePadding();
         const float text_width = ImGui::GetContentRegionAvail().x - remove -
                                  ImGui::GetStyle().ItemSpacing.x;
@@ -655,11 +685,14 @@ void LauncherDialog::DrawFolderList(const Setting& s) {
     const float buttons = ButtonWidth("Add") + ButtonWidth("Browse...") + style.ItemSpacing.x * 2;
     EditText("##add", "Add a folder: its path, or Browse", new_folder_,
              ImGui::GetContentRegionAvail().x - buttons);
+    // what's typed so far: new_folder_ takes it only once the field is left
+    const TextField& field = text_fields_[ImGui::GetID("##add")];
+    const std::string typed = field.text.empty() ? new_folder_ : std::string(field.text.data());
     ImGui::SameLine();
-    const bool blank = new_folder_.find_first_not_of(" \t") == std::string::npos;
+    const bool blank = typed.find_first_not_of(" \t") == std::string::npos;
     ImGui::BeginDisabled(blank);
     if (ImGui::Button("Add")) {
-        folders.push_back(new_folder_);
+        folders.push_back(typed);
         Apply(s.cvar, join(folders));
         new_folder_.clear();
     }
@@ -856,7 +889,10 @@ void LauncherDialog::DrawFooter() {
     const Setting* show = model_.Find("show_launcher");
     const bool show_locked = show && model_.IsLocked(show->cvar);
     ImGui::BeginDisabled(show_locked);
-    ImGui::Checkbox("Show this screen at startup", &show_at_startup_);
+    bool show_at_startup = model_.ShowAtStartup();
+    if (ImGui::Checkbox("Show this screen at startup", &show_at_startup)) {
+        model_.SetShowAtStartup(show_at_startup);
+    }
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) NoteHovered("show_launcher");
 
@@ -918,6 +954,10 @@ void LauncherDialog::DrawPrompts() {
         ImGui::OpenPopup(kPlayPrompt);
         open_play_prompt_ = false;
     }
+    if (open_save_failed_prompt_) {
+        ImGui::OpenPopup(kSaveFailedPrompt);
+        open_save_failed_prompt_ = false;
+    }
     const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(22), Px(18)));
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
@@ -954,6 +994,31 @@ void LauncherDialog::DrawPrompts() {
         ImGui::SetItemDefaultFocus();
         ImGui::EndPopup();
     }
+    // a band3.toml that can't be written (a read-only install) mustn't keep
+    // the game from starting: the settings are already applied to the cvars
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal(kSaveFailedPrompt, nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+        // the system's messages end in a full stop of their own ("Access is denied.")
+        std::string_view error = save_error_;
+        while (!error.empty() && (error.back() == '.' || error.back() == ' ')) {
+            error.remove_suffix(1);
+        }
+        ImGui::PushTextWrapPos(Px(620));
+        ImGui::TextColored(kBad, "Couldn't save your settings (%.*s).",
+                           static_cast<int>(error.size()), error.data());
+        ImGui::PopTextWrapPos();
+        ImGui::TextUnformatted("Play anyway with these settings for this session?");
+        ImGui::Spacing();
+        if (ImGui::Button("Play anyway")) {
+            ImGui::CloseCurrentPopup();
+            Begin();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::SetItemDefaultFocus();
+        ImGui::EndPopup();
+    }
     ImGui::PopStyleVar();
 }
 
@@ -974,6 +1039,8 @@ void LauncherDialog::DrawStarting(ImGuiIO& io) {
 }
 
 void LauncherDialog::Play() {
+    // the folder may have changed since the last check
+    RefreshGameDataCheck(true);
     if (!check_.ok) {
         open_play_prompt_ = true;
         return;
@@ -981,15 +1048,20 @@ void LauncherDialog::Play() {
     Start();
 }
 
-bool LauncherDialog::Start() {
-    if (stage_ != Stage::kEditing) return false;
-    // into the cvar as well as the file, so F4's "Save to config" keeps it
-    model_.Set("show_launcher", show_at_startup_ ? "true" : "false");
-    if (!Save()) return false;
-    REXLOG_INFO("Launcher: Play");
+void LauncherDialog::Start() {
+    if (stage_ != Stage::kEditing) return;
+    if (!Save()) {
+        open_save_failed_prompt_ = true;
+        return;
+    }
+    Begin();
+}
+
+void LauncherDialog::Begin() {
+    if (stage_ != Stage::kEditing) return;
+    REXLOG_INFO("Launcher: Play{}", save_failed_ ? ", without saving" : "");
     stage_ = Stage::kStarting;
     starting_frames_ = 0;
-    return true;
 }
 
 bool LauncherDialog::Save() {
@@ -997,6 +1069,7 @@ bool LauncherDialog::Save() {
     const SaveResult result = model_.Save(host_.config_path);
     save_failed_ = !result.ok;
     if (!result.ok) {
+        save_error_ = result.error;
         save_message_ = "Couldn't save " + name + ": " + result.error;
         REXLOG_ERROR("Launcher: couldn't save {}: {}", rex::path_to_utf8(host_.config_path),
                      result.error);

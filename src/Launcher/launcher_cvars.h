@@ -26,7 +26,8 @@ struct PathDefaults {
 
 // What the model needs to know about the table's cvars: types, descriptions
 // and limits from the registry, the default layers (band3's startup values,
-// the Steam Deck presets, band3_config.ini), and where each value came from.
+// the Steam Deck presets, band3_config.ini), and where each value came from
+// (locked, or from band3.toml).
 // Call it when the launcher opens, before anything is set, so a setting from
 // the command line or the environment is recorded as locked.
 Environment ReadEnvironment(std::span<const Setting> table, const PathDefaults& paths,

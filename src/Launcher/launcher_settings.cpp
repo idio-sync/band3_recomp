@@ -10,6 +10,9 @@ namespace band3::launcher {
 
 namespace {
 
+// the footer's startup box (ShowAtStartup)
+constexpr std::string_view kShowLauncher = "show_launcher";
+
 // Choices
 
 constexpr Choice kLanguages[] = {
@@ -429,6 +432,10 @@ const char* LockReason(Lock lock) {
 
 SettingsModel::SettingsModel(std::span<const Setting> table, Environment env, CvarStore& store)
     : table_(table), env_(std::move(env)), store_(store) {
+    if (const CvarFacts* facts = Facts(kShowLauncher); facts && facts->exists) {
+        const bool on = AsBool(Value(kShowLauncher));
+        show_at_startup_ = IsLocked(kShowLauncher) ? on : on && facts->from_config;
+    }
     MarkSaved();
 }
 
@@ -646,7 +653,15 @@ std::string SettingsModel::Refusal(std::string_view cvar, std::string_view value
     return text;
 }
 
+bool SettingsModel::SetShowAtStartup(bool on) {
+    const CvarFacts* facts = Facts(kShowLauncher);
+    if (!facts || !facts->exists || IsLocked(kShowLauncher)) return false;
+    show_at_startup_ = on;
+    return true;
+}
+
 bool SettingsModel::HasUnsavedChanges() const {
+    if (show_at_startup_ != saved_show_at_startup_) return true;
     for (const auto& s : table_) {
         if (!Available(s) || IsLocked(s.cvar)) continue;
         const auto it = saved_.find(s.cvar);
@@ -679,6 +694,10 @@ std::vector<ConfigEdit> SettingsModel::Edits() const {
         // a locked value wouldn't win, and saving it would keep it after the
         // command line stops setting it
         if (!Available(s) || IsLocked(s.cvar)) continue;
+        if (s.cvar == kShowLauncher) {
+            edits.push_back({std::string(s.cvar), ConfigValue(show_at_startup_)});
+            continue;
+        }
         const bool changed = !Same(s.cvar, Value(s.cvar), EffectiveDefault(s.cvar));
         edits.push_back({std::string(s.cvar), changed ? TypedValue(s) : std::nullopt});
     }
@@ -688,11 +707,18 @@ std::vector<ConfigEdit> SettingsModel::Edits() const {
 SaveResult SettingsModel::Save(const std::filesystem::path& file) {
     const auto edits = Edits();
     SaveResult result = SaveConfigFile(file, edits);
-    if (result.ok) MarkSaved();
+    if (!result.ok) return result;
+    // into the cvar as well as the file, so F4's "Save to config" keeps it
+    const Setting* show = Find(kShowLauncher);
+    if (show && Available(*show) && !IsLocked(kShowLauncher)) {
+        store_.Set(kShowLauncher, show_at_startup_ ? "true" : "false");
+    }
+    MarkSaved();
     return result;
 }
 
 void SettingsModel::MarkSaved() {
+    saved_show_at_startup_ = show_at_startup_;
     saved_.clear();
     for (const auto& s : table_) {
         if (Available(s)) saved_[std::string(s.cvar)] = Value(s.cvar);

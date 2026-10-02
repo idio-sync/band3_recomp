@@ -1,9 +1,12 @@
 // Checks the controller menu shortcut (src/Input/menu_shortcut.cpp) and the
-// Steam Deck detection (src/steam_deck.h).
+// Steam Deck detection and presets (src/steam_deck.h).
 
 #include <doctest/doctest.h>
 #include <chrono>
 #include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
 #include "src/Input/instruments.h"
 #include "src/Input/menu_shortcut.h"
 #include "src/steam_deck.h"
@@ -80,4 +83,65 @@ TEST_CASE("Steam Deck detection") {
     CHECK_FALSE(LooksLikeSteamDeck("", "", ""));
     CHECK_FALSE(LooksLikeSteamDeck("0", "Valve", "Index"));
     CHECK_FALSE(LooksLikeSteamDeck("", "LENOVO", "Jupiter"));
+}
+
+namespace {
+
+// a cvar at startup: its value, and whether anything but the default set it
+struct StartupCvar {
+    std::string value;
+    bool set = false;
+};
+
+}
+
+TEST_CASE("the Steam Deck presets win over band3_config.ini, even at the cvar's default") {
+    using namespace band3::steam_deck;
+    // the registry's defaults: fullscreen = true is the preset's value already
+    std::map<std::string, StartupCvar, std::less<>> cvars = {
+        {"fullscreen", {"true"}},
+        {"present_letterbox", {"false"}},
+        {"rnd_sync", {"-1"}},
+        {"debug_overlay", {"true"}},
+    };
+    // band3.toml set this one
+    cvars["rnd_sync"] = {"0", true};
+    std::vector<std::string> refused_names;
+    const PresetCvars access{
+        .set_elsewhere = [&](std::string_view cvar) { return cvars[std::string(cvar)].set; },
+        .set =
+            [&](std::string_view cvar, std::string_view value) {
+                if (cvar == "debug_overlay") return false;
+                cvars[std::string(cvar)] = {std::string(value), true};
+                return true;
+            },
+    };
+    const int applied = ApplyPresets(
+        access, [&](const DeckDefault& d) { refused_names.emplace_back(d.cvar); });
+
+    CHECK(applied == 2);
+    CHECK(refused_names == std::vector<std::string>{"debug_overlay"});
+    // set although it had the value, so it counts as set
+    CHECK(cvars["fullscreen"].value == "true");
+    CHECK(cvars["fullscreen"].set);
+    CHECK(cvars["present_letterbox"].value == "true");
+    // band3.toml's stays
+    CHECK(cvars["rnd_sync"].value == "0");
+
+    // then ApplyLegacyIni fills in only what nothing set: a desktop ini's
+    // [window] fullscreen = false doesn't undo the preset
+    const std::map<std::string, std::string> ini = {{"fullscreen", "false"},
+                                                    {"present_letterbox", "false"}};
+    for (const auto& [cvar, value] : ini) {
+        if (!access.set_elsewhere(cvar)) access.set(cvar, value);
+    }
+    CHECK(cvars["fullscreen"].value == "true");
+    CHECK(cvars["present_letterbox"].value == "true");
+}
+
+TEST_CASE("the launcher reads the same presets ApplyDefaults sets") {
+    using band3::steam_deck::Preset;
+    CHECK(Preset("fullscreen") == "true");
+    CHECK(Preset("rnd_sync") == "1");
+    CHECK_FALSE(Preset("lang"));
 }

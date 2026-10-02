@@ -48,7 +48,7 @@ These facts shape the design. Each was checked against code, the SDK's ReXApp so
 
 - **Never** when `test_port != 0` (test harness runs) or when this run is an RB3E relaunch. `WaitForPrevious` resets `relaunch_wait_pid` to 0, so it records the fact for a new `relaunch::WasRelaunched()`. `StartAgain` also drops `--launcher` from the command line it copies.
 - **Always** when the game data check fails (below), when `--launcher` is on the command line, or when Shift is held at startup (`GetAsyncKeyState(VK_SHIFT)` on Windows; not on Linux in this design).
-- **Otherwise** when the new cvar `show_launcher` is true. Its default is `true`, so the first run shows the launcher — including once for existing users after they update, which is intended. The footer has a "Show this screen at startup" checkbox, unticked by default; Play writes `show_launcher = false` unless it is ticked.
+- **Otherwise** when the new cvar `show_launcher` is true. Its default is `true`, so the first run shows the launcher — including once for existing users after they update, which is intended. The footer has a "Show this screen at startup" checkbox, ticked when the launcher opens only if `band3.toml` has `show_launcher = true` (its source is `kConfig`: the player ticked it before), unticked otherwise. Save and Play always write `show_launcher`, `true` or `false`: `true` equals the default, and dropping its key under the override rule would untick the box at the next start.
 
 New cvars (category `Band3/Launcher`): `show_launcher` (bool, default true) and `launcher` (bool, default false; meant for the command line). `docs/settings.md` explains the ways back to the launcher: Shift, `--launcher` (Steam launch options on a Deck), or `show_launcher` in F4.
 
@@ -64,7 +64,7 @@ If the launcher is not shown, `OnFinalizePaths` still applies the path rule belo
 
 ## Game data check
 
-A pure function `CheckGameData(path) -> {ok, problem}` reports, in order: folder missing; `default.xex` missing; `gen/main_xbox.hdr` missing. The Game tab shows the result next to the folder; Play with a failing check asks for confirmation. A failing check at startup forces the launcher open (instead of the SDK's message box).
+A pure function `CheckGameData(path) -> {ok, problem}` reports, in order: folder missing; `default.xex` missing; `gen/main_xbox.hdr` missing. The Game tab shows the result next to the folder. The check is redone every second while the launcher is open, and again when Play is pressed; Play with a failing check asks for confirmation. A failing check at startup forces the launcher open (instead of the SDK's message box).
 
 ## Settings model
 
@@ -74,16 +74,19 @@ A pure function `CheckGameData(path) -> {ok, problem}` reports, in order: folder
 
 **Effective default** — the value a setting would have with no `band3.toml` key — is the first of these that applies:
 
-1. band3's own startup override: `audio_maxqframes = 3`; `input_backend = sdl` on non-Windows.
-2. The Steam Deck preset, on a Deck with `steam_deck_defaults` on. The preset table moves from `steam_deck.cpp` into a lookup, `steam_deck::Preset(name) -> optional<string>`, used by both.
-3. The `band3_config.ini` value, read and normalised exactly as `ApplyLegacyIni` does (inih boolean spellings, `zero_is_unset`), through a new `LegacyIniValue(name) -> optional<string>` built on the same `kIniSettings` table.
-4. The registry default.
+1. band3's forced startup value: `input_backend = sdl` on non-Windows, which `OnPostInitLogging` sets whatever else did.
+2. The Steam Deck preset, on a Deck with `steam_deck_defaults` on. The preset table moves from `steam_deck.cpp` into a lookup, `steam_deck::Preset(name) -> optional<string>`, used by both. `ApplyDefaults` sets every preset nothing else set, also one equal to the cvar's current value, so its source records it and the ini (which fills only `kDefault` cvars) can't undo it: otherwise a desktop ini's `[window] fullscreen = false` would win over the Deck's `fullscreen = true`, the registry default.
+3. The `band3_config.ini` value, read and normalised exactly as `ApplyLegacyIni` does (inih boolean spellings, `zero_is_unset`), through a new `LegacyIniValue(name) -> optional<string>` built on the same `kIniSettings` table. A value the cvar would refuse is skipped, as `ApplyLegacyIni` leaves the default then.
+4. band3's own startup default: `audio_maxqframes = 3`, set only when nothing (the ini included) set the cvar, so it sits below the ini (`[audio] max_queued_frames` wins over it).
+5. The registry default.
+
+The order is the order startup applies them in: the Deck presets, then the ini, then band3's defaults, each filling in only what is still unset, with the forced value last over everything.
 
 Paths are the exception (see Path defaults).
 
 **Comparison is typed.** Current value and effective default are both parsed through the cvar's type before comparing, so `1.000000` equals `1` and `yes` equals `true`.
 
-**Overrides.** On save, for every setting in the table: if its value differs from its effective default, write it; otherwise remove its key. Keys not in the table are left as they are. The reset button sets the value back to the effective default (and so removes the key on save).
+**Overrides.** On save, for every setting in the table: if its value differs from its effective default, write it; otherwise remove its key. `show_launcher` is the exception, always written (see above). Keys not in the table are left as they are. The reset button sets the value back to the effective default (and so removes the key on save).
 
 **The Deck toggle.** When `steam_deck_defaults` changes in the launcher, each preset setting whose current value equals the old effective default and that the player has not edited moves to the new effective default, so turning the presets off does not save them as overrides.
 
@@ -101,7 +104,7 @@ The model is pure: it takes the table, current values, effective defaults, recor
 - Reads with the SDK's toml++. If the file does not parse, the launcher shows a banner ("band3.toml couldn't be read: <error>; saving replaces it, and the old file is kept as band3.toml.bak"), and Save copies the old file to `band3.toml.bak` and starts from an empty table.
 - Applies the overrides and removals; keeps every other key.
 - **Emits by hand**, not with toml++'s serializer: one flat `name = value` line per key, strings as TOML basic strings with `\\` and `\"` escaped, floats in plain decimal. This keeps the output in the form the SDK's `LoadConfig` is known to accept.
-- Writes via a temp file and rename.
+- Writes via a temp file and rename. A failed write (a read-only install) doesn't block Play: it asks "Couldn't save your settings (<error>). Play anyway with these settings for this session?", and playing anyway starts with the settings as they are in the cvars; the footer keeps the error.
 - Comments are not preserved. The first line is `# Written by the band3 launcher. F4 > Save to config rewrites this file.` A file with comments of the player's (anything but that line and F4's own header) is copied to `band3.toml.bak` before the rewrite, and the footer says so.
 
 F4 stays as it is. `docs/settings.md` will say the launcher is the recommended way, and that F4's save freezes ini and Deck values into the file.

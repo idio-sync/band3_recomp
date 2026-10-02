@@ -191,7 +191,9 @@ void AddLauncherFonts(ImFontAtlas* atlas) {
         std::snprintf(config.Name, sizeof(config.Name), "band3 launcher %.0fpx", kFontBakes[i]);
         g_fonts[i] = atlas->AddFontFromMemoryTTF(shared, shared_size, kFontBakes[i], &config,
                                                  kRanges);
-        if (!g_fonts[i] && i == 0 && owned) IM_FREE(shared);
+        // a font that fails (a corrupt file) isn't added, and ImGui 1.92 frees
+        // data the atlas was to own itself as it rolls back, so the first
+        // size's failure leaves nothing to free here
         if (!g_fonts[i]) break;
     }
     REXLOG_INFO("Launcher: font {}",

@@ -17,7 +17,8 @@ It opens:
 - when Shift is held as band3 starts (Windows only);
 - when band3 is started with `--launcher`;
 - otherwise only when **Show this screen at startup** was ticked the last time you pressed
-  Play. It starts unticked, so after the first Play band3 goes straight into the game.
+  Save or Play. It starts unticked until you tick it, so after the first Play band3 goes
+  straight into the game; once ticked, it stays ticked until you untick it.
 
 It never opens for a [test harness](test-harness.md) run (`test_port`) or when RB3E's
 `rb3e_relaunch_game` restarts the game.
@@ -31,13 +32,16 @@ the command line.
 The launcher saves to `band3.toml` beside the executable, and writes only the settings you
 changed: one that matches its default (what band3 would use without the file: the Steam
 Deck setting on a Deck, then `band3_config.ini`'s, then band3's own) is left out, and the
-file's other lines are kept. A changed setting has a **Reset** button that puts it back to
+file's other lines are kept. **Show this screen at startup** is the exception: every save
+writes it, as `show_launcher = true` or `false`. A changed setting has a **Reset** button that puts it back to
 its default and takes it out of the file at the next save. Folders are saved with forward
 slashes, and a folder inside the ini's folder (or the executable's, without an ini) is
 saved relative to it, so the install still moves as one folder. If `band3.toml` can't be
 read, the launcher says why; saving then replaces it and keeps the old file as
 `band3.toml.bak`. The launcher doesn't keep comments: the first time it saves over a
-`band3.toml` you wrote comments in, it keeps that file as `band3.toml.bak` too.
+`band3.toml` you wrote comments in, it keeps that file as `band3.toml.bak` too. If
+`band3.toml` can't be written (a read-only folder, say), Play says why and offers to play
+anyway with the settings as they are, for that session only.
 
 A setting given on the command line or by a `REX_*` environment variable is shown but
 locked ("Set on the command line", "Set by an environment variable"), since a saved value

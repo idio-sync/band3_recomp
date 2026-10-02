@@ -154,10 +154,24 @@ def place_config(source, exe_folder):
     return restore
 
 
+def config_problem(args):
+    """Why launch's --config can't be used as asked, or None."""
+    if args.config and args.no_harness:
+        # the file is put back once band3 has read it, which with the launcher
+        # showing is before a Save or Play there writes band3.toml: that would
+        # merge into the player's file
+        return ("--config can't be used with --no-harness: the launcher would save over the "
+                "band3.toml band3ctl puts back. Put the file beside the exe yourself instead")
+    return None
+
+
 def launch(args):
     exe = os.path.abspath(args.exe)
     if not os.path.isfile(exe):
         sys.exit(f"no band3 at {exe}")
+    problem = config_problem(args)
+    if problem:
+        sys.exit(problem)
     if not args.config:
         return start(args, exe)
     if not os.path.isfile(args.config):
@@ -629,7 +643,8 @@ def main(argv):
                         "the window instead of the harness, which won't answer")
     p.add_argument("--config", metavar="FILE",
                    help="start with FILE as the band3.toml beside the exe, putting back "
-                        "whatever was there once band3 has read it")
+                        "whatever was there once band3 has read it (not with --no-harness, "
+                        "whose launcher saves to band3.toml later)")
     p.add_argument("extra", nargs="*", help="more band3 arguments, e.g. --fast_start=true")
 
     p = sub.add_parser("run", help="replay a .b3t script")

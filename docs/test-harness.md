@@ -35,13 +35,16 @@ then, so `launch` waits for the window instead, and the window commands below dr
 
 `launch --config <file>` starts band3 with that file as the `band3.toml` beside the
 exe, and puts back what was there (moved aside to `band3.toml.band3ctl` meanwhile) as soon
-as the harness answers, by when band3 has read it. `--user_data_root` is on the command
-line, so the file's `user_data_root` loses to it. `tools/test_config_file.py` uses it to
-check that a `band3.toml` written by the launcher's writer reaches the game: its folders
-(absolute with forward slashes, and relative to the ini's folder), `content_folders`,
-`controller_type` and `lang`, each winning over a `band3_config.ini` that sets them
-otherwise. It needs the unit tests built, for `band3_write_config` (the writer as a small
-program), and runs band3 from a temporary folder it deletes afterwards:
+as the harness answers, by when band3 has read it. It refuses `--no-harness`: the launcher
+showing then saves to `band3.toml` after the file is put back, into the player's own. Put
+the file beside the exe by hand to start the launcher with it. `--user_data_root` is on
+the command line, so the file's `user_data_root` loses to it. `tools/test_config_file.py`
+uses it to check that a `band3.toml` written by the launcher's writer reaches the game: its
+folders (absolute with forward slashes, and relative to the ini's folder),
+`content_folders`, `controller_type` and `lang`, each winning over a `band3_config.ini`
+that sets them otherwise, and a bool, a float and a string with a quote and a backslash,
+read back as written. It needs the unit tests built, for `band3_write_config` (the writer
+as a small program), and runs band3 from a temporary folder it deletes afterwards:
 
 ```
 python tools/test_config_file.py

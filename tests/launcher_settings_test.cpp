@@ -82,6 +82,8 @@ constexpr Setting kTable[] = {
      .widget = Widget::kCheckbox},
     {.cvar = "steam_deck_defaults", .tab = Tab::kSteamDeck, .section = "Steam Deck",
      .label = "Deck", .widget = Widget::kCheckbox},
+    {.cvar = "show_launcher", .tab = Tab::kFooter, .section = "Footer",
+     .label = "Show this screen at startup", .widget = Widget::kCheckbox},
 };
 
 // cvars as a fresh start would leave them, nothing in band3.toml
@@ -115,6 +117,7 @@ struct Fixture {
         c["game_data_root"].path_default = Anchor() / "assets";
         c["content_folders"] = Facts(ValueType::kString, "songs");
         c["steam_deck_defaults"] = Facts(ValueType::kBool, "true");
+        c["show_launcher"] = Facts(ValueType::kBool, "true");
         c["missing_cvar"] = CvarFacts{};
 
         store.values = {
@@ -131,6 +134,7 @@ struct Fixture {
             {"game_data_root", ""},
             {"content_folders", "songs"},
             {"steam_deck_defaults", "true"},
+            {"show_launcher", "true"},
         };
     }
 
@@ -445,6 +449,81 @@ TEST_CASE("Save leaves keys outside the table alone") {
     CHECK(saved["song_speed"].value<double>() == 0.75);
     CHECK(saved["song_speed"].is_floating_point());
     fs::remove(file);
+}
+
+TEST_CASE("the startup box is ticked only when band3.toml has show_launcher = true") {
+    Fixture f;
+    SUBCASE("the default, on, as on a first run") {
+        SettingsModel m(kTable, f.env, f.store);
+        CHECK_FALSE(m.ShowAtStartup());
+    }
+    SUBCASE("ticked before: band3.toml says true") {
+        f.env.cvars["show_launcher"].from_config = true;
+        SettingsModel m(kTable, f.env, f.store);
+        CHECK(m.ShowAtStartup());
+    }
+    SUBCASE("band3.toml says false") {
+        f.env.cvars["show_launcher"].from_config = true;
+        f.store.values["show_launcher"] = "false";
+        SettingsModel m(kTable, f.env, f.store);
+        CHECK_FALSE(m.ShowAtStartup());
+    }
+    SUBCASE("locked, it shows the command line's value and can't change") {
+        f.env.cvars["show_launcher"].lock = Lock::kCommandLine;
+        SettingsModel m(kTable, f.env, f.store);
+        CHECK(m.ShowAtStartup());
+        CHECK_FALSE(m.SetShowAtStartup(false));
+        CHECK(m.ShowAtStartup());
+        CHECK_FALSE(EditFor(m.Edits(), "show_launcher"));
+    }
+}
+
+TEST_CASE("show_launcher is saved whatever it is, from the startup box") {
+    Fixture f;
+    SettingsModel m(kTable, f.env, f.store);
+    CHECK_FALSE(m.HasUnsavedChanges());
+
+    // unticked: false, though nothing was touched
+    REQUIRE(EditFor(m.Edits(), "show_launcher"));
+    CHECK(*EditFor(m.Edits(), "show_launcher")->value == ConfigValue(false));
+
+    // ticked: true, the default, is written too, so the box is ticked next time
+    CHECK(m.SetShowAtStartup(true));
+    CHECK(m.HasUnsavedChanges());
+    CHECK(*EditFor(m.Edits(), "show_launcher")->value == ConfigValue(true));
+    // the cvar waits for the save
+    CHECK(f.store.values["show_launcher"] == "true");
+
+    const fs::path file = fs::temp_directory_path() / "band3_launcher_show.toml";
+    fs::remove(file);
+    m.SetShowAtStartup(false);
+    REQUIRE(m.Save(file).ok);
+    CHECK(f.store.values["show_launcher"] == "false");
+    CHECK_FALSE(m.HasUnsavedChanges());
+    m.SetShowAtStartup(true);
+    CHECK(m.HasUnsavedChanges());
+    REQUIRE(m.Save(file).ok);
+    CHECK_FALSE(m.HasUnsavedChanges());
+    CHECK(f.store.values["show_launcher"] == "true");
+    const toml::table saved = toml::parse_file(file.string());
+    CHECK(saved["show_launcher"].value<bool>() == true);
+    fs::remove(file);
+}
+
+TEST_CASE("a failed save leaves show_launcher and the unsaved changes as they were") {
+    Fixture f;
+    SettingsModel m(kTable, f.env, f.store);
+    m.SetShowAtStartup(false);
+    m.Set("lang", "fre");
+    // a folder where the file should be: it can't be written
+    const fs::path dir = fs::temp_directory_path() / "band3_launcher_unwritable";
+    fs::create_directories(dir / "band3.toml");
+    const SaveResult result = m.Save(dir / "band3.toml");
+    CHECK_FALSE(result.ok);
+    CHECK_FALSE(result.error.empty());
+    CHECK(f.store.values["show_launcher"] == "true");
+    CHECK(m.HasUnsavedChanges());
+    fs::remove_all(dir);
 }
 
 TEST_CASE("which settings are shown") {

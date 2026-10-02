@@ -20,6 +20,13 @@ paths, and every check fails if band3.toml isn't read or loses to the ini:
   user_data_root   in the file, but band3ctl sets it on the command line,
                    which wins
 
+and, read back as written through the SDK's LoadConfig, one of each other kind
+of value the writer emits:
+
+  gold_on_all_difficulties  a bool, true
+  song_speed                a float, 1.25
+  midi_drums_device         a string with a quote and a backslash, escaped
+
 The temporary folder (the cache with it) is deleted afterwards; band3ctl puts
 back whatever band3.toml was beside the exe as soon as the game has read its own.
 
@@ -61,6 +68,10 @@ lang = fre
 content_folders = ini_songs
 cache_root = ini_cache
 """
+
+
+# a string the writer has to escape: a quote and a backslash
+QUOTED = 'Kit "A" \\ B'
 
 
 def forward(path):
@@ -126,6 +137,9 @@ def main(argv):
             "content_folders": "songs|" + forward(more_songs),
             "controller_type": "8",
             "lang": "eng",
+            "gold_on_all_difficulties": "true",
+            "song_speed": "1.25",
+            "midi_drums_device": QUOTED,
         }
         config = os.path.join(anchor, "band3.toml")
         subprocess.run([args.writer, config] + [f"{k}={v}" for k, v in settings.items()],
@@ -166,6 +180,16 @@ def main(argv):
             cvar("content_folders", settings["content_folders"])
             cvar("controller_type", "8")
             cvar("lang", "eng")
+            cvar("gold_on_all_difficulties", "true")
+            cvar("midi_drums_device", QUOTED)
+            reply = conn.command("cvar song_speed")
+            got = reply.get("cvar", {})
+            try:
+                speed = float(got.get("value", ""))
+            except ValueError:
+                speed = None
+            checks.check("song_speed is 1.25 from config",
+                         speed == 1.25 and got.get("source") == "config", json.dumps(reply))
             cvar("user_data_root", os.path.abspath(os.path.join(REPO, "out", "test_user_data")),
                  "command_line")
 

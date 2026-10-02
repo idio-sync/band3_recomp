@@ -15,7 +15,8 @@
 //
 // The launcher writes only overrides: a setting goes into band3.toml when its
 // value differs from its effective default (what it would be with no key
-// there), and its key is removed otherwise. The model is pure: it reads and
+// there), and its key is removed otherwise. show_launcher is the exception,
+// written whatever it is (ShowAtStartup). The model is pure: it reads and
 // sets values through a CvarStore and is told everything else (types,
 // defaults, sources) in an Environment, which launcher_cvars.h fills in from
 // the SDK in the game and tests write by hand.
@@ -180,6 +181,8 @@ struct CvarFacts {
 
     // where the value came from when the launcher opened
     Lock lock = Lock::kNone;
+    // band3.toml set it (its source was the config file when the launcher opened)
+    bool from_config = false;
 };
 
 struct Environment {
@@ -255,14 +258,28 @@ public:
     // not one of the allowed values)
     std::string Refusal(std::string_view cvar, std::string_view value) const;
 
-    // something differs from what was last saved (or loaded)
+    // The footer's "Show this screen at startup", saved as show_launcher.
+    // show_launcher is on by default, so a first run shows the launcher, but
+    // the box starts ticked only when band3.toml has show_launcher = true: the
+    // player ticked it before. Unticked otherwise, so Play then leaves band3
+    // going straight into the game. It's kept apart from the cvar until a save,
+    // and every save writes it, true or false: true is the default, and
+    // leaving its key out would untick the box at the next start. Shown as the
+    // cvar is when show_launcher is locked.
+    bool ShowAtStartup() const { return show_at_startup_; }
+    // false if show_launcher is locked or not in this build
+    bool SetShowAtStartup(bool on);
+
+    // something differs from what was last saved (or loaded), the startup box too
     bool HasUnsavedChanges() const;
 
     // what Save does to band3.toml, in table order: a changed setting's typed
-    // value, or removing an unchanged one's key. Locked and unavailable
-    // settings, and keys outside the table, are left as they are.
+    // value, or removing an unchanged one's key, and show_launcher from
+    // ShowAtStartup either way. Locked and unavailable settings, and keys
+    // outside the table, are left as they are.
     std::vector<ConfigEdit> Edits() const;
-    // writes Edits() into the file (config_file.h); on success the values count as saved
+    // writes Edits() into the file (config_file.h); on success show_launcher
+    // takes the startup box's value and the values count as saved
     SaveResult Save(const std::filesystem::path& file);
     void MarkSaved();
 
@@ -279,6 +296,9 @@ private:
     std::set<std::string, std::less<>> edited_;
     // the values when last saved or loaded
     std::map<std::string, std::string, std::less<>> saved_;
+    // the footer's startup box, and its value when last saved or loaded
+    bool show_at_startup_ = false;
+    bool saved_show_at_startup_ = false;
 };
 
 }
