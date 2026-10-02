@@ -47,6 +47,10 @@ VK_BINDING(0, 1) cbuffer VertexUniforms : register(b0, space1) {
     // the viewport, half a pixel right and down, for a draw on D3D9's pixel
     // centres (soft_raster.cpp's PixelCentre); 0 for DrawRect's quads
     float4 clip_offset;
+    // a back-buffer draw's depth as its camera layers it (soft_raster.h's
+    // DepthMap): (x w + y + z clip.z) / w in units of kNearW / w, 0 1 0 for
+    // kNearW / w itself
+    float4 depth_map;
     ShadeParams vs_shade;  // the texture's transform, and a vertex-lit draw's light
 };
 
@@ -219,10 +223,13 @@ PixelIn VSMain(VertexIn v) {
     PixelIn o;
     // depth is kNearW / w, the CPU's 1/w scaled: z/w interpolates as 1/w does,
     // larger is nearer, the near plane is w = kNearW and there's no far plane,
-    // whatever depth range the game's projection has. Into a shadow map it's
-    // the clip z, whose z/w the map keeps and its pass's LESS test compares,
-    // clipped at 0 as the game's device clips it (soft_raster.cpp likewise)
-    o.pos = float4(clip.xy, shadow_depth != 0u ? clip.z : kNearW, clip.w);
+    // whatever depth range the game's projection has; a back-buffer draw's
+    // mapped by its camera's depth_map. Into a shadow map it's the clip z,
+    // whose z/w the map keeps and its pass's LESS test compares, clipped at 0
+    // as the game's device clips it (soft_raster.cpp likewise)
+    const float depth =
+        kNearW * (depth_map.x * clip.w + depth_map.y + depth_map.z * clip.z);
+    o.pos = float4(clip.xy, shadow_depth != 0u ? clip.z : depth, clip.w);
     o.uv = TexGen(vs_shade, v.uv);
     o.nrm = wn;
     o.color = v.color;

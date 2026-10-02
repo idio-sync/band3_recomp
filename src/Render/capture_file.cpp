@@ -15,7 +15,8 @@
 //   FRAM  frame numbers, post-processing boundary and counts (a counted list),
 //         then the world's frame (a file without it: the frame's own), then
 //         the render targets rt_filtered counts (a counted list; a file
-//         without it: none)
+//         without it: none), then whether it has TheRnd's clear colour and
+//         the colour (a file without them: none)
 //   GEOM  geometry, with the vertex's size: Vertex only ever grows at the end,
 //         so a file with another size keeps the fields both have; version 2
 //         adds whether each one's verts have their tangents (Geometry::
@@ -44,9 +45,12 @@
 //         TexSampler's size and bytes, the diffuse texture's then each map's
 //         for every shade (a file without it, or with another number of
 //         shades or maps: every texture nearest at level 0, as before)
+//   CAMS  the back buffer's cameras (FrameCapture::cameras), as CameraView's
+//         size and each one's bytes: the struct only grows at the end (a
+//         file without it: none, and the renderers clear depth per camera)
 // A section newer than this reader skips if it's SHAD, PASS, FRAM, POST,
-// GAMA, MIPS or SMPL (the file loads without it) and fails the load if it's
-// GEOM, TEXS or DRAW.
+// GAMA, MIPS, SMPL or CAMS (the file loads without it) and fails the load if
+// it's GEOM, TEXS or DRAW.
 //
 // Versions 1 and 2 still load: 1 is frame, geometry, textures and draws; 2
 // adds the draws' ShadeStates, kept as their ShadeInputs were in memory (so
@@ -78,6 +82,7 @@ constexpr uint32_t kSecPost = FourCC("POST");
 constexpr uint32_t kSecGamma = FourCC("GAMA");
 constexpr uint32_t kSecMips = FourCC("MIPS");
 constexpr uint32_t kSecSamplers = FourCC("SMPL");
+constexpr uint32_t kSecCameras = FourCC("CAMS");
 // the versions this build writes and reads
 constexpr uint32_t kFrameVersion = 1;
 constexpr uint32_t kGeometryVersion = 2;
@@ -89,6 +94,7 @@ constexpr uint32_t kPostVersion = 1;
 constexpr uint32_t kGammaVersion = 1;
 constexpr uint32_t kMipsVersion = 1;
 constexpr uint32_t kSamplersVersion = 1;
+constexpr uint32_t kCamerasVersion = 1;
 
 // TEXS: where a texture's pixels are
 constexpr int32_t kOwnPixels = -1;  // they follow
@@ -430,6 +436,8 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     w.Put<uint64_t>(fc.world_frame);
     w.Put<uint32_t>(uint32_t(fc.rt_filtered_keys.size()));
     for (uint64_t k : fc.rt_filtered_keys) w.Put<uint64_t>(k);
+    w.Put<uint32_t>(fc.has_clear_color);
+    w.Raw(fc.clear_color, sizeof(fc.clear_color));
     w.End(sec);
 
     sec = w.Begin(kSecGeometry, kGeometryVersion);
@@ -560,6 +568,12 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     w.Raw(fc.gamma.pwl, sizeof(fc.gamma.pwl));
     w.End(sec);
 
+    sec = w.Begin(kSecCameras, kCamerasVersion);
+    w.Put<uint32_t>(uint32_t(sizeof(CameraView)));
+    w.Put<uint32_t>(uint32_t(fc.cameras.size()));
+    for (const CameraView& c : fc.cameras) w.Put(c);
+    w.End(sec);
+
     const std::string tmp = path + ".tmp";
     FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) return false;
@@ -614,6 +628,7 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                                : id == kSecGamma    ? kGammaVersion
                                : id == kSecMips     ? kMipsVersion
                                : id == kSecSamplers ? kSamplersVersion
+                               : id == kSecCameras  ? kCamerasVersion
                                                     : 0;
         if (version > known || version == 0) {
             if (core) return nullptr;
@@ -640,6 +655,10 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                 if (!r.Count(keys, sizeof(uint64_t))) return nullptr;
                 fc->rt_filtered_keys.resize(keys);
                 for (uint64_t& k : fc->rt_filtered_keys) k = r.Get<uint64_t>();
+            }
+            if (r.end - r.pos >= sizeof(uint32_t) + sizeof(fc->clear_color)) {
+                fc->has_clear_color = r.Get<uint32_t>();
+                r.Raw(fc->clear_color, sizeof(fc->clear_color));
             }
         } else if (id == kSecGeometry) {
             const uint32_t stride = r.Get<uint32_t>();
@@ -804,6 +823,16 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                 auto tex = std::make_shared<Texture>(*texs[i]);
                 tex->mips = texs[pixel_owner[i]]->mips;
                 texs[i] = std::move(tex);
+            }
+        } else if (id == kSecCameras) {
+            const uint32_t each = r.Get<uint32_t>();
+            uint32_t count;
+            if (!each || !r.Count(count, each)) return nullptr;
+            fc->cameras.resize(count);
+            std::vector<uint8_t> bytes(each);
+            for (CameraView& c : fc->cameras) {
+                r.Raw(bytes.data(), each);
+                std::memcpy(&c, bytes.data(), std::min<size_t>(each, sizeof(CameraView)));
             }
         } else if (id == kSecSamplers) {
             const uint32_t each = r.Get<uint32_t>();

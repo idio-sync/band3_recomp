@@ -15,8 +15,13 @@
 // shadow is its casters' white silhouettes, cleared first and blurred twice
 // in place, which the projected light's draws read; that a normal map a
 // texture pass draws (a head's) is that pass's target, which tilts the
-// normal of the draw after it in the frame its tangents give; and that a
-// crowd billboard's quad is turned to the camera.
+// normal of the draw after it in the frame its tangents give; that a
+// crowd billboard's quad is turned to the camera; that the back buffer starts
+// as the frame's clear colour and its DrawRect quads are drawn, but the post
+// copy; and that a camera draws in its viewport, layered with the others by
+// their z ranges, with no depth clear between them (but in a capture from
+// before the cameras were kept), the overlay's depth cleared after the
+// resolve.
 
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -1111,4 +1116,140 @@ TEST_CASE("the display gamma ramp maps each value as the presenter shows it") {
     f.gamma = GammaRamp{};
     Rasterize(f, o, graded);
     CHECK(graded == raw);
+}
+
+TEST_CASE("the back buffer starts as the clear colour; its DrawRects are drawn, the post copy not") {
+    FrameCapture f;
+    DrawItem flare = Item(Quad(-1, 0, kRed), 0);
+    flare.rect_shader = 6;
+    DrawItem copy = Item(Quad(-1, 1, kGreen), 0);
+    copy.rect_shader = kRectShaderPostCopy;
+    f.draws = {flare, copy};
+    f.passes = {BackBuffer(0, 2)};
+    std::vector<uint32_t> rgba;
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 1] == kRed);
+    CHECK(rgba[1 * 8 + 6] == 0xff202020u);  // a capture from before the clear colour
+    CHECK(DrawnToBackBuffer(flare));
+    CHECK_FALSE(DrawnToBackBuffer(copy));
+
+    f.has_clear_color = 1;
+    const float blue[4] = {0, 0, 1, 1};
+    std::copy(std::begin(blue), std::end(blue), f.clear_color);
+    CHECK(ClearRgba(f) == 0xffff0000u);
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 1] == kRed);
+    CHECK(rgba[1 * 8 + 6] == 0xffff0000u);
+}
+
+namespace {
+
+// Perspective() with a depth range: clip z = a w + b, z/w 0 at w 1 to 1 at
+// w 101, as a D3D projection with near 1 and far 101 has it
+Mat4 Projection() {
+    Mat4 m = Perspective();
+    m.m[2][2] = 101.0f / 100.0f;
+    m.m[3][2] = -101.0f / 100.0f;
+    return m;
+}
+
+// a camera over the target's left (x 0) or right half (x .5), as
+// RecordCamera keeps it for a 1280x720 back buffer, with z range z0..z1
+CameraView Camera(uint32_t cam, float x, float z0, float z1) {
+    CameraView c;
+    c.cam = cam;
+    c.viewport[0] = 1280 * x;
+    c.viewport[2] = 1280 - 1280 * x;
+    c.viewport[3] = 720;
+    c.target_w = 1280;
+    c.target_h = 720;
+    c.zrange[0] = z0;
+    c.zrange[1] = z1;
+    return c;
+}
+
+}  // namespace
+
+TEST_CASE("a camera draws in its viewport; cameras layer by their z ranges, depth never cleared") {
+    // the venue's camera, near (w 10), then a track's camera over the right
+    // half, farther (w 50) but in a z range in front of the venue's
+    FrameCapture f;
+    f.shades = {FlatShade(false)};
+    DrawItem venue = Shaded(-1, 1, kRed, 0, 1);
+    venue.geom = QuadAt(-1, 1, 10, kRed);
+    venue.view_proj = Projection();
+    venue.z_mode = 1;
+    venue.cam = 1;
+    DrawItem track = venue;
+    track.geom = QuadAt(-1, 1, 50, kGreen);
+    track.cam = 2;
+    f.draws = {venue, track};
+    f.passes = {BackBuffer(0, 2)};
+    f.cameras = {Camera(1, 0, 0, 1), Camera(2, 0.5f, 0, 0.1f)};
+    std::vector<uint32_t> rgba;
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 1] == kRed);    // the track's viewport is the right half
+    CHECK(rgba[1 * 8 + 6] == kGreen);  // in front by its z range
+
+    const BackBufferLayout l = LayoutBackBuffer(f);
+    CHECK(l.cameras);
+    REQUIRE(l.mapped);
+    float vp[4];
+    DepthMap venue_depth, track_depth;
+    PlaceBackBufferDraw(l, f, venue, 8, 4, vp, venue_depth);
+    CHECK(venue_depth.Identity());  // the reference: 1/w as before
+    CHECK(vp[2] == 8);
+    PlaceBackBufferDraw(l, f, track, 8, 4, vp, track_depth);
+    CHECK(vp[0] == 4);
+    CHECK(vp[2] == 4);
+    // RB3's depth, 1 - z0 - (z1 - z0) z/w, in the venue's 1/w: (d - B) / A
+    auto device = [](float w, float z0, float z1) {
+        const float zw = 101.0f / 100.0f * (1.0f - 1.0f / w);
+        return 1.0f - z0 - (z1 - z0) * zw;
+    };
+    const float B = device(1e30f, 0, 1), A = device(1, 0, 1) - B;
+    const float mapped = track_depth.p + track_depth.q / 50.0f;
+    CHECK(mapped == doctest::Approx((device(50, 0, 0.1f) - B) / A).epsilon(1e-4));
+    CHECK(mapped > 1.0f / 10.0f);
+
+    // in the same z range it's behind: no depth clear between cameras
+    f.cameras[1].zrange[1] = 1;
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 6] == kRed);
+    // as a capture from before the cameras draws it: depth cleared for each
+    // camera, over all of the picture
+    f.cameras.clear();
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 1] == kGreen);
+    CHECK(rgba[1 * 8 + 6] == kGreen);
+    RasterOptions o = Small();
+    o.clear_depth_per_camera = false;
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 6] == kRed);
+}
+
+TEST_CASE("with its cameras, the overlay's depth starts cleared after the resolve") {
+    // the world near (w 10); the overlay, by the same camera, far (w 50)
+    FrameCapture f;
+    f.shades = {FlatShade(false)};
+    DrawItem world = Shaded(-1, 1, kRed, 0, 1);
+    world.geom = QuadAt(-1, 1, 10, kRed);
+    world.view_proj = Projection();
+    world.z_mode = 1;
+    world.cam = 1;
+    DrawItem overlay = world;
+    overlay.geom = QuadAt(-1, 1, 50, kGreen);
+    f.draws = {world, overlay};
+    f.passes = {BackBuffer(0, 2)};
+    f.post_boundary = 1;
+    f.cameras = {Camera(1, 0, 0.1f, 1)};
+    RasterOptions o = Small();
+    o.post = false;
+    std::vector<uint32_t> rgba;
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 3] == kGreen);
+    // without them, over the depth the world left (the same camera: no clear)
+    f.cameras.clear();
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 3] == kRed);
 }

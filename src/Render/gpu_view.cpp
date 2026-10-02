@@ -51,8 +51,6 @@ constexpr SDL_GPUTextureFormat kColorFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNO
 constexpr SDL_GPUTextureFormat kDepthFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
 // a shadow map's target: its depth, clip z/w, as soft_raster.cpp keeps it
 constexpr SDL_GPUTextureFormat kShadowFormat = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
-// soft_raster.cpp's clear colour, 0xff202020
-constexpr float kClearGrey = float(0x20) / 255.0f;
 // a mesh or texture no frame has drawn for this many frames is let go
 constexpr uint64_t kEvictAfter = 120;
 // A texture array of a size class starts with layers to about this many
@@ -79,9 +77,18 @@ struct VertexUniforms {
     uint32_t bone_count;
     uint32_t shadow_depth;  // into a shadow map: the clip z is the depth
     float clip_offset[4];  // ClipOffset's
+    // the depth's DepthMap (soft_raster.h): p, q, r, then 0; 0 1 0 is 1/w
+    float depth_map[4];
     shade::ShadeParams shade;
 };
-static_assert(sizeof(VertexUniforms) == 160 + sizeof(shade::ShadeParams));
+static_assert(sizeof(VertexUniforms) == 176 + sizeof(shade::ShadeParams));
+
+void SetDepthMap(const DepthMap& d, float out[4]) {
+    out[0] = d.p;
+    out[1] = d.q;
+    out[2] = d.r;
+    out[3] = 0;
+}
 
 // What mesh.hlsl adds to a draw's clip x, y (times w) in a viewport vw x vh:
 // half a pixel right and down, so that the pixel SDL_gpu samples at its
@@ -1962,16 +1969,24 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     };
 
     // the back buffer: the world's draws into the scene target, cleared to
-    // the CPU's grey (alpha 0) the first time, and the overlay's into the
-    // picture once the resolve has filled it; depth cleared the first time
-    // and whenever a new camera starts
+    // the frame's clear colour (alpha 0) the first time, and the overlay's
+    // into the picture once the resolve has filled it; depth cleared the
+    // first time and, in a capture from before its cameras were kept,
+    // whenever a new camera starts, else after the resolve
+    const BackBufferLayout layout = LayoutBackBuffer(frame);
+    bool clear_overlay_depth = false;
     bool back_begun = false;
     bool resolved = false;
     bool depth_fresh = false;  // the open pass's depth is cleared and untouched
+    // the frame's clear colour (soft_raster.h's ClearRgba), the scene's alpha 0
+    const uint32_t clear_rgba = ClearRgba(frame);
+    const SDL_FColor clear_color = {float(clear_rgba & 0xff) / 255.0f,
+                                    float(clear_rgba >> 8 & 0xff) / 255.0f,
+                                    float(clear_rgba >> 16 & 0xff) / 255.0f, 0.0f};
     auto begin_back = [&](bool clear_depth) {
         SDL_GPUColorTargetInfo ct{};
         ct.texture = resolved ? color : scene;
-        ct.clear_color = {kClearGrey, kClearGrey, kClearGrey, 0.0f};
+        ct.clear_color = clear_color;
         ct.load_op = back_begun ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
         ct.store_op = SDL_GPU_STOREOP_STORE;
         SDL_GPUDepthStencilTargetInfo dt{};
@@ -1983,8 +1998,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
         dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
         begin_pass(ct, dt);
-        // SDL_gpu's default viewport, all of the target, which the back
-        // buffer's draws keep
+        // SDL_gpu's default viewport, all of the target, until a draw's
+        // camera has another (PlaceBackBufferDraw)
         bound_viewport[2] = float(width);
         bound_viewport[3] = float(height);
         back_begun = true;
@@ -2120,6 +2135,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SDL_EndGPUCopyPass(copy);
         }
         resolved = true;
+        // the overlay's depth starts cleared with the capture's cameras, as
+        // on the CPU (Rasterize's resolve)
+        clear_overlay_depth = layout.cameras;
     };
 
     // the density map the spotlights' cones read: the last drawn, as on the
@@ -2129,7 +2147,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
 
     // one draw into the open pass; `no_z` a texture without a depth buffer,
     // `shadow_depth` a shadow map's, into which it draws its depth alone
-    auto draw = [&](size_t d, AlphaMode alpha, bool no_z, bool shadow_depth = false) {
+    auto draw = [&](size_t d, AlphaMode alpha, bool no_z, bool shadow_depth = false,
+                    const DepthMap& depth_map = DepthMap{}) {
         const DrawItem& it = frame.draws[d];
         const Mesh& m = meshes[it.geom.get()];
         const int blend = BlendFor(it, o);
@@ -2169,6 +2188,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             }
             vu.shadow_depth = 1;
             ClipOffset(it, bound_viewport[2], bound_viewport[3], vu.clip_offset);
+            SetDepthMap(depth_map, vu.depth_map);
             vu.shade = shades[d];
             SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
             SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
@@ -2319,6 +2339,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             vu.bone_count = uint32_t(it.bones.size());
         }
         ClipOffset(it, bound_viewport[2], bound_viewport[3], vu.clip_offset);
+        SetDepthMap(depth_map, vu.depth_map);
         vu.shade = sp;
         SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
         PixelUniforms pu{};
@@ -2369,6 +2390,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
 
     cams_seen.clear();
     uint32_t last_cam = 0;
+    // the back buffer's draws in their cameras' viewports, layered by their z
+    // ranges (soft_raster.h's LayoutBackBuffer, which Rasterize() follows)
     for (size_t r = 0; r < runs.size(); r++) {
         const PassRun& run = runs[r];
         if (!run.pass) {
@@ -2378,22 +2401,36 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 if (!resolved && d >= frame.post_boundary) resolve();
                 if (resolved && o.view != RasterView::kFinal) break;
                 bool clear_depth = false;
-                if (o.clear_depth_per_camera && it.cam != last_cam &&
-                    std::find(cams_seen.begin(), cams_seen.end(), it.cam) == cams_seen.end()) {
-                    cams_seen.push_back(it.cam);
-                    clear_depth = true;
+                // (a DrawRect quad has no camera of its own)
+                if (it.rect_shader < 0) {
+                    if (o.clear_depth_per_camera && !layout.cameras && it.cam != last_cam &&
+                        std::find(cams_seen.begin(), cams_seen.end(), it.cam) ==
+                            cams_seen.end()) {
+                        cams_seen.push_back(it.cam);
+                        clear_depth = true;
+                    }
+                    last_cam = it.cam;
                 }
-                last_cam = it.cam;
                 if (!Drawable(it)) {
                     st.skipped++;
                     continue;
                 }
+                clear_depth |= clear_overlay_depth;
+                clear_overlay_depth = false;
                 if (pass && clear_depth && !depth_fresh) end_pass();
                 if (!pass) begin_back(clear_depth);
+                float vp[4];
+                DepthMap depth_map;
+                PlaceBackBufferDraw(layout, frame, it, width, height, vp, depth_map);
+                if (!std::equal(std::begin(vp), std::end(vp), bound_viewport)) {
+                    const SDL_GPUViewport v{vp[0], vp[1], vp[2], vp[3], 0.0f, 1.0f};
+                    SDL_SetGPUViewport(pass, &v);
+                    std::copy(std::begin(vp), std::end(vp), bound_viewport);
+                }
                 AlphaMode alpha = AlphaMode::kNone;
                 if (!resolved && WritesSceneAlpha(shade::ShadeOf(frame, it)))
                     alpha = AlphaMode::kScene;
-                draw(d, alpha, false);
+                draw(d, alpha, false, false, depth_map);
                 depth_fresh = false;
             }
             continue;

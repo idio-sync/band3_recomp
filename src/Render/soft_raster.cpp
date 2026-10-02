@@ -162,6 +162,10 @@ struct DrawState {
     uint8_t cull;  // DrawItem::cull, 0 with RasterOptions::culling off
     // where in a pixel it samples (PixelCentre)
     float centre;
+    // the depth it tests and writes, if not 1/w (a back-buffer draw's
+    // camera's: LayoutBackBuffer)
+    bool depth_mapped = false;
+    DepthMap depth_map;
 };
 
 // Where a draw samples pixel x: at x + PixelCentre in the target's pixels
@@ -404,6 +408,12 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
         sx[i] = t.vx + (v[i]->p[0] * iw[i] * 0.5f + 0.5f) * t.vw;
         sy[i] = t.vy + (0.5f - v[i]->p[1] * iw[i] * 0.5f) * t.vh;
     }
+    // the depth each corner tests and writes, (p w + q + r z) / w, which
+    // runs straight across the screen as 1/w does
+    float dv[3] = {iw[0], iw[1], iw[2]};
+    if (ds.depth_mapped)
+        for (int i = 0; i < 3; i++)
+            dv[i] = ds.depth_map.p + (ds.depth_map.q + ds.depth_map.r * v[i]->p[2]) * iw[i];
     const float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sy[1] - sy[0]) * (sx[2] - sx[0]);
     if (!(std::fabs(area) > 1e-9f)) return;
     // y runs down the screen, so a positive area goes clockwise
@@ -444,9 +454,10 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
                 continue;
             }
             const float z = l0 * iw[0] + l1 * iw[1] + l2 * iw[2];
+            const float dz = ds.depth_mapped ? l0 * dv[0] + l1 * dv[1] + l2 * dv[2] : z;
             if (ds.z_test) {
                 const float d = t.depth[idx];
-                if (ds.z_equal_passes ? z < d * 0.9999f : z <= d) continue;
+                if (ds.z_equal_passes ? dz < d * 0.9999f : dz <= d) continue;
             }
             const float q0 = l0 * iw[0] / z, q1 = l1 * iw[1] / z, q2 = l2 * iw[2] / z;
             float uv[2], n[3], vc[4], wp[3];
@@ -501,7 +512,7 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
                 t.color[idx] = Blend(ds.blend, col, t.color[idx], ds.alpha);
                 if (t.ids && ds.blend != 0) (*t.ids)[idx] = ds.index;
             }
-            if (ds.z_write) t.depth[idx] = z;
+            if (ds.z_write) t.depth[idx] = dz;
             st.pixels++;
         }
     }
@@ -651,11 +662,13 @@ TexView NormalMap(const ShadeState* state, int map, const RasterOptions& o, cons
 
 void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const RasterOptions& o,
              const RtTargets& rts, Target& t, RasterStats& st, std::vector<ClipVert>& cv,
-             const TexView& density = {}) {
+             const TexView& density = {}, const DepthMap& depth = {}) {
     const Geometry& g = *it.geom;
     const bool skinned = o.skinning && !it.bones.empty();
     DrawState ds;
     ds.index = index;
+    ds.depth_mapped = !depth.Identity();
+    ds.depth_map = depth;
     ds.cull = o.culling ? it.cull : 0;
     ds.centre = PixelCentre(it);
     ds.tex = Diffuse(it, o, rts, t, st);
@@ -961,12 +974,14 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     const auto start = std::chrono::steady_clock::now();
     RasterStats st;
     const size_t pixels = size_t(o.width) * o.height;
-    rgba.assign(pixels, kClearColor);
+    const uint32_t clear = ClearRgba(frame);
+    rgba.assign(pixels, clear);
     if (ids) ids->assign(pixels, -1);
     std::vector<float> depth(pixels, 0.0f);
     // the world's draws into the scene target, cleared with alpha 0; the
-    // overlay's into the picture, over the depth the world left
-    std::vector<uint32_t> scene(pixels, kClearColor & 0x00ffffffu);
+    // overlay's into the picture, over the depth the world left (cleared, in
+    // a capture with its cameras)
+    std::vector<uint32_t> scene(pixels, clear & 0x00ffffffu);
     Target world{o.width, o.height, scene, depth, ids};
     world.alpha = TargetAlpha::kScene;
     world.SetViewport(0, 0, float(o.width), float(o.height));
@@ -983,9 +998,12 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     post::PostPlan post_plan;
     const bool post_on =
         o.post && o.view == RasterView::kFinal && post::PlanPost(frame, o.post_only, post_plan);
+    const BackBufferLayout layout = LayoutBackBuffer(frame);
     // the scene into the picture, at post_boundary (or the frame's end):
     // post-processed, or as it is. A view of the scene target ends the frame
-    // there.
+    // there. With the capture's cameras, the overlay's depth starts cleared
+    // after it, as RB3's does (DxRnd::DoPostProcess clears its offscreen
+    // target's to 0 before the overlay draws: BeginTiling).
     auto resolve = [&] {
         back = &overlay;
         if (post_on) {
@@ -1018,6 +1036,8 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             behind = rgba;
             overlay.behind = behind.data();
         }
+        if (layout.cameras && o.view == RasterView::kFinal)
+            std::fill(depth.begin(), depth.end(), 0.0f);
     };
     std::vector<ClipVert> cv;
     std::unordered_set<uint32_t> cams_seen;
@@ -1031,12 +1051,19 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                 if (!DrawnToBackBuffer(it)) continue;
                 if (back == &world && i >= frame.post_boundary) resolve();
                 if (back == &overlay && o.view != RasterView::kFinal) break;
-                if (o.clear_depth_per_camera && it.cam != last_cam &&
-                    cams_seen.insert(it.cam).second)
-                    std::fill(depth.begin(), depth.end(), 0.0f);
-                last_cam = it.cam;
+                // (a DrawRect quad has no camera of its own)
+                if (it.rect_shader < 0) {
+                    if (o.clear_depth_per_camera && !layout.cameras && it.cam != last_cam &&
+                        cams_seen.insert(it.cam).second)
+                        std::fill(depth.begin(), depth.end(), 0.0f);
+                    last_cam = it.cam;
+                }
                 if (!Drawable(it)) continue;
-                DrawOne(it, int32_t(i), shade::ShadeOf(frame, it), o, rts, *back, st, cv);
+                float vp[4];
+                DepthMap dm;
+                PlaceBackBufferDraw(layout, frame, it, o.width, o.height, vp, dm);
+                back->SetViewport(vp[0], vp[1], vp[2], vp[3]);
+                DrawOne(it, int32_t(i), shade::ShadeOf(frame, it), o, rts, *back, st, cv, {}, dm);
             }
             continue;
         }
@@ -1139,6 +1166,118 @@ bool ShadowCasterPass(const FrameCapture& f, const Pass& p) {
 
 std::vector<PassRun> PlanPasses(const FrameCapture& frame, const RasterOptions& options) {
     return Plan(frame, options, 0, 0);
+}
+
+uint32_t ClearRgba(const FrameCapture& frame) {
+    if (!frame.has_clear_color) return kClearColor;
+    uint32_t c = 0;
+    for (int i = 0; i < 4; i++)
+        c |= uint32_t(std::clamp(frame.clear_color[i], 0.0f, 1.0f) * 255.0f + 0.5f) << (8 * i);
+    return c;
+}
+
+namespace {
+
+// the a and b of view_proj's clip z = a w + b, false if its z isn't a
+// multiple of its w plus a constant (an oblique or orthographic projection).
+// Rows are vectors (v' = v M), so z and w are columns 2 and 3: z's xyz a
+// times w's, and its translation a times w's plus b.
+bool PerspectiveZ(const Mat4& m, float& a, float& b) {
+    double c2[3], c3[3], n3 = 0, n2 = 0, dot = 0;
+    for (int i = 0; i < 3; i++) {
+        c2[i] = m.m[i][2];
+        c3[i] = m.m[i][3];
+        n3 += c3[i] * c3[i];
+        n2 += c2[i] * c2[i];
+        dot += c2[i] * c3[i];
+    }
+    if (!(n3 > 1e-12)) return false;
+    const double ka = dot / n3;
+    double off = 0;
+    for (int i = 0; i < 3; i++) off += (c2[i] - ka * c3[i]) * (c2[i] - ka * c3[i]);
+    if (off > 1e-10 * std::max(n2, 1e-30)) return false;
+    a = float(ka);
+    b = float(double(m.m[3][2]) - ka * double(m.m[3][3]));
+    return true;
+}
+
+}  // namespace
+
+BackBufferLayout LayoutBackBuffer(const FrameCapture& frame) {
+    BackBufferLayout l;
+    l.cameras = !frame.cameras.empty();
+    if (!l.cameras) return l;
+    // the reference: the camera with the most mesh draws in the world
+    const size_t end = std::min<size_t>(frame.post_boundary, frame.draws.size());
+    std::unordered_map<uint32_t, uint32_t> counts;
+    for (size_t i = 0; i < end; i++) {
+        const DrawItem& d = frame.draws[i];
+        if (d.target == 0 && d.rect_shader < 0 && CameraOf(frame, d.cam)) counts[d.cam]++;
+    }
+    uint32_t best = 0, most = 0;
+    for (size_t i = 0; i < end; i++) {
+        const uint32_t cam = frame.draws[i].cam;
+        if (auto it = counts.find(cam); it != counts.end() && it->second > most) {
+            best = cam;
+            most = it->second;
+        }
+    }
+    if (!most) return l;
+    for (size_t i = 0; i < end; i++) {
+        const DrawItem& d = frame.draws[i];
+        if (d.cam != best || d.target || d.rect_shader >= 0) continue;
+        const CameraView& c = *CameraOf(frame, best);
+        float a, b;
+        if (!PerspectiveZ(d.view_proj, a, b)) return l;
+        const float range = c.zrange[1] - c.zrange[0];
+        // d = B + A / w
+        l.ref_a = -range * b;
+        l.ref_b = 1.0f - c.zrange[0] - range * a;
+        if (!(l.ref_a > 0)) return l;
+        l.mapped = true;
+        l.ref_zrange[0] = c.zrange[0];
+        l.ref_zrange[1] = c.zrange[1];
+        l.ref_proj[0] = a;
+        l.ref_proj[1] = b;
+        return l;
+    }
+    return l;
+}
+
+void PlaceBackBufferDraw(const BackBufferLayout& l, const FrameCapture& frame, const DrawItem& d,
+                         uint32_t width, uint32_t height, float vp[4], DepthMap& depth) {
+    vp[0] = vp[1] = 0;
+    vp[2] = float(width);
+    vp[3] = float(height);
+    depth = DepthMap{};
+    if (!l.cameras) return;
+    if (d.rect_shader >= 0) {
+        // the device's depth 1, w 1
+        if (l.mapped) depth = {(1.0f - l.ref_b) / l.ref_a, 0, 0};
+        return;
+    }
+    const CameraView* c = CameraOf(frame, d.cam);
+    if (!c) return;
+    if (c->target_w && c->target_h) {
+        const float sx = float(width) / float(c->target_w), sy = float(height) / float(c->target_h);
+        vp[0] = c->viewport[0] * sx;
+        vp[1] = c->viewport[1] * sy;
+        vp[2] = c->viewport[2] * sx;
+        vp[3] = c->viewport[3] * sy;
+    }
+    if (!l.mapped) return;
+    const float range = c->zrange[1] - c->zrange[0];
+    float a, b;
+    if (PerspectiveZ(d.view_proj, a, b)) {
+        // the reference's own: 1/w as it is
+        if (a == l.ref_proj[0] && b == l.ref_proj[1] && c->zrange[0] == l.ref_zrange[0] &&
+            c->zrange[1] == l.ref_zrange[1])
+            return;
+        const float own_a = -range * b, own_b = 1.0f - c->zrange[0] - range * a;
+        depth = {(own_b - l.ref_b) / l.ref_a, own_a / l.ref_a, 0};
+        return;
+    }
+    depth = {(1.0f - c->zrange[0] - l.ref_b) / l.ref_a, 0, -range / l.ref_a};
 }
 
 RasterStats Rasterize(const FrameCapture& frame, const RasterOptions& o,

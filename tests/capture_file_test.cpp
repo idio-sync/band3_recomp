@@ -9,7 +9,9 @@
 // from before their cull mode was kept cull nothing, those from before their
 // draw mode was kept are the colour pass's, files from before the display
 // gamma ramp was kept have none, and textures keep their mips and shades
-// their samplers, which files from before them have none of.
+// their samplers, which files from before them have none of, as files from
+// before the frame's clear colour and back-buffer cameras were kept have
+// neither (and cameras from a smaller CameraView keep what both have).
 
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -236,6 +238,19 @@ size_t FindSection(const std::vector<uint8_t>& data, const char id[4]) {
     return std::string::npos;
 }
 
+// FRAM without the clear colour at its end (whether it has one, then four
+// floats), as builds before it wrote it
+void DropClearColor(std::vector<uint8_t>& data) {
+    const size_t fram = FindSection(data, "FRAM");
+    REQUIRE(fram != std::string::npos);
+    uint64_t size;
+    std::memcpy(&size, data.data() + fram + 8, 8);
+    const size_t end = fram + 16 + size_t(size), cut = 4 + 16;
+    data.erase(data.begin() + std::ptrdiff_t(end - cut), data.begin() + std::ptrdiff_t(end));
+    size -= cut;
+    std::memcpy(data.data() + fram + 8, &size, 8);
+}
+
 // a frame with an outfit composite carried in from the menu, the crowd's
 // impostor drawn, and the back buffer sampling two of its versions
 FrameCapture MakePassFrame() {
@@ -453,9 +468,10 @@ TEST_CASE("a capture says whose world it has, and one from before that says its 
     CHECK(back->world_frame == 2399);
 
     // FRAM as builds before composition wrote it: two counts fewer (composed
-    // and rt_filtered), and no world frame or filtered render targets (one)
-    // after them
+    // and rt_filtered), and no world frame, filtered render targets (one) or
+    // clear colour after them
     std::vector<uint8_t> data = ReadAll(path);
+    DropClearColor(data);
     const size_t fram = FindSection(data, "FRAM");
     REQUIRE(fram != std::string::npos);
     uint64_t size;
@@ -492,6 +508,7 @@ TEST_CASE("a capture from before filtered render targets has none") {
     // FRAM as builds before them wrote it: a count fewer (rt_filtered), and
     // nothing after the world frame
     std::vector<uint8_t> data = ReadAll(path);
+    DropClearColor(data);
     const size_t fram = FindSection(data, "FRAM");
     REQUIRE(fram != std::string::npos);
     uint64_t size;
@@ -917,4 +934,85 @@ TEST_CASE("a capture keeps its textures' mips and its shades' samplers") {
     CHECK(back->draws[0].tex->mips.empty());
     CHECK(back->draws[0].tex->width == 512);
     CHECK(back->shades[0].diffuse_sampler.filtered == 0);
+}
+
+TEST_CASE("a capture keeps its clear colour and cameras; one from before has neither") {
+    FrameCapture fc = MakePassFrame();
+    fc.has_clear_color = 1;
+    const float black[4] = {0, 0, 0, 1};
+    std::copy(std::begin(black), std::end(black), fc.clear_color);
+    CameraView venue, track;
+    venue.cam = 0x24F5A140;
+    venue.viewport[2] = 1280;
+    venue.viewport[3] = 720;
+    venue.target_w = 1280;
+    venue.target_h = 720;
+    track.cam = 0x24F5B2C0;
+    // a two-player track camera's (+0.22, 0, 1, 1), as DxCam::SetViewport clamps it
+    track.viewport[0] = 281;
+    track.viewport[2] = 998;
+    track.viewport[3] = 720;
+    track.target_w = 1280;
+    track.target_h = 720;
+    track.zrange[0] = 0.0f;
+    track.zrange[1] = 0.1f;
+    fc.cameras = {venue, track};
+    const std::string path = TempPath("band3_capture_file_cameras_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    REQUIRE(back);
+    CHECK(back->has_clear_color == 1);
+    CHECK(std::equal(std::begin(black), std::end(black), back->clear_color));
+    REQUIRE(back->cameras.size() == 2);
+    CHECK(std::memcmp(&back->cameras[0], &venue, sizeof(CameraView)) == 0);
+    CHECK(std::memcmp(&back->cameras[1], &track, sizeof(CameraView)) == 0);
+    CHECK(CameraOf(*back, 0x24F5B2C0) == &back->cameras[1]);
+    CHECK(back->rt_filtered_keys == fc.rt_filtered_keys);
+
+    // CAMS from a build whose CameraView was smaller: the fields both have,
+    // the rest as a CameraView starts (z range 0..1)
+    std::vector<uint8_t> data = ReadAll(path);
+    size_t at = FindSection(data, "CAMS");
+    REQUIRE(at != std::string::npos);
+    {
+        std::vector<uint8_t> small(data.begin(), data.begin() + std::ptrdiff_t(at + 16));
+        const uint32_t each = offsetof(CameraView, zrange), count = 2;
+        small.insert(small.end(), reinterpret_cast<const uint8_t*>(&each),
+                     reinterpret_cast<const uint8_t*>(&each) + 4);
+        small.insert(small.end(), reinterpret_cast<const uint8_t*>(&count),
+                     reinterpret_cast<const uint8_t*>(&count) + 4);
+        for (const CameraView& c : fc.cameras) {
+            const auto* b = reinterpret_cast<const uint8_t*>(&c);
+            small.insert(small.end(), b, b + each);
+        }
+        const uint64_t size = small.size() - (at + 16);
+        std::memcpy(small.data() + at + 8, &size, 8);
+        uint64_t old_size;
+        std::memcpy(&old_size, data.data() + at + 8, 8);
+        small.insert(small.end(), data.begin() + std::ptrdiff_t(at + 16 + size_t(old_size)),
+                     data.end());
+        WriteAll(path, small);
+        back = LoadCapture(path);
+        REQUIRE(back);
+        REQUIRE(back->cameras.size() == 2);
+        CHECK(back->cameras[1].viewport[0] == 281);
+        CHECK(back->cameras[1].target_h == 720);
+        CHECK(back->cameras[1].zrange[1] == 1.0f);
+    }
+
+    // without CAMS and without the clear colour, as builds before them wrote
+    // it: none of either
+    uint64_t size;
+    std::memcpy(&size, data.data() + at + 8, 8);
+    data.erase(data.begin() + std::ptrdiff_t(at),
+               data.begin() + std::ptrdiff_t(at + 16 + size_t(size)));
+    DropClearColor(data);
+    WriteAll(path, data);
+    back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    CHECK(back->has_clear_color == 0);
+    CHECK(back->cameras.empty());
+    CHECK(back->rt_filtered_keys == fc.rt_filtered_keys);
+    CHECK(back->draws.size() == fc.draws.size());
 }

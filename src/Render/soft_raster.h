@@ -41,7 +41,11 @@
 // frames without it or with RasterOptions::post off. An overlay draw that
 // reads the picture behind it (RefractsWorld) reads a copy of it as the
 // resolve left it. The display's gamma ramp (gamma_ramp.h) goes over the
-// finished picture.
+// finished picture. The back buffer starts as TheRnd's clear colour
+// (ClearRgba), and its draws go in their cameras' viewports, layered by their
+// z ranges as RB3's are, where the capture has its cameras (LayoutBackBuffer);
+// its DrawRect quads (flares, ScreenMasks, the intro movie) are drawn too,
+// but the post copy, which post-processing redoes.
 
 namespace band3::render {
 
@@ -64,6 +68,10 @@ struct RasterOptions {
     bool skinning = true;
     bool blending = true;   // off draws every material opaque
     bool culling = true;    // off draws both sides of every triangle (DrawItem::cull)
+    // in a capture without its cameras (FrameCapture::cameras), the back
+    // buffer's depth is cleared each time a camera draws first, as the
+    // renderers did before they layered cameras as RB3 does
+    // (LayoutBackBuffer); off, never. A capture with them never clears.
     bool clear_depth_per_camera = true;
     // the texture passes the frame samples drawn natively, and sampled; off,
     // a render target is what guest memory held of it, or nothing
@@ -153,6 +161,52 @@ std::vector<PassRun> PlanPasses(const FrameCapture& frame, const RasterOptions& 
 inline constexpr int kSoftBlurTaps = 5;
 bool SoftBlur(const FrameCapture& frame, const DrawItem& d, const ShadeInputs* state,
               const Pass& p);
+
+// The colour the back buffer starts as, RGBA8: TheRnd's clear colour
+// (FrameCapture::clear_color), or 0xff202020 in a capture from before it
+uint32_t ClearRgba(const FrameCapture& frame);
+
+// The depth a back-buffer draw's pixels test and write, in the renderers'
+// units of 1/w (larger nearer, 0 cleared): (p w + q + r z) / w, w and z its
+// clip w and z, which runs straight across the screen as 1/w does. The
+// default, 0 1 0, is 1/w itself.
+struct DepthMap {
+    float p = 0, q = 1, r = 0;
+    bool Identity() const { return p == 0 && q == 1 && r == 0; }
+};
+
+// How the back buffer's draws are placed when the capture has its cameras
+// (FrameCapture::cameras, scene_capture.h's CameraView): each mesh draw in
+// its camera's viewport, and no depth clear between cameras, which RB3
+// layers by their z ranges instead (the world's camera 0.1..1; a song's
+// track cameras 0..1 and its 0..0.1 camera in front of them); but the
+// overlay's depth starts cleared after the resolve, as DxRnd::DoPostProcess
+// clears its offscreen target's (BeginTiling, depth 0). The device's depth
+// for a camera with z range (z0, z1) is d = 1 - z0 - (z1 - z0) z/w; the
+// renderers keep d mapped so that a reference camera's draws (the one that
+// drew the most of the world, before post-processing) have 1/w as before,
+// d = B + A/w for it, which post-processing and the spotlights read the
+// depth as: every draw's depth is (d - B) / A (its DepthMap), in the same
+// order as RB3's. A camera whose projection has z = a w + b (any
+// perspective one) maps as p = (B' - B) / A, q = A' / A with its own A' and
+// B'; another (oblique, orthographic) by its clip z. A DrawRect quad, which
+// RB3 draws at the device's depth 1 with the viewport off, is (1 - B) / A,
+// in the whole picture. Without cameras, or without a perspective reference
+// camera, every draw is 1/w (DepthMap's default) and in the whole picture.
+struct BackBufferLayout {
+    bool cameras = false;  // the capture has them: no depth clear per camera
+    bool mapped = false;   // a reference camera: depths are mapped by its A, B
+    float ref_a = 1, ref_b = 0;
+    float ref_zrange[2] = {0, 1};
+    float ref_proj[2] = {0, 0};  // its z = a w + b's a and b
+};
+BackBufferLayout LayoutBackBuffer(const FrameCapture& frame);
+
+// a back-buffer draw's viewport in a width x height picture (x, y, w, h)
+// and its depth, as `layout` places it
+void PlaceBackBufferDraw(const BackBufferLayout& layout, const FrameCapture& frame,
+                         const DrawItem& d, uint32_t width, uint32_t height, float viewport[4],
+                         DepthMap& depth);
 
 // a texture pass's draws but FinishDrawTarget's mip downsamples: the
 // renderers make mips themselves, or sample level 0

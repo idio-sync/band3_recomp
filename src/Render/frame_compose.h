@@ -61,7 +61,9 @@ inline bool PresentsCapturedWorld(const FrameCapture& fc) {
 // overlay samples; those world already has are left out), then frame's draws
 // from its post_boundary on, which is where the result's is. Its other
 // fields are frame's (its post-processing and gamma ramp too, which the game ran on world's
-// picture), but composed (1) and world_frame (world's game_frame);
+// picture), but composed (1) and world_frame (world's game_frame), the clear
+// colour (world's, whose back buffer it shows) and the cameras (world's,
+// then frame's others);
 // counts of what was skipped, decoded and so on are the two frames' together,
 // and the render targets sampled, missing and filtered are counted again over
 // what it has. frame's back-buffer draws before its post_boundary are left

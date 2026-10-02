@@ -2,8 +2,9 @@
 // capture gets the world frame's world (its draws before post-processing,
 // in their passes) in front of its own overlay, keeps the texture passes its
 // overlay samples, leaves out what the world already has and its own draws
-// before post-processing, and counts render targets again; and which frames
-// a render check pairs with the game's picture.
+// before post-processing, and counts render targets again, is cleared as the
+// world frame was and has both frames' cameras; and which frames a render
+// check pairs with the game's picture.
 
 #include <doctest/doctest.h>
 #include <cstring>
@@ -249,4 +250,34 @@ TEST_CASE("a composed frame has its post frame's post-processing and gamma ramp"
     CHECK(fc->post_consts.valid == 1);
     CHECK(fc->post_consts.c24[0] == 4.0f);
     CHECK(fc->gamma == post.gamma);
+}
+
+TEST_CASE("a composed frame is cleared as its world frame was, with both frames' cameras") {
+    FrameCapture world = WorldFrame();
+    FrameCapture post = PostFrame();
+    world.has_clear_color = 1;
+    world.clear_color[3] = 1.0f;  // opaque black
+    post.has_clear_color = 1;
+    post.clear_color[0] = 0.3f;
+    CameraView venue, track, hud;
+    venue.cam = 0x10;
+    venue.zrange[0] = 0.1f;
+    track.cam = 0x20;
+    hud.cam = 0x10;  // the venue's camera again, as the post frame had it
+    hud.zrange[0] = 0.5f;
+    world.cameras = {venue, track};
+    post.cameras = {hud, CameraView{}};
+    post.cameras[1].cam = 0x30;
+    auto fc = ComposeFrame(world, post);
+    REQUIRE(fc);
+    CHECK(fc->has_clear_color == 1);
+    CHECK(fc->clear_color[0] == 0.0f);
+    CHECK(fc->clear_color[3] == 1.0f);
+    REQUIRE(fc->cameras.size() == 3);
+    CHECK(fc->cameras[0].cam == 0x10);
+    CHECK(fc->cameras[0].zrange[0] == 0.1f);  // the world's
+    CHECK(fc->cameras[1].cam == 0x20);
+    CHECK(fc->cameras[2].cam == 0x30);
+    CHECK(CameraOf(*fc, 0x30) == &fc->cameras[2]);
+    CHECK(CameraOf(*fc, 0x40) == nullptr);
 }
