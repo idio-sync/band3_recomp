@@ -18,6 +18,9 @@ float3 operator-(float3 a) { return {-a.x, -a.y, -a.z}; }
 float4 operator*(float4 a, float4 b) { return {a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w}; }
 
 float dot(float3 a, float3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+float3 cross(float3 a, float3 b) {
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
 float dot(float4 a, float4 b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
 float saturate(float v) { return std::clamp(v, 0.0f, 1.0f); }
 float3 saturate(float3 v) { return {saturate(v.x), saturate(v.y), saturate(v.z)}; }
@@ -38,6 +41,31 @@ float3 lerp(float3 a, float3 b, float t) { return a + (b - a) * t; }
 
 void TexGenUv(const ShadeParams& sp, const float uv[2], float out[2]) {
     const float2 r = TexGen(sp, float2{uv[0], uv[1]});
+    out[0] = r.x;
+    out[1] = r.y;
+}
+
+void TextureFrameCpu(const ShadeParams& sp, const float n[3], const float t[4], float n_out[3],
+                     float u_out[3]) {
+    const TangentFrame f =
+        TextureFrame(sp, float3{n[0], n[1], n[2]}, float4{t[0], t[1], t[2], t[3]});
+    n_out[0] = f.n.x;
+    n_out[1] = f.n.y;
+    n_out[2] = f.n.z;
+    u_out[0] = f.u.x;
+    u_out[1] = f.u.y;
+    u_out[2] = f.u.z;
+}
+
+void BitangentCpu(const float n[3], const float u[3], float w, float out[3]) {
+    const float3 b = Bitangent(float3{n[0], n[1], n[2]}, float3{u[0], u[1], u[2]}, w);
+    out[0] = b.x;
+    out[1] = b.y;
+    out[2] = b.z;
+}
+
+void DetailUvCpu(const ShadeParams& sp, const float uv[2], float out[2]) {
+    const float2 r = DetailUv(sp, float2{uv[0], uv[1]});
     out[0] = r.x;
     out[1] = r.y;
 }
@@ -66,7 +94,8 @@ void AoShVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], co
 
 void LightVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], const float vc[4],
                     const float ao_sh[2], float diffuse[3], float added[3]) {
-    const Lighting l = Light(sp, float3{p[0], p[1], p[2]}, float3{n[0], n[1], n[2]},
+    const float3 nn{n[0], n[1], n[2]};
+    const Lighting l = Light(sp, float3{p[0], p[1], p[2]}, nn, nn,
                              float4{vc[0], vc[1], vc[2], vc[3]}, float4{1, 1, 1, 1},
                              float2{ao_sh[0], ao_sh[1]}, float4{0, 0, 0, 0}, float4{0, 0, 0, 0},
                              1.0f);
@@ -119,17 +148,25 @@ void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], co
                    const float texel[4], const float spec_map[4], const float glow[4],
                    const float behind[4], float depth, const float ao_sh[2],
                    const float vertex_diffuse[3], const float vertex_added[3], float out[4],
-                   const float proj[4], const float gobo[4], float lit) {
+                   const float proj[4], const float gobo[4], float lit,
+                   const NormalMapInputs* normal_map) {
     const Lighting vertex{float3{vertex_diffuse[0], vertex_diffuse[1], vertex_diffuse[2]},
                           float3{vertex_added[0], vertex_added[1], vertex_added[2]}};
     const float none[4] = {0, 0, 0, 0};
     if (!proj) proj = none;
     if (!gobo) gobo = none;
+    NormalMapInputs flat{};
+    if (!normal_map) normal_map = &flat;
+    const NormalMapInputs& nm = *normal_map;
     const float4 r = ShadePixel(sp, float3{p[0], p[1], p[2]}, float3{n[0], n[1], n[2]},
+                                float3{nm.u[0], nm.u[1], nm.u[2]},
+                                float3{nm.b[0], nm.b[1], nm.b[2]},
                                 float4{vc[0], vc[1], vc[2], vc[3]},
                                 float4{texel[0], texel[1], texel[2], texel[3]},
                                 float4{spec_map[0], spec_map[1], spec_map[2], spec_map[3]},
                                 float4{glow[0], glow[1], glow[2], glow[3]},
+                                float4{nm.map[0], nm.map[1], nm.map[2], nm.map[3]},
+                                float4{nm.detail[0], nm.detail[1], nm.detail[2], nm.detail[3]},
                                 float4{behind[0], behind[1], behind[2], behind[3]}, depth,
                                 float2{ao_sh[0], ao_sh[1]},
                                 float4{proj[0], proj[1], proj[2], proj[3]},
@@ -194,6 +231,8 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     sp.ao.x = s->Vs(24)[0];
     Copy(s->Vs(20), sp.texgen[0]);
     Copy(s->Vs(21), sp.texgen[1]);
+    Copy(s->Vs(22), sp.texgen_n);
+    sp.normal_map = {s->Ps(14)[0], s->Ps(106)[0], s->Ps(106)[1], 0};
     for (int i = 0; i < 2; i++) {
         Copy(s->Ps(64 + i), sp.point_pos[i]);
         Copy(s->Ps(67 + i), sp.point_color[i]);
@@ -290,6 +329,15 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     // vertex-lit material's is left out.
     if (s->Option(kPerPixel) && o.self_shadow && o.texture_passes && ShadowMapOf(s))
         f |= kShadeShadow;
+    // the normal map, and the detail map with it, where the capture decoded
+    // them and has the geometry's tangents (a capture from before them
+    // hasn't): each pixel shader the dumps have that reads s1 or c14 lights
+    // per pixel (out/research/m2_shader_ucode.md 6)
+    if (s->Option(kNormalMap) && s->Option(kPerPixel) && maps && o.normal_maps &&
+        s->maps[kMapNormal] && it.geom && it.geom->tangents) {
+        f |= kShadeNormalMap;
+        if (s->Option(kNormDetail) && s->maps[kMapDetailNormal]) f |= kShadeDetailMap;
+    }
     if (s->Option(kRimLight)) f |= kShadeRim;
     if (s->Option(kRimLightUnder)) f |= kShadeRimUnder;
     switch (s->OptionBits(kCustomVariation, 2)) {

@@ -31,6 +31,10 @@ struct ClipVert {
     float ld[3];
     float la[3];
     float ao[2];  // the point lights' AoShVertex
+    // a normal-mapped draw's tangent and bitangent (shade.hlsli's
+    // TextureFrame and Bitangent, in the world)
+    float u[3];
+    float b[3];
 };
 
 ClipVert Lerp(const ClipVert& a, const ClipVert& b, float t) {
@@ -43,6 +47,8 @@ ClipVert Lerp(const ClipVert& a, const ClipVert& b, float t) {
     for (int i = 0; i < 3; i++) r.ld[i] = a.ld[i] + (b.ld[i] - a.ld[i]) * t;
     for (int i = 0; i < 3; i++) r.la[i] = a.la[i] + (b.la[i] - a.la[i]) * t;
     for (int i = 0; i < 2; i++) r.ao[i] = a.ao[i] + (b.ao[i] - a.ao[i]) * t;
+    for (int i = 0; i < 3; i++) r.u[i] = a.u[i] + (b.u[i] - a.u[i]) * t;
+    for (int i = 0; i < 3; i++) r.b[i] = a.b[i] + (b.b[i] - a.b[i]) * t;
     return r;
 }
 
@@ -127,6 +133,8 @@ struct DrawState {
     TexView tex;
     TexView spec_map;  // none unless shade samples it
     TexView glow;
+    TexView normal;  // kShadeNormalMap's s1, and kShadeDetailMap's s14
+    TexView detail;
     TexView proj;  // the projected light's s5 and s10, likewise
     TexView gobo;
     // kShadeShadow: the shadow map's depth (clip z/w) as its pass left it
@@ -137,6 +145,7 @@ struct DrawState {
     TexView behind;  // the target's behind, for kShadeRefract
     shade::ShadeParams shade;
     bool per_vertex;  // kShadePerVertex: ClipVert's ld and la are set
+    bool normal_map;  // kShadeNormalMap: ClipVert's u and b are set
     int blend;
     AlphaRule alpha;
     bool z_test;
@@ -258,15 +267,28 @@ float SoftPixelFade(const DrawState& ds, const Target& t, int x, int y, float w)
 }
 
 // pixel x, y's colour; the picture behind it is the one at x, y, the
-// target's size (mesh.hlsl reads it at SV_Position likewise)
+// target's size (mesh.hlsl reads it at SV_Position likewise); u and b the
+// tangent and bitangent of a normal-mapped draw
 void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3],
            const float vc[4], const float wp[3], float depth, const float ao[2],
-           const float ld[3], const float la[3], float out[4]) {
+           const float ld[3], const float la[3], const float u[3], const float b[3],
+           float out[4]) {
     float texel[4] = {1, 1, 1, 1}, spec_map[4] = {1, 1, 1, 1}, glow[4] = {0, 0, 0, 0};
     float behind[4] = {1, 1, 1, 1};
     if (ds.tex.px) Texel(ds.tex, uv, texel);
     if (ds.spec_map.px) Texel(ds.spec_map, uv, spec_map);
     if (ds.glow.px) Texel(ds.glow, uv, glow);
+    shade::NormalMapInputs nm{};
+    if (ds.normal_map) {
+        for (int i = 0; i < 3; i++) nm.u[i] = u[i];
+        for (int i = 0; i < 3; i++) nm.b[i] = b[i];
+        Texel(ds.normal, uv, nm.map);
+        if (ds.detail.px) {
+            float duv[2];
+            shade::DetailUvCpu(ds.shade, uv, duv);
+            Texel(ds.detail, duv, nm.detail);
+        }
+    }
     if (ds.behind.px) {
         const uint32_t c = ds.behind.px[size_t(y) * ds.behind.w + x];
         for (int i = 0; i < 4; i++) behind[i] = float((c >> (8 * i)) & 0xff) / 255.0f;
@@ -281,7 +303,7 @@ void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3
     const float lit =
         ds.shadow ? shade::ShadowLitCpu(ds.shade, wp, ds.shadow, ds.shadow_w, ds.shadow_h) : 1.0f;
     shade::ShadePixelCpu(ds.shade, wp, n, vc, texel, spec_map, glow, behind, depth, ao, ld, la,
-                         out, proj, gobo, lit);
+                         out, proj, gobo, lit, ds.normal_map ? &nm : nullptr);
 }
 
 // The colour by the material's blend mode (Dest keeps it), and alpha by
@@ -401,11 +423,16 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
                 for (int i = 0; i < 3; i++) ld[i] = q0 * a.ld[i] + q1 * b.ld[i] + q2 * c.ld[i];
                 for (int i = 0; i < 3; i++) la[i] = q0 * a.la[i] + q1 * b.la[i] + q2 * c.la[i];
             }
+            float tu[3] = {0, 0, 0}, tb[3] = {0, 0, 0};
+            if (ds.normal_map) {
+                for (int i = 0; i < 3; i++) tu[i] = q0 * a.u[i] + q1 * b.u[i] + q2 * c.u[i];
+                for (int i = 0; i < 3; i++) tb[i] = q0 * a.b[i] + q1 * b.b[i] + q2 * c.b[i];
+            }
             float col[4];
             if (ds.spot) {
                 SpotPixel(ds, t, x, y, wp, 1.0f / z, col);
             } else {
-                Shade(ds, x, y, uv, n, vc, wp, 1.0f / z, ao, ld, la, col);
+                Shade(ds, x, y, uv, n, vc, wp, 1.0f / z, ao, ld, la, tu, tb, col);
                 if (ds.soft) col[3] *= SoftPixelFade(ds, t, x, y, 1.0f / z);
             }
             if (shade::AlphaCutCpu(ds.shade, col[3])) continue;
@@ -540,6 +567,25 @@ TexView Projected(const ShadeState* state, const RasterOptions& o, const RtTarge
     return o.rt_guest_pixels ? View(rt) : TexView{};
 }
 
+// A normal or detail map. One RB3 draws (MapTargetOf: a head's normal map)
+// is its target as its passes have drawn it so far, as a diffuse render
+// target is (Diffuse), else guest memory's pixels if they're kept and wanted,
+// else none (counted), which leaves the map out, as gpu_view.cpp does. Any
+// other is the capture's decoded map.
+TexView NormalMap(const ShadeState* state, int map, const RasterOptions& o, const RtTargets& rts,
+                  const Target& t, RasterStats& st) {
+    const Texture* tex = state->maps[map].get();
+    const Texture* rt = MapTargetOf(state, map);
+    if (!rt) return View(tex);
+    if (o.texture_passes && rt->tex_obj != t.tex_obj) {
+        if (auto f = rts.find(rt->tex_obj); f != rts.end())
+            return {f->second.w, f->second.h, f->second.color.data()};
+    }
+    if (o.rt_guest_pixels && !rt->rgba.empty()) return View(rt);
+    if (o.texture_passes) st.rt_missing++;
+    return {};
+}
+
 void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const RasterOptions& o,
              const RtTargets& rts, Target& t, RasterStats& st, std::vector<ClipVert>& cv,
              const TexView& density = {}) {
@@ -560,6 +606,13 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     if (ds.shade.flags.x & shade::kShadeSpecMap)
         ds.spec_map = View(state->maps[kMapSpecular].get());
     if (ds.shade.flags.x & shade::kShadeGlow) ds.glow = View(state->maps[kMapGlow].get());
+    if (ds.shade.flags.x & shade::kShadeNormalMap) {
+        ds.normal = NormalMap(state, kMapNormal, o, rts, t, st);
+        if (ds.shade.flags.x & shade::kShadeDetailMap)
+            ds.detail = NormalMap(state, kMapDetailNormal, o, rts, t, st);
+        if (!ds.detail.px) ds.shade.flags.x &= ~shade::kShadeDetailMap;
+        if (!ds.normal.px) ds.shade.flags.x &= ~(shade::kShadeNormalMap | shade::kShadeDetailMap);
+    }
     if (ds.shade.flags.x & (shade::kShadeProjMultiply | shade::kShadeProjGobo)) {
         ds.proj = Projected(state, o, rts, t, st);
         if (ds.shade.flags.x & shade::kShadeProjGobo)
@@ -585,6 +638,7 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     }
     ds.depth_only = t.zw != nullptr;
     ds.per_vertex = (ds.shade.flags.x & shade::kShadePerVertex) != 0;
+    ds.normal_map = (ds.shade.flags.x & shade::kShadeNormalMap) != 0;
     // REFRACT_WORLD reads the picture behind it: in the picture, once resolved
     if (ds.shade.flags.x & shade::kShadeRefract) {
         if (t.behind)
@@ -601,34 +655,45 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
         // the vertex colour's SH direction turns as the normal does
         float dir[3] = {0, 0, 0};
         if (ao_sh) shade::AoShDirectionCpu(c.c, dir);
-        float wp[3] = {0, 0, 0}, wn[3] = {0, 0, 0}, wd[3] = {0, 0, 0};
+        // a normal-mapped draw's normal is its frame's, which turns with
+        // its tangent
+        float nrm[3] = {v.nrm[0], v.nrm[1], v.nrm[2]}, tangent[3] = {0, 0, 0};
+        if (ds.normal_map) shade::TextureFrameCpu(ds.shade, v.nrm, v.tan, nrm, tangent);
+        float wp[3] = {0, 0, 0}, wn[3] = {0, 0, 0}, wd[3] = {0, 0, 0}, wu[3] = {0, 0, 0};
         if (skinned) {
             float total = 0;
             for (int k = 0; k < 4; k++) {
                 const float w = v.weight[k];
                 if (w <= 0) continue;
                 const Mat4& b = it.bones[v.bone[k] < it.bones.size() ? v.bone[k] : 0];
-                float p[3], n[3], d[3] = {0, 0, 0};
+                float p[3], n[3], d[3] = {0, 0, 0}, u[3] = {0, 0, 0};
                 Point(v.pos, b, p);
-                Dir(v.nrm, b, n);
+                Dir(nrm, b, n);
                 if (ao_sh) Dir(dir, b, d);
+                if (ds.normal_map) Dir(tangent, b, u);
                 for (int j = 0; j < 3; j++) {
                     wp[j] += p[j] * w;
                     wn[j] += n[j] * w;
                     wd[j] += d[j] * w;
+                    wu[j] += u[j] * w;
                 }
                 total += w;
             }
             if (total <= 0) {
                 Point(v.pos, it.bones[0], wp);
-                Dir(v.nrm, it.bones[0], wn);
+                Dir(nrm, it.bones[0], wn);
                 if (ao_sh) Dir(dir, it.bones[0], wd);
+                if (ds.normal_map) Dir(tangent, it.bones[0], wu);
             }
         } else {
             Point(v.pos, it.world, wp);
-            Dir(v.nrm, it.world, wn);
+            Dir(nrm, it.world, wn);
             if (ao_sh) Dir(dir, it.world, wd);
+            if (ds.normal_map) Dir(tangent, it.world, wu);
         }
+        for (int k = 0; k < 3; k++) c.u[k] = wu[k];
+        c.b[0] = c.b[1] = c.b[2] = 0;
+        if (ds.normal_map) shade::BitangentCpu(wn, wu, v.tan[3], c.b);
         for (int col = 0; col < 4; col++)
             c.p[col] = wp[0] * it.view_proj.m[0][col] + wp[1] * it.view_proj.m[1][col] +
                        wp[2] * it.view_proj.m[2][col] + it.view_proj.m[3][col];
@@ -759,6 +824,10 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
             // a SHADOW_BUFFER draw's shadow map (s5)
             if (o.self_shadow)
                 if (const Texture* map = ShadowMapOf(state)) needed.insert(map->tex_obj);
+            // a head's normal map (s1), or a detail map RB3 draws (s14)
+            if (o.textures && o.normal_maps)
+                for (int m : {kMapNormal, kMapDetailNormal})
+                    if (const Texture* map = MapTargetOf(state, m)) needed.insert(map->tex_obj);
         }
     };
     for (size_t i = f.passes.size(); i-- > 0;) {

@@ -2,8 +2,10 @@
 // with shades and their maps, passes, render targets' versions and its
 // post-processing comes back as it was saved; a section from a newer build is
 // skipped or refused as it should be, and geometry from a smaller Vertex (or
-// post-processing from a smaller PostParams) keeps what both have; files from
-// before passes (B3CAP002) and before shades (B3CAP001) still load, and draws
+// post-processing from a smaller PostParams) keeps what both have; geometry
+// keeps its tangents, and geometry from before them (GEOM version 1) has
+// none; files from before passes (B3CAP002) and before shades (B3CAP001),
+// whose Vertex ended at its weights, still load, and draws
 // from before their cull mode was kept cull nothing, those from before their
 // draw mode was kept are the colour pass's, and files from before the display
 // gamma ramp was kept have none.
@@ -43,6 +45,14 @@ std::shared_ptr<Geometry> MakeTriangle() {
     for (int i = 0; i < 3; i++) g->verts[i].pos[i] = 1.0f;
     g->indices = {0, 1, 2};
     return g;
+}
+
+// the verts as B3CAP001 and B3CAP002 kept them: Vertex up to its weights
+void PutOldVerts(std::vector<uint8_t>& out, const Geometry& g) {
+    for (const Vertex& v : g.verts) {
+        const auto* b = reinterpret_cast<const uint8_t*>(&v);
+        out.insert(out.end(), b, b + offsetof(Vertex, tan));
+    }
 }
 
 DrawItem MakeDraw(std::shared_ptr<const Geometry> geom, int32_t shade) {
@@ -159,7 +169,7 @@ TEST_CASE("a capture from before shades still loads") {
     const auto geom = MakeTriangle();
     put32(1);
     put32(3);
-    raw(geom->verts.data(), 3 * sizeof(Vertex));
+    PutOldVerts(out, *geom);
     put32(3);
     raw(geom->indices.data(), 3 * sizeof(uint16_t));
     put32(0);  // textures
@@ -195,6 +205,9 @@ TEST_CASE("a capture from before shades still loads") {
     CHECK(back->draws[0].mesh == 0x5678);
     CHECK(back->draws[0].cam == 0xabcd);
     CHECK(back->shades.empty());
+    REQUIRE(back->draws[0].geom->verts.size() == 3);
+    CHECK(back->draws[0].geom->verts[2].pos[2] == 1.0f);
+    CHECK_FALSE(back->draws[0].geom->tangents);
 }
 
 namespace {
@@ -509,8 +522,9 @@ TEST_CASE("a capture's geometry loads from a build whose Vertex was smaller") {
     const std::string path = TempPath("band3_capture_file_stride_test.cap");
     REQUIRE(SaveCapture(path, fc));
     const std::vector<uint8_t> data = ReadAll(path);
-    // GEOM written again with each vertex cut to its first 32 bytes (pos,
-    // nrm, uv), as an older Vertex would have been
+    // GEOM written again as version 1, with each vertex cut to its first 32
+    // bytes (pos, nrm, uv), as an older Vertex would have been, and without
+    // each geometry's tangents flag
     const size_t geom = FindSection(data, "GEOM");
     REQUIRE(geom != std::string::npos);
     uint64_t size;
@@ -540,9 +554,11 @@ TEST_CASE("a capture's geometry loads from a build whose Vertex was smaller") {
         put32(ni);
         sec.insert(sec.end(), in + pos, in + pos + ni * 2);
         pos += ni * 2;
+        pos += 1;  // tangents
     }
     REQUIRE(pos == size);
     std::vector<uint8_t> out(data.begin(), data.begin() + geom + 8);
+    out[geom + 4] = 1;  // the version: before tangents
     const uint64_t new_size = sec.size();
     const auto* ns = reinterpret_cast<const uint8_t*>(&new_size);
     out.insert(out.end(), ns, ns + 8);
@@ -557,6 +573,33 @@ TEST_CASE("a capture's geometry loads from a build whose Vertex was smaller") {
     CHECK(g.verts[1].pos[1] == 1.0f);
     CHECK(g.verts[1].color == 0);  // past the old size: zero
     CHECK(g.indices.size() == 3);
+    CHECK_FALSE(g.tangents);
+}
+
+TEST_CASE("a capture keeps its geometry's tangents and whether it has them") {
+    FrameCapture fc;
+    auto with = MakeTriangle();
+    with->tangents = true;
+    for (int i = 0; i < 3; i++) {
+        with->verts[i].tan[0] = 0.25f * float(i);
+        with->verts[i].tan[1] = 0.5f;
+        with->verts[i].tan[3] = i == 1 ? -1.0f : 1.0f;
+    }
+    fc.draws.push_back(MakeDraw(with, -1));
+    fc.draws.push_back(MakeDraw(MakeTriangle(), -1));  // band3's own: none
+    const std::string path = TempPath("band3_capture_file_tangents_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    REQUIRE(back->draws.size() == 2);
+    const Geometry& a = *back->draws[0].geom;
+    CHECK(a.tangents);
+    CHECK(a.verts[2].tan[0] == 0.5f);
+    CHECK(a.verts[2].tan[1] == 0.5f);
+    CHECK(a.verts[1].tan[3] == -1.0f);
+    CHECK(a.verts[0].tan[3] == 1.0f);
+    CHECK_FALSE(back->draws[1].geom->tangents);
 }
 
 TEST_CASE("a capture from before passes (B3CAP002) still loads, with its shades") {
@@ -572,7 +615,7 @@ TEST_CASE("a capture from before passes (B3CAP002) still loads, with its shades"
     const auto geom = MakeTriangle();
     put32(1);
     put32(3);
-    raw(geom->verts.data(), 3 * sizeof(Vertex));
+    PutOldVerts(out, *geom);
     put32(3);
     raw(geom->indices.data(), 3 * sizeof(uint16_t));
     const auto tex = MakeTexture(2, 1, 18, 5);

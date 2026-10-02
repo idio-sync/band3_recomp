@@ -76,6 +76,12 @@ struct RasterOptions {
     // SHADOW_BUFFER draws after them (shade.hlsli's ShadowLit); off, those
     // draws are lit, as before the capture kept the maps
     bool self_shadow = true;
+    // RB3's normal maps and detail maps (NORMAL_MAP, NORM_DETAIL), where the
+    // capture kept the geometry's tangents (Geometry::tangents) and decoded
+    // the maps: the normal tilted in the tangent frame the game's vertex
+    // shaders build (shaders/shade.hlsli's MappedNormals); off, those draws
+    // are shaded with the vertex normal, as before the capture kept tangents
+    bool normal_maps = true;
     // RB3's post-processing at post_boundary (post_model.h): depth of field,
     // bloom and the colour matrix, as the frame set them; off, the scene as
     // it is
@@ -117,7 +123,8 @@ struct PassRun {
 // The frame's back-buffer stretches, and the texture passes that something
 // drawn after them samples (by texture, any version: a pass that clears hides
 // the ones before it), as its diffuse texture, as its projected light's map
-// (ProjectedTargetOf) or, with self_shadow, as its shadow map (ShadowMapOf),
+// (ProjectedTargetOf), with normal_maps as its normal or detail map
+// (MapTargetOf) or, with self_shadow, as its shadow map (ShadowMapOf),
 // but none from post-processing on, which isn't
 // drawn yet, other than the spotlights' (the depth volume's cones and blurs,
 // and the density map its cones read: spot_model.h), the soft particles' (the

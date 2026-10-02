@@ -216,17 +216,19 @@ it, so press Start to join again, as a player would.
 
 The native view (F7, experimental) draws the game's frames itself, from a capture of
 what RB3 drew: on the GPU, or on a reference CPU rasterizer. It draws RB3's shading
-(point, box and projected lights, and characters' self-shadows), the passes RB3 draws
-into textures (outfit composites, the crowd's impostors, shadow maps, NgLight's
-projected shadow, blurs), its post-processing (depth of field, bloom or glare, the
-spotlights' beams and haze, soft particles such as stage smoke, the colour matrix) and,
-last, the display's gamma ramp. Render checks set its picture against the game's.
+(point, box and projected lights, characters' self-shadows, normal and detail maps),
+the passes RB3 draws into textures (outfit composites, the crowd's impostors, shadow
+maps, NgLight's projected shadow, heads' normal maps, blurs), its post-processing
+(depth of field, bloom or glare, the spotlights' beams and haze, soft particles such
+as stage smoke, the colour matrix) and, last, the display's gamma ramp. Render checks
+set its picture against the game's.
 
 | Setting (Band3 → Debug) | |
 |---|---|
 | `native_view_backend` | `gpu` (the default) or `cpu`, the reference rasterizer. The GPU falls back to the CPU when it can't start |
 | `native_view_record_targets` | records the passes RB3 draws into textures all the time, even while the native view is off. Off by default, as it costs a little game-thread time while characters load. Render checks need it from launch: RB3 composes a band's outfits once, in the main menu |
 | `native_view_rt_fallback` | `guest` (the default) also keeps what guest memory holds of a texture RB3 draws, sampled where no recorded pass made it (right only with `--readback_resolve=full`); `none` keeps only which texture and version it is |
+| `native_view_normal_maps` | on (the default) shades normal and detail maps, live and in `capture`'s `.gpu.png`; off shades those materials with the vertex normal, to compare. Captures from before the capture kept the meshes' tangents have none either way |
 
 Launch render checks with:
 
@@ -305,6 +307,7 @@ option). It prints a `post:` line (what post-processing was set to do), a `check
 | `--no-post`, `--post-only xfm\|dof\|bloom\|spot\|soft` | no post-processing; or only the colour matrix, depth of field, bloom (and glare), the spotlights' beams or the soft particles |
 | `--no-gamma`, `--gamma-from <other.cap>` | no gamma ramp; or another capture's |
 | `--no-shadow` | characters without their self-shadows |
+| `--no-normal` | every material with its vertex normal, no normal or detail map |
 | `--no-cull` | both sides of every triangle |
 | `--legacy-light`, `--no-light` | the placeholder lighting from before RB3's shading; or every material unlit |
 

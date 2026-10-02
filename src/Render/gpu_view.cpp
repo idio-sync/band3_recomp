@@ -87,11 +87,15 @@ void ClipOffset(const DrawItem& it, float vw, float vh, float out[4]) {
 
 struct PixelUniforms {
     shade::ShadeParams shade;
-    uint32_t tex_layer[8];    // diffuse, specular map, glow map, projected light, gobo
-    uint32_t tex_size[6][4];  // each one's own width and height, then the shadow map's
-    uint32_t flags[4];        // x: kPremultiply
+    // diffuse, specular map, glow map, projected light, gobo, normal map,
+    // detail map
+    uint32_t tex_layer[8];
+    // each one's own width and height: the five before the normal map, then
+    // the shadow map's, the normal map's and the detail map's
+    uint32_t tex_size[8][4];
+    uint32_t flags[4];  // x: kPremultiply
 };
-static_assert(sizeof(PixelUniforms) == sizeof(shade::ShadeParams) + 144);
+static_assert(sizeof(PixelUniforms) == sizeof(shade::ShadeParams) + 176);
 
 // mesh.hlsl's pixel_flags.x
 enum : uint32_t { kPremultiply = 1 };
@@ -105,9 +109,10 @@ struct SpotUniforms {
 static_assert(sizeof(SpotUniforms) == sizeof(spot::SpotParams) + 32);
 
 // the textures a draw samples, in mesh.hlsl's sampler order: the maps, which
-// PixelUniforms sizes, then the picture behind (kShadeRefract) and the shadow
-// map (kShadeShadow, sized after the maps); a spotlight's cone reads two
-// more, the scene's depth and the density map
+// PixelUniforms sizes, then the picture behind (kShadeRefract), the shadow
+// map (kShadeShadow, sized after the maps) and the normal map and the detail
+// map (kShadeNormalMap, kShadeDetailMap, sized after the shadow map); a
+// spotlight's cone reads two more, the scene's depth and the density map
 enum {
     kSlotDiffuse,
     kSlotSpecular,
@@ -116,10 +121,13 @@ enum {
     kSlotGobo,
     kSlotBehind,
     kSlotShadow,
+    kSlotNormal,
+    kSlotDetail,
     kNumSlots
 };
 enum { kSlotSceneDepth = kNumSlots, kSlotDensity, kNumSpotSlots };
-static_assert(kSlotBehind == 5, "PixelUniforms has tex_size for the five maps, then the shadow's");
+static_assert(kSlotBehind == 5 && kSlotNormal == 7,
+              "PixelUniforms has tex_size for the five maps, the shadow's, then the normal's");
 
 // RndMat::Blend, the modes Blend() in soft_raster.cpp draws (Screen, Lighten
 // and Darken, which NgMat sets no state for, as Src, as it does)
@@ -423,6 +431,9 @@ struct GpuRenderer::Impl {
     enum Source : uint8_t { kSourceNone, kSourceTexture, kSourceRt, kSourceBlack };
     std::vector<uint8_t> diffuse_source;
     std::vector<uint8_t> proj_source;
+    // the normal map's and the detail map's (MapTargetOf: a head's normal map
+    // is a target's), kSourceTexture or kSourceRt
+    std::vector<uint8_t> normal_source[2];
     // per draw, a spotlight drawer's: a cone (PSSpotCone), one left out (no
     // scene depth to read), or a blur of the depth volume into itself; or
     // the soft-particle buffer's: a particle (PSSoftParticle), or a blur of
@@ -807,6 +818,7 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
         {3, 0, SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM, uint32_t(offsetof(Vertex, color))},
         {4, 0, SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4, uint32_t(offsetof(Vertex, bone))},
         {5, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, uint32_t(offsetof(Vertex, weight))},
+        {6, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, uint32_t(offsetof(Vertex, tan))},
     };
     SDL_GPUColorTargetDescription target{};
     target.format = kColorFormat;
@@ -1279,6 +1291,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     shades.resize(frame.draws.size());
     diffuse_source.assign(frame.draws.size(), kSourceNone);
     proj_source.assign(frame.draws.size(), kSourceNone);
+    for (auto& v : normal_source) v.assign(frame.draws.size(), kSourceNone);
     spot_draw.assign(frame.draws.size(), kSpotNone);
     const std::vector<PassRun> runs = PlanPasses(frame, o);
     run_clear.assign(runs.size(), 0);
@@ -1380,6 +1393,37 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             uint32_t& flags = shades[d].flags.x;
             if (flags & shade::kShadeSpecMap) UseTexture(state->maps[kMapSpecular]);
             if (flags & shade::kShadeGlow) UseTexture(state->maps[kMapGlow]);
+            // the normal map and the detail map, as soft_raster.cpp's
+            // NormalMap() has them: one RB3 draws (a head's) is its pass's
+            // target if one has drawn it, else guest pixels if kept and
+            // wanted, else it's left out (counted)
+            for (int k = 0; k < 2; k++) {
+                const uint32_t bit = k ? shade::kShadeDetailMap : shade::kShadeNormalMap;
+                if (!(flags & bit)) continue;
+                const int m = k ? kMapDetailNormal : kMapNormal;
+                const Texture* map = MapTargetOf(state, m);
+                uint8_t& source = normal_source[k][d];
+                if (!map) {
+                    source = kSourceTexture;
+                    UseTexture(state->maps[m]);
+                    continue;
+                }
+                auto f = rts.find(map->tex_obj);
+                const bool self = run.pass && run.pass->tex_obj == map->tex_obj;
+                if (o.texture_passes && !self && f != rts.end() && f->second.drawn &&
+                    !f->second.shadow) {
+                    source = kSourceRt;
+                    f->second.used = serial;
+                } else if (o.rt_guest_pixels && !map->rgba.empty()) {
+                    source = kSourceTexture;
+                    UseTexture(state->maps[m]);
+                } else {
+                    flags &= k ? ~shade::kShadeDetailMap
+                               : ~(shade::kShadeNormalMap | shade::kShadeDetailMap);
+                    if (o.texture_passes) st.rt_missing++;
+                    if (!k) break;
+                }
+            }
             // the projected light's s5, as soft_raster.cpp's Projected() has
             // it: a texture RB3 draws (NgLight's shadow) is its target where
             // this frame's last pass of it made the version the draw reads,
@@ -1849,6 +1893,19 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             tex[kSlotGlow] = layer_of(state->maps[kMapGlow].get());
             if (!tex[kSlotGlow].texture) sp.flags.x &= ~shade::kShadeGlow;
         }
+        if (sp.flags.x & shade::kShadeNormalMap) {
+            auto map_of = [&](int k) {
+                const int m = k ? kMapDetailNormal : kMapNormal;
+                if (normal_source[k][d] != kSourceRt) return layer_of(state->maps[m].get());
+                const Rt& rt = rts[MapTargetOf(state, m)->tex_obj];
+                return Sampled{rt.color, 0, rt.w, rt.h};
+            };
+            tex[kSlotNormal] = map_of(0);
+            if (sp.flags.x & shade::kShadeDetailMap) tex[kSlotDetail] = map_of(1);
+            if (!tex[kSlotDetail].texture) sp.flags.x &= ~shade::kShadeDetailMap;
+            if (!tex[kSlotNormal].texture)
+                sp.flags.x &= ~(shade::kShadeNormalMap | shade::kShadeDetailMap);
+        }
         // the shadow map's target, as its pass left it (the plan kept the
         // flag only where that's the version the draw reads)
         if (sp.flags.x & shade::kShadeShadow) {
@@ -1955,6 +2012,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         pu.tex_size[5][0] = tex[kSlotShadow].w;
         pu.tex_size[5][1] = tex[kSlotShadow].h;
+        for (int s : {kSlotNormal, kSlotDetail}) {
+            if (!tex[s].texture) continue;
+            pu.tex_layer[s - 2] = tex[s].layer;
+            pu.tex_size[s - 1][0] = tex[s].w;
+            pu.tex_size[s - 1][1] = tex[s].h;
+        }
         pu.flags[0] = blend == kBlendSrcAlpha || blend == kBlendSrcAlphaAdd ? kPremultiply : 0;
         SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
 

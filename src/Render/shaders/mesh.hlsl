@@ -55,10 +55,11 @@ VK_BINDING(0, 1) cbuffer VertexUniforms : register(b0, space1) {
 VK_BINDING(0, 0) ByteAddressBuffer bones : register(t0, space0);
 
 // Textures share arrays by size class, a texture to a layer, in its corner
-// (gpu_view.cpp): the diffuse texture, the specular map, the glow map and the
-// projected light's two (s5, and the gobo s10). The samplers are SDL_gpu's
-// pairing; the shader reads texels itself, as soft_raster.cpp's Texel() and
-// SampleBorder() do
+// (gpu_view.cpp): the diffuse texture, the specular map, the glow map, the
+// projected light's two (s5, and the gobo s10) and the normal map and the
+// detail map (s1, s14; after the shadow map's slot). The samplers are
+// SDL_gpu's pairing; the shader reads texels itself, as soft_raster.cpp's
+// Texel() and SampleBorder() do
 VK_SAMPLER VK_BINDING(0, 2) Texture2DArray<float4> tex : register(t0, space2);
 VK_SAMPLER VK_BINDING(0, 2) SamplerState tex_sampler : register(s0, space2);
 VK_SAMPLER VK_BINDING(1, 2) Texture2DArray<float4> spec_tex : register(t1, space2);
@@ -79,6 +80,10 @@ VK_SAMPLER VK_BINDING(5, 2) SamplerState behind_sampler : register(s5, space2);
 // read as they are (shade.hlsli's ShadowTaps)
 VK_SAMPLER VK_BINDING(6, 2) Texture2D<float> shadow_tex : register(t6, space2);
 VK_SAMPLER VK_BINDING(6, 2) SamplerState shadow_sampler : register(s6, space2);
+VK_SAMPLER VK_BINDING(7, 2) Texture2DArray<float4> normal_tex : register(t7, space2);
+VK_SAMPLER VK_BINDING(7, 2) SamplerState normal_sampler : register(s7, space2);
+VK_SAMPLER VK_BINDING(8, 2) Texture2DArray<float4> detail_tex : register(t8, space2);
+VK_SAMPLER VK_BINDING(8, 2) SamplerState detail_sampler : register(s8, space2);
 
 // pixel_flags.x
 // SrcAlpha and SrcAlphaAdd: the colour leaves already scaled by its alpha,
@@ -88,11 +93,13 @@ static const uint kPremultiply = 1;
 VK_BINDING(0, 3) cbuffer PixelUniforms : register(b0, space3) {
     ShadeParams ps_shade;
     // the diffuse texture's, the specular map's, the glow map's and the
-    // projected light's ([0].xyzw), the gobo's ([1].x)
+    // projected light's ([0].xyzw), the gobo's, the normal map's and the
+    // detail map's ([1].xyz)
     uint4 tex_layer[2];
-    // and their own sizes (xy), in that order (their layers may be bigger),
-    // then the shadow map's
-    uint4 tex_size[6];
+    // and their own sizes (xy): the five before the normal map in that order
+    // (their layers may be bigger), then the shadow map's, the normal map's
+    // and the detail map's
+    uint4 tex_size[8];
     uint4 pixel_flags;
 };
 
@@ -112,12 +119,12 @@ VK_BINDING(1, 3) cbuffer SpotUniforms : register(b1, space3) {
 // and what it reads besides its cross-section texture (tex): the scene's
 // depth as the world's draws left it (kNearW / w, 0 where nothing drew) and
 // the density map (a texture pass's target, an array of one layer). The
-// slots after the mesh's seven, which PSMain doesn't read; PSSoftParticle
+// slots after the mesh's nine, which PSMain doesn't read; PSSoftParticle
 // reads the scene's depth.
-VK_SAMPLER VK_BINDING(7, 2) Texture2D<float> scene_depth_tex : register(t7, space2);
-VK_SAMPLER VK_BINDING(7, 2) SamplerState scene_depth_sampler : register(s7, space2);
-VK_SAMPLER VK_BINDING(8, 2) Texture2DArray<float4> density_tex : register(t8, space2);
-VK_SAMPLER VK_BINDING(8, 2) SamplerState density_sampler : register(s8, space2);
+VK_SAMPLER VK_BINDING(9, 2) Texture2D<float> scene_depth_tex : register(t9, space2);
+VK_SAMPLER VK_BINDING(9, 2) SamplerState scene_depth_sampler : register(s9, space2);
+VK_SAMPLER VK_BINDING(10, 2) Texture2DArray<float4> density_tex : register(t10, space2);
+VK_SAMPLER VK_BINDING(10, 2) SamplerState density_sampler : register(s10, space2);
 
 // soft_raster.cpp's near plane: w below it is clipped
 static const float kNearW = 1e-3;
@@ -131,6 +138,7 @@ struct VertexIn {
     VK_LOCATION(3) float4 color : TEXCOORD3;  // UBYTE4_NORM, R in the low byte
     VK_LOCATION(4) uint4 bone : TEXCOORD4;
     VK_LOCATION(5) float4 weight : TEXCOORD5;
+    VK_LOCATION(6) float4 tan : TEXCOORD6;  // the tangent, w its handedness
 };
 
 struct PixelIn {
@@ -143,6 +151,10 @@ struct PixelIn {
     float3 light_diffuse : TEXCOORD5;  // a vertex-lit draw's Lighting
     float3 light_added : TEXCOORD6;
     float2 ao_sh : TEXCOORD7;          // the point lights' AoShVertex
+    // a normal-mapped draw's tangent and bitangent (shade.hlsli's
+    // TextureFrame and Bitangent)
+    float3 tan : TEXCOORD8;
+    float3 bitan : TEXCOORD9;
 };
 
 float4x4 Bone(uint i) {
@@ -154,7 +166,16 @@ float4x4 Bone(uint i) {
 PixelIn VSMain(VertexIn v) {
     // the vertex colour's SH direction turns as the normal does
     const float3 dir = AoShDirection(v.color);
-    float3 wp = 0, wn = 0, wd = 0;
+    // a normal-mapped draw's normal is its frame's, which turns with its
+    // tangent
+    const bool mapped = (vs_shade.flags.x & kShadeNormalMap) != 0u;
+    float3 nrm = v.nrm, tangent = 0;
+    if (mapped) {
+        const TangentFrame f = TextureFrame(vs_shade, v.nrm, v.tan);
+        nrm = f.n;
+        tangent = f.u;
+    }
+    float3 wp = 0, wn = 0, wd = 0, wu = 0;
     if (skinned != 0) {
         float total = 0;
         [unroll] for (int k = 0; k < 4; k++) {
@@ -162,20 +183,23 @@ PixelIn VSMain(VertexIn v) {
             if (w <= 0) continue;
             const float4x4 b = Bone(v.bone[k] < bone_count ? v.bone[k] : 0);
             wp += mul(float4(v.pos, 1), b).xyz * w;
-            wn += mul(float4(v.nrm, 0), b).xyz * w;
+            wn += mul(float4(nrm, 0), b).xyz * w;
             wd += mul(float4(dir, 0), b).xyz * w;
+            wu += mul(float4(tangent, 0), b).xyz * w;
             total += w;
         }
         if (total <= 0) {
             const float4x4 b = Bone(0);
             wp = mul(float4(v.pos, 1), b).xyz;
-            wn = mul(float4(v.nrm, 0), b).xyz;
+            wn = mul(float4(nrm, 0), b).xyz;
             wd = mul(float4(dir, 0), b).xyz;
+            wu = mul(float4(tangent, 0), b).xyz;
         }
     } else {
         wp = mul(float4(v.pos, 1), world).xyz;
-        wn = mul(float4(v.nrm, 0), world).xyz;
+        wn = mul(float4(nrm, 0), world).xyz;
         wd = mul(float4(dir, 0), world).xyz;
+        wu = mul(float4(tangent, 0), world).xyz;
     }
     float4 clip = mul(float4(wp, 1), view_proj);
     // the pixel this pipeline samples at x + .5 then sees what the game's
@@ -194,10 +218,12 @@ PixelIn VSMain(VertexIn v) {
     o.wpos = wp;
     o.depth = clip.w;
     o.ao_sh = AoShVertex(vs_shade, wp, wn, wd, v.color);
+    o.tan = wu;
+    o.bitan = mapped ? Bitangent(wn, wu, v.tan.w) : float3(0, 0, 0);
     o.light_diffuse = float3(0, 0, 0);
     o.light_added = float3(0, 0, 0);
     if ((vs_shade.flags.x & kShadePerVertex) != 0u) {
-        const Lighting l = Light(vs_shade, wp, wn, v.color, float4(1, 1, 1, 1), o.ao_sh,
+        const Lighting l = Light(vs_shade, wp, wn, wn, v.color, float4(1, 1, 1, 1), o.ao_sh,
                                  float4(0, 0, 0, 0), float4(0, 0, 0, 0), 1.0);
         o.light_diffuse = l.diffuse;
         o.light_added = l.added;
@@ -244,6 +270,13 @@ float4 MeshColor(PixelIn i) {
     if ((f & kShadeSpecMap) != 0u)
         spec_map = Texel(spec_tex, i.uv, tex_layer[0].y, tex_size[1].xy);
     if ((f & kShadeGlow) != 0u) glow = Texel(glow_tex, i.uv, tex_layer[0].z, tex_size[2].xy);
+    float4 normal = float4(0.5, 0.5, 0, 1);
+    float4 detail = float4(0.5, 0.5, 0, 1);
+    if ((f & kShadeNormalMap) != 0u) {
+        normal = Texel(normal_tex, i.uv, tex_layer[1].y, tex_size[6].xy);
+        if ((f & kShadeDetailMap) != 0u)
+            detail = Texel(detail_tex, DetailUv(ps_shade, i.uv), tex_layer[1].z, tex_size[7].xy);
+    }
     float4 proj = float4(0, 0, 0, 0);
     float4 gobo = float4(0, 0, 0, 0);
     if ((f & (kShadeProjMultiply | kShadeProjGobo)) != 0u) {
@@ -270,8 +303,8 @@ float4 MeshColor(PixelIn i) {
                                      shadow_tex.Load(int3(int(t.x.w), int(t.y.w), 0)));
         lit = ShadowLit(t, stored);
     }
-    return ShadePixel(ps_shade, i.wpos, i.nrm, i.color, texel, spec_map, glow, behind, i.depth,
-                      i.ao_sh, proj, gobo, lit, vertex);
+    return ShadePixel(ps_shade, i.wpos, i.nrm, i.tan, i.bitan, i.color, texel, spec_map, glow,
+                      normal, detail, behind, i.depth, i.ao_sh, proj, gobo, lit, vertex);
 }
 
 float4 FinishMesh(float4 c) {

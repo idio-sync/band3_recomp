@@ -209,6 +209,7 @@ public:
         render::RasterOptions options;
         options.width = out.screenshot.width;
         options.height = out.screenshot.height;
+        options.normal_maps = REXCVAR_GET(native_view_normal_maps);
         std::vector<uint32_t> rgba;
         render::GpuStats stats;
         if (!render::GpuRenderer::Get().RenderFrame(frame, options, rgba, stats)) {

@@ -10,9 +10,10 @@
 // game's shader microcode and checked it by running them; its Python models
 // (tools/shaders/research: fam3.py standard, skin2.py skin, hair3.py hair) are
 // the reference, and tests/shade_model_test.cpp checks this against them.
-// Left out: normal maps (the capture has no tangents), the environment cube
-// (not decoded), the projected light and the shadow buffer of a vertex-lit
-// material and the hair's strand highlight (it needs the tangent).
+// Left out: the environment cube (not decoded), the projected light and the
+// shadow buffer of a vertex-lit material, the hair's strand highlight (its
+// colours, c2 and c19, along the bitangent) and normal maps in captures from
+// before they kept the tangents.
 
 float3 Xyz(float4 v) { return float3(v.x, v.y, v.z); }
 
@@ -22,6 +23,85 @@ float3 SafeNormalize(float3 v) { return v * rsqrt(max(dot(v, v), 1e-20f)); }
 // x^p for x in [0, 1]; 0 at 0, where HLSL's pow (exp2(p * log2 x)) and C's
 // could disagree
 float PowSat(float x, float p) { return x > 0.0f ? pow(x, p) : 0.0f; }
+
+// The normal map's frame (NORMAL_MAP; out/research/m2_shader_ucode.md 6),
+// as the game's vertex shaders build it (837915E757EEC6DC, skinned
+// 18A3E6C52471D288): from the vertex's tangent T (w its handedness, +-1) and
+// normal N, the bitangent B = T.w (N x T), then the frame turned by the
+// texgen matrix, the tangent U = c20.x T + c20.y B + c20.z N and the normal
+// N' = c22.x T + c22.y B + c22.z N (T and N where it's the identity), in the
+// mesh's space. The backends turn both into the world as they do a normal
+// (by the bones, or world) and the pixels take them interpolated, with the
+// bitangent T.w (N'w x Uw) (Bitangent); none of them normalised.
+struct TangentFrame {
+    float3 n;  // N'
+    float3 u;  // U
+};
+
+TangentFrame TextureFrame(SHADE_IN(ShadeParams) sp, float3 n, float4 t) {
+    const float3 tt = Xyz(t);
+    const float3 b = cross(n, tt) * t.w;
+    TangentFrame f;
+    f.u = tt * sp.texgen[0].x + b * sp.texgen[0].y + n * sp.texgen[0].z;
+    f.n = tt * sp.texgen_n.x + b * sp.texgen_n.y + n * sp.texgen_n.z;
+    return f;
+}
+
+// n and u in the world, w the tangent's handedness
+float3 Bitangent(float3 n, float3 u, float w) { return cross(n, u) * w; }
+
+// The normals a pixel lights with: `diffuse` for the diffuse light, the box
+// map, the projected light and the shadow's diffuse darkening, `specular`
+// for the specular, the point lights' rim and their shadow. Only the skin
+// family's two differ.
+struct Normals {
+    float3 diffuse;
+    float3 specular;
+};
+
+// n, u and b are the interpolated normal, tangent and bitangent (the frame's,
+// with kShadeNormalMap), map s1's texel and detail s14's. The game's pixel
+// shaders (7C6659287B361841, detail 74DC45137476D064; skin FF3F7B88EB727BF9):
+// x = 2 s1.x - 1 pairs with the bitangent and y = 2 s1.y - 1 with the tangent,
+// z = sat(1 - x^2 - y^2) (no square root) with the normal, and
+//   N = normalize(z n + c14.x (x b + y u));
+// the detail map adds c106.x of its own x, y and z to those first. The skin
+// family lights its diffuse with that but without the detail map, and its
+// specular with the detail map and without c14's softening.
+Normals MappedNormals(SHADE_IN(ShadeParams) sp, float3 n, float3 u, float3 b, float4 map,
+                      float4 detail) {
+    const uint f = sp.flags.x;
+    Normals o;
+    o.diffuse = n;
+    o.specular = n;
+    if ((f & kShadeNormalMap) == 0u) return o;
+    float x = map.x * 2.0f - 1.0f;
+    float y = map.y * 2.0f - 1.0f;
+    float z = saturate(1.0f - x * x - y * y);
+    const float soft = sp.normal_map.x;
+    const bool skin = (f & kShadeSkin) != 0u;
+    if (skin) o.diffuse = SafeNormalize(n * z + (b * x + u * y) * soft);
+    if ((f & kShadeDetailMap) != 0u) {
+        const float dx = detail.x * 2.0f - 1.0f;
+        const float dy = detail.y * 2.0f - 1.0f;
+        const float share = sp.normal_map.y;
+        x = x + share * dx;
+        y = y + share * dy;
+        z = z + share * saturate(1.0f - dx * dx - dy * dy);
+    }
+    if (skin) {
+        o.specular = SafeNormalize(n * z + (b * x + u * y));
+    } else {
+        o.diffuse = SafeNormalize(n * z + (b * x + u * y) * soft);
+        o.specular = o.diffuse;
+    }
+    return o;
+}
+
+// where the detail map is read: the texture's uv times c106.y
+float2 DetailUv(SHADE_IN(ShadeParams) sp, float2 uv) {
+    return float2(uv.x * sp.normal_map.z, uv.y * sp.normal_map.z);
+}
 
 // u' = c20.x u + c20.y v + c20.w, likewise v' with c21 (the game's VS)
 float2 TexGen(SHADE_IN(ShadeParams) sp, float2 uv) {
@@ -161,24 +241,30 @@ struct Lighting {
     float3 added;    // after it: specular, and the rim's own light
 };
 
-// p is the world position, n the world normal (any length), vc the vertex
-// colour, spec_map the specular map's texel (1 where sp doesn't sample it),
+// p is the world position, n the world normal (any length) and n_spec the
+// specular one (MappedNormals': n but for a normal-mapped skin), vc the
+// vertex colour, spec_map the specular map's texel (1 where sp doesn't
+// sample it),
 // ao_sh the AoShVertex (interpolated, in a pixel), proj and gobo the
 // projected light's maps' texels at ProjUv (s5 and s10; per pixel only, and
 // unread where sp doesn't sample them), lit the shadow buffer's ShadowLit
 // (per pixel only, unread without kShadeShadow)
-Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 spec_map,
-               float2 ao_sh, float4 proj, float4 gobo, float lit) {
+Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, float4 vc,
+               float4 spec_map, float2 ao_sh, float4 proj, float4 gobo, float lit) {
     const uint f = sp.flags.x;
     const bool skin = (f & kShadeSkin) != 0u;
     const bool hair = (f & kShadeHair) != 0u;
     const bool box = (f & kShadeBox) != 0u;
     const float3 N = SafeNormalize(n);
     const float3 V = SafeNormalize(Xyz(sp.eye) - p);
-    const float nv = dot(N, V);
-    const float vn = saturate(nv);
-    const float3 R = N * (2.0f * nv) - V;  // the eye's reflection
-    const float up = 0.5f * N.z + 0.5f;    // world Z is up
+    const float vn = saturate(dot(N, V));
+    const float up = 0.5f * N.z + 0.5f;  // world Z is up
+    // and the specular normal's (N's but for a normal-mapped skin)
+    const float3 N2 = SafeNormalize(n_spec);
+    const float nv2 = dot(N2, V);
+    const float vn2 = saturate(nv2);
+    const float3 R = N2 * (2.0f * nv2) - V;  // the eye's reflection
+    const float up2 = 0.5f * N2.z + 0.5f;
 
     // ambient occlusion from the vertex colour's red: point light 0 gets the
     // stronger aoD, the rest of the light aoA; with a point light, the point
@@ -204,7 +290,7 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
     }
     const float spec_norm = power * 0.159155f + 0.31831f;  // (p + 2) / 2 pi
     const bool rim = (f & kShadeRim) != 0u;
-    const float rim_b = PowSat(1.0f - vn * vn, sp.rim.w);
+    const float rim_b = PowSat(1.0f - vn2 * vn2, sp.rim.w);
 
     // the skin and hair families wrap the diffuse, per channel
     float3 wrap_a = float3(0.55f, 0.6f, 0.65f);
@@ -240,11 +326,14 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
     // specular and its rim are darkened by up to 0.75 c107 (1 - the shadow's
     // colour), as far as the surface faces away from the light camera's
     // forward c108; not the ambient, the box map or the projected light's
-    // gobo.
+    // gobo. The specular and the rim take it by the specular normal.
     float3 shadow = one;
+    float3 shadow2 = one;
     if ((f & kShadeShadow) != 0u) {
         const float away = saturate(-dot(N, Xyz(sp.shadow_dir)));
         shadow = one - Xyz(sp.shadow_color) * (0.75f * away * (1.0f - lit));
+        const float away2 = saturate(-dot(N2, Xyz(sp.shadow_dir)));
+        shadow2 = one - Xyz(sp.shadow_color) * (0.75f * away2 * (1.0f - lit));
     }
 
     float3 lights = proj_add;  // the point lights' diffuse, and the gobo's
@@ -256,8 +345,10 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
         const float d = sqrt(dot(to_light, to_light));
         const float3 L = to_light / max(d, 1e-6f);
         const float att = saturate(d * sp.point_pos[i].w + sp.point_color[i].w);
-        const float3 lc =
-            Xyz(sp.point_color[i]) * proj_mul * shadow * (att * (i == 0u ? ao_0 : ao_1));
+        const float3 lc_own =
+            Xyz(sp.point_color[i]) * proj_mul * (att * (i == 0u ? ao_0 : ao_1));
+        const float3 lc = lc_own * shadow;    // for the diffuse
+        const float3 lc2 = lc_own * shadow2;  // the specular and the rim
         const float nl = dot(N, L);
         if (skin || hair) {
             lights = lights + lc * saturate(wrap_a * nl + wrap_b);
@@ -266,16 +357,16 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
         }
         const float rl = saturate(dot(R, L));
         if (skin) {
-            const float soft = 1.0f - vn * vn;
-            lights_spec = lights_spec + lc * (PowSat(rl, power) * soft * soft * spec_norm);
-            if (rim) lights_rim = lights_rim + lc * (saturate(-dot(L, V)) * rim_b * up);
+            const float soft = 1.0f - vn2 * vn2;
+            lights_spec = lights_spec + lc2 * (PowSat(rl, power) * soft * soft * spec_norm);
+            if (rim) lights_rim = lights_rim + lc2 * (saturate(-dot(L, V)) * rim_b * up2);
         } else if (!hair) {
-            // (the hair's highlight runs along the strands, the tangent the
-            // capture doesn't have: left out)
-            lights_spec = lights_spec + lc * (PowSat(rl, power) * spec_norm);
+            // (the hair's highlight runs along the strands, in colours of
+            // its own: left out)
+            lights_spec = lights_spec + lc2 * (PowSat(rl, power) * spec_norm);
             if (rim) {
-                const float under = (f & kShadeRimUnder) != 0u ? up : 1.0f;
-                lights_rim = lights_rim + lc * (saturate(-dot(L, V)) * rim_b * under);
+                const float under = (f & kShadeRimUnder) != 0u ? up2 : 1.0f;
+                lights_rim = lights_rim + lc2 * (saturate(-dot(L, V)) * rim_b * under);
             }
         }
     }
@@ -300,10 +391,10 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
     if ((f & kShadeSpecular) != 0u) {
         const float3 box_r = box ? BoxSpecular(sp, R, power) * proj_mul : zero;
         if (skin) {
-            const float fs = (1.0f - vn) * up;
+            const float fs = (1.0f - vn2) * up2;
             l.added = spec_color * (lights_spec + box_r * (fs * fs * spec_norm * ao_a));
         } else {
-            const float fresnel = (1.0f - vn) * up + 0.25f;
+            const float fresnel = (1.0f - vn2) * up2 + 0.25f;
             const float3 s = lights_spec + box_r * (fresnel * spec_norm * ao_a);
             // the hair's colour is its map's alone
             l.added = s * (hair ? Xyz(spec_map) : spec_color);
@@ -320,15 +411,19 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 s
 }
 
 // One pixel's colour and alpha. p is its world position, n its interpolated
-// world normal, vc its vertex colour, depth its clip w; texel, spec_map and
-// glow are the maps' texels where sp samples them (1 where it doesn't), behind
-// the post-processed picture at the pixel for kShadeRefract; ao_sh is the
-// interpolated AoShVertex, proj and gobo the projected light's maps' texels
-// at ProjUv (Light's), lit the shadow buffer's ShadowLit (Light's), vertex the
-// interpolated Lighting of a vertex-lit material's vertices.
-float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float4 texel,
-                  float4 spec_map, float4 glow, float4 behind, float depth, float2 ao_sh,
-                  float4 proj, float4 gobo, float lit, Lighting vertex) {
+// world normal and u and b its tangent and bitangent (TextureFrame's and
+// Bitangent's, read with kShadeNormalMap), vc its vertex colour, depth its
+// clip w; texel, spec_map and glow are the maps' texels where sp samples
+// them (1 where it doesn't), normal and detail the normal map's and the
+// detail map's (MappedNormals'), behind the post-processed picture at the
+// pixel for kShadeRefract; ao_sh is the interpolated AoShVertex, proj and
+// gobo the projected light's maps' texels at ProjUv (Light's), lit the
+// shadow buffer's ShadowLit (Light's), vertex the interpolated Lighting of a
+// vertex-lit material's vertices.
+float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 u, float3 b, float4 vc,
+                  float4 texel, float4 spec_map, float4 glow, float4 normal, float4 detail,
+                  float4 behind, float depth, float2 ao_sh, float4 proj, float4 gobo, float lit,
+                  Lighting vertex) {
     const uint f = sp.flags.x;
     // REFRACT_WORLD's pixel shader (FC53125B5EB914F8): the texture's rgb
     // times the picture behind it, alpha the texture's. The game nudges where
@@ -370,8 +465,10 @@ float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float4 vc, float
         alpha = base_alpha * col.w;
     } else {
         Lighting l = vertex;
-        if ((f & kShadePerVertex) == 0u)
-            l = Light(sp, p, n, vc, spec_map, ao_sh, proj, gobo, lit);
+        if ((f & kShadePerVertex) == 0u) {
+            const Normals nn = MappedNormals(sp, n, u, b, normal, detail);
+            l = Light(sp, p, nn.diffuse, nn.specular, vc, spec_map, ao_sh, proj, gobo, lit);
+        }
         rgb = base * l.diffuse + l.added;
         alpha = base_alpha * sp.ambient.w * ((f & kShadePrelit) != 0u ? vc.w : sp.color.w);
     }

@@ -11,9 +11,11 @@
 // pixel centres), a DrawRect quad's on D3D10's; and that a soft particle
 // fades by the scene's depth behind it, and the soft-particle buffer's blur
 // takes its taps from the other surface; that a shadow map's pass draws
-// depth alone, which a SHADOW_BUFFER draw after it reads; and that NgLight's
+// depth alone, which a SHADOW_BUFFER draw after it reads; that NgLight's
 // shadow is its casters' white silhouettes, cleared first and blurred twice
-// in place, which the projected light's draws read.
+// in place, which the projected light's draws read; and that a normal map a
+// texture pass draws (a head's) is that pass's target, which tilts the
+// normal of the draw after it in the frame its tangents give.
 
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -917,6 +919,90 @@ TEST_CASE("NgLight's shadow: its casters' silhouettes, blurred twice, darken the
     st = Rasterize(f, Small(), rgba);
     CHECK(st.rt_missing == 1);
     CHECK(std::abs(int(rgba[1 * 8 + 1] & 0xff) - 191) <= 1);
+}
+
+TEST_CASE("a head's normal map is a texture pass's target, which tilts the draw after it") {
+    // the pass fills the texture with x 1, y 0.5 (red 255, green 128); a lit
+    // quad facing +z, a white light far along +x, which grazes it. Its
+    // tangent (0, -1, 0), w 1, makes the bitangent the normal map's x pairs
+    // with (0, 0, 1) x (0, -1, 0) = +x: the normal tilts to the light.
+    const uint32_t kNormal = 0xff0080ffu;
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = 18;
+    s.options = 1ull << shader_opt::kRealLights | 1ull << shader_opt::kPerPixel |
+                1ull << shader_opt::kNumPoint | 1ull << shader_opt::kNormalMap;
+    auto set = [&](float* r, float x, float y, float z, float w) {
+        r[0] = x;
+        r[1] = y;
+        r[2] = z;
+        r[3] = w;
+    };
+    set(s.ps[ShadeRegIndex(0)], 1, 1, 1, 1);
+    set(s.ps[ShadeRegIndex(1)], 0, 0, 0, 1);
+    set(s.ps[ShadeRegIndex(14)], 1, 0, 0, 0);
+    set(s.ps[ShadeRegIndex(64)], 1e5f, 0, 0, 0);
+    set(s.ps[ShadeRegIndex(67)], 1, 1, 1, 1);
+    set(s.vs[ShadeRegIndex(20)], 1, 0, 0, 0);
+    set(s.vs[ShadeRegIndex(21)], 0, 1, 0, 0);
+    set(s.vs[ShadeRegIndex(22)], 0, 0, 1, 0);
+    s.eye[2] = 10;
+    auto map = std::make_shared<Texture>();
+    map->width = map->height = 4;
+    map->tex_obj = kTex;
+    map->tex_type = 0x22;
+    map->version = 1;
+    s.maps[kMapNormal] = map;
+    auto up = std::make_shared<Geometry>(*Quad(-1, 1, 0xffffffffu));
+    up->tangents = true;
+    for (Vertex& v : up->verts) {
+        v.nrm[2] = 1.0f;
+        v.tan[1] = -1.0f;
+        v.tan[3] = 1.0f;
+    }
+    DrawItem lit = Item(up, 0);
+    lit.prelit = false;
+    lit.shade = 0;
+    FrameCapture f;
+    f.shades = {s};
+    f.draws = {Fill(kNormal), lit};
+    f.passes = {TexturePass(0, 1), BackBuffer(1, 1)};
+    CHECK(MapTargetOf(&f.shades[0], kMapNormal) == map.get());
+    const std::vector<PassRun> runs = PlanPasses(f, Small());
+    REQUIRE(runs.size() == 2);
+    CHECK(runs[0].pass == &f.passes[0]);
+
+    // N = normalize(0 n + (1 (+x) + 0.004 u)): lit as it faces the light
+    std::vector<uint32_t> rgba;
+    RasterStats st = Rasterize(f, Small(), rgba);
+    CHECK(st.passes == 1);
+    CHECK(st.rt_missing == 0);
+    CHECK((rgba[1 * 8 + 3] & 0xff) >= 254);
+
+    // without normal maps, or with the geometry's tangents not kept, the
+    // vertex normal, which the light grazes, and the pass isn't drawn
+    RasterOptions o = Small();
+    o.normal_maps = false;
+    CHECK(PlanPasses(f, o).size() == 1);
+    st = Rasterize(f, o, rgba);
+    CHECK((rgba[1 * 8 + 3] & 0xff) == 0);
+    up->tangents = false;
+    Rasterize(f, Small(), rgba);
+    CHECK((rgba[1 * 8 + 3] & 0xff) == 0);
+    up->tangents = true;
+
+    // with no pass of it, guest memory's pixels where they're kept (here
+    // flat: the vertex normal), else the map is left out, counted as missing
+    f.draws = {lit};
+    f.passes = {BackBuffer(0, 1)};
+    map->rgba.assign(16, 0xff008080u);
+    st = Rasterize(f, Small(), rgba);
+    CHECK(st.rt_missing == 0);
+    CHECK((rgba[1 * 8 + 3] & 0xff) <= 2);
+    map->rgba.clear();
+    st = Rasterize(f, Small(), rgba);
+    CHECK(st.rt_missing == 1);
+    CHECK((rgba[1 * 8 + 3] & 0xff) == 0);
 }
 
 TEST_CASE("the display gamma ramp maps each value as the presenter shows it") {

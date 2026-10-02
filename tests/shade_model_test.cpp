@@ -4,8 +4,11 @@
 // (tools/shaders/research: fam3.py, skin2.py and hair3.py, checked there
 // against the shaders' microcode), the SH occlusion, REFRACT_WORLD's
 // picture behind and the shadow buffer's taps, their weights and its
-// darkening against hand-worked numbers, PackShade's reading of the
-// option word, the particle quad's corners (scene_capture.h's
+// darkening against hand-worked numbers, the normal map's tangent frame
+// against the game's vertex shaders, and the DXN block and the packed
+// vertex's tangent as the capture decodes them (guest_formats.h), with which
+// channel of a normal map tilts toward which of the frame's vectors,
+// PackShade's reading of the option word, the particle quad's corners (scene_capture.h's
 // ParticleCorner) against the particle VS's instructions, and a soft
 // particle's fade (SoftFade) against the soft particle pixel shader's maths.
 
@@ -13,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include "src/Render/guest_formats.h"
 #include "src/Render/shade_model.h"
 
 using namespace band3::render;
@@ -36,13 +40,16 @@ struct Case {
     float c66[4], c69[4], proj[4], gobo[4];
     // the shadow buffer's: c107, c108 and how lit the pixel is (ShadowLit)
     float c107[4], c108[4], lit;
+    // the normal map's: the interpolated tangent and bitangent, the normal
+    // map's and the detail map's texels, c14 and c106
+    float u[3], b[3], nmap[4], detail[4], c14[4], c106[4];
 };
 
 // Made from the models (fam3.model, skin2.skin, hair3.hair) by
-// tools/shaders/research/gen_shade_cases.py, with no normal or
-// environment map. The hair's cases have no
-// specular colour, as its strand highlight needs the tangent the capture
-// doesn't keep, so only its box highlight is compared.
+// tools/shaders/research/gen_shade_cases.py, with no environment map. The
+// hair's cases have no specular colour, as its strand highlight (in colours
+// of its own, along the bitangent) is left out, so only its box highlight is
+// compared.
 const Case kCases[] = {
     {"standard: two points, box, specular",
      kShadeLit | kShadeBox | kShadeSpecular | kShadeTextured, 2,
@@ -145,6 +152,66 @@ const Case kCases[] = {
      {0.138381038f, 0.0892702304f, 0.625476427f}, 0.021626514f,
      {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
      {0.479f, 0.359f, 0.306f, 0.0f}, {0.912f, 0.105f, 0.396f, 1.0f}, 0.0f},
+    {"standard: normal map, two points, rim",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadeRim | kShadeNormalMap | kShadeTextured, 2,
+     {{0.489f, 0.584f, 0.534f, 0.557f}, {0.164f, 0.263f, 0.104f, 0.254f}, {0.208f, 0.442f, 0.468f, 22.82f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.831f, 0.965f, 0.403f, 3.42f}, {66.97f, -189.05f, 164.2f, -0.002219f}, {-60.89f, -30.75f, 210.76f, -0.001726f}, {0.804f, 0.681f, 0.827f, 1.788f}, {0.798f, 0.375f, 1.956f, 1.79f}, {0.314f, 0.141f, 0.093f, 0.183f}, {0.277f, 0.039f, 0.42f, 0.437f}, {0.008f, 0.505f, 0.295f, 0.551f}, {0.285f, 0.477f, 0.273f, 0.368f}, {0.3f, 0.014f, 0.086f, 0.139f}, {0.244f, 0.222f, 0.324f, 0.396f}},
+     {-10.0f, -18.06f, 1.11f}, {271.66f, -365.15f, 231.08f}, {0.634f, -0.544f, -0.798f}, {0.093f, 0.122f, 0.009f, 0.626f}, 0.0f,
+     {0.927f, 0.202f, 0.718f, 0.947f}, {0.789f, 0.238f, 0.675f, 0.33f}, {0.178f, 0.011f, 0.525f, 0.919f},
+     {0.254010626f, 0.059912766f, 0.130997709f}, 0.133979666f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, 1.0f,
+     {-0.792f, -0.706f, -0.223f}, {-0.923f, -0.071f, 0.461f}, {0.469f, 0.131f, 0.124f, 0.259f}, {0.6f, 0.755f, 0.502f, 0.262f},
+     {0.451f, 0.0f, 0.0f, 0.0f}, {0.45f, 1.76f, 0.0f, 0.0f}},
+    {"standard: normal and detail maps, AO, specular map",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadeSpecMap | kShadeAO | kShadeNormalMap | kShadeDetailMap | kShadeTextured, 1,
+     {{0.618f, 0.845f, 0.968f, 0.432f}, {0.306f, 0.282f, 0.265f, 0.044f}, {0.222f, 0.507f, 0.797f, 16.04f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.877f, 0.956f, 0.521f, 1.19f}, {125.04f, 150.13f, 87.73f, -0.002074f}, {0.0f, 0.0f, 0.0f, 0.0f}, {1.25f, 1.924f, 0.657f, 1.882f}, {0.0f, 0.0f, 0.0f, 1.0f}, {0.552f, 0.011f, 0.223f, 0.031f}, {0.451f, 0.213f, 0.576f, 0.225f}, {0.465f, 0.521f, 0.143f, 0.334f}, {0.574f, 0.316f, 0.216f, 0.16f}, {0.472f, 0.116f, 0.362f, 0.333f}, {0.332f, 0.078f, 0.395f, 0.55f}},
+     {-18.11f, -16.79f, 40.9f}, {47.01f, -518.23f, 101.95f}, {0.507f, -0.304f, -0.066f}, {0.273f, 0.633f, 0.729f, 0.31f}, 1.1f,
+     {0.168f, 0.988f, 0.919f, 0.119f}, {0.608f, 0.717f, 0.463f, 0.758f}, {0.96f, 0.59f, 0.392f, 0.196f},
+     {0.0372572681f, 0.149012284f, 0.216486813f}, 0.002261952f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, 1.0f,
+     {-0.497f, -0.698f, -0.779f}, {-0.575f, 0.684f, 0.074f}, {0.744f, 0.836f, 0.749f, 0.14f}, {0.756f, 0.256f, 0.663f, 0.703f},
+     {0.76f, 0.0f, 0.0f, 0.0f}, {0.442f, 1.53f, 0.0f, 0.0f}},
+    {"standard: normal map, in shadow, two points",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadeShadow | kShadeNormalMap | kShadeTextured, 2,
+     {{0.345f, 0.729f, 0.468f, 0.358f}, {0.196f, 0.198f, 0.192f, 0.183f}, {0.412f, 0.403f, 0.754f, 20.89f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.893f, 0.955f, 0.388f, 3.2f}, {30.22f, -119.25f, 219.4f, -0.00182f}, {-111.82f, 90.84f, 184.47f, -0.002286f}, {1.721f, 0.667f, 0.808f, 1.976f}, {1.195f, 1.703f, 1.32f, 1.115f}, {0.286f, 0.554f, 0.087f, 0.41f}, {0.379f, 0.096f, 0.124f, 0.412f}, {0.262f, 0.244f, 0.288f, 0.061f}, {0.423f, 0.353f, 0.321f, 0.204f}, {0.487f, 0.494f, 0.327f, 0.053f}, {0.089f, 0.091f, 0.047f, 0.389f}},
+     {4.35f, -29.61f, 41.04f}, {77.87f, -362.35f, 263.61f}, {0.363f, 0.054f, 0.969f}, {0.133f, 0.689f, 0.884f, 0.478f}, 0.0f,
+     {0.835f, 0.263f, 0.475f, 0.344f}, {0.457f, 0.732f, 0.229f, 0.405f}, {0.846f, 0.301f, 0.126f, 0.994f},
+     {0.427737672f, 0.324566516f, 0.32085115f}, 0.022536816f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.933f, 0.406f, 0.421f, 0.0f}, {-0.592f, -0.232f, -0.772f, 1.0f}, 0.0f,
+     {0.082f, -0.964f, 0.143f}, {-0.708f, -0.674f, 0.478f}, {0.622f, 0.441f, 0.512f, 0.547f}, {0.475f, 0.261f, 0.661f, 0.662f},
+     {0.595f, 0.0f, 0.0f, 0.0f}, {0.442f, 5.27f, 0.0f, 0.0f}},
+    {"skin: normal and detail maps, rim, AO, two points",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadeSpecMap | kShadeRim | kShadeAO | kShadeSkin | kShadeNormalMap | kShadeDetailMap | kShadeTextured, 2,
+     {{0.742f, 0.828f, 0.616f, 0.609f}, {0.157f, 0.399f, 0.116f, 0.059f}, {0.409f, 0.408f, 0.462f, 5.01f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.449f, 0.655f, 0.361f, 1.61f}, {16.98f, -44.58f, 233.37f, -0.001919f}, {63.32f, -80.38f, 278.72f, -0.001874f}, {1.005f, 0.469f, 1.538f, 1.396f}, {1.646f, 1.922f, 0.696f, 1.731f}, {0.481f, 0.234f, 0.083f, 0.376f}, {0.063f, 0.423f, 0.004f, 0.273f}, {0.288f, 0.072f, 0.288f, 0.3f}, {0.221f, 0.538f, 0.52f, 0.534f}, {0.147f, 0.016f, 0.226f, 0.068f}, {0.423f, 0.158f, 0.077f, 0.17f}},
+     {-9.66f, 23.54f, -3.9f}, {-119.29f, -396.79f, 109.07f}, {-0.582f, 0.375f, 0.504f}, {0.101f, 0.066f, 0.506f, 0.656f}, 1.0f,
+     {0.115f, 0.493f, 0.347f, 0.177f}, {0.254f, 0.357f, 0.52f, 0.201f}, {0.62f, 0.879f, 0.684f, 0.068f},
+     {0.0278349488f, 0.111485905f, 0.0584784387f}, 0.006359787f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, 1.0f,
+     {0.297f, 0.268f, -0.982f}, {-0.231f, 0.305f, 0.9f}, {0.843f, 0.556f, 0.571f, 0.867f}, {0.326f, 0.505f, 0.237f, 0.665f},
+     {0.758f, 0.0f, 0.0f, 0.0f}, {0.326f, 2.38f, 0.0f, 0.0f}},
+    {"skin: normal and detail maps, in shadow, rim",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadeRim | kShadeSkin | kShadeShadow | kShadeNormalMap | kShadeDetailMap | kShadeTextured, 2,
+     {{0.925f, 0.749f, 0.813f, 0.924f}, {0.104f, 0.254f, 0.362f, 0.349f}, {0.658f, 0.336f, 0.529f, 4.89f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.96f, 0.56f, 0.367f, 3.73f}, {-65.77f, -29.05f, 206.92f, -0.001915f}, {-123.86f, 77.38f, 120.87f, -0.0021f}, {1.137f, 0.438f, 1.274f, 1.095f}, {0.578f, 0.5f, 0.34f, 1.859f}, {0.132f, 0.143f, 0.008f, 0.387f}, {0.18f, 0.082f, 0.388f, 0.36f}, {0.268f, 0.092f, 0.383f, 0.333f}, {0.26f, 0.099f, 0.557f, 0.518f}, {0.414f, 0.598f, 0.348f, 0.207f}, {0.07f, 0.365f, 0.312f, 0.262f}},
+     {49.26f, 33.95f, -38.52f}, {230.53f, -599.4f, 230.29f}, {-0.369f, 0.46f, 0.905f}, {0.53f, 0.763f, 0.054f, 0.667f}, 0.0f,
+     {0.206f, 0.51f, 0.4f, 0.166f}, {0.773f, 0.184f, 0.332f, 0.177f}, {0.662f, 0.301f, 0.044f, 0.027f},
+     {0.347640587f, 0.486980343f, 0.548023314f}, 0.053531016f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.432f, 0.744f, 0.584f, 0.0f}, {0.325f, -0.31f, -0.893f, 1.0f}, 0.0f,
+     {-0.561f, 0.013f, -0.976f}, {-0.952f, 0.333f, 0.055f}, {0.208f, 0.35f, 0.201f, 0.32f}, {0.433f, 0.331f, 0.319f, 0.336f},
+     {0.511f, 0.0f, 0.0f, 0.0f}, {0.533f, 7.2f, 0.0f, 0.0f}},
+    {"hair: normal and detail maps, two points",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadeSpecMap | kShadeHair | kShadeNormalMap | kShadeDetailMap | kShadeTextured, 2,
+     {{0.332f, 0.752f, 0.708f, 0.583f}, {0.086f, 0.317f, 0.323f, 0.205f}, {0.0f, 0.0f, 0.0f, 18.39f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.835f, 0.386f, 0.386f, 3.99f}, {95.48f, 150.02f, 203.97f, -0.004681f}, {-138.07f, 127.0f, 81.22f, -0.001751f}, {0.859f, 1.146f, 0.497f, 1.368f}, {1.07f, 1.238f, 0.883f, 1.187f}, {0.022f, 0.52f, 0.141f, 0.468f}, {0.125f, 0.581f, 0.536f, 0.453f}, {0.458f, 0.348f, 0.438f, 0.073f}, {0.286f, 0.496f, 0.121f, 0.554f}, {0.533f, 0.246f, 0.219f, 0.271f}, {0.231f, 0.597f, 0.232f, 0.016f}},
+     {-40.67f, 21.81f, 49.28f}, {-2.39f, -452.54f, 210.09f}, {0.496f, -0.556f, 0.218f}, {0.556f, 0.623f, 0.181f, 0.17f}, 0.0f,
+     {0.413f, 0.934f, 0.412f, 0.638f}, {0.376f, 0.193f, 0.159f, 0.832f}, {0.777f, 0.375f, 0.683f, 0.676f},
+     {0.186740985f, 0.829937467f, 0.231787406f}, 0.07625057f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, 1.0f,
+     {0.797f, 0.917f, -0.186f}, {0.978f, 0.923f, 0.181f}, {0.807f, 0.493f, 0.4f, 0.298f}, {0.726f, 0.297f, 0.242f, 0.683f},
+     {0.842f, 0.0f, 0.0f, 0.0f}, {0.49f, 6.86f, 0.0f, 0.0f}},
 };
 
 void Set(float4& to, const float* from) { to = {from[0], from[1], from[2], from[3]}; }
@@ -170,6 +237,7 @@ ShadeParams ParamsFor(const Case& c) {
     Set(sp.proj_color, c.c69);
     Set(sp.shadow_color, c.c107);
     Set(sp.shadow_dir, c.c108);
+    sp.normal_map = {c.c14[0], c.c106[0], c.c106[1], 0};
     return sp;
 }
 
@@ -206,15 +274,21 @@ TEST_CASE("shading matches the game's shader models, per pixel and per vertex") 
     const float no_sh[2] = {1, 1};
     for (const Case& c : kCases) {
         const ShadeParams sp = ParamsFor(c);
+        NormalMapInputs nm{};
+        for (int k = 0; k < 3; k++) nm.u[k] = c.u[k];
+        for (int k = 0; k < 3; k++) nm.b[k] = c.b[k];
+        for (int k = 0; k < 4; k++) nm.map[k] = c.nmap[k];
+        for (int k = 0; k < 4; k++) nm.detail[k] = c.detail[k];
         float out[4];
         ShadePixelCpu(sp, c.p, c.n, c.vc, c.tex, c.spec_map, c.glow, one, 100.0f, no_sh, zero,
-                      zero, out, c.proj, c.gobo, c.lit);
+                      zero, out, c.proj, c.gobo, c.lit, &nm);
         CheckColour(c, out);
 
         // a vertex-lit material's vertex gives its pixel the same colour, at
-        // the vertex; its specular map, the projected light and the shadow
-        // buffer are per pixel only
-        if (c.flags & (kShadeSpecMap | kShadeProjMultiply | kShadeProjGobo | kShadeShadow))
+        // the vertex; its specular map, the projected light, the shadow
+        // buffer and the normal map are per pixel only
+        if (c.flags & (kShadeSpecMap | kShadeProjMultiply | kShadeProjGobo | kShadeShadow |
+                       kShadeNormalMap))
             continue;
         ShadeParams pv = sp;
         pv.flags.x |= kShadePerVertex;
@@ -526,6 +600,133 @@ TEST_CASE("the shadow buffer darkens the point lights by 0.75 c107 as the surfac
     CHECK(s[3] == 2.0f);
 }
 
+TEST_CASE("the normal map's frame is the game's vertex shaders' tangent frame") {
+    // 837915E757EEC6DC instrs 17-45 with the texgen matrix the identity: U =
+    // T, N' = N, B = T.w (N x T), and the bitangent the pixels get T.w (N'w x
+    // Uw), here with world the identity
+    ShadeParams sp{};
+    sp.texgen[0] = {1, 0, 0, 0};
+    sp.texgen_n = {0, 0, 1, 0};
+    const float n[3] = {0, 0, 2}, t[4] = {3, 0, 0, -1};
+    float fn[3], fu[3], b[3];
+    TextureFrameCpu(sp, n, t, fn, fu);
+    CHECK(fn[2] == 2.0f);  // not normalised
+    CHECK(fu[0] == 3.0f);
+    BitangentCpu(fn, fu, t[3], b);
+    // (0, 0, 2) x (3, 0, 0) = (0, 6, 0), times -1
+    CHECK(b[0] == 0.0f);
+    CHECK(b[1] == -6.0f);
+    CHECK(b[2] == 0.0f);
+
+    // the texgen's rows turn the frame: U = c20.x T + c20.y B + c20.z N,
+    // N' = c22.x T + c22.y B + c22.z N, B = T.w (N x T) = (0, 1, 0) here
+    sp.texgen[0] = {0.5f, 2.0f, 0.25f, 9.0f};  // .w is the uv's offset: unread
+    sp.texgen_n = {1.0f, -1.0f, 3.0f, 9.0f};
+    const float n1[3] = {0, 0, 1}, t1[4] = {1, 0, 0, 1};
+    TextureFrameCpu(sp, n1, t1, fn, fu);
+    CHECK(fu[0] == 0.5f);
+    CHECK(fu[1] == 2.0f);
+    CHECK(fu[2] == 0.25f);
+    CHECK(fn[0] == 1.0f);
+    CHECK(fn[1] == -1.0f);
+    CHECK(fn[2] == 3.0f);
+
+    // the detail map is read at uv times c106.y
+    sp.normal_map = {1, 0.5f, 4, 0};
+    const float uv[2] = {0.25f, -0.5f};
+    float duv[2];
+    DetailUvCpu(sp, uv, duv);
+    CHECK(duv[0] == 1.0f);
+    CHECK(duv[1] == -2.0f);
+}
+
+TEST_CASE("DXN's first block is red, which tilts the normal toward the bitangent") {
+    // two DXT5 alpha blocks with all indices 0: each block's first endpoint
+    // everywhere; 230 in the first, 25 in the second
+    const uint8_t block[16] = {230, 10, 0, 0, 0, 0, 0, 0, 25, 200, 0, 0, 0, 0, 0, 0};
+    uint8_t x[16], y[16];
+    guest_format::DecodeDxnBlock(block, x, y);
+    for (int i = 0; i < 16; i++) {
+        CHECK(x[i] == 230);
+        CHECK(y[i] == 25);
+    }
+
+    // a white light along +x and a surface facing +z, bitangent +x and
+    // tangent +y: red (x, 2 230/255 - 1 = 0.804) tilts the normal toward
+    // the light, green (y = -0.804) away from +y, which the light doesn't see
+    ShadeParams sp{};
+    sp.flags.x = kShadeModel | kShadeLit | kShadeNormalMap | kShadeTextured;
+    sp.flags.y = 1;
+    sp.color = {1, 1, 1, 1};
+    sp.ambient = {0, 0, 0, 1};
+    sp.point_pos[0] = {1000, 0, 0, 0};
+    sp.point_color[0] = {1, 1, 1, 1};
+    sp.eye = {0, 0, 10, 1};
+    sp.normal_map = {1, 0, 1, 0};
+    const float p[3] = {0, 0, 0}, n[3] = {0, 0, 1}, vc[4] = {1, 1, 1, 1};
+    const float one[4] = {1, 1, 1, 1}, zero[4] = {0, 0, 0, 0}, no_sh[2] = {1, 1};
+    NormalMapInputs nm{};
+    nm.b[0] = 1;  // bitangent +x
+    nm.u[1] = 1;  // tangent +y
+    nm.map[0] = float(x[0]) / 255.0f;
+    nm.map[1] = float(y[0]) / 255.0f;
+    float out[4];
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, no_sh, zero, zero, out, zero, zero,
+                  1.0f, &nm);
+    // N = normalize(z (0, 0, 1) + 0.804 (1, 0, 0) - 0.804 (0, 1, 0)), z =
+    // sat(1 - 2 0.804^2) = 0: N.L = 0.804 / (0.804 sqrt 2)
+    CHECK(out[0] == doctest::Approx(1.0f / std::sqrt(2.0f)).epsilon(1e-3));
+    // the channels the other way round would turn it from the light: dark
+    nm.map[0] = float(y[0]) / 255.0f;
+    nm.map[1] = float(x[0]) / 255.0f;
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, no_sh, zero, zero, out, zero, zero,
+                  1.0f, &nm);
+    CHECK(out[0] == 0.0f);
+    // without the flag, the vertex normal: the light grazes it
+    sp.flags.x &= ~kShadeNormalMap;
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, no_sh, zero, zero, out, zero, zero,
+                  1.0f, &nm);
+    CHECK(out[0] == doctest::Approx(0.0f).epsilon(1e-6));
+    // c14 0 (de_normal 1) flattens it again
+    sp.flags.x |= kShadeNormalMap;
+    sp.normal_map.x = 0;
+    nm.map[0] = 0.75f;
+    nm.map[1] = 0.5f;
+    ShadePixelCpu(sp, p, n, vc, one, one, zero, one, 1.0f, no_sh, zero, zero, out, zero, zero,
+                  1.0f, &nm);
+    CHECK(out[0] == doctest::Approx(0.0f).epsilon(1e-6));
+}
+
+TEST_CASE("the packed vertex's normal and tangent, its handedness the top two bits") {
+    // CompressedVertex_Xbox, big-endian: position, ARGB, uv halves, normal
+    // and tangent 2_10_10_10 (x low), weights, bones
+    uint8_t v[36] = {};
+    auto put = [&](int at, uint32_t u) {
+        for (int i = 0; i < 4; i++) v[at + i] = uint8_t(u >> (24 - 8 * i));
+    };
+    auto ten = [](int s) { return uint32_t(s) & 0x3ffu; };
+    put(0, 0x3f800000u);  // x 1
+    put(16, 0x3c003800u);  // u 1, v 0.5
+    put(20, ten(0) | ten(-511) << 10 | ten(511) << 20);  // (0, -1, 1)
+    put(24, ten(511) | ten(-256) << 10 | ten(0) << 20 | 3u << 30);  // w -1
+    const Vertex out = guest_format::DecodePacked(v);
+    CHECK(out.pos[0] == 1.0f);
+    CHECK(out.uv[0] == 1.0f);
+    CHECK(out.uv[1] == 0.5f);
+    CHECK(out.nrm[0] == 0.0f);
+    CHECK(out.nrm[1] == -1.0f);
+    CHECK(out.nrm[2] == 1.0f);
+    CHECK(out.tan[0] == 1.0f);
+    CHECK(out.tan[1] == doctest::Approx(-256.0f / 511.0f));
+    CHECK(out.tan[2] == 0.0f);
+    CHECK(out.tan[3] == -1.0f);
+    put(24, 1u << 30);  // w +1
+    CHECK(guest_format::DecodePacked(v).tan[3] == 1.0f);
+    put(24, 2u << 30);  // -2, which a signed normalised fetch reads as -1
+    CHECK(guest_format::DecodePacked(v).tan[3] == -1.0f);
+    CHECK(guest_format::Snorm(0x200, 10) == -1.0f);
+}
+
 TEST_CASE("PackShade takes each term from the option word, not stale registers") {
     using namespace shader_opt;
     DrawItem it{};
@@ -628,6 +829,45 @@ TEST_CASE("PackShade takes each term from the option word, not stale registers")
     s.options &= ~Bit(kPerPixel);  // vertex-lit: left out
     PackShade(it, &s, o, true, sp);
     CHECK_FALSE(Has(sp, kShadeShadow));
+
+    // the normal map, per pixel, where it was decoded and the geometry has
+    // its tangents; the detail map with it; c14, c106 and VS c22 as given
+    s = MakeState(Bit(kRealLights) | Bit(kPerPixel) | (uint64_t(1) << kNumPoint) |
+                  Bit(kNormalMap) | Bit(kNormDetail));
+    s.ps[ShadeRegIndex(14)][0] = 0.625f;
+    s.ps[ShadeRegIndex(106)][0] = 0.25f;
+    s.ps[ShadeRegIndex(106)][1] = 6.0f;
+    s.vs[ShadeRegIndex(22)][2] = 1.0f;
+    auto tangents = std::make_shared<Geometry>();
+    tangents->tangents = true;
+    DrawItem mapped{};
+    mapped.geom = tangents;
+    PackShade(mapped, &s, o, true, sp);
+    CHECK_FALSE(Has(sp, (kShadeNormalMap | kShadeDetailMap)));  // no map
+    s.maps[kMapNormal] = map;
+    PackShade(mapped, &s, o, true, sp);
+    CHECK(Has(sp, kShadeNormalMap));
+    CHECK_FALSE(Has(sp, kShadeDetailMap));  // no detail map
+    s.maps[kMapDetailNormal] = map;
+    PackShade(mapped, &s, o, true, sp);
+    CHECK(Has(sp, kShadeNormalMap));
+    CHECK(Has(sp, kShadeDetailMap));
+    CHECK(sp.normal_map.x == 0.625f);
+    CHECK(sp.normal_map.y == 0.25f);
+    CHECK(sp.normal_map.z == 6.0f);
+    CHECK(sp.texgen_n.x == 0.5f);  // stale, as the game's VS would read it
+    CHECK(sp.texgen_n.z == 1.0f);
+    // geometry without tangents (a capture from before them), the option
+    // off, or vertex-lit: left out
+    PackShade(it, &s, o, true, sp);
+    CHECK_FALSE(Has(sp, (kShadeNormalMap | kShadeDetailMap)));
+    RasterOptions no_normal;
+    no_normal.normal_maps = false;
+    PackShade(mapped, &s, no_normal, true, sp);
+    CHECK_FALSE(Has(sp, (kShadeNormalMap | kShadeDetailMap)));
+    s.options &= ~Bit(kPerPixel);
+    PackShade(mapped, &s, o, true, sp);
+    CHECK_FALSE(Has(sp, (kShadeNormalMap | kShadeDetailMap)));
 
     // no light bits: unlit, with the ambient it was given
     s = MakeState(Bit(kDiffuseMap));

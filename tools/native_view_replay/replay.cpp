@@ -6,7 +6,8 @@
 //                               [--dump-tex <draw>[:<map>]] [--shade <draw>]
 //                               [--dump-rt <hex>[:<version>]]
 //                               [--rt-none | --rt-guest]
-//                               [--no-tex] [--no-blend] [--no-cull] [--no-shadow] [--transpose]
+//                               [--no-tex] [--no-blend] [--no-cull] [--no-shadow] [--no-normal]
+//                               [--transpose]
 //                               [--no-skinned | --only-skinned] [--unskinned]
 //                               [--legacy-light | --no-light] [--pick X,Y]
 //                               [--dump-alpha <png>] [--dump-depth <png>]
@@ -63,7 +64,10 @@
 // of the shadow map whose pass came last before it, and its VS c40..c43 are
 // that pass's view-projection times the texture's (u = .5x + .5009765625w, v =
 // -.5y + .5009765625w), as RB3's CheckShadow makes them, with its draw modes,
-// cull modes and options. --pick draws the frame at --size and prints the
+// cull modes and options. --no-normal shades every normal-mapped material
+// with its vertex normal, leaving its normal map and detail map out
+// (RasterOptions::normal_maps), as captures from before the tangents were
+// kept are drawn. --pick draws the frame at --size and prints the
 // draw that last wrote pixel X,Y, its colour and its shade.
 // Every capture prints a "post:" line, what post-processing was set to do at
 // DxRnd::DoPostProcess (post_params.h: boundary, colour matrix, bloom, DOF,
@@ -339,10 +343,24 @@ void PrintShadeSummary(const FrameCapture& fc) {
     size_t sampled[kNumShadeMaps] = {}, same_base[kNumShadeMaps] = {},
            other_base[kNumShadeMaps] = {}, decoded[kNumShadeMaps] = {};
     std::map<std::string, size_t> formats;
+    // NORMAL_MAP draws, those whose geometry kept its tangents (the
+    // renderers' normal maps need them), their skin and detail ones, and
+    // the texgen's third row, VS c22, other than (0, 0, 1): the frame turned
+    size_t nmap = 0, nmap_tangents = 0, nmap_skin = 0, nmap_detail = 0, nmap_c22 = 0,
+           nmap_rt = 0;
     for (const DrawItem& d : fc.draws) {
         const ShadeState* s = ShadeOf(fc, d);
         if (!s) continue;
         with++;
+        if (s->Option(kNormalMap) && d.rect_shader < 0) {
+            nmap++;
+            if (d.geom && d.geom->tangents) nmap_tangents++;
+            if (s->OptionBits(kCustomVariation, 2) == 1) nmap_skin++;
+            if (s->Option(kNormDetail)) nmap_detail++;
+            if (MapTargetOf(s, kMapNormal)) nmap_rt++;
+            const float* c22 = s->Vs(22);
+            if (c22[0] != 0 || c22[1] != 0 || c22[2] != 1) nmap_c22++;
+        }
         types[s->shader_type]++;
         if (!SameColor(s->Vs(0), d.color)) {
             vs_c0++;
@@ -395,6 +413,9 @@ void PrintShadeSummary(const FrameCapture& fc) {
                 "%zu; s0 bound = material's diffuse %zu, other %zu\n",
                 diffuse_bit, prelit_bit, s0_same, s0_differ);
     std::printf("  eye (camera translation) against VS c16..c18.w: off by up to %g\n", eye_off);
+    std::printf("  NORMAL_MAP draws %zu, their geometry with tangents %zu; skin %zu, "
+                "NORM_DETAIL %zu, VS c22 not (0,0,1) %zu, the map a render target %zu\n",
+                nmap, nmap_tangents, nmap_skin, nmap_detail, nmap_c22, nmap_rt);
     for (int m = 0; m < kNumShadeMaps; m++) {
         if (!sampled[m]) continue;
         std::printf("  %-9s sampled by %zu draws, %zu decoded; bound = material's %zu, other %zu\n",
@@ -846,6 +867,7 @@ int main(int argc, char** argv) {
         else if (a == "--no-blend") o.blending = false;
         else if (a == "--no-cull") o.culling = false;
         else if (a == "--no-shadow") o.self_shadow = false;
+        else if (a == "--no-normal") o.normal_maps = false;
         else if (a == "--no-tex") o.textures = false;
         else if (a == "--legacy-light") o.legacy_light = true;
         else if (a == "--no-light") o.lighting = false;

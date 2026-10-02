@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <unordered_map>
 #include <vector>
@@ -16,7 +17,10 @@
 //         the render targets rt_filtered counts (a counted list; a file
 //         without it: none)
 //   GEOM  geometry, with the vertex's size: Vertex only ever grows at the end,
-//         so a file with another size keeps the fields both have
+//         so a file with another size keeps the fields both have; version 2
+//         adds whether each one's verts have their tangents (Geometry::
+//         tangents: a version 1 file's have none, and its normal maps are
+//         left out)
 //   TEXS  textures, with render targets' identity; one whose pixels another
 //         has already points at those
 //   SHAD  shade states field by field, with the register list and the number
@@ -66,7 +70,7 @@ constexpr uint32_t kSecPost = FourCC("POST");
 constexpr uint32_t kSecGamma = FourCC("GAMA");
 // the versions this build writes and reads
 constexpr uint32_t kFrameVersion = 1;
-constexpr uint32_t kGeometryVersion = 1;
+constexpr uint32_t kGeometryVersion = 2;
 constexpr uint32_t kTexturesVersion = 1;
 constexpr uint32_t kShadesVersion = 1;
 constexpr uint32_t kDrawsVersion = 3;
@@ -252,15 +256,16 @@ constexpr NamedCount kFrameCounts[] = {
     {&FrameCapture::rt_filtered},
 };
 
-// B3CAP001 and B3CAP002, after the magic
+// B3CAP001 and B3CAP002, after the magic; their Vertex ended at its weights
 std::shared_ptr<FrameCapture> LoadOld(Reader& r, bool v1) {
+    constexpr size_t kOldVertex = offsetof(Vertex, tan);
     auto fc = std::make_shared<FrameCapture>();
     fc->frame = r.Get<uint64_t>();
     std::vector<std::shared_ptr<const Geometry>> geoms(r.Get<uint32_t>());
     for (auto& g : geoms) {
         auto geom = std::make_shared<Geometry>();
         geom->verts.resize(r.Get<uint32_t>());
-        r.Raw(geom->verts.data(), geom->verts.size() * sizeof(Vertex));
+        for (Vertex& v : geom->verts) r.Raw(&v, kOldVertex);
         geom->indices.resize(r.Get<uint32_t>());
         r.Raw(geom->indices.data(), geom->indices.size() * sizeof(uint16_t));
         if (!r.ok) return nullptr;
@@ -409,6 +414,7 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
         w.Raw(g->verts.data(), g->verts.size() * sizeof(Vertex));
         w.Put<uint32_t>(uint32_t(g->indices.size()));
         w.Raw(g->indices.data(), g->indices.size() * sizeof(uint16_t));
+        w.Put<uint8_t>(g->tangents ? 1 : 0);
     }
     w.End(sec);
 
@@ -603,6 +609,7 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                 if (!r.Count(ni, sizeof(uint16_t))) return nullptr;
                 geom->indices.resize(ni);
                 r.Raw(geom->indices.data(), size_t(ni) * sizeof(uint16_t));
+                if (version >= 2) geom->tangents = r.Get<uint8_t>() != 0;
                 g = std::move(geom);
             }
             have_geoms = true;

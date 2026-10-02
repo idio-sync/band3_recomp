@@ -45,6 +45,14 @@ static const uint kShadeProjGobo = 8388608u;
 // pixel, darkens the point lights (shade.hlsli's ShadowLit); set only where
 // the backend has that map
 static const uint kShadeShadow = 16777216u;
+// NORMAL_MAP, per pixel: s1 (DXN, x and y) tilts the normal in the tangent
+// frame the vertex shader builds (shade.hlsli's TextureFrame, MappedNormals);
+// set only where the backend has the map and the geometry its tangents
+// (Geometry::tangents)
+static const uint kShadeNormalMap = 33554432u;
+// NORM_DETAIL, with kShadeNormalMap: s14, a second normal map at uv times
+// c106.y, adds c106.x of its tilt
+static const uint kShadeDetailMap = 67108864u;
 
 // Register names are the game shaders' (scene_capture.h's kShadeRegs), PS
 // unless VS is said.
@@ -71,4 +79,10 @@ struct ShadeParams {
     float4 shadow[4];      // VS c40..c43: the shadow map's coordinate S = (c40 P, .., c43 P)
     float4 shadow_color;   // c107: 1 - the shadow's colour
     float4 shadow_dir;     // c108: the light camera's forward
+    // the normal map's: x c14.x (1 - de_normal), how much of its tilt the
+    // normal takes; y c106.x, the detail map's share, z c106.y, its uv scale
+    float4 normal_map;
+    // VS c22, the texgen matrix's third row: the tangent frame's normal is
+    // c22.x T + c22.y B + c22.z N, as its tangent is c20's (TextureFrame)
+    float4 texgen_n;
 };

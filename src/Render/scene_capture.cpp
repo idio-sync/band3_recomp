@@ -25,6 +25,7 @@
 
 #include "generated/band3_init.h"
 #include "src/Render/frame_compose.h"
+#include "src/Render/guest_formats.h"
 #include "src/settings.h"
 
 // See scene_capture.h.
@@ -293,56 +294,14 @@ Mat4 ReadMatrix4(const Guest& g, uint32_t a) {
     return r;
 }
 
-float HalfToFloat(uint16_t h) {
-    const uint32_t sign = (h >> 15) & 1;
-    const uint32_t exp = (h >> 10) & 0x1f;
-    const uint32_t mant = h & 0x3ff;
-    float v;
-    if (exp == 0) {
-        v = std::ldexp(float(mant), -24);
-    } else if (exp == 31) {
-        v = mant ? NAN : INFINITY;
-    } else {
-        v = std::ldexp(float(mant | 0x400), int(exp) - 25);
-    }
-    return sign ? -v : v;
-}
-
-float Dec10(uint32_t bits) {
-    int s = int(bits & 0x3ff);
-    if (s & 0x200) s -= 0x400;
-    return std::max(-1.0f, float(s) / 511.0f);
-}
+// DxMesh's packed vertex and the DXN block (guest_formats.h)
+using guest_format::DecodeDxnBlock;
+using guest_format::DecodeDxt5Alpha;
+using guest_format::DecodePacked;
 
 uint32_t Fnv(const uint8_t* p, size_t n, uint32_t h = 2166136261u) {
     for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
     return h;
-}
-
-// CompressedVertex_Xbox, as DxMesh's vertex declaration reads it
-Vertex DecodePacked(const uint8_t* p) {
-    Vertex v{};
-    for (int i = 0; i < 3; i++) v.pos[i] = BeF32(p + i * 4);
-    const uint32_t argb = Be32(p + 12);
-    v.color = ((argb >> 16) & 0xff) | (((argb >> 8) & 0xff) << 8) | ((argb & 0xff) << 16) |
-              (argb & 0xff000000u);
-    const uint32_t uv = Be32(p + 16);
-    v.uv[0] = HalfToFloat(uint16_t(uv >> 16));
-    v.uv[1] = HalfToFloat(uint16_t(uv & 0xffff));
-    const uint32_t n = Be32(p + 20);
-    v.nrm[0] = Dec10(n);
-    v.nrm[1] = Dec10(n >> 10);
-    v.nrm[2] = Dec10(n >> 20);
-    const uint32_t w = Be32(p + 28);
-    float sum = 0;
-    for (int i = 0; i < 3; i++) {
-        v.weight[i] = float((w >> (10 * i)) & 0x3ff) / 1023.0f;
-        sum += v.weight[i];
-    }
-    v.weight[3] = std::max(0.0f, 1.0f - sum);
-    const uint32_t bi = Be32(p + 32);
-    for (int i = 0; i < 4; i++) v.bone[i] = uint8_t(bi >> (8 * i));
-    return v;
 }
 
 // RndMesh::Vert in guest memory
@@ -364,6 +323,11 @@ Vertex DecodeCpuVert(const Guest& g, uint32_t a) {
     v.color = rgba;
     v.uv[0] = g.F32(a + 0x40);
     v.uv[1] = g.F32(a + 0x44);
+    // the tangent and its handedness, which FillCompressedVertex packs into
+    // the vertex buffer's 2_10_10_10 (guest_formats.h's DecodePacked): w as
+    // its two bits keep it, -1, 0 or 1
+    for (int i = 0; i < 3; i++) v.tan[i] = g.F32(a + 0x50 + i * 4);
+    v.tan[3] = std::clamp(std::round(g.F32(a + 0x5c)), -1.0f, 1.0f);
     return v;
 }
 
@@ -436,22 +400,6 @@ void DecodeColorBlock(const uint8_t* b, bool four_colour, Rgba out[16]) {
     for (int i = 0; i < 16; i++) out[i] = pal[(idx >> (2 * i)) & 3];
 }
 
-void DecodeDxt5Alpha(const uint8_t* b, uint8_t out[16]) {
-    uint8_t pal[8];
-    pal[0] = b[0];
-    pal[1] = b[1];
-    if (pal[0] > pal[1]) {
-        for (int i = 1; i < 7; i++) pal[i + 1] = uint8_t(((7 - i) * pal[0] + i * pal[1]) / 7);
-    } else {
-        for (int i = 1; i < 5; i++) pal[i + 1] = uint8_t(((5 - i) * pal[0] + i * pal[1]) / 5);
-        pal[6] = 0;
-        pal[7] = 255;
-    }
-    uint64_t bits = 0;
-    for (int i = 0; i < 6; i++) bits |= uint64_t(b[2 + i]) << (8 * i);
-    for (int i = 0; i < 16; i++) out[i] = pal[(bits >> (3 * i)) & 7];
-}
-
 struct FormatInfo {
     uint32_t block;  // block width and height in texels
     uint32_t bpb;    // bytes per block
@@ -507,11 +455,9 @@ void DecodeBlock(uint32_t format, const uint8_t* b, Rgba out[16]) {
             break;
         }
         case 49: {
-            // two DXT5 alpha blocks, x then y, as Xenia reads it (BC5); normal
-            // maps' tangent-space x and y
+            // normal maps' tangent-space x and y (guest_formats.h)
             uint8_t x[16], y[16];
-            DecodeDxt5Alpha(b, x);
-            DecodeDxt5Alpha(b + 8, y);
+            DecodeDxnBlock(b, x, y);
             for (int i = 0; i < 16; i++) out[i] = Rgba{{x[i], y[i], 0, 255}};
             break;
         }
@@ -814,6 +760,7 @@ std::shared_ptr<const Geometry> CaptureGeometry(const Guest& g, uint32_t geom,
         out->verts.resize(num_verts);
         for (uint32_t i = 0; i < num_verts; i++)
             out->verts[i] = DecodePacked(vsrc + i * kPackedVert_Size);
+        out->tangents = true;
         out->indices.reserve(num_indices);
         for (uint32_t i = 0; i + 2 < num_indices; i += 3) {
             const uint16_t a = Be16(isrc + i * 2), b = Be16(isrc + i * 2 + 2),
@@ -837,6 +784,7 @@ std::shared_ptr<const Geometry> CaptureGeometry(const Guest& g, uint32_t geom,
     out->verts.resize(num_verts);
     for (uint32_t i = 0; i < num_verts; i++)
         out->verts[i] = DecodeCpuVert(g, verts + i * kVert_Size);
+    out->tangents = true;
     out->indices.reserve(num_faces_cpu * 3);
     for (uint32_t i = 0; i < num_faces_cpu; i++) {
         const uint16_t a = g.U16(faces + i * 6), b = g.U16(faces + i * 6 + 2),
@@ -1180,13 +1128,16 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
         if (MapSampled(in, m)) fetch(kShadeMapSampler[m], in.fetch[m]);
     }
 
-    // s5 bound to a texture a pass draws (the shadow map, NgLight's shadow):
-    // its identity and the version it has now, as a diffuse render target's,
-    // and a sample the capture has to have the pass of
-    if (const uint32_t base = in.fetch[kMapProjected][1] & 0xfffff000u) {
+    // s5, s1 or s14 bound to a texture a pass draws (the shadow map,
+    // NgLight's shadow, a head's normal map): its identity and the version it
+    // has now, as a diffuse render target's, and a sample the capture has to
+    // have the pass of
+    for (int m : {kMapProjected, kMapNormal, kMapDetailNormal}) {
+        const uint32_t base = in.fetch[m][1] & 0xfffff000u;
+        if (!base) continue;
         for (const auto& [tex, rt] : s.rts) {
             if (rt.base != base) continue;
-            shade.maps[kMapProjected] = CaptureTexture(g, s, sink, tex);
+            shade.maps[m] = CaptureTexture(g, s, sink, tex);
             break;
         }
     }

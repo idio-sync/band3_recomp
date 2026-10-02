@@ -48,11 +48,21 @@ struct Vertex {
     uint32_t color;  // RGBA8, R in the low byte
     uint8_t bone[4];
     float weight[4];
+    // the tangent, xyz, and its handedness, w (+-1): what a NORMAL_MAP
+    // material's vertex shader builds the normal map's frame from
+    // (shaders/shade.hlsli's TextureFrame). Last, as capture_file.cpp's
+    // GEOM needs: Vertex only grows at the end.
+    float tan[4];
 };
 
 struct Geometry {
     std::vector<Vertex> verts;
     std::vector<uint16_t> indices;  // triangle list
+    // the verts' tangents are the mesh's (a vertex buffer's or a mutable
+    // mesh's): false for geometry band3 builds (particles, DrawRect quads)
+    // and in captures from before they were kept, whose normal maps the
+    // renderers leave out
+    bool tangents = false;
 };
 
 // Corner k (0..3) of a particle's quad, as RB3's particle VS builds it from
@@ -226,11 +236,12 @@ struct ShadeInputs {
 
 struct ShadeState : ShadeInputs {
     // the maps' mip 0 (2D only), null where none was bound, it's a cube or its
-    // format isn't decoded. s5 (kMapProjected) bound to a texture RB3 draws
-    // at runtime (its fetch constant's base is one a texture pass draws: the
-    // shadow map, NgLight's shadow) is that texture's identity and version
-    // instead (Texture::tex_obj), with guest memory's pixels as a diffuse
-    // render target has them.
+    // format isn't decoded. s5 (kMapProjected), s1 (kMapNormal) or s14
+    // (kMapDetailNormal) bound to a texture RB3 draws at runtime (its fetch
+    // constant's base is one a texture pass draws: the shadow map, NgLight's
+    // shadow, a character's head's normal map) is that texture's identity
+    // and version instead (Texture::tex_obj), with guest memory's pixels as a
+    // diffuse render target has them.
     std::shared_ptr<const Texture> maps[kNumShadeMaps];
 };
 
@@ -363,6 +374,19 @@ inline const Texture* ProjectedTargetOf(const ShadeState* s) {
     if (!s || !s->OptionBits(shader_opt::kNumProj, 2) || !s->Option(shader_opt::kPerPixel))
         return nullptr;
     const Texture* t = s->maps[kMapProjected].get();
+    return t && t->tex_obj && IsPassTargetType(t->tex_type) && t->tex_type != kTexTypeShadowMap
+               ? t
+               : nullptr;
+}
+
+// The normal map or the detail map (kMapNormal, kMapDetailNormal) when it's a
+// texture RB3 draws, as the capture kept it (its identity and version), or
+// null: a character's head's normal map, head_wrinkle_output.tex, which a
+// texture pass composes from its expressions' as the face moves (guest
+// memory's copy is garbage without --readback_resolve=full)
+inline const Texture* MapTargetOf(const ShadeState* s, int map) {
+    if (!s || (map != kMapNormal && map != kMapDetailNormal)) return nullptr;
+    const Texture* t = s->maps[map].get();
     return t && t->tex_obj && IsPassTargetType(t->tex_type) && t->tex_type != kTexTypeShadowMap
                ? t
                : nullptr;
