@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "src/Render/frame_compose.h"
 
@@ -122,6 +123,26 @@ void Blur(const Level& src, const float4* taps, int n, Level& dst) {
     }
 }
 
+// the glare pass over level 0 `src`, into `dst`
+void Glare(const Level& src, Level& dst) {
+    dst.Resize(src.w, src.h);
+    for (uint32_t y = 0; y < dst.h; y++) {
+        for (uint32_t x = 0; x < dst.w; x++) {
+            const float2 uv = Uv(x, y, dst);
+            const float2 stride = GlareStep(uv);
+            float2 at = uv;
+            float3 sum{0, 0, 0};
+            for (int k = 0; k < kGlareTaps; k++) {
+                const float4 t = Sample(src, at);
+                sum = sum + GlareTerm(float3{t.x, t.y, t.z}, GlareWeight(at));
+                at = float2{at.x + stride.x, at.y + stride.y};
+            }
+            const float3 rgb = GlareOut(sum);
+            dst.px[size_t(y) * dst.w + x] = Unorm8(float4{rgb.x, rgb.y, rgb.z, 1});
+        }
+    }
+}
+
 float3 Rgb(const float* v) { return {v[0], v[1], v[2]}; }
 float4 Rgba(const float* v) { return {v[0], v[1], v[2], v[3]}; }
 
@@ -197,6 +218,22 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan) {
         }
         if (spot_volume) flags |= kPostSpot;
     }
+    // The soft particles' term reads the first surface of
+    // RndSoftParticleBuffer, which its DoPost cleared and drew its particles
+    // into after DoPostProcess started (and blurred into the second and
+    // back). Without that pass the capture has no particles to draw (one
+    // from before, or a frame whose queue held none it keeps).
+    uint32_t soft = 0;
+    if (consts && c.flags[kPostFlagSoft] && c.soft_surface[0]) {
+        for (const Pass& s : frame.passes) {
+            if (s.tex_obj == c.soft_surface[0] && (s.clear_flags & 0x0f) &&
+                s.first_draw >= frame.post_boundary) {
+                soft = s.tex_obj;
+                flags |= kPostSoft;
+                break;
+            }
+        }
+    }
     if (only) flags &= only;
     if (!flags) return false;
 
@@ -221,6 +258,7 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan) {
         plan.spot_volume = spot_volume;
         plan.spot_density = spot_density;
     }
+    if (flags & kPostSoft) plan.soft = soft;
 
     DofTaps(false, p.blur_width_scale, plan.dof_taps[0]);
     DofTaps(true, p.blur_width_scale, plan.dof_taps[1]);
@@ -236,7 +274,8 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan) {
 
 void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
              const std::vector<float>& depth, uint32_t width, uint32_t height,
-             const PostImage& volume, const PostImage& density, std::vector<uint32_t>& out) {
+             const PostImage& volume, const PostImage& density, const PostImage& soft,
+             std::vector<uint32_t>& out, std::vector<uint32_t>* bloom0) {
     const PostPass& pass = plan.composite;
     const uint32_t flags = pass.flags.x;
     Level src;
@@ -263,19 +302,37 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
             Blur(bloom[k], plan.bloom_taps[k][0], 15, tmp);
             Blur(tmp, plan.bloom_taps[k][1], 15, bloom[k]);
         }
+        // with glare, its pass over level 0, which the composite reads
+        if (flags & kPostGlare) {
+            Glare(bloom[0], tmp);
+            std::swap(bloom[0], tmp);
+        }
+        if (bloom0) {
+            bloom0->resize(bloom[0].px.size());
+            for (size_t i = 0; i < bloom0->size(); i++) {
+                const float4 c = bloom[0].px[i];
+                (*bloom0)[i] = uint32_t(c.x * 255.0f + 0.5f) | uint32_t(c.y * 255.0f + 0.5f) << 8 |
+                               uint32_t(c.z * 255.0f + 0.5f) << 16 |
+                               uint32_t(c.w * 255.0f + 0.5f) << 24;
+            }
+        }
+    } else if (bloom0) {
+        bloom0->clear();
     }
 
-    // the spotlights' depth volume and density map, as they were drawn
-    Level spot[2];
+    // the spotlights' depth volume and density map, and the soft-particle
+    // surface, as they were drawn
+    auto load = [](const PostImage& image, Level& l) {
+        if (!image.px || !image.w || !image.h) return;
+        l.Resize(image.w, image.h);
+        for (size_t i = 0; i < l.px.size(); i++) l.px[i] = Unpack(image.px[i]);
+    };
+    Level spot[2], soft_level;
     if (flags & kPostSpot) {
-        const PostImage* images[2] = {&volume, &density};
-        for (int k = 0; k < 2; k++) {
-            const PostImage& image = *images[k];
-            if (!image.px || !image.w || !image.h) continue;
-            spot[k].Resize(image.w, image.h);
-            for (size_t i = 0; i < spot[k].px.size(); i++) spot[k].px[i] = Unpack(image.px[i]);
-        }
+        load(volume, spot[0]);
+        load(density, spot[1]);
     }
+    if (flags & kPostSoft) load(soft, soft_level);
 
     out.resize(size_t(width) * height);
     const float4 none{0, 0, 0, 0};
@@ -299,8 +356,13 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
                 vol = {v.x, v.y, v.z};
             }
             if (!spot[1].px.empty()) dens = Sample(spot[1], uv).x;
+            float3 particles{0, 0, 0};
+            if (!soft_level.px.empty()) {
+                const float4 s = Sample(soft_level, uv);
+                particles = {s.x, s.y, s.z};
+            }
             const float3 rgb = Composite(pass, src.px[i], d, GameDepth(pass, depth[i]), l[0], l[1],
-                                         l[2], vol, dens);
+                                         l[2], vol, dens, particles);
             out[i] = uint32_t(rgb.x * 255.0f + 0.5f) | uint32_t(rgb.y * 255.0f + 0.5f) << 8 |
                      uint32_t(rgb.z * 255.0f + 0.5f) << 16 | 0xff000000u;
         }
@@ -313,9 +375,9 @@ float DofAmountCpu(const float c24[4], float depth) { return DofAmount(Rgba(c24)
 
 void CompositeCpu(const PostPass& pass, const float scene[4], const float dof[4], float depth,
                   const float l0[3], const float l1[3], const float l2[3], const float volume[3],
-                  float density, float out[3]) {
+                  float density, const float soft[3], float out[3]) {
     const float3 r = Composite(pass, Rgba(scene), Rgba(dof), depth, Rgb(l0), Rgb(l1), Rgb(l2),
-                               Rgb(volume), density);
+                               Rgb(volume), density, Rgb(soft));
     out[0] = r.x;
     out[1] = r.y;
     out[2] = r.z;

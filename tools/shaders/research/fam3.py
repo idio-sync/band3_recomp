@@ -14,11 +14,16 @@ def model(c, r, t, o):
         N = norm([nz*r[3][k] + c[14][0]*(nx*r[5][k] + ny*r[4][k]) for k in range(3)])
     ao = r[o['aoreg']] if o['col'] == 'ao' else [1, 1, 1, 1]
     aoA = ao[3]
-    # projected light (multiply/shadow form)
+    # projected light: the multiply/shadow form scales the light but c1 by
+    # pm; the gobo form (s10 sampled) adds its light, masked by s5's alpha
     pm = [1, 1, 1]
+    gobo = [0, 0, 0]
     if o['proj']:
         g = t['tf5'][3]; nl = sat(dot(N, c[66]))
-        pm = [1-0.75*c[69][k]*g*nl for k in range(3)]
+        if o.get('gobo'):
+            gt = t['tf10']; gobo = [c[69][k]*gt[k]*(1-g)*nl*ao[1] for k in range(3)]
+        else:
+            pm = [1-0.75*c[69][k]*g*nl for k in range(3)]
     # shadow buffer
     sh = [1, 1, 1]
     if o['shadow']:
@@ -34,7 +39,7 @@ def model(c, r, t, o):
         w = [ao[i]*k_sh[k]*pm[k]*att for k in range(3)]   # per-light weight (rgb)
         lights.append((i, Ln, w))
     bx = [box(N, c)[k]*pm[k] for k in range(3)]
-    dl = [0, 0, 0]
+    dl = list(gobo)
     for i, Ln, w in lights:
         nl = sat(dot(N, Ln)); dl = [dl[k] + c[67+i][k]*w[k]*nl for k in range(3)]
     if o['col'] == 'vc':
@@ -81,7 +86,7 @@ def model(c, r, t, o):
 
 def search(h, n=30):
     cs, tfs, txt = refs(h)
-    base = dict(detail='14' in tfs, rim=63 in cs, rimmap='15' in tfs, hair=13 in cs, nmap=14 in cs, proj=95 in cs,
+    base = dict(detail='14' in tfs, rim=63 in cs, rimmap='15' in tfs, hair=13 in cs, nmap=14 in cs, proj=95 in cs, gobo='10' in tfs,
                 npt=(2 if 65 in cs else 1 if 64 in cs else 0), spec=2 in cs, glow='3' in tfs,
                 intens=bool(re.search(r'c5.y', txt)), tex='0' in tfs, specmap='2' in tfs)
     runs = []
@@ -117,7 +122,7 @@ if __name__ == '__main__':
         try:
             best, o, alpha, cs, tfs = search(h)
             extra = sorted(x for x in cs if x not in (0, 1, 2, 5, 7, 64, 65, 67, 68, 80, 81, 82, 83, 84, 85) and x < 240)
-            flags = ' '.join(k for k in ('nmap', 'detail', 'spec', 'specmap', 'hair', 'rim', 'rimmap', 'proj', 'glow', 'intens', 'tex') if o[k])
+            flags = ' '.join(k for k in ('nmap', 'detail', 'spec', 'specmap', 'hair', 'rim', 'rimmap', 'proj', 'gobo', 'glow', 'intens', 'tex') if o[k])
             print(h, '%2d/30' % best[0], 'col=%s%s' % (o['col'], '@r%d' % o['aoreg'] if o['col'] == 'ao' else ''),
                   'shadow@r%d%s' % (o['shadow'], '(all)' if o['shall'] else '') if o['shadow'] else '', 'env=%s' % o['env'] if o['env'] else '',
                   'rimNz' if o['rimnz'] else '', 'npt=%d' % o['npt'], flags, 'alpha', alpha, 'tf', sorted(tfs), 'extra', extra)

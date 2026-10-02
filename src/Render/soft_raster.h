@@ -16,10 +16,20 @@
 // render target samples what its passes have drawn so far, which makes the
 // versions right (the crowd's impostor is drawn eight times a frame, each
 // sampled in between). Texture targets keep alpha: impostors are alpha-cut
-// against the clear's 0, and outfit layers blend by it. Mips aren't sampled:
-// every texture is read nearest at level 0, on the GPU too. The spotlights'
+// against the clear's 0, and outfit layers blend by it. A material's textures
+// are read as the game's samplers read them (sample_model.h: filtered,
+// between mip levels by the pixel's footprint), a render target's mips made
+// after its pass as the GPU makes them (BuildMips). The spotlights'
 // cones shade by spot_model.h instead, reading the world's depth where they
-// are on the screen, and the depth volume's blurs blur it in place.
+// are on the screen, and the depth volume's blurs blur it in place; the soft
+// particles (scene_capture.h's IsSoftParticle) fade by that depth, and their
+// buffer's blurs take their taps from one surface into the other. A shadow
+// map's pass (kTexTypeShadowMap) draws depth alone, clip z/w less than what's
+// there (cleared to 1), into a float buffer of its target's, which the
+// SHADOW_BUFFER draws after it read (RasterOptions::self_shadow). NgLight's
+// shadow (scene_capture.h's ProjectedTargetOf) is drawn as RB3 draws it: its
+// casters' silhouettes into its texture (ShadowCasterPass), blurred twice in
+// place (spot::SpotBlur); the projected light's draws read that as their s5.
 //
 // The back buffer's draws are split at post_boundary, as RB3 draws them: the
 // world's go to a scene target, which keeps alpha as RB3's back buffer does
@@ -30,7 +40,8 @@
 // scene target's colour, alpha and depth, or a copy (alpha made opaque) on
 // frames without it or with RasterOptions::post off. An overlay draw that
 // reads the picture behind it (RefractsWorld) reads a copy of it as the
-// resolve left it.
+// resolve left it. The display's gamma ramp (gamma_ramp.h) goes over the
+// finished picture.
 
 namespace band3::render {
 
@@ -62,12 +73,36 @@ struct RasterOptions {
     // transparent black; off, they're never used (texture_passes off then
     // draws render targets untextured)
     bool rt_guest_pixels = true;
+    // RB3's character self-shadows: the shadow maps (scene_capture.h's
+    // kTexTypeShadowMap) drawn, their depth alone, and read by the
+    // SHADOW_BUFFER draws after them (shade.hlsli's ShadowLit); off, those
+    // draws are lit, as before the capture kept the maps
+    bool self_shadow = true;
+    // RB3's normal maps and detail maps (NORMAL_MAP, NORM_DETAIL), where the
+    // capture kept the geometry's tangents (Geometry::tangents) and decoded
+    // the maps: the normal tilted in the tangent frame the game's vertex
+    // shaders build (shaders/shade.hlsli's MappedNormals); off, those draws
+    // are shaded with the vertex normal, as before the capture kept tangents
+    bool normal_maps = true;
+    // the game's samplers (scene_capture.h's TexSampler, sample_model.h):
+    // filtering, mip levels by the footprint, anisotropy and addressing as
+    // each draw's fetch constants say, where the capture kept them; off,
+    // every texture nearest at level 0, wrapping, as before
+    bool filtering = true;
     // RB3's post-processing at post_boundary (post_model.h): depth of field,
     // bloom and the colour matrix, as the frame set them; off, the scene as
     // it is
     bool post = true;
     // with post, only these of its effects (post_model.h's kPost bits), 0 all
     uint32_t post_only = 0;
+    // with post, if given: bloom's level 0 as the composite read it
+    // (post_model.h's RunPost), to check it against the game's
+    std::vector<uint32_t>* post_bloom0 = nullptr;
+    // the display gamma ramp the frame was shown through (FrameCapture::
+    // gamma, gamma_ramp.h), last, over the overlay too, as the screen and the
+    // harness's screenshot have it; off, the picture as RB3 drew it. Not
+    // applied to the scene target's views.
+    bool gamma = true;
     RasterView view = RasterView::kFinal;
 };
 
@@ -94,16 +129,50 @@ struct PassRun {
 };
 // The frame's back-buffer stretches, and the texture passes that something
 // drawn after them samples (by texture, any version: a pass that clears hides
-// the ones before it), but none from post-processing on, which isn't drawn
-// yet, other than the spotlights' (the depth volume's cones and blurs, and
-// the density map its cones read: spot_model.h), which the composite's
-// spotlight term samples where it's on (post_model.h's PlanPost). A capture
+// the ones before it), as its diffuse texture, as its projected light's map
+// (ProjectedTargetOf), with normal_maps as its normal or detail map
+// (MapTargetOf) or, with self_shadow, as its shadow map (ShadowMapOf),
+// but none from post-processing on, which isn't
+// drawn yet, other than the spotlights' (the depth volume's cones and blurs,
+// and the density map its cones read: spot_model.h), the soft particles' (the
+// particles into the first surface, its blur into the second and back),
+// which the composite's terms sample where they're on (post_model.h's
+// PlanPost), and shadow maps (for a character in the overlay). A capture
 // without passes is one back-buffer stretch.
 std::vector<PassRun> PlanPasses(const FrameCapture& frame, const RasterOptions& options);
+
+// Whether pass p's draw is RndSoftParticleBuffer::BlurSurface's: a DrawRect
+// blur (shader 1) into one of its surfaces (PostConsts::soft_surface) from
+// the other, with the taps its shade state kept (c31.. their uv offsets,
+// c47.. their weights): across ([0] into [1]), then down ([1] back into
+// [0]), at -1.5..2.5 texels along and 0.5 across, weights .1 .25 .3 .25 .1
+// (out/research/softparticle_survey.md 1). The taps fall between texels,
+// so they're bilinear, and the two passes move the buffer a texel right and
+// down, as the game's do. The renderers draw it from the source surface's
+// target with the taps, rather than as a quad sampling it.
+inline constexpr int kSoftBlurTaps = 5;
+bool SoftBlur(const FrameCapture& frame, const DrawItem& d, const ShadeInputs* state,
+              const Pass& p);
 
 // a texture pass's draws but FinishDrawTarget's mip downsamples: the
 // renderers make mips themselves, or sample level 0
 inline bool DrawnInTexturePass(const DrawItem& d) { return d.mip_level == 0; }
+
+// Whether pass p is NgLight::RenderShadows' pass of its shadow casters (its
+// draws in draw mode 3): no camera selects it, so the capture has no clear
+// for it, but SetAndClearShadowViewport clears it to transparent black
+// (PassClearFlags) before the casters draw their silhouettes into it, opaque
+// white (shade_model.cpp's PackShade), untextured (SamplesDiffuse), culled
+// and blended as each says
+bool ShadowCasterPass(const FrameCapture& frame, const Pass& p);
+// the D3DCLEAR bits pass p starts with: its camera's, or a shadow caster
+// pass's colour clear (Pass::clear_color is then 0, transparent black)
+inline uint32_t PassClearFlags(const FrameCapture& frame, const Pass& p) {
+    return p.clear_flags | (ShadowCasterPass(frame, p) ? 0x0fu : 0u);
+}
+// whether a draw samples its diffuse texture: not a shadow caster, whose
+// shader has no DIFFUSE_MAP though its material has a texture
+inline bool SamplesDiffuse(const DrawItem& d) { return d.draw_mode != kDrawModeShadowCasters; }
 
 // a texture that texture passes draw, which a renderer samples from its own
 // target
@@ -153,8 +222,9 @@ inline uint32_t ArgbToRgba(uint32_t c) {
 // Draws `frame` on the CPU as Rasterize() does up to the pass that makes
 // `version` of the texture `tex_obj` (0: to the frame's end, its last), and
 // gives back what that texture's target holds then (RGBA8, the pass's size,
-// alpha kept): what native_view_replay's --dump-rt shows. False if no pass in
-// the capture draws it.
+// alpha kept; a shadow map's depth as opaque grey, white at its near plane
+// to black at its far one): what native_view_replay's --dump-rt shows. False
+// if no pass in the capture draws it.
 bool RasterizeTarget(const FrameCapture& frame, const RasterOptions& options, uint32_t tex_obj,
                      uint32_t version, std::vector<uint32_t>& rgba, uint32_t& width,
                      uint32_t& height, RasterStats* stats = nullptr);

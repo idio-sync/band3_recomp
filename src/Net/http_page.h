@@ -5,7 +5,8 @@
 // button that selects a song in the game's Music Library. It uses RB3E's
 // endpoints only, so RB3E's own page (rb3e_index.html in the game data root)
 // can replace it, and this one works against RB3E too. Nothing loads from
-// outside the server.
+// outside the server: the logo and favicon are band3.ico's 32x32 image, as a
+// PNG data URI (redo them if the icon changes).
 
 namespace band3::http {
 
@@ -15,6 +16,7 @@ inline constexpr std::string_view kIndexPage = R"html(<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>band3 songs</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABLElEQVR42sVX7Q6CMAzsNeW/PpvhJcVngwcgsf4RFNxYt3W4hIQAY9ePu7aQ+0ihNfdX8lzdMAWfS2KfOp2P2Aum9gsx608B0D2mQ0+2BgAClgBoCAi3jvt8u2TlgDpa/7FYN4moOSyA8SBrAuILGPYA1MLbnVZUe4wLrbYIVYx+m1BwSezfh2sp9488AK8MTHho9QIX/lgtDJj7azJU3ODwIJA4ANAZKwpCyK+yFVESMoxEum6GQ+JZ2fGmIeDddCBHNdmXfD5K2KT1iumD0FP/YfiacxKqUke8tUqsdT8navnPlVI2YzeNEADUioqFhvt7iXyAxI8WEKgVInFKpmKGcKGguA0nXKFqLsMJ14xVzSejbphqPZFszTizyCAj3qa+ELHxvFRscpXyBalCeV1YdpzwAAAAAElFTkSuQmCC">
 <style>
 :root {
   --bg: #f5f5f3; --panel: #ffffff; --text: #1d1d1f; --muted: #6b6b70;
@@ -37,6 +39,11 @@ header {
 }
 .bar { max-width: 760px; margin: 0 auto; display: flex; gap: 8px; align-items: center; }
 h1 { font-size: 18px; margin: 0 8px 0 0; white-space: nowrap; }
+/* a dark tile in both themes: the icon's "3" is white */
+.logo {
+  flex: none; width: 40px; height: 40px; padding: 4px; border-radius: 8px;
+  background: #1d1d20; image-rendering: pixelated;
+}
 input, select, button { font: inherit; color: inherit; }
 input[type=search] {
   flex: 1; min-width: 0; padding: 9px 12px; border-radius: 8px;
@@ -84,6 +91,7 @@ button.plain { background: var(--tag); color: var(--text); font-weight: 500; }
 <body>
 <header>
   <div class="bar">
+    <img class="logo" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABLElEQVR42sVX7Q6CMAzsNeW/PpvhJcVngwcgsf4RFNxYt3W4hIQAY9ePu7aQ+0ihNfdX8lzdMAWfS2KfOp2P2Aum9gsx608B0D2mQ0+2BgAClgBoCAi3jvt8u2TlgDpa/7FYN4moOSyA8SBrAuILGPYA1MLbnVZUe4wLrbYIVYx+m1BwSezfh2sp9488AK8MTHho9QIX/lgtDJj7azJU3ODwIJA4ANAZKwpCyK+yFVESMoxEum6GQ+JZ2fGmIeDddCBHNdmXfD5K2KT1iumD0FP/YfiacxKqUke8tUqsdT8navnPlVI2YzeNEADUioqFhvt7iXyAxI8WEKgVInFKpmKGcKGguA0nXKFqLsMJ14xVzSejbphqPZFszTizyCAj3qa+ELHxvFRscpXyBalCeV1YdpzwAAAAAElFTkSuQmCC">
     <h1>band3</h1>
     <input id="search" type="search" placeholder="Search songs, artists, albums" autocomplete="off">
     <select id="sort" aria-label="Sort by">

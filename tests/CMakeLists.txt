@@ -29,6 +29,7 @@ add_executable(band3_tests
     capture_file_test.cpp
     shade_model_test.cpp
     soft_raster_test.cpp
+    sample_model_test.cpp
     frame_compose_test.cpp
     post_params_test.cpp
     post_model_test.cpp

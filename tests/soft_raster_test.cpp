@@ -7,14 +7,23 @@
 // draw culls the triangles its cull mode says (an outline's near side);
 // that PreMultAlpha (blend 7) blends as RB3 sets it, ONE INVSRCALPHA; that
 // a REFRACT_WORLD draw over the overlay reads the picture as the resolve
-// left it; and that a mesh's edges land on the pixels the game's do (D3D9's
-// pixel centres), a DrawRect quad's on D3D10's.
+// left it; that a mesh's edges land on the pixels the game's do (D3D9's
+// pixel centres), a DrawRect quad's on D3D10's; and that a soft particle
+// fades by the scene's depth behind it, and the soft-particle buffer's blur
+// takes its taps from the other surface; that a shadow map's pass draws
+// depth alone, which a SHADOW_BUFFER draw after it reads; that NgLight's
+// shadow is its casters' white silhouettes, cleared first and blurred twice
+// in place, which the projected light's draws read; and that a normal map a
+// texture pass draws (a head's) is that pass's target, which tilts the
+// normal of the draw after it in the frame its tangents give.
 
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <vector>
 #include "src/Render/soft_raster.h"
+#include "src/Render/spot_model.h"
 
 using namespace band3::render;
 
@@ -441,4 +450,632 @@ TEST_CASE("a mesh's edges land on the game's pixels, D3D9's; a DrawRect quad's o
     REQUIRE(RasterizeTarget(r, Small(), kTex, 1, tex, w, h));
     CHECK(tex[1 * 4 + 0] == kRed);
     CHECK(tex[1 * 4 + 1] == 0);
+}
+
+namespace {
+
+constexpr uint32_t kSoft0 = 0x2387D148, kSoft1 = 0x2387D1F8;
+
+// a view-projection that puts world (x w, y w, w) at clip (x, y) with clip
+// w = w: a quad's view depth
+Mat4 Perspective() {
+    Mat4 m{};
+    m.m[0][0] = m.m[1][1] = 1.0f;
+    m.m[2][3] = 1.0f;
+    return m;
+}
+
+// Quad(x0, x1) at view depth w, through Perspective()
+std::shared_ptr<const Geometry> QuadAt(float x0, float x1, float w, uint32_t color) {
+    auto g = std::make_shared<Geometry>(*Quad(x0, x1, color));
+    for (Vertex& v : g->verts) {
+        v.pos[0] *= w;
+        v.pos[1] *= w;
+        v.pos[2] = w;
+    }
+    return g;
+}
+
+// a soft particle's shade: the particle shader (unlit, the vertex colour
+// times VS c0 and c1) with option bit 45, and the camera's range in PS c89
+ShadeState SoftShade() {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = kParticleShader;
+    s.options = 1ull << shader_opt::kPrelit | 1ull << shader_opt::kSoftParticles;
+    for (int c = 0; c < 4; c++) {
+        s.vs[ShadeRegIndex(0)][c] = 1.0f;
+        s.vs[ShadeRegIndex(1)][c] = 1.0f;
+    }
+    const float c89[4] = {10, 10000, 1.0f / 0.9f, 0.1f / 0.9f};
+    for (int c = 0; c < 4; c++) s.ps[ShadeRegIndex(89)][c] = c89[c];
+    s.vs[ShadeRegIndex(20)][0] = 1.0f;
+    s.vs[ShadeRegIndex(21)][1] = 1.0f;
+    return s;
+}
+
+// BlurSurface's first pass's taps into an 8x4 surface: -1.5..2.5 texels
+// across, half a texel down, weights .1 .25 .3 .25 .1
+ShadeState SoftBlurShade() {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = 1;
+    const float weights[5] = {0.1f, 0.25f, 0.3f, 0.25f, 0.1f};
+    for (int i = 0; i < 5; i++) {
+        s.ps[ShadeRegIndex(31 + i)][0] = (float(i) - 1.5f) / 8.0f;
+        s.ps[ShadeRegIndex(31 + i)][1] = 0.5f / 4.0f;
+        for (int c = 0; c < 4; c++) s.ps[ShadeRegIndex(47 + i)][c] = weights[i];
+    }
+    return s;
+}
+
+Pass SoftPass(uint32_t tex, uint32_t first, uint32_t clear, uint32_t version) {
+    Pass p;
+    p.tex_obj = tex;
+    p.first_draw = first;
+    p.draw_count = 1;
+    p.width = 8;
+    p.height = 4;
+    p.tex_type = 0x22;
+    p.clear_flags = clear;
+    p.version = version;
+    p.viewport[2] = 8;
+    p.viewport[3] = 4;
+    return p;
+}
+
+}  // namespace
+
+TEST_CASE("a soft particle fades by the scene's depth behind it; its buffer blurs across") {
+    // the world: an opaque quad over the left half at view depth 100; then,
+    // after post-processing starts, RndSoftParticleBuffer's pass: a white
+    // particle over all of its 8x4 surface at depth 76, SrcAlphaAdd
+    FrameCapture f;
+    f.shades = {FlatShade(false), SoftShade(), SoftBlurShade()};
+    DrawItem world = Shaded(-1, 0, 0xffffffffu, 0, 1);
+    world.geom = QuadAt(-1, 0, 100, 0xffffffffu);
+    world.view_proj = Perspective();
+    world.z_mode = 1;
+    DrawItem particle = Item(QuadAt(-1, 1, 76, 0xffffffffu), kSoft0);
+    particle.view_proj = Perspective();
+    particle.shade = 1;
+    particle.blend = 4;
+    particle.z_mode = 2;
+    // BlurSurface's first pass: the first surface across into the second
+    DrawItem blur = Item(Quad(-1, 1, 0xffffffffu), kSoft1);
+    blur.rect_shader = 1;
+    blur.rect[2] = 8;
+    blur.rect[3] = 4;
+    blur.shade = 2;
+    auto src = std::make_shared<Texture>();
+    src->width = 8;
+    src->height = 4;
+    src->tex_obj = kSoft0;
+    src->tex_type = 0x22;
+    src->version = 1;
+    blur.tex = src;
+    f.draws = {world, particle, blur};
+    f.passes = {BackBuffer(0, 1), SoftPass(kSoft0, 1, 0x0f, 1), SoftPass(kSoft1, 2, 0, 1)};
+    f.post_boundary = 1;
+    f.post_consts.soft_surface[0] = kSoft0;
+    f.post_consts.soft_surface[1] = kSoft1;
+    REQUIRE(IsSoftParticle(particle, &f.shades[1]));
+
+    // in front of the world by 24 of the fade's 48: half its alpha, which
+    // SrcAlphaAdd scales the white by; where the world drew nothing (the far
+    // plane) all of it. The surface's pixel x reads the scene's depth at x
+    // of the 8 across.
+    std::vector<uint32_t> tex;
+    uint32_t w = 0, h = 0;
+    REQUIRE(RasterizeTarget(f, Small(), kSoft0, 1, tex, w, h));
+    REQUIRE(w == 8);
+    for (int x = 0; x < 8; x++) {
+        CAPTURE(x);
+        // (128 but for float rounding at exactly half)
+        const int r = int(tex[1 * 8 + x] & 0xff);
+        if (x < 4)
+            CHECK((r == 127 || r == 128));
+        else
+            CHECK(r == 255);
+    }
+
+    // the blur: taps half a texel apart from the texels' centres, so each
+    // pixel takes .05 .175 .275 .275 .175 .05 of texels x-2..x+3 (clamped)
+    REQUIRE(RasterizeTarget(f, Small(), kSoft1, 1, tex, w, h));
+    const float kernel[6] = {0.05f, 0.175f, 0.275f, 0.275f, 0.175f, 0.05f};
+    for (int x = 0; x < 8; x++) {
+        float want = 0;
+        for (int k = 0; k < 6; k++) {
+            const int t = std::clamp(x - 2 + k, 0, 7);
+            want += kernel[k] * (t < 4 ? 128.0f : 255.0f);
+        }
+        CAPTURE(x);
+        CHECK(float(tex[2 * 8 + x] & 0xff) == doctest::Approx(want).epsilon(0.01));
+    }
+}
+
+namespace {
+
+constexpr uint32_t kShadowTex = 0x2251A0C0;
+
+// RndShadowMap's pass into its 4x4 shadow map: a quad over all of it at
+// clip z 0.5 (w 1), drawn in draw mode 1, cleared to depth 1 as DxCam::Select
+// clears it
+DrawItem ShadowCaster() {
+    auto g = std::make_shared<Geometry>(*Quad(-1, 1, 0xffffffffu));
+    for (Vertex& v : g->verts) v.pos[2] = 0.5f;
+    DrawItem d = Item(g, kShadowTex);
+    d.draw_mode = kDrawModeShadowDepth;
+    d.z_mode = 1;
+    return d;
+}
+
+Pass ShadowPass(uint32_t first, uint32_t version) {
+    Pass p;
+    p.tex_obj = kShadowTex;
+    p.first_draw = first;
+    p.draw_count = 1;
+    p.width = p.height = 4;
+    p.tex_type = kTexTypeShadowMap;
+    p.clear_flags = 0x30;
+    p.clear_z = 1.0f;
+    p.viewport[2] = 4;
+    p.viewport[3] = 4;
+    p.version = version;
+    return p;
+}
+
+// A lit SHADOW_BUFFER material: white, ambient 0.25, a light far above of
+// 0.5 (N.L 1 to a hair), the light camera looking down (c108 -z) and c107
+// (1, 0.5, 0). Its shadow coordinate is (0.5, 0.5, depth, 1) everywhere:
+// the map's middle, the four taps all in the caster's quad.
+ShadeState ShadowedShade(float depth, uint32_t version) {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = 18;
+    s.options = 1ull << shader_opt::kRealLights | 1ull << shader_opt::kPerPixel |
+                1ull << shader_opt::kShadowBuffer | 1ull << shader_opt::kNumPoint;
+    auto set = [&](float (&bank)[kNumShadeRegs][4], int reg, float x, float y, float z, float w) {
+        float* r = bank[ShadeRegIndex(reg)];
+        r[0] = x;
+        r[1] = y;
+        r[2] = z;
+        r[3] = w;
+    };
+    set(s.ps, 0, 1, 1, 1, 1);
+    set(s.ps, 1, 0.25f, 0.25f, 0.25f, 1);
+    set(s.ps, 64, 0, 0, 1e5f, 0);
+    set(s.ps, 67, 0.5f, 0.5f, 0.5f, 1);
+    set(s.ps, 107, 1, 0.5f, 0, 0);
+    set(s.ps, 108, 0, 0, -1, 1);
+    set(s.vs, 20, 1, 0, 0, 0);
+    set(s.vs, 21, 0, 1, 0, 0);
+    set(s.vs, 40, 0, 0, 0, 0.5f);
+    set(s.vs, 41, 0, 0, 0, 0.5f);
+    set(s.vs, 42, 0, 0, 0, depth);
+    set(s.vs, 43, 0, 0, 0, 1);
+    auto map = std::make_shared<Texture>();
+    map->width = map->height = 4;
+    map->tex_obj = kShadowTex;
+    map->tex_type = kTexTypeShadowMap;
+    map->version = version;
+    s.maps[kMapProjected] = map;
+    return s;
+}
+
+// the back buffer's draw of it, over all of the picture, facing up
+DrawItem Shadowed() {
+    auto g = std::make_shared<Geometry>(*Quad(-1, 1, 0xffffffffu));
+    for (Vertex& v : g->verts) v.nrm[2] = 1.0f;
+    DrawItem d = Item(g, 0);
+    d.prelit = false;
+    d.shade = 0;
+    return d;
+}
+
+}  // namespace
+
+TEST_CASE("a shadow map's pass draws depth, which a SHADOW_BUFFER draw after it reads") {
+    FrameCapture f;
+    f.shades = {ShadowedShade(0.75f, 1)};
+    f.draws = {ShadowCaster(), Shadowed()};
+    f.passes = {ShadowPass(0, 1), BackBuffer(1, 1)};
+    std::vector<uint32_t> rgba;
+    RasterStats st = Rasterize(f, Small(), rgba);
+    CHECK(st.passes == 1);
+    // behind the caster: the light, 0.5, times 1 - 0.75 c107 (0.25, 0.625,
+    // 1), over the ambient 0.25
+    auto channel = [&](int c) { return int((rgba[1 * 8 + 3] >> (8 * c)) & 0xff); };
+    CHECK(std::abs(channel(0) - 96) <= 1);   // 0.375
+    CHECK(std::abs(channel(1) - 143) <= 1);  // 0.5625
+    CHECK(std::abs(channel(2) - 191) <= 1);  // 0.75
+    const uint32_t shadowed = rgba[1 * 8 + 3];
+    for (uint32_t c : rgba) CHECK(c == shadowed);
+
+    // in front of it: lit, as without the shadow map
+    f.shades = {ShadowedShade(0.25f, 1)};
+    Rasterize(f, Small(), rgba);
+    const uint32_t lit = rgba[1 * 8 + 3];
+    CHECK(std::abs(int(lit & 0xff) - 191) <= 1);
+    CHECK((lit & 0xff) == ((lit >> 16) & 0xff));
+    f.shades = {ShadowedShade(0.75f, 1)};
+    RasterOptions o = Small();
+    o.self_shadow = false;
+    st = Rasterize(f, o, rgba);
+    CHECK(st.passes == 0);
+    CHECK(rgba[1 * 8 + 3] == lit);
+
+    // a version of the map no pass here drew (the character's before): lit
+    f.shades = {ShadowedShade(0.75f, 7)};
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 3] == lit);
+
+    // the map itself: the caster's depth, 0.5, as grey; where it's culled
+    // (its cull mode drops clockwise triangles, which Quad's are) the clear
+    std::vector<uint32_t> tex;
+    uint32_t w = 0, h = 0;
+    REQUIRE(RasterizeTarget(f, Small(), kShadowTex, 1, tex, w, h));
+    CHECK(w == 4);
+    CHECK(tex[5] == 0xff808080u);
+    f.draws[0].cull = kCullBack;
+    REQUIRE(RasterizeTarget(f, Small(), kShadowTex, 1, tex, w, h));
+    CHECK(tex[5] == 0xff000000u);
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 3] == lit);
+
+    // a caster partly in front of the light camera's near plane (z < 0) is
+    // cut there, as the device clips it, not stored nearer than anything:
+    // the quad from z -0.5 on the left to 1.5 on the right holds 0..1 in the
+    // middle (pixel x samples z -0.5 + x / 2)
+    auto slope = std::make_shared<Geometry>(*f.draws[0].geom);
+    for (Vertex& v : slope->verts) v.pos[2] = v.pos[0] < 0 ? -0.5f : 1.5f;
+    f.draws[0].geom = slope;
+    f.draws[0].cull = 0;
+    REQUIRE(RasterizeTarget(f, Small(), kShadowTex, 1, tex, w, h));
+    CHECK(tex[4 + 0] == 0xff000000u);  // pixel 0: z -0.5, clipped
+    CHECK(tex[4 + 2] == 0xff808080u);  // pixel 2: z 0.5
+    CHECK(tex[4 + 3] == 0xff000000u);  // pixel 3: z 1, no nearer than the clear
+}
+
+namespace {
+
+constexpr uint32_t kLightTex = 0x2261B598;  // NgLight's mShadowRT, 8x4 here
+
+// a texture of NgLight's shadow, as a draw's s5 or a blur's quad keeps it
+std::shared_ptr<Texture> LightShadow(uint32_t version) {
+    auto t = std::make_shared<Texture>();
+    t->width = 8;
+    t->height = 4;
+    t->tex_obj = kLightTex;
+    t->tex_type = 0x22;
+    t->version = version;
+    return t;
+}
+
+// NgLight::RenderShadows' pass, as the capture records it: no camera, so no
+// clear and no viewport
+Pass LightPass(uint32_t first, uint32_t version) {
+    Pass p = SoftPass(kLightTex, first, 0, version);
+    p.viewport[2] = p.viewport[3] = 0;
+    return p;
+}
+
+// a shadow caster's shade in draw mode 3: the standard shader with no
+// options (RndShaderStandard::CalcShaderOpts), its material's brown colour
+// half transparent in c0
+ShadeState CasterShade() {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = 18;
+    const float c0[4] = {0.51f, 0.42f, 0.23f, 0.5f};
+    for (int c = 0; c < 4; c++) {
+        s.ps[ShadeRegIndex(0)][c] = s.vs[ShadeRegIndex(0)][c] = c0[c];
+        s.ps[ShadeRegIndex(1)][c] = s.vs[ShadeRegIndex(1)][c] = 1.0f;
+    }
+    s.vs[ShadeRegIndex(20)][0] = 1.0f;
+    s.vs[ShadeRegIndex(21)][1] = 1.0f;
+    return s;
+}
+
+// BlurShadowRT's taps into the 8x4 shadow: a texel apart, across or down,
+// weights .1 .25 .3 .25 .1
+ShadeState LightBlurShade(bool down) {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = 1;
+    const float weights[5] = {0.1f, 0.25f, 0.3f, 0.25f, 0.1f};
+    for (int i = 0; i < 5; i++) {
+        float* off = s.ps[ShadeRegIndex(31 + i)];
+        off[down ? 1 : 0] = float(i - 2) / (down ? 4.0f : 8.0f);
+        off[2] = off[3] = 1;
+        for (int c = 0; c < 4; c++) s.ps[ShadeRegIndex(47 + i)][c] = weights[i];
+    }
+    return s;
+}
+
+// A lit PROJ_MULTIPLY material reading the shadow as its s5 (`map`, null
+// none): white, ambient 0.25, a light far above of 0.5, the projected light
+// white from above, its uv the world position's (x, -y) from 0..1 over the
+// picture's -1..1
+ShadeState ProjectedShade(std::shared_ptr<Texture> map) {
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = 18;
+    s.options = 1ull << shader_opt::kRealLights | 1ull << shader_opt::kPerPixel |
+                1ull << shader_opt::kNumPoint | 1ull << shader_opt::kNumProj |
+                1ull << shader_opt::kProjLightMultiply;
+    auto set = [&](int reg, float x, float y, float z, float w) {
+        float* r = s.ps[ShadeRegIndex(reg)];
+        r[0] = x;
+        r[1] = y;
+        r[2] = z;
+        r[3] = w;
+    };
+    set(0, 1, 1, 1, 1);
+    set(1, 0.25f, 0.25f, 0.25f, 1);
+    set(64, 0, 0, 1e5f, 0);
+    set(67, 0.5f, 0.5f, 0.5f, 1);
+    set(66, 0, 0, 1, 0);
+    set(69, 1, 1, 1, 1);
+    set(95, 0.5f, 0, 0, 0.5f);
+    set(96, 0, -0.5f, 0, 0.5f);
+    set(97, 0, 0, 0, 1);
+    s.vs[ShadeRegIndex(20)][0] = 1.0f;
+    s.vs[ShadeRegIndex(21)][1] = 1.0f;
+    s.maps[kMapProjected] = std::move(map);
+    return s;
+}
+
+}  // namespace
+
+TEST_CASE("NgLight's shadow: its casters' silhouettes, blurred twice, darken the projected light") {
+    // the shadow pass: a caster over the left half, its material's texture
+    // and colour, in draw mode 3; two in-place blurs, across then down; the
+    // back buffer's projected light over all of the picture, reading the
+    // last version. Before them a pass that filled the shadow red.
+    FrameCapture f;
+    f.shades = {CasterShade(), LightBlurShade(false), LightBlurShade(true),
+                ProjectedShade(LightShadow(4))};
+    DrawItem fill = Fill(kRed);
+    fill.target = kLightTex;
+    DrawItem caster = Item(Quad(-1, 0, 0xff0000ffu), kLightTex);
+    caster.draw_mode = kDrawModeShadowCasters;
+    caster.shade = 0;
+    caster.prelit = false;
+    caster.tex = std::make_shared<Texture>(Texture{1, 1, {kGreen}});
+    DrawItem blurs[2];
+    for (int k = 0; k < 2; k++) {
+        blurs[k] = Item(Quad(-1, 1, 0xffffffffu), kLightTex);
+        blurs[k].rect_shader = 1;
+        blurs[k].rect[2] = 8;
+        blurs[k].rect[3] = 4;
+        blurs[k].tex = LightShadow(2 + uint32_t(k));
+        blurs[k].shade = 1 + k;
+    }
+    auto up = std::make_shared<Geometry>(*Quad(-1, 1, 0xffffffffu));
+    for (Vertex& v : up->verts) v.nrm[2] = 1.0f;
+    DrawItem lit = Item(up, 0);
+    lit.prelit = false;
+    lit.shade = 3;
+    f.draws = {fill, caster, blurs[0], blurs[1], lit};
+    Pass filled = LightPass(0, 1);
+    filled.clear_flags = 0x0f;
+    f.passes = {filled, LightPass(1, 2), LightPass(2, 3), LightPass(3, 4), BackBuffer(4, 1)};
+    REQUIRE(spot::SpotBlur(blurs[0], &f.shades[1], f.passes[2]));
+    CHECK(ShadowCasterPass(f, f.passes[1]));
+    CHECK_FALSE(ShadowCasterPass(f, f.passes[2]));
+    // NgLight clears it though no camera does: what the red pass drew isn't
+    // seen, so it isn't drawn
+    CHECK(PassClearFlags(f, f.passes[1]) == 0x0f);
+    const std::vector<PassRun> runs = PlanPasses(f, Small());
+    REQUIRE(runs.size() == 4);
+    CHECK(runs[0].pass == &f.passes[1]);
+
+    // the casters: opaque white whatever their texture and colour, over
+    // transparent black
+    std::vector<uint32_t> tex;
+    uint32_t w = 0, h = 0;
+    REQUIRE(RasterizeTarget(f, Small(), kLightTex, 2, tex, w, h));
+    REQUIRE(w == 8);
+    for (int x = 0; x < 8; x++) CHECK(tex[1 * 8 + x] == (x < 4 ? 0xffffffffu : 0u));
+    // blurred across: x takes texels x-2..x+2 (clamped), .1 .25 .3 .25 .1
+    REQUIRE(RasterizeTarget(f, Small(), kLightTex, 3, tex, w, h));
+    const float kernel[5] = {0.1f, 0.25f, 0.3f, 0.25f, 0.1f};
+    uint32_t across[8];
+    for (int x = 0; x < 8; x++) {
+        float want = 0;
+        for (int k = 0; k < 5; k++) want += std::clamp(x - 2 + k, 0, 7) < 4 ? kernel[k] : 0.0f;
+        CAPTURE(x);
+        across[x] = tex[2 * 8 + x];
+        CHECK(std::abs(int(Alpha(across[x])) - int(want * 255 + 0.5f)) <= 1);
+        CHECK((across[x] & 0xff) == Alpha(across[x]));
+    }
+    // and down, which a shadow the same all the way down keeps
+    REQUIRE(RasterizeTarget(f, Small(), kLightTex, 4, tex, w, h));
+    for (int x = 0; x < 8; x++) CHECK(tex[0 * 8 + x] == across[x]);
+
+    // the picture: pixel x samples the shadow at texel x - 0.5, bilinear;
+    // where its alpha is 1 the light is 1 - 0.75 of itself (0.25 + 0.5 x
+    // 0.25), where it's 0 all of it (0.25 + 0.5)
+    std::vector<uint32_t> rgba;
+    RasterStats st = Rasterize(f, Small(), rgba);
+    CHECK(st.passes == 3);
+    CHECK(st.rt_missing == 0);
+    CHECK(std::abs(int(rgba[1 * 8 + 1] & 0xff) - 96) <= 1);
+    CHECK(std::abs(int(rgba[1 * 8 + 7] & 0xff) - 191) <= 1);
+    const float a = (float(Alpha(across[3])) + float(Alpha(across[4]))) / 2 / 255;
+    CHECK(std::abs(int(rgba[1 * 8 + 4] & 0xff) - int((0.25f + 0.5f * (1 - 0.75f * a)) * 255 + 0.5f)) <=
+          1);
+
+    // a version no pass here drew (the frame before's) reads guest memory's
+    // pixels where they're kept (here none of it shadowed), else leaves the
+    // light out, counted as missing
+    auto guest = LightShadow(9);
+    guest->rgba.assign(8 * 4, 0x00ffffffu);
+    f.shades[3] = ProjectedShade(guest);
+    Rasterize(f, Small(), rgba);
+    CHECK(std::abs(int(rgba[1 * 8 + 1] & 0xff) - 191) <= 1);
+    f.shades[3] = ProjectedShade(LightShadow(9));
+    st = Rasterize(f, Small(), rgba);
+    CHECK(st.rt_missing == 1);
+    CHECK(std::abs(int(rgba[1 * 8 + 1] & 0xff) - 191) <= 1);
+}
+
+TEST_CASE("a head's normal map is a texture pass's target, which tilts the draw after it") {
+    // the pass fills the texture with x 1, y 0.5 (red 255, green 128); a lit
+    // quad facing +z, a white light far along +x, which grazes it. Its
+    // tangent (0, -1, 0), w 1, makes the bitangent the normal map's x pairs
+    // with (0, 0, 1) x (0, -1, 0) = +x: the normal tilts to the light.
+    const uint32_t kNormal = 0xff0080ffu;
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = 18;
+    s.options = 1ull << shader_opt::kRealLights | 1ull << shader_opt::kPerPixel |
+                1ull << shader_opt::kNumPoint | 1ull << shader_opt::kNormalMap;
+    auto set = [&](float* r, float x, float y, float z, float w) {
+        r[0] = x;
+        r[1] = y;
+        r[2] = z;
+        r[3] = w;
+    };
+    set(s.ps[ShadeRegIndex(0)], 1, 1, 1, 1);
+    set(s.ps[ShadeRegIndex(1)], 0, 0, 0, 1);
+    set(s.ps[ShadeRegIndex(14)], 1, 0, 0, 0);
+    set(s.ps[ShadeRegIndex(64)], 1e5f, 0, 0, 0);
+    set(s.ps[ShadeRegIndex(67)], 1, 1, 1, 1);
+    set(s.vs[ShadeRegIndex(20)], 1, 0, 0, 0);
+    set(s.vs[ShadeRegIndex(21)], 0, 1, 0, 0);
+    set(s.vs[ShadeRegIndex(22)], 0, 0, 1, 0);
+    s.eye[2] = 10;
+    auto map = std::make_shared<Texture>();
+    map->width = map->height = 4;
+    map->tex_obj = kTex;
+    map->tex_type = 0x22;
+    map->version = 1;
+    s.maps[kMapNormal] = map;
+    auto up = std::make_shared<Geometry>(*Quad(-1, 1, 0xffffffffu));
+    up->tangents = true;
+    for (Vertex& v : up->verts) {
+        v.nrm[2] = 1.0f;
+        v.tan[1] = -1.0f;
+        v.tan[3] = 1.0f;
+    }
+    DrawItem lit = Item(up, 0);
+    lit.prelit = false;
+    lit.shade = 0;
+    FrameCapture f;
+    f.shades = {s};
+    f.draws = {Fill(kNormal), lit};
+    f.passes = {TexturePass(0, 1), BackBuffer(1, 1)};
+    CHECK(MapTargetOf(&f.shades[0], kMapNormal) == map.get());
+    const std::vector<PassRun> runs = PlanPasses(f, Small());
+    REQUIRE(runs.size() == 2);
+    CHECK(runs[0].pass == &f.passes[0]);
+
+    // N = normalize(0 n + (1 (+x) + 0.004 u)): lit as it faces the light
+    std::vector<uint32_t> rgba;
+    RasterStats st = Rasterize(f, Small(), rgba);
+    CHECK(st.passes == 1);
+    CHECK(st.rt_missing == 0);
+    CHECK((rgba[1 * 8 + 3] & 0xff) >= 254);
+
+    // without normal maps, or with the geometry's tangents not kept, the
+    // vertex normal, which the light grazes, and the pass isn't drawn
+    RasterOptions o = Small();
+    o.normal_maps = false;
+    CHECK(PlanPasses(f, o).size() == 1);
+    st = Rasterize(f, o, rgba);
+    CHECK((rgba[1 * 8 + 3] & 0xff) == 0);
+    up->tangents = false;
+    Rasterize(f, Small(), rgba);
+    CHECK((rgba[1 * 8 + 3] & 0xff) == 0);
+    up->tangents = true;
+
+    // with no pass of it, guest memory's pixels where they're kept (here
+    // flat: the vertex normal), else the map is left out, counted as missing
+    f.draws = {lit};
+    f.passes = {BackBuffer(0, 1)};
+    map->rgba.assign(16, 0xff008080u);
+    st = Rasterize(f, Small(), rgba);
+    CHECK(st.rt_missing == 0);
+    CHECK((rgba[1 * 8 + 3] & 0xff) <= 2);
+    map->rgba.clear();
+    st = Rasterize(f, Small(), rgba);
+    CHECK(st.rt_missing == 1);
+    CHECK((rgba[1 * 8 + 3] & 0xff) == 0);
+}
+
+TEST_CASE("the display gamma ramp maps each value as the presenter shows it") {
+    // RB3's sort of table: 10-bit, lifting the darks (a pow under 1), red
+    // apart from green and blue to tell the channels apart
+    GammaRamp g;
+    g.mode = GammaRamp::kTable;
+    for (uint32_t v = 0; v < 256; v++) {
+        const uint32_t lift = std::min<uint32_t>(1023, v * 1023 / 255 + (v < 128 ? 24 : 0));
+        const uint32_t red = 1023 - (255 - v) * 1023 / 255;
+        g.table[v] = red << 20 | lift << 10 | lift;
+    }
+    uint8_t lut[3][256];
+    GammaLut(g, lut);
+    // 10 bits to 8 as CaptureGuestOutput: v * 255/1023 + 0.5, truncated
+    CHECK(lut[1][0] == 6);  // 24 -> 5.98 + .5
+    CHECK(lut[1][1] == 7);  // 28 -> 6.98 + .5
+    CHECK(lut[1][128] == 128);
+    CHECK(lut[2][4] == lut[1][4]);
+    for (int v = 0; v < 256; v++) CHECK(lut[0][v] == v);
+    CHECK_FALSE(IsIdentity(lut));
+    CHECK(Unorm10To8(0x48) == 18);  // 17.95
+    CHECK(Unorm10To8(1023) == 255);
+    CHECK(Unorm10To8(2) == 0);  // 0.4985
+
+    // D3D's PWL ramp for a 10-bit front buffer before a game sets its own
+    // (register_table.inc): base step << 9, delta 8, identity but for its
+    // last step, flat at 1023, where 254 (1019 in 10 bits) lands
+    GammaRamp pwl;
+    pwl.mode = GammaRamp::kPwl;
+    for (uint32_t i = 0; i < 128; i++)
+        for (int c = 0; c < 3; c++) pwl.pwl[i][c] = 0x200u << 16 | i << 9;
+    pwl.pwl[127][0] = pwl.pwl[127][1] = pwl.pwl[127][2] = 0x0000FFC0;
+    GammaLut(pwl, lut);
+    for (int c = 0; c < 3; c++)
+        for (int v = 0; v < 256; v++) CHECK(lut[c][v] == (v == 254 ? 255 : v));
+
+    // over the finished picture, overlay and all, the CPU's and so the GPU's
+    // (gamma.hlsl's pass reads the same lookup)
+    FrameCapture f;
+    f.draws.push_back(Item(Quad(-1, 0, 0xff804020u), 0));
+    f.post_boundary = 1;
+    f.draws.push_back(Item(Quad(0, 1, 0xff000001u), 0));
+    f.gamma = g;
+    std::vector<uint32_t> raw, graded;
+    RasterOptions o = Small();
+    o.gamma = false;
+    Rasterize(f, o, raw);
+    o.gamma = true;
+    Rasterize(f, o, graded);
+    REQUIRE(raw.size() == graded.size());
+    GammaLut(g, lut);
+    for (size_t i = 0; i < raw.size(); i++) {
+        const uint32_t c = raw[i];
+        const uint32_t want = lut[0][c & 0xff] | lut[1][c >> 8 & 0xff] << 8 |
+                              lut[2][c >> 16 & 0xff] << 16 | (c & 0xff000000u);
+        CAPTURE(i);
+        CHECK(graded[i] == want);
+    }
+    CHECK(graded[0] != raw[0]);
+    CHECK(graded[7] != raw[7]);
+
+    // not on views of the scene target, and nothing from a capture from
+    // before the ramp was kept
+    o.view = RasterView::kSceneAlpha;
+    std::vector<uint32_t> a, b;
+    Rasterize(f, o, a);
+    o.gamma = false;
+    Rasterize(f, o, b);
+    CHECK(a == b);
+    o.view = RasterView::kFinal;
+    o.gamma = true;
+    f.gamma = GammaRamp{};
+    Rasterize(f, o, graded);
+    CHECK(graded == raw);
 }

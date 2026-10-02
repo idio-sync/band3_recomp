@@ -277,6 +277,17 @@ REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Debug",
     "main menu, and a later capture needs them. Costs a little game-thread time while "
     "characters load; turn it on at launch (--native_view_record_targets=true)");
 
+REXCVAR_DEFINE_BOOL(native_view_normal_maps, true, "Band3/Debug",
+    "Shade RB3's normal maps and detail maps in the native view (experimental), live and in "
+    "the test harness's captures; off shades those materials with the vertex normal, to "
+    "compare");
+
+REXCVAR_DEFINE_BOOL(native_view_texture_filtering, true, "Band3/Debug",
+    "Sample textures in the native view (experimental) as the game's samplers do: filtered, "
+    "between mip levels by distance, and clamped or wrapped as each says, live and in the "
+    "test harness's captures; off reads every texture's nearest texel at full size, to "
+    "compare");
+
 REXCVAR_DEFINE_STRING(native_view_rt_fallback, "guest", "Band3/Debug",
     "What the native view's capture keeps of a texture RB3 draws at runtime (outfits, the "
     "crowd, blurs): guest also decodes what guest memory holds, right only with "

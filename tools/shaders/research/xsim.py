@@ -3,7 +3,8 @@
 Runs the straight-line ALU and fetch instructions of a dumped shader on given
 inputs so a hypothesised formula can be checked against what the game's shader
 really computes. Fetches return caller-supplied values (texture samples / vertex
-attributes); control flow beyond plain exec blocks is not supported.
+attributes); of control flow, only exec blocks and loops (a loop constant's
+count from State.loops; no breaks or predicated jumps) are supported.
 
 Its inputs come from your own copy of the game and stay out of the repo (see
 README.md): DUMP is where a --dump_shaders run wrote the .ucode files, WORK holds
@@ -40,7 +41,13 @@ def load(h, kind='frag'):
         m = re.match(r'^/\*\s*([\d.]+)\s*\*/\s+(.*)$', line)
         if m:
             if '.' in m.group(1):
-                continue  # control flow (exec/alloc/cnop/...)
+                # control flow (exec/alloc/cnop/...): only loops matter
+                body = m.group(2).strip()
+                if body.startswith('loop '):
+                    prog.append(['@loop', body.split()[1].rstrip(',')])
+                elif body.startswith('endloop '):
+                    prog.append(['@endloop'])
+                continue
             body = m.group(2).strip()
             if body == 'serialize':
                 continue
@@ -51,7 +58,9 @@ def load(h, kind='frag'):
             prog[-1].append(m.group(1).strip())
             continue
         s = line.strip()
-        if s.startswith('label') or s.startswith('loop') or s.startswith('jmp'):
+        if s.startswith('label'):
+            continue  # a loop's target: its loop and endloop are in prog
+        if s.startswith('loop') or s.startswith('jmp'):
             raise NotImplementedError('control flow: ' + s)
         if s and s.split()[0].replace('_sat', '') in OPS:
             prog.append([s])  # instruction after a 'serialize' line
@@ -68,8 +77,10 @@ def comp(c):
     return 'xyzw'.index(c)
 
 class State:
-    def __init__(self, consts, regs=None, fetch=None):
+    def __init__(self, consts, regs=None, fetch=None, loops=None):
         self.c = {k: list(v) for k, v in consts.items()}
+        # loop constants by name ('i31'): each loop's iteration count
+        self.loops = dict(loops or {})
         self.r = {}
         for k, v in (regs or {}).items():
             self.r[k] = list(v)
@@ -211,8 +222,25 @@ def sca_op(st, op, a):
 def split_args(s):
     return [t.strip() for t in s.split(',')]
 
+def unroll(prog, st):
+    """prog with each loop's body repeated its loop constant's count"""
+    out, i = [], 0
+    while i < len(prog):
+        if prog[i][0] == '@loop':
+            # the body, up to the matching endloop
+            depth, j = 1, i + 1
+            while depth:
+                depth += {'@loop': 1, '@endloop': -1}.get(prog[j][0], 0)
+                j += 1
+            out += unroll(prog[i + 1:j - 1], st) * st.loops[prog[i][1]]
+            i = j
+        else:
+            out.append(prog[i])
+            i += 1
+    return out
+
 def run(prog, st):
-    for group in prog:
+    for group in unroll(prog, st):
         # gather all reads first (parallel issue)
         pending = []
         new_ps = None

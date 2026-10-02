@@ -1,10 +1,11 @@
 // Experimental: the native view's full-screen passes, for the GPU backend
 // (gpu_view.cpp): what happens to the scene target between the world's draws
 // and the overlay's (soft_raster.h). RB3's post-processing (post_model.h):
-// the 4x downsample (or bright pass), the blurs and the composite, whose
-// maths is post_model.hlsli's, which the CPU runs too; and the resolve, the
-// scene into the picture as it is (or, to check the scene target, its alpha
-// or its depth as grey) on frames without post-processing.
+// the 4x downsample (or bright pass), the blurs, glare's pass over bloom's
+// level 0 and the composite, whose maths is post_model.hlsli's, which the CPU
+// runs too; and the resolve, the scene into the picture as it is (or, to check
+// the scene target, its alpha or its depth as grey) on frames without
+// post-processing.
 //
 // Registers follow SDL_gpu's layout as mesh.hlsl's do: pixel resources in
 // space2, pixel uniforms in space3; the vertex shader has none.
@@ -28,9 +29,9 @@
 // read texel for texel by the resolve and the composite, or the level a
 // downsample or blur reads, bilinear; t1 the scene's depth (kNearW / w,
 // larger is nearer, 0 where nothing drew); t2 the DOF's level; t3..t5
-// bloom's; t6 the spotlights' depth volume and t7 their density map, render
-// targets of texture passes (gpu_view.cpp's, arrays of one layer). The
-// samplers are linear and clamp, as RB3 sets them.
+// bloom's; t6 the spotlights' depth volume and t7 their density map, t8 the
+// soft-particle buffer, render targets of texture passes (gpu_view.cpp's,
+// arrays of one layer). The samplers are linear and clamp, as RB3 sets them.
 VK_SAMPLER VK_BINDING(0, 2) Texture2D<float4> color_tex : register(t0, space2);
 VK_SAMPLER VK_BINDING(0, 2) SamplerState color_sampler : register(s0, space2);
 VK_SAMPLER VK_BINDING(1, 2) Texture2D<float> depth_tex : register(t1, space2);
@@ -47,6 +48,8 @@ VK_SAMPLER VK_BINDING(6, 2) Texture2DArray<float4> volume_tex : register(t6, spa
 VK_SAMPLER VK_BINDING(6, 2) SamplerState volume_sampler : register(s6, space2);
 VK_SAMPLER VK_BINDING(7, 2) Texture2DArray<float4> density_tex : register(t7, space2);
 VK_SAMPLER VK_BINDING(7, 2) SamplerState density_sampler : register(s7, space2);
+VK_SAMPLER VK_BINDING(8, 2) Texture2DArray<float4> soft_tex : register(t8, space2);
+VK_SAMPLER VK_BINDING(8, 2) SamplerState soft_sampler : register(s8, space2);
 
 VK_BINDING(0, 3) cbuffer PostUniforms : register(b0, space3) {
     PostPass params;
@@ -105,6 +108,19 @@ float4 PSBlur(PostIn i) : SV_Target0 {
     return sum;
 }
 
+// the glare pass over bloom's blurred level 0 (post_model.hlsli's Glare*)
+float4 PSGlare(PostIn i) : SV_Target0 {
+    const float2 uv = PixelUv(i);
+    const float2 stride = GlareStep(uv);
+    float2 at = uv;
+    float3 sum = 0.0;
+    [unroll] for (int k = 0; k < kGlareTaps; k++) {
+        sum += GlareTerm(color_tex.SampleLevel(color_sampler, at, 0).rgb, GlareWeight(at));
+        at += stride;
+    }
+    return float4(GlareOut(sum), 1.0);
+}
+
 // the composite into the picture, opaque: the overlay draws over it
 float4 PSComposite(PostIn i) : SV_Target0 {
     const int3 at = int3(int2(i.pos.xy), 0);
@@ -127,5 +143,7 @@ float4 PSComposite(PostIn i) : SV_Target0 {
         volume = volume_tex.SampleLevel(volume_sampler, float3(uv, 0.0), 0).rgb;
         density = density_tex.SampleLevel(density_sampler, float3(uv, 0.0), 0).r;
     }
-    return float4(Composite(params, scene, dof, depth, l0, l1, l2, volume, density), 1.0);
+    float3 soft = 0.0;
+    if ((f & kPostSoft) != 0u) soft = soft_tex.SampleLevel(soft_sampler, float3(uv, 0.0), 0).rgb;
+    return float4(Composite(params, scene, dof, depth, l0, l1, l2, volume, density, soft), 1.0);
 }
