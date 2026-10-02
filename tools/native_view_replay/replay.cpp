@@ -3,15 +3,19 @@
 //   replay <file.cap> <out.png> [--size WxH] [--cam N] [--per-cam] [--list]
 //                               [--compare <screenshot.png> [--image <native.png>]]
 //                               [--diff <native.png>] [--crop x,y,w,h] [--mesh <hex>]
-//                               [--dump-tex <draw>] [--shade <draw>]
+//                               [--dump-tex <draw>[:<map>][@<level>]] [--shade <draw>]
 //                               [--dump-rt <hex>[:<version>]]
 //                               [--rt-none | --rt-guest]
-//                               [--no-tex] [--no-blend] [--no-cull] [--transpose]
+//                               [--no-tex] [--no-blend] [--no-cull] [--no-shadow] [--no-normal]
+//                               [--nearest]
+//                               [--transpose]
 //                               [--no-skinned | --only-skinned] [--unskinned]
 //                               [--legacy-light | --no-light] [--pick X,Y]
 //                               [--dump-alpha <png>] [--dump-depth <png>]
+//                               [--dump-bloom <png>]
 //                               [--view alpha|depth]
 //                               [--no-post | --post-only xfm|dof|bloom|spot|soft]
+//                               [--no-gamma | --gamma-from <other.cap>]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
 // and inside the frustum with the matrix as captured and transposed (the back
@@ -33,6 +37,13 @@
 // --dump-rt writes what the texture pass target with that DxTex holds (alpha
 // shown as black) after the pass making that version of it (its last without
 // one), drawn on the CPU, to out.png, and its alpha as grey to out.alpha.png.
+// --dump-tex writes a draw's diffuse texture as the capture kept it (guest
+// memory's pixels, for a render target), or with :<map> one of its shade's
+// maps (normal, specular, glow, projected, gobo...: --shade's names), and its
+// alpha likewise: --dump-tex <draw>:projected of a projected light's draw is
+// guest memory's copy of NgLight's shadow (right with --readback_resolve=full),
+// to set against --dump-rt of it, which the CPU draws. With @<level> it
+// writes that mip level of it instead (Texture::mips, guest memory's chain).
 // --compare draws the frame at the size of a harness `capture` screenshot and
 // writes the two side by side (game left, native right), with their mean
 // difference; with --image the native side is that PNG instead (a harness
@@ -48,8 +59,22 @@
 // lighting from before the game's shading, --no-light with none (every
 // material unlit). --no-cull draws both sides of every
 // triangle, as the native view did before it culled as the game does (the
-// cull mode --list prints, scene_capture.h's DrawItem::cull). --pick draws the frame at --size and
-// prints the draw that last wrote pixel X,Y, its colour and its shade.
+// cull mode --list prints, scene_capture.h's DrawItem::cull). --no-shadow draws
+// the characters without their self-shadows (RasterOptions::self_shadow): no
+// shadow map's pass, every SHADOW_BUFFER draw lit. --list's "shadow:" lines
+// check the captured shadow maps: each SHADOW_BUFFER draw's s5 is the version
+// of the shadow map whose pass came last before it, and its VS c40..c43 are
+// that pass's view-projection times the texture's (u = .5x + .5009765625w, v =
+// -.5y + .5009765625w), as RB3's CheckShadow makes them, with its draw modes,
+// cull modes and options. --no-normal shades every normal-mapped material
+// with its vertex normal, leaving its normal map and detail map out
+// (RasterOptions::normal_maps), as captures from before the tangents were
+// kept are drawn. --nearest reads every texture nearest at level 0, as the
+// native view did before it sampled them as the game's samplers do
+// (RasterOptions::filtering; captures from before the samplers were kept
+// draw so either way); --shade prints each texture's sampler and its levels.
+// --pick draws the frame at --size and prints the
+// draw that last wrote pixel X,Y, its colour and its shade.
 // Every capture prints a "post:" line, what post-processing was set to do at
 // DxRnd::DoPostProcess (post_params.h: boundary, colour matrix, bloom, DOF,
 // the world camera), and a "check:" line setting it against the constants
@@ -62,6 +87,11 @@
 // RasterView), where the world's draws left them; --view alpha|depth does the
 // same for the picture the other options draw (--diff against a capture's
 // <name>.gpu.alpha.png or .gpu.depth.png, say).
+// --dump-bloom draws the frame on the CPU at --size and writes bloom's level
+// 0 (a quarter of it each way) as the composite read it, after glare's pass on
+// a glare frame: at the game's 1280x720, against --dump-tex of the glare
+// pass's draw (--list's "rect shader 25"), whose guest pixels are what that
+// pass left in the level (right in captures taken with --readback_resolve=full).
 // RB3's post-processing (post_model.h: depth of field, bloom or glare, the
 // spotlights' depth volume, the colour matrix) is applied as the frame set
 // it; --no-post leaves the scene as it is, --post-only applies one effect
@@ -72,6 +102,12 @@
 // "soft" draws (scene_capture.h's IsSoftParticle) in the pass into the
 // soft-particle buffer's first surface, before its two blurs; --dump-rt of
 // that surface draws them, and --post-only soft adds the buffer alone.
+// The display's gamma ramp (gamma_ramp.h), which the presenter applies to the
+// game's picture and so to a harness screenshot, goes over the native picture
+// last, as captured; every capture prints a "gamma:" line, which ramp and what
+// it shows a few values as, and --list the whole ramp. --no-gamma leaves it
+// off, --gamma-from draws with another capture's (one from before captures
+// kept it has none: it's drawn as RB3 drew it).
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
@@ -92,6 +128,7 @@
 #include "src/Render/png_writer.h"
 #include "src/Render/post_model.h"
 #include "src/Render/post_params.h"
+#include "src/Render/shade_model.h"
 #include "src/Render/soft_raster.h"
 
 using namespace band3::render;
@@ -293,10 +330,36 @@ bool SameColor(const float* a, const float* b) {
 // size and base address
 std::string FetchString(const uint32_t f[6]) {
     if (!f[1]) return "-";
-    char buf[96];
-    std::snprintf(buf, sizeof(buf), "fmt %u dim %u %ux%u base %08X", f[1] & 0x3f,
+    char buf[128];
+    // the clamp modes (0 wrap, 2 the edge, 6 the border...) are dword 0's
+    // bits 10-12 and 13-15
+    std::snprintf(buf, sizeof(buf), "fmt %u dim %u %ux%u base %08X clamp %u,%u", f[1] & 0x3f,
                   (f[5] >> 9) & 3, (f[2] & 0x1fff) + 1, ((f[2] >> 13) & 0x1fff) + 1,
-                  f[1] & 0xfffff000u);
+                  f[1] & 0xfffff000u, (f[0] >> 10) & 7, (f[0] >> 13) & 7);
+    return buf;
+}
+
+// what a sampler does (scene_capture.h's TexSampler)
+std::string SamplerString(const TexSampler& t) {
+    if (!t.filtered) return "sampler: none kept (nearest, level 0)";
+    static const char* kMip[] = {"nearest", "linear", "base", "?"};
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "sampler: clamp %u,%u mag %s min %s mip %s aniso %u levels %u-%u bias %.2f "
+                  "border %s",
+                  t.clamp_x, t.clamp_y, t.mag_linear ? "linear" : "point",
+                  t.min_linear ? "linear" : "point", kMip[t.mip & 3], t.aniso, t.mip_min,
+                  t.mip_max, t.lod_bias, t.border_white ? "white" : "black");
+    return buf;
+}
+
+// a texture's size and how many levels the capture kept of it
+std::string LevelsString(const Texture* t) {
+    if (!t) return "none";
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%ux%u, %zu level%s%s", t->width, t->height,
+                  1 + t->mips.size(), t->mips.empty() ? "" : "s",
+                  t->rgba.empty() ? " (no pixels)" : "");
     return buf;
 }
 
@@ -311,10 +374,24 @@ void PrintShadeSummary(const FrameCapture& fc) {
     size_t sampled[kNumShadeMaps] = {}, same_base[kNumShadeMaps] = {},
            other_base[kNumShadeMaps] = {}, decoded[kNumShadeMaps] = {};
     std::map<std::string, size_t> formats;
+    // NORMAL_MAP draws, those whose geometry kept its tangents (the
+    // renderers' normal maps need them), their skin and detail ones, and
+    // the texgen's third row, VS c22, other than (0, 0, 1): the frame turned
+    size_t nmap = 0, nmap_tangents = 0, nmap_skin = 0, nmap_detail = 0, nmap_c22 = 0,
+           nmap_rt = 0;
     for (const DrawItem& d : fc.draws) {
         const ShadeState* s = ShadeOf(fc, d);
         if (!s) continue;
         with++;
+        if (s->Option(kNormalMap) && d.rect_shader < 0) {
+            nmap++;
+            if (d.geom && d.geom->tangents) nmap_tangents++;
+            if (s->OptionBits(kCustomVariation, 2) == 1) nmap_skin++;
+            if (s->Option(kNormDetail)) nmap_detail++;
+            if (MapTargetOf(s, kMapNormal)) nmap_rt++;
+            const float* c22 = s->Vs(22);
+            if (c22[0] != 0 || c22[1] != 0 || c22[2] != 1) nmap_c22++;
+        }
         types[s->shader_type]++;
         if (!SameColor(s->Vs(0), d.color)) {
             vs_c0++;
@@ -367,6 +444,9 @@ void PrintShadeSummary(const FrameCapture& fc) {
                 "%zu; s0 bound = material's diffuse %zu, other %zu\n",
                 diffuse_bit, prelit_bit, s0_same, s0_differ);
     std::printf("  eye (camera translation) against VS c16..c18.w: off by up to %g\n", eye_off);
+    std::printf("  NORMAL_MAP draws %zu, their geometry with tangents %zu; skin %zu, "
+                "NORM_DETAIL %zu, VS c22 not (0,0,1) %zu, the map a render target %zu\n",
+                nmap, nmap_tangents, nmap_skin, nmap_detail, nmap_c22, nmap_rt);
     for (int m = 0; m < kNumShadeMaps; m++) {
         if (!sampled[m]) continue;
         std::printf("  %-9s sampled by %zu draws, %zu decoded; bound = material's %zu, other %zu\n",
@@ -401,12 +481,21 @@ void PrintShade(const FrameCapture& fc, size_t draw) {
     }
     std::printf("  s0  diffuse: bound %s, material's base %08X\n",
                 FetchString(s->fetch_diffuse).c_str(), s->mat_diffuse_base);
+    std::printf("      %s; texture %s\n", SamplerString(s->diffuse_sampler).c_str(),
+                LevelsString(d.tex.get()).c_str());
     for (int m = 0; m < kNumShadeMaps; m++) {
         std::printf("  s%-2u %s: bound %s, material %08X (base %08X)", kShadeMapSampler[m],
                     kMapNames[m], FetchString(s->fetch[m]).c_str(), s->mat_maps[m],
                     s->mat_map_base[m]);
-        if (s->maps[m]) std::printf(", decoded %ux%u", s->maps[m]->width, s->maps[m]->height);
+        if (const Texture* t = s->maps[m].get(); t && t->tex_obj)
+            std::printf(", render target %08X type 0x%X version %u%s", t->tex_obj, t->tex_type,
+                        t->version, t->rgba.empty() ? "" : " (guest pixels)");
+        else if (t)
+            std::printf(", decoded %ux%u", t->width, t->height);
         std::printf("\n");
+        if (s->fetch[m][1])
+            std::printf("      %s; map %s\n", SamplerString(s->samplers[m]).c_str(),
+                        LevelsString(s->maps[m].get()).c_str());
     }
 }
 
@@ -442,6 +531,11 @@ void PrintPassSummary(const FrameCapture& fc) {
                 fc.passes.size(), textures, carried, (unsigned long long)fc.game_frame,
                 fc.rt_sampled, fc.rt_missing, fc.rt_filtered, fc.rt_snapshots, fc.passes_empty,
                 fc.passes_unbalanced);
+    std::printf("draws left out: skipped_shadow %u (shadow draw modes outside their passes), "
+                "skipped_velocity %u, skipped_draw_mode %u, skipped_no_geom %u, "
+                "skipped_target %u\n",
+                fc.skipped_shadow, fc.skipped_velocity, fc.skipped_draw_mode, fc.skipped_no_geom,
+                fc.skipped_target);
     // the render targets draws sample that no pass here made
     std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, size_t>> missing;
     for (const DrawItem& d : fc.draws) {
@@ -484,6 +578,44 @@ float MaxDiff(const float* a, const float* b, int n) {
     float most = 0;
     for (int i = 0; i < n; i++) most = std::max(most, std::fabs(a[i] - b[i]));
     return most;
+}
+
+// The display gamma ramp (the "gamma:" line): which, and what a few 8-bit
+// values show as through it; with `all`, every entry, 10-bit
+void PrintGamma(const FrameCapture& fc, bool all) {
+    const GammaRamp& g = fc.gamma;
+    if (g.mode == GammaRamp::kNone) {
+        std::printf("gamma: none (a capture from before the ramp was kept, or it wasn't read): "
+                    "drawn as RB3 drew it\n");
+        return;
+    }
+    uint8_t lut[3][256];
+    GammaLut(g, lut);
+    std::printf("gamma: %s; value: shown r/g/b", g.mode == GammaRamp::kTable ? "table" : "pwl");
+    for (int v : {0, 1, 2, 4, 8, 16, 32, 64, 96, 128, 192, 255})
+        std::printf(" %d:%u/%u/%u", v, lut[0][v], lut[1][v], lut[2][v]);
+    int differ = 0;
+    for (int c = 0; c < 3; c++)
+        for (int v = 0; v < 256; v++) differ += lut[c][v] != v;
+    std::printf("; %d of 768 values change\n", differ);
+    if (!all) return;
+    if (g.mode == GammaRamp::kTable) {
+        std::printf("  table (10-bit r/g/b by 8-bit value):\n");
+        for (int v = 0; v < 256; v++) {
+            if (v % 8 == 0) std::printf("   %3d:", v);
+            std::printf(" %4u/%4u/%4u", TableChannel(g.table[v], 0), TableChannel(g.table[v], 1),
+                        TableChannel(g.table[v], 2));
+            if (v % 8 == 7) std::printf("\n");
+        }
+    } else {
+        std::printf("  pwl (base+delta, 10.6 fixed point, r g b by step of 8 10-bit values):\n");
+        for (int i = 0; i < 128; i++) {
+            std::printf("   %3d:", i);
+            for (int c = 0; c < 3; c++)
+                std::printf(" %04X+%04X", g.pwl[i][c] & 0xffff, g.pwl[i][c] >> 16);
+            std::printf("\n");
+        }
+    }
 }
 
 // What post-processing was set to do (the "post:" line), against what RB3's
@@ -577,12 +709,42 @@ void PrintPost(const FrameCapture& fc) {
     }
 }
 
+// a pass's draws by draw mode (DrawItem::draw_mode) other than the colour
+// pass's, and their cull modes and shaders' options: " mode 1 x12 (cull 6,
+// SKINNED)"
+std::string DrawModes(const FrameCapture& fc, const Pass& p) {
+    std::map<int, std::pair<size_t, std::map<std::string, size_t>>> modes;
+    const uint32_t end = std::min<uint32_t>(p.first_draw + p.draw_count, uint32_t(fc.draws.size()));
+    for (uint32_t d = p.first_draw; d < end; d++) {
+        const DrawItem& it = fc.draws[d];
+        if (!it.draw_mode) continue;
+        auto& m = modes[it.draw_mode];
+        m.first++;
+        const ShadeState* s = ShadeOf(fc, it);
+        m.second["cull " + std::to_string(it.cull) + ", " +
+                 (s ? OptionString(s->options) : std::string("no shade"))]++;
+    }
+    std::string out;
+    for (const auto& [mode, m] : modes) {
+        out += " mode " + std::to_string(mode) + " x" + std::to_string(m.first) + " (";
+        bool first = true;
+        for (const auto& [what, n] : m.second) {
+            if (!first) out += "; ";
+            first = false;
+            out += what + (m.second.size() > 1 ? " x" + std::to_string(n) : "");
+        }
+        out += ")";
+    }
+    return out;
+}
+
 void PrintPasses(const FrameCapture& fc) {
     for (size_t i = 0; i < fc.passes.size(); i++) {
         const Pass& p = fc.passes[i];
         const uint32_t end = p.first_draw + p.draw_count;
         if (!p.tex_obj) {
-            std::printf("pass %3zu back buffer draws %u..%u\n", i, p.first_draw, end);
+            std::printf("pass %3zu back buffer draws %u..%u%s\n", i, p.first_draw, end,
+                        DrawModes(fc, p).c_str());
             continue;
         }
         uint32_t rects = 0, mips = 0;
@@ -595,14 +757,88 @@ void PrintPasses(const FrameCapture& fc) {
             std::snprintf(clear, sizeof(clear), "clear %02X to %08X z %.0f", p.clear_flags,
                           p.clear_color, p.clear_z);
         std::printf("pass %3zu texture %08X %s %ux%u mips %u, draws %u..%u (%u rects, %u mip), "
-                    "%s, viewport %.0f,%.0f %.0fx%.0f, cam %08X, version %u, frame %llu%s: %s\n",
+                    "%s, viewport %.0f,%.0f %.0fx%.0f, cam %08X, version %u, frame %llu%s: %s%s\n",
                     i, p.tex_obj, TexTypeName(p.tex_type), p.width, p.height, p.num_mips,
                     p.first_draw, end, rects, mips, clear, p.viewport[0], p.viewport[1],
                     p.viewport[2], p.viewport[3], p.cam, p.version,
                     (unsigned long long)p.from_frame,
                     Carried(fc, p) ? " (carried)" : "",
-                    p.name.empty() ? "-" : p.name.c_str());
+                    p.name.empty() ? "-" : p.name.c_str(), DrawModes(fc, p).c_str());
     }
+}
+
+// The "shadow:" lines: each SHADOW_BUFFER draw's s5 against the shadow maps'
+// passes, and its VS c40..c43 against the view-projection the pass that made
+// its version drew with, times the texture's matrix (RB3's CheckShadow); and
+// the shadow maps' passes' draws (their draw modes, cull modes, options).
+void PrintShadowCheck(const FrameCapture& fc) {
+    using namespace shader_opt;
+    // the texture's: u = .5x + .5009765625w, v = -.5y + .5009765625w, z, w
+    Mat4 t{};
+    t.m[0][0] = 0.5f;
+    t.m[1][1] = -0.5f;
+    t.m[2][2] = 1.0f;
+    t.m[3][0] = t.m[3][1] = 0.5009765625f;
+    t.m[3][3] = 1.0f;
+    size_t buffer_draws = 0, as_map = 0, other_s5 = 0, no_s5 = 0, just_before = 0, made = 0;
+    float worst = 0, worst_rel = 0;
+    float worst_col[4] = {};  // by column: u, v, z, w
+    size_t checked = 0;
+    size_t worst_draw = 0;
+    for (size_t d = 0; d < fc.draws.size(); d++) {
+        const ShadeState* s = ShadeOf(fc, fc.draws[d]);
+        if (!s || !s->Option(kShadowBuffer)) continue;
+        buffer_draws++;
+        const Texture* map = ShadowMapOf(s);
+        if (!map) {
+            if (s->maps[kMapProjected]) other_s5++;
+            else no_s5++;
+            continue;
+        }
+        as_map++;
+        // the pass that made its version, and the last shadow map pass before the draw
+        const Pass* maker = nullptr;
+        const Pass* last = nullptr;
+        for (const Pass& p : fc.passes) {
+            if (p.tex_obj == map->tex_obj && p.version == map->version) maker = &p;
+            if (p.tex_type == kTexTypeShadowMap && p.first_draw + p.draw_count <= d) last = &p;
+        }
+        if (!maker) continue;
+        made++;
+        if (maker == last) just_before++;
+        if (!maker->draw_count) continue;
+        const Mat4& vp = fc.draws[maker->first_draw].view_proj;
+        for (int i = 0; i < 4; i++) {
+            const float* c = s->Vs(40 + i);
+            for (int r = 0; r < 4; r++) {
+                float want = 0;
+                for (int k = 0; k < 4; k++) want += vp.m[r][k] * t.m[k][i];
+                const float diff = std::fabs(c[r] - want);
+                if (diff > worst) worst_draw = d;
+                worst = std::max(worst, diff);
+                worst_col[i] = std::max(worst_col[i], diff);
+                worst_rel = std::max(worst_rel, diff / std::max(1.0f, std::fabs(want)));
+            }
+        }
+        checked++;
+    }
+    size_t map_passes = 0, map_draws = 0;
+    for (const Pass& p : fc.passes) {
+        if (p.tex_type != kTexTypeShadowMap) continue;
+        map_passes++;
+        map_draws += p.draw_count;
+    }
+    if (!buffer_draws && !map_passes) return;
+    std::printf("shadow: %zu shadow map passes, %zu draws; %zu SHADOW_BUFFER draws: s5 the shadow "
+                "map %zu (of those, made by a pass here %zu, by the shadow map pass just before "
+                "it %zu), s5 something else %zu, none %zu\n",
+                map_passes, map_draws, buffer_draws, as_map, made, just_before, other_s5, no_s5);
+    if (checked)
+        std::printf("shadow: c40..c43 against the maker pass's view_proj x T over %zu draws: off "
+                    "by up to %.6f (%.2e relative; u %.6f v %.6f z %.6f w %.6f), the most at "
+                    "draw %zu\n",
+                    checked, worst, worst_rel, worst_col[0], worst_col[1], worst_col[2],
+                    worst_col[3], worst_draw);
 }
 
 }  // namespace
@@ -620,9 +856,11 @@ int main(int argc, char** argv) {
     }
     RasterOptions o;
     bool transpose = false, per_cam = false, list = false, no_skinned = false, only_skinned = false;
-    std::string compare, image, diff_with, dump_alpha, dump_depth;
+    std::string compare, image, diff_with, dump_alpha, dump_depth, dump_bloom;
     Crop crop;
     long mesh_filter = -1, dump_tex = -1, shade_draw = -1;
+    int dump_map = -1;  // --dump-tex's :<map>, -1 the diffuse texture
+    long dump_level = 0;  // and its @<level>
     uint32_t dump_rt = 0, dump_rt_version = 0;
     int pick_x = -1, pick_y = -1;
     long cam_filter = -1;
@@ -642,7 +880,20 @@ int main(int argc, char** argv) {
             }
         }
         else if (a == "--mesh" && i + 1 < argc) mesh_filter = std::strtol(argv[++i], nullptr, 16);
-        else if (a == "--dump-tex" && i + 1 < argc) dump_tex = std::strtol(argv[++i], nullptr, 0);
+        else if (a == "--dump-tex" && i + 1 < argc) {
+            char* end = nullptr;
+            dump_tex = std::strtol(argv[++i], &end, 0);
+            if (const char* at = std::strchr(argv[i], '@')) dump_level = std::strtol(at + 1, nullptr, 0);
+            if (end && *end == ':') {
+                const std::string name(end + 1, std::strcspn(end + 1, "@"));
+                for (int m = 0; m < kNumShadeMaps; m++)
+                    if (name == kMapNames[m]) dump_map = m;
+                if (dump_map < 0) {
+                    std::fprintf(stderr, "--dump-tex's map is one of --shade's names\n");
+                    return 2;
+                }
+            }
+        }
         else if (a == "--shade" && i + 1 < argc) shade_draw = std::strtol(argv[++i], nullptr, 0);
         else if (a == "--dump-rt" && i + 1 < argc) {
             char* end = nullptr;
@@ -654,6 +905,9 @@ int main(int argc, char** argv) {
         else if (a == "--pick" && i + 1 < argc) std::sscanf(argv[++i], "%d,%d", &pick_x, &pick_y);
         else if (a == "--no-blend") o.blending = false;
         else if (a == "--no-cull") o.culling = false;
+        else if (a == "--no-shadow") o.self_shadow = false;
+        else if (a == "--no-normal") o.normal_maps = false;
+        else if (a == "--nearest") o.filtering = false;
         else if (a == "--no-tex") o.textures = false;
         else if (a == "--legacy-light") o.legacy_light = true;
         else if (a == "--no-light") o.lighting = false;
@@ -664,7 +918,17 @@ int main(int argc, char** argv) {
         else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%ux%u", &o.width, &o.height);
         else if (a == "--dump-alpha" && i + 1 < argc) dump_alpha = argv[++i];
         else if (a == "--dump-depth" && i + 1 < argc) dump_depth = argv[++i];
+        else if (a == "--dump-bloom" && i + 1 < argc) dump_bloom = argv[++i];
         else if (a == "--no-post") o.post = false;
+        else if (a == "--no-gamma") o.gamma = false;
+        else if (a == "--gamma-from" && i + 1 < argc) {
+            const auto other = LoadCapture(argv[++i]);
+            if (!other) {
+                std::fprintf(stderr, "can't load %s\n", argv[i]);
+                return 1;
+            }
+            fc->gamma = other->gamma;
+        }
         else if (a == "--post-only" && i + 1 < argc) {
             const std::string e = argv[++i];
             o.post_only = e == "xfm"     ? post::kPostXfm
@@ -716,7 +980,11 @@ int main(int argc, char** argv) {
                 (unsigned long long)fc->frame, fc->draws.size(), drawn, cams.size());
     PrintPassSummary(*fc);
     PrintPost(*fc);
-    if (list) PrintPasses(*fc);
+    PrintGamma(*fc, list);
+    if (list) {
+        PrintPasses(*fc);
+        PrintShadowCheck(*fc);
+    }
     for (uint32_t cam : order) {
         const CamStats& cs = cams[cam];
         std::printf("  cam 0x%08X: %d draws, %d sampled verts | as captured: %d front %d inside"
@@ -770,10 +1038,22 @@ int main(int argc, char** argv) {
             float mn[3] = {1e30f, 1e30f, 1e30f}, mx[3] = {-1e30f, -1e30f, -1e30f};
             float lo[2] = {1e30f, 1e30f}, hi[2] = {-1e30f, -1e30f};
             int front = 0;
+            // a BILLBOARD draw lands turned to the camera, as the renderers
+            // draw it (shade.hlsli's Billboard)
+            shade::ShadeParams sp;
+            shade::PackShade(d, ShadeOf(*fc, d), RasterOptions{}, false, sp);
+            const bool billboard = (sp.flags.x & shade::kShadeBillboard) != 0;
             for (const Vertex& v : d.geom->verts) {
                 for (int c = 0; c < 3; c++) { mn[c] = std::min(mn[c], v.pos[c]); mx[c] = std::max(mx[c], v.pos[c]); }
                 float c4[4];
-                Clip(v.pos, d.bones.empty() ? d.world : d.bones[v.bone[0] < d.bones.size() ? v.bone[0] : 0], d.view_proj, c4);
+                if (billboard) {
+                    float wp[3];
+                    shade::BillboardCpu(sp, v.pos, d.world.m[3], wp);
+                    const Mat4 identity{{{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}}};
+                    Clip(wp, identity, d.view_proj, c4);
+                } else {
+                    Clip(v.pos, d.bones.empty() ? d.world : d.bones[v.bone[0] < d.bones.size() ? v.bone[0] : 0], d.view_proj, c4);
+                }
                 if (c4[3] > 0) {
                     front++;
                     for (int k = 0; k < 2; k++) { lo[k] = std::min(lo[k], c4[k] / c4[3]); hi[k] = std::max(hi[k], c4[k] / c4[3]); }
@@ -789,6 +1069,7 @@ int main(int argc, char** argv) {
                     std::printf("rect shader %d [%.1f %.1f %.1f %.1f] ", d.rect_shader, d.rect[0],
                                 d.rect[1], d.rect[2], d.rect[3]);
                 if (d.mip_level) std::printf("mip %d ", d.mip_level);
+                if (d.draw_mode) std::printf("draw mode %u ", unsigned(d.draw_mode));
                 std::printf("\n");
             }
             if (d.tex && d.tex->tex_obj)
@@ -850,6 +1131,21 @@ int main(int argc, char** argv) {
                     vo.height, 100.0 * double(lit) / n, 100.0 * double(bright) / n, sum / n,
                     rs.draws, rs.ms);
     };
+    if (!dump_bloom.empty()) {
+        std::vector<uint32_t> px, level;
+        RasterOptions bo = o;
+        bo.post_bloom0 = &level;
+        Rasterize(*fc, bo, px);
+        if (level.empty()) {
+            std::fprintf(stderr, "the frame has no bloom or glare\n");
+            return 1;
+        }
+        for (uint32_t& c : level) c |= 0xff000000u;  // alpha off, as --dump-tex
+        WritePng(dump_bloom, level, post::Quarter(bo.width), post::Quarter(bo.height));
+        std::printf("%s: bloom level 0, %ux%u\n", dump_bloom.c_str(), post::Quarter(bo.width),
+                    post::Quarter(bo.height));
+        return 0;
+    }
     if (!dump_alpha.empty() || !dump_depth.empty()) {
         if (!dump_alpha.empty()) dump_view(dump_alpha, RasterView::kSceneAlpha);
         if (!dump_depth.empty()) dump_view(dump_depth, RasterView::kSceneDepth);
@@ -887,20 +1183,47 @@ int main(int argc, char** argv) {
     }
 
     if (dump_tex >= 0) {
-        if (size_t(dump_tex) >= fc->draws.size() || !fc->draws[dump_tex].tex) {
-            std::fprintf(stderr, "draw %ld has no texture\n", dump_tex);
+        const DrawItem* d = size_t(dump_tex) < fc->draws.size() ? &fc->draws[dump_tex] : nullptr;
+        const ShadeState* s = d ? ShadeOf(*fc, *d) : nullptr;
+        const Texture* tp = !d              ? nullptr
+                            : dump_map >= 0 ? (s ? s->maps[dump_map].get() : nullptr)
+                                            : d->tex.get();
+        if (!tp) {
+            std::fprintf(stderr, "draw %ld has no %s\n", dump_tex,
+                         dump_map >= 0 ? kMapNames[dump_map] : "texture");
             return 1;
         }
-        const Texture& t = *fc->draws[dump_tex].tex;
+        Texture t = *tp;
         if (t.rgba.empty()) {
             std::fprintf(stderr, "draw %ld samples render target %08X version %u, kept without "
                          "pixels\n", dump_tex, t.tex_obj, t.version);
             return 1;
         }
-        std::vector<uint32_t> px = t.rgba;
-        for (uint32_t& p : px) p |= 0xff000000u;  // alpha off, to see the colour
+        // a mip level instead of the base
+        if (dump_level > 0) {
+            if (size_t(dump_level) > t.mips.size()) {
+                std::fprintf(stderr, "it has %zu mip levels\n", t.mips.size());
+                return 1;
+            }
+            t.rgba = t.mips[dump_level - 1];
+            t.width = std::max(1u, t.width >> dump_level);
+            t.height = std::max(1u, t.height >> dump_level);
+        }
+        // alpha off, to see the colour, and on its own as grey
+        std::vector<uint32_t> px = t.rgba, alpha(t.rgba.size());
+        for (size_t i = 0; i < px.size(); i++) {
+            const uint32_t a = px[i] >> 24;
+            alpha[i] = a | a << 8 | a << 16 | 0xff000000u;
+            px[i] |= 0xff000000u;
+        }
+        std::string alpha_path = argv[2];
+        alpha_path = alpha_path.substr(0, alpha_path.size() - 4) + ".alpha.png";
         WritePng(argv[2], px, t.width, t.height);
-        std::printf("%s: %ux%u format %u\n", argv[2], t.width, t.height, t.format);
+        WritePng(alpha_path, alpha, t.width, t.height);
+        std::printf("%s (and %s): %ux%u format %u", argv[2], alpha_path.c_str(), t.width,
+                    t.height, t.format);
+        if (t.tex_obj) std::printf(", render target %08X version %u", t.tex_obj, t.version);
+        std::printf("\n");
         return 0;
     }
 

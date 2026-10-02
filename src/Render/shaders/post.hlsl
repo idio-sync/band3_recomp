@@ -1,10 +1,11 @@
 // Experimental: the native view's full-screen passes, for the GPU backend
 // (gpu_view.cpp): what happens to the scene target between the world's draws
 // and the overlay's (soft_raster.h). RB3's post-processing (post_model.h):
-// the 4x downsample (or bright pass), the blurs and the composite, whose
-// maths is post_model.hlsli's, which the CPU runs too; and the resolve, the
-// scene into the picture as it is (or, to check the scene target, its alpha
-// or its depth as grey) on frames without post-processing.
+// the 4x downsample (or bright pass), the blurs, glare's pass over bloom's
+// level 0 and the composite, whose maths is post_model.hlsli's, which the CPU
+// runs too; and the resolve, the scene into the picture as it is (or, to check
+// the scene target, its alpha or its depth as grey) on frames without
+// post-processing.
 //
 // Registers follow SDL_gpu's layout as mesh.hlsl's do: pixel resources in
 // space2, pixel uniforms in space3; the vertex shader has none.
@@ -105,6 +106,19 @@ float4 PSBlur(PostIn i) : SV_Target0 {
     for (uint k = 0; k < params.mode.z; k++)
         sum += color_tex.SampleLevel(color_sampler, uv + params.taps[k].xy, 0) * params.taps[k].z;
     return sum;
+}
+
+// the glare pass over bloom's blurred level 0 (post_model.hlsli's Glare*)
+float4 PSGlare(PostIn i) : SV_Target0 {
+    const float2 uv = PixelUv(i);
+    const float2 stride = GlareStep(uv);
+    float2 at = uv;
+    float3 sum = 0.0;
+    [unroll] for (int k = 0; k < kGlareTaps; k++) {
+        sum += GlareTerm(color_tex.SampleLevel(color_sampler, at, 0).rgb, GlareWeight(at));
+        at += stride;
+    }
+    return float4(GlareOut(sum), 1.0);
 }
 
 // the composite into the picture, opaque: the overlay draws over it

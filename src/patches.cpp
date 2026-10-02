@@ -10,6 +10,7 @@
 #include "settings.h"
 #include "src/Input/instruments.h"
 #include "src/Net/events.h"
+#include "src/Game/Modifiers.h"
 #include "src/Game/Symbol.h"
 #include "src/Test/game_state.h"
 #include "src/Test/test_server.h"
@@ -133,6 +134,25 @@ extern "C" REX_FUNC(OptionStr)
 		}
 	}
 
+	// PreInitSystem asks for "define" until it gets null, and makes each answer a
+	// macro the game's scripts see. With rb3e_mode, once the command line's
+	// -define values run out, the answers go on with RB3E's (its DefinesHook in
+	// source/rb3enhanced.c), which Rock Band 3 Deluxe checks to use RB3E. Not
+	// RB3E_EMULATOR: Deluxe reads a Dolphin path and drops its reboot options
+	// with it.
+	static constexpr const char* kRb3eDefines[] = {"RB3E", "RB3E_HAS_VERSION"};
+	static size_t rb3e_defines_given = 0;
+	if (std::strcmp(option, "define") == 0 && band3::settings::Startup().rb3e_mode &&
+	    rb3e_defines_given < std::size(kRb3eDefines)) {
+		const char* define = kRb3eDefines[rb3e_defines_given++];
+		const uint32_t len = static_cast<uint32_t>(std::strlen(define) + 1);
+		const uint32_t str_guest = rex::system::kernel_memory()->SystemHeapAlloc(len, 1);
+		std::memcpy(base + str_guest, define, len);
+		REXLOG_INFO("OptionStr(\"define\") = \"{}\" (rb3e_mode)", define);
+		ctx.r3.u64 = str_guest;
+		return;
+	}
+
 	ctx.r3.u64 = defaultPtr;
 }
 
@@ -218,6 +238,14 @@ extern "C" REX_FUNC(MetaPerformer__SetVenue)
     const std::string forced = band3::settings::ForcedVenue();
 
     if (forced.empty() || forced == "false") {
+        // RB3E's black background modifier: venue "none", the track over black;
+        // a forced venue still wins, as on RB3E
+        if (band3::modifiers::Active(ctx, base, "mod_black_background")) {
+            if (const uint32_t none = band3::modifiers::Intern(ctx, base, "none")) {
+                REXLOG_INFO("Black background modifier: no venue");
+                ctx.r4.u64 = none;
+            }
+        }
         SetVenueAndReport(ctx, base);
         return;
     }

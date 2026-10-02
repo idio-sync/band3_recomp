@@ -35,6 +35,16 @@ def spot_green_density(c, uv, T):    # the density map's green, as the cones rea
     try: return cp.m_spot_only_F7E2A8FB(c, uv, T)
     finally: cp.spot_term = real
 
+def glare_unsquared(c, uv, T):      # the glare pass's tap weight not squared: 1 - 4 min(r^2, 0.25)
+    out = [0.0] * 3; taps = set()
+    tenth = c[255][3]; p = list(uv); step = [(1 - 2*uv[0])*tenth, (1 - 2*uv[1])*tenth]
+    for _ in range(10):
+        t = T('tf0', p[0], p[1]); taps.add(('tf0', p[0], p[1]))
+        w = 1 - 4*min((p[0]-0.5)**2 + (p[1]-0.5)**2, 0.25)
+        for k in range(3): out[k] += 1 / (1 - w*t[k])
+        p = [p[0]+step[0], p[1]+step[1]]
+    return [2 - 20/out[k] for k in range(3)] + [1.0], taps
+
 def comp_w_negative(rng):           # c24.w < 0 (unreachable in-game): exposes the extra |.| before sat
     c = cp.consts_composite(rng); c[24][3] = -abs(c[24][3]) - 0.1; return c
 
@@ -45,6 +55,7 @@ cp.CASES = [
     ('63306D35C02782FB', 'EDGE composite c24.w<0', comp_w_negative, cp.m_composite_63306D35),
     ('6EF4844DABAEC671', 'NEG spot term after the matrix', cp.consts_composite, spot_after_xfm),
     ('F7E2A8FB5982ED7D', 'NEG spot density green', cp.consts_composite, spot_green_density),
+    ('2789C57F87CFFD5D', 'NEG glare weight unsquared', cp.consts_generic, glare_unsquared),
 ]
 cp.main()
 

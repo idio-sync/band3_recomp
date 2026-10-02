@@ -1,21 +1,24 @@
 #include "config.h"
 #include "settings.h"
+#include "paths.h"
 #include "ThirdParty/inih/INIReader.h"
+#include <rex/filesystem.h>
 #include <rex/logging.h>
+#include <fstream>
+#include <sstream>
 
 #ifdef _WIN32
 #include <cstdlib>
 #include <windows.h>
 #else
 #include <cstdlib>
-#include <fstream>
 #endif
 
 namespace band3 {
 
 static std::vector<std::string> g_args;
 static bool g_args_initialized = false;
-static std::string g_game_data_root;
+static std::filesystem::path g_game_data_root;
 
 namespace {
 
@@ -41,6 +44,7 @@ constexpr IniSetting kIniSettings[] = {
     {"game", "fast_start", "fast_start"},
     {"game", "disable_metamusic", "disable_metamusic"},
     {"game", "lang", "lang"},
+    {"game", "content_folders", "content_folders"},
     {"graphics", "disable_approximate_lights", "disable_approximate_lights"},
     {"graphics", "disable_hair_shader", "disable_hair_shader"},
     {"graphics", "fullbright", "fullbright"},
@@ -56,6 +60,11 @@ constexpr IniSetting kIniSettings[] = {
     {"http", "address", "http_address"},
     {"http", "allow_cors", "http_allow_cors"},
     {"http", "allow_scripts", "http_allow_scripts"},
+    {"game", "rb3e_mode", "rb3e_mode"},
+    {"game", "song_speed", "song_speed"},
+    {"game", "track_speed", "track_speed"},
+    {"game", "unlock_clothing", "unlock_clothing"},
+    {"game", "gold_on_all_difficulties", "gold_on_all_difficulties"},
     {"audio", "max_queued_frames", "audio_maxqframes"},
     {"memory", "main_heap_size", "main_heap_size"},
     {"memory", "char_heap_size", "char_heap_size"},
@@ -74,23 +83,58 @@ std::string Unquote(std::string value) {
     return value;
 }
 
+// read through a path, not a narrow file name, so a non-ASCII folder works;
+// a missing file reads as an empty ini
+INIReader ReadIni() {
+    std::ifstream file(LegacyIniPath(), std::ios::binary);
+    if (!file) return INIReader("", 0);
+    std::stringstream text;
+    text << file.rdbuf();
+    const std::string s = text.str();
+    return INIReader(s.c_str(), s.size());
 }
 
-std::string ReadIniGameDataRoot(const char* path) {
-    INIReader reader(path);
+}
+
+const std::filesystem::path& LegacyIniPath() {
+    static const std::filesystem::path path = [] {
+        std::error_code ec;
+        auto found = paths::FindFile(
+            {std::filesystem::current_path(ec), rex::filesystem::GetExecutableFolder()},
+            kLegacyIniPath);
+        return found.empty() ? std::filesystem::path(kLegacyIniPath) : found;
+    }();
+    return path;
+}
+
+std::filesystem::path IniAnchor() {
+    std::error_code ec;
+    auto path = std::filesystem::absolute(LegacyIniPath(), ec);
+    return std::filesystem::is_regular_file(path, ec) ? path.parent_path()
+                                                       : std::filesystem::current_path(ec);
+}
+
+std::string ReadIniString(const char* key) {
+    return Unquote(ReadIni().Get("game", key, ""));
+}
+
+std::string ReadIniGameDataRoot() {
+    INIReader reader = ReadIni();
     // [game] is where band3_config.ini documents it; [paths] kept for older inis
     std::string root = Unquote(
         reader.Get("game", "game_data_root", reader.Get("paths", "game_data_root", "")));
     return root.empty() ? "assets" : root;
 }
 
-void ApplyLegacyIni(const char* path) {
-    // inih keeps parsing past a bad line, so only a missing file loses the settings
-    INIReader reader(path);
-    if (reader.ParseError() == -1) {
+void ApplyLegacyIni() {
+    const std::string path = rex::path_to_utf8(LegacyIniPath());
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(LegacyIniPath(), ec)) {
         REXLOG_DEBUG("No {}, using band3.toml and defaults", path);
         return;
     }
+    // inih keeps parsing past a bad line, so only a missing file loses the settings
+    INIReader reader = ReadIni();
     if (reader.ParseError() != 0) {
         REXLOG_WARN("{}: {}; the other settings still apply", path, reader.ParseErrorMessage());
     }
@@ -155,8 +199,8 @@ void AddSettingArgs() {
     g_args.push_back("MHX_PC");
 }
 
-const std::string& GameDataRoot() { return g_game_data_root; }
-void SetGameDataRoot(std::string root) { g_game_data_root = std::move(root); }
+const std::filesystem::path& GameDataRoot() { return g_game_data_root; }
+void SetGameDataRoot(std::filesystem::path root) { g_game_data_root = std::move(root); }
 
 const std::vector<std::string>& GetArgs() {
     if (!g_args_initialized) {

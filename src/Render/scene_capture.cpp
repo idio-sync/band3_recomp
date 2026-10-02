@@ -2,10 +2,15 @@
 
 #include <rex/cvar.h>
 #include <rex/dbg.h>
+#include <rex/graphics/command_processor.h>
+#include <rex/graphics/graphics_system.h>
+#include <rex/logging.h>
+#include <rex/runtime.h>
 #include <rex/system/kernel_state.h>
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -13,6 +18,7 @@
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -20,6 +26,7 @@
 
 #include "generated/band3_init.h"
 #include "src/Render/frame_compose.h"
+#include "src/Render/guest_formats.h"
 #include "src/settings.h"
 
 // See scene_capture.h.
@@ -115,7 +122,6 @@ constexpr uint32_t kTex_NumMips = 0x64;
 constexpr uint32_t kDxTex_Format = 0x74;
 constexpr uint32_t kDxTex_Texture = 0x78;
 constexpr uint32_t kTexType_NoZ = 0x20;
-constexpr uint32_t kTexType_ShadowMap = 0x42;
 // RndCam (rndobj/Cam.h)
 constexpr uint32_t kCam_ScreenRect = 0x2cc;  // Hmx::Rect, 0..1 of the target
 constexpr uint32_t kCam_TargetTex = 0x2dc + 8;
@@ -143,12 +149,9 @@ constexpr uint32_t kD3DBaseTexture_Fetch = 0x1c;
 // 7 (WorldReflection::DrawShowing, the mirrored scene through a copy of the
 // current camera, so to the back buffer).
 // rb3-xenon's Rnd::Mode numbers NgLight's (kDrawOcclusion) and those after it
-// one higher than retail does.
+// one higher than retail does. scene_capture.h has 0, 1 and 3.
 constexpr uint32_t kDrawModeHolder = 0x82C76B68;  // TheRnd*
 constexpr uint32_t kDrawMode = 0xfc;
-constexpr uint32_t kDrawModeNormal = 0;
-constexpr uint32_t kDrawModeShadowDepth = 1;
-constexpr uint32_t kDrawModeShadowCasters = 3;
 constexpr uint32_t kDrawModeVelocity = 5;
 constexpr uint32_t kDrawModeSoftParticles = 6;
 constexpr uint32_t kDrawModeReflection = 7;
@@ -158,6 +161,10 @@ constexpr uint32_t kDrawModeReflection = 7;
 constexpr uint32_t kD3DDeviceHolder = 0x82E04CFC;
 constexpr uint32_t kDev_TextureFetch = 0x480;  // 26 of 24 bytes
 constexpr uint32_t kDev_VertexShaderF = 0x780;
+// the view-projection DxCam::Select uploads (kVS_ViewProjMatrix), which
+// NgLight::SetShadowTransforms sets itself for its camera-less pass: VS
+// c4..c7, the matrix's columns
+constexpr uint32_t kVsViewProj = 4;
 constexpr uint32_t kDev_PixelShaderF = 0x1780;
 // its PA_SU_SC_MODE_CNTL, whose low bits RndRenderState::SetCullMode sets
 // (the XDK's D3DDevice_SetRenderState_CullMode, sub_828502B8)
@@ -288,56 +295,12 @@ Mat4 ReadMatrix4(const Guest& g, uint32_t a) {
     return r;
 }
 
-float HalfToFloat(uint16_t h) {
-    const uint32_t sign = (h >> 15) & 1;
-    const uint32_t exp = (h >> 10) & 0x1f;
-    const uint32_t mant = h & 0x3ff;
-    float v;
-    if (exp == 0) {
-        v = std::ldexp(float(mant), -24);
-    } else if (exp == 31) {
-        v = mant ? NAN : INFINITY;
-    } else {
-        v = std::ldexp(float(mant | 0x400), int(exp) - 25);
-    }
-    return sign ? -v : v;
-}
-
-float Dec10(uint32_t bits) {
-    int s = int(bits & 0x3ff);
-    if (s & 0x200) s -= 0x400;
-    return std::max(-1.0f, float(s) / 511.0f);
-}
+// DxMesh's packed vertex (guest_formats.h)
+using guest_format::DecodePacked;
 
 uint32_t Fnv(const uint8_t* p, size_t n, uint32_t h = 2166136261u) {
     for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
     return h;
-}
-
-// CompressedVertex_Xbox, as DxMesh's vertex declaration reads it
-Vertex DecodePacked(const uint8_t* p) {
-    Vertex v{};
-    for (int i = 0; i < 3; i++) v.pos[i] = BeF32(p + i * 4);
-    const uint32_t argb = Be32(p + 12);
-    v.color = ((argb >> 16) & 0xff) | (((argb >> 8) & 0xff) << 8) | ((argb & 0xff) << 16) |
-              (argb & 0xff000000u);
-    const uint32_t uv = Be32(p + 16);
-    v.uv[0] = HalfToFloat(uint16_t(uv >> 16));
-    v.uv[1] = HalfToFloat(uint16_t(uv & 0xffff));
-    const uint32_t n = Be32(p + 20);
-    v.nrm[0] = Dec10(n);
-    v.nrm[1] = Dec10(n >> 10);
-    v.nrm[2] = Dec10(n >> 20);
-    const uint32_t w = Be32(p + 28);
-    float sum = 0;
-    for (int i = 0; i < 3; i++) {
-        v.weight[i] = float((w >> (10 * i)) & 0x3ff) / 1023.0f;
-        sum += v.weight[i];
-    }
-    v.weight[3] = std::max(0.0f, 1.0f - sum);
-    const uint32_t bi = Be32(p + 32);
-    for (int i = 0; i < 4; i++) v.bone[i] = uint8_t(bi >> (8 * i));
-    return v;
 }
 
 // RndMesh::Vert in guest memory
@@ -359,219 +322,28 @@ Vertex DecodeCpuVert(const Guest& g, uint32_t a) {
     v.color = rgba;
     v.uv[0] = g.F32(a + 0x40);
     v.uv[1] = g.F32(a + 0x44);
+    // the tangent and its handedness, which FillCompressedVertex packs into
+    // the vertex buffer's 2_10_10_10 (guest_formats.h's DecodePacked): w as
+    // its two bits keep it, -1, 0 or 1
+    for (int i = 0; i < 3; i++) v.tan[i] = g.F32(a + 0x50 + i * 4);
+    v.tan[3] = std::clamp(std::round(g.F32(a + 0x5c)), -1.0f, 1.0f);
     return v;
 }
 
 // ---------------------------------------------------------------------------
 // textures
 
-// Xenos tiled 2D addressing (x, y and pitch in blocks), as Xenia computes it
-int32_t TiledOffset2D(int32_t x, int32_t y, uint32_t pitch, uint32_t bpb_log2) {
-    pitch = (pitch + 31) & ~31u;
-    const int32_t macro = ((x >> 5) + (y >> 5) * int32_t(pitch >> 5)) << (bpb_log2 + 7);
-    const int32_t micro = ((x & 7) + ((y & 0xE) << 2)) << bpb_log2;
-    const int32_t offset = macro + ((micro & ~0xF) << 1) + (micro & 0xF) + ((y & 1) << 4);
-    return ((offset & ~0x1FF) << 3) + ((y & 16) << 7) + ((offset & 0x1C0) << 2) +
-           (((((y & 8) >> 2) + (x >> 3)) & 3) << 6) + (offset & 0x3F);
-}
-
-void SwapEndian(uint8_t* p, uint32_t n, uint32_t endian) {
-    switch (endian) {
-        case 1:  // 8in16
-            for (uint32_t i = 0; i + 1 < n; i += 2) std::swap(p[i], p[i + 1]);
-            break;
-        case 2:  // 8in32
-            for (uint32_t i = 0; i + 3 < n; i += 4) {
-                std::swap(p[i], p[i + 3]);
-                std::swap(p[i + 1], p[i + 2]);
-            }
-            break;
-        case 3:  // 16in32
-            for (uint32_t i = 0; i + 3 < n; i += 4) {
-                std::swap(p[i], p[i + 2]);
-                std::swap(p[i + 1], p[i + 3]);
-            }
-            break;
-        default:
-            break;
-    }
-}
-
-struct Rgba {
-    uint8_t c[4];
-};
-
-void Rgb565(uint16_t v, Rgba& out) {
-    out.c[0] = uint8_t(((v >> 11) & 31) * 255 / 31);
-    out.c[1] = uint8_t(((v >> 5) & 63) * 255 / 63);
-    out.c[2] = uint8_t((v & 31) * 255 / 31);
-    out.c[3] = 255;
-}
-
-// the colour half of a DXT block; four_colour forces DXT3/5 behaviour
-void DecodeColorBlock(const uint8_t* b, bool four_colour, Rgba out[16]) {
-    const uint16_t c0 = uint16_t(b[0] | (b[1] << 8));
-    const uint16_t c1 = uint16_t(b[2] | (b[3] << 8));
-    Rgba pal[4];
-    Rgb565(c0, pal[0]);
-    Rgb565(c1, pal[1]);
-    if (four_colour || c0 > c1) {
-        for (int i = 0; i < 3; i++) {
-            pal[2].c[i] = uint8_t((2 * pal[0].c[i] + pal[1].c[i]) / 3);
-            pal[3].c[i] = uint8_t((pal[0].c[i] + 2 * pal[1].c[i]) / 3);
-        }
-        pal[2].c[3] = pal[3].c[3] = 255;
-    } else {
-        for (int i = 0; i < 3; i++) pal[2].c[i] = uint8_t((pal[0].c[i] + pal[1].c[i]) / 2);
-        pal[2].c[3] = 255;
-        pal[3] = Rgba{{0, 0, 0, 0}};
-    }
-    const uint32_t idx = uint32_t(b[4]) | (uint32_t(b[5]) << 8) | (uint32_t(b[6]) << 16) |
-                         (uint32_t(b[7]) << 24);
-    for (int i = 0; i < 16; i++) out[i] = pal[(idx >> (2 * i)) & 3];
-}
-
-void DecodeDxt5Alpha(const uint8_t* b, uint8_t out[16]) {
-    uint8_t pal[8];
-    pal[0] = b[0];
-    pal[1] = b[1];
-    if (pal[0] > pal[1]) {
-        for (int i = 1; i < 7; i++) pal[i + 1] = uint8_t(((7 - i) * pal[0] + i * pal[1]) / 7);
-    } else {
-        for (int i = 1; i < 5; i++) pal[i + 1] = uint8_t(((5 - i) * pal[0] + i * pal[1]) / 5);
-        pal[6] = 0;
-        pal[7] = 255;
-    }
-    uint64_t bits = 0;
-    for (int i = 0; i < 6; i++) bits |= uint64_t(b[2 + i]) << (8 * i);
-    for (int i = 0; i < 16; i++) out[i] = pal[(bits >> (3 * i)) & 7];
-}
-
-struct FormatInfo {
-    uint32_t block;  // block width and height in texels
-    uint32_t bpb;    // bytes per block
-};
-
-bool GetFormatInfo(uint32_t format, FormatInfo& info) {
-    switch (format) {
-        case 2: info = {1, 1}; return true;    // k_8
-        case 4: info = {1, 2}; return true;    // k_5_6_5
-        case 6: info = {1, 4}; return true;    // k_8_8_8_8
-        case 10: info = {1, 2}; return true;   // k_8_8
-        case 18: info = {4, 8}; return true;   // k_DXT1
-        case 19: info = {4, 16}; return true;  // k_DXT2_3
-        case 20: info = {4, 16}; return true;  // k_DXT4_5
-        case 49: info = {4, 16}; return true;  // k_DXN
-        default: return false;
-    }
-}
-
-// texels of one block as the fetch's x, y, z, w components
-void DecodeBlock(uint32_t format, const uint8_t* b, Rgba out[16]) {
-    switch (format) {
-        case 2:
-            out[0] = Rgba{{b[0], 0, 0, 255}};
-            break;
-        case 4: {
-            const uint16_t v = uint16_t(b[0] | (b[1] << 8));
-            out[0] = Rgba{{uint8_t((v & 31) * 255 / 31), uint8_t(((v >> 5) & 63) * 255 / 63),
-                           uint8_t(((v >> 11) & 31) * 255 / 31), 255}};
-            break;
-        }
-        case 6:
-            out[0] = Rgba{{b[0], b[1], b[2], b[3]}};
-            break;
-        case 10:
-            out[0] = Rgba{{b[0], b[1], 0, 255}};
-            break;
-        case 18:
-            DecodeColorBlock(b, false, out);
-            break;
-        case 19:
-            DecodeColorBlock(b + 8, true, out);
-            for (int i = 0; i < 16; i++) {
-                const uint8_t nib = uint8_t((b[i / 2] >> ((i & 1) * 4)) & 0xF);
-                out[i].c[3] = uint8_t(nib * 17);
-            }
-            break;
-        case 20: {
-            DecodeColorBlock(b + 8, true, out);
-            uint8_t a[16];
-            DecodeDxt5Alpha(b, a);
-            for (int i = 0; i < 16; i++) out[i].c[3] = a[i];
-            break;
-        }
-        case 49: {
-            // two DXT5 alpha blocks, x then y, as Xenia reads it (BC5); normal
-            // maps' tangent-space x and y
-            uint8_t x[16], y[16];
-            DecodeDxt5Alpha(b, x);
-            DecodeDxt5Alpha(b + 8, y);
-            for (int i = 0; i < 16; i++) out[i] = Rgba{{x[i], y[i], 0, 255}};
-            break;
-        }
-    }
-}
-
-// mip 0 of a 2D texture from its fetch constant, or null for formats not handled
+// A 2D texture and its mip chain from its fetch constant (guest_formats.h's
+// DecodeTextureLevels); empty rgba for formats not handled
 std::shared_ptr<Texture> DecodeTexture(const Guest& g, const uint32_t f[6]) {
-    const bool tiled = (f[0] >> 31) & 1;
-    const uint32_t pitch_texels = ((f[0] >> 22) & 0x1ff) << 5;
-    const uint32_t format = f[1] & 0x3f;
-    const uint32_t endian = (f[1] >> 6) & 3;
-    const uint32_t base_address = f[1] & 0xfffff000u;
-    const uint32_t width = (f[2] & 0x1fff) + 1;
-    const uint32_t height = ((f[2] >> 13) & 0x1fff) + 1;
-    const uint32_t swizzle = (f[3] >> 1) & 0xfff;
-    const uint32_t dimension = (f[5] >> 9) & 3;
-
     auto tex = std::make_shared<Texture>();
-    tex->format = format;
-    FormatInfo info;
-    if (dimension != 1 || !GetFormatInfo(format, info) || !base_address ||
-        width > kMaxTextureSize || height > kMaxTextureSize) {
-        return tex;  // empty: format not decoded
-    }
-    const uint8_t* src = GpuHost(g, base_address);
-    if (!src) return tex;
-
-    const uint32_t blocks_x = (width + info.block - 1) / info.block;
-    const uint32_t blocks_y = (height + info.block - 1) / info.block;
-    const uint32_t pitch_blocks =
-        std::max(blocks_x, (std::max(pitch_texels, width) + info.block - 1) / info.block);
-    const uint32_t bpb_log2 = info.bpb == 1 ? 0 : info.bpb == 2 ? 1 : info.bpb == 4 ? 2 :
-                              info.bpb == 8 ? 3 : 4;
-    const uint32_t linear_row = (pitch_blocks * info.bpb + 255) & ~255u;
-
-    tex->width = width;
-    tex->height = height;
-    tex->rgba.assign(size_t(width) * height, 0);
-    uint8_t block[16];
-    Rgba texels[16];
-    for (uint32_t by = 0; by < blocks_y; by++) {
-        for (uint32_t bx = 0; bx < blocks_x; bx++) {
-            const uint32_t offset = tiled ? uint32_t(TiledOffset2D(int32_t(bx), int32_t(by),
-                                                                   pitch_blocks, bpb_log2))
-                                          : by * linear_row + bx * info.bpb;
-            std::memcpy(block, src + offset, info.bpb);
-            SwapEndian(block, info.bpb, endian);
-            DecodeBlock(format, block, texels);
-            const uint32_t n = info.block;
-            for (uint32_t ty = 0; ty < n; ty++) {
-                for (uint32_t tx = 0; tx < n; tx++) {
-                    const uint32_t x = bx * n + tx, y = by * n + ty;
-                    if (x >= width || y >= height) continue;
-                    const Rgba& s = texels[ty * n + tx];
-                    uint32_t rgba = 0;
-                    for (int c = 0; c < 4; c++) {
-                        const uint32_t sel = (swizzle >> (3 * c)) & 7;
-                        const uint8_t v = sel < 4 ? s.c[sel] : sel == 4 ? 0 : 255;
-                        rgba |= uint32_t(v) << (8 * c);
-                    }
-                    tex->rgba[size_t(y) * width + x] = rgba;
-                }
-            }
-        }
+    const guest_format::FetchLayout l = guest_format::ReadFetchLayout(f);
+    const uint8_t* base = l.base_address ? GpuHost(g, l.base_address) : nullptr;
+    const uint8_t* mips = l.mip_address && l.mip_max ? GpuHost(g, l.mip_address) : nullptr;
+    if (!guest_format::DecodeTextureLevels(base, mips, f, *tex, kMaxTextureSize)) {
+        tex->width = tex->height = 0;
+        tex->rgba.clear();
+        tex->mips.clear();
     }
     return tex;
 }
@@ -610,6 +382,9 @@ uint64_t RtKey(uint32_t tex, uint32_t version) { return uint64_t(tex) << 32 | ve
 // what's known of a texture that passes draw into
 struct RtState {
     uint32_t version = 0;  // its passes resolved since it was made
+    // its texture's base address, physical (TexBase), as a fetch constant
+    // that binds it has it: what tells s5 bound to it (CaptureShade)
+    uint32_t base = 0;
     uint64_t made_frame = ~0ull;  // the game frame of its last pass
     // its passes in a row each within kRepeatFrames of the one before
     uint32_t repeats = 0;
@@ -630,6 +405,7 @@ struct Sink {
     ShadeIndex& shades;
     std::vector<uint64_t>& samples;
     uint32_t target;  // 0 the frame's back buffer
+    uint8_t draw_mode = kDrawModeNormal;  // TheRnd's, for DrawItem::draw_mode
 };
 
 // the texture pass the game is drawing, between DxTex::MakeDrawTarget and
@@ -697,6 +473,9 @@ thread_local uint64_t g_shader_options = 0;
 thread_local int32_t g_shader_type = -1;
 // native_view_rt_fallback, kept by its change callback
 std::atomic<bool> g_rt_fallback_guest{true};
+// the SDK's anisotropic_override, which the game's own picture is sampled
+// with (guest_formats.h's DecodeSampler), kept by its change callback
+std::atomic<int32_t> g_aniso_override{-1};
 // native_view_record_targets: texture passes are recorded while capture is
 // off too (off by default, when the game pays only the hooks' early-outs)
 std::atomic<bool> g_record_targets{false};
@@ -805,6 +584,7 @@ std::shared_ptr<const Geometry> CaptureGeometry(const Guest& g, uint32_t geom,
         out->verts.resize(num_verts);
         for (uint32_t i = 0; i < num_verts; i++)
             out->verts[i] = DecodePacked(vsrc + i * kPackedVert_Size);
+        out->tangents = true;
         out->indices.reserve(num_indices);
         for (uint32_t i = 0; i + 2 < num_indices; i += 3) {
             const uint16_t a = Be16(isrc + i * 2), b = Be16(isrc + i * 2 + 2),
@@ -828,6 +608,7 @@ std::shared_ptr<const Geometry> CaptureGeometry(const Guest& g, uint32_t geom,
     out->verts.resize(num_verts);
     for (uint32_t i = 0; i < num_verts; i++)
         out->verts[i] = DecodeCpuVert(g, verts + i * kVert_Size);
+    out->tangents = true;
     out->indices.reserve(num_faces_cpu * 3);
     for (uint32_t i = 0; i < num_faces_cpu; i++) {
         const uint16_t a = g.U16(faces + i * 6), b = g.U16(faces + i * 6 + 2),
@@ -922,10 +703,28 @@ std::shared_ptr<const Texture> CaptureTexture(const Guest& g, State& s, Sink& si
     return tex;
 }
 
+// the view-projection the device's VS has (kVsViewProj), its columns read
+// back into rows
+Mat4 DeviceViewProj(const Guest& g) {
+    Mat4 m = Identity();
+    const uint32_t dev = g.U32(kD3DDeviceHolder);
+    if (!dev) return m;
+    for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++)
+            m.m[r][c] = g.F32(dev + kDev_VertexShaderF + (kVsViewProj + c) * 16 + r * 4);
+    return m;
+}
+
 // The camera's view-projection, read the first time a draw needs it after a
 // camera select: DxCam::Select writes it after RndCam::Select. Identity
-// without a camera.
+// without a camera. A texture pass no camera selected (NgLight's shadow, which
+// uploads its own) draws with the device's.
 const Mat4& ViewProj(const Guest& g, State& s) {
+    if (s.open.tex && s.open.rec && !s.open.rec->pass.cam) {
+        s.vp = DeviceViewProj(g);
+        s.vp_valid = false;  // a camera's again after
+        return s.vp;
+    }
     if (!s.vp_valid) {
         s.vp = s.cam ? ReadMatrix4(g, s.cam + kCam_ViewProj) : Identity();
         s.vp_valid = true;
@@ -938,8 +737,10 @@ const Mat4& ViewProj(const Guest& g, State& s) {
 // the frame's back buffer while capturing, if the current camera draws there;
 // and only in a colour pass, the normal one or a reflection's, or, for a
 // particle system (`particles`), the soft-particle buffer's pass into its
-// surface (draw mode 6: IsSoftParticle). Other draws there (a mesh child of
-// RndSoftParticles; none seen) are left out.
+// surface (draw mode 6: IsSoftParticle), or a shadow's: draw mode 1 into a
+// shadow map's pass (RndShadowMap's depth), 3 into any (NgLight's casters).
+// Other draws there (a mesh child of RndSoftParticles; none seen) are left
+// out. The sink says which mode it was.
 bool Target(const Guest& g, State& s, std::optional<Sink>& sink, bool particles = false) {
     if (s.open.tex) {
         if (!s.open.record) return false;
@@ -959,7 +760,11 @@ bool Target(const Guest& g, State& s, std::optional<Sink>& sink, bool particles 
     const uint32_t mode = holder ? g.U32(holder + kDrawMode) : kDrawModeNormal;
     const bool soft = mode == kDrawModeSoftParticles && particles && s.soft_surface &&
                       s.open.tex == s.soft_surface;
-    if (mode != kDrawModeNormal && mode != kDrawModeReflection && !soft) {
+    const bool shadow_depth = mode == kDrawModeShadowDepth && s.open.tex && s.open.rec &&
+                              s.open.rec->pass.tex_type == kTexTypeShadowMap;
+    const bool casters = mode == kDrawModeShadowCasters && s.open.tex;
+    if (mode != kDrawModeNormal && mode != kDrawModeReflection && !soft && !shadow_depth &&
+        !casters) {
         if (mode == kDrawModeVelocity) {
             fc.skipped_velocity++;
         } else if (mode == kDrawModeShadowDepth || mode == kDrawModeShadowCasters) {
@@ -973,6 +778,7 @@ bool Target(const Guest& g, State& s, std::optional<Sink>& sink, bool particles 
         fc.cams++;
         s.cam_counted = true;
     }
+    sink->draw_mode = uint8_t(mode);
     return true;
 }
 
@@ -991,6 +797,7 @@ void PushDraw(State& s, Sink& sink, DrawItem&& item) {
     } else if (!g_enabled.load(std::memory_order_relaxed)) {
         g_rec_draws.fetch_add(1, std::memory_order_relaxed);
     }
+    item.draw_mode = sink.draw_mode;
     fc.draws.push_back(std::move(item));
 }
 
@@ -1059,16 +866,27 @@ std::shared_ptr<const Texture> CaptureMap(const Guest& g, const uint32_t f[6],
     return tex;
 }
 
-// `shade`'s index in fc.shades, which gets it if no equal one is there yet;
-// fill_maps decodes a new one's maps
+// a map kept as a render target's identity (Texture::tex_obj), or null
+const Texture* RtMap(const std::shared_ptr<const Texture>& t) {
+    return t && t->tex_obj ? t.get() : nullptr;
+}
+
+// `shade`'s index in fc.shades, which gets it if no equal one is there yet:
+// the same inputs, and the same render targets' versions where it has some
+// as maps already (the same inputs can read another version of one: each
+// character's shadow map); fill_maps decodes a new one's other maps
 template <typename FillMaps>
 int32_t InternShade(FrameCapture& fc, ShadeIndex& index, ShadeState&& shade, FillMaps fill_maps) {
     const ShadeInputs& in = shade;
     const uint64_t hash = HashBytes(&in, sizeof(in));
     auto [first, last] = index.equal_range(hash);
     for (auto it = first; it != last; ++it) {
-        const ShadeInputs& other = fc.shades[it->second];
-        if (std::memcmp(&other, &in, sizeof(in)) == 0) return it->second;
+        const ShadeState& other = fc.shades[it->second];
+        if (std::memcmp(static_cast<const ShadeInputs*>(&other), &in, sizeof(in)) != 0) continue;
+        bool same_rts = true;
+        for (int m = 0; m < kNumShadeMaps; m++)
+            same_rts &= RtMap(other.maps[m]) == RtMap(shade.maps[m]);
+        if (same_rts) return it->second;
     }
     fill_maps(shade);
     const int32_t i = int32_t(fc.shades.size());
@@ -1134,9 +952,28 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
         if (MapSampled(in, m)) fetch(kShadeMapSampler[m], in.fetch[m]);
     }
 
+    // s5, s1 or s14 bound to a texture a pass draws (the shadow map,
+    // NgLight's shadow, a head's normal map): its identity and the version it
+    // has now, as a diffuse render target's, and a sample the capture has to
+    // have the pass of
+    for (int m : {kMapProjected, kMapNormal, kMapDetailNormal}) {
+        const uint32_t base = in.fetch[m][1] & 0xfffff000u;
+        if (!base) continue;
+        for (const auto& [tex, rt] : s.rts) {
+            if (rt.base != base) continue;
+            shade.maps[m] = CaptureTexture(g, s, sink, tex);
+            break;
+        }
+    }
     return InternShade(fc, sink.shades, std::move(shade), [&](ShadeState& st) {
+        // the samplers the textures are read with, from the same fetch
+        // constants (none bound: the default)
+        const int32_t aniso = g_aniso_override.load(std::memory_order_relaxed);
+        st.diffuse_sampler = guest_format::DecodeSampler(st.fetch_diffuse, aniso);
         for (int m = 0; m < kNumShadeMaps; m++)
-            if (st.fetch[m][1]) st.maps[m] = CaptureMap(g, st.fetch[m], fc);
+            st.samplers[m] = guest_format::DecodeSampler(st.fetch[m], aniso);
+        for (int m = 0; m < kNumShadeMaps; m++)
+            if (st.fetch[m][1] && !st.maps[m]) st.maps[m] = CaptureMap(g, st.fetch[m], fc);
     });
 }
 
@@ -1160,8 +997,10 @@ DrawItem MakeItem(const Guest& g, State& s, Sink& sink, uint32_t mat, uint32_t o
     item.cam = s.cam;
     item.mesh = owner;
     item.target = sink.target;
+    // (a shadow map's depth samples nothing: kShadowmapShader has SKINNED alone)
     const uint32_t tex = g.U32(mat + kMat_DiffuseTex);
-    if (tex && sample_texture) item.tex = CaptureTexture(g, s, sink, tex);
+    if (tex && sample_texture && sink.draw_mode != kDrawModeShadowDepth)
+        item.tex = CaptureTexture(g, s, sink, tex);
     item.shade = CaptureShade(g, s, sink, mat, blur);
     return item;
 }
@@ -1480,7 +1319,8 @@ void BeginPass(const Guest& g, uint32_t tex) {
     if (s.open.tex) DropOpenPass(s);
     const bool capturing = g_enabled.load(std::memory_order_relaxed);
     if (!capturing) g_rec_passes.fetch_add(1, std::memory_order_relaxed);
-    const RtState& rt = s.rts[tex];
+    RtState& rt = s.rts[tex];
+    rt.base = TexBase(g, tex);
     const bool regular = RecentlyMade(rt, s.game_frame) && rt.repeats >= 1;
     s.open.tex = tex;
     s.open.record = capturing || !regular;
@@ -1512,9 +1352,9 @@ void CameraSelected(const Guest& g, uint32_t cam) {
     p.cam = cam;
     p.clear_flags = 0;
     if ((type & 2) && !(type & kTexType_NoZ)) p.clear_flags |= 0x30;
-    if (type != kTexType_ShadowMap) p.clear_flags |= 0x0f;
+    if (type != kTexTypeShadowMap) p.clear_flags |= 0x0f;
     p.clear_color = type == kTexTypeDepthVolume ? 0xFF000000u : 0;
-    p.clear_z = g.F32(type == kTexType_ShadowMap ? kClearDepthShadow : kClearDepth);
+    p.clear_z = g.F32(type == kTexTypeShadowMap ? kClearDepthShadow : kClearDepth);
     const float size[4] = {float(p.width), float(p.height), float(p.width), float(p.height)};
     for (int i = 0; i < 4; i++) p.viewport[i] = g.F32(cam + kCam_ScreenRect + i * 4) * size[i];
     // a select clears what was drawn so far
@@ -1560,8 +1400,8 @@ void AddCounts(FrameCapture& to, const FrameCapture& from) {
 }
 
 // whether a pass drew nothing the capture keeps because every draw it made
-// was left out: for its draw mode (shadow casters, velocity), or for having no
-// material or geometry the capture draws
+// was left out: for its draw mode (velocity), or for having no material or
+// geometry the capture draws
 bool AllLeftOut(const FrameCapture& content) {
     const uint32_t left_out = content.skipped_shadow + content.skipped_velocity +
                               content.skipped_draw_mode + content.skipped_no_geom;
@@ -1570,9 +1410,9 @@ bool AllLeftOut(const FrameCapture& content) {
 
 // DxTex::FinishDrawTarget: `tex` is resolved, a new version of it. A recorded
 // pass becomes its last, and the capturing frame's next pass; one that drew
-// nothing kept (a shadow map's) is left out, though one whose draws were all
-// left out is still its last, so a capture sampling it counts it as such
-// (rt_filtered) rather than missing.
+// nothing kept (the velocity buffer's) is left out, though one whose draws
+// were all left out is still its last, so a capture sampling it counts it as
+// such (rt_filtered) rather than missing.
 void EndPass(uint32_t tex) {
     State& s = S();
     if (s.open.tex != tex) DropOpenPass(s);
@@ -1590,7 +1430,7 @@ void EndPass(uint32_t tex) {
     if (!recorded) return;
     rec->pass.version = rt.version;
     rec->pass.draw_count = uint32_t(rec->content.draws.size());
-    // what it left out (shadow casters, velocity) counts in the frame either way
+    // what it left out (velocity) counts in the frame either way
     if (capturing) AddCounts(*s.building, rec->content);
     if (rec->content.draws.empty()) {
         if (capturing) s.building->passes_empty++;
@@ -1796,6 +1636,103 @@ void HoldIfRequested(const std::shared_ptr<const FrameCapture>& frame) {
     g_held.released = true;
 }
 
+// whether each channel of the table never falls as the input rises, as any
+// gamma curve's doesn't: what tells a ramp read through the SDK's headers
+// from one read at the wrong place
+bool PlausibleTable(const GammaRamp& g) {
+    for (int c = 0; c < 3; c++)
+        for (int v = 1; v < 256; v++)
+            if (TableChannel(g.table[v], c) < TableChannel(g.table[v - 1], c)) return false;
+    return TableChannel(g.table[255], 0) != 0;
+}
+
+// The command processor's ramps, which its header keeps for its backends
+// (protected): reached through a pointer to the member, as a class derived
+// from it may take one. Never made.
+struct GammaRampAccess : rex::graphics::CommandProcessor {
+    static const rex::graphics::reg::DC_LUT_30_COLOR* Table(
+        const rex::graphics::CommandProcessor& cp) {
+        return (cp.*&GammaRampAccess::gamma_ramp_256_entry_table)();
+    }
+    static const rex::graphics::reg::DC_LUT_PWL_DATA* Pwl(
+        const rex::graphics::CommandProcessor& cp) {
+        return (cp.*&GammaRampAccess::gamma_ramp_pwl_rgb)();
+    }
+};
+
+// The display gamma ramp the presenter applies (gamma_ramp.h): the command
+// processor's copy of the DC_LUT registers, which the guest writes at a swap
+// after setting a ramp, and DC_LUT_RW_MODE for which of the two it wrote. Read
+// through the SDK headers' inline accessors, so right only while the GPU
+// plugin is built from the same headers: a table that doesn't look like a
+// gamma curve is taken as misread, logged once, and left out (kNone), as is
+// one never written. Under g_state_mutex.
+GammaRamp ReadDisplayGamma() {
+    static bool warned = false;
+    auto warn = [](const char* why) {
+        if (warned) return;
+        warned = true;
+        REXLOG_WARN("native view: no display gamma ramp ({}); captures are drawn without one",
+                    why);
+    };
+    GammaRamp g;
+    rex::system::KernelState* kernel = rex::system::kernel_state();
+    rex::Runtime* runtime = kernel ? kernel->emulator() : nullptr;
+    auto* graphics = runtime ? dynamic_cast<rex::graphics::GraphicsSystem*>(
+                                   runtime->graphics_system())
+                             : nullptr;
+    const rex::graphics::CommandProcessor* cp =
+        graphics ? graphics->command_processor() : nullptr;
+    if (!cp) {
+        warn("no command processor");
+        return g;
+    }
+    const rex::graphics::reg::DC_LUT_30_COLOR* table = GammaRampAccess::Table(*cp);
+    const rex::graphics::reg::DC_LUT_PWL_DATA* pwl = GammaRampAccess::Pwl(*cp);
+    for (int i = 0; i < 256; i++) g.table[i] = table[i].value;
+    for (int i = 0; i < 128 * 3; i++) g.pwl[i / 3][i % 3] = pwl[i].value;
+    const uint32_t rw_mode =
+        graphics->register_file()->values[rex::graphics::XE_GPU_REG_DC_LUT_RW_MODE];
+    if (rw_mode & 1) {
+        bool written = false;
+        for (const auto& step : g.pwl)
+            for (uint32_t v : step) written |= v != 0;
+        if (written) g.mode = GammaRamp::kPwl;
+        else warn("the PWL ramp is unwritten");
+        return g;
+    }
+    if (std::all_of(std::begin(g.table), std::end(g.table), [](uint32_t v) { return v == 0; })) {
+        warn("the table is unwritten");
+        return g;
+    }
+    if (!PlausibleTable(g)) {
+        warn("the table read isn't a gamma curve");
+        return g;
+    }
+    g.mode = GammaRamp::kTable;
+    return g;
+}
+
+// logs the ramp when it differs from the last one read (it's set at boot and
+// by the game's settings, so normally once)
+void LogGammaIfChanged(const GammaRamp& g) {
+    static GammaRamp last;
+    static bool logged = false;
+    if (logged && g == last) return;
+    logged = true;
+    last = g;
+    uint8_t lut[3][256];
+    GammaLut(g, lut);
+    std::string curve;
+    for (int v : {0, 4, 8, 16, 32, 64, 96, 128, 192, 255})
+        curve += fmt::format(" {}:{}/{}/{}", v, lut[0][v], lut[1][v], lut[2][v]);
+    REXLOG_INFO("native view: display gamma ramp {} (value: shown r/g/b){}",
+                g.mode == GammaRamp::kTable ? "table"
+                : g.mode == GammaRamp::kPwl ? "pwl"
+                                            : "none",
+                curve);
+}
+
 // The frame's end, under g_state_mutex: the frame captured, for
 // HoldIfRequested once that's let go, or null while capture is off
 std::shared_ptr<const FrameCapture> FinishFrame() {
@@ -1822,6 +1759,8 @@ std::shared_ptr<const FrameCapture> FinishFrame() {
     s.building->frame = ++s.frame;
     s.building->game_frame = game_frame;
     s.building->world_frame = game_frame;
+    s.building->gamma = ReadDisplayGamma();
+    LogGammaIfChanged(s.building->gamma);
     CarryPasses(s, *s.building);
     std::shared_ptr<const FrameCapture> done = s.building;
     // With even/odd rendering, a frame that drew the world is kept for the
@@ -1937,6 +1876,16 @@ void TrackSettings() {
                                           [](std::string_view, std::string_view v) {
                                               g_record_targets.store(v == "true" || v == "1");
                                           });
+        // the SDK's, by name: it lives in the GPU's DLL
+        auto aniso = [](std::string_view v) {
+            int32_t value = -1;
+            std::from_chars(v.data(), v.data() + v.size(), value);
+            g_aniso_override.store(value);
+        };
+        aniso(rex::cvar::GetFlagByName("anisotropic_override"));
+        rex::cvar::RegisterChangeCallback("anisotropic_override",
+                                          [aniso](std::string_view, std::string_view v) { aniso(v); });
+        REXLOG_INFO("native view: the host's anisotropic_override is {}", g_aniso_override.load());
     });
 }
 

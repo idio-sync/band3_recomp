@@ -2,6 +2,7 @@
 #include "generated/band3_init.h"
 #include "src/Game/DataNode.h"
 #include "src/Game/DataArray.h"
+#include "src/Game/song_id.h"
 
 extern "C" void __imp__DataNode__Evaluate(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DataNode__UseQueue(PPCContext& ctx, uint8_t* base);
@@ -11,6 +12,9 @@ extern "C" void ObjectDir__FindObject(PPCContext& ctx, uint8_t* base);
 constexpr uint32_t gEvalIndex_addr = 0x82E05220;
 constexpr uint32_t gEvalNode_addr  = 0x82E05240;
 constexpr uint32_t gDataDir_addr   = 0x82E05DB0;
+
+// the return address after SongMetadata's constructor's call reading song_id
+constexpr uint32_t kSongMetadataSongIdCall = 0x827AA7D8;
 
 extern "C" void DataNode__Evaluate(PPCContext& ctx, uint8_t* base);
 
@@ -47,7 +51,19 @@ extern "C" REX_FUNC(DataNode__Var) {
 
 // int DataNode::Int(const DataArray*) const
 extern "C" REX_FUNC(DataNode__Int) {
-    ctx.r3.u64 = node(base, evaluate(ctx, base))->value;
+    // read before evaluating: evaluating can run guest code that overwrites lr
+    const uint32_t caller = static_cast<uint32_t>(ctx.lr);
+    auto* n = node(base, evaluate(ctx, base));
+    // SongMetadata's constructor reading song_id: text there gets RB3Enhanced's number
+    if (caller == kSongMetadataSongIdCall &&
+        (n->type == band3::kDataSymbol || n->type == band3::kDataString)) {
+        const char* text = reinterpret_cast<const char*>(REX_RAW_ADDR(literal_str(base, ctx.r3.u32)));
+        const int32_t id = band3::CorrectedSongId(text);
+        band3::LogSongIdCorrection(text, id);
+        ctx.r3.u64 = static_cast<uint64_t>(static_cast<int64_t>(id));
+        return;
+    }
+    ctx.r3.u64 = n->value;
 }
 
 // const char* DataNode::LiteralStr(const DataArray*) const

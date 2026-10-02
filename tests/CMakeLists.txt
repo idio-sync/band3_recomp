@@ -29,14 +29,20 @@ add_executable(band3_tests
     capture_file_test.cpp
     shade_model_test.cpp
     soft_raster_test.cpp
+    sample_model_test.cpp
     frame_compose_test.cpp
     post_params_test.cpp
     post_model_test.cpp
     spot_model_test.cpp
     http_request_test.cpp
     album_art_test.cpp
+    paths_test.cpp
+    package_scan_test.cpp
+    song_id_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
+    ${BAND3_ROOT}/src/Content/package_scan.cpp
+    ${BAND3_ROOT}/src/Game/song_id.cpp
     ${BAND3_ROOT}/src/Input/hid_capture.cpp
     ${BAND3_ROOT}/src/Input/hid_instrument_types.cpp
     ${BAND3_ROOT}/src/Input/instrument_kind.cpp
@@ -49,6 +55,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/ps4_instruments.cpp
     ${BAND3_ROOT}/src/Net/album_art.cpp
     ${BAND3_ROOT}/src/Net/http_request.cpp
+    ${BAND3_ROOT}/src/paths.cpp
     ${BAND3_ROOT}/src/Render/capture_file.cpp
     ${BAND3_ROOT}/src/Render/frame_compose.cpp
     ${BAND3_ROOT}/src/Render/post_model.cpp
@@ -71,6 +78,10 @@ target_include_directories(band3_tests PRIVATE
     ${BAND3_ROOT}
     ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty
 )
+
+# src/Content/package_scan.cpp scans folders on threads of its own
+find_package(Threads REQUIRED)
+target_link_libraries(band3_tests PRIVATE Threads::Threads)
 
 if(MSVC)
     target_compile_options(band3_tests PRIVATE /W4)

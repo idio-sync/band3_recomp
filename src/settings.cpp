@@ -1,4 +1,5 @@
 #include "settings.h"
+#include <atomic>
 #include <mutex>
 #include <string_view>
 
@@ -103,6 +104,30 @@ REXCVAR_DEFINE_STRING(joypad_lag, "", "Band3/Game",
 REXCVAR_DEFINE_BOOL(autosave, true, "Band3/Game",
     "Let the game autosave profiles, after songs and setlist edits. Off, they're only saved "
     "from the options menu, e.g. to test with autoplay without touching your profile");
+
+REXCVAR_DEFINE_DOUBLE(song_speed, 1.0, "Band3/Game",
+    "Plays songs faster or slower: 1.5 is half again as fast, 0.75 three quarters. "
+    "Applies from the next song. A speed other than 1 that practice mode or Rock Band 3 "
+    "Deluxe's song speed sets is left as it is")
+    .range(0.1, 10.0);
+
+REXCVAR_DEFINE_DOUBLE(track_speed, 1.0, "Band3/Game",
+    "Scrolls the note highway faster or slower: 2 is twice as fast, with the notes "
+    "twice as far apart. Applies from the next song")
+    .range(0.1, 10.0);
+
+REXCVAR_DEFINE_BOOL(unlock_clothing, false, "Band3/Game",
+    "Unlock every piece of clothing, tattoo and face paint for your characters, and the "
+    "video venues, without earning them (RB3Enhanced's UnlockClothing)");
+
+REXCVAR_DEFINE_BOOL(gold_on_all_difficulties, false, "Band3/Game",
+    "Let gold stars be earned on every difficulty, not only expert "
+    "(RB3Enhanced's AllowGoldOnAllDifficulties). Applies from the next song");
+REXCVAR_DEFINE_STRING(content_folders, "songs", "Band3/Game",
+    "Folders RB3 reads DLC and custom songs from (Windows for now), without installing them, "
+    "separated by '|'. Subfolders count too. A relative folder is relative to "
+    "band3_config.ini's folder (or the working directory if there is no ini)")
+    .lifecycle(Lifecycle::kRequiresRestart);
 
 // Band3/MIDI drums
 
@@ -213,6 +238,12 @@ REXCVAR_DEFINE_BOOL(http_allow_scripts, false, "Band3/Integrations",
     "Let the web server's /execute run DTA scripts sent to it. Anyone on the local network "
     "could then run any script in the game");
 
+REXCVAR_DEFINE_BOOL(rb3e_mode, true, "Band3/Integrations",
+    "Tell the game's scripts RB3Enhanced is running (they see RB3E and RB3E_HAS_VERSION "
+    "defined), so Rock Band 3 Deluxe turns on its RB3E features: its version line, party "
+    "mode, song lookups, and clearing the song cache and restarting after an update")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 // Band3/Debug
 
 REXCVAR_DEFINE_BOOL(debug_overlay, true, "Band3/Debug",
@@ -260,6 +291,10 @@ REXCVAR_DEFINE_INT32(test_random_seed, 0, "Band3/Debug",
     .range(0, 2147483647)
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_INT32(relaunch_wait_pid, 0, "Band3/Debug",
+    "Set by band3 when it relaunches itself (rb3e_relaunch_game): the new one waits for "
+    "this process to close before starting. Cleared once it has");
+
 REXCVAR_DEFINE_STRING(native_view_backend, "gpu", "Band3/Debug",
     "What draws the native view (F7, experimental): gpu, or cpu for the reference "
     "rasterizer. The GPU falls back to the CPU when it can't start")
@@ -270,6 +305,17 @@ REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Debug",
     "for the native view (experimental), even while it's off: some are drawn once, in the "
     "main menu, and a later capture needs them. Costs a little game-thread time while "
     "characters load; turn it on at launch (--native_view_record_targets=true)");
+
+REXCVAR_DEFINE_BOOL(native_view_normal_maps, true, "Band3/Debug",
+    "Shade RB3's normal maps and detail maps in the native view (experimental), live and in "
+    "the test harness's captures; off shades those materials with the vertex normal, to "
+    "compare");
+
+REXCVAR_DEFINE_BOOL(native_view_texture_filtering, true, "Band3/Debug",
+    "Sample textures in the native view (experimental) as the game's samplers do: filtered, "
+    "between mip levels by distance, and clamped or wrapped as each says, live and in the "
+    "test harness's captures; off reads every texture's nearest texel at full size, to "
+    "compare");
 
 REXCVAR_DEFINE_STRING(native_view_rt_fallback, "guest", "Band3/Debug",
     "What the native view's capture keeps of a texture RB3 draws at runtime (outfits, the "
@@ -300,6 +346,8 @@ struct TrackedString {
 };
 
 TrackedString g_forced_venue;
+std::atomic<double> g_song_speed{1.0};
+std::atomic<double> g_track_speed{1.0};
 TrackedString g_username;
 StartupSettings g_startup{};
 
@@ -325,16 +373,29 @@ void Init() {
         .http_enabled = REXCVAR_GET(http_enabled),
         .http_port = REXCVAR_GET(http_port),
         .http_address = REXCVAR_GET(http_address),
+        .rb3e_mode = REXCVAR_GET(rb3e_mode),
         .native_camera_shake = REXCVAR_GET(native_camera_shake),
     };
 
     Track(g_forced_venue, "forced_venue");
+    g_song_speed = REXCVAR_GET(song_speed);
+    g_track_speed = REXCVAR_GET(track_speed);
+    rex::cvar::RegisterChangeCallback("song_speed", [](std::string_view, std::string_view) {
+        g_song_speed = REXCVAR_GET(song_speed);
+    });
+    rex::cvar::RegisterChangeCallback("track_speed", [](std::string_view, std::string_view) {
+        g_track_speed = REXCVAR_GET(track_speed);
+    });
     Track(g_username, "username");
 }
 
 const StartupSettings& Startup() { return g_startup; }
 std::string ForcedVenue() { return g_forced_venue.Get(); }
 void SetSessionVenue(std::string_view venue) { g_forced_venue.Set(venue); }
+double SongSpeed() { return g_song_speed; }
+double TrackSpeed() { return g_track_speed; }
+void SetSessionSongSpeed(double speed) { g_song_speed = speed; }
+void SetSessionTrackSpeed(double speed) { g_track_speed = speed; }
 std::string Username() { return g_username.Get(); }
 
 }

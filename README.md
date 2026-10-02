@@ -1,10 +1,12 @@
-# slopband3 - AI Assisted band3 recompile experiment
+# slopband3 - An AI assisted band3_recomp experiment
 
-Early recompilation of Rock Band 3 (title update 5). Playable, but just barely.
+Recompilation of Rock Band 3 (title update 5/Deluxe) with extra features. Playable, still WIP.
 
 This is a fork of [ihatecompvir/band3_recomp](https://github.com/ihatecompvir/band3_recomp).
 It targets ReXGlue SDK 0.10 and adds:
 
+- Multiplayer
+- Microphone functionality
 - An in-game settings menu (F4) backed by cvars, saved to `band3.toml`
 - Per-device controller types, an SDL/XInput `input_backend` option, and an Instrument Lab (F6)
 - RB3Enhanced-compatible network events (Stage Kit lighting, song/venue info) over UDP
@@ -12,6 +14,9 @@ It targets ReXGlue SDK 0.10 and adds:
 - Native Discord Rich Presence
 - A `refresh_rate` option for high-refresh monitors
 - Unit tests, a compile check, and CI
+- Configurable settings/save/DLC/custom song folder destinations
+
+All additions were created with the help of AI, doing the vast majority of the actual work 
 
 ## Prerequisites
 
@@ -22,7 +27,7 @@ Before building, ensure you have the following:
   the zip for your platform and put the folder inside it (`win-amd64`, `linux-amd64`, ...)
   at `.rexglue-sdk` in the repository root, where the CMake presets look for it, so that
   `.rexglue-sdk/include/rex/version.h` exists.
-- A copy of Rock Band 3 (Xbox 360) with Title Update 5 (TU5) XEX
+- A copy of Rock Band 3 (Xbox 360) with Title Update 5 (TU5) XEX or Rock Band 3 Deluxe XEX/patch 
 
 ## Building
 
@@ -142,6 +147,27 @@ modifiers and playlists there (`dx_settings.dta`, `dx_playlist.dta` and so on), 
 deleting that folder resets them. Test runs have their own user data, so they don't
 change yours.
 
+`band3_config.ini` can also move band3's other folders: `user_data_root` (saves, profiles
+and the `game` folder; `Documents\band3` by default) and `cache_root` (the shader cache;
+`cache` in the user data folder by default). A relative path there is relative to the
+ini's folder, so `user_data_root = user_data` keeps everything band3 writes beside it, for
+a portable install. band3 looks for the ini in its working directory, then beside the
+executable.
+
+### DLC and custom songs
+
+On Windows for now, band3 reads DLC and custom songs (Xbox 360 `CON`, `LIVE` and `PIRS`
+packages, Rock Band and Rock Band 2 DLC included, as RB3 reads them) straight from the
+folders `content_folders` names (Band3 → Game, or `[game]` in `band3_config.ini`);
+nothing is installed or unpacked, and band3 never writes there. Separate folders with `|`;
+subfolders count, and a relative folder is relative to the ini's folder (`songs` beside it
+by default). Changes apply at the next launch. A network folder works, but a local one is
+safer for audio: a song streams from its package while it plays. A local folder is also
+faster to read: a large library on a slow network folder can delay the song list on the
+first boot, and one that takes over a minute isn't listed that session. A custom song whose
+`song_id` is text instead of a number gets the number RB3Enhanced gives it (the text's
+CRC-32 mod 9999999, plus 2130000000), so IDs agree with RB3Enhanced's.
+
 ### Instrument Lab
 
 Press **F6** to open the Instrument Lab. It connects a virtual Xbox 360 instrument
@@ -173,26 +199,8 @@ first one that fails, saves a screenshot of the moment and exits 1. Commands joi
 with `;` share one connection, which `hold` needs: band3 lets go of everything held
 when a client disconnects.
 
-Render checks of the native view launch with `-- --native_view_record_targets=true`
-(and `--readback_resolve=full` for the variant that compares against guest memory's
-textures): RB3 composes a band's outfits once, in the main menu, so the passes it
-draws into textures have to be recorded from launch, before any capture. It's off by
-default, so a game that never uses the native view doesn't pay for it.
-A fresh profile's band is made up at random, so each launch has different characters;
-`--test_random_seed=<n>` (0, the default, is off) seeds RB3's random numbers with `n`
-instead of the clock, so the same seed gives the same band on every launch (and on
-every machine) and another seed another band. It fixes who is in the band and the song's
-shot categories, but not every frame: animations and particles draw random numbers as
-the frame timing gives, so poses and camera angles still vary a little between runs.
-With `--test_random_seed=21`, Futurama's Fry (a cel-shaded Deluxe character) plays
-guitar in the render songs below, in their 25 s capture.
-`tests/game/render_song.b3t` plays a song with even/odd rendering off (every frame
-draws everything) and captures four points through it; `render_song_evenodd.b3t` does
-the same with it on, as the game ships, where a frame draws the world and the next
-post-processes it and presents it with its own overlay: there each capture is such a
-post frame's, with the world frame's world in front of its overlay, as the game shows
-it, and its `capture <name> composed` fails if it isn't. Launch that one without
-`--readback_resolve=full`.
+`capture` and `native_view` check the native view's rendering; see
+[Render checks](#render-checks).
 
 | Command | |
 |---|---|
@@ -206,7 +214,7 @@ it, and its `capture <name> composed` fails if it isn't. Launch that one without
 | `pad [player]` | the buttons, triggers and sticks the game reads from a player (1-4) |
 | `wait <condition> [timeout=30s]`, `expect <condition> [timeout=5s]` | `screen=`, `screen~` (contains), `in_game`, `menus`, `song=<shortname>`, `frames=<n>`, `score>=<n>`, `mic=<slot>` (connected and fed audio since the wait began) |
 | `screenshot [name]` | |
-| `capture [name] [composed]` | a screenshot and the native view's capture (`.cap`) of the same full frame, for render checks: `out/native_view_replay.exe <name>.cap side.png --compare <name>.png` puts the two side by side, and its `--list` and `--shade <draw>` show what each draw's shader was given (option word, constants, maps), `--pick X,Y` (with `--size`) which draw left a pixel, `--legacy-light` draws it with the placeholder lighting from before the game's and `--no-cull` without the cull mode each draw had (`--list`'s `cull`: 2 is `D3DCULL_CW`, 6 `D3DCULL_CCW`), which both backends apply as the game's device did; `skipped_shadow` and `skipped_pass` in the reply count the draws left out because their pass isn't the back buffer's colour (shadow casters; velocity and the rest). The capture also has the passes RB3 drew into textures (outfit composites, the crowd's impostors, blurs, post-processing): `--list` prints them, and both of the native view's backends draw those the frame samples (all but post-processing's) into render targets of their own, which the draws after them sample; `--dump-rt <DxTex hex>[:<version>]` writes what one holds (`.alpha.png` its alpha), `--rt-none` never uses guest memory's pixels for a render target and `--rt-guest` draws no texture passes, sampling guest memory alone. `passes` counts them and `passes_carried` those carried in from earlier frames (a band's outfits are composed once, in the main menu, so they're there only if the game was launched with `-- --native_view_record_targets=true`), `rt_sampled` the render target versions the draws sample, `rt_filtered` those whose pass the capture left out because all its draws were (shadow maps and the velocity buffer, for their draw mode; the spotlights' depth volume, whose draws have no material or geometry the capture draws) and `rt_missing` the others no pass in the capture made, so 0 means none it could have had is missing, and `rt_fallback` is `native_view_rt_fallback`: `guest` (the default) also keeps what guest memory holds of a render target, `none` only which texture and version it is. `proc_cmds` is what the frame drew (7 everything; with even/odd rendering 1 the world, 2 post-processing; -1 unknown), and `composed` says the capture has the world of `world_frame` in front of the overlay of its own `game_frame` (a post frame's, which shows the world frame before it; the capture waits for one, and `held_fallback` says none came in 30 frames, so it took the last). With `composed` after the name the command fails unless the capture is such a post frame (`proc_cmds` 2, `composed` true); its files are written either way. Also `<name>.gpu.png`, the native view's GPU backend drawing the capture at the screenshot's size (`gpu`, `gpu_ms` in the reply, `gpu_passes` the texture passes it drew and `gpu_rt_missing` its draws that sampled a render target nothing had drawn, which draw transparent black; or `gpu_error` when there's no GPU device or `native_view_backend` is `cpu`): `--compare <name>.png --image <name>.gpu.png` shows it beside the game's, `--diff <name>.gpu.png` measures it against the CPU's drawing. Beside it, `<name>.gpu.alpha.png` and `<name>.gpu.depth.png` are the GPU's scene target where the world's draws left it, before the overlay: its alpha (the bloom weight RB3's shaders write) and depth as grey, which replay's `--dump-alpha <png>` and `--dump-depth <png>` draw on the CPU (`--view alpha` or `--view depth` with `--diff` compares them). Replay's `post:` line says what post-processing was set to do (colour matrix, bloom, depth of field, the world camera) and its `check:` line whether the constants RB3's composite drew with agree. Both of the native view's backends apply it (depth of field, bloom or glare, the colour matrix; `src/Render/post_model.h`) where the world's draws end, before the overlay's; replay's `--no-post` leaves it out and `--post-only xfm|dof|bloom` applies one effect alone, and F7's Post-processing box turns it off in the live view. Launch with `-- --native_view_record_targets=true` for these, or a band's outfits (composed in the main menu) are missing; `--readback_resolve=full` isn't needed any more, but makes guest memory's textures of what RB3 renders (otherwise garbage) the fallback |
+| `capture [name] [composed]` | a screenshot (`<name>.png`) and the native view's capture (`<name>.cap`) of the same full frame, and the native view's GPU backend drawing it (`<name>.gpu.png`), all under `screenshots/`. With `composed` it fails unless the capture is a post frame composed with the world frame before it (`proc_cmds` 2, `composed` true); its files are written either way. The reply's fields are under [Render checks](#render-checks) |
 | `native_view on [<width>x<height>] [nopost]\|off\|stats` | the native view live, as F7 draws it (same worker, same `native_view_backend`) but without its window, at 1280x720 unless given a size, and without RB3's post-processing with `nopost` (`post` in the reply), to see what it costs; `off` stops it and the capturing with it. Each reply has `stats`: the backend, frames `captured` and `rendered` since `on`, `skipped_busy` (captured while it was still drawing another), each drawn frame's time in `ms` (`mean`, `p50`, `p95`, `max`; on the GPU the whole frame, uploads and reading back included) and the part after submitting in `wait_ms`, and the game's own `game_frames` and `game_fps` since the last `on` or `off`, and `rt_recording`: whether `native_view_record_targets` is `on`, and the texture passes the game drew in that time while capture was off, how many of them were recorded (those into textures that aren't drawn every frame or every other), their draws, and the game thread's `ms` recording them. `off`'s reply is the run it ends; `run` prints replies with `stats`. `tests/game/render_song_live.b3t` measures a song with it |
 | `set <setting> <value>` | Band3 settings only |
 | `quit` | |
@@ -229,6 +237,142 @@ a moment to finish appearing). Submenus inside one screen (Play Now, Quickplay) 
 change the screen name. A song counts as `in_game` until you leave its results, and
 `state` keeps the last song's details after that. Switching `instrument` reconnects
 it, so press Start to join again, as a player would.
+
+### Render checks
+
+The native view (F7, experimental) draws the game's frames itself, from a capture of
+what RB3 drew: on the GPU, or on a reference CPU rasterizer. It draws RB3's shading
+(point, box and projected lights, characters' self-shadows, normal and detail maps),
+its textures as the game's samplers read them (filtered, between mip levels, clamped
+or wrapped), the passes RB3 draws into textures (outfit composites, the crowd's
+impostors, shadow maps, NgLight's projected shadow, heads' normal maps, blurs), its
+post-processing (depth of field, bloom or glare, the spotlights' beams and haze, soft
+particles such as stage smoke, the colour matrix) and, last, the display's gamma ramp.
+Render checks set its picture against the game's.
+
+| Setting (Band3 → Debug) | |
+|---|---|
+| `native_view_backend` | `gpu` (the default) or `cpu`, the reference rasterizer. The GPU falls back to the CPU when it can't start |
+| `native_view_record_targets` | records the passes RB3 draws into textures all the time, even while the native view is off. Off by default, as it costs a little game-thread time while characters load. Render checks need it from launch: RB3 composes a band's outfits once, in the main menu |
+| `native_view_rt_fallback` | `guest` (the default) also keeps what guest memory holds of a texture RB3 draws, sampled where no recorded pass made it (right only with `--readback_resolve=full`); `none` keeps only which texture and version it is |
+| `native_view_normal_maps` | on (the default) shades normal and detail maps, live and in `capture`'s `.gpu.png`; off shades those materials with the vertex normal, to compare. Captures from before the capture kept the meshes' tangents have none either way |
+| `native_view_texture_filtering` | on (the default) samples textures as each draw's fetch constants say: bilinear or point, the mip level (or two, blended) by how far and at what angle the surface is, anisotropy, and wrapping, mirroring or clamping per axis, from the mip chains in guest memory (and a render target's own, made after its pass). As the game's own picture under band3 is drawn, the SDK's `anisotropic_override` (4:1 by default) applies to the samplers it would apply to there. Off reads every texture's nearest texel at full size, as before, to compare; captures from before the capture kept the samplers and mips are drawn so either way |
+
+Launch render checks with:
+
+```
+python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
+python tools/band3ctl.py run tests/game/boot.b3t
+python tools/band3ctl.py run tests/game/render_song.b3t
+```
+
+The native view doesn't need `--readback_resolve=full`. With it, guest memory holds
+right copies of what RB3 draws into textures (garbage otherwise), to compare against:
+replay's `--rt-guest` and `--dump-tex`.
+
+Also launch with `--async_shader_compilation=false`. With the emulated GPU's
+default asynchronous shader compilation, a draw whose pipeline isn't compiled yet is
+skipped, and RB3 composes each band member's outfits only once, in the main menu: the
+first composites it makes can come out empty and stay black for the session in the
+game's own picture (not the native view's), differently on each run.
+
+A fresh profile's band is made up at random, so each launch has different characters;
+`--test_random_seed=<n>` (0, the default, is off) seeds RB3's random numbers with `n`
+instead of the clock, so the same seed gives the same band on every launch (and on
+every machine) and another seed another band. It fixes who is in the band and the song's
+shot categories, but not every frame: animations and particles draw random numbers as
+the frame timing gives, so poses and camera angles still vary a little between runs.
+With `--test_random_seed=21`, Futurama's Fry (a cel-shaded Deluxe character) plays
+guitar in the render songs below, in their 25 s capture.
+
+`tests/game/render_song.b3t` plays a song with even/odd rendering off (every frame
+draws everything) and captures four points through it; `render_song_evenodd.b3t` does
+the same with it on, as the game ships, where a frame draws the world and the next
+post-processes it and presents it with its own overlay: there each capture is such a
+post frame's, with the world frame's world in front of its overlay, as the game shows
+it, and its `capture <name> composed` fails if it isn't. Launch that one without
+`--readback_resolve=full`. `render_song_live.b3t` measures the live view's cost with
+`native_view on`.
+
+Besides the back buffer's draws and the texture passes, a capture keeps the
+characters' shadow-map passes and NgLight's shadow casters, and the display's gamma
+ramp the game was shown through (the screenshot has it). `capture`'s reply:
+
+| Field | |
+|---|---|
+| `draws` | the draws the capture kept |
+| `skipped_pass` | draws left out for their draw mode: the velocity buffer's and other passes the native view doesn't draw |
+| `skipped_shadow` | shadow-map or shadow-caster draws outside their own pass; 0 expected |
+| `passes`, `passes_carried` | the texture passes in the capture, and those carried in from earlier frames (a band's outfits: there only with `native_view_record_targets` on from launch) |
+| `rt_sampled` | the render target versions the draws sample |
+| `rt_filtered` | of those, the ones whose pass drew nothing the capture keeps (the velocity buffer, or draws with no material or geometry) |
+| `rt_missing` | the others no pass in the capture made; 0 means none it could have had is missing |
+| `rt_fallback` | `native_view_rt_fallback` |
+| `proc_cmds` | what the frame drew: 7 everything; with even/odd rendering 1 the world, 2 post-processing; -1 unknown |
+| `composed`, `world_frame`, `game_frame` | the capture has the world of `world_frame` in front of the overlay of its own `game_frame` (a post frame, which shows the world frame before it) |
+| `held_fallback` | no such post frame came in 30 frames, so the capture took the last |
+| `gpu`, `gpu_ms`, `gpu_passes`, `gpu_rt_missing` | the GPU's `<name>.gpu.png` at the screenshot's size, its time, the texture passes it drew, and its draws that sampled a render target nothing had drawn (drawn transparent black). `gpu_error` instead when there's no GPU device or `native_view_backend` is `cpu` |
+
+With `native_view_texture_filtering` on, `<name>.gpu.nearest.png` is the GPU's drawing
+of the same capture with it off: the same frame without the game's samplers.
+
+Beside `<name>.gpu.png`, `<name>.gpu.alpha.png` and `<name>.gpu.depth.png` are the
+GPU's scene target where the world's draws left it, before the overlay: its alpha (the
+bloom weight RB3's shaders write) and its depth, as grey.
+
+`out/native_view_replay.exe <name>.cap out.png [options]` draws a capture on the CPU
+(`tools/native_view_replay/replay.cpp`; its header has the build command and every
+option). It prints a `post:` line (what post-processing was set to do), a `check:` line
+(whether the constants RB3's composite drew with agree) and a `gamma:` line (the ramp).
+`--compare` and `--diff` follow the mean difference with a `metrics:` line.
+
+| Replay option | |
+|---|---|
+| `--compare <name>.png [--image <name>.gpu.png]` | the game's screenshot and the CPU's drawing side by side, at the screenshot's size; with `--image`, that PNG (the GPU's) instead of the CPU's |
+| `--diff <name>.gpu.png` | the CPU's drawing against that PNG: the GPU checked against the CPU |
+| `--crop x,y,w,h` | measures that rectangle alone (a HUD element, say), in the compared PNG's pixels |
+| `--size WxH` | the size to draw at (640x360) when nothing sets it |
+| `--list` | the passes and every draw: mesh, material, where it lands, what its shader was given, its `cull` (2 `D3DCULL_CW`, 6 `D3DCULL_CCW`); and `shadow:` lines checking each self-shadowed draw's shadow map |
+| `--shade <draw>` | everything one draw's shader was given |
+| `--pick X,Y` | the draw that last wrote that pixel (at `--size`), its colour and shade |
+| `--dump-rt <DxTex hex>[:<version>]` | what that render target holds after its pass (`out.alpha.png` its alpha) |
+| `--dump-tex <draw>[:<map>][@<level>]` | a draw's diffuse texture as captured, or one of its shade's maps (`--shade`'s names: `normal`, `projected`...); with `@<level>`, that mip level of it. `--shade` prints each one's sampler and how many levels the capture kept |
+| `--dump-alpha <png>`, `--dump-depth <png>` | the scene target's alpha or depth, as the GPU's `.gpu.alpha.png` and `.gpu.depth.png` |
+| `--view alpha\|depth` | draws that view instead of the picture (with `--diff` against those PNGs) |
+| `--dump-bloom <png>` | bloom's first level as the composite read it, after glare's pass |
+| `--rt-none`, `--rt-guest` | never use guest memory's pixels for a render target; or draw no texture passes and use guest memory's alone |
+| `--no-post`, `--post-only xfm\|dof\|bloom\|spot\|soft` | no post-processing; or only the colour matrix, depth of field, bloom (and glare), the spotlights' beams or the soft particles |
+| `--no-gamma`, `--gamma-from <other.cap>` | no gamma ramp; or another capture's |
+| `--no-shadow` | characters without their self-shadows |
+| `--no-normal` | every material with its vertex normal, no normal or detail map |
+| `--nearest` | every texture's nearest texel at full size, not the game's samplers (`native_view_texture_filtering` off) |
+| `--no-cull` | both sides of every triangle |
+| `--legacy-light`, `--no-light` | the placeholder lighting from before RB3's shading; or every material unlit |
+
+F7's window has switches like these for the live view (lighting, culling,
+post-processing, the gamma ramp and others).
+
+`tools/parity.py` measures a set of captures against the game: copy `<name>.cap`,
+`<name>.png` and `<name>.gpu.png` from `screenshots/` into `out/parity`, then
+
+```
+python tools/parity.py                                  # the table for out/parity
+python tools/parity.py --set out/parity_other           # another set
+python tools/parity.py --baseline out/parity/baseline.json
+python tools/parity.py --replay-args=--no-gamma         # every replay run with these options too
+```
+
+Each capture gets a `cpu` row (the CPU's drawing against the game), a `gpu` row (the
+GPU's `.gpu.png` against the game) and a `gpu-cpu` row (the two against each other,
+ok at a mean of 0.5 or less), with both HUD crops' means (the score box, the track).
+The `cpu` and `gpu` rows are graded: Tier A (parity) is a mean of 8 or less, p50 4 or
+less, at most 5% of pixels off by more than 32, no 4x4 grid cell's mean over 20, both
+HUD crops 5 or less and a signed mean within 3; Tier B (acceptable) a mean of 12 or
+less and at most 12% off by more than 32. `--baseline` writes the numbers if the file
+is missing, and otherwise exits 1 if any capture's `cpu` or `gpu` mean got worse by
+more than 0.5 (`--write-baseline` saves over it). The `gpu` rows change only when the
+capture is taken again, not when replay is rebuilt, and numbers from different runs of
+the game aren't comparable: a baseline compares re-renders of the same captures.
 
 ### Pro Keys and Pro Guitar (untested)
 
@@ -356,10 +500,37 @@ Band 3 Deluxe among them) can call them: `rb3e_get_song_name`, `rb3e_get_artist`
 `rb3e_get_album`, `rb3e_get_genre` and `rb3e_get_origin` (each takes a song ID),
 `rb3e_get_song_count`, `rb3e_set_venue` (for this session; `forced_venue` keeps its
 value), `rb3e_local_ip`, `rb3e_api_version` (0, the RB3E API band3 follows),
-`rb3e_build_tag`, `rb3e_commit`, `rb3e_is_emulator` (1), `rb3e_send_event_string` and
-`print_debug`, which logs its argument. `rb3e_relaunch_game` and `rb3e_delete_songcache`
-log that band3 can't do that yet and return 0. With `http_allow_scripts` on, the web
+`rb3e_build_tag`, `rb3e_commit`, `rb3e_is_emulator` (1), `rb3e_send_event_string`,
+`rb3e_change_music_speed`, `rb3e_change_track_speed` and their `rb3e_get_` pairs (the
+`song_speed` and `track_speed` settings, for this session) and
+`print_debug`, which logs its argument. `rb3e_relaunch_game` starts band3 again with
+the same command line (a minimized test run stays minimized; the new one waits for this
+one to close) and closes this one. `rb3e_delete_songcache` deletes the song cache the
+game mounted (`songcache`, or Deluxe's `rbdxcache`, in the user data root) the next
+time band3 starts, since the game has it open. With `http_allow_scripts` on, the web
 server's `/execute` runs them, e.g. `{print_debug {rb3e_get_song_name 1009}}`.
+
+Rock Band 3 Deluxe only uses them when its scripts see `RB3E` defined, as RB3E's
+loader does. With `rb3e_mode` (Band3 → Integrations; on unless you turn it off, then
+restart) band3 defines `RB3E` and `RB3E_HAS_VERSION`: Deluxe then shows its RB3E version line,
+offers its party mode (which shows this PC's address for the web page above) and
+looks songs up through these functions, and its "Clear and reboot game" after a
+Deluxe update clears the song cache and restarts band3.
+
+band3 also adds RB3E's six modifiers to the game's (Options → Modifiers, and Deluxe's
+menus), with or without `rb3e_mode`: Black Background (no venue), Force HOPOs, Mirror
+Mode (green and orange, red and blue swapped), Gem Color Shuffle (gems drawn in random
+colours), Gem Shuffle (each chord's lanes shuffled) and Double Bass (expert drums play
+the 2x bass pedal notes).
+
+As with RB3E, keys on guitar is always unlocked: the overshell's part list offers keys to
+a guitar without the career unlock. (RB3E's other always-on patches are already in: the
+8000-song limit, and the song blacklist, whose check TU5 itself no longer makes.)
+
+Two of RB3E's options are settings too (Band3 → Game, both off by default):
+`unlock_clothing` unlocks every piece of clothing, tattoo and face paint and the video
+venues without earning them, and `gold_on_all_difficulties` lets gold stars be earned
+below expert, from the next song.
 
 ### Steam Deck
 

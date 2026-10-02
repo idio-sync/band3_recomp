@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "src/Render/frame_compose.h"
 
@@ -118,6 +119,26 @@ void Blur(const Level& src, const float4* taps, int n, Level& dst) {
             for (int i = 0; i < n; i++)
                 sum = sum + Sample(src, float2{uv.x + taps[i].x, uv.y + taps[i].y}) * taps[i].z;
             dst.px[size_t(y) * dst.w + x] = Unorm8(sum);
+        }
+    }
+}
+
+// the glare pass over level 0 `src`, into `dst`
+void Glare(const Level& src, Level& dst) {
+    dst.Resize(src.w, src.h);
+    for (uint32_t y = 0; y < dst.h; y++) {
+        for (uint32_t x = 0; x < dst.w; x++) {
+            const float2 uv = Uv(x, y, dst);
+            const float2 stride = GlareStep(uv);
+            float2 at = uv;
+            float3 sum{0, 0, 0};
+            for (int k = 0; k < kGlareTaps; k++) {
+                const float4 t = Sample(src, at);
+                sum = sum + GlareTerm(float3{t.x, t.y, t.z}, GlareWeight(at));
+                at = float2{at.x + stride.x, at.y + stride.y};
+            }
+            const float3 rgb = GlareOut(sum);
+            dst.px[size_t(y) * dst.w + x] = Unorm8(float4{rgb.x, rgb.y, rgb.z, 1});
         }
     }
 }
@@ -254,7 +275,7 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan) {
 void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
              const std::vector<float>& depth, uint32_t width, uint32_t height,
              const PostImage& volume, const PostImage& density, const PostImage& soft,
-             std::vector<uint32_t>& out) {
+             std::vector<uint32_t>& out, std::vector<uint32_t>* bloom0) {
     const PostPass& pass = plan.composite;
     const uint32_t flags = pass.flags.x;
     Level src;
@@ -281,6 +302,22 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
             Blur(bloom[k], plan.bloom_taps[k][0], 15, tmp);
             Blur(tmp, plan.bloom_taps[k][1], 15, bloom[k]);
         }
+        // with glare, its pass over level 0, which the composite reads
+        if (flags & kPostGlare) {
+            Glare(bloom[0], tmp);
+            std::swap(bloom[0], tmp);
+        }
+        if (bloom0) {
+            bloom0->resize(bloom[0].px.size());
+            for (size_t i = 0; i < bloom0->size(); i++) {
+                const float4 c = bloom[0].px[i];
+                (*bloom0)[i] = uint32_t(c.x * 255.0f + 0.5f) | uint32_t(c.y * 255.0f + 0.5f) << 8 |
+                               uint32_t(c.z * 255.0f + 0.5f) << 16 |
+                               uint32_t(c.w * 255.0f + 0.5f) << 24;
+            }
+        }
+    } else if (bloom0) {
+        bloom0->clear();
     }
 
     // the spotlights' depth volume and density map, and the soft-particle

@@ -4,7 +4,8 @@
 // depth texture against the c24 the game's composite drew with, the
 // composite (the spotlights' and soft particles' terms too) against the
 // models of the game's composite shaders that tools/shaders/research/post/
-// check_post.py checks in an interpreter, and the passes together on a plain
+// check_post.py checks in an interpreter, glare's pass over bloom's level 0
+// against its model there too, and the passes together on a plain
 // picture. Captured
 // numbers are from render_song.b3t's 10s and render_song_evenodd.b3t's 25s
 // (kept in out/m4), and its intro (out/parity_spot) for the spotlights.
@@ -559,4 +560,77 @@ TEST_CASE("the soft particles add before bloom, which they don't brighten") {
     std::vector<uint32_t> none;
     RunPost(plan, scene, depth, w, h, {}, {}, {soft.data(), 320, 180}, none);
     CHECK(none[0] != out[0]);
+}
+
+TEST_CASE("glare's pass over level 0 is the game's bloom_glare shader") {
+    // check_post.py's model of 2789C57F87CFFD5D: ten taps of the level from
+    // the pixel's uv toward the centre, (1 - 2 uv) / 10 apart, each weighed
+    // by (1 - 4 min(r^2, 1/4))^2 at its uv, summed as 1 / (1 - weight *
+    // texel); the output is 2 - 20 / the sum, which the target saturates
+    auto model = [](float level, float u, float v) {
+        const float su = (1 - 2 * u) * 0.1f, sv = (1 - 2 * v) * 0.1f;
+        float sum = 0;
+        for (int i = 0; i < 10; i++) {
+            const float r2 = (u - 0.5f) * (u - 0.5f) + (v - 0.5f) * (v - 0.5f);
+            const float w = (1 - 4 * std::fmin(r2, 0.25f)) * (1 - 4 * std::fmin(r2, 0.25f));
+            sum += 1 / (1 - w * level);
+            u += su;
+            v += sv;
+        }
+        return Sat(2 - 20 / sum);
+    };
+    // a flat scene: level 0 is its colour times its alpha everywhere (the
+    // bright pass, and blurs of a flat level), so each tap reads that
+    const uint32_t w = 64, h = 36;
+    const uint32_t r = 250, g = 200, b = 40, a = 255;
+    std::vector<uint32_t> scene(size_t(w) * h, r | g << 8 | b << 16 | a << 24);
+    std::vector<float> depth(scene.size(), 0.0f);
+    PostPlan plan{};
+    plan.composite.flags = {kPostGlare, 0, 0, 0};
+    plan.composite.c6 = {0.5f, 0.5f, 0.5f, 0};
+    BloomTaps(false, 320, plan.bloom_taps[0][0]);
+    BloomTaps(true, 180, plan.bloom_taps[0][1]);
+    std::vector<uint32_t> out, level;
+    RunPost(plan, scene, depth, w, h, {}, {}, {}, out, &level);
+    const uint32_t lw = Quarter(w), lh = Quarter(h);
+    REQUIRE(level.size() == size_t(lw) * lh);
+    const uint32_t in[3] = {r, g, b};
+    // the corner (taps all the way across), the middle (taps on the spot,
+    // weight 1 at the centre) and one in between
+    const uint32_t at[][2] = {{0, 0}, {lw / 2, lh / 2}, {3, 6}, {lw - 1, lh - 1}};
+    for (const auto& p : at) {
+        CAPTURE(p[0]);
+        CAPTURE(p[1]);
+        const float u = (float(p[0]) + 0.5f) / float(lw), v = (float(p[1]) + 0.5f) / float(lh);
+        const uint32_t texel = level[size_t(p[1]) * lw + p[0]];
+        for (int k = 0; k < 3; k++) {
+            const float l = std::floor(float(in[k]) / 255 * float(a) / 255 * 255 + 0.5f) / 255;
+            const float want = model(l, u, v);
+            CHECK(Near(float(texel >> (8 * k) & 0xff) / 255, want, 1.0f / 255));
+        }
+        CHECK((texel >> 24) == 0xff);  // alpha 1
+    }
+    // the composite adds half of the level times c6: in the corner, whose
+    // pixel reads level 0's corner texel alone
+    for (int k = 0; k < 3; k++) {
+        const float glare = float(level[0] >> (8 * k) & 0xff) / 255;
+        const float want = Sat(float(in[k]) / 255 + 0.5f * 0.5f * glare);
+        CHECK(Near(float(out[0] >> (8 * k) & 0xff) / 255, want, 1.0f / 255));
+    }
+    // a black level stays black
+    std::vector<uint32_t> dark(scene.size(), r | g << 8 | b << 16);
+    RunPost(plan, dark, depth, w, h, {}, {}, {}, out, &level);
+    for (uint32_t c : level) CHECK((c & 0xffffffu) == 0u);
+    // bloom (not glare) has no glare pass: level 0 is the bright pass
+    plan.composite.flags.x = kPostBloom;
+    for (int k = 1; k < 3; k++) {
+        BloomTaps(false, 320 >> (2 * k), plan.bloom_taps[k][0]);
+        BloomTaps(true, 180 >> (2 * k), plan.bloom_taps[k][1]);
+    }
+    RunPost(plan, scene, depth, w, h, {}, {}, {}, out, &level);
+    CHECK((level[0] & 0xffffffu) == (r | g << 8 | b << 16));
+    // nor does a frame without either
+    plan.composite.flags.x = kPostXfm;
+    RunPost(plan, scene, depth, w, h, {}, {}, {}, out, &level);
+    CHECK(level.empty());
 }

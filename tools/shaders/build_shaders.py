@@ -3,12 +3,13 @@
   python tools/shaders/build_shaders.py
 
 Compiles src/Render/shaders/mesh.hlsl (and the shade*.hlsli and spot*.hlsli it
-includes) and post.hlsl (and the post*.hlsli it includes) twice each: DXBC (fxc, shader model 5.1) for SDL_gpu's Direct3D 12
-backend and SPIR-V (dxc) for its Vulkan backend, checks the SPIR-V (spirv-val,
-and spirv-cross --reflect for the descriptor sets SDL_gpu expects), and writes
-src/Render/shaders/mesh_shaders.gen.h and post_shaders.gen.h with the bytes, so
-building band3 needs none of these tools. Run it after changing a shader and
-check in the headers.
+includes), post.hlsl (and the post*.hlsli it includes) and gamma.hlsl twice
+each: DXBC (fxc, shader model 5.1) for SDL_gpu's Direct3D 12 backend and SPIR-V
+(dxc) for its Vulkan backend, checks the SPIR-V (spirv-val, and spirv-cross
+--reflect for the descriptor sets SDL_gpu expects), and writes
+src/Render/shaders/mesh_shaders.gen.h, post_shaders.gen.h and
+gamma_shaders.gen.h with the bytes, so building band3 needs none of these tools.
+Run it after changing a shader and check in the headers.
 
 Finds fxc in the Windows 10 SDK and dxc, spirv-val and spirv-cross in the Vulkan
 SDK (VULKAN_SDK, or C:/VulkanSDK/<newest>); FXC, DXC, SPIRV_VAL and SPIRV_CROSS
@@ -37,17 +38,21 @@ SHADERS = [
          {("ubos", "PixelUniforms", 3, 0), ("textures", "tex", 2, 0),
           ("textures", "spec_tex", 2, 1), ("textures", "glow_tex", 2, 2),
           ("textures", "proj_tex", 2, 3), ("textures", "gobo_tex", 2, 4),
-          ("textures", "behind_tex", 2, 5)}),
+          ("textures", "behind_tex", 2, 5), ("textures", "shadow_tex", 2, 6),
+          ("textures", "normal_tex", 2, 7), ("textures", "detail_tex", 2, 8)}),
         ("kSpotPixel", "PSSpotCone", "ps_5_1", "ps_6_0",
          {("ubos", "PixelUniforms", 3, 0), ("ubos", "SpotUniforms", 3, 1),
-          ("textures", "tex", 2, 0), ("textures", "scene_depth_tex", 2, 6),
-          ("textures", "density_tex", 2, 7)}),
+          ("textures", "tex", 2, 0), ("textures", "scene_depth_tex", 2, 9),
+          ("textures", "density_tex", 2, 10)}),
         ("kSoftPixel", "PSSoftParticle", "ps_5_1", "ps_6_0",
          {("ubos", "PixelUniforms", 3, 0), ("ubos", "SpotUniforms", 3, 1),
           ("textures", "tex", 2, 0), ("textures", "spec_tex", 2, 1),
           ("textures", "glow_tex", 2, 2), ("textures", "proj_tex", 2, 3),
           ("textures", "gobo_tex", 2, 4), ("textures", "behind_tex", 2, 5),
-          ("textures", "scene_depth_tex", 2, 6)}),
+          ("textures", "shadow_tex", 2, 6), ("textures", "normal_tex", 2, 7),
+          ("textures", "detail_tex", 2, 8), ("textures", "scene_depth_tex", 2, 9)}),
+        # a shadow map's depth: no resources
+        ("kShadowDepthPixel", "PSShadowDepth", "ps_5_1", "ps_6_0", set()),
     ]),
     ("post.hlsl", "post_shaders.gen.h", [
         ("kFullscreenVertex", "VSFullscreen", "vs_5_1", "vs_6_0", set()),
@@ -58,12 +63,19 @@ SHADERS = [
          {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0)}),
         ("kBlurPixel", "PSBlur", "ps_5_1", "ps_6_0",
          {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0)}),
+        ("kGlarePixel", "PSGlare", "ps_5_1", "ps_6_0",
+         {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0)}),
         ("kCompositePixel", "PSComposite", "ps_5_1", "ps_6_0",
          {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0),
           ("textures", "depth_tex", 2, 1), ("textures", "dof_tex", 2, 2),
           ("textures", "bloom0_tex", 2, 3), ("textures", "bloom1_tex", 2, 4),
           ("textures", "bloom2_tex", 2, 5), ("textures", "volume_tex", 2, 6),
           ("textures", "density_tex", 2, 7), ("textures", "soft_tex", 2, 8)}),
+    ]),
+    # the display gamma ramp's pass, drawn with post.hlsl's VSFullscreen
+    ("gamma.hlsl", "gamma_shaders.gen.h", [
+        ("kGammaPixel", "PSGamma", "ps_5_1", "ps_6_0",
+         {("ubos", "GammaUniforms", 3, 0), ("textures", "color_tex", 2, 0)}),
     ]),
 ]
 
