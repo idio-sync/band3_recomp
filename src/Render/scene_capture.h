@@ -672,6 +672,24 @@ std::shared_ptr<const FrameCapture> CaptureHeldFrame(
 // the latest complete frame, composed with the world before it if it drew
 // none (frame_compose.h), or null before the first
 std::shared_ptr<const FrameCapture> LatestCapture();
+// and when it was published, at the end of the game's DxRnd::Present: where
+// the native renderer's latency starts
+std::shared_ptr<const FrameCapture> LatestCapture(
+    std::chrono::steady_clock::time_point& published);
+
+// A number that moves on with each capture published and each
+// WakeCaptureWaiters, so the native renderer's worker can sleep until there
+// is something to draw: WaitForCapture waits up to `timeout` for it to move
+// past `epoch` and returns it as it is then.
+uint64_t CaptureEpoch();
+uint64_t WaitForCapture(uint64_t epoch, std::chrono::milliseconds timeout);
+// wakes WaitForCapture as a capture would (the worker has another reason to draw)
+void WakeCaptureWaiters();
+
+// The game's frames: when each of the newest few thousand DxRnd::Presents
+// ended (captured or not), from `since` on, oldest first
+std::vector<std::chrono::steady_clock::time_point> GamePresentTimes(
+    std::chrono::steady_clock::time_point since);
 
 // native_view_rt_fallback: whether render targets' textures carry the pixels
 // guest memory holds too ("guest", the default) or only their identity ("none")

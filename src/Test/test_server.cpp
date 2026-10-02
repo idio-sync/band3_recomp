@@ -360,6 +360,30 @@ public:
         return out;
     }
 
+    // the window's paints as the native renderer's drawer timed them, and
+    // the game's Presents in the same time
+    PresentStats Present(bool reset) override {
+        PresentStats out;
+        const auto now = Clock::now();
+        render::PresentPaintStats paints = render::GetPresentPaintStats(reset);
+        out.renderer = render::NativePresenting() ? "native" : "emulated";
+        out.path = paints.path;
+        out.seconds = std::chrono::duration<double>(now - paints.since).count();
+        out.paints = paints.log.paints;
+        out.paint_ms = std::move(paints.log.interval_ms);
+        out.native_paints = paints.log.native_paints;
+        out.shown = paints.log.shown;
+        out.repeats = paints.log.repeats;
+        out.skipped = paints.log.skipped;
+        out.latency_ms = std::move(paints.log.latency_ms);
+        const auto presents = render::GamePresentTimes(paints.since);
+        out.game_frames = presents.size();
+        for (size_t i = 1; i < presents.size(); i++)
+            out.game_ms.push_back(
+                std::chrono::duration<double, std::milli>(presents[i] - presents[i - 1]).count());
+        return out;
+    }
+
     std::string SetSetting(std::string_view name, std::string_view value) override {
         const rex::cvar::FlagEntry* info = rex::cvar::GetFlagInfo(name);
         if (!info || !info->category.starts_with("Band3/")) {

@@ -1,7 +1,7 @@
 // Checks src/Render/present_model.h: where the native picture goes in the
 // window (letterboxed to 16:9 as the SDK's presenter does, or stretched), and
 // which output texture the native renderer's worker may draw into while the
-// SDK's paints sample another.
+// SDK's paints sample another, and the paints' numbers for present_stats.
 
 #include <doctest/doctest.h>
 #include <utility>
@@ -137,4 +137,70 @@ TEST_CASE("after the presenter stops, slots the GPU may still read stay taken") 
     CHECK(s.Acquire() == -1);
     s.Completed(5);
     CHECK(s.Acquire() == a);
+}
+
+namespace {
+constexpr int64_t kMs = 1000000;  // a millisecond in nanoseconds
+}
+
+TEST_CASE("paints are timed against the one before, whichever renderer drew them") {
+    PaintRecorder r;
+    r.Paint(100 * kMs, false);
+    r.Paint(116 * kMs, false);
+    r.Paint(150 * kMs, true);
+    const PaintLog& log = r.Log();
+    CHECK(log.paints == 3);
+    CHECK(log.native_paints == 1);
+    REQUIRE(log.interval_ms.size() == 2);
+    CHECK(log.interval_ms[0] == doctest::Approx(16.0));
+    CHECK(log.interval_ms[1] == doctest::Approx(34.0));
+    // nothing drawn yet: neither shown nor repeated
+    CHECK(log.shown == 0);
+    CHECK(log.repeats == 0);
+}
+
+TEST_CASE("a native frame shown again is a repeat, one never shown a skip") {
+    PaintRecorder r;
+    r.Paint(100 * kMs, true, 0, 1, 90 * kMs);
+    r.Paint(116 * kMs, true, 0, 1, 90 * kMs);   // again
+    r.Paint(133 * kMs, true, 0, 2, 110 * kMs);
+    r.Paint(150 * kMs, true, 0, 5, 140 * kMs);  // 3 and 4 never shown
+    const PaintLog& log = r.Log();
+    CHECK(log.shown == 3);
+    CHECK(log.repeats == 1);
+    CHECK(log.skipped == 2);
+    // each frame's latency at the first paint showing it
+    REQUIRE(log.latency_ms.size() == 3);
+    CHECK(log.latency_ms[0] == doctest::Approx(10.0));
+    CHECK(log.latency_ms[1] == doctest::Approx(23.0));
+    CHECK(log.latency_ms[2] == doctest::Approx(10.0));
+}
+
+TEST_CASE("starting over keeps the last paint, so the next is measured against it") {
+    PaintRecorder r;
+    r.Paint(100 * kMs, true, 0, 7, 95 * kMs);
+    r.Reset();
+    CHECK(r.Log().paints == 0);
+    r.Paint(116 * kMs, true, 0, 7, 95 * kMs);
+    r.Paint(133 * kMs, true, 0, 9, 120 * kMs);
+    const PaintLog& log = r.Log();
+    REQUIRE(log.interval_ms.size() == 2);
+    CHECK(log.interval_ms[0] == doctest::Approx(16.0));
+    CHECK(log.repeats == 1);  // frame 7, shown before the reset
+    CHECK(log.shown == 1);
+    CHECK(log.skipped == 1);
+}
+
+TEST_CASE("an emulated paint or another source starts the frames' count over") {
+    PaintRecorder r;
+    r.Paint(100 * kMs, true, 0, 3, 90 * kMs);
+    r.Paint(116 * kMs, false);
+    // the worker went on drawing while the emulated GPU's picture showed
+    r.Paint(133 * kMs, true, 0, 10, 120 * kMs);
+    // uploads number their frames on their own
+    r.Paint(150 * kMs, true, 1, 2, 140 * kMs);
+    const PaintLog& log = r.Log();
+    CHECK(log.skipped == 0);
+    CHECK(log.shown == 3);
+    CHECK(log.repeats == 0);
 }

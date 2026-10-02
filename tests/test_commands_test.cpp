@@ -62,6 +62,8 @@ public:
     int64_t capture_proc_cmds = 2;
     bool capture_fell_back = false;
     NativeViewStats view;
+    PresentStats present;
+    int present_resets = 0;
     bool quit = false;
     bool cancelled = false;
     input::Gamepad360 pad;
@@ -148,6 +150,14 @@ public:
     }
     void NativeViewOff() override { view = NativeViewStats{}; }
     NativeViewStats NativeView() override { return view; }
+    PresentStats Present(bool reset) override {
+        const PresentStats out = present;
+        if (reset) {
+            present = PresentStats{};
+            present_resets++;
+        }
+        return out;
+    }
     void Quit() override { quit = true; }
     bool Cancelled() override { return cancelled; }
     bool ReadPad(int player, input::Gamepad360& out, uint32_t& packet) override {
@@ -857,4 +867,46 @@ TEST_CASE("the game state follows the song's position, unknown until it's read")
     CHECK(!state.InGame());
     state.SetInGame(true);
     CHECK(state.Snapshot().song_ms == -1);
+}
+
+TEST_CASE("present_stats reports the window's paints, the native frames and the game's") {
+    FakeGame game;
+    game.present.renderer = "native";
+    game.present.path = "zero-copy";
+    game.present.seconds = 20;
+    game.present.paints = 1200;
+    // 16 ms, but two at 40: hitches, longer than 1.5 times the median
+    game.present.paint_ms.assign(18, 16.0);
+    game.present.paint_ms.push_back(40.0);
+    game.present.paint_ms.push_back(40.0);
+    game.present.native_paints = 1200;
+    game.present.shown = 1190;
+    game.present.repeats = 10;
+    game.present.skipped = 3;
+    game.present.latency_ms = {20.0, 30.0};
+    game.present.game_frames = 1196;
+    game.present.game_ms.assign(20, 16.7);
+    std::string reply = RunCommand("present_stats", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"renderer\":\"native\",\"path\":\"zero-copy\""));
+    CHECK(Has(reply, "\"seconds\":20.0,\"paints\":1200,\"paint_fps\":60.0"));
+    CHECK(Has(reply, "\"paint_ms\":{\"mean\":18.40,\"p50\":16.00,\"p95\":40.00,\"max\":40.00}"));
+    CHECK(Has(reply, "\"hitches\":2,\"native\""));
+    CHECK(Has(reply, "\"native\":{\"paints\":1200,\"shown\":1190,\"repeats\":10,\"skipped\":3"));
+    CHECK(Has(reply, "\"latency_ms\":{\"mean\":25.00,\"p50\":20.00,\"p95\":30.00"));
+    CHECK(Has(reply, "\"game\":{\"frames\":1196,\"fps\":59.8"));
+    CHECK(Has(reply, "\"hitches\":0}}"));
+    CHECK(game.present_resets == 0);
+
+    // reset replies with the stretch it ends, then starts over
+    reply = RunCommand("present_stats reset", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"paints\":1200"));
+    CHECK(game.present_resets == 1);
+    CHECK(Has(RunCommand("present_stats", game), "\"paints\":0"));
+
+    for (const char* bad : {"present_stats now", "present_stats reset more", "p2 present_stats"}) {
+        CAPTURE(bad);
+        CHECK_FALSE(Ok(RunCommand(bad, game)));
+    }
 }

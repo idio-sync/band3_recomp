@@ -331,7 +331,11 @@ struct GpuRenderer::Impl {
     // by blend mode, DepthRules::Key, AlphaMode, CullWinding and PixelKind,
     // all made before the first frame
     std::unordered_map<int, SDL_GPUGraphicsPipeline*> pipelines;
-    bool warm = false;
+    // Prewarm has started (read without the mutex by GpuRenderer::Prewarm),
+    // and has finished: a pipeline made after it is one it doesn't make,
+    // which a frame waited for (logged)
+    std::atomic<bool> warm{false};
+    bool warmed_up = false;
     SDL_GPUSampler* sampler = nullptr;
     // linear and clamping, as RB3 samples its post-processing levels
     SDL_GPUSampler* linear_sampler = nullptr;
@@ -895,6 +899,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     arena_vert_count = arena_index_count = 0;
     pipelines.clear();
     warm = false;
+    warmed_up = false;
     device = nullptr;
     vertex_shader = pixel_shader = spot_shader = soft_shader = shadow_shader = nullptr;
     fullscreen_shader = nullptr;
@@ -923,6 +928,7 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     const int key =
         int(pixel) << 10 | int(cull) << 8 | int(alpha) << 6 | blend << 3 | rules.Key();
     if (auto it = pipelines.find(key); it != pipelines.end()) return it->second;
+    const auto start = std::chrono::steady_clock::now();
 
     // scene_capture.h's Vertex as it is, 56 bytes
     const SDL_GPUVertexBufferDescription buffer{0, sizeof(Vertex), SDL_GPU_VERTEXINPUTRATE_VERTEX,
@@ -1056,6 +1062,14 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(device, &pi);
     if (!p) REXLOG_WARN("native view gpu: no pipeline ({})", SDL_GetError());
     pipelines[key] = p;
+    // one Prewarm doesn't make: a frame waited for it (add it there)
+    if (warmed_up) {
+        REXLOG_INFO("native view gpu: pipeline made after warm-up: {:#x} (pixel {}, cull {}, "
+                    "alpha {}, blend {}, depth rules {}) ({:.1f} ms)",
+                    key, int(pixel), int(cull), int(alpha), blend, rules.Key(),
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                              start).count());
+    }
     return p;
 }
 
@@ -1100,6 +1114,7 @@ void GpuRenderer::Impl::Prewarm() {
                 pipelines.size(), upload_size >> 20,
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                           start).count());
+    warmed_up = true;
 }
 
 bool GpuRenderer::Impl::Reserve(Buffer& b, SDL_GPUBufferUsageFlags usage, uint32_t bytes) {
@@ -2861,6 +2876,13 @@ bool GpuRenderer::DownloadOutput(int slot, std::vector<uint32_t>& rgba, uint32_t
     width = o.w;
     height = o.h;
     return true;
+}
+
+void GpuRenderer::Prewarm() {
+    // done already, without waiting for a frame being drawn
+    if (impl_->warm) return;
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->device && !impl_->warm) impl_->Prewarm();
 }
 
 void GpuRenderer::SetPresentDevice(void* d3d12_device) {

@@ -492,6 +492,51 @@ std::string Distribution(std::vector<double> ms) {
     return buf;
 }
 
+// the intervals longer than 1.5 times their median: frames that came late
+uint64_t Hitches(std::vector<double> ms) {
+    if (ms.empty()) return 0;
+    std::sort(ms.begin(), ms.end());
+    const size_t i = static_cast<size_t>(std::ceil(0.5 * double(ms.size())));
+    const double median = ms[std::clamp<size_t>(i, 1, ms.size()) - 1];
+    return uint64_t(std::count_if(ms.begin(), ms.end(), [&](double m) { return m > 1.5 * median; }));
+}
+
+std::string PresentJson(const PresentStats& s) {
+    std::string out = "\"stats\":{\"renderer\":";
+    AppendJsonString(out, s.renderer);
+    out += ",\"path\":";
+    AppendJsonString(out, s.path);
+    const double seconds = s.seconds > 0 ? s.seconds : 0;
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), ",\"seconds\":%.1f,\"paints\":%llu,\"paint_fps\":%.1f",
+                  seconds, static_cast<unsigned long long>(s.paints),
+                  seconds > 0 ? double(s.paints) / seconds : 0.0);
+    out += buf;
+    out += ",\"paint_ms\":" + Distribution(s.paint_ms);
+    out += ",\"hitches\":" + std::to_string(Hitches(s.paint_ms));
+    out += ",\"native\":{\"paints\":" + std::to_string(s.native_paints);
+    out += ",\"shown\":" + std::to_string(s.shown);
+    out += ",\"repeats\":" + std::to_string(s.repeats);
+    out += ",\"skipped\":" + std::to_string(s.skipped);
+    out += ",\"latency_ms\":" + Distribution(s.latency_ms) + "}";
+    std::snprintf(buf, sizeof(buf), ",\"game\":{\"frames\":%llu,\"fps\":%.1f",
+                  static_cast<unsigned long long>(s.game_frames),
+                  seconds > 0 ? double(s.game_frames) / seconds : 0.0);
+    out += buf;
+    out += ",\"ms\":" + Distribution(s.game_ms);
+    out += ",\"hitches\":" + std::to_string(Hitches(s.game_ms)) + "}}";
+    return out;
+}
+
+// `present_stats [reset]`: the window's pacing since it last started over;
+// reset starts it over, and replies with the stretch it ends
+std::string PresentStatsCommand(TestTarget& target, const std::vector<std::string_view>& args) {
+    const bool reset = args.size() == 2 && args[1] == "reset";
+    if (args.size() > 2 || (args.size() == 2 && !reset))
+        return Error(target, "usage: present_stats [reset]");
+    return Ok(PresentJson(target.Present(reset)));
+}
+
 std::string NativeViewJson(const NativeViewStats& s) {
     std::string out = "\"stats\":{\"on\":";
     out += s.on ? "true" : "false";
@@ -703,6 +748,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "set") return Set(target, line, args);
     if (verb == "bind") return Bind(target, args);
     if (verb == "native_view") return NativeView(target, args);
+    if (verb == "present_stats") return PresentStatsCommand(target, args);
     if (verb == "quit") {
         target.Quit();
         return Ok();

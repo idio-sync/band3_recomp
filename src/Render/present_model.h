@@ -1,12 +1,15 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <vector>
 
 // Experimental: the arithmetic and bookkeeping of the native renderer's
 // presentation (renderer = native, native_view.cpp's NativePresentDrawer),
 // kept apart so the unit tests can check them: where the picture goes in the
-// window, and which of the presenter's output textures the renderer's worker
-// may draw into while the SDK's presenter samples another.
+// window, which of the presenter's output textures the renderer's worker
+// may draw into while the SDK's presenter samples another, and the paints'
+// pacing as the harness's present_stats reports it.
 
 namespace band3::render {
 
@@ -114,6 +117,67 @@ class PresentSlots {
     int newest_ = -1;
     uint64_t serial_ = 0;
     uint64_t completed_ = 0;
+};
+
+// The window's paints since the numbers last started over, for the harness's
+// present_stats: every paint, whichever renderer drew it, and on the native
+// renderer which of its frames each showed.
+struct PaintLog {
+    uint64_t paints = 0;
+    std::vector<double> interval_ms;  // between each paint and the one before
+    uint64_t native_paints = 0;       // paints the native renderer drew in
+    // of those, the ones showing a frame no paint had shown, and the ones
+    // showing the same frame again; and frames drawn that no paint showed
+    uint64_t shown = 0, repeats = 0, skipped = 0;
+    // from the game's Present of each frame shown to the first paint showing it
+    std::vector<double> latency_ms;
+};
+
+// Keeps a PaintLog from each paint's time (steady-clock nanoseconds). Not
+// thread-safe: native_view.cpp holds a mutex around every call.
+class PaintRecorder {
+ public:
+    // at most this many intervals and latencies: about 18 minutes at 60 Hz
+    static constexpr size_t kMaxSamples = size_t(1) << 16;
+
+    // A paint at `now_ns`. With `native`, it showed native frame `serial`
+    // (frames numbered from 1 as they were drawn, 0 none yet) from
+    // `source` (the frames' numbering: zero-copy outputs or uploaded
+    // pictures), which the game presented at `presented_ns`.
+    void Paint(int64_t now_ns, bool native, int source = 0, uint64_t serial = 0,
+               int64_t presented_ns = 0) {
+        log_.paints++;
+        if (last_ns_ && log_.interval_ms.size() < kMaxSamples)
+            log_.interval_ms.push_back(double(now_ns - last_ns_) / 1e6);
+        last_ns_ = now_ns;
+        // a stretch of the native renderer's paints is counted on its own,
+        // as is one from the other source
+        if (!native || source != source_) last_serial_ = 0;
+        source_ = source;
+        if (!native) return;
+        log_.native_paints++;
+        if (!serial) return;
+        if (serial == last_serial_) {
+            log_.repeats++;
+            return;
+        }
+        if (last_serial_ && serial > last_serial_ + 1) log_.skipped += serial - last_serial_ - 1;
+        log_.shown++;
+        if (presented_ns && log_.latency_ms.size() < kMaxSamples)
+            log_.latency_ms.push_back(double(now_ns - presented_ns) / 1e6);
+        last_serial_ = serial;
+    }
+
+    // The numbers start over; the last paint's time and frame are kept, so
+    // the next paint's interval and frame are measured against them.
+    void Reset() { log_ = PaintLog{}; }
+    const PaintLog& Log() const { return log_; }
+
+ private:
+    PaintLog log_;
+    int64_t last_ns_ = 0;
+    int source_ = 0;
+    uint64_t last_serial_ = 0;
 };
 
 }  // namespace band3::render

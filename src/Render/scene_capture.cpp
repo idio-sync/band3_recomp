@@ -613,6 +613,22 @@ constexpr int kMaxFramesToWait = 30;
 constexpr std::chrono::seconds kMaxHold{3};
 std::mutex g_latest_mutex;
 std::shared_ptr<const FrameCapture> g_latest;
+// when g_latest was published, for the native renderer's latency
+std::chrono::steady_clock::time_point g_latest_published;
+// captures published and WakeCaptureWaiters calls so far, under
+// g_latest_mutex: the native renderer's worker waits on g_latest_cv for it to
+// move rather than looking every few milliseconds
+uint64_t g_capture_epoch = 0;
+std::condition_variable g_latest_cv;
+// native_view_record_targets as set, and whether renderer is native: texture
+// passes are recorded if either is (g_record_targets)
+std::atomic<bool> g_record_targets_set{false}, g_renderer_native{false};
+// The game's frames: the newest kPresentTimes ends of DxRnd::Present, a ring,
+// for the harness's present_stats (about two minutes at 60 frames a second)
+constexpr size_t kPresentTimes = 8192;
+std::mutex g_present_times_mutex;
+std::chrono::steady_clock::time_point g_present_times[kPresentTimes];
+uint64_t g_present_count = 0;
 
 uint64_t Key(std::initializer_list<uint32_t> parts) {
     uint64_t h = 1469598103934665603ull;
@@ -2147,7 +2163,10 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
     {
         std::lock_guard lock(g_latest_mutex);
         g_latest = done;
+        g_latest_published = std::chrono::steady_clock::now();
+        g_capture_epoch++;
     }
+    g_latest_cv.notify_all();
     s.building = std::make_shared<FrameCapture>();
     s.shades.clear();
     s.samples.clear();
@@ -2210,6 +2229,44 @@ std::shared_ptr<const FrameCapture> LatestCapture() {
     return g_latest;
 }
 
+std::shared_ptr<const FrameCapture> LatestCapture(
+    std::chrono::steady_clock::time_point& published) {
+    std::lock_guard lock(g_latest_mutex);
+    published = g_latest_published;
+    return g_latest;
+}
+
+uint64_t CaptureEpoch() {
+    std::lock_guard lock(g_latest_mutex);
+    return g_capture_epoch;
+}
+
+uint64_t WaitForCapture(uint64_t epoch, std::chrono::milliseconds timeout) {
+    std::unique_lock lock(g_latest_mutex);
+    g_latest_cv.wait_for(lock, timeout, [epoch] { return g_capture_epoch != epoch; });
+    return g_capture_epoch;
+}
+
+void WakeCaptureWaiters() {
+    {
+        std::lock_guard lock(g_latest_mutex);
+        g_capture_epoch++;
+    }
+    g_latest_cv.notify_all();
+}
+
+std::vector<std::chrono::steady_clock::time_point> GamePresentTimes(
+    std::chrono::steady_clock::time_point since) {
+    std::vector<std::chrono::steady_clock::time_point> out;
+    std::lock_guard lock(g_present_times_mutex);
+    const uint64_t kept = std::min<uint64_t>(g_present_count, kPresentTimes);
+    for (uint64_t i = g_present_count - kept; i < g_present_count; i++) {
+        const auto t = g_present_times[i % kPresentTimes];
+        if (t >= since) out.push_back(t);
+    }
+    return out;
+}
+
 PassRecordingStats GetPassRecordingStats() {
     PassRecordingStats out;
     out.passes = g_rec_passes.load(std::memory_order_relaxed);
@@ -2240,10 +2297,27 @@ void TrackSettings() {
                                           [](std::string_view, std::string_view v) {
                                               g_rt_fallback_guest.store(v != "none");
                                           });
-        g_record_targets.store(REXCVAR_GET(native_view_record_targets));
+        // Recorded while renderer is native as well: it draws outfits and
+        // the like from passes RB3 draws once (in the main menu), which
+        // capture must have seen. Turning native on later doesn't bring back
+        // the ones drawn before.
+        auto record = [] {
+            g_record_targets.store(g_record_targets_set.load() || g_renderer_native.load());
+        };
+        g_record_targets_set.store(REXCVAR_GET(native_view_record_targets));
+        g_renderer_native.store(rex::cvar::GetFlagByName("renderer") == "native");
+        record();
         rex::cvar::RegisterChangeCallback("native_view_record_targets",
-                                          [](std::string_view, std::string_view v) {
-                                              g_record_targets.store(v == "true" || v == "1");
+                                          [record](std::string_view, std::string_view v) {
+                                              g_record_targets_set.store(v == "true" || v == "1");
+                                              record();
+                                          });
+        // (NativePresentDrawer's Stop takes every renderer callback off, this
+        // one too, but only at shutdown)
+        rex::cvar::RegisterChangeCallback("renderer",
+                                          [record](std::string_view, std::string_view v) {
+                                              g_renderer_native.store(v == "native");
+                                              record();
                                           });
         // the SDK's, by name: it lives in the GPU's DLL
         auto aniso = [](std::string_view v) {
@@ -2604,6 +2678,11 @@ extern "C" REX_FUNC(DxRnd__Present) {
     SCOPE_profile_cpu_f("RB3 DxRnd::Present");
     __imp__DxRnd__Present(ctx, base);
     TrackSettings();
+    {
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard lock(g_present_times_mutex);
+        g_present_times[g_present_count++ % kPresentTimes] = now;
+    }
     std::shared_ptr<const FrameCapture> done;
     {
         std::lock_guard lock(g_state_mutex);

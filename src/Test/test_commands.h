@@ -108,6 +108,29 @@ struct NativeViewStats {
     double rt_ms = 0;
 };
 
+// The window's pacing (`present_stats`), since its numbers last started over:
+// every paint of the window, whichever renderer drew it, and the game's own
+// frames in the same time
+struct PresentStats {
+    // what the window shows now, "emulated" or "native", and how the native
+    // renderer's frames reach it, "zero-copy" or "upload" (empty while emulated)
+    std::string renderer;
+    std::string path;
+    double seconds = 0;
+    uint64_t paints = 0;
+    std::vector<double> paint_ms;  // between each paint and the one before
+    // the native renderer's paints; of those, the ones showing a frame of its
+    // not shown before, and the ones showing one again; and frames it drew
+    // that no paint showed
+    uint64_t native_paints = 0;
+    uint64_t shown = 0, repeats = 0, skipped = 0;
+    // from the game's Present of each frame shown to the first paint showing it
+    std::vector<double> latency_ms;
+    // the game's frames: between the ends of its Presents
+    uint64_t game_frames = 0;
+    std::vector<double> game_ms;
+};
+
 class TestTarget {
 public:
     using Clock = std::chrono::steady_clock;
@@ -145,6 +168,9 @@ public:
     virtual std::string NativeViewOn(uint32_t width, uint32_t height, bool sized, bool post) = 0;
     virtual void NativeViewOff() = 0;
     virtual NativeViewStats NativeView() = 0;
+    // the window's pacing since it last started over; `reset` starts it over
+    // once read
+    virtual PresentStats Present(bool reset) = 0;
     virtual void Quit() = 0;
     // the harness is shutting down: a wait gives up
     virtual bool Cancelled() = 0;

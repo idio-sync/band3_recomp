@@ -135,20 +135,28 @@ class Renderer {
             stop_ = true;
             t = std::move(thread_);
         }
+        WakeCaptureWaiters();
         if (t.joinable()) t.join();
     }
 
     void SetOptions(const RasterOptions& o) {
-        std::lock_guard lock(mutex_);
-        options_ = o;
-        options_changed_ = true;
+        {
+            std::lock_guard lock(mutex_);
+            options_ = o;
+            options_changed_ = true;
+        }
+        WakeCaptureWaiters();
     }
 
     // the GPU when the device is there, else the CPU
     void SetGpu(bool gpu) {
-        std::lock_guard lock(mutex_);
-        options_changed_ |= gpu_ != gpu;
-        gpu_ = gpu;
+        {
+            std::lock_guard lock(mutex_);
+            if (gpu_ == gpu) return;
+            options_changed_ = true;
+            gpu_ = gpu;
+        }
+        WakeCaptureWaiters();
     }
 
     void SetDumpPath(std::string path) {
@@ -178,6 +186,7 @@ class Renderer {
             options_changed_ = true;
         }
         AddUser();
+        WakeCaptureWaiters();
     }
     void StopPresent() {
         {
@@ -188,6 +197,7 @@ class Renderer {
             settle_ = nullptr;
             options_changed_ = true;
         }
+        WakeCaptureWaiters();
         RemoveUser();
     }
     bool Presenting() {
@@ -208,16 +218,23 @@ class Renderer {
     }
     // the window's picture's size; the worker draws the next frame at it
     void SetPresentSize(uint32_t width, uint32_t height) {
-        std::lock_guard lock(mutex_);
-        if (width == present_w_ && height == present_h_) return;
-        present_w_ = width;
-        present_h_ = height;
-        options_changed_ = true;
+        {
+            std::lock_guard lock(mutex_);
+            if (width == present_w_ && height == present_h_) return;
+            present_w_ = width;
+            present_h_ = height;
+            options_changed_ = true;
+        }
+        WakeCaptureWaiters();
     }
     void SetPresentZeroCopy(bool zero_copy) {
-        std::lock_guard lock(mutex_);
-        options_changed_ |= present_zero_copy_ != zero_copy;
-        present_zero_copy_ = zero_copy;
+        {
+            std::lock_guard lock(mutex_);
+            if (present_zero_copy_ == zero_copy) return;
+            options_changed_ = true;
+            present_zero_copy_ = zero_copy;
+        }
+        WakeCaptureWaiters();
     }
     // Direct3D 12: lets the worker learn that the GPU has finished every paint
     // so far once paints have stopped (minimized), when no paint passes on a
@@ -227,9 +244,11 @@ class Renderer {
         settle_ = std::move(settle);
     }
     // A paint numbered `submission`, the GPU having finished those up to
-    // `completed`: the newest output to show, marked as sampled by it; false
-    // before the first
-    bool ShowNewest(uint64_t submission, uint64_t completed, int& slot, GpuOutput& out) {
+    // `completed`: the newest output to show, marked as sampled by it, its
+    // frame's number (PresentSlots::Serial when it was published) and when
+    // the game presented that frame; false before the first
+    bool ShowNewest(uint64_t submission, uint64_t completed, int& slot, GpuOutput& out,
+                    uint64_t& serial, std::chrono::steady_clock::time_point& presented) {
         std::lock_guard lock(mutex_);
         slots_.Completed(completed);
         last_paint_ = std::chrono::steady_clock::now();
@@ -237,17 +256,24 @@ class Renderer {
         if (slot < 0) return false;
         slots_.Shown(slot, submission);
         out = outputs_[slot];
+        serial = slot_serial_[slot];
+        presented = slot_presented_[slot];
         return true;
     }
     // A screenshot: the next frame drawn is read back too, for Take, on the
     // zero-copy path before it's published, so SDL never copies an output
     // the SDK's queue may be sampling. Returns the serial Take passes.
     uint64_t RequestImage() {
-        std::lock_guard lock(mutex_);
-        image_wanted_ = true;
-        // drawn again even if the game has no new frame (paused)
-        options_changed_ = true;
-        return image_serial_;
+        uint64_t serial;
+        {
+            std::lock_guard lock(mutex_);
+            image_wanted_ = true;
+            // drawn again even if the game has no new frame (paused)
+            options_changed_ = true;
+            serial = image_serial_;
+        }
+        WakeCaptureWaiters();
+        return serial;
     }
 
     // the live view's numbers start over, from the next frame captured, and
@@ -275,9 +301,10 @@ class Renderer {
         return s;
     }
 
-    // copies the newest picture if it is newer than `frame`
+    // copies the newest picture if it is newer than `frame`; `presented`:
+    // when the game presented the frame it is of
     bool Take(uint64_t& frame, std::vector<uint32_t>& rgba, uint32_t& w, uint32_t& h,
-              std::string& stats) {
+              std::string& stats, std::chrono::steady_clock::time_point* presented = nullptr) {
         std::lock_guard lock(mutex_);
         stats = stats_;
         if (image_serial_ == frame || image_.empty()) return false;
@@ -285,6 +312,7 @@ class Renderer {
         rgba = image_;
         w = image_w_;
         h = image_h_;
+        if (presented) *presented = image_presented_;
         return true;
     }
 
@@ -292,11 +320,17 @@ class Renderer {
     // how long paints must have stopped before the worker settles the slots
     // they sampled itself: by then each paint's commands were long submitted
     static constexpr std::chrono::milliseconds kPaintsStopped{250};
+    // the longest the worker sleeps with nothing to draw before it looks
+    // again; a capture, a setting changing or a user leaving wakes it sooner
+    static constexpr std::chrono::milliseconds kIdleWait{100};
 
     void Run() {
         uint64_t last_frame = 0;
         auto last_dump = std::chrono::steady_clock::now() - std::chrono::seconds(10);
         std::vector<uint32_t> rgba;
+        // as it was before the settings were last read: a capture or a
+        // change since has moved it on, and the wait below doesn't sleep
+        uint64_t epoch = CaptureEpoch();
         while (true) {
             RasterOptions o;
             std::string dump;
@@ -326,9 +360,12 @@ class Renderer {
                 changed = options_changed_;
                 options_changed_ = false;
             }
-            auto cap = LatestCapture();
+            std::chrono::steady_clock::time_point presented;
+            auto cap = LatestCapture(presented);
             if (!cap || (cap->frame == last_frame && !changed)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                // until the game publishes a capture, or a setting or a user
+                // changes (WakeCaptureWaiters)
+                epoch = WaitForCapture(epoch, kIdleWait);
                 continue;
             }
             // an output no paint may still be sampling, or wait for one
@@ -390,6 +427,8 @@ class Renderer {
                     if (drew_output) {
                         outputs_[slot] = out;
                         slots_.Publish(slot);
+                        slot_serial_[slot] = slots_.Serial();
+                        slot_presented_[slot] = presented;
                     } else {
                         slots_.Abandon(slot);
                     }
@@ -409,6 +448,7 @@ class Renderer {
                     image_ = rgba;
                     image_w_ = o.width;
                     image_h_ = o.height;
+                    image_presented_ = presented;
                     image_serial_++;
                     image_wanted_ = false;
                 }
@@ -457,6 +497,7 @@ class Renderer {
     std::vector<uint32_t> image_;
     uint32_t image_w_ = 0, image_h_ = 0;
     uint64_t image_serial_ = 0;
+    std::chrono::steady_clock::time_point image_presented_{};
     bool image_wanted_ = false;
     uint32_t dump_count_ = 0;
     std::string stats_;
@@ -467,6 +508,10 @@ class Renderer {
     bool present_zero_copy_ = false;
     PresentSlots slots_;
     GpuOutput outputs_[PresentSlots::kCount];
+    // each output's frame: its number as published, and when the game
+    // presented it
+    uint64_t slot_serial_[PresentSlots::kCount] = {};
+    std::chrono::steady_clock::time_point slot_presented_[PresentSlots::kCount] = {};
     std::chrono::steady_clock::time_point last_paint_{};
     std::function<bool()> settle_;
     // the live view's numbers; captures numbered up to live_base_ came before
@@ -642,6 +687,32 @@ void StopNativeView() {
 // the native renderer on the window (renderer = native)
 
 namespace {
+
+// The window's paints, for the harness's present_stats (GetPresentPaintStats):
+// the drawer's Draw notes every one, whichever renderer, on the UI thread.
+// `path` is how the native renderer's frames last reached the window.
+std::mutex g_paints_mutex;
+PaintRecorder g_paints;
+std::chrono::steady_clock::time_point g_paints_since = std::chrono::steady_clock::now();
+std::string g_present_path;
+
+int64_t Nanoseconds(std::chrono::steady_clock::time_point t) {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
+}
+
+// a paint at `now`; with `native`, showing native frame `serial` (0 none) of
+// `source`'s numbering, which the game presented at `presented`
+void NotePaint(std::chrono::steady_clock::time_point now, bool native, int source = 0,
+               uint64_t serial = 0, std::chrono::steady_clock::time_point presented = {}) {
+    std::lock_guard lock(g_paints_mutex);
+    g_paints.Paint(Nanoseconds(now), native, source, serial,
+                   presented.time_since_epoch().count() ? Nanoseconds(presented) : 0);
+}
+
+// the paths' numberings of their frames (PaintRecorder's sources); zero-copy
+// is Direct3D 12's alone
+[[maybe_unused]] constexpr int kZeroCopyFrames = 0;
+constexpr int kUploadedFrames = 1;
 
 // the SDK's present_letterbox, which it reads where it paints; on if it isn't
 // there to read
@@ -904,7 +975,9 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             REXLOG_INFO("native present: off, the emulated GPU's picture shows");
             return;
         }
-        UpdateGpu();
+        // every pipeline made now, here on the UI thread, not by the
+        // worker's first frame while the window waits for it
+        if (UpdateGpu()) GpuRenderer::Get().Prewarm();
         const bool zero_copy = ChoosePath();
         // before the first paint, the window's size (minimized, a paint may
         // not come for a while)
@@ -925,11 +998,19 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
     }
 
     void Draw(rex::ui::UIDrawContext& context) override {
+        // every paint is timed, whichever renderer it shows (present_stats)
+        const auto now = std::chrono::steady_clock::now();
         // read every paint, as well as followed as it changes
         Follow(REXCVAR_GET(renderer) == "native");
-        if (!active_) return;
+        if (!active_) {
+            NotePaint(now, false);
+            return;
+        }
         const uint32_t tw = context.render_target_width(), th = context.render_target_height();
-        if (!tw || !th) return;
+        if (!tw || !th) {
+            NotePaint(now, true);
+            return;
+        }
         rect_ = LetterboxRect(tw, th, PresentLetterbox());
         Renderer::Get().SetPresentSize(rect_.w, rect_.h);
         UpdateGpu();
@@ -938,26 +1019,33 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             auto& ctx = static_cast<rex::ui::d3d12::D3D12UIDrawContext&>(context);
             int slot = -1;
             GpuOutput out;
+            uint64_t serial = 0;
+            std::chrono::steady_clock::time_point presented;
             if (Renderer::Get().ShowNewest(ctx.submission_index_current(),
-                                           ctx.submission_index_completed(), slot, out) &&
+                                           ctx.submission_index_completed(), slot, out, serial,
+                                           presented) &&
                 out.d3d12_resource) {
                 d3d12_->Draw(ctx, rect_, slot, out);
                 drew_ = true;
+                NotePaint(now, true, kZeroCopyFrames, serial, presented);
+            } else {
+                NotePaint(now, true);
             }
             return;
         }
 #else
         ChoosePath();
 #endif
-        DrawUploaded(context);
+        DrawUploaded(context, now);
     }
 
  private:
     // native_view_backend, which F4 can change: on the GPU when its device
-    // starts (here, on the UI thread), else on the CPU
-    void UpdateGpu() {
-        Renderer::Get().SetGpu(REXCVAR_GET(native_view_backend) == "gpu" &&
-                               GpuRenderer::Get().Init());
+    // starts (here, on the UI thread), else on the CPU; true on the GPU
+    bool UpdateGpu() {
+        const bool gpu = REXCVAR_GET(native_view_backend) == "gpu" && GpuRenderer::Get().Init();
+        Renderer::Get().SetGpu(gpu);
+        return gpu;
     }
 
     // zero-copy, or uploading and why; logged when it changes
@@ -980,18 +1068,26 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         zero_copy_ = zero_copy;
         why_ = why;
         Renderer::Get().SetPresentZeroCopy(zero_copy);
+        {
+            std::lock_guard lock(g_paints_mutex);
+            g_present_path = zero_copy ? "zero-copy" : "upload";
+        }
         return zero_copy;
     }
 
     // the upload path: the worker's newest RGBA as an immediate texture (two
     // in turn, so the one a paint in flight reads isn't the one let go),
     // drawn through the SDK's immediate drawer in rect_, black around it
-    void DrawUploaded(rex::ui::UIDrawContext& context) {
+    void DrawUploaded(rex::ui::UIDrawContext& context, std::chrono::steady_clock::time_point now) {
         rex::ui::ImmediateDrawer* drawer = immediate_ ? immediate_() : nullptr;
-        if (!drawer) return;
+        if (!drawer) {
+            NotePaint(now, true);
+            return;
+        }
         uint32_t w = 0, h = 0;
         std::string stats;
-        if (Renderer::Get().Take(upload_frame_, upload_, w, h, stats) && w && h) {
+        if (Renderer::Get().Take(upload_frame_, upload_, w, h, stats, &upload_presented_) && w &&
+            h) {
             current_ ^= 1;
             // the immediate drawer's textures are made from data only, so a
             // new one each frame
@@ -1000,7 +1096,11 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
                                       reinterpret_cast<const uint8_t*>(upload_.data()));
         }
         rex::ui::ImmediateTexture* texture = textures_[current_].get();
-        if (!texture) return;
+        if (!texture) {
+            NotePaint(now, true);
+            return;
+        }
+        NotePaint(now, true, kUploadedFrames, upload_frame_, upload_presented_);
         const float tw = float(context.render_target_width());
         const float th = float(context.render_target_height());
         const float x0 = float(rect_.x), y0 = float(rect_.y);
@@ -1045,6 +1145,7 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
     std::unique_ptr<rex::ui::ImmediateTexture> textures_[2];
     int current_ = 0;
     uint64_t upload_frame_ = 0;
+    std::chrono::steady_clock::time_point upload_presented_{};
     std::vector<uint32_t> upload_;
 #ifdef _WIN32
     std::unique_ptr<D3D12Present> d3d12_;
@@ -1074,6 +1175,20 @@ void StopNativePresent() {
 }
 
 bool NativePresenting() { return Renderer::Get().Presenting(); }
+
+PresentPaintStats GetPresentPaintStats(bool reset) {
+    const bool presenting = Renderer::Get().Presenting();
+    PresentPaintStats out;
+    std::lock_guard lock(g_paints_mutex);
+    out.log = g_paints.Log();
+    out.since = g_paints_since;
+    if (presenting) out.path = g_present_path;
+    if (reset) {
+        g_paints.Reset();
+        g_paints_since = std::chrono::steady_clock::now();
+    }
+    return out;
+}
 
 bool NativePresentDrawSize(uint32_t& width, uint32_t& height) {
     return Renderer::Get().PresentDrawSize(width, height);
