@@ -39,6 +39,7 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Searching [RhythmVerse](https://rhythmverse.co) for custom songs from that page, and downloading them into the game without a restart
 - RB3Enhanced's script functions, modifiers and unlock options, so Deluxe's RB3E features work
 - Rock Central's online features (leaderboards, Battles) through [GoCentral](https://github.com/ihatecompvir/GoCentral), as RB3Enhanced connects
+- Online play without Xbox Live, straight to another player's game, as RB3Enhanced's Liveless does
 - Discord Rich Presence
 
 <img src="docs/images/web-song-browser.png" alt="band3's web song browser: the library with album art and part difficulties, and the song now playing" width="520">
@@ -74,7 +75,7 @@ CI runs and profiling.
 | [Building](docs/building.md) | requirements, Windows and Linux builds, unit tests, compile check, profiling |
 | [Settings, folders and songs](docs/settings.md) | the F4 menu, config files, where band3 keeps things, DLC and custom songs, Steam Deck |
 | [Instruments and microphones](docs/instruments.md) | Instrument Lab, PlayStation/Wii dongles, MIDI drums, USB mics, pro instruments, controller lag |
-| [Integrations](docs/integrations.md) | network events, Discord, the web server and its API, GoCentral, RB3Enhanced and Deluxe compatibility |
+| [Integrations](docs/integrations.md) | network events, Discord, the web server and its API, GoCentral, Liveless online play, RB3Enhanced and Deluxe compatibility |
 | [Test harness](docs/test-harness.md) | `band3ctl`: driving the game from scripts, and the game tests |
 | [Native renderer](docs/native-renderer.md) | the native renderer, render checks, capture replay and parity measurement |
 

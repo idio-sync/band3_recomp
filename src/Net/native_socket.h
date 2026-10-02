@@ -12,7 +12,7 @@ std::vector<uint32_t> ResolveIPv4(const std::string& host);
 // The local port and IPv4 address a host socket is bound to, both in network
 // byte order; false if it isn't bound or isn't IPv4. Separate from the hooks,
 // whose generated header has guest functions named like Winsock's.
-bool LocalAddress(uint64_t native_socket, uint16_t& port, uint32_t& address);
+bool BoundAddress(uint64_t native_socket, uint16_t& port, uint32_t& address);
 
 // Takes one datagram waiting on a host UDP socket, waiting up to wait_ms for
 // it: its length (cut to `size`), with the sender's address and port in

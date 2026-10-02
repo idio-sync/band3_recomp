@@ -250,7 +250,7 @@ extern "C" REX_FUNC(__imp__NetDll_getsockname) {
     uint32_t address = 0;
     if (native != ~uint64_t{0} && name && name_length &&
         REX_LOAD_U32(name_length) >= kSockaddrSize &&
-        band3::net::LocalAddress(native, port, address)) {
+        band3::net::BoundAddress(native, port, address)) {
         WriteSockaddr(base, name, address, port);
         REX_STORE_U32(name_length, kSockaddrSize);
         ctx.r3.u64 = 0;

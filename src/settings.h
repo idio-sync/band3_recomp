@@ -69,6 +69,10 @@ REXCVAR_DECLARE(bool, rb3e_mode);
 // Band3/Online
 REXCVAR_DECLARE(bool, gocentral);
 REXCVAR_DECLARE(std::string, gocentral_address);
+REXCVAR_DECLARE(bool, liveless);
+REXCVAR_DECLARE(std::string, liveless_connect);
+REXCVAR_DECLARE(std::string, liveless_external_ip);
+REXCVAR_DECLARE(int32_t, liveless_port);
 
 // Band3/Debug
 REXCVAR_DECLARE(bool, debug_overlay);
@@ -117,6 +121,10 @@ struct StartupSettings {
     bool rb3e_mode;
     bool gocentral;
     std::string gocentral_address;
+    bool liveless;
+    std::string liveless_connect;
+    std::string liveless_external_ip;
+    int32_t liveless_port;
     bool native_camera_shake;
 };
 const StartupSettings& Startup();

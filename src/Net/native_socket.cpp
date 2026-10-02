@@ -35,7 +35,7 @@ std::vector<uint32_t> ResolveIPv4(const std::string& host) {
     return addresses;
 }
 
-bool LocalAddress(uint64_t native_socket, uint16_t& port, uint32_t& address) {
+bool BoundAddress(uint64_t native_socket, uint16_t& port, uint32_t& address) {
     sockaddr_in local{};
 #ifdef _WIN32
     int length = sizeof(local);

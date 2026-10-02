@@ -27,7 +27,7 @@
 #include "Input/menu_shortcut_dialog.h"
 #include "Input/virtual_instrument.h"
 #include "Net/discord.h"
-#include "Net/gocentral_hooks.h"
+#include "Net/online_hooks.h"
 #include "Net/http_server.h"
 #include "Render/gpu_view.h"
 #include "Render/native_view.h"
@@ -144,12 +144,12 @@ class Band3App : public rex::ReXApp {
       std::abort();
     }
     // band3's sign-in overrides hand every call on to the SDK's
-    if (!band3::gocentral::ResolveSdkExports()) {
-      REXLOG_ERROR("gocentral: the SDK's user exports are missing, can't continue");
+    if (!band3::online::ResolveSdkExports()) {
+      REXLOG_ERROR("online: the SDK's user exports are missing, can't continue");
       std::abort();
     }
 #endif
-    band3::gocentral::Start();
+    band3::online::Start();
     band3::content::StartLiveContent(runtime()->file_system());
     band3::discord::Start();
     band3::audio::StartUsbMics();
