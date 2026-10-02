@@ -64,8 +64,14 @@ struct Level {
     }
 };
 
-// what an RGBA8 target keeps of a value: the nearest of 256 steps
-float Unorm8(float v) { return std::floor(saturate(v) * 255.0f + 0.5f) / 255.0f; }
+// What an RGBA8 target keeps of a value: the nearest of 256 steps, and of a
+// value halfway between two, to float error, the lower, as the GPU backend's
+// levels have it. The 4x downsample averages four texels, so a quarter of its
+// values are halfway; rounding them up, as the CPU did, left its bloom and
+// DOF levels a step brighter there, which the colour matrix of a desaturated
+// frame (rows summing to over 2) made a mean of 0.4 over the picture
+// (out/parity4's default-25s).
+float Unorm8(float v) { return std::floor(saturate(v) * 255.0f + (0.5f - 1.0f / 1024)) / 255.0f; }
 float4 Unorm8(float4 v) { return {Unorm8(v.x), Unorm8(v.y), Unorm8(v.z), Unorm8(v.w)}; }
 
 float4 Unpack(uint32_t c) {

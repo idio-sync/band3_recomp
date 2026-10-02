@@ -26,7 +26,8 @@
 //     colour matrix (shaders/post_model.hlsli). The renderers draw the soft
 //     particles' and the spotlights' buffers as texture passes before it.
 // The levels are 8-bit, as the 360's render targets are; the GPU's are RGBA8
-// and the CPU rounds each pass's output to 8 bits likewise. Both backends run
+// and the CPU rounds each pass's output to 8 bits likewise (a value halfway
+// between two steps to the lower, as the GPU's come out). Both backends run
 // the same passes with the same numbers: PlanPost's PostPass and the taps
 // here, the per-pixel maths in post_model.hlsli. The composite's values come
 // from PostConsts (what the game's composite drew with): a frame without them
