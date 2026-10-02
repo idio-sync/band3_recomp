@@ -183,7 +183,7 @@ screenshots. With `test_port` set, band3 takes its commands on that port, on thi
 machine only, and connects the virtual instrument as player 1.
 
 ```
-python tools/band3ctl.py launch --fresh       # start band3 minimized, on a fresh test profile
+python tools/band3ctl.py launch --fresh       # start band3 minimized and muted, on a fresh test profile
 python tools/band3ctl.py state                # screen, song, venue, band, frame count
 python tools/band3ctl.py press green+strum_down
 python tools/band3ctl.py wait screen=splash_screen timeout=60s
@@ -192,7 +192,8 @@ python tools/band3ctl.py run tests/game/boot.b3t
 python tools/band3ctl.py "hold up+orange; wait frames=60; pad; release all"
 ```
 
-`launch` starts the game minimized without taking focus (`--show` to watch it), and
+`launch` starts the game minimized without taking focus (`--show` to watch it) and muted
+(`--sound` to hear it), and
 gives it its own saves in `out/test_user_data`, so tests never touch your profile. A
 `.b3t` script is these commands one per line, with `#` comments; `run` stops at the
 first one that fails, saves a screenshot of the moment and exits 1. Commands joined

@@ -128,7 +128,12 @@ def launch(args):
     if args.fresh and os.path.isdir(user_data):
         shutil.rmtree(user_data)
     os.makedirs(user_data, exist_ok=True)
-    command = [exe, f"--test_port={args.port}", f"--user_data_root={user_data}"] + args.extra
+    command = [exe, f"--test_port={args.port}", f"--user_data_root={user_data}"]
+    # muted, like minimized, so a test doesn't disturb whoever is at the
+    # machine; the game's audio still runs, so songs play on as usual
+    if not args.sound and not any(a.startswith("--audio_mute") for a in args.extra):
+        command.append("--audio_mute=true")
+    command += args.extra
     flags = 0
     startupinfo = None
     if os.name == "nt":
@@ -198,6 +203,8 @@ def main(argv):
     p.add_argument("--show", action="store_true",
                    help="open the window normally (by default it starts minimized, "
                         "without taking focus)")
+    p.add_argument("--sound", action="store_true",
+                   help="let the game play sound (by default it starts muted, --audio_mute=true)")
     p.add_argument("extra", nargs="*", help="more band3 arguments, e.g. --fast_start=true")
 
     p = sub.add_parser("run", help="replay a .b3t script")
