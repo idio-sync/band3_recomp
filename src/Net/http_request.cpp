@@ -102,6 +102,8 @@ Route MatchRoute(std::string_view target) {
         route.endpoint = Endpoint::kJsonRpc;
     } else if (path == "/status") {
         route.endpoint = Endpoint::kStatus;
+    } else if (path == "/song_details") {
+        route.endpoint = Endpoint::kSongDetails;
     } else if (path.starts_with("/song_")) {
         const char* begin = path.data() + 6;
         const char* end = path.data() + path.size();
@@ -184,6 +186,23 @@ std::string FormatStatus(const Status& status) {
            ",\"position_ms\":" + (p.position_ms < 0 ? "null" : std::to_string(p.position_ms)) +
            ",\"length_ms\":" + std::to_string(p.length_ms) + "}}";
     return out;
+}
+
+std::string FormatSongDetails(const std::vector<SongDetails>& songs) {
+    std::string out = "{";
+    for (const SongDetails& s : songs) {
+        if (out.size() > 1) out += ',';
+        out += JsonString(s.shortname) + ":{\"genre\":" + JsonString(s.genre) +
+               ",\"year\":" + std::to_string(s.year) +
+               ",\"length_ms\":" + std::to_string(s.length_ms) +
+               ",\"vocal_parts\":" + std::to_string(s.vocal_parts) + ",\"tiers\":{";
+        for (size_t i = 0; i < s.tiers.size(); i++) {
+            if (i) out += ',';
+            out += JsonString(s.tiers[i].first) + ":" + std::to_string(s.tiers[i].second);
+        }
+        out += "}}";
+    }
+    return out + "}";
 }
 
 std::string Response(int status, std::string_view content_type, std::string_view body,

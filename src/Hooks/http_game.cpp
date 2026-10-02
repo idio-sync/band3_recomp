@@ -74,6 +74,23 @@ std::vector<SongInfo> RankedSongs(PPCContext& ctx, uint8_t* base) {
     return out;
 }
 
+std::vector<int32_t> RankedIds(PPCContext& ctx, uint8_t* base) {
+    return songs::RankedIds(ctx, base);
+}
+
+std::vector<SongDetails> Details(PPCContext& ctx, uint8_t* base,
+                                 const std::vector<int32_t>& ids) {
+    std::vector<SongDetails> out;
+    out.reserve(ids.size());
+    for (const int32_t id : ids) {
+        auto d = songs::GetDetails(ctx, base, id);
+        if (!d) continue;
+        out.push_back({d->shortname, d->genre, d->year, d->length_ms, d->vocal_parts,
+                       std::move(d->tiers)});
+    }
+    return out;
+}
+
 JumpResult JumpToSong(PPCContext& ctx, uint8_t* base, const std::string& shortname) {
     const uint32_t library = Load32(base, kTheMusicLibraryPtr);
     const uint32_t main_dir = Load32(base, kMainDirPtr);

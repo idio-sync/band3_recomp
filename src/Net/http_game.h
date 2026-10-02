@@ -18,6 +18,14 @@ std::optional<SongInfo> Song(PPCContext& ctx, uint8_t* base, int32_t id);
 // every song the Music Library can show, as BandSongMgr::GetRankedSongs lists them
 std::vector<SongInfo> RankedSongs(PPCContext& ctx, uint8_t* base);
 
+// the same songs' IDs, cheaper than RankedSongs, to see if the list changed
+std::vector<int32_t> RankedIds(PPCContext& ctx, uint8_t* base);
+
+// what /song_details says of these songs (IDs from RankedIds); a song the
+// song manager doesn't have any more is left out
+std::vector<SongDetails> Details(PPCContext& ctx, uint8_t* base,
+                                 const std::vector<int32_t>& ids);
+
 enum class JumpResult { kJumped, kNotInLibrary, kUnknownSong };
 
 // highlights the song in the Music Library, when the song select panel is up

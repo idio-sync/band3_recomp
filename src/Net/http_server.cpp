@@ -18,6 +18,7 @@
 #include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -25,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -148,6 +150,43 @@ Status CurrentStatus() {
                                          game.score, game.song_ms, game.song_length_ms};
     }
     return status;
+}
+
+// /song_details as last built, and the songs (by ID) it was built from. Its
+// game work goes a chunk of songs a frame, so a library of thousands of custom
+// songs can't hold up a frame of the game.
+constexpr size_t kDetailsChunk = 100;
+std::mutex g_details_mutex;
+std::vector<int32_t> g_details_ids;
+std::string g_details_json;
+
+// nullopt when the game is busy
+std::optional<std::string> SongDetailsJson() {
+    std::lock_guard lock(g_details_mutex);
+    std::vector<int32_t> ids;
+    if (!RunOnGameThread([&ids](PPCContext& ctx, uint8_t* base) {
+            ids = game::RankedIds(ctx, base);
+        })) {
+        return std::nullopt;
+    }
+    if (!g_details_json.empty() && ids == g_details_ids) return g_details_json;
+
+    std::vector<SongDetails> details;
+    details.reserve(ids.size());
+    for (size_t at = 0; at < ids.size(); at += kDetailsChunk) {
+        const std::vector<int32_t> chunk(ids.begin() + at,
+                                         ids.begin() + std::min(at + kDetailsChunk, ids.size()));
+        std::vector<SongDetails> part;
+        if (!RunOnGameThread([&part, &chunk](PPCContext& ctx, uint8_t* base) {
+                part = game::Details(ctx, base, chunk);
+            })) {
+            return std::nullopt;
+        }
+        std::move(part.begin(), part.end(), std::back_inserter(details));
+    }
+    g_details_json = FormatSongDetails(details);
+    g_details_ids = std::move(ids);
+    return g_details_json;
 }
 
 std::string Busy(bool cors) {
@@ -285,6 +324,12 @@ std::string Handle(const Request& request) {
         }
         case Endpoint::kStatus:
             return Response(200, "application/json", FormatStatus(CurrentStatus()), cors);
+        case Endpoint::kSongDetails: {
+            if (auto json = SongDetailsJson()) {
+                return Response(200, "application/json", *json, cors);
+            }
+            return Busy(cors);
+        }
         case Endpoint::kAlbumArt: {
             bool busy = false;
             if (auto jpeg = AlbumArt(route.argument, busy)) {

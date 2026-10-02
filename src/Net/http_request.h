@@ -35,6 +35,7 @@ enum class Endpoint {
     kJsonRpc,    // /jsonrpc           discordrp.json from the game data root
     kAlbumArt,   // /album_art?shortname=  a song's album art (band3's, not RB3E's)
     kStatus,     // /status            what the game is doing (band3's)
+    kSongDetails,  // /song_details    every song's genre, year, parts... (band3's)
 };
 
 struct Route {
@@ -86,6 +87,23 @@ struct Status {
 
 // {"screen":..., "in_library":..., "playing": {...} or null}
 std::string FormatStatus(const Status& status);
+
+// what /song_details says of a song, beyond /list_songs
+struct SongDetails {
+    std::string shortname;
+    std::string genre;  // as the Music Library names it
+    int32_t year = 0;
+    int32_t length_ms = 0;
+    int32_t vocal_parts = 0;
+    // the game's difficulty tier, 0 (Warmup) to 6 (Impossible), of each part the
+    // song has, by the game's name for it: band, guitar, bass, drum, vocals,
+    // keys, real_guitar, real_bass, real_keys
+    std::vector<std::pair<std::string, int32_t>> tiers;
+};
+
+// {"<shortname>": {"genre":..., "year":..., "length_ms":..., "vocal_parts":...,
+// "tiers": {"<part>": tier, ...}}, ...}
+std::string FormatSongDetails(const std::vector<SongDetails>& songs);
 
 // not cached unless max_age (seconds) says for how long
 std::string Response(int status, std::string_view content_type, std::string_view body,

@@ -5,6 +5,8 @@
 #include <rex/types.h>
 #include <algorithm>
 #include <cstring>
+#include <iterator>
+#include "Symbol.h"
 
 // Addresses and struct offsets are RB3Enhanced's Xbox 360 TU5 ones
 // (include/ports_xbox360.h, include/rb3/SongMetadata.h), which match this
@@ -15,6 +17,10 @@ REX_EXTERN(BandSongMgr__GetRankedSongs);
 REX_EXTERN(BandSongMgr__GetSongIDFromShortname);
 REX_EXTERN(BandSongMetadata__HasAlbumArt);
 REX_EXTERN(SongMgr__GetAlbumArtPath);
+REX_EXTERN(BandSongMetadata__Rank);
+REX_EXTERN(SongMgr__RankTier);
+REX_EXTERN(BandSongMgr__GetNumVocalParts);
+REX_EXTERN(Locale__Localize);
 
 namespace band3::songs {
 
@@ -22,7 +28,9 @@ namespace {
 
 constexpr uint32_t kTheSongMgr = 0x82DFE7B4;  // BandSongMgr object
 // SongMgr*, which the Music Library's song nodes pass to GetAlbumArtPath
+// and RankTier
 constexpr uint32_t kTheSongMgrPtr = 0x82C72BA8;
+constexpr uint32_t kTheLocale = 0x82E07138;  // Locale object
 
 // BandSongMetadata
 constexpr uint32_t kSongMetadata_Shortname = 0x2C;  // Symbol
@@ -31,6 +39,13 @@ constexpr uint32_t kSongMetadata_Title = 0x4C;      // String {vtable, length, b
 constexpr uint32_t kSongMetadata_Artist = 0x58;     // String
 constexpr uint32_t kSongMetadata_Album = 0x64;      // String
 constexpr uint32_t kSongMetadata_Genre = 0x80;      // Symbol
+// DateTime year_released at +0x78, whose Year() is its byte at +5 plus 1900
+constexpr uint32_t kSongMetadata_YearByte = 0x7D;
+constexpr uint32_t kSongMetadata_LengthMs = 0x8C;   // int, as LengthSym reads it
+
+// the parts a song can have, by the game's name, as /song_details lists them
+constexpr const char* kParts[] = {"band", "guitar", "bass", "drum", "vocals", "keys",
+                                  "real_guitar", "real_bass", "real_keys"};
 constexpr uint32_t kString_Length = 0x4;
 constexpr uint32_t kString_Buf = 0x8;
 constexpr uint32_t kVector_Begin = 0x0;
@@ -128,6 +143,65 @@ int32_t IdFromShortname(PPCContext& ctx, uint8_t* base, uint32_t symbol) {
     call.r5.u64 = 0;
     BandSongMgr__GetSongIDFromShortname(call, base);
     return std::max(call.r3.s32, 0);
+}
+
+std::optional<Details> GetDetails(PPCContext& ctx, uint8_t* base, int32_t id) {
+    PPCContext call = CallContext(ctx, 0x100);
+    call.r3.u64 = kTheSongMgr;
+    call.r4.u64 = static_cast<uint32_t>(id);
+    BandSongMgr__Data(call, base);
+    const uint32_t metadata = call.r3.u32;
+    if (!metadata) return std::nullopt;
+
+    // the parts' Symbols, made once: the game keeps them for good
+    static uint32_t parts[std::size(kParts)] = {};
+    if (!parts[0]) {
+        for (size_t i = 0; i < std::size(kParts); i++) {
+            parts[i] = band3::Symbol(ctx, base, kParts[i]).value(base);
+        }
+    }
+
+    Details details;
+    details.shortname = ReadSymbol(base, metadata + kSongMetadata_Shortname);
+    // Locale::Localize(Locale*, Symbol, bool fail) -> const char*, null for none
+    const uint32_t genre = Load32(base, metadata + kSongMetadata_Genre);
+    call = CallContext(ctx, 0x100);
+    call.r3.u64 = kTheLocale;
+    call.r4.u64 = genre;
+    call.r5.u64 = 0;
+    Locale__Localize(call, base);
+    const char* name = GuestStr(base, call.r3.u32);
+    details.genre = name ? name : ReadSymbol(base, metadata + kSongMetadata_Genre);
+    details.year = 1900 + base[metadata + kSongMetadata_YearByte];
+    details.length_ms = static_cast<int32_t>(Load32(base, metadata + kSongMetadata_LengthMs));
+
+    // BandSongMgr::GetNumVocalParts(BandSongMgr*, Symbol shortname)
+    call = CallContext(ctx, 0x100);
+    call.r3.u64 = kTheSongMgr;
+    call.r4.u64 = Load32(base, metadata + kSongMetadata_Shortname);
+    BandSongMgr__GetNumVocalParts(call, base);
+    details.vocal_parts = call.r3.s32;
+
+    const uint32_t song_mgr = Load32(base, kTheSongMgrPtr);
+    for (size_t i = 0; i < std::size(kParts); i++) {
+        if (!parts[i]) continue;
+        // BandSongMetadata::Rank(BandSongMetadata*, Symbol part) -> float, 0 for a
+        // part the song doesn't have
+        call = CallContext(ctx, 0x100);
+        call.r3.u64 = metadata;
+        call.r4.u64 = parts[i];
+        BandSongMetadata__Rank(call, base);
+        const double rank = call.f1.f64;
+        if (rank <= 0.0 || !song_mgr) continue;
+        // SongMgr::RankTier(SongMgr*, float rank, Symbol part) -> tier
+        call = CallContext(ctx, 0x100);
+        call.r3.u64 = song_mgr;
+        call.f1.f64 = rank;
+        call.r5.u64 = parts[i];
+        SongMgr__RankTier(call, base);
+        details.tiers.emplace_back(kParts[i], call.r3.s32);
+    }
+    return details;
 }
 
 std::string AlbumArtPath(PPCContext& ctx, uint8_t* base, uint32_t symbol) {

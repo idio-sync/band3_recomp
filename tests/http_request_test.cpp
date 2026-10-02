@@ -57,6 +57,19 @@ TEST_CASE("targets pick RB3E's endpoints") {
     CHECK(MatchRoute("/album_art").endpoint == Endpoint::kNotFound);
 
     CHECK(MatchRoute("/status").endpoint == Endpoint::kStatus);
+    CHECK(MatchRoute("/song_details").endpoint == Endpoint::kSongDetails);
+}
+
+TEST_CASE("song details are JSON keyed by shortname, with the parts each song has") {
+    SongDetails rehab{"rehab", "R&B/Soul/Funk", 2006, 214000, 1,
+                      {{"band", 3}, {"guitar", 2}, {"vocals", 4}}};
+    SongDetails mot{"mot", "Mot\xF6rhead \"Metal\"", 0, 0, 0, {}};
+    CHECK(FormatSongDetails({rehab, mot}) ==
+          R"({"rehab":{"genre":"R&B/Soul/Funk","year":2006,"length_ms":214000,"vocal_parts":1,)"
+          R"("tiers":{"band":3,"guitar":2,"vocals":4}},)"
+          "\"mot\":{\"genre\":\"Mot\xC3\xB6rhead \\\"Metal\\\"\",\"year\":0,\"length_ms\":0,"
+          R"("vocal_parts":0,"tiers":{}}})");
+    CHECK(FormatSongDetails({}) == "{}");
 }
 
 TEST_CASE("the status is JSON, with what's playing or null") {

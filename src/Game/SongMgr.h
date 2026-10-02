@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct PPCContext;
@@ -33,6 +34,21 @@ std::vector<int32_t> RankedIds(PPCContext& ctx, uint8_t* base);
 // the song's ID, or 0 when no song has this shortname; `symbol` is the
 // shortname's Symbol (its interned string's guest address)
 int32_t IdFromShortname(PPCContext& ctx, uint8_t* base, uint32_t symbol);
+
+// what the Music Library shows of a song beyond its title and artist
+struct Details {
+    std::string shortname;
+    std::string genre;  // localized, as the Music Library names it
+    int32_t year = 0;
+    int32_t length_ms = 0;
+    int32_t vocal_parts = 0;
+    // the difficulty tier (0 Warmup to 6 Impossible) of each part the song has,
+    // by the game's name for the part
+    std::vector<std::pair<std::string, int32_t>> tiers;
+};
+
+// nullopt when the song manager doesn't have the song
+std::optional<Details> GetDetails(PPCContext& ctx, uint8_t* base, int32_t id);
 
 // where the song's album art is, as SongMgr::GetAlbumArtPath gives it to the
 // Music Library (before the game adds gen/ and _xbox); empty when the song
