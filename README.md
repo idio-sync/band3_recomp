@@ -1,10 +1,12 @@
-# slopband3 - AI Assisted band3 recompile experiment
+# slopband3 - An AI assisted band3_recomp experiment
 
-Early recompilation of Rock Band 3 (title update 5). Playable, but just barely.
+Recompilation of Rock Band 3 (title update 5/Deluxe) with extra features. Playable, still WIP.
 
 This is a fork of [ihatecompvir/band3_recomp](https://github.com/ihatecompvir/band3_recomp).
 It targets ReXGlue SDK 0.10 and adds:
 
+- Multiplayer
+- Microphone functionality
 - An in-game settings menu (F4) backed by cvars, saved to `band3.toml`
 - Per-device controller types, an SDL/XInput `input_backend` option, and an Instrument Lab (F6)
 - RB3Enhanced-compatible network events (Stage Kit lighting, song/venue info) over UDP
@@ -12,6 +14,9 @@ It targets ReXGlue SDK 0.10 and adds:
 - Native Discord Rich Presence
 - A `refresh_rate` option for high-refresh monitors
 - Unit tests, a compile check, and CI
+- Configurable settings/save/DLC/custom song folder destinations
+
+All additions were created with the help of AI, doing the vast majority of the actual work 
 
 ## Prerequisites
 
@@ -22,7 +27,7 @@ Before building, ensure you have the following:
   the zip for your platform and put the folder inside it (`win-amd64`, `linux-amd64`, ...)
   at `.rexglue-sdk` in the repository root, where the CMake presets look for it, so that
   `.rexglue-sdk/include/rex/version.h` exists.
-- A copy of Rock Band 3 (Xbox 360) with Title Update 5 (TU5) XEX
+- A copy of Rock Band 3 (Xbox 360) with Title Update 5 (TU5) XEX or Rock Band 3 Deluxe XEX/patch 
 
 ## Building
 
