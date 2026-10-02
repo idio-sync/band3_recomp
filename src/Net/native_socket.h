@@ -27,4 +27,8 @@ int ReceiveFrom(uint64_t native_socket, uint8_t* buffer, size_t size, uint32_t& 
 int SendTo(uint64_t native_socket, const uint8_t* data, size_t size, uint32_t address,
            uint16_t port);
 
+// Why the last of these failed on this thread, as a Winsock error code, which
+// the guest's are too (WSAENETDOWN off Windows).
+uint32_t LastSocketError();
+
 }

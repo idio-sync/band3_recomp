@@ -55,7 +55,8 @@ REXCVAR_DEFINE_STRING(forced_venue, "false", "Band3/Game",
     "none for a black background, or a comma separated list to pick from at random");
 
 REXCVAR_DEFINE_STRING(username, "", "Band3/Game",
-    "Override the displayed username (up to 15 characters). Empty keeps the profile's");
+    "Override the username (up to 15 characters): the profile's gamertag wherever the game "
+    "asks for it, online included. Empty keeps the profile's");
 
 REXCVAR_DEFINE_INT32(main_heap_size, 0, "Band3/Game",
     "Main heap size in bytes, 0 = mem.dta's 105000000. Main and char together must stay "

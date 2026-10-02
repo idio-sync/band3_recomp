@@ -3,12 +3,28 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
+#include <cerrno>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #endif
 
 namespace band3::net {
+
+namespace {
+
+#ifdef _WIN32
+using Handle = SOCKET;
+using Length = int;
+#else
+using Handle = int;
+using Length = socklen_t;
+#endif
+
+Handle ToHandle(uint64_t native_socket) { return static_cast<Handle>(native_socket); }
+
+}  // namespace
 
 std::vector<uint32_t> ResolveIPv4(const std::string& host) {
 #ifdef _WIN32
@@ -37,14 +53,8 @@ std::vector<uint32_t> ResolveIPv4(const std::string& host) {
 
 bool BoundAddress(uint64_t native_socket, uint16_t& port, uint32_t& address) {
     sockaddr_in local{};
-#ifdef _WIN32
-    int length = sizeof(local);
-    const auto handle = static_cast<SOCKET>(native_socket);
-#else
-    socklen_t length = sizeof(local);
-    const auto handle = static_cast<int>(native_socket);
-#endif
-    if (getsockname(handle, reinterpret_cast<sockaddr*>(&local), &length) != 0 ||
+    Length length = sizeof(local);
+    if (getsockname(ToHandle(native_socket), reinterpret_cast<sockaddr*>(&local), &length) != 0 ||
         local.sin_family != AF_INET) {
         return false;
     }
@@ -55,50 +65,59 @@ bool BoundAddress(uint64_t native_socket, uint16_t& port, uint32_t& address) {
 
 int ReceiveFrom(uint64_t native_socket, uint8_t* buffer, size_t size, uint32_t& address,
                 uint16_t& port, int wait_ms) {
-#ifdef _WIN32
-    const auto handle = static_cast<SOCKET>(native_socket);
+    const Handle handle = ToHandle(native_socket);
     fd_set readable;
     FD_ZERO(&readable);
     FD_SET(handle, &readable);
     timeval timeout{wait_ms / 1000, (wait_ms % 1000) * 1000};
+#ifdef _WIN32
     const int ready = select(0, &readable, nullptr, nullptr, &timeout);
+#else
+    const int ready = select(handle + 1, &readable, nullptr, nullptr, &timeout);
+#endif
     if (ready < 0) return kSocketError;
     if (ready == 0) return kNothingWaiting;
     sockaddr_in from{};
-    int from_length = sizeof(from);
-    int received = recvfrom(handle, reinterpret_cast<char*>(buffer), static_cast<int>(size), 0,
-                            reinterpret_cast<sockaddr*>(&from), &from_length);
+    Length from_length = sizeof(from);
+    int received = static_cast<int>(recvfrom(handle, reinterpret_cast<char*>(buffer),
+                                             static_cast<int>(size), 0,
+                                             reinterpret_cast<sockaddr*>(&from), &from_length));
     if (received < 0) {
+#ifdef _WIN32
         const int error = WSAGetLastError();
         // an ICMP port unreachable from an earlier send, which UDP ignores
         if (error == WSAECONNRESET || error == WSAEWOULDBLOCK) return kNothingWaiting;
         // a datagram bigger than the buffer arrives cut short
         if (error != WSAEMSGSIZE) return kSocketError;
         received = static_cast<int>(size);
+#else
+        if (errno == ECONNREFUSED || errno == EAGAIN || errno == EWOULDBLOCK) return kNothingWaiting;
+        return kSocketError;
+#endif
     }
     address = from.sin_addr.s_addr;
     port = from.sin_port;
     return received;
-#else
-    (void)native_socket, (void)buffer, (void)size, (void)address, (void)port, (void)wait_ms;
-    return kSocketError;
-#endif
 }
 
 int SendTo(uint64_t native_socket, const uint8_t* data, size_t size, uint32_t address,
            uint16_t port) {
-#ifdef _WIN32
     sockaddr_in to{};
     to.sin_family = AF_INET;
     to.sin_port = port;
     to.sin_addr.s_addr = address;
-    const int sent = sendto(static_cast<SOCKET>(native_socket), reinterpret_cast<const char*>(data),
-                            static_cast<int>(size), 0, reinterpret_cast<const sockaddr*>(&to),
-                            sizeof(to));
+    const int sent = static_cast<int>(sendto(ToHandle(native_socket),
+                                             reinterpret_cast<const char*>(data),
+                                             static_cast<int>(size), 0,
+                                             reinterpret_cast<const sockaddr*>(&to), sizeof(to)));
     return sent < 0 ? kSocketError : sent;
+}
+
+uint32_t LastSocketError() {
+#ifdef _WIN32
+    return static_cast<uint32_t>(WSAGetLastError());
 #else
-    (void)native_socket, (void)data, (void)size, (void)address, (void)port;
-    return kSocketError;
+    return 10050;  // WSAENETDOWN
 #endif
 }
 

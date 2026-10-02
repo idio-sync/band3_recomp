@@ -146,8 +146,8 @@ picks **Play on Xbox Live**, backs out of it, then picks Play Now → Quickplay 
   network one on the same network, the public one over the internet). Their search
   joins the host's band.
 
-Over the internet, as with RB3Enhanced, each player needs UDP port 9103 forwarded
-to their PC and `liveless_external_ip` set to their public IP: the games tell each
+Over the internet, as with RB3Enhanced, each player needs their `liveless_port` (UDP
+9103 unless changed) forwarded to their PC and `liveless_external_ip` set to their public IP: the games tell each
 other where to reach them. Only play on one PC and on a local network has been
 tested so far.
 

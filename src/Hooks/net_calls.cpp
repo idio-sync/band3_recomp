@@ -18,7 +18,6 @@
 #include "src/settings.h"
 #ifdef _WIN32
 #include <windows.h>
-#endif
 
 // RB3's networking (Quazal, for Rock Central and online play) through the
 // SDK's NetDll exports. Quazal needs some the SDK doesn't do as a console
@@ -29,21 +28,19 @@
 //     WSAGetOverlappedResult until a datagram lands, sending with WSASendTo.
 //     The SDK reports each receive done at once with nothing in it, so
 //     Quazal never hears back.
-// The rest go on to the SDK's. With log_net_calls on, each is logged.
+// The rest go on to the SDK's, found in its DLL, so this is Windows only;
+// elsewhere the game calls the SDK's own. With log_net_calls on, each is
+// logged.
 
 namespace {
 
 using Export = void(PPCContext&, uint8_t*);
 
 Export* SdkExport(const char* name) {
-#ifdef _WIN32
     HMODULE runtime = GetModuleHandleA(BAND3_REXRUNTIME_DLL);
     auto* fn = runtime ? reinterpret_cast<Export*>(GetProcAddress(runtime, name)) : nullptr;
     if (!fn) REXLOG_ERROR("net: {} has no {}", BAND3_REXRUNTIME_DLL, name);
     return fn;
-#else
-    return nullptr;
-#endif
 }
 
 // Quazal polls some of these in a loop: each one's first 200 calls are
@@ -78,6 +75,8 @@ std::string Endpoint(uint32_t address, uint16_t port) {
 
 constexpr uint32_t kSocketErrorResult = 0xFFFFFFFF;
 // Winsock errors
+constexpr uint32_t kInvalidParameter = 87;  // WSA_INVALID_PARAMETER
+constexpr uint32_t kOperationAborted = 995; // WSA_OPERATION_ABORTED
 constexpr uint32_t kIoIncomplete = 996;   // WSA_IO_INCOMPLETE
 constexpr uint32_t kIoPending = 997;      // WSA_IO_PENDING
 constexpr uint32_t kInvalid = 10022;      // WSAEINVAL
@@ -86,7 +85,11 @@ constexpr uint32_t kNotSocket = 10038;    // WSAENOTSOCK
 constexpr uint32_t kNetworkDown = 10050;  // WSAENETDOWN
 constexpr uint32_t kNoBuffers = 10055;    // WSAENOBUFS
 constexpr uint32_t kHostNotFound = 11001; // WSAHOST_NOT_FOUND
+// a WSAOVERLAPPED's status: done (0), still going, cancelled with its socket,
+// failed
 constexpr uint32_t kStatusPending = 0x103;
+constexpr uint32_t kStatusCancelled = 0xC0000120;
+constexpr uint32_t kStatusUnsuccessful = 0xC0000001;
 // WSAOVERLAPPED: Internal (status), InternalHigh (bytes), Offset, OffsetHigh, hEvent
 constexpr uint32_t kOverlappedStatus = 0x0;
 constexpr uint32_t kOverlappedBytes = 0x4;
@@ -140,8 +143,12 @@ std::mutex g_pending_mutex;
 std::unordered_map<uint32_t, Receive> g_pending;
 
 // a datagram for `receive`, into its guest buffers: its length, or
-// kNothingWaiting / kSocketError
-int TakeDatagram(uint8_t* base, const Receive& receive, uint64_t native, int wait_ms) {
+// kNothingWaiting / kSocketError. Taken later than WSARecvFrom (`deferred`),
+// it leaves the receive's byte count and flags alone, as Winsock does: those
+// come back through WSAGetOverlappedResult, and Quazal's flags are a local in
+// a frame that's gone by then.
+int TakeDatagram(uint8_t* base, const Receive& receive, uint64_t native, int wait_ms,
+                 bool deferred) {
     static thread_local std::vector<uint8_t> datagram(65536);
     uint32_t address = 0;
     uint16_t port = 0;
@@ -157,8 +164,10 @@ int TakeDatagram(uint8_t* base, const Receive& receive, uint64_t native, int wai
         std::memcpy(base + buffer, datagram.data() + copied, take);
         copied += take;
     }
-    if (receive.bytes) REX_STORE_U32(receive.bytes, copied);
-    if (receive.flags) REX_STORE_U32(receive.flags, 0);
+    if (!deferred) {
+        if (receive.bytes) REX_STORE_U32(receive.bytes, copied);
+        if (receive.flags) REX_STORE_U32(receive.flags, 0);
+    }
     if (receive.from && receive.from_length && REX_LOAD_U32(receive.from_length) >= kSockaddrSize) {
         WriteSockaddr(base, receive.from, address, port);
         REX_STORE_U32(receive.from_length, kSockaddrSize);
@@ -277,14 +286,14 @@ extern "C" REX_FUNC(__imp__NetDll_WSARecvFrom) {
         SetLastError(ctx, base, kNotSocket);
         return;
     }
-    const int length = TakeDatagram(base, receive, native, 0);
+    const int length = TakeDatagram(base, receive, native, 0, false);
     if (length >= 0) {
         if (overlapped) Complete(base, overlapped, static_cast<uint32_t>(length));
         ctx.r3.u64 = 0;
         return;
     }
     if (length == band3::net::kSocketError) {
-        SetLastError(ctx, base, kNetworkDown);
+        SetLastError(ctx, base, band3::net::LastSocketError());
         return;
     }
     if (!overlapped) {
@@ -304,6 +313,11 @@ extern "C" REX_FUNC(__imp__NetDll_WSARecvFrom) {
 extern "C" REX_FUNC(__imp__NetDll_WSAGetOverlappedResult) {
     const uint32_t overlapped = ctx.r5.u32, bytes = ctx.r6.u32, flags = ctx.r8.u32;
     const bool wait = ctx.r7.u32 != 0;
+    ctx.r3.u64 = 0;
+    if (!overlapped) {
+        SetLastError(ctx, base, kInvalidParameter);
+        return;
+    }
     Receive receive{};
     bool pending = false;
     {
@@ -314,7 +328,16 @@ extern "C" REX_FUNC(__imp__NetDll_WSAGetOverlappedResult) {
         }
     }
     if (!pending) {
-        // finished already: a send, or a receive that found its datagram
+        // finished already: a send, or a receive that found its datagram,
+        // failed, or went with its socket
+        const uint32_t status = REX_LOAD_U32(overlapped + kOverlappedStatus);
+        if (status != 0) {
+            SetLastError(ctx, base,
+                         status == kStatusPending     ? kIoIncomplete
+                         : status == kStatusCancelled ? kOperationAborted
+                                                      : kNetworkDown);
+            return;
+        }
         if (bytes) REX_STORE_U32(bytes, REX_LOAD_U32(overlapped + kOverlappedBytes));
         if (flags) REX_STORE_U32(flags, 0);
         ctx.r3.u64 = 1;
@@ -324,12 +347,11 @@ extern "C" REX_FUNC(__imp__NetDll_WSAGetOverlappedResult) {
     int length = band3::net::kSocketError;
     if (native != ~uint64_t{0}) {
         do {
-            length = TakeDatagram(base, receive, native, wait ? 100 : 0);
+            length = TakeDatagram(base, receive, native, wait ? 100 : 0, true);
         } while (wait && length == band3::net::kNothingWaiting);
     }
     if (length == band3::net::kNothingWaiting) {
         SetLastError(ctx, base, kIoIncomplete);
-        ctx.r3.u64 = 0;
         return;
     }
     {
@@ -337,9 +359,9 @@ extern "C" REX_FUNC(__imp__NetDll_WSAGetOverlappedResult) {
         g_pending.erase(overlapped);
     }
     if (length == band3::net::kSocketError) {
-        REX_STORE_U32(overlapped + kOverlappedStatus, kNetworkDown);
-        SetLastError(ctx, base, kNetworkDown);
-        ctx.r3.u64 = 0;
+        REX_STORE_U32(overlapped + kOverlappedStatus, kStatusUnsuccessful);
+        SetLastError(ctx, base,
+                     native == ~uint64_t{0} ? kNotSocket : band3::net::LastSocketError());
         return;
     }
     Complete(base, overlapped, static_cast<uint32_t>(length));
@@ -376,7 +398,7 @@ extern "C" REX_FUNC(__imp__NetDll_WSASendTo) {
         REXLOG_INFO("net: sent {} of {} bytes to {}", sent, datagram.size(), Endpoint(address, port));
     }
     if (sent < 0) {
-        SetLastError(ctx, base, kNetworkDown);
+        SetLastError(ctx, base, band3::net::LastSocketError());
         return;
     }
     if (bytes) REX_STORE_U32(bytes, static_cast<uint32_t>(sent));
@@ -384,14 +406,20 @@ extern "C" REX_FUNC(__imp__NetDll_WSASendTo) {
     ctx.r3.u64 = 0;
 }
 
-// receives still waiting on a socket go with it
+// receives still waiting on a socket go with it, cancelled
 extern "C" REX_FUNC(__imp__NetDll_closesocket) {
     static Export* const sdk = SdkExport("__imp__NetDll_closesocket");
     static std::atomic<uint64_t> calls{0};
     const uint32_t socket = ctx.r4.u32;
     {
         std::lock_guard<std::mutex> lock(g_pending_mutex);
-        std::erase_if(g_pending, [socket](const auto& p) { return p.second.socket == socket; });
+        std::erase_if(g_pending, [socket, base](const auto& p) {
+            if (p.second.socket != socket) return false;
+            REX_STORE_U32(p.first + kOverlappedStatus, kStatusCancelled);
+            return true;
+        });
     }
     Forward(sdk, "NetDll_closesocket", calls, ctx, base);
 }
+
+#endif  // _WIN32

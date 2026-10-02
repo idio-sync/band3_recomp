@@ -94,7 +94,8 @@ bool StartGoCentral() {
 bool StartLiveless() {
     const auto& startup = band3::settings::Startup();
     if (!startup.liveless) return false;
-    const auto join = band3::online::ParseEndpoint(startup.liveless_connect, band3::online::kGamePort);
+    const auto join = band3::online::ParseJoinAddress(
+        startup.liveless_connect, static_cast<uint16_t>(startup.liveless_port));
     if (!join) {
         REXLOG_ERROR("liveless: liveless_connect '{}' isn't an address (host or host:port)",
                      startup.liveless_connect);
@@ -137,9 +138,17 @@ bool ResolveSdkExports() {
 }
 
 void Start() {
+#ifndef _WIN32
+    // the overrides that make Quazal's networking work are Windows only
+    // (net_calls.cpp), as are the sign-in ones below
+    if (settings::Startup().gocentral || settings::Startup().liveless) {
+        REXLOG_ERROR("online: GoCentral and Liveless only work on Windows for now");
+    }
+#else
     g_gocentral = StartGoCentral();
     g_liveless = StartLiveless();
     g_live = g_gocentral || g_liveless;
+#endif
 }
 
 bool LiveSpoofed() { return g_live; }
@@ -196,8 +205,10 @@ void GoCentralRockCentralLogin(PPCRegister& r11) {
     if (g_gocentral) r11.u64 = 1;
 }
 
+#ifdef _WIN32
 // Players signed in to the console count as signed in to Live, which RB3
-// wants before it goes online
+// wants before it goes online. These hand on to the SDK's exports in its DLL,
+// so they're Windows only; elsewhere the game calls the SDK's own.
 extern "C" REX_FUNC(__imp__XamUserGetSigninState) {
     (*g_sdk_get_signin_state)(ctx, base);
     if (g_live && ctx.r3.u32 == kSignedInLocally) ctx.r3.u64 = kSignedInToLive;
@@ -211,6 +222,7 @@ extern "C" REX_FUNC(__imp__XamUserGetSigninInfo) {
         REX_STORE_U32(info + kSigninInfoState, kSignedInToLive);
     }
 }
+#endif
 
 // XUserCheckPrivilege(user, privilege, BOOL* result): online play, voice,
 // content from others all allowed, as RB3Enhanced has it (it calls XAM's

@@ -51,4 +51,13 @@ std::optional<Endpoint> ParseEndpoint(std::string_view text, uint16_t default_po
     return Endpoint{std::string(host), static_cast<uint16_t>(port)};
 }
 
+std::optional<Endpoint> ParseJoinAddress(std::string_view text, uint16_t own_port) {
+    auto join = ParseEndpoint(text, kGamePort);
+    if (join && Trim(text).find(':') == std::string_view::npos &&
+        (join->host == "127.0.0.1" || join->host == "localhost")) {
+        join->port = own_port;
+    }
+    return join;
+}
+
 }

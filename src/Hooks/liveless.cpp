@@ -219,10 +219,14 @@ extern "C" REX_FUNC(XNetQosLookup) {
     const uint32_t count = ctx.r3.u32 + ctx.r7.u32;
     const uint32_t event = REX_LOAD_U32(ctx.r1.u32 + kArgument11);
     const uint32_t result = REX_LOAD_U32(ctx.r1.u32 + kArgument12);
+    if (!result) {
+        ctx.r3.u64 = 10022;  // WSAEINVAL
+        return;
+    }
     auto* memory = rex::system::kernel_memory();
     const uint32_t size = 8 + kInfoSize * std::max(count, 1u);
     const uint32_t qos = memory->SystemHeapAlloc(size, 4);
-    if (!qos || !result) {
+    if (!qos) {
         ctx.r3.u64 = 10055;  // WSAENOBUFS
         return;
     }

@@ -31,4 +31,9 @@ struct Endpoint {
 // when it has none; nothing if it's blank or the port isn't 1-65535.
 std::optional<Endpoint> ParseEndpoint(std::string_view text, uint16_t default_port);
 
+// liveless_connect's game to join. Without a port, one on this PC (127.0.0.1,
+// localhost: hosting) is this game, on `own_port`, and another player's is on
+// RB3Enhanced's 9103.
+std::optional<Endpoint> ParseJoinAddress(std::string_view text, uint16_t own_port);
+
 }
