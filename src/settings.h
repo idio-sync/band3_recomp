@@ -27,6 +27,7 @@ REXCVAR_DECLARE(double, song_speed);
 REXCVAR_DECLARE(double, track_speed);
 REXCVAR_DECLARE(bool, unlock_clothing);
 REXCVAR_DECLARE(bool, gold_on_all_difficulties);
+REXCVAR_DECLARE(std::string, content_folders);
 
 // Band3/MIDI drums
 REXCVAR_DECLARE(bool, midi_drums);
@@ -75,6 +76,8 @@ REXCVAR_DECLARE(int32_t, relaunch_wait_pid);
 REXCVAR_DECLARE(std::string, native_view_backend);
 REXCVAR_DECLARE(bool, native_view_record_targets);
 REXCVAR_DECLARE(std::string, native_view_rt_fallback);
+REXCVAR_DECLARE(bool, native_view_normal_maps);
+REXCVAR_DECLARE(bool, native_view_texture_filtering);
 
 namespace band3::settings {
 

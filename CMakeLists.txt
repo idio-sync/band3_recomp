@@ -25,6 +25,8 @@ rexglue_setup_target(band3 GPU_PLUGINS xenos)
 # UDP sockets for the RB3E network events (src/Net/events.cpp)
 if(WIN32)
     target_link_libraries(band3 PRIVATE ws2_32)
+    # the SDK's runtime DLL by file name (rexruntime[d|rd].dll), for src/Content/content_hooks.cpp
+    target_compile_definitions(band3 PRIVATE BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")
     # symbol map, to resolve the frames src/crash_trace.cpp logs
     target_link_options(band3 PRIVATE "LINKER:/MAP:${CMAKE_BINARY_DIR}/band3.map")
 endif()

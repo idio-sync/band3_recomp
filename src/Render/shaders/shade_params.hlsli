@@ -35,6 +35,28 @@ static const uint kShadeRefract = 1048576u;
 // ENABLE_AO with a point light: the point lights' occlusion is the vertex
 // colour's directional (SH) visibility toward each, AoShVertex, per vertex
 static const uint kShadeAoSh = 2097152u;
+// NUM_PROJ, the projected light (kFakeSpot), per pixel: s5's alpha, sampled
+// where ProjUv puts the pixel, darkens the light by the multiply form
+// (PROJ_MULTIPLY, the stage's shadows), or masks the gobo's (s10) light added
+static const uint kShadeProjMultiply = 4194304u;
+static const uint kShadeProjGobo = 8388608u;
+// SHADOW_BUFFER, the character's self-shadow, per pixel: the shadow map
+// (s5, a depth the backend drew natively), read where ShadowCoord puts the
+// pixel, darkens the point lights (shade.hlsli's ShadowLit); set only where
+// the backend has that map
+static const uint kShadeShadow = 16777216u;
+// NORMAL_MAP, per pixel: s1 (DXN, x and y) tilts the normal in the tangent
+// frame the vertex shader builds (shade.hlsli's TextureFrame, MappedNormals);
+// set only where the backend has the map and the geometry its tangents
+// (Geometry::tangents)
+static const uint kShadeNormalMap = 33554432u;
+// NORM_DETAIL, with kShadeNormalMap: s14, a second normal map at uv times
+// c106.y, adds c106.x of its tilt
+static const uint kShadeDetailMap = 67108864u;
+// BILLBOARD (option bit 25, the crowd's impostor quads): the vertex shader
+// turns the mesh to the camera (shade.hlsli's Billboard), and its point
+// lights light it by their falloff alone, no N.L and no AO
+static const uint kShadeBillboard = 134217728u;
 
 // Register names are the game shaders' (scene_capture.h's kShadeRegs), PS
 // unless VS is said.
@@ -55,4 +77,19 @@ struct ShadeParams {
     float4 fade[3];        // c53, c54 (left and right planes), c55 (end, 1/(end - start), max)
     float4 fade_color;     // c104
     float4 alpha_cut;      // x: the threshold, 0-255, as RndMat keeps it
+    float4 proj[3];        // c95..c97: the projected light's map uv = (c95 P, c96 P) / c97 P
+    float4 proj_dir;       // c66: toward it
+    float4 proj_color;     // c69
+    float4 shadow[4];      // VS c40..c43: the shadow map's coordinate S = (c40 P, .., c43 P)
+    float4 shadow_color;   // c107: 1 - the shadow's colour
+    float4 shadow_dir;     // c108: the light camera's forward
+    // the normal map's: x c14.x (1 - de_normal), how much of its tilt the
+    // normal takes; y c106.x, the detail map's share, z c106.y, its uv scale
+    float4 normal_map;
+    // VS c22, the texgen matrix's third row: the tangent frame's normal is
+    // c22.x T + c22.y B + c22.z N, as its tangent is c20's (TextureFrame)
+    float4 texgen_n;
+    // kShadeBillboard's camera right, up and forward (xyz): VS c16..c18's
+    // columns, the inverse view
+    float4 billboard[3];
 };

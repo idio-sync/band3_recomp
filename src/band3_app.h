@@ -14,10 +14,13 @@
 
 #include "config.h"
 #include "game_writes.h"
+#include "paths.h"
 #include "relaunch.h"
 #include "settings.h"
 #include "steam_deck.h"
 #include "Audio/usb_mic_capture.h"
+#include "Content/content_hooks.h"
+#include "Content/live_content.h"
 #include "Game/SongCache.h"
 #include "Input/input_system.h"
 #include "Input/instrument_lab.h"
@@ -64,13 +67,24 @@ class Band3App : public rex::ReXApp {
         PPCImageConfig));
   }
 
-  // paths are fixed before band3.toml loads, so the game data root is the one
-  // setting read here; --game_data_root on the command line wins over the ini
+  // paths are fixed before band3.toml loads, so band3_config.ini's are the ones
+  // read here, relative to its folder; the command line wins over the ini
   void OnConfigurePaths(rex::PathConfig& paths) override {
-    if (rex::cvar::GetFlagSource("game_data_root") == rex::cvar::Source::kDefault) {
-      paths.game_data_root = band3::ReadIniGameDataRoot();
+    const auto anchor = band3::IniAnchor();
+    auto from_ini = [&](const char* cvar, const std::string& value, std::filesystem::path& out) {
+      if (rex::cvar::GetFlagSource(cvar) != rex::cvar::Source::kDefault || value.empty()) return false;
+      out = band3::paths::Resolve(value, anchor);
+      return true;
+    };
+    from_ini("game_data_root", band3::ReadIniGameDataRoot(), paths.game_data_root);
+    const bool user_set = from_ini("user_data_root", band3::ReadIniString("user_data_root"),
+                                   paths.user_data_root);
+    const bool cache_set = from_ini("cache_root", band3::ReadIniString("cache_root"), paths.cache_root);
+    // the SDK put the cache in the default user data folder; keep it with the new one
+    if (user_set && !cache_set && rex::cvar::GetFlagSource("cache_root") == rex::cvar::Source::kDefault) {
+      paths.cache_root = paths.user_data_root / "cache";
     }
-    band3::SetGameDataRoot(paths.game_data_root.string());
+    band3::SetGameDataRoot(paths.game_data_root);
   }
 
   // band3.toml, the environment and the command line are applied by now, and
@@ -79,6 +93,9 @@ class Band3App : public rex::ReXApp {
   void OnPostInitLogging() override {
     // a relaunch (rb3e_relaunch_game) starts before the last run has closed
     band3::relaunch::WaitForPrevious();
+    REXLOG_INFO("Folders: game data {}, user data {}, cache {} (ini: {})",
+                rex::path_to_utf8(game_data_root()), rex::path_to_utf8(user_data_root()),
+                rex::path_to_utf8(cache_root()), rex::path_to_utf8(band3::LegacyIniPath()));
     // before the ini, so a desktop ini's window settings don't undo them
     band3::steam_deck::ApplyDefaults();
     band3::ApplyLegacyIni();
@@ -118,6 +135,15 @@ class Band3App : public rex::ReXApp {
     // a song cache rb3e_delete_songcache marked, before the game mounts it
     band3::song_cache::DeletePending(runtime()->user_data_root());
     band3::MountGameWrites(*runtime());
+#ifdef _WIN32
+    // band3's content overrides hand saves to the SDK's own exports; without
+    // them the first save would fail, so fail here instead
+    if (!band3::content::ResolveSdkContentExports()) {
+      REXLOG_ERROR("content: the SDK's content exports are missing, can't continue");
+      std::abort();
+    }
+#endif
+    band3::content::StartLiveContent(runtime()->file_system());
     band3::discord::Start();
     band3::audio::StartUsbMics();
     band3::render::StartDumpIfRequested();

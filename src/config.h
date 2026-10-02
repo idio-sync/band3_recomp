@@ -1,4 +1,5 @@
 #pragma once
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -10,20 +11,31 @@ namespace band3 {
 
 inline constexpr const char* kLegacyIniPath = "band3_config.ini";
 
+// the ini found (working directory, then beside the exe), or kLegacyIniPath
+// relative if neither has one; found once
+const std::filesystem::path& LegacyIniPath();
+
+// the folder the ini is in, absolute; the working directory if there is no ini.
+// A relative path in the ini is relative to this
+std::filesystem::path IniAnchor();
+
+// [game] key from the ini, unquoted; empty if missing
+std::string ReadIniString(const char* key);
+
 // the ini's game data root, or "assets"; paths are fixed before the other
 // settings load, so this one is read on its own
-std::string ReadIniGameDataRoot(const char* path = kLegacyIniPath);
+std::string ReadIniGameDataRoot();
 
 // copies the ini's values onto the cvars nothing else has set
-void ApplyLegacyIni(const char* path = kLegacyIniPath);
+void ApplyLegacyIni();
 
 // adds the game arguments the settings drive (-fast, -lang) to GetArgs();
 // call once, after the settings are loaded
 void AddSettingArgs();
 
 // the game data root the runtime was started with
-const std::string& GameDataRoot();
-void SetGameDataRoot(std::string root);
+const std::filesystem::path& GameDataRoot();
+void SetGameDataRoot(std::filesystem::path root);
 
 const std::vector<std::string>& GetArgs();
 

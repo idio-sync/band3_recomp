@@ -7,14 +7,17 @@
 
 // flags.x: what the composite applies, as the flags RB3's shader manager
 // picks its composite by (TheShaderMgr + 0x26 DOF, 0x27 bloom, 0x28 glare,
-// 0x2A colour matrix, 0x25 spotlights; out/research/m4_shader_check.md,
-// spotlight_survey.md 2)
+// 0x2A colour matrix, 0x25 spotlights, 0x3F soft particles; out/research/
+// m4_shader_check.md, spotlight_survey.md 2, softparticle_survey.md 1)
 static const uint kPostDof = 1u;    // depth of field: the blurred scene, by c24 and the depth
 static const uint kPostBloom = 2u;  // bloom's three levels, screen-blended by c6
-static const uint kPostGlare = 4u;  // glare: half of bloom's level 0 times c6, added
+// glare: half of bloom's level 0 (after its glare pass) times c6, added
+static const uint kPostGlare = 4u;
 static const uint kPostXfm = 8u;    // the colour matrix, c92..c94
 // the spotlights' depth volume, added by the density map's red (spot)
 static const uint kPostSpot = 16u;
+// the soft-particle buffer (s4), added after the DOF, before bloom
+static const uint kPostSoft = 32u;
 
 // the most taps a blur has (the bloom's Gaussian; the DOF's has 8)
 static const uint kPostMaxTaps = 15u;

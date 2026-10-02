@@ -58,8 +58,7 @@ bool PackSpot(const ShadeInputs& s, uint32_t width, uint32_t height, SpotParams&
 }
 
 bool SpotBlur(const DrawItem& d, const ShadeInputs* s, const Pass& p) {
-    if (d.rect_shader != 1 || !s || p.tex_type != kTexTypeDepthVolume || !d.tex ||
-        d.tex->tex_obj != p.tex_obj)
+    if (d.rect_shader != 1 || !s || !p.tex_obj || !d.tex || d.tex->tex_obj != p.tex_obj)
         return false;
     float weights = 0;
     for (int i = 0; i < kSpotBlurTaps; i++) weights += s->Ps(47 + i)[0];

@@ -16,13 +16,15 @@
 //   bloom: the scene 4x smaller, each texel weighted by its alpha (the bright
 //     pass, L0), blurred by a 15-tap Gaussian across then down; L0 4x smaller
 //     again (L1) and blurred, and L1 (L2) (NgPostProc::DoBloom); glare frames
-//     have L0 only (and a glare pass after its blur, whose shader isn't known:
-//     left out);
-//   the composite: the scene lerped toward D0 by the depth, bloom
-//     screen-blended (or glare added), the spotlights' depth volume added
-//     (spot_model.h: NgSpotlightDrawer's, which the renderers draw as
-//     texture passes before the composite), the colour matrix
-//     (shaders/post_model.hlsli).
+//     have L0 only, and its glare pass after the blur (kBloomGlareShader: a
+//     ghost of the bright parts mirrored through the centre,
+//     post_model.hlsli's Glare*);
+//   the composite: the scene lerped toward D0 by the depth, the
+//     soft-particle buffer added (RndSoftParticleBuffer's, scene_capture.h's
+//     IsSoftParticle), bloom screen-blended (or glare added), the
+//     spotlights' depth volume added (spot_model.h: NgSpotlightDrawer's), the
+//     colour matrix (shaders/post_model.hlsli). The renderers draw the soft
+//     particles' and the spotlights' buffers as texture passes before it.
 // The levels are 8-bit, as the 360's render targets are; the GPU's are RGBA8
 // and the CPU rounds each pass's output to 8 bits likewise. Both backends run
 // the same passes with the same numbers: PlanPost's PostPass and the taps
@@ -67,20 +69,25 @@ void DofTaps(bool vertical, float width_scale, float4 taps[8]);
 
 // What a frame's post-processing does: the composite's PostPass (flags, c6,
 // c24, the colour matrix, the world camera, the spotlights' term), the
-// blurs' taps, and the textures the spotlights' term reads: the depth volume
-// and the density map the frame's spotlight passes drew (DxTex, 0 none)
+// blurs' taps, the textures the spotlights' term reads: the depth volume
+// and the density map the frame's spotlight passes drew, and the
+// soft-particle surface the composite adds (DxTex, 0 none)
 struct PostPlan {
     PostPass composite;
     float4 dof_taps[2][8];        // across, then down
     float4 bloom_taps[3][2][15];  // each level's, across then down
     uint32_t spot_volume = 0, spot_density = 0;
+    uint32_t soft = 0;
 };
 
 // The frame's PostPlan, false if it post-processes nothing: its DoPostProcess
 // didn't run, or ran disabled, or its FinishPostProcess didn't (a world frame
 // with even/odd rendering), or the composite had no effect on (it's then a
 // copy). The spotlights' term is on where the game's composite had it
-// (PostConsts::spot_flag) and the frame has a depth volume's pass to read.
+// (PostConsts::spot_flag) and the frame has a depth volume's pass to read;
+// the soft particles' where it had them (TheShaderMgr + 0x3F) and the frame
+// has the pass that drew its particles into PostConsts::soft_surface[0]
+// (captures from before it have neither: the term reads 0 there).
 // With `only` (kPost bits, 0 all) the effects outside it are left off, to see
 // each on its own.
 bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan);
@@ -95,17 +102,21 @@ struct PostImage {
 // The post-processed picture, on the CPU: `scene` the world's draws (RGBA8, R
 // low, alpha the bloom weight) and `depth` theirs (1/w, 0 where nothing
 // drew), width x height; `volume` and `density` what the frame's spotlight
-// passes drew into the plan's spot_volume and spot_density, read bilinear
-// at each pixel's uv; `out` RGBA8, alpha 0xff.
+// passes drew into the plan's spot_volume and spot_density, `soft` what its
+// soft-particle passes left in the plan's soft, each read bilinear at each
+// pixel's uv; `out` RGBA8, alpha 0xff. `bloom0`, if given, gets bloom's level
+// 0 as the composite read it (after glare's pass), RGBA8, Quarter(width) x
+// Quarter(height), or nothing on a frame without bloom or glare.
 void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
              const std::vector<float>& depth, uint32_t width, uint32_t height,
-             const PostImage& volume, const PostImage& density, std::vector<uint32_t>& out);
+             const PostImage& volume, const PostImage& density, const PostImage& soft,
+             std::vector<uint32_t>& out, std::vector<uint32_t>* bloom0 = nullptr);
 
 // post_model.hlsli's functions on the CPU, for the tests
 float GameDepthCpu(const PostPass& pass, float inv_w);
 float DofAmountCpu(const float c24[4], float depth);
 void CompositeCpu(const PostPass& pass, const float scene[4], const float dof[4], float depth,
                   const float l0[3], const float l1[3], const float l2[3], const float volume[3],
-                  float density, float out[3]);
+                  float density, const float soft[3], float out[3]);
 
 }  // namespace band3::render::post

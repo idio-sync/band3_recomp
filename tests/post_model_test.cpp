@@ -2,9 +2,11 @@
 // post_model.hlsli on the CPU, as post.hlsl does on the GPU): the blurs' taps
 // against what the game gave its shaders, the native depth read as the game's
 // depth texture against the c24 the game's composite drew with, the
-// composite (the spotlights' term too) against the models of the game's
-// composite shaders that tools/shaders/research/post/check_post.py checks in
-// an interpreter, and the passes together on a plain picture. Captured
+// composite (the spotlights' and soft particles' terms too) against the
+// models of the game's composite shaders that tools/shaders/research/post/
+// check_post.py checks in an interpreter, glare's pass over bloom's level 0
+// against its model there too, and the passes together on a plain
+// picture. Captured
 // numbers are from render_song.b3t's 10s and render_song_evenodd.b3t's 25s
 // (kept in out/m4), and its intro (out/parity_spot) for the spotlights.
 
@@ -29,12 +31,13 @@ float ModelDofAmount(const float c24[4], float depth) {
 }
 
 // One composite's inputs, and check_post.py's models of the variants the
-// native composite stands for (without soft particles, which it leaves out:
-// their sampler reads 0 here). vol and dens are the spotlights' depth volume
-// and the density map's red, spot c127.x, c127.y and c91.x.
+// native composite stands for. vol and dens are the spotlights' depth volume
+// and the density map's red, spot c127.x, c127.y and c91.x, soft the
+// soft-particle buffer (s4), which 63306D35 and the spotlights' 0F105E2D
+// read (the others' models have none: it reads 0 there).
 struct Inputs {
     float scene[4], dof[4], depth, l0[3], l1[3], l2[3], c6[3], c24[4], rows[3][4];
-    float vol[3], dens, spot[3];
+    float vol[3], dens, spot[3], soft[3];
 };
 
 // the spotlights' term in channel k (check_post.py's spot_term)
@@ -42,12 +45,12 @@ float SpotTerm(const Inputs& in, int k) {
     return in.vol[k] * (in.spot[0] + in.spot[1] * in.dens) * in.spot[2];
 }
 
-// 63306D35: DOF, bloom (screen), colour matrix
+// 63306D35: DOF, soft particles, bloom (screen), colour matrix
 void Model63306D35(const Inputs& in, float out[3]) {
     const float a = ModelDofAmount(in.c24, in.depth);
     float rgb[3];
     for (int k = 0; k < 3; k++) {
-        rgb[k] = in.scene[k] + (in.dof[k] - in.scene[k]) * a;
+        rgb[k] = in.scene[k] + (in.dof[k] - in.scene[k]) * a + in.soft[k];
         rgb[k] = 1 - (1 - rgb[k]) * (1 - (in.l0[k] + in.l1[k] + in.l2[k]) * in.c6[k]);
     }
     for (int ch = 0; ch < 3; ch++)
@@ -79,14 +82,14 @@ void Model0F105E2D(const Inputs& in, float out[3]) {
                       in.rows[ch][3]);
 }
 
-// 0F105E2D with the spotlights' term (+0x25): DOF, glare, spotlights, colour
-// matrix
+// 0F105E2D with the spotlights' term (+0x25): DOF, soft particles, glare,
+// spotlights, colour matrix
 void Model0F105E2DSpot(const Inputs& in, float out[3]) {
     const float a = ModelDofAmount(in.c24, in.depth);
     float rgb[3];
     for (int k = 0; k < 3; k++)
-        rgb[k] = in.scene[k] + (in.dof[k] - in.scene[k]) * a + 0.5f * in.l0[k] * in.c6[k] +
-                 SpotTerm(in, k);
+        rgb[k] = in.scene[k] + (in.dof[k] - in.scene[k]) * a + in.soft[k] +
+                 0.5f * in.l0[k] * in.c6[k] + SpotTerm(in, k);
     for (int ch = 0; ch < 3; ch++)
         out[ch] = Sat(in.rows[ch][0] * rgb[0] + in.rows[ch][1] * rgb[1] + in.rows[ch][2] * rgb[2] +
                       in.rows[ch][3]);
@@ -143,6 +146,7 @@ Inputs MakeInputs(uint32_t seed) {
     in.spot[0] = next(0, 0.03f);
     in.spot[1] = next(0, 0.03f);
     in.spot[2] = next(0, 40);
+    for (int k = 0; k < 3; k++) in.soft[k] = next(0, 1);
     return in;
 }
 
@@ -245,13 +249,14 @@ TEST_CASE("the composite is the game's composite shaders' maths") {
         Model model;
     };
     const Variant variants[] = {
-        {"63306D35 DOF bloom xfm", kPostDof | kPostBloom | kPostXfm, Model63306D35},
+        {"63306D35 DOF soft bloom xfm", kPostDof | kPostSoft | kPostBloom | kPostXfm,
+         Model63306D35},
         {"C91275BB DOF", kPostDof, ModelC91275BB},
         {"2F002AB2 bloom", kPostBloom, Model2F002AB2},
         {"C6A009EA glare", kPostGlare, ModelC6A009EA},
         {"0F105E2D DOF glare xfm", kPostDof | kPostGlare | kPostXfm, Model0F105E2D},
-        {"0F105E2D DOF glare spot xfm", kPostDof | kPostGlare | kPostSpot | kPostXfm,
-         Model0F105E2DSpot},
+        {"0F105E2D DOF soft glare spot xfm",
+         kPostDof | kPostSoft | kPostGlare | kPostSpot | kPostXfm, Model0F105E2DSpot},
         {"6EF4844D DOF bloom spot xfm", kPostDof | kPostBloom | kPostSpot | kPostXfm,
          Model6EF4844D},
         {"F7E2A8FB spot", kPostSpot, ModelF7E2A8FB},
@@ -263,7 +268,7 @@ TEST_CASE("the composite is the game's composite shaders' maths") {
             float want[3], got[3];
             v.model(in, want);
             CompositeCpu(PassFor(in, v.flags), in.scene, in.dof, in.depth, in.l0, in.l1, in.l2,
-                         in.vol, in.dens, got);
+                         in.vol, in.dens, in.soft, got);
             for (int k = 0; k < 3; k++) CHECK(Near(got[k], want[k], 1e-5f));
         }
     }
@@ -409,6 +414,47 @@ TEST_CASE("PlanPost turns the spotlights' term on where the game's composite had
     CHECK(plan.spot_volume == 0u);
 }
 
+TEST_CASE("PlanPost adds the soft particles where the game's composite had them") {
+    // render_song.b3t's 10s: RndSoftParticleBuffer's surfaces, the pass that
+    // cleared the first and drew its particles, then its blur into the
+    // second and back
+    FrameCapture f;
+    f.post.valid = 1;
+    f.post.proc = 0x1000;
+    f.post_boundary = 641;
+    f.proc_cmds = 7;
+    f.post_consts.valid = 1;
+    auto pass = [&](uint32_t tex_obj, uint32_t clear, uint32_t first) {
+        Pass p;
+        p.tex_obj = tex_obj;
+        p.tex_type = 0x22;
+        p.clear_flags = clear;
+        p.first_draw = first;
+        p.draw_count = 1;
+        f.passes.push_back(p);
+    };
+    pass(0x2387CBE8, 0x0f, 706);
+    pass(0x2387CC98, 0, 709);
+    pass(0x2387CBE8, 0, 710);
+    PostPlan plan{};
+    // not without the flag, nor without the surfaces (captures from before)
+    f.post_consts.soft_surface[0] = 0x2387CBE8;
+    f.post_consts.soft_surface[1] = 0x2387CC98;
+    CHECK_FALSE(PlanPost(f, 0, plan));
+    f.post_consts.flags[kPostFlagSoft] = 1;
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK(plan.composite.flags.x == kPostSoft);
+    CHECK(plan.soft == 0x2387CBE8u);
+    CHECK_FALSE(PlanPost(f, kPostXfm, plan));
+    f.post_consts.soft_surface[0] = 0;
+    CHECK_FALSE(PlanPost(f, 0, plan));
+    // nor without the pass that drew the particles: the blurs alone have
+    // nothing to blur the capture has
+    f.post_consts.soft_surface[0] = 0x2387CBE8;
+    f.passes.erase(f.passes.begin());
+    CHECK_FALSE(PlanPost(f, 0, plan));
+}
+
 TEST_CASE("the passes on a plain picture: bloom of a flat colour is that colour") {
     // flat scene and depth: every level is the colour times its alpha (the
     // bright pass), blurs of a flat level are that level (the weights add up
@@ -430,7 +476,7 @@ TEST_CASE("the passes on a plain picture: bloom of a flat colour is that colour"
         BloomTaps(true, 180 >> (2 * k), plan.bloom_taps[k][1]);
     }
     std::vector<uint32_t> out;
-    RunPost(plan, scene, depth, w, h, {}, {}, out);
+    RunPost(plan, scene, depth, w, h, {}, {}, {}, out);
     REQUIRE(out.size() == scene.size());
     const float alpha = float(a) / 255;
     const uint32_t in[3] = {r, g, b};
@@ -462,7 +508,7 @@ TEST_CASE("the spotlights' term adds the depth volume by the density map's red")
     plan.composite.flags = {kPostSpot, 0, 0, 0};
     plan.composite.spot = {0.01f, 0.0099f, 32, 0};
     std::vector<uint32_t> out;
-    RunPost(plan, scene, depth, w, h, {vol.data(), 40, 20}, {dens.data(), 16, 9}, out);
+    RunPost(plan, scene, depth, w, h, {vol.data(), 40, 20}, {dens.data(), 16, 9}, {}, out);
     REQUIRE(out.size() == scene.size());
     const float gain = (0.01f + 0.0099f * 150.0f / 255.0f) * 32.0f;
     const uint32_t in[3] = {r, g, b}, v[3] = {50, 80, 30};
@@ -474,8 +520,117 @@ TEST_CASE("the spotlights' term adds the depth volume by the density map's red")
         }
     }
     // no density map: the term is c127.x's alone; no volume: none
-    RunPost(plan, scene, depth, w, h, {vol.data(), 40, 20}, {}, out);
+    RunPost(plan, scene, depth, w, h, {vol.data(), 40, 20}, {}, {}, out);
     CHECK(Near(float(out[0] & 0xff) / 255, float(r) / 255 + 50.0f / 255 * 0.01f * 32, 1.0f / 255));
-    RunPost(plan, scene, depth, w, h, {}, {}, out);
+    RunPost(plan, scene, depth, w, h, {}, {}, {}, out);
     CHECK((out[0] & 0xffffffu) == (scene[0] & 0xffffffu));
+}
+
+TEST_CASE("the soft particles add before bloom, which they don't brighten") {
+    // a flat scene with bloom, and a soft-particle buffer at the game's
+    // 320x180: the composite is (scene + soft) screen-blended with the
+    // bloom of the scene alone (the bright pass reads the scene)
+    const uint32_t w = 64, h = 36;
+    const uint32_t r = 60, g = 30, b = 90, a = 100;
+    std::vector<uint32_t> scene(size_t(w) * h, r | g << 8 | b << 16 | a << 24);
+    std::vector<float> depth(scene.size(), 0.0f);
+    const uint32_t soft_px = 40 | 20 << 8 | 0 << 16 | 0x80u << 24;
+    std::vector<uint32_t> soft(320 * 180, soft_px);
+    PostPlan plan{};
+    plan.composite.flags = {kPostBloom | kPostSoft, 0, 0, 0};
+    plan.composite.c6 = {0.5f, 0.5f, 0.5f, 0};
+    for (int k = 0; k < 3; k++) {
+        BloomTaps(false, 320 >> (2 * k), plan.bloom_taps[k][0]);
+        BloomTaps(true, 180 >> (2 * k), plan.bloom_taps[k][1]);
+    }
+    std::vector<uint32_t> out;
+    RunPost(plan, scene, depth, w, h, {}, {}, {soft.data(), 320, 180}, out);
+    const float alpha = float(a) / 255;
+    const uint32_t in[3] = {r, g, b}, s[3] = {40, 20, 0};
+    for (size_t i : {size_t(0), out.size() / 2, out.size() - 1}) {
+        for (int k = 0; k < 3; k++) {
+            const float c = float(in[k]) / 255;
+            const float level = std::floor(c * alpha * 255 + 0.5f) / 255;
+            const float want = 1 - (1 - (c + float(s[k]) / 255)) * (1 - 3 * level * 0.5f);
+            CHECK(Near(float(out[i] >> (8 * k) & 0xff) / 255, want, 1.5f / 255));
+        }
+    }
+    // without the flag the buffer isn't read
+    plan.composite.flags.x = kPostBloom;
+    std::vector<uint32_t> none;
+    RunPost(plan, scene, depth, w, h, {}, {}, {soft.data(), 320, 180}, none);
+    CHECK(none[0] != out[0]);
+}
+
+TEST_CASE("glare's pass over level 0 is the game's bloom_glare shader") {
+    // check_post.py's model of 2789C57F87CFFD5D: ten taps of the level from
+    // the pixel's uv toward the centre, (1 - 2 uv) / 10 apart, each weighed
+    // by (1 - 4 min(r^2, 1/4))^2 at its uv, summed as 1 / (1 - weight *
+    // texel); the output is 2 - 20 / the sum, which the target saturates
+    auto model = [](float level, float u, float v) {
+        const float su = (1 - 2 * u) * 0.1f, sv = (1 - 2 * v) * 0.1f;
+        float sum = 0;
+        for (int i = 0; i < 10; i++) {
+            const float r2 = (u - 0.5f) * (u - 0.5f) + (v - 0.5f) * (v - 0.5f);
+            const float w = (1 - 4 * std::fmin(r2, 0.25f)) * (1 - 4 * std::fmin(r2, 0.25f));
+            sum += 1 / (1 - w * level);
+            u += su;
+            v += sv;
+        }
+        return Sat(2 - 20 / sum);
+    };
+    // a flat scene: level 0 is its colour times its alpha everywhere (the
+    // bright pass, and blurs of a flat level), so each tap reads that
+    const uint32_t w = 64, h = 36;
+    const uint32_t r = 250, g = 200, b = 40, a = 255;
+    std::vector<uint32_t> scene(size_t(w) * h, r | g << 8 | b << 16 | a << 24);
+    std::vector<float> depth(scene.size(), 0.0f);
+    PostPlan plan{};
+    plan.composite.flags = {kPostGlare, 0, 0, 0};
+    plan.composite.c6 = {0.5f, 0.5f, 0.5f, 0};
+    BloomTaps(false, 320, plan.bloom_taps[0][0]);
+    BloomTaps(true, 180, plan.bloom_taps[0][1]);
+    std::vector<uint32_t> out, level;
+    RunPost(plan, scene, depth, w, h, {}, {}, {}, out, &level);
+    const uint32_t lw = Quarter(w), lh = Quarter(h);
+    REQUIRE(level.size() == size_t(lw) * lh);
+    const uint32_t in[3] = {r, g, b};
+    // the corner (taps all the way across), the middle (taps on the spot,
+    // weight 1 at the centre) and one in between
+    const uint32_t at[][2] = {{0, 0}, {lw / 2, lh / 2}, {3, 6}, {lw - 1, lh - 1}};
+    for (const auto& p : at) {
+        CAPTURE(p[0]);
+        CAPTURE(p[1]);
+        const float u = (float(p[0]) + 0.5f) / float(lw), v = (float(p[1]) + 0.5f) / float(lh);
+        const uint32_t texel = level[size_t(p[1]) * lw + p[0]];
+        for (int k = 0; k < 3; k++) {
+            const float l = std::floor(float(in[k]) / 255 * float(a) / 255 * 255 + 0.5f) / 255;
+            const float want = model(l, u, v);
+            CHECK(Near(float(texel >> (8 * k) & 0xff) / 255, want, 1.0f / 255));
+        }
+        CHECK((texel >> 24) == 0xff);  // alpha 1
+    }
+    // the composite adds half of the level times c6: in the corner, whose
+    // pixel reads level 0's corner texel alone
+    for (int k = 0; k < 3; k++) {
+        const float glare = float(level[0] >> (8 * k) & 0xff) / 255;
+        const float want = Sat(float(in[k]) / 255 + 0.5f * 0.5f * glare);
+        CHECK(Near(float(out[0] >> (8 * k) & 0xff) / 255, want, 1.0f / 255));
+    }
+    // a black level stays black
+    std::vector<uint32_t> dark(scene.size(), r | g << 8 | b << 16);
+    RunPost(plan, dark, depth, w, h, {}, {}, {}, out, &level);
+    for (uint32_t c : level) CHECK((c & 0xffffffu) == 0u);
+    // bloom (not glare) has no glare pass: level 0 is the bright pass
+    plan.composite.flags.x = kPostBloom;
+    for (int k = 1; k < 3; k++) {
+        BloomTaps(false, 320 >> (2 * k), plan.bloom_taps[k][0]);
+        BloomTaps(true, 180 >> (2 * k), plan.bloom_taps[k][1]);
+    }
+    RunPost(plan, scene, depth, w, h, {}, {}, {}, out, &level);
+    CHECK((level[0] & 0xffffffu) == (r | g << 8 | b << 16));
+    // nor does a frame without either
+    plan.composite.flags.x = kPostXfm;
+    RunPost(plan, scene, depth, w, h, {}, {}, {}, out, &level);
+    CHECK(level.empty());
 }

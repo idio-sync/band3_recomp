@@ -27,6 +27,8 @@ not when the replay is rebuilt.
                                                   worse by more than 0.5
   python tools/parity.py --baseline b.json --write-baseline
                                                   saves this run's numbers over it
+  python tools/parity.py --replay-args=--no-gamma
+                                                  every replay run with these options too
 
 Numbers from different runs of the game aren't comparable (run to run the same
 moment differs by 5.5-9.3): a baseline compares re-renders of the same captures.
@@ -137,14 +139,14 @@ def grade(row):
     return "-", misses
 
 
-def measure(captures, replay, jobs):
+def measure(captures, replay, jobs, extra=()):
     results = {}
     with tempfile.TemporaryDirectory(prefix="parity") as out_dir:
         work = []
         for cap in captures:
             name, cap_jobs = jobs_for(cap, out_dir)
             results[name] = {}
-            work += [(name, key, args) for key, args in cap_jobs]
+            work += [(name, key, args + list(extra)) for key, args in cap_jobs]
         with ThreadPoolExecutor(max_workers=jobs) as pool:
             done = list(pool.map(lambda w: (w[0], w[1], run_replay(replay, w[2])), work))
     for name, (kind, crop), m in done:
@@ -225,6 +227,10 @@ def main():
     ap.add_argument("--write-baseline", action="store_true",
                     help="write this run's numbers to --baseline even if it exists")
     ap.add_argument("--jobs", type=int, default=4, help="replay runs at once")
+    ap.add_argument("--replay-args", default="",
+                    help="more options for every replay run, space-separated (--no-gamma, "
+                         "say: the CPU's rows without the display's gamma ramp; the gpu rows "
+                         "are the .gpu.png as captured, so gpu-cpu then compares unlike)")
     ap.add_argument("captures", nargs="*", help="only these capture names (default: all)")
     a = ap.parse_args()
 
@@ -236,7 +242,7 @@ def main():
     if not captures:
         sys.exit(f"no captures in {a.set}")
 
-    results = measure(captures, a.replay, a.jobs)
+    results = measure(captures, a.replay, a.jobs, a.replay_args.split())
     baseline = None
     if a.baseline and os.path.exists(a.baseline) and not a.write_baseline:
         with open(a.baseline) as f:

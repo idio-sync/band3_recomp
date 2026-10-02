@@ -18,10 +18,15 @@ float3 operator-(float3 a) { return {-a.x, -a.y, -a.z}; }
 float4 operator*(float4 a, float4 b) { return {a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w}; }
 
 float dot(float3 a, float3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+float3 cross(float3 a, float3 b) {
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
 float dot(float4 a, float4 b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
 float saturate(float v) { return std::clamp(v, 0.0f, 1.0f); }
 float3 saturate(float3 v) { return {saturate(v.x), saturate(v.y), saturate(v.z)}; }
 float max(float a, float b) { return a > b ? a : b; }
+float min(float a, float b) { return a < b ? a : b; }
+float floor(float v) { return std::floor(v); }
 float sqrt(float v) { return std::sqrt(v); }
 float rsqrt(float v) { return 1.0f / std::sqrt(v); }
 float pow(float x, float p) { return std::pow(x, p); }
@@ -36,6 +41,38 @@ float3 lerp(float3 a, float3 b, float t) { return a + (b - a) * t; }
 
 void TexGenUv(const ShadeParams& sp, const float uv[2], float out[2]) {
     const float2 r = TexGen(sp, float2{uv[0], uv[1]});
+    out[0] = r.x;
+    out[1] = r.y;
+}
+
+void BillboardCpu(const ShadeParams& sp, const float v[3], const float t[3], float out[3]) {
+    const float3 r = Billboard(sp, float3{v[0], v[1], v[2]}) + float3{t[0], t[1], t[2]};
+    out[0] = r.x;
+    out[1] = r.y;
+    out[2] = r.z;
+}
+
+void TextureFrameCpu(const ShadeParams& sp, const float n[3], const float t[4], float n_out[3],
+                     float u_out[3]) {
+    const TangentFrame f =
+        TextureFrame(sp, float3{n[0], n[1], n[2]}, float4{t[0], t[1], t[2], t[3]});
+    n_out[0] = f.n.x;
+    n_out[1] = f.n.y;
+    n_out[2] = f.n.z;
+    u_out[0] = f.u.x;
+    u_out[1] = f.u.y;
+    u_out[2] = f.u.z;
+}
+
+void BitangentCpu(const float n[3], const float u[3], float w, float out[3]) {
+    const float3 b = Bitangent(float3{n[0], n[1], n[2]}, float3{u[0], u[1], u[2]}, w);
+    out[0] = b.x;
+    out[1] = b.y;
+    out[2] = b.z;
+}
+
+void DetailUvCpu(const ShadeParams& sp, const float uv[2], float out[2]) {
+    const float2 r = DetailUv(sp, float2{uv[0], uv[1]});
     out[0] = r.x;
     out[1] = r.y;
 }
@@ -64,9 +101,11 @@ void AoShVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], co
 
 void LightVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], const float vc[4],
                     const float ao_sh[2], float diffuse[3], float added[3]) {
-    const Lighting l = Light(sp, float3{p[0], p[1], p[2]}, float3{n[0], n[1], n[2]},
+    const float3 nn{n[0], n[1], n[2]};
+    const Lighting l = Light(sp, float3{p[0], p[1], p[2]}, nn, nn,
                              float4{vc[0], vc[1], vc[2], vc[3]}, float4{1, 1, 1, 1},
-                             float2{ao_sh[0], ao_sh[1]});
+                             float2{ao_sh[0], ao_sh[1]}, float4{0, 0, 0, 0}, float4{0, 0, 0, 0},
+                             1.0f);
     diffuse[0] = l.diffuse.x;
     diffuse[1] = l.diffuse.y;
     diffuse[2] = l.diffuse.z;
@@ -75,19 +114,70 @@ void LightVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], c
     added[2] = l.added.z;
 }
 
+void ProjUvCpu(const ShadeParams& sp, const float p[3], float out[2]) {
+    const float2 uv = ProjUv(sp, float3{p[0], p[1], p[2]});
+    out[0] = uv.x;
+    out[1] = uv.y;
+}
+
+void ShadowCoordCpu(const ShadeParams& sp, const float p[3], float out[4]) {
+    const float4 s = ShadowCoord(sp, float3{p[0], p[1], p[2]});
+    out[0] = s.x;
+    out[1] = s.y;
+    out[2] = s.z;
+    out[3] = s.w;
+}
+
+ShadowTapsCpu ShadowTapsOf(const float s[4], uint32_t w, uint32_t h) {
+    const ShadowTapSet t = ShadowTaps(float4{s[0], s[1], s[2], s[3]}, float2{float(w), float(h)});
+    ShadowTapsCpu out;
+    const float xs[4] = {t.x.x, t.x.y, t.x.z, t.x.w}, ys[4] = {t.y.x, t.y.y, t.y.z, t.y.w};
+    const float ws[4] = {t.weight.x, t.weight.y, t.weight.z, t.weight.w};
+    for (int k = 0; k < 4; k++) {
+        out.x[k] = int(xs[k]);
+        out.y[k] = int(ys[k]);
+        out.weight[k] = ws[k];
+    }
+    out.depth = t.depth;
+    return out;
+}
+
+float ShadowLitCpu(const ShadeParams& sp, const float p[3], const float* depth, uint32_t w,
+                   uint32_t h) {
+    const ShadowTapSet t = ShadowTaps(ShadowCoord(sp, float3{p[0], p[1], p[2]}),
+                                      float2{float(w), float(h)});
+    auto at = [&](float x, float y) { return depth[size_t(y) * w + size_t(x)]; };
+    return ShadowLit(t, float4{at(t.x.x, t.y.x), at(t.x.y, t.y.y), at(t.x.z, t.y.z),
+                               at(t.x.w, t.y.w)});
+}
+
 void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], const float vc[4],
                    const float texel[4], const float spec_map[4], const float glow[4],
                    const float behind[4], float depth, const float ao_sh[2],
-                   const float vertex_diffuse[3], const float vertex_added[3], float out[4]) {
+                   const float vertex_diffuse[3], const float vertex_added[3], float out[4],
+                   const float proj[4], const float gobo[4], float lit,
+                   const NormalMapInputs* normal_map) {
     const Lighting vertex{float3{vertex_diffuse[0], vertex_diffuse[1], vertex_diffuse[2]},
                           float3{vertex_added[0], vertex_added[1], vertex_added[2]}};
+    const float none[4] = {0, 0, 0, 0};
+    if (!proj) proj = none;
+    if (!gobo) gobo = none;
+    NormalMapInputs flat{};
+    if (!normal_map) normal_map = &flat;
+    const NormalMapInputs& nm = *normal_map;
     const float4 r = ShadePixel(sp, float3{p[0], p[1], p[2]}, float3{n[0], n[1], n[2]},
+                                float3{nm.u[0], nm.u[1], nm.u[2]},
+                                float3{nm.b[0], nm.b[1], nm.b[2]},
                                 float4{vc[0], vc[1], vc[2], vc[3]},
                                 float4{texel[0], texel[1], texel[2], texel[3]},
                                 float4{spec_map[0], spec_map[1], spec_map[2], spec_map[3]},
                                 float4{glow[0], glow[1], glow[2], glow[3]},
+                                float4{nm.map[0], nm.map[1], nm.map[2], nm.map[3]},
+                                float4{nm.detail[0], nm.detail[1], nm.detail[2], nm.detail[3]},
                                 float4{behind[0], behind[1], behind[2], behind[3]}, depth,
-                                float2{ao_sh[0], ao_sh[1]}, vertex);
+                                float2{ao_sh[0], ao_sh[1]},
+                                float4{proj[0], proj[1], proj[2], proj[3]},
+                                float4{gobo[0], gobo[1], gobo[2], gobo[3]}, lit, vertex);
     out[0] = r.x;
     out[1] = r.y;
     out[2] = r.z;
@@ -95,6 +185,10 @@ void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], co
 }
 
 bool AlphaCutCpu(const ShadeParams& sp, float alpha) { return AlphaCut(sp, alpha); }
+
+float SoftFadeCpu(float far_plane, float inv_w, float w) {
+    return SoftFade(SoftSceneDepth(far_plane, inv_w), w);
+}
 
 namespace {
 
@@ -124,6 +218,14 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
         f |= kShadePrelit;
         return;
     }
+    // where the vertices are, whatever the lighting: a BILLBOARD draw's are
+    // turned to the camera (shade.hlsli's Billboard), by the inverse view's
+    // columns, VS c16..c18
+    if (s && s->Option(kBillboard)) {
+        f |= kShadeBillboard;
+        for (int i = 0; i < 3; i++)
+            sp.billboard[i] = {s->Vs(16)[i], s->Vs(17)[i], s->Vs(18)[i], 0};
+    }
     if (!s || o.legacy_light) {
         Copy(it.color, sp.color);
         if (it.prelit) f |= kShadePrelit;
@@ -144,6 +246,8 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     sp.ao.x = s->Vs(24)[0];
     Copy(s->Vs(20), sp.texgen[0]);
     Copy(s->Vs(21), sp.texgen[1]);
+    Copy(s->Vs(22), sp.texgen_n);
+    sp.normal_map = {s->Ps(14)[0], s->Ps(106)[0], s->Ps(106)[1], 0};
     for (int i = 0; i < 2; i++) {
         Copy(s->Ps(64 + i), sp.point_pos[i]);
         Copy(s->Ps(67 + i), sp.point_color[i]);
@@ -152,11 +256,28 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     Copy(s->Ps(63), sp.rim);
     for (int i = 0; i < 3; i++) Copy(s->Ps(53 + i), sp.fade[i]);
     Copy(s->Ps(104), sp.fade_color);
+    for (int i = 0; i < 3; i++) Copy(s->Ps(95 + i), sp.proj[i]);
+    Copy(s->Ps(66), sp.proj_dir);
+    Copy(s->Ps(69), sp.proj_color);
+    for (int i = 0; i < 4; i++) Copy(s->Vs(40 + i), sp.shadow[i]);
+    Copy(s->Ps(107), sp.shadow_color);
+    Copy(s->Ps(108), sp.shadow_dir);
 
     // Registers the option word doesn't use may hold anything from an earlier
     // draw, so every term is the option word's
     const bool particles = s->shader_type == 14;
     if (s->Option(kPrelit)) f |= kShadePrelit;
+    // NgLight's shadow casters (draw mode 3), whose shader's options are
+    // SKINNED alone (RndShaderStandard::CalcShaderOpts): untextured (the
+    // renderers bind no diffuse texture: SamplesDiffuse), unlit and opaque
+    // white whatever the material's colour, as guest memory's copies of the
+    // shadow have them (r = g = b = a, with c0 brown); the projected light
+    // reads its alpha alone
+    if (it.draw_mode == kDrawModeShadowCasters) {
+        f &= ~(kShadeTextured | kShadePrelit);
+        sp.color = sp.ambient = {1, 1, 1, 1};
+        return;
+    }
     if (s->Option(kIntensify)) f |= kShadeIntensify;
     // the backend takes it off where it has no picture to read (before the
     // resolve, or into a texture)
@@ -198,11 +319,43 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     if (s->Option(kRealLights)) sp.flags.y = std::min<uint>(s->OptionBits(kNumPoint, 2), 2);
     if (s->Option(kSpecular)) f |= kShadeSpecular;
     if (s->Option(kSpecularMap) && maps && s->maps[kMapSpecular]) f |= kShadeSpecMap;
-    if (s->Option(kEnableAO)) f |= kShadeAO;
+    // a billboard's vertex shader has no AO, though the crowd's option word
+    // asks for it (4B19F15CA3B46FEB reads no vertex colour)
+    const bool ao = s->Option(kEnableAO) && !s->Option(kBillboard);
+    if (ao) f |= kShadeAO;
     // every AO shader the dumps have with a point light occludes it by the
     // vertex colour's SH, none of those without one (out/research/
     // parity_diag_ao_refract.md)
-    if (s->Option(kEnableAO) && sp.flags.y >= 1) f |= kShadeAoSh;
+    if (ao && sp.flags.y >= 1) f |= kShadeAoSh;
+    // the projected light, where its maps were decoded: the multiply form
+    // reads s5 alone, the gobo s10 too. The 18 pixel shaders the dumps have
+    // that read it (c95) all light per pixel (fam3.py matches each); a
+    // vertex-lit material's is left out. The multiply form's s5 is a texture
+    // RB3 draws (NgLight's shadow: its casters' silhouettes, blurred), which
+    // the backends draw too (scene_capture.h's ProjectedTargetOf) and drop
+    // the flags where they have neither that nor guest memory's copy.
+    if (s->OptionBits(kNumProj, 2) != 0 && s->Option(kPerPixel) && maps &&
+        s->maps[kMapProjected]) {
+        if (s->Option(kProjLightMultiply))
+            f |= kShadeProjMultiply;
+        else if (s->maps[kMapGobo])
+            f |= kShadeProjGobo;
+    }
+    // the shadow buffer, where s5 is the shadow map the capture has the pass
+    // of: the backend drops the flag where it hasn't drawn it. Every pixel
+    // shader the dumps have that reads it (c107) lights per pixel; a
+    // vertex-lit material's is left out.
+    if (s->Option(kPerPixel) && o.self_shadow && o.texture_passes && ShadowMapOf(s))
+        f |= kShadeShadow;
+    // the normal map, and the detail map with it, where the capture decoded
+    // them and has the geometry's tangents (a capture from before them
+    // hasn't): each pixel shader the dumps have that reads s1 or c14 lights
+    // per pixel (out/research/m2_shader_ucode.md 6)
+    if (s->Option(kNormalMap) && s->Option(kPerPixel) && maps && o.normal_maps &&
+        s->maps[kMapNormal] && it.geom && it.geom->tangents) {
+        f |= kShadeNormalMap;
+        if (s->Option(kNormDetail) && s->maps[kMapDetailNormal]) f |= kShadeDetailMap;
+    }
     if (s->Option(kRimLight)) f |= kShadeRim;
     if (s->Option(kRimLightUnder)) f |= kShadeRimUnder;
     switch (s->OptionBits(kCustomVariation, 2)) {

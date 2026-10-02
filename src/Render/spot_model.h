@@ -37,10 +37,13 @@ bool PackSpot(const ShadeInputs& state, uint32_t width, uint32_t height, SpotPar
 // uv offsets in PS c31.., their weights (per channel) in c47..
 inline constexpr int kSpotBlurTaps = 5;
 
-// Whether pass p's draw is a DrawRect blur of the depth volume into itself,
-// with the taps its shade state kept (none in captures from before them):
-// the renderers blur a copy of the target into it, as the game does in
-// place by a resolve, rather than draw a quad sampling what it draws
+// Whether pass p's draw is a DrawRect blur (shader 1) of its target into
+// itself, with the taps its shade state kept (none in captures from before
+// them): the depth volume's two, and NgLight::BlurShadowRT's two of its
+// shadow (the same taps, a texel apart, across then down), which the game
+// draws in place, reading the texture its last resolve left. The renderers
+// blur a copy of the target into it, rather than draw a quad sampling what
+// it draws.
 bool SpotBlur(const DrawItem& d, const ShadeInputs* state, const Pass& p);
 
 // spot_model.hlsli's SpotRay, on the CPU: the stretch [tn, tf] of the view ray

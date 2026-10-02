@@ -60,7 +60,7 @@ inline bool PresentsCapturedWorld(const FrameCapture& fc) {
 // frame's texture passes from before its own (carried ones, say, that its
 // overlay samples; those world already has are left out), then frame's draws
 // from its post_boundary on, which is where the result's is. Its other
-// fields are frame's (its post-processing too, which the game ran on world's
+// fields are frame's (its post-processing and gamma ramp too, which the game ran on world's
 // picture), but composed (1) and world_frame (world's game_frame);
 // counts of what was skipped, decoded and so on are the two frames' together,
 // and the render targets sampled, missing and filtered are counted again over
@@ -68,10 +68,11 @@ inline bool PresentsCapturedWorld(const FrameCapture& fc) {
 // out (a post frame has none of the world's to draw).
 std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const FrameCapture& frame);
 
-// render targets the frame's draws sample, by (texture, version), and of
-// those no pass in it made, the ones in `left_out` (made by a pass whose draws
-// were all left out: FrameCapture::rt_filtered_keys) and how many others:
-// FrameCapture::rt_sampled, rt_filtered_keys and rt_missing
+// render targets the frame's draws sample (as their diffuse texture, or as
+// s5: the shadow map), by (texture, version), and of those no pass in it
+// made, the ones in `left_out` (made by a pass whose draws were all left out:
+// FrameCapture::rt_filtered_keys) and how many others: FrameCapture::
+// rt_sampled, rt_filtered_keys and rt_missing
 void CountRenderTargets(const FrameCapture& fc, const std::vector<uint64_t>& left_out,
                         uint32_t& sampled, uint32_t& missing, std::vector<uint64_t>& filtered);
 

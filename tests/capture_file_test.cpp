@@ -2,11 +2,17 @@
 // with shades and their maps, passes, render targets' versions and its
 // post-processing comes back as it was saved; a section from a newer build is
 // skipped or refused as it should be, and geometry from a smaller Vertex (or
-// post-processing from a smaller PostParams) keeps what both have; files from
-// before passes (B3CAP002) and before shades (B3CAP001) still load, and draws
-// from before their cull mode was kept cull nothing.
+// post-processing from a smaller PostParams) keeps what both have; geometry
+// keeps its tangents, and geometry from before them (GEOM version 1) has
+// none; files from before passes (B3CAP002) and before shades (B3CAP001),
+// whose Vertex ended at its weights, still load, and draws
+// from before their cull mode was kept cull nothing, those from before their
+// draw mode was kept are the colour pass's, files from before the display
+// gamma ramp was kept have none, and textures keep their mips and shades
+// their samplers, which files from before them have none of.
 
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -41,6 +47,14 @@ std::shared_ptr<Geometry> MakeTriangle() {
     for (int i = 0; i < 3; i++) g->verts[i].pos[i] = 1.0f;
     g->indices = {0, 1, 2};
     return g;
+}
+
+// the verts as B3CAP001 and B3CAP002 kept them: Vertex up to its weights
+void PutOldVerts(std::vector<uint8_t>& out, const Geometry& g) {
+    for (const Vertex& v : g.verts) {
+        const auto* b = reinterpret_cast<const uint8_t*>(&v);
+        out.insert(out.end(), b, b + offsetof(Vertex, tan));
+    }
 }
 
 DrawItem MakeDraw(std::shared_ptr<const Geometry> geom, int32_t shade) {
@@ -157,7 +171,7 @@ TEST_CASE("a capture from before shades still loads") {
     const auto geom = MakeTriangle();
     put32(1);
     put32(3);
-    raw(geom->verts.data(), 3 * sizeof(Vertex));
+    PutOldVerts(out, *geom);
     put32(3);
     raw(geom->indices.data(), 3 * sizeof(uint16_t));
     put32(0);  // textures
@@ -193,6 +207,9 @@ TEST_CASE("a capture from before shades still loads") {
     CHECK(back->draws[0].mesh == 0x5678);
     CHECK(back->draws[0].cam == 0xabcd);
     CHECK(back->shades.empty());
+    REQUIRE(back->draws[0].geom->verts.size() == 3);
+    CHECK(back->draws[0].geom->verts[2].pos[2] == 1.0f);
+    CHECK_FALSE(back->draws[0].geom->tangents);
 }
 
 namespace {
@@ -507,8 +524,9 @@ TEST_CASE("a capture's geometry loads from a build whose Vertex was smaller") {
     const std::string path = TempPath("band3_capture_file_stride_test.cap");
     REQUIRE(SaveCapture(path, fc));
     const std::vector<uint8_t> data = ReadAll(path);
-    // GEOM written again with each vertex cut to its first 32 bytes (pos,
-    // nrm, uv), as an older Vertex would have been
+    // GEOM written again as version 1, with each vertex cut to its first 32
+    // bytes (pos, nrm, uv), as an older Vertex would have been, and without
+    // each geometry's tangents flag
     const size_t geom = FindSection(data, "GEOM");
     REQUIRE(geom != std::string::npos);
     uint64_t size;
@@ -538,9 +556,11 @@ TEST_CASE("a capture's geometry loads from a build whose Vertex was smaller") {
         put32(ni);
         sec.insert(sec.end(), in + pos, in + pos + ni * 2);
         pos += ni * 2;
+        pos += 1;  // tangents
     }
     REQUIRE(pos == size);
     std::vector<uint8_t> out(data.begin(), data.begin() + geom + 8);
+    out[geom + 4] = 1;  // the version: before tangents
     const uint64_t new_size = sec.size();
     const auto* ns = reinterpret_cast<const uint8_t*>(&new_size);
     out.insert(out.end(), ns, ns + 8);
@@ -555,6 +575,33 @@ TEST_CASE("a capture's geometry loads from a build whose Vertex was smaller") {
     CHECK(g.verts[1].pos[1] == 1.0f);
     CHECK(g.verts[1].color == 0);  // past the old size: zero
     CHECK(g.indices.size() == 3);
+    CHECK_FALSE(g.tangents);
+}
+
+TEST_CASE("a capture keeps its geometry's tangents and whether it has them") {
+    FrameCapture fc;
+    auto with = MakeTriangle();
+    with->tangents = true;
+    for (int i = 0; i < 3; i++) {
+        with->verts[i].tan[0] = 0.25f * float(i);
+        with->verts[i].tan[1] = 0.5f;
+        with->verts[i].tan[3] = i == 1 ? -1.0f : 1.0f;
+    }
+    fc.draws.push_back(MakeDraw(with, -1));
+    fc.draws.push_back(MakeDraw(MakeTriangle(), -1));  // band3's own: none
+    const std::string path = TempPath("band3_capture_file_tangents_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    REQUIRE(back->draws.size() == 2);
+    const Geometry& a = *back->draws[0].geom;
+    CHECK(a.tangents);
+    CHECK(a.verts[2].tan[0] == 0.5f);
+    CHECK(a.verts[2].tan[1] == 0.5f);
+    CHECK(a.verts[1].tan[3] == -1.0f);
+    CHECK(a.verts[0].tan[3] == 1.0f);
+    CHECK_FALSE(back->draws[1].geom->tangents);
 }
 
 TEST_CASE("a capture from before passes (B3CAP002) still loads, with its shades") {
@@ -570,7 +617,7 @@ TEST_CASE("a capture from before passes (B3CAP002) still loads, with its shades"
     const auto geom = MakeTriangle();
     put32(1);
     put32(3);
-    raw(geom->verts.data(), 3 * sizeof(Vertex));
+    PutOldVerts(out, *geom);
     put32(3);
     raw(geom->indices.data(), 3 * sizeof(uint16_t));
     const auto tex = MakeTexture(2, 1, 18, 5);
@@ -689,42 +736,185 @@ TEST_CASE("a capture keeps its post-processing, and one from before has none") {
     CHECK(back->post_consts.c24[1] == -3.5f);
 }
 
-TEST_CASE("a capture keeps each draw's cull mode, and one from before culls nothing") {
+TEST_CASE("a capture keeps each draw's cull and draw modes; one from before has none") {
     FrameCapture fc = MakePassFrame();
     fc.draws[3].cull = kCullBack;                   // D3DCULL_CW, RndMat's cull
     fc.draws[4].cull = kCullBack | kCullFrontIsCw;  // D3DCULL_CCW, a reflection's
+    fc.draws[1].draw_mode = kDrawModeShadowDepth;
+    fc.draws[2].draw_mode = kDrawModeShadowCasters;
     const std::string path = TempPath("band3_capture_file_cull_test.cap");
     REQUIRE(SaveCapture(path, fc));
     auto back = LoadCapture(path);
     REQUIRE(back);
     REQUIRE(back->draws.size() == fc.draws.size());
-    for (size_t i = 0; i < fc.draws.size(); i++) CHECK(back->draws[i].cull == fc.draws[i].cull);
+    for (size_t i = 0; i < fc.draws.size(); i++) {
+        CHECK(back->draws[i].cull == fc.draws[i].cull);
+        CHECK(back->draws[i].draw_mode == fc.draws[i].draw_mode);
+    }
 
-    // DRAW as builds before culling wrote it, version 1: each draw one byte
-    // shorter, without its cull mode at the end
+    // DRAW as older builds wrote it: version 2 without each draw's draw mode
+    // at its end, version 1 without its cull mode before that either
+    const std::vector<uint8_t> saved = ReadAll(path);
+    for (uint8_t version : {uint8_t(2), uint8_t(1)}) {
+        CAPTURE(int(version));
+        std::vector<uint8_t> data = saved;
+        const size_t at = FindSection(data, "DRAW");
+        REQUIRE(at != std::string::npos);
+        data[at + 4] = version;
+        const size_t cut = version == 2 ? 1 : 2;
+        uint64_t size;
+        std::memcpy(&size, data.data() + at + 8, 8);
+        size_t pos = at + 16 + 4;  // past the draw count
+        for (size_t i = 0; i < fc.draws.size(); i++) {
+            uint32_t bones;
+            std::memcpy(&bones, data.data() + pos + 4 + 4 + 2 * sizeof(Mat4), 4);
+            pos += 4 + 4 + 2 * sizeof(Mat4) + 4 + bones * sizeof(Mat4) + 16 + 4 + 4 + 1 + 1 + 4 +
+                   4 + 4 + 4 + 4 + 4 + 16 + 4 + 2 - cut;
+            // its draw mode, and its cull mode
+            data.erase(data.begin() + std::ptrdiff_t(pos),
+                       data.begin() + std::ptrdiff_t(pos + cut));
+            size -= cut;
+        }
+        CHECK(pos == at + 16 + size_t(size));
+        std::memcpy(data.data() + at + 8, &size, 8);
+        WriteAll(path, data);
+        back = LoadCapture(path);
+        REQUIRE(back);
+        REQUIRE(back->draws.size() == fc.draws.size());
+        for (size_t i = 0; i < fc.draws.size(); i++) {
+            CHECK(back->draws[i].cull == (version == 2 ? fc.draws[i].cull : 0));
+            CHECK(back->draws[i].draw_mode == 0);
+        }
+        CHECK(back->draws[4].tex);
+        CHECK(back->passes.size() == 3);
+    }
+    std::remove(path.c_str());
+}
+
+TEST_CASE("a shade's s5 as a render target keeps its identity and version, without pixels") {
+    // a SHADOW_BUFFER draw's shadow map, as scene_capture.cpp keeps it: the
+    // texture RB3 draws, the version it read
+    FrameCapture fc = MakePassFrame();
+    auto map = std::make_shared<Texture>();
+    map->width = map->height = 512;
+    map->tex_obj = 0x2251A0C0;
+    map->tex_type = kTexTypeShadowMap;
+    map->version = 41;
+    fc.shades[0].options = 1ull << shader_opt::kShadowBuffer;
+    fc.shades[0].maps[kMapProjected] = map;
+    const std::string path = TempPath("band3_capture_file_shadow_map_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    REQUIRE(back->shades.size() == 1);
+    const Texture* got = ShadowMapOf(&back->shades[0]);
+    REQUIRE(got);
+    CHECK(got->tex_obj == 0x2251A0C0);
+    CHECK(got->version == 41);
+    CHECK(got->width == 512);
+    CHECK(got->rgba.empty());
+}
+
+TEST_CASE("a capture keeps its display gamma ramp, and one from before has none") {
+    FrameCapture fc = MakePassFrame();
+    fc.gamma.mode = GammaRamp::kTable;
+    for (uint32_t v = 0; v < 256; v++) {
+        const uint32_t ten = v * 1023 / 255;
+        fc.gamma.table[v] = ten << 20 | (ten / 2) << 10 | v;
+    }
+    fc.gamma.pwl[127][2] = 0x0400FBC0;
+    const std::string path = TempPath("band3_capture_file_gamma_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    REQUIRE(back);
+    CHECK(back->gamma == fc.gamma);
+
+    // without the section, as builds before it wrote: none, which draws the
+    // picture as it is
     std::vector<uint8_t> data = ReadAll(path);
-    const size_t at = FindSection(data, "DRAW");
+    const size_t at = FindSection(data, "GAMA");
     REQUIRE(at != std::string::npos);
-    data[at + 4] = 1;
     uint64_t size;
     std::memcpy(&size, data.data() + at + 8, 8);
-    size_t pos = at + 16 + 4;  // past the draw count
-    for (size_t i = 0; i < fc.draws.size(); i++) {
-        uint32_t bones;
-        std::memcpy(&bones, data.data() + pos + 4 + 4 + 2 * sizeof(Mat4), 4);
-        pos += 4 + 4 + 2 * sizeof(Mat4) + 4 + bones * sizeof(Mat4) + 16 + 4 + 4 + 1 + 1 + 4 +
-               4 + 4 + 4 + 4 + 4 + 16 + 4;
-        data.erase(data.begin() + std::ptrdiff_t(pos));  // its cull mode
-        size--;
-    }
-    CHECK(pos == at + 16 + size_t(size));
-    std::memcpy(data.data() + at + 8, &size, 8);
+    data.erase(data.begin() + std::ptrdiff_t(at),
+               data.begin() + std::ptrdiff_t(at + 16 + size_t(size)));
     WriteAll(path, data);
     back = LoadCapture(path);
     std::remove(path.c_str());
     REQUIRE(back);
-    REQUIRE(back->draws.size() == fc.draws.size());
-    for (const DrawItem& d : back->draws) CHECK(d.cull == 0);
-    CHECK(back->draws[4].tex);
-    CHECK(back->passes.size() == 3);
+    CHECK(back->gamma.mode == GammaRamp::kNone);
+    CHECK(back->gamma == GammaRamp{});
+    CHECK(back->draws.size() == fc.draws.size());
+    std::vector<uint32_t> rgba = {0xff102030u, 0x80fefdfcu};
+    const std::vector<uint32_t> before = rgba;
+    ApplyGamma(back->gamma, rgba);
+    CHECK(rgba == before);
+}
+
+TEST_CASE("a capture keeps its textures' mips and its shades' samplers") {
+    FrameCapture fc;
+    auto geom = MakeTriangle();
+    // 1024x4 with its chain: kept at 512, from its first mip, with the rest
+    auto diffuse = MakeTexture(1024, 4, 6, 1);
+    for (uint32_t l = 1; l <= 10; l++) {
+        const uint32_t w = std::max(1024u >> l, 1u), h = std::max(4u >> l, 1u);
+        diffuse->mips.emplace_back(size_t(w) * h, 0x1000u * l);
+    }
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    // the same pixels and mips again, as another object
+    auto again = std::make_shared<Texture>(*diffuse);
+    s.maps[kMapSpecular] = again;
+    s.diffuse_sampler.filtered = 1;
+    s.diffuse_sampler.mag_linear = s.diffuse_sampler.min_linear = 1;
+    s.diffuse_sampler.mip = 1;
+    s.diffuse_sampler.mip_max = 10;
+    s.diffuse_sampler.lod_bias = -0.25f;
+    s.samplers[kMapSpecular].filtered = 1;
+    s.samplers[kMapSpecular].clamp_x = 2;
+    s.samplers[kMapSpecular].aniso = 4;
+    fc.shades = {s};
+    fc.draws.push_back(MakeDraw(geom, 0));
+    fc.draws.back().tex = diffuse;
+
+    const std::string path = TempPath("band3_capture_file_mips_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    REQUIRE(back);
+    const Texture& t = *back->draws[0].tex;
+    CHECK(t.width == 512);
+    CHECK(t.height == 2);
+    CHECK(t.rgba == diffuse->mips[0]);
+    REQUIRE(t.mips.size() == 9);
+    CHECK(t.mips[0] == diffuse->mips[1]);
+    CHECK(t.mips[8] == diffuse->mips[9]);
+    // the map with the same pixels and mips is kept once with them
+    REQUIRE(back->shades.size() == 1);
+    const ShadeState& b = back->shades[0];
+    REQUIRE(b.maps[kMapSpecular]);
+    CHECK(!b.maps[kMapSpecular]->mips.empty());
+    CHECK(b.diffuse_sampler.filtered == 1);
+    CHECK(b.diffuse_sampler.mip == 1);
+    CHECK(b.diffuse_sampler.mip_max == 10);
+    CHECK(b.diffuse_sampler.lod_bias == -0.25f);
+    CHECK(b.samplers[kMapSpecular].clamp_x == 2);
+    CHECK(b.samplers[kMapSpecular].aniso == 4);
+    CHECK(b.samplers[kMapNormal].filtered == 0);
+
+    // a file without the two sections (as from before them) loads with no
+    // mips and the old nearest sampler
+    std::vector<uint8_t> data = ReadAll(path);
+    for (const char* id : {"MIPS", "SMPL"}) {
+        const size_t at = FindSection(data, id);
+        REQUIRE(at != std::string::npos);
+        data[at] = 'X';  // a section this build doesn't know: skipped
+    }
+    WriteAll(path, data);
+    back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    CHECK(back->draws[0].tex->mips.empty());
+    CHECK(back->draws[0].tex->width == 512);
+    CHECK(back->shades[0].diffuse_sampler.filtered == 0);
 }

@@ -37,11 +37,17 @@ class Tex:
         return list(self(unit, coord[0], coord[1]))
 
 
+# The loop constants a shader's loops run by, from its definition table in the
+# game's shader container (xbox_shaders.bin), which lits.json doesn't keep:
+# bloom_glare's PS has one integer constant, i31 = 0x0000000a (count 10)
+LOOPS = {'2789C57F87CFFD5D': {'i31': 10}}
+
+
 def run_shader(h, consts, uv, tex):
     c = {i: [0.0] * 4 for i in range(256)}
     c.update(consts)
     c.update(xsim.lits(h))          # literal c255 etc. win
-    st = xsim.State(c, {0: [uv[0], uv[1], 0.0, 0.0]}, tex.fetch_cb)
+    st = xsim.State(c, {0: [uv[0], uv[1], 0.0, 0.0]}, tex.fetch_cb, LOOPS.get(h))
     xsim.run(xsim.load(h), st)
     return st.o.get('oC0', [math.nan] * 4)
 
@@ -163,6 +169,31 @@ def m_down4_38448F55(c, uv, T):
     return out, {('tf0', u, v) for (u, v) in taps}
 
 
+# kBloomGlareShader (bloom_glare, ShaderType 25), the pass NgPostProc::DoBloom
+# draws on bloom's level 0 after its blur when glare is on: 10 taps of the level
+# (tf0) from the pixel's uv toward the centre, 0.1 * (1 - 2 uv) apart (the last
+# 0.9 of the way to the uv mirrored through the centre, 1 - uv), each weighted
+# by (1 - 4 min(r^2, 0.25))^2, r its distance from the centre in uv, and taken
+# as 1 / (1 - weight * texel); the output is 2 - 20 / their sum, alpha 1 (no
+# saturate: the target clamps). It reads no constants but its literals (c254,
+# c255) and the loop's count.
+def m_glare_pass_2789C57F(c, uv, T):
+    tenth = c[255][3]   # 0.1 as a float32, which the tap positions add up
+    step = [(1 - 2 * uv[0]) * tenth, (1 - 2 * uv[1]) * tenth]
+    p = list(uv)
+    s = [0.0] * 3
+    taps = set()
+    for _ in range(10):
+        t = T('tf0', p[0], p[1])
+        taps.add(('tf0', p[0], p[1]))
+        r2 = (p[0] - 0.5) ** 2 + (p[1] - 0.5) ** 2
+        w = (1 - 4 * min(r2, 0.25)) ** 2
+        for k in range(3):
+            s[k] += 1 / (1 - w * t[k])
+        p = [p[0] + step[0], p[1] + step[1]]
+    return [2 - 20 / s[k] for k in range(3)] + [1.0], taps
+
+
 def m_kernel(n):
     def m(c, uv, T):
         out = [0.0] * 4
@@ -207,6 +238,7 @@ CASES = [
     ('38448F554B8CF69D', 'downsample 4x', consts_generic, m_down4_38448F55),
     ('0D31052586F96765', 'gaussian 15 taps', consts_generic, m_kernel(15)),
     ('7A05ED55B7DFE558', 'DOF blur 8 taps', consts_generic, m_kernel(8)),
+    ('2789C57F87CFFD5D', 'glare pass (bloom_glare)', consts_generic, m_glare_pass_2789C57F),
 ]
 
 

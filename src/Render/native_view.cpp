@@ -180,6 +180,8 @@ class Renderer {
                 std::lock_guard lock(mutex_);
                 if (stop_) return;
                 o = options_;
+                o.normal_maps = REXCVAR_GET(native_view_normal_maps);
+                o.filtering = REXCVAR_GET(native_view_texture_filtering);
                 gpu = gpu_;
                 changed = options_changed_;
                 options_changed_ = false;
@@ -311,6 +313,9 @@ void NativeViewDialog::OnDraw(ImGuiIO& io) {
         ImGui::SameLine();
         // RB3's depth of field, bloom and colour matrix (post_model.h)
         changed |= ImGui::Checkbox("Post-processing", &options_.post);
+        ImGui::SameLine();
+        // the display's gamma ramp, as the game's own picture has it (gamma_ramp.h)
+        changed |= ImGui::Checkbox("Gamma ramp", &options_.gamma);
         int size = options_.width >= 1280 ? 2 : options_.width >= 960 ? 1 : 0;
         if (ImGui::Combo("Size", &size, "640x360\0960x540\01280x720\0")) {
             const uint32_t widths[] = {640, 960, 1280};
