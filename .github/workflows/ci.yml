@@ -16,8 +16,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # match find_package(rexglue ...) in generated/rexglue.cmake
-  REXGLUE_SDK_VERSION: 0.10.0
+  # the nightly docs/building.md asks for; the v0.10.0 release lacks its XInput
+  # changes (InputSystem::GetStateForUI)
+  REXGLUE_SDK_TAG: nightly-20260925-5cf287f4
+  REXGLUE_SDK_VERSION: 0.10.0.15-dev.g5cf287f
 
 jobs:
   unit-tests:
@@ -63,7 +65,7 @@ jobs:
       - name: Download ReXGlue SDK
         if: steps.sdk-cache.outputs.cache-hit != 'true'
         run: |
-          curl -fsSL -o sdk.zip "https://github.com/rexglue/rexglue-sdk/releases/download/v${REXGLUE_SDK_VERSION}/rexglue-sdk-${REXGLUE_SDK_VERSION}-${{ matrix.sdk }}.zip"
+          curl -fsSL -o sdk.zip "https://github.com/rexglue/rexglue-sdk/releases/download/${REXGLUE_SDK_TAG}/rexglue-sdk-${REXGLUE_SDK_VERSION}-${{ matrix.sdk }}.zip"
           mkdir -p .ci-sdk
           unzip -q sdk.zip -d .ci-sdk
           rm sdk.zip

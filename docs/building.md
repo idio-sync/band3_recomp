@@ -67,6 +67,20 @@ cmake --build out/compile_check
 
 For checks that run the game itself, see the [test harness](test-harness.md).
 
+## Updating the SDK
+
+CI downloads its own copy of the SDK, so when you move `.rexglue-sdk` to a newer nightly,
+move CI and the docs along with it. Otherwise the compile check keeps building against the
+old SDK and fails as soon as band3 uses something only the new one has.
+
+1. In `.github/workflows/ci.yml`, set `REXGLUE_SDK_TAG` to the release tag (e.g.
+   `nightly-20260925-5cf287f4`) and `REXGLUE_SDK_VERSION` to the version in its zip names
+   (e.g. `0.10.0.15-dev.g5cf287f` from `rexglue-sdk-0.10.0.15-dev.g5cf287f-win-amd64.zip`).
+   The SDK cache is keyed by that version, so CI downloads the new one on its next run.
+2. Update the SDK link and version under [Requirements](#requirements) above and in the
+   README's quick start.
+3. Run the compile check above against the new SDK before pushing.
+
 ## Profiling
 
 Profiling is compiled into every build except Release. Build the `relwithdebinfo` preset
