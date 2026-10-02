@@ -1,7 +1,9 @@
 #include "rhythmverse.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
+#include "src/Game/song_id.h"
 #include "http_request.h"
 #include "json.h"
 
@@ -75,6 +77,7 @@ std::optional<Song> ParseSong(const json::Value& entry) {
     if (!art.empty()) song.art_url = Absolute(art);
     song.page_url = Absolute(file["file_url"].Text());
     song.file_name = file["file_name"].Text();
+    song.song_id = SongIdOf(file["custom_id"].Text());
 
     const std::string external = file["external_url"].Text();
     const std::string download = file["download_url"].Text();
@@ -135,7 +138,8 @@ std::optional<SearchResult> ParseSearch(std::string_view text) {
     const auto reply = json::Parse(text);
     if (!reply || (*reply)["status"].Text() != "success") return std::nullopt;
     const json::Value& data = (*reply)["data"];
-    if (!data["songs"].IsArray()) return std::nullopt;
+    // a search that found nothing says "songs": false
+    if (!data["songs"].IsArray() && data["songs"].Bool(true)) return std::nullopt;
     SearchResult result;
     result.total = Whole(data["records"]["total_filtered"]);
     result.page = static_cast<int32_t>(std::max<int64_t>(Whole(data["pagination"]["page"]), 1));
@@ -143,6 +147,36 @@ std::optional<SearchResult> ParseSearch(std::string_view text) {
         if (auto song = ParseSong(entry)) result.songs.push_back(std::move(*song));
     }
     return result;
+}
+
+int32_t SongIdOf(std::string_view custom_id) {
+    if (custom_id.empty() || custom_id == "0") return 0;
+    int64_t id = 0;
+    const auto [ptr, ec] = std::from_chars(custom_id.data(), custom_id.data() + custom_id.size(), id);
+    if (ptr != custom_id.data() + custom_id.size() || ec != std::errc()) {
+        // text, as some songs.dta have it; a number with more after it is too
+        return CorrectedSongId(custom_id);
+    }
+    return id > 0 && id <= INT32_MAX ? static_cast<int32_t>(id) : 0;
+}
+
+std::string LowerAscii(std::string_view text) {
+    std::string out(text);
+    for (char& c : out) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+    return out;
+}
+
+bool IsDownloaded(const Song& song, const LocalSongs& local) {
+    // band3's own download, whatever its size: it was checked as it came
+    const std::string own = LowerAscii(DownloadFileName(song));
+    const auto it = local.files.lower_bound({own, INT64_MIN});
+    if (it != local.files.end() && it->first == own) return true;
+    // RhythmVerse's download, as its page saves it; the size tells it from
+    // another upload by the same name (and from an older version of this one)
+    return !song.file_name.empty() && song.size > 0 &&
+           local.files.contains({LowerAscii(song.file_name), song.size});
 }
 
 bool ValidFileId(std::string_view file_id) {
@@ -176,7 +210,7 @@ std::string FileIdOf(std::string_view file_name) {
     return ValidFileId(id) ? std::string(id) : std::string();
 }
 
-std::string FormatSearch(const SearchResult& result, const std::set<std::string>& downloaded) {
+std::string FormatSearch(const SearchResult& result, const LocalSongs& local) {
     std::string out = "{\"total\":" + std::to_string(result.total) +
                       ",\"page\":" + std::to_string(result.page) +
                       ",\"page_size\":" + std::to_string(kPageSize) + ",\"songs\":[";
@@ -205,7 +239,11 @@ std::string FormatSearch(const SearchResult& result, const std::set<std::string>
         AppendField(out, "page", JsonString(s.page_url));
         AppendField(out, "host", JsonString(s.host));
         AppendField(out, "download", s.download_url.empty() ? "false" : "true");
-        AppendField(out, "downloaded", downloaded.contains(s.file_id) ? "true" : "false");
+        AppendField(out, "downloaded", IsDownloaded(s, local) ? "true" : "false");
+        AppendField(out, "in_library",
+                    !local.game_ids ? "null"
+                    : s.song_id && local.game_ids->contains(s.song_id) ? "true"
+                                                                        : "false");
         out += '}';
     }
     return out + "]}";

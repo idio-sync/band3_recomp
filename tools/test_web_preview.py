@@ -236,6 +236,11 @@ class RhythmVerseTest(unittest.TestCase):
                          (False, 'www.mediafire.com', 'someone'))
         self.assertEqual((songs[2]['download'], songs[2]['host']), (False, 'rhythmverse.co'))
 
+    def test_a_search_that_found_nothing_is_empty(self):
+        result = web_preview.rv_search_result(
+            {'status': 'success', 'data': {'records': {'total_filtered': 0}, 'songs': False}}, set())
+        self.assertEqual((result['total'], result['songs']), (0, []))
+
     def test_a_failed_reply_is_none(self):
         self.assertIsNone(web_preview.rv_search_result({'status': 'error'}, set()))
         self.assertIsNone(web_preview.rv_search_result([], set()))

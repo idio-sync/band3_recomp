@@ -605,7 +605,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) poll
 const rv = {
   text: null,        // what the list is a search for; null before the first
   page: 0, total: 0,
-  rows: new Map(),   // file_id -> {s, action}: the row's song and its button
+  rows: new Map(),   // file_id -> {s, li}: the row's song and its element
   downloads: new Map(),  // file_id -> this session's download, from /rv/downloads
   folder: "",
 };
@@ -666,7 +666,14 @@ function rvAction(s) {
   }
   const b = el("button", "dl", "Download");
   b.onclick = e => { e.stopPropagation(); download(s); };
-  if (!d) return b;
+  if (!d) {
+    // the game has it under another file name, or another version of it
+    if (s.in_library) {
+      b.className = "dl plain";
+      b.title = "The game has this song already";
+    }
+    return b;
+  }
   if (d.state === "failed") {
     b.textContent = "Retry";
     b.title = d.error;
@@ -679,28 +686,37 @@ function rvAction(s) {
   return b;
 }
 
+// what the game has of a song, as [tag, its tooltip]: by song ID when band3
+// says (in_library), else by artist and title; [null] for nothing
+function libraryTag(s) {
+  const downloaded = rvState(s) && rvState(s).state === "done";
+  if (s.in_library) return ["In library", "The game has this song (by its song ID)"];
+  if (downloaded) return ["Restart to load", "It's in the song folders; the game reads them as it starts"];
+  if (s.in_library === null && inLibrary(s)) return ["In library", "A song by this artist and title is in the game"];
+  if (inLibrary(s)) return ["Similar in library", "Another chart of this artist and title is in the game"];
+  return [null, null];
+}
+
 function rvRow(s) {
   const li = el("li");
   li.append(rvArt(s));
   const info = el("div", "info");
   info.append(el("div", "title", s.title),
               el("div", "sub", [s.artist, s.album].filter(Boolean).join(" · ")));
-  const have = inLibrary(s);
-  const tag = el("span", have ? "tag have" : "tag", have ? "In library" : s.author);
-  if (have) tag.title = "A song by this artist and title is in the game";
+  const [text, title] = libraryTag(s);
+  const tag = el("span", text ? "tag have" : "tag", text || s.author);
+  if (title) tag.title = title;
   const action = rvAction(s);
   li.append(info, tag, action, meters(s));
   li.onclick = () => openRvSong(s);
-  rv.rows.set(s.file_id, {s, action});
+  rv.rows.set(s.file_id, {s, li});
   return li;
 }
 
+// a row again, for a download's progress
 function refreshRow(fileId) {
   const row = rv.rows.get(fileId);
-  if (!row) return;
-  const action = rvAction(row.s);
-  row.action.replaceWith(action);
-  row.action = action;
+  if (row) row.li.replaceWith(rvRow(row.s));
 }
 
 function openRvSong(s) {
@@ -713,7 +729,8 @@ function openRvSong(s) {
   const by = [s.author ? "By " + s.author : null, s.size ? megabytes(s.size) : null,
               s.downloads.toLocaleString() + " downloads"];
   body.append(el("div", "facts", by.filter(Boolean).join(" · ")));
-  if (inLibrary(s)) body.append(el("div", "facts", "A song by this artist and title is in the game."));
+  const [have, why] = libraryTag(s);
+  if (have) body.append(el("div", "facts", have + ": " + why.charAt(0).toLowerCase() + why.slice(1) + "."));
   body.append(el("h3", "", "Difficulty"), partsGrid(s.tiers));
   const actions = el("div", "actions");
   const close = el("button", "plain", "Close");
@@ -770,10 +787,10 @@ async function download(s) {
     });
     const text = await r.text();
     if (!r.ok) { toast(text); return; }
-    if (text === "Already downloaded") {
+    if (text === "Already in the song folders") {
       s.downloaded = true;
       refreshRow(s.file_id);
-      toast(`“${s.title}” is downloaded already`);
+      toast(`“${s.title}” is in the song folders already`);
       return;
     }
     rv.downloads.set(s.file_id, {file_id: s.file_id, title: s.title, state: "queued", received: 0, total: s.size});

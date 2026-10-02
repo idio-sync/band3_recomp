@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <mutex>
 #include <span>
@@ -25,6 +26,9 @@ namespace {
 constexpr size_t kMaxRemembered = 5000;
 // bigger than any song's package
 constexpr int64_t kMaxBytes = int64_t{4} << 30;
+// how long LocalFiles' listing is kept: songs copied into the folders show up
+// as downloaded this long after
+constexpr std::chrono::seconds kListingAge{60};
 
 // leaked, so a download still running when band3 closes never touches a
 // destroyed object
@@ -35,6 +39,11 @@ struct State {
     std::deque<std::string> queue;
     bool working = false;  // the download thread is running
     std::atomic<bool> stopping{false};
+    // LocalFiles' listing, and when it was made; listings happen one at a time
+    std::mutex files_mutex;
+    std::set<std::pair<std::string, int64_t>> files;
+    std::chrono::steady_clock::time_point files_time;
+    bool files_stale = true;
 };
 
 State& TheState() {
@@ -130,6 +139,10 @@ void Work() {
         } else {
             REXLOG_WARN("RhythmVerse: couldn't download {} - {}: {}", song.artist, song.title, error);
         }
+        {
+            std::lock_guard lock(state.files_mutex);
+            state.files_stale = true;
+        }
         std::lock_guard lock(state.mutex);
         if (Download* d = FindDownload(state, song.file_id)) {
             d->state = error.empty() ? Download::State::kDone : Download::State::kFailed;
@@ -161,8 +174,8 @@ void Remember(const std::vector<Song>& songs) {
 QueueResult QueueDownload(std::string_view file_id) {
     if (!ValidFileId(file_id)) return QueueResult::kUnknown;
     const fs::path folder = DownloadFolder();
-    // read before the lock: the folder may be on a slow drive
-    const bool have = !folder.empty() && DownloadedIds().contains(std::string(file_id));
+    // listed before the lock: the folders may be on a slow drive
+    const LocalSongs local{LocalFiles(), std::nullopt};
 
     auto& state = TheState();
     std::lock_guard lock(state.mutex);
@@ -175,7 +188,7 @@ QueueResult QueueDownload(std::string_view file_id) {
     if (d && (d->state == Download::State::kQueued || d->state == Download::State::kDownloading)) {
         return QueueResult::kQueued;
     }
-    if (have) return QueueResult::kHave;
+    if (IsDownloaded(song, local)) return QueueResult::kHave;
     // a failed one is tried again
     if (!d) {
         state.downloads.push_back(Download{song.file_id, song.title, song.artist});
@@ -199,18 +212,31 @@ std::vector<Download> Downloads() {
     return state.downloads;
 }
 
-std::set<std::string> DownloadedIds() {
-    std::set<std::string> ids;
-    const fs::path folder = DownloadFolder();
-    if (folder.empty()) return ids;
-    std::error_code ec;
-    for (const auto& entry : fs::directory_iterator(folder, ec)) {
-        if (!entry.is_regular_file(ec)) continue;
-        if (entry.path().extension() == fs::path(content::kPartialSuffix)) continue;
-        std::string id = FileIdOf(Utf8(entry.path().filename()));
-        if (!id.empty()) ids.insert(std::move(id));
+std::set<std::pair<std::string, int64_t>> LocalFiles() {
+    auto& state = TheState();
+    std::lock_guard lock(state.files_mutex);
+    const auto now = std::chrono::steady_clock::now();
+    if (!state.files_stale && now - state.files_time < kListingAge) return state.files;
+
+    std::set<std::pair<std::string, int64_t>> files;
+    for (const auto& entry : paths::SplitList(REXCVAR_GET(content_folders))) {
+        std::error_code ec;
+        // as the content scan does: symlinks and junctions aren't followed
+        fs::recursive_directory_iterator it(paths::Resolve(entry, IniAnchor()),
+                                            fs::directory_options::skip_permission_denied, ec);
+        for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            std::error_code file_ec;
+            if (!it->is_regular_file(file_ec)) continue;
+            if (it->path().extension() == fs::path(content::kPartialSuffix)) continue;
+            const uintmax_t size = it->file_size(file_ec);
+            if (file_ec) continue;
+            files.emplace(LowerAscii(Utf8(it->path().filename())), static_cast<int64_t>(size));
+        }
     }
-    return ids;
+    state.files = std::move(files);
+    state.files_time = now;
+    state.files_stale = false;
+    return state.files;
 }
 
 void StopDownloads() { TheState().stopping = true; }

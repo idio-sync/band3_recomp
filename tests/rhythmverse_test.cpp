@@ -3,6 +3,7 @@
 
 #include <doctest/doctest.h>
 #include <string>
+#include "src/Game/song_id.h"
 #include "src/Net/json.h"
 #include "src/Net/rhythmverse.h"
 
@@ -26,7 +27,7 @@ constexpr std::string_view kReply = R"json({"status":"success","data":{
              "file_title":"Never Gonna Stop (The Red, Red Kroovy)","file_artist":"Rob Zombie",
              "file_album":"The Sinister Urge","file_genre":"Rock","file_year":2001,
              "song_length":190,"vocal_parts_authored":"1","size":3706880,"downloads":2702,
-             "zippata":0,"external_url":"",
+             "zippata":0,"external_url":"","custom_id":"1689100131",
              "diff_drums":4,"diff_guitar":4,"diff_bass":3,"diff_vocals":1,"diff_proguitar":-1,
              "diff_probass":-1,"diff_band":4,
              "author":{"name":"DenVaktare"},"user":"denvaktare",
@@ -70,6 +71,7 @@ TEST_CASE("a search reply gives each song's details") {
     CHECK(s.downloads == 2702);
     CHECK(s.author == "DenVaktare");
     CHECK(s.file_name == "DVNeverGonnaStopFinal");
+    CHECK(s.song_id == 1689100131);
     CHECK(s.art_url == "https://rhythmverse.co/assets/album_art/denvaktare/595481a7cbc158.68319817.png");
     CHECK(s.page_url == "https://rhythmverse.co/songfile/595481a7cbc158.68319817");
     CHECK(s.download_url ==
@@ -109,6 +111,47 @@ TEST_CASE("replies that aren't a successful search fail") {
     REQUIRE(empty);
     CHECK(empty->songs.empty());
     CHECK(empty->page == 1);
+    // what a search that finds nothing gets
+    const auto none = ParseSearch(
+        R"({"status":"success","data":{"records":{"total_filtered":0},"songs":false}})");
+    REQUIRE(none);
+    CHECK(none->songs.empty());
+    CHECK(none->total == 0);
+}
+
+TEST_CASE("custom_id is the song ID the game gives the song") {
+    CHECK(SongIdOf("1689100131") == 1689100131);
+    CHECK(SongIdOf("") == 0);
+    CHECK(SongIdOf("0") == 0);
+    CHECK(SongIdOf("-5") == 0);
+    CHECK(SongIdOf("99999999999") == 0);  // more than a song ID holds
+    // a text song_id, as band3 numbers it
+    CHECK(SongIdOf("mysong") == band3::CorrectedSongId("mysong"));
+    CHECK(SongIdOf("123abc") == band3::CorrectedSongId("123abc"));
+}
+
+TEST_CASE("a song is downloaded when its file is in the content folders, however it got there") {
+    Song song;
+    song.file_id = "595481a7cbc158.68319817";
+    song.file_name = "DVNeverGonnaStopFinal";
+    song.size = 3706880;
+    LocalSongs local;
+    CHECK(!IsDownloaded(song, local));
+
+    // band3's own download, whatever its size
+    local.files = {{"dvnevergonnastopfinal_595481a7cbc158.68319817", 99}};
+    CHECK(IsDownloaded(song, local));
+
+    // RhythmVerse's file name with the upload's size, in any case
+    local.files = {{"dvnevergonnastopfinal", 3706880}};
+    CHECK(IsDownloaded(song, local));
+    // another size is another upload by that name, or another version
+    local.files = {{"dvnevergonnastopfinal", 3706881}};
+    CHECK(!IsDownloaded(song, local));
+    // without a size to compare, a name isn't enough
+    song.size = 0;
+    local.files = {{"dvnevergonnastopfinal", 0}};
+    CHECK(!IsDownloaded(song, local));
 }
 
 TEST_CASE("a search with text asks the search, and one without the newest songs") {
@@ -161,7 +204,10 @@ TEST_CASE("a download's file name is its uploaded name made safe, then its file 
 TEST_CASE("search results are JSON for the page, saying what's downloadable and downloaded") {
     const auto result = ParseSearch(kReply);
     REQUIRE(result);
-    const auto page = band3::json::Parse(FormatSearch(*result, {"595481a7cbc158.68319817"}));
+    LocalSongs local;
+    local.files = {{"dvnevergonnastopfinal", 3706880}};
+    local.game_ids = std::set<int32_t>{1689100131};
+    const auto page = band3::json::Parse(FormatSearch(*result, local));
     REQUIRE(page);
     CHECK((*page)["total"].Number() == 812);
     CHECK((*page)["page"].Number() == 2);
@@ -174,10 +220,18 @@ TEST_CASE("search results are JSON for the page, saying what's downloadable and 
     CHECK(songs[0]["tiers"]["keys"].IsNull());
     CHECK(songs[0]["download"].Bool() == true);
     CHECK(songs[0]["downloaded"].Bool() == true);
+    CHECK(songs[0]["in_library"].Bool() == true);
+    CHECK(songs[1]["in_library"].Bool(true) == false);
     CHECK(songs[0]["page"].Text() == "https://rhythmverse.co/songfile/595481a7cbc158.68319817");
     CHECK(songs[1]["download"].Bool(true) == false);
     CHECK(songs[1]["downloaded"].Bool(true) == false);
     CHECK(songs[1]["host"].Text() == "www.mediafire.com");
+
+    // the game busy: nothing said of what it has
+    local.game_ids.reset();
+    const auto busy = band3::json::Parse(FormatSearch(*result, local));
+    REQUIRE(busy);
+    CHECK((*busy)["songs"].Items()[0]["in_library"].IsNull());
 }
 
 TEST_CASE("downloads are JSON, with their state and progress") {

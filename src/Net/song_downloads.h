@@ -24,7 +24,7 @@ void Remember(const std::vector<Song>& songs);
 
 enum class QueueResult {
     kQueued,     // or already queued, or downloading
-    kHave,       // already in the download folder
+    kHave,       // already in the content folders (IsDownloaded)
     kUnknown,    // no search has found it
     kNotHosted,  // RhythmVerse doesn't host it (another site, a zip, the official DLC)
     kNoFolder,   // content_folders names no folder
@@ -34,8 +34,10 @@ QueueResult QueueDownload(std::string_view file_id);
 // this session's downloads, in the order they were asked for
 std::vector<Download> Downloads();
 
-// the file IDs of the songs in the download folder
-std::set<std::string> DownloadedIds();
+// the files in every content folder and their subfolders, as LocalSongs keeps
+// them, however they got there; listed again when a minute old, or after a
+// download
+std::set<std::pair<std::string, int64_t>> LocalFiles();
 
 // a download in progress stops (and its file goes) when band3 closes
 void StopDownloads();

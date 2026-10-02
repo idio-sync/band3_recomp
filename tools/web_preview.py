@@ -250,11 +250,14 @@ def rv_search_result(reply, downloaded):
     if not isinstance(reply, dict) or reply.get('status') != 'success':
         return None
     data = reply.get('data') or {}
-    if not isinstance(data.get('songs'), list):
+    # a search that found nothing says "songs": false
+    if not isinstance(data.get('songs'), list) and data.get('songs') is not False:
         return None
-    songs = [s for s in map(rv_song, data['songs']) if s]
+    songs = [s for s in map(rv_song, data['songs'] or []) if s]
     for s in songs:
         s['downloaded'] = s['file_id'] in downloaded
+        # there's no game to ask, so the page goes by artist and title
+        s['in_library'] = None
     return {'total': _rv_number((data.get('records') or {}).get('total_filtered')),
             'page': max(_rv_number((data.get('pagination') or {}).get('page')), 1),
             'page_size': RV_PAGE_SIZE, 'songs': songs}

@@ -274,8 +274,18 @@ std::string RhythmVerseSearch(const Route& route, bool cors) {
         return Response(502, kText, "RhythmVerse's reply wasn't one band3 can read", cors);
     }
     rhythmverse::Remember(result->songs);
-    return Response(200, "application/json",
-                    rhythmverse::FormatSearch(*result, rhythmverse::DownloadedIds()), cors);
+
+    rhythmverse::LocalSongs local;
+    local.files = rhythmverse::LocalFiles();
+    std::vector<int32_t> ids;
+    // the game's songs say what's in it whatever their files are called; while
+    // the game is busy, the page goes by artist and title
+    if (RunOnGameThread([&ids](PPCContext& ctx, uint8_t* base) {
+            ids = game::RankedIds(ctx, base);
+        })) {
+        local.game_ids.emplace(ids.begin(), ids.end());
+    }
+    return Response(200, "application/json", rhythmverse::FormatSearch(*result, local), cors);
 }
 
 // POST /rv/download {"file_id": ...}. JSON only, so another site's page can't
@@ -290,7 +300,7 @@ std::string RhythmVerseDownload(const Request& request, bool cors) {
         case rhythmverse::QueueResult::kQueued:
             return Response(200, kText, "Downloading", cors);
         case rhythmverse::QueueResult::kHave:
-            return Response(200, kText, "Already downloaded", cors);
+            return Response(200, kText, "Already in the song folders", cors);
         case rhythmverse::QueueResult::kUnknown:
             break;
         case rhythmverse::QueueResult::kNotHosted:

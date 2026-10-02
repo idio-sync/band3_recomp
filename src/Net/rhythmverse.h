@@ -47,7 +47,11 @@ struct Song {
     std::vector<std::pair<std::string, int32_t>> tiers;
     std::string art_url;   // absolute; empty when there's none
     std::string page_url;  // the upload's page on RhythmVerse
-    std::string file_name;  // as uploaded
+    std::string file_name;  // as uploaded, and as RhythmVerse's own downloads name it
+    // the song_id in the package's songs.dta (RhythmVerse's custom_id), as the
+    // game has it: a text one as band3 turns it into a number (CorrectedSongId);
+    // 0 when RhythmVerse doesn't say
+    int32_t song_id = 0;
     // set only for files RhythmVerse hosts itself, unpacked: the ones band3
     // can download. The rest are on another site (`host`), zipped, or the
     // official DLC's store page.
@@ -61,8 +65,13 @@ struct SearchResult {
     std::vector<Song> songs;
 };
 
-// nullopt unless `json` is a successful reply to Search
+// nullopt unless `json` is a successful reply to Search (one that found
+// nothing has "songs": false)
 std::optional<SearchResult> ParseSearch(std::string_view json);
+
+// RhythmVerse's custom_id as the game's song ID: a number as it is, text as
+// band3 corrects a text song_id; 0 for none, or a number no song ID can be
+int32_t SongIdOf(std::string_view custom_id);
 
 // file IDs are letters, digits and dots, which keeps them safe in a file name
 bool ValidFileId(std::string_view file_id);
@@ -84,10 +93,27 @@ struct Download {
     std::string error;  // kFailed's reason
 };
 
+// The songs already here, to tell a search's songs by: the files in the
+// content folders, however they got there, and the songs the game has.
+struct LocalSongs {
+    // the files' names, ASCII lower-cased, and sizes
+    std::set<std::pair<std::string, int64_t>> files;
+    // the song IDs of the songs in the game; nullopt when the game couldn't say
+    std::optional<std::set<int32_t>> game_ids;
+};
+
+// ASCII letters lower-cased, as LocalSongs keeps file names
+std::string LowerAscii(std::string_view text);
+
+// the song's file is in the content folders: one band3 downloaded (named by
+// DownloadFileName), or one with the name RhythmVerse gives it and its size
+bool IsDownloaded(const Song& song, const LocalSongs& local);
+
 // /rv/search: {"total":, "page":, "page_size":, "songs": [{"file_id":,
 // "title":, ..., "tiers": {...}, "download": true when band3 can download it,
-// "downloaded": true when it's in the download folder}, ...]}
-std::string FormatSearch(const SearchResult& result, const std::set<std::string>& downloaded);
+// "downloaded": true when IsDownloaded, "in_library": true when the game has
+// a song with its song ID (null when the game couldn't say)}, ...]}
+std::string FormatSearch(const SearchResult& result, const LocalSongs& local);
 
 // /rv/downloads: {"folder": where they go, "downloads": [{"file_id":, "title":,
 // "artist":, "state": "queued"|"downloading"|"done"|"failed", "received":,
