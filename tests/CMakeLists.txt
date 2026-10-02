@@ -42,6 +42,7 @@ add_executable(band3_tests
     json_test.cpp
     rhythmverse_test.cpp
     song_id_test.cpp
+    frame_pacing_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp

@@ -49,6 +49,7 @@ REXCVAR_DECLARE(bool, disable_hair_shader);
 REXCVAR_DECLARE(bool, fullbright);
 REXCVAR_DECLARE(bool, compress_character_textures);
 REXCVAR_DECLARE(bool, disable_even_odd_rendering);
+REXCVAR_DECLARE(int32_t, background_fps);
 REXCVAR_DECLARE(std::string, renderer);
 
 // Band3/Integrations

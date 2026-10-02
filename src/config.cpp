@@ -50,6 +50,7 @@ constexpr IniSetting kIniSettings[] = {
     {"graphics", "fullbright", "fullbright"},
     {"graphics", "compress_character_textures", "compress_character_textures"},
     {"graphics", "disable_even_odd_rendering", "disable_even_odd_rendering"},
+    {"graphics", "background_fps", "background_fps"},
     {"profile", "username", "username"},
     {"events", "enabled", "events_enabled"},
     {"events", "target", "events_target"},

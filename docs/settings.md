@@ -29,6 +29,7 @@ Some options worth knowing about, by the names F4 and the command line use:
 | Option | |
 |---|---|
 | `refresh_rate` | the rate the game runs at, e.g. 120 for a 120 Hz monitor (0 keeps the console's 60) |
+| `background_fps` | the venue's frame rate: 0 keeps the venue's own (30 in most) at any `refresh_rate`, or set one, up to `refresh_rate`. Rates that divide `refresh_rate` (30 at 120, 180 or 240) draw evenly |
 | `forced_venue` | a venue, a class of venues, or a comma-separated mix to pick from at random |
 | `song_speed`, `track_speed` | play songs faster or slower, or scroll the highway faster |
 | `controller_type`, `input_backend` | what gamepads play as, and SDL (the default) or XInput |

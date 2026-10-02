@@ -200,6 +200,12 @@ REXCVAR_DEFINE_BOOL(compress_character_textures, false, "Band3/Graphics",
 REXCVAR_DEFINE_BOOL(disable_even_odd_rendering, false, "Band3/Graphics",
     "Process every render command each frame instead of alternating even/odd frames");
 
+REXCVAR_DEFINE_INT32(background_fps, 0, "Band3/Graphics",
+    "The venue's frame rate under even/odd rendering: 0 = the venue's own (30 in most), "
+    "whatever the game's refresh rate, or that many fps (at most the refresh rate). RB3 "
+    "counts it as if the game ran at 60, so at refresh_rate 120 a venue's 30 drew at 60")
+    .range(0, 240);
+
 REXCVAR_DEFINE_STRING(renderer, "emulated", "Band3/Graphics",
     "What draws the game's picture: emulated, the emulated Xbox 360 GPU, or native "
     "(experimental), band3's own renderer drawing what the game sent the GPU, at the "
