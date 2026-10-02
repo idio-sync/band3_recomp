@@ -5,6 +5,7 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <fstream>
+#include <optional>
 #include <sstream>
 
 #ifdef _WIN32
@@ -18,6 +19,8 @@ namespace band3 {
 
 static std::vector<std::string> g_args;
 static bool g_args_initialized = false;
+// where AddSettingArgs' arguments start in g_args, once it has run
+static std::optional<size_t> g_setting_args_at;
 static std::filesystem::path g_game_data_root;
 
 namespace {
@@ -110,10 +113,7 @@ const std::filesystem::path& LegacyIniPath() {
 }
 
 std::filesystem::path IniAnchor() {
-    std::error_code ec;
-    auto path = std::filesystem::absolute(LegacyIniPath(), ec);
-    return std::filesystem::is_regular_file(path, ec) ? path.parent_path()
-                                                       : std::filesystem::current_path(ec);
+    return paths::Anchor(LegacyIniPath(), rex::filesystem::GetExecutableFolder());
 }
 
 std::string ReadIniString(const char* key) {
@@ -186,6 +186,9 @@ void ApplyLegacyIni() {
 
 void AddSettingArgs() {
     GetArgs();
+    // nothing else adds to the arguments, so the last call's are the tail
+    if (g_setting_args_at) g_args.resize(*g_setting_args_at);
+    g_setting_args_at = g_args.size();
     if (REXCVAR_GET(fast_start)) {
         g_args.push_back("-fast");
     }

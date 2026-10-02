@@ -49,9 +49,11 @@ change yours.
 
 `band3_config.ini` can also move band3's other folders: `user_data_root` (saves, profiles
 and the `game` folder; `Documents\band3` by default) and `cache_root` (the shader cache;
-`cache` in the user data folder by default). A relative path there is relative to the
-ini's folder, so `user_data_root = user_data` keeps everything band3 writes beside it, for
-a portable install. band3 looks for the ini in its working directory, then beside the
+`cache` in the user data folder by default), and so can `band3.toml`
+(`game_data_root`, `user_data_root`, `cache_root`), which wins over the ini. A relative
+path in either is relative to the ini's folder, or to the executable's folder when there is
+no ini, so `user_data_root = user_data` keeps everything band3 writes beside it, for a
+portable install. band3 looks for the ini in its working directory, then beside the
 executable.
 
 ## DLC and custom songs

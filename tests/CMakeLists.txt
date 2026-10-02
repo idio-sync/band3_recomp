@@ -43,6 +43,7 @@ add_executable(band3_tests
     rhythmverse_test.cpp
     song_id_test.cpp
     frame_pacing_test.cpp
+    launcher_start_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp
@@ -57,6 +58,8 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/player_slots.cpp
     ${BAND3_ROOT}/src/Input/ps3_instruments.cpp
     ${BAND3_ROOT}/src/Input/ps4_instruments.cpp
+    ${BAND3_ROOT}/src/Launcher/game_data_check.cpp
+    ${BAND3_ROOT}/src/Launcher/launcher_start.cpp
     ${BAND3_ROOT}/src/Net/album_art.cpp
     ${BAND3_ROOT}/src/Net/http_request.cpp
     ${BAND3_ROOT}/src/Net/json.cpp

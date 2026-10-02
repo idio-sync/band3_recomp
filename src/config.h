@@ -15,8 +15,9 @@ inline constexpr const char* kLegacyIniPath = "band3_config.ini";
 // relative if neither has one; found once
 const std::filesystem::path& LegacyIniPath();
 
-// the folder the ini is in, absolute; the working directory if there is no ini.
-// A relative path in the ini is relative to this
+// the folder the ini is in, absolute; the exe's folder if there is no ini.
+// Every relative path band3 reads (the ini's, band3.toml's, the launcher's,
+// content_folders) is relative to this
 std::filesystem::path IniAnchor();
 
 // [game] key from the ini, unquoted; empty if missing
@@ -29,8 +30,9 @@ std::string ReadIniGameDataRoot();
 // copies the ini's values onto the cvars nothing else has set
 void ApplyLegacyIni();
 
-// adds the game arguments the settings drive (-fast, -lang) to GetArgs();
-// call once, after the settings are loaded
+// adds the game arguments the settings drive (-fast, -lang, -define MHX_PC)
+// to GetArgs(), after the settings are loaded; calling it again replaces the
+// ones the last call added, as the launcher's Play does
 void AddSettingArgs();
 
 // the game data root the runtime was started with

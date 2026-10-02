@@ -29,6 +29,10 @@ first one that fails, saves a screenshot of the moment and exits 1. Commands joi
 with `;` share one connection, which `hold` needs: band3 lets go of everything held
 when a client disconnects.
 
+`test_port` also keeps the launcher (band3's setup screen) away, so `launch --no-harness
+-- --launcher` starts band3 without it, to see the launcher: nothing answers on the port
+then, so `launch` waits for the window instead, and the window commands below drive it.
+
 `capture` and `native_view` check the native view's rendering; see
 [Render checks](native-renderer.md#render-checks).
 
@@ -39,7 +43,9 @@ shot <png>` then saves its client area as the window presents it, the SDK's over
 included (`screenshot` is the game's picture alone); `window size <W>x<H>` sets
 its client area in physical pixels, though Windows keeps it no bigger than the monitors
 (`clamped` in the reply); `window minimize` minimizes it again, and moves where it
-restores to back onto the primary monitor. `window status` prints where it is.
+restores to back onto the primary monitor. `window click <X>,<Y>` clicks there (client
+pixels) with posted mouse messages, without focus or the real cursor, for the launcher's
+buttons; the window has to be `offscreen` to see it. `window status` prints where it is.
 
 | Command | |
 |---|---|

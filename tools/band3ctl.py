@@ -137,7 +137,10 @@ def launch(args):
     if args.fresh and os.path.isdir(user_data):
         shutil.rmtree(user_data)
     os.makedirs(user_data, exist_ok=True)
-    command = [exe, f"--test_port={args.port}", f"--user_data_root={user_data}"]
+    command = [exe, f"--user_data_root={user_data}"]
+    # test_port also keeps the launcher away, so --no-harness is how to see it
+    if not args.no_harness:
+        command.insert(1, f"--test_port={args.port}")
     # muted, like minimized, so a test doesn't disturb whoever is at the
     # machine; the game's audio still runs, so songs play on as usual
     if not args.sound and not any(a.startswith("--audio_mute") for a in args.extra):
@@ -156,6 +159,18 @@ def launch(args):
     process = subprocess.Popen(command, cwd=cwd, creationflags=flags, startupinfo=startupinfo,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     deadline = time.monotonic() + args.timeout
+    if args.no_harness:
+        # nothing answers on the harness port; its window is the sign it's up
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                sys.exit(f"band3 exited with code {process.returncode} before its window opened")
+            try:
+                GameWindow(process.pid)
+                print(json.dumps({"ok": True, "pid": process.pid}))
+                return 0
+            except RuntimeError:
+                time.sleep(0.5)
+        sys.exit(f"band3 (pid {process.pid}) opened no window within {args.timeout} s")
     while time.monotonic() < deadline:
         if process.poll() is not None:
             sys.exit(f"band3 exited with code {process.returncode} before the harness answered")
@@ -410,6 +425,27 @@ class GameWindow:
             self.user32.SetWindowPos(self.hwnd, None, 0, 0, fw, fh,
                                      self.SWP_NOMOVE | self.SWP_NOZORDER | self.SWP_NOACTIVATE)
 
+    def click(self, x, y):
+        """A left click at (x, y) in the client area's physical pixels, posted
+        to the window as mouse messages, so it needs neither focus nor the real
+        cursor. The window has to be painting (`offscreen`) for ImGui to see it.
+        SDL answers a move with a mouse-leave (the real cursor is elsewhere) that
+        puts the position back where the cursor is, unless a button holds the
+        mouse: so the press follows its move at once, ahead of that, and the
+        release (a frame later) comes without a move of its own."""
+        if self.user32.IsIconic(self.hwnd):
+            raise RuntimeError("the window is minimized; `window offscreen` it first")
+        post = self.user32.PostMessageW
+        post.restype = self.wt.BOOL
+        post.argtypes = [self.wt.HWND, self.wt.UINT, self.wt.WPARAM, self.wt.LPARAM]
+        position = (y & 0xFFFF) << 16 | (x & 0xFFFF)
+        WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON = 0x200, 0x201, 0x202, 0x1
+        for message, buttons, pause in ((WM_MOUSEMOVE, 0, 0), (WM_LBUTTONDOWN, MK_LBUTTON, 0.15),
+                                        (WM_LBUTTONUP, 0, 0)):
+            if not post(self.hwnd, message, buttons, position):
+                raise RuntimeError(f"PostMessage failed ({self.ct.get_last_error()})")
+            time.sleep(pause)
+
     def shot(self, path):
         """The client area as the window draws it, flip-model swap chains
         included (PrintWindow's PW_RENDERFULLCONTENT), into an RGB PNG. A
@@ -485,6 +521,11 @@ def window(args):
             if not args.arg:
                 raise RuntimeError("window shot <file.png>")
             reply["shot"] = w.shot(args.arg)
+        elif args.what == "click":
+            m = re.fullmatch(r"\s*(\d+)\s*,\s*(\d+)\s*", args.arg or "")
+            if not m:
+                raise RuntimeError("window click <x>,<y>")
+            w.click(int(m.group(1)), int(m.group(2)))
         reply.update(w.status())
         # none of it may take the keyboard from whatever had it
         reply["foreground_changed"] = w.user32.GetForegroundWindow() != before
@@ -538,6 +579,9 @@ def main(argv):
                         "without taking focus)")
     p.add_argument("--sound", action="store_true",
                    help="let the game play sound (by default it starts muted, --audio_mute=true)")
+    p.add_argument("--no-harness", action="store_true",
+                   help="without test_port, so the launcher can show (--launcher); waits for "
+                        "the window instead of the harness, which won't answer")
     p.add_argument("extra", nargs="*", help="more band3 arguments, e.g. --fast_start=true")
 
     p = sub.add_parser("run", help="replay a .b3t script")
@@ -546,11 +590,12 @@ def main(argv):
     p = sub.add_parser(
         "window", help="move, size, minimize or screenshot the running game's window "
                        "without ever activating it (Windows)")
-    p.add_argument("what", choices=["offscreen", "shot", "minimize", "size", "status"],
+    p.add_argument("what", choices=["offscreen", "shot", "minimize", "size", "click", "status"],
                    help="offscreen: restored, right of every monitor; shot <png>: its client "
                         "area as drawn (not while minimized); minimize; size <W>x<H>: its "
-                        "client area in physical pixels; status")
-    p.add_argument("arg", nargs="?", help="shot's PNG path, or size's <W>x<H>")
+                        "client area in physical pixels; click <X>,<Y>: a left click there, "
+                        "in client pixels; status")
+    p.add_argument("arg", nargs="?", help="shot's PNG path, size's <W>x<H>, or click's <X>,<Y>")
     p.add_argument("--pid", type=int, help="which band3, when more than one runs")
 
     known = {"launch", "run", "window", "-h", "--help"}

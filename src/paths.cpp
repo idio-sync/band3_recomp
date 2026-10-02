@@ -18,6 +18,14 @@ std::filesystem::path Resolve(std::string_view value, const std::filesystem::pat
     return (anchor / path).lexically_normal();
 }
 
+std::filesystem::path Anchor(const std::filesystem::path& ini,
+                             const std::filesystem::path& exe_folder) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(ini, ec)) return exe_folder;
+    auto path = std::filesystem::absolute(ini, ec);
+    return ec ? exe_folder : path.parent_path();
+}
+
 std::filesystem::path FindFile(const std::vector<std::filesystem::path>& dirs,
                                std::string_view name) {
     std::error_code ec;
@@ -43,6 +51,25 @@ std::vector<std::string> SplitList(std::string_view value) {
         start = end + 1;
     }
     return parts;
+}
+
+Folders ApplyPathRule(const PathRuleInputs& in) {
+    Folders out = in.defaults;
+    auto apply = [&](const PathSetting& setting, std::filesystem::path& folder) {
+        if (setting.source != PathSource::kSaved || setting.value.empty()) return false;
+        folder = Resolve(setting.value, in.anchor);
+        return true;
+    };
+    apply(in.game_data, out.game_data);
+    const bool user_replaced = apply(in.user_data, out.user_data);
+    const bool cache_replaced = apply(in.cache, out.cache);
+    // as OnConfigurePaths does for the ini's user data folder; an empty saved
+    // cache folder counts as unset
+    if (user_replaced && !cache_replaced && in.cache.source != PathSource::kFixed &&
+        !in.cache_in_ini) {
+        out.cache = out.user_data / "cache";
+    }
+    return out;
 }
 
 }

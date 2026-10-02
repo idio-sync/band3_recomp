@@ -65,6 +65,10 @@ REXCVAR_DECLARE(bool, http_allow_scripts);
 REXCVAR_DECLARE(bool, http_rhythmverse);
 REXCVAR_DECLARE(bool, rb3e_mode);
 
+// Band3/Launcher
+REXCVAR_DECLARE(bool, show_launcher);
+REXCVAR_DECLARE(bool, launcher);
+
 // Band3/Debug
 REXCVAR_DECLARE(bool, debug_overlay);
 REXCVAR_DECLARE(bool, native_math);
@@ -86,10 +90,13 @@ REXCVAR_DECLARE(bool, native_view_texture_filtering);
 
 namespace band3::settings {
 
-// Snapshots the restart settings and starts tracking the string settings guest
-// threads read. Call once, after the config sources are applied and before the
-// game runs.
+// Starts tracking the string settings guest threads read. Call once, after the
+// config sources are applied and before the game runs.
 void Init();
+
+// Takes the Startup() snapshot from the current values: once at startup, and
+// again when the launcher's Play starts the game with what was set in it.
+void SnapshotStartupSettings();
 
 // The settings that need a restart, as they were when the game started. F4
 // changes a cvar as soon as it is edited, so hooks that run after startup read

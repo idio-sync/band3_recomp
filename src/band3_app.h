@@ -26,6 +26,9 @@
 #include "Input/instrument_lab.h"
 #include "Input/menu_shortcut_dialog.h"
 #include "Input/virtual_instrument.h"
+#include "Launcher/game_data_check.h"
+#include "Launcher/launcher_dialog.h"
+#include "Launcher/launcher_start.h"
 #include "Net/discord.h"
 #include "Net/http_server.h"
 #include "Render/gpu_view.h"
@@ -39,9 +42,12 @@ class DebugOverlayDialog : public rex::ui::ImGuiDialog {
   explicit DebugOverlayDialog(rex::ui::ImGuiDrawer* imgui_drawer)
       : rex::ui::ImGuiDialog(imgui_drawer) {}
 
+  // hidden while the launcher is up
+  void set_hidden(bool hidden) { hidden_ = hidden; }
+
  protected:
   void OnDraw(ImGuiIO& io) override {
-    if (!REXCVAR_GET(debug_overlay)) return;
+    if (hidden_ || !REXCVAR_GET(debug_overlay)) return;
     ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(220, 60), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.5f);
@@ -50,6 +56,9 @@ class DebugOverlayDialog : public rex::ui::ImGuiDialog {
     }
     ImGui::End();
   }
+
+ private:
+  bool hidden_ = false;
 };
 
 class Band3App : public rex::ReXApp {
@@ -60,6 +69,16 @@ class Band3App : public rex::ReXApp {
   std::unique_ptr<band3::input::MenuShortcutDialog> menu_shortcut_;
   // the native view, see src/Render/native_view.h
   std::unique_ptr<band3::render::NativeViewDialog> native_view_;
+  // the launcher while it's up, before the game starts (src/Launcher/)
+  std::unique_ptr<band3::launcher::LauncherDialog> launcher_;
+  // OnFinalizePaths' folders and resume, kept for the launcher's Play, and
+  // what the path rule needs from the ini
+  rex::PathConfig path_defaults_;
+  std::function<void(rex::PathConfig)> resume_;
+  std::filesystem::path anchor_;
+  bool cache_in_ini_ = false;
+  // quitting from the launcher was confirmed, so the window may close
+  bool quit_confirmed_ = false;
 
   static std::unique_ptr<rex::ui::WindowedApp> Create(
       rex::ui::WindowedAppContext& ctx) {
@@ -68,7 +87,8 @@ class Band3App : public rex::ReXApp {
   }
 
   // paths are fixed before band3.toml loads, so band3_config.ini's are the ones
-  // read here, relative to its folder; the command line wins over the ini
+  // read here, relative to its folder; the command line wins over the ini, and
+  // OnFinalizePaths puts band3.toml's (and the launcher's) over the ini's
   void OnConfigurePaths(rex::PathConfig& paths) override {
     const auto anchor = band3::IniAnchor();
     auto from_ini = [&](const char* cvar, const std::string& value, std::filesystem::path& out) {
@@ -93,9 +113,7 @@ class Band3App : public rex::ReXApp {
   void OnPostInitLogging() override {
     // a relaunch (rb3e_relaunch_game) starts before the last run has closed
     band3::relaunch::WaitForPrevious();
-    REXLOG_INFO("Folders: game data {}, user data {}, cache {} (ini: {})",
-                rex::path_to_utf8(game_data_root()), rex::path_to_utf8(user_data_root()),
-                rex::path_to_utf8(cache_root()), rex::path_to_utf8(band3::LegacyIniPath()));
+    LogFolders(game_data_root(), user_data_root(), cache_root());
     // before the ini, so a desktop ini's window settings don't undo them
     band3::steam_deck::ApplyDefaults();
     band3::ApplyLegacyIni();
@@ -115,8 +133,134 @@ class Band3App : public rex::ReXApp {
 
     band3::AddSettingArgs();
     band3::settings::Init();
+    band3::settings::SnapshotStartupSettings();
     band3::input::InitVirtualInstrument();
     band3::test::Init();
+  }
+
+  static void LogFolders(const std::filesystem::path& game_data,
+                         const std::filesystem::path& user_data,
+                         const std::filesystem::path& cache) {
+    REXLOG_INFO("Folders: game data {}, user data {}, cache {} (ini: {})",
+                rex::path_to_utf8(game_data), rex::path_to_utf8(user_data),
+                rex::path_to_utf8(cache), rex::path_to_utf8(band3::LegacyIniPath()));
+  }
+
+  // The folders the game would start with: OnFinalizePaths' defaults with the
+  // path rule (paths.h) applied for the folder settings as they are now, so
+  // ones from band3.toml or the launcher count. The launcher asks every frame.
+  rex::PathConfig RulePaths() const {
+    using rex::cvar::Source;
+    using band3::paths::PathSource;
+    auto setting = [](const char* cvar) {
+      const Source source = rex::cvar::GetFlagSource(cvar);
+      const PathSource from = source == Source::kDefault ? PathSource::kUnset
+                              : source == Source::kConfig || source == Source::kRuntime
+                                  ? PathSource::kSaved
+                                  : PathSource::kFixed;
+      return band3::paths::PathSetting{rex::cvar::GetFlagByName(cvar), from};
+    };
+    band3::paths::PathRuleInputs in;
+    in.defaults = {path_defaults_.game_data_root, path_defaults_.user_data_root,
+                   path_defaults_.cache_root};
+    in.game_data = setting("game_data_root");
+    in.user_data = setting("user_data_root");
+    in.cache = setting("cache_root");
+    in.cache_in_ini = cache_in_ini_;
+    in.anchor = anchor_;
+    const band3::paths::Folders folders = band3::paths::ApplyPathRule(in);
+
+    rex::PathConfig paths = path_defaults_;
+    paths.game_data_root = folders.game_data;
+    paths.user_data_root = folders.user_data;
+    paths.cache_root = folders.cache;
+    return paths;
+  }
+
+  // RulePaths, as the game starts with them
+  rex::PathConfig FinalPaths() const {
+    rex::PathConfig paths = RulePaths();
+    band3::SetGameDataRoot(paths.game_data_root);
+    LogFolders(paths.game_data_root, paths.user_data_root, paths.cache_root);
+    return paths;
+  }
+
+  // The window and ImGui are up and the runtime isn't built yet: the launcher
+  // shows here when it's wanted (launcher_start.h), holding the game back until
+  // its Play calls resume.
+  std::optional<rex::PathConfig> OnFinalizePaths(
+      const rex::PathConfig& defaults, std::function<void(rex::PathConfig)> resume) override {
+    path_defaults_ = defaults;
+    anchor_ = band3::IniAnchor();
+    cache_in_ini_ = !band3::ReadIniString("cache_root").empty();
+    rex::PathConfig paths = FinalPaths();
+    const auto check = band3::launcher::CheckGameData(paths.game_data_root);
+    if (!check.ok) {
+      REXLOG_WARN("Game data {}: {}", rex::path_to_utf8(paths.game_data_root),
+                  band3::launcher::DescribeProblem(check.problem));
+    }
+    const auto decision = band3::launcher::DecideLauncher({
+        .test_port = REXCVAR_GET(test_port) != 0,
+        .relaunched = band3::relaunch::WasRelaunched(),
+        .game_data_ok = check.ok,
+        .launcher_flag = REXCVAR_GET(launcher),
+        .shift_held = band3::launcher::ShiftHeld(),
+        .show_launcher = REXCVAR_GET(show_launcher),
+    });
+    // --launcher is for this start only; F4's "Save to config" would keep it
+    if (REXCVAR_GET(launcher)) rex::cvar::SetFlagByName("launcher", "false");
+    REXLOG_INFO("Launcher: {}", decision.reason);
+    if (!decision.show) return paths;
+    if (!imgui_drawer()) {
+      REXLOG_WARN("Launcher: no ImGui to draw it with, starting the game");
+      return paths;
+    }
+
+    resume_ = std::move(resume);
+    launcher_ = std::make_unique<band3::launcher::LauncherDialog>(
+        imgui_drawer(),
+        band3::launcher::LauncherHost{
+            .game_data_root = [this] { return RulePaths().game_data_root; },
+            .start_game = [this] { StartFromLauncher(); },
+            .quit = [this] { QuitFromLauncher(); },
+        });
+    if (debug_overlay_) debug_overlay_->set_hidden(true);
+    return std::nullopt;
+  }
+
+  // the launcher's Play, once its "Starting" frame is drawn: the settings read
+  // at startup are taken again from what the launcher left, then the game starts
+  void StartFromLauncher() {
+    band3::settings::SnapshotStartupSettings();
+    band3::AddSettingArgs();
+    // what the launcher changed is read from here on, so nothing waits on a
+    // restart
+    rex::cvar::ClearPendingRestartFlags();
+    rex::PathConfig paths = FinalPaths();
+    // not inside the launcher's draw: resume builds the runtime and starts the
+    // native renderer on the same drawer
+    app_context().CallInUIThreadDeferred([this, paths = std::move(paths)] {
+      launcher_.reset();
+      if (debug_overlay_) debug_overlay_->set_hidden(false);
+      auto resume = std::move(resume_);
+      resume(paths);
+    });
+  }
+
+  void QuitFromLauncher() {
+    quit_confirmed_ = true;
+    app_context().CallInUIThreadDeferred([this] {
+      if (window()) window()->RequestClose();
+    });
+  }
+
+  // while the launcher has unsaved changes, closing the window asks first
+  bool OnWindowCloseRequested() override {
+    if (launcher_ && !quit_confirmed_ && launcher_->HasUnsavedChanges()) {
+      launcher_->RequestQuit();
+      return false;
+    }
+    return true;
   }
 
   // GPU emulation is a plugin (rexgpu-xenos) that the SDK leaves off unless
@@ -158,6 +302,8 @@ class Band3App : public rex::ReXApp {
   }
 
   void OnShutdown() override {
+    // before the ImGui drawer it's attached to goes
+    launcher_.reset();
     band3::http::StopServer();
     band3::test::StopServer();
     rex::ui::UnregisterBind("bind_instrument_lab");
@@ -179,14 +325,15 @@ class Band3App : public rex::ReXApp {
     if (drawer) {
       debug_overlay_ = std::make_unique<DebugOverlayDialog>(drawer);
       instrument_lab_ = std::make_unique<band3::input::InstrumentLabDialog>(drawer);
+      // F6 and F9 do nothing while the launcher is up: both need the game
       rex::ui::RegisterBind("bind_instrument_lab", "F6", "Toggle the Instrument Lab", [this] {
-        if (instrument_lab_) instrument_lab_->Toggle();
+        if (instrument_lab_ && !launcher_) instrument_lab_->Toggle();
       });
       native_view_ = std::make_unique<band3::render::NativeViewDialog>(
           drawer, [this] { return immediate_drawer(); });
       // F9: the SDK's achievements overlay has F7
       rex::ui::RegisterBind("bind_native_view", "F9", "Toggle the native view (experimental)", [this] {
-        if (native_view_) native_view_->Toggle();
+        if (native_view_ && !launcher_) native_view_->Toggle();
       });
       rex::ui::RegisterBind("bind_renderer", "F8",
                             "Switch between the emulated and the native renderer (experimental)", [] {

@@ -1,5 +1,6 @@
 // Checks band3's folder settings (src/paths.cpp): how a configured path is
-// resolved against the ini's folder, finding the ini, and folder lists.
+// resolved against the anchor, the anchor itself, finding the ini, folder
+// lists, and the path rule that picks the folders the game starts with.
 
 #include <doctest/doctest.h>
 #include <filesystem>
@@ -52,4 +53,94 @@ TEST_CASE("a folder list splits on bars and drops blanks") {
           std::vector<std::string>{"songs", "\\\\BISHOP\\Downloads\\rb", "D:/dlc"});
     // spaces and semicolons inside a folder's name are kept
     CHECK(SplitList("My Songs|a;b") == std::vector<std::string>{"My Songs", "a;b"});
+}
+
+TEST_CASE("the anchor is the ini's folder, or the exe's without an ini") {
+    const fs::path root = fs::temp_directory_path() / "band3_anchor_test";
+    fs::remove_all(root);
+    fs::create_directories(root / "install");
+    fs::create_directories(root / "exe");
+    CHECK(Anchor(root / "install" / "band3_config.ini", root / "exe") == root / "exe");
+    // the relative name LegacyIniPath falls back to, when no ini was found
+    CHECK(Anchor("band3_config.ini_missing", root / "exe") == root / "exe");
+    std::ofstream(root / "install" / "band3_config.ini") << "[game]\n";
+    CHECK(Anchor(root / "install" / "band3_config.ini", root / "exe") == root / "install");
+    // a folder of that name isn't an ini
+    fs::create_directories(root / "dir" / "band3_config.ini");
+    CHECK(Anchor(root / "dir" / "band3_config.ini", root / "exe") == root / "exe");
+    fs::remove_all(root);
+}
+
+namespace {
+
+// the SDK's folders with band3_config.ini's applied, as OnConfigurePaths leaves them
+PathRuleInputs RuleDefaults() {
+    PathRuleInputs in;
+    in.anchor = fs::temp_directory_path() / "band3";
+    in.defaults = {in.anchor / "assets", fs::temp_directory_path() / "home" / "band3",
+                   fs::temp_directory_path() / "home" / "band3" / "cache"};
+    return in;
+}
+
+}
+
+TEST_CASE("the path rule keeps the defaults when nothing is saved") {
+    auto in = RuleDefaults();
+    const Folders out = ApplyPathRule(in);
+    CHECK(out.game_data == in.defaults.game_data);
+    CHECK(out.user_data == in.defaults.user_data);
+    CHECK(out.cache == in.defaults.cache);
+}
+
+TEST_CASE("a saved folder replaces the default, relative to the anchor") {
+    auto in = RuleDefaults();
+    in.game_data = {"rb3", PathSource::kSaved};
+    const fs::path absolute = fs::temp_directory_path() / "elsewhere" / "rb3";
+    in.cache = {absolute.string(), PathSource::kSaved};
+    const Folders out = ApplyPathRule(in);
+    CHECK(out.game_data == in.anchor / "rb3");
+    CHECK(out.cache == absolute);
+    CHECK(out.user_data == in.defaults.user_data);
+}
+
+TEST_CASE("the command line and the environment keep the SDK's folders") {
+    auto in = RuleDefaults();
+    // the value is the cvar's; the defaults already hold what the SDK made of it
+    in.game_data = {"from_the_command_line", PathSource::kFixed};
+    in.user_data = {"from_the_environment", PathSource::kFixed};
+    const Folders out = ApplyPathRule(in);
+    CHECK(out.game_data == in.defaults.game_data);
+    CHECK(out.user_data == in.defaults.user_data);
+    CHECK(out.cache == in.defaults.cache);
+}
+
+TEST_CASE("an empty saved folder keeps the default") {
+    auto in = RuleDefaults();
+    in.game_data = {"", PathSource::kSaved};
+    CHECK(ApplyPathRule(in).game_data == in.defaults.game_data);
+}
+
+TEST_CASE("the cache follows a saved user data folder unless it's set somewhere") {
+    auto in = RuleDefaults();
+    in.user_data = {"user_data", PathSource::kSaved};
+    CHECK(ApplyPathRule(in).user_data == in.anchor / "user_data");
+    CHECK(ApplyPathRule(in).cache == in.anchor / "user_data" / "cache");
+
+    // an empty saved cache folder is no cache folder
+    in.cache = {"", PathSource::kSaved};
+    CHECK(ApplyPathRule(in).cache == in.anchor / "user_data" / "cache");
+
+    // the ini's cache folder is in the defaults, and stays
+    in.cache = {};
+    in.cache_in_ini = true;
+    CHECK(ApplyPathRule(in).cache == in.defaults.cache);
+
+    // so does the command line's
+    in.cache_in_ini = false;
+    in.cache = {"cli_cache", PathSource::kFixed};
+    CHECK(ApplyPathRule(in).cache == in.defaults.cache);
+
+    // and a saved one wins
+    in.cache = {"saved_cache", PathSource::kSaved};
+    CHECK(ApplyPathRule(in).cache == in.anchor / "saved_cache");
 }

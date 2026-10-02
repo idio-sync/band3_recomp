@@ -130,7 +130,7 @@ REXCVAR_DEFINE_BOOL(gold_on_all_difficulties, false, "Band3/Game",
 REXCVAR_DEFINE_STRING(content_folders, "songs", "Band3/Game",
     "Folders RB3 reads DLC and custom songs from (Windows for now), without installing them, "
     "separated by '|'. Subfolders count too. A relative folder is relative to "
-    "band3_config.ini's folder (or the working directory if there is no ini)")
+    "band3_config.ini's folder (or band3's own folder if there is no ini)")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 // Band3/MIDI drums
@@ -266,6 +266,19 @@ REXCVAR_DEFINE_BOOL(rb3e_mode, true, "Band3/Integrations",
     "mode, song lookups, and clearing the song cache and restarting after an update")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+// Band3/Launcher
+
+REXCVAR_DEFINE_BOOL(show_launcher, true, "Band3/Launcher",
+    "Show the launcher, band3's setup screen, before the game starts. Off, band3 starts "
+    "the game straight away; hold Shift as it starts, or start it with --launcher, to see "
+    "the launcher anyway")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(launcher, false, "Band3/Launcher",
+    "Show the launcher at this start whatever show_launcher says. Meant for the command "
+    "line (--launcher), e.g. in Steam's launch options; cleared once read, so \"Save to "
+    "config\" can't keep it");
+
 // Band3/Debug
 
 REXCVAR_DEFINE_BOOL(debug_overlay, true, "Band3/Debug",
@@ -387,7 +400,7 @@ void Track(TrackedString& tracked, std::string_view name) {
 
 }
 
-void Init() {
+void SnapshotStartupSettings() {
     g_startup = {
         .controller_type = REXCVAR_GET(controller_type),
         .rnd_sync = REXCVAR_GET(rnd_sync),
@@ -403,7 +416,9 @@ void Init() {
         .rb3e_mode = REXCVAR_GET(rb3e_mode),
         .native_camera_shake = REXCVAR_GET(native_camera_shake),
     };
+}
 
+void Init() {
     Track(g_forced_venue, "forced_venue");
     g_song_speed = REXCVAR_GET(song_speed);
     g_track_speed = REXCVAR_GET(track_speed);
