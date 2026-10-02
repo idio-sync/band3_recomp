@@ -79,8 +79,6 @@ bool ValidFileId(std::string_view file_id);
 // the file a download is saved as: the uploaded name with anything but
 // letters, digits, spaces and -_.() made '_', then '_' and the file ID
 std::string DownloadFileName(const Song& song);
-// the file ID of a DownloadFileName name; empty for any other name
-std::string FileIdOf(std::string_view file_name);
 
 struct Download {
     enum class State { kQueued, kDownloading, kDone, kFailed };

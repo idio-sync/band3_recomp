@@ -122,3 +122,21 @@ TEST_CASE("a subfolder that can't be listed is a problem, and the rest of its fo
     fs::remove_all(long_root);
 }
 #endif
+
+TEST_CASE("one file reads as a package when it's an RB3 one, whole") {
+    const fs::path root = fs::temp_directory_path() / "band3_read_package_test";
+    fs::remove_all(root);
+    Write(root / "Song", MakeHeader("CON ", 1, kRb3TitleId, 0x10, u"Song"));
+    Write(root / "Song_x.part", MakeHeader("CON ", 1, kRb3TitleId, 0x20, u"Coming"));
+    Write(root / "forza", MakeHeader("CON ", 2, 0x4D5307E6, 0x90, u"Car"));
+    Write(root / "short", std::vector<uint8_t>(16, 'x'));
+    const auto song = ReadPackage(root / "Song", kRb3TitleIds);
+    REQUIRE(song);
+    CHECK(song->path == root / "Song");
+    CHECK(song->header.display_name == u"Song");
+    CHECK(!ReadPackage(root / "Song_x.part", kRb3TitleIds));  // still downloading
+    CHECK(!ReadPackage(root / "forza", kRb3TitleIds));        // another game's
+    CHECK(!ReadPackage(root / "short", kRb3TitleIds));
+    CHECK(!ReadPackage(root / "missing", kRb3TitleIds));
+    fs::remove_all(root);
+}

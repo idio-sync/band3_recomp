@@ -67,13 +67,7 @@ FolderScan ScanFolder(const fs::path& folder, std::span<const uint32_t> title_id
             continue;
         }
         if (!entry.is_regular_file(ec)) continue;
-        if (entry.path().extension() == fs::path(kPartialSuffix)) continue;
-        std::vector<uint8_t> bytes(kHeaderBytes);
-        std::ifstream file(entry.path(), std::ios::binary);
-        if (!file.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(bytes.size()))) continue;
-        auto header = ParsePackageHeader(bytes);
-        if (!header || std::ranges::find(title_ids, header->title_id) == title_ids.end()) continue;
-        out.packages.push_back({entry.path(), std::move(*header)});
+        if (auto package = ReadPackage(entry.path(), title_ids)) out.packages.push_back(std::move(*package));
     }
     return out;
 }
@@ -102,6 +96,16 @@ std::optional<PackageHeader> ParsePackageHeader(std::span<const uint8_t> b) {
         h.display_name += c;
     }
     return h;
+}
+
+std::optional<Package> ReadPackage(const fs::path& path, std::span<const uint32_t> title_ids) {
+    if (path.extension() == fs::path(kPartialSuffix)) return std::nullopt;
+    std::vector<uint8_t> bytes(kHeaderBytes);
+    std::ifstream file(path, std::ios::binary);
+    if (!file.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(bytes.size()))) return std::nullopt;
+    auto header = ParsePackageHeader(bytes);
+    if (!header || std::ranges::find(title_ids, header->title_id) == title_ids.end()) return std::nullopt;
+    return Package{path, std::move(*header)};
 }
 
 std::vector<Package> ScanFolders(const std::vector<fs::path>& folders,

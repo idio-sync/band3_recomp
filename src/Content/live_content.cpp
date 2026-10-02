@@ -4,6 +4,8 @@
 #include <condition_variable>
 #include <deque>
 #include <map>
+#include <set>
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -35,8 +37,8 @@ struct Scan {
     std::deque<Package> packages;
     // packages by content ID (upper-case hex, as the headers give it)
     std::unordered_map<std::string, const Package*> by_id;
-    // rescans go one at a time
-    std::mutex rescan_mutex;
+    // the packages' files, so a file already listed isn't read again
+    std::set<std::filesystem::path> paths;
 };
 
 Scan& TheScan() {
@@ -46,6 +48,18 @@ Scan& TheScan() {
 
 // XN_LIVE_CONTENT_INSTALLED, which PlatformMgr::Poll turns into a ContentInstalledMsg
 constexpr uint32_t kXnLiveContentInstalled = 0x02000007;
+// band3 is closing: the kernel may be going, so nothing more is announced
+std::atomic<bool> g_stopping{false};
+
+// tells the game of packages it hasn't listed, as the console told it of
+// content it had installed: PlatformMgr passes it on as a ContentInstalledMsg,
+// which marks XboxContentMgr's content changed, so its next refresh lists it
+// again. Not with the scan's lock held, which the game's listings take inside
+// a kernel call.
+void Announce() {
+    if (g_stopping) return;
+    if (auto* kernel = REX_KERNEL_STATE()) kernel->BroadcastNotification(kXnLiveContentInstalled, 0);
+}
 
 std::mutex g_mutex;
 rex::filesystem::VirtualFileSystem* g_vfs = nullptr;
@@ -71,14 +85,21 @@ std::string Upper(std::string_view s) {
 
 void Finish(std::vector<Package> packages) {
     auto& scan = TheScan();
+    bool late;
     {
         std::lock_guard lock(scan.mutex);
         scan.packages.assign(std::make_move_iterator(packages.begin()),
                              std::make_move_iterator(packages.end()));
-        for (const auto& package : scan.packages) scan.by_id[package.header.content_id] = &package;
+        for (const auto& package : scan.packages) {
+            scan.by_id[package.header.content_id] = &package;
+            scan.paths.insert(package.path);
+        }
         scan.done = true;
+        late = scan.late && !scan.packages.empty();
     }
     scan.cv.notify_all();
+    // a listing gave the game none while the scan ran: it lists them again now
+    if (late) Announce();
 }
 
 #ifdef _WIN32
@@ -170,22 +191,29 @@ const Package* FindLivePackage(std::string_view file_name) {
     return it == scan.by_id.end() ? nullptr : it->second;
 }
 
-size_t RescanLiveContent() {
-#ifdef _WIN32
+size_t AddLivePackages(const std::vector<std::filesystem::path>& files) {
     auto& scan = TheScan();
-    std::lock_guard rescan(scan.rescan_mutex);
     {
-        // before the first scan is done, it finds them anyway
-        std::lock_guard lock(scan.mutex);
-        if (!scan.done) return 0;
+        // the first scan may not have read these yet, or may have missed them
+        std::unique_lock lock(scan.mutex);
+        scan.cv.wait(lock, [&] { return scan.done || g_stopping; });
+        if (g_stopping) return 0;
     }
-    std::string names;
-    std::vector<std::string> problems;
-    auto found = ScanFolders(Folders(REXCVAR_GET(content_folders), names), kRb3TitleIds, &problems);
+    std::vector<Package> found;
+    for (const auto& file : files) {
+        {
+            std::lock_guard lock(scan.mutex);
+            if (scan.paths.contains(file)) continue;
+        }
+        if (auto package = ReadPackage(file, kRb3TitleIds)) found.push_back(std::move(*package));
+    }
     size_t added = 0;
     {
         std::lock_guard lock(scan.mutex);
         for (auto& package : found) {
+            scan.paths.insert(package.path);
+            // another file of a package already listed (a copy, or a newer
+            // version): the game reads the one it has until the next launch
             if (scan.by_id.contains(package.header.content_id)) continue;
             REXLOG_INFO("content: found {} ({})", rex::path_to_utf8(package.path),
                         package.header.content_id);
@@ -194,19 +222,14 @@ size_t RescanLiveContent() {
             added++;
         }
     }
-    if (added) {
-        // as the console told the game of content it had installed: PlatformMgr
-        // passes it on as a ContentInstalledMsg, which marks XboxContentMgr's
-        // content changed, so its next StartRefresh lists it again. Outside the
-        // lock, which the game's listings take inside a kernel call.
-        REX_KERNEL_STATE()->BroadcastNotification(kXnLiveContentInstalled, 0);
-    }
+    if (added) Announce();
     return added;
-#else
-    return 0;
-#endif
 }
 
+void StopLiveContent() {
+    g_stopping = true;
+    TheScan().cv.notify_all();
+}
 bool MountLivePackage(const Package& package, std::string_view root_name) {
     // a package the SDK has open on this root goes first, as it does for CREATE_ALWAYS
     REX_KERNEL_STATE()->content_manager()->CloseContent(root_name);

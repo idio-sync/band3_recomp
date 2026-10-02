@@ -37,6 +37,11 @@ inline constexpr std::string_view kPartialSuffix = ".part";
 
 std::optional<PackageHeader> ParsePackageHeader(std::span<const uint8_t> bytes);
 
+// the file at path, if it's a package for one of title_ids (and not one still
+// downloading, kPartialSuffix)
+std::optional<Package> ReadPackage(const std::filesystem::path& path,
+                                   std::span<const uint32_t> title_ids);
+
 // every package for one of title_ids in folders and their subfolders (but not
 // files ending kPartialSuffix), one per content ID (the first found, in the folders' order); the folders are scanned
 // at once, a thread each. `problems` gets one line per folder or subfolder

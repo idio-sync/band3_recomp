@@ -102,6 +102,18 @@ TEST_CASE("only songs RhythmVerse hosts unzipped can be downloaded") {
     CHECK(result->songs[3].host == "rhythmverse.co");
 }
 
+TEST_CASE("a zipped upload is one whatever type its flag comes as") {
+    const auto result = ParseSearch(R"json({"status":"success","data":{"songs":[
+        {"data":{},"file":{"file_id":"a1","zippata":"1","download_url":"/download_file/u/a1/x"}},
+        {"data":{},"file":{"file_id":"a2","zippata":"0","download_url":"/download_file/u/a2/x"}},
+        {"data":{},"file":{"file_id":"a3","zippata":true,"download_url":"/download_file/u/a3/x"}}]}})json");
+    REQUIRE(result);
+    REQUIRE(result->songs.size() == 3);
+    CHECK(result->songs[0].download_url.empty());
+    CHECK(!result->songs[1].download_url.empty());
+    CHECK(result->songs[2].download_url.empty());
+}
+
 TEST_CASE("replies that aren't a successful search fail") {
     CHECK(!ParseSearch(""));
     CHECK(!ParseSearch("<html>Cloudflare</html>"));
@@ -194,11 +206,6 @@ TEST_CASE("a download's file name is its uploaded name made safe, then its file 
     song.file_name = std::string(100, 'n');
     CHECK(DownloadFileName(song) == std::string(60, 'n') + "_595481a7cbc158.68319817");
 
-    CHECK(FileIdOf(DownloadFileName(song)) == "595481a7cbc158.68319817");
-    CHECK(FileIdOf("my_song_abc.123") == "abc.123");
-    CHECK(FileIdOf("NoUnderscore").empty());
-    CHECK(FileIdOf("_leading").empty());
-    CHECK(FileIdOf("song_bad-id").empty());
 }
 
 TEST_CASE("search results are JSON for the page, saying what's downloadable and downloaded") {

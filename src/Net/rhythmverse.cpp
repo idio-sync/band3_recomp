@@ -84,7 +84,10 @@ std::optional<Song> ParseSong(const json::Value& entry) {
     const std::string url = !external.empty() ? external : download;
     const std::string host = HostOf(url);
     const bool hosted = !url.empty() && (host.empty() || host == "rhythmverse.co");
-    if (hosted && !file["zippata"].Bool()) {
+    // a bool, a number, or a string of one as PHP sends them
+    const json::Value& zip = file["zippata"];
+    const bool zipped = zip.Bool(false) || zip.Number(0) != 0;
+    if (hosted && !zipped) {
         song.download_url = Absolute(url);
     } else {
         song.host = hosted ? "rhythmverse.co" : host;
@@ -207,13 +210,6 @@ std::string DownloadFileName(const Song& song) {
     while (!name.empty() && (name.back() == '.' || name.back() == ' ')) name.pop_back();
     if (name.empty()) name = "song";
     return name + "_" + song.file_id;
-}
-
-std::string FileIdOf(std::string_view file_name) {
-    const size_t underscore = file_name.rfind('_');
-    if (underscore == std::string_view::npos || underscore == 0) return {};
-    const std::string_view id = file_name.substr(underscore + 1);
-    return ValidFileId(id) ? std::string(id) : std::string();
 }
 
 std::string FormatSearch(const SearchResult& result, const LocalSongs& local) {

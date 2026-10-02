@@ -815,6 +815,7 @@ async function download(s) {
       return;
     }
     rv.downloads.set(s.file_id, {file_id: s.file_id, title: s.title, state: "queued", received: 0, total: s.size});
+    waitingSince = null;
     refreshRow(s.file_id);
     pollDownloads();
   } catch (e) {
@@ -822,8 +823,11 @@ async function download(s) {
   }
 }
 
-// the downloads, every second while one's going
+// the downloads, every second while one's going, and every few while
+// downloaded songs wait for the game, for up to WAIT_FOR_GAME_MS
 let downloadsTimer = null;
+let waitingSince = null;
+const WAIT_FOR_GAME_MS = 10 * 60 * 1000;
 async function pollDownloads() {
   clearTimeout(downloadsTimer);
   try {
@@ -846,7 +850,8 @@ async function pollDownloads() {
     }
     const done = res.downloads.filter(d => d.state === "done");
     // in_library is null while the game's busy: still waiting, as far as anyone knows
-    const waiting = done.filter(d => !d.in_library).length;
+    // only songs with a song ID can be seen joining the game
+    const waiting = done.filter(d => d.song_id && !d.in_library).length;
     const songs = n => n === 1 ? "1 song" : n + " songs";
     $("rv-note").hidden = !done.length;
     $("rv-note").textContent = songs(done.length) + " downloaded to " + rv.folder + ". " + (waiting
@@ -855,12 +860,20 @@ async function pollDownloads() {
         "the game adds songs as it did ones from the store, when you're in the Music Library (or once the song that's playing is over)."
       : (done.length === 1 ? "It's" : "They're") + " in the game.");
     // downloading, every second; waiting for the game, every few
+    if (!waiting) waitingSince = null;
+    else if (waitingSince === null) waitingSince = Date.now();
     if (busy) downloadsTimer = setTimeout(pollDownloads, 1000);
-    else if (waiting) downloadsTimer = setTimeout(pollDownloads, 3000);
+    // not for ever: a song can wait on the game for a while, e.g. a long
+    // song playing, and the page's next download or reload asks again
+    else if (waiting && Date.now() - waitingSince < WAIT_FOR_GAME_MS) {
+      downloadsTimer = setTimeout(pollDownloads, 3000);
+    }
   } catch (e) {}
 }
 
 function setMode(next) {
+  // a search typed on the other tab isn't this one's
+  clearTimeout(searchTimer);
   searchText[mode] = $("search").value;
   mode = next;
   try { localStorage.setItem("band3.mode", mode); } catch (e) {}

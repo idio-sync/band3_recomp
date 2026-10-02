@@ -4,10 +4,12 @@
 #include <atomic>
 #include <chrono>
 #include <deque>
+#include <iterator>
 #include <mutex>
 #include <span>
 #include <thread>
 #include <unordered_map>
+#include <rex/filesystem.h>
 #include <rex/logging.h>
 #include "src/Content/live_content.h"
 #include "src/Content/package_scan.h"
@@ -36,6 +38,7 @@ constexpr std::chrono::seconds kListingAge{60};
 struct State {
     std::mutex mutex;
     std::unordered_map<std::string, Song> known;
+    std::deque<std::string> known_order;  // oldest first, for forgetting
     std::vector<Download> downloads;
     std::deque<std::string> queue;
     bool working = false;  // the download thread is running
@@ -43,6 +46,7 @@ struct State {
     // LocalFiles' listing, and when it was made; listings happen one at a time
     std::mutex files_mutex;
     std::set<std::pair<std::string, int64_t>> files;
+    std::set<fs::path> paths;  // the same files' paths
     std::chrono::steady_clock::time_point files_time;
     bool files_stale = true;
 };
@@ -50,11 +54,6 @@ struct State {
 State& TheState() {
     static State* state = new State;
     return *state;
-}
-
-std::string Utf8(const fs::path& path) {
-    const std::u8string text = path.u8string();
-    return std::string(text.begin(), text.end());
 }
 
 // the state's mutex held
@@ -85,11 +84,12 @@ void RemovePartials(const fs::path& folder) {
     }
 }
 
-std::string DownloadOne(const Song& song, const fs::path& folder) {
+// "" and the file it's in, or why not
+std::string DownloadOne(const Song& song, const fs::path& folder, fs::path& path) {
     std::error_code ec;
     fs::create_directories(folder, ec);
-    if (ec) return "couldn't make the folder " + Utf8(folder) + ": " + ec.message();
-    const fs::path path = folder / DownloadFileName(song);
+    if (ec) return "couldn't make the folder " + rex::path_to_utf8(folder) + ": " + ec.message();
+    path = folder / DownloadFileName(song);
     fs::path partial = path;
     partial += content::kPartialSuffix;
 
@@ -133,7 +133,8 @@ void Work() {
             if (Download* d = FindDownload(state, file_id)) d->state = Download::State::kDownloading;
         }
         REXLOG_INFO("RhythmVerse: downloading {} - {} ({})", song.artist, song.title, song.file_id);
-        const std::string error = DownloadOne(song, folder);
+        fs::path path;
+        const std::string error = DownloadOne(song, folder, path);
         if (error.empty()) {
             REXLOG_INFO("RhythmVerse: downloaded {} - {}", song.artist, song.title);
         } else {
@@ -150,8 +151,8 @@ void Work() {
                 d->error = error;
             }
         }
-        // for the game to take it in where it can (live_content.h)
-        if (error.empty()) content::RescanLiveContent();
+        // for the game to take it in (live_content.h)
+        if (error.empty()) content::AddLivePackages({path});
     }
 }
 
@@ -166,13 +167,23 @@ fs::path DownloadFolder() {
 void Remember(const std::vector<Song>& songs) {
     auto& state = TheState();
     std::lock_guard lock(state.mutex);
-    if (state.known.size() + songs.size() > kMaxRemembered) {
-        // the queued ones stay, since the download thread looks them up
-        std::unordered_map<std::string, Song> kept;
-        for (const auto& id : state.queue) kept.emplace(id, state.known.at(id));
-        state.known = std::move(kept);
+    for (const Song& song : songs) {
+        if (state.known.insert_or_assign(song.file_id, song).second) {
+            state.known_order.push_back(song.file_id);
+        }
     }
-    for (const Song& song : songs) state.known.insert_or_assign(song.file_id, song);
+    // the oldest go, so the page's latest results stay downloadable; queued
+    // ones stay, since the download thread looks them up
+    for (size_t tries = state.known_order.size();
+         state.known.size() > kMaxRemembered && tries > 0; tries--) {
+        std::string id = std::move(state.known_order.front());
+        state.known_order.pop_front();
+        if (std::ranges::find(state.queue, id) != state.queue.end()) {
+            state.known_order.push_back(std::move(id));
+            continue;
+        }
+        state.known.erase(id);
+    }
 }
 
 QueueResult QueueDownload(std::string_view file_id) {
@@ -224,6 +235,7 @@ std::set<std::pair<std::string, int64_t>> LocalFiles() {
     if (!state.files_stale && now - state.files_time < kListingAge) return state.files;
 
     std::set<std::pair<std::string, int64_t>> files;
+    std::set<fs::path> paths;
     for (const auto& entry : paths::SplitList(REXCVAR_GET(content_folders))) {
         std::error_code ec;
         // as the content scan does: symlinks and junctions aren't followed
@@ -235,18 +247,29 @@ std::set<std::pair<std::string, int64_t>> LocalFiles() {
             if (it->path().extension() == fs::path(content::kPartialSuffix)) continue;
             const uintmax_t size = it->file_size(file_ec);
             if (file_ec) continue;
-            files.emplace(LowerAscii(Utf8(it->path().filename())), static_cast<int64_t>(size));
+            files.emplace(LowerAscii(rex::path_to_utf8(it->path().filename())),
+                          static_cast<int64_t>(size));
+            paths.insert(it->path());
         }
     }
-    // files copied in by hand, or a first listing: songs among them the game
-    // doesn't have yet are found, and it takes them in (live_content.h)
-    if (files != state.files) std::thread([] { content::RescanLiveContent(); }).detach();
+    // files copied in by hand (or, at the first listing, since the content
+    // scan): the game takes in packages among them (live_content.h), which
+    // reads only the ones it doesn't know
+    std::vector<fs::path> added;
+    std::ranges::set_difference(paths, state.paths, std::back_inserter(added));
+    if (!added.empty()) {
+        std::thread([added = std::move(added)] { content::AddLivePackages(added); }).detach();
+    }
+    state.paths = std::move(paths);
     state.files = std::move(files);
     state.files_time = now;
     state.files_stale = false;
     return state.files;
 }
 
-void StopDownloads() { TheState().stopping = true; }
+void StopDownloads() {
+    TheState().stopping = true;
+    content::StopLiveContent();
+}
 
 }
