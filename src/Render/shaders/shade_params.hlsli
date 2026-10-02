@@ -57,6 +57,11 @@ static const uint kShadeDetailMap = 67108864u;
 // turns the mesh to the camera (shade.hlsli's Billboard), and its point
 // lights light it by their falloff alone, no N.L and no AO
 static const uint kShadeBillboard = 134217728u;
+// a movie's frame (scene_capture.h's IsMovie): the diffuse texture is its Y
+// plane, s2 (kShadeSpecMap) its cR and s3 (kShadeGlow) its cB, which
+// shade.hlsli's MovieRgb turns to RGB as the game's shader does; a plane the
+// backend doesn't have is neutral
+static const uint kShadeYuv = 268435456u;
 
 // Register names are the game shaders' (scene_capture.h's kShadeRegs), PS
 // unless VS is said.

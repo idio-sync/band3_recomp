@@ -385,6 +385,21 @@ inline LevelPlace PlaceLevel(const FetchLayout& l, const FormatInfo& info, uint3
     return p;
 }
 
+// The bytes from the base address that hold the base level, as DecodeLevel
+// reads them (whole 32x32-block tiles when tiled, whole rows when linear), or
+// 0 for a format not decoded
+inline uint32_t BaseLevelBytes(const uint32_t f[6]) {
+    const FetchLayout l = ReadFetchLayout(f);
+    FormatInfo info;
+    if (!GetFormatInfo(l.format, info)) return 0;
+    const LevelPlace p = PlaceLevel(l, info, 0);
+    const uint32_t blocks_x = p.x_blocks + (l.width + info.block - 1) / info.block;
+    const uint32_t blocks_y = p.y_blocks + (l.height + info.block - 1) / info.block;
+    if (l.tiled)
+        return AlignUp(std::max(p.pitch_blocks, blocks_x), 32) * AlignUp(blocks_y, 32) * info.bpb;
+    return p.row_bytes * blocks_y;
+}
+
 // Decodes level `level` (w x h texels) from src, where PlaceLevel says it is,
 // into out (w * h RGBA8, R in the low byte, swizzled as the fetch says)
 inline void DecodeLevel(const uint8_t* src, const FetchLayout& l, const FormatInfo& info,

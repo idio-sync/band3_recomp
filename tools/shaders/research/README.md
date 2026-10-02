@@ -14,6 +14,7 @@ microcode, that the native view's shading (`src/Render/shaders/shade.hlsli`) and
 | `hair3.py` | the hair family's model (wrap diffuse, two-colour strand highlight); `python hair3.py <hash>...` |
 | `vs.py` | setup helpers for running vertex shaders in xsim |
 | `crowd.py` | the crowd's billboards (BILLBOARD, option bit 25): their vertex shaders' turn to the camera and light, and their pixel shader; `python crowd.py` checks the model against the microcode |
+| `movie.py` | the movie's pixel shader (ShaderType 11): a Bink frame's Y, cR and cB planes to RGB, which `shade.hlsli`'s `MovieRgb` is; `python movie.py` checks the model against the microcode, `--cases` prints the cases `tests/shade_model_test.cpp` checks |
 | `lit.py`, `vlit.py` | find each dumped shader's literal constants (c240-c255, which the disassembly leaves out) in the game's shader blobs and write `lits.json` |
 | `gen_shade_cases.py` | prints `kCases` in `tests/shade_model_test.cpp` from the three models |
 | `post/check_post.py` | checks models of the post-processing pixel shaders (DOF, bloom, glare, the spotlights' term, bright pass, downsample, blur kernels, glare's pass over bloom's level 0) against their microcode, sample positions included; exits 1 on a mismatch |

@@ -38,8 +38,10 @@ static_assert(sizeof(ShadeParams) == 42 * 16, "ShadeParams is float4s only, as H
 // texture the backend samples. The maps (specular, glow, normal, detail) are
 // flagged when the option word samples them and the capture decoded them, the
 // normal maps only where the geometry has its tangents. A DrawRect quad that
-// DxRnd drew with a shader of its own is its texture times its vertex colour;
-// a draw into a texture keeps its alpha (no PSEUDO_HDR luminance).
+// DxRnd drew with a shader of its own is its texture times its vertex colour,
+// but a movie's frame (IsMovie), its planes to RGB (kShadeYuv, with the
+// chroma planes as the specular and glow maps); a draw into a texture keeps
+// its alpha (no PSEUDO_HDR luminance).
 void PackShade(const DrawItem& item, const ShadeState* state, const RasterOptions& options,
                bool textured, ShadeParams& out);
 

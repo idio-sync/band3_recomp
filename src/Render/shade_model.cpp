@@ -209,9 +209,17 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     sp.alpha_cut.x = float(it.alpha_threshold);
     sp.texgen[0] = {1, 0, 0, 0};
     sp.texgen[1] = {0, 1, 0, 0};
+    // a movie's frame: its three planes to RGB (MovieRgb), the chroma planes
+    // read as the maps where the capture has them (not before it kept them)
+    if (IsMovie(it)) {
+        f |= kShadeYuv;
+        if (s && o.textures && s->maps[kMapSpecular] && s->maps[kMapGlow])
+            f |= kShadeSpecMap | kShadeGlow;
+        return;
+    }
     if (it.rect_shader >= 0 && (!s || s->shader_type != kStandardShader)) {
         // a DrawRect quad drawn with one of DxRnd's own shaders (blurs,
-        // downsamples, the movie's) or no material: the texture times the
+        // downsamples) or no material: the texture times the
         // colour DrawRect gave its vertices. Those with a material's shader
         // (the outfit layers, TexBlender) are shaded as it says, below.
         sp.color = {1, 1, 1, 1};

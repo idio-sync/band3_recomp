@@ -311,6 +311,20 @@ uint32_t Fnv(const uint8_t* p, size_t n, uint32_t h = 2166136261u) {
     return h;
 }
 
+uint64_t HashBytes(const void* p, size_t n) {
+    const auto* b = static_cast<const uint8_t*>(p);
+    uint64_t h = 1469598103934665603ull;
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        uint64_t w;
+        std::memcpy(&w, b + i, 8);
+        h = (h ^ w) * 1099511628211ull;
+        h ^= h >> 29;
+    }
+    for (; i < n; i++) h = (h ^ b[i]) * 1099511628211ull;
+    return h;
+}
+
 // RndMesh::Vert in guest memory
 Vertex DecodeCpuVert(const Guest& g, uint32_t a) {
     Vertex v{};
@@ -651,13 +665,25 @@ std::shared_ptr<const Geometry> CaptureGeometry(const Guest& g, uint32_t geom,
 }
 
 // the texture fetch constant `f` describes, decoded again only when it or its
-// first bytes changed; empty rgba if its format isn't decoded
+// first bytes changed, or with `whole` any of its base level's: a movie's
+// plane, which the CPU writes in place (Movie.cpp's BeginFrame, into one of
+// four buffers in turn), and whose first rows are often the same black from
+// one frame to the next. Not every texture: hashing each of 256 KB or less
+// whole cost the capture 5-11 ms a frame in the music library (30 MB: each
+// draw's), a movie's planes cost it 0.07 ms there (384 KB; 1.4 MB at
+// 1280x720). Empty rgba if its format isn't decoded.
 std::shared_ptr<const Texture> DecodeCached(const Guest& g, const uint32_t f[6], uint32_t where,
                                             std::unordered_map<uint32_t, TexEntry>& cache,
-                                            FrameCapture& fc) {
+                                            FrameCapture& fc, bool whole = false) {
     const uint32_t base_address = f[1] & 0xfffff000u;
     const uint8_t* src = base_address ? GpuHost(g, base_address) : nullptr;
-    const uint64_t key = Key({f[0], f[1], f[2], f[3], f[5], src ? Fnv(src, 64) : 0});
+    uint64_t texels = 0;
+    if (src) {
+        const uint32_t bytes = guest_format::BaseLevelBytes(f);
+        texels = whole && bytes ? HashBytes(src, bytes) : Fnv(src, 64);
+    }
+    const uint64_t key =
+        Key({f[0], f[1], f[2], f[3], f[5], uint32_t(texels), uint32_t(texels >> 32)});
     auto it = cache.find(where);
     if (it != cache.end() && it->second.key == key) {
         fc.tex_cached++;
@@ -668,13 +694,17 @@ std::shared_ptr<const Texture> DecodeCached(const Guest& g, const uint32_t f[6],
     return tex;
 }
 
+// RndTex::Type's kMovie bit: a movie's plane, which the CPU writes
+constexpr uint32_t kTexTypeMovie = 4;
+
 // a loaded texture's pixels, decoded (or null, counted, in a format that isn't)
 std::shared_ptr<const Texture> GuestPixels(const Guest& g, uint32_t tex_obj, FrameCapture& fc) {
     const uint32_t d3d = g.U32(tex_obj + kDxTex_Texture);
     if (!d3d) return nullptr;
     uint32_t f[6];
     for (int i = 0; i < 6; i++) f[i] = g.U32(d3d + kD3DBaseTexture_Fetch + i * 4);
-    std::shared_ptr<const Texture> tex = DecodeCached(g, f, d3d, S().texs, fc);
+    const bool movie = (g.U32(tex_obj + kTex_Type) & kTexTypeMovie) != 0;
+    std::shared_ptr<const Texture> tex = DecodeCached(g, f, d3d, S().texs, fc, movie);
     if (tex->rgba.empty()) {
         fc.untextured_format++;
         return nullptr;
@@ -868,30 +898,17 @@ bool MapSampled(const ShadeInputs& in, int map) {
     }
 }
 
-uint64_t HashBytes(const void* p, size_t n) {
-    const auto* b = static_cast<const uint8_t*>(p);
-    uint64_t h = 1469598103934665603ull;
-    size_t i = 0;
-    for (; i + 8 <= n; i += 8) {
-        uint64_t w;
-        std::memcpy(&w, b + i, 8);
-        h = (h ^ w) * 1099511628211ull;
-        h ^= h >> 29;
-    }
-    for (; i < n; i++) h = (h ^ b[i]) * 1099511628211ull;
-    return h;
-}
-
 // a 2D map the device has bound, decoded (and counted), or null for a cube or
-// a format not decoded
+// a format not decoded; `whole` a movie's plane (DecodeCached)
 std::shared_ptr<const Texture> CaptureMap(const Guest& g, const uint32_t f[6],
-                                          FrameCapture& fc) {
+                                          FrameCapture& fc, bool whole = false) {
     const uint32_t dimension = (f[5] >> 9) & 3;
     if (dimension == 3) {
         fc.maps_cube++;
         return nullptr;
     }
-    std::shared_ptr<const Texture> tex = DecodeCached(g, f, f[1] & 0xfffff000u, S().map_texs, fc);
+    std::shared_ptr<const Texture> tex =
+        DecodeCached(g, f, f[1] & 0xfffff000u, S().map_texs, fc, whole);
     if (!tex || tex->rgba.empty()) {
         fc.maps_other_format++;
         return nullptr;
@@ -977,14 +994,18 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
     auto fetch = [&](uint32_t sampler, uint32_t out[6]) {
         for (int i = 0; i < 6; i++) out[i] = g.U32(dev + kDev_TextureFetch + sampler * 24 + i * 4);
     };
-    if (in.Option(shader_opt::kDiffuseMap)) fetch(0, in.fetch_diffuse);
+    // the movie's shader samples its three planes whatever the option word
+    // (0): Y s0, cR s2, cB s3 (IsMovie)
+    const bool movie = in.shader_type == kMovieShader;
+    if (in.Option(shader_opt::kDiffuseMap) || movie) fetch(0, in.fetch_diffuse);
     for (int m = 0; m < kNumShadeMaps; m++) {
         if (kMat_Map[m] && mat) {
             in.mat_maps[m] = g.U32(mat + kMat_Map[m]);
             // RndCubeTex isn't a DxTex
             if (m != kMapEnviron) in.mat_map_base[m] = TexBase(g, in.mat_maps[m]);
         }
-        if (MapSampled(in, m)) fetch(kShadeMapSampler[m], in.fetch[m]);
+        if (MapSampled(in, m) || (movie && (m == kMapSpecular || m == kMapGlow)))
+            fetch(kShadeMapSampler[m], in.fetch[m]);
     }
 
     // s5, s1 or s14 bound to a texture a pass draws (the shadow map,
@@ -1008,7 +1029,7 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
         for (int m = 0; m < kNumShadeMaps; m++)
             st.samplers[m] = guest_format::DecodeSampler(st.fetch[m], aniso);
         for (int m = 0; m < kNumShadeMaps; m++)
-            if (st.fetch[m][1] && !st.maps[m]) st.maps[m] = CaptureMap(g, st.fetch[m], fc);
+            if (st.fetch[m][1] && !st.maps[m]) st.maps[m] = CaptureMap(g, st.fetch[m], fc, movie);
     });
 }
 

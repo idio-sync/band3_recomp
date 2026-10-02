@@ -349,6 +349,17 @@ inline bool Culls(uint8_t cull, bool clockwise) {
 // post-processed picture copied to the screen, which post_model.h redoes
 inline constexpr int32_t kRectShaderPostCopy = 16;
 
+// A Bink movie's frame: Movie::Impl::Draw (rb3-xenon movie/Movie.cpp) gives
+// its material the frame's three planes, Y as the diffuse texture (s0), cR as
+// the specular map (s2) and cB as the emissive map (s3), each 8 bits, and
+// draws a DrawRect quad with ShaderType 11 (kMovieShader), into a TexMovie's
+// texture (from Rnd::DrawPreClear) or the back buffer (the intro's
+// MoviePanel). Its shade state keeps the three fetch constants and the two
+// chroma planes as kMapSpecular and kMapGlow, whatever the option word (0);
+// the shading turns them to RGB (shaders/shade.hlsli's MovieRgb).
+inline constexpr int32_t kMovieShader = 11;
+inline bool IsMovie(const DrawItem& d) { return d.rect_shader == kMovieShader; }
+
 // What the renderers draw into the back buffer: its mesh draws and its
 // DrawRect quads (flares, RndScreenMask's, the movie), but the post copy;
 // texture passes are drawn too, the quads in them as well (soft_raster.h's

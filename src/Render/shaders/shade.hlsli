@@ -424,6 +424,19 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, floa
     return l;
 }
 
+// A movie's frame, as its pixel shader (22F426E8D3A1F1B5, ShaderType 11)
+// turns its planes' texels (each 0..1) to RGB: Bink's BT.601 matrix with its
+// offsets folded in, the shader's literals (c254, c255) exactly, opaque. It
+// reads neither the material's colour nor the vertex colour, and doesn't
+// clamp (the target does). tools/shaders/research/movie.py checks this
+// against the microcode.
+float4 MovieRgb(float y, float cr, float cb) {
+    const float a = 1.16412353515625f * y;
+    return float4(a + 1.595794677734375f * cr - 0.8706550598144531f,
+                  a - 0.8134765625f * cr - 0.391448974609375f * cb + 0.5297050476074219f,
+                  a + 2.017822265625f * cb - 1.0816688537597656f, 1.0f);
+}
+
 // One pixel's colour and alpha. p is its world position, n its interpolated
 // world normal and u and b its tangent and bitangent (TextureFrame's and
 // Bitangent's, read with kShadeNormalMap), vc its vertex colour, depth its
@@ -439,6 +452,12 @@ float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 u, float3
                   float4 behind, float depth, float2 ao_sh, float4 proj, float4 gobo, float lit,
                   Lighting vertex) {
     const uint f = sp.flags.x;
+    if ((f & kShadeYuv) != 0u) {
+        // a chroma plane the backend doesn't have is Bink's neutral, 128
+        const float neutral = 128.0f / 255.0f;
+        return MovieRgb(texel.x, (f & kShadeSpecMap) != 0u ? spec_map.x : neutral,
+                        (f & kShadeGlow) != 0u ? glow.x : neutral);
+    }
     // REFRACT_WORLD's pixel shader (FC53125B5EB914F8): the texture's rgb
     // times the picture behind it, alpha the texture's. The game nudges where
     // it reads the picture by a second map (s1 * 2 - 1, times c119.w); that's

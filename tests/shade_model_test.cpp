@@ -11,8 +11,9 @@
 // PackShade's reading of the option word, the particle quad's corners (scene_capture.h's
 // ParticleCorner) against the particle VS's instructions, a crowd billboard's
 // placement and light against what the billboard VS gives (run in xsim.py),
-// and a soft particle's fade (SoftFade) against the soft particle pixel
-// shader's maths.
+// a soft particle's fade (SoftFade) against the soft particle pixel
+// shader's maths, and a movie's planes to RGB against movie.py's model of
+// the movie's pixel shader.
 
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -338,6 +339,64 @@ TEST_CASE("unlit materials are colour, ambient, vertex colour if prelit, and tex
     sp.flags.x &= ~kShadeRefract;
     ShadePixelCpu(sp, p, n, vc, tex, one, zero, behind, 1.0f, one, zero, zero, out);
     CHECK(out[0] == doctest::Approx(0.25f));
+}
+
+TEST_CASE("a movie's planes to RGB as its pixel shader does, opaque, whatever the colours") {
+    // python tools/shaders/research/movie.py --cases: the 8-bit Y, cR, cB and
+    // what the model (checked against 22F426E8D3A1F1B5's microcode) gives
+    struct MovieCase {
+        int y, cr, cb;
+        float rgba[4];
+    };
+    const MovieCase cases[] = {
+        {16, 128, 128, {0.003414f, -0.002077f, 0.004242f, 1.0f}},
+        {235, 128, 128, {1.003191f, 0.997699f, 1.004019f, 1.0f}},
+        {126, 128, 128, {0.505585f, 0.500094f, 0.506413f, 1.0f}},
+        {82, 240, 90, {1.005615f, 0.000267f, 0.004849f, 1.0f}},
+        {145, 34, 54, {0.004070f, 1.000299f, 0.007587f, 1.0f}},
+        {41, 110, 240, {0.004900f, -0.002456f, 1.004631f, 1.0f}},
+        {200, 200, 30, {1.293987f, 0.758669f, 0.068760f, 1.0f}},
+    };
+    DrawItem it{};
+    it.rect_shader = kMovieShader;
+    ShadeState s{};
+    s.shader_type = kMovieShader;
+    s.maps[kMapSpecular] = std::make_shared<Texture>();
+    s.maps[kMapGlow] = std::make_shared<Texture>();
+    RasterOptions o;
+    ShadeParams sp;
+    PackShade(it, &s, o, true, sp);
+    REQUIRE((sp.flags.x & kShadeYuv) != 0u);
+    REQUIRE((sp.flags.x & (kShadeSpecMap | kShadeGlow)) == (kShadeSpecMap | kShadeGlow));
+    // the material's colour and the vertex colour (DrawRect's, uninitialised
+    // for a movie) count for nothing
+    sp.color = {0.25f, 0.5f, 0.75f, 0.5f};
+    const float p[3] = {0, 0, 0}, n[3] = {0, 0, 1}, vc[4] = {0, 0, 0, 0};
+    const float one[4] = {1, 1, 1, 1}, zero[4] = {0, 0, 0, 0};
+    for (const MovieCase& c : cases) {
+        CAPTURE(c.y);
+        CAPTURE(c.cr);
+        CAPTURE(c.cb);
+        // each plane's texel as an 8-bit k_8 decodes: its value in every channel
+        const float y = c.y / 255.0f, cr = c.cr / 255.0f, cb = c.cb / 255.0f;
+        const float tex[4] = {y, y, y, y}, spec[4] = {cr, cr, cr, cr}, glow[4] = {cb, cb, cb, cb};
+        float out[4];
+        ShadePixelCpu(sp, p, n, vc, tex, spec, glow, one, 1.0f, one, zero, zero, out);
+        for (int i = 0; i < 4; i++) CHECK(out[i] == doctest::Approx(c.rgba[i]).epsilon(1e-5));
+    }
+
+    // without its chroma planes (a capture from before they were kept) it's
+    // the Y plane alone, grey: cR and cB neutral
+    PackShade(it, nullptr, o, true, sp);
+    CHECK((sp.flags.x & kShadeYuv) != 0u);
+    CHECK((sp.flags.x & (kShadeSpecMap | kShadeGlow)) == 0u);
+    const float grey[4] = {126 / 255.0f, 0, 0, 1};
+    float out[4];
+    ShadePixelCpu(sp, p, n, vc, grey, one, zero, one, 1.0f, one, zero, zero, out);
+    CHECK(out[0] == doctest::Approx(0.505585f).epsilon(1e-5));
+    CHECK(out[1] == doctest::Approx(0.500094f).epsilon(1e-5));
+    CHECK(out[2] == doctest::Approx(0.506413f).epsilon(1e-5));
+    CHECK(out[3] == 1.0f);
 }
 
 TEST_CASE("SH occlusion: light 0's visibility over a bare surface's, from the vertex colour") {
