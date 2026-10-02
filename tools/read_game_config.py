@@ -48,9 +48,11 @@ def decrypt(data):
 
 
 class Ark:
-    def __init__(self, gen=GEN):
+    # header is main_xbox.hdr, or patch_xbox.hdr for the title update's archive,
+    # whose files the game takes over the main one's
+    def __init__(self, gen=GEN, header='main_xbox.hdr'):
         self.gen = gen
-        with open(os.path.join(gen, 'main_xbox.hdr'), 'rb') as f:
+        with open(os.path.join(gen, header), 'rb') as f:
             h = decrypt(f.read())
         self.pos = 0
 
@@ -101,6 +103,39 @@ class Ark:
         with open(os.path.join(self.gen, os.path.basename(self.part_names[part])), 'rb') as f:
             f.seek(offset)
             return f.read(size)
+
+
+def parse_dtb(data):
+    """A decrypted .dtb's DataArrays as nested lists: strings, symbols and the
+    directives' names as str (Latin-1), numbers as int or float."""
+    pos = 1     # version byte
+
+    def take(fmt):
+        nonlocal pos
+        v = struct.unpack_from(fmt, data, pos)[0]
+        pos += struct.calcsize(fmt)
+        return v
+
+    def array():
+        nonlocal pos
+        count = take('<h')
+        take('<i')      # line number
+        items = []
+        for _ in range(count):
+            kind = take('<i')
+            if kind in BRACKETS:
+                items.append(array())
+            elif kind == FLOAT:
+                items.append(take('<f'))
+            elif kind in (INT, UNHANDLED, ELSE, ENDIF):
+                items.append(take('<i'))
+            else:
+                n = take('<i')
+                items.append(data[pos:pos + n].decode('latin1'))
+                pos += n
+        return items
+
+    return array()
 
 
 class DtbPrinter:

@@ -332,6 +332,11 @@ band3 adds one of its own, which RB3E doesn't have:
 |---|---|
 | `/album_art?shortname=<name>` | the song's album art as a JPEG, read as the game reads it for the Music Library (from the ARK, or a loose file that replaces it); 404 when the song has none, or no song has that shortname |
 
+To work on the page without the game, `python tools/web_preview.py` serves it at
+http://127.0.0.1:21080/ with the songs and album art read from the game data. The page
+comes from `src/Net/http_page.h` on every load, so an edit shows on a refresh, without a
+rebuild; **Select** can't work there.
+
 `http_allow_cors` adds `Access-Control-Allow-Origin: *`, for pages served from somewhere
 else. Requests wait for the game's next frame, and get a 503 if it doesn't come within 5 s.
 Files at `game:\` are found as the game finds them: in the `game` folder of the user data
