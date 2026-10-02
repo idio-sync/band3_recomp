@@ -48,6 +48,13 @@ std::string ReadDmi(const char* name) {
 
 }
 
+std::optional<std::string> Preset(std::string_view cvar) {
+    for (const auto& d : kDeckDefaults) {
+        if (cvar == d.cvar) return d.value;
+    }
+    return std::nullopt;
+}
+
 bool IsSteamDeck() {
     const char* env = std::getenv("SteamDeck");
 #ifdef _WIN32

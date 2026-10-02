@@ -99,6 +99,19 @@ INIReader ReadIni() {
     return INIReader(s.c_str(), s.size());
 }
 
+// what the ini gives s's cvar, as it's set; nullopt where the ini leaves it unset
+std::optional<std::string> IniValue(const INIReader& reader, const IniSetting& s) {
+    std::string value = Unquote(reader.Get(s.section, s.key, ""));
+    // an empty value is how the ini leaves a setting at its default
+    if (value.empty() || (s.zero_is_unset && value == "0")) return std::nullopt;
+    // the ini takes inih's true/yes/on/1 spellings
+    const auto* info = rex::cvar::GetFlagInfo(s.cvar);
+    if (info && info->type == rex::cvar::FlagType::Boolean) {
+        value = reader.GetBoolean(s.section, s.key, false) ? "true" : "false";
+    }
+    return value;
+}
+
 }
 
 const std::filesystem::path& LegacyIniPath() {
@@ -128,6 +141,13 @@ std::string ReadIniGameDataRoot() {
     return root.empty() ? "assets" : root;
 }
 
+std::optional<std::string> LegacyIniValue(std::string_view cvar) {
+    for (const auto& s : kIniSettings) {
+        if (cvar == s.cvar) return IniValue(ReadIni(), s);
+    }
+    return std::nullopt;
+}
+
 void ApplyLegacyIni() {
     const std::string path = rex::path_to_utf8(LegacyIniPath());
     std::error_code ec;
@@ -144,9 +164,8 @@ void ApplyLegacyIni() {
     int applied = 0;
     int overridden = 0;
     for (const auto& s : kIniSettings) {
-        std::string value = Unquote(reader.Get(s.section, s.key, ""));
-        // an empty value is how the ini leaves a setting at its default
-        if (value.empty() || (s.zero_is_unset && value == "0")) continue;
+        const auto value = IniValue(reader, s);
+        if (!value) continue;
 
         // band3.toml, the environment, the command line and the Steam Deck
         // defaults all win over the ini
@@ -160,14 +179,9 @@ void ApplyLegacyIni() {
             REXLOG_WARN("{}: [{}] {} has no matching setting '{}'", path, s.section, s.key, s.cvar);
             continue;
         }
-        // the ini takes inih's true/yes/on/1 spellings
-        if (info->type == rex::cvar::FlagType::Boolean) {
-            value = reader.GetBoolean(s.section, s.key, false) ? "true" : "false";
-        }
-
-        if (!rex::cvar::SetFlagByName(s.cvar, value)) {
+        if (!rex::cvar::SetFlagByName(s.cvar, *value)) {
             REXLOG_WARN("{}: [{}] {} = {} is not valid, keeping {}", path, s.section, s.key,
-                        value, rex::cvar::GetFlagByName(s.cvar));
+                        *value, rex::cvar::GetFlagByName(s.cvar));
             continue;
         }
         applied++;

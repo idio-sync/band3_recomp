@@ -1,6 +1,8 @@
 #pragma once
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // band3_config.ini predates the cvars in settings.h. It is still read, but only
@@ -26,6 +28,11 @@ std::string ReadIniString(const char* key);
 // the ini's game data root, or "assets"; paths are fixed before the other
 // settings load, so this one is read on its own
 std::string ReadIniGameDataRoot();
+
+// the value the ini gives `cvar`, as ApplyLegacyIni would set it (unquoted,
+// inih's boolean spellings as true/false); nullopt where the ini leaves it
+// unset, or has no key for it
+std::optional<std::string> LegacyIniValue(std::string_view cvar);
 
 // copies the ini's values onto the cvars nothing else has set
 void ApplyLegacyIni();

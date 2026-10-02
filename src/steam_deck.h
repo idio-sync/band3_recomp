@@ -1,4 +1,6 @@
 #pragma once
+#include <optional>
+#include <string>
 #include <string_view>
 
 // Settings that suit a Steam Deck, applied at startup when band3 finds itself on
@@ -20,6 +22,10 @@ inline bool LooksLikeSteamDeck(std::string_view steam_deck_env, std::string_view
 
 // whether this is a Steam Deck, going by the above
 bool IsSteamDeck();
+
+// the value steam_deck_defaults gives `cvar` on a Deck, if it's one of the
+// presets; ApplyDefaults and the launcher's defaults both read them here
+std::optional<std::string> Preset(std::string_view cvar);
 
 // Call after band3.toml, the environment and the command line are applied and
 // before band3_config.ini is.
