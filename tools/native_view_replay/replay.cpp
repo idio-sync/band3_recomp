@@ -177,6 +177,7 @@
 #include "src/Render/post_params.h"
 #include "src/Render/shade_model.h"
 #include "src/Render/soft_raster.h"
+#include "tools/native_view_replay/free_cam.h"
 
 using namespace band3::render;
 
@@ -1064,6 +1065,63 @@ void PrintCameras(const FrameCapture& fc) {
     }
 }
 
+// The free-camera experiment (free_cam.h): moves the world camera (the back
+// buffer's camera with the most mesh draws before post-processing) to eye,
+// looking at `at`, its projection kept but `wider` (or, negative, the
+// horizontal field of view in degrees). Every draw drawn with
+// its view_proj moves with it, in any pass (the spotlights' depth volume and
+// the soft particles' draws see the world through it too), and their shades'
+// eye. world_only empties the back buffer's other cameras' draws (the
+// track, the HUD), which stay where the game's camera put them otherwise.
+void ApplyFreeCam(FrameCapture& fc, bool move, const float eye[3], const float at[3], float wider,
+                  bool world_only) {
+    std::map<uint32_t, int> counts;
+    std::map<uint32_t, Mat4> vps;
+    for (size_t i = 0; i < fc.draws.size(); i++) {
+        const DrawItem& d = fc.draws[i];
+        if (!DrawnToBackBuffer(d)) continue;
+        if (fc.post_boundary != FrameCapture::kNoPost && i >= fc.post_boundary) continue;
+        counts[d.cam]++;
+        vps[d.cam] = d.view_proj;
+    }
+    uint32_t cam = 0;
+    int best = 0;
+    for (auto [c, n] : counts)
+        if (n > best) cam = c, best = n;
+    freecam::Pose pose{};
+    Mat4 proj{};
+    if (!best || !freecam::Decompose(vps[cam], pose, proj)) {
+        std::fprintf(stderr, "free cam: no perspective world camera\n");
+        return;
+    }
+    std::printf("free cam: world cam %08X eye %.1f %.1f %.1f fwd %.3f %.3f %.3f hfov %.1f\n", cam,
+                pose.eye[0], pose.eye[1], pose.eye[2], pose.fwd[0], pose.fwd[1], pose.fwd[2],
+                2 * std::atan(1 / proj.m[0][0]) * 57.29578f);
+    const Mat4 old_vp = vps[cam];
+    const freecam::Pose np = freecam::LookAt(eye, at);
+    // a negative `wider` is the horizontal field of view wanted, in degrees
+    if (wider < 0) wider = std::tan(-wider / 2 / 57.29578f) * proj.m[0][0];
+    const Mat4 new_vp = freecam::Mul(freecam::View(np), freecam::Widen(proj, wider));
+    auto empty = std::make_shared<Geometry>();
+    int moved = 0, emptied = 0;
+    std::vector<bool> moved_shade(fc.shades.size());
+    for (DrawItem& d : fc.draws) {
+        if (move && std::memcmp(&d.view_proj, &old_vp, sizeof(Mat4)) == 0) {
+            d.view_proj = new_vp;
+            if (d.shade >= 0) moved_shade[d.shade] = true;
+            moved++;
+        } else if (world_only && DrawnToBackBuffer(d) && d.cam != cam) {
+            d.geom = empty;
+            emptied++;
+        }
+    }
+    for (size_t s = 0; s < fc.shades.size(); s++)
+        if (moved_shade[s])
+            for (int c = 0; c < 3; c++) fc.shades[s].eye[c] = eye[c];
+    std::printf("free cam: %d draws moved to eye %.1f %.1f %.1f, %d other cameras' draws left out\n",
+                moved, eye[0], eye[1], eye[2], emptied);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1089,6 +1147,8 @@ int main(int argc, char** argv) {
     long cam_filter = -1;
     bool sized = false;
     float scale = 0;  // --scale's, 0 none
+    bool free_cam = false, world_only = false;
+    float free_eye[3] = {}, free_at[3] = {}, free_wider = 1;
     for (int i = 3; i < argc; i++) {
         const std::string a = argv[i];
         if (a == "--transpose") transpose = true;
@@ -1195,7 +1255,15 @@ int main(int argc, char** argv) {
                      : v == "depth" ? RasterView::kSceneDepth
                                     : RasterView::kFinal;
         }
+        else if (a == "--free-eye" && i + 1 < argc)
+            free_cam = std::sscanf(argv[++i], "%f,%f,%f", &free_eye[0], &free_eye[1], &free_eye[2]) == 3;
+        else if (a == "--free-at" && i + 1 < argc)
+            std::sscanf(argv[++i], "%f,%f,%f", &free_at[0], &free_at[1], &free_at[2]);
+        else if (a == "--free-wider" && i + 1 < argc) free_wider = std::strtof(argv[++i], nullptr);
+        else if (a == "--free-hfov" && i + 1 < argc) free_wider = -std::strtof(argv[++i], nullptr);
+        else if (a == "--world-only") world_only = true;
     }
+    if (free_cam || world_only) ApplyFreeCam(*fc, free_cam, free_eye, free_at, free_wider, world_only);
 
     if (scale) {
         if (!(scale > 0) || scale > 8) {
