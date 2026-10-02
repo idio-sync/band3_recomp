@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -15,9 +16,12 @@
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xam/content_manager.h>
+#include "src/Game/Script.h"
+#include "src/Test/game_state.h"
 #include "src/config.h"
 #include "src/paths.h"
 #include "src/settings.h"
+#include "content_refresh.h"
 
 namespace band3::content {
 
@@ -30,9 +34,16 @@ struct Scan {
     std::condition_variable cv;
     bool done = false;
     bool late = false;  // the listings' wait ran out first
-    std::vector<Package> packages;
+    // only ever added to, so pointers to them (by_id, FindLivePackage's) stay good
+    std::deque<Package> packages;
     // packages by content ID (upper-case hex, as the headers give it)
     std::unordered_map<std::string, const Package*> by_id;
+    // rises with each rescan that adds packages; listed is what it was at the
+    // game's last listing (LivePackages)
+    uint64_t generation = 0;
+    uint64_t listed = 0;
+    // rescans go one at a time
+    std::mutex rescan_mutex;
 };
 
 Scan& TheScan() {
@@ -66,7 +77,8 @@ void Finish(std::vector<Package> packages) {
     auto& scan = TheScan();
     {
         std::lock_guard lock(scan.mutex);
-        scan.packages = std::move(packages);
+        scan.packages.assign(std::make_move_iterator(packages.begin()),
+                             std::make_move_iterator(packages.end()));
         for (const auto& package : scan.packages) scan.by_id[package.header.content_id] = &package;
         scan.done = true;
     }
@@ -74,16 +86,22 @@ void Finish(std::vector<Package> packages) {
 }
 
 #ifdef _WIN32
-void RunScan(std::string setting) {
-    const auto start = std::chrono::steady_clock::now();
+// the setting's folders, and their names for the log
+std::vector<std::filesystem::path> Folders(const std::string& setting, std::string& names) {
     const auto anchor = IniAnchor();
     std::vector<std::filesystem::path> folders;
-    std::string names;
     for (const auto& entry : paths::SplitList(setting)) {
         folders.push_back(paths::Resolve(entry, anchor));
         if (!names.empty()) names += " | ";
         names += rex::path_to_utf8(folders.back());
     }
+    return folders;
+}
+
+void RunScan(std::string setting) {
+    const auto start = std::chrono::steady_clock::now();
+    std::string names;
+    auto folders = Folders(setting, names);
 
     // no songs folder is how band3 ships, so that alone, for an unchanged default, stays quiet
     std::error_code ec;
@@ -131,32 +149,82 @@ void StartLiveContent(rex::filesystem::VirtualFileSystem* vfs) {
 #endif
 }
 
-const std::vector<Package>& LivePackages() {
-    static const std::vector<Package> kNone;
+std::vector<Package> LivePackages() {
     // a big library on a slow network folder can take longer than this, and the
     // game waits on each listing
     static const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
     auto& scan = TheScan();
     std::unique_lock lock(scan.mutex);
-    // the packages never change once done, so the reference stays good
-    if (scan.cv.wait_until(lock, deadline, [&] { return scan.done; })) return scan.packages;
+    if (scan.cv.wait_until(lock, deadline, [&] { return scan.done; })) {
+        scan.listed = scan.generation;
+        return std::vector<Package>(scan.packages.begin(), scan.packages.end());
+    }
     if (!scan.late) {
         scan.late = true;
         REXLOG_WARN("content: scanning the content folders took longer than 60 s, so their "
-                    "packages aren't listed this session");
+                    "packages aren't listed until it's done");
     }
-    return kNone;
+    return {};
 }
 
 const Package* FindLivePackage(std::string_view file_name) {
     auto& scan = TheScan();
-    {
-        std::lock_guard lock(scan.mutex);
-        if (!scan.done) return nullptr;
-    }
-    // done, so the index no longer changes
+    std::lock_guard lock(scan.mutex);
+    if (!scan.done) return nullptr;
     auto it = scan.by_id.find(Upper(file_name));
     return it == scan.by_id.end() ? nullptr : it->second;
+}
+
+size_t RescanLiveContent() {
+#ifdef _WIN32
+    auto& scan = TheScan();
+    std::lock_guard rescan(scan.rescan_mutex);
+    {
+        // before the first scan is done, it finds them anyway
+        std::lock_guard lock(scan.mutex);
+        if (!scan.done) return 0;
+    }
+    std::string names;
+    std::vector<std::string> problems;
+    auto found = ScanFolders(Folders(REXCVAR_GET(content_folders), names), kRb3TitleIds, &problems);
+    std::lock_guard lock(scan.mutex);
+    size_t added = 0;
+    for (auto& package : found) {
+        if (scan.by_id.contains(package.header.content_id)) continue;
+        REXLOG_INFO("content: found {} ({})", rex::path_to_utf8(package.path),
+                    package.header.content_id);
+        scan.packages.push_back(std::move(package));
+        scan.by_id[scan.packages.back().header.content_id] = &scan.packages.back();
+        added++;
+    }
+    if (added) scan.generation++;
+    return added;
+#else
+    return 0;
+#endif
+}
+
+bool GameMissesPackages() {
+    auto& scan = TheScan();
+    std::lock_guard lock(scan.mutex);
+    return scan.generation != scan.listed;
+}
+
+void PollRefresh(PPCContext& ctx, uint8_t* base) {
+    static RefreshPlanner planner;
+    uint64_t generation, listed;
+    {
+        auto& scan = TheScan();
+        std::lock_guard lock(scan.mutex);
+        generation = scan.generation;
+        listed = scan.listed;
+    }
+    if (generation == listed) return;
+    const test::GameStateSnapshot state = test::GameState::Get().Snapshot();
+    const std::string script = planner.Next(generation, listed, state.screen, state.in_game);
+    if (script.empty()) return;
+    REXLOG_INFO("content: having the game list the new packages ({})", state.screen);
+    RunScript(ctx, base, script);
 }
 
 bool MountLivePackage(const Package& package, std::string_view root_name) {

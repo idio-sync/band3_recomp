@@ -689,9 +689,10 @@ function rvAction(s) {
 // what the game has of a song, as [tag, its tooltip]: by song ID when band3
 // says (in_library), else by artist and title; [null] for nothing
 function libraryTag(s) {
+  const d = rv.downloads.get(s.file_id);
   const downloaded = rvState(s) && rvState(s).state === "done";
-  if (s.in_library) return ["In library", "The game has this song (by its song ID)"];
-  if (downloaded) return ["Restart to load", "It's in the song folders; the game reads them as it starts"];
+  if (s.in_library || (d && d.in_library)) return ["In library", "The game has this song (by its song ID)"];
+  if (downloaded) return ["Not in game yet", "band3 adds it in the main menu or the Music Library, after any song that's playing"];
   if (s.in_library === null && inLibrary(s)) return ["In library", "A song by this artist and title is in the game"];
   if (inLibrary(s)) return ["Similar in library", "Another chart of this artist and title is in the game"];
   return [null, null];
@@ -817,16 +818,25 @@ async function pollDownloads() {
       if (was && was.state !== d.state) {
         if (d.state === "done") toast(`Downloaded “${d.title}”`);
         if (d.state === "failed") toast(`Couldn't download “${d.title}”: ${d.error}`);
+      } else if (was && d.in_library && was.in_library === false) {
+        toast(`“${d.title}” is in the game`);
       }
       refreshRow(d.file_id);
       busy = busy || d.state === "queued" || d.state === "downloading";
     }
-    const done = res.downloads.filter(d => d.state === "done").length;
-    $("rv-note").hidden = !done;
-    $("rv-note").textContent = (done === 1 ? "1 song" : done + " songs") + " downloaded to " +
-      rv.folder + ". The game reads its song folders as it starts, so restart band3 to play " +
-      (done === 1 ? "it." : "them.");
+    const done = res.downloads.filter(d => d.state === "done");
+    // in_library is null while the game's busy: still waiting, as far as anyone knows
+    const waiting = done.filter(d => !d.in_library).length;
+    const songs = n => n === 1 ? "1 song" : n + " songs";
+    $("rv-note").hidden = !done.length;
+    $("rv-note").textContent = songs(done.length) + " downloaded to " + rv.folder + ". " + (waiting
+      ? (done.length === 1 ? "It's not" : waiting === 1 ? "1 isn't" : waiting + " aren't") +
+        " in the game yet: " +
+        "band3 adds songs in the main menu or the Music Library, after any song that's playing."
+      : (done.length === 1 ? "It's" : "They're") + " in the game.");
+    // downloading, every second; waiting for the game, every few
     if (busy) downloadsTimer = setTimeout(pollDownloads, 1000);
+    else if (waiting) downloadsTimer = setTimeout(pollDownloads, 3000);
   } catch (e) {}
 }
 

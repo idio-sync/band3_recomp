@@ -5,13 +5,15 @@
 #include <bit>
 #include <cstdint>
 #include "generated/band3_init.h"
+#include "src/Content/live_content.h"
 #include "src/Net/http_server.h"
 #include "src/Test/game_state.h"
 #include "src/Test/test_server.h"
 
 // Counts the frames RB3 draws, for the test harness's `wait frames=N`, keeps
 // the song's position for the web server's /status, and runs the game work
-// the web server's requests wait on (src/Net/http_server.h).
+// the web server's requests wait on (src/Net/http_server.h), and has the game
+// list songs added to the content folders (src/Content/live_content.h).
 // App::DrawRegular runs once per frame; profiling builds also give it its zone
 // here, next to the others in profile_zones.cpp.
 
@@ -52,5 +54,6 @@ extern "C" REX_FUNC(App__DrawRegular)
     band3::test::GameState::Get().CountFrame();
     if (band3::test::Enabled() || band3::http::Enabled()) RecordSongTime(base);
     band3::http::RunGameJobs(ctx, base);
+    band3::content::PollRefresh(ctx, base);
     __imp__App__DrawRegular(ctx, base);
 }

@@ -264,7 +264,8 @@ def rv_search_result(reply, downloaded):
 
 
 class FakeDownloads:
-    """band3's downloads, made up: each takes a few seconds, and nothing is saved."""
+    """band3's downloads, made up: each takes a few seconds, is in the game as long
+    again after, and nothing is saved."""
 
     SECONDS = 4
 
@@ -302,9 +303,11 @@ class FakeDownloads:
             for file_id, (song, start) in self.started.items():
                 total = song['size'] or 50 * 1048576
                 part = min((now - start) / self.SECONDS, 1)
+                # the game takes it in as long again after
                 out.append({'file_id': file_id, 'title': song['title'], 'artist': song['artist'],
                             'state': 'done' if part >= 1 else 'downloading',
-                            'received': int(total * part), 'total': total, 'error': ''})
+                            'received': int(total * part), 'total': total, 'error': '',
+                            'in_library': now - start >= 2 * self.SECONDS})
         return {'folder': 'songs\\rhythmverse (web_preview: nothing is saved)', 'downloads': out}
 
 

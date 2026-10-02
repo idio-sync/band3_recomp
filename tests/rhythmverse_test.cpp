@@ -244,7 +244,9 @@ TEST_CASE("downloads are JSON, with their state and progress") {
     downloads[1].file_id = "b.2";
     downloads[1].state = Download::State::kFailed;
     downloads[1].error = "the site answered 404";
-    const auto json = band3::json::Parse(FormatDownloads(downloads, "C:\\songs\\rhythmverse"));
+    downloads[0].song_id = 7;
+    const auto json = band3::json::Parse(
+        FormatDownloads(downloads, "C:\\songs\\rhythmverse", std::set<int32_t>{7}));
     REQUIRE(json);
     CHECK((*json)["folder"].Text() == "C:\\songs\\rhythmverse");
     const auto& items = (*json)["downloads"].Items();
@@ -255,4 +257,10 @@ TEST_CASE("downloads are JSON, with their state and progress") {
     CHECK(items[0]["total"].Number() == 400);
     CHECK(items[1]["state"].Text() == "failed");
     CHECK(items[1]["error"].Text() == "the site answered 404");
+    CHECK(items[0]["in_library"].Bool() == true);
+    CHECK(items[1]["in_library"].Bool(true) == false);
+    // the game busy, or nothing to ask it about
+    const auto unknown = band3::json::Parse(FormatDownloads(downloads, "", std::nullopt));
+    REQUIRE(unknown);
+    CHECK((*unknown)["downloads"].Items()[0]["in_library"].IsNull());
 }

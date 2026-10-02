@@ -241,7 +241,7 @@ REXCVAR_DEFINE_BOOL(http_allow_scripts, false, "Band3/Integrations",
 REXCVAR_DEFINE_BOOL(http_rhythmverse, true, "Band3/Integrations",
     "Let the web page search RhythmVerse (rhythmverse.co) for custom songs and download the "
     "ones it hosts into a rhythmverse folder in the first of content_folders. Downloaded "
-    "songs are in the game from its next launch");
+    "songs join the game in the main menu or the Music Library, without a restart");
 
 REXCVAR_DEFINE_BOOL(rb3e_mode, true, "Band3/Integrations",
     "Tell the game's scripts RB3Enhanced is running (they see RB3E and RB3E_HAS_VERSION "

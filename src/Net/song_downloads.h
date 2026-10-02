@@ -8,8 +8,8 @@
 
 // Songs downloaded from RhythmVerse (rhythmverse.h) into the songs folder,
 // one at a time on a thread of their own, for the web page's RhythmVerse tab.
-// They go into a "rhythmverse" folder in the first of content_folders, which
-// the game reads at its next launch: the folders are scanned once, at startup
+// They go into a "rhythmverse" folder in the first of content_folders, and the
+// game takes each in once it's in the main hub or the Music Library
 // (src/Content/live_content.h). Only songs a search has found can be
 // downloaded, and only what RhythmVerse hosts itself; a file that isn't an
 // RB3 package is thrown away.
@@ -36,7 +36,8 @@ std::vector<Download> Downloads();
 
 // the files in every content folder and their subfolders, as LocalSongs keeps
 // them, however they got there; listed again when a minute old, or after a
-// download
+// download. A listing with files the last didn't have has the content folders
+// scanned again for packages, so the game takes in songs copied in by hand.
 std::set<std::pair<std::string, int64_t>> LocalFiles();
 
 // a download in progress stops (and its file goes) when band3 closes

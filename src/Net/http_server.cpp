@@ -30,6 +30,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -258,6 +259,17 @@ std::optional<std::string> AlbumArt(const std::string& shortname, bool& busy) {
     return jpeg;
 }
 
+// the song IDs of every song in the game; nullopt while the game is busy
+std::optional<std::set<int32_t>> GameSongIds() {
+    std::vector<int32_t> ids;
+    if (!RunOnGameThread([&ids](PPCContext& ctx, uint8_t* base) {
+            ids = game::RankedIds(ctx, base);
+        })) {
+        return std::nullopt;
+    }
+    return std::set<int32_t>(ids.begin(), ids.end());
+}
+
 // /rv/search: a page of RhythmVerse's songs, asked of it as this request waits
 std::string RhythmVerseSearch(const Route& route, bool cors) {
     const auto search = rhythmverse::Search(route.argument, route.page);
@@ -277,14 +289,9 @@ std::string RhythmVerseSearch(const Route& route, bool cors) {
 
     rhythmverse::LocalSongs local;
     local.files = rhythmverse::LocalFiles();
-    std::vector<int32_t> ids;
     // the game's songs say what's in it whatever their files are called; while
     // the game is busy, the page goes by artist and title
-    if (RunOnGameThread([&ids](PPCContext& ctx, uint8_t* base) {
-            ids = game::RankedIds(ctx, base);
-        })) {
-        local.game_ids.emplace(ids.begin(), ids.end());
-    }
+    local.game_ids = GameSongIds();
     return Response(200, "application/json", rhythmverse::FormatSearch(*result, local), cors);
 }
 
@@ -414,12 +421,18 @@ std::string Handle(const Request& request) {
             return RhythmVerseSearch(route, cors);
         case Endpoint::kRvDownload:
             return RhythmVerseDownload(request, cors);
-        case Endpoint::kRvDownloads:
+        case Endpoint::kRvDownloads: {
+            const auto downloads = rhythmverse::Downloads();
+            // whether the game has taken the downloaded ones in yet
+            const bool done = std::ranges::any_of(downloads, [](const auto& d) {
+                return d.state == rhythmverse::Download::State::kDone;
+            });
             return Response(200, "application/json",
                             rhythmverse::FormatDownloads(
-                                rhythmverse::Downloads(),
-                                rex::path_to_utf8(rhythmverse::DownloadFolder())),
+                                downloads, rex::path_to_utf8(rhythmverse::DownloadFolder()),
+                                done ? GameSongIds() : std::nullopt),
                             cors);
+        }
         case Endpoint::kNotFound:
             break;
     }

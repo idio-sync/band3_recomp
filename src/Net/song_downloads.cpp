@@ -9,6 +9,7 @@
 #include <thread>
 #include <unordered_map>
 #include <rex/logging.h>
+#include "src/Content/live_content.h"
 #include "src/Content/package_scan.h"
 #include "src/config.h"
 #include "src/paths.h"
@@ -134,8 +135,7 @@ void Work() {
         REXLOG_INFO("RhythmVerse: downloading {} - {} ({})", song.artist, song.title, song.file_id);
         const std::string error = DownloadOne(song, folder);
         if (error.empty()) {
-            REXLOG_INFO("RhythmVerse: downloaded {} - {}; it's in the game from the next launch",
-                        song.artist, song.title);
+            REXLOG_INFO("RhythmVerse: downloaded {} - {}", song.artist, song.title);
         } else {
             REXLOG_WARN("RhythmVerse: couldn't download {} - {}: {}", song.artist, song.title, error);
         }
@@ -143,11 +143,15 @@ void Work() {
             std::lock_guard lock(state.files_mutex);
             state.files_stale = true;
         }
-        std::lock_guard lock(state.mutex);
-        if (Download* d = FindDownload(state, song.file_id)) {
-            d->state = error.empty() ? Download::State::kDone : Download::State::kFailed;
-            d->error = error;
+        {
+            std::lock_guard lock(state.mutex);
+            if (Download* d = FindDownload(state, song.file_id)) {
+                d->state = error.empty() ? Download::State::kDone : Download::State::kFailed;
+                d->error = error;
+            }
         }
+        // for the game to take it in where it can (live_content.h)
+        if (error.empty()) content::RescanLiveContent();
     }
 }
 
@@ -193,6 +197,7 @@ QueueResult QueueDownload(std::string_view file_id) {
     if (!d) {
         state.downloads.push_back(Download{song.file_id, song.title, song.artist});
         d = &state.downloads.back();
+        d->song_id = song.song_id;
     }
     d->state = Download::State::kQueued;
     d->received = 0;
@@ -233,6 +238,9 @@ std::set<std::pair<std::string, int64_t>> LocalFiles() {
             files.emplace(LowerAscii(Utf8(it->path().filename())), static_cast<int64_t>(size));
         }
     }
+    // files copied in by hand, or a first listing: songs among them the game
+    // doesn't have yet are found, and it takes them in (live_content.h)
+    if (files != state.files) std::thread([] { content::RescanLiveContent(); }).detach();
     state.files = std::move(files);
     state.files_time = now;
     state.files_stale = false;

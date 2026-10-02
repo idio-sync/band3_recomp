@@ -161,7 +161,9 @@ packages, Rock Band and Rock Band 2 DLC included, as RB3 reads them) straight fr
 folders `content_folders` names (Band3 → Game, or `[game]` in `band3_config.ini`);
 nothing is installed or unpacked, and band3 never writes there. Separate folders with `|`;
 subfolders count, and a relative folder is relative to the ini's folder (`songs` beside it
-by default). Changes apply at the next launch. A network folder works, but a local one is
+by default). Changes apply at the next launch, except songs the web page's RhythmVerse tab
+downloads or finds added (below), which the game takes in as it runs; a song taken out
+stays listed until the next launch. A network folder works, but a local one is
 safer for audio: a song streams from its package while it plays. A local folder is also
 faster to read: a large library on a slow network folder can delay the song list on the
 first boot, and one that takes over a minute isn't listed that session. A custom song whose
@@ -484,7 +486,7 @@ band3 adds its own, which RB3E doesn't have:
 | `/album_art?shortname=<name>` | the song's album art as a JPEG, read as the game reads it for the Music Library (from the ARK, or a loose file that replaces it); 404 when the song has none, or no song has that shortname |
 | `/rv/search?text=<text>&page=<n>` | a page of 25 of [RhythmVerse](https://rhythmverse.co)'s Rock Band 3 (Xbox) songs matching the text, or its newest without; JSON with `total`, `page` and `songs`, each with its `file_id`, details, `tiers` as `/song_details` gives them, `download` (RhythmVerse hosts it, so band3 can download it), `downloaded` (its file is in the content folders) and `in_library` (the game has a song with its song ID; null while the game is busy) |
 | `POST /rv/download` | downloads `{"file_id": "<id>"}` (JSON) from a search into the songs folder: 404 for a song no search has found, 409 for one RhythmVerse doesn't host |
-| `/rv/downloads` | this session's downloads as JSON: the `folder` they go to, and each one's `state` (`queued`, `downloading`, `done`, `failed`), `received`, `total` and `error` |
+| `/rv/downloads` | this session's downloads as JSON: the `folder` they go to, and each one's `state` (`queued`, `downloading`, `done`, `failed`), `received`, `total`, `error` and `in_library` (the game has taken it in; null while the game is busy, or before any is done) |
 
 #### RhythmVerse
 
@@ -493,13 +495,17 @@ songs for Rock Band 3 on Xbox, with their art, details and difficulties, and say
 which you have, however you got them. **In library**: the game has a song with its
 song ID (RhythmVerse's for the upload is the `song_id` in its `songs.dta`), whatever
 its file is called. **Downloaded**: its file is in the content folders, under the name
-RhythmVerse gives it and at its size; **Restart to load** when the game doesn't have it
-yet (folders are read again a minute on, so songs copied in show up). **Similar in
-library**: a song by its artist and title is in the game, another chart of it maybe.
-**Download** saves a song's
-package into a `rhythmverse` folder in the first of the content folders
-(`content_folders`; `songs\rhythmverse` unless you've changed it). The game reads its
-song folders as it starts, so downloaded songs are in it from the next launch. Only
+RhythmVerse gives it and at its size; **Not in game yet** until the game has taken it in.
+**Similar in library**: a song by its artist and title is in the game, another chart of
+it maybe.
+
+**Download** saves a song's package into a `rhythmverse` folder in the first of the
+content folders (`content_folders`; `songs\rhythmverse` unless you've changed it), and
+the game takes it in without a restart: band3 has the game list its content again as it
+does after a storage change, but only where the game does that itself, in the main menu
+or the Music Library (which keeps its place), so a download during a song joins once the
+song is over. Songs copied into the content folders by hand join the same way once a
+search has seen them (the folders' files are listed again a minute on). Only
 songs RhythmVerse hosts itself download this way; for those on other sites (MediaFire,
 Google Drive...), zipped ones and the official DLC, **Open** goes to the song's
 RhythmVerse page. A download that isn't a Rock Band package is thrown away. Turn

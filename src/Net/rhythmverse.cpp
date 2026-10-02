@@ -92,6 +92,12 @@ std::optional<Song> ParseSong(const json::Value& entry) {
     return song;
 }
 
+// "in_library" as FormatSearch and FormatDownloads give it
+std::string InLibrary(int32_t song_id, const std::optional<std::set<int32_t>>& game_ids) {
+    if (!game_ids) return "null";
+    return song_id && game_ids->contains(song_id) ? "true" : "false";
+}
+
 void AppendField(std::string& out, std::string_view key, std::string_view json) {
     if (out.back() != '{') out += ',';
     out += '"';
@@ -240,16 +246,14 @@ std::string FormatSearch(const SearchResult& result, const LocalSongs& local) {
         AppendField(out, "host", JsonString(s.host));
         AppendField(out, "download", s.download_url.empty() ? "false" : "true");
         AppendField(out, "downloaded", IsDownloaded(s, local) ? "true" : "false");
-        AppendField(out, "in_library",
-                    !local.game_ids ? "null"
-                    : s.song_id && local.game_ids->contains(s.song_id) ? "true"
-                                                                        : "false");
+        AppendField(out, "in_library", InLibrary(s.song_id, local.game_ids));
         out += '}';
     }
     return out + "]}";
 }
 
-std::string FormatDownloads(const std::vector<Download>& downloads, std::string_view folder) {
+std::string FormatDownloads(const std::vector<Download>& downloads, std::string_view folder,
+                            const std::optional<std::set<int32_t>>& game_ids) {
     std::string out = "{\"folder\":" + JsonString(folder) + ",\"downloads\":[";
     for (size_t i = 0; i < downloads.size(); i++) {
         const Download& d = downloads[i];
@@ -269,6 +273,7 @@ std::string FormatDownloads(const std::vector<Download>& downloads, std::string_
         AppendField(out, "received", std::to_string(d.received));
         AppendField(out, "total", std::to_string(d.total));
         AppendField(out, "error", JsonString(d.error));
+        AppendField(out, "in_library", InLibrary(d.song_id, game_ids));
         out += '}';
     }
     return out + "]}";

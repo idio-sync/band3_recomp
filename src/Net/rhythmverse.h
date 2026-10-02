@@ -87,6 +87,7 @@ struct Download {
     std::string file_id;
     std::string title;
     std::string artist;
+    int32_t song_id = 0;  // Song's
     State state = State::kQueued;
     int64_t received = 0;
     int64_t total = 0;  // 0 until known
@@ -117,7 +118,9 @@ std::string FormatSearch(const SearchResult& result, const LocalSongs& local);
 
 // /rv/downloads: {"folder": where they go, "downloads": [{"file_id":, "title":,
 // "artist":, "state": "queued"|"downloading"|"done"|"failed", "received":,
-// "total":, "error":}, ...]}
-std::string FormatDownloads(const std::vector<Download>& downloads, std::string_view folder);
+// "total":, "error":, "in_library": the game has its song ID (null when
+// game_ids is)}, ...]}
+std::string FormatDownloads(const std::vector<Download>& downloads, std::string_view folder,
+                            const std::optional<std::set<int32_t>>& game_ids);
 
 }
