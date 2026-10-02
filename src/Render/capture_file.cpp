@@ -36,9 +36,17 @@
 //   GAMA  the display gamma ramp (gamma_ramp.h): which applies, the 256-entry
 //         table and the PWL ramp (a file without it: none, the picture as RB3
 //         drew it)
-// A section newer than this reader skips if it's SHAD, PASS, FRAM, POST or
-// GAMA (the file loads without it) and fails the load if it's GEOM, TEXS or
-// DRAW.
+//   MIPS  the textures' mip chains (Texture::mips), for those TEXS keeps the
+//         pixels of: each one's index, its level count and the levels, each
+//         half the one before; one whose pixels are another's has its mips
+//         too (a file without it: no texture has mips)
+//   SMPL  the shades' samplers (ShadeState::diffuse_sampler, samplers), as
+//         TexSampler's size and bytes, the diffuse texture's then each map's
+//         for every shade (a file without it, or with another number of
+//         shades or maps: every texture nearest at level 0, as before)
+// A section newer than this reader skips if it's SHAD, PASS, FRAM, POST,
+// GAMA, MIPS or SMPL (the file loads without it) and fails the load if it's
+// GEOM, TEXS or DRAW.
 //
 // Versions 1 and 2 still load: 1 is frame, geometry, textures and draws; 2
 // adds the draws' ShadeStates, kept as their ShadeInputs were in memory (so
@@ -68,6 +76,8 @@ constexpr uint32_t kSecDraws = FourCC("DRAW");
 constexpr uint32_t kSecPasses = FourCC("PASS");
 constexpr uint32_t kSecPost = FourCC("POST");
 constexpr uint32_t kSecGamma = FourCC("GAMA");
+constexpr uint32_t kSecMips = FourCC("MIPS");
+constexpr uint32_t kSecSamplers = FourCC("SMPL");
 // the versions this build writes and reads
 constexpr uint32_t kFrameVersion = 1;
 constexpr uint32_t kGeometryVersion = 2;
@@ -77,6 +87,8 @@ constexpr uint32_t kDrawsVersion = 3;
 constexpr uint32_t kPassesVersion = 1;
 constexpr uint32_t kPostVersion = 1;
 constexpr uint32_t kGammaVersion = 1;
+constexpr uint32_t kMipsVersion = 1;
+constexpr uint32_t kSamplersVersion = 1;
 
 // TEXS: where a texture's pixels are
 constexpr int32_t kOwnPixels = -1;  // they follow
@@ -133,9 +145,15 @@ struct Reader {
     }
 };
 
+// `t` at most `most` texels a side: from its mip chain where it has the level
+// (the level the sampler would read there, and the ones after it), else
+// every step-th texel
 Texture Downsample(const Texture& t, uint32_t most) {
-    uint32_t step = 1;
-    while (t.width / step > most || t.height / step > most) step *= 2;
+    uint32_t step = 1, level = 0;
+    while (t.width / step > most || t.height / step > most) {
+        step *= 2;
+        level++;
+    }
     if (step == 1) return t;
     Texture r;
     r.format = t.format;
@@ -144,6 +162,13 @@ Texture Downsample(const Texture& t, uint32_t most) {
     r.version = t.version;
     r.width = std::max(1u, t.width / step);
     r.height = std::max(1u, t.height / step);
+    if (level <= t.mips.size() && r.width == std::max(1u, t.width >> level) &&
+        r.height == std::max(1u, t.height >> level) &&
+        t.mips[level - 1].size() == size_t(r.width) * r.height) {
+        r.rgba = t.mips[level - 1];
+        r.mips.assign(t.mips.begin() + level, t.mips.end());
+        return r;
+    }
     r.rgba.resize(size_t(r.width) * r.height);
     for (uint32_t y = 0; y < r.height; y++)
         for (uint32_t x = 0; x < r.width; x++)
@@ -163,7 +188,8 @@ bool SameIdentity(const Texture& a, const Texture& b) {
 }
 
 bool SamePixels(const Texture& a, const Texture& b) {
-    return a.width == b.width && a.height == b.height && a.format == b.format && a.rgba == b.rgba;
+    return a.width == b.width && a.height == b.height && a.format == b.format &&
+           a.rgba == b.rgba && a.mips == b.mips;
 }
 
 // ShadeInputs field by field, its registers and maps as the section says
@@ -444,6 +470,19 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     }
     w.End(sec);
 
+    sec = w.Begin(kSecMips, kMipsVersion);
+    uint32_t with_mips = 0;
+    for (size_t i = 0; i < tex_list.size(); i++)
+        with_mips += tex_list[i].pixels == kOwnPixels && !kept[i].mips.empty();
+    w.Put<uint32_t>(with_mips);
+    for (size_t i = 0; i < tex_list.size(); i++) {
+        if (tex_list[i].pixels != kOwnPixels || kept[i].mips.empty()) continue;
+        w.Put<uint32_t>(uint32_t(i));
+        w.Put<uint32_t>(uint32_t(kept[i].mips.size()));
+        for (const auto& level : kept[i].mips) w.Raw(level.data(), level.size() * sizeof(uint32_t));
+    }
+    w.End(sec);
+
     sec = w.Begin(kSecShades, kShadesVersion);
     w.Put<uint32_t>(uint32_t(kNumShadeRegs));
     for (uint16_t reg : kShadeRegs) w.Put<uint32_t>(reg);
@@ -452,6 +491,16 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     for (const ShadeState& s : fc.shades) {
         PutShade(w, s);
         for (const auto& m : s.maps) w.Put<int32_t>(m ? int32_t(texs[m.get()]) : -1);
+    }
+    w.End(sec);
+
+    sec = w.Begin(kSecSamplers, kSamplersVersion);
+    w.Put<uint32_t>(uint32_t(sizeof(TexSampler)));
+    w.Put<uint32_t>(uint32_t(kNumShadeMaps));
+    w.Put<uint32_t>(uint32_t(fc.shades.size()));
+    for (const ShadeState& s : fc.shades) {
+        w.Put(s.diffuse_sampler);
+        for (const TexSampler& m : s.samplers) w.Put(m);
     }
     w.End(sec);
 
@@ -540,6 +589,11 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
     auto fc = std::make_shared<FrameCapture>();
     std::vector<std::shared_ptr<const Geometry>> geoms;
     std::vector<std::shared_ptr<const Texture>> texs;
+    // TEXS's entries: where each one's pixels came from (its own index if
+    // they followed it), whose mips it takes; and SMPL's samplers, set on
+    // the shades once both are read
+    std::vector<uint32_t> pixel_owner;
+    std::vector<TexSampler> samplers;
     bool have_geoms = false, have_texs = false, have_draws = false, shades_skipped = false;
     while (r.ok && r.pos < data.size()) {
         r.end = data.size();
@@ -558,6 +612,8 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                                : id == kSecPasses   ? kPassesVersion
                                : id == kSecPost     ? kPostVersion
                                : id == kSecGamma    ? kGammaVersion
+                               : id == kSecMips     ? kMipsVersion
+                               : id == kSecSamplers ? kSamplersVersion
                                                     : 0;
         if (version > known || version == 0) {
             if (core) return nullptr;
@@ -617,6 +673,7 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
             uint32_t count;
             if (!r.Count(count, 28)) return nullptr;
             texs.resize(count);
+            pixel_owner.resize(count);
             for (uint32_t i = 0; i < count; i++) {
                 auto tex = std::make_shared<Texture>();
                 tex->width = r.Get<uint32_t>();
@@ -627,6 +684,7 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                 tex->version = r.Get<uint32_t>();
                 const int32_t pixels = r.Get<int32_t>();
                 const uint64_t texels = uint64_t(tex->width) * tex->height;
+                pixel_owner[i] = pixels >= 0 ? uint32_t(pixels) : i;
                 if (pixels == kOwnPixels) {
                     if (texels * 4 > r.end - r.pos) return nullptr;
                     tex->rgba.resize(size_t(texels));
@@ -721,11 +779,55 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
             r.Raw(fc->gamma.table, sizeof(fc->gamma.table));
             r.Raw(fc->gamma.pwl, sizeof(fc->gamma.pwl));
             if (fc->gamma.mode > GammaRamp::kPwl) return nullptr;
+        } else if (id == kSecMips) {
+            if (!have_texs) return nullptr;
+            uint32_t count;
+            if (!r.Count(count, 8)) return nullptr;
+            for (uint32_t k = 0; k < count; k++) {
+                const uint32_t i = r.Get<uint32_t>();
+                uint32_t levels;
+                if (!r.Count(levels, 4) || i >= texs.size() || levels > 16) return nullptr;
+                auto tex = std::make_shared<Texture>(*texs[i]);
+                tex->mips.resize(levels);
+                for (uint32_t l = 0; l < levels; l++) {
+                    const uint64_t texels = uint64_t(std::max(1u, tex->width >> (l + 1))) *
+                                            std::max(1u, tex->height >> (l + 1));
+                    if (texels * 4 > r.end - r.pos) return nullptr;
+                    tex->mips[l].resize(size_t(texels));
+                    r.Raw(tex->mips[l].data(), size_t(texels) * sizeof(uint32_t));
+                }
+                texs[i] = std::move(tex);
+            }
+            // the entries that share an owner's pixels share its mips
+            for (size_t i = 0; i < texs.size(); i++) {
+                if (pixel_owner[i] == i || texs[pixel_owner[i]]->mips.empty()) continue;
+                auto tex = std::make_shared<Texture>(*texs[i]);
+                tex->mips = texs[pixel_owner[i]]->mips;
+                texs[i] = std::move(tex);
+            }
+        } else if (id == kSecSamplers) {
+            const uint32_t each = r.Get<uint32_t>();
+            const uint32_t maps = r.Get<uint32_t>();
+            uint32_t count;
+            if (maps > 64 || !r.Count(count, size_t(each) * (maps + 1))) return nullptr;
+            // samplers of another size or map count are read as none
+            if (each == sizeof(TexSampler) && maps == uint32_t(kNumShadeMaps)) {
+                samplers.resize(size_t(count) * (maps + 1));
+                r.Raw(samplers.data(), samplers.size() * sizeof(TexSampler));
+            }
         }
         if (!r.ok) return nullptr;
         r.pos = next;
     }
     if (!r.ok || !have_draws) return nullptr;
+    if (samplers.size() == fc->shades.size() * (kNumShadeMaps + 1)) {
+        for (size_t i = 0; i < fc->shades.size(); i++) {
+            ShadeState& s = fc->shades[i];
+            s.diffuse_sampler = samplers[i * (kNumShadeMaps + 1)];
+            for (int m = 0; m < kNumShadeMaps; m++)
+                s.samplers[m] = samplers[i * (kNumShadeMaps + 1) + 1 + m];
+        }
+    }
     // draws that point past the shades: none if a newer build's shades were
     // skipped, else a broken file
     for (DrawItem& d : fc->draws) {

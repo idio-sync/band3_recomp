@@ -181,6 +181,7 @@ class Renderer {
                 if (stop_) return;
                 o = options_;
                 o.normal_maps = REXCVAR_GET(native_view_normal_maps);
+                o.filtering = REXCVAR_GET(native_view_texture_filtering);
                 gpu = gpu_;
                 changed = options_changed_;
                 options_changed_ = false;

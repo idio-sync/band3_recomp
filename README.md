@@ -217,11 +217,12 @@ it, so press Start to join again, as a player would.
 The native view (F7, experimental) draws the game's frames itself, from a capture of
 what RB3 drew: on the GPU, or on a reference CPU rasterizer. It draws RB3's shading
 (point, box and projected lights, characters' self-shadows, normal and detail maps),
-the passes RB3 draws into textures (outfit composites, the crowd's impostors, shadow
-maps, NgLight's projected shadow, heads' normal maps, blurs), its post-processing
-(depth of field, bloom or glare, the spotlights' beams and haze, soft particles such
-as stage smoke, the colour matrix) and, last, the display's gamma ramp. Render checks
-set its picture against the game's.
+its textures as the game's samplers read them (filtered, between mip levels, clamped
+or wrapped), the passes RB3 draws into textures (outfit composites, the crowd's
+impostors, shadow maps, NgLight's projected shadow, heads' normal maps, blurs), its
+post-processing (depth of field, bloom or glare, the spotlights' beams and haze, soft
+particles such as stage smoke, the colour matrix) and, last, the display's gamma ramp.
+Render checks set its picture against the game's.
 
 | Setting (Band3 → Debug) | |
 |---|---|
@@ -229,6 +230,7 @@ set its picture against the game's.
 | `native_view_record_targets` | records the passes RB3 draws into textures all the time, even while the native view is off. Off by default, as it costs a little game-thread time while characters load. Render checks need it from launch: RB3 composes a band's outfits once, in the main menu |
 | `native_view_rt_fallback` | `guest` (the default) also keeps what guest memory holds of a texture RB3 draws, sampled where no recorded pass made it (right only with `--readback_resolve=full`); `none` keeps only which texture and version it is |
 | `native_view_normal_maps` | on (the default) shades normal and detail maps, live and in `capture`'s `.gpu.png`; off shades those materials with the vertex normal, to compare. Captures from before the capture kept the meshes' tangents have none either way |
+| `native_view_texture_filtering` | on (the default) samples textures as each draw's fetch constants say: bilinear or point, the mip level (or two, blended) by how far and at what angle the surface is, anisotropy, and wrapping, mirroring or clamping per axis, from the mip chains in guest memory (and a render target's own, made after its pass). As the game's own picture under band3 is drawn, the SDK's `anisotropic_override` (4:1 by default) applies to the samplers it would apply to there. Off reads every texture's nearest texel at full size, as before, to compare; captures from before the capture kept the samplers and mips are drawn so either way |
 
 Launch render checks with:
 
@@ -279,6 +281,9 @@ ramp the game was shown through (the screenshot has it). `capture`'s reply:
 | `held_fallback` | no such post frame came in 30 frames, so the capture took the last |
 | `gpu`, `gpu_ms`, `gpu_passes`, `gpu_rt_missing` | the GPU's `<name>.gpu.png` at the screenshot's size, its time, the texture passes it drew, and its draws that sampled a render target nothing had drawn (drawn transparent black). `gpu_error` instead when there's no GPU device or `native_view_backend` is `cpu` |
 
+With `native_view_texture_filtering` on, `<name>.gpu.nearest.png` is the GPU's drawing
+of the same capture with it off: the same frame without the game's samplers.
+
 Beside `<name>.gpu.png`, `<name>.gpu.alpha.png` and `<name>.gpu.depth.png` are the
 GPU's scene target where the world's draws left it, before the overlay: its alpha (the
 bloom weight RB3's shaders write) and its depth, as grey.
@@ -299,7 +304,7 @@ option). It prints a `post:` line (what post-processing was set to do), a `check
 | `--shade <draw>` | everything one draw's shader was given |
 | `--pick X,Y` | the draw that last wrote that pixel (at `--size`), its colour and shade |
 | `--dump-rt <DxTex hex>[:<version>]` | what that render target holds after its pass (`out.alpha.png` its alpha) |
-| `--dump-tex <draw>[:<map>]` | a draw's diffuse texture as captured, or one of its shade's maps (`--shade`'s names: `normal`, `projected`...) |
+| `--dump-tex <draw>[:<map>][@<level>]` | a draw's diffuse texture as captured, or one of its shade's maps (`--shade`'s names: `normal`, `projected`...); with `@<level>`, that mip level of it. `--shade` prints each one's sampler and how many levels the capture kept |
 | `--dump-alpha <png>`, `--dump-depth <png>` | the scene target's alpha or depth, as the GPU's `.gpu.alpha.png` and `.gpu.depth.png` |
 | `--view alpha\|depth` | draws that view instead of the picture (with `--diff` against those PNGs) |
 | `--dump-bloom <png>` | bloom's first level as the composite read it, after glare's pass |
@@ -308,6 +313,7 @@ option). It prints a `post:` line (what post-processing was set to do), a `check
 | `--no-gamma`, `--gamma-from <other.cap>` | no gamma ramp; or another capture's |
 | `--no-shadow` | characters without their self-shadows |
 | `--no-normal` | every material with its vertex normal, no normal or detail map |
+| `--nearest` | every texture's nearest texel at full size, not the game's samplers (`native_view_texture_filtering` off) |
 | `--no-cull` | both sides of every triangle |
 | `--legacy-light`, `--no-light` | the placeholder lighting from before RB3's shading; or every material unlit |
 

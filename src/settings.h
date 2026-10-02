@@ -70,6 +70,7 @@ REXCVAR_DECLARE(std::string, native_view_backend);
 REXCVAR_DECLARE(bool, native_view_record_targets);
 REXCVAR_DECLARE(std::string, native_view_rt_fallback);
 REXCVAR_DECLARE(bool, native_view_normal_maps);
+REXCVAR_DECLARE(bool, native_view_texture_filtering);
 
 namespace band3::settings {
 

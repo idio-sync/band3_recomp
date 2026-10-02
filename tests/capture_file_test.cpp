@@ -7,10 +7,12 @@
 // none; files from before passes (B3CAP002) and before shades (B3CAP001),
 // whose Vertex ended at its weights, still load, and draws
 // from before their cull mode was kept cull nothing, those from before their
-// draw mode was kept are the colour pass's, and files from before the display
-// gamma ramp was kept have none.
+// draw mode was kept are the colour pass's, files from before the display
+// gamma ramp was kept have none, and textures keep their mips and shades
+// their samplers, which files from before them have none of.
 
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -848,4 +850,71 @@ TEST_CASE("a capture keeps its display gamma ramp, and one from before has none"
     const std::vector<uint32_t> before = rgba;
     ApplyGamma(back->gamma, rgba);
     CHECK(rgba == before);
+}
+
+TEST_CASE("a capture keeps its textures' mips and its shades' samplers") {
+    FrameCapture fc;
+    auto geom = MakeTriangle();
+    // 1024x4 with its chain: kept at 512, from its first mip, with the rest
+    auto diffuse = MakeTexture(1024, 4, 6, 1);
+    for (uint32_t l = 1; l <= 10; l++) {
+        const uint32_t w = std::max(1024u >> l, 1u), h = std::max(4u >> l, 1u);
+        diffuse->mips.emplace_back(size_t(w) * h, 0x1000u * l);
+    }
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    // the same pixels and mips again, as another object
+    auto again = std::make_shared<Texture>(*diffuse);
+    s.maps[kMapSpecular] = again;
+    s.diffuse_sampler.filtered = 1;
+    s.diffuse_sampler.mag_linear = s.diffuse_sampler.min_linear = 1;
+    s.diffuse_sampler.mip = 1;
+    s.diffuse_sampler.mip_max = 10;
+    s.diffuse_sampler.lod_bias = -0.25f;
+    s.samplers[kMapSpecular].filtered = 1;
+    s.samplers[kMapSpecular].clamp_x = 2;
+    s.samplers[kMapSpecular].aniso = 4;
+    fc.shades = {s};
+    fc.draws.push_back(MakeDraw(geom, 0));
+    fc.draws.back().tex = diffuse;
+
+    const std::string path = TempPath("band3_capture_file_mips_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    REQUIRE(back);
+    const Texture& t = *back->draws[0].tex;
+    CHECK(t.width == 512);
+    CHECK(t.height == 2);
+    CHECK(t.rgba == diffuse->mips[0]);
+    REQUIRE(t.mips.size() == 9);
+    CHECK(t.mips[0] == diffuse->mips[1]);
+    CHECK(t.mips[8] == diffuse->mips[9]);
+    // the map with the same pixels and mips is kept once with them
+    REQUIRE(back->shades.size() == 1);
+    const ShadeState& b = back->shades[0];
+    REQUIRE(b.maps[kMapSpecular]);
+    CHECK(!b.maps[kMapSpecular]->mips.empty());
+    CHECK(b.diffuse_sampler.filtered == 1);
+    CHECK(b.diffuse_sampler.mip == 1);
+    CHECK(b.diffuse_sampler.mip_max == 10);
+    CHECK(b.diffuse_sampler.lod_bias == -0.25f);
+    CHECK(b.samplers[kMapSpecular].clamp_x == 2);
+    CHECK(b.samplers[kMapSpecular].aniso == 4);
+    CHECK(b.samplers[kMapNormal].filtered == 0);
+
+    // a file without the two sections (as from before them) loads with no
+    // mips and the old nearest sampler
+    std::vector<uint8_t> data = ReadAll(path);
+    for (const char* id : {"MIPS", "SMPL"}) {
+        const size_t at = FindSection(data, id);
+        REQUIRE(at != std::string::npos);
+        data[at] = 'X';  // a section this build doesn't know: skipped
+    }
+    WriteAll(path, data);
+    back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    CHECK(back->draws[0].tex->mips.empty());
+    CHECK(back->draws[0].tex->width == 512);
+    CHECK(back->shades[0].diffuse_sampler.filtered == 0);
 }

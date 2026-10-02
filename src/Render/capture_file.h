@@ -7,7 +7,8 @@
 
 // Experimental: a FrameCapture on disk, so the rasterizer can be worked on
 // offline (tools/native_view_replay) without running the game each time.
-// Textures larger than 512 are downsampled to keep the file small.
+// Textures larger than 512 are downsampled to keep the file small: from
+// their mip chain where they have one (the level a sampler would read there).
 
 namespace band3::render {
 

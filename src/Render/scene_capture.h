@@ -96,10 +96,44 @@ inline bool IsRenderedType(uint32_t type) {
 // of those, the ones texture passes draw into
 inline bool IsPassTargetType(uint32_t type) { return (type & 2) != 0; }
 
+// What a texture fetch constant tells the texture unit to do with a sample
+// (xenos.h's xe_gpu_texture_fetch_t: clamp_x/y in dword 0, the filters and
+// anisotropy in dword 3, the mip range and LOD bias in dword 4, the border
+// colour in dword 5; guest_formats.h's DecodeSampler). The default is the
+// one the renderers drew every texture with before captures kept them, and
+// draw old captures with: nearest, wrapping, level 0 alone (filtered 0).
+struct TexSampler {
+    // Xenos ClampMode per axis: 0 repeat, 1 mirrored repeat, 2 clamp to the
+    // edge, 3 mirror once then the edge, 4/5 halfway (drawn as 2/3), 6 the
+    // border, 7 mirror once then the border
+    uint8_t clamp_x = 0, clamp_y = 0;
+    // magnification and minification: 0 point, 1 linear
+    uint8_t mag_linear = 0, min_linear = 0;
+    // between levels: 0 the nearest, 1 linear, 2 the base level (mip_min) alone
+    uint8_t mip = 2;
+    // the most probes along a footprint's long axis (1 isotropic, 2..16)
+    uint8_t aniso = 1;
+    // the levels it may read, LOD clamped to them
+    uint8_t mip_min = 0, mip_max = 0;
+    // the border's colour: 0 transparent black, 1 opaque white
+    uint8_t border_white = 0;
+    // 1: the game's sampler, sampled as above; 0: the old nearest at level 0
+    uint8_t filtered = 0;
+    // what would be padding, zero: a capture saves the struct's bytes
+    uint8_t unused[2] = {};
+    float lod_bias = 0;  // added to the LOD, in levels
+};
+static_assert(sizeof(TexSampler) == 16, "TexSampler has no padding");
+
 struct Texture {
     uint32_t width = 0;
     uint32_t height = 0;
     std::vector<uint32_t> rgba;  // R in the low byte
+    // levels 1, 2... (each half the one before, at least 1 texel), as RB3's
+    // mip chain in guest memory has them (guest_formats.h's
+    // DecodeTextureLevels), for the samplers that read them; empty where the
+    // texture has none or the capture is from before they were kept
+    std::vector<std::vector<uint32_t>> mips;
     uint32_t format = 0;         // Xenos TextureFormat, for the stats
     // A texture RB3 draws at runtime (IsRenderedType): its DxTex, its type and
     // the version a draw sampled, how many of its passes had resolved by then
@@ -243,6 +277,12 @@ struct ShadeState : ShadeInputs {
     // and version instead (Texture::tex_obj), with guest memory's pixels as a
     // diffuse render target has them.
     std::shared_ptr<const Texture> maps[kNumShadeMaps];
+    // the samplers its fetch constants describe (fetch_diffuse's for the
+    // diffuse texture, fetch's for each map), which the renderers sample
+    // them with; the default (TexSampler::filtered 0) where none was bound
+    // and in captures from before they were kept
+    TexSampler diffuse_sampler;
+    TexSampler samplers[kNumShadeMaps];
 };
 
 // one draw (first material pass): a DxMesh::DrawShowing, one DxMultiMesh

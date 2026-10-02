@@ -16,8 +16,10 @@
 // render target samples what its passes have drawn so far, which makes the
 // versions right (the crowd's impostor is drawn eight times a frame, each
 // sampled in between). Texture targets keep alpha: impostors are alpha-cut
-// against the clear's 0, and outfit layers blend by it. Mips aren't sampled:
-// every texture is read nearest at level 0, on the GPU too. The spotlights'
+// against the clear's 0, and outfit layers blend by it. A material's textures
+// are read as the game's samplers read them (sample_model.h: filtered,
+// between mip levels by the pixel's footprint), a render target's mips made
+// after its pass as the GPU makes them (BuildMips). The spotlights'
 // cones shade by spot_model.h instead, reading the world's depth where they
 // are on the screen, and the depth volume's blurs blur it in place; the soft
 // particles (scene_capture.h's IsSoftParticle) fade by that depth, and their
@@ -82,6 +84,11 @@ struct RasterOptions {
     // shaders build (shaders/shade.hlsli's MappedNormals); off, those draws
     // are shaded with the vertex normal, as before the capture kept tangents
     bool normal_maps = true;
+    // the game's samplers (scene_capture.h's TexSampler, sample_model.h):
+    // filtering, mip levels by the footprint, anisotropy and addressing as
+    // each draw's fetch constants say, where the capture kept them; off,
+    // every texture nearest at level 0, wrapping, as before
+    bool filtering = true;
     // RB3's post-processing at post_boundary (post_model.h): depth of field,
     // bloom and the colour matrix, as the frame set them; off, the scene as
     // it is

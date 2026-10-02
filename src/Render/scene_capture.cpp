@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -294,9 +295,7 @@ Mat4 ReadMatrix4(const Guest& g, uint32_t a) {
     return r;
 }
 
-// DxMesh's packed vertex and the DXN block (guest_formats.h)
-using guest_format::DecodeDxnBlock;
-using guest_format::DecodeDxt5Alpha;
+// DxMesh's packed vertex (guest_formats.h)
 using guest_format::DecodePacked;
 
 uint32_t Fnv(const uint8_t* p, size_t n, uint32_t h = 2166136261u) {
@@ -334,195 +333,17 @@ Vertex DecodeCpuVert(const Guest& g, uint32_t a) {
 // ---------------------------------------------------------------------------
 // textures
 
-// Xenos tiled 2D addressing (x, y and pitch in blocks), as Xenia computes it
-int32_t TiledOffset2D(int32_t x, int32_t y, uint32_t pitch, uint32_t bpb_log2) {
-    pitch = (pitch + 31) & ~31u;
-    const int32_t macro = ((x >> 5) + (y >> 5) * int32_t(pitch >> 5)) << (bpb_log2 + 7);
-    const int32_t micro = ((x & 7) + ((y & 0xE) << 2)) << bpb_log2;
-    const int32_t offset = macro + ((micro & ~0xF) << 1) + (micro & 0xF) + ((y & 1) << 4);
-    return ((offset & ~0x1FF) << 3) + ((y & 16) << 7) + ((offset & 0x1C0) << 2) +
-           (((((y & 8) >> 2) + (x >> 3)) & 3) << 6) + (offset & 0x3F);
-}
-
-void SwapEndian(uint8_t* p, uint32_t n, uint32_t endian) {
-    switch (endian) {
-        case 1:  // 8in16
-            for (uint32_t i = 0; i + 1 < n; i += 2) std::swap(p[i], p[i + 1]);
-            break;
-        case 2:  // 8in32
-            for (uint32_t i = 0; i + 3 < n; i += 4) {
-                std::swap(p[i], p[i + 3]);
-                std::swap(p[i + 1], p[i + 2]);
-            }
-            break;
-        case 3:  // 16in32
-            for (uint32_t i = 0; i + 3 < n; i += 4) {
-                std::swap(p[i], p[i + 2]);
-                std::swap(p[i + 1], p[i + 3]);
-            }
-            break;
-        default:
-            break;
-    }
-}
-
-struct Rgba {
-    uint8_t c[4];
-};
-
-void Rgb565(uint16_t v, Rgba& out) {
-    out.c[0] = uint8_t(((v >> 11) & 31) * 255 / 31);
-    out.c[1] = uint8_t(((v >> 5) & 63) * 255 / 63);
-    out.c[2] = uint8_t((v & 31) * 255 / 31);
-    out.c[3] = 255;
-}
-
-// the colour half of a DXT block; four_colour forces DXT3/5 behaviour
-void DecodeColorBlock(const uint8_t* b, bool four_colour, Rgba out[16]) {
-    const uint16_t c0 = uint16_t(b[0] | (b[1] << 8));
-    const uint16_t c1 = uint16_t(b[2] | (b[3] << 8));
-    Rgba pal[4];
-    Rgb565(c0, pal[0]);
-    Rgb565(c1, pal[1]);
-    if (four_colour || c0 > c1) {
-        for (int i = 0; i < 3; i++) {
-            pal[2].c[i] = uint8_t((2 * pal[0].c[i] + pal[1].c[i]) / 3);
-            pal[3].c[i] = uint8_t((pal[0].c[i] + 2 * pal[1].c[i]) / 3);
-        }
-        pal[2].c[3] = pal[3].c[3] = 255;
-    } else {
-        for (int i = 0; i < 3; i++) pal[2].c[i] = uint8_t((pal[0].c[i] + pal[1].c[i]) / 2);
-        pal[2].c[3] = 255;
-        pal[3] = Rgba{{0, 0, 0, 0}};
-    }
-    const uint32_t idx = uint32_t(b[4]) | (uint32_t(b[5]) << 8) | (uint32_t(b[6]) << 16) |
-                         (uint32_t(b[7]) << 24);
-    for (int i = 0; i < 16; i++) out[i] = pal[(idx >> (2 * i)) & 3];
-}
-
-struct FormatInfo {
-    uint32_t block;  // block width and height in texels
-    uint32_t bpb;    // bytes per block
-};
-
-bool GetFormatInfo(uint32_t format, FormatInfo& info) {
-    switch (format) {
-        case 2: info = {1, 1}; return true;    // k_8
-        case 4: info = {1, 2}; return true;    // k_5_6_5
-        case 6: info = {1, 4}; return true;    // k_8_8_8_8
-        case 10: info = {1, 2}; return true;   // k_8_8
-        case 18: info = {4, 8}; return true;   // k_DXT1
-        case 19: info = {4, 16}; return true;  // k_DXT2_3
-        case 20: info = {4, 16}; return true;  // k_DXT4_5
-        case 49: info = {4, 16}; return true;  // k_DXN
-        default: return false;
-    }
-}
-
-// texels of one block as the fetch's x, y, z, w components
-void DecodeBlock(uint32_t format, const uint8_t* b, Rgba out[16]) {
-    switch (format) {
-        case 2:
-            out[0] = Rgba{{b[0], 0, 0, 255}};
-            break;
-        case 4: {
-            const uint16_t v = uint16_t(b[0] | (b[1] << 8));
-            out[0] = Rgba{{uint8_t((v & 31) * 255 / 31), uint8_t(((v >> 5) & 63) * 255 / 63),
-                           uint8_t(((v >> 11) & 31) * 255 / 31), 255}};
-            break;
-        }
-        case 6:
-            out[0] = Rgba{{b[0], b[1], b[2], b[3]}};
-            break;
-        case 10:
-            out[0] = Rgba{{b[0], b[1], 0, 255}};
-            break;
-        case 18:
-            DecodeColorBlock(b, false, out);
-            break;
-        case 19:
-            DecodeColorBlock(b + 8, true, out);
-            for (int i = 0; i < 16; i++) {
-                const uint8_t nib = uint8_t((b[i / 2] >> ((i & 1) * 4)) & 0xF);
-                out[i].c[3] = uint8_t(nib * 17);
-            }
-            break;
-        case 20: {
-            DecodeColorBlock(b + 8, true, out);
-            uint8_t a[16];
-            DecodeDxt5Alpha(b, a);
-            for (int i = 0; i < 16; i++) out[i].c[3] = a[i];
-            break;
-        }
-        case 49: {
-            // normal maps' tangent-space x and y (guest_formats.h)
-            uint8_t x[16], y[16];
-            DecodeDxnBlock(b, x, y);
-            for (int i = 0; i < 16; i++) out[i] = Rgba{{x[i], y[i], 0, 255}};
-            break;
-        }
-    }
-}
-
-// mip 0 of a 2D texture from its fetch constant, or null for formats not handled
+// A 2D texture and its mip chain from its fetch constant (guest_formats.h's
+// DecodeTextureLevels); empty rgba for formats not handled
 std::shared_ptr<Texture> DecodeTexture(const Guest& g, const uint32_t f[6]) {
-    const bool tiled = (f[0] >> 31) & 1;
-    const uint32_t pitch_texels = ((f[0] >> 22) & 0x1ff) << 5;
-    const uint32_t format = f[1] & 0x3f;
-    const uint32_t endian = (f[1] >> 6) & 3;
-    const uint32_t base_address = f[1] & 0xfffff000u;
-    const uint32_t width = (f[2] & 0x1fff) + 1;
-    const uint32_t height = ((f[2] >> 13) & 0x1fff) + 1;
-    const uint32_t swizzle = (f[3] >> 1) & 0xfff;
-    const uint32_t dimension = (f[5] >> 9) & 3;
-
     auto tex = std::make_shared<Texture>();
-    tex->format = format;
-    FormatInfo info;
-    if (dimension != 1 || !GetFormatInfo(format, info) || !base_address ||
-        width > kMaxTextureSize || height > kMaxTextureSize) {
-        return tex;  // empty: format not decoded
-    }
-    const uint8_t* src = GpuHost(g, base_address);
-    if (!src) return tex;
-
-    const uint32_t blocks_x = (width + info.block - 1) / info.block;
-    const uint32_t blocks_y = (height + info.block - 1) / info.block;
-    const uint32_t pitch_blocks =
-        std::max(blocks_x, (std::max(pitch_texels, width) + info.block - 1) / info.block);
-    const uint32_t bpb_log2 = info.bpb == 1 ? 0 : info.bpb == 2 ? 1 : info.bpb == 4 ? 2 :
-                              info.bpb == 8 ? 3 : 4;
-    const uint32_t linear_row = (pitch_blocks * info.bpb + 255) & ~255u;
-
-    tex->width = width;
-    tex->height = height;
-    tex->rgba.assign(size_t(width) * height, 0);
-    uint8_t block[16];
-    Rgba texels[16];
-    for (uint32_t by = 0; by < blocks_y; by++) {
-        for (uint32_t bx = 0; bx < blocks_x; bx++) {
-            const uint32_t offset = tiled ? uint32_t(TiledOffset2D(int32_t(bx), int32_t(by),
-                                                                   pitch_blocks, bpb_log2))
-                                          : by * linear_row + bx * info.bpb;
-            std::memcpy(block, src + offset, info.bpb);
-            SwapEndian(block, info.bpb, endian);
-            DecodeBlock(format, block, texels);
-            const uint32_t n = info.block;
-            for (uint32_t ty = 0; ty < n; ty++) {
-                for (uint32_t tx = 0; tx < n; tx++) {
-                    const uint32_t x = bx * n + tx, y = by * n + ty;
-                    if (x >= width || y >= height) continue;
-                    const Rgba& s = texels[ty * n + tx];
-                    uint32_t rgba = 0;
-                    for (int c = 0; c < 4; c++) {
-                        const uint32_t sel = (swizzle >> (3 * c)) & 7;
-                        const uint8_t v = sel < 4 ? s.c[sel] : sel == 4 ? 0 : 255;
-                        rgba |= uint32_t(v) << (8 * c);
-                    }
-                    tex->rgba[size_t(y) * width + x] = rgba;
-                }
-            }
-        }
+    const guest_format::FetchLayout l = guest_format::ReadFetchLayout(f);
+    const uint8_t* base = l.base_address ? GpuHost(g, l.base_address) : nullptr;
+    const uint8_t* mips = l.mip_address && l.mip_max ? GpuHost(g, l.mip_address) : nullptr;
+    if (!guest_format::DecodeTextureLevels(base, mips, f, *tex, kMaxTextureSize)) {
+        tex->width = tex->height = 0;
+        tex->rgba.clear();
+        tex->mips.clear();
     }
     return tex;
 }
@@ -652,6 +473,9 @@ thread_local uint64_t g_shader_options = 0;
 thread_local int32_t g_shader_type = -1;
 // native_view_rt_fallback, kept by its change callback
 std::atomic<bool> g_rt_fallback_guest{true};
+// the SDK's anisotropic_override, which the game's own picture is sampled
+// with (guest_formats.h's DecodeSampler), kept by its change callback
+std::atomic<int32_t> g_aniso_override{-1};
 // native_view_record_targets: texture passes are recorded while capture is
 // off too (off by default, when the game pays only the hooks' early-outs)
 std::atomic<bool> g_record_targets{false};
@@ -1142,6 +966,12 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
         }
     }
     return InternShade(fc, sink.shades, std::move(shade), [&](ShadeState& st) {
+        // the samplers the textures are read with, from the same fetch
+        // constants (none bound: the default)
+        const int32_t aniso = g_aniso_override.load(std::memory_order_relaxed);
+        st.diffuse_sampler = guest_format::DecodeSampler(st.fetch_diffuse, aniso);
+        for (int m = 0; m < kNumShadeMaps; m++)
+            st.samplers[m] = guest_format::DecodeSampler(st.fetch[m], aniso);
         for (int m = 0; m < kNumShadeMaps; m++)
             if (st.fetch[m][1] && !st.maps[m]) st.maps[m] = CaptureMap(g, st.fetch[m], fc);
     });
@@ -2046,6 +1876,16 @@ void TrackSettings() {
                                           [](std::string_view, std::string_view v) {
                                               g_record_targets.store(v == "true" || v == "1");
                                           });
+        // the SDK's, by name: it lives in the GPU's DLL
+        auto aniso = [](std::string_view v) {
+            int32_t value = -1;
+            std::from_chars(v.data(), v.data() + v.size(), value);
+            g_aniso_override.store(value);
+        };
+        aniso(rex::cvar::GetFlagByName("anisotropic_override"));
+        rex::cvar::RegisterChangeCallback("anisotropic_override",
+                                          [aniso](std::string_view, std::string_view v) { aniso(v); });
+        REXLOG_INFO("native view: the host's anisotropic_override is {}", g_aniso_override.load());
     });
 }
 

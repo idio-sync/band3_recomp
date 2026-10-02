@@ -3,10 +3,11 @@
 //   replay <file.cap> <out.png> [--size WxH] [--cam N] [--per-cam] [--list]
 //                               [--compare <screenshot.png> [--image <native.png>]]
 //                               [--diff <native.png>] [--crop x,y,w,h] [--mesh <hex>]
-//                               [--dump-tex <draw>[:<map>]] [--shade <draw>]
+//                               [--dump-tex <draw>[:<map>][@<level>]] [--shade <draw>]
 //                               [--dump-rt <hex>[:<version>]]
 //                               [--rt-none | --rt-guest]
 //                               [--no-tex] [--no-blend] [--no-cull] [--no-shadow] [--no-normal]
+//                               [--nearest]
 //                               [--transpose]
 //                               [--no-skinned | --only-skinned] [--unskinned]
 //                               [--legacy-light | --no-light] [--pick X,Y]
@@ -41,7 +42,8 @@
 // maps (normal, specular, glow, projected, gobo...: --shade's names), and its
 // alpha likewise: --dump-tex <draw>:projected of a projected light's draw is
 // guest memory's copy of NgLight's shadow (right with --readback_resolve=full),
-// to set against --dump-rt of it, which the CPU draws.
+// to set against --dump-rt of it, which the CPU draws. With @<level> it
+// writes that mip level of it instead (Texture::mips, guest memory's chain).
 // --compare draws the frame at the size of a harness `capture` screenshot and
 // writes the two side by side (game left, native right), with their mean
 // difference; with --image the native side is that PNG instead (a harness
@@ -67,7 +69,11 @@
 // cull modes and options. --no-normal shades every normal-mapped material
 // with its vertex normal, leaving its normal map and detail map out
 // (RasterOptions::normal_maps), as captures from before the tangents were
-// kept are drawn. --pick draws the frame at --size and prints the
+// kept are drawn. --nearest reads every texture nearest at level 0, as the
+// native view did before it sampled them as the game's samplers do
+// (RasterOptions::filtering; captures from before the samplers were kept
+// draw so either way); --shade prints each texture's sampler and its levels.
+// --pick draws the frame at --size and prints the
 // draw that last wrote pixel X,Y, its colour and its shade.
 // Every capture prints a "post:" line, what post-processing was set to do at
 // DxRnd::DoPostProcess (post_params.h: boundary, colour matrix, bloom, DOF,
@@ -332,6 +338,30 @@ std::string FetchString(const uint32_t f[6]) {
     return buf;
 }
 
+// what a sampler does (scene_capture.h's TexSampler)
+std::string SamplerString(const TexSampler& t) {
+    if (!t.filtered) return "sampler: none kept (nearest, level 0)";
+    static const char* kMip[] = {"nearest", "linear", "base", "?"};
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "sampler: clamp %u,%u mag %s min %s mip %s aniso %u levels %u-%u bias %.2f "
+                  "border %s",
+                  t.clamp_x, t.clamp_y, t.mag_linear ? "linear" : "point",
+                  t.min_linear ? "linear" : "point", kMip[t.mip & 3], t.aniso, t.mip_min,
+                  t.mip_max, t.lod_bias, t.border_white ? "white" : "black");
+    return buf;
+}
+
+// a texture's size and how many levels the capture kept of it
+std::string LevelsString(const Texture* t) {
+    if (!t) return "none";
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%ux%u, %zu level%s%s", t->width, t->height,
+                  1 + t->mips.size(), t->mips.empty() ? "" : "s",
+                  t->rgba.empty() ? " (no pixels)" : "");
+    return buf;
+}
+
 // the shades' numbers over the frame: how well the constants and option word
 // agree with the material, and how often a draw has a second pass
 void PrintShadeSummary(const FrameCapture& fc) {
@@ -450,6 +480,8 @@ void PrintShade(const FrameCapture& fc, size_t draw) {
     }
     std::printf("  s0  diffuse: bound %s, material's base %08X\n",
                 FetchString(s->fetch_diffuse).c_str(), s->mat_diffuse_base);
+    std::printf("      %s; texture %s\n", SamplerString(s->diffuse_sampler).c_str(),
+                LevelsString(d.tex.get()).c_str());
     for (int m = 0; m < kNumShadeMaps; m++) {
         std::printf("  s%-2u %s: bound %s, material %08X (base %08X)", kShadeMapSampler[m],
                     kMapNames[m], FetchString(s->fetch[m]).c_str(), s->mat_maps[m],
@@ -460,6 +492,9 @@ void PrintShade(const FrameCapture& fc, size_t draw) {
         else if (t)
             std::printf(", decoded %ux%u", t->width, t->height);
         std::printf("\n");
+        if (s->fetch[m][1])
+            std::printf("      %s; map %s\n", SamplerString(s->samplers[m]).c_str(),
+                        LevelsString(s->maps[m].get()).c_str());
     }
 }
 
@@ -824,6 +859,7 @@ int main(int argc, char** argv) {
     Crop crop;
     long mesh_filter = -1, dump_tex = -1, shade_draw = -1;
     int dump_map = -1;  // --dump-tex's :<map>, -1 the diffuse texture
+    long dump_level = 0;  // and its @<level>
     uint32_t dump_rt = 0, dump_rt_version = 0;
     int pick_x = -1, pick_y = -1;
     long cam_filter = -1;
@@ -846,9 +882,11 @@ int main(int argc, char** argv) {
         else if (a == "--dump-tex" && i + 1 < argc) {
             char* end = nullptr;
             dump_tex = std::strtol(argv[++i], &end, 0);
+            if (const char* at = std::strchr(argv[i], '@')) dump_level = std::strtol(at + 1, nullptr, 0);
             if (end && *end == ':') {
+                const std::string name(end + 1, std::strcspn(end + 1, "@"));
                 for (int m = 0; m < kNumShadeMaps; m++)
-                    if (std::strcmp(end + 1, kMapNames[m]) == 0) dump_map = m;
+                    if (name == kMapNames[m]) dump_map = m;
                 if (dump_map < 0) {
                     std::fprintf(stderr, "--dump-tex's map is one of --shade's names\n");
                     return 2;
@@ -868,6 +906,7 @@ int main(int argc, char** argv) {
         else if (a == "--no-cull") o.culling = false;
         else if (a == "--no-shadow") o.self_shadow = false;
         else if (a == "--no-normal") o.normal_maps = false;
+        else if (a == "--nearest") o.filtering = false;
         else if (a == "--no-tex") o.textures = false;
         else if (a == "--legacy-light") o.legacy_light = true;
         else if (a == "--no-light") o.lighting = false;
@@ -1141,11 +1180,21 @@ int main(int argc, char** argv) {
                          dump_map >= 0 ? kMapNames[dump_map] : "texture");
             return 1;
         }
-        const Texture& t = *tp;
+        Texture t = *tp;
         if (t.rgba.empty()) {
             std::fprintf(stderr, "draw %ld samples render target %08X version %u, kept without "
                          "pixels\n", dump_tex, t.tex_obj, t.version);
             return 1;
+        }
+        // a mip level instead of the base
+        if (dump_level > 0) {
+            if (size_t(dump_level) > t.mips.size()) {
+                std::fprintf(stderr, "it has %zu mip levels\n", t.mips.size());
+                return 1;
+            }
+            t.rgba = t.mips[dump_level - 1];
+            t.width = std::max(1u, t.width >> dump_level);
+            t.height = std::max(1u, t.height >> dump_level);
         }
         // alpha off, to see the colour, and on its own as grey
         std::vector<uint32_t> px = t.rgba, alpha(t.rgba.size());

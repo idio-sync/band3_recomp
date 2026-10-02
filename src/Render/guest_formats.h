@@ -4,12 +4,16 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <utility>
+#include <vector>
 
 #include "src/Render/scene_capture.h"
 
 // Experimental: the 360 formats the native view's capture (scene_capture.cpp)
-// decodes RB3's meshes and normal maps from, apart from guest memory so the
-// unit tests can check them: DxMesh's packed vertex and the DXN block.
+// decodes RB3's meshes and textures from, apart from guest memory so the
+// unit tests can check them: DxMesh's packed vertex, the texture blocks, the
+// tiled layout and the mip chain, and the sampler a texture fetch constant
+// describes.
 
 namespace band3::render::guest_format {
 
@@ -107,6 +111,388 @@ inline void DecodeDxt5Alpha(const uint8_t* b, uint8_t out[16]) {
 inline void DecodeDxnBlock(const uint8_t* b, uint8_t x[16], uint8_t y[16]) {
     DecodeDxt5Alpha(b, x);
     DecodeDxt5Alpha(b + 8, y);
+}
+
+// ---------------------------------------------------------------------------
+// textures
+
+// Xenos tiled 2D addressing (x, y and pitch in blocks), as Xenia computes it
+inline int32_t TiledOffset2D(int32_t x, int32_t y, uint32_t pitch, uint32_t bpb_log2) {
+    pitch = (pitch + 31) & ~31u;
+    const int32_t macro = ((x >> 5) + (y >> 5) * int32_t(pitch >> 5)) << (bpb_log2 + 7);
+    const int32_t micro = ((x & 7) + ((y & 0xE) << 2)) << bpb_log2;
+    const int32_t offset = macro + ((micro & ~0xF) << 1) + (micro & 0xF) + ((y & 1) << 4);
+    return ((offset & ~0x1FF) << 3) + ((y & 16) << 7) + ((offset & 0x1C0) << 2) +
+           (((((y & 8) >> 2) + (x >> 3)) & 3) << 6) + (offset & 0x3F);
+}
+
+inline void SwapEndian(uint8_t* p, uint32_t n, uint32_t endian) {
+    switch (endian) {
+        case 1:  // 8in16
+            for (uint32_t i = 0; i + 1 < n; i += 2) std::swap(p[i], p[i + 1]);
+            break;
+        case 2:  // 8in32
+            for (uint32_t i = 0; i + 3 < n; i += 4) {
+                std::swap(p[i], p[i + 3]);
+                std::swap(p[i + 1], p[i + 2]);
+            }
+            break;
+        case 3:  // 16in32
+            for (uint32_t i = 0; i + 3 < n; i += 4) {
+                std::swap(p[i], p[i + 2]);
+                std::swap(p[i + 1], p[i + 3]);
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+struct Rgba {
+    uint8_t c[4];
+};
+
+inline void Rgb565(uint16_t v, Rgba& out) {
+    out.c[0] = uint8_t(((v >> 11) & 31) * 255 / 31);
+    out.c[1] = uint8_t(((v >> 5) & 63) * 255 / 63);
+    out.c[2] = uint8_t((v & 31) * 255 / 31);
+    out.c[3] = 255;
+}
+
+// the colour half of a DXT block; four_colour forces DXT3/5 behaviour
+inline void DecodeColorBlock(const uint8_t* b, bool four_colour, Rgba out[16]) {
+    const uint16_t c0 = uint16_t(b[0] | (b[1] << 8));
+    const uint16_t c1 = uint16_t(b[2] | (b[3] << 8));
+    Rgba pal[4];
+    Rgb565(c0, pal[0]);
+    Rgb565(c1, pal[1]);
+    if (four_colour || c0 > c1) {
+        for (int i = 0; i < 3; i++) {
+            pal[2].c[i] = uint8_t((2 * pal[0].c[i] + pal[1].c[i]) / 3);
+            pal[3].c[i] = uint8_t((pal[0].c[i] + 2 * pal[1].c[i]) / 3);
+        }
+        pal[2].c[3] = pal[3].c[3] = 255;
+    } else {
+        for (int i = 0; i < 3; i++) pal[2].c[i] = uint8_t((pal[0].c[i] + pal[1].c[i]) / 2);
+        pal[2].c[3] = 255;
+        pal[3] = Rgba{{0, 0, 0, 0}};
+    }
+    const uint32_t idx = uint32_t(b[4]) | (uint32_t(b[5]) << 8) | (uint32_t(b[6]) << 16) |
+                         (uint32_t(b[7]) << 24);
+    for (int i = 0; i < 16; i++) out[i] = pal[(idx >> (2 * i)) & 3];
+}
+
+struct FormatInfo {
+    uint32_t block;  // block width and height in texels
+    uint32_t bpb;    // bytes per block
+    uint32_t bpb_log2;
+};
+
+// the Xenos TextureFormats decoded
+inline bool GetFormatInfo(uint32_t format, FormatInfo& info) {
+    switch (format) {
+        case 2: info = {1, 1, 0}; return true;    // k_8
+        case 4: info = {1, 2, 1}; return true;    // k_5_6_5
+        case 6: info = {1, 4, 2}; return true;    // k_8_8_8_8
+        case 10: info = {1, 2, 1}; return true;   // k_8_8
+        case 18: info = {4, 8, 3}; return true;   // k_DXT1
+        case 19: info = {4, 16, 4}; return true;  // k_DXT2_3
+        case 20: info = {4, 16, 4}; return true;  // k_DXT4_5
+        case 49: info = {4, 16, 4}; return true;  // k_DXN
+        default: return false;
+    }
+}
+
+// texels of one block as the fetch's x, y, z, w components
+inline void DecodeBlock(uint32_t format, const uint8_t* b, Rgba out[16]) {
+    switch (format) {
+        case 2:
+            out[0] = Rgba{{b[0], 0, 0, 255}};
+            break;
+        case 4: {
+            const uint16_t v = uint16_t(b[0] | (b[1] << 8));
+            out[0] = Rgba{{uint8_t((v & 31) * 255 / 31), uint8_t(((v >> 5) & 63) * 255 / 63),
+                           uint8_t(((v >> 11) & 31) * 255 / 31), 255}};
+            break;
+        }
+        case 6:
+            out[0] = Rgba{{b[0], b[1], b[2], b[3]}};
+            break;
+        case 10:
+            out[0] = Rgba{{b[0], b[1], 0, 255}};
+            break;
+        case 18:
+            DecodeColorBlock(b, false, out);
+            break;
+        case 19:
+            DecodeColorBlock(b + 8, true, out);
+            for (int i = 0; i < 16; i++) {
+                const uint8_t nib = uint8_t((b[i / 2] >> ((i & 1) * 4)) & 0xF);
+                out[i].c[3] = uint8_t(nib * 17);
+            }
+            break;
+        case 20: {
+            DecodeColorBlock(b + 8, true, out);
+            uint8_t a[16];
+            DecodeDxt5Alpha(b, a);
+            for (int i = 0; i < 16; i++) out[i].c[3] = a[i];
+            break;
+        }
+        case 49: {
+            // normal maps' tangent-space x and y (DecodeDxnBlock)
+            uint8_t x[16], y[16];
+            DecodeDxnBlock(b, x, y);
+            for (int i = 0; i < 16; i++) out[i] = Rgba{{x[i], y[i], 0, 255}};
+            break;
+        }
+    }
+}
+
+inline uint32_t Log2Ceil(uint32_t v) {
+    uint32_t l = 0;
+    while ((1u << l) < v) l++;
+    return l;
+}
+inline uint32_t Log2Floor(uint32_t v) {
+    uint32_t l = 0;
+    while (v > 1) {
+        v >>= 1;
+        l++;
+    }
+    return l;
+}
+inline uint32_t NextPow2(uint32_t v) { return 1u << Log2Ceil(v); }
+inline uint32_t AlignUp(uint32_t v, uint32_t a) { return (v + a - 1) / a * a; }
+
+// The level a texture's packed mip tail starts at: the first whose shorter
+// side is 16 texels or less (Xenia's texture_util GetPackedMipLevel). With
+// packed mips, that level and every smaller one share one 32x32-texel tile.
+inline uint32_t PackedMipLevel(uint32_t width, uint32_t height) {
+    const uint32_t log2_size = Log2Ceil(std::min(width, height));
+    return log2_size > 4 ? log2_size - 4 : 0;
+}
+
+// Where `mip` of a width x height texture is in its packed tail, in blocks
+// of `block` texels, or false if it isn't packed (Xenia's texture_util
+// GetPackedMipOffset, for 2D): a wide texture's tail goes down then across,
+// a tall or square one's across then down
+inline bool PackedMipOffset(uint32_t width, uint32_t height, uint32_t block, uint32_t mip,
+                            uint32_t& x_blocks, uint32_t& y_blocks) {
+    const uint32_t log2_width = Log2Ceil(width), log2_height = Log2Ceil(height);
+    const uint32_t log2_size = std::min(log2_width, log2_height);
+    x_blocks = y_blocks = 0;
+    if (log2_size > 4 + mip) return false;
+    const uint32_t packed_mip_base = log2_size > 4 ? log2_size - 4 : 0;
+    const uint32_t packed_mip = mip - packed_mip_base;
+    if (packed_mip < 3) {
+        if (log2_width > log2_height)
+            y_blocks = 16 >> packed_mip;
+        else
+            x_blocks = 16 >> packed_mip;
+    } else if (log2_width > log2_height) {
+        x_blocks = (1u << (log2_width - packed_mip_base)) >> (packed_mip - 2);
+    } else {
+        y_blocks = (1u << (log2_height - packed_mip_base)) >> (packed_mip - 2);
+    }
+    x_blocks /= block;
+    y_blocks /= block;
+    return true;
+}
+
+// What a texture fetch constant's six dwords say about the texture's layout
+struct FetchLayout {
+    bool tiled = false;
+    uint32_t pitch_texels = 0;  // the base level's row pitch
+    uint32_t format = 0, endian = 0;
+    uint32_t base_address = 0, mip_address = 0;
+    uint32_t width = 0, height = 0;
+    uint32_t swizzle = 0;
+    uint32_t dimension = 0;  // 1 2D, 3 cube
+    bool packed_mips = false;
+    // the last level stored under mip_address (0: none), Xenia's
+    // GetSubresourcesFromFetchConstant's mip_max_level
+    uint32_t mip_max = 0;
+};
+
+inline FetchLayout ReadFetchLayout(const uint32_t f[6]) {
+    FetchLayout l;
+    l.tiled = (f[0] >> 31) & 1;
+    l.pitch_texels = ((f[0] >> 22) & 0x1ff) << 5;
+    l.format = f[1] & 0x3f;
+    l.endian = (f[1] >> 6) & 3;
+    l.base_address = f[1] & 0xfffff000u;
+    l.width = (f[2] & 0x1fff) + 1;
+    l.height = ((f[2] >> 13) & 0x1fff) + 1;
+    l.swizzle = (f[3] >> 1) & 0xfff;
+    l.dimension = (f[5] >> 9) & 3;
+    l.packed_mips = (f[5] >> 11) & 1;
+    l.mip_address = f[5] & 0xfffff000u;
+    const uint32_t size_max = Log2Floor(std::max(l.width, l.height));
+    const uint32_t mip_min = std::min((f[4] >> 2) & 15, size_max);
+    l.mip_max = l.mip_address ? std::max(std::min((f[4] >> 6) & 15, size_max), mip_min) : 0;
+    return l;
+}
+
+// Where a level's texels are: the bytes from its memory's start (the base
+// address for level 0, the mip address for the rest) to the 32x32-block-
+// padded image it's stored in, that image's row pitch in blocks (tiled) or
+// bytes (linear), and its own offset in that image in blocks (non-zero in a
+// packed mip tail), as Xenia's GetGuestTextureLayout lays them out: the base
+// at the fetch's pitch; mips each padded to max(next_pow2(size) >> level, 1)
+// in 32-block tiles, 4 KB aligned, one after another from the mip address;
+// with packed mips, every level from PackedMipLevel on in that level's image
+// (the mips' tail like level 0's, under the mip address, when the texture's
+// shorter side is 16 or less, and then the base in a tail of its own too).
+struct LevelPlace {
+    uint32_t offset = 0;
+    uint32_t pitch_blocks = 0;
+    uint32_t row_bytes = 0;  // linear only
+    uint32_t x_blocks = 0, y_blocks = 0;
+};
+
+inline LevelPlace PlaceLevel(const FetchLayout& l, const FormatInfo& info, uint32_t level) {
+    LevelPlace p;
+    const uint32_t packed = l.packed_mips ? PackedMipLevel(l.width, l.height) : ~0u;
+    if (level == 0) {
+        const uint32_t blocks_x = (l.width + info.block - 1) / info.block;
+        p.pitch_blocks =
+            std::max(blocks_x, (std::max(l.pitch_texels, l.width) + info.block - 1) / info.block);
+    } else {
+        // the image it's stored in, and the bytes of each image before it
+        const uint32_t stored = std::min(level, packed);
+        auto pitch_of = [&](uint32_t s) {
+            const uint32_t texels = std::max(NextPow2(l.width) >> s, 1u);
+            return AlignUp((texels + info.block - 1) / info.block, 32);
+        };
+        auto row_bytes_of = [&](uint32_t s) {
+            const uint32_t bytes = pitch_of(s) * info.bpb;
+            return l.tiled ? bytes : AlignUp(bytes, 256);
+        };
+        for (uint32_t s = 1; s < stored; s++) {
+            const uint32_t rows = std::max(NextPow2(l.height) >> s, 1u);
+            const uint32_t block_rows = AlignUp((rows + info.block - 1) / info.block, 32);
+            p.offset += AlignUp(row_bytes_of(s) * block_rows, 4096);
+        }
+        p.pitch_blocks = pitch_of(stored);
+    }
+    p.row_bytes = AlignUp(p.pitch_blocks * info.bpb, 256);
+    if (level >= packed) PackedMipOffset(l.width, l.height, info.block, level, p.x_blocks, p.y_blocks);
+    return p;
+}
+
+// Decodes level `level` (w x h texels) from src, where PlaceLevel says it is,
+// into out (w * h RGBA8, R in the low byte, swizzled as the fetch says)
+inline void DecodeLevel(const uint8_t* src, const FetchLayout& l, const FormatInfo& info,
+                        const LevelPlace& p, uint32_t w, uint32_t h, uint32_t* out) {
+    const uint32_t blocks_x = (w + info.block - 1) / info.block;
+    const uint32_t blocks_y = (h + info.block - 1) / info.block;
+    uint8_t block[16];
+    Rgba texels[16];
+    for (uint32_t by = 0; by < blocks_y; by++) {
+        for (uint32_t bx = 0; bx < blocks_x; bx++) {
+            const uint32_t x = p.x_blocks + bx, y = p.y_blocks + by;
+            const uint32_t offset =
+                p.offset + (l.tiled ? uint32_t(TiledOffset2D(int32_t(x), int32_t(y),
+                                                             p.pitch_blocks, info.bpb_log2))
+                                    : y * p.row_bytes + x * info.bpb);
+            std::memcpy(block, src + offset, info.bpb);
+            SwapEndian(block, info.bpb, l.endian);
+            DecodeBlock(l.format, block, texels);
+            const uint32_t n = info.block;
+            for (uint32_t ty = 0; ty < n; ty++) {
+                for (uint32_t tx = 0; tx < n; tx++) {
+                    const uint32_t px = bx * n + tx, py = by * n + ty;
+                    if (px >= w || py >= h) continue;
+                    const Rgba& s = texels[ty * n + tx];
+                    uint32_t rgba = 0;
+                    for (int c = 0; c < 4; c++) {
+                        const uint32_t sel = (l.swizzle >> (3 * c)) & 7;
+                        const uint8_t v = sel < 4 ? s.c[sel] : sel == 4 ? 0 : 255;
+                        rgba |= uint32_t(v) << (8 * c);
+                    }
+                    out[size_t(py) * w + px] = rgba;
+                }
+            }
+        }
+    }
+}
+
+// A 2D texture's base level and mip chain, from its base level's memory
+// (`base`, the fetch's base address) and its mips' (`mips`, its mip address;
+// null for none), as the fetch constant `f` lays them out. False, out left
+// empty, for a format not decoded or a texture that isn't 2D. Levels that are
+// the base itself in a packed tail (a texture 16 or less on its short side)
+// are read where the tail puts them.
+inline bool DecodeTextureLevels(const uint8_t* base, const uint8_t* mips, const uint32_t f[6],
+                                Texture& out, uint32_t max_size = 4096) {
+    const FetchLayout l = ReadFetchLayout(f);
+    out.format = l.format;
+    FormatInfo info;
+    if (l.dimension != 1 || !GetFormatInfo(l.format, info) || !base || l.width > max_size ||
+        l.height > max_size)
+        return false;
+    out.width = l.width;
+    out.height = l.height;
+    out.rgba.assign(size_t(l.width) * l.height, 0);
+    DecodeLevel(base, l, info, PlaceLevel(l, info, 0), l.width, l.height, out.rgba.data());
+    out.mips.clear();
+    if (!mips) return true;
+    for (uint32_t level = 1; level <= l.mip_max; level++) {
+        const uint32_t w = std::max(l.width >> level, 1u), h = std::max(l.height >> level, 1u);
+        std::vector<uint32_t> px(size_t(w) * h, 0);
+        DecodeLevel(mips, l, info, PlaceLevel(l, info, level), w, h, px.data());
+        out.mips.push_back(std::move(px));
+    }
+    return true;
+}
+
+// The sampler a texture fetch constant describes (scene_capture.h's
+// TexSampler): its clamp modes, filters, anisotropy, mip range and LOD bias
+// (5 fractional bits) and border colour. Filters 2 and 3 (base map, "use the
+// fetch constant") mean linear for mag and min; anisotropy 1 is 1:1 and 7
+// "the fetch constant's", both isotropic.
+//
+// As the game's own picture under band3 has it: the SDK draws it on the host
+// GPU through Xenia's texture cache, which takes the sampler from the same
+// fetch constant, and then `aniso_override` (the SDK's anisotropic_override
+// setting: -1 none, 0 off, 1..5 1:1..16:1) replaces the anisotropy of a
+// sampler that's linear both ways, nearest or linear between levels, on a
+// texture with more than one level (xenia-canary's D3D12TextureCache::
+// GetSamplerParameters); anisotropy of any ratio filters linearly in all
+// three ways, as there. RB3's material shaders take every filter from the
+// fetch constant (their tfetch instructions override none), so the override
+// is the only difference.
+inline TexSampler DecodeSampler(const uint32_t f[6], int32_t aniso_override = -1) {
+    TexSampler s;
+    if (!f[1]) return s;
+    s.filtered = 1;
+    s.clamp_x = uint8_t((f[0] >> 10) & 7);
+    s.clamp_y = uint8_t((f[0] >> 13) & 7);
+    const uint32_t mag = (f[3] >> 19) & 3, min = (f[3] >> 21) & 3, mip = (f[3] >> 23) & 3;
+    s.mag_linear = mag != 0;
+    s.min_linear = min != 0;
+    s.mip = uint8_t(mip == 3 ? 1 : mip);
+    s.mip_min = uint8_t((f[4] >> 2) & 15);
+    s.mip_max = uint8_t((f[4] >> 6) & 15);
+    uint32_t aniso = (f[3] >> 25) & 7;
+    if (aniso == 7) aniso = 0;
+    aniso = std::min(aniso, 5u);
+    const FetchLayout l = ReadFetchLayout(f);
+    const uint32_t size_max = Log2Floor(std::max(l.width, l.height));
+    const bool has_mips = l.mip_max > std::min<uint32_t>(s.mip_min, size_max);
+    if (aniso_override >= 0 && aniso_override <= 5 && has_mips && mag == 1 && min == 1 &&
+        (mip == 0 || mip == 1))
+        aniso = uint32_t(aniso_override);
+    s.aniso = uint8_t(aniso >= 2 ? 1u << (aniso - 1) : 1u);
+    if (aniso) {
+        s.mag_linear = s.min_linear = 1;
+        if (s.mip != 2) s.mip = 1;
+    }
+    int32_t bias = int32_t((f[4] >> 12) & 1023);
+    if (bias & 512) bias -= 1024;
+    s.lod_bias = float(bias) / 32.0f;
+    s.border_white = (f[5] & 3) == 1;
+    return s;
 }
 
 }  // namespace band3::render::guest_format

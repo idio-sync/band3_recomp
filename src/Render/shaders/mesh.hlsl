@@ -55,11 +55,13 @@ VK_BINDING(0, 1) cbuffer VertexUniforms : register(b0, space1) {
 VK_BINDING(0, 0) ByteAddressBuffer bones : register(t0, space0);
 
 // Textures share arrays by size class, a texture to a layer, in its corner
-// (gpu_view.cpp): the diffuse texture, the specular map, the glow map, the
-// projected light's two (s5, and the gobo s10) and the normal map and the
-// detail map (s1, s14; after the shadow map's slot). The samplers are
-// SDL_gpu's pairing; the shader reads texels itself, as soft_raster.cpp's
-// Texel() and SampleBorder() do
+// of every level (gpu_view.cpp): the diffuse texture, the specular map, the
+// glow map, the projected light's two (s5, and the gobo s10) and the normal
+// map and the detail map (s1, s14; after the shadow map's slot). The
+// samplers are SDL_gpu's pairing; the shader reads texels itself, as
+// soft_raster.cpp's Texel() and SampleBorder() do, and filters them by the
+// game's samplers itself (sample_model.hlsli, which the CPU runs too): a
+// hardware sampler couldn't wrap a texture in a corner of its layer
 VK_SAMPLER VK_BINDING(0, 2) Texture2DArray<float4> tex : register(t0, space2);
 VK_SAMPLER VK_BINDING(0, 2) SamplerState tex_sampler : register(s0, space2);
 VK_SAMPLER VK_BINDING(1, 2) Texture2DArray<float4> spec_tex : register(t1, space2);
@@ -101,6 +103,9 @@ VK_BINDING(0, 3) cbuffer PixelUniforms : register(b0, space3) {
     // and the detail map's
     uint4 tex_size[8];
     uint4 pixel_flags;
+    // the samplers they're read with (sample_model.h's PackSampler), in
+    // tex_layer's order
+    uint4 tex_samp[8];
 };
 
 // A spotlight's cone (PSSpotCone): its numbers, where its pass's viewport is
@@ -238,6 +243,21 @@ float4 Texel(Texture2DArray<float4> t, float2 uv, uint layer, uint2 size) {
     return t.Load(int4(at, layer, 0));
 }
 
+#define SAMPLE_TEX Texture2DArray<float4> t, uint layer
+#define SAMPLE_ARGS t, layer
+#define SAMPLE_LOAD(level, x, y) t.Load(int4(x, y, layer, level))
+#define SAMPLE_LOOP [loop]
+#include "sample_model.hlsli"
+
+// A texel of a material's texture at uv, whose derivatives across the screen
+// are dx and dy: by sampler s, the game's, or nearest at level 0 as before
+// (soft_raster.cpp's Read)
+float4 ReadTexture(Texture2DArray<float4> t, uint layer, uint2 size, uint4 s, float2 uv,
+                   float2 dx, float2 dy) {
+    if ((s.x & kSampleFiltered) == 0u) return Texel(t, uv, layer, size);
+    return SampleTexture(t, layer, size, s, uv, dx, dy);
+}
+
 // bilinear at uv, outside the texture a transparent black border, by
 // soft_raster.cpp's SampleBorder()'s arithmetic: the projected light's maps
 float4 ProjTexel(Texture2DArray<float4> t, float2 uv, uint layer, uint2 size) {
@@ -263,19 +283,32 @@ float4 ProjTexel(Texture2DArray<float4> t, float2 uv, uint layer, uint2 size) {
 // cut and the blend's premultiply (FinishMesh)
 float4 MeshColor(PixelIn i) {
     const uint f = ps_shade.flags.x;
+    // the uv's derivatives, and the detail map's uv's, between the pixels
+    // of the 2x2 quad in the pixel's row and in its column (soft_raster.cpp's
+    // RasterTri works the same ones out), before anything branches
+    const float2 dx = ddx_fine(i.uv);
+    const float2 dy = ddy_fine(i.uv);
+    const float2 detail_uv = DetailUv(ps_shade, i.uv);
+    const float2 detail_dx = ddx_fine(detail_uv);
+    const float2 detail_dy = ddy_fine(detail_uv);
     float4 texel = float4(1, 1, 1, 1);
     float4 spec_map = float4(1, 1, 1, 1);
     float4 glow = float4(0, 0, 0, 0);
-    if ((f & kShadeTextured) != 0u) texel = Texel(tex, i.uv, tex_layer[0].x, tex_size[0].xy);
+    if ((f & kShadeTextured) != 0u)
+        texel = ReadTexture(tex, tex_layer[0].x, tex_size[0].xy, tex_samp[0], i.uv, dx, dy);
     if ((f & kShadeSpecMap) != 0u)
-        spec_map = Texel(spec_tex, i.uv, tex_layer[0].y, tex_size[1].xy);
-    if ((f & kShadeGlow) != 0u) glow = Texel(glow_tex, i.uv, tex_layer[0].z, tex_size[2].xy);
+        spec_map = ReadTexture(spec_tex, tex_layer[0].y, tex_size[1].xy, tex_samp[1], i.uv,
+                               dx, dy);
+    if ((f & kShadeGlow) != 0u)
+        glow = ReadTexture(glow_tex, tex_layer[0].z, tex_size[2].xy, tex_samp[2], i.uv, dx, dy);
     float4 normal = float4(0.5, 0.5, 0, 1);
     float4 detail = float4(0.5, 0.5, 0, 1);
     if ((f & kShadeNormalMap) != 0u) {
-        normal = Texel(normal_tex, i.uv, tex_layer[1].y, tex_size[6].xy);
+        normal = ReadTexture(normal_tex, tex_layer[1].y, tex_size[6].xy, tex_samp[5], i.uv, dx,
+                             dy);
         if ((f & kShadeDetailMap) != 0u)
-            detail = Texel(detail_tex, DetailUv(ps_shade, i.uv), tex_layer[1].z, tex_size[7].xy);
+            detail = ReadTexture(detail_tex, tex_layer[1].z, tex_size[7].xy, tex_samp[6],
+                                 detail_uv, detail_dx, detail_dy);
     }
     float4 proj = float4(0, 0, 0, 0);
     float4 gobo = float4(0, 0, 0, 0);

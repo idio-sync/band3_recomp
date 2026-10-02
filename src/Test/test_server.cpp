@@ -210,6 +210,7 @@ public:
         options.width = out.screenshot.width;
         options.height = out.screenshot.height;
         options.normal_maps = REXCVAR_GET(native_view_normal_maps);
+        options.filtering = REXCVAR_GET(native_view_texture_filtering);
         std::vector<uint32_t> rgba;
         render::GpuStats stats;
         if (!render::GpuRenderer::Get().RenderFrame(frame, options, rgba, stats)) {
@@ -238,6 +239,19 @@ public:
             render::WritePng(
                 (rex::filesystem::GetExecutableFolder() / "screenshots" / (file + suffix)).string(),
                 rgba, options.width, options.height);
+        }
+        // and, sampling the textures as it did before the game's samplers,
+        // nearest at level 0, <name>.gpu.nearest.png: the same frame without
+        // them, to see what they change
+        if (options.filtering) {
+            options.view = render::RasterView::kFinal;
+            options.filtering = false;
+            render::GpuStats nearest_stats;
+            if (render::GpuRenderer::Get().RenderFrame(frame, options, rgba, nearest_stats))
+                render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
+                                  (file + ".gpu.nearest.png"))
+                                     .string(),
+                                 rgba, options.width, options.height);
         }
     }
 

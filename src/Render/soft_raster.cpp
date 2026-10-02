@@ -1,12 +1,14 @@
 #include "src/Render/soft_raster.h"
 
 #include "src/Render/post_model.h"
+#include "src/Render/sample_model.h"
 #include "src/Render/shade_model.h"
 #include "src/Render/spot_model.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -106,15 +108,16 @@ struct Target {
     }
 };
 
-// a texture to sample: its size and pixels (RGBA8, R low), null for none
-struct TexView {
-    uint32_t w = 0, h = 0;
-    const uint32_t* px = nullptr;
-};
+// a texture to sample: its size, pixels (RGBA8, R low; null for none) and
+// mips, if it has any
+using TexView = TexLevels;
+
+using MipChain = std::vector<std::vector<uint32_t>>;
+const MipChain* MipsOf(const MipChain& m) { return m.empty() ? nullptr : &m; }
 
 TexView View(const Texture* t) {
     if (!t || t->rgba.empty()) return {};
-    return {t->width, t->height, t->rgba.data()};
+    return {t->width, t->height, t->rgba.data(), MipsOf(t->mips)};
 }
 
 struct DrawState {
@@ -143,6 +146,11 @@ struct DrawState {
     // into a shadow map (Target::zw): depth alone
     bool depth_only = false;
     TexView behind;  // the target's behind, for kShadeRefract
+    // the samplers tex, spec_map, glow, normal and detail are read with
+    // (sample_model.h's PackSampler), and whether any of them is the game's,
+    // which reads the uv's derivatives
+    uint32_t samp_tex[4], samp_spec[4], samp_glow[4], samp_normal[4], samp_detail[4];
+    bool lod = false;
     shade::ShadeParams shade;
     bool per_vertex;  // kShadePerVertex: ClipVert's ld and la are set
     bool normal_map;  // kShadeNormalMap: ClipVert's u and b are set
@@ -266,27 +274,57 @@ float SoftPixelFade(const DrawState& ds, const Target& t, int x, int y, float w)
     return shade::SoftFadeCpu(ds.soft_far, SceneInvW(t, u, v), w);
 }
 
+// A texel of t at uv: by sampler s, the game's (sample_model.h), with the
+// uv's derivatives d (across, then down), or else nearest at level 0
+void Read(const TexView& t, const uint32_t s[4], const float uv[2], const float d[4],
+          float out[4]) {
+    if (s[0] & kSampleFiltered)
+        SampleTextureCpu(t, s, uv, d, d + 2, out);
+    else
+        Texel(t, uv, out);
+}
+
 // pixel x, y's colour; the picture behind it is the one at x, y, the
 // target's size (mesh.hlsl reads it at SV_Position likewise); u and b the
-// tangent and bitangent of a normal-mapped draw
+// tangent and bitangent of a normal-mapped draw. With ds.lod, quad has the
+// uv at the pixels its derivatives are taken between, as the GPU's
+// ddx_fine and ddy_fine take them (RasterTri): the two of its 2x2 quad in
+// its row, then the two in its column.
 void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3],
            const float vc[4], const float wp[3], float depth, const float ao[2],
            const float ld[3], const float la[3], const float u[3], const float b[3],
-           float out[4]) {
+           const float quad[8], float out[4]) {
     float texel[4] = {1, 1, 1, 1}, spec_map[4] = {1, 1, 1, 1}, glow[4] = {0, 0, 0, 0};
     float behind[4] = {1, 1, 1, 1};
-    if (ds.tex.px) Texel(ds.tex, uv, texel);
-    if (ds.spec_map.px) Texel(ds.spec_map, uv, spec_map);
-    if (ds.glow.px) Texel(ds.glow, uv, glow);
+    float d[4] = {0, 0, 0, 0};
+    if (ds.lod) {
+        d[0] = quad[2] - quad[0];
+        d[1] = quad[3] - quad[1];
+        d[2] = quad[6] - quad[4];
+        d[3] = quad[7] - quad[5];
+    }
+    if (ds.tex.px) Read(ds.tex, ds.samp_tex, uv, d, texel);
+    if (ds.spec_map.px) Read(ds.spec_map, ds.samp_spec, uv, d, spec_map);
+    if (ds.glow.px) Read(ds.glow, ds.samp_glow, uv, d, glow);
     shade::NormalMapInputs nm{};
     if (ds.normal_map) {
         for (int i = 0; i < 3; i++) nm.u[i] = u[i];
         for (int i = 0; i < 3; i++) nm.b[i] = b[i];
-        Texel(ds.normal, uv, nm.map);
+        Read(ds.normal, ds.samp_normal, uv, d, nm.map);
         if (ds.detail.px) {
-            float duv[2];
+            float duv[2], dd[4] = {0, 0, 0, 0};
             shade::DetailUvCpu(ds.shade, uv, duv);
-            Texel(ds.detail, duv, nm.detail);
+            if (ds.lod) {
+                // the detail map's uv is the uv scaled: its derivatives are
+                // taken between the same pixels' (mesh.hlsl's likewise)
+                float q[8];
+                for (int k = 0; k < 4; k++) shade::DetailUvCpu(ds.shade, quad + 2 * k, q + 2 * k);
+                dd[0] = q[2] - q[0];
+                dd[1] = q[3] - q[1];
+                dd[2] = q[6] - q[4];
+                dd[3] = q[7] - q[5];
+            }
+            Read(ds.detail, ds.samp_detail, duv, dd, nm.detail);
         }
     }
     if (ds.behind.px) {
@@ -413,6 +451,28 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
             const float q0 = l0 * iw[0] / z, q1 = l1 * iw[1] / z, q2 = l2 * iw[2] / z;
             float uv[2], n[3], vc[4], wp[3];
             for (int i = 0; i < 2; i++) uv[i] = q0 * a.uv[i] + q1 * b.uv[i] + q2 * c.uv[i];
+            // the uv where the GPU takes its derivatives (Shade): on the
+            // plane the pixel's uv is on, perspective-correct, at the other
+            // pixels of its 2x2 quad, inside the triangle or not
+            float quad[8] = {};
+            if (ds.lod) {
+                auto uv_at = [&](float qx, float qy, float* out) {
+                    const float m0 =
+                        ((sx[2] - sx[1]) * (qy - sy[1]) - (sy[2] - sy[1]) * (qx - sx[1])) * inv_area;
+                    const float m1 =
+                        ((sx[0] - sx[2]) * (qy - sy[2]) - (sy[0] - sy[2]) * (qx - sx[2])) * inv_area;
+                    const float m2 =
+                        ((sx[1] - sx[0]) * (qy - sy[0]) - (sy[1] - sy[0]) * (qx - sx[0])) * inv_area;
+                    const float mz = m0 * iw[0] + m1 * iw[1] + m2 * iw[2];
+                    const float r0 = m0 * iw[0] / mz, r1 = m1 * iw[1] / mz, r2 = m2 * iw[2] / mz;
+                    for (int i = 0; i < 2; i++) out[i] = r0 * a.uv[i] + r1 * b.uv[i] + r2 * c.uv[i];
+                };
+                const float qx = float(x & ~1) + ds.centre, qy = float(y & ~1) + ds.centre;
+                uv_at(qx, py, quad);
+                uv_at(qx + 1.0f, py, quad + 2);
+                uv_at(px, qy, quad + 4);
+                uv_at(px, qy + 1.0f, quad + 6);
+            }
             for (int i = 0; i < 3; i++) n[i] = q0 * a.n[i] + q1 * b.n[i] + q2 * c.n[i];
             for (int i = 0; i < 4; i++) vc[i] = q0 * a.c[i] + q1 * b.c[i] + q2 * c.c[i];
             for (int i = 0; i < 3; i++) wp[i] = q0 * a.wp[i] + q1 * b.wp[i] + q2 * c.wp[i];
@@ -432,7 +492,7 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
             if (ds.spot) {
                 SpotPixel(ds, t, x, y, wp, 1.0f / z, col);
             } else {
-                Shade(ds, x, y, uv, n, vc, wp, 1.0f / z, ao, ld, la, tu, tb, col);
+                Shade(ds, x, y, uv, n, vc, wp, 1.0f / z, ao, ld, la, tu, tb, quad, col);
                 if (ds.soft) col[3] *= SoftPixelFade(ds, t, x, y, 1.0f / z);
             }
             if (shade::AlphaCutCpu(ds.shade, col[3])) continue;
@@ -514,6 +574,9 @@ void ClipAndRaster(const ClipVert& a, const ClipVert& b, const ClipVert& c,
 struct RtTarget {
     uint32_t w = 0, h = 0;
     std::vector<uint32_t> color;
+    // its mips, made after each pass from what it drew (BuildMips), where
+    // the texture has them and filtering is on; empty otherwise
+    MipChain mips;
     std::vector<float> depth;
     std::vector<float> zw;  // a shadow map's depth (Target::zw); empty for the rest
     uint32_t version = 0;
@@ -535,7 +598,7 @@ TexView Diffuse(const DrawItem& it, const RasterOptions& o, const RtTargets& rts
     if (o.texture_passes && IsPassTarget(&tex)) {
         if (tex.tex_obj != t.tex_obj) {
             if (auto f = rts.find(tex.tex_obj); f != rts.end())
-                return {f->second.w, f->second.h, f->second.color.data()};
+                return {f->second.w, f->second.h, f->second.color.data(), MipsOf(f->second.mips)};
             if (o.rt_guest_pixels && !tex.rgba.empty()) return View(&tex);
         }
         st.rt_missing++;
@@ -579,7 +642,7 @@ TexView NormalMap(const ShadeState* state, int map, const RasterOptions& o, cons
     if (!rt) return View(tex);
     if (o.texture_passes && rt->tex_obj != t.tex_obj) {
         if (auto f = rts.find(rt->tex_obj); f != rts.end())
-            return {f->second.w, f->second.h, f->second.color.data()};
+            return {f->second.w, f->second.h, f->second.color.data(), MipsOf(f->second.mips)};
     }
     if (o.rt_guest_pixels && !rt->rgba.empty()) return View(rt);
     if (o.texture_passes) st.rt_missing++;
@@ -635,6 +698,22 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
         } else {
             ds.shade.flags.x &= ~shade::kShadeShadow;
         }
+    }
+    // the samplers they're read with: the game's where the capture kept them
+    // and filtering is on, else the old nearest (TexSampler's default)
+    {
+        const TexSampler none;
+        auto pack = [&](const TexSampler& s, const TexView& v, uint32_t out[4]) {
+            PackSampler(o.filtering && state ? s : none, v.Levels(), out);
+            ds.lod |= v.px && (out[0] & kSampleFiltered) != 0;
+        };
+        pack(state ? state->diffuse_sampler : none, ds.tex, ds.samp_tex);
+        pack(state ? state->samplers[kMapSpecular] : none, ds.spec_map, ds.samp_spec);
+        pack(state ? state->samplers[kMapGlow] : none, ds.glow, ds.samp_glow);
+        pack(state ? state->samplers[kMapNormal] : none, ds.normal, ds.samp_normal);
+        pack(state ? state->samplers[kMapDetailNormal] : none, ds.detail, ds.samp_detail);
+        // a cone reads its cross-section texture its own way (SpotPixel)
+        if (ds.spot) ds.lod = false;
     }
     ds.depth_only = t.zw != nullptr;
     ds.per_vertex = (ds.shade.flags.x & shade::kShadePerVertex) != 0;
@@ -1015,6 +1094,12 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                 rtt.SetViewport(0, 0, float(rt.w), float(rt.h));
             DrawOne(it, int32_t(i), state, o, rts, rtt, st, cv, density_view);
         }
+        // its mips, from what it holds now, as the GPU makes them after the
+        // pass (gpu_view.cpp's TargetFor and SDL_GenerateMipmapsForGPUTexture)
+        rt.mips.clear();
+        if (o.filtering && !shadow_map && p.num_mips > 1)
+            BuildMips(rt.color.data(), rt.w, rt.h, std::min(p.num_mips, FullMipChain(rt.w, rt.h)),
+                      rt.mips);
         st.passes++;
         if (stop && p.tex_obj == stop && p.version == stop_version) break;
     }
@@ -1083,6 +1168,101 @@ bool RasterizeTarget(const FrameCapture& frame, const RasterOptions& options, ui
         }
     }
     return true;
+}
+
+namespace sample_cpu {
+namespace {
+
+// HLSL's types and functions, for sample_model.hlsli: only what it uses
+using shade::float2;
+using shade::float4;
+using shade::uint;
+using shade::uint4;
+struct uint2 {
+    uint x, y;
+};
+float floor(float v) { return std::floor(v); }
+float ceil(float v) { return std::ceil(v); }
+float sqrt(float v) { return std::sqrt(v); }
+float log2(float v) { return std::log2(v); }
+float max(float a, float b) { return a > b ? a : b; }
+float min(float a, float b) { return a < b ? a : b; }
+uint max(uint a, uint b) { return a > b ? a : b; }
+uint min(uint a, uint b) { return a < b ? a : b; }
+float asfloat(uint v) {
+    float f;
+    std::memcpy(&f, &v, 4);
+    return f;
+}
+
+float4 LoadTexel(const TexLevels& t, uint level, int x, int y) {
+    const uint w = std::max(t.w >> level, 1u);
+    const uint32_t c = t.Level(level)[size_t(y) * w + uint(x)];
+    return float4(float(c & 0xff) / 255.0f, float((c >> 8) & 0xff) / 255.0f,
+                  float((c >> 16) & 0xff) / 255.0f, float(c >> 24) / 255.0f);
+}
+
+#define SAMPLE_TEX const TexLevels& t
+#define SAMPLE_ARGS t
+#define SAMPLE_LOAD(level, x, y) LoadTexel(t, level, x, y)
+#define SAMPLE_LOOP
+#include "src/Render/shaders/sample_model.hlsli"
+#undef SAMPLE_TEX
+#undef SAMPLE_ARGS
+#undef SAMPLE_LOAD
+#undef SAMPLE_LOOP
+
+}  // namespace
+}  // namespace sample_cpu
+
+void SampleTextureCpu(const TexLevels& t, const uint32_t s[4], const float uv[2],
+                      const float dx[2], const float dy[2], float out[4]) {
+    using namespace sample_cpu;
+    const float4 c = SampleTexture(t, uint2{t.w, t.h}, uint4{s[0], s[1], s[2], s[3]},
+                                   float2{uv[0], uv[1]}, float2{dx[0], dx[1]},
+                                   float2{dy[0], dy[1]});
+    out[0] = c.x;
+    out[1] = c.y;
+    out[2] = c.z;
+    out[3] = c.w;
+}
+
+void BuildMips(const uint32_t* px, uint32_t w, uint32_t h, uint32_t levels,
+               std::vector<std::vector<uint32_t>>& out) {
+    out.clear();
+    if (levels > 1) out.reserve(levels - 1);
+    uint32_t sw = w, sh = h;
+    for (uint32_t l = 1; l < levels; l++) {
+        const uint32_t* src = l == 1 ? px : out.back().data();
+        const uint32_t dw = std::max(sw >> 1, 1u), dh = std::max(sh >> 1, 1u);
+        std::vector<uint32_t> dst(size_t(dw) * dh);
+        for (uint32_t y = 0; y < dh; y++) {
+            const float fy = (float(y) + 0.5f) * float(sh) / float(dh) - 0.5f;
+            const float y0f = std::floor(fy), ty = fy - y0f;
+            const int y0 = std::clamp(int(y0f), 0, int(sh) - 1);
+            const int y1 = std::clamp(int(y0f) + 1, 0, int(sh) - 1);
+            for (uint32_t x = 0; x < dw; x++) {
+                const float fx = (float(x) + 0.5f) * float(sw) / float(dw) - 0.5f;
+                const float x0f = std::floor(fx), tx = fx - x0f;
+                const int x0 = std::clamp(int(x0f), 0, int(sw) - 1);
+                const int x1 = std::clamp(int(x0f) + 1, 0, int(sw) - 1);
+                const uint32_t c00 = src[size_t(y0) * sw + x0], c10 = src[size_t(y0) * sw + x1];
+                const uint32_t c01 = src[size_t(y1) * sw + x0], c11 = src[size_t(y1) * sw + x1];
+                uint32_t r = 0;
+                for (int c = 0; c < 4; c++) {
+                    auto ch = [&](uint32_t v) { return float((v >> (8 * c)) & 0xff); };
+                    const float top = ch(c00) + (ch(c10) - ch(c00)) * tx;
+                    const float bottom = ch(c01) + (ch(c11) - ch(c01)) * tx;
+                    const float v = top + (bottom - top) * ty;
+                    r |= uint32_t(std::clamp(v, 0.0f, 255.0f) + 0.5f) << (8 * c);
+                }
+                dst[size_t(y) * dw + x] = r;
+            }
+        }
+        out.push_back(std::move(dst));
+        sw = dw;
+        sh = dh;
+    }
 }
 
 }  // namespace band3::render

@@ -2,6 +2,7 @@
 
 #include "src/Render/gamma_ramp.h"
 #include "src/Render/post_model.h"
+#include "src/Render/sample_model.h"
 #include "src/Render/shade_model.h"
 #include "src/Render/spot_model.h"
 #include "src/Render/shaders/gamma_shaders.gen.h"
@@ -94,8 +95,11 @@ struct PixelUniforms {
     // the shadow map's, the normal map's and the detail map's
     uint32_t tex_size[8][4];
     uint32_t flags[4];  // x: kPremultiply
+    // the samplers they're read with (sample_model.h's PackSampler), in
+    // tex_layer's order
+    uint32_t tex_sampler[8][4];
 };
-static_assert(sizeof(PixelUniforms) == sizeof(shade::ShadeParams) + 176);
+static_assert(sizeof(PixelUniforms) == sizeof(shade::ShadeParams) + 304);
 
 // mesh.hlsl's pixel_flags.x
 enum : uint32_t { kPremultiply = 1 };
@@ -228,6 +232,19 @@ std::string FormatNames(SDL_GPUShaderFormat f) {
 
 uint32_t Align(uint32_t v, uint32_t a) { return (v + a - 1) / a * a; }
 
+// how many of a texture's levels the GPU gets: level 0 and the mips after it
+// that are the size they should be
+uint32_t LevelsOf(const Texture& t) {
+    uint32_t n = 1;
+    for (const auto& level : t.mips) {
+        const size_t texels =
+            size_t(std::max(t.width >> n, 1u)) * std::max(t.height >> n, 1u);
+        if (level.size() != texels) break;
+        n++;
+    }
+    return n;
+}
+
 // index counts are kept even, so every copy of indices is whole 4-byte words
 uint32_t IndexSlots(const Geometry& g) { return Align(uint32_t(g.indices.size()), 2); }
 
@@ -239,7 +256,8 @@ uint32_t NextPow2(uint32_t v) {
 
 // A texture's size class, the layer size of the array it goes in: powers of
 // two that hold it, at least kMinClassSize and at most 2:1, so a frame's
-// textures need few arrays
+// textures need few arrays. An array has every level of its class's chain;
+// a texture's levels go in its layer's corner of each, as its level 0 does.
 constexpr uint32_t kMinClassSize = 64;
 
 void SizeClass(uint32_t w, uint32_t h, uint32_t& cw, uint32_t& ch) {
@@ -377,6 +395,7 @@ struct GpuRenderer::Impl {
     struct TexArray {
         SDL_GPUTexture* texture = nullptr;
         uint32_t layers = 0;
+        uint32_t levels = 1;  // its class's whole chain
         std::vector<uint32_t> free;
         uint64_t empty_since = 0;  // when its last texture went, if none are left
     };
@@ -385,6 +404,7 @@ struct GpuRenderer::Impl {
         std::shared_ptr<const Texture> keep;
         TexArray* array = nullptr;  // null if it couldn't have a layer
         uint32_t layer = 0;
+        uint32_t levels = 1;  // of the texture's, in it (LevelsOf)
         uint64_t first = 0;
         uint64_t used = 0;
     };
@@ -419,7 +439,7 @@ struct GpuRenderer::Impl {
     struct ArrayCopy {
         SDL_GPUTexture* from;
         SDL_GPUTexture* to;
-        uint32_t w, h, layers;
+        uint32_t w, h, layers, levels;
     };
     std::vector<ArrayCopy> array_copies;  // arrays that grew, old into new
     std::vector<Mat4> frame_bones;
@@ -1073,7 +1093,7 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx) {
             ti.width = w;
             ti.height = h;
             ti.layer_count_or_depth = layers;
-            ti.num_levels = 1;
+            ti.num_levels = FullMipChain(w, h);
             grown = SDL_CreateGPUTexture(device, &ti);
         }
         if (!grown) {
@@ -1087,13 +1107,15 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx) {
         if (a.texture) {
             // what the old one holds goes over in this frame's copy pass,
             // before anything is sent to the new one
-            array_copies.push_back({a.texture, grown, w, h, a.layers});
+            array_copies.push_back({a.texture, grown, w, h, a.layers, a.levels});
         }
         for (uint32_t l = layers; l-- > a.layers;) a.free.push_back(l);
         a.texture = grown;
         a.layers = layers;
+        a.levels = FullMipChain(w, h);
     }
     tx.array = &a;
+    tx.levels = std::min(LevelsOf(t), a.levels);
     tx.layer = a.free.back();
     a.free.pop_back();
     return true;
@@ -1485,10 +1507,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     const uint32_t bone_bytes = uint32_t(frame_bones.size() * sizeof(Mat4));
     const uint32_t textures_at = Align(bones_at + bone_bytes, kTextureOffsetAlign);
     uint32_t upload_bytes = textures_at;
-    for (const Tex* tx : new_textures) {
-        const Texture& t = *tx->keep;
-        upload_bytes += Align(Align(t.width * 4, kRowPitchAlign) * t.height, kTextureOffsetAlign);
-    }
+    // each level of a texture where a copy may start
+    auto level_bytes = [](const Texture& t, uint32_t l) {
+        const uint32_t w = std::max(t.width >> l, 1u), h = std::max(t.height >> l, 1u);
+        return Align(Align(w * 4, kRowPitchAlign) * h, kTextureOffsetAlign);
+    };
+    for (const Tex* tx : new_textures)
+        for (uint32_t l = 0; l < tx->levels; l++) upload_bytes += level_bytes(*tx->keep, l);
     if (pool_vert_count &&
         (!Reserve(pool_v, SDL_GPU_BUFFERUSAGE_VERTEX, pool_vert_count * sizeof(Vertex)) ||
          !Reserve(pool_i, SDL_GPU_BUFFERUSAGE_INDEX, pool_index_count * 2))) {
@@ -1541,11 +1566,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         uint32_t tex_at = textures_at;
         for (const Tex* tx : new_textures) {
             const Texture& t = *tx->keep;
-            const uint32_t pitch = Align(t.width * 4, kRowPitchAlign);
-            for (uint32_t y = 0; y < t.height; y++)
-                std::memcpy(base + tex_at + size_t(y) * pitch,
-                            t.rgba.data() + size_t(y) * t.width, t.width * 4);
-            tex_at += Align(pitch * t.height, kTextureOffsetAlign);
+            for (uint32_t l = 0; l < tx->levels; l++) {
+                const uint32_t w = std::max(t.width >> l, 1u), h = std::max(t.height >> l, 1u);
+                const uint32_t pitch = Align(w * 4, kRowPitchAlign);
+                const uint32_t* px = l ? t.mips[l - 1].data() : t.rgba.data();
+                for (uint32_t y = 0; y < h; y++)
+                    std::memcpy(base + tex_at + size_t(y) * pitch, px + size_t(y) * w, w * 4);
+                tex_at += level_bytes(t, l);
+            }
         }
         SDL_UnmapGPUTransferBuffer(device, upload);
     }
@@ -1562,9 +1590,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // first, then it can go (SDL keeps it until the copy is done)
         for (const ArrayCopy& c : array_copies) {
             for (uint32_t l = 0; l < c.layers; l++) {
-                SDL_GPUTextureLocation src{c.from, 0, l, 0, 0, 0};
-                SDL_GPUTextureLocation dst{c.to, 0, l, 0, 0, 0};
-                SDL_CopyGPUTextureToTexture(copy, &src, &dst, c.w, c.h, 1, false);
+                for (uint32_t m = 0; m < c.levels; m++) {
+                    SDL_GPUTextureLocation src{c.from, m, l, 0, 0, 0};
+                    SDL_GPUTextureLocation dst{c.to, m, l, 0, 0, 0};
+                    SDL_CopyGPUTextureToTexture(copy, &src, &dst, std::max(c.w >> m, 1u),
+                                                std::max(c.h >> m, 1u), 1, false);
+                }
             }
             SDL_ReleaseGPUTexture(device, c.from);
         }
@@ -1605,16 +1636,20 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         uint32_t tex_at = textures_at;
         for (const Tex* tx : new_textures) {
             const Texture& t = *tx->keep;
-            const uint32_t pitch = Align(t.width * 4, kRowPitchAlign);
-            SDL_GPUTextureTransferInfo src{upload, tex_at, pitch / 4, t.height};
-            SDL_GPUTextureRegion dst{};
-            dst.texture = tx->array->texture;
-            dst.layer = tx->layer;
-            dst.w = t.width;
-            dst.h = t.height;
-            dst.d = 1;
-            SDL_UploadToGPUTexture(copy, &src, &dst, false);
-            tex_at += Align(pitch * t.height, kTextureOffsetAlign);
+            for (uint32_t l = 0; l < tx->levels; l++) {
+                const uint32_t w = std::max(t.width >> l, 1u), h = std::max(t.height >> l, 1u);
+                const uint32_t pitch = Align(w * 4, kRowPitchAlign);
+                SDL_GPUTextureTransferInfo src{upload, tex_at, pitch / 4, h};
+                SDL_GPUTextureRegion dst{};
+                dst.texture = tx->array->texture;
+                dst.mip_level = l;
+                dst.layer = tx->layer;
+                dst.w = w;
+                dst.h = h;
+                dst.d = 1;
+                SDL_UploadToGPUTexture(copy, &src, &dst, false);
+                tex_at += level_bytes(t, l);
+            }
         }
         SDL_EndGPUCopyPass(copy);
     }
@@ -1866,10 +1901,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         struct Sampled {
             SDL_GPUTexture* texture = nullptr;
             uint32_t layer = 0, w = 0, h = 0;
+            uint32_t levels = 1;
         };
         auto layer_of = [&](const Texture* t) {
             const Tex* tx = TextureFor(t);
-            return tx ? Sampled{tx->array->texture, tx->layer, t->width, t->height} : Sampled{};
+            return tx ? Sampled{tx->array->texture, tx->layer, t->width, t->height, tx->levels}
+                      : Sampled{};
         };
         shade::ShadeParams& sp = shades[d];
         const ShadeState* state = shade::ShadeOf(frame, it);
@@ -1878,7 +1915,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             case kSourceTexture: tex[kSlotDiffuse] = layer_of(it.tex.get()); break;
             case kSourceRt: {
                 const Rt& rt = rts[it.tex->tex_obj];
-                tex[kSlotDiffuse] = {rt.color, 0, rt.w, rt.h};
+                tex[kSlotDiffuse] = {rt.color, 0, rt.w, rt.h, rt.levels};
                 break;
             }
             case kSourceBlack: tex[kSlotDiffuse] = {black, 0, 1, 1}; break;
@@ -1898,7 +1935,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 const int m = k ? kMapDetailNormal : kMapNormal;
                 if (normal_source[k][d] != kSourceRt) return layer_of(state->maps[m].get());
                 const Rt& rt = rts[MapTargetOf(state, m)->tex_obj];
-                return Sampled{rt.color, 0, rt.w, rt.h};
+                return Sampled{rt.color, 0, rt.w, rt.h, rt.levels};
             };
             tex[kSlotNormal] = map_of(0);
             if (sp.flags.x & shade::kShadeDetailMap) tex[kSlotDetail] = map_of(1);
@@ -2017,6 +2054,28 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             pu.tex_layer[s - 2] = tex[s].layer;
             pu.tex_size[s - 1][0] = tex[s].w;
             pu.tex_size[s - 1][1] = tex[s].h;
+        }
+        // the samplers they're read with: the game's where the capture kept
+        // them and filtering is on, else the old nearest (soft_raster.cpp's
+        // DrawOne likewise)
+        {
+            const TexSampler none;
+            auto sampler_of = [&](int slot) -> const TexSampler& {
+                if (!o.filtering || !state) return none;
+                switch (slot) {
+                    case kSlotDiffuse: return state->diffuse_sampler;
+                    case kSlotSpecular: return state->samplers[kMapSpecular];
+                    case kSlotGlow: return state->samplers[kMapGlow];
+                    case kSlotNormal: return state->samplers[kMapNormal];
+                    case kSlotDetail: return state->samplers[kMapDetailNormal];
+                    default: return none;  // the projected light's: bilinear, its own way
+                }
+            };
+            for (int s : {kSlotDiffuse, kSlotSpecular, kSlotGlow, kSlotNormal, kSlotDetail}) {
+                if (!tex[s].texture) continue;
+                PackSampler(sampler_of(s), tex[s].levels,
+                            pu.tex_sampler[s >= kSlotNormal ? s - 2 : s]);
+            }
         }
         pu.flags[0] = blend == kBlendSrcAlpha || blend == kBlendSrcAlphaAdd ? kPremultiply : 0;
         SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
