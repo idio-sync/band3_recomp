@@ -8,9 +8,13 @@ Playable, still a work in progress.
 
 This is a fork of [ihatecompvir/band3_recomp](https://github.com/ihatecompvir/band3_recomp).
 Everything it adds was written with the help of AI, which did the vast majority of the
-work.
+work. I wanted something I could keep on my Steam Deck/laptop so I didn't have to lug my
+360 to parties anymore. There are other recomp projects that have not utilized AI as much
+as this one has, if you'd rather go with one of those. This one was put together by me with
+features I wanted to see and use, for my personal use. If you like it, awesome. If not, I
+get it and don't blame you at all. Either way, rock on.
 
-You need your own copy of the game; no game files are included.
+You need your own copy of the game; no game files are included. RB3 Deluxe is highly recommended.
 
 ## Features
 
