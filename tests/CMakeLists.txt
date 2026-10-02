@@ -38,6 +38,8 @@ add_executable(band3_tests
     album_art_test.cpp
     paths_test.cpp
     package_scan_test.cpp
+    json_test.cpp
+    rhythmverse_test.cpp
     song_id_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
@@ -55,6 +57,8 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/ps4_instruments.cpp
     ${BAND3_ROOT}/src/Net/album_art.cpp
     ${BAND3_ROOT}/src/Net/http_request.cpp
+    ${BAND3_ROOT}/src/Net/json.cpp
+    ${BAND3_ROOT}/src/Net/rhythmverse.cpp
     ${BAND3_ROOT}/src/paths.cpp
     ${BAND3_ROOT}/src/Render/capture_file.cpp
     ${BAND3_ROOT}/src/Render/frame_compose.cpp

@@ -35,6 +35,8 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <fmt/format.h>
+#include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include "src/config.h"
@@ -45,7 +47,11 @@
 #include "http_game.h"
 #include "http_page.h"
 #include "http_request.h"
+#include "json.h"
 #include "local_address.h"
+#include "rhythmverse.h"
+#include "song_downloads.h"
+#include "web_client.h"
 
 namespace band3::http {
 
@@ -72,6 +78,8 @@ constexpr std::chrono::seconds kGameTimeout{5};
 constexpr int kMaxClients = 8;
 // a request line and headers longer than this aren't from a browser
 constexpr size_t kMaxHead = 16 * 1024;
+// the page's POSTs are a line of JSON
+constexpr size_t kMaxBody = 4 * 1024;
 // the files served from game:\, as RB3E serves them from its rawfiles
 constexpr uintmax_t kMaxFile = 4 * 1024 * 1024;
 
@@ -250,11 +258,65 @@ std::optional<std::string> AlbumArt(const std::string& shortname, bool& busy) {
     return jpeg;
 }
 
+// /rv/search: a page of RhythmVerse's songs, asked of it as this request waits
+std::string RhythmVerseSearch(const Route& route, bool cors) {
+    const auto search = rhythmverse::Search(route.argument, route.page);
+    const web::Reply reply = web::PostForm(search.url, search.form);
+    if (!reply.error.empty()) {
+        return Response(502, kText, "Couldn't reach RhythmVerse: " + reply.error, cors);
+    }
+    if (reply.status != 200) {
+        return Response(502, kText, fmt::format("RhythmVerse answered {}", reply.status), cors);
+    }
+    auto result = rhythmverse::ParseSearch(reply.body);
+    if (!result) {
+        REXLOG_WARN("Web server: RhythmVerse's search reply wasn't as expected: {:.200}", reply.body);
+        return Response(502, kText, "RhythmVerse's reply wasn't one band3 can read", cors);
+    }
+    rhythmverse::Remember(result->songs);
+    return Response(200, "application/json",
+                    rhythmverse::FormatSearch(*result, rhythmverse::DownloadedIds()), cors);
+}
+
+// POST /rv/download {"file_id": ...}. JSON only, so another site's page can't
+// send one without the preflight band3 never answers.
+std::string RhythmVerseDownload(const Request& request, bool cors) {
+    if (!request.content_type.starts_with("application/json")) {
+        return Response(415, kText, "Send the file ID as JSON", cors);
+    }
+    const auto body = json::Parse(request.body);
+    const std::string file_id = body ? (*body)["file_id"].Text() : std::string();
+    switch (rhythmverse::QueueDownload(file_id)) {
+        case rhythmverse::QueueResult::kQueued:
+            return Response(200, kText, "Downloading", cors);
+        case rhythmverse::QueueResult::kHave:
+            return Response(200, kText, "Already downloaded", cors);
+        case rhythmverse::QueueResult::kUnknown:
+            break;
+        case rhythmverse::QueueResult::kNotHosted:
+            return Response(409, kText,
+                            "RhythmVerse doesn't host this one: download it from its page", cors);
+        case rhythmverse::QueueResult::kNoFolder:
+            return Response(409, kText, "content_folders names no folder to download to", cors);
+    }
+    return Response(404, kText, "No search has found that song; search for it again", cors);
+}
+
 std::string Handle(const Request& request) {
     const bool cors = REXCVAR_GET(http_allow_cors);
-    if (request.method != "GET") return Response(405, kText, "Only GET is supported", cors);
-
     const Route route = MatchRoute(request.target);
+    // POST for what changes things beyond the game, GET for the rest
+    const bool post = route.endpoint == Endpoint::kRvDownload;
+    if (request.method != (post ? "POST" : "GET")) {
+        return Response(405, kText, post ? "Only POST is supported" : "Only GET is supported", cors);
+    }
+    const bool rhythmverse = route.endpoint == Endpoint::kRvSearch ||
+                             route.endpoint == Endpoint::kRvDownload ||
+                             route.endpoint == Endpoint::kRvDownloads;
+    if (rhythmverse && !REXCVAR_GET(http_rhythmverse)) {
+        return Response(403, kText, "RhythmVerse is off (http_rhythmverse)", cors);
+    }
+
     switch (route.endpoint) {
         case Endpoint::kIndex: {
             // a page of the user's own at game:\ replaces band3's, as it does RB3E's
@@ -338,6 +400,16 @@ std::string Handle(const Request& request) {
             if (busy) return Busy(cors);
             return Response(404, kText, "No album art for that shortname", cors);
         }
+        case Endpoint::kRvSearch:
+            return RhythmVerseSearch(route, cors);
+        case Endpoint::kRvDownload:
+            return RhythmVerseDownload(request, cors);
+        case Endpoint::kRvDownloads:
+            return Response(200, "application/json",
+                            rhythmverse::FormatDownloads(
+                                rhythmverse::Downloads(),
+                                rex::path_to_utf8(rhythmverse::DownloadFolder())),
+                            cors);
         case Endpoint::kNotFound:
             break;
     }
@@ -513,11 +585,25 @@ private:
             if (n <= 0) return;
             head.append(buf, static_cast<size_t>(n));
         }
-        const std::optional<Request> request = ParseRequest(head);
+        const size_t head_end = head.find("\r\n\r\n") + 4;
+        std::optional<Request> request = ParseRequest(std::string_view(head).substr(0, head_end));
         if (!request) {
             SendAll(client, Response(400, kText, "Bad Request", false));
             return;
         }
+        if (request->content_length > kMaxBody) {
+            SendAll(client, Response(413, kText, "Too much was sent", false));
+            return;
+        }
+        request->body = head.substr(head_end);
+        while (request->body.size() < request->content_length) {
+            if (stopping_) return;
+            char buf[1024];
+            const int n = recv(client, buf, sizeof(buf), 0);
+            if (n <= 0) return;
+            request->body.append(buf, static_cast<size_t>(n));
+        }
+        request->body.resize(request->content_length);
         REXLOG_DEBUG("Web server: {} {}", request->method, request->target);
         SendAll(client, Handle(*request));
     }
@@ -535,7 +621,10 @@ private:
 
 void StartServer() { Server::Get().Start(); }
 
-void StopServer() { Server::Get().Stop(); }
+void StopServer() {
+    Server::Get().Stop();
+    rhythmverse::StopDownloads();
+}
 
 bool Enabled() { return band3::settings::Startup().http_enabled; }
 

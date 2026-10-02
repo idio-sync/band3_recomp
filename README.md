@@ -482,12 +482,30 @@ band3 adds its own, which RB3E doesn't have:
 | `/song_details` | every listed song's `genre` (as the Music Library names it), `year`, `length_ms`, `vocal_parts` and `tiers`, the difficulty of each part it has (`band`, `guitar`, `bass`, `drum`, `vocals`, `keys`, `real_guitar`, `real_bass`, `real_keys`) from 0 (Warmup) to 6 (Impossible), as JSON by shortname |
 | `/status` | what the game is doing, as JSON: `screen`, `in_library` (the Music Library is open, so `/jump` can select) and `playing`, during a song its `shortname`, `title`, `artist`, `score`, `position_ms` (null until the song starts) and `length_ms`, else null |
 | `/album_art?shortname=<name>` | the song's album art as a JPEG, read as the game reads it for the Music Library (from the ARK, or a loose file that replaces it); 404 when the song has none, or no song has that shortname |
+| `/rv/search?text=<text>&page=<n>` | a page of 25 of [RhythmVerse](https://rhythmverse.co)'s Rock Band 3 (Xbox) songs matching the text, or its newest without; JSON with `total`, `page` and `songs`, each with its `file_id`, details, `tiers` as `/song_details` gives them, `download` (RhythmVerse hosts it, so band3 can download it) and `downloaded` |
+| `POST /rv/download` | downloads `{"file_id": "<id>"}` (JSON) from a search into the songs folder: 404 for a song no search has found, 409 for one RhythmVerse doesn't host |
+| `/rv/downloads` | this session's downloads as JSON: the `folder` they go to, and each one's `state` (`queued`, `downloading`, `done`, `failed`), `received`, `total` and `error` |
+
+#### RhythmVerse
+
+The page's **RhythmVerse** tab searches [RhythmVerse](https://rhythmverse.co)'s custom
+songs for Rock Band 3 on Xbox, with their art, details and difficulties, and marks the
+ones whose artist and title are already in the library. **Download** saves a song's
+package into a `rhythmverse` folder in the first of the content folders
+(`content_folders`; `songs\rhythmverse` unless you've changed it). The game reads its
+song folders as it starts, so downloaded songs are in it from the next launch. Only
+songs RhythmVerse hosts itself download this way; for those on other sites (MediaFire,
+Google Drive...), zipped ones and the official DLC, **Open** goes to the song's
+RhythmVerse page. A download that isn't a Rock Band package is thrown away. Turn
+`http_rhythmverse` off (`[http] rhythmverse = false`) to leave the tab out. RhythmVerse's
+API isn't documented, so a change on its side can break the tab until band3 follows.
 
 To work on the page without the game, `python tools/web_preview.py` serves it at
 http://127.0.0.1:21080/ with the songs, their details and album art read from the game
 data. The page comes from `src/Net/http_page.h` on every load, so an edit shows on a
 refresh, without a rebuild; **Select** can't work there, and `/status` says what
-`--status` (`menu`, `library` or `playing`) tells it to.
+`--status` (`menu`, `library` or `playing`) tells it to. Its RhythmVerse tab searches
+RhythmVerse, but its downloads are made up and save nothing.
 
 `http_allow_cors` adds `Access-Control-Allow-Origin: *`, for pages served from somewhere
 else. Requests wait for the game's next frame, and get a 503 if it doesn't come within 5 s.

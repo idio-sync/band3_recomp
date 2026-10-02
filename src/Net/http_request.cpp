@@ -21,6 +21,9 @@ std::string_view StatusText(int status) {
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
         case 409: return "Conflict";
+        case 413: return "Content Too Large";
+        case 415: return "Unsupported Media Type";
+        case 502: return "Bad Gateway";
         case 503: return "Service Unavailable";
         default: return "Error";
     }
@@ -50,6 +53,21 @@ size_t Utf8Length(std::string_view text) {
     return length;
 }
 
+// ASCII letters lower-cased, as header names compare
+std::string Lower(std::string_view text) {
+    std::string out(text);
+    for (char& c : out) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+    return out;
+}
+
+std::string_view Trim(std::string_view text) {
+    while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) text.remove_prefix(1);
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\t')) text.remove_suffix(1);
+    return text;
+}
+
 bool IsUtf8(std::string_view text) {
     while (!text.empty()) {
         const size_t length = Utf8Length(text);
@@ -69,8 +87,51 @@ std::optional<Request> ParseRequest(std::string_view head) {
     const size_t second = line.find(' ', first + 1);
     if (second == std::string_view::npos || second == first + 1) return std::nullopt;
     if (!line.substr(second + 1).starts_with("HTTP/")) return std::nullopt;
-    return Request{std::string(line.substr(0, first)),
-                   std::string(line.substr(first + 1, second - first - 1))};
+    Request request;
+    request.method = std::string(line.substr(0, first));
+    request.target = std::string(line.substr(first + 1, second - first - 1));
+
+    size_t at = line_end == std::string_view::npos ? head.size() : line_end + 2;
+    while (at < head.size()) {
+        size_t end = head.find("\r\n", at);
+        if (end == std::string_view::npos) end = head.size();
+        const std::string_view header = head.substr(at, end - at);
+        at = end + 2;
+        const size_t colon = header.find(':');
+        if (colon == std::string_view::npos) continue;
+        const std::string name = Lower(Trim(header.substr(0, colon)));
+        const std::string_view value = Trim(header.substr(colon + 1));
+        if (name == "content-type") {
+            request.content_type = std::string(value);
+        } else if (name == "content-length") {
+            const auto [ptr, ec] =
+                std::from_chars(value.data(), value.data() + value.size(), request.content_length);
+            if (value.empty() || ec != std::errc() || ptr != value.data() + value.size()) {
+                return std::nullopt;
+            }
+        }
+    }
+    return request;
+}
+
+std::optional<std::string> QueryParam(std::string_view target, std::string_view name) {
+    const size_t question = target.find('?');
+    if (question == std::string_view::npos) return std::nullopt;
+    std::string_view query = target.substr(question + 1);
+    while (!query.empty()) {
+        const size_t amp = query.find('&');
+        const std::string_view pair = query.substr(0, amp);
+        query = amp == std::string_view::npos ? std::string_view() : query.substr(amp + 1);
+        const size_t eq = pair.find('=');
+        if (UrlDecode(pair.substr(0, eq)) != name) continue;
+        if (eq == std::string_view::npos) return std::string();
+        std::string value(pair.substr(eq + 1));
+        for (char& c : value) {
+            if (c == '+') c = ' ';
+        }
+        return UrlDecode(value);
+    }
+    return std::nullopt;
 }
 
 std::string UrlDecode(std::string_view text) {
@@ -93,8 +154,20 @@ std::string UrlDecode(std::string_view text) {
 
 Route MatchRoute(std::string_view target) {
     const std::string path = UrlDecode(target);
+    // band3's newer endpoints take their parameters from the query, by name
+    const std::string_view bare = target.substr(0, target.find('?'));
     Route route;
-    if (path == "/") {
+    if (bare == "/rv/search") {
+        route.endpoint = Endpoint::kRvSearch;
+        route.argument = QueryParam(target, "text").value_or("");
+        const std::string page = QueryParam(target, "page").value_or("1");
+        const auto [ptr, ec] = std::from_chars(page.data(), page.data() + page.size(), route.page);
+        if (ec != std::errc() || ptr != page.data() + page.size() || route.page < 1) route.page = 1;
+    } else if (target == "/rv/download") {
+        route.endpoint = Endpoint::kRvDownload;
+    } else if (target == "/rv/downloads") {
+        route.endpoint = Endpoint::kRvDownloads;
+    } else if (path == "/") {
         route.endpoint = Endpoint::kIndex;
     } else if (path == "/list_songs") {
         route.endpoint = Endpoint::kListSongs;

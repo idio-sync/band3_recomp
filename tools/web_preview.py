@@ -6,7 +6,8 @@ refresh, without a rebuild. The songs and their album art come from the game
 data as the game finds them: a loose file in the game data root first, then
 the title update's archive (patch_xbox.hdr), then the main one. Select can't
 work without the game; it answers 409. /status makes up what the game is doing
-(--status), to work on the page's banner.
+(--status), to work on the page's banner. The RhythmVerse tab searches
+RhythmVerse itself, but its downloads are made up: nothing is saved.
 
 Usage:
   python tools/web_preview.py                 open http://127.0.0.1:21080/
@@ -24,6 +25,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 import zlib
 
 import read_game_config
@@ -169,6 +171,140 @@ def format_songs(songs):
     return ''.join(out)
 
 
+RHYTHMVERSE = 'https://rhythmverse.co'
+RV_PAGE_SIZE = 25
+# RhythmVerse's difficulty fields by the game's part names; its 1-7 are the
+# game's tiers 0-6, and 0 or -1 a part the song doesn't have
+RV_PARTS = (('diff_band', 'band'), ('diff_guitar', 'guitar'), ('diff_bass', 'bass'),
+            ('diff_drums', 'drum'), ('diff_vocals', 'vocals'), ('diff_keys', 'keys'),
+            ('diff_proguitar', 'real_guitar'), ('diff_probass', 'real_bass'),
+            ('diff_prokeys', 'real_keys'))
+
+
+def _rv_number(value):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def rv_song(entry):
+    """One song of RhythmVerse's search reply as band3's /rv/search gives it
+    (src/Net/rhythmverse.cpp), or None without a usable file ID."""
+    data = entry.get('data') or {}
+    upload = entry.get('file') or {}
+    file_id = str(upload.get('file_id') or '')
+    if not file_id or len(file_id) > 64 or not all(c.isascii() and (c.isalnum() or c == '.')
+                                                    for c in file_id):
+        return None
+
+    def field(own, song):
+        value = upload.get(own)
+        return data.get(song) if value is None or str(value) == '' else value
+
+    def absolute(url):
+        return RHYTHMVERSE + url if url.startswith('/') else url
+
+    tiers = {}
+    for key, part in RV_PARTS:
+        value = _rv_number(field(key, key))
+        if value >= 1:
+            tiers[part] = min(value - 1, 6)
+    url = upload.get('external_url') or upload.get('download_url') or ''
+    host = urllib.parse.urlsplit(url).netloc
+    hosted = bool(url) and host in ('', 'rhythmverse.co')
+    download = hosted and not _rv_number(upload.get('zippata'))
+    art = field('album_art', 'album_art') or ''
+    return {
+        'file_id': file_id,
+        'title': str(field('file_title', 'title') or ''),
+        'artist': str(field('file_artist', 'artist') or ''),
+        'album': str(field('file_album', 'album') or ''),
+        'genre': str(field('file_genre', 'genre') or ''),
+        'author': str((upload.get('author') or {}).get('name') or upload.get('user') or ''),
+        'year': _rv_number(field('file_year', 'year')),
+        'length_ms': _rv_number(field('song_length', 'song_length')) * 1000,
+        'vocal_parts': _rv_number(field('vocal_parts_authored', 'vocal_parts')),
+        'size': _rv_number(upload.get('size')),
+        'downloads': _rv_number(upload.get('downloads')),
+        'tiers': tiers,
+        'art': absolute(art) if art else '',
+        'page': absolute(upload.get('file_url') or ''),
+        'host': '' if download else ('rhythmverse.co' if hosted else host),
+        'download': download,
+    }
+
+
+def rv_search_form(text, page):
+    """What band3 posts to RhythmVerse for a search: (url, form)."""
+    form = {'records': RV_PAGE_SIZE, 'page': max(page, 1), 'data_type': 'full'}
+    if not text:
+        form.update({'sort[0][sort_by]': 'release_date', 'sort[0][sort_order]': 'DESC'})
+        return RHYTHMVERSE + '/api/rb3xbox/songfiles/list', form
+    form['text'] = text
+    return RHYTHMVERSE + '/api/rb3xbox/songfiles/search/live', form
+
+
+def rv_search_result(reply, downloaded):
+    """band3's /rv/search out of RhythmVerse's reply, or None if it isn't one."""
+    if not isinstance(reply, dict) or reply.get('status') != 'success':
+        return None
+    data = reply.get('data') or {}
+    if not isinstance(data.get('songs'), list):
+        return None
+    songs = [s for s in map(rv_song, data['songs']) if s]
+    for s in songs:
+        s['downloaded'] = s['file_id'] in downloaded
+    return {'total': _rv_number((data.get('records') or {}).get('total_filtered')),
+            'page': max(_rv_number((data.get('pagination') or {}).get('page')), 1),
+            'page_size': RV_PAGE_SIZE, 'songs': songs}
+
+
+class FakeDownloads:
+    """band3's downloads, made up: each takes a few seconds, and nothing is saved."""
+
+    SECONDS = 4
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.known = {}
+        self.started = {}  # file_id -> (song, monotonic start)
+
+    def remember(self, songs):
+        with self.lock:
+            self.known.update({s['file_id']: s for s in songs})
+
+    def queue(self, file_id):
+        """(status, text) as band3's POST /rv/download answers."""
+        with self.lock:
+            song = self.known.get(file_id)
+            if not song:
+                return 404, 'No search has found that song; search for it again'
+            if not song['download']:
+                return 409, "RhythmVerse doesn't host this one: download it from its page"
+            if file_id in self.started:
+                return 200, 'Downloading'
+            self.started[file_id] = (song, time.monotonic())
+            return 200, 'Downloading'
+
+    def downloaded(self):
+        now = time.monotonic()
+        with self.lock:
+            return {i for i, (_, t) in self.started.items() if now - t >= self.SECONDS}
+
+    def report(self):
+        now = time.monotonic()
+        out = []
+        with self.lock:
+            for file_id, (song, start) in self.started.items():
+                total = song['size'] or 50 * 1048576
+                part = min((now - start) / self.SECONDS, 1)
+                out.append({'file_id': file_id, 'title': song['title'], 'artist': song['artist'],
+                            'state': 'done' if part >= 1 else 'downloading',
+                            'received': int(total * part), 'total': total, 'error': ''})
+        return {'folder': 'songs\\rhythmverse (web_preview: nothing is saved)', 'downloads': out}
+
+
 def _from565(c):
     return [(c >> 11) * 255 // 31, ((c >> 5) & 63) * 255 // 63, (c & 31) * 255 // 31, 255]
 
@@ -298,6 +434,23 @@ class Preview:
         self.details = format_details(self.songs).encode()
         self.art = {}
         self.lock = threading.Lock()
+        self.downloads = FakeDownloads()
+
+    def rv_search(self, text, page):
+        """band3's /rv/search, asked of RhythmVerse: (status, content type, body)."""
+        url, form = rv_search_form(text, page)
+        request = urllib.request.Request(
+            url, data=urllib.parse.urlencode(form).encode(),
+            headers={'User-Agent': 'band3 web_preview', 'Accept': 'application/json'})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as reply:
+                result = rv_search_result(json.load(reply), self.downloads.downloaded())
+        except (OSError, ValueError) as e:
+            return 502, f"Couldn't reach RhythmVerse: {e}"
+        if result is None:
+            return 502, "RhythmVerse's reply wasn't one band3 can read"
+        self.downloads.remember(result['songs'])
+        return 200, json.dumps(result)
 
     def album_art(self, shortname):
         song = self.by_shortname.get(shortname)
@@ -347,8 +500,34 @@ def handler(preview):
                     self.reply(404, text, b'No album art for that shortname')
             elif path.startswith('/jump?shortname='):
                 self.reply(409, text, b'This is web_preview.py: there is no game to select it in')
+            elif urllib.parse.urlsplit(self.path).path == '/rv/search':
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                try:
+                    page = int(query.get('page', ['1'])[0])
+                except ValueError:
+                    page = 1
+                status, body = preview.rv_search(query.get('text', [''])[0].strip(), page)
+                self.reply(status, 'application/json' if status == 200 else text, body.encode())
+            elif path == '/rv/downloads':
+                self.reply(200, 'application/json', json.dumps(preview.downloads.report()).encode())
             else:
                 self.reply(404, text, b'Not Found')
+
+        def do_POST(self):
+            text = 'text/plain; charset=utf-8'
+            if self.path != '/rv/download':
+                self.reply(405, text, b'Only GET is supported')
+                return
+            if not (self.headers.get('Content-Type') or '').startswith('application/json'):
+                self.reply(415, text, b'Send the file ID as JSON')
+                return
+            length = int(self.headers.get('Content-Length') or 0)
+            try:
+                file_id = str(json.loads(self.rfile.read(length)).get('file_id', ''))
+            except (ValueError, AttributeError):
+                file_id = ''
+            status, body = preview.downloads.queue(file_id)
+            self.reply(status, text, body.encode())
 
         def log_message(self, *args):
             pass

@@ -67,6 +67,7 @@ FolderScan ScanFolder(const fs::path& folder, std::span<const uint32_t> title_id
             continue;
         }
         if (!entry.is_regular_file(ec)) continue;
+        if (entry.path().extension() == fs::path(kPartialSuffix)) continue;
         std::vector<uint8_t> bytes(kHeaderBytes);
         std::ifstream file(entry.path(), std::ios::binary);
         if (!file.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(bytes.size()))) continue;

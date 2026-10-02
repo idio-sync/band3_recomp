@@ -16,11 +16,20 @@ struct Request {
     std::string method;
     // as sent, still percent-encoded
     std::string target;
+    // the headers a POST needs; empty and 0 when not sent
+    std::string content_type;
+    size_t content_length = 0;
+    std::string body;  // the server reads it in after the head
 };
 
-// The request line of `head` (everything up to the blank line); nullopt when
-// it isn't "METHOD target HTTP/x".
+// The request line and headers of `head` (everything up to the blank line);
+// nullopt when the line isn't "METHOD target HTTP/x" or Content-Length isn't
+// a number.
 std::optional<Request> ParseRequest(std::string_view head);
+
+// a query parameter of a target (?a=1&b=2), decoded, with '+' as a space as
+// forms send it; nullopt when it isn't there
+std::optional<std::string> QueryParam(std::string_view target, std::string_view name);
 
 // %XX escapes decoded; '+' stays '+', as RB3E leaves it, since DTA scripts use it
 std::string UrlDecode(std::string_view text);
@@ -36,12 +45,18 @@ enum class Endpoint {
     kAlbumArt,   // /album_art?shortname=  a song's album art (band3's, not RB3E's)
     kStatus,     // /status            what the game is doing (band3's)
     kSongDetails,  // /song_details    every song's genre, year, parts... (band3's)
+    // RhythmVerse (band3's; src/Net/rhythmverse.h)
+    kRvSearch,     // /rv/search?text=&page=  a page of RhythmVerse's songs
+    kRvDownload,   // POST /rv/download {"file_id": ...}  download one to the songs folder
+    kRvDownloads,  // /rv/downloads    the downloads, and how far along they are
 };
 
 struct Route {
     Endpoint endpoint = Endpoint::kNotFound;
     int32_t song_id = 0;   // kSong
-    std::string argument;  // kJump's and kAlbumArt's shortname, kExecute's script, decoded
+    // kJump's and kAlbumArt's shortname, kExecute's script, kRvSearch's text, decoded
+    std::string argument;
+    int32_t page = 1;  // kRvSearch's, from 1
 };
 
 // RB3E matches the decoded target, so /jump?shortname=a%26b jumps to "a&b"

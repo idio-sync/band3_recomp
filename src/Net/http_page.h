@@ -67,6 +67,29 @@ button {
 }
 button.plain { background: var(--tag); color: var(--text); font-weight: 500; }
 .bar button.plain { padding: 7px 12px; }
+button:disabled { cursor: default; }
+/* a link that looks like a plain button: a RhythmVerse page */
+a.button {
+  display: inline-block; text-decoration: none; text-align: center; white-space: nowrap;
+  border-radius: 8px; padding: 8px 14px; background: var(--tag); color: var(--text); font-weight: 500;
+}
+.bar + .bar { flex-wrap: wrap; }
+#lib-tools { display: contents; }
+#lib-tools[hidden] { display: none; }
+/* the song library or RhythmVerse */
+.tabs { display: inline-flex; background: var(--tag); border-radius: 8px; padding: 2px; }
+.tabs[hidden] { display: none; }
+.tabs button {
+  background: transparent; color: var(--text); font-weight: 500; padding: 5px 12px; border-radius: 6px;
+}
+.tabs button[aria-pressed=true] { background: var(--panel); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .15); }
+.note {
+  background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+  border-radius: 8px; padding: 10px 12px; margin: 8px 0; font-size: 14px;
+}
+.note[hidden] { display: none; }
+.tag.have { color: var(--accent); }
+button.dl { min-width: 104px; }
 
 /* what the game is doing, from band3's /status */
 #banner {
@@ -82,8 +105,8 @@ button.plain { background: var(--tag); color: var(--text); font-weight: 500; }
 #banner .score { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 
 main { max-width: 760px; margin: 0 auto; padding: 8px 16px 48px; }
-#message { color: var(--muted); font-size: 14px; padding: 8px 0; }
-#message:empty { display: none; }
+#message, #rv-message { color: var(--muted); font-size: 14px; padding: 8px 0; }
+#message:empty, #rv-message:empty { display: none; }
 ul { list-style: none; margin: 0; padding: 0; }
 li {
   display: grid; grid-template-columns: 48px minmax(0, 1fr) auto auto;
@@ -93,7 +116,7 @@ li {
 }
 li > .art { grid-row: span 2; }
 li > .meters { grid-column: 2 / 4; margin-top: 4px; }
-li > button { grid-column: 4; grid-row: 1 / span 2; }
+li > button, li > a.button { grid-column: 4; grid-row: 1 / span 2; }
 /* against RB3E: no album art, so no column for it */
 body.plain li { grid-template-columns: minmax(0, 1fr) auto auto; }
 body.plain li > button { grid-column: 3; }
@@ -155,7 +178,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
 .parts { display: grid; grid-template-columns: auto auto 1fr; gap: 6px 12px; align-items: center; font-size: 14px; }
 .parts .tier { color: var(--muted); }
 
-#more { display: block; margin: 12px auto; }
+#more, #rv-more { display: block; margin: 12px auto; }
+#more[hidden], #rv-more[hidden] { display: none; }
 #toast {
   position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 2;
   background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 8px;
@@ -168,7 +192,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
   .tag { display: none; }
   li { grid-template-columns: 48px minmax(0, 1fr) auto; }
   li > .meters { grid-column: 2 / 3; }
-  li > button { grid-column: 3; }
+  li > button, li > a.button { grid-column: 3; }
+  button.dl { min-width: 0; }
   body.plain li { grid-template-columns: minmax(0, 1fr) auto; }
   body.plain li > button { grid-column: 2; }
 }
@@ -182,22 +207,36 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
     <input id="search" type="search" placeholder="Search songs, artists, albums" autocomplete="off">
   </div>
   <div class="bar">
-    <select id="sort" aria-label="Sort by">
-      <option value="artist">Artist</option>
-      <option value="title">Title</option>
-      <option value="album">Album</option>
-      <option value="origin">Source</option>
-    </select>
-    <button id="filter" class="plain" hidden>Filters</button>
-    <button id="random" class="plain">Random</button>
+    <div class="tabs" id="tabs" hidden>
+      <button data-mode="library" aria-pressed="true">Library</button>
+      <button data-mode="rv" aria-pressed="false">RhythmVerse</button>
+    </div>
+    <span id="lib-tools">
+      <select id="sort" aria-label="Sort by">
+        <option value="artist">Artist</option>
+        <option value="title">Title</option>
+        <option value="album">Album</option>
+        <option value="origin">Source</option>
+      </select>
+      <button id="filter" class="plain" hidden>Filters</button>
+      <button id="random" class="plain">Random</button>
+    </span>
     <span id="count"></span>
   </div>
   <div id="banner" hidden></div>
 </header>
 <main>
-  <div id="message">Loading songs&hellip;</div>
-  <ul id="list"></ul>
-  <button id="more" class="plain" hidden>Show more</button>
+  <section id="lib">
+    <div id="message">Loading songs&hellip;</div>
+    <ul id="list"></ul>
+    <button id="more" class="plain" hidden>Show more</button>
+  </section>
+  <section id="rv" hidden>
+    <div class="note" id="rv-note" hidden></div>
+    <div id="rv-message"></div>
+    <ul id="rv-list"></ul>
+    <button id="rv-more" class="plain" hidden>Show more</button>
+  </section>
 </main>
 <dialog id="filters"><div class="sheet">
   <h2>Filters</h2>
@@ -223,6 +262,8 @@ let songs = [], matches = [], shown = 0;
 // band3's /song_details: null until (and unless) the server has it
 let details = null;
 let hasArt = false;
+// the list that's up: the song library, or RhythmVerse's songs ("rv")
+let mode = "library";
 
 // the parts the rows show, and the pro parts the details add
 const PARTS = [["band", "Band"], ["guitar", "Guitar"], ["bass", "Bass"],
@@ -424,9 +465,17 @@ function showMore() {
   $("list").append(...next.map(row));
   shown += next.length;
   $("more").hidden = shown >= matches.length;
-  $("count").textContent = matches.length === songs.length
-    ? songs.length + " songs" : matches.length + " of " + songs.length;
+  showCount();
   $("message").textContent = songs.length && !matches.length ? "No songs match." : "";
+}
+
+function showCount() {
+  if (mode === "rv") {
+    $("count").textContent = rv.text === null ? "" : rv.total.toLocaleString() + " on RhythmVerse";
+  } else {
+    $("count").textContent = matches.length === songs.length
+      ? songs.length + " songs" : matches.length + " of " + songs.length;
+  }
 }
 
 // ---- a song's details; from Random, with another pick
@@ -441,14 +490,7 @@ function openSong(s, random) {
     const facts = [d.year || null, d.genre || null, d.length_ms ? minutes(d.length_ms) : null,
                    d.vocal_parts > 1 ? d.vocal_parts + "-part harmonies" : null];
     body.append(el("div", "facts", facts.filter(Boolean).join(" · ")));
-    body.append(el("h3", "", "Difficulty"));
-    const parts = el("div", "parts");
-    for (const [part, label] of PARTS.concat(PRO)) {
-      const has = part in d.tiers;
-      parts.append(el("span", "", label), has ? dots(d.tiers[part]) : el("span", "", "–"),
-                   el("span", "tier", has ? TIERS[d.tiers[part]] : "None"));
-    }
-    body.append(parts);
+    body.append(el("h3", "", "Difficulty"), partsGrid(d.tiers));
   }
   const actions = el("div", "actions");
   const close = el("button", "plain", "Close");
@@ -464,6 +506,17 @@ function openSong(s, random) {
   actions.append(pick);
   body.append(actions);
   if (!$("sheet").open) $("sheet").showModal();
+}
+
+// every part's difficulty, pro parts too, for a song's sheet
+function partsGrid(tiers) {
+  const parts = el("div", "parts");
+  for (const [part, label] of PARTS.concat(PRO)) {
+    const has = part in tiers;
+    parts.append(el("span", "", label), has ? dots(tiers[part]) : el("span", "", "–"),
+                 el("span", "tier", has ? TIERS[tiers[part]] : "None"));
+  }
+  return parts;
 }
 
 function pickRandom() {
@@ -547,6 +600,250 @@ async function pollStatus() {
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) pollStatus(); });
 
+// ---- RhythmVerse (band3's /rv/...): search its custom songs, and download
+// the ones it hosts into the songs folder, for the game's next launch
+const rv = {
+  text: null,        // what the list is a search for; null before the first
+  page: 0, total: 0,
+  rows: new Map(),   // file_id -> {s, action}: the row's song and its button
+  downloads: new Map(),  // file_id -> this session's download, from /rv/downloads
+  folder: "",
+};
+const searchText = {library: "", rv: ""};
+
+function norm(text) { return (text || "").toLowerCase().replace(/[^a-z0-9]+/g, ""); }
+// a song by this artist and title is in the library already
+let libraryKeys = null;
+function inLibrary(s) {
+  if (!libraryKeys) libraryKeys = new Set(songs.map(x => norm(x.artist) + "|" + norm(x.title)));
+  return libraryKeys.has(norm(s.artist) + "|" + norm(s.title));
+}
+
+function megabytes(bytes) { return (bytes / 1048576).toFixed(1) + " MB"; }
+
+function rvArt(s, className) {
+  const tile = el("div", className || "art");
+  if (s.art.startsWith("https://rhythmverse.co/")) {
+    const img = el("img");
+    img.alt = "";
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.referrerPolicy = "no-referrer";
+    img.onerror = () => img.remove();
+    img.src = s.art;
+    tile.append(img);
+  }
+  return tile;
+}
+
+// downloaded (here or before), downloading, failed, or null
+function rvState(s) {
+  const d = rv.downloads.get(s.file_id);
+  if (d && (d.state === "queued" || d.state === "downloading")) return d;
+  if (s.downloaded || (d && d.state === "done")) return {state: "done"};
+  return d || null;
+}
+
+function rvPageLink(s, text) {
+  const a = el("a", "button", text);
+  a.href = s.page.startsWith("https://rhythmverse.co/") ? s.page : "https://rhythmverse.co/";
+  a.target = "_blank";
+  a.rel = "noopener";
+  a.onclick = e => e.stopPropagation();
+  return a;
+}
+
+// a song's button: Download, how far along it is, or Open for a song
+// RhythmVerse doesn't host, to download from its page
+function rvAction(s) {
+  const d = rvState(s);
+  if (!s.download && !(d && d.state === "done")) {
+    const a = rvPageLink(s, "Open");
+    a.title = s.host === "rhythmverse.co" ? "Zipped: download it from its RhythmVerse page"
+      : s.host ? "On " + s.host + ": download it from its RhythmVerse page"
+      : "Download it from its RhythmVerse page";
+    return a;
+  }
+  const b = el("button", "dl", "Download");
+  b.onclick = e => { e.stopPropagation(); download(s); };
+  if (!d) return b;
+  if (d.state === "failed") {
+    b.textContent = "Retry";
+    b.title = d.error;
+    return b;
+  }
+  b.className = "dl plain";
+  b.disabled = true;
+  b.textContent = d.state === "done" ? "Downloaded" : d.state === "queued" ? "Waiting"
+    : d.total ? Math.min(99, Math.floor(100 * d.received / d.total)) + "%" : megabytes(d.received);
+  return b;
+}
+
+function rvRow(s) {
+  const li = el("li");
+  li.append(rvArt(s));
+  const info = el("div", "info");
+  info.append(el("div", "title", s.title),
+              el("div", "sub", [s.artist, s.album].filter(Boolean).join(" · ")));
+  const have = inLibrary(s);
+  const tag = el("span", have ? "tag have" : "tag", have ? "In library" : s.author);
+  if (have) tag.title = "A song by this artist and title is in the game";
+  const action = rvAction(s);
+  li.append(info, tag, action, meters(s));
+  li.onclick = () => openRvSong(s);
+  rv.rows.set(s.file_id, {s, action});
+  return li;
+}
+
+function refreshRow(fileId) {
+  const row = rv.rows.get(fileId);
+  if (!row) return;
+  const action = rvAction(row.s);
+  row.action.replaceWith(action);
+  row.action = action;
+}
+
+function openRvSong(s) {
+  const body = $("sheet-body");
+  body.replaceChildren(rvArt(s, "cover"), el("h2", "", s.title),
+                       el("div", "sub", [s.artist, s.album].filter(Boolean).join(" · ")));
+  const facts = [s.year || null, s.genre || null, s.length_ms ? minutes(s.length_ms) : null,
+                 s.vocal_parts > 1 ? s.vocal_parts + "-part harmonies" : null];
+  body.append(el("div", "facts", facts.filter(Boolean).join(" · ")));
+  const by = [s.author ? "By " + s.author : null, s.size ? megabytes(s.size) : null,
+              s.downloads.toLocaleString() + " downloads"];
+  body.append(el("div", "facts", by.filter(Boolean).join(" · ")));
+  if (inLibrary(s)) body.append(el("div", "facts", "A song by this artist and title is in the game."));
+  body.append(el("h3", "", "Difficulty"), partsGrid(s.tiers));
+  const actions = el("div", "actions");
+  const close = el("button", "plain", "Close");
+  close.onclick = () => $("sheet").close();
+  actions.append(close, rvPageLink(s, "RhythmVerse page"));
+  if (s.download || rvState(s)) {
+    const action = rvAction(s);
+    if (action.tagName === "BUTTON") action.addEventListener("click", () => $("sheet").close());
+    actions.append(action);
+  }
+  body.append(actions);
+  if (!$("sheet").open) $("sheet").showModal();
+}
+
+// a new search (or the newest songs, without text), or its next page
+let rvSeq = 0;
+async function rvSearch(more) {
+  if (!more) {
+    rv.text = $("search").value.trim();
+    rv.page = 0;
+    rv.total = 0;
+    rv.rows.clear();
+    $("rv-list").replaceChildren();
+    $("rv-message").textContent = rv.text ? "Searching RhythmVerse…" : "Loading RhythmVerse's newest songs…";
+  }
+  const seq = ++rvSeq;
+  $("rv-more").hidden = true;
+  try {
+    const r = await fetch("/rv/search?text=" + encodeURIComponent(rv.text) + "&page=" + (rv.page + 1));
+    if (seq !== rvSeq) return;
+    if (!r.ok) throw new Error(await r.text());
+    const res = await r.json();
+    if (seq !== rvSeq) return;
+    rv.page = res.page;
+    rv.total = res.total;
+    $("rv-list").append(...res.songs.map(rvRow));
+    $("rv-more").hidden = !res.songs.length || rv.page * res.page_size >= rv.total;
+    $("rv-message").textContent = rv.rows.size ? "" : "Nothing on RhythmVerse matches.";
+    showCount();
+  } catch (e) {
+    if (seq !== rvSeq) return;
+    $("rv-message").textContent = "Couldn't search RhythmVerse: " + e.message + " ";
+    const retry = el("button", "plain", "Retry");
+    retry.onclick = () => rvSearch(more);
+    $("rv-message").append(retry);
+  }
+}
+
+async function download(s) {
+  try {
+    const r = await fetch("/rv/download", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({file_id: s.file_id}),
+    });
+    const text = await r.text();
+    if (!r.ok) { toast(text); return; }
+    if (text === "Already downloaded") {
+      s.downloaded = true;
+      refreshRow(s.file_id);
+      toast(`“${s.title}” is downloaded already`);
+      return;
+    }
+    rv.downloads.set(s.file_id, {file_id: s.file_id, title: s.title, state: "queued", received: 0, total: s.size});
+    refreshRow(s.file_id);
+    pollDownloads();
+  } catch (e) {
+    toast("band3 didn't answer");
+  }
+}
+
+// the downloads, every second while one's going
+let downloadsTimer = null;
+async function pollDownloads() {
+  clearTimeout(downloadsTimer);
+  try {
+    const r = await fetch("/rv/downloads");
+    if (!r.ok) return;
+    const res = await r.json();
+    rv.folder = res.folder;
+    let busy = false;
+    for (const d of res.downloads) {
+      const was = rv.downloads.get(d.file_id);
+      rv.downloads.set(d.file_id, d);
+      if (was && was.state !== d.state) {
+        if (d.state === "done") toast(`Downloaded “${d.title}”`);
+        if (d.state === "failed") toast(`Couldn't download “${d.title}”: ${d.error}`);
+      }
+      refreshRow(d.file_id);
+      busy = busy || d.state === "queued" || d.state === "downloading";
+    }
+    const done = res.downloads.filter(d => d.state === "done").length;
+    $("rv-note").hidden = !done;
+    $("rv-note").textContent = (done === 1 ? "1 song" : done + " songs") + " downloaded to " +
+      rv.folder + ". The game reads its song folders as it starts, so restart band3 to play " +
+      (done === 1 ? "it." : "them.");
+    if (busy) downloadsTimer = setTimeout(pollDownloads, 1000);
+  } catch (e) {}
+}
+
+function setMode(next) {
+  searchText[mode] = $("search").value;
+  mode = next;
+  try { localStorage.setItem("band3.mode", mode); } catch (e) {}
+  for (const b of $("tabs").children) b.setAttribute("aria-pressed", b.dataset.mode === mode);
+  $("lib").hidden = mode !== "library";
+  $("rv").hidden = mode !== "rv";
+  $("lib-tools").hidden = mode !== "library";
+  $("search").value = searchText[mode];
+  $("search").placeholder = mode === "rv" ? "Search RhythmVerse's custom songs"
+                                          : "Search songs, artists, albums";
+  if (mode === "rv" && rv.text === null) rvSearch(false);
+  showCount();
+}
+for (const b of $("tabs").children) b.onclick = () => { if (b.dataset.mode !== mode) setMode(b.dataset.mode); };
+
+// the tab, when band3 has RhythmVerse on (/rv/downloads answers)
+async function initRhythmVerse() {
+  try {
+    const r = await fetch("/rv/downloads");
+    if (!r.ok) return;
+  } catch (e) {
+    return;
+  }
+  $("tabs").hidden = false;
+  pollDownloads();
+  let saved = null;
+  try { saved = localStorage.getItem("band3.mode"); } catch (e) {}
+  if (saved === "rv") setMode("rv");
+}
+
 // ---- loading
 async function loadDetails(retry) {
   try {
@@ -571,10 +868,12 @@ async function load() {
     hasArt = r.headers.get("Server") === "band3";
     document.body.classList.toggle("plain", !hasArt);
     songs = parseSongs(await r.text());
+    libraryKeys = null;
     filter();
     if (hasArt) {
       loadDetails(true);
       pollStatus();
+      initRhythmVerse();
     }
   } catch (e) {
     $("message").textContent = "Couldn't load the songs: " + e.message + " ";
@@ -587,8 +886,16 @@ async function load() {
 let searchTimer;
 $("search").addEventListener("input", () => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(filter, 150);
+  // RhythmVerse is asked once typing stops for a moment, not at every key
+  if (mode === "rv") searchTimer = setTimeout(() => rvSearch(false), 700);
+  else searchTimer = setTimeout(filter, 150);
 });
+$("search").addEventListener("keydown", e => {
+  if (e.key !== "Enter" || mode !== "rv") return;
+  clearTimeout(searchTimer);
+  rvSearch(false);
+});
+$("rv-more").addEventListener("click", () => rvSearch(true));
 $("sort").addEventListener("change", filter);
 $("more").addEventListener("click", showMore);
 load();

@@ -60,6 +60,55 @@ TEST_CASE("targets pick RB3E's endpoints") {
     CHECK(MatchRoute("/song_details").endpoint == Endpoint::kSongDetails);
 }
 
+TEST_CASE("a request's Content-Type and Content-Length are read, whatever their case") {
+    const auto post = ParseRequest(
+        "POST /rv/download HTTP/1.1\r\nHost: x\r\ncontent-TYPE:  application/json \r\n"
+        "Content-Length: 27\r\n\r\n");
+    REQUIRE(post);
+    CHECK(post->content_type == "application/json");
+    CHECK(post->content_length == 27);
+    CHECK(post->body.empty());
+
+    const auto get = ParseRequest("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    REQUIRE(get);
+    CHECK(get->content_type.empty());
+    CHECK(get->content_length == 0);
+
+    CHECK(!ParseRequest("POST / HTTP/1.1\r\nContent-Length: lots\r\n\r\n"));
+    CHECK(!ParseRequest("POST / HTTP/1.1\r\nContent-Length: -1\r\n\r\n"));
+    CHECK(!ParseRequest("POST / HTTP/1.1\r\nContent-Length:\r\n\r\n"));
+}
+
+TEST_CASE("query parameters are found by name and decoded, '+' as a space") {
+    CHECK(QueryParam("/x?text=rob+zombie%26co&page=2", "text") == "rob zombie&co");
+    CHECK(QueryParam("/x?text=rob+zombie%26co&page=2", "page") == "2");
+    CHECK(QueryParam("/x?text=a&page=2", "nope") == std::nullopt);
+    CHECK(QueryParam("/x", "text") == std::nullopt);
+    CHECK(QueryParam("/x?flag&text=", "flag") == "");
+    CHECK(QueryParam("/x?flag&text=", "text") == "");
+    // a name that only starts the same isn't it
+    CHECK(QueryParam("/x?texts=a", "text") == std::nullopt);
+}
+
+TEST_CASE("targets pick the RhythmVerse endpoints") {
+    const Route search = MatchRoute("/rv/search?text=never%20gonna&page=3");
+    CHECK(search.endpoint == Endpoint::kRvSearch);
+    CHECK(search.argument == "never gonna");
+    CHECK(search.page == 3);
+
+    const Route newest = MatchRoute("/rv/search");
+    CHECK(newest.endpoint == Endpoint::kRvSearch);
+    CHECK(newest.argument.empty());
+    CHECK(newest.page == 1);
+    CHECK(MatchRoute("/rv/search?page=0").page == 1);
+    CHECK(MatchRoute("/rv/search?page=x").page == 1);
+
+    CHECK(MatchRoute("/rv/download").endpoint == Endpoint::kRvDownload);
+    CHECK(MatchRoute("/rv/downloads").endpoint == Endpoint::kRvDownloads);
+    CHECK(MatchRoute("/rv/searches").endpoint == Endpoint::kNotFound);
+    CHECK(MatchRoute("/rv/").endpoint == Endpoint::kNotFound);
+}
+
 TEST_CASE("song details are JSON keyed by shortname, with the parts each song has") {
     SongDetails rehab{"rehab", "R&B/Soul/Funk", 2006, 214000, 1,
                       {{"band", 3}, {"guitar", 2}, {"vocals", 4}}};

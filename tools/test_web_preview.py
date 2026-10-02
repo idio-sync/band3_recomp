@@ -196,5 +196,58 @@ class PageTest(unittest.TestCase):
         self.assertEqual(web_preview.index_page(header), '<p>hi</p>\n')
 
 
+class RhythmVerseTest(unittest.TestCase):
+    """As band3's tests/rhythmverse_test.cpp checks the same conversion."""
+
+    REPLY = {'status': 'success', 'data': {
+        'records': {'total_filtered': 812}, 'pagination': {'page': '2'},
+        'songs': [
+            {'data': {'artist': 'Rob Zombie', 'title': 'Never Gonna Stop', 'diff_keys': '0',
+                      'album_art': '/assets/album_art/n/x.png'},
+             'file': {'file_id': '595481a7cbc158.68319817', 'file_title': 'Never Gonna Stop (Red)',
+                      'song_length': 190, 'size': 3706880, 'zippata': 0, 'external_url': '',
+                      'diff_drums': 4, 'diff_vocals': 1, 'diff_proguitar': -1,
+                      'author': {'name': 'DenVaktare'}, 'file_url': '/songfile/595481a7cbc158.68319817',
+                      'download_url': '/download_file/denvaktare/595481a7cbc158.68319817/DV'}},
+            {'data': {'artist': 'Band', 'title': 'Elsewhere'},
+             'file': {'file_id': '5b94.1', 'external_url': 'https://www.mediafire.com/f/x.rar',
+                      'author': None, 'user': 'someone'}},
+            {'data': {}, 'file': {'file_id': '60aa', 'zippata': 1, 'download_url': '/download_file/u/z.zip'}},
+            {'data': {}, 'file': {'file_id': '../evil'}},
+        ]}}
+
+    def test_songs_as_band3_gives_them(self):
+        result = web_preview.rv_search_result(self.REPLY, {'595481a7cbc158.68319817'})
+        self.assertEqual((result['total'], result['page'], len(result['songs'])), (812, 2, 3))
+        song = result['songs'][0]
+        self.assertEqual(song['title'], 'Never Gonna Stop (Red)')
+        self.assertEqual(song['artist'], 'Rob Zombie')
+        self.assertEqual(song['tiers'], {'drum': 3, 'vocals': 0})
+        self.assertEqual(song['length_ms'], 190000)
+        self.assertEqual(song['author'], 'DenVaktare')
+        self.assertEqual(song['art'], 'https://rhythmverse.co/assets/album_art/n/x.png')
+        self.assertEqual(song['page'], 'https://rhythmverse.co/songfile/595481a7cbc158.68319817')
+        self.assertTrue(song['download'])
+        self.assertTrue(song['downloaded'])
+
+    def test_only_hosted_unzipped_songs_download(self):
+        songs = web_preview.rv_search_result(self.REPLY, set())['songs']
+        self.assertEqual((songs[1]['download'], songs[1]['host'], songs[1]['author']),
+                         (False, 'www.mediafire.com', 'someone'))
+        self.assertEqual((songs[2]['download'], songs[2]['host']), (False, 'rhythmverse.co'))
+
+    def test_a_failed_reply_is_none(self):
+        self.assertIsNone(web_preview.rv_search_result({'status': 'error'}, set()))
+        self.assertIsNone(web_preview.rv_search_result([], set()))
+
+    def test_search_or_newest(self):
+        url, form = web_preview.rv_search_form('zombie', 2)
+        self.assertTrue(url.endswith('/search/live'))
+        self.assertEqual((form['text'], form['page']), ('zombie', 2))
+        url, form = web_preview.rv_search_form('', 0)
+        self.assertTrue(url.endswith('/songfiles/list'))
+        self.assertEqual((form['page'], form['sort[0][sort_by]']), (1, 'release_date'))
+
+
 if __name__ == '__main__':
     unittest.main()

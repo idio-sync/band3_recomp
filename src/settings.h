@@ -59,6 +59,7 @@ REXCVAR_DECLARE(int32_t, http_port);
 REXCVAR_DECLARE(std::string, http_address);
 REXCVAR_DECLARE(bool, http_allow_cors);
 REXCVAR_DECLARE(bool, http_allow_scripts);
+REXCVAR_DECLARE(bool, http_rhythmverse);
 REXCVAR_DECLARE(bool, rb3e_mode);
 
 // Band3/Debug

@@ -5,6 +5,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace band3::content {
@@ -30,10 +31,14 @@ struct Package {
 // enough of a file's start to parse: everything up to the display name's end
 inline constexpr size_t kHeaderBytes = 0x511;
 
+// the end of a file's name while it's still downloading (src/Net/song_downloads.h);
+// scans skip it, since its header can be whole while the rest isn't there yet
+inline constexpr std::string_view kPartialSuffix = ".part";
+
 std::optional<PackageHeader> ParsePackageHeader(std::span<const uint8_t> bytes);
 
-// every package for one of title_ids in folders and their subfolders, one per
-// content ID (the first found, in the folders' order); the folders are scanned
+// every package for one of title_ids in folders and their subfolders (but not
+// files ending kPartialSuffix), one per content ID (the first found, in the folders' order); the folders are scanned
 // at once, a thread each. `problems` gets one line per folder or subfolder
 // that couldn't be read, naming it; the rest of the folder is still read
 std::vector<Package> ScanFolders(const std::vector<std::filesystem::path>& folders,

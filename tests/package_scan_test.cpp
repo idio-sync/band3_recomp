@@ -79,6 +79,7 @@ TEST_CASE("scanning keeps one of each RB3 package and skips the rest") {
     Write(root / "a" / "rb2_song", MakeHeader("CON ", 2, 0x45410869, 0x70, u"RB2"));  // RB3 reads RB2's
     Write(root / "a" / "forza", MakeHeader("CON ", 2, 0x4D5307E6, 0x90, u"Car"));      // another game's
     Write(root / "a" / "notes.txt", std::vector<uint8_t>(10, 'x'));                    // junk
+    Write(root / "a" / "Coming_1.part", MakeHeader("CON ", 1, kRb3TitleId, 0xB0, u"Coming"));  // downloading
     std::vector<std::string> problems;
     auto found = ScanFolders({root / "a", root / "missing"}, kRb3TitleIds, &problems);
     REQUIRE(found.size() == 3);
