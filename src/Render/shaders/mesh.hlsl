@@ -200,6 +200,12 @@ PixelIn VSMain(VertexIn v) {
             wd = mul(float4(dir, 0), b).xyz;
             wu = mul(float4(tangent, 0), b).xyz;
         }
+    } else if ((vs_shade.flags.x & kShadeBillboard) != 0u) {
+        // turned to the camera at the instance's translation
+        wp = Billboard(vs_shade, v.pos) + world[3].xyz;
+        wn = Billboard(vs_shade, nrm);
+        wd = Billboard(vs_shade, dir);
+        wu = Billboard(vs_shade, tangent);
     } else {
         wp = mul(float4(v.pos, 1), world).xyz;
         wn = mul(float4(nrm, 0), world).xyz;

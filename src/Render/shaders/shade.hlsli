@@ -109,6 +109,18 @@ float2 TexGen(SHADE_IN(ShadeParams) sp, float2 uv) {
                   sp.texgen[1].x * uv.x + sp.texgen[1].y * uv.y + sp.texgen[1].w);
 }
 
+// A BILLBOARD draw's vertex turned to the camera (kShadeBillboard): the
+// crowd's impostor quads, one DxMultiMesh instance each, lie in their mesh's
+// XZ, and the game's vertex shaders (4B19F15CA3B46FEB lit, 7D050DB197258C07
+// unlit; tools/shaders/research/crowd.py) place local v at
+//   P = T + v.x R + v.y F + v.z U
+// with R, U and F the camera's right, up and forward (VS c16..c18's
+// columns) and T the instance's translation: its rotation and scale are left
+// out. The normal turns the same way, without T. Returns the turned v.
+float3 Billboard(SHADE_IN(ShadeParams) sp, float3 v) {
+    return Xyz(sp.billboard[0]) * v.x + Xyz(sp.billboard[2]) * v.y + Xyz(sp.billboard[1]) * v.z;
+}
+
 // The box map lit along d: each face's colour weighted by sat(+-d.a), linear
 float3 Box(SHADE_IN(ShadeParams) sp, float3 d) {
     return Xyz(sp.box[0]) * max(d.x, 0.0f) + Xyz(sp.box[1]) * max(-d.x, 0.0f) +
@@ -349,7 +361,9 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, floa
             Xyz(sp.point_color[i]) * proj_mul * (att * (i == 0u ? ao_0 : ao_1));
         const float3 lc = lc_own * shadow;    // for the diffuse
         const float3 lc2 = lc_own * shadow2;  // the specular and the rim
-        const float nl = dot(N, L);
+        // a billboard's light is the falloff alone (4B19F15CA3B46FEB instrs
+        // 37-40): its quad faces the camera, not the light
+        const float nl = (f & kShadeBillboard) != 0u ? 1.0f : dot(N, L);
         if (skin || hair) {
             lights = lights + lc * saturate(wrap_a * nl + wrap_b);
         } else {

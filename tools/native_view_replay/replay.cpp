@@ -128,6 +128,7 @@
 #include "src/Render/png_writer.h"
 #include "src/Render/post_model.h"
 #include "src/Render/post_params.h"
+#include "src/Render/shade_model.h"
 #include "src/Render/soft_raster.h"
 
 using namespace band3::render;
@@ -1037,10 +1038,22 @@ int main(int argc, char** argv) {
             float mn[3] = {1e30f, 1e30f, 1e30f}, mx[3] = {-1e30f, -1e30f, -1e30f};
             float lo[2] = {1e30f, 1e30f}, hi[2] = {-1e30f, -1e30f};
             int front = 0;
+            // a BILLBOARD draw lands turned to the camera, as the renderers
+            // draw it (shade.hlsli's Billboard)
+            shade::ShadeParams sp;
+            shade::PackShade(d, ShadeOf(*fc, d), RasterOptions{}, false, sp);
+            const bool billboard = (sp.flags.x & shade::kShadeBillboard) != 0;
             for (const Vertex& v : d.geom->verts) {
                 for (int c = 0; c < 3; c++) { mn[c] = std::min(mn[c], v.pos[c]); mx[c] = std::max(mx[c], v.pos[c]); }
                 float c4[4];
-                Clip(v.pos, d.bones.empty() ? d.world : d.bones[v.bone[0] < d.bones.size() ? v.bone[0] : 0], d.view_proj, c4);
+                if (billboard) {
+                    float wp[3];
+                    shade::BillboardCpu(sp, v.pos, d.world.m[3], wp);
+                    const Mat4 identity{{{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}}};
+                    Clip(wp, identity, d.view_proj, c4);
+                } else {
+                    Clip(v.pos, d.bones.empty() ? d.world : d.bones[v.bone[0] < d.bones.size() ? v.bone[0] : 0], d.view_proj, c4);
+                }
                 if (c4[3] > 0) {
                     front++;
                     for (int k = 0; k < 2; k++) { lo[k] = std::min(lo[k], c4[k] / c4[3]); hi[k] = std::max(hi[k], c4[k] / c4[3]); }

@@ -13,9 +13,10 @@
 // takes its taps from the other surface; that a shadow map's pass draws
 // depth alone, which a SHADOW_BUFFER draw after it reads; that NgLight's
 // shadow is its casters' white silhouettes, cleared first and blurred twice
-// in place, which the projected light's draws read; and that a normal map a
+// in place, which the projected light's draws read; that a normal map a
 // texture pass draws (a head's) is that pass's target, which tilts the
-// normal of the draw after it in the frame its tangents give.
+// normal of the draw after it in the frame its tangents give; and that a
+// crowd billboard's quad is turned to the camera.
 
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -410,6 +411,38 @@ TEST_CASE("a REFRACT_WORLD draw in the overlay is its colour times the picture b
     f.post_boundary = 3;
     Rasterize(f, Small(), rgba);
     CHECK(rgba[1 * 8 + 3] == 0xff808080u);
+}
+
+TEST_CASE("a crowd billboard's quad, in its mesh's XZ, is turned to the camera") {
+    // the quad from x -1..0, z 1..-1 (y 0), at an instance moved 1 right and
+    // scaled 2: drawn as a mesh, with the identity view-projection, it's
+    // edge-on (no height on the screen) and draws nothing; BILLBOARD turns it
+    // to the camera (VS c16..c18: right x, up y, forward z, as clip space
+    // has them here) and leaves the scale out, so it covers the right half,
+    // its winding turned counter-clockwise there: kept by D3DCULL_CW, as the
+    // game's crowd draws are
+    auto quad = std::make_shared<Geometry>(*Quad(-1, 0, kGreen));
+    for (Vertex& v : quad->verts) std::swap(v.pos[1], v.pos[2]);
+    quad->indices = {0, 2, 1, 0, 3, 2};
+    FrameCapture f;
+    f.shades = {FlatShade(false)};
+    ShadeState& s = f.shades[0];
+    s.shader_type = 12;
+    for (int i = 0; i < 3; i++) s.vs[ShadeRegIndex(16 + i)][i] = 1.0f;
+    DrawItem d = Item(quad, 0);
+    d.shade = 0;
+    d.cull = kCullBack;
+    for (int i = 0; i < 3; i++) d.world.m[i][i] = 2.0f;
+    d.world.m[3][0] = 1.0f;
+    f.draws = {d};
+    f.passes = {BackBuffer(0, 1)};
+    std::vector<uint32_t> rgba;
+    Rasterize(f, Small(), rgba);
+    CHECK(std::count(rgba.begin(), rgba.end(), kGreen) == 0);
+    s.options |= 1ull << shader_opt::kBillboard;
+    Rasterize(f, Small(), rgba);
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 8; x++) CHECK((rgba[y * 8 + x] == kGreen) == (x >= 4));
 }
 
 TEST_CASE("a mesh's edges land on the game's pixels, D3D9's; a DrawRect quad's on D3D10's") {

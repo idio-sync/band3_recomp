@@ -9,8 +9,10 @@
 // vertex's tangent as the capture decodes them (guest_formats.h), with which
 // channel of a normal map tilts toward which of the frame's vectors,
 // PackShade's reading of the option word, the particle quad's corners (scene_capture.h's
-// ParticleCorner) against the particle VS's instructions, and a soft
-// particle's fade (SoftFade) against the soft particle pixel shader's maths.
+// ParticleCorner) against the particle VS's instructions, a crowd billboard's
+// placement and light against what the billboard VS gives (run in xsim.py),
+// and a soft particle's fade (SoftFade) against the soft particle pixel
+// shader's maths.
 
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -902,6 +904,93 @@ TEST_CASE("PackShade takes each term from the option word, not stale registers")
     o.legacy_light = true;
     PackShade(it, &s, o, true, sp);
     CHECK_FALSE(Has(sp, kShadeModel));
+}
+
+TEST_CASE("a crowd billboard turns to the camera and lights as the game's billboard VS does") {
+    using namespace shader_opt;
+    // the crowd's option word (default-10s.cap's type-12 draws): DIFFUSE_MAP,
+    // REAL_LIGHTS, APPROX_LIGHTS, BILLBOARD, AO, one point light; with a
+    // real frame's camera (VS c16..c18), point light and ambient
+    ShadeState s = MakeState(Bit(kDiffuseMap) | Bit(kRealLights) | Bit(kApproxLights) |
+                                 Bit(kBillboard) | Bit(kEnableAO) | (uint64_t(1) << kNumPoint),
+                             12);
+    auto set = [](float* r, float x, float y, float z, float w) {
+        r[0] = x;
+        r[1] = y;
+        r[2] = z;
+        r[3] = w;
+    };
+    set(s.vs[ShadeRegIndex(16)], -0.5318f, 0.1279f, 0.8372f, -367.7529f);
+    set(s.vs[ShadeRegIndex(17)], -0.8468f, -0.0645f, -0.5280f, -327.8842f);
+    set(s.vs[ShadeRegIndex(18)], 0.0135f, 0.9897f, -0.1426f, 360.6602f);
+    set(s.vs[ShadeRegIndex(20)], 1, 0, 0, 0);
+    set(s.vs[ShadeRegIndex(21)], 0, 1, 0, 0);
+    set(s.ps[ShadeRegIndex(0)], 0.9f, 0.8f, 0.7f, 0.5f);
+    set(s.ps[ShadeRegIndex(1)], 0.0f, 0.1098f, 0.1686f, 1.0f);
+    set(s.ps[ShadeRegIndex(64)], 51.3894f, -533.5551f, 271.7365f, -0.002f);
+    set(s.ps[ShadeRegIndex(67)], 1.349f, 1.2941f, 2.0f, 1.1765f);
+    for (int i = 0; i < 6; i++) set(s.ps[ShadeRegIndex(80 + i)], 0, 0, 0, 0);
+    set(s.ps[ShadeRegIndex(80)], 0.1f, 0.2f, 0.3f, 0);
+    set(s.ps[ShadeRegIndex(83)], 0.3f, 0.1f, 0.05f, 0);
+    set(s.ps[ShadeRegIndex(84)], 0.05f, 0.05f, 0.2f, 0);
+    DrawItem it{};
+    ShadeParams sp;
+    PackShade(it, &s, RasterOptions{}, true, sp);
+    CHECK(Has(sp, kShadeBillboard));
+    CHECK(Has(sp, kShadePerVertex));
+    CHECK(Has(sp, kShadeBox));
+    CHECK(sp.flags.y == 1);
+    // the billboard VS reads no vertex colour: no AO, whatever the option word
+    CHECK_FALSE(Has(sp, (kShadeAO | kShadeAoSh)));
+
+    // A vertex of the quad (local XZ) at an instance whose transform has a
+    // scale the VS leaves out: what 4B19F15CA3B46FEB writes, run in
+    // tools/shaders/research/xsim.py (crowd.py's model gives the same), is
+    // o1 = (331.23788, -753.2216, 270.72944): T + x R + y F + z U
+    const float pos[3] = {9.0f, 0.0f, 5.2f}, nrm[3] = {0.2f, -0.9f, 0.3f};
+    const float t[3] = {335.359f, -745.265f, 265.4615f}, zero[3] = {0, 0, 0};
+    float wp[3], wn[3];
+    BillboardCpu(sp, pos, t, wp);
+    BillboardCpu(sp, nrm, zero, wn);
+    CHECK(wp[0] == doctest::Approx(331.23788f).epsilon(1e-6));
+    CHECK(wp[1] == doctest::Approx(-753.2216f).epsilon(1e-6));
+    CHECK(wp[2] == doctest::Approx(270.72944f).epsilon(1e-6));
+    CHECK(wn[0] == doctest::Approx(-0.82147f));
+    CHECK(wn[1] == doctest::Approx(0.28649f));
+    CHECK(wn[2] == doctest::Approx(0.42795f));
+
+    // its colour, o2 = c0 (c1 + att c67 + box(N)) with no N.L, alpha c0.a
+    // c1.a: (0.58438, 0.58687, 0.83077, 0.5); and the vertex-lit pixel
+    // shader 729384CD01836AE2 makes a texel (0.5, 0.25, 1, 0.8) of it
+    // (0.29219, 0.14672, 0.83077, 0.4)
+    const float vc[4] = {1, 1, 1, 1}, no_sh[2] = {1, 1}, one[4] = {1, 1, 1, 1};
+    float diffuse[3], added[3];
+    LightVertexCpu(sp, wp, wn, vc, no_sh, diffuse, added);
+    CHECK(diffuse[0] == doctest::Approx(0.58438f).epsilon(1e-4));
+    CHECK(diffuse[1] == doctest::Approx(0.58687f).epsilon(1e-4));
+    CHECK(diffuse[2] == doctest::Approx(0.83077f).epsilon(1e-4));
+    CHECK(added[0] == 0.0f);
+    const float tex[4] = {0.5f, 0.25f, 1.0f, 0.8f};
+    float out[4];
+    ShadePixelCpu(sp, wp, wn, vc, tex, one, one, one, 100.0f, no_sh, diffuse, added, out);
+    CHECK(out[0] == doctest::Approx(0.29219f).epsilon(1e-4));
+    CHECK(out[1] == doctest::Approx(0.14672f).epsilon(1e-4));
+    CHECK(out[2] == doctest::Approx(0.83077f).epsilon(1e-4));
+    CHECK(out[3] == doctest::Approx(0.4f));
+
+    // the same vertex lit as a mesh's would be, by N.L (about 0.86 here), is
+    // darker
+    ShadeParams mesh = sp;
+    mesh.flags.x &= ~kShadeBillboard;
+    float mesh_diffuse[3];
+    LightVertexCpu(mesh, wp, wn, vc, no_sh, mesh_diffuse, added);
+    CHECK(mesh_diffuse[2] < diffuse[2] - 0.05f);
+
+    // without BILLBOARD the camera's registers aren't read
+    s.options &= ~Bit(kBillboard);
+    PackShade(it, &s, RasterOptions{}, true, sp);
+    CHECK_FALSE(Has(sp, kShadeBillboard));
+    CHECK(sp.billboard[0].x == 0.0f);
 }
 
 namespace {

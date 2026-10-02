@@ -30,7 +30,7 @@ struct uint4 {
 
 #include "src/Render/shaders/shade_params.hlsli"
 
-static_assert(sizeof(ShadeParams) == 39 * 16, "ShadeParams is float4s only, as HLSL packs it");
+static_assert(sizeof(ShadeParams) == 42 * 16, "ShadeParams is float4s only, as HLSL packs it");
 
 // What a draw shades with. Without a ShadeState (a capture from before them),
 // with options.legacy_light, it's the placeholder from before; options.lighting
@@ -60,6 +60,9 @@ inline const ShadeState* ShadeOf(const FrameCapture& frame, const DrawItem& item
 // kShadeShadow), normal_map the normal map's inputs (null: none; unread
 // without kShadeNormalMap).
 void TexGenUv(const ShadeParams& sp, const float uv[2], float out[2]);
+// shade.hlsli's Billboard of v, plus t (the instance's translation for a
+// position, zero for a direction)
+void BillboardCpu(const ShadeParams& sp, const float v[3], const float t[3], float out[3]);
 void TextureFrameCpu(const ShadeParams& sp, const float n[3], const float t[4], float n_out[3],
                      float u_out[3]);
 void BitangentCpu(const float n[3], const float u[3], float w, float out[3]);

@@ -45,6 +45,13 @@ void TexGenUv(const ShadeParams& sp, const float uv[2], float out[2]) {
     out[1] = r.y;
 }
 
+void BillboardCpu(const ShadeParams& sp, const float v[3], const float t[3], float out[3]) {
+    const float3 r = Billboard(sp, float3{v[0], v[1], v[2]}) + float3{t[0], t[1], t[2]};
+    out[0] = r.x;
+    out[1] = r.y;
+    out[2] = r.z;
+}
+
 void TextureFrameCpu(const ShadeParams& sp, const float n[3], const float t[4], float n_out[3],
                      float u_out[3]) {
     const TangentFrame f =
@@ -211,6 +218,14 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
         f |= kShadePrelit;
         return;
     }
+    // where the vertices are, whatever the lighting: a BILLBOARD draw's are
+    // turned to the camera (shade.hlsli's Billboard), by the inverse view's
+    // columns, VS c16..c18
+    if (s && s->Option(kBillboard)) {
+        f |= kShadeBillboard;
+        for (int i = 0; i < 3; i++)
+            sp.billboard[i] = {s->Vs(16)[i], s->Vs(17)[i], s->Vs(18)[i], 0};
+    }
     if (!s || o.legacy_light) {
         Copy(it.color, sp.color);
         if (it.prelit) f |= kShadePrelit;
@@ -304,11 +319,14 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     if (s->Option(kRealLights)) sp.flags.y = std::min<uint>(s->OptionBits(kNumPoint, 2), 2);
     if (s->Option(kSpecular)) f |= kShadeSpecular;
     if (s->Option(kSpecularMap) && maps && s->maps[kMapSpecular]) f |= kShadeSpecMap;
-    if (s->Option(kEnableAO)) f |= kShadeAO;
+    // a billboard's vertex shader has no AO, though the crowd's option word
+    // asks for it (4B19F15CA3B46FEB reads no vertex colour)
+    const bool ao = s->Option(kEnableAO) && !s->Option(kBillboard);
+    if (ao) f |= kShadeAO;
     // every AO shader the dumps have with a point light occludes it by the
     // vertex colour's SH, none of those without one (out/research/
     // parity_diag_ao_refract.md)
-    if (s->Option(kEnableAO) && sp.flags.y >= 1) f |= kShadeAoSh;
+    if (ao && sp.flags.y >= 1) f |= kShadeAoSh;
     // the projected light, where its maps were decoded: the multiply form
     // reads s5 alone, the gobo s10 too. The 18 pixel shaders the dumps have
     // that read it (c95) all light per pixel (fam3.py matches each); a

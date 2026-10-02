@@ -726,6 +726,7 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
             ds.shade.flags.x &= ~shade::kShadeRefract;
     }
     const bool ao_sh = (ds.shade.flags.x & shade::kShadeAoSh) != 0;
+    const bool billboard = (ds.shade.flags.x & shade::kShadeBillboard) != 0;
     cv.resize(g.verts.size());
     for (size_t i = 0; i < g.verts.size(); i++) {
         const Vertex& v = g.verts[i];
@@ -764,6 +765,13 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
                 if (ao_sh) Dir(dir, it.bones[0], wd);
                 if (ds.normal_map) Dir(tangent, it.bones[0], wu);
             }
+        } else if (billboard) {
+            // turned to the camera at the instance's translation
+            const float zero[3] = {0, 0, 0};
+            shade::BillboardCpu(ds.shade, v.pos, it.world.m[3], wp);
+            shade::BillboardCpu(ds.shade, nrm, zero, wn);
+            if (ao_sh) shade::BillboardCpu(ds.shade, dir, zero, wd);
+            if (ds.normal_map) shade::BillboardCpu(ds.shade, tangent, zero, wu);
         } else {
             Point(v.pos, it.world, wp);
             Dir(nrm, it.world, wn);

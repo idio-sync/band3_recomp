@@ -211,8 +211,8 @@ inline constexpr int kPerPixel = 0, kSpecularMap = 1, kSpecular = 2, kEnvironMap
                      kSkinned = 12, kScreenAligned = 13, kRimLightUnder = 14,
                      kRimLightMap = 15, kRealLights = 16, kApproxLights = 17, kFog = 18,
                      kShadowBuffer = 19, kAnisotropic = 20, kColorXfm = 21, kPseudoHdr = 22,
-                     kNormDetail = 24, kFadeOut = 26, kNumProj = 28, kCustomVariation = 30,
-                     kColorMod = 32, kRimLight = 37, kEnableAO = 38, kToneMapping = 39,
+                     kNormDetail = 24, kBillboard = 25, kFadeOut = 26, kNumProj = 28,
+                     kCustomVariation = 30, kColorMod = 32, kRimLight = 37, kEnableAO = 38, kToneMapping = 39,
                      kNumPoint = 40, kEnvironMapFalloff = 43, kProjLightMultiply = 44,
                      kSoftParticles = 45, kPointCubeTex = 48, kEnvironMapSpecMask = 49,
                      kIntensify = 53;

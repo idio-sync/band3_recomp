@@ -53,6 +53,10 @@ static const uint kShadeNormalMap = 33554432u;
 // NORM_DETAIL, with kShadeNormalMap: s14, a second normal map at uv times
 // c106.y, adds c106.x of its tilt
 static const uint kShadeDetailMap = 67108864u;
+// BILLBOARD (option bit 25, the crowd's impostor quads): the vertex shader
+// turns the mesh to the camera (shade.hlsli's Billboard), and its point
+// lights light it by their falloff alone, no N.L and no AO
+static const uint kShadeBillboard = 134217728u;
 
 // Register names are the game shaders' (scene_capture.h's kShadeRegs), PS
 // unless VS is said.
@@ -85,4 +89,7 @@ struct ShadeParams {
     // VS c22, the texgen matrix's third row: the tangent frame's normal is
     // c22.x T + c22.y B + c22.z N, as its tangent is c20's (TextureFrame)
     float4 texgen_n;
+    // kShadeBillboard's camera right, up and forward (xyz): VS c16..c18's
+    // columns, the inverse view
+    float4 billboard[3];
 };
