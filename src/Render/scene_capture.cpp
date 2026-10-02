@@ -25,6 +25,7 @@
 #include <unordered_set>
 
 #include "generated/band3_init.h"
+#include "src/Hooks/frame_pacing.h"
 #include "src/Render/frame_compose.h"
 #include "src/Render/guest_formats.h"
 #include "src/settings.h"
@@ -408,7 +409,7 @@ struct RtState {
     // that binds it has it: what tells s5 bound to it (CaptureShade)
     uint32_t base = 0;
     uint64_t made_frame = ~0ull;  // the game frame of its last pass
-    // its passes in a row each within kRepeatFrames of the one before
+    // its passes in a row each within RepeatFrames() of the one before
     uint32_t repeats = 0;
     // its last two recorded passes (a texture drawn every frame is sampled
     // before it's drawn again too), null where the pass wasn't recorded or
@@ -1418,16 +1419,21 @@ void DropOpenPass(State& s) {
     g_pass_recording.store(false, std::memory_order_relaxed);
 }
 
-// a world frame is composed with the frames after it that draw none for this
-// many frames (one, with even/odd rendering at 30 fps; two at 20)
-constexpr uint64_t kMaxWorldAge = 2;
+// The most frames apart even/odd rendering draws the world now: 2 at 30 fps
+// on the console's 60 Hz, 3 at 20, 4 at 30 at refresh_rate 120
+// (frame_pacing.h); at least 2.
+uint64_t WorldPeriod() { return std::max<uint64_t>(2, band3::pacing::WorldPeriod()); }
 
-// a texture drawn into again within this many frames is drawn regularly:
-// every frame, or every other one with even/odd rendering on
-constexpr uint64_t kRepeatFrames = 2;
+// a world frame is composed with the frames after it that draw none for up to
+// a period of frames (the last of them is a period less one after it)
+uint64_t MaxWorldAge() { return WorldPeriod(); }
+
+// a texture drawn into again within a period of frames is drawn regularly:
+// every frame, or every world frame with even/odd rendering on
+uint64_t RepeatFrames() { return WorldPeriod(); }
 
 bool RecentlyMade(const RtState& rt, uint64_t frame) {
-    return rt.made_frame != ~0ull && rt.made_frame + kRepeatFrames >= frame;
+    return rt.made_frame != ~0ull && rt.made_frame + RepeatFrames() >= frame;
 }
 
 // DxTex::MakeDrawTarget: the game starts drawing into `tex`. While capture is
@@ -1931,14 +1937,14 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
     // With even/odd rendering, a frame that drew the world is kept for the
     // ones after it that don't, which present it (frame_compose.h); one that
     // began before capture was on has only part of it. The world is kept for a
-    // couple of frames, and dropped by a frame that doesn't say (menus).
+    // period of frames, and dropped by a frame that doesn't say (menus).
     const bool whole = s.captured_last;
     s.captured_last = true;
     if (!ProcKnown(*done)) {
         s.last_world.reset();
     } else if (DrawsWorld(*done)) {
         s.last_world = whole ? done : nullptr;
-    } else if (s.last_world && s.last_world->game_frame + kMaxWorldAge >= game_frame) {
+    } else if (s.last_world && s.last_world->game_frame + MaxWorldAge() >= game_frame) {
         done = ComposeFrame(*s.last_world, *done);
     }
     {

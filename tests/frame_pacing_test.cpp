@@ -43,3 +43,11 @@ TEST_CASE("a venue's rate is kept to SetEmulateFPS's 1..60") {
 TEST_CASE("an unset refresh rate is the console's 60") {
     CHECK(WorldHalfFrames(0, 30, 0) == 4);
 }
+
+TEST_CASE("the longest period counts ProcCounter's odd half-frame") {
+    using band3::pacing::MaxPeriod;
+    CHECK(MaxPeriod(2, 0) == 2);
+    CHECK(MaxPeriod(2, 1) == 3);   // 2 now, then 3
+    CHECK(MaxPeriod(3, -1) == 3);  // 3 now, then 2
+    CHECK(MaxPeriod(0, 0) == 0);   // every frame
+}

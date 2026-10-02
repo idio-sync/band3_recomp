@@ -1,6 +1,7 @@
 #include "src/Render/native_view.h"
 
 #include "src/Render/capture_file.h"
+#include "src/Render/frame_compose.h"
 #include "src/Render/gpu_view.h"
 #include "src/Render/png_writer.h"
 #include "src/Render/present_model.h"
@@ -368,6 +369,7 @@ class Renderer {
                     live_.skipped_busy += cap->frame - live_last_ - 1;
                     live_last_ = cap->frame;
                     live_.rendered++;
+                    if (ProcKnown(*cap) && !DrawsWorld(*cap) && !cap->composed) live_.worldless++;
                     live_.ms.push_back(drew_gpu ? gs.ms : rs.ms);
                     if (drew_gpu) live_.wait_ms.push_back(gs.wait_ms);
                 }

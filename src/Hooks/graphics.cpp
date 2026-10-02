@@ -38,6 +38,7 @@ extern "C" void __imp__ProcCounter__ProcCommands(PPCContext& ctx, uint8_t* base)
 extern "C" REX_FUNC(ProcCounter__ProcCommands)
 {
     if (REXCVAR_GET(disable_even_odd_rendering)) {
+        band3::pacing::g_world_period.store(0, std::memory_order_relaxed);
         ctx.r3.u64 = 7;
         return;
     }
@@ -74,27 +75,31 @@ extern "C" REX_FUNC(ProcCounter__SetEmulateFPS)
             s_half_frames = 0;
         }
         __imp__ProcCounter__SetEmulateFPS(ctx, base);
-        return;
+    } else {
+        const int32_t half_frames = band3::pacing::WorldHalfFrames(game_hz, fps, background_fps);
+        if (counter != s_counter || half_frames != s_half_frames ||
+            static_cast<int32_t>(REX_LOAD_U32(counter + kProcCounter_Fps)) != fps) {
+            const int32_t period = half_frames >> 1;
+            REX_STORE_U32(counter + kProcCounter_Fps, static_cast<uint32_t>(fps));
+            REX_STORE_U32(counter + kProcCounter_Period, static_cast<uint32_t>(period));
+            REX_STORE_U32(counter + kProcCounter_OddHalf, static_cast<uint32_t>(half_frames & 1));
+            if (static_cast<int32_t>(REX_LOAD_U32(counter + kProcCounter_Count)) >= period)
+                REX_STORE_U32(counter + kProcCounter_Count, 0);
+            if (half_frames != s_half_frames)
+                REXLOG_INFO("Background: the world every {} frames, {:.1f} fps at {} Hz "
+                            "(venue {} fps, background_fps {})",
+                            half_frames / 2.0, 2 * game_hz / half_frames, game_hz, fps,
+                            background_fps);
+            s_counter = counter;
+            s_half_frames = half_frames;
+        }
+        ctx.r3.u64 = static_cast<uint32_t>(fps);
     }
-
-    const int32_t half_frames = band3::pacing::WorldHalfFrames(game_hz, fps, background_fps);
-    if (counter != s_counter || half_frames != s_half_frames ||
-        static_cast<int32_t>(REX_LOAD_U32(counter + kProcCounter_Fps)) != fps) {
-        const int32_t period = half_frames >> 1;
-        REX_STORE_U32(counter + kProcCounter_Fps, static_cast<uint32_t>(fps));
-        REX_STORE_U32(counter + kProcCounter_Period, static_cast<uint32_t>(period));
-        REX_STORE_U32(counter + kProcCounter_OddHalf, static_cast<uint32_t>(half_frames & 1));
-        if (static_cast<int32_t>(REX_LOAD_U32(counter + kProcCounter_Count)) >= period)
-            REX_STORE_U32(counter + kProcCounter_Count, 0);
-        if (half_frames != s_half_frames)
-            REXLOG_INFO("Background: the world every {} frames, {:.1f} fps at {} Hz "
-                        "(venue {} fps, background_fps {})",
-                        half_frames / 2.0, 2 * game_hz / half_frames, game_hz, fps,
-                        background_fps);
-        s_counter = counter;
-        s_half_frames = half_frames;
-    }
-    ctx.r3.u64 = static_cast<uint32_t>(fps);
+    // what keeps a world frame for the frames after it (scene_capture.cpp)
+    band3::pacing::g_world_period.store(
+        band3::pacing::MaxPeriod(static_cast<int32_t>(REX_LOAD_U32(counter + kProcCounter_Period)),
+                                 static_cast<int32_t>(REX_LOAD_U32(counter + kProcCounter_OddHalf))),
+        std::memory_order_relaxed);
 }
 
 extern "C" REX_FUNC(OutfitConfig__CompressTextures)

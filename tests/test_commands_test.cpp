@@ -630,6 +630,7 @@ TEST_CASE("native_view stats reports what the live view drew and how long it too
     game.view.captured = 2392;
     game.view.rendered = 20;
     game.view.skipped_busy = 2372;
+    game.view.worldless = 1;
     // 1 to 20 ms: the median is 10, the 95th percentile 19
     for (int ms = 20; ms >= 1; ms--) game.view.frame_ms.push_back(ms);
     game.view.wait_ms.assign(20, 1.5);
@@ -641,7 +642,7 @@ TEST_CASE("native_view stats reports what the live view drew and how long it too
     const std::string reply = RunCommand("native_view stats", game);
     CHECK(Ok(reply));
     CHECK(Has(reply, "\"seconds\":40.0,\"game_frames\":2392,\"game_fps\":59.8"));
-    CHECK(Has(reply, "\"captured\":2392,\"rendered\":20,\"skipped_busy\":2372"));
+    CHECK(Has(reply, "\"captured\":2392,\"rendered\":20,\"skipped_busy\":2372,\"worldless\":1"));
     CHECK(Has(reply, "\"ms\":{\"mean\":10.50,\"p50\":10.00,\"p95\":19.00,\"max\":20.00}"));
     CHECK(Has(reply, "\"wait_ms\":{\"mean\":1.50,\"p50\":1.50,\"p95\":1.50,\"max\":1.50}"));
     CHECK(Has(reply, "\"rt_recording\":{\"on\":true,\"passes\":1200,\"recorded\":3,\"draws\":11,\"ms\":0.25}"));

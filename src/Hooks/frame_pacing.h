@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 
@@ -27,6 +28,21 @@ inline int32_t WorldHalfFrames(double game_hz, int32_t venue_fps, int32_t backgr
     const double fps = background_fps > 0 ? background_fps : std::clamp(venue_fps, 1, 60);
     const double half_frames = std::round(2 * game_hz / fps);
     return static_cast<int32_t>(std::clamp(half_frames, 2.0, 2 * game_hz));
+}
+
+// The most frames apart the world is drawn now (ProcCounter's period, the
+// longer of its two when it alternates), 0 or 1 when it's drawn every frame.
+// Set by the game thread every frame (ProcCounter::SetEmulateFPS), for what
+// keeps a world frame for the frames after it (scene_capture.cpp).
+inline std::atomic<uint32_t> g_world_period{0};
+
+inline uint32_t WorldPeriod() { return g_world_period.load(std::memory_order_relaxed); }
+
+// ProcCounter's period and odd half-frame (+8, +12) as the frames between
+// world frames at most: the odd half-frame is added to the period at the
+// period's end and negated, so it's -1 while the longer one runs
+inline uint32_t MaxPeriod(int32_t period, int32_t odd_half) {
+    return static_cast<uint32_t>(std::max({period, period + odd_half, 0}));
 }
 
 }  // namespace band3::pacing

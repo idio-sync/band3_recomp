@@ -505,6 +505,7 @@ std::string NativeViewJson(const NativeViewStats& s) {
     out += ",\"captured\":" + std::to_string(s.captured);
     out += ",\"rendered\":" + std::to_string(s.rendered);
     out += ",\"skipped_busy\":" + std::to_string(s.skipped_busy);
+    out += ",\"worldless\":" + std::to_string(s.worldless);
     out += ",\"ms\":" + Distribution(s.frame_ms);
     out += ",\"wait_ms\":" + Distribution(s.wait_ms);
     std::snprintf(buf, sizeof(buf),

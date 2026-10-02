@@ -326,6 +326,7 @@ public:
             out.captured = live.captured;
             out.rendered = live.rendered;
             out.skipped_busy = live.skipped_busy;
+            out.worldless = live.worldless;
             out.frame_ms = std::move(live.ms);
             out.wait_ms = std::move(live.wait_ms);
         }

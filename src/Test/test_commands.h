@@ -87,6 +87,8 @@ struct NativeViewStats {
     uint64_t rendered = 0;     // of those, the ones it drew
     // captured frames it never drew, because it was still drawing an earlier one
     uint64_t skipped_busy = 0;
+    // drawn frames with no world: they drew none and weren't composed with one
+    uint64_t worldless = 0;
     // each drawn frame's time; for the GPU the whole frame, uploads and
     // reading back included (GpuStats::ms), and of that from submitting it to
     // having the picture

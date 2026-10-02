@@ -70,6 +70,9 @@ struct LiveViewStats {
     uint64_t captured = 0;      // frames captured since it started
     uint64_t rendered = 0;      // of those, the ones drawn
     uint64_t skipped_busy = 0;  // and the ones it was still drawing another for
+    // of those drawn, the ones with no world: they drew none, under even/odd
+    // rendering, and weren't composed with the world frame before them
+    uint64_t worldless = 0;
     std::vector<double> ms;     // each one's time, GpuStats::ms or RasterStats::ms
     std::vector<double> wait_ms;  // GpuStats::wait_ms, the GPU's frames only
 };
