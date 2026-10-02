@@ -1076,13 +1076,14 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
 void GpuRenderer::Impl::Prewarm() {
     warm = true;
     const auto start = std::chrono::steady_clock::now();
-    // RulesFor's, with blending on and off, culling nothing or what RndMat's
-    // cull flag does (D3DCULL_CW); the reflections' counter-clockwise culling
-    // is made when it's first drawn
+    // RulesFor's, with blending on and off, culling nothing, what RndMat's
+    // cull flag does (D3DCULL_CW) or the other side (D3DCULL_CCW: the
+    // reflections, and a song draws it with several blends and alphas)
     constexpr DepthRules kRules[] = {{false, false, false}, {true, true, false},
                                      {false, false, true},  {true, true, true},
                                      {true, false, true}};
-    for (CullWinding cull : {CullWinding::kNone, CullWinding::kClockwise})
+    for (CullWinding cull :
+         {CullWinding::kNone, CullWinding::kClockwise, CullWinding::kCounterClockwise})
         for (int alpha = 0; alpha < kNumAlphaModes; alpha++)
             for (int blend = kBlendDest; blend <= kBlendPreMultAlpha; blend++)
                 for (const DepthRules& r : kRules) Pipeline(blend, r, AlphaMode(alpha), cull);

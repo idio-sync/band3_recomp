@@ -620,9 +620,10 @@ std::chrono::steady_clock::time_point g_latest_published;
 // move rather than looking every few milliseconds
 uint64_t g_capture_epoch = 0;
 std::condition_variable g_latest_cv;
-// native_view_record_targets as set, and whether renderer is native: texture
-// passes are recorded if either is (g_record_targets)
-std::atomic<bool> g_record_targets_set{false}, g_renderer_native{false};
+// native_view_record_targets as set, and whether renderer has been native at
+// any time this session: texture passes are recorded if either is
+// (g_record_targets)
+std::atomic<bool> g_record_targets_set{false}, g_renderer_was_native{false};
 // The game's frames: the newest kPresentTimes ends of DxRnd::Present, a ring,
 // for the harness's present_stats (about two minutes at 60 frames a second)
 constexpr size_t kPresentTimes = 8192;
@@ -2300,12 +2301,15 @@ void TrackSettings() {
         // Recorded while renderer is native as well: it draws outfits and
         // the like from passes RB3 draws once (in the main menu), which
         // capture must have seen. Turning native on later doesn't bring back
-        // the ones drawn before.
+        // the ones drawn before. And recorded from then on, renderer native
+        // or not: turned off, recording would forget every pass it kept
+        // (FinishFrame clears s.rts) and F8 back to native would show the
+        // outfits wrong, so once native it stays on for the session.
         auto record = [] {
-            g_record_targets.store(g_record_targets_set.load() || g_renderer_native.load());
+            g_record_targets.store(g_record_targets_set.load() || g_renderer_was_native.load());
         };
         g_record_targets_set.store(REXCVAR_GET(native_view_record_targets));
-        g_renderer_native.store(rex::cvar::GetFlagByName("renderer") == "native");
+        g_renderer_was_native.store(rex::cvar::GetFlagByName("renderer") == "native");
         record();
         rex::cvar::RegisterChangeCallback("native_view_record_targets",
                                           [record](std::string_view, std::string_view v) {
@@ -2316,7 +2320,7 @@ void TrackSettings() {
         // one too, but only at shutdown)
         rex::cvar::RegisterChangeCallback("renderer",
                                           [record](std::string_view, std::string_view v) {
-                                              g_renderer_native.store(v == "native");
+                                              if (v == "native") g_renderer_was_native.store(true);
                                               record();
                                           });
         // the SDK's, by name: it lives in the GPU's DLL

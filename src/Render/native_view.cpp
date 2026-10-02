@@ -24,6 +24,7 @@
 #include <atomic>
 #include <chrono>
 #include <climits>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -136,6 +137,7 @@ class Renderer {
             t = std::move(thread_);
         }
         WakeCaptureWaiters();
+        paint_cv_.notify_all();
         if (t.joinable()) t.join();
     }
 
@@ -198,6 +200,7 @@ class Renderer {
             options_changed_ = true;
         }
         WakeCaptureWaiters();
+        paint_cv_.notify_all();
         RemoveUser();
     }
     bool Presenting() {
@@ -249,16 +252,22 @@ class Renderer {
     // the game presented that frame; false before the first
     bool ShowNewest(uint64_t submission, uint64_t completed, int& slot, GpuOutput& out,
                     uint64_t& serial, std::chrono::steady_clock::time_point& presented) {
-        std::lock_guard lock(mutex_);
-        slots_.Completed(completed);
-        last_paint_ = std::chrono::steady_clock::now();
-        slot = slots_.Newest();
-        if (slot < 0) return false;
-        slots_.Shown(slot, submission);
-        out = outputs_[slot];
-        serial = slot_serial_[slot];
-        presented = slot_presented_[slot];
-        return true;
+        {
+            std::lock_guard lock(mutex_);
+            slots_.Completed(completed);
+            last_paint_ = std::chrono::steady_clock::now();
+            paints_++;
+            slot = slots_.Newest();
+            if (slot >= 0) {
+                slots_.Shown(slot, submission);
+                out = outputs_[slot];
+                serial = slot_serial_[slot];
+                presented = slot_presented_[slot];
+            }
+        }
+        // the worker may be waiting for a paint to free a slot (AcquireSlot)
+        paint_cv_.notify_all();
+        return slot >= 0;
     }
     // A screenshot: the next frame drawn is read back too, for Take, on the
     // zero-copy path before it's published, so SDL never copies an output
@@ -457,17 +466,18 @@ class Renderer {
         }
     }
 
-    // A slot for the zero-copy path's next frame, or -1 after waiting a
-    // little for paints to finish with one (or to stop). Once paints have
-    // stopped for kPaintsStopped, the GPU is asked (settle_) whether it has
-    // finished them all, and then every slot they sampled is free.
+    // A slot for the zero-copy path's next frame, or -1 after waiting for
+    // paints to finish with one (or to stop). Once paints have stopped for
+    // kPaintsStopped, the GPU is asked (settle_) whether it has finished them
+    // all, and then every slot they sampled is free.
     int AcquireSlot() {
         std::function<bool()> settle;
-        uint64_t last_used = 0;
+        uint64_t last_used = 0, paints = 0;
         {
             std::lock_guard lock(mutex_);
             const int slot = slots_.Acquire();
-            if (slot >= 0 || stop_) return slot;
+            if (slot >= 0 || stop_ || !present_) return slot;
+            paints = paints_;
             if (settle_ && std::chrono::steady_clock::now() - last_paint_ >= kPaintsStopped &&
                 slots_.LastUsed() > slots_.CompletedIndex()) {
                 settle = settle_;
@@ -479,7 +489,17 @@ class Renderer {
             slots_.Completed(last_used);
             return -1;  // taken next time round
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        // Nothing else frees a slot but a paint (the GPU's completed index it
+        // passes on, ShowNewest), so wait for the next one, or until paints
+        // count as stopped and settling can be tried. Without a fence to
+        // settle with, or with one that failed, a window that stopped
+        // painting frees none until it paints again: wait for that, looking
+        // every kIdleWait, rather than every few milliseconds for good.
+        std::unique_lock lock(mutex_);
+        const auto now = std::chrono::steady_clock::now();
+        auto until = now + kIdleWait;
+        if (settle_ && !settle) until = std::min(until, std::max(now, last_paint_ + kPaintsStopped));
+        paint_cv_.wait_until(lock, until, [&] { return stop_ || !present_ || paints_ != paints; });
         return -1;
     }
 
@@ -513,6 +533,9 @@ class Renderer {
     uint64_t slot_serial_[PresentSlots::kCount] = {};
     std::chrono::steady_clock::time_point slot_presented_[PresentSlots::kCount] = {};
     std::chrono::steady_clock::time_point last_paint_{};
+    // paints so far (ShowNewest), and the worker's wait for the next one
+    uint64_t paints_ = 0;
+    std::condition_variable paint_cv_;
     std::function<bool()> settle_;
     // the live view's numbers; captures numbered up to live_base_ came before
     // they started, and live_last_ is the newest one counted

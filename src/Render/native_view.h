@@ -32,9 +32,10 @@ class Window;
 // still runs and its picture is still painted underneath, then covered.
 // Its worker sleeps until the game publishes a capture (scene_capture.h's
 // WaitForCapture) and draws the newest; each paint shows the newest drawn.
-// While it's native, capture records the passes RB3 draws into textures all
-// the time, as native_view_record_targets does (scene_capture.cpp's
-// TrackSettings): set it at launch, as outfits are composed only once.
+// Once it has been native, capture records the passes RB3 draws into
+// textures all the time for the rest of the session, as
+// native_view_record_targets does (scene_capture.cpp's TrackSettings): set it
+// at launch, as outfits are composed only once.
 //
 // BAND3_NATIVE_VIEW_DUMP=<path> starts capturing at launch without the window
 // and saves a frame every five seconds as <path>.NNN.cap (and .cap.txt with its

@@ -25,10 +25,12 @@ measures the window's pacing under either renderer.
 While `renderer` is native, the passes RB3 draws into textures are recorded all the time,
 as `native_view_record_targets` does (below), since the native renderer draws outfits and
 the like from them: a little game-thread time while characters load (about 170 ms from boot
-to a song). RB3 composes a band's outfits once, in the main menu, so switching to native
-later (F8) after they were composed without recording shows them wrong until RB3 composes
-them again. To play on the native renderer, set it at launch (`--renderer=native`, or in
-the settings before the main menu).
+to a song). Once `renderer` has been native, they stay recorded for the rest of the session,
+under the emulated GPU too, so F8 back to native still has the outfits. RB3 composes a
+band's outfits once, in the main menu, so switching to native later (F8) after they were
+composed without recording shows them wrong until RB3 composes them again. To play on the
+native renderer, set it at launch (`--renderer=native`, or in the settings before the main
+menu).
 
 | Setting | |
 |---|---|
@@ -56,7 +58,7 @@ Render checks set its picture against the game's.
 | Setting (Band3 → Debug) | |
 |---|---|
 | `native_view_backend` | `gpu` (the default) or `cpu`, the reference rasterizer. The GPU falls back to the CPU when it can't start |
-| `native_view_record_targets` | records the passes RB3 draws into textures all the time, even while the native view is off. Off by default, as it costs a little game-thread time while characters load; on regardless while `renderer` is native. Render checks need it from launch: RB3 composes a band's outfits once, in the main menu |
+| `native_view_record_targets` | records the passes RB3 draws into textures all the time, even while the native view is off. Off by default, as it costs a little game-thread time while characters load; on regardless once `renderer` has been native in the session. Render checks need it from launch: RB3 composes a band's outfits once, in the main menu |
 | `native_view_rt_fallback` | `guest` (the default) also keeps what guest memory holds of a texture RB3 draws, sampled where no recorded pass made it (right only with `--readback_resolve=full`); `none` keeps only which texture and version it is |
 | `native_view_normal_maps` | on (the default) shades normal and detail maps, live and in `capture`'s `.gpu.png`; off shades those materials with the vertex normal, to compare. Captures from before the capture kept the meshes' tangents have none either way |
 | `native_view_texture_filtering` | on (the default) samples textures as each draw's fetch constants say: bilinear or point, the mip level (or two, blended) by how far and at what angle the surface is, anisotropy, and wrapping, mirroring or clamping per axis, from the mip chains in guest memory (and a render target's own, made after its pass). As the game's own picture under band3 is drawn, the SDK's `anisotropic_override` (4:1 by default) applies to the samplers it would apply to there. Off reads every texture's nearest texel at full size, as before, to compare; captures from before the capture kept the samplers and mips are drawn so either way |
