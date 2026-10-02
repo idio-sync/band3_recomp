@@ -67,6 +67,10 @@ constexpr uint32_t kMaxSavedTexture = 512;
 // a ShadeState's maps are kept smaller: at 512 they made a song's captures
 // half again as big
 constexpr uint32_t kMaxSavedMap = 256;
+// a movie's planes (IsMovie) are kept whole: at 512 the intro's 1280x720 Y
+// plane was kept at 320x180, and the movie offline as blurred as that. They
+// add about 5.5 MB to a capture with a 1280x720 movie in it.
+constexpr uint32_t kWhole = ~0u;
 
 constexpr uint32_t FourCC(const char (&s)[5]) {
     return uint32_t(uint8_t(s[0])) | uint32_t(uint8_t(s[1])) << 8 | uint32_t(uint8_t(s[2])) << 16 |
@@ -419,7 +423,14 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     for (const DrawItem& d : fc.draws) {
         if (geoms.emplace(d.geom.get(), uint32_t(geom_list.size())).second)
             geom_list.push_back(d.geom.get());
-        add_tex(d.tex.get(), kMaxSavedTexture);
+        if (IsMovie(d)) {
+            add_tex(d.tex.get(), kWhole);
+            if (d.shade >= 0 && size_t(d.shade) < fc.shades.size())
+                for (int m : {kMapSpecular, kMapGlow})
+                    add_tex(fc.shades[d.shade].maps[m].get(), kWhole);
+        } else {
+            add_tex(d.tex.get(), kMaxSavedTexture);
+        }
     }
     for (const ShadeState& s : fc.shades)
         for (const auto& m : s.maps) add_tex(m.get(), kMaxSavedMap);

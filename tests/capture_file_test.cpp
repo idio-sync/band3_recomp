@@ -11,7 +11,8 @@
 // gamma ramp was kept have none, and textures keep their mips and shades
 // their samplers, which files from before them have none of, as files from
 // before the frame's clear colour and back-buffer cameras were kept have
-// neither (and cameras from a smaller CameraView keep what both have).
+// neither (and cameras from a smaller CameraView keep what both have). A
+// movie's planes are kept whole, where other textures are kept smaller.
 
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -157,6 +158,43 @@ TEST_CASE("a capture keeps maps smaller, and pixels it has already once") {
     REQUIRE(b.maps[kMapNormal]);
     CHECK(b.maps[kMapNormal]->width == 256);
     CHECK(b.maps[kMapNormal]->height == 1);
+}
+
+TEST_CASE("a capture keeps a movie's planes whole, other textures smaller") {
+    // the intro's: Y 1280x720 as the diffuse texture, cR and cB 640x360 as
+    // the specular and emissive maps; a texture as big on another draw
+    FrameCapture fc;
+    auto geom = MakeTriangle();
+    ShadeState s;
+    std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
+    s.shader_type = kMovieShader;
+    s.maps[kMapSpecular] = MakeTexture(640, 360, 2, 7);
+    s.maps[kMapGlow] = MakeTexture(640, 360, 2, 8);
+    fc.shades = {s};
+    fc.draws.push_back(MakeDraw(geom, 0));
+    fc.draws.back().rect_shader = kMovieShader;
+    fc.draws.back().tex = MakeTexture(1280, 720, 2, 5);
+    fc.draws.push_back(MakeDraw(geom, -1));
+    fc.draws.back().tex = MakeTexture(1280, 720, 2, 6);
+
+    const std::string path = TempPath("band3_capture_file_movie_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    REQUIRE(back->draws.size() == 2);
+    REQUIRE(back->draws[0].tex);
+    CHECK(back->draws[0].tex->width == 1280);
+    CHECK(back->draws[0].tex->height == 720);
+    CHECK(back->draws[0].tex->rgba == fc.draws[0].tex->rgba);
+    REQUIRE(back->shades.size() == 1);
+    for (int m : {kMapSpecular, kMapGlow}) {
+        REQUIRE(back->shades[0].maps[m]);
+        CHECK(back->shades[0].maps[m]->width == 640);
+        CHECK(back->shades[0].maps[m]->height == 360);
+    }
+    REQUIRE(back->draws[1].tex);
+    CHECK(back->draws[1].tex->width == 320);
 }
 
 TEST_CASE("a capture from before shades still loads") {

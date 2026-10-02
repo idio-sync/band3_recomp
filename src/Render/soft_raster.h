@@ -145,8 +145,11 @@ struct PassRun {
 // and the density map its cones read: spot_model.h), the soft particles' (the
 // particles into the first surface, its blur into the second and back),
 // which the composite's terms sample where they're on (post_model.h's
-// PlanPost), and shadow maps (for a character in the overlay). A capture
-// without passes is one back-buffer stretch.
+// PlanPost), and shadow maps (for a character in the overlay). A pass whose
+// version is one past what a draw before it samples, where no pass made that
+// one (a texture drawn every frame, whose last frame's pass the capture
+// didn't record), is drawn first, for that draw. A capture without passes is
+// one back-buffer stretch.
 std::vector<PassRun> PlanPasses(const FrameCapture& frame, const RasterOptions& options);
 
 // Whether pass p's draw is RndSoftParticleBuffer::BlurSurface's: a DrawRect

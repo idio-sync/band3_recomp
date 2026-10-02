@@ -906,9 +906,9 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     // the resolve's 1, as the CPU's picture has it, so the readback is the
     // picture. A texture's blends alpha by the colour's factors; the scene's,
     // where the draw writes it, is ONE ONE MAX (AlphaMode). The target clamps
-    // the colour to 0-1 before blending, which only Multiply above 1 notices;
-    // SrcAlpha's scaling happens in the shader (kPremultiply), to the colour
-    // only
+    // the colour to 0-1 before blending, as Blend() does; SrcAlpha's scaling
+    // happens in the shader (kPremultiply), to the colour only, after the
+    // shader's own clamp
     SDL_GPUColorTargetBlendState& bs = target.blend_state;
     bs.enable_color_write_mask = true;
     SDL_GPUColorComponentFlags mask =

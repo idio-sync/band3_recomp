@@ -352,6 +352,12 @@ void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3
 // `alpha`: 1, blended by the colour's factors (a texture's, as gpu_view.cpp's
 // pipelines do), kept, or RB3's back buffer's ONE ONE MAX, the larger of the
 // two where the mode blends (any but Src, which Blend() draws other modes as).
+// The colour and alpha are clamped to 0..1 first, as an 8-bit target clamps
+// what reaches its blender, so before SrcAlpha's scaling too: a lit colour of
+// 1.5 multiplies by 1 and adds a * 1. The game's pictures agree: the menus'
+// blue header, Multiply and SrcAlphaAdd layers lit above 1, matches them only
+// clamped this way. gpu_view.cpp's UNORM target and mesh.hlsl's FinishMesh do
+// the same.
 // RndMat's Screen, Lighten and Darken (8..10) are drawn as Src too: NgMat's
 // SetupShader sets no blend state for them (rb3-xenon Mat_NG.cpp's switch
 // falls to default, and the second one asserts), so on the 360 they never
@@ -361,18 +367,20 @@ uint32_t Blend(int mode, const float s[4], uint32_t dst, AlphaRule alpha) {
     for (int i = 0; i < 4; i++) d[i] = float((dst >> (8 * i)) & 0xff) / 255.0f;
     float o[4];
     const float a = std::clamp(s[3], 0.0f, 1.0f);
+    float c[3];
+    for (int i = 0; i < 3; i++) c[i] = std::clamp(s[i], 0.0f, 1.0f);
     for (int i = 0; i < 3; i++) {
         switch (mode) {
-            case 2: o[i] = d[i] + s[i]; break;                    // Add
-            case 3: o[i] = s[i] * a + d[i] * (1.0f - a); break;  // SrcAlpha
-            case 4: o[i] = d[i] + s[i] * a; break;               // SrcAlphaAdd
-            case 5: o[i] = d[i] - s[i]; break;                   // Subtract
-            case 6: o[i] = d[i] * s[i]; break;                   // Multiply
+            case 2: o[i] = d[i] + c[i]; break;                    // Add
+            case 3: o[i] = c[i] * a + d[i] * (1.0f - a); break;  // SrcAlpha
+            case 4: o[i] = d[i] + c[i] * a; break;               // SrcAlphaAdd
+            case 5: o[i] = d[i] - c[i]; break;                   // Subtract
+            case 6: o[i] = d[i] * c[i]; break;                   // Multiply
             // PreMultAlpha, ONE INVSRCALPHA: the colour comes scaled by alpha
             // (c0 by SetupShader's PreMultiplyAlpha, the texture as it is)
-            case 7: o[i] = s[i] + d[i] * (1.0f - a); break;
+            case 7: o[i] = c[i] + d[i] * (1.0f - a); break;
             case 0: o[i] = d[i]; break;  // Dest
-            default: o[i] = s[i]; break;  // Src
+            default: o[i] = c[i]; break;  // Src
         }
     }
     switch (alpha) {
@@ -911,12 +919,41 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
         if (post_plan.composite.flags.x & post::kPostSpot) needed.insert(post_plan.spot_volume);
         if (post_plan.composite.flags.x & post::kPostSoft) needed.insert(post_plan.soft);
     }
+    // A draw that samples a version of a texture no pass here made, where a
+    // pass later in the frame makes the next one: a texture drawn every frame
+    // (the title's clouds), sampled before this frame's pass draws it again,
+    // whose pass of the frame before the capture didn't record (BeginPass in
+    // scene_capture.cpp records a regular one only while capturing). That
+    // pass is drawn first instead, a frame newer than the one sampled, which
+    // the diffuse texture and normal maps read whatever its version is
+    // (Diffuse, NormalMap): one frame of the clouds' drift, where without it
+    // they'd be black. Not for version 0, which no pass ever made, a shadow
+    // map, or a pass from post-processing on, which draws from this frame's
+    // picture.
+    std::unordered_set<uint64_t> made;
+    for (const Pass& p : f.passes)
+        if (p.tex_obj) made.insert(uint64_t(p.tex_obj) << 32 | p.version);
+    std::vector<const Pass*> early;
+    auto stand_in = [&](const Texture* t, uint32_t d) {
+        if (!t->version || t->tex_type == kTexTypeShadowMap ||
+            made.count(uint64_t(t->tex_obj) << 32 | t->version))
+            return;
+        for (const Pass& p : f.passes) {
+            if (p.tex_obj != t->tex_obj || p.version != t->version + 1 || p.first_draw <= d)
+                continue;
+            if (p.first_draw >= f.post_boundary) return;
+            if (std::find(early.begin(), early.end(), &p) == early.end()) early.push_back(&p);
+            return;
+        }
+    };
     auto samples = [&](uint32_t first, uint32_t end, bool texture) {
         for (uint32_t d = first; d < end; d++) {
             const DrawItem& it = f.draws[d];
             if (texture ? !DrawnInTexturePass(it) : !DrawnToBackBuffer(it)) continue;
-            if (o.textures && IsPassTarget(it.tex.get()) && SamplesDiffuse(it))
+            if (o.textures && IsPassTarget(it.tex.get()) && SamplesDiffuse(it)) {
                 needed.insert(it.tex->tex_obj);
+                stand_in(it.tex.get(), d);
+            }
             const ShadeState* state = shade::ShadeOf(f, it);
             // the projected light's s5, NgLight's shadow
             if (o.textures)
@@ -926,8 +963,12 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
                 if (const Texture* map = ShadowMapOf(state)) needed.insert(map->tex_obj);
             // a head's normal map (s1), or a detail map RB3 draws (s14)
             if (o.textures && o.normal_maps)
-                for (int m : {kMapNormal, kMapDetailNormal})
-                    if (const Texture* map = MapTargetOf(state, m)) needed.insert(map->tex_obj);
+                for (int m : {kMapNormal, kMapDetailNormal}) {
+                    if (const Texture* map = MapTargetOf(state, m)) {
+                        needed.insert(map->tex_obj);
+                        stand_in(map, d);
+                    }
+                }
         }
     };
     for (size_t i = f.passes.size(); i-- > 0;) {
@@ -962,7 +1003,22 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
             }
         }
     }
+    // the stand-ins first, whether or not something after them wanted them
+    // where they are
+    if (o.texture_passes) {
+        for (const Pass* p : early) {
+            const bool kept = std::any_of(runs.begin(), runs.end(),
+                                          [&](const PassRun& r) { return r.pass == p; });
+            if (kept || !p->width || !p->height) continue;
+            const uint32_t first = std::min(p->first_draw, n);
+            runs.push_back({p, first, std::min(first + p->draw_count, n)});
+        }
+    }
     std::reverse(runs.begin(), runs.end());
+    if (!early.empty())
+        std::stable_partition(runs.begin(), runs.end(), [&](const PassRun& r) {
+            return r.pass && std::find(early.begin(), early.end(), r.pass) != early.end();
+        });
     return runs;
 }
 

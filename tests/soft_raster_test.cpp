@@ -6,8 +6,10 @@
 // scene target as RB3's back buffer has them, under the overlay's; that a
 // draw culls the triangles its cull mode says (an outline's near side);
 // that PreMultAlpha (blend 7) blends as RB3 sets it, ONE INVSRCALPHA; that
-// a REFRACT_WORLD draw over the overlay reads the picture as the resolve
-// left it; that a mesh's edges land on the pixels the game's do (D3D9's
+// a colour above 1 blends as 1, clamped before SrcAlpha's scaling; that a
+// draw sampling a version no pass here made reads the frame's pass of the
+// next one, drawn first; that a REFRACT_WORLD draw over the overlay reads
+// the picture as the resolve left it; that a mesh's edges land on the pixels the game's do (D3D9's
 // pixel centres), a DrawRect quad's on D3D10's; and that a soft particle
 // fades by the scene's depth behind it, and the soft-particle buffer's blur
 // takes its taps from the other surface; that a shadow map's pass draws
@@ -246,6 +248,89 @@ TEST_CASE("PreMultAlpha adds its colour as it is over what's there, by 1 - alpha
         Rasterize(b, Small(), rgba);
         CHECK(rgba[1 * 8 + 1] == 0xff004000u);
     }
+}
+
+TEST_CASE("a colour above 1 blends as 1, clamped before SrcAlpha's scaling, as a target does") {
+    // grey 128, then a layer whose colour is 2 (the material's colour times
+    // white): every mode reads it as 1, as the menus' header lit above 1
+    // shows on the game's pictures and an 8-bit target clamps it
+    FrameCapture f;
+    DrawItem layer = Item(Quad(-1, 1, 0xffffffffu), 0);
+    f.draws = {Item(Quad(-1, 1, 0xff808080u), 0), layer};
+    f.passes = {BackBuffer(0, 2)};
+    std::vector<uint32_t> rgba;
+    auto blended = [&](int mode, float alpha) {
+        f.draws[1].blend = mode;
+        for (int c = 0; c < 3; c++) f.draws[1].color[c] = 2.0f;
+        f.draws[1].color[3] = alpha;
+        Rasterize(f, Small(), rgba);
+        return rgba[1 * 8 + 1] & 0xff;
+    };
+    // Multiply: 128 * 1, not * 2
+    CHECK(blended(6, 1.0f) == 128);
+    // SrcAlphaAdd: 128 + 255 * 0.25, not + 255 * 2 * 0.25
+    CHECK(blended(4, 0.25f) == 192);
+    // SrcAlpha: 255 * 0.5 + 128 * 0.5, not 255 * 2 * 0.5 + ...
+    CHECK(blended(3, 0.5f) == 192);
+    // and so in a texture: SrcAlpha's alpha by its own factors, a * a
+    FrameCapture t;
+    DrawItem fill = Item(Quad(-1, 1, 0xffffffffu), kTex);  // a mesh: DrawRect's colour is 1
+    fill.blend = 3;
+    for (int c = 0; c < 3; c++) fill.color[c] = 2.0f;
+    fill.color[3] = 0.5f;
+    t.draws = {fill, Sample(-1, 1, 1)};
+    t.passes = {TexturePass(0, 1), BackBuffer(1, 1)};
+    std::vector<uint32_t> tex;
+    uint32_t w = 0, h = 0;
+    REQUIRE(RasterizeTarget(t, Small(), kTex, 1, tex, w, h));
+    CHECK((tex[5] & 0xff) == 128);  // 255 * 0.5 over the clear's black
+    CHECK((tex[5] >> 24) == 64);
+}
+
+TEST_CASE("a pass of the next version is drawn first for a draw before it that samples one missing") {
+    // the sky samples version 1, which no pass here made (the frame before
+    // the capture drew it, unrecorded); this frame's pass makes version 2
+    // after it. That pass is drawn first, so the sky reads it, not black.
+    FrameCapture f;
+    f.draws = {Sample(-1, 1, 1), Fill(kGreen), Item(Quad(-1, 1, kRed), 0)};
+    f.passes = {BackBuffer(0, 1), TexturePass(1, 2), BackBuffer(2, 1)};
+    std::vector<PassRun> runs = PlanPasses(f, Small());
+    REQUIRE(runs.size() == 3);
+    CHECK(runs[0].pass == &f.passes[1]);
+    CHECK(runs[1].pass == nullptr);
+    CHECK(runs[1].first == 0);
+    CHECK(runs[2].pass == nullptr);
+    f.draws[2] = Sample(0, 1, 2);  // and one after it, sampling it where it is
+    std::vector<uint32_t> rgba;
+    RasterStats st = Rasterize(f, Small(), rgba);
+    CHECK(st.rt_missing == 0);
+    CHECK(st.passes == 1);
+    CHECK(rgba[1 * 8 + 1] == kGreen);
+    CHECK(rgba[1 * 8 + 6] == kGreen);
+
+    // not for version 0, which no pass made, nor from a pass after
+    // post-processing starts
+    f.draws[2] = Item(Quad(-1, 1, kRed), 0);
+    f.draws[0] = Sample(-1, 1, 0);
+    f.passes[1].version = 1;
+    st = Rasterize(f, Small(), rgba);
+    CHECK(st.rt_missing == 1);
+    CHECK(st.passes == 0);
+    f.draws[0] = Sample(-1, 1, 1);
+    f.passes[1].version = 2;
+    f.post_boundary = 1;
+    st = Rasterize(f, Small(), rgba);
+    CHECK(st.passes == 0);
+
+    // nor when the frame made the version sampled: its pass, in order
+    FrameCapture g;
+    g.draws = {Fill(kRed), Sample(-1, 1, 1), Fill(kGreen), Item(Quad(-1, 1, 0xffff0000u), 0)};
+    g.passes = {TexturePass(0, 1), BackBuffer(1, 1), TexturePass(2, 2), BackBuffer(3, 1)};
+    runs = PlanPasses(g, Small());
+    REQUIRE(runs.size() == 3);
+    CHECK(runs[0].pass == &g.passes[0]);
+    CHECK(runs[1].pass == nullptr);
+    CHECK(runs[2].pass == nullptr);
 }
 
 namespace {

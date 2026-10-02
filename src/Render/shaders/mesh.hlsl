@@ -92,8 +92,9 @@ VK_SAMPLER VK_BINDING(8, 2) Texture2DArray<float4> detail_tex : register(t8, spa
 VK_SAMPLER VK_BINDING(8, 2) SamplerState detail_sampler : register(s8, space2);
 
 // pixel_flags.x
-// SrcAlpha and SrcAlphaAdd: the colour leaves already scaled by its alpha,
-// which the blend can't clamp first (gpu_view.cpp's pipelines)
+// SrcAlpha and SrcAlphaAdd: the colour leaves clamped and scaled by its alpha
+// (FinishMesh), so the scaling comes after the clamp the target would do
+// (gpu_view.cpp's pipelines)
 static const uint kPremultiply = 1;
 
 VK_BINDING(0, 3) cbuffer PixelUniforms : register(b0, space3) {
@@ -355,10 +356,10 @@ float4 MeshColor(PixelIn i) {
 
 float4 FinishMesh(float4 c) {
     if (AlphaCut(ps_shade, c.a)) discard;
-    // Blend() in soft_raster.cpp clamps alpha, never the colour, before
-    // scaling by it; a UNORM target clamps what reaches the blender, so the
-    // scaling happens here, where colour above 1 still counts
-    if ((pixel_flags.x & kPremultiply) != 0u) c.rgb *= saturate(c.a);
+    // a UNORM target clamps what reaches the blender, colour and alpha, as
+    // Blend() in soft_raster.cpp does before any mode's arithmetic; SrcAlpha's
+    // scaling happens here, so clamps first: a colour above 1 counts as 1
+    if ((pixel_flags.x & kPremultiply) != 0u) c.rgb = saturate(c.rgb) * saturate(c.a);
     return c;
 }
 
