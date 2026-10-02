@@ -62,6 +62,8 @@ constexpr IniSetting kIniSettings[] = {
     {"http", "allow_cors", "http_allow_cors"},
     {"http", "allow_scripts", "http_allow_scripts"},
     {"http", "rhythmverse", "http_rhythmverse"},
+    {"gocentral", "enabled", "gocentral"},
+    {"gocentral", "address", "gocentral_address"},
     {"game", "rb3e_mode", "rb3e_mode"},
     {"game", "song_speed", "song_speed"},
     {"game", "track_speed", "track_speed"},

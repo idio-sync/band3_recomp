@@ -272,6 +272,18 @@ REXCVAR_DEFINE_BOOL(rb3e_mode, true, "Band3/Integrations",
     "mode, song lookups, and clearing the song cache and restarting after an update")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+// Band3/Online
+
+REXCVAR_DEFINE_BOOL(gocentral, false, "Band3/Online",
+    "Connect to GoCentral, the fan-run Rock Central server RB3Enhanced uses, for "
+    "leaderboards, battles and setlist sharing. Needs username set: it's your account "
+    "there, with no password, so pick one nobody else uses")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(gocentral_address, "gocentral-xbox.rbenhanced.rocks", "Band3/Online",
+    "The GoCentral server to connect to: RB3Enhanced's Xbox 360 one, or your own")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 // Band3/Debug
 
 REXCVAR_DEFINE_BOOL(debug_overlay, true, "Band3/Debug",
@@ -289,6 +301,9 @@ REXCVAR_DEFINE_BOOL(log_shake_timing, false, "Band3/Debug",
     "Log the game's frame time against the wall clock once a second while the camera "
     "shake runs")
     .debug_only();
+
+REXCVAR_DEFINE_BOOL(log_net_calls, false, "Band3/Debug",
+    "Log each of the game's network calls (sockets, XNet) and what it returned");
 
 REXCVAR_DEFINE_BOOL(autoplay, false, "Band3/Debug",
     "The game plays every part itself, from the next song start: for repeatable profiling "
@@ -419,6 +434,8 @@ void Init() {
         .http_port = REXCVAR_GET(http_port),
         .http_address = REXCVAR_GET(http_address),
         .rb3e_mode = REXCVAR_GET(rb3e_mode),
+        .gocentral = REXCVAR_GET(gocentral),
+        .gocentral_address = REXCVAR_GET(gocentral_address),
         .native_camera_shake = REXCVAR_GET(native_camera_shake),
     };
 

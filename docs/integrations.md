@@ -110,6 +110,23 @@ Turn `http_rhythmverse` off (`[http] rhythmverse = false`) to leave the tab out.
 RhythmVerse's API isn't documented, so a change on its side can break the tab until band3
 follows.
 
+## GoCentral (Rock Central)
+
+Rock Band 3's online features (leaderboards, Battles, setlists shared with friends,
+Rock Central's goals) talked to Harmonix's Rock Central, which closed.
+[GoCentral](https://github.com/ihatecompvir/GoCentral) is a fan-run replacement that
+RB3Enhanced players use. Under F4 → Band3 → Online, set `username` (Band3 → Game)
+to a name of your own, turn on `gocentral`, then restart. band3 then logs into
+`gocentral_address`, RB3Enhanced's Xbox 360 server (`gocentral-xbox.rbenhanced.rocks`)
+unless you run your own, as RB3Enhanced does on a console with Xbox Live blocked.
+
+GoCentral knows Xbox players by their name alone, with no password: anyone using
+your name logs in as you. band3 won't connect while `username` is blank or "User",
+every profile's name until you change it.
+
+To see how a connection goes, turn on `log_net_calls` (Band3 → Debug): the log then
+has each of the game's network calls and each step of its Rock Central login.
+
 ## RB3Enhanced compatibility
 
 ### Script functions

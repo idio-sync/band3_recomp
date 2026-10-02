@@ -66,11 +66,16 @@ REXCVAR_DECLARE(bool, http_allow_scripts);
 REXCVAR_DECLARE(bool, http_rhythmverse);
 REXCVAR_DECLARE(bool, rb3e_mode);
 
+// Band3/Online
+REXCVAR_DECLARE(bool, gocentral);
+REXCVAR_DECLARE(std::string, gocentral_address);
+
 // Band3/Debug
 REXCVAR_DECLARE(bool, debug_overlay);
 REXCVAR_DECLARE(bool, native_math);
 REXCVAR_DECLARE(bool, native_camera_shake);
 REXCVAR_DECLARE(bool, log_shake_timing);
+REXCVAR_DECLARE(bool, log_net_calls);
 REXCVAR_DECLARE(bool, autoplay);
 REXCVAR_DECLARE(bool, virtual_instrument);
 REXCVAR_DECLARE(std::string, virtual_instrument_type);
@@ -110,6 +115,8 @@ struct StartupSettings {
     int32_t http_port;
     std::string http_address;
     bool rb3e_mode;
+    bool gocentral;
+    std::string gocentral_address;
     bool native_camera_shake;
 };
 const StartupSettings& Startup();
