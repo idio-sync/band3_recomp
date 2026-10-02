@@ -271,8 +271,9 @@ std::optional<std::set<int32_t>> GameSongIds() {
 }
 
 // /rv/search: a page of RhythmVerse's songs, asked of it as this request waits
-std::string RhythmVerseSearch(const Route& route, bool cors) {
-    const auto search = rhythmverse::Search(route.argument, route.page);
+std::string RhythmVerseSearch(const Request& request, bool cors) {
+    const auto options = rhythmverse::ParseSearchOptions(request.target);
+    const auto search = rhythmverse::Search(options);
     const web::Reply reply = web::PostForm(search.url, search.form);
     if (!reply.error.empty()) {
         return Response(502, kText, "Couldn't reach RhythmVerse: " + reply.error, cors);
@@ -284,6 +285,11 @@ std::string RhythmVerseSearch(const Route& route, bool cors) {
     if (!result) {
         REXLOG_WARN("Web server: RhythmVerse's search reply wasn't as expected: {:.200}", reply.body);
         return Response(502, kText, "RhythmVerse's reply wasn't one band3 can read", cors);
+    }
+    result->page_size = search.page_size;
+    // RhythmVerse can't leave them out itself
+    if (options.downloadable_only) {
+        std::erase_if(result->songs, [](const auto& s) { return s.download_url.empty(); });
     }
     rhythmverse::Remember(result->songs);
 
@@ -418,7 +424,7 @@ std::string Handle(const Request& request) {
             return Response(404, kText, "No album art for that shortname", cors);
         }
         case Endpoint::kRvSearch:
-            return RhythmVerseSearch(route, cors);
+            return RhythmVerseSearch(request, cors);
         case Endpoint::kRvDownload:
             return RhythmVerseDownload(request, cors);
         case Endpoint::kRvDownloads: {

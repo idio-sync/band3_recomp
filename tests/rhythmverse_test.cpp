@@ -167,15 +167,67 @@ TEST_CASE("a song is downloaded when its file is in the content folders, however
 }
 
 TEST_CASE("a search with text asks the search, and one without the newest songs") {
-    const auto search = Search("rob zombie & co", 3);
+    SearchOptions options;
+    options.text = "rob zombie & co";
+    options.page = 3;
+    const auto search = Search(options);
     CHECK(search.url == "https://rhythmverse.co/api/rb3xbox/songfiles/search/live");
     CHECK(search.form == "records=25&page=3&data_type=full&text=rob%20zombie%20%26%20co");
+    CHECK(search.page_size == 25);
 
-    const auto newest = Search("", 0);
+    const auto newest = Search(SearchOptions{});
     CHECK(newest.url == "https://rhythmverse.co/api/rb3xbox/songfiles/list");
     CHECK(newest.form ==
           "records=25&page=1&data_type=full&sort%5B0%5D%5Bsort_by%5D=release_date&"
           "sort%5B0%5D%5Bsort_order%5D=DESC");
+}
+
+TEST_CASE("a search's sort and filters become RhythmVerse's form fields") {
+    SearchOptions options;
+    options.text = "x";
+    options.sort = "downloads";
+    options.downloadable_only = true;
+    options.has = {"real_keys", "keys"};
+    options.harmonies = true;
+    options.genres = {"metal"};
+    options.decades = {1990};
+    options.cap_part = "drum";
+    options.cap_tier = 2;
+    const auto search = Search(options);
+    // band3 leaves out what it can't download, so it asks for more at once
+    CHECK(search.page_size == 100);
+    CHECK(search.form ==
+          "records=100&page=1&data_type=full&text=x"
+          "&sort%5B0%5D%5Bsort_by%5D=downloads&sort%5B0%5D%5Bsort_order%5D=DESC"
+          "&instrument%5B%5D=prokeys&instrument%5B%5D=keys"
+          "&vocal_parts%5B%5D=2&vocal_parts%5B%5D=3&genre%5B%5D=metal&decade%5B%5D=1990"
+          // Solid (2) at most: RhythmVerse's tiers 1 to 3
+          "&tierinstrument%5B%5D=drums&tier%5B%5D=1&tier%5B%5D=2&tier%5B%5D=3");
+}
+
+TEST_CASE("the page's query becomes a search's options, leaving out what isn't one") {
+    const auto options = ParseSearchOptions(
+        "/rv/search?text=never%20gonna&page=2&sort=title&downloadable=1"
+        "&has=keys,real_guitar,banjo&harmonies=1&genre=metal,Bad-Genre,,rock"
+        "&decade=1990,1995,abc,2000&cap=drum:4");
+    CHECK(options.text == "never gonna");
+    CHECK(options.page == 2);
+    CHECK(options.sort == "title");
+    CHECK(options.downloadable_only);
+    CHECK(options.has == std::vector<std::string>{"keys", "real_guitar"});
+    CHECK(options.harmonies);
+    CHECK(options.genres == std::vector<std::string>{"metal", "rock"});
+    CHECK(options.decades == std::vector<int32_t>{1990, 2000});
+    CHECK(options.cap_part == "drum");
+    CHECK(options.cap_tier == 4);
+
+    const auto plain = ParseSearchOptions("/rv/search?sort=random&page=0&cap=drum:9&downloadable=yes");
+    CHECK(plain.text.empty());
+    CHECK(plain.page == 1);
+    CHECK(plain.sort.empty());
+    CHECK(!plain.downloadable_only);
+    CHECK(plain.cap_tier == -1);
+    CHECK(ParseSearchOptions("/rv/search?cap=banjo:2").cap_tier == -1);
 }
 
 TEST_CASE("form encoding keeps only unreserved characters") {

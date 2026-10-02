@@ -16,16 +16,39 @@
 namespace band3::rhythmverse {
 
 inline constexpr std::string_view kSite = "https://rhythmverse.co";
-// songs a search page asks for
+// songs a search page asks for; for downloadable ones only, more, since band3
+// leaves out the rest
 inline constexpr int kPageSize = 25;
+inline constexpr int kDownloadablePageSize = 100;
 
-// what a search asks RhythmVerse: a POST of a form to a URL. Without text,
-// the newest songs.
+// what the page's RhythmVerse tab asks for (/rv/search's query: text=, page=,
+// sort=, downloadable=1, has=keys,real_keys, harmonies=1, genre=metal,rock,
+// decade=1990,2000, cap=drum:3). Parts are the game's names for them, as in
+// /song_details; values RhythmVerse doesn't have are left out.
+struct SearchOptions {
+    std::string text;
+    int32_t page = 1;
+    // newest, updated, downloads, title, artist or length; empty for the
+    // search's own order, or the newest without text
+    std::string sort;
+    bool downloadable_only = false;
+    std::vector<std::string> has;  // parts the songs have
+    bool harmonies = false;        // two or three vocal parts
+    std::vector<std::string> genres;  // RhythmVerse's: rock, poprock, metal...
+    std::vector<int32_t> decades;     // 1990, 2000...
+    // a part's difficulty at most: the game's tier, 0 (Warmup) to 6
+    std::string cap_part;
+    int32_t cap_tier = -1;
+};
+SearchOptions ParseSearchOptions(std::string_view target);
+
+// what a search asks RhythmVerse: a POST of a form to a URL
 struct SearchRequest {
     std::string url;
     std::string form;  // application/x-www-form-urlencoded
+    int32_t page_size = kPageSize;
 };
-SearchRequest Search(std::string_view text, int page);
+SearchRequest Search(const SearchOptions& options);
 
 // text with everything but letters, digits and -._~ percent-encoded
 std::string FormEncode(std::string_view text);
@@ -62,6 +85,7 @@ struct Song {
 struct SearchResult {
     int64_t total = 0;  // songs matching, over every page
     int32_t page = 1;
+    int32_t page_size = kPageSize;
     std::vector<Song> songs;
 };
 

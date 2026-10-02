@@ -246,12 +246,26 @@ class RhythmVerseTest(unittest.TestCase):
         self.assertIsNone(web_preview.rv_search_result([], set()))
 
     def test_search_or_newest(self):
-        url, form = web_preview.rv_search_form('zombie', 2)
+        url, form, size = web_preview.rv_search_form({'text': 'zombie', 'page': '2'})
         self.assertTrue(url.endswith('/search/live'))
-        self.assertEqual((form['text'], form['page']), ('zombie', 2))
-        url, form = web_preview.rv_search_form('', 0)
+        self.assertIn(('text', 'zombie'), form)
+        self.assertIn(('page', 2), form)
+        self.assertEqual(size, 25)
+        url, form, _ = web_preview.rv_search_form({'page': '0'})
         self.assertTrue(url.endswith('/songfiles/list'))
-        self.assertEqual((form['page'], form['sort[0][sort_by]']), (1, 'release_date'))
+        self.assertIn(('page', 1), form)
+        self.assertIn(('sort[0][sort_by]', 'release_date'), form)
+
+    def test_filters_as_band3_sends_them(self):
+        _, form, size = web_preview.rv_search_form({
+            'text': 'x', 'sort': 'downloads', 'downloadable': '1', 'has': 'real_keys,banjo',
+            'harmonies': '1', 'genre': 'metal,Bad-Genre', 'decade': '1990,1995', 'cap': 'drum:2'})
+        self.assertEqual(size, 100)
+        self.assertEqual(form[3:], [
+            ('text', 'x'), ('sort[0][sort_by]', 'downloads'), ('sort[0][sort_order]', 'DESC'),
+            ('instrument[]', 'prokeys'), ('vocal_parts[]', '2'), ('vocal_parts[]', '3'),
+            ('genre[]', 'metal'), ('decade[]', '1990'), ('tierinstrument[]', 'drums'),
+            ('tier[]', '1'), ('tier[]', '2'), ('tier[]', '3')])
 
 
 if __name__ == '__main__':

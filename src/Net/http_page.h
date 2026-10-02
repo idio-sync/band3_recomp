@@ -74,8 +74,8 @@ a.button {
   border-radius: 8px; padding: 8px 14px; background: var(--tag); color: var(--text); font-weight: 500;
 }
 .bar + .bar { flex-wrap: wrap; }
-#lib-tools { display: contents; }
-#lib-tools[hidden] { display: none; }
+#lib-tools, #rv-tools { display: contents; }
+#lib-tools[hidden], #rv-tools[hidden] { display: none; }
 /* the song library or RhythmVerse */
 .tabs { display: inline-flex; background: var(--tag); border-radius: 8px; padding: 2px; }
 .tabs[hidden] { display: none; }
@@ -221,6 +221,18 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
       <button id="filter" class="plain" hidden>Filters</button>
       <button id="random" class="plain">Random</button>
     </span>
+    <span id="rv-tools" hidden>
+      <select id="rv-sort" aria-label="Sort RhythmVerse by">
+        <option value="">Best match</option>
+        <option value="newest">Newest</option>
+        <option value="updated">Recently updated</option>
+        <option value="downloads">Most downloaded</option>
+        <option value="title">Title</option>
+        <option value="artist">Artist</option>
+        <option value="length">Shortest</option>
+      </select>
+      <button id="rv-filter" class="plain">Filters</button>
+    </span>
     <span id="count"></span>
   </div>
   <div id="banner" hidden></div>
@@ -251,6 +263,23 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
   <div class="actions">
     <button class="plain" id="f-clear">Clear</button>
     <button id="f-done">Done</button>
+  </div>
+</div></dialog>
+<dialog id="rv-filters"><div class="sheet">
+  <h2>RhythmVerse filters</h2>
+  <h3>Show</h3>
+  <div class="chips" id="rvf-show"></div>
+  <h3>Has</h3>
+  <div class="chips" id="rvf-has"></div>
+  <h3>Difficulty at most</h3>
+  <div class="caps" id="rvf-cap"></div>
+  <h3>Genre</h3>
+  <div class="chips" id="rvf-genres"></div>
+  <h3>Decade</h3>
+  <div class="chips" id="rvf-decades"></div>
+  <div class="actions">
+    <button class="plain" id="rvf-clear">Clear</button>
+    <button id="rvf-done">Done</button>
   </div>
 </div></dialog>
 <dialog id="sheet"><div class="sheet" id="sheet-body"></div></dialog>
@@ -525,7 +554,7 @@ function pickRandom() {
 }
 $("random").onclick = pickRandom;
 
-for (const dialog of [$("filters"), $("sheet")]) {
+for (const dialog of [$("filters"), $("sheet"), $("rv-filters")]) {
   // a tap outside the sheet closes it
   dialog.addEventListener("click", e => { if (e.target === dialog) dialog.close(); });
 }
@@ -610,6 +639,98 @@ const rv = {
   folder: "",
 };
 const searchText = {library: "", rv: ""};
+
+// ---- RhythmVerse's sort and filters, kept on this device; RhythmVerse
+// applies them, but for Downloadable only, which band3 does
+const RV_GENRES = [["rock", "Rock"], ["poprock", "Pop-Rock"], ["alternative", "Alternative"],
+  ["glam", "Glam"], ["popdanceelectronic", "Pop/Dance/Electronic"], ["country", "Country"],
+  ["classicrock", "Classic Rock"], ["reggaeska", "Reggae/Ska"], ["numetal", "Nu-Metal"],
+  ["emo", "Emo"], ["metal", "Metal"], ["indierock", "Indie Rock"], ["punk", "Punk"],
+  ["new_wave", "New Wave"], ["fusion", "Fusion"], ["grunge", "Grunge"], ["prog", "Prog"],
+  ["southernrock", "Southern Rock"], ["novelty", "Novelty"], ["rbsoulfunk", "R&B/Soul/Funk"],
+  ["hiphoprap", "Hip-Hop/Rap"], ["blues", "Blues"], ["jazz", "Jazz"], ["jrock", "J-Rock"],
+  ["classical", "Classical"], ["world", "World"], ["latin", "Latin"],
+  ["inspirational", "Inspirational"], ["other", "Other"]];
+const RV_DECADES = [1960, 1970, 1980, 1990, 2000, 2010, 2020];
+// the parts a difficulty can be capped on: the game's names, as /song_details'
+const RV_CAP_PARTS = [["guitar", "Guitar"], ["bass", "Bass"], ["drum", "Drums"], ["vocals", "Vocals"],
+  ["keys", "Keys"], ["real_guitar", "Pro Guitar"], ["real_bass", "Pro Bass"], ["real_keys", "Pro Keys"]];
+const RV_DEFAULTS = {sort: "", downloadable: true, has: [], genres: [], decades: [],
+                     cap_part: "guitar", cap_tier: null};
+const rvFilters = structuredClone(RV_DEFAULTS);
+try { Object.assign(rvFilters, JSON.parse(localStorage.getItem("band3.rvfilters")) || {}); } catch (e) {}
+
+function rvFilterCount() {
+  return (rvFilters.downloadable ? 1 : 0) + rvFilters.has.length + (rvFilters.cap_tier === null ? 0 : 1) +
+         (rvFilters.genres.length ? 1 : 0) + (rvFilters.decades.length ? 1 : 0);
+}
+
+// /rv/search's query for a page
+function rvQuery(page) {
+  const q = new URLSearchParams({text: rv.text, page});
+  const has = rvFilters.has.filter(h => h !== "harmonies");
+  if (rvFilters.sort) q.set("sort", rvFilters.sort);
+  if (rvFilters.downloadable) q.set("downloadable", "1");
+  if (has.length) q.set("has", has.join(","));
+  if (rvFilters.has.includes("harmonies")) q.set("harmonies", "1");
+  if (rvFilters.genres.length) q.set("genre", rvFilters.genres.join(","));
+  if (rvFilters.decades.length) q.set("decade", rvFilters.decades.join(","));
+  if (rvFilters.cap_tier !== null) q.set("cap", rvFilters.cap_part + ":" + rvFilters.cap_tier);
+  return q.toString();
+}
+
+// a filter changed: kept, and searched again once the clicking stops
+let rvFilterTimer;
+function rvFiltersChanged() {
+  try { localStorage.setItem("band3.rvfilters", JSON.stringify(rvFilters)); } catch (e) {}
+  const n = rvFilterCount();
+  $("rv-filter").textContent = n ? "Filters (" + n + ")" : "Filters";
+  $("rv-sort").value = rvFilters.sort;
+  clearTimeout(rvFilterTimer);
+  if (rv.text !== null) rvFilterTimer = setTimeout(() => rvSearch(false), 400);
+}
+
+function rvChip(label, on, toggle) {
+  const b = el("button", "chip", label);
+  b.setAttribute("aria-pressed", on);
+  b.onclick = () => {
+    toggle();
+    b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") !== "true");
+    rvFiltersChanged();
+  };
+  return b;
+}
+
+function buildRvFilters() {
+  $("rvf-show").replaceChildren(rvChip("Downloadable only", rvFilters.downloadable,
+    () => { rvFilters.downloadable = !rvFilters.downloadable; }));
+  $("rvf-has").replaceChildren(...HAS.map(([key, label]) =>
+    rvChip(label, rvFilters.has.includes(key), () => toggleIn(rvFilters.has, key))));
+  const tier = el("select"), part = el("select");
+  tier.setAttribute("aria-label", "Difficulty at most");
+  part.setAttribute("aria-label", "On the part");
+  tier.append(new Option("Any", ""));
+  TIERS.forEach((name, i) => tier.append(new Option(name, i)));
+  RV_CAP_PARTS.forEach(([key, label]) => part.append(new Option(label, key)));
+  tier.value = rvFilters.cap_tier === null ? "" : rvFilters.cap_tier;
+  part.value = rvFilters.cap_part;
+  tier.onchange = () => { rvFilters.cap_tier = tier.value === "" ? null : Number(tier.value); rvFiltersChanged(); };
+  part.onchange = () => { rvFilters.cap_part = part.value; if (rvFilters.cap_tier !== null) rvFiltersChanged(); };
+  $("rvf-cap").replaceChildren(tier, part);
+  $("rvf-genres").replaceChildren(...RV_GENRES.map(([key, label]) =>
+    rvChip(label, rvFilters.genres.includes(key), () => toggleIn(rvFilters.genres, key))));
+  $("rvf-decades").replaceChildren(...RV_DECADES.map(y =>
+    rvChip(y + "s", rvFilters.decades.includes(y), () => toggleIn(rvFilters.decades, y))));
+}
+
+$("rv-filter").onclick = () => { buildRvFilters(); $("rv-filters").showModal(); };
+$("rvf-done").onclick = () => $("rv-filters").close();
+$("rvf-clear").onclick = () => {
+  Object.assign(rvFilters, structuredClone(RV_DEFAULTS), {sort: rvFilters.sort});
+  buildRvFilters();
+  rvFiltersChanged();
+};
+$("rv-sort").onchange = () => { rvFilters.sort = $("rv-sort").value; rvFiltersChanged(); };
 
 function norm(text) { return (text || "").toLowerCase().replace(/[^a-z0-9]+/g, ""); }
 // a song by this artist and title is in the library already
@@ -774,13 +895,14 @@ async function rvSearch(more) {
     rv.page = 0;
     rv.total = 0;
     rv.rows.clear();
+    rv.emptyPages = 0;
     $("rv-list").replaceChildren();
     $("rv-message").textContent = rv.text ? "Searching RhythmVerse…" : "Loading RhythmVerse's newest songs…";
   }
   const seq = ++rvSeq;
   $("rv-more").hidden = true;
   try {
-    const r = await fetch("/rv/search?text=" + encodeURIComponent(rv.text) + "&page=" + (rv.page + 1));
+    const r = await fetch("/rv/search?" + rvQuery(rv.page + 1));
     if (seq !== rvSeq) return;
     if (!r.ok) throw new Error(await r.text());
     const res = await r.json();
@@ -788,8 +910,17 @@ async function rvSearch(more) {
     rv.page = res.page;
     rv.total = res.total;
     $("rv-list").append(...res.songs.map(rvRow));
-    $("rv-more").hidden = !res.songs.length || rv.page * res.page_size >= rv.total;
-    $("rv-message").textContent = rv.rows.size ? "" : "Nothing on RhythmVerse matches.";
+    const last = rv.page * res.page_size >= rv.total;
+    $("rv-more").hidden = last;
+    // with Downloadable only, a page can have none: on to the next, a few at most
+    rv.emptyPages = res.songs.length ? 0 : (rv.emptyPages || 0) + 1;
+    if (!res.songs.length && !last && rv.emptyPages < 5) {
+      rvSearch(true);
+      return;
+    }
+    $("rv-message").textContent = rv.rows.size ? "" : rvFilters.downloadable
+      ? "Nothing RhythmVerse hosts matches. Turn off Downloadable only for songs on other sites."
+      : "Nothing on RhythmVerse matches.";
     showCount();
   } catch (e) {
     if (seq !== rvSeq) return;
@@ -881,6 +1012,7 @@ function setMode(next) {
   $("lib").hidden = mode !== "library";
   $("rv").hidden = mode !== "rv";
   $("lib-tools").hidden = mode !== "library";
+  $("rv-tools").hidden = mode !== "rv";
   $("search").value = searchText[mode];
   $("search").placeholder = mode === "rv" ? "Search RhythmVerse's custom songs"
                                           : "Search songs, artists, albums";
@@ -898,6 +1030,7 @@ async function initRhythmVerse() {
     return;
   }
   $("tabs").hidden = false;
+  rvFiltersChanged();  // the saved filters' count on the button
   pollDownloads();
   let saved = null;
   try { saved = localStorage.getItem("band3.mode"); } catch (e) {}

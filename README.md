@@ -484,15 +484,18 @@ band3 adds its own, which RB3E doesn't have:
 | `/song_details` | every listed song's `genre` (as the Music Library names it), `year`, `length_ms`, `vocal_parts` and `tiers`, the difficulty of each part it has (`band`, `guitar`, `bass`, `drum`, `vocals`, `keys`, `real_guitar`, `real_bass`, `real_keys`) from 0 (Warmup) to 6 (Impossible), as JSON by shortname |
 | `/status` | what the game is doing, as JSON: `screen`, `in_library` (the Music Library is open, so `/jump` can select) and `playing`, during a song its `shortname`, `title`, `artist`, `score`, `position_ms` (null until the song starts) and `length_ms`, else null |
 | `/album_art?shortname=<name>` | the song's album art as a JPEG, read as the game reads it for the Music Library (from the ARK, or a loose file that replaces it); 404 when the song has none, or no song has that shortname |
-| `/rv/search?text=<text>&page=<n>` | a page of 25 of [RhythmVerse](https://rhythmverse.co)'s Rock Band 3 (Xbox) songs matching the text, or its newest without; JSON with `total`, `page` and `songs`, each with its `file_id`, details, `tiers` as `/song_details` gives them, `download` (RhythmVerse hosts it, so band3 can download it), `downloaded` (its file is in the content folders) and `in_library` (the game has a song with its song ID; null while the game is busy) |
+| `/rv/search?text=<text>&page=<n>` | a page of 25 of [RhythmVerse](https://rhythmverse.co)'s Rock Band 3 (Xbox) songs matching the text, or its newest without; JSON with `total`, `page`, `page_size` and `songs`, each with its `file_id`, details, `tiers` as `/song_details` gives them, `song_id`, `download` (RhythmVerse hosts it, so band3 can download it), `downloaded` (its file is in the content folders) and `in_library` (the game has a song with its song ID; null while the game is busy). Optional: `sort=` `newest`, `updated`, `downloads`, `title`, `artist` or `length`; `downloadable=1` for only what band3 can download (pages of 100, the rest left out); `has=` parts (`keys`, `real_guitar`...), `harmonies=1`, `genre=` RhythmVerse's genres (`metal,rock`), `decade=1990,2000`, and `cap=<part>:<tier>` for a part's difficulty at most |
 | `POST /rv/download` | downloads `{"file_id": "<id>"}` (JSON) from a search into the songs folder: 404 for a song no search has found, 409 for one RhythmVerse doesn't host |
 | `/rv/downloads` | this session's downloads as JSON: the `folder` they go to, and each one's `state` (`queued`, `downloading`, `done`, `failed`), `received`, `total`, `error` and `in_library` (the game has taken it in; null while the game is busy, or before any is done) |
 
 #### RhythmVerse
 
 The page's **RhythmVerse** tab searches [RhythmVerse](https://rhythmverse.co)'s custom
-songs for Rock Band 3 on Xbox, with their art, details and difficulties, and says
-which you have, however you got them. **In library**: the game has a song with its
+songs for Rock Band 3 on Xbox, with their art, details and difficulties, sorted as you
+choose (newest, most downloaded, title...) and with **Filters** for the parts a song has,
+a part's difficulty at most, genre and decade, and **Downloadable only** (on at first),
+which leaves out what band3 can't download; they're kept on that device. It says which
+songs you have, however you got them. **In library**: the game has a song with its
 song ID (RhythmVerse's for the upload is the `song_id` in its `songs.dta`), whatever
 its file is called; **Select** then selects it in the Music Library, as on the Library
 tab. **Downloaded**: its file is in the content folders, under the name RhythmVerse gives

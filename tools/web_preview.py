@@ -237,14 +237,48 @@ def rv_song(entry):
     }
 
 
-def rv_search_form(text, page):
-    """What band3 posts to RhythmVerse for a search: (url, form)."""
-    form = {'records': RV_PAGE_SIZE, 'page': max(page, 1), 'data_type': 'full'}
-    if not text:
-        form.update({'sort[0][sort_by]': 'release_date', 'sort[0][sort_order]': 'DESC'})
-        return RHYTHMVERSE + '/api/rb3xbox/songfiles/list', form
-    form['text'] = text
-    return RHYTHMVERSE + '/api/rb3xbox/songfiles/search/live', form
+RV_DOWNLOADABLE_PAGE_SIZE = 100
+# the page's sorts, as RhythmVerse's field and order
+RV_SORTS = {'newest': ('release_date', 'DESC'), 'updated': ('update_date', 'DESC'),
+            'downloads': ('downloads', 'DESC'), 'title': ('title', 'ASC'),
+            'artist': ('artist', 'ASC'), 'length': ('length', 'ASC')}
+# RhythmVerse's names for the game's parts
+RV_INSTRUMENTS = {'guitar': 'guitar', 'bass': 'bass', 'drum': 'drums', 'vocals': 'vocals',
+                  'keys': 'keys', 'real_guitar': 'proguitar', 'real_bass': 'probass',
+                  'real_keys': 'prokeys'}
+
+
+def rv_search_form(query):
+    """What band3 posts to RhythmVerse for /rv/search's query (a dict of
+    strings, as src/Net/rhythmverse.cpp's ParseSearchOptions reads it):
+    (url, form as a list of pairs, page size)."""
+    text = query.get('text', '').strip()
+    try:
+        page = max(int(query.get('page', '1')), 1)
+    except ValueError:
+        page = 1
+    downloadable = query.get('downloadable') == '1'
+    size = RV_DOWNLOADABLE_PAGE_SIZE if downloadable else RV_PAGE_SIZE
+    form = [('records', size), ('page', page), ('data_type', 'full')]
+    if text:
+        url = RHYTHMVERSE + '/api/rb3xbox/songfiles/search/live'
+        form.append(('text', text))
+    else:
+        url = RHYTHMVERSE + '/api/rb3xbox/songfiles/list'
+    sort = query.get('sort', '') if query.get('sort') in RV_SORTS else ('' if text else 'newest')
+    if sort:
+        form += [('sort[0][sort_by]', RV_SORTS[sort][0]), ('sort[0][sort_order]', RV_SORTS[sort][1])]
+    split = lambda key: [v for v in query.get(key, '').split(',') if v]
+    form += [('instrument[]', RV_INSTRUMENTS[p]) for p in split('has') if p in RV_INSTRUMENTS]
+    if query.get('harmonies') == '1':
+        form += [('vocal_parts[]', '2'), ('vocal_parts[]', '3')]
+    form += [('genre[]', g) for g in split('genre') if g.replace('_', '').isalpha() and g.islower()]
+    form += [('decade[]', d) for d in split('decade') if d.isdigit() and int(d) % 10 == 0]
+    part, _, tier = query.get('cap', '').partition(':')
+    if part in RV_INSTRUMENTS and tier.isdigit() and int(tier) <= 6:
+        form.append(('tierinstrument[]', RV_INSTRUMENTS[part]))
+        form += [('tier[]', str(t + 1)) for t in range(int(tier) + 1)]
+    return url, form, size
 
 
 def rv_search_result(reply, downloaded):
@@ -445,9 +479,9 @@ class Preview:
         self.lock = threading.Lock()
         self.downloads = FakeDownloads()
 
-    def rv_search(self, text, page):
-        """band3's /rv/search, asked of RhythmVerse: (status, content type, body)."""
-        url, form = rv_search_form(text, page)
+    def rv_search(self, query):
+        """band3's /rv/search, asked of RhythmVerse: (status, body)."""
+        url, form, size = rv_search_form(query)
         request = urllib.request.Request(
             url, data=urllib.parse.urlencode(form).encode(),
             headers={'User-Agent': 'band3 web_preview', 'Accept': 'application/json'})
@@ -458,6 +492,9 @@ class Preview:
             return 502, f"Couldn't reach RhythmVerse: {e}"
         if result is None:
             return 502, "RhythmVerse's reply wasn't one band3 can read"
+        result['page_size'] = size
+        if query.get('downloadable') == '1':
+            result['songs'] = [s for s in result['songs'] if s['download']]
         self.downloads.remember(result['songs'])
         return 200, json.dumps(result)
 
@@ -510,12 +547,8 @@ def handler(preview):
             elif path.startswith('/jump?shortname='):
                 self.reply(409, text, b'This is web_preview.py: there is no game to select it in')
             elif urllib.parse.urlsplit(self.path).path == '/rv/search':
-                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-                try:
-                    page = int(query.get('page', ['1'])[0])
-                except ValueError:
-                    page = 1
-                status, body = preview.rv_search(query.get('text', [''])[0].strip(), page)
+                query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query))
+                status, body = preview.rv_search(query)
                 self.reply(status, 'application/json' if status == 200 else text, body.encode())
             elif path == '/rv/downloads':
                 self.reply(200, 'application/json', json.dumps(preview.downloads.report()).encode())

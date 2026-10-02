@@ -101,6 +101,46 @@ std::string InLibrary(int32_t song_id, const std::optional<std::set<int32_t>>& g
     return song_id && game_ids->contains(song_id) ? "true" : "false";
 }
 
+// the page's sorts, and RhythmVerse's field|order for each
+constexpr std::pair<std::string_view, std::string_view> kSorts[] = {
+    {"newest", "release_date|DESC"}, {"updated", "update_date|DESC"},
+    {"downloads", "downloads|DESC"}, {"title", "title|ASC"},
+    {"artist", "artist|ASC"},        {"length", "length|ASC"},
+};
+
+// RhythmVerse's name for one of the game's parts
+std::optional<std::string_view> RvInstrument(std::string_view part) {
+    static constexpr std::pair<std::string_view, std::string_view> kInstruments[] = {
+        {"guitar", "guitar"},     {"bass", "bass"},           {"drum", "drums"},
+        {"vocals", "vocals"},     {"keys", "keys"},           {"real_guitar", "proguitar"},
+        {"real_bass", "probass"}, {"real_keys", "prokeys"},
+    };
+    for (const auto& [game, rv] : kInstruments) {
+        if (game == part) return rv;
+    }
+    return std::nullopt;
+}
+
+// "a,,b" -> {"a", "b"}
+std::vector<std::string> SplitCommas(std::string_view text) {
+    std::vector<std::string> out;
+    while (!text.empty()) {
+        const size_t comma = text.find(',');
+        if (comma) out.emplace_back(text.substr(0, comma));
+        if (comma == std::string_view::npos) break;
+        text.remove_prefix(comma + 1);
+    }
+    return out;
+}
+
+// all of text as a whole number
+std::optional<int32_t> WholeOf(std::string_view text) {
+    int32_t n = 0;
+    const auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), n);
+    if (text.empty() || ec != std::errc() || ptr != text.data() + text.size()) return std::nullopt;
+    return n;
+}
+
 void AppendField(std::string& out, std::string_view key, std::string_view json) {
     if (out.back() != '{') out += ',';
     out += '"';
@@ -128,17 +168,82 @@ std::string FormEncode(std::string_view text) {
     return out;
 }
 
-SearchRequest Search(std::string_view text, int page) {
+SearchOptions ParseSearchOptions(std::string_view target) {
+    SearchOptions options;
+    auto param = [&](std::string_view name) {
+        return http::QueryParam(target, name).value_or("");
+    };
+    options.text = param("text");
+    options.page = std::max<int32_t>(WholeOf(param("page")).value_or(1), 1);
+    const std::string sort = param("sort");
+    if (std::ranges::any_of(kSorts, [&](const auto& s) { return s.first == sort; })) {
+        options.sort = sort;
+    }
+    options.downloadable_only = param("downloadable") == "1";
+    options.harmonies = param("harmonies") == "1";
+    for (const std::string& part : SplitCommas(param("has"))) {
+        if (RvInstrument(part)) options.has.push_back(part);
+    }
+    for (const std::string& genre : SplitCommas(param("genre"))) {
+        const bool slug = genre.size() <= 32 && std::ranges::all_of(genre, [](char c) {
+            return (c >= 'a' && c <= 'z') || c == '_';
+        });
+        if (slug) options.genres.push_back(genre);
+    }
+    for (const std::string& decade : SplitCommas(param("decade"))) {
+        const auto year = WholeOf(decade);
+        if (year && *year >= 1900 && *year <= 2100 && *year % 10 == 0) {
+            options.decades.push_back(*year);
+        }
+    }
+    const std::string cap = param("cap");
+    const size_t colon = cap.find(':');
+    if (colon != std::string::npos && RvInstrument(cap.substr(0, colon))) {
+        const auto tier = WholeOf(std::string_view(cap).substr(colon + 1));
+        if (tier && *tier >= 0 && *tier <= 6) {
+            options.cap_part = cap.substr(0, colon);
+            options.cap_tier = *tier;
+        }
+    }
+    return options;
+}
+
+SearchRequest Search(const SearchOptions& options) {
     SearchRequest request;
-    request.form = "records=" + std::to_string(kPageSize) +
-                   "&page=" + std::to_string(std::max(page, 1)) + "&data_type=full";
-    if (text.empty()) {
+    request.page_size = options.downloadable_only ? kDownloadablePageSize : kPageSize;
+    request.form = "records=" + std::to_string(request.page_size) +
+                   "&page=" + std::to_string(std::max(options.page, 1)) + "&data_type=full";
+    auto add = [&](std::string_view key, std::string_view value) {
+        request.form += "&" + FormEncode(key) + "=" + FormEncode(value);
+    };
+    if (options.text.empty()) {
         request.url = std::string(kSite) + "/api/rb3xbox/songfiles/list";
-        request.form += "&" + FormEncode("sort[0][sort_by]") + "=release_date&" +
-                        FormEncode("sort[0][sort_order]") + "=DESC";
     } else {
         request.url = std::string(kSite) + "/api/rb3xbox/songfiles/search/live";
-        request.form += "&text=" + FormEncode(text);
+        add("text", options.text);
+    }
+    // a search keeps its own order unless asked; the list, the newest first
+    std::string_view sort = options.sort;
+    if (sort.empty() && options.text.empty()) sort = "newest";
+    for (const auto& [name, field] : kSorts) {
+        if (name != sort) continue;
+        const size_t bar = field.find('|');
+        add("sort[0][sort_by]", field.substr(0, bar));
+        add("sort[0][sort_order]", field.substr(bar + 1));
+    }
+    for (const std::string& part : options.has) add("instrument[]", *RvInstrument(part));
+    if (options.harmonies) {
+        add("vocal_parts[]", "2");
+        add("vocal_parts[]", "3");
+    }
+    for (const std::string& genre : options.genres) add("genre[]", genre);
+    for (const int32_t decade : options.decades) add("decade[]", std::to_string(decade));
+    if (options.cap_tier >= 0) {
+        add("tierinstrument[]", *RvInstrument(options.cap_part));
+        // RhythmVerse's tiers are the game's plus one, and match exactly
+        for (int32_t tier = 0; tier <= options.cap_tier; tier++) {
+            add("tier[]", std::to_string(tier + 1));
+        }
     }
     return request;
 }
@@ -215,7 +320,7 @@ std::string DownloadFileName(const Song& song) {
 std::string FormatSearch(const SearchResult& result, const LocalSongs& local) {
     std::string out = "{\"total\":" + std::to_string(result.total) +
                       ",\"page\":" + std::to_string(result.page) +
-                      ",\"page_size\":" + std::to_string(kPageSize) + ",\"songs\":[";
+                      ",\"page_size\":" + std::to_string(result.page_size) + ",\"songs\":[";
     for (size_t i = 0; i < result.songs.size(); i++) {
         const Song& s = result.songs[i];
         if (i) out += ',';
