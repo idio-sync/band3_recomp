@@ -33,6 +33,7 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
+#include <rex/ui/keybinds.h>
 #include <rex/ui/presenter.h>
 #include <rex/ui/window.h>
 #include <rex/ui/windowed_app_context.h>
@@ -354,6 +355,25 @@ public:
         OnUIThread([&] { set = rex::cvar::SetFlagByName(name, value); });
         if (!set) return std::string(name) + " doesn't take " + std::string(value);
         return {};
+    }
+
+    // as band3_app's PressBind does for the menu shortcut: the bind's key goes
+    // straight to the binds, so it works on a window that never has focus
+    std::string PressBind(std::string_view bind) override {
+        std::string error;
+        rex::ui::Window* window = window_;
+        OnUIThread([&] {
+            // empty for a name no bind has
+            const std::string key = rex::cvar::GetFlagByName(bind);
+            const rex::ui::VirtualKey vk = rex::ui::ParseVirtualKey(key);
+            if (vk == rex::ui::VirtualKey::kNone) {
+                error = "no key bind " + std::string(bind) + " (or it has no key)";
+                return;
+            }
+            rex::ui::KeyEvent e(window, vk, 0, false, false, false, false, false);
+            rex::ui::ProcessKeyEvent(e);
+        });
+        return error;
     }
 
     void Quit() override {

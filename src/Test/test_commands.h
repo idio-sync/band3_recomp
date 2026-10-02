@@ -128,6 +128,10 @@ public:
     virtual std::string Capture(const std::string& name, CaptureInfo& out) = 0;
     // a Band3 setting only; returns an error, or empty
     virtual std::string SetSetting(std::string_view name, std::string_view value) = 0;
+    // presses the key a key bind (bind_settings, bind_instrument_lab...) is set
+    // to, as the window would, without the window having focus; returns an
+    // error, or empty
+    virtual std::string PressBind(std::string_view bind) = 0;
     // the live native view, drawing every frame the game captures at width x
     // height as F9's window does (without post-processing unless `post`), and
     // its numbers, which on and off reset; on returns an error, or empty.

@@ -48,6 +48,7 @@ public:
     Clock::time_point now{};
     std::chrono::milliseconds slept{0};
     std::vector<std::pair<std::string, std::string>> settings_set;
+    std::vector<std::string> binds_pressed;
     std::string screenshot_name;
     ScreenshotSource screenshot_source = ScreenshotSource::kWindow;
     // renderer = native: the window's picture is the native renderer's, and
@@ -127,6 +128,11 @@ public:
     std::string SetSetting(std::string_view name, std::string_view value) override {
         if (name == "secret") return "secret isn't a Band3 setting";
         settings_set.emplace_back(name, value);
+        return {};
+    }
+    std::string PressBind(std::string_view bind) override {
+        if (bind == "bind_nothing") return "no key bind bind_nothing";
+        binds_pressed.emplace_back(bind);
         return {};
     }
     std::string NativeViewOn(uint32_t width, uint32_t height, bool sized, bool post) override {
@@ -671,6 +677,19 @@ TEST_CASE("set passes the setting on, keeping spaces in the value") {
     CHECK_FALSE(Ok(reply));
     CHECK(Has(reply, "isn't a Band3 setting"));
     CHECK_FALSE(Ok(RunCommand("set autoplay", game)));
+}
+
+TEST_CASE("bind presses a key bind, with or without its bind_ prefix") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("bind instrument_lab", game)));
+    CHECK(Ok(RunCommand("bind bind_settings", game)));
+    CHECK(game.binds_pressed == std::vector<std::string>{"bind_instrument_lab", "bind_settings"});
+
+    const std::string reply = RunCommand("bind nothing", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(Has(reply, "no key bind bind_nothing"));
+    CHECK_FALSE(Ok(RunCommand("bind", game)));
+    CHECK_FALSE(Ok(RunCommand("p2 bind settings", game)));
 }
 
 TEST_CASE("pad reports what the game reads from a player") {

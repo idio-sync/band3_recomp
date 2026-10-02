@@ -571,6 +571,16 @@ std::string Set(TestTarget& target, std::string_view line,
     return Ok();
 }
 
+// bind <name>: presses a key bind's key, e.g. `bind instrument_lab` for F6;
+// the bind_ prefix is optional
+std::string Bind(TestTarget& target, const std::vector<std::string_view>& args) {
+    if (args.size() != 2) return Error(target, "usage: bind <name>, e.g. bind instrument_lab");
+    std::string bind(args[1]);
+    if (!bind.starts_with("bind_")) bind = "bind_" + bind;
+    if (std::string error = target.PressBind(bind); !error.empty()) return Error(target, error);
+    return Ok();
+}
+
 }
 
 std::variant<Condition, std::string> ParseCondition(std::string_view text) {
@@ -686,6 +696,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "screenshot") return Screenshot(target, args);
     if (verb == "capture") return Capture(target, args);
     if (verb == "set") return Set(target, line, args);
+    if (verb == "bind") return Bind(target, args);
     if (verb == "native_view") return NativeView(target, args);
     if (verb == "quit") {
         target.Quit();
