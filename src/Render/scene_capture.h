@@ -307,7 +307,8 @@ struct DrawItem {
     // A DxRnd::DrawRect quad: its ShaderType (6 colour fills, 3 mip
     // downsample, 1 blur, 4 DOF, 11 movie, 16 the post copy...), -1 for a mesh
     // draw. Its geometry is the quad in clip space (z 0, w 1, uv 0..1 from the
-    // top left, the vertex colour DrawRect gives it) with world and view_proj
+    // top left through the material's texture transform as DrawRect applies
+    // it, the vertex colour DrawRect gives it) with world and view_proj
     // identity, and rect the rectangle in the target's pixels (x, y, w, h).
     int32_t rect_shader = -1;
     float rect[4] = {};

@@ -26,7 +26,8 @@
 // every draw: its mesh, sizes, material and where it lands on screen, and what
 // its shader was given (option word, shade, ambient c1, the box map's sum,
 // point lights in the option word / with a colour); a draw into a texture or a
-// DrawRect quad says so. --shade prints all of one draw's ShadeState. A
+// DrawRect quad says so (with its corners' uv, where the material's texture
+// transform moved them off 0..1). --shade prints all of one draw's ShadeState. A
 // capture with shades also gets a summary of them.
 // The texture passes the frame samples are drawn as the native view draws
 // them (soft_raster.h), each into a target of its own; a render target no
@@ -1068,6 +1069,14 @@ int main(int argc, char** argv) {
                 if (d.rect_shader >= 0)
                     std::printf("rect shader %d [%.1f %.1f %.1f %.1f] ", d.rect_shader, d.rect[0],
                                 d.rect[1], d.rect[2], d.rect[3]);
+                // its corners' uv where the material's texture transform
+                // moved them off 0..1 (top left, then bottom right)
+                if (d.rect_shader >= 0 && d.geom && d.geom->verts.size() == 4) {
+                    const float* a = d.geom->verts[0].uv;
+                    const float* b = d.geom->verts[2].uv;
+                    if (a[0] != 0 || a[1] != 0 || b[0] != 1 || b[1] != 1)
+                        std::printf("uv %.3f,%.3f..%.3f,%.3f ", a[0], a[1], b[0], b[1]);
+                }
                 if (d.mip_level) std::printf("mip %d ", d.mip_level);
                 if (d.draw_mode) std::printf("draw mode %u ", unsigned(d.draw_mode));
                 std::printf("\n");

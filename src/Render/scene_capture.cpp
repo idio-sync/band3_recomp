@@ -81,6 +81,9 @@ constexpr uint32_t kPackedVert_Size = 36;
 constexpr uint32_t kMat_Blend = 0x28;
 constexpr uint32_t kMat_Color = 0x2c;
 constexpr uint32_t kMat_ZMode = 0x3c;
+constexpr uint32_t kMat_TexGen = 0x44;
+constexpr uint32_t kMat_TexXfm = 0x4c;  // Transform: Matrix3 rows of 16 bytes, then v at +0x30
+constexpr uint32_t kTexGenXfmOrigin = 4;
 constexpr uint32_t kMat_DiffuseTex = 0x8c + 8;
 constexpr uint32_t kMat_Intensify = 0x98;
 constexpr uint32_t kMat_UseEnviron = 0x99;
@@ -1199,8 +1202,12 @@ void CaptureParticles(uint8_t* base, uint32_t sys) {
 // ...) (band3_recomp.31.cpp; out/research/m3_survey.md 3): a quad over the
 // rect (x, y, w, h in the bound target's pixels), coloured by the material's
 // colour unless it's prelit or there's none, else by `color`. The second and
-// third colours DrawRect can take for a gradient aren't kept, nor the
-// material's texture transform (uv stays 0..1).
+// third colours DrawRect can take for a gradient aren't kept. Its uv is 0..1
+// from the top left, through the material's texture transform when its tex
+// gen is kTexGenXfmOrigin, as DrawRect works it out on the CPU (rb3-xenon
+// rnddx9/Rnd.cpp): u' = m.x.x u - m.y.x v + v.x, v' = m.y.y v - m.x.y u + v.y,
+// MakeTex3's matrix about the origin. The shader's texgen (VS c20/c21, which
+// the shade state keeps) transforms it again, as the game's VS does.
 void CaptureRect(uint8_t* base, uint32_t rnd, uint32_t rect_ptr, uint32_t mat, int32_t shader,
                  uint32_t color_ptr) {
     State& s = S();
@@ -1234,6 +1241,17 @@ void CaptureRect(uint8_t* base, uint32_t rnd, uint32_t rect_ptr, uint32_t mat, i
     uint32_t rgba = 0;
     for (int i = 0; i < 4; i++)
         rgba |= uint32_t(std::clamp(col[i], 0.0f, 1.0f) * 255.0f + 0.5f) << (8 * i);
+    // the texture transform's rows x and y and its translation, identity
+    // without one
+    float xx = 1, xy = 0, yx = 0, yy = 1, tx = 0, ty = 0;
+    if (mat && g.U32(mat + kMat_TexGen) == kTexGenXfmOrigin) {
+        xx = g.F32(mat + kMat_TexXfm + 0x00);
+        xy = g.F32(mat + kMat_TexXfm + 0x04);
+        yx = g.F32(mat + kMat_TexXfm + 0x10);
+        yy = g.F32(mat + kMat_TexXfm + 0x14);
+        tx = g.F32(mat + kMat_TexXfm + 0x30);
+        ty = g.F32(mat + kMat_TexXfm + 0x34);
+    }
     auto geom = std::make_shared<Geometry>();
     const float corner[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
     for (const auto& c : corner) {
@@ -1241,8 +1259,8 @@ void CaptureRect(uint8_t* base, uint32_t rnd, uint32_t rect_ptr, uint32_t mat, i
         v.pos[0] = (r[0] + c[0] * r[2]) / tw * 2.0f - 1.0f;
         v.pos[1] = 1.0f - (r[1] + c[1] * r[3]) / th * 2.0f;
         v.nrm[2] = -1.0f;
-        v.uv[0] = c[0];
-        v.uv[1] = c[1];
+        v.uv[0] = xx * c[0] - yx * c[1] + tx;
+        v.uv[1] = yy * c[1] - xy * c[0] + ty;
         v.color = rgba;
         geom->verts.push_back(v);
     }
