@@ -214,8 +214,8 @@ inline constexpr int kPerPixel = 0, kSpecularMap = 1, kSpecular = 2, kEnvironMap
                      kNormDetail = 24, kBillboard = 25, kFadeOut = 26, kNumProj = 28,
                      kCustomVariation = 30, kColorMod = 32, kRimLight = 37, kEnableAO = 38, kToneMapping = 39,
                      kNumPoint = 40, kEnvironMapFalloff = 43, kProjLightMultiply = 44,
-                     kSoftParticles = 45, kPointCubeTex = 48, kEnvironMapSpecMask = 49,
-                     kIntensify = 53;
+                     kSoftParticles = 45, kRefractWorld = 46, kPointCubeTex = 48,
+                     kEnvironMapSpecMask = 49, kIntensify = 53;
 }  // namespace shader_opt
 
 // What a draw's shader was given, read from the D3D device's constant shadow
@@ -231,7 +231,8 @@ struct ShadeInputs {
     float eye[3];   // the camera's world position (WorldXfm translation)
     float vs[kNumShadeRegs][4];
     float ps[kNumShadeRegs][4];
-    // the pass's material (rb3-xenon rndobj/BaseMaterial.h)
+    // the pass's material (rb3-xenon rndobj/BaseMaterial.h); kDefaultMaterial
+    // for a mesh's pass without one (NoMaterial)
     uint32_t mat;
     // +0xac: the material of the pass after it, which is a draw of its own
     // (the next one, in captures since passes were; before, the pass after
@@ -404,6 +405,17 @@ inline constexpr uint32_t kTexTypeDensityMap = 0x122;
 inline constexpr int32_t kDepthVolumeShader = 2;
 inline bool IsSpotCone(const DrawItem& d, const ShadeInputs* s) {
     return s && s->shader_type == kDepthVolumeShader && d.rect_shader < 0;
+}
+
+// A mesh's material pass without a material (RndShader::SelectConfig(null):
+// a mesh with none), which RB3 draws with TheRnd's default material (white,
+// prelit, unlit, opaque; every RndShader's Select takes it for null): kept
+// with that material's colour, blend and constants, its shade state's mat
+// kDefaultMaterial (scene_capture.cpp's MeshParts). Captures from before kept
+// none.
+inline constexpr uint32_t kDefaultMaterial = 0xffffffffu;
+inline bool NoMaterial(const DrawItem& d, const ShadeInputs* s) {
+    return s && s->mat == kDefaultMaterial && d.rect_shader < 0;
 }
 
 // A soft particle: RndSoftParticleBuffer::DoPost draws the particle systems
@@ -594,7 +606,9 @@ struct FrameCapture {
     // material passes: a mesh's second pass or a later one (RndMat::NextPass;
     // a multimesh's counted once for all its instances), and passes drawn
     // with no material (RndShader::SelectConfig(null): a mesh without one),
-    // left out and counted in skipped_no_geom too, the spotlights' cones apart
+    // the spotlights' cones apart: kept, with TheRnd's default material
+    // (NoMaterial), where they have geometry (in captures from before, left
+    // out and counted in skipped_no_geom too)
     uint32_t later_passes = 0;
     uint32_t skipped_no_mat = 0;
     // DxMesh::DrawFaces calls outside a DxMesh::DrawShowing, not recorded:

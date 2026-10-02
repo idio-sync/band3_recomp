@@ -7,6 +7,7 @@
 //                               [--dump-rt <hex>[:<version>]]
 //                               [--rt-none | --rt-guest]
 //                               [--no-tex] [--no-blend] [--no-cull] [--no-shadow] [--no-normal]
+//                               [--no-default-mat]
 //                               [--no-depth-clear]
 //                               [--nearest]
 //                               [--transpose]
@@ -79,7 +80,9 @@
 // cull modes and options. --no-normal shades every normal-mapped material
 // with its vertex normal, leaving its normal map and detail map out
 // (RasterOptions::normal_maps), as captures from before the tangents were
-// kept are drawn. --nearest reads every texture nearest at level 0, as the
+// kept are drawn. --no-default-mat leaves out the passes RB3 draws without a
+// material, with its default one (scene_capture.h's NoMaterial;
+// RasterOptions::default_material), as captures from before kept none. --nearest reads every texture nearest at level 0, as the
 // native view did before it sampled them as the game's samplers do
 // (RasterOptions::filtering; captures from before the samplers were kept
 // draw so either way); --shade prints each texture's sampler and its levels.
@@ -561,9 +564,13 @@ void PrintPassSummary(const FrameCapture& fc) {
                 "skipped_target %u\n",
                 fc.skipped_shadow, fc.skipped_velocity, fc.skipped_draw_mode, fc.skipped_no_geom,
                 fc.skipped_target);
-    std::printf("material passes: after a mesh's first %u, without a material %u (left out, "
-                "in skipped_no_geom too); DrawFaces outside a DrawShowing %u\n",
-                fc.later_passes, fc.skipped_no_mat, fc.faces_elsewhere);
+    uint32_t no_mat = 0;
+    for (const DrawItem& d : fc.draws)
+        no_mat += NoMaterial(d, d.shade >= 0 ? &fc.shades[size_t(d.shade)] : nullptr);
+    std::printf("material passes: after a mesh's first %u, without a material %u (%u of them "
+                "kept, with the default material; the rest in skipped_no_geom too); DrawFaces "
+                "outside a DrawShowing %u\n",
+                fc.later_passes, fc.skipped_no_mat, no_mat, fc.faces_elsewhere);
     // the render targets draws sample that no pass here made
     std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, size_t>> missing;
     for (const DrawItem& d : fc.draws) {
@@ -1020,6 +1027,7 @@ int main(int argc, char** argv) {
         else if (a == "--no-depth-clear") o.clear_depth_per_camera = false;
         else if (a == "--no-shadow") o.self_shadow = false;
         else if (a == "--no-normal") o.normal_maps = false;
+        else if (a == "--no-default-mat") o.default_material = false;
         else if (a == "--nearest") o.filtering = false;
         else if (a == "--no-tex") o.textures = false;
         else if (a == "--legacy-light") o.legacy_light = true;

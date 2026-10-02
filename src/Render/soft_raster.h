@@ -140,7 +140,20 @@ struct RasterOptions {
     // the characters' shadow maps (512x512) drawn at this times their size,
     // their taps a texel of that apart (sharper self-shadows); 1 is the game's
     float shadow_scale = 1.0f;
+    // the passes RB3 draws without a material, with TheRnd's default one
+    // (scene_capture.h's NoMaterial); off, they're left out, as the
+    // renderers did before the capture kept them
+    bool default_material = true;
 };
+
+// whether the renderers draw d, as far as the options say
+// (RasterOptions::default_material)
+inline bool DrawnByOptions(const FrameCapture& f, const DrawItem& d, const RasterOptions& o) {
+    if (o.default_material) return true;
+    const ShadeInputs* s =
+        d.shade >= 0 && size_t(d.shade) < f.shades.size() ? &f.shades[d.shade] : nullptr;
+    return !NoMaterial(d, s);
+}
 
 struct RasterStats {
     uint32_t draws = 0;
@@ -320,12 +333,14 @@ inline bool WritesSceneAlpha(const ShadeState* s) {
     return s && (s->Option(shader_opt::kPseudoHdr) || s->alpha_write);
 }
 
-// Whether a draw's shader is REFRACT_WORLD (option bit 46, which shader_opt
-// doesn't name; the score box's glass): its texture times the picture behind
-// it. Drawn over the overlay, that's DxRnd::GetCurrentFrameTex's
+// Whether a draw's shader is REFRACT_WORLD (option bit 46; the score box's
+// glass): its texture times the picture behind it, where its refract normal
+// map moves it (shade.hlsli's RefractUv). Drawn over the overlay, that's DxRnd::GetCurrentFrameTex's
 // PostProcessTexture, the picture as DoPostProcess left it (SavePostBuffer)
 // before the overlay's draws, which the renderers keep a copy of for it.
-inline bool RefractsWorld(const ShadeState* s) { return s && ((s->options >> 46) & 1); }
+inline bool RefractsWorld(const ShadeState* s) {
+    return s && s->Option(shader_opt::kRefractWorld);
+}
 
 // the renderers' depth, kNearW / w (w the clip w, larger is nearer, 0 where
 // nothing drew), as RasterView::kSceneDepth shows it: grey falling off with

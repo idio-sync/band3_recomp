@@ -204,8 +204,10 @@ bool Skinned(const DrawItem& it, const RasterOptions& o) {
 }
 
 // whether a draw of `run` is drawn (soft_raster.h's PassRun)
-bool DrawnIn(const PassRun& run, const DrawItem& it) {
-    return (run.pass ? DrawnInTexturePass(it) : DrawnToBackBuffer(it)) && Drawable(it);
+bool DrawnIn(const PassRun& run, const FrameCapture& frame, const DrawItem& it,
+             const RasterOptions& o) {
+    return (run.pass ? DrawnInTexturePass(it) : DrawnToBackBuffer(it)) && Drawable(it) &&
+           DrawnByOptions(frame, it, o);
 }
 
 // soft_raster.cpp's depth rules for a draw, which pick its pipeline
@@ -1690,7 +1692,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         for (size_t d = run.first; d < run.end; d++) {
             const DrawItem& it = frame.draws[d];
-            if (!DrawnIn(run, it)) continue;
+            if (!DrawnIn(run, frame, it, o)) continue;
             const ShadeState* state = shade::ShadeOf(frame, it);
             // the depth volume's blurs read a copy of it, not its quad's
             // texture (so they don't count as sampling a target nothing drew);
@@ -1772,9 +1774,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             // the normal map and the detail map, as soft_raster.cpp's
             // NormalMap() has them: one RB3 draws (a head's) is its pass's
             // target if one has drawn it, else guest pixels if kept and
-            // wanted, else it's left out (counted)
+            // wanted, else it's left out (counted). REFRACT_WORLD's refract
+            // normal map is s1 too, in the normal map's slot.
+            constexpr uint32_t kNormalSlotBits =
+                shade::kShadeNormalMap | shade::kShadeRefractMap;
             for (int k = 0; k < 2; k++) {
-                const uint32_t bit = k ? shade::kShadeDetailMap : shade::kShadeNormalMap;
+                const uint32_t bit = k ? shade::kShadeDetailMap : kNormalSlotBits;
                 if (!(flags & bit)) continue;
                 const int m = k ? kMapDetailNormal : kMapNormal;
                 const Texture* map = MapTargetOf(state, m);
@@ -1795,7 +1800,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     UseTexture(state->maps[m]);
                 } else {
                     flags &= k ? ~shade::kShadeDetailMap
-                               : ~(shade::kShadeNormalMap | shade::kShadeDetailMap);
+                               : ~(kNormalSlotBits | shade::kShadeDetailMap);
                     if (o.texture_passes) st.rt_missing++;
                     if (!k) break;
                 }
@@ -2343,7 +2348,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             tex[kSlotGlow] = layer_of(state->maps[kMapGlow].get());
             if (!tex[kSlotGlow].texture) sp.flags.x &= ~shade::kShadeGlow;
         }
-        if (sp.flags.x & shade::kShadeNormalMap) {
+        if (sp.flags.x & (shade::kShadeNormalMap | shade::kShadeRefractMap)) {
             auto map_of = [&](int k) {
                 const int m = k ? kMapDetailNormal : kMapNormal;
                 if (normal_source[k][d] != kSourceRt) return layer_of(state->maps[m].get());
@@ -2354,7 +2359,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             if (sp.flags.x & shade::kShadeDetailMap) tex[kSlotDetail] = map_of(1);
             if (!tex[kSlotDetail].texture) sp.flags.x &= ~shade::kShadeDetailMap;
             if (!tex[kSlotNormal].texture)
-                sp.flags.x &= ~(shade::kShadeNormalMap | shade::kShadeDetailMap);
+                sp.flags.x &= ~(shade::kShadeNormalMap | shade::kShadeDetailMap |
+                                shade::kShadeRefractMap);
         }
         // the shadow map's target, as its pass left it (the plan kept the
         // flag only where that's the version the draw reads)
@@ -2382,7 +2388,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             if (resolved && refracts && alpha != AlphaMode::kTexture)
                 tex[kSlotBehind] = {behind, 0, width, height};
             else
-                sp.flags.x &= ~shade::kShadeRefract;
+                sp.flags.x &= ~(shade::kShadeRefract | shade::kShadeRefractMap);
         }
         for (int s = 0; s < kNumSlots; s++) {
             // behind's and the shadow map's bindings are plain 2D textures;
@@ -2523,7 +2529,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     }
                     last_cam = it.cam;
                 }
-                if (!Drawable(it)) {
+                if (!Drawable(it) || !DrawnByOptions(frame, it, o)) {
                     st.skipped++;
                     continue;
                 }
@@ -2588,7 +2594,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         begin_rt(true);
         for (size_t d = run.first; d < run.end; d++) {
             const DrawItem& it = frame.draws[d];
-            if (!DrawnIn(run, it)) continue;
+            if (!DrawnIn(run, frame, it, o)) continue;
             if (spot_draw[d] == kSpotConeSkipped) {
                 st.skipped++;
                 continue;

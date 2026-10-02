@@ -13,6 +13,7 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <condition_variable>
 #include <functional>
@@ -144,6 +145,9 @@ constexpr uint32_t kRnd_ProcCmds = 0x16c;
 // its clear colour, four floats r g b a, which DxRnd::BeginDrawing clears the
 // back buffer to (out/research/n1_runtime_survey.md 3)
 constexpr uint32_t kRnd_ClearColor = 0x2c;
+// its default material (mDefaultMat, rndobj/Rnd.h: white, prelit, unlit),
+// which RndShader's Select draws a pass without a material with
+constexpr uint32_t kRnd_DefaultMat = 0x94;
 // XDK D3D resources (rb3-xenon xdk/d3d9i/d3d9.h)
 constexpr uint32_t kD3DVertexBuffer_Fetch = 0x18;
 constexpr uint32_t kD3DIndexBuffer_Address = 0x18;
@@ -490,6 +494,10 @@ struct State {
     std::shared_ptr<const Texture> noise_map;
     TexSampler noise_sampler;
     uint32_t noise_base = 0;
+    // the frame's draws logged so far (DiagLog): passes without a material,
+    // DrawFaces outside a DrawShowing
+    uint32_t logged_no_mat = 0;
+    uint32_t logged_elsewhere = 0;
 };
 
 State& S() {
@@ -973,10 +981,14 @@ int32_t InternShade(FrameCapture& fc, ShadeIndex& index, ShadeState&& shade, Fil
 // DrawFaces (and a multimesh's before the next pass's SelectConfig). The spotlight
 // drawer's registers are kept for its cones (ShaderType 2) and, `blur`, a
 // DrawRect blur's taps, c89 (the camera's depth range) for a soft particle,
-// and zeroed for the rest. `mat` 0 for a draw without a material (a cone).
+// and zeroed for the rest. `mat` 0 for a draw without a material (a cone);
+// `default_mat` for a mesh's pass without one, drawn with TheRnd's default
+// material (`mat`), which ShadeInputs::mat then has as kDefaultMaterial
+// (NoMaterial).
 // The index of an equal state already in the sink, or of a new one; -1
 // without a device.
-int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool blur = false) {
+int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool blur = false,
+                     bool default_mat = false) {
     FrameCapture& fc = sink.fc;
     const uint32_t dev = g.U32(kD3DDeviceHolder);
     if (!dev) return -1;
@@ -1002,7 +1014,7 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
             std::memset(in.ps[r], 0, sizeof(in.ps[r]));
         }
     }
-    in.mat = mat;
+    in.mat = default_mat ? kDefaultMaterial : mat;
     if (mat) {
         in.next_pass = g.U32(mat + kMat_NextPass);
         in.use_environ = g.U8(mat + kMat_UseEnviron);
@@ -1018,6 +1030,10 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
     // the movie's shader samples its three planes whatever the option word
     // (0): Y s0, cR s2, cB s3 (IsMovie)
     const bool movie = in.shader_type == kMovieShader;
+    // REFRACT_WORLD's samples s1 too, its material's refract normal map
+    // (NgMat::SetupShader binds it with c119 for the shader, which moves
+    // where it reads the picture behind by it), whatever NORMAL_MAP says
+    const bool refract = in.Option(shader_opt::kRefractWorld);
     if (in.Option(shader_opt::kDiffuseMap) || movie) fetch(0, in.fetch_diffuse);
     for (int m = 0; m < kNumShadeMaps; m++) {
         if (kMat_Map[m] && mat) {
@@ -1025,7 +1041,8 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
             // RndCubeTex isn't a DxTex
             if (m != kMapEnviron) in.mat_map_base[m] = TexBase(g, in.mat_maps[m]);
         }
-        if (MapSampled(in, m) || (movie && (m == kMapSpecular || m == kMapGlow)))
+        if (MapSampled(in, m) || (movie && (m == kMapSpecular || m == kMapGlow)) ||
+            (refract && m == kMapNormal))
             fetch(kShadeMapSampler[m], in.fetch[m]);
     }
 
@@ -1057,10 +1074,11 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
 // a draw of `geometry` with material `mat`, for the current camera;
 // sample_texture false leaves its diffuse texture out (a mip downsample's,
 // which is the texture it's drawing); blur: a DrawRect blur, whose taps its
-// shade state keeps
+// shade state keeps; default_mat: `mat` is TheRnd's default, for a mesh's
+// pass without a material (CaptureShade)
 DrawItem MakeItem(const Guest& g, State& s, Sink& sink, uint32_t mat, uint32_t owner,
                   std::shared_ptr<const Geometry> geometry, bool sample_texture = true,
-                  bool blur = false) {
+                  bool blur = false, bool default_mat = false) {
     DrawItem item;
     item.geom = std::move(geometry);
     item.world = Identity();
@@ -1078,7 +1096,7 @@ DrawItem MakeItem(const Guest& g, State& s, Sink& sink, uint32_t mat, uint32_t o
     const uint32_t tex = g.U32(mat + kMat_DiffuseTex);
     if (tex && sample_texture && sink.draw_mode != kDrawModeShadowDepth)
         item.tex = CaptureTexture(g, s, sink, tex);
-    item.shade = CaptureShade(g, s, sink, mat, blur);
+    item.shade = CaptureShade(g, s, sink, mat, blur, default_mat);
     return item;
 }
 
@@ -1091,12 +1109,20 @@ uint8_t CaptureCull(const Guest& g) {
 }
 
 // the mesh's geometry for a pass with material `mat`, or false (and counted)
-// if it draws nothing: no material (left out for now), fur, or no geometry
-bool MeshParts(const Guest& g, FrameCapture& fc, uint32_t mesh, uint32_t mat,
-               std::shared_ptr<const Geometry>& geometry) {
+// if it draws nothing: fur, or no geometry. A pass without a material
+// (RndShader::SelectConfig(null), a mesh without one) draws with TheRnd's
+// default material (every RndShader's Select takes it for null): `mat`
+// becomes that one, and `default_mat` says so (counted, skipped_no_mat).
+bool MeshParts(const Guest& g, FrameCapture& fc, uint32_t mesh, uint32_t& mat,
+               bool& default_mat, std::shared_ptr<const Geometry>& geometry) {
     uint32_t geom = g.U32(mesh + kMesh_GeomOwner);
     if (!geom) geom = mesh;
-    if (!mat) fc.skipped_no_mat++;
+    default_mat = !mat;
+    if (!mat) {
+        fc.skipped_no_mat++;
+        const uint32_t rnd = g.U32(kDrawModeHolder);
+        mat = rnd ? g.U32(rnd + kRnd_DefaultMat) : 0;
+    }
     if (!mat || g.U32(mat + kMat_Fur)) {
         fc.skipped_no_geom++;
         return false;
@@ -1149,11 +1175,99 @@ void CaptureSpotCone(const Guest& g, State& s, Sink& sink, uint32_t mesh) {
     PushDraw(s, sink, std::move(item));
 }
 
+std::string ReadName(const Guest& g, uint32_t p);
+
+// With BAND3_NATIVE_VIEW_LOG_DRAWS set, the first 32 of each captured
+// frame's draws of a kind (`logged`, State's) are logged: the passes drawn
+// without a material, and DxMesh::DrawFaces outside a DrawShowing (which are
+// logged without it too, the session's first 8)
+bool DiagLog(uint32_t& logged) {
+    static const bool on = std::getenv("BAND3_NATIVE_VIEW_LOG_DRAWS") != nullptr;
+    if (!on || !g_enabled.load(std::memory_order_relaxed) || logged >= 32) return false;
+    logged++;
+    return true;
+}
+
+// The name of an object whose Hmx::Object is a virtual base (a RndMesh's,
+// under RndDrawable's and RndTransformable's RndHighlightable), for the logs:
+// the vbtable its vbptr (+4) points at has the virtual bases' offsets from
+// the vbptr, and Hmx::Object's mName is at its +0x18; the first entry that
+// gives a printable name
+std::string VirtualBaseName(const Guest& g, uint32_t obj) {
+    const uint32_t table = obj ? g.U32(obj + 4) : 0;
+    if (table < 0x82000000u || table >= 0x84000000u) return {};
+    for (int k = 1; k <= 3; k++) {
+        const int32_t off = int32_t(g.U32(table + 4 * k));
+        if (off <= 0 || off > 0x1000) continue;
+        const std::string name = ReadName(g, g.U32(obj + 4 + uint32_t(off) + kObj_Name));
+        if (!name.empty() && std::all_of(name.begin(), name.end(),
+                                         [](char c) { return c >= 0x20 && c < 0x7f; }))
+            return name;
+    }
+    return {};
+}
+
+// a pass without a material (MeshParts' default_mat) logged: the mesh, its
+// geometry, where it is and where its vertices land on the screen
+void LogNoMaterial(const Guest& g, const State& s, const Sink& sink, const DrawItem& it,
+                   const char* kind) {
+    const Geometry& geom = *it.geom;
+    float lo[2] = {1e30f, 1e30f}, hi[2] = {-1e30f, -1e30f};
+    uint32_t front = 0, colors = 0;
+    for (const Vertex& v : geom.verts) {
+        const Mat4& w = it.bones.empty() ? it.world
+                                         : it.bones[v.bone[0] < it.bones.size() ? v.bone[0] : 0];
+        float p[3], c[4];
+        for (int i = 0; i < 3; i++)
+            p[i] = v.pos[0] * w.m[0][i] + v.pos[1] * w.m[1][i] + v.pos[2] * w.m[2][i] + w.m[3][i];
+        for (int i = 0; i < 4; i++)
+            c[i] = p[0] * it.view_proj.m[0][i] + p[1] * it.view_proj.m[1][i] +
+                   p[2] * it.view_proj.m[2][i] + it.view_proj.m[3][i];
+        colors |= v.color ^ geom.verts[0].color;
+        if (c[3] <= 1e-3f) continue;
+        front++;
+        for (int i = 0; i < 2; i++) {
+            lo[i] = std::min(lo[i], c[i] / c[3]);
+            hi[i] = std::max(hi[i], c[i] / c[3]);
+        }
+    }
+    REXLOG_INFO("native view: {} without a material: mesh {:08X} '{}', {} verts {} tris{}, "
+                "colour {:08X}{}, at ({:.1f} {:.1f} {:.1f}), on screen x {:.2f}..{:.2f} y "
+                "{:.2f}..{:.2f} ({} verts in front), into {:08X} ({}), camera {:08X}{}, draw "
+                "mode {}, options {:016X} type {}, frame {}",
+                kind, it.mesh, VirtualBaseName(g, it.mesh), geom.verts.size(),
+                geom.indices.size() / 3, it.bones.empty() ? "" : " skinned",
+                geom.verts.empty() ? 0u : geom.verts[0].color, colors ? " (varies)" : "",
+                it.world.m[3][0], it.world.m[3][1], it.world.m[3][2], lo[0], hi[0], lo[1], hi[1],
+                front, sink.target,
+                s.open.tex && s.open.rec ? s.open.rec->pass.name : std::string(), s.cam,
+                s.cam_backbuffer ? " (back buffer)" : "", int(sink.draw_mode), g_shader_options,
+                g_shader_type, s.game_frame);
+}
+
+// a mesh without a material that drew nothing logged: `drawn` false for a
+// DrawShowing that drew no pass (DxMesh::CanDraw: no buffers, not mutable),
+// true for a pass whose geometry the capture couldn't have
+void LogNoMaterialNotDrawn(const Guest& g, const State& s, uint32_t mesh, bool drawn) {
+    uint32_t geom = g.U32(mesh + kMesh_GeomOwner);
+    if (!geom) geom = mesh;
+    const uint32_t faces = g.U32(geom + kMesh_Faces), faces_end = g.U32(geom + kMesh_Faces + 4);
+    REXLOG_INFO("native view: a mesh without a material {}: mesh {:08X} '{}', geometry {:08X} "
+                "'{}' with {} verts {} faces, mutable {}, camera {:08X}{}, frame {}",
+                drawn ? "drew a pass the capture has no geometry for" : "drew no pass", mesh,
+                VirtualBaseName(g, mesh), geom, VirtualBaseName(g, geom),
+                g.U32(geom + kMesh_Verts + 4), (faces_end - faces) / 6,
+                g.U32(geom + kMesh_Mutable), s.cam, s.cam_backbuffer ? " (back buffer)" : "",
+                s.game_frame);
+}
+
 // One material pass of DxMesh::DrawShowing (rb3-xenon rnddx9/Mesh.cpp), which
 // draws the mesh's faces once per pass: RndShader::SelectConfig(mat) then
 // DrawFaces, for its material and each NextPass after it (0 for the first:
-// pass counts them). `mat` is the pass's, null for a mesh without one.
-void CaptureMesh(uint8_t* base, uint32_t mesh, uint32_t mat, uint32_t pass) {
+// pass counts them). `mat` is the pass's, null for a mesh without one;
+// `drawn` false for a DrawShowing that drew no pass, recorded for what it
+// counts.
+void CaptureMesh(uint8_t* base, uint32_t mesh, uint32_t mat, uint32_t pass, bool drawn = true) {
     State& s = S();
     const Guest g{base};
     std::optional<Sink> sink;
@@ -1164,10 +1278,15 @@ void CaptureMesh(uint8_t* base, uint32_t mesh, uint32_t mat, uint32_t pass) {
         return;
     }
     std::shared_ptr<const Geometry> geometry;
-    if (!MeshParts(g, sink->fc, mesh, mat, geometry)) return;
+    bool default_mat = false;
+    if (!MeshParts(g, sink->fc, mesh, mat, default_mat, geometry)) {
+        if (default_mat && DiagLog(s.logged_no_mat)) LogNoMaterialNotDrawn(g, s, mesh, drawn);
+        return;
+    }
     if (pass) sink->fc.later_passes++;
 
-    DrawItem item = MakeItem(g, s, *sink, mat, mesh, std::move(geometry));
+    DrawItem item =
+        MakeItem(g, s, *sink, mat, mesh, std::move(geometry), true, false, default_mat);
     item.world = ReadXfm(g, mesh + kMesh_WorldXfm);
     item.cull = CaptureCull(g);
     const uint32_t bones = g.U32(mesh + kMesh_BonesBegin);
@@ -1183,6 +1302,8 @@ void CaptureMesh(uint8_t* base, uint32_t mesh, uint32_t mat, uint32_t pass) {
                                   : Identity();
         }
     }
+    if (default_mat && DiagLog(s.logged_no_mat))
+        LogNoMaterial(g, s, *sink, item, "a mesh's pass");
     PushDraw(s, *sink, std::move(item));
 }
 
@@ -1198,11 +1319,15 @@ void CaptureMultiMesh(uint8_t* base, uint32_t multimesh, uint32_t mat, uint32_t 
     std::optional<Sink> sink;
     if (!mesh || !Target(g, s, sink)) return;
     std::shared_ptr<const Geometry> geometry;
-    if (!MeshParts(g, sink->fc, mesh, mat, geometry)) return;
+    bool default_mat = false;
+    if (!MeshParts(g, sink->fc, mesh, mat, default_mat, geometry)) return;
     if (pass) sink->fc.later_passes++;
 
-    DrawItem proto = MakeItem(g, s, *sink, mat, mesh, std::move(geometry));
+    DrawItem proto =
+        MakeItem(g, s, *sink, mat, mesh, std::move(geometry), true, false, default_mat);
     proto.cull = CaptureCull(g);
+    if (default_mat && DiagLog(s.logged_no_mat))
+        LogNoMaterial(g, s, *sink, proto, "a multimesh's pass");
     // std::list with its sentinel node inline: next at +0, the Instance at +8
     const uint32_t head = multimesh + kMultiMesh_Instances;
     uint32_t n = 0;
@@ -1233,13 +1358,13 @@ void CountFacesElsewhere(const Guest& g, uint32_t geom) {
     }
     if (fc) fc->faces_elsewhere++;
     static int logged = 0;
-    if (logged < 8) {
+    if (logged < 8 || DiagLog(s.logged_elsewhere)) {
         logged++;
-        REXLOG_INFO("native view: DxMesh::DrawFaces of {:08X} outside a DrawShowing, material "
-                    "{:08X}, draw mode {}, into {:08X} ({}), camera {:08X}{}",
-                    geom, g_selected_mat, mode, s.open.tex,
+        REXLOG_INFO("native view: DxMesh::DrawFaces of {:08X} '{}' outside a DrawShowing, "
+                    "material {:08X}, draw mode {}, into {:08X} ({}), camera {:08X}{}, frame {}",
+                    geom, VirtualBaseName(g, geom), g_selected_mat, mode, s.open.tex,
                     s.open.tex && s.open.rec ? s.open.rec->pass.name : std::string(), s.cam,
-                    s.cam_backbuffer ? " (back buffer)" : "");
+                    s.cam_backbuffer ? " (back buffer)" : "", s.game_frame);
     }
 }
 
@@ -1986,6 +2111,7 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
         s.shades.clear();
         s.samples.clear();
         s.left_out.clear();
+        s.logged_no_mat = s.logged_elsewhere = 0;
         // nothing watches textures until capture or recording is on again, so
         // what's known of them would go stale (an address reused, say)
         if (!g_record_targets.load(std::memory_order_relaxed) && !s.rts.empty()) s.rts.clear();
@@ -2026,6 +2152,7 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
     s.shades.clear();
     s.samples.clear();
     s.left_out.clear();
+    s.logged_no_mat = s.logged_elsewhere = 0;
     s.cam_counted = false;
     // a venue change leaves stale entries behind; start over now and then
     if (s.geoms.size() > 50000) s.geoms.clear();
@@ -2175,7 +2302,7 @@ extern "C" REX_FUNC(DxMesh__DrawShowing) {
     if (passes || !Recording()) return;
     std::lock_guard lock(g_state_mutex);
     RecordTimer timer;
-    CaptureMesh(base, mesh, REX_LOAD_U32(mesh + kMesh_Mat), 0);
+    CaptureMesh(base, mesh, REX_LOAD_U32(mesh + kMesh_Mat), 0, false);
 }
 
 // DxMesh::DrawFaces (r3 the geometry owner): one material pass of the

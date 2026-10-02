@@ -120,6 +120,14 @@ void ProjUvCpu(const ShadeParams& sp, const float p[3], float out[2]) {
     out[1] = uv.y;
 }
 
+void RefractUvCpu(const ShadeParams& sp, const float clip[2], float w, const float map[4],
+                  float out[2]) {
+    const float2 uv =
+        RefractUv(sp, float2{clip[0], clip[1]}, w, float4{map[0], map[1], map[2], map[3]});
+    out[0] = uv.x;
+    out[1] = uv.y;
+}
+
 void ShadowCoordCpu(const ShadeParams& sp, const float p[3], float out[4]) {
     const float4 s = ShadowCoord(sp, float3{p[0], p[1], p[2]});
     out[0] = s.x;
@@ -302,8 +310,16 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     }
     if (s->Option(kIntensify)) f |= kShadeIntensify;
     // the backend takes it off where it has no picture to read (before the
-    // resolve, or into a texture)
-    if (RefractsWorld(s)) f |= kShadeRefract;
+    // resolve, or into a texture). Where it reads it moves by the refract
+    // normal map, s1, which NgMat::SetupShader binds with c119 (the strength,
+    // in all four) for this shader whatever the option word's NORMAL_MAP:
+    // where the capture decoded it (scene_capture.cpp keeps s1 for a
+    // REFRACT_WORLD draw), and the backend has it (as a normal map's).
+    if (RefractsWorld(s)) {
+        f |= kShadeRefract;
+        sp.refract = {s->Ps(119)[3], 0, 0, 0};
+        if (o.textures && s->maps[kMapNormal]) f |= kShadeRefractMap;
+    }
     // the luminance in alpha is for the back buffer's bloom: RB3's shaders
     // keep alpha into a texture ("not the main target", out/research/
     // m3_design.md 3), where it's the impostor's cut-out and a layer's blend

@@ -136,7 +136,7 @@ struct DrawState {
     TexView tex;
     TexView spec_map;  // none unless shade samples it
     TexView glow;
-    TexView normal;  // kShadeNormalMap's s1, and kShadeDetailMap's s14
+    TexView normal;  // kShadeNormalMap's s1 (kShadeRefractMap's), and kShadeDetailMap's s14
     TexView detail;
     TexView proj;  // the projected light's s5 and s10, likewise
     TexView gobo;
@@ -145,7 +145,10 @@ struct DrawState {
     uint32_t shadow_w = 0, shadow_h = 0;
     // into a shadow map (Target::zw): depth alone
     bool depth_only = false;
-    TexView behind;  // the target's behind, for kShadeRefract
+    // the target's behind, for kShadeRefract, and its viewport (x, y, w, h),
+    // from which a pixel's clip position is worked out (RefractUv)
+    TexView behind;
+    float view[4] = {};
     // the samplers tex, spec_map, glow, normal and detail are read with
     // (sample_model.h's PackSampler), and whether any of them is the game's,
     // which reads the uv's derivatives
@@ -288,8 +291,8 @@ void Read(const TexView& t, const uint32_t s[4], const float uv[2], const float 
         Texel(t, uv, out);
 }
 
-// pixel x, y's colour; the picture behind it is the one at x, y, the
-// target's size (mesh.hlsl reads it at SV_Position likewise); u and b the
+// pixel x, y's colour; the picture behind it is read where RefractUv puts
+// it, across the target (mesh.hlsl reads it likewise); u and b the
 // tangent and bitangent of a normal-mapped draw. With ds.lod, quad has the
 // uv at the pixels its derivatives are taken between, as the GPU's
 // ddx_fine and ddy_fine take them (RasterTri): the two of its 2x2 quad in
@@ -332,8 +335,17 @@ void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3
         }
     }
     if (ds.behind.px) {
-        const uint32_t c = ds.behind.px[size_t(y) * ds.behind.w + x];
-        for (int i = 0; i < 4; i++) behind[i] = float((c >> (8 * i)) & 0xff) / 255.0f;
+        // the clip position the game's pixel shader is given there (its x, y
+        // over w are where in the viewport the pixel samples), and where its
+        // refract normal map moves that, read bilinear and clamped
+        const float sx = (float(x) + ds.centre - ds.view[0]) / ds.view[2];
+        const float sy = (float(y) + ds.centre - ds.view[1]) / ds.view[3];
+        const float clip[2] = {(sx * 2 - 1) * depth, (1 - sy * 2) * depth};
+        float map[4] = {0.5f, 0.5f, 0, 1}, at[2];
+        if (ds.shade.flags.x & shade::kShadeRefractMap)
+            Read(ds.normal, ds.samp_normal, uv, d, map);
+        shade::RefractUvCpu(ds.shade, clip, depth, map, at);
+        SampleLinear(ds.behind, at[0], at[1], behind);
     }
     float proj[4] = {0, 0, 0, 0}, gobo[4] = {0, 0, 0, 0};
     if (ds.proj.px) {
@@ -700,6 +712,11 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
         if (!ds.detail.px) ds.shade.flags.x &= ~shade::kShadeDetailMap;
         if (!ds.normal.px) ds.shade.flags.x &= ~(shade::kShadeNormalMap | shade::kShadeDetailMap);
     }
+    // REFRACT_WORLD's refract normal map is s1 too, read as a normal map is
+    if (ds.shade.flags.x & shade::kShadeRefractMap) {
+        if (!ds.normal.px) ds.normal = NormalMap(state, kMapNormal, o, rts, t, st);
+        if (!ds.normal.px) ds.shade.flags.x &= ~shade::kShadeRefractMap;
+    }
     if (ds.shade.flags.x & (shade::kShadeProjMultiply | shade::kShadeProjGobo)) {
         ds.proj = Projected(state, o, rts, t, st);
         if (ds.shade.flags.x & shade::kShadeProjGobo)
@@ -746,10 +763,15 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     ds.normal_map = (ds.shade.flags.x & shade::kShadeNormalMap) != 0;
     // REFRACT_WORLD reads the picture behind it: in the picture, once resolved
     if (ds.shade.flags.x & shade::kShadeRefract) {
-        if (t.behind)
+        if (t.behind) {
             ds.behind = {t.w, t.h, t.behind};
-        else
-            ds.shade.flags.x &= ~shade::kShadeRefract;
+            ds.view[0] = t.vx;
+            ds.view[1] = t.vy;
+            ds.view[2] = t.vw;
+            ds.view[3] = t.vh;
+        } else {
+            ds.shade.flags.x &= ~(shade::kShadeRefract | shade::kShadeRefractMap);
+        }
     }
     const bool ao_sh = (ds.shade.flags.x & shade::kShadeAoSh) != 0;
     const bool billboard = (ds.shade.flags.x & shade::kShadeBillboard) != 0;
@@ -1148,7 +1170,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                         std::fill(depth.begin(), depth.end(), 0.0f);
                     last_cam = it.cam;
                 }
-                if (!Drawable(it)) continue;
+                if (!Drawable(it) || !DrawnByOptions(frame, it, o)) continue;
                 float vp[4];
                 DepthMap dm;
                 PlaceBackBufferDraw(layout, frame, it, o.width, o.height, vp, dm);
@@ -1197,7 +1219,8 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             density_view = {d->second.w, d->second.h, d->second.color.data()};
         for (uint32_t i = run.first; i < run.end; i++) {
             const DrawItem& it = frame.draws[i];
-            if (!DrawnInTexturePass(it) || !Drawable(it)) continue;
+            if (!DrawnInTexturePass(it) || !Drawable(it) || !DrawnByOptions(frame, it, o))
+                continue;
             const ShadeState* state = shade::ShadeOf(frame, it);
             if (spot::SpotBlur(it, state, p)) {
                 SpotBlurDraw(it, *state, o, rtt, st, p);

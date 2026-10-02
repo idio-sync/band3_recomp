@@ -4,7 +4,8 @@
 // (tools/shaders/research: fam3.py, skin2.py and hair3.py, checked there
 // against the shaders' microcode), the SH occlusion, REFRACT_WORLD's
 // picture behind and the shadow buffer's taps, their weights and its
-// darkening against hand-worked numbers, the normal map's tangent frame
+// darkening against hand-worked numbers, where REFRACT_WORLD reads that
+// picture against refract.py's model, the normal map's tangent frame
 // against the game's vertex shaders, and the DXN block and the packed
 // vertex's tangent as the capture decodes them (guest_formats.h), with which
 // channel of a normal map tilts toward which of the frame's vectors,
@@ -397,6 +398,53 @@ TEST_CASE("a movie's planes to RGB as its pixel shader does, opaque, whatever th
     CHECK(out[1] == doctest::Approx(0.500094f).epsilon(1e-5));
     CHECK(out[2] == doctest::Approx(0.506413f).epsilon(1e-5));
     CHECK(out[3] == 1.0f);
+}
+
+TEST_CASE("REFRACT_WORLD reads the picture behind where its refract normal map moves it") {
+    using namespace shader_opt;
+    // python tools/shaders/research/refract.py --cases: the clip position,
+    // c119.w, the map's texel (x, y) and where the model (checked against
+    // FC53125B5EB914F8's microcode) reads the picture
+    struct RefractCase {
+        float clip[4], k, map[2], uv[2];
+    };
+    const RefractCase cases[] = {
+        {{10, -20, 5, 100}, 2.1f, {0.501960784f, 0.501960784f}, {0.550041176f, 0.599958824f}},
+        {{10, -20, 5, 100}, 2.1f, {1, 0}, {0.5395f, 0.5895f}},
+        {{-35, 12, 5, 80}, 2.1f, {0.25f, 0.9f}, {0.29175f, 0.4315625f}},
+        {{0, 0, 1, 1}, 1, {0, 0}, {0, 1}},
+        {{3, 4, 1, 2}, 0.5f, {0.75f, 0.2f}, {1.175f, -0.5625f}},
+    };
+    // PackShade: c119.w, and the map's flag only where the capture decoded s1
+    DrawItem it{};
+    RasterOptions o;
+    ShadeState s = MakeState(Bit(kDiffuseMap) | Bit(kRefractWorld));
+    s.ps[ShadeRegIndex(119)][3] = 2.1f;
+    ShadeParams sp;
+    PackShade(it, &s, o, true, sp);
+    CHECK(Has(sp, kShadeRefract));
+    CHECK_FALSE(Has(sp, kShadeRefractMap));
+    CHECK(sp.refract.x == 2.1f);
+    s.maps[kMapNormal] = std::make_shared<Texture>();
+    PackShade(it, &s, o, true, sp);
+    CHECK(Has(sp, kShadeRefractMap));
+    for (const RefractCase& c : cases) {
+        CAPTURE(c.clip[0]);
+        CAPTURE(c.k);
+        sp.refract.x = c.k;
+        const float map[4] = {c.map[0], c.map[1], 0.0f, 1.0f};
+        float uv[2];
+        RefractUvCpu(sp, c.clip, c.clip[3], map, uv);
+        CHECK(uv[0] == doctest::Approx(c.uv[0]).epsilon(1e-5));
+        CHECK(uv[1] == doctest::Approx(c.uv[1]).epsilon(1e-5));
+    }
+    // without the map it's straight behind: the clip position's own place
+    sp.flags.x &= ~kShadeRefractMap;
+    const float clip[2] = {10, -20}, map[4] = {1, 0, 0, 1};
+    float uv[2];
+    RefractUvCpu(sp, clip, 100, map, uv);
+    CHECK(uv[0] == doctest::Approx(0.55f));
+    CHECK(uv[1] == doctest::Approx(0.6f));
 }
 
 TEST_CASE("SH occlusion: light 0's visibility over a bare surface's, from the vertex colour") {

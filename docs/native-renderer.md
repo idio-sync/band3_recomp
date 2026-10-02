@@ -143,6 +143,7 @@ option). It prints a `post:` line (what post-processing was set to do), a `check
 | `--no-gamma`, `--gamma-from <other.cap>` | no gamma ramp; or another capture's |
 | `--no-shadow` | characters without their self-shadows |
 | `--no-normal` | every material with its vertex normal, no normal or detail map |
+| `--no-default-mat` | without the passes RB3 draws with no material of their own, which it draws with its default one (white, prelit) |
 | `--nearest` | every texture's nearest texel at full size, not the game's samplers (`native_view_texture_filtering` off) |
 | `--no-cull` | both sides of every triangle |
 | `--legacy-light`, `--no-light` | the placeholder lighting from before RB3's shading; or every material unlit |

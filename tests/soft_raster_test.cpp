@@ -505,6 +505,64 @@ TEST_CASE("a REFRACT_WORLD draw in the overlay is its colour times the picture b
     CHECK(rgba[1 * 8 + 3] == 0xff808080u);
 }
 
+TEST_CASE("a pass RB3 drew without a material is drawn, as with its default material") {
+    // the capture keeps it with TheRnd's default material (white, prelit),
+    // its shade state's mat kDefaultMaterial: drawn, unless the option says not
+    FrameCapture f;
+    f.shades = {FlatShade(false)};
+    f.shades[0].mat = kDefaultMaterial;
+    f.draws = {Shaded(-1, 1, kGreen, 0, 1)};
+    f.passes = {BackBuffer(0, 1)};
+    REQUIRE(NoMaterial(f.draws[0], &f.shades[0]));
+    std::vector<uint32_t> rgba;
+    RasterOptions o = Small();
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 1] == kGreen);
+    o.default_material = false;
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 1] != kGreen);
+    // a DrawRect quad without a material isn't one
+    f.draws[0].rect_shader = 6;
+    CHECK_FALSE(NoMaterial(f.draws[0], &f.shades[0]));
+}
+
+TEST_CASE("a REFRACT_WORLD draw reads the picture where its refract normal map moves it") {
+    // the world red on the left, green on the right; a white REFRACT_WORLD
+    // quad over it all. Pixel x is the game's sample at x (D3D9's centres),
+    // which reads the picture bilinear at x: halfway between texels x - 1
+    // and x, so at the halves' edge (x 4) the two mixed
+    FrameCapture f;
+    f.shades = {FlatShade(false), FlatShade(false)};
+    ShadeState& glass = f.shades[1];
+    glass.options |= 1ull << shader_opt::kRefractWorld;
+    glass.ps[ShadeRegIndex(119)][3] = 1.0f;
+    f.draws = {Shaded(-1, 0, kRed, 0, 1), Shaded(0, 1, kGreen, 0, 1),
+               Shaded(-1, 1, 0xffffffffu, 1, 1)};
+    f.passes = {BackBuffer(0, 3)};
+    f.post_boundary = 2;
+    std::vector<uint32_t> rgba;
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 1] == kRed);
+    CHECK(rgba[1 * 8 + 4] == 0xff008080u);
+    CHECK(rgba[1 * 8 + 6] == kGreen);
+
+    // its map's green moves it across by c119.w (1, w 1) times 2 g - 1: a
+    // whole 1 in clip x, half the picture, so pixel 1 reads 5 (green); its
+    // red (0x80, about the middle) barely moves it up or down
+    auto map = std::make_shared<Texture>();
+    map->width = map->height = 1;
+    map->rgba = {0xff00ff80u};
+    glass.maps[kMapNormal] = map;
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 1] == kGreen);
+    CHECK(rgba[1 * 8 + 6] == kGreen);
+    // green 0 moves it the other way: pixel 6 reads 2 (red)
+    map->rgba = {0xff000080u};
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 6] == kRed);
+    CHECK(rgba[1 * 8 + 1] == kRed);
+}
+
 TEST_CASE("a crowd billboard's quad, in its mesh's XZ, is turned to the camera") {
     // the quad from x -1..0, z 1..-1 (y 0), at an instance moved 1 right and
     // scaled 2: drawn as a mesh, with the identity view-projection, it's

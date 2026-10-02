@@ -30,7 +30,7 @@ struct uint4 {
 
 #include "src/Render/shaders/shade_params.hlsli"
 
-static_assert(sizeof(ShadeParams) == 42 * 16, "ShadeParams is float4s only, as HLSL packs it");
+static_assert(sizeof(ShadeParams) == 43 * 16, "ShadeParams is float4s only, as HLSL packs it");
 
 // What a draw shades with. Without a ShadeState (a capture from before them),
 // with options.legacy_light, it's the placeholder from before; options.lighting
@@ -83,6 +83,11 @@ struct NormalMapInputs {
     float map[4], detail[4];
 };
 void ProjUvCpu(const ShadeParams& sp, const float p[3], float out[2]);
+// RefractUv: where a REFRACT_WORLD pixel at clip position (clip, w) reads the
+// picture behind it, map its refract normal map's texel (unread without
+// kShadeRefractMap)
+void RefractUvCpu(const ShadeParams& sp, const float clip[2], float w, const float map[4],
+                  float out[2]);
 void ShadowCoordCpu(const ShadeParams& sp, const float p[3], float out[4]);
 // ShadowTaps of coordinate s (ShadowCoordCpu's) in a w x h map: the texels'
 // columns and rows, their weights, and the pixel's depth

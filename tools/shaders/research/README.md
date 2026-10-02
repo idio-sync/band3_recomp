@@ -14,6 +14,7 @@ microcode, that the native view's shading (`src/Render/shaders/shade.hlsli`) and
 | `hair3.py` | the hair family's model (wrap diffuse, two-colour strand highlight); `python hair3.py <hash>...` |
 | `vs.py` | setup helpers for running vertex shaders in xsim |
 | `crowd.py` | the crowd's billboards (BILLBOARD, option bit 25): their vertex shaders' turn to the camera and light, and their pixel shader; `python crowd.py` checks the model against the microcode |
+| `refract.py` | REFRACT_WORLD's pixel shader (the score box's glass): where it reads the picture behind it, moved by its refract normal map, which `shade.hlsli`'s `RefractUv` is; `python refract.py` checks the model against the microcode, `--cases` prints the cases `tests/shade_model_test.cpp` checks |
 | `movie.py` | the movie's pixel shader (ShaderType 11): a Bink frame's Y, cR and cB planes to RGB, which `shade.hlsli`'s `MovieRgb` is; `python movie.py` checks the model against the microcode, `--cases` prints the cases `tests/shade_model_test.cpp` checks |
 | `lit.py`, `vlit.py` | find each dumped shader's literal constants (c240-c255, which the disassembly leaves out) in the game's shader blobs and write `lits.json` |
 | `gen_shade_cases.py` | prints `kCases` in `tests/shade_model_test.cpp` from the three models |
