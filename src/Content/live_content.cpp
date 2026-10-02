@@ -16,12 +16,9 @@
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xam/content_manager.h>
-#include "src/Game/Script.h"
-#include "src/Test/game_state.h"
 #include "src/config.h"
 #include "src/paths.h"
 #include "src/settings.h"
-#include "content_refresh.h"
 
 namespace band3::content {
 
@@ -38,10 +35,6 @@ struct Scan {
     std::deque<Package> packages;
     // packages by content ID (upper-case hex, as the headers give it)
     std::unordered_map<std::string, const Package*> by_id;
-    // rises with each rescan that adds packages; listed is what it was at the
-    // game's last listing (LivePackages)
-    uint64_t generation = 0;
-    uint64_t listed = 0;
     // rescans go one at a time
     std::mutex rescan_mutex;
 };
@@ -50,6 +43,9 @@ Scan& TheScan() {
     static Scan* scan = new Scan;
     return *scan;
 }
+
+// XN_LIVE_CONTENT_INSTALLED, which PlatformMgr::Poll turns into a ContentInstalledMsg
+constexpr uint32_t kXnLiveContentInstalled = 0x02000007;
 
 std::mutex g_mutex;
 rex::filesystem::VirtualFileSystem* g_vfs = nullptr;
@@ -156,7 +152,6 @@ std::vector<Package> LivePackages() {
     auto& scan = TheScan();
     std::unique_lock lock(scan.mutex);
     if (scan.cv.wait_until(lock, deadline, [&] { return scan.done; })) {
-        scan.listed = scan.generation;
         return std::vector<Package>(scan.packages.begin(), scan.packages.end());
     }
     if (!scan.late) {
@@ -187,44 +182,29 @@ size_t RescanLiveContent() {
     std::string names;
     std::vector<std::string> problems;
     auto found = ScanFolders(Folders(REXCVAR_GET(content_folders), names), kRb3TitleIds, &problems);
-    std::lock_guard lock(scan.mutex);
     size_t added = 0;
-    for (auto& package : found) {
-        if (scan.by_id.contains(package.header.content_id)) continue;
-        REXLOG_INFO("content: found {} ({})", rex::path_to_utf8(package.path),
-                    package.header.content_id);
-        scan.packages.push_back(std::move(package));
-        scan.by_id[scan.packages.back().header.content_id] = &scan.packages.back();
-        added++;
+    {
+        std::lock_guard lock(scan.mutex);
+        for (auto& package : found) {
+            if (scan.by_id.contains(package.header.content_id)) continue;
+            REXLOG_INFO("content: found {} ({})", rex::path_to_utf8(package.path),
+                        package.header.content_id);
+            scan.packages.push_back(std::move(package));
+            scan.by_id[scan.packages.back().header.content_id] = &scan.packages.back();
+            added++;
+        }
     }
-    if (added) scan.generation++;
+    if (added) {
+        // as the console told the game of content it had installed: PlatformMgr
+        // passes it on as a ContentInstalledMsg, which marks XboxContentMgr's
+        // content changed, so its next StartRefresh lists it again. Outside the
+        // lock, which the game's listings take inside a kernel call.
+        REX_KERNEL_STATE()->BroadcastNotification(kXnLiveContentInstalled, 0);
+    }
     return added;
 #else
     return 0;
 #endif
-}
-
-bool GameMissesPackages() {
-    auto& scan = TheScan();
-    std::lock_guard lock(scan.mutex);
-    return scan.generation != scan.listed;
-}
-
-void PollRefresh(PPCContext& ctx, uint8_t* base) {
-    static RefreshPlanner planner;
-    uint64_t generation, listed;
-    {
-        auto& scan = TheScan();
-        std::lock_guard lock(scan.mutex);
-        generation = scan.generation;
-        listed = scan.listed;
-    }
-    if (generation == listed) return;
-    const test::GameStateSnapshot state = test::GameState::Get().Snapshot();
-    const std::string script = planner.Next(generation, listed, state.screen, state.in_game);
-    if (script.empty()) return;
-    REXLOG_INFO("content: having the game list the new packages ({})", state.screen);
-    RunScript(ctx, base, script);
 }
 
 bool MountLivePackage(const Package& package, std::string_view root_name) {

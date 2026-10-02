@@ -226,6 +226,8 @@ def rv_song(entry):
         'length_ms': _rv_number(field('song_length', 'song_length')) * 1000,
         'vocal_parts': _rv_number(field('vocal_parts_authored', 'vocal_parts')),
         'size': _rv_number(upload.get('size')),
+        # text song_ids, which band3 numbers as RB3E does, are left out here
+        'song_id': _rv_number(upload.get('custom_id')),
         'downloads': _rv_number(upload.get('downloads')),
         'tiers': tiers,
         'art': absolute(art) if art else '',
@@ -306,6 +308,7 @@ class FakeDownloads:
                 # the game takes it in as long again after
                 out.append({'file_id': file_id, 'title': song['title'], 'artist': song['artist'],
                             'state': 'done' if part >= 1 else 'downloading',
+                            'song_id': song['song_id'],
                             'received': int(total * part), 'total': total, 'error': '',
                             'in_library': now - start >= 2 * self.SECONDS})
         return {'folder': 'songs\\rhythmverse (web_preview: nothing is saved)', 'downloads': out}

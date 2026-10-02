@@ -6,7 +6,6 @@
 #include <rex/system/xam/content_device.h>
 #include <rex/system/xam/content_manager.h>
 #include <rex/system/xenumerator.h>
-#include <rex/system/xmemory.h>
 #include <rex/types.h>
 #include "generated/band3_init.h"
 #include "live_content.h"
@@ -22,7 +21,6 @@
 
 extern "C" void __imp__XContentCreateCrossTitleEnumerator(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__XContentCrossTitleCreate(PPCContext& ctx, uint8_t* base);
-extern "C" void __imp__XboxContentMgr__StartRefresh(PPCContext& ctx, uint8_t* base);
 
 namespace {
 
@@ -89,19 +87,6 @@ extern "C" REX_FUNC(XContentCreateCrossTitleEnumerator) {
     }
     if (n > 0) REXLOG_INFO("content: listed {} packages of type {}", n, type);
 #endif
-}
-
-// XboxContentMgr::StartRefresh(XboxContentMgr*) only lists content again when
-// a message has said it changed: its storage change handler (OnMsg at
-// 0x82520260) sets this flag. band3 sets it as well for packages it has
-// added since the game's last listing.
-constexpr uint32_t kXboxContentMgr_Changed = 68;  // bool
-
-extern "C" REX_FUNC(XboxContentMgr__StartRefresh) {
-    if (band3::content::GameMissesPackages()) {
-        *rex::memory::GuestPtr<uint8_t*>(base, ctx.r3.u32 + kXboxContentMgr_Changed) = 1;
-    }
-    __imp__XboxContentMgr__StartRefresh(ctx, base);
 }
 
 #ifdef _WIN32

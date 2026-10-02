@@ -221,6 +221,8 @@ TEST_CASE("search results are JSON for the page, saying what's downloadable and 
     CHECK(songs[0]["download"].Bool() == true);
     CHECK(songs[0]["downloaded"].Bool() == true);
     CHECK(songs[0]["in_library"].Bool() == true);
+    CHECK(songs[0]["song_id"].Number() == 1689100131);
+    CHECK(songs[1]["song_id"].Number() == 0);
     CHECK(songs[1]["in_library"].Bool(true) == false);
     CHECK(songs[0]["page"].Text() == "https://rhythmverse.co/songfile/595481a7cbc158.68319817");
     CHECK(songs[1]["download"].Bool(true) == false);
@@ -258,6 +260,7 @@ TEST_CASE("downloads are JSON, with their state and progress") {
     CHECK(items[1]["state"].Text() == "failed");
     CHECK(items[1]["error"].Text() == "the site answered 404");
     CHECK(items[0]["in_library"].Bool() == true);
+    CHECK(items[0]["song_id"].Number() == 7);
     CHECK(items[1]["in_library"].Bool(true) == false);
     // the game busy, or nothing to ask it about
     const auto unknown = band3::json::Parse(FormatDownloads(downloads, "", std::nullopt));

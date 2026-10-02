@@ -112,14 +112,15 @@ bool IsDownloaded(const Song& song, const LocalSongs& local);
 
 // /rv/search: {"total":, "page":, "page_size":, "songs": [{"file_id":,
 // "title":, ..., "tiers": {...}, "download": true when band3 can download it,
-// "downloaded": true when IsDownloaded, "in_library": true when the game has
-// a song with its song ID (null when the game couldn't say)}, ...]}
+// "downloaded": true when IsDownloaded, "song_id": as the game has it (0 for
+// none), "in_library": true when the game has a song with its song ID (null
+// when the game couldn't say)}, ...]}
 std::string FormatSearch(const SearchResult& result, const LocalSongs& local);
 
 // /rv/downloads: {"folder": where they go, "downloads": [{"file_id":, "title":,
 // "artist":, "state": "queued"|"downloading"|"done"|"failed", "received":,
-// "total":, "error":, "in_library": the game has its song ID (null when
-// game_ids is)}, ...]}
+// "total":, "error":, "song_id":, "in_library": the game has its song ID
+// (null when game_ids is)}, ...]}
 std::string FormatDownloads(const std::vector<Download>& downloads, std::string_view folder,
                             const std::optional<std::set<int32_t>>& game_ids);
 

@@ -494,18 +494,20 @@ The page's **RhythmVerse** tab searches [RhythmVerse](https://rhythmverse.co)'s 
 songs for Rock Band 3 on Xbox, with their art, details and difficulties, and says
 which you have, however you got them. **In library**: the game has a song with its
 song ID (RhythmVerse's for the upload is the `song_id` in its `songs.dta`), whatever
-its file is called. **Downloaded**: its file is in the content folders, under the name
-RhythmVerse gives it and at its size; **Not in game yet** until the game has taken it in.
-**Similar in library**: a song by its artist and title is in the game, another chart of
-it maybe.
+its file is called; **Select** then selects it in the Music Library, as on the Library
+tab. **Downloaded**: its file is in the content folders, under the name RhythmVerse gives
+it and at its size; **Not in game yet** until the game has taken it in. **Similar in
+library**: a song by its artist and title is in the game, another chart of it maybe.
 
 **Download** saves a song's package into a `rhythmverse` folder in the first of the
 content folders (`content_folders`; `songs\rhythmverse` unless you've changed it), and
-the game takes it in without a restart: band3 has the game list its content again as it
-does after a storage change, but only where the game does that itself, in the main menu
-or the Music Library (which keeps its place), so a download during a song joins once the
-song is over. Songs copied into the content folders by hand join the same way once a
-search has seen them (the folders' files are listed again a minute on). Only
+the game takes it in without a restart, as it took in songs bought from the Xbox store:
+band3 tells it new content is installed (the console's `XN_LIVE_CONTENT_INSTALLED`), and
+the game lists its content again at its next refresh, showing "Loading New Downloaded
+Content..." as it does. That's at once with the Music Library open (it keeps its place),
+once a song that's playing is over, and on the way into the Music Library from the main
+menu. Songs copied into the content folders by hand join the same way once a search has
+seen them (the folders' files are listed again a minute on). Only
 songs RhythmVerse hosts itself download this way; for those on other sites (MediaFire,
 Google Drive...), zipped ones and the official DLC, **Open** goes to the song's
 RhythmVerse page. A download that isn't a Rock Band package is thrown away. Turn

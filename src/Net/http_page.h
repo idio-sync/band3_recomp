@@ -653,9 +653,36 @@ function rvPageLink(s, text) {
   return a;
 }
 
-// a song's button: Download, how far along it is, or Open for a song
+// the game has this song (by its song ID), so Select can find it
+function inGame(s) {
+  const d = rv.downloads.get(s.file_id);
+  return !!s.song_id && !!(s.in_library || (d && d.in_library));
+}
+
+// Select, as the Library tab's: the game's shortname for the song comes from
+// its song ID (RB3E's /song_<id>)
+function rvSelectButton(s) {
+  const b = el("button", "pick", "Select");
+  b.title = "The game has this song: select it in the Music Library";
+  b.onclick = async e => {
+    e.stopPropagation();
+    try {
+      const r = await fetch("/song_" + s.song_id);
+      const song = r.ok && parseSongs("[song]\n" + await r.text())[0];
+      if (!song || !song.shortname) { toast("The game doesn't have it yet"); return; }
+      jump({shortname: song.shortname, title: song.title || s.title});
+    } catch (err) {
+      toast("The game didn't answer");
+    }
+  };
+  return b;
+}
+
+// a song's button: Select when the game has it, else Download, how far along
+// it is, or Open for a song
 // RhythmVerse doesn't host, to download from its page
 function rvAction(s) {
+  if (inGame(s)) return rvSelectButton(s);
   const d = rvState(s);
   if (!s.download && !(d && d.state === "done")) {
     const a = rvPageLink(s, "Open");
@@ -666,14 +693,7 @@ function rvAction(s) {
   }
   const b = el("button", "dl", "Download");
   b.onclick = e => { e.stopPropagation(); download(s); };
-  if (!d) {
-    // the game has it under another file name, or another version of it
-    if (s.in_library) {
-      b.className = "dl plain";
-      b.title = "The game has this song already";
-    }
-    return b;
-  }
+  if (!d) return b;
   if (d.state === "failed") {
     b.textContent = "Retry";
     b.title = d.error;
@@ -692,7 +712,7 @@ function libraryTag(s) {
   const d = rv.downloads.get(s.file_id);
   const downloaded = rvState(s) && rvState(s).state === "done";
   if (s.in_library || (d && d.in_library)) return ["In library", "The game has this song (by its song ID)"];
-  if (downloaded) return ["Not in game yet", "band3 adds it in the main menu or the Music Library, after any song that's playing"];
+  if (downloaded) return ["Not in game yet", "The game adds it as it did songs from the store: in the Music Library, or after a song that's playing"];
   if (s.in_library === null && inLibrary(s)) return ["In library", "A song by this artist and title is in the game"];
   if (inLibrary(s)) return ["Similar in library", "Another chart of this artist and title is in the game"];
   return [null, null];
@@ -737,7 +757,7 @@ function openRvSong(s) {
   const close = el("button", "plain", "Close");
   close.onclick = () => $("sheet").close();
   actions.append(close, rvPageLink(s, "RhythmVerse page"));
-  if (s.download || rvState(s)) {
+  if (inGame(s) || s.download || rvState(s)) {
     const action = rvAction(s);
     if (action.tagName === "BUTTON") action.addEventListener("click", () => $("sheet").close());
     actions.append(action);
@@ -832,7 +852,7 @@ async function pollDownloads() {
     $("rv-note").textContent = songs(done.length) + " downloaded to " + rv.folder + ". " + (waiting
       ? (done.length === 1 ? "It's not" : waiting === 1 ? "1 isn't" : waiting + " aren't") +
         " in the game yet: " +
-        "band3 adds songs in the main menu or the Music Library, after any song that's playing."
+        "the game adds songs as it did ones from the store, when you're in the Music Library (or once the song that's playing is over)."
       : (done.length === 1 ? "It's" : "They're") + " in the game.");
     // downloading, every second; waiting for the game, every few
     if (busy) downloadsTimer = setTimeout(pollDownloads, 1000);

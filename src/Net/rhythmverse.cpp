@@ -246,6 +246,7 @@ std::string FormatSearch(const SearchResult& result, const LocalSongs& local) {
         AppendField(out, "host", JsonString(s.host));
         AppendField(out, "download", s.download_url.empty() ? "false" : "true");
         AppendField(out, "downloaded", IsDownloaded(s, local) ? "true" : "false");
+        AppendField(out, "song_id", std::to_string(s.song_id));
         AppendField(out, "in_library", InLibrary(s.song_id, local.game_ids));
         out += '}';
     }
@@ -273,6 +274,7 @@ std::string FormatDownloads(const std::vector<Download>& downloads, std::string_
         AppendField(out, "received", std::to_string(d.received));
         AppendField(out, "total", std::to_string(d.total));
         AppendField(out, "error", JsonString(d.error));
+        AppendField(out, "song_id", std::to_string(d.song_id));
         AppendField(out, "in_library", InLibrary(d.song_id, game_ids));
         out += '}';
     }
