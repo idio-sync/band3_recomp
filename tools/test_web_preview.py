@@ -1,5 +1,6 @@
 """Tests for web_preview.py's song list and album art: python tools/test_web_preview.py"""
 
+import json
 import struct
 import unittest
 import zlib
@@ -85,7 +86,11 @@ class AlbumArtTest(unittest.TestCase):
 SONGS = [
     '#ifndef', ['rehab',
                 ['name', 'Rehab'], ['artist', 'Amy Winehouse'], ['album_name', 'Back to Black'],
-                ['song', ['name', 'songs/rehab/rehab']], ['game_origin', 'rb3']],
+                ['song', ['name', 'songs/rehab/rehab'], ['vocal_parts', 3]],
+                ['game_origin', 'rb3'], ['genre', 'rbsoulfunk'], ['year_released', 2006],
+                ['song_length', 214369],
+                ['rank', ['drum', 310], ['guitar', 104], ['bass', 138], ['vocals', 241],
+                 ['keys', 0], ['band', 255]]],
     ['noart', ['name', 'No Art'], ['artist', 'Band'], ['song', ['name', 'songs/noart/noart']]],
     # no files
     ['_budget_test', ['name', 'Test'], ['song', ['name', 'songs/_budget_test/_budget_test']]],
@@ -102,7 +107,35 @@ class SongsTest(unittest.TestCase):
     def songs(self):
         return web_preview.songs_from_dtb(
             SONGS, lambda d: d != 'songs/_budget_test/',
-            lambda f: f == 'songs/rehab/gen/rehab_keep.png_xbox')
+            lambda f: f == 'songs/rehab/gen/rehab_keep.png_xbox',
+            {'rbsoulfunk': 'R&B/Soul/Funk'})
+
+    def test_details_as_band3_reports_them(self):
+        rehab = self.songs()[0]['details']
+        self.assertEqual((rehab['genre'], rehab['year'], rehab['length_ms'], rehab['vocal_parts']),
+                         ('R&B/Soul/Funk', 2006, 214369, 3))
+        # a rank of 0 is a part the song doesn't have
+        self.assertEqual(rehab['tiers'],
+                         {'band': 3, 'guitar': 0, 'bass': 1, 'drum': 4, 'vocals': 3})
+
+    def test_details_of_a_song_with_little_in_its_entry(self):
+        noart = self.songs()[1]['details']
+        self.assertEqual(noart, {'genre': '', 'year': 0, 'length_ms': 0, 'vocal_parts': 0,
+                                 'tiers': {}})
+
+    def test_updates_replace_the_fields_they_name(self):
+        # Rock Band 3 Deluxe's dx/song_updates/gen/songs_updates.dtb
+        updates = [['rehab', ['genre', 'grunge'], ['year_released', 2007]]]
+        songs = web_preview.songs_from_dtb(SONGS, lambda d: True, lambda f: False,
+                                           {'grunge': 'Grunge'}, updates)
+        rehab = songs[0]['details']
+        self.assertEqual((rehab['genre'], rehab['year'], rehab['length_ms']),
+                         ('Grunge', 2007, 214369))
+
+    def test_details_json_by_shortname(self):
+        details = json.loads(web_preview.format_details(self.songs()))
+        self.assertEqual(list(details), ['rehab', 'noart', 'mot'])
+        self.assertEqual(details['rehab']['tiers']['drum'], 4)
 
     def test_lists_the_songs_the_music_library_shows(self):
         self.assertEqual([s['shortname'] for s in self.songs()], ['rehab', 'noart', 'mot'])
@@ -126,6 +159,35 @@ class SongsTest(unittest.TestCase):
         self.assertEqual(web_preview.format_songs(self.songs()[:1]),
                          '[rehab]\r\nshortname=rehab\r\ntitle=Rehab\r\nartist=Amy Winehouse\r\n'
                          'album=Back to Black\r\norigin=rb3\r\n\r\n')
+
+
+class TierTest(unittest.TestCase):
+    # the game's thresholds for guitar, as SongMgr::RankTier has them
+    def test_the_first_threshold_the_rank_is_under(self):
+        self.assertEqual(web_preview.tier('guitar', 1), 0)
+        self.assertEqual(web_preview.tier('guitar', 138), 0)
+        self.assertEqual(web_preview.tier('guitar', 139), 1)
+        self.assertEqual(web_preview.tier('guitar', 474), 6)
+
+    def test_past_the_last_threshold_is_impossible(self):
+        self.assertEqual(web_preview.tier('guitar', 900), 6)
+
+
+class StatusTest(unittest.TestCase):
+    SONG = {'shortname': 'rehab', 'title': 'Rehab', 'artist': 'Amy Winehouse',
+            'details': {'length_ms': 200000}}
+
+    def test_menu_and_library(self):
+        self.assertEqual(web_preview.demo_status('menu', [self.SONG], 0),
+                         {'screen': 'main_hub_screen', 'in_library': False, 'playing': None})
+        self.assertTrue(web_preview.demo_status('library', [self.SONG], 0)['in_library'])
+
+    def test_playing_goes_round_the_song(self):
+        playing = web_preview.demo_status('playing', [self.SONG], 230)['playing']
+        self.assertEqual(playing['shortname'], 'rehab')
+        self.assertEqual(playing['length_ms'], 200000)
+        self.assertEqual(playing['position_ms'], 30000)
+        self.assertGreater(playing['score'], 0)
 
 
 class PageTest(unittest.TestCase):

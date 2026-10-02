@@ -5,20 +5,24 @@ The page comes from src/Net/http_page.h on every load, so an edit shows on a
 refresh, without a rebuild. The songs and their album art come from the game
 data as the game finds them: a loose file in the game data root first, then
 the title update's archive (patch_xbox.hdr), then the main one. Select can't
-work without the game; it answers 409.
+work without the game; it answers 409. /status makes up what the game is doing
+(--status), to work on the page's banner.
 
 Usage:
   python tools/web_preview.py                 open http://127.0.0.1:21080/
+  python tools/web_preview.py --status playing
   python tools/web_preview.py --port 8000 --address 0.0.0.0
   python tools/web_preview.py --game-data D:/rb3
 """
 
 import argparse
 import http.server
+import json
 import os
 import struct
 import sys
 import threading
+import time
 import urllib.parse
 import zlib
 
@@ -27,6 +31,36 @@ import read_game_config
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAGE = os.path.join(REPO, 'src', 'Net', 'http_page.h')
 GAME_DATA = os.path.join(REPO, 'assets')
+
+# Rock Band 3 Deluxe's changes to songs.dtb's entries (genres, years...), which
+# the game takes over them; absent without Deluxe
+SONG_UPDATES = 'dx/song_updates/gen/songs_updates.dtb'
+
+# the parts /song_details rates, in its order
+PARTS = ('band', 'guitar', 'bass', 'drum', 'vocals', 'keys', 'real_guitar', 'real_bass', 'real_keys')
+
+# The game's difficulty tiers: SongMgr::RankTier gives the first of a part's
+# thresholds its rank is at or under, 0 (Warmup) to 6 (Impossible), and 6 past
+# the last. Read out of the running game (the SongMgr's list at +296), as no
+# config file holds them.
+THRESHOLDS = {
+    'band': (162, 214, 242, 266, 291, 344, 500),
+    'guitar': (138, 175, 220, 266, 332, 408, 474),
+    'vocals': (131, 174, 217, 278, 352, 426, 500),
+    'drum': (123, 150, 177, 241, 344, 447, 550),
+    'bass': (134, 180, 227, 292, 363, 435, 500),
+    'keys': (152, 210, 268, 326, 384, 442, 500),
+    'real_guitar': (149, 204, 263, 322, 381, 441, 500),
+    'real_bass': (149, 207, 266, 324, 383, 441, 500),
+    'real_keys': (152, 210, 268, 326, 384, 442, 500),
+}
+
+
+def tier(part, rank):
+    for i, threshold in enumerate(THRESHOLDS[part]):
+        if rank <= threshold:
+            return i
+    return len(THRESHOLDS[part]) - 1
 
 
 def index_page(header):
@@ -51,18 +85,27 @@ def to_utf8(text):
         return text
 
 
-def songs_from_dtb(tree, has_dir, has_file):
-    """The songs.dtb songs the Music Library shows, with what /list_songs lists
-    and their album art's file, if any. Left out, as the game leaves them out:
-    songs whose folder isn't there (has_dir('songs/x/')), the trainers' lessons,
-    which have no title, and test songs marked fake. The art is wherever its
-    file is (has_file), whatever album_art says: the game shows Radar Love's
-    though its entry says FALSE."""
+def songs_from_dtb(tree, has_dir, has_file, genres=None, updates=None):
+    """The songs.dtb songs the Music Library shows, with what /list_songs lists,
+    what /song_details does (genre names from `genres`) and their album art's
+    file, if any. `updates` (entries like songs.dtb's) replace the fields they
+    name, as Rock Band 3 Deluxe's song updates do in the game. Left out, as the
+    game leaves them out: songs whose folder isn't there (has_dir('songs/x/')),
+    the trainers' lessons, which have no title, and test songs marked fake. The
+    art is wherever its file is (has_file), whatever album_art says: the game
+    shows Radar Love's though its entry says FALSE."""
+    genres = genres or {}
+    changes = {}
+    for entry in updates or []:
+        if isinstance(entry, list) and entry and isinstance(entry[0], str):
+            changes.setdefault(entry[0], {}).update(
+                {f[0]: f[1:] for f in entry[1:] if isinstance(f, list) and f})
     songs = []
     for entry in tree:
         if not isinstance(entry, list) or not entry or not isinstance(entry[0], str):
             continue
         fields = {f[0]: f[1:] for f in entry[1:] if isinstance(f, list) and f}
+        fields.update(changes.get(entry[0], {}))
         song = {f[0]: f[1] for f in fields.get('song', []) if isinstance(f, list) and len(f) > 1}
         path = song.get('name')
         if (not isinstance(path, str) or 'name' not in fields or
@@ -74,11 +117,45 @@ def songs_from_dtb(tree, has_dir, has_file):
             value = fields.get(key, [''])[0]
             return to_utf8(value) if isinstance(value, str) else str(value)
 
+        def number(value):
+            return value if isinstance(value, int) else 0
+
+        ranks = {r[0]: r[1] for r in fields.get('rank', []) if isinstance(r, list) and len(r) > 1}
+        genre = text('genre')
+        details = {
+            'genre': genres.get(genre, genre),
+            'year': number(fields.get('year_released', [0])[0]),
+            'length_ms': number(fields.get('song_length', [0])[0]),
+            'vocal_parts': number(song.get('vocal_parts', 0)),
+            # a rank of 0 is a part the song doesn't have
+            'tiers': {p: tier(p, ranks[p]) for p in PARTS if number(ranks.get(p, 0)) > 0},
+        }
         art = xbox_bitmap_path(path + '_keep.png')
         songs.append({'shortname': entry[0], 'title': text('name'), 'artist': text('artist'),
                       'album': text('album_name'), 'origin': text('game_origin'),
-                      'art': art if has_file(art) else None})
+                      'art': art if has_file(art) else None, 'details': details})
     return songs
+
+
+def format_details(songs):
+    """/song_details: each song's details, by shortname."""
+    return json.dumps({s['shortname']: s['details'] for s in songs}, separators=(',', ':'))
+
+
+def demo_status(kind, songs, seconds):
+    """/status as band3 would answer it: 'menu', 'library' (the Music Library
+    open), or 'playing' the first song, round and round, `seconds` in."""
+    if kind == 'playing' and songs:
+        song = songs[0]
+        length = song['details']['length_ms'] or 180000
+        position = int(seconds * 1000) % length
+        return {'screen': 'game_screen', 'in_library': False,
+                'playing': {'shortname': song['shortname'], 'title': song['title'],
+                            'artist': song['artist'], 'score': position * 2,
+                            'position_ms': position, 'length_ms': length}}
+    if kind == 'library':
+        return {'screen': 'song_select_screen', 'in_library': True, 'playing': None}
+    return {'screen': 'main_hub_screen', 'in_library': False, 'playing': None}
 
 
 def format_songs(songs):
@@ -190,14 +267,35 @@ class GameData:
                 os.path.isfile(os.path.join(self.root, *path.split('/'))))
 
 
+def genre_names(game):
+    """The game's English names for things, as Locale::Localize looks them up:
+    its locale file, then the title update's and Rock Band 3 Deluxe's additions."""
+    names = {}
+    for path in ('ui/locale/eng/gen/locale_keep.dtb', 'ui/locale/eng/gen/locale_updates_keep.dtb',
+                 'dx/locale/gen/dx_locale_updates.dtb'):
+        data = game.read(path)
+        if not data:
+            continue
+        for entry in read_game_config.parse_dtb(read_game_config.decrypt(data)):
+            if isinstance(entry, list) and len(entry) > 1 and isinstance(entry[1], str):
+                names[entry[0]] = to_utf8(entry[1])
+    return names
+
+
 class Preview:
-    def __init__(self, game):
+    def __init__(self, game, status='library'):
         self.game = game
-        self.songs = songs_from_dtb(
-            read_game_config.parse_dtb(read_game_config.decrypt(game.read('songs/gen/songs.dtb'))),
-            game.has_dir, game.has_file)
+        self.status = status
+        self.started = time.monotonic()
+        def dtb(path):
+            data = game.read(path)
+            return read_game_config.parse_dtb(read_game_config.decrypt(data)) if data else []
+
+        self.songs = songs_from_dtb(dtb('songs/gen/songs.dtb'), game.has_dir, game.has_file,
+                                    genre_names(game), dtb(SONG_UPDATES))
         self.by_shortname = {s['shortname']: s for s in self.songs}
         self.list_songs = format_songs(self.songs).encode()
+        self.details = format_details(self.songs).encode()
         self.art = {}
         self.lock = threading.Lock()
 
@@ -235,6 +333,12 @@ def handler(preview):
                     self.reply(200, 'text/html; charset=utf-8', index_page(f.read()).encode())
             elif path == '/list_songs':
                 self.reply(200, text, preview.list_songs)
+            elif path == '/song_details':
+                self.reply(200, 'application/json', preview.details)
+            elif path == '/status':
+                status = demo_status(preview.status, preview.songs,
+                                     time.monotonic() - preview.started)
+                self.reply(200, 'application/json', json.dumps(status).encode())
             elif path.startswith('/album_art?shortname='):
                 image = preview.album_art(path[len('/album_art?shortname='):])
                 if image:
@@ -259,9 +363,11 @@ def main():
                     help='0.0.0.0 to reach it from other devices (default: this PC only)')
     ap.add_argument('--game-data', default=GAME_DATA,
                     help='the game data root, holding gen/main_xbox.hdr (default: assets)')
+    ap.add_argument('--status', choices=('menu', 'library', 'playing'), default='library',
+                    help="what /status says the game is doing (default: the Music Library's open)")
     args = ap.parse_args()
 
-    preview = Preview(GameData(args.game_data))
+    preview = Preview(GameData(args.game_data), args.status)
     server = http.server.ThreadingHTTPServer((args.address, args.port), handler(preview))
     print(f'{len(preview.songs)} songs; open http://127.0.0.1:{args.port}/ (Ctrl+C stops it)',
           flush=True)
