@@ -203,6 +203,7 @@ private:
 
 const Value kNull;
 const Value::Array kNoItems;
+const Value::Object kNoMembers;
 
 }
 
@@ -216,6 +217,11 @@ const Value& Value::operator[](std::string_view key) const {
 const Value::Array& Value::Items() const {
     if (!IsArray()) return kNoItems;
     return *std::get<std::shared_ptr<Array>>(v_);
+}
+
+const Value::Object& Value::Members() const {
+    if (!IsObject()) return kNoMembers;
+    return *std::get<std::shared_ptr<Object>>(v_);
 }
 
 std::string Value::Text() const {

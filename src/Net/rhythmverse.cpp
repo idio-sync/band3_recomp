@@ -78,6 +78,12 @@ std::optional<Song> ParseSong(const json::Value& entry) {
     song.page_url = Absolute(file["file_url"].Text());
     song.file_name = file["file_name"].Text();
     song.song_id = SongIdOf(file["custom_id"].Text());
+    const std::string hashes = file["gamefile_hash"].Text() + file["gameplay_file_hash"].Text() +
+                               file["configuration_file_hash"].Text();
+    if (!hashes.empty()) {
+        song.hash = file["gamefile_hash"].Text() + "/" + file["gameplay_file_hash"].Text() + "/" +
+                    file["configuration_file_hash"].Text();
+    }
 
     const std::string external = file["external_url"].Text();
     const std::string download = file["download_url"].Text();
@@ -284,13 +290,52 @@ std::string LowerAscii(std::string_view text) {
 
 bool IsDownloaded(const Song& song, const LocalSongs& local) {
     // band3's own download, whatever its size: it was checked as it came
-    const std::string own = LowerAscii(DownloadFileName(song));
-    const auto it = local.files.lower_bound({own, INT64_MIN});
-    if (it != local.files.end() && it->first == own) return true;
+    const auto has_file = [&](const std::string& name) {
+        const std::string lower = LowerAscii(name);
+        const auto it = local.files.lower_bound({lower, INT64_MIN});
+        return it != local.files.end() && it->first == lower;
+    };
+    if (has_file(DownloadFileName(song))) return true;
+    const auto record = local.records.find(song.file_id);
+    if (record != local.records.end() && has_file(record->second.file_name)) return true;
     // RhythmVerse's download, as its page saves it; the size tells it from
     // another upload by the same name (and from an older version of this one)
     return !song.file_name.empty() && song.size > 0 &&
            local.files.contains({LowerAscii(song.file_name), song.size});
+}
+
+DownloadRecords ParseRecords(std::string_view text) {
+    DownloadRecords records;
+    const auto json = json::Parse(text);
+    if (!json || !json->IsObject()) return records;
+    for (const auto& [file_id, value] : json->Members()) {
+        DownloadRecord record{value["file"].Text(), value["hash"].Text(), value["pending"].Text()};
+        if (ValidFileId(file_id) && !record.file_name.empty()) records.emplace(file_id, std::move(record));
+    }
+    return records;
+}
+
+std::string FormatRecords(const DownloadRecords& records) {
+    std::string out = "{";
+    for (const auto& [file_id, record] : records) {
+        if (out.size() > 1) out += ",";
+        out += "\n  " + JsonString(file_id) + ": {\"file\": " + JsonString(record.file_name) +
+               ", \"hash\": " + JsonString(record.hash) +
+               ", \"pending\": " + JsonString(record.pending_hash) + "}";
+    }
+    return out + "\n}\n";
+}
+
+UpdateState UpdateOf(const Song& song, const DownloadRecords& records) {
+    const auto it = records.find(song.file_id);
+    if (it == records.end() || song.hash.empty() || song.download_url.empty()) return UpdateState::kNone;
+    const DownloadRecord& record = it->second;
+    if (!record.pending_hash.empty()) {
+        return record.pending_hash == song.hash ? UpdateState::kPending : UpdateState::kAvailable;
+    }
+    // a record from before band3 kept hashes says nothing
+    if (record.hash.empty() || record.hash == song.hash) return UpdateState::kNone;
+    return UpdateState::kAvailable;
 }
 
 bool ValidFileId(std::string_view file_id) {
@@ -349,6 +394,10 @@ std::string FormatSearch(const SearchResult& result, const LocalSongs& local) {
         AppendField(out, "downloaded", IsDownloaded(s, local) ? "true" : "false");
         AppendField(out, "song_id", std::to_string(s.song_id));
         AppendField(out, "in_library", InLibrary(s.song_id, local.game_ids));
+        const UpdateState update = UpdateOf(s, local.records);
+        AppendField(out, "update", update == UpdateState::kAvailable ? "\"available\""
+                                   : update == UpdateState::kPending  ? "\"pending\""
+                                                                      : "\"\"");
         out += '}';
     }
     return out + "]}";
@@ -376,6 +425,7 @@ std::string FormatDownloads(const std::vector<Download>& downloads, std::string_
         AppendField(out, "total", std::to_string(d.total));
         AppendField(out, "error", JsonString(d.error));
         AppendField(out, "song_id", std::to_string(d.song_id));
+        AppendField(out, "update", d.update ? "true" : "false");
         AppendField(out, "in_library", InLibrary(d.song_id, game_ids));
         out += '}';
     }

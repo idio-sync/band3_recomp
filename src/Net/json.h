@@ -36,6 +36,8 @@ public:
     const Value& operator[](std::string_view key) const;
     // an array's items; none for anything else
     const Array& Items() const;
+    // an object's members; none for anything else
+    const Object& Members() const;
 
     // a string as it is, a number in its shortest form, true/false; "" otherwise
     std::string Text() const;

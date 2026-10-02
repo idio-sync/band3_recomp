@@ -28,6 +28,7 @@ constexpr std::string_view kReply = R"json({"status":"success","data":{
              "file_album":"The Sinister Urge","file_genre":"Rock","file_year":2001,
              "song_length":190,"vocal_parts_authored":"1","size":3706880,"downloads":2702,
              "zippata":0,"external_url":"","custom_id":"1689100131",
+             "gamefile_hash":"e1cf","gameplay_file_hash":"4116","configuration_file_hash":"4298",
              "diff_drums":4,"diff_guitar":4,"diff_bass":3,"diff_vocals":1,"diff_proguitar":-1,
              "diff_probass":-1,"diff_band":4,
              "author":{"name":"DenVaktare"},"user":"denvaktare",
@@ -72,6 +73,7 @@ TEST_CASE("a search reply gives each song's details") {
     CHECK(s.author == "DenVaktare");
     CHECK(s.file_name == "DVNeverGonnaStopFinal");
     CHECK(s.song_id == 1689100131);
+    CHECK(s.hash == "e1cf/4116/4298");
     CHECK(s.art_url == "https://rhythmverse.co/assets/album_art/denvaktare/595481a7cbc158.68319817.png");
     CHECK(s.page_url == "https://rhythmverse.co/songfile/595481a7cbc158.68319817");
     CHECK(s.download_url ==
@@ -325,4 +327,78 @@ TEST_CASE("downloads are JSON, with their state and progress") {
     const auto unknown = band3::json::Parse(FormatDownloads(downloads, "", std::nullopt));
     REQUIRE(unknown);
     CHECK((*unknown)["downloads"].Items()[0]["in_library"].IsNull());
+}
+
+TEST_CASE("download records read back as written, leaving out what isn't one") {
+    DownloadRecords records;
+    records["595481a7cbc158.68319817"] = {"DVNeverGonnaStopFinal_595481a7cbc158.68319817", "a/b/c", ""};
+    records["9b8f"] = {"Other \"quoted\" name_9b8f", "d/e/f", "g/h/i"};
+    CHECK(ParseRecords(FormatRecords(records)).size() == 2);
+    const auto back = ParseRecords(FormatRecords(records));
+    CHECK(back.at("9b8f").file_name == "Other \"quoted\" name_9b8f");
+    CHECK(back.at("9b8f").pending_hash == "g/h/i");
+    CHECK(back.at("595481a7cbc158.68319817").hash == "a/b/c");
+
+    CHECK(ParseRecords("").empty());
+    CHECK(ParseRecords("[1,2]").empty());
+    const auto some = ParseRecords(R"({"../x": {"file": "a"}, "ok1": {"file": ""}, "ok2": {"file": "b"}})");
+    REQUIRE(some.size() == 1);
+    CHECK(some.at("ok2").file_name == "b");
+}
+
+TEST_CASE("an update is available when RhythmVerse's hashes change from what band3 downloaded") {
+    Song song;
+    song.file_id = "f1";
+    song.hash = "new";
+    song.download_url = "https://rhythmverse.co/download_file/u/f1/x";
+    DownloadRecords records;
+    CHECK(UpdateOf(song, records) == UpdateState::kNone);  // not band3's download
+    records["f1"] = {"x_f1", "new", ""};
+    CHECK(UpdateOf(song, records) == UpdateState::kNone);  // the same version
+    records["f1"].hash = "old";
+    CHECK(UpdateOf(song, records) == UpdateState::kAvailable);
+    records["f1"].pending_hash = "new";
+    CHECK(UpdateOf(song, records) == UpdateState::kPending);  // downloaded, for the next launch
+    records["f1"].pending_hash = "newer than that";
+    CHECK(UpdateOf(song, records) == UpdateState::kAvailable);  // RhythmVerse moved on again
+
+    records["f1"] = {"x_f1", "", ""};
+    CHECK(UpdateOf(song, records) == UpdateState::kNone);  // a record without a hash says nothing
+    records["f1"].hash = "old";
+    song.hash.clear();
+    CHECK(UpdateOf(song, records) == UpdateState::kNone);  // RhythmVerse gives none to compare
+    song.hash = "new";
+    song.download_url.clear();
+    CHECK(UpdateOf(song, records) == UpdateState::kNone);  // nothing band3 can download
+}
+
+TEST_CASE("a song band3 downloaded is downloaded under the name its record gives") {
+    Song song;
+    song.file_id = "f1";
+    song.file_name = "Renamed upload";
+    LocalSongs local;
+    local.files = {{"oldname_f1", 123}};
+    CHECK(!IsDownloaded(song, local));
+    local.records["f1"] = {"OldName_f1", "h", ""};
+    CHECK(IsDownloaded(song, local));
+}
+
+TEST_CASE("search results say when there's an update, or one waiting") {
+    SearchResult result;
+    Song song;
+    song.file_id = "f1";
+    song.hash = "new";
+    song.download_url = "https://rhythmverse.co/download_file/u/f1/x";
+    result.songs = {song};
+    LocalSongs local;
+    local.records["f1"] = {"x_f1", "old", ""};
+    auto page = band3::json::Parse(FormatSearch(result, local));
+    REQUIRE(page);
+    CHECK((*page)["songs"].Items()[0]["update"].Text() == "available");
+    local.records["f1"].pending_hash = "new";
+    page = band3::json::Parse(FormatSearch(result, local));
+    CHECK((*page)["songs"].Items()[0]["update"].Text() == "pending");
+    local.records.clear();
+    page = band3::json::Parse(FormatSearch(result, local));
+    CHECK((*page)["songs"].Items()[0]["update"].Text().empty());
 }

@@ -28,8 +28,14 @@ enum class QueueResult {
     kUnknown,    // no search has found it
     kNotHosted,  // RhythmVerse doesn't host it (another site, a zip, the official DLC)
     kNoFolder,   // content_folders names no folder
+    kNoUpdate,   // asked to update one RhythmVerse has nothing newer of (UpdateOf)
 };
-QueueResult QueueDownload(std::string_view file_id);
+// a song, or with update a newer version of one band3 downloaded: it goes
+// beside the old one as .pending and takes its place at the next launch
+QueueResult QueueDownload(std::string_view file_id, bool update = false);
+
+// what band3 has downloaded, from the download folder's rhythmverse.json
+DownloadRecords Records();
 
 // this session's downloads, in the order they were asked for
 std::vector<Download> Downloads();

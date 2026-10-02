@@ -485,7 +485,7 @@ band3 adds its own, which RB3E doesn't have:
 | `/status` | what the game is doing, as JSON: `screen`, `in_library` (the Music Library is open, so `/jump` can select) and `playing`, during a song its `shortname`, `title`, `artist`, `score`, `position_ms` (null until the song starts) and `length_ms`, else null |
 | `/album_art?shortname=<name>` | the song's album art as a JPEG, read as the game reads it for the Music Library (from the ARK, or a loose file that replaces it); 404 when the song has none, or no song has that shortname |
 | `/rv/search?text=<text>&page=<n>` | a page of 25 of [RhythmVerse](https://rhythmverse.co)'s Rock Band 3 (Xbox) songs matching the text, or its newest without; JSON with `total`, `page`, `page_size` and `songs`, each with its `file_id`, details, `tiers` as `/song_details` gives them, `song_id`, `download` (RhythmVerse hosts it, so band3 can download it), `downloaded` (its file is in the content folders) and `in_library` (the game has a song with its song ID; null while the game is busy). Optional: `sort=` `newest`, `updated`, `downloads`, `title`, `artist` or `length`; `downloadable=1` for only what band3 can download (pages of 100, the rest left out); `has=` parts (`keys`, `real_guitar`...), `harmonies=1`, `genre=` RhythmVerse's genres (`metal,rock`), `decade=1990,2000`, and `cap=<part>:<tier>` for a part's difficulty at most |
-| `POST /rv/download` | downloads `{"file_id": "<id>"}` (JSON) from a search into the songs folder: 404 for a song no search has found, 409 for one RhythmVerse doesn't host |
+| `POST /rv/download` | downloads `{"file_id": "<id>"}` (JSON) from a search into the songs folder, or with `"update": true` the newer version of one band3 downloaded (search results' `update` is `available`), for the next launch: 404 for a song no search has found, 409 for one RhythmVerse doesn't host, or has nothing newer of |
 | `/rv/downloads` | this session's downloads as JSON: the `folder` they go to, and each one's `state` (`queued`, `downloading`, `done`, `failed`), `received`, `total`, `error` and `in_library` (the game has taken it in; null while the game is busy, or before any is done) |
 
 #### RhythmVerse
@@ -513,7 +513,14 @@ menu. Songs copied into the content folders by hand join the same way once a sea
 seen them (the folders' files are listed again a minute on). Only
 songs RhythmVerse hosts itself download this way; for those on other sites (MediaFire,
 Google Drive...), zipped ones and the official DLC, **Open** goes to the song's
-RhythmVerse page. A download that isn't a Rock Band package is thrown away. Turn
+RhythmVerse page. A download that isn't a Rock Band package is thrown away.
+
+band3 keeps what it downloaded in `rhythmverse.json` in the download folder, with
+RhythmVerse's hashes of each upload, and when they change the song shows **Update
+available**. **Update** downloads the new version beside the old one as `<name>.pending`;
+the game has the old one open, so band3 puts the new one in its place when it next
+starts, keeping the old one beside it as `<name>.replaced` (nothing is deleted; clear
+them out when you like). Songs you got some other way aren't checked for updates. Turn
 `http_rhythmverse` off (`[http] rhythmverse = false`) to leave the tab out. RhythmVerse's
 API isn't documented, so a change on its side can break the tab until band3 follows.
 

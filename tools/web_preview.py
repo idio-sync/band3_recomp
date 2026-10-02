@@ -292,8 +292,10 @@ def rv_search_result(reply, downloaded):
     songs = [s for s in map(rv_song, data['songs'] or []) if s]
     for s in songs:
         s['downloaded'] = s['file_id'] in downloaded
-        # there's no game to ask, so the page goes by artist and title
+        # there's no game to ask, so the page goes by artist and title; and no
+        # downloads to have updates of
         s['in_library'] = None
+        s['update'] = ''
     return {'total': _rv_number((data.get('records') or {}).get('total_filtered')),
             'page': max(_rv_number((data.get('pagination') or {}).get('page')), 1),
             'page_size': RV_PAGE_SIZE, 'songs': songs}

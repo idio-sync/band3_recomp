@@ -5,7 +5,9 @@
 #include <chrono>
 #include <deque>
 #include <iterator>
+#include <fstream>
 #include <mutex>
+#include <sstream>
 #include <span>
 #include <thread>
 #include <unordered_map>
@@ -49,6 +51,9 @@ struct State {
     std::set<fs::path> paths;  // the same files' paths
     std::chrono::steady_clock::time_point files_time;
     bool files_stale = true;
+    // rhythmverse.json's, read when first needed (mutex held)
+    DownloadRecords records;
+    bool records_loaded = false;
 };
 
 State& TheState() {
@@ -74,6 +79,54 @@ std::string CheckPackage(std::string_view first) {
     return {};
 }
 
+fs::path RecordsPath() { return DownloadFolder() / "rhythmverse.json"; }
+
+// the state's mutex held
+void SaveRecords(State& state) {
+    const fs::path path = RecordsPath();
+    fs::path temp = path;
+    temp += content::kPartialSuffix;
+    {
+        std::ofstream file(temp, std::ios::binary | std::ios::trunc);
+        file << FormatRecords(state.records);
+        if (!file) {
+            REXLOG_WARN("RhythmVerse: couldn't write {}", rex::path_to_utf8(temp));
+            return;
+        }
+    }
+    std::error_code ec;
+    fs::rename(temp, path, ec);
+    if (ec) REXLOG_WARN("RhythmVerse: couldn't write {}: {}", rex::path_to_utf8(path), ec.message());
+}
+
+// the state's mutex held. An update that was waiting and is in place now
+// (the content scan puts them there) is the version downloaded.
+void LoadRecords(State& state) {
+    if (state.records_loaded) return;
+    state.records_loaded = true;
+    {
+        // closed before it's written again: Windows won't replace an open file
+        std::ifstream file(RecordsPath(), std::ios::binary);
+        if (!file) return;
+        std::ostringstream text;
+        text << file.rdbuf();
+        state.records = ParseRecords(text.str());
+    }
+    const fs::path folder = DownloadFolder();
+    bool changed = false;
+    for (auto& [file_id, record] : state.records) {
+        if (record.pending_hash.empty()) continue;
+        std::error_code ec;
+        fs::path pending = folder / rex::to_path(record.file_name);
+        pending += content::kPendingSuffix;
+        if (fs::exists(pending, ec) || !fs::exists(folder / rex::to_path(record.file_name), ec)) continue;
+        record.hash = std::move(record.pending_hash);
+        record.pending_hash.clear();
+        changed = true;
+    }
+    if (changed) SaveRecords(state);
+}
+
 // downloads left half done by a band3 that didn't close normally
 void RemovePartials(const fs::path& folder) {
     std::error_code ec;
@@ -84,12 +137,13 @@ void RemovePartials(const fs::path& folder) {
     }
 }
 
-// "" and the file it's in, or why not
-std::string DownloadOne(const Song& song, const fs::path& folder, fs::path& path) {
+// "" and the file it's in (name, in folder), or why not
+std::string DownloadOne(const Song& song, const fs::path& folder, const fs::path& name,
+                        fs::path& path) {
     std::error_code ec;
     fs::create_directories(folder, ec);
     if (ec) return "couldn't make the folder " + rex::path_to_utf8(folder) + ": " + ec.message();
-    path = folder / DownloadFileName(song);
+    path = folder / name;
     fs::path partial = path;
     partial += content::kPartialSuffix;
 
@@ -121,6 +175,10 @@ void Work() {
     RemovePartials(folder);
     while (true) {
         Song song;
+        bool update = false;
+        // an update goes beside the file it's for, which the game may have
+        // open, and takes its place at the next launch (content/package_scan.h)
+        fs::path name;
         {
             std::lock_guard lock(state.mutex);
             if (state.queue.empty() || state.stopping) {
@@ -130,11 +188,20 @@ void Work() {
             const std::string file_id = state.queue.front();
             state.queue.pop_front();
             song = state.known.at(file_id);
-            if (Download* d = FindDownload(state, file_id)) d->state = Download::State::kDownloading;
+            if (Download* d = FindDownload(state, file_id)) {
+                d->state = Download::State::kDownloading;
+                update = d->update;
+            }
+            name = DownloadFileName(song);
+            LoadRecords(state);
+            const auto record = state.records.find(file_id);
+            if (update && record != state.records.end()) name = rex::to_path(record->second.file_name);
+            if (update) name += content::kPendingSuffix;
         }
-        REXLOG_INFO("RhythmVerse: downloading {} - {} ({})", song.artist, song.title, song.file_id);
+        REXLOG_INFO("RhythmVerse: {} {} - {} ({})", update ? "updating" : "downloading", song.artist,
+                    song.title, song.file_id);
         fs::path path;
-        const std::string error = DownloadOne(song, folder, path);
+        const std::string error = DownloadOne(song, folder, name, path);
         if (error.empty()) {
             REXLOG_INFO("RhythmVerse: downloaded {} - {}", song.artist, song.title);
         } else {
@@ -146,13 +213,23 @@ void Work() {
         }
         {
             std::lock_guard lock(state.mutex);
+            if (error.empty()) {
+                // what was downloaded, to tell when there's a newer version
+                if (update) {
+                    state.records[song.file_id].pending_hash = song.hash;
+                } else {
+                    state.records[song.file_id] = {rex::path_to_utf8(path.filename()), song.hash, {}};
+                }
+                SaveRecords(state);
+            }
             if (Download* d = FindDownload(state, song.file_id)) {
                 d->state = error.empty() ? Download::State::kDone : Download::State::kFailed;
                 d->error = error;
             }
         }
-        // for the game to take it in (live_content.h)
-        if (error.empty()) content::AddLivePackages({path});
+        // for the game to take it in (live_content.h); an update waits for the
+        // next launch
+        if (error.empty() && !update) content::AddLivePackages({path});
     }
 }
 
@@ -186,14 +263,17 @@ void Remember(const std::vector<Song>& songs) {
     }
 }
 
-QueueResult QueueDownload(std::string_view file_id) {
+QueueResult QueueDownload(std::string_view file_id, bool update) {
     if (!ValidFileId(file_id)) return QueueResult::kUnknown;
     const fs::path folder = DownloadFolder();
     // listed before the lock: the folders may be on a slow drive
-    const LocalSongs local{LocalFiles(), std::nullopt};
+    LocalSongs local;
+    local.files = LocalFiles();
 
     auto& state = TheState();
     std::lock_guard lock(state.mutex);
+    LoadRecords(state);
+    local.records = state.records;
     const auto it = state.known.find(std::string(file_id));
     if (it == state.known.end()) return QueueResult::kUnknown;
     const Song& song = it->second;
@@ -203,13 +283,18 @@ QueueResult QueueDownload(std::string_view file_id) {
     if (d && (d->state == Download::State::kQueued || d->state == Download::State::kDownloading)) {
         return QueueResult::kQueued;
     }
-    if (IsDownloaded(song, local)) return QueueResult::kHave;
+    if (update) {
+        if (UpdateOf(song, local.records) != UpdateState::kAvailable) return QueueResult::kNoUpdate;
+    } else if (IsDownloaded(song, local)) {
+        return QueueResult::kHave;
+    }
     // a failed one is tried again
     if (!d) {
         state.downloads.push_back(Download{song.file_id, song.title, song.artist});
         d = &state.downloads.back();
         d->song_id = song.song_id;
     }
+    d->update = update;
     d->state = Download::State::kQueued;
     d->received = 0;
     d->total = song.size;
@@ -220,6 +305,13 @@ QueueResult QueueDownload(std::string_view file_id) {
         std::thread(Work).detach();
     }
     return QueueResult::kQueued;
+}
+
+DownloadRecords Records() {
+    auto& state = TheState();
+    std::lock_guard lock(state.mutex);
+    LoadRecords(state);
+    return state.records;
 }
 
 std::vector<Download> Downloads() {
@@ -244,7 +336,7 @@ std::set<std::pair<std::string, int64_t>> LocalFiles() {
         for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
             std::error_code file_ec;
             if (!it->is_regular_file(file_ec)) continue;
-            if (it->path().extension() == fs::path(content::kPartialSuffix)) continue;
+            if (content::IsSetAside(it->path())) continue;
             const uintmax_t size = it->file_size(file_ec);
             if (file_ec) continue;
             files.emplace(LowerAscii(rex::path_to_utf8(it->path().filename())),

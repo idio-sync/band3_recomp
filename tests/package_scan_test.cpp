@@ -140,3 +140,38 @@ TEST_CASE("one file reads as a package when it's an RB3 one, whole") {
     CHECK(!ReadPackage(root / "missing", kRb3TitleIds));
     fs::remove_all(root);
 }
+
+TEST_CASE("a scan puts pending updates in place and keeps what they replace") {
+    const fs::path root = fs::temp_directory_path() / "band3_update_test";
+    fs::remove_all(root);
+    Write(root / "Song_1", MakeHeader("CON ", 1, kRb3TitleId, 0x10, u"Old"));
+    Write(root / "Song_1.pending", MakeHeader("CON ", 1, kRb3TitleId, 0x10, u"New"));
+    Write(root / "Other_2.replaced", MakeHeader("CON ", 1, kRb3TitleId, 0x40, u"Replaced before"));
+    // an update for a file that's gone: it's the file now
+    Write(root / "Gone_3.pending", MakeHeader("CON ", 1, kRb3TitleId, 0x70, u"Gone"));
+    std::vector<std::string> problems;
+    const auto found = ScanFolders({root}, kRb3TitleIds, &problems);
+    CHECK(problems.empty());
+    std::set<std::u16string> names;
+    for (const auto& package : found) names.insert(package.header.display_name);
+    CHECK(names == std::set<std::u16string>{u"New", u"Gone"});
+    CHECK(fs::exists(root / "Song_1.replaced"));
+    CHECK(!fs::exists(root / "Song_1.pending"));
+    CHECK(fs::exists(root / "Gone_3"));
+
+    // a second update keeps both older versions
+    Write(root / "Song_1.pending", MakeHeader("CON ", 1, kRb3TitleId, 0x10, u"Newer"));
+    ScanFolders({root}, kRb3TitleIds, nullptr);
+    CHECK(fs::exists(root / "Song_1.replaced"));
+    CHECK(fs::exists(root / "Song_1.2.replaced"));
+    CHECK(ReadPackage(root / "Song_1", kRb3TitleIds)->header.display_name == u"Newer");
+    fs::remove_all(root);
+}
+
+TEST_CASE("files waiting or replaced are set aside") {
+    CHECK(IsSetAside("a/Song_1.part"));
+    CHECK(IsSetAside("a/Song_1.pending"));
+    CHECK(IsSetAside("a/Song_1.2.replaced"));
+    CHECK(!IsSetAside("a/Song_1"));
+    CHECK(!IsSetAside("a/DVNeverGonnaStopFinal_595481a7cbc158.68319817"));
+}

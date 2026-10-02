@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -75,6 +76,9 @@ struct Song {
     // game has it: a text one as band3 turns it into a number (CorrectedSongId);
     // 0 when RhythmVerse doesn't say
     int32_t song_id = 0;
+    // RhythmVerse's hashes of the upload's files, which change with them; empty
+    // when it gives none
+    std::string hash;
     // set only for files RhythmVerse hosts itself, unpacked: the ones band3
     // can download. The rest are on another site (`host`), zipped, or the
     // official DLC's store page.
@@ -110,11 +114,35 @@ struct Download {
     std::string title;
     std::string artist;
     int32_t song_id = 0;  // Song's
+    bool update = false;  // a newer version of one band3 downloaded, for the next launch
     State state = State::kQueued;
     int64_t received = 0;
     int64_t total = 0;  // 0 until known
     std::string error;  // kFailed's reason
 };
+
+// What band3 downloaded of an upload, kept in the download folder's
+// rhythmverse.json, to tell when RhythmVerse has a newer version of it
+struct DownloadRecord {
+    std::string file_name;     // the file it's in, in the download folder
+    std::string hash;          // Song::hash, as downloaded
+    std::string pending_hash;  // an update's, waiting for the next launch (file_name + .pending)
+};
+// by file ID
+using DownloadRecords = std::map<std::string, DownloadRecord>;
+
+// {"<file_id>": {"file": , "hash": , "pending": }, ...}; records it can't read
+// are left out
+DownloadRecords ParseRecords(std::string_view json);
+std::string FormatRecords(const DownloadRecords& records);
+
+// what's become of an upload band3 downloaded
+enum class UpdateState {
+    kNone,       // not downloaded by band3, the same as RhythmVerse's, or no hash to tell
+    kAvailable,  // RhythmVerse has another version, which band3 can download
+    kPending,    // the latest is downloaded, for the next launch
+};
+UpdateState UpdateOf(const Song& song, const DownloadRecords& records);
 
 // The songs already here, to tell a search's songs by: the files in the
 // content folders, however they got there, and the songs the game has.
@@ -123,26 +151,29 @@ struct LocalSongs {
     std::set<std::pair<std::string, int64_t>> files;
     // the song IDs of the songs in the game; nullopt when the game couldn't say
     std::optional<std::set<int32_t>> game_ids;
+    DownloadRecords records;
 };
 
 // ASCII letters lower-cased, as LocalSongs keeps file names
 std::string LowerAscii(std::string_view text);
 
 // the song's file is in the content folders: one band3 downloaded (named by
-// DownloadFileName), or one with the name RhythmVerse gives it and its size
+// DownloadFileName, or as its record says), or one with the name RhythmVerse
+// gives it and its size
 bool IsDownloaded(const Song& song, const LocalSongs& local);
 
 // /rv/search: {"total":, "page":, "page_size":, "songs": [{"file_id":,
 // "title":, ..., "tiers": {...}, "download": true when band3 can download it,
 // "downloaded": true when IsDownloaded, "song_id": as the game has it (0 for
 // none), "in_library": true when the game has a song with its song ID (null
-// when the game couldn't say)}, ...]}
+// when the game couldn't say), "update": "available" or "pending" (UpdateOf)
+// or ""}, ...]}
 std::string FormatSearch(const SearchResult& result, const LocalSongs& local);
 
 // /rv/downloads: {"folder": where they go, "downloads": [{"file_id":, "title":,
 // "artist":, "state": "queued"|"downloading"|"done"|"failed", "received":,
-// "total":, "error":, "song_id":, "in_library": the game has its song ID
-// (null when game_ids is)}, ...]}
+// "total":, "error":, "song_id":, "update":, "in_library": the game has its
+// song ID (null when game_ids is)}, ...]}
 std::string FormatDownloads(const std::vector<Download>& downloads, std::string_view folder,
                             const std::optional<std::set<int32_t>>& game_ids);
 

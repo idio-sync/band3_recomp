@@ -295,6 +295,7 @@ std::string RhythmVerseSearch(const Request& request, bool cors) {
 
     rhythmverse::LocalSongs local;
     local.files = rhythmverse::LocalFiles();
+    local.records = rhythmverse::Records();
     // the game's songs say what's in it whatever their files are called; while
     // the game is busy, the page goes by artist and title
     local.game_ids = GameSongIds();
@@ -309,9 +310,12 @@ std::string RhythmVerseDownload(const Request& request, bool cors) {
     }
     const auto body = json::Parse(request.body);
     const std::string file_id = body ? (*body)["file_id"].Text() : std::string();
-    switch (rhythmverse::QueueDownload(file_id)) {
+    const bool update = body && (*body)["update"].Bool();
+    switch (rhythmverse::QueueDownload(file_id, update)) {
         case rhythmverse::QueueResult::kQueued:
-            return Response(200, kText, "Downloading", cors);
+            return Response(200, kText, update ? "Updating" : "Downloading", cors);
+        case rhythmverse::QueueResult::kNoUpdate:
+            return Response(409, kText, "RhythmVerse has nothing newer of it", cors);
         case rhythmverse::QueueResult::kHave:
             return Response(200, kText, "Already in the song folders", cors);
         case rhythmverse::QueueResult::kUnknown:

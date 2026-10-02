@@ -37,6 +37,7 @@ FolderScan ScanFolder(const fs::path& folder, std::span<const uint32_t> title_id
         return out;
     }
     std::vector<fs::directory_iterator> listing;  // the folders being listed, innermost last
+    std::vector<fs::path> pending;  // updates to put in place
     auto enter = [&](const fs::path& dir) {
         std::error_code error;
         fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, error);
@@ -67,7 +68,21 @@ FolderScan ScanFolder(const fs::path& folder, std::span<const uint32_t> title_id
             continue;
         }
         if (!entry.is_regular_file(ec)) continue;
+        if (entry.path().extension() == fs::path(kPendingSuffix)) {
+            pending.push_back(entry.path());
+            continue;
+        }
         if (auto package = ReadPackage(entry.path(), title_ids)) out.packages.push_back(std::move(*package));
+    }
+    // after the walk, which may have read the old file already
+    for (const fs::path& update : pending) {
+        if (std::string problem = ApplyPendingUpdate(update); !problem.empty()) {
+            out.problems.push_back(problem);
+            continue;
+        }
+        const fs::path target = fs::path(update).replace_extension();
+        std::erase_if(out.packages, [&](const Package& p) { return p.path == target; });
+        if (auto package = ReadPackage(target, title_ids)) out.packages.push_back(std::move(*package));
     }
     return out;
 }
@@ -98,8 +113,32 @@ std::optional<PackageHeader> ParsePackageHeader(std::span<const uint8_t> b) {
     return h;
 }
 
+bool IsSetAside(const fs::path& path) {
+    const fs::path ext = path.extension();
+    return ext == fs::path(kPartialSuffix) || ext == fs::path(kPendingSuffix) ||
+           ext == fs::path(kReplacedSuffix);
+}
+
+std::string ApplyPendingUpdate(const fs::path& pending) {
+    const fs::path target = fs::path(pending).replace_extension();
+    std::error_code ec;
+    if (fs::exists(target, ec)) {
+        fs::path kept = target;
+        kept += kReplacedSuffix;
+        for (int n = 2; fs::exists(kept, ec); n++) {
+            kept = target;
+            kept += "." + std::to_string(n) + std::string(kReplacedSuffix);
+        }
+        fs::rename(target, kept, ec);
+        if (ec) return Utf8(target) + ": couldn't set it aside for its update: " + ec.message();
+    }
+    fs::rename(pending, target, ec);
+    if (ec) return Utf8(pending) + ": couldn't put the update in place: " + ec.message();
+    return {};
+}
+
 std::optional<Package> ReadPackage(const fs::path& path, std::span<const uint32_t> title_ids) {
-    if (path.extension() == fs::path(kPartialSuffix)) return std::nullopt;
+    if (IsSetAside(path)) return std::nullopt;
     std::vector<uint8_t> bytes(kHeaderBytes);
     std::ifstream file(path, std::ios::binary);
     if (!file.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(bytes.size()))) return std::nullopt;

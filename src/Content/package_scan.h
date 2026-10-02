@@ -34,16 +34,30 @@ inline constexpr size_t kHeaderBytes = 0x511;
 // the end of a file's name while it's still downloading (src/Net/song_downloads.h);
 // scans skip it, since its header can be whole while the rest isn't there yet
 inline constexpr std::string_view kPartialSuffix = ".part";
+// A newer version of the file it's named after (X.pending for X), downloaded
+// while the game had X open (src/Net/song_downloads.h): the next scan puts it
+// in X's place and keeps X as X.replaced (or X.2.replaced...), which scans
+// skip too, so nothing is deleted.
+inline constexpr std::string_view kPendingSuffix = ".pending";
+inline constexpr std::string_view kReplacedSuffix = ".replaced";
+
+// a file a scan leaves out: one still downloading, waiting to replace
+// another, or replaced
+bool IsSetAside(const std::filesystem::path& path);
+
+// puts pending (X.pending) in X's place, keeping X as X.replaced; "" or why not
+std::string ApplyPendingUpdate(const std::filesystem::path& pending);
 
 std::optional<PackageHeader> ParsePackageHeader(std::span<const uint8_t> bytes);
 
-// the file at path, if it's a package for one of title_ids (and not one still
-// downloading, kPartialSuffix)
+// the file at path, if it's a package for one of title_ids (and not one set
+// aside, IsSetAside)
 std::optional<Package> ReadPackage(const std::filesystem::path& path,
                                    std::span<const uint32_t> title_ids);
 
 // every package for one of title_ids in folders and their subfolders (but not
-// files ending kPartialSuffix), one per content ID (the first found, in the folders' order); the folders are scanned
+// those set aside, IsSetAside, after pending updates are put in place), one
+// per content ID (the first found, in the folders' order); the folders are scanned
 // at once, a thread each. `problems` gets one line per folder or subfolder
 // that couldn't be read, naming it; the rest of the folder is still read
 std::vector<Package> ScanFolders(const std::vector<std::filesystem::path>& folders,

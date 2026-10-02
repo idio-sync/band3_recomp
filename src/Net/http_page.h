@@ -802,9 +802,33 @@ function rvSelectButton(s) {
 // a song's button: Select when the game has it, else Download, how far along
 // it is, or Open for a song
 // RhythmVerse doesn't host, to download from its page
+// a newer version of one band3 downloaded is on RhythmVerse, and not being
+// downloaded already
+function updateAvailable(s) {
+  const d = rv.downloads.get(s.file_id);
+  return s.update === "available" && !(d && d.update && d.state !== "failed");
+}
+
+// the newer version is downloaded, for band3's next launch
+function updatePending(s) {
+  const d = rv.downloads.get(s.file_id);
+  return s.update === "pending" || !!(d && d.update && d.state === "done");
+}
+
+function rvUpdateButton(s) {
+  const b = el("button", "dl", "Update");
+  b.title = "Download RhythmVerse's newer version; band3 puts it in place when it next starts";
+  b.onclick = e => { e.stopPropagation(); download(s, true); };
+  return b;
+}
+
 function rvAction(s) {
-  if (inGame(s)) return rvSelectButton(s);
+  if (updateAvailable(s)) return rvUpdateButton(s);
   const d = rvState(s);
+  // an update downloading: its progress, below
+  if (inGame(s) && !(d && d.update && (d.state === "queued" || d.state === "downloading"))) {
+    return rvSelectButton(s);
+  }
   if (!s.download && !(d && d.state === "done")) {
     const a = rvPageLink(s, "Open");
     a.title = s.host === "rhythmverse.co" ? "Zipped: download it from its RhythmVerse page"
@@ -832,6 +856,8 @@ function rvAction(s) {
 function libraryTag(s) {
   const d = rv.downloads.get(s.file_id);
   const downloaded = rvState(s) && rvState(s).state === "done";
+  if (updateAvailable(s)) return ["Update available", "RhythmVerse has a newer version than the one band3 downloaded"];
+  if (updatePending(s)) return ["Updated at next launch", "The newer version is downloaded; band3 puts it in place of the old one (kept as .replaced) when it next starts"];
   if (s.in_library || (d && d.in_library)) return ["In library", "The game has this song (by its song ID)"];
   if (downloaded) return ["Not in game yet", "The game adds it as it did songs from the store: in the Music Library, or after a song that's playing"];
   if (s.in_library === null && inLibrary(s)) return ["In library", "A song by this artist and title is in the game"];
@@ -881,6 +907,8 @@ function openRvSong(s) {
   if (inGame(s) || s.download || rvState(s)) {
     const action = rvAction(s);
     if (action.tagName === "BUTTON") action.addEventListener("click", () => $("sheet").close());
+    // Select as well as Update, for a song the game has
+    if (updateAvailable(s) && inGame(s)) actions.append(rvSelectButton(s));
     actions.append(action);
   }
   body.append(actions);
@@ -931,11 +959,11 @@ async function rvSearch(more) {
   }
 }
 
-async function download(s) {
+async function download(s, update) {
   try {
     const r = await fetch("/rv/download", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({file_id: s.file_id}),
+      body: JSON.stringify({file_id: s.file_id, update: !!update}),
     });
     const text = await r.text();
     if (!r.ok) { toast(text); return; }
@@ -945,7 +973,8 @@ async function download(s) {
       toast(`“${s.title}” is in the song folders already`);
       return;
     }
-    rv.downloads.set(s.file_id, {file_id: s.file_id, title: s.title, state: "queued", received: 0, total: s.size});
+    rv.downloads.set(s.file_id, {file_id: s.file_id, title: s.title, state: "queued", received: 0,
+                                 total: s.size, song_id: s.song_id, update: !!update});
     waitingSince = null;
     refreshRow(s.file_id);
     pollDownloads();
@@ -979,17 +1008,27 @@ async function pollDownloads() {
       refreshRow(d.file_id);
       busy = busy || d.state === "queued" || d.state === "downloading";
     }
-    const done = res.downloads.filter(d => d.state === "done");
+    const updates = res.downloads.filter(d => d.state === "done" && d.update).length;
+    const done = res.downloads.filter(d => d.state === "done" && !d.update);
     // in_library is null while the game's busy: still waiting, as far as anyone knows
     // only songs with a song ID can be seen joining the game
     const waiting = done.filter(d => d.song_id && !d.in_library).length;
     const songs = n => n === 1 ? "1 song" : n + " songs";
-    $("rv-note").hidden = !done.length;
-    $("rv-note").textContent = songs(done.length) + " downloaded to " + rv.folder + ". " + (waiting
-      ? (done.length === 1 ? "It's not" : waiting === 1 ? "1 isn't" : waiting + " aren't") +
-        " in the game yet: " +
-        "the game adds songs as it did ones from the store, when you're in the Music Library (or once the song that's playing is over)."
-      : (done.length === 1 ? "It's" : "They're") + " in the game.");
+    const notes = [];
+    if (done.length) {
+      notes.push(songs(done.length) + " downloaded to " + rv.folder + ". " + (waiting
+        ? (done.length === 1 ? "It's not" : waiting === 1 ? "1 isn't" : waiting + " aren't") +
+          " in the game yet: " +
+          "the game adds songs as it did ones from the store, when you're in the Music Library (or once the song that's playing is over)."
+        : (done.length === 1 ? "It's" : "They're") + " in the game."));
+    }
+    if (updates) {
+      notes.push((updates === 1 ? "1 update" : updates + " updates") + " downloaded: the game has the " +
+        "old version open, so band3 puts the new one in place when it next starts, keeping the old " +
+        "one beside it as .replaced.");
+    }
+    $("rv-note").hidden = !notes.length;
+    $("rv-note").textContent = notes.join(" ");
     // downloading, every second; waiting for the game, every few
     if (!waiting) waitingSince = null;
     else if (waitingSince === null) waitingSince = Date.now();
