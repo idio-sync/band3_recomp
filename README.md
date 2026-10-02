@@ -39,6 +39,7 @@ You need your own copy of the game; no game files are included.
 <img src="docs/images/web-song-browser.png" alt="band3's web song browser: the library with album art and part difficulties, and the song now playing" width="520">
 
 **Settings**
+- A launcher: a setup screen for folders, graphics, audio, controllers and online features, shown on the first run (Shift at startup brings it back)
 - An in-game settings menu (F4, or both stick clicks), saved to `band3.toml`
 - Configurable save, cache and song folders, including a portable install
 
@@ -67,7 +68,7 @@ CI runs and profiling.
 | | |
 |---|---|
 | [Building](docs/building.md) | requirements, Windows and Linux builds, unit tests, compile check, profiling |
-| [Settings, folders and songs](docs/settings.md) | the F4 menu, config files, where band3 keeps things, DLC and custom songs, Steam Deck |
+| [Settings, folders and songs](docs/settings.md) | the launcher, the F4 menu, config files, where band3 keeps things, DLC and custom songs, Steam Deck |
 | [Instruments and microphones](docs/instruments.md) | Instrument Lab, PlayStation/Wii dongles, MIDI drums, USB mics, pro instruments, controller lag |
 | [Integrations](docs/integrations.md) | network events, Discord, the web server and its API, RB3Enhanced and Deluxe compatibility |
 | [Test harness](docs/test-harness.md) | `band3ctl`: driving the game from scripts, and the game tests |

@@ -105,12 +105,10 @@ void Finish(std::vector<Package> packages) {
 #ifdef _WIN32
 // the setting's folders, and their names for the log
 std::vector<std::filesystem::path> Folders(const std::string& setting, std::string& names) {
-    const auto anchor = IniAnchor();
-    std::vector<std::filesystem::path> folders;
-    for (const auto& entry : paths::SplitList(setting)) {
-        folders.push_back(paths::Resolve(entry, anchor));
+    auto folders = ContentFolders(setting);
+    for (const auto& folder : folders) {
         if (!names.empty()) names += " | ";
-        names += rex::path_to_utf8(folders.back());
+        names += rex::path_to_utf8(folder);
     }
     return folders;
 }
@@ -150,6 +148,15 @@ bool UnmountLocked(std::string_view root_name) {
 }
 
 }  // namespace
+
+std::vector<std::filesystem::path> ContentFolders(std::string_view setting) {
+    const auto anchor = IniAnchor();
+    std::vector<std::filesystem::path> folders;
+    for (const auto& entry : paths::SplitList(setting)) {
+        folders.push_back(paths::Resolve(entry, anchor));
+    }
+    return folders;
+}
 
 void StartLiveContent(rex::filesystem::VirtualFileSystem* vfs) {
     g_vfs = vfs;

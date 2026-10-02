@@ -49,6 +49,7 @@ public:
     std::chrono::milliseconds slept{0};
     std::vector<std::pair<std::string, std::string>> settings_set;
     std::vector<std::string> binds_pressed;
+    GameFolders folders;
     std::string screenshot_name;
     ScreenshotSource screenshot_source = ScreenshotSource::kWindow;
     // renderer = native: the window's picture is the native renderer's, and
@@ -130,6 +131,12 @@ public:
         settings_set.emplace_back(name, value);
         return {};
     }
+    std::optional<SettingValue> GetSetting(std::string_view name) override {
+        if (name == "lang") return SettingValue{"fre", "config"};
+        if (name == "username") return SettingValue{"Some \"Name\"", "default"};
+        return std::nullopt;
+    }
+    GameFolders Folders() override { return folders; }
     std::string PressBind(std::string_view bind) override {
         if (bind == "bind_nothing") return "no key bind bind_nothing";
         binds_pressed.emplace_back(bind);
@@ -678,6 +685,33 @@ TEST_CASE("set passes the setting on, keeping spaces in the value") {
     CHECK_FALSE(Ok(reply));
     CHECK(Has(reply, "isn't a Band3 setting"));
     CHECK_FALSE(Ok(RunCommand("set autoplay", game)));
+}
+
+TEST_CASE("cvar reports a setting's value and what set it") {
+    FakeGame game;
+    CHECK(RunCommand("cvar lang", game) ==
+          "{\"ok\":true,\"cvar\":{\"name\":\"lang\",\"value\":\"fre\",\"source\":\"config\"}}");
+    CHECK(Has(RunCommand("cvar username", game), "\"value\":\"Some \\\"Name\\\"\""));
+
+    const std::string reply = RunCommand("cvar nothing", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(Has(reply, "no setting nothing"));
+    CHECK_FALSE(Ok(RunCommand("cvar", game)));
+    CHECK_FALSE(Ok(RunCommand("cvar lang username", game)));
+    CHECK_FALSE(Ok(RunCommand("p2 cvar lang", game)));
+}
+
+TEST_CASE("folders reports the folders the game runs with") {
+    FakeGame game;
+    game.folders = {"C:/Games/rb3", "C:\\Users\\me\\band3", "D:/cache", {"C:/songs", "D:/more"}};
+    CHECK(RunCommand("folders", game) ==
+          "{\"ok\":true,\"folders\":{\"game_data\":\"C:/Games/rb3\","
+          "\"user_data\":\"C:\\\\Users\\\\me\\\\band3\",\"cache\":\"D:/cache\","
+          "\"content\":[\"C:/songs\",\"D:/more\"]}}");
+
+    game.folders.content.clear();
+    CHECK(Has(RunCommand("folders", game), "\"content\":[]"));
+    CHECK_FALSE(Ok(RunCommand("folders now", game)));
 }
 
 TEST_CASE("bind presses a key bind, with or without its bind_ prefix") {

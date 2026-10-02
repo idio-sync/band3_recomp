@@ -126,10 +126,55 @@ def connect(port, wait_s=0.0):
             time.sleep(0.5)
 
 
+def place_config(source, exe_folder):
+    """Puts source beside the exe as band3.toml, for one start. A band3.toml
+    already there is moved aside to band3.toml.band3ctl, so it survives even if
+    band3ctl doesn't. Returns what puts the folder back as it was."""
+    target = os.path.join(exe_folder, "band3.toml")
+    saved = target + ".band3ctl"
+    if os.path.exists(saved):
+        raise RuntimeError(f"{saved} is left from an earlier --config; put it back as "
+                           "band3.toml (or delete it) first")
+    had_one = os.path.exists(target)
+    if had_one:
+        os.replace(target, saved)
+    try:
+        shutil.copyfile(source, target)
+    except OSError:
+        if had_one:
+            os.replace(saved, target)
+        raise
+
+    def restore():
+        if had_one:
+            os.replace(saved, target)
+        elif os.path.exists(target):
+            os.remove(target)
+
+    return restore
+
+
 def launch(args):
     exe = os.path.abspath(args.exe)
     if not os.path.isfile(exe):
         sys.exit(f"no band3 at {exe}")
+    if not args.config:
+        return start(args, exe)
+    if not os.path.isfile(args.config):
+        sys.exit(f"no config file at {args.config}")
+    try:
+        restore = place_config(args.config, os.path.dirname(exe))
+    except (RuntimeError, OSError) as e:
+        sys.exit(f"--config: {e}")
+    try:
+        return start(args, exe)
+    finally:
+        # band3 reads band3.toml only as it starts, before its window opens
+        # and the harness answers, so it's done with it by now
+        restore()
+
+
+def start(args, exe):
     # band3 finds band3_config.ini and its game data (assets/) from here
     cwd = os.path.abspath(args.cwd)
     # its own saves and profile, so a test never touches the player's
@@ -582,6 +627,9 @@ def main(argv):
     p.add_argument("--no-harness", action="store_true",
                    help="without test_port, so the launcher can show (--launcher); waits for "
                         "the window instead of the harness, which won't answer")
+    p.add_argument("--config", metavar="FILE",
+                   help="start with FILE as the band3.toml beside the exe, putting back "
+                        "whatever was there once band3 has read it")
     p.add_argument("extra", nargs="*", help="more band3 arguments, e.g. --fast_start=true")
 
     p = sub.add_parser("run", help="replay a .b3t script")

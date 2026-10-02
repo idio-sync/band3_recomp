@@ -118,7 +118,7 @@ class Band3App : public rex::ReXApp {
     band3::steam_deck::ApplyDefaults();
     band3::ApplyLegacyIni();
 
-    // band3 keeps a shorter audio queue than the SDK's 64 unless told otherwise
+    // band3 keeps a shorter audio queue than the SDK's 8 unless told otherwise
     if (rex::cvar::GetFlagSource("audio_maxqframes") == rex::cvar::Source::kDefault) {
       rex::cvar::SetFlagByName("audio_maxqframes", "3");
       rex::cvar::ClearPendingRestartFlags();

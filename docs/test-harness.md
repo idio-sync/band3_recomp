@@ -33,6 +33,20 @@ when a client disconnects.
 -- --launcher` starts band3 without it, to see the launcher: nothing answers on the port
 then, so `launch` waits for the window instead, and the window commands below drive it.
 
+`launch --config <file>` starts band3 with that file as the `band3.toml` beside the
+exe, and puts back what was there (moved aside to `band3.toml.band3ctl` meanwhile) as soon
+as the harness answers, by when band3 has read it. `--user_data_root` is on the command
+line, so the file's `user_data_root` loses to it. `tools/test_config_file.py` uses it to
+check that a `band3.toml` written by the launcher's writer reaches the game: its folders
+(absolute with forward slashes, and relative to the ini's folder), `content_folders`,
+`controller_type` and `lang`, each winning over a `band3_config.ini` that sets them
+otherwise. It needs the unit tests built, for `band3_write_config` (the writer as a small
+program), and runs band3 from a temporary folder it deletes afterwards:
+
+```
+python tools/test_config_file.py
+```
+
 `capture` and `native_view` check the native view's rendering; see
 [Render checks](native-renderer.md#render-checks).
 
@@ -63,6 +77,8 @@ buttons; the window has to be `offscreen` to see it. `window status` prints wher
 | `capture [name] [composed]` | a screenshot (`<name>.png`) and the native view's capture (`<name>.cap`) of the same full frame, and the native view's GPU backend drawing it (`<name>.gpu.png`), all under `screenshots/`. With `composed` it fails unless the capture is a post frame composed with the world frame before it (`proc_cmds` 2, `composed` true); its files are written either way. The reply's fields are under [Render checks](native-renderer.md#render-checks) |
 | `native_view on [<width>x<height>] [nopost]\|off\|stats` | the native view live, as F9 draws it (same worker, same `native_view_backend`) but without its window, at 1280x720 unless given a size, and without RB3's post-processing with `nopost` (`post` in the reply), to see what it costs; `off` stops it and the capturing with it. While `renderer` is native the native renderer draws at the window's size, so `on` measures it at that size and `on` with a size is an error. Each reply has `stats`: the backend, frames `captured` and `rendered` since `on`, `skipped_busy` (captured while it was still drawing another), `worldless` (drawn without a world: with even/odd rendering, a frame that drew none and wasn't composed with the one before; 0 unless that's broken), each drawn frame's time in `ms` (`mean`, `p50`, `p95`, `max`; on the GPU the whole frame, uploads and reading back included) and the part after submitting in `wait_ms`, and the game's own `game_frames` and `game_fps` since the last `on` or `off`, and `rt_recording`: whether `native_view_record_targets` is `on`, and the texture passes the game drew in that time while capture was off, how many of them were recorded (those into textures that aren't drawn every frame or every world frame), their draws, and the game thread's `ms` recording them. `off`'s reply is the run it ends; `run` prints replies with `stats`. `tests/game/render_song_live.b3t` measures a song with it |
 | `set <setting> <value>` | Band3 settings only |
+| `cvar <setting>` | any setting's value, the SDK's too, and its `source`: `default`, `config` (`band3.toml`), `environment`, `command_line` or `runtime` (changed since startup, by F4, `set`, band3_config.ini or band3 itself) |
+| `folders` | the folders the game runs with: `game_data`, `user_data`, `cache`, and `content`, the `content_folders` resolved as the song scan reads them |
 | `bind <name>` | presses the key a key bind is set to, as if the window had focus: `bind instrument_lab` (F6), `bind settings` (F4), `bind native_view` (F9), `bind renderer` (F8); the `bind_` prefix is optional. With `window offscreen`, `window shot` then captures the overlay it opens |
 | `quit` | |
 

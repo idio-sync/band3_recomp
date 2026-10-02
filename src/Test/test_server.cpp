@@ -39,6 +39,7 @@
 #include <rex/ui/windowed_app_context.h>
 #include <rex/input/input_system.h>
 #include "src/Audio/usb_mic_capture.h"
+#include "src/Content/live_content.h"
 #include "src/Input/input_lock.h"
 #include "src/Input/input_system.h"
 #include "src/Input/virtual_instrument.h"
@@ -358,6 +359,29 @@ public:
         return {};
     }
 
+    std::optional<SettingValue> GetSetting(std::string_view name) override {
+        std::optional<SettingValue> out;
+        OnUIThread([&] {
+            if (!rex::cvar::GetFlagInfo(name)) return;
+            out = SettingValue{rex::cvar::GetFlagByName(name),
+                               SourceName(rex::cvar::GetFlagSource(name))};
+        });
+        return out;
+    }
+
+    GameFolders Folders() override {
+        GameFolders out{rex::path_to_utf8(runtime_->game_data_root()),
+                        rex::path_to_utf8(runtime_->user_data_root()),
+                        rex::path_to_utf8(runtime_->cache_root()),
+                        {}};
+        std::string setting;
+        OnUIThread([&] { setting = REXCVAR_GET(content_folders); });
+        for (const auto& folder : content::ContentFolders(setting)) {
+            out.content.push_back(rex::path_to_utf8(folder));
+        }
+        return out;
+    }
+
     // as band3_app's PressBind does for the menu shortcut: the bind's key goes
     // straight to the binds, so it works on a window that never has focus
     std::string PressBind(std::string_view bind) override {
@@ -417,6 +441,17 @@ private:
     // cvars and their change callbacks belong to the UI thread
     void OnUIThread(const std::function<void()>& function) {
         app_context_->CallInUIThreadSynchronous(function);
+    }
+
+    static std::string SourceName(rex::cvar::Source source) {
+        switch (source) {
+        case rex::cvar::Source::kDefault: return "default";
+        case rex::cvar::Source::kConfig: return "config";
+        case rex::cvar::Source::kEnvironment: return "environment";
+        case rex::cvar::Source::kCommandLine: return "command_line";
+        case rex::cvar::Source::kRuntime: return "runtime";
+        }
+        return "unknown";
     }
 
     static std::string TimestampName() {

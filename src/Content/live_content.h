@@ -13,6 +13,10 @@ class VirtualFileSystem;
 
 namespace band3::content {
 
+// a content_folders value's folders, each resolved against the anchor
+// (IniAnchor) as the scan resolves them
+std::vector<std::filesystem::path> ContentFolders(std::string_view setting);
+
 // scans the content_folders setting's folders on a worker thread; call once,
 // before the game starts
 void StartLiveContent(rex::filesystem::VirtualFileSystem* vfs);

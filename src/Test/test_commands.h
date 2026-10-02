@@ -104,6 +104,23 @@ struct NativeViewStats {
     double rt_ms = 0;
 };
 
+// a setting's value as the game has it, and what set it
+struct SettingValue {
+    std::string value;
+    // "default", "config" (band3.toml), "environment", "command_line" or
+    // "runtime" (since startup: F4, the launcher, `set`, band3 itself)
+    std::string source;
+};
+
+// the folders the game runs with, as UTF-8 paths
+struct GameFolders {
+    std::string game_data;
+    std::string user_data;
+    std::string cache;
+    // content_folders' folders, resolved as the song scan resolves them
+    std::vector<std::string> content;
+};
+
 class TestTarget {
 public:
     using Clock = std::chrono::steady_clock;
@@ -130,6 +147,9 @@ public:
     virtual std::string Capture(const std::string& name, CaptureInfo& out) = 0;
     // a Band3 setting only; returns an error, or empty
     virtual std::string SetSetting(std::string_view name, std::string_view value) = 0;
+    // any setting, the SDK's too; nothing when there's none by that name
+    virtual std::optional<SettingValue> GetSetting(std::string_view name) = 0;
+    virtual GameFolders Folders() = 0;
     // presses the key a key bind (bind_settings, bind_instrument_lab...) is set
     // to, as the window would, without the window having focus; returns an
     // error, or empty

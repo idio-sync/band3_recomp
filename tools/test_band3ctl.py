@@ -1,8 +1,10 @@
-"""Tests for band3ctl.py's script handling and window helpers: python tools/test_band3ctl.py"""
+"""Tests for band3ctl.py's scripts, --config and window helpers: python tools/test_band3ctl.py"""
 
 import json
 import os
+import shutil
 import struct
+import tempfile
 import unittest
 import zlib
 
@@ -139,6 +141,57 @@ class WindowHelpersTest(unittest.TestCase):
         self.assertEqual(data[37:41], b"IDAT")
         self.assertEqual(zlib.decompress(data[41:41 + length]),
                          b"\x00" + rows[0] + b"\x00" + rows[1])
+
+
+class PlaceConfigTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.exe_folder = os.path.join(self.dir, "build")
+        os.makedirs(self.exe_folder)
+        self.source = os.path.join(self.dir, "test.toml")
+        write(self.source, "lang = \"eng\"\n")
+        self.target = os.path.join(self.exe_folder, "band3.toml")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    def test_the_file_is_there_until_restored_then_gone(self):
+        restore = band3ctl.place_config(self.source, self.exe_folder)
+        self.assertEqual(read(self.target), "lang = \"eng\"\n")
+        restore()
+        self.assertEqual(os.listdir(self.exe_folder), [])
+
+    def test_the_players_file_is_kept_aside_and_put_back(self):
+        write(self.target, "fullscreen = false\n")
+        restore = band3ctl.place_config(self.source, self.exe_folder)
+        self.assertEqual(read(self.target), "lang = \"eng\"\n")
+        self.assertEqual(read(self.target + ".band3ctl"), "fullscreen = false\n")
+        restore()
+        self.assertEqual(os.listdir(self.exe_folder), ["band3.toml"])
+        self.assertEqual(read(self.target), "fullscreen = false\n")
+
+    def test_a_file_left_aside_before_stops_it(self):
+        write(self.target + ".band3ctl", "fullscreen = false\n")
+        with self.assertRaises(RuntimeError):
+            band3ctl.place_config(self.source, self.exe_folder)
+        self.assertFalse(os.path.exists(self.target))
+
+    def test_a_missing_source_leaves_the_players_file(self):
+        write(self.target, "fullscreen = false\n")
+        with self.assertRaises(OSError):
+            band3ctl.place_config(os.path.join(self.dir, "none.toml"), self.exe_folder)
+        self.assertEqual(os.listdir(self.exe_folder), ["band3.toml"])
+        self.assertEqual(read(self.target), "fullscreen = false\n")
+
+
+def write(path, text):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def read(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
 
 
 if __name__ == "__main__":

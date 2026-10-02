@@ -1,5 +1,52 @@
 # Settings, folders and songs
 
+## The launcher
+
+The launcher is band3's setup screen. It opens in the game window before the game starts,
+with tabs for the game and its folders, graphics, audio, controllers and online features,
+and works with the mouse or the keyboard. Point at a setting to see what it does. Changes
+apply as you make them; **Save** keeps them for next time, **Play** saves and starts the
+game, and **Close** quits, asking first if something isn't saved.
+
+It opens:
+
+- the first time band3 starts, including the first start after updating to a version that
+  has it;
+- whenever the game data folder doesn't look like Rock Band 3's (the folder, `default.xex`
+  or `gen/main_xbox.hdr` is missing); the Game tab says what's wrong;
+- when Shift is held as band3 starts (Windows only);
+- when band3 is started with `--launcher`;
+- otherwise only when **Show this screen at startup** was ticked the last time you pressed
+  Play. It starts unticked, so after the first Play band3 goes straight into the game.
+
+It never opens for a [test harness](test-harness.md) run (`test_port`) or when RB3E's
+`rb3e_relaunch_game` restarts the game.
+
+To get back to it, hold Shift while band3 starts, start it with `--launcher`, or turn
+`show_launcher` on in F4 (Band3 → Launcher). On a Steam Deck in Game Mode, add
+`--launcher` to band3's launch options in Steam (Properties → Launch Options), and take it
+out again afterwards. `launcher = true` in `band3.toml` is ignored: it's for one start, from
+the command line.
+
+The launcher saves to `band3.toml` beside the executable, and writes only the settings you
+changed: one that matches its default (what band3 would use without the file: the Steam
+Deck setting on a Deck, then `band3_config.ini`'s, then band3's own) is left out, and the
+file's other lines are kept. A changed setting has a **Reset** button that puts it back to
+its default and takes it out of the file at the next save. Folders are saved with forward
+slashes, and a folder inside the ini's folder (or the executable's, without an ini) is
+saved relative to it, so the install still moves as one folder. If `band3.toml` can't be
+read, the launcher says why; saving then replaces it and keeps the old file as
+`band3.toml.bak`.
+
+A setting given on the command line or by a `REX_*` environment variable is shown but
+locked ("Set on the command line", "Set by an environment variable"), since a saved value
+wouldn't win over it. On a Steam Deck a banner at the top says so, with the
+`steam_deck_defaults` switch: on, the [Deck's settings](#steam-deck) are the defaults and
+what you change wins over them.
+
+Some settings stay in F4 only: debug options, heap sizes, the native renderer's options and
+the virtual instrument.
+
 ## The settings menu
 
 Press **F4** in game to open the settings menu. band3's own options are under the
@@ -17,12 +64,25 @@ doesn't work with `input_backend = xinput`.
 
 ## Config files
 
-**Save to config** writes the changed settings to `band3.toml` next to the executable.
-Any setting can also be passed on the command line, e.g. `--forced_venue=arena_04`.
+`band3.toml` next to the executable holds band3's settings; the [launcher](#the-launcher)
+writes it. Any setting can also be passed on the command line, e.g.
+`--forced_venue=arena_04`, or by a `REX_*` environment variable.
+
+F4's **Save to config** writes `band3.toml` too, but differently: it rewrites the whole file
+with every setting that differs from the SDK's default, whatever set it, so values from
+`band3_config.ini`, the Steam Deck settings and the command line are frozen into the file
+from then on, and anything else in the file is dropped. Prefer the launcher, which writes
+only what you change.
 
 `band3_config.ini` is still read and documents every option. Where the same setting is
-set in more than one place, the command line wins over `band3.toml`, which wins over
-`band3_config.ini`.
+set in more than one place, the first of these wins:
+
+1. the command line
+2. `REX_*` environment variables
+3. `band3.toml`
+4. the [Steam Deck](#steam-deck) settings, on a Deck
+5. `band3_config.ini`
+6. the defaults
 
 Some options worth knowing about, by the names F4 and the command line use:
 
@@ -50,11 +110,11 @@ change yours.
 `band3_config.ini` can also move band3's other folders: `user_data_root` (saves, profiles
 and the `game` folder; `Documents\band3` by default) and `cache_root` (the shader cache;
 `cache` in the user data folder by default), and so can `band3.toml`
-(`game_data_root`, `user_data_root`, `cache_root`), which wins over the ini. A relative
-path in either is relative to the ini's folder, or to the executable's folder when there is
-no ini, so `user_data_root = user_data` keeps everything band3 writes beside it, for a
-portable install. band3 looks for the ini in its working directory, then beside the
-executable.
+(`game_data_root`, `user_data_root`, `cache_root`; the launcher's Game tab), which wins over
+the ini. A relative path in either is relative to the ini's folder, or to the executable's
+folder when there is no ini, so `user_data_root = user_data` keeps everything band3 writes
+beside it, for a portable install. band3 looks for the ini in its working directory, then
+beside the executable.
 
 ## DLC and custom songs
 
@@ -62,10 +122,10 @@ On Windows for now, band3 reads DLC and custom songs (Xbox 360 `CON`, `LIVE` and
 packages, Rock Band and Rock Band 2 DLC included, as RB3 reads them) straight from the
 folders `content_folders` names (Band3 → Game, or `[game]` in `band3_config.ini`);
 nothing is installed or unpacked, and band3 never writes there. Separate folders with `|`;
-subfolders count, and a relative folder is relative to the ini's folder (`songs` beside it
-by default). Changes apply at the next launch, except songs the web page's RhythmVerse tab
-downloads or finds added ([RhythmVerse](integrations.md#rhythmverse)), which the game takes
-in as it runs; a song taken out stays listed until the next launch.
+subfolders count, and a relative folder is relative to the ini's folder, as above (`songs`
+beside it by default). Changes apply at the next launch, except songs the web page's
+RhythmVerse tab downloads or finds added ([RhythmVerse](integrations.md#rhythmverse)), which
+the game takes in as it runs; a song taken out stays listed until the next launch.
 
 A network folder works, but a local one is safer for audio: a song streams from its
 package while it plays. A local folder is also faster to read: a large library on a slow

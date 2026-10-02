@@ -572,6 +572,40 @@ std::string Set(TestTarget& target, std::string_view line,
     return Ok();
 }
 
+// cvar <name>: a setting's value and what set it, e.g. `cvar lang`
+std::string Cvar(TestTarget& target, const std::vector<std::string_view>& args) {
+    if (args.size() != 2) return Error(target, "usage: cvar <setting>");
+    const auto setting = target.GetSetting(args[1]);
+    if (!setting) return Error(target, "no setting " + std::string(args[1]));
+    std::string out = "\"cvar\":{\"name\":";
+    AppendJsonString(out, args[1]);
+    out += ",\"value\":";
+    AppendJsonString(out, setting->value);
+    out += ",\"source\":";
+    AppendJsonString(out, setting->source);
+    out += '}';
+    return Ok(out);
+}
+
+// folders: the game data, user data, cache and song folders the game runs with
+std::string FoldersReply(TestTarget& target, const std::vector<std::string_view>& args) {
+    if (args.size() != 1) return Error(target, "usage: folders");
+    const GameFolders folders = target.Folders();
+    std::string out = "\"folders\":{\"game_data\":";
+    AppendJsonString(out, folders.game_data);
+    out += ",\"user_data\":";
+    AppendJsonString(out, folders.user_data);
+    out += ",\"cache\":";
+    AppendJsonString(out, folders.cache);
+    out += ",\"content\":[";
+    for (size_t i = 0; i < folders.content.size(); i++) {
+        if (i) out += ',';
+        AppendJsonString(out, folders.content[i]);
+    }
+    out += "]}";
+    return Ok(out);
+}
+
 // bind <name>: presses a key bind's key, e.g. `bind instrument_lab` for F6;
 // the bind_ prefix is optional
 std::string Bind(TestTarget& target, const std::vector<std::string_view>& args) {
@@ -697,6 +731,8 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "screenshot") return Screenshot(target, args);
     if (verb == "capture") return Capture(target, args);
     if (verb == "set") return Set(target, line, args);
+    if (verb == "cvar") return Cvar(target, args);
+    if (verb == "folders") return FoldersReply(target, args);
     if (verb == "bind") return Bind(target, args);
     if (verb == "native_view") return NativeView(target, args);
     if (verb == "quit") {

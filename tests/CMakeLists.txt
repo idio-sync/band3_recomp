@@ -105,5 +105,18 @@ else()
     target_compile_options(band3_tests PRIVATE -Wall -Wextra)
 endif()
 
+# band3.toml written by the launcher's writer, for tools/test_config_file.py
+add_executable(band3_write_config
+    write_config.cpp
+    ${BAND3_ROOT}/src/Launcher/config_file.cpp
+)
+target_include_directories(band3_write_config PRIVATE ${BAND3_ROOT})
+target_include_directories(band3_write_config SYSTEM PRIVATE ${BAND3_ROOT}/.rexglue-sdk/include)
+if(MSVC)
+    target_compile_options(band3_write_config PRIVATE /W4)
+else()
+    target_compile_options(band3_write_config PRIVATE -Wall -Wextra)
+endif()
+
 enable_testing()
 add_test(NAME band3_tests COMMAND band3_tests)
