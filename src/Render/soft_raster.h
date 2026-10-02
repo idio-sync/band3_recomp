@@ -46,6 +46,10 @@
 // z ranges as RB3's are, where the capture has its cameras (LayoutBackBuffer);
 // its DrawRect quads (flares, ScreenMasks, the intro movie) are drawn too,
 // but the post copy, which post-processing redoes.
+//
+// A picture bigger than the game's 1280x720 has the passes that are pictures
+// of the screen (the spotlights', the soft particles') drawn bigger with it
+// (RasterOptions::target_scale, PassTargetSize), the others at their size.
 
 namespace band3::render {
 
@@ -127,6 +131,15 @@ struct RasterOptions {
     // applied to the scene target's views.
     bool gamma = true;
     RasterView view = RasterView::kFinal;
+    // The texture passes that are pictures of the screen (the spotlights'
+    // depth volume and density map, the soft-particle surfaces: PassTargetSize)
+    // drawn at their game size times this, so they keep their share of a
+    // picture bigger than the game's 1280x720: the presenter's is its height
+    // over 720. Every other pass stays the game's size. 1 is the game's.
+    float target_scale = 1.0f;
+    // the characters' shadow maps (512x512) drawn at this times their size,
+    // their taps a texel of that apart (sharper self-shadows); 1 is the game's
+    float shadow_scale = 1.0f;
 };
 
 struct RasterStats {
@@ -225,6 +238,49 @@ BackBufferLayout LayoutBackBuffer(const FrameCapture& frame);
 void PlaceBackBufferDraw(const BackBufferLayout& layout, const FrameCapture& frame,
                          const DrawItem& d, uint32_t width, uint32_t height, float viewport[4],
                          DepthMap& depth);
+
+// The size both renderers draw texture pass p's target at: the game's
+// (Pass::width, height), but the passes that are pictures of the screen, the
+// spotlights' depth volume and density map (kTexTypeDepthVolume,
+// kTexTypeDensityMap) and the soft-particle surfaces (PostConsts::
+// soft_surface), at that times options.target_scale, and the shadow maps
+// times options.shadow_scale, each side rounded to an even number. Their
+// draws' viewports (Pass::viewport, in the game's texels) scale with them
+// (ScalePassViewport); what reads them reads them by uv (the composite, the
+// cones' density, the blurs' taps: uv offsets the game set for its size, so
+// a blur covers as much of the screen at any size), but for a shadow map's
+// half-texel offset (shade_model.h's RescaleShadowCoord). NgLight's shadow
+// (ShadowCasterPass) stays 256x256: it's the light's picture, not the
+// screen's, and its two blurs leave nothing finer than its texels.
+void PassTargetSize(const FrameCapture& frame, const Pass& p, const RasterOptions& options,
+                    uint32_t& width, uint32_t& height);
+// pass p's camera viewport (x, y, w, h) in a target of w x h rather than its
+// own size
+inline void ScalePassViewport(const Pass& p, uint32_t w, uint32_t h, float vp[4]) {
+    for (int i = 0; i < 4; i++) vp[i] = p.viewport[i];
+    if (w == p.width && h == p.height) return;
+    const float sx = float(w) / float(p.width), sy = float(h) / float(p.height);
+    vp[0] *= sx;
+    vp[1] *= sy;
+    vp[2] *= sx;
+    vp[3] *= sy;
+}
+
+// A texture pass's blur (spot::SpotBlur's, SoftBlur's) into a target drawn
+// at w x h, bigger than the game's (PassTargetSize). The game's taps are uv
+// offsets a texel or a half apart, each reading a texel or the mean of two;
+// at the same uv in a bigger target they'd read single texels with others
+// between them left out, combing whatever is finer than the game's texels
+// (a cone's edge against the scene). So each tap is instead the mean of
+// `count` samples `step` (uv) apart along the taps' line, spread over one of
+// the game's texels: the game's tap over the texels it covers. count 1 at
+// the game's size (or smaller).
+struct BlurSubTaps {
+    uint32_t count = 1;
+    float step[2] = {0, 0};
+};
+BlurSubTaps BlurSubTapsFor(const ShadeInputs& state, int taps, const Pass& p, uint32_t w,
+                           uint32_t h);
 
 // a texture pass's draws but FinishDrawTarget's mip downsamples: the
 // renderers make mips themselves, or sample level 0

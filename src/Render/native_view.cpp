@@ -20,6 +20,7 @@
 #include "src/Render/shaders/present_shaders.gen.h"
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <climits>
@@ -97,6 +98,17 @@ std::string DescribeGpu(const GpuStats& gs) {
 
 // ---------------------------------------------------------------------------
 // the worker that rasterizes the newest capture
+
+// native_max_height: a window's picture taller than it is drawn that tall,
+// its width in proportion, and the presenter scales it up to fill the
+// window's (present.hlsl filters a picture that isn't 1:1)
+void CapHeight(RasterOptions& o) {
+    const int32_t max_h = REXCVAR_GET(native_max_height);
+    if (max_h <= 0 || o.height <= uint32_t(max_h)) return;
+    o.width = std::max<uint32_t>(
+        1, uint32_t((uint64_t(o.width) * uint32_t(max_h) + o.height / 2) / o.height));
+    o.height = uint32_t(max_h);
+}
 
 class Renderer {
  public:
@@ -181,6 +193,18 @@ class Renderer {
     bool Presenting() {
         std::lock_guard lock(mutex_);
         return present_;
+    }
+    // the size the next frame for the window is drawn at, if presenting
+    bool PresentDrawSize(uint32_t& width, uint32_t& height) {
+        std::lock_guard lock(mutex_);
+        if (!present_) return false;
+        RasterOptions o;
+        o.width = present_w_;
+        o.height = present_h_;
+        CapHeight(o);
+        width = o.width;
+        height = o.height;
+        return true;
     }
     // the window's picture's size; the worker draws the next frame at it
     void SetPresentSize(uint32_t width, uint32_t height) {
@@ -285,7 +309,9 @@ class Renderer {
                 if (present_) {
                     o.width = present_w_;
                     o.height = present_h_;
+                    CapHeight(o);
                 }
+                ScaleForPicture(o);
                 o.normal_maps = REXCVAR_GET(native_view_normal_maps);
                 o.filtering = REXCVAR_GET(native_view_texture_filtering);
                 // drawn frame after frame, so the trails have the post frame
@@ -1048,6 +1074,20 @@ void StopNativePresent() {
 }
 
 bool NativePresenting() { return Renderer::Get().Presenting(); }
+
+bool NativePresentDrawSize(uint32_t& width, uint32_t& height) {
+    return Renderer::Get().PresentDrawSize(width, height);
+}
+
+void ScaleForPicture(RasterOptions& o) {
+    // the screen's passes (the spotlights' haze, the soft particles) keep
+    // their share of a picture bigger than the game's (soft_raster.h's
+    // PassTargetSize)
+    o.target_scale = REXCVAR_GET(native_view_target_scale)
+                         ? float(o.height) / float(post::kGameHeight)
+                         : 1.0f;
+    o.shadow_scale = float(REXCVAR_GET(native_view_shadow_scale));
+}
 
 std::string NativePresentedPicture(std::vector<uint32_t>& rgba, uint32_t& width,
                                    uint32_t& height, std::chrono::milliseconds wait) {

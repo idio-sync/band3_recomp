@@ -18,6 +18,7 @@
 //                               [--no-post | --post-only xfm|dof|bloom|spot|soft|noise]
 //                               [--no-grain]
 //                               [--no-gamma | --gamma-from <other.cap>]
+//                               [--scale <f>] [--shadow-scale <f>]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
 // and inside the frustum with the matrix as captured and transposed (the back
@@ -124,6 +125,14 @@
 // it shows a few values as, and --list the whole ramp. --no-gamma leaves it
 // off, --gamma-from draws with another capture's (one from before captures
 // kept it has none: it's drawn as RB3 drew it).
+// --scale draws the frame at f times the game's 1280x720 (or at --size, or
+// the PNG's size with --compare and --diff), with the passes that are
+// pictures of the screen (the spotlights' depth volume and density map, the
+// soft-particle surfaces) f times their game size, as the native renderer
+// draws them at a window f times 720 lines tall (RasterOptions::
+// target_scale); --shadow-scale draws the characters' shadow maps f times
+// theirs (RasterOptions::shadow_scale). --dump-rt writes a scaled pass at
+// its scaled size.
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
@@ -965,6 +974,8 @@ int main(int argc, char** argv) {
     uint32_t dump_rt = 0, dump_rt_version = 0;
     int pick_x = -1, pick_y = -1;
     long cam_filter = -1;
+    bool sized = false;
+    float scale = 0;  // --scale's, 0 none
     for (int i = 3; i < argc; i++) {
         const std::string a = argv[i];
         if (a == "--transpose") transpose = true;
@@ -1017,7 +1028,13 @@ int main(int argc, char** argv) {
         else if (a == "--only-skinned") only_skinned = true;
         else if (a == "--unskinned") o.skinning = false;
         else if (a == "--cam" && i + 1 < argc) cam_filter = std::strtol(argv[++i], nullptr, 0);
-        else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%ux%u", &o.width, &o.height);
+        else if (a == "--size" && i + 1 < argc) {
+            std::sscanf(argv[++i], "%ux%u", &o.width, &o.height);
+            sized = true;
+        }
+        else if (a == "--scale" && i + 1 < argc) scale = std::strtof(argv[++i], nullptr);
+        else if (a == "--shadow-scale" && i + 1 < argc)
+            o.shadow_scale = std::strtof(argv[++i], nullptr);
         else if (a == "--dump-alpha" && i + 1 < argc) dump_alpha = argv[++i];
         else if (a == "--dump-depth" && i + 1 < argc) dump_depth = argv[++i];
         else if (a == "--dump-bloom" && i + 1 < argc) dump_bloom = argv[++i];
@@ -1053,6 +1070,22 @@ int main(int argc, char** argv) {
                      : v == "depth" ? RasterView::kSceneDepth
                                     : RasterView::kFinal;
         }
+    }
+
+    if (scale) {
+        if (!(scale > 0) || scale > 8) {
+            std::fprintf(stderr, "--scale takes a number above 0, at most 8\n");
+            return 2;
+        }
+        o.target_scale = scale;
+        if (!sized) {
+            o.width = uint32_t(std::lround(post::kGameWidth * double(scale)));
+            o.height = uint32_t(std::lround(post::kGameHeight * double(scale)));
+        }
+    }
+    if (!(o.shadow_scale > 0) || o.shadow_scale > 8) {
+        std::fprintf(stderr, "--shadow-scale takes a number above 0, at most 8\n");
+        return 2;
     }
 
     // per-camera diagnostics, both matrix orders

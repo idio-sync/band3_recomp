@@ -69,6 +69,10 @@ struct CaptureInfo {
     // nothing had drawn (transparent black)
     uint32_t gpu_passes = 0;
     uint32_t gpu_rt_missing = 0;
+    // while the native renderer draws the window at another size, the GPU's
+    // drawing of the capture at that size too, as it draws the window's
+    // (<name>.gpu.presented.png: replay --scale's to check), or empty
+    std::string gpu_presented_path;
 };
 
 // the live native view (`native_view on`): F9's renderer without its window,

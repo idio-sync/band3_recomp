@@ -592,6 +592,9 @@ void ClipAndRaster(const ClipVert& a, const ClipVert& b, const ClipVert& c,
 // up to the one that made `version`
 struct RtTarget {
     uint32_t w = 0, h = 0;
+    // its pass's size in the game (Pass::width, height), which w x h is
+    // unless it's drawn bigger (PassTargetSize)
+    uint32_t game_w = 0, game_h = 0;
     std::vector<uint32_t> color;
     // its mips, made after each pass from what it drew (BuildMips), where
     // the texture has them and filtering is on; empty otherwise
@@ -716,6 +719,8 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
             ds.shadow = f->second.zw.data();
             ds.shadow_w = f->second.w;
             ds.shadow_h = f->second.h;
+            shade::RescaleShadowCoord(ds.shade, f->second.game_w, f->second.game_h, ds.shadow_w,
+                                      ds.shadow_h);
         } else {
             ds.shade.flags.x &= ~shade::kShadeShadow;
         }
@@ -848,24 +853,51 @@ bool Drawable(const DrawItem& it) {
 // offset, blended by its material. The spotlights' blur and NgLight's read
 // their own target as it was (spot::SpotBlur: whole texels apart, so point), the soft
 // particles' the other surface (SoftBlur: half-texel taps, so bilinear).
+// In pass p's target drawn bigger than the game's (PassTargetSize), the
+// rect, in the game's texels, is scaled with it, and each tap reads the
+// texels the game's covers (BlurSubTaps); null p (or its size) is the game's.
 void TapBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o,
-                 const TexView& src, Target& t, RasterStats& st) {
-    const int x0 = std::clamp(int(std::floor(it.rect[0])), 0, int(t.w));
-    const int y0 = std::clamp(int(std::floor(it.rect[1])), 0, int(t.h));
-    const int x1 = std::clamp(int(std::ceil(it.rect[0] + it.rect[2])), x0, int(t.w));
-    const int y1 = std::clamp(int(std::ceil(it.rect[1] + it.rect[3])), y0, int(t.h));
-    if (it.rect[2] <= 0 || it.rect[3] <= 0) return;
+                 const TexView& src, Target& t, RasterStats& st, const Pass* p = nullptr) {
+    float rect[4] = {it.rect[0], it.rect[1], it.rect[2], it.rect[3]};
+    BlurSubTaps sub;
+    if (p && (t.w != p->width || t.h != p->height)) {
+        const float sx = float(t.w) / float(p->width), sy = float(t.h) / float(p->height);
+        rect[0] *= sx;
+        rect[1] *= sy;
+        rect[2] *= sx;
+        rect[3] *= sy;
+        sub = BlurSubTapsFor(s, spot::kSpotBlurTaps, *p, t.w, t.h);
+    }
+    const int x0 = std::clamp(int(std::floor(rect[0])), 0, int(t.w));
+    const int y0 = std::clamp(int(std::floor(rect[1])), 0, int(t.h));
+    const int x1 = std::clamp(int(std::ceil(rect[0] + rect[2])), x0, int(t.w));
+    const int y1 = std::clamp(int(std::ceil(rect[1] + rect[3])), y0, int(t.h));
+    if (rect[2] <= 0 || rect[3] <= 0) return;
     const int blend = o.blending ? it.blend : 1;
     for (int y = y0; y < y1; y++) {
-        const float v = (float(y) + 0.5f - it.rect[1]) / it.rect[3];
+        const float v = (float(y) + 0.5f - rect[1]) / rect[3];
         for (int x = x0; x < x1; x++) {
-            const float u = (float(x) + 0.5f - it.rect[0]) / it.rect[2];
+            const float u = (float(x) + 0.5f - rect[0]) / rect[2];
             float sum[4] = {0, 0, 0, 0};
             for (int i = 0; i < spot::kSpotBlurTaps; i++) {
                 const float* off = s.Ps(31 + i);
                 const float* weight = s.Ps(47 + i);
                 float tap[4];
-                SampleLinear(src, u + off[0], v + off[1], tap);
+                if (sub.count <= 1) {
+                    SampleLinear(src, u + off[0], v + off[1], tap);
+                } else {
+                    // post.hlsl's PSBlur likewise
+                    const float n = float(sub.count);
+                    const float first[2] = {-0.5f * (n - 1) * sub.step[0],
+                                            -0.5f * (n - 1) * sub.step[1]};
+                    float mean[4] = {0, 0, 0, 0};
+                    for (uint32_t j = 0; j < sub.count; j++) {
+                        SampleLinear(src, u + off[0] + first[0] + float(j) * sub.step[0],
+                                     v + off[1] + first[1] + float(j) * sub.step[1], tap);
+                        for (int c = 0; c < 4; c++) mean[c] += tap[c];
+                    }
+                    for (int c = 0; c < 4; c++) tap[c] = mean[c] / n;
+                }
                 for (int c = 0; c < 4; c++) sum[c] += tap[c] * weight[c];
             }
             const size_t idx = size_t(y) * t.w + x;
@@ -879,9 +911,9 @@ void TapBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o
 // The blur into the target it samples (spot::SpotBlur), as the game does it
 // in place by a resolve: from a copy of the target as it was before it
 void SpotBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o, Target& t,
-                  RasterStats& st) {
+                  RasterStats& st, const Pass& p) {
     const std::vector<uint32_t> before = t.color;
-    TapBlurDraw(it, s, o, {t.w, t.h, before.data()}, t, st);
+    TapBlurDraw(it, s, o, {t.w, t.h, before.data()}, t, st, &p);
 }
 
 
@@ -1131,9 +1163,13 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         const Pass& p = *run.pass;
         RtTarget& rt = rts[p.tex_obj];
         const bool shadow_map = p.tex_type == kTexTypeShadowMap;
-        if (rt.w != p.width || rt.h != p.height) {
-            rt.w = p.width;
-            rt.h = p.height;
+        uint32_t tw, th;
+        PassTargetSize(frame, p, o, tw, th);
+        rt.game_w = p.width;
+        rt.game_h = p.height;
+        if (rt.w != tw || rt.h != th) {
+            rt.w = tw;
+            rt.h = th;
             rt.color.assign(size_t(rt.w) * rt.h, kTransparentBlack);
             rt.depth.assign(size_t(rt.w) * rt.h, 0.0f);
             rt.zw.clear();
@@ -1164,7 +1200,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             if (!DrawnInTexturePass(it) || !Drawable(it)) continue;
             const ShadeState* state = shade::ShadeOf(frame, it);
             if (spot::SpotBlur(it, state, p)) {
-                SpotBlurDraw(it, *state, o, rtt, st);
+                SpotBlurDraw(it, *state, o, rtt, st, p);
                 continue;
             }
             if (SoftBlur(frame, it, state, p)) {
@@ -1176,15 +1212,18 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                     src = {s->second.w, s->second.h, s->second.color.data()};
                 else
                     st.rt_missing++;
-                TapBlurDraw(it, *state, o, src, rtt, st);
+                TapBlurDraw(it, *state, o, src, rtt, st, &p);
                 continue;
             }
-            // the camera's viewport; DrawRect's quads are in the target's
-            // pixels, over all of it
-            if (it.rect_shader < 0 && p.viewport[2] > 0 && p.viewport[3] > 0)
-                rtt.SetViewport(p.viewport[0], p.viewport[1], p.viewport[2], p.viewport[3]);
-            else
+            // the camera's viewport, scaled with the target; DrawRect's quads
+            // are in the target's pixels, over all of it
+            if (it.rect_shader < 0 && p.viewport[2] > 0 && p.viewport[3] > 0) {
+                float vp[4];
+                ScalePassViewport(p, rt.w, rt.h, vp);
+                rtt.SetViewport(vp[0], vp[1], vp[2], vp[3]);
+            } else {
                 rtt.SetViewport(0, 0, float(rt.w), float(rt.h));
+            }
             DrawOne(it, int32_t(i), state, o, rts, rtt, st, cv, density_view);
         }
         // its mips, from what it holds now, as the GPU makes them after the
@@ -1212,6 +1251,44 @@ bool SoftBlur(const FrameCapture& f, const DrawItem& d, const ShadeInputs* s, co
     float weights = 0;
     for (int i = 0; i < kSoftBlurTaps; i++) weights += s->Ps(47 + i)[0];
     return weights > 0;
+}
+
+void PassTargetSize(const FrameCapture& f, const Pass& p, const RasterOptions& o, uint32_t& w,
+                    uint32_t& h) {
+    w = p.width;
+    h = p.height;
+    const float scale = p.tex_type == kTexTypeShadowMap         ? o.shadow_scale
+                        : SpotTarget(p) || SoftTarget(f, p) ? o.target_scale
+                                                            : 1.0f;
+    if (scale == 1.0f || !(scale > 0)) return;
+    auto even = [&](uint32_t size) {
+        return std::max<uint32_t>(2, 2 * uint32_t(std::lround(double(size) * scale / 2)));
+    };
+    w = even(p.width);
+    h = even(p.height);
+}
+
+BlurSubTaps BlurSubTapsFor(const ShadeInputs& s, int taps, const Pass& p, uint32_t w,
+                           uint32_t h) {
+    BlurSubTaps sub;
+    if (!p.width || !p.height || (w <= p.width && h <= p.height)) return sub;
+    // the line the taps lie along: the axis their offsets spread over most
+    float lo[2] = {0, 0}, hi[2] = {0, 0};
+    for (int i = 0; i < taps; i++) {
+        for (int k = 0; k < 2; k++) {
+            lo[k] = i ? std::min(lo[k], s.Ps(31 + i)[k]) : s.Ps(31 + i)[k];
+            hi[k] = i ? std::max(hi[k], s.Ps(31 + i)[k]) : s.Ps(31 + i)[k];
+        }
+    }
+    // (in the game's texels)
+    const bool across = (hi[0] - lo[0]) * float(p.width) >= (hi[1] - lo[1]) * float(p.height);
+    const float scale = across ? float(w) / float(p.width) : float(h) / float(p.height);
+    sub.count = std::clamp<uint32_t>(uint32_t(std::ceil(scale - 1e-3f)), 1, 8);
+    if (sub.count > 1) {
+        if (across) sub.step[0] = 1.0f / (float(p.width) * float(sub.count));
+        else sub.step[1] = 1.0f / (float(p.height) * float(sub.count));
+    }
+    return sub;
 }
 
 bool ShadowCasterPass(const FrameCapture& f, const Pass& p) {

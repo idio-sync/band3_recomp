@@ -481,6 +481,9 @@ struct GpuRenderer::Impl {
         SDL_GPUTexture* color = nullptr;
         SDL_GPUTexture* depth = nullptr;
         uint32_t w = 0, h = 0, levels = 1;
+        // its pass's size in the game, which w x h is unless the pass is
+        // drawn bigger (soft_raster.h's PassTargetSize)
+        uint32_t game_w = 0, game_h = 0;
         bool shadow = false;    // a shadow map's
         bool drawn = false;     // by a pass, this frame or before
         uint64_t drawn_in = 0;  // the frame a pass last drew it
@@ -574,9 +577,9 @@ struct GpuRenderer::Impl {
     // a layer of its size class's array for `tx`, growing the array if full
     bool PlaceTexture(Tex& tx);
     void LetTextureGo(Tex& tx);
-    // the target for texture pass `p`, made (again) at its size; null if it
-    // couldn't be
-    Rt* TargetFor(const Pass& p);
+    // the target for texture pass `p`, made (again) at w x h (PassTargetSize);
+    // null if it couldn't be
+    Rt* TargetFor(const Pass& p, uint32_t w, uint32_t h);
     void ReleaseRt(Rt& rt);
     // output `slot` at w x h, made again (a new generation) if it isn't;
     // false if it couldn't be
@@ -1236,29 +1239,30 @@ const GpuRenderer::Impl::Tex* GpuRenderer::Impl::TextureFor(const Texture* t) {
     return it != textures.end() && it->second.array ? &it->second : nullptr;
 }
 
-GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p) {
+GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, uint32_t h) {
     Rt& rt = rts[p.tex_obj];
     rt.used = serial;
+    rt.game_w = p.width;
+    rt.game_h = p.height;
     // the texture's mips (FinishDrawTarget's downsamples), down to 1x1 at most
     uint32_t levels = 1;
     if (p.num_mips > 1) {
         uint32_t chain = 1;
-        for (uint32_t s = std::max(p.width, p.height); s > 1; s >>= 1) chain++;
+        for (uint32_t s = std::max(w, h); s > 1; s >>= 1) chain++;
         levels = std::min(p.num_mips, chain);
     }
     // a shadow map's depth, read by Load: no mips
     const bool shadow = p.tex_type == kTexTypeShadowMap;
     if (shadow) levels = 1;
-    if (rt.color && rt.w == p.width && rt.h == p.height && rt.levels == levels &&
-        rt.shadow == shadow)
+    if (rt.color && rt.w == w && rt.h == h && rt.levels == levels && rt.shadow == shadow)
         return &rt;
     ReleaseRt(rt);
     SDL_GPUTextureCreateInfo ti{};
     ti.type = shadow ? SDL_GPU_TEXTURETYPE_2D : SDL_GPU_TEXTURETYPE_2D_ARRAY;
     ti.format = shadow ? kShadowFormat : kColorFormat;
     ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
-    ti.width = p.width;
-    ti.height = p.height;
+    ti.width = w;
+    ti.height = h;
     ti.layer_count_or_depth = 1;
     ti.num_levels = levels;
     rt.color = SDL_CreateGPUTexture(device, &ti);
@@ -1272,14 +1276,14 @@ GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p) {
             rt_failure_logged = true;
             REXLOG_WARN("native view gpu: no {}x{} render target ({}); what samples it draws "
                         "transparent black",
-                        p.width, p.height, SDL_GetError());
+                        w, h, SDL_GetError());
         }
         ReleaseRt(rt);
         rts.erase(p.tex_obj);
         return nullptr;
     }
-    rt.w = p.width;
-    rt.h = p.height;
+    rt.w = w;
+    rt.h = h;
     rt.levels = levels;
     rt.shadow = shadow;
     return &rt;
@@ -1673,7 +1677,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // as on the CPU)
         Rt* target = nullptr;
         if (run.pass) {
-            target = TargetFor(*run.pass);
+            uint32_t tw, th;
+            PassTargetSize(frame, *run.pass, o, tw, th);
+            target = TargetFor(*run.pass, tw, th);
             if (!target) continue;
             const bool fresh = !target->drawn;
             const uint32_t clear = PassClearFlags(frame, *run.pass);
@@ -2355,6 +2361,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         if (sp.flags.x & shade::kShadeShadow) {
             const Rt& rt = rts[ShadowMapOf(state)->tex_obj];
             tex[kSlotShadow] = {rt.color, 0, rt.w, rt.h};
+            shade::RescaleShadowCoord(sp, rt.game_w, rt.game_h, rt.w, rt.h);
         }
         if (sp.flags.x & (shade::kShadeProjMultiply | shade::kShadeProjGobo)) {
             if (proj_source[d] == kSourceRt) {
@@ -2607,7 +2614,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 SDL_EndGPUCopyPass(copy);
                 const ShadeState& state = *shade::ShadeOf(frame, it);
                 post::PostPass blur{};
-                blur.mode = {0, 0, uint32_t(spot::kSpotBlurTaps), 0};
+                // in a target bigger than the game's, each tap over the
+                // texels the game's covers (soft_raster.h's BlurSubTaps)
+                const BlurSubTaps sub = BlurSubTapsFor(state, spot::kSpotBlurTaps, p, rt.w, rt.h);
+                blur.mode = {0, 0, uint32_t(spot::kSpotBlurTaps), sub.count};
+                blur.half_pixel = {0, 0, sub.step[0], sub.step[1]};
                 for (int k = 0; k < spot::kSpotBlurTaps; k++)
                     blur.taps[k] = {state.Ps(31 + k)[0], state.Ps(31 + k)[1], state.Ps(47 + k)[0],
                                     0};
@@ -2642,7 +2653,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 }
                 const ShadeState& state = *shade::ShadeOf(frame, it);
                 post::PostPass blur{};
-                blur.mode = {0, 0, uint32_t(kSoftBlurTaps), 0};
+                const BlurSubTaps sub = BlurSubTapsFor(state, kSoftBlurTaps, p, rt.w, rt.h);
+                blur.mode = {0, 0, uint32_t(kSoftBlurTaps), sub.count};
+                blur.half_pixel = {0, 0, sub.step[0], sub.step[1]};
                 for (int k = 0; k < kSoftBlurTaps; k++)
                     blur.taps[k] = {state.Ps(31 + k)[0], state.Ps(31 + k)[1], state.Ps(47 + k)[0],
                                     0};
@@ -2651,11 +2664,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 continue;
             }
             if (!pass) begin_rt(false);
-            // the camera's viewport; DrawRect's quads are in the target's
-            // pixels, over all of it (soft_raster.cpp likewise)
+            // the camera's viewport, scaled with the target; DrawRect's quads
+            // are in the target's pixels, over all of it (soft_raster.cpp
+            // likewise)
             float vp[4] = {0, 0, float(rt.w), float(rt.h)};
             if (it.rect_shader < 0 && p.viewport[2] > 0 && p.viewport[3] > 0)
-                std::copy(std::begin(p.viewport), std::end(p.viewport), vp);
+                ScalePassViewport(p, rt.w, rt.h, vp);
             if (!std::equal(std::begin(vp), std::end(vp), bound_viewport)) {
                 const SDL_GPUViewport v{vp[0], vp[1], vp[2], vp[3], 0.0f, 1.0f};
                 SDL_SetGPUViewport(pass, &v);

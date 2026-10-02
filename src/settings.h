@@ -51,6 +51,7 @@ REXCVAR_DECLARE(bool, compress_character_textures);
 REXCVAR_DECLARE(bool, disable_even_odd_rendering);
 REXCVAR_DECLARE(int32_t, background_fps);
 REXCVAR_DECLARE(std::string, renderer);
+REXCVAR_DECLARE(int32_t, native_max_height);
 
 // Band3/Integrations
 REXCVAR_DECLARE(bool, events_enabled);
@@ -83,6 +84,8 @@ REXCVAR_DECLARE(bool, native_view_record_targets);
 REXCVAR_DECLARE(std::string, native_view_rt_fallback);
 REXCVAR_DECLARE(bool, native_view_normal_maps);
 REXCVAR_DECLARE(bool, native_view_texture_filtering);
+REXCVAR_DECLARE(bool, native_view_target_scale);
+REXCVAR_DECLARE(int32_t, native_view_shadow_scale);
 
 namespace band3::settings {
 

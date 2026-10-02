@@ -34,11 +34,14 @@ static const uint kPostMaxTaps = 15u;
 struct PostPass {
     // x: soft_raster.h's RasterView, for the resolve (0 the picture, 1 the
     // scene's alpha, 2 its depth); y: 1 when the 4x downsample is the bright
-    // pass; z: the blur's taps
+    // pass; z: the blur's taps; w: a texture pass's blur's samples per tap
+    // (soft_raster.h's BlurSubTaps), 0 or 1 one
     uint4 mode;
     uint4 flags;          // x: the kPost bits above
     float4 target;        // the pass's target: width, height, 1/width, 1/height
-    float4 half_pixel;    // c15: half a texel of the source, uv (xy)
+    // c15: half a texel of the source, uv (xy); zw a texture pass's blur's
+    // step between a tap's samples (BlurSubTaps)
+    float4 half_pixel;
     float4 taps[15];      // a blur's taps: uv offset (xy) and weight (z)
     float4 c6;            // the bloom colour times its intensity
     float4 c24;           // the DOF's: (1/(scale-bias), -scale/(scale-bias), min, max)

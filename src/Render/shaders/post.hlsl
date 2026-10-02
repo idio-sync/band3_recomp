@@ -112,12 +112,28 @@ float4 PSDownsample(PostIn i) : SV_Target0 {
     return Quad(t[0], t[1], t[2], t[3], params.mode.y != 0u);
 }
 
-// a blur: mode.z taps of params.taps
+// a blur: mode.z taps of params.taps; with mode.w above 1 (a texture pass
+// drawn bigger than the game's: soft_raster.h's BlurSubTaps), each tap the
+// mean of mode.w samples half_pixel.zw apart, centred on it
 float4 PSBlur(PostIn i) : SV_Target0 {
     const float2 uv = PixelUv(i);
     float4 sum = 0.0;
-    for (uint k = 0; k < params.mode.z; k++)
-        sum += color_tex.SampleLevel(color_sampler, uv + params.taps[k].xy, 0) * params.taps[k].z;
+    const uint n = params.mode.w;
+    if (n <= 1u) {
+        for (uint k = 0; k < params.mode.z; k++)
+            sum += color_tex.SampleLevel(color_sampler, uv + params.taps[k].xy, 0) *
+                   params.taps[k].z;
+        return sum;
+    }
+    const float2 step = params.half_pixel.zw;
+    const float2 first = -0.5 * float(n - 1u) * step;
+    for (uint k = 0; k < params.mode.z; k++) {
+        float4 tap = 0.0;
+        for (uint j = 0; j < n; j++)
+            tap += color_tex.SampleLevel(color_sampler,
+                                         uv + params.taps[k].xy + first + float(j) * step, 0);
+        sum += tap / float(n) * params.taps[k].z;
+    }
     return sum;
 }
 

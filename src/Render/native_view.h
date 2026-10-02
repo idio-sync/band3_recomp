@@ -99,6 +99,12 @@ void StartNativePresent(rex::ui::Presenter* presenter, rex::ui::GraphicsProvider
 void StopNativePresent();
 // whether the native renderer is drawing the window (renderer = native, started)
 bool NativePresenting();
+// the size it draws the window's picture at (the picture's, or less by
+// native_max_height), false while it isn't drawing it
+bool NativePresentDrawSize(uint32_t& width, uint32_t& height);
+// o's target_scale and shadow_scale as the native renderer draws a picture
+// o.height tall with (native_view_target_scale, native_view_shadow_scale)
+void ScaleForPicture(RasterOptions& o);
 // For the harness's screenshot: the picture the native renderer last drew for
 // the window, at its size (the newest frame the window showed, or the newest
 // drawn if no paint has shown one, minimized), waiting up to `wait` for the

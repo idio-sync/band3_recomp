@@ -213,6 +213,12 @@ REXCVAR_DEFINE_STRING(renderer, "emulated", "Band3/Graphics",
     "switches at once (F8)")
     .allowed({"emulated", "native"});
 
+REXCVAR_DEFINE_INT32(native_max_height, 0, "Band3/Graphics",
+    "With renderer = native, the most lines the native renderer draws: a window taller "
+    "than this has its picture drawn this tall and scaled up to fill it, for 4K on a GPU "
+    "that can't draw it at full size. 0 = the window's size")
+    .range(0, 4320);
+
 // Band3/Integrations
 
 REXCVAR_DEFINE_BOOL(events_enabled, false, "Band3/Integrations",
@@ -350,6 +356,18 @@ REXCVAR_DEFINE_STRING(native_view_rt_fallback, "guest", "Band3/Debug",
     "--readback_resolve=full; none keeps only which texture and version it is, for the "
     "texture passes the capture records")
     .allowed({"guest", "none"});
+
+REXCVAR_DEFINE_BOOL(native_view_target_scale, true, "Band3/Debug",
+    "Draw the native renderer's passes that are pictures of the screen (the spotlights' "
+    "haze, the soft particles' smoke) in proportion to its picture: 1.5 times the game's "
+    "size at 1080p, 3 times at 4K. Off keeps the game's sizes, made for 1280x720, to "
+    "compare");
+
+REXCVAR_DEFINE_INT32(native_view_shadow_scale, 1, "Band3/Debug",
+    "Draw the characters' self-shadow maps this many times the game's 512x512 in the "
+    "native renderer and the native view (experimental): sharper shadow edges. 1 = the "
+    "game's")
+    .range(1, 4);
 
 namespace band3::settings {
 

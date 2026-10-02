@@ -18,7 +18,13 @@ which (`native present: zero-copy`, or `native present: uploading each frame (<w
 | Setting | |
 |---|---|
 | `renderer` (Band3 → Graphics) | `emulated` (the default) or `native` |
+| `native_max_height` (Band3 → Graphics) | the most lines the native renderer draws: a taller window's picture is drawn this tall and scaled up to fill it, for 4K on a GPU that can't keep up at full size. 0 (the default) draws at the window's size |
 | `native_present_zero_copy` (Band3 → Debug) | on (the default) shows the GPU's frames where they are; off reads each back and uploads it, to compare |
+| `native_view_target_scale` (Band3 → Debug) | on (the default) draws the passes that are pictures of the screen (the spotlights' haze and the soft particles' smoke, made at 640x360 and 320x180 for the game's 1280x720) in proportion to the picture: 1.5 times at 1080p, 3 times at 4K. Off keeps the game's sizes, to compare |
+| `native_view_shadow_scale` (Band3 → Debug) | the characters' self-shadow maps at this many times the game's 512x512 (1, the default, to 4): sharper shadow edges, and less of the game's own shadow acne, so further from the game's picture |
+
+Every other pass RB3 draws into a texture (outfits, the crowd's impostors, NgLight's
+projected shadow, heads' normal maps) is drawn at the game's size at any window size.
 
 ## Render checks
 
@@ -101,6 +107,7 @@ ramp the game was shown through (the screenshot has it). `capture`'s reply:
 | `composed`, `world_frame`, `game_frame` | the capture has the world of `world_frame` in front of the overlay of its own `game_frame` (a post frame, which shows the world frame before it) |
 | `held_fallback` | no such post frame came in 30 frames, so the capture took the last |
 | `gpu`, `gpu_ms`, `gpu_passes`, `gpu_rt_missing` | the GPU's `<name>.gpu.png` at the screenshot's size, its time, the texture passes it drew, and its draws that sampled a render target nothing had drawn (drawn transparent black). `gpu_error` instead when there's no GPU device or `native_view_backend` is `cpu` |
+| `gpu_presented` | with `renderer` native at another size than the screenshot's, the GPU's `<name>.gpu.presented.png` at the size it draws the window at, as it draws it there (replay's `--scale` checks it) |
 
 With `native_view_texture_filtering` on, `<name>.gpu.nearest.png` is the GPU's drawing
 of the same capture with it off: the same frame without the game's samplers.
@@ -121,6 +128,8 @@ option). It prints a `post:` line (what post-processing was set to do), a `check
 | `--diff <name>.gpu.png` | the CPU's drawing against that PNG: the GPU checked against the CPU |
 | `--crop x,y,w,h` | measures that rectangle alone (a HUD element, say), in the compared PNG's pixels |
 | `--size WxH` | the size to draw at (640x360) when nothing sets it |
+| `--scale <f>` | draws at f times 1280x720 (or at `--size`, or the PNG's size with `--compare` and `--diff`) with the haze's and smoke's passes f times theirs, as the native renderer draws a window f times 720 lines tall: `--scale 1.5 --diff <name>.gpu.presented.png` for a 1080-line window |
+| `--shadow-scale <f>` | the characters' shadow maps at f times their size (`native_view_shadow_scale`) |
 | `--list` | the passes and every draw: mesh, material, where it lands, what its shader was given, its `cull` (2 `D3DCULL_CW`, 6 `D3DCULL_CCW`); and `shadow:` lines checking each self-shadowed draw's shadow map |
 | `--shade <draw>` | everything one draw's shader was given |
 | `--pick X,Y` | the draw that last wrote that pixel (at `--size`), its colour and shade |

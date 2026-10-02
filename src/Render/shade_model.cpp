@@ -184,6 +184,20 @@ void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], co
     out[3] = r.w;
 }
 
+void RescaleShadowCoord(ShadeParams& sp, uint32_t game_w, uint32_t game_h, uint32_t w,
+                        uint32_t h) {
+    if (!game_w || !game_h || !w || !h || (w == game_w && h == game_h)) return;
+    // u = .5x + (.5 + .5 / game_w) w, so moving its offset is adding w times
+    // the difference; v likewise
+    const float du = 0.5f / float(w) - 0.5f / float(game_w);
+    const float dv = 0.5f / float(h) - 0.5f / float(game_h);
+    float4& u = sp.shadow[0];
+    float4& v = sp.shadow[1];
+    const float4& q = sp.shadow[3];
+    u = {u.x + du * q.x, u.y + du * q.y, u.z + du * q.z, u.w + du * q.w};
+    v = {v.x + dv * q.x, v.y + dv * q.y, v.z + dv * q.z, v.w + dv * q.w};
+}
+
 bool AlphaCutCpu(const ShadeParams& sp, float alpha) { return AlphaCut(sp, alpha); }
 
 float SoftFadeCpu(float far_plane, float inv_w, float w) {

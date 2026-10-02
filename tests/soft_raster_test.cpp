@@ -23,7 +23,9 @@
 // copy; and that a camera draws in its viewport, layered with the others by
 // their z ranges, with no depth clear between them (but in a capture from
 // before the cameras were kept), the overlay's depth cleared after the
-// resolve.
+// resolve; and that the passes that are pictures of the screen are drawn in
+// proportion to the picture (RasterOptions::target_scale), their cameras'
+// viewports with them, their blurs' taps over the texels the game's cover.
 
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -1337,4 +1339,120 @@ TEST_CASE("with its cameras, the overlay's depth starts cleared after the resolv
     f.cameras.clear();
     Rasterize(f, o, rgba);
     CHECK(rgba[1 * 8 + 3] == kRed);
+}
+
+TEST_CASE("the screen's passes are drawn in proportion to the picture, others as they are") {
+    FrameCapture f;
+    f.post_consts.soft_surface[0] = 0x1000;
+    auto pass = [](uint32_t tex_obj, uint32_t type, uint32_t w, uint32_t h) {
+        Pass p;
+        p.tex_obj = tex_obj;
+        p.tex_type = type;
+        p.width = w;
+        p.height = h;
+        return p;
+    };
+    const Pass volume = pass(0x2000, kTexTypeDepthVolume, 640, 360);
+    const Pass density = pass(0x3000, kTexTypeDensityMap, 320, 180);
+    const Pass soft = pass(0x1000, 0x22, 320, 180);
+    const Pass light = pass(0x4000, 0x22, 256, 256);  // NgLight's shadow
+    const Pass outfit = pass(0x5000, 0x22, 512, 512);
+    const Pass shadow = pass(0x6000, kTexTypeShadowMap, 512, 512);
+    RasterOptions o;
+    uint32_t w = 0, h = 0;
+    auto size = [&](const Pass& p) {
+        PassTargetSize(f, p, o, w, h);
+        return std::pair{w, h};
+    };
+    // the game's, at 1
+    CHECK(size(volume) == std::pair{640u, 360u});
+    CHECK(size(shadow) == std::pair{512u, 512u});
+    // 1080p's 1.5 and 4K's 3; 900 lines' 1.25 rounds 225 to an even 226
+    o.target_scale = 1.5f;
+    CHECK(size(volume) == std::pair{960u, 540u});
+    CHECK(size(soft) == std::pair{480u, 270u});
+    o.target_scale = 3;
+    CHECK(size(volume) == std::pair{1920u, 1080u});
+    CHECK(size(density) == std::pair{960u, 540u});
+    o.target_scale = 1.25f;
+    CHECK(size(density) == std::pair{400u, 226u});
+    // the light's picture, an outfit and a shadow map stay as they are
+    CHECK(size(light) == std::pair{256u, 256u});
+    CHECK(size(outfit) == std::pair{512u, 512u});
+    CHECK(size(shadow) == std::pair{512u, 512u});
+    // the shadow maps by shadow_scale alone
+    o.shadow_scale = 2;
+    CHECK(size(shadow) == std::pair{1024u, 1024u});
+    CHECK(size(outfit) == std::pair{512u, 512u});
+
+    // a camera's viewport scales with its target
+    Pass half = volume;
+    half.viewport[2] = 320;
+    half.viewport[3] = 360;
+    float vp[4];
+    ScalePassViewport(half, 640, 360, vp);
+    CHECK(vp[2] == 320);
+    ScalePassViewport(half, 1920, 1080, vp);
+    CHECK(vp[0] == 0);
+    CHECK(vp[2] == 960);
+    CHECK(vp[3] == 1080);
+}
+
+TEST_CASE("a depth volume drawn bigger keeps its camera's viewport, its share of the screen") {
+    // a 4x4 depth volume whose camera covers its left half, drawn red
+    FrameCapture f;
+    DrawItem cone = Item(Quad(-1, 1, kRed), kTex);
+    f.draws = {cone};
+    Pass p = TexturePass(0, 1);
+    p.tex_type = kTexTypeDepthVolume;
+    p.viewport[2] = 2;
+    p.viewport[3] = 4;
+    f.passes = {p};
+    RasterOptions o = Small();
+    std::vector<uint32_t> tex;
+    uint32_t w = 0, h = 0;
+    REQUIRE(RasterizeTarget(f, o, kTex, 1, tex, w, h));
+    CHECK(w == 4);
+    CHECK(tex[1 * 4 + 1] == kRed);
+    CHECK(tex[1 * 4 + 2] == 0);
+    // twice the size: 8x8, still the left half
+    o.target_scale = 2;
+    REQUIRE(RasterizeTarget(f, o, kTex, 1, tex, w, h));
+    CHECK(w == 8);
+    CHECK(h == 8);
+    CHECK(tex[3 * 8 + 3] == kRed);
+    CHECK(tex[3 * 8 + 4] == 0);
+}
+
+TEST_CASE("a blur in a bigger target reads each tap over the texels the game's covers") {
+    // the depth volume's blur across: taps a texel apart along x, at 640
+    ShadeState s{};
+    auto set = [&](int reg, float x, float y) {
+        s.ps[ShadeRegIndex(reg)][0] = x;
+        s.ps[ShadeRegIndex(reg)][1] = y;
+    };
+    for (int k = 0; k < spot::kSpotBlurTaps; k++) {
+        set(31 + k, float(k - 2) / 640.0f, 0);
+        set(47 + k, 0.2f, 0.2f);
+    }
+    Pass p;
+    p.width = 640;
+    p.height = 360;
+    BlurSubTaps sub = BlurSubTapsFor(s, spot::kSpotBlurTaps, p, 640, 360);
+    CHECK(sub.count == 1);
+    // at 1080p (1.5 times), two samples half a texel of the game's apart
+    sub = BlurSubTapsFor(s, spot::kSpotBlurTaps, p, 960, 540);
+    CHECK(sub.count == 2);
+    CHECK(sub.step[0] == doctest::Approx(1.0 / 1280));
+    CHECK(sub.step[1] == 0);
+    // at 4K, three, a third of one apart
+    sub = BlurSubTapsFor(s, spot::kSpotBlurTaps, p, 1920, 1080);
+    CHECK(sub.count == 3);
+    CHECK(sub.step[0] == doctest::Approx(1.0 / 1920));
+    // the blur down: along y
+    for (int k = 0; k < spot::kSpotBlurTaps; k++) set(31 + k, 0, float(k - 2) / 360.0f);
+    sub = BlurSubTapsFor(s, spot::kSpotBlurTaps, p, 1280, 720);
+    CHECK(sub.count == 2);
+    CHECK(sub.step[0] == 0);
+    CHECK(sub.step[1] == doctest::Approx(1.0 / 720));
 }

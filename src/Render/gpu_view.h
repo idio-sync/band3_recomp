@@ -42,7 +42,9 @@
 // The display's gamma ramp (gamma_ramp.h) goes over the finished picture
 // last, by shaders/gamma.hlsl's pass, into an output texture the frame is
 // read back from; without a ramp the same pass with an identity lookup,
-// which is exact for 8 bits, so every frame ends in it.
+// which is exact for 8 bits, so every frame ends in it. Every target is the
+// size the CPU's is (soft_raster.h's PassTargetSize: the screen's passes in
+// proportion to a picture bigger than the game's).
 //
 // For the native renderer's presentation (renderer = native) that pass writes
 // one of kOutputs textures the SDK's presenter samples where they are, no

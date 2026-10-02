@@ -45,6 +45,13 @@ static_assert(sizeof(ShadeParams) == 42 * 16, "ShadeParams is float4s only, as H
 void PackShade(const DrawItem& item, const ShadeState* state, const RasterOptions& options,
                bool textured, ShadeParams& out);
 
+// A shadow map drawn at w x h rather than the game's game_w x game_h
+// (RasterOptions::shadow_scale): the coordinate's half-texel offset (the .5 /
+// 512 in shade.hlsli's ShadowCoord's .5009765625 w) made half of the new
+// texel, so the taps' bilinear centre is still the texel the map drew there
+void RescaleShadowCoord(ShadeParams& sp, uint32_t game_w, uint32_t game_h, uint32_t w,
+                        uint32_t h);
+
 // the draw's shade state, or null
 inline const ShadeState* ShadeOf(const FrameCapture& frame, const DrawItem& item) {
     return item.shade >= 0 && size_t(item.shade) < frame.shades.size() ? &frame.shades[item.shade]

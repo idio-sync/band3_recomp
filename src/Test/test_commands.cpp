@@ -460,6 +460,10 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
         fields += ms;
         fields += ",\"gpu_passes\":" + std::to_string(info.gpu_passes);
         fields += ",\"gpu_rt_missing\":" + std::to_string(info.gpu_rt_missing);
+        if (!info.gpu_presented_path.empty()) {
+            fields += ",\"gpu_presented\":";
+            AppendJsonString(fields, info.gpu_presented_path);
+        }
     } else if (!info.gpu_error.empty()) {
         fields += ",\"gpu_error\":";
         AppendJsonString(fields, info.gpu_error);

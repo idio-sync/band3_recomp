@@ -610,6 +610,33 @@ TEST_CASE("the shadow buffer's taps: four texels around the coordinate, bilinear
     CHECK(ShadowLitCpu(sp, in_p, depth.data(), 8, 4) == 0.0f);
 }
 
+TEST_CASE("a shadow map drawn bigger keeps its taps on the texel it drew") {
+    // the game's u = .5x + .5009765625w (half a texel of 512 on), v likewise
+    ShadeParams sp{};
+    sp.shadow[0] = {0.5f, 0, 0, 0.5009765625f};
+    sp.shadow[1] = {0, -0.5f, 0, 0.5009765625f};
+    sp.shadow[2] = {0, 0, 1, 0};
+    sp.shadow[3] = {0, 0, 0, 1};
+    ShadeParams same = sp;
+    RescaleShadowCoord(same, 512, 512, 512, 512);
+    CHECK(same.shadow[0].w == 0.5009765625f);
+    // at 1024: half a texel of 1024 on, so x = u 1024 - 0.5 is whole on the
+    // texel the map drew there
+    RescaleShadowCoord(sp, 512, 512, 1024, 1024);
+    CHECK(sp.shadow[0].w == doctest::Approx(0.50048828125f));
+    CHECK(sp.shadow[1].w == doctest::Approx(0.50048828125f));
+    CHECK(sp.shadow[0].x == 0.5f);
+    const float p[3] = {0.25f, 0, 0};
+    float s[4];
+    ShadowCoordCpu(sp, p, s);
+    const ShadowTapsCpu t = ShadowTapsOf(s, 1024, 1024);
+    // u = .125 + .5 + .5/1024: x = 640 exactly, and v's y = 512: the one
+    // texel, weighted 1
+    CHECK(t.x[0] == 640);
+    CHECK(t.y[0] == 512);
+    CHECK(t.weight[0] == doctest::Approx(1.0f));
+}
+
 TEST_CASE("the shadow buffer darkens the point lights by 0.75 c107 as the surface faces away") {
     // a white light straight above, unattenuated, a white material with
     // ambient 0.25; the light camera looking down (c108 -z), c107 (1, 0.5, 0)

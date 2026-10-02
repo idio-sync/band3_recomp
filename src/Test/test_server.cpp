@@ -270,6 +270,24 @@ public:
         out.gpu_wait_ms = stats.wait_ms;
         out.gpu_passes = stats.passes;
         out.gpu_rt_missing = stats.rt_missing;
+        // and at the size the native renderer draws the window at, if it
+        // does and that's another, with the passes it scales scaled
+        // (<name>.gpu.presented.png)
+        uint32_t pw = 0, ph = 0;
+        if (render::NativePresentDrawSize(pw, ph) &&
+            (pw != options.width || ph != options.height)) {
+            render::RasterOptions presented = options;
+            presented.width = pw;
+            presented.height = ph;
+            render::ScaleForPicture(presented);
+            std::vector<uint32_t> big;
+            render::GpuStats presented_stats;
+            const std::filesystem::path big_path = rex::filesystem::GetExecutableFolder() /
+                                                   "screenshots" / (file + ".gpu.presented.png");
+            if (render::GpuRenderer::Get().RenderFrame(frame, presented, big, presented_stats) &&
+                render::WritePng(big_path.string(), big, pw, ph))
+                out.gpu_presented_path = big_path.string();
+        }
         // and its scene target's alpha and depth, as grey, beside it
         // (<name>.gpu.alpha.png, .gpu.depth.png): what replay's --dump-alpha
         // and --dump-depth show of the CPU's
