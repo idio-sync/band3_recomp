@@ -285,7 +285,8 @@ constexpr NamedCount kFrameCounts[] = {
     {&FrameCapture::passes_empty},   {&FrameCapture::rt_sampled},
     {&FrameCapture::rt_missing},     {&FrameCapture::rt_snapshots},
     {&FrameCapture::passes_unbalanced}, {&FrameCapture::composed},
-    {&FrameCapture::rt_filtered},
+    {&FrameCapture::rt_filtered},    {&FrameCapture::later_passes},
+    {&FrameCapture::skipped_no_mat}, {&FrameCapture::faces_elsewhere},
 };
 
 // B3CAP001 and B3CAP002, after the magic; their Vertex ended at its weights

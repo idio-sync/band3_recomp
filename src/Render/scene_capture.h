@@ -219,7 +219,7 @@ inline constexpr int kPerPixel = 0, kSpecularMap = 1, kSpecular = 2, kEnvironMap
 }  // namespace shader_opt
 
 // What a draw's shader was given, read from the D3D device's constant shadow
-// after the draw: the constants and option word of its last material pass.
+// after the draw: the constants and option word of its material pass.
 // Plain data, so a frame's draws can share equal ones and a .cap can keep it
 // as it is; zeroed before filling, padding included.
 struct ShadeInputs {
@@ -231,9 +231,12 @@ struct ShadeInputs {
     float eye[3];   // the camera's world position (WorldXfm translation)
     float vs[kNumShadeRegs][4];
     float ps[kNumShadeRegs][4];
-    // the first pass's material (rb3-xenon rndobj/BaseMaterial.h)
+    // the pass's material (rb3-xenon rndobj/BaseMaterial.h)
     uint32_t mat;
-    uint32_t next_pass;  // +0xac: a second pass, whose constants these would be
+    // +0xac: the material of the pass after it, which is a draw of its own
+    // (the next one, in captures since passes were; before, the pass after
+    // was folded into this draw, its constants these)
+    uint32_t next_pass;
     uint8_t use_environ;  // +0x99: lit at all
     uint8_t intensify;
     uint8_t per_pixel_lit;
@@ -285,8 +288,12 @@ struct ShadeState : ShadeInputs {
     TexSampler samplers[kNumShadeMaps];
 };
 
-// one draw (first material pass): a DxMesh::DrawShowing, one DxMultiMesh
-// instance, a particle system's quads, or a DxRnd::DrawRect quad
+// one draw: a material pass of a DxMesh::DrawShowing (RB3 draws the mesh's
+// faces once for its material and once for each RndMat::NextPass after it,
+// each with that pass's material, constants and cull), one DxMultiMesh
+// instance in one pass, a particle system's quads, or a DxRnd::DrawRect quad.
+// Captures from before passes were have one draw per mesh, with the first
+// pass's material and the last pass's constants.
 struct DrawItem {
     std::shared_ptr<const Geometry> geom;
     std::shared_ptr<const Texture> tex;
@@ -565,6 +572,15 @@ struct FrameCapture {
     // passes that didn't pair up (a Make while one was open, a Finish of
     // another texture, a frame ending inside one): dropped
     uint32_t passes_unbalanced = 0;
+    // material passes: a mesh's second pass or a later one (RndMat::NextPass;
+    // a multimesh's counted once for all its instances), and passes drawn
+    // with no material (RndShader::SelectConfig(null): a mesh without one),
+    // left out and counted in skipped_no_geom too, the spotlights' cones apart
+    uint32_t later_passes = 0;
+    uint32_t skipped_no_mat = 0;
+    // DxMesh::DrawFaces calls outside a DxMesh::DrawShowing, not recorded:
+    // RndTexBlender's, into its textures (the velocity buffer's aren't counted)
+    uint32_t faces_elsewhere = 0;
     // TheRnd's clear colour (+0x2c, r g b a), what DxRnd::BeginDrawing clears
     // the back buffer to, read at the frame's end; has_clear_color 0 in
     // captures from before it, which the renderers clear to 0xff202020

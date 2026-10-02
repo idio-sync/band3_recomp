@@ -238,6 +238,11 @@ size_t FindSection(const std::vector<uint8_t>& data, const char id[4]) {
     return std::string::npos;
 }
 
+// FRAM's counts after rt_filtered (later_passes, skipped_no_mat,
+// faces_elsewhere), which the builds the tests below stand in for didn't
+// write either
+constexpr uint32_t kCountsAfterFiltered = 3;
+
 // FRAM without the clear colour at its end (whether it has one, then four
 // floats), as builds before it wrote it
 void DropClearColor(std::vector<uint8_t>& data) {
@@ -265,6 +270,9 @@ FrameCapture MakePassFrame() {
     fc.rt_filtered_keys = {uint64_t(0x20D00000) << 32 | 12};
     fc.passes_carried = 1;
     fc.passes_own = 2;
+    fc.later_passes = 4;
+    fc.skipped_no_mat = 5;
+    fc.faces_elsewhere = 6;
     auto geom = MakeTriangle();
     ShadeState s;
     std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
@@ -360,6 +368,9 @@ TEST_CASE("a capture keeps its passes and which render target version each draw 
     CHECK(back->rt_filtered_keys == std::vector<uint64_t>{uint64_t(0x20D00000) << 32 | 12});
     CHECK(back->passes_carried == 1);
     CHECK(back->passes_own == 2);
+    CHECK(back->later_passes == 4);
+    CHECK(back->skipped_no_mat == 5);
+    CHECK(back->faces_elsewhere == 6);
 
     REQUIRE(back->passes.size() == 3);
     const Pass& c = back->passes[0];
@@ -479,10 +490,10 @@ TEST_CASE("a capture says whose world it has, and one from before that says its 
     const size_t counts_at = fram + 16 + 8 + 8 + 4 + 4;
     uint32_t counts;
     std::memcpy(&counts, data.data() + counts_at, 4);
-    counts -= 2;
+    counts -= 2 + kCountsAfterFiltered;
     std::memcpy(data.data() + counts_at, &counts, 4);
     const size_t end = fram + 16 + size_t(size);
-    const size_t cut = 4 + 4 + 8 + 4 + 8;
+    const size_t cut = 4 + 4 + 4 * kCountsAfterFiltered + 8 + 4 + 8;
     data.erase(data.begin() + std::ptrdiff_t(end - cut), data.begin() + std::ptrdiff_t(end));
     size -= cut;
     std::memcpy(data.data() + fram + 8, &size, 8);
@@ -495,6 +506,8 @@ TEST_CASE("a capture says whose world it has, and one from before that says its 
     CHECK(back->rt_missing == 1);
     CHECK(back->rt_filtered == 0);
     CHECK(back->rt_filtered_keys.empty());
+    CHECK(back->later_passes == 0);
+    CHECK(back->faces_elsewhere == 0);
     CHECK(back->draws.size() == 7);
 }
 
@@ -516,14 +529,16 @@ TEST_CASE("a capture from before filtered render targets has none") {
     const size_t counts_at = fram + 16 + 8 + 8 + 4 + 4;
     uint32_t counts;
     std::memcpy(&counts, data.data() + counts_at, 4);
-    counts--;
+    counts -= 1 + kCountsAfterFiltered;
     std::memcpy(data.data() + counts_at, &counts, 4);
     const size_t end = fram + 16 + size_t(size);
-    // the keys (a count and one), then the rt_filtered count before the world frame
+    // the keys (a count and one), then the rt_filtered count and those after
+    // it before the world frame
     data.erase(data.begin() + std::ptrdiff_t(end - 12), data.begin() + std::ptrdiff_t(end));
-    const size_t count_at = end - 12 - 8 - 4;
-    data.erase(data.begin() + std::ptrdiff_t(count_at), data.begin() + std::ptrdiff_t(count_at + 4));
-    size -= 16;
+    const size_t count_at = end - 12 - 8 - 4 - 4 * kCountsAfterFiltered;
+    data.erase(data.begin() + std::ptrdiff_t(count_at),
+               data.begin() + std::ptrdiff_t(count_at + 4 + 4 * kCountsAfterFiltered));
+    size -= 16 + 4 * kCountsAfterFiltered;
     std::memcpy(data.data() + fram + 8, &size, 8);
     WriteAll(path, data);
     auto back = LoadCapture(path);
@@ -534,6 +549,8 @@ TEST_CASE("a capture from before filtered render targets has none") {
     CHECK(back->rt_missing == 1);
     CHECK(back->rt_filtered == 0);
     CHECK(back->rt_filtered_keys.empty());
+    CHECK(back->later_passes == 0);
+    CHECK(back->faces_elsewhere == 0);
 }
 
 TEST_CASE("a capture's geometry loads from a build whose Vertex was smaller") {

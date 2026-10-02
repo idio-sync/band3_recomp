@@ -544,6 +544,9 @@ void PrintPassSummary(const FrameCapture& fc) {
                 "skipped_target %u\n",
                 fc.skipped_shadow, fc.skipped_velocity, fc.skipped_draw_mode, fc.skipped_no_geom,
                 fc.skipped_target);
+    std::printf("material passes: after a mesh's first %u, without a material %u (left out, "
+                "in skipped_no_geom too); DrawFaces outside a DrawShowing %u\n",
+                fc.later_passes, fc.skipped_no_mat, fc.faces_elsewhere);
     // the render targets draws sample that no pass here made
     std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, size_t>> missing;
     for (const DrawItem& d : fc.draws) {
@@ -1150,11 +1153,14 @@ int main(int argc, char** argv) {
                 d.color[0], d.color[1], d.color[2], d.color[3]);
             if (const ShadeState* s = shade) {
                 const float* c1 = s->Vs(1);
+                // the pass's material and the next pass's (a draw of its
+                // own in captures since passes were: the same mesh after)
                 std::printf("      opt %016llX type %d shade %d env %u | c1 %.2f %.2f %.2f %.2f "
-                            "| box %.2f | points %u/%d\n",
+                            "| box %.2f | points %u/%d | mat %08X next_pass %08X\n",
                             (unsigned long long)s->options, s->shader_type, d.shade,
                             unsigned(s->use_environ), c1[0], c1[1], c1[2], c1[3], BoxSum(*s),
-                            s->OptionBits(shader_opt::kNumPoint, 2), PointsLit(*s));
+                            s->OptionBits(shader_opt::kNumPoint, 2), PointsLit(*s), s->mat,
+                            s->next_pass);
                 // particles: the quad axes' lengths (VS c47, c48) and the
                 // first quad's sides along them (corners 0 to 3, 0 to 1)
                 if (s->shader_type == 14 && d.geom->verts.size() >= 4) {

@@ -33,6 +33,8 @@
 
 extern "C" void __imp__RndCam__Select(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxMesh__DrawShowing(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__DxMesh__DrawFaces(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__RndShader__SelectConfig(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxRnd__Present(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxMultiMesh__DrawShowing(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__DxParticleSys__DrawParticles(PPCContext& ctx, uint8_t* base);
@@ -477,6 +479,28 @@ std::atomic<bool> g_pass_recording{false};
 // while the splash thread draws)
 thread_local uint64_t g_shader_options = 0;
 thread_local int32_t g_shader_type = -1;
+// The material RndShader::SelectConfig last selected on this thread (r3,
+// null for none): a material pass's, which DxMesh::DrawShowing selects
+// before each DrawFaces. Stored on every call, as it's one store.
+thread_local uint32_t g_selected_mat = 0;
+// The DxMesh::DrawShowing running on this thread (mesh 0 outside one) and
+// the passes it has drawn: each DxMesh::DrawFaces inside it is a pass, a
+// draw of its own (CaptureMesh)
+struct MeshDrawing {
+    uint32_t mesh = 0;
+    uint32_t passes = 0;
+};
+thread_local MeshDrawing g_mesh_drawing;
+// The DxMultiMesh::DrawShowing running on this thread (0 outside one), its
+// passes selected so far and the last one's material: DrawBatchedNewGfx draws
+// a pass's instances between one SelectConfig and the next, so a pass is
+// recorded at the next one's SelectConfig, and the last at the end
+struct MultiMeshDrawing {
+    uint32_t multimesh = 0;
+    uint32_t passes = 0;
+    uint32_t mat = 0;
+};
+thread_local MultiMeshDrawing g_multimesh_drawing;
 // native_view_rt_fallback, kept by its change callback
 std::atomic<bool> g_rt_fallback_guest{true};
 // the SDK's anisotropic_override, which the game's own picture is sampled
@@ -906,8 +930,9 @@ int32_t InternShade(FrameCapture& fc, ShadeIndex& index, ShadeState&& shade, Fil
 }
 
 // What the draw just made had its shader read, from the device's constant
-// shadow: the hooks run after the draw, and DxMesh::DrawShowing sets the
-// constants per material pass, so these are its last pass's. The spotlight
+// shadow: the hooks run after the draw, and RndShader::SelectConfig sets the
+// constants per material pass, so a mesh's are read after each pass's
+// DrawFaces (and a multimesh's before the next pass's SelectConfig). The spotlight
 // drawer's registers are kept for its cones (ShaderType 2) and, `blur`, a
 // DrawRect blur's taps, c89 (the camera's depth range) for a soft particle,
 // and zeroed for the rest. `mat` 0 for a draw without a material (a cone).
@@ -1015,20 +1040,21 @@ DrawItem MakeItem(const Guest& g, State& s, Sink& sink, uint32_t mat, uint32_t o
     return item;
 }
 
-// the cull mode the draw just made had (DrawItem::cull): DxMesh::DrawShowing
-// sets it per material pass, so its last pass's
+// the cull mode the draw just made had (DrawItem::cull): RndShader::SelectConfig
+// sets it per material pass, so read as the constants are (CaptureShade)
 uint8_t CaptureCull(const Guest& g) {
     const uint32_t dev = g.U32(kD3DDeviceHolder);
     return dev ? uint8_t(g.U32(dev + kDev_ModeCntl) & (kCullFront | kCullBack | kCullFrontIsCw))
                : 0;
 }
 
-// the mesh's material and geometry, or false (and counted) if it draws nothing
-bool MeshParts(const Guest& g, FrameCapture& fc, uint32_t mesh, uint32_t& mat,
+// the mesh's geometry for a pass with material `mat`, or false (and counted)
+// if it draws nothing: no material (left out for now), fur, or no geometry
+bool MeshParts(const Guest& g, FrameCapture& fc, uint32_t mesh, uint32_t mat,
                std::shared_ptr<const Geometry>& geometry) {
-    mat = g.U32(mesh + kMesh_Mat);
     uint32_t geom = g.U32(mesh + kMesh_GeomOwner);
     if (!geom) geom = mesh;
+    if (!mat) fc.skipped_no_mat++;
     if (!mat || g.U32(mat + kMat_Fur)) {
         fc.skipped_no_geom++;
         return false;
@@ -1081,7 +1107,11 @@ void CaptureSpotCone(const Guest& g, State& s, Sink& sink, uint32_t mesh) {
     PushDraw(s, sink, std::move(item));
 }
 
-void CaptureMesh(uint8_t* base, uint32_t mesh) {
+// One material pass of DxMesh::DrawShowing (rb3-xenon rnddx9/Mesh.cpp), which
+// draws the mesh's faces once per pass: RndShader::SelectConfig(mat) then
+// DrawFaces, for its material and each NextPass after it (0 for the first:
+// pass counts them). `mat` is the pass's, null for a mesh without one.
+void CaptureMesh(uint8_t* base, uint32_t mesh, uint32_t mat, uint32_t pass) {
     State& s = S();
     const Guest g{base};
     std::optional<Sink> sink;
@@ -1091,9 +1121,9 @@ void CaptureMesh(uint8_t* base, uint32_t mesh) {
         CaptureSpotCone(g, s, *sink, mesh);
         return;
     }
-    uint32_t mat;
     std::shared_ptr<const Geometry> geometry;
     if (!MeshParts(g, sink->fc, mesh, mat, geometry)) return;
+    if (pass) sink->fc.later_passes++;
 
     DrawItem item = MakeItem(g, s, *sink, mat, mesh, std::move(geometry));
     item.world = ReadXfm(g, mesh + kMesh_WorldXfm);
@@ -1115,16 +1145,19 @@ void CaptureMesh(uint8_t* base, uint32_t mesh) {
 }
 
 // DxMultiMesh draws its mesh once per instance, instanced, without going
-// through the mesh's DrawShowing; one draw per instance here
-void CaptureMultiMesh(uint8_t* base, uint32_t multimesh) {
+// through the mesh's DrawShowing; one draw per instance here, for one
+// material pass (`mat`, and `pass` as CaptureMesh's): its
+// DrawBatchedNewGfx loops over them as DrawShowing does, SelectConfig then
+// its batches of instances
+void CaptureMultiMesh(uint8_t* base, uint32_t multimesh, uint32_t mat, uint32_t pass) {
     State& s = S();
     const Guest g{base};
     const uint32_t mesh = g.U32(multimesh + kMultiMesh_Mesh);
     std::optional<Sink> sink;
     if (!mesh || !Target(g, s, sink)) return;
-    uint32_t mat;
     std::shared_ptr<const Geometry> geometry;
     if (!MeshParts(g, sink->fc, mesh, mat, geometry)) return;
+    if (pass) sink->fc.later_passes++;
 
     DrawItem proto = MakeItem(g, s, *sink, mat, mesh, std::move(geometry));
     proto.cull = CaptureCull(g);
@@ -1138,6 +1171,34 @@ void CaptureMultiMesh(uint8_t* base, uint32_t multimesh) {
         PushDraw(s, *sink, std::move(item));
     }
     sink->fc.multimesh_instances += n;
+}
+
+// A DxMesh::DrawFaces outside a DrawShowing (RndTexBlender's, the velocity
+// buffer's), counted (faces_elsewhere) in the texture pass it draws into or
+// the frame, and not recorded; the velocity buffer's aren't counted, as its
+// DrawShowing's aren't recorded either. The first few are logged, with where
+// they draw.
+void CountFacesElsewhere(const Guest& g, uint32_t geom) {
+    State& s = S();
+    const uint32_t holder = g.U32(kDrawModeHolder);
+    const uint32_t mode = holder ? g.U32(holder + kDrawMode) : kDrawModeNormal;
+    if (mode == kDrawModeVelocity) return;
+    FrameCapture* fc = nullptr;
+    if (s.open.tex) {
+        if (s.open.record) fc = &s.open.rec->content;
+    } else if (g_enabled.load(std::memory_order_relaxed)) {
+        fc = s.building.get();
+    }
+    if (fc) fc->faces_elsewhere++;
+    static int logged = 0;
+    if (logged < 8) {
+        logged++;
+        REXLOG_INFO("native view: DxMesh::DrawFaces of {:08X} outside a DrawShowing, material "
+                    "{:08X}, draw mode {}, into {:08X} ({}), camera {:08X}{}",
+                    geom, g_selected_mat, mode, s.open.tex,
+                    s.open.tex && s.open.rec ? s.open.rec->pass.name : std::string(), s.cam,
+                    s.cam_backbuffer ? " (back buffer)" : "");
+    }
 }
 
 // DxParticleSys's vertex fill: one quad per active particle, built as the
@@ -1472,6 +1533,9 @@ void AddCounts(FrameCapture& to, const FrameCapture& from) {
     to.maps_cube += from.maps_cube;
     to.maps_other_format += from.maps_other_format;
     to.rt_snapshots += from.rt_snapshots;
+    to.later_passes += from.later_passes;
+    to.skipped_no_mat += from.skipped_no_mat;
+    to.faces_elsewhere += from.faces_elsewhere;
 }
 
 // whether a pass drew nothing the capture keeps because every draw it made
@@ -1991,24 +2055,93 @@ extern "C" REX_FUNC(RndCam__Select) {
         RecordCamera(Guest{base}, s, cam);
 }
 
-// the draw hooks record while capturing, and inside a recorded texture pass
-// while not
+// The draw hooks record while capturing, and inside a recorded texture pass
+// while not.
+//
+// DxMesh::DrawShowing (band3_recomp.24.cpp) returns unless DxMesh::CanDraw;
+// in the velocity buffer's draw mode it queues the mesh and draws nothing;
+// else it sets the transforms and, for its material and each NextPass after
+// it (none for a fur material, whose DrawFur draws its shells), calls
+// RndShader::SelectConfig(mat, 18) and its geometry owner's DrawFaces
+// (DxMesh::DrawFaces, through the vtable), which draws the faces with the
+// device as that pass set it. Each DrawFaces is recorded as a draw of its own
+// (the DrawFaces hook); a DrawShowing that drew none is recorded as before
+// passes were, after it, for what Target and MeshParts count.
 extern "C" REX_FUNC(DxMesh__DrawShowing) {
     const uint32_t mesh = ctx.r3.u32;
+    const MeshDrawing outer = g_mesh_drawing;
+    g_mesh_drawing = MeshDrawing{mesh, 0};
     __imp__DxMesh__DrawShowing(ctx, base);
-    if (!Recording()) return;
+    const uint32_t passes = g_mesh_drawing.passes;
+    g_mesh_drawing = outer;
+    if (passes || !Recording()) return;
     std::lock_guard lock(g_state_mutex);
     RecordTimer timer;
-    CaptureMesh(base, mesh);
+    CaptureMesh(base, mesh, REX_LOAD_U32(mesh + kMesh_Mat), 0);
 }
 
-extern "C" REX_FUNC(DxMultiMesh__DrawShowing) {
-    const uint32_t multimesh = ctx.r3.u32;
-    __imp__DxMultiMesh__DrawShowing(ctx, base);
+// DxMesh::DrawFaces (r3 the geometry owner): one material pass of the
+// DxMesh::DrawShowing running, with g_selected_mat its material. Called
+// outside one too, by RndTexBlender (its blend meshes, into its texture,
+// after its own SelectConfig) and the velocity buffer: those are counted
+// (faces_elsewhere) and not recorded.
+extern "C" REX_FUNC(DxMesh__DrawFaces) {
+    const uint32_t geom = ctx.r3.u32;
+    __imp__DxMesh__DrawFaces(ctx, base);
+    const uint32_t mesh = g_mesh_drawing.mesh;
+    const uint32_t pass = mesh ? g_mesh_drawing.passes++ : 0;
     if (!Recording()) return;
     std::lock_guard lock(g_state_mutex);
     RecordTimer timer;
-    CaptureMultiMesh(base, multimesh);
+    if (mesh) {
+        CaptureMesh(base, mesh, g_selected_mat, pass);
+        return;
+    }
+    CountFacesElsewhere(Guest{base}, geom);
+}
+
+// DxMultiMesh::DrawShowing draws in the colour pass alone, through
+// DrawBatchedNewGfx, whose passes CaptureMultiMesh records: each at the next
+// pass's SelectConfig (the SelectConfig hook) and the last after it. One that
+// selected none (CanDraw false, another draw mode) is recorded as before
+// passes were, for what Target and MeshParts count.
+extern "C" REX_FUNC(DxMultiMesh__DrawShowing) {
+    const uint32_t multimesh = ctx.r3.u32;
+    const MultiMeshDrawing outer = g_multimesh_drawing;
+    g_multimesh_drawing = MultiMeshDrawing{multimesh, 0, 0};
+    __imp__DxMultiMesh__DrawShowing(ctx, base);
+    const MultiMeshDrawing drawn = g_multimesh_drawing;
+    g_multimesh_drawing = outer;
+    if (!Recording()) return;
+    std::lock_guard lock(g_state_mutex);
+    RecordTimer timer;
+    if (drawn.passes) {
+        CaptureMultiMesh(base, multimesh, drawn.mat, drawn.passes - 1);
+    } else {
+        const uint32_t mesh = REX_LOAD_U32(multimesh + kMultiMesh_Mesh);
+        CaptureMultiMesh(base, multimesh, mesh ? REX_LOAD_U32(mesh + kMesh_Mat) : 0, 0);
+    }
+}
+
+// RndShader::SelectConfig(mat, ShaderType, ...): selects the material pass's
+// shader and sets its constants (as the draw mode wants it: 17 for a shadow
+// map's depth, 22 velocity). Inside a DxMultiMesh::DrawShowing, the pass
+// before this one has drawn all its instances by now: recorded before its
+// device state is replaced.
+extern "C" REX_FUNC(RndShader__SelectConfig) {
+    const uint32_t mat = ctx.r3.u32;
+    MultiMeshDrawing& multi = g_multimesh_drawing;
+    if (multi.multimesh) {
+        if (multi.passes && Recording()) {
+            std::lock_guard lock(g_state_mutex);
+            RecordTimer timer;
+            CaptureMultiMesh(base, multi.multimesh, multi.mat, multi.passes - 1);
+        }
+        multi.passes++;
+        multi.mat = mat;
+    }
+    g_selected_mat = mat;
+    __imp__RndShader__SelectConfig(ctx, base);
 }
 
 extern "C" REX_FUNC(DxParticleSys__DrawParticles) {

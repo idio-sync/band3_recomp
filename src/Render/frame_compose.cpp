@@ -49,7 +49,8 @@ void AddCounts(FrameCapture& to, const FrameCapture& from) {
           &FrameCapture::untextured_format, &FrameCapture::geom_cached, &FrameCapture::tex_cached,
           &FrameCapture::maps_decoded, &FrameCapture::maps_cube, &FrameCapture::maps_other_format,
           &FrameCapture::passes_empty, &FrameCapture::rt_snapshots,
-          &FrameCapture::passes_unbalanced})
+          &FrameCapture::passes_unbalanced, &FrameCapture::later_passes,
+          &FrameCapture::skipped_no_mat, &FrameCapture::faces_elsewhere})
         to.*f += from.*f;
 }
 
