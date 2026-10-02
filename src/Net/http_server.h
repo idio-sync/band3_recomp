@@ -12,6 +12,8 @@ namespace band3::http {
 
 // Starts listening when http_enabled was set at startup.
 void StartServer();
+// http_enabled was set at startup, so the hooks keep what /status reports
+bool Enabled();
 void StopServer();
 
 // Runs the game work requests are waiting on. App::DrawRegular calls it once

@@ -747,3 +747,19 @@ TEST_CASE("the game state counts frames and keeps the latest of everything") {
     state.SetInGame(true);
     CHECK(state.Snapshot().score == 0);
 }
+
+TEST_CASE("the game state follows the song's position, unknown until it's read") {
+    GameState state;
+    state.SetSong("Ruby", "Kaiser Chiefs", "ruby", 210000);
+    state.SetInGame(true);
+    CHECK(state.InGame());
+    CHECK(state.Snapshot().song_length_ms == 210000);
+    CHECK(state.Snapshot().song_ms == -1);
+    state.SetSongTime(61000);
+    CHECK(state.Snapshot().song_ms == 61000);
+    // a new song starts unknown again
+    state.SetInGame(false);
+    CHECK(!state.InGame());
+    state.SetInGame(true);
+    CHECK(state.Snapshot().song_ms == -1);
+}

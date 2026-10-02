@@ -100,6 +100,8 @@ Route MatchRoute(std::string_view target) {
         route.endpoint = Endpoint::kListSongs;
     } else if (path == "/jsonrpc") {
         route.endpoint = Endpoint::kJsonRpc;
+    } else if (path == "/status") {
+        route.endpoint = Endpoint::kStatus;
     } else if (path.starts_with("/song_")) {
         const char* begin = path.data() + 6;
         const char* end = path.data() + path.size();
@@ -147,6 +149,40 @@ std::string ToUtf8(std::string_view text) {
             out += static_cast<char>(0x80 | (byte & 0x3F));
         }
     }
+    return out;
+}
+
+std::string JsonString(std::string_view text) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out = "\"";
+    for (char c : ToUtf8(text)) {
+        const auto byte = static_cast<uint8_t>(c);
+        if (c == '"' || c == '\\') {
+            out += '\\';
+            out += c;
+        } else if (c == '\n') {
+            out += "\\n";
+        } else if (byte < 0x20) {
+            out += "\\u00";
+            out += kHex[byte >> 4];
+            out += kHex[byte & 15];
+        } else {
+            out += c;
+        }
+    }
+    return out + "\"";
+}
+
+std::string FormatStatus(const Status& status) {
+    std::string out = "{\"screen\":" + JsonString(status.screen) +
+                      ",\"in_library\":" + (status.in_library ? "true" : "false") +
+                      ",\"playing\":";
+    if (!status.playing) return out + "null}";
+    const Status::Playing& p = *status.playing;
+    out += "{\"shortname\":" + JsonString(p.shortname) + ",\"title\":" + JsonString(p.title) +
+           ",\"artist\":" + JsonString(p.artist) + ",\"score\":" + std::to_string(p.score) +
+           ",\"position_ms\":" + (p.position_ms < 0 ? "null" : std::to_string(p.position_ms)) +
+           ",\"length_ms\":" + std::to_string(p.length_ms) + "}}";
     return out;
 }
 

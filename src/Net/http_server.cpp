@@ -38,6 +38,7 @@
 #include "src/config.h"
 #include "src/game_writes.h"
 #include "src/settings.h"
+#include "src/Test/game_state.h"
 #include "album_art.h"
 #include "http_game.h"
 #include "http_page.h"
@@ -132,6 +133,21 @@ std::optional<std::string> ReadGameFile(const char* name) {
         return contents.str();
     }
     return std::nullopt;
+}
+
+// what the hooks have kept (src/Test/game_state.h), so /status never waits on
+// the game thread
+Status CurrentStatus() {
+    const test::GameStateSnapshot game = test::GameState::Get().Snapshot();
+    Status status;
+    status.screen = game.screen;
+    // the Music Library's screen; /jump checks its panel is up as well
+    status.in_library = game.screen == "song_select_screen";
+    if (game.in_game) {
+        status.playing = Status::Playing{game.song_shortname, game.song_name, game.song_artist,
+                                         game.score, game.song_ms, game.song_length_ms};
+    }
+    return status;
 }
 
 std::string Busy(bool cors) {
@@ -267,6 +283,8 @@ std::string Handle(const Request& request) {
             }
             break;
         }
+        case Endpoint::kStatus:
+            return Response(200, "application/json", FormatStatus(CurrentStatus()), cors);
         case Endpoint::kAlbumArt: {
             bool busy = false;
             if (auto jpeg = AlbumArt(route.argument, busy)) {
@@ -473,6 +491,8 @@ private:
 void StartServer() { Server::Get().Start(); }
 
 void StopServer() { Server::Get().Stop(); }
+
+bool Enabled() { return band3::settings::Startup().http_enabled; }
 
 void RunGameJobs(PPCContext& ctx, uint8_t* base) {
     if (!g_has_jobs.load(std::memory_order_acquire)) return;

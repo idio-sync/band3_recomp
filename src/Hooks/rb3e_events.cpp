@@ -7,11 +7,12 @@
 #include <string>
 #include "src/Net/discord.h"
 #include "src/Net/events.h"
+#include "src/Net/http_server.h"
 #include "src/Test/game_state.h"
 #include "src/Test/test_server.h"
 
-// Reports game state to the RB3Enhanced network events, Discord presence and the
-// test harness,
+// Reports game state to the RB3Enhanced network events, Discord presence, and
+// the test harness and web server's /status (band3::test::GameState),
 // from the same hook points and with the same data as RB3E (source/rb3enhanced.c,
 // source/GameHooks.c), and also from PresenceMgr::SetSongID, for a song that
 // starts without a new Game.
@@ -43,6 +44,7 @@ constexpr uint32_t kBandUI_CurrentScreen = 0x2C;       // UIScreen*
 constexpr uint32_t kUIScreen_Name = 0x18;              // Symbol (char*)
 constexpr uint32_t kSongMetadata_Title = 0x4C;         // String {vtable, length, buf}
 constexpr uint32_t kSongMetadata_Artist = 0x58;        // String
+constexpr uint32_t kSongMetadata_LengthMs = 0x8C;      // int, as LengthSym reads it
 constexpr uint32_t kString_Length = 0x4;
 constexpr uint32_t kString_Buf = 0x8;
 constexpr uint32_t kBandUser_Difficulty = 0x8;
@@ -87,13 +89,14 @@ struct SongInfo {
     std::string shortname;
     std::string title;
     std::string artist;
+    int32_t length_ms = 0;
 };
 
 // the song last reported, so GamePanel::Enter's SetSongID (below) only reports
 // one Game's constructor hasn't; 0 while none is
 int32_t g_reported_song = 0;
 
-// title and artist from BandSongMgr::Data(BandSongMgr*, int song_id) -> SongMetadata*
+// title, artist and length from BandSongMgr::Data(BandSongMgr*, int song_id) -> SongMetadata*
 void ReadSongMetadata(const PPCContext& ctx, uint8_t* base, SongInfo& song) {
     PPCContext call = CallContext(ctx, 0x100);
     call.r3.u64 = kTheSongMgr;
@@ -104,6 +107,7 @@ void ReadSongMetadata(const PPCContext& ctx, uint8_t* base, SongInfo& song) {
 
     song.title = ReadGameString(base, metadata + kSongMetadata_Title);
     song.artist = ReadGameString(base, metadata + kSongMetadata_Artist);
+    song.length_ms = static_cast<int32_t>(Load32(base, metadata + kSongMetadata_LengthMs));
 }
 
 // the song MetaPerformer has picked
@@ -164,8 +168,12 @@ void SendSong(const SongInfo& song) {
 }
 
 void RecordSong(const SongInfo& song) {
-    band3::test::GameState::Get().SetSong(song.title, song.artist, song.shortname);
+    band3::test::GameState::Get().SetSong(song.title, song.artist, song.shortname,
+                                          song.length_ms);
 }
+
+// GameState is kept for the test harness and the web server's /status
+bool Recording() { return band3::test::Enabled() || band3::http::Enabled(); }
 
 void RecordBand(const band3::events::BandInfo& info) {
     std::array<band3::test::BandMember, 4> band{};
@@ -207,12 +215,12 @@ extern "C" REX_FUNC(Game____ct)
 {
     bool events = band3::events::Enabled();
     bool discord = band3::discord::Enabled();
-    bool test = band3::test::Enabled();
-    if (events || discord || test) {
+    bool record = Recording();
+    if (events || discord || record) {
         SongInfo song = ReadSongInfo(ctx, base);
         band3::events::BandInfo band = ReadBandInfo(ctx, base);
 
-        if (test) {
+        if (record) {
             RecordSong(song);
             RecordBand(band);
             band3::test::GameState::Get().SetInGame(true);
@@ -249,13 +257,13 @@ extern "C" REX_FUNC(PresenceMgr__SetSongID)
     const int32_t id = ctx.r4.s32;
     const bool events = band3::events::Enabled();
     const bool discord = band3::discord::Enabled();
-    const bool test = band3::test::Enabled();
+    const bool record = Recording();
     // song IDs below 1 are "any", "random" and "invalid"
-    if ((events || discord || test) && id > 0 && id != g_reported_song) {
+    if ((events || discord || record) && id > 0 && id != g_reported_song) {
         SongInfo song = ReadSongInfoById(ctx, base, id);
         if (!song.shortname.empty()) {
             if (events) SendSong(song);
-            if (test) RecordSong(song);
+            if (record) RecordSong(song);
             band3::discord::SetPlaying(song.title, song.artist, ReadBandInfo(ctx, base));
             g_reported_song = id;
         }
@@ -267,14 +275,14 @@ extern "C" REX_FUNC(PresenceMgr__SetSongID)
 extern "C" REX_FUNC(PresenceMgr__UpdatePresence)
 {
     const bool events = band3::events::Enabled();
-    const bool test = band3::test::Enabled();
-    if (events || test) {
+    const bool record = Recording();
+    if (events || record) {
         uint32_t screen = Load32(base, kTheBandUI + kBandUI_CurrentScreen);
         uint32_t name = screen ? Load32(base, screen + kUIScreen_Name) : 0;
         if (name && events) {
             band3::events::SendString(band3::events::kScreenName, GuestStr(base, name));
         }
-        if (name && test) band3::test::GameState::Get().SetScreen(GuestStr(base, name));
+        if (name && record) band3::test::GameState::Get().SetScreen(GuestStr(base, name));
     }
     __imp__PresenceMgr__UpdatePresence(ctx, base);
 }

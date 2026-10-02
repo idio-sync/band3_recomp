@@ -34,6 +34,10 @@ struct GameStateSnapshot {
     std::string song_name;
     std::string song_artist;
     std::string song_shortname;
+    // the song's length from its metadata, and where it is (the game's song
+    // clock, read each frame during it); -1 until it's read
+    int32_t song_length_ms = 0;
+    int32_t song_ms = -1;
     std::string venue;
     std::array<BandMember, 4> band{};
     // frames the game has drawn since it started
@@ -53,13 +57,17 @@ public:
 
     void SetScreen(std::string screen);
     void SetInGame(bool in_game);
-    void SetSong(std::string name, std::string artist, std::string shortname);
+    void SetSong(std::string name, std::string artist, std::string shortname,
+                 int32_t length_ms = 0);
+    void SetSongTime(int32_t ms);
     void SetVenue(std::string venue);
     void SetBand(const std::array<BandMember, 4>& band);
     void SetScore(int64_t score);
     void CountFrame();
 
     GameStateSnapshot Snapshot();
+    // in_game alone, without copying the rest, for the hooks that check it each frame
+    bool InGame();
 
 private:
     std::mutex mutex_;

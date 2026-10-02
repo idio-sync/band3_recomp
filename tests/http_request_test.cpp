@@ -55,6 +55,34 @@ TEST_CASE("targets pick RB3E's endpoints") {
     CHECK(art.endpoint == Endpoint::kAlbumArt);
     CHECK(art.argument == "gimmeshelter&co");
     CHECK(MatchRoute("/album_art").endpoint == Endpoint::kNotFound);
+
+    CHECK(MatchRoute("/status").endpoint == Endpoint::kStatus);
+}
+
+TEST_CASE("the status is JSON, with what's playing or null") {
+    Status idle;
+    idle.screen = "main_hub_screen";
+    CHECK(FormatStatus(idle) ==
+          R"({"screen":"main_hub_screen","in_library":false,"playing":null})");
+
+    Status playing;
+    playing.screen = "song_select_screen";
+    playing.in_library = true;
+    playing.playing = Status::Playing{"rehab", "Rehab", "Amy Winehouse", 123450, 61000, 214000};
+    CHECK(FormatStatus(playing) ==
+          R"({"screen":"song_select_screen","in_library":true,"playing":{"shortname":"rehab",)"
+          R"("title":"Rehab","artist":"Amy Winehouse","score":123450,"position_ms":61000,)"
+          R"("length_ms":214000}})");
+}
+
+TEST_CASE("JSON strings are escaped, and Latin-1 becomes UTF-8") {
+    Status status;
+    status.playing = Status::Playing{"x", "Say \"Hi\"\\\n", "Mot\xF6rhead\x01", 0, -1, 0};
+    const std::string json = FormatStatus(status);
+    CHECK(json.find(R"("title":"Say \"Hi\"\\\n")") != std::string::npos);
+    CHECK(json.find("\"artist\":\"Mot\xC3\xB6rhead\\u0001\"") != std::string::npos);
+    // an unknown position is null
+    CHECK(json.find(R"("position_ms":null)") != std::string::npos);
 }
 
 TEST_CASE("songs are written as RB3E writes them") {

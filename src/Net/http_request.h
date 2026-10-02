@@ -34,6 +34,7 @@ enum class Endpoint {
     kExecute,    // /execute?script=   run a DTA script (http_allow_scripts)
     kJsonRpc,    // /jsonrpc           discordrp.json from the game data root
     kAlbumArt,   // /album_art?shortname=  a song's album art (band3's, not RB3E's)
+    kStatus,     // /status            what the game is doing (band3's)
 };
 
 struct Route {
@@ -63,6 +64,28 @@ std::string FormatSong(const SongInfo& song, bool section);
 // rest; anything that isn't valid UTF-8 is taken as Latin-1, so the replies
 // can all be UTF-8.
 std::string ToUtf8(std::string_view text);
+
+// a JSON string, quoted, of the game's text (made UTF-8 as ToUtf8 does)
+std::string JsonString(std::string_view text);
+
+// what /status reports, for the page's banner
+struct Status {
+    struct Playing {
+        std::string shortname;
+        std::string title;
+        std::string artist;
+        int64_t score = 0;
+        int32_t position_ms = -1;  // -1 until the song's clock is known
+        int32_t length_ms = 0;
+    };
+    std::string screen;
+    // the Music Library is up, so /jump can select a song
+    bool in_library = false;
+    std::optional<Playing> playing;  // during a song
+};
+
+// {"screen":..., "in_library":..., "playing": {...} or null}
+std::string FormatStatus(const Status& status);
 
 // not cached unless max_age (seconds) says for how long
 std::string Response(int status, std::string_view content_type, std::string_view body,

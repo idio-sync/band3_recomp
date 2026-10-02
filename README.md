@@ -326,10 +326,11 @@ It answers RB3Enhanced's API, so RB3E's page and tools written for it work too:
 | `/execute?script=<dta>` | runs a DTA script, only with `http_allow_scripts` on (anyone on the network could run any script, so it's off by default) |
 | `/jsonrpc` | `discordrp.json` at `game:\`, which Rock Band 3 Deluxe writes for Discord presence tools |
 
-band3 adds one of its own, which RB3E doesn't have:
+band3 adds its own, which RB3E doesn't have:
 
 | Endpoint | |
 |---|---|
+| `/status` | what the game is doing, as JSON: `screen`, `in_library` (the Music Library is open, so `/jump` can select) and `playing`, during a song its `shortname`, `title`, `artist`, `score`, `position_ms` (null until the song starts) and `length_ms`, else null |
 | `/album_art?shortname=<name>` | the song's album art as a JPEG, read as the game reads it for the Music Library (from the ARK, or a loose file that replaces it); 404 when the song has none, or no song has that shortname |
 
 To work on the page without the game, `python tools/web_preview.py` serves it at

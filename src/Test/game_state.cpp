@@ -16,15 +16,25 @@ void GameState::SetScreen(std::string screen) {
 void GameState::SetInGame(bool in_game) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.in_game = in_game;
-    // a new song starts its score over
-    if (in_game) state_.score = 0;
+    // a new song starts its score over, at a position not read yet
+    if (in_game) {
+        state_.score = 0;
+        state_.song_ms = -1;
+    }
 }
 
-void GameState::SetSong(std::string name, std::string artist, std::string shortname) {
+void GameState::SetSong(std::string name, std::string artist, std::string shortname,
+                        int32_t length_ms) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.song_name = std::move(name);
     state_.song_artist = std::move(artist);
     state_.song_shortname = std::move(shortname);
+    state_.song_length_ms = length_ms;
+}
+
+void GameState::SetSongTime(int32_t ms) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.song_ms = ms;
 }
 
 void GameState::SetVenue(std::string venue) {
@@ -50,6 +60,11 @@ void GameState::CountFrame() {
 GameStateSnapshot GameState::Snapshot() {
     std::lock_guard<std::mutex> lock(mutex_);
     return state_;
+}
+
+bool GameState::InGame() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return state_.in_game;
 }
 
 }
