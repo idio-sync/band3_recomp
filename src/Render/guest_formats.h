@@ -239,10 +239,15 @@ inline void DecodeBlock(uint32_t format, const uint8_t* b, Rgba out[16]) {
             break;
         }
         case 49: {
-            // normal maps' tangent-space x and y (DecodeDxnBlock)
+            // normal maps' tangent-space x and y (DecodeDxnBlock), y in z
+            // and w too: a fetch fills a format's missing components with
+            // its last, as Xenia's texture cache does for DXN (RGGG,
+            // rex/graphics/pipeline/texture/cache.h's GetHostFormatSwizzle).
+            // TexBlender's copy of a head's normal map into norm_output.tex
+            // writes them out, which guest memory's copy shows.
             uint8_t x[16], y[16];
             DecodeDxnBlock(b, x, y);
-            for (int i = 0; i < 16; i++) out[i] = Rgba{{x[i], y[i], 0, 255}};
+            for (int i = 0; i < 16; i++) out[i] = Rgba{{x[i], y[i], y[i], y[i]}};
             break;
         }
     }

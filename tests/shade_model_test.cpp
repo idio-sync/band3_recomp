@@ -699,6 +699,20 @@ TEST_CASE("DXN's first block is red, which tilts the normal toward the bitangent
     CHECK(out[0] == doctest::Approx(0.0f).epsilon(1e-6));
 }
 
+TEST_CASE("A DXN texel fetches its y in z and w too") {
+    // as Xenia's texture cache fills a format's missing components, which
+    // TexBlender's copy of a normal map into norm_output.tex writes out
+    const uint8_t block[16] = {230, 10, 0, 0, 0, 0, 0, 0, 25, 200, 0, 0, 0, 0, 0, 0};
+    guest_format::Rgba texels[16];
+    guest_format::DecodeBlock(49, block, texels);
+    for (const guest_format::Rgba& t : texels) {
+        CHECK(t.c[0] == 230);
+        CHECK(t.c[1] == 25);
+        CHECK(t.c[2] == 25);
+        CHECK(t.c[3] == 25);
+    }
+}
+
 TEST_CASE("the packed vertex's normal and tangent, its handedness the top two bits") {
     // CompressedVertex_Xbox, big-endian: position, ARGB, uv halves, normal
     // and tangent 2_10_10_10 (x low), weights, bones
