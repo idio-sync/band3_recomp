@@ -384,16 +384,27 @@ std::string FileNameArg(TestTarget& target, const std::vector<std::string_view>&
     return {};
 }
 
+// `screenshot [emulated|native] [name]`: the picture the window shows, as the
+// renderer setting has it, or the one named
 std::string Screenshot(TestTarget& target, const std::vector<std::string_view>& args) {
+    ScreenshotSource source = ScreenshotSource::kWindow;
+    std::vector<std::string_view> name_args = args;
+    if (args.size() >= 2 && (args[1] == "emulated" || args[1] == "native")) {
+        source = args[1] == "native" ? ScreenshotSource::kNative : ScreenshotSource::kEmulated;
+        name_args.erase(name_args.begin() + 1);
+    }
     std::string name;
-    if (std::string error = FileNameArg(target, args, name); !error.empty()) return error;
+    if (name_args.size() > 2) return Error(target, "usage: screenshot [emulated|native] [name]");
+    if (std::string error = FileNameArg(target, name_args, name); !error.empty()) return error;
     ScreenshotInfo info;
-    if (std::string error = target.Screenshot(name, info); !error.empty())
+    if (std::string error = target.Screenshot(name, source, info); !error.empty())
         return Error(target, error);
     std::string fields = "\"path\":";
     AppendJsonString(fields, info.path);
     fields += ",\"width\":" + std::to_string(info.width);
     fields += ",\"height\":" + std::to_string(info.height);
+    fields += ",\"renderer\":";
+    AppendJsonString(fields, info.renderer);
     return Ok(fields);
 }
 
@@ -532,7 +543,8 @@ std::string NativeView(TestTarget& target, const std::vector<std::string_view>& 
             if (!parsed) return Error(target, "a native view size is <width>x<height>, 16x16 up");
             size = *parsed;
         }
-        if (std::string error = target.NativeViewOn(size.first, size.second, post); !error.empty())
+        if (std::string error = target.NativeViewOn(size.first, size.second, end == 3, post);
+            !error.empty())
             return Error(target, error);
         return Ok(NativeViewJson(target.NativeView()));
     }

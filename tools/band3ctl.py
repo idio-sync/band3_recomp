@@ -20,7 +20,7 @@ exits 1. It prints the replies that carry measurements (`native_view`'s stats). 
 
 `window` works on the game's window itself, through Win32, never activating it,
 for checking what the window presents (the harness's screenshots are the
-emulated GPU's picture alone): a window launched minimized never paints, so
+game's picture alone, the renderer's that `renderer` picks): a window launched minimized never paints, so
 `offscreen` restores it to the right of every monitor, where it paints but nobody
 sees it.
 

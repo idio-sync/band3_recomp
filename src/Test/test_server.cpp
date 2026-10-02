@@ -120,7 +120,33 @@ public:
         return state;
     }
 
-    std::string Screenshot(const std::string& name, ScreenshotInfo& out) override {
+    // the window's picture, as the renderer setting has it, or the one asked for
+    std::string Screenshot(const std::string& name, ScreenshotSource source,
+                           ScreenshotInfo& out) override {
+        const bool native = source == ScreenshotSource::kNative ||
+                            (source == ScreenshotSource::kWindow && render::NativePresenting());
+        std::vector<uint32_t> rgba;
+        uint32_t width = 0, height = 0;
+        const std::string error =
+            native ? NativePicture(rgba, width, height) : EmulatedPicture(rgba, width, height);
+        if (!error.empty()) return error;
+
+        const std::filesystem::path dir = rex::filesystem::GetExecutableFolder() / "screenshots";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        const std::filesystem::path path = dir / ((name.empty() ? TimestampName() : name) + ".png");
+        if (!render::WritePng(path.string(), rgba, width, height)) {
+            return "couldn't write " + path.string();
+        }
+        out.path = path.string();
+        out.width = width;
+        out.height = height;
+        out.renderer = native ? "native" : "emulated";
+        return {};
+    }
+
+    // the emulated GPU's picture, at the guest's size
+    std::string EmulatedPicture(std::vector<uint32_t>& rgba, uint32_t& width, uint32_t& height) {
         auto* graphics = runtime_ ? runtime_->graphics_system() : nullptr;
         rex::ui::Presenter* presenter = graphics ? graphics->presenter() : nullptr;
         if (!presenter) return "there is no picture to capture (no presenter)";
@@ -128,9 +154,8 @@ public:
         if (!presenter->CaptureGuestOutput(image) || !image.width || !image.height) {
             return "the game hasn't drawn a frame yet";
         }
-
         // R8 G8 B8 X8 rows to RGBA, R in the low byte
-        std::vector<uint32_t> rgba(size_t(image.width) * image.height);
+        rgba.resize(size_t(image.width) * image.height);
         for (uint32_t y = 0; y < image.height; y++) {
             const uint8_t* row = image.data.data() + y * image.stride;
             for (uint32_t x = 0; x < image.width; x++) {
@@ -139,17 +164,32 @@ public:
                     p[0] | (p[1] << 8) | (p[2] << 16) | 0xFF000000u;
             }
         }
+        width = image.width;
+        height = image.height;
+        return {};
+    }
 
-        const std::filesystem::path dir = rex::filesystem::GetExecutableFolder() / "screenshots";
-        std::error_code ec;
-        std::filesystem::create_directories(dir, ec);
-        const std::filesystem::path path = dir / ((name.empty() ? TimestampName() : name) + ".png");
-        if (!render::WritePng(path.string(), rgba, image.width, image.height)) {
-            return "couldn't write " + path.string();
-        }
-        out.path = path.string();
-        out.width = image.width;
-        out.height = image.height;
+    // The native renderer's picture: while it draws the window, the next
+    // frame it draws, at the window's picture's size; otherwise the game's
+    // next whole frame drawn once at 1280x720, on native_view_backend
+    std::string NativePicture(std::vector<uint32_t>& rgba, uint32_t& width, uint32_t& height) {
+        if (render::NativePresenting())
+            return render::NativePresentedPicture(rgba, width, height, std::chrono::seconds(3));
+        auto frame = render::CaptureHeldFrame([] {}, std::chrono::seconds(5),
+                                              std::chrono::milliseconds(0));
+        if (!frame) return "the game didn't finish a frame to draw in 5 s";
+        render::RasterOptions options;
+        options.width = width = 1280;
+        options.height = height = 720;
+        options.normal_maps = REXCVAR_GET(native_view_normal_maps);
+        options.filtering = REXCVAR_GET(native_view_texture_filtering);
+        bool ready = false;
+        // SDL starts video on the main thread only
+        if (REXCVAR_GET(native_view_backend) == "gpu")
+            OnUIThread([&] { ready = render::GpuRenderer::Get().Init(); });
+        render::GpuStats stats;
+        if (!ready || !render::GpuRenderer::Get().RenderFrame(*frame, options, rgba, stats))
+            render::Rasterize(*frame, options, rgba);
         return {};
     }
 
@@ -159,7 +199,8 @@ public:
         const std::string file = name.empty() ? TimestampName() : name;
         std::string shot_error;
         auto frame = render::CaptureHeldFrame(
-            [&] { shot_error = Screenshot(file, out.screenshot); }, std::chrono::seconds(5),
+            [&] { shot_error = Screenshot(file, ScreenshotSource::kEmulated, out.screenshot); },
+            std::chrono::seconds(5),
             std::chrono::milliseconds(150), &out.held_fallback);
         if (!frame) return "the game didn't finish a frame to capture in 5 s";
         if (!shot_error.empty()) return shot_error;
@@ -255,7 +296,11 @@ public:
         }
     }
 
-    std::string NativeViewOn(uint32_t width, uint32_t height, bool post) override {
+    std::string NativeViewOn(uint32_t width, uint32_t height, bool sized, bool post) override {
+        if (sized && render::NativePresenting()) {
+            return "renderer is native: the native renderer draws the window and its size "
+                   "follows the window's; native_view on without a size measures it";
+        }
         // the GPU device starts on the UI thread
         OnUIThread([&] { render::StartLiveView(width, height, post); });
         StartMeasuring();

@@ -147,6 +147,12 @@ class Band3App : public rex::ReXApp {
     band3::discord::Start();
     band3::audio::StartUsbMics();
     band3::render::StartDumpIfRequested();
+    // the native renderer's drawer; here rather than in OnCreateDialogs,
+    // which runs before the runtime has its graphics system
+    if (auto* graphics = runtime()->graphics_system()) {
+      band3::render::StartNativePresent(graphics->presenter(), graphics->provider(), window(),
+                                        [this] { return immediate_drawer(); });
+    }
     band3::test::StartServer(runtime(), &app_context(), window());
     band3::http::StartServer();
   }
@@ -156,8 +162,12 @@ class Band3App : public rex::ReXApp {
     band3::test::StopServer();
     rex::ui::UnregisterBind("bind_instrument_lab");
     rex::ui::UnregisterBind("bind_native_view");
+    rex::ui::UnregisterBind("bind_renderer");
+    // off the presenter, and the GPU done with the textures its paints read,
+    // before the GPU device goes
+    band3::render::StopNativePresent();
     band3::render::StopNativeView();
-    // the F7 window's worker would draw on the CPU once the GPU is gone
+    // the F9 window's worker would draw on the CPU once the GPU is gone
     native_view_.reset();
     band3::render::GpuRenderer::Get().Shutdown();
     band3::discord::Stop();
@@ -174,8 +184,14 @@ class Band3App : public rex::ReXApp {
       });
       native_view_ = std::make_unique<band3::render::NativeViewDialog>(
           drawer, [this] { return immediate_drawer(); });
-      rex::ui::RegisterBind("bind_native_view", "F7", "Toggle the native view (experimental)", [this] {
+      // F9: the SDK's achievements overlay has F7
+      rex::ui::RegisterBind("bind_native_view", "F9", "Toggle the native view (experimental)", [this] {
         if (native_view_) native_view_->Toggle();
+      });
+      rex::ui::RegisterBind("bind_renderer", "F8",
+                            "Switch between the emulated and the native renderer (experimental)", [] {
+        rex::cvar::SetFlagByName("renderer",
+                                 REXCVAR_GET(renderer) == "native" ? "emulated" : "native");
       });
       // deferred: opening the settings menu adds a dialog, and this runs while
       // the dialogs draw

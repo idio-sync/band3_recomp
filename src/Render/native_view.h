@@ -1,7 +1,10 @@
 #pragma once
 
+#include <chrono>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <rex/ui/imgui_dialog.h>
@@ -9,9 +12,23 @@
 
 #include "src/Render/soft_raster.h"
 
-// Experimental: the native view (bind_native_view, F7) draws what RB3
+namespace rex::ui {
+class GraphicsProvider;
+class Presenter;
+class Window;
+}  // namespace rex::ui
+
+// Experimental: the native view (bind_native_view, F9) draws what RB3
 // sent to the back buffer last frame on the CPU, from guest memory alone,
 // beside the emulated GPU's picture.
+//
+// The native renderer (renderer = native, bind_renderer F8) draws the same
+// pictures on the game's window in place of the emulated GPU's, under the
+// SDK's ImGui overlays, through a UI drawer on the SDK's presenter (z 0, ImGui
+// is 64). On Windows it samples gpu_view's output textures where they are
+// (zero-copy, see gpu_view.h); elsewhere, or when that can't be done, it
+// uploads each frame through the SDK's immediate drawer. The emulated GPU
+// still runs and its picture is still painted underneath, then covered.
 //
 // BAND3_NATIVE_VIEW_DUMP=<path> starts capturing at launch without the window
 // and saves a frame every five seconds as <path>.NNN.cap (and .cap.txt with its
@@ -44,7 +61,8 @@ class NativeViewDialog : public rex::ui::ImGuiDialog {
 // The live view, for the test harness (`native_view on`): the window's
 // renderer, the same worker drawing each new capture on the same backend,
 // without the window. The window and the live view share it, and the last to
-// set a size wins.
+// set a size wins, unless the native renderer is drawing the window: its
+// size, the window's picture's, wins over both.
 struct LiveViewStats {
     bool gpu = false;  // what drew the last frame, or would draw the next
     uint32_t width = 0, height = 0;
@@ -63,6 +81,27 @@ void StartLiveView(uint32_t width, uint32_t height, bool post = true);
 void StopLiveView();
 bool LiveViewOn();
 LiveViewStats GetLiveViewStats();
+
+// The native renderer on the window. Start on the UI thread once the runtime
+// has its graphics system (OnPostSetup; the presenter doesn't exist at
+// OnCreateDialogs): it adds the drawer, which draws nothing while renderer is
+// emulated, and follows the setting from then on, starting the worker when
+// it turns native and letting it go when it turns emulated. `immediate_drawer`
+// is the SDK's, for the upload path. Stop it at shutdown before
+// GpuRenderer::Shutdown: it takes the drawer off and waits for the GPU to
+// finish with the outputs its paints sampled.
+void StartNativePresent(rex::ui::Presenter* presenter, rex::ui::GraphicsProvider* provider,
+                        rex::ui::Window* window,
+                        std::function<rex::ui::ImmediateDrawer*()> immediate_drawer);
+void StopNativePresent();
+// whether the native renderer is drawing the window (renderer = native, started)
+bool NativePresenting();
+// For the harness's screenshot: the picture the native renderer last drew for
+// the window, at its size (the newest frame the window showed, or the newest
+// drawn if no paint has shown one, minimized), waiting up to `wait` for the
+// first; an error, or empty. Any thread.
+std::string NativePresentedPicture(std::vector<uint32_t>& rgba, uint32_t& width,
+                                   uint32_t& height, std::chrono::milliseconds wait);
 
 // reads BAND3_NATIVE_VIEW_DUMP
 void StartDumpIfRequested();

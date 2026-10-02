@@ -49,6 +49,10 @@ public:
     std::chrono::milliseconds slept{0};
     std::vector<std::pair<std::string, std::string>> settings_set;
     std::string screenshot_name;
+    ScreenshotSource screenshot_source = ScreenshotSource::kWindow;
+    // renderer = native: the window's picture is the native renderer's, and
+    // its size the window's
+    bool native = false;
     std::string capture_name;
     bool gpu_works = true;
     // what the capture is: a composed post frame, or the frame a capture
@@ -79,11 +83,16 @@ public:
         player(p).pulses.push_back({pressed, length});
     }
     GameStateSnapshot State() override { return state; }
-    std::string Screenshot(const std::string& name, ScreenshotInfo& out) override {
+    std::string Screenshot(const std::string& name, ScreenshotSource source,
+                           ScreenshotInfo& out) override {
         screenshot_name = name;
+        screenshot_source = source;
+        const bool drawn_native = source == ScreenshotSource::kNative ||
+                                  (source == ScreenshotSource::kWindow && native);
         out.path = "screenshots/" + (name.empty() ? std::string("auto") : name) + ".png";
-        out.width = 1280;
-        out.height = 720;
+        out.width = drawn_native ? 1600 : 1280;
+        out.height = drawn_native ? 900 : 720;
+        out.renderer = drawn_native ? "native" : "emulated";
         return {};
     }
     std::string Capture(const std::string& name, CaptureInfo& out) override {
@@ -120,8 +129,9 @@ public:
         settings_set.emplace_back(name, value);
         return {};
     }
-    std::string NativeViewOn(uint32_t width, uint32_t height, bool post) override {
+    std::string NativeViewOn(uint32_t width, uint32_t height, bool sized, bool post) override {
         if (width > 4000) return "no GPU target that big";
+        if (sized && native) return "renderer is native: its size follows the window's";
         view = NativeViewStats{};
         view.on = true;
         view.backend = "gpu";
@@ -454,6 +464,40 @@ TEST_CASE("screenshot names are plain file names") {
     CHECK(game.screenshot_name == "unchanged");
 }
 
+TEST_CASE("screenshot takes the window's picture, or the renderer named") {
+    FakeGame game;
+    std::string reply = RunCommand("screenshot menu", game);
+    CHECK(Ok(reply));
+    CHECK(game.screenshot_source == ScreenshotSource::kWindow);
+    CHECK(Has(reply, "\"width\":1280,\"height\":720,\"renderer\":\"emulated\""));
+
+    // renderer = native: the window shows the native renderer's, at its size
+    game.native = true;
+    reply = RunCommand("screenshot", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"width\":1600,\"height\":900,\"renderer\":\"native\""));
+
+    // either one, whatever the window shows, with or without a name
+    reply = RunCommand("screenshot emulated song-1", game);
+    CHECK(Ok(reply));
+    CHECK(game.screenshot_source == ScreenshotSource::kEmulated);
+    CHECK(game.screenshot_name == "song-1");
+    CHECK(Has(reply, "\"renderer\":\"emulated\""));
+    game.native = false;
+    reply = RunCommand("screenshot native", game);
+    CHECK(Ok(reply));
+    CHECK(game.screenshot_source == ScreenshotSource::kNative);
+    CHECK(game.screenshot_name == "");
+    CHECK(Has(reply, "\"renderer\":\"native\""));
+
+    game.screenshot_name = "unchanged";
+    for (const char* bad : {"screenshot native a b", "screenshot a native", "screenshot native ../x"}) {
+        CAPTURE(bad);
+        CHECK_FALSE(Ok(RunCommand(bad, game)));
+    }
+    CHECK(game.screenshot_name == "unchanged");
+}
+
 TEST_CASE("capture names the screenshot and the native capture alike") {
     FakeGame game;
     const std::string reply = RunCommand("capture venue_1", game);
@@ -561,6 +605,15 @@ TEST_CASE("native_view on starts the live view at a size, 1280x720 without one")
     CHECK_FALSE(Ok(reply));
     CHECK(Has(reply, "no GPU target that big"));
     CHECK_FALSE(Ok(RunCommand("p2 native_view on", game)));
+
+    // while the native renderer draws the window, its size is the window's:
+    // on measures it, on at a size is an error
+    game.native = true;
+    CHECK(Ok(RunCommand("native_view on", game)));
+    CHECK(Ok(RunCommand("native_view on nopost", game)));
+    reply = RunCommand("native_view on 640x360", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(Has(reply, "renderer is native"));
 }
 
 TEST_CASE("native_view stats reports what the live view drew and how long it took") {

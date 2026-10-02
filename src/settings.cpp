@@ -196,6 +196,13 @@ REXCVAR_DEFINE_BOOL(compress_character_textures, false, "Band3/Graphics",
 REXCVAR_DEFINE_BOOL(disable_even_odd_rendering, false, "Band3/Graphics",
     "Process every render command each frame instead of alternating even/odd frames");
 
+REXCVAR_DEFINE_STRING(renderer, "emulated", "Band3/Graphics",
+    "What draws the game's picture: emulated, the emulated Xbox 360 GPU, or native "
+    "(experimental), band3's own renderer drawing what the game sent the GPU, at the "
+    "window's size, under the overlays. The emulated GPU keeps running either way, so it "
+    "switches at once (F8)")
+    .allowed({"emulated", "native"});
+
 // Band3/Integrations
 
 REXCVAR_DEFINE_BOOL(events_enabled, false, "Band3/Integrations",
@@ -296,9 +303,14 @@ REXCVAR_DEFINE_INT32(relaunch_wait_pid, 0, "Band3/Debug",
     "this process to close before starting. Cleared once it has");
 
 REXCVAR_DEFINE_STRING(native_view_backend, "gpu", "Band3/Debug",
-    "What draws the native view (F7, experimental): gpu, or cpu for the reference "
-    "rasterizer. The GPU falls back to the CPU when it can't start")
+    "What draws the native view (F9, experimental) and the native renderer: gpu, or cpu for "
+    "the reference rasterizer. The GPU falls back to the CPU when it can't start")
     .allowed({"cpu", "gpu"});
+
+REXCVAR_DEFINE_BOOL(native_present_zero_copy, true, "Band3/Debug",
+    "With renderer = native, show the GPU's frames where they are, on the GPU (Direct3D 12, "
+    "when band3's renderer shares the game's device); off reads each frame back and uploads "
+    "it, the way other platforms do, to compare");
 
 REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Debug",
     "Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, "

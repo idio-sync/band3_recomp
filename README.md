@@ -209,7 +209,7 @@ when a client disconnects.
 activates it or puts it on a monitor. A window launched minimized never paints, so `window
 offscreen` restores it to the right of every monitor, where it paints unseen; `window
 shot <png>` then saves its client area as the window presents it, the SDK's overlays
-included (`screenshot` is the emulated GPU's picture alone); `window size <W>x<H>` sets
+included (`screenshot` is the game's picture alone); `window size <W>x<H>` sets
 its client area in physical pixels, though Windows keeps it no bigger than the monitors
 (`clamped` in the reply); `window minimize` minimizes it again, and moves where it
 restores to back onto the primary monitor. `window status` prints where it is.
@@ -226,9 +226,9 @@ restores to back onto the primary monitor. `window status` prints where it is.
 | `pad [player]` | the buttons, triggers and sticks the game reads from a player (1-4) |
 | `wait <condition> [timeout=30s]`, `expect <condition> [timeout=5s]` | `screen=`, `screen~` (contains), `in_game`, `menus`, `song=<shortname>`, `frames=<n>`, `score>=<n>`, `mic=<slot>` (connected and fed audio since the wait began) |
 | `sleep <n>s\|<n>ms` | waits that long, up to 600 s: `frames=` counts the main thread's frames, which stand still while the boot logos play on RB3's splash thread |
-| `screenshot [name]` | |
+| `screenshot [emulated\|native] [name]` | the picture the window shows: the emulated GPU's at the game's size, or with `renderer` native the [native renderer](#native-renderer-experimental)'s next frame at the size it draws at (the window's picture's, minimized too). `emulated` or `native` takes that one whatever the window shows; `native` while the native renderer is off draws the game's next frame once at 1280x720. The reply has `renderer` (`emulated` or `native`), `width` and `height` |
 | `capture [name] [composed]` | a screenshot (`<name>.png`) and the native view's capture (`<name>.cap`) of the same full frame, and the native view's GPU backend drawing it (`<name>.gpu.png`), all under `screenshots/`. With `composed` it fails unless the capture is a post frame composed with the world frame before it (`proc_cmds` 2, `composed` true); its files are written either way. The reply's fields are under [Render checks](#render-checks) |
-| `native_view on [<width>x<height>] [nopost]\|off\|stats` | the native view live, as F7 draws it (same worker, same `native_view_backend`) but without its window, at 1280x720 unless given a size, and without RB3's post-processing with `nopost` (`post` in the reply), to see what it costs; `off` stops it and the capturing with it. Each reply has `stats`: the backend, frames `captured` and `rendered` since `on`, `skipped_busy` (captured while it was still drawing another), each drawn frame's time in `ms` (`mean`, `p50`, `p95`, `max`; on the GPU the whole frame, uploads and reading back included) and the part after submitting in `wait_ms`, and the game's own `game_frames` and `game_fps` since the last `on` or `off`, and `rt_recording`: whether `native_view_record_targets` is `on`, and the texture passes the game drew in that time while capture was off, how many of them were recorded (those into textures that aren't drawn every frame or every other), their draws, and the game thread's `ms` recording them. `off`'s reply is the run it ends; `run` prints replies with `stats`. `tests/game/render_song_live.b3t` measures a song with it |
+| `native_view on [<width>x<height>] [nopost]\|off\|stats` | the native view live, as F9 draws it (same worker, same `native_view_backend`) but without its window, at 1280x720 unless given a size, and without RB3's post-processing with `nopost` (`post` in the reply), to see what it costs; `off` stops it and the capturing with it. While `renderer` is native the native renderer draws at the window's size, so `on` measures it at that size and `on` with a size is an error. Each reply has `stats`: the backend, frames `captured` and `rendered` since `on`, `skipped_busy` (captured while it was still drawing another), each drawn frame's time in `ms` (`mean`, `p50`, `p95`, `max`; on the GPU the whole frame, uploads and reading back included) and the part after submitting in `wait_ms`, and the game's own `game_frames` and `game_fps` since the last `on` or `off`, and `rt_recording`: whether `native_view_record_targets` is `on`, and the texture passes the game drew in that time while capture was off, how many of them were recorded (those into textures that aren't drawn every frame or every other), their draws, and the game thread's `ms` recording them. `off`'s reply is the run it ends; `run` prints replies with `stats`. `tests/game/render_song_live.b3t` measures a song with it |
 | `set <setting> <value>` | Band3 settings only |
 | `quit` | |
 
@@ -251,9 +251,26 @@ change the screen name. A song counts as `in_game` until you leave its results, 
 `state` keeps the last song's details after that. Switching `instrument` reconnects
 it, so press Start to join again, as a player would.
 
+### Native renderer (experimental)
+
+`renderer` (Band3 → Graphics) picks what draws the game's picture: `emulated` (the
+default), the emulated Xbox 360 GPU, or `native`, band3's own renderer (the native view's,
+below) drawing each frame the game sends at the window's size, under the SDK's overlays.
+**F8** (`bind_renderer`) switches between them at once, without a restart; the emulated GPU
+keeps running either way. The picture keeps the game's 16:9 with black bars, or stretches
+when the SDK's `present_letterbox` is off. On Windows the frames go to the window without
+leaving the GPU; where that can't be done (other platforms, `native_view_backend` cpu, or
+`native_present_zero_copy` off) each frame is read back and uploaded instead. The log says
+which (`native present: zero-copy`, or `native present: uploading each frame (<why>)`).
+
+| Setting | |
+|---|---|
+| `renderer` (Band3 → Graphics) | `emulated` (the default) or `native` |
+| `native_present_zero_copy` (Band3 → Debug) | on (the default) shows the GPU's frames where they are; off reads each back and uploads it, to compare |
+
 ### Render checks
 
-The native view (F7, experimental) draws the game's frames itself, from a capture of
+The native view (F9, experimental) draws the game's frames itself, from a capture of
 what RB3 drew: on the GPU, or on a reference CPU rasterizer. It draws RB3's shading
 (point, box and projected lights, characters' self-shadows, normal and detail maps),
 its textures as the game's samplers read them (filtered, between mip levels, clamped
@@ -369,7 +386,7 @@ option). It prints a `post:` line (what post-processing was set to do), a `check
 | `--no-cull` | both sides of every triangle |
 | `--legacy-light`, `--no-light` | the placeholder lighting from before RB3's shading; or every material unlit |
 
-F7's window has switches like these for the live view (lighting, culling,
+F9's window has switches like these for the live view (lighting, culling,
 post-processing, the gamma ramp and others).
 
 `tools/parity.py` measures a set of captures against the game: copy `<name>.cap`,

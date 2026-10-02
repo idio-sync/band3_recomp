@@ -13,11 +13,20 @@
 #include <SDL3/SDL_gpu.h>
 #include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_init.h>
+#include <SDL3/SDL_version.h>
 #ifdef _WIN32
 // for SDL_RegisterApp only; band3 has its own main
 #define SDL_MAIN_HANDLED
 #define SDL_MAIN_NOIMPL
 #include <SDL3/SDL_main.h>
+// the Direct3D 12 texture behind an output, for the presenter (CheckZeroCopy)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <d3d12.h>
 #endif
 #include <rex/logging.h>
 
@@ -329,8 +338,8 @@ struct GpuRenderer::Impl {
     // a copy of `color` as the resolve left it, for the overlay's
     // REFRACT_WORLD draws (RefractsWorld), made on frames that have one
     SDL_GPUTexture* behind = nullptr;
-    // the finished picture through the frame's gamma ramp, read back in place
-    // of `color` on frames that have one
+    // RenderFrame's output: the finished picture through the frame's gamma
+    // ramp (or the identity), which it reads back
     SDL_GPUTexture* graded = nullptr;
     bool depth_sampled = false;
     SDL_GPUTexture* no_depth = nullptr;
@@ -353,6 +362,31 @@ struct GpuRenderer::Impl {
         uint32_t w = 0, h = 0;
     };
     Scratch spot_scratch, light_scratch, soft_scratch;
+
+    // The presenter's outputs (RenderFrameToOutput), each at the size it was
+    // last drawn at: apart from the frame's targets, so a frame drawn at
+    // another size (a capture's) leaves them be. COLOR_TARGET and SAMPLER,
+    // which SDL leaves in ALL_SHADER_RESOURCE after its passes, so the SDK's
+    // command list samples one without a barrier. Never cycled: SDL's texture
+    // behind each stays the one that was checked.
+    struct Output {
+        SDL_GPUTexture* texture = nullptr;
+        uint32_t w = 0, h = 0;
+        uint64_t generation = 0;
+        void* resource = nullptr;  // its ID3D12Resource, if it can be sampled in place
+    };
+    Output outputs[kOutputs];
+    uint64_t output_generations = 0;
+    // DownloadOutput's, grown to the biggest output read back
+    SDL_GPUTransferBuffer* output_readback = nullptr;
+    uint32_t output_readback_size = 0;
+    // CheckZeroCopy: the SDK's ID3D12Device, and whether outputs can be
+    // sampled in place (read without `mutex`; zero_copy_why under its own)
+    void* present_device = nullptr;
+    std::atomic<bool> zero_copy_checked{false};
+    std::atomic<bool> zero_copy{false};
+    std::mutex zero_copy_mutex;
+    std::string zero_copy_why = "not checked yet";
 
     // Everything a frame sends goes through this one transfer buffer and one
     // copy pass. It's mapped cycling, so a frame never waits on an earlier one
@@ -517,8 +551,25 @@ struct GpuRenderer::Impl {
     // couldn't be
     Rt* TargetFor(const Pass& p);
     void ReleaseRt(Rt& rt);
-    bool Render(const FrameCapture& frame, const RasterOptions& o,
-                std::vector<uint32_t>& rgba, GpuStats& stats);
+    // output `slot` at w x h, made again (a new generation) if it isn't;
+    // false if it couldn't be
+    bool EnsureOutput(int slot, uint32_t w, uint32_t h);
+    void ReleaseOutputs();
+    // the ID3D12Resource behind `texture`, made with `info`, if the SDK's
+    // presenter can sample it in place; null, and why not, otherwise
+    void* SdkResource(SDL_GPUTexture* texture, const SDL_GPUTextureCreateInfo& info,
+                      std::string& why);
+    // CheckZeroCopy's first check, with a texture of its own
+    void CheckZeroCopyOnce();
+    // a zero-copy check's result, for CheckZeroCopy (the presenter's drawer
+    // logs a change)
+    void SetZeroCopy(bool ok, const std::string& why);
+    // Draws `frame` into output `slot`, or with -1 into `graded`, which it
+    // reads back into rgba
+    bool Render(const FrameCapture& frame, const RasterOptions& o, int slot,
+                std::vector<uint32_t>* rgba, GpuStats& stats);
+    // reads `texture` (w x h) back into rgba; false if the GPU failed (logged)
+    bool Download(SDL_GPUTexture* texture, uint32_t w, uint32_t h, std::vector<uint32_t>& rgba);
     void Evict();
 };
 
@@ -792,6 +843,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
         if (no_depth) SDL_ReleaseGPUTexture(device, no_depth);
         if (no_bones) SDL_ReleaseGPUBuffer(device, no_bones);
         ReleaseTargets();
+        ReleaseOutputs();
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
         SDL_DestroyGPUDevice(device);
     }
@@ -814,6 +866,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     sampler = linear_sampler = nullptr;
     white = black = no_depth = nullptr;
     ReleaseTargets();  // released above: forgets them
+    ReleaseOutputs();
     depth_sampled = false;
     no_bones = nullptr;
     upload = nullptr;
@@ -1294,9 +1347,238 @@ bool GpuRenderer::Impl::EnsureScratch(Scratch& s, uint32_t w, uint32_t h) {
     return s.texture != nullptr;
 }
 
-bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o,
-                               std::vector<uint32_t>& rgba, GpuStats& st) {
+namespace {
+
+SDL_GPUTextureCreateInfo OutputInfo(uint32_t w, uint32_t h) {
+    SDL_GPUTextureCreateInfo ti{};
+    ti.type = SDL_GPU_TEXTURETYPE_2D;
+    ti.format = kColorFormat;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    ti.width = w;
+    ti.height = h;
+    ti.layer_count_or_depth = 1;
+    ti.num_levels = 1;
+    return ti;
+}
+
+#ifdef _WIN32
+// SDL 3.4.14's private Direct3D 12 texture (src/gpu/d3d12/SDL_gpu_d3d12.c's
+// D3D12TextureContainer and D3D12Texture, SDL_sysgpu.h's TextureCommonHeader):
+// an SDL_GPUTexture* is a container, its create info first. Nothing here is
+// trusted until SdkResource's checks pass, and none of it is written.
+struct SdlD3D12Texture;
+struct SdlD3D12TextureContainer {
+    SDL_GPUTextureCreateInfo info;
+    SdlD3D12Texture* active_texture;
+    SdlD3D12Texture** textures;
+    Uint32 texture_capacity;
+    Uint32 texture_count;
+    bool can_be_cycled;
+    char* debug_name;
+};
+struct SdlD3D12Texture {
+    SdlD3D12TextureContainer* container;
+    Uint32 container_index;
+    void* subresources;
+    Uint32 subresource_count;
+    ID3D12Resource* resource;
+    // the SRV's staging descriptor and the reference count follow
+};
+
+// an object's identity: COM's rule is that its IUnknown pointer is the same
+// however it's reached
+IUnknown* Identity(IUnknown* object) {
+    IUnknown* unknown = nullptr;
+    if (!object || FAILED(object->QueryInterface(IID_PPV_ARGS(&unknown)))) return nullptr;
+    unknown->Release();  // the object holds it still
+    return unknown;
+}
+#endif
+
+}  // namespace
+
+void* GpuRenderer::Impl::SdkResource(SDL_GPUTexture* texture, const SDL_GPUTextureCreateInfo& ti,
+                                     std::string& why) {
+#ifdef _WIN32
+    if (!present_device) {
+        why = "the SDK's presenter isn't Direct3D 12";
+        return nullptr;
+    }
+    if (std::strcmp(SDL_GetGPUDeviceDriver(device), "direct3d12") != 0) {
+        why = std::string("SDL_gpu's device is ") + SDL_GetGPUDeviceDriver(device) +
+              ", not Direct3D 12";
+        return nullptr;
+    }
+    // the checks the N2 kill test ran (out/research/n2_design.md), on the
+    // layout of SDL 3.4.14, the version these headers are; a newer SDL that
+    // moved anything fails one of them before anything is called on it
+    const auto* c = reinterpret_cast<const SdlD3D12TextureContainer*>(texture);
+    // (a) the create info, all but props: SDL gives the container a
+    // properties object of its own
+    if (c->info.type != ti.type || c->info.format != ti.format || c->info.usage != ti.usage ||
+        c->info.width != ti.width || c->info.height != ti.height ||
+        c->info.layer_count_or_depth != ti.layer_count_or_depth ||
+        c->info.num_levels != ti.num_levels || c->info.sample_count != ti.sample_count) {
+        why = fmt::format("SDL {}.{}.{}'s texture container doesn't start with its create info",
+                          SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
+        return nullptr;
+    }
+    // (b) its texture points back at it
+    const SdlD3D12Texture* t = c->active_texture;
+    if (!t || t->container != c) {
+        why = "SDL's active texture doesn't point back at its container";
+        return nullptr;
+    }
+    // (c) the one texture the container has
+    if (t->container_index != 0 || c->texture_count != 1 || !c->textures ||
+        c->textures[0] != t || !t->resource) {
+        why = fmt::format("SDL's texture container has {} textures, or its first isn't the "
+                          "active one",
+                          c->texture_count);
+        return nullptr;
+    }
+    // (d) on the SDK's device, the same object however reached
+    ID3D12Resource* resource = t->resource;
+    ID3D12Device* sdl_device = nullptr;
+    if (FAILED(resource->GetDevice(IID_PPV_ARGS(&sdl_device))) || !sdl_device) {
+        why = "SDL's resource has no device";
+        return nullptr;
+    }
+    const bool same = Identity(sdl_device) &&
+                      Identity(sdl_device) == Identity(static_cast<ID3D12Device*>(present_device));
+    sdl_device->Release();
+    if (!same) {
+        why = "SDL_gpu's Direct3D 12 device isn't the SDK's (another adapter?)";
+        return nullptr;
+    }
+    // (e) the texture asked for
+    const D3D12_RESOURCE_DESC desc = resource->GetDesc();
+    if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+        desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM || desc.Width != ti.width ||
+        desc.Height != ti.height || desc.DepthOrArraySize != 1 || desc.MipLevels != 1) {
+        why = fmt::format("SDL's resource is format {} {}x{}, not R8G8B8A8_UNORM {}x{}",
+                          int(desc.Format), uint64_t(desc.Width), desc.Height, ti.width,
+                          ti.height);
+        return nullptr;
+    }
+    return resource;
+#else
+    (void)texture;
+    (void)ti;
+    why = "zero-copy presentation is Direct3D 12 only";
+    return nullptr;
+#endif
+}
+
+void GpuRenderer::Impl::SetZeroCopy(bool ok, const std::string& why) {
+    std::lock_guard lock(zero_copy_mutex);
+    zero_copy_why = ok ? std::string() : why;
+    zero_copy = ok;
+}
+
+void GpuRenderer::Impl::CheckZeroCopyOnce() {
+    if (zero_copy_checked) return;
+    zero_copy_checked = true;
+    const SDL_GPUTextureCreateInfo ti = OutputInfo(16, 16);
+    SDL_GPUTexture* texture = SDL_CreateGPUTexture(device, &ti);
+    if (!texture) {
+        SetZeroCopy(false, std::string("no test texture (") + SDL_GetError() + ")");
+        return;
+    }
+    std::string why;
+    const bool ok = SdkResource(texture, ti, why) != nullptr;
+    SDL_ReleaseGPUTexture(device, texture);
+    SetZeroCopy(ok, why);
+}
+
+bool GpuRenderer::Impl::EnsureOutput(int slot, uint32_t w, uint32_t h) {
+    Output& out = outputs[slot];
+    if (out.texture && out.w == w && out.h == h) return true;
+    // SDL lets it go once its own work on it is done; the presenter holds the
+    // Direct3D 12 texture itself for as long as its paints need it, and
+    // native_view.cpp only has a slot drawn again once they're done with it
+    if (out.texture) SDL_ReleaseGPUTexture(device, out.texture);
+    out = Output{};
+    const SDL_GPUTextureCreateInfo ti = OutputInfo(w, h);
+    out.texture = SDL_CreateGPUTexture(device, &ti);
+    if (!out.texture) {
+        REXLOG_WARN("native view gpu: no {}x{} output ({})", w, h, SDL_GetError());
+        return false;
+    }
+    out.w = w;
+    out.h = h;
+    out.generation = ++output_generations;
+    // each one checked as the test texture was, while zero-copy is on
+    if (zero_copy) {
+        std::string why;
+        out.resource = SdkResource(out.texture, ti, why);
+        if (!out.resource) SetZeroCopy(false, "an output failed the checks: " + why);
+    }
+    return true;
+}
+
+void GpuRenderer::Impl::ReleaseOutputs() {
+    if (device) {
+        for (Output& out : outputs)
+            if (out.texture) SDL_ReleaseGPUTexture(device, out.texture);
+        if (output_readback) SDL_ReleaseGPUTransferBuffer(device, output_readback);
+    }
+    for (Output& out : outputs) out = Output{};
+    output_readback = nullptr;
+    output_readback_size = 0;
+}
+
+bool GpuRenderer::Impl::Download(SDL_GPUTexture* texture, uint32_t w, uint32_t h,
+                                 std::vector<uint32_t>& rgba) {
+    const uint32_t bytes = w * h * 4;
+    if (!output_readback || output_readback_size < bytes) {
+        if (output_readback) SDL_ReleaseGPUTransferBuffer(device, output_readback);
+        SDL_GPUTransferBufferCreateInfo tbi{};
+        tbi.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
+        tbi.size = bytes;
+        output_readback = SDL_CreateGPUTransferBuffer(device, &tbi);
+        output_readback_size = output_readback ? bytes : 0;
+        if (!output_readback) {
+            REXLOG_WARN("native view gpu: no buffer to read an output back ({})", SDL_GetError());
+            return false;
+        }
+    }
+    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device);
+    if (!cmd) {
+        REXLOG_WARN("native view gpu: no command buffer ({})", SDL_GetError());
+        return false;
+    }
+    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+    SDL_GPUTextureRegion src{};
+    src.texture = texture;
+    src.w = w;
+    src.h = h;
+    src.d = 1;
+    SDL_GPUTextureTransferInfo dst{output_readback, 0, w, h};
+    SDL_DownloadFromGPUTexture(copy, &src, &dst);
+    SDL_EndGPUCopyPass(copy);
+    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+    const bool done = fence && SDL_WaitForGPUFences(device, true, &fence, 1);
+    if (fence) SDL_ReleaseGPUFence(device, fence);
+    const auto* px =
+        done ? static_cast<const uint32_t*>(SDL_MapGPUTransferBuffer(device, output_readback, false))
+             : nullptr;
+    if (!px) {
+        REXLOG_WARN("native view gpu: couldn't read an output back ({})", SDL_GetError());
+        return false;
+    }
+    rgba.resize(size_t(w) * h);
+    std::memcpy(rgba.data(), px, rgba.size() * sizeof(uint32_t));
+    SDL_UnmapGPUTransferBuffer(device, output_readback);
+    return true;
+}
+
+bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o, int slot,
+                               std::vector<uint32_t>* rgba, GpuStats& st) {
     if (!o.width || !o.height || !EnsureTargets(o.width, o.height)) return false;
+    if (slot >= 0 && !EnsureOutput(slot, o.width, o.height)) return false;
+    // where the last pass, the gamma ramp's, puts the finished frame
+    SDL_GPUTexture* const output = slot >= 0 ? outputs[slot].texture : graded;
     serial++;
     Buffer& pool_v = pool_verts[serial & 1];
     Buffer& pool_i = pool_indices[serial & 1];
@@ -2248,40 +2530,47 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
 
     // the display's gamma ramp over all of it, as the presenter applies it
     // (gamma_ramp.h), by the CPU's lookup: each value's entry, red in the low
-    // byte, four to a uint4
-    SDL_GPUTexture* finished = color;
-    if (o.gamma && o.view == RasterView::kFinal && frame.gamma.mode != GammaRamp::kNone) {
+    // byte, four to a uint4. Every frame ends in this pass, into its output:
+    // with no ramp (or a view, or the ramp off) the lookup is the identity,
+    // which gives each 8-bit value back as it was, alpha the resolve's 1
+    {
         uint8_t lut[3][256];
-        GammaLut(frame.gamma, lut);
-        if (!IsIdentity(lut)) {
-            uint32_t packed[256];
-            for (int v = 0; v < 256; v++)
-                packed[v] = uint32_t(lut[0][v]) | uint32_t(lut[1][v]) << 8 |
-                            uint32_t(lut[2][v]) << 16;
-            SDL_GPUColorTargetInfo ct{};
-            ct.texture = graded;
-            ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
-            ct.store_op = SDL_GPU_STOREOP_STORE;
-            SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
-            SDL_BindGPUGraphicsPipeline(rp, gamma_pipeline);
-            const SDL_GPUTextureSamplerBinding tb{color, sampler};
-            SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
-            SDL_PushGPUFragmentUniformData(cmd, 0, packed, sizeof(packed));
-            SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
-            SDL_EndGPURenderPass(rp);
-            finished = graded;
+        if (o.gamma && o.view == RasterView::kFinal && frame.gamma.mode != GammaRamp::kNone) {
+            GammaLut(frame.gamma, lut);
+        } else {
+            for (int c = 0; c < 3; c++)
+                for (int v = 0; v < 256; v++) lut[c][v] = uint8_t(v);
         }
+        uint32_t packed[256];
+        for (int v = 0; v < 256; v++)
+            packed[v] =
+                uint32_t(lut[0][v]) | uint32_t(lut[1][v]) << 8 | uint32_t(lut[2][v]) << 16;
+        SDL_GPUColorTargetInfo ct{};
+        ct.texture = output;
+        ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
+        ct.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
+        SDL_BindGPUGraphicsPipeline(rp, gamma_pipeline);
+        const SDL_GPUTextureSamplerBinding tb{color, sampler};
+        SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
+        SDL_PushGPUFragmentUniformData(cmd, 0, packed, sizeof(packed));
+        SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+        SDL_EndGPURenderPass(rp);
     }
 
-    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-    SDL_GPUTextureRegion src{};
-    src.texture = finished;
-    src.w = width;
-    src.h = height;
-    src.d = 1;
-    SDL_GPUTextureTransferInfo dst{readback, 0, width, height};
-    SDL_DownloadFromGPUTexture(copy, &src, &dst);
-    SDL_EndGPUCopyPass(copy);
+    // RenderFrame's is read back in the same submission; the presenter's
+    // stays on the GPU
+    if (rgba) {
+        SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+        SDL_GPUTextureRegion src{};
+        src.texture = output;
+        src.w = width;
+        src.h = height;
+        src.d = 1;
+        SDL_GPUTextureTransferInfo dst{readback, 0, width, height};
+        SDL_DownloadFromGPUTexture(copy, &src, &dst);
+        SDL_EndGPUCopyPass(copy);
+    }
     const auto submitted = std::chrono::steady_clock::now();
     SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
     if (!fence) {
@@ -2294,15 +2583,19 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         REXLOG_WARN("native view gpu: the frame didn't finish ({})", SDL_GetError());
         return false;
     }
-    const auto* px = static_cast<const uint32_t*>(SDL_MapGPUTransferBuffer(device, readback, false));
-    if (!px) {
-        REXLOG_WARN("native view gpu: couldn't read the frame back ({})", SDL_GetError());
-        return false;
+    if (rgba) {
+        const auto* px =
+            static_cast<const uint32_t*>(SDL_MapGPUTransferBuffer(device, readback, false));
+        if (!px) {
+            REXLOG_WARN("native view gpu: couldn't read the frame back ({})", SDL_GetError());
+            return false;
+        }
+        // alpha is the resolve's 0xff throughout: the passes after it, the
+        // gamma ramp's too, write 1
+        rgba->resize(size_t(width) * height);
+        std::memcpy(rgba->data(), px, rgba->size() * sizeof(uint32_t));
+        SDL_UnmapGPUTransferBuffer(device, readback);
     }
-    // alpha is the resolve's 0xff throughout: no pipeline after it writes it
-    rgba.resize(size_t(width) * height);
-    std::memcpy(rgba.data(), px, rgba.size() * sizeof(uint32_t));
-    SDL_UnmapGPUTransferBuffer(device, readback);
     st.wait_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                            submitted).count();
     Evict();
@@ -2380,6 +2673,57 @@ bool GpuRenderer::Ready() { return impl_->ready; }
 bool GpuRenderer::RenderFrame(const FrameCapture& frame, const RasterOptions& options,
                               std::vector<uint32_t>& rgba, GpuStats& stats) {
     std::lock_guard lock(impl_->mutex);
+    return Draw(frame, options, -1, &rgba, stats);
+}
+
+bool GpuRenderer::RenderFrameToOutput(const FrameCapture& frame, const RasterOptions& options,
+                                      int slot, GpuOutput& out, GpuStats& stats) {
+    if (slot < 0 || slot >= kOutputs) return false;
+    std::lock_guard lock(impl_->mutex);
+    if (!Draw(frame, options, slot, nullptr, stats)) return false;
+    const Impl::Output& o = impl_->outputs[slot];
+    out.d3d12_resource = o.resource;
+    out.width = o.w;
+    out.height = o.h;
+    out.generation = o.generation;
+    return true;
+}
+
+bool GpuRenderer::DownloadOutput(int slot, std::vector<uint32_t>& rgba, uint32_t& width,
+                                 uint32_t& height) {
+    if (slot < 0 || slot >= kOutputs) return false;
+    std::lock_guard lock(impl_->mutex);
+    const Impl::Output& o = impl_->outputs[slot];
+    if (!impl_->device || !o.texture) return false;
+    if (!impl_->Download(o.texture, o.w, o.h, rgba)) return false;
+    width = o.w;
+    height = o.h;
+    return true;
+}
+
+void GpuRenderer::SetPresentDevice(void* d3d12_device) {
+    std::lock_guard lock(impl_->mutex);
+    impl_->present_device = d3d12_device;
+}
+
+bool GpuRenderer::CheckZeroCopy(std::string& why) {
+    if (!impl_->ready) {
+        why = "no GPU device for the native view";
+        return false;
+    }
+    if (!impl_->zero_copy_checked) {
+        // once: waits out a frame being drawn
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->device) impl_->CheckZeroCopyOnce();
+    }
+    std::lock_guard lock(impl_->zero_copy_mutex);
+    why = impl_->zero_copy_why;
+    return impl_->zero_copy;
+}
+
+// with the mutex held: RenderFrame's and RenderFrameToOutput's frame
+bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, int slot,
+                       std::vector<uint32_t>* rgba, GpuStats& stats) {
     if (!impl_->device) return false;
     // before the clock starts: it's the device's setting up, not a frame's
     if (!impl_->warm) impl_->Prewarm();
@@ -2389,7 +2733,7 @@ bool GpuRenderer::RenderFrame(const FrameCapture& frame, const RasterOptions& op
     // draw lit, as the CPU draws them without self_shadow
     RasterOptions o = options;
     o.self_shadow = options.self_shadow && impl_->shadow_maps;
-    if (!impl_->Render(frame, o, rgba, stats)) {
+    if (!impl_->Render(frame, o, slot, rgba, stats)) {
         // whatever went wrong would go wrong every frame; the CPU takes over
         REXLOG_WARN("native view gpu: giving up for this session, the native view draws on "
                     "the CPU");
