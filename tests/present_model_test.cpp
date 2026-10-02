@@ -5,6 +5,7 @@
 
 #include <doctest/doctest.h>
 #include <utility>
+#include "src/Render/gpu_skip.h"
 #include "src/Render/present_model.h"
 
 using namespace band3::render;
@@ -203,4 +204,63 @@ TEST_CASE("an emulated paint or another source starts the frames' count over") {
     CHECK(log.skipped == 0);
     CHECK(log.shown == 3);
     CHECK(log.repeats == 0);
+}
+
+// gpu_skip.h's SkipLatch: which frames the emulated GPU skips the game's draws
+// in, and when its picture is the game's again
+
+TEST_CASE("the emulated GPU skips from the frame after skipping is wanted") {
+    SkipLatch l;
+    CHECK_FALSE(l.Skipping());
+    CHECK(l.Fresh());  // nothing skipped yet
+    // the frame now being drawn was drawn whole; the next is skipped
+    CHECK(l.EndFrame(true, 0));
+    CHECK(l.Skipping());
+    CHECK(l.Fresh());
+    // a skipped frame swapped: stale
+    CHECK(l.EndFrame(true, 0));
+    CHECK_FALSE(l.Fresh());
+}
+
+TEST_CASE("after skipping stops, the picture is fresh once two whole frames are swapped") {
+    SkipLatch l;
+    l.EndFrame(true, 0);
+    l.EndFrame(true, 0);
+    // F8 back: the frame being drawn is still skipped
+    CHECK_FALSE(l.EndFrame(false, 0));
+    CHECK_FALSE(l.Fresh());
+    // one whole frame: with even/odd rendering it presents the skipped world
+    l.EndFrame(false, 0);
+    CHECK_FALSE(l.Fresh());
+    l.EndFrame(false, 0);
+    CHECK(l.Fresh());
+}
+
+TEST_CASE("whole frames asked for are drawn whatever is wanted, then skipping goes on") {
+    SkipLatch l;
+    l.EndFrame(true, 0);
+    l.EndFrame(true, 0);
+    CHECK_FALSE(l.Fresh());
+    // asked for 3: the next three frames are drawn whole
+    CHECK_FALSE(l.EndFrame(true, 3));
+    CHECK(l.FullPending() == 2);
+    CHECK_FALSE(l.EndFrame(true, 0));
+    CHECK_FALSE(l.Fresh());  // one whole frame swapped
+    CHECK_FALSE(l.EndFrame(true, 0));
+    CHECK(l.Fresh());  // two: a capture can hold this one
+    // then skipped again
+    CHECK(l.EndFrame(true, 0));
+    CHECK(l.Fresh());  // the third whole frame swapped
+    l.EndFrame(true, 0);
+    CHECK_FALSE(l.Fresh());
+}
+
+TEST_CASE("a request while one runs keeps the larger") {
+    SkipLatch l;
+    l.EndFrame(true, 5);
+    CHECK(l.FullPending() == 4);
+    l.EndFrame(true, 2);
+    CHECK(l.FullPending() == 3);
+    l.EndFrame(true, 9);
+    CHECK(l.FullPending() == 8);
 }

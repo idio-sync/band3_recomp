@@ -769,7 +769,10 @@ std::vector<std::chrono::steady_clock::time_point> GamePresentTimes(
     std::chrono::steady_clock::time_point since);
 
 // native_view_rt_fallback: whether render targets' textures carry the pixels
-// guest memory holds too ("guest", the default) or only their identity ("none")
+// guest memory holds too ("guest", the default) or only their identity
+// ("none"). Never while renderer is native: the emulated GPU skips the draws
+// that would make them (gpu_skip.h), so they're stale by construction, and
+// the native renderer draws them from their passes, by identity and version.
 bool RtFallbackGuest();
 
 }  // namespace band3::render

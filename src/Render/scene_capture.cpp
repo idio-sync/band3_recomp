@@ -29,6 +29,7 @@
 #include "generated/band3_init.h"
 #include "src/Hooks/frame_pacing.h"
 #include "src/Render/frame_compose.h"
+#include "src/Render/gpu_skip.h"
 #include "src/Render/guest_formats.h"
 #include "src/settings.h"
 
@@ -853,8 +854,9 @@ std::shared_ptr<const Texture> GuestPixels(const Guest& g, uint32_t tex_obj, Fra
 
 // A draw's diffuse texture. A loaded one is decoded from guest memory; one RB3
 // draws at runtime is its identity and version (Texture::tex_obj), with guest
-// memory's pixels only if native_view_rt_fallback is guest, and a sample the
-// capture has to have the pass of. Null when there's nothing to draw it with.
+// memory's pixels only if native_view_rt_fallback is guest and renderer is
+// emulated (RtFallbackGuest), and a sample the capture has to have the pass
+// of. Null when there's nothing to draw it with.
 std::shared_ptr<const Texture> CaptureTexture(const Guest& g, State& s, Sink& sink,
                                               uint32_t tex_obj) {
     FrameCapture& fc = sink.fc;
@@ -873,7 +875,7 @@ std::shared_ptr<const Texture> CaptureTexture(const Guest& g, State& s, Sink& si
         fc.rt_snapshots++;
     }
     std::shared_ptr<const Texture> pixels;
-    if (g_rt_fallback_guest.load(std::memory_order_relaxed)) pixels = GuestPixels(g, tex_obj, fc);
+    if (RtFallbackGuest()) pixels = GuestPixels(g, tex_obj, fc);
     if (pixels) fc.textured++;
 
     // the same version with the same pixels is the same Texture, so a frame's
@@ -1713,6 +1715,7 @@ void DropOpenPass(State& s) {
     if (s.open.tex) s.building->passes_unbalanced++;
     s.open = OpenPass{};
     g_pass_recording.store(false, std::memory_order_relaxed);
+    SetPassWantsDraws(false);
 }
 
 // The most frames apart even/odd rendering draws the world now: 2 at 30 fps
@@ -1736,7 +1739,9 @@ bool RecentlyMade(const RtState& rt, uint64_t frame) {
 // off, a texture drawn into regularly isn't recorded once it has been twice in
 // a row: the crowd's impostor, blurs and the rest are drawn again every frame
 // (or world frame), and a capture records them itself then. One drawn once, or
-// twice (made, then made again), is.
+// twice (made, then made again), is. The same rule keeps the emulated GPU
+// drawing a pass while it skips the game's draws (gpu_skip.h): one that isn't
+// regular is drawn, so what RB3 makes once is there after F8 back.
 void BeginPass(const Guest& g, uint32_t tex) {
     State& s = S();
     // the same texture again is its camera selected again, which clears it:
@@ -1748,6 +1753,7 @@ void BeginPass(const Guest& g, uint32_t tex) {
     RtState& rt = s.rts[tex];
     rt.base = TexBase(g, tex);
     const bool regular = RecentlyMade(rt, s.game_frame) && rt.repeats >= 1;
+    SetPassWantsDraws(!regular);
     s.open.tex = tex;
     s.open.record = capturing || !regular;
     g_pass_recording.store(s.open.record, std::memory_order_relaxed);
@@ -1884,6 +1890,7 @@ bool AllLeftOut(const FrameCapture& content) {
 // such (rt_filtered) rather than missing.
 void EndPass(uint32_t tex) {
     State& s = S();
+    SetPassWantsDraws(false);
     if (s.open.tex != tex) DropOpenPass(s);
     RtState& rt = s.rts[tex];
     rt.version++;
@@ -2143,6 +2150,11 @@ void ReadBlurTaps(const Guest& g, float offsets[N][4], float weights[N][4]) {
 void HoldIfRequested(const std::shared_ptr<const FrameCapture>& frame) {
     std::unique_lock lock(g_held.mutex);
     if (!g_held.armed) return;
+    // While the emulated GPU skips the game's draws (gpu_skip.h) its picture
+    // isn't this frame's: neither taken nor counted until it has drawn the
+    // frame and the one before whole, which the harness's capture asks for
+    // (RequestFullFrames) before it holds one.
+    if (!EmulatedPictureFresh()) return;
     if (g_held.skip > 0) {
         g_held.skip--;
         return;
@@ -2501,7 +2513,9 @@ CaptureProfile CaptureProfileSince(const CaptureProfile& now, const CaptureProfi
     return p;
 }
 
-bool RtFallbackGuest() { return g_rt_fallback_guest.load(std::memory_order_relaxed); }
+bool RtFallbackGuest() {
+    return g_rt_fallback_guest.load(std::memory_order_relaxed) && !RendererNative();
+}
 
 }  // namespace band3::render
 
@@ -2945,6 +2959,10 @@ extern "C" REX_FUNC(DxRnd__Present) {
         HookTimer timer(CaptureProfile::kHookPresent);
         done = FinishFrame(base);
     }
+    // whether the emulated GPU draws the next frame, now this one is captured
+    // (so it's skipped only if capture has it whole), and before it's held
+    LatchGpuSkip(g_enabled.load(std::memory_order_relaxed),
+                 g_record_targets.load(std::memory_order_relaxed));
     // held without the lock, which a texture let go of on another thread
     // meanwhile takes
     if (done) HoldIfRequested(done);

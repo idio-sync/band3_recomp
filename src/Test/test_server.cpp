@@ -45,6 +45,7 @@
 #include "src/Input/xinput_state.h"
 #include "src/Render/capture_file.h"
 #include "src/Render/frame_compose.h"
+#include "src/Render/gpu_skip.h"
 #include "src/Render/gpu_view.h"
 #include "src/Render/native_view.h"
 #include "src/Render/png_writer.h"
@@ -121,11 +122,24 @@ public:
         return state;
     }
 
-    // the window's picture, as the renderer setting has it, or the one asked for
+    // the window's picture, as the renderer setting has it, or the one asked
+    // for; not the emulated GPU's while it skips the game's draws, which
+    // isn't the game's picture (capture asks for whole frames first)
     std::string Screenshot(const std::string& name, ScreenshotSource source,
                            ScreenshotInfo& out) override {
         const bool native = source == ScreenshotSource::kNative ||
                             (source == ScreenshotSource::kWindow && render::NativePresenting());
+        if (!native && !render::EmulatedPictureFresh()) {
+            return "the emulated GPU's picture is stale: it skips the game's draws while the "
+                   "native renderer draws the window (emulated_gpu_while_native skip_draws). "
+                   "`capture` has it draw whole frames first; or set emulated_gpu_while_native "
+                   "full";
+        }
+        return Shot(name, native, out);
+    }
+
+    // the native renderer's picture or the emulated GPU's, fresh or not
+    std::string Shot(const std::string& name, bool native, ScreenshotInfo& out) {
         std::vector<uint32_t> rgba;
         uint32_t width = 0, height = 0;
         const std::string error =
@@ -195,12 +209,20 @@ public:
     }
 
     // the game is held at the end of the captured frame while the screenshot
-    // is taken, so both are the same frame
+    // is taken, so both are the same frame. While the emulated GPU skips the
+    // game's draws (renderer native), it draws whole frames for a while
+    // first, enough for the held frame's wait (CaptureHeldFrame: two frames
+    // to be fresh, two to learn, thirty at most), so the screenshot is the
+    // game's picture of the captured frame.
     std::string Capture(const std::string& name, CaptureInfo& out) override {
         const std::string file = name.empty() ? TimestampName() : name;
         std::string shot_error;
+        render::RequestFullFrames(40);
         auto frame = render::CaptureHeldFrame(
-            [&] { shot_error = Screenshot(file, ScreenshotSource::kEmulated, out.screenshot); },
+            [&] {
+                out.emulated = render::EmulatedPictureFresh() ? "full" : "stale";
+                shot_error = Shot(file, false, out.screenshot);
+            },
             std::chrono::seconds(5),
             std::chrono::milliseconds(150), &out.held_fallback);
         if (!frame) return "the game didn't finish a frame to capture in 5 s";
@@ -359,6 +381,8 @@ public:
         out.rt_draws = rec.draws_recorded - measure_rec_.draws_recorded;
         out.rt_ms = rec.ms - measure_rec_.ms;
         out.capture = CaptureCost(render::CaptureProfileSince(profile, measure_profile_));
+        out.emulated_gpu =
+            EmulatedGpu(render::GpuSkipStatsSince(render::GetGpuSkipStats(), measure_gpu_));
         return out;
     }
 
@@ -484,11 +508,31 @@ private:
         const uint64_t frame = GameState::Get().Snapshot().frame;
         const render::PassRecordingStats rec = render::GetPassRecordingStats();
         const render::CaptureProfile profile = render::GetCaptureProfile();
+        const render::GpuSkipStats gpu = render::GetGpuSkipStats();
         std::lock_guard lock(measure_mutex_);
         measure_start_ = Clock::now();
         measure_frame_ = frame;
         measure_rec_ = rec;
         measure_profile_ = profile;
+        measure_gpu_ = gpu;
+    }
+
+    // what the emulated GPU was sent, as native_view stats reports it
+    static NativeViewStats::EmulatedGpu EmulatedGpu(const render::GpuSkipStats& g) {
+        using G = render::GpuSkipStats;
+        NativeViewStats::EmulatedGpu e;
+        e.skip_mode = g.skip_mode;
+        e.skipping = g.skipping;
+        e.fresh = g.fresh;
+        e.frames = g.frames;
+        e.frames_skipped = g.frames_skipped;
+        for (int i = 0; i < G::kNumKinds; i++) {
+            e.emitted.emplace_back(G::kKindNames[i], g.emitted[i]);
+            e.skipped.emplace_back(G::kKindNames[i], g.skipped[i]);
+        }
+        e.kept_pass = g.kept_pass;
+        e.kept_point_tests = g.kept_point_tests;
+        return e;
     }
 
     // the capture's cost as native_view stats reports it, in milliseconds
@@ -524,6 +568,7 @@ private:
     uint64_t measure_frame_ = 0;
     render::PassRecordingStats measure_rec_;
     render::CaptureProfile measure_profile_;
+    render::GpuSkipStats measure_gpu_;
 };
 
 bool SendAll(socket_t s, const std::string& data) {

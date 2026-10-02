@@ -60,6 +60,10 @@ struct CaptureInfo {
     // no frame whose world the game's picture shows came within the frames
     // the capture waits (CaptureHeldFrame), so it took the last one anyway
     bool held_fallback = false;
+    // whether the emulated GPU drew the frame screenshot whole ("full"), or
+    // skipped the game's draws in it or the one before ("stale": renderer
+    // native with emulated_gpu_while_native skip_draws, src/Render/gpu_skip.h)
+    std::string emulated = "full";
     // the native view's GPU backend drawing the same capture, at the
     // screenshot's size: its PNG, or why there's none
     std::string gpu_path;
@@ -123,6 +127,24 @@ struct NativeViewStats {
         std::vector<std::pair<std::string, uint64_t>> counts;
         std::vector<std::pair<std::string, uint64_t>> sizes;
     } capture;
+    // what the emulated GPU was sent in the same time (src/Render/gpu_skip.h):
+    // whether it skips the game's draws now (renderer native with
+    // emulated_gpu_while_native skip_draws), the frame being drawn is skipped
+    // and its picture is fresh; the game's frames and those skipped; each
+    // draw emitter's calls emitted and skipped by kind, totals the reply
+    // divides by the frames; and of those emitted in skipped frames, the ones
+    // a one-shot texture pass kept and the occlusion queries
+    struct EmulatedGpu {
+        bool skip_mode = false;
+        bool skipping = false;
+        bool fresh = true;
+        uint64_t frames = 0;
+        uint64_t frames_skipped = 0;
+        std::vector<std::pair<std::string, uint64_t>> emitted;
+        std::vector<std::pair<std::string, uint64_t>> skipped;
+        uint64_t kept_pass = 0;
+        uint64_t kept_point_tests = 0;
+    } emulated_gpu;
 };
 
 // The window's pacing (`present_stats`), since its numbers last started over:

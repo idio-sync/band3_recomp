@@ -219,6 +219,14 @@ REXCVAR_DEFINE_INT32(native_max_height, 0, "Band3/Graphics",
     "that can't draw it at full size. 0 = the window's size")
     .range(0, 4320);
 
+// read by src/Render/gpu_skip.cpp, by name
+REXCVAR_DEFINE_STRING(emulated_gpu_while_native, "skip_draws", "Band3/Graphics",
+    "With renderer = native, what the emulated GPU still does: skip_draws leaves out the "
+    "game's draws nobody sees (the native renderer draws them), keeping what RB3 draws once "
+    "(outfits) so F8 back shows the game's picture; full draws everything, as with "
+    "renderer = emulated")
+    .allowed({"full", "skip_draws"});
+
 // Band3/Integrations
 
 REXCVAR_DEFINE_BOOL(events_enabled, false, "Band3/Integrations",

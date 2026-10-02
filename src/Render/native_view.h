@@ -29,7 +29,11 @@ class Window;
 // is 64). On Windows it samples gpu_view's output textures where they are
 // (zero-copy, see gpu_view.h); elsewhere, or when that can't be done, it
 // uploads each frame through the SDK's immediate drawer. The emulated GPU
-// still runs and its picture is still painted underneath, then covered.
+// still runs and its picture is still painted underneath, then covered;
+// with emulated_gpu_while_native skip_draws (the default) it skips the
+// game's draws meanwhile (gpu_skip.h), so after F8 back to emulated the
+// native renderer draws the window on until the emulated GPU has drawn whole
+// frames again.
 // Its worker sleeps until the game publishes a capture (scene_capture.h's
 // WaitForCapture) and draws the newest; each paint shows the newest drawn.
 // Once it has been native, capture records the passes RB3 draws into

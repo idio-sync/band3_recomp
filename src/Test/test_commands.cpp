@@ -445,6 +445,8 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
     fields += ",\"game_frame\":" + std::to_string(info.game_frame);
     fields += ",\"world_frame\":" + std::to_string(info.world_frame);
     fields += std::string(",\"held_fallback\":") + (info.held_fallback ? "true" : "false");
+    fields += ",\"emulated\":";
+    AppendJsonString(fields, info.emulated);
     if (want_composed && !(info.composed && info.proc_cmds == 2)) {
         return Error(target, "capture " + name + " isn't a post frame composed with the world "
                                  "before it: proc_cmds " + std::to_string(info.proc_cmds) +
@@ -579,6 +581,35 @@ std::string CaptureCostJson(const NativeViewStats::Capture& c) {
     return out;
 }
 
+// native_view stats' `emulated_gpu`: what the emulated GPU was sent, the
+// draws per game frame (0 with no frames)
+std::string EmulatedGpuJson(const NativeViewStats::EmulatedGpu& e) {
+    const double frames = double(e.frames);
+    auto per_frame = [&](uint64_t v) { return frames > 0 ? double(v) / frames : 0.0; };
+    char buf[96];
+    std::string out = "{\"skip_mode\":";
+    out += e.skip_mode ? "true" : "false";
+    out += ",\"skipping\":";
+    out += e.skipping ? "true" : "false";
+    out += ",\"fresh\":";
+    out += e.fresh ? "true" : "false";
+    out += ",\"frames\":" + std::to_string(e.frames);
+    out += ",\"frames_skipped\":" + std::to_string(e.frames_skipped);
+    for (const auto* list : {&e.emitted, &e.skipped}) {
+        out += list == &e.emitted ? ",\"emitted_per_frame\":{" : ",\"skipped_per_frame\":{";
+        for (size_t i = 0; i < list->size(); i++) {
+            std::snprintf(buf, sizeof(buf), "%s\"%s\":%.1f", i ? "," : "",
+                          (*list)[i].first.c_str(), per_frame((*list)[i].second));
+            out += buf;
+        }
+        out += "}";
+    }
+    std::snprintf(buf, sizeof(buf), ",\"kept_per_frame\":{\"pass\":%.1f,\"point_tests\":%.1f}}",
+                  per_frame(e.kept_pass), per_frame(e.kept_point_tests));
+    out += buf;
+    return out;
+}
+
 std::string NativeViewJson(const NativeViewStats& s) {
     std::string out = "\"stats\":{\"on\":";
     out += s.on ? "true" : "false";
@@ -608,6 +639,7 @@ std::string NativeViewJson(const NativeViewStats& s) {
                   static_cast<unsigned long long>(s.rt_draws), s.rt_ms);
     out += buf;
     out += ",\"capture\":" + CaptureCostJson(s.capture);
+    out += ",\"emulated_gpu\":" + EmulatedGpuJson(s.emulated_gpu);
     out += '}';
     return out;
 }

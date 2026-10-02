@@ -2,6 +2,7 @@
 
 #include "src/Render/capture_file.h"
 #include "src/Render/frame_compose.h"
+#include "src/Render/gpu_skip.h"
 #include "src/Render/gpu_view.h"
 #include "src/Render/png_writer.h"
 #include "src/Render/post_model.h"
@@ -934,6 +935,10 @@ class D3D12Present {
 };
 #endif
 
+// on the UI thread: the drawer follows renderer again (the emulated GPU's
+// picture has turned fresh), if it's still there
+void FollowRendererLater();
+
 // The UI drawer: always on the presenter at z 0, under ImGui (64), drawing
 // nothing while renderer is emulated. While native it owns the worker's size
 // (the window's picture's, LetterboxRect) and draws the newest frame each
@@ -966,6 +971,13 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         (void)provider_;  // the immediate drawer is the provider's already
 #endif
         presenter_->AddUIDrawerFromUIThread(this, 0);
+        // F8 back to emulated waits for the emulated GPU's picture; told on
+        // the game's thread, followed on the UI thread
+        if (window_) {
+            rex::ui::WindowedAppContext* app = &window_->app_context();
+            SetEmulatedFreshCallback(
+                [app] { app->CallInUIThreadDeferred([] { FollowRendererLater(); }); });
+        }
         // F4, F8 and the harness's `set` change it on the UI thread
         rex::cvar::RegisterChangeCallback("renderer", [this](std::string_view, std::string_view v) {
             Follow(v == "native");
@@ -974,9 +986,10 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
     }
 
     void Stop() {
+        SetEmulatedFreshCallback(nullptr);
         rex::cvar::UnregisterChangeCallbacks("renderer");
         presenter_->RemoveUIDrawerFromUIThread(this);
-        Follow(false);
+        Follow(false, true);
 #ifdef _WIN32
         // the GPU done with every paint that sampled an output before the
         // textures they hold are let go (no paint runs now: this is the UI
@@ -989,15 +1002,40 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
 
     // renderer, as it changes: the worker starts when it turns native, on the
     // UI thread where the GPU device starts, and is let go when it turns
-    // emulated
-    void Follow(bool native) {
+    // emulated, once the emulated GPU's picture is the game's again: while
+    // native it skipped the game's draws (gpu_skip.h), so it keeps drawing
+    // the window until the emulated GPU has swapped two whole frames
+    // (gpu_skip.cpp calls back then), or kMaxDrain has gone by
+    // (`at_once`: at shutdown, without waiting)
+    void Follow(bool native, bool at_once = false) {
+        // native again while draining: it just goes on
+        if (native) draining_ = false;
         if (native == active_) return;
-        active_ = native;
         if (!native) {
+            const auto now = std::chrono::steady_clock::now();
+            if (!at_once && !EmulatedPictureFresh()) {
+                if (!draining_) {
+                    draining_ = true;
+                    drain_start_ = now;
+                    REXLOG_INFO("native present: drawing on until the emulated GPU has drawn "
+                                "whole frames again");
+                }
+                if (now - drain_start_ < kMaxDrain) return;
+                REXLOG_WARN("native present: the emulated GPU drew no whole frames in {} ms; "
+                            "its picture may be stale for a moment",
+                            kMaxDrain.count());
+            }
+            const double waited =
+                draining_ ? std::chrono::duration<double, std::milli>(now - drain_start_).count()
+                          : 0.0;
+            draining_ = false;
+            active_ = false;
             Renderer::Get().StopPresent();
-            REXLOG_INFO("native present: off, the emulated GPU's picture shows");
+            REXLOG_INFO("native present: off, the emulated GPU's picture shows (after {:.0f} ms)",
+                        waited);
             return;
         }
+        active_ = true;
         // every pipeline made now, here on the UI thread, not by the
         // worker's first frame while the window waits for it
         if (UpdateGpu()) GpuRenderer::Get().Prewarm();
@@ -1159,6 +1197,11 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
     rex::ui::Window* window_;
     ImmediateGetter immediate_;
     bool active_ = false;
+    // renderer turned emulated, and the window is drawn on until the emulated
+    // GPU's picture is fresh (Follow), since drain_start_
+    bool draining_ = false;
+    std::chrono::steady_clock::time_point drain_start_;
+    static constexpr std::chrono::milliseconds kMaxDrain{3000};
     // the picture's place in the back buffer at the last paint
     ImageRect rect_;
     bool path_logged_ = false;
@@ -1179,6 +1222,10 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
 };
 
 std::unique_ptr<NativePresentDrawer> g_present;
+
+void FollowRendererLater() {
+    if (g_present) g_present->Follow(REXCVAR_GET(renderer) == "native");
+}
 
 }  // namespace
 

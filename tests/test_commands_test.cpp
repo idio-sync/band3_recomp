@@ -61,6 +61,7 @@ public:
     bool capture_composed = true;
     int64_t capture_proc_cmds = 2;
     bool capture_fell_back = false;
+    std::string capture_emulated = "full";
     NativeViewStats view;
     PresentStats present;
     int present_resets = 0;
@@ -116,6 +117,7 @@ public:
         out.proc_cmds = capture_proc_cmds;
         out.composed = capture_composed;
         out.held_fallback = capture_fell_back;
+        out.emulated = capture_emulated;
         out.game_frame = 2401;
         out.world_frame = 2400;
         if (gpu_works) {
@@ -527,7 +529,7 @@ TEST_CASE("capture names the screenshot and the native capture alike") {
                      "\"rt_filtered\":3"));
     CHECK(Has(reply, "\"rt_fallback\":\"none\""));
     CHECK(Has(reply, "\"proc_cmds\":2,\"composed\":true,\"game_frame\":2401,"
-                     "\"world_frame\":2400,\"held_fallback\":false"));
+                     "\"world_frame\":2400,\"held_fallback\":false,\"emulated\":\"full\""));
     CHECK(Has(reply, "\"gpu\":\"screenshots/venue_1.gpu.png\""));
     CHECK(Has(reply, "\"gpu_ms\":4.2,\"gpu_wait_ms\":1.0"));
 
@@ -539,6 +541,14 @@ TEST_CASE("capture names the screenshot and the native capture alike") {
     CHECK_FALSE(Ok(RunCommand("capture a b", game)));
     CHECK(game.capture_name == "unchanged");
     CHECK_FALSE(Ok(RunCommand("p2 capture", game)));
+}
+
+TEST_CASE("capture says when the emulated GPU's picture of the frame is stale") {
+    FakeGame game;
+    game.capture_emulated = "stale";
+    const std::string reply = RunCommand("capture", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"held_fallback\":false,\"emulated\":\"stale\""));
 }
 
 TEST_CASE("capture with composed fails unless the capture is a composed post frame") {
@@ -684,6 +694,36 @@ TEST_CASE("native_view stats reports what capture cost the game's thread per fra
     CHECK(Has(RunCommand("native_view stats", game),
               "\"capture\":{\"frames\":0,\"captured\":0,\"ms_per_frame\":{\"total\":0.000},"
               "\"draws_per_frame\":0.0,\"us_per_draw\":0.00"));
+}
+
+TEST_CASE("native_view stats reports what the emulated GPU was sent per frame") {
+    FakeGame game;
+    NativeViewStats::EmulatedGpu& e = game.view.emulated_gpu;
+    e.skip_mode = true;
+    e.skipping = true;
+    e.fresh = false;
+    e.frames = 200;
+    e.frames_skipped = 198;
+    e.emitted = {{"begin_indexed", 5400}, {"indexed", 300}, {"instanced", 0}, {"up", 2000}};
+    e.skipped = {{"begin_indexed", 0}, {"indexed", 80000}, {"instanced", 4000}, {"up", 6000}};
+    e.kept_pass = 300;
+    e.kept_point_tests = 1800;
+    const std::string reply = RunCommand("native_view stats", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"emulated_gpu\":{\"skip_mode\":true,\"skipping\":true,\"fresh\":false,"
+                     "\"frames\":200,\"frames_skipped\":198,"
+                     "\"emitted_per_frame\":{\"begin_indexed\":27.0,\"indexed\":1.5,"
+                     "\"instanced\":0.0,\"up\":10.0},"
+                     "\"skipped_per_frame\":{\"begin_indexed\":0.0,\"indexed\":400.0,"
+                     "\"instanced\":20.0,\"up\":30.0},"
+                     "\"kept_per_frame\":{\"pass\":1.5,\"point_tests\":9.0}}"));
+
+    // no frames: zeros, not a division by zero
+    game.view.emulated_gpu = NativeViewStats::EmulatedGpu{};
+    game.view.emulated_gpu.emitted = {{"indexed", 7}};
+    CHECK(Has(RunCommand("native_view stats", game),
+              "\"emulated_gpu\":{\"skip_mode\":false,\"skipping\":false,\"fresh\":true,"
+              "\"frames\":0,\"frames_skipped\":0,\"emitted_per_frame\":{\"indexed\":0.0}"));
 }
 
 TEST_CASE("native_view off reports the run it ends, then measures the game without it") {
