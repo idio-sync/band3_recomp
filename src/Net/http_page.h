@@ -1042,8 +1042,9 @@ async function pollDownloads() {
 }
 
 function setMode(next) {
-  // a search typed on the other tab isn't this one's
+  // a search typed, or a filter changed, on the other tab isn't this one's
   clearTimeout(searchTimer);
+  clearTimeout(rvFilterTimer);
   searchText[mode] = $("search").value;
   mode = next;
   try { localStorage.setItem("band3.mode", mode); } catch (e) {}

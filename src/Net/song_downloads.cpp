@@ -81,14 +81,17 @@ std::string CheckPackage(std::string_view first) {
 
 fs::path RecordsPath() { return DownloadFolder() / "rhythmverse.json"; }
 
-// the state's mutex held
-void SaveRecords(State& state) {
+// rhythmverse.json as written (FormatRecords); the state's mutex not held,
+// since the folder may be on a slow drive. Writes go one at a time.
+void WriteRecords(const std::string& text) {
+    static std::mutex write_mutex;
+    std::lock_guard lock(write_mutex);
     const fs::path path = RecordsPath();
     fs::path temp = path;
     temp += content::kPartialSuffix;
     {
         std::ofstream file(temp, std::ios::binary | std::ios::trunc);
-        file << FormatRecords(state.records);
+        file << text;
         if (!file) {
             REXLOG_WARN("RhythmVerse: couldn't write {}", rex::path_to_utf8(temp));
             return;
@@ -99,32 +102,62 @@ void SaveRecords(State& state) {
     if (ec) REXLOG_WARN("RhythmVerse: couldn't write {}: {}", rex::path_to_utf8(path), ec.message());
 }
 
-// the state's mutex held. An update that was waiting and is in place now
-// (the content scan puts them there) is the version downloaded.
-void LoadRecords(State& state) {
-    if (state.records_loaded) return;
-    state.records_loaded = true;
-    {
-        // closed before it's written again: Windows won't replace an open file
-        std::ifstream file(RecordsPath(), std::ios::binary);
-        if (!file) return;
-        std::ostringstream text;
-        text << file.rdbuf();
-        state.records = ParseRecords(text.str());
-    }
+// The records, read from rhythmverse.json the first time; the state's mutex
+// not held. An update that was waiting is the version downloaded once it's
+// in place (the content scan puts it there, maybe after the first read).
+DownloadRecords CurrentRecords() {
+    auto& state = TheState();
     const fs::path folder = DownloadFolder();
-    bool changed = false;
-    for (auto& [file_id, record] : state.records) {
+    if (folder.empty()) return {};
+    bool loaded;
+    {
+        std::lock_guard lock(state.mutex);
+        loaded = state.records_loaded;
+    }
+    if (!loaded) {
+        DownloadRecords read;
+        if (std::ifstream file(RecordsPath(), std::ios::binary); file) {
+            std::ostringstream text;
+            text << file.rdbuf();
+            read = ParseRecords(text.str());
+        }
+        std::lock_guard lock(state.mutex);
+        if (!state.records_loaded) {
+            // a download that finished meanwhile is newer than the file
+            for (auto& [id, record] : state.records) read.insert_or_assign(id, record);
+            state.records = std::move(read);
+            state.records_loaded = true;
+        }
+    }
+    DownloadRecords records;
+    {
+        std::lock_guard lock(state.mutex);
+        records = state.records;
+    }
+    std::vector<std::string> in_place;
+    for (const auto& [file_id, record] : records) {
         if (record.pending_hash.empty()) continue;
         std::error_code ec;
-        fs::path pending = folder / rex::to_path(record.file_name);
+        const fs::path file = folder / rex::to_path(record.file_name);
+        fs::path pending = file;
         pending += content::kPendingSuffix;
-        if (fs::exists(pending, ec) || !fs::exists(folder / rex::to_path(record.file_name), ec)) continue;
-        record.hash = std::move(record.pending_hash);
-        record.pending_hash.clear();
-        changed = true;
+        if (!fs::exists(pending, ec) && fs::exists(file, ec)) in_place.push_back(file_id);
     }
-    if (changed) SaveRecords(state);
+    if (in_place.empty()) return records;
+    std::string text;
+    {
+        std::lock_guard lock(state.mutex);
+        for (const auto& file_id : in_place) {
+            auto it = state.records.find(file_id);
+            if (it == state.records.end() || it->second.pending_hash.empty()) continue;
+            it->second.hash = std::move(it->second.pending_hash);
+            it->second.pending_hash.clear();
+        }
+        records = state.records;
+        text = FormatRecords(state.records);
+    }
+    WriteRecords(text);
+    return records;
 }
 
 // downloads left half done by a band3 that didn't close normally
@@ -174,6 +207,8 @@ void Work() {
     const fs::path folder = DownloadFolder();
     RemovePartials(folder);
     while (true) {
+        // first, outside the lock: it may read the download folder
+        const DownloadRecords records = CurrentRecords();
         Song song;
         bool update = false;
         // an update goes beside the file it's for, which the game may have
@@ -193,9 +228,8 @@ void Work() {
                 update = d->update;
             }
             name = DownloadFileName(song);
-            LoadRecords(state);
-            const auto record = state.records.find(file_id);
-            if (update && record != state.records.end()) name = rex::to_path(record->second.file_name);
+            const auto record = records.find(file_id);
+            if (update && record != records.end()) name = rex::to_path(record->second.file_name);
             if (update) name += content::kPendingSuffix;
         }
         REXLOG_INFO("RhythmVerse: {} {} - {} ({})", update ? "updating" : "downloading", song.artist,
@@ -211,6 +245,7 @@ void Work() {
             std::lock_guard lock(state.files_mutex);
             state.files_stale = true;
         }
+        std::string records_text;
         {
             std::lock_guard lock(state.mutex);
             if (error.empty()) {
@@ -220,13 +255,14 @@ void Work() {
                 } else {
                     state.records[song.file_id] = {rex::path_to_utf8(path.filename()), song.hash, {}};
                 }
-                SaveRecords(state);
+                records_text = FormatRecords(state.records);
             }
             if (Download* d = FindDownload(state, song.file_id)) {
                 d->state = error.empty() ? Download::State::kDone : Download::State::kFailed;
                 d->error = error;
             }
         }
+        if (!records_text.empty()) WriteRecords(records_text);
         // for the game to take it in (live_content.h); an update waits for the
         // next launch
         if (error.empty() && !update) content::AddLivePackages({path});
@@ -269,11 +305,10 @@ QueueResult QueueDownload(std::string_view file_id, bool update) {
     // listed before the lock: the folders may be on a slow drive
     LocalSongs local;
     local.files = LocalFiles();
+    local.records = CurrentRecords();
 
     auto& state = TheState();
     std::lock_guard lock(state.mutex);
-    LoadRecords(state);
-    local.records = state.records;
     const auto it = state.known.find(std::string(file_id));
     if (it == state.known.end()) return QueueResult::kUnknown;
     const Song& song = it->second;
@@ -307,12 +342,7 @@ QueueResult QueueDownload(std::string_view file_id, bool update) {
     return QueueResult::kQueued;
 }
 
-DownloadRecords Records() {
-    auto& state = TheState();
-    std::lock_guard lock(state.mutex);
-    LoadRecords(state);
-    return state.records;
-}
+DownloadRecords Records() { return CurrentRecords(); }
 
 std::vector<Download> Downloads() {
     auto& state = TheState();

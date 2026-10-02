@@ -54,9 +54,8 @@ enum class Endpoint {
 struct Route {
     Endpoint endpoint = Endpoint::kNotFound;
     int32_t song_id = 0;   // kSong
-    // kJump's and kAlbumArt's shortname, kExecute's script, kRvSearch's text, decoded
+    // kJump's and kAlbumArt's shortname, kExecute's script, decoded
     std::string argument;
-    int32_t page = 1;  // kRvSearch's, from 1
 };
 
 // RB3E matches the decoded target, so /jump?shortname=a%26b jumps to "a&b"

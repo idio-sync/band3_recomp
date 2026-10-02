@@ -91,17 +91,8 @@ TEST_CASE("query parameters are found by name and decoded, '+' as a space") {
 }
 
 TEST_CASE("targets pick the RhythmVerse endpoints") {
-    const Route search = MatchRoute("/rv/search?text=never%20gonna&page=3");
-    CHECK(search.endpoint == Endpoint::kRvSearch);
-    CHECK(search.argument == "never gonna");
-    CHECK(search.page == 3);
-
-    const Route newest = MatchRoute("/rv/search");
-    CHECK(newest.endpoint == Endpoint::kRvSearch);
-    CHECK(newest.argument.empty());
-    CHECK(newest.page == 1);
-    CHECK(MatchRoute("/rv/search?page=0").page == 1);
-    CHECK(MatchRoute("/rv/search?page=x").page == 1);
+    CHECK(MatchRoute("/rv/search?text=never%20gonna&page=3").endpoint == Endpoint::kRvSearch);
+    CHECK(MatchRoute("/rv/search").endpoint == Endpoint::kRvSearch);
 
     CHECK(MatchRoute("/rv/download").endpoint == Endpoint::kRvDownload);
     CHECK(MatchRoute("/rv/downloads").endpoint == Endpoint::kRvDownloads);

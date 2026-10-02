@@ -207,6 +207,15 @@ TEST_CASE("a search's sort and filters become RhythmVerse's form fields") {
           "&tierinstrument%5B%5D=drums&tier%5B%5D=1&tier%5B%5D=2&tier%5B%5D=3");
 }
 
+TEST_CASE("parts RhythmVerse doesn't have are left out of a search") {
+    SearchOptions options;
+    options.has = {"banjo"};
+    options.cap_tier = 2;  // with no part to cap
+    CHECK(Search(options).form ==
+          "records=25&page=1&data_type=full&sort%5B0%5D%5Bsort_by%5D=release_date&"
+          "sort%5B0%5D%5Bsort_order%5D=DESC");
+}
+
 TEST_CASE("the page's query becomes a search's options, leaving out what isn't one") {
     const auto options = ParseSearchOptions(
         "/rv/search?text=never%20gonna&page=2&sort=title&downloadable=1"
@@ -341,7 +350,9 @@ TEST_CASE("download records read back as written, leaving out what isn't one") {
 
     CHECK(ParseRecords("").empty());
     CHECK(ParseRecords("[1,2]").empty());
-    const auto some = ParseRecords(R"({"../x": {"file": "a"}, "ok1": {"file": ""}, "ok2": {"file": "b"}})");
+    const auto some = ParseRecords(R"({"../x": {"file": "a"}, "ok1": {"file": ""}, "ok2": {"file": "b"},
+        "ok3": {"file": "..\\..\\evil"}, "ok4": {"file": "C:\\evil"}, "ok5": {"file": "a/b"},
+        "ok6": {"file": ".."}})");
     REQUIRE(some.size() == 1);
     CHECK(some.at("ok2").file_name == "b");
 }

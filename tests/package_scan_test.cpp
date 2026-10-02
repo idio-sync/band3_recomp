@@ -175,3 +175,18 @@ TEST_CASE("files waiting or replaced are set aside") {
     CHECK(!IsSetAside("a/Song_1"));
     CHECK(!IsSetAside("a/DVNeverGonnaStopFinal_595481a7cbc158.68319817"));
 }
+
+TEST_CASE("folders that overlap put an update in place once") {
+    const fs::path root = fs::temp_directory_path() / "band3_update_overlap_test";
+    fs::remove_all(root);
+    Write(root / "rv" / "Song_1", MakeHeader("CON ", 1, kRb3TitleId, 0x10, u"Old"));
+    Write(root / "rv" / "Song_1.pending", MakeHeader("CON ", 1, kRb3TitleId, 0x10, u"New"));
+    std::vector<std::string> problems;
+    const auto found = ScanFolders({root, root / "rv"}, kRb3TitleIds, &problems);
+    CHECK(problems.empty());
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].header.display_name == u"New");
+    CHECK(fs::exists(root / "rv" / "Song_1.replaced"));
+    CHECK(!fs::exists(root / "rv" / "Song_1.2.replaced"));
+    fs::remove_all(root);
+}

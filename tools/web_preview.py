@@ -252,7 +252,7 @@ def rv_search_form(query):
     """What band3 posts to RhythmVerse for /rv/search's query (a dict of
     strings, as src/Net/rhythmverse.cpp's ParseSearchOptions reads it):
     (url, form as a list of pairs, page size)."""
-    text = query.get('text', '').strip()
+    text = query.get('text', '')
     try:
         page = max(int(query.get('page', '1')), 1)
     except ValueError:
@@ -272,8 +272,10 @@ def rv_search_form(query):
     form += [('instrument[]', RV_INSTRUMENTS[p]) for p in split('has') if p in RV_INSTRUMENTS]
     if query.get('harmonies') == '1':
         form += [('vocal_parts[]', '2'), ('vocal_parts[]', '3')]
-    form += [('genre[]', g) for g in split('genre') if g.replace('_', '').isalpha() and g.islower()]
-    form += [('decade[]', d) for d in split('decade') if d.isdigit() and int(d) % 10 == 0]
+    form += [('genre[]', g) for g in split('genre')
+             if len(g) <= 32 and all(c == '_' or 'a' <= c <= 'z' for c in g)]
+    form += [('decade[]', d) for d in split('decade')
+             if d.isascii() and d.isdigit() and 1900 <= int(d) <= 2100 and int(d) % 10 == 0]
     part, _, tier = query.get('cap', '').partition(':')
     if part in RV_INSTRUMENTS and tier.isdigit() and int(tier) <= 6:
         form.append(('tierinstrument[]', RV_INSTRUMENTS[part]))

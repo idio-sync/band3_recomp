@@ -1,6 +1,7 @@
 #include "package_scan.h"
 #include <algorithm>
 #include <fstream>
+#include <mutex>
 #include <set>
 #include <system_error>
 #include <thread>
@@ -74,11 +75,21 @@ FolderScan ScanFolder(const fs::path& folder, std::span<const uint32_t> title_id
         }
         if (auto package = ReadPackage(entry.path(), title_ids)) out.packages.push_back(std::move(*package));
     }
-    // after the walk, which may have read the old file already
+    // after the walk, which may have read the old file already; one at a time,
+    // since folders that overlap ("songs" and "songs/rhythmverse") meet the same
+    // update on two threads
+    static std::mutex updates_mutex;
     for (const fs::path& update : pending) {
-        if (std::string problem = ApplyPendingUpdate(update); !problem.empty()) {
-            out.problems.push_back(problem);
-            continue;
+        {
+            std::lock_guard lock(updates_mutex);
+            std::error_code exists_ec;
+            // another thread has put it in place: only the reading is left
+            if (fs::exists(update, exists_ec)) {
+                if (std::string problem = ApplyPendingUpdate(update); !problem.empty()) {
+                    out.problems.push_back(problem);
+                    continue;
+                }
+            }
         }
         const fs::path target = fs::path(update).replace_extension();
         std::erase_if(out.packages, [&](const Package& p) { return p.path == target; });
@@ -131,6 +142,14 @@ std::string ApplyPendingUpdate(const fs::path& pending) {
         }
         fs::rename(target, kept, ec);
         if (ec) return Utf8(target) + ": couldn't set it aside for its update: " + ec.message();
+        fs::rename(pending, target, ec);
+        if (ec) {
+            // the old one goes back, so the song is still there
+            std::error_code back;
+            fs::rename(kept, target, back);
+            return Utf8(pending) + ": couldn't put the update in place: " + ec.message();
+        }
+        return {};
     }
     fs::rename(pending, target, ec);
     if (ec) return Utf8(pending) + ": couldn't put the update in place: " + ec.message();

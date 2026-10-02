@@ -237,15 +237,18 @@ SearchRequest Search(const SearchOptions& options) {
         add("sort[0][sort_by]", field.substr(0, bar));
         add("sort[0][sort_order]", field.substr(bar + 1));
     }
-    for (const std::string& part : options.has) add("instrument[]", *RvInstrument(part));
+    for (const std::string& part : options.has) {
+        if (const auto instrument = RvInstrument(part)) add("instrument[]", *instrument);
+    }
     if (options.harmonies) {
         add("vocal_parts[]", "2");
         add("vocal_parts[]", "3");
     }
     for (const std::string& genre : options.genres) add("genre[]", genre);
     for (const int32_t decade : options.decades) add("decade[]", std::to_string(decade));
-    if (options.cap_tier >= 0) {
-        add("tierinstrument[]", *RvInstrument(options.cap_part));
+    if (const auto instrument = RvInstrument(options.cap_part);
+        instrument && options.cap_tier >= 0 && options.cap_tier <= 6) {
+        add("tierinstrument[]", *instrument);
         // RhythmVerse's tiers are the game's plus one, and match exactly
         for (int32_t tier = 0; tier <= options.cap_tier; tier++) {
             add("tier[]", std::to_string(tier + 1));
@@ -310,7 +313,11 @@ DownloadRecords ParseRecords(std::string_view text) {
     if (!json || !json->IsObject()) return records;
     for (const auto& [file_id, value] : json->Members()) {
         DownloadRecord record{value["file"].Text(), value["hash"].Text(), value["pending"].Text()};
-        if (ValidFileId(file_id) && !record.file_name.empty()) records.emplace(file_id, std::move(record));
+        // a file in the download folder, not a path that leaves it
+        const std::string& name = record.file_name;
+        const bool bare = !name.empty() && name != "." && name != ".." &&
+                          name.find_first_of("/\\:") == std::string::npos;
+        if (ValidFileId(file_id) && bare) records.emplace(file_id, std::move(record));
     }
     return records;
 }

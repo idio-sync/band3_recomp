@@ -155,14 +155,12 @@ std::string UrlDecode(std::string_view text) {
 Route MatchRoute(std::string_view target) {
     const std::string path = UrlDecode(target);
     // band3's newer endpoints take their parameters from the query, by name
+    // (QueryParam)
     const std::string_view bare = target.substr(0, target.find('?'));
     Route route;
     if (bare == "/rv/search") {
+        // its parameters are rhythmverse::ParseSearchOptions'
         route.endpoint = Endpoint::kRvSearch;
-        route.argument = QueryParam(target, "text").value_or("");
-        const std::string page = QueryParam(target, "page").value_or("1");
-        const auto [ptr, ec] = std::from_chars(page.data(), page.data() + page.size(), route.page);
-        if (ec != std::errc() || ptr != page.data() + page.size() || route.page < 1) route.page = 1;
     } else if (target == "/rv/download") {
         route.endpoint = Endpoint::kRvDownload;
     } else if (target == "/rv/downloads") {

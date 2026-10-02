@@ -259,7 +259,8 @@ class RhythmVerseTest(unittest.TestCase):
     def test_filters_as_band3_sends_them(self):
         _, form, size = web_preview.rv_search_form({
             'text': 'x', 'sort': 'downloads', 'downloadable': '1', 'has': 'real_keys,banjo',
-            'harmonies': '1', 'genre': 'metal,Bad-Genre', 'decade': '1990,1995', 'cap': 'drum:2'})
+            'harmonies': '1', 'genre': 'metal,Bad-Genre,m\u00e9tal', 'decade': '1990,1995,0,2150',
+            'cap': 'drum:2'})
         self.assertEqual(size, 100)
         self.assertEqual(form[3:], [
             ('text', 'x'), ('sort[0][sort_by]', 'downloads'), ('sort[0][sort_order]', 'DESC'),
