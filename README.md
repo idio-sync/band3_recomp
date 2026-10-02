@@ -310,8 +310,12 @@ Turn on `http_enabled` (F4, Band3 → Integrations, then restart) and band3 serv
 page on port 21070 (`http_port`) to this PC and the local network (`http_address`
 127.0.0.1 keeps it to this PC). The log says where to open it
 (`Web server: listening on 0.0.0.0:21070, open http://192.168.1.20:21070/`).
-The page lists the song library with each song's album art, searchable and sortable, and
-**Select** highlights a song in the game's Music Library, which has to be open. Windows asks once whether to
+The page lists the song library with each song's album art and the difficulty of its
+parts, searchable and sortable, and **Select** highlights a song in the game's Music
+Library, which has to be open. **Filters** narrows it to songs with keys, pro parts or
+harmonies, under a difficulty for each part, or in some genres or decades (kept on that
+device); tapping a song shows its details, and **Random** picks one of those showing. A
+banner says what the game is doing: during a song, which, how far in, and the score. Windows asks once whether to
 let band3 through the firewall; allow it on private networks for other devices to
 reach it.
 
