@@ -361,6 +361,10 @@ Mode (green and orange, red and blue swapped), Gem Color Shuffle (gems drawn in 
 colours), Gem Shuffle (each chord's lanes shuffled) and Double Bass (expert drums play
 the 2x bass pedal notes).
 
+As with RB3E, keys on guitar is always unlocked: the overshell's part list offers keys to
+a guitar without the career unlock. (RB3E's other always-on patches are already in: the
+8000-song limit, and the song blacklist, whose check TU5 itself no longer makes.)
+
 Two of RB3E's options are settings too (Band3 → Game, both off by default):
 `unlock_clothing` unlocks every piece of clothing, tattoo and face paint and the video
 venues without earning them, and `gold_on_all_difficulties` lets gold stars be earned

@@ -8,7 +8,8 @@
 #include "src/settings.h"
 
 // RB3Enhanced's UnlockClothing and AllowGoldOnAllDifficulties
-// (source/rb3enhanced.c's ApplyConfigurablePatches). RB3E rewrites
+// (source/rb3enhanced.c's ApplyConfigurablePatches), and its always-on keys on
+// guitar unlock (ApplyPatches). RB3E rewrites
 // instructions at fixed addresses; a recompiled game can't, so each patch is
 // a hook on the function around it that has the same effect. Layouts are
 // rb3-xenon's (game/Scoring.h) for the same TU5 executable.
@@ -71,6 +72,15 @@ extern "C" REX_FUNC(ProfileAssets__HasAsset)
         return;
     }
     __imp__ProfileAssets__HasAsset(ctx, base);
+}
+
+// OvershellPanel::CanGuitarPlayKeys(OvershellPanel*): whether the overshell's
+// part list offers keys to a guitar, which a signed-in profile otherwise has to
+// earn (the key_keys_on_guitar campaign key). RB3E always unlocks it, with a
+// blr at the function's start (returning the panel, so true).
+extern "C" REX_FUNC(OvershellPanel__CanGuitarPlayKeys)
+{
+    ctx.r3.u64 = 1;
 }
 
 // BandProfile::HasCampaignKey(BandProfile*, Symbol), true inside the two
