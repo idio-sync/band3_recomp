@@ -74,6 +74,32 @@ CI runs and profiling.
 
 `band3_config.ini` documents every option band3 reads.
 
+## band3 and milo-native-engine
+
+[milo-native-engine](https://github.com/freeqaz/milo-native-engine) takes the other route
+to a native Rock Band 3: a port. Decompiled source (rb3-xenon's, for the Xbox 360 version)
+is rebuilt as native 64-bit C++ and linked against a shared engine that renders with WebGPU
+and provides audio, input and file access. band3 instead runs the game's own executable,
+statically recompiled.
+
+| | band3 | milo-native-engine |
+|---|---|---|
+| Game code | the Xbox 360 executable, recompiled from PowerPC; it runs in an emulated 32-bit address space, on ReXGlue's implementation of the Xbox kernel | the decompiled source, rebuilt as native 64-bit C++ |
+| What it needs | only the executable: every function runs, decompiled or not | a complete, working decompilation |
+| Rendering | a native renderer, which reproduces the game's own shaders and is checked against the game's picture pixel by pixel; it will replace the emulated Xbox 360 GPU\* | WebGPU, with shaders of its own |
+| Platforms | wherever ReXGlue runs: Windows and Linux | Windows, Linux, Mac and the web |
+| Pros | playable now; the whole game runs as it shipped, so gameplay, timing, DLC and Deluxe behave as on a 360; the picture aims to match the 360's exactly | runs anywhere, the web included; the game can be changed at the source; no emulation layer, and ordinary C++ to debug |
+| Cons | the emulated address space and kernel stay; changing the game means hooking recompiled functions; limited to ReXGlue's platforms | playable only once the decompilation is complete; the game behaves as the original only where the decompilation matches it; its own shaders don't reproduce the 360's picture |
+
+Both renderers replace the same part of RB3, its platform render layer (`DxRnd`, `DxMesh`,
+`DxTex`), and draw the same Milo meshes, materials and cameras. The difference is everything
+around them.
+
+\* Planned, not done. Today the native renderer is experimental and draws on top of the
+emulated GPU, which stays the default. Once it covers every screen, launching with
+`renderer = native` will leave the emulated GPU out entirely, and `emulated` will remain as
+a choice at launch.
+
 ## Credits
 
 band3 stands on the work of these projects:
