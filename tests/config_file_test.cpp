@@ -211,7 +211,57 @@ TEST_CASE("saving writes through a temporary file") {
         CHECK(ReadAll(file) == std::string(kConfigHeader) + "\nlang = \"ita\"\n");
         CHECK_FALSE(ConfigFileProblem(file));
     }
+    SUBCASE("a file with the player's comments is kept as band3.toml.bak first") {
+        const std::string commented = "# my settings\nwindow_width = 1600 # wide\n";
+        WriteAll(file, commented);
+        WriteAll(BackupPath(file), "an older copy");
+        const ConfigEdit edits[] = {{"lang", std::string("ita")}};
+        const SaveResult result = SaveConfigFile(file, edits);
+        CHECK(result.ok);
+        CHECK(result.backed_up);
+        CHECK(result.had_comments);
+        CHECK(result.parse_error.empty());
+        // over the older copy: the file just replaced is the one worth keeping
+        CHECK(ReadAll(BackupPath(file)) == commented);
+        CHECK(ReadAll(file) ==
+              std::string(kConfigHeader) + "\nwindow_width = 1600\nlang = \"ita\"\n");
+
+        // rewritten, it has none to keep the next time
+        fs::remove(BackupPath(file));
+        const SaveResult again = SaveConfigFile(file, edits);
+        CHECK(again.ok);
+        CHECK_FALSE(again.backed_up);
+        CHECK_FALSE(fs::exists(BackupPath(file)));
+    }
+    SUBCASE("F4's own header isn't the player's comment") {
+        WriteAll(file, std::string(kSdkConfigHeader) + "\r\nwindow_width = 1600\r\n");
+        const ConfigEdit edits[] = {{"lang", std::string("ita")}};
+        const SaveResult result = SaveConfigFile(file, edits);
+        CHECK(result.ok);
+        CHECK_FALSE(result.backed_up);
+        CHECK_FALSE(fs::exists(BackupPath(file)));
+    }
     fs::remove_all(dir);
+}
+
+TEST_CASE("comments the rewrite would drop are found, and nothing else") {
+    CHECK_FALSE(HasOwnComments(""));
+    CHECK_FALSE(HasOwnComments("lang = \"eng\"\n"));
+    CHECK_FALSE(HasOwnComments(std::string(kConfigHeader) + "\nlang = \"eng\"\n"));
+    CHECK_FALSE(HasOwnComments(std::string(kSdkConfigHeader) + "\r\nlang = \"eng\"\r\n"));
+    CHECK(HasOwnComments("# mine\nlang = \"eng\"\n"));
+    CHECK(HasOwnComments("  # indented\n"));
+    CHECK(HasOwnComments("lang = \"eng\" # after a value\n"));
+    CHECK(HasOwnComments("lang = \"eng\"\n# at the end, no newline"));
+    // the header after a value is a comment of the player's
+    CHECK(HasOwnComments("lang = \"eng\" " + std::string(kConfigHeader) + "\n"));
+    // a # inside a string isn't a comment
+    CHECK_FALSE(HasOwnComments("username = \"#1 fan\"\n"));
+    CHECK_FALSE(HasOwnComments("username = \"say \\\"#hi\\\"\"\n"));
+    CHECK_FALSE(HasOwnComments("username = '#literal'\n"));
+    CHECK_FALSE(HasOwnComments("username = \"\"\"\n# in a multi-line string\n\"\"\"\n"));
+    CHECK_FALSE(HasOwnComments("username = '''\n# in a literal one\n'''\n"));
+    CHECK(HasOwnComments("username = \"#1\" # but this one is\n"));
 }
 
 TEST_CASE("everything the writer writes reads back with its type") {

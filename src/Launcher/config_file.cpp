@@ -180,6 +180,68 @@ std::string MergeConfig(std::span<const ConfigLine> existing, std::span<const Co
     return out;
 }
 
+bool HasOwnComments(std::string_view text) {
+    enum class In { kNothing, kBasic, kLiteral, kMultiBasic, kMultiLiteral };
+    In in = In::kNothing;
+    auto at = [&](size_t i, std::string_view s) { return text.substr(i, s.size()) == s; };
+    for (size_t i = 0; i < text.size(); i++) {
+        const char c = text[i];
+        switch (in) {
+        case In::kNothing:
+            if (c == '#') {
+                // the whole line: a header line on its own doesn't count
+                const size_t newline = text.rfind('\n', i);
+                const size_t start = newline == std::string_view::npos ? 0 : newline + 1;
+                size_t end = text.find('\n', i);
+                if (end == std::string_view::npos) end = text.size();
+                std::string_view line = text.substr(start, end - start);
+                while (!line.empty() && (line.back() == '\r' || line.back() == ' ' ||
+                                         line.back() == '\t')) {
+                    line.remove_suffix(1);
+                }
+                if (line != kConfigHeader && line != kSdkConfigHeader) return true;
+                i = end;
+            } else if (at(i, "\"\"\"")) {
+                in = In::kMultiBasic;
+                i += 2;
+            } else if (at(i, "'''")) {
+                in = In::kMultiLiteral;
+                i += 2;
+            } else if (c == '"') {
+                in = In::kBasic;
+            } else if (c == '\'') {
+                in = In::kLiteral;
+            }
+            break;
+        case In::kBasic:
+            if (c == '\\') {
+                i++;
+            } else if (c == '"' || c == '\n') {
+                in = In::kNothing;
+            }
+            break;
+        case In::kLiteral:
+            if (c == '\'' || c == '\n') in = In::kNothing;
+            break;
+        case In::kMultiBasic:
+            if (c == '\\') {
+                i++;
+            } else if (at(i, "\"\"\"")) {
+                in = In::kNothing;
+                i += 2;
+            }
+            break;
+        case In::kMultiLiteral:
+            if (at(i, "'''")) {
+                in = In::kNothing;
+                i += 2;
+            }
+            break;
+        }
+    }
+    return false;
+}
+
 std::optional<std::string> ConfigFileProblem(const std::filesystem::path& file) {
     std::string error;
     const auto text = ReadFile(file, error);
@@ -223,6 +285,17 @@ SaveResult SaveConfigFile(const std::filesystem::path& file, std::span<const Con
             result.backed_up = true;
             result.parse_error = parsed.error;
             parsed = {};
+        } else if (HasOwnComments(*text)) {
+            // the rewrite drops comments; keep the file the player wrote them in
+            std::filesystem::copy_file(file, BackupPath(file),
+                                       std::filesystem::copy_options::overwrite_existing, ec);
+            if (ec) {
+                result.error = "the old band3.toml's comments couldn't be kept in "
+                               "band3.toml.bak: " + ec.message();
+                return result;
+            }
+            result.backed_up = true;
+            result.had_comments = true;
         }
     }
 

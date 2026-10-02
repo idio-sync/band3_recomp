@@ -36,7 +36,8 @@ its default and takes it out of the file at the next save. Folders are saved wit
 slashes, and a folder inside the ini's folder (or the executable's, without an ini) is
 saved relative to it, so the install still moves as one folder. If `band3.toml` can't be
 read, the launcher says why; saving then replaces it and keeps the old file as
-`band3.toml.bak`.
+`band3.toml.bak`. The launcher doesn't keep comments: the first time it saves over a
+`band3.toml` you wrote comments in, it keeps that file as `band3.toml.bak` too.
 
 A setting given on the command line or by a `REX_*` environment variable is shown but
 locked ("Set on the command line", "Set by an environment variable"), since a saved value

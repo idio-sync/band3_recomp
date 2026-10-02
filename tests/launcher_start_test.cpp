@@ -85,3 +85,20 @@ TEST_CASE("every decision says why") {
     in.test_port = true;
     CHECK_FALSE(std::string(DecideLauncher(in).reason).empty());
 }
+
+TEST_CASE("the fonts are skipped only when no input could show the launcher") {
+    // every combination: whatever the game data check, Shift and the settings
+    // turn out to be, a start LauncherPossible rules out never shows it
+    for (int bits = 0; bits < 64; bits++) {
+        StartInputs in;
+        in.test_port = bits & 1;
+        in.relaunched = bits & 2;
+        in.game_data_ok = bits & 4;
+        in.launcher_flag = bits & 8;
+        in.shift_held = bits & 16;
+        in.show_launcher = bits & 32;
+        CAPTURE(bits);
+        if (DecideLauncher(in).show) CHECK(LauncherPossible(in));
+        CHECK(LauncherPossible(in) == (!in.test_port && !in.relaunched));
+    }
+}

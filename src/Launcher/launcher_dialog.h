@@ -14,9 +14,6 @@
 #include "launcher_cvars.h"
 #include "launcher_settings.h"
 
-struct ImFont;
-struct ImFontAtlas;
-
 namespace band3::launcher {
 
 // a folder chosen in the system's folder dialog, which answers on a thread of
@@ -122,6 +119,9 @@ private:
     bool EditText(const char* id, const char* hint, std::string& value, float width);
     // the setting under the mouse (or the keyboard) is the footer's to describe
     void NoteHovered(std::string_view cvar);
+    // sets a row's setting; a value its cvar refuses is named under the row
+    // rather than dropped without a word. False if it was refused.
+    bool Apply(std::string_view cvar, std::string_view value);
 
     void StartFolderPick(std::string target, const std::string& from);
     void TakeFolderPick();
@@ -142,8 +142,6 @@ private:
     // ImGui's ConfigFlags before the launcher turned keyboard navigation on
     int saved_config_flags_ = 0;
 
-    // the scale the page is drawn at, from the window's size
-    float scale_ = 1.0f;
     Tab current_tab_ = Tab::kGame;
     // the setting the footer describes: the one hovered in the last frame,
     // and the one hovered in this one so far
@@ -158,6 +156,9 @@ private:
     // the last save's outcome, for the footer
     std::string save_message_;
     bool save_failed_ = false;
+    // what went wrong with a row's last change, shown under it until one goes
+    // through: a value its cvar refused, or a folder dialog that didn't open
+    std::map<std::string, std::string, std::less<>> row_problems_;
 
     // the text fields' buffers while they're being edited
     std::map<unsigned, TextField> text_fields_;
@@ -184,18 +185,5 @@ private:
     bool open_quit_prompt_ = false;
     bool open_play_prompt_ = false;
 };
-
-// Adds the launcher's fonts: a readable UI face at a few sizes, so the page
-// stays sharp from 720p to 4K. From Band3App::OnConfigureFonts, which runs
-// before band3 knows whether the launcher will show. Uses a system font when
-// one is there and the SDK's own font, larger, otherwise.
-void AddLauncherFonts(ImFontAtlas* atlas);
-
-// whether Shift is held right now; Windows only (false elsewhere)
-bool ShiftHeld();
-
-// the refresh rate of the display a native window (HWND) is on, in Hz; 0 when
-// it can't be told
-double DisplayRefreshRate(void* native_window);
 
 }

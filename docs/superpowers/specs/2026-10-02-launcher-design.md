@@ -1,6 +1,6 @@
 # Launcher design
 
-Date: 2026-10-02. Status: draft for review.
+Date: 2026-10-02. Status: phase 1 implemented.
 
 ## Goal
 
@@ -102,7 +102,7 @@ The model is pure: it takes the table, current values, effective defaults, recor
 - Applies the overrides and removals; keeps every other key.
 - **Emits by hand**, not with toml++'s serializer: one flat `name = value` line per key, strings as TOML basic strings with `\\` and `\"` escaped, floats in plain decimal. This keeps the output in the form the SDK's `LoadConfig` is known to accept.
 - Writes via a temp file and rename.
-- Comments are not preserved. The first line is `# Written by the band3 launcher. F4 > Save to config rewrites this file.`
+- Comments are not preserved. The first line is `# Written by the band3 launcher. F4 > Save to config rewrites this file.` A file with comments of the player's (anything but that line and F4's own header) is copied to `band3.toml.bak` before the rewrite, and the footer says so.
 
 F4 stays as it is. `docs/settings.md` will say the launcher is the recommended way, and that F4's save freezes ini and Deck values into the file.
 
@@ -158,6 +158,9 @@ Folder pickers use `SDL_ShowOpenFolderDialog` from band3's SDL copy, next to an 
 New, under `src/Launcher/`:
 
 - `launcher_dialog.{h,cpp}` — the screen, tabs and footer.
+- `launcher_style.{h,cpp}` — colours, fonts and the page's scale.
+- `launcher_platform.{h,cpp}` — Shift at startup and the display's refresh rate.
+- `launcher_start.{h,cpp}`, `launcher_cvars.{h,cpp}` — when it shows (pure), and the model's view of the real cvars.
 - `launcher_settings.{h,cpp}` — the setting table and the override model (pure).
 - `config_file.{h,cpp}` — band3.toml read/merge/write (pure apart from file IO).
 - `game_data_check.{h,cpp}` — the folder check (pure).
@@ -177,7 +180,7 @@ Changed: `band3_app.h` (`OnFinalizePaths`, `OnWindowCloseRequested`, the path ru
 
 ## Open questions, settled by the first task of each phase
 
-1. **(Phase 1) When is `swap_post_effect` read?** Set it in `OnFinalizePaths` and check whether FXAA applies. If not, use the relaunch path for it.
+1. **(Phase 1) When is `swap_post_effect` read?** Settled: once, when the guest GPU is set up. Disassembling `rexgpu-xenos.dll` shows its only reader is `GraphicsSystem::SetupGuestGpu`, through `CommandProcessor::SetDesiredSwapPostEffect` (that function's only call site), and `Runtime::Setup` runs it inside `resume`, after the launcher. So FXAA set in the launcher applies without a relaunch; a change made in F4 in game applies at the next start.
 2. **(Phase 2) Can the input system be built before the Runtime and handed over?** Check that SDK pads enumerate before the Runtime; that `Runtime::Setup` does not call `Setup()` on the handed-over system again (the HID driver's `Setup` would start a second scanner); that `AttachWindow` after the launcher (or twice) is safe; that destroying and rebuilding `CreateDefaultInputSystem` works more than once in a process; and that the game gets input afterwards (band3ctl). If not, use the fallback.
 3. **(Phase 2) Does the SDK's `monitor` index follow `SDL_GetDisplays` order** in band3's SDL copy, so the monitor dropdown can show names?
 

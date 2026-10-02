@@ -33,22 +33,6 @@ constexpr std::chrono::seconds kWaitLimit{30};
 bool g_relaunched = false;
 
 #ifdef _WIN32
-// drops each " --name" and " --name=value" from a command line; " --name_more"
-// is another setting and stays
-void EraseFlag(std::wstring& command, std::wstring_view name) {
-    const std::wstring flag = L" --" + std::wstring(name);
-    for (size_t from = 0, at; (at = command.find(flag, from)) != std::wstring::npos;) {
-        const size_t after = at + flag.size();
-        if (after < command.size() && command[after] != L' ' && command[after] != L'=') {
-            from = after;
-            continue;
-        }
-        const size_t end = command.find(L' ', after);
-        command.erase(at, end == std::wstring::npos ? std::wstring::npos : end - at);
-        from = at;
-    }
-}
-
 std::wstring Widen(const std::string& utf8) {
     if (utf8.empty()) return {};
     const int len = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()),
@@ -104,9 +88,9 @@ bool StartAgain(const std::vector<std::string>& extra_args) {
     std::ifstream cmdline("/proc/self/cmdline", std::ios::binary);
     for (std::string arg; std::getline(cmdline, arg, '\0');) {
         // a relaunched run's pid from last time; given twice, it isn't read
-        if (arg.starts_with("--relaunch_wait_pid=")) continue;
+        if (IsFlag(arg, "relaunch_wait_pid")) continue;
         // the launcher was this run's; the next one starts the game
-        if (arg == "--launcher" || arg.starts_with("--launcher=")) continue;
+        if (IsFlag(arg, "launcher")) continue;
         args.push_back(std::move(arg));
     }
     if (args.empty()) {

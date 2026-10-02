@@ -250,6 +250,10 @@ public:
 
     // a warning for the row, if it needs one (render scale above 1 on a Deck)
     std::optional<std::string> Warning(std::string_view cvar) const;
+    // what the row says when Set(cvar, value) was refused: "Not accepted:
+    // "<value>"", and why when the limits tell (not a number, out of range,
+    // not one of the allowed values)
+    std::string Refusal(std::string_view cvar, std::string_view value) const;
 
     // something differs from what was last saved (or loaded)
     bool HasUnsavedChanges() const;

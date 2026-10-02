@@ -13,4 +13,6 @@ StartDecision DecideLauncher(const StartInputs& in) {
     return {false, "skipped, show_launcher is off"};
 }
 
+bool LauncherPossible(const StartInputs& in) { return !in.test_port && !in.relaunched; }
+
 }

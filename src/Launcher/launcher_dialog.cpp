@@ -1,33 +1,19 @@
 #include "launcher_dialog.h"
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_error.h>
-#include <SDL3/SDL_init.h>
-#include <SDL3/SDL_video.h>
 #include <imgui.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdio>
-#include <cstring>
-#include <fstream>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
 #include "src/Audio/usb_mic.h"
 #include "src/paths.h"
-
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
+#include "launcher_style.h"
 
 namespace band3::launcher {
 
@@ -44,175 +30,6 @@ namespace {
 
 constexpr const char* kQuitPrompt = "Quit without saving?";
 constexpr const char* kPlayPrompt = "Play anyway?";
-
-// Colours
-
-const ImVec4 kBackground(0.071f, 0.075f, 0.090f, 1.0f);
-const ImVec4 kPopup(0.105f, 0.110f, 0.135f, 1.0f);
-const ImVec4 kFrame(0.150f, 0.157f, 0.190f, 1.0f);
-const ImVec4 kFrameHover(0.200f, 0.208f, 0.250f, 1.0f);
-const ImVec4 kFrameActive(0.245f, 0.255f, 0.305f, 1.0f);
-const ImVec4 kLine(0.200f, 0.208f, 0.245f, 1.0f);
-const ImVec4 kText(0.925f, 0.925f, 0.945f, 1.0f);
-const ImVec4 kMuted(0.585f, 0.600f, 0.660f, 1.0f);
-const ImVec4 kAccent(0.937f, 0.435f, 0.235f, 1.0f);
-const ImVec4 kAccentHover(1.000f, 0.540f, 0.330f, 1.0f);
-const ImVec4 kAccentActive(0.820f, 0.355f, 0.180f, 1.0f);
-const ImVec4 kAccentDim(0.380f, 0.200f, 0.130f, 1.0f);
-const ImVec4 kGood(0.470f, 0.840f, 0.500f, 1.0f);
-const ImVec4 kWarn(1.000f, 0.700f, 0.330f, 1.0f);
-const ImVec4 kBad(1.000f, 0.470f, 0.420f, 1.0f);
-const ImVec4 kDeckBanner(0.105f, 0.150f, 0.215f, 1.0f);
-const ImVec4 kProblemBanner(0.235f, 0.125f, 0.090f, 1.0f);
-
-// Fonts and scale
-
-// the sizes the launcher's font is baked at: the SDK's ImGui renderer can't
-// bake new sizes on the fly, so each size is drawn from the nearest bake
-// at or above it
-constexpr float kFontBakes[] = {17, 20, 23, 30, 40, 60};
-std::array<ImFont*, std::size(kFontBakes)> g_fonts{};
-
-// text sizes at a 1280x720 window
-constexpr float kBodySize = 20;
-constexpr float kSmallSize = 17;
-constexpr float kHeadingSize = 23;
-constexpr float kTitleSize = 30;
-
-// the page's scale, set at the start of each frame
-float g_scale = 1.0f;
-
-float Px(float v) { return v * g_scale; }
-
-ImFont* FontFor(float size) {
-    ImFont* best = nullptr;
-    for (size_t i = 0; i < g_fonts.size(); i++) {
-        if (!g_fonts[i]) continue;
-        best = g_fonts[i];
-        if (kFontBakes[i] >= size - 0.5f) break;
-    }
-    return best;
-}
-
-// the launcher's font at a 720p size, scaled with the page
-class FontScope {
-public:
-    explicit FontScope(float size) {
-        const float px = Px(size);
-        ImGui::PushFont(FontFor(px), px);
-    }
-    ~FontScope() { ImGui::PopFont(); }
-    FontScope(const FontScope&) = delete;
-    FontScope& operator=(const FontScope&) = delete;
-};
-
-// a readable system font, if there's one where it's expected
-std::filesystem::path FindUiFont() {
-    std::vector<std::filesystem::path> candidates;
-#ifdef _WIN32
-    wchar_t windows[MAX_PATH] = {};
-    const UINT length = GetWindowsDirectoryW(windows, MAX_PATH);
-    if (length > 0 && length < MAX_PATH) {
-        const std::filesystem::path fonts = std::filesystem::path(windows) / "Fonts";
-        // Segoe UI on Windows; Proton (a Steam Deck) has Arial's metric twin
-        for (const char* name : {"segoeui.ttf", "arial.ttf", "tahoma.ttf"}) {
-            candidates.push_back(fonts / name);
-        }
-    }
-#else
-    for (const char* file : {"/usr/share/fonts/noto/NotoSans-Regular.ttf",
-                             "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-                             "/usr/share/fonts/TTF/DejaVuSans.ttf",
-                             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"}) {
-        candidates.emplace_back(file);
-    }
-#endif
-    for (const auto& file : candidates) {
-        std::error_code ec;
-        if (std::filesystem::is_regular_file(file, ec)) return file;
-    }
-    return {};
-}
-
-std::vector<char> ReadFile(const std::filesystem::path& file) {
-    std::ifstream in(file, std::ios::binary);
-    if (!in) return {};
-    return std::vector<char>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-}
-
-// the launcher's look, over the SDK's style for the length of its draw
-void ApplyStyle(ImGuiStyle& style, float s) {
-    style.FontScaleMain = 1.0f;
-    style.FontScaleDpi = 1.0f;
-    style.WindowPadding = ImVec2(28 * s, 18 * s);
-    style.FramePadding = ImVec2(10 * s, 6 * s);
-    style.ItemSpacing = ImVec2(12 * s, 9 * s);
-    style.ItemInnerSpacing = ImVec2(8 * s, 6 * s);
-    style.CellPadding = ImVec2(6 * s, 5 * s);
-    style.IndentSpacing = 20 * s;
-    style.ScrollbarSize = 14 * s;
-    style.GrabMinSize = 16 * s;
-    style.WindowRounding = 0;
-    style.ChildRounding = 6 * s;
-    style.FrameRounding = 5 * s;
-    style.PopupRounding = 6 * s;
-    style.ScrollbarRounding = 7 * s;
-    style.GrabRounding = 4 * s;
-    style.TabRounding = 5 * s;
-    style.WindowBorderSize = 0;
-    style.ChildBorderSize = 0;
-    style.PopupBorderSize = 1;
-    style.FrameBorderSize = 0;
-    style.TabBorderSize = 0;
-    style.TabBarBorderSize = 2 * s;
-    style.TabBarOverlineSize = 2 * s;
-    style.SeparatorTextBorderSize = 1;
-    style.DisabledAlpha = 0.45f;
-
-    ImVec4* c = style.Colors;
-    c[ImGuiCol_Text] = kText;
-    c[ImGuiCol_TextDisabled] = kMuted;
-    c[ImGuiCol_WindowBg] = kBackground;
-    c[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_PopupBg] = kPopup;
-    c[ImGuiCol_Border] = kLine;
-    c[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_FrameBg] = kFrame;
-    c[ImGuiCol_FrameBgHovered] = kFrameHover;
-    c[ImGuiCol_FrameBgActive] = kFrameActive;
-    c[ImGuiCol_Button] = kFrame;
-    c[ImGuiCol_ButtonHovered] = kFrameHover;
-    c[ImGuiCol_ButtonActive] = kFrameActive;
-    c[ImGuiCol_Header] = kAccentDim;
-    c[ImGuiCol_HeaderHovered] = kFrameHover;
-    c[ImGuiCol_HeaderActive] = kFrameActive;
-    c[ImGuiCol_CheckMark] = kAccent;
-    c[ImGuiCol_SliderGrab] = kAccent;
-    c[ImGuiCol_SliderGrabActive] = kAccentHover;
-    c[ImGuiCol_Separator] = kLine;
-    c[ImGuiCol_Tab] = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_TabHovered] = kFrameHover;
-    c[ImGuiCol_TabSelected] = kFrame;
-    c[ImGuiCol_TabSelectedOverline] = kAccent;
-    c[ImGuiCol_TabDimmed] = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_TabDimmedSelected] = kFrame;
-    c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_ScrollbarGrab] = kFrameHover;
-    c[ImGuiCol_ScrollbarGrabHovered] = kFrameActive;
-    c[ImGuiCol_ScrollbarGrabActive] = kFrameActive;
-    c[ImGuiCol_TextSelectedBg] = ImVec4(kAccent.x, kAccent.y, kAccent.z, 0.35f);
-    c[ImGuiCol_NavCursor] = kAccent;
-    c[ImGuiCol_ModalWindowDimBg] = ImVec4(0, 0, 0, 0.6f);
-    c[ImGuiCol_TitleBg] = kFrame;
-    c[ImGuiCol_TitleBgActive] = kAccentDim;
-    c[ImGuiCol_TitleBgCollapsed] = kFrame;
-}
-
-// how much bigger than at 1280x720 the page is drawn
-float ScaleFor(const ImVec2& display) {
-    const float s = std::min(display.x / 1280.0f, display.y / 720.0f);
-    return std::clamp(s, 0.75f, 3.0f);
-}
 
 // the footer's description: the setting's name and three lines of small text
 float DescriptionHeight() { return Px(kSmallSize) * 4 + Px(2); }
@@ -350,8 +167,8 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
 
     ImGuiStyle& style = ImGui::GetStyle();
     const ImGuiStyle sdk_style = style;
-    g_scale = scale_ = ScaleFor(io.DisplaySize);
-    ApplyStyle(style, scale_);
+    SetScale(ScaleFor(io.DisplaySize));
+    ApplyStyle(style, Scale());
     {
         FontScope font(kBodySize);
         if (stage_ == Stage::kEditing) {
@@ -565,12 +382,22 @@ void LauncherDialog::DrawRow(const Setting& setting) {
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
     }
+    if (const auto problem = row_problems_.find(setting.cvar); problem != row_problems_.end()) {
+        FontScope font(kSmallSize);
+        ImGui::PushStyleColor(ImGuiCol_Text, kBad);
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextUnformatted(problem->second.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+    }
     ImGui::EndGroup();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) NoteHovered(setting.cvar);
 
     ImGui::TableSetColumnIndex(2);
     if (!locked && model_.IsChanged(setting.cvar)) {
-        if (ImGui::Button("Reset")) model_.Reset(setting.cvar);
+        if (ImGui::Button("Reset") && model_.Reset(setting.cvar)) {
+            row_problems_.erase(Str(setting.cvar));
+        }
         if (ImGui::IsItemHovered()) NoteHovered(setting.cvar);
     }
     ImGui::PopID();
@@ -604,7 +431,7 @@ float ControlWidth() { return std::min(ImGui::GetContentRegionAvail().x, Px(380)
 
 void LauncherDialog::DrawCheckbox(const Setting& s) {
     bool on = AsBool(model_.Value(s.cvar));
-    if (ImGui::Checkbox("##value", &on)) model_.Set(s.cvar, on ? "true" : "false");
+    if (ImGui::Checkbox("##value", &on)) Apply(s.cvar, on ? "true" : "false");
 }
 
 void LauncherDialog::DrawCombo(const Setting& s) {
@@ -616,7 +443,7 @@ void LauncherDialog::DrawCombo(const Setting& s) {
         for (size_t i = 0; i < s.choices.size(); i++) {
             const bool selected = static_cast<int>(i) == index;
             if (ImGui::Selectable(Str(s.choices[i].label).c_str(), selected)) {
-                model_.Set(s.cvar, s.choices[i].value);
+                Apply(s.cvar, s.choices[i].value);
             }
             if (selected) ImGui::SetItemDefaultFocus();
         }
@@ -641,7 +468,7 @@ void LauncherDialog::DrawComboText(const Setting& s) {
             const bool selected = !custom && static_cast<int>(i) == index;
             if (ImGui::Selectable(Str(s.choices[i].label).c_str(), selected)) {
                 custom_rows_.erase(Str(s.cvar));
-                model_.Set(s.cvar, s.choices[i].value);
+                Apply(s.cvar, s.choices[i].value);
             }
             if (selected) ImGui::SetItemDefaultFocus();
         }
@@ -653,7 +480,7 @@ void LauncherDialog::DrawComboText(const Setting& s) {
     ImGui::SameLine();
     std::string value = model_.Value(s.cvar);
     if (EditText("##custom", HintFor(s.cvar), value, ImGui::GetContentRegionAvail().x)) {
-        model_.Set(s.cvar, value);
+        Apply(s.cvar, value);
     }
 }
 
@@ -667,7 +494,7 @@ void LauncherDialog::DrawIntStepper(const Setting& s) {
         if (range.max > range.min) {
             v = std::clamp(v, static_cast<int>(range.min), static_cast<int>(range.max));
         }
-        model_.Set(s.cvar, std::to_string(v));
+        Apply(s.cvar, std::to_string(v));
     }
     // a special value's name, or the unit
     const int index = model_.ChoiceIndex(s);
@@ -687,7 +514,7 @@ void LauncherDialog::DrawIntSlider(const Setting& s) {
     const Range range = s.range.value_or(Range{0, 100, 1});
     ImGui::SetNextItemWidth(ControlWidth());
     if (ImGui::SliderInt("##value", &v, static_cast<int>(range.min), static_cast<int>(range.max))) {
-        model_.Set(s.cvar, std::to_string(v));
+        Apply(s.cvar, std::to_string(v));
     }
 }
 
@@ -703,14 +530,14 @@ void LauncherDialog::DrawFloatSlider(const Setting& s, bool percent) {
         double next = v / shown_scale;
         // on the range's steps, so a drag lands on 1.25 rather than 1.2493
         if (range.step > 0) next = std::round(next / range.step) * range.step;
-        model_.Set(s.cvar, FormatNumber(std::clamp(next, range.min, range.max)));
+        Apply(s.cvar, FormatNumber(std::clamp(next, range.min, range.max)));
     }
 }
 
 void LauncherDialog::DrawText(const Setting& s) {
     std::string value = model_.Value(s.cvar);
     if (EditText("##value", HintFor(s.cvar), value, ImGui::GetContentRegionAvail().x)) {
-        model_.Set(s.cvar, value);
+        Apply(s.cvar, value);
     }
 }
 
@@ -721,7 +548,7 @@ void LauncherDialog::DrawPath(const Setting& s) {
     const std::string hint = fallback.empty() ? std::string() : "Default: " + fallback;
     const float browse = ButtonWidth("Browse...");
     const float field = ImGui::GetContentRegionAvail().x - browse - ImGui::GetStyle().ItemSpacing.x;
-    if (EditText("##value", hint.c_str(), value, field)) model_.Set(s.cvar, value);
+    if (EditText("##value", hint.c_str(), value, field)) Apply(s.cvar, value);
     ImGui::SameLine();
     if (ImGui::Button("Browse...")) {
         const std::string from = value.empty()
@@ -770,6 +597,9 @@ void LauncherDialog::DrawFolderList(const Setting& s) {
         return out;
     };
 
+    // the default's folders (songs beside the ini) aren't there until someone
+    // makes them: band3 ships without one
+    const std::vector<std::string> defaults = paths::SplitList(model_.EffectiveDefault(s.cvar));
     const float remove = ButtonWidth("Remove");
     std::optional<size_t> removed;
     for (size_t i = 0; i < folders.size(); i++) {
@@ -791,7 +621,16 @@ void LauncherDialog::DrawFolderList(const Setting& s) {
                                    ImGui::GetCursorScreenPos().y + ImGui::GetFrameHeight()),
                             true);
         ImGui::TextUnformatted(rex::path_to_utf8(resolved).c_str());
-        if (!exists) {
+        const bool default_folder = std::ranges::find(defaults, folders[i]) != defaults.end();
+        if (!exists && default_folder) {
+            ImGui::SameLine();
+            ImGui::TextColored(kMuted, "(doesn't exist yet)");
+            // downloads go into the first folder (song_downloads.h), made as needed
+            if (i == 0 && ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("band3 makes it when you download songs; you can also make "
+                                  "it yourself and put songs in it.");
+            }
+        } else if (!exists) {
             ImGui::SameLine();
             ImGui::TextColored(kWarn, "(not found)");
         }
@@ -808,7 +647,7 @@ void LauncherDialog::DrawFolderList(const Setting& s) {
     }
     if (removed) {
         folders.erase(folders.begin() + static_cast<std::ptrdiff_t>(*removed));
-        model_.Set(s.cvar, join(folders));
+        Apply(s.cvar, join(folders));
     }
 
     // adding one: typed, or from the system's folder dialog
@@ -821,7 +660,7 @@ void LauncherDialog::DrawFolderList(const Setting& s) {
     ImGui::BeginDisabled(blank);
     if (ImGui::Button("Add")) {
         folders.push_back(new_folder_);
-        model_.Set(s.cvar, join(folders));
+        Apply(s.cvar, join(folders));
         new_folder_.clear();
     }
     ImGui::EndDisabled();
@@ -845,7 +684,7 @@ void LauncherDialog::DrawMicSlots(const Setting& s) {
         const char* hint = i == 0 ? "The system's default recording device" : "Not used";
         if (EditText("##slot", hint, slots[static_cast<size_t>(i)],
                      ImGui::GetContentRegionAvail().x)) {
-            model_.Set(s.cvar, JoinMicSlots(slots));
+            Apply(s.cvar, JoinMicSlots(slots));
         }
         ImGui::PopID();
     }
@@ -867,8 +706,8 @@ void LauncherDialog::DrawJoypadLag(const Setting& s) {
         bool on = lag.has_value();
         const float start = ImGui::GetCursorPosX();
         if (ImGui::Checkbox(Str(type.label).c_str(), &on)) {
-            model_.Set(s.cvar, WithLag(text, type.type, on ? std::optional<float>(0.0f)
-                                                         : std::nullopt));
+            Apply(s.cvar, WithLag(text, type.type, on ? std::optional<float>(0.0f)
+                                                     : std::nullopt));
         }
         if (ImGui::IsItemHovered()) NoteHovered(s.cvar);
         ImGui::SameLine();
@@ -877,7 +716,7 @@ void LauncherDialog::DrawJoypadLag(const Setting& s) {
             float ms = *lag;
             ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, Px(190)));
             if (ImGui::InputFloat("##ms", &ms, 1.0f, 10.0f, "%.0f ms")) {
-                model_.Set(s.cvar, WithLag(model_.Value(s.cvar), type.type, std::round(ms)));
+                Apply(s.cvar, WithLag(model_.Value(s.cvar), type.type, std::round(ms)));
             }
         } else {
             ImGui::AlignTextToFramePadding();
@@ -929,6 +768,18 @@ bool LauncherDialog::EditText(const char* id, const char* hint, std::string& val
 
 void LauncherDialog::NoteHovered(std::string_view cvar) { hovered_next_ = cvar; }
 
+bool LauncherDialog::Apply(std::string_view cvar, std::string_view value) {
+    if (model_.Set(cvar, value)) {
+        if (const auto it = row_problems_.find(cvar); it != row_problems_.end()) {
+            row_problems_.erase(it);
+        }
+        return true;
+    }
+    REXLOG_WARN("Launcher: {} didn't accept \"{}\"", cvar, value);
+    row_problems_[Str(cvar)] = model_.Refusal(cvar, value);
+    return false;
+}
+
 void LauncherDialog::StartFolderPick(std::string target, const std::string& from) {
     // a dialog that never answered (gamescope may not show it) doesn't block
     // another: its answer goes to the pick it was for, which is dropped
@@ -948,8 +799,7 @@ void LauncherDialog::TakeFolderPick() {
         folder = pick_->folder;
         if (!pick_->error.empty()) {
             REXLOG_WARN("Launcher: the folder dialog failed: {}", pick_->error);
-            save_failed_ = true;
-            save_message_ = "The folder dialog didn't open; type the folder instead.";
+            row_problems_[pick_target_] = "The folder dialog didn't open; type the folder instead.";
         }
     }
     pick_.reset();
@@ -957,9 +807,9 @@ void LauncherDialog::TakeFolderPick() {
     if (pick_target_ == "content_folders") {
         std::string list = model_.Value(pick_target_);
         if (!paths::SplitList(list).empty()) list += '|';
-        model_.Set(pick_target_, list + *folder);
+        Apply(pick_target_, list + *folder);
     } else {
-        model_.Set(pick_target_, *folder);
+        Apply(pick_target_, *folder);
     }
 }
 
@@ -1152,9 +1002,12 @@ bool LauncherDialog::Save() {
                      result.error);
         return false;
     }
-    if (result.backed_up) {
-        save_message_ = "Saved. The old " + name + " couldn't be read and is kept as " +
-                        rex::path_to_utf8(BackupPath(host_.config_path).filename()) + ".";
+    const std::string backup = rex::path_to_utf8(BackupPath(host_.config_path).filename());
+    if (result.had_comments) {
+        save_message_ = "Saved; your old file with its comments is in " + backup + ".";
+    } else if (result.backed_up) {
+        save_message_ =
+            "Saved. The old " + name + " couldn't be read and is kept as " + backup + ".";
     } else {
         save_message_ = "Saved to " + name + ".";
     }
@@ -1162,73 +1015,6 @@ bool LauncherDialog::Save() {
     REXLOG_INFO("Launcher: saved {}{}", rex::path_to_utf8(host_.config_path),
                 result.backed_up ? " (the old file is kept as .bak)" : "");
     return true;
-}
-
-void AddLauncherFonts(ImFontAtlas* atlas) {
-    // Latin, Latin-1 and Latin Extended-A, and punctuation (dashes, quotes, ...)
-    static const ImWchar kRanges[] = {0x0020, 0x00FF, 0x0100, 0x017F, 0x2010, 0x205E, 0};
-    const std::filesystem::path file = FindUiFont();
-    std::vector<char> data = file.empty() ? std::vector<char>() : ReadFile(file);
-
-    // one copy of the font's data, owned by the first font, for every size
-    void* shared = nullptr;
-    int shared_size = 0;
-    bool owned = false;
-    if (!data.empty()) {
-        shared_size = static_cast<int>(data.size());
-        shared = IM_ALLOC(data.size());
-        std::memcpy(shared, data.data(), data.size());
-        owned = true;
-    } else if (atlas->Sources.Size > 0 && atlas->Sources[0].FontData) {
-        // the SDK's own font, larger
-        shared = atlas->Sources[0].FontData;
-        shared_size = atlas->Sources[0].FontDataSize;
-    }
-    if (!shared) {
-        REXLOG_WARN("Launcher: no font to draw with; it uses the SDK's small one");
-        return;
-    }
-    for (size_t i = 0; i < std::size(kFontBakes); i++) {
-        ImFontConfig config;
-        config.FontDataOwnedByAtlas = owned && i == 0;
-        std::snprintf(config.Name, sizeof(config.Name), "band3 launcher %.0fpx", kFontBakes[i]);
-        g_fonts[i] = atlas->AddFontFromMemoryTTF(shared, shared_size, kFontBakes[i], &config,
-                                                 kRanges);
-        if (!g_fonts[i] && i == 0 && owned) IM_FREE(shared);
-        if (!g_fonts[i]) break;
-    }
-    REXLOG_INFO("Launcher: font {}",
-                data.empty() ? std::string("the SDK's own") : rex::path_to_utf8(file));
-}
-
-bool ShiftHeld() {
-#ifdef _WIN32
-    return (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-#else
-    return false;
-#endif
-}
-
-double DisplayRefreshRate(void* native_window) {
-#ifdef _WIN32
-    HMONITOR monitor =
-        MonitorFromWindow(static_cast<HWND>(native_window), MONITOR_DEFAULTTOPRIMARY);
-    MONITORINFOEXW info{};
-    info.cbSize = sizeof(info);
-    if (!monitor || !GetMonitorInfoW(monitor, &info)) return 0;
-    DEVMODEW mode{};
-    mode.dmSize = sizeof(mode);
-    if (!EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode)) return 0;
-    // 0 and 1 stand for the hardware's default rate
-    return mode.dmDisplayFrequency > 1 ? mode.dmDisplayFrequency : 0;
-#else
-    (void)native_window;
-    // band3's SDL copy only has video while the native view runs; the SDK's
-    // copy owns the window, so this is the primary display's rate at best
-    if (!SDL_WasInit(SDL_INIT_VIDEO)) return 0;
-    const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
-    return mode && mode->refresh_rate > 0 ? mode->refresh_rate : 0;
-#endif
 }
 
 }

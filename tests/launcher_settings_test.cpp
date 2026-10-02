@@ -325,6 +325,22 @@ TEST_CASE("settings from the command line or the environment are locked") {
     CHECK_FALSE(m.HasUnsavedChanges());
 }
 
+TEST_CASE("a refused value says why when the limits tell") {
+    Fixture f;
+    SettingsModel m(kTable, f.env, f.store);
+    CHECK(m.Refusal("rnd_sync", "fast") == "Not accepted: \"fast\" isn't a number");
+    CHECK(m.Refusal("rnd_sync", "5") == "Not accepted: \"5\" isn't from -1 to 1");
+    CHECK(m.Refusal("song_speed", "x") == "Not accepted: \"x\" isn't a number");
+    CHECK(m.Refusal("lang", "klingon") ==
+          "Not accepted: \"klingon\" isn't one of (empty), eng, esl, fre, ita, deu");
+    // a refusal the facts don't explain
+    CHECK(m.Refusal("midi_drums_device", "loopMIDI") == "Not accepted: \"loopMIDI\"");
+    CHECK(m.Refusal("no_such_cvar", "1") == "Not accepted: \"1\"");
+
+    f.store.refuse.insert("midi_drums_device");
+    CHECK_FALSE(m.Set("midi_drums_device", "loopMIDI"));
+}
+
 TEST_CASE("turning the Steam Deck presets off doesn't save them as overrides") {
     Fixture f;
     f.OnDeck();
@@ -356,8 +372,15 @@ TEST_CASE("turning the Steam Deck presets off doesn't save them as overrides") {
     CHECK(*EditFor(edits, "steam_deck_defaults")->value == ConfigValue(false));
 
     // and back on: the preset returns where the player didn't choose
-    CHECK(m.Set("steam_deck_defaults", "true"));
+    SUBCASE("ticked again") { CHECK(m.Set("steam_deck_defaults", "true")); }
+    SUBCASE("reset") {
+        CHECK(m.IsChanged("steam_deck_defaults"));
+        CHECK(m.Reset("steam_deck_defaults"));
+        CHECK(f.store.values["steam_deck_defaults"] == "true");
+        CHECK_FALSE(m.IsChanged("steam_deck_defaults"));
+    }
     CHECK(f.store.values["present_letterbox"] == "true");
+    CHECK_FALSE(m.IsChanged("present_letterbox"));
     CHECK(f.store.values["rnd_sync"] == "1");
     CHECK(f.store.values["fullscreen"] == "false");
 }

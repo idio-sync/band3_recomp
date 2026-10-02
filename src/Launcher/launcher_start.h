@@ -30,4 +30,10 @@ struct StartDecision {
 // the launcher is asked for (--launcher, Shift); otherwise as show_launcher says.
 StartDecision DecideLauncher(const StartInputs& in);
 
+// Whether DecideLauncher could still show it, from test_port and relaunched
+// alone: those rule it out whatever else holds. Band3App's fonts are set up
+// before the game data check and Shift are known (OnConfigureFonts), and the
+// launcher's are skipped only when this is false, so it never shows without them.
+bool LauncherPossible(const StartInputs& in);
+
 }

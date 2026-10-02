@@ -46,6 +46,7 @@ add_executable(band3_tests
     launcher_start_test.cpp
     launcher_settings_test.cpp
     config_file_test.cpp
+    relaunch_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp

@@ -16,12 +16,16 @@
 // The file is written by hand rather than with toml++'s serializer, one flat
 // `name = value` line per key, the form the SDK's LoadConfig is known to read:
 // bools and ints bare, floats in plain decimal, strings as basic strings with
-// backslashes, quotes and control characters escaped. Comments aren't kept.
+// backslashes, quotes and control characters escaped. Comments aren't kept,
+// so a file with comments of the player's is copied to band3.toml.bak first.
 
 namespace band3::launcher {
 
 inline constexpr const char* kConfigHeader =
     "# Written by the band3 launcher. F4 > Save to config rewrites this file.";
+
+// the first line of a file F4's "Save to config" wrote (the SDK's SaveConfig)
+inline constexpr const char* kSdkConfigHeader = "# Auto-generated cvar configuration";
 
 using ConfigValue = std::variant<bool, int64_t, double, std::string>;
 
@@ -60,6 +64,11 @@ std::string FormatValue(const ConfigValue& value);
 // keys (a set key stays where it was, a new one goes at the end)
 std::string MergeConfig(std::span<const ConfigLine> existing, std::span<const ConfigEdit> edits);
 
+// whether the text has a comment the launcher's rewrite would drop: a `#`
+// line, or a `#` after a value, other than the launcher's or F4's header line
+// (a `#` inside a string isn't one)
+bool HasOwnComments(std::string_view text);
+
 // why the file can't be read, for the banner: nullopt when it reads or isn't there
 std::optional<std::string> ConfigFileProblem(const std::filesystem::path& file);
 
@@ -67,16 +76,21 @@ struct SaveResult {
     bool ok = false;
     // what went wrong, when !ok
     std::string error;
-    // the old file didn't parse: it was copied to <file>.bak and replaced
+    // the old file was copied to <file>.bak before it was replaced: it didn't
+    // parse (parse_error says why), or it had comments (HasOwnComments), which
+    // the rewrite drops
     bool backed_up = false;
     std::string parse_error;
+    bool had_comments = false;
 };
 
-// the old file kept when it doesn't parse: band3.toml.bak
+// the old file kept when it doesn't parse or has comments: band3.toml.bak
 std::filesystem::path BackupPath(const std::filesystem::path& file);
 
 // reads the file as it is now, applies the edits and writes it through a
-// temporary file and a rename
+// temporary file and a rename. A file that doesn't parse, or has comments, is
+// copied to BackupPath first, over any older copy: the file being replaced is
+// the one worth keeping, and once rewritten it has no comments to back up again.
 SaveResult SaveConfigFile(const std::filesystem::path& file, std::span<const ConfigEdit> edits);
 
 }

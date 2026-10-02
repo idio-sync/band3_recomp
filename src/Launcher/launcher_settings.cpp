@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <cstdio>
 #include "src/Input/joypad_lag_status.h"
 #include "src/paths.h"
 
@@ -555,8 +556,12 @@ bool SettingsModel::Reset(std::string_view cvar) {
         // an empty folder setting is the default folder
         const std::string value =
             s && s->widget == Widget::kPath ? std::string() : EffectiveDefault(name);
-        // setting a value it already has would still re-apply a HotReload one
-        if (Same(name, Value(name), value) || store_.Set(name, value)) {
+        // setting a value it already has would still re-apply a HotReload one.
+        // The Deck toggle goes through Set, so the preset settings the player
+        // hasn't edited follow it as they do when it's ticked.
+        const bool deck_toggle = name == "steam_deck_defaults" && env_.steam_deck;
+        if (Same(name, Value(name), value) ||
+            (deck_toggle ? Set(name, value) : store_.Set(name, value))) {
             edited_.erase(std::string(name));
         }
     };
@@ -608,6 +613,37 @@ std::optional<std::string> SettingsModel::Warning(std::string_view cvar) const {
         }
     }
     return std::nullopt;
+}
+
+std::string SettingsModel::Refusal(std::string_view cvar, std::string_view value) const {
+    std::string text = "Not accepted: \"" + std::string(value) + "\"";
+    const CvarFacts* facts = Facts(cvar);
+    if (!facts) return text;
+    auto number = [](double v) {
+        char buffer[64];
+        std::snprintf(buffer, sizeof(buffer), "%g", v);
+        return std::string(buffer);
+    };
+    const bool numeric = facts->type == ValueType::kInt || facts->type == ValueType::kFloat;
+    const bool parses = facts->type == ValueType::kInt ? AsInt(value).has_value()
+                                                       : AsFloat(value).has_value();
+    if (numeric && !parses) return text + " isn't a number";
+    if (numeric && (facts->min || facts->max)) {
+        if (facts->min && facts->max) {
+            return text + " isn't from " + number(*facts->min) + " to " + number(*facts->max);
+        }
+        return facts->min ? text + " is below " + number(*facts->min)
+                          : text + " is above " + number(*facts->max);
+    }
+    if (!facts->allowed.empty()) {
+        std::string list;
+        for (const auto& allowed : facts->allowed) {
+            if (!list.empty()) list += ", ";
+            list += allowed.empty() ? "(empty)" : allowed;
+        }
+        return text + " isn't one of " + list;
+    }
+    return text;
 }
 
 bool SettingsModel::HasUnsavedChanges() const {

@@ -28,7 +28,9 @@
 #include "Input/virtual_instrument.h"
 #include "Launcher/game_data_check.h"
 #include "Launcher/launcher_dialog.h"
+#include "Launcher/launcher_platform.h"
 #include "Launcher/launcher_start.h"
+#include "Launcher/launcher_style.h"
 #include "Net/discord.h"
 #include "Net/http_server.h"
 #include "Render/gpu_view.h"
@@ -250,7 +252,11 @@ class Band3App : public rex::ReXApp {
     band3::settings::SnapshotStartupSettings();
     band3::AddSettingArgs();
     // what the launcher changed is read from here on, so nothing waits on a
-    // restart
+    // restart. That holds for swap_post_effect (FXAA) too: it's read once,
+    // when the guest GPU is set up (GraphicsSystem::SetupGuestGpu, through
+    // CommandProcessor::SetDesiredSwapPostEffect), which Runtime::Setup runs
+    // inside resume, so the launcher's value applies without a relaunch; an F4
+    // change to it in game applies at the next start.
     rex::cvar::ClearPendingRestartFlags();
     rex::PathConfig paths = FinalPaths();
     // not inside the launcher's draw: resume builds the runtime and starts the
@@ -281,9 +287,18 @@ class Band3App : public rex::ReXApp {
     return true;
   }
 
-  // the launcher's larger font, added whether or not it shows: the fonts are
-  // set up before band3 decides
+  // the launcher's larger font: the fonts are set up before band3 decides
+  // whether it shows (the game data check needs OnFinalizePaths' folders, and
+  // Shift is read then), so they're added unless nothing could show it, and
+  // only a test run or a relaunch rules it out this early (LauncherPossible)
   void OnConfigureFonts(ImFontAtlas* atlas) override {
+    if (!band3::launcher::LauncherPossible({
+            .test_port = REXCVAR_GET(test_port) != 0,
+            .relaunched = band3::relaunch::WasRelaunched(),
+        })) {
+      REXLOG_INFO("Launcher: fonts skipped, it can't show in this run");
+      return;
+    }
     band3::launcher::AddLauncherFonts(atlas);
   }
 
