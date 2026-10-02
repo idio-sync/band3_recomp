@@ -23,6 +23,7 @@ REXCVAR_DECLARE(bool, menu_shortcut);
 REXCVAR_DECLARE(bool, steam_deck_defaults);
 REXCVAR_DECLARE(std::string, joypad_lag);
 REXCVAR_DECLARE(bool, autosave);
+REXCVAR_DECLARE(bool, skip_profile_prompt);
 REXCVAR_DECLARE(double, song_speed);
 REXCVAR_DECLARE(double, track_speed);
 REXCVAR_DECLARE(bool, unlock_clothing);

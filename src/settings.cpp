@@ -105,6 +105,10 @@ REXCVAR_DEFINE_BOOL(autosave, true, "Band3/Game",
     "Let the game autosave profiles, after songs and setlist edits. Off, they're only saved "
     "from the options menu, e.g. to test with autoplay without touching your profile");
 
+REXCVAR_DEFINE_BOOL(skip_profile_prompt, true, "Band3/Game",
+    "Players who join without a profile join as guests, without the game asking them to "
+    "choose one (No Profile, Sign In, Swap to User). Off, it asks, as on a console");
+
 REXCVAR_DEFINE_DOUBLE(song_speed, 1.0, "Band3/Game",
     "Plays songs faster or slower: 1.5 is half again as fast, 0.75 three quarters. "
     "Applies from the next song. A speed other than 1 that practice mode or Rock Band 3 "
