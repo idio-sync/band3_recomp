@@ -216,6 +216,10 @@ void AddSettingArgs() {
     // Rock Band 3 DX identifier
     g_args.push_back("-define");
     g_args.push_back("MHX_PC");
+
+    std::string added;
+    for (size_t i = *g_setting_args_at; i < g_args.size(); i++) added += " " + g_args[i];
+    REXLOG_INFO("Game arguments from settings:{}", added);
 }
 
 const std::filesystem::path& GameDataRoot() { return g_game_data_root; }

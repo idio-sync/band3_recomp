@@ -276,8 +276,8 @@ REXCVAR_DEFINE_BOOL(show_launcher, true, "Band3/Launcher",
 
 REXCVAR_DEFINE_BOOL(launcher, false, "Band3/Launcher",
     "Show the launcher at this start whatever show_launcher says. Meant for the command "
-    "line (--launcher), e.g. in Steam's launch options; cleared once read, so \"Save to "
-    "config\" can't keep it");
+    "line (--launcher), e.g. in Steam's launch options, or the environment; a value in "
+    "band3.toml is ignored, and it's cleared once read, so \"Save to config\" can't keep it");
 
 // Band3/Debug
 

@@ -152,12 +152,14 @@ class Band3App : public rex::ReXApp {
   rex::PathConfig RulePaths() const {
     using rex::cvar::Source;
     using band3::paths::PathSource;
+    // fixed: the command line and the environment, which the launcher shows
+    // locked for the same reason (launcher_cvars.cpp)
     auto setting = [](const char* cvar) {
       const Source source = rex::cvar::GetFlagSource(cvar);
       const PathSource from = source == Source::kDefault ? PathSource::kUnset
-                              : source == Source::kConfig || source == Source::kRuntime
-                                  ? PathSource::kSaved
-                                  : PathSource::kFixed;
+                              : source == Source::kCommandLine || source == Source::kEnvironment
+                                  ? PathSource::kFixed
+                                  : PathSource::kSaved;
       return band3::paths::PathSetting{rex::cvar::GetFlagByName(cvar), from};
     };
     band3::paths::PathRuleInputs in;
@@ -199,16 +201,22 @@ class Band3App : public rex::ReXApp {
       REXLOG_WARN("Game data {}: {}", rex::path_to_utf8(paths.game_data_root),
                   band3::launcher::DescribeProblem(check.problem));
     }
+    // --launcher is for this start only: a value saved in band3.toml (F4's
+    // "Save to config" of a run started with it) doesn't count
+    const bool launcher_flag = REXCVAR_GET(launcher) &&
+                               rex::cvar::GetFlagSource("launcher") != rex::cvar::Source::kConfig;
     const auto decision = band3::launcher::DecideLauncher({
         .test_port = REXCVAR_GET(test_port) != 0,
         .relaunched = band3::relaunch::WasRelaunched(),
         .game_data_ok = check.ok,
-        .launcher_flag = REXCVAR_GET(launcher),
+        .launcher_flag = launcher_flag,
         .shift_held = band3::launcher::ShiftHeld(),
         .show_launcher = REXCVAR_GET(show_launcher),
     });
-    // --launcher is for this start only; F4's "Save to config" would keep it
-    if (REXCVAR_GET(launcher)) rex::cvar::SetFlagByName("launcher", "false");
+    // cleared, so a later "Save to config" doesn't keep it
+    if (REXCVAR_GET(launcher) && !rex::cvar::SetFlagByName("launcher", "false")) {
+      REXLOG_WARN("Launcher: couldn't clear the launcher setting");
+    }
     REXLOG_INFO("Launcher: {}", decision.reason);
     if (!decision.show) return paths;
     if (!imgui_drawer()) {
@@ -220,7 +228,15 @@ class Band3App : public rex::ReXApp {
     launcher_ = std::make_unique<band3::launcher::LauncherDialog>(
         imgui_drawer(),
         band3::launcher::LauncherHost{
+            .config_path = defaults.config_path,
+            .path_defaults = {defaults.game_data_root, defaults.user_data_root},
+            .anchor = anchor_,
             .game_data_root = [this] { return RulePaths().game_data_root; },
+            .refresh_rate =
+                [this] {
+                  return band3::launcher::DisplayRefreshRate(
+                      window() ? window()->GetNativeWindowHandle() : nullptr);
+                },
             .start_game = [this] { StartFromLauncher(); },
             .quit = [this] { QuitFromLauncher(); },
         });
@@ -254,13 +270,21 @@ class Band3App : public rex::ReXApp {
     });
   }
 
-  // while the launcher has unsaved changes, closing the window asks first
+  // while the launcher's settings are being edited and aren't saved, closing
+  // the window asks first; once Play is pressed it closes as usual
   bool OnWindowCloseRequested() override {
-    if (launcher_ && !quit_confirmed_ && launcher_->HasUnsavedChanges()) {
+    if (launcher_ && !quit_confirmed_ && launcher_->IsEditing() &&
+        launcher_->HasUnsavedChanges()) {
       launcher_->RequestQuit();
       return false;
     }
     return true;
+  }
+
+  // the launcher's larger font, added whether or not it shows: the fonts are
+  // set up before band3 decides
+  void OnConfigureFonts(ImFontAtlas* atlas) override {
+    band3::launcher::AddLauncherFonts(atlas);
   }
 
   // GPU emulation is a plugin (rexgpu-xenos) that the SDK leaves off unless
