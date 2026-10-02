@@ -261,7 +261,7 @@ Render checks set its picture against the game's.
 Launch render checks with:
 
 ```
-python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true --test_random_seed=21
+python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
 python tools/band3ctl.py run tests/game/boot.b3t
 python tools/band3ctl.py run tests/game/render_song.b3t
 ```
@@ -269,6 +269,12 @@ python tools/band3ctl.py run tests/game/render_song.b3t
 The native view doesn't need `--readback_resolve=full`. With it, guest memory holds
 right copies of what RB3 draws into textures (garbage otherwise), to compare against:
 replay's `--rt-guest` and `--dump-tex`.
+
+Also launch with `--async_shader_compilation=false`. With the emulated GPU's
+default asynchronous shader compilation, a draw whose pipeline isn't compiled yet is
+skipped, and RB3 composes each band member's outfits only once, in the main menu: the
+first composites it makes can come out empty and stay black for the session in the
+game's own picture (not the native view's), differently on each run.
 
 A fresh profile's band is made up at random, so each launch has different characters;
 `--test_random_seed=<n>` (0, the default, is off) seeds RB3's random numbers with `n`
