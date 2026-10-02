@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "src/Render/frame_compose.h"
+#include "src/Render/sample_model.h"
 
 // See post_model.h.
 
@@ -25,6 +26,7 @@ float dot(float3 a, float3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 float saturate(float v) { return std::clamp(v, 0.0f, 1.0f); }
 float3 saturate(float3 v) { return {saturate(v.x), saturate(v.y), saturate(v.z)}; }
 float abs(float v) { return std::fabs(v); }
+float sqrt(float v) { return std::sqrt(v); }
 float min(float a, float b) { return a < b ? a : b; }
 float max(float a, float b) { return a > b ? a : b; }
 float3 lerp(float3 a, float3 b, float t) {
@@ -152,6 +154,21 @@ void Glare(const Level& src, Level& dst) {
 float3 Rgb(const float* v) { return {v[0], v[1], v[2]}; }
 float4 Rgba(const float* v) { return {v[0], v[1], v[2], v[3]}; }
 
+// a world frame's noise seeds (c112), which the game draws at random each
+// frame: four numbers in 0..1 from its frame number, so the grain moves as
+// the game's does and both backends draw the same
+float4 FrameSeeds(uint64_t frame) {
+    uint64_t h = frame * 0x9E3779B97F4A7C15ull + 0x632BE59BD9B4E019ull;
+    float out[4];
+    for (float& v : out) {
+        h ^= h >> 31;
+        h *= 0xBF58476D1CE4E5B9ull;
+        h ^= h >> 29;
+        v = float(h >> 40) / float(1u << 24);
+    }
+    return {out[0], out[1], out[2], out[3]};
+}
+
 }  // namespace
 
 void BloomTaps(bool vertical, uint32_t size, float4 taps[15]) {
@@ -172,7 +189,7 @@ void DofTaps(bool vertical, float width_scale, float4 taps[8]) {
         taps[i] = {disc[i][0] * sx * 5.0f, disc[i][1] * sy * 5.0f, 0.125f, 0};
 }
 
-bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan) {
+bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noise) {
     plan = PostPlan{};
     const PostParams& p = frame.post;
     const PostConsts& c = frame.post_consts;
@@ -240,7 +257,19 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan) {
             }
         }
     }
-    if (only) flags &= only;
+    // The noise reads the map the capture kept (none: no grain), by the
+    // composite's seeds and scales, or on a world frame by the proc's
+    const Texture* noise_map = frame.noise_map.get();
+    const bool noise_kept = noise && noise_map && noise_map->width && noise_map->height &&
+                            noise_map->rgba.size() == size_t(noise_map->width) * noise_map->height;
+    if (noise_kept) {
+        if (consts ? c.flags[kPostFlagNoise] != 0 : NoiseEnabled(p)) flags |= kPostNoise;
+        if (consts ? c.flags[kPostFlagNoiseMidtone] != 0 : p.noise_midtone != 0)
+            flags |= kPostNoiseMidtone;
+    }
+    if (consts ? c.flags[kPostFlagBlendPrevious] != 0 : BlendPrevious(p)) flags |= kPostTrails;
+    if (only) flags &= only | ((only & kPostNoise) ? kPostNoiseMidtone : 0u);
+    if (!(flags & kPostNoise)) flags &= ~kPostNoiseMidtone;
     if (!flags) return false;
 
     PostPass& pass = plan.composite;
@@ -265,6 +294,36 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan) {
         plan.spot_density = spot_density;
     }
     if (flags & kPostSoft) plan.soft = soft;
+    if (flags & kPostNoise) {
+        float c113[4];
+        if (consts) {
+            pass.noise_seeds = Rgba(c.c112);
+            std::copy(std::begin(c.c113), std::end(c.c113), c113);
+        } else {
+            pass.noise_seeds = p.noise_stationary ? float4{p.noise_seeds[0], p.noise_seeds[1],
+                                                           p.noise_seeds[0], p.noise_seeds[1]}
+                                                  : FrameSeeds(frame.game_frame);
+            NoiseConstant(p, c113);
+        }
+        pass.noise = Rgba(c113);
+        uint32_t s[4];
+        PackSampler(frame.noise_sampler, 1 + uint32_t(noise_map->mips.size()), s);
+        pass.noise_sampler = {s[0], s[1], s[2], s[3]};
+        pass.noise_tex = {noise_map->width, noise_map->height, 0, 0};
+        plan.noise = noise_map;
+    }
+    if (flags & kPostTrails) {
+        if (consts) {
+            pass.trails = Rgba(c.c125);
+        } else {
+            // UpdateBlendPrevious's, with a post frame's time at the rate
+            // even/odd rendering runs post-processing at (every frame
+            // without it)
+            const float dt = 1.0f / (p.emulate_fps > 0 ? p.emulate_fps : 60.0f);
+            pass.trails = {p.trail_threshold, dt / p.trail_duration, 1.0f / 3.0f, 0};
+        }
+    }
+    plan.trails_update = consts;
 
     DofTaps(false, p.blur_width_scale, plan.dof_taps[0]);
     DofTaps(true, p.blur_width_scale, plan.dof_taps[1]);
@@ -281,9 +340,15 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan) {
 void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
              const std::vector<float>& depth, uint32_t width, uint32_t height,
              const PostImage& volume, const PostImage& density, const PostImage& soft,
-             std::vector<uint32_t>& out, std::vector<uint32_t>* bloom0) {
+             std::vector<uint32_t>& out, std::vector<uint32_t>* bloom0,
+             PostHistory* history, uint64_t game_frame) {
     const PostPass& pass = plan.composite;
-    const uint32_t flags = pass.flags.x;
+    // the trails read the previous post frame, where there's one of this
+    // size from an earlier frame
+    const bool have_prev = history && history->w == width && history->h == height &&
+                           history->game_frame && history->game_frame < game_frame &&
+                           history->rgba.size() == size_t(width) * height;
+    const uint32_t flags = have_prev ? pass.flags.x : pass.flags.x & ~kPostTrails;
     Level src;
     src.Resize(width, height);
     for (size_t i = 0; i < src.px.size(); i++) src.px[i] = Unpack(scene[i]);
@@ -340,8 +405,41 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
     }
     if (flags & kPostSoft) load(soft, soft_level);
 
+    // the noise map, read by its sampler at each tap (sample_model.h); the
+    // composite's target size gives the taps' derivatives
+    PostPass composite = pass;
+    composite.flags.x = flags;
+    composite.target = {float(width), float(height), 1.0f / float(width), 1.0f / float(height)};
+    TexLevels noise_levels;
+    if ((flags & kPostNoise) && plan.noise) {
+        noise_levels.w = plan.noise->width;
+        noise_levels.h = plan.noise->height;
+        noise_levels.px = plan.noise->rgba.data();
+        noise_levels.mips = &plan.noise->mips;
+    }
+    const uint32_t noise_sampler[4] = {pass.noise_sampler.x, pass.noise_sampler.y,
+                                       pass.noise_sampler.z, pass.noise_sampler.w};
+    auto noise_tap = [&](float2 uv, int tap) {
+        const float2 at = NoiseUv(composite, uv, tap);
+        const float2 dx = NoiseDx(composite, tap), dy = NoiseDy(composite, tap);
+        const float a[2] = {at.x, at.y}, ddx[2] = {dx.x, dx.y}, ddy[2] = {dy.x, dy.y};
+        float t[4];
+        SampleTextureCpu(noise_levels, noise_sampler, a, ddx, ddy, t);
+        return float3{t[0], t[1], t[2]};
+    };
+
     out.resize(size_t(width) * height);
     const float4 none{0, 0, 0, 0};
+    // a post frame's composite, which the next frame's trails read (once a
+    // frame: drawn again, it's kept as it was)
+    const bool keep = history && plan.trails_update && game_frame &&
+                      !(history->game_frame == game_frame && history->w == width &&
+                        history->h == height);
+    std::vector<uint32_t> kept(keep ? out.size() : 0);
+    auto pack = [](float4 c) {
+        return uint32_t(c.x * 255.0f + 0.5f) | uint32_t(c.y * 255.0f + 0.5f) << 8 |
+               uint32_t(c.z * 255.0f + 0.5f) << 16 | uint32_t(c.w * 255.0f + 0.5f) << 24;
+    };
     for (uint32_t y = 0; y < height; y++) {
         for (uint32_t x = 0; x < width; x++) {
             const size_t i = size_t(y) * width + x;
@@ -367,11 +465,30 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
                 const float4 s = Sample(soft_level, uv);
                 particles = {s.x, s.y, s.z};
             }
-            const float3 rgb = Composite(pass, src.px[i], d, GameDepth(pass, depth[i]), l[0], l[1],
-                                         l[2], vol, dens, particles);
-            out[i] = uint32_t(rgb.x * 255.0f + 0.5f) | uint32_t(rgb.y * 255.0f + 0.5f) << 8 |
-                     uint32_t(rgb.z * 255.0f + 0.5f) << 16 | 0xff000000u;
+            float3 n0{0, 0, 0}, n1{0, 0, 0};
+            if (noise_levels.px) {
+                n0 = noise_tap(uv, 0);
+                n1 = noise_tap(uv, 1);
+            }
+            const float game_depth = GameDepth(pass, depth[i]);
+            const float3 color = CompositeColor(composite, src.px[i], d, game_depth, l[0], l[1],
+                                                l[2], vol, dens, particles, n0, n1);
+            float4 c;
+            if (flags & kPostTrails) {
+                c = Trails(composite, color, Unpack(history->rgba[i]));
+            } else {
+                const float3 rgb = saturate(color);
+                c = {rgb.x, rgb.y, rgb.z, CompositeAlpha(composite, src.px[i], d, game_depth)};
+            }
+            if (keep) kept[i] = pack(c);
+            out[i] = pack(float4{c.x, c.y, c.z, 1.0f});
         }
+    }
+    if (keep) {
+        history->rgba = std::move(kept);
+        history->w = width;
+        history->h = height;
+        history->game_frame = game_frame;
     }
 }
 
@@ -381,12 +498,33 @@ float DofAmountCpu(const float c24[4], float depth) { return DofAmount(Rgba(c24)
 
 void CompositeCpu(const PostPass& pass, const float scene[4], const float dof[4], float depth,
                   const float l0[3], const float l1[3], const float l2[3], const float volume[3],
-                  float density, const float soft[3], float out[3]) {
+                  float density, const float soft[3], const float noise0[3],
+                  const float noise1[3], float out[3]) {
     const float3 r = Composite(pass, Rgba(scene), Rgba(dof), depth, Rgb(l0), Rgb(l1), Rgb(l2),
-                               Rgb(volume), density, Rgb(soft));
+                               Rgb(volume), density, Rgb(soft), Rgb(noise0), Rgb(noise1));
     out[0] = r.x;
     out[1] = r.y;
     out[2] = r.z;
+}
+
+void TrailsCpu(const PostPass& pass, const float rgb[3], const float prev[4], float out[4]) {
+    const float4 c = Trails(pass, Rgb(rgb), Rgba(prev));
+    out[0] = c.x;
+    out[1] = c.y;
+    out[2] = c.z;
+    out[3] = c.w;
+}
+
+void NoiseTapCpu(const PostPass& pass, const float uv[2], int tap, float at[2], float dx[2],
+                 float dy[2]) {
+    const float2 a = NoiseUv(pass, float2{uv[0], uv[1]}, tap);
+    const float2 x = NoiseDx(pass, tap), y = NoiseDy(pass, tap);
+    at[0] = a.x;
+    at[1] = a.y;
+    dx[0] = x.x;
+    dx[1] = x.y;
+    dy[0] = y.x;
+    dy[1] = y.y;
 }
 
 }  // namespace band3::render::post

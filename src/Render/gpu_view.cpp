@@ -314,11 +314,15 @@ struct GpuRenderer::Impl {
     SDL_GPUShader* blur_shader = nullptr;
     SDL_GPUShader* glare_shader = nullptr;
     SDL_GPUShader* composite_shader = nullptr;
+    // the live view's composite, which also keeps the post buffer the
+    // trails read (PSCompositeHistory: two targets)
+    SDL_GPUShader* composite_history_shader = nullptr;
     SDL_GPUGraphicsPipeline* resolve_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* downsample_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* blur_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* glare_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* composite_pipeline = nullptr;
+    SDL_GPUGraphicsPipeline* composite_history_pipeline = nullptr;
     // gamma.hlsl's: the display gamma ramp over the finished picture
     SDL_GPUShader* gamma_shader = nullptr;
     SDL_GPUGraphicsPipeline* gamma_pipeline = nullptr;
@@ -369,6 +373,19 @@ struct GpuRenderer::Impl {
         uint32_t w = 0, h = 0;
     };
     Scratch spot_scratch, light_scratch, soft_scratch;
+    // The post buffer the trails read (RasterOptions::trails, the live
+    // view's): the last post frame's composite, its colour and alpha, at the
+    // picture's size, in tex[cur] (-1 none yet), from game frame game_frame;
+    // the composite of a post frame writes the other and makes it cur.
+    // Apart from the frame's targets, so a capture drawn at another size in
+    // between leaves it be.
+    struct History {
+        SDL_GPUTexture* tex[2] = {};
+        uint32_t w = 0, h = 0;
+        int cur = -1;
+        uint64_t game_frame = 0;
+    };
+    History history;
 
     // The presenter's outputs (RenderFrameToOutput), each at the size it was
     // last drawn at: apart from the frame's targets, so a frame drawn at
@@ -532,7 +549,10 @@ struct GpuRenderer::Impl {
                         PixelKind::kShadowDepth);
     }
     // a full-screen pass's pipeline: post.hlsl's triangle and `pixel`, into RGBA8
-    SDL_GPUGraphicsPipeline* MakeFullscreenPipeline(SDL_GPUShader* pixel, const char* name);
+    SDL_GPUGraphicsPipeline* MakeFullscreenPipeline(SDL_GPUShader* pixel, const char* name,
+                                                    uint32_t targets = 1);
+    bool EnsureHistory(uint32_t w, uint32_t h);
+    void ReleaseHistory();
     void ReleaseTargets();
     // makes every pipeline a frame can ask for and the upload buffer's usual
     // size, so no frame stalls making them
@@ -635,17 +655,18 @@ SDL_GPUShader* GpuRenderer::Impl::MakeShader(SDL_GPUShaderFormat format,
 }
 
 SDL_GPUGraphicsPipeline* GpuRenderer::Impl::MakeFullscreenPipeline(SDL_GPUShader* pixel,
-                                                                    const char* name) {
-    SDL_GPUColorTargetDescription target{};
-    target.format = kColorFormat;
+                                                                    const char* name,
+                                                                    uint32_t targets) {
+    SDL_GPUColorTargetDescription target[2]{};
+    target[0].format = target[1].format = kColorFormat;
     SDL_GPUGraphicsPipelineCreateInfo pi{};
     pi.vertex_shader = fullscreen_shader;
     pi.fragment_shader = pixel;
     pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
     pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
     pi.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
-    pi.target_info.color_target_descriptions = &target;
-    pi.target_info.num_color_targets = 1;
+    pi.target_info.color_target_descriptions = target;
+    pi.target_info.num_color_targets = targets;
     SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(device, &pi);
     if (!p) REXLOG_WARN("native view gpu: no {} pipeline ({})", name, SDL_GetError());
     return p;
@@ -712,22 +733,28 @@ bool GpuRenderer::Impl::Create() {
                               "PSGlare", 1, 0, 1);
     composite_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kCompositePixelDxbc,
                                   sizeof(kCompositePixelDxbc), kCompositePixelSpirv,
-                                  sizeof(kCompositePixelSpirv), "PSComposite", 9, 0, 1);
+                                  sizeof(kCompositePixelSpirv), "PSComposite", 10, 0, 1);
+    composite_history_shader = MakeShader(
+        format, SDL_GPU_SHADERSTAGE_FRAGMENT, kCompositeHistoryPixelDxbc,
+        sizeof(kCompositeHistoryPixelDxbc), kCompositeHistoryPixelSpirv,
+        sizeof(kCompositeHistoryPixelSpirv), "PSCompositeHistory", 11, 0, 1);
     gamma_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kGammaPixelDxbc,
                               sizeof(kGammaPixelDxbc), kGammaPixelSpirv, sizeof(kGammaPixelSpirv),
                               "PSGamma", 1, 0, 1);
     if (!vertex_shader || !pixel_shader || !spot_shader || !soft_shader || !shadow_shader ||
         !fullscreen_shader || !resolve_shader || !downsample_shader || !blur_shader ||
-        !glare_shader || !composite_shader || !gamma_shader)
+        !glare_shader || !composite_shader || !composite_history_shader || !gamma_shader)
         return false;
     resolve_pipeline = MakeFullscreenPipeline(resolve_shader, "resolve");
     downsample_pipeline = MakeFullscreenPipeline(downsample_shader, "downsample");
     blur_pipeline = MakeFullscreenPipeline(blur_shader, "blur");
     glare_pipeline = MakeFullscreenPipeline(glare_shader, "glare");
     composite_pipeline = MakeFullscreenPipeline(composite_shader, "composite");
+    composite_history_pipeline =
+        MakeFullscreenPipeline(composite_history_shader, "composite with history", 2);
     gamma_pipeline = MakeFullscreenPipeline(gamma_shader, "gamma");
     if (!resolve_pipeline || !downsample_pipeline || !blur_pipeline || !glare_pipeline ||
-        !composite_pipeline || !gamma_pipeline)
+        !composite_pipeline || !composite_history_pipeline || !gamma_pipeline)
         return false;
     // the scene's depth, read after the world's draws: D32 the resolve samples
     // where the device can (Direct3D 12 and Vulkan both should)
@@ -835,13 +862,14 @@ void GpuRenderer::Impl::Release(bool stop_video) {
             if (a.texture) SDL_ReleaseGPUTexture(device, a.texture);
         for (auto& [k, rt] : rts) ReleaseRt(rt);
         for (auto& [k, p] : pipelines) SDL_ReleaseGPUGraphicsPipeline(device, p);
-        for (SDL_GPUGraphicsPipeline* p : {resolve_pipeline, downsample_pipeline, blur_pipeline,
-                                           glare_pipeline, composite_pipeline, gamma_pipeline})
+        for (SDL_GPUGraphicsPipeline* p :
+             {resolve_pipeline, downsample_pipeline, blur_pipeline, glare_pipeline,
+              composite_pipeline, composite_history_pipeline, gamma_pipeline})
             if (p) SDL_ReleaseGPUGraphicsPipeline(device, p);
         for (SDL_GPUShader* sh : {vertex_shader, pixel_shader, spot_shader, soft_shader,
                                   shadow_shader, fullscreen_shader, resolve_shader,
                                   downsample_shader, blur_shader, glare_shader, composite_shader,
-                                  gamma_shader})
+                                  composite_history_shader, gamma_shader})
             if (sh) SDL_ReleaseGPUShader(device, sh);
         if (sampler) SDL_ReleaseGPUSampler(device, sampler);
         if (linear_sampler) SDL_ReleaseGPUSampler(device, linear_sampler);
@@ -850,6 +878,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
         if (no_depth) SDL_ReleaseGPUTexture(device, no_depth);
         if (no_bones) SDL_ReleaseGPUBuffer(device, no_bones);
         ReleaseTargets();
+        ReleaseHistory();
         ReleaseOutputs();
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
         SDL_DestroyGPUDevice(device);
@@ -867,12 +896,14 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     shadow_maps = false;
     resolve_shader = nullptr;
     downsample_shader = blur_shader = glare_shader = composite_shader = gamma_shader = nullptr;
+    composite_history_shader = nullptr;
     resolve_pipeline = downsample_pipeline = blur_pipeline = glare_pipeline = nullptr;
-    composite_pipeline = nullptr;
+    composite_pipeline = composite_history_pipeline = nullptr;
     gamma_pipeline = nullptr;
     sampler = linear_sampler = nullptr;
     white = black = no_depth = nullptr;
     ReleaseTargets();  // released above: forgets them
+    ReleaseHistory();
     ReleaseOutputs();
     depth_sampled = false;
     no_bones = nullptr;
@@ -1280,6 +1311,34 @@ void GpuRenderer::Impl::ReleaseTargets() {
     for (int k = 0; k < 3; k++) post_bloom[k] = post_tmp[k] = nullptr;
     readback = nullptr;
     width = height = 0;
+}
+
+void GpuRenderer::Impl::ReleaseHistory() {
+    if (device)
+        for (SDL_GPUTexture* t : history.tex)
+            if (t) SDL_ReleaseGPUTexture(device, t);
+    history = History{};
+}
+
+bool GpuRenderer::Impl::EnsureHistory(uint32_t w, uint32_t h) {
+    if (history.tex[0] && history.tex[1] && history.w == w && history.h == h) return true;
+    ReleaseHistory();
+    SDL_GPUTextureCreateInfo ti{};
+    ti.type = SDL_GPU_TEXTURETYPE_2D;
+    ti.width = w;
+    ti.height = h;
+    ti.layer_count_or_depth = 1;
+    ti.num_levels = 1;
+    ti.format = kColorFormat;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    for (SDL_GPUTexture*& t : history.tex) t = SDL_CreateGPUTexture(device, &ti);
+    if (!history.tex[0] || !history.tex[1]) {
+        ReleaseHistory();
+        return false;
+    }
+    history.w = w;
+    history.h = h;
+    return true;
 }
 
 bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
@@ -1779,6 +1838,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             target->version = run.pass->version;
         }
     }
+    // the composite's noise map, a texture like a draw's
+    if (o.post && o.view == RasterView::kFinal && frame.noise_map) UseTexture(frame.noise_map);
     if (!PlaceInArena()) return false;
 
     // the upload: the pool's vertices and indices, the arena's new meshes that
@@ -2007,18 +2068,23 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     };
 
     // one of post.hlsl's full-screen passes: `pipeline` into all of `target`
-    // (w x h), reading `sources` at t0, t1... with `params`
+    // (w x h), and of `second` (as big) if given, reading `sources` at t0,
+    // t1... with `params`
     auto fullscreen = [&](SDL_GPUTexture* target, uint32_t w, uint32_t h,
                           SDL_GPUGraphicsPipeline* pipeline,
-                          std::initializer_list<SDL_GPUTexture*> sources, post::PostPass& params) {
+                          std::initializer_list<SDL_GPUTexture*> sources, post::PostPass& params,
+                          SDL_GPUTexture* second = nullptr) {
         params.target = {float(w), float(h), 1.0f / float(w), 1.0f / float(h)};
-        SDL_GPUColorTargetInfo ct{};
-        ct.texture = target;
-        ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
-        ct.store_op = SDL_GPU_STOREOP_STORE;
-        SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
+        SDL_GPUColorTargetInfo ct[2]{};
+        ct[0].texture = target;
+        ct[1].texture = second;
+        for (SDL_GPUColorTargetInfo& c : ct) {
+            c.load_op = SDL_GPU_LOADOP_DONT_CARE;
+            c.store_op = SDL_GPU_STOREOP_STORE;
+        }
+        SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, ct, second ? 2 : 1, nullptr);
         SDL_BindGPUGraphicsPipeline(rp, pipeline);
-        SDL_GPUTextureSamplerBinding tb[9];
+        SDL_GPUTextureSamplerBinding tb[11];
         uint32_t n = 0;
         for (SDL_GPUTexture* t : sources) tb[n++] = {t, linear_sampler};
         SDL_BindGPUFragmentSamplers(rp, 0, tb, n);
@@ -2032,8 +2098,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // CPU, into the RGBA8 levels: the DOF's, then bloom's, then the composite
     // into the picture
     post::PostPlan post_plan;
-    bool post_on =
-        o.post && o.view == RasterView::kFinal && post::PlanPost(frame, o.post_only, post_plan);
+    bool post_on = o.post && o.view == RasterView::kFinal &&
+                   post::PlanPost(frame, o.post_only, post_plan, o.grain);
     // depth of field blurs by the depth, which reads as 0 (all blurred)
     // without a sampled one: left out then (Create warns of it, once)
     if (post_on && !depth_sampled) {
@@ -2093,13 +2159,52 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             return tex_obj && f != rts.end() && f->second.drawn_in == serial ? f->second.color
                                                                             : black;
         };
+        // the noise map's layer, its sampler packed for the levels it has
+        // there; none (no layer for it) leaves the noise out
+        SDL_GPUTexture* noise = black;
+        if (flags & post::kPostNoise) {
+            const Tex* tx = TextureFor(post_plan.noise);
+            if (tx) {
+                noise = tx->array->texture;
+                p.noise_tex.z = tx->layer;
+                uint32_t packed[4];
+                PackSampler(frame.noise_sampler, tx->levels, packed);
+                p.noise_sampler = {packed[0], packed[1], packed[2], packed[3]};
+            } else {
+                p.flags.x &= ~(post::kPostNoise | post::kPostNoiseMidtone);
+            }
+        }
         // the levels an effect that's off didn't draw are bound all the same,
         // and not read
         p.mode = {0, 0, 0, 0};
+        // The live view's composite keeps the post buffer the trails read:
+        // a post frame's goes into the history's other texture, which is
+        // then the current one (once a game frame); a world frame's (no
+        // constants) only reads it. The trails need a post frame from
+        // before this one.
+        if (o.trails && EnsureHistory(width, height)) {
+            const bool have_prev = history.cur >= 0 && history.game_frame &&
+                                   history.game_frame < frame.game_frame;
+            if (!have_prev) p.flags.x &= ~post::kPostTrails;
+            const int next = history.cur == 0 ? 1 : 0;
+            SDL_GPUTexture* prev = history.tex[1 - next];
+            fullscreen(color, width, height, composite_history_pipeline,
+                       {scene, scene_depth, post_dof, bloom0, post_bloom[1], post_bloom[2],
+                        drawn_now(post_plan.spot_volume), drawn_now(post_plan.spot_density),
+                        drawn_now(post_plan.soft), noise, prev},
+                       p, history.tex[next]);
+            if (post_plan.trails_update && frame.game_frame &&
+                frame.game_frame != history.game_frame) {
+                history.cur = next;
+                history.game_frame = frame.game_frame;
+            }
+            return;
+        }
+        p.flags.x &= ~post::kPostTrails;
         fullscreen(color, width, height, composite_pipeline,
                    {scene, scene_depth, post_dof, bloom0, post_bloom[1], post_bloom[2],
                     drawn_now(post_plan.spot_volume), drawn_now(post_plan.spot_density),
-                    drawn_now(post_plan.soft)},
+                    drawn_now(post_plan.soft), noise},
                    p);
     };
 

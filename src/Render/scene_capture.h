@@ -525,6 +525,14 @@ struct FrameCapture {
     // has its post frame's, which post-processes the world it shows
     PostParams post;
     PostConsts post_consts;
+    // The noise map the composite's film grain reads (PostParams::noise_map's
+    // pixels and mips) and the sampler it reads it with: on a post frame
+    // sampler 13's, PostConsts::noise_fetch, as NgPostProc::CheckNoise bound
+    // it; on a world frame (even/odd rendering) the last post frame's, for
+    // the grain the next frame gives its world. Null where the noise is off,
+    // the format isn't decoded, and in captures from before.
+    std::shared_ptr<const Texture> noise_map;
+    TexSampler noise_sampler;
     // With even/odd rendering a frame that draws no world (proc_cmds 2)
     // presents the last one that did, so its capture has that frame's world
     // in front of its own draws from post_boundary on (frame_compose.h):

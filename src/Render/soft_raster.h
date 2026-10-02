@@ -49,6 +49,10 @@
 
 namespace band3::render {
 
+namespace post {
+struct PostHistory;
+}
+
 // What a renderer hands back: the picture, or, to check the scene target, its
 // alpha or its depth as grey (DepthViewGrey) where the world's draws left them
 // at post_boundary, without the overlay
@@ -103,6 +107,17 @@ struct RasterOptions {
     bool post = true;
     // with post, only these of its effects (post_model.h's kPost bits), 0 all
     uint32_t post_only = 0;
+    // with post, the film grain (the composite's noise) where the frame has
+    // it and the capture kept its map; off, left out
+    bool grain = true;
+    // with post, the trails (blend previous), which read the previous post
+    // frame: the live view's, which draws frame after frame and keeps each
+    // post frame's composite (the GPU in GpuRenderer, the CPU in
+    // post_history, which its owner keeps between frames). Off (captures,
+    // replay: one frame, none before it) they're left out, which is the
+    // game's picture wherever no trail has started (post_model.h's PlanPost).
+    bool trails = false;
+    post::PostHistory* post_history = nullptr;
     // with post, if given: bloom's level 0 as the composite read it
     // (post_model.h's RunPost), to check it against the game's
     std::vector<uint32_t>* post_bloom0 = nullptr;

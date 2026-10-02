@@ -4,6 +4,7 @@
 #include "src/Render/frame_compose.h"
 #include "src/Render/gpu_view.h"
 #include "src/Render/png_writer.h"
+#include "src/Render/post_model.h"
 #include "src/Render/present_model.h"
 #include "src/settings.h"
 
@@ -287,6 +288,10 @@ class Renderer {
                 }
                 o.normal_maps = REXCVAR_GET(native_view_normal_maps);
                 o.filtering = REXCVAR_GET(native_view_texture_filtering);
+                // drawn frame after frame, so the trails have the post frame
+                // before (the CPU's kept here, the GPU's in GpuRenderer)
+                o.trails = true;
+                o.post_history = &post_history_;
                 gpu = gpu_;
                 dump = dump_path_;
                 zero_copy = present_ && present_zero_copy_ && gpu && dump.empty();
@@ -414,6 +419,8 @@ class Renderer {
 
     std::mutex mutex_;
     std::thread thread_;
+    // the CPU's post buffer for the trails, the worker's alone
+    post::PostHistory post_history_;
     int users_ = 0;
     bool stop_ = false;
     RasterOptions options_;

@@ -48,9 +48,12 @@
 //   CAMS  the back buffer's cameras (FrameCapture::cameras), as CameraView's
 //         size and each one's bytes: the struct only grows at the end (a
 //         file without it: none, and the renderers clear depth per camera)
+//   NOIS  the composite's noise map (FrameCapture::noise_map), as its index
+//         in TEXS (-1 none), and its sampler as TexSampler's size and bytes
+//         (a file without it: none, and no grain)
 // A section newer than this reader skips if it's SHAD, PASS, FRAM, POST,
-// GAMA, MIPS, SMPL or CAMS (the file loads without it) and fails the load if
-// it's GEOM, TEXS or DRAW.
+// GAMA, MIPS, SMPL, CAMS or NOIS (the file loads without it) and fails the
+// load if it's GEOM, TEXS or DRAW.
 //
 // Versions 1 and 2 still load: 1 is frame, geometry, textures and draws; 2
 // adds the draws' ShadeStates, kept as their ShadeInputs were in memory (so
@@ -63,13 +66,17 @@ namespace {
 constexpr char kMagic[8] = {'B', '3', 'C', 'A', 'P', '0', '0', '3'};
 constexpr char kMagicV2[8] = {'B', '3', 'C', 'A', 'P', '0', '0', '2'};
 constexpr char kMagicV1[8] = {'B', '3', 'C', 'A', 'P', '0', '0', '1'};
-constexpr uint32_t kMaxSavedTexture = 512;
-// a ShadeState's maps are kept smaller: at 512 they made a song's captures
-// half again as big
-constexpr uint32_t kMaxSavedMap = 256;
+// Textures and a ShadeState's maps are kept at up to 2048 a side, which is
+// every one RB3 loads at its full size, so the CPU's drawing of a capture
+// samples what the GPU's drew in the game (at 512, and 256 for the maps,
+// the CPU's was a step blurrier than the capture's .gpu.png: gpu-cpu over
+// 0.5 on the menus). It makes the captures several times bigger.
+constexpr uint32_t kMaxSavedTexture = 2048;
+constexpr uint32_t kMaxSavedMap = 2048;
 // a movie's planes (IsMovie) are kept whole: at 512 the intro's 1280x720 Y
 // plane was kept at 320x180, and the movie offline as blurred as that. They
-// add about 5.5 MB to a capture with a 1280x720 movie in it.
+// add about 5.5 MB to a capture with a 1280x720 movie in it. The noise map
+// too, whose grain is a texel or so a pixel.
 constexpr uint32_t kWhole = ~0u;
 
 constexpr uint32_t FourCC(const char (&s)[5]) {
@@ -87,6 +94,7 @@ constexpr uint32_t kSecGamma = FourCC("GAMA");
 constexpr uint32_t kSecMips = FourCC("MIPS");
 constexpr uint32_t kSecSamplers = FourCC("SMPL");
 constexpr uint32_t kSecCameras = FourCC("CAMS");
+constexpr uint32_t kSecNoise = FourCC("NOIS");
 // the versions this build writes and reads
 constexpr uint32_t kFrameVersion = 1;
 constexpr uint32_t kGeometryVersion = 2;
@@ -99,6 +107,7 @@ constexpr uint32_t kGammaVersion = 1;
 constexpr uint32_t kMipsVersion = 1;
 constexpr uint32_t kSamplersVersion = 1;
 constexpr uint32_t kCamerasVersion = 1;
+constexpr uint32_t kNoiseVersion = 1;
 
 // TEXS: where a texture's pixels are
 constexpr int32_t kOwnPixels = -1;  // they follow
@@ -434,6 +443,7 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     }
     for (const ShadeState& s : fc.shades)
         for (const auto& m : s.maps) add_tex(m.get(), kMaxSavedMap);
+    add_tex(fc.noise_map.get(), kWhole);
 
     Writer w;
     w.Raw(kMagic, sizeof(kMagic));
@@ -586,6 +596,12 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     for (const CameraView& c : fc.cameras) w.Put(c);
     w.End(sec);
 
+    sec = w.Begin(kSecNoise, kNoiseVersion);
+    w.Put<int32_t>(fc.noise_map ? int32_t(texs[fc.noise_map.get()]) : -1);
+    w.Put<uint32_t>(uint32_t(sizeof(TexSampler)));
+    w.Put(fc.noise_sampler);
+    w.End(sec);
+
     const std::string tmp = path + ".tmp";
     FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) return false;
@@ -620,6 +636,8 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
     // the shades once both are read
     std::vector<uint32_t> pixel_owner;
     std::vector<TexSampler> samplers;
+    // NOIS's texture, set once MIPS has given the textures their mips
+    int32_t noise_tex = -1;
     bool have_geoms = false, have_texs = false, have_draws = false, shades_skipped = false;
     while (r.ok && r.pos < data.size()) {
         r.end = data.size();
@@ -641,6 +659,7 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                                : id == kSecMips     ? kMipsVersion
                                : id == kSecSamplers ? kSamplersVersion
                                : id == kSecCameras  ? kCamerasVersion
+                               : id == kSecNoise    ? kNoiseVersion
                                                     : 0;
         if (version > known || version == 0) {
             if (core) return nullptr;
@@ -846,6 +865,11 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                 r.Raw(bytes.data(), each);
                 std::memcpy(&c, bytes.data(), std::min<size_t>(each, sizeof(CameraView)));
             }
+        } else if (id == kSecNoise) {
+            if (!have_texs) return nullptr;
+            noise_tex = r.Get<int32_t>();
+            if (noise_tex >= int32_t(texs.size())) return nullptr;
+            GetGrown(r, fc->noise_sampler);
         } else if (id == kSecSamplers) {
             const uint32_t each = r.Get<uint32_t>();
             const uint32_t maps = r.Get<uint32_t>();
@@ -869,6 +893,7 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                 s.samplers[m] = samplers[i * (kNumShadeMaps + 1) + 1 + m];
         }
     }
+    if (noise_tex >= 0) fc->noise_map = texs[noise_tex];
     // draws that point past the shades: none if a newer build's shades were
     // skipped, else a broken file
     for (DrawItem& d : fc->draws) {

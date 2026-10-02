@@ -132,7 +132,7 @@ TEST_CASE("a capture keeps its shades and their maps") {
     CHECK(back->shades[1].shader_type == 14);
 }
 
-TEST_CASE("a capture keeps maps smaller, and pixels it has already once") {
+TEST_CASE("a capture keeps textures and maps up to 2048 a side, and pixels it has already once") {
     FrameCapture fc;
     auto geom = MakeTriangle();
     auto diffuse = MakeTexture(512, 2, 6, 1);
@@ -140,7 +140,8 @@ TEST_CASE("a capture keeps maps smaller, and pixels it has already once") {
     std::memset(static_cast<ShadeInputs*>(&s), 0, sizeof(ShadeInputs));
     // the colour texture again, as another object
     s.maps[kMapSpecular] = MakeTexture(512, 2, 6, 1);
-    s.maps[kMapNormal] = MakeTexture(512, 2, 49, 9);
+    s.maps[kMapNormal] = MakeTexture(4096, 2, 49, 9);
+    s.maps[kMapGlow] = MakeTexture(2048, 4, 2, 3);
     fc.shades = {s};
     fc.draws.push_back(MakeDraw(geom, 0));
     fc.draws.back().tex = diffuse;
@@ -156,8 +157,11 @@ TEST_CASE("a capture keeps maps smaller, and pixels it has already once") {
     CHECK(back->draws[0].tex->width == 512);
     CHECK(b.maps[kMapSpecular] == back->draws[0].tex);
     REQUIRE(b.maps[kMapNormal]);
-    CHECK(b.maps[kMapNormal]->width == 256);
+    CHECK(b.maps[kMapNormal]->width == 2048);
     CHECK(b.maps[kMapNormal]->height == 1);
+    REQUIRE(b.maps[kMapGlow]);
+    CHECK(b.maps[kMapGlow]->width == 2048);
+    CHECK(b.maps[kMapGlow]->rgba == s.maps[kMapGlow]->rgba);
 }
 
 TEST_CASE("a capture keeps a movie's planes whole, other textures smaller") {
@@ -175,7 +179,7 @@ TEST_CASE("a capture keeps a movie's planes whole, other textures smaller") {
     fc.draws.back().rect_shader = kMovieShader;
     fc.draws.back().tex = MakeTexture(1280, 720, 2, 5);
     fc.draws.push_back(MakeDraw(geom, -1));
-    fc.draws.back().tex = MakeTexture(1280, 720, 2, 6);
+    fc.draws.back().tex = MakeTexture(4096, 8, 2, 6);
 
     const std::string path = TempPath("band3_capture_file_movie_test.cap");
     REQUIRE(SaveCapture(path, fc));
@@ -194,7 +198,8 @@ TEST_CASE("a capture keeps a movie's planes whole, other textures smaller") {
         CHECK(back->shades[0].maps[m]->height == 360);
     }
     REQUIRE(back->draws[1].tex);
-    CHECK(back->draws[1].tex->width == 320);
+    CHECK(back->draws[1].tex->width == 2048);
+    CHECK(back->draws[1].tex->height == 4);
 }
 
 TEST_CASE("a capture from before shades still loads") {
@@ -927,10 +932,10 @@ TEST_CASE("a capture keeps its display gamma ramp, and one from before has none"
 TEST_CASE("a capture keeps its textures' mips and its shades' samplers") {
     FrameCapture fc;
     auto geom = MakeTriangle();
-    // 1024x4 with its chain: kept at 512, from its first mip, with the rest
-    auto diffuse = MakeTexture(1024, 4, 6, 1);
-    for (uint32_t l = 1; l <= 10; l++) {
-        const uint32_t w = std::max(1024u >> l, 1u), h = std::max(4u >> l, 1u);
+    // 4096x4 with its chain: kept at 2048, from its first mip, with the rest
+    auto diffuse = MakeTexture(4096, 4, 6, 1);
+    for (uint32_t l = 1; l <= 12; l++) {
+        const uint32_t w = std::max(4096u >> l, 1u), h = std::max(4u >> l, 1u);
         diffuse->mips.emplace_back(size_t(w) * h, 0x1000u * l);
     }
     ShadeState s;
@@ -955,12 +960,12 @@ TEST_CASE("a capture keeps its textures' mips and its shades' samplers") {
     auto back = LoadCapture(path);
     REQUIRE(back);
     const Texture& t = *back->draws[0].tex;
-    CHECK(t.width == 512);
+    CHECK(t.width == 2048);
     CHECK(t.height == 2);
     CHECK(t.rgba == diffuse->mips[0]);
-    REQUIRE(t.mips.size() == 9);
+    REQUIRE(t.mips.size() == 11);
     CHECK(t.mips[0] == diffuse->mips[1]);
-    CHECK(t.mips[8] == diffuse->mips[9]);
+    CHECK(t.mips[10] == diffuse->mips[11]);
     // the map with the same pixels and mips is kept once with them
     REQUIRE(back->shades.size() == 1);
     const ShadeState& b = back->shades[0];
@@ -987,7 +992,7 @@ TEST_CASE("a capture keeps its textures' mips and its shades' samplers") {
     std::remove(path.c_str());
     REQUIRE(back);
     CHECK(back->draws[0].tex->mips.empty());
-    CHECK(back->draws[0].tex->width == 512);
+    CHECK(back->draws[0].tex->width == 2048);
     CHECK(back->shades[0].diffuse_sampler.filtered == 0);
 }
 
@@ -1070,4 +1075,45 @@ TEST_CASE("a capture keeps its clear colour and cameras; one from before has nei
     CHECK(back->cameras.empty());
     CHECK(back->rt_filtered_keys == fc.rt_filtered_keys);
     CHECK(back->draws.size() == fc.draws.size());
+}
+
+TEST_CASE("a capture keeps the composite's noise map whole, its mips and its sampler") {
+    // noise_mono.tex as sampler 13 has it: wrapping, linear, with its chain
+    FrameCapture fc;
+    auto geom = MakeTriangle();
+    fc.draws.push_back(MakeDraw(geom, -1));
+    auto noise = MakeTexture(4096, 4, 2, 11);
+    for (uint32_t l = 1; l <= 12; l++) {
+        const uint32_t w = std::max(4096u >> l, 1u), h = std::max(4u >> l, 1u);
+        noise->mips.emplace_back(size_t(w) * h, 0x2000u * l);
+    }
+    fc.noise_map = noise;
+    fc.noise_sampler.filtered = 1;
+    fc.noise_sampler.mag_linear = fc.noise_sampler.min_linear = 1;
+    fc.noise_sampler.mip = 1;
+    fc.noise_sampler.mip_max = 12;
+    fc.post_consts.noise_fetch[1] = 0x1234000u;
+
+    const std::string path = TempPath("band3_capture_file_noise_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    REQUIRE(back->noise_map);
+    CHECK(back->noise_map->width == 4096);
+    CHECK(back->noise_map->rgba == noise->rgba);
+    REQUIRE(back->noise_map->mips.size() == 12);
+    CHECK(back->noise_map->mips[11] == noise->mips[11]);
+    CHECK(back->noise_sampler.filtered == 1);
+    CHECK(back->noise_sampler.mip == 1);
+    CHECK(back->noise_sampler.mip_max == 12);
+    CHECK(back->post_consts.noise_fetch[1] == 0x1234000u);
+
+    // a frame without: none
+    fc.noise_map = nullptr;
+    REQUIRE(SaveCapture(path, fc));
+    back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    CHECK(!back->noise_map);
 }

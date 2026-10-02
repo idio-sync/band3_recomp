@@ -19,6 +19,8 @@ microcode, that the native view's shading (`src/Render/shaders/shade.hlsli`) and
 | `gen_shade_cases.py` | prints `kCases` in `tests/shade_model_test.cpp` from the three models |
 | `post/check_post.py` | checks models of the post-processing pixel shaders (DOF, bloom, glare, the spotlights' term, bright pass, downsample, blur kernels, glare's pass over bloom's level 0) against their microcode, sample positions included; exits 1 on a mismatch |
 | `post/neg_controls.py` | deliberately wrong post models, which `check_post.py` must fail |
+| `post/check_noise.py` | checks the composite's noise (film grain) term, `post_model.hlsli`'s `NoiseTerm`, against the three straight-line composite variants that have it (glare, DOF, bloom and the spotlights' term around it), taps included; exits 1 on a mismatch |
+| `post/neg_noise.py` | deliberately wrong noise models (overlay per channel, no 6.75, arithmetic mean), which `check_noise.py` must fail |
 
 ## Inputs
 

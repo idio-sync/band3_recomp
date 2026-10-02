@@ -23,6 +23,8 @@
 //     soft-particle buffer added (RndSoftParticleBuffer's, scene_capture.h's
 //     IsSoftParticle), bloom screen-blended (or glare added), the
 //     spotlights' depth volume added (spot_model.h: NgSpotlightDrawer's), the
+//     noise (film grain: the noise map the capture kept, FrameCapture::
+//     noise_map, read twice by the game's random seeds and overlaid), the
 //     colour matrix (shaders/post_model.hlsli). The renderers draw the soft
 //     particles' and the spotlights' buffers as texture passes before it.
 // The levels are 8-bit, as the 360's render targets are; the GPU's are RGBA8
@@ -41,7 +43,7 @@ using shade::uint4;
 
 #include "src/Render/shaders/post_params.hlsli"
 
-static_assert(sizeof(PostPass) == 26 * 16, "PostPass is float4s and uint4s only, as HLSL packs it");
+static_assert(sizeof(PostPass) == 31 * 16, "PostPass is float4s and uint4s only, as HLSL packs it");
 
 // The 360's back buffer, 1280x720: RB3's post-processing sizes its levels by
 // it, and the blurs' taps are offsets in its levels' texels. The native view's
@@ -69,16 +71,33 @@ inline constexpr float kDofWidthFactor = 0.666f;
 void DofTaps(bool vertical, float width_scale, float4 taps[8]);
 
 // What a frame's post-processing does: the composite's PostPass (flags, c6,
-// c24, the colour matrix, the world camera, the spotlights' term), the
-// blurs' taps, the textures the spotlights' term reads: the depth volume
-// and the density map the frame's spotlight passes drew, and the
-// soft-particle surface the composite adds (DxTex, 0 none)
+// c24, the colour matrix, the world camera, the spotlights' term, the
+// noise's), the blurs' taps, the textures the spotlights' term reads: the
+// depth volume and the density map the frame's spotlight passes drew, the
+// soft-particle surface the composite adds (DxTex, 0 none), and the noise
+// map (the frame's FrameCapture::noise_map, null without the noise)
 struct PostPlan {
     PostPass composite;
     float4 dof_taps[2][8];        // across, then down
     float4 bloom_taps[3][2][15];  // each level's, across then down
     uint32_t spot_volume = 0, spot_density = 0;
     uint32_t soft = 0;
+    const Texture* noise = nullptr;
+    // whether the frame's composite is one the game resolved into its post
+    // buffer (a post frame's, with its constants): the renderer keeps its
+    // output as the next frame's previous, which the trails read
+    bool trails_update = false;
+};
+
+// The previous post frame the trails read (the post buffer, s14): the last
+// post frame's composite, RGBA8 (R low) at the picture's size, its alpha
+// the composite's (CompositeAlpha, or the trails' 1 where the trail was
+// kept), and the game frame it was (0 none). Only a renderer drawing frame
+// after frame has one (RasterOptions::trails): a capture is one frame.
+struct PostHistory {
+    std::vector<uint32_t> rgba;
+    uint32_t w = 0, h = 0;
+    uint64_t game_frame = 0;
 };
 
 // The frame's PostPlan, false if it post-processes nothing: its DoPostProcess
@@ -88,10 +107,21 @@ struct PostPlan {
 // (PostConsts::spot_flag) and the frame has a depth volume's pass to read;
 // the soft particles' where it had them (TheShaderMgr + 0x3F) and the frame
 // has the pass that drew its particles into PostConsts::soft_surface[0]
-// (captures from before it have neither: the term reads 0 there).
+// (captures from before it have neither: the term reads 0 there). The
+// noise is on where the game's composite had it (TheShaderMgr + 0x2D) and
+// the capture kept its map; on a world frame where the proc has it on
+// (NgPostProc::CheckNoise's test) and the capture has the last post
+// frame's map, with seeds of its own (the game's are random each frame:
+// these are the frame number's, or the proc's two when stationary). With
+// `noise` false it's left off. The trails are on where the game's composite
+// had them (TheShaderMgr + 0x2F, c125), or on a world frame where the proc
+// has them (RndPostProc::BlendPrevious), faded by a post frame's time at
+// its emulated rate; a renderer without the previous post frame leaves
+// them off (a capture's: the term then is the colour alone, as it is in
+// steady state for every music-video proc but video_trails).
 // With `only` (kPost bits, 0 all) the effects outside it are left off, to see
 // each on its own.
-bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan);
+bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noise = true);
 
 // A texture the composite reads besides the scene's own levels, RGBA8 (R
 // low), w x h; none (read as 0) if px is null
@@ -105,19 +135,32 @@ struct PostImage {
 // drew), width x height; `volume` and `density` what the frame's spotlight
 // passes drew into the plan's spot_volume and spot_density, `soft` what its
 // soft-particle passes left in the plan's soft, each read bilinear at each
-// pixel's uv; `out` RGBA8, alpha 0xff. `bloom0`, if given, gets bloom's level
+// pixel's uv; the noise map, the plan's, by its sampler (sample_model.h:
+// mip levels by NoiseDx and NoiseDy); `out` RGBA8, alpha 0xff. `bloom0`, if given, gets bloom's level
 // 0 as the composite read it (after glare's pass), RGBA8, Quarter(width) x
-// Quarter(height), or nothing on a frame without bloom or glare.
+// Quarter(height), or nothing on a frame without bloom or glare. With
+// `history`, the trails read it where it's the picture's size and from an
+// earlier frame (else they're left off), and a post frame's composite
+// (PostPlan::trails_update) goes into it, as the frame `game_frame`.
 void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
              const std::vector<float>& depth, uint32_t width, uint32_t height,
              const PostImage& volume, const PostImage& density, const PostImage& soft,
-             std::vector<uint32_t>& out, std::vector<uint32_t>* bloom0 = nullptr);
+             std::vector<uint32_t>& out, std::vector<uint32_t>* bloom0 = nullptr,
+             PostHistory* history = nullptr, uint64_t game_frame = 0);
 
 // post_model.hlsli's functions on the CPU, for the tests
 float GameDepthCpu(const PostPass& pass, float inv_w);
 float DofAmountCpu(const float c24[4], float depth);
 void CompositeCpu(const PostPass& pass, const float scene[4], const float dof[4], float depth,
                   const float l0[3], const float l1[3], const float l2[3], const float volume[3],
-                  float density, const float soft[3], float out[3]);
+                  float density, const float soft[3], const float noise0[3],
+                  const float noise1[3], float out[3]);
+// the trails over a composite's colour `rgb` (unsaturated), from the
+// previous post frame's texel `prev` (RGBA 0..1): the colour and alpha out
+void TrailsCpu(const PostPass& pass, const float rgb[3], const float prev[4], float out[4]);
+// tap 0 or 1's uv at the pixel's uv, and its derivatives (NoiseUv, NoiseDx,
+// NoiseDy)
+void NoiseTapCpu(const PostPass& pass, const float uv[2], int tap, float at[2], float dx[2],
+                 float dy[2]);
 
 }  // namespace band3::render::post

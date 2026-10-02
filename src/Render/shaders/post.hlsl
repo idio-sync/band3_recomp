@@ -31,7 +31,10 @@
 // larger is nearer, 0 where nothing drew); t2 the DOF's level; t3..t5
 // bloom's; t6 the spotlights' depth volume and t7 their density map, t8 the
 // soft-particle buffer, render targets of texture passes (gpu_view.cpp's,
-// arrays of one layer). The samplers are linear and clamp, as RB3 sets them.
+// arrays of one layer); t9 the noise map, a layer (params.noise_tex.z) of
+// a texture array, read texel by texel through sample_model.hlsli as the CPU
+// reads it; t10 the previous post frame the trails read (the live view's,
+// PSCompositeHistory). The samplers are linear and clamp, as RB3 sets them.
 VK_SAMPLER VK_BINDING(0, 2) Texture2D<float4> color_tex : register(t0, space2);
 VK_SAMPLER VK_BINDING(0, 2) SamplerState color_sampler : register(s0, space2);
 VK_SAMPLER VK_BINDING(1, 2) Texture2D<float> depth_tex : register(t1, space2);
@@ -50,12 +53,22 @@ VK_SAMPLER VK_BINDING(7, 2) Texture2DArray<float4> density_tex : register(t7, sp
 VK_SAMPLER VK_BINDING(7, 2) SamplerState density_sampler : register(s7, space2);
 VK_SAMPLER VK_BINDING(8, 2) Texture2DArray<float4> soft_tex : register(t8, space2);
 VK_SAMPLER VK_BINDING(8, 2) SamplerState soft_sampler : register(s8, space2);
+VK_SAMPLER VK_BINDING(9, 2) Texture2DArray<float4> noise_tex : register(t9, space2);
+VK_SAMPLER VK_BINDING(9, 2) SamplerState noise_sampler : register(s9, space2);
+VK_SAMPLER VK_BINDING(10, 2) Texture2D<float4> prev_tex : register(t10, space2);
+VK_SAMPLER VK_BINDING(10, 2) SamplerState prev_sampler : register(s10, space2);
 
 VK_BINDING(0, 3) cbuffer PostUniforms : register(b0, space3) {
     PostPass params;
 };
 
 static const float kNearW = 1e-3;
+
+#define SAMPLE_TEX Texture2DArray<float4> t, uint layer
+#define SAMPLE_ARGS t, layer
+#define SAMPLE_LOAD(level, x, y) t.Load(int4(x, y, layer, level))
+#define SAMPLE_LOOP [loop]
+#include "sample_model.hlsli"
 
 struct PostIn {
     float4 pos : SV_Position;
@@ -121,8 +134,9 @@ float4 PSGlare(PostIn i) : SV_Target0 {
     return float4(GlareOut(sum), 1.0);
 }
 
-// the composite into the picture, opaque: the overlay draws over it
-float4 PSComposite(PostIn i) : SV_Target0 {
+// The composite's colour at a pixel, unsaturated (post_model.hlsli's
+// CompositeColor), and in `alpha` its alpha (CompositeAlpha)
+float3 CompositeAt(PostIn i, out float alpha) {
     const int3 at = int3(int2(i.pos.xy), 0);
     const float2 uv = PixelUv(i);
     const uint f = params.flags.x;
@@ -145,5 +159,44 @@ float4 PSComposite(PostIn i) : SV_Target0 {
     }
     float3 soft = 0.0;
     if ((f & kPostSoft) != 0u) soft = soft_tex.SampleLevel(soft_sampler, float3(uv, 0.0), 0).rgb;
-    return float4(Composite(params, scene, dof, depth, l0, l1, l2, volume, density, soft), 1.0);
+    // the noise map's two taps, by its sampler, at the levels their fixed
+    // derivatives pick
+    float3 noise[2] = {float3(0.0, 0.0, 0.0), float3(0.0, 0.0, 0.0)};
+    if ((f & kPostNoise) != 0u) {
+        [unroll] for (int k = 0; k < 2; k++)
+            noise[k] = SampleTexture(noise_tex, params.noise_tex.z, params.noise_tex.xy,
+                                     params.noise_sampler, NoiseUv(params, uv, k),
+                                     NoiseDx(params, k), NoiseDy(params, k)).rgb;
+    }
+    alpha = CompositeAlpha(params, scene, dof, depth);
+    return CompositeColor(params, scene, dof, depth, l0, l1, l2, volume, density, soft, noise[0],
+                          noise[1]);
+}
+
+// the composite into the picture, opaque: the overlay draws over it
+float4 PSComposite(PostIn i) : SV_Target0 {
+    float alpha;
+    return float4(saturate(CompositeAt(i, alpha)), 1.0);
+}
+
+// The live view's composite, which keeps each post frame's for the next
+// frame's trails: the picture as PSComposite's (the trails over it where
+// params.flags has them, from t10), and the post buffer as the game's
+// resolve keeps it, the same colour with the composite's alpha (or the
+// trails': 1 where the trail was kept)
+struct CompositeOut {
+    float4 color : SV_Target0;
+    float4 history : SV_Target1;
+};
+
+CompositeOut PSCompositeHistory(PostIn i) {
+    float alpha;
+    const float3 rgb = CompositeAt(i, alpha);
+    float4 c = float4(saturate(rgb), alpha);
+    if ((params.flags.x & kPostTrails) != 0u)
+        c = Trails(params, rgb, prev_tex.Load(int3(int2(i.pos.xy), 0)));
+    CompositeOut o;
+    o.color = float4(c.rgb, 1.0);
+    o.history = c;
+    return o;
 }

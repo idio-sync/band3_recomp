@@ -57,6 +57,28 @@ struct PostParams {
     uint32_t cam = 0;
     float cam_near = 0, cam_far = 0;
     float cam_zrange[2] = {};
+    // The noise (film grain) fields NgPostProc::CheckNoise reads
+    // (out/research/n1_post_noise.md 1): base scale (+0x130, +0x134), top
+    // scale (+0x138), intensity (+0x13C, 0 off), stationary (+0x140),
+    // midtone (+0x141), the map's RndTex (+0x14C, 0 none) and its texture's
+    // base address (physical, as a fetch constant has it), and the
+    // stationary seeds (NgPostProc's +0x20C, +0x210). The composite draws
+    // with PostConsts' c112/c113 (random seeds each frame); these check them,
+    // and give a world frame its grain (post_model.h's PlanPost).
+    float noise_base[2] = {};
+    float noise_top = 0;
+    float noise_intensity = 0;
+    uint8_t noise_stationary = 0;
+    uint8_t noise_midtone = 0;
+    uint8_t pad2[2] = {};
+    uint32_t noise_map = 0;
+    uint32_t noise_map_base = 0;
+    float noise_seeds[2] = {};
+    // the trails (blend previous): mTrailThreshold (+0x150) and
+    // mTrailDuration (+0x154), on (TheShaderMgr + 0x2F) where the threshold
+    // is under 1 and the duration over 0 (RndPostProc::BlendPrevious)
+    float trail_threshold = 0;
+    float trail_duration = 0;
 };
 
 // What RB3's composite drew with, read at DxRnd::FinishPostProcess's start on
@@ -96,6 +118,16 @@ struct PostConsts {
     // TheShaderMgr + 0x3F is set (out/research/softparticle_survey.md 1); 0
     // when DoPost didn't run, and in captures from before
     uint32_t soft_surface[2] = {};
+    // the texture fetch constant of sampler 13 where TheShaderMgr + 0x2D (the
+    // noise) is set: the noise map NgPostProc::CheckNoise bound there, with
+    // the filter and wrap it set (FrameCapture::noise_map is its pixels);
+    // zero otherwise, and in captures from before
+    uint32_t noise_fetch[6] = {};
+    // c125, the trails' (NgPostProc::CheckBlendPrevious): (threshold,
+    // dt / duration, 1/3, 0), which the composite reads with the previous
+    // post frame (s14) where TheShaderMgr + 0x2F is set; zero in captures
+    // from before
+    float c125[4] = {};
 };
 
 // TheShaderMgr's flag bytes, as PostConsts::flags indexes them
@@ -104,6 +136,11 @@ inline constexpr int kPostFlagDof = 0x26 - kPostFlagBase;
 inline constexpr int kPostFlagBloom = 0x27 - kPostFlagBase;
 inline constexpr int kPostFlagGlare = 0x28 - kPostFlagBase;
 inline constexpr int kPostFlagColorXfm = 0x2A - kPostFlagBase;
+// the noise, and its weight by the midtones (mNoiseMidtone)
+inline constexpr int kPostFlagNoise = 0x2D - kPostFlagBase;
+inline constexpr int kPostFlagNoiseMidtone = 0x2E - kPostFlagBase;
+// the trails: the previous post frame, faded, kept where it's brighter
+inline constexpr int kPostFlagBlendPrevious = 0x2F - kPostFlagBase;
 inline constexpr int kPostFlagSoft = 0x3F - kPostFlagBase;
 // and PostConsts::spot_flag's, before them
 inline constexpr int kPostFlagSpot = 0x25;
@@ -157,6 +194,26 @@ inline void DofConstants(const PostParams& p, float out[4]) {
 inline void BloomConstant(const PostParams& p, float out[4]) {
     for (int i = 0; i < 3; i++) out[i] = p.bloom_color[i] * p.bloom_intensity;
     out[3] = 0;
+}
+
+// whether NgPostProc::CheckNoise turns the noise on: an intensity and a map
+inline bool NoiseEnabled(const PostParams& p) {
+    return p.noise_intensity != 0 && p.noise_map != 0;
+}
+
+// whether RndPostProc::BlendPrevious turns the trails on (TheShaderMgr +
+// 0x2F): a threshold under 1 and a duration
+inline bool BlendPrevious(const PostParams& p) {
+    return p.trail_threshold < 1 && p.trail_duration > 0;
+}
+
+// PS c113 as NgPostProc::CheckNoise sets it: (base scale x, y, the top
+// scale or 1 if stationary, the intensity)
+inline void NoiseConstant(const PostParams& p, float out[4]) {
+    out[0] = p.noise_base[0];
+    out[1] = p.noise_base[1];
+    out[2] = p.noise_stationary ? 1.0f : p.noise_top;
+    out[3] = p.noise_intensity;
 }
 
 // RndColorXfm::AdjustColorXfm (rb3-xenon ColorXfm.cpp): the colour matrix

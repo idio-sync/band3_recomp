@@ -915,7 +915,8 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
     // cones the density map) at the frame's end, its soft particles' term
     // the soft-particle surface
     post::PostPlan post_plan;
-    if (o.post && o.view == RasterView::kFinal && post::PlanPost(f, o.post_only, post_plan)) {
+    if (o.post && o.view == RasterView::kFinal &&
+        post::PlanPost(f, o.post_only, post_plan, o.grain)) {
         if (post_plan.composite.flags.x & post::kPostSpot) needed.insert(post_plan.spot_volume);
         if (post_plan.composite.flags.x & post::kPostSoft) needed.insert(post_plan.soft);
     }
@@ -1052,8 +1053,8 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         refracts = DrawnToBackBuffer(it) && RefractsWorld(shade::ShadeOf(frame, it));
     }
     post::PostPlan post_plan;
-    const bool post_on =
-        o.post && o.view == RasterView::kFinal && post::PlanPost(frame, o.post_only, post_plan);
+    const bool post_on = o.post && o.view == RasterView::kFinal &&
+                         post::PlanPost(frame, o.post_only, post_plan, o.grain);
     const BackBufferLayout layout = LayoutBackBuffer(frame);
     // the scene into the picture, at post_boundary (or the frame's end):
     // post-processed, or as it is. A view of the scene target ends the frame
@@ -1072,7 +1073,8 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             // the depth buffer has 1/w, as RunPost wants it
             post::RunPost(post_plan, scene, depth, o.width, o.height,
                           image(post_plan.spot_volume), image(post_plan.spot_density),
-                          image(post_plan.soft), rgba, o.post_bloom0);
+                          image(post_plan.soft), rgba, o.post_bloom0,
+                          o.trails ? o.post_history : nullptr, frame.game_frame);
         } else {
             for (size_t i = 0; i < pixels; i++) {
                 const uint32_t c = scene[i];

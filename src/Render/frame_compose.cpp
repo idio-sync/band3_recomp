@@ -94,6 +94,8 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
     // post-processing as the post frame ran it, on the world it presents
     fc.post = frame.post;
     fc.post_consts = frame.post_consts;
+    fc.noise_map = frame.noise_map;
+    fc.noise_sampler = frame.noise_sampler;
     // and the gamma ramp the presenter applied to it
     fc.gamma = frame.gamma;
     // the world's back buffer, cleared as the world frame cleared it, and its

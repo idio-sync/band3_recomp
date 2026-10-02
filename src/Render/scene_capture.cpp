@@ -200,6 +200,21 @@ constexpr uint32_t kPostProc_LevelOutHi = 0xa8;
 constexpr uint32_t kPostProc_Xfm = 0xb8;  // rows 0x10 apart, then the translation
 constexpr uint32_t kPostProc_ColorMod = 0x12c;
 constexpr uint32_t kPostProc_EmulateFps = 0x168;
+// the noise's (NgPostProc::CheckNoise; out/research/n1_post_noise.md 1):
+// base scale x, y, top scale, intensity, stationary and midtone bytes, the
+// map's RndTex, and NgPostProc's stationary seeds
+constexpr uint32_t kPostProc_NoiseBase = 0x130;
+constexpr uint32_t kPostProc_NoiseTop = 0x138;
+constexpr uint32_t kPostProc_NoiseIntensity = 0x13c;
+constexpr uint32_t kPostProc_NoiseStationary = 0x140;
+constexpr uint32_t kPostProc_NoiseMidtone = 0x141;
+constexpr uint32_t kPostProc_NoiseMap = 0x14c;
+constexpr uint32_t kPostProc_NoiseSeeds = 0x20c;
+// the trails' threshold and duration (RndPostProc::BlendPrevious)
+constexpr uint32_t kPostProc_TrailThreshold = 0x150;
+constexpr uint32_t kPostProc_TrailDuration = 0x154;
+// the sampler CheckNoise binds the noise map to
+constexpr uint32_t kNoiseSampler = 13;
 constexpr uint32_t kDOFProcHolder = 0x82CC6368;  // TheDOFProc
 constexpr uint32_t kDOF_Enabled = 0x2c;
 constexpr uint32_t kDOF_Scale = 0x30;  // then bias, focal, blur depth, min and max blur
@@ -470,6 +485,11 @@ struct State {
     // while RndSoftParticleBuffer::DoPost runs: the surface it draws its
     // particles into (0 otherwise)
     uint32_t soft_surface = 0;
+    // the last post frame's noise map and sampler (FrameCapture::noise_map),
+    // for the world frames after it, and its base address
+    std::shared_ptr<const Texture> noise_map;
+    TexSampler noise_sampler;
+    uint32_t noise_base = 0;
 };
 
 State& S() {
@@ -1714,6 +1734,18 @@ void ReadPostParams(const Guest& g, PostParams& p) {
         p.bloom_glare = g.U8(proc + kPostProc_BloomGlare);
         p.bloom_streak = g.U8(proc + kPostProc_BloomStreak);
         p.emulate_fps = g.F32(proc + kPostProc_EmulateFps);
+        p.noise_base[0] = g.F32(proc + kPostProc_NoiseBase);
+        p.noise_base[1] = g.F32(proc + kPostProc_NoiseBase + 4);
+        p.noise_top = g.F32(proc + kPostProc_NoiseTop);
+        p.noise_intensity = g.F32(proc + kPostProc_NoiseIntensity);
+        p.noise_stationary = g.U8(proc + kPostProc_NoiseStationary);
+        p.noise_midtone = g.U8(proc + kPostProc_NoiseMidtone);
+        p.noise_map = g.U32(proc + kPostProc_NoiseMap);
+        p.noise_map_base = TexBase(g, p.noise_map);
+        p.noise_seeds[0] = g.F32(proc + kPostProc_NoiseSeeds);
+        p.noise_seeds[1] = g.F32(proc + kPostProc_NoiseSeeds + 4);
+        p.trail_threshold = g.F32(proc + kPostProc_TrailThreshold);
+        p.trail_duration = g.F32(proc + kPostProc_TrailDuration);
     }
     if (const uint32_t dof = g.U32(kDOFProcHolder)) {
         p.dof = dof;
@@ -1750,11 +1782,50 @@ void ReadPostConsts(const Guest& g, PostConsts& pc) {
     ReadPsConst(g, dev, 112, pc.c112);
     ReadPsConst(g, dev, 113, pc.c113);
     ReadPsConst(g, dev, 122, pc.c122);
+    ReadPsConst(g, dev, 125, pc.c125);
     ReadPsConst(g, dev, 127, pc.c127);
     if (const uint32_t sm = g.U32(kShaderMgrHolder)) {
         for (int i = 0; i < int(sizeof(pc.flags)); i++) pc.flags[i] = g.U8(sm + kPostFlagBase + i);
         pc.spot_flag = g.U8(sm + kPostFlagSpot);
     }
+}
+
+// The noise map the composite reads, at FinishPostProcess where
+// TheShaderMgr + 0x2D says the noise is on: sampler 13's fetch constant, as
+// NgPostProc::CheckNoise bound it (the map, its filter linear and its
+// addressing wrap), and its pixels and mips. A static texture, so decoded
+// once and found in the cache after. Kept for the world frames after it.
+void CaptureNoise(const Guest& g, FrameCapture& fc) {
+    const uint32_t dev = g.U32(kD3DDeviceHolder);
+    if (!dev) return;
+    PostConsts& pc = fc.post_consts;
+    for (int i = 0; i < 6; i++)
+        pc.noise_fetch[i] = g.U32(dev + kDev_TextureFetch + kNoiseSampler * 24 + i * 4);
+    const int32_t aniso = g_aniso_override.load(std::memory_order_relaxed);
+    std::shared_ptr<const Texture> tex;
+    TexSampler sampler;
+    if (const uint32_t base = pc.noise_fetch[1] & 0xfffff000u) {
+        tex = DecodeCached(g, pc.noise_fetch, base, S().map_texs, fc);
+        sampler = guest_format::DecodeSampler(pc.noise_fetch, aniso);
+    } else if (fc.post.noise_map) {
+        // nothing bound there (none seen): the proc's map, by its own fetch
+        // constant, with the filter and addressing CheckNoise sets
+        tex = GuestPixels(g, fc.post.noise_map, fc);
+        if (const uint32_t d3d = g.U32(fc.post.noise_map + kDxTex_Texture)) {
+            uint32_t f[6];
+            for (int i = 0; i < 6; i++) f[i] = g.U32(d3d + kD3DBaseTexture_Fetch + i * 4);
+            sampler = guest_format::DecodeSampler(f, aniso);
+            sampler.mag_linear = sampler.min_linear = 1;
+            sampler.clamp_x = sampler.clamp_y = 0;
+        }
+    }
+    if (!tex || tex->rgba.empty()) return;
+    fc.noise_map = tex;
+    fc.noise_sampler = sampler;
+    State& s = S();
+    s.noise_map = tex;
+    s.noise_sampler = sampler;
+    s.noise_base = fc.post.noise_map_base;
 }
 
 // a blur's taps, c31.. (offsets) and c47.. (weights), after it set them
@@ -2286,6 +2357,14 @@ extern "C" REX_FUNC(DxRnd__DoPostProcess) {
             fc.post_boundary = uint32_t(fc.draws.size());
             fc.proc_cmds = REX_LOAD_U32(ctx.r3.u32 + kRnd_ProcCmds);
             ReadPostParams(Guest{base}, fc.post);
+            // a world frame's grain is the next frame's, by the last post
+            // frame's map and sampler while the proc has that map
+            const State& s = S();
+            if ((fc.proc_cmds & kProcWorld) && !(fc.proc_cmds & kProcPost) &&
+                NoiseEnabled(fc.post) && s.noise_map && s.noise_base == fc.post.noise_map_base) {
+                fc.noise_map = s.noise_map;
+                fc.noise_sampler = s.noise_sampler;
+            }
         }
     }
     __imp__DxRnd__DoPostProcess(ctx, base);
@@ -2305,6 +2384,7 @@ extern "C" REX_FUNC(DxRnd__FinishPostProcess) {
             // began (UpdateColorModulation), and the composite scales by this
             if (fc.post.valid && fc.post.proc)
                 fc.post.color_mod = g.F32(fc.post.proc + kPostProc_ColorMod);
+            if (fc.post_consts.flags[kPostFlagNoise]) CaptureNoise(g, fc);
         }
     }
     __imp__DxRnd__FinishPostProcess(ctx, base);

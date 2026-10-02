@@ -13,9 +13,10 @@
 //                               [--no-skinned | --only-skinned] [--unskinned]
 //                               [--legacy-light | --no-light] [--pick X,Y]
 //                               [--dump-alpha <png>] [--dump-depth <png>]
-//                               [--dump-bloom <png>]
+//                               [--dump-bloom <png>] [--dump-noise <png>]
 //                               [--view alpha|depth]
-//                               [--no-post | --post-only xfm|dof|bloom|spot|soft]
+//                               [--no-post | --post-only xfm|dof|bloom|spot|soft|noise]
+//                               [--no-grain]
 //                               [--no-gamma | --gamma-from <other.cap>]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
@@ -101,9 +102,16 @@
 // pass's draw (--list's "rect shader 25"), whose guest pixels are what that
 // pass left in the level (right in captures taken with --readback_resolve=full).
 // RB3's post-processing (post_model.h: depth of field, bloom or glare, the
-// spotlights' depth volume, the colour matrix) is applied as the frame set
-// it; --no-post leaves the scene as it is, --post-only applies one effect
-// alone (bloom covers glare), to see what each contributes.
+// spotlights' depth volume, the noise, the colour matrix) is applied as the
+// frame set it; --no-post leaves the scene as it is, --post-only applies one
+// effect alone (bloom covers glare), to see what each contributes, and
+// --no-grain leaves the noise (film grain) out. The "noise:" line under
+// "check:" says what the noise drew with: the flags (+0x2D, midtone +0x2E),
+// c112 and c113 against the proc's fields (c113 = base scale, top scale or 1
+// if stationary, intensity; c112 the stationary seeds when it's stationary),
+// and the map the capture kept, its size, format, levels and sampler, and
+// sampler 13's base against the proc's map's. --dump-noise writes that map
+// to a PNG (level 0; its mips beside it, <png>.1.png and on).
 // The spotlights' passes (spot_model.h) show in --list as passes into the
 // depth-volume and density textures, the cones as "cone" draws; --dump-rt
 // of the depth volume draws them on the CPU. The soft particles' show as
@@ -691,19 +699,53 @@ void PrintPost(const FrameCapture& fc) {
     // the spotlights' term (s12 * (c127.x + c127.y * s5.x) * c91.x,
     // TheShaderMgr +0x25: out/research/spotlight_survey.md 2), the soft
     // particles' (s4, +0x3F, the buffer's first surface: softparticle_survey.md
-    // 1), and what the native composite leaves out: velocity blur (s10 *
-    // c122) and noise (c112, c113) (out/research/m4_design.md)
+    // 1), the noise's (c112, c113, +0x2D/+0x2E: out/research/
+    // n1_post_noise.md), and what the native composite leaves out: velocity
+    // blur (s10 * c122) (out/research/m4_design.md)
     const auto flag = [&](int offset) { return unsigned(c.flags[offset - kPostFlagBase]); };
     std::printf("  spotlights: +0x25 %02X c127 %.4f %.4f %.4f %.4f c91 %.4f %.4f %.4f %.4f\n",
                 c.spot_flag, c.c127[0], c.c127[1], c.c127[2], c.c127[3], c.c91[0], c.c91[1],
                 c.c91[2], c.c91[3]);
     std::printf("  soft particles: +0x3F %02X, surfaces %08X %08X\n", flag(0x3F),
                 c.soft_surface[0], c.soft_surface[1]);
-    std::printf("  left out: velocity +0x38 %02X +0x39 %02X c122 %.4f %.4f %.4f %.4f; noise "
-                "+0x2D %02X c112 %.4f %.4f %.4f %.4f c113 %.4f %.4f %.4f %.4f\n",
-                flag(0x38), flag(0x39), c.c122[0], c.c122[1], c.c122[2], c.c122[3], flag(0x2D),
-                c.c112[0], c.c112[1], c.c112[2], c.c112[3], c.c113[0], c.c113[1], c.c113[2],
-                c.c113[3]);
+    {
+        float want[4];
+        NoiseConstant(p, want);
+        const float seeds[4] = {p.noise_seeds[0], p.noise_seeds[1], p.noise_seeds[0],
+                                p.noise_seeds[1]};
+        const uint32_t base = c.noise_fetch[1] & 0xfffff000u;
+        std::printf("  noise: +0x2D %02X +0x2E %02X (proc: intensity %.4f map %08X midtone %u "
+                    "stationary %u, so %s); c112 %.4f %.4f %.4f %.4f%s; c113 %.4f %.4f %.4f %.4f "
+                    "vs proc %.4f %.4f %.4f %.4f, off by %.6f\n",
+                    flag(0x2D), flag(0x2E), p.noise_intensity, p.noise_map, p.noise_midtone,
+                    p.noise_stationary, NoiseEnabled(p) ? "on" : "off", c.c112[0], c.c112[1],
+                    c.c112[2], c.c112[3],
+                    !p.noise_stationary                ? ""
+                    : MaxDiff(seeds, c.c112, 4) == 0 ? " (the stationary seeds)"
+                                                       : " (NOT the stationary seeds)",
+                    c.c113[0], c.c113[1], c.c113[2], c.c113[3], want[0], want[1], want[2], want[3],
+                    MaxDiff(want, c.c113, 4));
+        if (const Texture* t = fc.noise_map.get()) {
+            const TexSampler& ns = fc.noise_sampler;
+            std::printf("    map %ux%u format %u, %zu mips; sampler clamp %u/%u mag %u min %u mip "
+                        "%u (%u..%u) aniso %u bias %.3f; s13 base %08X vs the proc's map %08X "
+                        "(%s)\n",
+                        t->width, t->height, t->format, t->mips.size(), ns.clamp_x, ns.clamp_y,
+                        ns.mag_linear, ns.min_linear, ns.mip, ns.mip_min, ns.mip_max, ns.aniso,
+                        ns.lod_bias, base, p.noise_map_base,
+                        base == p.noise_map_base ? "same" : "DIFFERENT");
+        } else if (flag(0x2D)) {
+            std::printf("    no map kept (a capture from before, or a format not decoded): no "
+                        "grain\n");
+        }
+    }
+    // and the trails (blend previous, +0x2F: the previous post frame faded
+    // by c125.y, kept where its mean is over the threshold c125.x and over
+    // the colour's), which a capture can't draw: it has no previous frame
+    std::printf("  left out: velocity +0x38 %02X +0x39 %02X c122 %.4f %.4f %.4f %.4f; trails "
+                "+0x2F %02X c125 %.4f %.4f %.4f %.4f (proc threshold %.4f duration %.4f)\n",
+                flag(0x38), flag(0x39), c.c122[0], c.c122[1], c.c122[2], c.c122[3], flag(0x2F),
+                c.c125[0], c.c125[1], c.c125[2], c.c125[3], p.trail_threshold, p.trail_duration);
     if (c.dof_survey) {
         std::printf("  DOF blur taps (c31..c38 xy, weight c47..c54 x):");
         for (int i = 0; i < 8; i++)
@@ -915,7 +957,7 @@ int main(int argc, char** argv) {
     }
     RasterOptions o;
     bool transpose = false, per_cam = false, list = false, no_skinned = false, only_skinned = false;
-    std::string compare, image, diff_with, dump_alpha, dump_depth, dump_bloom;
+    std::string compare, image, diff_with, dump_alpha, dump_depth, dump_bloom, dump_noise;
     Crop crop;
     long mesh_filter = -1, dump_tex = -1, shade_draw = -1;
     int dump_map = -1;  // --dump-tex's :<map>, -1 the diffuse texture
@@ -979,7 +1021,9 @@ int main(int argc, char** argv) {
         else if (a == "--dump-alpha" && i + 1 < argc) dump_alpha = argv[++i];
         else if (a == "--dump-depth" && i + 1 < argc) dump_depth = argv[++i];
         else if (a == "--dump-bloom" && i + 1 < argc) dump_bloom = argv[++i];
+        else if (a == "--dump-noise" && i + 1 < argc) dump_noise = argv[++i];
         else if (a == "--no-post") o.post = false;
+        else if (a == "--no-grain") o.grain = false;
         else if (a == "--no-gamma") o.gamma = false;
         else if (a == "--gamma-from" && i + 1 < argc) {
             const auto other = LoadCapture(argv[++i]);
@@ -996,9 +1040,10 @@ int main(int argc, char** argv) {
                           : e == "bloom" ? post::kPostBloom | post::kPostGlare
                           : e == "spot"  ? post::kPostSpot
                           : e == "soft"  ? post::kPostSoft
+                          : e == "noise" ? post::kPostNoise
                                          : 0;
             if (!o.post_only) {
-                std::fprintf(stderr, "--post-only takes xfm, dof, bloom, spot or soft\n");
+                std::fprintf(stderr, "--post-only takes xfm, dof, bloom, spot, soft or noise\n");
                 return 2;
             }
         }
@@ -1216,6 +1261,25 @@ int main(int argc, char** argv) {
         WritePng(dump_bloom, level, post::Quarter(bo.width), post::Quarter(bo.height));
         std::printf("%s: bloom level 0, %ux%u\n", dump_bloom.c_str(), post::Quarter(bo.width),
                     post::Quarter(bo.height));
+        return 0;
+    }
+    if (!dump_noise.empty()) {
+        const Texture* t = fc->noise_map.get();
+        if (!t || t->rgba.empty()) {
+            std::fprintf(stderr, "the capture kept no noise map\n");
+            return 1;
+        }
+        // level 0 there, and each mip beside it as <png>.<level>.png
+        const std::string stem = dump_noise.substr(0, dump_noise.size() - 4);
+        for (size_t l = 0; l <= t->mips.size(); l++) {
+            std::vector<uint32_t> px = l ? t->mips[l - 1] : t->rgba;
+            for (uint32_t& c : px) c |= 0xff000000u;  // alpha off, as --dump-tex
+            const uint32_t w = std::max(t->width >> l, 1u), h = std::max(t->height >> l, 1u);
+            if (px.size() != size_t(w) * h) break;
+            WritePng(l ? stem + "." + std::to_string(l) + ".png" : dump_noise, px, w, h);
+        }
+        std::printf("%s: the noise map, %ux%u format %u, %zu mips (beside it)\n",
+                    dump_noise.c_str(), t->width, t->height, t->format, t->mips.size());
         return 0;
     }
     if (!dump_alpha.empty() || !dump_depth.empty()) {

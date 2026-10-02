@@ -73,7 +73,15 @@ SHADERS = [
           ("textures", "depth_tex", 2, 1), ("textures", "dof_tex", 2, 2),
           ("textures", "bloom0_tex", 2, 3), ("textures", "bloom1_tex", 2, 4),
           ("textures", "bloom2_tex", 2, 5), ("textures", "volume_tex", 2, 6),
-          ("textures", "density_tex", 2, 7), ("textures", "soft_tex", 2, 8)}),
+          ("textures", "density_tex", 2, 7), ("textures", "soft_tex", 2, 8),
+          ("textures", "noise_tex", 2, 9)}),
+        ("kCompositeHistoryPixel", "PSCompositeHistory", "ps_5_1", "ps_6_0",
+         {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0),
+          ("textures", "depth_tex", 2, 1), ("textures", "dof_tex", 2, 2),
+          ("textures", "bloom0_tex", 2, 3), ("textures", "bloom1_tex", 2, 4),
+          ("textures", "bloom2_tex", 2, 5), ("textures", "volume_tex", 2, 6),
+          ("textures", "density_tex", 2, 7), ("textures", "soft_tex", 2, 8),
+          ("textures", "noise_tex", 2, 9), ("textures", "prev_tex", 2, 10)}),
     ]),
     # the display gamma ramp's pass, drawn with post.hlsl's VSFullscreen
     ("gamma.hlsl", "gamma_shaders.gen.h", [

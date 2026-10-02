@@ -7,8 +7,9 @@
 
 // flags.x: what the composite applies, as the flags RB3's shader manager
 // picks its composite by (TheShaderMgr + 0x26 DOF, 0x27 bloom, 0x28 glare,
-// 0x2A colour matrix, 0x25 spotlights, 0x3F soft particles; out/research/
-// m4_shader_check.md, spotlight_survey.md 2, softparticle_survey.md 1)
+// 0x2A colour matrix, 0x25 spotlights, 0x3F soft particles, 0x2D noise and
+// 0x2E its midtone weight, 0x2F trails; out/research/m4_shader_check.md,
+// spotlight_survey.md 2, softparticle_survey.md 1, n1_post_noise.md)
 static const uint kPostDof = 1u;    // depth of field: the blurred scene, by c24 and the depth
 static const uint kPostBloom = 2u;  // bloom's three levels, screen-blended by c6
 // glare: half of bloom's level 0 (after its glare pass) times c6, added
@@ -18,6 +19,14 @@ static const uint kPostXfm = 8u;    // the colour matrix, c92..c94
 static const uint kPostSpot = 16u;
 // the soft-particle buffer (s4), added after the DOF, before bloom
 static const uint kPostSoft = 32u;
+// the noise (film grain): the noise map overlaid by c112/c113, after the
+// spotlights' term, before the colour matrix; with kPostNoiseMidtone
+// weighted by the luminance's midtones
+static const uint kPostNoise = 64u;
+static const uint kPostNoiseMidtone = 128u;
+// the trails (blend previous): the previous post frame faded, kept where
+// it's brighter, last; on where the renderer has its previous frame
+static const uint kPostTrails = 256u;
 
 // the most taps a blur has (the bloom's Gaussian; the DOF's has 8)
 static const uint kPostMaxTaps = 15u;
@@ -38,4 +47,14 @@ struct PostPass {
     // the spotlights' term: (c127.x, c127.y, c91.x), the volume times x + y *
     // the density, times z
     float4 spot;
+    // the noise's: c112, the seeds (the two taps' uv offsets), and c113,
+    // (base scale x, y, the second tap's scale on top, intensity)
+    float4 noise_seeds;
+    float4 noise;
+    // the noise map's sampler (sample_model.h's PackSampler), and its size
+    // (x, y) and, on the GPU, its layer in its texture array (z)
+    uint4 noise_sampler;
+    uint4 noise_tex;
+    // c125, the trails': (threshold, fade (dt / duration), 1/3, 0)
+    float4 trails;
 };

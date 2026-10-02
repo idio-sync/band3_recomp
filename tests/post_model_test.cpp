@@ -2,19 +2,23 @@
 // post_model.hlsli on the CPU, as post.hlsl does on the GPU): the blurs' taps
 // against what the game gave its shaders, the native depth read as the game's
 // depth texture against the c24 the game's composite drew with, the
-// composite (the spotlights' and soft particles' terms too) against the
-// models of the game's composite shaders that tools/shaders/research/post/
-// check_post.py checks in an interpreter, glare's pass over bloom's level 0
+// composite (the spotlights', soft particles' and noise's terms too)
+// against the models of the game's composite shaders that
+// tools/shaders/research/post/check_post.py and check_noise.py check in an
+// interpreter, glare's pass over bloom's level 0
 // against its model there too, and the passes together on a plain
 // picture. Captured
 // numbers are from render_song.b3t's 10s and render_song_evenodd.b3t's 25s
 // (kept in out/m4), and its intro (out/parity_spot) for the spotlights.
 
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include "src/Render/post_model.h"
+#include "src/Render/sample_model.h"
 
 using namespace band3::render;
 using namespace band3::render::post;
@@ -35,9 +39,12 @@ float ModelDofAmount(const float c24[4], float depth) {
 // and the density map's red, spot c127.x, c127.y and c91.x, soft the
 // soft-particle buffer (s4), which 63306D35 and the spotlights' 0F105E2D
 // read (the others' models have none: it reads 0 there).
+// n0 and n1 are the noise map's two taps (s13), c112 and c113 the noise's
+// constants.
 struct Inputs {
     float scene[4], dof[4], depth, l0[3], l1[3], l2[3], c6[3], c24[4], rows[3][4];
     float vol[3], dens, spot[3], soft[3];
+    float n0[3], n1[3], c112[4], c113[4];
 };
 
 // the spotlights' term in channel k (check_post.py's spot_term)
@@ -112,6 +119,65 @@ void ModelF7E2A8FB(const Inputs& in, float out[3]) {
     for (int k = 0; k < 3; k++) out[k] = Sat(in.scene[k] + SpotTerm(in, k));
 }
 
+// check_noise.py's noise(): the taps' geometric mean, overlaid on rgb by
+// its luminance, moved toward by 6.75 c113.w L (1 - L)^2 (or, without the
+// midtone weight, c113.w: band3's guess), in place
+void NoiseModel(const Inputs& in, bool midtone, float rgb[3]) {
+    float n[3];
+    for (int k = 0; k < 3; k++) n[k] = std::sqrt(std::fabs(in.n0[k] * in.n1[k]));
+    const float l = 0.30f * rgb[0] + 0.59f * rgb[1] + 0.11f * rgb[2];
+    const float w = midtone ? 6.75f * in.c113[3] * l * (1 - l) * (1 - l) : in.c113[3];
+    for (int k = 0; k < 3; k++) {
+        const float ov = l <= 0.5f ? 2 * n[k] * rgb[k] : 1 - 2 * (1 - n[k]) * (1 - rgb[k]);
+        rgb[k] = rgb[k] + w * (ov - rgb[k]);
+    }
+}
+// 4FD49280: glare, spotlights, noise (no colour matrix)
+void Model4FD49280(const Inputs& in, float out[3]) {
+    float rgb[3];
+    for (int k = 0; k < 3; k++) rgb[k] = in.scene[k] + 0.5f * in.l0[k] * in.c6[k] + SpotTerm(in, k);
+    NoiseModel(in, true, rgb);
+    for (int k = 0; k < 3; k++) out[k] = Sat(rgb[k]);
+}
+// 0A9D6EAE: DOF, spotlights, noise
+void Model0A9D6EAE(const Inputs& in, float out[3]) {
+    const float a = ModelDofAmount(in.c24, in.depth);
+    float rgb[3];
+    for (int k = 0; k < 3; k++)
+        rgb[k] = in.scene[k] + (in.dof[k] - in.scene[k]) * a + SpotTerm(in, k);
+    NoiseModel(in, true, rgb);
+    for (int k = 0; k < 3; k++) out[k] = Sat(rgb[k]);
+}
+// D1942A59: DOF, bloom (screen), spotlights, noise
+void ModelD1942A59(const Inputs& in, float out[3]) {
+    const float a = ModelDofAmount(in.c24, in.depth);
+    float rgb[3];
+    for (int k = 0; k < 3; k++) {
+        rgb[k] = in.scene[k] + (in.dof[k] - in.scene[k]) * a;
+        rgb[k] = 1 - (1 - rgb[k]) * (1 - (in.l0[k] + in.l1[k] + in.l2[k]) * in.c6[k]) +
+                 SpotTerm(in, k);
+    }
+    NoiseModel(in, true, rgb);
+    for (int k = 0; k < 3; k++) out[k] = Sat(rgb[k]);
+}
+// the music-video venues' composite (not dumped): glare, noise, then the
+// colour matrix, as 4FD49280 (glare -> noise) and 5C1E47C0 (noise ->
+// matrix, unsaturated between) put them together
+void ModelVideoVenue(const Inputs& in, float out[3]) {
+    float rgb[3];
+    for (int k = 0; k < 3; k++) rgb[k] = in.scene[k] + 0.5f * in.l0[k] * in.c6[k];
+    NoiseModel(in, true, rgb);
+    for (int ch = 0; ch < 3; ch++)
+        out[ch] = Sat(in.rows[ch][0] * rgb[0] + in.rows[ch][1] * rgb[1] + in.rows[ch][2] * rgb[2] +
+                      in.rows[ch][3]);
+}
+// the noise without the midtone weight (band3's guess: no such shader)
+void ModelNoiseFlat(const Inputs& in, float out[3]) {
+    float rgb[3] = {in.scene[0], in.scene[1], in.scene[2]};
+    NoiseModel(in, false, rgb);
+    for (int k = 0; k < 3; k++) out[k] = Sat(rgb[k]);
+}
+
 // deterministic inputs in check_post.py's ranges (the spotlights' gains
 // about the game's: c127 around 0.01, c91.x 32)
 Inputs MakeInputs(uint32_t seed) {
@@ -147,6 +213,17 @@ Inputs MakeInputs(uint32_t seed) {
     in.spot[1] = next(0, 0.03f);
     in.spot[2] = next(0, 40);
     for (int k = 0; k < 3; k++) in.soft[k] = next(0, 1);
+    // check_noise.py's ranges: seeds 0..1, base scales 1..40, top 0.5..2,
+    // intensity -3..3; the taps 0..1
+    for (int k = 0; k < 3; k++) {
+        in.n0[k] = next(0, 1);
+        in.n1[k] = next(0, 1);
+    }
+    for (int k = 0; k < 4; k++) in.c112[k] = next(0, 1);
+    in.c113[0] = next(1, 40);
+    in.c113[1] = next(1, 40);
+    in.c113[2] = next(0.5f, 2);
+    in.c113[3] = next(-3, 3);
     return in;
 }
 
@@ -158,6 +235,8 @@ PostPass PassFor(const Inputs& in, uint32_t flags) {
     for (int j = 0; j < 3; j++)
         p.xfm[j] = {in.rows[j][0], in.rows[j][1], in.rows[j][2], in.rows[j][3]};
     p.spot = {in.spot[0], in.spot[1], in.spot[2], 0};
+    p.noise_seeds = {in.c112[0], in.c112[1], in.c112[2], in.c112[3]};
+    p.noise = {in.c113[0], in.c113[1], in.c113[2], in.c113[3]};
     return p;
 }
 
@@ -260,6 +339,15 @@ TEST_CASE("the composite is the game's composite shaders' maths") {
         {"6EF4844D DOF bloom spot xfm", kPostDof | kPostBloom | kPostSpot | kPostXfm,
          Model6EF4844D},
         {"F7E2A8FB spot", kPostSpot, ModelF7E2A8FB},
+        {"4FD49280 glare spot noise", kPostGlare | kPostSpot | kPostNoise | kPostNoiseMidtone,
+         Model4FD49280},
+        {"0A9D6EAE DOF spot noise", kPostDof | kPostSpot | kPostNoise | kPostNoiseMidtone,
+         Model0A9D6EAE},
+        {"D1942A59 DOF bloom spot noise",
+         kPostDof | kPostBloom | kPostSpot | kPostNoise | kPostNoiseMidtone, ModelD1942A59},
+        {"video venues: glare noise xfm", kPostGlare | kPostNoise | kPostNoiseMidtone | kPostXfm,
+         ModelVideoVenue},
+        {"noise without the midtone weight", kPostNoise, ModelNoiseFlat},
     };
     for (const Variant& v : variants) {
         CAPTURE(v.name);
@@ -268,7 +356,7 @@ TEST_CASE("the composite is the game's composite shaders' maths") {
             float want[3], got[3];
             v.model(in, want);
             CompositeCpu(PassFor(in, v.flags), in.scene, in.dof, in.depth, in.l0, in.l1, in.l2,
-                         in.vol, in.dens, in.soft, got);
+                         in.vol, in.dens, in.soft, in.n0, in.n1, got);
             for (int k = 0; k < 3; k++) CHECK(Near(got[k], want[k], 1e-5f));
         }
     }
@@ -633,4 +721,310 @@ TEST_CASE("glare's pass over level 0 is the game's bloom_glare shader") {
     plan.composite.flags.x = kPostXfm;
     RunPost(plan, scene, depth, w, h, {}, {}, {}, out, &level);
     CHECK(level.empty());
+}
+
+TEST_CASE("the noise's taps are the game's: (uv + c112.xy) c113.xy and (uv + c112.zw) c113.xyz") {
+    // check_noise.py's noise_taps, and the derivatives the taps are read
+    // with: their scales over the target's size
+    for (uint32_t seed = 0; seed < 20; seed++) {
+        const Inputs in = MakeInputs(seed);
+        PostPass p = PassFor(in, kPostNoise);
+        p.target = {1280, 720, 1.0f / 1280, 1.0f / 720};
+        const float uv[2] = {in.scene[0], in.scene[1]};
+        float at[2], dx[2], dy[2];
+        NoiseTapCpu(p, uv, 0, at, dx, dy);
+        CHECK(Near(at[0], (uv[0] + in.c112[0]) * in.c113[0], 1e-4f));
+        CHECK(Near(at[1], (uv[1] + in.c112[1]) * in.c113[1], 1e-4f));
+        CHECK(Near(dx[0], in.c113[0] / 1280, 1e-7f));
+        CHECK(dx[1] == 0);
+        CHECK(dy[0] == 0);
+        CHECK(Near(dy[1], in.c113[1] / 720, 1e-7f));
+        NoiseTapCpu(p, uv, 1, at, dx, dy);
+        CHECK(Near(at[0], (uv[0] + in.c112[2]) * in.c113[0] * in.c113[2], 1e-4f));
+        CHECK(Near(at[1], (uv[1] + in.c112[3]) * in.c113[1] * in.c113[2], 1e-4f));
+        CHECK(Near(dx[0], in.c113[0] * in.c113[2] / 1280, 1e-7f));
+        CHECK(Near(dy[1], in.c113[1] * in.c113[2] / 720, 1e-7f));
+    }
+}
+
+TEST_CASE("the noise's midtone weight peaks at a third and leaves black and white be") {
+    // the song-video capture's c113.w (render_screens_song.b3t), and taps
+    // whose geometric mean is n: the move toward the overlay is 6.75 I L
+    // (1 - L)^2 of the way, 2.65 times it at L = 1/3, none at 0 and 1
+    Inputs in{};
+    in.c113[3] = 2.65f;
+    const float n = 0.6f;
+    for (int k = 0; k < 3; k++) in.n0[k] = in.n1[k] = n;
+    const uint32_t flags = kPostNoise | kPostNoiseMidtone;
+    for (float grey : {0.0f, 1.0f / 3, 0.5f, 0.75f, 1.0f}) {
+        CAPTURE(grey);
+        for (int k = 0; k < 4; k++) in.scene[k] = grey;
+        float got[3];
+        CompositeCpu(PassFor(in, flags), in.scene, in.dof, 0, in.l0, in.l1, in.l2, in.vol, 0,
+                     in.soft, in.n0, in.n1, got);
+        const float w = 6.75f * 2.65f * grey * (1 - grey) * (1 - grey);
+        const float ov = grey <= 0.5f ? 2 * n * grey : 1 - 2 * (1 - n) * (1 - grey);
+        CHECK(Near(got[0], Sat(grey + w * (ov - grey)), 1e-5f));
+    }
+    // at n 0.5 the overlay of a grey at or under 0.5 is the grey itself: no
+    // change, whatever the weight
+    for (int k = 0; k < 3; k++) in.n0[k] = in.n1[k] = 0.5f;
+    for (int k = 0; k < 4; k++) in.scene[k] = 0.3f;
+    float got[3];
+    CompositeCpu(PassFor(in, flags), in.scene, in.dof, 0, in.l0, in.l1, in.l2, in.vol, 0, in.soft,
+                 in.n0, in.n1, got);
+    CHECK(Near(got[1], 0.3f, 1e-6f));
+}
+
+TEST_CASE("PlanPost turns the noise on where the game's composite had it and the map was kept") {
+    // render_screens_song.b3t's song-video (out/n1/c): c112, c113 and the
+    // flags +0x2D, +0x2E as the composite drew with them
+    FrameCapture f;
+    f.post.valid = 1;
+    f.post.proc = 0x1000;
+    f.post_boundary = 0;
+    f.proc_cmds = 7;
+    f.post_consts.valid = 1;
+    const float c112[4] = {0.7767f, 0.8988f, 0.7839f, 0.8558f};
+    const float c113[4] = {2.5f, 2.5f, 1.35914f, 2.65f};
+    std::copy(c112, c112 + 4, f.post_consts.c112);
+    std::copy(c113, c113 + 4, f.post_consts.c113);
+    f.post_consts.flags[kPostFlagNoise] = 1;
+    f.post_consts.flags[kPostFlagNoiseMidtone] = 1;
+    PostPlan plan{};
+    // no map kept (captures from before): no grain, and nothing else on
+    CHECK_FALSE(PlanPost(f, 0, plan));
+    auto map = std::make_shared<Texture>();
+    map->width = map->height = 4;
+    map->rgba.assign(16, 0xff808080u);
+    map->mips = {std::vector<uint32_t>(4, 0xff808080u), std::vector<uint32_t>(1, 0xff808080u)};
+    f.noise_map = map;
+    f.noise_sampler.filtered = 1;
+    f.noise_sampler.mag_linear = f.noise_sampler.min_linear = 1;
+    f.noise_sampler.mip = 1;
+    f.noise_sampler.mip_max = 2;
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK(plan.composite.flags.x == (kPostNoise | kPostNoiseMidtone));
+    CHECK(plan.noise == map.get());
+    CHECK(Near(plan.composite.noise_seeds.x, c112[0]));
+    CHECK(Near(plan.composite.noise_seeds.w, c112[3]));
+    CHECK(Near(plan.composite.noise.z, c113[2]));
+    CHECK(plan.composite.noise_tex.x == 4u);
+    uint32_t packed[4];
+    PackSampler(f.noise_sampler, 3, packed);
+    CHECK(plan.composite.noise_sampler.x == packed[0]);
+    CHECK(plan.composite.noise_sampler.z == packed[2]);
+    // left out when asked, or by another effect alone; --post-only noise
+    // keeps its midtone weight
+    CHECK_FALSE(PlanPost(f, 0, plan, false));
+    CHECK_FALSE(PlanPost(f, kPostXfm, plan));
+    REQUIRE(PlanPost(f, kPostNoise, plan));
+    CHECK(plan.composite.flags.x == (kPostNoise | kPostNoiseMidtone));
+    // without the composite's flag, none
+    f.post_consts.flags[kPostFlagNoise] = 0;
+    CHECK_FALSE(PlanPost(f, 0, plan));
+
+    // a world frame: on by the proc's fields, c113 from them, seeds of its
+    // own that differ from frame to frame (or the stationary two)
+    f.proc_cmds = 1;
+    f.post.noise_base[0] = f.post.noise_base[1] = 2.5f;
+    f.post.noise_top = 1.35914f;
+    f.post.noise_intensity = 2.65f;
+    f.post.noise_midtone = 1;
+    CHECK_FALSE(PlanPost(f, 0, plan));  // no map
+    f.post.noise_map = 0x2000;
+    f.game_frame = 100;
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK(plan.composite.flags.x == (kPostNoise | kPostNoiseMidtone));
+    CHECK(Near(plan.composite.noise.x, 2.5f));
+    CHECK(Near(plan.composite.noise.z, 1.35914f));
+    CHECK(Near(plan.composite.noise.w, 2.65f));
+    const float4 seeds = plan.composite.noise_seeds;
+    for (float v : {seeds.x, seeds.y, seeds.z, seeds.w}) {
+        CHECK(v >= 0);
+        CHECK(v < 1);
+    }
+    f.game_frame = 101;
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK(plan.composite.noise_seeds.x != seeds.x);
+    f.post.noise_stationary = 1;
+    f.post.noise_seeds[0] = 0.25f;
+    f.post.noise_seeds[1] = 0.75f;
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK(plan.composite.noise_seeds.x == 0.25f);
+    CHECK(plan.composite.noise_seeds.w == 0.75f);
+    CHECK(plan.composite.noise.z == 1.0f);
+}
+
+TEST_CASE("the grain reads the noise map by its sampler at both taps") {
+    // a flat scene at a midtone and a noise map with a known texel pattern,
+    // read nearest at level 0 (so every tap is one texel): each pixel is the
+    // model's noise term of its two texels
+    const uint32_t w = 32, h = 18;
+    const uint32_t grey = 85;  // L = 1/3
+    std::vector<uint32_t> scene(size_t(w) * h, grey | grey << 8 | grey << 16);
+    std::vector<float> depth(scene.size(), 0.0f);
+    Texture map;
+    map.width = map.height = 8;
+    map.rgba.resize(64);
+    for (uint32_t i = 0; i < 64; i++) {
+        const uint32_t v = (i * 37 + 11) % 256;
+        map.rgba[i] = v | v << 8 | v << 16 | 0xffu << 24;
+    }
+    TexSampler ts;
+    ts.filtered = 1;
+    ts.mip = 2;  // level 0 alone
+    PostPlan plan{};
+    plan.composite.flags = {kPostNoise | kPostNoiseMidtone, 0, 0, 0};
+    plan.composite.noise_seeds = {0.1f, 0.2f, 0.3f, 0.4f};
+    plan.composite.noise = {2.5f, 2.5f, 1.35914f, 2.65f};
+    uint32_t packed[4];
+    PackSampler(ts, 1, packed);
+    plan.composite.noise_sampler = {packed[0], packed[1], packed[2], packed[3]};
+    plan.composite.noise_tex = {8, 8, 0, 0};
+    plan.noise = &map;
+    std::vector<uint32_t> out;
+    RunPost(plan, scene, depth, w, h, {}, {}, {}, out);
+    REQUIRE(out.size() == scene.size());
+    auto texel = [&](float u, float v) {
+        const int x = int(std::floor((u - std::floor(u)) * 8));
+        const int y = int(std::floor((v - std::floor(v)) * 8));
+        return float(map.rgba[size_t(y) * 8 + x] & 0xff) / 255;
+    };
+    int changed = 0;
+    for (uint32_t y = 0; y < h; y += 5) {
+        for (uint32_t x = 0; x < w; x += 3) {
+            const float u = (float(x) + 0.5f) / float(w), v = (float(y) + 0.5f) / float(h);
+            const float t0 = texel((u + 0.1f) * 2.5f, (v + 0.2f) * 2.5f);
+            const float t1 = texel((u + 0.3f) * 2.5f * 1.35914f, (v + 0.4f) * 2.5f * 1.35914f);
+            Inputs in{};
+            in.c113[3] = 2.65f;
+            for (int k = 0; k < 3; k++) {
+                in.n0[k] = t0;
+                in.n1[k] = t1;
+            }
+            float rgb[3] = {float(grey) / 255, float(grey) / 255, float(grey) / 255};
+            NoiseModel(in, true, rgb);
+            const float got = float(out[size_t(y) * w + x] & 0xff) / 255;
+            CHECK(Near(got, Sat(rgb[0]), 0.6f / 255));
+            changed += (out[size_t(y) * w + x] & 0xff) != grey;
+        }
+    }
+    CHECK(changed > 0);
+}
+
+// check_trails.py's model of the game's BLENDPREVIOUS term (variants 30,
+// 200030 and 802000200024 of its shader cache, run in xsim): the previous
+// post frame faded by c125.y, its mean scored against the threshold c125.x
+// (or gated by the previous alpha), kept where it beats the colour's mean
+void ModelTrails(const float c125[4], const float cur[3], const float prev[4], float out[4]) {
+    float d[3];
+    for (int k = 0; k < 3; k++) d[k] = Sat(prev[k] - c125[1]);
+    const float m = (d[0] + d[1] + d[2]) * c125[2];
+    const float score = m > c125[0] ? m : prev[3] * m;
+    const bool win = score > (cur[0] + cur[1] + cur[2]) * c125[2];
+    for (int k = 0; k < 3; k++) out[k] = Sat(win ? d[k] : cur[k]);
+    out[3] = win ? 1.0f : 0.0f;
+}
+
+TEST_CASE("the trails keep the faded previous frame where it's brighter, as the game's shader") {
+    uint32_t s = 7;
+    auto next = [&](float lo, float hi) {
+        s = s * 1664525u + 1013904223u;
+        return lo + (hi - lo) * float(s >> 8) / float(1u << 24);
+    };
+    for (int trial = 0; trial < 300; trial++) {
+        CAPTURE(trial);
+        // check_trails.py's ranges; the colour unsaturated, as after the
+        // colour matrix
+        const float c125[4] = {next(0, 1), next(0, 0.3f), trial % 2 ? 1.0f / 3 : next(0.1f, 1), 0};
+        const float cur[3] = {next(-0.5f, 1.5f), next(-0.5f, 1.5f), next(-0.5f, 1.5f)};
+        const float prev[4] = {next(0, 1), next(0, 1), next(0, 1), trial % 3 ? next(0, 1) : 1.0f};
+        PostPass p{};
+        p.trails = {c125[0], c125[1], c125[2], c125[3]};
+        float want[4], got[4];
+        ModelTrails(c125, cur, prev, want);
+        TrailsCpu(p, cur, prev, got);
+        for (int k = 0; k < 4; k++) CHECK(Near(got[k], want[k], 1e-6f));
+    }
+    // the music-video venues' most common (0.9999, a sixth or more a
+    // frame): no trail ever starts, even from white
+    PostPass p{};
+    p.trails = {0.9999f, 1.0f / 6, 1.0f / 3, 0};
+    const float white[4] = {1, 1, 1, 0}, dark[3] = {0.1f, 0.1f, 0.1f};
+    float got[4];
+    TrailsCpu(p, dark, white, got);
+    CHECK(got[3] == 0.0f);
+    CHECK(Near(got[0], 0.1f));
+    // but one that was kept (alpha 1) goes on until it fades under the colour
+    const float kept[4] = {1, 1, 1, 1};
+    TrailsCpu(p, dark, kept, got);
+    CHECK(got[3] == 1.0f);
+    CHECK(Near(got[0], 1 - 1.0f / 6));
+}
+
+TEST_CASE("PlanPost turns the trails on where the game's composite had them") {
+    FrameCapture f;
+    f.post.valid = 1;
+    f.post.proc = 0x1000;
+    f.post_boundary = 0;
+    f.proc_cmds = 7;
+    f.post_consts.valid = 1;
+    // song-video (render_screens_song.b3t): c125 and +0x2F as captured
+    const float c125[4] = {0.9999f, 0.382057f, 0.333333f, 0};
+    std::copy(c125, c125 + 4, f.post_consts.c125);
+    PostPlan plan{};
+    CHECK_FALSE(PlanPost(f, 0, plan));
+    f.post_consts.flags[kPostFlagBlendPrevious] = 1;
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK(plan.composite.flags.x == kPostTrails);
+    CHECK(plan.trails_update);
+    CHECK(Near(plan.composite.trails.y, c125[1]));
+    // a world frame: by the proc's threshold and duration, a post frame's
+    // time at its emulated rate, and not one the game keeps
+    f.proc_cmds = 1;
+    f.post.emulate_fps = 30;
+    CHECK_FALSE(PlanPost(f, 0, plan));
+    f.post.trail_threshold = 0;
+    f.post.trail_duration = 0.4f;
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK(plan.composite.flags.x == kPostTrails);
+    CHECK_FALSE(plan.trails_update);
+    CHECK(Near(plan.composite.trails.y, 1.0f / 30 / 0.4f));
+    CHECK(Near(plan.composite.trails.z, 1.0f / 3));
+    f.post.trail_threshold = 1;
+    CHECK_FALSE(PlanPost(f, 0, plan));
+}
+
+TEST_CASE("the trails read the post frame before, which a frame drawn alone hasn't") {
+    // video_trails' (0, fade 0.1 a frame): a white frame, then a dark one,
+    // which keeps the white faded; without the history (a capture) it's
+    // the dark frame alone
+    const uint32_t w = 8, h = 4;
+    std::vector<uint32_t> white(size_t(w) * h, 0xffffffffu), dark(size_t(w) * h, 0x00202020u);
+    std::vector<float> depth(white.size(), 0.0f);
+    PostPlan plan{};
+    plan.composite.flags = {kPostTrails, 0, 0, 0};
+    plan.composite.trails = {0, 0.1f, 1.0f / 3, 0};
+    plan.trails_update = true;
+    PostHistory history;
+    std::vector<uint32_t> out;
+    RunPost(plan, white, depth, w, h, {}, {}, {}, out, nullptr, &history, 10);
+    CHECK((out[0] & 0xffffffu) == 0xffffffu);
+    REQUIRE(history.game_frame == 10u);
+    CHECK(history.rgba[0] == 0xffffffffu);  // the scene's alpha, 1
+    RunPost(plan, dark, depth, w, h, {}, {}, {}, out, nullptr, &history, 11);
+    const uint32_t faded = uint32_t(0.9f * 255 + 0.5f);
+    CHECK((out[0] & 0xff) == faded);
+    CHECK((history.rgba[0] >> 24) == 0xffu);  // kept: alpha 1
+    CHECK(history.game_frame == 11u);
+    // drawn again, the same frame isn't kept twice, and has no earlier one
+    // to read (the history is its own): the dark frame
+    std::vector<uint32_t> again;
+    RunPost(plan, dark, depth, w, h, {}, {}, {}, again, nullptr, &history, 11);
+    CHECK((again[0] & 0xff) == 0x20u);
+    CHECK(history.game_frame == 11u);
+    // no history: the dark frame
+    RunPost(plan, dark, depth, w, h, {}, {}, {}, out);
+    CHECK((out[0] & 0xffffffu) == 0x202020u);
 }
