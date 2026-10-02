@@ -9,11 +9,20 @@ band3 started with --test_port=<port> takes one command per line on
   python tools/band3ctl.py wait screen~main timeout=90s
   python tools/band3ctl.py run tests/game/boot.b3t
   python tools/band3ctl.py "hold down; wait frames=90; release all"
+  python tools/band3ctl.py window offscreen       restore the game's window off every monitor
+  python tools/band3ctl.py window shot out.png    what its window shows (not minimized)
+  python tools/band3ctl.py window minimize
 
 Commands joined with ; share one connection, which `hold` needs: band3 lets go
 of everything held when a client disconnects. `run` replays a .b3t script: harness commands one per line, # comments. It
 stops at the first command that fails, saves a screenshot of the moment, and
 exits 1. It prints the replies that carry measurements (`native_view`'s stats). The commands are listed in the README's Test harness section.
+
+`window` works on the game's window itself, through Win32, never activating it,
+for checking what the window presents (the harness's screenshots are the
+emulated GPU's picture alone): a window launched minimized never paints, so
+`offscreen` restores it to the right of every monitor, where it paints but nobody
+sees it.
 
 Standard library only.
 """
@@ -162,6 +171,330 @@ def launch(args):
              f"within {args.timeout} s; is test_port in use?")
 
 
+def parse_size(text):
+    """'1920x1080' as (1920, 1080); ValueError otherwise."""
+    m = re.fullmatch(r"(\d+)x(\d+)", text.strip().lower())
+    if not m or int(m.group(1)) <= 0 or int(m.group(2)) <= 0:
+        raise ValueError(f"not a size: {text!r} (want <width>x<height>)")
+    return int(m.group(1)), int(m.group(2))
+
+
+def offscreen_origin(virtual_screen):
+    """Where a window goes to be on no monitor: right of the virtual screen
+    (left, top, width, height), by a margin, at its top."""
+    left, top, width, _ = virtual_screen
+    return left + width + 100, top
+
+
+def is_build_exe(image, repo=REPO):
+    """Whether a process's image is a band3.exe built under this checkout's
+    out/build, not a worktree's (.claude/worktrees/<name>/out/build) or another's."""
+    build = os.path.normcase(os.path.join(repo, "out", "build")) + os.sep
+    image = os.path.normcase(os.path.abspath(image))
+    return image.startswith(build) and os.path.basename(image) == "band3.exe"
+
+
+def png_bytes(width, height, rgb_rows):
+    """An 8-bit RGB PNG of rows of width*3 bytes each."""
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    raw = b"".join(b"\x00" + row for row in rgb_rows)
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+
+
+class GameWindow:
+    """The running game's window, moved and read without ever activating it:
+    every call here leaves the foreground window as it was. Win32 only."""
+
+    SW_SHOWNOACTIVATE = 4
+    SW_SHOWMINNOACTIVE = 7
+    SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_NOACTIVATE = 0x1, 0x2, 0x4, 0x10
+    PW_CLIENTONLY, PW_RENDERFULLCONTENT = 0x1, 0x2
+
+    def __init__(self, pid=None):
+        import ctypes
+        from ctypes import wintypes
+        self.ct, self.wt = ctypes, wintypes
+        self.user32 = ctypes.WinDLL("user32", use_last_error=True)
+        self.gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        # physical pixels everywhere, whatever the monitors' scaling
+        self.user32.SetProcessDpiAwarenessContext.restype = wintypes.BOOL
+        self.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # per-monitor v2
+        # handles are pointer-sized; ctypes would pass a bare int as a 32-bit one
+        H, P, I = wintypes.HWND, ctypes.c_void_p, ctypes.c_int
+        for dll, name, res, args in (
+                (self.user32, "GetForegroundWindow", H, []),
+                (self.user32, "GetDpiForWindow", wintypes.UINT, [H]),
+                (self.user32, "IsIconic", wintypes.BOOL, [H]),
+                (self.user32, "IsWindowVisible", wintypes.BOOL, [H]),
+                (self.user32, "GetWindowThreadProcessId", wintypes.DWORD, [H, P]),
+                (self.user32, "GetWindowPlacement", wintypes.BOOL, [H, P]),
+                (self.user32, "SetWindowPlacement", wintypes.BOOL, [H, P]),
+                (self.user32, "GetWindowRect", wintypes.BOOL, [H, P]),
+                (self.user32, "GetClientRect", wintypes.BOOL, [H, P]),
+                (self.user32, "SetWindowPos", wintypes.BOOL, [H, H, I, I, I, I, wintypes.UINT]),
+                (self.user32, "ShowWindow", wintypes.BOOL, [H, I]),
+                (self.user32, "GetWindowLongW", wintypes.LONG, [H, I]),
+                (self.user32, "AdjustWindowRectExForDpi", wintypes.BOOL,
+                 [P, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD, wintypes.UINT]),
+                (self.user32, "PrintWindow", wintypes.BOOL, [H, wintypes.HDC, wintypes.UINT]),
+                (self.user32, "GetDC", wintypes.HDC, [H]),
+                (self.user32, "ReleaseDC", I, [H, wintypes.HDC]),
+                (self.gdi32, "CreateCompatibleDC", wintypes.HDC, [wintypes.HDC]),
+                (self.gdi32, "CreateCompatibleBitmap", wintypes.HBITMAP, [wintypes.HDC, I, I]),
+                (self.gdi32, "SelectObject", wintypes.HGDIOBJ, [wintypes.HDC, wintypes.HGDIOBJ]),
+                (self.gdi32, "GetDIBits", I, [wintypes.HDC, wintypes.HBITMAP, wintypes.UINT,
+                                              wintypes.UINT, P, P, wintypes.UINT]),
+                (self.gdi32, "DeleteObject", wintypes.BOOL, [wintypes.HGDIOBJ]),
+                (self.gdi32, "DeleteDC", wintypes.BOOL, [wintypes.HDC]),
+                (self.kernel32, "OpenProcess", wintypes.HANDLE,
+                 [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]),
+                (self.kernel32, "CloseHandle", wintypes.BOOL, [wintypes.HANDLE]),
+                (self.kernel32, "QueryFullProcessImageNameW", wintypes.BOOL,
+                 [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, P])):
+            getattr(dll, name).restype = res
+            getattr(dll, name).argtypes = args
+        self.pid = pid if pid else self._find_pid()
+        self.hwnd = self._find_window(self.pid)
+
+    def _find_pid(self):
+        """The one band3.exe running from this checkout's out/build."""
+        ct, wt = self.ct, self.wt
+        pids = (wt.DWORD * 4096)()
+        needed = wt.DWORD()
+        self.ct.WinDLL("psapi").EnumProcesses(pids, ct.sizeof(pids), ct.byref(needed))
+        found = []
+        for pid in pids[:needed.value // ct.sizeof(wt.DWORD)]:
+            handle = self.kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+            if not handle:
+                continue
+            try:
+                buf = ct.create_unicode_buffer(1024)
+                size = wt.DWORD(len(buf))
+                if (self.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ct.byref(size))
+                        and is_build_exe(buf.value)):
+                    found.append(pid)
+            finally:
+                self.kernel32.CloseHandle(handle)
+        if not found:
+            raise RuntimeError("band3 isn't running from out/build")
+        if len(found) > 1:
+            raise RuntimeError(f"more than one band3 is running ({found}); pick one with --pid")
+        return found[0]
+
+    def _find_window(self, pid):
+        """The process's largest visible top-level window: the game's."""
+        ct, wt = self.ct, self.wt
+        best = []
+        proc = ct.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+        def visit(hwnd, _):
+            owner = wt.DWORD()
+            self.user32.GetWindowThreadProcessId(hwnd, ct.byref(owner))
+            if owner.value == pid and self.user32.IsWindowVisible(hwnd):
+                placement = self._placement(hwnd)
+                r = placement.rcNormalPosition
+                best.append(((r.right - r.left) * (r.bottom - r.top), hwnd))
+            return True
+
+        self.user32.EnumWindows(proc(visit), 0)
+        if not best:
+            raise RuntimeError(f"band3 (pid {pid}) has no window yet")
+        return max(best)[1]
+
+    def _placement(self, hwnd=None):
+        wt = self.wt
+
+        class WINDOWPLACEMENT(self.ct.Structure):
+            _fields_ = [("length", wt.UINT), ("flags", wt.UINT), ("showCmd", wt.UINT),
+                        ("ptMinPosition", wt.POINT), ("ptMaxPosition", wt.POINT),
+                        ("rcNormalPosition", wt.RECT)]
+
+        p = WINDOWPLACEMENT()
+        p.length = self.ct.sizeof(p)
+        self.user32.GetWindowPlacement(hwnd or self.hwnd, self.ct.byref(p))
+        return p
+
+    def _set_placement(self, placement):
+        if not self.user32.SetWindowPlacement(self.hwnd, self.ct.byref(placement)):
+            raise RuntimeError(f"SetWindowPlacement failed ({self.ct.get_last_error()})")
+
+    def _rect(self, client=False):
+        r = self.wt.RECT()
+        if client:
+            self.user32.GetClientRect(self.hwnd, self.ct.byref(r))
+        else:
+            self.user32.GetWindowRect(self.hwnd, self.ct.byref(r))
+        return r
+
+    def _virtual_screen(self):
+        m = self.user32.GetSystemMetrics
+        return m(76), m(77), m(78), m(79)  # SM_X/Y/CX/CYVIRTUALSCREEN
+
+    def _frame(self, width, height):
+        """The window size whose client area is width x height."""
+        ct, wt = self.ct, self.wt
+        r = wt.RECT(0, 0, width, height)
+        style = self.user32.GetWindowLongW(self.hwnd, -16)
+        ex_style = self.user32.GetWindowLongW(self.hwnd, -20)
+        self.user32.AdjustWindowRectExForDpi(ct.byref(r), wt.DWORD(style & 0xFFFFFFFF), False,
+                                             wt.DWORD(ex_style & 0xFFFFFFFF),
+                                             self.user32.GetDpiForWindow(self.hwnd))
+        return r.right - r.left, r.bottom - r.top
+
+    def status(self):
+        w = self._rect()
+        c = self._rect(client=True)
+        return {"pid": self.pid, "hwnd": self.hwnd,
+                "minimized": bool(self.user32.IsIconic(self.hwnd)),
+                "window": [w.left, w.top, w.right - w.left, w.bottom - w.top],
+                "client": [c.right - c.left, c.bottom - c.top],
+                "foreground": self.user32.GetForegroundWindow() == self.hwnd}
+
+    def offscreen(self):
+        """Restored (so it paints) but right of every monitor, never activated."""
+        x, y = offscreen_origin(self._virtual_screen())
+        p = self._placement()
+        r = p.rcNormalPosition
+        width, height = r.right - r.left, r.bottom - r.top
+        # the restored position first, so restoring doesn't show it on a monitor
+        r.left, r.top, r.right, r.bottom = x, y, x + width, y + height
+        p.showCmd = self.SW_SHOWNOACTIVATE
+        self._set_placement(p)
+        # the placement is in workspace coordinates, which can be off from the
+        # screen's by a taskbar; this is in the screen's
+        self.user32.SetWindowPos(self.hwnd, None, x, y, 0, 0,
+                                 self.SWP_NOSIZE | self.SWP_NOZORDER | self.SWP_NOACTIVATE)
+        # A window launched minimized restores at the size the SDK already
+        # assumes, so its presenter never connects to it and nothing paints
+        # until the size changes: a pixel taller and back makes it connect.
+        r = self._rect()
+        width, height = r.right - r.left, r.bottom - r.top
+        flags = self.SWP_NOMOVE | self.SWP_NOZORDER | self.SWP_NOACTIVATE
+        self.user32.SetWindowPos(self.hwnd, None, 0, 0, width, height + 1, flags)
+        self.user32.SetWindowPos(self.hwnd, None, 0, 0, width, height, flags)
+
+    def minimize(self):
+        """Minimized without activating; restoring it later puts it on the
+        primary monitor rather than where `offscreen` left it."""
+        self.user32.ShowWindow(self.hwnd, self.SW_SHOWMINNOACTIVE)
+        p = self._placement()
+        r = p.rcNormalPosition
+        vx, vy, vw, vh = self._virtual_screen()
+        if r.left >= vx + vw or r.top >= vy + vh or r.right <= vx or r.bottom <= vy:
+            width, height = r.right - r.left, r.bottom - r.top
+            sw, sh = self.user32.GetSystemMetrics(0), self.user32.GetSystemMetrics(1)
+            left, top = max(0, (sw - width) // 2), max(0, (sh - height) // 2)
+            r.left, r.top, r.right, r.bottom = left, top, left + width, top + height
+            p.showCmd = self.SW_SHOWMINNOACTIVE
+            self._set_placement(p)
+
+    def resize(self, width, height):
+        """Its client area to width x height physical pixels, where it is."""
+        fw, fh = self._frame(width, height)
+        if self.user32.IsIconic(self.hwnd):
+            p = self._placement()
+            r = p.rcNormalPosition
+            r.right, r.bottom = r.left + fw, r.top + fh
+            p.showCmd = self.SW_SHOWMINNOACTIVE
+            self._set_placement(p)
+        else:
+            self.user32.SetWindowPos(self.hwnd, None, 0, 0, fw, fh,
+                                     self.SWP_NOMOVE | self.SWP_NOZORDER | self.SWP_NOACTIVATE)
+
+    def shot(self, path):
+        """The client area as the window draws it, flip-model swap chains
+        included (PrintWindow's PW_RENDERFULLCONTENT), into an RGB PNG. A
+        minimized window has nothing to give."""
+        ct, wt = self.ct, self.wt
+        if self.user32.IsIconic(self.hwnd):
+            raise RuntimeError("the window is minimized; `window offscreen` it first")
+        c = self._rect(client=True)
+        width, height = c.right - c.left, c.bottom - c.top
+        screen = self.user32.GetDC(None)
+        dc = self.gdi32.CreateCompatibleDC(screen)
+        bitmap = self.gdi32.CreateCompatibleBitmap(screen, width, height)
+        old = self.gdi32.SelectObject(dc, bitmap)
+        try:
+            if not self.user32.PrintWindow(self.hwnd, dc,
+                                           self.PW_CLIENTONLY | self.PW_RENDERFULLCONTENT):
+                raise RuntimeError(f"PrintWindow failed ({ct.get_last_error()})")
+
+            class BITMAPINFOHEADER(ct.Structure):
+                _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG), ("biHeight", wt.LONG),
+                            ("biPlanes", wt.WORD), ("biBitCount", wt.WORD),
+                            ("biCompression", wt.DWORD), ("biSizeImage", wt.DWORD),
+                            ("biXPelsPerMeter", wt.LONG), ("biYPelsPerMeter", wt.LONG),
+                            ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
+
+            info = BITMAPINFOHEADER()
+            info.biSize = ct.sizeof(info)
+            info.biWidth, info.biHeight = width, -height  # top row first
+            info.biPlanes, info.biBitCount = 1, 32
+            pixels = ct.create_string_buffer(width * height * 4)
+            self.gdi32.SelectObject(dc, old)
+            if self.gdi32.GetDIBits(dc, bitmap, 0, height, pixels, ct.byref(info), 0) != height:
+                raise RuntimeError("GetDIBits failed")
+        finally:
+            self.gdi32.DeleteObject(bitmap)
+            self.gdi32.DeleteDC(dc)
+            self.user32.ReleaseDC(None, screen)
+        bgrx = pixels.raw
+        rows, peak, total = [], 0, 0
+        for y in range(height):
+            row = bgrx[y * width * 4:(y + 1) * width * 4]
+            rgb = bytearray(width * 3)
+            rgb[0::3], rgb[1::3], rgb[2::3] = row[2::4], row[1::4], row[0::4]
+            peak = max(peak, max(rgb) if rgb else 0)
+            total += sum(rgb)
+            rows.append(bytes(rgb))
+        with open(path, "wb") as f:
+            f.write(png_bytes(width, height, rows))
+        return {"path": os.path.abspath(path), "width": width, "height": height,
+                "mean": round(total / max(1, width * height * 3), 2), "max": peak}
+
+
+def window(args):
+    if os.name != "nt":
+        sys.exit("window: Windows only")
+    try:
+        w = GameWindow(args.pid)
+        before = w.user32.GetForegroundWindow()
+        reply = {"ok": True}
+        if args.what == "offscreen":
+            w.offscreen()
+        elif args.what == "minimize":
+            w.minimize()
+        elif args.what == "size":
+            if not args.arg:
+                raise RuntimeError("window size <width>x<height>")
+            size = parse_size(args.arg)
+            w.resize(*size)
+            if not w.user32.IsIconic(w.hwnd) and w.status()["client"] != list(size):
+                # Windows keeps a window no bigger than the monitors around it
+                reply["clamped"] = True
+        elif args.what == "shot":
+            if not args.arg:
+                raise RuntimeError("window shot <file.png>")
+            reply["shot"] = w.shot(args.arg)
+        reply.update(w.status())
+        # none of it may take the keyboard from whatever had it
+        reply["foreground_changed"] = w.user32.GetForegroundWindow() != before
+    except (RuntimeError, ValueError, OSError) as e:
+        print(json.dumps({"ok": False, "error": str(e)}))
+        return 1
+    print(json.dumps(reply))
+    return 0
+
+
 def run(args):
     with open(args.script, encoding="utf-8") as f:
         commands = parse_script(f.read())
@@ -210,7 +543,17 @@ def main(argv):
     p = sub.add_parser("run", help="replay a .b3t script")
     p.add_argument("script")
 
-    known = {"launch", "run", "-h", "--help"}
+    p = sub.add_parser(
+        "window", help="move, size, minimize or screenshot the running game's window "
+                       "without ever activating it (Windows)")
+    p.add_argument("what", choices=["offscreen", "shot", "minimize", "size", "status"],
+                   help="offscreen: restored, right of every monitor; shot <png>: its client "
+                        "area as drawn (not while minimized); minimize; size <W>x<H>: its "
+                        "client area in physical pixels; status")
+    p.add_argument("arg", nargs="?", help="shot's PNG path, or size's <W>x<H>")
+    p.add_argument("--pid", type=int, help="which band3, when more than one runs")
+
+    known = {"launch", "run", "window", "-h", "--help"}
     rest = argv[:]
     port_args = []
     while rest and rest[0].startswith("--port"):
@@ -236,6 +579,8 @@ def main(argv):
         return launch(args)
     if args.action == "run":
         return run(args)
+    if args.action == "window":
+        return window(args)
     parser.print_help()
     return 2
 

@@ -190,6 +190,8 @@ python tools/band3ctl.py wait screen=splash_screen timeout=60s
 python tools/band3ctl.py screenshot menu      # saved under screenshots/ next to the exe
 python tools/band3ctl.py run tests/game/boot.b3t
 python tools/band3ctl.py "hold up+orange; wait frames=60; pad; release all"
+python tools/band3ctl.py window offscreen     # restore the window off every monitor, unfocused
+python tools/band3ctl.py window shot out.png  # what the window presents, overlays and all
 ```
 
 `launch` starts the game minimized without taking focus (`--show` to watch it) and muted
@@ -202,6 +204,15 @@ when a client disconnects.
 
 `capture` and `native_view` check the native view's rendering; see
 [Render checks](#render-checks).
+
+`window` works on the game's window itself rather than through the harness, and never
+activates it or puts it on a monitor. A window launched minimized never paints, so `window
+offscreen` restores it to the right of every monitor, where it paints unseen; `window
+shot <png>` then saves its client area as the window presents it, the SDK's overlays
+included (`screenshot` is the emulated GPU's picture alone); `window size <W>x<H>` sets
+its client area in physical pixels, though Windows keeps it no bigger than the monitors
+(`clamped` in the reply); `window minimize` minimizes it again, and moves where it
+restores to back onto the primary monitor. `window status` prints where it is.
 
 | Command | |
 |---|---|
