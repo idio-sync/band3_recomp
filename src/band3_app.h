@@ -27,6 +27,7 @@
 #include "Input/menu_shortcut_dialog.h"
 #include "Input/virtual_instrument.h"
 #include "Net/discord.h"
+#include "Net/liveless_rooms_panel.h"
 #include "Net/online_hooks.h"
 #include "Net/http_server.h"
 #include "Render/gpu_view.h"
@@ -59,6 +60,8 @@ class Band3App : public rex::ReXApp {
   std::unique_ptr<DebugOverlayDialog> debug_overlay_;
   std::unique_ptr<band3::input::InstrumentLabDialog> instrument_lab_;
   std::unique_ptr<band3::input::MenuShortcutDialog> menu_shortcut_;
+  // the Liveless Rooms panel, see src/Net/liveless_rooms_panel.h
+  std::unique_ptr<band3::rooms::RoomsPanelDialog> rooms_panel_;
   // the native view, see src/Render/native_view.h
   std::unique_ptr<band3::render::NativeViewDialog> native_view_;
 
@@ -165,9 +168,15 @@ class Band3App : public rex::ReXApp {
   }
 
   void OnShutdown() override {
+    // the Liveless Rooms client's thread reaches into the game (a join's
+    // invite, a NAT punch from the game's socket), so it ends while the kernel
+    // is still there, and before the test server that asks it for its status.
+    // Closing the window doesn't come here: the SDK exits the process at once
+    band3::online::Stop();
     band3::http::StopServer();
     band3::test::StopServer();
     rex::ui::UnregisterBind("bind_instrument_lab");
+    rex::ui::UnregisterBind("bind_liveless_rooms");
     rex::ui::UnregisterBind("bind_native_view");
     rex::ui::UnregisterBind("bind_renderer");
     // off the presenter, and the GPU done with the textures its paints read,
@@ -200,6 +209,12 @@ class Band3App : public rex::ReXApp {
         rex::cvar::SetFlagByName("renderer",
                                  REXCVAR_GET(renderer) == "native" ? "emulated" : "native");
       });
+      // also opened by the overshell's Invite Friends while Rooms is on, which
+      // the panel watches for itself
+      rooms_panel_ = std::make_unique<band3::rooms::RoomsPanelDialog>(drawer);
+      rex::ui::RegisterBind("bind_liveless_rooms", "F10", "Toggle the Liveless Rooms panel", [this] {
+        if (rooms_panel_) rooms_panel_->Toggle();
+      });
       // deferred: opening the settings menu adds a dialog, and this runs while
       // the dialogs draw
       menu_shortcut_ = std::make_unique<band3::input::MenuShortcutDialog>(
@@ -213,6 +228,7 @@ class Band3App : public rex::ReXApp {
       debug_overlay_.reset();
       instrument_lab_.reset();
       menu_shortcut_.reset();
+      rooms_panel_.reset();
       native_view_.reset();
     }
   }

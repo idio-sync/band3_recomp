@@ -158,11 +158,70 @@ list of games: Live's matchmaking is gone, so searching finds one game, the one 
 
 Players should both search: a player who searches for a host that only went
 online from the overshell (without Find Xbox Live Players) is turned away.
-RB3Enhanced's Liveless Rooms server, for joining by code instead of address,
-isn't supported.
+To join by code instead of address, see [Liveless Rooms](#liveless-rooms-joining-by-code).
 
 `liveless_port` moves the game to another UDP port, so two band3s on one PC can
 play each other: [`tests/game/liveless.b3t`](../tests/game/liveless.b3t) does that.
+
+### Liveless Rooms (joining by code)
+
+RB3Enhanced's Liveless Rooms joins players by an 8-character code instead of an
+address: each game logs in to a Rooms server, which gives it a code, and when another
+player asks for that code the server tells their game where the host's is. Under F4 →
+Band3 → Online, turn on `liveless` and `liveless_rooms`, set `username` (Band3 → Game)
+to your name, then restart. band3 then logs in to `liveless_rooms_server`,
+RB3Enhanced's (`liveless-testing.ipg.pw`) unless you run your own. Logging in
+registers your `username` there, and as with GoCentral the server knows you by that
+name alone, so band3 won't log in while it's blank or "User".
+
+Your code shows in the Rooms panel: press **F10** (`bind_liveless_rooms`), or, once
+online, pick **Xbox Live Options** → **Invite Friends** in the overshell, which opens
+the panel instead of Xbox Live's friends list while Rooms is on. The panel also
+shows the server, the connection's state and the last thing that went wrong; with
+Rooms off, it says how to turn it on. Give your code to the players who'll join you.
+
+To join someone:
+
+1. Go online first: press Start for the overshell, pick **Play on Xbox Live**, then
+   back out of it. Until then the panel's **Join** stays greyed out ("Go online
+   first: Play on Xbox Live in the overshell.").
+2. Open the panel, enter the host's code (type it, or pick its characters from the
+   grid under the field) and press **Join** (or Enter in the field).
+3. Your game joins the host's band, as when accepting an invite on a console. Then
+   you both pick the same mode: Play Now → Quickplay → **Choose Songs**. The host waits
+   ("Waiting for Xbox LIVE Players...") until the player who joined picks it too.
+
+With a controller: while the panel is open and in front, the d-pad moves around it,
+A presses, X deletes a character and B closes it (B first stops typing in the field,
+if A started it). The game reads no buttons until the panel closes or you click the
+game, so a guitar's strum doesn't also move the overshell.
+
+Joins by code always go to UDP port 9103, as RB3Enhanced's do, so a host keeps
+`liveless_port` at 9103 (the panel warns when it isn't) and forwards it to their PC,
+as RB3Enhanced players do. `liveless_external_ip` isn't needed: band3 tells the game
+its public address as the Rooms server saw it, unless `liveless_external_ip` is set,
+which wins. A player joins the host's public address, or its local network one when
+both have the same public address (the same network, or one PC). When a player
+joins, the server also has the host's game send them a packet first, which may get
+the join through some routers without the forward; don't count on it.
+
+What the panel's errors mean:
+
+| Error | |
+|---|---|
+| `no IPv4 address for <server>` | `liveless_rooms_server` didn't resolve: check it and the PC's connection |
+| `no answer from <server>`, `<server> refused the connection` | nothing is taking connections at that address (port 19532 unless it has `:port`), or a firewall is in the way |
+| `the server turned the connection away` | the server isn't taking this client |
+| `login refused: check that liveless_rooms_server matches the server's address, and username` | the server closed the connection before giving a code. It checks the login against its own name, so `liveless_rooms_server` must be that name as the server knows it (not, say, its IP address) |
+| `the server closed the connection`, `the server stopped answering`, `bad data from the server` | the connection went after logging in (the server sends nothing for 30 s, or something it can't read). band3 doesn't connect again by itself: press **Connect** |
+| `not logged in to the Rooms server` | a join before the code came, or after the connection went |
+| `a code is 8 letters and digits` | the code isn't 8 characters long |
+| `no game with code <code>` | no one is logged in with that code: check it with the host, whose game must be running with Rooms on |
+| `join denied (reason <n>)` | the server turned the join away for a reason band3 doesn't know |
+| `the server gave no address for <user>` | the server found the host but gave no address to reach them at |
+
+The log's `rooms:` lines follow the connection: logging in, with the code and public
+address, and what each join did.
 
 ## RB3Enhanced compatibility
 
