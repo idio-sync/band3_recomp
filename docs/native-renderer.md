@@ -125,8 +125,10 @@ vignette, the song, its pause menu, a music-video venue, a controller's disconne
 dialog and the results.
 
 Besides the back buffer's draws and the texture passes, a capture keeps the
-characters' shadow-map passes and NgLight's shadow casters, and the display's gamma
-ramp the game was shown through (the screenshot has it). `capture`'s reply:
+characters' shadow-map passes and NgLight's shadow casters, a texture pass whose camera
+cleared it but that drew nothing (the spotlights' depth volume with no cone in view), and
+the display's gamma ramp the game was shown through (the screenshot has it). `capture`'s
+reply:
 
 | Field | |
 |---|---|

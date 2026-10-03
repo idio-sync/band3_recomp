@@ -481,8 +481,9 @@ struct GpuRenderer::Impl {
     // texture, and a depth buffer; a shadow map's is R32_FLOAT, a plain 2D
     // texture (mesh.hlsl's shadow_tex), its depth alone. Kept between frames,
     // so a render target a frame samples but doesn't draw is what was drawn
-    // last; let go when no frame has drawn or sampled it for kEvictAfter
-    // frames, and made again when its size changes.
+    // last (one it draws starts over: Render); let go when no frame has drawn
+    // or sampled it for kEvictAfter frames, and made again when its size
+    // changes.
     struct Rt {
         SDL_GPUTexture* color = nullptr;
         SDL_GPUTexture* depth = nullptr;
@@ -1691,15 +1692,21 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     for (size_t r = 0; r < runs.size(); r++) {
         const PassRun& run = runs[r];
         // a texture pass's target, cleared where its camera (or NgLight)
-        // cleared it and where nothing has drawn it yet (transparent black,
-        // as on the CPU)
+        // cleared it and where nothing in this frame has drawn it yet
+        // (transparent black, as on the CPU, whose targets are the frame's
+        // own): what an earlier frame left in it is never drawn over, so a
+        // frame's picture doesn't depend on what was drawn before it (a
+        // capture's on the live view's or the last capture's; the depth
+        // volume's blurs in a frame with no cone would blur the last shot's
+        // beams). One the frame samples but doesn't draw still reads what
+        // was drawn last.
         Rt* target = nullptr;
         if (run.pass) {
             uint32_t tw, th;
             PassTargetSize(frame, *run.pass, o, tw, th);
             target = TargetFor(*run.pass, tw, th);
             if (!target) continue;
-            const bool fresh = !target->drawn;
+            const bool fresh = !target->drawn || target->drawn_in != serial;
             const uint32_t clear = PassClearFlags(frame, *run.pass);
             run_clear[r] = kRunDrawn;
             if ((clear & 0x0f) || fresh) run_clear[r] |= kRunClearColor;

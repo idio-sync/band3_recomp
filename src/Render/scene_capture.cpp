@@ -1966,7 +1966,11 @@ bool AllLeftOut(const FrameCapture& content) {
 // pass becomes its last, and the capturing frame's next pass; one that drew
 // nothing kept (the velocity buffer's) is left out, though one whose draws
 // were all left out is still its last, so a capture sampling it counts it as
-// such (rt_filtered) rather than missing.
+// such (rt_filtered) rather than missing. One whose camera cleared it and
+// that drew nothing else is kept with no draws: the clear is what it made
+// (NgSpotlightDrawer clears the depth volume to opaque black with no cone in
+// view, and blurs it after; without the clear the blurs would blur whatever
+// the target held before).
 void EndPass(uint32_t tex) {
     State& s = S();
     SetPassWantsDraws(false);
@@ -1987,7 +1991,9 @@ void EndPass(uint32_t tex) {
     rec->pass.draw_count = uint32_t(rec->content.draws.size());
     // what it left out (velocity) counts in the frame either way
     if (capturing) AddCounts(*s.building, rec->content);
-    if (rec->content.draws.empty()) {
+    const bool clear_only = rec->content.draws.empty() && rec->pass.cam &&
+                            (rec->pass.clear_flags & 0x0f) && !AllLeftOut(rec->content);
+    if (rec->content.draws.empty() && !clear_only) {
         if (capturing) s.building->passes_empty++;
         if (AllLeftOut(rec->content)) {
             // kept for the frame too: later passes into the same texture can
@@ -2040,7 +2046,8 @@ void CarryPasses(State& s, FrameCapture& fc) {
             fc.rt_missing++;
             continue;
         }
-        if (found->content.draws.empty()) {
+        // (one that only cleared is carried: its clear is what it made)
+        if (AllLeftOut(found->content)) {
             fc.rt_filtered++;
             fc.rt_filtered_keys.push_back(key);
             continue;
