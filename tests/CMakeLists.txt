@@ -43,6 +43,7 @@ add_executable(band3_tests
     rhythmverse_test.cpp
     song_id_test.cpp
     online_test.cpp
+    liveless_rooms_protocol_test.cpp
     native_socket_test.cpp
     frame_pacing_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
@@ -60,11 +61,13 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/ps3_instruments.cpp
     ${BAND3_ROOT}/src/Input/ps4_instruments.cpp
     ${BAND3_ROOT}/src/Net/album_art.cpp
+    ${BAND3_ROOT}/src/Net/liveless_rooms_protocol.cpp
     ${BAND3_ROOT}/src/Net/native_socket.cpp
     ${BAND3_ROOT}/src/Net/online.cpp
     ${BAND3_ROOT}/src/Net/http_request.cpp
     ${BAND3_ROOT}/src/Net/json.cpp
     ${BAND3_ROOT}/src/Net/rhythmverse.cpp
+    ${BAND3_ROOT}/src/Net/sha1.cpp
     ${BAND3_ROOT}/src/paths.cpp
     ${BAND3_ROOT}/src/Render/capture_file.cpp
     ${BAND3_ROOT}/src/Render/frame_compose.cpp
@@ -76,9 +79,11 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Test/test_commands.cpp
     ${BAND3_ROOT}/src/Test/test_inputs.cpp
 )
-# instrument captures replayed by hid_capture_test.cpp
+# instrument captures replayed by hid_capture_test.cpp, and the Liveless Rooms
+# packets liveless_rooms_protocol_test.cpp shares with tools/liveless_rooms_mock.py
 target_compile_definitions(band3_tests PRIVATE
     BAND3_CAPTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/captures"
+    BAND3_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden"
 )
 # capture_file.cpp saves with fopen, as band3's own build lets it
 set_source_files_properties(${BAND3_ROOT}/src/Render/capture_file.cpp PROPERTIES
