@@ -360,7 +360,6 @@ class Band3App : public rex::ReXApp {
     // a song cache rb3e_delete_songcache marked, before the game mounts it
     band3::song_cache::DeletePending(runtime()->user_data_root());
     band3::MountGameWrites(*runtime());
-#ifdef _WIN32
     // band3's content overrides hand saves to the SDK's own exports; without
     // them the first save would fail, so fail here instead
     if (!band3::content::ResolveSdkContentExports()) {
@@ -372,7 +371,6 @@ class Band3App : public rex::ReXApp {
       REXLOG_ERROR("online: the SDK's user exports are missing, can't continue");
       std::abort();
     }
-#endif
     band3::online::Start();
     band3::content::StartLiveContent(runtime()->file_system());
     band3::discord::Start();

@@ -11,10 +11,8 @@
 #include "src/Net/native_socket.h"
 #include "src/Net/online.h"
 #include "src/Net/online_hooks.h"
+#include "src/sdk_export.h"
 #include "src/settings.h"
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 // RB3 online without Xbox Live, as RB3Enhanced's xbox360_liveless.c has it on
 // a console with Live blocked. RB3 goes online through Quazal, behind Live's
@@ -30,11 +28,11 @@ extern "C" void __imp__Quazal__StepSequenceJob__SetStep(PPCContext& ctx, uint8_t
 
 namespace {
 
-using Export = void(PPCContext&, uint8_t*);
+using band3::SdkFunction;
 
 // set before the game runs: OnPostSetup aborts if any is missing
-Export* g_sdk_get_signin_state = nullptr;
-Export* g_sdk_get_signin_info = nullptr;
+SdkFunction* g_sdk_get_signin_state = nullptr;
+SdkFunction* g_sdk_get_signin_info = nullptr;
 
 // XUSER_SIGNIN_STATE
 constexpr uint32_t kSignedInLocally = 1;
@@ -122,33 +120,15 @@ bool StartLiveless() {
 namespace band3::online {
 
 bool ResolveSdkExports() {
-#ifdef _WIN32
-    HMODULE runtime = GetModuleHandleA(BAND3_REXRUNTIME_DLL);
-    auto find = [&](const char* name, Export*& out) {
-        out = runtime ? reinterpret_cast<Export*>(GetProcAddress(runtime, name)) : nullptr;
-        if (!out) REXLOG_ERROR("online: {} has no {}", BAND3_REXRUNTIME_DLL, name);
-        return out != nullptr;
-    };
-    bool ok = find("__imp__XamUserGetSigninState", g_sdk_get_signin_state);
-    ok &= find("__imp__XamUserGetSigninInfo", g_sdk_get_signin_info);
-    return ok;
-#else
-    return false;
-#endif
+    g_sdk_get_signin_state = band3::SdkExport("__imp__XamUserGetSigninState");
+    g_sdk_get_signin_info = band3::SdkExport("__imp__XamUserGetSigninInfo");
+    return g_sdk_get_signin_state && g_sdk_get_signin_info;
 }
 
 void Start() {
-#ifndef _WIN32
-    // the overrides that make Quazal's networking work are Windows only
-    // (net_calls.cpp), as are the sign-in ones below
-    if (settings::Startup().gocentral || settings::Startup().liveless) {
-        REXLOG_ERROR("online: GoCentral and Liveless only work on Windows for now");
-    }
-#else
     g_gocentral = StartGoCentral();
     g_liveless = StartLiveless();
     g_live = g_gocentral || g_liveless;
-#endif
 }
 
 bool LiveSpoofed() { return g_live; }
@@ -205,10 +185,8 @@ void GoCentralRockCentralLogin(PPCRegister& r11) {
     if (g_gocentral) r11.u64 = 1;
 }
 
-#ifdef _WIN32
 // Players signed in to the console count as signed in to Live, which RB3
-// wants before it goes online. These hand on to the SDK's exports in its DLL,
-// so they're Windows only; elsewhere the game calls the SDK's own.
+// wants before it goes online. These hand on to the SDK's exports.
 extern "C" REX_FUNC(__imp__XamUserGetSigninState) {
     (*g_sdk_get_signin_state)(ctx, base);
     if (g_live && ctx.r3.u32 == kSignedInLocally) ctx.r3.u64 = kSignedInToLive;
@@ -222,7 +200,6 @@ extern "C" REX_FUNC(__imp__XamUserGetSigninInfo) {
         REX_STORE_U32(info + kSigninInfoState, kSignedInToLive);
     }
 }
-#endif
 
 // XUserCheckPrivilege(user, privilege, BOOL* result): online play, voice,
 // content from others all allowed, as RB3Enhanced has it (it calls XAM's

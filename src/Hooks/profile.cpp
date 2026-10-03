@@ -2,10 +2,8 @@
 #include <rex/logging.h>
 #include <algorithm>
 #include <cstring>
+#include "src/sdk_export.h"
 #include "src/settings.h"
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 extern "C" void __imp__PlatformMgr__GetName(PPCContext& ctx, uint8_t* base);
 
@@ -31,20 +29,12 @@ extern "C" REX_FUNC(PlatformMgr__GetName)
     WriteUsername(base, ctx.r3.u32, kMaxNameLen + 1);
 }
 
-#ifdef _WIN32
 // XamUserGetName(user index, char* buffer, size): the gamertag, which
 // XboxServer::FindPadToLogin logs into Rock Central (GoCentral) with. It hands
-// on to the SDK's export in its DLL, so it's Windows only.
+// on to the SDK's export.
 extern "C" REX_FUNC(__imp__XamUserGetName)
 {
-    using Export = void(PPCContext&, uint8_t*);
-    static Export* const sdk = [] {
-        HMODULE runtime = GetModuleHandleA(BAND3_REXRUNTIME_DLL);
-        auto* fn = runtime ? reinterpret_cast<Export*>(GetProcAddress(runtime, "__imp__XamUserGetName"))
-                           : nullptr;
-        if (!fn) REXLOG_ERROR("profile: {} has no __imp__XamUserGetName", BAND3_REXRUNTIME_DLL);
-        return fn;
-    }();
+    static band3::SdkFunction* const sdk = band3::SdkExport("__imp__XamUserGetName");
     const uint32_t buffer = ctx.r4.u32, size = ctx.r5.u32;
     if (!sdk) {
         ctx.r3.u64 = 0x80004005;  // E_FAIL
@@ -59,4 +49,3 @@ extern "C" REX_FUNC(__imp__XamUserGetName)
                     reinterpret_cast<const char*>(base + buffer));
     }
 }
-#endif

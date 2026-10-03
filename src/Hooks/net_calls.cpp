@@ -15,9 +15,8 @@
 #include <vector>
 #include "generated/band3_init.h"
 #include "src/Net/native_socket.h"
+#include "src/sdk_export.h"
 #include "src/settings.h"
-#ifdef _WIN32
-#include <windows.h>
 
 // RB3's networking (Quazal, for Rock Central and online play) through the
 // SDK's NetDll exports. Quazal needs some the SDK doesn't do as a console
@@ -28,20 +27,12 @@
 //     WSAGetOverlappedResult until a datagram lands, sending with WSASendTo.
 //     The SDK reports each receive done at once with nothing in it, so
 //     Quazal never hears back.
-// The rest go on to the SDK's, found in its DLL, so this is Windows only;
-// elsewhere the game calls the SDK's own. With log_net_calls on, each is
-// logged.
+// The rest go on to the SDK's. With log_net_calls on, each is logged.
 
 namespace {
 
-using Export = void(PPCContext&, uint8_t*);
-
-Export* SdkExport(const char* name) {
-    HMODULE runtime = GetModuleHandleA(BAND3_REXRUNTIME_DLL);
-    auto* fn = runtime ? reinterpret_cast<Export*>(GetProcAddress(runtime, name)) : nullptr;
-    if (!fn) REXLOG_ERROR("net: {} has no {}", BAND3_REXRUNTIME_DLL, name);
-    return fn;
-}
+using Export = band3::SdkFunction;
+using band3::SdkExport;
 
 // Quazal polls some of these in a loop: each one's first 200 calls are
 // logged, then every 10000th
@@ -421,5 +412,3 @@ extern "C" REX_FUNC(__imp__NetDll_closesocket) {
     }
     Forward(sdk, "NetDll_closesocket", calls, ctx, base);
 }
-
-#endif  // _WIN32

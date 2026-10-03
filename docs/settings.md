@@ -161,9 +161,9 @@ beside the executable.
 
 ## DLC and custom songs
 
-On Windows for now, band3 reads DLC and custom songs (Xbox 360 `CON`, `LIVE` and `PIRS`
-packages, Rock Band and Rock Band 2 DLC included, as RB3 reads them) straight from the
-folders `content_folders` names (Band3 → Game, or `[game]` in `band3_config.ini`);
+band3 reads DLC and custom songs (Xbox 360 `CON`, `LIVE` and `PIRS` packages, Rock Band
+and Rock Band 2 DLC included, as RB3 reads them) straight from the folders
+`content_folders` names (Band3 → Game, or `[game]` in `band3_config.ini`);
 nothing is installed or unpacked, and band3 never writes there. Separate folders with `|`;
 subfolders count, and a relative folder is relative to the ini's folder, as above (`songs`
 beside it by default). Changes apply at the next launch, except songs the web page's

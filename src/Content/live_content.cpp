@@ -102,7 +102,6 @@ void Finish(std::vector<Package> packages) {
     if (late) Announce();
 }
 
-#ifdef _WIN32
 // the setting's folders, and their names for the log
 std::vector<std::filesystem::path> Folders(const std::string& setting, std::string& names) {
     auto folders = ContentFolders(setting);
@@ -135,7 +134,6 @@ void RunScan(std::string setting) {
                 names.empty() ? "no folders" : names, ms);
     Finish(std::move(packages));
 }
-#endif
 
 // band3's mount of root_name, if any; g_mutex held
 bool UnmountLocked(std::string_view root_name) {
@@ -160,17 +158,8 @@ std::vector<std::filesystem::path> ContentFolders(std::string_view setting) {
 
 void StartLiveContent(rex::filesystem::VirtualFileSystem* vfs) {
     g_vfs = vfs;
-#ifdef _WIN32
     // an unreachable network share can take tens of seconds to give up on
     std::thread(RunScan, REXCVAR_GET(content_folders)).detach();
-#else
-    // listing packages the game then couldn't close would do no good: they open
-    // through the XContentCrossTitleCreate override, but the XamContentClose
-    // override that closes them needs the SDK's own export, found only on Windows
-    REXLOG_INFO("content: content folders need Windows for now, not reading {}",
-                REXCVAR_GET(content_folders));
-    Finish({});
-#endif
 }
 
 std::vector<Package> LivePackages() {

@@ -71,11 +71,9 @@ target_include_directories(band3_compile_check PRIVATE
     "${BAND3_ROOT}/src"
 )
 target_link_libraries(band3_compile_check PRIVATE rex::runtime)
-if(WIN32)
-    # as the band3 target defines it, for src/Content/content_hooks.cpp
-    target_compile_definitions(band3_compile_check PRIVATE
-        BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")
-endif()
+# as the band3 target defines it, for src/sdk_export.cpp
+target_compile_definitions(band3_compile_check PRIVATE
+    BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")
 
 # the same MIDI backend as the real build
 include(${BAND3_ROOT}/cmake/rtmidi.cmake)

@@ -130,7 +130,7 @@ REXCVAR_DEFINE_BOOL(gold_on_all_difficulties, false, "Band3/Game",
     "Let gold stars be earned on every difficulty, not only expert "
     "(RB3Enhanced's AllowGoldOnAllDifficulties). Applies from the next song");
 REXCVAR_DEFINE_STRING(content_folders, "songs", "Band3/Game",
-    "Folders RB3 reads DLC and custom songs from (Windows for now), without installing them, "
+    "Folders RB3 reads DLC and custom songs from, without installing them, "
     "separated by '|'. Subfolders count too. A relative folder is relative to "
     "band3_config.ini's folder (or band3's own folder if there is no ini)")
     .lifecycle(Lifecycle::kRequiresRestart);

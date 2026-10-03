@@ -9,9 +9,7 @@
 #include <rex/types.h>
 #include "generated/band3_init.h"
 #include "live_content.h"
-#ifdef _WIN32
-#include <windows.h>
-#endif
+#include "src/sdk_export.h"
 
 // RB3 lists DLC and custom songs through XContentCreateCrossTitleEnumerator,
 // opens them through XContentCrossTitleCreate, and opens its saves and closes
@@ -24,25 +22,21 @@ extern "C" void __imp__XContentCrossTitleCreate(PPCContext& ctx, uint8_t* base);
 
 namespace {
 
-using Export = void(PPCContext&, uint8_t*);
+using band3::SdkFunction;
 
-// set before the game makes a content call: OnPostSetup aborts if any is missing;
-// called as (*p)(ctx, base), which tools/compile_check doesn't take for a guest call
-Export* g_sdk_create_ex = nullptr;
-Export* g_sdk_close = nullptr;
-Export* g_sdk_get_creator = nullptr;
-Export* g_sdk_create_enumerator = nullptr;
+// set before the game makes a content call: OnPostSetup aborts if any is missing
+SdkFunction* g_sdk_create_ex = nullptr;
+SdkFunction* g_sdk_close = nullptr;
+SdkFunction* g_sdk_get_creator = nullptr;
+SdkFunction* g_sdk_create_enumerator = nullptr;
 
 }  // namespace
 
 namespace band3::content {
 
 bool ResolveSdkContentExports() {
-#ifdef _WIN32
-    HMODULE runtime = GetModuleHandleA(BAND3_REXRUNTIME_DLL);
-    auto find = [&](const char* name, Export*& out) {
-        out = runtime ? reinterpret_cast<Export*>(GetProcAddress(runtime, name)) : nullptr;
-        if (!out) REXLOG_ERROR("content: {} has no {}", BAND3_REXRUNTIME_DLL, name);
+    auto find = [](const char* name, SdkFunction*& out) {
+        out = band3::SdkExport(name);
         return out != nullptr;
     };
     bool ok = find("__imp__XamContentCreateEx", g_sdk_create_ex);
@@ -50,20 +44,16 @@ bool ResolveSdkContentExports() {
     ok &= find("__imp__XamContentGetCreator", g_sdk_get_creator);
     ok &= find("__imp__XamContentCreateEnumerator", g_sdk_create_enumerator);
     return ok;
-#else
-    return false;
-#endif
 }
 
 }  // namespace band3::content
 
 extern "C" REX_FUNC(XContentCreateCrossTitleEnumerator) {
     const uint32_t user = ctx.r3.u32, device = ctx.r4.u32, type = ctx.r5.u32;
-    [[maybe_unused]] const uint32_t handle_out = ctx.r9.u32;
+    const uint32_t handle_out = ctx.r9.u32;
     __imp__XContentCreateCrossTitleEnumerator(ctx, base);
     REXLOG_DEBUG("content: cross-title enumerator user {} device {} type {} -> {:#x}", user, device,
                  type, ctx.r3.u32);
-#ifdef _WIN32
     // RB3 asks for each type as user 0 and again as any user (0xFF); band3's
     // packages belong to no user, so they go in the second, once each
     using rex::system::xam::DummyDeviceId;
@@ -86,10 +76,7 @@ extern "C" REX_FUNC(XContentCreateCrossTitleEnumerator) {
         n++;
     }
     if (n > 0) REXLOG_INFO("content: listed {} packages of type {}", n, type);
-#endif
 }
-
-#ifdef _WIN32
 
 namespace {
 
@@ -242,5 +229,3 @@ extern "C" REX_FUNC(__imp__XamContentGetCreator) {
     REXLOG_DEBUG("content: GetCreator user {} file '{}' type {} -> {:#x}", user, file, type,
                  ctx.r3.u32);
 }
-
-#endif
