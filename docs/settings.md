@@ -179,6 +179,20 @@ A custom song whose `song_id` is text instead of a number gets the number RB3Enh
 gives it (the text's CRC-32 mod 9999999, plus 2130000000), so IDs agree with
 RB3Enhanced's.
 
+## Loose files (mods)
+
+As with RB3Enhanced, a file on disk replaces the same file in the ARK, so mods such as
+custom characters can be installed without rebuilding the ARK. Put the file in the game
+data folder (`assets` by default, or `game_data_root`) at the path it has inside the ARK,
+with its Xbox name (`gen` folders and `_xbox` extensions as in the ARK). A `..` in an ARK
+path becomes a folder named `(..)`, as RB3Enhanced lays them out, so files packaged for
+RB3Enhanced go in as they are. band3 checks for each file as the game opens it, so a file
+added while the game runs is used the next time the game loads it.
+
+Each file read from disk instead of the ARK is logged as `NewFile: <path>`. If a mod
+doesn't show up, set `log_level = debug`: the log then also lists every file read from the
+ARK, marked `(ARK)`, with the path its replacement needs.
+
 ## Steam Deck
 
 On a Steam Deck, band3 starts fullscreen and letterboxed (the game is 16:9, the screen
