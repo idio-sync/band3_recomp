@@ -196,9 +196,11 @@ def main():
                     print(f"{entry}: {os.path.getsize(dxbc)} bytes DXBC")
                     continue
                 spirv = os.path.join(tmp, entry + ".spv")
-                run([dxc, "-spirv", "-fspv-target-env=vulkan1.1", "-O3",
+                # Vulkan 1.0 (SPIR-V 1.0): SDL_gpu creates its Vulkan instance
+                # at API 1.0, which allows no newer SPIR-V
+                run([dxc, "-spirv", "-fspv-target-env=vulkan1.0", "-O3",
                      "-T", dxc_profile, "-E", entry, "-Fo", spirv, source])
-                run([spirv_val, "--target-env", "vulkan1.1", spirv])
+                run([spirv_val, "--target-env", "vulkan1.0", spirv])
                 check_reflection(entry, expected, run([spirv_cross, spirv, "--reflect"]))
                 with open(spirv, "rb") as f:
                     arrays.append(c_array(stem + "Spirv", f.read()))

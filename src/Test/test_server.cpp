@@ -20,12 +20,14 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -576,9 +578,15 @@ private:
 };
 
 bool SendAll(socket_t s, const std::string& data) {
+#ifdef _WIN32
+    constexpr int kFlags = 0;
+#else
+    // band3ctl going away mid-reply (a timeout, Ctrl-C) mustn't SIGPIPE the game
+    constexpr int kFlags = MSG_NOSIGNAL;
+#endif
     size_t sent = 0;
     while (sent < data.size()) {
-        const int n = send(s, data.data() + sent, static_cast<int>(data.size() - sent), 0);
+        const int n = send(s, data.data() + sent, static_cast<int>(data.size() - sent), kFlags);
         if (n <= 0) return false;
         sent += static_cast<size_t>(n);
     }

@@ -12,6 +12,11 @@
 #include <rex/ui/keybinds.h>
 #include <imgui.h>
 
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <string>
+
 #include "config.h"
 #include "game_writes.h"
 #include "paths.h"

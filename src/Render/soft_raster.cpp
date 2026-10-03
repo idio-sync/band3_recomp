@@ -11,6 +11,7 @@
 #include <cstring>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 // See soft_raster.h.
 

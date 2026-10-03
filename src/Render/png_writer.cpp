@@ -1,5 +1,6 @@
 #include "src/Render/png_writer.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>

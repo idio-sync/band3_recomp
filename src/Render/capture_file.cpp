@@ -3,8 +3,10 @@
 #include <cstdio>
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 // See capture_file.h. Host byte order, same machine only.
