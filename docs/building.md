@@ -44,6 +44,13 @@ ninja -C out/build/linux-amd64-release
 PlayStation and Wii instrument dongles need a udev rule to be readable by your user; see
 [Instruments](instruments.md#playstation-and-wii-instruments-experimental).
 
+## Build tag
+
+Each build names itself by `git describe` of the checkout (the log's `band3 build`
+line, and the version a Liveless Rooms server sees). A build from source without
+`.git` is `unknown` unless the configure passes `-DBAND3_BUILD_TAG=<tag>`, as the Nix
+flake does with its revision.
+
 ## Checks
 
 These run on every push (`.github/workflows/ci.yml`) and don't need the game.

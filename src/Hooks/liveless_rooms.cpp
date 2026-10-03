@@ -8,7 +8,7 @@
 #include <mutex>
 #include <string>
 #include "generated/band3_init.h"
-#include "src/Net/events.h"
+#include "src/build_tag.h"
 #include "src/Net/liveless_rooms.h"
 #include "src/Net/liveless_rooms_client.h"
 #include "src/Net/local_address.h"
@@ -164,7 +164,9 @@ void Start() {
     config.xuid = RoomsXuid(username);
     const auto local = net::ResolveIPv4(net::LocalAddress());
     config.local_ipv4 = local.empty() ? 0 : local.front();
-    config.version = std::string("band3 ") + events::kBuildTag;
+    // which build logged in, as RB3Enhanced sends its own; the hello has room
+    // for 47 characters
+    config.version = (std::string("band3 ") + BuildTag()).substr(0, 47);
     const std::string lang = REXCVAR_GET(lang);
     config.language = lang.empty() ? "eng" : lang;
     {

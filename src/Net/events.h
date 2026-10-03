@@ -22,8 +22,8 @@ enum EventType : uint8_t {
     kDxData = 10,        // ModData
 };
 
-// what band3 calls itself where RB3E gives its build tag: the alive event
-// and the rb3e_build_tag script function
+// what band3 calls itself in the alive event, where RB3E gives its build tag
+// (rb3e_build_tag and the log give src/build_tag.h's)
 inline constexpr char kBuildTag[] = "band3_recomp";
 
 // RB3E_EventBandInfo

@@ -223,7 +223,8 @@ What the panel's errors mean:
 | `the server gave no address for <user>` | the server found the host but gave no address to reach them at |
 
 The log's `rooms:` lines follow the connection: logging in, with the code and public
-address, and what each join did.
+address, and what each join did. band3 tells the server which build it is
+(`band3 <build>`, the build its log's `band3 build` line names), as RB3Enhanced does.
 
 ## RB3Enhanced compatibility
 
@@ -234,7 +235,7 @@ Band 3 Deluxe among them) can call them: `rb3e_get_song_name`, `rb3e_get_artist`
 `rb3e_get_album`, `rb3e_get_genre` and `rb3e_get_origin` (each takes a song ID),
 `rb3e_get_song_count`, `rb3e_set_venue` (for this session; `forced_venue` keeps its
 value), `rb3e_local_ip`, `rb3e_api_version` (0, the RB3E API band3 follows),
-`rb3e_build_tag`, `rb3e_commit`, `rb3e_is_emulator` (1), `rb3e_send_event_string`,
+`rb3e_build_tag` (`band3 <build>`), `rb3e_commit`, `rb3e_is_emulator` (1), `rb3e_send_event_string`,
 `rb3e_change_music_speed`, `rb3e_change_track_speed` and their `rb3e_get_` pairs (the
 `song_speed` and `track_speed` settings, for this session) and
 `print_debug`, which logs its argument. `rb3e_relaunch_game` starts band3 again with

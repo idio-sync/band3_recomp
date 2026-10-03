@@ -12,6 +12,7 @@
 #include <rex/ui/keybinds.h>
 #include <imgui.h>
 
+#include "build_tag.h"
 #include "config.h"
 #include "game_writes.h"
 #include "paths.h"
@@ -95,6 +96,8 @@ class Band3App : public rex::ReXApp {
   // the window and input system don't exist yet, so everything set here applies
   // at startup
   void OnPostInitLogging() override {
+    // band3's first line, so any log says which build wrote it
+    REXLOG_INFO("band3 build {}", band3::BuildTag());
     // a relaunch (rb3e_relaunch_game) starts before the last run has closed
     band3::relaunch::WaitForPrevious();
     REXLOG_INFO("Folders: game data {}, user data {}, cache {} (ini: {})",

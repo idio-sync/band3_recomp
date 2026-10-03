@@ -35,3 +35,7 @@ endif()
 # MIDI input for MIDI drum kits (src/Input/midi_drums_driver.cpp)
 include(cmake/rtmidi.cmake)
 band3_setup_rtmidi(band3 ${CMAKE_CURRENT_SOURCE_DIR}/src/ThirdParty/rtmidi/RtMidi.cpp)
+
+# the build tag src/build_tag.cpp gives the log and the Liveless Rooms server
+include(cmake/build_tag.cmake)
+band3_setup_build_tag(band3 ${CMAKE_CURRENT_SOURCE_DIR})
