@@ -194,6 +194,11 @@ void RoomsPanelDialog::DrawRooms(const Status& status) {
     ImGui::TextDisabled("State");
     ImGui::SameLine(70);
     ImGui::TextColored(StateColor(status.state), "%s", std::string(StateName(status.state)).c_str());
+    if (status.retry_in_s > 0) {
+        ImGui::SameLine();
+        ImGui::TextColored(kBusy, "reconnecting in %d s", status.retry_in_s);
+    }
+    // Connect doesn't wait for the retry
     if (status.state == State::kDisconnected || status.state == State::kFailed) {
         ImGui::SameLine();
         if (ImGui::SmallButton("Connect")) {

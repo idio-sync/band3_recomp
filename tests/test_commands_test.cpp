@@ -834,6 +834,7 @@ band3::rooms::Status LoggedInRooms() {
     rooms.last_join_user = "host";
     rooms.last_join_ipv4 = 0x0201A8C0;
     rooms.game_socket_seen = true;
+    rooms.attempt = 1;
     return rooms;
 }
 
@@ -845,15 +846,37 @@ TEST_CASE("rooms_status reports Liveless Rooms' status, addresses dotted") {
     CHECK(off ==
           "{\"ok\":true,\"rooms\":{\"state\":\"off\",\"server\":\"\",\"code\":\"\",\"public_ip\":\"\","
           "\"advertised_ip\":\"\",\"error\":\"\",\"last_join_user\":\"\",\"last_join_ip\":\"\","
-          "\"game_socket\":false}}");
+          "\"game_socket\":false,\"retry_in\":0,\"attempt\":0}}");
     game.rooms = LoggedInRooms();
     game.rooms.error = "no game with code \"NOPE0000\"";
     CHECK(RunCommand("rooms_status", game) ==
           "{\"ok\":true,\"rooms\":{\"state\":\"logged_in\",\"server\":\"127.0.0.1\",\"code\":\"HOST0001\","
           "\"public_ip\":\"127.0.0.1\",\"advertised_ip\":\"127.0.0.1\","
           "\"error\":\"no game with code \\\"NOPE0000\\\"\",\"last_join_user\":\"host\","
-          "\"last_join_ip\":\"192.168.1.2\",\"game_socket\":true}}");
+          "\"last_join_ip\":\"192.168.1.2\",\"game_socket\":true,\"retry_in\":0,\"attempt\":1}}");
     CHECK_FALSE(Ok(RunCommand("p2 rooms_status", game)));
+}
+
+TEST_CASE("rooms_status says when the client connects again, and which connection it's on") {
+    FakeGame game;
+    game.rooms = LoggedInRooms();
+    game.rooms.state = band3::rooms::State::kDisconnected;
+    game.rooms.error = "the server closed the connection";
+    game.rooms.retry_in_s = 5;
+    CHECK(Has(RunCommand("rooms_status", game), "\"retry_in\":5,\"attempt\":1}"));
+    CHECK(Ok(RunCommand("rooms_status state=disconnected retry_in!=0 attempt=1", game)));
+    CHECK(Ok(RunCommand("rooms_status retry_in=5 code!=HOST0002", game)));
+    const std::string waiting = RunCommand("rooms_status retry_in=0", game);
+    CHECK_FALSE(Ok(waiting));
+    CHECK(Has(waiting, "rooms retry_in is \\\"5\\\", not \\\"0\\\""));
+    game.rooms = LoggedInRooms();
+    game.rooms.attempt = 2;
+    CHECK(Ok(RunCommand("rooms_status state=logged_in retry_in=0 attempt=2", game)));
+    const std::string not_waiting = RunCommand("rooms_status retry_in!=0", game);
+    CHECK_FALSE(Ok(not_waiting));
+    CHECK(Has(not_waiting, "rooms retry_in is \\\"0\\\", not other than \\\"0\\\""));
+    CHECK(Has(RunCommand("rooms_status !=0", game), "usage: rooms_status"));
+    CHECK(Has(RunCommand("rooms_status colour!=red", game), "rooms_status has no field colour"));
 }
 
 TEST_CASE("rooms_status checks fields, exactly or by what they contain") {

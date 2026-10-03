@@ -746,6 +746,8 @@ std::vector<std::pair<std::string_view, std::string>> RoomsFields(const rooms::S
         {"last_join_user", s.last_join_user},
         {"last_join_ip", ip(s.last_join_ipv4)},
         {"game_socket", s.game_socket_seen ? "true" : "false"},
+        {"retry_in", std::to_string(s.retry_in_s)},
+        {"attempt", std::to_string(s.attempt)},
     };
 }
 
@@ -757,7 +759,8 @@ std::string RoomsJson(const rooms::Status& s) {
         first = false;
         AppendJsonString(out, name);
         out += ':';
-        if (name == "game_socket") {
+        // a boolean and numbers, bare
+        if (name == "game_socket" || name == "retry_in" || name == "attempt") {
             out += value;
         } else {
             AppendJsonString(out, value);
@@ -767,27 +770,33 @@ std::string RoomsJson(const rooms::Status& s) {
     return out;
 }
 
-// rooms_status [<field>=<value>|<field>~<text>]...: Liveless Rooms' status;
-// with checks, a failure unless each field is the value, or has the text in
-// it (for errors, which have spaces)
+// rooms_status [<field>=<value>|<field>!=<value>|<field>~<text>]...: Liveless
+// Rooms' status; with checks, a failure unless each field is the value, isn't
+// it (retry_in!=0: a retry is coming), or has the text in it (for errors,
+// which have spaces)
 std::string RoomsStatus(TestTarget& target, const std::vector<std::string_view>& args) {
     const rooms::Status status = target.RoomsStatus();
     const auto fields = RoomsFields(status);
     for (size_t i = 1; i < args.size(); i++) {
         const size_t at = args[i].find_first_of("=~");
-        if (at == std::string_view::npos || at == 0) {
-            return Error(target, "usage: rooms_status [<field>=<value>|<field>~<text>]...");
+        const bool unequal =
+            at != std::string_view::npos && at > 0 && args[i][at] == '=' && args[i][at - 1] == '!';
+        const size_t name_end = unequal ? at - 1 : at;
+        if (at == std::string_view::npos || name_end == 0) {
+            return Error(target, "usage: rooms_status [<field>=<value>|<field>!=<value>|<field>~<text>]...");
         }
-        const std::string_view name = args[i].substr(0, at), want = args[i].substr(at + 1);
+        const std::string_view name = args[i].substr(0, name_end), want = args[i].substr(at + 1);
         const bool contains = args[i][at] == '~';
         const auto field = std::find_if(fields.begin(), fields.end(),
                                         [&](const auto& f) { return f.first == name; });
         if (field == fields.end()) return Error(target, "rooms_status has no field " + std::string(name));
-        const bool holds = contains ? field->second.find(want) != std::string::npos : field->second == want;
+        const bool holds = contains  ? field->second.find(want) != std::string::npos
+                           : unequal ? field->second != want
+                                     : field->second == want;
         if (!holds) {
-            return Error(target, "rooms " + std::string(name) + " is \"" + field->second + "\", not " +
-                                     (contains ? "containing " : "") + "\"" + std::string(want) +
-                                     "\"; {" + RoomsJson(status) + "}");
+            const char* how = contains ? "containing " : unequal ? "other than " : "";
+            return Error(target, "rooms " + std::string(name) + " is \"" + field->second + "\", not " + how +
+                                     "\"" + std::string(want) + "\"; {" + RoomsJson(status) + "}");
         }
     }
     return Ok(RoomsJson(status));

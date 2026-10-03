@@ -206,6 +206,12 @@ the panel instead of Xbox Live's friends list while Rooms is on. The panel also
 shows the server, the connection's state and the last thing that went wrong; with
 Rooms off, it says how to turn it on. Give your code to the players who'll join you.
 
+When the connection to the server goes, or no server answers, band3 connects again
+by itself: 5 s later, then 10, 30 and 60 s apart until it's back (the panel's state
+says "reconnecting in N s"), starting over at 5 s once it logs in again. **Connect**
+connects now instead. It doesn't try again when the server itself said no (turned the
+connection away, or refused the login): that takes a change on your side.
+
 To join someone:
 
 1. Go online first: press Start for the overshell, pick **Play on Xbox Live**, then
@@ -236,12 +242,13 @@ What the panel's errors mean:
 
 | Error | |
 |---|---|
-| `no IPv4 address for <server>` | `liveless_rooms_server` didn't resolve: check it and the PC's connection |
-| `no answer from <server>`, `<server> refused the connection` | nothing is taking connections at that address (port 19532 unless it has `:port`), or a firewall is in the way |
-| `the server turned the connection away` | the server isn't taking this client |
-| `login refused: check that liveless_rooms_server matches the server's address, and username` | the server closed the connection before giving a code. It checks the login against its own name, so `liveless_rooms_server` must be that name as the server knows it (not, say, its IP address) |
-| `the server closed the connection` | the connection went after logging in (state `disconnected`). band3 doesn't connect again by itself: press **Connect** |
-| `the server stopped answering`, `bad data from the server` | the connection went: the server sent nothing for 30 s, or something band3 can't read. State `disconnected` after logging in (or `failed`, if it went before logging in). band3 doesn't connect again by itself: press **Connect** |
+| `no IPv4 address for <server>` | `liveless_rooms_server` didn't resolve: check it and the PC's connection. band3 tries again by itself (5 s, then longer); **Connect** does it now |
+| `no answer from <server>`, `<server> refused the connection` | nothing is taking connections at that address (port 19532 unless it has `:port`), or a firewall is in the way. band3 tries again by itself (5 s, then longer); **Connect** does it now |
+| `the server turned the connection away` | the server isn't taking this client. band3 doesn't ask again by itself |
+| `login refused: check that liveless_rooms_server matches the server's address, and username` | the server closed the connection before giving a code. It checks the login against its own name, so `liveless_rooms_server` must be that name as the server knows it (not, say, its IP address). band3 doesn't ask again by itself: fix the setting and restart |
+| `the server closed the connection` | the connection went after logging in (state `disconnected`). band3 connects again by itself (5 s, then longer), and the code may change; **Connect** does it now |
+| `the server stopped answering` | the server sent nothing for 30 s. State `disconnected` after logging in, `failed` before. band3 connects again by itself (5 s, then longer); **Connect** does it now |
+| `bad data from the server` | the server sent something band3 can't read. After logging in (state `disconnected`) band3 connects again by itself (5 s, then longer); before it (`failed`), the address isn't a Rooms server, and band3 doesn't try again. **Connect** does it now |
 | `not logged in to the Rooms server` | a join before the code came, or after the connection went |
 | `the game isn't online yet: Play on Xbox Live first` | a join while the game is offline: before Play on Xbox Live, or after leaving it |
 | `a code is 8 letters and digits` | the code isn't 8 characters long |
