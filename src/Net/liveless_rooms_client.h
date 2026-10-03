@@ -146,7 +146,8 @@ public:
     // asks for the game with `code`: an error, or empty once it's on its way
     std::string Join(std::string code);
     ClientStatus GetStatus() const;
-    // the server's view of this PC's address, 0 until logged in; never locks
+    // the server's view of this PC's address, 0 until logged in; kept through
+    // the thread's own reconnects and Stop, 0 again at Start; never locks
     uint32_t PublicAddress() const { return public_ipv4_; }
 
 private:

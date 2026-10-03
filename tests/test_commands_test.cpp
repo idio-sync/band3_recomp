@@ -987,6 +987,23 @@ TEST_CASE("port_mapping_status reports the router's mapping, and checks its fiel
     CHECK_FALSE(Ok(RunCommand("p2 port_mapping_status", game)));
 }
 
+TEST_CASE("port_mapping_status checks a field isn't a value") {
+    FakeGame game;
+    game.port_mapping.state = band3::port_mapping::State::kMapped;
+    game.port_mapping.method = band3::port_mapping::Method::kUpnp;
+    game.port_mapping.port = 9103;
+    // a permanent UPnP mapping has lease 0; a leased one anything else
+    CHECK(Ok(RunCommand("port_mapping_status state!=failed method=upnp lease_s=0 error!=x", game)));
+    const std::string leased = RunCommand("port_mapping_status lease_s!=0", game);
+    CHECK_FALSE(Ok(leased));
+    CHECK(Has(leased, "port_mapping lease_s is \\\"0\\\", not other than \\\"0\\\""));
+    game.port_mapping.lease_s = 3600;
+    CHECK(Ok(RunCommand("port_mapping_status lease_s!=0", game)));
+    CHECK(Has(RunCommand("port_mapping_status !=0", game), "usage: port_mapping_status"));
+    CHECK(Has(RunCommand("port_mapping_status colour!=red", game),
+              "port_mapping_status has no field colour"));
+}
+
 TEST_CASE("wait port_mapping= waits for the router's mapping to reach a state") {
     FakeGame game;
     CHECK(Ok(RunCommand("expect port_mapping=off", game)));

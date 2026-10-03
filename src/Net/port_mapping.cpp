@@ -62,8 +62,11 @@ constexpr auto kStopWait = 3000ms;
 constexpr auto kSlice = 50ms;
 // how long SSDP discovery waits for routers to answer
 constexpr int kDiscoverMs = 2000;
-// UPnP's OnlyPermanentLeasesSupported
+// UPnP's OnlyPermanentLeasesSupported and ConflictInMappingEntry
 constexpr int kUpnpPermanentOnly = 725;
+constexpr int kUpnpConflict = 718;
+// what band3 calls its UPnP mappings, to know one again
+constexpr char kUpnpDescription[] = "band3";
 // the shortest wait before renewing, whatever lease a router grants
 constexpr uint32_t kMinRenew = 30;
 
@@ -445,26 +448,61 @@ private:
     }
 
     bool AddUpnp(uint32_t& lease, std::string& error) {
-        const std::string port = std::to_string(config_.port);
         const std::string lifetime = std::to_string(kLifetime);
-        int result = UPNP_AddPortMapping(urls_.controlURL, data_.first.servicetype, port.c_str(),
-                                         port.c_str(), lan_, "band3", "UDP", nullptr,
-                                         lifetime.c_str());
+        std::string holder;
+        int result = AddUpnpMapping(lifetime.c_str(), holder);
         lease = kLifetime;
         if (result == kUpnpPermanentOnly) {
             Log("port mapping: the UPnP router only maps for good; asking for that, and band3 "
                 "deletes it when it closes");
-            result = UPNP_AddPortMapping(urls_.controlURL, data_.first.servicetype, port.c_str(),
-                                         port.c_str(), lan_, "band3", "UDP", nullptr, "0");
+            result = AddUpnpMapping("0", holder);
             lease = 0;
         }
         if (result != UPNPCOMMAND_SUCCESS) {
             const char* text = strupnperror(result);
-            error = "the UPnP router refused the mapping: " + std::to_string(result) +
-                    (text ? std::string(" ") + text : std::string());
+            error = !holder.empty()
+                        ? "the UPnP router forwards " + Port() + " to " + holder + " already"
+                        : "the UPnP router refused the mapping: " + std::to_string(result) +
+                              (text ? std::string(" ") + text : std::string());
             return false;
         }
         return true;
+    }
+
+    // One AddPortMapping. A conflict with band3's own mapping to this PC is
+    // one a band3 that crashed or was killed didn't delete (a router that only
+    // maps for good keeps it), which some routers won't overwrite: that's
+    // deleted and asked for again, once. Another PC's or another program's
+    // isn't touched; `holder` then says whose it is.
+    int AddUpnpMapping(const char* lifetime, std::string& holder) {
+        const std::string port = std::to_string(config_.port);
+        auto add = [&] {
+            return UPNP_AddPortMapping(urls_.controlURL, data_.first.servicetype, port.c_str(),
+                                       port.c_str(), lan_, kUpnpDescription, "UDP", nullptr, lifetime);
+        };
+        const int result = add();
+        if (result != kUpnpConflict) return result;
+        char client[16] = {}, internal_port[6] = {}, description[80] = {}, enabled[4] = {},
+             lease[16] = {};
+        if (UPNP_GetSpecificPortMappingEntry(urls_.controlURL, data_.first.servicetype, port.c_str(),
+                                             "UDP", nullptr, client, internal_port, description,
+                                             enabled, lease) != UPNPCOMMAND_SUCCESS) {
+            return result;
+        }
+        if (std::strcmp(client, lan_) != 0 || std::strcmp(description, kUpnpDescription) != 0) {
+            holder = std::string(client[0] ? client : "another address") +
+                     (description[0] ? " (\"" + std::string(description) + "\")" : std::string());
+            return result;
+        }
+        Log("port mapping: the UPnP router has an old band3 mapping of " + Port() +
+            " to this PC that it won't replace (error 718); deleting it and asking again");
+        const int deleted = UPNP_DeletePortMapping(urls_.controlURL, data_.first.servicetype,
+                                                   port.c_str(), "UDP", nullptr);
+        if (deleted != UPNPCOMMAND_SUCCESS) {
+            Log("port mapping: deleting the old mapping failed (" + std::to_string(deleted) +
+                "); asking again anyway");
+        }
+        return add();
     }
 
     // The router's answer to a mapping: only the port asked for will do, as

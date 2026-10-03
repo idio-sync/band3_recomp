@@ -15,7 +15,10 @@ with them, never through the real router):
 NAT-PMP; silent never answers UDP, so band3 goes on to UPnP after 3.5 s. Every mapping
 gets --external as the public address (203.0.113.5, an address kept for documentation).
 --upnp-error 725 refuses UPnP mappings with a lease (OnlyPermanentLeasesSupported), so
-only a permanent one (lease 0) works; another code refuses every UPnP mapping.
+only a permanent one (lease 0) works; 718 (ConflictInMappingEntry) has an old band3
+mapping (one a band3 that crashed didn't delete) hold each port, to --stale-client
+(127.0.0.1, band3's own PC, unless given), and refuses mappings of a port until a
+DeletePortMapping clears it; another code refuses every UPnP mapping.
 --assign-port maps PCP and NAT-PMP requests to that port outside instead of the one asked.
 
 It logs one line per request: `pcp: map UDP 9103 lifetime 3600`, `natpmp: delete UDP
@@ -198,17 +201,20 @@ class MockRouter:
     thread of its own (serve_in_background) until close()."""
 
     def __init__(self, udp_port=GATEWAY_PORT, mode="pcp", external="203.0.113.5",
-                 upnp_error=0, assign_port=0, log=print):
+                 upnp_error=0, assign_port=0, stale_client=HOST, log=print):
         self.mode = mode
         self.external = external
         self.upnp_error = upnp_error
         self.assign_port = assign_port
+        self.stale_client = stale_client
         self.log = log
         self.start = time.monotonic()
         self.stopping = False
         self.lock = threading.Lock()
         # (protocol, port) -> lifetime, what UPnP has mapped
         self.upnp_mappings = {}
+        # with upnp_error 718, the (protocol, port)s whose old mapping is deleted
+        self.cleared = set()
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp.bind((HOST, udp_port))
         self.udp_port = self.udp.getsockname()[1]
@@ -279,6 +285,10 @@ class MockRouter:
 
     # UPnP
 
+    def held_by_stale(self, key):
+        """Whether the old mapping 718 has holds key still (call with the lock held)."""
+        return self.upnp_error == 718 and key not in self.cleared
+
     def answer_soap(self, action, args):
         """(HTTP status, body) for a SOAP action."""
         if action == "GetExternalIPAddress":
@@ -289,29 +299,40 @@ class MockRouter:
         key = (protocol, port)
         if action == "AddPortMapping":
             lease = args.get("NewLeaseDuration", "0")
-            refused = self.upnp_error and (self.upnp_error != 725 or lease != "0")
+            with self.lock:
+                if self.upnp_error == 718:
+                    refused = self.held_by_stale(key)
+                else:
+                    refused = self.upnp_error and (self.upnp_error != 725 or lease != "0")
             self.log(f"upnp: map {protocol} {port} lifetime {lease} for "
                      f"{args.get('NewInternalClient', '')}:{args.get('NewInternalPort', '')}"
                      + (f" -> error {self.upnp_error}" if refused else ""))
             if refused:
                 return 500, soap_fault(self.upnp_error)
             with self.lock:
-                self.upnp_mappings[key] = lease
+                self.upnp_mappings[key] = (args.get("NewInternalClient", ""), lease)
             return 200, soap_response(action)
         if action == "DeletePortMapping":
             with self.lock:
-                found = self.upnp_mappings.pop(key, None) is not None
-            self.log(f"upnp: delete {protocol} {port}" + ("" if found else " -> error 714"))
+                stale = self.held_by_stale(key)
+                found = stale or self.upnp_mappings.pop(key, None) is not None
+                self.cleared.add(key)
+            self.log(f"upnp: delete {protocol} {port}" + (" (the old mapping)" if stale else "")
+                     + ("" if found else " -> error 714"))
             return (200, soap_response(action)) if found else (500, soap_fault(714))
         if action == "GetSpecificPortMappingEntry":
             with self.lock:
-                lease = self.upnp_mappings.get(key)
+                if self.held_by_stale(key):
+                    entry = (self.stale_client, "0")
+                else:
+                    entry = self.upnp_mappings.get(key)
             self.log(f"upnp: GetSpecificPortMappingEntry {protocol} {port}"
-                     + ("" if lease is not None else " -> error 714"))
-            if lease is None:
+                     + (f" -> {entry[0]}" if entry is not None else " -> error 714"))
+            if entry is None:
                 return 500, soap_fault(714)
+            client, lease = entry
             return 200, soap_response(action, [("NewInternalPort", port),
-                                               ("NewInternalClient", HOST),
+                                               ("NewInternalClient", client),
                                                ("NewEnabled", "1"),
                                                ("NewPortMappingDescription", "band3"),
                                                ("NewLeaseDuration", lease)])
@@ -391,7 +412,10 @@ def main(argv):
     parser.add_argument("--external", default="203.0.113.5",
                         help="the public IPv4 address every mapping gets")
     parser.add_argument("--upnp-error", type=int, default=0,
-                        help="refuse UPnP mappings with this error (725: only those with a lease)")
+                        help="refuse UPnP mappings with this error (725: only those with a "
+                             "lease; 718: until an old mapping of the port is deleted)")
+    parser.add_argument("--stale-client", default=HOST,
+                        help="with --upnp-error 718, the PC the old mapping forwards to")
     parser.add_argument("--assign-port", type=int, default=0,
                         help="map PCP and NAT-PMP requests to this port outside")
     args = parser.parse_args(argv)
@@ -402,7 +426,8 @@ def main(argv):
 
     try:
         router = MockRouter(udp_port=args.udp_port, mode=args.mode, external=args.external,
-                            upnp_error=args.upnp_error, assign_port=args.assign_port, log=log)
+                            upnp_error=args.upnp_error, assign_port=args.assign_port,
+                            stale_client=args.stale_client, log=log)
         if args.http_port:
             router.start_http(args.http_port)
     except OSError as e:

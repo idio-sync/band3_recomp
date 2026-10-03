@@ -75,8 +75,10 @@ std::string Join(std::string code);
 // server's thread; waits for the old connection's thread to end.
 std::string Connect();
 
-// This PC's public address as the server saw it, 0 until logged in. The game
-// thread's XNetGetTitleXnAddr hook calls it, so it never locks.
+// This PC's public address as the server last saw it: 0 until logged in, kept
+// while the client reconnects by itself (so the game goes on telling players
+// it through a dropped connection), and 0 again after Connect until it logs
+// in. The game thread's XNetGetTitleXnAddr hook calls it, so it never locks.
 uint32_t PublicAddress();
 
 // The game thread's hooks: the guest socket handle the game bound its online

@@ -11,6 +11,10 @@ it quits:
   natpmp   PCP turned away, NAT-PMP works
   upnp     no answer over UDP (3.5 s), UPnP works
   upnp725  UPnP only maps for good: a permanent mapping (lease 0)
+  upnp718  an old band3 mapping to this PC holds the port (ConflictInMappingEntry): band3
+           deletes it and maps the port
+  upnp718other  the mapping holding the port is another PC's: band3 leaves it alone
+           and isn't mapped
   guard    no overrides: under the test harness band3 asks nothing (the mock, running,
            must log no request)
   setting  liveless_external_ip set: it wins over the mapping's address
@@ -43,8 +47,10 @@ OVERRIDES = [f"--liveless_gateway=127.0.0.1:{UDP_PORT}",
 PUBLIC = "203.0.113.5"
 SETTING = "198.51.100.9"
 
-# name: (mock arguments, game arguments, port_mapping_status checks, advertised address
-# and where it's from or None to stay offline, the delete the mock must log)
+# name: (mock arguments, game arguments, port_mapping_status checks (the first the state
+# to wait for), advertised address and where it's from or None to stay offline, the
+# delete the mock must log, then optionally what the mock must log in that order, a
+# "!" before what it mustn't log at all)
 SCENARIOS = {
     "pcp": (["--mode", "pcp"], OVERRIDES,
             ["state=mapped", "method=pcp", f"external_ip={PUBLIC}", "port=9103", "lease_s=3600"],
@@ -59,6 +65,24 @@ SCENARIOS = {
     "upnp725": (["--mode", "silent", "--upnp-error", "725"], OVERRIDES,
                 ["state=mapped", "method=upnp", f"external_ip={PUBLIC}", "port=9103", "lease_s=0"],
                 None, "upnp: delete UDP 9103"),
+    "upnp718": (["--mode", "silent", "--upnp-error", "718"], OVERRIDES,
+                ["state=mapped", "method=upnp", f"external_ip={PUBLIC}", "port=9103",
+                 "lease_s=3600"],
+                None, "upnp: delete UDP 9103",
+                ["upnp: map UDP 9103 lifetime 3600 for 127.0.0.1:9103 -> error 718",
+                 "upnp: GetSpecificPortMappingEntry UDP 9103 -> 127.0.0.1",
+                 "upnp: delete UDP 9103 (the old mapping)",
+                 "upnp: map UDP 9103 lifetime 3600 for 127.0.0.1:9103\n",
+                 # at quit
+                 "upnp: delete UDP 9103\n"]),
+    "upnp718other": (["--mode", "silent", "--upnp-error", "718", "--stale-client", "192.0.2.7"],
+                     OVERRIDES,
+                     # a check is one word
+                     ["state=failed", "method=upnp", "error~192.0.2.7"],
+                     None, None,
+                     ["upnp: map UDP 9103 lifetime 3600 for 127.0.0.1:9103 -> error 718",
+                      "upnp: GetSpecificPortMappingEntry UDP 9103 -> 192.0.2.7",
+                      "!upnp: delete"]),
     "guard": (["--mode", "pcp"], [],
               ["state=off", "error~harness"],
               None, None),
@@ -139,7 +163,8 @@ def read(path):
 
 
 def run(name):
-    mock_args, game_args, checks, advertised, delete = SCENARIOS[name]
+    mock_args, game_args, checks, advertised, delete, *rest = SCENARIOS[name]
+    sequence = rest[0] if rest else []
     game_log = os.path.join(OUT, f"port_mapping_{name}_game.log")
     mock_log = os.path.join(OUT, f"port_mapping_{name}_mock.log")
     if os.path.exists(game_log):
@@ -155,7 +180,7 @@ def run(name):
             # Start ran before the harness answered; give a UDP leg time to show
             check("sleep 5s")
         else:
-            check("wait port_mapping=mapped timeout=30s")
+            check(f"wait port_mapping={checks[0].partition('=')[2]} timeout=30s")
         check("port_mapping_status", *checks)
         if advertised:
             for command in ONLINE:
@@ -178,6 +203,16 @@ def run(name):
                                         if "port mapping" in l or "liveless: advertising" in l))
     if delete and delete not in mock_text:
         raise AssertionError(f"the mock has no '{delete}' after quit")
+    at = 0
+    for text in sequence:
+        if text.startswith("!"):
+            if text[1:] in mock_text:
+                raise AssertionError(f"the mock has '{text[1:]}'")
+            continue
+        found = mock_text.find(text, at)
+        if found < 0:
+            raise AssertionError(f"the mock has no '{text.strip()}' after what came before")
+        at = found + len(text)
     if name == "guard":
         if requests:
             raise AssertionError("band3 sent the mock something under the guard")

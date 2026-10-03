@@ -220,7 +220,8 @@ void RoomsPanelDialog::DrawRooms(const Status& status) {
     // the router's forward of the port, which band3 asks for itself
     // (liveless_port_mapping); by hand only when that didn't work
     const port_mapping::Status mapping = port_mapping::GetStatus();
-    const std::string udp = "UDP " + std::to_string(settings::Startup().liveless_port);
+    const int port = settings::Startup().liveless_port;
+    const std::string udp = "UDP " + std::to_string(port);
     switch (mapping.state) {
         case port_mapping::State::kMapped:
             Wrapped(kGood, udp + ": mapped by " + std::string(port_mapping::MethodLabel(mapping.method)) +
@@ -236,13 +237,13 @@ void RoomsPanelDialog::DrawRooms(const Status& status) {
                                                              : ": " + mapping.error));
             break;
     }
+    const std::string udp_port = "UDP port " + std::to_string(port);
     if (mapping.state == port_mapping::State::kMapped) {
-        Hint("Players join you with it, on UDP port 9103.");
+        Hint("Players join you with it, on " + udp_port + ".");
     } else {
-        Hint("Players join you with it, on UDP port 9103: forward it to this PC, as RB3Enhanced "
+        Hint("Players join you with it, on " + udp_port + ": forward it to this PC, as RB3Enhanced "
              "players do.");
     }
-    const int port = settings::Startup().liveless_port;
     if (port != online::kGamePort) {
         Wrapped(kBusy, "liveless_port is " + std::to_string(port) +
                            ", but joins by code go to 9103, so they can't reach this game.");

@@ -179,6 +179,14 @@ tell players that address. The mapping lasts an hour, renewed every half hour, a
 band3 deletes it when it closes. Turn `liveless_port_mapping` off (Band3 → Online, then
 restart) to leave the router alone.
 
+band3 asks when it starts, and a mapping that failed isn't asked for again during the
+session: if the router or the network comes up after band3 starts, restart band3. A
+crash or a killed band3 can leave the mapping behind: a leased one lapses within the
+hour, but a router that only keeps permanent mappings holds it until band3's next clean
+exit. On its next start band3 deletes that old mapping if the router won't replace it
+(UPnP's ConflictInMappingEntry); a mapping of the port to another PC, or by another
+program, it leaves alone, and says whose it is.
+
 The log's `port mapping:` lines say how it went, and the Rooms panel (F10) shows it
 under your code: `UDP 9103: mapped by PCP, public 203.0.113.5`, `mapping...`, or
 `not mapped:` and why. When it isn't mapped, forward the port by hand and set

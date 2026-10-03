@@ -733,8 +733,43 @@ std::string LivelessInvite(TestTarget& target, const std::vector<std::string_vie
     return Ok();
 }
 
+using StatusFields = std::vector<std::pair<std::string_view, std::string>>;
+
+// A status command's checks, args[1] on: each field is the value
+// (<field>=<value>), isn't it (<field>!=<value>; retry_in!=0: a retry is
+// coming), or has the text in it (<field>~<text>, for errors, which have
+// spaces). Empty when every check holds, else what's wrong: `verb`'s usage, a
+// field it hasn't, or the field that isn't, named as `label`'s with the whole
+// status (`json`) after it.
+std::string CheckStatusFields(std::string_view verb, std::string_view label, const StatusFields& fields,
+                              std::string_view json, const std::vector<std::string_view>& args) {
+    for (size_t i = 1; i < args.size(); i++) {
+        const size_t at = args[i].find_first_of("=~");
+        const bool unequal =
+            at != std::string_view::npos && at > 0 && args[i][at] == '=' && args[i][at - 1] == '!';
+        const size_t name_end = unequal ? at - 1 : at;
+        if (at == std::string_view::npos || name_end == 0) {
+            return "usage: " + std::string(verb) + " [<field>=<value>|<field>!=<value>|<field>~<text>]...";
+        }
+        const std::string_view name = args[i].substr(0, name_end), want = args[i].substr(at + 1);
+        const bool contains = args[i][at] == '~';
+        const auto field = std::find_if(fields.begin(), fields.end(),
+                                        [&](const auto& f) { return f.first == name; });
+        if (field == fields.end()) return std::string(verb) + " has no field " + std::string(name);
+        const bool holds = contains  ? field->second.find(want) != std::string::npos
+                           : unequal ? field->second != want
+                                     : field->second == want;
+        if (!holds) {
+            const char* how = contains ? "containing " : unequal ? "other than " : "";
+            return std::string(label) + " " + std::string(name) + " is \"" + field->second + "\", not " +
+                   how + "\"" + std::string(want) + "\"; {" + std::string(json) + "}";
+        }
+    }
+    return {};
+}
+
 // Liveless Rooms' status, each field as text: addresses dotted, empty for none
-std::vector<std::pair<std::string_view, std::string>> RoomsFields(const rooms::Status& s) {
+StatusFields RoomsFields(const rooms::Status& s) {
     auto ip = [](uint32_t address) { return address ? rooms::Ipv4Text(address) : std::string(); };
     return {
         {"state", std::string(rooms::StateName(s.state))},
@@ -771,35 +806,15 @@ std::string RoomsJson(const rooms::Status& s) {
 }
 
 // rooms_status [<field>=<value>|<field>!=<value>|<field>~<text>]...: Liveless
-// Rooms' status; with checks, a failure unless each field is the value, isn't
-// it (retry_in!=0: a retry is coming), or has the text in it (for errors,
-// which have spaces)
+// Rooms' status; with checks (CheckStatusFields'), a failure unless each holds
 std::string RoomsStatus(TestTarget& target, const std::vector<std::string_view>& args) {
     const rooms::Status status = target.RoomsStatus();
-    const auto fields = RoomsFields(status);
-    for (size_t i = 1; i < args.size(); i++) {
-        const size_t at = args[i].find_first_of("=~");
-        const bool unequal =
-            at != std::string_view::npos && at > 0 && args[i][at] == '=' && args[i][at - 1] == '!';
-        const size_t name_end = unequal ? at - 1 : at;
-        if (at == std::string_view::npos || name_end == 0) {
-            return Error(target, "usage: rooms_status [<field>=<value>|<field>!=<value>|<field>~<text>]...");
-        }
-        const std::string_view name = args[i].substr(0, name_end), want = args[i].substr(at + 1);
-        const bool contains = args[i][at] == '~';
-        const auto field = std::find_if(fields.begin(), fields.end(),
-                                        [&](const auto& f) { return f.first == name; });
-        if (field == fields.end()) return Error(target, "rooms_status has no field " + std::string(name));
-        const bool holds = contains  ? field->second.find(want) != std::string::npos
-                           : unequal ? field->second != want
-                                     : field->second == want;
-        if (!holds) {
-            const char* how = contains ? "containing " : unequal ? "other than " : "";
-            return Error(target, "rooms " + std::string(name) + " is \"" + field->second + "\", not " + how +
-                                     "\"" + std::string(want) + "\"; {" + RoomsJson(status) + "}");
-        }
+    const std::string json = RoomsJson(status);
+    if (std::string error = CheckStatusFields("rooms_status", "rooms", RoomsFields(status), json, args);
+        !error.empty()) {
+        return Error(target, error);
     }
-    return Ok(RoomsJson(status));
+    return Ok(json);
 }
 
 // rooms_join <code>: asks the Rooms server for the game with that code
@@ -822,8 +837,7 @@ std::string RoomsConnect(TestTarget& target, const std::vector<std::string_view>
 
 // Liveless' port mapping, each field as text: the address dotted, empty for
 // none; port and lease_s are numbers in the JSON
-std::vector<std::pair<std::string_view, std::string>> PortMappingFields(
-    const port_mapping::Status& s) {
+StatusFields PortMappingFields(const port_mapping::Status& s) {
     return {
         {"state", std::string(port_mapping::StateName(s.state))},
         {"method", std::string(port_mapping::MethodName(s.method))},
@@ -852,32 +866,18 @@ std::string PortMappingJson(const port_mapping::Status& s) {
     return out;
 }
 
-// port_mapping_status [<field>=<value>|<field>~<text>]...: the port mapping's
-// status; with checks, a failure unless each field is the value, or has the
-// text in it
+// port_mapping_status [<field>=<value>|<field>!=<value>|<field>~<text>]...:
+// the port mapping's status; with checks (CheckStatusFields'), a failure
+// unless each holds
 std::string PortMappingStatus(TestTarget& target, const std::vector<std::string_view>& args) {
     const port_mapping::Status status = target.PortMappingStatus();
-    const auto fields = PortMappingFields(status);
-    for (size_t i = 1; i < args.size(); i++) {
-        const size_t at = args[i].find_first_of("=~");
-        if (at == std::string_view::npos || at == 0) {
-            return Error(target, "usage: port_mapping_status [<field>=<value>|<field>~<text>]...");
-        }
-        const std::string_view name = args[i].substr(0, at), want = args[i].substr(at + 1);
-        const bool contains = args[i][at] == '~';
-        const auto field = std::find_if(fields.begin(), fields.end(),
-                                        [&](const auto& f) { return f.first == name; });
-        if (field == fields.end()) {
-            return Error(target, "port_mapping_status has no field " + std::string(name));
-        }
-        const bool holds = contains ? field->second.find(want) != std::string::npos : field->second == want;
-        if (!holds) {
-            return Error(target, "port_mapping " + std::string(name) + " is \"" + field->second +
-                                     "\", not " + (contains ? "containing " : "") + "\"" +
-                                     std::string(want) + "\"; {" + PortMappingJson(status) + "}");
-        }
+    const std::string json = PortMappingJson(status);
+    if (std::string error = CheckStatusFields("port_mapping_status", "port_mapping",
+                                              PortMappingFields(status), json, args);
+        !error.empty()) {
+        return Error(target, error);
     }
-    return Ok(PortMappingJson(status));
+    return Ok(json);
 }
 
 }

@@ -2,8 +2,9 @@
 # log's first line shows and a Liveless Rooms server gets as band3's version.
 # A build without .git (Nix's, a source zip's) passes -DBAND3_BUILD_TAG=<tag>.
 #
-# The tag is written each build rather than at configure time, so a commit or
-# an edit shows in the next build without a reconfigure. build_tag_write.cmake
+# The tag is worked out on every build, on purpose: at configure time it would
+# go stale with the next commit or edit until a reconfigure, so don't move it
+# there. build_tag_write.cmake
 # leaves the header alone while the tag is the same, so only src/build_tag.cpp
 # (its one includer) recompiles, and only when the tag changes.
 set(BAND3_BUILD_TAG "" CACHE STRING

@@ -213,9 +213,46 @@ class UpnpTest(RouterTest):
         self.assertTrue(self.logged("upnp: map UDP 9103 lifetime 3600 for 127.0.0.1:9103 -> error 725"))
         self.assertTrue(self.logged("upnp: map UDP 9103 lifetime 0"))
 
-    def test_other_errors_refuse_every_mapping(self):
+    def entry(self, router):
+        return self.soap(router, "GetSpecificPortMappingEntry", NewRemoteHost="",
+                         NewExternalPort=9103, NewProtocol="UDP")
+
+    def delete(self, router):
+        return self.soap(router, "DeletePortMapping", NewRemoteHost="", NewExternalPort=9103,
+                         NewProtocol="UDP")
+
+    def test_conflict_holds_the_port_until_its_old_mapping_is_deleted(self):
         router = self.start(upnp_error=718)
+        status, body = self.add(router, 3600)
+        self.assertEqual(status, 500)
+        self.assertIn("<errorCode>718</errorCode>", body)
         self.assertEqual(self.add(router, 0)[0], 500)
+        # the old mapping is band3's, to this PC
+        status, body = self.entry(router)
+        self.assertEqual(status, 200)
+        self.assertIn("<NewInternalClient>127.0.0.1</NewInternalClient>", body)
+        self.assertIn("<NewPortMappingDescription>band3</NewPortMappingDescription>", body)
+        self.assertEqual(self.delete(router)[0], 200)
+        self.assertEqual(self.add(router, 3600)[0], 200)
+        status, body = self.entry(router)
+        self.assertIn("<NewLeaseDuration>3600</NewLeaseDuration>", body)
+        # and band3's own goes as any other
+        self.assertEqual(self.delete(router)[0], 200)
+        self.assertEqual(self.delete(router)[0], 500)
+        self.assertTrue(self.logged("upnp: map UDP 9103 lifetime 3600 for 127.0.0.1:9103 -> error 718"))
+        self.assertTrue(self.logged("upnp: delete UDP 9103 (the old mapping)"))
+        self.assertTrue(self.logged("upnp: delete UDP 9103 -> error 714"))
+
+    def test_conflict_can_be_another_pcs(self):
+        router = self.start(upnp_error=718, stale_client="192.0.2.7")
+        self.assertIn("<NewInternalClient>192.0.2.7</NewInternalClient>", self.entry(router)[1])
+        self.assertTrue(self.logged("upnp: GetSpecificPortMappingEntry UDP 9103 -> 192.0.2.7"))
+
+    def test_other_errors_refuse_every_mapping(self):
+        router = self.start(upnp_error=606)
+        self.assertEqual(self.add(router, 0)[0], 500)
+        self.assertEqual(self.delete(router)[0], 500)
+        self.assertEqual(self.add(router, 3600)[0], 500)
 
 
 if __name__ == "__main__":

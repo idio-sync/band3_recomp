@@ -6,7 +6,10 @@
 # The tag is FALLBACK when set, else `git describe` of SRC (with "-dirty"
 # while a tracked file says something other than HEAD's), else "unknown".
 # A header that already says it is left untouched, so nothing recompiles.
-if(FALLBACK)
+# Any FALLBACK but an empty one is the tag: if(FALLBACK) would take "no",
+# "off" or "0" for unset. (DEFINED first: if() reads an undefined variable's
+# name as the string "FALLBACK".)
+if(DEFINED FALLBACK AND NOT FALLBACK STREQUAL "")
     set(tag "${FALLBACK}")
 else()
     set(tag "")
