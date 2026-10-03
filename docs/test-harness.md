@@ -68,6 +68,10 @@ without one it's player 1's. `state` lists every player's instrument.
 so they join as guests (`skip_profile_prompt`, on by default). With it off, RB3 asks
 each to choose a profile when they join: No Profile plays as a guest.
 
+`tests/game/liveless.b3t` takes two band3s on this PC online with Liveless, one
+hosting and one joining it (its header has the two launches: each needs its own
+`--port`, and the second its own `--user-data` and `liveless_port`).
+
 `tests/game/usb_mic.b3t` sings a song's vocals through the USB mics' test tone (launch
 with `-- --usb_mics=true --usb_mic_test_tone=220`) and waits for the score to go up.
 

@@ -55,7 +55,8 @@ REXCVAR_DEFINE_STRING(forced_venue, "false", "Band3/Game",
     "none for a black background, or a comma separated list to pick from at random");
 
 REXCVAR_DEFINE_STRING(username, "", "Band3/Game",
-    "Override the displayed username (up to 15 characters). Empty keeps the profile's");
+    "Override the username (up to 15 characters): the profile's gamertag wherever the game "
+    "asks for it, online included. Empty keeps the profile's");
 
 REXCVAR_DEFINE_INT32(main_heap_size, 0, "Band3/Game",
     "Main heap size in bytes, 0 = mem.dta's 105000000. Main and char together must stay "
@@ -280,6 +281,39 @@ REXCVAR_DEFINE_BOOL(rb3e_mode, true, "Band3/Integrations",
     "mode, song lookups, and clearing the song cache and restarting after an update")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+// Band3/Online
+
+REXCVAR_DEFINE_BOOL(gocentral, false, "Band3/Online",
+    "Connect to GoCentral, the fan-run Rock Central server RB3Enhanced uses, for "
+    "leaderboards, battles and setlist sharing. Needs username set: it's your account "
+    "there, with no password, so pick one nobody else uses")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(gocentral_address, "gocentral-xbox.rbenhanced.rocks", "Band3/Online",
+    "The GoCentral server to connect to: RB3Enhanced's Xbox 360 one, or your own")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(liveless, false, "Band3/Online",
+    "Play online with other band3 and RB3Enhanced players without Xbox Live, as "
+    "RB3Enhanced's Liveless does: searching for an online game joins liveless_connect's")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(liveless_connect, "127.0.0.1", "Band3/Online",
+    "The game to join when searching online: its player's address, and :port if it isn't "
+    "9103. 127.0.0.1 to host")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(liveless_external_ip, "", "Band3/Online",
+    "This PC's address as players joining you reach it: your public IP for players over the "
+    "internet. Empty uses this PC's address on the local network")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_INT32(liveless_port, 9103, "Band3/Online",
+    "The UDP port this game plays online on, which players joining you need open. "
+    "RB3Enhanced's is 9103; another (9203, say) lets a second band3 on this PC join the first")
+    .range(1024, 65000)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 // Band3/Debug
 
 REXCVAR_DEFINE_BOOL(debug_overlay, true, "Band3/Debug",
@@ -297,6 +331,9 @@ REXCVAR_DEFINE_BOOL(log_shake_timing, false, "Band3/Debug",
     "Log the game's frame time against the wall clock once a second while the camera "
     "shake runs")
     .debug_only();
+
+REXCVAR_DEFINE_BOOL(log_net_calls, false, "Band3/Debug",
+    "Log each of the game's network calls (sockets, XNet) and what it returned");
 
 REXCVAR_DEFINE_BOOL(autoplay, false, "Band3/Debug",
     "The game plays every part itself, from the next song start: for repeatable profiling "
@@ -432,6 +469,12 @@ void Init() {
         .http_port = REXCVAR_GET(http_port),
         .http_address = REXCVAR_GET(http_address),
         .rb3e_mode = REXCVAR_GET(rb3e_mode),
+        .gocentral = REXCVAR_GET(gocentral),
+        .gocentral_address = REXCVAR_GET(gocentral_address),
+        .liveless = REXCVAR_GET(liveless),
+        .liveless_connect = REXCVAR_GET(liveless_connect),
+        .liveless_external_ip = REXCVAR_GET(liveless_external_ip),
+        .liveless_port = REXCVAR_GET(liveless_port),
         .native_camera_shake = REXCVAR_GET(native_camera_shake),
     };
 
