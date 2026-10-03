@@ -26,6 +26,13 @@ rexglue_setup_target(band3 GPU_PLUGINS xenos)
 # librexruntime[d|rd].so), for src/sdk_export.cpp
 target_compile_definitions(band3 PRIVATE BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")
 target_link_libraries(band3 PRIVATE ${CMAKE_DL_LIBS})
+# the SDK stages its runtime beside band3 on Windows and macOS only; Linux
+# looks for it there too ($ORIGIN)
+if(UNIX AND NOT APPLE)
+    add_custom_command(TARGET band3 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:rex::runtime>
+                $<TARGET_FILE_DIR:band3>)
+endif()
 
 # UDP sockets for the RB3E network events (src/Net/events.cpp)
 if(WIN32)

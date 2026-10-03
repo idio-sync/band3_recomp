@@ -2501,7 +2501,10 @@ GammaRamp ReadDisplayGamma() {
     GammaRamp g;
     rex::system::KernelState* kernel = rex::system::kernel_state();
     rex::Runtime* runtime = kernel ? kernel->emulator() : nullptr;
-    auto* graphics = runtime ? dynamic_cast<rex::graphics::GraphicsSystem*>(
+    // band3's GPU is the SDK's xenos plugin, whose system is a GraphicsSystem;
+    // not a dynamic_cast, as the Linux SDK keeps GraphicsSystem's typeinfo
+    // hidden inside the plugin, which leaves band3 unable to link one
+    auto* graphics = runtime ? static_cast<rex::graphics::GraphicsSystem*>(
                                    runtime->graphics_system())
                              : nullptr;
     const rex::graphics::CommandProcessor* cp =
