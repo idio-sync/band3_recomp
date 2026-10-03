@@ -1555,13 +1555,11 @@ void CaptureParticles(uint8_t* base, uint32_t sys) {
          p = g.U32(p + kParticle_Next), n++) {
         float pos[3], col[4];
         for (int i = 0; i < 3; i++) pos[i] = g.F32(p + kParticle_Pos + i * 4);
-        for (int i = 0; i < 4; i++)
-            col[i] = std::clamp(g.F32(p + kParticle_Color + i * 4), 0.0f, 1.0f);
+        for (int i = 0; i < 4; i++) col[i] = g.F32(p + kParticle_Color + i * 4);
         const float size = g.F32(p + kParticle_Size);
         const float angle = g.F32(p + kParticle_Angle);
         const float swing = g.F32(p + kParticle_SwingArm);
-        uint32_t rgba = 0;
-        for (int i = 0; i < 4; i++) rgba |= uint32_t(col[i] * 255.0f + 0.5f) << (8 * i);
+        const uint32_t rgba = ParticleColor(col);  // unclamped, as the game packs it
         const uint16_t first = uint16_t(geom->verts.size());
         for (int k = 0; k < 4; k++) {
             Vertex v{};

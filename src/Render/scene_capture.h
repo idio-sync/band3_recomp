@@ -86,6 +86,28 @@ inline void ParticleCorner(const float p[3], const float right[3], const float u
     uv[1] = v;
 }
 
+// A particle's colour (r, g, b, a floats) as DxParticleSys::DrawParticles
+// packs it into its vertex (band3_recomp.139.cpp, both paths): each channel
+// times DrawShowing's colour, (1,1,1,1), then 255, single precision; fctidz
+// (toward zero, NaN and below -2^63 to 0x8000000000000000, 2^63 and up to
+// 0x7FFF...); rlwimi keeps each one's low byte. No clamp: a particle a
+// little past the end of its life, alpha -0.004, is -1, 0xFF, drawn nearly
+// opaque, as the game draws it. RGBA8 here, R in the low byte.
+inline uint32_t ParticleColor(const float col[4]) {
+    uint32_t rgba = 0;
+    for (int i = 0; i < 4; i++) {
+        const float c = col[i] * 255.0f;
+        int64_t v = INT64_MIN;
+        if (c >= 9223372036854775808.0f) {
+            v = INT64_MAX;
+        } else if (c > -9223372036854775808.0f) {  // false for NaN
+            v = int64_t(c);
+        }
+        rgba |= (uint32_t(uint64_t(v)) & 0xffu) << (8 * i);
+    }
+    return rgba;
+}
+
 // RndTex::Type (tex+0x48) values that make a texture's pixels something RB3
 // draws at runtime rather than loads: kRendered and what's built on it
 // (0x22 NoZ, 0x42 shadow map, 0xA2, 0x122), back-buffer snapshots (8, 0x18)
