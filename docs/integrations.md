@@ -147,9 +147,11 @@ picks **Play on Xbox Live**, backs out of it, then picks Play Now → Quickplay 
   joins the host's band.
 
 Over the internet, as with RB3Enhanced, each player needs their `liveless_port` (UDP
-9103 unless changed) forwarded to their PC and `liveless_external_ip` set to their public IP: the games tell each
-other where to reach them. Only play on one PC and on a local network has been
-tested so far.
+9103 unless changed) forwarded to their PC, and the games tell each other where to
+reach them. band3 asks the router for both the forward and the public address itself
+(see [Port mapping](#port-mapping)); forward the port by hand and set
+`liveless_external_ip` to your public IP only when that doesn't work. Only play on one
+PC and on a local network has been tested so far.
 
 Once the others show in the host's band, the host picks **Play With Current
 Lineup** and everyone makes the setlist and plays together. There is no lobby or
@@ -162,6 +164,30 @@ To join by code instead of address, see [Liveless Rooms](#liveless-rooms-joining
 
 `liveless_port` moves the game to another UDP port, so two band3s on one PC can
 play each other: [`tests/game/liveless.b3t`](../tests/game/liveless.b3t) does that.
+
+### Port mapping
+
+With `liveless` on, band3 asks the router to forward `liveless_port` to this PC, as
+RB3Enhanced does, so players over the internet reach your game without a forward made
+by hand: by PCP first, then NAT-PMP if the router doesn't speak PCP, then UPnP. The
+router also says its public address, which band3 tells players joining you unless
+`liveless_external_ip` is set or the Rooms server saw another (the order is
+`liveless_external_ip`, the Rooms server's, the router's, then this PC's on the local
+network). A router that gives a private address (10.x, 172.16-31.x, 192.168.x,
+100.64-127.x: it's behind another router) still forwards the port, but band3 doesn't
+tell players that address. The mapping lasts an hour, renewed every half hour, and
+band3 deletes it when it closes. Turn `liveless_port_mapping` off (Band3 → Online, then
+restart) to leave the router alone.
+
+The log's `port mapping:` lines say how it went, and the Rooms panel (F10) shows it
+under your code: `UDP 9103: mapped by PCP, public 203.0.113.5`, `mapping...`, or
+`not mapped:` and why. When it isn't mapped, forward the port by hand and set
+`liveless_external_ip`, as RB3Enhanced players do. A router can only forward to one PC,
+so two PCs behind one router can't both use 9103.
+
+The router's forward doesn't open Windows Firewall: if you declined its prompt when
+band3 first went online, allow band3.exe for UDP in Windows Security → Firewall &
+network protection → Allow an app through firewall.
 
 ### Liveless Rooms (joining by code)
 
@@ -197,8 +223,9 @@ if A started it). The game reads no buttons until the panel closes or you click 
 game, so a guitar's strum doesn't also move the overshell.
 
 Joins by code always go to UDP port 9103, as RB3Enhanced's do, so a host keeps
-`liveless_port` at 9103 (the panel warns when it isn't) and forwards it to their PC,
-as RB3Enhanced players do. `liveless_external_ip` isn't needed: band3 tells the game
+`liveless_port` at 9103 (the panel warns when it isn't), forwarded to their PC: band3
+asks the router for it ([Port mapping](#port-mapping)), or the host forwards it by
+hand, as RB3Enhanced players do. `liveless_external_ip` isn't needed: band3 tells the game
 its public address as the Rooms server saw it, unless `liveless_external_ip` is set,
 which wins. A player joins the host's public address, or its local network one when
 both have the same public address (the same network, or one PC). When a player

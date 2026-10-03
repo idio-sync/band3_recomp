@@ -15,6 +15,7 @@
 #include "src/Net/native_socket.h"
 #include "src/Net/online.h"
 #include "src/Net/online_hooks.h"
+#include "src/Net/port_mapping.h"
 #include "src/Test/game_state.h"
 #include "src/settings.h"
 
@@ -176,20 +177,25 @@ extern "C" REX_FUNC(XSessionSearchEx) {
 // XNetGetTitleXnAddr(XNADDR*): this game's address as others reach it, on
 // liveless_port, which the game hands to who joins it. That's
 // liveless_external_ip when it's set, else the public address the Liveless
-// Rooms server saw this PC at, else this PC's on the local network.
+// Rooms server saw this PC at, else the router's public address from mapping
+// the port, else this PC's on the local network.
 extern "C" REX_FUNC(XNetGetTitleXnAddr) {
     const uint32_t address = ctx.r3.u32;
     __imp__XNetGetTitleXnAddr(ctx, base);
     if (!Liveless() || !address) return;
     uint32_t external = band3::online::LivelessExternalAddress();
     const char* source = "local network";
-    bool from_rooms = false;
+    uint64_t from = 0;
     if (!band3::settings::Startup().liveless_external_ip.empty()) {
         source = "setting";
     } else if (const uint32_t rooms = band3::rooms::PublicAddress()) {
         external = rooms;
         source = "rooms server";
-        from_rooms = true;
+        from = 1;
+    } else if (const uint32_t mapped = band3::port_mapping::ExternalAddress()) {
+        external = mapped;
+        source = "port mapping";
+        from = 2;
     }
     if (external) StoreNetworkOrder(base, address + kXnAddrInaOnline, external);
     REX_STORE_U16(address + kXnAddrPortOnline, band3::online::LivelessPort());
@@ -199,7 +205,7 @@ extern "C" REX_FUNC(XNetGetTitleXnAddr) {
     band3::rooms::NoteAdvertised(advertised);
     // the game asks often; say it when it changes
     static std::atomic<uint64_t> last{~uint64_t{0}};
-    const uint64_t now = advertised | (uint64_t{from_rooms} << 32);
+    const uint64_t now = advertised | (from << 32);
     if (last.exchange(now) != now) {
         REXLOG_INFO("liveless: advertising {} ({})", band3::rooms::Ipv4Text(advertised), source);
     }

@@ -314,6 +314,12 @@ REXCVAR_DEFINE_INT32(liveless_port, 9103, "Band3/Online",
     .range(1024, 65000)
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(liveless_port_mapping, true, "Band3/Online",
+    "Ask the router to forward liveless_port to this PC (PCP, NAT-PMP or UPnP), as "
+    "RB3Enhanced does, so players over the internet reach you without a port forward made "
+    "by hand. Deleted again when band3 closes")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 REXCVAR_DEFINE_BOOL(liveless_rooms, false, "Band3/Online",
     "Join friends by an 8-character room code through a Liveless Rooms server "
     "(RB3Enhanced's), instead of typing an address. Needs liveless")
@@ -344,6 +350,18 @@ REXCVAR_DEFINE_BOOL(log_shake_timing, false, "Band3/Debug",
 
 REXCVAR_DEFINE_BOOL(log_net_calls, false, "Band3/Debug",
     "Log each of the game's network calls (sockets, XNet) and what it returned");
+
+REXCVAR_DEFINE_STRING(liveless_gateway, "", "Band3/Debug",
+    "Where liveless_port_mapping sends PCP and NAT-PMP (host[:port], port 5351 by default) "
+    "instead of the router, for testing against a stand-in. Empty asks the default gateway; "
+    "under the test harness, empty skips PCP and NAT-PMP")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(liveless_upnp_url, "", "Band3/Debug",
+    "The UPnP router description liveless_port_mapping uses (http://host:port/desc.xml) "
+    "instead of looking for one on the network, for testing against a stand-in. Under the "
+    "test harness, empty skips UPnP")
+    .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(autoplay, false, "Band3/Debug",
     "The game plays every part itself, from the next song start: for repeatable profiling "
@@ -485,8 +503,11 @@ void Init() {
         .liveless_connect = REXCVAR_GET(liveless_connect),
         .liveless_external_ip = REXCVAR_GET(liveless_external_ip),
         .liveless_port = REXCVAR_GET(liveless_port),
+        .liveless_port_mapping = REXCVAR_GET(liveless_port_mapping),
         .liveless_rooms = REXCVAR_GET(liveless_rooms),
         .liveless_rooms_server = REXCVAR_GET(liveless_rooms_server),
+        .liveless_gateway = REXCVAR_GET(liveless_gateway),
+        .liveless_upnp_url = REXCVAR_GET(liveless_upnp_url),
         .native_camera_shake = REXCVAR_GET(native_camera_shake),
     };
 

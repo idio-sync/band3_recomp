@@ -45,6 +45,7 @@ add_executable(band3_tests
     online_test.cpp
     liveless_rooms_protocol_test.cpp
     liveless_rooms_client_test.cpp
+    port_mapping_protocol_test.cpp
     native_socket_test.cpp
     frame_pacing_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
@@ -66,6 +67,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Net/liveless_rooms_protocol.cpp
     ${BAND3_ROOT}/src/Net/native_socket.cpp
     ${BAND3_ROOT}/src/Net/online.cpp
+    ${BAND3_ROOT}/src/Net/port_mapping_protocol.cpp
     ${BAND3_ROOT}/src/Net/http_request.cpp
     ${BAND3_ROOT}/src/Net/json.cpp
     ${BAND3_ROOT}/src/Net/rhythmverse.cpp
@@ -82,7 +84,8 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Test/test_inputs.cpp
 )
 # instrument captures replayed by hid_capture_test.cpp, and the Liveless Rooms
-# packets liveless_rooms_protocol_test.cpp shares with tools/liveless_rooms_mock.py
+# packets liveless_rooms_protocol_test.cpp shares with tools/liveless_rooms_mock.py (and
+# port_mapping_protocol_test.cpp's with tools/port_mapping_mock.py)
 target_compile_definitions(band3_tests PRIVATE
     BAND3_CAPTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/captures"
     BAND3_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden"

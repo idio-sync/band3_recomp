@@ -51,6 +51,9 @@ struct GameStateSnapshot {
     // the Liveless Rooms connection's state, as liveless_rooms.h's StateName
     // says it; the test server adds it too
     std::string rooms_state = "off";
+    // Liveless' port mapping's state, as port_mapping.h's StateName says it;
+    // the test server adds it too
+    std::string port_mapping_state = "off";
     // an online band formed with this game in it: as the host, it let a
     // player join (NetSession::CheckJoinable); as a player joining, the host
     // said yes (JoinResultMsg, error 0). Kept once set: a script waits on it

@@ -165,6 +165,8 @@ public:
         rooms_connects++;
         return {};
     }
+    band3::port_mapping::Status port_mapping;
+    band3::port_mapping::Status PortMappingStatus() override { return port_mapping; }
     std::string NativeViewOn(uint32_t width, uint32_t height, bool sized, bool post) override {
         if (width > 4000) return "no GPU target that big";
         if (sized && native) return "renderer is native: its size follows the window's";
@@ -931,6 +933,51 @@ TEST_CASE("wait rooms= waits for the Rooms connection to reach a state") {
     FakeGame off;
     CHECK(Ok(RunCommand("expect rooms=off", off)));
     CHECK_FALSE(Has(RunCommand("state", off), "\"rooms\""));
+}
+
+TEST_CASE("port_mapping_status reports the router's mapping, and checks its fields") {
+    FakeGame game;
+    game.port_mapping.error = "skipped under the test harness";
+    CHECK(RunCommand("port_mapping_status", game) ==
+          "{\"ok\":true,\"port_mapping\":{\"state\":\"off\",\"method\":\"\",\"external_ip\":\"\","
+          "\"port\":0,\"lease_s\":0,\"error\":\"skipped under the test harness\"}}");
+    CHECK(Ok(RunCommand("port_mapping_status state=off error~harness", game)));
+
+    game.port_mapping = {};
+    game.port_mapping.state = band3::port_mapping::State::kMapped;
+    game.port_mapping.method = band3::port_mapping::Method::kNatPmp;
+    game.port_mapping.external_ipv4 = 0x057100CB;  // 203.0.113.5
+    game.port_mapping.port = 9103;
+    game.port_mapping.lease_s = 3600;
+    CHECK(RunCommand("port_mapping_status", game) ==
+          "{\"ok\":true,\"port_mapping\":{\"state\":\"mapped\",\"method\":\"natpmp\","
+          "\"external_ip\":\"203.0.113.5\",\"port\":9103,\"lease_s\":3600,\"error\":\"\"}}");
+    CHECK(Ok(RunCommand("port_mapping_status state=mapped method=natpmp external_ip=203.0.113.5 "
+                        "port=9103 lease_s=3600",
+                        game)));
+    const std::string wrong = RunCommand("port_mapping_status method=pcp", game);
+    CHECK_FALSE(Ok(wrong));
+    CHECK(Has(wrong, "port_mapping method is \\\"natpmp\\\", not \\\"pcp\\\""));
+    CHECK(Has(RunCommand("port_mapping_status lease", game), "usage: port_mapping_status"));
+    CHECK(Has(RunCommand("port_mapping_status colour=red", game),
+              "port_mapping_status has no field colour"));
+    CHECK_FALSE(Ok(RunCommand("p2 port_mapping_status", game)));
+}
+
+TEST_CASE("wait port_mapping= waits for the router's mapping to reach a state") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("expect port_mapping=off", game)));
+    CHECK_FALSE(Has(RunCommand("state", game), "\"port_mapping\""));
+    game.state.port_mapping_state = "searching";
+    game.on_sleep = [](FakeGame& g) {
+        if (g.slept >= 2s) g.state.port_mapping_state = "mapped";
+    };
+    const std::string reply = RunCommand("wait port_mapping=mapped timeout=10s", game);
+    CHECK(Ok(reply));
+    CHECK(game.slept >= 2s);
+    CHECK(Has(reply, "\"port_mapping\":\"mapped\""));
+    CHECK_FALSE(Ok(RunCommand("expect port_mapping=failed timeout=1s", game)));
+    CHECK(Has(RunCommand("wait port_mapping=open", game), "port_mapping= takes off, searching"));
 }
 
 TEST_CASE("wait joined waits for an online band to form with the game in it") {

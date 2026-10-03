@@ -8,6 +8,12 @@ for the joiner's join, and each for the other at the song's menus). At the resul
 prints each game's band score and fails unless they're the same, then quits both games
 and stops the mock, pass or fail.
 
+It relies on band3's harness guard for Liveless' port mapping rather than passing its
+overrides: under the harness (band3ctl sets test_port) a game without
+liveless_gateway and liveless_upnp_url maps nothing ("port mapping: skipped under the
+test harness" in each log), so neither game asks the real router, and each advertises
+the address the mock Rooms server saw, as before port mapping.
+
   python tools/liveless_rooms_play.py                 logs as out/liveless_rooms_play_*.log
   python tools/liveless_rooms_play.py --name run1     logs as out/run1_*.log
 

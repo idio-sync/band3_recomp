@@ -193,6 +193,16 @@ class Band3App : public rex::ReXApp {
     band3::audio::StopUsbMics();
   }
 
+  // Closing the window (its close button, Alt+F4) ends the process at once,
+  // without OnShutdown, so online play lets go here: the router's port
+  // mapping is deleted, and the Rooms connection closes. The harness's quit
+  // closes the window without asking, so it does the same itself
+  // (src/Test/test_server.cpp).
+  bool OnWindowCloseRequested() override {
+    band3::online::Stop();
+    return true;
+  }
+
   // the SDK applies the fullscreen cvar to the window itself
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
     if (drawer) {

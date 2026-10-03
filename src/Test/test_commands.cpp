@@ -127,6 +127,10 @@ std::string StateJson(const GameStateSnapshot& s, TestTarget& target) {
         out += ",\"rooms\":";
         AppendJsonString(out, s.rooms_state);
     }
+    if (s.port_mapping_state != "off") {
+        out += ",\"port_mapping\":";
+        AppendJsonString(out, s.port_mapping_state);
+    }
     if (s.joined) out += ",\"joined\":true";
     out += ",\"instruments\":[";
     for (int player = 1; player <= kPlayerCount; player++) {
@@ -807,6 +811,66 @@ std::string RoomsConnect(TestTarget& target, const std::vector<std::string_view>
     return Ok();
 }
 
+// Liveless' port mapping, each field as text: the address dotted, empty for
+// none; port and lease_s are numbers in the JSON
+std::vector<std::pair<std::string_view, std::string>> PortMappingFields(
+    const port_mapping::Status& s) {
+    return {
+        {"state", std::string(port_mapping::StateName(s.state))},
+        {"method", std::string(port_mapping::MethodName(s.method))},
+        {"external_ip", s.external_ipv4 ? rooms::Ipv4Text(s.external_ipv4) : std::string()},
+        {"port", std::to_string(s.port)},
+        {"lease_s", std::to_string(s.lease_s)},
+        {"error", s.error},
+    };
+}
+
+std::string PortMappingJson(const port_mapping::Status& s) {
+    std::string out = "\"port_mapping\":{";
+    bool first = true;
+    for (const auto& [name, value] : PortMappingFields(s)) {
+        if (!first) out += ',';
+        first = false;
+        AppendJsonString(out, name);
+        out += ':';
+        if (name == "port" || name == "lease_s") {
+            out += value;
+        } else {
+            AppendJsonString(out, value);
+        }
+    }
+    out += '}';
+    return out;
+}
+
+// port_mapping_status [<field>=<value>|<field>~<text>]...: the port mapping's
+// status; with checks, a failure unless each field is the value, or has the
+// text in it
+std::string PortMappingStatus(TestTarget& target, const std::vector<std::string_view>& args) {
+    const port_mapping::Status status = target.PortMappingStatus();
+    const auto fields = PortMappingFields(status);
+    for (size_t i = 1; i < args.size(); i++) {
+        const size_t at = args[i].find_first_of("=~");
+        if (at == std::string_view::npos || at == 0) {
+            return Error(target, "usage: port_mapping_status [<field>=<value>|<field>~<text>]...");
+        }
+        const std::string_view name = args[i].substr(0, at), want = args[i].substr(at + 1);
+        const bool contains = args[i][at] == '~';
+        const auto field = std::find_if(fields.begin(), fields.end(),
+                                        [&](const auto& f) { return f.first == name; });
+        if (field == fields.end()) {
+            return Error(target, "port_mapping_status has no field " + std::string(name));
+        }
+        const bool holds = contains ? field->second.find(want) != std::string::npos : field->second == want;
+        if (!holds) {
+            return Error(target, "port_mapping " + std::string(name) + " is \"" + field->second +
+                                     "\", not " + (contains ? "containing " : "") + "\"" +
+                                     std::string(want) + "\"; {" + PortMappingJson(status) + "}");
+        }
+    }
+    return Ok(PortMappingJson(status));
+}
+
 }
 
 std::variant<Condition, std::string> ParseCondition(std::string_view text) {
@@ -850,9 +914,19 @@ std::variant<Condition, std::string> ParseCondition(std::string_view text) {
             known |= c.text == rooms::StateName(state);
         }
         if (!known) return "rooms= takes off, connecting, connected, logged_in, disconnected or failed";
+    } else if (text.starts_with("port_mapping=")) {
+        c.kind = Condition::Kind::kPortMapping;
+        c.text = text.substr(13);
+        bool known = false;
+        for (auto state : {port_mapping::State::kOff, port_mapping::State::kSearching,
+                           port_mapping::State::kMapped, port_mapping::State::kFailed}) {
+            known |= c.text == port_mapping::StateName(state);
+        }
+        if (!known) return "port_mapping= takes off, searching, mapped or failed";
     } else {
         return "no condition " + std::string(text) +
-               " (screen=, screen~, in_game, menus, song=, frames=, score>=, mic=, rooms=, joined)";
+               " (screen=, screen~, in_game, menus, song=, frames=, score>=, mic=, rooms=, "
+               "port_mapping=, joined)";
     }
     if ((c.kind == Condition::Kind::kScreen || c.kind == Condition::Kind::kScreenContains ||
          c.kind == Condition::Kind::kSong) &&
@@ -881,6 +955,7 @@ bool ConditionHolds(const Condition& condition, const GameStateSnapshot& state,
         return state.mics[slot].bytes_fed > fed_before;
     }
     case Condition::Kind::kRooms: return state.rooms_state == condition.text;
+    case Condition::Kind::kPortMapping: return state.port_mapping_state == condition.text;
     case Condition::Kind::kJoined: return state.joined;
     }
     return false;
@@ -940,6 +1015,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "rooms_status") return RoomsStatus(target, args);
     if (verb == "rooms_join") return RoomsJoin(target, args);
     if (verb == "rooms_connect") return RoomsConnect(target, args);
+    if (verb == "port_mapping_status") return PortMappingStatus(target, args);
     if (verb == "native_view") return NativeView(target, args);
     if (verb == "present_stats") return PresentStatsCommand(target, args);
     if (verb == "quit") {

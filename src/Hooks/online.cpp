@@ -13,6 +13,7 @@
 #include "src/Net/native_socket.h"
 #include "src/Net/online.h"
 #include "src/Net/online_hooks.h"
+#include "src/Net/port_mapping.h"
 #include "src/settings.h"
 #ifdef _WIN32
 #include <windows.h>
@@ -137,6 +138,20 @@ void StartLivelessRooms() {
     band3::rooms::Start();
 }
 
+// Liveless players reach this game on liveless_port, so the router is asked
+// to forward it here, as RB3Enhanced does. Under the test harness only the
+// overrides' mock is asked, never the real router (port_mapping.h).
+void StartPortMapping() {
+    const auto& startup = band3::settings::Startup();
+    if (!g_liveless || !startup.liveless_port_mapping) return;
+    band3::port_mapping::Config config;
+    config.port = g_liveless_port;
+    config.gateway = startup.liveless_gateway;
+    config.upnp_url = startup.liveless_upnp_url;
+    config.harness = REXCVAR_GET(test_port) != 0;
+    band3::port_mapping::Start(config);
+}
+
 }  // namespace
 
 namespace band3::online {
@@ -168,11 +183,15 @@ void Start() {
     g_gocentral = StartGoCentral();
     g_liveless = StartLiveless();
     g_live = g_gocentral || g_liveless;
+    StartPortMapping();
     StartLivelessRooms();
 #endif
 }
 
-void Stop() { rooms::Stop(); }
+void Stop() {
+    rooms::Stop();
+    port_mapping::Stop();
+}
 
 bool LiveSpoofed() { return g_live; }
 bool GoCentral() { return g_gocentral; }

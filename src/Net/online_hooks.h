@@ -14,7 +14,9 @@ bool ResolveSdkExports();
 void Start();
 
 // Ends what Start began that runs on threads of its own (the Liveless Rooms
-// client). Call at shutdown, before the test server stops and the kernel goes.
+// client, and the port mapping, which it deletes from the router). Call when
+// the window closes or at shutdown, before the test server stops and the
+// kernel goes.
 void Stop();
 
 // Set by Start, for the hooks:
