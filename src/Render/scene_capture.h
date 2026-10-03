@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -147,6 +148,14 @@ struct TexSampler {
 };
 static_assert(sizeof(TexSampler) == 16, "TexSampler has no padding");
 
+// A movie's plane as capture took it, for decoding later (Texture::deferred):
+// its base level's bytes as guest memory held them, and its fetch constant
+struct DeferredPixels {
+    std::once_flag once;
+    std::vector<uint8_t> bytes;
+    uint32_t fetch[6] = {};
+};
+
 struct Texture {
     uint32_t width = 0;
     uint32_t height = 0;
@@ -166,6 +175,13 @@ struct Texture {
     uint32_t tex_obj = 0;
     uint32_t tex_type = 0;
     uint32_t version = 0;
+    // A movie's plane (scene_capture.cpp's DecodeCached): the CPU writes it
+    // anew for each movie frame, so the game's thread only copies its bytes,
+    // and rgba is decoded from them once, by whoever takes the capture first
+    // (LatestCapture, CaptureHeldFrame), before they hand it on; width,
+    // height and format are set from the start. Null for every other
+    // texture, and in captures loaded from a file.
+    std::shared_ptr<DeferredPixels> deferred;
 };
 
 // The float constant registers a ShadeState keeps, the same numbers from the
@@ -699,7 +715,8 @@ struct CaptureProfile {
         kStepRectGeom,      // a DrawRect's quad
         kStepItem,          // the material's fields, the view-projection
         kStepTexLookup,     // a loaded texture's key hashed and found
-        kStepTexDecode,     // and decoded (bytes: its levels')
+        kStepTexDecode,     // and decoded (bytes: its levels'), or a movie's
+                            // plane copied to decode later (bytes: those)
         kStepTexRt,         // a render target's identity and version
         kStepShadeRead,     // the shade's constants and fetch constants read
         kStepShadeRtsScan,  // its maps bound to render targets looked for
@@ -739,6 +756,11 @@ struct CaptureProfile {
     uint64_t geom_miss_bytes = 0;
     uint64_t tex_decode_bytes = 0;
     uint64_t bones = 0;
+    // movie planes decoded off the game's thread (Texture::deferred), by
+    // whoever took the capture first (the native renderer's worker, a
+    // harness capture), and the microseconds that took them: not the game's
+    uint64_t deferred_decodes = 0;
+    uint64_t deferred_decode_us = 0;
     // the caches' sizes now: render targets known, geometry, loaded textures
     // and maps
     uint64_t rts = 0, geoms = 0, texs = 0, map_texs = 0;
@@ -769,7 +791,9 @@ std::shared_ptr<const FrameCapture> CaptureHeldFrame(
     bool* fell_back = nullptr);
 
 // the latest complete frame, composed with the world before it if it drew
-// none (frame_compose.h), or null before the first
+// none (frame_compose.h), or null before the first. Its movie planes
+// (Texture::deferred) are decoded first, on the caller's thread, if no one
+// has yet, as CaptureHeldFrame's are once the game goes on.
 std::shared_ptr<const FrameCapture> LatestCapture();
 // and when it was published, at the end of the game's DxRnd::Present: where
 // the native renderer's latency starts

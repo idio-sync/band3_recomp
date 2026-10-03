@@ -211,13 +211,13 @@ public:
     // the game is held at the end of the captured frame while the screenshot
     // is taken, so both are the same frame. While the emulated GPU skips the
     // game's draws (renderer native), it draws whole frames for a while
-    // first, enough for the held frame's wait (CaptureHeldFrame: two frames
-    // to be fresh, two to learn, thirty at most), so the screenshot is the
-    // game's picture of the captured frame.
+    // first, enough for the held frame's wait (CaptureHeldFrame:
+    // kWholeFramesToHold whole in a row, two to learn, thirty at most), so
+    // the screenshot is the game's picture of the captured frame.
     std::string Capture(const std::string& name, CaptureInfo& out) override {
         const std::string file = name.empty() ? TimestampName() : name;
         std::string shot_error;
-        render::RequestFullFrames(40);
+        render::RequestFullFrames(render::kWholeFramesToHold + 40);
         auto frame = render::CaptureHeldFrame(
             [&] {
                 out.emulated = render::EmulatedPictureFresh() ? "full" : "stale";
@@ -551,7 +551,9 @@ private:
                     {"allocs", p.allocs},
                     {"geom_miss_bytes", p.geom_miss_bytes},
                     {"tex_decode_bytes", p.tex_decode_bytes},
-                    {"bones", p.bones}};
+                    {"bones", p.bones},
+                    {"deferred_decodes", p.deferred_decodes},
+                    {"deferred_decode_us", p.deferred_decode_us}};
         for (int i = 0; i < P::kNumSteps; i++)
             if (p.step_calls[i])
                 c.counts.emplace_back(std::string(P::kStepNames[i]) + "_n", p.step_calls[i]);

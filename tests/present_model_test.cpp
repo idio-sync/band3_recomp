@@ -255,6 +255,22 @@ TEST_CASE("whole frames asked for are drawn whatever is wanted, then skipping go
     CHECK_FALSE(l.Fresh());
 }
 
+TEST_CASE("whole frames are counted from the last skipped one, for a capture's hold") {
+    SkipLatch l;
+    CHECK(l.WholeFrames() == 2);  // before the first frame
+    l.EndFrame(false, 0);
+    CHECK(l.WholeFrames() == 3);  // never skipping, it only grows
+    l.EndFrame(true, 0);
+    l.EndFrame(true, 0);
+    CHECK(l.WholeFrames() == 0);
+    // a capture asks for kWholeFramesToHold and more: the count reaches it
+    // while frames are still drawn whole
+    l.EndFrame(true, kWholeFramesToHold + 40);
+    for (int i = 0; i < kWholeFramesToHold; i++) CHECK_FALSE(l.EndFrame(true, 0));
+    CHECK(l.WholeFrames() == kWholeFramesToHold);
+    CHECK(l.FullPending() == 39);
+}
+
 TEST_CASE("a request while one runs keeps the larger") {
     SkipLatch l;
     l.EndFrame(true, 5);

@@ -386,8 +386,10 @@ inline LevelPlace PlaceLevel(const FetchLayout& l, const FormatInfo& info, uint3
 }
 
 // The bytes from the base address that hold the base level, as DecodeLevel
-// reads them (whole 32x32-block tiles when tiled, whole rows when linear), or
-// 0 for a format not decoded
+// reads them (whole rows when linear; tiled, whole 32x32-block tiles, which
+// TiledOffset2D lays out in 4 KB groups: a tile of 1- or 2-byte blocks, 1 or
+// 2 KB, shares its group with the next ones, its rows 16-31 2 KB on, so the
+// last tile's texels reach to its group's end), or 0 for a format not decoded
 inline uint32_t BaseLevelBytes(const uint32_t f[6]) {
     const FetchLayout l = ReadFetchLayout(f);
     FormatInfo info;
@@ -395,15 +397,18 @@ inline uint32_t BaseLevelBytes(const uint32_t f[6]) {
     const LevelPlace p = PlaceLevel(l, info, 0);
     const uint32_t blocks_x = p.x_blocks + (l.width + info.block - 1) / info.block;
     const uint32_t blocks_y = p.y_blocks + (l.height + info.block - 1) / info.block;
-    if (l.tiled)
-        return AlignUp(std::max(p.pitch_blocks, blocks_x), 32) * AlignUp(blocks_y, 32) * info.bpb;
+    if (l.tiled) {
+        const uint32_t tiles =
+            AlignUp(std::max(p.pitch_blocks, blocks_x), 32) / 32 * (AlignUp(blocks_y, 32) / 32);
+        return AlignUp(tiles << (info.bpb_log2 + 7), 512) << 3;
+    }
     return p.row_bytes * blocks_y;
 }
 
-// Decodes level `level` (w x h texels) from src, where PlaceLevel says it is,
-// into out (w * h RGBA8, R in the low byte, swizzled as the fetch says)
-inline void DecodeLevel(const uint8_t* src, const FetchLayout& l, const FormatInfo& info,
-                        const LevelPlace& p, uint32_t w, uint32_t h, uint32_t* out) {
+// DecodeLevel, block by block: every format's way, a texel's address, block
+// decode and swizzle at a time
+inline void DecodeLevelBlocks(const uint8_t* src, const FetchLayout& l, const FormatInfo& info,
+                              const LevelPlace& p, uint32_t w, uint32_t h, uint32_t* out) {
     const uint32_t blocks_x = (w + info.block - 1) / info.block;
     const uint32_t blocks_y = (h + info.block - 1) / info.block;
     uint8_t block[16];
@@ -435,6 +440,51 @@ inline void DecodeLevel(const uint8_t* src, const FetchLayout& l, const FormatIn
             }
         }
     }
+}
+
+// DecodeLevel for k_8, the same texels faster: a byte a texel, no endian
+// swap, its block (byte, 0, 0, 255) swizzled into a texel byte * mul | konst,
+// the channels that take the byte in mul, those that are 255 in konst. Tiled,
+// texels x..x+7 are side by side when x is a multiple of 8 (TiledOffset2D
+// leaves the low three bits of x as they are), so a run of eight takes one
+// address. Bink's movie planes are k_8: a 1280x720 Y plane and its two
+// 640x360 chroma planes take the general loop 10-12 ms, this 0.3-0.9 ms.
+inline void DecodeLevel8(const uint8_t* src, const FetchLayout& l, const LevelPlace& p,
+                         uint32_t w, uint32_t h, uint32_t* out) {
+    uint32_t mul = 0, konst = 0;
+    for (int c = 0; c < 4; c++) {
+        const uint32_t sel = (l.swizzle >> (3 * c)) & 7;
+        if (sel == 0) mul |= 1u << (8 * c);
+        else if (sel == 3 || sel > 4) konst |= 0xFFu << (8 * c);
+    }
+    for (uint32_t py = 0; py < h; py++) {
+        const uint32_t y = p.y_blocks + py;
+        uint32_t* row = out + size_t(py) * w;
+        if (!l.tiled) {
+            const uint8_t* s = src + p.offset + size_t(y) * p.row_bytes + p.x_blocks;
+            for (uint32_t px = 0; px < w; px++) row[px] = s[px] * mul | konst;
+            continue;
+        }
+        for (uint32_t px = 0; px < w;) {
+            const uint32_t x = p.x_blocks + px;
+            const uint8_t* s = src + p.offset +
+                               uint32_t(TiledOffset2D(int32_t(x), int32_t(y), p.pitch_blocks, 0));
+            if ((x & 7) == 0 && px + 8 <= w) {
+                for (uint32_t i = 0; i < 8; i++) row[px + i] = s[i] * mul | konst;
+                px += 8;
+            } else {
+                row[px++] = s[0] * mul | konst;
+            }
+        }
+    }
+}
+
+// Decodes level `level` (w x h texels) from src, where PlaceLevel says it is,
+// into out (w * h RGBA8, R in the low byte, swizzled as the fetch says)
+inline void DecodeLevel(const uint8_t* src, const FetchLayout& l, const FormatInfo& info,
+                        const LevelPlace& p, uint32_t w, uint32_t h, uint32_t* out) {
+    if (l.format == 2) DecodeLevel8(src, l, p, w, h, out);
+    else DecodeLevelBlocks(src, l, info, p, w, h, out);
 }
 
 // A 2D texture's base level and mip chain, from its base level's memory

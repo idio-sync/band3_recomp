@@ -794,17 +794,46 @@ std::shared_ptr<const Geometry> CaptureGeometry(const Guest& g, uint32_t geom,
 constexpr uint32_t kFetchTexelBits[6] = {0xFFC00000u, 0xFFFFFFFFu, 0xFFFFFFFFu,
                                          0x00001FFEu, 0x000003FCu, 0xFFFFFE00u};
 
+// the deferred decodes done (CaptureProfile::deferred_decodes), on any thread
+std::atomic<uint64_t> g_deferred_decodes{0}, g_deferred_decode_ns{0};
+
+// A movie's plane with its base level's bytes copied as guest memory holds
+// them now, for DecodeDeferred to decode later (Texture::deferred), or null
+// where DecodeTexture wouldn't decode it or it has mips (a plane has none)
+std::shared_ptr<Texture> CopyForLater(const uint8_t* src, const uint32_t f[6]) {
+    const guest_format::FetchLayout l = guest_format::ReadFetchLayout(f);
+    guest_format::FormatInfo info{};
+    const uint32_t bytes = guest_format::BaseLevelBytes(f);
+    if (!src || !bytes || l.dimension != 1 || !guest_format::GetFormatInfo(l.format, info) ||
+        l.width > kMaxTextureSize || l.height > kMaxTextureSize || (l.mip_address && l.mip_max))
+        return nullptr;
+    auto tex = std::make_shared<Texture>();
+    tex->width = l.width;
+    tex->height = l.height;
+    tex->format = l.format;
+    auto d = std::make_shared<DeferredPixels>();
+    d->bytes.assign(src, src + bytes);
+    std::copy(f, f + 6, d->fetch);
+    tex->deferred = std::move(d);
+    return tex;
+}
+
 // the texture fetch constant `f` describes, decoded again only when its
 // texels' fields (kFetchTexelBits) or its first bytes changed, or with `whole`
 // any of its base level's: a movie's plane, which the CPU writes in place
 // (Movie.cpp's BeginFrame, into one of four buffers in turn), and whose first
-// rows are often the same black from one frame to the next. Not every texture: hashing each of 256 KB or less
-// whole cost the capture 5-11 ms a frame in the music library (30 MB: each
-// draw's), a movie's planes cost it 0.07 ms there (384 KB; 1.4 MB at
-// 1280x720). Empty rgba if its format isn't decoded.
+// rows are often the same black from one frame to the next. Not every
+// texture: hashing each of 256 KB or less whole cost the capture 5-11 ms a
+// frame in the music library (30 MB: each draw's), a movie's planes cost it
+// 0.07 ms there (384 KB; 1.4 MB at 1280x720). With `defer` too, a changed
+// plane's bytes are only copied (CopyForLater), and decoded off the game's
+// thread: decoding a video venue's 1280x720 planes here cost the game's
+// thread 5-6 ms a frame. Empty rgba if its format isn't decoded, but for a
+// deferred one, whose rgba the game's thread mustn't read (HasPixels).
 std::shared_ptr<const Texture> DecodeCached(const Guest& g, const uint32_t f[6], uint32_t where,
                                             std::unordered_map<uint32_t, TexEntry>& cache,
-                                            FrameCapture& fc, bool whole = false) {
+                                            FrameCapture& fc, bool whole = false,
+                                            bool defer = false) {
     const uint32_t base_address = f[1] & 0xfffff000u;
     const uint8_t* src = base_address ? GpuHost(g, base_address) : nullptr;
     uint64_t texels = 0;
@@ -824,15 +853,63 @@ std::shared_ptr<const Texture> DecodeCached(const Guest& g, const uint32_t f[6],
         return it->second.tex;
     }
     Lap(s, CaptureProfile::kStepTexLookup);
-    std::shared_ptr<const Texture> tex = DecodeTexture(g, f);
+    std::shared_ptr<const Texture> tex = whole && defer ? CopyForLater(src, f) : nullptr;
+    uint64_t bytes = 0;
+    if (tex) {
+        bytes = tex->deferred->bytes.size();
+    } else {
+        tex = DecodeTexture(g, f);
+        bytes = tex->rgba.size() * 4;
+        for (const auto& level : tex->mips) bytes += level.size() * 4;
+    }
     cache[where] = TexEntry{key, tex};
     s.profile.allocs++;
-    uint64_t bytes = tex->rgba.size() * 4;
-    for (const auto& level : tex->mips) bytes += level.size() * 4;
     s.profile.tex_decode_bytes += bytes;
     Lap(s, CaptureProfile::kStepTexDecode);
     return tex;
 }
+
+// a deferred texture's rgba decoded from the bytes copied, once, whichever
+// thread asks first; the others wait for it. Only rgba (and mips, which a
+// plane has none of) is written: the game's thread may be reading the rest.
+// The same decode as DecodeTexture's, from the same bytes.
+void DecodeDeferred(const Texture& t) {
+    DeferredPixels& d = *t.deferred;
+    std::call_once(d.once, [&] {
+        const auto start = std::chrono::steady_clock::now();
+        Texture decoded;
+        if (guest_format::DecodeTextureLevels(d.bytes.data(), nullptr, d.fetch, decoded,
+                                              kMaxTextureSize)) {
+            auto& out = const_cast<Texture&>(t);
+            out.rgba = std::move(decoded.rgba);
+            out.mips = std::move(decoded.mips);
+        }
+        d.bytes = {};
+        g_deferred_decodes.fetch_add(1, std::memory_order_relaxed);
+        g_deferred_decode_ns.fetch_add(
+            uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         std::chrono::steady_clock::now() - start)
+                         .count()),
+            std::memory_order_relaxed);
+    });
+}
+
+// every deferred texture a frame draws with decoded, before it's handed on:
+// its draws' and its shades' (a pass carried in from an earlier frame, or a
+// composed frame's world, brings its own along, perhaps never decoded if no
+// one took that frame)
+void DecodeDeferred(const FrameCapture& fc) {
+    for (const DrawItem& d : fc.draws)
+        if (d.tex && d.tex->deferred) DecodeDeferred(*d.tex);
+    for (const ShadeState& st : fc.shades)
+        for (const auto& m : st.maps)
+            if (m && m->deferred) DecodeDeferred(*m);
+}
+
+// whether a texture has pixels to draw, or will have (a movie's plane,
+// decoded later): what the game's thread asks, which never reads a deferred
+// one's rgba, as another thread may be decoding it
+bool HasPixels(const Texture& t) { return t.deferred || !t.rgba.empty(); }
 
 // RndTex::Type's kMovie bit: a movie's plane, which the CPU writes
 constexpr uint32_t kTexTypeMovie = 4;
@@ -843,9 +920,13 @@ std::shared_ptr<const Texture> GuestPixels(const Guest& g, uint32_t tex_obj, Fra
     if (!d3d) return nullptr;
     uint32_t f[6];
     for (int i = 0; i < 6; i++) f[i] = g.U32(d3d + kD3DBaseTexture_Fetch + i * 4);
-    const bool movie = (g.U32(tex_obj + kTex_Type) & kTexTypeMovie) != 0;
-    std::shared_ptr<const Texture> tex = DecodeCached(g, f, d3d, S().texs, fc, movie);
-    if (tex->rgba.empty()) {
+    const uint32_t type = g.U32(tex_obj + kTex_Type);
+    const bool movie = (type & kTexTypeMovie) != 0;
+    // a render target's pixels are copied on this thread (CaptureTexture), so
+    // decoded here
+    std::shared_ptr<const Texture> tex =
+        DecodeCached(g, f, d3d, S().texs, fc, movie, !IsRenderedType(type));
+    if (!HasPixels(*tex)) {
         fc.untextured_format++;
         return nullptr;
     }
@@ -1054,8 +1135,8 @@ std::shared_ptr<const Texture> CaptureMap(const Guest& g, const uint32_t f[6],
         return nullptr;
     }
     std::shared_ptr<const Texture> tex =
-        DecodeCached(g, f, f[1] & 0xfffff000u, S().map_texs, fc, whole);
-    if (!tex || tex->rgba.empty()) {
+        DecodeCached(g, f, f[1] & 0xfffff000u, S().map_texs, fc, whole, whole);
+    if (!tex || !HasPixels(*tex)) {
         fc.maps_other_format++;
         return nullptr;
     }
@@ -2149,10 +2230,11 @@ void HoldIfRequested(const std::shared_ptr<const FrameCapture>& frame) {
     std::unique_lock lock(g_held.mutex);
     if (!g_held.armed) return;
     // While the emulated GPU skips the game's draws (gpu_skip.h) its picture
-    // isn't this frame's: neither taken nor counted until it has drawn the
-    // frame and the one before whole, which the harness's capture asks for
-    // (RequestFullFrames) before it holds one.
-    if (!EmulatedPictureFresh()) return;
+    // isn't this frame's: neither taken nor counted until it has drawn
+    // kWholeFramesToHold frames whole in a row, this one and the ones before
+    // (what it builds up over frames back too, not just the frame), which
+    // the harness's capture asks for (RequestFullFrames) before it holds one.
+    if (EmulatedWholeFrames() < kWholeFramesToHold) return;
     if (g_held.skip > 0) {
         g_held.skip--;
         return;
@@ -2422,19 +2504,31 @@ std::shared_ptr<const FrameCapture> CaptureHeldFrame(const std::function<void()>
         lock.unlock();
     }
     ReleaseCapture();
+    // its movie planes decoded now the game has gone on
+    if (got && frame) DecodeDeferred(*frame);
     return got ? frame : nullptr;
 }
 
 std::shared_ptr<const FrameCapture> LatestCapture() {
-    std::lock_guard lock(g_latest_mutex);
-    return g_latest;
+    std::shared_ptr<const FrameCapture> latest;
+    {
+        std::lock_guard lock(g_latest_mutex);
+        latest = g_latest;
+    }
+    if (latest) DecodeDeferred(*latest);
+    return latest;
 }
 
 std::shared_ptr<const FrameCapture> LatestCapture(
     std::chrono::steady_clock::time_point& published) {
-    std::lock_guard lock(g_latest_mutex);
-    published = g_latest_published;
-    return g_latest;
+    std::shared_ptr<const FrameCapture> latest;
+    {
+        std::lock_guard lock(g_latest_mutex);
+        published = g_latest_published;
+        latest = g_latest;
+    }
+    if (latest) DecodeDeferred(*latest);
+    return latest;
 }
 
 uint64_t CaptureEpoch() {
@@ -2487,6 +2581,8 @@ CaptureProfile GetCaptureProfile() {
     p.geoms = s.geoms.size();
     p.texs = s.texs.size();
     p.map_texs = s.map_texs.size();
+    p.deferred_decodes = g_deferred_decodes.load(std::memory_order_relaxed);
+    p.deferred_decode_us = g_deferred_decode_ns.load(std::memory_order_relaxed) / 1000;
     return p;
 }
 
@@ -2508,6 +2604,8 @@ CaptureProfile CaptureProfileSince(const CaptureProfile& now, const CaptureProfi
     p.geom_miss_bytes -= before.geom_miss_bytes;
     p.tex_decode_bytes -= before.tex_decode_bytes;
     p.bones -= before.bones;
+    p.deferred_decodes -= before.deferred_decodes;
+    p.deferred_decode_us -= before.deferred_decode_us;
     return p;
 }
 

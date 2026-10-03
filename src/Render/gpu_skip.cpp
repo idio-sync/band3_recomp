@@ -40,8 +40,9 @@ std::mutex g_latch_mutex;
 SkipLatch g_latch;
 // whole frames asked for and not yet handed to the latch
 std::atomic<int> g_full_requested{0};
-// SkipLatch::Fresh, for any thread
+// SkipLatch::Fresh and WholeFrames, for any thread
 std::atomic<bool> g_fresh{true};
+std::atomic<int> g_whole{2};
 
 std::mutex g_callback_mutex;
 std::function<void()> g_on_fresh;
@@ -98,12 +99,15 @@ void LatchGpuSkip(bool capture_on, bool recording) {
                       g_skip_setting.load(std::memory_order_relaxed) && capture_on && recording;
     const int full = g_full_requested.exchange(0);
     bool was_fresh, fresh, skip;
+    int whole;
     {
         std::lock_guard lock(g_latch_mutex);
         was_fresh = g_latch.Fresh();
         skip = g_latch.EndFrame(want, full);
         fresh = g_latch.Fresh();
+        whole = g_latch.WholeFrames();
     }
+    g_whole.store(whole);
     g_frames.fetch_add(1, std::memory_order_relaxed);
     if (skip) g_frames_skipped.fetch_add(1, std::memory_order_relaxed);
     g_fresh.store(fresh);
@@ -119,6 +123,8 @@ void SetPassWantsDraws(bool wants) { g_pass_wants_draws.store(wants, std::memory
 bool RendererNative() { return g_renderer_native.load(std::memory_order_relaxed); }
 
 bool EmulatedPictureFresh() { return g_fresh.load(); }
+
+int EmulatedWholeFrames() { return g_whole.load(); }
 
 void RequestFullFrames(int frames) {
     int now = g_full_requested.load();

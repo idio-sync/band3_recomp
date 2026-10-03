@@ -238,6 +238,96 @@ TEST_CASE("a small linear texture's base and mips both come from packed tails") 
     CHECK(t.rgba[3 * 8 + 6] == Coded(0, 6, 3));
 }
 
+TEST_CASE("k_8 decodes as the block-by-block loop does: tiled and linear, any swizzle, odd edges") {
+    // bytes that differ texel to texel
+    std::vector<uint8_t> mem(2u << 20);
+    uint32_t r = 12345;
+    for (uint8_t& b : mem) {
+        r = r * 1664525u + 1013904223u;
+        b = uint8_t(r >> 24);
+    }
+    FormatInfo info{};
+    REQUIRE(GetFormatInfo(2, info));
+    // xyzw (the byte, 0, 0, 255), xxxx, x 0 0 1, and w 1 1 x
+    for (uint32_t swizzle : {0x688u, 0u, 0xB20u, 3u | 6u << 3 | 7u << 6}) {
+        for (bool tiled : {true, false}) {
+            // a movie's Y plane, a size that ends runs of eight part way, and
+            // a level placed part way into its image (a packed tail's)
+            struct Case {
+                uint32_t w, h, pitch, x0, y0;
+            };
+            for (const Case c : {Case{1280, 720, 1280, 0, 0}, Case{37, 21, 64, 0, 0},
+                                 Case{13, 9, 64, 3, 5}}) {
+                FetchLayout l;
+                l.tiled = tiled;
+                l.format = 2;
+                l.width = c.w;
+                l.height = c.h;
+                l.swizzle = swizzle;
+                LevelPlace p;
+                p.pitch_blocks = c.pitch;
+                p.row_bytes = AlignUp(c.pitch, 256);
+                p.x_blocks = c.x0;
+                p.y_blocks = c.y0;
+                std::vector<uint32_t> fast(size_t(c.w) * c.h), blocks(fast.size());
+                DecodeLevel(mem.data(), l, info, p, c.w, c.h, fast.data());
+                DecodeLevelBlocks(mem.data(), l, info, p, c.w, c.h, blocks.data());
+                CHECK_MESSAGE(fast == blocks, "swizzle ", swizzle, " tiled ", tiled, " ", c.w,
+                              "x", c.h);
+            }
+        }
+    }
+}
+
+TEST_CASE("a plane decodes the same from a copy of its base level's bytes alone") {
+    // what capture keeps of a movie's plane to decode later (scene_capture.h's
+    // Texture::deferred), and hashes of it whole: BaseLevelBytes from the
+    // base address, every byte DecodeLevel reads of the base level. Tiled,
+    // a 1- or 2-byte format's tiles reach past their own size (the 4 KB
+    // groups TiledOffset2D lays them out in).
+    struct Size {
+        uint32_t w, h;
+    };
+    for (uint32_t format : {2u, 10u, 6u}) {
+        FormatInfo info{};
+        REQUIRE(GetFormatInfo(format, info));
+        for (bool tiled : {true, false}) {
+            for (const Size size : {Size{1280, 720}, Size{640, 360}, Size{37, 21}, Size{100, 50},
+                                    Size{200, 33}}) {
+                const uint32_t w = size.w, h = size.h;
+                const uint32_t pitch = AlignUp(w, 32);
+                const uint32_t f[6] = {uint32_t(tiled) << 31 | (pitch >> 5) << 22,
+                                       format | 0x10000, (w - 1) | (h - 1) << 13, 0x688u << 1,
+                                       0, 1u << 9};  // 2D, no mips
+                const uint32_t bytes = BaseLevelBytes(f);
+                REQUIRE(bytes > 0);
+                // every texel's bytes lie within the copy
+                const uint32_t row_bytes = AlignUp(pitch * info.bpb, 256);
+                uint32_t end = 0;
+                for (uint32_t y = 0; y < h; y++)
+                    for (uint32_t x = 0; x < w; x++)
+                        end = std::max(end, (tiled ? uint32_t(TiledOffset2D(int32_t(x), int32_t(y),
+                                                                            pitch, info.bpb_log2))
+                                                   : y * row_bytes + x * info.bpb) +
+                                                info.bpb);
+                CHECK_MESSAGE(end <= bytes, "format ", format, " tiled ", tiled, " ", w, "x", h);
+                std::vector<uint8_t> mem(bytes + 65536);
+                uint32_t r = w * 7 + h;
+                for (uint8_t& b : mem) {
+                    r = r * 1664525u + 1013904223u;
+                    b = uint8_t(r >> 24);
+                }
+                const std::vector<uint8_t> copy(mem.begin(), mem.begin() + bytes);
+                Texture whole, copied;
+                REQUIRE(DecodeTextureLevels(mem.data(), nullptr, f, whole));
+                REQUIRE(DecodeTextureLevels(copy.data(), nullptr, f, copied));
+                CHECK(whole.width == w);
+                CHECK(whole.rgba == copied.rgba);
+            }
+        }
+    }
+}
+
 TEST_CASE("point and bilinear filtering, and the clamp modes at the edges") {
     // 4x1: 0, 100, 200, 40 across
     const uint32_t row[4] = {Grey(0), Grey(100), Grey(200), Grey(40)};

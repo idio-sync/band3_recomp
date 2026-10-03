@@ -60,6 +60,9 @@ class SkipLatch {
     // were drawn whole. Two, as with even/odd rendering a frame shows the
     // world the one before drew. True before the first frame.
     bool Fresh() const { return whole_ >= 2; }
+    // the frames swapped whole since the last skipped one (2 before the
+    // first frame, at most kWholeMax)
+    int WholeFrames() const { return whole_; }
     // whole frames still to come from a request
     int FullPending() const { return full_; }
 
@@ -114,6 +117,19 @@ bool RendererNative();
 // Whether the emulated GPU's picture is the game's now (SkipLatch::Fresh): a
 // screenshot of it is, and F8 back to emulated can show it. Any thread.
 bool EmulatedPictureFresh();
+
+// SkipLatch::WholeFrames now, for any thread
+int EmulatedWholeFrames();
+
+// How many whole frames the emulated GPU must have swapped in a row before
+// a render check holds a frame (scene_capture.cpp's HoldIfRequested). Fresh
+// (two) is the frame's own picture, but not everything in it: what the GPU
+// builds up over frames comes back slowly after skipping. The title's clouds
+// took 5 to 20 whole frames to come back (out/n3/soak.md); with fewer, its
+// render check compared the native frame with a picture lacking them. Under
+// renderer emulated, or emulated_gpu_while_native full, every frame is whole,
+// so this never waits there.
+inline constexpr int kWholeFramesToHold = 30;
 
 // The next `frames` frames are drawn whole whatever the setting, from the
 // next one the game begins: the harness's `capture` asks before holding a
