@@ -23,7 +23,12 @@
 // copy; and that a camera draws in its viewport, layered with the others by
 // their z ranges, with no depth clear between them (but in a capture from
 // before the cameras were kept), the overlay's depth cleared after the
-// resolve.
+// resolve; and that the passes that are pictures of the screen are drawn in
+// proportion to the picture (RasterOptions::target_scale), their cameras'
+// viewports with them, their blurs' taps over the texels the game's cover;
+// and that the overlay is multisampled as RB3's is (RasterOptions::msaa: an
+// edge pixel the mean of its samples, each with its own depth), the world
+// not.
 
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -377,7 +382,11 @@ TEST_CASE("the world's alpha is the bloom weight PSEUDO_HDR draws write, kept by
     f.passes = {BackBuffer(0, 4)};
     f.post_boundary = 3;
     std::vector<uint32_t> rgba;
-    Rasterize(f, Small(), rgba);
+    // single-sampled: multisampled, the overlay's quad from the picture's
+    // left edge, on D3D9's pixel centres, covers half of column 0 and 2
+    RasterOptions single = Small();
+    single.msaa = 1;
+    Rasterize(f, single, rgba);
     // the picture: opaque, the overlay over the world
     CHECK(rgba[1 * 8 + 0] == 0xffffffffu);
     CHECK(rgba[1 * 8 + 2] == kGreen);
@@ -501,6 +510,64 @@ TEST_CASE("a REFRACT_WORLD draw in the overlay is its colour times the picture b
     f.post_boundary = 3;
     Rasterize(f, Small(), rgba);
     CHECK(rgba[1 * 8 + 3] == 0xff808080u);
+}
+
+TEST_CASE("a pass RB3 drew without a material is drawn, as with its default material") {
+    // the capture keeps it with TheRnd's default material (white, prelit),
+    // its shade state's mat kDefaultMaterial: drawn, unless the option says not
+    FrameCapture f;
+    f.shades = {FlatShade(false)};
+    f.shades[0].mat = kDefaultMaterial;
+    f.draws = {Shaded(-1, 1, kGreen, 0, 1)};
+    f.passes = {BackBuffer(0, 1)};
+    REQUIRE(NoMaterial(f.draws[0], &f.shades[0]));
+    std::vector<uint32_t> rgba;
+    RasterOptions o = Small();
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 1] == kGreen);
+    o.default_material = false;
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 1] != kGreen);
+    // a DrawRect quad without a material isn't one
+    f.draws[0].rect_shader = 6;
+    CHECK_FALSE(NoMaterial(f.draws[0], &f.shades[0]));
+}
+
+TEST_CASE("a REFRACT_WORLD draw reads the picture where its refract normal map moves it") {
+    // the world red on the left, green on the right; a white REFRACT_WORLD
+    // quad over it all. Pixel x is the game's sample at x (D3D9's centres),
+    // which reads the picture bilinear at x: halfway between texels x - 1
+    // and x, so at the halves' edge (x 4) the two mixed
+    FrameCapture f;
+    f.shades = {FlatShade(false), FlatShade(false)};
+    ShadeState& glass = f.shades[1];
+    glass.options |= 1ull << shader_opt::kRefractWorld;
+    glass.ps[ShadeRegIndex(119)][3] = 1.0f;
+    f.draws = {Shaded(-1, 0, kRed, 0, 1), Shaded(0, 1, kGreen, 0, 1),
+               Shaded(-1, 1, 0xffffffffu, 1, 1)};
+    f.passes = {BackBuffer(0, 3)};
+    f.post_boundary = 2;
+    std::vector<uint32_t> rgba;
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 1] == kRed);
+    CHECK(rgba[1 * 8 + 4] == 0xff008080u);
+    CHECK(rgba[1 * 8 + 6] == kGreen);
+
+    // its map's green moves it across by c119.w (1, w 1) times 2 g - 1: a
+    // whole 1 in clip x, half the picture, so pixel 1 reads 5 (green); its
+    // red (0x80, about the middle) barely moves it up or down
+    auto map = std::make_shared<Texture>();
+    map->width = map->height = 1;
+    map->rgba = {0xff00ff80u};
+    glass.maps[kMapNormal] = map;
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 1] == kGreen);
+    CHECK(rgba[1 * 8 + 6] == kGreen);
+    // green 0 moves it the other way: pixel 6 reads 2 (red)
+    map->rgba = {0xff000080u};
+    Rasterize(f, Small(), rgba);
+    CHECK(rgba[1 * 8 + 6] == kRed);
+    CHECK(rgba[1 * 8 + 1] == kRed);
 }
 
 TEST_CASE("a crowd billboard's quad, in its mesh's XZ, is turned to the camera") {
@@ -1337,4 +1404,197 @@ TEST_CASE("with its cameras, the overlay's depth starts cleared after the resolv
     f.cameras.clear();
     Rasterize(f, o, rgba);
     CHECK(rgba[1 * 8 + 3] == kRed);
+}
+
+TEST_CASE("the screen's passes are drawn in proportion to the picture, others as they are") {
+    FrameCapture f;
+    f.post_consts.soft_surface[0] = 0x1000;
+    auto pass = [](uint32_t tex_obj, uint32_t type, uint32_t w, uint32_t h) {
+        Pass p;
+        p.tex_obj = tex_obj;
+        p.tex_type = type;
+        p.width = w;
+        p.height = h;
+        return p;
+    };
+    const Pass volume = pass(0x2000, kTexTypeDepthVolume, 640, 360);
+    const Pass density = pass(0x3000, kTexTypeDensityMap, 320, 180);
+    const Pass soft = pass(0x1000, 0x22, 320, 180);
+    const Pass light = pass(0x4000, 0x22, 256, 256);  // NgLight's shadow
+    const Pass outfit = pass(0x5000, 0x22, 512, 512);
+    const Pass shadow = pass(0x6000, kTexTypeShadowMap, 512, 512);
+    RasterOptions o;
+    uint32_t w = 0, h = 0;
+    auto size = [&](const Pass& p) {
+        PassTargetSize(f, p, o, w, h);
+        return std::pair{w, h};
+    };
+    // the game's, at 1
+    CHECK(size(volume) == std::pair{640u, 360u});
+    CHECK(size(shadow) == std::pair{512u, 512u});
+    // 1080p's 1.5 and 4K's 3; 900 lines' 1.25 rounds 225 to an even 226
+    o.target_scale = 1.5f;
+    CHECK(size(volume) == std::pair{960u, 540u});
+    CHECK(size(soft) == std::pair{480u, 270u});
+    o.target_scale = 3;
+    CHECK(size(volume) == std::pair{1920u, 1080u});
+    CHECK(size(density) == std::pair{960u, 540u});
+    o.target_scale = 1.25f;
+    CHECK(size(density) == std::pair{400u, 226u});
+    // the light's picture, an outfit and a shadow map stay as they are
+    CHECK(size(light) == std::pair{256u, 256u});
+    CHECK(size(outfit) == std::pair{512u, 512u});
+    CHECK(size(shadow) == std::pair{512u, 512u});
+    // the shadow maps by shadow_scale alone
+    o.shadow_scale = 2;
+    CHECK(size(shadow) == std::pair{1024u, 1024u});
+    CHECK(size(outfit) == std::pair{512u, 512u});
+
+    // a camera's viewport scales with its target
+    Pass half = volume;
+    half.viewport[2] = 320;
+    half.viewport[3] = 360;
+    float vp[4];
+    ScalePassViewport(half, 640, 360, vp);
+    CHECK(vp[2] == 320);
+    ScalePassViewport(half, 1920, 1080, vp);
+    CHECK(vp[0] == 0);
+    CHECK(vp[2] == 960);
+    CHECK(vp[3] == 1080);
+}
+
+TEST_CASE("a depth volume drawn bigger keeps its camera's viewport, its share of the screen") {
+    // a 4x4 depth volume whose camera covers its left half, drawn red
+    FrameCapture f;
+    DrawItem cone = Item(Quad(-1, 1, kRed), kTex);
+    f.draws = {cone};
+    Pass p = TexturePass(0, 1);
+    p.tex_type = kTexTypeDepthVolume;
+    p.viewport[2] = 2;
+    p.viewport[3] = 4;
+    f.passes = {p};
+    RasterOptions o = Small();
+    std::vector<uint32_t> tex;
+    uint32_t w = 0, h = 0;
+    REQUIRE(RasterizeTarget(f, o, kTex, 1, tex, w, h));
+    CHECK(w == 4);
+    CHECK(tex[1 * 4 + 1] == kRed);
+    CHECK(tex[1 * 4 + 2] == 0);
+    // twice the size: 8x8, still the left half
+    o.target_scale = 2;
+    REQUIRE(RasterizeTarget(f, o, kTex, 1, tex, w, h));
+    CHECK(w == 8);
+    CHECK(h == 8);
+    CHECK(tex[3 * 8 + 3] == kRed);
+    CHECK(tex[3 * 8 + 4] == 0);
+}
+
+TEST_CASE("a blur in a bigger target reads each tap over the texels the game's covers") {
+    // the depth volume's blur across: taps a texel apart along x, at 640
+    ShadeState s{};
+    auto set = [&](int reg, float x, float y) {
+        s.ps[ShadeRegIndex(reg)][0] = x;
+        s.ps[ShadeRegIndex(reg)][1] = y;
+    };
+    for (int k = 0; k < spot::kSpotBlurTaps; k++) {
+        set(31 + k, float(k - 2) / 640.0f, 0);
+        set(47 + k, 0.2f, 0.2f);
+    }
+    Pass p;
+    p.width = 640;
+    p.height = 360;
+    BlurSubTaps sub = BlurSubTapsFor(s, spot::kSpotBlurTaps, p, 640, 360);
+    CHECK(sub.count == 1);
+    // at 1080p (1.5 times), two samples half a texel of the game's apart
+    sub = BlurSubTapsFor(s, spot::kSpotBlurTaps, p, 960, 540);
+    CHECK(sub.count == 2);
+    CHECK(sub.step[0] == doctest::Approx(1.0 / 1280));
+    CHECK(sub.step[1] == 0);
+    // at 4K, three, a third of one apart
+    sub = BlurSubTapsFor(s, spot::kSpotBlurTaps, p, 1920, 1080);
+    CHECK(sub.count == 3);
+    CHECK(sub.step[0] == doctest::Approx(1.0 / 1920));
+    // the blur down: along y
+    for (int k = 0; k < spot::kSpotBlurTaps; k++) set(31 + k, 0, float(k - 2) / 360.0f);
+    sub = BlurSubTapsFor(s, spot::kSpotBlurTaps, p, 1280, 720);
+    CHECK(sub.count == 2);
+    CHECK(sub.step[0] == 0);
+    CHECK(sub.step[1] == doctest::Approx(1.0 / 720));
+}
+
+TEST_CASE("the overlay is multisampled: an edge pixel is the mean of its samples, the world's not") {
+    // a quad to x 2 over the clear's grey: pixel 2 samples at 1.75 (inside)
+    // and 2.25 (outside), so its colour is half red, half grey, as the GPU's
+    // 2x target resolves it (and RB3's EndTiling): (255 + 32 + 1) / 2 = 144
+    // red, (0 + 32 + 1) / 2 = 16 green and blue
+    auto at = [](float px, float size) { return px / size * 2.0f - 1.0f; };
+    FrameCapture f;
+    f.draws = {Item(Quad(-1, at(2, 8), kRed), 0)};
+    f.passes = {BackBuffer(0, 1)};
+    f.post_boundary = 0;
+    RasterOptions o = Small();
+    o.post = false;
+    std::vector<uint32_t> rgba;
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 1] == kRed);
+    CHECK(rgba[1 * 8 + 2] == 0xff101090u);
+    CHECK(rgba[1 * 8 + 3] == 0xff202020u);
+    // with 4 samples, an edge at 2.2 covers three of pixel 2's (x - .125,
+    // + .125, - .375): (3 * 255 + 32 + 2) / 4 = 199 red, (32 + 2) / 4 = 8
+    f.draws = {Item(Quad(-1, at(2.2f, 8), kRed), 0)};
+    o.msaa = 4;
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 2] == 0xff0808c7u);
+    // single-sampled, as the renderers drew before: the centre's on the
+    // edge, which isn't the quad's (the top-left rule)
+    f.draws = {Item(Quad(-1, at(2, 8), kRed), 0)};
+    o.msaa = 1;
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 2] == 0xff202020u);
+
+    // the world's draws, before post_boundary, are single-sampled whatever
+    // msaa says, as RB3's back buffer is: the same edge stays hard, while
+    // the overlay's over the bottom rows is half covered
+    DrawItem overlay = Item(Quad(-1, at(2, 8), kGreen, 0, -1), 0);
+    f.draws = {Item(Quad(-1, at(2, 8), kRed), 0), overlay};
+    f.passes = {BackBuffer(0, 2)};
+    f.post_boundary = 1;
+    o.msaa = 2;
+    Rasterize(f, o, rgba);
+    CHECK(rgba[0 * 8 + 1] == kRed);
+    CHECK(rgba[0 * 8 + 2] == 0xff202020u);
+    CHECK(rgba[3 * 8 + 1] == kGreen);
+    CHECK(rgba[3 * 8 + 2] == 0xff109010u);  // half green over the clear
+    std::vector<uint32_t> single;
+    o.msaa = 1;
+    Rasterize(f, o, single);
+    for (int y = 0; y < 2; y++)
+        for (int x = 0; x < 8; x++) CHECK(rgba[y * 8 + x] == single[y * 8 + x]);
+}
+
+TEST_CASE("each of an overlay pixel's samples keeps its own depth") {
+    // a near quad (w 10) over the left of pixel 2's samples, then a far one
+    // (w 50) over all of it: the far one's colour lands only in the sample
+    // the near one left, so the pixel is half each
+    auto at = [](float px, float size) { return px / size * 2.0f - 1.0f; };
+    FrameCapture f;
+    f.shades = {FlatShade(false)};
+    DrawItem near_quad = Shaded(-1, 1, kRed, 0, 1);
+    near_quad.geom = QuadAt(-1, at(2, 8), 10, kRed);
+    near_quad.view_proj = Projection();
+    near_quad.z_mode = 1;
+    near_quad.cam = 1;
+    DrawItem far_quad = near_quad;
+    far_quad.geom = QuadAt(-1, 1, 50, kGreen);
+    f.draws = {near_quad, far_quad};
+    f.passes = {BackBuffer(0, 2)};
+    f.post_boundary = 0;
+    f.cameras = {Camera(1, 0, 0, 1)};
+    RasterOptions o = Small();
+    o.post = false;
+    std::vector<uint32_t> rgba;
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 1] == kRed);
+    CHECK(rgba[1 * 8 + 2] == 0xff008080u);  // (255 + 0 + 1) / 2 = 128 each
+    CHECK(rgba[1 * 8 + 3] == kGreen);
 }

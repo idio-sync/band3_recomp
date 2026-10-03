@@ -13,6 +13,7 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <condition_variable>
 #include <functional>
@@ -23,10 +24,12 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include "generated/band3_init.h"
 #include "src/Hooks/frame_pacing.h"
 #include "src/Render/frame_compose.h"
+#include "src/Render/gpu_skip.h"
 #include "src/Render/guest_formats.h"
 #include "src/settings.h"
 
@@ -144,6 +147,9 @@ constexpr uint32_t kRnd_ProcCmds = 0x16c;
 // its clear colour, four floats r g b a, which DxRnd::BeginDrawing clears the
 // back buffer to (out/research/n1_runtime_survey.md 3)
 constexpr uint32_t kRnd_ClearColor = 0x2c;
+// its default material (mDefaultMat, rndobj/Rnd.h: white, prelit, unlit),
+// which RndShader's Select draws a pass without a material with
+constexpr uint32_t kRnd_DefaultMat = 0x94;
 // XDK D3D resources (rb3-xenon xdk/d3d9i/d3d9.h)
 constexpr uint32_t kD3DVertexBuffer_Fetch = 0x18;
 constexpr uint32_t kD3DIndexBuffer_Address = 0x18;
@@ -238,6 +244,40 @@ constexpr int32_t kRectShaderBlur = 1;
 // RndSoftParticleBuffer::DoPost's r3 is the buffer's PostProcessor (+0x28),
 // its two surfaces' DxTex at +4 and +8 (out/research/softparticle_survey.md 1)
 constexpr uint32_t kSoftPost_Surfaces = 4;
+// The camera motion blur's (out/research/n5_hub_soft.md 3):
+// RndVelocityBuffer::sSingleton, its fields as rb3-xenon's
+// rndobj/VelocityBuffer.h has them, checked against the retail Draw
+// (0x82B855F0); the proc's mMotionBlurVelocity (DoVelocity's lbz 0x1A4);
+// TheNgRnd (Draw's PreDepthTexture and DrawRectDepth calls go through it) and
+// its pre-pass depth texture (DxRnd::PreDepthTexture: lwz 0x340); and the
+// samplers the composite reads the scene and the velocity texture from
+constexpr uint32_t kVelocityBuffer = 0x82E12BA0;
+constexpr uint32_t kVel_ViewProj = 0x8;
+constexpr uint32_t kVel_DepthRange = 0x48;
+constexpr uint32_t kVel_FrustumNear = 0x58;
+constexpr uint32_t kVel_FrustumCorners = 0x68;
+constexpr uint32_t kVel_Cam = 0xa8;
+constexpr uint32_t kVel_Scale = 0x36be8;
+constexpr uint32_t kVel_Xfms = 0x36bec;  // two Hmx::Matrix4, 64 bytes apart
+constexpr uint32_t kVel_Index = 0x36c6c;
+constexpr uint32_t kVel_Frame = 0x36c70;
+constexpr uint32_t kVel_Tex = 0x36c74;
+constexpr uint32_t kVel_LastCam = 0x36c7c;
+constexpr uint32_t kPostProc_MotionBlurVelocity = 0x1a4;
+constexpr uint32_t kNgRndHolder = 0x82C76B6C;
+constexpr uint32_t kNgRnd_PreDepth = 0x340;
+constexpr uint32_t kSceneSampler = 6;
+constexpr uint32_t kVelocitySampler = 10;
+// its transform caches, RndXfmCache (VelocityBuffer.h, checked against the
+// retail DrawMesh, 0x82B852A8): two, 0x1B584 apart from +0xAC, each its
+// meshes by bone slot (+0), 12 floats a slot (+0x1F40) and the slots used
+// (+0x1B580); and a mesh's slot in each (RndMesh's mMotionCache keys, +0x138
+// + 4 * index); its material's z mode (kMat_ZMode) 2, transparent, draws none
+constexpr uint32_t kVel_XfmCaches = 0xac;
+constexpr uint32_t kXfmCache_Size = 0x1b584;
+constexpr uint32_t kXfmCache_Floats = 0x1f40;
+constexpr uint32_t kXfmCache_Used = 0x1b580;
+constexpr uint32_t kMesh_MotionKeys = 0x138;
 
 constexpr uint32_t kMaxBufferBytes = 64u << 20;
 constexpr uint32_t kMaxTextureSize = 4096;
@@ -322,15 +362,28 @@ Mat4 ReadMatrix4(const Guest& g, uint32_t a) {
 // DxMesh's packed vertex (guest_formats.h)
 using guest_format::DecodePacked;
 
-uint32_t Fnv(const uint8_t* p, size_t n, uint32_t h = 2166136261u) {
-    for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
-    return h;
-}
-
+// FNV-style mixing in four lanes, 32 bytes a round, which don't wait on each
+// other's multiplies, so the CPU runs them side by side (about four times as
+// fast as one lane on a shade state's 2.7 KB, and than byte-wise FNV on the
+// keys' few hundred bytes), then folded together with the tail
 uint64_t HashBytes(const void* p, size_t n) {
     const auto* b = static_cast<const uint8_t*>(p);
-    uint64_t h = 1469598103934665603ull;
+    uint64_t lane[4] = {1469598103934665603ull, 0x9E3779B97F4A7C15ull, 0xC2B2AE3D27D4EB4Full,
+                        0x165667B19E3779F9ull};
     size_t i = 0;
+    for (; i + 32 <= n; i += 32) {
+        for (int l = 0; l < 4; l++) {
+            uint64_t w;
+            std::memcpy(&w, b + i + l * 8, 8);
+            lane[l] = (lane[l] ^ w) * 1099511628211ull;
+            lane[l] ^= lane[l] >> 29;
+        }
+    }
+    uint64_t h = n;
+    for (uint64_t l : lane) {
+        h = (h ^ l) * 1099511628211ull;
+        h ^= h >> 29;
+    }
     for (; i + 8 <= n; i += 8) {
         uint64_t w;
         std::memcpy(&w, b + i, 8);
@@ -490,12 +543,75 @@ struct State {
     std::shared_ptr<const Texture> noise_map;
     TexSampler noise_sampler;
     uint32_t noise_base = 0;
+    // the meshes the last post frame drew into the velocity buffer with
+    // their own motion (DxMesh::DrawShowing's mesh, its cull mode then) and
+    // the game frame it was: a world frame's object pass is theirs
+    // (EmulateVelocityObjects)
+    struct VelocityMesh {
+        uint32_t mesh = 0;
+        uint8_t cull = 0;
+    };
+    std::vector<VelocityMesh> velocity_meshes;
+    uint64_t velocity_meshes_frame = 0;
+    // the frame's draws logged so far (DiagLog): passes without a material,
+    // DrawFaces outside a DrawShowing
+    uint32_t logged_no_mat = 0;
+    uint32_t logged_elsewhere = 0;
+    // what the hooks cost (GetCaptureProfile), and where the step running
+    // started (Lap)
+    CaptureProfile profile;
+    std::chrono::steady_clock::time_point profile_mark;
 };
 
 State& S() {
     static State state;
     return state;
 }
+
+// native_view_capture_profile, kept by its change callback: the hooks' steps
+// are timed too (CaptureProfile)
+std::atomic<bool> g_profile_steps{false};
+
+uint64_t Nanos(std::chrono::steady_clock::duration d) {
+    return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count());
+}
+
+// A step of the running hook's ends: its time since the step before ended
+// (or the hook began) counts as `step`'s, with native_view_capture_profile
+// on. Under g_state_mutex, as State is.
+void Lap(State& s, CaptureProfile::Step step) {
+    if (!g_profile_steps.load(std::memory_order_relaxed)) return;
+    const auto now = std::chrono::steady_clock::now();
+    s.profile.step_ns[step] += Nanos(now - s.profile_mark);
+    s.profile.step_calls[step]++;
+    s.profile_mark = now;
+}
+
+// A hook's work, timed into its kind's total (CaptureProfile::hook_ns), and
+// what its steps didn't name into kStepRest. Made once g_state_mutex is held,
+// so it's let go of before the lock is.
+class HookTimer {
+ public:
+    explicit HookTimer(CaptureProfile::Hook hook)
+        : hook_(hook), start_(std::chrono::steady_clock::now()) {
+        S().profile_mark = start_;
+    }
+    ~HookTimer() {
+        State& s = S();
+        const auto end = std::chrono::steady_clock::now();
+        s.profile.hook_ns[hook_] += Nanos(end - start_);
+        s.profile.hook_calls[hook_]++;
+        if (!g_profile_steps.load(std::memory_order_relaxed)) return;
+        s.profile.step_ns[CaptureProfile::kStepRest] += Nanos(end - s.profile_mark);
+        s.profile.step_calls[CaptureProfile::kStepRest]++;
+    }
+    HookTimer(const HookTimer&) = delete;
+    HookTimer& operator=(const HookTimer&) = delete;
+
+ private:
+    CaptureProfile::Hook hook_;
+    std::chrono::steady_clock::time_point start_;
+};
 
 // State's, taken by each hook once it's past its early-out, so a game that
 // never uses the native view doesn't take it but at the frame's end; never
@@ -605,6 +721,23 @@ constexpr int kMaxFramesToWait = 30;
 constexpr std::chrono::seconds kMaxHold{3};
 std::mutex g_latest_mutex;
 std::shared_ptr<const FrameCapture> g_latest;
+// when g_latest was published, for the native renderer's latency
+std::chrono::steady_clock::time_point g_latest_published;
+// captures published and WakeCaptureWaiters calls so far, under
+// g_latest_mutex: the native renderer's worker waits on g_latest_cv for it to
+// move rather than looking every few milliseconds
+uint64_t g_capture_epoch = 0;
+std::condition_variable g_latest_cv;
+// native_view_record_targets as set, and whether renderer has been native at
+// any time this session: texture passes are recorded if either is
+// (g_record_targets)
+std::atomic<bool> g_record_targets_set{false}, g_renderer_was_native{false};
+// The game's frames: the newest kPresentTimes ends of DxRnd::Present, a ring,
+// for the harness's present_stats (about two minutes at 60 frames a second)
+constexpr size_t kPresentTimes = 8192;
+std::mutex g_present_times_mutex;
+std::chrono::steady_clock::time_point g_present_times[kPresentTimes];
+uint64_t g_present_count = 0;
 
 uint64_t Key(std::initializer_list<uint32_t> parts) {
     uint64_t h = 1469598103934665603ull;
@@ -637,15 +770,19 @@ std::shared_ptr<const Geometry> CaptureGeometry(const Guest& g, uint32_t geom,
         const uint32_t num_verts = std::min<uint32_t>(vb_bytes / kPackedVert_Size, 65536);
         const uint32_t num_indices = std::min(num_faces * 3, ib_bytes / 2);
 
-        const uint64_t key = Key({vb_phys, vb_bytes, ib_addr, ib_bytes, num_faces,
-                                  Fnv(vsrc, std::min<uint32_t>(vb_bytes, 256)),
-                                  Fnv(isrc, std::min<uint32_t>(num_indices * 2, 64))});
+        const uint64_t verts = HashBytes(vsrc, std::min<uint32_t>(vb_bytes, 256));
+        const uint64_t indices = HashBytes(isrc, std::min<uint32_t>(num_indices * 2, 64));
+        const uint64_t key =
+            Key({vb_phys, vb_bytes, ib_addr, ib_bytes, num_faces, uint32_t(verts),
+                 uint32_t(verts >> 32), uint32_t(indices), uint32_t(indices >> 32)});
         auto it = S().geoms.find(geom);
         if (it != S().geoms.end() && it->second.key == key) {
             fc.geom_cached++;
+            Lap(S(), CaptureProfile::kStepGeomHit);
             return it->second.geom;
         }
         auto out = std::make_shared<Geometry>();
+        S().profile.allocs++;
         out->verts.resize(num_verts);
         for (uint32_t i = 0; i < num_verts; i++)
             out->verts[i] = DecodePacked(vsrc + i * kPackedVert_Size);
@@ -658,6 +795,9 @@ std::shared_ptr<const Geometry> CaptureGeometry(const Guest& g, uint32_t geom,
             out->indices.insert(out->indices.end(), {a, b, c});
         }
         S().geoms[geom] = GeomEntry{key, out};
+        S().profile.geom_miss_bytes +=
+            out->verts.size() * sizeof(Vertex) + out->indices.size() * sizeof(uint16_t);
+        Lap(S(), CaptureProfile::kStepGeomMiss);
         return out;
     }
 
@@ -682,38 +822,138 @@ std::shared_ptr<const Geometry> CaptureGeometry(const Guest& g, uint32_t geom,
         out->indices.insert(out->indices.end(), {a, b, c});
     }
     fc.mutable_meshes++;
+    S().profile.allocs++;
+    Lap(S(), CaptureProfile::kStepGeomMutable);
     return out;
 }
 
-// the texture fetch constant `f` describes, decoded again only when it or its
-// first bytes changed, or with `whole` any of its base level's: a movie's
-// plane, which the CPU writes in place (Movie.cpp's BeginFrame, into one of
-// four buffers in turn), and whose first rows are often the same black from
-// one frame to the next. Not every texture: hashing each of 256 KB or less
-// whole cost the capture 5-11 ms a frame in the music library (30 MB: each
-// draw's), a movie's planes cost it 0.07 ms there (384 KB; 1.4 MB at
-// 1280x720). Empty rgba if its format isn't decoded.
+// The fetch constant's fields that say what its texture's texels are, as
+// guest_formats.h's ReadFetchLayout and DecodeTextureLevels read them: tiling
+// and pitch (dword 0), format, endianness and base (1), size (2), swizzle
+// (3), the levels kept (4), dimension, packed mips and the mip address (5).
+// Not the sampler's (clamp, filters, anisotropy, LOD bias, border), which
+// draws sampling the same texture set their own ways: keyed on those too, a
+// texture two draws sample differently was decoded again at each (7 ms a
+// frame in the main hub, its 512x512 maps over and over).
+constexpr uint32_t kFetchTexelBits[6] = {0xFFC00000u, 0xFFFFFFFFu, 0xFFFFFFFFu,
+                                         0x00001FFEu, 0x000003FCu, 0xFFFFFE00u};
+
+// the deferred decodes done (CaptureProfile::deferred_decodes), on any thread
+std::atomic<uint64_t> g_deferred_decodes{0}, g_deferred_decode_ns{0};
+
+// A movie's plane with its base level's bytes copied as guest memory holds
+// them now, for DecodeDeferred to decode later (Texture::deferred), or null
+// where DecodeTexture wouldn't decode it or it has mips (a plane has none)
+std::shared_ptr<Texture> CopyForLater(const uint8_t* src, const uint32_t f[6]) {
+    const guest_format::FetchLayout l = guest_format::ReadFetchLayout(f);
+    guest_format::FormatInfo info{};
+    const uint32_t bytes = guest_format::BaseLevelBytes(f);
+    if (!src || !bytes || l.dimension != 1 || !guest_format::GetFormatInfo(l.format, info) ||
+        l.width > kMaxTextureSize || l.height > kMaxTextureSize || (l.mip_address && l.mip_max))
+        return nullptr;
+    auto tex = std::make_shared<Texture>();
+    tex->width = l.width;
+    tex->height = l.height;
+    tex->format = l.format;
+    auto d = std::make_shared<DeferredPixels>();
+    d->bytes.assign(src, src + bytes);
+    std::copy(f, f + 6, d->fetch);
+    tex->deferred = std::move(d);
+    return tex;
+}
+
+// the texture fetch constant `f` describes, decoded again only when its
+// texels' fields (kFetchTexelBits) or its first bytes changed, or with `whole`
+// any of its base level's: a movie's plane, which the CPU writes in place
+// (Movie.cpp's BeginFrame, into one of four buffers in turn), and whose first
+// rows are often the same black from one frame to the next. Not every
+// texture: hashing each of 256 KB or less whole cost the capture 5-11 ms a
+// frame in the music library (30 MB: each draw's), a movie's planes cost it
+// 0.07 ms there (384 KB; 1.4 MB at 1280x720). With `defer` too, a changed
+// plane's bytes are only copied (CopyForLater), and decoded off the game's
+// thread: decoding a video venue's 1280x720 planes here cost the game's
+// thread 5-6 ms a frame. Empty rgba if its format isn't decoded, but for a
+// deferred one, whose rgba the game's thread mustn't read (HasPixels).
 std::shared_ptr<const Texture> DecodeCached(const Guest& g, const uint32_t f[6], uint32_t where,
                                             std::unordered_map<uint32_t, TexEntry>& cache,
-                                            FrameCapture& fc, bool whole = false) {
+                                            FrameCapture& fc, bool whole = false,
+                                            bool defer = false) {
     const uint32_t base_address = f[1] & 0xfffff000u;
     const uint8_t* src = base_address ? GpuHost(g, base_address) : nullptr;
     uint64_t texels = 0;
     if (src) {
         const uint32_t bytes = guest_format::BaseLevelBytes(f);
-        texels = whole && bytes ? HashBytes(src, bytes) : Fnv(src, 64);
+        texels = HashBytes(src, whole && bytes ? bytes : 64);
     }
+    uint32_t k[6];
+    for (int i = 0; i < 6; i++) k[i] = f[i] & kFetchTexelBits[i];
     const uint64_t key =
-        Key({f[0], f[1], f[2], f[3], f[5], uint32_t(texels), uint32_t(texels >> 32)});
+        Key({k[0], k[1], k[2], k[3], k[4], k[5], uint32_t(texels), uint32_t(texels >> 32)});
     auto it = cache.find(where);
+    State& s = S();
     if (it != cache.end() && it->second.key == key) {
         fc.tex_cached++;
+        Lap(s, CaptureProfile::kStepTexLookup);
         return it->second.tex;
     }
-    std::shared_ptr<const Texture> tex = DecodeTexture(g, f);
+    Lap(s, CaptureProfile::kStepTexLookup);
+    std::shared_ptr<const Texture> tex = whole && defer ? CopyForLater(src, f) : nullptr;
+    uint64_t bytes = 0;
+    if (tex) {
+        bytes = tex->deferred->bytes.size();
+    } else {
+        tex = DecodeTexture(g, f);
+        bytes = tex->rgba.size() * 4;
+        for (const auto& level : tex->mips) bytes += level.size() * 4;
+    }
     cache[where] = TexEntry{key, tex};
+    s.profile.allocs++;
+    s.profile.tex_decode_bytes += bytes;
+    Lap(s, CaptureProfile::kStepTexDecode);
     return tex;
 }
+
+// a deferred texture's rgba decoded from the bytes copied, once, whichever
+// thread asks first; the others wait for it. Only rgba (and mips, which a
+// plane has none of) is written: the game's thread may be reading the rest.
+// The same decode as DecodeTexture's, from the same bytes.
+void DecodeDeferred(const Texture& t) {
+    DeferredPixels& d = *t.deferred;
+    std::call_once(d.once, [&] {
+        const auto start = std::chrono::steady_clock::now();
+        Texture decoded;
+        if (guest_format::DecodeTextureLevels(d.bytes.data(), nullptr, d.fetch, decoded,
+                                              kMaxTextureSize)) {
+            auto& out = const_cast<Texture&>(t);
+            out.rgba = std::move(decoded.rgba);
+            out.mips = std::move(decoded.mips);
+        }
+        d.bytes = {};
+        g_deferred_decodes.fetch_add(1, std::memory_order_relaxed);
+        g_deferred_decode_ns.fetch_add(
+            uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         std::chrono::steady_clock::now() - start)
+                         .count()),
+            std::memory_order_relaxed);
+    });
+}
+
+// every deferred texture a frame draws with decoded, before it's handed on:
+// its draws' and its shades' (a pass carried in from an earlier frame, or a
+// composed frame's world, brings its own along, perhaps never decoded if no
+// one took that frame)
+void DecodeDeferred(const FrameCapture& fc) {
+    for (const DrawItem& d : fc.draws)
+        if (d.tex && d.tex->deferred) DecodeDeferred(*d.tex);
+    for (const ShadeState& st : fc.shades)
+        for (const auto& m : st.maps)
+            if (m && m->deferred) DecodeDeferred(*m);
+}
+
+// whether a texture has pixels to draw, or will have (a movie's plane,
+// decoded later): what the game's thread asks, which never reads a deferred
+// one's rgba, as another thread may be decoding it
+bool HasPixels(const Texture& t) { return t.deferred || !t.rgba.empty(); }
 
 // RndTex::Type's kMovie bit: a movie's plane, which the CPU writes
 constexpr uint32_t kTexTypeMovie = 4;
@@ -724,9 +964,13 @@ std::shared_ptr<const Texture> GuestPixels(const Guest& g, uint32_t tex_obj, Fra
     if (!d3d) return nullptr;
     uint32_t f[6];
     for (int i = 0; i < 6; i++) f[i] = g.U32(d3d + kD3DBaseTexture_Fetch + i * 4);
-    const bool movie = (g.U32(tex_obj + kTex_Type) & kTexTypeMovie) != 0;
-    std::shared_ptr<const Texture> tex = DecodeCached(g, f, d3d, S().texs, fc, movie);
-    if (tex->rgba.empty()) {
+    const uint32_t type = g.U32(tex_obj + kTex_Type);
+    const bool movie = (type & kTexTypeMovie) != 0;
+    // a render target's pixels are copied on this thread (CaptureTexture), so
+    // decoded here
+    std::shared_ptr<const Texture> tex =
+        DecodeCached(g, f, d3d, S().texs, fc, movie, !IsRenderedType(type));
+    if (!HasPixels(*tex)) {
         fc.untextured_format++;
         return nullptr;
     }
@@ -735,8 +979,9 @@ std::shared_ptr<const Texture> GuestPixels(const Guest& g, uint32_t tex_obj, Fra
 
 // A draw's diffuse texture. A loaded one is decoded from guest memory; one RB3
 // draws at runtime is its identity and version (Texture::tex_obj), with guest
-// memory's pixels only if native_view_rt_fallback is guest, and a sample the
-// capture has to have the pass of. Null when there's nothing to draw it with.
+// memory's pixels only if native_view_rt_fallback is guest and renderer is
+// emulated (RtFallbackGuest), and a sample the capture has to have the pass
+// of. Null when there's nothing to draw it with.
 std::shared_ptr<const Texture> CaptureTexture(const Guest& g, State& s, Sink& sink,
                                               uint32_t tex_obj) {
     FrameCapture& fc = sink.fc;
@@ -755,7 +1000,7 @@ std::shared_ptr<const Texture> CaptureTexture(const Guest& g, State& s, Sink& si
         fc.rt_snapshots++;
     }
     std::shared_ptr<const Texture> pixels;
-    if (g_rt_fallback_guest.load(std::memory_order_relaxed)) pixels = GuestPixels(g, tex_obj, fc);
+    if (RtFallbackGuest()) pixels = GuestPixels(g, tex_obj, fc);
     if (pixels) fc.textured++;
 
     // the same version with the same pixels is the same Texture, so a frame's
@@ -764,9 +1009,11 @@ std::shared_ptr<const Texture> CaptureTexture(const Guest& g, State& s, Sink& si
     if (rt.sampled && rt.sampled->version == version && rt.sampled->tex_type == type &&
         rt.sampled_pixels == pixels) {
         fc.tex_cached++;
+        Lap(s, CaptureProfile::kStepTexRt);
         return rt.sampled;
     }
     auto tex = std::make_shared<Texture>();
+    s.profile.allocs++;
     tex->tex_obj = tex_obj;
     tex->tex_type = type;
     tex->version = version;
@@ -781,6 +1028,7 @@ std::shared_ptr<const Texture> CaptureTexture(const Guest& g, State& s, Sink& si
     }
     rt.sampled = tex;
     rt.sampled_pixels = pixels;
+    Lap(s, CaptureProfile::kStepTexRt);
     return tex;
 }
 
@@ -884,6 +1132,8 @@ void PushDraw(State& s, Sink& sink, DrawItem&& item) {
     }
     item.draw_mode = sink.draw_mode;
     fc.draws.push_back(std::move(item));
+    s.profile.draws++;
+    Lap(s, CaptureProfile::kStepPush);
 }
 
 // an address in a texture's header as the device's fetch constants have it
@@ -929,8 +1179,8 @@ std::shared_ptr<const Texture> CaptureMap(const Guest& g, const uint32_t f[6],
         return nullptr;
     }
     std::shared_ptr<const Texture> tex =
-        DecodeCached(g, f, f[1] & 0xfffff000u, S().map_texs, fc, whole);
-    if (!tex || tex->rgba.empty()) {
+        DecodeCached(g, f, f[1] & 0xfffff000u, S().map_texs, fc, whole, whole);
+    if (!tex || !HasPixels(*tex)) {
         fc.maps_other_format++;
         return nullptr;
     }
@@ -946,9 +1196,12 @@ const Texture* RtMap(const std::shared_ptr<const Texture>& t) {
 // `shade`'s index in fc.shades, which gets it if no equal one is there yet:
 // the same inputs, and the same render targets' versions where it has some
 // as maps already (the same inputs can read another version of one: each
-// character's shadow map); fill_maps decodes a new one's other maps
+// character's shadow map); fill_maps decodes a new one's other maps. `draw`:
+// a draw's (CaptureShade), whose steps are timed as the shade's, not a pass's
+// copied in (AppendPass)
 template <typename FillMaps>
-int32_t InternShade(FrameCapture& fc, ShadeIndex& index, ShadeState&& shade, FillMaps fill_maps) {
+int32_t InternShade(FrameCapture& fc, ShadeIndex& index, ShadeState&& shade, FillMaps fill_maps,
+                    bool draw = false) {
     const ShadeInputs& in = shade;
     const uint64_t hash = HashBytes(&in, sizeof(in));
     auto [first, last] = index.equal_range(hash);
@@ -958,12 +1211,20 @@ int32_t InternShade(FrameCapture& fc, ShadeIndex& index, ShadeState&& shade, Fil
         bool same_rts = true;
         for (int m = 0; m < kNumShadeMaps; m++)
             same_rts &= RtMap(other.maps[m]) == RtMap(shade.maps[m]);
-        if (same_rts) return it->second;
+        if (same_rts) {
+            if (draw) Lap(S(), CaptureProfile::kStepShadeIntern);
+            return it->second;
+        }
     }
+    if (draw) Lap(S(), CaptureProfile::kStepShadeIntern);
     fill_maps(shade);
     const int32_t i = int32_t(fc.shades.size());
     fc.shades.push_back(std::move(shade));
     index.emplace(hash, i);
+    if (draw) {
+        S().profile.new_shades++;
+        Lap(S(), CaptureProfile::kStepShadeStore);
+    }
     return i;
 }
 
@@ -973,10 +1234,14 @@ int32_t InternShade(FrameCapture& fc, ShadeIndex& index, ShadeState&& shade, Fil
 // DrawFaces (and a multimesh's before the next pass's SelectConfig). The spotlight
 // drawer's registers are kept for its cones (ShaderType 2) and, `blur`, a
 // DrawRect blur's taps, c89 (the camera's depth range) for a soft particle,
-// and zeroed for the rest. `mat` 0 for a draw without a material (a cone).
+// and zeroed for the rest. `mat` 0 for a draw without a material (a cone);
+// `default_mat` for a mesh's pass without one, drawn with TheRnd's default
+// material (`mat`), which ShadeInputs::mat then has as kDefaultMaterial
+// (NoMaterial).
 // The index of an equal state already in the sink, or of a new one; -1
 // without a device.
-int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool blur = false) {
+int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool blur = false,
+                     bool default_mat = false) {
     FrameCapture& fc = sink.fc;
     const uint32_t dev = g.U32(kD3DDeviceHolder);
     if (!dev) return -1;
@@ -986,7 +1251,11 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
     in.options = g_shader_options;
     in.shader_type = g_shader_type;
     in.env = g.U32(kEnvironCurrent);
-    for (int i = 0; i < 3; i++) in.eye[i] = g.F32(s.cam + kTrans_WorldXfm + 0x30 + i * 4);
+    // no camera yet: a DrawRect drawn before the first RndCam::Select after
+    // capture came on (nothing keeps s.cam while it's off), at 0 in guest
+    // memory that isn't there
+    if (s.cam)
+        for (int i = 0; i < 3; i++) in.eye[i] = g.F32(s.cam + kTrans_WorldXfm + 0x30 + i * 4);
     for (int r = 0; r < kNumShadeRegs; r++) {
         for (int c = 0; c < 4; c++) {
             in.vs[r][c] = g.F32(dev + kDev_VertexShaderF + kShadeRegs[r] * 16 + c * 4);
@@ -1002,7 +1271,7 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
             std::memset(in.ps[r], 0, sizeof(in.ps[r]));
         }
     }
-    in.mat = mat;
+    in.mat = default_mat ? kDefaultMaterial : mat;
     if (mat) {
         in.next_pass = g.U32(mat + kMat_NextPass);
         in.use_environ = g.U8(mat + kMat_UseEnviron);
@@ -1018,6 +1287,10 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
     // the movie's shader samples its three planes whatever the option word
     // (0): Y s0, cR s2, cB s3 (IsMovie)
     const bool movie = in.shader_type == kMovieShader;
+    // REFRACT_WORLD's samples s1 too, its material's refract normal map
+    // (NgMat::SetupShader binds it with c119 for the shader, which moves
+    // where it reads the picture behind by it), whatever NORMAL_MAP says
+    const bool refract = in.Option(shader_opt::kRefractWorld);
     if (in.Option(shader_opt::kDiffuseMap) || movie) fetch(0, in.fetch_diffuse);
     for (int m = 0; m < kNumShadeMaps; m++) {
         if (kMat_Map[m] && mat) {
@@ -1025,9 +1298,11 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
             // RndCubeTex isn't a DxTex
             if (m != kMapEnviron) in.mat_map_base[m] = TexBase(g, in.mat_maps[m]);
         }
-        if (MapSampled(in, m) || (movie && (m == kMapSpecular || m == kMapGlow)))
+        if (MapSampled(in, m) || (movie && (m == kMapSpecular || m == kMapGlow)) ||
+            (refract && m == kMapNormal))
             fetch(kShadeMapSampler[m], in.fetch[m]);
     }
+    Lap(s, CaptureProfile::kStepShadeRead);
 
     // s5, s1 or s14 bound to a texture a pass draws (the shadow map,
     // NgLight's shadow, a head's normal map): its identity and the version it
@@ -1038,29 +1313,38 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
         if (!base) continue;
         for (const auto& [tex, rt] : s.rts) {
             if (rt.base != base) continue;
+            Lap(s, CaptureProfile::kStepShadeRtsScan);
             shade.maps[m] = CaptureTexture(g, s, sink, tex);
             break;
         }
     }
-    return InternShade(fc, sink.shades, std::move(shade), [&](ShadeState& st) {
-        // the samplers the textures are read with, from the same fetch
-        // constants (none bound: the default)
-        const int32_t aniso = g_aniso_override.load(std::memory_order_relaxed);
-        st.diffuse_sampler = guest_format::DecodeSampler(st.fetch_diffuse, aniso);
-        for (int m = 0; m < kNumShadeMaps; m++)
-            st.samplers[m] = guest_format::DecodeSampler(st.fetch[m], aniso);
-        for (int m = 0; m < kNumShadeMaps; m++)
-            if (st.fetch[m][1] && !st.maps[m]) st.maps[m] = CaptureMap(g, st.fetch[m], fc, movie);
-    });
+    Lap(s, CaptureProfile::kStepShadeRtsScan);
+    return InternShade(
+        fc, sink.shades, std::move(shade),
+        [&](ShadeState& st) {
+            // the samplers the textures are read with, from the same fetch
+            // constants (none bound: the default)
+            const int32_t aniso = g_aniso_override.load(std::memory_order_relaxed);
+            st.diffuse_sampler = guest_format::DecodeSampler(st.fetch_diffuse, aniso);
+            for (int m = 0; m < kNumShadeMaps; m++)
+                st.samplers[m] = guest_format::DecodeSampler(st.fetch[m], aniso);
+            Lap(s, CaptureProfile::kStepShadeFill);
+            for (int m = 0; m < kNumShadeMaps; m++)
+                if (st.fetch[m][1] && !st.maps[m])
+                    st.maps[m] = CaptureMap(g, st.fetch[m], fc, movie);
+            Lap(s, CaptureProfile::kStepShadeFill);
+        },
+        true);
 }
 
 // a draw of `geometry` with material `mat`, for the current camera;
 // sample_texture false leaves its diffuse texture out (a mip downsample's,
 // which is the texture it's drawing); blur: a DrawRect blur, whose taps its
-// shade state keeps
+// shade state keeps; default_mat: `mat` is TheRnd's default, for a mesh's
+// pass without a material (CaptureShade)
 DrawItem MakeItem(const Guest& g, State& s, Sink& sink, uint32_t mat, uint32_t owner,
                   std::shared_ptr<const Geometry> geometry, bool sample_texture = true,
-                  bool blur = false) {
+                  bool blur = false, bool default_mat = false) {
     DrawItem item;
     item.geom = std::move(geometry);
     item.world = Identity();
@@ -1076,9 +1360,10 @@ DrawItem MakeItem(const Guest& g, State& s, Sink& sink, uint32_t mat, uint32_t o
     item.target = sink.target;
     // (a shadow map's depth samples nothing: kShadowmapShader has SKINNED alone)
     const uint32_t tex = g.U32(mat + kMat_DiffuseTex);
+    Lap(s, CaptureProfile::kStepItem);
     if (tex && sample_texture && sink.draw_mode != kDrawModeShadowDepth)
         item.tex = CaptureTexture(g, s, sink, tex);
-    item.shade = CaptureShade(g, s, sink, mat, blur);
+    item.shade = CaptureShade(g, s, sink, mat, blur, default_mat);
     return item;
 }
 
@@ -1091,12 +1376,20 @@ uint8_t CaptureCull(const Guest& g) {
 }
 
 // the mesh's geometry for a pass with material `mat`, or false (and counted)
-// if it draws nothing: no material (left out for now), fur, or no geometry
-bool MeshParts(const Guest& g, FrameCapture& fc, uint32_t mesh, uint32_t mat,
-               std::shared_ptr<const Geometry>& geometry) {
+// if it draws nothing: fur, or no geometry. A pass without a material
+// (RndShader::SelectConfig(null), a mesh without one) draws with TheRnd's
+// default material (every RndShader's Select takes it for null): `mat`
+// becomes that one, and `default_mat` says so (counted, skipped_no_mat).
+bool MeshParts(const Guest& g, FrameCapture& fc, uint32_t mesh, uint32_t& mat,
+               bool& default_mat, std::shared_ptr<const Geometry>& geometry) {
     uint32_t geom = g.U32(mesh + kMesh_GeomOwner);
     if (!geom) geom = mesh;
-    if (!mat) fc.skipped_no_mat++;
+    default_mat = !mat;
+    if (!mat) {
+        fc.skipped_no_mat++;
+        const uint32_t rnd = g.U32(kDrawModeHolder);
+        mat = rnd ? g.U32(rnd + kRnd_DefaultMat) : 0;
+    }
     if (!mat || g.U32(mat + kMat_Fur)) {
         fc.skipped_no_geom++;
         return false;
@@ -1149,29 +1442,240 @@ void CaptureSpotCone(const Guest& g, State& s, Sink& sink, uint32_t mesh) {
     PushDraw(s, sink, std::move(item));
 }
 
+std::string ReadName(const Guest& g, uint32_t p);
+
+// With BAND3_NATIVE_VIEW_LOG_DRAWS set, the first 32 of each captured
+// frame's draws of a kind (`logged`, State's) are logged: the passes drawn
+// without a material, and DxMesh::DrawFaces outside a DrawShowing (which are
+// logged without it too, the session's first 8)
+bool DiagLog(uint32_t& logged) {
+    static const bool on = std::getenv("BAND3_NATIVE_VIEW_LOG_DRAWS") != nullptr;
+    if (!on || !g_enabled.load(std::memory_order_relaxed) || logged >= 32) return false;
+    logged++;
+    return true;
+}
+
+// The name of an object whose Hmx::Object is a virtual base (a RndMesh's,
+// under RndDrawable's and RndTransformable's RndHighlightable), for the logs:
+// the vbtable its vbptr (+4) points at has the virtual bases' offsets from
+// the vbptr, and Hmx::Object's mName is at its +0x18; the first entry that
+// gives a printable name
+std::string VirtualBaseName(const Guest& g, uint32_t obj) {
+    const uint32_t table = obj ? g.U32(obj + 4) : 0;
+    if (table < 0x82000000u || table >= 0x84000000u) return {};
+    for (int k = 1; k <= 3; k++) {
+        const int32_t off = int32_t(g.U32(table + 4 * k));
+        if (off <= 0 || off > 0x1000) continue;
+        const std::string name = ReadName(g, g.U32(obj + 4 + uint32_t(off) + kObj_Name));
+        if (!name.empty() && std::all_of(name.begin(), name.end(),
+                                         [](char c) { return c >= 0x20 && c < 0x7f; }))
+            return name;
+    }
+    return {};
+}
+
+// a pass without a material (MeshParts' default_mat) logged: the mesh, its
+// geometry, where it is and where its vertices land on the screen
+void LogNoMaterial(const Guest& g, const State& s, const Sink& sink, const DrawItem& it,
+                   const char* kind) {
+    const Geometry& geom = *it.geom;
+    float lo[2] = {1e30f, 1e30f}, hi[2] = {-1e30f, -1e30f};
+    uint32_t front = 0, colors = 0;
+    for (const Vertex& v : geom.verts) {
+        const Mat4& w = it.bones.empty() ? it.world
+                                         : it.bones[v.bone[0] < it.bones.size() ? v.bone[0] : 0];
+        float p[3], c[4];
+        for (int i = 0; i < 3; i++)
+            p[i] = v.pos[0] * w.m[0][i] + v.pos[1] * w.m[1][i] + v.pos[2] * w.m[2][i] + w.m[3][i];
+        for (int i = 0; i < 4; i++)
+            c[i] = p[0] * it.view_proj.m[0][i] + p[1] * it.view_proj.m[1][i] +
+                   p[2] * it.view_proj.m[2][i] + it.view_proj.m[3][i];
+        colors |= v.color ^ geom.verts[0].color;
+        if (c[3] <= 1e-3f) continue;
+        front++;
+        for (int i = 0; i < 2; i++) {
+            lo[i] = std::min(lo[i], c[i] / c[3]);
+            hi[i] = std::max(hi[i], c[i] / c[3]);
+        }
+    }
+    REXLOG_INFO("native view: {} without a material: mesh {:08X} '{}', {} verts {} tris{}, "
+                "colour {:08X}{}, at ({:.1f} {:.1f} {:.1f}), on screen x {:.2f}..{:.2f} y "
+                "{:.2f}..{:.2f} ({} verts in front), into {:08X} ({}), camera {:08X}{}, draw "
+                "mode {}, options {:016X} type {}, frame {}",
+                kind, it.mesh, VirtualBaseName(g, it.mesh), geom.verts.size(),
+                geom.indices.size() / 3, it.bones.empty() ? "" : " skinned",
+                geom.verts.empty() ? 0u : geom.verts[0].color, colors ? " (varies)" : "",
+                it.world.m[3][0], it.world.m[3][1], it.world.m[3][2], lo[0], hi[0], lo[1], hi[1],
+                front, sink.target,
+                s.open.tex && s.open.rec ? s.open.rec->pass.name : std::string(), s.cam,
+                s.cam_backbuffer ? " (back buffer)" : "", int(sink.draw_mode), g_shader_options,
+                g_shader_type, s.game_frame);
+}
+
+// a mesh without a material that drew nothing logged: `drawn` false for a
+// DrawShowing that drew no pass (DxMesh::CanDraw: no buffers, not mutable),
+// true for a pass whose geometry the capture couldn't have
+void LogNoMaterialNotDrawn(const Guest& g, const State& s, uint32_t mesh, bool drawn) {
+    uint32_t geom = g.U32(mesh + kMesh_GeomOwner);
+    if (!geom) geom = mesh;
+    const uint32_t faces = g.U32(geom + kMesh_Faces), faces_end = g.U32(geom + kMesh_Faces + 4);
+    REXLOG_INFO("native view: a mesh without a material {}: mesh {:08X} '{}', geometry {:08X} "
+                "'{}' with {} verts {} faces, mutable {}, camera {:08X}{}, frame {}",
+                drawn ? "drew a pass the capture has no geometry for" : "drew no pass", mesh,
+                VirtualBaseName(g, mesh), geom, VirtualBaseName(g, geom),
+                g.U32(geom + kMesh_Verts + 4), (faces_end - faces) / 6,
+                g.U32(geom + kMesh_Mutable), s.cam, s.cam_backbuffer ? " (back buffer)" : "",
+                s.game_frame);
+}
+
 // One material pass of DxMesh::DrawShowing (rb3-xenon rnddx9/Mesh.cpp), which
 // draws the mesh's faces once per pass: RndShader::SelectConfig(mat) then
 // DrawFaces, for its material and each NextPass after it (0 for the first:
-// pass counts them). `mat` is the pass's, null for a mesh without one.
-void CaptureMesh(uint8_t* base, uint32_t mesh, uint32_t mat, uint32_t pass) {
+// pass counts them). `mat` is the pass's, null for a mesh without one;
+// `drawn` false for a DrawShowing that drew no pass, recorded for what it
+// counts.
+// RndVelocityBuffer::DrawMesh's draw (scene_capture.h's VelocityObject):
+// DxMesh::DrawShowing in draw mode 5 hands it the mesh's geometry owner,
+// whose bones it counts and whose faces it draws, with the device set as
+// kept here. Into the frame being captured, apart from its draws; DrawMesh
+// draws none with more bones than the shader has (40).
+constexpr uint32_t kMaxVelocityBones = 40;
+
+void CaptureVelocityObject(const Guest& g, State& s, uint32_t mesh) {
+    if (!g_enabled.load(std::memory_order_relaxed) || !s.building) return;
+    const uint32_t dev = g.U32(kD3DDeviceHolder);
+    if (!dev) return;
+    FrameCapture& fc = *s.building;
+    uint32_t owner = g.U32(mesh + kMesh_GeomOwner);
+    if (!owner) owner = mesh;
+    std::shared_ptr<const Geometry> geometry = CaptureGeometry(g, owner, fc);
+    if (!geometry || geometry->indices.empty()) return;
+    const uint32_t bones = g.U32(owner + kMesh_BonesBegin);
+    const uint32_t bones_end = g.U32(owner + kMesh_BonesEnd);
+    const uint32_t n = bones && bones_end > bones ? (bones_end - bones) / kBone_Size : 0;
+    if (n > kMaxVelocityBones) return;
+    VelocityObject o;
+    o.geom = std::move(geometry);
+    o.mesh = mesh;
+    o.cull = CaptureCull(g);
+    o.skinned = n > 0;
+    o.bones = std::max(n, 1u);
+    auto vs = [&](uint32_t reg, float* out) {
+        for (int c = 0; c < 4; c++) out[c] = g.F32(dev + kDev_VertexShaderF + reg * 16 + c * 4);
+    };
+    for (uint32_t r = 0; r < 8; r++) vs(r, o.view_proj[r]);
+    for (int c = 0; c < 4; c++) o.depth_range[c] = g.F32(dev + kDev_PixelShaderF + 8 * 16 + c * 4);
+    const uint32_t rows = o.bones * 3;
+    o.rows.resize(size_t(rows) * 2 * 4);
+    for (uint32_t i = 0; i < rows; i++) {
+        vs(9 + i, &o.rows[size_t(i) * 4]);
+        vs(129 + i, &o.rows[size_t(rows + i) * 4]);
+    }
+    if (s.velocity_meshes_frame != s.game_frame) {
+        s.velocity_meshes.clear();
+        s.velocity_meshes_frame = s.game_frame;
+    }
+    s.velocity_meshes.push_back({mesh, o.cull});
+    fc.velocity_objects.push_back(std::move(o));
+}
+
+// A world frame's object pass (even/odd rendering: its world's velocity
+// buffer is drawn by the next frame, which the live view's world frame stands
+// in for), as the next frame's DrawMesh will draw it: the meshes the last
+// post frame drew there that this frame's world drew too, each by the
+// palettes the velocity buffer's caches hold for it (this frame's, which
+// DxMesh::SetTransforms cached as the world drew, and the last world's), the
+// camera's view-projection and the previous one (PostParams', as Draw will
+// upload them) and its depth range, into `out`; one the caches lack is left
+// out, as GetXfms leaves it. On frames that draw it, what this gives matched
+// what DrawMesh drew exactly (render_song.b3t's captures).
+void EmulateVelocityObjects(const Guest& g, State& s, FrameCapture& fc,
+                            std::vector<VelocityObject>& out) {
+    const PostParams& p = fc.post;
+    if (!VelocityExpected(p) || s.velocity_meshes.empty()) return;
+    constexpr uint32_t vb = kVelocityBuffer;
+    const uint32_t idx = g.U32(vb + kVel_Index) & 1;
+    const uint32_t caches[2] = {vb + kVel_XfmCaches + idx * kXfmCache_Size,
+                                vb + kVel_XfmCaches + (idx ^ 1) * kXfmCache_Size};
+    for (const State::VelocityMesh& m : s.velocity_meshes) {
+        bool drawn = false;
+        for (const DrawItem& d : fc.draws) drawn |= d.mesh == m.mesh && d.draw_mode == 0;
+        if (!drawn) continue;
+        uint32_t owner = g.U32(m.mesh + kMesh_GeomOwner);
+        if (!owner) owner = m.mesh;
+        const uint32_t mat = g.U32(owner + kMesh_Mat);
+        if (!mat || g.U32(mat + kMat_ZMode) == 2) continue;
+        const uint32_t bones = g.U32(owner + kMesh_BonesBegin);
+        const uint32_t bones_end = g.U32(owner + kMesh_BonesEnd);
+        const uint32_t n = bones && bones_end > bones ? (bones_end - bones) / kBone_Size : 0;
+        if (n > kMaxVelocityBones) continue;
+        const uint32_t count = std::max(n, 1u);
+        // this frame's palette and the last's, where the caches have them
+        uint32_t at[2] = {};
+        bool cached = true;
+        for (int k = 0; k < 2 && cached; k++) {
+            const uint32_t key = g.U32(owner + kMesh_MotionKeys + 4 * (k ? idx ^ 1 : idx));
+            const uint32_t c = caches[k];
+            cached = key + count <= g.U32(c + kXfmCache_Used) && g.U32(c + key * 4) == owner &&
+                     g.U32(c + (key + count - 1) * 4) == owner;
+            at[k] = c + kXfmCache_Floats + key * 48;
+        }
+        if (!cached) continue;
+        std::shared_ptr<const Geometry> geometry = CaptureGeometry(g, owner, fc);
+        if (!geometry || geometry->indices.empty()) continue;
+        VelocityObject o;
+        o.geom = std::move(geometry);
+        o.mesh = m.mesh;
+        o.cull = m.cull;
+        o.skinned = n > 0;
+        o.bones = count;
+        for (int r = 0; r < 4; r++) {
+            for (int c = 0; c < 4; c++) {
+                o.view_proj[r][c] = p.vel_view_proj[c][r];
+                o.view_proj[4 + r][c] = p.vel_prev_view_proj[c][r];
+            }
+            o.depth_range[r] = p.vel_depth_range[r];
+        }
+        o.rows.resize(size_t(count) * 3 * 2 * 4);
+        for (int k = 0; k < 2; k++)
+            for (uint32_t i = 0; i < count * 12; i++)
+                o.rows[size_t(k) * count * 12 + i] = g.F32(at[k] + i * 4);
+        out.push_back(std::move(o));
+    }
+}
+
+void CaptureMesh(uint8_t* base, uint32_t mesh, uint32_t mat, uint32_t pass, bool drawn = true) {
     State& s = S();
     const Guest g{base};
+    // the velocity buffer's object pass, which is no draw of the frame's
+    if (drawn) {
+        const uint32_t holder = g.U32(kDrawModeHolder);
+        if (holder && g.U32(holder + kDrawMode) == kDrawModeVelocity)
+            CaptureVelocityObject(g, s, mesh);
+    }
     std::optional<Sink> sink;
     if (!Target(g, s, sink)) return;
+    Lap(s, CaptureProfile::kStepTarget);
     if (sink->target && s.open.rec && s.open.rec->pass.tex_type == kTexTypeDepthVolume &&
         g_shader_type == kDepthVolumeShader) {
         CaptureSpotCone(g, s, *sink, mesh);
         return;
     }
     std::shared_ptr<const Geometry> geometry;
-    if (!MeshParts(g, sink->fc, mesh, mat, geometry)) return;
+    bool default_mat = false;
+    if (!MeshParts(g, sink->fc, mesh, mat, default_mat, geometry)) {
+        if (default_mat && DiagLog(s.logged_no_mat)) LogNoMaterialNotDrawn(g, s, mesh, drawn);
+        return;
+    }
     if (pass) sink->fc.later_passes++;
 
-    DrawItem item = MakeItem(g, s, *sink, mat, mesh, std::move(geometry));
+    DrawItem item =
+        MakeItem(g, s, *sink, mat, mesh, std::move(geometry), true, false, default_mat);
     item.world = ReadXfm(g, mesh + kMesh_WorldXfm);
     item.cull = CaptureCull(g);
     const uint32_t bones = g.U32(mesh + kMesh_BonesBegin);
     const uint32_t bones_end = g.U32(mesh + kMesh_BonesEnd);
+    Lap(s, CaptureProfile::kStepItem);
     if (bones && bones_end > bones) {
         const uint32_t n = std::min((bones_end - bones) / kBone_Size, kMaxBones);
         item.bones.resize(n);
@@ -1182,7 +1686,11 @@ void CaptureMesh(uint8_t* base, uint32_t mesh, uint32_t mat, uint32_t pass) {
                                         ReadXfm(g, trans + kTrans_WorldXfm))
                                   : Identity();
         }
+        s.profile.bones += n;
+        Lap(s, CaptureProfile::kStepBones);
     }
+    if (default_mat && DiagLog(s.logged_no_mat))
+        LogNoMaterial(g, s, *sink, item, "a mesh's pass");
     PushDraw(s, *sink, std::move(item));
 }
 
@@ -1197,12 +1705,17 @@ void CaptureMultiMesh(uint8_t* base, uint32_t multimesh, uint32_t mat, uint32_t 
     const uint32_t mesh = g.U32(multimesh + kMultiMesh_Mesh);
     std::optional<Sink> sink;
     if (!mesh || !Target(g, s, sink)) return;
+    Lap(s, CaptureProfile::kStepTarget);
     std::shared_ptr<const Geometry> geometry;
-    if (!MeshParts(g, sink->fc, mesh, mat, geometry)) return;
+    bool default_mat = false;
+    if (!MeshParts(g, sink->fc, mesh, mat, default_mat, geometry)) return;
     if (pass) sink->fc.later_passes++;
 
-    DrawItem proto = MakeItem(g, s, *sink, mat, mesh, std::move(geometry));
+    DrawItem proto =
+        MakeItem(g, s, *sink, mat, mesh, std::move(geometry), true, false, default_mat);
     proto.cull = CaptureCull(g);
+    if (default_mat && DiagLog(s.logged_no_mat))
+        LogNoMaterial(g, s, *sink, proto, "a multimesh's pass");
     // std::list with its sentinel node inline: next at +0, the Instance at +8
     const uint32_t head = multimesh + kMultiMesh_Instances;
     uint32_t n = 0;
@@ -1233,13 +1746,13 @@ void CountFacesElsewhere(const Guest& g, uint32_t geom) {
     }
     if (fc) fc->faces_elsewhere++;
     static int logged = 0;
-    if (logged < 8) {
+    if (logged < 8 || DiagLog(s.logged_elsewhere)) {
         logged++;
-        REXLOG_INFO("native view: DxMesh::DrawFaces of {:08X} outside a DrawShowing, material "
-                    "{:08X}, draw mode {}, into {:08X} ({}), camera {:08X}{}",
-                    geom, g_selected_mat, mode, s.open.tex,
+        REXLOG_INFO("native view: DxMesh::DrawFaces of {:08X} '{}' outside a DrawShowing, "
+                    "material {:08X}, draw mode {}, into {:08X} ({}), camera {:08X}{}, frame {}",
+                    geom, VirtualBaseName(g, geom), g_selected_mat, mode, s.open.tex,
                     s.open.tex && s.open.rec ? s.open.rec->pass.name : std::string(), s.cam,
-                    s.cam_backbuffer ? " (back buffer)" : "");
+                    s.cam_backbuffer ? " (back buffer)" : "", s.game_frame);
     }
 }
 
@@ -1252,6 +1765,7 @@ void CaptureParticles(uint8_t* base, uint32_t sys) {
     const uint32_t mat = g.U32(sys + kPart_Mat);
     std::optional<Sink> sink;
     if (!mat || !g.U32(sys + kPart_NumActive) || !s.cam || !Target(g, s, sink, true)) return;
+    Lap(s, CaptureProfile::kStepTarget);
 
     // the camera's right (x) and up (z) axes; Milo cameras look down +y. The
     // quad's own are VS c47 and c48, which DxParticleSys::DrawShowing sets
@@ -1282,13 +1796,11 @@ void CaptureParticles(uint8_t* base, uint32_t sys) {
          p = g.U32(p + kParticle_Next), n++) {
         float pos[3], col[4];
         for (int i = 0; i < 3; i++) pos[i] = g.F32(p + kParticle_Pos + i * 4);
-        for (int i = 0; i < 4; i++)
-            col[i] = std::clamp(g.F32(p + kParticle_Color + i * 4), 0.0f, 1.0f);
+        for (int i = 0; i < 4; i++) col[i] = g.F32(p + kParticle_Color + i * 4);
         const float size = g.F32(p + kParticle_Size);
         const float angle = g.F32(p + kParticle_Angle);
         const float swing = g.F32(p + kParticle_SwingArm);
-        uint32_t rgba = 0;
-        for (int i = 0; i < 4; i++) rgba |= uint32_t(col[i] * 255.0f + 0.5f) << (8 * i);
+        const uint32_t rgba = ParticleColor(col);  // unclamped, as the game packs it
         const uint16_t first = uint16_t(geom->verts.size());
         for (int k = 0; k < 4; k++) {
             Vertex v{};
@@ -1301,6 +1813,8 @@ void CaptureParticles(uint8_t* base, uint32_t sys) {
                              {first, uint16_t(first + 1), uint16_t(first + 2), first,
                               uint16_t(first + 2), uint16_t(first + 3)});
     }
+    s.profile.allocs++;
+    Lap(s, CaptureProfile::kStepParticleGeom);
     if (geom->indices.empty()) return;
     sink->fc.particles += n;
     DrawItem item = MakeItem(g, s, *sink, mat, sys, std::move(geom));
@@ -1326,6 +1840,7 @@ void CaptureRect(uint8_t* base, uint32_t rnd, uint32_t rect_ptr, uint32_t mat, i
     const Guest g{base};
     std::optional<Sink> sink;
     if (!rect_ptr || !Target(g, s, sink, false, true)) return;
+    Lap(s, CaptureProfile::kStepTarget);
 
     // the bound target's size: the texture's, or its mip level's while
     // FinishDrawTarget builds them; else the screen's
@@ -1392,6 +1907,8 @@ void CaptureRect(uint8_t* base, uint32_t rnd, uint32_t rect_ptr, uint32_t mat, i
         geom->verts.push_back(v);
     }
     geom->indices = {0, 1, 2, 0, 2, 3};
+    s.profile.allocs++;
+    Lap(s, CaptureProfile::kStepRectGeom);
 
     DrawItem item;
     if (mat) {
@@ -1437,6 +1954,7 @@ void DropOpenPass(State& s) {
     if (s.open.tex) s.building->passes_unbalanced++;
     s.open = OpenPass{};
     g_pass_recording.store(false, std::memory_order_relaxed);
+    SetPassWantsDraws(false);
 }
 
 // The most frames apart even/odd rendering draws the world now: 2 at 30 fps
@@ -1460,7 +1978,9 @@ bool RecentlyMade(const RtState& rt, uint64_t frame) {
 // off, a texture drawn into regularly isn't recorded once it has been twice in
 // a row: the crowd's impostor, blurs and the rest are drawn again every frame
 // (or world frame), and a capture records them itself then. One drawn once, or
-// twice (made, then made again), is.
+// twice (made, then made again), is. The same rule keeps the emulated GPU
+// drawing a pass while it skips the game's draws (gpu_skip.h): one that isn't
+// regular is drawn, so what RB3 makes once is there after F8 back.
 void BeginPass(const Guest& g, uint32_t tex) {
     State& s = S();
     // the same texture again is its camera selected again, which clears it:
@@ -1472,12 +1992,19 @@ void BeginPass(const Guest& g, uint32_t tex) {
     RtState& rt = s.rts[tex];
     rt.base = TexBase(g, tex);
     const bool regular = RecentlyMade(rt, s.game_frame) && rt.repeats >= 1;
+    SetPassWantsDraws(!regular);
     s.open.tex = tex;
     s.open.record = capturing || !regular;
     g_pass_recording.store(s.open.record, std::memory_order_relaxed);
     if (!s.open.record) return;
     if (!capturing) g_rec_recorded.fetch_add(1, std::memory_order_relaxed);
     s.open.rec = std::make_shared<PassRecord>();
+    s.profile.allocs++;
+    // as much as its last pass drew
+    if (rt.last) {
+        s.open.rec->content.draws.reserve(rt.last->content.draws.size());
+        s.open.rec->content.shades.reserve(rt.last->content.shades.size());
+    }
     Pass& p = s.open.rec->pass;
     p.tex_obj = tex;
     p.width = g.U32(tex + kTex_Width);
@@ -1562,6 +2089,7 @@ void AppendPass(State& s, FrameCapture& fc, const PassRecord& rec) {
     }
     fc.passes.push_back(std::move(p));
     s.samples.insert(s.samples.end(), rec.samples.begin(), rec.samples.end());
+    Lap(s, CaptureProfile::kStepPassAppend);
 }
 
 void AddCounts(FrameCapture& to, const FrameCapture& from) {
@@ -1598,9 +2126,14 @@ bool AllLeftOut(const FrameCapture& content) {
 // pass becomes its last, and the capturing frame's next pass; one that drew
 // nothing kept (the velocity buffer's) is left out, though one whose draws
 // were all left out is still its last, so a capture sampling it counts it as
-// such (rt_filtered) rather than missing.
+// such (rt_filtered) rather than missing. One whose camera cleared it and
+// that drew nothing else is kept with no draws: the clear is what it made
+// (NgSpotlightDrawer clears the depth volume to opaque black with no cone in
+// view, and blurs it after; without the clear the blurs would blur whatever
+// the target held before).
 void EndPass(uint32_t tex) {
     State& s = S();
+    SetPassWantsDraws(false);
     if (s.open.tex != tex) DropOpenPass(s);
     RtState& rt = s.rts[tex];
     rt.version++;
@@ -1618,7 +2151,9 @@ void EndPass(uint32_t tex) {
     rec->pass.draw_count = uint32_t(rec->content.draws.size());
     // what it left out (velocity) counts in the frame either way
     if (capturing) AddCounts(*s.building, rec->content);
-    if (rec->content.draws.empty()) {
+    const bool clear_only = rec->content.draws.empty() && rec->pass.cam &&
+                            (rec->pass.clear_flags & 0x0f) && !AllLeftOut(rec->content);
+    if (rec->content.draws.empty() && !clear_only) {
         if (capturing) s.building->passes_empty++;
         if (AllLeftOut(rec->content)) {
             // kept for the frame too: later passes into the same texture can
@@ -1671,7 +2206,8 @@ void CarryPasses(State& s, FrameCapture& fc) {
             fc.rt_missing++;
             continue;
         }
-        if (found->content.draws.empty()) {
+        // (one that only cleared is carried: its clear is what it made)
+        if (AllLeftOut(found->content)) {
             fc.rt_filtered++;
             fc.rt_filtered_keys.push_back(key);
             continue;
@@ -1683,12 +2219,21 @@ void CarryPasses(State& s, FrameCapture& fc) {
             if (seen.insert(k).second) todo.push_back(k);
     }
     fc.rt_sampled = uint32_t(seen.size());
+    Lap(s, CaptureProfile::kStepCarry);
     if (carried.empty()) return;
 
     std::vector<DrawItem> own_draws = std::move(fc.draws);
     std::vector<Pass> own_passes = std::move(fc.passes);
     fc.draws.clear();
     fc.passes.clear();
+    size_t draws = own_draws.size(), shades = fc.shades.size();
+    for (const PassRecord* rec : carried) {
+        draws += rec->content.draws.size();
+        shades += rec->content.shades.size();
+    }
+    fc.draws.reserve(draws);
+    fc.passes.reserve(own_passes.size() + carried.size());
+    fc.shades.reserve(shades);
     // what a carried pass samples was found after it, so goes before it
     for (auto it = carried.rbegin(); it != carried.rend(); ++it) AppendPass(s, fc, **it);
     fc.passes_carried = uint32_t(carried.size());
@@ -1699,6 +2244,7 @@ void CarryPasses(State& s, FrameCapture& fc) {
     }
     for (DrawItem& d : own_draws) fc.draws.push_back(std::move(d));
     if (fc.post_boundary != FrameCapture::kNoPost) fc.post_boundary += shift;
+    Lap(s, CaptureProfile::kStepCarry);
 }
 
 // What post-processing is set to do, at DxRnd::DoPostProcess: the proc
@@ -1762,6 +2308,31 @@ void ReadPostParams(const Guest& g, PostParams& p) {
         p.cam_zrange[0] = g.F32(cam + kCam_ZRange);
         p.cam_zrange[1] = g.F32(cam + kCam_ZRange + 4);
     }
+    // The velocity buffer, as Draw will find it: EndWorld's
+    // CacheCameraSettings (in DoWorldEnd, before this) set the camera's
+    // matrix and frustum, and Draw keeps the matrix at index idx and reads
+    // the previous one at idx ^ 1 before AdvanceFrame flips idx
+    constexpr uint32_t vb = kVelocityBuffer;
+    if (g.U32(vb + kVel_Tex)) {
+        p.vel_read = 1;
+        p.vel_on = p.proc ? g.U8(p.proc + kPostProc_MotionBlurVelocity) != 0 : 0;
+        const uint32_t ng = g.U32(kNgRndHolder);
+        p.vel_pre_depth = ng && g.U32(ng + kNgRnd_PreDepth) != 0;
+        const uint32_t world = g.U32(rnd + kRnd_WorldCam);
+        p.vel_same_cam = world && g.U32(vb + kVel_Cam) == world && g.U32(vb + kVel_LastCam) == world;
+        p.vel_frame = g.U32(vb + kVel_Frame);
+        p.vel_scale = g.F32(vb + kVel_Scale);
+        const uint32_t prev = vb + kVel_Xfms + 64 * ((g.U32(vb + kVel_Index) & 1) ^ 1);
+        for (int r = 0; r < 4; r++) {
+            for (int c = 0; c < 4; c++) {
+                p.vel_view_proj[r][c] = g.F32(vb + kVel_ViewProj + r * 16 + c * 4);
+                p.vel_prev_view_proj[r][c] = g.F32(prev + r * 16 + c * 4);
+                p.vel_corners[r][c] = g.F32(vb + kVel_FrustumCorners + r * 16 + c * 4);
+            }
+            p.vel_depth_range[r] = g.F32(vb + kVel_DepthRange + r * 4);
+        }
+        for (int c = 0; c < 3; c++) p.vel_near[c] = g.F32(vb + kVel_FrustumNear + c * 4);
+    }
 }
 
 // pixel shader constant `reg` from the device's shadow
@@ -1784,6 +2355,15 @@ void ReadPostConsts(const Guest& g, PostConsts& pc) {
     ReadPsConst(g, dev, 122, pc.c122);
     ReadPsConst(g, dev, 125, pc.c125);
     ReadPsConst(g, dev, 127, pc.c127);
+    // the velocity pass's, as RndVelocityBuffer::Draw left them (replay's
+    // "velocity:" line sets them against PostParams' vel_*), and the samplers
+    // the composite blurs the scene by
+    ReadPsConst(g, dev, 89, pc.c89);
+    for (int r = 0; r < 4; r++) ReadPsConst(g, dev, 134 + r, pc.c134[r]);
+    for (int i = 0; i < 6; i++) {
+        pc.scene_fetch[i] = g.U32(dev + kDev_TextureFetch + kSceneSampler * 24 + i * 4);
+        pc.velocity_fetch[i] = g.U32(dev + kDev_TextureFetch + kVelocitySampler * 24 + i * 4);
+    }
     if (const uint32_t sm = g.U32(kShaderMgrHolder)) {
         for (int i = 0; i < int(sizeof(pc.flags)); i++) pc.flags[i] = g.U8(sm + kPostFlagBase + i);
         pc.spot_flag = g.U8(sm + kPostFlagSpot);
@@ -1850,6 +2430,12 @@ void ReadBlurTaps(const Guest& g, float offsets[N][4], float weights[N][4]) {
 void HoldIfRequested(const std::shared_ptr<const FrameCapture>& frame) {
     std::unique_lock lock(g_held.mutex);
     if (!g_held.armed) return;
+    // While the emulated GPU skips the game's draws (gpu_skip.h) its picture
+    // isn't this frame's: neither taken nor counted until it has drawn
+    // kWholeFramesToHold frames whole in a row, this one and the ones before
+    // (what it builds up over frames back too, not just the frame), which
+    // the harness's capture asks for (RequestFullFrames) before it holds one.
+    if (EmulatedWholeFrames() < kWholeFramesToHold) return;
     if (g_held.skip > 0) {
         g_held.skip--;
         return;
@@ -1970,6 +2556,23 @@ void LogGammaIfChanged(const GammaRamp& g) {
                 curve);
 }
 
+// `from`'s vectors emptied into `to`'s, which keeps their memory: a frame's
+// draws and shades come to a megabyte or two, which allocated afresh each
+// frame cost the game's thread its pages' first touches and the copies as
+// they grow
+void Recycle(FrameCapture& from, FrameCapture& to) {
+    from.draws.clear();
+    from.shades.clear();
+    from.passes.clear();
+    from.cameras.clear();
+    from.rt_filtered_keys.clear();
+    to.draws.swap(from.draws);
+    to.shades.swap(from.shades);
+    to.passes.swap(from.passes);
+    to.cameras.swap(from.cameras);
+    to.rt_filtered_keys.swap(from.rt_filtered_keys);
+}
+
 // The frame's end, under g_state_mutex: the frame captured, for
 // HoldIfRequested once that's let go, or null while capture is off
 std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
@@ -1977,15 +2580,18 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
     // passes close within the frame they start in
     if (s.open.tex) DropOpenPass(s);
     const uint64_t game_frame = s.game_frame++;
+    s.profile.frames++;
     if (!g_enabled.load(std::memory_order_relaxed)) {
         FrameCapture& b = *s.building;
         if (!b.draws.empty() || !b.passes.empty() || b.post_boundary != FrameCapture::kNoPost ||
             b.passes_unbalanced) {
             s.building = std::make_shared<FrameCapture>();
+            s.profile.allocs++;
         }
         s.shades.clear();
         s.samples.clear();
         s.left_out.clear();
+        s.logged_no_mat = s.logged_elsewhere = 0;
         // nothing watches textures until capture or recording is on again, so
         // what's known of them would go stale (an address reused, say)
         if (!g_record_targets.load(std::memory_order_relaxed) && !s.rts.empty()) s.rts.clear();
@@ -1993,6 +2599,7 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
         s.last_world.reset();
         return nullptr;
     }
+    s.profile.captured++;
     s.building->frame = ++s.frame;
     s.building->game_frame = game_frame;
     s.building->world_frame = game_frame;
@@ -2003,6 +2610,7 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
         for (int i = 0; i < 4; i++)
             s.building->clear_color[i] = g.F32(rnd + kRnd_ClearColor + i * 4);
     }
+    Lap(s, CaptureProfile::kStepGamma);
     CarryPasses(s, *s.building);
     std::shared_ptr<const FrameCapture> done = s.building;
     // With even/odd rendering, a frame that drew the world is kept for the
@@ -2017,20 +2625,42 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
         s.last_world = whole ? done : nullptr;
     } else if (s.last_world && s.last_world->game_frame + MaxWorldAge() >= game_frame) {
         done = ComposeFrame(*s.last_world, *done);
+        s.profile.allocs++;
     }
+    Lap(s, CaptureProfile::kStepCompose);
+    // the frame published before, let go of after the lock is: the worker
+    // takes it for every frame, and a capture's draws and shades take a while
+    // to free
+    std::shared_ptr<const FrameCapture> old;
     {
         std::lock_guard lock(g_latest_mutex);
-        g_latest = done;
+        old = std::exchange(g_latest, done);
+        g_latest_published = std::chrono::steady_clock::now();
+        g_capture_epoch++;
     }
-    s.building = std::make_shared<FrameCapture>();
+    g_latest_cv.notify_all();
+    auto next = std::make_shared<FrameCapture>();
+    s.profile.allocs++;
+    // nothing else has it (the worker drew it and let go, and it isn't the
+    // world kept for composing): its emptied vectors are the next frame's,
+    // memory and all (made as a FrameCapture, so not const); and room for as
+    // much as this frame had
+    if (old && old.use_count() == 1) Recycle(const_cast<FrameCapture&>(*old), *next);
+    next->draws.reserve(done->draws.size() + done->draws.size() / 8);
+    next->shades.reserve(done->shades.size() + done->shades.size() / 8);
+    old.reset();
+    Lap(s, CaptureProfile::kStepPublish);
+    s.building = std::move(next);
     s.shades.clear();
     s.samples.clear();
     s.left_out.clear();
+    s.logged_no_mat = s.logged_elsewhere = 0;
     s.cam_counted = false;
     // a venue change leaves stale entries behind; start over now and then
     if (s.geoms.size() > 50000) s.geoms.clear();
     if (s.texs.size() > 20000) s.texs.clear();
     if (s.map_texs.size() > 20000) s.map_texs.clear();
+    Lap(s, CaptureProfile::kStepReset);
     return done;
 }
 
@@ -2075,12 +2705,62 @@ std::shared_ptr<const FrameCapture> CaptureHeldFrame(const std::function<void()>
         lock.unlock();
     }
     ReleaseCapture();
+    // its movie planes decoded now the game has gone on
+    if (got && frame) DecodeDeferred(*frame);
     return got ? frame : nullptr;
 }
 
 std::shared_ptr<const FrameCapture> LatestCapture() {
+    std::shared_ptr<const FrameCapture> latest;
+    {
+        std::lock_guard lock(g_latest_mutex);
+        latest = g_latest;
+    }
+    if (latest) DecodeDeferred(*latest);
+    return latest;
+}
+
+std::shared_ptr<const FrameCapture> LatestCapture(
+    std::chrono::steady_clock::time_point& published) {
+    std::shared_ptr<const FrameCapture> latest;
+    {
+        std::lock_guard lock(g_latest_mutex);
+        published = g_latest_published;
+        latest = g_latest;
+    }
+    if (latest) DecodeDeferred(*latest);
+    return latest;
+}
+
+uint64_t CaptureEpoch() {
     std::lock_guard lock(g_latest_mutex);
-    return g_latest;
+    return g_capture_epoch;
+}
+
+uint64_t WaitForCapture(uint64_t epoch, std::chrono::milliseconds timeout) {
+    std::unique_lock lock(g_latest_mutex);
+    g_latest_cv.wait_for(lock, timeout, [epoch] { return g_capture_epoch != epoch; });
+    return g_capture_epoch;
+}
+
+void WakeCaptureWaiters() {
+    {
+        std::lock_guard lock(g_latest_mutex);
+        g_capture_epoch++;
+    }
+    g_latest_cv.notify_all();
+}
+
+std::vector<std::chrono::steady_clock::time_point> GamePresentTimes(
+    std::chrono::steady_clock::time_point since) {
+    std::vector<std::chrono::steady_clock::time_point> out;
+    std::lock_guard lock(g_present_times_mutex);
+    const uint64_t kept = std::min<uint64_t>(g_present_count, kPresentTimes);
+    for (uint64_t i = g_present_count - kept; i < g_present_count; i++) {
+        const auto t = g_present_times[i % kPresentTimes];
+        if (t >= since) out.push_back(t);
+    }
+    return out;
 }
 
 PassRecordingStats GetPassRecordingStats() {
@@ -2093,7 +2773,46 @@ PassRecordingStats GetPassRecordingStats() {
     return out;
 }
 
-bool RtFallbackGuest() { return g_rt_fallback_guest.load(std::memory_order_relaxed); }
+CaptureProfile GetCaptureProfile() {
+    std::lock_guard lock(g_state_mutex);
+    const State& s = S();
+    CaptureProfile p = s.profile;
+    p.steps_on = g_profile_steps.load(std::memory_order_relaxed);
+    p.rts = s.rts.size();
+    p.geoms = s.geoms.size();
+    p.texs = s.texs.size();
+    p.map_texs = s.map_texs.size();
+    p.deferred_decodes = g_deferred_decodes.load(std::memory_order_relaxed);
+    p.deferred_decode_us = g_deferred_decode_ns.load(std::memory_order_relaxed) / 1000;
+    return p;
+}
+
+CaptureProfile CaptureProfileSince(const CaptureProfile& now, const CaptureProfile& before) {
+    CaptureProfile p = now;
+    for (int i = 0; i < CaptureProfile::kNumHooks; i++) {
+        p.hook_ns[i] -= before.hook_ns[i];
+        p.hook_calls[i] -= before.hook_calls[i];
+    }
+    for (int i = 0; i < CaptureProfile::kNumSteps; i++) {
+        p.step_ns[i] -= before.step_ns[i];
+        p.step_calls[i] -= before.step_calls[i];
+    }
+    p.frames -= before.frames;
+    p.captured -= before.captured;
+    p.draws -= before.draws;
+    p.new_shades -= before.new_shades;
+    p.allocs -= before.allocs;
+    p.geom_miss_bytes -= before.geom_miss_bytes;
+    p.tex_decode_bytes -= before.tex_decode_bytes;
+    p.bones -= before.bones;
+    p.deferred_decodes -= before.deferred_decodes;
+    p.deferred_decode_us -= before.deferred_decode_us;
+    return p;
+}
+
+bool RtFallbackGuest() {
+    return g_rt_fallback_guest.load(std::memory_order_relaxed) && !RendererNative();
+}
 
 }  // namespace band3::render
 
@@ -2113,10 +2832,37 @@ void TrackSettings() {
                                           [](std::string_view, std::string_view v) {
                                               g_rt_fallback_guest.store(v != "none");
                                           });
-        g_record_targets.store(REXCVAR_GET(native_view_record_targets));
+        auto profile_steps = [](std::string_view v) {
+            g_profile_steps.store(v == "true" || v == "1");
+        };
+        profile_steps(rex::cvar::GetFlagByName("native_view_capture_profile"));
+        rex::cvar::RegisterChangeCallback(
+            "native_view_capture_profile",
+            [profile_steps](std::string_view, std::string_view v) { profile_steps(v); });
+        // Recorded while renderer is native as well: it draws outfits and
+        // the like from passes RB3 draws once (in the main menu), which
+        // capture must have seen. Turning native on later doesn't bring back
+        // the ones drawn before. And recorded from then on, renderer native
+        // or not: turned off, recording would forget every pass it kept
+        // (FinishFrame clears s.rts) and F8 back to native would show the
+        // outfits wrong, so once native it stays on for the session.
+        auto record = [] {
+            g_record_targets.store(g_record_targets_set.load() || g_renderer_was_native.load());
+        };
+        g_record_targets_set.store(REXCVAR_GET(native_view_record_targets));
+        g_renderer_was_native.store(rex::cvar::GetFlagByName("renderer") == "native");
+        record();
         rex::cvar::RegisterChangeCallback("native_view_record_targets",
-                                          [](std::string_view, std::string_view v) {
-                                              g_record_targets.store(v == "true" || v == "1");
+                                          [record](std::string_view, std::string_view v) {
+                                              g_record_targets_set.store(v == "true" || v == "1");
+                                              record();
+                                          });
+        // (NativePresentDrawer's Stop takes every renderer callback off, this
+        // one too, but only at shutdown)
+        rex::cvar::RegisterChangeCallback("renderer",
+                                          [record](std::string_view, std::string_view v) {
+                                              if (v == "native") g_renderer_was_native.store(true);
+                                              record();
                                           });
         // the SDK's, by name: it lives in the GPU's DLL
         auto aniso = [](std::string_view v) {
@@ -2144,6 +2890,7 @@ extern "C" REX_FUNC(RndCam__Select) {
     // kept while capture is off too if texture passes are recorded then
     if (!Active()) return;
     std::lock_guard lock(g_state_mutex);
+    HookTimer timer(CaptureProfile::kHookOther);
     State& s = S();
     if (cam != s.cam) s.cam_counted = false;
     s.cam = cam;
@@ -2174,8 +2921,9 @@ extern "C" REX_FUNC(DxMesh__DrawShowing) {
     g_mesh_drawing = outer;
     if (passes || !Recording()) return;
     std::lock_guard lock(g_state_mutex);
+    HookTimer hook_timer(CaptureProfile::kHookMesh);
     RecordTimer timer;
-    CaptureMesh(base, mesh, REX_LOAD_U32(mesh + kMesh_Mat), 0);
+    CaptureMesh(base, mesh, REX_LOAD_U32(mesh + kMesh_Mat), 0, false);
 }
 
 // DxMesh::DrawFaces (r3 the geometry owner): one material pass of the
@@ -2190,6 +2938,7 @@ extern "C" REX_FUNC(DxMesh__DrawFaces) {
     const uint32_t pass = mesh ? g_mesh_drawing.passes++ : 0;
     if (!Recording()) return;
     std::lock_guard lock(g_state_mutex);
+    HookTimer hook_timer(CaptureProfile::kHookMesh);
     RecordTimer timer;
     if (mesh) {
         CaptureMesh(base, mesh, g_selected_mat, pass);
@@ -2212,6 +2961,7 @@ extern "C" REX_FUNC(DxMultiMesh__DrawShowing) {
     g_multimesh_drawing = outer;
     if (!Recording()) return;
     std::lock_guard lock(g_state_mutex);
+    HookTimer hook_timer(CaptureProfile::kHookMultiMesh);
     RecordTimer timer;
     if (drawn.passes) {
         CaptureMultiMesh(base, multimesh, drawn.mat, drawn.passes - 1);
@@ -2232,6 +2982,7 @@ extern "C" REX_FUNC(RndShader__SelectConfig) {
     if (multi.multimesh) {
         if (multi.passes && Recording()) {
             std::lock_guard lock(g_state_mutex);
+            HookTimer hook_timer(CaptureProfile::kHookMultiMesh);
             RecordTimer timer;
             CaptureMultiMesh(base, multi.multimesh, multi.mat, multi.passes - 1);
         }
@@ -2247,6 +2998,7 @@ extern "C" REX_FUNC(DxParticleSys__DrawParticles) {
     __imp__DxParticleSys__DrawParticles(ctx, base);
     if (!Recording()) return;
     std::lock_guard lock(g_state_mutex);
+    HookTimer hook_timer(CaptureProfile::kHookParticles);
     RecordTimer timer;
     CaptureParticles(base, sys);
 }
@@ -2261,6 +3013,7 @@ extern "C" REX_FUNC(DxRnd__DrawRect_82733538) {
     __imp__DxRnd__DrawRect_82733538(ctx, base);
     if (!Recording()) return;
     std::lock_guard lock(g_state_mutex);
+    HookTimer hook_timer(CaptureProfile::kHookRect);
     RecordTimer timer;
     CaptureRect(base, rnd, rect, mat, shader, color, color1, color2);
 }
@@ -2283,6 +3036,7 @@ extern "C" REX_FUNC(DxTex__MakeDrawTarget) {
     __imp__DxTex__MakeDrawTarget(ctx, base);
     if (!Active()) return;
     std::lock_guard lock(g_state_mutex);
+    HookTimer timer(CaptureProfile::kHookPass);
     BeginPass(Guest{base}, tex);
 }
 
@@ -2297,11 +3051,13 @@ extern "C" REX_FUNC(DxTex__FinishDrawTarget) {
     }
     {
         std::lock_guard lock(g_state_mutex);
+        HookTimer timer(CaptureProfile::kHookPass);
         State& s = S();
         if (s.open.tex == tex) s.open.in_finish = true;
     }
     __imp__DxTex__FinishDrawTarget(ctx, base);
     std::lock_guard lock(g_state_mutex);
+    HookTimer hook_timer(CaptureProfile::kHookPass);
     RecordTimer timer;
     EndPass(tex);
 }
@@ -2313,6 +3069,7 @@ extern "C" REX_FUNC(DxRnd__MakeDrawTarget) {
     __imp__DxRnd__MakeDrawTarget(ctx, base);
     if (!Active()) return;
     std::lock_guard lock(g_state_mutex);
+    HookTimer timer(CaptureProfile::kHookPass);
     if (S().open.tex) DropOpenPass(S());
 }
 
@@ -2323,6 +3080,7 @@ extern "C" REX_FUNC(DxCam__Select) {
     __imp__DxCam__Select(ctx, base);
     if (!Active()) return;
     std::lock_guard lock(g_state_mutex);
+    HookTimer timer(CaptureProfile::kHookPass);
     CameraSelected(Guest{base}, cam);
 }
 
@@ -2332,6 +3090,7 @@ extern "C" REX_FUNC(DxCam__Select) {
 extern "C" REX_FUNC(RndTex__dt) {
     if (Active()) {
         std::lock_guard lock(g_state_mutex);
+        HookTimer timer(CaptureProfile::kHookPass);
         ForgetTexture(ctx.r3.u32);
     }
     __imp__RndTex__dt(ctx, base);
@@ -2340,18 +3099,29 @@ extern "C" REX_FUNC(RndTex__dt) {
 extern "C" REX_FUNC(DxTex__SyncBitmap) {
     if (Active()) {
         std::lock_guard lock(g_state_mutex);
+        HookTimer timer(CaptureProfile::kHookPass);
         ForgetTexture(ctx.r3.u32);
     }
     __imp__DxTex__SyncBitmap(ctx, base);
 }
+
+// what ProcCommands asked of the frame being drawn, as DxRnd::DoPostProcess
+// found it, for LatchGpuSkip at its Present (whether the emulated GPU's
+// picture is the game's again); -1 until it runs (some menus' frames don't)
+namespace {
+std::atomic<int32_t> g_frame_proc{-1};
+}  // namespace
 
 // DxRnd::DoPostProcess, at its start: where the frame's post-processing
 // begins in its draws, what ProcCommands asked of the frame, and what its
 // post-processing is set to do
 extern "C" REX_FUNC(DxRnd__DoPostProcess) {
     SCOPE_profile_cpu_f("RB3 DxRnd::DoPostProcess");
+    g_frame_proc.store(int32_t(REX_LOAD_U32(ctx.r3.u32 + kRnd_ProcCmds)),
+                       std::memory_order_relaxed);
     if (g_enabled.load(std::memory_order_relaxed)) {
         std::lock_guard lock(g_state_mutex);
+        HookTimer timer(CaptureProfile::kHookOther);
         FrameCapture& fc = *S().building;
         if (fc.post_boundary == FrameCapture::kNoPost) {
             fc.post_boundary = uint32_t(fc.draws.size());
@@ -2365,6 +3135,9 @@ extern "C" REX_FUNC(DxRnd__DoPostProcess) {
                 fc.noise_map = s.noise_map;
                 fc.noise_sampler = s.noise_sampler;
             }
+            // and its motion blur's object pass, the next frame's
+            if ((fc.proc_cmds & kProcWorld) && !(fc.proc_cmds & kProcPost))
+                EmulateVelocityObjects(Guest{base}, S(), fc, fc.velocity_objects);
         }
     }
     __imp__DxRnd__DoPostProcess(ctx, base);
@@ -2376,6 +3149,7 @@ extern "C" REX_FUNC(DxRnd__DoPostProcess) {
 extern "C" REX_FUNC(DxRnd__FinishPostProcess) {
     if (g_enabled.load(std::memory_order_relaxed)) {
         std::lock_guard lock(g_state_mutex);
+        HookTimer timer(CaptureProfile::kHookOther);
         FrameCapture& fc = *S().building;
         if (!fc.post_consts.valid) {
             const Guest g{base};
@@ -2397,6 +3171,7 @@ extern "C" REX_FUNC(NgDOFProc__DoPost) {
     __imp__NgDOFProc__DoPost(ctx, base);
     if (!g_enabled.load(std::memory_order_relaxed)) return;
     std::lock_guard lock(g_state_mutex);
+    HookTimer timer(CaptureProfile::kHookOther);
     PostConsts& pc = S().building->post_consts;
     const Guest g{base};
     if (pc.dof_survey || !g.U8(dof + kDOF_Enabled)) return;
@@ -2410,6 +3185,7 @@ extern "C" REX_FUNC(Bloom_Blur) {
     __imp__Bloom_Blur(ctx, base);
     if (!g_enabled.load(std::memory_order_relaxed)) return;
     std::lock_guard lock(g_state_mutex);
+    HookTimer timer(CaptureProfile::kHookOther);
     PostConsts& pc = S().building->post_consts;
     if (pc.bloom_survey) return;
     pc.bloom_survey = 1;
@@ -2431,6 +3207,7 @@ extern "C" REX_FUNC(NgSpotlightDrawer__BlurRT_824D24D0) {
     uint32_t tex = 0;
     {
         std::lock_guard lock(g_state_mutex);
+        HookTimer timer(CaptureProfile::kHookPass);
         const Guest g{base};
         if (const uint32_t shared = g.U32(kSpotSharedHolder))
             tex = g.U32(shared + kSpotShared_DepthVolume);
@@ -2439,6 +3216,7 @@ extern "C" REX_FUNC(NgSpotlightDrawer__BlurRT_824D24D0) {
     __imp__NgSpotlightDrawer__BlurRT_824D24D0(ctx, base);
     if (!tex) return;
     std::lock_guard lock(g_state_mutex);
+    HookTimer hook_timer(CaptureProfile::kHookPass);
     RecordTimer timer;
     EndPass(tex);
 }
@@ -2456,6 +3234,7 @@ extern "C" REX_FUNC(RndSoftParticleBuffer__DoPost) {
     }
     {
         std::lock_guard lock(g_state_mutex);
+        HookTimer timer(CaptureProfile::kHookPass);
         const Guest g{base};
         State& s = S();
         const uint32_t post = ctx.r3.u32;
@@ -2470,6 +3249,7 @@ extern "C" REX_FUNC(RndSoftParticleBuffer__DoPost) {
     }
     __imp__RndSoftParticleBuffer__DoPost(ctx, base);
     std::lock_guard lock(g_state_mutex);
+    HookTimer timer(CaptureProfile::kHookPass);
     S().soft_surface = 0;
 }
 
@@ -2477,11 +3257,22 @@ extern "C" REX_FUNC(DxRnd__Present) {
     SCOPE_profile_cpu_f("RB3 DxRnd::Present");
     __imp__DxRnd__Present(ctx, base);
     TrackSettings();
+    {
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard lock(g_present_times_mutex);
+        g_present_times[g_present_count++ % kPresentTimes] = now;
+    }
     std::shared_ptr<const FrameCapture> done;
     {
         std::lock_guard lock(g_state_mutex);
+        HookTimer timer(CaptureProfile::kHookPresent);
         done = FinishFrame(base);
     }
+    // whether the emulated GPU draws the next frame, now this one is captured
+    // (so it's skipped only if capture has it whole), and before it's held
+    LatchGpuSkip(g_enabled.load(std::memory_order_relaxed),
+                 g_record_targets.load(std::memory_order_relaxed),
+                 g_frame_proc.exchange(-1, std::memory_order_relaxed));
     // held without the lock, which a texture let go of on another thread
     // meanwhile takes
     if (done) HoldIfRequested(done);

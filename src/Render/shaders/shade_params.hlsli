@@ -29,8 +29,9 @@ static const uint kShadeLegacyLight = 262144u;
 // no PER_PIXEL: lit per vertex, Light() in the vertex shader
 static const uint kShadePerVertex = 524288u;
 // REFRACT_WORLD (option bit 46): the texture's rgb times the picture behind
-// the pixel as post-processing left it (soft_raster.h's RefractsWorld); set
-// only where the backend has that (an overlay draw, after the resolve)
+// the pixel as post-processing left it (soft_raster.h's RefractsWorld), read
+// where shade.hlsli's RefractUv puts it; set only where the backend has that
+// (an overlay draw, after the resolve)
 static const uint kShadeRefract = 1048576u;
 // ENABLE_AO with a point light: the point lights' occlusion is the vertex
 // colour's directional (SH) visibility toward each, AoShVertex, per vertex
@@ -62,6 +63,11 @@ static const uint kShadeBillboard = 134217728u;
 // shade.hlsli's MovieRgb turns to RGB as the game's shader does; a plane the
 // backend doesn't have is neutral
 static const uint kShadeYuv = 268435456u;
+// with kShadeRefract: s1, the material's refract normal map, read in the
+// normal map's slot at the texture's uv, moves where the picture behind is
+// read (RefractUv); without it (none bound, a format not decoded, or a
+// capture from before s1 was kept for it) the picture is read straight behind
+static const uint kShadeRefractMap = 536870912u;
 
 // Register names are the game shaders' (scene_capture.h's kShadeRegs), PS
 // unless VS is said.
@@ -97,4 +103,7 @@ struct ShadeParams {
     // kShadeBillboard's camera right, up and forward (xyz): VS c16..c18's
     // columns, the inverse view
     float4 billboard[3];
+    // REFRACT_WORLD's: x c119.w, how far the refract normal map moves where
+    // the picture behind is read, in clip units (RefractUv)
+    float4 refract;
 };

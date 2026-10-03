@@ -110,6 +110,60 @@ Turn `http_rhythmverse` off (`[http] rhythmverse = false`) to leave the tab out.
 RhythmVerse's API isn't documented, so a change on its side can break the tab until band3
 follows.
 
+## GoCentral (Rock Central)
+
+Rock Band 3's online features (leaderboards, Battles, setlists shared with friends,
+Rock Central's goals) talked to Harmonix's Rock Central, which closed.
+[GoCentral](https://github.com/ihatecompvir/GoCentral) is a fan-run replacement that
+RB3Enhanced players use. Under F4 → Band3 → Online, set `username` (Band3 → Game)
+to a name of your own, turn on `gocentral`, then restart. band3 then logs into
+`gocentral_address`, RB3Enhanced's Xbox 360 server (`gocentral-xbox.rbenhanced.rocks`)
+unless you run your own, as RB3Enhanced does on a console with Xbox Live blocked.
+
+GoCentral knows Xbox players by their name alone, with no password: anyone using
+your name logs in as you. band3 won't connect while `username` is blank or "User",
+every profile's name until you change it.
+
+To see how a connection goes, turn on `log_net_calls` (Band3 → Debug): the log then
+has each of the game's network calls and each step of its Rock Central login.
+
+## Liveless (online play)
+
+Rock Band 3 plays online over Xbox Live, which band3 doesn't have. RB3Enhanced's
+Liveless plays without it, straight from one player's game to another's, and band3
+does the same, so band3 players can play together (and, the game's packets being
+the same, with RB3Enhanced players, though that's untested). Under F4 → Band3 →
+Online, turn on `liveless`, set `username` to your name (others see it), then
+restart.
+
+One player hosts and the others join. Everyone presses Start for the overshell,
+picks **Play on Xbox Live**, backs out of it, then picks Play Now → Quickplay →
+**Find Xbox Live Players**:
+
+- The host leaves `liveless_connect` at `127.0.0.1`: their search finds their own
+  game, so they wait there for players.
+- Each joining player sets `liveless_connect` to the host's address (the local
+  network one on the same network, the public one over the internet). Their search
+  joins the host's band.
+
+Over the internet, as with RB3Enhanced, each player needs their `liveless_port` (UDP
+9103 unless changed) forwarded to their PC and `liveless_external_ip` set to their public IP: the games tell each
+other where to reach them. Only play on one PC and on a local network has been
+tested so far.
+
+Once the others show in the host's band, the host picks **Play With Current
+Lineup** and everyone makes the setlist and plays together. There is no lobby or
+list of games: Live's matchmaking is gone, so searching finds one game, the one at
+`liveless_connect`.
+
+Players should both search: a player who joins a host that only went online from
+the overshell (without Find Xbox Live Players) is turned away, and their game then
+crashes. RB3Enhanced's Liveless Rooms server, for joining by code instead of
+address, isn't supported.
+
+`liveless_port` moves the game to another UDP port, so two band3s on one PC can
+play each other: [`tests/game/liveless.b3t`](../tests/game/liveless.b3t) does that.
+
 ## RB3Enhanced compatibility
 
 ### Script functions

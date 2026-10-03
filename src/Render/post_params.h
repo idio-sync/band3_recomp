@@ -79,6 +79,39 @@ struct PostParams {
     // is under 1 and the duration over 0 (RndPostProc::BlendPrevious)
     float trail_threshold = 0;
     float trail_duration = 0;
+    // The camera motion blur's (velocity blur: NgPostProc::DoVelocity,
+    // RndVelocityBuffer::Draw; out/research/n5_hub_soft.md 3): what
+    // RndVelocityBuffer::sSingleton (0x82E12BA0) holds as DoPostProcess
+    // starts, which a post frame's Draw then reprojects the pre-pass depth
+    // with. vel_read: the singleton has its velocity texture (+0x36C74,
+    // AllocateData ran); vel_on: the proc's mMotionBlurVelocity (+0x1A4);
+    // vel_pre_depth: DxRnd's pre-pass depth texture (+0x340), without which
+    // Draw draws nothing; vel_same_cam: its mCam (+0xA8, the camera
+    // CacheCameraSettings cached) and mLastFrameCamera (+0x36C7C) are TheRnd's
+    // world camera, as Draw is given; vel_frame its mFrame (+0x36C70: frames
+    // since a shot started, CamShot::StartAnim resetting it) and vel_scale its
+    // last c122 (+0x36BE8, min(2, 41.67 / (ms + 1))). Zero in captures from
+    // before (no velocity blur).
+    uint8_t vel_read = 0;
+    uint8_t vel_on = 0;
+    uint8_t vel_pre_depth = 0;
+    uint8_t vel_same_cam = 0;
+    uint32_t vel_frame = 0;
+    float vel_scale = 0;
+    // mViewProjXfm (+0x8), the world camera's view times projection as
+    // CacheCameraSettings left it, and the previous frame's, unk36bec[idx ^
+    // 1] (+0x36BEC + 64 * (idx ^ 1), idx +0x36C6C), which Draw uploads as PS
+    // c134..c137: both as the singleton keeps them (Hmx::Matrix4, rows)
+    float vel_view_proj[4][4] = {};
+    float vel_prev_view_proj[4][4] = {};
+    // mDepthRangeValues (+0x48), which DrawRectDepth sets as PS c89 (near,
+    // far, and the depth texture's scale and bias back to z), and the
+    // camera's frustum (GetCamFrustum: mFrustumNear +0x58 and the four
+    // corner rays mFrustumCorners +0x68, 16 bytes apart), DrawRectDepth's
+    // vertices' TEXCOORD1 and 2
+    float vel_depth_range[4] = {};
+    float vel_near[4] = {};
+    float vel_corners[4][4] = {};
 };
 
 // What RB3's composite drew with, read at DxRnd::FinishPostProcess's start on
@@ -128,6 +161,15 @@ struct PostConsts {
     // post frame (s14) where TheShaderMgr + 0x2F is set; zero in captures
     // from before
     float c125[4] = {};
+    // The velocity blur's, to check PostParams' against (zero in captures
+    // from before): PS c89 and c134..c137 as RndVelocityBuffer::Draw left
+    // them (the depth range and the previous view-projection its pass read),
+    // and the texture fetch constants of sampler 6 (the scene the composite
+    // blurs) and 10 (the velocity texture)
+    float c89[4] = {};
+    float c134[4][4] = {};
+    uint32_t scene_fetch[6] = {};
+    uint32_t velocity_fetch[6] = {};
 };
 
 // TheShaderMgr's flag bytes, as PostConsts::flags indexes them
@@ -141,6 +183,9 @@ inline constexpr int kPostFlagNoise = 0x2D - kPostFlagBase;
 inline constexpr int kPostFlagNoiseMidtone = 0x2E - kPostFlagBase;
 // the trails: the previous post frame, faded, kept where it's brighter
 inline constexpr int kPostFlagBlendPrevious = 0x2F - kPostFlagBase;
+// the camera motion blur (NgPostProc::DoVelocity: RndVelocityBuffer::Draw
+// drew the velocity texture)
+inline constexpr int kPostFlagVelocity = 0x39 - kPostFlagBase;
 inline constexpr int kPostFlagSoft = 0x3F - kPostFlagBase;
 // and PostConsts::spot_flag's, before them
 inline constexpr int kPostFlagSpot = 0x25;
@@ -205,6 +250,14 @@ inline bool NoiseEnabled(const PostParams& p) {
 // 0x2F): a threshold under 1 and a duration
 inline bool BlendPrevious(const PostParams& p) {
     return p.trail_threshold < 1 && p.trail_duration > 0;
+}
+
+// whether NgPostProc::DoVelocity would turn the velocity blur on (TheShaderMgr
+// + 0x39), as far as DoPostProcess's start can tell: the proc has it, Draw has
+// its texture, the pre-pass depth and the camera it cached, and its
+// AdvanceFrame makes this the shot's second frame or later (mFrame + 1 >= 2)
+inline bool VelocityExpected(const PostParams& p) {
+    return p.vel_read && p.vel_on && p.vel_pre_depth && p.vel_same_cam && p.vel_frame >= 1;
 }
 
 // PS c113 as NgPostProc::CheckNoise sets it: (base scale x, y, the top

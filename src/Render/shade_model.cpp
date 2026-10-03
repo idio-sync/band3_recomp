@@ -120,6 +120,14 @@ void ProjUvCpu(const ShadeParams& sp, const float p[3], float out[2]) {
     out[1] = uv.y;
 }
 
+void RefractUvCpu(const ShadeParams& sp, const float clip[2], float w, const float map[4],
+                  float out[2]) {
+    const float2 uv =
+        RefractUv(sp, float2{clip[0], clip[1]}, w, float4{map[0], map[1], map[2], map[3]});
+    out[0] = uv.x;
+    out[1] = uv.y;
+}
+
 void ShadowCoordCpu(const ShadeParams& sp, const float p[3], float out[4]) {
     const float4 s = ShadowCoord(sp, float3{p[0], p[1], p[2]});
     out[0] = s.x;
@@ -182,6 +190,20 @@ void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], co
     out[1] = r.y;
     out[2] = r.z;
     out[3] = r.w;
+}
+
+void RescaleShadowCoord(ShadeParams& sp, uint32_t game_w, uint32_t game_h, uint32_t w,
+                        uint32_t h) {
+    if (!game_w || !game_h || !w || !h || (w == game_w && h == game_h)) return;
+    // u = .5x + (.5 + .5 / game_w) w, so moving its offset is adding w times
+    // the difference; v likewise
+    const float du = 0.5f / float(w) - 0.5f / float(game_w);
+    const float dv = 0.5f / float(h) - 0.5f / float(game_h);
+    float4& u = sp.shadow[0];
+    float4& v = sp.shadow[1];
+    const float4& q = sp.shadow[3];
+    u = {u.x + du * q.x, u.y + du * q.y, u.z + du * q.z, u.w + du * q.w};
+    v = {v.x + dv * q.x, v.y + dv * q.y, v.z + dv * q.z, v.w + dv * q.w};
 }
 
 bool AlphaCutCpu(const ShadeParams& sp, float alpha) { return AlphaCut(sp, alpha); }
@@ -288,8 +310,16 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     }
     if (s->Option(kIntensify)) f |= kShadeIntensify;
     // the backend takes it off where it has no picture to read (before the
-    // resolve, or into a texture)
-    if (RefractsWorld(s)) f |= kShadeRefract;
+    // resolve, or into a texture). Where it reads it moves by the refract
+    // normal map, s1, which NgMat::SetupShader binds with c119 (the strength,
+    // in all four) for this shader whatever the option word's NORMAL_MAP:
+    // where the capture decoded it (scene_capture.cpp keeps s1 for a
+    // REFRACT_WORLD draw), and the backend has it (as a normal map's).
+    if (RefractsWorld(s)) {
+        f |= kShadeRefract;
+        sp.refract = {s->Ps(119)[3], 0, 0, 0};
+        if (o.textures && s->maps[kMapNormal]) f |= kShadeRefractMap;
+    }
     // the luminance in alpha is for the back buffer's bloom: RB3's shaders
     // keep alpha into a texture ("not the main target", out/research/
     // m3_design.md 3), where it's the impostor's cut-out and a layer's blend

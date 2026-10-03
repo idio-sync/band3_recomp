@@ -88,7 +88,7 @@ the virtual instrument.
 ## The settings menu
 
 Press **F4** in game to open the settings menu. band3's own options are under the
-**Band3** categories (Game, Graphics, Integrations, MIDI drums, Microphones, Debug), next
+**Band3** categories (Game, Graphics, Integrations, Online, MIDI drums, Microphones, Debug), next
 to the SDK's window, graphics, audio and input settings. Settings marked as needing a
 restart take effect the next time the game starts; the others apply immediately, or from
 the next time the game loads what they affect (for example, a forced venue applies from

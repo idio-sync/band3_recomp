@@ -14,6 +14,7 @@ microcode, that the native view's shading (`src/Render/shaders/shade.hlsli`) and
 | `hair3.py` | the hair family's model (wrap diffuse, two-colour strand highlight); `python hair3.py <hash>...` |
 | `vs.py` | setup helpers for running vertex shaders in xsim |
 | `crowd.py` | the crowd's billboards (BILLBOARD, option bit 25): their vertex shaders' turn to the camera and light, and their pixel shader; `python crowd.py` checks the model against the microcode |
+| `refract.py` | REFRACT_WORLD's pixel shader (the score box's glass): where it reads the picture behind it, moved by its refract normal map, which `shade.hlsli`'s `RefractUv` is; `python refract.py` checks the model against the microcode, `--cases` prints the cases `tests/shade_model_test.cpp` checks |
 | `movie.py` | the movie's pixel shader (ShaderType 11): a Bink frame's Y, cR and cB planes to RGB, which `shade.hlsli`'s `MovieRgb` is; `python movie.py` checks the model against the microcode, `--cases` prints the cases `tests/shade_model_test.cpp` checks |
 | `lit.py`, `vlit.py` | find each dumped shader's literal constants (c240-c255, which the disassembly leaves out) in the game's shader blobs and write `lits.json` |
 | `gen_shade_cases.py` | prints `kCases` in `tests/shade_model_test.cpp` from the three models |
@@ -21,6 +22,7 @@ microcode, that the native view's shading (`src/Render/shaders/shade.hlsli`) and
 | `post/neg_controls.py` | deliberately wrong post models, which `check_post.py` must fail |
 | `post/check_noise.py` | checks the composite's noise (film grain) term, `post_model.hlsli`'s `NoiseTerm`, against the three straight-line composite variants that have it (glare, DOF, bloom and the spotlights' term around it), taps included; exits 1 on a mismatch |
 | `post/neg_noise.py` | deliberately wrong noise models (overlay per channel, no 6.75, arithmetic mean), which `check_noise.py` must fail |
+| `post/check_velocity.py` | checks the camera motion blur: the velocity pass (`post_model.hlsli`'s `VelocityTexel`) against its microcode, the velocity-and-colour-matrix composite against a model of its 11-tap blur, every dumped composite that reads c122 for the blurred scene standing in for the scene and nothing else, and the object pass's vertex shaders (skinned and not) and pixel shader (`VelocityObject*`); `--neg` runs deliberately wrong blur models, which must fail; exits 1 on a mismatch |
 
 ## Inputs
 

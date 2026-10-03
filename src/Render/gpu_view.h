@@ -42,7 +42,18 @@
 // The display's gamma ramp (gamma_ramp.h) goes over the finished picture
 // last, by shaders/gamma.hlsl's pass, into an output texture the frame is
 // read back from; without a ramp the same pass with an identity lookup,
-// which is exact for 8 bits, so every frame ends in it.
+// which is exact for 8 bits, so every frame ends in it. Every target is the
+// size the CPU's is (soft_raster.h's PassTargetSize: the screen's passes in
+// proportion to a picture bigger than the game's).
+//
+// The overlay is multisampled as the CPU's is (soft_raster.h's
+// OverlaySamples): into a colour and a depth target of 2 (or 4) samples a
+// pixel, which start as the picture (copied into every sample by
+// post.hlsl's PSOverlayStart) and a cleared depth, and resolve into the
+// picture as each of the overlay's passes ends (SDL_GPU_STOREOP_RESOLVE_AND_
+// STORE: the mean of each pixel's samples). Its pipelines are made for that
+// sample count; where the device can't draw it, the other of 2 and 4, else 1
+// (logged).
 //
 // For the native renderer's presentation (renderer = native) that pass writes
 // one of kOutputs textures the SDK's presenter samples where they are, no
@@ -84,6 +95,13 @@ class GpuRenderer {
     bool Init();
     // whether Init made a device
     bool Ready();
+    // Makes every pipeline a frame can ask for and the upload buffer's usual
+    // size, once, if Init made a device: on the UI thread as the native
+    // renderer turns on, so its first frames don't wait for them (a frame
+    // drawn before does it itself), the overlay's for the game's 2 samples a
+    // pixel and for overlay_samples (RasterOptions::msaa, native_view_msaa).
+    // A pipeline made after it is logged ("pipeline made after warm-up").
+    void Prewarm(uint32_t overlay_samples);
     // Draws `frame` at options.width x options.height into rgba (R in the low
     // byte, alpha 0xff): into an output texture of its own, then read back.
     // Any thread, one frame at a time. False without a device or if the GPU

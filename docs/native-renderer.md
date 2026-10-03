@@ -15,10 +15,55 @@ leaving the GPU; where that can't be done (other platforms, `native_view_backend
 `native_present_zero_copy` off) each frame is read back and uploaded instead. The log says
 which (`native present: zero-copy`, or `native present: uploading each frame (<why>)`).
 
+Turning native on makes the native renderer's GPU pipelines first, on the UI thread (about
+100 ms, once a session), so no frame waits for one; the log says `native view gpu: <n>
+pipelines ... in <ms>`, and names any pipeline a frame still had to wait for after that
+(`pipeline made after warm-up: <key> (<ms>)`). Each frame is drawn as soon as the game
+presents it and shown by the window's next paint. With RB3's even/odd rendering (on, as
+the game ships), a frame that draws the world but doesn't post-process it shows what the
+game's does: the last post-processed picture (the world frame before it, with its
+spotlights' beams, smoke and bloom) under its own track and HUD. The test harness's `present_stats`
+measures the window's pacing under either renderer.
+
+While `renderer` is native, the passes RB3 draws into textures are recorded all the time,
+as `native_view_record_targets` does (below), since the native renderer draws outfits and
+the like from them: a little game-thread time while characters load (about 170 ms from boot
+to a song). Once `renderer` has been native, they stay recorded for the rest of the session,
+under the emulated GPU too, so F8 back to native still has the outfits. RB3 composes a
+band's outfits once, in the main menu, so switching to native later (F8) after they were
+composed without recording shows them wrong until RB3 composes them again. To play on the
+native renderer, set it at launch (`--renderer=native`, or in the settings before the main
+menu).
+
+While the native renderer draws the window, the emulated GPU skips the game's draws nobody
+sees (`emulated_gpu_while_native`, `skip_draws` by default): the meshes, instanced meshes and
+quads of every frame the native renderer has whole. It still clears, resolves and swaps, and
+still draws the passes RB3 draws into textures once or now and then (outfits, portraits;
+the first two of any pass), and the lens flares' occlusion tests, so after F8 back to emulated
+its picture is the game's within a few frames (two, and with even/odd rendering a world
+frame drawn whole and the post frame after it, a frame later on screen): the native
+renderer keeps drawing the window until it is (the log says `native present: off, the emulated GPU's picture shows (after <ms>)`).
+The title screen's clouds are the exception found so far: they take 5 to 20 whole frames to
+come back, so the emulated GPU's picture of the title lacks them for a moment after F8 back.
+`capture` under `skip_draws` has the emulated GPU draw 30 whole frames before it holds one,
+so its game screenshot has them. With nothing seen to draw, the emulated GPU's command
+processor does about a third of the work per frame, and the game runs faster uncapped than
+under `emulated`. `full`
+draws everything, as before. `tests/game/soak_native.b3t` soaks the native renderer: three
+songs, menu round trips and F8 both ways in each song.
+
 | Setting | |
 |---|---|
 | `renderer` (Band3 → Graphics) | `emulated` (the default) or `native` |
+| `emulated_gpu_while_native` (Band3 → Graphics) | with `renderer` native, `skip_draws` (the default) leaves the game's draws out of the emulated GPU's work as above; `full` has it draw everything |
+| `native_max_height` (Band3 → Graphics) | the most lines the native renderer draws: a taller window's picture is drawn this tall and scaled up to fill it, for 4K on a GPU that can't keep up at full size. 0 (the default) draws at the window's size |
+| `native_view_msaa` (Band3 → Graphics) | the samples a pixel the native renderer and the native view draw the overlay with (the track, the HUD, menus drawn after the world), averaged at its edges: 2 (the default) as RB3 does, 4 smoother than the game, 1 none. RB3 multisamples only those: the world, its post-processing and every texture pass are single-sampled, in the game and here. Where the GPU can't draw 2 samples it draws 4 (or 4 → 2, else 1; the log says so) |
 | `native_present_zero_copy` (Band3 → Debug) | on (the default) shows the GPU's frames where they are; off reads each back and uploads it, to compare |
+| `native_view_target_scale` (Band3 → Debug) | on (the default) draws the passes that are pictures of the screen (the spotlights' haze and the soft particles' smoke, made at 640x360 and 320x180 for the game's 1280x720) in proportion to the picture: 1.5 times at 1080p, 3 times at 4K. Off keeps the game's sizes, to compare |
+| `native_view_shadow_scale` (Band3 → Debug) | the characters' self-shadow maps at this many times the game's 512x512 (1, the default, to 4): sharper shadow edges, and less of the game's own shadow acne, so further from the game's picture |
+
+Every other pass RB3 draws into a texture (outfits, the crowd's impostors, NgLight's
+projected shadow, heads' normal maps) is drawn at the game's size at any window size.
 
 ## Render checks
 
@@ -28,16 +73,19 @@ what RB3 drew: on the GPU, or on a reference CPU rasterizer. It draws RB3's shad
 its textures as the game's samplers read them (filtered, between mip levels, clamped
 or wrapped), the passes RB3 draws into textures (outfit composites, the crowd's
 impostors, shadow maps, NgLight's projected shadow, heads' normal maps, blurs), its
-post-processing (depth of field, bloom or glare, the spotlights' beams and haze, soft
-particles such as stage smoke, the colour matrix) and, last, the display's gamma ramp.
+post-processing (the camera's motion blur, depth of field, bloom or glare, the spotlights'
+beams and haze, soft particles such as stage smoke, the colour matrix) and, last, the
+display's gamma ramp. The motion blur is the camera's, and the characters' own where
+RB3 draws them into its velocity buffer with their motion, as it does in songs.
 Render checks set its picture against the game's.
 
 | Setting (Band3 → Debug) | |
 |---|---|
 | `native_view_backend` | `gpu` (the default) or `cpu`, the reference rasterizer. The GPU falls back to the CPU when it can't start |
-| `native_view_record_targets` | records the passes RB3 draws into textures all the time, even while the native view is off. Off by default, as it costs a little game-thread time while characters load. Render checks need it from launch: RB3 composes a band's outfits once, in the main menu |
-| `native_view_rt_fallback` | `guest` (the default) also keeps what guest memory holds of a texture RB3 draws, sampled where no recorded pass made it (right only with `--readback_resolve=full`); `none` keeps only which texture and version it is |
+| `native_view_record_targets` | records the passes RB3 draws into textures all the time, even while the native view is off. Off by default, as it costs a little game-thread time while characters load; on regardless once `renderer` has been native in the session. Render checks need it from launch: RB3 composes a band's outfits once, in the main menu |
+| `native_view_rt_fallback` | `guest` (the default) also keeps what guest memory holds of a texture RB3 draws, sampled where no recorded pass made it (right only with `--readback_resolve=full`); `none` keeps only which texture and version it is. While `renderer` is native it's always `none`: what guest memory holds is stale then, as the emulated GPU skips the draws that make it |
 | `native_view_normal_maps` | on (the default) shades normal and detail maps, live and in `capture`'s `.gpu.png`; off shades those materials with the vertex normal, to compare. Captures from before the capture kept the meshes' tangents have none either way |
+| `native_view_capture_profile` | off by default. The test harness's `native_view stats` has `capture`: what capturing cost the game's thread per game frame since `on` or `off`, in all and by kind of hook (`ms_per_frame`: `mesh`, `multimesh`, `particles`, `rect`, `pass`, `present`, `other`), per draw (`us_per_draw`), with counts per frame (`per_frame`) and the caches' `sizes`. On, it also times each step inside the hooks (`steps_ms_per_frame`: `bones`, `shade_read`, `tex_decode`, `publish` and the rest, `rest` what none names), at a clock read per step |
 | `native_view_texture_filtering` | on (the default) samples textures as each draw's fetch constants say: bilinear or point, the mip level (or two, blended) by how far and at what angle the surface is, anisotropy, and wrapping, mirroring or clamping per axis, from the mip chains in guest memory (and a render target's own, made after its pass). As the game's own picture under band3 is drawn, the SDK's `anisotropic_override` (4:1 by default) applies to the samplers it would apply to there. Off reads every texture's nearest texel at full size, as before, to compare; captures from before the capture kept the samplers and mips are drawn so either way |
 
 Launch render checks with:
@@ -81,16 +129,24 @@ in that order from a fresh launch (instead of `boot.b3t`), capture `screen-<kind
 kind of screen RB3 shows: the boot logos, the intro movie, the title, the first-run
 prompts, the band, closet and main menus, practice, the music library, a song's loading
 vignette, the song, its pause menu, a music-video venue, a controller's disconnect
-dialog and the results.
+dialog and the results. `render_screens_more.b3t` (after `boot.b3t`) captures the ones
+that work offline and those don't reach: the character creator and its face maker, the
+career's goals, Play a Show and its setlists, the calibration screens, and on drums the
+trainers and a drum lesson. `render_multiplayer.b3t` plays a song with two players
+(guitar and drums, `screen-mp2-<kind>`), and `render_multiplayer4.b3t` with four parts
+(guitar, drums, keys, and the USB mics' test tone singing through Rock Band 3 Deluxe's
+All Instruments Mode, `screen-mp4-<kind>`; its header has the launch).
 
 Besides the back buffer's draws and the texture passes, a capture keeps the
-characters' shadow-map passes and NgLight's shadow casters, and the display's gamma
-ramp the game was shown through (the screenshot has it). `capture`'s reply:
+characters' shadow-map passes and NgLight's shadow casters, a texture pass whose camera
+cleared it but that drew nothing (the spotlights' depth volume with no cone in view), and
+the display's gamma ramp the game was shown through (the screenshot has it). `capture`'s
+reply:
 
 | Field | |
 |---|---|
 | `draws` | the draws the capture kept |
-| `skipped_pass` | draws left out for their draw mode: the velocity buffer's and other passes the native view doesn't draw |
+| `skipped_pass` | draws left out for their draw mode: the velocity buffer's (kept apart, as the motion blur's objects) and other passes the native view doesn't draw |
 | `skipped_shadow` | shadow-map or shadow-caster draws outside their own pass; 0 expected |
 | `passes`, `passes_carried` | the texture passes in the capture, and those carried in from earlier frames (a band's outfits: there only with `native_view_record_targets` on from launch) |
 | `rt_sampled` | the render target versions the draws sample |
@@ -100,7 +156,9 @@ ramp the game was shown through (the screenshot has it). `capture`'s reply:
 | `proc_cmds` | what the frame drew: 7 everything; with even/odd rendering 1 the world, 2 post-processing; -1 unknown |
 | `composed`, `world_frame`, `game_frame` | the capture has the world of `world_frame` in front of the overlay of its own `game_frame` (a post frame, which shows the world frame before it) |
 | `held_fallback` | no such post frame came in 30 frames, so the capture took the last |
+| `emulated` | `full`: the emulated GPU drew the screenshot's frame (and the one before it) whole. With `renderer` native and `emulated_gpu_while_native` `skip_draws`, `capture` has it draw whole frames for a moment first and holds one of those, so this is `full` too; `stale` if it couldn't |
 | `gpu`, `gpu_ms`, `gpu_passes`, `gpu_rt_missing` | the GPU's `<name>.gpu.png` at the screenshot's size, its time, the texture passes it drew, and its draws that sampled a render target nothing had drawn (drawn transparent black). `gpu_error` instead when there's no GPU device or `native_view_backend` is `cpu` |
+| `gpu_presented` | with `renderer` native at another size than the screenshot's, the GPU's `<name>.gpu.presented.png` at the size it draws the window at, as it draws it there (replay's `--scale` checks it) |
 
 With `native_view_texture_filtering` on, `<name>.gpu.nearest.png` is the GPU's drawing
 of the same capture with it off: the same frame without the game's samplers.
@@ -121,6 +179,9 @@ option). It prints a `post:` line (what post-processing was set to do), a `check
 | `--diff <name>.gpu.png` | the CPU's drawing against that PNG: the GPU checked against the CPU |
 | `--crop x,y,w,h` | measures that rectangle alone (a HUD element, say), in the compared PNG's pixels |
 | `--size WxH` | the size to draw at (640x360) when nothing sets it |
+| `--scale <f>` | draws at f times 1280x720 (or at `--size`, or the PNG's size with `--compare` and `--diff`) with the haze's and smoke's passes f times theirs, as the native renderer draws a window f times 720 lines tall: `--scale 1.5 --diff <name>.gpu.presented.png` for a 1080-line window |
+| `--shadow-scale <f>` | the characters' shadow maps at f times their size (`native_view_shadow_scale`) |
+| `--msaa 1\|2\|4` | the overlay's samples a pixel (`native_view_msaa`): 2 by default, as the game's; 1 as the renderers drew before |
 | `--list` | the passes and every draw: mesh, material, where it lands, what its shader was given, its `cull` (2 `D3DCULL_CW`, 6 `D3DCULL_CCW`); and `shadow:` lines checking each self-shadowed draw's shadow map |
 | `--shade <draw>` | everything one draw's shader was given |
 | `--pick X,Y` | the draw that last wrote that pixel (at `--size`), its colour and shade |
@@ -130,10 +191,12 @@ option). It prints a `post:` line (what post-processing was set to do), a `check
 | `--view alpha\|depth` | draws that view instead of the picture (with `--diff` against those PNGs) |
 | `--dump-bloom <png>` | bloom's first level as the composite read it, after glare's pass |
 | `--rt-none`, `--rt-guest` | never use guest memory's pixels for a render target; or draw no texture passes and use guest memory's alone |
-| `--no-post`, `--post-only xfm\|dof\|bloom\|spot\|soft` | no post-processing; or only the colour matrix, depth of field, bloom (and glare), the spotlights' beams or the soft particles |
+| `--no-post`, `--post-only xfm\|dof\|bloom\|spot\|soft\|noise\|velocity` | no post-processing; or only the colour matrix, depth of field, bloom (and glare), the spotlights' beams, the soft particles, the film grain or the camera's motion blur |
+| `--no-grain`, `--no-velocity`, `--no-velocity-objects` | without the film grain; without the camera's motion blur; with the camera's alone, not the characters' own motion |
 | `--no-gamma`, `--gamma-from <other.cap>` | no gamma ramp; or another capture's |
 | `--no-shadow` | characters without their self-shadows |
 | `--no-normal` | every material with its vertex normal, no normal or detail map |
+| `--no-default-mat` | without the passes RB3 draws with no material of their own, which it draws with its default one (white, prelit) |
 | `--nearest` | every texture's nearest texel at full size, not the game's samplers (`native_view_texture_filtering` off) |
 | `--no-cull` | both sides of every triangle |
 | `--legacy-light`, `--no-light` | the placeholder lighting from before RB3's shading; or every material unlit |
@@ -162,3 +225,20 @@ is missing, and otherwise exits 1 if any capture's `cpu` or `gpu` mean got worse
 more than 0.5 (`--write-baseline` saves over it). The `gpu` rows change only when the
 capture is taken again, not when replay is rebuilt, and numbers from different runs of
 the game aren't comparable: a baseline compares re-renders of the same captures.
+
+`tools/pairs.py` measures F8 pairs: the native renderer's picture and, after F8, the
+emulated GPU's, a moment apart, without `capture`'s whole frames first, so what the
+window shows under each renderer as a player switches. With the game launched
+`--renderer=native` and its window `window offscreen` at `window size 1280x720` (the
+emulated GPU's size), on a still moment (a menu, a paused song):
+
+```
+python tools/pairs.py out/pairs --take title --port <port>   # take one and measure it
+python tools/pairs.py out/pairs --still 2                    # every pair in the set
+```
+
+Each pair gets parity.py's columns and tier, and passes at a mean of 3 or less with no
+4x4 cell over 20. `--take` takes the native picture again after F8 back, and the pair is
+graded by the closer of the two; `--still <mean>` leaves out what moved between them by
+itself, and `<set>/exclude.txt` rectangles by hand. `pairs_sheet.png` shows each pair
+and its difference.

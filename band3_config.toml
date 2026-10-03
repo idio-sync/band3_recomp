@@ -67695,3 +67695,41 @@ address = 0x82579880
 name = "SongCountHook"
 registers = ["r3"]
 after_instruction = true
+
+[[midasm_hook]]
+address = 0x82A88268
+name = "GoCentralBypassSecureGateway"
+registers = ["r11"]
+after_instruction = true
+
+[[midasm_hook]]
+address = 0x824F7170
+name = "GoCentralRockCentralLogin"
+registers = ["r11"]
+after_instruction = true
+
+[[midasm_hook]]
+address = 0x82652AC8
+name = "LivelessAnyInstruments"
+registers = ["r3"]
+after_instruction = false
+
+[[midasm_hook]]
+address = 0x82B39BA0
+name = "LivelessPlainPackets"
+jump_address_on_true = 0x82B39BA4
+
+[[midasm_hook]]
+address = 0x82B39E60
+name = "LivelessPlainPackets"
+jump_address_on_true = 0x82B39E64
+
+[[midasm_hook]]
+address = 0x82B3A5E4
+name = "LivelessPlainPackets"
+jump_address_on_true = 0x82B3A5E8
+
+[[midasm_hook]]
+address = 0x82B3A5F0
+name = "LivelessPlainPackets"
+jump_address_on_true = 0x82B3A5F4

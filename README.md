@@ -8,9 +8,13 @@ Playable, still a work in progress.
 
 This is a fork of [ihatecompvir/band3_recomp](https://github.com/ihatecompvir/band3_recomp).
 Everything it adds was written with the help of AI, which did the vast majority of the
-work.
+work. I wanted something I could keep on my Steam Deck/laptop so I didn't have to lug my
+360 to parties anymore. There are other recomp projects that have not utilized AI as much
+as this one has, if you'd rather go with one of those. This one was put together by me with
+features I wanted to see and use, for my personal use. If you like it, awesome. If not, I
+get it and don't blame you at all. Either way, rock on.
 
-You need your own copy of the game; no game files are included.
+You need your own copy of the game; no game files are included. RB3 Deluxe is highly recommended.
 
 ## Features
 
@@ -34,6 +38,8 @@ You need your own copy of the game; no game files are included.
 - A web page for browsing the song library from a phone and picking the next song, plus RB3Enhanced's web API
 - Searching [RhythmVerse](https://rhythmverse.co) for custom songs from that page, and downloading them into the game without a restart
 - RB3Enhanced's script functions, modifiers and unlock options, so Deluxe's RB3E features work
+- Rock Central's online features (leaderboards, Battles) through [GoCentral](https://github.com/ihatecompvir/GoCentral), as RB3Enhanced connects
+- Online play without Xbox Live, straight to another player's game, as RB3Enhanced's Liveless does
 - Discord Rich Presence
 
 <img src="docs/images/web-song-browser.png" alt="band3's web song browser: the library with album art and part difficulties, and the song now playing" width="520">
@@ -43,8 +49,17 @@ You need your own copy of the game; no game files are included.
 - An in-game settings menu (F4, or both stick clicks), saved to `band3.toml`
 - Configurable save, cache and song folders, including a portable install
 
+**Graphics**
+- An experimental native renderer (`renderer = native` at launch, F8 to switch, F9 for its
+  debug view). band3 draws each frame itself with the game's own shaders, checked against
+  the emulated GPU's picture pixel by pixel, while the emulated GPU skips the draws nobody sees:
+  - Faster: uncapped, 257 fps in the main menu and 285 in a song, against 165 and 163 on
+    the emulated GPU (about 1.6 to 1.75 times)
+  - Sharper: it draws at the window's size, 1080p or 4K, where the emulated GPU draws the
+    console's 720p unless `resolution_scale` is raised, at a high GPU cost
+  - [Native renderer](docs/native-renderer.md) has the details and the settings
+
 **Development**
-- An experimental native renderer (F8 switches to it, F9 opens its debug view)
 - A scriptable test harness, render checks against the game's own picture, unit tests and CI
 - Tracy profiling zones on RB3's engine systems
 
@@ -70,7 +85,7 @@ CI runs and profiling.
 | [Building](docs/building.md) | requirements, Windows and Linux builds, unit tests, compile check, profiling |
 | [Settings, folders and songs](docs/settings.md) | the launcher, the F4 menu, config files, where band3 keeps things, DLC and custom songs, Steam Deck |
 | [Instruments and microphones](docs/instruments.md) | Instrument Lab, PlayStation/Wii dongles, MIDI drums, USB mics, pro instruments, controller lag |
-| [Integrations](docs/integrations.md) | network events, Discord, the web server and its API, RB3Enhanced and Deluxe compatibility |
+| [Integrations](docs/integrations.md) | network events, Discord, the web server and its API, GoCentral, Liveless online play, RB3Enhanced and Deluxe compatibility |
 | [Test harness](docs/test-harness.md) | `band3ctl`: driving the game from scripts, and the game tests |
 | [Native renderer](docs/native-renderer.md) | the native renderer, render checks, capture replay and parity measurement |
 
@@ -97,8 +112,8 @@ Both renderers replace the same part of RB3, its platform render layer (`DxRnd`,
 `DxTex`), and draw the same Milo meshes, materials and cameras. The difference is everything
 around them.
 
-\* Planned, not done. Today the native renderer is experimental and draws on top of the
-emulated GPU, which stays the default. Once it covers every screen, launching with
+\* Planned, not done. Today the native renderer is experimental, and the emulated GPU stays
+the default; under native it still runs, but skips the draws the native renderer has made. Once it covers every screen, launching with
 `renderer = native` will leave the emulated GPU out entirely, and `emulated` will remain as
 a choice at launch.
 

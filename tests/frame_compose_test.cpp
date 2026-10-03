@@ -9,6 +9,7 @@
 #include <doctest/doctest.h>
 #include <cstring>
 #include <memory>
+#include <utility>
 #include <vector>
 #include "src/Render/frame_compose.h"
 
@@ -159,6 +160,53 @@ TEST_CASE("a post frame's capture gets the world frame's world in front of its o
     // the frames it's made from are as they were
     CHECK(world.draws.size() == 5);
     CHECK(post.draws[4].shade == 0);
+}
+
+TEST_CASE("a texture pass that only cleared is kept where it was when composing") {
+    // the post frame's depth volume cleared with no cone after its overlay's
+    // draws, and again after its last draw
+    constexpr uint32_t kVolume = 0x241B4508;
+    const FrameCapture world = WorldFrame();
+    FrameCapture post = PostFrame();
+    post.passes = {MakePass(kComposite, 0, 1, 1, 50), MakePass(kImpostor, 1, 1, 3, 100),
+                   MakePass(0, 2, 3, 0, 101),         MakePass(kVolume, 5, 0, 11, 101),
+                   MakePass(kDof, 5, 1, 4, 101),      MakePass(kVolume, 6, 0, 12, 101)};
+    auto fc = ComposeFrame(world, post);
+    REQUIRE(fc);
+    CHECK(Meshes(*fc) == std::vector<uint32_t>{1, 2, 3, 10, 13, 14, 15});
+    REQUIRE(fc->passes.size() == 7);
+    CHECK(fc->passes[4].tex_obj == kVolume);
+    CHECK(fc->passes[4].version == 11);
+    CHECK(fc->passes[4].first_draw == 6);
+    CHECK(fc->passes[4].draw_count == 0);
+    CHECK(fc->passes[5].tex_obj == kDof);
+    CHECK(fc->passes[5].first_draw == 6);
+    CHECK(fc->passes[6].tex_obj == kVolume);
+    CHECK(fc->passes[6].version == 12);
+    CHECK(fc->passes[6].first_draw == 7);
+    CHECK(fc->passes[6].draw_count == 0);
+    CHECK(fc->passes_own == 4);
+
+    // one before the post frame's post-processing goes with its texture
+    // passes from before (after the composite), unless the world has it
+    post.passes[3].first_draw = 2;
+    post.passes.erase(post.passes.begin() + 5);
+    std::swap(post.passes[2], post.passes[3]);
+    fc = ComposeFrame(world, post);
+    REQUIRE(fc);
+    REQUIRE(fc->passes.size() == 6);
+    CHECK(fc->passes[2].tex_obj == kComposite);
+    CHECK(fc->passes[3].tex_obj == kVolume);
+    CHECK(fc->passes[3].first_draw == 4);
+    CHECK(fc->passes[3].draw_count == 0);
+    CHECK(fc->passes[4].tex_obj == 0);
+    FrameCapture world_has = WorldFrame();
+    world_has.passes.insert(world_has.passes.begin() + 1, MakePass(kVolume, 1, 0, 11, 100));
+    fc = ComposeFrame(world_has, post);
+    REQUIRE(fc);
+    REQUIRE(fc->passes.size() == 6);
+    CHECK(fc->passes[1].tex_obj == kVolume);
+    for (size_t i = 2; i < fc->passes.size(); i++) CHECK(fc->passes[i].tex_obj != kVolume);
 }
 
 TEST_CASE("render targets sampled are counted by version") {

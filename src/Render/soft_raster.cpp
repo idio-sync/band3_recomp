@@ -1,5 +1,6 @@
 #include "src/Render/soft_raster.h"
 
+#include "src/Render/frame_compose.h"
 #include "src/Render/post_model.h"
 #include "src/Render/sample_model.h"
 #include "src/Render/shade_model.h"
@@ -11,6 +12,7 @@
 #include <cstring>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 // See soft_raster.h.
 
@@ -91,6 +93,12 @@ struct Target {
     // the world's depth: the cones draw after it, before the overlay's)
     const float* scene_depth = nullptr;
     uint32_t scene_w = 0, scene_h = 0;
+    // the overlay's, multisampled (OverlaySamples): `samples` colours and
+    // depths per pixel, a pixel's one after another, which its draws write
+    // instead of color and depth, and the frame's end averages into color
+    uint32_t samples = 1;
+    uint32_t* ms_color = nullptr;
+    float* ms_depth = nullptr;
     // the viewport (clip space -1..1 maps to x..x+w, y..y+h), and the pixels
     // it covers, which is all a triangle can reach
     float vx = 0, vy = 0, vw = 0, vh = 0;
@@ -136,7 +144,7 @@ struct DrawState {
     TexView tex;
     TexView spec_map;  // none unless shade samples it
     TexView glow;
-    TexView normal;  // kShadeNormalMap's s1, and kShadeDetailMap's s14
+    TexView normal;  // kShadeNormalMap's s1 (kShadeRefractMap's), and kShadeDetailMap's s14
     TexView detail;
     TexView proj;  // the projected light's s5 and s10, likewise
     TexView gobo;
@@ -145,7 +153,10 @@ struct DrawState {
     uint32_t shadow_w = 0, shadow_h = 0;
     // into a shadow map (Target::zw): depth alone
     bool depth_only = false;
-    TexView behind;  // the target's behind, for kShadeRefract
+    // the target's behind, for kShadeRefract, and its viewport (x, y, w, h),
+    // from which a pixel's clip position is worked out (RefractUv)
+    TexView behind;
+    float view[4] = {};
     // the samplers tex, spec_map, glow, normal and detail are read with
     // (sample_model.h's PackSampler), and whether any of them is the game's,
     // which reads the uv's derivatives
@@ -177,6 +188,35 @@ struct DrawState {
 // position half a pixel right and down instead (mesh.hlsl's VSMain), which
 // lands it on the same pixels.
 float PixelCentre(const DrawItem& it) { return it.rect_shader >= 0 ? 0.5f : 0.0f; }
+
+// Where a multisampled pixel's samples are, from where it samples
+// (PixelCentre), in pixels, y down: D3D's standard 2x and 4x patterns
+// (D3D11_STANDARD_MULTISAMPLE_PATTERN, in 16ths of a pixel: 2x (4,4)
+// (-4,-4); 4x (-2,-6) (6,-2) (-6,2) (2,6)), which the GPU's multisampled
+// targets have (Direct3D 12 and Vulkan both) and the emulated GPU's 2x
+// (diagonal, top left and bottom right) is too. gpu_view.cpp's half-pixel
+// move of a mesh draw moves its samples with it, so they're these about
+// the game's pixel centre either way.
+constexpr float kSamples2[2][2] = {{0.25f, 0.25f}, {-0.25f, -0.25f}};
+constexpr float kSamples4[4][2] = {
+    {-0.125f, -0.375f}, {0.375f, -0.125f}, {-0.375f, 0.125f}, {0.125f, 0.375f}};
+const float (*SamplePositions(uint32_t samples))[2] {
+    return samples == 4 ? kSamples4 : kSamples2;
+}
+
+// A multisampled pixel's samples averaged, as the GPU's resolve does
+// (SDL_GPU_STOREOP_RESOLVE, Direct3D 12's ResolveSubresource: the mean of
+// the samples' UNORM values, back to 8 bits rounding to nearest, half up),
+// and RB3's EndTiling (the mean of its two)
+uint32_t ResolvePixel(const uint32_t* s, uint32_t samples) {
+    uint32_t r = 0;
+    for (int c = 0; c < 4; c++) {
+        uint32_t sum = 0;
+        for (uint32_t k = 0; k < samples; k++) sum += (s[k] >> (8 * c)) & 0xff;
+        r |= ((sum + samples / 2) / samples) << (8 * c);
+    }
+    return r;
+}
 
 // nearest texel, wrapping; mesh.hlsl's Texel does the same arithmetic
 void Texel(const TexView& t, const float uv[2], float out[4]) {
@@ -288,8 +328,8 @@ void Read(const TexView& t, const uint32_t s[4], const float uv[2], const float 
         Texel(t, uv, out);
 }
 
-// pixel x, y's colour; the picture behind it is the one at x, y, the
-// target's size (mesh.hlsl reads it at SV_Position likewise); u and b the
+// pixel x, y's colour; the picture behind it is read where RefractUv puts
+// it, across the target (mesh.hlsl reads it likewise); u and b the
 // tangent and bitangent of a normal-mapped draw. With ds.lod, quad has the
 // uv at the pixels its derivatives are taken between, as the GPU's
 // ddx_fine and ddy_fine take them (RasterTri): the two of its 2x2 quad in
@@ -332,8 +372,17 @@ void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3
         }
     }
     if (ds.behind.px) {
-        const uint32_t c = ds.behind.px[size_t(y) * ds.behind.w + x];
-        for (int i = 0; i < 4; i++) behind[i] = float((c >> (8 * i)) & 0xff) / 255.0f;
+        // the clip position the game's pixel shader is given there (its x, y
+        // over w are where in the viewport the pixel samples), and where its
+        // refract normal map moves that, read bilinear and clamped
+        const float sx = (float(x) + ds.centre - ds.view[0]) / ds.view[2];
+        const float sy = (float(y) + ds.centre - ds.view[1]) / ds.view[3];
+        const float clip[2] = {(sx * 2 - 1) * depth, (1 - sy * 2) * depth};
+        float map[4] = {0.5f, 0.5f, 0, 1}, at[2];
+        if (ds.shade.flags.x & shade::kShadeRefractMap)
+            Read(ds.normal, ds.samp_normal, uv, d, map);
+        shade::RefractUvCpu(ds.shade, clip, depth, map, at);
+        SampleLinear(ds.behind, at[0], at[1], behind);
     }
     float proj[4] = {0, 0, 0, 0}, gobo[4] = {0, 0, 0, 0};
     if (ds.proj.px) {
@@ -444,77 +493,140 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
     };
     const bool own0 = owns(1, 2), own1 = owns(2, 0), own2 = owns(0, 1);
 
+    // the barycentrics at (qx, qy), inside the triangle or not
+    auto bary = [&](float qx, float qy, float l[3]) {
+        l[0] = ((sx[2] - sx[1]) * (qy - sy[1]) - (sy[2] - sy[1]) * (qx - sx[1])) * inv_area;
+        l[1] = ((sx[0] - sx[2]) * (qy - sy[2]) - (sy[0] - sy[2]) * (qx - sx[2])) * inv_area;
+        l[2] = ((sx[1] - sx[0]) * (qy - sy[0]) - (sy[1] - sy[0]) * (qx - sx[0])) * inv_area;
+    };
+    auto inside = [&](const float l[3]) {
+        if (l[0] < 0 || l[1] < 0 || l[2] < 0) return false;
+        return !((l[0] == 0 && !own0) || (l[1] == 0 && !own1) || (l[2] == 0 && !own2));
+    };
+    // the depth tested and written where the barycentrics are l
+    auto depth_at = [&](const float l[3]) {
+        return ds.depth_mapped ? l[0] * dv[0] + l[1] * dv[1] + l[2] * dv[2]
+                               : l[0] * iw[0] + l[1] * iw[1] + l[2] * iw[2];
+    };
+    // pixel x, y's colour, shaded where it samples (px, py; barycentrics l
+    // there, z its 1/w); false if the alpha test drops it
+    auto shade_at = [&](int x, int y, float px, float py, const float l[3], float z,
+                        float col[4]) {
+        const float q0 = l[0] * iw[0] / z, q1 = l[1] * iw[1] / z, q2 = l[2] * iw[2] / z;
+        float uv[2], n[3], vc[4], wp[3];
+        for (int i = 0; i < 2; i++) uv[i] = q0 * a.uv[i] + q1 * b.uv[i] + q2 * c.uv[i];
+        // the uv where the GPU takes its derivatives (Shade): on the
+        // plane the pixel's uv is on, perspective-correct, at the other
+        // pixels of its 2x2 quad, inside the triangle or not
+        float quad[8] = {};
+        if (ds.lod) {
+            auto uv_at = [&](float qx, float qy, float* out) {
+                float m[3];
+                bary(qx, qy, m);
+                const float mz = m[0] * iw[0] + m[1] * iw[1] + m[2] * iw[2];
+                const float r0 = m[0] * iw[0] / mz, r1 = m[1] * iw[1] / mz, r2 = m[2] * iw[2] / mz;
+                for (int i = 0; i < 2; i++) out[i] = r0 * a.uv[i] + r1 * b.uv[i] + r2 * c.uv[i];
+            };
+            const float qx = float(x & ~1) + ds.centre, qy = float(y & ~1) + ds.centre;
+            uv_at(qx, py, quad);
+            uv_at(qx + 1.0f, py, quad + 2);
+            uv_at(px, qy, quad + 4);
+            uv_at(px, qy + 1.0f, quad + 6);
+        }
+        for (int i = 0; i < 3; i++) n[i] = q0 * a.n[i] + q1 * b.n[i] + q2 * c.n[i];
+        for (int i = 0; i < 4; i++) vc[i] = q0 * a.c[i] + q1 * b.c[i] + q2 * c.c[i];
+        for (int i = 0; i < 3; i++) wp[i] = q0 * a.wp[i] + q1 * b.wp[i] + q2 * c.wp[i];
+        float ao[2];
+        for (int i = 0; i < 2; i++) ao[i] = q0 * a.ao[i] + q1 * b.ao[i] + q2 * c.ao[i];
+        float ld[3] = {0, 0, 0}, la[3] = {0, 0, 0};
+        if (ds.per_vertex) {
+            for (int i = 0; i < 3; i++) ld[i] = q0 * a.ld[i] + q1 * b.ld[i] + q2 * c.ld[i];
+            for (int i = 0; i < 3; i++) la[i] = q0 * a.la[i] + q1 * b.la[i] + q2 * c.la[i];
+        }
+        float tu[3] = {0, 0, 0}, tb[3] = {0, 0, 0};
+        if (ds.normal_map) {
+            for (int i = 0; i < 3; i++) tu[i] = q0 * a.u[i] + q1 * b.u[i] + q2 * c.u[i];
+            for (int i = 0; i < 3; i++) tb[i] = q0 * a.b[i] + q1 * b.b[i] + q2 * c.b[i];
+        }
+        if (ds.spot) {
+            SpotPixel(ds, t, x, y, wp, 1.0f / z, col);
+        } else {
+            Shade(ds, x, y, uv, n, vc, wp, 1.0f / z, ao, ld, la, tu, tb, quad, col);
+            if (ds.soft) col[3] *= SoftPixelFade(ds, t, x, y, 1.0f / z);
+        }
+        return !shade::AlphaCutCpu(ds.shade, col[3]);
+    };
+    // whether depth dz passes the test against d, what's there
+    auto passes = [&](float dz, float d) {
+        return !ds.z_test || (ds.z_equal_passes ? !(dz < d * 0.9999f) : !(dz <= d));
+    };
+
+    // Multisampled (the overlay's: Target::samples), as a GPU's MSAA: the
+    // samples the triangle covers, by the same rule as a pixel's centre; a
+    // pixel with any is shaded once, where it samples (its centre, inside the
+    // triangle or not, as the GPU's interpolants are without centroid), and
+    // each covered sample whose depth, its own, passes takes the colour
+    if (t.samples > 1) {
+        const uint32_t ns = t.samples;
+        const float(*pos)[2] = SamplePositions(ns);
+        for (int y = int(min_y); y <= int(max_y); y++) {
+            const float py = float(y) + ds.centre;
+            for (int x = int(min_x); x <= int(max_x); x++) {
+                const float px = float(x) + ds.centre;
+                const size_t idx = size_t(y) * t.w + x;
+                uint32_t* scol = t.ms_color + idx * ns;
+                float* sdep = t.ms_depth + idx * ns;
+                uint32_t pass = 0;
+                float dz[4];
+                for (uint32_t k = 0; k < ns; k++) {
+                    float l[3];
+                    bary(px + pos[k][0], py + pos[k][1], l);
+                    if (!inside(l)) continue;
+                    dz[k] = depth_at(l);
+                    if (passes(dz[k], sdep[k])) pass |= 1u << k;
+                }
+                if (!pass) continue;
+                float l[3];
+                bary(px, py, l);
+                const float z = l[0] * iw[0] + l[1] * iw[1] + l[2] * iw[2];
+                float col[4];
+                if (!shade_at(x, y, px, py, l, z, col)) continue;
+                for (uint32_t k = 0; k < ns; k++) {
+                    if (!(pass & (1u << k))) continue;
+                    // Dest draws no colour
+                    if (ds.blend != 0 || ds.alpha == AlphaRule::kMax) {
+                        scol[k] = Blend(ds.blend, col, scol[k], ds.alpha);
+                        if (k == 0 && t.ids && ds.blend != 0) (*t.ids)[idx] = ds.index;
+                    }
+                    if (ds.z_write) sdep[k] = dz[k];
+                }
+                st.pixels++;
+            }
+        }
+        return;
+    }
+
     for (int y = int(min_y); y <= int(max_y); y++) {
         const float py = float(y) + ds.centre;
         for (int x = int(min_x); x <= int(max_x); x++) {
             const float px = float(x) + ds.centre;
-            const float l0 = ((sx[2] - sx[1]) * (py - sy[1]) - (sy[2] - sy[1]) * (px - sx[1])) * inv_area;
-            const float l1 = ((sx[0] - sx[2]) * (py - sy[2]) - (sy[0] - sy[2]) * (px - sx[2])) * inv_area;
-            const float l2 = ((sx[1] - sx[0]) * (py - sy[0]) - (sy[1] - sy[0]) * (px - sx[0])) * inv_area;
-            if (l0 < 0 || l1 < 0 || l2 < 0) continue;
-            if ((l0 == 0 && !own0) || (l1 == 0 && !own1) || (l2 == 0 && !own2)) continue;
+            float l[3];
+            bary(px, py, l);
+            if (!inside(l)) continue;
             const size_t idx = size_t(y) * t.w + x;
             if (ds.depth_only) {
                 // clip z/w, which runs straight across the screen; LESS
-                const float zw = l0 * a.p[2] * iw[0] + l1 * b.p[2] * iw[1] + l2 * c.p[2] * iw[2];
+                const float zw =
+                    l[0] * a.p[2] * iw[0] + l[1] * b.p[2] * iw[1] + l[2] * c.p[2] * iw[2];
                 if (zw < t.zw[idx]) t.zw[idx] = zw;
                 st.pixels++;
                 continue;
             }
-            const float z = l0 * iw[0] + l1 * iw[1] + l2 * iw[2];
-            const float dz = ds.depth_mapped ? l0 * dv[0] + l1 * dv[1] + l2 * dv[2] : z;
-            if (ds.z_test) {
-                const float d = t.depth[idx];
-                if (ds.z_equal_passes ? dz < d * 0.9999f : dz <= d) continue;
-            }
-            const float q0 = l0 * iw[0] / z, q1 = l1 * iw[1] / z, q2 = l2 * iw[2] / z;
-            float uv[2], n[3], vc[4], wp[3];
-            for (int i = 0; i < 2; i++) uv[i] = q0 * a.uv[i] + q1 * b.uv[i] + q2 * c.uv[i];
-            // the uv where the GPU takes its derivatives (Shade): on the
-            // plane the pixel's uv is on, perspective-correct, at the other
-            // pixels of its 2x2 quad, inside the triangle or not
-            float quad[8] = {};
-            if (ds.lod) {
-                auto uv_at = [&](float qx, float qy, float* out) {
-                    const float m0 =
-                        ((sx[2] - sx[1]) * (qy - sy[1]) - (sy[2] - sy[1]) * (qx - sx[1])) * inv_area;
-                    const float m1 =
-                        ((sx[0] - sx[2]) * (qy - sy[2]) - (sy[0] - sy[2]) * (qx - sx[2])) * inv_area;
-                    const float m2 =
-                        ((sx[1] - sx[0]) * (qy - sy[0]) - (sy[1] - sy[0]) * (qx - sx[0])) * inv_area;
-                    const float mz = m0 * iw[0] + m1 * iw[1] + m2 * iw[2];
-                    const float r0 = m0 * iw[0] / mz, r1 = m1 * iw[1] / mz, r2 = m2 * iw[2] / mz;
-                    for (int i = 0; i < 2; i++) out[i] = r0 * a.uv[i] + r1 * b.uv[i] + r2 * c.uv[i];
-                };
-                const float qx = float(x & ~1) + ds.centre, qy = float(y & ~1) + ds.centre;
-                uv_at(qx, py, quad);
-                uv_at(qx + 1.0f, py, quad + 2);
-                uv_at(px, qy, quad + 4);
-                uv_at(px, qy + 1.0f, quad + 6);
-            }
-            for (int i = 0; i < 3; i++) n[i] = q0 * a.n[i] + q1 * b.n[i] + q2 * c.n[i];
-            for (int i = 0; i < 4; i++) vc[i] = q0 * a.c[i] + q1 * b.c[i] + q2 * c.c[i];
-            for (int i = 0; i < 3; i++) wp[i] = q0 * a.wp[i] + q1 * b.wp[i] + q2 * c.wp[i];
-            float ao[2];
-            for (int i = 0; i < 2; i++) ao[i] = q0 * a.ao[i] + q1 * b.ao[i] + q2 * c.ao[i];
-            float ld[3] = {0, 0, 0}, la[3] = {0, 0, 0};
-            if (ds.per_vertex) {
-                for (int i = 0; i < 3; i++) ld[i] = q0 * a.ld[i] + q1 * b.ld[i] + q2 * c.ld[i];
-                for (int i = 0; i < 3; i++) la[i] = q0 * a.la[i] + q1 * b.la[i] + q2 * c.la[i];
-            }
-            float tu[3] = {0, 0, 0}, tb[3] = {0, 0, 0};
-            if (ds.normal_map) {
-                for (int i = 0; i < 3; i++) tu[i] = q0 * a.u[i] + q1 * b.u[i] + q2 * c.u[i];
-                for (int i = 0; i < 3; i++) tb[i] = q0 * a.b[i] + q1 * b.b[i] + q2 * c.b[i];
-            }
+            const float z = l[0] * iw[0] + l[1] * iw[1] + l[2] * iw[2];
+            const float dz = ds.depth_mapped ? depth_at(l) : z;
+            if (!passes(dz, t.depth[idx])) continue;
             float col[4];
-            if (ds.spot) {
-                SpotPixel(ds, t, x, y, wp, 1.0f / z, col);
-            } else {
-                Shade(ds, x, y, uv, n, vc, wp, 1.0f / z, ao, ld, la, tu, tb, quad, col);
-                if (ds.soft) col[3] *= SoftPixelFade(ds, t, x, y, 1.0f / z);
-            }
-            if (shade::AlphaCutCpu(ds.shade, col[3])) continue;
+            if (!shade_at(x, y, px, py, l, z, col)) continue;
             // Dest draws no colour, but may still write the scene's alpha
             if (ds.blend != 0 || ds.alpha == AlphaRule::kMax) {
                 t.color[idx] = Blend(ds.blend, col, t.color[idx], ds.alpha);
@@ -592,6 +704,9 @@ void ClipAndRaster(const ClipVert& a, const ClipVert& b, const ClipVert& c,
 // up to the one that made `version`
 struct RtTarget {
     uint32_t w = 0, h = 0;
+    // its pass's size in the game (Pass::width, height), which w x h is
+    // unless it's drawn bigger (PassTargetSize)
+    uint32_t game_w = 0, game_h = 0;
     std::vector<uint32_t> color;
     // its mips, made after each pass from what it drew (BuildMips), where
     // the texture has them and filtering is on; empty otherwise
@@ -697,6 +812,11 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
         if (!ds.detail.px) ds.shade.flags.x &= ~shade::kShadeDetailMap;
         if (!ds.normal.px) ds.shade.flags.x &= ~(shade::kShadeNormalMap | shade::kShadeDetailMap);
     }
+    // REFRACT_WORLD's refract normal map is s1 too, read as a normal map is
+    if (ds.shade.flags.x & shade::kShadeRefractMap) {
+        if (!ds.normal.px) ds.normal = NormalMap(state, kMapNormal, o, rts, t, st);
+        if (!ds.normal.px) ds.shade.flags.x &= ~shade::kShadeRefractMap;
+    }
     if (ds.shade.flags.x & (shade::kShadeProjMultiply | shade::kShadeProjGobo)) {
         ds.proj = Projected(state, o, rts, t, st);
         if (ds.shade.flags.x & shade::kShadeProjGobo)
@@ -716,6 +836,8 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
             ds.shadow = f->second.zw.data();
             ds.shadow_w = f->second.w;
             ds.shadow_h = f->second.h;
+            shade::RescaleShadowCoord(ds.shade, f->second.game_w, f->second.game_h, ds.shadow_w,
+                                      ds.shadow_h);
         } else {
             ds.shade.flags.x &= ~shade::kShadeShadow;
         }
@@ -741,10 +863,15 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     ds.normal_map = (ds.shade.flags.x & shade::kShadeNormalMap) != 0;
     // REFRACT_WORLD reads the picture behind it: in the picture, once resolved
     if (ds.shade.flags.x & shade::kShadeRefract) {
-        if (t.behind)
+        if (t.behind) {
             ds.behind = {t.w, t.h, t.behind};
-        else
-            ds.shade.flags.x &= ~shade::kShadeRefract;
+            ds.view[0] = t.vx;
+            ds.view[1] = t.vy;
+            ds.view[2] = t.vw;
+            ds.view[3] = t.vh;
+        } else {
+            ds.shade.flags.x &= ~(shade::kShadeRefract | shade::kShadeRefractMap);
+        }
     }
     const bool ao_sh = (ds.shade.flags.x & shade::kShadeAoSh) != 0;
     const bool billboard = (ds.shade.flags.x & shade::kShadeBillboard) != 0;
@@ -848,24 +975,51 @@ bool Drawable(const DrawItem& it) {
 // offset, blended by its material. The spotlights' blur and NgLight's read
 // their own target as it was (spot::SpotBlur: whole texels apart, so point), the soft
 // particles' the other surface (SoftBlur: half-texel taps, so bilinear).
+// In pass p's target drawn bigger than the game's (PassTargetSize), the
+// rect, in the game's texels, is scaled with it, and each tap reads the
+// texels the game's covers (BlurSubTaps); null p (or its size) is the game's.
 void TapBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o,
-                 const TexView& src, Target& t, RasterStats& st) {
-    const int x0 = std::clamp(int(std::floor(it.rect[0])), 0, int(t.w));
-    const int y0 = std::clamp(int(std::floor(it.rect[1])), 0, int(t.h));
-    const int x1 = std::clamp(int(std::ceil(it.rect[0] + it.rect[2])), x0, int(t.w));
-    const int y1 = std::clamp(int(std::ceil(it.rect[1] + it.rect[3])), y0, int(t.h));
-    if (it.rect[2] <= 0 || it.rect[3] <= 0) return;
+                 const TexView& src, Target& t, RasterStats& st, const Pass* p = nullptr) {
+    float rect[4] = {it.rect[0], it.rect[1], it.rect[2], it.rect[3]};
+    BlurSubTaps sub;
+    if (p && (t.w != p->width || t.h != p->height)) {
+        const float sx = float(t.w) / float(p->width), sy = float(t.h) / float(p->height);
+        rect[0] *= sx;
+        rect[1] *= sy;
+        rect[2] *= sx;
+        rect[3] *= sy;
+        sub = BlurSubTapsFor(s, spot::kSpotBlurTaps, *p, t.w, t.h);
+    }
+    const int x0 = std::clamp(int(std::floor(rect[0])), 0, int(t.w));
+    const int y0 = std::clamp(int(std::floor(rect[1])), 0, int(t.h));
+    const int x1 = std::clamp(int(std::ceil(rect[0] + rect[2])), x0, int(t.w));
+    const int y1 = std::clamp(int(std::ceil(rect[1] + rect[3])), y0, int(t.h));
+    if (rect[2] <= 0 || rect[3] <= 0) return;
     const int blend = o.blending ? it.blend : 1;
     for (int y = y0; y < y1; y++) {
-        const float v = (float(y) + 0.5f - it.rect[1]) / it.rect[3];
+        const float v = (float(y) + 0.5f - rect[1]) / rect[3];
         for (int x = x0; x < x1; x++) {
-            const float u = (float(x) + 0.5f - it.rect[0]) / it.rect[2];
+            const float u = (float(x) + 0.5f - rect[0]) / rect[2];
             float sum[4] = {0, 0, 0, 0};
             for (int i = 0; i < spot::kSpotBlurTaps; i++) {
                 const float* off = s.Ps(31 + i);
                 const float* weight = s.Ps(47 + i);
                 float tap[4];
-                SampleLinear(src, u + off[0], v + off[1], tap);
+                if (sub.count <= 1) {
+                    SampleLinear(src, u + off[0], v + off[1], tap);
+                } else {
+                    // post.hlsl's PSBlur likewise
+                    const float n = float(sub.count);
+                    const float first[2] = {-0.5f * (n - 1) * sub.step[0],
+                                            -0.5f * (n - 1) * sub.step[1]};
+                    float mean[4] = {0, 0, 0, 0};
+                    for (uint32_t j = 0; j < sub.count; j++) {
+                        SampleLinear(src, u + off[0] + first[0] + float(j) * sub.step[0],
+                                     v + off[1] + first[1] + float(j) * sub.step[1], tap);
+                        for (int c = 0; c < 4; c++) mean[c] += tap[c];
+                    }
+                    for (int c = 0; c < 4; c++) tap[c] = mean[c] / n;
+                }
                 for (int c = 0; c < 4; c++) sum[c] += tap[c] * weight[c];
             }
             const size_t idx = size_t(y) * t.w + x;
@@ -879,9 +1033,9 @@ void TapBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o
 // The blur into the target it samples (spot::SpotBlur), as the game does it
 // in place by a resolve: from a copy of the target as it was before it
 void SpotBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o, Target& t,
-                  RasterStats& st) {
+                  RasterStats& st, const Pass& p) {
     const std::vector<uint32_t> before = t.color;
-    TapBlurDraw(it, s, o, {t.w, t.h, before.data()}, t, st);
+    TapBlurDraw(it, s, o, {t.w, t.h, before.data()}, t, st, &p);
 }
 
 
@@ -916,7 +1070,7 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
     // the soft-particle surface
     post::PostPlan post_plan;
     if (o.post && o.view == RasterView::kFinal &&
-        post::PlanPost(f, o.post_only, post_plan, o.grain)) {
+        post::PlanPost(f, o.post_only, post_plan, o.grain, o.velocity)) {
         if (post_plan.composite.flags.x & post::kPostSpot) needed.insert(post_plan.spot_volume);
         if (post_plan.composite.flags.x & post::kPostSoft) needed.insert(post_plan.soft);
     }
@@ -1045,6 +1199,10 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     Target overlay{o.width, o.height, rgba, depth, ids};
     overlay.SetViewport(0, 0, float(o.width), float(o.height));
     Target* back = &world;
+    // the overlay's samples, if it's multisampled (OverlaySamples)
+    const uint32_t samples = OverlaySamples(o);
+    std::vector<uint32_t> ms_color;
+    std::vector<float> ms_depth;
     // the picture as the resolve leaves it, kept if an overlay draw reads it
     std::vector<uint32_t> behind;
     bool refracts = false;
@@ -1054,16 +1212,31 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     }
     post::PostPlan post_plan;
     const bool post_on = o.post && o.view == RasterView::kFinal &&
-                         post::PlanPost(frame, o.post_only, post_plan, o.grain);
+                         post::PlanPost(frame, o.post_only, post_plan, o.grain, o.velocity);
+    // the post buffer (RasterOptions::post_buffer): a post frame's picture
+    // kept, and shown by the frames after it that post-process nothing, in
+    // place of their world, which isn't drawn
+    post::PostHistory* const kept =
+        o.post_buffer && o.view == RasterView::kFinal ? o.post_history : nullptr;
+    const bool shows_kept = kept && ShowsPostBuffer(frame) && kept->picture_w == o.width &&
+                            kept->picture_h == o.height &&
+                            PostBufferFor(frame, kept->picture_frame);
+    const bool keeps = kept && ProcKnown(frame) && (frame.proc_cmds & kProcPost);
     const BackBufferLayout layout = LayoutBackBuffer(frame);
     // the scene into the picture, at post_boundary (or the frame's end):
     // post-processed, or as it is. A view of the scene target ends the frame
     // there. With the capture's cameras, the overlay's depth starts cleared
     // after it, as RB3's does (DxRnd::DoPostProcess clears its offscreen
-    // target's to 0 before the overlay draws: BeginTiling).
-    auto resolve = [&] {
+    // target's to 0 before the overlay draws: BeginTiling). Multisampled,
+    // the overlay's samples start as the picture, each of them, as RB3's
+    // CopyPostProcess draws it into its 2x target, and their depth cleared,
+    // with the cameras, or else the world's (`overlay_follows`: there are
+    // overlay draws to come, not the frame's end).
+    auto resolve = [&](bool overlay_follows) {
         back = &overlay;
-        if (post_on) {
+        if (shows_kept) {
+            rgba = kept->picture;
+        } else if (post_on) {
             // the spotlights' passes, drawn before it (Plan keeps them)
             auto image = [&](uint32_t tex_obj) {
                 const auto f = rts.find(tex_obj);
@@ -1090,12 +1263,31 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                 rgba[i] = g | g << 8 | g << 16 | 0xff000000u;
             }
         }
+        if (keeps) {
+            kept->picture = rgba;
+            kept->picture_w = o.width;
+            kept->picture_h = o.height;
+            kept->picture_frame = frame.game_frame;
+        }
         if (refracts) {
             behind = rgba;
             overlay.behind = behind.data();
         }
-        if (layout.cameras && o.view == RasterView::kFinal)
+        if (samples > 1 && overlay_follows) {
+            ms_color.resize(pixels * samples);
+            ms_depth.resize(pixels * samples);
+            for (size_t i = 0; i < pixels; i++) {
+                for (uint32_t k = 0; k < samples; k++) {
+                    ms_color[i * samples + k] = rgba[i];
+                    ms_depth[i * samples + k] = layout.cameras ? 0.0f : depth[i];
+                }
+            }
+            overlay.samples = samples;
+            overlay.ms_color = ms_color.data();
+            overlay.ms_depth = ms_depth.data();
+        } else if (layout.cameras && o.view == RasterView::kFinal) {
             std::fill(depth.begin(), depth.end(), 0.0f);
+        }
     };
     std::vector<ClipVert> cv;
     std::unordered_set<uint32_t> cams_seen;
@@ -1106,17 +1298,21 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         if (!run.pass) {
             for (uint32_t i = run.first; i < run.end; i++) {
                 const DrawItem& it = frame.draws[i];
-                if (!DrawnToBackBuffer(it)) continue;
-                if (back == &world && i >= frame.post_boundary) resolve();
+                if (!DrawnToBackBuffer(it) || (shows_kept && i < frame.post_boundary)) continue;
+                if (back == &world && i >= frame.post_boundary) resolve(true);
                 if (back == &overlay && o.view != RasterView::kFinal) break;
                 // (a DrawRect quad has no camera of its own)
                 if (it.rect_shader < 0) {
                     if (o.clear_depth_per_camera && !layout.cameras && it.cam != last_cam &&
-                        cams_seen.insert(it.cam).second)
-                        std::fill(depth.begin(), depth.end(), 0.0f);
+                        cams_seen.insert(it.cam).second) {
+                        if (back->samples > 1)
+                            std::fill(ms_depth.begin(), ms_depth.end(), 0.0f);
+                        else
+                            std::fill(depth.begin(), depth.end(), 0.0f);
+                    }
                     last_cam = it.cam;
                 }
-                if (!Drawable(it)) continue;
+                if (!Drawable(it) || !DrawnByOptions(frame, it, o)) continue;
                 float vp[4];
                 DepthMap dm;
                 PlaceBackBufferDraw(layout, frame, it, o.width, o.height, vp, dm);
@@ -1131,9 +1327,13 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         const Pass& p = *run.pass;
         RtTarget& rt = rts[p.tex_obj];
         const bool shadow_map = p.tex_type == kTexTypeShadowMap;
-        if (rt.w != p.width || rt.h != p.height) {
-            rt.w = p.width;
-            rt.h = p.height;
+        uint32_t tw, th;
+        PassTargetSize(frame, p, o, tw, th);
+        rt.game_w = p.width;
+        rt.game_h = p.height;
+        if (rt.w != tw || rt.h != th) {
+            rt.w = tw;
+            rt.h = th;
             rt.color.assign(size_t(rt.w) * rt.h, kTransparentBlack);
             rt.depth.assign(size_t(rt.w) * rt.h, 0.0f);
             rt.zw.clear();
@@ -1161,10 +1361,11 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             density_view = {d->second.w, d->second.h, d->second.color.data()};
         for (uint32_t i = run.first; i < run.end; i++) {
             const DrawItem& it = frame.draws[i];
-            if (!DrawnInTexturePass(it) || !Drawable(it)) continue;
+            if (!DrawnInTexturePass(it) || !Drawable(it) || !DrawnByOptions(frame, it, o))
+                continue;
             const ShadeState* state = shade::ShadeOf(frame, it);
             if (spot::SpotBlur(it, state, p)) {
-                SpotBlurDraw(it, *state, o, rtt, st);
+                SpotBlurDraw(it, *state, o, rtt, st, p);
                 continue;
             }
             if (SoftBlur(frame, it, state, p)) {
@@ -1176,15 +1377,18 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                     src = {s->second.w, s->second.h, s->second.color.data()};
                 else
                     st.rt_missing++;
-                TapBlurDraw(it, *state, o, src, rtt, st);
+                TapBlurDraw(it, *state, o, src, rtt, st, &p);
                 continue;
             }
-            // the camera's viewport; DrawRect's quads are in the target's
-            // pixels, over all of it
-            if (it.rect_shader < 0 && p.viewport[2] > 0 && p.viewport[3] > 0)
-                rtt.SetViewport(p.viewport[0], p.viewport[1], p.viewport[2], p.viewport[3]);
-            else
+            // the camera's viewport, scaled with the target; DrawRect's quads
+            // are in the target's pixels, over all of it
+            if (it.rect_shader < 0 && p.viewport[2] > 0 && p.viewport[3] > 0) {
+                float vp[4];
+                ScalePassViewport(p, rt.w, rt.h, vp);
+                rtt.SetViewport(vp[0], vp[1], vp[2], vp[3]);
+            } else {
                 rtt.SetViewport(0, 0, float(rt.w), float(rt.h));
+            }
             DrawOne(it, int32_t(i), state, o, rts, rtt, st, cv, density_view);
         }
         // its mips, from what it holds now, as the GPU makes them after the
@@ -1196,7 +1400,11 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         st.passes++;
         if (stop && p.tex_obj == stop && p.version == stop_version) break;
     }
-    if (back == &world) resolve();
+    if (back == &world) resolve(false);
+    // the overlay's samples averaged into the picture, as the GPU's resolve
+    // and RB3's EndTiling do
+    if (overlay.samples > 1)
+        for (size_t i = 0; i < pixels; i++) rgba[i] = ResolvePixel(&ms_color[i * samples], samples);
     st.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                 .count();
     return st;
@@ -1212,6 +1420,44 @@ bool SoftBlur(const FrameCapture& f, const DrawItem& d, const ShadeInputs* s, co
     float weights = 0;
     for (int i = 0; i < kSoftBlurTaps; i++) weights += s->Ps(47 + i)[0];
     return weights > 0;
+}
+
+void PassTargetSize(const FrameCapture& f, const Pass& p, const RasterOptions& o, uint32_t& w,
+                    uint32_t& h) {
+    w = p.width;
+    h = p.height;
+    const float scale = p.tex_type == kTexTypeShadowMap         ? o.shadow_scale
+                        : SpotTarget(p) || SoftTarget(f, p) ? o.target_scale
+                                                            : 1.0f;
+    if (scale == 1.0f || !(scale > 0)) return;
+    auto even = [&](uint32_t size) {
+        return std::max<uint32_t>(2, 2 * uint32_t(std::lround(double(size) * scale / 2)));
+    };
+    w = even(p.width);
+    h = even(p.height);
+}
+
+BlurSubTaps BlurSubTapsFor(const ShadeInputs& s, int taps, const Pass& p, uint32_t w,
+                           uint32_t h) {
+    BlurSubTaps sub;
+    if (!p.width || !p.height || (w <= p.width && h <= p.height)) return sub;
+    // the line the taps lie along: the axis their offsets spread over most
+    float lo[2] = {0, 0}, hi[2] = {0, 0};
+    for (int i = 0; i < taps; i++) {
+        for (int k = 0; k < 2; k++) {
+            lo[k] = i ? std::min(lo[k], s.Ps(31 + i)[k]) : s.Ps(31 + i)[k];
+            hi[k] = i ? std::max(hi[k], s.Ps(31 + i)[k]) : s.Ps(31 + i)[k];
+        }
+    }
+    // (in the game's texels)
+    const bool across = (hi[0] - lo[0]) * float(p.width) >= (hi[1] - lo[1]) * float(p.height);
+    const float scale = across ? float(w) / float(p.width) : float(h) / float(p.height);
+    sub.count = std::clamp<uint32_t>(uint32_t(std::ceil(scale - 1e-3f)), 1, 8);
+    if (sub.count > 1) {
+        if (across) sub.step[0] = 1.0f / (float(p.width) * float(sub.count));
+        else sub.step[1] = 1.0f / (float(p.height) * float(sub.count));
+    }
+    return sub;
 }
 
 bool ShadowCasterPass(const FrameCapture& f, const Pass& p) {

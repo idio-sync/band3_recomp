@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -86,6 +87,28 @@ inline void ParticleCorner(const float p[3], const float right[3], const float u
     uv[1] = v;
 }
 
+// A particle's colour (r, g, b, a floats) as DxParticleSys::DrawParticles
+// packs it into its vertex (band3_recomp.139.cpp, both paths): each channel
+// times DrawShowing's colour, (1,1,1,1), then 255, single precision; fctidz
+// (toward zero, NaN and below -2^63 to 0x8000000000000000, 2^63 and up to
+// 0x7FFF...); rlwimi keeps each one's low byte. No clamp: a particle a
+// little past the end of its life, alpha -0.004, is -1, 0xFF, drawn nearly
+// opaque, as the game draws it. RGBA8 here, R in the low byte.
+inline uint32_t ParticleColor(const float col[4]) {
+    uint32_t rgba = 0;
+    for (int i = 0; i < 4; i++) {
+        const float c = col[i] * 255.0f;
+        int64_t v = INT64_MIN;
+        if (c >= 9223372036854775808.0f) {
+            v = INT64_MAX;
+        } else if (c > -9223372036854775808.0f) {  // false for NaN
+            v = int64_t(c);
+        }
+        rgba |= (uint32_t(uint64_t(v)) & 0xffu) << (8 * i);
+    }
+    return rgba;
+}
+
 // RndTex::Type (tex+0x48) values that make a texture's pixels something RB3
 // draws at runtime rather than loads: kRendered and what's built on it
 // (0x22 NoZ, 0x42 shadow map, 0xA2, 0x122), back-buffer snapshots (8, 0x18)
@@ -125,6 +148,14 @@ struct TexSampler {
 };
 static_assert(sizeof(TexSampler) == 16, "TexSampler has no padding");
 
+// A movie's plane as capture took it, for decoding later (Texture::deferred):
+// its base level's bytes as guest memory held them, and its fetch constant
+struct DeferredPixels {
+    std::once_flag once;
+    std::vector<uint8_t> bytes;
+    uint32_t fetch[6] = {};
+};
+
 struct Texture {
     uint32_t width = 0;
     uint32_t height = 0;
@@ -144,6 +175,13 @@ struct Texture {
     uint32_t tex_obj = 0;
     uint32_t tex_type = 0;
     uint32_t version = 0;
+    // A movie's plane (scene_capture.cpp's DecodeCached): the CPU writes it
+    // anew for each movie frame, so the game's thread only copies its bytes,
+    // and rgba is decoded from them once, by whoever takes the capture first
+    // (LatestCapture, CaptureHeldFrame), before they hand it on; width,
+    // height and format are set from the start. Null for every other
+    // texture, and in captures loaded from a file.
+    std::shared_ptr<DeferredPixels> deferred;
 };
 
 // The float constant registers a ShadeState keeps, the same numbers from the
@@ -214,8 +252,8 @@ inline constexpr int kPerPixel = 0, kSpecularMap = 1, kSpecular = 2, kEnvironMap
                      kNormDetail = 24, kBillboard = 25, kFadeOut = 26, kNumProj = 28,
                      kCustomVariation = 30, kColorMod = 32, kRimLight = 37, kEnableAO = 38, kToneMapping = 39,
                      kNumPoint = 40, kEnvironMapFalloff = 43, kProjLightMultiply = 44,
-                     kSoftParticles = 45, kPointCubeTex = 48, kEnvironMapSpecMask = 49,
-                     kIntensify = 53;
+                     kSoftParticles = 45, kRefractWorld = 46, kPointCubeTex = 48,
+                     kEnvironMapSpecMask = 49, kIntensify = 53;
 }  // namespace shader_opt
 
 // What a draw's shader was given, read from the D3D device's constant shadow
@@ -231,7 +269,8 @@ struct ShadeInputs {
     float eye[3];   // the camera's world position (WorldXfm translation)
     float vs[kNumShadeRegs][4];
     float ps[kNumShadeRegs][4];
-    // the pass's material (rb3-xenon rndobj/BaseMaterial.h)
+    // the pass's material (rb3-xenon rndobj/BaseMaterial.h); kDefaultMaterial
+    // for a mesh's pass without one (NoMaterial)
     uint32_t mat;
     // +0xac: the material of the pass after it, which is a draw of its own
     // (the next one, in captures since passes were; before, the pass after
@@ -406,6 +445,17 @@ inline bool IsSpotCone(const DrawItem& d, const ShadeInputs* s) {
     return s && s->shader_type == kDepthVolumeShader && d.rect_shader < 0;
 }
 
+// A mesh's material pass without a material (RndShader::SelectConfig(null):
+// a mesh with none), which RB3 draws with TheRnd's default material (white,
+// prelit, unlit, opaque; every RndShader's Select takes it for null): kept
+// with that material's colour, blend and constants, its shade state's mat
+// kDefaultMaterial (scene_capture.cpp's MeshParts). Captures from before kept
+// none.
+inline constexpr uint32_t kDefaultMaterial = 0xffffffffu;
+inline bool NoMaterial(const DrawItem& d, const ShadeInputs* s) {
+    return s && s->mat == kDefaultMaterial && d.rect_shader < 0;
+}
+
 // A soft particle: RndSoftParticleBuffer::DoPost draws the particle systems
 // RndSoftParticles queued during the world's draws into its 320x180 surface
 // (PostConsts::soft_surface), after post-processing starts, through the
@@ -505,6 +555,32 @@ struct CameraView {
 };
 static_assert(sizeof(CameraView) == 36, "CameraView has no padding: a capture saves its bytes");
 
+// A mesh RB3 draws into the camera motion blur's velocity texture with its
+// own motion (out/research/n5_hub_soft.md 3.1, the object pass): NgPostProc's
+// mMotionBlurDrawList (the characters), drawn in draw mode 5 by
+// RndVelocityBuffer::DrawMesh after the camera pass, with
+// kVelocityObjectShader (VS 21A0C657F6C70854 skinned, F922317D5AAC4AE6 not;
+// PS 39DE58D45328C089: tools/shaders/research/post/check_velocity.py), blend
+// SrcAlpha and its depth tested and written. Kept as the device had it at
+// the draw: VS c0..c3 this frame's view-projection and c4..c7 the last's
+// (the clip position's x..w are each row's dot with the world position), the
+// bone palettes c9.. (this frame's) and c129.. (the last frame's), 3 rows a
+// bone (each a row of the world x, y and z), and PS c8, the camera's depth
+// range values (c89's). Unskinned (no bones), one palette entry each, the
+// mesh's world.
+struct VelocityObject {
+    std::shared_ptr<const Geometry> geom;
+    uint32_t mesh = 0;
+    uint8_t cull = 0;     // as DrawItem::cull
+    uint8_t skinned = 0;  // the vertices' bones and weights place them
+    uint32_t bones = 0;   // palette entries, 1 unskinned
+    float view_proj[8][4] = {};
+    float depth_range[4] = {};
+    // bones * 3 rows of this frame's palette (c9..), then as many of the
+    // last frame's (c129..)
+    std::vector<float> rows;  // 4 floats a row
+};
+
 struct FrameCapture {
     uint64_t frame = 0;
     uint64_t game_frame = 0;  // Present calls before this frame's
@@ -533,6 +609,10 @@ struct FrameCapture {
     // the format isn't decoded, and in captures from before.
     std::shared_ptr<const Texture> noise_map;
     TexSampler noise_sampler;
+    // the camera motion blur's object pass, in the order RB3 drew it (a post
+    // frame's, which draws it on the world it presents); none on a world
+    // frame and in captures from before
+    std::vector<VelocityObject> velocity_objects;
     // With even/odd rendering a frame that draws no world (proc_cmds 2)
     // presents the last one that did, so its capture has that frame's world
     // in front of its own draws from post_boundary on (frame_compose.h):
@@ -546,7 +626,9 @@ struct FrameCapture {
     GammaRamp gamma;
     uint32_t cams = 0;             // camera selects that drew to the back buffer
     uint32_t skipped_target = 0;   // draws for a camera with a target, but no texture pass open
-    uint32_t skipped_velocity = 0; // motion blur velocity pass
+    // the motion blur's velocity pass, which isn't a draw: its object pass is
+    // kept as velocity_objects
+    uint32_t skipped_velocity = 0;
     // draws in a shadow's draw mode (1, 3) outside its pass: none expected
     // (Target keeps 1 in a shadow map's pass, 3 in any texture pass)
     uint32_t skipped_shadow = 0;
@@ -594,7 +676,9 @@ struct FrameCapture {
     // material passes: a mesh's second pass or a later one (RndMat::NextPass;
     // a multimesh's counted once for all its instances), and passes drawn
     // with no material (RndShader::SelectConfig(null): a mesh without one),
-    // left out and counted in skipped_no_geom too, the spotlights' cones apart
+    // the spotlights' cones apart: kept, with TheRnd's default material
+    // (NoMaterial), where they have geometry (in captures from before, left
+    // out and counted in skipped_no_geom too)
     uint32_t later_passes = 0;
     uint32_t skipped_no_mat = 0;
     // DxMesh::DrawFaces calls outside a DxMesh::DrawShowing, not recorded:
@@ -634,6 +718,89 @@ struct PassRecordingStats {
 };
 PassRecordingStats GetPassRecordingStats();
 
+// What capture costs the game's render thread, since the game started: each
+// kind of hook's time past its early-out (taking g_state_mutex aside), always
+// counted while the hooks work (capture on, or texture passes recorded); and
+// with native_view_capture_profile (Band3/Debug, off by default) the steps
+// inside them, each the time since the step before it ended, so they add up
+// to the hooks' time (rest: what no step names), at a clock read each. The
+// harness's `native_view stats` reports it per game frame (its `capture`).
+struct CaptureProfile {
+    enum Hook {
+        kHookMesh,       // DxMesh::DrawShowing and DrawFaces
+        kHookMultiMesh,  // DxMultiMesh::DrawShowing, its passes at SelectConfig
+        kHookParticles,  // DxParticleSys::DrawParticles
+        kHookRect,       // DxRnd::DrawRect
+        kHookPass,       // texture passes begun, ended, cleared and forgotten
+        kHookPresent,    // the frame's end: FinishFrame, publishing it
+        kHookOther,      // camera selects and post-processing's reads
+        kNumHooks
+    };
+    static constexpr const char* kHookNames[kNumHooks] = {
+        "mesh", "multimesh", "particles", "rect", "pass", "present", "other"};
+    enum Step {
+        kStepTarget,        // where a draw goes (Target)
+        kStepGeomHit,       // a vertex buffer's geometry found in the cache
+        kStepGeomMiss,      // and decoded (bytes: the Geometry's)
+        kStepGeomMutable,   // a mutable mesh's CPU verts, decoded each draw
+        kStepParticleGeom,  // a particle system's quads
+        kStepRectGeom,      // a DrawRect's quad
+        kStepItem,          // the material's fields, the view-projection
+        kStepTexLookup,     // a loaded texture's key hashed and found
+        kStepTexDecode,     // and decoded (bytes: its levels'), or a movie's
+                            // plane copied to decode later (bytes: those)
+        kStepTexRt,         // a render target's identity and version
+        kStepShadeRead,     // the shade's constants and fetch constants read
+        kStepShadeRtsScan,  // its maps bound to render targets looked for
+        kStepShadeIntern,   // hashed and compared with the frame's
+        kStepShadeFill,     // a new one's samplers and maps
+        kStepShadeStore,    // a new one kept
+        kStepBones,         // a skinned draw's bones (count: bones)
+        kStepPush,          // the draw added to its frame or pass
+        kStepPassAppend,    // a pass's draws and shades into the frame
+        kStepCarry,         // the passes a frame samples carried in
+        kStepCompose,       // a post frame composed with its world
+        kStepGamma,         // the display gamma ramp read
+        kStepPublish,       // the frame published (the one before let go)
+        kStepReset,         // the next frame started
+        kStepRest,          // the hooks' time no step names
+        kNumSteps
+    };
+    static constexpr const char* kStepNames[kNumSteps] = {
+        "target",      "geom_hit",    "geom_miss",      "geom_mutable",  "particle_geom",
+        "rect_geom",   "item",        "tex_lookup",     "tex_decode",    "tex_rt",
+        "shade_read",  "shade_rts_scan", "shade_intern", "shade_fill",   "shade_store",
+        "bones",       "push",        "pass_append",    "carry",         "compose",
+        "gamma",       "publish",     "reset",          "rest"};
+    uint64_t hook_ns[kNumHooks] = {};
+    uint64_t hook_calls[kNumHooks] = {};
+    uint64_t step_ns[kNumSteps] = {};
+    uint64_t step_calls[kNumSteps] = {};
+    bool steps_on = false;  // native_view_capture_profile, now
+    uint64_t frames = 0;    // the game's frames (Presents)
+    uint64_t captured = 0;  // of those, captured
+    // draws added (to frames and recorded passes alike), shade states kept
+    // new, the shared objects made (frames, geometry, textures, passes), and
+    // what the steps above count
+    uint64_t draws = 0;
+    uint64_t new_shades = 0;
+    uint64_t allocs = 0;
+    uint64_t geom_miss_bytes = 0;
+    uint64_t tex_decode_bytes = 0;
+    uint64_t bones = 0;
+    // movie planes decoded off the game's thread (Texture::deferred), by
+    // whoever took the capture first (the native renderer's worker, a
+    // harness capture), and the microseconds that took them: not the game's
+    uint64_t deferred_decodes = 0;
+    uint64_t deferred_decode_us = 0;
+    // the caches' sizes now: render targets known, geometry, loaded textures
+    // and maps
+    uint64_t rts = 0, geoms = 0, texs = 0, map_texs = 0;
+};
+CaptureProfile GetCaptureProfile();
+// what `now` counted since `before` (the sizes and steps_on are now's)
+CaptureProfile CaptureProfileSince(const CaptureProfile& now, const CaptureProfile& before);
+
 // capture costs a little every frame, so it only runs while something wants
 // it: each Acquire is matched by a Release
 void AcquireCapture();
@@ -656,11 +823,34 @@ std::shared_ptr<const FrameCapture> CaptureHeldFrame(
     bool* fell_back = nullptr);
 
 // the latest complete frame, composed with the world before it if it drew
-// none (frame_compose.h), or null before the first
+// none (frame_compose.h), or null before the first. Its movie planes
+// (Texture::deferred) are decoded first, on the caller's thread, if no one
+// has yet, as CaptureHeldFrame's are once the game goes on.
 std::shared_ptr<const FrameCapture> LatestCapture();
+// and when it was published, at the end of the game's DxRnd::Present: where
+// the native renderer's latency starts
+std::shared_ptr<const FrameCapture> LatestCapture(
+    std::chrono::steady_clock::time_point& published);
+
+// A number that moves on with each capture published and each
+// WakeCaptureWaiters, so the native renderer's worker can sleep until there
+// is something to draw: WaitForCapture waits up to `timeout` for it to move
+// past `epoch` and returns it as it is then.
+uint64_t CaptureEpoch();
+uint64_t WaitForCapture(uint64_t epoch, std::chrono::milliseconds timeout);
+// wakes WaitForCapture as a capture would (the worker has another reason to draw)
+void WakeCaptureWaiters();
+
+// The game's frames: when each of the newest few thousand DxRnd::Presents
+// ended (captured or not), from `since` on, oldest first
+std::vector<std::chrono::steady_clock::time_point> GamePresentTimes(
+    std::chrono::steady_clock::time_point since);
 
 // native_view_rt_fallback: whether render targets' textures carry the pixels
-// guest memory holds too ("guest", the default) or only their identity ("none")
+// guest memory holds too ("guest", the default) or only their identity
+// ("none"). Never while renderer is native: the emulated GPU skips the draws
+// that would make them (gpu_skip.h), so they're stale by construction, and
+// the native renderer draws them from their passes, by identity and version.
 bool RtFallbackGuest();
 
 }  // namespace band3::render

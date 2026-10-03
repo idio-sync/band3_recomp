@@ -62,6 +62,9 @@ SHADERS = [
         ("kResolvePixel", "PSResolve", "ps_5_1", "ps_6_0",
          {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0),
           ("textures", "depth_tex", 2, 1)}),
+        ("kOverlayStartPixel", "PSOverlayStart", "ps_5_1", "ps_6_0",
+         {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0),
+          ("textures", "depth_tex", 2, 1)}),
         ("kDownsamplePixel", "PSDownsample", "ps_5_1", "ps_6_0",
          {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0)}),
         ("kBlurPixel", "PSBlur", "ps_5_1", "ps_6_0",
@@ -74,14 +77,25 @@ SHADERS = [
           ("textures", "bloom0_tex", 2, 3), ("textures", "bloom1_tex", 2, 4),
           ("textures", "bloom2_tex", 2, 5), ("textures", "volume_tex", 2, 6),
           ("textures", "density_tex", 2, 7), ("textures", "soft_tex", 2, 8),
-          ("textures", "noise_tex", 2, 9)}),
+          ("textures", "noise_tex", 2, 9), ("textures", "velocity_tex", 2, 10)}),
         ("kCompositeHistoryPixel", "PSCompositeHistory", "ps_5_1", "ps_6_0",
          {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0),
           ("textures", "depth_tex", 2, 1), ("textures", "dof_tex", 2, 2),
           ("textures", "bloom0_tex", 2, 3), ("textures", "bloom1_tex", 2, 4),
           ("textures", "bloom2_tex", 2, 5), ("textures", "volume_tex", 2, 6),
           ("textures", "density_tex", 2, 7), ("textures", "soft_tex", 2, 8),
-          ("textures", "noise_tex", 2, 9), ("textures", "prev_tex", 2, 10)}),
+          ("textures", "noise_tex", 2, 9), ("textures", "velocity_tex", 2, 10),
+          ("textures", "prev_tex", 2, 11)}),
+        # the velocity pass: the scene's depth alone (t1; t0 bound, not read)
+        ("kVelocityPixel", "PSVelocity", "ps_5_1", "ps_6_0",
+         {("ubos", "PostUniforms", 3, 0), ("textures", "depth_tex", 2, 1)}),
+    ]),
+    # the camera motion blur's object pass: meshes into the velocity texture
+    ("velocity.hlsl", "velocity_shaders.gen.h", [
+        ("kVelocityObjectVertex", "VSVelocityObject", "vs_5_1", "vs_6_0",
+         {("ubos", "ObjectVertexUniforms", 1, 0), ("ssbos", "bones", 0, 0)}),
+        ("kVelocityObjectPixel", "PSVelocityObject", "ps_5_1", "ps_6_0",
+         {("ubos", "ObjectPixelUniforms", 3, 0), ("textures", "depth_tex", 2, 0)}),
     ]),
     # the display gamma ramp's pass, drawn with post.hlsl's VSFullscreen
     ("gamma.hlsl", "gamma_shaders.gen.h", [
@@ -182,9 +196,11 @@ def main():
                     print(f"{entry}: {os.path.getsize(dxbc)} bytes DXBC")
                     continue
                 spirv = os.path.join(tmp, entry + ".spv")
-                run([dxc, "-spirv", "-fspv-target-env=vulkan1.1", "-O3",
+                # Vulkan 1.0 (SPIR-V 1.0): SDL_gpu creates its Vulkan instance
+                # at API 1.0, which allows no newer SPIR-V
+                run([dxc, "-spirv", "-fspv-target-env=vulkan1.0", "-O3",
                      "-T", dxc_profile, "-E", entry, "-Fo", spirv, source])
-                run([spirv_val, "--target-env", "vulkan1.1", spirv])
+                run([spirv_val, "--target-env", "vulkan1.0", spirv])
                 check_reflection(entry, expected, run([spirv_cross, spirv, "--reflect"]))
                 with open(spirv, "rb") as f:
                     arrays.append(c_array(stem + "Spirv", f.read()))

@@ -437,13 +437,31 @@ float4 MovieRgb(float y, float cr, float cb) {
                   a + 2.017822265625f * cb - 1.0816688537597656f, 1.0f);
 }
 
+// Where REFRACT_WORLD's pixel shader (FC53125B5EB914F8) reads the picture
+// behind a pixel, 0..1 across it: its clip position (xy, and w), as the
+// vertex shader passes it on, moved by c119.w times the refract normal map's
+// texel (s1 at the texture's uv) * 2 - 1, its green across and its red up
+// and down, then
+//   uv = (clip.xy + offset) / w * (0.5, -0.5) + 0.5
+// (c255's literals). Without kShadeRefractMap it's straight behind. The
+// picture is read bilinear, clamped to its edges (NgMat::SetupShader's s6).
+// tools/shaders/research/refract.py checks this against the microcode.
+float2 RefractUv(SHADE_IN(ShadeParams) sp, float2 clip, float w, float4 map) {
+    float2 c = clip;
+    if ((sp.flags.x & kShadeRefractMap) != 0u) {
+        const float k = sp.refract.x;
+        c = float2(c.x + k * (map.y * 2.0f - 1.0f), c.y + k * (map.x * 2.0f - 1.0f));
+    }
+    return float2(c.x / w * 0.5f + 0.5f, c.y / w * -0.5f + 0.5f);
+}
+
 // One pixel's colour and alpha. p is its world position, n its interpolated
 // world normal and u and b its tangent and bitangent (TextureFrame's and
 // Bitangent's, read with kShadeNormalMap), vc its vertex colour, depth its
 // clip w; texel, spec_map and glow are the maps' texels where sp samples
 // them (1 where it doesn't), normal and detail the normal map's and the
-// detail map's (MappedNormals'), behind the post-processed picture at the
-// pixel for kShadeRefract; ao_sh is the interpolated AoShVertex, proj and
+// detail map's (MappedNormals'), behind the post-processed picture at
+// RefractUv for kShadeRefract; ao_sh is the interpolated AoShVertex, proj and
 // gobo the projected light's maps' texels at ProjUv (Light's), lit the
 // shadow buffer's ShadowLit (Light's), vertex the interpolated Lighting of a
 // vertex-lit material's vertices.
@@ -459,9 +477,8 @@ float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 u, float3
                         (f & kShadeGlow) != 0u ? glow.x : neutral);
     }
     // REFRACT_WORLD's pixel shader (FC53125B5EB914F8): the texture's rgb
-    // times the picture behind it, alpha the texture's. The game nudges where
-    // it reads the picture by a second map (s1 * 2 - 1, times c119.w); that's
-    // left out, so it reads straight behind.
+    // times the picture behind it (read where RefractUv says), alpha the
+    // texture's
     if ((f & kShadeRefract) != 0u) {
         texel = float4(texel.x * behind.x, texel.y * behind.y, texel.z * behind.z, texel.w);
     }

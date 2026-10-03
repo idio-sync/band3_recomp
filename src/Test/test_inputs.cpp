@@ -1,4 +1,5 @@
 #include "test_inputs.h"
+#include <array>
 #include <charconv>
 #include <string>
 

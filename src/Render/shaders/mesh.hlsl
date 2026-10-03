@@ -77,8 +77,8 @@ VK_SAMPLER VK_BINDING(3, 2) SamplerState proj_sampler : register(s3, space2);
 VK_SAMPLER VK_BINDING(4, 2) Texture2DArray<float4> gobo_tex : register(t4, space2);
 VK_SAMPLER VK_BINDING(4, 2) SamplerState gobo_sampler : register(s4, space2);
 // a copy of the picture as the resolve left it, for kShadeRefract (a 1x1
-// stand-in for the others): read at the pixel's own position, as Shade() in
-// soft_raster.cpp does
+// stand-in for the others): read where RefractUv puts the pixel, bilinear,
+// as Shade() in soft_raster.cpp does (BehindTexel)
 VK_SAMPLER VK_BINDING(5, 2) Texture2D<float4> behind_tex : register(t5, space2);
 VK_SAMPLER VK_BINDING(5, 2) SamplerState behind_sampler : register(s5, space2);
 // the shadow map kShadeShadow reads, its depth (clip z/w) as its pass left it
@@ -165,6 +165,10 @@ struct PixelIn {
     // TextureFrame and Bitangent)
     float3 tan : TEXCOORD8;
     float3 bitan : TEXCOORD9;
+    // the clip position's x and y as the game's vertex shader has them,
+    // before clip_offset: at the pixel, what REFRACT_WORLD's pixel shader is
+    // given (RefractUv; its w is depth)
+    float2 clip : TEXCOORD10;
 };
 
 float4x4 Bone(uint i) {
@@ -218,10 +222,11 @@ PixelIn VSMain(VertexIn v) {
         wu = mul(float4(tangent, 0), world).xyz;
     }
     float4 clip = mul(float4(wp, 1), view_proj);
+    PixelIn o;
+    o.clip = clip.xy;
     // the pixel this pipeline samples at x + .5 then sees what the game's
     // sampled at x
     clip.xy += clip_offset.xy * clip.w;
-    PixelIn o;
     // depth is kNearW / w, the CPU's 1/w scaled: z/w interpolates as 1/w does,
     // larger is nearer, the near plane is w = kNearW and there's no far plane,
     // whatever depth range the game's projection has; a back-buffer draw's
@@ -293,6 +298,25 @@ float4 ProjTexel(Texture2DArray<float4> t, float2 uv, uint layer, uint2 size) {
     return top + (bottom - top) * w.y;
 }
 
+// the picture behind at uv (0..1 across it), bilinear, clamped to its edges:
+// soft_raster.cpp's SampleLinear, by the same arithmetic
+float4 BehindTexel(float2 uv) {
+    uint w, h;
+    behind_tex.GetDimensions(w, h);
+    const float2 xy = uv * float2(w, h) - 0.5;
+    const float2 f = floor(xy);
+    const float2 t = xy - f;
+    const int2 at = int2(f);
+    float4 c[4];
+    [unroll] for (int k = 0; k < 4; k++) {
+        const int2 q = clamp(at + int2(k & 1, k >> 1), int2(0, 0), int2(w, h) - 1);
+        c[k] = behind_tex.Load(int3(q, 0));
+    }
+    const float4 top = c[0] + (c[1] - c[0]) * t.x;
+    const float4 bottom = c[2] + (c[3] - c[2]) * t.x;
+    return top + (bottom - top) * t.y;
+}
+
 // What a mesh's pixel shades to (shade.hlsli's ShadePixel), before the alpha
 // cut and the blend's premultiply (FinishMesh)
 float4 MeshColor(PixelIn i) {
@@ -317,13 +341,13 @@ float4 MeshColor(PixelIn i) {
         glow = ReadTexture(glow_tex, tex_layer[0].z, tex_size[2].xy, tex_samp[2], i.uv, dx, dy);
     float4 normal = float4(0.5, 0.5, 0, 1);
     float4 detail = float4(0.5, 0.5, 0, 1);
-    if ((f & kShadeNormalMap) != 0u) {
+    // s1: the normal map, or REFRACT_WORLD's refract normal map
+    if ((f & (kShadeNormalMap | kShadeRefractMap)) != 0u)
         normal = ReadTexture(normal_tex, tex_layer[1].y, tex_size[6].xy, tex_samp[5], i.uv, dx,
                              dy);
-        if ((f & kShadeDetailMap) != 0u)
-            detail = ReadTexture(detail_tex, tex_layer[1].z, tex_size[7].xy, tex_samp[6],
-                                 detail_uv, detail_dx, detail_dy);
-    }
+    if ((f & kShadeNormalMap) != 0u && (f & kShadeDetailMap) != 0u)
+        detail = ReadTexture(detail_tex, tex_layer[1].z, tex_size[7].xy, tex_samp[6], detail_uv,
+                             detail_dx, detail_dy);
     float4 proj = float4(0, 0, 0, 0);
     float4 gobo = float4(0, 0, 0, 0);
     if ((f & (kShadeProjMultiply | kShadeProjGobo)) != 0u) {
@@ -332,9 +356,9 @@ float4 MeshColor(PixelIn i) {
         if ((f & kShadeProjGobo) != 0u)
             gobo = ProjTexel(gobo_tex, puv, tex_layer[1].x, tex_size[4].xy);
     }
-    // SV_Position is the pixel's centre: its integer part is the pixel
     float4 behind = float4(1, 1, 1, 1);
-    if ((f & kShadeRefract) != 0u) behind = behind_tex.Load(int3(int2(i.pos.xy), 0));
+    if ((f & kShadeRefract) != 0u)
+        behind = BehindTexel(RefractUv(ps_shade, i.clip, i.depth, normal));
     Lighting vertex;
     vertex.diffuse = i.light_diffuse;
     vertex.added = i.light_added;

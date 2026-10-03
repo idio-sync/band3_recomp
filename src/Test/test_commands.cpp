@@ -445,6 +445,8 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
     fields += ",\"game_frame\":" + std::to_string(info.game_frame);
     fields += ",\"world_frame\":" + std::to_string(info.world_frame);
     fields += std::string(",\"held_fallback\":") + (info.held_fallback ? "true" : "false");
+    fields += ",\"emulated\":";
+    AppendJsonString(fields, info.emulated);
     if (want_composed && !(info.composed && info.proc_cmds == 2)) {
         return Error(target, "capture " + name + " isn't a post frame composed with the world "
                                  "before it: proc_cmds " + std::to_string(info.proc_cmds) +
@@ -460,6 +462,10 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
         fields += ms;
         fields += ",\"gpu_passes\":" + std::to_string(info.gpu_passes);
         fields += ",\"gpu_rt_missing\":" + std::to_string(info.gpu_rt_missing);
+        if (!info.gpu_presented_path.empty()) {
+            fields += ",\"gpu_presented\":";
+            AppendJsonString(fields, info.gpu_presented_path);
+        }
     } else if (!info.gpu_error.empty()) {
         fields += ",\"gpu_error\":";
         AppendJsonString(fields, info.gpu_error);
@@ -486,6 +492,122 @@ std::string Distribution(std::vector<double> ms) {
     std::snprintf(buf, sizeof(buf), "{\"mean\":%.2f,\"p50\":%.2f,\"p95\":%.2f,\"max\":%.2f}", mean,
                   p50, p95, max);
     return buf;
+}
+
+// the intervals longer than 1.5 times their median: frames that came late
+uint64_t Hitches(std::vector<double> ms) {
+    if (ms.empty()) return 0;
+    std::sort(ms.begin(), ms.end());
+    const size_t i = static_cast<size_t>(std::ceil(0.5 * double(ms.size())));
+    const double median = ms[std::clamp<size_t>(i, 1, ms.size()) - 1];
+    return uint64_t(std::count_if(ms.begin(), ms.end(), [&](double m) { return m > 1.5 * median; }));
+}
+
+std::string PresentJson(const PresentStats& s) {
+    std::string out = "\"stats\":{\"renderer\":";
+    AppendJsonString(out, s.renderer);
+    out += ",\"path\":";
+    AppendJsonString(out, s.path);
+    const double seconds = s.seconds > 0 ? s.seconds : 0;
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), ",\"seconds\":%.1f,\"paints\":%llu,\"paint_fps\":%.1f",
+                  seconds, static_cast<unsigned long long>(s.paints),
+                  seconds > 0 ? double(s.paints) / seconds : 0.0);
+    out += buf;
+    out += ",\"paint_ms\":" + Distribution(s.paint_ms);
+    out += ",\"hitches\":" + std::to_string(Hitches(s.paint_ms));
+    out += ",\"native\":{\"paints\":" + std::to_string(s.native_paints);
+    out += ",\"shown\":" + std::to_string(s.shown);
+    out += ",\"repeats\":" + std::to_string(s.repeats);
+    out += ",\"skipped\":" + std::to_string(s.skipped);
+    out += ",\"latency_ms\":" + Distribution(s.latency_ms) + "}";
+    std::snprintf(buf, sizeof(buf), ",\"game\":{\"frames\":%llu,\"fps\":%.1f",
+                  static_cast<unsigned long long>(s.game_frames),
+                  seconds > 0 ? double(s.game_frames) / seconds : 0.0);
+    out += buf;
+    out += ",\"ms\":" + Distribution(s.game_ms);
+    out += ",\"hitches\":" + std::to_string(Hitches(s.game_ms)) + "}}";
+    return out;
+}
+
+// `present_stats [reset]`: the window's pacing since it last started over;
+// reset starts it over, and replies with the stretch it ends
+std::string PresentStatsCommand(TestTarget& target, const std::vector<std::string_view>& args) {
+    const bool reset = args.size() == 2 && args[1] == "reset";
+    if (args.size() > 2 || (args.size() == 2 && !reset))
+        return Error(target, "usage: present_stats [reset]");
+    return Ok(PresentJson(target.Present(reset)));
+}
+
+// native_view stats' `capture`: what capture cost the game's thread, per game
+// frame (0 with no frames), and per draw recorded
+std::string CaptureCostJson(const NativeViewStats::Capture& c) {
+    const double frames = double(c.frames);
+    auto per_frame = [&](double v) { return frames > 0 ? v / frames : 0.0; };
+    char buf[96];
+    double total_ms = 0;
+    for (const auto& [name, ms] : c.hooks_ms) total_ms += ms;
+    std::string out = "{\"frames\":" + std::to_string(c.frames);
+    out += ",\"captured\":" + std::to_string(c.captured);
+    std::snprintf(buf, sizeof(buf), ",\"ms_per_frame\":{\"total\":%.3f", per_frame(total_ms));
+    out += buf;
+    for (const auto& [name, ms] : c.hooks_ms) {
+        std::snprintf(buf, sizeof(buf), ",\"%s\":%.3f", name.c_str(), per_frame(ms));
+        out += buf;
+    }
+    std::snprintf(buf, sizeof(buf), "},\"draws_per_frame\":%.1f,\"us_per_draw\":%.2f",
+                  per_frame(double(c.draws)), c.draws ? total_ms * 1000 / double(c.draws) : 0.0);
+    out += buf;
+    out += ",\"steps\":";
+    out += c.steps ? "true" : "false";
+    out += ",\"steps_ms_per_frame\":{";
+    for (size_t i = 0; i < c.steps_ms.size(); i++) {
+        std::snprintf(buf, sizeof(buf), "%s\"%s\":%.3f", i ? "," : "", c.steps_ms[i].first.c_str(),
+                      per_frame(c.steps_ms[i].second));
+        out += buf;
+    }
+    out += "},\"per_frame\":{";
+    for (size_t i = 0; i < c.counts.size(); i++) {
+        std::snprintf(buf, sizeof(buf), "%s\"%s\":%.1f", i ? "," : "", c.counts[i].first.c_str(),
+                      per_frame(double(c.counts[i].second)));
+        out += buf;
+    }
+    out += "},\"sizes\":{";
+    for (size_t i = 0; i < c.sizes.size(); i++) {
+        out += i ? "," : "";
+        out += "\"" + c.sizes[i].first + "\":" + std::to_string(c.sizes[i].second);
+    }
+    out += "}}";
+    return out;
+}
+
+// native_view stats' `emulated_gpu`: what the emulated GPU was sent, the
+// draws per game frame (0 with no frames)
+std::string EmulatedGpuJson(const NativeViewStats::EmulatedGpu& e) {
+    const double frames = double(e.frames);
+    auto per_frame = [&](uint64_t v) { return frames > 0 ? double(v) / frames : 0.0; };
+    char buf[96];
+    std::string out = "{\"skip_mode\":";
+    out += e.skip_mode ? "true" : "false";
+    out += ",\"skipping\":";
+    out += e.skipping ? "true" : "false";
+    out += ",\"fresh\":";
+    out += e.fresh ? "true" : "false";
+    out += ",\"frames\":" + std::to_string(e.frames);
+    out += ",\"frames_skipped\":" + std::to_string(e.frames_skipped);
+    for (const auto* list : {&e.emitted, &e.skipped}) {
+        out += list == &e.emitted ? ",\"emitted_per_frame\":{" : ",\"skipped_per_frame\":{";
+        for (size_t i = 0; i < list->size(); i++) {
+            std::snprintf(buf, sizeof(buf), "%s\"%s\":%.1f", i ? "," : "",
+                          (*list)[i].first.c_str(), per_frame((*list)[i].second));
+            out += buf;
+        }
+        out += "}";
+    }
+    std::snprintf(buf, sizeof(buf), ",\"kept_per_frame\":{\"pass\":%.1f,\"point_tests\":%.1f}}",
+                  per_frame(e.kept_pass), per_frame(e.kept_point_tests));
+    out += buf;
+    return out;
 }
 
 std::string NativeViewJson(const NativeViewStats& s) {
@@ -516,6 +638,8 @@ std::string NativeViewJson(const NativeViewStats& s) {
     std::snprintf(buf, sizeof(buf), "\"draws\":%llu,\"ms\":%.2f}",
                   static_cast<unsigned long long>(s.rt_draws), s.rt_ms);
     out += buf;
+    out += ",\"capture\":" + CaptureCostJson(s.capture);
+    out += ",\"emulated_gpu\":" + EmulatedGpuJson(s.emulated_gpu);
     out += '}';
     return out;
 }
@@ -735,6 +859,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "folders") return FoldersReply(target, args);
     if (verb == "bind") return Bind(target, args);
     if (verb == "native_view") return NativeView(target, args);
+    if (verb == "present_stats") return PresentStatsCommand(target, args);
     if (verb == "quit") {
         target.Quit();
         return Ok();

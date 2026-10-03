@@ -449,3 +449,39 @@ TEST_CASE("a cone adds SpotCone's colour into the depth volume, 8-bit, and the b
     Rasterize(none, o, without);
     CHECK(picture == without);
 }
+
+TEST_CASE("a pass that only cleared the depth volume is drawn, so its blurs blur the clear") {
+    // NgSpotlightDrawer with no cone in view: the camera clears the volume
+    // to opaque black and draws nothing, then the two blurs in place. The
+    // capture keeps the clear as a pass with no draws.
+    FrameCapture f;
+    f.shades = {BlurShade(false), BlurShade(true)};
+    for (uint32_t v = 0; v < 2; v++) {
+        DrawItem b = Item(Quad(-1, 1, 0xffffffffu));
+        b.rect_shader = 1;
+        b.rect[2] = b.rect[3] = float(kSize);
+        b.tex = Volume(10 + v);
+        b.shade = int32_t(v);
+        f.draws.push_back(b);
+    }
+    f.passes = {VolumePass(0, 0, 10, true), VolumePass(0, 1, 11, false),
+                VolumePass(1, 1, 12, false)};
+    f.post_boundary = 0;
+    f.proc_cmds = 7;
+
+    RasterOptions o;
+    o.width = o.height = 32;
+    std::vector<uint32_t> px;
+    uint32_t w = 0, h = 0;
+    REQUIRE(RasterizeTarget(f, o, kVolume, 0, px, w, h));
+    REQUIRE(px.size() == kSize * kSize);
+    for (uint32_t c : px) CHECK(c == 0xFF000000u);
+    REQUIRE(RasterizeTarget(f, o, kVolume, 10, px, w, h));
+    for (uint32_t c : px) CHECK(c == 0xFF000000u);
+
+    // without it the blurs start from the transparent black of a target
+    // nothing drew
+    f.passes.erase(f.passes.begin());
+    REQUIRE(RasterizeTarget(f, o, kVolume, 0, px, w, h));
+    for (uint32_t c : px) CHECK(c == 0u);
+}

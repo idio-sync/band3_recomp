@@ -16,20 +16,25 @@ uint64_t RtKey(uint32_t tex, uint32_t version) { return uint64_t(tex) << 32 | ve
 // draws [first, end) of `from` to the end of `to`, in the passes they're in
 // (cut to the range; the draws of a live capture are all in one), their
 // shades moved on by `shade_base`; texture passes only if `textures_only`,
-// and none of those `skip` has
+// and none of those `skip` has. A texture pass with no draws (one that only
+// cleared) is in the range it starts in, and one after the last draw in the
+// range that runs to the frame's end (`to_end`).
 void AppendRange(FrameCapture& to, const FrameCapture& from, uint32_t first, uint32_t end,
-                 int32_t shade_base, bool textures_only, const std::set<uint64_t>* skip = nullptr) {
+                 int32_t shade_base, bool textures_only, bool to_end,
+                 const std::set<uint64_t>* skip = nullptr) {
     const uint32_t n = uint32_t(from.draws.size());
     end = std::min(end, n);
     for (const Pass& p : from.passes) {
         const uint32_t a = std::max(p.first_draw, first);
         const uint32_t b = std::min(std::min(p.first_draw + p.draw_count, n), end);
-        if (a >= b) continue;
+        const bool clear_only = p.tex_obj && !p.draw_count && p.first_draw >= first &&
+                                (p.first_draw < end || (to_end && p.first_draw == n));
+        if (a >= b && !clear_only) continue;
         if (textures_only && !p.tex_obj) continue;
         if (skip && p.tex_obj && skip->count(RtKey(p.tex_obj, p.version))) continue;
         Pass q = p;
         q.first_draw = uint32_t(to.draws.size());
-        q.draw_count = b - a;
+        q.draw_count = clear_only ? 0 : b - a;
         for (uint32_t d = a; d < b; d++) {
             DrawItem item = from.draws[d];
             if (item.shade >= 0) item.shade += shade_base;
@@ -96,6 +101,9 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
     fc.post_consts = frame.post_consts;
     fc.noise_map = frame.noise_map;
     fc.noise_sampler = frame.noise_sampler;
+    // the motion blur's object pass, which the post frame drew over its
+    // velocity texture from the world's depth
+    fc.velocity_objects = frame.velocity_objects;
     // and the gamma ramp the presenter applied to it
     fc.gamma = frame.gamma;
     // the world's back buffer, cleared as the world frame cleared it, and its
@@ -115,13 +123,13 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
 
     const uint32_t world_end = ProcKnown(world) ? world.post_boundary : uint32_t(world.draws.size());
     const uint32_t frame_post = ProcKnown(frame) ? frame.post_boundary : 0;
-    AppendRange(fc, world, 0, world_end, 0, false);
+    AppendRange(fc, world, 0, world_end, 0, false, !ProcKnown(world));
     std::set<uint64_t> have;
     for (const Pass& p : fc.passes)
         if (p.tex_obj) have.insert(RtKey(p.tex_obj, p.version));
-    AppendRange(fc, frame, 0, frame_post, frame_shades, true, &have);
+    AppendRange(fc, frame, 0, frame_post, frame_shades, true, false, &have);
     fc.post_boundary = uint32_t(fc.draws.size());
-    AppendRange(fc, frame, frame_post, uint32_t(frame.draws.size()), frame_shades, false);
+    AppendRange(fc, frame, frame_post, uint32_t(frame.draws.size()), frame_shades, false, true);
 
     AddCounts(fc, world);
     AddCounts(fc, frame);

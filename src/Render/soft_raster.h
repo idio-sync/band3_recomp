@@ -46,6 +46,22 @@
 // z ranges as RB3's are, where the capture has its cameras (LayoutBackBuffer);
 // its DrawRect quads (flares, ScreenMasks, the intro movie) are drawn too,
 // but the post copy, which post-processing redoes.
+//
+// A picture bigger than the game's 1280x720 has the passes that are pictures
+// of the screen (the spotlights', the soft particles') drawn bigger with it
+// (RasterOptions::target_scale, PassTargetSize), the others at their size.
+//
+// The overlay is multisampled, as RB3's is (RasterOptions::msaa,
+// OverlaySamples): RB3 draws the world into a 1x back buffer and everything
+// after DoPostProcess (the track, the HUD, panels after EndWorld) into a 2x
+// one, which EndTiling resolves into the front buffer as the mean of each
+// pixel's two samples. Every texture pass, the world and its depth (which
+// post-processing reads) are 1x, there and here. The CPU does it the way a
+// GPU's MSAA does: each overlay pixel has a colour and a depth per sample, at
+// D3D's standard positions (kSamplePositions in soft_raster.cpp), the
+// picture copied into each at the resolve; a triangle covering any of them is
+// shaded once, at the pixel's centre, and depth-tested and blended into each
+// sample it covers; the frame's end averages them into the picture.
 
 namespace band3::render {
 
@@ -110,6 +126,9 @@ struct RasterOptions {
     // with post, the film grain (the composite's noise) where the frame has
     // it and the capture kept its map; off, left out
     bool grain = true;
+    // with post, the camera motion blur (velocity blur) where the frame has
+    // it and the capture kept the velocity buffer's cameras; off, left out
+    bool velocity = true;
     // with post, the trails (blend previous), which read the previous post
     // frame: the live view's, which draws frame after frame and keeps each
     // post frame's composite (the GPU in GpuRenderer, the CPU in
@@ -118,6 +137,19 @@ struct RasterOptions {
     // game's picture wherever no trail has started (post_model.h's PlanPost).
     bool trails = false;
     post::PostHistory* post_history = nullptr;
+    // A frame that post-processes nothing of its own under even/odd rendering
+    // (frame_compose.h's ShowsPostBuffer: a world frame, or one that draws
+    // neither) shows what the game's does: the post buffer as the last post
+    // frame left it, its picture before the overlay, under the frame's own
+    // overlay (DxRnd::DoPostProcess copies the post buffer to the screen
+    // every frame, and makes it anew on post frames alone); its world isn't
+    // drawn, as the next frame, composed with it, draws it. The live view's,
+    // which draws frame after frame and keeps each post frame's picture (the
+    // GPU in GpuRenderer, the CPU in post_history), for kPostBufferFrames
+    // after it. Off (captures, replay: one frame), or with none kept, such a
+    // frame draws its own world, post-processed as its parameters say
+    // (post_model.h's PlanPost).
+    bool post_buffer = false;
     // with post, if given: bloom's level 0 as the composite read it
     // (post_model.h's RunPost), to check it against the game's
     std::vector<uint32_t>* post_bloom0 = nullptr;
@@ -127,7 +159,41 @@ struct RasterOptions {
     // applied to the scene target's views.
     bool gamma = true;
     RasterView view = RasterView::kFinal;
+    // The texture passes that are pictures of the screen (the spotlights'
+    // depth volume and density map, the soft-particle surfaces: PassTargetSize)
+    // drawn at their game size times this, so they keep their share of a
+    // picture bigger than the game's 1280x720: the presenter's is its height
+    // over 720. Every other pass stays the game's size. 1 is the game's.
+    float target_scale = 1.0f;
+    // the characters' shadow maps (512x512) drawn at this times their size,
+    // their taps a texel of that apart (sharper self-shadows); 1 is the game's
+    float shadow_scale = 1.0f;
+    // the passes RB3 draws without a material, with TheRnd's default one
+    // (scene_capture.h's NoMaterial); off, they're left out, as the
+    // renderers did before the capture kept them
+    bool default_material = true;
+    // the overlay's samples per pixel (OverlaySamples): 2, the game's (its
+    // D3DMULTISAMPLE_2_SAMPLES offscreen target), 4 smoother than the game,
+    // 1 none, as the renderers drew before
+    uint32_t msaa = 2;
 };
+
+// whether the renderers draw d, as far as the options say
+// (RasterOptions::default_material)
+inline bool DrawnByOptions(const FrameCapture& f, const DrawItem& d, const RasterOptions& o) {
+    if (o.default_material) return true;
+    const ShadeInputs* s =
+        d.shade >= 0 && size_t(d.shade) < f.shades.size() ? &f.shades[d.shade] : nullptr;
+    return !NoMaterial(d, s);
+}
+
+// A frame's overlay's samples per pixel: RasterOptions::msaa (2 or 4; any
+// other is 1) for a picture (RasterView::kFinal), 1 for a view of the scene
+// target, which ends at the resolve
+inline uint32_t OverlaySamples(const RasterOptions& o) {
+    if (o.view != RasterView::kFinal) return 1;
+    return o.msaa == 2 || o.msaa == 4 ? o.msaa : 1;
+}
 
 struct RasterStats {
     uint32_t draws = 0;
@@ -226,6 +292,49 @@ void PlaceBackBufferDraw(const BackBufferLayout& layout, const FrameCapture& fra
                          const DrawItem& d, uint32_t width, uint32_t height, float viewport[4],
                          DepthMap& depth);
 
+// The size both renderers draw texture pass p's target at: the game's
+// (Pass::width, height), but the passes that are pictures of the screen, the
+// spotlights' depth volume and density map (kTexTypeDepthVolume,
+// kTexTypeDensityMap) and the soft-particle surfaces (PostConsts::
+// soft_surface), at that times options.target_scale, and the shadow maps
+// times options.shadow_scale, each side rounded to an even number. Their
+// draws' viewports (Pass::viewport, in the game's texels) scale with them
+// (ScalePassViewport); what reads them reads them by uv (the composite, the
+// cones' density, the blurs' taps: uv offsets the game set for its size, so
+// a blur covers as much of the screen at any size), but for a shadow map's
+// half-texel offset (shade_model.h's RescaleShadowCoord). NgLight's shadow
+// (ShadowCasterPass) stays 256x256: it's the light's picture, not the
+// screen's, and its two blurs leave nothing finer than its texels.
+void PassTargetSize(const FrameCapture& frame, const Pass& p, const RasterOptions& options,
+                    uint32_t& width, uint32_t& height);
+// pass p's camera viewport (x, y, w, h) in a target of w x h rather than its
+// own size
+inline void ScalePassViewport(const Pass& p, uint32_t w, uint32_t h, float vp[4]) {
+    for (int i = 0; i < 4; i++) vp[i] = p.viewport[i];
+    if (w == p.width && h == p.height) return;
+    const float sx = float(w) / float(p.width), sy = float(h) / float(p.height);
+    vp[0] *= sx;
+    vp[1] *= sy;
+    vp[2] *= sx;
+    vp[3] *= sy;
+}
+
+// A texture pass's blur (spot::SpotBlur's, SoftBlur's) into a target drawn
+// at w x h, bigger than the game's (PassTargetSize). The game's taps are uv
+// offsets a texel or a half apart, each reading a texel or the mean of two;
+// at the same uv in a bigger target they'd read single texels with others
+// between them left out, combing whatever is finer than the game's texels
+// (a cone's edge against the scene). So each tap is instead the mean of
+// `count` samples `step` (uv) apart along the taps' line, spread over one of
+// the game's texels: the game's tap over the texels it covers. count 1 at
+// the game's size (or smaller).
+struct BlurSubTaps {
+    uint32_t count = 1;
+    float step[2] = {0, 0};
+};
+BlurSubTaps BlurSubTapsFor(const ShadeInputs& state, int taps, const Pass& p, uint32_t w,
+                           uint32_t h);
+
 // a texture pass's draws but FinishDrawTarget's mip downsamples: the
 // renderers make mips themselves, or sample level 0
 inline bool DrawnInTexturePass(const DrawItem& d) { return d.mip_level == 0; }
@@ -264,12 +373,14 @@ inline bool WritesSceneAlpha(const ShadeState* s) {
     return s && (s->Option(shader_opt::kPseudoHdr) || s->alpha_write);
 }
 
-// Whether a draw's shader is REFRACT_WORLD (option bit 46, which shader_opt
-// doesn't name; the score box's glass): its texture times the picture behind
-// it. Drawn over the overlay, that's DxRnd::GetCurrentFrameTex's
+// Whether a draw's shader is REFRACT_WORLD (option bit 46; the score box's
+// glass): its texture times the picture behind it, where its refract normal
+// map moves it (shade.hlsli's RefractUv). Drawn over the overlay, that's DxRnd::GetCurrentFrameTex's
 // PostProcessTexture, the picture as DoPostProcess left it (SavePostBuffer)
 // before the overlay's draws, which the renderers keep a copy of for it.
-inline bool RefractsWorld(const ShadeState* s) { return s && ((s->options >> 46) & 1); }
+inline bool RefractsWorld(const ShadeState* s) {
+    return s && s->Option(shader_opt::kRefractWorld);
+}
 
 // the renderers' depth, kNearW / w (w the clip w, larger is nearer, 0 where
 // nothing drew), as RasterView::kSceneDepth shows it: grey falling off with
