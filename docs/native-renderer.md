@@ -13,7 +13,10 @@ keeps running either way. The picture keeps the game's 16:9 with black bars, or 
 when the SDK's `present_letterbox` is off. On Windows the frames go to the window without
 leaving the GPU; where that can't be done (other platforms, `native_view_backend` cpu, or
 `native_present_zero_copy` off) each frame is read back and uploaded instead. The log says
-which (`native present: zero-copy`, or `native present: uploading each frame (<why>)`).
+which (`native present: zero-copy`, or `native present: uploading each frame (<why>)`). On
+Microsoft's software rasterizer (WARP, the Basic Render Driver Windows uses without a GPU
+driver) the native renderer draws on the CPU instead: band3's GPU drawing would share the
+emulated GPU's Direct3D 12 device there, which crashes (`native view gpu: not started`).
 
 Turning native on makes the native renderer's GPU pipelines first, on the UI thread (about
 100 ms, once a session), so no frame waits for one; the log says `native view gpu: <n>

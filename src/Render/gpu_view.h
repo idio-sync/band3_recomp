@@ -61,6 +61,12 @@
 // device per adapter in a process), so the ID3D12Resource behind SDL's
 // texture, reached through SDL 3.4.14's private texture layout and checked
 // before use (CheckZeroCopy), is a texture the SDK's command list can read.
+// Sharing it is also why no device is made on Microsoft's software
+// rasterizer (WARP, the Basic Render Driver, vendor 0x1414): there the shared
+// device faults inside WARP (an access violation that kills band3) once
+// band3's frames and the emulated GPU's run on it together, whether or not
+// they're presented in place; native_view.cpp refuses the device
+// (RefuseDevice) and the native view draws on the CPU.
 
 namespace band3::render {
 
@@ -125,6 +131,11 @@ class GpuRenderer {
     // to sample them in place, or null when its presenter isn't Direct3D 12.
     // On the UI thread, before CheckZeroCopy.
     void SetPresentDevice(void* d3d12_device);
+    // No device for the session, and why (Init logs it once; CheckZeroCopy
+    // gives it as its why not): the SDK's GPU is one SDL_gpu mustn't share.
+    // On the UI thread, before Init; after it, a device made is let go and
+    // the native view draws on the CPU from the next frame.
+    void RefuseDevice(std::string why);
     // Whether the outputs can be sampled in place (GpuOutput::d3d12_resource):
     // on Windows, once the device has started, SDL's texture behind a test
     // texture is checked once (its create info, its texture's container and

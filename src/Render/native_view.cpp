@@ -1041,6 +1041,17 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         // are D3D12Provider and D3D12Presenter.
         if (provider_) {
             const auto& d3d12 = static_cast<const rex::ui::d3d12::D3D12Provider&>(*provider_);
+            // Microsoft's software rasterizer (WARP, and the Basic Render
+            // Driver Windows falls back to without a GPU driver): SDL_gpu
+            // would get the SDK's own device there too, and band3's frames
+            // and the emulated GPU's running on it together fault inside
+            // WARP, killing band3, on either path. On separate devices they
+            // don't; on hardware sharing is fine.
+            if (d3d12.GetAdapterVendorID() == rex::ui::GraphicsProvider::GpuVendorID::kMicrosoft)
+                GpuRenderer::Get().RefuseDevice(
+                    "the SDK's GPU is Microsoft's software rasterizer (WARP), whose Direct3D 12 "
+                    "device band3's GPU drawing would share with the emulated GPU, and that "
+                    "crashes there");
             GpuRenderer::Get().SetPresentDevice(d3d12.GetDevice());
             auto present = std::make_unique<D3D12Present>();
             if (present->Init(d3d12)) d3d12_ = std::move(present);

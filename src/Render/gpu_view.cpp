@@ -42,6 +42,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 // See gpu_view.h.
@@ -483,6 +484,9 @@ struct GpuRenderer::Impl {
     std::atomic<bool> zero_copy{false};
     std::mutex zero_copy_mutex;
     std::string zero_copy_why = "not checked yet";
+    // RefuseDevice's why, which keeps Init from making the device (under
+    // zero_copy_mutex)
+    std::string refused;
 
     // Everything a frame sends goes through this one transfer buffer and one
     // copy pass. It's mapped cycling, so a frame never waits on an earlier one
@@ -3377,6 +3381,16 @@ bool GpuRenderer::Init() {
     if (impl_->tried) return impl_->ready;
     std::lock_guard lock(impl_->mutex);
     if (impl_->tried.exchange(true)) return impl_->ready;
+    std::string refused;
+    {
+        std::lock_guard why_lock(impl_->zero_copy_mutex);
+        refused = impl_->refused;
+    }
+    if (!refused.empty()) {
+        REXLOG_WARN("native view gpu: not started, the native view draws on the CPU: {}",
+                    refused);
+        return false;
+    }
     if (impl_->Create()) {
         impl_->ready = true;
         return true;
@@ -3431,9 +3445,23 @@ void GpuRenderer::SetPresentDevice(void* d3d12_device) {
     impl_->present_device = d3d12_device;
 }
 
+void GpuRenderer::RefuseDevice(std::string why) {
+    {
+        std::lock_guard lock(impl_->zero_copy_mutex);
+        impl_->refused = std::move(why);
+    }
+    // made already: a frame being drawn finishes first, and the next finds
+    // no device (Draw) and is drawn on the CPU
+    std::lock_guard lock(impl_->mutex);
+    if (!impl_->device) return;
+    impl_->ready = false;
+    impl_->Release(true);
+}
+
 bool GpuRenderer::CheckZeroCopy(std::string& why) {
     if (!impl_->ready) {
-        why = "no GPU device for the native view";
+        std::lock_guard lock(impl_->zero_copy_mutex);
+        why = impl_->refused.empty() ? "no GPU device for the native view" : impl_->refused;
         return false;
     }
     if (!impl_->zero_copy_checked) {
