@@ -393,6 +393,9 @@ class Renderer {
                 // and the frames that post-process nothing show the post
                 // buffer, as the game's do, not their own world
                 o.post_buffer = true;
+                // and the world's REFRACT_WORLD draws (the title's road) read
+                // the last world frame's scene, as the game's do
+                o.pre_buffer = true;
                 gpu = gpu_;
                 dump = dump_path_;
                 zero_copy = present_ && present_zero_copy_ && gpu && dump.empty();
@@ -585,8 +588,8 @@ class Renderer {
 
     std::mutex mutex_;
     std::thread thread_;
-    // the CPU's post buffer, for the trails and the frames that show it, the
-    // worker's alone
+    // the CPU's post buffer, for the trails and the frames that show it, and
+    // its pre-process buffer, the worker's alone
     post::PostHistory post_history_;
     int users_ = 0;
     bool stop_ = false;

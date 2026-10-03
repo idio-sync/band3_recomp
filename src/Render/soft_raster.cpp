@@ -861,7 +861,8 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     ds.depth_only = t.zw != nullptr;
     ds.per_vertex = (ds.shade.flags.x & shade::kShadePerVertex) != 0;
     ds.normal_map = (ds.shade.flags.x & shade::kShadeNormalMap) != 0;
-    // REFRACT_WORLD reads the picture behind it: in the picture, once resolved
+    // REFRACT_WORLD reads the picture behind it: in the picture, once
+    // resolved; in the world, the pre-process buffer (Run's world_behind)
     if (ds.shade.flags.x & shade::kShadeRefract) {
         if (t.behind) {
             ds.behind = {t.w, t.h, t.behind};
@@ -1177,11 +1178,21 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
     return runs;
 }
 
+// One of the world passes drawn before a frame whose world refracts, with
+// no pre-process buffer kept for it (kPreBufferPasses): its REFRACT_WORLD
+// draws read `behind` (width x height), and the scene its world leaves goes
+// into `scene`, where it ends
+struct PrePass {
+    const uint32_t* behind;
+    std::vector<uint32_t>* scene;
+};
+
 // Rasterize(), and the texture targets it drew: `stop` (a DxTex, 0 none)
-// ends the frame after `stop_version` of it (0 its last) is drawn
+// ends the frame after `stop_version` of it (0 its last) is drawn; with
+// `pre`, it's that world pass and ends at post_boundary
 RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<uint32_t>& rgba,
                 std::vector<int32_t>* ids, RtTargets& rts, uint32_t stop,
-                uint32_t stop_version) {
+                uint32_t stop_version, const PrePass* pre = nullptr) {
     const auto start = std::chrono::steady_clock::now();
     RasterStats st;
     const size_t pixels = size_t(o.width) * o.height;
@@ -1222,6 +1233,43 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                             kept->picture_h == o.height &&
                             PostBufferFor(frame, kept->picture_frame);
     const bool keeps = kept && ProcKnown(frame) && (frame.proc_cmds & kProcPost);
+    // The world's REFRACT_WORLD draws read the pre-process buffer (RefractsWorld,
+    // RasterOptions::pre_buffer): the one kept from the world frames before,
+    // or else the world drawn kPreBufferPasses times first; black where
+    // neither (a view of the scene target, whose alpha and depth they don't
+    // change, or a texture target's dump). This frame's world is kept in turn.
+    std::vector<uint32_t> world_behind;
+    const bool world_refracts = !shows_kept && WorldRefracts(frame);
+    post::PostHistory* const pre_kept =
+        world_refracts && !pre && o.pre_buffer && o.view == RasterView::kFinal ? o.post_history
+                                                                               : nullptr;
+    if (world_refracts) {
+        if (pre) {
+            world.behind = pre->behind;
+        } else if (pre_kept && pre_kept->pre_w == o.width && pre_kept->pre_h == o.height &&
+                   PreBufferFor(frame, pre_kept->pre_frame)) {
+            world.behind = pre_kept->pre.data();
+        } else {
+            world_behind.assign(pixels, 0);
+            if (o.view == RasterView::kFinal && !stop) {
+                // the world alone, on its own targets, with nothing of the
+                // live view's: no post-processing, history or samples
+                RasterOptions po = o;
+                po.post = po.trails = po.post_buffer = po.pre_buffer = false;
+                po.post_history = nullptr;
+                po.post_bloom0 = nullptr;
+                po.msaa = 1;
+                std::vector<uint32_t> picture, next;
+                for (int k = 0; k < kPreBufferPasses; k++) {
+                    RtTargets pre_rts;
+                    const PrePass pass{world_behind.data(), &next};
+                    Run(frame, po, picture, nullptr, pre_rts, 0, 0, &pass);
+                    world_behind.swap(next);
+                }
+            }
+            world.behind = world_behind.data();
+        }
+    }
     const BackBufferLayout layout = LayoutBackBuffer(frame);
     // the scene into the picture, at post_boundary (or the frame's end):
     // post-processed, or as it is. A view of the scene target ends the frame
@@ -1234,6 +1282,17 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     // overlay draws to come, not the frame's end).
     auto resolve = [&](bool overlay_follows) {
         back = &overlay;
+        // the scene as the world left it, before post-processing, as
+        // DoWorldEnd's SavePreBuffer keeps it: for the next world frame's
+        // REFRACT_WORLD draws, or the next world pass's
+        if (pre) {
+            *pre->scene = scene;
+        } else if (pre_kept) {
+            pre_kept->pre = scene;
+            pre_kept->pre_w = o.width;
+            pre_kept->pre_h = o.height;
+            pre_kept->pre_frame = WorldFrameOf(frame);
+        }
         if (shows_kept) {
             rgba = kept->picture;
         } else if (post_on) {
@@ -1295,12 +1354,14 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     // the density map the spotlights' cones read: the last drawn
     uint32_t density = 0;
     for (const PassRun& run : Plan(frame, o, stop, stop_version)) {
+        // a world pass ends with the world
+        if (pre && back == &overlay) break;
         if (!run.pass) {
             for (uint32_t i = run.first; i < run.end; i++) {
                 const DrawItem& it = frame.draws[i];
                 if (!DrawnToBackBuffer(it) || (shows_kept && i < frame.post_boundary)) continue;
                 if (back == &world && i >= frame.post_boundary) resolve(true);
-                if (back == &overlay && o.view != RasterView::kFinal) break;
+                if (back == &overlay && (o.view != RasterView::kFinal || pre)) break;
                 // (a DrawRect quad has no camera of its own)
                 if (it.rect_shader < 0) {
                     if (o.clear_depth_per_camera && !layout.cameras && it.cam != last_cam &&
@@ -1470,6 +1531,15 @@ bool ShadowCasterPass(const FrameCapture& f, const Pass& p) {
 
 std::vector<PassRun> PlanPasses(const FrameCapture& frame, const RasterOptions& options) {
     return Plan(frame, options, 0, 0);
+}
+
+bool WorldRefracts(const FrameCapture& frame) {
+    const size_t end = std::min<size_t>(frame.post_boundary, frame.draws.size());
+    for (size_t i = 0; i < end; i++) {
+        const DrawItem& it = frame.draws[i];
+        if (DrawnToBackBuffer(it) && RefractsWorld(shade::ShadeOf(frame, it))) return true;
+    }
+    return false;
 }
 
 uint32_t ClearRgba(const FrameCapture& frame) {

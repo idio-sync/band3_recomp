@@ -40,8 +40,9 @@
 // scene target's colour, alpha and depth, or a copy (alpha made opaque) on
 // frames without it or with RasterOptions::post off. An overlay draw that
 // reads the picture behind it (RefractsWorld) reads a copy of it as the
-// resolve left it. The display's gamma ramp (gamma_ramp.h) goes over the
-// finished picture. The back buffer starts as TheRnd's clear colour
+// resolve left it; a world draw that does, the last world frame's scene
+// (RasterOptions::pre_buffer). The display's gamma ramp (gamma_ramp.h) goes
+// over the finished picture. The back buffer starts as TheRnd's clear colour
 // (ClearRgba), and its draws go in their cameras' viewports, layered by their
 // z ranges as RB3's are, where the capture has its cameras (LayoutBackBuffer);
 // its DrawRect quads (flares, ScreenMasks, the intro movie) are drawn too,
@@ -150,6 +151,16 @@ struct RasterOptions {
     // frame draws its own world, post-processed as its parameters say
     // (post_model.h's PlanPost).
     bool post_buffer = false;
+    // The world's REFRACT_WORLD draws (RefractsWorld: the title's road) read
+    // the pre-process buffer, the last world frame's scene before
+    // post-processing: the live view's, which keeps each world frame's scene
+    // where it has such a draw (the GPU in GpuRenderer, the CPU in
+    // post_history) for the world frames after it (frame_compose.h's
+    // PreBufferFor). Off (captures, replay: one frame), or with none kept,
+    // the frame's world is drawn kPreBufferPasses times first, the first
+    // reading black and each after it the one before's scene, standing in
+    // for the frames before it.
+    bool pre_buffer = false;
     // with post, if given: bloom's level 0 as the composite read it
     // (post_model.h's RunPost), to check it against the game's
     std::vector<uint32_t>* post_bloom0 = nullptr;
@@ -374,13 +385,35 @@ inline bool WritesSceneAlpha(const ShadeState* s) {
 }
 
 // Whether a draw's shader is REFRACT_WORLD (option bit 46; the score box's
-// glass): its texture times the picture behind it, where its refract normal
-// map moves it (shade.hlsli's RefractUv). Drawn over the overlay, that's DxRnd::GetCurrentFrameTex's
-// PostProcessTexture, the picture as DoPostProcess left it (SavePostBuffer)
-// before the overlay's draws, which the renderers keep a copy of for it.
+// glass, the title's road): its texture (or its lit colour) times the
+// picture behind it, where its refract normal map moves it (shade.hlsli's
+// RefractUv). That's DxRnd::GetCurrentFrameTex (rb3-xenon Rnd_Xbox.cpp:632,
+// bound by Mat_NG.cpp:324). Drawn over the overlay, it's PostProcessTexture,
+// the picture as DoPostProcess left it (SavePostBuffer) before the overlay's
+// draws, which the renderers keep a copy of for it. Drawn in the world,
+// before post-processing, it's PreProcessTexture, not resolved then (outside
+// HiResScreen): what SavePreBuffer left in it at the last world frame's end,
+// that frame's scene. So the title's road is a feedback loop, each frame's
+// the lit colour times the last's, which settles dark and reflective
+// (out/research/n5_title_street.md). The renderers keep it frame after frame
+// where they draw frame after frame (RasterOptions::pre_buffer), else draw
+// the world kPreBufferPasses times first.
 inline bool RefractsWorld(const ShadeState* s) {
     return s && s->Option(shader_opt::kRefractWorld);
 }
+
+// whether any of the frame's world draws (before post_boundary, into the
+// back buffer) is REFRACT_WORLD
+bool WorldRefracts(const FrameCapture& frame);
+
+// The world passes drawn before a frame whose world refracts, where no
+// pre-process buffer is kept for it (RasterOptions::pre_buffer): the first
+// reads black, each after it the one before's scene, and the frame the
+// last's. Two put the title's road (out/n1/f/title, replay's --crop
+// 560,500,340,220) at a mean of 1.1 of 255 against the game, where the
+// loop has all but settled (1.2 after one or after six); black alone leaves
+// it 1.8, darker, and no picture behind at all 14.1, orange.
+inline constexpr int kPreBufferPasses = 2;
 
 // the renderers' depth, kNearW / w (w the clip w, larger is nearer, 0 where
 // nothing drew), as RasterView::kSceneDepth shows it: grey falling off with

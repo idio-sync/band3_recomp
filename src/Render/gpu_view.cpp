@@ -424,7 +424,10 @@ struct GpuRenderer::Impl {
         SDL_GPUTexture* texture = nullptr;
         uint32_t w = 0, h = 0;
     };
-    Scratch spot_scratch, light_scratch, soft_scratch;
+    // and the scene a world pass left (soft_raster.h's kPreBufferPasses),
+    // which the next one's REFRACT_WORLD draws read, and the frame's after
+    // them
+    Scratch spot_scratch, light_scratch, soft_scratch, pre_scratch;
     // The post buffer the trails read (RasterOptions::trails, the live
     // view's): the last post frame's composite, its colour and alpha, at the
     // picture's size, in tex[cur] (-1 none yet), from game frame game_frame;
@@ -449,6 +452,12 @@ struct GpuRenderer::Impl {
         uint64_t game_frame = 0;
     };
     PostBuffer post_buffer;
+    // The pre-process buffer (RasterOptions::pre_buffer, the live view's):
+    // the last world frame's scene before post-processing, at the picture's
+    // size, from the world of game frame game_frame (0 none), kept where that
+    // world has a REFRACT_WORLD draw, which the next one's read. Apart from
+    // the frame's targets, as the post buffer is.
+    PostBuffer pre_buffer;
 
     // The presenter's outputs (RenderFrameToOutput), each at the size it was
     // last drawn at: apart from the frame's targets, so a frame drawn at
@@ -635,9 +644,10 @@ struct GpuRenderer::Impl {
     SDL_GPUGraphicsPipeline* MakeVelocityObjectPipeline(CullWinding cull);
     bool EnsureHistory(uint32_t w, uint32_t h);
     void ReleaseHistory();
-    // the post buffer at w x h, emptied (game_frame 0) if it's made again
-    bool EnsurePostBuffer(uint32_t w, uint32_t h);
-    void ReleasePostBuffer();
+    // the post buffer or the pre-process buffer `b` at w x h, emptied
+    // (game_frame 0) if it's made again
+    bool EnsureKept(PostBuffer& b, uint32_t w, uint32_t h);
+    void ReleaseKept(PostBuffer& b);
     void ReleaseTargets();
     // makes every pipeline a frame can ask for and the upload buffer's usual
     // size, so no frame stalls making them: the overlay's at overlay_samples
@@ -678,9 +688,13 @@ struct GpuRenderer::Impl {
     // logs a change)
     void SetZeroCopy(bool ok, const std::string& why);
     // Draws `frame` into output `slot`, or with -1 into `graded`, which it
-    // reads back into rgba
+    // reads back into rgba. With `pre_pass` (from 1) it's that one of the
+    // world passes before a frame whose world refracts (soft_raster.h's
+    // kPreBufferPasses): its world alone, which leaves its scene in
+    // pre_scratch, its REFRACT_WORLD draws reading the last pass's there (the
+    // first black).
     bool Render(const FrameCapture& frame, const RasterOptions& o, int slot,
-                std::vector<uint32_t>* rgba, GpuStats& stats);
+                std::vector<uint32_t>* rgba, GpuStats& stats, int pre_pass = 0);
     // reads `texture` (w x h) back into rgba; false if the GPU failed (logged)
     bool Download(SDL_GPUTexture* texture, uint32_t w, uint32_t h, std::vector<uint32_t>& rgba);
     void Evict();
@@ -1046,7 +1060,8 @@ void GpuRenderer::Impl::Release(bool stop_video) {
         if (no_bones) SDL_ReleaseGPUBuffer(device, no_bones);
         ReleaseTargets();
         ReleaseHistory();
-        ReleasePostBuffer();
+        ReleaseKept(post_buffer);
+        ReleaseKept(pre_buffer);
         ReleaseOutputs();
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
         SDL_DestroyGPUDevice(device);
@@ -1078,7 +1093,8 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     white = black = no_depth = nullptr;
     ReleaseTargets();  // released above: forgets them
     ReleaseHistory();
-    ReleasePostBuffer();
+    ReleaseKept(post_buffer);
+    ReleaseKept(pre_buffer);
     ReleaseOutputs();
     depth_sampled = false;
     no_bones = nullptr;
@@ -1586,7 +1602,8 @@ void GpuRenderer::Impl::ReleaseTargets() {
                                   post_velocity_depth, post_bloom[0],
                                   post_bloom[1], post_bloom[2], post_tmp[0], post_tmp[1],
                                   post_tmp[2], spot_scratch.texture, light_scratch.texture,
-                                  soft_scratch.texture, color_ms, depth_ms})
+                                  soft_scratch.texture, pre_scratch.texture, color_ms,
+                                  depth_ms})
             if (t) SDL_ReleaseGPUTexture(device, t);
         if (readback) SDL_ReleaseGPUTransferBuffer(device, readback);
     }
@@ -1596,7 +1613,7 @@ void GpuRenderer::Impl::ReleaseTargets() {
     color_ms = depth_ms = nullptr;
     ms_samples = 1;
     ms_w = ms_h = 0;
-    spot_scratch = light_scratch = soft_scratch = Scratch{};
+    spot_scratch = light_scratch = soft_scratch = pre_scratch = Scratch{};
     for (int k = 0; k < 3; k++) post_bloom[k] = post_tmp[k] = nullptr;
     readback = nullptr;
     width = height = 0;
@@ -1630,14 +1647,14 @@ bool GpuRenderer::Impl::EnsureHistory(uint32_t w, uint32_t h) {
     return true;
 }
 
-void GpuRenderer::Impl::ReleasePostBuffer() {
-    if (device && post_buffer.tex) SDL_ReleaseGPUTexture(device, post_buffer.tex);
-    post_buffer = PostBuffer{};
+void GpuRenderer::Impl::ReleaseKept(PostBuffer& b) {
+    if (device && b.tex) SDL_ReleaseGPUTexture(device, b.tex);
+    b = PostBuffer{};
 }
 
-bool GpuRenderer::Impl::EnsurePostBuffer(uint32_t w, uint32_t h) {
-    if (post_buffer.tex && post_buffer.w == w && post_buffer.h == h) return true;
-    ReleasePostBuffer();
+bool GpuRenderer::Impl::EnsureKept(PostBuffer& b, uint32_t w, uint32_t h) {
+    if (b.tex && b.w == w && b.h == h) return true;
+    ReleaseKept(b);
     SDL_GPUTextureCreateInfo ti{};
     ti.type = SDL_GPU_TEXTURETYPE_2D;
     ti.width = w;
@@ -1646,10 +1663,10 @@ bool GpuRenderer::Impl::EnsurePostBuffer(uint32_t w, uint32_t h) {
     ti.num_levels = 1;
     ti.format = kColorFormat;
     ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
-    post_buffer.tex = SDL_CreateGPUTexture(device, &ti);
-    if (!post_buffer.tex) return false;
-    post_buffer.w = w;
-    post_buffer.h = h;
+    b.tex = SDL_CreateGPUTexture(device, &ti);
+    if (!b.tex) return false;
+    b.w = w;
+    b.h = h;
     return true;
 }
 
@@ -1962,11 +1979,51 @@ bool GpuRenderer::Impl::Download(SDL_GPUTexture* texture, uint32_t w, uint32_t h
 }
 
 bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o, int slot,
-                               std::vector<uint32_t>* rgba, GpuStats& st) {
+                               std::vector<uint32_t>* rgba, GpuStats& st, int pre_pass) {
     if (!o.width || !o.height || !EnsureTargets(o.width, o.height)) return false;
     if (slot >= 0 && !EnsureOutput(slot, o.width, o.height)) return false;
     // where the last pass, the gamma ramp's, puts the finished frame
     SDL_GPUTexture* const output = slot >= 0 ? outputs[slot].texture : graded;
+    // the post buffer (RasterOptions::post_buffer): a post frame's picture
+    // kept, and shown by the frames after it that post-process nothing, in
+    // place of their world, whose draws are left out
+    const bool kept_buffer = o.post_buffer && o.view == RasterView::kFinal;
+    const bool shows_kept = kept_buffer && ShowsPostBuffer(frame) && post_buffer.tex &&
+                            post_buffer.w == width && post_buffer.h == height &&
+                            PostBufferFor(frame, post_buffer.game_frame);
+    const bool keeps = kept_buffer && ProcKnown(frame) && (frame.proc_cmds & kProcPost) &&
+                       EnsureKept(post_buffer, width, height);
+    // The world's REFRACT_WORLD draws read the pre-process buffer (soft_raster.h's
+    // RefractsWorld, RasterOptions::pre_buffer): the one kept from the world
+    // frames before, or else the world drawn kPreBufferPasses times first
+    // (each a Render of its own, before this one starts), as Rasterize()
+    // does; black (no_depth's 0) where neither, as in a view of the scene
+    // target, whose alpha and depth they don't change. This frame's world is
+    // kept in turn.
+    const bool world_refracts = !shows_kept && WorldRefracts(frame);
+    const bool keeps_pre =
+        world_refracts && !pre_pass && o.pre_buffer && o.view == RasterView::kFinal;
+    SDL_GPUTexture* world_behind = no_depth;
+    if (world_refracts) {
+        if (pre_pass) {
+            if (pre_pass > 1) world_behind = pre_scratch.texture;
+        } else if (keeps_pre && pre_buffer.tex && pre_buffer.w == width &&
+                   pre_buffer.h == height && PreBufferFor(frame, pre_buffer.game_frame)) {
+            world_behind = pre_buffer.tex;
+        } else if (o.view == RasterView::kFinal && EnsureScratch(pre_scratch, width, height)) {
+            // the world alone, with nothing of the live view's: no
+            // post-processing, history or samples
+            RasterOptions po = o;
+            po.post = po.trails = po.post_buffer = po.pre_buffer = false;
+            po.msaa = 1;
+            for (int k = 1; k <= kPreBufferPasses; k++) {
+                GpuStats ps;
+                if (!Render(frame, po, -1, nullptr, ps, k)) return false;
+            }
+            world_behind = pre_scratch.texture;
+        }
+    }
+    const bool keeps_pre_now = keeps_pre && EnsureKept(pre_buffer, width, height);
     serial++;
     Buffer& pool_v = pool_verts[serial & 1];
     Buffer& pool_i = pool_indices[serial & 1];
@@ -1986,15 +2043,6 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     for (auto& v : normal_source) v.assign(frame.draws.size(), kSourceNone);
     spot_draw.assign(frame.draws.size(), kSpotNone);
     const std::vector<PassRun> runs = PlanPasses(frame, o);
-    // the post buffer (RasterOptions::post_buffer): a post frame's picture
-    // kept, and shown by the frames after it that post-process nothing, in
-    // place of their world, whose draws are left out
-    const bool kept_buffer = o.post_buffer && o.view == RasterView::kFinal;
-    const bool shows_kept = kept_buffer && ShowsPostBuffer(frame) && post_buffer.tex &&
-                            post_buffer.w == width && post_buffer.h == height &&
-                            PostBufferFor(frame, post_buffer.game_frame);
-    const bool keeps = kept_buffer && ProcKnown(frame) && (frame.proc_cmds & kProcPost) &&
-                       EnsurePostBuffer(width, height);
     run_clear.assign(runs.size(), 0);
     uint32_t pool_vert_count = 0, pool_index_count = 0;
     // a geometry this frame draws: in the arena already, or into it from
@@ -2709,6 +2757,18 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             begin_back(true);
             end_pass();
         }
+        // the scene as the world left it, before post-processing, as
+        // DoWorldEnd's SavePreBuffer keeps it: for the next world frame's
+        // REFRACT_WORLD draws, or the next world pass's
+        if (pre_pass || keeps_pre_now) {
+            SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+            const SDL_GPUTextureLocation from{scene, 0, 0, 0, 0, 0};
+            const SDL_GPUTextureLocation to{pre_pass ? pre_scratch.texture : pre_buffer.tex, 0,
+                                            0, 0, 0, 0};
+            SDL_CopyGPUTextureToTexture(copy, &from, &to, width, height, 1, false);
+            SDL_EndGPUCopyPass(copy);
+            if (!pre_pass) pre_buffer.game_frame = WorldFrameOf(frame);
+        }
         // the post buffer as the picture, or the picture kept as it
         if (shows_kept) {
             SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
@@ -2873,10 +2933,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 sp.flags.x &= ~(shade::kShadeProjMultiply | shade::kShadeProjGobo);
         }
         // REFRACT_WORLD reads the picture behind it: into the picture, once
-        // the resolve has kept a copy of it
+        // the resolve has kept a copy of it; into the world, the pre-process
+        // buffer (world_behind)
         if (sp.flags.x & shade::kShadeRefract) {
             if (resolved && refracts && alpha != AlphaMode::kTexture)
                 tex[kSlotBehind] = {behind, 0, width, height};
+            else if (!resolved && alpha != AlphaMode::kTexture)
+                tex[kSlotBehind] = {world_behind, 0, width, height};
             else
                 sp.flags.x &= ~(shade::kShadeRefract | shade::kShadeRefractMap);
         }
@@ -3002,12 +3065,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // ranges (soft_raster.h's LayoutBackBuffer, which Rasterize() follows)
     for (size_t r = 0; r < runs.size(); r++) {
         const PassRun& run = runs[r];
+        // a world pass ends with the world
+        if (pre_pass && resolved) break;
         if (!run.pass) {
             for (size_t d = run.first; d < run.end; d++) {
                 const DrawItem& it = frame.draws[d];
                 if (!DrawnToBackBuffer(it) || (shows_kept && d < frame.post_boundary)) continue;
                 if (!resolved && d >= frame.post_boundary) resolve();
-                if (resolved && o.view != RasterView::kFinal) break;
+                if (resolved && (o.view != RasterView::kFinal || pre_pass)) break;
                 bool clear_depth = false;
                 // (a DrawRect quad has no camera of its own)
                 if (it.rect_shader < 0) {

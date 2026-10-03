@@ -117,6 +117,14 @@ struct PostHistory {
     std::vector<uint32_t> picture;
     uint32_t picture_w = 0, picture_h = 0;
     uint64_t picture_frame = 0;
+    // and the pre-process buffer (RasterOptions::pre_buffer): the last world
+    // frame's scene as its world's draws left it, before post-processing
+    // (DxRnd's SavePreBuffer), RGBA8, alpha the bloom weight, pre_w x pre_h,
+    // from the world of game frame pre_frame (0 none); kept where that world
+    // has a REFRACT_WORLD draw, which the next one's read
+    std::vector<uint32_t> pre;
+    uint32_t pre_w = 0, pre_h = 0;
+    uint64_t pre_frame = 0;
 };
 
 // The frame's PostPlan, false if it post-processes nothing: its DoPostProcess

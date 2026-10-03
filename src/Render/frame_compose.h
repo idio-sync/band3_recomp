@@ -90,6 +90,22 @@ inline bool PostBufferFor(const FrameCapture& fc, uint64_t kept) {
     return kept && kept < fc.game_frame && fc.game_frame - kept <= kPostBufferFrames;
 }
 
+// the game frame whose world `fc` draws: the world frame it's composed with,
+// or its own
+inline uint64_t WorldFrameOf(const FrameCapture& fc) {
+    return fc.composed && fc.world_frame ? fc.world_frame : fc.game_frame;
+}
+
+// Whether a pre-process buffer kept from the world of game frame `kept` (0
+// none: soft_raster.h's RasterOptions::pre_buffer) is the one `fc`'s world
+// reads: from its world frame or the last few before it. The same frame's
+// counts, for a frame drawn again (new options, a screenshot): the game's
+// world reads its own last frame there, which a still screen has the same.
+inline bool PreBufferFor(const FrameCapture& fc, uint64_t kept) {
+    const uint64_t world = WorldFrameOf(fc);
+    return kept && kept <= world && world - kept <= kPostBufferFrames;
+}
+
 // `frame` (a frame that drew no world) with `world`'s in front of its overlay:
 // world's draws before its post_boundary and the passes they're in, then
 // frame's texture passes from before its own (carried ones, say, that its

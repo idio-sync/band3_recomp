@@ -9,7 +9,8 @@
 // a colour above 1 blends as 1, clamped before SrcAlpha's scaling; that a
 // draw sampling a version no pass here made reads the frame's pass of the
 // next one, drawn first; that a REFRACT_WORLD draw over the overlay reads
-// the picture as the resolve left it; that a mesh's edges land on the pixels the game's do (D3D9's
+// the picture as the resolve left it, and one in the world the last world
+// frame's scene (or the world drawn twice first); that a mesh's edges land on the pixels the game's do (D3D9's
 // pixel centres), a DrawRect quad's on D3D10's; and that a soft particle
 // fades by the scene's depth behind it, and the soft-particle buffer's blur
 // takes its taps from the other surface; that a shadow map's pass draws
@@ -32,9 +33,12 @@
 
 #include <doctest/doctest.h>
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <vector>
+#include "src/Render/frame_compose.h"
+#include "src/Render/post_model.h"
 #include "src/Render/soft_raster.h"
 #include "src/Render/spot_model.h"
 
@@ -506,10 +510,63 @@ TEST_CASE("a REFRACT_WORLD draw in the overlay is its colour times the picture b
     Rasterize(f, Small(), rgba);
     CHECK(rgba[1 * 8 + 3] == 0xff000080u);  // red 255 * 128 / 255
 
-    // in the world, before the resolve, it draws as it is
+    // in the world, before the resolve, it reads the last world frame's
+    // scene instead (below): black here, the quad covering it all
     f.post_boundary = 3;
     Rasterize(f, Small(), rgba);
-    CHECK(rgba[1 * 8 + 3] == 0xff808080u);
+    CHECK(rgba[1 * 8 + 3] == 0xff000000u);
+}
+
+TEST_CASE("a REFRACT_WORLD draw in the world reads the last world frame's scene") {
+    // the world dark red (64), then a grey (128) REFRACT_WORLD quad added
+    // over it all: 64 plus half what's behind, which RB3 reads from the last
+    // world frame's scene (PreProcessTexture), so it climbs toward 128 frame
+    // after frame
+    FrameCapture f;
+    f.shades = {FlatShade(false), FlatShade(false)};
+    f.shades[1].options |= 1ull << shader_opt::kRefractWorld;
+    f.draws = {Shaded(-1, 1, 0xff000040u, 0, 1), Shaded(-1, 1, 0xff808080u, 1, 2)};
+    f.passes = {BackBuffer(0, 2)};
+    f.post_boundary = 2;
+    f.game_frame = f.world_frame = 10;
+    REQUIRE(WorldRefracts(f));
+    auto red = [](const std::vector<uint32_t>& p) { return int(p[1 * 8 + 3] & 0xff); };
+    std::vector<uint32_t> rgba;
+    // drawn alone (a capture, replay), the world is drawn kPreBufferPasses
+    // times first, the first reading black: 64, 96, then the frame's 112
+    REQUIRE(kPreBufferPasses == 2);
+    Rasterize(f, Small(), rgba);
+    CHECK(std::abs(red(rgba) - 112) <= 1);
+
+    // the live view keeps each world frame's scene for the world frames
+    // after it; with none kept yet, the frame is drawn as alone
+    post::PostHistory history;
+    RasterOptions o = Small();
+    o.pre_buffer = true;
+    o.post_history = &history;
+    Rasterize(f, o, rgba);
+    CHECK(std::abs(red(rgba) - 112) <= 1);
+    CHECK(history.pre_frame == 10);
+    REQUIRE(history.pre.size() == size_t(8) * 4);
+    CHECK(std::abs(int(history.pre[1 * 8 + 3] & 0xff) - 112) <= 1);
+    // the next world frame reads it: 64 + 56
+    f.game_frame = f.world_frame = 12;
+    Rasterize(f, o, rgba);
+    CHECK(std::abs(red(rgba) - 120) <= 1);
+    CHECK(history.pre_frame == 12);
+    // a post frame composed with the world frame after it (even/odd
+    // rendering) reads it by that world frame: 64 + 60
+    f.game_frame = 15;
+    f.world_frame = 14;
+    f.composed = 1;
+    Rasterize(f, o, rgba);
+    CHECK(std::abs(red(rgba) - 124) <= 1);
+    CHECK(history.pre_frame == 14);
+    // one from another moment isn't read: drawn as alone
+    f.game_frame = 14 + kPostBufferFrames + 2;
+    f.world_frame = f.game_frame - 1;
+    Rasterize(f, o, rgba);
+    CHECK(std::abs(red(rgba) - 112) <= 1);
 }
 
 TEST_CASE("a pass RB3 drew without a material is drawn, as with its default material") {
