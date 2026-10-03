@@ -125,7 +125,13 @@ in that order from a fresh launch (instead of `boot.b3t`), capture `screen-<kind
 kind of screen RB3 shows: the boot logos, the intro movie, the title, the first-run
 prompts, the band, closet and main menus, practice, the music library, a song's loading
 vignette, the song, its pause menu, a music-video venue, a controller's disconnect
-dialog and the results.
+dialog and the results. `render_screens_more.b3t` (after `boot.b3t`) captures the ones
+that work offline and those don't reach: the character creator and its face maker, the
+career's goals, Play a Show and its setlists, the calibration screens, and on drums the
+trainers and a drum lesson. `render_multiplayer.b3t` plays a song with two players
+(guitar and drums, `screen-mp2-<kind>`), and `render_multiplayer4.b3t` with four parts
+(guitar, drums, keys, and the USB mics' test tone singing through Rock Band 3 Deluxe's
+All Instruments Mode, `screen-mp4-<kind>`; its header has the launch).
 
 Besides the back buffer's draws and the texture passes, a capture keeps the
 characters' shadow-map passes and NgLight's shadow casters, a texture pass whose camera
@@ -215,3 +221,20 @@ is missing, and otherwise exits 1 if any capture's `cpu` or `gpu` mean got worse
 more than 0.5 (`--write-baseline` saves over it). The `gpu` rows change only when the
 capture is taken again, not when replay is rebuilt, and numbers from different runs of
 the game aren't comparable: a baseline compares re-renders of the same captures.
+
+`tools/pairs.py` measures F8 pairs: the native renderer's picture and, after F8, the
+emulated GPU's, a moment apart, without `capture`'s whole frames first, so what the
+window shows under each renderer as a player switches. With the game launched
+`--renderer=native` and its window `window offscreen` at `window size 1280x720` (the
+emulated GPU's size), on a still moment (a menu, a paused song):
+
+```
+python tools/pairs.py out/pairs --take title --port <port>   # take one and measure it
+python tools/pairs.py out/pairs --still 2                    # every pair in the set
+```
+
+Each pair gets parity.py's columns and tier, and passes at a mean of 3 or less with no
+4x4 cell over 20. `--take` takes the native picture again after F8 back, and the pair is
+graded by the closer of the two; `--still <mean>` leaves out what moved between them by
+itself, and `<set>/exclude.txt` rectangles by hand. `pairs_sheet.png` shows each pair
+and its difference.

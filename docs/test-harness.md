@@ -64,7 +64,9 @@ restores to back onto the primary monitor. `window status` prints where it is.
 Each player can have a virtual instrument: start a controller command with `p2`,
 `p3` or `p4` for that player's (`p2 instrument drums`, `p2 hit red_pad`, `pad 2`);
 without one it's player 1's. `state` lists every player's instrument.
-`tests/game/multiplayer.b3t` plays a two-player song. Players 2-4 aren't signed in,
+`tests/game/multiplayer.b3t` plays a two-player song, and the render checks
+`render_multiplayer.b3t` and `render_multiplayer4.b3t` two- and four-part ones
+([Render checks](native-renderer.md#render-checks)). Players 2-4 aren't signed in,
 so they join as guests (`skip_profile_prompt`, on by default). With it off, RB3 asks
 each to choose a profile when they join: No Profile plays as a guest.
 
