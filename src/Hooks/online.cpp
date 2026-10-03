@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include "generated/band3_init.h"
+#include "src/Net/liveless_rooms.h"
 #include "src/Net/local_address.h"
 #include "src/Net/native_socket.h"
 #include "src/Net/online.h"
@@ -119,6 +120,23 @@ bool StartLiveless() {
     return true;
 }
 
+// Liveless Rooms only finds the game for Liveless to join, and logs in with
+// username, which the server then keeps as that player's, as GoCentral does
+void StartLivelessRooms() {
+    if (!band3::settings::Startup().liveless_rooms) return;
+    if (!g_liveless) {
+        REXLOG_ERROR("rooms: liveless_rooms needs liveless = true");
+        return;
+    }
+    if (!band3::online::IsOwnAccountName(band3::settings::Username())) {
+        REXLOG_ERROR("rooms: not connecting as '{}': set username to a name of your own "
+                     "first, it's your account on the Liveless Rooms server",
+                     band3::settings::Username());
+        return;
+    }
+    band3::rooms::Start();
+}
+
 }  // namespace
 
 namespace band3::online {
@@ -150,8 +168,11 @@ void Start() {
     g_gocentral = StartGoCentral();
     g_liveless = StartLiveless();
     g_live = g_gocentral || g_liveless;
+    StartLivelessRooms();
 #endif
 }
+
+void Stop() { rooms::Stop(); }
 
 bool LiveSpoofed() { return g_live; }
 bool GoCentral() { return g_gocentral; }

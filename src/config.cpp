@@ -68,6 +68,8 @@ constexpr IniSetting kIniSettings[] = {
     {"liveless", "connect", "liveless_connect"},
     {"liveless", "external_ip", "liveless_external_ip"},
     {"liveless", "port", "liveless_port"},
+    {"liveless", "rooms", "liveless_rooms"},
+    {"liveless", "rooms_server", "liveless_rooms_server"},
     {"game", "rb3e_mode", "rb3e_mode"},
     {"game", "song_speed", "song_speed"},
     {"game", "track_speed", "track_speed"},

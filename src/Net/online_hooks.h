@@ -13,6 +13,10 @@ bool ResolveSdkExports();
 // runs.
 void Start();
 
+// Ends what Start began that runs on threads of its own (the Liveless Rooms
+// client). Call at shutdown, before the test server stops and the kernel goes.
+void Stop();
+
 // Set by Start, for the hooks:
 // players count as signed in to Live, and Quazal skips Live's security
 bool LiveSpoofed();

@@ -314,6 +314,16 @@ REXCVAR_DEFINE_INT32(liveless_port, 9103, "Band3/Online",
     .range(1024, 65000)
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(liveless_rooms, false, "Band3/Online",
+    "Join friends by an 8-character room code through a Liveless Rooms server "
+    "(RB3Enhanced's), instead of typing an address. Needs liveless")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(liveless_rooms_server, "liveless-testing.ipg.pw", "Band3/Online",
+    "The Liveless Rooms server's host name, as the server knows itself (host[:port], port "
+    "19532 by default). Logging in registers your username there")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 // Band3/Debug
 
 REXCVAR_DEFINE_BOOL(debug_overlay, true, "Band3/Debug",
@@ -475,6 +485,8 @@ void Init() {
         .liveless_connect = REXCVAR_GET(liveless_connect),
         .liveless_external_ip = REXCVAR_GET(liveless_external_ip),
         .liveless_port = REXCVAR_GET(liveless_port),
+        .liveless_rooms = REXCVAR_GET(liveless_rooms),
+        .liveless_rooms_server = REXCVAR_GET(liveless_rooms_server),
         .native_camera_shake = REXCVAR_GET(native_camera_shake),
     };
 
