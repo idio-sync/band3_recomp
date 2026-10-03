@@ -1,5 +1,6 @@
-// Checks the controller menu shortcut (src/Input/menu_shortcut.cpp) and the
-// Steam Deck detection and presets (src/steam_deck.h).
+// Checks the controller menu shortcut (src/Input/menu_shortcut.cpp), the
+// controllers it watches (ChordPads), and the Steam Deck detection and presets
+// (src/steam_deck.h).
 
 #include <doctest/doctest.h>
 #include <chrono>
@@ -73,6 +74,59 @@ TEST_CASE("other buttons don't matter, one stick click isn't a chord") {
     CHECK(one_stick.Update(xbox::kLeftThumb | xbox::kLeftShoulder, t0) == MenuShortcutAction::kNone);
     CHECK(one_stick.Update(xbox::kLeftThumb | xbox::kLeftShoulder, t0 + 10s) ==
           MenuShortcutAction::kNone);
+}
+
+TEST_CASE("the shortcut sees what the game read from each player's controller") {
+    ChordPads pads;
+    // nothing read yet
+    CHECK(pads.Held(t0) == 0);
+    pads.OnCapabilities(0, kSubtypeGamepad);
+    pads.OnState(0, kSticks, t0);
+    CHECK(pads.Held(t0 + 10ms) == kSticks);
+    // another player's buttons add to them
+    pads.OnCapabilities(2, kSubtypeGamepad);
+    pads.OnState(2, xbox::kLeftShoulder | xbox::kButtonA, t0);
+    CHECK(pads.Held(t0 + 10ms) == (kSticksAndBumper | xbox::kButtonA));
+    // let go, or unplugged
+    pads.OnState(0, 0, t0 + 20ms);
+    pads.OnState(2, std::nullopt, t0 + 20ms);
+    CHECK(pads.Held(t0 + 30ms) == 0);
+    // players past the fourth aren't read
+    pads.OnCapabilities(4, kSubtypeGamepad);
+    pads.OnState(4, kSticks, t0 + 30ms);
+    CHECK(pads.Held(t0 + 40ms) == 0);
+}
+
+TEST_CASE("instruments don't count, nor a controller of no known type") {
+    ChordPads pads;
+    // a kit's pad flag and second kick are the stick clicks, its kick the bumper
+    pads.OnCapabilities(0, kSubtypeDrums);
+    pads.OnState(0, kSticksAndBumper, t0);
+    // a guitar's solo frets are the left stick click
+    pads.OnCapabilities(1, kSubtypeGuitar);
+    pads.OnState(1, xbox::kLeftThumb, t0);
+    // read before its type was
+    pads.OnState(2, kSticks, t0);
+    CHECK(pads.Held(t0) == 0);
+
+    // the same player as a controller: its type is read again when it connects
+    pads.OnCapabilities(0, kSubtypeGamepad);
+    CHECK(pads.Held(t0) == kSticksAndBumper);
+}
+
+TEST_CASE("a player the game stopped reading holds nothing") {
+    ChordPads pads;
+    pads.OnCapabilities(1, kSubtypeGamepad);
+    pads.OnState(1, kSticks, t0);
+    CHECK(pads.Held(t0 + ChordPads::kStale) == kSticks);
+    CHECK(pads.Held(t0 + ChordPads::kStale + 1ms) == 0);
+    pads.OnState(1, kSticks, t0 + 2s);
+    CHECK(pads.Held(t0 + 2s) == kSticks);
+
+    // so a chord held as the reads stop doesn't fire
+    MenuShortcut shortcut;
+    CHECK(shortcut.Update(pads.Held(t0 + 2s), t0 + 2s) == MenuShortcutAction::kNone);
+    CHECK(shortcut.Update(pads.Held(t0 + 3s), t0 + 3s) == MenuShortcutAction::kNone);
 }
 
 TEST_CASE("Steam Deck detection") {

@@ -202,4 +202,4 @@ Changed: `band3_app.h` (`OnFinalizePaths`, `OnWindowCloseRequested`, the path ru
 
 Audio output device selection, pinning devices to players or instruments, a gameplay fps cap (each is engine work that adds a row to the launcher when it lands); opening the launcher from inside the game; Shift-to-open on Linux; changing F4's save behaviour.
 
-Found while investigating, to fix separately: `menu_shortcut_dialog.cpp` checks `SDL_WasInit(SDL_INIT_GAMEPAD)` in band3's SDL copy, which never initialises gamepads, so the controller menu shortcut may never fire; `band3_app.h`'s comment says the SDK's audio queue default is 64, but it is 8.
+Found while investigating, to fix separately: `menu_shortcut_dialog.cpp` checked `SDL_WasInit(SDL_INIT_GAMEPAD)` in band3's SDL copy, which never initialises gamepads, so the controller menu shortcut never fired (fixed: it now reads the buttons the game reads for each player, `ChordPads` in `menu_shortcut.h`, fed by the game's XInputGetState and XInputGetCapabilities in `src/Hooks/input_lock.cpp`, so it works with either backend); `band3_app.h`'s comment says the SDK's audio queue default is 64, but it is 8.

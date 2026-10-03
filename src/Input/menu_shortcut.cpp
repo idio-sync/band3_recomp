@@ -37,4 +37,33 @@ MenuShortcutAction MenuShortcut::Update(uint16_t buttons, Clock::time_point now)
     return held_;
 }
 
+void ChordPads::OnCapabilities(uint32_t player, uint8_t subtype) {
+    if (player >= players_.size()) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    players_[player].subtype = subtype;
+}
+
+void ChordPads::OnState(uint32_t player, std::optional<uint16_t> buttons, Clock::time_point now) {
+    if (player >= players_.size()) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    players_[player].buttons = buttons.value_or(0);
+    players_[player].read = now;
+}
+
+uint16_t ChordPads::Held(Clock::time_point now) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    uint16_t held = 0;
+    for (const Player& p : players_) {
+        if (!p.subtype || IsRb3InstrumentSubtype(*p.subtype)) continue;
+        if (now - p.read > kStale) continue;
+        held |= p.buttons;
+    }
+    return held;
+}
+
+ChordPads& GameChordPads() {
+    static ChordPads pads;
+    return pads;
+}
+
 }
