@@ -75,6 +75,7 @@
 
           buildInputs = with pkgs; [
             gtk3
+            curl
           ];
 
           configurePhase = ''

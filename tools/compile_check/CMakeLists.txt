@@ -78,3 +78,7 @@ target_compile_definitions(band3_compile_check PRIVATE
 # the same MIDI backend as the real build
 include(${BAND3_ROOT}/cmake/rtmidi.cmake)
 band3_setup_rtmidi(band3_compile_check ${BAND3_ROOT}/src/ThirdParty/rtmidi/RtMidi.cpp)
+
+# the same HTTPS client as the real build
+include(${BAND3_ROOT}/cmake/web_client.cmake)
+band3_setup_web_client(band3_compile_check)

@@ -6,8 +6,8 @@
 #include <string_view>
 
 // band3 asking other sites for things over HTTPS (for RhythmVerse, through
-// src/Net/song_downloads.h): Windows' WinHTTP, so nothing more to ship. On
-// other systems every request fails, saying so.
+// src/Net/song_downloads.h): Windows' WinHTTP, so nothing more to ship, or
+// libcurl elsewhere. Built without libcurl, every request fails, saying so.
 
 namespace band3::web {
 

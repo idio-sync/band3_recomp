@@ -10,7 +10,9 @@
 - A copy of Rock Band 3 (Xbox 360) with the Title Update 5 (TU5) `default.xex`, or Rock
   Band 3 Deluxe's patched XEX.
 - cmake, ninja and clang. On Windows, also Visual Studio with "Desktop development with
-  C++"; on Linux, `sudo apt install build-essential git cmake ninja-build clang`.
+  C++"; on Linux, `sudo apt install build-essential git cmake ninja-build clang
+  libasound2-dev libcurl4-openssl-dev` (ALSA for MIDI drum kits, libcurl for
+  [RhythmVerse](integrations.md#rhythmverse); band3 builds without them, less those).
 
 ## Game files
 

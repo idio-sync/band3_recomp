@@ -80,10 +80,10 @@ jobs:
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         # xcb and wayland headers are included by the SDK's window headers;
-        # ALSA is RtMidi's backend for MIDI drum kits
+        # ALSA is RtMidi's backend for MIDI drum kits; libcurl is web_client's
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang libstdc++-14-dev libxcb1-dev libx11-dev libwayland-dev libasound2-dev
+          sudo apt-get install -y ninja-build clang libstdc++-14-dev libxcb1-dev libx11-dev libwayland-dev libasound2-dev libcurl4-openssl-dev
 
       - name: Install Ninja
         if: runner.os == 'Windows'
