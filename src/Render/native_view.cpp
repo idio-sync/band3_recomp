@@ -100,6 +100,10 @@ std::string DescribeGpu(const GpuStats& gs) {
     return buf;
 }
 
+int64_t Nanoseconds(std::chrono::steady_clock::time_point t) {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
+}
+
 // ---------------------------------------------------------------------------
 // the worker that rasterizes the newest capture
 
@@ -179,7 +183,8 @@ class Renderer {
     // The presenter (renderer = native) as a user. While it is one, its size
     // is the size drawn at, whatever the window or the live view set; and on
     // the zero-copy path each frame goes into one of the outputs (slots_),
-    // not into RGBA.
+    // not into RGBA. Each time it starts, it shows only frames drawn from
+    // captures published from then on (PresentSlots::Start).
     void StartPresent(uint32_t width, uint32_t height, bool zero_copy) {
         {
             std::lock_guard lock(mutex_);
@@ -188,6 +193,7 @@ class Renderer {
             present_w_ = width;
             present_h_ = height;
             present_zero_copy_ = zero_copy;
+            slots_.Start(Nanoseconds(std::chrono::steady_clock::now()));
             options_changed_ = true;
         }
         AddUser();
@@ -272,9 +278,10 @@ class Renderer {
         paint_cv_.notify_all();
         return slot >= 0;
     }
-    // A screenshot: the next frame drawn is read back too, for Take, on the
-    // zero-copy path before it's published, so SDL never copies an output
-    // the SDK's queue may be sampling. Returns the serial Take passes.
+    // A screenshot: the next frame drawn is read back too, for Take (with
+    // `for_present`), on the zero-copy path before it's published, so SDL
+    // never copies an output the SDK's queue may be sampling. Returns the
+    // serial Take passes.
     uint64_t RequestImage() {
         uint64_t serial;
         {
@@ -314,12 +321,16 @@ class Renderer {
     }
 
     // copies the newest picture if it is newer than `frame`; `presented`:
-    // when the game presented the frame it is of
+    // when the game presented the frame it is of; `for_present`: only one
+    // drawn for the window since presenting last started (the upload path,
+    // a screenshot of it), not one left from before or drawn for the views
     bool Take(uint64_t& frame, std::vector<uint32_t>& rgba, uint32_t& w, uint32_t& h,
-              std::string& stats, std::chrono::steady_clock::time_point* presented = nullptr) {
+              std::string& stats, std::chrono::steady_clock::time_point* presented = nullptr,
+              bool for_present = false) {
         std::lock_guard lock(mutex_);
         stats = stats_;
         if (image_serial_ == frame || image_.empty()) return false;
+        if (for_present && (!present_ || image_generation_ != slots_.Generation())) return false;
         frame = image_serial_;
         rgba = image_;
         w = image_w_;
@@ -335,6 +346,10 @@ class Renderer {
     // the longest the worker sleeps with nothing to draw before it looks
     // again; a capture, a setting changing or a user leaving wakes it sooner
     static constexpr std::chrono::milliseconds kIdleWait{100};
+    // the most captures a stretch of presenting waits through for one whose
+    // capture is its whole picture to start with (a screen whose frames
+    // none is, if there is one, starts with what it has)
+    static constexpr uint32_t kStartWait = 8;
 
     void Run() {
         uint64_t last_frame = 0;
@@ -343,10 +358,20 @@ class Renderer {
         // as it was before the settings were last read: a capture or a
         // change since has moved it on, and the wait below doesn't sleep
         uint64_t epoch = CaptureEpoch();
+        // when the window's frames are published, through the presenting
+        // stretch pacer_generation
+        PublishPacer pacer;
+        uint64_t pacer_generation = 0;
+        // the presenting stretch the last frame was drawn for; and for the
+        // one starting, the captures seen while waiting for its first
+        uint64_t drawn_generation = 0, start_generation = 0, start_seen = 0;
+        uint32_t start_waited = 0;
         while (true) {
             RasterOptions o;
             std::string dump;
-            bool changed, gpu, zero_copy, want_rgba;
+            bool changed, gpu, zero_copy, want_rgba, presenting, pace;
+            // the presenting stretch this frame is drawn for (PresentSlots)
+            uint64_t generation;
             {
                 std::lock_guard lock(mutex_);
                 if (stop_) return;
@@ -375,10 +400,39 @@ class Renderer {
                 want_rgba = !zero_copy || dialog_open_ || image_wanted_;
                 changed = options_changed_;
                 options_changed_ = false;
+                presenting = present_;
+                generation = slots_.Generation();
+                pace = presenting && REXCVAR_GET(native_present_pacing);
             }
+            // a capture published after this is a new one (the pacing's
+            // wait, below)
+            const uint64_t seen = CaptureEpoch();
             std::chrono::steady_clock::time_point presented;
             auto cap = LatestCapture(presented);
-            if (!cap || (cap->frame == last_frame && !changed)) {
+            bool fresh = true;
+            if (cap && presenting) {
+                std::lock_guard lock(mutex_);
+                fresh = slots_.Fresh(Nanoseconds(presented));
+            }
+            // Presenting just started, and the newest capture is from before
+            // (the last one before capture stopped, if no view kept it
+            // going): nothing is drawn for the window until the game
+            // publishes one, and the stretch's first frame is one whose
+            // capture is its whole picture (StartsPicture), or else the
+            // kStartWait-th. A setting changing meanwhile needs no redraw,
+            // the next capture being a new frame anyway.
+            if (cap && fresh && presenting && drawn_generation != generation) {
+                if (start_generation != generation) {
+                    start_generation = generation;
+                    start_waited = 0;
+                }
+                if (cap->frame != start_seen) {
+                    start_seen = cap->frame;
+                    start_waited++;
+                }
+                if (!StartsPicture(*cap) && start_waited < kStartWait) fresh = false;
+            }
+            if (!cap || !fresh || (cap->frame == last_frame && !changed)) {
                 // until the game publishes a capture, or a setting or a user
                 // changes (WakeCaptureWaiters)
                 epoch = WaitForCapture(epoch, kIdleWait);
@@ -394,7 +448,9 @@ class Renderer {
                     continue;
                 }
             }
+            const bool new_frame = cap->frame != last_frame;
             last_frame = cap->frame;
+            if (presenting) drawn_generation = generation;
             // dumping saves captures for tools/native_view_replay and leaves
             // the drawing to it
             if (!dump.empty()) {
@@ -437,12 +493,26 @@ class Renderer {
             }
             const std::string stats =
                 Describe(*cap, drew_gpu ? DescribeGpu(gs) : DescribeRaster(rs));
+            // a new frame for the window is published a steady delay after
+            // the game presented it (PublishPacer), or sooner once the next
+            // capture is there or a setting or a user changes; a redraw (new
+            // options, a screenshot of a paused game) at once
+            if (pace && new_frame) {
+                if (generation != pacer_generation) {
+                    pacer.Reset();
+                    pacer_generation = generation;
+                }
+                const int64_t now = Nanoseconds(std::chrono::steady_clock::now());
+                const int64_t due = pacer.Due(cap->frame, Nanoseconds(presented), now);
+                if (due > now) WaitForCapture(seen, std::chrono::nanoseconds(due - now));
+            }
             {
                 std::lock_guard lock(mutex_);
+                // still the stretch it was drawn for (PresentSlots::Publish)
+                const bool current = presenting && generation == slots_.Generation();
                 if (slot >= 0) {
-                    if (drew_output) {
+                    if (drew_output && slots_.Publish(slot, generation)) {
                         outputs_[slot] = out;
-                        slots_.Publish(slot);
                         slot_serial_[slot] = slots_.Serial();
                         slot_presented_[slot] = presented;
                     } else {
@@ -466,7 +536,10 @@ class Renderer {
                     image_h_ = o.height;
                     image_presented_ = presented;
                     image_serial_++;
-                    image_wanted_ = false;
+                    image_generation_ = current ? generation : 0;
+                    // a screenshot asked for while presenting is of a frame
+                    // drawn for the window's stretch (Take's `for_present`)
+                    if (current || !present_) image_wanted_ = false;
                 }
                 stats_ = stats;
             }
@@ -525,6 +598,9 @@ class Renderer {
     std::vector<uint32_t> image_;
     uint32_t image_w_ = 0, image_h_ = 0;
     uint64_t image_serial_ = 0;
+    // the presenting stretch it was drawn for (PresentSlots::Generation), or
+    // 0 for none
+    uint64_t image_generation_ = 0;
     std::chrono::steady_clock::time_point image_presented_{};
     bool image_wanted_ = false;
     uint32_t dump_count_ = 0;
@@ -726,10 +802,6 @@ std::mutex g_paints_mutex;
 PaintRecorder g_paints;
 std::chrono::steady_clock::time_point g_paints_since = std::chrono::steady_clock::now();
 std::string g_present_path;
-
-int64_t Nanoseconds(std::chrono::steady_clock::time_point t) {
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
-}
 
 // a paint at `now`; with `native`, showing native frame `serial` (0 none) of
 // `source`'s numbering, which the game presented at `presented`
@@ -1058,6 +1130,9 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             rect = w && h ? LetterboxRect(w, h, PresentLetterbox()) : ImageRect{0, 0, 1280, 720};
         }
         Renderer::Get().StartPresent(rect.w, rect.h, zero_copy);
+        // the upload path's last picture is from before: none until this
+        // stretch's first
+        upload_shown_ = false;
 #ifdef _WIN32
         if (fence_) {
             std::shared_ptr<PaintFence> fence = fence_;
@@ -1156,8 +1231,9 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         }
         uint32_t w = 0, h = 0;
         std::string stats;
-        if (Renderer::Get().Take(upload_frame_, upload_, w, h, stats, &upload_presented_) && w &&
-            h) {
+        if (Renderer::Get().Take(upload_frame_, upload_, w, h, stats, &upload_presented_, true) &&
+            w && h) {
+            upload_shown_ = true;
             current_ ^= 1;
             // the immediate drawer's textures are made from data only, so a
             // new one each frame
@@ -1165,7 +1241,7 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
                 drawer->CreateTexture(w, h, rex::ui::ImmediateTextureFilter::kLinear, false,
                                       reinterpret_cast<const uint8_t*>(upload_.data()));
         }
-        rex::ui::ImmediateTexture* texture = textures_[current_].get();
+        rex::ui::ImmediateTexture* texture = upload_shown_ ? textures_[current_].get() : nullptr;
         if (!texture) {
             NotePaint(now, true);
             return;
@@ -1220,6 +1296,8 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
     std::unique_ptr<rex::ui::ImmediateTexture> textures_[2];
     int current_ = 0;
     uint64_t upload_frame_ = 0;
+    // a picture taken since native last started
+    bool upload_shown_ = false;
     std::chrono::steady_clock::time_point upload_presented_{};
     std::vector<uint32_t> upload_;
 #ifdef _WIN32
@@ -1290,7 +1368,7 @@ std::string NativePresentedPicture(std::vector<uint32_t>& rgba, uint32_t& width,
     const auto deadline = std::chrono::steady_clock::now() + wait;
     uint64_t frame = Renderer::Get().RequestImage();
     std::string stats;
-    while (!Renderer::Get().Take(frame, rgba, width, height, stats)) {
+    while (!Renderer::Get().Take(frame, rgba, width, height, stats, nullptr, true)) {
         if (std::chrono::steady_clock::now() >= deadline)
             return "the native renderer hasn't drawn a frame in " +
                    std::to_string(wait.count()) + " ms";

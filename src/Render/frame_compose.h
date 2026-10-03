@@ -67,6 +67,16 @@ inline bool ShowsPostBuffer(const FrameCapture& fc) {
     return ProcKnown(fc) && !(fc.proc_cmds & kProcPost);
 }
 
+// Whether the frame's capture alone draws the game's whole picture of it: it
+// began with capture on (FrameCapture::whole), and it presents its own world
+// (PresentsCapturedWorld) or doesn't say. The native renderer starts showing
+// frames on the window (F8) from one that does, rather than from the part of
+// a frame captured as capture turned on, a post frame with no world before
+// it, or a world frame, whose picture is a post buffer it doesn't have yet.
+inline bool StartsPicture(const FrameCapture& fc) {
+    return fc.whole && (!ProcKnown(fc) || PresentsCapturedWorld(fc));
+}
+
 // The most game frames after the post frame whose picture it is that the
 // live view shows the post buffer (RasterOptions::post_buffer): even/odd
 // rendering's longest period (frame_pacing.h, 6 at background_fps 20 and

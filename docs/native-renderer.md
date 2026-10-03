@@ -19,7 +19,14 @@ Turning native on makes the native renderer's GPU pipelines first, on the UI thr
 100 ms, once a session), so no frame waits for one; the log says `native view gpu: <n>
 pipelines ... in <ms>`, and names any pipeline a frame still had to wait for after that
 (`pipeline made after warm-up: <key> (<ms>)`). Each frame is drawn as soon as the game
-presents it and shown by the window's next paint. With RB3's even/odd rendering (on, as
+presents it, and reaches the window a steady delay after the game presented it, about as
+long as the slowest of the last few frames took to draw (never more than a frame), so the
+window gets one new frame a refresh: frames take as long to draw as what they have, and
+with even/odd rendering one published at once came 8 ms after the one before and the next
+25 ms after it, so a paint could find two new frames and never show the first
+(`native_present_pacing`, below). After F8 back to native the window shows only frames the
+game presented since, from the first whose capture is the whole picture, never one left
+from before the switch. With RB3's even/odd rendering (on, as
 the game ships), a frame that draws the world but doesn't post-process it shows what the
 game's does: the last post-processed picture (the world frame before it, with its
 spotlights' beams, smoke and bloom) under its own track and HUD. The test harness's `present_stats`
@@ -59,6 +66,7 @@ songs, menu round trips and F8 both ways in each song.
 | `native_max_height` (Band3 → Graphics) | the most lines the native renderer draws: a taller window's picture is drawn this tall and scaled up to fill it, for 4K on a GPU that can't keep up at full size. 0 (the default) draws at the window's size |
 | `native_view_msaa` (Band3 → Graphics) | the samples a pixel the native renderer and the native view draw the overlay with (the track, the HUD, menus drawn after the world), averaged at its edges: 2 (the default) as RB3 does, 4 smoother than the game, 1 none. RB3 multisamples only those: the world, its post-processing and every texture pass are single-sampled, in the game and here. Where the GPU can't draw 2 samples it draws 4 (or 4 → 2, else 1; the log says so) |
 | `native_present_zero_copy` (Band3 → Debug) | on (the default) shows the GPU's frames where they are; off reads each back and uploads it, to compare |
+| `native_present_pacing` (Band3 → Debug) | on (the default) publishes each frame to the window a steady delay after the game presented it, as above; off publishes each as soon as it's drawn, sooner on average but unevenly, to compare |
 | `native_view_target_scale` (Band3 → Debug) | on (the default) draws the passes that are pictures of the screen (the spotlights' haze and the soft particles' smoke, made at 640x360 and 320x180 for the game's 1280x720) in proportion to the picture: 1.5 times at 1080p, 3 times at 4K. Off keeps the game's sizes, to compare |
 | `native_view_shadow_scale` (Band3 → Debug) | the characters' self-shadow maps at this many times the game's 512x512 (1, the default, to 4): sharper shadow edges, and less of the game's own shadow acne, so further from the game's picture |
 

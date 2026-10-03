@@ -282,6 +282,31 @@ TEST_CASE("a render check pairs the game's picture with a frame that shows its w
     CHECK_FALSE(PresentsCapturedWorld(fc));
 }
 
+TEST_CASE("the native renderer starts the window's picture from a whole one") {
+    FrameCapture fc;
+    // a frame that doesn't say, begun with capture on
+    CHECK(fc.whole);
+    CHECK(StartsPicture(fc));
+    // the first frame after capture turned on has only part of its draws
+    fc.whole = 0;
+    CHECK_FALSE(StartsPicture(fc));
+    fc.whole = 1;
+    fc.post_boundary = 0;
+    fc.proc_cmds = 7;
+    CHECK(StartsPicture(fc));
+    // even/odd rendering: a world frame's picture is a post buffer, and a
+    // post frame needs the world before it
+    fc.proc_cmds = kProcWorld;
+    CHECK_FALSE(StartsPicture(fc));
+    fc.proc_cmds = kProcPost;
+    CHECK_FALSE(StartsPicture(fc));
+    fc.composed = 1;
+    CHECK(StartsPicture(fc));
+    fc.proc_cmds = 0;
+    fc.composed = 0;
+    CHECK_FALSE(StartsPicture(fc));
+}
+
 TEST_CASE("a composed frame has its post frame's post-processing and gamma ramp") {
     FrameCapture world = WorldFrame();
     FrameCapture post = PostFrame();

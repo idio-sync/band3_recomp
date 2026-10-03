@@ -620,6 +620,10 @@ struct FrameCapture {
     // the world is the frame's own: world_frame is its game_frame.
     uint32_t composed = 0;
     uint64_t world_frame = 0;
+    // 0 for the first frame captured after capture turned on, which began
+    // before and has only the draws made since; 1 otherwise (not saved:
+    // capture files hold whole frames)
+    uint8_t whole = 1;
     // the display gamma ramp the presenter applied to the game's picture of
     // it (gamma_ramp.h), read at the frame's end; kNone in captures from
     // before it, and where it couldn't be read
@@ -837,7 +841,7 @@ std::shared_ptr<const FrameCapture> LatestCapture(
 // is something to draw: WaitForCapture waits up to `timeout` for it to move
 // past `epoch` and returns it as it is then.
 uint64_t CaptureEpoch();
-uint64_t WaitForCapture(uint64_t epoch, std::chrono::milliseconds timeout);
+uint64_t WaitForCapture(uint64_t epoch, std::chrono::nanoseconds timeout);
 // wakes WaitForCapture as a capture would (the worker has another reason to draw)
 void WakeCaptureWaiters();
 

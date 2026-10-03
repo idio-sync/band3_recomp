@@ -35,7 +35,10 @@ class Window;
 // native renderer draws the window on until the emulated GPU has drawn whole
 // frames again.
 // Its worker sleeps until the game publishes a capture (scene_capture.h's
-// WaitForCapture) and draws the newest; each paint shows the newest drawn.
+// WaitForCapture) and draws the newest, published to the window a steady
+// delay after the game presented it (present_model.h's PublishPacer); each
+// paint shows the newest published. Each time it turns native, the window
+// shows only frames from captures published since (PresentSlots).
 // Once it has been native, capture records the passes RB3 draws into
 // textures all the time for the rest of the session, as
 // native_view_record_targets does (scene_capture.cpp's TrackSettings): set it

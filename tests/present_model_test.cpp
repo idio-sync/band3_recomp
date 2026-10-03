@@ -5,6 +5,7 @@
 
 #include <doctest/doctest.h>
 #include <utility>
+#include <vector>
 #include "src/Render/gpu_skip.h"
 #include "src/Render/present_model.h"
 
@@ -142,6 +143,110 @@ TEST_CASE("after the presenter stops, slots the GPU may still read stay taken") 
 
 namespace {
 constexpr int64_t kMs = 1000000;  // a millisecond in nanoseconds
+}
+
+TEST_CASE("a stretch of presenting shows only frames drawn for it from captures after it began") {
+    PresentSlots s;
+    s.Start(1000);
+    const uint64_t first = s.Generation();
+    // a capture from before F8 back to native isn't drawn for the window
+    CHECK_FALSE(s.Fresh(999));
+    CHECK_FALSE(s.Fresh(1000));
+    CHECK(s.Fresh(1001));
+    const int a = s.Acquire();
+    REQUIRE(a >= 0);
+    CHECK(s.Publish(a, first));
+    CHECK(s.Newest() == a);
+    CHECK(s.Serial() == 1);
+    s.Shown(a, 1);
+    s.Completed(1);
+    // the worker is drawing when presenting stops: that frame is nobody's
+    const int b = s.Acquire();
+    REQUIRE(b >= 0);
+    s.Forget();
+    CHECK(s.Newest() == -1);
+    CHECK_FALSE(s.Publish(b, first));
+    CHECK(s.Newest() == -1);
+    CHECK(s.Serial() == 1);
+    // nor is it when presenting starts again, and the slot is free again
+    s.Start(5000);
+    CHECK(s.Generation() != first);
+    CHECK_FALSE(s.Fresh(4000));
+    CHECK(s.Newest() == -1);
+    int got[PresentSlots::kCount];
+    for (int& g : got) g = s.Acquire();
+    CHECK((got[0] == b || got[1] == b || got[2] == b));
+    for (int g : got) s.Abandon(g);
+    // the new stretch's first frame is the newest
+    const int c = s.Acquire();
+    CHECK(s.Publish(c, s.Generation()));
+    CHECK(s.Newest() == c);
+    CHECK(s.Serial() == 2);
+}
+
+TEST_CASE("starting presenting again clears what the last stretch showed") {
+    PresentSlots s;
+    s.Start(10);
+    const int a = s.Acquire();
+    s.Publish(a);
+    // F8 to native while still native (Start twice) or after a stop: no
+    // newest until a frame of the new stretch is published
+    s.Start(20);
+    CHECK(s.Newest() == -1);
+    // the paints' indices are kept: a slot an unfinished paint sampled stays taken
+    s.Shown(a, 4);
+    s.Start(30);
+    for (int i = 0; i < PresentSlots::kCount - 1; i++) CHECK(s.Acquire() >= 0);
+    CHECK(s.Acquire() == -1);
+    s.Completed(4);
+    CHECK(s.Acquire() == a);
+}
+
+TEST_CASE("frames are published a steady delay after the game presented them") {
+    PublishPacer p;
+    constexpr int64_t kFrame = 16666667;
+    // even/odd rendering: post frames take 10 ms, world frames 2
+    int64_t last_publish = 0;
+    std::vector<int64_t> gaps;
+    for (uint64_t f = 1; f <= 40; f++) {
+        const int64_t presented = int64_t(f) * kFrame;
+        const int64_t own = (f % 2) ? 10 * kMs : 2 * kMs;
+        const int64_t due = p.Due(f, presented, presented + own);
+        CHECK(due >= presented + own);
+        if (last_publish && f > 4) gaps.push_back(due - last_publish);
+        last_publish = due;
+    }
+    // once it has seen a post frame, every frame goes out 10 ms after its
+    // Present, a frame apart
+    for (int64_t g : gaps) CHECK(double(g) == doctest::Approx(double(kFrame)).epsilon(0.001));
+    CHECK(double(p.IntervalNs()) == doctest::Approx(double(kFrame)).epsilon(0.001));
+}
+
+TEST_CASE("the pacer never holds a frame past the game's next one, and lets a hitch go") {
+    PublishPacer p;
+    constexpr int64_t kFrame = 16666667;
+    uint64_t f = 1;
+    for (; f <= 8; f++) {
+        const int64_t presented = int64_t(f) * kFrame;
+        p.Due(f, presented, presented + 3 * kMs);
+    }
+    // one slow frame: published when drawn, and the frames after aren't
+    // held for it (the second slowest counts)
+    int64_t presented = int64_t(f) * kFrame;
+    CHECK(p.Due(f, presented, presented + 40 * kMs) == presented + 40 * kMs);
+    f++;
+    presented = int64_t(f) * kFrame;
+    CHECK(p.Due(f, presented, presented + 3 * kMs) == presented + 3 * kMs);
+    // slow frames all along: held no later than a frame less a millisecond
+    for (int i = 0; i < 8; i++, f++) {
+        presented = int64_t(f) * kFrame;
+        p.Due(f, presented, presented + 30 * kMs);
+    }
+    presented = int64_t(f) * kFrame;
+    CHECK(p.Due(f, presented, presented + 2 * kMs) == presented + kFrame - kMs);
+    // a reset starts over: a frame on its own goes when drawn
+    p.Reset();
+    CHECK(p.Due(1, kFrame, kFrame + 2 * kMs) == kFrame + 2 * kMs);
 }
 
 TEST_CASE("paints are timed against the one before, whichever renderer drew them") {
