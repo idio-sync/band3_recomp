@@ -39,4 +39,21 @@ StartDecision DecideLauncher(const StartInputs& in);
 // only when this is false, so it never shows without them.
 bool LauncherPossible(const StartInputs& in);
 
+struct RestartInputs {
+    // input_backend names another backend than the launcher's input system's
+    // (input::InputBackendChanged)
+    bool backend_changed = false;
+    // Play saved band3.toml
+    bool saved = false;
+    // test_port is set: a test harness run
+    bool test_port = false;
+};
+
+// Whether Play starts band3 again rather than the game, for a new input
+// backend: the input system can't be swapped while band3 runs
+// (input_system.h), and a relaunch skips the launcher. The new run reads
+// band3.toml, so only once it's saved; and never under the test harness,
+// which follows this process. Otherwise the change applies at the next start.
+bool RestartsForInput(const RestartInputs& in);
+
 }

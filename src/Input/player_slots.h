@@ -30,4 +30,11 @@ struct SlotDevice {
 std::array<std::vector<size_t>, kPlayers> AssignPlayers(
     const std::vector<SlotDevice>& devices, const std::array<bool, kPlayers>& reserved);
 
+// The player (0-3) the launcher reads one device on, alone (ReadInputDevice):
+// the last one it doesn't feed (`feeds`). The SDK remembers which device each
+// player last had input from and prefers it among that player's devices, so a
+// read on a player the device doesn't feed can't change which of player 1's
+// devices the game first reads.
+int ProbePlayer(const std::array<bool, kPlayers>& feeds);
+
 }

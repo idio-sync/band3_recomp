@@ -1,5 +1,6 @@
 #include "input_system.h"
 #include <algorithm>
+#include <array>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -9,6 +10,7 @@
 #include <rex/input/input_system.h>
 #include <rex/logging.h>
 #include "hid_instruments.h"
+#include "input_backend.h"
 #include "input_lock.h"
 #include "midi_drums_driver.h"
 #include "player_slots.h"
@@ -51,14 +53,51 @@ DeviceKind KindOf(const DeviceInfo& device) {
 //   change empties the slot and RB3 reads the new type when it comes back (RB3
 //   only reads a pad's type when its slot connects).
 //
-// For the launcher it can also hand player 1 a single device to read (Probe),
-// or hand no player anything (Hide). The input system's callers hold
+// For the launcher it can also hand one player a single device to read (Probe),
+// or hand no player anything (Hide), and assign the players again for devices
+// that stay but read differently (Reassign). The input system's callers hold
 // InputLock(), and so do the launcher's, so these never change under a read.
 static_assert(kPlayers == kMaxGuestUsers);
 
 class PlayerAssignment final : public rex::input::DeviceAssignment {
 public:
     void OnDevicesChanged(const std::vector<DeviceInfo>& devices) override {
+        devices_ = devices;
+        Assign();
+    }
+
+    // The players again for the same devices: which are SDL's copies of a HID
+    // instrument depends on whether the HID driver runs, and the SDK only
+    // calls OnDevicesChanged when the devices themselves change.
+    void Reassign() { Assign(); }
+
+    void DevicesForUser(uint32_t user_index, std::vector<DeviceId>& out) const override {
+        out.clear();
+        if (hidden_ || user_index >= kMaxGuestUsers) return;
+        if (probe_) {
+            if (user_index == probe_user_) out.push_back(*probe_);
+            return;
+        }
+        out = users_[user_index];
+    }
+
+    // hands `id` alone to a player it doesn't feed (ProbePlayer), and returns
+    // that player's user index
+    uint32_t Probe(DeviceId id) {
+        std::array<bool, kPlayers> feeds{};
+        for (uint32_t user = 0; user < kMaxGuestUsers; user++) {
+            feeds[user] = std::find(users_[user].begin(), users_[user].end(), id) != users_[user].end();
+        }
+        probe_ = id;
+        probe_user_ = static_cast<uint32_t>(ProbePlayer(feeds));
+        return probe_user_;
+    }
+    void EndProbe() { probe_.reset(); }
+    void Hide(bool hidden) { hidden_ = hidden; }
+
+private:
+    void Assign() {
+        const std::vector<DeviceInfo>& devices = devices_;
         std::vector<SlotDevice> slots;
         slots.reserve(devices.size());
         for (const auto& device : devices) {
@@ -100,22 +139,11 @@ public:
         g_devices = std::move(seen);
     }
 
-    void DevicesForUser(uint32_t user_index, std::vector<DeviceId>& out) const override {
-        out.clear();
-        if (hidden_ || user_index >= kMaxGuestUsers) return;
-        if (probe_) {
-            if (user_index == 0) out.push_back(*probe_);
-            return;
-        }
-        out = users_[user_index];
-    }
-
-    void Probe(std::optional<DeviceId> id) { probe_ = id; }
-    void Hide(bool hidden) { hidden_ = hidden; }
-
-private:
+    // the SDK's last list, for Reassign
+    std::vector<DeviceInfo> devices_;
     std::vector<std::vector<DeviceId>> users_ = std::vector<std::vector<DeviceId>>(kMaxGuestUsers);
     std::optional<DeviceId> probe_;
+    uint32_t probe_user_ = 0;
     bool hidden_ = false;
 };
 
@@ -197,8 +225,15 @@ struct MidiConfig {
     bool operator==(const MidiConfig&) const = default;
 };
 
-// the SDK's input_backend (sdl or xinput), which CreateDefaultInputSystem reads
-std::string Backend() { return rex::cvar::GetFlagByName("input_backend"); }
+// the backend CreateDefaultInputSystem builds for input_backend as it is now
+std::string Backend() {
+#ifdef _WIN32
+    constexpr bool kWindows = true;
+#else
+    constexpr bool kWindows = false;
+#endif
+    return std::string(BackendFor(rex::cvar::GetFlagByName("input_backend"), kWindows));
+}
 
 // An input system with band3's drivers, and the parts the launcher changes.
 struct Built {
@@ -210,20 +245,23 @@ struct Built {
     bool hid_on = false;
     MidiConfig midi_config;
 
-    // starts and stops the HID and MIDI drivers to match the settings
+    // starts and stops the HID and MIDI drivers to match the settings, and
+    // assigns the players again after any restart: a device the SDK still
+    // lists may read differently now (PlayerAssignment::Reassign)
     void Follow(bool hid_wanted, const MidiConfig& midi_wanted) {
+        bool restarted = false;
         if (hid_wanted != hid_on) {
             hid->Restart(hid_wanted ? &CreateHidInstrumentDriver : nullptr);
             hid_on = hid_wanted;
+            restarted = true;
         }
         if (!(midi_wanted == midi_config)) {
             midi->Restart(midi_wanted.enabled ? &CreateMidiDrumsDriver : nullptr);
             midi_config = midi_wanted;
+            restarted = true;
         }
+        if (restarted && assignment) assignment->Reassign();
     }
-
-    // band3's drivers off, for a system that isn't the one being read
-    void Stop() { Follow(false, MidiConfig{}); }
 };
 
 Built Build() {
@@ -253,34 +291,8 @@ rex::input::InputSystem* g_game_input = nullptr;
 
 // The launcher's input system, before the runtime takes it (UI thread only).
 std::optional<Built> g_prepared;
-rex::ui::Window* g_window = nullptr;
-// An SDL system the launcher switched away from: kept for switching back, and
-// never destroyed once it has seen the window (see input_system.h).
-std::optional<Built>* g_parked_sdl = new std::optional<Built>();
 // ReadyInputForGame was called: the game's from here on
 bool g_ready = false;
-
-// makes `backend`'s system the prepared one
-void SwitchTo(const std::string& backend) {
-    std::lock_guard<std::recursive_mutex> lock(InputLock());
-    if (g_prepared) {
-        g_prepared->Stop();
-        // an SDL system that has seen the window can't be destroyed
-        if (g_prepared->backend == "sdl" && g_window) {
-            *g_parked_sdl = std::move(g_prepared);
-        }
-        g_prepared.reset();
-    }
-    if (backend == "sdl" && *g_parked_sdl) {
-        g_prepared = std::move(*g_parked_sdl);
-        g_parked_sdl->reset();
-        g_prepared->Follow(REXCVAR_GET(hid_instruments), MidiConfig::Current());
-    } else {
-        g_prepared = Build();
-    }
-    if (g_window) g_prepared->system->AttachWindow(g_window);
-    REXLOG_INFO("Input: the launcher's input system uses {}", g_prepared->backend);
-}
 
 }
 
@@ -290,6 +302,13 @@ std::unique_ptr<rex::system::IInputSystem> CreateInputSystem(bool tool_mode) {
     std::unique_ptr<rex::input::InputSystem> input;
     if (g_prepared) {
         ApplyInputSettings();
+        // Play restarts band3 for a new backend unless it couldn't (unsaved,
+        // or under the test harness); then it applies at the next start
+        if (const std::string backend = Backend(); backend != g_prepared->backend) {
+            REXLOG_WARN("Input: input_backend is {}, but the game keeps the launcher's {} "
+                        "until band3 restarts",
+                        backend, g_prepared->backend);
+        }
         input = std::move(g_prepared->system);
         g_prepared.reset();
         REXLOG_INFO("Input: the game takes over the launcher's input system");
@@ -305,22 +324,20 @@ rex::input::InputSystem* GameInputSystem() { return g_game_input; }
 
 void PrepareInputSystem(rex::ui::Window* window) {
     if (g_game_input) return;
-    g_window = window;
-    if (!g_prepared || g_prepared->backend != Backend()) {
-        SwitchTo(Backend());
-    } else if (g_window) {
-        std::lock_guard<std::recursive_mutex> lock(InputLock());
-        g_prepared->system->AttachWindow(g_window);
+    std::lock_guard<std::recursive_mutex> lock(InputLock());
+    if (!g_prepared) {
+        g_prepared = Build();
+        REXLOG_INFO("Input: the launcher's input system uses {}", g_prepared->backend);
     }
+    if (window) g_prepared->system->AttachWindow(window);
+}
+
+bool InputBackendChanged() {
+    return g_prepared && !g_ready && Backend() != g_prepared->backend;
 }
 
 void ApplyInputSettings() {
     if (!g_prepared || g_ready) return;
-    const std::string backend = Backend();
-    if (backend != g_prepared->backend) {
-        SwitchTo(backend);
-        return;
-    }
     const bool hid = REXCVAR_GET(hid_instruments);
     const MidiConfig midi = MidiConfig::Current();
     if (hid == g_prepared->hid_on && midi == g_prepared->midi_config) return;
@@ -366,14 +383,16 @@ std::vector<InputDevice> PlayerDevices() {
 std::optional<DeviceReading> ReadInputDevice(uint64_t id) {
     if (!g_prepared || g_ready) return std::nullopt;
     std::lock_guard<std::recursive_mutex> lock(InputLock());
-    // player 1 is handed just this device for the read
+    // a player it doesn't feed is handed just this device for the read, so the
+    // SDK's note of the device each player last used (GetStateForUI) can't
+    // change which device the game reads first
     PlayerAssignment& assignment = *g_prepared->assignment;
-    assignment.Probe(static_cast<DeviceId>(id));
+    const uint32_t user = assignment.Probe(static_cast<DeviceId>(id));
     rex::input::X_INPUT_CAPABILITIES caps{};
     rex::input::X_INPUT_STATE state{};
-    const bool ok = g_prepared->system->GetCapabilities(0, 0, &caps) == X_ERROR_SUCCESS &&
-                    g_prepared->system->GetStateForUI(0, &state) == X_ERROR_SUCCESS;
-    assignment.Probe(std::nullopt);
+    const bool ok = g_prepared->system->GetCapabilities(user, 0, &caps) == X_ERROR_SUCCESS &&
+                    g_prepared->system->GetStateForUI(user, &state) == X_ERROR_SUCCESS;
+    assignment.EndProbe();
     if (!ok) return std::nullopt;
     return DeviceReading{LoadCaps(caps), LoadGamepad(state.gamepad)};
 }

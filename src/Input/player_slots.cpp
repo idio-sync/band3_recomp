@@ -48,4 +48,12 @@ std::array<std::vector<size_t>, kPlayers> AssignPlayers(
     return players;
 }
 
+int ProbePlayer(const std::array<bool, kPlayers>& feeds) {
+    for (int player = kPlayers - 1; player >= 0; player--) {
+        if (!feeds[player]) return player;
+    }
+    // a device feeds one player at most; this is only for completeness
+    return kPlayers - 1;
+}
+
 }

@@ -74,3 +74,14 @@ TEST_CASE("SDL's copy of a HID instrument is left out and later pads close up") 
     CHECK(players[1] == std::vector<size_t>{2});
     CHECK(players[2].empty());
 }
+
+TEST_CASE("the launcher reads a device on the last player it doesn't feed") {
+    CHECK(ProbePlayer({false, false, false, false}) == 3);
+    // player 1's keyboard or second pad
+    CHECK(ProbePlayer({true, false, false, false}) == 3);
+    // player 4's pad
+    CHECK(ProbePlayer({false, false, false, true}) == 2);
+    CHECK(ProbePlayer({false, true, true, true}) == 0);
+    // can't happen (a device feeds one player at most), but stays in range
+    CHECK(ProbePlayer({true, true, true, true}) == 3);
+}

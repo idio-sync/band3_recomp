@@ -18,4 +18,8 @@ bool LauncherPossible(const StartInputs& in) {
     return !in.relaunched && (!in.test_port || in.launcher_flag);
 }
 
+bool RestartsForInput(const RestartInputs& in) {
+    return in.backend_changed && in.saved && !in.test_port;
+}
+
 }

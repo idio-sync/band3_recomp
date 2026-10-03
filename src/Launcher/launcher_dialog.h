@@ -38,10 +38,11 @@ struct LauncherHost {
     std::function<double()> refresh_rate;
     // the game window's native handle (an HWND), for which monitor it's on
     std::function<void*()> native_window;
-    // Play, once the "Starting" frame is on screen: starts the game. Runs inside
-    // the launcher's draw, so it defers removing the launcher and building the
-    // runtime.
-    std::function<void()> start_game;
+    // Play, once the "Starting" frame is on screen: starts the game, or with
+    // `restart` (RestartsForInput) starts band3 again straight into the game
+    // and quits this one. Runs inside the launcher's draw, so it defers
+    // removing the launcher and building the runtime.
+    std::function<void(bool restart)> start_game;
     // quits band3 without starting the game; runs inside the draw too
     std::function<void()> quit;
 };
@@ -196,6 +197,8 @@ private:
     SettingsModel model_;
     Stage stage_ = Stage::kEditing;
     int starting_frames_ = 0;
+    // Play restarts band3 for a new input backend (RestartsForInput)
+    bool restart_ = false;
     // ImGui's ConfigFlags before the launcher turned keyboard navigation on
     int saved_config_flags_ = 0;
 

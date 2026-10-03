@@ -243,7 +243,7 @@ class Band3App : public rex::ReXApp {
                 },
             .native_window =
                 [this]() -> void* { return window() ? window()->GetNativeWindowHandle() : nullptr; },
-            .start_game = [this] { StartFromLauncher(); },
+            .start_game = [this](bool restart) { StartFromLauncher(restart); },
             .quit = [this] { QuitFromLauncher(); },
         });
     if (debug_overlay_) debug_overlay_->set_hidden(true);
@@ -262,8 +262,19 @@ class Band3App : public rex::ReXApp {
   }
 
   // the launcher's Play, once its "Starting" frame is drawn: the settings read
-  // at startup are taken again from what the launcher left, then the game starts
-  void StartFromLauncher() {
+  // at startup are taken again from what the launcher left, then the game
+  // starts. With `restart` (a new input_backend, which the input system can't
+  // switch to while band3 runs: input_system.h) band3 starts again instead,
+  // with this run's command line less --launcher; a relaunch skips the
+  // launcher and reads the band3.toml Play just saved.
+  void StartFromLauncher(bool restart) {
+    if (restart) {
+      if (band3::relaunch::StartAgain()) {
+        QuitFromLauncher();
+        return;
+      }
+      REXLOG_WARN("Launcher: couldn't restart band3; the new input backend applies at the next start");
+    }
     // what the launcher opened for itself goes; the input system stays open
     // for the game, which takes it over in Runtime::Setup (OnPreSetup)
     band3::launcher::CloseMicMeters();

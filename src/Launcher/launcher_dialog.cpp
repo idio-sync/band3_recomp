@@ -17,6 +17,8 @@
 #include "src/Audio/usb_mic.h"
 #include "src/Input/input_system.h"
 #include "src/paths.h"
+#include "src/settings.h"
+#include "launcher_start.h"
 #include "launcher_style.h"
 
 namespace band3::launcher {
@@ -208,7 +210,7 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
     // holds up the UI thread for a while; the next one starts the game
     if (stage_ == Stage::kStarting && ++starting_frames_ > 1) {
         stage_ = Stage::kStarted;
-        if (host_.start_game) host_.start_game();
+        if (host_.start_game) host_.start_game(restart_);
     }
 }
 
@@ -398,6 +400,11 @@ void LauncherDialog::DrawRow(const Setting& setting) {
                                                         : model_.LockOf(setting.companion);
         FontScope font(kSmallSize);
         ImGui::TextColored(kMuted, "%s; it can't be changed here.", LockReason(lock));
+    }
+    // the input system can't be swapped while band3 runs
+    if (setting.cvar == "input_backend" && input::InputBackendChanged()) {
+        FontScope font(kSmallSize);
+        ImGui::TextColored(kMuted, "Applies when you press Play (band3 restarts)");
     }
     if (const auto warning = model_.Warning(setting.cvar)) {
         FontScope font(kSmallSize);
@@ -1422,6 +1429,10 @@ void LauncherDialog::DrawPrompts() {
                            static_cast<int>(error.size()), error.data());
         ImGui::PopTextWrapPos();
         ImGui::TextUnformatted("Play anyway with these settings for this session?");
+        // a restart reads band3.toml, so Play doesn't restart without it
+        if (input::InputBackendChanged()) {
+            ImGui::TextColored(kWarn, "The new input backend applies only once it's saved.");
+        }
         ImGui::Spacing();
         if (ImGui::Button("Play anyway")) {
             ImGui::CloseCurrentPopup();
@@ -1443,7 +1454,7 @@ void LauncherDialog::DrawStarting(ImGuiIO& io) {
                                    ImGuiWindowFlags_NoBringToFrontOnFocus;
     if (ImGui::Begin("band3##launcher_starting", nullptr, flags)) {
         FontScope font(kTitleSize);
-        const char* text = "Starting Rock Band 3...";
+        const char* text = restart_ ? "Restarting band3..." : "Starting Rock Band 3...";
         const ImVec2 size = ImGui::CalcTextSize(text);
         ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - size.x) / 2, (io.DisplaySize.y - size.y) / 2));
         ImGui::TextUnformatted(text);
@@ -1472,7 +1483,13 @@ void LauncherDialog::Start() {
 
 void LauncherDialog::Begin() {
     if (stage_ != Stage::kEditing) return;
-    REXLOG_INFO("Launcher: Play{}", save_failed_ ? ", without saving" : "");
+    restart_ = RestartsForInput({
+        .backend_changed = input::InputBackendChanged(),
+        .saved = !save_failed_,
+        .test_port = REXCVAR_GET(test_port) != 0,
+    });
+    REXLOG_INFO("Launcher: Play{}{}", save_failed_ ? ", without saving" : "",
+                restart_ ? ", restarting band3 for the new input backend" : "");
     stage_ = Stage::kStarting;
     starting_frames_ = 0;
 }

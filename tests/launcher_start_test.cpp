@@ -111,3 +111,12 @@ TEST_CASE("the fonts are skipped only when no input could show the launcher") {
               (!in.relaunched && (!in.test_port || in.launcher_flag)));
     }
 }
+
+TEST_CASE("Play restarts band3 for a new input backend only once it's saved, outside the harness") {
+    CHECK(RestartsForInput({.backend_changed = true, .saved = true, .test_port = false}));
+    CHECK_FALSE(RestartsForInput({.backend_changed = false, .saved = true, .test_port = false}));
+    // the new run reads band3.toml
+    CHECK_FALSE(RestartsForInput({.backend_changed = true, .saved = false, .test_port = false}));
+    // the harness follows this process
+    CHECK_FALSE(RestartsForInput({.backend_changed = true, .saved = true, .test_port = true}));
+}
