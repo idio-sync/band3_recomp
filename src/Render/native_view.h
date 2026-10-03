@@ -10,6 +10,7 @@
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/immediate_drawer.h>
 
+#include "src/Render/present_model.h"
 #include "src/Render/soft_raster.h"
 
 namespace rex::ui {
@@ -28,7 +29,17 @@ class Window;
 // is 64). On Windows it samples gpu_view's output textures where they are
 // (zero-copy, see gpu_view.h); elsewhere, or when that can't be done, it
 // uploads each frame through the SDK's immediate drawer. The emulated GPU
-// still runs and its picture is still painted underneath, then covered.
+// still runs and its picture is still painted underneath, then covered;
+// with emulated_gpu_while_native skip_draws (the default) it skips the
+// game's draws meanwhile (gpu_skip.h), so after F8 back to emulated the
+// native renderer draws the window on until the emulated GPU has drawn whole
+// frames again.
+// Its worker sleeps until the game publishes a capture (scene_capture.h's
+// WaitForCapture) and draws the newest; each paint shows the newest drawn.
+// Once it has been native, capture records the passes RB3 draws into
+// textures all the time for the rest of the session, as
+// native_view_record_targets does (scene_capture.cpp's TrackSettings): set it
+// at launch, as outfits are composed only once.
 //
 // BAND3_NATIVE_VIEW_DUMP=<path> starts capturing at launch without the window
 // and saves a frame every five seconds as <path>.NNN.cap (and .cap.txt with its
@@ -99,6 +110,18 @@ void StartNativePresent(rex::ui::Presenter* presenter, rex::ui::GraphicsProvider
 void StopNativePresent();
 // whether the native renderer is drawing the window (renderer = native, started)
 bool NativePresenting();
+// The window's paints since their numbers last started over (`since`),
+// whichever renderer drew them, for the harness's present_stats; `reset`
+// starts them over once read. `path`: how the native renderer's frames reach
+// the window, "zero-copy" or "upload", or empty while it isn't drawing it.
+// A paint's time is when the drawer is asked to draw, on the UI thread, not
+// when the picture reaches the screen. Any thread.
+struct PresentPaintStats {
+    PaintLog log;
+    std::chrono::steady_clock::time_point since;
+    std::string path;
+};
+PresentPaintStats GetPresentPaintStats(bool reset);
 // the size it draws the window's picture at (the picture's, or less by
 // native_max_height), false while it isn't drawing it
 bool NativePresentDrawSize(uint32_t& width, uint32_t& height);

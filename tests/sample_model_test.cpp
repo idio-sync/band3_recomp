@@ -338,6 +338,21 @@ TEST_CASE("anisotropy samples along the footprint's long side at a finer level")
     a.aniso = 16;
     a.clamp_x = 2;
     CHECK(Sample(r, a, 8.0f / 16, 0.5f, 8.0f / 16, 0, 0, 1.0f) == doctest::Approx(75));
+
+    // magnified both ways, half a texel across and one down (the torso
+    // composite's fishnet): one sample, as D3D's ratio of the sides clamped to
+    // a texel gives, not two probes a quarter texel either side that blur the
+    // rows. Rows alternate 0 and 200; row 1's centre reads 200 (150 blurred)
+    std::vector<uint32_t> rows(16);
+    for (uint32_t y = 0; y < 4; y++)
+        for (uint32_t x = 0; x < 4; x++) rows[y * 4 + x] = Grey(y % 2 ? 200 : 0);
+    const TexLevels m{4, 4, rows.data(), nullptr};
+    TexSampler b = Trilinear(0);
+    b.aniso = 4;
+    CHECK(Sample(m, b, 0.5f, 1.5f / 4, 0.5f / 4, 0, 0, 1.0f / 4) == doctest::Approx(200));
+    // a texel down and under one across is still a footprint of a texel at
+    // most: one sample, the probes' ratio of 4 notwithstanding
+    CHECK(Sample(m, b, 0.5f, 1.5f / 4, 0.25f / 4, 0, 0, 1.0f / 4) == doctest::Approx(200));
 }
 
 TEST_CASE("a render target's mips are the box averages the GPU's blit makes") {

@@ -86,6 +86,12 @@ class GpuRenderer {
     bool Init();
     // whether Init made a device
     bool Ready();
+    // Makes every pipeline a frame can ask for and the upload buffer's usual
+    // size, once, if Init made a device: on the UI thread as the native
+    // renderer turns on, so its first frames don't wait for them (a frame
+    // drawn before does it itself). A pipeline made after it is logged
+    // ("pipeline made after warm-up").
+    void Prewarm();
     // Draws `frame` at options.width x options.height into rgba (R in the low
     // byte, alpha 0xff): into an output texture of its own, then read back.
     // Any thread, one frame at a time. False without a device or if the GPU

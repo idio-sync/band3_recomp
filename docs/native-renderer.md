@@ -15,9 +15,38 @@ leaving the GPU; where that can't be done (other platforms, `native_view_backend
 `native_present_zero_copy` off) each frame is read back and uploaded instead. The log says
 which (`native present: zero-copy`, or `native present: uploading each frame (<why>)`).
 
+Turning native on makes the native renderer's GPU pipelines first, on the UI thread (about
+100 ms, once a session), so no frame waits for one; the log says `native view gpu: <n>
+pipelines ... in <ms>`, and names any pipeline a frame still had to wait for after that
+(`pipeline made after warm-up: <key> (<ms>)`). Each frame is drawn as soon as the game
+presents it and shown by the window's next paint. The test harness's `present_stats`
+measures the window's pacing under either renderer.
+
+While `renderer` is native, the passes RB3 draws into textures are recorded all the time,
+as `native_view_record_targets` does (below), since the native renderer draws outfits and
+the like from them: a little game-thread time while characters load (about 170 ms from boot
+to a song). Once `renderer` has been native, they stay recorded for the rest of the session,
+under the emulated GPU too, so F8 back to native still has the outfits. RB3 composes a
+band's outfits once, in the main menu, so switching to native later (F8) after they were
+composed without recording shows them wrong until RB3 composes them again. To play on the
+native renderer, set it at launch (`--renderer=native`, or in the settings before the main
+menu).
+
+While the native renderer draws the window, the emulated GPU skips the game's draws nobody
+sees (`emulated_gpu_while_native`, `skip_draws` by default): the meshes, instanced meshes and
+quads of every frame the native renderer has whole. It still clears, resolves and swaps, and
+still draws the passes RB3 draws into textures once or now and then (outfits, portraits;
+the first two of any pass), and the lens flares' occlusion tests, so after F8 back to emulated
+its picture is the game's within two frames: the native renderer keeps drawing the window
+until it is (the log says `native present: off, the emulated GPU's picture shows (after <ms>)`).
+With nothing seen to draw, the emulated GPU's command processor does about a third of the
+work per frame, and the game runs faster uncapped than under `emulated`. `full` draws
+everything, as before.
+
 | Setting | |
 |---|---|
 | `renderer` (Band3 → Graphics) | `emulated` (the default) or `native` |
+| `emulated_gpu_while_native` (Band3 → Graphics) | with `renderer` native, `skip_draws` (the default) leaves the game's draws out of the emulated GPU's work as above; `full` has it draw everything |
 | `native_max_height` (Band3 → Graphics) | the most lines the native renderer draws: a taller window's picture is drawn this tall and scaled up to fill it, for 4K on a GPU that can't keep up at full size. 0 (the default) draws at the window's size |
 | `native_present_zero_copy` (Band3 → Debug) | on (the default) shows the GPU's frames where they are; off reads each back and uploads it, to compare |
 | `native_view_target_scale` (Band3 → Debug) | on (the default) draws the passes that are pictures of the screen (the spotlights' haze and the soft particles' smoke, made at 640x360 and 320x180 for the game's 1280x720) in proportion to the picture: 1.5 times at 1080p, 3 times at 4K. Off keeps the game's sizes, to compare |
@@ -41,9 +70,10 @@ Render checks set its picture against the game's.
 | Setting (Band3 → Debug) | |
 |---|---|
 | `native_view_backend` | `gpu` (the default) or `cpu`, the reference rasterizer. The GPU falls back to the CPU when it can't start |
-| `native_view_record_targets` | records the passes RB3 draws into textures all the time, even while the native view is off. Off by default, as it costs a little game-thread time while characters load. Render checks need it from launch: RB3 composes a band's outfits once, in the main menu |
-| `native_view_rt_fallback` | `guest` (the default) also keeps what guest memory holds of a texture RB3 draws, sampled where no recorded pass made it (right only with `--readback_resolve=full`); `none` keeps only which texture and version it is |
+| `native_view_record_targets` | records the passes RB3 draws into textures all the time, even while the native view is off. Off by default, as it costs a little game-thread time while characters load; on regardless once `renderer` has been native in the session. Render checks need it from launch: RB3 composes a band's outfits once, in the main menu |
+| `native_view_rt_fallback` | `guest` (the default) also keeps what guest memory holds of a texture RB3 draws, sampled where no recorded pass made it (right only with `--readback_resolve=full`); `none` keeps only which texture and version it is. While `renderer` is native it's always `none`: what guest memory holds is stale then, as the emulated GPU skips the draws that make it |
 | `native_view_normal_maps` | on (the default) shades normal and detail maps, live and in `capture`'s `.gpu.png`; off shades those materials with the vertex normal, to compare. Captures from before the capture kept the meshes' tangents have none either way |
+| `native_view_capture_profile` | off by default. The test harness's `native_view stats` has `capture`: what capturing cost the game's thread per game frame since `on` or `off`, in all and by kind of hook (`ms_per_frame`: `mesh`, `multimesh`, `particles`, `rect`, `pass`, `present`, `other`), per draw (`us_per_draw`), with counts per frame (`per_frame`) and the caches' `sizes`. On, it also times each step inside the hooks (`steps_ms_per_frame`: `bones`, `shade_read`, `tex_decode`, `publish` and the rest, `rest` what none names), at a clock read per step |
 | `native_view_texture_filtering` | on (the default) samples textures as each draw's fetch constants say: bilinear or point, the mip level (or two, blended) by how far and at what angle the surface is, anisotropy, and wrapping, mirroring or clamping per axis, from the mip chains in guest memory (and a render target's own, made after its pass). As the game's own picture under band3 is drawn, the SDK's `anisotropic_override` (4:1 by default) applies to the samplers it would apply to there. Off reads every texture's nearest texel at full size, as before, to compare; captures from before the capture kept the samplers and mips are drawn so either way |
 
 Launch render checks with:
@@ -106,6 +136,7 @@ ramp the game was shown through (the screenshot has it). `capture`'s reply:
 | `proc_cmds` | what the frame drew: 7 everything; with even/odd rendering 1 the world, 2 post-processing; -1 unknown |
 | `composed`, `world_frame`, `game_frame` | the capture has the world of `world_frame` in front of the overlay of its own `game_frame` (a post frame, which shows the world frame before it) |
 | `held_fallback` | no such post frame came in 30 frames, so the capture took the last |
+| `emulated` | `full`: the emulated GPU drew the screenshot's frame (and the one before it) whole. With `renderer` native and `emulated_gpu_while_native` `skip_draws`, `capture` has it draw whole frames for a moment first and holds one of those, so this is `full` too; `stale` if it couldn't |
 | `gpu`, `gpu_ms`, `gpu_passes`, `gpu_rt_missing` | the GPU's `<name>.gpu.png` at the screenshot's size, its time, the texture passes it drew, and its draws that sampled a render target nothing had drawn (drawn transparent black). `gpu_error` instead when there's no GPU device or `native_view_backend` is `cpu` |
 | `gpu_presented` | with `renderer` native at another size than the screenshot's, the GPU's `<name>.gpu.presented.png` at the size it draws the window at, as it draws it there (replay's `--scale` checks it) |
 

@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 #include "src/Input/instrument_kind.h"
@@ -59,6 +60,10 @@ struct CaptureInfo {
     // no frame whose world the game's picture shows came within the frames
     // the capture waits (CaptureHeldFrame), so it took the last one anyway
     bool held_fallback = false;
+    // whether the emulated GPU drew the frame screenshot whole ("full"), or
+    // skipped the game's draws in it or the one before ("stale": renderer
+    // native with emulated_gpu_while_native skip_draws, src/Render/gpu_skip.h)
+    std::string emulated = "full";
     // the native view's GPU backend drawing the same capture, at the
     // screenshot's size: its PNG, or why there's none
     std::string gpu_path;
@@ -106,6 +111,63 @@ struct NativeViewStats {
     uint64_t rt_recorded = 0;
     uint64_t rt_draws = 0;
     double rt_ms = 0;
+    // what capture cost the game's thread in the same time (scene_capture.h's
+    // CaptureProfile), reported per game frame: the game's frames and those
+    // captured, each kind of hook's milliseconds, the draws recorded, and
+    // with native_view_capture_profile on (`steps`) each step's milliseconds;
+    // then totals the reply divides by the frames (new shades, allocations,
+    // bytes decoded, bones) and the caches' sizes now
+    struct Capture {
+        uint64_t frames = 0;
+        uint64_t captured = 0;
+        std::vector<std::pair<std::string, double>> hooks_ms;
+        uint64_t draws = 0;
+        bool steps = false;
+        std::vector<std::pair<std::string, double>> steps_ms;
+        std::vector<std::pair<std::string, uint64_t>> counts;
+        std::vector<std::pair<std::string, uint64_t>> sizes;
+    } capture;
+    // what the emulated GPU was sent in the same time (src/Render/gpu_skip.h):
+    // whether it skips the game's draws now (renderer native with
+    // emulated_gpu_while_native skip_draws), the frame being drawn is skipped
+    // and its picture is fresh; the game's frames and those skipped; each
+    // draw emitter's calls emitted and skipped by kind, totals the reply
+    // divides by the frames; and of those emitted in skipped frames, the ones
+    // a one-shot texture pass kept and the occlusion queries
+    struct EmulatedGpu {
+        bool skip_mode = false;
+        bool skipping = false;
+        bool fresh = true;
+        uint64_t frames = 0;
+        uint64_t frames_skipped = 0;
+        std::vector<std::pair<std::string, uint64_t>> emitted;
+        std::vector<std::pair<std::string, uint64_t>> skipped;
+        uint64_t kept_pass = 0;
+        uint64_t kept_point_tests = 0;
+    } emulated_gpu;
+};
+
+// The window's pacing (`present_stats`), since its numbers last started over:
+// every paint of the window, whichever renderer drew it, and the game's own
+// frames in the same time
+struct PresentStats {
+    // what the window shows now, "emulated" or "native", and how the native
+    // renderer's frames reach it, "zero-copy" or "upload" (empty while emulated)
+    std::string renderer;
+    std::string path;
+    double seconds = 0;
+    uint64_t paints = 0;
+    std::vector<double> paint_ms;  // between each paint and the one before
+    // the native renderer's paints; of those, the ones showing a frame of its
+    // not shown before, and the ones showing one again; and frames it drew
+    // that no paint showed
+    uint64_t native_paints = 0;
+    uint64_t shown = 0, repeats = 0, skipped = 0;
+    // from the game's Present of each frame shown to the first paint showing it
+    std::vector<double> latency_ms;
+    // the game's frames: between the ends of its Presents
+    uint64_t game_frames = 0;
+    std::vector<double> game_ms;
 };
 
 class TestTarget {
@@ -145,6 +207,9 @@ public:
     virtual std::string NativeViewOn(uint32_t width, uint32_t height, bool sized, bool post) = 0;
     virtual void NativeViewOff() = 0;
     virtual NativeViewStats NativeView() = 0;
+    // the window's pacing since it last started over; `reset` starts it over
+    // once read
+    virtual PresentStats Present(bool reset) = 0;
     virtual void Quit() = 0;
     // the harness is shutting down: a wait gives up
     virtual bool Cancelled() = 0;

@@ -1212,6 +1212,19 @@ TEST_CASE("particle quads are built as the particle VS builds them") {
     }
 }
 
+TEST_CASE("a particle's colour is packed as DrawParticles packs it, unclamped") {
+    // truncated toward zero, R in the low byte
+    const float a[4] = {1.0f, 0.5f, 0.999f, 0.0f};
+    CHECK(ParticleColor(a) == (0x00u << 24 | 254u << 16 | 127u << 8 | 255u));
+    // a little below 0 is -1 (0xFF); under 1/255 below it truncates to 0;
+    // past 1 wraps (1.5 is 382, 0x7E); -2 is -510, 0x02
+    const float b[4] = {-0.004f, -0.003f, 1.5f, -2.0f};
+    CHECK(ParticleColor(b) == (0x02u << 24 | 0x7Eu << 16 | 0x00u << 8 | 0xFFu));
+    // NaN and -inf are 0x8000000000000000 (low byte 0), inf 0x7FFF... (0xFF)
+    const float c[4] = {std::nanf(""), -INFINITY, INFINITY, 0.25f};
+    CHECK(ParticleColor(c) == (63u << 24 | 0xFFu << 16 | 0x00u << 8 | 0x00u));
+}
+
 // The soft particle pixel shader (66C00A7A56838997, out/research/
 // softparticle_survey.md 2) reads the scene's depth from s9, the D3D depth
 // the camera's projection gave it (post_model's GameDepth: 1 - z, z the near

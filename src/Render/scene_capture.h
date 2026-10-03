@@ -86,6 +86,28 @@ inline void ParticleCorner(const float p[3], const float right[3], const float u
     uv[1] = v;
 }
 
+// A particle's colour (r, g, b, a floats) as DxParticleSys::DrawParticles
+// packs it into its vertex (band3_recomp.139.cpp, both paths): each channel
+// times DrawShowing's colour, (1,1,1,1), then 255, single precision; fctidz
+// (toward zero, NaN and below -2^63 to 0x8000000000000000, 2^63 and up to
+// 0x7FFF...); rlwimi keeps each one's low byte. No clamp: a particle a
+// little past the end of its life, alpha -0.004, is -1, 0xFF, drawn nearly
+// opaque, as the game draws it. RGBA8 here, R in the low byte.
+inline uint32_t ParticleColor(const float col[4]) {
+    uint32_t rgba = 0;
+    for (int i = 0; i < 4; i++) {
+        const float c = col[i] * 255.0f;
+        int64_t v = INT64_MIN;
+        if (c >= 9223372036854775808.0f) {
+            v = INT64_MAX;
+        } else if (c > -9223372036854775808.0f) {  // false for NaN
+            v = int64_t(c);
+        }
+        rgba |= (uint32_t(uint64_t(v)) & 0xffu) << (8 * i);
+    }
+    return rgba;
+}
+
 // RndTex::Type (tex+0x48) values that make a texture's pixels something RB3
 // draws at runtime rather than loads: kRendered and what's built on it
 // (0x22 NoZ, 0x42 shadow map, 0xA2, 0x122), back-buffer snapshots (8, 0x18)
@@ -648,6 +670,83 @@ struct PassRecordingStats {
 };
 PassRecordingStats GetPassRecordingStats();
 
+// What capture costs the game's render thread, since the game started: each
+// kind of hook's time past its early-out (taking g_state_mutex aside), always
+// counted while the hooks work (capture on, or texture passes recorded); and
+// with native_view_capture_profile (Band3/Debug, off by default) the steps
+// inside them, each the time since the step before it ended, so they add up
+// to the hooks' time (rest: what no step names), at a clock read each. The
+// harness's `native_view stats` reports it per game frame (its `capture`).
+struct CaptureProfile {
+    enum Hook {
+        kHookMesh,       // DxMesh::DrawShowing and DrawFaces
+        kHookMultiMesh,  // DxMultiMesh::DrawShowing, its passes at SelectConfig
+        kHookParticles,  // DxParticleSys::DrawParticles
+        kHookRect,       // DxRnd::DrawRect
+        kHookPass,       // texture passes begun, ended, cleared and forgotten
+        kHookPresent,    // the frame's end: FinishFrame, publishing it
+        kHookOther,      // camera selects and post-processing's reads
+        kNumHooks
+    };
+    static constexpr const char* kHookNames[kNumHooks] = {
+        "mesh", "multimesh", "particles", "rect", "pass", "present", "other"};
+    enum Step {
+        kStepTarget,        // where a draw goes (Target)
+        kStepGeomHit,       // a vertex buffer's geometry found in the cache
+        kStepGeomMiss,      // and decoded (bytes: the Geometry's)
+        kStepGeomMutable,   // a mutable mesh's CPU verts, decoded each draw
+        kStepParticleGeom,  // a particle system's quads
+        kStepRectGeom,      // a DrawRect's quad
+        kStepItem,          // the material's fields, the view-projection
+        kStepTexLookup,     // a loaded texture's key hashed and found
+        kStepTexDecode,     // and decoded (bytes: its levels')
+        kStepTexRt,         // a render target's identity and version
+        kStepShadeRead,     // the shade's constants and fetch constants read
+        kStepShadeRtsScan,  // its maps bound to render targets looked for
+        kStepShadeIntern,   // hashed and compared with the frame's
+        kStepShadeFill,     // a new one's samplers and maps
+        kStepShadeStore,    // a new one kept
+        kStepBones,         // a skinned draw's bones (count: bones)
+        kStepPush,          // the draw added to its frame or pass
+        kStepPassAppend,    // a pass's draws and shades into the frame
+        kStepCarry,         // the passes a frame samples carried in
+        kStepCompose,       // a post frame composed with its world
+        kStepGamma,         // the display gamma ramp read
+        kStepPublish,       // the frame published (the one before let go)
+        kStepReset,         // the next frame started
+        kStepRest,          // the hooks' time no step names
+        kNumSteps
+    };
+    static constexpr const char* kStepNames[kNumSteps] = {
+        "target",      "geom_hit",    "geom_miss",      "geom_mutable",  "particle_geom",
+        "rect_geom",   "item",        "tex_lookup",     "tex_decode",    "tex_rt",
+        "shade_read",  "shade_rts_scan", "shade_intern", "shade_fill",   "shade_store",
+        "bones",       "push",        "pass_append",    "carry",         "compose",
+        "gamma",       "publish",     "reset",          "rest"};
+    uint64_t hook_ns[kNumHooks] = {};
+    uint64_t hook_calls[kNumHooks] = {};
+    uint64_t step_ns[kNumSteps] = {};
+    uint64_t step_calls[kNumSteps] = {};
+    bool steps_on = false;  // native_view_capture_profile, now
+    uint64_t frames = 0;    // the game's frames (Presents)
+    uint64_t captured = 0;  // of those, captured
+    // draws added (to frames and recorded passes alike), shade states kept
+    // new, the shared objects made (frames, geometry, textures, passes), and
+    // what the steps above count
+    uint64_t draws = 0;
+    uint64_t new_shades = 0;
+    uint64_t allocs = 0;
+    uint64_t geom_miss_bytes = 0;
+    uint64_t tex_decode_bytes = 0;
+    uint64_t bones = 0;
+    // the caches' sizes now: render targets known, geometry, loaded textures
+    // and maps
+    uint64_t rts = 0, geoms = 0, texs = 0, map_texs = 0;
+};
+CaptureProfile GetCaptureProfile();
+// what `now` counted since `before` (the sizes and steps_on are now's)
+CaptureProfile CaptureProfileSince(const CaptureProfile& now, const CaptureProfile& before);
+
 // capture costs a little every frame, so it only runs while something wants
 // it: each Acquire is matched by a Release
 void AcquireCapture();
@@ -672,9 +771,30 @@ std::shared_ptr<const FrameCapture> CaptureHeldFrame(
 // the latest complete frame, composed with the world before it if it drew
 // none (frame_compose.h), or null before the first
 std::shared_ptr<const FrameCapture> LatestCapture();
+// and when it was published, at the end of the game's DxRnd::Present: where
+// the native renderer's latency starts
+std::shared_ptr<const FrameCapture> LatestCapture(
+    std::chrono::steady_clock::time_point& published);
+
+// A number that moves on with each capture published and each
+// WakeCaptureWaiters, so the native renderer's worker can sleep until there
+// is something to draw: WaitForCapture waits up to `timeout` for it to move
+// past `epoch` and returns it as it is then.
+uint64_t CaptureEpoch();
+uint64_t WaitForCapture(uint64_t epoch, std::chrono::milliseconds timeout);
+// wakes WaitForCapture as a capture would (the worker has another reason to draw)
+void WakeCaptureWaiters();
+
+// The game's frames: when each of the newest few thousand DxRnd::Presents
+// ended (captured or not), from `since` on, oldest first
+std::vector<std::chrono::steady_clock::time_point> GamePresentTimes(
+    std::chrono::steady_clock::time_point since);
 
 // native_view_rt_fallback: whether render targets' textures carry the pixels
-// guest memory holds too ("guest", the default) or only their identity ("none")
+// guest memory holds too ("guest", the default) or only their identity
+// ("none"). Never while renderer is native: the emulated GPU skips the draws
+// that would make them (gpu_skip.h), so they're stale by construction, and
+// the native renderer draws them from their passes, by identity and version.
 bool RtFallbackGuest();
 
 }  // namespace band3::render

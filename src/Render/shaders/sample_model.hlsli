@@ -20,7 +20,8 @@
 // the sampler's mip range and the levels the texture has; each point or
 // bilinear (texel centres at .5); with anisotropy up to its ratio of such
 // samples spread along the footprint's long side, averaged (the Vulkan
-// spec's approximation). Addressing per axis, as the sampler's clamp modes
+// spec's approximation; its sides clamped to a texel for the ratio, as
+// D3D's is, so a magnified footprint takes one). Addressing per axis, as the sampler's clamp modes
 // say: repeat, mirror, clamp to the edge or to the border, or mirror once
 // then clamp (halfway is drawn as the edge). The Xenos' own filter weights
 // and LOD precision aren't modelled.
@@ -111,9 +112,14 @@ SamplePlan PlanSample(uint2 size, uint4 s, float2 dx, float2 dy) {
     const float pmax = max(px, py);
     const float pmin = min(px, py);
     const uint ratio = max(s.w, 1u);
+    // the probes: the ratio of the sides with the short one clamped to a
+    // texel, as D3D's anisotropic LOD has it (the D3D11.3 spec's 7.18.11:
+    // under a texel along the minor axis the ratio becomes max(1, major)),
+    // which is the host GPU's filter the game's picture comes from. So a
+    // footprint under a texel both ways is magnified with one sample, not
+    // probes a fraction of a texel apart that blur the axis it's 1:1 on
     float n = 1.0f;
-    if (ratio > 1u && pmax > 0.0f)
-        n = pmin > 0.0f ? min(ceil(pmax / pmin), float(ratio)) : float(ratio);
+    if (ratio > 1u && pmax > 1.0f) n = min(ceil(pmax / max(pmin, 1.0f)), float(ratio));
     const float lod = (pmax > 0.0f ? log2(pmax / n) : -64.0f) + asfloat(s.y);
     SamplePlan p;
     p.bilinear = ((s.x >> (lod <= 0.0f ? 6u : 7u)) & 1u) != 0u;
