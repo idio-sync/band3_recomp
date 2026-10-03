@@ -39,9 +39,13 @@ still draws the passes RB3 draws into textures once or now and then (outfits, po
 the first two of any pass), and the lens flares' occlusion tests, so after F8 back to emulated
 its picture is the game's within two frames: the native renderer keeps drawing the window
 until it is (the log says `native present: off, the emulated GPU's picture shows (after <ms>)`).
-With nothing seen to draw, the emulated GPU's command processor does about a third of the
-work per frame, and the game runs faster uncapped than under `emulated`. `full` draws
-everything, as before.
+The title screen's clouds are the exception found so far: they take 5 to 20 whole frames to
+come back, so the emulated GPU's picture of the title lacks them for a moment after F8 back,
+and `capture` of the title under `skip_draws` pairs the native frame with a game screenshot
+without them. With nothing seen to draw, the emulated GPU's command processor does about a
+third of the work per frame, and the game runs faster uncapped than under `emulated`. `full`
+draws everything, as before. `tests/game/soak_native.b3t` soaks the native renderer: three
+songs, menu round trips and F8 both ways in each song.
 
 | Setting | |
 |---|---|
