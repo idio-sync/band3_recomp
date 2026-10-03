@@ -48,6 +48,9 @@ std::set<uint16_t> KnownVendors() {
 
 // set while a HID driver is running, for IsSdlCopyOfHidInstrument
 std::atomic<bool> g_active{false};
+// counts across drivers, since the launcher restarts the driver inside one
+// input system, which never takes an id back
+std::atomic<uint64_t> g_generation{0};
 
 std::mutex g_capture_message_mutex;
 std::string g_capture_message;
@@ -312,7 +315,7 @@ private:
 
     void Open(HidInstrumentType instrument, uint16_t vendor, uint16_t product, uint16_t release,
               const char* path, SDL_hid_device* handle) {
-        auto device = std::make_unique<Device>(static_cast<DeviceId>(kDeviceIdBase + ++generation_),
+        auto device = std::make_unique<Device>(static_cast<DeviceId>(kDeviceIdBase + ++g_generation),
                                                instrument, vendor, product, release, path,
                                                NameOf(vendor, product), handle);
         REXLOG_INFO("HID instruments: {} connected ({:04X}:{:04X})", device->name, vendor, product);
@@ -421,7 +424,6 @@ private:
 
     std::mutex devices_mutex_;
     std::vector<std::unique_ptr<Device>> devices_;
-    uint64_t generation_ = 0;
 
     // scanner thread only
     std::set<std::string> open_failed_;

@@ -38,4 +38,12 @@ inline void StoreCaps(const Caps360& caps, rex::input::X_INPUT_CAPABILITIES& out
     StoreGamepad(caps.gamepad, out.gamepad);
 }
 
+inline Caps360 LoadCaps(const rex::input::X_INPUT_CAPABILITIES& in) {
+    Caps360 caps;
+    caps.sub_type = in.sub_type;
+    caps.flags = in.flags;
+    caps.gamepad = LoadGamepad(in.gamepad);
+    return caps;
+}
+
 }

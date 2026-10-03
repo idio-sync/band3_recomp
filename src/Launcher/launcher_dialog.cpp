@@ -13,6 +13,7 @@
 #include <thread>
 #include <utility>
 #include "src/Audio/usb_mic.h"
+#include "src/Input/input_system.h"
 #include "src/paths.h"
 #include "launcher_style.h"
 
@@ -183,6 +184,8 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
 #endif
             TakeFolderPick();
             RefreshGameDataCheck(false);
+            // the instrument settings restart band3's drivers as they change
+            input::ApplyInputSettings();
             DrawPage(io);
         } else {
             DrawStarting(io);

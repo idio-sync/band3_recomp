@@ -26,7 +26,41 @@ uint16_t NavButtons(const NavInputs& n) {
     return b;
 }
 
+NavInputs DecodeNav(uint16_t b) {
+    NavInputs n;
+    n.a = (b & kButtonA) != 0;
+    n.b = (b & kButtonB) != 0;
+    n.x = (b & kButtonX) != 0;
+    n.y = (b & kButtonY) != 0;
+    n.start = (b & kStart) != 0;
+    n.back = (b & kBack) != 0;
+    n.dpad_up = (b & kDpadUp) != 0;
+    n.dpad_down = (b & kDpadDown) != 0;
+    n.dpad_left = (b & kDpadLeft) != 0;
+    n.dpad_right = (b & kDpadRight) != 0;
+    return n;
+}
+
 uint8_t Clamp7(uint8_t v) { return std::min<uint8_t>(v, 127); }
+
+// frets follow the 360 face button colors. PlasticBand's table swaps yellow
+// and blue, but its struct (and the controller's colors) put yellow on Y.
+constexpr uint16_t kFretButtons[kFretCount] = {kButtonA, kButtonB, kButtonY, kButtonX,
+                                               kLeftShoulder};
+
+constexpr uint16_t kPadButtons[kPadCount] = {kButtonB, kButtonY, kButtonX, kButtonA};
+// each velocity axis belongs to one pad color; yellow and green set the top bit
+constexpr bool kVelocityHighBit[kPadCount] = {false, true, false, true};
+// cymbals share the pad colors' buttons and velocity axes
+constexpr DrumPad kCymbalPad[kCymbalCount] = {kYellowPad, kBluePad, kGreenPad};
+constexpr uint16_t kCymbalDpad[kCymbalCount] = {kDpadUp, kDpadDown, 0};
+
+// a velocity axis back to its velocity, 1 to 127 (EncodeDrums inverts it)
+uint8_t AxisVelocity(int16_t axis) {
+    const int v = static_cast<uint16_t>(axis) & 0x7FFF;
+    const int velocity = 127 - (v * 126 + 0x7FFF / 2) / 0x7FFF;
+    return static_cast<uint8_t>(std::clamp(velocity, 1, 127));
+}
 
 // the capability values RB3 checks, set to what a real device of each kind
 // reports; stick axes double as hardware IDs
@@ -72,10 +106,6 @@ Gamepad360 EncodeGuitar(const GuitarInputs& in) {
     Gamepad360 g;
     g.buttons = NavButtons(in.nav);
 
-    // frets follow the 360 face button colors. PlasticBand's table swaps yellow
-    // and blue, but its struct (and the controller's colors) put yellow on Y.
-    static constexpr uint16_t kFretButtons[kFretCount] = {kButtonA, kButtonB, kButtonY, kButtonX,
-                                                          kLeftShoulder};
     bool any_fret = false;
     for (int f = 0; f < kFretCount; f++) {
         if (in.frets[f]) {
@@ -93,6 +123,19 @@ Gamepad360 EncodeGuitar(const GuitarInputs& in) {
     g.thumb_rx = static_cast<int16_t>(-32768 + static_cast<int>(w * 65535.0f));
     g.thumb_ry = static_cast<int16_t>(std::clamp(in.tilt, 0.0f, 1.0f) * 32767.0f);
     return g;
+}
+
+GuitarInputs DecodeGuitar(const Gamepad360& g) {
+    GuitarInputs in;
+    in.nav = DecodeNav(g.buttons);
+    for (int f = 0; f < kFretCount; f++) in.frets[f] = (g.buttons & kFretButtons[f]) != 0;
+    in.solo = (g.buttons & kLeftThumb) != 0;
+    in.strum_up = (g.buttons & kDpadUp) != 0;
+    in.strum_down = (g.buttons & kDpadDown) != 0;
+    in.pickup = g.left_trigger;
+    in.whammy = (static_cast<float>(g.thumb_rx) + 32768.0f) / 65535.0f;
+    in.tilt = std::max(0.0f, static_cast<float>(g.thumb_ry) / 32767.0f);
+    return in;
 }
 
 // Drums
@@ -114,13 +157,6 @@ Caps360 DrumCaps(bool rb2) {
 Gamepad360 EncodeDrums(const DrumInputs& in) {
     Gamepad360 g;
     g.buttons = NavButtons(in.nav);
-
-    static constexpr uint16_t kPadButtons[kPadCount] = {kButtonB, kButtonY, kButtonX, kButtonA};
-    // each velocity axis belongs to one pad color; yellow and green set the top bit
-    static constexpr bool kVelocityHighBit[kPadCount] = {false, true, false, true};
-    // cymbals share the pad colors' buttons and velocity axes
-    static constexpr DrumPad kCymbalPad[kCymbalCount] = {kYellowPad, kBluePad, kGreenPad};
-    static constexpr uint16_t kCymbalDpad[kCymbalCount] = {kDpadUp, kDpadDown, 0};
 
     std::array<uint8_t, kPadCount> velocity{};
     bool any_pad = false;
@@ -164,6 +200,69 @@ Gamepad360 EncodeDrums(const DrumInputs& in) {
     g.thumb_rx = axis[kBluePad];
     g.thumb_ry = axis[kGreenPad];
     return g;
+}
+
+bool IsRb2Drums(const Caps360& caps) {
+    // force feedback, or a hardware ID in sThumbRX (DrumCaps)
+    return (caps.flags & kCapsForceFeedback) != 0 || caps.gamepad.thumb_rx >= 0x100;
+}
+
+DrumInputs DecodeDrums(const Gamepad360& g, const Caps360& caps) {
+    DrumInputs in;
+    in.nav = DecodeNav(g.buttons);
+    in.kick1 = (g.buttons & kLeftShoulder) != 0;
+    in.kick2 = (g.buttons & kLeftThumb) != 0;
+
+    std::array<bool, kPadCount> color{};
+    for (int p = 0; p < kPadCount; p++) color[p] = (g.buttons & kPadButtons[p]) != 0;
+    if (!IsRb2Drums(caps)) {
+        for (int p = 0; p < kPadCount; p++) in.pads[p] = color[p] ? 127 : 0;
+        return in;
+    }
+
+    const bool pad_flag = (g.buttons & kRightThumb) != 0;
+    const bool cymbal_flag = (g.buttons & kRightShoulder) != 0;
+    const bool up = (g.buttons & kDpadUp) != 0;
+    const bool down = (g.buttons & kDpadDown) != 0;
+
+    std::array<bool, kCymbalCount> cymbal{};
+    std::array<bool, kPadCount> pad{};
+    if (cymbal_flag) {
+        for (int c = 0; c < kCymbalCount; c++) {
+            if (!color[kCymbalPad[c]]) continue;
+            if (!pad_flag) {
+                cymbal[c] = true;
+            } else if (kCymbalDpad[c] != 0) {
+                cymbal[c] = (g.buttons & kCymbalDpad[c]) != 0;
+            } else {
+                cymbal[c] = !up && !down;
+            }
+        }
+    }
+    if (pad_flag) {
+        pad[kRedPad] = color[kRedPad];
+        for (int c = 0; c < kCymbalCount; c++) {
+            pad[kCymbalPad[c]] = color[kCymbalPad[c]] && !cymbal[c];
+        }
+    }
+    // the pad flag with no pad to explain it: a pad and cymbal of one color
+    int both = -1;
+    if (pad_flag && std::ranges::none_of(pad, [](bool p) { return p; })) {
+        for (int c = 0; c < kCymbalCount && both < 0; c++) {
+            if (cymbal[c]) both = c;
+        }
+        if (both >= 0) pad[kCymbalPad[both]] = true;
+    }
+
+    const std::array<int16_t, kPadCount> axis = {g.thumb_lx, g.thumb_ly, g.thumb_rx, g.thumb_ry};
+    for (int p = 0; p < kPadCount; p++) {
+        if (pad[p]) in.pads[p] = AxisVelocity(axis[p]);
+    }
+    for (int c = 0; c < kCymbalCount; c++) {
+        if (!cymbal[c]) continue;
+        in.cymbals[c] = AxisVelocity(c == both ? axis[kRedPad] : axis[kCymbalPad[c]]);
+    }
+    return in;
 }
 
 // Keys

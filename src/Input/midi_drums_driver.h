@@ -13,6 +13,9 @@ namespace band3::input {
 
 std::unique_ptr<rex::input::InputDriver> CreateMidiDrumsDriver();
 
+// the MIDI drums driver's kit
+bool IsMidiDrums(const rex::input::DeviceInfo& device);
+
 // For the Instrument Lab.
 struct MidiDrumsStatus {
     bool running = false;

@@ -7,6 +7,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 #include <rex/logging.h>
@@ -25,6 +26,10 @@ namespace {
 
 // clear of the SDK drivers' ids and band3's others ("B3VI", "B3HI")
 constexpr uint64_t kDeviceIdBase = 0x42334D4900000000ull;  // "B3MI"
+constexpr std::string_view kGuidPrefix = "band3-midi:";
+// counts across drivers, since the launcher restarts the driver inside one
+// input system, which never takes an id back
+std::atomic<uint64_t> g_generation{0};
 // how often to look for the port, and notice it going away
 constexpr std::chrono::milliseconds kScanInterval{2000};
 // how many notes the Lab shows
@@ -97,7 +102,7 @@ public:
         DeviceInfo info;
         info.id = id_;
         info.name = "MIDI drums: " + port_;
-        info.guid = "band3-midi:" + port_;
+        info.guid = std::string(kGuidPrefix) + port_;
         info.synthetic = false;
         out.push_back(std::move(info));
     }
@@ -212,7 +217,7 @@ private:
             std::lock_guard<std::mutex> lock(mutex_);
             port_ = ports[i];
             // a new id reads as a new controller
-            id_ = static_cast<DeviceId>(kDeviceIdBase + ++generation_);
+            id_ = static_cast<DeviceId>(kDeviceIdBase + ++g_generation);
             return;
         }
     }
@@ -250,7 +255,6 @@ private:
     std::mutex mutex_;
     midi_drums::Kit kit_;
     DeviceId id_ = DeviceId::kInvalid;
-    uint64_t generation_ = 0;
     std::string port_;
     std::vector<std::string> ports_;
     std::deque<midi_drums::Hit> recent_;
@@ -263,6 +267,8 @@ private:
 std::unique_ptr<rex::input::InputDriver> CreateMidiDrumsDriver() {
     return std::make_unique<MidiDrumsDriver>();
 }
+
+bool IsMidiDrums(const DeviceInfo& device) { return device.guid.starts_with(kGuidPrefix); }
 
 MidiDrumsStatus GetMidiDrumsStatus() {
     std::lock_guard<std::mutex> lock(MidiDrumsDriver::driver_mutex());

@@ -31,6 +31,7 @@
 #include "Launcher/launcher_platform.h"
 #include "Launcher/launcher_start.h"
 #include "Launcher/launcher_style.h"
+#include "Launcher/mic_meter.h"
 #include "Net/discord.h"
 #include "Net/http_server.h"
 #include "Render/gpu_view.h"
@@ -227,6 +228,9 @@ class Band3App : public rex::ReXApp {
     }
 
     resume_ = std::move(resume);
+    // the input system the game will take over (OnPreSetup), built now so the
+    // launcher lists and tests the devices the game will read
+    band3::input::PrepareInputSystem(window());
     launcher_ = std::make_unique<band3::launcher::LauncherDialog>(
         imgui_drawer(),
         band3::launcher::LauncherHost{
@@ -249,6 +253,10 @@ class Band3App : public rex::ReXApp {
   // the launcher's Play, once its "Starting" frame is drawn: the settings read
   // at startup are taken again from what the launcher left, then the game starts
   void StartFromLauncher() {
+    // what the launcher opened for itself goes; the input system stays open
+    // for the game, which takes it over in Runtime::Setup (OnPreSetup)
+    band3::launcher::CloseMicMeters();
+    band3::input::ReadyInputForGame();
     band3::settings::SnapshotStartupSettings();
     band3::AddSettingArgs();
     // what the launcher changed is read from here on, so nothing waits on a
@@ -308,7 +316,11 @@ class Band3App : public rex::ReXApp {
     if (config.gpu_plugin.empty()) {
       config.gpu_plugin = "xenos";
     }
-    // the SDK's input drivers plus band3's (virtual and PS3/Wii instruments)
+    // the SDK's input drivers plus band3's (virtual and PS3/Wii instruments):
+    // the launcher's, when it was shown (OnFinalizePaths), or a new one. The
+    // runtime calls Setup on it, which does nothing for an InputSystem (its
+    // drivers were set up as they were added), then AttachWindow, which the
+    // drivers take a second time without harm (input_system.h).
     config.input_factory = band3::input::CreateInputSystem;
   }
 

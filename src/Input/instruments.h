@@ -143,6 +143,29 @@ Gamepad360 EncodeGuitar(const GuitarInputs& in);
 Caps360 DrumCaps(bool rb2 = true);
 Gamepad360 EncodeDrums(const DrumInputs& in);
 
+// What a guitar or drum kit is pressing, read back from what it reports: the
+// encoders above in reverse, for the launcher's test view. Every source
+// reaches it in this form, the HID and MIDI drivers' encoded instruments and
+// real Xbox 360 instruments alike. `nav` holds every menu button as the game
+// reads it, including those the frets, strums or pads also press (a green fret
+// is A).
+GuitarInputs DecodeGuitar(const Gamepad360& g);
+
+// RB2-or-later kits by the capabilities, as RB3 tells them apart (IsRb2Drums):
+// pads and cymbals from the face buttons with the pad and cymbal flags and the
+// d-pad markers, and velocities from the sticks. Where the report can't tell
+// hits apart, the common case is taken: with both flags set, green is a cymbal
+// unless yellow or blue's cymbal marker explains the cymbal flag, and a pad
+// flag nothing else explains is a pad of the cymbal's color, whose velocity is
+// then in red's axis (as EncodeDrums puts it). Face buttons without a flag are
+// menu presses only. An RB1 kit has neither flags nor velocity: each face
+// button is its pad, hit at 127, and the d-pad only navigates.
+DrumInputs DecodeDrums(const Gamepad360& g, const Caps360& caps);
+
+// whether RB3 reads a drum kit with these capabilities as RB2-or-later
+// (cymbals and velocity) rather than RB1
+bool IsRb2Drums(const Caps360& caps);
+
 // RB3 keytar
 Caps360 KeysCaps();
 Gamepad360 EncodeKeys(const KeysInputs& in);
