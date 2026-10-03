@@ -679,7 +679,8 @@ TEST_CASE("the launcher's table is consistent") {
         CHECK(names.insert(s.cvar).second);
         CHECK_FALSE(s.label.empty());
         CHECK_FALSE(s.section.empty());
-        if (s.widget == Widget::kCombo || s.widget == Widget::kComboText) {
+        if (s.widget == Widget::kCombo || s.widget == Widget::kComboText ||
+            s.widget == Widget::kMonitor || s.widget == Widget::kResolution) {
             CHECK_FALSE(s.choices.empty());
         }
         if (s.widget == Widget::kIntSlider || s.widget == Widget::kIntStepper ||

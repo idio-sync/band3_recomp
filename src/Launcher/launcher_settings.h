@@ -52,8 +52,15 @@ enum class Widget {
     kPath,
     // folders separated by '|' (paths::SplitList), shown resolved
     kFolderList,
-    // up to four names, comma separated, one per mic slot (ParseDeviceList)
+    // up to four names, comma separated, one per mic slot (ParseDeviceList):
+    // a dropdown of the PC's microphones per slot, with a level meter
     kMicSlots,
+    // a MIDI input port from the list, or a typed name (midi_drums_device)
+    kMidiPort,
+    // the monitors by name; the choices number them where they can't be listed
+    kMonitor,
+    // the monitor's display modes, then the choices (presets), or a typed WxH
+    kResolution,
     // one game lag number per controller type (LagEditorTypes, WithLag)
     kJoypadLag,
     // windowed / borderless / exclusive, over this setting (fullscreen) and its

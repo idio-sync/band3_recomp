@@ -29,14 +29,17 @@ first one that fails, saves a screenshot of the moment and exits 1. Commands joi
 with `;` share one connection, which `hold` needs: band3 lets go of everything held
 when a client disconnects.
 
-`test_port` also keeps the launcher (band3's setup screen) away, so `launch --no-harness
--- --launcher` starts band3 without it, to see the launcher: nothing answers on the port
-then, so `launch` waits for the window instead, and the window commands below drive it.
+`test_port` also keeps the launcher (band3's setup screen) away, unless `--launcher` asks
+for it: `launch -- --launcher` shows the launcher under the harness. Nothing answers on the
+port until the launcher's Play starts the game, so `launch` waits for the window instead;
+the window commands below drive the launcher, and once Play is clicked the harness answers
+as usual. `launch --no-harness -- --launcher` shows it without `test_port` at all.
 
 `launch --config <file>` starts band3 with that file as the `band3.toml` beside the
 exe, and puts back what was there (moved aside to `band3.toml.band3ctl` meanwhile) as soon
-as the harness answers, by when band3 has read it. It refuses `--no-harness`: the launcher
-showing then saves to `band3.toml` after the file is put back, into the player's own. Put
+as the harness answers, by when band3 has read it. It refuses `--no-harness` and
+`--launcher`: the launcher showing then saves to `band3.toml` after the file is put back,
+into the player's own. Put
 the file beside the exe by hand to start the launcher with it. `--user_data_root` is on
 the command line, so the file's `user_data_root` loses to it. `tools/test_config_file.py`
 uses it to check that a `band3.toml` written by the launcher's writer reaches the game: its

@@ -33,7 +33,7 @@ constexpr Choice kVenues[] = {
     {"none", "None (black background)"},
 };
 
-// numbered for now; named from the monitors in phase 2
+// where the monitors can't be listed (off Windows); named from the list otherwise
 constexpr Choice kMonitors[] = {
     {"0", "Default"},   {"1", "Primary"},   {"2", "Monitor 2"},
     {"3", "Monitor 3"}, {"4", "Monitor 4"},
@@ -122,13 +122,13 @@ constexpr Setting kSettings[] = {
 
     // Graphics
     {.cvar = "monitor", .tab = kGraphics, .section = "Display", .label = "Monitor",
-     .widget = kCombo, .choices = kMonitors},
+     .widget = kMonitor, .choices = kMonitors},
     {.cvar = "fullscreen", .tab = kGraphics, .section = "Display", .label = "Window mode",
      .widget = kWindowMode, .companion = "fullscreen_exclusive"},
     {.cvar = "fullscreen_exclusive", .tab = kGraphics, .section = "Display",
      .label = "Exclusive fullscreen", .widget = kNone},
     {.cvar = "resolution", .tab = kGraphics, .section = "Display", .label = "Resolution",
-     .widget = kComboText, .choices = kResolutions},
+     .widget = kResolution, .choices = kResolutions},
     {.cvar = "present_letterbox", .tab = kGraphics, .section = "Display", .label = "Aspect",
      .widget = kCombo, .choices = kAspect},
     {.cvar = "vsync", .tab = kGraphics, .section = "Display", .label = "VSync",
@@ -169,7 +169,7 @@ constexpr Setting kSettings[] = {
     {.cvar = "midi_drums", .tab = kControllers, .section = "MIDI drums",
      .label = "Play a MIDI drum kit", .widget = kCheckbox},
     {.cvar = "midi_drums_device", .tab = kControllers, .section = "MIDI drums",
-     .label = "MIDI port", .widget = kText, .shown_when = kWithMidiDrums},
+     .label = "MIDI port", .widget = kMidiPort, .shown_when = kWithMidiDrums},
     {.cvar = "midi_drums_min_velocity", .tab = kControllers, .section = "MIDI drums",
      .label = "Minimum velocity", .widget = kIntSlider, .range = Range{1, 127, 1},
      .shown_when = kWithMidiDrums},

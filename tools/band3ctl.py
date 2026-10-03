@@ -154,13 +154,27 @@ def place_config(source, exe_folder):
     return restore
 
 
+def asks_for_launcher(extra):
+    """Whether band3's arguments ask for the launcher (--launcher), which then
+    shows under the harness too. The last --launcher wins, as on band3's
+    command line."""
+    asked = False
+    for arg in extra:
+        if arg == "--launcher":
+            asked = True
+        elif arg.startswith("--launcher="):
+            asked = arg.split("=", 1)[1].strip().lower() in ("true", "1", "yes")
+    return asked
+
+
 def config_problem(args):
     """Why launch's --config can't be used as asked, or None."""
-    if args.config and args.no_harness:
+    if args.config and (args.no_harness or asks_for_launcher(args.extra)):
         # the file is put back once band3 has read it, which with the launcher
         # showing is before a Save or Play there writes band3.toml: that would
         # merge into the player's file
-        return ("--config can't be used with --no-harness: the launcher would save over the "
+        flag = "--no-harness" if args.no_harness else "--launcher"
+        return (f"--config can't be used with {flag}: the launcher would save over the "
                 "band3.toml band3ctl puts back. Put the file beside the exe yourself instead")
     return None
 
@@ -197,9 +211,11 @@ def start(args, exe):
         shutil.rmtree(user_data)
     os.makedirs(user_data, exist_ok=True)
     command = [exe, f"--user_data_root={user_data}"]
-    # test_port also keeps the launcher away, so --no-harness is how to see it
+    # test_port keeps the launcher away unless --launcher asks for it; then the
+    # harness answers only once the launcher's Play starts the game
     if not args.no_harness:
         command.insert(1, f"--test_port={args.port}")
+    launcher = asks_for_launcher(args.extra)
     # muted, like minimized, so a test doesn't disturb whoever is at the
     # machine; the game's audio still runs, so songs play on as usual
     if not args.sound and not any(a.startswith("--audio_mute") for a in args.extra):
@@ -218,8 +234,9 @@ def start(args, exe):
     process = subprocess.Popen(command, cwd=cwd, creationflags=flags, startupinfo=startupinfo,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     deadline = time.monotonic() + args.timeout
-    if args.no_harness:
-        # nothing answers on the harness port; its window is the sign it's up
+    if args.no_harness or launcher:
+        # nothing answers on the harness port (yet); the window is the sign
+        # it's up
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 sys.exit(f"band3 exited with code {process.returncode} before its window opened")
@@ -639,13 +656,16 @@ def main(argv):
     p.add_argument("--sound", action="store_true",
                    help="let the game play sound (by default it starts muted, --audio_mute=true)")
     p.add_argument("--no-harness", action="store_true",
-                   help="without test_port, so the launcher can show (--launcher); waits for "
-                        "the window instead of the harness, which won't answer")
+                   help="without test_port; waits for the window instead of the harness, "
+                        "which won't answer")
     p.add_argument("--config", metavar="FILE",
                    help="start with FILE as the band3.toml beside the exe, putting back "
-                        "whatever was there once band3 has read it (not with --no-harness, "
-                        "whose launcher saves to band3.toml later)")
-    p.add_argument("extra", nargs="*", help="more band3 arguments, e.g. --fast_start=true")
+                        "whatever was there once band3 has read it (not with --no-harness or "
+                        "--launcher, whose launcher saves to band3.toml later)")
+    p.add_argument("extra", nargs="*",
+                   help="more band3 arguments, e.g. --fast_start=true; with --launcher the "
+                        "launcher shows, launch waits for the window, and the harness answers "
+                        "once its Play starts the game")
 
     p = sub.add_parser("run", help="replay a .b3t script")
     p.add_argument("script")

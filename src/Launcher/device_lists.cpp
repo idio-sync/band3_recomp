@@ -124,6 +124,7 @@ DisplayMode ModeOf(const DEVMODEW& mode) {
 }
 
 struct Found {
+    HMONITOR monitor = nullptr;
     std::wstring device;
     bool primary = false;
 };
@@ -133,16 +134,19 @@ BOOL CALLBACK AddMonitor(HMONITOR monitor, HDC, LPRECT, LPARAM data) {
     info.cbSize = sizeof(info);
     if (GetMonitorInfoW(monitor, &info)) {
         reinterpret_cast<std::vector<Found>*>(data)->push_back(
-            {info.szDevice, (info.dwFlags & MONITORINFOF_PRIMARY) != 0});
+            {monitor, info.szDevice, (info.dwFlags & MONITORINFOF_PRIMARY) != 0});
     }
     return TRUE;
 }
 
 }
 
-std::vector<Monitor> ListMonitors() {
+std::vector<Monitor> ListMonitors(void* native_window) {
     std::vector<Found> found;
     EnumDisplayMonitors(nullptr, nullptr, AddMonitor, reinterpret_cast<LPARAM>(&found));
+    const HMONITOR window_monitor =
+        native_window ? MonitorFromWindow(static_cast<HWND>(native_window), MONITOR_DEFAULTTONEAREST)
+                      : nullptr;
 
     std::vector<bool> primary;
     for (const auto& f : found) primary.push_back(f.primary);
@@ -156,6 +160,7 @@ std::vector<Monitor> ListMonitors() {
         Monitor monitor;
         monitor.name = MonitorName(device);
         monitor.primary = found[i].primary;
+        monitor.has_window = window_monitor && found[i].monitor == window_monitor;
         monitor.current = ModeOf(mode);
         std::vector<DisplayMode> modes{monitor.current};
         for (DWORD n = 0;; n++) {
@@ -174,7 +179,7 @@ std::vector<Monitor> ListMonitors() {
 
 #else
 
-std::vector<Monitor> ListMonitors() { return {}; }
+std::vector<Monitor> ListMonitors(void*) { return {}; }
 
 #endif
 

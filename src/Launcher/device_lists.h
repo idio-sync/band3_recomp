@@ -12,7 +12,9 @@ namespace band3::launcher {
 
 // The recording devices band3's SDL lists, which the game's mic capture picks
 // from by usb_mic_devices. Read straight from SDL: the game's capture can't be
-// started before the game, nor restarted after.
+// started before the game, nor restarted after. Starts SDL's audio subsystem
+// for the call, which is cheap only while something else keeps it started
+// (the launcher does while its mic slots show).
 std::vector<std::string> RecordingDeviceNames();
 
 struct MidiPort {
@@ -30,6 +32,9 @@ std::vector<MidiPort> MidiInputPorts();
 struct Monitor {
     std::string name;
     bool primary = false;
+    // the window passed to ListMonitors is on it (or nearest to it), which is
+    // where the monitor setting's default (0) leaves it
+    bool has_window = false;
     // the desktop's mode, and every fullscreen mode (SortDisplayModes' order)
     DisplayMode current;
     std::vector<DisplayMode> modes;
@@ -40,6 +45,7 @@ struct Monitor {
 // Win32 in SDL's order (SdlDisplayOrder) on Windows. Empty elsewhere: band3's
 // SDL would have to start its video subsystem next to the SDK's, which isn't
 // known to be safe, so the launcher numbers the monitors there instead.
-std::vector<Monitor> ListMonitors();
+// `native_window` (an HWND, or null) marks the monitor it's on.
+std::vector<Monitor> ListMonitors(void* native_window = nullptr);
 
 }

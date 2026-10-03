@@ -82,6 +82,8 @@ class Band3App : public rex::ReXApp {
   bool cache_in_ini_ = false;
   // quitting from the launcher was confirmed, so the window may close
   bool quit_confirmed_ = false;
+  // --launcher, once read (LauncherFlag)
+  std::optional<bool> launcher_flag_;
 
   static std::unique_ptr<rex::ui::WindowedApp> Create(
       rex::ui::WindowedAppContext& ctx) {
@@ -204,15 +206,11 @@ class Band3App : public rex::ReXApp {
       REXLOG_WARN("Game data {}: {}", rex::path_to_utf8(paths.game_data_root),
                   band3::launcher::DescribeProblem(check.problem));
     }
-    // --launcher is for this start only: a value saved in band3.toml (F4's
-    // "Save to config" of a run started with it) doesn't count
-    const bool launcher_flag = REXCVAR_GET(launcher) &&
-                               rex::cvar::GetFlagSource("launcher") != rex::cvar::Source::kConfig;
     const auto decision = band3::launcher::DecideLauncher({
         .test_port = REXCVAR_GET(test_port) != 0,
         .relaunched = band3::relaunch::WasRelaunched(),
         .game_data_ok = check.ok,
-        .launcher_flag = launcher_flag,
+        .launcher_flag = LauncherFlag(),
         .shift_held = band3::launcher::ShiftHeld(),
         .show_launcher = REXCVAR_GET(show_launcher),
     });
@@ -243,11 +241,24 @@ class Band3App : public rex::ReXApp {
                   return band3::launcher::DisplayRefreshRate(
                       window() ? window()->GetNativeWindowHandle() : nullptr);
                 },
+            .native_window =
+                [this]() -> void* { return window() ? window()->GetNativeWindowHandle() : nullptr; },
             .start_game = [this] { StartFromLauncher(); },
             .quit = [this] { QuitFromLauncher(); },
         });
     if (debug_overlay_) debug_overlay_->set_hidden(true);
     return std::nullopt;
+  }
+
+  // --launcher, for this start only: a value saved in band3.toml (F4's "Save
+  // to config" of a run started with it) doesn't count. Read once, since
+  // OnFinalizePaths clears the setting once it has decided.
+  bool LauncherFlag() {
+    if (!launcher_flag_) {
+      launcher_flag_ = REXCVAR_GET(launcher) &&
+                       rex::cvar::GetFlagSource("launcher") != rex::cvar::Source::kConfig;
+    }
+    return *launcher_flag_;
   }
 
   // the launcher's Play, once its "Starting" frame is drawn: the settings read
@@ -298,11 +309,13 @@ class Band3App : public rex::ReXApp {
   // the launcher's larger font: the fonts are set up before band3 decides
   // whether it shows (the game data check needs OnFinalizePaths' folders, and
   // Shift is read then), so they're added unless nothing could show it, and
-  // only a test run or a relaunch rules it out this early (LauncherPossible)
+  // only a relaunch or a test run without --launcher rules it out this early
+  // (LauncherPossible)
   void OnConfigureFonts(ImFontAtlas* atlas) override {
     if (!band3::launcher::LauncherPossible({
             .test_port = REXCVAR_GET(test_port) != 0,
             .relaunched = band3::relaunch::WasRelaunched(),
+            .launcher_flag = LauncherFlag(),
         })) {
       REXLOG_INFO("Launcher: fonts skipped, it can't show in this run");
       return;

@@ -67,15 +67,23 @@ TEST_CASE("--launcher, Shift and missing game data show it whatever show_launche
     CHECK(DecideLauncher(in).show);
 }
 
-TEST_CASE("a test run and a relaunch never show it") {
+TEST_CASE("a test run shows it only with --launcher, and a relaunch never") {
     StartInputs in;
-    in.launcher_flag = true;
     in.shift_held = true;
     in.game_data_ok = false;
     in.test_port = true;
     CHECK_FALSE(DecideLauncher(in).show);
+    // a harness that drives the launcher itself asks for it
+    in.launcher_flag = true;
+    CHECK(DecideLauncher(in).show);
+    in.shift_held = false;
+    in.game_data_ok = true;
+    in.show_launcher = false;
+    CHECK(DecideLauncher(in).show);
     in.test_port = false;
     in.relaunched = true;
+    CHECK_FALSE(DecideLauncher(in).show);
+    in.test_port = true;
     CHECK_FALSE(DecideLauncher(in).show);
 }
 
@@ -99,6 +107,7 @@ TEST_CASE("the fonts are skipped only when no input could show the launcher") {
         in.show_launcher = bits & 32;
         CAPTURE(bits);
         if (DecideLauncher(in).show) CHECK(LauncherPossible(in));
-        CHECK(LauncherPossible(in) == (!in.test_port && !in.relaunched));
+        CHECK(LauncherPossible(in) ==
+              (!in.relaunched && (!in.test_port || in.launcher_flag)));
     }
 }

@@ -194,6 +194,12 @@ class ConfigProblemTest(unittest.TestCase):
         problem = band3ctl.config_problem(launch_args(config="x.toml", no_harness=True))
         self.assertIn("--no-harness", problem)
 
+    def test_config_with_the_launcher_is_refused(self):
+        problem = band3ctl.config_problem(launch_args(config="x.toml", extra=["--launcher"]))
+        self.assertIn("--launcher", problem)
+        self.assertIsNone(band3ctl.config_problem(
+            launch_args(config="x.toml", extra=["--launcher=false"])))
+
     def test_launch_stops_before_touching_band3_toml(self):
         folder = tempfile.mkdtemp()
         try:
@@ -212,12 +218,29 @@ class ConfigProblemTest(unittest.TestCase):
             shutil.rmtree(folder)
 
 
+class AsksForLauncherTest(unittest.TestCase):
+    def test_the_flag_alone_or_true(self):
+        self.assertTrue(band3ctl.asks_for_launcher(["--launcher"]))
+        self.assertTrue(band3ctl.asks_for_launcher(["--fast_start=true", "--launcher=true"]))
+        self.assertTrue(band3ctl.asks_for_launcher(["--launcher=1"]))
+
+    def test_false_or_absent(self):
+        self.assertFalse(band3ctl.asks_for_launcher([]))
+        self.assertFalse(band3ctl.asks_for_launcher(["--launcher=false"]))
+        self.assertFalse(band3ctl.asks_for_launcher(["--launcher_x"]))
+
+    def test_the_last_one_wins(self):
+        self.assertFalse(band3ctl.asks_for_launcher(["--launcher", "--launcher=false"]))
+        self.assertTrue(band3ctl.asks_for_launcher(["--launcher=false", "--launcher"]))
+
+
 PLAYERS_FILE = "fullscreen = false"
 
 
-def launch_args(exe="band3.exe", config=None, no_harness=False):
+def launch_args(exe="band3.exe", config=None, no_harness=False, extra=None):
     """What `launch` reads before it starts anything."""
-    return argparse.Namespace(exe=exe, config=config, no_harness=no_harness)
+    return argparse.Namespace(exe=exe, config=config, no_harness=no_harness,
+                              extra=extra or [])
 
 
 def write(path, text):

@@ -2,8 +2,10 @@
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_events.h>
+#include <SDL3/SDL_init.h>
 #include <imgui.h>
 #include <rex/filesystem.h>
+#include <rex/graphics/video_mode_util.h>
 #include <rex/logging.h>
 #include <algorithm>
 #include <cmath>
@@ -92,7 +94,8 @@ void SDLCALL OnFolderPicked(void* userdata, const char* const* files, int) {
 // what an empty text setting means, shown greyed in its field
 const char* HintFor(std::string_view cvar) {
     if (cvar == "username") return "The profile's own name";
-    if (cvar == "midi_drums_device") return "The first MIDI port";
+    if (cvar == "midi_drums_device") return "A port's name, or part of one";
+    if (cvar == "usb_mic_devices") return "A microphone's name, or part of one";
     if (cvar == "resolution") return "Width x height, e.g. 1600x900";
     if (cvar == "forced_venue") return "A venue or a comma separated list";
     return "";
@@ -126,6 +129,7 @@ LauncherDialog::LauncherDialog(rex::ui::ImGuiDrawer* imgui_drawer, LauncherHost 
 }
 
 LauncherDialog::~LauncherDialog() {
+    CloseMeters();
     ImGuiIO& io = GetIO();
     io.ConfigFlags = (io.ConfigFlags & ~ImGuiConfigFlags_NavEnableKeyboard) |
                      (saved_config_flags_ & ImGuiConfigFlags_NavEnableKeyboard);
@@ -186,8 +190,15 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
             RefreshGameDataCheck(false);
             // the instrument settings restart band3's drivers as they change
             input::ApplyInputSettings();
+            meters_drawn_ = false;
             DrawPage(io);
+            // the meters record only while their slots show: not on another
+            // tab, nor with usb_mics off
+            if (!meters_drawn_) CloseMeters();
         } else {
+            // nothing of the launcher's records once Play is pressed: the
+            // game's own capture opens the microphones
+            CloseMeters();
             DrawStarting(io);
         }
     }
@@ -226,6 +237,7 @@ void LauncherDialog::DrawPage(ImGuiIO& io) {
             ImGui::EndTabBar();
         }
         ImGui::PopStyleVar();
+        RefreshDeviceLists();
         DrawDeckBanner();
         ImGui::Dummy(ImVec2(0, Px(2)));
 
@@ -429,6 +441,9 @@ void LauncherDialog::DrawControl(const Setting& setting) {
     case Widget::kPath: DrawPath(setting); break;
     case Widget::kFolderList: DrawFolderList(setting); break;
     case Widget::kMicSlots: DrawMicSlots(setting); break;
+    case Widget::kMidiPort: DrawMidiPort(setting); break;
+    case Widget::kMonitor: DrawMonitor(setting); break;
+    case Widget::kResolution: DrawResolution(setting); break;
     case Widget::kJoypadLag: DrawJoypadLag(setting); break;
     case Widget::kWindowMode: DrawWindowMode(setting); break;
     case Widget::kNone: break;
@@ -706,26 +721,421 @@ void LauncherDialog::DrawFolderList(const Setting& s) {
     }
 }
 
+namespace {
+
+constexpr const char* kOther = "Other...";
+
+// the meters' scale: silence to full scale, in dB
+constexpr float kMeterFloor = -60.0f;
+
+// where an amplitude sits on a meter, 0 to 1
+float MeterPosition(float amplitude) {
+    return (MicLevel::ToDecibels(amplitude, kMeterFloor) - kMeterFloor) / -kMeterFloor;
+}
+
+std::string SizeLabel(int width, int height) {
+    return std::to_string(width) + " x " + std::to_string(height);
+}
+
+// a resolution setting's size, as the SDK reads it (a preset or WxH)
+std::optional<std::pair<int, int>> ResolutionSize(std::string_view value) {
+    int32_t width = 0, height = 0;
+    if (!rex::graphics::video_mode_util::TryParseResolutionPreset(value, width, height)) {
+        return std::nullopt;
+    }
+    return std::pair<int, int>(width, height);
+}
+
+}
+
+void LauncherDialog::RefreshDeviceLists() {
+    using Clock = std::chrono::steady_clock;
+    const Clock::time_point now = Clock::now();
+    // a list is kept for this long, also while its tab is away, so going back
+    // and forth between tabs doesn't list again each time
+    constexpr auto kEvery = std::chrono::seconds(2);
+    auto due = [&](bool showing, Clock::time_point& next) {
+        if (!showing || now < next) return false;
+        next = now + kEvery;
+        return true;
+    };
+    auto shown = [&](std::string_view cvar) {
+        const Setting* s = model_.Find(cvar);
+        return s && model_.Visible(*s);
+    };
+    const bool mics_showing = stage_ == Stage::kEditing && current_tab_ == Tab::kAudio &&
+                              shown("usb_mic_devices");
+    // let go when the slots stop showing (OnDraw's CloseMeters)
+    if (mics_showing) HoldAudio(true);
+    if (due(mics_showing, next_mics_)) {
+        std::vector<std::string> mics = RecordingDeviceNames();
+        if (mics != mics_ || !mics_listed_) {
+            mics_ = std::move(mics);
+            mic_list_generation_++;
+        }
+        mics_listed_ = true;
+    }
+    if (due(current_tab_ == Tab::kControllers && shown("midi_drums_device"), next_midi_)) {
+        midi_ports_ = MidiInputPorts();
+        midi_listed_ = true;
+    }
+    if (due(current_tab_ == Tab::kGraphics && (shown("monitor") || shown("resolution")),
+            next_monitors_)) {
+        monitors_ = ListMonitors(host_.native_window ? host_.native_window() : nullptr);
+    }
+}
+
+bool LauncherDialog::DeviceCombo(std::string_view key, const std::string& none,
+                                 const std::vector<DeviceEntry>& devices,
+                                 std::optional<size_t> selected, std::string& value,
+                                 const char* empty_list, float width) {
+    const bool custom = custom_rows_.contains(key);
+    const bool blank = value.empty();
+    const bool found = !blank && selected && *selected < devices.size();
+    const std::string missing = value + " (not connected)";
+    std::string preview = custom ? kOther : blank ? none : found ? devices[*selected].label : missing;
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float combo_width = custom ? std::min(width * 0.4f, Px(170)) : width;
+    bool changed = false;
+    auto pick = [&](const std::string& next) {
+        custom_rows_.erase(std::string(key));
+        if (next == value) return;
+        value = next;
+        changed = true;
+    };
+    ImGui::SetNextItemWidth(combo_width);
+    if (ImGui::BeginCombo("##device", preview.c_str(), ImGuiComboFlags_HeightLarge)) {
+        const bool none_selected = !custom && blank;
+        if (ImGui::Selectable(none.c_str(), none_selected)) pick({});
+        if (none_selected) ImGui::SetItemDefaultFocus();
+        for (size_t i = 0; i < devices.size(); i++) {
+            ImGui::PushID(static_cast<int>(i));
+            const bool is_selected = !custom && found && *selected == i;
+            if (ImGui::Selectable(devices[i].label.c_str(), is_selected)) pick(devices[i].value);
+            if (is_selected) ImGui::SetItemDefaultFocus();
+            ImGui::PopID();
+        }
+        if (devices.empty()) {
+            ImGui::BeginDisabled();
+            ImGui::Selectable(empty_list, false);
+            ImGui::EndDisabled();
+        }
+        if (!custom && !blank && !found) {
+            // stays the setting until another is picked
+            ImGui::Selectable(missing.c_str(), true);
+            ImGui::SetItemDefaultFocus();
+        }
+        if (ImGui::Selectable(kOther, custom)) custom_rows_.insert(std::string(key));
+        if (custom) ImGui::SetItemDefaultFocus();
+        ImGui::EndCombo();
+    }
+    if (custom) {
+        ImGui::SameLine();
+        std::string typed = value;
+        if (EditText("##typed", HintFor(key.substr(0, key.find('#'))), typed,
+                     width - combo_width - style.ItemSpacing.x) &&
+            typed != value) {
+            value = typed;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+void LauncherDialog::CloseMeters() {
+    for (SlotMeter& slot : meters_) slot = {};
+    HoldAudio(false);
+    audio_hold_failed_ = false;
+}
+
+void LauncherDialog::HoldAudio(bool hold) {
+    if (hold == audio_held_ || (hold && audio_hold_failed_)) return;
+    if (!hold) {
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        audio_held_ = false;
+        return;
+    }
+    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+        REXLOG_WARN("Launcher: SDL's audio didn't start ({})", SDL_GetError());
+        audio_hold_failed_ = true;
+        return;
+    }
+    audio_held_ = true;
+}
+
+void LauncherDialog::DrawMicMeter(int slot, const std::optional<std::string>& device,
+                                  float width) {
+    SlotMeter& m = meters_[static_cast<size_t>(slot)];
+    // a meter that couldn't record tries again when the microphones change
+    if (m.meter && (!device || *device != m.device ||
+                    (m.generation != mic_list_generation_ && !m.meter->recording()))) {
+        m = {};
+    }
+    if (!device) return;
+    if (!m.meter) {
+        m.meter = std::make_unique<MicMeter>(*device);
+        m.device = *device;
+        m.generation = mic_list_generation_;
+    }
+
+    const float frame = ImGui::GetFrameHeight();
+    if (!m.meter->recording()) {
+        FontScope font(kSmallSize);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(kBad, "Can't record");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", m.meter->error().c_str());
+        return;
+    }
+
+    const MicLevel::Reading level = m.meter->Level();
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    const float height = std::max(Px(8), std::round(frame * 0.32f));
+    const ImVec2 min(at.x, at.y + std::round((frame - height) / 2));
+    const ImVec2 max(at.x + width, min.y + height);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(min, max, ImGui::GetColorU32(kFrame), height / 2);
+    // the RMS: green, warming as it nears full scale
+    const float rms = MeterPosition(level.rms);
+    if (rms > 0) {
+        const float rms_db = MicLevel::ToDecibels(level.rms, kMeterFloor);
+        const ImVec4 color = rms_db > -6 ? kBad : rms_db > -18 ? kWarn : kGood;
+        draw->AddRectFilled(min, ImVec2(min.x + std::max(width * rms, height), max.y),
+                            ImGui::GetColorU32(color), height / 2);
+    }
+    // a tick every 12 dB, over the bar
+    for (int db = -48; db < 0; db += 12) {
+        const float x = std::round(min.x + width * (db - kMeterFloor) / -kMeterFloor);
+        draw->AddLine(ImVec2(x, min.y), ImVec2(x, max.y), ImGui::GetColorU32(kBackground),
+                      std::max(1.0f, Px(1)));
+    }
+    // the held peak, red when it reaches full scale
+    const float peak = MeterPosition(level.peak);
+    if (peak > 0) {
+        const float x = min.x + std::clamp(width * peak, Px(1), width - Px(1));
+        const ImVec4 color = MicLevel::ToDecibels(level.peak, kMeterFloor) > -1 ? kBad : kText;
+        draw->AddLine(ImVec2(x, min.y - Px(3)), ImVec2(x, max.y + Px(3)),
+                      ImGui::GetColorU32(color), std::max(2.0f, Px(2)));
+    }
+    ImGui::Dummy(ImVec2(width, frame));
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s\nPeak %.0f dB, RMS %.0f dB", m.meter->device_name().c_str(),
+                          MicLevel::ToDecibels(level.peak, kMeterFloor),
+                          MicLevel::ToDecibels(level.rms, kMeterFloor));
+    }
+}
+
 void LauncherDialog::DrawMicSlots(const Setting& s) {
+    static_assert(std::tuple_size_v<decltype(meters_)> == audio::usb_mic::kSlots);
+    meters_drawn_ = true;
     std::vector<std::string> slots = audio::usb_mic::ParseDeviceList(model_.Value(s.cvar));
     slots.resize(audio::usb_mic::kSlots);
-    const float label = ImGui::CalcTextSize("Mic 4").x + ImGui::GetStyle().ItemSpacing.x * 2;
+    // with every slot empty, slot 1 records the system's default microphone;
+    // once another is named, an empty slot is just unused (usb_mic_capture.cpp)
+    const bool all_empty = std::ranges::all_of(slots, [](const auto& v) { return v.empty(); });
+
+    std::vector<DeviceEntry> devices;
+    for (const auto& name : mics_) devices.push_back({name, MicSlotValue(name)});
+
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float label = ImGui::CalcTextSize("Mic 4").x + style.ItemSpacing.x * 2;
     for (int i = 0; i < audio::usb_mic::kSlots; i++) {
         ImGui::PushID(i);
+        std::string& slot = slots[static_cast<size_t>(i)];
         const float start = ImGui::GetCursorPosX();
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(kMuted, "Mic %d", i + 1);
         ImGui::SameLine();
         ImGui::SetCursorPosX(start + label);
-        const char* hint = i == 0 ? "The system's default recording device" : "Not used";
-        if (EditText("##slot", hint, slots[static_cast<size_t>(i)],
-                     ImGui::GetContentRegionAvail().x)) {
+
+        const bool default_slot = i == 0 && all_empty;
+        const std::optional<size_t> selected = FindSavedDevice(mics_, slot);
+        // the meter takes what's left after a comfortable dropdown, within limits
+        const float avail = ImGui::GetContentRegionAvail().x;
+        const float meter = std::clamp(avail - Px(380) - style.ItemSpacing.x, Px(120), Px(220));
+        const float combo = std::max(avail - meter - style.ItemSpacing.x, Px(160));
+        const std::string key = Str(s.cvar) + "#" + std::to_string(i);
+        std::string value = slot;
+        if (DeviceCombo(key, default_slot ? "System default" : "None", devices, selected, value,
+                        "No microphones found", combo)) {
+            slot = value;
             Apply(s.cvar, JoinMicSlots(slots));
         }
+
+        std::optional<std::string> meter_device;
+        if (default_slot && !mics_.empty()) {
+            meter_device = "";
+        } else if (!slot.empty() && selected) {
+            meter_device = slot;
+        }
+        ImGui::SameLine();
+        DrawMicMeter(i, meter_device, meter);
+        if (!meter_device) ImGui::NewLine();
         ImGui::PopID();
     }
-    FontScope font(kSmallSize);
-    ImGui::TextColored(kMuted, "A name, or part of one; device lists come in a later version.");
+    if (mics_listed_ && mics_.empty()) {
+        FontScope font(kSmallSize);
+        ImGui::TextColored(kWarn, "No microphones found. Connect one, and it shows up here.");
+    }
+}
+
+void LauncherDialog::DrawMidiPort(const Setting& s) {
+    std::string value = model_.Value(s.cvar);
+    std::vector<std::string> ports;
+    std::vector<DeviceEntry> devices;
+    for (const auto& port : midi_ports_) {
+        ports.push_back(port.port);
+        devices.push_back({port.name, port.name});
+    }
+    // the driver opens the first port when the setting is empty: say which
+    std::string none = "First MIDI port";
+    if (const auto first = FindMidiPort(ports, "")) none += " (" + devices[*first].label + ")";
+    const std::optional<size_t> selected =
+        value.empty() ? std::nullopt : FindMidiPort(ports, value);
+    // a dropdown's width, and the row's when it has a text field too
+    const float width = custom_rows_.contains(s.cvar) ? ImGui::GetContentRegionAvail().x
+                                                      : ControlWidth();
+    if (DeviceCombo(s.cvar, none, devices, selected, value, "No MIDI ports found", width)) {
+        Apply(s.cvar, value);
+    }
+    if (midi_listed_ && midi_ports_.empty()) {
+        FontScope font(kSmallSize);
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextColored(kWarn, "No MIDI ports found. Connect the kit: band3 opens it when it "
+                                  "appears.");
+        ImGui::PopTextWrapPos();
+    }
+}
+
+void LauncherDialog::DrawMonitor(const Setting& s) {
+    // numbered where the monitors can't be listed
+    if (monitors_.empty()) {
+        DrawCombo(s);
+        return;
+    }
+    const int current = static_cast<int>(AsInt(model_.Value(s.cvar)).value_or(0));
+    auto label = [&](int monitor) {
+        if (monitor <= 0) return std::string("Default (where the window is)");
+        const size_t i = static_cast<size_t>(monitor - 1);
+        if (i >= monitors_.size()) return "Monitor " + std::to_string(monitor) + " (not connected)";
+        const Monitor& m = monitors_[i];
+        std::string text = std::to_string(monitor) + ": " +
+                           (m.name.empty() ? "Monitor " + std::to_string(monitor) : m.name);
+        if (m.primary) text += " (primary)";
+        return text;
+    };
+    const std::string preview = label(current);
+    ImGui::SetNextItemWidth(ControlWidth());
+    if (ImGui::BeginCombo("##value", preview.c_str())) {
+        const int count = static_cast<int>(monitors_.size());
+        for (int monitor = 0; monitor <= count; monitor++) {
+            const bool is_selected = monitor == current;
+            if (ImGui::Selectable(label(monitor).c_str(), is_selected)) {
+                Apply(s.cvar, std::to_string(monitor));
+            }
+            if (is_selected) ImGui::SetItemDefaultFocus();
+        }
+        if (current < 0 || current > count) {
+            ImGui::Selectable(preview.c_str(), true);
+            ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+}
+
+void LauncherDialog::DrawResolution(const Setting& s) {
+    // the presets alone where the monitors can't be listed
+    if (monitors_.empty()) {
+        DrawComboText(s);
+        return;
+    }
+    // the chosen monitor's modes; the default's is the one the window is on
+    const int chosen = static_cast<int>(AsInt(model_.Value("monitor")).value_or(0));
+    const Monitor* monitor = nullptr;
+    if (chosen >= 1 && static_cast<size_t>(chosen) <= monitors_.size()) {
+        monitor = &monitors_[static_cast<size_t>(chosen - 1)];
+    } else {
+        for (const auto& m : monitors_) {
+            if (m.has_window || (!monitor && m.primary)) monitor = &m;
+        }
+        if (!monitor) monitor = &monitors_.front();
+    }
+
+    struct Entry {
+        std::string label;
+        std::string value;
+        int width = 0, height = 0;
+    };
+    // the monitor's sizes, once each (the setting has no refresh rate), and
+    // then the presets it doesn't have
+    std::vector<Entry> modes;
+    for (const DisplayMode& mode : monitor->modes) {
+        const bool listed = std::ranges::any_of(modes, [&](const Entry& e) {
+            return e.width == mode.width && e.height == mode.height;
+        });
+        if (listed) continue;
+        const bool desktop =
+            mode.width == monitor->current.width && mode.height == monitor->current.height;
+        modes.push_back({SizeLabel(mode.width, mode.height) + (desktop ? " (desktop)" : ""),
+                         std::to_string(mode.width) + "x" + std::to_string(mode.height),
+                         mode.width, mode.height});
+    }
+    std::vector<Entry> presets;
+    for (const Choice& choice : s.choices) {
+        const auto size = ResolutionSize(choice.value);
+        if (!size) continue;
+        const bool listed = std::ranges::any_of(modes, [&](const Entry& e) {
+            return e.width == size->first && e.height == size->second;
+        });
+        if (!listed) presets.push_back({Str(choice.label), Str(choice.value), size->first, size->second});
+    }
+
+    // the value selects the entry of its size, whichever way it's written
+    const std::string value = model_.Value(s.cvar);
+    const auto size = ResolutionSize(value);
+    const Entry* selected = nullptr;
+    for (const auto* list : {&modes, &presets}) {
+        for (const Entry& e : *list) {
+            if (size && e.width == size->first && e.height == size->second) selected = &e;
+        }
+    }
+    // a size this monitor doesn't list (set for another) is still shown as one
+    std::optional<Entry> other;
+    if (size && !selected) other = Entry{SizeLabel(size->first, size->second), value};
+    const bool custom = custom_rows_.contains(s.cvar) || (!value.empty() && !size);
+    const std::string default_label = s.choices.empty() ? "Default" : Str(s.choices.front().label);
+    const std::string preview = custom     ? kOther
+                                : selected ? selected->label
+                                : other    ? other->label
+                                           : default_label;
+
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const float combo_width = custom ? std::min(avail * 0.45f, Px(240)) : ControlWidth();
+    ImGui::SetNextItemWidth(combo_width);
+    if (ImGui::BeginCombo("##choice", preview.c_str())) {
+        auto entry = [&](const std::string& label, const std::string& next, bool is_selected) {
+            if (ImGui::Selectable(label.c_str(), is_selected)) {
+                custom_rows_.erase(Str(s.cvar));
+                Apply(s.cvar, next);
+            }
+            if (is_selected) ImGui::SetItemDefaultFocus();
+        };
+        entry(default_label, "", !custom && value.empty());
+        for (const Entry& e : modes) entry(e.label, e.value, !custom && selected == &e);
+        if (other) entry(other->label, other->value, !custom);
+        if (!presets.empty()) {
+            ImGui::Separator();
+            for (const Entry& e : presets) entry(e.label, e.value, !custom && selected == &e);
+        }
+        if (ImGui::Selectable(kOther, custom)) custom_rows_.insert(Str(s.cvar));
+        if (custom) ImGui::SetItemDefaultFocus();
+        ImGui::EndCombo();
+    }
+    if (!custom) return;
+    ImGui::SameLine();
+    std::string typed = value;
+    if (EditText("##custom", HintFor(s.cvar), typed, ImGui::GetContentRegionAvail().x)) {
+        Apply(s.cvar, typed);
+    }
 }
 
 void LauncherDialog::DrawJoypadLag(const Setting& s) {

@@ -8,6 +8,13 @@ and works with the mouse or the keyboard. Point at a setting to see what it does
 apply as you make them; **Save** keeps them for next time, **Play** saves and starts the
 game, and **Close** quits, asking first if something isn't saved.
 
+Devices are picked from lists of what's connected: each mic slot on the Audio tab lists the
+PC's microphones, with a level meter beside it while the tab is open; the Controllers tab
+lists the MIDI ports; the Graphics tab names the monitors and offers the chosen monitor's
+display modes as resolutions. A saved device that isn't plugged in shows as "(not
+connected)" and stays chosen until you pick another, and **Other...** takes a typed name
+or part of one.
+
 It opens:
 
 - the first time band3 starts, including the first start after updating to a version that
@@ -20,8 +27,8 @@ It opens:
   Save or Play. It starts unticked until you tick it, so after the first Play band3 goes
   straight into the game; once ticked, it stays ticked until you untick it.
 
-It never opens for a [test harness](test-harness.md) run (`test_port`) or when RB3E's
-`rb3e_relaunch_game` restarts the game.
+It never opens when RB3E's `rb3e_relaunch_game` restarts the game, nor for a
+[test harness](test-harness.md) run (`test_port`) unless that is started with `--launcher`.
 
 To get back to it, hold Shift while band3 starts, start it with `--launcher`, or turn
 `show_launcher` on in F4 (Band3 → Launcher). On a Steam Deck in Game Mode, add

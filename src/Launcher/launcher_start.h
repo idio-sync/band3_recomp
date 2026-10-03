@@ -26,14 +26,17 @@ struct StartDecision {
     const char* reason = "";
 };
 
-// Never for a test run or a relaunch; always when the game data is missing or
-// the launcher is asked for (--launcher, Shift); otherwise as show_launcher says.
+// Never for a relaunch, nor for a test run unless --launcher asks for it (a
+// harness that drives the launcher itself); always when the game data is
+// missing or the launcher is asked for (--launcher, Shift); otherwise as
+// show_launcher says.
 StartDecision DecideLauncher(const StartInputs& in);
 
-// Whether DecideLauncher could still show it, from test_port and relaunched
-// alone: those rule it out whatever else holds. Band3App's fonts are set up
-// before the game data check and Shift are known (OnConfigureFonts), and the
-// launcher's are skipped only when this is false, so it never shows without them.
+// Whether DecideLauncher could still show it, from test_port, relaunched and
+// launcher_flag alone: a relaunch, or a test run without --launcher, rules it
+// out whatever else holds. Band3App's fonts are set up before the game data
+// check and Shift are known (OnConfigureFonts), and the launcher's are skipped
+// only when this is false, so it never shows without them.
 bool LauncherPossible(const StartInputs& in);
 
 }

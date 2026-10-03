@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <functional>
@@ -10,9 +11,11 @@
 #include <string_view>
 #include <vector>
 #include <rex/ui/imgui_dialog.h>
+#include "device_lists.h"
 #include "game_data_check.h"
 #include "launcher_cvars.h"
 #include "launcher_settings.h"
+#include "mic_meter.h"
 
 namespace band3::launcher {
 
@@ -33,6 +36,8 @@ struct LauncherHost {
     // the refresh rate of the window's display, in Hz (0 when unknown); the
     // launcher paces itself to it, since nothing else does before the game runs
     std::function<double()> refresh_rate;
+    // the game window's native handle (an HWND), for which monitor it's on
+    std::function<void*()> native_window;
     // Play, once the "Starting" frame is on screen: starts the game. Runs inside
     // the launcher's draw, so it defers removing the launcher and building the
     // runtime.
@@ -85,6 +90,21 @@ private:
         bool editing = false;
     };
 
+    // an entry in a device dropdown: what it shows, and what picking it saves
+    struct DeviceEntry {
+        std::string label;
+        std::string value;
+    };
+
+    // a mic slot's level meter, while the Audio tab shows it (DrawMicSlots)
+    struct SlotMeter {
+        std::unique_ptr<MicMeter> meter;
+        // the slot's setting it records ("" for the default microphone)
+        std::string device;
+        // mic_list_generation_ when it was opened
+        unsigned generation = 0;
+    };
+
     // sleeps until the display's next refresh is due
     void Pace();
 
@@ -111,6 +131,31 @@ private:
     void DrawPath(const Setting& s);
     void DrawFolderList(const Setting& s);
     void DrawMicSlots(const Setting& s);
+    void DrawMidiPort(const Setting& s);
+    void DrawMonitor(const Setting& s);
+    void DrawResolution(const Setting& s);
+    // A dropdown over a setting that names a device (a mic slot, the MIDI
+    // port): `none` (the empty value) first, then `devices`, then the saved
+    // name as "(not connected)" when it selects none of them, then "Other..."
+    // for typing a name or part of one. `selected` is the device the saved
+    // name picks. Returns true with `value` set when the player picks or types
+    // another. `key` keeps the row's typed mode (custom_rows_).
+    bool DeviceCombo(std::string_view key, const std::string& none,
+                     const std::vector<DeviceEntry>& devices, std::optional<size_t> selected,
+                     std::string& value, const char* empty_list, float width);
+    // a mic slot's meter: opens, keeps or closes it for `device` (nullopt for
+    // none), and draws it `width` wide where the cursor is
+    void DrawMicMeter(int slot, const std::optional<std::string>& device, float width);
+    // closes every mic slot's meter and lets go of SDL's audio (HoldAudio)
+    void CloseMeters();
+    // keeps band3's SDL audio subsystem started while the mic slots show, so
+    // listing the microphones every couple of seconds doesn't start and stop
+    // it (and its device enumeration) each time, and SDL sees them come and go
+    void HoldAudio(bool hold);
+    // lists the devices again for the tab that shows them, at most every
+    // couple of seconds: listing starts SDL's audio, or walks every display
+    // mode, which mustn't happen every frame
+    void RefreshDeviceLists();
     void DrawJoypadLag(const Setting& s);
     void DrawWindowMode(const Setting& s);
     void DrawGameDataCheck();
@@ -172,8 +217,31 @@ private:
 
     // the text fields' buffers while they're being edited
     std::map<unsigned, TextField> text_fields_;
-    // combo-with-text rows showing their text field
+    // combo-with-text rows showing their text field (device rows by
+    // DeviceCombo's key)
     std::set<std::string, std::less<>> custom_rows_;
+
+    // the devices on this PC, listed again every couple of seconds while
+    // their tab shows (RefreshDeviceLists), and when each list is due
+    std::vector<std::string> mics_;
+    std::vector<MidiPort> midi_ports_;
+    std::vector<Monitor> monitors_;
+    bool mics_listed_ = false;
+    bool midi_listed_ = false;
+    std::chrono::steady_clock::time_point next_mics_{};
+    std::chrono::steady_clock::time_point next_midi_{};
+    std::chrono::steady_clock::time_point next_monitors_{};
+    // counts changes to mics_, so a meter that couldn't record tries again
+    // once the microphones change
+    unsigned mic_list_generation_ = 0;
+    std::array<SlotMeter, 4> meters_;
+    // the mic slots were drawn this frame; their meters close, and SDL's
+    // audio is let go, when they aren't
+    bool meters_drawn_ = false;
+    // HoldAudio started SDL's audio subsystem, and hasn't stopped it
+    bool audio_held_ = false;
+    // it couldn't be started; not tried again until the slots show again
+    bool audio_hold_failed_ = false;
     // content_folders' "add a folder" field
     std::string new_folder_;
 
