@@ -156,6 +156,7 @@ public:
     band3::rooms::Status RoomsStatus() override { return rooms; }
     std::string RoomsJoin(const std::string& code) override {
         if (rooms.state != band3::rooms::State::kLoggedIn) return "not logged in to the Rooms server";
+        if (!rooms.game_socket_seen) return "the game isn't online yet: Play on Xbox Live first";
         rooms_joins.push_back(code);
         return {};
     }
@@ -889,6 +890,16 @@ TEST_CASE("rooms_join asks for a game by code, in upper case") {
     game.rooms.state = band3::rooms::State::kDisconnected;
     CHECK(Has(RunCommand("rooms_join HOST0001", game), "not logged in to the Rooms server"));
     CHECK(game.rooms_joins.size() == 1);
+}
+
+TEST_CASE("rooms_join says so when the game isn't online") {
+    FakeGame game;
+    game.rooms = LoggedInRooms();
+    game.rooms.game_socket_seen = false;
+    const std::string reply = RunCommand("rooms_join HOST0001", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(Has(reply, "the game isn't online yet: Play on Xbox Live first"));
+    CHECK(game.rooms_joins.empty());
 }
 
 TEST_CASE("rooms_connect connects again") {

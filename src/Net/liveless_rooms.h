@@ -47,8 +47,9 @@ struct Status {
     // the last game a join went to
     std::string last_join_user;
     uint32_t last_join_ipv4 = 0;
-    // whether the game has bound its online socket (gone online), which a
-    // join and a NAT punch both need
+    // whether the game's online socket (NetDll_bind's) is open: it's gone
+    // online, and not left Play on Xbox Live since. A join and a NAT punch
+    // both need it.
     bool game_socket_seen = false;
 };
 
@@ -60,8 +61,9 @@ bool Enabled();
 Status GetStatus();
 
 // Joins the game with `code` (any case; 8 letters and digits) once the server
-// answers. Returns an error, or empty when the request went. Any thread (the
-// panel's, the test server's); doesn't wait for the server.
+// answers. Returns an error (one is the game not being online), or empty when
+// the request went. Any thread (the panel's, the test server's); doesn't wait
+// for the server.
 std::string Join(std::string code);
 
 // Connects again after a disconnect or a failure. Returns an error, or empty.

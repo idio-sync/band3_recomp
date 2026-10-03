@@ -18,11 +18,11 @@ namespace band3::rooms {
 
 namespace {
 
-// what RB3Enhanced's Rooms server makes codes of: no I, O, 0 or 1, which read
-// as each other
-constexpr std::string_view kCodeChars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+// every letter and digit: which ones a Rooms server makes codes of is its own
+// business, and a player with only a controller has to be able to type any
+constexpr std::string_view kCodeChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 constexpr size_t kCodeLength = 8;
-constexpr int kPickerColumns = 8;
+constexpr int kPickerColumns = 9;
 constexpr float kKeySize = 34.0f;
 
 const ImVec4 kGood(0.4f, 0.9f, 0.4f, 1.0f);
@@ -80,8 +80,8 @@ void Wrapped(const ImVec4& color, const std::string& text) {
 
 void Hint(const std::string& text) { Wrapped(ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled), text); }
 
-// letters and digits; CharsUppercase has made the letters upper case. The
-// field takes the ones codes leave out too, as the server does.
+// letters and digits, as the picker has; CharsUppercase has made the letters
+// upper case
 int CodeCharFilter(ImGuiInputTextCallbackData* data) {
     const ImWchar c = data->EventChar;
     const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
@@ -265,11 +265,13 @@ void RoomsPanelDialog::DrawPicker(bool can_join) {
         // where a controller starts: the field would take it into typing
         if (i == 0) ImGui::SetItemDefaultFocus();
     }
+    // the bottom row: Backspace three keys wide, Join the rest of the grid's
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    if (ImGui::Button("Backspace", ImVec2(3 * kKeySize + 2 * spacing, kKeySize))) Backspace();
+    auto wide = [&](int keys) { return ImVec2(keys * kKeySize + (keys - 1) * spacing, kKeySize); };
+    if (ImGui::Button("Backspace", wide(3))) Backspace();
     ImGui::SameLine();
     ImGui::BeginDisabled(!can_join);
-    if (ImGui::Button("Join", ImVec2(5 * kKeySize + 4 * spacing, kKeySize))) TryJoin();
+    if (ImGui::Button("Join", wide(kPickerColumns - 3))) TryJoin();
     ImGui::EndDisabled();
 }
 

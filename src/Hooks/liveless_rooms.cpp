@@ -35,8 +35,8 @@ std::mutex g_mutex;
 band3::rooms::Config g_config;
 std::string g_start_error;
 
+// 0 until the game first goes online
 std::atomic<uint32_t> g_game_socket{0};
-std::atomic<bool> g_game_socket_seen{false};
 std::atomic<uint32_t> g_advertised{0};
 std::atomic<bool> g_panel_requested{false};
 
@@ -46,16 +46,26 @@ std::string JoinGame(uint32_t address) {
     return band3::online::FakeInvite(Ipv4Text(address), band3::online::kGamePort, false);
 }
 
+// The game's online socket while it's open, null before the game goes online
+// and again once it leaves Play on Xbox Live and closes it. The kernel's
+// object table locks, so any thread asks.
+rex::system::object_ref<rex::system::XSocket> GameSocket() {
+    const uint32_t handle = g_game_socket;
+    rex::system::KernelState* kernel = REX_KERNEL_STATE();
+    if (handle == 0 || !kernel) return {};
+    return kernel->object_table()->LookupObject<rex::system::XSocket>(handle);
+}
+
 // The host's side of a join, as RB3Enhanced's: four bytes from the game's
 // socket to the joiner's address, so a router in front of this PC lets the
 // joiner's packets in as answers. This thread sends on the socket Quazal
 // polls; a datagram sent is all it shares with it.
 void PunchTo(uint32_t address) {
-    if (!g_game_socket_seen) {
+    if (g_game_socket == 0) {
         REXLOG_INFO("rooms: NAT punch asked for before the game went online, skipped");
         return;
     }
-    auto socket = REX_KERNEL_OBJECTS()->LookupObject<rex::system::XSocket>(g_game_socket.load());
+    auto socket = GameSocket();
     if (!socket) {
         REXLOG_WARN("rooms: NAT punch to {}: the game's socket is gone", Ipv4Text(address));
         return;
@@ -104,12 +114,14 @@ Status GetStatus() {
         }
     }
     status.advertised_ipv4 = g_advertised;
-    status.game_socket_seen = g_game_socket_seen;
+    status.game_socket_seen = static_cast<bool>(GameSocket());
     return status;
 }
 
 std::string Join(std::string code) {
     if (!g_enabled) return "Liveless Rooms isn't running";
+    // a join ends in an invite, which the game only takes while it's online
+    if (!GameSocket()) return "the game isn't online yet: Play on Xbox Live first";
     return g_client.Join(std::move(code));
 }
 
@@ -129,7 +141,6 @@ uint32_t PublicAddress() { return g_client.PublicAddress(); }
 
 void NoteGameSocket(uint32_t guest_handle) {
     g_game_socket = guest_handle;
-    g_game_socket_seen = true;
 }
 
 void NoteAdvertised(uint32_t ipv4) { g_advertised = ipv4; }

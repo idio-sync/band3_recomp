@@ -183,8 +183,8 @@ Rooms off, it says how to turn it on. Give your code to the players who'll join 
 To join someone:
 
 1. Go online first: press Start for the overshell, pick **Play on Xbox Live**, then
-   back out of it. Until then the panel's **Join** stays greyed out ("Go online
-   first: Play on Xbox Live in the overshell.").
+   back out of it. Until then, and again once the game leaves Xbox Live, the panel's
+   **Join** stays greyed out ("Go online first: Play on Xbox Live in the overshell.").
 2. Open the panel, enter the host's code (type it, or pick its characters from the
    grid under the field) and press **Join** (or Enter in the field).
 3. Your game joins the host's band, as when accepting an invite on a console. Then
@@ -213,8 +213,10 @@ What the panel's errors mean:
 | `no answer from <server>`, `<server> refused the connection` | nothing is taking connections at that address (port 19532 unless it has `:port`), or a firewall is in the way |
 | `the server turned the connection away` | the server isn't taking this client |
 | `login refused: check that liveless_rooms_server matches the server's address, and username` | the server closed the connection before giving a code. It checks the login against its own name, so `liveless_rooms_server` must be that name as the server knows it (not, say, its IP address) |
-| `the server closed the connection`, `the server stopped answering`, `bad data from the server` | the connection went after logging in (the server sends nothing for 30 s, or something it can't read). band3 doesn't connect again by itself: press **Connect** |
+| `the server closed the connection` | the connection went after logging in (state `disconnected`). band3 doesn't connect again by itself: press **Connect** |
+| `the server stopped answering`, `bad data from the server` | the connection went: the server sent nothing for 30 s, or something band3 can't read. State `disconnected` after logging in (or `failed`, if it went before logging in). band3 doesn't connect again by itself: press **Connect** |
 | `not logged in to the Rooms server` | a join before the code came, or after the connection went |
+| `the game isn't online yet: Play on Xbox Live first` | a join while the game is offline: before Play on Xbox Live, or after leaving it |
 | `a code is 8 letters and digits` | the code isn't 8 characters long |
 | `no game with code <code>` | no one is logged in with that code: check it with the host, whose game must be running with Rooms on |
 | `join denied (reason <n>)` | the server turned the join away for a reason band3 doesn't know |
