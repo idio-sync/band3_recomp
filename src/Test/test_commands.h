@@ -9,6 +9,7 @@
 #include <variant>
 #include <vector>
 #include "src/Input/instrument_kind.h"
+#include "src/Net/liveless_rooms.h"
 #include "game_state.h"
 
 // The test harness's commands: one line of text in, one line of JSON out. They
@@ -204,6 +205,12 @@ public:
     // on), with the BandUI's joined-by-invite flag set first if `force_flag`;
     // returns an error, or empty
     virtual std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) = 0;
+    // Liveless Rooms (src/Net/liveless_rooms.h): its status; a join by code
+    // (8 letters and digits, upper case), which goes without waiting for the
+    // server's answer; connecting again. The last two return an error, or empty.
+    virtual rooms::Status RoomsStatus() = 0;
+    virtual std::string RoomsJoin(const std::string& code) = 0;
+    virtual std::string RoomsConnect() = 0;
     // the live native view, drawing every frame the game captures at width x
     // height as F9's window does (without post-processing unless `post`), and
     // its numbers, which on and off reset; on returns an error, or empty.
@@ -226,7 +233,7 @@ public:
 };
 
 struct Condition {
-    enum class Kind { kScreen, kScreenContains, kInGame, kMenus, kSong, kFrames, kScore, kMic };
+    enum class Kind { kScreen, kScreenContains, kInGame, kMenus, kSong, kFrames, kScore, kMic, kRooms };
     Kind kind = Kind::kInGame;
     std::string text;
     uint64_t frames = 0;

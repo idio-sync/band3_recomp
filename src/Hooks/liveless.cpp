@@ -5,10 +5,13 @@
 #include <rex/system/xmemory.h>
 #include <rex/types.h>
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <mutex>
 #include <unordered_set>
 #include "generated/band3_init.h"
+#include "src/Net/liveless_rooms.h"
+#include "src/Net/liveless_rooms_client.h"
 #include "src/Net/native_socket.h"
 #include "src/Net/online.h"
 #include "src/Net/online_hooks.h"
@@ -79,6 +82,9 @@ void CompleteOverlapped(uint32_t overlapped, uint8_t* base) {
 void StoreNetworkOrder(uint8_t* base, uint32_t address, uint32_t value) {
     std::memcpy(base + address, &value, 4);
 }
+
+// a join, step by step, in the log (log_net_calls)
+bool LogJoins() { return REXCVAR_GET(log_net_calls); }
 
 // an async XSession call that RB3Enhanced has succeed at once: its
 // XOVERLAPPED, the last argument, completes
@@ -167,16 +173,35 @@ extern "C" REX_FUNC(XSessionSearchEx) {
 }
 
 // XNetGetTitleXnAddr(XNADDR*): this game's address as others reach it, on
-// liveless_port, which the game hands to who joins it
+// liveless_port, which the game hands to who joins it. That's
+// liveless_external_ip when it's set, else the public address the Liveless
+// Rooms server saw this PC at, else this PC's on the local network.
 extern "C" REX_FUNC(XNetGetTitleXnAddr) {
     const uint32_t address = ctx.r3.u32;
     __imp__XNetGetTitleXnAddr(ctx, base);
     if (!Liveless() || !address) return;
-    if (const uint32_t external = band3::online::LivelessExternalAddress()) {
-        StoreNetworkOrder(base, address + kXnAddrInaOnline, external);
+    uint32_t external = band3::online::LivelessExternalAddress();
+    const char* source = "local network";
+    bool from_rooms = false;
+    if (!band3::settings::Startup().liveless_external_ip.empty()) {
+        source = "setting";
+    } else if (const uint32_t rooms = band3::rooms::PublicAddress()) {
+        external = rooms;
+        source = "rooms server";
+        from_rooms = true;
     }
+    if (external) StoreNetworkOrder(base, address + kXnAddrInaOnline, external);
     REX_STORE_U16(address + kXnAddrPortOnline, band3::online::LivelessPort());
     for (uint32_t i = 0; i < 20; i++) base[address + kXnAddrOnline + i] = static_cast<uint8_t>(i);
+    uint32_t advertised;
+    std::memcpy(&advertised, base + address + kXnAddrInaOnline, 4);
+    band3::rooms::NoteAdvertised(advertised);
+    // the game asks often; say it when it changes
+    static std::atomic<uint64_t> last{~uint64_t{0}};
+    const uint64_t now = advertised | (uint64_t{from_rooms} << 32);
+    if (last.exchange(now) != now) {
+        REXLOG_INFO("liveless: advertising {} ({})", band3::rooms::Ipv4Text(advertised), source);
+    }
 }
 
 // XNetXnAddrToInAddr(const XNADDR*, const XNKID*, IN_ADDR*): the address to
@@ -190,12 +215,23 @@ extern "C" REX_FUNC(band_NetDll_XNetXnAddrToInAddr) {
         ctx.r3.u64 = 87;  // ERROR_INVALID_PARAMETER
         return;
     }
-    if (REX_LOAD_U32(xnaddr + kXnAddrIna) == 0) {
+    const bool stand_in = REX_LOAD_U32(xnaddr + kXnAddrIna) == 0;
+    if (stand_in) {
         StoreNetworkOrder(base, in_addr, band3::online::kJoinStandIn);
     } else {
         std::memcpy(base + in_addr, base + xnaddr + kXnAddrInaOnline, 4);
     }
     ctx.r3.u64 = kErrorSuccess;
+    if (LogJoins()) {
+        uint32_t ina, ina_online, result;
+        std::memcpy(&ina, base + xnaddr + kXnAddrIna, 4);
+        std::memcpy(&ina_online, base + xnaddr + kXnAddrInaOnline, 4);
+        std::memcpy(&result, base + in_addr, 4);
+        REXLOG_INFO("liveless: XNetXnAddrToInAddr ina {} inaOnline {} port {} -> {} ({})",
+                    band3::rooms::Ipv4Text(ina), band3::rooms::Ipv4Text(ina_online),
+                    REX_LOAD_U16(xnaddr + kXnAddrPortOnline), band3::rooms::Ipv4Text(result),
+                    stand_in ? "stand-in" : "inaOnline");
+    }
 }
 
 namespace {
@@ -304,19 +340,24 @@ extern "C" REX_FUNC(band_NetDll_socket) {
 // bind(socket, sockaddr*, length): the game's online socket goes on
 // liveless_port, if that isn't RB3Enhanced's 9103, and its others near it
 // (9100, for finding games on the local network) move with it, so a second
-// band3 on this PC can play the first
+// band3 on this PC can play the first. The online socket is noted for Liveless
+// Rooms, whose NAT punches go from it.
 extern "C" REX_FUNC(band_NetDll_bind) {
     constexpr uint16_t kFirstGamePort = 9100;
-    const uint32_t name = ctx.r4.u32;
+    const uint32_t handle = ctx.r3.u32, name = ctx.r4.u32;
     const int shift = band3::online::LivelessPort() - band3::online::kGamePort;
     const uint16_t port = name && ctx.r5.u32 >= 4 ? REX_LOAD_U16(name + 2) : 0;
     if (!Liveless() || shift == 0 || port < kFirstGamePort || port > band3::online::kGamePort) {
-        return __imp__band_NetDll_bind(ctx, base);
+        __imp__band_NetDll_bind(ctx, base);
+    } else {
+        // the caller's sockaddr keeps its port
+        REX_STORE_U16(name + 2, static_cast<uint16_t>(port + shift));
+        __imp__band_NetDll_bind(ctx, base);
+        REX_STORE_U16(name + 2, port);
     }
-    // the caller's sockaddr keeps its port
-    REX_STORE_U16(name + 2, static_cast<uint16_t>(port + shift));
-    __imp__band_NetDll_bind(ctx, base);
-    REX_STORE_U16(name + 2, port);
+    if (Liveless() && port == band3::online::kGamePort && ctx.r3.u32 == 0) {
+        band3::rooms::NoteGameSocket(handle);
+    }
 }
 
 // BandMatchmaker::HasCompatibleInstruments's answer for the game found, in
@@ -352,8 +393,6 @@ extern "C" void __imp__Quazal__DuplicatedObject__IsADuplicationMaster(PPCContext
                                                                        uint8_t* base);
 
 namespace {
-
-bool LogJoins() { return REXCVAR_GET(log_net_calls); }
 
 // the BandUI's "joined through an invite" flag (TheBandUI + 152), which spares
 // the joiner the host's checks for private and Quickplay-only games

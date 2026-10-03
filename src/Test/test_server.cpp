@@ -43,6 +43,7 @@
 #include "src/Input/input_system.h"
 #include "src/Input/virtual_instrument.h"
 #include "src/Input/xinput_state.h"
+#include "src/Net/liveless_rooms.h"
 #include "src/Net/online_hooks.h"
 #include "src/Render/capture_file.h"
 #include "src/Render/frame_compose.h"
@@ -120,6 +121,7 @@ public:
                 state.mics.push_back({slot.device, slot.connected, slot.bytes_fed});
             }
         }
+        state.rooms_state = rooms::StateName(rooms::GetStatus().state);
         return state;
     }
 
@@ -449,6 +451,12 @@ public:
     std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) override {
         return online::FakeInvite(host, port, force_flag);
     }
+
+    rooms::Status RoomsStatus() override { return rooms::GetStatus(); }
+
+    std::string RoomsJoin(const std::string& code) override { return rooms::Join(code); }
+
+    std::string RoomsConnect() override { return rooms::Connect(); }
 
     void Quit() override {
         rex::ui::Window* window = window_;

@@ -150,6 +150,20 @@ public:
         invites.push_back({host, port, force_flag});
         return {};
     }
+    band3::rooms::Status rooms;
+    std::vector<std::string> rooms_joins;
+    int rooms_connects = 0;
+    band3::rooms::Status RoomsStatus() override { return rooms; }
+    std::string RoomsJoin(const std::string& code) override {
+        if (rooms.state != band3::rooms::State::kLoggedIn) return "not logged in to the Rooms server";
+        rooms_joins.push_back(code);
+        return {};
+    }
+    std::string RoomsConnect() override {
+        if (rooms.state == band3::rooms::State::kOff) return "Liveless Rooms isn't running";
+        rooms_connects++;
+        return {};
+    }
     std::string NativeViewOn(uint32_t width, uint32_t height, bool sized, bool post) override {
         if (width > 4000) return "no GPU target that big";
         if (sized && native) return "renderer is native: its size follows the window's";
@@ -802,6 +816,110 @@ TEST_CASE("liveless_invite accepts an invite to a game, on 9103 unless given a p
     CHECK_FALSE(Ok(RunCommand("liveless_invite 127.0.0.1 force", game)));
     CHECK_FALSE(Ok(RunCommand("p2 liveless_invite 127.0.0.1", game)));
     CHECK(game.invites.size() == 2);
+}
+
+namespace {
+
+// logged in to a Rooms server on this PC, and joined a game at 192.168.1.2
+band3::rooms::Status LoggedInRooms() {
+    band3::rooms::Status rooms;
+    rooms.state = band3::rooms::State::kLoggedIn;
+    rooms.server = "127.0.0.1";
+    rooms.code = "HOST0001";
+    rooms.public_ipv4 = 0x0100007F;
+    rooms.advertised_ipv4 = 0x0100007F;
+    rooms.last_join_user = "host";
+    rooms.last_join_ipv4 = 0x0201A8C0;
+    rooms.game_socket_seen = true;
+    return rooms;
+}
+
+}  // namespace
+
+TEST_CASE("rooms_status reports Liveless Rooms' status, addresses dotted") {
+    FakeGame game;
+    const std::string off = RunCommand("rooms_status", game);
+    CHECK(off ==
+          "{\"ok\":true,\"rooms\":{\"state\":\"off\",\"server\":\"\",\"code\":\"\",\"public_ip\":\"\","
+          "\"advertised_ip\":\"\",\"error\":\"\",\"last_join_user\":\"\",\"last_join_ip\":\"\","
+          "\"game_socket\":false}}");
+    game.rooms = LoggedInRooms();
+    game.rooms.error = "no game with code \"NOPE0000\"";
+    CHECK(RunCommand("rooms_status", game) ==
+          "{\"ok\":true,\"rooms\":{\"state\":\"logged_in\",\"server\":\"127.0.0.1\",\"code\":\"HOST0001\","
+          "\"public_ip\":\"127.0.0.1\",\"advertised_ip\":\"127.0.0.1\","
+          "\"error\":\"no game with code \\\"NOPE0000\\\"\",\"last_join_user\":\"host\","
+          "\"last_join_ip\":\"192.168.1.2\",\"game_socket\":true}}");
+    CHECK_FALSE(Ok(RunCommand("p2 rooms_status", game)));
+}
+
+TEST_CASE("rooms_status checks fields, exactly or by what they contain") {
+    FakeGame game;
+    game.rooms = LoggedInRooms();
+    game.rooms.error = "no game with code NOPE0000";
+    CHECK(Ok(RunCommand("rooms_status state=logged_in code=HOST0001 public_ip=127.0.0.1", game)));
+    CHECK(Ok(RunCommand("rooms_status error~NOPE0000 game_socket=true advertised_ip=127.0.0.1", game)));
+    CHECK(Ok(RunCommand("rooms_status last_join_user=host last_join_ip=192.168.1.2", game)));
+    const std::string wrong = RunCommand("rooms_status state=logged_in code=JOIN0001", game);
+    CHECK_FALSE(Ok(wrong));
+    CHECK(Has(wrong, "rooms code is \\\"HOST0001\\\", not \\\"JOIN0001\\\""));
+    // the whole status comes with it
+    CHECK(Has(wrong, "public_ip"));
+    CHECK_FALSE(Ok(RunCommand("rooms_status error~EXIT0000", game)));
+    CHECK(Has(RunCommand("rooms_status colour=red", game), "rooms_status has no field colour"));
+    CHECK(Has(RunCommand("rooms_status logged_in", game), "usage: rooms_status"));
+    CHECK(Has(RunCommand("rooms_status =x", game), "usage: rooms_status"));
+    // an empty value is a field with nothing in it
+    game.rooms.error.clear();
+    CHECK(Ok(RunCommand("rooms_status error=", game)));
+}
+
+TEST_CASE("rooms_join asks for a game by code, in upper case") {
+    FakeGame game;
+    game.rooms = LoggedInRooms();
+    const std::string reply = RunCommand("rooms_join host0001", game);
+    CHECK(reply == "{\"ok\":true,\"code\":\"HOST0001\"}");
+    REQUIRE(game.rooms_joins.size() == 1);
+    CHECK(game.rooms_joins[0] == "HOST0001");
+
+    CHECK(Has(RunCommand("rooms_join HOST001", game), "a code is 8 letters and digits"));
+    CHECK(Has(RunCommand("rooms_join HOST-001", game), "a code is 8 letters and digits"));
+    CHECK(Has(RunCommand("rooms_join", game), "usage: rooms_join <code>"));
+    CHECK(Has(RunCommand("rooms_join HOST0001 JOIN0001", game), "usage: rooms_join <code>"));
+    game.rooms.state = band3::rooms::State::kDisconnected;
+    CHECK(Has(RunCommand("rooms_join HOST0001", game), "not logged in to the Rooms server"));
+    CHECK(game.rooms_joins.size() == 1);
+}
+
+TEST_CASE("rooms_connect connects again") {
+    FakeGame game;
+    CHECK(Has(RunCommand("rooms_connect", game), "Liveless Rooms isn't running"));
+    game.rooms.state = band3::rooms::State::kFailed;
+    CHECK(Ok(RunCommand("rooms_connect", game)));
+    CHECK(game.rooms_connects == 1);
+    CHECK(Has(RunCommand("rooms_connect now", game), "usage: rooms_connect"));
+}
+
+TEST_CASE("wait rooms= waits for the Rooms connection to reach a state") {
+    FakeGame game;
+    game.state.rooms_state = "connecting";
+    game.on_sleep = [](FakeGame& g) {
+        if (g.slept >= 2s) g.state.rooms_state = "logged_in";
+    };
+    const std::string reply = RunCommand("wait rooms=logged_in timeout=10s", game);
+    CHECK(Ok(reply));
+    CHECK(game.slept >= 2s);
+    CHECK(game.slept < 3s);
+    // the state says it, once it's on
+    CHECK(Has(reply, "\"rooms\":\"logged_in\""));
+    CHECK(Ok(RunCommand("expect rooms=logged_in", game)));
+    CHECK_FALSE(Ok(RunCommand("expect rooms=failed timeout=1s", game)));
+
+    CHECK(Has(RunCommand("wait rooms=online", game), "rooms= takes off, connecting"));
+    CHECK(Has(RunCommand("wait rooms=", game), "rooms= takes off, connecting"));
+    FakeGame off;
+    CHECK(Ok(RunCommand("expect rooms=off", off)));
+    CHECK_FALSE(Has(RunCommand("state", off), "\"rooms\""));
 }
 
 TEST_CASE("pad reports what the game reads from a player") {

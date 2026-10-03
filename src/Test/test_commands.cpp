@@ -6,6 +6,7 @@
 #include <optional>
 #include <utility>
 #include <vector>
+#include "src/Net/liveless_rooms_client.h"
 #include "src/Net/online.h"
 #include "test_inputs.h"
 
@@ -121,6 +122,10 @@ std::string StateJson(const GameStateSnapshot& s, TestTarget& target) {
             out += ",\"fed\":" + std::to_string(mic.bytes_fed) + "}";
         }
         out += ']';
+    }
+    if (s.rooms_state != "off") {
+        out += ",\"rooms\":";
+        AppendJsonString(out, s.rooms_state);
     }
     out += ",\"instruments\":[";
     for (int player = 1; player <= kPlayerCount; player++) {
@@ -723,6 +728,84 @@ std::string LivelessInvite(TestTarget& target, const std::vector<std::string_vie
     return Ok();
 }
 
+// Liveless Rooms' status, each field as text: addresses dotted, empty for none
+std::vector<std::pair<std::string_view, std::string>> RoomsFields(const rooms::Status& s) {
+    auto ip = [](uint32_t address) { return address ? rooms::Ipv4Text(address) : std::string(); };
+    return {
+        {"state", std::string(rooms::StateName(s.state))},
+        {"server", s.server},
+        {"code", s.code},
+        {"public_ip", ip(s.public_ipv4)},
+        {"advertised_ip", ip(s.advertised_ipv4)},
+        {"error", s.error},
+        {"last_join_user", s.last_join_user},
+        {"last_join_ip", ip(s.last_join_ipv4)},
+        {"game_socket", s.game_socket_seen ? "true" : "false"},
+    };
+}
+
+std::string RoomsJson(const rooms::Status& s) {
+    std::string out = "\"rooms\":{";
+    bool first = true;
+    for (const auto& [name, value] : RoomsFields(s)) {
+        if (!first) out += ',';
+        first = false;
+        AppendJsonString(out, name);
+        out += ':';
+        if (name == "game_socket") {
+            out += value;
+        } else {
+            AppendJsonString(out, value);
+        }
+    }
+    out += '}';
+    return out;
+}
+
+// rooms_status [<field>=<value>|<field>~<text>]...: Liveless Rooms' status;
+// with checks, a failure unless each field is the value, or has the text in
+// it (for errors, which have spaces)
+std::string RoomsStatus(TestTarget& target, const std::vector<std::string_view>& args) {
+    const rooms::Status status = target.RoomsStatus();
+    const auto fields = RoomsFields(status);
+    for (size_t i = 1; i < args.size(); i++) {
+        const size_t at = args[i].find_first_of("=~");
+        if (at == std::string_view::npos || at == 0) {
+            return Error(target, "usage: rooms_status [<field>=<value>|<field>~<text>]...");
+        }
+        const std::string_view name = args[i].substr(0, at), want = args[i].substr(at + 1);
+        const bool contains = args[i][at] == '~';
+        const auto field = std::find_if(fields.begin(), fields.end(),
+                                        [&](const auto& f) { return f.first == name; });
+        if (field == fields.end()) return Error(target, "rooms_status has no field " + std::string(name));
+        const bool holds = contains ? field->second.find(want) != std::string::npos : field->second == want;
+        if (!holds) {
+            return Error(target, "rooms " + std::string(name) + " is \"" + field->second + "\", not " +
+                                     (contains ? "containing " : "") + "\"" + std::string(want) +
+                                     "\"; {" + RoomsJson(status) + "}");
+        }
+    }
+    return Ok(RoomsJson(status));
+}
+
+// rooms_join <code>: asks the Rooms server for the game with that code
+std::string RoomsJoin(TestTarget& target, const std::vector<std::string_view>& args) {
+    if (args.size() != 2) return Error(target, "usage: rooms_join <code>");
+    std::string code(args[1]);
+    if (std::string error = rooms::NormalizeCode(code); !error.empty()) return Error(target, error);
+    if (std::string error = target.RoomsJoin(code); !error.empty()) return Error(target, error);
+    std::string fields = "\"code\":";
+    AppendJsonString(fields, code);
+    return Ok(fields);
+}
+
+// rooms_connect: connects to the Rooms server again
+std::string RoomsConnect(TestTarget& target, const std::vector<std::string_view>& args) {
+    if (args.size() != 1) return Error(target, "usage: rooms_connect");
+    if (std::string error = target.RoomsConnect(); !error.empty()) return Error(target, error);
+    return Ok();
+}
+
 }
 
 std::variant<Condition, std::string> ParseCondition(std::string_view text) {
@@ -755,9 +838,18 @@ std::variant<Condition, std::string> ParseCondition(std::string_view text) {
         if (!n || *n < 1 || *n > kMicSlots) return "mic= takes a mic slot, 1 to 4";
         c.kind = Condition::Kind::kMic;
         c.mic = *n;
+    } else if (text.starts_with("rooms=")) {
+        c.kind = Condition::Kind::kRooms;
+        c.text = text.substr(6);
+        bool known = false;
+        for (auto state : {rooms::State::kOff, rooms::State::kConnecting, rooms::State::kConnected,
+                           rooms::State::kLoggedIn, rooms::State::kDisconnected, rooms::State::kFailed}) {
+            known |= c.text == rooms::StateName(state);
+        }
+        if (!known) return "rooms= takes off, connecting, connected, logged_in, disconnected or failed";
     } else {
         return "no condition " + std::string(text) +
-               " (screen=, screen~, in_game, menus, song=, frames=, score>=, mic=)";
+               " (screen=, screen~, in_game, menus, song=, frames=, score>=, mic=, rooms=)";
     }
     if ((c.kind == Condition::Kind::kScreen || c.kind == Condition::Kind::kScreenContains ||
          c.kind == Condition::Kind::kSong) &&
@@ -785,6 +877,7 @@ bool ConditionHolds(const Condition& condition, const GameStateSnapshot& state,
         const uint64_t fed_before = slot < start.mics.size() ? start.mics[slot].bytes_fed : 0;
         return state.mics[slot].bytes_fed > fed_before;
     }
+    case Condition::Kind::kRooms: return state.rooms_state == condition.text;
     }
     return false;
 }
@@ -840,6 +933,9 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "set") return Set(target, line, args);
     if (verb == "bind") return Bind(target, args);
     if (verb == "liveless_invite") return LivelessInvite(target, args);
+    if (verb == "rooms_status") return RoomsStatus(target, args);
+    if (verb == "rooms_join") return RoomsJoin(target, args);
+    if (verb == "rooms_connect") return RoomsConnect(target, args);
     if (verb == "native_view") return NativeView(target, args);
     if (verb == "present_stats") return PresentStatsCommand(target, args);
     if (verb == "quit") {

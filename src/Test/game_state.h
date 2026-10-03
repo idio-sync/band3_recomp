@@ -48,6 +48,9 @@ struct GameStateSnapshot {
     // the USB mic slots, while usb_mics records; the hooks don't keep these,
     // the test server adds them
     std::vector<MicSlot> mics;
+    // the Liveless Rooms connection's state, as liveless_rooms.h's StateName
+    // says it; the test server adds it too
+    std::string rooms_state = "off";
 };
 
 class GameState {

@@ -44,6 +44,7 @@ add_executable(band3_tests
     song_id_test.cpp
     online_test.cpp
     liveless_rooms_protocol_test.cpp
+    liveless_rooms_client_test.cpp
     native_socket_test.cpp
     frame_pacing_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
@@ -61,6 +62,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/ps3_instruments.cpp
     ${BAND3_ROOT}/src/Input/ps4_instruments.cpp
     ${BAND3_ROOT}/src/Net/album_art.cpp
+    ${BAND3_ROOT}/src/Net/liveless_rooms_client.cpp
     ${BAND3_ROOT}/src/Net/liveless_rooms_protocol.cpp
     ${BAND3_ROOT}/src/Net/native_socket.cpp
     ${BAND3_ROOT}/src/Net/online.cpp
@@ -97,7 +99,7 @@ target_include_directories(band3_tests PRIVATE
 # src/Content/package_scan.cpp scans folders on threads of its own
 find_package(Threads REQUIRED)
 target_link_libraries(band3_tests PRIVATE Threads::Threads)
-# src/Net/native_socket.cpp sends and receives over Winsock
+# src/Net/native_socket.cpp and liveless_rooms_client.cpp send and receive over Winsock
 if(WIN32)
     target_link_libraries(band3_tests PRIVATE ws2_32)
 endif()
