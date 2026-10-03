@@ -81,6 +81,10 @@ endif()
 include(${BAND3_ROOT}/cmake/rtmidi.cmake)
 band3_setup_rtmidi(band3_compile_check ${BAND3_ROOT}/src/ThirdParty/rtmidi/RtMidi.cpp)
 
+# the same miniupnpc definitions and headers, for src/Net/port_mapping.cpp
+include(${BAND3_ROOT}/cmake/miniupnpc.cmake)
+band3_setup_miniupnpc(band3_compile_check ${BAND3_ROOT}/src/ThirdParty/miniupnpc)
+
 # the same build tag header, for src/build_tag.cpp
 include(${BAND3_ROOT}/cmake/build_tag.cmake)
 band3_setup_build_tag(band3_compile_check ${BAND3_ROOT})

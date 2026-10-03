@@ -157,6 +157,7 @@ band3 stands on the work of these projects:
 **Libraries**
 - [RtMidi](https://github.com/thestk/rtmidi) (MIDI input),
   [inih](https://github.com/benhoyt/inih) (INI parsing),
+  [miniupnpc](https://github.com/miniupnp/miniupnp) (UPnP port mapping),
   [stb_image_write](https://github.com/nothings/stb) (album art),
   [doctest](https://github.com/doctest/doctest) (unit tests),
   [Tracy](https://github.com/wolfpld/tracy) (profiling), and SDL3 through the ReXGlue SDK.
