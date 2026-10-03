@@ -1,6 +1,7 @@
 // Checks the launcher's settings model (src/Launcher/launcher_settings.h):
 // effective defaults, typed comparison, reset, locks, the Steam Deck toggle,
-// what Save writes, and the joypad_lag and folder helpers.
+// what Save writes, the renderer's per-platform default, and the joypad_lag
+// and folder helpers.
 
 #include <doctest/doctest.h>
 #include <filesystem>
@@ -11,6 +12,7 @@
 #include <toml++/toml.hpp>
 #include "src/Input/joypad_lag_status.h"
 #include "src/Launcher/launcher_settings.h"
+#include "src/renderer_default.h"
 
 namespace fs = std::filesystem;
 using namespace band3::launcher;
@@ -669,6 +671,39 @@ TEST_CASE("mic slots join without trailing blanks") {
     CHECK(JoinMicSlots(empty) == "");
     const std::string second[] = {"", "Yeti"};
     CHECK(JoinMicSlots(second) == ",Yeti");
+}
+
+TEST_CASE("the renderer's default is native on Windows, and an untouched one isn't saved") {
+#ifdef _WIN32
+    CHECK(std::string_view(band3::settings::kDefaultRenderer) == "native");
+#else
+    CHECK(std::string_view(band3::settings::kDefaultRenderer) == "emulated");
+#endif
+    // the registry's default is the build's, as ReadEnvironment reads it, so a
+    // fresh start leaves the key out of band3.toml on either platform
+    const std::string other =
+        std::string_view(band3::settings::kDefaultRenderer) == "native" ? "emulated" : "native";
+    Fixture f;
+    f.env.cvars["renderer"] = Facts(ValueType::kString, band3::settings::kDefaultRenderer);
+    f.env.cvars["renderer"].allowed = {"emulated", "native"};
+    f.store.values["renderer"] = band3::settings::kDefaultRenderer;
+    const Setting* row = FindSetting(SettingTable(), "renderer");
+    REQUIRE(row);
+    const Setting table[] = {*row};
+    SettingsModel m(table, f.env, f.store);
+    CHECK(m.EffectiveDefault("renderer") == band3::settings::kDefaultRenderer);
+    CHECK_FALSE(m.IsChanged("renderer"));
+    CHECK(m.ChoiceIndex(table[0]) >= 0);
+    REQUIRE(EditFor(m.Edits(), "renderer"));
+    CHECK_FALSE(EditFor(m.Edits(), "renderer")->value);
+    // the other one is a choice the player made, and is saved
+    CHECK(m.Set("renderer", other));
+    CHECK(m.IsChanged("renderer"));
+    CHECK(m.ChoiceIndex(table[0]) >= 0);
+    CHECK(*EditFor(m.Edits(), "renderer")->value == ConfigValue(other));
+    // and Reset takes it out again
+    CHECK(m.Reset("renderer"));
+    CHECK_FALSE(EditFor(m.Edits(), "renderer")->value);
 }
 
 TEST_CASE("the launcher's table is consistent") {

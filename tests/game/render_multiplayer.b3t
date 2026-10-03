@@ -3,7 +3,7 @@
 # players bring: the part and difficulty choice with both players' panels, the
 # song with two tracks at points through it, its pause menu and the results.
 # Starts where boot.b3t leaves Rock Band 3 Deluxe (on a fresh profile):
-#   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
+#   python tools/band3ctl.py launch --fresh -- --renderer=emulated --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
 #   python tools/band3ctl.py run tests/game/boot.b3t
 #   python tools/band3ctl.py run tests/game/render_multiplayer.b3t
 # Every frame draws everything here, as in render_song.b3t, in the same venue.

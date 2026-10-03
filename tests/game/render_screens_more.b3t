@@ -8,7 +8,7 @@
 # store or online rankings: they need the network. Starts where boot.b3t
 # leaves Rock Band 3 Deluxe (on a fresh profile; the hints and goal screens
 # below are a first time's):
-#   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
+#   python tools/band3ctl.py launch --fresh -- --renderer=emulated --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
 #   python tools/band3ctl.py run tests/game/boot.b3t
 #   python tools/band3ctl.py run tests/game/render_screens_more.b3t
 # Even/odd rendering stays on, as the game ships, as in

@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "renderer_default.h"
 #include <atomic>
 #include <mutex>
 #include <string_view>
@@ -207,11 +208,14 @@ REXCVAR_DEFINE_INT32(background_fps, 0, "Band3/Graphics",
     "counts it as if the game ran at 60, so at refresh_rate 120 a venue's 30 drew at 60")
     .range(0, 240);
 
-REXCVAR_DEFINE_STRING(renderer, "emulated", "Band3/Graphics",
-    "What draws the game's picture: emulated, the emulated Xbox 360 GPU, or native "
-    "(experimental), band3's own renderer drawing what the game sent the GPU, at the "
-    "window's size, under the overlays. The emulated GPU keeps running either way, so it "
-    "switches at once (F8)")
+// native on Windows, emulated elsewhere: renderer_default.h says why it's
+// chosen at build time
+REXCVAR_DEFINE_STRING(renderer, band3::settings::kDefaultRenderer, "Band3/Graphics",
+    "What draws the game's picture: native, band3's own renderer drawing what the game "
+    "sent the GPU, at the window's size, under the overlays, or emulated, the emulated Xbox "
+    "360 GPU. Native is the default on Windows, emulated elsewhere; on Microsoft's software "
+    "rasterizer (Windows without a GPU driver) native draws on the CPU. The emulated GPU "
+    "keeps running either way, so it switches at once (F8)")
     .allowed({"emulated", "native"});
 
 REXCVAR_DEFINE_INT32(native_max_height, 0, "Band3/Graphics",

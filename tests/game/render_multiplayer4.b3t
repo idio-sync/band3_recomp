@@ -7,7 +7,7 @@
 # vocals need no controller, and add the singer by themselves. Starts where
 # boot.b3t leaves Rock Band 3 Deluxe (on a fresh profile); launch with the
 # mics and their tone:
-#   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false --usb_mics=true --usb_mic_test_tone=220
+#   python tools/band3ctl.py launch --fresh -- --renderer=emulated --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false --usb_mics=true --usb_mic_test_tone=220
 #   python tools/band3ctl.py run tests/game/boot.b3t
 #   python tools/band3ctl.py run tests/game/render_multiplayer4.b3t
 # The fourth part is the singer, not a fourth virtual instrument: with three

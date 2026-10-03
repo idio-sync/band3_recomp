@@ -51,7 +51,7 @@ constexpr Choice kAspect[] = {{"true", "Letterbox"}, {"false", "Stretch"}};
 
 constexpr Choice kRenderers[] = {
     {"emulated", "Emulated GPU"},
-    {"native", "Native (experimental)"},
+    {"native", "Native"},
 };
 
 constexpr Choice kAntiAliasing[] = {

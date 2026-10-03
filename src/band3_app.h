@@ -423,7 +423,7 @@ class Band3App : public rex::ReXApp {
         if (native_view_ && !launcher_) native_view_->Toggle();
       });
       rex::ui::RegisterBind("bind_renderer", "F8",
-                            "Switch between the emulated and the native renderer (experimental)", [] {
+                            "Switch between the native and the emulated renderer", [] {
         rex::cvar::SetFlagByName("renderer",
                                  REXCVAR_GET(renderer) == "native" ? "emulated" : "native");
       });

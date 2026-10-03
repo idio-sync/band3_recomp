@@ -1,16 +1,19 @@
 # Native renderer and render checks
 
-Experimental: band3's own renderer for the game's frames, an alternative to the emulated
-Xbox 360 GPU, and the tools that check its picture against the game's.
+band3's own renderer for the game's frames, which draws the game's picture by default on
+Windows (the emulated Xbox 360 GPU is a switch away), and the tools that check its picture
+against the game's.
 
 ## Switching renderers
 
-`renderer` (Band3 → Graphics) picks what draws the game's picture: `emulated` (the
-default), the emulated Xbox 360 GPU, or `native`, band3's own renderer (the native view's,
-below) drawing each frame the game sends at the window's size, under the SDK's overlays.
-**F8** (`bind_renderer`) switches between them at once, without a restart; the emulated GPU
-keeps running either way. The picture keeps the game's 16:9 with black bars, or stretches
-when the SDK's `present_letterbox` is off. On Windows the frames go to the window without
+`renderer` (Band3 → Graphics, or the launcher's Graphics tab) picks what draws the game's
+picture: `native`, band3's own renderer (the native view's, below) drawing each frame the
+game sends at the window's size, under the SDK's overlays, or `emulated`, the emulated Xbox
+360 GPU. `native` is the default on Windows. Elsewhere `emulated` stays the default: the
+native renderer builds on Linux, but hasn't been run there yet. **F8** (`bind_renderer`)
+switches between them at once, without a restart; the emulated GPU keeps running either
+way, so its picture is always one key (or one setting) away. The picture keeps the game's
+16:9 with black bars, or stretches when the SDK's `present_letterbox` is off. On Windows the frames go to the window without
 leaving the GPU; where that can't be done (other platforms, `native_view_backend` cpu, or
 `native_present_zero_copy` off) each frame is read back and uploaded instead. The log says
 which (`native present: zero-copy`, or `native present: uploading each frame (<why>)`). On
@@ -41,9 +44,9 @@ the like from them: a little game-thread time while characters load (about 170 m
 to a song). Once `renderer` has been native, they stay recorded for the rest of the session,
 under the emulated GPU too, so F8 back to native still has the outfits. RB3 composes a
 band's outfits once, in the main menu, so switching to native later (F8) after they were
-composed without recording shows them wrong until RB3 composes them again. To play on the
-native renderer, set it at launch (`--renderer=native`, or in the settings before the main
-menu).
+composed without recording shows them wrong until RB3 composes them again. On Windows the
+native renderer is on from launch by default; elsewhere, to play on it, set it at launch
+(`--renderer=native`, or in the settings before the main menu).
 
 While the native renderer draws the window, the emulated GPU skips the game's draws nobody
 sees (`emulated_gpu_while_native`, `skip_draws` by default): the meshes, instanced meshes and
@@ -62,9 +65,30 @@ under `emulated`. `full`
 draws everything, as before. `tests/game/soak_native.b3t` soaks the native renderer: three
 songs, menu round trips and F8 both ways in each song.
 
+Every kind of screen the render checks below go through matches the game's picture, as
+they measure it. Where the native renderer still differs from the emulated GPU, or hasn't
+been checked:
+
+- The lens flares are drawn without occlusion, as the emulated GPU draws them (it never
+  occludes RB3's flare queries), so the picture matches the emulated one, not a 360's.
+- The world is drawn single-sampled at the window's size, as RB3 draws it at 720p, so above
+  720p its edges shimmer a little where the emulated GPU's 720p picture, stretched to the
+  window, blurs them.
+- With `emulated_gpu_while_native` `full` and no frame cap, the native renderer's frames
+  stall now and then (both GPUs' work on one 3D engine); `skip_draws`, the default, doesn't.
+- Not checked: the store and other online screens, RB3's error screens drawn over
+  everything (`ModalDraw`), and screens no script reaches.
+- A texture pass RB3 draws every frame but stops drawing while the native renderer is on
+  shows, after F8 back to emulated, what the emulated GPU last drew in it, until RB3 draws
+  it again.
+- At a 120 Hz refresh rate (`video_mode_refresh_rate`) it doesn't show every one of the
+  game's frames yet: about two in three in a song, where at 60 Hz it shows nearly all.
+- It has only run on Windows. Linux keeps `emulated` as the default until it has been run
+  there (Vulkan, and each frame uploaded rather than shown in place).
+
 | Setting | |
 |---|---|
-| `renderer` (Band3 → Graphics) | `emulated` (the default) or `native` |
+| `renderer` (Band3 → Graphics) | `native` (the default on Windows) or `emulated` (the default elsewhere) |
 | `emulated_gpu_while_native` (Band3 → Graphics) | with `renderer` native, `skip_draws` (the default) leaves the game's draws out of the emulated GPU's work as above; `full` has it draw everything |
 | `native_max_height` (Band3 → Graphics) | the most lines the native renderer draws: a taller window's picture is drawn this tall and scaled up to fill it, for 4K on a GPU that can't keep up at full size. 0 (the default) draws at the window's size |
 | `native_view_msaa` (Band3 → Graphics) | the samples a pixel the native renderer and the native view draw the overlay with (the track, the HUD, menus drawn after the world), averaged at its edges: 2 (the default) as RB3 does, 4 smoother than the game, 1 none. RB3 multisamples only those: the world, its post-processing and every texture pass are single-sampled, in the game and here. Where the GPU can't draw 2 samples it draws 4 (or 4 → 2, else 1; the log says so) |
@@ -102,10 +126,17 @@ Render checks set its picture against the game's.
 Launch render checks with:
 
 ```
-python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
+python tools/band3ctl.py launch --fresh -- --renderer=emulated --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
 python tools/band3ctl.py run tests/game/boot.b3t
 python tools/band3ctl.py run tests/game/render_song.b3t
 ```
+
+`--renderer=emulated` keeps the emulated GPU drawing the window, as the reference picture
+is its. The checks hold under the native renderer too (the default on Windows), since
+`capture` has the emulated GPU draw whole frames before it holds one (`emulated`: `full`
+in its reply), but guest memory's copies of the texture passes are stale there (no
+`--rt-guest`), and `render_song_live.b3t` measures the live view with the native renderer
+off.
 
 The native view doesn't need `--readback_resolve=full`. With it, guest memory holds
 right copies of what RB3 draws into textures (garbage otherwise), to compare against:

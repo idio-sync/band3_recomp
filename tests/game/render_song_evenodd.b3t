@@ -4,10 +4,11 @@
 # same points through the song, for render checks:
 #   out/native_view_replay.exe screenshots/<name>.cap side.png --compare screenshots/<name>.png
 # Starts where boot.b3t leaves Rock Band 3 Deluxe (on a fresh profile). Launch
-# with the passes RB3 draws into textures recorded from the start (outfits are
-# composed once, in the main menu), and without full readback: the native view
-# draws those passes itself.
-#   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true
+# on the emulated GPU, whose picture is the reference (render_song.b3t says
+# why), with the passes RB3 draws into textures recorded from the start
+# (outfits are composed once, in the main menu), and without full readback:
+# the native view draws those passes itself.
+#   python tools/band3ctl.py launch --fresh -- --renderer=emulated --native_view_record_targets=true
 # Add --async_shader_compilation=false to the launch: with asynchronous
 # compilation the emulated GPU skips draws whose shaders aren't ready, and the
 # outfits RB3 composes once in the main menu can stay black in the game's picture.

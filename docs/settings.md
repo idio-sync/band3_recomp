@@ -16,6 +16,11 @@ display modes as resolutions. A saved device that isn't plugged in shows as "(no
 connected)" and stays chosen until you pick another, and **Other...** takes a typed name
 or part of one.
 
+The Graphics tab's **Renderer** picks what draws the game's picture: **Native**, band3's own
+[native renderer](native-renderer.md) (the default on Windows), or **Emulated GPU** (the
+default on Linux, where the native renderer hasn't been run yet). F8 switches between them
+in game.
+
 The Controllers tab starts with a list of every controller and instrument band3 sees (Xbox
 pads and instruments, PS3/Wii/PS4/PS5 instruments on their dongles, a MIDI kit, the
 keyboard) and the player each one is, or "Not playing", and shows the selected one live

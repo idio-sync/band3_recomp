@@ -53,6 +53,10 @@ as a small program), and runs band3 from a temporary folder it deletes afterward
 python tools/test_config_file.py
 ```
 
+The game starts on its default renderer: on Windows the [native renderer](native-renderer.md),
+so `screenshot` takes its picture (`renderer` `native` in the reply). Add `-- --renderer=emulated`
+to `launch` for the emulated GPU's, as the render scripts' launch lines do.
+
 `capture` and `native_view` check the native view's rendering; see
 [Render checks](native-renderer.md#render-checks).
 

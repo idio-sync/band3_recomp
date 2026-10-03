@@ -3,8 +3,11 @@
 # by default), and prints its numbers: frames captured and drawn, each drawn
 # frame's time (mean, p50, p95, max ms), and the game's own frame rate with the
 # view off and then on. Starts where boot.b3t leaves Rock Band 3 Deluxe (on a
-# fresh profile), with full readback as render_song.b3t needs:
-#   python tools/band3ctl.py launch --fresh -- --readback_resolve=full
+# fresh profile), on the emulated GPU (under the native renderer, the default
+# on Windows, `native_view on` with a size is an error and the view-off numbers
+# would be the native renderer's) and with full readback as render_song.b3t
+# needs:
+#   python tools/band3ctl.py launch --fresh -- --renderer=emulated --readback_resolve=full
 #   python tools/band3ctl.py run tests/game/boot.b3t
 #   python tools/band3ctl.py run tests/game/render_song_live.b3t
 # Add --native_view_record_targets=true to the launch for the texture passes
