@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include "src/Input/joypad_lag_status.h"
+#include "src/Net/online.h"
 #include "src/paths.h"
 
 namespace band3::launcher {
@@ -82,9 +83,13 @@ constexpr Condition kWithMidiDrums{"midi_drums", "true"};
 constexpr Condition kWithUsbMics{"usb_mics", "true"};
 constexpr Condition kWithHttp{"http_enabled", "true"};
 constexpr Condition kWithEvents{"events_enabled", "true"};
+constexpr Condition kWithGoCentral{"gocentral", "true"};
+constexpr Condition kWithLiveless{"liveless", "true"};
 
 constexpr Range kSpeeds{0.5, 2.0, 0.05};
 constexpr Range kPorts{1, 65535, 1};
+// liveless_port's
+constexpr Range kGamePorts{1024, 65000, 1};
 
 using enum Tab;
 using enum Widget;
@@ -202,6 +207,23 @@ constexpr Setting kSettings[] = {
      .widget = kText, .shown_when = kWithEvents},
     {.cvar = "events_port", .tab = kOnline, .section = "RB3Enhanced", .label = "Port",
      .widget = kIntStepper, .range = kPorts, .shown_when = kWithEvents},
+    // only on Windows for now (online::Start)
+    {.cvar = "gocentral", .tab = kOnline, .section = "GoCentral",
+     .label = "Leaderboards, battles and setlists (GoCentral)", .widget = kCheckbox,
+     .windows_only = true},
+    {.cvar = "gocentral_address", .tab = kOnline, .section = "GoCentral", .label = "Server",
+     .widget = kText, .shown_when = kWithGoCentral, .windows_only = true},
+    {.cvar = "liveless", .tab = kOnline, .section = "Online play (Liveless)",
+     .label = "Play online without Xbox Live", .widget = kCheckbox, .windows_only = true},
+    {.cvar = "liveless_connect", .tab = kOnline, .section = "Online play (Liveless)",
+     .label = "Game to join", .widget = kText, .shown_when = kWithLiveless,
+     .windows_only = true},
+    {.cvar = "liveless_external_ip", .tab = kOnline, .section = "Online play (Liveless)",
+     .label = "Your address for players joining", .widget = kText,
+     .shown_when = kWithLiveless, .windows_only = true},
+    {.cvar = "liveless_port", .tab = kOnline, .section = "Online play (Liveless)",
+     .label = "Port", .widget = kIntStepper, .range = kGamePorts,
+     .shown_when = kWithLiveless, .windows_only = true},
 
     {.cvar = "steam_deck_defaults", .tab = kSteamDeck, .section = "Steam Deck",
      .label = "Use the Steam Deck settings", .widget = kCheckbox},
@@ -617,6 +639,17 @@ std::optional<std::string> SettingsModel::Warning(std::string_view cvar) const {
         if (scale && *scale > 1) {
             return "Costs a lot of GPU time for detail the Deck's 1280x800 screen can't show; "
                    "1 is the console's resolution";
+        }
+    }
+    // what online::Start refuses, said before Play
+    if (cvar == "gocentral" && AsBool(Value(cvar)) && !online::IsOwnAccountName(Value("username"))) {
+        return "Set the profile name (Game tab) to a name of your own first: it's your "
+               "GoCentral account, and band3 won't connect as \"User\" or a blank one";
+    }
+    if (cvar == "liveless_connect" && AsBool(Value("liveless"))) {
+        const auto port = AsInt(Value("liveless_port"));
+        if (!online::ParseJoinAddress(Value(cvar), static_cast<uint16_t>(port.value_or(online::kGamePort)))) {
+            return "Not an address: an IP or a name, with :port if it isn't 9103";
         }
     }
     return std::nullopt;

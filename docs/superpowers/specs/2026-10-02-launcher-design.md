@@ -138,7 +138,7 @@ One full-window ImGui screen. Tabs: **Game, Graphics, Audio, Controllers, Online
 
 **Controllers.** Instrument type (`controller_type`); PS3/Wii/PS4/PS5 dongles (`hid_instruments`); MIDI drums on/off, port (typed in phase 1, a dropdown in phase 2), minimum velocity, cymbal combos; input lag per controller type (`joypad_lag`, one number per type; the editor keeps any `video`/`audio` parts and types it does not edit); stick deadzones (shown as %); input backend (`input_backend`). Phase 2 adds the device list and test view above these.
 
-**Online.** Web song browser (`http_enabled`, `http_port`), RhythmVerse (`http_rhythmverse`), Discord presence (`discord_enabled`), RB3E events (`events_enabled`, `events_target`, `events_port`), RB3E mode (`rb3e_mode`).
+**Online.** Web song browser (`http_enabled`, `http_port`), RhythmVerse (`http_rhythmverse`), Discord presence (`discord_enabled`), RB3E events (`events_enabled`, `events_target`, `events_port`), RB3E mode (`rb3e_mode`), GoCentral (`gocentral`, `gocentral_address`; warns while `username` is blank or "User", which band3 won't log in as), Liveless online play (`liveless`, `liveless_connect`, `liveless_external_ip`, `liveless_port`; warns when `liveless_connect` isn't an address). GoCentral and Liveless are Windows only, so their rows are too; each one's address and port rows show only while it's on.
 
 Folder pickers use `SDL_ShowOpenFolderDialog` from band3's SDL copy, next to an editable path field (the dialog may not appear under gamescope).
 

@@ -116,7 +116,8 @@ Rock Band 3's online features (leaderboards, Battles, setlists shared with frien
 Rock Central's goals) talked to Harmonix's Rock Central, which closed.
 [GoCentral](https://github.com/ihatecompvir/GoCentral) is a fan-run replacement that
 RB3Enhanced players use. Under F4 → Band3 → Online, set `username` (Band3 → Game)
-to a name of your own, turn on `gocentral`, then restart. band3 then logs into
+to a name of your own, turn on `gocentral`, then restart; or do it on the
+[launcher](settings.md#the-launcher)'s Game and Online tabs and press Play. band3 then logs into
 `gocentral_address`, RB3Enhanced's Xbox 360 server (`gocentral-xbox.rbenhanced.rocks`)
 unless you run your own, as RB3Enhanced does on a console with Xbox Live blocked.
 
@@ -134,7 +135,8 @@ Liveless plays without it, straight from one player's game to another's, and ban
 does the same, so band3 players can play together (and, the game's packets being
 the same, with RB3Enhanced players, though that's untested). Under F4 → Band3 →
 Online, turn on `liveless`, set `username` to your name (others see it), then
-restart.
+restart; or set them on the [launcher](settings.md#the-launcher)'s Online and Game
+tabs and press Play.
 
 One player hosts and the others join. Everyone presses Start for the overshell,
 picks **Play on Xbox Live**, backs out of it, then picks Play Now → Quickplay →
