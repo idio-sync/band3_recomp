@@ -12,18 +12,25 @@
 // system has, with the player each feeds, and the selected one drawn live
 // (guitar frets, strum, whammy and tilt; drum pads and cymbals flashing with
 // how hard they're hit; a controller's buttons and sticks), read as the game
-// would read it (input::ReadInputDevice). Before the game only: Poll and Draw
-// are called while the launcher's settings are edited, never after Play.
+// would read it (input::ReadInputDevice). Picking a device's row tests it: it
+// plays the test view only, and stops moving around the launcher, until Back
+// is pressed on it or Stop clicked (TestMode). Before the game only: Poll and
+// Draw are called while the launcher's settings are edited, never after Play.
 
 namespace band3::launcher {
 
 class DevicePanel {
 public:
     // Looks for devices again every quarter second (hotplugs), and reads every
-    // device gamepad navigation uses, and the selected one. Once a frame.
-    void Poll();
+    // device gamepad navigation uses, and the selected one. Once a frame;
+    // `showing` is whether the Controllers tab shows (a test ends when not).
+    void Poll(bool showing);
 
-    // the devices' states for gamepad navigation, from the last Poll
+    // ends the test, at Play
+    void StopTest() { test_.End(); }
+
+    // the devices' states for gamepad navigation, from the last Poll (none
+    // from the device under test)
     const std::vector<NavPad>& NavPads() const { return nav_pads_; }
 
     // the device list and the selected device's test view, where the cursor is
@@ -67,6 +74,8 @@ private:
     std::optional<uint64_t> selected_;
     // the player chose it: it stays chosen while it's connected
     bool picked_ = false;
+    // the device under test, which is the selected one
+    TestMode test_;
     // the drum view's hits, for the device they're of
     uint64_t hits_for_ = 0;
     std::array<Hit, input::kPadCount> pad_hits_{};

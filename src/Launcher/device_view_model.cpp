@@ -161,4 +161,43 @@ NavEdges PressedEdges(uint16_t before, uint16_t now) {
     };
 }
 
+void TestMode::Begin(uint64_t id) {
+    if (testing_ == id) return;
+    End();
+    testing_ = id;
+    last_ = 0;
+    primed_ = false;
+    if (ended_ == id) ended_.reset();
+}
+
+void TestMode::End() {
+    if (!testing_) return;
+    ended_ = testing_;
+    ended_held_ = primed_ ? last_ : 0;
+    testing_.reset();
+}
+
+void TestMode::Follow(std::span<const uint64_t> connected, bool showing) {
+    if (testing_ && (!showing || std::ranges::find(connected, *testing_) == connected.end())) {
+        End();
+    }
+}
+
+NavPad TestMode::Filter(uint64_t id, const NavPad& pad) {
+    if (testing_ == id) {
+        // a Back held as the test began isn't a press
+        const bool back = primed_ && (pad.buttons & ~last_ & xbox::kBack) != 0;
+        last_ = pad.buttons;
+        primed_ = true;
+        if (back) End();
+        return {};
+    }
+    if (ended_ != id) return pad;
+    ended_held_ &= pad.buttons;
+    NavPad free = pad;
+    free.buttons &= static_cast<uint16_t>(~ended_held_);
+    if (ended_held_ == 0) ended_.reset();
+    return free;
+}
+
 }

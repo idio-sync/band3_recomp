@@ -86,7 +86,7 @@ void Stick(ImDrawList* draw, const ImVec2& center, float radius, int16_t x, int1
 
 }
 
-void DevicePanel::Poll() {
+void DevicePanel::Poll(bool showing) {
     const Clock::time_point now = Clock::now();
     if (!listed_ || now >= next_list_) {
         devices_.clear();
@@ -97,6 +97,11 @@ void DevicePanel::Poll() {
         next_list_ = now + std::chrono::milliseconds(250);
         ChooseDevice();
     }
+    std::vector<uint64_t> connected;
+    connected.reserve(devices_.size());
+    for (const Device& device : devices_) connected.push_back(device.info.id);
+    test_.Follow(connected, showing);
+
     nav_pads_.clear();
     for (Device& device : devices_) {
         const bool nav = DrivesNavigation(device.info.kind);
@@ -104,7 +109,10 @@ void DevicePanel::Poll() {
         device.reading = nav || shown ? input::ReadInputDevice(device.info.id) : std::nullopt;
         if (!device.reading) continue;
         sub_types_[device.info.id] = device.reading->caps.sub_type;
-        if (nav) nav_pads_.push_back(NavFromReading(device.reading->caps, device.reading->state));
+        if (nav) {
+            nav_pads_.push_back(test_.Filter(
+                device.info.id, NavFromReading(device.reading->caps, device.reading->state)));
+        }
     }
 }
 
@@ -171,6 +179,12 @@ void DevicePanel::DrawList() {
                                   ImGuiSelectableFlags_SpanAllColumns, ImVec2(0, row))) {
                 selected_ = d.id;
                 picked_ = true;
+                // the keyboard navigates by itself, so it's only shown
+                if (DrivesNavigation(d.kind)) {
+                    test_.Begin(d.id);
+                } else {
+                    test_.End();
+                }
             }
             ImGui::EndDisabled();
             if (copy && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -195,12 +209,39 @@ void DevicePanel::DrawTestView(const Device& device) {
     ImGui::Spacing();
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kPopup);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(18), Px(14)));
+    // (flattened: its Test button is on the page's navigation)
     if (ImGui::BeginChild("##test_view", ImVec2(0, 0),
-                          ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding,
-                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoNav)) {
+                          ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding |
+                              ImGuiChildFlags_NavFlattened,
+                          ImGuiWindowFlags_NoScrollbar)) {
+        // the keyboard navigates by itself, so it's only shown, not tested
+        const bool testable = DrivesNavigation(d.kind);
+        const bool testing = test_.Testing() == d.id;
+        if (testable) ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(d.name.empty() ? "(unnamed)" : d.name.c_str());
+        if (testable) {
+            // Test and Stop are one button, so the focus stays on it
+            const float width =
+                std::max(ImGui::CalcTextSize("Test").x, ImGui::CalcTextSize("Stop").x) +
+                ImGui::GetStyle().FramePadding.x * 2;
+            ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - width);
+            if (ImGui::Button(testing ? "Stop###test" : "Test###test", ImVec2(width, 0))) {
+                if (testing) {
+                    test_.End();
+                } else {
+                    test_.Begin(d.id);
+                }
+            }
+        }
         FontScope font(kSmallSize);
         ImGui::PushTextWrapPos(0);
+        if (testing) {
+            ImGui::TextColored(kAccent, "Testing: press Back on it (or click Stop) to stop. Until "
+                                        "then it plays this view only, not the launcher.");
+        } else if (testable) {
+            ImGui::TextColored(kMuted, "It also moves around the launcher. Click its row, or press "
+                                       "A on it, to test it on its own.");
+        }
         if (!device.reading) {
             ImGui::TextColored(kMuted, "Can't read it right now.");
         } else {

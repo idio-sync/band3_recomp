@@ -1,7 +1,8 @@
 // Checks the pure parts of the launcher's Controllers device list, test view
 // and gamepad navigation (src/Launcher/device_view_model.cpp): the kinds'
 // labels, which view draws a device, how a hit fades, and what a device's
-// state does to navigation.
+// state does to navigation, and the test mode that keeps a tested device out
+// of it.
 
 #include <doctest/doctest.h>
 #include <cstdint>
@@ -175,4 +176,100 @@ TEST_CASE("Start and the bumpers count once, as they go down") {
     e = PressedEdges(xbox::kStart, xbox::kLeftShoulder);
     CHECK(e.tab_previous);
     CHECK_FALSE(e.start);
+}
+
+TEST_CASE("outside test mode every device navigates") {
+    TestMode test;
+    const NavPad a{.buttons = xbox::kButtonA, .left_x = 0.5f};
+    CHECK(test.Filter(1, a) == a);
+    CHECK(test.Filter(2, a) == a);
+    CHECK_FALSE(test.Testing().has_value());
+}
+
+TEST_CASE("the device under test doesn't navigate, and the others still do") {
+    TestMode test;
+    test.Begin(1);
+    CHECK(test.Testing() == 1u);
+    const NavPad frets{.buttons = xbox::kButtonA | xbox::kButtonB | xbox::kStart, .right_x = 1.0f};
+    CHECK(test.Filter(1, frets) == NavPad{});
+    CHECK(test.Filter(1, frets) == NavPad{});
+    CHECK(test.Filter(2, frets) == frets);
+    // another device's Back doesn't end it
+    CHECK(test.Filter(2, {.buttons = xbox::kBack}).buttons == xbox::kBack);
+    CHECK(test.Testing() == 1u);
+}
+
+TEST_CASE("Back on the device under test ends the test, and what it holds counts once let go") {
+    TestMode test;
+    test.Begin(1);
+    test.Filter(1, {.buttons = xbox::kButtonA});
+    // Back pressed with the green fret held
+    CHECK(test.Filter(1, {.buttons = xbox::kButtonA | xbox::kBack}) == NavPad{});
+    CHECK_FALSE(test.Testing().has_value());
+    // the fret and Back still held don't navigate; a new button and the sticks do
+    NavPad pad = test.Filter(1, {.buttons = xbox::kButtonA | xbox::kBack | xbox::kDpadDown,
+                                 .left_y = -1.0f});
+    CHECK(pad.buttons == xbox::kDpadDown);
+    CHECK(pad.left_y == doctest::Approx(-1.0f));
+    // Back let go, the fret still held
+    CHECK(test.Filter(1, {.buttons = xbox::kButtonA}).buttons == 0);
+    // the fret let go, then pressed again
+    CHECK(test.Filter(1, {}).buttons == 0);
+    CHECK(test.Filter(1, {.buttons = xbox::kButtonA}).buttons == xbox::kButtonA);
+    CHECK(test.Filter(1, {.buttons = xbox::kBack}).buttons == xbox::kBack);
+}
+
+TEST_CASE("a Back held as the test begins doesn't end it until pressed again") {
+    TestMode test;
+    test.Begin(1);
+    test.Filter(1, {.buttons = xbox::kBack});
+    test.Filter(1, {.buttons = xbox::kBack});
+    CHECK(test.Testing() == 1u);
+    test.Filter(1, {});
+    test.Filter(1, {.buttons = xbox::kBack});
+    CHECK_FALSE(test.Testing().has_value());
+}
+
+TEST_CASE("Stop ends the test, and what the device holds counts once let go") {
+    TestMode test;
+    test.Begin(1);
+    test.Filter(1, {.buttons = xbox::kButtonB});
+    test.End();
+    CHECK_FALSE(test.Testing().has_value());
+    CHECK(test.Filter(1, {.buttons = xbox::kButtonB}).buttons == 0);
+    CHECK(test.Filter(1, {}).buttons == 0);
+    CHECK(test.Filter(1, {.buttons = xbox::kButtonB}).buttons == xbox::kButtonB);
+}
+
+TEST_CASE("testing another device ends the first one's test") {
+    TestMode test;
+    test.Begin(1);
+    test.Filter(1, {.buttons = xbox::kButtonY});
+    test.Begin(2);
+    CHECK(test.Testing() == 2u);
+    CHECK(test.Filter(2, {.buttons = xbox::kButtonA}) == NavPad{});
+    CHECK(test.Filter(1, {.buttons = xbox::kButtonY}).buttons == 0);
+    CHECK(test.Filter(1, {.buttons = xbox::kButtonA}).buttons == xbox::kButtonA);
+    // testing the same device again changes nothing
+    test.Begin(2);
+    CHECK(test.Testing() == 2u);
+}
+
+TEST_CASE("the test ends when its device goes or the Controllers tab stops showing") {
+    TestMode test;
+    const std::vector<uint64_t> both = {1, 2};
+    const std::vector<uint64_t> other = {2};
+    test.Begin(1);
+    test.Follow(both, true);
+    CHECK(test.Testing() == 1u);
+    test.Follow(other, true);
+    CHECK_FALSE(test.Testing().has_value());
+
+    test.Begin(1);
+    test.Follow(both, false);
+    CHECK_FALSE(test.Testing().has_value());
+
+    // nothing to end
+    test.Follow({}, false);
+    CHECK_FALSE(test.Testing().has_value());
 }

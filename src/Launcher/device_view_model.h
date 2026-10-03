@@ -9,8 +9,9 @@
 
 // The pure parts of the launcher's Controllers device list, test view
 // (instrument_view.h) and gamepad navigation (gamepad_nav.h): what a device is
-// called, which view draws it, how a hit fades, and what a device's state
-// does to the launcher's navigation. Kept apart from the ImGui and input
+// called, which view draws it, how a hit fades, what a device's state does
+// to the launcher's navigation, and which devices navigate while one is
+// tested. Kept apart from the ImGui and input
 // system code so the unit tests can check them.
 
 namespace band3::launcher {
@@ -87,5 +88,40 @@ struct NavEdges {
     bool tab_next = false;      // RB
 };
 NavEdges PressedEdges(uint16_t before, uint16_t now);
+
+// The test view's test mode. Navigation reads every device, so a fret held
+// to see it light would press the focused setting; while a device is tested
+// it plays the test view only. Its buttons, sticks and triggers aren't
+// navigation (Start doesn't play, and its bumpers don't switch tabs), and a
+// Back pressed on it ends the test. Other devices, the mouse and the keyboard
+// navigate as before. The test also ends when its device goes, when the
+// Controllers tab stops showing, and at Play. The buttons the device holds as
+// its test ends count for navigation only once let go and pressed again, so
+// the fret held as Back is pressed doesn't then press the focused row.
+class TestMode {
+public:
+    // tests this device; another one's test ends
+    void Begin(uint64_t id);
+    void End();
+    std::optional<uint64_t> Testing() const { return testing_; }
+
+    // ends the test unless its device is still `connected` and the
+    // Controllers tab `showing`; once a frame
+    void Follow(std::span<const uint64_t> connected, bool showing);
+
+    // one device's navigation this frame, as NavFromReading read it: nothing
+    // from the device under test (whose Back, pressed during the test, ends
+    // it), the rest as they are
+    NavPad Filter(uint64_t id, const NavPad& pad);
+
+private:
+    std::optional<uint64_t> testing_;
+    // the tested device's buttons at its last Filter, once it has had one
+    uint16_t last_ = 0;
+    bool primed_ = false;
+    // the last device tested, and the buttons it still holds from then
+    std::optional<uint64_t> ended_;
+    uint16_t ended_held_ = 0;
+};
 
 }

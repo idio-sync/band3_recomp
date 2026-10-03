@@ -18,19 +18,22 @@ or part of one.
 
 The Controllers tab starts with a list of every controller and instrument band3 sees (Xbox
 pads and instruments, PS3/Wii/PS4/PS5 instruments on their dongles, a MIDI kit, the
-keyboard) and the player each one is, or "Not playing". Pick one to test it: a guitar shows
-its frets, solo frets, strum, whammy, tilt and pickup switch as you play; a drum kit flashes
-each pad and cymbal as brightly as it was hit, with its velocity (an RB1 kit has none, so
-every hit shows at full strength), and both kick pedals; a controller shows its buttons,
-sticks and triggers, and the instrument "Gamepads play as" makes it in the game. With the
-SDL input backend an Xbox 360 guitar or kit shows as a controller too, and plays as that
-instrument. A MIDI kit also lists its last notes with their velocity and what they play.
-What it shows is what the game will read: the launcher reads the devices through band3's own
-input drivers.
+keyboard) and the player each one is, or "Not playing", and shows the selected one live
+below. Pick one (click its row, or press A on it) to test it: until you press Back on it, or
+click Stop, it plays the test view only and doesn't move around the launcher, so holding a
+fret or hitting a pad presses nothing. A guitar shows its frets, solo frets, strum, whammy,
+tilt and pickup switch as you play; a drum kit flashes each pad and cymbal as brightly as it
+was hit, with its velocity (an RB1 kit has none, so every hit shows at full strength), and
+both kick pedals; a controller shows its buttons, sticks and triggers, and the instrument
+"Gamepads play as" makes it in the game. With the SDL input backend an Xbox 360 guitar or
+kit shows as a controller too, and plays as that instrument. A MIDI kit also lists its last
+notes with their velocity and what they play. What it shows is what the game will read: the
+launcher reads the devices through band3's own input drivers.
 
 Any controller can drive the launcher: the d-pad or left stick moves, A picks, B backs out,
 LB and RB switch tabs, and Start plays. A guitar's frets and a kit's pads act as the face
-buttons (green is A, red is B), and strumming moves up and down.
+buttons (green is A, red is B), and strumming moves up and down, except while it's being
+tested. Leaving the Controllers tab, unplugging the device or pressing Play ends a test too.
 
 It opens:
 

@@ -195,7 +195,7 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
             // the instrument settings restart band3's drivers as they change
             input::ApplyInputSettings();
             // the devices are read only until Play: then they're the game's
-            device_panel_.Poll();
+            device_panel_.Poll(current_tab_ == Tab::kControllers);
             HandleNav(nav_->Feed(device_panel_.NavPads()));
             meters_drawn_ = false;
             DrawPage(io);
@@ -206,6 +206,7 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
             // nothing of the launcher's records once Play is pressed: the
             // game's own capture opens the microphones
             CloseMeters();
+            device_panel_.StopTest();
             nav_->Stop();
             DrawStarting(io);
         }
@@ -1307,7 +1308,10 @@ void LauncherDialog::DrawFooter() {
                                    "make them; Save keeps them for next time.");
                 if (!device_panel_.NavPads().empty()) {
                     ImGui::TextColored(kMuted, "With a controller: LB and RB switch tabs, Start "
-                                               "plays.");
+                                               "plays.%s",
+                                       current_tab_ == Tab::kControllers
+                                           ? " A on a device tests it; Back stops."
+                                           : "");
                 }
             }
             ImGui::PopTextWrapPos();
