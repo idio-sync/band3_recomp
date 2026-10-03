@@ -796,6 +796,7 @@ void LauncherDialog::RefreshDeviceLists() {
     if (due(current_tab_ == Tab::kGraphics && (shown("monitor") || shown("resolution")),
             next_monitors_)) {
         monitors_ = ListMonitors(host_.native_window ? host_.native_window() : nullptr);
+        monitors_generation_++;
     }
 }
 
@@ -1064,44 +1065,51 @@ void LauncherDialog::DrawResolution(const Setting& s) {
     }
     // the chosen monitor's modes; the default's is the one the window is on
     const int chosen = static_cast<int>(AsInt(model_.Value("monitor")).value_or(0));
-    const Monitor* monitor = nullptr;
-    if (chosen >= 1 && static_cast<size_t>(chosen) <= monitors_.size()) {
-        monitor = &monitors_[static_cast<size_t>(chosen - 1)];
-    } else {
-        for (const auto& m : monitors_) {
-            if (m.has_window || (!monitor && m.primary)) monitor = &m;
+    if (!resolution_lists_ || resolution_lists_->monitors_generation != monitors_generation_ ||
+        resolution_lists_->monitor != chosen) {
+        const Monitor* monitor = nullptr;
+        if (chosen >= 1 && static_cast<size_t>(chosen) <= monitors_.size()) {
+            monitor = &monitors_[static_cast<size_t>(chosen - 1)];
+        } else {
+            for (const auto& m : monitors_) {
+                if (m.has_window || (!monitor && m.primary)) monitor = &m;
+            }
+            if (!monitor) monitor = &monitors_.front();
         }
-        if (!monitor) monitor = &monitors_.front();
-    }
 
-    struct Entry {
-        std::string label;
-        std::string value;
-        int width = 0, height = 0;
-    };
-    // the monitor's sizes, once each (the setting has no refresh rate), and
-    // then the presets it doesn't have
-    std::vector<Entry> modes;
-    for (const DisplayMode& mode : monitor->modes) {
-        const bool listed = std::ranges::any_of(modes, [&](const Entry& e) {
-            return e.width == mode.width && e.height == mode.height;
-        });
-        if (listed) continue;
-        const bool desktop =
-            mode.width == monitor->current.width && mode.height == monitor->current.height;
-        modes.push_back({SizeLabel(mode.width, mode.height) + (desktop ? " (desktop)" : ""),
-                         std::to_string(mode.width) + "x" + std::to_string(mode.height),
-                         mode.width, mode.height});
+        // the monitor's sizes, once each (the setting has no refresh rate), and
+        // then the presets it doesn't have
+        ResolutionLists lists;
+        lists.monitors_generation = monitors_generation_;
+        lists.monitor = chosen;
+        for (const DisplayMode& mode : monitor->modes) {
+            const bool listed = std::ranges::any_of(lists.modes, [&](const ResolutionEntry& e) {
+                return e.width == mode.width && e.height == mode.height;
+            });
+            if (listed) continue;
+            const bool desktop =
+                mode.width == monitor->current.width && mode.height == monitor->current.height;
+            lists.modes.push_back(
+                {SizeLabel(mode.width, mode.height) + (desktop ? " (desktop)" : ""),
+                 std::to_string(mode.width) + "x" + std::to_string(mode.height), mode.width,
+                 mode.height});
+        }
+        for (const Choice& choice : s.choices) {
+            const auto size = ResolutionSize(choice.value);
+            if (!size) continue;
+            const bool listed = std::ranges::any_of(lists.modes, [&](const ResolutionEntry& e) {
+                return e.width == size->first && e.height == size->second;
+            });
+            if (!listed) {
+                lists.presets.push_back(
+                    {Str(choice.label), Str(choice.value), size->first, size->second});
+            }
+        }
+        resolution_lists_ = std::move(lists);
     }
-    std::vector<Entry> presets;
-    for (const Choice& choice : s.choices) {
-        const auto size = ResolutionSize(choice.value);
-        if (!size) continue;
-        const bool listed = std::ranges::any_of(modes, [&](const Entry& e) {
-            return e.width == size->first && e.height == size->second;
-        });
-        if (!listed) presets.push_back({Str(choice.label), Str(choice.value), size->first, size->second});
-    }
+    using Entry = ResolutionEntry;
+    const std::vector<Entry>& modes = resolution_lists_->modes;
+    const std::vector<Entry>& presets = resolution_lists_->presets;
 
     // the value selects the entry of its size, whichever way it's written
     const std::string value = model_.Value(s.cvar);

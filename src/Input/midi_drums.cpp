@@ -131,6 +131,11 @@ bool Kit::Pulse::IsCymbal() const {
 
 Kit::Kit(const NoteMap& notes, const Settings& settings) : notes_(notes), settings_(settings) {}
 
+void Kit::SetSettings(const Settings& settings) {
+    settings_ = settings;
+    if (!settings_.combos) combo_.clear();
+}
+
 const char* Kit::TrackCombo(Part part, Clock::time_point now) {
     if (!combo_.empty() && now >= combo_expiry_) combo_.clear();
 

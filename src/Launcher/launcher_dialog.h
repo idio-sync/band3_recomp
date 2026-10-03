@@ -244,6 +244,24 @@ private:
     std::chrono::steady_clock::time_point next_mics_{};
     std::chrono::steady_clock::time_point next_midi_{};
     std::chrono::steady_clock::time_point next_monitors_{};
+    // counts listings of monitors_, for resolution_lists_
+    unsigned monitors_generation_ = 0;
+    // a resolution dropdown entry (DrawResolution)
+    struct ResolutionEntry {
+        std::string label;
+        std::string value;
+        int width = 0, height = 0;
+    };
+    // DrawResolution's entries for a monitor: its sizes, once each, then the
+    // presets it doesn't have; made again when the monitors are listed again
+    // or another monitor is chosen, rather than every frame
+    struct ResolutionLists {
+        unsigned monitors_generation = 0;
+        int monitor = 0;
+        std::vector<ResolutionEntry> modes;
+        std::vector<ResolutionEntry> presets;
+    };
+    std::optional<ResolutionLists> resolution_lists_;
     // counts changes to mics_, so a meter that couldn't record tries again
     // once the microphones change
     unsigned mic_list_generation_ = 0;

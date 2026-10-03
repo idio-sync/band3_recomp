@@ -51,8 +51,11 @@ rex::input::InputSystem* GameInputSystem();
 void PrepareInputSystem(rex::ui::Window* window);
 
 // Follows the input settings the launcher may have changed (hid_instruments,
-// midi_drums*): starts or stops the HID and MIDI drivers. Cheap when nothing
-// changed, so call it every frame.
+// midi_drums*): starts or stops the HID and MIDI drivers. The MIDI driver
+// restarts only for its port, notes or midi_drums itself, once they have
+// stayed the same for a moment (so clicking through ports opens the kit once);
+// it follows its other settings (the Minimum velocity slider) as it runs.
+// Cheap when nothing changed, so call it every frame.
 void ApplyInputSettings();
 
 // input_backend names another backend than the launcher's input system uses
@@ -64,7 +67,7 @@ bool InputBackendChanged();
 // launcher saw connected, so the game's first reads announce them as at a
 // start without the launcher (the SDK tells the game when a player connects,
 // which it can't do before the runtime exists). The devices stay open for the
-// game; ReadInputDevice refuses from here on.
+// game; ReadInputCaps and ReadInputState refuse from here on.
 void ReadyInputForGame();
 
 struct InputDevice {
@@ -82,15 +85,13 @@ struct InputDevice {
 // since nothing else asks the input system yet; once the game runs, any thread.
 std::vector<InputDevice> PlayerDevices();
 
-struct DeviceReading {
-    Caps360 caps;
-    Gamepad360 state;
-};
-
-// One device's capabilities and state, as the game would read them on its
+// One device's capabilities, or its state, as the game would read them on its
 // player; nullopt once it's gone, or once the game has the input system. Read
 // on a player the device doesn't feed, so the read can't change which of a
-// player's devices the game reads first.
-std::optional<DeviceReading> ReadInputDevice(uint64_t id);
+// player's devices the game reads first. Every read makes the SDK look for
+// devices again, so read the capabilities when the device list is taken, and
+// only the state every frame.
+std::optional<Caps360> ReadInputCaps(uint64_t id);
+std::optional<Gamepad360> ReadInputState(uint64_t id);
 
 }

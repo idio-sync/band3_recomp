@@ -16,6 +16,13 @@ std::unique_ptr<rex::input::InputDriver> CreateMidiDrumsDriver();
 // the MIDI drums driver's kit
 bool IsMidiDrums(const rex::input::DeviceInfo& device);
 
+// Hands the running driver midi_drums_pulse_ms, midi_drums_min_velocity and
+// midi_drums_combos as they are now, which it plays by from its next MIDI
+// message on, without a restart: the launcher's slider changes them every
+// frame of a drag. The other settings (the port, the notes) are read when the
+// driver starts. UI thread; does nothing while no driver runs.
+void UpdateMidiDrumsSettings();
+
 // For the Instrument Lab.
 struct MidiDrumsStatus {
     bool running = false;

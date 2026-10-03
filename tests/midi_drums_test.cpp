@@ -203,3 +203,30 @@ TEST_CASE("combos time out, restart after a stray note, and can be turned off") 
     CHECK(hit->combo == nullptr);
     CHECK(plain.State(t0 + 41ms).pads[kRedPad] == 100);
 }
+
+TEST_CASE("settings changed while the kit plays apply from the next hit") {
+    Kit kit = DefaultKit();
+    kit.Receive(NoteOn(kSnareNote, 20), t0);
+    CHECK(kit.State(t0 + 1ms).pads[kRedPad] == 20);
+
+    // the launcher's Minimum velocity slider, dragged while the kit runs
+    Settings louder;
+    louder.min_velocity = 50;
+    louder.pulse = 60ms;
+    kit.SetSettings(louder);
+    kit.Receive(NoteOn(kHiTomNote, 20), t0 + 100ms);
+    CHECK(kit.State(t0 + 101ms).pads[kYellowPad] == 0);
+    kit.Receive(NoteOn(kHiTomNote, 80), t0 + 200ms);
+    CHECK(kit.State(t0 + 250ms).pads[kYellowPad] == 80);
+    CHECK(kit.State(t0 + 260ms).pads[kYellowPad] == 0);
+
+    // turning combos off drops one in progress
+    Kit combos = DefaultKit();
+    for (int i = 0; i < 3; i++) combos.Receive(NoteOn(kHihatPedalNote), t0 + i * 10ms);
+    Settings off;
+    off.combos = false;
+    combos.SetSettings(off);
+    combos.SetSettings({});
+    const auto hit = combos.Receive(NoteOn(kSnareNote), t0 + 40ms);
+    CHECK(hit->combo == nullptr);
+}

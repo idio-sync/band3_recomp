@@ -16,9 +16,13 @@
 
 namespace band3::launcher {
 
-// The SDK's stand-in controller ("None"), which reads as a controller that
-// never presses anything, as against the keyboard and mouse (with mnk_mode):
-// both are synthetic devices, told apart by name.
+// The SDK's stand-in controller, which reads as a controller that never
+// presses anything, as against the keyboard and mouse (with mnk_mode): both
+// are synthetic devices, told apart by name. The SDK's names, from its
+// rexruntime.dll: the stand-in (NopInputDriver, id "NOP") is "None"; the
+// keyboard (MnkInputDriver, id "MNK") is "Keyboard and Mouse", or "Keyboard"
+// in one of its modes. Anything synthetic not named for a keyboard or mouse
+// counts as a stand-in.
 bool IsStandIn(input::DeviceKind kind, std::string_view name);
 
 // what a device is, for the device list: "Controller", "Xbox 360 guitar",

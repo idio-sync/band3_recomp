@@ -20,6 +20,7 @@ add_executable(band3_tests
     ps4_instruments_test.cpp
     hid_capture_test.cpp
     midi_drums_test.cpp
+    restart_debounce_test.cpp
     menu_shortcut_test.cpp
     usb_mic_test.cpp
     game_status_test.cpp

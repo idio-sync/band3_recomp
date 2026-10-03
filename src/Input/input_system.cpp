@@ -1,6 +1,7 @@
 #include "input_system.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -14,6 +15,7 @@
 #include "input_lock.h"
 #include "midi_drums_driver.h"
 #include "player_slots.h"
+#include "restart_debounce.h"
 #include "src/settings.h"
 #include "virtual_instrument.h"
 #include "xinput_state.h"
@@ -208,22 +210,37 @@ private:
     std::unique_ptr<rex::input::InputDriver> driver_;
 };
 
-// what the MIDI drums driver reads from the settings when it starts
+// what the MIDI drums driver reads from the settings only when it starts, so
+// a change restarts it
 struct MidiConfig {
     bool enabled = false;
     std::string device;
     std::string notes;
+
+    static MidiConfig Current() {
+        return {REXCVAR_GET(midi_drums), REXCVAR_GET(midi_drums_device),
+                REXCVAR_GET(midi_drums_notes)};
+    }
+    bool operator==(const MidiConfig&) const = default;
+};
+
+// what a running MIDI drums driver follows as it changes
+// (UpdateMidiDrumsSettings): the launcher's Minimum velocity slider changes it
+// every frame of a drag, which mustn't reopen the kit each time
+struct MidiLive {
     int32_t pulse_ms = 0;
     int32_t min_velocity = 0;
     bool combos = false;
 
-    static MidiConfig Current() {
-        return {REXCVAR_GET(midi_drums), REXCVAR_GET(midi_drums_device),
-                REXCVAR_GET(midi_drums_notes), REXCVAR_GET(midi_drums_pulse_ms),
-                REXCVAR_GET(midi_drums_min_velocity), REXCVAR_GET(midi_drums_combos)};
+    static MidiLive Current() {
+        return {REXCVAR_GET(midi_drums_pulse_ms), REXCVAR_GET(midi_drums_min_velocity),
+                REXCVAR_GET(midi_drums_combos)};
     }
-    bool operator==(const MidiConfig&) const = default;
+    bool operator==(const MidiLive&) const = default;
 };
+
+// how long the MIDI settings stay the same before the driver restarts for them
+constexpr std::chrono::milliseconds kMidiSettle{300};
 
 // the backend CreateDefaultInputSystem builds for input_backend as it is now
 std::string Backend() {
@@ -244,6 +261,12 @@ struct Built {
     DriverSlot* midi = nullptr;
     bool hid_on = false;
     MidiConfig midi_config;
+    MidiLive midi_live;
+    // the MIDI settings restart the driver once they settle: a dropdown
+    // clicked through, or a port typed and changed again, opens the kit once.
+    // hid_instruments is a checkbox, which changes once a click, so the HID
+    // driver restarts at once.
+    RestartDebounce<MidiConfig> midi_settle{kMidiSettle};
 
     // starts and stops the HID and MIDI drivers to match the settings, and
     // assigns the players again after any restart: a device the SDK still
@@ -258,9 +281,18 @@ struct Built {
         if (!(midi_wanted == midi_config)) {
             midi->Restart(midi_wanted.enabled ? &CreateMidiDrumsDriver : nullptr);
             midi_config = midi_wanted;
+            // a new driver reads them as it starts
+            midi_live = MidiLive::Current();
             restarted = true;
         }
         if (restarted && assignment) assignment->Reassign();
+    }
+
+    // hands the running MIDI driver the settings it follows, when they changed
+    void FollowLive(const MidiLive& wanted) {
+        if (wanted == midi_live) return;
+        UpdateMidiDrumsSettings();
+        midi_live = wanted;
     }
 };
 
@@ -280,6 +312,7 @@ Built Build() {
     built.system->AddDriver(std::move(hid));
     built.system->AddDriver(std::move(midi));
     built.Follow(REXCVAR_GET(hid_instruments), MidiConfig::Current());
+    built.midi_live = MidiLive::Current();
 
     auto assignment = std::make_unique<PlayerAssignment>();
     built.assignment = assignment.get();
@@ -294,6 +327,22 @@ std::optional<Built> g_prepared;
 // ReadyInputForGame was called: the game's from here on
 bool g_ready = false;
 
+// ApplyInputSettings; `settle` holds a MIDI restart back until its settings
+// have settled, which Play's last apply doesn't
+void ApplySettings(bool settle) {
+    if (!g_prepared || g_ready) return;
+    Built& built = *g_prepared;
+    const bool hid = REXCVAR_GET(hid_instruments);
+    const MidiConfig wanted = MidiConfig::Current();
+    const bool midi_due = settle ? built.midi_settle.Due(wanted, built.midi_config,
+                                                         std::chrono::steady_clock::now())
+                                 : !(wanted == built.midi_config);
+    built.FollowLive(MidiLive::Current());
+    if (hid == built.hid_on && !midi_due) return;
+    std::lock_guard<std::recursive_mutex> lock(InputLock());
+    built.Follow(hid, midi_due ? wanted : built.midi_config);
+}
+
 }
 
 std::unique_ptr<rex::system::IInputSystem> CreateInputSystem(bool tool_mode) {
@@ -301,7 +350,7 @@ std::unique_ptr<rex::system::IInputSystem> CreateInputSystem(bool tool_mode) {
 
     std::unique_ptr<rex::input::InputSystem> input;
     if (g_prepared) {
-        ApplyInputSettings();
+        ApplySettings(false);
         // Play restarts band3 for a new backend unless it couldn't (unsaved,
         // or under the test harness); then it applies at the next start
         if (const std::string backend = Backend(); backend != g_prepared->backend) {
@@ -336,18 +385,11 @@ bool InputBackendChanged() {
     return g_prepared && !g_ready && Backend() != g_prepared->backend;
 }
 
-void ApplyInputSettings() {
-    if (!g_prepared || g_ready) return;
-    const bool hid = REXCVAR_GET(hid_instruments);
-    const MidiConfig midi = MidiConfig::Current();
-    if (hid == g_prepared->hid_on && midi == g_prepared->midi_config) return;
-    std::lock_guard<std::recursive_mutex> lock(InputLock());
-    g_prepared->Follow(hid, midi);
-}
+void ApplyInputSettings() { ApplySettings(true); }
 
 void ReadyInputForGame() {
     if (!g_prepared || g_ready) return;
-    ApplyInputSettings();
+    ApplySettings(false);
     std::lock_guard<std::recursive_mutex> lock(InputLock());
     // a player with no device reads as disconnected, which the input system
     // notes without telling anyone while there's no runtime
@@ -380,21 +422,41 @@ std::vector<InputDevice> PlayerDevices() {
     return g_devices;
 }
 
-std::optional<DeviceReading> ReadInputDevice(uint64_t id) {
-    if (!g_prepared || g_ready) return std::nullopt;
+namespace {
+
+// Reads one device through `read(system, user)` on a player it doesn't feed,
+// which is handed just this device for the read, so the SDK's note of the
+// device each player last used (GetStateForUI) can't change which device the
+// game reads first. False if the read fails.
+template <typename Read>
+bool ReadAlone(uint64_t id, Read read) {
+    if (!g_prepared || g_ready) return false;
     std::lock_guard<std::recursive_mutex> lock(InputLock());
-    // a player it doesn't feed is handed just this device for the read, so the
-    // SDK's note of the device each player last used (GetStateForUI) can't
-    // change which device the game reads first
     PlayerAssignment& assignment = *g_prepared->assignment;
     const uint32_t user = assignment.Probe(static_cast<DeviceId>(id));
-    rex::input::X_INPUT_CAPABILITIES caps{};
-    rex::input::X_INPUT_STATE state{};
-    const bool ok = g_prepared->system->GetCapabilities(user, 0, &caps) == X_ERROR_SUCCESS &&
-                    g_prepared->system->GetStateForUI(user, &state) == X_ERROR_SUCCESS;
+    const bool ok = read(*g_prepared->system, user) == X_ERROR_SUCCESS;
     assignment.EndProbe();
+    return ok;
+}
+
+}
+
+std::optional<Caps360> ReadInputCaps(uint64_t id) {
+    rex::input::X_INPUT_CAPABILITIES caps{};
+    const bool ok = ReadAlone(id, [&](rex::input::InputSystem& system, uint32_t user) {
+        return system.GetCapabilities(user, 0, &caps);
+    });
     if (!ok) return std::nullopt;
-    return DeviceReading{LoadCaps(caps), LoadGamepad(state.gamepad)};
+    return LoadCaps(caps);
+}
+
+std::optional<Gamepad360> ReadInputState(uint64_t id) {
+    rex::input::X_INPUT_STATE state{};
+    const bool ok = ReadAlone(id, [&](rex::input::InputSystem& system, uint32_t user) {
+        return system.GetStateForUI(user, &state);
+    });
+    if (!ok) return std::nullopt;
+    return LoadGamepad(state.gamepad);
 }
 
 }

@@ -84,6 +84,10 @@ public:
     // what the kit is pressing at `now`
     DrumInputs State(Clock::time_point now);
 
+    // Changes the settings from here on, keeping the hits still sounding; with
+    // combos turned off, a combo in progress is dropped.
+    void SetSettings(const Settings& settings);
+
 private:
     struct Pulse {
         // when it started sounding; it lasts settings_.pulse from then

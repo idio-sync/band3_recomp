@@ -35,6 +35,12 @@ LB and RB switch tabs, and Start plays. A guitar's frets and a kit's pads act as
 buttons (green is A, red is B), and strumming moves up and down, except while it's being
 tested. Leaving the Controllers tab, unplugging the device or pressing Play ends a test too.
 
+The instrument settings on the Controllers tab apply as you change them, except **Input
+backend** (SDL or XInput): changing it applies when you press Play, which saves and restarts
+band3 on the new backend (the row says so). Under the [test harness](test-harness.md)
+band3 doesn't restart itself, so the game keeps the old backend until the next start. A
+changed MIDI port reopens the kit a moment after you stop changing it.
+
 It opens:
 
 - the first time band3 starts, including the first start after updating to a version that

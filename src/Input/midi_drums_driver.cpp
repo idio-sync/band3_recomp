@@ -46,6 +46,17 @@ bool Matches(const std::string& port, const std::string& wanted) {
     return Lower(port).find(Lower(wanted)) != std::string::npos;
 }
 
+// The settings the kit reads as it plays, as they are now: the ones a running
+// driver follows without a restart (UpdateMidiDrumsSettings). UI thread, or
+// Setup's.
+midi_drums::Settings LiveSettings() {
+    midi_drums::Settings settings;
+    settings.pulse = std::chrono::milliseconds(REXCVAR_GET(midi_drums_pulse_ms));
+    settings.min_velocity = static_cast<uint8_t>(REXCVAR_GET(midi_drums_min_velocity));
+    settings.combos = REXCVAR_GET(midi_drums_combos);
+    return settings;
+}
+
 void LogRtMidiError(RtMidiError::Type type, const std::string& text, void*) {
     if (type == RtMidiError::WARNING || type == RtMidiError::DEBUG_WARNING) {
         REXLOG_DEBUG("MIDI drums: {}", text);
@@ -65,12 +76,12 @@ public:
             REXLOG_WARN("MIDI drums: ignoring the note override \"{}\" (expected note=Part, "
                         "e.g. 44=Kick)", bad);
         }
-        midi_drums::Settings settings;
-        settings.pulse = std::chrono::milliseconds(REXCVAR_GET(midi_drums_pulse_ms));
-        settings.min_velocity = static_cast<uint8_t>(REXCVAR_GET(midi_drums_min_velocity));
-        settings.combos = REXCVAR_GET(midi_drums_combos);
-        kit_ = midi_drums::Kit(notes, settings);
-        min_velocity_ = settings.min_velocity;
+        {
+            const midi_drums::Settings settings = LiveSettings();
+            std::lock_guard<std::mutex> lock(mutex_);
+            kit_ = midi_drums::Kit(notes, settings);
+            min_velocity_ = settings.min_velocity;
+        }
         wanted_port_ = REXCVAR_GET(midi_drums_device);
 
         try {
@@ -150,6 +161,13 @@ public:
     static MidiDrumsDriver*& driver() {
         static MidiDrumsDriver* running = nullptr;
         return running;
+    }
+
+    // the settings the kit reads as it plays, changed while it runs
+    void Update(const midi_drums::Settings& settings) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        kit_.SetSettings(settings);
+        min_velocity_ = settings.min_velocity;
     }
 
     MidiDrumsStatus Status() {
@@ -249,11 +267,11 @@ private:
     std::unique_ptr<RtMidiIn> input_;
     std::unique_ptr<RtMidiIn> probe_;
     std::string wanted_port_;
-    uint8_t min_velocity_ = 0;
 
-    // shared by RtMidi's thread, guest threads and the Lab
+    // shared by RtMidi's thread, guest threads, the Lab and the launcher (Update)
     std::mutex mutex_;
     midi_drums::Kit kit_;
+    uint8_t min_velocity_ = 0;
     DeviceId id_ = DeviceId::kInvalid;
     std::string port_;
     std::vector<std::string> ports_;
@@ -269,6 +287,12 @@ std::unique_ptr<rex::input::InputDriver> CreateMidiDrumsDriver() {
 }
 
 bool IsMidiDrums(const DeviceInfo& device) { return device.guid.starts_with(kGuidPrefix); }
+
+void UpdateMidiDrumsSettings() {
+    const midi_drums::Settings settings = LiveSettings();
+    std::lock_guard<std::mutex> lock(MidiDrumsDriver::driver_mutex());
+    if (auto* driver = MidiDrumsDriver::driver()) driver->Update(settings);
+}
 
 MidiDrumsStatus GetMidiDrumsStatus() {
     std::lock_guard<std::mutex> lock(MidiDrumsDriver::driver_mutex());

@@ -12,7 +12,7 @@
 // system has, with the player each feeds, and the selected one drawn live
 // (guitar frets, strum, whammy and tilt; drum pads and cymbals flashing with
 // how hard they're hit; a controller's buttons and sticks), read as the game
-// would read it (input::ReadInputDevice). Picking a device's row tests it: it
+// would read it (input::ReadInputState). Picking a device's row tests it: it
 // plays the test view only, and stops moving around the launcher, until Back
 // is pressed on it or Stop clicked (TestMode). Before the game only: Poll and
 // Draw are called while the launcher's settings are edited, never after Play.
@@ -22,8 +22,10 @@ namespace band3::launcher {
 class DevicePanel {
 public:
     // Looks for devices again every quarter second (hotplugs), and reads every
-    // device gamepad navigation uses, and the selected one. Once a frame;
-    // `showing` is whether the Controllers tab shows (a test ends when not).
+    // device gamepad navigation uses, and the selected one while the tab
+    // shows: their state each frame, their capabilities once a list (each read
+    // makes the SDK look for devices again). Once a frame; `showing` is
+    // whether the Controllers tab shows (a test ends when not).
     void Poll(bool showing);
 
     // ends the test, at Play
@@ -41,8 +43,12 @@ private:
 
     struct Device {
         input::InputDevice info;
-        // this frame's reading, for devices Poll reads
-        std::optional<input::DeviceReading> reading;
+        // its capabilities, read once for each device list, the first time
+        // Poll reads it; nullopt when it couldn't be read
+        std::optional<input::Caps360> caps;
+        bool caps_read = false;
+        // this frame's state, for devices Poll reads
+        std::optional<input::Gamepad360> state;
     };
 
     // a pad, cymbal or kick's last hit, for its flash

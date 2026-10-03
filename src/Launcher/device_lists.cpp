@@ -20,11 +20,15 @@
 namespace band3::launcher {
 
 std::vector<std::string> RecordingDeviceNames() {
+    // said once, not at every listing, until SDL's audio starts again
+    static bool warned = false;
     std::vector<std::string> names;
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-        REXLOG_WARN("Launcher: can't list microphones ({})", SDL_GetError());
+        if (!warned) REXLOG_WARN("Launcher: can't list microphones ({})", SDL_GetError());
+        warned = true;
         return names;
     }
+    warned = false;
     int count = 0;
     if (SDL_AudioDeviceID* ids = SDL_GetAudioRecordingDevices(&count)) {
         for (int i = 0; i < count; i++) {

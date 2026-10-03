@@ -37,8 +37,13 @@ TEST_CASE("devices are labelled by kind, and pads and instruments by the subtype
 }
 
 TEST_CASE("the SDK's stand-in is told from the keyboard by name") {
+    // the names the SDK's drivers give them (rexruntime.dll): NopInputDriver's
+    // stand-in, and MnkInputDriver's keyboard in its two modes
     CHECK(IsStandIn(DeviceKind::kSynthetic, "None"));
     CHECK_FALSE(IsStandIn(DeviceKind::kSynthetic, "Keyboard and Mouse"));
+    CHECK_FALSE(IsStandIn(DeviceKind::kSynthetic, "Keyboard"));
+    CHECK(DeviceKindLabel(DeviceKind::kSynthetic, "Keyboard", std::nullopt) ==
+          "Keyboard and mouse");
     CHECK_FALSE(IsStandIn(DeviceKind::kSynthetic, "mouse"));
     CHECK_FALSE(IsStandIn(DeviceKind::kPad, "None"));
 }

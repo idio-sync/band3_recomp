@@ -89,9 +89,11 @@ void Stick(ImDrawList* draw, const ImVec2& center, float radius, int16_t x, int1
 void DevicePanel::Poll(bool showing) {
     const Clock::time_point now = Clock::now();
     if (!listed_ || now >= next_list_) {
+        // the capabilities are read again for the new list
         devices_.clear();
         for (input::InputDevice& info : input::PlayerDevices()) {
-            devices_.push_back({std::move(info), std::nullopt});
+            Device& device = devices_.emplace_back();
+            device.info = std::move(info);
         }
         listed_ = true;
         next_list_ = now + std::chrono::milliseconds(250);
@@ -105,13 +107,20 @@ void DevicePanel::Poll(bool showing) {
     nav_pads_.clear();
     for (Device& device : devices_) {
         const bool nav = DrivesNavigation(device.info.kind);
-        const bool shown = selected_ == device.info.id;
-        device.reading = nav || shown ? input::ReadInputDevice(device.info.id) : std::nullopt;
-        if (!device.reading) continue;
-        sub_types_[device.info.id] = device.reading->caps.sub_type;
-        if (nav) {
-            nav_pads_.push_back(test_.Filter(
-                device.info.id, NavFromReading(device.reading->caps, device.reading->state)));
+        // the selected one is drawn only while the tab shows
+        const bool shown = showing && selected_ == device.info.id;
+        device.state.reset();
+        if (!nav && !shown) continue;
+        if (!device.caps_read) {
+            device.caps = input::ReadInputCaps(device.info.id);
+            device.caps_read = true;
+            if (device.caps) sub_types_[device.info.id] = device.caps->sub_type;
+        }
+        if (!device.caps) continue;
+        device.state = input::ReadInputState(device.info.id);
+        if (nav && device.state) {
+            nav_pads_.push_back(
+                test_.Filter(device.info.id, NavFromReading(*device.caps, *device.state)));
         }
     }
 }
@@ -242,11 +251,11 @@ void DevicePanel::DrawTestView(const Device& device) {
             ImGui::TextColored(kMuted, "It also moves around the launcher. Click its row, or press "
                                        "A on it, to test it on its own.");
         }
-        if (!device.reading) {
+        if (!device.caps || !device.state) {
             ImGui::TextColored(kMuted, "Can't read it right now.");
         } else {
-            const input::Caps360& caps = device.reading->caps;
-            const input::Gamepad360& state = device.reading->state;
+            const input::Caps360& caps = *device.caps;
+            const input::Gamepad360& state = *device.state;
             const TestView view = ViewFor(caps);
             const bool gamepad = caps.sub_type == input::kSubtypeGamepad;
             if (IsStandIn(d.kind, d.name)) {
