@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <functional>
 
+#include "src/Render/frame_compose.h"
+
 // Experimental (N3): while the native renderer draws the window (renderer =
 // native), the emulated GPU stops drawing what nobody sees. gpu_skip.cpp
 // overrides the guest's D3D draw emitters (the generated functions are weak,
@@ -40,11 +42,33 @@ class SkipLatch {
  public:
     // The frame being drawn has just been swapped (its Present ran): `want`,
     // whether the next would be skipped as things stand; `full`, whole frames
-    // asked for since the last call (RequestFullFrames), which go first.
+    // asked for since the last call (RequestFullFrames), which go first;
+    // `proc`, what the swapped frame drew (its ProcCommands, frame_compose.h's
+    // kProcWorld and kProcPost), or -1 if it didn't say (no DoPostProcess).
     // Returns whether the next frame is skipped.
-    bool EndFrame(bool want, int full) {
-        // a frame drawn while not skipping was drawn whole
-        whole_ = skipping_ ? 0 : std::min(whole_ + 1, kWholeMax);
+    bool EndFrame(bool want, int full, int proc = -1) {
+        if (skipping_) {
+            whole_ = 0;
+            world_ = false;
+            game_frames_ = 0;
+        } else {
+            // a frame drawn while not skipping was drawn whole
+            whole_ = std::min(whole_ + 1, kWholeMax);
+            const bool world = proc >= 0 && (proc & kProcWorld);
+            const bool post = proc >= 0 && (proc & kProcPost);
+            world_ |= world;
+            // Whether this frame's picture is the game's. With even/odd
+            // rendering a post frame shows the world frame before it,
+            // post-processed, and a frame that post-processes nothing shows
+            // the post buffer the last post frame made (frame_compose.h): the
+            // game's once a post frame has followed a whole world frame,
+            // whichever came first after skipping stopped. A frame that draws
+            // its world and post-processes it (7), or doesn't say, is.
+            bool game = game_frames_ > 0;
+            if (proc < 0 || (world && post)) game = true;
+            else if (post) game = world_;
+            game_frames_ = game ? std::min(game_frames_ + 1, kWholeMax) : 0;
+        }
         full_ = std::max(full_, full);
         if (full_ > 0) {
             full_--;
@@ -56,10 +80,13 @@ class SkipLatch {
     }
     // whether the frame being drawn now is skipped
     bool Skipping() const { return skipping_; }
-    // The emulated GPU's picture is the game's: the last two frames swapped
-    // were drawn whole. Two, as with even/odd rendering a frame shows the
-    // world the one before drew. True before the first frame.
-    bool Fresh() const { return whole_ >= 2; }
+    // The emulated GPU's picture is the game's: a frame whose picture is the
+    // game's (EndFrame) was swapped, and kPresenterLag whole frames after it.
+    // The emulated GPU swaps a frame after the game's Present returns, so its
+    // presenter shows the frame before the one just presented: after F8 back
+    // with one frame fewer, the window showed a black world for a frame
+    // (out/n5/fix). True before the first frame.
+    bool Fresh() const { return game_frames_ > kPresenterLag; }
     // the frames swapped whole since the last skipped one (2 before the
     // first frame, at most kWholeMax)
     int WholeFrames() const { return whole_; }
@@ -68,9 +95,14 @@ class SkipLatch {
 
  private:
     static constexpr int kWholeMax = 1 << 20;
+    static constexpr int kPresenterLag = 1;
     bool skipping_ = false;
     int whole_ = 2;
     int full_ = 0;
+    // a world frame was swapped whole since the last skipped one; and the
+    // frames swapped in a row whose pictures are the game's (Fresh)
+    bool world_ = true;
+    int game_frames_ = kPresenterLag + 1;
 };
 
 // The draw emitters' calls since the game started, by kind: BeginIndexedVertices
@@ -102,8 +134,9 @@ GpuSkipStats GpuSkipStatsSince(const GpuSkipStats& now, const GpuSkipStats& befo
 // At the end of the game's DxRnd::Present hook, once the frame is captured:
 // decides whether the next frame is skipped. `capture_on`: capture is on;
 // `recording`: texture passes are recorded (native_view_record_targets, or
-// renderer has been native).
-void LatchGpuSkip(bool capture_on, bool recording);
+// renderer has been native); `proc`: the frame's ProcCommands, -1 if its
+// DoPostProcess didn't run (SkipLatch::EndFrame).
+void LatchGpuSkip(bool capture_on, bool recording, int proc);
 
 // scene_capture.cpp's BeginPass: the texture pass opening isn't one drawn
 // regularly, so its draws reach the emulated GPU; false when it ends or is
@@ -137,7 +170,7 @@ inline constexpr int kWholeFramesToHold = 30;
 void RequestFullFrames(int frames);
 
 // Called on the game's thread when the emulated picture turns fresh after
-// being stale (skipping stopped and two whole frames were swapped): the
+// being stale (skipping stopped and whole frames were swapped: Fresh): the
 // native renderer's drawer, which keeps drawing the window until then after
 // F8 back to emulated. Null to clear; any thread.
 void SetEmulatedFreshCallback(std::function<void()> callback);

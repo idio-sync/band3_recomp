@@ -3105,11 +3105,20 @@ extern "C" REX_FUNC(DxTex__SyncBitmap) {
     __imp__DxTex__SyncBitmap(ctx, base);
 }
 
+// what ProcCommands asked of the frame being drawn, as DxRnd::DoPostProcess
+// found it, for LatchGpuSkip at its Present (whether the emulated GPU's
+// picture is the game's again); -1 until it runs (some menus' frames don't)
+namespace {
+std::atomic<int32_t> g_frame_proc{-1};
+}  // namespace
+
 // DxRnd::DoPostProcess, at its start: where the frame's post-processing
 // begins in its draws, what ProcCommands asked of the frame, and what its
 // post-processing is set to do
 extern "C" REX_FUNC(DxRnd__DoPostProcess) {
     SCOPE_profile_cpu_f("RB3 DxRnd::DoPostProcess");
+    g_frame_proc.store(int32_t(REX_LOAD_U32(ctx.r3.u32 + kRnd_ProcCmds)),
+                       std::memory_order_relaxed);
     if (g_enabled.load(std::memory_order_relaxed)) {
         std::lock_guard lock(g_state_mutex);
         HookTimer timer(CaptureProfile::kHookOther);
@@ -3262,7 +3271,8 @@ extern "C" REX_FUNC(DxRnd__Present) {
     // whether the emulated GPU draws the next frame, now this one is captured
     // (so it's skipped only if capture has it whole), and before it's held
     LatchGpuSkip(g_enabled.load(std::memory_order_relaxed),
-                 g_record_targets.load(std::memory_order_relaxed));
+                 g_record_targets.load(std::memory_order_relaxed),
+                 g_frame_proc.exchange(-1, std::memory_order_relaxed));
     // held without the lock, which a texture let go of on another thread
     // meanwhile takes
     if (done) HoldIfRequested(done);

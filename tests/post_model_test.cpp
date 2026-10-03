@@ -441,6 +441,17 @@ TEST_CASE("PlanPost takes the composite's constants, on frames that drew post") 
     REQUIRE(PlanPost(f, 0, plan));
     CHECK(plan.composite.flags.x == (kPostBloom | kPostXfm));
 
+    // with no proc current (the results screen) the composite still runs by
+    // its flags and constants; a world frame has nothing to work its out from
+    f.post.proc = 0;
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK(plan.composite.flags.x == (kPostBloom | kPostXfm));
+    CHECK(Near(plan.composite.c6.x, 0.25f));
+    f.proc_cmds = 1;
+    CHECK_FALSE(PlanPost(f, 0, plan));
+    f.proc_cmds = 2;
+    f.post.proc = 0x1000;
+
     f.post.disabled = 1;
     CHECK_FALSE(PlanPost(f, 0, plan));
 }

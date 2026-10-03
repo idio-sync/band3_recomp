@@ -17,11 +17,13 @@
 // draws before post_boundary are no world. Composed, it has.
 //
 // A world frame's capture is published as it is, its own world with its own
-// overlay: the game presents the world frame before it there, one world
-// behind, but its next frame presents this world, so the native view is a
-// frame ahead of the game, never showing a world the game didn't. Render
-// checks pair the game's picture with a post frame's capture, where the two
-// are the same world and the same overlay (PresentsCapturedWorld).
+// overlay, but the game presents the post buffer there, the last post
+// frame's picture (the world frame before it, post-processed), under the
+// world frame's overlay: so does the live view, which keeps that picture
+// (soft_raster.h's RasterOptions::post_buffer, ShowsPostBuffer). Drawn
+// alone (replay), it's its own world, post-processed as its parameters say.
+// Render checks pair the game's picture with a post frame's capture, where
+// the two are the same world and the same overlay (PresentsCapturedWorld).
 //
 // With even/odd rendering off every frame is 7 (world, post and characters),
 // and nothing is composed.
@@ -53,6 +55,29 @@ inline bool DrawsWorld(const FrameCapture& fc) {
 inline bool PresentsCapturedWorld(const FrameCapture& fc) {
     if (!(fc.proc_cmds & kProcPost)) return false;
     return (fc.proc_cmds & kProcWorld) || fc.composed;
+}
+
+// Whether the game's picture of the frame is the post buffer as the last
+// post frame left it (its picture before the overlay), under the frame's own
+// overlay: a frame that says what it drew and post-processed nothing, a world
+// frame (1) or one that drew neither (0). DxRnd::DoPostProcess copies the
+// post buffer to the screen every frame (CopyPostProcess), and only a post
+// frame's FinishPostProcess makes it anew (SavePostBuffer).
+inline bool ShowsPostBuffer(const FrameCapture& fc) {
+    return ProcKnown(fc) && !(fc.proc_cmds & kProcPost);
+}
+
+// The most game frames after the post frame whose picture it is that the
+// live view shows the post buffer (RasterOptions::post_buffer): even/odd
+// rendering's longest period (frame_pacing.h, 6 at background_fps 20 and
+// refresh_rate 120) and frames the live view didn't get to, with room to
+// spare; one older is another moment's (the view was off, or the capture),
+// and the frame draws its own world instead.
+inline constexpr uint64_t kPostBufferFrames = 16;
+
+// whether a post buffer from game frame `kept` (0 none) is for `fc`'s
+inline bool PostBufferFor(const FrameCapture& fc, uint64_t kept) {
+    return kept && kept < fc.game_frame && fc.game_frame - kept <= kPostBufferFrames;
 }
 
 // `frame` (a frame that drew no world) with `world`'s in front of its overlay:

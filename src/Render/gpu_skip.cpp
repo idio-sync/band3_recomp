@@ -93,7 +93,7 @@ bool Emit(int kind) {
 
 }  // namespace
 
-void LatchGpuSkip(bool capture_on, bool recording) {
+void LatchGpuSkip(bool capture_on, bool recording, int proc) {
     TrackSettings();
     const bool want = g_renderer_native.load(std::memory_order_relaxed) &&
                       g_skip_setting.load(std::memory_order_relaxed) && capture_on && recording;
@@ -103,7 +103,7 @@ void LatchGpuSkip(bool capture_on, bool recording) {
     {
         std::lock_guard lock(g_latch_mutex);
         was_fresh = g_latch.Fresh();
-        skip = g_latch.EndFrame(want, full);
+        skip = g_latch.EndFrame(want, full, proc);
         fresh = g_latch.Fresh();
         whole = g_latch.WholeFrames();
     }

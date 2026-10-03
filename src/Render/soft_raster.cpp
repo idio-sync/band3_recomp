@@ -1,5 +1,6 @@
 #include "src/Render/soft_raster.h"
 
+#include "src/Render/frame_compose.h"
 #include "src/Render/post_model.h"
 #include "src/Render/sample_model.h"
 #include "src/Render/shade_model.h"
@@ -1212,6 +1213,15 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     post::PostPlan post_plan;
     const bool post_on = o.post && o.view == RasterView::kFinal &&
                          post::PlanPost(frame, o.post_only, post_plan, o.grain, o.velocity);
+    // the post buffer (RasterOptions::post_buffer): a post frame's picture
+    // kept, and shown by the frames after it that post-process nothing, in
+    // place of their world, which isn't drawn
+    post::PostHistory* const kept =
+        o.post_buffer && o.view == RasterView::kFinal ? o.post_history : nullptr;
+    const bool shows_kept = kept && ShowsPostBuffer(frame) && kept->picture_w == o.width &&
+                            kept->picture_h == o.height &&
+                            PostBufferFor(frame, kept->picture_frame);
+    const bool keeps = kept && ProcKnown(frame) && (frame.proc_cmds & kProcPost);
     const BackBufferLayout layout = LayoutBackBuffer(frame);
     // the scene into the picture, at post_boundary (or the frame's end):
     // post-processed, or as it is. A view of the scene target ends the frame
@@ -1224,7 +1234,9 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     // overlay draws to come, not the frame's end).
     auto resolve = [&](bool overlay_follows) {
         back = &overlay;
-        if (post_on) {
+        if (shows_kept) {
+            rgba = kept->picture;
+        } else if (post_on) {
             // the spotlights' passes, drawn before it (Plan keeps them)
             auto image = [&](uint32_t tex_obj) {
                 const auto f = rts.find(tex_obj);
@@ -1250,6 +1262,12 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                 }
                 rgba[i] = g | g << 8 | g << 16 | 0xff000000u;
             }
+        }
+        if (keeps) {
+            kept->picture = rgba;
+            kept->picture_w = o.width;
+            kept->picture_h = o.height;
+            kept->picture_frame = frame.game_frame;
         }
         if (refracts) {
             behind = rgba;
@@ -1280,7 +1298,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         if (!run.pass) {
             for (uint32_t i = run.first; i < run.end; i++) {
                 const DrawItem& it = frame.draws[i];
-                if (!DrawnToBackBuffer(it)) continue;
+                if (!DrawnToBackBuffer(it) || (shows_kept && i < frame.post_boundary)) continue;
                 if (back == &world && i >= frame.post_boundary) resolve(true);
                 if (back == &overlay && o.view != RasterView::kFinal) break;
                 // (a DrawRect quad has no camera of its own)

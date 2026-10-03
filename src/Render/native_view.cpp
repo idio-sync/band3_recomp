@@ -365,6 +365,9 @@ class Renderer {
                 // before (the CPU's kept here, the GPU's in GpuRenderer)
                 o.trails = true;
                 o.post_history = &post_history_;
+                // and the frames that post-process nothing show the post
+                // buffer, as the game's do, not their own world
+                o.post_buffer = true;
                 gpu = gpu_;
                 dump = dump_path_;
                 zero_copy = present_ && present_zero_copy_ && gpu && dump.empty();
@@ -509,7 +512,8 @@ class Renderer {
 
     std::mutex mutex_;
     std::thread thread_;
-    // the CPU's post buffer for the trails, the worker's alone
+    // the CPU's post buffer, for the trails and the frames that show it, the
+    // worker's alone
     post::PostHistory post_history_;
     int users_ = 0;
     bool stop_ = false;
@@ -1007,8 +1011,10 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
     // UI thread where the GPU device starts, and is let go when it turns
     // emulated, once the emulated GPU's picture is the game's again: while
     // native it skipped the game's draws (gpu_skip.h), so it keeps drawing
-    // the window until the emulated GPU has swapped two whole frames
-    // (gpu_skip.cpp calls back then), or kMaxDrain has gone by
+    // the window until the emulated GPU has swapped whole frames enough
+    // (SkipLatch::Fresh: two, and with even/odd rendering a post frame after
+    // a whole world frame; gpu_skip.cpp calls back then), or kMaxDrain has
+    // gone by
     // (`at_once`: at shutdown, without waiting)
     void Follow(bool native, bool at_once = false) {
         // native again while draining: it just goes on

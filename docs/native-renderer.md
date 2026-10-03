@@ -19,7 +19,10 @@ Turning native on makes the native renderer's GPU pipelines first, on the UI thr
 100 ms, once a session), so no frame waits for one; the log says `native view gpu: <n>
 pipelines ... in <ms>`, and names any pipeline a frame still had to wait for after that
 (`pipeline made after warm-up: <key> (<ms>)`). Each frame is drawn as soon as the game
-presents it and shown by the window's next paint. The test harness's `present_stats`
+presents it and shown by the window's next paint. With RB3's even/odd rendering (on, as
+the game ships), a frame that draws the world but doesn't post-process it shows what the
+game's does: the last post-processed picture (the world frame before it, with its
+spotlights' beams, smoke and bloom) under its own track and HUD. The test harness's `present_stats`
 measures the window's pacing under either renderer.
 
 While `renderer` is native, the passes RB3 draws into textures are recorded all the time,
@@ -37,8 +40,9 @@ sees (`emulated_gpu_while_native`, `skip_draws` by default): the meshes, instanc
 quads of every frame the native renderer has whole. It still clears, resolves and swaps, and
 still draws the passes RB3 draws into textures once or now and then (outfits, portraits;
 the first two of any pass), and the lens flares' occlusion tests, so after F8 back to emulated
-its picture is the game's within two frames: the native renderer keeps drawing the window
-until it is (the log says `native present: off, the emulated GPU's picture shows (after <ms>)`).
+its picture is the game's within a few frames (two, and with even/odd rendering a world
+frame drawn whole and the post frame after it, a frame later on screen): the native
+renderer keeps drawing the window until it is (the log says `native present: off, the emulated GPU's picture shows (after <ms>)`).
 The title screen's clouds are the exception found so far: they take 5 to 20 whole frames to
 come back, so the emulated GPU's picture of the title lacks them for a moment after F8 back.
 `capture` under `skip_draws` has the emulated GPU draw 30 whole frames before it holds one,

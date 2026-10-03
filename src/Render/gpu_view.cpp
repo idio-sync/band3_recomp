@@ -1,5 +1,6 @@
 #include "src/Render/gpu_view.h"
 
+#include "src/Render/frame_compose.h"
 #include "src/Render/gamma_ramp.h"
 #include "src/Render/post_model.h"
 #include "src/Render/sample_model.h"
@@ -437,6 +438,17 @@ struct GpuRenderer::Impl {
         uint64_t game_frame = 0;
     };
     History history;
+    // The post buffer as the screen shows it (RasterOptions::post_buffer,
+    // the live view's): the last post frame's picture before its overlay, at
+    // the picture's size, from game frame game_frame (0 none), which the
+    // frames after it that post-process nothing show under their own
+    // overlay. Apart from the frame's targets, as the history is.
+    struct PostBuffer {
+        SDL_GPUTexture* tex = nullptr;
+        uint32_t w = 0, h = 0;
+        uint64_t game_frame = 0;
+    };
+    PostBuffer post_buffer;
 
     // The presenter's outputs (RenderFrameToOutput), each at the size it was
     // last drawn at: apart from the frame's targets, so a frame drawn at
@@ -623,6 +635,9 @@ struct GpuRenderer::Impl {
     SDL_GPUGraphicsPipeline* MakeVelocityObjectPipeline(CullWinding cull);
     bool EnsureHistory(uint32_t w, uint32_t h);
     void ReleaseHistory();
+    // the post buffer at w x h, emptied (game_frame 0) if it's made again
+    bool EnsurePostBuffer(uint32_t w, uint32_t h);
+    void ReleasePostBuffer();
     void ReleaseTargets();
     // makes every pipeline a frame can ask for and the upload buffer's usual
     // size, so no frame stalls making them: the overlay's at overlay_samples
@@ -1031,6 +1046,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
         if (no_bones) SDL_ReleaseGPUBuffer(device, no_bones);
         ReleaseTargets();
         ReleaseHistory();
+        ReleasePostBuffer();
         ReleaseOutputs();
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
         SDL_DestroyGPUDevice(device);
@@ -1062,6 +1078,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     white = black = no_depth = nullptr;
     ReleaseTargets();  // released above: forgets them
     ReleaseHistory();
+    ReleasePostBuffer();
     ReleaseOutputs();
     depth_sampled = false;
     no_bones = nullptr;
@@ -1613,6 +1630,29 @@ bool GpuRenderer::Impl::EnsureHistory(uint32_t w, uint32_t h) {
     return true;
 }
 
+void GpuRenderer::Impl::ReleasePostBuffer() {
+    if (device && post_buffer.tex) SDL_ReleaseGPUTexture(device, post_buffer.tex);
+    post_buffer = PostBuffer{};
+}
+
+bool GpuRenderer::Impl::EnsurePostBuffer(uint32_t w, uint32_t h) {
+    if (post_buffer.tex && post_buffer.w == w && post_buffer.h == h) return true;
+    ReleasePostBuffer();
+    SDL_GPUTextureCreateInfo ti{};
+    ti.type = SDL_GPU_TEXTURETYPE_2D;
+    ti.width = w;
+    ti.height = h;
+    ti.layer_count_or_depth = 1;
+    ti.num_levels = 1;
+    ti.format = kColorFormat;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    post_buffer.tex = SDL_CreateGPUTexture(device, &ti);
+    if (!post_buffer.tex) return false;
+    post_buffer.w = w;
+    post_buffer.h = h;
+    return true;
+}
+
 bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     if (color && w == width && h == height) return true;
     ReleaseTargets();
@@ -1946,6 +1986,15 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     for (auto& v : normal_source) v.assign(frame.draws.size(), kSourceNone);
     spot_draw.assign(frame.draws.size(), kSpotNone);
     const std::vector<PassRun> runs = PlanPasses(frame, o);
+    // the post buffer (RasterOptions::post_buffer): a post frame's picture
+    // kept, and shown by the frames after it that post-process nothing, in
+    // place of their world, whose draws are left out
+    const bool kept_buffer = o.post_buffer && o.view == RasterView::kFinal;
+    const bool shows_kept = kept_buffer && ShowsPostBuffer(frame) && post_buffer.tex &&
+                            post_buffer.w == width && post_buffer.h == height &&
+                            PostBufferFor(frame, post_buffer.game_frame);
+    const bool keeps = kept_buffer && ProcKnown(frame) && (frame.proc_cmds & kProcPost) &&
+                       EnsurePostBuffer(width, height);
     run_clear.assign(runs.size(), 0);
     uint32_t pool_vert_count = 0, pool_index_count = 0;
     // a geometry this frame draws: in the arena already, or into it from
@@ -2001,6 +2050,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         for (size_t d = run.first; d < run.end; d++) {
             const DrawItem& it = frame.draws[d];
             if (!DrawnIn(run, frame, it, o)) continue;
+            if (!run.pass && shows_kept && d < frame.post_boundary) continue;
             const ShadeState* state = shade::ShadeOf(frame, it);
             // the depth volume's blurs read a copy of it, not its quad's
             // texture (so they don't count as sampling a target nothing drew);
@@ -2659,12 +2709,27 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             begin_back(true);
             end_pass();
         }
-        if (post_on) {
+        // the post buffer as the picture, or the picture kept as it
+        if (shows_kept) {
+            SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+            const SDL_GPUTextureLocation from{post_buffer.tex, 0, 0, 0, 0, 0};
+            const SDL_GPUTextureLocation to{color, 0, 0, 0, 0, 0};
+            SDL_CopyGPUTextureToTexture(copy, &from, &to, width, height, 1, false);
+            SDL_EndGPUCopyPass(copy);
+        } else if (post_on) {
             post_process();
         } else {
             post::PostPass p{};
             p.mode = {uint32_t(o.view), 0, 0, 0};
             fullscreen(color, width, height, resolve_pipeline, {scene, scene_depth}, p);
+        }
+        if (keeps) {
+            SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+            const SDL_GPUTextureLocation from{color, 0, 0, 0, 0, 0};
+            const SDL_GPUTextureLocation to{post_buffer.tex, 0, 0, 0, 0, 0};
+            SDL_CopyGPUTextureToTexture(copy, &from, &to, width, height, 1, false);
+            SDL_EndGPUCopyPass(copy);
+            post_buffer.game_frame = frame.game_frame;
         }
         if (refracts) {
             SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
@@ -2940,7 +3005,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         if (!run.pass) {
             for (size_t d = run.first; d < run.end; d++) {
                 const DrawItem& it = frame.draws[d];
-                if (!DrawnToBackBuffer(it)) continue;
+                if (!DrawnToBackBuffer(it) || (shows_kept && d < frame.post_boundary)) continue;
                 if (!resolved && d >= frame.post_boundary) resolve();
                 if (resolved && o.view != RasterView::kFinal) break;
                 bool clear_depth = false;

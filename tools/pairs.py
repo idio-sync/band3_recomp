@@ -4,7 +4,7 @@ F8 pairs: on a still moment (a menu, a paused song) the harness's `screenshot
 native` is the native renderer's next frame; then `bind renderer` (F8) hands
 the window to the emulated GPU, which draws whole frames again, and
 `screenshot emulated` is the game's own picture once it has (the drawer hands
-back after two whole frames: 50-450 ms); then F8 back and `screenshot native`
+back once its picture is the game's: 50-450 ms); then F8 back and `screenshot native`
 again. Unlike `capture`, nothing asks the emulated GPU for whole frames
 beforehand, so a pair shows what the window shows under each renderer as the
 player switches, skip_draws and all. With the game launched --renderer=native
@@ -262,9 +262,7 @@ def take(port, directory, name):
                 time.sleep(0.1)
                 r = shot("emulated", "emulated")
                 if r.get("ok"):
-                    # and again a moment later: with even/odd rendering the
-                    # first picture after two whole frames can still be a
-                    # world drawn while skipped (black), for a frame
+                    # and again a moment later, which the pair keeps
                     time.sleep(0.25)
                     r = shot("emulated", "emulated")
                     break

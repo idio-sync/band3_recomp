@@ -236,6 +236,48 @@ TEST_CASE("after skipping stops, the picture is fresh once two whole frames are 
     CHECK(l.Fresh());
 }
 
+TEST_CASE("with even/odd rendering, fresh once a post frame follows a whole world frame") {
+    constexpr int kWorld = 1, kPost = 2;
+    // skipping stops on a world frame: it and the post frame after are the
+    // game's picture, which the presenter shows a frame later
+    SkipLatch a;
+    a.EndFrame(true, 0, kPost);
+    a.EndFrame(true, 0, kWorld);
+    CHECK_FALSE(a.EndFrame(false, 0, kPost));  // still skipped
+    a.EndFrame(false, 0, kWorld);
+    CHECK_FALSE(a.Fresh());  // it shows the post buffer from a skipped frame
+    a.EndFrame(false, 0, kPost);
+    CHECK_FALSE(a.Fresh());  // the game's, but the presenter shows the one before
+    a.EndFrame(false, 0, kWorld);
+    CHECK(a.Fresh());  // the post buffer that post frame made
+    a.EndFrame(false, 0, kPost);
+    CHECK(a.Fresh());
+    // on a post frame: it post-processes the world drawn while skipped, and
+    // the world frame after shows that, so it takes the next post frame
+    SkipLatch b;
+    b.EndFrame(true, 0, kWorld);
+    b.EndFrame(true, 0, kPost);
+    CHECK_FALSE(b.EndFrame(false, 0, kWorld));
+    b.EndFrame(false, 0, kPost);
+    CHECK_FALSE(b.Fresh());
+    b.EndFrame(false, 0, kWorld);
+    CHECK_FALSE(b.Fresh());  // two whole frames, but no whole world under post
+    b.EndFrame(false, 0, 0);
+    CHECK_FALSE(b.Fresh());  // a frame that draws neither shows the post buffer too
+    b.EndFrame(false, 0, kPost);
+    CHECK_FALSE(b.Fresh());
+    b.EndFrame(false, 0, kWorld);
+    CHECK(b.Fresh());
+    // a frame that does both, or doesn't say, is the game's: two whole frames
+    SkipLatch c;
+    c.EndFrame(true, 0, 7);
+    c.EndFrame(false, 0, 7);
+    c.EndFrame(false, 0, 7);
+    CHECK_FALSE(c.Fresh());
+    c.EndFrame(false, 0, -1);
+    CHECK(c.Fresh());
+}
+
 TEST_CASE("whole frames asked for are drawn whatever is wanted, then skipping goes on") {
     SkipLatch l;
     l.EndFrame(true, 0);

@@ -137,6 +137,19 @@ struct RasterOptions {
     // game's picture wherever no trail has started (post_model.h's PlanPost).
     bool trails = false;
     post::PostHistory* post_history = nullptr;
+    // A frame that post-processes nothing of its own under even/odd rendering
+    // (frame_compose.h's ShowsPostBuffer: a world frame, or one that draws
+    // neither) shows what the game's does: the post buffer as the last post
+    // frame left it, its picture before the overlay, under the frame's own
+    // overlay (DxRnd::DoPostProcess copies the post buffer to the screen
+    // every frame, and makes it anew on post frames alone); its world isn't
+    // drawn, as the next frame, composed with it, draws it. The live view's,
+    // which draws frame after frame and keeps each post frame's picture (the
+    // GPU in GpuRenderer, the CPU in post_history), for kPostBufferFrames
+    // after it. Off (captures, replay: one frame), or with none kept, such a
+    // frame draws its own world, post-processed as its parameters say
+    // (post_model.h's PlanPost).
+    bool post_buffer = false;
     // with post, if given: bloom's level 0 as the composite read it
     // (post_model.h's RunPost), to check it against the game's
     std::vector<uint32_t>* post_bloom0 = nullptr;

@@ -110,6 +110,13 @@ struct PostHistory {
     std::vector<uint32_t> rgba;
     uint32_t w = 0, h = 0;
     uint64_t game_frame = 0;
+    // and the post buffer as the screen shows it (RasterOptions::
+    // post_buffer): the last post frame's picture before its overlay, RGBA8,
+    // alpha 0xff, picture_w x picture_h, from game frame picture_frame (0
+    // none), post-processed or not
+    std::vector<uint32_t> picture;
+    uint32_t picture_w = 0, picture_h = 0;
+    uint64_t picture_frame = 0;
 };
 
 // The frame's PostPlan, false if it post-processes nothing: its DoPostProcess

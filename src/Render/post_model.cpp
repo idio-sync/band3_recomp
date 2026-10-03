@@ -357,18 +357,23 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noi
     plan = PostPlan{};
     const PostParams& p = frame.post;
     const PostConsts& c = frame.post_consts;
-    if (!p.valid || p.disabled || !p.proc) return false;
+    if (!p.valid || p.disabled) return false;
     // The game post-processes where FinishPostProcess runs, on frames whose
     // ProcCommands has kProcPost (7, or 2 with even/odd rendering; a composed
     // frame is its post frame), and the capture has the composite's constants
     // there; a post frame without them drew no post, nor does a frame that
     // does neither (0). A world frame (1) draws none either, but the next
-    // frame post-processes its world, by then with that frame's numbers: the
-    // live view shows world frames too, so they get the post worked out from
-    // their own PostParams, or the view would flicker between post and none.
+    // frame post-processes its world, by then with that frame's numbers: a
+    // capture of one alone (replay; the live view shows the post buffer
+    // there instead, RasterOptions::post_buffer) gets the post worked out
+    // from its own PostParams, which needs a proc. With the constants there
+    // is no need: with no proc current (the results screen) Rnd::
+    // DoPostProcess runs the other post-processors (NgDOFProc, the
+    // spotlights) and FinishPostProcess composites by TheShaderMgr's flags
+    // all the same.
     const bool world_only =
         (frame.proc_cmds & kProcWorld) && !(frame.proc_cmds & kProcPost);
-    if (!world_only && (!(frame.proc_cmds & kProcPost) || !c.valid)) return false;
+    if (world_only ? !p.proc : (!(frame.proc_cmds & kProcPost) || !c.valid)) return false;
     const bool consts = !world_only;
     // the flags the game's composite was picked by, or as NgDOFProc::DoPost
     // and NgPostProc::DoBloom would set them
