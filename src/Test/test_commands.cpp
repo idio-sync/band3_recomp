@@ -127,6 +127,7 @@ std::string StateJson(const GameStateSnapshot& s, TestTarget& target) {
         out += ",\"rooms\":";
         AppendJsonString(out, s.rooms_state);
     }
+    if (s.joined) out += ",\"joined\":true";
     out += ",\"instruments\":[";
     for (int player = 1; player <= kPlayerCount; player++) {
         if (player > 1) out += ',';
@@ -814,6 +815,8 @@ std::variant<Condition, std::string> ParseCondition(std::string_view text) {
         c.kind = Condition::Kind::kInGame;
     } else if (text == "menus") {
         c.kind = Condition::Kind::kMenus;
+    } else if (text == "joined") {
+        c.kind = Condition::Kind::kJoined;
     } else if (text.starts_with("screen=")) {
         c.kind = Condition::Kind::kScreen;
         c.text = text.substr(7);
@@ -849,7 +852,7 @@ std::variant<Condition, std::string> ParseCondition(std::string_view text) {
         if (!known) return "rooms= takes off, connecting, connected, logged_in, disconnected or failed";
     } else {
         return "no condition " + std::string(text) +
-               " (screen=, screen~, in_game, menus, song=, frames=, score>=, mic=, rooms=)";
+               " (screen=, screen~, in_game, menus, song=, frames=, score>=, mic=, rooms=, joined)";
     }
     if ((c.kind == Condition::Kind::kScreen || c.kind == Condition::Kind::kScreenContains ||
          c.kind == Condition::Kind::kSong) &&
@@ -878,6 +881,7 @@ bool ConditionHolds(const Condition& condition, const GameStateSnapshot& state,
         return state.mics[slot].bytes_fed > fed_before;
     }
     case Condition::Kind::kRooms: return state.rooms_state == condition.text;
+    case Condition::Kind::kJoined: return state.joined;
     }
     return false;
 }

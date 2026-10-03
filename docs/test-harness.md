@@ -51,7 +51,7 @@ restores to back onto the primary monitor. `window status` prints where it is.
 | `axis whammy\|tilt <0..1>` | |
 | `state` | the screen, song, venue, band, frame count, each player's instrument, the band's `score` (the song's scoreboard, 0 when a song starts) and, while `usb_mics` records, the `mics` slots: what records each, whether the game connected it and the bytes `fed` to it |
 | `pad [player]` | the buttons, triggers and sticks the game reads from a player (1-4) |
-| `wait <condition> [timeout=30s]`, `expect <condition> [timeout=5s]` | `screen=`, `screen~` (contains), `in_game`, `menus`, `song=<shortname>`, `frames=<n>`, `score>=<n>`, `mic=<slot>` (connected and fed audio since the wait began), `rooms=<off\|connecting\|connected\|logged_in\|disconnected\|failed>` (the Liveless Rooms connection's state, which `state` shows as `rooms` once it isn't `off`) |
+| `wait <condition> [timeout=30s]`, `expect <condition> [timeout=5s]` | `screen=`, `screen~` (contains), `in_game`, `menus`, `song=<shortname>`, `frames=<n>`, `score>=<n>`, `mic=<slot>` (connected and fed audio since the wait began), `rooms=<off\|connecting\|connected\|logged_in\|disconnected\|failed>` (the Liveless Rooms connection's state, which `state` shows as `rooms` once it isn't `off`), `joined` (an online band formed with this game in it, since it started: as the host, it let a player join; joining, the host said yes. `state` shows `"joined":true` from then on) |
 | `sleep <n>s\|<n>ms` | waits that long, up to 600 s: `frames=` counts the main thread's frames, which stand still while the boot logos play on RB3's splash thread |
 | `screenshot [emulated\|native] [name]` | the picture the window shows: the emulated GPU's at the game's size, or with `renderer` native the [native renderer](native-renderer.md)'s next frame at the size it draws at (the window's picture's, minimized too). `emulated` or `native` takes that one whatever the window shows; `native` while the native renderer is off draws the game's next frame once at 1280x720. The reply has `renderer` (`emulated` or `native`), `width` and `height`. The emulated GPU's picture is an error while it skips the game's draws (`renderer` native, `emulated_gpu_while_native` `skip_draws`): it isn't the game's then; `capture` takes one it drew whole |
 | `capture [name] [composed]` | a screenshot (`<name>.png`) and the native view's capture (`<name>.cap`) of the same full frame, and the native view's GPU backend drawing it (`<name>.gpu.png`), all under `screenshots/`. With `composed` it fails unless the capture is a post frame composed with the world frame before it (`proc_cmds` 2, `composed` true); its files are written either way. The reply's fields are under [Render checks](native-renderer.md#render-checks) |
@@ -89,6 +89,13 @@ and the game's command lines): every test launch with `liveless_rooms` on passes
 HOST0001,JOIN0001` hands out those codes in connection order, so with two games online
 (`liveless_online.b3t` on both) `rooms_join HOST0001` on the second joins the first's
 band. `python tools/test_liveless_rooms_mock.py` checks the mock itself.
+
+`tests/game/liveless_rooms_host.b3t` and `tests/game/liveless_rooms_join.b3t` take that
+join through a song: the joiner joins by code, each waits for the other (`wait joined`,
+then the game's own "Waiting for Xbox LIVE Players"), and both play 20th Century Boy on
+autoplay to the results, where `state`'s score is the band's on both. The host's header
+has the launches and the order; `python tools/liveless_rooms_play.py` runs all of it,
+mock included, and fails unless the two band scores match.
 
 `tests/game/usb_mic.b3t` sings a song's vocals through the USB mics' test tone (launch
 with `-- --usb_mics=true --usb_mic_test_tone=220`) and waits for the score to go up.

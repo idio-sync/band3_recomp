@@ -233,7 +233,9 @@ public:
 };
 
 struct Condition {
-    enum class Kind { kScreen, kScreenContains, kInGame, kMenus, kSong, kFrames, kScore, kMic, kRooms };
+    enum class Kind {
+        kScreen, kScreenContains, kInGame, kMenus, kSong, kFrames, kScore, kMic, kRooms, kJoined
+    };
     Kind kind = Kind::kInGame;
     std::string text;
     uint64_t frames = 0;

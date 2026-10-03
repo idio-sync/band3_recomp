@@ -15,6 +15,7 @@
 #include "src/Net/native_socket.h"
 #include "src/Net/online.h"
 #include "src/Net/online_hooks.h"
+#include "src/Test/game_state.h"
 #include "src/settings.h"
 
 // Liveless: RB3 online play without Xbox Live, as RB3Enhanced's
@@ -441,12 +442,14 @@ extern "C" REX_FUNC(NetSession__Join) {
 
 // NetSession::CheckJoinable(this, int* error, int* extra, joiners, data): the
 // host's verdict on a join, true to let it in; only a join turned away has
-// its error and extra written
+// its error and extra written. A join let in is the harness's `joined`.
 extern "C" REX_FUNC(NetSession__CheckJoinable) {
     const uint32_t error = ctx.r4.u32, extra = ctx.r5.u32;
     __imp__NetSession__CheckJoinable(ctx, base);
+    const bool joinable = ctx.r3.u32 & 0xFF;
+    if (joinable) band3::test::GameState::Get().SetJoined();
     if (!LogJoins()) return;
-    if (ctx.r3.u32 & 0xFF) {
+    if (joinable) {
         REXLOG_INFO("liveless: NetSession::CheckJoinable -> joinable");
     } else {
         REXLOG_INFO("liveless: NetSession::CheckJoinable -> turned away, error {}, extra {}",
@@ -455,8 +458,9 @@ extern "C" REX_FUNC(NetSession__CheckJoinable) {
 }
 
 // JoinResultMsg(error, extra): what the joiner hears of its join, error 0 on
-// success
+// success, which is the harness's `joined`
 extern "C" REX_FUNC(JoinResultMsg_ct) {
+    if (ctx.r4.s32 == 0) band3::test::GameState::Get().SetJoined();
     if (LogJoins()) {
         REXLOG_INFO("liveless: JoinResultMsg(error {}, extra {})", ctx.r4.s32, ctx.r5.s32);
     }

@@ -933,6 +933,22 @@ TEST_CASE("wait rooms= waits for the Rooms connection to reach a state") {
     CHECK_FALSE(Has(RunCommand("state", off), "\"rooms\""));
 }
 
+TEST_CASE("wait joined waits for an online band to form with the game in it") {
+    FakeGame game;
+    CHECK_FALSE(Has(RunCommand("state", game), "\"joined\""));
+    CHECK_FALSE(Ok(RunCommand("expect joined timeout=1s", game)));
+    game.on_sleep = [](FakeGame& g) {
+        if (g.slept >= 2s) g.state.joined = true;
+    };
+    const std::string reply = RunCommand("wait joined timeout=10s", game);
+    CHECK(Ok(reply));
+    CHECK(game.slept >= 2s);
+    CHECK(game.slept < 3s);
+    CHECK(Has(reply, "\"joined\":true"));
+    CHECK(Has(RunCommand("state", game), "\"joined\":true"));
+    CHECK(Has(RunCommand("wait joined=yes", game), "no condition joined=yes"));
+}
+
 TEST_CASE("pad reports what the game reads from a player") {
     FakeGame game;
     game.pad.buttons = input::xbox::kButtonA | input::xbox::kDpadUp;
@@ -1097,6 +1113,15 @@ TEST_CASE("the game state follows the song's position, unknown until it's read")
     CHECK(!state.InGame());
     state.SetInGame(true);
     CHECK(state.Snapshot().song_ms == -1);
+}
+
+TEST_CASE("the game state keeps that an online band formed, through songs") {
+    GameState state;
+    CHECK_FALSE(state.Snapshot().joined);
+    state.SetJoined();
+    state.SetInGame(true);
+    state.SetInGame(false);
+    CHECK(state.Snapshot().joined);
 }
 
 TEST_CASE("present_stats reports the window's paints, the native frames and the game's") {
