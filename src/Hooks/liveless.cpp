@@ -9,8 +9,10 @@
 #include <mutex>
 #include <unordered_set>
 #include "generated/band3_init.h"
+#include "src/Net/native_socket.h"
 #include "src/Net/online.h"
 #include "src/Net/online_hooks.h"
+#include "src/settings.h"
 
 // Liveless: RB3 online play without Xbox Live, as RB3Enhanced's
 // xbox360_liveless.c has it, so band3 and RB3Enhanced players can play
@@ -329,4 +331,210 @@ void LivelessAnyInstruments(PPCRegister& r3) {
 // RB3Enhanced's games send plain UDP and skip these calls
 bool LivelessPlainPackets() {
     return Liveless();
+}
+
+// Joining a game, step by step, logged with log_net_calls: an invite the
+// player accepted (XSessionSearcher, JoinInvitePanel), then NetSession's join
+// on both sides, the host's verdict on it and the joiner's result. An invite
+// goes: XSessionSearcher::OnMsg reads it and probes the game it's for,
+// RVSessionSearcher::Poll hands the probe's answer on as an
+// InviteAcceptedMsg, JoinInvitePanel::TryJoin joins it.
+
+extern "C" void __imp__XSessionSearcher__OnMsg(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__InviteAcceptedMsg_ct(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__JoinInvitePanel__TryJoin(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__JoinInvitePanel__SetPresence(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__NetSession__Join(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__NetSession__CheckJoinable(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__JoinResultMsg_ct(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__rex_sub_82651248(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__Quazal__DuplicatedObject__IsADuplicationMaster(PPCContext& ctx,
+                                                                       uint8_t* base);
+
+namespace {
+
+bool LogJoins() { return REXCVAR_GET(log_net_calls); }
+
+// the BandUI's "joined through an invite" flag (TheBandUI + 152), which spares
+// the joiner the host's checks for private and Quickplay-only games
+constexpr uint32_t kJoinedByInvite = 0x82DFD348;
+
+}  // namespace
+
+// XSessionSearcher::OnMsg(const InviteAcceptedMsg&): keeps the pad that
+// accepted (this + 152), reads the invite and probes the game it's for;
+// returns 0 when the invite is for another title
+extern "C" REX_FUNC(XSessionSearcher__OnMsg) {
+    const uint32_t self = ctx.r3.u32;
+    __imp__XSessionSearcher__OnMsg(ctx, base);
+    if (LogJoins()) {
+        REXLOG_INFO("liveless: XSessionSearcher::OnMsg(invite accepted), pad {} -> {}",
+                    REX_LOAD_U32(self + 152), ctx.r3.u32);
+    }
+}
+
+// InviteAcceptedMsg(pad, ?, failed)
+extern "C" REX_FUNC(InviteAcceptedMsg_ct) {
+    if (LogJoins()) {
+        REXLOG_INFO("liveless: InviteAcceptedMsg({}, {}, {})", ctx.r4.u32, ctx.r5.u32,
+                    ctx.r6.u32);
+    }
+    __imp__InviteAcceptedMsg_ct(ctx, base);
+}
+
+extern "C" REX_FUNC(JoinInvitePanel__TryJoin) {
+    if (LogJoins()) REXLOG_INFO("liveless: JoinInvitePanel::TryJoin");
+    __imp__JoinInvitePanel__TryJoin(ctx, base);
+}
+
+// the presence (and so the step) JoinInvitePanel's join is at
+extern "C" REX_FUNC(JoinInvitePanel__SetPresence) {
+    if (LogJoins()) REXLOG_INFO("liveless: JoinInvitePanel::SetPresence({})", ctx.r4.u32);
+    __imp__JoinInvitePanel__SetPresence(ctx, base);
+}
+
+extern "C" REX_FUNC(NetSession__Join) {
+    if (LogJoins()) {
+        REXLOG_INFO("liveless: NetSession::Join, session state {}", REX_LOAD_U32(ctx.r3.u32 + 104));
+    }
+    __imp__NetSession__Join(ctx, base);
+}
+
+// NetSession::CheckJoinable(this, int* error, int* extra, joiners, data): the
+// host's verdict on a join, true to let it in; only a join turned away has
+// its error and extra written
+extern "C" REX_FUNC(NetSession__CheckJoinable) {
+    const uint32_t error = ctx.r4.u32, extra = ctx.r5.u32;
+    __imp__NetSession__CheckJoinable(ctx, base);
+    if (!LogJoins()) return;
+    if (ctx.r3.u32 & 0xFF) {
+        REXLOG_INFO("liveless: NetSession::CheckJoinable -> joinable");
+    } else {
+        REXLOG_INFO("liveless: NetSession::CheckJoinable -> turned away, error {}, extra {}",
+                    error ? REX_LOAD_U32(error) : 0, extra ? REX_LOAD_U32(extra) : 0);
+    }
+}
+
+// JoinResultMsg(error, extra): what the joiner hears of its join, error 0 on
+// success
+extern "C" REX_FUNC(JoinResultMsg_ct) {
+    if (LogJoins()) {
+        REXLOG_INFO("liveless: JoinResultMsg(error {}, extra {})", ctx.r4.s32, ctx.r5.s32);
+    }
+    __imp__JoinResultMsg_ct(ctx, base);
+}
+
+// the joiner's side of the join's data: whether it came through an invite
+// (the BandUI's flag, or r5) decides which of the host's checks apply
+extern "C" REX_FUNC(rex_sub_82651248) {
+    if (LogJoins()) {
+        REXLOG_INFO("liveless: join data, joined by invite {}, r5 {:#x}",
+                    REX_LOAD_U8(kJoinedByInvite), ctx.r5.u32);
+    }
+    __imp__rex_sub_82651248(ctx, base);
+}
+
+// NetSession::IsHost asks this of the Quazal session, which is gone once a
+// join is turned away: none is no master, rather than a read of address 20
+extern "C" REX_FUNC(Quazal__DuplicatedObject__IsADuplicationMaster) {
+    if (ctx.r3.u32 == 0) {
+        static bool logged = false;
+        if (!logged) {
+            REXLOG_WARN("liveless: no Quazal session to be the master of; taken as not the host");
+            logged = true;
+        }
+        ctx.r3.u64 = 0;
+        return;
+    }
+    __imp__Quazal__DuplicatedObject__IsADuplicationMaster(ctx, base);
+}
+
+// Invites. Live's are gone, so band3 makes one up (FakeInvite, the harness's
+// liveless_invite): the game is told the player accepted it, as the console's
+// guide tells it, and reads it for the game at the address it was given.
+
+extern "C" void __imp__XInviteGetAcceptedInfo(PPCContext& ctx, uint8_t* base);
+
+namespace {
+
+// XN_LIVE_INVITE_ACCEPTED, its parameter the user who accepted: PlatformMgr::Poll
+// turns it into an InviteAcceptedMsg for that pad
+constexpr uint32_t kXnLiveInviteAccepted = 0x02000002;
+// XSessionSearcher::OnMsg drops invites for other titles
+constexpr uint32_t kRb3TitleId = 0x45410914;
+
+// XINVITE_INFO: xuidInviter, xuidInvitee, dwTitleID, XNKID session, XNADDR
+// host, XNKEY key exchange key, fFromGameInvite
+constexpr uint32_t kInviteTitleId = 16;
+constexpr uint32_t kInviteSession = 20;
+constexpr uint32_t kInviteHost = 28;
+constexpr uint32_t kInviteKey = 64;
+constexpr uint32_t kInviteFromGame = 80;
+constexpr uint32_t kInviteSize = 84;
+
+struct Invite {
+    bool pending = false;
+    uint32_t address = 0;  // network order
+    uint16_t port = 0;
+};
+
+std::mutex g_invite_mutex;
+// made up, until the game reads it
+Invite g_invite;
+
+}  // namespace
+
+namespace band3::online {
+
+std::string FakeInvite(const std::string& host, uint16_t port, bool force_flag) {
+    if (!Liveless()) return "liveless is off";
+    auto* kernel = REX_KERNEL_STATE();
+    if (!kernel) return "the game isn't running yet";
+    const auto found = band3::net::ResolveIPv4(host);
+    if (found.empty()) return "no IPv4 address for " + host;
+    if (!SetLivelessJoin(host, port)) return "out of guest memory";
+    {
+        std::lock_guard<std::mutex> lock(g_invite_mutex);
+        g_invite = {true, found.front(), port};
+    }
+    if (force_flag) {
+        rex::system::kernel_memory()->virtual_membase()[kJoinedByInvite] = 1;
+        REXLOG_INFO("liveless: the BandUI's joined-by-invite flag set");
+    }
+    kernel->BroadcastNotification(kXnLiveInviteAccepted, 0);
+    REXLOG_INFO("liveless: invite notification sent, for player 1 to join {}:{}", host, port);
+    return {};
+}
+
+}  // namespace band3::online
+
+// XInviteGetAcceptedInfo(user, XINVITE_INFO*): the invite band3 made up, once,
+// for the game to join; Live's otherwise
+extern "C" REX_FUNC(XInviteGetAcceptedInfo) {
+    const uint32_t user = ctx.r3.u32, info = ctx.r4.u32;
+    Invite invite;
+    if (info) {
+        std::lock_guard<std::mutex> lock(g_invite_mutex);
+        invite = g_invite;
+        g_invite.pending = false;
+    }
+    if (!invite.pending) {
+        __imp__XInviteGetAcceptedInfo(ctx, base);
+        if (LogJoins()) REXLOG_INFO("liveless: XInviteGetAcceptedInfo({}) -> {:#x}", user, ctx.r3.u32);
+        return;
+    }
+    std::memset(base + info, 0, kInviteSize);
+    REX_STORE_U32(info + kInviteTitleId, kRb3TitleId);
+    // the session's ID and key, made up as the search's are
+    for (uint32_t i = 0; i < 8; i++) base[info + kInviteSession + i] = static_cast<uint8_t>(i + 1);
+    const uint32_t host = info + kInviteHost;
+    StoreNetworkOrder(base, host + kXnAddrIna, invite.address);
+    StoreNetworkOrder(base, host + kXnAddrInaOnline, invite.address);
+    REX_STORE_U16(host + kXnAddrPortOnline, invite.port);
+    for (uint32_t i = 0; i < 20; i++) base[host + kXnAddrOnline + i] = static_cast<uint8_t>(i);
+    for (uint32_t i = 0; i < 16; i++) base[info + kInviteKey + i] = static_cast<uint8_t>(i + 1);
+    REX_STORE_U32(info + kInviteFromGame, 1);
+    ctx.r3.u64 = kErrorSuccess;
+    REXLOG_INFO("liveless: XInviteGetAcceptedInfo({}) gave the invite, to port {}", user,
+                invite.port);
 }

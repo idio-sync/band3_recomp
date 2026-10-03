@@ -59,6 +59,7 @@ restores to back onto the primary monitor. `window status` prints where it is.
 | `present_stats [reset]` | the window's pacing since `reset` (which replies with the stretch it ends and starts over), in `stats`: `renderer` (`emulated` or `native`) and `path` (`zero-copy` or `upload`, empty while emulated); the window's `paints` under either renderer and the time between them, `paint_ms` (`mean`, `p50`, `p95`, `max`), and `hitches` (intervals over 1.5 times the median); under `native`, its `paints`, the native frames `shown`, `repeats` (a paint showing the frame the one before showed), `skipped` (frames drawn that no paint showed) and `latency_ms` from the game's Present of each frame shown to the first paint showing it; and the `game`'s own `frames`, `fps`, intervals (`ms`) and `hitches` in the same time. A paint's time is when the presenter asks for it, not when it reaches the screen. A minimized window doesn't paint: `window offscreen` first. Off every monitor a window has no real vertical blank, so its numbers compare renderers under the same conditions rather than measure what a monitor would show |
 | `set <setting> <value>` | Band3 settings only |
 | `bind <name>` | presses the key a key bind is set to, as if the window had focus: `bind instrument_lab` (F6), `bind settings` (F4), `bind native_view` (F9), `bind renderer` (F8); the `bind_` prefix is optional. With `window offscreen`, `window shot` then captures the overlay it opens |
+| `liveless_invite <host[:port]> [force_flag]` | player 1 accepts an invite to the [Liveless](integrations.md#liveless-online-play) game at that address (port 9103 unless given), as from the console's guide: the game is told of it (`XN_LIVE_INVITE_ACCEPTED`), reads it, and joins that game's band, which also becomes the game to join (`liveless_connect`) from then on. Needs `liveless` on and the game online (the overshell's Play on Xbox Live). `force_flag` also sets RB3's "joined through an invite" flag first, which the game's own invite handling sets anyway; it's there to tell whether a host turning the join away (error 10) is for want of it |
 | `quit` | |
 
 Each player can have a virtual instrument: start a controller command with `p2`,
@@ -71,6 +72,10 @@ each to choose a profile when they join: No Profile plays as a guest.
 `tests/game/liveless.b3t` takes two band3s on this PC online with Liveless, one
 hosting and one joining it (its header has the two launches: each needs its own
 `--port`, and the second its own `--user-data` and `liveless_port`).
+`tests/game/liveless_online.b3t` only takes one online, from the overshell, without
+searching: run it on both, then `liveless_invite 127.0.0.1:9103` on the second
+joins the first's band by invite. The host then goes Play Now → Quickplay → Choose
+Songs, and waits ("Waiting for Xbox LIVE Players...") until the joiner picks the same.
 
 `tests/game/usb_mic.b3t` sings a song's vocals through the USB mics' test tone (launch
 with `-- --usb_mics=true --usb_mic_test_tone=220`) and waits for the score to go up.

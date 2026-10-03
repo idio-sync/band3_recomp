@@ -6,6 +6,7 @@
 #include <optional>
 #include <utility>
 #include <vector>
+#include "src/Net/online.h"
 #include "test_inputs.h"
 
 namespace band3::test {
@@ -706,6 +707,22 @@ std::string Bind(TestTarget& target, const std::vector<std::string_view>& args) 
     return Ok();
 }
 
+// liveless_invite <host[:port]> [force_flag]: player 1 accepts an invite to
+// the Liveless game there, on RB3Enhanced's 9103 unless given
+std::string LivelessInvite(TestTarget& target, const std::vector<std::string_view>& args) {
+    constexpr std::string_view kUsage = "usage: liveless_invite <host[:port]> [force_flag]";
+    if (args.size() < 2 || args.size() > 3) return Error(target, kUsage);
+    const bool force_flag = args.size() == 3;
+    if (force_flag && args[2] != "force_flag") return Error(target, kUsage);
+    const auto game = online::ParseEndpoint(args[1], online::kGamePort);
+    if (!game) return Error(target, std::string(args[1]) + " isn't an address (host or host:port)");
+    if (std::string error = target.LivelessInvite(game->host, game->port, force_flag);
+        !error.empty()) {
+        return Error(target, error);
+    }
+    return Ok();
+}
+
 }
 
 std::variant<Condition, std::string> ParseCondition(std::string_view text) {
@@ -822,6 +839,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "capture") return Capture(target, args);
     if (verb == "set") return Set(target, line, args);
     if (verb == "bind") return Bind(target, args);
+    if (verb == "liveless_invite") return LivelessInvite(target, args);
     if (verb == "native_view") return NativeView(target, args);
     if (verb == "present_stats") return PresentStatsCommand(target, args);
     if (verb == "quit") {

@@ -49,6 +49,12 @@ public:
     std::chrono::milliseconds slept{0};
     std::vector<std::pair<std::string, std::string>> settings_set;
     std::vector<std::string> binds_pressed;
+    struct InviteRecord {
+        std::string host;
+        uint16_t port;
+        bool force_flag;
+    };
+    std::vector<InviteRecord> invites;
     std::string screenshot_name;
     ScreenshotSource screenshot_source = ScreenshotSource::kWindow;
     // renderer = native: the window's picture is the native renderer's, and
@@ -137,6 +143,11 @@ public:
     std::string PressBind(std::string_view bind) override {
         if (bind == "bind_nothing") return "no key bind bind_nothing";
         binds_pressed.emplace_back(bind);
+        return {};
+    }
+    std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) override {
+        if (host == "offline") return "liveless is off";
+        invites.push_back({host, port, force_flag});
         return {};
     }
     std::string NativeViewOn(uint32_t width, uint32_t height, bool sized, bool post) override {
@@ -769,6 +780,28 @@ TEST_CASE("bind presses a key bind, with or without its bind_ prefix") {
     CHECK(Has(reply, "no key bind bind_nothing"));
     CHECK_FALSE(Ok(RunCommand("bind", game)));
     CHECK_FALSE(Ok(RunCommand("p2 bind settings", game)));
+}
+
+TEST_CASE("liveless_invite accepts an invite to a game, on 9103 unless given a port") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("liveless_invite 127.0.0.1", game)));
+    CHECK(Ok(RunCommand("liveless_invite 192.168.1.20:9203 force_flag", game)));
+    REQUIRE(game.invites.size() == 2);
+    CHECK(game.invites[0].host == "127.0.0.1");
+    CHECK(game.invites[0].port == 9103);
+    CHECK_FALSE(game.invites[0].force_flag);
+    CHECK(game.invites[1].host == "192.168.1.20");
+    CHECK(game.invites[1].port == 9203);
+    CHECK(game.invites[1].force_flag);
+
+    const std::string refused = RunCommand("liveless_invite offline", game);
+    CHECK_FALSE(Ok(refused));
+    CHECK(Has(refused, "liveless is off"));
+    CHECK(Has(RunCommand("liveless_invite host:0", game), "isn't an address"));
+    CHECK_FALSE(Ok(RunCommand("liveless_invite", game)));
+    CHECK_FALSE(Ok(RunCommand("liveless_invite 127.0.0.1 force", game)));
+    CHECK_FALSE(Ok(RunCommand("p2 liveless_invite 127.0.0.1", game)));
+    CHECK(game.invites.size() == 2);
 }
 
 TEST_CASE("pad reports what the game reads from a player") {

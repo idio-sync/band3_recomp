@@ -156,10 +156,10 @@ Lineup** and everyone makes the setlist and plays together. There is no lobby or
 list of games: Live's matchmaking is gone, so searching finds one game, the one at
 `liveless_connect`.
 
-Players should both search: a player who joins a host that only went online from
-the overshell (without Find Xbox Live Players) is turned away, and their game then
-crashes. RB3Enhanced's Liveless Rooms server, for joining by code instead of
-address, isn't supported.
+Players should both search: a player who searches for a host that only went
+online from the overshell (without Find Xbox Live Players) is turned away.
+RB3Enhanced's Liveless Rooms server, for joining by code instead of address,
+isn't supported.
 
 `liveless_port` moves the game to another UDP port, so two band3s on one PC can
 play each other: [`tests/game/liveless.b3t`](../tests/game/liveless.b3t) does that.

@@ -3,6 +3,7 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 #include <rex/types.h>
+#include <atomic>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -48,10 +49,11 @@ bool g_live = false;
 bool g_gocentral = false;
 bool g_liveless = false;
 // names in guest memory for Quazal::InetAddress::SetAddress: the GoCentral
-// server, and the Liveless game to join
+// server, and the Liveless game to join, which an invite (SetLivelessJoin)
+// changes while the game runs
 uint32_t g_gocentral_server = 0;
-uint32_t g_liveless_join = 0;
-uint16_t g_liveless_join_port = band3::online::kGamePort;
+std::atomic<uint32_t> g_liveless_join{0};
+std::atomic<uint16_t> g_liveless_join_port{band3::online::kGamePort};
 uint16_t g_liveless_port = band3::online::kGamePort;
 uint32_t g_liveless_external = 0;
 
@@ -158,6 +160,16 @@ uint16_t LivelessJoinPort() { return g_liveless_join_port; }
 uint16_t LivelessPort() { return g_liveless_port; }
 uint32_t LivelessExternalAddress() { return g_liveless_external; }
 
+bool SetLivelessJoin(const std::string& host, uint16_t port) {
+    // the old name stays allocated: Quazal may be looking it up as it changes
+    const uint32_t name = GuestCopy(host);
+    if (!name) return false;
+    g_liveless_join_port = port;
+    g_liveless_join = name;
+    REXLOG_INFO("liveless: the game to join is now {}:{}", host, port);
+    return true;
+}
+
 }  // namespace band3::online
 
 // Quazal::InetAddress::SetAddress(InetAddress*, const char* host): where Quazal
@@ -168,8 +180,9 @@ extern "C" REX_FUNC(Quazal__InetAddress__SetAddress) {
         REXLOG_INFO("gocentral: {} -> {}", host, GuestString(base, g_gocentral_server));
         ctx.r4.u64 = g_gocentral_server;
     } else if (g_liveless && host == band3::online::kJoinStandInName) {
-        REXLOG_INFO("liveless: joining {}", GuestString(base, g_liveless_join));
-        ctx.r4.u64 = g_liveless_join;
+        const uint32_t join = g_liveless_join;
+        REXLOG_INFO("liveless: joining {}", GuestString(base, join));
+        ctx.r4.u64 = join;
     }
     __imp__Quazal__InetAddress__SetAddress(ctx, base);
 }

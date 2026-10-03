@@ -43,6 +43,7 @@
 #include "src/Input/input_system.h"
 #include "src/Input/virtual_instrument.h"
 #include "src/Input/xinput_state.h"
+#include "src/Net/online_hooks.h"
 #include "src/Render/capture_file.h"
 #include "src/Render/frame_compose.h"
 #include "src/Render/gpu_skip.h"
@@ -443,6 +444,10 @@ public:
             rex::ui::ProcessKeyEvent(e);
         });
         return error;
+    }
+
+    std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) override {
+        return online::FakeInvite(host, port, force_flag);
     }
 
     void Quit() override {

@@ -200,6 +200,10 @@ public:
     // to, as the window would, without the window having focus; returns an
     // error, or empty
     virtual std::string PressBind(std::string_view bind) = 0;
+    // player 1 accepts an invite to the Liveless game at host:port (Liveless
+    // on), with the BandUI's joined-by-invite flag set first if `force_flag`;
+    // returns an error, or empty
+    virtual std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) = 0;
     // the live native view, drawing every frame the game captures at width x
     // height as F9's window does (without post-processing unless `post`), and
     // its numbers, which on and off reset; on returns an error, or empty.
