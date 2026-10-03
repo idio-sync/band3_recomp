@@ -248,7 +248,7 @@ PixelIn VSMain(VertexIn v) {
     o.light_added = float3(0, 0, 0);
     if ((vs_shade.flags.x & kShadePerVertex) != 0u) {
         const Lighting l = Light(vs_shade, wp, wn, wn, v.color, float4(1, 1, 1, 1), o.ao_sh,
-                                 float4(0, 0, 0, 0), float4(0, 0, 0, 0), 1.0);
+                                 float4(0, 0, 0, 0), float4(0, 0, 0, 0), 1.0, float3(0, 0, 0));
         o.light_diffuse = l.diffuse;
         o.light_added = l.added;
     }

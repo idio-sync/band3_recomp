@@ -22,6 +22,7 @@ float3 cross(float3 a, float3 b) {
     return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
 float dot(float4 a, float4 b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
+float abs(float v) { return std::fabs(v); }
 float saturate(float v) { return std::clamp(v, 0.0f, 1.0f); }
 float3 saturate(float3 v) { return {saturate(v.x), saturate(v.y), saturate(v.z)}; }
 float max(float a, float b) { return a > b ? a : b; }
@@ -105,7 +106,7 @@ void LightVertexCpu(const ShadeParams& sp, const float p[3], const float n[3], c
     const Lighting l = Light(sp, float3{p[0], p[1], p[2]}, nn, nn,
                              float4{vc[0], vc[1], vc[2], vc[3]}, float4{1, 1, 1, 1},
                              float2{ao_sh[0], ao_sh[1]}, float4{0, 0, 0, 0}, float4{0, 0, 0, 0},
-                             1.0f);
+                             1.0f, float3{0, 0, 0});
     diffuse[0] = l.diffuse.x;
     diffuse[1] = l.diffuse.y;
     diffuse[2] = l.diffuse.z;
@@ -270,6 +271,7 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     Copy(s->Ps(0), sp.color);
     Copy(s->Ps(1), sp.ambient);
     Copy(s->Ps(2), sp.specular);
+    Copy(s->Ps(19), sp.specular2);
     Copy(s->Ps(5), sp.emissive);
     Copy(s->Ps(7), sp.bloom);
     sp.eye = {s->eye[0], s->eye[1], s->eye[2], 1};

@@ -106,4 +106,6 @@ struct ShadeParams {
     // REFRACT_WORLD's: x c119.w, how far the refract normal map moves where
     // the picture behind is read, in clip units (RefractUv)
     float4 refract;
+    // c19, specular2: the hair's strand highlight's second colour (Light)
+    float4 specular2;
 };

@@ -30,7 +30,7 @@ struct uint4 {
 
 #include "src/Render/shaders/shade_params.hlsli"
 
-static_assert(sizeof(ShadeParams) == 43 * 16, "ShadeParams is float4s only, as HLSL packs it");
+static_assert(sizeof(ShadeParams) == 44 * 16, "ShadeParams is float4s only, as HLSL packs it");
 
 // What a draw shades with. Without a ShadeState (a capture from before them),
 // with options.legacy_light, it's the placeholder from before; options.lighting
