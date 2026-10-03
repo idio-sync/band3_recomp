@@ -2619,6 +2619,7 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
     // period of frames, and dropped by a frame that doesn't say (menus).
     const bool whole = s.captured_last;
     s.captured_last = true;
+    s.building->whole = whole ? 1 : 0;
     if (!ProcKnown(*done)) {
         s.last_world.reset();
     } else if (DrawsWorld(*done)) {
@@ -2737,7 +2738,7 @@ uint64_t CaptureEpoch() {
     return g_capture_epoch;
 }
 
-uint64_t WaitForCapture(uint64_t epoch, std::chrono::milliseconds timeout) {
+uint64_t WaitForCapture(uint64_t epoch, std::chrono::nanoseconds timeout) {
     std::unique_lock lock(g_latest_mutex);
     g_latest_cv.wait_for(lock, timeout, [epoch] { return g_capture_epoch != epoch; });
     return g_capture_epoch;

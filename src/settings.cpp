@@ -391,6 +391,12 @@ REXCVAR_DEFINE_BOOL(native_present_zero_copy, true, "Band3/Debug",
     "when band3's renderer shares the game's device); off reads each frame back and uploads "
     "it, the way other platforms do, to compare");
 
+REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Debug",
+    "With renderer = native, publish each frame to the window a steady delay after the game "
+    "presented it (about the slowest recent frame's), so frames that draw quickly (with "
+    "even/odd rendering, every other one) don't reach a paint together with the one before; "
+    "off publishes each as soon as it's drawn, to compare");
+
 REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Debug",
     "Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, "
     "for the native view (experimental), even while it's off: some are drawn once, in the "
