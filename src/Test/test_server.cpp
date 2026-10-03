@@ -198,6 +198,7 @@ public:
         options.height = height = 720;
         options.normal_maps = REXCVAR_GET(native_view_normal_maps);
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
+        options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         bool ready = false;
         // SDL starts video on the main thread only
         if (REXCVAR_GET(native_view_backend) == "gpu")
@@ -275,6 +276,7 @@ public:
         options.height = out.screenshot.height;
         options.normal_maps = REXCVAR_GET(native_view_normal_maps);
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
+        options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         std::vector<uint32_t> rgba;
         render::GpuStats stats;
         if (!render::GpuRenderer::Get().RenderFrame(frame, options, rgba, stats)) {

@@ -5,7 +5,7 @@
 // level 0 and the composite, whose maths is post_model.hlsli's, which the CPU
 // runs too; and the resolve, the scene into the picture as it is (or, to check
 // the scene target, its alpha or its depth as grey) on frames without
-// post-processing.
+// post-processing; and the overlay's start in its multisampled target.
 //
 // Registers follow SDL_gpu's layout as mesh.hlsl's do: pixel resources in
 // space2, pixel uniforms in space3; the vertex shader has none.
@@ -101,6 +101,25 @@ float4 PSResolve(PostIn i) : SV_Target0 {
         return float4(g, g, g, 1.0);
     }
     return float4(c.rgb, 1.0);
+}
+
+// The overlay's start, into its multisampled target (gpu_view.cpp's
+// begin_back): the picture in every sample, as DxRnd::DoPostProcess's
+// CopyPostProcess draws it into its 2x target, and the depth the overlay
+// starts with: 0, cleared as BeginTiling clears it, or with mode.y the
+// world's (a capture from before the cameras were kept, whose overlay went on
+// over the world's depth)
+struct OverlayStartOut {
+    float4 color : SV_Target0;
+    float depth : SV_Depth;
+};
+
+OverlayStartOut PSOverlayStart(PostIn i) {
+    const int3 at = int3(int2(i.pos.xy), 0);
+    OverlayStartOut o;
+    o.color = float4(color_tex.Load(at).rgb, 1.0);
+    o.depth = params.mode.y != 0u ? depth_tex.Load(at) : 0.0;
+    return o;
 }
 
 // the 4x downsample, or the bright pass (mode.y)

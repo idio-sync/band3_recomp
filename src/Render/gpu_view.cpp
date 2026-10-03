@@ -176,6 +176,14 @@ constexpr int kNumAlphaModes = 3;
 // against its depth cleared to the pass's clear_z, no blend)
 enum class PixelKind { kMesh, kSpot, kSoft, kShadowDepth };
 
+// a target's sample count (1, 2 or 4) as SDL has it, and in Pipeline()'s key
+SDL_GPUSampleCount SampleCount(uint32_t samples) {
+    return samples == 4   ? SDL_GPU_SAMPLECOUNT_4
+           : samples == 2 ? SDL_GPU_SAMPLECOUNT_2
+                          : SDL_GPU_SAMPLECOUNT_1;
+}
+int SampleBits(uint32_t samples) { return samples == 4 ? 2 : samples == 2 ? 1 : 0; }
+
 // the triangles a draw's pipeline culls, by their winding on the screen
 // (DrawItem::cull): what soft_raster.cpp's RasterTri drops
 enum class CullWinding { kNone, kClockwise, kCounterClockwise, kAll };
@@ -312,6 +320,9 @@ struct GpuRenderer::Impl {
     // and composite
     SDL_GPUShader* fullscreen_shader = nullptr;
     SDL_GPUShader* resolve_shader = nullptr;
+    // the overlay's start in its multisampled target: the picture copied
+    // into every sample, and its depth (PSOverlayStart)
+    SDL_GPUShader* overlay_start_shader = nullptr;
     SDL_GPUShader* downsample_shader = nullptr;
     SDL_GPUShader* blur_shader = nullptr;
     SDL_GPUShader* glare_shader = nullptr;
@@ -328,8 +339,9 @@ struct GpuRenderer::Impl {
     // gamma.hlsl's: the display gamma ramp over the finished picture
     SDL_GPUShader* gamma_shader = nullptr;
     SDL_GPUGraphicsPipeline* gamma_pipeline = nullptr;
-    // by blend mode, DepthRules::Key, AlphaMode, CullWinding and PixelKind,
-    // all made before the first frame
+    // by blend mode, DepthRules::Key, AlphaMode, CullWinding, PixelKind and
+    // sample count, all made before the first frame; and the overlay's
+    // start's, by sample count (OverlayStartPipeline)
     std::unordered_map<int, SDL_GPUGraphicsPipeline*> pipelines;
     // Prewarm has started (read without the mutex by GpuRenderer::Prewarm),
     // and has finished: a pipeline made after it is one it doesn't make,
@@ -352,6 +364,22 @@ struct GpuRenderer::Impl {
     SDL_GPUTexture* scene = nullptr;
     SDL_GPUTexture* color = nullptr;
     SDL_GPUTexture* depth = nullptr;
+    // The overlay's multisampled targets (soft_raster.h's OverlaySamples),
+    // ms_samples a pixel: its colour, which each of its passes resolves into
+    // `color` as it ends (the mean of each pixel's samples, as RB3's
+    // EndTiling), and its own depth, so the world's stays as the world left
+    // it. Render targets alone: SDL can't sample a multisampled texture.
+    // Made at the picture's size when a frame first draws an overlay.
+    SDL_GPUTexture* color_ms = nullptr;
+    SDL_GPUTexture* depth_ms = nullptr;
+    uint32_t ms_samples = 1, ms_w = 0, ms_h = 0;
+    // whether the device draws kColorFormat and kDepthFormat multisampled,
+    // [0] at 2 samples and [1] at 4; and the counts asked for that it
+    // couldn't, logged once each, and whether making the targets failed
+    // (logged once)
+    bool ms_supported[2] = {};
+    uint32_t ms_fallback_logged = 0;
+    bool ms_failure_logged = false;
     // a copy of `color` as the resolve left it, for the overlay's
     // REFRACT_WORLD draws (RefractsWorld), made on frames that have one
     SDL_GPUTexture* behind = nullptr;
@@ -550,9 +578,20 @@ struct GpuRenderer::Impl {
                               const unsigned char* dxbc, size_t dxbc_size,
                               const unsigned char* spirv, size_t spirv_size, const char* entry,
                               uint32_t samplers, uint32_t storage_buffers, uint32_t uniforms);
-    // `pixel`: PSMain's, or PSSpotCone's or PSSoftParticle's in its place
+    // `pixel`: PSMain's, or PSSpotCone's or PSSoftParticle's in its place;
+    // `samples` the target's (the overlay's multisampled one, or 1)
     SDL_GPUGraphicsPipeline* Pipeline(int blend, const DepthRules& rules, AlphaMode alpha,
-                                      CullWinding cull, PixelKind pixel = PixelKind::kMesh);
+                                      CullWinding cull, PixelKind pixel = PixelKind::kMesh,
+                                      uint32_t samples = 1);
+    // PSOverlayStart's, into the overlay's targets at `samples`: depth
+    // written, not tested
+    SDL_GPUGraphicsPipeline* OverlayStartPipeline(uint32_t samples);
+    // the overlay's samples for a frame that asks for `want` (OverlaySamples):
+    // `want` if the device can, else the other of 2 and 4, else 1 (logged once)
+    uint32_t DeviceSamples(uint32_t want);
+    // the overlay's targets at the picture's size and `samples`; false if
+    // they couldn't be made (logged)
+    bool EnsureOverlayTargets(uint32_t samples);
     // a shadow map's draw's: PSShadowDepth into R32_FLOAT, LESS, no blend
     SDL_GPUGraphicsPipeline* ShadowDepthPipeline(CullWinding cull) {
         return Pipeline(kBlendSrc, {true, false, true}, AlphaMode::kNone, cull,
@@ -565,8 +604,9 @@ struct GpuRenderer::Impl {
     void ReleaseHistory();
     void ReleaseTargets();
     // makes every pipeline a frame can ask for and the upload buffer's usual
-    // size, so no frame stalls making them
-    void Prewarm();
+    // size, so no frame stalls making them: the overlay's at overlay_samples
+    // (RasterOptions::msaa) as the device draws them (DeviceSamples)
+    void Prewarm(uint32_t overlay_samples);
     bool EnsureTargets(uint32_t w, uint32_t h);
     // `s` at w x h; false if it couldn't be made
     bool EnsureScratch(Scratch& s, uint32_t w, uint32_t h);
@@ -732,6 +772,10 @@ bool GpuRenderer::Impl::Create() {
     resolve_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kResolvePixelDxbc,
                                 sizeof(kResolvePixelDxbc), kResolvePixelSpirv,
                                 sizeof(kResolvePixelSpirv), "PSResolve", 2, 0, 1);
+    overlay_start_shader = MakeShader(
+        format, SDL_GPU_SHADERSTAGE_FRAGMENT, kOverlayStartPixelDxbc,
+        sizeof(kOverlayStartPixelDxbc), kOverlayStartPixelSpirv,
+        sizeof(kOverlayStartPixelSpirv), "PSOverlayStart", 2, 0, 1);
     downsample_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kDownsamplePixelDxbc,
                                    sizeof(kDownsamplePixelDxbc), kDownsamplePixelSpirv,
                                    sizeof(kDownsamplePixelSpirv), "PSDownsample", 1, 0, 1);
@@ -752,7 +796,8 @@ bool GpuRenderer::Impl::Create() {
                               sizeof(kGammaPixelDxbc), kGammaPixelSpirv, sizeof(kGammaPixelSpirv),
                               "PSGamma", 1, 0, 1);
     if (!vertex_shader || !pixel_shader || !spot_shader || !soft_shader || !shadow_shader ||
-        !fullscreen_shader || !resolve_shader || !downsample_shader || !blur_shader ||
+        !fullscreen_shader || !resolve_shader || !overlay_start_shader || !downsample_shader ||
+        !blur_shader ||
         !glare_shader || !composite_shader || !composite_history_shader || !gamma_shader)
         return false;
     resolve_pipeline = MakeFullscreenPipeline(resolve_shader, "resolve");
@@ -783,6 +828,13 @@ bool GpuRenderer::Impl::Create() {
     if (!shadow_maps)
         REXLOG_WARN("native view gpu: the device can't draw into an R32_FLOAT texture; the "
                     "characters are drawn without their self-shadows");
+    // the overlay's multisampled targets (Direct3D 12 and Vulkan both must
+    // have 4 samples; 2 every desktop GPU has)
+    for (int k = 0; k < 2; k++) {
+        const SDL_GPUSampleCount count = k ? SDL_GPU_SAMPLECOUNT_4 : SDL_GPU_SAMPLECOUNT_2;
+        ms_supported[k] = SDL_GPUTextureSupportsSampleCount(device, kColorFormat, count) &&
+                          SDL_GPUTextureSupportsSampleCount(device, kDepthFormat, count);
+    }
 
     // nearest and wrapping, as Shade() samples
     SDL_GPUSamplerCreateInfo si{};
@@ -878,6 +930,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
             if (p) SDL_ReleaseGPUGraphicsPipeline(device, p);
         for (SDL_GPUShader* sh : {vertex_shader, pixel_shader, spot_shader, soft_shader,
                                   shadow_shader, fullscreen_shader, resolve_shader,
+                                  overlay_start_shader,
                                   downsample_shader, blur_shader, glare_shader, composite_shader,
                                   composite_history_shader, gamma_shader})
             if (sh) SDL_ReleaseGPUShader(device, sh);
@@ -905,7 +958,10 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     vertex_shader = pixel_shader = spot_shader = soft_shader = shadow_shader = nullptr;
     fullscreen_shader = nullptr;
     shadow_maps = false;
-    resolve_shader = nullptr;
+    resolve_shader = overlay_start_shader = nullptr;
+    ms_supported[0] = ms_supported[1] = false;
+    ms_fallback_logged = 0;
+    ms_failure_logged = false;
     downsample_shader = blur_shader = glare_shader = composite_shader = gamma_shader = nullptr;
     composite_history_shader = nullptr;
     resolve_pipeline = downsample_pipeline = blur_pipeline = glare_pipeline = nullptr;
@@ -925,9 +981,9 @@ void GpuRenderer::Impl::Release(bool stop_video) {
 
 SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules& rules,
                                                      AlphaMode alpha, CullWinding cull,
-                                                     PixelKind pixel) {
-    const int key =
-        int(pixel) << 10 | int(cull) << 8 | int(alpha) << 6 | blend << 3 | rules.Key();
+                                                     PixelKind pixel, uint32_t samples) {
+    const int key = SampleBits(samples) << 12 | int(pixel) << 10 | int(cull) << 8 |
+                    int(alpha) << 6 | blend << 3 | rules.Key();
     if (auto it = pipelines.find(key); it != pipelines.end()) return it->second;
     const auto start = std::chrono::steady_clock::now();
 
@@ -1060,21 +1116,104 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     pi.target_info.num_color_targets = 1;
     pi.target_info.depth_stencil_format = kDepthFormat;
     pi.target_info.has_depth_stencil_target = true;
+    pi.multisample_state.sample_count = SampleCount(samples);
     SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(device, &pi);
     if (!p) REXLOG_WARN("native view gpu: no pipeline ({})", SDL_GetError());
     pipelines[key] = p;
     // one Prewarm doesn't make: a frame waited for it (add it there)
     if (warmed_up) {
         REXLOG_INFO("native view gpu: pipeline made after warm-up: {:#x} (pixel {}, cull {}, "
-                    "alpha {}, blend {}, depth rules {}) ({:.1f} ms)",
-                    key, int(pixel), int(cull), int(alpha), blend, rules.Key(),
+                    "alpha {}, blend {}, depth rules {}, samples {}) ({:.1f} ms)",
+                    key, int(pixel), int(cull), int(alpha), blend, rules.Key(), samples,
                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                               start).count());
     }
     return p;
 }
 
-void GpuRenderer::Impl::Prewarm() {
+SDL_GPUGraphicsPipeline* GpuRenderer::Impl::OverlayStartPipeline(uint32_t samples) {
+    const int key = 1 << 16 | SampleBits(samples);
+    if (auto it = pipelines.find(key); it != pipelines.end()) return it->second;
+    const auto start = std::chrono::steady_clock::now();
+    SDL_GPUColorTargetDescription target{};
+    target.format = kColorFormat;
+    SDL_GPUGraphicsPipelineCreateInfo pi{};
+    pi.vertex_shader = fullscreen_shader;
+    pi.fragment_shader = overlay_start_shader;
+    pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+    pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+    pi.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+    // its depth everywhere, whatever is there
+    pi.depth_stencil_state.enable_depth_test = true;
+    pi.depth_stencil_state.enable_depth_write = true;
+    pi.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_ALWAYS;
+    pi.multisample_state.sample_count = SampleCount(samples);
+    pi.target_info.color_target_descriptions = &target;
+    pi.target_info.num_color_targets = 1;
+    pi.target_info.depth_stencil_format = kDepthFormat;
+    pi.target_info.has_depth_stencil_target = true;
+    SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(device, &pi);
+    if (!p) REXLOG_WARN("native view gpu: no overlay start pipeline ({})", SDL_GetError());
+    pipelines[key] = p;
+    if (warmed_up) {
+        REXLOG_INFO("native view gpu: pipeline made after warm-up: the overlay's start at {} "
+                    "samples ({:.1f} ms)",
+                    samples,
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                              start).count());
+    }
+    return p;
+}
+
+uint32_t GpuRenderer::Impl::DeviceSamples(uint32_t want) {
+    if (want != 2 && want != 4) return 1;
+    const bool two = ms_supported[0], four = ms_supported[1];
+    const uint32_t got = want == 2 ? (two ? 2 : four ? 4 : 1) : (four ? 4 : two ? 2 : 1);
+    if (got != want && !(ms_fallback_logged & want)) {
+        ms_fallback_logged |= want;
+        REXLOG_WARN("native view gpu: the device can't draw {} samples a pixel; the overlay "
+                    "is drawn with {}",
+                    want, got);
+    }
+    return got;
+}
+
+bool GpuRenderer::Impl::EnsureOverlayTargets(uint32_t samples) {
+    if (color_ms && ms_samples == samples && ms_w == width && ms_h == height) return true;
+    if (color_ms) SDL_ReleaseGPUTexture(device, color_ms);
+    if (depth_ms) SDL_ReleaseGPUTexture(device, depth_ms);
+    SDL_GPUTextureCreateInfo ti{};
+    ti.type = SDL_GPU_TEXTURETYPE_2D;
+    ti.width = width;
+    ti.height = height;
+    ti.layer_count_or_depth = 1;
+    ti.num_levels = 1;
+    ti.sample_count = SampleCount(samples);
+    ti.format = kColorFormat;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+    color_ms = SDL_CreateGPUTexture(device, &ti);
+    ti.format = kDepthFormat;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+    depth_ms = SDL_CreateGPUTexture(device, &ti);
+    if (!color_ms || !depth_ms) {
+        if (!ms_failure_logged)
+            REXLOG_WARN("native view gpu: no {}x{} target at {} samples ({}); the overlay is "
+                        "drawn single-sampled",
+                        width, height, samples, SDL_GetError());
+        ms_failure_logged = true;
+        if (color_ms) SDL_ReleaseGPUTexture(device, color_ms);
+        if (depth_ms) SDL_ReleaseGPUTexture(device, depth_ms);
+        color_ms = depth_ms = nullptr;
+        ms_w = ms_h = 0;
+        return false;
+    }
+    ms_samples = samples;
+    ms_w = width;
+    ms_h = height;
+    return true;
+}
+
+void GpuRenderer::Impl::Prewarm(uint32_t overlay_samples) {
     warm = true;
     const auto start = std::chrono::steady_clock::now();
     // RulesFor's, with blending on and off, culling nothing, what RndMat's
@@ -1104,6 +1243,19 @@ void GpuRenderer::Impl::Prewarm() {
         for (CullWinding cull :
              {CullWinding::kNone, CullWinding::kClockwise, CullWinding::kCounterClockwise})
             ShadowDepthPipeline(cull);
+    // the overlay's, multisampled: its start, and its draws, which leave
+    // the picture's alpha be (AlphaMode::kNone); at the game's 2 samples
+    // whatever the setting is now, so turning it back on doesn't wait for
+    // them, and at the setting's (the same ones again are found made)
+    for (uint32_t samples : {DeviceSamples(2), DeviceSamples(overlay_samples)}) {
+        if (samples <= 1) continue;
+        OverlayStartPipeline(samples);
+        for (CullWinding cull :
+             {CullWinding::kNone, CullWinding::kClockwise, CullWinding::kCounterClockwise})
+            for (int blend = kBlendDest; blend <= kBlendPreMultAlpha; blend++)
+                for (const DepthRules& r : kRules)
+                    Pipeline(blend, r, AlphaMode::kNone, cull, PixelKind::kMesh, samples);
+    }
     if (upload_size < kInitialUploadBytes) {
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
         SDL_GPUTransferBufferCreateInfo tbi{};
@@ -1325,11 +1477,14 @@ void GpuRenderer::Impl::ReleaseTargets() {
         for (SDL_GPUTexture* t : {scene, color, depth, behind, graded, post_dof, post_bloom[0],
                                   post_bloom[1], post_bloom[2], post_tmp[0], post_tmp[1],
                                   post_tmp[2], spot_scratch.texture, light_scratch.texture,
-                                  soft_scratch.texture})
+                                  soft_scratch.texture, color_ms, depth_ms})
             if (t) SDL_ReleaseGPUTexture(device, t);
         if (readback) SDL_ReleaseGPUTransferBuffer(device, readback);
     }
     scene = color = depth = behind = graded = post_dof = nullptr;
+    color_ms = depth_ms = nullptr;
+    ms_samples = 1;
+    ms_w = ms_h = 0;
     spot_scratch = light_scratch = soft_scratch = Scratch{};
     for (int k = 0; k < 3; k++) post_bloom[k] = post_tmp[k] = nullptr;
     readback = nullptr;
@@ -2073,19 +2228,71 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     bool back_begun = false;
     bool resolved = false;
     bool depth_fresh = false;  // the open pass's depth is cleared and untouched
+    uint32_t pass_samples = 1;  // the open pass's targets'
+    // The overlay's samples (soft_raster.h's OverlaySamples) as the device
+    // draws them, into its multisampled targets; 1 into `color`, over the
+    // world's depth, as before. A capture from before the cameras were kept
+    // has its overlay go on over the world's depth, which the overlay's start
+    // reads: single-sampled where the device can't sample it.
+    SDL_GPUTexture* const world_depth = depth_sampled ? depth : no_depth;
+    uint32_t overlay_samples = DeviceSamples(OverlaySamples(o));
+    if (overlay_samples > 1 &&
+        ((!layout.cameras && !depth_sampled) || !EnsureOverlayTargets(overlay_samples) ||
+         !OverlayStartPipeline(overlay_samples)))
+        overlay_samples = 1;
+    bool overlay_start = false;  // the overlay's targets are yet to be started
     // the frame's clear colour (soft_raster.h's ClearRgba), the scene's alpha 0
     const uint32_t clear_rgba = ClearRgba(frame);
     const SDL_FColor clear_color = {float(clear_rgba & 0xff) / 255.0f,
                                     float(clear_rgba >> 8 & 0xff) / 255.0f,
                                     float(clear_rgba >> 16 & 0xff) / 255.0f, 0.0f};
     auto begin_back = [&](bool clear_depth) {
+        // the overlay's, multisampled: each of its passes resolves into the
+        // picture as it ends
+        const bool ms = resolved && overlay_samples > 1;
+        bool depth_cleared = false;
+        if (ms && overlay_start) {
+            // RB3's DoPostProcess clears its 2x target and draws the post
+            // picture into it (BeginTiling, CopyPostProcess): here the
+            // picture into every sample, and the overlay's depth 0, or the
+            // world's where a capture from before the cameras goes on over
+            // it (and no new camera clears it)
+            SDL_GPUColorTargetInfo start_ct{};
+            start_ct.texture = color_ms;
+            start_ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
+            start_ct.store_op = SDL_GPU_STOREOP_STORE;
+            SDL_GPUDepthStencilTargetInfo start_dt{};
+            start_dt.texture = depth_ms;
+            start_dt.load_op = SDL_GPU_LOADOP_DONT_CARE;
+            start_dt.store_op = SDL_GPU_STOREOP_STORE;
+            start_dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+            start_dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+            SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &start_ct, 1, &start_dt);
+            SDL_BindGPUGraphicsPipeline(rp, OverlayStartPipeline(overlay_samples));
+            const SDL_GPUTextureSamplerBinding tb[2] = {{color, sampler}, {world_depth, sampler}};
+            SDL_BindGPUFragmentSamplers(rp, 0, tb, 2);
+            post::PostPass p{};
+            const bool world = !layout.cameras && !clear_depth;
+            p.mode = {0, world ? 1u : 0u, 0, 0};
+            p.target = {float(width), float(height), 1.0f / float(width), 1.0f / float(height)};
+            SDL_PushGPUFragmentUniformData(cmd, 0, &p, sizeof(p));
+            SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+            SDL_EndGPURenderPass(rp);
+            overlay_start = false;
+            depth_cleared = !world;
+            clear_depth = false;
+        }
         SDL_GPUColorTargetInfo ct{};
-        ct.texture = resolved ? color : scene;
+        ct.texture = ms ? color_ms : resolved ? color : scene;
         ct.clear_color = clear_color;
         ct.load_op = back_begun ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
         ct.store_op = SDL_GPU_STOREOP_STORE;
+        if (ms) {
+            ct.store_op = SDL_GPU_STOREOP_RESOLVE_AND_STORE;
+            ct.resolve_texture = color;
+        }
         SDL_GPUDepthStencilTargetInfo dt{};
-        dt.texture = depth;
+        dt.texture = ms ? depth_ms : depth;
         dt.clear_depth = 0.0f;
         clear_depth |= !back_begun;
         dt.load_op = clear_depth ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
@@ -2098,7 +2305,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         bound_viewport[2] = float(width);
         bound_viewport[3] = float(height);
         back_begun = true;
-        depth_fresh = clear_depth;
+        depth_fresh = clear_depth || depth_cleared;
+        pass_samples = ms ? overlay_samples : 1;
     };
 
     // one of post.hlsl's full-screen passes: `pipeline` into all of `target`
@@ -2275,8 +2483,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         resolved = true;
         // the overlay's depth starts cleared with the capture's cameras, as
-        // on the CPU (Rasterize's resolve)
+        // on the CPU (Rasterize's resolve); multisampled, the overlay's first
+        // pass starts its targets
         clear_overlay_depth = layout.cameras;
+        overlay_start = overlay_samples > 1;
     };
 
     // the density map the spotlights' cones read: the last drawn, as on the
@@ -2298,7 +2508,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         const PixelKind kind = cone ? PixelKind::kSpot : soft ? PixelKind::kSoft : PixelKind::kMesh;
         SDL_GPUGraphicsPipeline* pipeline =
             shadow_depth ? ShadowDepthPipeline(cull)
-                         : Pipeline(blend, RulesFor(it, o, no_z), alpha, cull, kind);
+                         : Pipeline(blend, RulesFor(it, o, no_z), alpha, cull, kind, pass_samples);
         if (!pipeline) {
             st.skipped++;
             return;
@@ -2613,6 +2823,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
             dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
             begin_pass(ct, dt);
+            pass_samples = 1;
         };
         begin_rt(true);
         for (size_t d = run.first; d < run.end; d++) {
@@ -2886,11 +3097,11 @@ bool GpuRenderer::DownloadOutput(int slot, std::vector<uint32_t>& rgba, uint32_t
     return true;
 }
 
-void GpuRenderer::Prewarm() {
+void GpuRenderer::Prewarm(uint32_t overlay_samples) {
     // done already, without waiting for a frame being drawn
     if (impl_->warm) return;
     std::lock_guard lock(impl_->mutex);
-    if (impl_->device && !impl_->warm) impl_->Prewarm();
+    if (impl_->device && !impl_->warm) impl_->Prewarm(overlay_samples);
 }
 
 void GpuRenderer::SetPresentDevice(void* d3d12_device) {
@@ -2918,7 +3129,7 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
                        std::vector<uint32_t>* rgba, GpuStats& stats) {
     if (!impl_->device) return false;
     // before the clock starts: it's the device's setting up, not a frame's
-    if (!impl_->warm) impl_->Prewarm();
+    if (!impl_->warm) impl_->Prewarm(OverlaySamples(options));
     const auto start = std::chrono::steady_clock::now();
     stats = GpuStats{};
     // without R32_FLOAT targets, no shadow map's pass: every SHADOW_BUFFER

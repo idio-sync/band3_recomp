@@ -50,6 +50,18 @@
 // A picture bigger than the game's 1280x720 has the passes that are pictures
 // of the screen (the spotlights', the soft particles') drawn bigger with it
 // (RasterOptions::target_scale, PassTargetSize), the others at their size.
+//
+// The overlay is multisampled, as RB3's is (RasterOptions::msaa,
+// OverlaySamples): RB3 draws the world into a 1x back buffer and everything
+// after DoPostProcess (the track, the HUD, panels after EndWorld) into a 2x
+// one, which EndTiling resolves into the front buffer as the mean of each
+// pixel's two samples. Every texture pass, the world and its depth (which
+// post-processing reads) are 1x, there and here. The CPU does it the way a
+// GPU's MSAA does: each overlay pixel has a colour and a depth per sample, at
+// D3D's standard positions (kSamplePositions in soft_raster.cpp), the
+// picture copied into each at the resolve; a triangle covering any of them is
+// shaded once, at the pixel's centre, and depth-tested and blended into each
+// sample it covers; the frame's end averages them into the picture.
 
 namespace band3::render {
 
@@ -144,6 +156,10 @@ struct RasterOptions {
     // (scene_capture.h's NoMaterial); off, they're left out, as the
     // renderers did before the capture kept them
     bool default_material = true;
+    // the overlay's samples per pixel (OverlaySamples): 2, the game's (its
+    // D3DMULTISAMPLE_2_SAMPLES offscreen target), 4 smoother than the game,
+    // 1 none, as the renderers drew before
+    uint32_t msaa = 2;
 };
 
 // whether the renderers draw d, as far as the options say
@@ -153,6 +169,14 @@ inline bool DrawnByOptions(const FrameCapture& f, const DrawItem& d, const Raste
     const ShadeInputs* s =
         d.shade >= 0 && size_t(d.shade) < f.shades.size() ? &f.shades[d.shade] : nullptr;
     return !NoMaterial(d, s);
+}
+
+// A frame's overlay's samples per pixel: RasterOptions::msaa (2 or 4; any
+// other is 1) for a picture (RasterView::kFinal), 1 for a view of the scene
+// target, which ends at the resolve
+inline uint32_t OverlaySamples(const RasterOptions& o) {
+    if (o.view != RasterView::kFinal) return 1;
+    return o.msaa == 2 || o.msaa == 4 ? o.msaa : 1;
 }
 
 struct RasterStats {

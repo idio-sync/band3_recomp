@@ -95,6 +95,7 @@ REXCVAR_DECLARE(bool, native_view_normal_maps);
 REXCVAR_DECLARE(bool, native_view_texture_filtering);
 REXCVAR_DECLARE(bool, native_view_target_scale);
 REXCVAR_DECLARE(int32_t, native_view_shadow_scale);
+REXCVAR_DECLARE(int32_t, native_view_msaa);
 
 namespace band3::settings {
 

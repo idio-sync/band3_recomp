@@ -53,6 +53,7 @@ songs, menu round trips and F8 both ways in each song.
 | `renderer` (Band3 → Graphics) | `emulated` (the default) or `native` |
 | `emulated_gpu_while_native` (Band3 → Graphics) | with `renderer` native, `skip_draws` (the default) leaves the game's draws out of the emulated GPU's work as above; `full` has it draw everything |
 | `native_max_height` (Band3 → Graphics) | the most lines the native renderer draws: a taller window's picture is drawn this tall and scaled up to fill it, for 4K on a GPU that can't keep up at full size. 0 (the default) draws at the window's size |
+| `native_view_msaa` (Band3 → Graphics) | the samples a pixel the native renderer and the native view draw the overlay with (the track, the HUD, menus drawn after the world), averaged at its edges: 2 (the default) as RB3 does, 4 smoother than the game, 1 none. RB3 multisamples only those: the world, its post-processing and every texture pass are single-sampled, in the game and here. Where the GPU can't draw 2 samples it draws 4 (or 4 → 2, else 1; the log says so) |
 | `native_present_zero_copy` (Band3 → Debug) | on (the default) shows the GPU's frames where they are; off reads each back and uploads it, to compare |
 | `native_view_target_scale` (Band3 → Debug) | on (the default) draws the passes that are pictures of the screen (the spotlights' haze and the soft particles' smoke, made at 640x360 and 320x180 for the game's 1280x720) in proportion to the picture: 1.5 times at 1080p, 3 times at 4K. Off keeps the game's sizes, to compare |
 | `native_view_shadow_scale` (Band3 → Debug) | the characters' self-shadow maps at this many times the game's 512x512 (1, the default, to 4): sharper shadow edges, and less of the game's own shadow acne, so further from the game's picture |
@@ -168,6 +169,7 @@ option). It prints a `post:` line (what post-processing was set to do), a `check
 | `--size WxH` | the size to draw at (640x360) when nothing sets it |
 | `--scale <f>` | draws at f times 1280x720 (or at `--size`, or the PNG's size with `--compare` and `--diff`) with the haze's and smoke's passes f times theirs, as the native renderer draws a window f times 720 lines tall: `--scale 1.5 --diff <name>.gpu.presented.png` for a 1080-line window |
 | `--shadow-scale <f>` | the characters' shadow maps at f times their size (`native_view_shadow_scale`) |
+| `--msaa 1\|2\|4` | the overlay's samples a pixel (`native_view_msaa`): 2 by default, as the game's; 1 as the renderers drew before |
 | `--list` | the passes and every draw: mesh, material, where it lands, what its shader was given, its `cull` (2 `D3DCULL_CW`, 6 `D3DCULL_CCW`); and `shadow:` lines checking each self-shadowed draw's shadow map |
 | `--shade <draw>` | everything one draw's shader was given |
 | `--pick X,Y` | the draw that last wrote that pixel (at `--size`), its colour and shade |

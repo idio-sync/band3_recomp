@@ -358,6 +358,7 @@ class Renderer {
                 ScaleForPicture(o);
                 o.normal_maps = REXCVAR_GET(native_view_normal_maps);
                 o.filtering = REXCVAR_GET(native_view_texture_filtering);
+                o.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
                 // drawn frame after frame, so the trails have the post frame
                 // before (the CPU's kept here, the GPU's in GpuRenderer)
                 o.trails = true;
@@ -1038,7 +1039,7 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         active_ = true;
         // every pipeline made now, here on the UI thread, not by the
         // worker's first frame while the window waits for it
-        if (UpdateGpu()) GpuRenderer::Get().Prewarm();
+        if (UpdateGpu()) GpuRenderer::Get().Prewarm(uint32_t(REXCVAR_GET(native_view_msaa)));
         const bool zero_copy = ChoosePath();
         // before the first paint, the window's size (minimized, a paint may
         // not come for a while)

@@ -414,6 +414,13 @@ REXCVAR_DEFINE_INT32(native_view_shadow_scale, 1, "Band3/Debug",
     "game's")
     .range(1, 4);
 
+REXCVAR_DEFINE_INT32(native_view_msaa, 2, "Band3/Graphics",
+    "Samples a pixel the native renderer and the native view (experimental) draw the HUD, "
+    "the track and the menus over the world with, averaged at their edges: 2 = the game's "
+    "(RB3 multisamples them, not the world), 4 smoother, 1 none")
+    .range(1, 4)
+    .validator([](std::string_view v) { return v == "1" || v == "2" || v == "4"; });
+
 REXCVAR_DEFINE_BOOL(native_view_capture_profile, false, "Band3/Debug",
     "Time each step of the native view's capture on the game's thread (geometry, textures, "
     "shade states, bones...) for the test harness's native_view stats, at a clock read per "

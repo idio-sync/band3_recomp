@@ -19,7 +19,7 @@
 //                               [--no-post | --post-only xfm|dof|bloom|spot|soft|noise]
 //                               [--no-grain]
 //                               [--no-gamma | --gamma-from <other.cap>]
-//                               [--scale <f>] [--shadow-scale <f>]
+//                               [--scale <f>] [--shadow-scale <f>] [--msaa 1|2|4]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
 // and inside the frustum with the matrix as captured and transposed (the back
@@ -136,6 +136,9 @@
 // target_scale); --shadow-scale draws the characters' shadow maps f times
 // theirs (RasterOptions::shadow_scale). --dump-rt writes a scaled pass at
 // its scaled size.
+// --msaa draws the overlay (the draws from post-processing on: the track, the
+// HUD) with that many samples a pixel, averaged (RasterOptions::msaa,
+// native_view_msaa): 2, the default, as RB3 does, 4 smoother, 1 none.
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
@@ -1043,6 +1046,13 @@ int main(int argc, char** argv) {
         else if (a == "--scale" && i + 1 < argc) scale = std::strtof(argv[++i], nullptr);
         else if (a == "--shadow-scale" && i + 1 < argc)
             o.shadow_scale = std::strtof(argv[++i], nullptr);
+        else if (a == "--msaa" && i + 1 < argc) {
+            o.msaa = uint32_t(std::strtoul(argv[++i], nullptr, 0));
+            if (o.msaa != 1 && o.msaa != 2 && o.msaa != 4) {
+                std::fprintf(stderr, "--msaa takes 1, 2 or 4\n");
+                return 2;
+            }
+        }
         else if (a == "--dump-alpha" && i + 1 < argc) dump_alpha = argv[++i];
         else if (a == "--dump-depth" && i + 1 < argc) dump_depth = argv[++i];
         else if (a == "--dump-bloom" && i + 1 < argc) dump_bloom = argv[++i];
