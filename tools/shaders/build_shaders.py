@@ -77,14 +77,25 @@ SHADERS = [
           ("textures", "bloom0_tex", 2, 3), ("textures", "bloom1_tex", 2, 4),
           ("textures", "bloom2_tex", 2, 5), ("textures", "volume_tex", 2, 6),
           ("textures", "density_tex", 2, 7), ("textures", "soft_tex", 2, 8),
-          ("textures", "noise_tex", 2, 9)}),
+          ("textures", "noise_tex", 2, 9), ("textures", "velocity_tex", 2, 10)}),
         ("kCompositeHistoryPixel", "PSCompositeHistory", "ps_5_1", "ps_6_0",
          {("ubos", "PostUniforms", 3, 0), ("textures", "color_tex", 2, 0),
           ("textures", "depth_tex", 2, 1), ("textures", "dof_tex", 2, 2),
           ("textures", "bloom0_tex", 2, 3), ("textures", "bloom1_tex", 2, 4),
           ("textures", "bloom2_tex", 2, 5), ("textures", "volume_tex", 2, 6),
           ("textures", "density_tex", 2, 7), ("textures", "soft_tex", 2, 8),
-          ("textures", "noise_tex", 2, 9), ("textures", "prev_tex", 2, 10)}),
+          ("textures", "noise_tex", 2, 9), ("textures", "velocity_tex", 2, 10),
+          ("textures", "prev_tex", 2, 11)}),
+        # the velocity pass: the scene's depth alone (t1; t0 bound, not read)
+        ("kVelocityPixel", "PSVelocity", "ps_5_1", "ps_6_0",
+         {("ubos", "PostUniforms", 3, 0), ("textures", "depth_tex", 2, 1)}),
+    ]),
+    # the camera motion blur's object pass: meshes into the velocity texture
+    ("velocity.hlsl", "velocity_shaders.gen.h", [
+        ("kVelocityObjectVertex", "VSVelocityObject", "vs_5_1", "vs_6_0",
+         {("ubos", "ObjectVertexUniforms", 1, 0), ("ssbos", "bones", 0, 0)}),
+        ("kVelocityObjectPixel", "PSVelocityObject", "ps_5_1", "ps_6_0",
+         {("ubos", "ObjectPixelUniforms", 3, 0), ("textures", "depth_tex", 2, 0)}),
     ]),
     # the display gamma ramp's pass, drawn with post.hlsl's VSFullscreen
     ("gamma.hlsl", "gamma_shaders.gen.h", [

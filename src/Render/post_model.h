@@ -19,6 +19,13 @@
 //     have L0 only, and its glare pass after the blur (kBloomGlareShader: a
 //     ghost of the bright parts mirrored through the centre,
 //     post_model.hlsli's Glare*);
+//   camera motion blur (velocity blur): a velocity texture half the
+//     picture's size each way, each texel how far the picture moved there
+//     since the last frame, from the depth and the previous frame's camera
+//     (RndVelocityBuffer::Draw), then the meshes RB3 draws there with their
+//     own motion (the characters: its object pass, DrawMesh) over that; the
+//     composite takes the scene blurred along it, where it moved enough
+//     (post_model.hlsli's Velocity*);
 //   the composite: the scene lerped toward D0 by the depth, the
 //     soft-particle buffer added (RndSoftParticleBuffer's, scene_capture.h's
 //     IsSoftParticle), bloom screen-blended (or glare added), the
@@ -43,7 +50,7 @@ using shade::uint4;
 
 #include "src/Render/shaders/post_params.hlsli"
 
-static_assert(sizeof(PostPass) == 31 * 16, "PostPass is float4s and uint4s only, as HLSL packs it");
+static_assert(sizeof(PostPass) == 40 * 16, "PostPass is float4s and uint4s only, as HLSL packs it");
 
 // The 360's back buffer, 1280x720: RB3's post-processing sizes its levels by
 // it, and the blurs' taps are offsets in its levels' texels. The native view's
@@ -87,6 +94,11 @@ struct PostPlan {
     // buffer (a post frame's, with its constants): the renderer keeps its
     // output as the next frame's previous, which the trails read
     bool trails_update = false;
+    // the motion blur's object pass, drawn over the velocity texture after
+    // its camera pass, in order: the frame's VelocityObjects and each one's
+    // numbers (its mesh.z, the GPU's bones, the renderer's to fill in)
+    std::vector<const VelocityObject*> velocity_objects;
+    std::vector<VelocityObjectPass> velocity_object_passes;
 };
 
 // The previous post frame the trails read (the post buffer, s14): the last
@@ -119,9 +131,18 @@ struct PostHistory {
 // its emulated rate; a renderer without the previous post frame leaves
 // them off (a capture's: the term then is the colour alone, as it is in
 // steady state for every music-video proc but video_trails).
+// The camera motion blur is on where the game's composite had it
+// (TheShaderMgr + 0x39, by its c122), or on a world frame where DoVelocity
+// would turn it on (post_params.h's VelocityExpected, by the velocity
+// buffer's last c122), and the capture has the velocity buffer's cameras
+// (PostParams::vel_read: captures from before don't); with `velocity` false
+// it's left off. A frame whose game drew the motion blur's object pass
+// (FrameCapture::velocity_objects: a post frame's) has it drawn over the
+// camera's (PostPlan::velocity_objects).
 // With `only` (kPost bits, 0 all) the effects outside it are left off, to see
 // each on its own.
-bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noise = true);
+bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noise = true,
+              bool velocity = true);
 
 // A texture the composite reads besides the scene's own levels, RGBA8 (R
 // low), w x h; none (read as 0) if px is null
@@ -155,6 +176,21 @@ void CompositeCpu(const PostPass& pass, const float scene[4], const float dof[4]
                   const float l0[3], const float l1[3], const float l2[3], const float volume[3],
                   float density, const float soft[3], const float noise0[3],
                   const float noise1[3], float out[3]);
+// the velocity pass's texel at uv over native depth inv_w (VelocityTexel,
+// unrounded), and the composite's scene at uv blurred along the velocity
+// texel `velocity` (bilinear) through `tap`, which reads the scene at a uv:
+// the scene `centre` as it is outside the mask
+void VelocityTexelCpu(const PostPass& pass, const float uv[2], float inv_w, float out[4]);
+// the object pass's texel from the clip positions cur and prev over native
+// depth inv_w (VelocityObjectTexel), and a vertex's two clip positions
+// (VelocityObjectWeights, VelocityObjectClip) by object o's palettes
+void VelocityObjectTexelCpu(const VelocityObjectPass& pass, const float cur[4],
+                            const float prev[4], float inv_w, float out[4]);
+void VelocityObjectVertexCpu(const VelocityObject& o, const VelocityObjectPass& pass,
+                             const Vertex& v, float cur[4], float prev[4]);
+void VelocityBlurCpu(const PostPass& pass, const float uv[2], const float velocity[4],
+                     const float centre[4], void (*tap)(const float at[2], float out[4]),
+                     float out[4]);
 // the trails over a composite's colour `rgb` (unsaturated), from the
 // previous post frame's texel `prev` (RGBA 0..1): the colour and alpha out
 void TrailsCpu(const PostPass& pass, const float rgb[3], const float prev[4], float out[4]);

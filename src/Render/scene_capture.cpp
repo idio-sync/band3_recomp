@@ -244,6 +244,40 @@ constexpr int32_t kRectShaderBlur = 1;
 // RndSoftParticleBuffer::DoPost's r3 is the buffer's PostProcessor (+0x28),
 // its two surfaces' DxTex at +4 and +8 (out/research/softparticle_survey.md 1)
 constexpr uint32_t kSoftPost_Surfaces = 4;
+// The camera motion blur's (out/research/n5_hub_soft.md 3):
+// RndVelocityBuffer::sSingleton, its fields as rb3-xenon's
+// rndobj/VelocityBuffer.h has them, checked against the retail Draw
+// (0x82B855F0); the proc's mMotionBlurVelocity (DoVelocity's lbz 0x1A4);
+// TheNgRnd (Draw's PreDepthTexture and DrawRectDepth calls go through it) and
+// its pre-pass depth texture (DxRnd::PreDepthTexture: lwz 0x340); and the
+// samplers the composite reads the scene and the velocity texture from
+constexpr uint32_t kVelocityBuffer = 0x82E12BA0;
+constexpr uint32_t kVel_ViewProj = 0x8;
+constexpr uint32_t kVel_DepthRange = 0x48;
+constexpr uint32_t kVel_FrustumNear = 0x58;
+constexpr uint32_t kVel_FrustumCorners = 0x68;
+constexpr uint32_t kVel_Cam = 0xa8;
+constexpr uint32_t kVel_Scale = 0x36be8;
+constexpr uint32_t kVel_Xfms = 0x36bec;  // two Hmx::Matrix4, 64 bytes apart
+constexpr uint32_t kVel_Index = 0x36c6c;
+constexpr uint32_t kVel_Frame = 0x36c70;
+constexpr uint32_t kVel_Tex = 0x36c74;
+constexpr uint32_t kVel_LastCam = 0x36c7c;
+constexpr uint32_t kPostProc_MotionBlurVelocity = 0x1a4;
+constexpr uint32_t kNgRndHolder = 0x82C76B6C;
+constexpr uint32_t kNgRnd_PreDepth = 0x340;
+constexpr uint32_t kSceneSampler = 6;
+constexpr uint32_t kVelocitySampler = 10;
+// its transform caches, RndXfmCache (VelocityBuffer.h, checked against the
+// retail DrawMesh, 0x82B852A8): two, 0x1B584 apart from +0xAC, each its
+// meshes by bone slot (+0), 12 floats a slot (+0x1F40) and the slots used
+// (+0x1B580); and a mesh's slot in each (RndMesh's mMotionCache keys, +0x138
+// + 4 * index); its material's z mode (kMat_ZMode) 2, transparent, draws none
+constexpr uint32_t kVel_XfmCaches = 0xac;
+constexpr uint32_t kXfmCache_Size = 0x1b584;
+constexpr uint32_t kXfmCache_Floats = 0x1f40;
+constexpr uint32_t kXfmCache_Used = 0x1b580;
+constexpr uint32_t kMesh_MotionKeys = 0x138;
 
 constexpr uint32_t kMaxBufferBytes = 64u << 20;
 constexpr uint32_t kMaxTextureSize = 4096;
@@ -509,6 +543,16 @@ struct State {
     std::shared_ptr<const Texture> noise_map;
     TexSampler noise_sampler;
     uint32_t noise_base = 0;
+    // the meshes the last post frame drew into the velocity buffer with
+    // their own motion (DxMesh::DrawShowing's mesh, its cull mode then) and
+    // the game frame it was: a world frame's object pass is theirs
+    // (EmulateVelocityObjects)
+    struct VelocityMesh {
+        uint32_t mesh = 0;
+        uint8_t cull = 0;
+    };
+    std::vector<VelocityMesh> velocity_meshes;
+    uint64_t velocity_meshes_frame = 0;
     // the frame's draws logged so far (DiagLog): passes without a material,
     // DrawFaces outside a DrawShowing
     uint32_t logged_no_mat = 0;
@@ -1490,9 +1534,125 @@ void LogNoMaterialNotDrawn(const Guest& g, const State& s, uint32_t mesh, bool d
 // pass counts them). `mat` is the pass's, null for a mesh without one;
 // `drawn` false for a DrawShowing that drew no pass, recorded for what it
 // counts.
+// RndVelocityBuffer::DrawMesh's draw (scene_capture.h's VelocityObject):
+// DxMesh::DrawShowing in draw mode 5 hands it the mesh's geometry owner,
+// whose bones it counts and whose faces it draws, with the device set as
+// kept here. Into the frame being captured, apart from its draws; DrawMesh
+// draws none with more bones than the shader has (40).
+constexpr uint32_t kMaxVelocityBones = 40;
+
+void CaptureVelocityObject(const Guest& g, State& s, uint32_t mesh) {
+    if (!g_enabled.load(std::memory_order_relaxed) || !s.building) return;
+    const uint32_t dev = g.U32(kD3DDeviceHolder);
+    if (!dev) return;
+    FrameCapture& fc = *s.building;
+    uint32_t owner = g.U32(mesh + kMesh_GeomOwner);
+    if (!owner) owner = mesh;
+    std::shared_ptr<const Geometry> geometry = CaptureGeometry(g, owner, fc);
+    if (!geometry || geometry->indices.empty()) return;
+    const uint32_t bones = g.U32(owner + kMesh_BonesBegin);
+    const uint32_t bones_end = g.U32(owner + kMesh_BonesEnd);
+    const uint32_t n = bones && bones_end > bones ? (bones_end - bones) / kBone_Size : 0;
+    if (n > kMaxVelocityBones) return;
+    VelocityObject o;
+    o.geom = std::move(geometry);
+    o.mesh = mesh;
+    o.cull = CaptureCull(g);
+    o.skinned = n > 0;
+    o.bones = std::max(n, 1u);
+    auto vs = [&](uint32_t reg, float* out) {
+        for (int c = 0; c < 4; c++) out[c] = g.F32(dev + kDev_VertexShaderF + reg * 16 + c * 4);
+    };
+    for (uint32_t r = 0; r < 8; r++) vs(r, o.view_proj[r]);
+    for (int c = 0; c < 4; c++) o.depth_range[c] = g.F32(dev + kDev_PixelShaderF + 8 * 16 + c * 4);
+    const uint32_t rows = o.bones * 3;
+    o.rows.resize(size_t(rows) * 2 * 4);
+    for (uint32_t i = 0; i < rows; i++) {
+        vs(9 + i, &o.rows[size_t(i) * 4]);
+        vs(129 + i, &o.rows[size_t(rows + i) * 4]);
+    }
+    if (s.velocity_meshes_frame != s.game_frame) {
+        s.velocity_meshes.clear();
+        s.velocity_meshes_frame = s.game_frame;
+    }
+    s.velocity_meshes.push_back({mesh, o.cull});
+    fc.velocity_objects.push_back(std::move(o));
+}
+
+// A world frame's object pass (even/odd rendering: its world's velocity
+// buffer is drawn by the next frame, which the live view's world frame stands
+// in for), as the next frame's DrawMesh will draw it: the meshes the last
+// post frame drew there that this frame's world drew too, each by the
+// palettes the velocity buffer's caches hold for it (this frame's, which
+// DxMesh::SetTransforms cached as the world drew, and the last world's), the
+// camera's view-projection and the previous one (PostParams', as Draw will
+// upload them) and its depth range, into `out`; one the caches lack is left
+// out, as GetXfms leaves it. On frames that draw it, what this gives matched
+// what DrawMesh drew exactly (render_song.b3t's captures).
+void EmulateVelocityObjects(const Guest& g, State& s, FrameCapture& fc,
+                            std::vector<VelocityObject>& out) {
+    const PostParams& p = fc.post;
+    if (!VelocityExpected(p) || s.velocity_meshes.empty()) return;
+    constexpr uint32_t vb = kVelocityBuffer;
+    const uint32_t idx = g.U32(vb + kVel_Index) & 1;
+    const uint32_t caches[2] = {vb + kVel_XfmCaches + idx * kXfmCache_Size,
+                                vb + kVel_XfmCaches + (idx ^ 1) * kXfmCache_Size};
+    for (const State::VelocityMesh& m : s.velocity_meshes) {
+        bool drawn = false;
+        for (const DrawItem& d : fc.draws) drawn |= d.mesh == m.mesh && d.draw_mode == 0;
+        if (!drawn) continue;
+        uint32_t owner = g.U32(m.mesh + kMesh_GeomOwner);
+        if (!owner) owner = m.mesh;
+        const uint32_t mat = g.U32(owner + kMesh_Mat);
+        if (!mat || g.U32(mat + kMat_ZMode) == 2) continue;
+        const uint32_t bones = g.U32(owner + kMesh_BonesBegin);
+        const uint32_t bones_end = g.U32(owner + kMesh_BonesEnd);
+        const uint32_t n = bones && bones_end > bones ? (bones_end - bones) / kBone_Size : 0;
+        if (n > kMaxVelocityBones) continue;
+        const uint32_t count = std::max(n, 1u);
+        // this frame's palette and the last's, where the caches have them
+        uint32_t at[2] = {};
+        bool cached = true;
+        for (int k = 0; k < 2 && cached; k++) {
+            const uint32_t key = g.U32(owner + kMesh_MotionKeys + 4 * (k ? idx ^ 1 : idx));
+            const uint32_t c = caches[k];
+            cached = key + count <= g.U32(c + kXfmCache_Used) && g.U32(c + key * 4) == owner &&
+                     g.U32(c + (key + count - 1) * 4) == owner;
+            at[k] = c + kXfmCache_Floats + key * 48;
+        }
+        if (!cached) continue;
+        std::shared_ptr<const Geometry> geometry = CaptureGeometry(g, owner, fc);
+        if (!geometry || geometry->indices.empty()) continue;
+        VelocityObject o;
+        o.geom = std::move(geometry);
+        o.mesh = m.mesh;
+        o.cull = m.cull;
+        o.skinned = n > 0;
+        o.bones = count;
+        for (int r = 0; r < 4; r++) {
+            for (int c = 0; c < 4; c++) {
+                o.view_proj[r][c] = p.vel_view_proj[c][r];
+                o.view_proj[4 + r][c] = p.vel_prev_view_proj[c][r];
+            }
+            o.depth_range[r] = p.vel_depth_range[r];
+        }
+        o.rows.resize(size_t(count) * 3 * 2 * 4);
+        for (int k = 0; k < 2; k++)
+            for (uint32_t i = 0; i < count * 12; i++)
+                o.rows[size_t(k) * count * 12 + i] = g.F32(at[k] + i * 4);
+        out.push_back(std::move(o));
+    }
+}
+
 void CaptureMesh(uint8_t* base, uint32_t mesh, uint32_t mat, uint32_t pass, bool drawn = true) {
     State& s = S();
     const Guest g{base};
+    // the velocity buffer's object pass, which is no draw of the frame's
+    if (drawn) {
+        const uint32_t holder = g.U32(kDrawModeHolder);
+        if (holder && g.U32(holder + kDrawMode) == kDrawModeVelocity)
+            CaptureVelocityObject(g, s, mesh);
+    }
     std::optional<Sink> sink;
     if (!Target(g, s, sink)) return;
     Lap(s, CaptureProfile::kStepTarget);
@@ -2148,6 +2308,31 @@ void ReadPostParams(const Guest& g, PostParams& p) {
         p.cam_zrange[0] = g.F32(cam + kCam_ZRange);
         p.cam_zrange[1] = g.F32(cam + kCam_ZRange + 4);
     }
+    // The velocity buffer, as Draw will find it: EndWorld's
+    // CacheCameraSettings (in DoWorldEnd, before this) set the camera's
+    // matrix and frustum, and Draw keeps the matrix at index idx and reads
+    // the previous one at idx ^ 1 before AdvanceFrame flips idx
+    constexpr uint32_t vb = kVelocityBuffer;
+    if (g.U32(vb + kVel_Tex)) {
+        p.vel_read = 1;
+        p.vel_on = p.proc ? g.U8(p.proc + kPostProc_MotionBlurVelocity) != 0 : 0;
+        const uint32_t ng = g.U32(kNgRndHolder);
+        p.vel_pre_depth = ng && g.U32(ng + kNgRnd_PreDepth) != 0;
+        const uint32_t world = g.U32(rnd + kRnd_WorldCam);
+        p.vel_same_cam = world && g.U32(vb + kVel_Cam) == world && g.U32(vb + kVel_LastCam) == world;
+        p.vel_frame = g.U32(vb + kVel_Frame);
+        p.vel_scale = g.F32(vb + kVel_Scale);
+        const uint32_t prev = vb + kVel_Xfms + 64 * ((g.U32(vb + kVel_Index) & 1) ^ 1);
+        for (int r = 0; r < 4; r++) {
+            for (int c = 0; c < 4; c++) {
+                p.vel_view_proj[r][c] = g.F32(vb + kVel_ViewProj + r * 16 + c * 4);
+                p.vel_prev_view_proj[r][c] = g.F32(prev + r * 16 + c * 4);
+                p.vel_corners[r][c] = g.F32(vb + kVel_FrustumCorners + r * 16 + c * 4);
+            }
+            p.vel_depth_range[r] = g.F32(vb + kVel_DepthRange + r * 4);
+        }
+        for (int c = 0; c < 3; c++) p.vel_near[c] = g.F32(vb + kVel_FrustumNear + c * 4);
+    }
 }
 
 // pixel shader constant `reg` from the device's shadow
@@ -2170,6 +2355,15 @@ void ReadPostConsts(const Guest& g, PostConsts& pc) {
     ReadPsConst(g, dev, 122, pc.c122);
     ReadPsConst(g, dev, 125, pc.c125);
     ReadPsConst(g, dev, 127, pc.c127);
+    // the velocity pass's, as RndVelocityBuffer::Draw left them (replay's
+    // "velocity:" line sets them against PostParams' vel_*), and the samplers
+    // the composite blurs the scene by
+    ReadPsConst(g, dev, 89, pc.c89);
+    for (int r = 0; r < 4; r++) ReadPsConst(g, dev, 134 + r, pc.c134[r]);
+    for (int i = 0; i < 6; i++) {
+        pc.scene_fetch[i] = g.U32(dev + kDev_TextureFetch + kSceneSampler * 24 + i * 4);
+        pc.velocity_fetch[i] = g.U32(dev + kDev_TextureFetch + kVelocitySampler * 24 + i * 4);
+    }
     if (const uint32_t sm = g.U32(kShaderMgrHolder)) {
         for (int i = 0; i < int(sizeof(pc.flags)); i++) pc.flags[i] = g.U8(sm + kPostFlagBase + i);
         pc.spot_flag = g.U8(sm + kPostFlagSpot);
@@ -2932,6 +3126,9 @@ extern "C" REX_FUNC(DxRnd__DoPostProcess) {
                 fc.noise_map = s.noise_map;
                 fc.noise_sampler = s.noise_sampler;
             }
+            // and its motion blur's object pass, the next frame's
+            if ((fc.proc_cmds & kProcWorld) && !(fc.proc_cmds & kProcPost))
+                EmulateVelocityObjects(Guest{base}, S(), fc, fc.velocity_objects);
         }
     }
     __imp__DxRnd__DoPostProcess(ctx, base);

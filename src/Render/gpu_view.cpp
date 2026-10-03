@@ -8,6 +8,7 @@
 #include "src/Render/shaders/gamma_shaders.gen.h"
 #include "src/Render/shaders/mesh_shaders.gen.h"
 #include "src/Render/shaders/post_shaders.gen.h"
+#include "src/Render/shaders/velocity_shaders.gen.h"
 
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_gpu.h>
@@ -330,12 +331,20 @@ struct GpuRenderer::Impl {
     // the live view's composite, which also keeps the post buffer the
     // trails read (PSCompositeHistory: two targets)
     SDL_GPUShader* composite_history_shader = nullptr;
+    // the camera motion blur's velocity pass (PSVelocity), and its object
+    // pass (velocity.hlsl): a pipeline for each way it culls (CullWinding's
+    // first three)
+    SDL_GPUShader* velocity_shader = nullptr;
+    SDL_GPUShader* velocity_object_vs = nullptr;
+    SDL_GPUShader* velocity_object_ps = nullptr;
+    SDL_GPUGraphicsPipeline* velocity_object_pipelines[3] = {};
     SDL_GPUGraphicsPipeline* resolve_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* downsample_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* blur_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* glare_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* composite_pipeline = nullptr;
     SDL_GPUGraphicsPipeline* composite_history_pipeline = nullptr;
+    SDL_GPUGraphicsPipeline* velocity_pipeline = nullptr;
     // gamma.hlsl's: the display gamma ramp over the finished picture
     SDL_GPUShader* gamma_shader = nullptr;
     SDL_GPUGraphicsPipeline* gamma_pipeline = nullptr;
@@ -392,8 +401,16 @@ struct GpuRenderer::Impl {
     uint32_t width = 0, height = 0;
     // post-processing's levels (post_model.h), RGBA8 as the 360's: the DOF's
     // at a quarter of the picture's size, bloom's at a quarter, a sixteenth
-    // and a sixty-fourth, and one of each size for a blur's first direction
+    // and a sixty-fourth, and one of each size for a blur's first direction;
+    // and the camera motion blur's velocity texture, half the picture's size
     SDL_GPUTexture* post_dof = nullptr;
+    SDL_GPUTexture* post_velocity = nullptr;
+    uint32_t velocity_w = 0, velocity_h = 0;
+    // the object pass's depth, at the velocity texture's size
+    SDL_GPUTexture* post_velocity_depth = nullptr;
+    // where each of the frame's velocity objects' palettes start in the
+    // frame's bones (its two, this frame's then the last's)
+    std::vector<uint32_t> velocity_bone_base;
     SDL_GPUTexture* post_bloom[3] = {};
     SDL_GPUTexture* post_tmp[3] = {};
     uint32_t post_w[3] = {}, post_h[3] = {};
@@ -600,6 +617,10 @@ struct GpuRenderer::Impl {
     // a full-screen pass's pipeline: post.hlsl's triangle and `pixel`, into RGBA8
     SDL_GPUGraphicsPipeline* MakeFullscreenPipeline(SDL_GPUShader* pixel, const char* name,
                                                     uint32_t targets = 1);
+    // the motion blur's object pass's (velocity.hlsl), culling as `cull`
+    // says: into the velocity texture, SrcAlpha (alpha 1 or 0), its depth
+    // smaller-or-equal tested and written
+    SDL_GPUGraphicsPipeline* MakeVelocityObjectPipeline(CullWinding cull);
     bool EnsureHistory(uint32_t w, uint32_t h);
     void ReleaseHistory();
     void ReleaseTargets();
@@ -722,6 +743,52 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::MakeFullscreenPipeline(SDL_GPUShader
     return p;
 }
 
+SDL_GPUGraphicsPipeline* GpuRenderer::Impl::MakeVelocityObjectPipeline(CullWinding cull) {
+    const SDL_GPUVertexBufferDescription buffer{0, sizeof(Vertex), SDL_GPU_VERTEXINPUTRATE_VERTEX,
+                                                0};
+    const SDL_GPUVertexAttribute attributes[] = {
+        {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, uint32_t(offsetof(Vertex, pos))},
+        {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, uint32_t(offsetof(Vertex, nrm))},
+        {2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, uint32_t(offsetof(Vertex, uv))},
+        {3, 0, SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM, uint32_t(offsetof(Vertex, color))},
+        {4, 0, SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4, uint32_t(offsetof(Vertex, bone))},
+        {5, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, uint32_t(offsetof(Vertex, weight))},
+        {6, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, uint32_t(offsetof(Vertex, tan))},
+    };
+    SDL_GPUColorTargetDescription target{};
+    target.format = kColorFormat;
+    SDL_GPUColorTargetBlendState& bs = target.blend_state;
+    bs.enable_blend = true;
+    bs.src_color_blendfactor = bs.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+    bs.dst_color_blendfactor = bs.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    bs.color_blend_op = bs.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    SDL_GPUGraphicsPipelineCreateInfo pi{};
+    pi.vertex_shader = velocity_object_vs;
+    pi.fragment_shader = velocity_object_ps;
+    pi.vertex_input_state.vertex_buffer_descriptions = &buffer;
+    pi.vertex_input_state.num_vertex_buffers = 1;
+    pi.vertex_input_state.vertex_attributes = attributes;
+    pi.vertex_input_state.num_vertex_attributes = uint32_t(std::size(attributes));
+    pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+    pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+    pi.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+    pi.rasterizer_state.cull_mode = cull == CullWinding::kClockwise ? SDL_GPU_CULLMODE_BACK
+                                    : cull == CullWinding::kCounterClockwise
+                                        ? SDL_GPU_CULLMODE_FRONT
+                                        : SDL_GPU_CULLMODE_NONE;
+    pi.rasterizer_state.enable_depth_clip = true;
+    pi.depth_stencil_state.enable_depth_test = true;
+    pi.depth_stencil_state.enable_depth_write = true;
+    pi.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+    pi.target_info.color_target_descriptions = &target;
+    pi.target_info.num_color_targets = 1;
+    pi.target_info.depth_stencil_format = kDepthFormat;
+    pi.target_info.has_depth_stencil_target = true;
+    SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(device, &pi);
+    if (!p) REXLOG_WARN("native view gpu: no velocity object pipeline ({})", SDL_GetError());
+    return p;
+}
+
 bool GpuRenderer::Impl::Create() {
     // offscreen first: it makes no windows at all; the platform's own driver
     // is the fallback
@@ -787,18 +854,32 @@ bool GpuRenderer::Impl::Create() {
                               "PSGlare", 1, 0, 1);
     composite_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kCompositePixelDxbc,
                                   sizeof(kCompositePixelDxbc), kCompositePixelSpirv,
-                                  sizeof(kCompositePixelSpirv), "PSComposite", 10, 0, 1);
+                                  sizeof(kCompositePixelSpirv), "PSComposite", 11, 0, 1);
     composite_history_shader = MakeShader(
         format, SDL_GPU_SHADERSTAGE_FRAGMENT, kCompositeHistoryPixelDxbc,
         sizeof(kCompositeHistoryPixelDxbc), kCompositeHistoryPixelSpirv,
-        sizeof(kCompositeHistoryPixelSpirv), "PSCompositeHistory", 11, 0, 1);
+        sizeof(kCompositeHistoryPixelSpirv), "PSCompositeHistory", 12, 0, 1);
+    // the scene's colour (not read) and depth, as the resolve's
+    velocity_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kVelocityPixelDxbc,
+                                 sizeof(kVelocityPixelDxbc), kVelocityPixelSpirv,
+                                 sizeof(kVelocityPixelSpirv), "PSVelocity", 2, 0, 1);
+    // the object pass: the bones, and the scene's depth
+    velocity_object_vs = MakeShader(
+        format, SDL_GPU_SHADERSTAGE_VERTEX, kVelocityObjectVertexDxbc,
+        sizeof(kVelocityObjectVertexDxbc), kVelocityObjectVertexSpirv,
+        sizeof(kVelocityObjectVertexSpirv), "VSVelocityObject", 0, 1, 1);
+    velocity_object_ps = MakeShader(
+        format, SDL_GPU_SHADERSTAGE_FRAGMENT, kVelocityObjectPixelDxbc,
+        sizeof(kVelocityObjectPixelDxbc), kVelocityObjectPixelSpirv,
+        sizeof(kVelocityObjectPixelSpirv), "PSVelocityObject", 1, 0, 1);
     gamma_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kGammaPixelDxbc,
                               sizeof(kGammaPixelDxbc), kGammaPixelSpirv, sizeof(kGammaPixelSpirv),
                               "PSGamma", 1, 0, 1);
     if (!vertex_shader || !pixel_shader || !spot_shader || !soft_shader || !shadow_shader ||
         !fullscreen_shader || !resolve_shader || !overlay_start_shader || !downsample_shader ||
         !blur_shader ||
-        !glare_shader || !composite_shader || !composite_history_shader || !gamma_shader)
+        !glare_shader || !composite_shader || !composite_history_shader || !velocity_shader ||
+        !velocity_object_vs || !velocity_object_ps || !gamma_shader)
         return false;
     resolve_pipeline = MakeFullscreenPipeline(resolve_shader, "resolve");
     downsample_pipeline = MakeFullscreenPipeline(downsample_shader, "downsample");
@@ -807,9 +888,14 @@ bool GpuRenderer::Impl::Create() {
     composite_pipeline = MakeFullscreenPipeline(composite_shader, "composite");
     composite_history_pipeline =
         MakeFullscreenPipeline(composite_history_shader, "composite with history", 2);
+    velocity_pipeline = MakeFullscreenPipeline(velocity_shader, "velocity");
+    for (int c = 0; c < 3; c++)
+        velocity_object_pipelines[c] = MakeVelocityObjectPipeline(CullWinding(c));
     gamma_pipeline = MakeFullscreenPipeline(gamma_shader, "gamma");
     if (!resolve_pipeline || !downsample_pipeline || !blur_pipeline || !glare_pipeline ||
-        !composite_pipeline || !composite_history_pipeline || !gamma_pipeline)
+        !composite_pipeline || !composite_history_pipeline || !velocity_pipeline ||
+        !velocity_object_pipelines[0] || !velocity_object_pipelines[1] ||
+        !velocity_object_pipelines[2] || !gamma_pipeline)
         return false;
     // the scene's depth, read after the world's draws: D32 the resolve samples
     // where the device can (Direct3D 12 and Vulkan both should)
@@ -926,13 +1012,16 @@ void GpuRenderer::Impl::Release(bool stop_video) {
         for (auto& [k, p] : pipelines) SDL_ReleaseGPUGraphicsPipeline(device, p);
         for (SDL_GPUGraphicsPipeline* p :
              {resolve_pipeline, downsample_pipeline, blur_pipeline, glare_pipeline,
-              composite_pipeline, composite_history_pipeline, gamma_pipeline})
+              composite_pipeline, composite_history_pipeline, velocity_pipeline, gamma_pipeline,
+              velocity_object_pipelines[0], velocity_object_pipelines[1],
+              velocity_object_pipelines[2]})
             if (p) SDL_ReleaseGPUGraphicsPipeline(device, p);
         for (SDL_GPUShader* sh : {vertex_shader, pixel_shader, spot_shader, soft_shader,
                                   shadow_shader, fullscreen_shader, resolve_shader,
                                   overlay_start_shader,
                                   downsample_shader, blur_shader, glare_shader, composite_shader,
-                                  composite_history_shader, gamma_shader})
+                                  composite_history_shader, velocity_shader, velocity_object_vs,
+                                  velocity_object_ps, gamma_shader})
             if (sh) SDL_ReleaseGPUShader(device, sh);
         if (sampler) SDL_ReleaseGPUSampler(device, sampler);
         if (linear_sampler) SDL_ReleaseGPUSampler(device, linear_sampler);
@@ -963,9 +1052,11 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     ms_fallback_logged = 0;
     ms_failure_logged = false;
     downsample_shader = blur_shader = glare_shader = composite_shader = gamma_shader = nullptr;
-    composite_history_shader = nullptr;
+    composite_history_shader = velocity_shader = velocity_object_vs = velocity_object_ps =
+        nullptr;
+    for (auto& p : velocity_object_pipelines) p = nullptr;
     resolve_pipeline = downsample_pipeline = blur_pipeline = glare_pipeline = nullptr;
-    composite_pipeline = composite_history_pipeline = nullptr;
+    composite_pipeline = composite_history_pipeline = velocity_pipeline = nullptr;
     gamma_pipeline = nullptr;
     sampler = linear_sampler = nullptr;
     white = black = no_depth = nullptr;
@@ -1474,14 +1565,17 @@ void GpuRenderer::Impl::ReleaseRt(Rt& rt) {
 // the frame's targets, at the picture's size; with no device, only forgets them
 void GpuRenderer::Impl::ReleaseTargets() {
     if (device) {
-        for (SDL_GPUTexture* t : {scene, color, depth, behind, graded, post_dof, post_bloom[0],
+        for (SDL_GPUTexture* t : {scene, color, depth, behind, graded, post_dof, post_velocity,
+                                  post_velocity_depth, post_bloom[0],
                                   post_bloom[1], post_bloom[2], post_tmp[0], post_tmp[1],
                                   post_tmp[2], spot_scratch.texture, light_scratch.texture,
                                   soft_scratch.texture, color_ms, depth_ms})
             if (t) SDL_ReleaseGPUTexture(device, t);
         if (readback) SDL_ReleaseGPUTransferBuffer(device, readback);
     }
-    scene = color = depth = behind = graded = post_dof = nullptr;
+    scene = color = depth = behind = graded = post_dof = post_velocity = nullptr;
+    post_velocity_depth = nullptr;
+    velocity_w = velocity_h = 0;
     color_ms = depth_ms = nullptr;
     ms_samples = 1;
     ms_w = ms_h = 0;
@@ -1563,6 +1657,16 @@ bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
             levels &= post_dof != nullptr;
         }
     }
+    velocity_w = std::max(w / 2, 1u);
+    velocity_h = std::max(h / 2, 1u);
+    ti.width = velocity_w;
+    ti.height = velocity_h;
+    post_velocity = SDL_CreateGPUTexture(device, &ti);
+    levels &= post_velocity != nullptr;
+    ti.format = kDepthFormat;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+    post_velocity_depth = SDL_CreateGPUTexture(device, &ti);
+    levels &= post_velocity_depth != nullptr;
     if (!scene || !color || !depth || !behind || !graded || !readback || !levels) {
         REXLOG_WARN("native view gpu: no {}x{} target ({})", w, h, SDL_GetError());
         return false;
@@ -1844,6 +1948,32 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     const std::vector<PassRun> runs = PlanPasses(frame, o);
     run_clear.assign(runs.size(), 0);
     uint32_t pool_vert_count = 0, pool_index_count = 0;
+    // a geometry this frame draws: in the arena already, or into it from
+    // the last frame's pool, or into this frame's pool
+    auto use_mesh = [&](const std::shared_ptr<const Geometry>& geom) {
+        Mesh& m = meshes[geom.get()];
+        if (!m.keep) {
+            m.keep = geom;
+            m.first = serial;
+        }
+        if (m.used == serial) return;
+        m.used = serial;
+        if (m.in_arena) {
+            // already there
+        } else if (m.first != serial) {
+            // the last frame drew it too (Evict lets go of pool geometry a
+            // frame doesn't draw), from its pool: it stays
+            m.pool_vertex = m.first_vertex;
+            m.pool_index = m.first_index;
+            to_arena.push_back(&m);
+        } else {
+            m.first_vertex = pool_vert_count;
+            m.first_index = pool_index_count;
+            pool_vert_count += uint32_t(geom->verts.size());
+            pool_index_count += IndexSlots(*geom);
+            to_pool.push_back(&m);
+        }
+    };
     for (size_t r = 0; r < runs.size(); r++) {
         const PassRun& run = runs[r];
         // a texture pass's target, cleared where its camera (or NgLight)
@@ -1891,29 +2021,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 continue;
             }
             if (run.pass && IsSoftParticle(it, state)) spot_draw[d] = kSoftParticle;
-            Mesh& m = meshes[it.geom.get()];
-            if (!m.keep) {
-                m.keep = it.geom;
-                m.first = serial;
-            }
-            if (m.used != serial) {
-                m.used = serial;
-                if (m.in_arena) {
-                    // already there
-                } else if (m.first != serial) {
-                    // the last frame drew it too (Evict lets go of pool
-                    // geometry a frame doesn't draw), from its pool: it stays
-                    m.pool_vertex = m.first_vertex;
-                    m.pool_index = m.first_index;
-                    to_arena.push_back(&m);
-                } else {
-                    m.first_vertex = pool_vert_count;
-                    m.first_index = pool_index_count;
-                    pool_vert_count += uint32_t(it.geom->verts.size());
-                    pool_index_count += IndexSlots(*it.geom);
-                    to_pool.push_back(&m);
-                }
-            }
+            use_mesh(it.geom);
             if (Skinned(it, o)) {
                 bone_base[d] = uint32_t(frame_bones.size());
                 frame_bones.insert(frame_bones.end(), it.bones.begin(), it.bones.end());
@@ -2029,6 +2137,23 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     }
     // the composite's noise map, a texture like a draw's
     if (o.post && o.view == RasterView::kFinal && frame.noise_map) UseTexture(frame.noise_map);
+    // the motion blur's object pass's meshes, and its palettes as bones:
+    // each entry's three rows, as the shader reads them
+    velocity_bone_base.assign(frame.velocity_objects.size(), 0);
+    if (o.post && o.velocity && o.view == RasterView::kFinal && depth_sampled) {
+        for (size_t i = 0; i < frame.velocity_objects.size(); i++) {
+            const VelocityObject& v = frame.velocity_objects[i];
+            if (!v.geom || v.geom->indices.empty() || v.rows.size() != size_t(v.bones) * 24)
+                continue;
+            use_mesh(v.geom);
+            velocity_bone_base[i] = uint32_t(frame_bones.size());
+            for (uint32_t e = 0; e < v.bones * 2; e++) {
+                Mat4 m{};
+                std::memcpy(m.m, &v.rows[size_t(e) * 12], 12 * sizeof(float));
+                frame_bones.push_back(m);
+            }
+        }
+    }
     if (!PlaceInArena()) return false;
 
     // the upload: the pool's vertices and indices, the arena's new meshes that
@@ -2326,7 +2451,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, ct, second ? 2 : 1, nullptr);
         SDL_BindGPUGraphicsPipeline(rp, pipeline);
-        SDL_GPUTextureSamplerBinding tb[11];
+        SDL_GPUTextureSamplerBinding tb[12];
         uint32_t n = 0;
         for (SDL_GPUTexture* t : sources) tb[n++] = {t, linear_sampler};
         SDL_BindGPUFragmentSamplers(rp, 0, tb, n);
@@ -2341,13 +2466,72 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // into the picture
     post::PostPlan post_plan;
     bool post_on = o.post && o.view == RasterView::kFinal &&
-                   post::PlanPost(frame, o.post_only, post_plan, o.grain);
+                   post::PlanPost(frame, o.post_only, post_plan, o.grain, o.velocity);
     // depth of field blurs by the depth, which reads as 0 (all blurred)
     // without a sampled one: left out then (Create warns of it, once)
     if (post_on && !depth_sampled) {
-        post_plan.composite.flags.x &= ~post::kPostDof;
+        post_plan.composite.flags.x &= ~(post::kPostDof | post::kPostVelocity);
         post_on = post_plan.composite.flags.x != 0;
     }
+    // the motion blur's object pass (velocity.hlsl), over the camera pass's
+    // texels: each object's mesh, its palettes in the frame's bones, its
+    // depth in a buffer of its own cleared to 1
+    auto velocity_objects = [&] {
+        if (post_plan.velocity_objects.empty() || frame.velocity_objects.empty()) return;
+        SDL_GPUColorTargetInfo ct{};
+        ct.texture = post_velocity;
+        ct.load_op = SDL_GPU_LOADOP_LOAD;
+        ct.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPUDepthStencilTargetInfo dt{};
+        dt.texture = post_velocity_depth;
+        dt.clear_depth = 1.0f;
+        dt.load_op = SDL_GPU_LOADOP_CLEAR;
+        dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
+        dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+        dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
+        SDL_BindGPUVertexStorageBuffers(rp, 0, &bone_buffer, 1);
+        const SDL_GPUTextureSamplerBinding tb{scene_depth, sampler};
+        SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
+        SDL_GPUBuffer* objects_bound = nullptr;
+        SDL_GPUGraphicsPipeline* pipeline_bound = nullptr;
+        for (size_t n = 0; n < post_plan.velocity_objects.size(); n++) {
+            const VelocityObject& v = *post_plan.velocity_objects[n];
+            const size_t index = size_t(&v - frame.velocity_objects.data());
+            if (index >= frame.velocity_objects.size()) continue;
+            const auto found = meshes.find(v.geom.get());
+            if (found == meshes.end() || found->second.used != serial) continue;
+            const Mesh& m = found->second;
+            RasterOptions cull_options = o;
+            DrawItem cull_item{};
+            cull_item.cull = v.cull;
+            const CullWinding cull = CullFor(cull_item, cull_options);
+            if (cull == CullWinding::kAll) continue;
+            SDL_GPUGraphicsPipeline* pipeline = velocity_object_pipelines[int(cull)];
+            if (pipeline != pipeline_bound) {
+                SDL_BindGPUGraphicsPipeline(rp, pipeline);
+                pipeline_bound = pipeline;
+            }
+            SDL_GPUBuffer* verts = m.in_arena ? arena_verts.buffer : pool_v.buffer;
+            if (verts != objects_bound) {
+                const SDL_GPUBufferBinding vb{verts, 0};
+                SDL_BindGPUVertexBuffers(rp, 0, &vb, 1);
+                const SDL_GPUBufferBinding ib{m.in_arena ? arena_indices.buffer : pool_i.buffer, 0};
+                SDL_BindGPUIndexBuffer(rp, &ib, SDL_GPU_INDEXELEMENTSIZE_16BIT);
+                objects_bound = verts;
+            }
+            post::VelocityObjectPass u = post_plan.velocity_object_passes[n];
+            u.mesh.z = velocity_bone_base[index];
+            u.target = {float(velocity_w), float(velocity_h), 1.0f / float(velocity_w),
+                        1.0f / float(velocity_h)};
+            u.depth = {width, height, 0, 0};
+            SDL_PushGPUVertexUniformData(cmd, 0, &u, sizeof(u));
+            SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof(u));
+            SDL_DrawGPUIndexedPrimitives(rp, uint32_t(v.geom->indices.size() / 3 * 3), 1,
+                                         m.first_index, int32_t(m.first_vertex), 0);
+        }
+        SDL_EndGPURenderPass(rp);
+    };
     auto post_process = [&] {
         post::PostPass p = post_plan.composite;
         const uint32_t flags = p.flags.x;
@@ -2369,6 +2553,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             std::copy(down, down + taps, p.taps);
             fullscreen(level, post_w[k], post_h[k], blur_pipeline, {post_tmp[k]}, p);
         };
+        // the velocity pass, from the scene's depth (t1), then the objects
+        // with their own motion over it
+        if (flags & post::kPostVelocity) {
+            p.mode = {0, width, height, 0};
+            fullscreen(post_velocity, velocity_w, velocity_h, velocity_pipeline,
+                       {scene, scene_depth}, p);
+            velocity_objects();
+        }
         if (flags & post::kPostDof) {
             downsample(scene, width, height, post_dof, 0, false);
             blur(post_dof, 0, post_plan.dof_taps[0], post_plan.dof_taps[1], 8);
@@ -2433,7 +2625,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             fullscreen(color, width, height, composite_history_pipeline,
                        {scene, scene_depth, post_dof, bloom0, post_bloom[1], post_bloom[2],
                         drawn_now(post_plan.spot_volume), drawn_now(post_plan.spot_density),
-                        drawn_now(post_plan.soft), noise, prev},
+                        drawn_now(post_plan.soft), noise, post_velocity, prev},
                        p, history.tex[next]);
             if (post_plan.trails_update && frame.game_frame &&
                 frame.game_frame != history.game_frame) {
@@ -2446,7 +2638,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         fullscreen(color, width, height, composite_pipeline,
                    {scene, scene_depth, post_dof, bloom0, post_bloom[1], post_bloom[2],
                     drawn_now(post_plan.spot_volume), drawn_now(post_plan.spot_density),
-                    drawn_now(post_plan.soft), noise},
+                    drawn_now(post_plan.soft), noise, post_velocity},
                    p);
     };
 

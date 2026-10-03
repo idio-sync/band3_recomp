@@ -62,8 +62,10 @@ def load(h, kind='frag'):
             continue  # a loop's target: its loop and endloop are in prog
         if s.startswith('loop') or s.startswith('jmp'):
             raise NotImplementedError('control flow: ' + s)
-        if s and s.split()[0].replace('_sat', '') in OPS:
-            prog.append([s])  # instruction after a 'serialize' line
+        # an instruction after a 'serialize' line, maybe predicated
+        op = s.split()[1] if s.split()[0] in ('(p0)', '(!p0)') and len(s.split()) > 1 else s.split()[0]
+        if s and op.replace('_sat', '') in OPS:
+            prog.append([s])
             continue
         raise ValueError('unparsed: ' + line)
     return prog
@@ -241,6 +243,12 @@ def unroll(prog, st):
 
 def run(prog, st):
     for group in unroll(prog, st):
+        # a predicated group the predicate turns off: skipped, its fetches
+        # too (so the caller's fetch log has only the taps the shader takes)
+        first = group[0]
+        if first.startswith(('(p0) ', '(!p0) ')) and \
+                bool(getattr(st, 'p0', False)) != first.startswith('(p0)'):
+            continue
         # gather all reads first (parallel issue)
         pending = []
         new_ps = None

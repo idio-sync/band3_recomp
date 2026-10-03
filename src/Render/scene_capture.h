@@ -555,6 +555,32 @@ struct CameraView {
 };
 static_assert(sizeof(CameraView) == 36, "CameraView has no padding: a capture saves its bytes");
 
+// A mesh RB3 draws into the camera motion blur's velocity texture with its
+// own motion (out/research/n5_hub_soft.md 3.1, the object pass): NgPostProc's
+// mMotionBlurDrawList (the characters), drawn in draw mode 5 by
+// RndVelocityBuffer::DrawMesh after the camera pass, with
+// kVelocityObjectShader (VS 21A0C657F6C70854 skinned, F922317D5AAC4AE6 not;
+// PS 39DE58D45328C089: tools/shaders/research/post/check_velocity.py), blend
+// SrcAlpha and its depth tested and written. Kept as the device had it at
+// the draw: VS c0..c3 this frame's view-projection and c4..c7 the last's
+// (the clip position's x..w are each row's dot with the world position), the
+// bone palettes c9.. (this frame's) and c129.. (the last frame's), 3 rows a
+// bone (each a row of the world x, y and z), and PS c8, the camera's depth
+// range values (c89's). Unskinned (no bones), one palette entry each, the
+// mesh's world.
+struct VelocityObject {
+    std::shared_ptr<const Geometry> geom;
+    uint32_t mesh = 0;
+    uint8_t cull = 0;     // as DrawItem::cull
+    uint8_t skinned = 0;  // the vertices' bones and weights place them
+    uint32_t bones = 0;   // palette entries, 1 unskinned
+    float view_proj[8][4] = {};
+    float depth_range[4] = {};
+    // bones * 3 rows of this frame's palette (c9..), then as many of the
+    // last frame's (c129..)
+    std::vector<float> rows;  // 4 floats a row
+};
+
 struct FrameCapture {
     uint64_t frame = 0;
     uint64_t game_frame = 0;  // Present calls before this frame's
@@ -583,6 +609,10 @@ struct FrameCapture {
     // the format isn't decoded, and in captures from before.
     std::shared_ptr<const Texture> noise_map;
     TexSampler noise_sampler;
+    // the camera motion blur's object pass, in the order RB3 drew it (a post
+    // frame's, which draws it on the world it presents); none on a world
+    // frame and in captures from before
+    std::vector<VelocityObject> velocity_objects;
     // With even/odd rendering a frame that draws no world (proc_cmds 2)
     // presents the last one that did, so its capture has that frame's world
     // in front of its own draws from post_boundary on (frame_compose.h):
@@ -596,7 +626,9 @@ struct FrameCapture {
     GammaRamp gamma;
     uint32_t cams = 0;             // camera selects that drew to the back buffer
     uint32_t skipped_target = 0;   // draws for a camera with a target, but no texture pass open
-    uint32_t skipped_velocity = 0; // motion blur velocity pass
+    // the motion blur's velocity pass, which isn't a draw: its object pass is
+    // kept as velocity_objects
+    uint32_t skipped_velocity = 0;
     // draws in a shadow's draw mode (1, 3) outside its pass: none expected
     // (Target keeps 1 in a shadow map's pass, 3 in any texture pass)
     uint32_t skipped_shadow = 0;

@@ -69,8 +69,10 @@ what RB3 drew: on the GPU, or on a reference CPU rasterizer. It draws RB3's shad
 its textures as the game's samplers read them (filtered, between mip levels, clamped
 or wrapped), the passes RB3 draws into textures (outfit composites, the crowd's
 impostors, shadow maps, NgLight's projected shadow, heads' normal maps, blurs), its
-post-processing (depth of field, bloom or glare, the spotlights' beams and haze, soft
-particles such as stage smoke, the colour matrix) and, last, the display's gamma ramp.
+post-processing (the camera's motion blur, depth of field, bloom or glare, the spotlights'
+beams and haze, soft particles such as stage smoke, the colour matrix) and, last, the
+display's gamma ramp. The motion blur is the camera's, and the characters' own where
+RB3 draws them into its velocity buffer with their motion, as it does in songs.
 Render checks set its picture against the game's.
 
 | Setting (Band3 → Debug) | |
@@ -134,7 +136,7 @@ reply:
 | Field | |
 |---|---|
 | `draws` | the draws the capture kept |
-| `skipped_pass` | draws left out for their draw mode: the velocity buffer's and other passes the native view doesn't draw |
+| `skipped_pass` | draws left out for their draw mode: the velocity buffer's (kept apart, as the motion blur's objects) and other passes the native view doesn't draw |
 | `skipped_shadow` | shadow-map or shadow-caster draws outside their own pass; 0 expected |
 | `passes`, `passes_carried` | the texture passes in the capture, and those carried in from earlier frames (a band's outfits: there only with `native_view_record_targets` on from launch) |
 | `rt_sampled` | the render target versions the draws sample |
@@ -179,7 +181,8 @@ option). It prints a `post:` line (what post-processing was set to do), a `check
 | `--view alpha\|depth` | draws that view instead of the picture (with `--diff` against those PNGs) |
 | `--dump-bloom <png>` | bloom's first level as the composite read it, after glare's pass |
 | `--rt-none`, `--rt-guest` | never use guest memory's pixels for a render target; or draw no texture passes and use guest memory's alone |
-| `--no-post`, `--post-only xfm\|dof\|bloom\|spot\|soft` | no post-processing; or only the colour matrix, depth of field, bloom (and glare), the spotlights' beams or the soft particles |
+| `--no-post`, `--post-only xfm\|dof\|bloom\|spot\|soft\|noise\|velocity` | no post-processing; or only the colour matrix, depth of field, bloom (and glare), the spotlights' beams, the soft particles, the film grain or the camera's motion blur |
+| `--no-grain`, `--no-velocity`, `--no-velocity-objects` | without the film grain; without the camera's motion blur; with the camera's alone, not the characters' own motion |
 | `--no-gamma`, `--gamma-from <other.cap>` | no gamma ramp; or another capture's |
 | `--no-shadow` | characters without their self-shadows |
 | `--no-normal` | every material with its vertex normal, no normal or detail map |

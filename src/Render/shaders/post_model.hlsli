@@ -13,10 +13,129 @@
 // 6EF4844D and F7E2A8FB, the noise from 4FD49280, 0A9D6EAE and D1942A59,
 // the trails from 30, 200030 and 802000200024 of the game's shader cache),
 // the bright pass F920AF5C, the 4x downsample 38448F55, the glare pass
-// 2789C57F. What the composite leaves out: velocity blur, which nothing
-// draws natively yet.
+// 2789C57F, and the camera motion blur: the velocity pass 8CDB397D and the
+// composites' blur along it (140762E9, 17175814 and every other with c122:
+// tools/shaders/research/post/check_velocity.py).
 
 float3 PostXyz(float4 v) { return float3(v.x, v.y, v.z); }
+
+// The camera motion blur (velocity blur; out/research/n5_hub_soft.md 3).
+// RndVelocityBuffer::Draw draws kVelocityCameraShader over a velocity texture
+// half the picture's size each way (640x360 at the game's 1280x720), DrawRectDepth
+// giving each pixel its uv and the frustum's near point and corner ray
+// there: it rebuilds the pixel's world position from the pre-pass depth
+// (the depth DOF reads), projects it by the previous frame's view-projection
+// and keeps how far the picture moved there, d = prev uv - uv, clamped to
+// +-0.02 each way, as d * 25 + 0.5 (xy) and |d| * 1.7677668 (z, the mask),
+// RGBA8. inv_w is the native depth there (1/w, 0 where nothing drew, which
+// the game's depth texture has as 0: PostPass::vel_depth.x).
+float4 VelocityTexel(POST_IN(PostPass) p, float2 uv, float inv_w) {
+    // w / far, the shader's view depth over the far plane's
+    const float t = inv_w > 0.0f ? 1.0f / (p.vel_near.w * inv_w) : p.vel_depth.x;
+    const float3 corner = PostXyz(p.vel_corner[0]) + PostXyz(p.vel_corner[1]) * uv.x +
+                          PostXyz(p.vel_corner[2]) * uv.y;
+    const float4 world = float4(p.vel_near.x + corner.x * t, p.vel_near.y + corner.y * t,
+                                p.vel_near.z + corner.z * t, 1.0f);
+    const float rw = 1.0f / dot(p.vel_prev[3], world);
+    float dx = (0.5f - uv.x) + 0.5f * rw * dot(p.vel_prev[0], world);
+    float dy = (0.5f - uv.y) - 0.5f * rw * dot(p.vel_prev[1], world);
+    // max then min, as the shader: a NaN (a point on the previous camera's
+    // plane) comes out -0.02 both here and there
+    dx = min(max(dx, -0.02f), 0.02f);
+    dy = min(max(dy, -0.02f), 0.02f);
+    return float4(dx * 25.0f + 0.5f, dy * 25.0f + 0.5f, sqrt(dx * dx + dy * dy) * 1.7677668f,
+                  0.0f);
+}
+
+// The composite's blur, where the velocity texture (read bilinear at the
+// pixel's uv) has its mask at 0.003 or more (|d| about 0.0017 of the
+// picture): the scene at the pixel weighted kVelocityCentre and ten taps along
+// the motion, VelocityTap k -5..4 (bilinear, clamped: the game's s6),
+// weighted VelocityWeight(k), a Gaussian of sigma 2 steps (the +side one tap
+// short of the -side, as the shader has it), all times kVelocityNorm, which
+// makes the weights sum to 1. The blurred scene then stands in for the scene
+// in everything after (the DOF lerp, bloom, the alpha...); the levels the
+// DOF and bloom read are the scene's own.
+static const float kVelocityMask = 0.003f;
+static const float kVelocityCentre = 0.19947115f;
+static const float kVelocityNorm = 1.0054859f;
+static const float kVelocityWeights[10] = {0.0087641505f, 0.026995484f, 0.0647588f,
+                                           0.12098536f,   0.17603266f,  0.17603266f,
+                                           0.12098536f,   0.0647588f,   0.026995484f,
+                                           0.0087641505f};
+
+bool VelocityBlurs(POST_IN(PostPass) p, float4 velocity) {
+    return (p.flags.x & kPostVelocity) != 0u && velocity.z >= kVelocityMask;
+}
+
+// the taps' step in uv, (0.0046 * v.xy - 0.0023) * c122.x: 0.115 * d * c122.x
+float2 VelocityStep(POST_IN(PostPass) p, float4 velocity) {
+    return float2((velocity.x * 0.0046f - 0.0023f) * p.vel_depth.y,
+                  (velocity.y * 0.0046f - 0.0023f) * p.vel_depth.y);
+}
+
+float2 VelocityTap(float2 uv, float2 step, int k) {
+    return float2(uv.x + float(k) * step.x, uv.y + float(k) * step.y);
+}
+
+float VelocityWeight(int k) { return kVelocityWeights[k + 5]; }
+
+// The object pass (RndVelocityBuffer::DrawMesh; scene_capture.h's
+// VelocityObject): each mesh of the motion blur's list drawn over the camera
+// pass's texels with its own motion, its depth tested and written among
+// themselves. Its vertex shader (21A0C657 skinned, F922317D not) places a
+// vertex by this frame's palette and by the last's, a skinned one by its
+// first three weights and 1 - their sum (VelocityObjectWeights) of the
+// palette rows its bones pick, and gives both clip positions
+// (VelocityObjectClip); the pixel shader (39DE58D4) VelocityObjectTexel.
+float4 VelocityObjectWeights(float4 w) { return float4(w.x, w.y, w.z, 1.0f - (w.x + w.y + w.z)); }
+
+// a world position's clip position by this frame's view-projection (VS
+// c0..c3), or with `last` the last frame's (c4..c7)
+float4 VelocityObjectClip(POST_IN(VelocityObjectPass) p, float3 world, bool last) {
+    const int r = last ? 4 : 0;
+    const float4 at = float4(world.x, world.y, world.z, 1.0f);
+    return float4(dot(p.view_proj[r], at), dot(p.view_proj[r + 1], at),
+                  dot(p.view_proj[r + 2], at), dot(p.view_proj[r + 3], at));
+}
+
+// where a clip position is in the picture, uv
+float2 VelocityObjectUv(float4 clip) {
+    const float r = 1.0f / clip.w;
+    return float2(0.5f + 0.5f * r * clip.x, 0.5f - 0.5f * r * clip.y);
+}
+
+// the depth the renderers test and write the object pass by: 1 - near / w,
+// smaller nearer, which clips at the camera's near plane as the game's does
+// (w - near is the clip z both backends give it)
+float VelocityObjectDepth(POST_IN(VelocityObjectPass) p, float w) {
+    return 1.0f - p.depth_range.x / w;
+}
+
+// The texel it leaves where the mesh covers the pixel, from its clip
+// positions there (cur this frame's, prev the last's) and inv_w the native
+// depth (1/w, 0 where nothing drew) at the texel cur's uv lands in, which the
+// shader reads from the pre-pass depth (s9, point): d = prev uv - uv encoded
+// as the camera pass's are, and alpha 1 where the mesh is in front of the
+// scene there (its w at most the scene's view depth + 1), else 0, which its
+// SrcAlpha blend leaves the camera's texel under. Where nothing drew the
+// depth texture holds 0, which c8 makes the far plane.
+float4 VelocityObjectTexel(POST_IN(VelocityObjectPass) p, float4 cur, float4 prev, float inv_w) {
+    const float near_plane = p.depth_range.x, far_plane = p.depth_range.y;
+    float scene = 0.0f;
+    if (inv_w > 0.0f) {
+        scene = 1.0f / inv_w;
+    } else {
+        const float z = p.depth_range.z - p.depth_range.w;
+        scene = near_plane * far_plane / (far_plane - z * (far_plane - near_plane));
+    }
+    const float2 at = VelocityObjectUv(cur);
+    const float2 was = VelocityObjectUv(prev);
+    const float dx = min(max(was.x - at.x, -0.02f), 0.02f);
+    const float dy = min(max(was.y - at.y, -0.02f), 0.02f);
+    return float4(dx * 25.0f + 0.5f, dy * 25.0f + 0.5f, sqrt(dx * dx + dy * dy) * 1.7677668f,
+                  cur.w > scene + 1.0f ? 0.0f : 1.0f);
+}
 
 // The bright pass and the 4x downsample read four bilinear taps, at uv plus
 // and minus twice c15 (half a source texel) each way: on a 4x smaller target
@@ -147,7 +266,8 @@ float3 NoiseTerm(POST_IN(PostPass) p, float3 rgb, float3 tap0, float3 tap1) {
                   rgb.z + (over.z - rgb.z) * w);
 }
 
-// The composite's colour, from the scene, its DOF blur, the depth texture's
+// The composite's colour, from the scene (blurred along the motion where the
+// velocity blur is on: VelocityBlurs), its DOF blur, the depth texture's
 // value, bloom's three levels, the spotlights' depth volume and the density
 // map's red, the soft-particle buffer and the noise map's two taps, all at
 // the pixel: the DOF lerp, then the soft particles added (63306D35,

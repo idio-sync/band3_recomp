@@ -22,6 +22,7 @@ microcode, that the native view's shading (`src/Render/shaders/shade.hlsli`) and
 | `post/neg_controls.py` | deliberately wrong post models, which `check_post.py` must fail |
 | `post/check_noise.py` | checks the composite's noise (film grain) term, `post_model.hlsli`'s `NoiseTerm`, against the three straight-line composite variants that have it (glare, DOF, bloom and the spotlights' term around it), taps included; exits 1 on a mismatch |
 | `post/neg_noise.py` | deliberately wrong noise models (overlay per channel, no 6.75, arithmetic mean), which `check_noise.py` must fail |
+| `post/check_velocity.py` | checks the camera motion blur: the velocity pass (`post_model.hlsli`'s `VelocityTexel`) against its microcode, the velocity-and-colour-matrix composite against a model of its 11-tap blur, every dumped composite that reads c122 for the blurred scene standing in for the scene and nothing else, and the object pass's vertex shaders (skinned and not) and pixel shader (`VelocityObject*`); `--neg` runs deliberately wrong blur models, which must fail; exits 1 on a mismatch |
 
 ## Inputs
 

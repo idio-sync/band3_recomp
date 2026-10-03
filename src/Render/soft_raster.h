@@ -126,6 +126,9 @@ struct RasterOptions {
     // with post, the film grain (the composite's noise) where the frame has
     // it and the capture kept its map; off, left out
     bool grain = true;
+    // with post, the camera motion blur (velocity blur) where the frame has
+    // it and the capture kept the velocity buffer's cameras; off, left out
+    bool velocity = true;
     // with post, the trails (blend previous), which read the previous post
     // frame: the live view's, which draws frame after frame and keeps each
     // post frame's composite (the GPU in GpuRenderer, the CPU in

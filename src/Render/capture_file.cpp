@@ -51,9 +51,14 @@
 //   NOIS  the composite's noise map (FrameCapture::noise_map), as its index
 //         in TEXS (-1 none), and its sampler as TexSampler's size and bytes
 //         (a file without it: none, and no grain)
+//   VOBJ  the camera motion blur's object pass (FrameCapture::
+//         velocity_objects): each one's geometry as its index in GEOM, mesh,
+//         cull, skinned, palette entries, VS c0..c7, PS c8 and the two
+//         palettes' rows (a file without it: none, and the motion blur is the
+//         camera's alone)
 // A section newer than this reader skips if it's SHAD, PASS, FRAM, POST,
-// GAMA, MIPS, SMPL, CAMS or NOIS (the file loads without it) and fails the
-// load if it's GEOM, TEXS or DRAW.
+// GAMA, MIPS, SMPL, CAMS, NOIS or VOBJ (the file loads without it) and fails
+// the load if it's GEOM, TEXS or DRAW.
 //
 // Versions 1 and 2 still load: 1 is frame, geometry, textures and draws; 2
 // adds the draws' ShadeStates, kept as their ShadeInputs were in memory (so
@@ -95,6 +100,7 @@ constexpr uint32_t kSecMips = FourCC("MIPS");
 constexpr uint32_t kSecSamplers = FourCC("SMPL");
 constexpr uint32_t kSecCameras = FourCC("CAMS");
 constexpr uint32_t kSecNoise = FourCC("NOIS");
+constexpr uint32_t kSecVelocity = FourCC("VOBJ");
 // the versions this build writes and reads
 constexpr uint32_t kFrameVersion = 1;
 constexpr uint32_t kGeometryVersion = 2;
@@ -108,6 +114,7 @@ constexpr uint32_t kMipsVersion = 1;
 constexpr uint32_t kSamplersVersion = 1;
 constexpr uint32_t kCamerasVersion = 1;
 constexpr uint32_t kNoiseVersion = 1;
+constexpr uint32_t kVelocityVersion = 1;
 
 // TEXS: where a texture's pixels are
 constexpr int32_t kOwnPixels = -1;  // they follow
@@ -444,6 +451,9 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     for (const ShadeState& s : fc.shades)
         for (const auto& m : s.maps) add_tex(m.get(), kMaxSavedMap);
     add_tex(fc.noise_map.get(), kWhole);
+    for (const VelocityObject& v : fc.velocity_objects)
+        if (geoms.emplace(v.geom.get(), uint32_t(geom_list.size())).second)
+            geom_list.push_back(v.geom.get());
 
     Writer w;
     w.Raw(kMagic, sizeof(kMagic));
@@ -602,6 +612,21 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     w.Put(fc.noise_sampler);
     w.End(sec);
 
+    sec = w.Begin(kSecVelocity, kVelocityVersion);
+    w.Put<uint32_t>(uint32_t(fc.velocity_objects.size()));
+    for (const VelocityObject& v : fc.velocity_objects) {
+        w.Put<uint32_t>(geoms[v.geom.get()]);
+        w.Put<uint32_t>(v.mesh);
+        w.Put<uint8_t>(v.cull);
+        w.Put<uint8_t>(v.skinned);
+        w.Put<uint32_t>(v.bones);
+        w.Raw(v.view_proj, sizeof(v.view_proj));
+        w.Raw(v.depth_range, sizeof(v.depth_range));
+        w.Put<uint32_t>(uint32_t(v.rows.size()));
+        w.Raw(v.rows.data(), v.rows.size() * sizeof(float));
+    }
+    w.End(sec);
+
     const std::string tmp = path + ".tmp";
     FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) return false;
@@ -660,6 +685,7 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                                : id == kSecSamplers ? kSamplersVersion
                                : id == kSecCameras  ? kCamerasVersion
                                : id == kSecNoise    ? kNoiseVersion
+                               : id == kSecVelocity ? kVelocityVersion
                                                     : 0;
         if (version > known || version == 0) {
             if (core) return nullptr;
@@ -870,6 +896,27 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
             noise_tex = r.Get<int32_t>();
             if (noise_tex >= int32_t(texs.size())) return nullptr;
             GetGrown(r, fc->noise_sampler);
+        } else if (id == kSecVelocity) {
+            if (!have_geoms) return nullptr;
+            uint32_t count;
+            if (!r.Count(count, 12)) return nullptr;
+            fc->velocity_objects.resize(count);
+            for (VelocityObject& v : fc->velocity_objects) {
+                const uint32_t gi = r.Get<uint32_t>();
+                if (gi >= geoms.size()) return nullptr;
+                v.geom = geoms[gi];
+                v.mesh = r.Get<uint32_t>();
+                v.cull = r.Get<uint8_t>();
+                v.skinned = r.Get<uint8_t>();
+                v.bones = r.Get<uint32_t>();
+                r.Raw(v.view_proj, sizeof(v.view_proj));
+                r.Raw(v.depth_range, sizeof(v.depth_range));
+                uint32_t floats;
+                if (!r.Count(floats, sizeof(float))) return nullptr;
+                if (floats != size_t(v.bones) * 3 * 2 * 4) return nullptr;
+                v.rows.resize(floats);
+                r.Raw(v.rows.data(), floats * sizeof(float));
+            }
         } else if (id == kSecSamplers) {
             const uint32_t each = r.Get<uint32_t>();
             const uint32_t maps = r.Get<uint32_t>();

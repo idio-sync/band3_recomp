@@ -6,7 +6,9 @@
 // against the models of the game's composite shaders that
 // tools/shaders/research/post/check_post.py and check_noise.py check in an
 // interpreter, glare's pass over bloom's level 0
-// against its model there too, and the passes together on a plain
+// against its model there too, the camera motion blur (the velocity pass
+// against the geometry it stands for, the composite's blur against the
+// model check_velocity.py checks), and the passes together on a plain
 // picture. Captured
 // numbers are from render_song.b3t's 10s and render_song_evenodd.b3t's 25s
 // (kept in out/m4), and its intro (out/parity_spot) for the spotlights.
@@ -15,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <vector>
 #include "src/Render/post_model.h"
@@ -1027,4 +1030,373 @@ TEST_CASE("the trails read the post frame before, which a frame drawn alone hasn
     // no history: the dark frame
     RunPost(plan, dark, depth, w, h, {}, {}, {}, out);
     CHECK((out[0] & 0xffffffu) == 0x202020u);
+}
+
+namespace {
+
+// A camera for the motion blur's tests: at the origin, looking down +z (the
+// view depth is z), its picture kTx wide and kTy tall per unit of depth
+// either side of the centre, near 10 and far 10000 in the z range 0.1..1 (c89
+// as captured: 10, 10000, 1/0.9, 0.1/0.9); the previous frame's the same
+// moved by (sx, sy, 0). As RndVelocityBuffer keeps them: Milo's row-vector
+// matrices (clip = [x y z 1] M) and the frustum's eye and corner rays to the
+// far plane, in DrawRectDepth's order (top left, bottom left, top right,
+// bottom right).
+constexpr float kTx = 0.8f, kTy = 0.45f, kNear = 10, kFar = 10000;
+
+FrameCapture MovingCamera(float sx, float sy) {
+    FrameCapture f;
+    f.post.valid = 1;
+    f.post.proc = 0x1000;
+    f.post_boundary = 0;
+    f.proc_cmds = 7;
+    f.post_consts.valid = 1;
+    f.post_consts.flags[kPostFlagVelocity] = 1;
+    for (float& v : f.post_consts.c122) v = 1.25f;
+    PostParams& p = f.post;
+    p.vel_read = p.vel_on = p.vel_pre_depth = p.vel_same_cam = 1;
+    p.vel_frame = 5;
+    p.vel_scale = 0.75f;
+    const float a = kFar / (kFar - kNear), b = -kNear * kFar / (kFar - kNear);
+    float m[4][4] = {{1 / kTx, 0, 0, 0}, {0, 1 / kTy, 0, 0}, {0, 0, a, 1}, {0, 0, b, 0}};
+    std::memcpy(p.vel_view_proj, m, sizeof(m));
+    // the previous camera at (sx, sy): x - sx, y - sy before the projection
+    m[3][0] = -sx / kTx;
+    m[3][1] = -sy / kTy;
+    std::memcpy(p.vel_prev_view_proj, m, sizeof(m));
+    const float d[4] = {kNear, kFar, 1 / 0.9f, 0.1f / 0.9f};
+    std::copy(d, d + 4, p.vel_depth_range);
+    const float corners[4][2] = {{-1, 1}, {-1, -1}, {1, 1}, {1, -1}};
+    for (int i = 0; i < 4; i++) {
+        p.vel_corners[i][0] = corners[i][0] * kTx * kFar;
+        p.vel_corners[i][1] = corners[i][1] * kTy * kFar;
+        p.vel_corners[i][2] = kFar;
+    }
+    return f;
+}
+
+// what the picture moved at view depth w: prev uv - uv, from the geometry
+// (the eye moved by s: a point at depth w is s / (t w) the other way in NDC,
+// half that in uv; uv's y is down)
+float MovedU(float sx, float w) { return -0.5f * sx / (kTx * w); }
+float MovedV(float sy, float w) { return 0.5f * sy / (kTy * w); }
+
+// a scene that's a function of uv, so each tap's place shows
+void UvScene(const float at[2], float out[4]) {
+    out[0] = at[0];
+    out[1] = at[1];
+    out[2] = at[0] * at[1];
+    out[3] = 0.25f + at[0] * at[0];
+}
+
+}  // namespace
+
+TEST_CASE("the velocity pass is the game's 8CDB397D: how far the picture moved, clamped") {
+    // check_velocity.py checks the shader against its model in xsim; this
+    // checks that model here against the geometry it stands for
+    PostPlan plan{};
+    for (const float s : {0.0f, 3.0f, -40.0f, 400.0f}) {
+        const FrameCapture f = MovingCamera(s, s / 2);
+        REQUIRE(PlanPost(f, 0, plan));
+        CHECK(plan.composite.flags.x == kPostVelocity);
+        CHECK(Near(plan.composite.vel_depth.y, 1.25f));  // c122.x
+        // where nothing drew, the depth texture's 0: the far plane
+        CHECK(Near(plan.composite.vel_depth.x, 1.0f));
+        for (const float w : {50.0f, 300.0f, 2500.0f, 0.0f}) {
+            for (const float u : {0.1f, 0.5f, 0.83f}) {
+                const float uv[2] = {u, 1 - u * 0.7f};
+                float t[4];
+                VelocityTexelCpu(plan.composite, uv, w > 0 ? 1 / w : 0.0f, t);
+                const float at = w > 0 ? w : kFar;
+                const float du = std::clamp(MovedU(s, at), -0.02f, 0.02f);
+                const float dv = std::clamp(MovedV(s / 2, at), -0.02f, 0.02f);
+                CHECK(Near(t[0], du * 25 + 0.5f, 2e-5f));
+                CHECK(Near(t[1], dv * 25 + 0.5f, 2e-5f));
+                CHECK(Near(t[2], std::sqrt(du * du + dv * dv) * 1.7677668f, 2e-5f));
+                CHECK(t[3] == 0.0f);
+            }
+        }
+    }
+}
+
+TEST_CASE("the composite's velocity blur is the game's 140762E9: 11 taps along the motion") {
+    // check_velocity.py's blurred_scene, which matches 140762E9 and every
+    // dumped composite with c122 in xsim
+    const float g0 = 0.1994711458683014f;
+    const float gk[10] = {0.00876415055245161f, 0.02699548378586769f, 0.06475879997015f,
+                          0.12098535895347595f, 0.1760326623916626f,  0.1760326623916626f,
+                          0.12098535895347595f, 0.06475879997015f,    0.02699548378586769f,
+                          0.00876415055245161f};
+    const float norm = 1.0054858922958374f;
+    float sum = g0;
+    for (float g : gk) sum += g;
+    CHECK(Near(sum * norm, 1.0f, 1e-5f));  // a flat picture stays flat
+
+    PostPass pass{};
+    pass.flags.x = kPostVelocity;
+    pass.vel_depth = {0, 1.4f, 0, 0};
+    const float uv[2] = {0.4f, 0.6f};
+    const float centre[4] = {0.9f, 0.8f, 0.7f, 0.6f};
+    for (const float d : {0.0005f, 0.0019f, 0.012f, -0.02f}) {
+        const float vel[4] = {d * 25 + 0.5f, -d * 12.5f + 0.5f,
+                              std::sqrt(d * d * 1.25f) * 1.7677668f, 0};
+        float got[4];
+        VelocityBlurCpu(pass, uv, vel, centre, UvScene, got);
+        if (!(vel[2] >= 0.003f)) {
+            for (int c = 0; c < 4; c++) CHECK(got[c] == centre[c]);  // under the mask
+            continue;
+        }
+        const float step[2] = {0.0046f * (vel[0] - 0.5f) * 1.4f,
+                               0.0046f * (vel[1] - 0.5f) * 1.4f};
+        float want[4];
+        for (int c = 0; c < 4; c++) want[c] = centre[c] * g0;
+        for (int k = -5; k < 5; k++) {
+            const float at[2] = {uv[0] + k * step[0], uv[1] + k * step[1]};
+            float t[4];
+            UvScene(at, t);
+            for (int c = 0; c < 4; c++) want[c] += t[c] * gk[k + 5];
+        }
+        for (int c = 0; c < 4; c++) CHECK(Near(got[c], want[c] * norm, 1e-5f));
+    }
+    // off, it's the scene
+    pass.flags.x = 0;
+    const float vel[4] = {0.9f, 0.5f, 0.5f, 0};
+    float got[4];
+    VelocityBlurCpu(pass, uv, vel, centre, UvScene, got);
+    CHECK(got[0] == centre[0]);
+}
+
+TEST_CASE("PlanPost turns the motion blur on where the game's had it and the capture has its cameras") {
+    FrameCapture f = MovingCamera(5, 0);
+    PostPlan plan{};
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK(plan.composite.flags.x == kPostVelocity);
+    // c134..c137 as Draw uploads the previous matrix: its columns
+    CHECK(Near(plan.composite.vel_prev[0].x, 1 / kTx));
+    CHECK(Near(plan.composite.vel_prev[0].w, -5 / kTx));
+    CHECK(Near(plan.composite.vel_prev[3].z, 1));
+    CHECK(Near(plan.composite.vel_near.w, kFar));
+    // the corner rays: the top left's, then across and down
+    CHECK(Near(plan.composite.vel_corner[0].x, -kTx * kFar, 1e-2f));
+    CHECK(Near(plan.composite.vel_corner[1].x, 2 * kTx * kFar, 1e-2f));
+    CHECK(Near(plan.composite.vel_corner[2].y, -2 * kTy * kFar, 1e-2f));
+    CHECK_FALSE(PlanPost(f, 0, plan, true, false));  // left off
+    REQUIRE(PlanPost(f, kPostVelocity, plan));
+    CHECK(plan.composite.flags.x == kPostVelocity);
+    // the composite didn't have it
+    f.post_consts.flags[kPostFlagVelocity] = 0;
+    CHECK_FALSE(PlanPost(f, 0, plan));
+    f.post_consts.flags[kPostFlagVelocity] = 1;
+    // a capture from before has no velocity buffer: none, as before
+    f.post.vel_read = 0;
+    CHECK_FALSE(PlanPost(f, 0, plan));
+    f.post.vel_read = 1;
+    // a world frame: where DoVelocity would turn it on, by the buffer's last
+    // c122
+    f.proc_cmds = 1;
+    REQUIRE(PlanPost(f, 0, plan));
+    CHECK(plan.composite.flags.x == kPostVelocity);
+    CHECK(Near(plan.composite.vel_depth.y, 0.75f));
+    f.post.vel_frame = 0;  // a shot's first frame: AdvanceFrame says not yet
+    CHECK_FALSE(PlanPost(f, 0, plan));
+    f.post.vel_frame = 5;
+    f.post.vel_on = 0;  // the proc's motion_blur_velocity off
+    CHECK_FALSE(PlanPost(f, 0, plan));
+}
+
+TEST_CASE("the motion blur leaves a still camera's picture be and smears a moving one's along it") {
+    // a white column on black, everything at depth 100
+    const uint32_t w = 128, h = 72;
+    std::vector<uint32_t> scene(size_t(w) * h, 0xff000000u);
+    for (uint32_t y = 0; y < h; y++) scene[size_t(y) * w + 64] = 0xffffffffu;
+    std::vector<float> depth(scene.size(), 1.0f / 100);
+    PostPlan plan{};
+    std::vector<uint32_t> still, moved;
+    REQUIRE(PlanPost(MovingCamera(0, 0), 0, plan));
+    RunPost(plan, scene, depth, w, h, {}, {}, {}, still);
+    CHECK(still == scene);  // no motion: under the mask, the scene as it was
+    // the eye moved left by 4 since: the picture moved right by 0.025 uv,
+    // clamped to 0.02 (2.6 px here); the taps reach 5 steps of 0.115 * 0.02
+    // * c122 uv (1.8 px) either way
+    REQUIRE(PlanPost(MovingCamera(-4, 0), 0, plan));
+    RunPost(plan, scene, depth, w, h, {}, {}, {}, moved);
+    const uint32_t row = 36 * w;
+    CHECK((moved[row + 64] & 0xff) < 0xff);  // the column spread out
+    CHECK((moved[row + 64] & 0xff) > 0x20);
+    CHECK((moved[row + 63] & 0xff) > 0);
+    CHECK((moved[row + 65] & 0xff) > 0);
+    CHECK((moved[row + 60] & 0xff) == 0);  // no further than the taps reach
+    CHECK((moved[row + 68] & 0xff) == 0);
+    // along the motion only: every row the same
+    for (uint32_t y = 1; y < h - 1; y++) CHECK(moved[size_t(y) * w + 63] == moved[row + 63]);
+}
+
+namespace {
+
+// check_velocity.py's object_ps_model: the texel 39DE58D4 writes
+void ModelObjectTexel(const float c8[4], const float cur[4], const float prev[4], float s9,
+                      float out[4]) {
+    const float cu = 0.5f + 0.5f * cur[0] / cur[3], cv = 0.5f - 0.5f * cur[1] / cur[3];
+    const float pu = 0.5f + 0.5f * prev[0] / prev[3], pv = 0.5f - 0.5f * prev[1] / prev[3];
+    const float z = (1 - s9) * c8[2] - c8[3];
+    const float w = c8[0] * c8[1] / (c8[1] - z * (c8[1] - c8[0]));
+    const float dx = std::clamp(pu - cu, -0.02f, 0.02f), dy = std::clamp(pv - cv, -0.02f, 0.02f);
+    out[0] = dx * 25 + 0.5f;
+    out[1] = dy * 25 + 0.5f;
+    out[2] = std::sqrt(dx * dx + dy * dy) * 1.7677668f;
+    out[3] = cur[3] > w + 1 ? 0.0f : 1.0f;
+}
+
+// what the game's depth texture holds at view depth w, through c8 (s9 = 1 - z)
+float GameS9(const float c8[4], float w) {
+    const float z = (c8[1] - c8[1] * c8[0] / w) / (c8[1] - c8[0]);
+    return 1 - (z + c8[3]) / c8[2];
+}
+
+// a quad facing the camera at depth z, x0..x1 across and y0..y1 up
+std::shared_ptr<Geometry> Quad(float x0, float x1, float y0, float y1, float z) {
+    auto g = std::make_shared<Geometry>();
+    g->verts.resize(4);
+    const float corners[4][2] = {{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}};
+    for (int i = 0; i < 4; i++) {
+        g->verts[i].pos[0] = corners[i][0];
+        g->verts[i].pos[1] = corners[i][1];
+        g->verts[i].pos[2] = z;
+    }
+    g->indices = {0, 1, 2, 0, 2, 3};
+    return g;
+}
+
+// MovingCamera's frame with one rigid object: `geom` placed as it is this
+// frame and moved by (shift, 0, 0) the last (palette rows of a translation),
+// through the frame's two view-projections (VS c0..c7: the matrices'
+// columns) and its depth range
+VelocityObject RigidObject(const FrameCapture& f, std::shared_ptr<const Geometry> geom,
+                           float shift) {
+    VelocityObject o;
+    o.geom = std::move(geom);
+    o.mesh = 0x5000;
+    o.bones = 1;
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            o.view_proj[r][c] = f.post.vel_view_proj[c][r];
+            o.view_proj[4 + r][c] = f.post.vel_prev_view_proj[c][r];
+        }
+        o.depth_range[r] = f.post.vel_depth_range[r];
+    }
+    o.rows = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, shift, 0, 1, 0, 0, 0, 0, 1, 0};
+    return o;
+}
+
+}  // namespace
+
+TEST_CASE("the object pass's texel is the game's 39DE58D4: its motion, where it's in front") {
+    const float c8[4] = {kNear, kFar, 1 / 0.9f, 0.1f / 0.9f};
+    VelocityObjectPass pass{};
+    pass.depth_range = {c8[0], c8[1], c8[2], c8[3]};
+    const float cur[4] = {100, 50, 20, 200};
+    const float prevs[3][4] = {{100, 50, 20, 200}, {110, 40, 25, 210}, {-400, 300, 30, 190}};
+    for (const auto& prev : prevs) {
+        // the scene in front (150), just behind (199.5: within the shader's
+        // 1), behind, and nothing drawn (the far plane)
+        for (const float w : {150.0f, 199.5f, 400.0f, 0.0f}) {
+            float got[4], want[4];
+            VelocityObjectTexelCpu(pass, cur, prev, w > 0 ? 1 / w : 0.0f, got);
+            ModelObjectTexel(c8, cur, prev, w > 0 ? GameS9(c8, w) : 0.0f, want);
+            for (int c = 0; c < 4; c++) CHECK(Near(got[c], want[c], 2e-4f));
+            CHECK(got[3] == (w == 150.0f ? 0.0f : 1.0f));
+        }
+    }
+}
+
+TEST_CASE("the object pass places a vertex as the game's 21A0C657 and F922317D") {
+    // two palette entries, this frame's translating by (10 b + 10, 0, 0) and
+    // the last frame's by (0, 5 b + 5, 0); weights x, y, z and 1 - their sum
+    VelocityObject o;
+    o.bones = 2;
+    o.skinned = 1;
+    auto translate = [](float x, float y) {
+        return std::vector<float>{1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, 0};
+    };
+    for (int last = 0; last < 2; last++)
+        for (int b = 0; b < 2; b++) {
+            const auto r = last ? translate(0, 5.0f * b + 5) : translate(10.0f * b + 10, 0);
+            o.rows.insert(o.rows.end(), r.begin(), r.end());
+        }
+    VelocityObjectPass pass{};
+    // c0..c3 the identity, c4..c7 doubling x
+    for (int r = 0; r < 4; r++) {
+        pass.view_proj[r] = {r == 0 ? 1.0f : 0, r == 1 ? 1.0f : 0, r == 2 ? 1.0f : 0,
+                             r == 3 ? 1.0f : 0};
+        pass.view_proj[4 + r] = pass.view_proj[r];
+    }
+    pass.view_proj[4].x = 2;
+    Vertex v{};
+    v.pos[0] = 1;
+    v.pos[1] = 2;
+    v.pos[2] = 3;
+    const uint8_t bones[4] = {1, 0, 1, 0};
+    const float weights[4] = {0.25f, 0.5f, 0.1f, 0.9f};  // the fourth isn't read
+    std::copy(bones, bones + 4, v.bone);
+    std::copy(weights, weights + 4, v.weight);
+    float cur[4], prev[4];
+    VelocityObjectVertexCpu(o, pass, v, cur, prev);
+    // weights by bone: 1 has 0.25 + 0.1, 0 has 0.5 + 0.15
+    CHECK(Near(cur[0], 1 + 0.35f * 20 + 0.65f * 10));
+    CHECK(Near(cur[1], 2));
+    CHECK(Near(cur[3], 1));
+    CHECK(Near(prev[0], 2));
+    CHECK(Near(prev[1], 2 + 0.35f * 10 + 0.65f * 5));
+    // unskinned: the palette's first entry, whatever the weights
+    o.skinned = 0;
+    o.bones = 1;
+    o.rows = translate(7, 0);
+    const auto last = translate(0, 3);
+    o.rows.insert(o.rows.end(), last.begin(), last.end());
+    VelocityObjectVertexCpu(o, pass, v, cur, prev);
+    CHECK(Near(cur[0], 8));
+    CHECK(Near(prev[0], 2));
+    CHECK(Near(prev[1], 5));
+}
+
+TEST_CASE("the object pass keeps what moves with the camera sharp, where it's in front") {
+    // white columns on black: one at x 32, where a quad at depth 50 covers
+    // the left half, one at x 96, over the background at depth 100
+    const uint32_t w = 128, h = 72;
+    std::vector<uint32_t> scene(size_t(w) * h, 0xff000000u);
+    std::vector<float> depth(scene.size(), 1.0f / 100);
+    for (uint32_t y = 0; y < h; y++) {
+        scene[size_t(y) * w + 32] = scene[size_t(y) * w + 96] = 0xffffffffu;
+        for (uint32_t x = 0; x < 64; x++) depth[size_t(y) * w + x] = 1.0f / 50;
+    }
+    const uint32_t row = 36 * w;
+    auto run = [&](const FrameCapture& f) {
+        PostPlan plan{};
+        REQUIRE(PlanPost(f, 0, plan));
+        std::vector<uint32_t> out;
+        RunPost(plan, scene, depth, w, h, {}, {}, {}, out);
+        return out;
+    };
+    // the eye moved left by 4: without the object both columns smear
+    FrameCapture f = MovingCamera(-4, 0);
+    std::vector<uint32_t> out = run(f);
+    CHECK((out[row + 31] & 0xff) > 0);
+    CHECK((out[row + 97] & 0xff) > 0);
+    // the quad moved with the eye (it was 4 left of here too): its pixels
+    // keep still, the background still smears
+    const auto quad = Quad(-45, 0.2f, -30, 30, 50);
+    f.velocity_objects.push_back(RigidObject(f, quad, -4));
+    out = run(f);
+    CHECK((out[row + 31] & 0xff) == 0);
+    CHECK((out[row + 32] & 0xff) == 0xff);
+    CHECK((out[row + 33] & 0xff) == 0);
+    CHECK((out[row + 97] & 0xff) > 0);
+    // behind the scene (the shader's own test against the pre-pass depth),
+    // it leaves the camera's motion
+    f.velocity_objects[0] = RigidObject(f, Quad(-120, 0.4f, -60, 60, 120), -4);
+    out = run(f);
+    CHECK((out[row + 31] & 0xff) > 0);
+    // a capture from before has none: the camera's alone
+    f.velocity_objects.clear();
+    CHECK(run(f) == run(MovingCamera(-4, 0)));
 }

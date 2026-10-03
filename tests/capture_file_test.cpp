@@ -1117,3 +1117,55 @@ TEST_CASE("a capture keeps the composite's noise map whole, its mips and its sam
     REQUIRE(back);
     CHECK(!back->noise_map);
 }
+
+TEST_CASE("a capture keeps the motion blur's object pass, and one from before has none") {
+    FrameCapture fc = MakePassFrame();
+    VelocityObject v;
+    v.geom = MakeTriangle();  // a geometry no draw has
+    v.mesh = 0x4321;
+    v.cull = 6;
+    v.skinned = 1;
+    v.bones = 2;
+    for (int r = 0; r < 8; r++)
+        for (int c = 0; c < 4; c++) v.view_proj[r][c] = float(r * 4 + c);
+    v.depth_range[1] = 10000;
+    for (int i = 0; i < 2 * 2 * 3 * 4; i++) v.rows.push_back(float(i) * 0.5f);
+    fc.velocity_objects.push_back(v);
+    VelocityObject shared = v;
+    shared.geom = fc.draws[0].geom;  // and one a draw has too
+    shared.bones = 1;
+    shared.skinned = 0;
+    shared.rows.resize(2 * 3 * 4);
+    fc.velocity_objects.push_back(shared);
+    const std::string path = TempPath("band3_capture_file_velocity_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    REQUIRE(back);
+    REQUIRE(back->velocity_objects.size() == 2);
+    const VelocityObject& a = back->velocity_objects[0];
+    REQUIRE(a.geom);
+    CHECK(a.geom->verts.size() == 3);
+    CHECK(a.mesh == 0x4321);
+    CHECK(a.cull == 6);
+    CHECK(a.skinned == 1);
+    CHECK(a.bones == 2);
+    CHECK(a.view_proj[7][3] == 31.0f);
+    CHECK(a.depth_range[1] == 10000.0f);
+    CHECK(a.rows == v.rows);
+    CHECK(back->velocity_objects[1].geom == back->draws[0].geom);
+    CHECK(back->velocity_objects[1].rows.size() == 24);
+
+    // without VOBJ (a capture from before it): none
+    std::vector<uint8_t> data = ReadAll(path);
+    const size_t at = FindSection(data, "VOBJ");
+    REQUIRE(at != std::string::npos);
+    uint64_t size;
+    std::memcpy(&size, data.data() + at + 8, 8);
+    data.erase(data.begin() + std::ptrdiff_t(at), data.begin() + std::ptrdiff_t(at + 16 + size));
+    WriteAll(path, data);
+    back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    CHECK(back->velocity_objects.empty());
+    CHECK(back->draws.size() == fc.draws.size());
+}

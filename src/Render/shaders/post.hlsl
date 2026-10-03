@@ -33,7 +33,8 @@
 // soft-particle buffer, render targets of texture passes (gpu_view.cpp's,
 // arrays of one layer); t9 the noise map, a layer (params.noise_tex.z) of
 // a texture array, read texel by texel through sample_model.hlsli as the CPU
-// reads it; t10 the previous post frame the trails read (the live view's,
+// reads it; t10 the velocity texture (PSVelocity's, half the picture's
+// size); t11 the previous post frame the trails read (the live view's,
 // PSCompositeHistory). The samplers are linear and clamp, as RB3 sets them.
 VK_SAMPLER VK_BINDING(0, 2) Texture2D<float4> color_tex : register(t0, space2);
 VK_SAMPLER VK_BINDING(0, 2) SamplerState color_sampler : register(s0, space2);
@@ -55,8 +56,10 @@ VK_SAMPLER VK_BINDING(8, 2) Texture2DArray<float4> soft_tex : register(t8, space
 VK_SAMPLER VK_BINDING(8, 2) SamplerState soft_sampler : register(s8, space2);
 VK_SAMPLER VK_BINDING(9, 2) Texture2DArray<float4> noise_tex : register(t9, space2);
 VK_SAMPLER VK_BINDING(9, 2) SamplerState noise_sampler : register(s9, space2);
-VK_SAMPLER VK_BINDING(10, 2) Texture2D<float4> prev_tex : register(t10, space2);
-VK_SAMPLER VK_BINDING(10, 2) SamplerState prev_sampler : register(s10, space2);
+VK_SAMPLER VK_BINDING(10, 2) Texture2D<float4> velocity_tex : register(t10, space2);
+VK_SAMPLER VK_BINDING(10, 2) SamplerState velocity_sampler : register(s10, space2);
+VK_SAMPLER VK_BINDING(11, 2) Texture2D<float4> prev_tex : register(t11, space2);
+VK_SAMPLER VK_BINDING(11, 2) SamplerState prev_sampler : register(s11, space2);
 
 VK_BINDING(0, 3) cbuffer PostUniforms : register(b0, space3) {
     PostPass params;
@@ -169,13 +172,36 @@ float4 PSGlare(PostIn i) : SV_Target0 {
     return float4(GlareOut(sum), 1.0);
 }
 
+// The velocity pass (post_model.hlsli's VelocityTexel), into a target half
+// the picture's size: each texel from the depth texel its uv lands in (the
+// game's s9, point), mode.yz the depth's size, in integers as the CPU's
+float4 PSVelocity(PostIn i) : SV_Target0 {
+    const uint2 v = uint2(i.pos.xy);
+    const uint2 size = params.mode.yz;
+    const uint2 level = uint2(params.target.xy);
+    const uint2 at = min((2u * v + 1u) * size / (2u * level), size - 1u);
+    return VelocityTexel(params, PixelUv(i), depth_tex.Load(int3(int2(at), 0)) / kNearW);
+}
+
 // The composite's colour at a pixel, unsaturated (post_model.hlsli's
 // CompositeColor), and in `alpha` its alpha (CompositeAlpha)
 float3 CompositeAt(PostIn i, out float alpha) {
     const int3 at = int3(int2(i.pos.xy), 0);
     const float2 uv = PixelUv(i);
     const uint f = params.flags.x;
-    const float4 scene = color_tex.Load(at);
+    float4 scene = color_tex.Load(at);
+    // the scene blurred along the motion, where the velocity texture says
+    if ((f & kPostVelocity) != 0u) {
+        const float4 v = velocity_tex.SampleLevel(velocity_sampler, uv, 0);
+        if (VelocityBlurs(params, v)) {
+            const float2 step = VelocityStep(params, v);
+            float4 acc = scene * kVelocityCentre;
+            [unroll] for (int k = -5; k < 5; k++)
+                acc += color_tex.SampleLevel(color_sampler, VelocityTap(uv, step, k), 0) *
+                       VelocityWeight(k);
+            scene = acc * kVelocityNorm;
+        }
+    }
     const float depth = GameDepth(params, depth_tex.Load(at) / kNearW);
     float4 dof = 0.0;
     if ((f & kPostDof) != 0u) dof = dof_tex.SampleLevel(dof_sampler, uv, 0);
@@ -216,7 +242,7 @@ float4 PSComposite(PostIn i) : SV_Target0 {
 
 // The live view's composite, which keeps each post frame's for the next
 // frame's trails: the picture as PSComposite's (the trails over it where
-// params.flags has them, from t10), and the post buffer as the game's
+// params.flags has them, from t11), and the post buffer as the game's
 // resolve keeps it, the same colour with the composite's alpha (or the
 // trails': 1 where the trail was kept)
 struct CompositeOut {

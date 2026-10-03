@@ -16,8 +16,9 @@
 //                               [--dump-alpha <png>] [--dump-depth <png>]
 //                               [--dump-bloom <png>] [--dump-noise <png>]
 //                               [--view alpha|depth]
-//                               [--no-post | --post-only xfm|dof|bloom|spot|soft|noise]
-//                               [--no-grain]
+//                               [--no-post |
+//                                --post-only xfm|dof|bloom|spot|soft|noise|velocity]
+//                               [--no-grain] [--no-velocity | --no-velocity-objects]
 //                               [--no-gamma | --gamma-from <other.cap>]
 //                               [--scale <f>] [--shadow-scale <f>] [--msaa 1|2|4]
 //
@@ -105,11 +106,25 @@
 // a glare frame: at the game's 1280x720, against --dump-tex of the glare
 // pass's draw (--list's "rect shader 25"), whose guest pixels are what that
 // pass left in the level (right in captures taken with --readback_resolve=full).
-// RB3's post-processing (post_model.h: depth of field, bloom or glare, the
-// spotlights' depth volume, the noise, the colour matrix) is applied as the
-// frame set it; --no-post leaves the scene as it is, --post-only applies one
-// effect alone (bloom covers glare), to see what each contributes, and
-// --no-grain leaves the noise (film grain) out. The "noise:" line under
+// RB3's post-processing (post_model.h: the camera motion blur, depth of
+// field, bloom or glare, the spotlights' depth volume, the noise, the colour
+// matrix) is applied as the frame set it; --no-post leaves the scene as it
+// is, --post-only applies one effect alone (bloom covers glare), to see what
+// each contributes, --no-grain leaves the noise (film grain) out and
+// --no-velocity the camera motion blur (--no-velocity-objects its object
+// pass: the characters with their own motion). The "velocity:" line under "check:"
+// says what the motion blur drew with: the flag (+0x39) and c122, the
+// velocity buffer's state as DoPostProcess found it (post_params.h's vel_*:
+// whether the proc has it, the pre-pass depth, the camera, its frame and
+// last scale, what VelocityExpected says), the previous view-projection
+// against the PS c134..c137 its pass read and the depth range against c89,
+// where the current view-projection puts the frustum's four corners (the
+// picture's corners, in DrawRectDepth's order: top left, bottom left, top
+// right, bottom right), and the samplers the composite read the scene (s6)
+// and the velocity (s10) by; then the object pass's meshes (scene_capture.h's
+// VelocityObject: how many, skinned, their triangles and bones), this frame's
+// palette against the bones the colour pass drew the same mesh with, and
+// their view-projections against the velocity buffer's. The "noise:" line under
 // "check:" says what the noise drew with: the flags (+0x2D, midtone +0x2E),
 // c112 and c113 against the proc's fields (c113 = base scale, top scale or 1
 // if stationary, intensity; c112 the stationary seeds when it's stationary),
@@ -156,6 +171,7 @@
 #include <vector>
 
 #include "src/Render/capture_file.h"
+#include "src/Render/guest_formats.h"
 #include "src/Render/png_writer.h"
 #include "src/Render/post_model.h"
 #include "src/Render/post_params.h"
@@ -656,6 +672,90 @@ void PrintGamma(const FrameCapture& fc, bool all) {
     }
 }
 
+// The camera motion blur's "velocity:" lines (see the top)
+void PrintVelocity(const FrameCapture& fc) {
+    const PostParams& p = fc.post;
+    const PostConsts& c = fc.post_consts;
+    std::printf("  velocity: +0x39 %02X c122 %.4f %.4f %.4f %.4f; buffer %s",
+                unsigned(c.flags[kPostFlagVelocity]), c.c122[0], c.c122[1], c.c122[2], c.c122[3],
+                p.vel_read ? "read" : "not read (a capture from before: no motion blur)");
+    if (!p.vel_read) {
+        std::printf("\n");
+        return;
+    }
+    // c134..c137 against the previous matrix's columns (Milo's row vectors:
+    // clip x is the first column's dot) and its rows
+    float columns = 0, rows = 0;
+    for (int r = 0; r < 4; r++) {
+        for (int k = 0; k < 4; k++) {
+            columns = std::max(columns, std::fabs(c.c134[r][k] - p.vel_prev_view_proj[k][r]));
+            rows = std::max(rows, std::fabs(c.c134[r][k] - p.vel_prev_view_proj[r][k]));
+        }
+    }
+    std::printf(" (proc %s, pre-pass depth %s, camera %s, frame %u, last c122 %.4f: expected "
+                "%s); c134..c137 vs the previous matrix's columns off by %.6g, its rows %.6g; "
+                "depth range %.4f %.2f %.6f %.6f vs c89 %.4f %.2f %.6f %.6f\n",
+                p.vel_on ? "on" : "off", p.vel_pre_depth ? "yes" : "none",
+                p.vel_same_cam ? "the world's" : "another", p.vel_frame, p.vel_scale,
+                VelocityExpected(p) ? "on" : "off", columns, rows, p.vel_depth_range[0],
+                p.vel_depth_range[1], p.vel_depth_range[2], p.vel_depth_range[3], c.c89[0],
+                c.c89[1], c.c89[2], c.c89[3]);
+    // the frustum's corners through the current matrix, as uv
+    std::printf("    corners (near + ray) at uv:");
+    for (int i = 0; i < 4; i++) {
+        const float w[4] = {p.vel_near[0] + p.vel_corners[i][0],
+                            p.vel_near[1] + p.vel_corners[i][1],
+                            p.vel_near[2] + p.vel_corners[i][2], 1};
+        float clip[4] = {};
+        for (int j = 0; j < 4; j++)
+            for (int k = 0; k < 4; k++) clip[j] += w[k] * p.vel_view_proj[k][j];
+        std::printf(" (%.4f %.4f)", 0.5f + 0.5f * clip[0] / clip[3],
+                    0.5f - 0.5f * clip[1] / clip[3]);
+    }
+    const TexSampler s6 = guest_format::DecodeSampler(c.scene_fetch);
+    const TexSampler s10 = guest_format::DecodeSampler(c.velocity_fetch);
+    std::printf("; s6 mag %u min %u clamp %u/%u, s10 mag %u min %u clamp %u/%u\n", s6.mag_linear,
+                s6.min_linear, s6.clamp_x, s6.clamp_y, s10.mag_linear, s10.min_linear,
+                s10.clamp_x, s10.clamp_y);
+    // the object pass: how many meshes, skinned, their triangles and
+    // bones; this frame's palette against the bones the colour pass drew
+    // the same mesh with (Mat4 columns: the rows the VS dots), and c0..c3
+    // against the velocity buffer's matrix (columns), c4..c7 against the
+    // previous one's
+    size_t skinned = 0, tris = 0, bones = 0, matched = 0;
+    float palette = 0, vp = 0, prev_vp = 0;
+    for (const VelocityObject& o : fc.velocity_objects) {
+        skinned += o.skinned;
+        tris += o.geom ? o.geom->indices.size() / 3 : 0;
+        bones += o.bones;
+        for (int r = 0; r < 4; r++) {
+            for (int k = 0; k < 4; k++) {
+                vp = std::max(vp, std::fabs(o.view_proj[r][k] - p.vel_view_proj[k][r]));
+                prev_vp = std::max(prev_vp,
+                                   std::fabs(o.view_proj[4 + r][k] - p.vel_prev_view_proj[k][r]));
+            }
+        }
+        for (const DrawItem& d : fc.draws) {
+            if (d.mesh != o.mesh || d.draw_mode != 0) continue;
+            const size_t n = o.skinned ? std::min<size_t>(d.bones.size(), o.bones) : 1;
+            if (o.skinned && d.bones.empty()) break;
+            for (size_t b = 0; b < n; b++) {
+                const Mat4& m = o.skinned ? d.bones[b] : d.world;
+                for (int r = 0; r < 3; r++)
+                    for (int k = 0; k < 4; k++)
+                        palette = std::max(
+                            palette, std::fabs(o.rows[(b * 3 + r) * 4 + k] - m.m[k][r]));
+            }
+            matched++;
+            break;
+        }
+    }
+    std::printf("    objects %zu (%zu skinned, %zu triangles, %zu bones); %zu matched to a colour "
+                "draw, this frame's palette off by %.6g from its bones; VS c0..c3 vs the "
+                "matrix's columns off by %.6g, c4..c7 vs the previous's %.6g\n",
+                fc.velocity_objects.size(), skinned, tris, bones, matched, palette, vp, prev_vp);
+}
+
 // What post-processing was set to do (the "post:" line), against what RB3's
 // composite drew with (the "check:" line), and the blurs' taps
 void PrintPost(const FrameCapture& fc) {
@@ -719,8 +819,8 @@ void PrintPost(const FrameCapture& fc) {
     // TheShaderMgr +0x25: out/research/spotlight_survey.md 2), the soft
     // particles' (s4, +0x3F, the buffer's first surface: softparticle_survey.md
     // 1), the noise's (c112, c113, +0x2D/+0x2E: out/research/
-    // n1_post_noise.md), and what the native composite leaves out: velocity
-    // blur (s10 * c122) (out/research/m4_design.md)
+    // n1_post_noise.md), the camera motion blur's (s10 * c122, +0x39:
+    // out/research/n5_hub_soft.md), and what the native composite leaves out
     const auto flag = [&](int offset) { return unsigned(c.flags[offset - kPostFlagBase]); };
     std::printf("  spotlights: +0x25 %02X c127 %.4f %.4f %.4f %.4f c91 %.4f %.4f %.4f %.4f\n",
                 c.spot_flag, c.c127[0], c.c127[1], c.c127[2], c.c127[3], c.c91[0], c.c91[1],
@@ -758,13 +858,16 @@ void PrintPost(const FrameCapture& fc) {
                         "grain\n");
         }
     }
-    // and the trails (blend previous, +0x2F: the previous post frame faded
-    // by c125.y, kept where its mean is over the threshold c125.x and over
-    // the colour's), which a capture can't draw: it has no previous frame
-    std::printf("  left out: velocity +0x38 %02X +0x39 %02X c122 %.4f %.4f %.4f %.4f; trails "
-                "+0x2F %02X c125 %.4f %.4f %.4f %.4f (proc threshold %.4f duration %.4f)\n",
-                flag(0x38), flag(0x39), c.c122[0], c.c122[1], c.c122[2], c.c122[3], flag(0x2F),
-                c.c125[0], c.c125[1], c.c125[2], c.c125[3], p.trail_threshold, p.trail_duration);
+    PrintVelocity(fc);
+    // and what the native composite leaves out: the motion blur that blends
+    // the previous frame (+0x38), and the trails (blend previous, +0x2F: the
+    // previous post frame faded by c125.y, kept where its mean is over the
+    // threshold c125.x and over the colour's), which a capture can't draw: it
+    // has no previous frame
+    std::printf("  left out: motion blur +0x38 %02X; trails +0x2F %02X c125 %.4f %.4f %.4f %.4f "
+                "(proc threshold %.4f duration %.4f)\n",
+                flag(0x38), flag(0x2F), c.c125[0], c.c125[1], c.c125[2], c.c125[3],
+                p.trail_threshold, p.trail_duration);
     if (c.dof_survey) {
         std::printf("  DOF blur taps (c31..c38 xy, weight c47..c54 x):");
         for (int i = 0; i < 8; i++)
@@ -1059,6 +1162,8 @@ int main(int argc, char** argv) {
         else if (a == "--dump-noise" && i + 1 < argc) dump_noise = argv[++i];
         else if (a == "--no-post") o.post = false;
         else if (a == "--no-grain") o.grain = false;
+        else if (a == "--no-velocity") o.velocity = false;
+        else if (a == "--no-velocity-objects") fc->velocity_objects.clear();
         else if (a == "--no-gamma") o.gamma = false;
         else if (a == "--gamma-from" && i + 1 < argc) {
             const auto other = LoadCapture(argv[++i]);
@@ -1076,9 +1181,11 @@ int main(int argc, char** argv) {
                           : e == "spot"  ? post::kPostSpot
                           : e == "soft"  ? post::kPostSoft
                           : e == "noise" ? post::kPostNoise
+                          : e == "velocity" ? post::kPostVelocity
                                          : 0;
             if (!o.post_only) {
-                std::fprintf(stderr, "--post-only takes xfm, dof, bloom, spot, soft or noise\n");
+                std::fprintf(stderr,
+                             "--post-only takes xfm, dof, bloom, spot, soft, noise or velocity\n");
                 return 2;
             }
         }

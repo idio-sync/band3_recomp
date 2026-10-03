@@ -101,6 +101,9 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
     fc.post_consts = frame.post_consts;
     fc.noise_map = frame.noise_map;
     fc.noise_sampler = frame.noise_sampler;
+    // the motion blur's object pass, which the post frame drew over its
+    // velocity texture from the world's depth
+    fc.velocity_objects = frame.velocity_objects;
     // and the gamma ramp the presenter applied to it
     fc.gamma = frame.gamma;
     // the world's back buffer, cleared as the world frame cleared it, and its

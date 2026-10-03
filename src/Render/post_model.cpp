@@ -23,6 +23,7 @@ float4 operator+(float4 a, float4 b) { return {a.x + b.x, a.y + b.y, a.z + b.z, 
 float4 operator*(float4 a, float s) { return {a.x * s, a.y * s, a.z * s, a.w * s}; }
 
 float dot(float3 a, float3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+float dot(float4 a, float4 b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
 float saturate(float v) { return std::clamp(v, 0.0f, 1.0f); }
 float3 saturate(float3 v) { return {saturate(v.x), saturate(v.y), saturate(v.z)}; }
 float abs(float v) { return std::fabs(v); }
@@ -169,6 +170,168 @@ float4 FrameSeeds(uint64_t frame) {
     return {out[0], out[1], out[2], out[3]};
 }
 
+// A vertex of object o placed by its palettes (VS 21A0C657 / F922317D): the
+// world position by this frame's (rows 0..) and the last frame's (rows
+// bones * 3 on), each through its view-projection
+void ObjectVertex(const VelocityObject& o, const VelocityObjectPass& pass, const Vertex& v,
+                  float4& cur, float4& prev) {
+    const float4 at{v.pos[0], v.pos[1], v.pos[2], 1.0f};
+    auto row = [&](bool last, uint32_t bone, int r) {
+        const size_t i = (size_t(last ? o.bones * 3 : 0) + size_t(bone) * 3 + r) * 4;
+        return float4{o.rows[i], o.rows[i + 1], o.rows[i + 2], o.rows[i + 3]};
+    };
+    auto place = [&](bool last) {
+        float3 world{0, 0, 0};
+        if (!o.skinned) {
+            world = {dot(row(last, 0, 0), at), dot(row(last, 0, 1), at), dot(row(last, 0, 2), at)};
+        } else {
+            const float4 w = VelocityObjectWeights(
+                float4{v.weight[0], v.weight[1], v.weight[2], v.weight[3]});
+            const float ws[4] = {w.x, w.y, w.z, w.w};
+            for (int k = 0; k < 4; k++) {
+                const uint32_t b = v.bone[k] < o.bones ? v.bone[k] : 0;
+                world = world + float3{dot(row(last, b, 0), at), dot(row(last, b, 1), at),
+                                       dot(row(last, b, 2), at)} *
+                                    ws[k];
+            }
+        }
+        return VelocityObjectClip(pass, world, last);
+    };
+    cur = place(false);
+    prev = place(true);
+}
+
+// The object pass on the CPU, over `vel` (the camera pass's texels, RGBA8 as
+// floats), from the scene's `depth` (1/w, width x height): each object's
+// triangles clipped at the camera's near plane (w at least c8.x, the clip z
+// both backends give, VelocityObjectDepth), on D3D9's pixel centres as the
+// game's mesh draws are (soft_raster.cpp's PixelCentre), culled by its cull
+// mode, filled by D3D's top-left rule, their depth tested (smaller or equal
+// passes) and written in a buffer of their own, cleared to 1, and where a
+// pixel passes, the texel VelocityObjectTexel gives replacing the camera's
+// where its alpha is 1 (SrcAlpha, by 1 or 0)
+void ObjectPass(const PostPlan& plan, Level& vel, const std::vector<float>& depth,
+                uint32_t width, uint32_t height) {
+    if (plan.velocity_objects.empty()) return;
+    std::vector<float> zbuf(vel.px.size(), 1.0f);
+    const float vw = float(vel.w), vh = float(vel.h);
+    struct Corner {
+        float4 cur, prev;
+    };
+    std::vector<Corner> corners;
+    for (size_t n = 0; n < plan.velocity_objects.size(); n++) {
+        const VelocityObject& o = *plan.velocity_objects[n];
+        const VelocityObjectPass& pass = plan.velocity_object_passes[n];
+        const float near_plane = pass.depth_range.x;
+        const Geometry& g = *o.geom;
+        corners.resize(g.verts.size());
+        for (size_t i = 0; i < g.verts.size(); i++)
+            ObjectVertex(o, pass, g.verts[i], corners[i].cur, corners[i].prev);
+        auto raster = [&](const Corner& a, const Corner& b, const Corner& c) {
+            const Corner* v[3] = {&a, &b, &c};
+            float sx[3], sy[3], iw[3];
+            for (int i = 0; i < 3; i++) {
+                iw[i] = 1.0f / v[i]->cur.w;
+                sx[i] = (v[i]->cur.x * iw[i] * 0.5f + 0.5f) * vw;
+                sy[i] = (0.5f - v[i]->cur.y * iw[i] * 0.5f) * vh;
+            }
+            const float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sy[1] - sy[0]) * (sx[2] - sx[0]);
+            if (!(std::fabs(area) > 1e-9f)) return;
+            // y runs down the target, so a positive area goes clockwise
+            if (o.cull && Culls(o.cull, area > 0)) return;
+            const int x0 = std::max(0, int(std::floor(std::min({sx[0], sx[1], sx[2]}))));
+            const int x1 = std::min(int(vel.w) - 1, int(std::ceil(std::max({sx[0], sx[1], sx[2]}))));
+            const int y0 = std::max(0, int(std::floor(std::min({sy[0], sy[1], sy[2]}))));
+            const int y1 = std::min(int(vel.h) - 1, int(std::ceil(std::max({sy[0], sy[1], sy[2]}))));
+            if (x0 > x1 || y0 > y1) return;
+            const float inv_area = 1.0f / area;
+            auto owns = [&](int i, int j) {
+                const float gx = -(sy[j] - sy[i]) * inv_area, gy = (sx[j] - sx[i]) * inv_area;
+                return gx > 0 || (gx == 0 && gy > 0);
+            };
+            const bool own0 = owns(1, 2), own1 = owns(2, 0), own2 = owns(0, 1);
+            for (int y = y0; y <= y1; y++) {
+                for (int x = x0; x <= x1; x++) {
+                    const float qx = float(x), qy = float(y);
+                    float l[3];
+                    l[0] = ((sx[2] - sx[1]) * (qy - sy[1]) - (sy[2] - sy[1]) * (qx - sx[1])) * inv_area;
+                    l[1] = ((sx[0] - sx[2]) * (qy - sy[2]) - (sy[0] - sy[2]) * (qx - sx[2])) * inv_area;
+                    l[2] = ((sx[1] - sx[0]) * (qy - sy[0]) - (sy[1] - sy[0]) * (qx - sx[0])) * inv_area;
+                    if (l[0] < 0 || l[1] < 0 || l[2] < 0) continue;
+                    if ((l[0] == 0 && !own0) || (l[1] == 0 && !own1) || (l[2] == 0 && !own2))
+                        continue;
+                    const float z = l[0] * iw[0] + l[1] * iw[1] + l[2] * iw[2];
+                    const float d = VelocityObjectDepth(pass, 1.0f / z);
+                    const size_t at = size_t(y) * vel.w + x;
+                    if (!(d <= zbuf[at])) continue;
+                    zbuf[at] = d;
+                    const float q0 = l[0] * iw[0] / z, q1 = l[1] * iw[1] / z, q2 = l[2] * iw[2] / z;
+                    const float4 cur = a.cur * q0 + b.cur * q1 + c.cur * q2;
+                    const float4 prev = a.prev * q0 + b.prev * q1 + c.prev * q2;
+                    const float2 uv = VelocityObjectUv(cur);
+                    const int dx = int(std::clamp(std::floor(uv.x * float(width)), 0.0f,
+                                                  float(width) - 1.0f));
+                    const int dy = int(std::clamp(std::floor(uv.y * float(height)), 0.0f,
+                                                  float(height) - 1.0f));
+                    const float4 t =
+                        VelocityObjectTexel(pass, cur, prev, depth[size_t(dy) * width + dx]);
+                    if (t.w > 0.5f) vel.px[at] = Unorm8(float4{t.x, t.y, t.z, 1.0f});
+                }
+            }
+        };
+        // clipped at w = near: each triangle's corners in front of it, and
+        // where its edges cross it
+        for (size_t i = 0; i + 2 < g.indices.size(); i += 3) {
+            const Corner* tri[3] = {&corners[g.indices[i]], &corners[g.indices[i + 1]],
+                                    &corners[g.indices[i + 2]]};
+            Corner poly[4];
+            int count = 0;
+            for (int k = 0; k < 3; k++) {
+                const Corner& p = *tri[k];
+                const Corner& q = *tri[(k + 1) % 3];
+                const float dp = p.cur.w - near_plane, dq = q.cur.w - near_plane;
+                if (dp >= 0) poly[count++] = p;
+                if ((dp >= 0) != (dq >= 0)) {
+                    const float t = dp / (dp - dq);
+                    poly[count++] = {Lerp4(p.cur, q.cur, t), Lerp4(p.prev, q.prev, t)};
+                }
+            }
+            for (int k = 1; k + 1 < count; k++) raster(poly[0], poly[k], poly[k + 1]);
+        }
+    }
+}
+
+// The velocity pass's numbers (PostPass::vel_*), from the velocity buffer as
+// DoPostProcess found it (PostParams::vel_*), and the blur's step scale
+// (c122.x, or the buffer's last)
+void PlanVelocity(const PostParams& p, float scale, PostPass& pass) {
+    // c134..c137 as Draw uploads the previous matrix: its columns (the
+    // clip position's x is the first column's dot with the world position,
+    // Milo's row vectors)
+    for (int r = 0; r < 4; r++) {
+        pass.vel_prev[r] = {p.vel_prev_view_proj[0][r], p.vel_prev_view_proj[1][r],
+                            p.vel_prev_view_proj[2][r], p.vel_prev_view_proj[3][r]};
+    }
+    const float near_plane = p.vel_depth_range[0], far_plane = p.vel_depth_range[1];
+    pass.vel_near = {p.vel_near[0], p.vel_near[1], p.vel_near[2], far_plane};
+    // DrawRectDepth's four vertices, a strip over the target: (-1, 1),
+    // (-1, -1), (1, 1), (1, -1) with uv (0, 0), (0, 1), (1, 0), (1, 1), the
+    // corner rays in that order. The far plane's corners are a rectangle, so
+    // the ray at uv is the top left's plus u across and v down
+    const float* c = p.vel_corners[0];
+    const float* down = p.vel_corners[1];
+    const float* across = p.vel_corners[2];
+    pass.vel_corner[0] = {c[0], c[1], c[2], 0};
+    pass.vel_corner[1] = {across[0] - c[0], across[1] - c[1], across[2] - c[2], 0};
+    pass.vel_corner[2] = {down[0] - c[0], down[1] - c[1], down[2] - c[2], 0};
+    // where nothing drew, the depth texture's 0 (cleared, reverse Z) as
+    // the shader takes it through c89: z = c89.z - c89.w, w = near far /
+    // (far - z (far - near)); w / far
+    const float z = p.vel_depth_range[2] - p.vel_depth_range[3];
+    const float w = near_plane * far_plane / (far_plane - z * (far_plane - near_plane));
+    pass.vel_depth = {w * (1.0f / far_plane), scale, 0, 0};
+}
+
 }  // namespace
 
 void BloomTaps(bool vertical, uint32_t size, float4 taps[15]) {
@@ -189,7 +352,8 @@ void DofTaps(bool vertical, float width_scale, float4 taps[8]) {
         taps[i] = {disc[i][0] * sx * 5.0f, disc[i][1] * sy * 5.0f, 0.125f, 0};
 }
 
-bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noise) {
+bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noise,
+              bool velocity) {
     plan = PostPlan{};
     const PostParams& p = frame.post;
     const PostConsts& c = frame.post_consts;
@@ -268,6 +432,15 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noi
             flags |= kPostNoiseMidtone;
     }
     if (consts ? c.flags[kPostFlagBlendPrevious] != 0 : BlendPrevious(p)) flags |= kPostTrails;
+    // The camera motion blur, where the game's composite had it (TheShaderMgr
+    // + 0x39), or on a world frame where DoVelocity would turn it on
+    // (VelocityExpected). It needs the velocity buffer's cameras, which
+    // captures from before don't have: none there. With `velocity` false
+    // it's left off.
+    const bool vel_known = p.vel_read && p.vel_depth_range[1] > 0;
+    if (velocity && vel_known &&
+        (consts ? c.flags[kPostFlagVelocity] != 0 : VelocityExpected(p)))
+        flags |= kPostVelocity;
     if (only) flags &= only | ((only & kPostNoise) ? kPostNoiseMidtone : 0u);
     if (!(flags & kPostNoise)) flags &= ~kPostNoiseMidtone;
     if (!flags) return false;
@@ -323,6 +496,20 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noi
             pass.trails = {p.trail_threshold, dt / p.trail_duration, 1.0f / 3.0f, 0};
         }
     }
+    if (flags & kPostVelocity) {
+        PlanVelocity(p, consts ? c.c122[0] : p.vel_scale, pass);
+        for (const VelocityObject& o : frame.velocity_objects) {
+            if (!o.geom || o.geom->indices.empty() || !o.bones ||
+                o.rows.size() != size_t(o.bones) * 3 * 2 * 4)
+                continue;
+            VelocityObjectPass v{};
+            for (int r = 0; r < 8; r++) v.view_proj[r] = Rgba(o.view_proj[r]);
+            v.depth_range = Rgba(o.depth_range);
+            v.mesh = {o.skinned ? 1u : 0u, o.bones, 0, 0};
+            plan.velocity_objects.push_back(&o);
+            plan.velocity_object_passes.push_back(v);
+        }
+    }
     plan.trails_update = consts;
 
     DofTaps(false, p.blur_width_scale, plan.dof_taps[0]);
@@ -352,6 +539,24 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
     Level src;
     src.Resize(width, height);
     for (size_t i = 0; i < src.px.size(); i++) src.px[i] = Unpack(scene[i]);
+
+    // the velocity pass, into a level half the picture's size, each texel
+    // from the depth texel its uv lands in (the game's s9, point: depth's
+    // width over the level's times x + .5, in integers, as the GPU's)
+    Level vel;
+    if (flags & kPostVelocity) {
+        vel.Resize(std::max(width / 2, 1u), std::max(height / 2, 1u));
+        for (uint32_t y = 0; y < vel.h; y++) {
+            const uint32_t dy = std::min((2 * y + 1) * height / (2 * vel.h), height - 1);
+            for (uint32_t x = 0; x < vel.w; x++) {
+                const uint32_t dx = std::min((2 * x + 1) * width / (2 * vel.w), width - 1);
+                vel.px[size_t(y) * vel.w + x] =
+                    Unorm8(VelocityTexel(pass, Uv(x, y, vel), depth[size_t(dy) * width + dx]));
+            }
+        }
+        // and the objects with their own motion over it
+        ObjectPass(plan, vel, depth, width, height);
+    }
 
     Level dof, tmp, bloom[3];
     if (flags & kPostDof) {
@@ -470,15 +675,27 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
                 n0 = noise_tap(uv, 0);
                 n1 = noise_tap(uv, 1);
             }
+            // the scene, blurred along the motion where the velocity says
+            float4 scene_px = src.px[i];
+            if (!vel.px.empty()) {
+                const float4 v = Sample(vel, uv);
+                if (VelocityBlurs(composite, v)) {
+                    const float2 step = VelocityStep(composite, v);
+                    float4 acc = scene_px * kVelocityCentre;
+                    for (int k = -5; k < 5; k++)
+                        acc = acc + Sample(src, VelocityTap(uv, step, k)) * VelocityWeight(k);
+                    scene_px = acc * kVelocityNorm;
+                }
+            }
             const float game_depth = GameDepth(pass, depth[i]);
-            const float3 color = CompositeColor(composite, src.px[i], d, game_depth, l[0], l[1],
+            const float3 color = CompositeColor(composite, scene_px, d, game_depth, l[0], l[1],
                                                 l[2], vol, dens, particles, n0, n1);
             float4 c;
             if (flags & kPostTrails) {
                 c = Trails(composite, color, Unpack(history->rgba[i]));
             } else {
                 const float3 rgb = saturate(color);
-                c = {rgb.x, rgb.y, rgb.z, CompositeAlpha(composite, src.px[i], d, game_depth)};
+                c = {rgb.x, rgb.y, rgb.z, CompositeAlpha(composite, scene_px, d, game_depth)};
             }
             if (keep) kept[i] = pack(c);
             out[i] = pack(float4{c.x, c.y, c.z, 1.0f});
@@ -505,6 +722,54 @@ void CompositeCpu(const PostPass& pass, const float scene[4], const float dof[4]
     out[0] = r.x;
     out[1] = r.y;
     out[2] = r.z;
+}
+
+void VelocityTexelCpu(const PostPass& pass, const float uv[2], float inv_w, float out[4]) {
+    const float4 v = VelocityTexel(pass, float2{uv[0], uv[1]}, inv_w);
+    out[0] = v.x;
+    out[1] = v.y;
+    out[2] = v.z;
+    out[3] = v.w;
+}
+
+void VelocityObjectTexelCpu(const VelocityObjectPass& pass, const float cur[4],
+                            const float prev[4], float inv_w, float out[4]) {
+    const float4 t = VelocityObjectTexel(pass, Rgba(cur), Rgba(prev), inv_w);
+    out[0] = t.x;
+    out[1] = t.y;
+    out[2] = t.z;
+    out[3] = t.w;
+}
+
+void VelocityObjectVertexCpu(const VelocityObject& o, const VelocityObjectPass& pass,
+                             const Vertex& v, float cur[4], float prev[4]) {
+    float4 c, p;
+    ObjectVertex(o, pass, v, c, p);
+    cur[0] = c.x, cur[1] = c.y, cur[2] = c.z, cur[3] = c.w;
+    prev[0] = p.x, prev[1] = p.y, prev[2] = p.z, prev[3] = p.w;
+}
+
+void VelocityBlurCpu(const PostPass& pass, const float uv[2], const float velocity[4],
+                     const float centre[4], void (*tap)(const float at[2], float out[4]),
+                     float out[4]) {
+    float4 acc = Rgba(centre);
+    const float4 v = Rgba(velocity);
+    if (VelocityBlurs(pass, v)) {
+        const float2 step = VelocityStep(pass, v);
+        acc = acc * kVelocityCentre;
+        for (int k = -5; k < 5; k++) {
+            const float2 at = VelocityTap(float2{uv[0], uv[1]}, step, k);
+            const float a[2] = {at.x, at.y};
+            float t[4];
+            tap(a, t);
+            acc = acc + Rgba(t) * VelocityWeight(k);
+        }
+        acc = acc * kVelocityNorm;
+    }
+    out[0] = acc.x;
+    out[1] = acc.y;
+    out[2] = acc.z;
+    out[3] = acc.w;
 }
 
 void TrailsCpu(const PostPass& pass, const float rgb[3], const float prev[4], float out[4]) {
