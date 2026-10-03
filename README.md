@@ -46,8 +46,17 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - An in-game settings menu (F4, or both stick clicks), saved to `band3.toml`
 - Configurable save, cache and song folders, including a portable install
 
+**Graphics**
+- An experimental native renderer (`renderer = native` at launch, F8 to switch, F9 for its
+  debug view). band3 draws each frame itself with the game's own shaders, checked against
+  the emulated GPU's picture pixel by pixel, while the emulated GPU skips the draws nobody sees:
+  - Faster: uncapped, 257 fps in the main menu and 285 in a song, against 165 and 163 on
+    the emulated GPU (about 1.6 to 1.75 times)
+  - Sharper: it draws at the window's size, 1080p or 4K, where the emulated GPU draws the
+    console's 720p unless `resolution_scale` is raised, at a high GPU cost
+  - [Native renderer](docs/native-renderer.md) has the details and the settings
+
 **Development**
-- An experimental native renderer (F8 switches to it, F9 opens its debug view)
 - A scriptable test harness, render checks against the game's own picture, unit tests and CI
 - Tracy profiling zones on RB3's engine systems
 
@@ -100,8 +109,8 @@ Both renderers replace the same part of RB3, its platform render layer (`DxRnd`,
 `DxTex`), and draw the same Milo meshes, materials and cameras. The difference is everything
 around them.
 
-\* Planned, not done. Today the native renderer is experimental and draws on top of the
-emulated GPU, which stays the default. Once it covers every screen, launching with
+\* Planned, not done. Today the native renderer is experimental, and the emulated GPU stays
+the default; under native it still runs, but skips the draws the native renderer has made. Once it covers every screen, launching with
 `renderer = native` will leave the emulated GPU out entirely, and `emulated` will remain as
 a choice at launch.
 
