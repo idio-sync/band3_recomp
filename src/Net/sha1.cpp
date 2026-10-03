@@ -54,7 +54,7 @@ void Compress(std::array<uint32_t, 5>& state, const uint8_t* block) {
 
 std::array<uint8_t, 20> Sha1(std::span<const uint8_t> data) {
     std::array<uint32_t, 5> state = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0};
-    const size_t whole =data.size() - data.size() % kBlockSize;
+    const size_t whole = data.size() - data.size() % kBlockSize;
     for (size_t at = 0; at < whole; at += kBlockSize) Compress(state, data.data() + at);
 
     // the rest, a 1 bit, zeros, then the length in bits: one block or two

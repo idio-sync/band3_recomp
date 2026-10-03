@@ -133,7 +133,10 @@ using ClientMessage = std::variant<ClientHello, ClientLogin, Pong, JoinRequest, 
 // A frame's packet; nothing if its body is shorter than the packet's (a longer
 // one is read as far as the packet goes). Strings end at their first NUL.
 std::optional<ServerMessage> DecodeServer(const Frame& frame);
-// A login's proof decodes as nothing if it's all zeros, else its first 20 bytes.
+// band3 is only ever a client, so this is for tests and the mock's side of things. A
+// login's proof decodes as nothing if it's all zeros, else its first 20 bytes; it doesn't
+// check that the rest is zero, so it can't tell an emulator's hash from a console's
+// signature.
 std::optional<ClientMessage> DecodeClient(const Frame& frame);
 
 // The proof a login sends when the server asks: HMAC-SHA1 of the server's
