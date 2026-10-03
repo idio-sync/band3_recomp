@@ -105,6 +105,8 @@ Status GetStatus() {
         status.code = client.code;
         status.public_ipv4 = client.public_ipv4;
         status.error = client.error;
+        status.retry_in_s = client.retry_in_s;
+        status.attempt = client.attempt;
         status.last_join_user = client.last_join_user;
         status.last_join_ipv4 = client.last_join_ipv4;
         std::lock_guard<std::mutex> lock(g_mutex);

@@ -44,6 +44,10 @@ struct Status {
     // players joining it dial
     uint32_t advertised_ipv4 = 0;
     std::string error;         // the last thing that went wrong, or empty
+    // seconds until it connects again by itself, after the connection went
+    // (state disconnected or failed); 0 when it won't
+    int retry_in_s = 0;
+    int attempt = 0;  // which connection this is since Start or Connect, from 1
     // the last game a join went to
     std::string last_join_user;
     uint32_t last_join_ipv4 = 0;
@@ -66,9 +70,9 @@ Status GetStatus();
 // for the server.
 std::string Join(std::string code);
 
-// Connects again after a disconnect or a failure. Returns an error, or empty.
-// The panel's or the test server's thread; waits for the old connection's
-// thread to end.
+// Connects again after a disconnect or a failure, now rather than when the
+// client would by itself. Returns an error, or empty. The panel's or the test
+// server's thread; waits for the old connection's thread to end.
 std::string Connect();
 
 // This PC's public address as the server saw it, 0 until logged in. The game

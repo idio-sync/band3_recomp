@@ -19,6 +19,7 @@
 #endif
 
 #include <algorithm>
+#include <cstdio>
 #include <utility>
 #include <variant>
 #include "native_socket.h"
@@ -133,6 +134,7 @@ Bytes Session::Received(const uint8_t* data, size_t size, Clock::time_point now)
     Bytes out;
     if (Over()) return out;
     last_heard_ = now;
+    if (size > 0) server_spoke_ = true;
     reader_.Feed(data, size);
     while (!Over()) {
         auto frame = reader_.Next();
@@ -262,9 +264,12 @@ void Client::Start(Config config, Callbacks callbacks) {
         std::lock_guard<std::mutex> lock(mutex_);
         status_ = {};
         status_.state = State::kConnecting;
+        status_.attempt = 1;
         joins_.clear();
     }
     public_ipv4_ = 0;
+    // the thread isn't running yet, and starting it publishes this to it
+    attempt_ = 0;
     thread_ = std::thread([this, config = std::move(config), callbacks = std::move(callbacks)] {
         Run(config, callbacks);
     });
@@ -274,6 +279,8 @@ void Client::Stop() {
     std::lock_guard<std::mutex> control(control_mutex_);
     stop_ = true;
     if (thread_.joinable()) thread_.join();
+    std::lock_guard<std::mutex> lock(mutex_);
+    status_.retry_in_s = 0;
 }
 
 std::string Client::Join(std::string code) {
@@ -289,9 +296,11 @@ ClientStatus Client::GetStatus() const {
     return status_;
 }
 
-void Client::Publish(const Session& session) {
+void Client::Publish(const Session& session, int retry_in_s) {
     std::lock_guard<std::mutex> lock(mutex_);
     status_ = session.status();
+    status_.attempt = attempt_;
+    status_.retry_in_s = retry_in_s;
     if (status_.public_ipv4) public_ipv4_ = status_.public_ipv4;
 }
 
@@ -303,7 +312,6 @@ std::vector<std::string> Client::TakeJoins() {
 // Stop waits for this: every wait in it is cut into kWake slices that check
 // stop_, except the name lookup, which is the system's
 void Client::Run(Config config, Callbacks callbacks) {
-    Session session(config, callbacks);
 #ifdef _WIN32
     // Winsock counts startups, so this one is harmless beside the SDK's
     static const bool started = [] {
@@ -311,11 +319,58 @@ void Client::Run(Config config, Callbacks callbacks) {
         return WSAStartup(MAKEWORD(2, 2), &data) == 0;
     }();
     if (!started) {
+        // nothing a retry would change
+        Session session(config, callbacks);
+        attempt_ = 1;
         session.Failed("Winsock didn't start");
         Publish(session);
         return;
     }
 #endif
+    // which of retry_delays the next wait is
+    size_t backoff = 0;
+    while (true) {
+        attempt_++;
+        Session session(config, callbacks);
+        if (attempt_ > 1) {
+            // what the last connection had, its code and joins, went with it
+            std::lock_guard<std::mutex> lock(mutex_);
+            status_ = {};
+            status_.state = State::kConnecting;
+            status_.attempt = attempt_;
+            joins_.clear();
+        }
+        Attempt(session, config, callbacks);
+        if (stop_ || !session.Retry() || config.retry_delays.empty()) return;
+        // it logged in, so the server was fine until now: the waits start over
+        if (session.status().state == State::kDisconnected) backoff = 0;
+        const auto delay = config.retry_delays[std::min(backoff, config.retry_delays.size() - 1)];
+        backoff++;
+        if (callbacks.log) {
+            const auto seconds = std::chrono::duration<double>(delay).count();
+            char text[32];
+            std::snprintf(text, sizeof(text), "%g", seconds);
+            callbacks.log("rooms: connecting again in " + std::string(text) + " s (attempt " +
+                          std::to_string(attempt_ + 1) + ")");
+        }
+        if (!Backoff(session, delay)) return;
+    }
+}
+
+bool Client::Backoff(const Session& session, std::chrono::milliseconds delay) {
+    const auto until = Session::Clock::now() + delay;
+    while (!stop_) {
+        const auto left = until - Session::Clock::now();
+        if (left <= Session::Clock::duration::zero()) return true;
+        // rounded up, so it says 1 until the moment it connects, never 0
+        const int seconds = static_cast<int>(std::chrono::ceil<std::chrono::seconds>(left).count());
+        Publish(session, std::max(1, seconds));
+        std::this_thread::sleep_for(std::min<Session::Clock::duration>(kWake, left));
+    }
+    return false;
+}
+
+void Client::Attempt(Session& session, const Config& config, const Callbacks& callbacks) {
     const std::vector<uint32_t> found = net::ResolveIPv4(config.host);
     if (found.empty()) {
         session.Failed("no IPv4 address for " + config.server);

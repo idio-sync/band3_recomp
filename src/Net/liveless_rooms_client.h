@@ -40,6 +40,12 @@ struct Config {
     uint32_t local_ipv4 = 0;  // this PC's on its own network, for players behind the same router
     std::string version;
     std::string language = "eng";
+    // How long Client waits before connecting again after a connection is
+    // lost, one after another, the last one from then on; logging in starts
+    // them over. Long enough apart that a server that's down isn't hammered by
+    // every game waiting on it. Empty: never by itself.
+    std::vector<std::chrono::milliseconds> retry_delays{std::chrono::seconds(5), std::chrono::seconds(10),
+                                                        std::chrono::seconds(30), std::chrono::seconds(60)};
 };
 
 // The connection as far as it got. IPv4 addresses in network order.
@@ -50,6 +56,11 @@ struct ClientStatus {
     std::string error;
     std::string last_join_user;
     uint32_t last_join_ipv4 = 0;
+    // seconds until Client connects again by itself, rounded up; 0 when it
+    // isn't going to
+    int retry_in_s = 0;
+    // which connection this is since Start, from 1
+    int attempt = 0;
 };
 
 // What the server asks of the game, on the connection's thread.
@@ -88,6 +99,13 @@ public:
     void Tick(Clock::time_point now);
     // whether the connection is done with, failed or disconnected, and should close
     bool Over() const { return status_.state == State::kFailed || status_.state == State::kDisconnected; }
+    // Whether it's worth connecting again, once Over: a connection that was
+    // logged in and went, or one that never reached a server. Not once the
+    // server has had its say before logging in (turned the connection away,
+    // refused the login, sent what isn't Rooms): asking again gets the same.
+    bool Retry() const {
+        return status_.state == State::kDisconnected || (status_.state == State::kFailed && !server_spoke_);
+    }
 
     const ClientStatus& status() const { return status_; }
 
@@ -104,11 +122,15 @@ private:
     Clock::time_point last_heard_{};
     // the code of the last join asked for, which a denial is about
     std::string joining_;
+    // the server sent something: its hello, or bytes that aren't Rooms
+    bool server_spoke_ = false;
 };
 
-// A Session on a thread of its own, over TCP. Start connects and logs in;
-// nothing reconnects by itself, Start again does. Everything here is safe from
-// any thread; GetStatus and PublicAddress never wait on the connection.
+// A Session on a thread of its own, over TCP. Start connects and logs in, and
+// when the connection is lost (Session::Retry) the thread connects again by
+// itself after Config::retry_delays, a new Session each time; Start again
+// connects at once. Everything here is safe from any thread; GetStatus and
+// PublicAddress never wait on the connection.
 class Client {
 public:
     Client() = default;
@@ -118,7 +140,8 @@ public:
 
     // ends any connection there is, then starts a new one
     void Start(Config config, Callbacks callbacks);
-    // ends the connection and waits for its thread; the status stays as it was
+    // ends the connection, or the wait to connect again, and waits for its
+    // thread; the status stays as it was, but for retry_in_s, now 0
     void Stop();
     // asks for the game with `code`: an error, or empty once it's on its way
     std::string Join(std::string code);
@@ -128,7 +151,11 @@ public:
 
 private:
     void Run(Config config, Callbacks callbacks);
-    void Publish(const Session& session);
+    // one connection, from looking the server up until it's over or stopped
+    void Attempt(Session& session, const Config& config, const Callbacks& callbacks);
+    // waits out `delay` with the status saying so; false if stopped
+    bool Backoff(const Session& session, std::chrono::milliseconds delay);
+    void Publish(const Session& session, int retry_in_s = 0);
     // the joins asked for since the thread last looked
     std::vector<std::string> TakeJoins();
 
@@ -136,6 +163,8 @@ private:
     std::mutex control_mutex_;
     std::thread thread_;
     std::atomic<bool> stop_{false};
+    // the thread's: which connection it's on, for the status
+    int attempt_ = 0;
     mutable std::mutex mutex_;
     ClientStatus status_;
     std::vector<std::string> joins_;

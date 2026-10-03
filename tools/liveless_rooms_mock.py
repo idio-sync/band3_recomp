@@ -20,6 +20,12 @@ It logs one line per event (connect, hello, login with its code, join, deny, pin
 timeout, close), and with --hex every frame in and out. --ping and --drop take
 seconds; 0 turns pinging (and so dropping) off.
 
+To test a game connecting again by itself, --drop-after-login 3 hangs up on each game
+3 s after it logs in, and --drop-count 1 on the first login only, so the game's next
+connection stays (with --codes HOST0001,HOST0002 it logs in again as HOST0002):
+
+  python tools/liveless_rooms_mock.py --port 19533 --ping 2 --drop-after-login 3 --drop-count 1 --codes HOST0001,HOST0002
+
 The packing functions (encode_*/decode_*, login_proof, rooms_xuid) are kept apart
 from the server for tools/test_liveless_rooms_mock.py, which checks them against
 tests/golden/liveless_rooms_packets.txt, the vectors band3's C++ codec is held to.
@@ -309,6 +315,8 @@ class Connection:
         self.public = None
         self.last_pong = now
         self.next_ping = None
+        # when --drop-after-login hangs up on it, once logged in
+        self.drop_at = None
         self.closed = False
 
     @property
@@ -322,13 +330,19 @@ class RoomsServer:
     """The mock, single-threaded on a selector. serve_forever() until stop()."""
 
     def __init__(self, port=PORT, address="127.0.0.1", proof=True, public=None, codes=(),
-                 ping=10.0, drop=30.0, hex=False, strict=False, host="127.0.0.1", log=print):
+                 ping=10.0, drop=30.0, hex=False, strict=False, host="127.0.0.1", log=print,
+                 drop_after_login=0.0, drop_count=None):
         self.address = address
         self.proof = proof
         self.public = public
         self.codes = collections.deque(code.upper() for code in codes)
         self.ping = ping
         self.drop = drop
+        # hang up on a game this long after it logs in (0: never), as a server
+        # restarting or a network going would, for testing reconnects; only the
+        # first drop_count logins (None: every one)
+        self.drop_after_login = drop_after_login
+        self.drops_left = drop_count
         self.hex = hex
         self.strict = strict
         self.log = log
@@ -370,6 +384,9 @@ class RoomsServer:
                 due = min(due, conn.next_send)
             if conn.next_ping is not None:
                 due = min(due, conn.next_ping)
+            # with frames to send it waits for them, as _tick does
+            if conn.drop_at is not None and not conn.outbox:
+                due = min(due, conn.drop_at)
         return max(0.0, due - now)
 
     def _accept(self):
@@ -464,6 +481,10 @@ class RoomsServer:
         self.log(f"login {conn.name}: xuid {login.xuid:016X} local {login.local_ipv4} "
                  f"public {conn.public} code {conn.code}")
         self._send(conn, encode_server_logged_in(ServerLoggedIn(conn.public, conn.code)))
+        if self.drop_after_login > 0 and (self.drops_left is None or self.drops_left > 0):
+            conn.drop_at = time.monotonic() + self.drop_after_login
+            if self.drops_left is not None:
+                self.drops_left -= 1
 
     def _join(self, conn, body):
         request = decode_join_request(body)
@@ -518,6 +539,10 @@ class RoomsServer:
     def _tick(self):
         now = time.monotonic()
         for conn in list(self.connections):
+            # once the game has its code: the LoggedIn may still wait on FRAME_GAP
+            if conn.drop_at is not None and now >= conn.drop_at and not conn.outbox:
+                self._close(conn, "dropped (--drop-after-login)")
+                continue
             if conn.next_ping is not None and now >= conn.next_ping:
                 # a game hangs up after 30 s without hearing from the server
                 conn.outbox.append(PING_FRAME)
@@ -576,12 +601,20 @@ def main(argv):
     parser.add_argument("--drop", type=float, default=30.0,
                         help="close a game that hasn't answered a ping in this many "
                              "seconds (0: never)")
+    parser.add_argument("--drop-after-login", type=float, default=0.0,
+                        help="close each game's connection this many seconds after it "
+                             "logs in (0: never), to test reconnecting")
+    parser.add_argument("--drop-count", type=int,
+                        help="how many logins --drop-after-login hangs up on, the first "
+                             "ones (default: every one)")
     parser.add_argument("--hex", action="store_true", help="log every frame in hex")
     parser.add_argument("--strict", action="store_true",
                         help="refuse console logins, whose signed proofs the mock can't check")
     args = parser.parse_args(argv)
     if args.ping > 0 and 0 < args.drop <= args.ping:
         parser.error("--drop must be longer than --ping, or every game is dropped")
+    if args.drop_count is not None and args.drop_count < 0:
+        parser.error("--drop-count can't be negative")
 
     def log(line):
         stamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -590,7 +623,9 @@ def main(argv):
     try:
         server = RoomsServer(port=args.port, address=args.address, proof=not args.no_proof,
                              public=args.public, codes=args.codes, ping=args.ping,
-                             drop=args.drop, hex=args.hex, strict=args.strict, log=log)
+                             drop=args.drop, hex=args.hex, strict=args.strict, log=log,
+                             drop_after_login=args.drop_after_login,
+                             drop_count=args.drop_count)
     except OSError as e:
         print(f"can't listen on 127.0.0.1:{args.port}: {e}", file=sys.stderr)
         return 1

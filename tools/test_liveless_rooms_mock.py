@@ -396,6 +396,44 @@ class PingTest(ServerTest):
         self.assertFalse(any("close #1" in line for line in self.log), self.log)
 
 
+class DropAfterLoginTest(ServerTest):
+    def test_every_login_is_dropped_after_the_delay(self):
+        port = self.start(drop_after_login=0.4, codes=["HOST0001", "HOST0002"])
+        for code in ("HOST0001", "HOST0002"):
+            client = self.connect(port)
+            started = time.monotonic()
+            self.assertEqual(client.login("host", "10.0.0.2").code, code)
+            # nothing until it hangs up, about 0.4 s after the login
+            self.assertIsNone(client.recv(timeout=3))
+            self.assertGreaterEqual(time.monotonic() - started, 0.3)
+        self.wait_log("close #1 (\"host\"): dropped (--drop-after-login)")
+        self.wait_log("close #2 (\"host\"): dropped (--drop-after-login)")
+
+    def test_drop_count_drops_only_the_first_logins(self):
+        port = self.start(drop_after_login=0.3, drop_count=1, codes=["HOST0001", "HOST0002"])
+        first = self.connect(port)
+        self.assertEqual(first.login("host", "10.0.0.2").code, "HOST0001")
+        self.assertIsNone(first.recv(timeout=3))
+        # the game connecting again, as band3 does by itself
+        second = self.connect(port)
+        self.assertEqual(second.login("host", "10.0.0.2").code, "HOST0002")
+        with self.assertRaises(socket.timeout):
+            second.recv(timeout=1)
+        self.assertEqual(sum("dropped" in line for line in self.log), 1, self.log)
+
+    def test_a_connection_that_never_logs_in_isnt_dropped(self):
+        port = self.start(drop_after_login=0.2, drop_count=1)
+        waiting = self.connect(port)
+        waiting.hello()
+        with self.assertRaises(socket.timeout):
+            waiting.recv(timeout=0.6)
+        # the drop is still there for the first login
+        client = self.connect(port)
+        client.login("host", "10.0.0.2")
+        self.assertIsNone(client.recv(timeout=3))
+        self.wait_log("close #2 (\"host\"): dropped")
+
+
 class OneFramePerReadTest(ServerTest):
     def test_frames_queued_together_arrive_apart(self):
         port = self.start(ping=1, codes=["HOST0001", "JOIN0001"])

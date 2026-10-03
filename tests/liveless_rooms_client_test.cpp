@@ -19,6 +19,7 @@
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -331,6 +332,61 @@ TEST_CASE("a stream that isn't Rooms ends the connection") {
     CHECK(h.Feed("ping").empty());
 }
 
+TEST_CASE("a lost connection is worth another try, unless the server said no") {
+    {
+        // logged in, then gone: the server may be back
+        Harness h;
+        h.LogIn();
+        h.session.Closed();
+        CHECK(h.session.Retry());
+        Harness silent;
+        silent.LogIn();
+        silent.now += 31s;
+        silent.session.Tick(silent.now);
+        CHECK(silent.session.status().state == State::kDisconnected);
+        CHECK(silent.session.Retry());
+    }
+    {
+        // no server reached: looking up or connecting failed, or one took the
+        // connection and never said a word
+        Harness h;
+        h.session.Failed("127.0.0.1 refused the connection");
+        CHECK(h.session.Retry());
+        Harness hung_up;
+        hung_up.session.Connected(hung_up.now);
+        hung_up.session.Closed();
+        CHECK(hung_up.session.status().state == State::kFailed);
+        CHECK(hung_up.session.Retry());
+        Harness mute;
+        mute.session.Connected(mute.now);
+        mute.now += 31s;
+        mute.session.Tick(mute.now);
+        CHECK(mute.session.Retry());
+    }
+    {
+        // the server had its say: asking again gets the same answer
+        Harness refused;
+        refused.session.Connected(refused.now);
+        refused.Feed("server_hello");
+        refused.session.Closed();
+        CHECK(refused.session.status().error.starts_with("login refused"));
+        CHECK_FALSE(refused.session.Retry());
+        Harness away;
+        away.session.Connected(away.now);
+        away.Feed(Encode(ServerHello{false, true, {}}));
+        CHECK_FALSE(away.session.Retry());
+        Harness junk;
+        junk.session.Connected(junk.now);
+        junk.Feed(Bytes{'H', 'T', 'T', 'P', '/', '1'});
+        CHECK(junk.session.status().error == "bad data from the server");
+        CHECK_FALSE(junk.session.Retry());
+    }
+    // and a session still going isn't over
+    Harness going;
+    going.LogIn();
+    CHECK_FALSE(going.session.Retry());
+}
+
 TEST_CASE("a code is 8 letters and digits, in upper case") {
     std::string code = "host0001";
     CHECK(NormalizeCode(code).empty());
@@ -389,6 +445,28 @@ Bytes ReadExactly(Handle s, size_t size) {
 
 void Send(Handle s, const Bytes& bytes) {
     send(s, reinterpret_cast<const char*>(bytes.data()), static_cast<int>(bytes.size()), 0);
+}
+
+// the server's side of a login, as the golden packets have it
+void ServeLogin(Handle s) {
+    ReadExactly(s, GoldenBytes("client_hello").size());
+    Send(s, GoldenBytes("server_hello"));
+    ReadExactly(s, GoldenBytes("client_login").size());
+    Send(s, GoldenBytes("server_logged_in"));
+}
+
+// whether a connection comes in on `listener` within `wait`
+bool Incoming(Handle listener, std::chrono::milliseconds wait) {
+    fd_set set;
+    FD_ZERO(&set);
+    FD_SET(listener, &set);
+    timeval timeout{static_cast<long>(wait.count() / 1000), static_cast<long>((wait.count() % 1000) * 1000)};
+#ifdef _WIN32
+    const int nfds = 0;  // ignored on Windows
+#else
+    const int nfds = listener + 1;
+#endif
+    return select(nfds, &set, nullptr, nullptr, &timeout) > 0;
 }
 
 // polls the client's status until `done` holds, for up to 5 s
@@ -511,4 +589,93 @@ TEST_CASE("a client stops while it waits on its server, and starts over") {
     CHECK(client.GetStatus().state == State::kConnecting);
     client.Stop();
     Close(listener);
+}
+
+TEST_CASE("the client connects again by itself after the server drops it") {
+    uint16_t port = 0;
+    const Handle listener = Listen(port);
+    std::thread server([&] {
+        Handle s = accept(listener, nullptr, nullptr);
+        if (s == kNone) return;
+        ServeLogin(s);
+        std::this_thread::sleep_for(300ms);
+        Close(s);
+        s = accept(listener, nullptr, nullptr);
+        if (s == kNone) return;
+        ServeLogin(s);
+        // until the client closes its end
+        ReadExactly(s, 1);
+        Close(s);
+    });
+    Client client;
+    Config config = LoopbackConfig(port);
+    config.retry_delays = {1200ms};
+    client.Start(config, {});
+    ClientStatus status = WaitFor(client, [](const ClientStatus& s) { return s.state == State::kLoggedIn; });
+    CHECK(status.state == State::kLoggedIn);
+    CHECK(status.attempt == 1);
+    CHECK(status.retry_in_s == 0);
+    // the wait says how long it has left, rounded up, while the state stays
+    status = WaitFor(client, [](const ClientStatus& s) { return s.retry_in_s > 0; });
+    CHECK(status.state == State::kDisconnected);
+    CHECK(status.error == "the server closed the connection");
+    CHECK(status.retry_in_s >= 1);
+    CHECK(status.retry_in_s <= 2);
+    CHECK(status.attempt == 1);
+    status = WaitFor(client, [](const ClientStatus& s) { return s.state == State::kLoggedIn; });
+    CHECK(status.state == State::kLoggedIn);
+    CHECK(status.attempt == 2);
+    CHECK(status.retry_in_s == 0);
+    CHECK(status.code == "ABCD2345");
+    CHECK(status.error.empty());
+    client.Stop();
+    server.join();
+    Close(listener);
+}
+
+TEST_CASE("the client doesn't try again once the server refused its login") {
+    uint16_t port = 0;
+    const Handle listener = Listen(port);
+    bool again = true;
+    std::thread server([&] {
+        const Handle s = accept(listener, nullptr, nullptr);
+        if (s == kNone) return;
+        ReadExactly(s, GoldenBytes("client_hello").size());
+        Send(s, GoldenBytes("server_hello"));
+        ReadExactly(s, GoldenBytes("client_login").size());
+        // as a Rooms server says no to a login: it hangs up
+        Close(s);
+        again = Incoming(listener, 1000ms);
+    });
+    Client client;
+    Config config = LoopbackConfig(port);
+    config.retry_delays = {100ms};
+    client.Start(config, {});
+    server.join();
+    Close(listener);
+    CHECK_FALSE(again);
+    const ClientStatus status = client.GetStatus();
+    CHECK(status.state == State::kFailed);
+    CHECK(status.error.starts_with("login refused"));
+    CHECK(status.retry_in_s == 0);
+    CHECK(status.attempt == 1);
+}
+
+TEST_CASE("Stop ends the wait to connect again at once") {
+    uint16_t port = 0;
+    Close(Listen(port));
+    Client client;
+    // the first wait, 5 s
+    client.Start(LoopbackConfig(port), {});
+    ClientStatus status = WaitFor(client, [](const ClientStatus& s) { return s.retry_in_s > 0; });
+    CHECK(status.state == State::kFailed);
+    CHECK(status.error == "127.0.0.1:" + std::to_string(port) + " refused the connection");
+    CHECK(status.retry_in_s == 5);
+    CHECK(status.attempt == 1);
+    const auto stopping = Clock::now();
+    client.Stop();
+    CHECK(Clock::now() - stopping < 2s);
+    status = client.GetStatus();
+    CHECK(status.state == State::kFailed);
+    CHECK(status.retry_in_s == 0);
 }
