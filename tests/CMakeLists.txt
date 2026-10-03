@@ -50,6 +50,7 @@ add_executable(band3_tests
     instrument_decode_test.cpp
     device_lists_test.cpp
     input_backend_test.cpp
+    device_view_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp
@@ -66,6 +67,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/ps4_instruments.cpp
     ${BAND3_ROOT}/src/Launcher/config_file.cpp
     ${BAND3_ROOT}/src/Launcher/device_names.cpp
+    ${BAND3_ROOT}/src/Launcher/device_view_model.cpp
     ${BAND3_ROOT}/src/Launcher/game_data_check.cpp
     ${BAND3_ROOT}/src/Launcher/launcher_settings.cpp
     ${BAND3_ROOT}/src/Launcher/launcher_start.cpp

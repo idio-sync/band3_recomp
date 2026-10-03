@@ -156,6 +156,20 @@ void ApplyStyle(ImGuiStyle& style, float s) {
     c[ImGuiCol_TitleBgCollapsed] = kFrame;
 }
 
+void SectionHeading(const char* name) {
+    {
+        FontScope font(kHeadingSize);
+        ImGui::TextColored(kAccent, "%s", name);
+    }
+    // a hairline under the heading
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddLine(
+        ImVec2(at.x, at.y - Px(4)),
+        ImVec2(at.x + ImGui::GetContentRegionAvail().x, at.y - Px(4)),
+        ImGui::GetColorU32(kLine), std::max(1.0f, Px(1)));
+    ImGui::Dummy(ImVec2(0, Px(2)));
+}
+
 FontScope::FontScope(float size) {
     const float px = Px(size);
     ImGui::PushFont(FontFor(px), px);

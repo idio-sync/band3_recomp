@@ -119,10 +119,11 @@ LauncherDialog::LauncherDialog(rex::ui::ImGuiDrawer* imgui_drawer, LauncherHost 
       model_(SettingTable(), ReadEnvironment(SettingTable(), host_.path_defaults, host_.anchor),
              store_) {
     // the SDK's ImGui has no navigation; the launcher can be driven from the
-    // keyboard until it closes
+    // keyboard and controllers until it closes
     ImGuiIO& io = GetIO();
     saved_config_flags_ = io.ConfigFlags;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    nav_.emplace(io);
     config_problem_ = ConfigFileProblem(host_.config_path);
     if (config_problem_) {
         REXLOG_WARN("Launcher: {} couldn't be read: {}", rex::path_to_utf8(host_.config_path),
@@ -132,6 +133,7 @@ LauncherDialog::LauncherDialog(rex::ui::ImGuiDrawer* imgui_drawer, LauncherHost 
 
 LauncherDialog::~LauncherDialog() {
     CloseMeters();
+    nav_.reset();
     ImGuiIO& io = GetIO();
     io.ConfigFlags = (io.ConfigFlags & ~ImGuiConfigFlags_NavEnableKeyboard) |
                      (saved_config_flags_ & ImGuiConfigFlags_NavEnableKeyboard);
@@ -192,6 +194,9 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
             RefreshGameDataCheck(false);
             // the instrument settings restart band3's drivers as they change
             input::ApplyInputSettings();
+            // the devices are read only until Play: then they're the game's
+            device_panel_.Poll();
+            HandleNav(nav_->Feed(device_panel_.NavPads()));
             meters_drawn_ = false;
             DrawPage(io);
             // the meters record only while their slots show: not on another
@@ -201,6 +206,7 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
             // nothing of the launcher's records once Play is pressed: the
             // game's own capture opens the microphones
             CloseMeters();
+            nav_->Stop();
             DrawStarting(io);
         }
     }
@@ -231,11 +237,14 @@ void LauncherDialog::DrawPage(ImGuiIO& io) {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(Px(18), Px(8)));
         if (ImGui::BeginTabBar("##tabs", ImGuiTabBarFlags_NoTooltip)) {
             for (const auto& [tab, name] : kTabs) {
-                if (ImGui::BeginTabItem(name)) {
+                const ImGuiTabItemFlags select =
+                    pending_tab_ == tab ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+                if (ImGui::BeginTabItem(name, nullptr, select)) {
                     current_tab_ = tab;
                     ImGui::EndTabItem();
                 }
             }
+            pending_tab_.reset();
             ImGui::EndTabBar();
         }
         ImGui::PopStyleVar();
@@ -251,7 +260,10 @@ void LauncherDialog::DrawPage(ImGuiIO& io) {
         // (in a window too short for both, the settings keep a few rows)
         const float settings_height =
             std::max(ImGui::GetContentRegionAvail().y - footer_height, Px(80));
-        if (ImGui::BeginChild("##settings", ImVec2(0, settings_height), ImGuiChildFlags_None)) {
+        // (flattened: the keyboard and controllers move between the settings
+        // and the footer as if they were one page)
+        if (ImGui::BeginChild("##settings", ImVec2(0, settings_height),
+                              ImGuiChildFlags_NavFlattened)) {
             ImGui::Dummy(ImVec2(0, Px(4)));
             DrawTab(current_tab_);
         }
@@ -337,6 +349,7 @@ void LauncherDialog::DrawDeckBanner() {
 }
 
 void LauncherDialog::DrawTab(Tab tab) {
+    if (tab == Tab::kControllers) device_panel_.Draw();
     for (const std::string_view section : SectionsOf(model_.Table(), tab)) {
         DrawSection(tab, section);
     }
@@ -350,17 +363,7 @@ void LauncherDialog::DrawSection(Tab tab, std::string_view section) {
     if (rows.empty()) return;
 
     const std::string name(section);
-    {
-        FontScope font(kHeadingSize);
-        ImGui::TextColored(kAccent, "%s", name.c_str());
-    }
-    // a hairline under the heading
-    const ImVec2 at = ImGui::GetCursorScreenPos();
-    ImGui::GetWindowDrawList()->AddLine(
-        ImVec2(at.x, at.y - Px(4)),
-        ImVec2(at.x + ImGui::GetContentRegionAvail().x, at.y - Px(4)),
-        ImGui::GetColorU32(kLine), std::max(1.0f, Px(1)));
-    ImGui::Dummy(ImVec2(0, Px(2)));
+    SectionHeading(name.c_str());
 
     const float width = ImGui::GetContentRegionAvail().x;
     const float label_width = std::clamp(width * 0.36f, Px(220), Px(420));
@@ -423,7 +426,10 @@ void LauncherDialog::DrawRow(const Setting& setting) {
         ImGui::PopStyleColor();
     }
     ImGui::EndGroup();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) NoteHovered(setting.cvar);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) ||
+        NavCursorWithin(ImGui::GetItemRectMin(), ImGui::GetItemRectMax())) {
+        NoteHovered(setting.cvar);
+    }
 
     ImGui::TableSetColumnIndex(2);
     if (!locked && model_.IsChanged(setting.cvar)) {
@@ -1269,7 +1275,7 @@ void LauncherDialog::TakeFolderPick() {
 void LauncherDialog::DrawFooter() {
     const ImGuiStyle& style = ImGui::GetStyle();
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    if (!ImGui::BeginChild("##footer", ImVec2(0, 0), ImGuiChildFlags_None,
+    if (!ImGui::BeginChild("##footer", ImVec2(0, 0), ImGuiChildFlags_NavFlattened,
                            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
         ImGui::EndChild();
         ImGui::PopStyleVar();
@@ -1299,6 +1305,10 @@ void LauncherDialog::DrawFooter() {
                 ImGui::TextColored(kMuted,
                                    "Point at a setting to see what it does. Changes apply as you "
                                    "make them; Save keeps them for next time.");
+                if (!device_panel_.NavPads().empty()) {
+                    ImGui::TextColored(kMuted, "With a controller: LB and RB switch tabs, Start "
+                                               "plays.");
+                }
             }
             ImGui::PopTextWrapPos();
         }
@@ -1460,6 +1470,18 @@ void LauncherDialog::DrawStarting(ImGuiIO& io) {
         ImGui::TextUnformatted(text);
     }
     ImGui::End();
+}
+
+void LauncherDialog::HandleNav(const NavEdges& edges) {
+    if (edges.tab_previous || edges.tab_next) {
+        const int count = static_cast<int>(std::size(kTabs));
+        int i = 0;
+        while (i < count && kTabs[i].first != current_tab_) i++;
+        i = (i + (edges.tab_next ? 1 : count - 1)) % count;
+        pending_tab_ = kTabs[i].first;
+    }
+    // not while a prompt or a dropdown is open
+    if (edges.start && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) Play();
 }
 
 void LauncherDialog::Play() {

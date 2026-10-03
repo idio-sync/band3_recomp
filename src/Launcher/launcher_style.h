@@ -52,6 +52,9 @@ inline float Px(float v) { return v * Scale(); }
 // the launcher's look, over the SDK's style for the length of its draw
 void ApplyStyle(ImGuiStyle& style, float scale);
 
+// a section's heading, in the accent colour over a hairline across the page
+void SectionHeading(const char* name);
+
 // the launcher's font at a 720p size, scaled with the page
 class FontScope {
 public:

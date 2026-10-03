@@ -4,7 +4,8 @@
 
 The launcher is band3's setup screen. It opens in the game window before the game starts,
 with tabs for the game and its folders, graphics, audio, controllers and online features,
-and works with the mouse or the keyboard. Point at a setting to see what it does. Changes
+and works with the mouse, the keyboard or a controller. Point at a setting (or move to it)
+to see what it does. Changes
 apply as you make them; **Save** keeps them for next time, **Play** saves and starts the
 game, and **Close** quits, asking first if something isn't saved.
 
@@ -14,6 +15,22 @@ lists the MIDI ports; the Graphics tab names the monitors and offers the chosen 
 display modes as resolutions. A saved device that isn't plugged in shows as "(not
 connected)" and stays chosen until you pick another, and **Other...** takes a typed name
 or part of one.
+
+The Controllers tab starts with a list of every controller and instrument band3 sees (Xbox
+pads and instruments, PS3/Wii/PS4/PS5 instruments on their dongles, a MIDI kit, the
+keyboard) and the player each one is, or "Not playing". Pick one to test it: a guitar shows
+its frets, solo frets, strum, whammy, tilt and pickup switch as you play; a drum kit flashes
+each pad and cymbal as brightly as it was hit, with its velocity (an RB1 kit has none, so
+every hit shows at full strength), and both kick pedals; a controller shows its buttons,
+sticks and triggers, and the instrument "Gamepads play as" makes it in the game. With the
+SDL input backend an Xbox 360 guitar or kit shows as a controller too, and plays as that
+instrument. A MIDI kit also lists its last notes with their velocity and what they play.
+What it shows is what the game will read: the launcher reads the devices through band3's own
+input drivers.
+
+Any controller can drive the launcher: the d-pad or left stick moves, A picks, B backs out,
+LB and RB switch tabs, and Start plays. A guitar's frets and a kit's pads act as the face
+buttons (green is A, red is B), and strumming moves up and down.
 
 It opens:
 

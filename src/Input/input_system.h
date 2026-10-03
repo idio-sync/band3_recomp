@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <rex/system/interfaces/input.h>
+#include "device_kind.h"
 #include "instruments.h"
 
 namespace rex::input {
@@ -65,15 +66,6 @@ bool InputBackendChanged();
 // which it can't do before the runtime exists). The devices stay open for the
 // game; ReadInputDevice refuses from here on.
 void ReadyInputForGame();
-
-enum class DeviceKind {
-    kPad,            // an SDL or XInput controller (an Xbox instrument too)
-    kSynthetic,      // the keyboard and mouse, or the SDK's stand-in
-    kVirtual,        // a virtual instrument (debug)
-    kHidInstrument,  // a PS3/Wii/PS4/PS5 instrument read by its dongle
-    kMidiDrums,      // a MIDI drum kit
-    kSdlCopy,        // SDL's copy of an instrument the HID driver reads; no player
-};
 
 struct InputDevice {
     uint64_t id = 0;

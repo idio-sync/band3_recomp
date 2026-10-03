@@ -13,6 +13,8 @@
 #include <rex/ui/imgui_dialog.h>
 #include "device_lists.h"
 #include "game_data_check.h"
+#include "gamepad_nav.h"
+#include "instrument_view.h"
 #include "launcher_cvars.h"
 #include "launcher_settings.h"
 #include "mic_meter.h"
@@ -48,8 +50,8 @@ struct LauncherHost {
 };
 
 // The launcher: band3's setup screen, one full-window ImGui page shown before
-// the game starts (Band3App::OnFinalizePaths), driven with the mouse or the
-// keyboard. Tabs of settings (launcher_settings.h's table) over a footer with
+// the game starts (Band3App::OnFinalizePaths), driven with the mouse, the
+// keyboard or a controller (gamepad_nav.h). Tabs of settings (launcher_settings.h's table) over a footer with
 // the hovered setting's description and Save, Close and Play. Every edit is
 // applied to its cvar at once; Save writes the overrides to band3.toml.
 //
@@ -120,6 +122,8 @@ private:
     void DrawFooter();
     void DrawPrompts();
     void DrawStarting(ImGuiIO& io);
+    // a controller's Start plays, and its bumpers switch tabs
+    void HandleNav(const NavEdges& edges);
 
     // the widgets, one per Widget kind
     void DrawCheckbox(const Setting& s);
@@ -203,6 +207,12 @@ private:
     int saved_config_flags_ = 0;
 
     Tab current_tab_ = Tab::kGame;
+    // the tab a controller's bumper switched to, selected at the next frame
+    std::optional<Tab> pending_tab_;
+    // the Controllers tab's device list and test view; its readings also
+    // drive the gamepad navigation
+    DevicePanel device_panel_;
+    std::optional<GamepadNav> nav_;
     // the setting the footer describes: the one hovered in the last frame,
     // and the one hovered in this one so far
     std::string hovered_;
