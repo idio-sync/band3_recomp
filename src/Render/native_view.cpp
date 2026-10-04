@@ -477,6 +477,7 @@ class Renderer {
                 // the next frame recorded while the GPU draws this one, or
                 // each waited for once submitted
                 pipeline = REXCVAR_GET(native_present_pipeline);
+                o.gpu_no_wait = pipeline;
             }
             // a capture published after this is a new one (the pacing's
             // wait, below)

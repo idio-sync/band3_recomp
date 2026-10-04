@@ -3437,13 +3437,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         draw_log_frame = frame_label;
         draw_log = std::move(indexed_draws);
     }
-    // A world pass before the frame (pre_pass) and the presenter's frame
-    // aren't waited for: what comes after them on SDL's one queue (this
-    // frame's passes, RenderFrame's wait, the next frame) goes after them on
-    // the GPU too, and the presenter's caller waits for its output's fence
-    // (OutputDone) before the presenter's queue may sample it. RenderFrame
-    // waits here, for the picture to read back.
-    if (pre_pass || (slot >= 0 && !rgba)) {
+    // With gpu_no_wait, a world pass before the frame (pre_pass) and the
+    // presenter's frame aren't waited for: what comes after them on SDL's
+    // one queue (this frame's passes, RenderFrame's wait, the next frame)
+    // goes after them on the GPU too, and the presenter's caller waits for
+    // its output's fence (OutputDone) before the presenter's queue may
+    // sample it. Otherwise, and for RenderFrame's picture to read back, it
+    // waits here.
+    if (o.gpu_no_wait && (pre_pass || (slot >= 0 && !rgba))) {
         bool submitted;
         if (pre_pass) {
             submitted = SDL_SubmitGPUCommandBuffer(cmd);
