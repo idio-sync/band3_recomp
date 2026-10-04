@@ -425,6 +425,7 @@ public:
             out.worldless = live.worldless;
             out.frame_ms = std::move(live.ms);
             out.wait_ms = std::move(live.wait_ms);
+            out.in_flight_max = live.in_flight_max;
         }
         const render::PassRecordingStats rec = render::GetPassRecordingStats();
         const render::CaptureProfile profile = render::GetCaptureProfile();

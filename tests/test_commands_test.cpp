@@ -667,6 +667,7 @@ TEST_CASE("native_view stats reports what the live view drew and how long it too
     // 1 to 20 ms: the median is 10, the 95th percentile 19
     for (int ms = 20; ms >= 1; ms--) game.view.frame_ms.push_back(ms);
     game.view.wait_ms.assign(20, 1.5);
+    game.view.in_flight_max = 2;
     game.view.rt_on = true;
     game.view.rt_passes = 1200;
     game.view.rt_recorded = 3;
@@ -677,7 +678,8 @@ TEST_CASE("native_view stats reports what the live view drew and how long it too
     CHECK(Has(reply, "\"seconds\":40.0,\"game_frames\":2392,\"game_fps\":59.8"));
     CHECK(Has(reply, "\"captured\":2392,\"rendered\":20,\"skipped_busy\":2372,\"worldless\":1"));
     CHECK(Has(reply, "\"ms\":{\"mean\":10.50,\"p50\":10.00,\"p95\":19.00,\"max\":20.00}"));
-    CHECK(Has(reply, "\"wait_ms\":{\"mean\":1.50,\"p50\":1.50,\"p95\":1.50,\"max\":1.50}"));
+    CHECK(Has(reply, "\"wait_ms\":{\"mean\":1.50,\"p50\":1.50,\"p95\":1.50,\"max\":1.50},"
+                     "\"in_flight_max\":2"));
     CHECK(Has(reply, "\"rt_recording\":{\"on\":true,\"passes\":1200,\"recorded\":3,\"draws\":11,\"ms\":0.25}"));
 }
 

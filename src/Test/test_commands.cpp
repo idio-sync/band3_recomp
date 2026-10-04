@@ -646,6 +646,7 @@ std::string NativeViewJson(const NativeViewStats& s) {
     out += ",\"worldless\":" + std::to_string(s.worldless);
     out += ",\"ms\":" + Distribution(s.frame_ms);
     out += ",\"wait_ms\":" + Distribution(s.wait_ms);
+    out += ",\"in_flight_max\":" + std::to_string(s.in_flight_max);
     std::snprintf(buf, sizeof(buf),
                   ",\"rt_recording\":{\"on\":%s,\"passes\":%llu,\"recorded\":%llu,",
                   s.rt_on ? "true" : "false", static_cast<unsigned long long>(s.rt_passes),

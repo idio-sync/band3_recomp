@@ -30,7 +30,16 @@ long as the slowest of the last few frames took to draw (never more than a frame
 window gets one new frame a refresh: frames take as long to draw as what they have, and
 with even/odd rendering one published at once came 8 ms after the one before and the next
 25 ms after it, so a paint could find two new frames and never show the first
-(`native_present_pacing`, below). After F8 back to native the window shows only frames the
+(`native_present_pacing`, below). With `native_present_pipeline` on (off by default until
+it has been checked in game), the native renderer on the zero-copy path doesn't wait for
+the GPU after sending it a frame: it waits only to hand the frame to the window, so it
+records the next frame while the GPU draws the one before (at most that one frame in flight
+besides the one being recorded), and a frame costs the longer of its CPU and GPU time
+rather than both, to keep up at 120 Hz; off, it waits for each frame once sent, as before.
+Either way, if the GPU hasn't finished a frame in 2 s, it
+sends no more and the window keeps its last frame until the GPU does (`native renderer:
+the GPU hasn't finished a frame in <n> ms; holding the last frame`, then `... drawing
+again`). After F8 back to native the window shows only frames the
 game presented since, from the first whose capture is the whole picture, never one left
 from before the switch. With RB3's even/odd rendering (on, as
 the game ships), a frame that draws the world but doesn't post-process it shows what the
@@ -102,6 +111,7 @@ been checked:
 | `native_view_msaa` (Band3 → Graphics) | the samples a pixel the native renderer and the native view draw the overlay with (the track, the HUD, menus drawn after the world), averaged at its edges: 2 (the default) as RB3 does, 4 smoother than the game, 1 none. RB3 multisamples only those: the world, its post-processing and every texture pass are single-sampled, in the game and here. Where the GPU can't draw 2 samples it draws 4 (or 4 → 2, else 1; the log says so) |
 | `native_present_zero_copy` (Band3 → Debug) | on (the default) shows the GPU's frames where they are; off reads each back and uploads it, to compare |
 | `native_present_pacing` (Band3 → Debug) | on (the default) publishes each frame to the window a steady delay after the game presented it, as above; off publishes each as soon as it's drawn, sooner on average but unevenly, to compare |
+| `native_present_pipeline` (Band3 → Debug) | on records the next frame while the GPU draws the one before, on the zero-copy path, as above; off (the default, until it has been checked in game) waits for the GPU after each frame. `set` changes it at once |
 | `native_view_target_scale` (Band3 → Debug) | on (the default) draws the passes that are pictures of the screen (the spotlights' haze and the soft particles' smoke, made at 640x360 and 320x180 for the game's 1280x720) in proportion to the picture: 1.5 times at 1080p, 3 times at 4K. Off keeps the game's sizes, to compare |
 | `native_view_shadow_scale` (Band3 → Debug) | the characters' self-shadow maps at this many times the game's 512x512 (1, the default, to 4): sharper shadow edges, and less of the game's own shadow acne, so further from the game's picture |
 

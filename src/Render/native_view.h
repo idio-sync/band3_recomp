@@ -37,7 +37,13 @@ class Window;
 // Its worker sleeps until the game publishes a capture (scene_capture.h's
 // WaitForCapture) and draws the newest, published to the window a steady
 // delay after the game presented it (present_model.h's PublishPacer); each
-// paint shows the newest published. Each time it turns native, the window
+// paint shows the newest published. With native_present_pipeline (off until
+// checked in game), on the zero-copy path it submits a frame without waiting
+// for the GPU and waits for it only to publish it, so it records the next
+// capture while the GPU draws the one before (one frame in flight besides the
+// one recorded, never more); off, it waits for each once submitted. A frame
+// the GPU hasn't finished in 2 s holds it, the window keeping the last frame,
+// until the GPU does. Each time it turns native, the window
 // shows only frames from captures published since (PresentSlots).
 // Once it has been native, capture records the passes RB3 draws into
 // textures all the time for the rest of the session, as
@@ -87,8 +93,18 @@ struct LiveViewStats {
     // of those drawn, the ones with no world: they drew none, under even/odd
     // rendering, and weren't composed with the world frame before them
     uint64_t worldless = 0;
-    std::vector<double> ms;     // each one's time, GpuStats::ms or RasterStats::ms
-    std::vector<double> wait_ms;  // GpuStats::wait_ms, the GPU's frames only
+    // each one's time, GpuStats::ms or RasterStats::ms: on the zero-copy
+    // path the worker's recording and submitting it, the GPU's time after
+    // left out
+    std::vector<double> ms;
+    // GpuStats::wait_ms, the GPU's frames only: on the zero-copy path the
+    // time the worker waited for the GPU to finish the frame before
+    // publishing it, its time that recording the next frame didn't hide
+    std::vector<double> wait_ms;
+    // the most of the worker's frames the GPU had at once (submitted and
+    // not finished): 1 unless native_present_pipeline is on, then 2 while it
+    // records a frame as the GPU draws the one before, never more
+    uint32_t in_flight_max = 0;
 };
 // starts it, or starts its numbers over at a new size if it's on; on the UI
 // thread, as the GPU device starts there. `post` off leaves RB3's

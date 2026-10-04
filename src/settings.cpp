@@ -422,6 +422,12 @@ REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Debug",
     "even/odd rendering, every other one) don't reach a paint together with the one before; "
     "off publishes each as soon as it's drawn, to compare");
 
+REXCVAR_DEFINE_BOOL(native_present_pipeline, false, "Band3/Debug",
+    "With renderer = native on the zero-copy path, record the next frame while the GPU draws "
+    "the one before, waiting for the GPU only to hand a frame to the window, so a frame costs "
+    "the longer of its CPU and GPU time rather than both (for 120 Hz); off waits for each "
+    "frame right after sending it. Off until it has been checked in game");
+
 REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Debug",
     "Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, "
     "for the native view (experimental), even while it's off: some are drawn once, in the "

@@ -103,11 +103,15 @@ struct NativeViewStats {
     uint64_t skipped_busy = 0;
     // drawn frames with no world: they drew none and weren't composed with one
     uint64_t worldless = 0;
-    // each drawn frame's time; for the GPU the whole frame, uploads and
-    // reading back included (GpuStats::ms), and of that from submitting it to
-    // having the picture
+    // each drawn frame's time (LiveViewStats::ms): for the GPU the whole
+    // frame, uploads and reading back included, and of that from submitting
+    // it to having the picture; on the native renderer's zero-copy path the
+    // frame up to its submission, and apart from that the time the worker
+    // waited for the GPU to finish it before publishing it
     std::vector<double> frame_ms;
     std::vector<double> wait_ms;
+    // the most of the worker's frames the GPU had at once (LiveViewStats)
+    uint32_t in_flight_max = 0;
     // the texture passes recorded while capture was off, in the same time:
     // whether that's on (native_view_record_targets), passes the game drew,
     // those recorded, their draws, and the game thread's time recording them

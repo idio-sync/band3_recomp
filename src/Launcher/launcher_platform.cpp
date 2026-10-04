@@ -2,6 +2,7 @@
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_video.h>
 
+#include <algorithm>
 #include <chrono>
 #include <thread>
 #include <vector>
@@ -190,6 +191,21 @@ int64_t WaitUntil(int64_t deadline_ns) {
         now = Now();
     }
     return now - spin_from;
+}
+
+void SleepFor(int64_t ns) {
+    if (ns <= 0) return;
+#ifdef _WIN32
+    // the calling thread's own timer, as WaitUntil's is
+    thread_local Timer timer;
+    LARGE_INTEGER due;
+    due.QuadPart = -std::max<int64_t>(ns / 100, 1);  // relative, in 100 ns
+    if (timer.handle && SetWaitableTimer(timer.handle, &due, 0, nullptr, nullptr, FALSE)) {
+        WaitForSingleObject(timer.handle, INFINITE);
+        return;
+    }
+#endif
+    std::this_thread::sleep_for(std::chrono::nanoseconds(ns));
 }
 
 }

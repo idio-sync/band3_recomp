@@ -36,4 +36,10 @@ namespace band3::pacing {
 // timer's resolution (timeBeginPeriod). Returns how long it spun.
 int64_t WaitUntil(int64_t deadline_ns);
 
+// Sleeps for about `ns` on the same timer, without the spin: up to a few
+// hundred microseconds longer on Windows 10 1803 and later, on the system
+// timer's tick before, tens of microseconds elsewhere. For a short poll
+// (native_view.cpp's wait for a GPU fence) that shouldn't cost a core.
+void SleepFor(int64_t ns);
+
 }

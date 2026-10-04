@@ -141,6 +141,83 @@ TEST_CASE("after the presenter stops, slots the GPU may still read stay taken") 
     CHECK(s.Acquire() == a);
 }
 
+TEST_CASE("a slot submitted to the GPU is never handed out or published before it finishes") {
+    PresentSlots s;
+    const int a = s.Acquire();
+    REQUIRE(a >= 0);
+    s.Submitted(a);
+    CHECK(s.InFlight() == 1);
+    // the worker records the next frame meanwhile, into another slot
+    const int b = s.Acquire();
+    REQUIRE(b >= 0);
+    CHECK(b != a);
+    s.Submitted(b);
+    CHECK(s.InFlight() == 2);
+    // not finished: not published, and still taken
+    CHECK_FALSE(s.Publish(a));
+    CHECK(s.Newest() == -1);
+    CHECK(s.Serial() == 0);
+    const int c = s.Acquire();
+    REQUIRE(c >= 0);
+    CHECK(c != a);
+    CHECK(c != b);
+    CHECK(s.Acquire() == -1);
+    s.Abandon(c);
+    // finished: published as any other
+    s.Finished(a);
+    CHECK(s.InFlight() == 1);
+    CHECK(s.Publish(a));
+    CHECK(s.Newest() == a);
+    CHECK(s.Serial() == 1);
+    // a slot submitted for a stretch that has ended is still not published,
+    // and once finished it's free again as before
+    const uint64_t stretch = s.Generation();
+    s.Forget();
+    CHECK_FALSE(s.Publish(b, stretch));
+    s.Finished(b);
+    CHECK_FALSE(s.Publish(b, stretch));
+    CHECK(s.Newest() == -1);
+    CHECK(s.InFlight() == 0);
+    CHECK(s.Acquire() >= 0);
+}
+
+TEST_CASE("a refused unfinished slot stays taken until the GPU finishes it") {
+    PresentSlots s;
+    const int a = s.Acquire();
+    REQUIRE(a >= 0);
+    CHECK_FALSE(s.Unfinished(a));
+    s.Submitted(a);
+    CHECK(s.Unfinished(a));
+    // refused, for being unfinished rather than for its stretch: the worker
+    // tells them apart by Unfinished and leaves this one be, so no other
+    // frame is drawn into it while the GPU still writes it
+    CHECK_FALSE(s.Publish(a));
+    CHECK(s.Unfinished(a));
+    for (int i = 0; i < PresentSlots::kCount; i++) CHECK(s.Acquire() != a);
+    s.Finished(a);
+    CHECK_FALSE(s.Unfinished(a));
+    CHECK(s.Publish(a));
+    CHECK_FALSE(s.Unfinished(-1));
+    CHECK_FALSE(s.Unfinished(PresentSlots::kCount));
+}
+
+TEST_CASE("an abandoned submitted slot is free again, and Submitted needs a slot being drawn") {
+    PresentSlots s;
+    const int a = s.Acquire();
+    s.Submitted(a);
+    s.Abandon(a);
+    CHECK(s.InFlight() == 0);
+    // free again, and drawn and published as any other
+    CHECK(s.Acquire() == a);
+    CHECK(s.Publish(a));
+    // the newest isn't being drawn: Submitted leaves it be
+    s.Submitted(a);
+    CHECK(s.InFlight() == 0);
+    s.Submitted(-1);
+    s.Finished(PresentSlots::kCount);
+    CHECK(s.InFlight() == 0);
+}
+
 namespace {
 constexpr int64_t kMs = 1000000;  // a millisecond in nanoseconds
 }
@@ -247,6 +324,72 @@ TEST_CASE("the pacer never holds a frame past the game's next one, and lets a hi
     // a reset starts over: a frame on its own goes when drawn
     p.Reset();
     CHECK(p.Due(1, kFrame, kFrame + 2 * kMs) == kFrame + 2 * kMs);
+}
+
+TEST_CASE("at 120 Hz, pipelined frames go out a frame apart and never past the next frame") {
+    // The worker learns its frame is done when a poll of its fence finds it
+    // (native_view.cpp's kFencePoll), up to a millisecond after the GPU
+    // finished, so each frame's own time has that much jitter on top of
+    // even/odd rendering's: post frames 5.5 ms to recording and the GPU's
+    // end, world frames 1.5.
+    PublishPacer p;
+    constexpr int64_t kFrame = 8333333;
+    uint32_t seed = 12345;
+    auto jitter = [&seed] {
+        seed = seed * 1664525u + 1013904223u;
+        return int64_t(seed >> 8) % kMs;
+    };
+    int64_t last_publish = 0;
+    std::vector<int64_t> gaps;
+    for (uint64_t f = 1; f <= 120; f++) {
+        const int64_t presented = int64_t(f) * kFrame;
+        const int64_t own = ((f % 2) ? 5500 * 1000 : 1500 * 1000) + jitter();
+        const int64_t due = p.Due(f, presented, presented + own);
+        CHECK(due >= presented + own);
+        // once the interval is measured: never held past the next frame
+        // less a millisecond
+        if (f > 40) CHECK(due - presented <= kFrame - kMs);
+        if (last_publish && f > 4) gaps.push_back(due - last_publish);
+        last_publish = due;
+    }
+    CHECK(double(p.IntervalNs()) == doctest::Approx(double(kFrame)).epsilon(0.001));
+    // no two publications in one frame's time: each a frame apart, give or
+    // take the poll's millisecond
+    for (int64_t g : gaps) {
+        CHECK(g >= kFrame - kMs);
+        CHECK(g <= kFrame + kMs);
+    }
+}
+
+TEST_CASE("at 120 Hz, a frame slower than the interval goes when done and holds no other") {
+    PublishPacer p;
+    constexpr int64_t kFrame = 8333333;
+    uint64_t f = 1;
+    // long enough for the interval measured to settle
+    for (; f <= 200; f++) {
+        const int64_t presented = int64_t(f) * kFrame;
+        p.Due(f, presented, presented + ((f % 2) ? 5 * kMs : 2 * kMs));
+    }
+    // a post frame the GPU took 12 ms over: published when it's done, and
+    // the frames after keep their steady delay (the second slowest counts)
+    int64_t presented = int64_t(f) * kFrame;
+    CHECK(p.Due(f, presented, presented + 12 * kMs) == presented + 12 * kMs);
+    f++;
+    presented = int64_t(f) * kFrame;
+    CHECK(p.Due(f, presented, presented + 2 * kMs) == presented + 5 * kMs);
+    // frames slower than the interval all along: held to the interval less
+    // a millisecond at most, so the next frame is drawn and published in its
+    // own interval
+    for (int i = 0; i < 8; i++, f++) {
+        presented = int64_t(f) * kFrame;
+        p.Due(f, presented, presented + 10 * kMs);
+    }
+    presented = int64_t(f) * kFrame;
+    // (the interval as measured, which settles within a few nanoseconds of
+    // the frames' 8333333)
+    const int64_t due = p.Due(f, presented, presented + 2 * kMs);
+    CHECK(due >= presented + kFrame - kMs);
+    CHECK(due <= presented + kFrame - kMs + 10);
 }
 
 TEST_CASE("paints are timed against the one before, whichever renderer drew them") {

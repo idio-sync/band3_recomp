@@ -53,6 +53,12 @@ inline ImageRect LetterboxRect(uint32_t target_w, uint32_t target_h, bool letter
 // finishing: the newest, the one the last unfinished paint sampled, and the
 // other. Not thread-safe: native_view.cpp holds its mutex around every call.
 //
+// The worker submits a frame and records the next while the GPU draws it
+// (native_view.cpp's Renderer::Run), so a slot drawn into can be submitted
+// and not yet finished (Submitted): it stays taken, and isn't published until
+// the GPU has finished it (Finished), as the paints sample it on another
+// queue, which nothing but the worker's wait orders after SDL's.
+//
 // Presenting comes and goes (F8), and each stretch of it shows only its own
 // frames: ones drawn for it (Publish's `generation`) from captures the game
 // published after it began (Fresh). The capture newest when F8 turns native
@@ -94,10 +100,30 @@ class PresentSlots {
         }
         return -1;
     }
-    // drawn for stretch `generation`: the newest from now on, or, if that
-    // stretch is over, free again and false
+    // the slot being drawn is submitted, and the GPU may still be drawing it:
+    // taken still, and not published until Finished
+    void Submitted(int slot) {
+        if (Valid(slot) && slots_[slot].drawing) slots_[slot].in_flight = true;
+    }
+    // the GPU has finished drawing the slot Submitted
+    void Finished(int slot) {
+        if (Valid(slot)) slots_[slot].in_flight = false;
+    }
+    // whether `slot` is submitted and the GPU hasn't finished it: Publish
+    // refuses it, and the worker mustn't Abandon it as refused (the next
+    // frame could take it while the GPU still writes it)
+    bool Unfinished(int slot) const { return Valid(slot) && slots_[slot].in_flight; }
+    // slots submitted that the GPU hasn't finished
+    int InFlight() const {
+        int n = 0;
+        for (const Slot& s : slots_) n += s.in_flight ? 1 : 0;
+        return n;
+    }
+    // Drawn for stretch `generation`: the newest from now on, or, if that
+    // stretch is over, free again and false. A slot the GPU hasn't finished
+    // (Submitted) is never published: false, and it stays as it was.
     bool Publish(int slot, uint64_t generation) {
-        if (!Valid(slot)) return false;
+        if (!Valid(slot) || slots_[slot].in_flight) return false;
         slots_[slot].drawing = false;
         if (generation != generation_) return false;
         newest_ = slot;
@@ -105,9 +131,14 @@ class PresentSlots {
         return true;
     }
     bool Publish(int slot) { return Publish(slot, generation_); }
-    // not drawn after all (the GPU failed): free again, as it was
+    // not drawn after all (the GPU failed, or the worker stopped): free
+    // again, as it was. The GPU may still be drawing it if it was Submitted;
+    // nothing samples a slot until it's published, and the next frame drawn
+    // into it goes after that on SDL's queue.
     void Abandon(int slot) {
-        if (Valid(slot)) slots_[slot].drawing = false;
+        if (!Valid(slot)) return;
+        slots_[slot].drawing = false;
+        slots_[slot].in_flight = false;
     }
 
     // the drawer: the paint numbered `submission` samples `slot`
@@ -138,7 +169,8 @@ class PresentSlots {
  private:
     struct Slot {
         bool drawing = false;
-        uint64_t used = 0;  // the last paint that sampled it
+        bool in_flight = false;  // submitted, not finished (drawing too)
+        uint64_t used = 0;       // the last paint that sampled it
     };
     static bool Valid(int slot) { return slot >= 0 && slot < kCount; }
 
