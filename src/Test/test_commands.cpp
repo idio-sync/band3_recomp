@@ -447,6 +447,7 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
     fields += std::string(",\"held_fallback\":") + (info.held_fallback ? "true" : "false");
     fields += ",\"emulated\":";
     AppendJsonString(fields, info.emulated);
+    fields += ",\"emulated_passes_dropped\":" + std::to_string(info.emulated_passes_dropped);
     if (want_composed && !(info.composed && info.proc_cmds == 2)) {
         return Error(target, "capture " + name + " isn't a post frame composed with the world "
                                  "before it: proc_cmds " + std::to_string(info.proc_cmds) +
@@ -590,12 +591,15 @@ std::string CaptureCostJson(const NativeViewStats::Capture& c) {
 }
 
 // native_view stats' `emulated_gpu`: what the emulated GPU was sent, the
-// draws per game frame (0 with no frames)
+// calls per game frame (0 with no frames), and its command processor's CPU
+// milliseconds per frame (-1 unknown)
 std::string EmulatedGpuJson(const NativeViewStats::EmulatedGpu& e) {
     const double frames = double(e.frames);
     auto per_frame = [&](uint64_t v) { return frames > 0 ? double(v) / frames : 0.0; };
     char buf[96];
-    std::string out = "{\"skip_mode\":";
+    std::string out = "{\"mode\":";
+    AppendJsonString(out, e.mode);
+    out += ",\"skip_mode\":";
     out += e.skip_mode ? "true" : "false";
     out += ",\"skipping\":";
     out += e.skipping ? "true" : "false";
@@ -612,8 +616,12 @@ std::string EmulatedGpuJson(const NativeViewStats::EmulatedGpu& e) {
         }
         out += "}";
     }
-    std::snprintf(buf, sizeof(buf), ",\"kept_per_frame\":{\"pass\":%.1f,\"point_tests\":%.1f}}",
+    std::snprintf(buf, sizeof(buf), ",\"kept_per_frame\":{\"pass\":%.1f,\"point_tests\":%.1f}",
                   per_frame(e.kept_pass), per_frame(e.kept_point_tests));
+    out += buf;
+    out += ",\"passes_dropped\":" + std::to_string(e.passes_dropped);
+    const double cp = e.cp_ms < 0 ? -1.0 : frames > 0 ? e.cp_ms / frames : 0.0;
+    std::snprintf(buf, sizeof(buf), ",\"cp_ms_per_frame\":%.3f}", cp);
     out += buf;
     return out;
 }

@@ -62,8 +62,13 @@ struct CaptureInfo {
     bool held_fallback = false;
     // whether the emulated GPU drew the frame screenshot whole ("full"), or
     // skipped the game's draws in it or the one before ("stale": renderer
-    // native with emulated_gpu_while_native skip_draws, src/Render/gpu_skip.h)
+    // native with emulated_gpu_while_native skip_draws or swap_only,
+    // src/Render/gpu_skip.h)
     std::string emulated = "full";
+    // texture passes RB3 draws once whose draws the emulated GPU skipped
+    // (swap_only) since the game started: more than 0, the screenshot may
+    // show black outfits or portraits RB3 hasn't drawn again since
+    uint64_t emulated_passes_dropped = 0;
     // the native view's GPU backend drawing the same capture, at the
     // screenshot's size: its PNG, or why there's none
     std::string gpu_path;
@@ -128,13 +133,18 @@ struct NativeViewStats {
         std::vector<std::pair<std::string, uint64_t>> sizes;
     } capture;
     // what the emulated GPU was sent in the same time (src/Render/gpu_skip.h):
-    // whether it skips the game's draws now (renderer native with
-    // emulated_gpu_while_native skip_draws), the frame being drawn is skipped
-    // and its picture is fresh; the game's frames and those skipped; each
-    // draw emitter's calls emitted and skipped by kind, totals the reply
-    // divides by the frames; and of those emitted in skipped frames, the ones
-    // a one-shot texture pass kept and the occlusion queries
+    // emulated_gpu_while_native's mode while renderer is native ("full"
+    // otherwise) and whether it skips anything (skip_mode), the frame being
+    // drawn is skipped and its picture is fresh; the game's frames and those
+    // skipped; each emitter's calls emitted and skipped by kind, totals the
+    // reply divides by the frames; of those emitted in skip_draws frames, the
+    // ones a one-shot texture pass kept and the occlusion-test quads; the
+    // one-shot passes whose draws swap_only skipped; and the emulated GPU's
+    // command processor thread's CPU time, which the reply divides by the
+    // frames (-1 where it can't be told: off Windows, or the thread wasn't
+    // found)
     struct EmulatedGpu {
+        std::string mode = "full";
         bool skip_mode = false;
         bool skipping = false;
         bool fresh = true;
@@ -144,6 +154,8 @@ struct NativeViewStats {
         std::vector<std::pair<std::string, uint64_t>> skipped;
         uint64_t kept_pass = 0;
         uint64_t kept_point_tests = 0;
+        uint64_t passes_dropped = 0;
+        double cp_ms = -1;
     } emulated_gpu;
 };
 

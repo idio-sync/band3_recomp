@@ -427,3 +427,115 @@ TEST_CASE("a request while one runs keeps the larger") {
     l.EndFrame(true, 9);
     CHECK(l.FullPending() == 8);
 }
+
+// emulated_gpu_while_native swap_only: a level beyond skip_draws, latched the
+// same way
+
+TEST_CASE("swap_only takes effect at the next frame and goes stale like skip_draws") {
+    SkipLatch l;
+    CHECK(l.Level() == SkipLevel::kFull);
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kSwapOnly);
+    CHECK(l.Level() == SkipLevel::kSwapOnly);
+    CHECK(l.Skipping());
+    CHECK(l.Fresh());  // the frame swapped was whole
+    // a swap_only frame swapped: stale
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kSwapOnly);
+    CHECK_FALSE(l.Fresh());
+    CHECK(l.WholeFrames() == 0);
+}
+
+TEST_CASE("switching between skip_draws and swap_only keeps the picture stale") {
+    SkipLatch l;
+    l.EndFrame(SkipLevel::kSkipDraws, 0);
+    l.EndFrame(SkipLevel::kSkipDraws, 0);
+    CHECK_FALSE(l.Fresh());
+    // the frame being drawn stays at its level; the next one changes
+    CHECK(l.Level() == SkipLevel::kSkipDraws);
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kSwapOnly);
+    CHECK(l.WholeFrames() == 0);
+    CHECK_FALSE(l.Fresh());
+    CHECK(l.EndFrame(SkipLevel::kSkipDraws, 0) == SkipLevel::kSkipDraws);
+    CHECK(l.WholeFrames() == 0);
+    CHECK_FALSE(l.Fresh());
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kSwapOnly);
+    CHECK_FALSE(l.Fresh());
+    // full again: fresh after two whole frames, as from skip_draws
+    CHECK(l.EndFrame(SkipLevel::kFull, 0) == SkipLevel::kFull);
+    CHECK_FALSE(l.Fresh());
+    l.EndFrame(SkipLevel::kFull, 0);
+    CHECK_FALSE(l.Fresh());
+    l.EndFrame(SkipLevel::kFull, 0);
+    CHECK(l.Fresh());
+}
+
+TEST_CASE("whole frames asked for under swap_only are drawn, then swap_only goes on") {
+    SkipLatch l;
+    l.EndFrame(SkipLevel::kSwapOnly, 0);
+    l.EndFrame(SkipLevel::kSwapOnly, 0);
+    CHECK_FALSE(l.Fresh());
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 3) == SkipLevel::kFull);
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kFull);
+    CHECK_FALSE(l.Fresh());
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kFull);
+    CHECK(l.Fresh());  // two whole frames swapped: a capture can hold this one
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kSwapOnly);
+    CHECK(l.Fresh());
+    l.EndFrame(SkipLevel::kSwapOnly, 0);
+    CHECK_FALSE(l.Fresh());
+}
+
+TEST_CASE("the bool EndFrame is skip_draws") {
+    SkipLatch a, b;
+    for (bool want : {true, true, false, true, false, false, false}) {
+        const bool skipped = a.EndFrame(want, 0);
+        const SkipLevel level = b.EndFrame(want ? SkipLevel::kSkipDraws : SkipLevel::kFull, 0);
+        CHECK(skipped == (level != SkipLevel::kFull));
+        CHECK(a.Level() == level);
+        CHECK(a.Level() == (want ? SkipLevel::kSkipDraws : SkipLevel::kFull));
+        CHECK(a.Fresh() == b.Fresh());
+        CHECK(a.WholeFrames() == b.WholeFrames());
+    }
+}
+
+TEST_CASE("nothing is skipped unless renderer is native with the frame recorded") {
+    for (SkipLevel setting : {SkipLevel::kFull, SkipLevel::kSkipDraws, SkipLevel::kSwapOnly}) {
+        CAPTURE(int(setting));
+        CHECK(WantedLevel(true, setting, true, true) == setting);
+        // renderer emulated, capture off or texture passes not recorded: one
+        // of the three bits clear (7 is all set)
+        for (int on = 0; on < 7; on++) {
+            CHECK(WantedLevel((on & 1) != 0, setting, (on & 2) != 0, (on & 4) != 0) ==
+                  SkipLevel::kFull);
+        }
+    }
+}
+
+TEST_CASE("which emitters write their packets at each level") {
+    using G = GpuSkipStats;
+    for (int kind = 0; kind < G::kNumKinds; kind++) {
+        for (int flags = 0; flags < 4; flags++) {
+            const bool pass = flags & 1, point_tests = flags & 2;
+            CAPTURE(G::kKindNames[kind]);
+            CAPTURE(pass);
+            CAPTURE(point_tests);
+            // full: everything
+            CHECK(EmitDraw(SkipLevel::kFull, kind, pass, point_tests));
+            // swap_only: only BeginIndexedVertices, whose caller writes
+            // through what it returns
+            CHECK(EmitDraw(SkipLevel::kSwapOnly, kind, pass, point_tests) ==
+                  (kind == G::kBeginIndexed));
+            // skip_draws: clears and resolves too, and the draws a one-shot
+            // pass wants or the flares' occlusion tests make (quads only)
+            bool skip_draws = false;
+            switch (kind) {
+                case G::kBeginIndexed:
+                case G::kClear:
+                case G::kResolve: skip_draws = true; break;
+                case G::kIndexed:
+                case G::kInstanced: skip_draws = pass; break;
+                case G::kUp: skip_draws = pass || point_tests; break;
+            }
+            CHECK(EmitDraw(SkipLevel::kSkipDraws, kind, pass, point_tests) == skip_draws);
+        }
+    }
+}

@@ -9,8 +9,10 @@
 #   python tools/band3ctl.py run tests/game/boot.b3t
 #   python tools/band3ctl.py run tests/game/soak_native.b3t
 # Add --emulated_gpu_while_native=full to the launch to soak the emulated GPU
-# drawing everything too. A hang shows as a wait timing out (the frame count
-# or the screen stands still), a crash as the connection closing. What the
+# drawing everything too, or =swap_only to soak it doing only what the game
+# waits on (then the -f8 screenshots may show black outfits: expected). A
+# hang shows as a wait timing out (the frame count or the screen stands
+# still), a crash as the connection closing. What the
 # script can't check itself, look at afterwards (screenshots/ next to the
 # exe, and the log):
 # - soak-r<n>-a.png and -b.png, the native renderer's frames 2 s apart, differ

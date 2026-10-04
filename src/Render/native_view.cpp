@@ -1134,9 +1134,18 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             Renderer::Get().StopPresent();
             REXLOG_INFO("native present: off, the emulated GPU's picture shows (after {:.0f} ms)",
                         waited);
+            // whole frames don't bring back what RB3 drew once (gpu_skip.h)
+            const uint64_t dropped = GetGpuSkipStats().passes_dropped - passes_dropped_on_;
+            if (dropped && !at_once) {
+                REXLOG_WARN("native present: {} texture passes RB3 draws once were skipped "
+                            "(swap_only): outfits/portraits may be wrong until RB3 draws them "
+                            "again",
+                            dropped);
+            }
             return;
         }
         active_ = true;
+        passes_dropped_on_ = GetGpuSkipStats().passes_dropped;
         // every pipeline made now, here on the UI thread, not by the
         // worker's first frame while the window waits for it
         if (UpdateGpu()) GpuRenderer::Get().Prewarm(uint32_t(REXCVAR_GET(native_view_msaa)));
@@ -1307,6 +1316,8 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
     bool draining_ = false;
     std::chrono::steady_clock::time_point drain_start_;
     static constexpr std::chrono::milliseconds kMaxDrain{3000};
+    // GpuSkipStats::passes_dropped when it last turned native
+    uint64_t passes_dropped_on_ = 0;
     // the picture's place in the back buffer at the last paint
     ImageRect rect_;
     bool path_logged_ = false;

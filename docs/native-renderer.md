@@ -58,12 +58,20 @@ frame drawn whole and the post frame after it, a frame later on screen): the nat
 renderer keeps drawing the window until it is (the log says `native present: off, the emulated GPU's picture shows (after <ms>)`).
 The title screen's clouds are the exception found so far: they take 5 to 20 whole frames to
 come back, so the emulated GPU's picture of the title lacks them for a moment after F8 back.
-`capture` under `skip_draws` has the emulated GPU draw 30 whole frames before it holds one,
-so its game screenshot has them. With nothing seen to draw, the emulated GPU's command
-processor does about a third of the work per frame, and the game runs faster uncapped than
-under `emulated`. `full`
-draws everything, as before. `tests/game/soak_native.b3t` soaks the native renderer: three
-songs, menu round trips and F8 both ways in each song.
+`capture` under `skip_draws` (or `swap_only`) has the emulated GPU draw 30 whole frames
+before it holds one, so its game screenshot has them. With nothing seen to draw, the
+emulated GPU's command processor does about a third of the work per frame, and the game runs
+faster uncapped than under `emulated`. `full` draws everything, as before. `swap_only`, a test and performance mode, leaves the emulated
+GPU only what the game waits on (fences, the occlusion queries' results, vertical blanks and
+swaps): it also skips the clears, every resolve, the flares' occlusion-test quads (their
+queries still give the same result, the emulated GPU's fixed sample count) and the passes
+RB3 draws into textures once. After F8 back to emulated its picture may show black outfits
+and portraits, and other pictures RB3 drew once, until RB3 draws them again; the log says
+how many such passes were skipped, `native_view stats` counts them (`passes_dropped`) and
+`capture` reports them (`emulated_passes_dropped`). With `compress_character_textures` on,
+outfits composed under `swap_only` are read back before anything was drawn into them, so
+both renderers may show them black (the log warns once). `tests/game/soak_native.b3t` soaks
+the native renderer: three songs, menu round trips and F8 both ways in each song.
 
 Every kind of screen the render checks below go through matches the game's picture, as
 they measure it. Where the native renderer still differs from the emulated GPU, or hasn't
@@ -89,7 +97,7 @@ been checked:
 | Setting | |
 |---|---|
 | `renderer` (Band3 → Graphics) | `native` (the default on Windows) or `emulated` (the default elsewhere) |
-| `emulated_gpu_while_native` (Band3 → Graphics) | with `renderer` native, `skip_draws` (the default) leaves the game's draws out of the emulated GPU's work as above; `full` has it draw everything |
+| `emulated_gpu_while_native` (Band3 → Graphics) | with `renderer` native, `skip_draws` (the default) leaves the game's draws out of the emulated GPU's work as above; `full` has it draw everything; `swap_only` leaves it only what the game waits on, so F8 back may show black outfits and portraits for a while (above) |
 | `native_max_height` (Band3 → Graphics) | the most lines the native renderer draws: a taller window's picture is drawn this tall and scaled up to fill it, for 4K on a GPU that can't keep up at full size. 0 (the default) draws at the window's size |
 | `native_view_msaa` (Band3 → Graphics) | the samples a pixel the native renderer and the native view draw the overlay with (the track, the HUD, menus drawn after the world), averaged at its edges: 2 (the default) as RB3 does, 4 smoother than the game, 1 none. RB3 multisamples only those: the world, its post-processing and every texture pass are single-sampled, in the game and here. Where the GPU can't draw 2 samples it draws 4 (or 4 → 2, else 1; the log says so) |
 | `native_present_zero_copy` (Band3 → Debug) | on (the default) shows the GPU's frames where they are; off reads each back and uploads it, to compare |
@@ -198,7 +206,8 @@ reply:
 | `proc_cmds` | what the frame drew: 7 everything; with even/odd rendering 1 the world, 2 post-processing; -1 unknown |
 | `composed`, `world_frame`, `game_frame` | the capture has the world of `world_frame` in front of the overlay of its own `game_frame` (a post frame, which shows the world frame before it) |
 | `held_fallback` | no such post frame came in 30 frames, so the capture took the last |
-| `emulated` | `full`: the emulated GPU drew the screenshot's frame (and the one before it) whole. With `renderer` native and `emulated_gpu_while_native` `skip_draws`, `capture` has it draw whole frames for a moment first and holds one of those, so this is `full` too; `stale` if it couldn't |
+| `emulated` | `full`: the emulated GPU drew the screenshot's frame (and the one before it) whole. With `renderer` native and `emulated_gpu_while_native` `skip_draws` or `swap_only`, `capture` has it draw whole frames for a moment first and holds one of those, so this is `full` too; `stale` if it couldn't |
+| `emulated_passes_dropped` | the passes RB3 draws into textures once whose draws the emulated GPU skipped under `swap_only` since the game started: more than 0, the screenshot may show black outfits or portraits RB3 hasn't drawn again since |
 | `gpu`, `gpu_ms`, `gpu_passes`, `gpu_rt_missing` | the GPU's `<name>.gpu.png` at the screenshot's size, its time, the texture passes it drew, and its draws that sampled a render target nothing had drawn (drawn transparent black). `gpu_error` instead when there's no GPU device or `native_view_backend` is `cpu` |
 | `gpu_presented` | with `renderer` native at another size than the screenshot's, the GPU's `<name>.gpu.presented.png` at the size it draws the window at, as it draws it there (replay's `--scale` checks it) |
 

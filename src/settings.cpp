@@ -242,8 +242,11 @@ REXCVAR_DEFINE_STRING(emulated_gpu_while_native, "skip_draws", "Band3/Graphics",
     "With renderer = native, what the emulated GPU still does: skip_draws leaves out the "
     "game's draws nobody sees (the native renderer draws them), keeping what RB3 draws once "
     "(outfits) so F8 back shows the game's picture; full draws everything, as with "
-    "renderer = emulated")
-    .allowed({"full", "skip_draws"});
+    "renderer = emulated. swap_only also skips clears, resolves, the flares' occlusion-test "
+    "quads and the passes RB3 draws once, leaving only what the game waits on: a test and "
+    "performance mode, after which F8 back to emulated may show black outfits, portraits "
+    "and other stale pictures until RB3 draws them again")
+    .allowed({"full", "skip_draws", "swap_only"});
 
 // Band3/Integrations
 
