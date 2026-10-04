@@ -2,6 +2,9 @@
 
 // See crash_trace.cpp.
 
+#include <cstdint>
+#include <string>
+
 namespace band3::crash_trace {
 
 #ifdef _WIN32
@@ -14,6 +17,12 @@ void EnableDred();
 // ID3D12CommandQueue*, named so in the report), whose DRED the crash trace
 // logs when the device was removed; null, null lets them go.
 void WatchD3D12Device(void* device, void* direct_queue);
+
+// What names the indexed draw a GPU hang stopped at, from how many indexed
+// draws came before it in the hung command list and how many it has
+// (dred_report.h's IndexedDrawNamer): the native renderer's last frame
+// (GpuRenderer::DescribeIndexedDraw). Null lets it go.
+void SetIndexedDrawNamer(std::string (*namer)(uint32_t before, uint32_t total));
 #endif
 
 }  // namespace band3::crash_trace

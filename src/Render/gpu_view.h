@@ -127,6 +127,14 @@ class GpuRenderer {
     // it has no picture (or no device)
     bool DownloadOutput(int slot, std::vector<uint32_t>& rgba, uint32_t& width,
                         uint32_t& height);
+    // With RasterOptions::gpu_labels, the last frame submitted's indexed
+    // draws (DrawIndexedInstanced each, in order, a list per command buffer
+    // the frame took), for a GPU hang's DRED report: the one `before` such
+    // draws into a command list of `total`, and the frame, if one of the last
+    // frame's command buffers had `total` of them (the list is likely that
+    // one); else why not. Any thread, the crash trace's included: never waits
+    // for the lock, "" if it can't have it.
+    std::string DescribeIndexedDraw(uint32_t before, uint32_t total);
     // The SDK's ID3D12Device, which the outputs must live on for its presenter
     // to sample them in place, or null when its presenter isn't Direct3D 12.
     // On the UI thread, before CheckZeroCopy.

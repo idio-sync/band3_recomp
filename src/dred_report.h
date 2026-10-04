@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -145,13 +146,24 @@ inline const char* AllocationTypeName(uint32_t type) {
     return other;
 }
 
+// DRAWINDEXEDINSTANCED, which a list's indexed draws are counted by
+inline constexpr uint32_t kOpDrawIndexed = 4;
+
+// Names a list's unfinished indexed draw from how many indexed draws came
+// before it in the list and how many the list has (GpuRenderer::
+// DescribeIndexedDraw); "" for nothing to say
+using IndexedDrawNamer = std::function<std::string(uint32_t before, uint32_t total)>;
+
 // The breadcrumbs, a line per command list the GPU hadn't finished: first
 // those it stopped partway through, each with `context` ops either side of
-// the unfinished one, then those it had done nothing of (waiting their turn
-// on the queue, or stuck at their first op: DRED can't tell those apart).
-// At most `max_shown` lists; the finished ones only counted.
+// the unfinished one (and, stopped at an indexed draw, which of the list's
+// it is, and what `namer` says of it), then those it had done nothing of
+// (waiting their turn on the queue, or stuck at their first op: DRED can't
+// tell those apart). At most `max_shown` lists; the finished ones only
+// counted.
 inline std::string FormatBreadcrumbs(const std::vector<CommandList>& lists, size_t context = 6,
-                                     size_t max_shown = 8) {
+                                     size_t max_shown = 8,
+                                     const IndexedDrawNamer& namer = IndexedDrawNamer()) {
     size_t finished = 0;
     std::vector<const CommandList*> partway, waiting;
     for (const CommandList& l : lists) {
@@ -169,6 +181,23 @@ inline std::string FormatBreadcrumbs(const std::vector<CommandList>& lists, size
         shown++;
         out += "  queue " + l->queue + ", list " + l->list + ": stopped at [" +
                std::to_string(l->done) + "] of " + std::to_string(l->ops.size()) + " ops\n";
+        if (l->ops[l->done] == kOpDrawIndexed) {
+            uint32_t before = 0, total = 0;
+            for (size_t i = 0; i < l->ops.size(); i++) {
+                if (l->ops[i] != kOpDrawIndexed) continue;
+                total++;
+                if (i < l->done) before++;
+            }
+            out += "     its indexed draw " + std::to_string(before) + " of " +
+                   std::to_string(total) + "\n";
+            const std::string named = namer ? namer(before, total) : std::string();
+            if (!named.empty()) {
+                // indented under the list, a line at a time
+                out += "     ";
+                for (char c : named) out += c == '\n' ? std::string("\n     ") : std::string(1, c);
+                out += "\n";
+            }
+        }
         const size_t first = l->done > context ? l->done - context : 0;
         const size_t end = std::min(l->ops.size(), size_t(l->done) + context + 1);
         for (size_t i = first; i < end; i++) {

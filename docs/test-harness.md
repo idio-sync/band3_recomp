@@ -117,3 +117,39 @@ a moment to finish appearing). Submenus inside one screen (Play Now, Quickplay) 
 change the screen name. A song counts as `in_game` until you leave its results, and
 `state` keeps the last song's details after that. Switching `instrument` reconnects
 it, so press Start to join again, as a player would.
+
+## GPU hangs
+
+`launch` starts band3 with `--dred=true` (`--dred=false` leaves it off): Direct3D 12's
+Device Removed Extended Data. When the GPU hangs (`DEVICE_HUNG` in the log), band3
+aborts and `band3_crash_trace.txt`, in the folder it runs from (the repository root
+under the harness), gets the command lists the GPU hadn't finished and the op each
+stopped at. A list stopped at an indexed draw says which of the list's indexed draws
+it is, and, where it's one of the native renderer's last frame, what that draw was:
+its mesh, its target, its counts, its blend and its textures. Some hangs take the
+whole PC down instead, so nothing is written.
+
+With `--d3d12_debug=true`, the Direct3D 12 debug layer checks every call (it's
+Windows' optional Graphics Tools feature, which has to be installed). Its errors end
+band3 (`d3d12_break_on_error`), and the crash trace gets each error's message with
+the stack of the call it's about: `band3.exe` frames are band3 or SDL_gpu, which
+`out/build/<preset>/band3.map` resolves; `rexgpu-xenos.dll` frames are the SDK's
+emulated GPU.
+
+`tools/hang_bisect.py` boots band3 and plays `tests/game/pacing_song.b3t` at
+refresh_rate 120 under settings that each take a renderer interaction away
+(`baseline`, `no-zero-copy`, `emulated-full`, `emulated`), a few rounds of each, and
+counts the runs that hung. Each run goes to `out/hang_bisect.jsonl` as it starts and
+ends, so after a hang that took the PC down, running it again records that run and
+carries on:
+
+```
+python tools/hang_bisect.py --rounds 3
+python tools/hang_bisect.py --only baseline --rounds 5
+python tools/hang_bisect.py --summary
+```
+
+`tests/game/pacing_song.b3t` plays 20th Century Boy and measures the native
+renderer's pacing over 20 s of it (`native_view stats` and `present_stats`). Its
+header has the launch line; restore the window off-screen first (`window offscreen`),
+since a minimized window doesn't paint.

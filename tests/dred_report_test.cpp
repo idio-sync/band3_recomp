@@ -79,6 +79,30 @@ TEST_CASE("a list the GPU stopped partway through shows the ops around the unfin
     CHECK_FALSE(Has(text, "[14] "));
 }
 
+TEST_CASE("an unfinished indexed draw is counted among the list's, and named") {
+    // barrier, 3 indexed draws, a non-indexed one, 2 more indexed: stopped
+    // at the fifth op, the list's indexed draw 3 (from 0) of 5
+    const std::vector<uint32_t> ops = {15, 4, 4, 4, 3, 4, 4};
+    uint32_t asked_before = 99, asked_total = 99;
+    const IndexedDrawNamer namer = [&](uint32_t before, uint32_t total) {
+        asked_before = before;
+        asked_total = total;
+        return std::string("the frame\n  the draw");
+    };
+    const std::string text = FormatBreadcrumbs({List("q", "a", 5, ops)}, 1, 8, namer);
+    CHECK(asked_before == 3);
+    CHECK(asked_total == 5);
+    CHECK(Has(text, "     its indexed draw 3 of 5\n"));
+    // the namer's lines indented under the list
+    CHECK(Has(text, "     the frame\n       the draw\n"));
+
+    // stopped at a non-indexed op: nothing to name
+    asked_before = 99;
+    const std::string other = FormatBreadcrumbs({List("q", "a", 4, ops)}, 1, 8, namer);
+    CHECK(asked_before == 99);
+    CHECK_FALSE(Has(other, "its indexed draw"));
+}
+
 TEST_CASE("a list with nothing done may be waiting or stuck on its first op") {
     const std::string text = FormatBreadcrumbs({List("q", "a", 0, {4, 15, 3})});
     CHECK(Has(text, "1 not started"));

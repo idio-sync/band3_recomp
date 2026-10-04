@@ -397,6 +397,8 @@ class Renderer {
                 // and the world's REFRACT_WORLD draws (the title's road) read
                 // the last world frame's scene, as the game's do
                 o.pre_buffer = true;
+                // what each GPU draw is, for a GPU hang's DRED report
+                o.gpu_labels = REXCVAR_GET(dred);
                 gpu = gpu_;
                 dump = dump_path_;
                 zero_copy = present_ && present_zero_copy_ && gpu && dump.empty();
@@ -1058,6 +1060,11 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             // hang), whichever renderer is on; here, as the one place band3
             // has the SDK's device from the start
             crash_trace::WatchD3D12Device(d3d12.GetDevice(), d3d12.GetDirectQueue());
+            // and, stopped at an indexed draw, which of the native renderer's
+            // it was (RasterOptions::gpu_labels)
+            crash_trace::SetIndexedDrawNamer([](uint32_t before, uint32_t total) {
+                return GpuRenderer::Get().DescribeIndexedDraw(before, total);
+            });
             auto present = std::make_unique<D3D12Present>();
             if (present->Init(d3d12)) d3d12_ = std::move(present);
             else d3d12_why_ = "its Direct3D 12 pipeline couldn't be made (see the log)";
@@ -1095,6 +1102,7 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         if (fence_ && drew_) fence_->Settle(2000);
         d3d12_.reset();
         crash_trace::WatchD3D12Device(nullptr, nullptr);
+        crash_trace::SetIndexedDrawNamer(nullptr);
 #endif
         for (auto& t : textures_) t.reset();
     }

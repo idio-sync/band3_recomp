@@ -24,6 +24,7 @@
 
 #include "src/dred_report.h"
 
+#include <atomic>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -45,6 +46,8 @@ std::string g_dred_status = "off (--dred=true turns it on)";
 std::mutex g_dred_mutex;
 ComPtr<ID3D12Device> g_dred_device;
 const void* g_dred_queue = nullptr;
+// names the native renderer's draw a hang stopped at (SetIndexedDrawNamer)
+std::string (*g_namer)(uint32_t before, uint32_t total) = nullptr;
 
 // a list's, queue's or allocation's name, or else what it is
 std::string DebugName(const char* a, const wchar_t* w, const void* object, const char* what) {
@@ -118,7 +121,10 @@ void AppendDred(std::string& text) {
                     l.ops.push_back(uint32_t(n->pCommandHistory[i]));
             lists.push_back(std::move(l));
         }
-        text += band3::dred::FormatBreadcrumbs(lists);
+        // the native renderer's draw, where the list stopped at one of its
+        band3::dred::IndexedDrawNamer namer;
+        if (g_namer) namer = g_namer;
+        text += band3::dred::FormatBreadcrumbs(lists, 6, 8, namer);
     } else {
         text += "DRED: no breadcrumbs\n";
     }
@@ -187,8 +193,42 @@ void OnInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned
     DumpStack("CRT invalid parameter");
 }
 
+// With d3d12_debug, where the debug layer's errors come from: it reports each
+// message through OutputDebugString (DBG_PRINTEXCEPTION_C) on the thread
+// whose call it's about, and with d3d12_break_on_error (its default) breaks
+// there too, so the stack names the caller (SDL in band3.exe, or the SDK's
+// GPU in rexgpu-xenos.dll). A breakpoint nothing handles ends band3 with no
+// word of where; it still does, once its stack is written.
+LONG CALLBACK OnException(EXCEPTION_POINTERS* info) {
+    static thread_local bool in_handler = false;
+    const DWORD code = info->ExceptionRecord->ExceptionCode;
+    if (code == EXCEPTION_BREAKPOINT && !in_handler) {
+        in_handler = true;
+        DumpStack("breakpoint (with d3d12_debug: the debug layer's error, logged just before)");
+        in_handler = false;
+    } else if (code == 0x40010006 && !in_handler &&
+               info->ExceptionRecord->NumberParameters >= 2) {
+        // an error's or a corruption's, the first few
+        const char* text = reinterpret_cast<const char*>(
+            info->ExceptionRecord->ExceptionInformation[1]);
+        if (text && (std::strstr(text, "D3D12 ERROR") || std::strstr(text, "CORRUPTION"))) {
+            static std::atomic<int> dumps{0};
+            if (dumps++ < 4) {
+                in_handler = true;
+                std::string why = std::string("debug-layer message: ") + text;
+                while (!why.empty() && (why.back() == '\n' || why.back() == '\r'))
+                    why.pop_back();
+                DumpStack(why.c_str());
+                in_handler = false;
+            }
+        }
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 struct Install {
     Install() {
+        AddVectoredExceptionHandler(1, OnException);
         std::signal(SIGABRT, OnAbort);
         std::set_terminate(OnTerminate);
         _set_invalid_parameter_handler(OnInvalidParameter);
@@ -202,6 +242,11 @@ namespace band3::crash_trace {
 void EnableDred() {
     TurnOnDred();
     REXLOG_INFO("DRED: {}", g_dred_status);
+}
+
+void SetIndexedDrawNamer(std::string (*namer)(uint32_t before, uint32_t total)) {
+    std::lock_guard lock(g_dred_mutex);
+    g_namer = namer;
 }
 
 void WatchD3D12Device(void* device, void* direct_queue) {

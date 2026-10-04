@@ -359,6 +359,12 @@ struct GpuRenderer::Impl {
     // which a frame waited for (logged)
     std::atomic<bool> warm{false};
     bool warmed_up = false;
+    // RasterOptions::gpu_labels: the last frame submitted, and what each of
+    // its indexed draws is, in order, a list per command buffer it took
+    // (DescribeIndexedDraw)
+    std::mutex draw_log_mutex;
+    std::string draw_log_frame;
+    std::vector<std::vector<std::string>> draw_log;
     SDL_GPUSampler* sampler = nullptr;
     // linear and clamping, as RB3 samples its post-processing levels
     SDL_GPUSampler* linear_sampler = nullptr;
@@ -2350,6 +2356,18 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         REXLOG_WARN("native view gpu: no command buffer ({})", SDL_GetError());
         return false;
     }
+    // RasterOptions::gpu_labels: what each indexed draw is, in the order
+    // they're recorded, a list per command buffer, handed to draw_log as the
+    // frame is submitted; callers check gpu_labels first, so the text is
+    // only made when it's on
+    std::vector<std::vector<std::string>> indexed_draws(1);
+    auto label = [&](std::string text) { indexed_draws.back().push_back(std::move(text)); };
+    const std::string frame_label =
+        o.gpu_labels ? fmt::format("band3 frame {} (game frame {}, proc_cmds {}, composed {}) "
+                                   "at {}x{}",
+                                   frame.frame, frame.game_frame, frame.proc_cmds,
+                                   frame.composed, width, height)
+                     : std::string();
     if (upload_bytes || !to_arena.empty() || !array_copies.empty()) {
         SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
         // texture arrays that grew: the old one's layers into the new one
@@ -2629,6 +2647,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             u.depth = {width, height, 0, 0};
             SDL_PushGPUVertexUniformData(cmd, 0, &u, sizeof(u));
             SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof(u));
+            if (o.gpu_labels)
+                label(fmt::format("velocity object {}: mesh {:#x}, {} indices, {} vertices, {} "
+                                  "bones",
+                                  index, v.mesh, v.geom->indices.size(), v.geom->verts.size(),
+                                  v.bones));
             SDL_DrawGPUIndexedPrimitives(rp, uint32_t(v.geom->indices.size() / 3 * 3), 1,
                                          m.first_index, int32_t(m.first_vertex), 0);
         }
@@ -2861,6 +2884,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SetDepthMap(depth_map, vu.depth_map);
             vu.shade = shades[d];
             SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
+            if (o.gpu_labels)
+                label(fmt::format("draw {} shadow depth: mesh {:#x} into {:#x}, {} indices, {} "
+                                  "vertices, {} bones",
+                                  d, it.mesh, it.target, it.geom->indices.size(),
+                                  it.geom->verts.size(), it.bones.size()));
             SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
                                          m.first_index, int32_t(m.first_vertex), 0);
             st.draws++;
@@ -3058,6 +3086,22 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         pu.flags[0] = blend == kBlendSrcAlpha || blend == kBlendSrcAlphaAdd ? kPremultiply : 0;
         SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
 
+        if (o.gpu_labels) {
+            // each texture's size and its sampler's anisotropy, in tex_layer's order
+            std::string textures;
+            for (int t = 0; t < 8; t++)
+                if (pu.tex_size[t][0])
+                    textures += fmt::format(" {}:{}x{}/{}", t, pu.tex_size[t][0],
+                                            pu.tex_size[t][1], pu.tex_sampler[t][3]);
+            label(fmt::format("draw {} {}: mesh {:#x} into {:#x}, {} indices, {} vertices, {} "
+                              "bones, blend {}, alpha {}, {} samples, shade {}, rect {}, "
+                              "textures{}, layers {} {} {} {} {}",
+                              d, cone ? "spot cone" : soft ? "soft particle" : "mesh", it.mesh,
+                              it.target, it.geom->indices.size(), it.geom->verts.size(),
+                              it.bones.size(), blend, int(alpha), pass_samples, it.shade,
+                              it.rect_shader, textures, pu.tex_layer[0], pu.tex_layer[1],
+                              pu.tex_layer[2], pu.tex_layer[3], pu.tex_layer[4]));
+        }
         SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
                                      m.first_index, int32_t(m.first_vertex), 0);
         st.draws++;
@@ -3293,6 +3337,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         SDL_DownloadFromGPUTexture(copy, &src, &dst);
         SDL_EndGPUCopyPass(copy);
     }
+    if (o.gpu_labels) {
+        std::lock_guard lock(draw_log_mutex);
+        draw_log_frame = frame_label;
+        draw_log = std::move(indexed_draws);
+    }
     const auto submitted = std::chrono::steady_clock::now();
     SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
     if (!fence) {
@@ -3431,6 +3480,27 @@ bool GpuRenderer::DownloadOutput(int slot, std::vector<uint32_t>& rgba, uint32_t
     width = o.w;
     height = o.h;
     return true;
+}
+
+std::string GpuRenderer::DescribeIndexedDraw(uint32_t before, uint32_t total) {
+    std::unique_lock lock(impl_->draw_log_mutex, std::try_to_lock);
+    if (!lock) return "";
+    const auto& log = impl_->draw_log;
+    if (log.empty()) return "the native renderer kept no draws (gpu_labels off, or no frame yet)";
+    // the last of its command buffers with that many indexed draws: the one
+    // the GPU got furthest into
+    for (size_t i = log.size(); i-- > 0;) {
+        if (log[i].size() != total || before >= total) continue;
+        return fmt::format("the native renderer's {}, command buffer {} of {}\n  its indexed "
+                           "draw {} of {}: {}",
+                           impl_->draw_log_frame, i + 1, log.size(), before, total,
+                           log[i][before]);
+    }
+    std::string sizes;
+    for (const auto& list : log) sizes += (sizes.empty() ? "" : ", ") + std::to_string(list.size());
+    return fmt::format("not the native renderer's last frame, whose command buffers had {} "
+                       "indexed draws: {}",
+                       sizes, impl_->draw_log_frame);
 }
 
 void GpuRenderer::Prewarm(uint32_t overlay_samples) {
