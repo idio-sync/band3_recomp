@@ -580,10 +580,17 @@ struct GpuRenderer::Impl {
     // they've grown
     std::vector<Mesh*> to_pool, to_arena;
     std::vector<Tex*> new_textures;
+    // An array that grew: the layers of the old one holding textures sent in
+    // an earlier frame, each with its levels written (Tex::levels), go over
+    // to the new one. Nothing else is copied, as nothing else was written: a
+    // layer placed this frame is sent to the new array, and an array made
+    // this frame (more of a size arriving at once than it holds) holds
+    // nothing yet.
     struct ArrayCopy {
         SDL_GPUTexture* from;
         SDL_GPUTexture* to;
-        uint32_t w, h, layers, levels;
+        uint32_t w, h;
+        std::vector<std::pair<uint32_t, uint32_t>> layers;  // layer, levels
     };
     std::vector<ArrayCopy> array_copies;  // arrays that grew, old into new
     std::vector<Mat4> frame_bones;
@@ -621,6 +628,23 @@ struct GpuRenderer::Impl {
     bool Create();
     // stop_video: on the UI thread only, as SDL wants
     void Release(bool stop_video);
+    // SDL's Direct3D 12 backend copies a pipeline's fragment samplers into
+    // its command buffer's GPU sampler heap (2048 of them) as one batch each
+    // time they're bound again, checking for room before the batch only and
+    // skipping null slots without counting them (SDL 3.4, and main as of
+    // 2026-10: "FIXME: need to error on overflow"). A batch that starts short
+    // of the heap's end runs past it: descriptors copied outside any heap
+    // (the debug layer's INVALID_DESCRIPTOR_HANDLE), which the GPU then reads,
+    // and AMD GPUs hung on the next draw (DEVICE_HUNG). So every fragment
+    // shader that samples declares kSamplerBatch samplers (MakeShader) and
+    // every pass binds all of them first (BeginPass): each batch is
+    // kSamplerBatch, which divides the heap, so batches end on its end
+    // exactly, where SDL moves to a fresh heap (the view heap with it).
+    static constexpr uint32_t kSamplerBatch = 16;
+    static_assert(2048 % kSamplerBatch == 0, "a batch divides SDL's sampler heap");
+    // a render pass, its kSamplerBatch fragment samplers bound to white first
+    SDL_GPURenderPass* BeginPass(SDL_GPUCommandBuffer* cmd, const SDL_GPUColorTargetInfo* ct,
+                                 uint32_t targets, const SDL_GPUDepthStencilTargetInfo* dt);
     // one of the generated shaders, in `format` (DXBC or SPIR-V)
     SDL_GPUShader* MakeShader(SDL_GPUShaderFormat format, SDL_GPUShaderStage stage,
                               const unsigned char* dxbc, size_t dxbc_size,
@@ -756,12 +780,31 @@ SDL_GPUShader* GpuRenderer::Impl::MakeShader(SDL_GPUShaderFormat format,
     info.entrypoint = entry;
     info.format = format;
     info.stage = stage;
+    // a fragment shader's samplers, padded (kSamplerBatch)
+    if (stage == SDL_GPU_SHADERSTAGE_FRAGMENT && samplers) {
+        if (samplers > kSamplerBatch)
+            REXLOG_WARN("native view gpu: the shader {} samples {} textures, more than {}", entry,
+                        samplers, kSamplerBatch);
+        samplers = std::max(samplers, kSamplerBatch);
+    }
     info.num_samplers = samplers;
     info.num_storage_buffers = storage_buffers;
     info.num_uniform_buffers = uniforms;
     SDL_GPUShader* s = SDL_CreateGPUShader(device, &info);
     if (!s) REXLOG_WARN("native view gpu: the shader {} didn't load ({})", entry, SDL_GetError());
     return s;
+}
+
+SDL_GPURenderPass* GpuRenderer::Impl::BeginPass(SDL_GPUCommandBuffer* cmd,
+                                                const SDL_GPUColorTargetInfo* ct, uint32_t targets,
+                                                const SDL_GPUDepthStencilTargetInfo* dt) {
+    SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, ct, targets, dt);
+    if (rp) {
+        SDL_GPUTextureSamplerBinding padding[kSamplerBatch];
+        for (SDL_GPUTextureSamplerBinding& b : padding) b = {white, sampler};
+        SDL_BindGPUFragmentSamplers(rp, 0, padding, kSamplerBatch);
+    }
+    return rp;
 }
 
 SDL_GPUGraphicsPipeline* GpuRenderer::Impl::MakeFullscreenPipeline(SDL_GPUShader* pixel,
@@ -1505,8 +1548,12 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx) {
         }
         if (a.texture) {
             // what the old one holds goes over in this frame's copy pass,
-            // before anything is sent to the new one
-            array_copies.push_back({a.texture, grown, w, h, a.layers, a.levels});
+            // before anything is sent to the new one (ArrayCopy)
+            ArrayCopy c{a.texture, grown, w, h, {}};
+            for (const auto& [key, held] : textures)
+                if (held.array == &a && held.first < serial)
+                    c.layers.emplace_back(held.layer, held.levels);
+            array_copies.push_back(std::move(c));
         }
         for (uint32_t l = layers; l-- > a.layers;) a.free.push_back(l);
         a.texture = grown;
@@ -2373,8 +2420,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // texture arrays that grew: the old one's layers into the new one
         // first, then it can go (SDL keeps it until the copy is done)
         for (const ArrayCopy& c : array_copies) {
-            for (uint32_t l = 0; l < c.layers; l++) {
-                for (uint32_t m = 0; m < c.levels; m++) {
+            for (const auto& [l, levels] : c.layers) {
+                for (uint32_t m = 0; m < levels; m++) {
                     SDL_GPUTextureLocation src{c.from, m, l, 0, 0, 0};
                     SDL_GPUTextureLocation dst{c.to, m, l, 0, 0, 0};
                     SDL_CopyGPUTextureToTexture(copy, &src, &dst, std::max(c.w >> m, 1u),
@@ -2451,7 +2498,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     float bound_viewport[4] = {};
     auto begin_pass = [&](const SDL_GPUColorTargetInfo& ct,
                           const SDL_GPUDepthStencilTargetInfo& dt) {
-        pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
+        pass = BeginPass(cmd, &ct, 1, &dt);
         SDL_BindGPUVertexStorageBuffers(pass, 0, &bone_buffer, 1);
         bound = nullptr;
         bound_verts = nullptr;
@@ -2512,7 +2559,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             start_dt.store_op = SDL_GPU_STOREOP_STORE;
             start_dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
             start_dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-            SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &start_ct, 1, &start_dt);
+            SDL_GPURenderPass* rp = BeginPass(cmd, &start_ct, 1, &start_dt);
             SDL_BindGPUGraphicsPipeline(rp, OverlayStartPipeline(overlay_samples));
             const SDL_GPUTextureSamplerBinding tb[2] = {{color, sampler}, {world_depth, sampler}};
             SDL_BindGPUFragmentSamplers(rp, 0, tb, 2);
@@ -2569,7 +2616,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             c.load_op = SDL_GPU_LOADOP_DONT_CARE;
             c.store_op = SDL_GPU_STOREOP_STORE;
         }
-        SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, ct, second ? 2 : 1, nullptr);
+        SDL_GPURenderPass* rp = BeginPass(cmd, ct, second ? 2 : 1, nullptr);
         SDL_BindGPUGraphicsPipeline(rp, pipeline);
         SDL_GPUTextureSamplerBinding tb[12];
         uint32_t n = 0;
@@ -2609,7 +2656,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
         dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
         dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-        SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
+        SDL_GPURenderPass* rp = BeginPass(cmd, &ct, 1, &dt);
         SDL_BindGPUVertexStorageBuffers(rp, 0, &bone_buffer, 1);
         const SDL_GPUTextureSamplerBinding tb{scene_depth, sampler};
         SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
@@ -3288,8 +3335,30 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             draw(d, AlphaMode::kTexture, no_z, shadow_map);
         }
         end_pass();
-        // in place of FinishDrawTarget's downsamples
-        if (rt.levels > 1) SDL_GenerateMipmapsForGPUTexture(cmd, rt.color);
+        // in place of FinishDrawTarget's downsamples. SDL makes them with
+        // blits of its own, a sampler each, which would put the command
+        // buffer's sampler heap off kSamplerBatch's step (BeginPass); so in a
+        // command buffer of their own, the frame's work so far submitted
+        // before it and the rest in a new one (each starts its heaps afresh).
+        // One queue runs them in order, so the frame's fence still waits out
+        // all of it.
+        if (rt.levels > 1) {
+            SDL_GPUCommandBuffer* next = nullptr;
+            if (SDL_SubmitGPUCommandBuffer(cmd)) {
+                if (SDL_GPUCommandBuffer* mips = SDL_AcquireGPUCommandBuffer(device)) {
+                    SDL_GenerateMipmapsForGPUTexture(mips, rt.color);
+                    if (SDL_SubmitGPUCommandBuffer(mips))
+                        next = SDL_AcquireGPUCommandBuffer(device);
+                }
+            }
+            if (!next) {
+                REXLOG_WARN("native view gpu: a texture pass's mips didn't submit ({})",
+                            SDL_GetError());
+                return false;
+            }
+            cmd = next;
+            if (o.gpu_labels) indexed_draws.emplace_back();
+        }
     }
     if (!resolved) resolve();
     end_pass();
@@ -3315,7 +3384,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         ct.texture = output;
         ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
         ct.store_op = SDL_GPU_STOREOP_STORE;
-        SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
+        SDL_GPURenderPass* rp = BeginPass(cmd, &ct, 1, nullptr);
         SDL_BindGPUGraphicsPipeline(rp, gamma_pipeline);
         const SDL_GPUTextureSamplerBinding tb{color, sampler};
         SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
