@@ -76,8 +76,12 @@ struct GpuStats {
     uint32_t uploads = 0;   // meshes and textures sent to the GPU this frame
     uint32_t passes = 0;    // texture passes drawn
     uint32_t rt_missing = 0;  // draws that sampled a render target nothing had drawn
-    double ms = 0;          // the whole frame: uploads, drawing and reading back
-    double wait_ms = 0;     // of that, from submitting to having the picture
+    // RenderFrame's whole frame: uploads, drawing and reading back; and of
+    // that, from submitting to having the picture. RenderFrameToOutput's
+    // frame up to its submission alone, with no wait (0): the GPU's time
+    // after is its caller's to wait out (OutputDone).
+    double ms = 0;
+    double wait_ms = 0;
 };
 
 // one of the presenter's output textures, as RenderFrameToOutput left it
@@ -116,13 +120,22 @@ class GpuRenderer {
                      std::vector<uint32_t>& rgba, GpuStats& stats);
 
     // The presenter's output textures, which RenderFrameToOutput draws into
-    // and leaves on the GPU, finished (it waits for the GPU): output `slot`
-    // (0 to kOutputs - 1), made again at options' size if it isn't that size.
-    // native_view.cpp keeps the presenter from sampling a slot while it's
-    // drawn into (present_model.h's PresentSlots). False as RenderFrame.
+    // and leaves on the GPU: output `slot` (0 to kOutputs - 1), made again at
+    // options' size if it isn't that size. It returns once the frame is
+    // submitted, so the caller can record the next while the GPU draws this
+    // one, and OutputDone tells when the GPU has finished it: until then the
+    // presenter mustn't sample it, as it does on the SDK's queue, which
+    // nothing orders after SDL's but that. native_view.cpp keeps the
+    // presenter from sampling a slot while it's drawn into or unfinished
+    // (present_model.h's PresentSlots). False as RenderFrame.
     static constexpr int kOutputs = 3;
     bool RenderFrameToOutput(const FrameCapture& frame, const RasterOptions& options, int slot,
                              GpuOutput& out, GpuStats& stats);
+    // Whether the GPU has finished the frame RenderFrameToOutput last drew
+    // into `slot`: never waits (SDL_gpu's own wait has no timeout, and the
+    // caller watches for a GPU that never finishes), so the caller polls it.
+    // True with no frame in flight there, or no device.
+    bool OutputDone(int slot);
     // reads output `slot` back as RenderFrame's rgba, at its size; false if
     // it has no picture (or no device)
     bool DownloadOutput(int slot, std::vector<uint32_t>& rgba, uint32_t& width,

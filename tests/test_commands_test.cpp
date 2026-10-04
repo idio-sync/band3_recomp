@@ -63,6 +63,7 @@ public:
     int64_t capture_proc_cmds = 2;
     bool capture_fell_back = false;
     std::string capture_emulated = "full";
+    uint64_t capture_passes_dropped = 0;
     NativeViewStats view;
     PresentStats present;
     int present_resets = 0;
@@ -119,6 +120,7 @@ public:
         out.composed = capture_composed;
         out.held_fallback = capture_fell_back;
         out.emulated = capture_emulated;
+        out.emulated_passes_dropped = capture_passes_dropped;
         out.game_frame = 2401;
         out.world_frame = 2400;
         if (gpu_works) {
@@ -556,6 +558,10 @@ TEST_CASE("capture says when the emulated GPU's picture of the frame is stale") 
     const std::string reply = RunCommand("capture", game);
     CHECK(Ok(reply));
     CHECK(Has(reply, "\"held_fallback\":false,\"emulated\":\"stale\""));
+    CHECK(Has(reply, "\"emulated\":\"stale\",\"emulated_passes_dropped\":0"));
+    // swap_only skipped passes RB3 draws once: the screenshot may lack them
+    game.capture_passes_dropped = 7;
+    CHECK(Has(RunCommand("capture", game), "\"emulated_passes_dropped\":7"));
 }
 
 TEST_CASE("capture with composed fails unless the capture is a composed post frame") {
@@ -661,6 +667,7 @@ TEST_CASE("native_view stats reports what the live view drew and how long it too
     // 1 to 20 ms: the median is 10, the 95th percentile 19
     for (int ms = 20; ms >= 1; ms--) game.view.frame_ms.push_back(ms);
     game.view.wait_ms.assign(20, 1.5);
+    game.view.in_flight_max = 2;
     game.view.rt_on = true;
     game.view.rt_passes = 1200;
     game.view.rt_recorded = 3;
@@ -671,7 +678,8 @@ TEST_CASE("native_view stats reports what the live view drew and how long it too
     CHECK(Has(reply, "\"seconds\":40.0,\"game_frames\":2392,\"game_fps\":59.8"));
     CHECK(Has(reply, "\"captured\":2392,\"rendered\":20,\"skipped_busy\":2372,\"worldless\":1"));
     CHECK(Has(reply, "\"ms\":{\"mean\":10.50,\"p50\":10.00,\"p95\":19.00,\"max\":20.00}"));
-    CHECK(Has(reply, "\"wait_ms\":{\"mean\":1.50,\"p50\":1.50,\"p95\":1.50,\"max\":1.50}"));
+    CHECK(Has(reply, "\"wait_ms\":{\"mean\":1.50,\"p50\":1.50,\"p95\":1.50,\"max\":1.50},"
+                     "\"in_flight_max\":2"));
     CHECK(Has(reply, "\"rt_recording\":{\"on\":true,\"passes\":1200,\"recorded\":3,\"draws\":11,\"ms\":0.25}"));
 }
 
@@ -706,31 +714,49 @@ TEST_CASE("native_view stats reports what capture cost the game's thread per fra
 TEST_CASE("native_view stats reports what the emulated GPU was sent per frame") {
     FakeGame game;
     NativeViewStats::EmulatedGpu& e = game.view.emulated_gpu;
+    e.mode = "skip_draws";
     e.skip_mode = true;
     e.skipping = true;
     e.fresh = false;
     e.frames = 200;
     e.frames_skipped = 198;
-    e.emitted = {{"begin_indexed", 5400}, {"indexed", 300}, {"instanced", 0}, {"up", 2000}};
-    e.skipped = {{"begin_indexed", 0}, {"indexed", 80000}, {"instanced", 4000}, {"up", 6000}};
+    e.emitted = {{"begin_indexed", 5400}, {"indexed", 300}, {"instanced", 0}, {"up", 2000},
+                 {"clear", 1000}, {"resolve", 600}};
+    e.skipped = {{"begin_indexed", 0}, {"indexed", 80000}, {"instanced", 4000}, {"up", 6000},
+                 {"clear", 0}, {"resolve", 0}};
     e.kept_pass = 300;
     e.kept_point_tests = 1800;
+    e.cp_ms = 50;
     const std::string reply = RunCommand("native_view stats", game);
     CHECK(Ok(reply));
-    CHECK(Has(reply, "\"emulated_gpu\":{\"skip_mode\":true,\"skipping\":true,\"fresh\":false,"
+    CHECK(Has(reply, "\"emulated_gpu\":{\"mode\":\"skip_draws\",\"skip_mode\":true,"
+                     "\"skipping\":true,\"fresh\":false,"
                      "\"frames\":200,\"frames_skipped\":198,"
                      "\"emitted_per_frame\":{\"begin_indexed\":27.0,\"indexed\":1.5,"
-                     "\"instanced\":0.0,\"up\":10.0},"
+                     "\"instanced\":0.0,\"up\":10.0,\"clear\":5.0,\"resolve\":3.0},"
                      "\"skipped_per_frame\":{\"begin_indexed\":0.0,\"indexed\":400.0,"
-                     "\"instanced\":20.0,\"up\":30.0},"
-                     "\"kept_per_frame\":{\"pass\":1.5,\"point_tests\":9.0}}"));
+                     "\"instanced\":20.0,\"up\":30.0,\"clear\":0.0,\"resolve\":0.0},"
+                     "\"kept_per_frame\":{\"pass\":1.5,\"point_tests\":9.0},"
+                     "\"passes_dropped\":0,\"cp_ms_per_frame\":0.250}"));
 
-    // no frames: zeros, not a division by zero
+    // swap_only: the passes it dropped, a count rather than per frame
+    e.mode = "swap_only";
+    e.passes_dropped = 12;
+    CHECK(Has(RunCommand("native_view stats", game),
+              "\"emulated_gpu\":{\"mode\":\"swap_only\",\"skip_mode\":true,"));
+    CHECK(Has(RunCommand("native_view stats", game), "\"passes_dropped\":12,"));
+
+    // no frames: zeros, not a division by zero; the CP's time unknown is -1
     game.view.emulated_gpu = NativeViewStats::EmulatedGpu{};
     game.view.emulated_gpu.emitted = {{"indexed", 7}};
-    CHECK(Has(RunCommand("native_view stats", game),
-              "\"emulated_gpu\":{\"skip_mode\":false,\"skipping\":false,\"fresh\":true,"
-              "\"frames\":0,\"frames_skipped\":0,\"emitted_per_frame\":{\"indexed\":0.0}"));
+    const std::string none = RunCommand("native_view stats", game);
+    CHECK(Has(none, "\"emulated_gpu\":{\"mode\":\"full\",\"skip_mode\":false,\"skipping\":false,"
+                    "\"fresh\":true,\"frames\":0,\"frames_skipped\":0,"
+                    "\"emitted_per_frame\":{\"indexed\":0.0}"));
+    CHECK(Has(none, "\"cp_ms_per_frame\":-1.000}"));
+    // known but no frames: 0
+    game.view.emulated_gpu.cp_ms = 3;
+    CHECK(Has(RunCommand("native_view stats", game), "\"cp_ms_per_frame\":0.000}"));
 }
 
 TEST_CASE("native_view off reports the run it ends, then measures the game without it") {
@@ -988,6 +1014,8 @@ TEST_CASE("present_stats reports the window's paints, the native frames and the 
     game.present.latency_ms = {20.0, 30.0};
     game.present.game_frames = 1196;
     game.present.game_ms.assign(20, 16.7);
+    game.present.cap = {.mode = "display", .hz = 119.88, .late = 4, .resets = 1,
+                        .wait_ms = 2.5, .spin_ms = 0.4};
     std::string reply = RunCommand("present_stats", game);
     CHECK(Ok(reply));
     CHECK(Has(reply, "\"renderer\":\"native\",\"path\":\"zero-copy\""));
@@ -997,7 +1025,8 @@ TEST_CASE("present_stats reports the window's paints, the native frames and the 
     CHECK(Has(reply, "\"native\":{\"paints\":1200,\"shown\":1190,\"repeats\":10,\"skipped\":3"));
     CHECK(Has(reply, "\"latency_ms\":{\"mean\":25.00,\"p50\":20.00,\"p95\":30.00"));
     CHECK(Has(reply, "\"game\":{\"frames\":1196,\"fps\":59.8"));
-    CHECK(Has(reply, "\"hitches\":0}}"));
+    CHECK(Has(reply, "\"hitches\":0,\"cap\":{\"mode\":\"display\",\"hz\":119.88,\"late\":4,"
+                     "\"resets\":1,\"wait_ms\":2.500,\"spin_ms\":0.400}}}"));
     CHECK(game.present_resets == 0);
 
     // reset replies with the stretch it ends, then starts over

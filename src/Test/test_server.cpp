@@ -9,6 +9,8 @@
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <tlhelp32.h>
+#include <cwchar>
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -42,6 +44,7 @@
 #include <rex/input/input_system.h>
 #include "src/Audio/usb_mic_capture.h"
 #include "src/Content/live_content.h"
+#include "src/Hooks/frame_pacing.h"
 #include "src/Input/input_lock.h"
 #include "src/Input/input_system.h"
 #include "src/Input/virtual_instrument.h"
@@ -72,6 +75,52 @@ using socket_t = int;
 constexpr socket_t kNoSocket = -1;
 void CloseSocket(socket_t s) { close(s); }
 #endif
+
+// The CPU time (kernel and user) the emulated GPU's command processor thread
+// has used, in milliseconds, or -1 where it can't be told: what the emulated
+// GPU still costs while the native renderer draws (native_view stats). The
+// SDK names the thread "GPU Commands"; it's looked for in a snapshot of the
+// process's threads until found, then only read, at each stats.
+double CpThreadMs() {
+#ifdef _WIN32
+    static std::mutex mutex;
+    static HANDLE thread = nullptr;
+    std::lock_guard lock(mutex);
+    if (!thread) {
+        using GetDescription = HRESULT(WINAPI*)(HANDLE, PWSTR*);
+        const auto get_description = reinterpret_cast<GetDescription>(reinterpret_cast<void*>(
+            GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetThreadDescription")));
+        HANDLE snap = get_description ? CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+                                      : INVALID_HANDLE_VALUE;
+        if (snap == INVALID_HANDLE_VALUE) return -1;
+        const DWORD pid = GetCurrentProcessId();
+        THREADENTRY32 te{};
+        te.dwSize = sizeof(te);
+        for (BOOL ok = Thread32First(snap, &te); ok && !thread; ok = Thread32Next(snap, &te)) {
+            if (te.th32OwnerProcessID != pid) continue;
+            HANDLE h = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, te.th32ThreadID);
+            if (!h) continue;
+            PWSTR name = nullptr;
+            if (SUCCEEDED(get_description(h, &name)) && name) {
+                if (std::wcsstr(name, L"GPU Commands")) thread = h;
+                LocalFree(name);
+            }
+            if (thread != h) CloseHandle(h);
+        }
+        CloseHandle(snap);
+        if (!thread) return -1;
+    }
+    FILETIME created, exited, kernel, user;
+    if (!GetThreadTimes(thread, &created, &exited, &kernel, &user)) return -1;
+    auto ticks = [](const FILETIME& f) {
+        return (uint64_t(f.dwHighDateTime) << 32) | f.dwLowDateTime;
+    };
+    // 100 ns ticks
+    return double(ticks(kernel) + ticks(user)) / 1e4;
+#else
+    return -1;
+#endif
+}
 
 // how often the server thread looks up from its sockets to see if it should stop
 constexpr std::chrono::milliseconds kStopCheck{200};
@@ -134,8 +183,9 @@ public:
                             (source == ScreenshotSource::kWindow && render::NativePresenting());
         if (!native && !render::EmulatedPictureFresh()) {
             return "the emulated GPU's picture is stale: it skips the game's draws while the "
-                   "native renderer draws the window (emulated_gpu_while_native skip_draws). "
-                   "`capture` has it draw whole frames first; or set emulated_gpu_while_native "
+                   "native renderer draws the window (emulated_gpu_while_native skip_draws or "
+                   "swap_only). `capture` has it draw whole frames first (under swap_only, "
+                   "what RB3 drew once may still be black); or set emulated_gpu_while_native "
                    "full";
         }
         return Shot(name, native, out);
@@ -231,6 +281,7 @@ public:
             std::chrono::milliseconds(150), &out.held_fallback);
         if (!frame) return "the game didn't finish a frame to capture in 5 s";
         if (!shot_error.empty()) return shot_error;
+        out.emulated_passes_dropped = render::GetGpuSkipStats().passes_dropped;
         const std::filesystem::path path =
             rex::filesystem::GetExecutableFolder() / "screenshots" / (file + ".cap");
         if (!render::SaveCapture(path.string(), *frame)) return "couldn't write " + path.string();
@@ -374,6 +425,7 @@ public:
             out.worldless = live.worldless;
             out.frame_ms = std::move(live.ms);
             out.wait_ms = std::move(live.wait_ms);
+            out.in_flight_max = live.in_flight_max;
         }
         const render::PassRecordingStats rec = render::GetPassRecordingStats();
         const render::CaptureProfile profile = render::GetCaptureProfile();
@@ -388,6 +440,8 @@ public:
         out.capture = CaptureCost(render::CaptureProfileSince(profile, measure_profile_));
         out.emulated_gpu =
             EmulatedGpu(render::GpuSkipStatsSince(render::GetGpuSkipStats(), measure_gpu_));
+        const double cp_ms = CpThreadMs();
+        out.emulated_gpu.cp_ms = cp_ms >= 0 && measure_cp_ms_ >= 0 ? cp_ms - measure_cp_ms_ : -1;
         return out;
     }
 
@@ -412,6 +466,18 @@ public:
         for (size_t i = 1; i < presents.size(); i++)
             out.game_ms.push_back(
                 std::chrono::duration<double, std::milli>(presents[i] - presents[i - 1]).count());
+        // the cap's since present_stats last started over (or since startup)
+        const pacing::FrameCapStats cap = pacing::GetFrameCapStats();
+        std::lock_guard lock(measure_mutex_);
+        const pacing::FrameCapStats& from = present_cap_;
+        const uint64_t frames = cap.frames - from.frames;
+        out.cap.mode = pacing::FrameCapModeName(cap.mode);
+        out.cap.hz = cap.hz;
+        out.cap.late = cap.late - from.late;
+        out.cap.resets = cap.resets - from.resets;
+        out.cap.wait_ms = frames ? (cap.wait_ms - from.wait_ms) / double(frames) : 0;
+        out.cap.spin_ms = frames ? (cap.spin_ms - from.spin_ms) / double(frames) : 0;
+        if (reset) present_cap_ = cap;
         return out;
     }
 
@@ -548,18 +614,21 @@ private:
         const render::PassRecordingStats rec = render::GetPassRecordingStats();
         const render::CaptureProfile profile = render::GetCaptureProfile();
         const render::GpuSkipStats gpu = render::GetGpuSkipStats();
+        const double cp_ms = CpThreadMs();
         std::lock_guard lock(measure_mutex_);
         measure_start_ = Clock::now();
         measure_frame_ = frame;
         measure_rec_ = rec;
         measure_profile_ = profile;
         measure_gpu_ = gpu;
+        measure_cp_ms_ = cp_ms;
     }
 
     // what the emulated GPU was sent, as native_view stats reports it
     static NativeViewStats::EmulatedGpu EmulatedGpu(const render::GpuSkipStats& g) {
         using G = render::GpuSkipStats;
         NativeViewStats::EmulatedGpu e;
+        e.mode = render::SkipLevelName(g.level);
         e.skip_mode = g.skip_mode;
         e.skipping = g.skipping;
         e.fresh = g.fresh;
@@ -571,6 +640,7 @@ private:
         }
         e.kept_pass = g.kept_pass;
         e.kept_point_tests = g.kept_point_tests;
+        e.passes_dropped = g.passes_dropped;
         return e;
     }
 
@@ -610,6 +680,9 @@ private:
     render::PassRecordingStats measure_rec_;
     render::CaptureProfile measure_profile_;
     render::GpuSkipStats measure_gpu_;
+    double measure_cp_ms_ = -1;  // CpThreadMs
+    // the frame cap's totals when present_stats last started over
+    pacing::FrameCapStats present_cap_;
 };
 
 bool SendAll(socket_t s, const std::string& data) {

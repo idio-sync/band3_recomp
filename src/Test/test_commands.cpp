@@ -447,6 +447,7 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
     fields += std::string(",\"held_fallback\":") + (info.held_fallback ? "true" : "false");
     fields += ",\"emulated\":";
     AppendJsonString(fields, info.emulated);
+    fields += ",\"emulated_passes_dropped\":" + std::to_string(info.emulated_passes_dropped);
     if (want_composed && !(info.composed && info.proc_cmds == 2)) {
         return Error(target, "capture " + name + " isn't a post frame composed with the world "
                                  "before it: proc_cmds " + std::to_string(info.proc_cmds) +
@@ -526,7 +527,15 @@ std::string PresentJson(const PresentStats& s) {
                   seconds > 0 ? double(s.game_frames) / seconds : 0.0);
     out += buf;
     out += ",\"ms\":" + Distribution(s.game_ms);
-    out += ",\"hitches\":" + std::to_string(Hitches(s.game_ms)) + "}}";
+    out += ",\"hitches\":" + std::to_string(Hitches(s.game_ms));
+    out += ",\"cap\":{\"mode\":";
+    AppendJsonString(out, s.cap.mode);
+    char cap[192];
+    std::snprintf(cap, sizeof(cap),
+                  ",\"hz\":%.2f,\"late\":%llu,\"resets\":%llu,\"wait_ms\":%.3f,\"spin_ms\":%.3f}}}",
+                  s.cap.hz, static_cast<unsigned long long>(s.cap.late),
+                  static_cast<unsigned long long>(s.cap.resets), s.cap.wait_ms, s.cap.spin_ms);
+    out += cap;
     return out;
 }
 
@@ -582,12 +591,15 @@ std::string CaptureCostJson(const NativeViewStats::Capture& c) {
 }
 
 // native_view stats' `emulated_gpu`: what the emulated GPU was sent, the
-// draws per game frame (0 with no frames)
+// calls per game frame (0 with no frames), and its command processor's CPU
+// milliseconds per frame (-1 unknown)
 std::string EmulatedGpuJson(const NativeViewStats::EmulatedGpu& e) {
     const double frames = double(e.frames);
     auto per_frame = [&](uint64_t v) { return frames > 0 ? double(v) / frames : 0.0; };
     char buf[96];
-    std::string out = "{\"skip_mode\":";
+    std::string out = "{\"mode\":";
+    AppendJsonString(out, e.mode);
+    out += ",\"skip_mode\":";
     out += e.skip_mode ? "true" : "false";
     out += ",\"skipping\":";
     out += e.skipping ? "true" : "false";
@@ -604,8 +616,12 @@ std::string EmulatedGpuJson(const NativeViewStats::EmulatedGpu& e) {
         }
         out += "}";
     }
-    std::snprintf(buf, sizeof(buf), ",\"kept_per_frame\":{\"pass\":%.1f,\"point_tests\":%.1f}}",
+    std::snprintf(buf, sizeof(buf), ",\"kept_per_frame\":{\"pass\":%.1f,\"point_tests\":%.1f}",
                   per_frame(e.kept_pass), per_frame(e.kept_point_tests));
+    out += buf;
+    out += ",\"passes_dropped\":" + std::to_string(e.passes_dropped);
+    const double cp = e.cp_ms < 0 ? -1.0 : frames > 0 ? e.cp_ms / frames : 0.0;
+    std::snprintf(buf, sizeof(buf), ",\"cp_ms_per_frame\":%.3f}", cp);
     out += buf;
     return out;
 }
@@ -630,6 +646,7 @@ std::string NativeViewJson(const NativeViewStats& s) {
     out += ",\"worldless\":" + std::to_string(s.worldless);
     out += ",\"ms\":" + Distribution(s.frame_ms);
     out += ",\"wait_ms\":" + Distribution(s.wait_ms);
+    out += ",\"in_flight_max\":" + std::to_string(s.in_flight_max);
     std::snprintf(buf, sizeof(buf),
                   ",\"rt_recording\":{\"on\":%s,\"passes\":%llu,\"recorded\":%llu,",
                   s.rt_on ? "true" : "false", static_cast<unsigned long long>(s.rt_passes),

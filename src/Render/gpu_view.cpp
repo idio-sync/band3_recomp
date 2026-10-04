@@ -471,12 +471,14 @@ struct GpuRenderer::Impl {
     // another size (a capture's) leaves them be. COLOR_TARGET and SAMPLER,
     // which SDL leaves in ALL_SHADER_RESOURCE after its passes, so the SDK's
     // command list samples one without a barrier. Never cycled: SDL's texture
-    // behind each stays the one that was checked.
+    // behind each stays the one that was checked. `fence` is the submission
+    // of the frame last drawn into it until OutputDone finds it signalled.
     struct Output {
         SDL_GPUTexture* texture = nullptr;
         uint32_t w = 0, h = 0;
         uint64_t generation = 0;
         void* resource = nullptr;  // its ID3D12Resource, if it can be sampled in place
+        SDL_GPUFence* fence = nullptr;
     };
     Output outputs[kOutputs];
     uint64_t output_generations = 0;
@@ -712,6 +714,9 @@ struct GpuRenderer::Impl {
     // false if it couldn't be
     bool EnsureOutput(int slot, uint32_t w, uint32_t h);
     void ReleaseOutputs();
+    // lets go of `out`'s fence, signalled or not (SDL's own reference keeps
+    // it until its submission is done)
+    void ReleaseFence(Output& out);
     // the ID3D12Resource behind `texture`, made with `info`, if the SDK's
     // presenter can sample it in place; null, and why not, otherwise
     void* SdkResource(SDL_GPUTexture* texture, const SDL_GPUTextureCreateInfo& info,
@@ -1498,9 +1503,12 @@ bool GpuRenderer::Impl::PlaceInArena() {
             indices += IndexSlots(*m.keep);
             ++it;
         }
-        // everything in it is sent again this frame, so a bigger buffer can
-        // start empty
+        // everything in it is sent again this frame, so it starts empty in
+        // a new buffer: the frame before, which the GPU may still be
+        // drawing, reads the old one, which SDL keeps until it's done
         arena_vert_count = arena_index_count = 0;
+        ReleaseBuffer(arena_verts);
+        ReleaseBuffer(arena_indices);
         if (!Reserve(arena_verts, SDL_GPU_BUFFERUSAGE_VERTEX,
                      std::max<uint32_t>(verts * sizeof(Vertex), kMinArenaBytes)) ||
             !Reserve(arena_indices, SDL_GPU_BUFFERUSAGE_INDEX,
@@ -1960,6 +1968,7 @@ bool GpuRenderer::Impl::EnsureOutput(int slot, uint32_t w, uint32_t h) {
     // Direct3D 12 texture itself for as long as its paints need it, and
     // native_view.cpp only has a slot drawn again once they're done with it
     if (out.texture) SDL_ReleaseGPUTexture(device, out.texture);
+    ReleaseFence(out);
     out = Output{};
     const SDL_GPUTextureCreateInfo ti = OutputInfo(w, h);
     out.texture = SDL_CreateGPUTexture(device, &ti);
@@ -1979,10 +1988,17 @@ bool GpuRenderer::Impl::EnsureOutput(int slot, uint32_t w, uint32_t h) {
     return true;
 }
 
+void GpuRenderer::Impl::ReleaseFence(Output& out) {
+    if (device && out.fence) SDL_ReleaseGPUFence(device, out.fence);
+    out.fence = nullptr;
+}
+
 void GpuRenderer::Impl::ReleaseOutputs() {
     if (device) {
-        for (Output& out : outputs)
+        for (Output& out : outputs) {
+            ReleaseFence(out);
             if (out.texture) SDL_ReleaseGPUTexture(device, out.texture);
+        }
         if (output_readback) SDL_ReleaseGPUTransferBuffer(device, output_readback);
     }
     for (Output& out : outputs) out = Output{};
@@ -2430,17 +2446,27 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             }
             SDL_ReleaseGPUTexture(device, c.from);
         }
-        // nothing here cycles: Render waits out each frame, so none is still
-        // drawing from these (the pools alternate for the copies to the
-        // arena, which read the last frame's)
-        auto send = [&](uint32_t from, const Buffer& to, uint32_t offset, uint32_t size) {
+        // The frame before may still be drawing as this one is sent
+        // (RenderFrameToOutput doesn't wait for it). The pools and the
+        // bones, which each frame fills from the start, cycle: a buffer the
+        // GPU still reads is left to it and SDL gives this frame another
+        // (the copies to the arena read the last frame's pool, the one it
+        // filled). The arena is appended to, into space no frame drew from
+        // since it was last rebuilt (in a new buffer, PlaceInArena), and a
+        // texture goes into a new layer or one Evict let go, which the
+        // frames still drawing don't sample but where a world pass before
+        // this frame (pre_pass) let go of the frame before's own textures;
+        // there, as with the targets every frame draws over, SDL's barriers
+        // hold this frame's copy on its queue until those reads are done.
+        auto send = [&](uint32_t from, const Buffer& to, uint32_t offset, uint32_t size,
+                        bool cycle) {
             if (!size) return;
             SDL_GPUTransferBufferLocation src{upload, from};
             SDL_GPUBufferRegion dst{to.buffer, offset, size};
-            SDL_UploadToGPUBuffer(copy, &src, &dst, false);
+            SDL_UploadToGPUBuffer(copy, &src, &dst, cycle);
         };
-        send(0, pool_v, 0, pool_vert_count * uint32_t(sizeof(Vertex)));
-        send(pool_index_at, pool_i, 0, pool_index_count * 2);
+        send(0, pool_v, 0, pool_vert_count * uint32_t(sizeof(Vertex)), true);
+        send(pool_index_at, pool_i, 0, pool_index_count * 2, true);
         uint32_t mesh_at = arena_at;
         for (const Mesh* m : to_arena) {
             const Geometry& g = *m->keep;
@@ -2458,12 +2484,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 SDL_CopyGPUBufferToBuffer(copy, &src, &dst, isize, false);
                 continue;
             }
-            send(mesh_at, arena_verts, vto, vsize);
+            send(mesh_at, arena_verts, vto, vsize, false);
             mesh_at = Align(mesh_at + vsize, 16);
-            send(mesh_at, arena_indices, ito, isize);
+            send(mesh_at, arena_indices, ito, isize, false);
             mesh_at = Align(mesh_at + isize, 16);
         }
-        send(bones_at, bones, 0, bone_bytes);
+        send(bones_at, bones, 0, bone_bytes, true);
         uint32_t tex_at = textures_at;
         for (const Tex* tx : new_textures) {
             const Texture& t = *tx->keep;
@@ -3411,6 +3437,31 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         draw_log_frame = frame_label;
         draw_log = std::move(indexed_draws);
     }
+    // A world pass before the frame (pre_pass) and the presenter's frame
+    // aren't waited for: what comes after them on SDL's one queue (this
+    // frame's passes, RenderFrame's wait, the next frame) goes after them on
+    // the GPU too, and the presenter's caller waits for its output's fence
+    // (OutputDone) before the presenter's queue may sample it. RenderFrame
+    // waits here, for the picture to read back.
+    if (pre_pass || (slot >= 0 && !rgba)) {
+        bool submitted;
+        if (pre_pass) {
+            submitted = SDL_SubmitGPUCommandBuffer(cmd);
+        } else {
+            SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+            submitted = fence != nullptr;
+            if (fence) {
+                ReleaseFence(outputs[slot]);
+                outputs[slot].fence = fence;
+            }
+        }
+        if (!submitted) {
+            REXLOG_WARN("native view gpu: the frame didn't submit ({})", SDL_GetError());
+            return false;
+        }
+        Evict();
+        return true;
+    }
     const auto submitted = std::chrono::steady_clock::now();
     SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
     if (!fence) {
@@ -3536,6 +3587,16 @@ bool GpuRenderer::RenderFrameToOutput(const FrameCapture& frame, const RasterOpt
     out.width = o.w;
     out.height = o.h;
     out.generation = o.generation;
+    return true;
+}
+
+bool GpuRenderer::OutputDone(int slot) {
+    if (slot < 0 || slot >= kOutputs) return true;
+    std::lock_guard lock(impl_->mutex);
+    Impl::Output& o = impl_->outputs[slot];
+    if (!impl_->device || !o.fence) return true;
+    if (!SDL_QueryGPUFence(impl_->device, o.fence)) return false;
+    impl_->ReleaseFence(o);
     return true;
 }
 

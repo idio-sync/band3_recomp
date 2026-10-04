@@ -141,6 +141,83 @@ TEST_CASE("after the presenter stops, slots the GPU may still read stay taken") 
     CHECK(s.Acquire() == a);
 }
 
+TEST_CASE("a slot submitted to the GPU is never handed out or published before it finishes") {
+    PresentSlots s;
+    const int a = s.Acquire();
+    REQUIRE(a >= 0);
+    s.Submitted(a);
+    CHECK(s.InFlight() == 1);
+    // the worker records the next frame meanwhile, into another slot
+    const int b = s.Acquire();
+    REQUIRE(b >= 0);
+    CHECK(b != a);
+    s.Submitted(b);
+    CHECK(s.InFlight() == 2);
+    // not finished: not published, and still taken
+    CHECK_FALSE(s.Publish(a));
+    CHECK(s.Newest() == -1);
+    CHECK(s.Serial() == 0);
+    const int c = s.Acquire();
+    REQUIRE(c >= 0);
+    CHECK(c != a);
+    CHECK(c != b);
+    CHECK(s.Acquire() == -1);
+    s.Abandon(c);
+    // finished: published as any other
+    s.Finished(a);
+    CHECK(s.InFlight() == 1);
+    CHECK(s.Publish(a));
+    CHECK(s.Newest() == a);
+    CHECK(s.Serial() == 1);
+    // a slot submitted for a stretch that has ended is still not published,
+    // and once finished it's free again as before
+    const uint64_t stretch = s.Generation();
+    s.Forget();
+    CHECK_FALSE(s.Publish(b, stretch));
+    s.Finished(b);
+    CHECK_FALSE(s.Publish(b, stretch));
+    CHECK(s.Newest() == -1);
+    CHECK(s.InFlight() == 0);
+    CHECK(s.Acquire() >= 0);
+}
+
+TEST_CASE("a refused unfinished slot stays taken until the GPU finishes it") {
+    PresentSlots s;
+    const int a = s.Acquire();
+    REQUIRE(a >= 0);
+    CHECK_FALSE(s.Unfinished(a));
+    s.Submitted(a);
+    CHECK(s.Unfinished(a));
+    // refused, for being unfinished rather than for its stretch: the worker
+    // tells them apart by Unfinished and leaves this one be, so no other
+    // frame is drawn into it while the GPU still writes it
+    CHECK_FALSE(s.Publish(a));
+    CHECK(s.Unfinished(a));
+    for (int i = 0; i < PresentSlots::kCount; i++) CHECK(s.Acquire() != a);
+    s.Finished(a);
+    CHECK_FALSE(s.Unfinished(a));
+    CHECK(s.Publish(a));
+    CHECK_FALSE(s.Unfinished(-1));
+    CHECK_FALSE(s.Unfinished(PresentSlots::kCount));
+}
+
+TEST_CASE("an abandoned submitted slot is free again, and Submitted needs a slot being drawn") {
+    PresentSlots s;
+    const int a = s.Acquire();
+    s.Submitted(a);
+    s.Abandon(a);
+    CHECK(s.InFlight() == 0);
+    // free again, and drawn and published as any other
+    CHECK(s.Acquire() == a);
+    CHECK(s.Publish(a));
+    // the newest isn't being drawn: Submitted leaves it be
+    s.Submitted(a);
+    CHECK(s.InFlight() == 0);
+    s.Submitted(-1);
+    s.Finished(PresentSlots::kCount);
+    CHECK(s.InFlight() == 0);
+}
+
 namespace {
 constexpr int64_t kMs = 1000000;  // a millisecond in nanoseconds
 }
@@ -247,6 +324,72 @@ TEST_CASE("the pacer never holds a frame past the game's next one, and lets a hi
     // a reset starts over: a frame on its own goes when drawn
     p.Reset();
     CHECK(p.Due(1, kFrame, kFrame + 2 * kMs) == kFrame + 2 * kMs);
+}
+
+TEST_CASE("at 120 Hz, pipelined frames go out a frame apart and never past the next frame") {
+    // The worker learns its frame is done when a poll of its fence finds it
+    // (native_view.cpp's kFencePoll), up to a millisecond after the GPU
+    // finished, so each frame's own time has that much jitter on top of
+    // even/odd rendering's: post frames 5.5 ms to recording and the GPU's
+    // end, world frames 1.5.
+    PublishPacer p;
+    constexpr int64_t kFrame = 8333333;
+    uint32_t seed = 12345;
+    auto jitter = [&seed] {
+        seed = seed * 1664525u + 1013904223u;
+        return int64_t(seed >> 8) % kMs;
+    };
+    int64_t last_publish = 0;
+    std::vector<int64_t> gaps;
+    for (uint64_t f = 1; f <= 120; f++) {
+        const int64_t presented = int64_t(f) * kFrame;
+        const int64_t own = ((f % 2) ? 5500 * 1000 : 1500 * 1000) + jitter();
+        const int64_t due = p.Due(f, presented, presented + own);
+        CHECK(due >= presented + own);
+        // once the interval is measured: never held past the next frame
+        // less a millisecond
+        if (f > 40) CHECK(due - presented <= kFrame - kMs);
+        if (last_publish && f > 4) gaps.push_back(due - last_publish);
+        last_publish = due;
+    }
+    CHECK(double(p.IntervalNs()) == doctest::Approx(double(kFrame)).epsilon(0.001));
+    // no two publications in one frame's time: each a frame apart, give or
+    // take the poll's millisecond
+    for (int64_t g : gaps) {
+        CHECK(g >= kFrame - kMs);
+        CHECK(g <= kFrame + kMs);
+    }
+}
+
+TEST_CASE("at 120 Hz, a frame slower than the interval goes when done and holds no other") {
+    PublishPacer p;
+    constexpr int64_t kFrame = 8333333;
+    uint64_t f = 1;
+    // long enough for the interval measured to settle
+    for (; f <= 200; f++) {
+        const int64_t presented = int64_t(f) * kFrame;
+        p.Due(f, presented, presented + ((f % 2) ? 5 * kMs : 2 * kMs));
+    }
+    // a post frame the GPU took 12 ms over: published when it's done, and
+    // the frames after keep their steady delay (the second slowest counts)
+    int64_t presented = int64_t(f) * kFrame;
+    CHECK(p.Due(f, presented, presented + 12 * kMs) == presented + 12 * kMs);
+    f++;
+    presented = int64_t(f) * kFrame;
+    CHECK(p.Due(f, presented, presented + 2 * kMs) == presented + 5 * kMs);
+    // frames slower than the interval all along: held to the interval less
+    // a millisecond at most, so the next frame is drawn and published in its
+    // own interval
+    for (int i = 0; i < 8; i++, f++) {
+        presented = int64_t(f) * kFrame;
+        p.Due(f, presented, presented + 10 * kMs);
+    }
+    presented = int64_t(f) * kFrame;
+    // (the interval as measured, which settles within a few nanoseconds of
+    // the frames' 8333333)
+    const int64_t due = p.Due(f, presented, presented + 2 * kMs);
+    CHECK(due >= presented + kFrame - kMs);
+    CHECK(due <= presented + kFrame - kMs + 10);
 }
 
 TEST_CASE("paints are timed against the one before, whichever renderer drew them") {
@@ -426,4 +569,116 @@ TEST_CASE("a request while one runs keeps the larger") {
     CHECK(l.FullPending() == 3);
     l.EndFrame(true, 9);
     CHECK(l.FullPending() == 8);
+}
+
+// emulated_gpu_while_native swap_only: a level beyond skip_draws, latched the
+// same way
+
+TEST_CASE("swap_only takes effect at the next frame and goes stale like skip_draws") {
+    SkipLatch l;
+    CHECK(l.Level() == SkipLevel::kFull);
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kSwapOnly);
+    CHECK(l.Level() == SkipLevel::kSwapOnly);
+    CHECK(l.Skipping());
+    CHECK(l.Fresh());  // the frame swapped was whole
+    // a swap_only frame swapped: stale
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kSwapOnly);
+    CHECK_FALSE(l.Fresh());
+    CHECK(l.WholeFrames() == 0);
+}
+
+TEST_CASE("switching between skip_draws and swap_only keeps the picture stale") {
+    SkipLatch l;
+    l.EndFrame(SkipLevel::kSkipDraws, 0);
+    l.EndFrame(SkipLevel::kSkipDraws, 0);
+    CHECK_FALSE(l.Fresh());
+    // the frame being drawn stays at its level; the next one changes
+    CHECK(l.Level() == SkipLevel::kSkipDraws);
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kSwapOnly);
+    CHECK(l.WholeFrames() == 0);
+    CHECK_FALSE(l.Fresh());
+    CHECK(l.EndFrame(SkipLevel::kSkipDraws, 0) == SkipLevel::kSkipDraws);
+    CHECK(l.WholeFrames() == 0);
+    CHECK_FALSE(l.Fresh());
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kSwapOnly);
+    CHECK_FALSE(l.Fresh());
+    // full again: fresh after two whole frames, as from skip_draws
+    CHECK(l.EndFrame(SkipLevel::kFull, 0) == SkipLevel::kFull);
+    CHECK_FALSE(l.Fresh());
+    l.EndFrame(SkipLevel::kFull, 0);
+    CHECK_FALSE(l.Fresh());
+    l.EndFrame(SkipLevel::kFull, 0);
+    CHECK(l.Fresh());
+}
+
+TEST_CASE("whole frames asked for under swap_only are drawn, then swap_only goes on") {
+    SkipLatch l;
+    l.EndFrame(SkipLevel::kSwapOnly, 0);
+    l.EndFrame(SkipLevel::kSwapOnly, 0);
+    CHECK_FALSE(l.Fresh());
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 3) == SkipLevel::kFull);
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kFull);
+    CHECK_FALSE(l.Fresh());
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kFull);
+    CHECK(l.Fresh());  // two whole frames swapped: a capture can hold this one
+    CHECK(l.EndFrame(SkipLevel::kSwapOnly, 0) == SkipLevel::kSwapOnly);
+    CHECK(l.Fresh());
+    l.EndFrame(SkipLevel::kSwapOnly, 0);
+    CHECK_FALSE(l.Fresh());
+}
+
+TEST_CASE("the bool EndFrame is skip_draws") {
+    SkipLatch a, b;
+    for (bool want : {true, true, false, true, false, false, false}) {
+        const bool skipped = a.EndFrame(want, 0);
+        const SkipLevel level = b.EndFrame(want ? SkipLevel::kSkipDraws : SkipLevel::kFull, 0);
+        CHECK(skipped == (level != SkipLevel::kFull));
+        CHECK(a.Level() == level);
+        CHECK(a.Level() == (want ? SkipLevel::kSkipDraws : SkipLevel::kFull));
+        CHECK(a.Fresh() == b.Fresh());
+        CHECK(a.WholeFrames() == b.WholeFrames());
+    }
+}
+
+TEST_CASE("nothing is skipped unless renderer is native with the frame recorded") {
+    for (SkipLevel setting : {SkipLevel::kFull, SkipLevel::kSkipDraws, SkipLevel::kSwapOnly}) {
+        CAPTURE(int(setting));
+        CHECK(WantedLevel(true, setting, true, true) == setting);
+        // renderer emulated, capture off or texture passes not recorded: one
+        // of the three bits clear (7 is all set)
+        for (int on = 0; on < 7; on++) {
+            CHECK(WantedLevel((on & 1) != 0, setting, (on & 2) != 0, (on & 4) != 0) ==
+                  SkipLevel::kFull);
+        }
+    }
+}
+
+TEST_CASE("which emitters write their packets at each level") {
+    using G = GpuSkipStats;
+    for (int kind = 0; kind < G::kNumKinds; kind++) {
+        for (int flags = 0; flags < 4; flags++) {
+            const bool pass = flags & 1, point_tests = flags & 2;
+            CAPTURE(G::kKindNames[kind]);
+            CAPTURE(pass);
+            CAPTURE(point_tests);
+            // full: everything
+            CHECK(EmitDraw(SkipLevel::kFull, kind, pass, point_tests));
+            // swap_only: only BeginIndexedVertices, whose caller writes
+            // through what it returns
+            CHECK(EmitDraw(SkipLevel::kSwapOnly, kind, pass, point_tests) ==
+                  (kind == G::kBeginIndexed));
+            // skip_draws: clears and resolves too, and the draws a one-shot
+            // pass wants or the flares' occlusion tests make (quads only)
+            bool skip_draws = false;
+            switch (kind) {
+                case G::kBeginIndexed:
+                case G::kClear:
+                case G::kResolve: skip_draws = true; break;
+                case G::kIndexed:
+                case G::kInstanced: skip_draws = pass; break;
+                case G::kUp: skip_draws = pass || point_tests; break;
+            }
+            CHECK(EmitDraw(SkipLevel::kSkipDraws, kind, pass, point_tests) == skip_draws);
+        }
+    }
 }

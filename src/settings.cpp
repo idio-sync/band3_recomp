@@ -1,5 +1,6 @@
 #include "settings.h"
 #include "renderer_default.h"
+#include "Hooks/frame_pacing.h"
 #include <atomic>
 #include <mutex>
 #include <string_view>
@@ -208,6 +209,18 @@ REXCVAR_DEFINE_INT32(background_fps, 0, "Band3/Graphics",
     "counts it as if the game ran at 60, so at refresh_rate 120 a venue's 30 drew at 60")
     .range(0, 240);
 
+// src/Hooks/frame_pacing.h says what the cap does in place of the vblank
+REXCVAR_DEFINE_STRING(frame_cap, "off", "Band3/Graphics",
+    "What paces the game's frames. display: the display's refresh rate exactly "
+    "(119.88 Hz, not 120), for fixed-refresh displays. auto: a little under it (5% less, at "
+    "least 4 fps), for VRR displays (G-Sync, FreeSync), keeping each frame inside their range; "
+    "on a fixed-refresh display a cap under the refresh rate shows a frame twice every "
+    "1/(refresh - cap) seconds. A number of Hz (24 to 240), e.g. 117. off: the emulated "
+    "console's vertical blank, paced by vsync and refresh_rate (the default). With the cap on, "
+    "vsync is turned off and an unset refresh_rate follows the cap. Without a display whose "
+    "rate can be told, display and auto are off")
+    .validator([](std::string_view v) { return band3::pacing::ParseFrameCap(v).has_value(); });
+
 // native on Windows, emulated elsewhere: renderer_default.h says why it's
 // chosen at build time
 REXCVAR_DEFINE_STRING(renderer, band3::settings::kDefaultRenderer, "Band3/Graphics",
@@ -229,8 +242,11 @@ REXCVAR_DEFINE_STRING(emulated_gpu_while_native, "skip_draws", "Band3/Graphics",
     "With renderer = native, what the emulated GPU still does: skip_draws leaves out the "
     "game's draws nobody sees (the native renderer draws them), keeping what RB3 draws once "
     "(outfits) so F8 back shows the game's picture; full draws everything, as with "
-    "renderer = emulated")
-    .allowed({"full", "skip_draws"});
+    "renderer = emulated. swap_only also skips clears, resolves, the flares' occlusion-test "
+    "quads and the passes RB3 draws once, leaving only what the game waits on: a test and "
+    "performance mode, after which F8 back to emulated may show black outfits, portraits "
+    "and other stale pictures until RB3 draws them again")
+    .allowed({"full", "skip_draws", "swap_only"});
 
 // Band3/Integrations
 
@@ -405,6 +421,12 @@ REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Debug",
     "presented it (about the slowest recent frame's), so frames that draw quickly (with "
     "even/odd rendering, every other one) don't reach a paint together with the one before; "
     "off publishes each as soon as it's drawn, to compare");
+
+REXCVAR_DEFINE_BOOL(native_present_pipeline, false, "Band3/Debug",
+    "With renderer = native on the zero-copy path, record the next frame while the GPU draws "
+    "the one before, waiting for the GPU only to hand a frame to the window, so a frame costs "
+    "the longer of its CPU and GPU time rather than both (for 120 Hz); off waits for each "
+    "frame right after sending it. Off until it has been checked in game");
 
 REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Debug",
     "Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, "
