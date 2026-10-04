@@ -395,6 +395,11 @@ REXCVAR_DEFINE_BOOL(native_present_zero_copy, true, "Band3/Debug",
     "when band3's renderer shares the game's device); off reads each frame back and uploads "
     "it, the way other platforms do, to compare");
 
+REXCVAR_DEFINE_BOOL(dred, false, "Band3/Debug",
+    "Turn on Direct3D 12's Device Removed Extended Data at startup (Windows): if the GPU "
+    "hangs, the crash trace says which command list and op it stopped at. Costs the GPU a "
+    "small write per op; the test harness (band3ctl launch) turns it on");
+
 REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Debug",
     "With renderer = native, publish each frame to the window a steady delay after the game "
     "presented it (about the slowest recent frame's), so frames that draw quickly (with "

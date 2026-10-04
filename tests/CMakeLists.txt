@@ -54,6 +54,7 @@ add_executable(band3_tests
     device_lists_test.cpp
     input_backend_test.cpp
     device_view_test.cpp
+    dred_report_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp

@@ -93,6 +93,7 @@ REXCVAR_DECLARE(int32_t, test_random_seed);
 REXCVAR_DECLARE(int32_t, relaunch_wait_pid);
 REXCVAR_DECLARE(std::string, native_view_backend);
 REXCVAR_DECLARE(bool, native_present_zero_copy);
+REXCVAR_DECLARE(bool, dred);
 REXCVAR_DECLARE(bool, native_present_pacing);
 REXCVAR_DECLARE(bool, native_view_record_targets);
 REXCVAR_DECLARE(std::string, native_view_rt_fallback);

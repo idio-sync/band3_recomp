@@ -18,6 +18,7 @@
 #include <string>
 
 #include "config.h"
+#include "crash_trace.h"
 #include "game_writes.h"
 #include "paths.h"
 #include "relaunch.h"
@@ -147,6 +148,10 @@ class Band3App : public rex::ReXApp {
     band3::settings::SnapshotStartupSettings();
     band3::input::InitVirtualInstrument();
     band3::test::Init();
+#ifdef _WIN32
+    // GPU hang reports, before SetupPresentation makes the SDK's device
+    if (REXCVAR_GET(dred)) band3::crash_trace::EnableDred();
+#endif
   }
 
   static void LogFolders(const std::filesystem::path& game_data,

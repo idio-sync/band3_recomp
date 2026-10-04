@@ -7,6 +7,7 @@
 #include "src/Render/png_writer.h"
 #include "src/Render/post_model.h"
 #include "src/Render/present_model.h"
+#include "src/crash_trace.h"
 #include "src/settings.h"
 
 #include <imgui.h>
@@ -1053,6 +1054,10 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
                     "device band3's GPU drawing would share with the emulated GPU, and that "
                     "crashes there");
             GpuRenderer::Get().SetPresentDevice(d3d12.GetDevice());
+            // the crash trace's DRED report if the device is removed (a GPU
+            // hang), whichever renderer is on; here, as the one place band3
+            // has the SDK's device from the start
+            crash_trace::WatchD3D12Device(d3d12.GetDevice(), d3d12.GetDirectQueue());
             auto present = std::make_unique<D3D12Present>();
             if (present->Init(d3d12)) d3d12_ = std::move(present);
             else d3d12_why_ = "its Direct3D 12 pipeline couldn't be made (see the log)";
@@ -1089,6 +1094,7 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         // thread)
         if (fence_ && drew_) fence_->Settle(2000);
         d3d12_.reset();
+        crash_trace::WatchD3D12Device(nullptr, nullptr);
 #endif
         for (auto& t : textures_) t.reset();
     }
