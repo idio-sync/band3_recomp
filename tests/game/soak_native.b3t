@@ -29,13 +29,11 @@
 # the welcome hint, whose first choice customizes the band; back out of that
 # to the main menu
 wait screen=hint_rb3_welcome_screen timeout=30s
-wait frames=60
-press green
-wait screen=manage_band_screen timeout=30s
-wait frames=60
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 set renderer native
 set autoplay true
 set song_speed 1.5
@@ -45,22 +43,20 @@ set forced_venue arena_04
 # Play Now, Quickplay, Choose Songs (a press while a submenu still slides in
 # is dropped, so these wait 1.5 s each)
 press green
-wait frames=90
+sleep 1500ms
 press green
-wait frames=90
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
 # past the 123 heading to 20th Century Boy, where the cursor stays after
 press down
 press down
-wait frames=30
-press green
-wait screen=part_difficulty_screen timeout=30s
-wait frames=90
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
 # Guitar, Expert
 press green
-wait frames=30
+sleep 500ms
 press green
 wait in_game timeout=60s
 present_stats reset
@@ -86,106 +82,89 @@ wait screen=coop_endgame_screen timeout=600s
 native_view stats
 present_stats
 native_view off
-wait frames=120
+sleep 2s
 # the results, a loading screen, two new awards and a goal hint, then the
 # music library and back to the main menu
+press green until screen=accomplishments_newaward_screen timeout=60s
+sleep 2s
 press green
-wait screen=accomplishments_newaward_screen timeout=60s
-wait frames=120
-press green
-wait frames=180
-press green
-wait screen=hint_goalcomplete_screen timeout=30s
-wait frames=120
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 3s
+press green until screen=hint_goalcomplete_screen timeout=30s
+sleep 2s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 
 # ---- menu round trip: Customize Band, the music library, practice ----
 # Customize, Customize Band
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=30
+sleep 500ms
 press green
-wait frames=60
-press green
-wait screen=manage_band_screen timeout=30s
-wait frames=120
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 2s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 # Play Now, Quickplay, Choose Songs: the music library
 press green
-wait frames=90
+sleep 1500ms
 press green
-wait frames=90
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=120
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 2s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 # Training, Practice, the song under the cursor, Guitar, Expert, Full Song,
 # 100%, 5 s of it, and back through its pause menu's Back to Music Library
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=30
+sleep 500ms
 press green
-wait frames=60
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
 press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
-press green
-wait screen=part_difficulty_screen timeout=30s
-wait frames=90
-press green
-wait frames=30
-press green
-wait screen=practice_sel_section_screen timeout=30s
-wait frames=60
-press green
-wait screen=practice_sel_speed_screen timeout=30s
-wait frames=60
-press green
-wait screen=practice_game_screen timeout=60s
+sleep 500ms
+press green until screen=practice_sel_section_screen timeout=30s
+sleep 1s
+press green until screen=practice_sel_speed_screen timeout=30s
+sleep 1s
+press green until screen=practice_game_screen timeout=60s
 wait frames=300
 press start
-wait frames=30
+sleep 500ms
 press down
 press down
 press down
 press down
 press down
-wait frames=20
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 333ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 screenshot native soak-hub-r1
 
 # ---- round 2: the venue the game picks ----
 set forced_venue false
 press green
-wait frames=90
+sleep 1500ms
 press green
-wait frames=90
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
 press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
-press green
-wait screen=part_difficulty_screen timeout=30s
-wait frames=90
-press green
-wait frames=30
+sleep 500ms
 press green
 wait in_game timeout=60s
 present_stats reset
@@ -209,94 +188,79 @@ wait screen=coop_endgame_screen timeout=600s
 native_view stats
 present_stats
 native_view off
-wait frames=120
+sleep 2s
 # the results, then the music library (after a loading screen) and back to
 # the main menu
-press green
-wait screen=song_select_screen timeout=60s
-wait frames=60
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+press green until screen=song_select_screen timeout=60s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 
 # ---- menu round trip again ----
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=30
+sleep 500ms
 press green
-wait frames=60
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 2s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 press green
-wait screen=manage_band_screen timeout=30s
-wait frames=120
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 1500ms
 press green
-wait frames=90
-press green
-wait frames=90
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=120
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 2s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=30
+sleep 500ms
 press green
-wait frames=60
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
 press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
-press green
-wait screen=part_difficulty_screen timeout=30s
-wait frames=90
-press green
-wait frames=30
-press green
-wait screen=practice_sel_section_screen timeout=30s
-wait frames=60
-press green
-wait screen=practice_sel_speed_screen timeout=30s
-wait frames=60
-press green
-wait screen=practice_game_screen timeout=60s
+sleep 500ms
+press green until screen=practice_sel_section_screen timeout=30s
+sleep 1s
+press green until screen=practice_sel_speed_screen timeout=30s
+sleep 1s
+press green until screen=practice_game_screen timeout=60s
 wait frames=300
 press start
-wait frames=30
+sleep 500ms
 press down
 press down
 press down
 press down
 press down
-wait frames=20
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 333ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 screenshot native soak-hub-r2
 
 # ---- round 3: a music-video venue ----
 set forced_venue video
 press green
-wait frames=90
+sleep 1500ms
 press green
-wait frames=90
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
 press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
-press green
-wait screen=part_difficulty_screen timeout=30s
-wait frames=90
-press green
-wait frames=30
+sleep 500ms
 press green
 wait in_game timeout=60s
 present_stats reset
@@ -320,13 +284,11 @@ wait screen=coop_endgame_screen timeout=600s
 native_view stats
 present_stats
 native_view off
-wait frames=120
+sleep 2s
 # the results, then the music library (after a loading screen) and back to
 # the main menu
-press green
-wait screen=song_select_screen timeout=60s
-wait frames=60
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=120
+press green until screen=song_select_screen timeout=60s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 2s
 screenshot native soak-hub-r3

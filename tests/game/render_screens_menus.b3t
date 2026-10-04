@@ -7,77 +7,68 @@
 # for render_screens_song.b3t. Launch as render_screens_boot.b3t says.
 
 # the welcome hint's first choice customizes the band
-wait frames=60
-press green
-wait screen=manage_band_screen timeout=30s
-wait frames=90
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1500ms
 capture screen-manage-band
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=120
+press red until screen=main_hub_screen timeout=30s
+sleep 2s
 capture screen-main-hub
 
 # Customize, then Customize Character: a vignette (tv11_a_screen) while the
 # closet loads, then the closet with the band's first character
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=30
+sleep 500ms
 press green
-wait frames=60
+sleep 1s
 press down
-wait frames=30
-press green
-wait screen=tv11_a_screen timeout=30s
-wait frames=60
+sleep 500ms
+press green until screen=tv11_a_screen timeout=30s
+sleep 1s
 capture screen-vignette
 wait screen=customize_clothing_screen timeout=60s
-wait frames=120
+sleep 2s
 capture screen-closet
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 
 # Training, Practice: the music library (song_select_screen), then the part,
 # the section and the speed, and the song
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=30
+sleep 500ms
 press green
-wait frames=60
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
 # from Random Song to 20th Century Boy, where the cursor stays for the next
 # script's music library
 press down
-wait frames=30
-press green
-wait screen=part_difficulty_screen timeout=30s
-wait frames=90
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
 # Guitar, Expert
 press green
-wait frames=30
-press green
-wait screen=practice_sel_section_screen timeout=30s
-wait frames=60
+sleep 500ms
+press green until screen=practice_sel_section_screen timeout=30s
+sleep 1s
 capture screen-practice-section
 # Full Song
-press green
-wait screen=practice_sel_speed_screen timeout=30s
-wait frames=60
+press green until screen=practice_sel_speed_screen timeout=30s
+sleep 1s
 # 100%
-press green
-wait screen=practice_game_screen timeout=60s
+press green until screen=practice_game_screen timeout=60s
 expect song=20thcenturyboy
 wait frames=300
 capture screen-practice
 # its pause menu, an overlay on the same screen
 press start
-wait frames=30
+sleep 500ms
 capture screen-practice-pause
 # Back to Music Library, the last of six
 press down
@@ -85,10 +76,8 @@ press down
 press down
 press down
 press down
-wait frames=20
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 333ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s

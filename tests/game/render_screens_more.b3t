@@ -17,264 +17,239 @@
 
 # the welcome hint: Continue, to the main menu
 wait screen=hint_rb3_welcome_screen timeout=30s
-wait frames=60
+sleep 1s
 press down
-wait frames=20
-press green
-wait screen=main_hub_screen timeout=30s
-wait frames=120
+sleep 333ms
+press green until screen=main_hub_screen timeout=30s
+sleep 2s
 
 # ---- the character creator ----
 # Customize, Create Character: the camera comes in through the barbershop's
 # doors first, for about 10 s
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=30
+sleep 500ms
 press green
-wait frames=60
+sleep 1s
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=30
-press green
-wait screen=charactercreator_screen timeout=60s
+sleep 500ms
+press green until screen=charactercreator_screen timeout=60s
 wait frames=900
 capture screen-creator
 # Modify Head, Customize Face: the face maker, close on the face
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=30
+sleep 500ms
 press green
-wait frames=120
+sleep 2s
 press green
-wait frames=180
+sleep 3s
 capture screen-face-maker
 # Randomize: RB3 blends the new face's textures (RndTexBlender)
 press green
-wait frames=180
+sleep 3s
 capture screen-face-random
 # back out to the creator's own menu, and once more for its leave dialog
 press red
-wait frames=60
+sleep 1s
 press red
-wait frames=60
-press red
-wait screen=charactercreator_leave_screen timeout=30s
-wait frames=60
+sleep 1s
+press red until screen=charactercreator_leave_screen timeout=30s
+sleep 1s
 capture screen-creator-leave
 # Yes, leave
 press up
-wait frames=20
-press green
-wait screen=main_hub_screen timeout=60s
-wait frames=120
+sleep 333ms
+press green until screen=main_hub_screen timeout=60s
+sleep 2s
 
 # ---- the career's goals ----
 # Career, My Goals: a vignette, the career's hint the first time, then the goals
 press down
-wait frames=30
+sleep 500ms
 press green
-wait frames=60
-press green
-wait screen=hint_career_screen timeout=60s
-wait frames=60
-press green
-wait screen=accomplishment_screen timeout=30s
-wait frames=120
+sleep 1s
+press green until screen=hint_career_screen timeout=60s
+sleep 1s
+press green until screen=accomplishment_screen timeout=30s
+sleep 2s
 capture screen-goals
-press red
-wait screen=main_hub_screen timeout=60s
-wait frames=120
+press red until screen=main_hub_screen timeout=60s
+sleep 2s
 
 # ---- Play a Show and setlists ----
 # Play a Show: Rock Band 3 Deluxe's introduction to it, then its music library
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=30
-press green
-wait screen=dx_playashow_intro_screen timeout=30s
-wait frames=90
+sleep 500ms
+press green until screen=dx_playashow_intro_screen timeout=30s
+sleep 1500ms
 capture screen-play-a-show
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=90
+press green until screen=song_select_screen timeout=30s
+sleep 1500ms
 # from Random Song up to Setlists / Battles: the setlist browser
 press up
-wait frames=20
+sleep 333ms
 press up
-wait frames=30
+sleep 500ms
 press green
-wait frames=120
+sleep 2s
 capture screen-setlist-browser
 # Make a Setlist: 20th Century Boy and 25 or 6 to 4, past Finish Setlist and
 # the 123 heading
 press green
-wait frames=120
+sleep 2s
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=30
+sleep 500ms
 press green
-wait frames=60
+sleep 1s
 press down
-wait frames=30
+sleep 500ms
 press green
-wait frames=120
+sleep 2s
 capture screen-setlist
 # back, without the setlist, to the main menu
-press red
-wait screen=main_hub_screen timeout=60s
-wait frames=120
+press red until screen=main_hub_screen timeout=60s
+sleep 2s
 
 # ---- calibration ----
 # the menu (Start): Options, System Settings, Calibration, Calibration, Yes
 press start
-wait frames=60
+sleep 1s
 press down
-wait frames=15
+sleep 250ms
 press down
-wait frames=15
+sleep 250ms
 press down
-wait frames=20
+sleep 333ms
 press green
-wait frames=60
+sleep 1s
 press down
-wait frames=15
+sleep 250ms
 press down
-wait frames=15
+sleep 250ms
 press down
-wait frames=20
+sleep 333ms
 press green
-wait frames=60
+sleep 1s
 press down
-wait frames=15
+sleep 250ms
 press down
-wait frames=15
+sleep 250ms
 press down
-wait frames=20
+sleep 333ms
 press green
-wait frames=60
+sleep 1s
 press down
-wait frames=15
+sleep 250ms
 press down
-wait frames=20
+sleep 333ms
 press green
-wait frames=60
-press green
-wait screen=cal_welcome_screen timeout=30s
-wait frames=90
+sleep 1s
+press green until screen=cal_welcome_screen timeout=30s
+sleep 1500ms
 capture screen-cal-welcome
 # Calibrate Automatically, which a guitar offers first: its audio step, then
 # back, as the virtual guitar has no light or audio sensor
-press green
-wait screen=cal_hw_audio_screen timeout=30s
-wait frames=60
+press green until screen=cal_hw_audio_screen timeout=30s
+sleep 1s
 capture screen-cal-auto
-press red
-wait screen=cal_welcome_screen timeout=30s
-wait frames=60
+press red until screen=cal_welcome_screen timeout=30s
+sleep 1s
 # Calibrate Manually: audio first
 press right
-wait frames=30
-press green
-wait screen=cal_audio_screen timeout=30s
-wait frames=60
+sleep 500ms
+press green until screen=cal_audio_screen timeout=30s
+sleep 1s
 capture screen-cal-audio
 # its test, which nothing hits, fails; Enter Calibration Numbers, Continue
-press green
-wait screen=cal_manual_failed_screen timeout=90s
-wait frames=60
+press green until screen=cal_manual_failed_screen timeout=90s
+sleep 1s
 press down
-wait frames=20
-press green
-wait screen=cal_manual_audio_postfailure_screen timeout=30s
-wait frames=60
+sleep 333ms
+press green until screen=cal_manual_audio_postfailure_screen timeout=30s
+sleep 1s
 press green
 # then video
 wait screen=cal_visuals_screen timeout=30s
-wait frames=60
+sleep 1s
 capture screen-cal-video
-press green
-wait screen=cal_manual_failed_screen timeout=90s
-wait frames=60
+press green until screen=cal_manual_failed_screen timeout=90s
+sleep 1s
 press down
-wait frames=20
-press green
-wait screen=cal_manual_video_postfailure_screen timeout=30s
-wait frames=60
-press green
-wait screen=cal_manual_complete_screen timeout=30s
-wait frames=60
+sleep 333ms
+press green until screen=cal_manual_video_postfailure_screen timeout=30s
+sleep 1s
+press green until screen=cal_manual_complete_screen timeout=30s
+sleep 1s
 press green
 # calibrating is a fresh profile's first goal
 wait screen=hint_goalcomplete_screen timeout=30s
-wait frames=60
-press green
-wait screen=main_hub_screen timeout=60s
-wait frames=120
+sleep 1s
+press green until screen=main_hub_screen timeout=60s
+sleep 2s
 
 # ---- the drum trainer ----
 # player 1 on drums, joined again; the trainers need an instrument of theirs
 instrument drums
-wait frames=90
+sleep 1500ms
 press start
-wait frames=120
+sleep 2s
 # Training, Learn an Instrument: a vignette, then the instrument trainers
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=30
+sleep 500ms
 press a
-wait frames=60
+sleep 1s
 press down
-wait frames=30
-press a
-wait screen=training_screen timeout=60s
-wait frames=120
+sleep 500ms
+press a until screen=training_screen timeout=60s
+sleep 2s
 capture screen-trainers
 # Drums, Introduction to the Kit: its preview, then the lesson
 press a
-wait frames=120
-press a
-wait screen=gem_preview_screen timeout=60s
-wait frames=240
+sleep 2s
+press a until screen=gem_preview_screen timeout=60s
+sleep 4s
 capture screen-drum-preview
-press a
-wait screen=drum_trainer_screen timeout=30s
+press a until screen=drum_trainer_screen timeout=30s
 wait frames=300
 capture screen-drum-trainer
 # its pause menu's Back to Trainer Menu, Yes, then back to the main menu
 press start
-wait frames=40
+sleep 667ms
 press down
 press down
 press down
 press down
-wait frames=20
+sleep 333ms
 press a
-wait frames=60
-press a
-wait screen=training_screen timeout=60s
-wait frames=60
+sleep 1s
+press a until screen=training_screen timeout=60s
+sleep 1s
 press b
-wait frames=90
-press b
-wait screen=main_hub_screen timeout=60s
-wait frames=60
+sleep 1500ms
+press b until screen=main_hub_screen timeout=60s
+sleep 1s
 instrument guitar
-wait frames=90
+sleep 1500ms
 press start
-wait frames=120
+sleep 2s

@@ -14,42 +14,38 @@ expect mic=1
 # the welcome hint boot.b3t leaves up, whose first choice customizes the band;
 # back out of that to the main menu
 wait screen=hint_rb3_welcome_screen timeout=30s
-wait frames=60
-press green
-wait screen=manage_band_screen timeout=30s
-wait frames=60
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 # every point is the mic's
 set autoplay false
 # Play Now, Quickplay, Choose Songs
 press green
-wait frames=60
+sleep 1s
 press green
-wait frames=60
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
 # past the 123 heading to 20th Century Boy
 press down
 press down
-wait frames=30
-press green
-wait screen=part_difficulty_screen timeout=30s
-wait frames=90
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
 # Guitar, Bass, Keys, then Solo (vocals), which the game offers only with a
 # mic connected; without one this lands elsewhere and nothing scores
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=20
+sleep 333ms
 press down
-wait frames=30
+sleep 500ms
 screenshot usb-mic-part
 # Solo, its default difficulty
 press green
-wait frames=60
+sleep 1s
 press green
 wait in_game timeout=60s
 expect song=20thcenturyboy
@@ -58,5 +54,5 @@ expect song=20thcenturyboy
 wait score>=1 timeout=60s
 expect mic=1
 # the scoreboard shows the points a moment later
-wait frames=60
+sleep 1s
 screenshot usb-mic-scored

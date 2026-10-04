@@ -262,6 +262,85 @@ TEST_CASE("press defaults to 100 ms") {
     CHECK(game.pulses[0].length == 100ms);
 }
 
+TEST_CASE("press until: one press when the screen changes") {
+    FakeGame game;
+    game.state.screen = "dx_welcome_screen";
+    game.on_sleep = [](FakeGame& g) {
+        if (!g.pulses.empty() && g.slept > 300ms) g.state.screen = "hint_rb3_welcome_screen";
+    };
+    const std::string reply =
+        RunCommand("press green until screen=hint_rb3_welcome_screen", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "hint_rb3_welcome_screen"));
+    CHECK(game.pulses.size() == 1);
+}
+
+TEST_CASE("press until: pressed again while the screen stays, every 2 s by default") {
+    FakeGame game;
+    game.state.screen = "dx_welcome_screen";
+    // the first two presses are dropped, the third takes
+    game.on_sleep = [](FakeGame& g) {
+        if (g.pulses.size() >= 3) g.state.screen = "hint_rb3_welcome_screen";
+    };
+    CHECK(Ok(RunCommand("press green until screen=hint_rb3_welcome_screen", game)));
+    CHECK(game.pulses.size() == 3);
+    // two waits of 2 s before the third press
+    CHECK(game.slept >= 4000ms);
+    CHECK(game.slept < 5000ms);
+}
+
+TEST_CASE("press until: `every` and `timeout` are the press's, and the timeout counts presses") {
+    FakeGame game;
+    game.state.screen = "main_hub_screen";
+    const std::string reply = RunCommand(
+        "press green until screen=song_select_screen every=500ms timeout=2s", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(Has(reply, "timed out after 2000 ms and"));
+    CHECK(Has(reply, "presses waiting for screen=song_select_screen"));
+    // a press every 500 ms (and its 100 ms and the release gap) over 2 s
+    CHECK(game.pulses.size() >= 3);
+    CHECK(game.pulses.size() <= 4);
+}
+
+TEST_CASE("press until: a screen that changes slowly isn't pressed into twice") {
+    FakeGame game;
+    game.state.screen = "a";
+    // the press takes, but the screen changes 1.5 s later
+    game.on_sleep = [](FakeGame& g) {
+        if (!g.pulses.empty() && g.slept > 1500ms) g.state.screen = "b";
+    };
+    CHECK(Ok(RunCommand("press green until screen=b", game)));
+    CHECK(game.pulses.size() == 1);
+}
+
+TEST_CASE("press until: once the screen has changed at all, it isn't pressed again") {
+    FakeGame game;
+    game.state.screen = "main_hub_screen";
+    // the press takes: a loading screen for 5 s, then the one waited for
+    game.on_sleep = [](FakeGame& g) {
+        if (g.pulses.empty()) return;
+        g.state.screen = g.slept > 5000ms ? "song_select_screen" : "loading_screen";
+    };
+    CHECK(Ok(RunCommand("press green until screen=song_select_screen", game)));
+    CHECK(game.pulses.size() == 1);
+}
+
+TEST_CASE("press until: bad conditions and options press nothing") {
+    FakeGame game;
+    CHECK_FALSE(Ok(RunCommand("press green until", game)));
+    CHECK_FALSE(Ok(RunCommand("press green until nowhere", game)));
+    CHECK_FALSE(Ok(RunCommand("press green until in_game every=soon", game)));
+    CHECK_FALSE(Ok(RunCommand("press green until in_game every=0ms", game)));
+    CHECK_FALSE(Ok(RunCommand("press green until in_game later=2s", game)));
+    CHECK_FALSE(Ok(RunCommand("press green 100 50 until in_game", game)));
+    CHECK(game.pulses.empty());
+    // a length still goes before `until`
+    game.state.in_game = true;
+    CHECK(Ok(RunCommand("press green 200 until in_game", game)));
+    REQUIRE(game.pulses.size() == 1);
+    CHECK(game.pulses[0].length == 200ms);
+}
+
 TEST_CASE("a press with any bad input presses nothing") {
     FakeGame game;
     const std::string reply = RunCommand("press green+red_pad", game);

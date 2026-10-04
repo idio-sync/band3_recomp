@@ -20,82 +20,78 @@ expect mic=1
 # the welcome hint, whose first choice customizes the band; back out of that
 # to the main menu
 wait screen=hint_rb3_welcome_screen timeout=30s
-wait frames=60
-press green
-wait screen=manage_band_screen timeout=30s
-wait frames=60
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 set autoplay true
 set forced_venue arena_04
 set disable_even_odd_rendering true
 set song_speed 1
 # players 2 and 3 join, on drums and keys, as guests
 p2 instrument drums
-wait frames=60
+sleep 1s
 p2 press start
-wait frames=120
+sleep 2s
 p3 instrument keys
-wait frames=60
+sleep 1s
 p3 press start
-wait frames=120
+sleep 2s
 # player 1's menu (Start): Options, All Instruments Mode, Yes; then closed
 press start
-wait frames=60
+sleep 1s
 press down
-wait frames=15
+sleep 250ms
 press down
-wait frames=15
+sleep 250ms
 press down
-wait frames=20
+sleep 333ms
 press green
-wait frames=60
+sleep 1s
 press green
-wait frames=90
+sleep 1500ms
 press up
-wait frames=20
+sleep 333ms
 press green
-wait frames=120
+sleep 2s
 press red
-wait frames=40
+sleep 667ms
 press red
-wait frames=60
+sleep 1s
 # Play Now, Quickplay, Choose Songs
 press green
-wait frames=90
+sleep 1500ms
 press green
-wait frames=90
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
 # past the 123 heading to 20th Century Boy
 press down
 press down
-wait frames=30
-press green
-wait screen=part_difficulty_screen timeout=30s
-wait frames=90
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
 capture screen-mp4-part
 # player 1: Guitar, Expert; player 2: Drums, its default difficulty
 press green
-wait frames=30
+sleep 500ms
 press green
-wait frames=60
+sleep 1s
 p2 press a
-wait frames=60
+sleep 1s
 p2 press a
-wait frames=60
+sleep 1s
 # player 3: up from Bass (offered first) past Guitar and Pro Keys to Keys,
 # its default difficulty; the song starts with the singer added
 p3 press up
-wait frames=40
+sleep 667ms
 p3 press up
-wait frames=40
+sleep 667ms
 p3 press up
-wait frames=40
+sleep 667ms
 p3 press a
-wait frames=60
+sleep 1s
 p3 press a
 wait in_game timeout=60s
 expect song=20thcenturyboy
@@ -109,11 +105,11 @@ wait frames=900 timeout=60s
 capture screen-mp4-40s
 # the pause menu, an overlay on the same screen, and on again
 press start
-wait frames=30
+sleep 500ms
 capture screen-mp4-pause
 press green
-wait frames=120
+sleep 2s
 # the results
 wait screen=coop_endgame_screen timeout=300s
-wait frames=120
+sleep 2s
 capture screen-mp4-results

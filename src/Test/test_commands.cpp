@@ -22,6 +22,8 @@ constexpr std::chrono::milliseconds kReleaseGap = 50ms;
 constexpr std::chrono::milliseconds kReplugWait = 1000ms;
 constexpr std::chrono::milliseconds kWaitTimeout = 30s;
 constexpr std::chrono::milliseconds kExpectTimeout = 5s;
+// how long `press ... until` waits before pressing again
+constexpr std::chrono::milliseconds kPressRetry = 2s;
 constexpr std::chrono::milliseconds kMaxSleep = 600s;
 // about a frame
 constexpr std::chrono::milliseconds kWaitPoll = 16ms;
@@ -177,11 +179,22 @@ std::string ApplyInputs(const Controller& c, InstrumentInputs& in, std::string_v
     return {};
 }
 
+// `press <inputs> [ms] [until <condition> [every=<time>] [timeout=<time>]]`.
+// With `until`, it waits up to `timeout` (30 s by default) for the condition,
+// and presses again each time `every` (2 s) goes by with the screen still the
+// one it pressed on: RB3 drops a press made while a screen is still coming
+// in, and how long that takes isn't a number of frames at every refresh rate.
+// Once the screen has changed at all (a loading screen on the way, say) the
+// press took, and it's never made again, so a retry can't land on the next
+// screen.
 std::string Press(TestTarget& target, const Controller& c,
                   const std::vector<std::string_view>& args) {
-    if (args.size() < 2 || args.size() > 3) return Error(target, "usage: press <inputs> [ms]");
+    const auto until = std::find(args.begin(), args.end(), "until");
+    const size_t press_args = size_t(until - args.begin());
+    const char* usage = "usage: press <inputs> [ms] [until <condition> [every=<n>s] [timeout=<n>s]]";
+    if (press_args < 2 || press_args > 3) return Error(target, usage);
     std::chrono::milliseconds length = kPressLength;
-    if (args.size() == 3) {
+    if (press_args == 3) {
         auto ms = ParseNumber<int64_t>(args[2]);
         if (!ms || *ms < 1 || *ms > 10000) return Error(target, "press length is 1 to 10000 ms");
         length = std::chrono::milliseconds(*ms);
@@ -191,13 +204,58 @@ std::string Press(TestTarget& target, const Controller& c,
     if (std::string error = ApplyInputs(c, check, args[1], kDefaultVelocity); !error.empty())
         return Error(target, error);
 
+    std::optional<Condition> condition;
+    std::chrono::milliseconds every = kPressRetry, timeout = kWaitTimeout;
+    if (until != args.end()) {
+        if (until + 1 == args.end()) return Error(target, usage);
+        auto parsed = ParseCondition(*(until + 1));
+        if (auto* error = std::get_if<std::string>(&parsed)) return Error(target, *error);
+        condition = std::get<Condition>(parsed);
+        for (auto it = until + 2; it != args.end(); ++it) {
+            const bool is_every = it->starts_with("every="), is_timeout = it->starts_with("timeout=");
+            auto value = is_every     ? ParseDuration(it->substr(6))
+                         : is_timeout ? ParseDuration(it->substr(8))
+                                      : std::nullopt;
+            if (!value || *value <= std::chrono::milliseconds(0))
+                return Error(target, "bad " + std::string(*it) + " (" + usage + ")");
+            (is_every ? every : timeout) = *value;
+        }
+    }
+
     const input::InstrumentKind kind = c.kind;
     const std::string list(args[1]);
-    target.Pulse(c.player, [kind, list](InstrumentInputs& in) {
-        for (const std::string& name : SplitInputs(list)) SetInput(kind, in, name, kDefaultVelocity);
-    }, length);
-    target.Sleep(length + kReleaseGap);
-    return Ok();
+    auto press = [&] {
+        target.Pulse(c.player, [kind, list](InstrumentInputs& in) {
+            for (const std::string& name : SplitInputs(list))
+                SetInput(kind, in, name, kDefaultVelocity);
+        }, length);
+        target.Sleep(length + kReleaseGap);
+    };
+    if (!condition) {
+        press();
+        return Ok();
+    }
+
+    const auto start = target.Now();
+    const GameStateSnapshot start_state = target.State();
+    for (int presses = 1;; presses++) {
+        press();
+        const auto pressed_at = target.Now();
+        GameStateSnapshot state = target.State();
+        while (!ConditionHolds(*condition, state, start_state)) {
+            if (target.Cancelled()) return Error(target, "the test server is shutting down");
+            if (target.Now() - start >= timeout) {
+                return Error(target, "timed out after " + std::to_string(timeout.count()) +
+                                         " ms and " + std::to_string(presses) +
+                                         (presses == 1 ? " press" : " presses") +
+                                         " waiting for " + std::string(*(until + 1)));
+            }
+            if (state.screen == start_state.screen && target.Now() - pressed_at >= every) break;
+            target.Sleep(kWaitPoll);
+            state = target.State();
+        }
+        if (ConditionHolds(*condition, state, start_state)) return OkWithState(target, state);
+    }
 }
 
 std::string Hit(TestTarget& target, const Controller& c,

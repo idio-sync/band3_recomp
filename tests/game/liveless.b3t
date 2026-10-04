@@ -11,20 +11,15 @@
 # Lineup (green) and both go to the setlist together.
 
 wait screen=splash_screen timeout=120s
-press start
-wait screen=first_time_calibration timeout=30s
+press start until screen=first_time_calibration timeout=30s
 press down
-press green
-wait screen=dx_welcome_screen timeout=30s
+press green until screen=dx_welcome_screen timeout=30s
 sleep 2s
-press green
-wait screen=hint_rb3_welcome_screen timeout=30s
+press green until screen=hint_rb3_welcome_screen timeout=30s
 sleep 2s
-press green
-wait screen=manage_band_screen timeout=30s
+press green until screen=manage_band_screen timeout=30s
 sleep 2s
-press red
-wait screen=main_hub_screen timeout=30s
+press red until screen=main_hub_screen timeout=30s
 sleep 2s
 # the overshell: Play on Xbox Live
 press start

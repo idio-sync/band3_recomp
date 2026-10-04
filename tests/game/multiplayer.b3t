@@ -4,36 +4,34 @@
 # bytes (src/Hooks/xnet_random.cpp): every player had player 1's user guid.
 
 p2 instrument guitar
-wait frames=60
+sleep 1s
 p2 press start
-wait frames=90
+sleep 1500ms
 set autoplay true
 # Play Now, Quickplay, Choose Songs
 press green
-wait frames=60
+sleep 1s
 press green
-wait frames=60
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
 # past the 123 heading to 20th Century Boy
 press down
 press down
-wait frames=30
-press green
-wait screen=part_difficulty_screen timeout=30s
-wait frames=90
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
 # player 1: Guitar, Expert
 press green
-wait frames=30
+sleep 500ms
 press green
-wait frames=60
+sleep 1s
 # player 2: Bass (offered first, as player 1 has guitar), its default difficulty.
 # Player 2 isn't signed in, so joined as a guest: skip_profile_prompt (on by
 # default) answers RB3's Choose Profile with No Profile. With the prompt up,
 # the first press here would answer it and the song wouldn't start.
 p2 press green
-wait frames=60
+sleep 1s
 p2 press green
 wait in_game timeout=60s
 expect song=20thcenturyboy

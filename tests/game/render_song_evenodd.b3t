@@ -23,13 +23,11 @@
 # the welcome hint, whose first choice customizes the
 # band; back out of that to the main menu
 wait screen=hint_rb3_welcome_screen timeout=30s
-wait frames=60
-press green
-wait screen=manage_band_screen timeout=30s
-wait frames=60
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 set autoplay true
 # the same venue every run, so captures compare across runs
 set forced_venue arena_04
@@ -39,22 +37,20 @@ set forced_venue arena_04
 set disable_even_odd_rendering false
 # Play Now, Quickplay, Choose Songs
 press green
-wait frames=60
+sleep 1s
 press green
-wait frames=60
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
 # past the 123 heading to 20th Century Boy
 press down
 press down
-wait frames=30
-press green
-wait screen=part_difficulty_screen timeout=30s
-wait frames=90
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
 # Guitar, Expert
 press green
-wait frames=30
+sleep 500ms
 press green
 wait in_game timeout=60s
 expect song=20thcenturyboy
