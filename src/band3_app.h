@@ -28,6 +28,7 @@
 #include "Content/content_hooks.h"
 #include "Content/live_content.h"
 #include "Game/SongCache.h"
+#include "Hooks/frame_pacing.h"
 #include "Input/input_system.h"
 #include "Input/instrument_lab.h"
 #include "Input/menu_shortcut_dialog.h"
@@ -230,9 +231,13 @@ class Band3App : public rex::ReXApp {
       REXLOG_WARN("Launcher: couldn't clear the launcher setting");
     }
     REXLOG_INFO("Launcher: {}", decision.reason);
-    if (!decision.show) return paths;
+    if (!decision.show) {
+      StartFrameCap();
+      return paths;
+    }
     if (!imgui_drawer()) {
       REXLOG_WARN("Launcher: no ImGui to draw it with, starting the game");
+      StartFrameCap();
       return paths;
     }
 
@@ -305,9 +310,22 @@ class Band3App : public rex::ReXApp {
     app_context().CallInUIThreadDeferred([this, paths = std::move(paths)] {
       launcher_.reset();
       if (debug_overlay_) debug_overlay_->set_hidden(false);
+      StartFrameCap();
       auto resume = std::move(resume_);
       resume(paths);
     });
+  }
+
+  // The frame cap (src/Hooks/frame_pacing.h), with the settings the game
+  // starts with. Not in OnPreSetup: that runs before the window, the launcher
+  // and the GPU plugin (whose vsync it turns off) exist. Here they all do, and
+  // the runtime that starts the plugin's vblank thread, which reads the
+  // guest's refresh rate once, isn't built yet.
+  void StartFrameCap() {
+    band3::pacing::StartFrameCap(window() ? window()->GetNativeWindowHandle() : nullptr,
+                                 [this](std::function<void()> task) {
+                                   app_context().CallInUIThreadDeferred(std::move(task));
+                                 });
   }
 
   void QuitFromLauncher() {
@@ -394,6 +412,7 @@ class Band3App : public rex::ReXApp {
   void OnShutdown() override {
     // before the ImGui drawer it's attached to goes
     launcher_.reset();
+    band3::pacing::StopFrameCap();
     band3::http::StopServer();
     band3::test::StopServer();
     rex::ui::UnregisterBind("bind_instrument_lab");

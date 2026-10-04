@@ -988,6 +988,8 @@ TEST_CASE("present_stats reports the window's paints, the native frames and the 
     game.present.latency_ms = {20.0, 30.0};
     game.present.game_frames = 1196;
     game.present.game_ms.assign(20, 16.7);
+    game.present.cap = {.mode = "display", .hz = 119.88, .late = 4, .resets = 1,
+                        .wait_ms = 2.5, .spin_ms = 0.4};
     std::string reply = RunCommand("present_stats", game);
     CHECK(Ok(reply));
     CHECK(Has(reply, "\"renderer\":\"native\",\"path\":\"zero-copy\""));
@@ -997,7 +999,8 @@ TEST_CASE("present_stats reports the window's paints, the native frames and the 
     CHECK(Has(reply, "\"native\":{\"paints\":1200,\"shown\":1190,\"repeats\":10,\"skipped\":3"));
     CHECK(Has(reply, "\"latency_ms\":{\"mean\":25.00,\"p50\":20.00,\"p95\":30.00"));
     CHECK(Has(reply, "\"game\":{\"frames\":1196,\"fps\":59.8"));
-    CHECK(Has(reply, "\"hitches\":0}}"));
+    CHECK(Has(reply, "\"hitches\":0,\"cap\":{\"mode\":\"display\",\"hz\":119.88,\"late\":4,"
+                     "\"resets\":1,\"wait_ms\":2.500,\"spin_ms\":0.400}}}"));
     CHECK(game.present_resets == 0);
 
     // reset replies with the stretch it ends, then starts over

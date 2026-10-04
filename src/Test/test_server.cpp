@@ -42,6 +42,7 @@
 #include <rex/input/input_system.h>
 #include "src/Audio/usb_mic_capture.h"
 #include "src/Content/live_content.h"
+#include "src/Hooks/frame_pacing.h"
 #include "src/Input/input_lock.h"
 #include "src/Input/input_system.h"
 #include "src/Input/virtual_instrument.h"
@@ -412,6 +413,18 @@ public:
         for (size_t i = 1; i < presents.size(); i++)
             out.game_ms.push_back(
                 std::chrono::duration<double, std::milli>(presents[i] - presents[i - 1]).count());
+        // the cap's since present_stats last started over (or since startup)
+        const pacing::FrameCapStats cap = pacing::GetFrameCapStats();
+        std::lock_guard lock(measure_mutex_);
+        const pacing::FrameCapStats& from = present_cap_;
+        const uint64_t frames = cap.frames - from.frames;
+        out.cap.mode = pacing::FrameCapModeName(cap.mode);
+        out.cap.hz = cap.hz;
+        out.cap.late = cap.late - from.late;
+        out.cap.resets = cap.resets - from.resets;
+        out.cap.wait_ms = frames ? (cap.wait_ms - from.wait_ms) / double(frames) : 0;
+        out.cap.spin_ms = frames ? (cap.spin_ms - from.spin_ms) / double(frames) : 0;
+        if (reset) present_cap_ = cap;
         return out;
     }
 
@@ -610,6 +623,8 @@ private:
     render::PassRecordingStats measure_rec_;
     render::CaptureProfile measure_profile_;
     render::GpuSkipStats measure_gpu_;
+    // the frame cap's totals when present_stats last started over
+    pacing::FrameCapStats present_cap_;
 };
 
 bool SendAll(socket_t s, const std::string& data) {

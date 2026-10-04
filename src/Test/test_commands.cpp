@@ -526,7 +526,15 @@ std::string PresentJson(const PresentStats& s) {
                   seconds > 0 ? double(s.game_frames) / seconds : 0.0);
     out += buf;
     out += ",\"ms\":" + Distribution(s.game_ms);
-    out += ",\"hitches\":" + std::to_string(Hitches(s.game_ms)) + "}}";
+    out += ",\"hitches\":" + std::to_string(Hitches(s.game_ms));
+    out += ",\"cap\":{\"mode\":";
+    AppendJsonString(out, s.cap.mode);
+    char cap[192];
+    std::snprintf(cap, sizeof(cap),
+                  ",\"hz\":%.2f,\"late\":%llu,\"resets\":%llu,\"wait_ms\":%.3f,\"spin_ms\":%.3f}}}",
+                  s.cap.hz, static_cast<unsigned long long>(s.cap.late),
+                  static_cast<unsigned long long>(s.cap.resets), s.cap.wait_ms, s.cap.spin_ms);
+    out += cap;
     return out;
 }
 

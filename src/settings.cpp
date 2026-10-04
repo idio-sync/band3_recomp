@@ -1,5 +1,6 @@
 #include "settings.h"
 #include "renderer_default.h"
+#include "Hooks/frame_pacing.h"
 #include <atomic>
 #include <mutex>
 #include <string_view>
@@ -207,6 +208,18 @@ REXCVAR_DEFINE_INT32(background_fps, 0, "Band3/Graphics",
     "whatever the game's refresh rate, or that many fps (at most the refresh rate). RB3 "
     "counts it as if the game ran at 60, so at refresh_rate 120 a venue's 30 drew at 60")
     .range(0, 240);
+
+// src/Hooks/frame_pacing.h says what the cap does in place of the vblank
+REXCVAR_DEFINE_STRING(frame_cap, "off", "Band3/Graphics",
+    "What paces the game's frames. display: the display's refresh rate exactly "
+    "(119.88 Hz, not 120), for fixed-refresh displays. auto: a little under it (5% less, at "
+    "least 4 fps), for VRR displays (G-Sync, FreeSync), keeping each frame inside their range; "
+    "on a fixed-refresh display a cap under the refresh rate shows a frame twice every "
+    "1/(refresh - cap) seconds. A number of Hz (24 to 240), e.g. 117. off: the emulated "
+    "console's vertical blank, paced by vsync and refresh_rate (the default). With the cap on, "
+    "vsync is turned off and an unset refresh_rate follows the cap. Without a display whose "
+    "rate can be told, display and auto are off")
+    .validator([](std::string_view v) { return band3::pacing::ParseFrameCap(v).has_value(); });
 
 // native on Windows, emulated elsewhere: renderer_default.h says why it's
 // chosen at build time

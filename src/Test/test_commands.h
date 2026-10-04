@@ -168,6 +168,16 @@ struct PresentStats {
     // the game's frames: between the ends of its Presents
     uint64_t game_frames = 0;
     std::vector<double> game_ms;
+    // the frame cap now (frame_cap): "off", "display", "auto" or "fixed", and
+    // its rate; in the same time, the frames that ended after their beat by
+    // less than a frame and the times one later than that started the beat
+    // again, and the mean a frame waited for its beat and, of that, spun
+    struct Cap {
+        std::string mode = "off";
+        double hz = 0;
+        uint64_t late = 0, resets = 0;
+        double wait_ms = 0, spin_ms = 0;
+    } cap;
 };
 
 // a setting's value as the game has it, and what set it
