@@ -1,0 +1,37 @@
+# Takes a fresh profile online with Liveless from the overshell alone, without
+# finding Xbox Live players: liveless.b3t up to backing out of Play on Xbox
+# Live, which leaves it at the main hub, online. For a game that joins (or is
+# joined) through an invite rather than a search; launched as liveless.b3t's
+# are.
+#   python tools/band3ctl.py --port 21181 launch --fresh -- --liveless=true --username=host
+#   python tools/band3ctl.py --port 21181 run tests/game/liveless_online.b3t
+
+wait screen=splash_screen timeout=120s
+press start
+wait screen=first_time_calibration timeout=30s
+press down
+press green
+wait screen=dx_welcome_screen timeout=30s
+sleep 2s
+press green
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 2s
+press green
+wait screen=manage_band_screen timeout=30s
+sleep 2s
+press red
+wait screen=main_hub_screen timeout=30s
+sleep 2s
+# the overshell: Play on Xbox Live
+press start
+sleep 2s
+press down
+sleep 1s
+press green
+sleep 4s
+# back out of it: Return
+press up
+sleep 1s
+press green
+sleep 2s
+screenshot liveless-online

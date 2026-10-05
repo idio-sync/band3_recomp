@@ -55,6 +55,9 @@ add_executable(band3_tests
     rhythmverse_test.cpp
     song_id_test.cpp
     online_test.cpp
+    liveless_rooms_protocol_test.cpp
+    liveless_rooms_client_test.cpp
+    port_mapping_protocol_test.cpp
     native_socket_test.cpp
     frame_pacing_test.cpp
     launcher_start_test.cpp
@@ -88,11 +91,15 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Launcher/launcher_start.cpp
     ${BAND3_ROOT}/src/Launcher/mic_level.cpp
     ${BAND3_ROOT}/src/Net/album_art.cpp
+    ${BAND3_ROOT}/src/Net/liveless_rooms_client.cpp
+    ${BAND3_ROOT}/src/Net/liveless_rooms_protocol.cpp
     ${BAND3_ROOT}/src/Net/native_socket.cpp
     ${BAND3_ROOT}/src/Net/online.cpp
+    ${BAND3_ROOT}/src/Net/port_mapping_protocol.cpp
     ${BAND3_ROOT}/src/Net/http_request.cpp
     ${BAND3_ROOT}/src/Net/json.cpp
     ${BAND3_ROOT}/src/Net/rhythmverse.cpp
+    ${BAND3_ROOT}/src/Net/sha1.cpp
     ${BAND3_ROOT}/src/paths.cpp
     ${BAND3_ROOT}/src/Render/capture_file.cpp
     ${BAND3_ROOT}/src/Render/frame_compose.cpp
@@ -104,9 +111,12 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Test/test_commands.cpp
     ${BAND3_ROOT}/src/Test/test_inputs.cpp
 )
-# instrument captures replayed by hid_capture_test.cpp
+# instrument captures replayed by hid_capture_test.cpp, and the Liveless Rooms
+# packets liveless_rooms_protocol_test.cpp shares with tools/liveless_rooms_mock.py (and
+# port_mapping_protocol_test.cpp's with tools/port_mapping_mock.py)
 target_compile_definitions(band3_tests PRIVATE
     BAND3_CAPTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/captures"
+    BAND3_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden"
 )
 # capture_file.cpp saves with fopen, as band3's own build lets it
 set_source_files_properties(${BAND3_ROOT}/src/Render/capture_file.cpp PROPERTIES
@@ -121,7 +131,7 @@ target_link_libraries(band3_tests PRIVATE tomlplusplus::tomlplusplus)
 # src/Content/package_scan.cpp scans folders on threads of its own
 find_package(Threads REQUIRED)
 target_link_libraries(band3_tests PRIVATE Threads::Threads)
-# src/Net/native_socket.cpp sends and receives over Winsock
+# src/Net/native_socket.cpp and liveless_rooms_client.cpp send and receive over Winsock
 if(WIN32)
     target_link_libraries(band3_tests PRIVATE ws2_32)
 endif()

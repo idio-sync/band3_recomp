@@ -1,0 +1,27 @@
+# PCP (RFC 6887) and NAT-PMP (RFC 6886) packets, as "name hex" lines: what band3
+# sends a router (src/Net/port_mapping_protocol.cpp) and what a router answers.
+# tests/port_mapping_protocol_test.cpp holds band3's encoder and parser to them, and
+# tools/test_port_mapping_mock.py the mock router (tools/port_mapping_mock.py).
+#
+# The requests: UDP port 9103 inside and out, an hour (3600 s) or 0 to delete, from
+# 192.168.1.20 with the PCP nonce 01 02 ... 0C. The replies: public address
+# 203.0.113.5, epoch 42.
+pcp_map_request 0201000000000E1000000000000000000000FFFFC0A801140102030405060708090A0B0C11000000238F238F00000000000000000000FFFF00000000
+pcp_delete_request 020100000000000000000000000000000000FFFFC0A801140102030405060708090A0B0C11000000238F238F00000000000000000000FFFF00000000
+pcp_map_reply 0281000000000E100000002A0000000000000000000000000102030405060708090A0B0C11000000238F238F00000000000000000000FFFFCB007105
+pcp_delete_reply 02810000000000000000002A0000000000000000000000000102030405060708090A0B0C11000000238F238F00000000000000000000FFFFCB007105
+# the router mapped it to 9104 outside
+pcp_map_reply_other_port 0281000000000E100000002A0000000000000000000000000102030405060708090A0B0C11000000238F239000000000000000000000FFFFCB007105
+# result 2, NOT_AUTHORIZED, without the MAP part
+pcp_map_reply_not_authorized 02810002000000000000002A000000000000000000000000
+# "unsupported version", result 1: a NAT-PMP router's to PCP, and a PCP-only one's to NAT-PMP
+unsupported_version_natpmp 008100010000002A
+unsupported_version_pcp 02800001000000000000002A000000000000000000000000
+natpmp_external_address_request 0000
+natpmp_external_address_reply 008000000000002ACB007105
+natpmp_map_request 00010000238F238F00000E10
+natpmp_delete_request 00010000238F000000000000
+natpmp_map_reply 008100000000002A238F238F00000E10
+natpmp_delete_reply 008100000000002A238F000000000000
+# result 2, not authorized or refused
+natpmp_map_reply_refused 008100020000002A238F000000000000

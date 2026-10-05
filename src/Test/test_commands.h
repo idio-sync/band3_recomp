@@ -9,6 +9,8 @@
 #include <variant>
 #include <vector>
 #include "src/Input/instrument_kind.h"
+#include "src/Net/liveless_rooms.h"
+#include "src/Net/port_mapping.h"
 #include "game_state.h"
 
 // The test harness's commands: one line of text in, one line of JSON out. They
@@ -246,6 +248,18 @@ public:
     // to, as the window would, without the window having focus; returns an
     // error, or empty
     virtual std::string PressBind(std::string_view bind) = 0;
+    // player 1 accepts an invite to the Liveless game at host:port (Liveless
+    // on), with the BandUI's joined-by-invite flag set first if `force_flag`;
+    // returns an error, or empty
+    virtual std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) = 0;
+    // Liveless Rooms (src/Net/liveless_rooms.h): its status; a join by code
+    // (1-8 letters and digits, upper case), which goes without waiting for the
+    // server's answer; connecting again. The last two return an error, or empty.
+    virtual rooms::Status RoomsStatus() = 0;
+    virtual std::string RoomsJoin(const std::string& code) = 0;
+    virtual std::string RoomsConnect() = 0;
+    // Liveless' port mapping on the router (src/Net/port_mapping.h)
+    virtual port_mapping::Status PortMappingStatus() = 0;
     // the live native view, drawing every frame the game captures at width x
     // height as F9's window does (without post-processing unless `post`), and
     // its numbers, which on and off reset; on returns an error, or empty.
@@ -268,7 +282,10 @@ public:
 };
 
 struct Condition {
-    enum class Kind { kScreen, kScreenContains, kInGame, kMenus, kSong, kFrames, kScore, kMic };
+    enum class Kind {
+        kScreen, kScreenContains, kInGame, kMenus, kSong, kFrames, kScore, kMic, kRooms,
+        kPortMapping, kJoined
+    };
     Kind kind = Kind::kInGame;
     std::string text;
     uint64_t frames = 0;

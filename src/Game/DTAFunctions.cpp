@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "generated/band3_init.h"
+#include "src/build_tag.h"
 #include "src/Net/events.h"
 #include "src/Game/SongCache.h"
 #include "src/Net/local_address.h"
@@ -163,8 +164,10 @@ static void PrintDebugHandler(PPCContext& ctx, uint8_t* base) {
 // using any of these; band3 answers as the version it follows
 static void ApiVersionHandler(PPCContext& ctx, uint8_t* base) { ReturnInt(ctx, base, 0); }
 
+// {rb3e_build_tag}: RB3E's is its git describe; band3's the same, named, as
+// the Liveless Rooms server gets it
 static void BuildTagHandler(PPCContext& ctx, uint8_t* base) {
-    ReturnSymbol(ctx, base, band3::events::kBuildTag, "unknown");
+    ReturnSymbol(ctx, base, std::string("band3 ") + band3::BuildTag(), "unknown");
 }
 
 // RB3E's build's commit; band3's build doesn't record one

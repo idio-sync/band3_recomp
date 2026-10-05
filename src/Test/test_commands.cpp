@@ -6,6 +6,8 @@
 #include <optional>
 #include <utility>
 #include <vector>
+#include "src/Net/liveless_rooms_client.h"
+#include "src/Net/online.h"
 #include "test_inputs.h"
 
 namespace band3::test {
@@ -123,6 +125,15 @@ std::string StateJson(const GameStateSnapshot& s, TestTarget& target) {
         }
         out += ']';
     }
+    if (s.rooms_state != "off") {
+        out += ",\"rooms\":";
+        AppendJsonString(out, s.rooms_state);
+    }
+    if (s.port_mapping_state != "off") {
+        out += ",\"port_mapping\":";
+        AppendJsonString(out, s.port_mapping_state);
+    }
+    if (s.joined) out += ",\"joined\":true";
     out += ",\"instruments\":[";
     for (int player = 1; player <= kPlayerCount; player++) {
         if (player > 1) out += ',';
@@ -815,6 +826,169 @@ std::string Bind(TestTarget& target, const std::vector<std::string_view>& args) 
     return Ok();
 }
 
+// liveless_invite <host[:port]> [force_flag]: player 1 accepts an invite to
+// the Liveless game there, on RB3Enhanced's 9103 unless given
+std::string LivelessInvite(TestTarget& target, const std::vector<std::string_view>& args) {
+    constexpr std::string_view kUsage = "usage: liveless_invite <host[:port]> [force_flag]";
+    if (args.size() < 2 || args.size() > 3) return Error(target, kUsage);
+    const bool force_flag = args.size() == 3;
+    if (force_flag && args[2] != "force_flag") return Error(target, kUsage);
+    const auto game = online::ParseEndpoint(args[1], online::kGamePort);
+    if (!game) return Error(target, std::string(args[1]) + " isn't an address (host or host:port)");
+    if (std::string error = target.LivelessInvite(game->host, game->port, force_flag);
+        !error.empty()) {
+        return Error(target, error);
+    }
+    return Ok();
+}
+
+using StatusFields = std::vector<std::pair<std::string_view, std::string>>;
+
+// A status command's checks, args[1] on: each field is the value
+// (<field>=<value>), isn't it (<field>!=<value>; retry_in!=0: a retry is
+// coming), or has the text in it (<field>~<text>, for errors, which have
+// spaces). Empty when every check holds, else what's wrong: `verb`'s usage, a
+// field it hasn't, or the field that isn't, named as `label`'s with the whole
+// status (`json`) after it.
+std::string CheckStatusFields(std::string_view verb, std::string_view label, const StatusFields& fields,
+                              std::string_view json, const std::vector<std::string_view>& args) {
+    for (size_t i = 1; i < args.size(); i++) {
+        const size_t at = args[i].find_first_of("=~");
+        const bool unequal =
+            at != std::string_view::npos && at > 0 && args[i][at] == '=' && args[i][at - 1] == '!';
+        const size_t name_end = unequal ? at - 1 : at;
+        if (at == std::string_view::npos || name_end == 0) {
+            return "usage: " + std::string(verb) + " [<field>=<value>|<field>!=<value>|<field>~<text>]...";
+        }
+        const std::string_view name = args[i].substr(0, name_end), want = args[i].substr(at + 1);
+        const bool contains = args[i][at] == '~';
+        const auto field = std::find_if(fields.begin(), fields.end(),
+                                        [&](const auto& f) { return f.first == name; });
+        if (field == fields.end()) return std::string(verb) + " has no field " + std::string(name);
+        const bool holds = contains  ? field->second.find(want) != std::string::npos
+                           : unequal ? field->second != want
+                                     : field->second == want;
+        if (!holds) {
+            const char* how = contains ? "containing " : unequal ? "other than " : "";
+            return std::string(label) + " " + std::string(name) + " is \"" + field->second + "\", not " +
+                   how + "\"" + std::string(want) + "\"; {" + std::string(json) + "}";
+        }
+    }
+    return {};
+}
+
+// Liveless Rooms' status, each field as text: addresses dotted, empty for none
+StatusFields RoomsFields(const rooms::Status& s) {
+    auto ip = [](uint32_t address) { return address ? rooms::Ipv4Text(address) : std::string(); };
+    return {
+        {"state", std::string(rooms::StateName(s.state))},
+        {"server", s.server},
+        {"code", s.code},
+        {"public_ip", ip(s.public_ipv4)},
+        {"advertised_ip", ip(s.advertised_ipv4)},
+        {"error", s.error},
+        {"last_join_user", s.last_join_user},
+        {"last_join_ip", ip(s.last_join_ipv4)},
+        {"game_socket", s.game_socket_seen ? "true" : "false"},
+        {"retry_in", std::to_string(s.retry_in_s)},
+        {"attempt", std::to_string(s.attempt)},
+    };
+}
+
+std::string RoomsJson(const rooms::Status& s) {
+    std::string out = "\"rooms\":{";
+    bool first = true;
+    for (const auto& [name, value] : RoomsFields(s)) {
+        if (!first) out += ',';
+        first = false;
+        AppendJsonString(out, name);
+        out += ':';
+        // a boolean and numbers, bare
+        if (name == "game_socket" || name == "retry_in" || name == "attempt") {
+            out += value;
+        } else {
+            AppendJsonString(out, value);
+        }
+    }
+    out += '}';
+    return out;
+}
+
+// rooms_status [<field>=<value>|<field>!=<value>|<field>~<text>]...: Liveless
+// Rooms' status; with checks (CheckStatusFields'), a failure unless each holds
+std::string RoomsStatus(TestTarget& target, const std::vector<std::string_view>& args) {
+    const rooms::Status status = target.RoomsStatus();
+    const std::string json = RoomsJson(status);
+    if (std::string error = CheckStatusFields("rooms_status", "rooms", RoomsFields(status), json, args);
+        !error.empty()) {
+        return Error(target, error);
+    }
+    return Ok(json);
+}
+
+// rooms_join <code>: asks the Rooms server for the game with that code
+std::string RoomsJoin(TestTarget& target, const std::vector<std::string_view>& args) {
+    if (args.size() != 2) return Error(target, "usage: rooms_join <code>");
+    std::string code(args[1]);
+    if (std::string error = rooms::NormalizeCode(code); !error.empty()) return Error(target, error);
+    if (std::string error = target.RoomsJoin(code); !error.empty()) return Error(target, error);
+    std::string fields = "\"code\":";
+    AppendJsonString(fields, code);
+    return Ok(fields);
+}
+
+// rooms_connect: connects to the Rooms server again
+std::string RoomsConnect(TestTarget& target, const std::vector<std::string_view>& args) {
+    if (args.size() != 1) return Error(target, "usage: rooms_connect");
+    if (std::string error = target.RoomsConnect(); !error.empty()) return Error(target, error);
+    return Ok();
+}
+
+// Liveless' port mapping, each field as text: the address dotted, empty for
+// none; port and lease_s are numbers in the JSON
+StatusFields PortMappingFields(const port_mapping::Status& s) {
+    return {
+        {"state", std::string(port_mapping::StateName(s.state))},
+        {"method", std::string(port_mapping::MethodName(s.method))},
+        {"external_ip", s.external_ipv4 ? rooms::Ipv4Text(s.external_ipv4) : std::string()},
+        {"port", std::to_string(s.port)},
+        {"lease_s", std::to_string(s.lease_s)},
+        {"error", s.error},
+    };
+}
+
+std::string PortMappingJson(const port_mapping::Status& s) {
+    std::string out = "\"port_mapping\":{";
+    bool first = true;
+    for (const auto& [name, value] : PortMappingFields(s)) {
+        if (!first) out += ',';
+        first = false;
+        AppendJsonString(out, name);
+        out += ':';
+        if (name == "port" || name == "lease_s") {
+            out += value;
+        } else {
+            AppendJsonString(out, value);
+        }
+    }
+    out += '}';
+    return out;
+}
+
+// port_mapping_status [<field>=<value>|<field>!=<value>|<field>~<text>]...:
+// the port mapping's status; with checks (CheckStatusFields'), a failure
+// unless each holds
+std::string PortMappingStatus(TestTarget& target, const std::vector<std::string_view>& args) {
+    const port_mapping::Status status = target.PortMappingStatus();
+    const std::string json = PortMappingJson(status);
+    if (std::string error = CheckStatusFields("port_mapping_status", "port_mapping",
+                                              PortMappingFields(status), json, args);
+        !error.empty()) {
+        return Error(target, error);
+    }
+    return Ok(json);
+}
+
 }
 
 std::variant<Condition, std::string> ParseCondition(std::string_view text) {
@@ -823,6 +997,8 @@ std::variant<Condition, std::string> ParseCondition(std::string_view text) {
         c.kind = Condition::Kind::kInGame;
     } else if (text == "menus") {
         c.kind = Condition::Kind::kMenus;
+    } else if (text == "joined") {
+        c.kind = Condition::Kind::kJoined;
     } else if (text.starts_with("screen=")) {
         c.kind = Condition::Kind::kScreen;
         c.text = text.substr(7);
@@ -847,9 +1023,28 @@ std::variant<Condition, std::string> ParseCondition(std::string_view text) {
         if (!n || *n < 1 || *n > kMicSlots) return "mic= takes a mic slot, 1 to 4";
         c.kind = Condition::Kind::kMic;
         c.mic = *n;
+    } else if (text.starts_with("rooms=")) {
+        c.kind = Condition::Kind::kRooms;
+        c.text = text.substr(6);
+        bool known = false;
+        for (auto state : {rooms::State::kOff, rooms::State::kConnecting, rooms::State::kConnected,
+                           rooms::State::kLoggedIn, rooms::State::kDisconnected, rooms::State::kFailed}) {
+            known |= c.text == rooms::StateName(state);
+        }
+        if (!known) return "rooms= takes off, connecting, connected, logged_in, disconnected or failed";
+    } else if (text.starts_with("port_mapping=")) {
+        c.kind = Condition::Kind::kPortMapping;
+        c.text = text.substr(13);
+        bool known = false;
+        for (auto state : {port_mapping::State::kOff, port_mapping::State::kSearching,
+                           port_mapping::State::kMapped, port_mapping::State::kFailed}) {
+            known |= c.text == port_mapping::StateName(state);
+        }
+        if (!known) return "port_mapping= takes off, searching, mapped or failed";
     } else {
         return "no condition " + std::string(text) +
-               " (screen=, screen~, in_game, menus, song=, frames=, score>=, mic=)";
+               " (screen=, screen~, in_game, menus, song=, frames=, score>=, mic=, rooms=, "
+               "port_mapping=, joined)";
     }
     if ((c.kind == Condition::Kind::kScreen || c.kind == Condition::Kind::kScreenContains ||
          c.kind == Condition::Kind::kSong) &&
@@ -877,6 +1072,9 @@ bool ConditionHolds(const Condition& condition, const GameStateSnapshot& state,
         const uint64_t fed_before = slot < start.mics.size() ? start.mics[slot].bytes_fed : 0;
         return state.mics[slot].bytes_fed > fed_before;
     }
+    case Condition::Kind::kRooms: return state.rooms_state == condition.text;
+    case Condition::Kind::kPortMapping: return state.port_mapping_state == condition.text;
+    case Condition::Kind::kJoined: return state.joined;
     }
     return false;
 }
@@ -933,6 +1131,11 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "cvar") return Cvar(target, args);
     if (verb == "folders") return FoldersReply(target, args);
     if (verb == "bind") return Bind(target, args);
+    if (verb == "liveless_invite") return LivelessInvite(target, args);
+    if (verb == "rooms_status") return RoomsStatus(target, args);
+    if (verb == "rooms_join") return RoomsJoin(target, args);
+    if (verb == "rooms_connect") return RoomsConnect(target, args);
+    if (verb == "port_mapping_status") return PortMappingStatus(target, args);
     if (verb == "native_view") return NativeView(target, args);
     if (verb == "present_stats") return PresentStatsCommand(target, args);
     if (verb == "quit") {

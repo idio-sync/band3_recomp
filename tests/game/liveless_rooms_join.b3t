@@ -1,0 +1,34 @@
+# Joins a Liveless Rooms game on this PC by typing its code, and plays a song
+# in its band on autoplay to the results: the joiner's half of the pair.
+# liveless_rooms_host.b3t's header has the mock, both launches and the order
+# to run them in; this one runs last, in front, once both games are online.
+#
+# The Rooms server answers the code with the host's address (its local network
+# one, both games having the same public address), and the game takes it as an
+# invite and joins the host's band (`joined`: the host's JoinResultMsg said
+# yes). The host picks the song; each player picks their own part.
+
+rooms_status state=logged_in code=JOIN0001 game_socket=true
+set autoplay true
+rooms_join HOST0001
+wait joined timeout=30s
+rooms_status last_join_user=host error=
+sleep 3s
+# Play Now, Quickplay, Choose Songs
+press green
+sleep 3s
+press green
+sleep 3s
+press green
+wait screen=song_select_screen timeout=60s
+# the host makes the setlist
+wait screen=part_difficulty_screen timeout=120s
+wait frames=90
+# Bass (offered first, as the host has guitar), its default difficulty
+press green
+wait frames=30
+press green
+wait in_game timeout=120s
+expect song=20thcenturyboy
+wait score>=1 timeout=60s
+wait screen=coop_endgame_screen timeout=300s

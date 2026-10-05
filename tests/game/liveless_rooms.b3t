@@ -1,0 +1,50 @@
+# Logs a fresh profile in to a Liveless Rooms server and takes it online:
+# against the mock server on this PC, never the public one, so every launch
+# with liveless_rooms on names 127.0.0.1 (the mock signs its logins with the
+# address it's given, the same string as --address). The mock first:
+#   python tools/liveless_rooms_mock.py --address 127.0.0.1 --ping 2 --drop 30 --codes HOST0001
+#   python tools/band3ctl.py --port 21181 launch --fresh -- --liveless=true --liveless_rooms=true --liveless_rooms_server=127.0.0.1 --username=host --log_net_calls=true
+#   python tools/band3ctl.py --port 21181 run tests/game/liveless_rooms.b3t
+# It stays logged in through 40 s of the mock's pings (the mock's log has no
+# "ping timeout"), then once online tells players joining it the address the
+# server saw (band3's log: "liveless: advertising 127.0.0.1 (rooms server)"),
+# and a code no game has is an error that leaves it logged in.
+
+wait rooms=logged_in timeout=20s
+rooms_status state=logged_in code=HOST0001 public_ip=127.0.0.1 error=
+sleep 40s
+expect rooms=logged_in
+wait screen=splash_screen timeout=120s
+press start
+wait screen=first_time_calibration timeout=30s
+press down
+press green
+wait screen=dx_welcome_screen timeout=30s
+sleep 2s
+press green
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 2s
+press green
+wait screen=manage_band_screen timeout=30s
+sleep 2s
+press red
+wait screen=main_hub_screen timeout=30s
+sleep 2s
+# the overshell: Play on Xbox Live
+press start
+sleep 2s
+press down
+sleep 1s
+press green
+sleep 4s
+# back out of it: Return
+press up
+sleep 1s
+press green
+sleep 2s
+rooms_status state=logged_in advertised_ip=127.0.0.1 game_socket=true
+rooms_join nope0000
+sleep 1s
+expect rooms=logged_in
+rooms_status state=logged_in code=HOST0001 error~NOPE0000
+screenshot liveless-rooms

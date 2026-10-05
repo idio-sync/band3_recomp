@@ -49,6 +49,9 @@
 #include "src/Input/input_system.h"
 #include "src/Input/virtual_instrument.h"
 #include "src/Input/xinput_state.h"
+#include "src/Net/liveless_rooms.h"
+#include "src/Net/online_hooks.h"
+#include "src/Net/port_mapping.h"
 #include "src/Render/capture_file.h"
 #include "src/Render/frame_compose.h"
 #include "src/Render/gpu_skip.h"
@@ -171,6 +174,8 @@ public:
                 state.mics.push_back({slot.device, slot.connected, slot.bytes_fed});
             }
         }
+        state.rooms_state = rooms::StateName(rooms::GetStatus().state);
+        state.port_mapping_state = port_mapping::StateName(port_mapping::GetStatus().state);
         return state;
     }
 
@@ -539,9 +544,27 @@ public:
         return error;
     }
 
+    std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) override {
+        return online::FakeInvite(host, port, force_flag);
+    }
+
+    rooms::Status RoomsStatus() override { return rooms::GetStatus(); }
+
+    std::string RoomsJoin(const std::string& code) override { return rooms::Join(code); }
+
+    std::string RoomsConnect() override { return rooms::Connect(); }
+
+    port_mapping::Status PortMappingStatus() override { return port_mapping::GetStatus(); }
+
+    // as the window's close button: RequestClose skips the close request the
+    // button makes (band3_app.h's OnWindowCloseRequested), so online play
+    // lets go of the router's port mapping and the Rooms server here first
     void Quit() override {
         rex::ui::Window* window = window_;
-        app_context_->CallInUIThreadDeferred([window] { window->RequestClose(); });
+        app_context_->CallInUIThreadDeferred([window] {
+            online::Stop();
+            window->RequestClose();
+        });
     }
 
     bool Cancelled() override { return stopping_.load(); }
