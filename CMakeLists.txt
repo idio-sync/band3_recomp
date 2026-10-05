@@ -22,12 +22,21 @@ endif()
 
 rexglue_setup_target(band3 GPU_PLUGINS xenos)
 
-# UDP sockets for the RB3E network events (src/Net/events.cpp), and HTTPS
-# requests for RhythmVerse's songs (src/Net/web_client.cpp)
+# the SDK's runtime library by file name (rexruntime[d|rd].dll,
+# librexruntime[d|rd].so), for src/sdk_export.cpp
+target_compile_definitions(band3 PRIVATE BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")
+target_link_libraries(band3 PRIVATE ${CMAKE_DL_LIBS})
+# the SDK stages its runtime beside band3 on Windows and macOS only; Linux
+# looks for it there too ($ORIGIN)
+if(UNIX AND NOT APPLE)
+    add_custom_command(TARGET band3 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:rex::runtime>
+                $<TARGET_FILE_DIR:band3>)
+endif()
+
+# UDP sockets for the RB3E network events (src/Net/events.cpp)
 if(WIN32)
-    target_link_libraries(band3 PRIVATE ws2_32 winhttp)
-    # the SDK's runtime DLL by file name (rexruntime[d|rd].dll), for src/Content/content_hooks.cpp
-    target_compile_definitions(band3 PRIVATE BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")
+    target_link_libraries(band3 PRIVATE ws2_32)
     # symbol map, to resolve the frames src/crash_trace.cpp logs
     target_link_options(band3 PRIVATE "LINKER:/MAP:${CMAKE_BINARY_DIR}/band3.map")
 endif()
@@ -35,3 +44,15 @@ endif()
 # MIDI input for MIDI drum kits (src/Input/midi_drums_driver.cpp)
 include(cmake/rtmidi.cmake)
 band3_setup_rtmidi(band3 ${CMAKE_CURRENT_SOURCE_DIR}/src/ThirdParty/rtmidi/RtMidi.cpp)
+
+# HTTPS requests for RhythmVerse's songs (src/Net/web_client.cpp)
+include(cmake/web_client.cmake)
+band3_setup_web_client(band3)
+
+# UPnP port mapping for Liveless (src/Net/port_mapping.cpp)
+include(cmake/miniupnpc.cmake)
+band3_setup_miniupnpc(band3 ${CMAKE_CURRENT_SOURCE_DIR}/src/ThirdParty/miniupnpc)
+
+# the build tag src/build_tag.cpp gives the log and the Liveless Rooms server
+include(cmake/build_tag.cmake)
+band3_setup_build_tag(band3 ${CMAKE_CURRENT_SOURCE_DIR})

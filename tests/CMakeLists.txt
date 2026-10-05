@@ -13,6 +13,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 get_filename_component(BAND3_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
+# The launcher's config writer needs toml++, but these tests don't need the
+# ReXGlue SDK. Fetch the same header-only version shipped with the SDK.
+include(FetchContent)
+FetchContent_Declare(tomlplusplus
+    URL https://codeload.github.com/marzer/tomlplusplus/tar.gz/refs/tags/v3.4.0
+    URL_HASH SHA256=8517f65938a4faae9ccf8ebb36631a38c1cadfb5efa85d9a72e15b9e97d25155
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SYSTEM
+)
+FetchContent_MakeAvailable(tomlplusplus)
+
 add_executable(band3_tests
     main.cpp
     instruments_test.cpp
@@ -44,6 +55,9 @@ add_executable(band3_tests
     rhythmverse_test.cpp
     song_id_test.cpp
     online_test.cpp
+    liveless_rooms_protocol_test.cpp
+    liveless_rooms_client_test.cpp
+    port_mapping_protocol_test.cpp
     native_socket_test.cpp
     frame_pacing_test.cpp
     launcher_start_test.cpp
@@ -54,6 +68,7 @@ add_executable(band3_tests
     device_lists_test.cpp
     input_backend_test.cpp
     device_view_test.cpp
+    dred_report_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp
@@ -76,11 +91,15 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Launcher/launcher_start.cpp
     ${BAND3_ROOT}/src/Launcher/mic_level.cpp
     ${BAND3_ROOT}/src/Net/album_art.cpp
+    ${BAND3_ROOT}/src/Net/liveless_rooms_client.cpp
+    ${BAND3_ROOT}/src/Net/liveless_rooms_protocol.cpp
     ${BAND3_ROOT}/src/Net/native_socket.cpp
     ${BAND3_ROOT}/src/Net/online.cpp
+    ${BAND3_ROOT}/src/Net/port_mapping_protocol.cpp
     ${BAND3_ROOT}/src/Net/http_request.cpp
     ${BAND3_ROOT}/src/Net/json.cpp
     ${BAND3_ROOT}/src/Net/rhythmverse.cpp
+    ${BAND3_ROOT}/src/Net/sha1.cpp
     ${BAND3_ROOT}/src/paths.cpp
     ${BAND3_ROOT}/src/Render/capture_file.cpp
     ${BAND3_ROOT}/src/Render/frame_compose.cpp
@@ -92,9 +111,12 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Test/test_commands.cpp
     ${BAND3_ROOT}/src/Test/test_inputs.cpp
 )
-# instrument captures replayed by hid_capture_test.cpp
+# instrument captures replayed by hid_capture_test.cpp, and the Liveless Rooms
+# packets liveless_rooms_protocol_test.cpp shares with tools/liveless_rooms_mock.py (and
+# port_mapping_protocol_test.cpp's with tools/port_mapping_mock.py)
 target_compile_definitions(band3_tests PRIVATE
     BAND3_CAPTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/captures"
+    BAND3_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden"
 )
 # capture_file.cpp saves with fopen, as band3's own build lets it
 set_source_files_properties(${BAND3_ROOT}/src/Render/capture_file.cpp PROPERTIES
@@ -104,14 +126,12 @@ target_include_directories(band3_tests PRIVATE
     ${BAND3_ROOT}
     ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty
 )
-# toml++ (header-only), for the launcher's band3.toml writer; only toml++ is
-# used from the SDK's headers
-target_include_directories(band3_tests SYSTEM PRIVATE ${BAND3_ROOT}/.rexglue-sdk/include)
+target_link_libraries(band3_tests PRIVATE tomlplusplus::tomlplusplus)
 
 # src/Content/package_scan.cpp scans folders on threads of its own
 find_package(Threads REQUIRED)
 target_link_libraries(band3_tests PRIVATE Threads::Threads)
-# src/Net/native_socket.cpp sends and receives over Winsock
+# src/Net/native_socket.cpp and liveless_rooms_client.cpp send and receive over Winsock
 if(WIN32)
     target_link_libraries(band3_tests PRIVATE ws2_32)
 endif()
@@ -128,7 +148,7 @@ add_executable(band3_write_config
     ${BAND3_ROOT}/src/Launcher/config_file.cpp
 )
 target_include_directories(band3_write_config PRIVATE ${BAND3_ROOT})
-target_include_directories(band3_write_config SYSTEM PRIVATE ${BAND3_ROOT}/.rexglue-sdk/include)
+target_link_libraries(band3_write_config PRIVATE tomlplusplus::tomlplusplus)
 if(MSVC)
     target_compile_options(band3_write_config PRIVATE /W4)
 else()

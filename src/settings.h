@@ -50,6 +50,7 @@ REXCVAR_DECLARE(bool, fullbright);
 REXCVAR_DECLARE(bool, compress_character_textures);
 REXCVAR_DECLARE(bool, disable_even_odd_rendering);
 REXCVAR_DECLARE(int32_t, background_fps);
+REXCVAR_DECLARE(std::string, frame_cap);
 REXCVAR_DECLARE(std::string, renderer);
 REXCVAR_DECLARE(int32_t, native_max_height);
 
@@ -77,6 +78,9 @@ REXCVAR_DECLARE(bool, liveless);
 REXCVAR_DECLARE(std::string, liveless_connect);
 REXCVAR_DECLARE(std::string, liveless_external_ip);
 REXCVAR_DECLARE(int32_t, liveless_port);
+REXCVAR_DECLARE(bool, liveless_port_mapping);
+REXCVAR_DECLARE(bool, liveless_rooms);
+REXCVAR_DECLARE(std::string, liveless_rooms_server);
 
 // Band3/Debug
 REXCVAR_DECLARE(bool, debug_overlay);
@@ -84,6 +88,8 @@ REXCVAR_DECLARE(bool, native_math);
 REXCVAR_DECLARE(bool, native_camera_shake);
 REXCVAR_DECLARE(bool, log_shake_timing);
 REXCVAR_DECLARE(bool, log_net_calls);
+REXCVAR_DECLARE(std::string, liveless_gateway);
+REXCVAR_DECLARE(std::string, liveless_upnp_url);
 REXCVAR_DECLARE(bool, autoplay);
 REXCVAR_DECLARE(bool, virtual_instrument);
 REXCVAR_DECLARE(std::string, virtual_instrument_type);
@@ -93,7 +99,9 @@ REXCVAR_DECLARE(int32_t, test_random_seed);
 REXCVAR_DECLARE(int32_t, relaunch_wait_pid);
 REXCVAR_DECLARE(std::string, native_view_backend);
 REXCVAR_DECLARE(bool, native_present_zero_copy);
+REXCVAR_DECLARE(bool, dred);
 REXCVAR_DECLARE(bool, native_present_pacing);
+REXCVAR_DECLARE(bool, native_present_pipeline);
 REXCVAR_DECLARE(bool, native_view_record_targets);
 REXCVAR_DECLARE(std::string, native_view_rt_fallback);
 REXCVAR_DECLARE(bool, native_view_normal_maps);
@@ -134,6 +142,11 @@ struct StartupSettings {
     std::string liveless_connect;
     std::string liveless_external_ip;
     int32_t liveless_port;
+    bool liveless_port_mapping;
+    bool liveless_rooms;
+    std::string liveless_rooms_server;
+    std::string liveless_gateway;
+    std::string liveless_upnp_url;
     bool native_camera_shake;
 };
 const StartupSettings& Startup();

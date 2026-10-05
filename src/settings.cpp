@@ -1,4 +1,6 @@
 #include "settings.h"
+#include "renderer_default.h"
+#include "Hooks/frame_pacing.h"
 #include <atomic>
 #include <mutex>
 #include <string_view>
@@ -92,8 +94,8 @@ REXCVAR_DEFINE_BOOL(menu_shortcut, true, "Band3/Game",
     "menu, or both stick clicks and the left bumper for the Instrument Lab");
 
 REXCVAR_DEFINE_BOOL(steam_deck_defaults, true, "Band3/Game",
-    "On a Steam Deck, start fullscreen and letterboxed with vsync on and the FPS counter "
-    "off, unless band3.toml or the command line set those")
+    "On a Steam Deck, start fullscreen and letterboxed at the console's 60 Hz with vsync on "
+    "and the FPS counter off, unless band3.toml or the command line set those")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_STRING(joypad_lag, "", "Band3/Game",
@@ -129,7 +131,7 @@ REXCVAR_DEFINE_BOOL(gold_on_all_difficulties, false, "Band3/Game",
     "Let gold stars be earned on every difficulty, not only expert "
     "(RB3Enhanced's AllowGoldOnAllDifficulties). Applies from the next song");
 REXCVAR_DEFINE_STRING(content_folders, "songs", "Band3/Game",
-    "Folders RB3 reads DLC and custom songs from (Windows for now), without installing them, "
+    "Folders RB3 reads DLC and custom songs from, without installing them, "
     "separated by '|'. Subfolders count too. A relative folder is relative to "
     "band3_config.ini's folder (or band3's own folder if there is no ini)")
     .lifecycle(Lifecycle::kRequiresRestart);
@@ -207,11 +209,26 @@ REXCVAR_DEFINE_INT32(background_fps, 0, "Band3/Graphics",
     "counts it as if the game ran at 60, so at refresh_rate 120 a venue's 30 drew at 60")
     .range(0, 240);
 
-REXCVAR_DEFINE_STRING(renderer, "emulated", "Band3/Graphics",
-    "What draws the game's picture: emulated, the emulated Xbox 360 GPU, or native "
-    "(experimental), band3's own renderer drawing what the game sent the GPU, at the "
-    "window's size, under the overlays. The emulated GPU keeps running either way, so it "
-    "switches at once (F8)")
+// src/Hooks/frame_pacing.h says what the cap does in place of the vblank
+REXCVAR_DEFINE_STRING(frame_cap, "display", "Band3/Graphics",
+    "What paces the game's frames. display: the display's refresh rate exactly "
+    "(119.88 Hz, not 120), for fixed-refresh displays (the default). auto: a little under "
+    "it (5% less, at least 4 fps), for VRR displays (G-Sync, FreeSync), keeping each frame "
+    "inside their range; on a fixed-refresh display a cap under the refresh rate shows a "
+    "frame twice every 1/(refresh - cap) seconds. A number of Hz (24 to 240), e.g. 117. off: the emulated "
+    "console's vertical blank, paced by vsync and refresh_rate (60 unless set). With the cap on, "
+    "vsync is turned off and an unset refresh_rate follows the cap. Without a display whose "
+    "rate can be told, display and auto are off")
+    .validator([](std::string_view v) { return band3::pacing::ParseFrameCap(v).has_value(); });
+
+// native on Windows, emulated elsewhere: renderer_default.h says why it's
+// chosen at build time
+REXCVAR_DEFINE_STRING(renderer, band3::settings::kDefaultRenderer, "Band3/Graphics",
+    "What draws the game's picture: native, band3's own renderer drawing what the game "
+    "sent the GPU, at the window's size, under the overlays, or emulated, the emulated Xbox "
+    "360 GPU. Native is the default on Windows, emulated elsewhere; on Microsoft's software "
+    "rasterizer (Windows without a GPU driver) native draws on the CPU. The emulated GPU "
+    "keeps running either way, so it switches at once (F8)")
     .allowed({"emulated", "native"});
 
 REXCVAR_DEFINE_INT32(native_max_height, 0, "Band3/Graphics",
@@ -225,8 +242,11 @@ REXCVAR_DEFINE_STRING(emulated_gpu_while_native, "skip_draws", "Band3/Graphics",
     "With renderer = native, what the emulated GPU still does: skip_draws leaves out the "
     "game's draws nobody sees (the native renderer draws them), keeping what RB3 draws once "
     "(outfits) so F8 back shows the game's picture; full draws everything, as with "
-    "renderer = emulated")
-    .allowed({"full", "skip_draws"});
+    "renderer = emulated. swap_only also skips clears, resolves, the flares' occlusion-test "
+    "quads and the passes RB3 draws once, leaving only what the game waits on: a test and "
+    "performance mode, after which F8 back to emulated may show black outfits, portraits "
+    "and other stale pictures until RB3 draws them again")
+    .allowed({"full", "skip_draws", "swap_only"});
 
 // Band3/Integrations
 
@@ -327,6 +347,22 @@ REXCVAR_DEFINE_INT32(liveless_port, 9103, "Band3/Online",
     .range(1024, 65000)
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(liveless_port_mapping, true, "Band3/Online",
+    "Ask the router to forward liveless_port to this PC (PCP, NAT-PMP or UPnP), as "
+    "RB3Enhanced does, so players over the internet reach you without a port forward made "
+    "by hand. Deleted again when band3 closes")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(liveless_rooms, false, "Band3/Online",
+    "Join friends by a room code (1-8 letters and digits) through a Liveless Rooms server "
+    "(RB3Enhanced's), instead of typing an address. Needs liveless")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(liveless_rooms_server, "liveless-testing.ipg.pw", "Band3/Online",
+    "The Liveless Rooms server's host name, as the server knows itself (host[:port], port "
+    "19532 by default). Logging in registers your username there")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 // Band3/Debug
 
 REXCVAR_DEFINE_BOOL(debug_overlay, true, "Band3/Debug",
@@ -347,6 +383,18 @@ REXCVAR_DEFINE_BOOL(log_shake_timing, false, "Band3/Debug",
 
 REXCVAR_DEFINE_BOOL(log_net_calls, false, "Band3/Debug",
     "Log each of the game's network calls (sockets, XNet) and what it returned");
+
+REXCVAR_DEFINE_STRING(liveless_gateway, "", "Band3/Debug",
+    "Where liveless_port_mapping sends PCP and NAT-PMP (host[:port], port 5351 by default) "
+    "instead of the router, for testing against a stand-in. Empty asks the default gateway; "
+    "under the test harness, empty skips PCP and NAT-PMP")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(liveless_upnp_url, "", "Band3/Debug",
+    "The UPnP router description liveless_port_mapping uses (http://host:port/desc.xml) "
+    "instead of looking for one on the network, for testing against a stand-in. Under the "
+    "test harness, empty skips UPnP")
+    .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(autoplay, false, "Band3/Debug",
     "The game plays every part itself, from the next song start: for repeatable profiling "
@@ -391,11 +439,22 @@ REXCVAR_DEFINE_BOOL(native_present_zero_copy, true, "Band3/Debug",
     "when band3's renderer shares the game's device); off reads each frame back and uploads "
     "it, the way other platforms do, to compare");
 
+REXCVAR_DEFINE_BOOL(dred, false, "Band3/Debug",
+    "Turn on Direct3D 12's Device Removed Extended Data at startup (Windows): if the GPU "
+    "hangs, the crash trace says which command list and op it stopped at. Costs the GPU a "
+    "small write per op; the test harness (band3ctl launch) turns it on");
+
 REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Debug",
     "With renderer = native, publish each frame to the window a steady delay after the game "
     "presented it (about the slowest recent frame's), so frames that draw quickly (with "
     "even/odd rendering, every other one) don't reach a paint together with the one before; "
     "off publishes each as soon as it's drawn, to compare");
+
+REXCVAR_DEFINE_BOOL(native_present_pipeline, false, "Band3/Debug",
+    "With renderer = native on the zero-copy path, record the next frame while the GPU draws "
+    "the one before, waiting for the GPU only to hand a frame to the window, so a frame costs "
+    "the longer of its CPU and GPU time rather than both (for 120 Hz); off waits for each "
+    "frame right after sending it. Off until it has been checked in game");
 
 REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Debug",
     "Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, "
@@ -501,6 +560,11 @@ void SnapshotStartupSettings() {
         .liveless_connect = REXCVAR_GET(liveless_connect),
         .liveless_external_ip = REXCVAR_GET(liveless_external_ip),
         .liveless_port = REXCVAR_GET(liveless_port),
+        .liveless_port_mapping = REXCVAR_GET(liveless_port_mapping),
+        .liveless_rooms = REXCVAR_GET(liveless_rooms),
+        .liveless_rooms_server = REXCVAR_GET(liveless_rooms_server),
+        .liveless_gateway = REXCVAR_GET(liveless_gateway),
+        .liveless_upnp_url = REXCVAR_GET(liveless_upnp_url),
         .native_camera_shake = REXCVAR_GET(native_camera_shake),
     };
 }

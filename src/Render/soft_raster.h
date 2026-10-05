@@ -187,6 +187,22 @@ struct RasterOptions {
     // D3DMULTISAMPLE_2_SAMPLES offscreen target), 4 smoother than the game,
     // 1 none, as the renderers drew before
     uint32_t msaa = 2;
+    // On the GPU, what each indexed draw of the frame is (mesh, target,
+    // counts, textures and their samplers), kept while the GPU draws it
+    // (GpuRenderer::DescribeIndexedDraw): with the dred setting, so a GPU
+    // hang's report (crash_trace.cpp) names the draw the GPU stopped at.
+    // Not labels in the command list: SDL's go through WinPixEventRuntime.dll,
+    // which band3 doesn't ship, so they'd never reach DRED. The CPU ignores it.
+    bool gpu_labels = false;
+    // On the GPU, a frame drawn into the presenter's output
+    // (GpuRenderer::RenderFrameToOutput) is submitted and left to the GPU,
+    // its fence for the caller to wait out (OutputDone); off, it's waited for
+    // before RenderFrameToOutput returns, as it was before the pipeline.
+    // native_present_pipeline's alone: left to the GPU with the worker
+    // waiting for it at once, the debug layer saw the SDK's command lists go
+    // wrong (a barrier out of step, a list executed still open) and AMD GPUs
+    // hung, which waiting inside didn't.
+    bool gpu_no_wait = false;
 };
 
 // whether the renderers draw d, as far as the options say

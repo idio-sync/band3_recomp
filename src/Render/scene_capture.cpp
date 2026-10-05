@@ -2501,7 +2501,10 @@ GammaRamp ReadDisplayGamma() {
     GammaRamp g;
     rex::system::KernelState* kernel = rex::system::kernel_state();
     rex::Runtime* runtime = kernel ? kernel->emulator() : nullptr;
-    auto* graphics = runtime ? dynamic_cast<rex::graphics::GraphicsSystem*>(
+    // band3's GPU is the SDK's xenos plugin, whose system is a GraphicsSystem;
+    // not a dynamic_cast, as the Linux SDK keeps GraphicsSystem's typeinfo
+    // hidden inside the plugin, which leaves band3 unable to link one
+    auto* graphics = runtime ? static_cast<rex::graphics::GraphicsSystem*>(
                                    runtime->graphics_system())
                              : nullptr;
     const rex::graphics::CommandProcessor* cp =
@@ -3274,6 +3277,11 @@ extern "C" REX_FUNC(DxRnd__Present) {
     LatchGpuSkip(g_enabled.load(std::memory_order_relaxed),
                  g_record_targets.load(std::memory_order_relaxed),
                  g_frame_proc.exchange(-1, std::memory_order_relaxed));
+    // the frame cap's wait for this frame's beat, under either renderer: after
+    // the Present's time is taken, so the game's intervals are the cadence,
+    // and before a render check's hold, after which the cap starts its beat
+    // again (frame_pacing.h)
+    band3::pacing::PaceFrame();
     // held without the lock, which a texture let go of on another thread
     // meanwhile takes
     if (done) HoldIfRequested(done);

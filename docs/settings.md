@@ -16,6 +16,13 @@ display modes as resolutions. A saved device that isn't plugged in shows as "(no
 connected)" and stays chosen until you pick another, and **Other...** takes a typed name
 or part of one.
 
+The Graphics tab's **Renderer** picks what draws the game's picture: **Native**, band3's own
+[native renderer](native-renderer.md) (the default on Windows), or **Emulated GPU** (the
+default on Linux, where the native renderer hasn't been run yet). F8 switches between them
+in game. Its **Frame rate cap** is [`frame_cap`](#config-files): the display's refresh rate
+(the default), Auto for a VRR display, Off, a rate from the list, or **Other...** for a
+typed one. **VSync** shows only with the cap off, since the cap turns it off.
+
 The Controllers tab starts with a list of every controller and instrument band3 sees (Xbox
 pads and instruments, PS3/Wii/PS4/PS5 instruments on their dongles, a MIDI kit, the
 keyboard) and the player each one is, or "Not playing", and shows the selected one live
@@ -133,7 +140,8 @@ Some options worth knowing about, by the names F4 and the command line use:
 
 | Option | |
 |---|---|
-| `refresh_rate` | the rate the game runs at, e.g. 120 for a 120 Hz monitor (0 keeps the console's 60) |
+| `frame_cap` | what paces the game's frames, in place of the emulated console's vertical blank. `display` runs the game at the display's refresh rate exactly (119.88 Hz, not 120): best on a fixed-refresh display, and the default. `auto` runs it a little under (5% less, at least 4 fps: 114 at 120 Hz, 136.8 at 144): best on a VRR display (G-Sync, FreeSync), where it keeps every frame inside the display's range; on a fixed-refresh display a cap under its refresh rate shows a frame twice every 1/(refresh − cap) seconds. A number (24 to 240, e.g. `117`) caps there. `off` leaves the console's vertical blank to pace it, as `vsync` and `refresh_rate` say. With the cap on, `vsync` is turned off for the session (F4's Save to config then writes `vsync = false`, which matters only if `frame_cap` is later `off`), and `refresh_rate`, unless set, is set to the cap's rate. `display` and `auto` are off when the display's rate can't be told (on Linux, until the native view has run). Changes apply at once; the display is read again every 2 seconds |
+| `refresh_rate` | the rate the game runs at, e.g. 120 for a 120 Hz monitor (0 keeps the console's 60, or follows `frame_cap`) |
 | `background_fps` | the venue's frame rate: 0 keeps the venue's own (30 in most) at any `refresh_rate`, or set one, up to `refresh_rate`. Rates that divide `refresh_rate` (30 at 120, 180 or 240) draw evenly |
 | `forced_venue` | a venue, a class of venues, or a comma-separated mix to pick from at random |
 | `song_speed`, `track_speed` | play songs faster or slower, or scroll the highway faster |
@@ -163,9 +171,9 @@ beside the executable.
 
 ## DLC and custom songs
 
-On Windows for now, band3 reads DLC and custom songs (Xbox 360 `CON`, `LIVE` and `PIRS`
-packages, Rock Band and Rock Band 2 DLC included, as RB3 reads them) straight from the
-folders `content_folders` names (Band3 → Game, or `[game]` in `band3_config.ini`);
+band3 reads DLC and custom songs (Xbox 360 `CON`, `LIVE` and `PIRS` packages, Rock Band
+and Rock Band 2 DLC included, as RB3 reads them) straight from the folders
+`content_folders` names (Band3 → Game, or `[game]` in `band3_config.ini`);
 nothing is installed or unpacked, and band3 never writes there. Separate folders with `|`;
 subfolders count, and a relative folder is relative to the ini's folder, as above (`songs`
 beside it by default). Changes apply at the next launch, except songs the web page's
@@ -181,10 +189,24 @@ A custom song whose `song_id` is text instead of a number gets the number RB3Enh
 gives it (the text's CRC-32 mod 9999999, plus 2130000000), so IDs agree with
 RB3Enhanced's.
 
+## Loose files (mods)
+
+As with RB3Enhanced, a file on disk replaces the same file in the ARK, so mods such as
+custom characters can be installed without rebuilding the ARK. Put the file in the game
+data folder (`assets` by default, or `game_data_root`) at the path it has inside the ARK,
+with its Xbox name (`gen` folders and `_xbox` extensions as in the ARK). A `..` in an ARK
+path becomes a folder named `(..)`, as RB3Enhanced lays them out, so files packaged for
+RB3Enhanced go in as they are. band3 checks for each file as the game opens it, so a file
+added while the game runs is used the next time the game loads it.
+
+Each file read from disk instead of the ARK is logged as `NewFile: <path>`. If a mod
+doesn't show up, set `log_level = debug`: the log then also lists every file read from the
+ARK, marked `(ARK)`, with the path its replacement needs.
+
 ## Steam Deck
 
 On a Steam Deck, band3 starts fullscreen and letterboxed (the game is 16:9, the screen
-16:10), with vsync on and the FPS counter off, since Steam's performance overlay does
+16:10), at the console's 60 Hz (`frame_cap` off) with vsync on and the FPS counter off, since Steam's performance overlay does
 that job. These only fill in settings that `band3.toml` and the command line leave unset,
 but they win over `band3_config.ini`, whose window settings are for a desktop. Turn
 `steam_deck_defaults` off (Band3 → Game, then restart) to go back to the ini's.

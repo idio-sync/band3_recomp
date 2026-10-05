@@ -220,6 +220,9 @@ def start(args, exe):
     # machine; the game's audio still runs, so songs play on as usual
     if not args.sound and not any(a.startswith("--audio_mute") for a in args.extra):
         command.append("--audio_mute=true")
+    # GPU hang reports (DRED) in the crash trace; --dred=false leaves them off
+    if not any(a.startswith("--dred") for a in args.extra):
+        command.append("--dred=true")
     command += args.extra
     flags = 0
     startupinfo = None

@@ -17,7 +17,9 @@
 #include <memory>
 #include <string>
 
+#include "build_tag.h"
 #include "config.h"
+#include "crash_trace.h"
 #include "game_writes.h"
 #include "paths.h"
 #include "relaunch.h"
@@ -27,6 +29,7 @@
 #include "Content/content_hooks.h"
 #include "Content/live_content.h"
 #include "Game/SongCache.h"
+#include "Hooks/frame_pacing.h"
 #include "Input/input_system.h"
 #include "Input/instrument_lab.h"
 #include "Input/menu_shortcut_dialog.h"
@@ -38,6 +41,7 @@
 #include "Launcher/launcher_style.h"
 #include "Launcher/mic_meter.h"
 #include "Net/discord.h"
+#include "Net/liveless_rooms_panel.h"
 #include "Net/online_hooks.h"
 #include "Net/http_server.h"
 #include "Render/gpu_view.h"
@@ -76,6 +80,8 @@ class Band3App : public rex::ReXApp {
   std::unique_ptr<DebugOverlayDialog> debug_overlay_;
   std::unique_ptr<band3::input::InstrumentLabDialog> instrument_lab_;
   std::unique_ptr<band3::input::MenuShortcutDialog> menu_shortcut_;
+  // the Liveless Rooms panel, see src/Net/liveless_rooms_panel.h
+  std::unique_ptr<band3::rooms::RoomsPanelDialog> rooms_panel_;
   // the native view, see src/Render/native_view.h
   std::unique_ptr<band3::render::NativeViewDialog> native_view_;
   // the launcher while it's up, before the game starts (src/Launcher/)
@@ -122,6 +128,8 @@ class Band3App : public rex::ReXApp {
   // the window and input system don't exist yet, so everything set here applies
   // at startup
   void OnPostInitLogging() override {
+    // band3's first line, so any log says which build wrote it
+    REXLOG_INFO("band3 build {}", band3::BuildTag());
     // a relaunch (rb3e_relaunch_game) starts before the last run has closed
     band3::relaunch::WaitForPrevious();
     LogFolders(game_data_root(), user_data_root(), cache_root());
@@ -147,6 +155,10 @@ class Band3App : public rex::ReXApp {
     band3::settings::SnapshotStartupSettings();
     band3::input::InitVirtualInstrument();
     band3::test::Init();
+#ifdef _WIN32
+    // GPU hang reports, before SetupPresentation makes the SDK's device
+    if (REXCVAR_GET(dred)) band3::crash_trace::EnableDred();
+#endif
   }
 
   static void LogFolders(const std::filesystem::path& game_data,
@@ -225,9 +237,13 @@ class Band3App : public rex::ReXApp {
       REXLOG_WARN("Launcher: couldn't clear the launcher setting");
     }
     REXLOG_INFO("Launcher: {}", decision.reason);
-    if (!decision.show) return paths;
+    if (!decision.show) {
+      StartFrameCap();
+      return paths;
+    }
     if (!imgui_drawer()) {
       REXLOG_WARN("Launcher: no ImGui to draw it with, starting the game");
+      StartFrameCap();
       return paths;
     }
 
@@ -300,9 +316,22 @@ class Band3App : public rex::ReXApp {
     app_context().CallInUIThreadDeferred([this, paths = std::move(paths)] {
       launcher_.reset();
       if (debug_overlay_) debug_overlay_->set_hidden(false);
+      StartFrameCap();
       auto resume = std::move(resume_);
       resume(paths);
     });
+  }
+
+  // The frame cap (src/Hooks/frame_pacing.h), with the settings the game
+  // starts with. Not in OnPreSetup: that runs before the window, the launcher
+  // and the GPU plugin (whose vsync it turns off) exist. Here they all do, and
+  // the runtime that starts the plugin's vblank thread, which reads the
+  // guest's refresh rate once, isn't built yet.
+  void StartFrameCap() {
+    band3::pacing::StartFrameCap(window() ? window()->GetNativeWindowHandle() : nullptr,
+                                 [this](std::function<void()> task) {
+                                   app_context().CallInUIThreadDeferred(std::move(task));
+                                 });
   }
 
   void QuitFromLauncher() {
@@ -314,12 +343,17 @@ class Band3App : public rex::ReXApp {
 
   // while the launcher's settings are being edited and aren't saved, closing
   // the window asks first; once Play is pressed it closes as usual
+  // Closing the window ends the process without OnShutdown, so an accepted
+  // close also deletes the port mapping and closes the Rooms connection.
+  // The harness's quit closes without asking and stops online play itself
+  // (src/Test/test_server.cpp).
   bool OnWindowCloseRequested() override {
     if (launcher_ && !quit_confirmed_ && launcher_->IsEditing() &&
         launcher_->HasUnsavedChanges()) {
       launcher_->RequestQuit();
       return false;
     }
+    band3::online::Stop();
     return true;
   }
 
@@ -360,7 +394,6 @@ class Band3App : public rex::ReXApp {
     // a song cache rb3e_delete_songcache marked, before the game mounts it
     band3::song_cache::DeletePending(runtime()->user_data_root());
     band3::MountGameWrites(*runtime());
-#ifdef _WIN32
     // band3's content overrides hand saves to the SDK's own exports; without
     // them the first save would fail, so fail here instead
     if (!band3::content::ResolveSdkContentExports()) {
@@ -372,7 +405,6 @@ class Band3App : public rex::ReXApp {
       REXLOG_ERROR("online: the SDK's user exports are missing, can't continue");
       std::abort();
     }
-#endif
     band3::online::Start();
     band3::content::StartLiveContent(runtime()->file_system());
     band3::discord::Start();
@@ -391,9 +423,16 @@ class Band3App : public rex::ReXApp {
   void OnShutdown() override {
     // before the ImGui drawer it's attached to goes
     launcher_.reset();
+    band3::pacing::StopFrameCap();
+    // the Liveless Rooms client's thread reaches into the game (a join's
+    // invite, a NAT punch from the game's socket), so it ends while the kernel
+    // is still there, and before the test server that asks it for its status.
+    // Closing the window doesn't come here: the SDK exits the process at once
+    band3::online::Stop();
     band3::http::StopServer();
     band3::test::StopServer();
     rex::ui::UnregisterBind("bind_instrument_lab");
+    rex::ui::UnregisterBind("bind_liveless_rooms");
     rex::ui::UnregisterBind("bind_native_view");
     rex::ui::UnregisterBind("bind_renderer");
     // off the presenter, and the GPU done with the textures its paints read,
@@ -423,9 +462,15 @@ class Band3App : public rex::ReXApp {
         if (native_view_ && !launcher_) native_view_->Toggle();
       });
       rex::ui::RegisterBind("bind_renderer", "F8",
-                            "Switch between the emulated and the native renderer (experimental)", [] {
+                            "Switch between the native and the emulated renderer", [] {
         rex::cvar::SetFlagByName("renderer",
                                  REXCVAR_GET(renderer) == "native" ? "emulated" : "native");
+      });
+      // also opened by the overshell's Invite Friends while Rooms is on, which
+      // the panel watches for itself
+      rooms_panel_ = std::make_unique<band3::rooms::RoomsPanelDialog>(drawer);
+      rex::ui::RegisterBind("bind_liveless_rooms", "F10", "Toggle the Liveless Rooms panel", [this] {
+        if (rooms_panel_ && !launcher_) rooms_panel_->Toggle();
       });
       // deferred: opening the settings menu adds a dialog, and this runs while
       // the dialogs draw
@@ -440,6 +485,7 @@ class Band3App : public rex::ReXApp {
       debug_overlay_.reset();
       instrument_lab_.reset();
       menu_shortcut_.reset();
+      rooms_panel_.reset();
       native_view_.reset();
     }
   }

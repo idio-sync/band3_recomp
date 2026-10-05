@@ -47,13 +47,16 @@ struct Case {
     // the normal map's: the interpolated tangent and bitangent, the normal
     // map's and the detail map's texels, c14 and c106
     float u[3], b[3], nmap[4], detail[4], c14[4], c106[4];
+    // the hair's c19, its strands' second colour; 0 elsewhere
+    float c19[4];
 };
 
 // Made from the models (fam3.model, skin2.skin, hair3.hair) by
 // tools/shaders/research/gen_shade_cases.py, with no environment map. The
-// hair's cases have no specular colour, as its strand highlight (in colours
-// of its own, along the bitangent) is left out, so only its box highlight is
-// compared.
+// hair's strand highlight runs along the normal map's bitangent, so its
+// cases without the normal map have no specular colour (c2, c19), and only
+// their box highlight is compared; some of those with it have the strands
+// across the eye's reflection, where the highlight is.
 const Case kCases[] = {
     {"standard: two points, box, specular",
      kShadeLit | kShadeBox | kShadeSpecular | kShadeTextured, 2,
@@ -216,6 +219,46 @@ const Case kCases[] = {
      {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, 1.0f,
      {0.797f, 0.917f, -0.186f}, {0.978f, 0.923f, 0.181f}, {0.807f, 0.493f, 0.4f, 0.298f}, {0.726f, 0.297f, 0.242f, 0.683f},
      {0.842f, 0.0f, 0.0f, 0.0f}, {0.49f, 6.86f, 0.0f, 0.0f}},
+    {"hair: strands, normal and detail maps, two points",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadeSpecMap | kShadeHair | kShadeNormalMap | kShadeDetailMap | kShadeTextured, 2,
+     {{0.967f, 0.312f, 0.219f, 0.999f}, {0.074f, 0.048f, 0.261f, 0.138f}, {0.912f, 0.385f, 0.968f, 18.83f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.748f, 0.939f, 0.766f, 3.64f}, {35.82f, -75.73f, 97.53f, -0.001852f}, {79.35f, 44.93f, 114.6f, -0.001716f}, {1.291f, 1.895f, 1.616f, 1.566f}, {0.831f, 1.628f, 1.923f, 1.142f}, {0.495f, 0.401f, 0.111f, 0.029f}, {0.319f, 0.019f, 0.555f, 0.304f}, {0.31f, 0.246f, 0.397f, 0.55f}, {0.184f, 0.224f, 0.35f, 0.178f}, {0.357f, 0.326f, 0.26f, 0.404f}, {0.317f, 0.053f, 0.598f, 0.213f}},
+     {-6.82f, -9.72f, 42.95f}, {271.29f, -446.4f, 180.13f}, {-0.807f, 0.791f, -0.657f}, {0.547f, 0.349f, 0.328f, 0.357f}, 0.0f,
+     {0.272f, 0.133f, 0.582f, 0.816f}, {0.682f, 0.281f, 0.724f, 0.147f}, {0.411f, 0.828f, 0.921f, 0.461f},
+     {1.02494762f, 0.256622818f, 1.57390762f}, 0.112495392f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, 1.0f,
+     {0.693f, -0.003f, 0.048f}, {0.169f, 0.983f, 0.487f}, {0.478f, 0.682f, 0.615f, 0.383f}, {0.671f, 0.692f, 0.565f, 0.766f},
+     {0.313f, 0.0f, 0.0f, 0.0f}, {0.5f, 5.44f, 0.0f, 0.0f}, {0.472f, 0.337f, 0.754f, 0.548f}},
+    {"hair: strands across the reflection, normal and detail maps, AO, in shadow",
+     kShadeLit | kShadeSpecular | kShadeSpecMap | kShadeAO | kShadeHair | kShadeShadow | kShadeNormalMap | kShadeDetailMap | kShadeTextured, 1,
+     {{0.94f, 0.959f, 0.914f, 0.267f}, {0.237f, 0.169f, 0.212f, 0.052f}, {0.354f, 0.556f, 0.377f, 13.46f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.768f, 0.537f, 0.61f, 2.08f}, {85.66f, -80.14f, 148.03f, -0.002159f}, {0.0f, 0.0f, 0.0f, 0.0f}, {1.356f, 1.95f, 0.917f, 1.369f}, {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}},
+     {41.87f, 9.27f, 44.55f}, {-199.64f, -307.5f, 111.18f}, {-0.168f, -0.953f, 0.619f}, {0.687f, 0.974f, 0.805f, 0.949f}, 1.0f,
+     {0.585f, 0.989f, 0.774f, 0.412f}, {0.977f, 0.439f, 0.274f, 0.971f}, {0.466f, 0.197f, 0.934f, 0.95f},
+     {0.976314688f, 1.42595014f, 0.364972797f}, 0.005720208f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.507f, 0.587f, 0.84f, 0.0f}, {0.361f, 0.717f, -0.597f, 1.0f}, 0.0f,
+     {-0.568f, -0.793f, 0.058f}, {-0.643f, -0.768f, -0.095f}, {0.5f, 0.437f, 0.821f, 0.456f}, {0.5f, 0.735f, 0.688f, 0.737f},
+     {0.781f, 0.0f, 0.0f, 0.0f}, {0.448f, 5.85f, 0.0f, 0.0f}, {0.64f, 0.861f, 0.287f, 0.705f}},
+    {"hair: strands across the reflection, normal map, two points",
+     kShadeLit | kShadeBox | kShadeSpecular | kShadeSpecMap | kShadeHair | kShadeNormalMap | kShadeTextured, 2,
+     {{0.77f, 0.872f, 0.346f, 0.999f}, {0.078f, 0.268f, 0.037f, 0.303f}, {0.321f, 0.765f, 0.78f, 26.59f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.99f, 0.292f, 0.614f, 3.22f}, {20.6f, -3.26f, -132.17f, -0.004273f}, {16.83f, -53.2f, 273.42f, -0.001755f}, {1.593f, 1.734f, 0.568f, 1.305f}, {0.837f, 1.821f, 0.418f, 1.665f}, {0.479f, 0.491f, 0.595f, 0.516f}, {0.16f, 0.446f, 0.555f, 0.056f}, {0.297f, 0.093f, 0.086f, 0.288f}, {0.402f, 0.584f, 0.079f, 0.303f}, {0.598f, 0.459f, 0.319f, 0.146f}, {0.379f, 0.157f, 0.386f, 0.389f}},
+     {-10.87f, 29.48f, -9.65f}, {-18.67f, -350.51f, 150.11f}, {-0.629f, 0.149f, -0.131f}, {0.874f, 0.249f, 0.371f, 0.058f}, 0.0f,
+     {0.506f, 0.381f, 0.504f, 0.788f}, {0.134f, 0.99f, 0.74f, 0.718f}, {0.539f, 0.576f, 0.41f, 0.396f},
+     {0.592788265f, 3.53926202f, 1.02912645f}, 0.238525236f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, 1.0f,
+     {-0.558f, -0.394f, -0.412f}, {-0.912f, -0.095f, -0.32f}, {0.5f, 0.114f, 0.31f, 0.535f}, {0.5f, 0.452f, 0.58f, 0.743f},
+     {0.487f, 0.0f, 0.0f, 0.0f}, {0.429f, 6.32f, 0.0f, 0.0f}, {0.455f, 0.777f, 0.518f, 0.216f}},
+    {"hair: strands across the reflection, normal and detail maps, AO, shadow lit",
+     kShadeLit | kShadeSpecular | kShadeSpecMap | kShadeAO | kShadeHair | kShadeShadow | kShadeNormalMap | kShadeDetailMap | kShadeTextured, 1,
+     {{0.502f, 0.941f, 0.875f, 0.371f}, {0.349f, 0.255f, 0.017f, 0.381f}, {0.405f, 0.445f, 0.539f, 28.07f}, {0.0f, 2.0f, 0.0f, 0.0f}, {0.03f, 0.059f, 0.011f, 10.0f}, {0.866f, 0.61f, 0.836f, 3.47f}, {-5.4f, -58.24f, -22.61f, -0.004139f}, {0.0f, 0.0f, 0.0f, 0.0f}, {1.954f, 1.381f, 0.467f, 1.414f}, {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}},
+     {18.45f, 38.22f, 25.55f}, {-168.31f, -555.87f, 290.11f}, {-0.252f, -0.666f, 0.143f}, {0.619f, 0.541f, 0.452f, 0.304f}, 0.7f,
+     {0.545f, 0.512f, 0.713f, 0.503f}, {0.419f, 0.988f, 0.2f, 0.596f}, {0.417f, 0.805f, 0.708f, 0.566f},
+     {1.17070173f, 1.3033884f, 0.320834185f}, 0.071099553f,
+     {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
+     {0.558f, 0.492f, 0.365f, 0.0f}, {0.606f, 0.678f, -0.416f, 1.0f}, 1.0f,
+     {0.22f, -0.541f, -0.968f}, {0.4f, -0.634f, 0.707f}, {0.5f, 0.573f, 0.126f, 0.516f}, {0.5f, 0.719f, 0.363f, 0.764f},
+     {0.729f, 0.0f, 0.0f, 0.0f}, {0.247f, 3.86f, 0.0f, 0.0f}, {0.756f, 0.373f, 0.641f, 0.889f}},
 };
 
 void Set(float4& to, const float* from) { to = {from[0], from[1], from[2], from[3]}; }
@@ -242,6 +285,7 @@ ShadeParams ParamsFor(const Case& c) {
     Set(sp.shadow_color, c.c107);
     Set(sp.shadow_dir, c.c108);
     sp.normal_map = {c.c14[0], c.c106[0], c.c106[1], 0};
+    Set(sp.specular2, c.c19);
     return sp;
 }
 
@@ -903,6 +947,14 @@ TEST_CASE("PackShade takes each term from the option word, not stale registers")
     PackShade(it, &s, o, true, sp);
     CHECK(Has(sp, kShadeAO));
     CHECK_FALSE(Has(sp, kShadeAoSh));
+
+    // VARIATION=2 is the hair, whose strands' second colour is PS c19
+    s = MakeState(Bit(kRealLights) | Bit(kPerPixel) | (uint64_t(2) << kCustomVariation));
+    s.ps[ShadeRegIndex(19)][1] = 0.125f;
+    PackShade(it, &s, o, true, sp);
+    CHECK(Has(sp, kShadeHair));
+    CHECK_FALSE(Has(sp, kShadeSkin));
+    CHECK(sp.specular2.y == 0.125f);
 
     // REFRACT_WORLD, option bit 46, on an unlit material (the score box's)
     s = MakeState(Bit(kDiffuseMap) | Bit(46));

@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <string>
 
 namespace band3::online {
 
@@ -11,6 +12,12 @@ bool ResolveSdkExports();
 // RB3Enhanced does on a console with Xbox Live blocked. Call before the game
 // runs.
 void Start();
+
+// Ends what Start began that runs on threads of its own (the Liveless Rooms
+// client, and the port mapping, which it deletes from the router). Call when
+// the window closes or at shutdown, before the test server stops and the
+// kernel goes.
+void Stop();
 
 // Set by Start, for the hooks:
 // players count as signed in to Live, and Quazal skips Live's security
@@ -26,6 +33,18 @@ bool Liveless();
 uint16_t LivelessJoinPort();
 uint16_t LivelessPort();
 uint32_t LivelessExternalAddress();
+
+// Liveless: makes `host`:`port` the game to join from now on, as
+// liveless_connect does at launch; false if guest memory ran out.
+bool SetLivelessJoin(const std::string& host, uint16_t port);
+
+// Liveless: has the game accept an invite to the game at `host`:`port`, as
+// the console does when the player accepts one from the guide: it's told of
+// the invite (XN_LIVE_INVITE_ACCEPTED, for player 1), its
+// XInviteGetAcceptedInfo then reads one for that game, and the join goes
+// there. `force_flag` also sets the BandUI's "joined through an invite" flag
+// first. Returns an error, or empty.
+std::string FakeInvite(const std::string& host, uint16_t port, bool force_flag);
 
 // The address RB3Enhanced's session search hands the game for the game to
 // join (192.0.2.1, reserved for documentation), which Quazal then looks up by

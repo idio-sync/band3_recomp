@@ -7,14 +7,11 @@
 # presses during a transition are dropped.
 
 wait screen=splash_screen timeout=120s
-press start
-wait screen=first_time_calibration timeout=30s
+press start until screen=first_time_calibration timeout=30s
 # Continue, not Calibrate System
 press down
-press green
-wait screen=dx_welcome_screen timeout=30s
+press green until screen=dx_welcome_screen timeout=30s
 screenshot boot-dx-welcome
 # Let's Rock!
-press green
-wait screen=hint_rb3_welcome_screen timeout=30s
+press green until screen=hint_rb3_welcome_screen timeout=30s
 screenshot boot-rb3-welcome

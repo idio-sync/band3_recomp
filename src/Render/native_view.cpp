@@ -1,5 +1,6 @@
 #include "src/Render/native_view.h"
 
+#include "src/Launcher/launcher_platform.h"
 #include "src/Render/capture_file.h"
 #include "src/Render/frame_compose.h"
 #include "src/Render/gpu_skip.h"
@@ -7,6 +8,7 @@
 #include "src/Render/png_writer.h"
 #include "src/Render/post_model.h"
 #include "src/Render/present_model.h"
+#include "src/crash_trace.h"
 #include "src/settings.h"
 
 #include <imgui.h>
@@ -91,12 +93,18 @@ std::string DescribeRaster(const RasterStats& rs) {
     return buf;
 }
 
-std::string DescribeGpu(const GpuStats& gs) {
+// `output`: drawn into the presenter's output (RenderFrameToOutput), whose
+// ms is up to submitting and wait_ms the worker's wait for the GPU after
+std::string DescribeGpu(const GpuStats& gs, bool output) {
+    const char* format =
+        output ? "gpu: %u draws (%u texture passes, %u not drawn yet), %u uploads, %.1f ms to "
+                 "submit, then %.1f ms waiting for the GPU; %u sampled a render target nothing "
+                 "drew\n"
+               : "gpu: %u draws (%u texture passes, %u not drawn yet), %u uploads, %.1f ms "
+                 "(%.1f ms after submit); %u sampled a render target nothing drew\n";
     char buf[240];
-    std::snprintf(buf, sizeof(buf),
-                  "gpu: %u draws (%u texture passes, %u not drawn yet), %u uploads, %.1f ms "
-                  "(%.1f ms after submit); %u sampled a render target nothing drew\n",
-                  gs.draws, gs.passes, gs.skipped, gs.uploads, gs.ms, gs.wait_ms, gs.rt_missing);
+    std::snprintf(buf, sizeof(buf), format, gs.draws, gs.passes, gs.skipped, gs.uploads, gs.ms,
+                  gs.wait_ms, gs.rt_missing);
     return buf;
 }
 
@@ -350,6 +358,38 @@ class Renderer {
     // capture is its whole picture to start with (a screen whose frames
     // none is, if there is one, starts with what it has)
     static constexpr uint32_t kStartWait = 8;
+    // How often the worker looks at a submitted frame's fence while it waits
+    // for the GPU to finish it: SDL_gpu's own wait has no timeout, and a hung
+    // GPU would hold the worker in it for good. A frame unfinished after
+    // kGpuHung holds the worker (WaitFlight), which then looks every
+    // kHeldPoll.
+    static constexpr std::chrono::microseconds kFencePoll{250};
+    static constexpr std::chrono::milliseconds kHeldPoll{10};
+    static constexpr std::chrono::milliseconds kGpuHung{2000};
+
+    // A frame drawn, until it's published: what it was drawn from and for,
+    // how, and its numbers. On the zero-copy path it's submitted to the GPU
+    // (RenderFrameToOutput) and the worker goes on while the GPU draws it:
+    // `done` once a look at its fence finds it finished (PollFlight), and
+    // published once done and due.
+    struct Drawn {
+        std::shared_ptr<const FrameCapture> cap;
+        std::chrono::steady_clock::time_point presented;  // by the game
+        uint64_t generation = 0;  // the presenting stretch it's drawn for
+        bool presenting = false;
+        bool new_frame = false;  // a capture not drawn before, not a redraw
+        bool pace = false;       // published by PublishPacer
+        int slot = -1;           // its output, on the zero-copy path
+        bool drew_output = false, drew_gpu = false, want_rgba = false;
+        GpuOutput out;
+        GpuStats gs;
+        RasterStats rs;
+        uint32_t width = 0, height = 0;
+        bool done = true;
+        // steady-clock nanoseconds: recorded and submitted, seen done, and
+        // due (once done; -1 before)
+        int64_t submitted_ns = 0, done_ns = 0, due_ns = -1;
+    };
 
     void Run() {
         uint64_t last_frame = 0;
@@ -366,15 +406,41 @@ class Renderer {
         // one starting, the captures seen while waiting for its first
         uint64_t drawn_generation = 0, start_generation = 0, start_seen = 0;
         uint32_t start_waited = 0;
+        gpu_held_ = false;
+        // The zero-copy path's frame submitted and not yet published, which
+        // the GPU may still be drawing. One at most: with
+        // native_present_pipeline the worker records the next capture into
+        // another output while the GPU draws it, and publishes it before it
+        // records another, so the GPU never has more than two of the
+        // worker's frames to draw; without, it waits for each once
+        // submitted, and the GPU has one.
+        std::optional<Drawn> flight;
+        // When `d`, drawn by `done_ns`, is to be published: a new frame for
+        // the window a steady delay after the game presented it
+        // (PublishPacer), a redraw (new options, a screenshot of a paused
+        // game) at once. The worker publishes sooner once the next capture
+        // is there or a setting or a user changes.
+        auto due_of = [&](const Drawn& d, int64_t done_ns) {
+            if (!d.pace || !d.new_frame) return done_ns;
+            if (d.generation != pacer_generation) {
+                pacer.Reset();
+                pacer_generation = d.generation;
+            }
+            return pacer.Due(d.cap->frame, Nanoseconds(d.presented), done_ns);
+        };
         while (true) {
             RasterOptions o;
             std::string dump;
-            bool changed, gpu, zero_copy, want_rgba, presenting, pace;
+            bool changed, gpu, zero_copy, want_rgba, presenting, pace, pipeline;
             // the presenting stretch this frame is drawn for (PresentSlots)
             uint64_t generation;
             {
                 std::lock_guard lock(mutex_);
-                if (stop_) return;
+                if (stop_) {
+                    // a frame the GPU may still be drawing is nobody's
+                    if (flight) slots_.Abandon(flight->slot);
+                    return;
+                }
                 o = options_;
                 // the presenter's size wins over the window's and the live view's
                 if (present_) {
@@ -396,6 +462,8 @@ class Renderer {
                 // and the world's REFRACT_WORLD draws (the title's road) read
                 // the last world frame's scene, as the game's do
                 o.pre_buffer = true;
+                // what each GPU draw is, for a GPU hang's DRED report
+                o.gpu_labels = REXCVAR_GET(dred);
                 gpu = gpu_;
                 dump = dump_path_;
                 zero_copy = present_ && present_zero_copy_ && gpu && dump.empty();
@@ -406,6 +474,10 @@ class Renderer {
                 presenting = present_;
                 generation = slots_.Generation();
                 pace = presenting && REXCVAR_GET(native_present_pacing);
+                // the next frame recorded while the GPU draws this one, or
+                // each waited for once submitted
+                pipeline = REXCVAR_GET(native_present_pipeline);
+                o.gpu_no_wait = pipeline;
             }
             // a capture published after this is a new one (the pacing's
             // wait, below)
@@ -435,15 +507,53 @@ class Renderer {
                 }
                 if (!StartsPicture(*cap) && start_waited < kStartWait) fresh = false;
             }
-            if (!cap || !fresh || (cap->frame == last_frame && !changed)) {
+            // something to draw: a capture not drawn yet, or a setting or a
+            // user changed
+            const bool work = cap && fresh && (cap->frame != last_frame || changed);
+            int slot = -1;
+            if (flight) {
+                // The frame in flight is published once the GPU has finished
+                // it and it's due, or as soon as it's finished once there's
+                // something new to draw. Until it's finished, something new
+                // is drawn meanwhile into another output, with
+                // native_present_pipeline, if one is free and the GPU isn't
+                // held (WaitFlight); else the worker waits for it, as nothing
+                // else can go on.
+                if (!flight->done) PollFlight(*flight);
+                if (flight->done) {
+                    if (flight->due_ns < 0) flight->due_ns = due_of(*flight, flight->done_ns);
+                    const int64_t now = Nanoseconds(std::chrono::steady_clock::now());
+                    if (!work && flight->due_ns > now) {
+                        WaitForCapture(seen, std::chrono::nanoseconds(flight->due_ns - now));
+                        continue;
+                    }
+                    PublishDrawn(*flight, nullptr);
+                    flight.reset();
+                } else {
+                    // (a frame left in flight as native_present_pipeline
+                    // turned off is waited for, never overlapped)
+                    if (work && zero_copy && pipeline && !gpu_held_) {
+                        std::lock_guard lock(mutex_);
+                        slot = slots_.Acquire();
+                    }
+                    if (slot < 0) {
+                        WaitFlight(*flight, &seen);
+                        if (changed) {
+                            std::lock_guard lock(mutex_);
+                            options_changed_ = true;
+                        }
+                        continue;
+                    }
+                }
+            }
+            if (!work) {
                 // until the game publishes a capture, or a setting or a user
                 // changes (WakeCaptureWaiters)
                 epoch = WaitForCapture(epoch, kIdleWait);
                 continue;
             }
             // an output no paint may still be sampling, or wait for one
-            int slot = -1;
-            if (zero_copy) {
+            if (zero_copy && slot < 0) {
                 slot = AcquireSlot();
                 if (slot < 0) {
                     std::lock_guard lock(mutex_);
@@ -471,82 +581,196 @@ class Renderer {
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 continue;
             }
+            Drawn d;
+            d.cap = cap;
+            d.presented = presented;
+            d.generation = generation;
+            d.presenting = presenting;
+            d.new_frame = new_frame;
+            d.pace = pace;
+            d.slot = slot;
+            d.want_rgba = want_rgba;
+            d.width = o.width;
+            d.height = o.height;
             // RenderFrame fails (and stays failed) without a device, and the
             // CPU draws instead
-            GpuStats gs;
-            RasterStats rs;
-            GpuOutput out;
-            bool drew_gpu = false, drew_output = false;
             if (slot >= 0) {
-                drew_output = GpuRenderer::Get().RenderFrameToOutput(*cap, o, slot, out, gs);
-                drew_gpu = drew_output;
+                d.drew_output = GpuRenderer::Get().RenderFrameToOutput(*cap, o, slot, d.out, d.gs);
+                d.drew_gpu = d.drew_output;
+                d.submitted_ns = Nanoseconds(std::chrono::steady_clock::now());
+                if (d.drew_output) {
+                    std::lock_guard lock(mutex_);
+                    slots_.Submitted(slot);
+                    d.done = false;
+                    if (live_measuring_)
+                        live_.in_flight_max =
+                            std::max(live_.in_flight_max, uint32_t(slots_.InFlight()));
+                }
+                // native_present_pipeline off: the GPU finishes each frame
+                // before the worker goes on, as it did before the pipeline
+                if (d.drew_output && !pipeline) WaitFlight(d, nullptr);
                 // an output that failed the zero-copy checks is read back, and
-                // the drawer turns to uploading from the next paint
-                if (drew_output && (want_rgba || !out.d3d12_resource)) {
+                // the drawer turns to uploading from the next paint; reading
+                // it back waits for the GPU, so the frame is done at once
+                if (d.drew_output && (d.want_rgba || !d.out.d3d12_resource)) {
                     uint32_t w = 0, h = 0;
-                    drew_gpu = GpuRenderer::Get().DownloadOutput(slot, rgba, w, h);
-                    want_rgba = true;
+                    d.drew_gpu = GpuRenderer::Get().DownloadOutput(slot, rgba, w, h);
+                    d.want_rgba = true;
+                    WaitFlight(d, nullptr);
                 }
             } else if (gpu) {
-                drew_gpu = GpuRenderer::Get().RenderFrame(*cap, o, rgba, gs);
+                d.drew_gpu = GpuRenderer::Get().RenderFrame(*cap, o, rgba, d.gs);
             }
-            if (!drew_gpu) {
-                rs = Rasterize(*cap, o, rgba);
-                want_rgba = true;
+            if (!d.drew_gpu) {
+                d.rs = Rasterize(*cap, o, rgba);
+                d.want_rgba = true;
             }
-            const std::string stats =
-                Describe(*cap, drew_gpu ? DescribeGpu(gs) : DescribeRaster(rs));
-            // a new frame for the window is published a steady delay after
-            // the game presented it (PublishPacer), or sooner once the next
-            // capture is there or a setting or a user changes; a redraw (new
-            // options, a screenshot of a paused game) at once
-            if (pace && new_frame) {
-                if (generation != pacer_generation) {
-                    pacer.Reset();
-                    pacer_generation = generation;
+            if (flight && slot >= 0 && !d.drew_output) {
+                // the GPU failed, and gpu_view let its device go, the frame
+                // before's output with it: nobody's
+                std::lock_guard lock(mutex_);
+                slots_.Abandon(flight->slot);
+                flight.reset();
+            }
+            if (flight) {
+                // the frame before, which the GPU was still drawing as this
+                // one was recorded: published as soon as it's finished, this
+                // one being newer (and noted by the pacer, in order)
+                if (!WaitFlight(*flight, nullptr)) {
+                    // stopping: both are nobody's
+                    if (!d.done) {
+                        std::lock_guard lock(mutex_);
+                        slots_.Abandon(d.slot);
+                    }
+                    continue;
                 }
-                const int64_t now = Nanoseconds(std::chrono::steady_clock::now());
-                const int64_t due = pacer.Due(cap->frame, Nanoseconds(presented), now);
-                if (due > now) WaitForCapture(seen, std::chrono::nanoseconds(due - now));
+                flight->due_ns = due_of(*flight, flight->done_ns);
+                PublishDrawn(*flight, nullptr);
+                flight.reset();
             }
+            if (!d.done) {
+                // in flight until the GPU finishes it (above, next time
+                // round), or stopping before a read back's frame finished
+                if (!d.want_rgba) {
+                    flight = std::move(d);
+                } else {
+                    std::lock_guard lock(mutex_);
+                    slots_.Abandon(d.slot);
+                }
+                continue;
+            }
+            // drawn, and finished: published when due
+            const int64_t now = Nanoseconds(std::chrono::steady_clock::now());
+            const int64_t due = due_of(d, now);
+            if (due > now) WaitForCapture(seen, std::chrono::nanoseconds(due - now));
+            PublishDrawn(d, d.want_rgba ? &rgba : nullptr);
+        }
+    }
+
+    // One look at the fence of `f`, in flight: done, and its slot finished
+    // (PresentSlots::Finished), once the GPU has finished it; and the worker
+    // no longer held, if it was (WaitFlight).
+    bool PollFlight(Drawn& f) {
+        if (f.done) return true;
+        if (!GpuRenderer::Get().OutputDone(f.slot)) return false;
+        f.done = true;
+        f.done_ns = Nanoseconds(std::chrono::steady_clock::now());
+        if (gpu_held_) {
+            gpu_held_ = false;
+            REXLOG_INFO("native renderer: the GPU finished the frame after {} ms; drawing again",
+                        (f.done_ns - f.submitted_ns) / 1000000);
+        }
+        std::lock_guard lock(mutex_);
+        slots_.Finished(f.slot);
+        return true;
+    }
+
+    // Waits for the GPU to finish `f`, looking every kFencePoll, until it
+    // has (true), the worker stops, or with `seen` a capture or a setting
+    // moves CaptureEpoch on from it (something new to draw). The time
+    // waited is added to the frame's wait_ms. A frame the GPU hasn't
+    // finished kGpuHung after it was submitted holds the worker: it submits
+    // no more frames (the window keeps the last one published) until the
+    // GPU finishes it, rather than pile them onto a GPU that may have hung.
+    bool WaitFlight(Drawn& f, const uint64_t* seen) {
+        const auto from = std::chrono::steady_clock::now();
+        while (!PollFlight(f)) {
             {
                 std::lock_guard lock(mutex_);
-                // still the stretch it was drawn for (PresentSlots::Publish)
-                const bool current = presenting && generation == slots_.Generation();
-                if (slot >= 0) {
-                    if (drew_output && slots_.Publish(slot, generation)) {
-                        outputs_[slot] = out;
-                        slot_serial_[slot] = slots_.Serial();
-                        slot_presented_[slot] = presented;
-                    } else {
-                        slots_.Abandon(slot);
-                    }
-                }
-                // a capture from before the numbers started over (one left
-                // from the last time, or redrawn for new options) isn't counted
-                if (live_measuring_ && cap->frame > live_last_) {
-                    live_.skipped_busy += cap->frame - live_last_ - 1;
-                    live_last_ = cap->frame;
-                    live_.rendered++;
-                    if (ProcKnown(*cap) && !DrawsWorld(*cap) && !cap->composed) live_.worldless++;
-                    live_.ms.push_back(drew_gpu ? gs.ms : rs.ms);
-                    if (drew_gpu) live_.wait_ms.push_back(gs.wait_ms);
-                }
-                live_drew_gpu_ = drew_gpu;
-                if (want_rgba) {
-                    image_ = rgba;
-                    image_w_ = o.width;
-                    image_h_ = o.height;
-                    image_presented_ = presented;
-                    image_serial_++;
-                    image_generation_ = current ? generation : 0;
-                    // a screenshot asked for while presenting is of a frame
-                    // drawn for the window's stretch (Take's `for_present`)
-                    if (current || !present_) image_wanted_ = false;
-                }
-                stats_ = stats;
+                if (stop_) break;
+            }
+            if (seen && CaptureEpoch() != *seen) break;
+            const int64_t waited_ms =
+                (Nanoseconds(std::chrono::steady_clock::now()) - f.submitted_ns) / 1000000;
+            if (!gpu_held_ && waited_ms >= kGpuHung.count()) {
+                gpu_held_ = true;
+                REXLOG_WARN("native renderer: the GPU hasn't finished a frame in {} ms; holding "
+                            "the last frame",
+                            waited_ms);
+            }
+            pacing::SleepFor(gpu_held_ ? std::chrono::nanoseconds(kHeldPoll).count()
+                                       : std::chrono::nanoseconds(kFencePoll).count());
+        }
+        f.gs.wait_ms += std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - from)
+                            .count();
+        return f.done;
+    }
+
+    // `d` to whoever wants it: its output to the window (if still the
+    // stretch it was drawn for), its numbers to the live view, its RGBA
+    // (`rgba`, if it has one) to F9's window, a screenshot and the upload
+    // path, and its description to F9's window. A slot's frame must be done.
+    void PublishDrawn(const Drawn& d, const std::vector<uint32_t>* rgba) {
+        const std::string stats =
+            Describe(*d.cap, d.drew_gpu ? DescribeGpu(d.gs, d.slot >= 0) : DescribeRaster(d.rs));
+        std::lock_guard lock(mutex_);
+        // Never a frame the GPU may still be drawing: Publish would refuse
+        // it, and abandoning it as refused would free a slot the GPU is
+        // writing for the next frame to take. Every caller has waited for it
+        // (PollFlight); one that hasn't leaves it as it is, taken.
+        if (d.slot >= 0 && (!d.done || slots_.Unfinished(d.slot))) {
+            if (!unfinished_logged_) {
+                unfinished_logged_ = true;
+                REXLOG_WARN("native renderer: a frame was to be published before the GPU had "
+                            "finished it; left unpublished");
+            }
+            return;
+        }
+        // still the stretch it was drawn for (PresentSlots::Publish)
+        const bool current = d.presenting && d.generation == slots_.Generation();
+        if (d.slot >= 0) {
+            if (d.drew_output && slots_.Publish(d.slot, d.generation)) {
+                outputs_[d.slot] = d.out;
+                slot_serial_[d.slot] = slots_.Serial();
+                slot_presented_[d.slot] = d.presented;
+            } else {
+                slots_.Abandon(d.slot);
             }
         }
+        // a capture from before the numbers started over (one left from
+        // the last time, or redrawn for new options) isn't counted
+        if (live_measuring_ && d.cap->frame > live_last_) {
+            live_.skipped_busy += d.cap->frame - live_last_ - 1;
+            live_last_ = d.cap->frame;
+            live_.rendered++;
+            if (ProcKnown(*d.cap) && !DrawsWorld(*d.cap) && !d.cap->composed) live_.worldless++;
+            live_.ms.push_back(d.drew_gpu ? d.gs.ms : d.rs.ms);
+            if (d.drew_gpu) live_.wait_ms.push_back(d.gs.wait_ms);
+        }
+        live_drew_gpu_ = d.drew_gpu;
+        if (rgba) {
+            image_ = *rgba;
+            image_w_ = d.width;
+            image_h_ = d.height;
+            image_presented_ = d.presented;
+            image_serial_++;
+            image_generation_ = current ? d.generation : 0;
+            // a screenshot asked for while presenting is of a frame
+            // drawn for the window's stretch (Take's `for_present`)
+            if (current || !present_) image_wanted_ = false;
+        }
+        stats_ = stats;
     }
 
     // A slot for the zero-copy path's next frame, or -1 after waiting for
@@ -624,6 +848,11 @@ class Renderer {
     uint64_t paints_ = 0;
     std::condition_variable paint_cv_;
     std::function<bool()> settle_;
+    // the worker's alone: a frame has been in flight kGpuHung, and it
+    // submits none until the GPU finishes it (WaitFlight)
+    bool gpu_held_ = false;
+    // PublishDrawn was handed an unfinished frame (logged once)
+    bool unfinished_logged_ = false;
     // the live view's numbers; captures numbered up to live_base_ came before
     // they started, and live_last_ is the newest one counted
     bool live_measuring_ = false;
@@ -1041,7 +1270,27 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         // are D3D12Provider and D3D12Presenter.
         if (provider_) {
             const auto& d3d12 = static_cast<const rex::ui::d3d12::D3D12Provider&>(*provider_);
+            // Microsoft's software rasterizer (WARP, and the Basic Render
+            // Driver Windows falls back to without a GPU driver): SDL_gpu
+            // would get the SDK's own device there too, and band3's frames
+            // and the emulated GPU's running on it together fault inside
+            // WARP, killing band3, on either path. On separate devices they
+            // don't; on hardware sharing is fine.
+            if (d3d12.GetAdapterVendorID() == rex::ui::GraphicsProvider::GpuVendorID::kMicrosoft)
+                GpuRenderer::Get().RefuseDevice(
+                    "the SDK's GPU is Microsoft's software rasterizer (WARP), whose Direct3D 12 "
+                    "device band3's GPU drawing would share with the emulated GPU, and that "
+                    "crashes there");
             GpuRenderer::Get().SetPresentDevice(d3d12.GetDevice());
+            // the crash trace's DRED report if the device is removed (a GPU
+            // hang), whichever renderer is on; here, as the one place band3
+            // has the SDK's device from the start
+            crash_trace::WatchD3D12Device(d3d12.GetDevice(), d3d12.GetDirectQueue());
+            // and, stopped at an indexed draw, which of the native renderer's
+            // it was (RasterOptions::gpu_labels)
+            crash_trace::SetIndexedDrawNamer([](uint32_t before, uint32_t total) {
+                return GpuRenderer::Get().DescribeIndexedDraw(before, total);
+            });
             auto present = std::make_unique<D3D12Present>();
             if (present->Init(d3d12)) d3d12_ = std::move(present);
             else d3d12_why_ = "its Direct3D 12 pipeline couldn't be made (see the log)";
@@ -1078,6 +1327,8 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         // thread)
         if (fence_ && drew_) fence_->Settle(2000);
         d3d12_.reset();
+        crash_trace::WatchD3D12Device(nullptr, nullptr);
+        crash_trace::SetIndexedDrawNamer(nullptr);
 #endif
         for (auto& t : textures_) t.reset();
     }
@@ -1117,9 +1368,18 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             Renderer::Get().StopPresent();
             REXLOG_INFO("native present: off, the emulated GPU's picture shows (after {:.0f} ms)",
                         waited);
+            // whole frames don't bring back what RB3 drew once (gpu_skip.h)
+            const uint64_t dropped = GetGpuSkipStats().passes_dropped - passes_dropped_on_;
+            if (dropped && !at_once) {
+                REXLOG_WARN("native present: {} texture passes RB3 draws once were skipped "
+                            "(swap_only): outfits/portraits may be wrong until RB3 draws them "
+                            "again",
+                            dropped);
+            }
             return;
         }
         active_ = true;
+        passes_dropped_on_ = GetGpuSkipStats().passes_dropped;
         // every pipeline made now, here on the UI thread, not by the
         // worker's first frame while the window waits for it
         if (UpdateGpu()) GpuRenderer::Get().Prewarm(uint32_t(REXCVAR_GET(native_view_msaa)));
@@ -1290,6 +1550,8 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
     bool draining_ = false;
     std::chrono::steady_clock::time_point drain_start_;
     static constexpr std::chrono::milliseconds kMaxDrain{3000};
+    // GpuSkipStats::passes_dropped when it last turned native
+    uint64_t passes_dropped_on_ = 0;
     // the picture's place in the back buffer at the last paint
     ImageRect rect_;
     bool path_logged_ = false;

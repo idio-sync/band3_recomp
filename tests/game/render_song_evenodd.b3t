@@ -4,10 +4,11 @@
 # same points through the song, for render checks:
 #   out/native_view_replay.exe screenshots/<name>.cap side.png --compare screenshots/<name>.png
 # Starts where boot.b3t leaves Rock Band 3 Deluxe (on a fresh profile). Launch
-# with the passes RB3 draws into textures recorded from the start (outfits are
-# composed once, in the main menu), and without full readback: the native view
-# draws those passes itself.
-#   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true
+# on the emulated GPU, whose picture is the reference (render_song.b3t says
+# why), with the passes RB3 draws into textures recorded from the start
+# (outfits are composed once, in the main menu), and without full readback:
+# the native view draws those passes itself.
+#   python tools/band3ctl.py launch --fresh -- --renderer=emulated --native_view_record_targets=true
 # Add --async_shader_compilation=false to the launch: with asynchronous
 # compilation the emulated GPU skips draws whose shaders aren't ready, and the
 # outfits RB3 composes once in the main menu can stay black in the game's picture.
@@ -22,13 +23,11 @@
 # the welcome hint, whose first choice customizes the
 # band; back out of that to the main menu
 wait screen=hint_rb3_welcome_screen timeout=30s
-wait frames=60
-press green
-wait screen=manage_band_screen timeout=30s
-wait frames=60
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 set autoplay true
 # the same venue every run, so captures compare across runs
 set forced_venue arena_04
@@ -38,22 +37,20 @@ set forced_venue arena_04
 set disable_even_odd_rendering false
 # Play Now, Quickplay, Choose Songs
 press green
-wait frames=60
+sleep 1s
 press green
-wait frames=60
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
 # past the 123 heading to 20th Century Boy
 press down
 press down
-wait frames=30
-press green
-wait screen=part_difficulty_screen timeout=30s
-wait frames=90
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
 # Guitar, Expert
 press green
-wait frames=30
+sleep 500ms
 press green
 wait in_game timeout=60s
 expect song=20thcenturyboy

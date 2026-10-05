@@ -61,6 +61,12 @@
 // device per adapter in a process), so the ID3D12Resource behind SDL's
 // texture, reached through SDL 3.4.14's private texture layout and checked
 // before use (CheckZeroCopy), is a texture the SDK's command list can read.
+// Sharing it is also why no device is made on Microsoft's software
+// rasterizer (WARP, the Basic Render Driver, vendor 0x1414): there the shared
+// device faults inside WARP (an access violation that kills band3) once
+// band3's frames and the emulated GPU's run on it together, whether or not
+// they're presented in place; native_view.cpp refuses the device
+// (RefuseDevice) and the native view draws on the CPU.
 
 namespace band3::render {
 
@@ -70,8 +76,12 @@ struct GpuStats {
     uint32_t uploads = 0;   // meshes and textures sent to the GPU this frame
     uint32_t passes = 0;    // texture passes drawn
     uint32_t rt_missing = 0;  // draws that sampled a render target nothing had drawn
-    double ms = 0;          // the whole frame: uploads, drawing and reading back
-    double wait_ms = 0;     // of that, from submitting to having the picture
+    // RenderFrame's whole frame: uploads, drawing and reading back; and of
+    // that, from submitting to having the picture. RenderFrameToOutput's
+    // frame up to its submission alone, with no wait (0): the GPU's time
+    // after is its caller's to wait out (OutputDone).
+    double ms = 0;
+    double wait_ms = 0;
 };
 
 // one of the presenter's output textures, as RenderFrameToOutput left it
@@ -110,21 +120,43 @@ class GpuRenderer {
                      std::vector<uint32_t>& rgba, GpuStats& stats);
 
     // The presenter's output textures, which RenderFrameToOutput draws into
-    // and leaves on the GPU, finished (it waits for the GPU): output `slot`
-    // (0 to kOutputs - 1), made again at options' size if it isn't that size.
-    // native_view.cpp keeps the presenter from sampling a slot while it's
-    // drawn into (present_model.h's PresentSlots). False as RenderFrame.
+    // and leaves on the GPU: output `slot` (0 to kOutputs - 1), made again at
+    // options' size if it isn't that size. It returns once the frame is
+    // submitted, so the caller can record the next while the GPU draws this
+    // one, and OutputDone tells when the GPU has finished it: until then the
+    // presenter mustn't sample it, as it does on the SDK's queue, which
+    // nothing orders after SDL's but that. native_view.cpp keeps the
+    // presenter from sampling a slot while it's drawn into or unfinished
+    // (present_model.h's PresentSlots). False as RenderFrame.
     static constexpr int kOutputs = 3;
     bool RenderFrameToOutput(const FrameCapture& frame, const RasterOptions& options, int slot,
                              GpuOutput& out, GpuStats& stats);
+    // Whether the GPU has finished the frame RenderFrameToOutput last drew
+    // into `slot`: never waits (SDL_gpu's own wait has no timeout, and the
+    // caller watches for a GPU that never finishes), so the caller polls it.
+    // True with no frame in flight there, or no device.
+    bool OutputDone(int slot);
     // reads output `slot` back as RenderFrame's rgba, at its size; false if
     // it has no picture (or no device)
     bool DownloadOutput(int slot, std::vector<uint32_t>& rgba, uint32_t& width,
                         uint32_t& height);
+    // With RasterOptions::gpu_labels, the last frame submitted's indexed
+    // draws (DrawIndexedInstanced each, in order, a list per command buffer
+    // the frame took), for a GPU hang's DRED report: the one `before` such
+    // draws into a command list of `total`, and the frame, if one of the last
+    // frame's command buffers had `total` of them (the list is likely that
+    // one); else why not. Any thread, the crash trace's included: never waits
+    // for the lock, "" if it can't have it.
+    std::string DescribeIndexedDraw(uint32_t before, uint32_t total);
     // The SDK's ID3D12Device, which the outputs must live on for its presenter
     // to sample them in place, or null when its presenter isn't Direct3D 12.
     // On the UI thread, before CheckZeroCopy.
     void SetPresentDevice(void* d3d12_device);
+    // No device for the session, and why (Init logs it once; CheckZeroCopy
+    // gives it as its why not): the SDK's GPU is one SDL_gpu mustn't share.
+    // On the UI thread, before Init; after it, a device made is let go and
+    // the native view draws on the CPU from the next frame.
+    void RefuseDevice(std::string why);
     // Whether the outputs can be sampled in place (GpuOutput::d3d12_resource):
     // on Windows, once the device has started, SDL's texture behind a test
     // texture is checked once (its create info, its texture's container and

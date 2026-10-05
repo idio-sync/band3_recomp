@@ -20,9 +20,9 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 
 **Playing**
 - Local multiplayer: up to four players, each controller its own player
-- DLC and custom songs (`CON`/`LIVE`/`PIRS`) read straight from folders, nothing to install (Windows for now)
+- DLC and custom songs (`CON`/`LIVE`/`PIRS`) read straight from folders, nothing to install
 - Rock Band 3 Deluxe support
-- High refresh rates (`refresh_rate`), a forced venue, song and highway speed
+- The display's refresh rate, high ones included (`frame_cap`), a forced venue, song and highway speed
 - Steam Deck defaults: fullscreen, letterboxed, vsync
 
 **Instruments**
@@ -39,7 +39,7 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Searching [RhythmVerse](https://rhythmverse.co) for custom songs from that page, and downloading them into the game without a restart
 - RB3Enhanced's script functions, modifiers and unlock options, so Deluxe's RB3E features work
 - Rock Central's online features (leaderboards, Battles) through [GoCentral](https://github.com/ihatecompvir/GoCentral), as RB3Enhanced connects
-- Online play without Xbox Live, straight to another player's game, as RB3Enhanced's Liveless does
+- Online play without Xbox Live, straight to another player's game, as RB3Enhanced's Liveless does, or by code through RB3Enhanced's Liveless Rooms (F10)
 - Discord Rich Presence
 
 <img src="docs/images/web-song-browser.png" alt="band3's web song browser: the library with album art and part difficulties, and the song now playing" width="520">
@@ -50,14 +50,18 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Configurable save, cache and song folders, including a portable install
 
 **Graphics**
-- An experimental native renderer (`renderer = native` at launch, F8 to switch, F9 for its
-  debug view). band3 draws each frame itself with the game's own shaders, checked against
-  the emulated GPU's picture pixel by pixel, while the emulated GPU skips the draws nobody sees:
+- A native renderer, the default on Windows (F8 switches to the emulated GPU and back,
+  `renderer = emulated` keeps it, F9 opens its debug view; Linux keeps the emulated GPU as
+  the default until the native renderer has been run there). band3 draws each frame itself
+  with the game's own shaders, checked against the emulated GPU's picture pixel by pixel,
+  while the emulated GPU skips the draws nobody sees:
   - Faster: uncapped, 257 fps in the main menu and 285 in a song, against 165 and 163 on
     the emulated GPU (about 1.6 to 1.75 times)
   - Sharper: it draws at the window's size, 1080p or 4K, where the emulated GPU draws the
     console's 720p unless `resolution_scale` is raised, at a high GPU cost
-  - [Native renderer](docs/native-renderer.md) has the details and the settings
+  - [Native renderer](docs/native-renderer.md) has the details, the settings and what still
+    differs (the lens flares aren't occluded, as on the emulated GPU; the store and RB3's
+    error screens aren't checked)
 
 **Development**
 - A scriptable test harness, render checks against the game's own picture, unit tests and CI
@@ -83,7 +87,7 @@ CI runs and profiling.
 | | |
 |---|---|
 | [Building](docs/building.md) | requirements, Windows and Linux builds, unit tests, compile check, profiling |
-| [Settings, folders and songs](docs/settings.md) | the launcher, the F4 menu, config files, where band3 keeps things, DLC and custom songs, Steam Deck |
+| [Settings, folders and songs](docs/settings.md) | the launcher, the F4 menu, config files, where band3 keeps things, DLC and custom songs, loose-file mods, Steam Deck |
 | [Instruments and microphones](docs/instruments.md) | Instrument Lab, PlayStation/Wii dongles, MIDI drums, USB mics, pro instruments, controller lag |
 | [Integrations](docs/integrations.md) | network events, Discord, the web server and its API, GoCentral, Liveless online play, RB3Enhanced and Deluxe compatibility |
 | [Test harness](docs/test-harness.md) | `band3ctl`: driving the game from scripts, and the game tests |
@@ -112,10 +116,11 @@ Both renderers replace the same part of RB3, its platform render layer (`DxRnd`,
 `DxTex`), and draw the same Milo meshes, materials and cameras. The difference is everything
 around them.
 
-\* Planned, not done. Today the native renderer is experimental, and the emulated GPU stays
-the default; under native it still runs, but skips the draws the native renderer has made. Once it covers every screen, launching with
-`renderer = native` will leave the emulated GPU out entirely, and `emulated` will remain as
-a choice at launch.
+\* Partly done. The native renderer draws the picture by default on Windows (the emulated GPU
+stays the default on Linux until the native renderer has been run there), but the emulated
+GPU still runs under it, skipping the draws the native renderer has made, so F8 can switch
+back at once. Once it covers every screen, launching with `renderer = native` will leave the
+emulated GPU out entirely, and `emulated` will remain as a choice at launch.
 
 ## Credits
 
@@ -158,6 +163,7 @@ band3 stands on the work of these projects:
 **Libraries**
 - [RtMidi](https://github.com/thestk/rtmidi) (MIDI input),
   [inih](https://github.com/benhoyt/inih) (INI parsing),
+  [miniupnpc](https://github.com/miniupnp/miniupnp) (UPnP port mapping),
   [stb_image_write](https://github.com/nothings/stb) (album art),
   [doctest](https://github.com/doctest/doctest) (unit tests),
   [Tracy](https://github.com/wolfpld/tracy) (profiling), and SDL3 through the ReXGlue SDK.

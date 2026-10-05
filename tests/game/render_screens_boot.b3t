@@ -3,7 +3,7 @@
 # the boot logos, the intro movie, the title and the first-run prompts. The
 # first of three scripts that go through every kind of screen RB3 shows;
 # render_screens_menus.b3t and render_screens_song.b3t go on from here.
-#   python tools/band3ctl.py launch --fresh -- --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
+#   python tools/band3ctl.py launch --fresh -- --renderer=emulated --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
 #   python tools/band3ctl.py run tests/game/render_screens_boot.b3t
 #   python tools/band3ctl.py run tests/game/render_screens_menus.b3t
 #   python tools/band3ctl.py run tests/game/render_screens_song.b3t
@@ -22,25 +22,23 @@ sleep 2s
 capture screen-boot-logos
 # the intro movie, a movie screen of its own
 wait screen=intro_movie_screen timeout=180s
-wait frames=240
+sleep 4s
 capture screen-intro-movie
 # the title (press start), over the city
 wait screen=splash_screen timeout=120s
-wait frames=120
+sleep 2s
 capture screen-title
-press start
-wait screen=first_time_calibration timeout=30s
-wait frames=60
+press start until screen=first_time_calibration timeout=30s
+sleep 1s
 capture screen-calibration-prompt
 # Continue, not Calibrate System
 press down
 press green
 # the dx_ screens are Rock Band 3 Deluxe's
 wait screen=dx_welcome_screen timeout=30s
-wait frames=60
+sleep 1s
 capture screen-dx-welcome
 # Let's Rock!
-press green
-wait screen=hint_rb3_welcome_screen timeout=30s
-wait frames=60
+press green until screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
 capture screen-rb3-welcome

@@ -1,0 +1,43 @@
+# Liveless asks the router to forward liveless_port by PCP, and then tells
+# players joining it the router's public address: against the mock router on
+# this PC, never the real one (the harness only maps with both overrides). The
+# mock, then the game:
+#   python tools/port_mapping_mock.py --udp-port 5451 --http-port 8089 --mode pcp
+#   python tools/band3ctl.py --port 21181 launch --fresh -- --liveless=true --username=host --liveless_gateway=127.0.0.1:5451 --liveless_upnp_url=http://127.0.0.1:8089/desc.xml
+#   python tools/band3ctl.py --port 21181 run tests/game/liveless_port_mapping.b3t
+# Quitting the game deletes the mapping: the mock logs "pcp: delete UDP 9103".
+# tools/port_mapping_check.py runs this way and the others (NAT-PMP, UPnP).
+
+wait port_mapping=mapped timeout=30s
+port_mapping_status state=mapped method=pcp external_ip=203.0.113.5 port=9103 lease_s=3600
+# online from the overshell, as liveless_online.b3t, each press held 600 ms
+# so a game drawing a few frames a second still sees it
+wait screen=splash_screen timeout=120s
+press start 600
+wait screen=first_time_calibration timeout=30s
+sleep 2s
+press down 600
+press green 600
+wait screen=dx_welcome_screen timeout=30s
+sleep 2s
+press green 600
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 2s
+press green 600
+wait screen=manage_band_screen timeout=30s
+sleep 2s
+press red 600
+wait screen=main_hub_screen timeout=30s
+sleep 2s
+press start 600
+sleep 3s
+press down 600
+sleep 2s
+press green 600
+sleep 6s
+press up 600
+sleep 2s
+press green 600
+sleep 3s
+# what the game told players it's reached at: the router's public address
+rooms_status advertised_ip=203.0.113.5

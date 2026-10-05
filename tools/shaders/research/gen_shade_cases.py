@@ -9,10 +9,12 @@ depth against the shadow coordinate's z/w, 1 or 0). The normal map's give
 those (zero where they're not the shadow buffer's) and then the interpolated
 tangent (the models' r4, I4) and bitangent (r5, I5), the normal map's texel
 (s1), the detail map's (s14), c14 and c106; their occlusion, if any, is in r7,
-the tangent frame's in r4 and r5."""
+the tangent frame's in r4 and r5. A hair case with a specular colour then gives
+c19, its strands' second colour (the others have none: their strands, which
+need the normal map's bitangent, are left out)."""
 import sys, os, random, math
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from hyp import norm, sat
+from hyp import norm, sat, dot, refl
 import fam3, skin2, hair3
 
 def r4(lo, hi):
@@ -52,7 +54,7 @@ def ao_of(vc, s):
 cases = []
 def add(name, family, flags, seed, npt, ao=None, specmap=False, glow=False, intens=False,
         prelit=False, rim=False, spec=True, zero_c2=False, proj=False, gobo=False,
-        shadow=None, nmap=False, detail=False):
+        shadow=None, nmap=False, detail=False, across=False):
     c, P, eye, N, vc, t = make(seed, npt)
     # The normal map: drawn after make()'s, so the other cases keep their
     # numbers. A tangent frame of any length and direction, as the
@@ -88,6 +90,36 @@ def add(name, family, flags, seed, npt, ao=None, specmap=False, glow=False, inte
     if zero_c2:
         c[2][0] = c[2][1] = c[2][2] = 0.0
         c[19] = [0, 0, 0, 1]
+    elif family == 'hair':
+        # the strands' second colour, drawn last so the rest keep their numbers
+        c[19] = r4(0.2, 1.0)
+    if across:
+        # The strands across the eye's reflection and point light 0 along it,
+        # where their highlight is: the normal map flat along the bitangent
+        # (x = 0, the detail map's too), so the normal doesn't depend on it,
+        # then a power of 8 to 30 and the bitangent, at about unit length, at
+        # the angle to R (hair3.py's N and R) that puts the broad colour's
+        # weight s^2p at 0.3 to 0.8, so both colours show.
+        t['tf1'][0] = 0.5
+        t['tf14'][0] = 0.5
+        ny = t['tf1'][1] * 2 - 1
+        nz = sat(1 - ny * ny)
+        if detail:
+            dy = t['tf14'][1] * 2 - 1
+            ny += c[106][0] * dy
+            nz += c[106][0] * sat(1 - dy * dy)
+        Nm = norm([nz * N[k] + c[14][0] * ny * U[k] for k in range(3)])
+        R = refl(Nm, norm([eye[k] - P[k] for k in range(3)]))
+        a = [random.uniform(-1, 1) for _ in range(3)]
+        side = norm([R[1] * a[2] - R[2] * a[1], R[2] * a[0] - R[0] * a[2], R[0] * a[1] - R[1] * a[0]])
+        c[2][3] = round(random.uniform(8, 30), 2)
+        t['tf2'][3] = round(random.uniform(0.4, 1.0), 3)
+        p = max(t['tf2'][3] * c[2][3], 0.5)
+        rt = math.sqrt(1 - random.uniform(0.3, 0.8) ** (1 / (2 * p)))
+        size = random.uniform(0.95, 1.05)
+        Bt = [round(size * (math.sqrt(1 - rt * rt) * side[k] + rt * R[k]), 3) for k in range(3)]
+        d = random.uniform(80, 200)
+        c[64][:3] = [round(P[k] + d * R[k] + random.uniform(-5, 5), 2) for k in range(3)]
     if not spec:
         c[2] = [0, 0, 0, c[2][3]]
     if 'Box' not in flags:
@@ -134,7 +166,7 @@ def add(name, family, flags, seed, npt, ao=None, specmap=False, glow=False, inte
     alpha = a_tex * c[1][3] * (vc[3] if prelit else c[0][3])
     cases.append(dict(name=name, flags=flags, npt=npt, c=c, P=P, eye=eye, N=N, vc=vc, t=t,
                       ao=ao or 0.0, rgb=rgb, alpha=alpha, proj=proj, shadow=shadow, nmap=nmap,
-                      U=U, B=Bt))
+                      U=U, B=Bt, c19=family == 'hair' and not zero_c2))
 
 add('standard: two points, box, specular', 'standard', ['Lit', 'Box', 'Specular', 'Textured'], 1, 2)
 add('standard: AO, one point, specular map, glow, intensify', 'standard',
@@ -186,6 +218,18 @@ add('skin: normal and detail maps, in shadow, rim', 'skin',
 add('hair: normal and detail maps, two points', 'hair',
     ['Lit', 'Box', 'Specular', 'SpecMap', 'Hair', 'NormalMap', 'DetailMap', 'Textured'], 21, 2,
     specmap=True, zero_c2=True, nmap=True, detail=True)
+add('hair: strands, normal and detail maps, two points', 'hair',
+    ['Lit', 'Box', 'Specular', 'SpecMap', 'Hair', 'NormalMap', 'DetailMap', 'Textured'], 22, 2,
+    specmap=True, nmap=True, detail=True)
+add('hair: strands across the reflection, normal and detail maps, AO, in shadow', 'hair',
+    ['Lit', 'Specular', 'SpecMap', 'AO', 'Hair', 'Shadow', 'NormalMap', 'DetailMap', 'Textured'],
+    23, 1, ao=1.0, specmap=True, shadow=0, nmap=True, detail=True, across=True)
+add('hair: strands across the reflection, normal map, two points', 'hair',
+    ['Lit', 'Box', 'Specular', 'SpecMap', 'Hair', 'NormalMap', 'Textured'], 24, 2,
+    specmap=True, nmap=True, across=True)
+add('hair: strands across the reflection, normal and detail maps, AO, shadow lit', 'hair',
+    ['Lit', 'Specular', 'SpecMap', 'AO', 'Hair', 'Shadow', 'NormalMap', 'DetailMap', 'Textured'],
+    25, 1, ao=0.7, specmap=True, shadow=1, nmap=True, detail=True, across=True)
 
 def lit(x):
     s = '%.9g' % x
@@ -223,5 +267,8 @@ for cs in cases:
     if cs['nmap']:
         out.append('     %s, %s, %s, %s,' % (f4(cs['U']), f4(cs['B']), f4(cs['t']['tf1']),
                                              f4(cs['t']['tf14'])))
-        out.append('     %s, %s},' % (f4(c[14]), f4(c[106])))
+        if cs['c19']:
+            out.append('     %s, %s, %s},' % (f4(c[14]), f4(c[106]), f4(c[19])))
+        else:
+            out.append('     %s, %s},' % (f4(c[14]), f4(c[106])))
 print('\n'.join(out))

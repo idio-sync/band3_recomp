@@ -1,0 +1,48 @@
+# Plays 20th Century Boy on autoplay in arena_04 and measures the native
+# renderer's pacing over 20 s of it: the worker's numbers (`native_view stats`:
+# frames captured and drawn, skipped_busy, each frame's ms and wait_ms) and the
+# window's (`present_stats`). Starts where boot.b3t leaves Rock Band 3 Deluxe
+# (on a fresh profile). Restore the window off-screen first: a minimized
+# window doesn't paint, which starves the native renderer's outputs.
+#   python tools/band3ctl.py launch --fresh -- --renderer=native --video_mode_refresh_rate=120 --frame_cap=off --test_random_seed=21
+#   python tools/band3ctl.py window offscreen
+#   python tools/band3ctl.py run tests/game/boot.b3t
+#   python tools/band3ctl.py run tests/game/pacing_song.b3t
+# tools/hang_bisect.py plays it too, for the GPU hang at 120 Hz.
+
+# the welcome hint, whose first choice customizes the band; back out of that
+# to the main menu
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+set autoplay true
+set forced_venue arena_04
+# Play Now, Quickplay, Choose Songs
+press green
+sleep 1500ms
+press green
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+# past the 123 heading to 20th Century Boy
+press down
+press down
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+# Guitar, Expert
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+# past the song's loading
+sleep 5s
+native_view on
+present_stats reset
+sleep 20s
+native_view stats
+present_stats
+native_view off

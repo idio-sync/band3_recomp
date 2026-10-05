@@ -9,6 +9,8 @@
 #include <variant>
 #include <vector>
 #include "src/Input/instrument_kind.h"
+#include "src/Net/liveless_rooms.h"
+#include "src/Net/port_mapping.h"
 #include "game_state.h"
 
 // The test harness's commands: one line of text in, one line of JSON out. They
@@ -62,8 +64,13 @@ struct CaptureInfo {
     bool held_fallback = false;
     // whether the emulated GPU drew the frame screenshot whole ("full"), or
     // skipped the game's draws in it or the one before ("stale": renderer
-    // native with emulated_gpu_while_native skip_draws, src/Render/gpu_skip.h)
+    // native with emulated_gpu_while_native skip_draws or swap_only,
+    // src/Render/gpu_skip.h)
     std::string emulated = "full";
+    // texture passes RB3 draws once whose draws the emulated GPU skipped
+    // (swap_only) since the game started: more than 0, the screenshot may
+    // show black outfits or portraits RB3 hasn't drawn again since
+    uint64_t emulated_passes_dropped = 0;
     // the native view's GPU backend drawing the same capture, at the
     // screenshot's size: its PNG, or why there's none
     std::string gpu_path;
@@ -98,11 +105,15 @@ struct NativeViewStats {
     uint64_t skipped_busy = 0;
     // drawn frames with no world: they drew none and weren't composed with one
     uint64_t worldless = 0;
-    // each drawn frame's time; for the GPU the whole frame, uploads and
-    // reading back included (GpuStats::ms), and of that from submitting it to
-    // having the picture
+    // each drawn frame's time (LiveViewStats::ms): for the GPU the whole
+    // frame, uploads and reading back included, and of that from submitting
+    // it to having the picture; on the native renderer's zero-copy path the
+    // frame up to its submission, and apart from that the time the worker
+    // waited for the GPU to finish it before publishing it
     std::vector<double> frame_ms;
     std::vector<double> wait_ms;
+    // the most of the worker's frames the GPU had at once (LiveViewStats)
+    uint32_t in_flight_max = 0;
     // the texture passes recorded while capture was off, in the same time:
     // whether that's on (native_view_record_targets), passes the game drew,
     // those recorded, their draws, and the game thread's time recording them
@@ -128,13 +139,18 @@ struct NativeViewStats {
         std::vector<std::pair<std::string, uint64_t>> sizes;
     } capture;
     // what the emulated GPU was sent in the same time (src/Render/gpu_skip.h):
-    // whether it skips the game's draws now (renderer native with
-    // emulated_gpu_while_native skip_draws), the frame being drawn is skipped
-    // and its picture is fresh; the game's frames and those skipped; each
-    // draw emitter's calls emitted and skipped by kind, totals the reply
-    // divides by the frames; and of those emitted in skipped frames, the ones
-    // a one-shot texture pass kept and the occlusion queries
+    // emulated_gpu_while_native's mode while renderer is native ("full"
+    // otherwise) and whether it skips anything (skip_mode), the frame being
+    // drawn is skipped and its picture is fresh; the game's frames and those
+    // skipped; each emitter's calls emitted and skipped by kind, totals the
+    // reply divides by the frames; of those emitted in skip_draws frames, the
+    // ones a one-shot texture pass kept and the occlusion-test quads; the
+    // one-shot passes whose draws swap_only skipped; and the emulated GPU's
+    // command processor thread's CPU time, which the reply divides by the
+    // frames (-1 where it can't be told: off Windows, or the thread wasn't
+    // found)
     struct EmulatedGpu {
+        std::string mode = "full";
         bool skip_mode = false;
         bool skipping = false;
         bool fresh = true;
@@ -144,6 +160,8 @@ struct NativeViewStats {
         std::vector<std::pair<std::string, uint64_t>> skipped;
         uint64_t kept_pass = 0;
         uint64_t kept_point_tests = 0;
+        uint64_t passes_dropped = 0;
+        double cp_ms = -1;
     } emulated_gpu;
 };
 
@@ -168,6 +186,16 @@ struct PresentStats {
     // the game's frames: between the ends of its Presents
     uint64_t game_frames = 0;
     std::vector<double> game_ms;
+    // the frame cap now (frame_cap): "off", "display", "auto" or "fixed", and
+    // its rate; in the same time, the frames that ended after their beat by
+    // less than a frame and the times one later than that started the beat
+    // again, and the mean a frame waited for its beat and, of that, spun
+    struct Cap {
+        std::string mode = "off";
+        double hz = 0;
+        uint64_t late = 0, resets = 0;
+        double wait_ms = 0, spin_ms = 0;
+    } cap;
 };
 
 // a setting's value as the game has it, and what set it
@@ -220,6 +248,18 @@ public:
     // to, as the window would, without the window having focus; returns an
     // error, or empty
     virtual std::string PressBind(std::string_view bind) = 0;
+    // player 1 accepts an invite to the Liveless game at host:port (Liveless
+    // on), with the BandUI's joined-by-invite flag set first if `force_flag`;
+    // returns an error, or empty
+    virtual std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) = 0;
+    // Liveless Rooms (src/Net/liveless_rooms.h): its status; a join by code
+    // (1-8 letters and digits, upper case), which goes without waiting for the
+    // server's answer; connecting again. The last two return an error, or empty.
+    virtual rooms::Status RoomsStatus() = 0;
+    virtual std::string RoomsJoin(const std::string& code) = 0;
+    virtual std::string RoomsConnect() = 0;
+    // Liveless' port mapping on the router (src/Net/port_mapping.h)
+    virtual port_mapping::Status PortMappingStatus() = 0;
     // the live native view, drawing every frame the game captures at width x
     // height as F9's window does (without post-processing unless `post`), and
     // its numbers, which on and off reset; on returns an error, or empty.
@@ -242,7 +282,10 @@ public:
 };
 
 struct Condition {
-    enum class Kind { kScreen, kScreenContains, kInGame, kMenus, kSong, kFrames, kScore, kMic };
+    enum class Kind {
+        kScreen, kScreenContains, kInGame, kMenus, kSong, kFrames, kScore, kMic, kRooms,
+        kPortMapping, kJoined
+    };
     Kind kind = Kind::kInGame;
     std::string text;
     uint64_t frames = 0;

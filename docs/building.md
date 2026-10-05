@@ -10,7 +10,9 @@
 - A copy of Rock Band 3 (Xbox 360) with the Title Update 5 (TU5) `default.xex`, or Rock
   Band 3 Deluxe's patched XEX.
 - cmake, ninja and clang. On Windows, also Visual Studio with "Desktop development with
-  C++"; on Linux, `sudo apt install build-essential git cmake ninja-build clang`.
+  C++"; on Linux, `sudo apt install build-essential git cmake ninja-build clang
+  libasound2-dev libcurl4-openssl-dev` (ALSA for MIDI drum kits, libcurl for
+  [RhythmVerse](integrations.md#rhythmverse); band3 builds without them, less those).
 
 ## Game files
 
@@ -44,11 +46,22 @@ ninja -C out/build/linux-amd64-release
 PlayStation and Wii instrument dongles need a udev rule to be readable by your user; see
 [Instruments](instruments.md#playstation-and-wii-instruments-experimental).
 
+## Build tag
+
+Each build names itself by `git describe` of the checkout (the log's `band3 build`
+line, and the version a Liveless Rooms server sees). A build from source without
+`.git` is `unknown` unless the configure passes `-DBAND3_BUILD_TAG=<tag>`, as the Nix
+flake does with its revision.
+
 ## Checks
 
 These run on every push (`.github/workflows/ci.yml`) and don't need the game.
 
 Unit tests (no SDK needed):
+
+The first configure downloads toml++ 3.4.0, the header-only dependency used by
+the launcher's config writer. It requires internet access and checks the archive's
+SHA-256 hash; subsequent builds reuse the download in the build directory.
 
 ```
 cmake -S tests -B out/tests

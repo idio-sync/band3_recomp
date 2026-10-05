@@ -11,8 +11,8 @@
 // (tools/shaders/research: fam3.py standard, skin2.py skin, hair3.py hair) are
 // the reference, and tests/shade_model_test.cpp checks this against them.
 // Left out: the environment cube (not decoded), the projected light and the
-// shadow buffer of a vertex-lit material, the hair's strand highlight (its
-// colours, c2 and c19, along the bitangent) and normal maps in captures from
+// shadow buffer of a vertex-lit material, and normal maps (with them the
+// hair's strand highlight, which runs along their bitangent) in captures from
 // before they kept the tangents.
 
 float3 Xyz(float4 v) { return float3(v.x, v.y, v.z); }
@@ -260,9 +260,12 @@ struct Lighting {
 // ao_sh the AoShVertex (interpolated, in a pixel), proj and gobo the
 // projected light's maps' texels at ProjUv (s5 and s10; per pixel only, and
 // unread where sp doesn't sample them), lit the shadow buffer's ShadowLit
-// (per pixel only, unread without kShadeShadow)
+// (per pixel only, unread without kShadeShadow), strand the hair's: the
+// normal map's interpolated bitangent, as it is (read with kShadeHair and
+// kShadeNormalMap)
 Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, float4 vc,
-               float4 spec_map, float2 ao_sh, float4 proj, float4 gobo, float lit) {
+               float4 spec_map, float2 ao_sh, float4 proj, float4 gobo, float lit,
+               float3 strand) {
     const uint f = sp.flags.x;
     const bool skin = (f & kShadeSkin) != 0u;
     const bool hair = (f & kShadeHair) != 0u;
@@ -314,6 +317,23 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, floa
 
     const float3 zero = float3(0.0f, 0.0f, 0.0f);
     const float3 one = float3(1.0f, 1.0f, 1.0f);
+
+    // The hair's strand highlight (hair3.py; 47D5A8EE975C7558 instrs 62-80):
+    // brightest where the eye's reflection crosses the strands, which run
+    // along the normal map's bitangent, taken as interpolated (not
+    // normalised), in two colours, c2 on its narrow core and c19 on the
+    // broader sheen around it. Its point lights' specular is that colour
+    // times sat(L.R), with no power of its own. Every hair shader the dumps
+    // have is normal-mapped; without the frame (a capture from before it) it's
+    // left out.
+    float3 strand_color = zero;
+    if (hair && (f & kShadeNormalMap) != 0u) {
+        const float rt = dot(R, strand);
+        const float s = abs(1.0f - rt * rt);
+        const float a2 = PowSat(s, 2.0f * power);
+        const float a4 = PowSat(s, 4.0f * power);
+        strand_color = Xyz(sp.specular) * a4 + Xyz(sp.specular2) * (a2 * (1.0f - a4));
+    }
 
     // The projected light (NUM_PROJ; m2_shader_ucode.md 5, fam3.py). The
     // multiply form darkens the box map, the point lights, their specular
@@ -374,9 +394,9 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, floa
             const float soft = 1.0f - vn2 * vn2;
             lights_spec = lights_spec + lc2 * (PowSat(rl, power) * soft * soft * spec_norm);
             if (rim) lights_rim = lights_rim + lc2 * (saturate(-dot(L, V)) * rim_b * up2);
-        } else if (!hair) {
-            // (the hair's highlight runs along the strands, in colours of
-            // its own: left out)
+        } else if (hair) {
+            lights_spec = lights_spec + lc2 * strand_color * (rl * spec_norm);
+        } else {
             lights_spec = lights_spec + lc2 * (PowSat(rl, power) * spec_norm);
             if (rim) {
                 const float under = (f & kShadeRimUnder) != 0u ? up2 : 1.0f;
@@ -410,7 +430,7 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, floa
         } else {
             const float fresnel = (1.0f - vn2) * up2 + 0.25f;
             const float3 s = lights_spec + box_r * (fresnel * spec_norm * ao_a);
-            // the hair's colour is its map's alone
+            // the hair's colour is its map's alone (its strands' are in s)
             l.added = s * (hair ? Xyz(spec_map) : spec_color);
         }
     }
@@ -517,7 +537,7 @@ float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 u, float3
         Lighting l = vertex;
         if ((f & kShadePerVertex) == 0u) {
             const Normals nn = MappedNormals(sp, n, u, b, normal, detail);
-            l = Light(sp, p, nn.diffuse, nn.specular, vc, spec_map, ao_sh, proj, gobo, lit);
+            l = Light(sp, p, nn.diffuse, nn.specular, vc, spec_map, ao_sh, proj, gobo, lit, b);
         }
         rgb = base * l.diffuse + l.added;
         alpha = base_alpha * sp.ambient.w * ((f & kShadePrelit) != 0u ? vc.w : sp.color.w);

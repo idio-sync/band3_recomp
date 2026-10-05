@@ -42,6 +42,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 // See gpu_view.h.
@@ -358,6 +359,12 @@ struct GpuRenderer::Impl {
     // which a frame waited for (logged)
     std::atomic<bool> warm{false};
     bool warmed_up = false;
+    // RasterOptions::gpu_labels: the last frame submitted, and what each of
+    // its indexed draws is, in order, a list per command buffer it took
+    // (DescribeIndexedDraw)
+    std::mutex draw_log_mutex;
+    std::string draw_log_frame;
+    std::vector<std::vector<std::string>> draw_log;
     SDL_GPUSampler* sampler = nullptr;
     // linear and clamping, as RB3 samples its post-processing levels
     SDL_GPUSampler* linear_sampler = nullptr;
@@ -464,12 +471,14 @@ struct GpuRenderer::Impl {
     // another size (a capture's) leaves them be. COLOR_TARGET and SAMPLER,
     // which SDL leaves in ALL_SHADER_RESOURCE after its passes, so the SDK's
     // command list samples one without a barrier. Never cycled: SDL's texture
-    // behind each stays the one that was checked.
+    // behind each stays the one that was checked. `fence` is the submission
+    // of the frame last drawn into it until OutputDone finds it signalled.
     struct Output {
         SDL_GPUTexture* texture = nullptr;
         uint32_t w = 0, h = 0;
         uint64_t generation = 0;
         void* resource = nullptr;  // its ID3D12Resource, if it can be sampled in place
+        SDL_GPUFence* fence = nullptr;
     };
     Output outputs[kOutputs];
     uint64_t output_generations = 0;
@@ -483,6 +492,9 @@ struct GpuRenderer::Impl {
     std::atomic<bool> zero_copy{false};
     std::mutex zero_copy_mutex;
     std::string zero_copy_why = "not checked yet";
+    // RefuseDevice's why, which keeps Init from making the device (under
+    // zero_copy_mutex)
+    std::string refused;
 
     // Everything a frame sends goes through this one transfer buffer and one
     // copy pass. It's mapped cycling, so a frame never waits on an earlier one
@@ -570,10 +582,17 @@ struct GpuRenderer::Impl {
     // they've grown
     std::vector<Mesh*> to_pool, to_arena;
     std::vector<Tex*> new_textures;
+    // An array that grew: the layers of the old one holding textures sent in
+    // an earlier frame, each with its levels written (Tex::levels), go over
+    // to the new one. Nothing else is copied, as nothing else was written: a
+    // layer placed this frame is sent to the new array, and an array made
+    // this frame (more of a size arriving at once than it holds) holds
+    // nothing yet.
     struct ArrayCopy {
         SDL_GPUTexture* from;
         SDL_GPUTexture* to;
-        uint32_t w, h, layers, levels;
+        uint32_t w, h;
+        std::vector<std::pair<uint32_t, uint32_t>> layers;  // layer, levels
     };
     std::vector<ArrayCopy> array_copies;  // arrays that grew, old into new
     std::vector<Mat4> frame_bones;
@@ -611,6 +630,23 @@ struct GpuRenderer::Impl {
     bool Create();
     // stop_video: on the UI thread only, as SDL wants
     void Release(bool stop_video);
+    // SDL's Direct3D 12 backend copies a pipeline's fragment samplers into
+    // its command buffer's GPU sampler heap (2048 of them) as one batch each
+    // time they're bound again, checking for room before the batch only and
+    // skipping null slots without counting them (SDL 3.4, and main as of
+    // 2026-10: "FIXME: need to error on overflow"). A batch that starts short
+    // of the heap's end runs past it: descriptors copied outside any heap
+    // (the debug layer's INVALID_DESCRIPTOR_HANDLE), which the GPU then reads,
+    // and AMD GPUs hung on the next draw (DEVICE_HUNG). So every fragment
+    // shader that samples declares kSamplerBatch samplers (MakeShader) and
+    // every pass binds all of them first (BeginPass): each batch is
+    // kSamplerBatch, which divides the heap, so batches end on its end
+    // exactly, where SDL moves to a fresh heap (the view heap with it).
+    static constexpr uint32_t kSamplerBatch = 16;
+    static_assert(2048 % kSamplerBatch == 0, "a batch divides SDL's sampler heap");
+    // a render pass, its kSamplerBatch fragment samplers bound to white first
+    SDL_GPURenderPass* BeginPass(SDL_GPUCommandBuffer* cmd, const SDL_GPUColorTargetInfo* ct,
+                                 uint32_t targets, const SDL_GPUDepthStencilTargetInfo* dt);
     // one of the generated shaders, in `format` (DXBC or SPIR-V)
     SDL_GPUShader* MakeShader(SDL_GPUShaderFormat format, SDL_GPUShaderStage stage,
                               const unsigned char* dxbc, size_t dxbc_size,
@@ -678,6 +714,9 @@ struct GpuRenderer::Impl {
     // false if it couldn't be
     bool EnsureOutput(int slot, uint32_t w, uint32_t h);
     void ReleaseOutputs();
+    // lets go of `out`'s fence, signalled or not (SDL's own reference keeps
+    // it until its submission is done)
+    void ReleaseFence(Output& out);
     // the ID3D12Resource behind `texture`, made with `info`, if the SDK's
     // presenter can sample it in place; null, and why not, otherwise
     void* SdkResource(SDL_GPUTexture* texture, const SDL_GPUTextureCreateInfo& info,
@@ -746,12 +785,31 @@ SDL_GPUShader* GpuRenderer::Impl::MakeShader(SDL_GPUShaderFormat format,
     info.entrypoint = entry;
     info.format = format;
     info.stage = stage;
+    // a fragment shader's samplers, padded (kSamplerBatch)
+    if (stage == SDL_GPU_SHADERSTAGE_FRAGMENT && samplers) {
+        if (samplers > kSamplerBatch)
+            REXLOG_WARN("native view gpu: the shader {} samples {} textures, more than {}", entry,
+                        samplers, kSamplerBatch);
+        samplers = std::max(samplers, kSamplerBatch);
+    }
     info.num_samplers = samplers;
     info.num_storage_buffers = storage_buffers;
     info.num_uniform_buffers = uniforms;
     SDL_GPUShader* s = SDL_CreateGPUShader(device, &info);
     if (!s) REXLOG_WARN("native view gpu: the shader {} didn't load ({})", entry, SDL_GetError());
     return s;
+}
+
+SDL_GPURenderPass* GpuRenderer::Impl::BeginPass(SDL_GPUCommandBuffer* cmd,
+                                                const SDL_GPUColorTargetInfo* ct, uint32_t targets,
+                                                const SDL_GPUDepthStencilTargetInfo* dt) {
+    SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, ct, targets, dt);
+    if (rp) {
+        SDL_GPUTextureSamplerBinding padding[kSamplerBatch];
+        for (SDL_GPUTextureSamplerBinding& b : padding) b = {white, sampler};
+        SDL_BindGPUFragmentSamplers(rp, 0, padding, kSamplerBatch);
+    }
+    return rp;
 }
 
 SDL_GPUGraphicsPipeline* GpuRenderer::Impl::MakeFullscreenPipeline(SDL_GPUShader* pixel,
@@ -1445,9 +1503,12 @@ bool GpuRenderer::Impl::PlaceInArena() {
             indices += IndexSlots(*m.keep);
             ++it;
         }
-        // everything in it is sent again this frame, so a bigger buffer can
-        // start empty
+        // everything in it is sent again this frame, so it starts empty in
+        // a new buffer: the frame before, which the GPU may still be
+        // drawing, reads the old one, which SDL keeps until it's done
         arena_vert_count = arena_index_count = 0;
+        ReleaseBuffer(arena_verts);
+        ReleaseBuffer(arena_indices);
         if (!Reserve(arena_verts, SDL_GPU_BUFFERUSAGE_VERTEX,
                      std::max<uint32_t>(verts * sizeof(Vertex), kMinArenaBytes)) ||
             !Reserve(arena_indices, SDL_GPU_BUFFERUSAGE_INDEX,
@@ -1495,8 +1556,12 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx) {
         }
         if (a.texture) {
             // what the old one holds goes over in this frame's copy pass,
-            // before anything is sent to the new one
-            array_copies.push_back({a.texture, grown, w, h, a.layers, a.levels});
+            // before anything is sent to the new one (ArrayCopy)
+            ArrayCopy c{a.texture, grown, w, h, {}};
+            for (const auto& [key, held] : textures)
+                if (held.array == &a && held.first < serial)
+                    c.layers.emplace_back(held.layer, held.levels);
+            array_copies.push_back(std::move(c));
         }
         for (uint32_t l = layers; l-- > a.layers;) a.free.push_back(l);
         a.texture = grown;
@@ -1903,6 +1968,7 @@ bool GpuRenderer::Impl::EnsureOutput(int slot, uint32_t w, uint32_t h) {
     // Direct3D 12 texture itself for as long as its paints need it, and
     // native_view.cpp only has a slot drawn again once they're done with it
     if (out.texture) SDL_ReleaseGPUTexture(device, out.texture);
+    ReleaseFence(out);
     out = Output{};
     const SDL_GPUTextureCreateInfo ti = OutputInfo(w, h);
     out.texture = SDL_CreateGPUTexture(device, &ti);
@@ -1922,10 +1988,17 @@ bool GpuRenderer::Impl::EnsureOutput(int slot, uint32_t w, uint32_t h) {
     return true;
 }
 
+void GpuRenderer::Impl::ReleaseFence(Output& out) {
+    if (device && out.fence) SDL_ReleaseGPUFence(device, out.fence);
+    out.fence = nullptr;
+}
+
 void GpuRenderer::Impl::ReleaseOutputs() {
     if (device) {
-        for (Output& out : outputs)
+        for (Output& out : outputs) {
+            ReleaseFence(out);
             if (out.texture) SDL_ReleaseGPUTexture(device, out.texture);
+        }
         if (output_readback) SDL_ReleaseGPUTransferBuffer(device, output_readback);
     }
     for (Output& out : outputs) out = Output{};
@@ -2346,13 +2419,25 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         REXLOG_WARN("native view gpu: no command buffer ({})", SDL_GetError());
         return false;
     }
+    // RasterOptions::gpu_labels: what each indexed draw is, in the order
+    // they're recorded, a list per command buffer, handed to draw_log as the
+    // frame is submitted; callers check gpu_labels first, so the text is
+    // only made when it's on
+    std::vector<std::vector<std::string>> indexed_draws(1);
+    auto label = [&](std::string text) { indexed_draws.back().push_back(std::move(text)); };
+    const std::string frame_label =
+        o.gpu_labels ? fmt::format("band3 frame {} (game frame {}, proc_cmds {}, composed {}) "
+                                   "at {}x{}",
+                                   frame.frame, frame.game_frame, frame.proc_cmds,
+                                   frame.composed, width, height)
+                     : std::string();
     if (upload_bytes || !to_arena.empty() || !array_copies.empty()) {
         SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
         // texture arrays that grew: the old one's layers into the new one
         // first, then it can go (SDL keeps it until the copy is done)
         for (const ArrayCopy& c : array_copies) {
-            for (uint32_t l = 0; l < c.layers; l++) {
-                for (uint32_t m = 0; m < c.levels; m++) {
+            for (const auto& [l, levels] : c.layers) {
+                for (uint32_t m = 0; m < levels; m++) {
                     SDL_GPUTextureLocation src{c.from, m, l, 0, 0, 0};
                     SDL_GPUTextureLocation dst{c.to, m, l, 0, 0, 0};
                     SDL_CopyGPUTextureToTexture(copy, &src, &dst, std::max(c.w >> m, 1u),
@@ -2361,17 +2446,27 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             }
             SDL_ReleaseGPUTexture(device, c.from);
         }
-        // nothing here cycles: Render waits out each frame, so none is still
-        // drawing from these (the pools alternate for the copies to the
-        // arena, which read the last frame's)
-        auto send = [&](uint32_t from, const Buffer& to, uint32_t offset, uint32_t size) {
+        // The frame before may still be drawing as this one is sent
+        // (RenderFrameToOutput doesn't wait for it). The pools and the
+        // bones, which each frame fills from the start, cycle: a buffer the
+        // GPU still reads is left to it and SDL gives this frame another
+        // (the copies to the arena read the last frame's pool, the one it
+        // filled). The arena is appended to, into space no frame drew from
+        // since it was last rebuilt (in a new buffer, PlaceInArena), and a
+        // texture goes into a new layer or one Evict let go, which the
+        // frames still drawing don't sample but where a world pass before
+        // this frame (pre_pass) let go of the frame before's own textures;
+        // there, as with the targets every frame draws over, SDL's barriers
+        // hold this frame's copy on its queue until those reads are done.
+        auto send = [&](uint32_t from, const Buffer& to, uint32_t offset, uint32_t size,
+                        bool cycle) {
             if (!size) return;
             SDL_GPUTransferBufferLocation src{upload, from};
             SDL_GPUBufferRegion dst{to.buffer, offset, size};
-            SDL_UploadToGPUBuffer(copy, &src, &dst, false);
+            SDL_UploadToGPUBuffer(copy, &src, &dst, cycle);
         };
-        send(0, pool_v, 0, pool_vert_count * uint32_t(sizeof(Vertex)));
-        send(pool_index_at, pool_i, 0, pool_index_count * 2);
+        send(0, pool_v, 0, pool_vert_count * uint32_t(sizeof(Vertex)), true);
+        send(pool_index_at, pool_i, 0, pool_index_count * 2, true);
         uint32_t mesh_at = arena_at;
         for (const Mesh* m : to_arena) {
             const Geometry& g = *m->keep;
@@ -2389,12 +2484,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 SDL_CopyGPUBufferToBuffer(copy, &src, &dst, isize, false);
                 continue;
             }
-            send(mesh_at, arena_verts, vto, vsize);
+            send(mesh_at, arena_verts, vto, vsize, false);
             mesh_at = Align(mesh_at + vsize, 16);
-            send(mesh_at, arena_indices, ito, isize);
+            send(mesh_at, arena_indices, ito, isize, false);
             mesh_at = Align(mesh_at + isize, 16);
         }
-        send(bones_at, bones, 0, bone_bytes);
+        send(bones_at, bones, 0, bone_bytes, true);
         uint32_t tex_at = textures_at;
         for (const Tex* tx : new_textures) {
             const Texture& t = *tx->keep;
@@ -2429,7 +2524,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     float bound_viewport[4] = {};
     auto begin_pass = [&](const SDL_GPUColorTargetInfo& ct,
                           const SDL_GPUDepthStencilTargetInfo& dt) {
-        pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
+        pass = BeginPass(cmd, &ct, 1, &dt);
         SDL_BindGPUVertexStorageBuffers(pass, 0, &bone_buffer, 1);
         bound = nullptr;
         bound_verts = nullptr;
@@ -2490,7 +2585,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             start_dt.store_op = SDL_GPU_STOREOP_STORE;
             start_dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
             start_dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-            SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &start_ct, 1, &start_dt);
+            SDL_GPURenderPass* rp = BeginPass(cmd, &start_ct, 1, &start_dt);
             SDL_BindGPUGraphicsPipeline(rp, OverlayStartPipeline(overlay_samples));
             const SDL_GPUTextureSamplerBinding tb[2] = {{color, sampler}, {world_depth, sampler}};
             SDL_BindGPUFragmentSamplers(rp, 0, tb, 2);
@@ -2547,7 +2642,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             c.load_op = SDL_GPU_LOADOP_DONT_CARE;
             c.store_op = SDL_GPU_STOREOP_STORE;
         }
-        SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, ct, second ? 2 : 1, nullptr);
+        SDL_GPURenderPass* rp = BeginPass(cmd, ct, second ? 2 : 1, nullptr);
         SDL_BindGPUGraphicsPipeline(rp, pipeline);
         SDL_GPUTextureSamplerBinding tb[12];
         uint32_t n = 0;
@@ -2587,7 +2682,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
         dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
         dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-        SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
+        SDL_GPURenderPass* rp = BeginPass(cmd, &ct, 1, &dt);
         SDL_BindGPUVertexStorageBuffers(rp, 0, &bone_buffer, 1);
         const SDL_GPUTextureSamplerBinding tb{scene_depth, sampler};
         SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
@@ -2625,6 +2720,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             u.depth = {width, height, 0, 0};
             SDL_PushGPUVertexUniformData(cmd, 0, &u, sizeof(u));
             SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof(u));
+            if (o.gpu_labels)
+                label(fmt::format("velocity object {}: mesh {:#x}, {} indices, {} vertices, {} "
+                                  "bones",
+                                  index, v.mesh, v.geom->indices.size(), v.geom->verts.size(),
+                                  v.bones));
             SDL_DrawGPUIndexedPrimitives(rp, uint32_t(v.geom->indices.size() / 3 * 3), 1,
                                          m.first_index, int32_t(m.first_vertex), 0);
         }
@@ -2857,6 +2957,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SetDepthMap(depth_map, vu.depth_map);
             vu.shade = shades[d];
             SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
+            if (o.gpu_labels)
+                label(fmt::format("draw {} shadow depth: mesh {:#x} into {:#x}, {} indices, {} "
+                                  "vertices, {} bones",
+                                  d, it.mesh, it.target, it.geom->indices.size(),
+                                  it.geom->verts.size(), it.bones.size()));
             SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
                                          m.first_index, int32_t(m.first_vertex), 0);
             st.draws++;
@@ -3054,6 +3159,22 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         pu.flags[0] = blend == kBlendSrcAlpha || blend == kBlendSrcAlphaAdd ? kPremultiply : 0;
         SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
 
+        if (o.gpu_labels) {
+            // each texture's size and its sampler's anisotropy, in tex_layer's order
+            std::string textures;
+            for (int t = 0; t < 8; t++)
+                if (pu.tex_size[t][0])
+                    textures += fmt::format(" {}:{}x{}/{}", t, pu.tex_size[t][0],
+                                            pu.tex_size[t][1], pu.tex_sampler[t][3]);
+            label(fmt::format("draw {} {}: mesh {:#x} into {:#x}, {} indices, {} vertices, {} "
+                              "bones, blend {}, alpha {}, {} samples, shade {}, rect {}, "
+                              "textures{}, layers {} {} {} {} {}",
+                              d, cone ? "spot cone" : soft ? "soft particle" : "mesh", it.mesh,
+                              it.target, it.geom->indices.size(), it.geom->verts.size(),
+                              it.bones.size(), blend, int(alpha), pass_samples, it.shade,
+                              it.rect_shader, textures, pu.tex_layer[0], pu.tex_layer[1],
+                              pu.tex_layer[2], pu.tex_layer[3], pu.tex_layer[4]));
+        }
         SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
                                      m.first_index, int32_t(m.first_vertex), 0);
         st.draws++;
@@ -3240,8 +3361,30 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             draw(d, AlphaMode::kTexture, no_z, shadow_map);
         }
         end_pass();
-        // in place of FinishDrawTarget's downsamples
-        if (rt.levels > 1) SDL_GenerateMipmapsForGPUTexture(cmd, rt.color);
+        // in place of FinishDrawTarget's downsamples. SDL makes them with
+        // blits of its own, a sampler each, which would put the command
+        // buffer's sampler heap off kSamplerBatch's step (BeginPass); so in a
+        // command buffer of their own, the frame's work so far submitted
+        // before it and the rest in a new one (each starts its heaps afresh).
+        // One queue runs them in order, so the frame's fence still waits out
+        // all of it.
+        if (rt.levels > 1) {
+            SDL_GPUCommandBuffer* next = nullptr;
+            if (SDL_SubmitGPUCommandBuffer(cmd)) {
+                if (SDL_GPUCommandBuffer* mips = SDL_AcquireGPUCommandBuffer(device)) {
+                    SDL_GenerateMipmapsForGPUTexture(mips, rt.color);
+                    if (SDL_SubmitGPUCommandBuffer(mips))
+                        next = SDL_AcquireGPUCommandBuffer(device);
+                }
+            }
+            if (!next) {
+                REXLOG_WARN("native view gpu: a texture pass's mips didn't submit ({})",
+                            SDL_GetError());
+                return false;
+            }
+            cmd = next;
+            if (o.gpu_labels) indexed_draws.emplace_back();
+        }
     }
     if (!resolved) resolve();
     end_pass();
@@ -3267,7 +3410,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         ct.texture = output;
         ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
         ct.store_op = SDL_GPU_STOREOP_STORE;
-        SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
+        SDL_GPURenderPass* rp = BeginPass(cmd, &ct, 1, nullptr);
         SDL_BindGPUGraphicsPipeline(rp, gamma_pipeline);
         const SDL_GPUTextureSamplerBinding tb{color, sampler};
         SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
@@ -3288,6 +3431,37 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         SDL_GPUTextureTransferInfo dst{readback, 0, width, height};
         SDL_DownloadFromGPUTexture(copy, &src, &dst);
         SDL_EndGPUCopyPass(copy);
+    }
+    if (o.gpu_labels) {
+        std::lock_guard lock(draw_log_mutex);
+        draw_log_frame = frame_label;
+        draw_log = std::move(indexed_draws);
+    }
+    // With gpu_no_wait, a world pass before the frame (pre_pass) and the
+    // presenter's frame aren't waited for: what comes after them on SDL's
+    // one queue (this frame's passes, RenderFrame's wait, the next frame)
+    // goes after them on the GPU too, and the presenter's caller waits for
+    // its output's fence (OutputDone) before the presenter's queue may
+    // sample it. Otherwise, and for RenderFrame's picture to read back, it
+    // waits here.
+    if (o.gpu_no_wait && (pre_pass || (slot >= 0 && !rgba))) {
+        bool submitted;
+        if (pre_pass) {
+            submitted = SDL_SubmitGPUCommandBuffer(cmd);
+        } else {
+            SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+            submitted = fence != nullptr;
+            if (fence) {
+                ReleaseFence(outputs[slot]);
+                outputs[slot].fence = fence;
+            }
+        }
+        if (!submitted) {
+            REXLOG_WARN("native view gpu: the frame didn't submit ({})", SDL_GetError());
+            return false;
+        }
+        Evict();
+        return true;
     }
     const auto submitted = std::chrono::steady_clock::now();
     SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
@@ -3377,6 +3551,16 @@ bool GpuRenderer::Init() {
     if (impl_->tried) return impl_->ready;
     std::lock_guard lock(impl_->mutex);
     if (impl_->tried.exchange(true)) return impl_->ready;
+    std::string refused;
+    {
+        std::lock_guard why_lock(impl_->zero_copy_mutex);
+        refused = impl_->refused;
+    }
+    if (!refused.empty()) {
+        REXLOG_WARN("native view gpu: not started, the native view draws on the CPU: {}",
+                    refused);
+        return false;
+    }
     if (impl_->Create()) {
         impl_->ready = true;
         return true;
@@ -3407,6 +3591,16 @@ bool GpuRenderer::RenderFrameToOutput(const FrameCapture& frame, const RasterOpt
     return true;
 }
 
+bool GpuRenderer::OutputDone(int slot) {
+    if (slot < 0 || slot >= kOutputs) return true;
+    std::lock_guard lock(impl_->mutex);
+    Impl::Output& o = impl_->outputs[slot];
+    if (!impl_->device || !o.fence) return true;
+    if (!SDL_QueryGPUFence(impl_->device, o.fence)) return false;
+    impl_->ReleaseFence(o);
+    return true;
+}
+
 bool GpuRenderer::DownloadOutput(int slot, std::vector<uint32_t>& rgba, uint32_t& width,
                                  uint32_t& height) {
     if (slot < 0 || slot >= kOutputs) return false;
@@ -3417,6 +3611,27 @@ bool GpuRenderer::DownloadOutput(int slot, std::vector<uint32_t>& rgba, uint32_t
     width = o.w;
     height = o.h;
     return true;
+}
+
+std::string GpuRenderer::DescribeIndexedDraw(uint32_t before, uint32_t total) {
+    std::unique_lock lock(impl_->draw_log_mutex, std::try_to_lock);
+    if (!lock) return "";
+    const auto& log = impl_->draw_log;
+    if (log.empty()) return "the native renderer kept no draws (gpu_labels off, or no frame yet)";
+    // the last of its command buffers with that many indexed draws: the one
+    // the GPU got furthest into
+    for (size_t i = log.size(); i-- > 0;) {
+        if (log[i].size() != total || before >= total) continue;
+        return fmt::format("the native renderer's {}, command buffer {} of {}\n  its indexed "
+                           "draw {} of {}: {}",
+                           impl_->draw_log_frame, i + 1, log.size(), before, total,
+                           log[i][before]);
+    }
+    std::string sizes;
+    for (const auto& list : log) sizes += (sizes.empty() ? "" : ", ") + std::to_string(list.size());
+    return fmt::format("not the native renderer's last frame, whose command buffers had {} "
+                       "indexed draws: {}",
+                       sizes, impl_->draw_log_frame);
 }
 
 void GpuRenderer::Prewarm(uint32_t overlay_samples) {
@@ -3431,9 +3646,23 @@ void GpuRenderer::SetPresentDevice(void* d3d12_device) {
     impl_->present_device = d3d12_device;
 }
 
+void GpuRenderer::RefuseDevice(std::string why) {
+    {
+        std::lock_guard lock(impl_->zero_copy_mutex);
+        impl_->refused = std::move(why);
+    }
+    // made already: a frame being drawn finishes first, and the next finds
+    // no device (Draw) and is drawn on the CPU
+    std::lock_guard lock(impl_->mutex);
+    if (!impl_->device) return;
+    impl_->ready = false;
+    impl_->Release(true);
+}
+
 bool GpuRenderer::CheckZeroCopy(std::string& why) {
     if (!impl_->ready) {
-        why = "no GPU device for the native view";
+        std::lock_guard lock(impl_->zero_copy_mutex);
+        why = impl_->refused.empty() ? "no GPU device for the native view" : impl_->refused;
         return false;
     }
     if (!impl_->zero_copy_checked) {

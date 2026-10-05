@@ -52,7 +52,7 @@ constexpr Choice kAspect[] = {{"true", "Letterbox"}, {"false", "Stretch"}};
 
 constexpr Choice kRenderers[] = {
     {"emulated", "Emulated GPU"},
-    {"native", "Native (experimental)"},
+    {"native", "Native"},
 };
 
 constexpr Choice kAntiAliasing[] = {
@@ -67,6 +67,15 @@ constexpr Choice kAnisotropic[] = {
 };
 
 constexpr Choice kFrameSync[] = {{"-1", "Game's choice"}, {"0", "Off"}, {"1", "On"}};
+
+constexpr Choice kFrameCaps[] = {
+    {"display", "The display's refresh rate"},
+    {"auto", "Auto (VRR: G-Sync, FreeSync)"},
+    {"off", "Off (the console's vblank)"},
+    {"60", "60 fps"},
+    {"120", "120 fps"},
+    {"144", "144 fps"},
+};
 
 constexpr Choice kBackgroundFps[] = {{"0", "The venue's own"}};
 
@@ -85,6 +94,8 @@ constexpr Condition kWithHttp{"http_enabled", "true"};
 constexpr Condition kWithEvents{"events_enabled", "true"};
 constexpr Condition kWithGoCentral{"gocentral", "true"};
 constexpr Condition kWithLiveless{"liveless", "true"};
+// vsync paces the game only with the frame cap off; the cap turns it off
+constexpr Condition kWithoutFrameCap{"frame_cap", "off"};
 
 constexpr Range kSpeeds{0.5, 2.0, 0.05};
 constexpr Range kPorts{1, 65535, 1};
@@ -136,8 +147,10 @@ constexpr Setting kSettings[] = {
      .widget = kResolution, .choices = kResolutions},
     {.cvar = "present_letterbox", .tab = kGraphics, .section = "Display", .label = "Aspect",
      .widget = kCombo, .choices = kAspect},
+    {.cvar = "frame_cap", .tab = kGraphics, .section = "Display", .label = "Frame rate cap",
+     .widget = kComboText, .choices = kFrameCaps},
     {.cvar = "vsync", .tab = kGraphics, .section = "Display", .label = "VSync",
-     .widget = kCheckbox},
+     .widget = kCheckbox, .shown_when = kWithoutFrameCap},
     {.cvar = "renderer", .tab = kGraphics, .section = "Rendering", .label = "Renderer",
      .widget = kCombo, .choices = kRenderers},
     {.cvar = "resolution_scale", .tab = kGraphics, .section = "Rendering",

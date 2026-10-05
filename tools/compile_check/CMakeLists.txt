@@ -71,12 +71,22 @@ target_include_directories(band3_compile_check PRIVATE
     "${BAND3_ROOT}/src"
 )
 target_link_libraries(band3_compile_check PRIVATE rex::runtime)
-if(WIN32)
-    # as the band3 target defines it, for src/Content/content_hooks.cpp
-    target_compile_definitions(band3_compile_check PRIVATE
-        BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")
-endif()
+# as the band3 target defines it, for src/sdk_export.cpp
+target_compile_definitions(band3_compile_check PRIVATE
+    BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")
 
 # the same MIDI backend as the real build
 include(${BAND3_ROOT}/cmake/rtmidi.cmake)
 band3_setup_rtmidi(band3_compile_check ${BAND3_ROOT}/src/ThirdParty/rtmidi/RtMidi.cpp)
+
+# the same HTTPS client as the real build
+include(${BAND3_ROOT}/cmake/web_client.cmake)
+band3_setup_web_client(band3_compile_check)
+
+# the same miniupnpc definitions and headers, for src/Net/port_mapping.cpp
+include(${BAND3_ROOT}/cmake/miniupnpc.cmake)
+band3_setup_miniupnpc(band3_compile_check ${BAND3_ROOT}/src/ThirdParty/miniupnpc)
+
+# the same build tag header, for src/build_tag.cpp
+include(${BAND3_ROOT}/cmake/build_tag.cmake)
+band3_setup_build_tag(band3_compile_check ${BAND3_ROOT})

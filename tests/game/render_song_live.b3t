@@ -3,8 +3,11 @@
 # by default), and prints its numbers: frames captured and drawn, each drawn
 # frame's time (mean, p50, p95, max ms), and the game's own frame rate with the
 # view off and then on. Starts where boot.b3t leaves Rock Band 3 Deluxe (on a
-# fresh profile), with full readback as render_song.b3t needs:
-#   python tools/band3ctl.py launch --fresh -- --readback_resolve=full
+# fresh profile), on the emulated GPU (under the native renderer, the default
+# on Windows, `native_view on` with a size is an error and the view-off numbers
+# would be the native renderer's) and with full readback as render_song.b3t
+# needs:
+#   python tools/band3ctl.py launch --fresh -- --renderer=emulated --readback_resolve=full
 #   python tools/band3ctl.py run tests/game/boot.b3t
 #   python tools/band3ctl.py run tests/game/render_song_live.b3t
 # Add --native_view_record_targets=true to the launch for the texture passes
@@ -15,13 +18,11 @@
 # the welcome hint, whose first choice customizes the
 # band; back out of that to the main menu
 wait screen=hint_rb3_welcome_screen timeout=30s
-wait frames=60
-press green
-wait screen=manage_band_screen timeout=30s
-wait frames=60
-press red
-wait screen=main_hub_screen timeout=30s
-wait frames=60
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
 set autoplay true
 # the same venue every run, so captures compare across runs
 set forced_venue arena_04
@@ -31,22 +32,20 @@ set forced_venue arena_04
 set disable_even_odd_rendering true
 # Play Now, Quickplay, Choose Songs
 press green
-wait frames=60
+sleep 1s
 press green
-wait frames=60
-press green
-wait screen=song_select_screen timeout=30s
-wait frames=60
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
 # past the 123 heading to 20th Century Boy
 press down
 press down
-wait frames=30
-press green
-wait screen=part_difficulty_screen timeout=30s
-wait frames=90
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
 # Guitar, Expert
 press green
-wait frames=30
+sleep 500ms
 press green
 wait in_game timeout=60s
 expect song=20thcenturyboy
