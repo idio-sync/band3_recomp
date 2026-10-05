@@ -55,6 +55,11 @@ constexpr Choice kRenderers[] = {
     {"native", "Native"},
 };
 
+constexpr Choice kEmulatedGpu[] = {
+    {"on", "On (A/B test mode, F8 switches)"},
+    {"off", "Off (native only)"},
+};
+
 constexpr Choice kAntiAliasing[] = {
     {"none", "Off"},
     {"fxaa", "FXAA"},
@@ -153,6 +158,9 @@ constexpr Setting kSettings[] = {
      .widget = kCheckbox, .shown_when = kWithoutFrameCap},
     {.cvar = "renderer", .tab = kGraphics, .section = "Rendering", .label = "Renderer",
      .widget = kCombo, .choices = kRenderers},
+    // experimental, and Direct3D 12 only for now (sync_graphics_system.h)
+    {.cvar = "emulated_gpu", .tab = kGraphics, .section = "Rendering", .label = "Emulated GPU",
+     .widget = kCombo, .choices = kEmulatedGpu, .windows_only = true},
     {.cvar = "resolution_scale", .tab = kGraphics, .section = "Rendering",
      .label = "Render scale", .widget = kIntStepper, .range = Range{1, 8, 1}, .unit = "x"},
     {.cvar = "swap_post_effect", .tab = kGraphics, .section = "Rendering",

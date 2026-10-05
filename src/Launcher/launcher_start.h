@@ -47,13 +47,18 @@ struct RestartInputs {
     bool saved = false;
     // test_port is set: a test harness run
     bool test_port = false;
+    // emulated_gpu asks for another mode than this run's
+    // (render::sync_gpu::EmulatedGpuChanged): the runtime's graphics system
+    // was chosen before the launcher showed
+    bool gpu_changed = false;
 };
 
 // Whether Play starts band3 again rather than the game, for a new input
-// backend: the input system can't be swapped while band3 runs
-// (input_system.h), and a relaunch skips the launcher. The new run reads
-// band3.toml, so only once it's saved; and never under the test harness,
-// which follows this process. Otherwise the change applies at the next start.
+// backend or emulated_gpu: neither the input system nor the graphics system
+// can be swapped while band3 runs (input_system.h, Band3App::OnPreSetup), and
+// a relaunch skips the launcher. The new run reads band3.toml, so only once
+// it's saved; and never under the test harness, which follows this process.
+// Otherwise the change applies at the next start.
 bool RestartsForInput(const RestartInputs& in);
 
 }

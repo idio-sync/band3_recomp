@@ -31,6 +31,8 @@
 #include "src/Render/frame_compose.h"
 #include "src/Render/gpu_skip.h"
 #include "src/Render/guest_formats.h"
+#include "src/Render/sync_gpu/emulated_gpu_mode.h"
+#include "src/Render/sync_gpu/sync_graphics_system.h"
 #include "src/settings.h"
 #include "src/stall_watch.h"
 
@@ -2440,7 +2442,8 @@ void HoldIfRequested(const std::shared_ptr<const FrameCapture>& frame) {
     // kWholeFramesToHold frames whole in a row, this one and the ones before
     // (what it builds up over frames back too, not just the frame), which
     // the harness's capture asks for (RequestFullFrames) before it holds one.
-    if (EmulatedWholeFrames() < kWholeFramesToHold) return;
+    // With emulated_gpu off there's no emulated picture to wait for.
+    if (!sync_gpu::NativeOnly() && EmulatedWholeFrames() < kWholeFramesToHold) return;
     if (g_held.skip > 0) {
         g_held.skip--;
         return;
@@ -2488,13 +2491,42 @@ struct GammaRampAccess : rex::graphics::CommandProcessor {
     }
 };
 
+// The sync-only GPU's ramp (sync_cp.h's DisplayGamma, its mode
+// DC_LUT_RW_MODE's) through ReadDisplayGamma's checks below: a ramp never
+// written, or a table that isn't a gamma curve, is left out (kNone)
+template <typename Warn>
+GammaRamp CheckDisplayGamma(GammaRamp g, Warn&& warn) {
+    if (g.mode == GammaRamp::kPwl) {
+        bool written = false;
+        for (const auto& step : g.pwl)
+            for (uint32_t v : step) written |= v != 0;
+        if (!written) {
+            warn("the PWL ramp is unwritten");
+            g.mode = GammaRamp::kNone;
+        }
+        return g;
+    }
+    g.mode = GammaRamp::kNone;
+    if (std::all_of(std::begin(g.table), std::end(g.table), [](uint32_t v) { return v == 0; })) {
+        warn("the table is unwritten");
+        return g;
+    }
+    if (!PlausibleTable(g)) {
+        warn("the table read isn't a gamma curve");
+        return g;
+    }
+    g.mode = GammaRamp::kTable;
+    return g;
+}
+
 // The display gamma ramp the presenter applies (gamma_ramp.h): the command
 // processor's copy of the DC_LUT registers, which the guest writes at a swap
 // after setting a ramp, and DC_LUT_RW_MODE for which of the two it wrote. Read
 // through the SDK headers' inline accessors, so right only while the GPU
 // plugin is built from the same headers: a table that doesn't look like a
 // gamma curve is taken as misread, logged once, and left out (kNone), as is
-// one never written. Under g_state_mutex.
+// one never written. With emulated_gpu off, band3's sync-only GPU has the
+// registers (sync_cp.h), checked the same way. Under g_state_mutex.
 GammaRamp ReadDisplayGamma() {
     static bool warned = false;
     auto warn = [](const char* why) {
@@ -2503,6 +2535,9 @@ GammaRamp ReadDisplayGamma() {
         REXLOG_WARN("native view: no display gamma ramp ({}); captures are drawn without one",
                     why);
     };
+    // no plugin there to cast to: its GraphicsSystem isn't the runtime's
+    if (sync_gpu::Band3GraphicsSystem* sync = sync_gpu::Active())
+        return CheckDisplayGamma(sync->DisplayGamma(), warn);
     GammaRamp g;
     rex::system::KernelState* kernel = rex::system::kernel_state();
     rex::Runtime* runtime = kernel ? kernel->emulator() : nullptr;

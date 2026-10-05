@@ -53,6 +53,7 @@ REXCVAR_DECLARE(int32_t, background_fps);
 REXCVAR_DECLARE(std::string, frame_cap);
 REXCVAR_DECLARE(std::string, renderer);
 REXCVAR_DECLARE(int32_t, native_max_height);
+REXCVAR_DECLARE(std::string, emulated_gpu);
 
 // Band3/Integrations
 REXCVAR_DECLARE(bool, events_enabled);
@@ -101,6 +102,8 @@ REXCVAR_DECLARE(std::string, native_view_backend);
 REXCVAR_DECLARE(bool, native_present_zero_copy);
 REXCVAR_DECLARE(bool, dred);
 REXCVAR_DECLARE(bool, native_present_pacing);
+REXCVAR_DECLARE(bool, native_present_request_paint);
+REXCVAR_DECLARE(int32_t, native_query_sample_count);
 REXCVAR_DECLARE(bool, native_present_pipeline);
 REXCVAR_DECLARE(int32_t, native_slow_frame_ms);
 REXCVAR_DECLARE(int32_t, game_stall_log_ms);

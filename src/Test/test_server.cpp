@@ -59,6 +59,9 @@
 #include "src/Render/native_view.h"
 #include "src/Render/png_writer.h"
 #include "src/Render/scene_capture.h"
+#include "src/Render/sync_gpu/emulated_gpu_mode.h"
+#include "src/Render/sync_gpu/sync_graphics_system.h"
+#include "src/Render/sync_gpu/sync_monitor.h"
 #include "src/settings.h"
 #include "game_state.h"
 #include "test_commands.h"
@@ -184,6 +187,13 @@ public:
     // isn't the game's picture (capture asks for whole frames first)
     std::string Screenshot(const std::string& name, ScreenshotSource source,
                            ScreenshotInfo& out) override {
+        // emulated_gpu off: the window's picture is the native renderer's,
+        // and there's no other
+        if (render::sync_gpu::NativeOnly()) {
+            if (source == ScreenshotSource::kEmulated)
+                return "no emulated GPU this run (emulated_gpu off)";
+            return Shot(name, true, out);
+        }
         const bool native = source == ScreenshotSource::kNative ||
                             (source == ScreenshotSource::kWindow && render::NativePresenting());
         if (!native && !render::EmulatedPictureFresh()) {
@@ -273,12 +283,21 @@ public:
     // first, enough for the held frame's wait (CaptureHeldFrame:
     // kWholeFramesToHold whole in a row, two to learn, thirty at most), so
     // the screenshot is the game's picture of the captured frame.
+    // With emulated_gpu off there's no emulated picture: no whole frames
+    // first, and the screenshot is the native renderer's (its drawing of the
+    // held frame, the newest captured), `emulated` "none".
     std::string Capture(const std::string& name, CaptureInfo& out) override {
         const std::string file = name.empty() ? TimestampName() : name;
         std::string shot_error;
-        render::RequestFullFrames(render::kWholeFramesToHold + 40);
+        const bool native_only = render::sync_gpu::NativeOnly();
+        if (!native_only) render::RequestFullFrames(render::kWholeFramesToHold + 40);
         auto frame = render::CaptureHeldFrame(
             [&] {
+                if (native_only) {
+                    out.emulated = "none";
+                    shot_error = Shot(file, true, out.screenshot);
+                    return;
+                }
                 out.emulated = render::EmulatedPictureFresh() ? "full" : "stale";
                 shot_error = Shot(file, false, out.screenshot);
             },
@@ -333,6 +352,13 @@ public:
         render::RasterOptions options;
         options.width = out.screenshot.width;
         options.height = out.screenshot.height;
+        // emulated_gpu off: the screenshot is the native renderer's, at the
+        // window's size, so this one is at the game's, as with the emulated
+        // GPU (the window's size is .gpu.presented.png's)
+        if (render::sync_gpu::NativeOnly()) {
+            options.width = 1280;
+            options.height = 720;
+        }
         options.normal_maps = REXCVAR_GET(native_view_normal_maps);
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
@@ -449,6 +475,11 @@ public:
             EmulatedGpu(render::GpuSkipStatsSince(render::GetGpuSkipStats(), measure_gpu_));
         const double cp_ms = CpThreadMs();
         out.emulated_gpu.cp_ms = cp_ms >= 0 && measure_cp_ms_ >= 0 ? cp_ms - measure_cp_ms_ : -1;
+        if (render::sync_gpu::NativeOnly()) {
+            out.emulated_gpu.present = false;
+            if (auto* sync = render::sync_gpu::Active())
+                out.emulated_gpu.sync = SyncGpu(sync->Stats(), measure_sync_);
+        }
         return out;
     }
 
@@ -640,6 +671,8 @@ private:
         const render::CaptureProfile profile = render::GetCaptureProfile();
         const render::GpuSkipStats gpu = render::GetGpuSkipStats();
         const double cp_ms = CpThreadMs();
+        // emulated_gpu off: the sync-only GPU's numbers too
+        auto* sync = render::sync_gpu::Active();
         std::lock_guard lock(measure_mutex_);
         measure_start_ = Clock::now();
         measure_frame_ = frame;
@@ -647,6 +680,36 @@ private:
         measure_profile_ = profile;
         measure_gpu_ = gpu;
         measure_cp_ms_ = cp_ms;
+        if (sync) measure_sync_ = sync->Stats();
+    }
+
+    // what the sync-only GPU did between two readings, as native_view stats
+    // reports it (emulated_gpu off)
+    static NativeViewStats::EmulatedGpu::Sync SyncGpu(const render::sync_gpu::SyncGpuStats& now,
+                                                      const render::sync_gpu::SyncGpuStats& from) {
+        const render::sync_gpu::SyncCpDelta d = render::sync_gpu::DeltaOf(now.cp, from.cp);
+        NativeViewStats::EmulatedGpu::Sync s;
+        s.packets = d.packets;
+        for (size_t i = 0; i < d.opcodes.size() && i < 8; i++)
+            s.opcodes.emplace_back(render::sync_gpu::Pm4OpcodeName(d.opcodes[i].first),
+                                   d.opcodes[i].second);
+        s.draws_skipped = d.draws_skipped;
+        s.waits = d.waits;
+        s.stalled_waits = d.stalled_waits;
+        s.wait_ms = d.wait_ms;
+        s.wait_max_ms = d.wait_max_ms;
+        s.interrupts = d.interrupts;
+        s.swaps = d.swaps;
+        s.vblanks = now.vblanks - from.vblanks;
+        s.fences = d.fences;
+        s.zpd_writes = d.sample_count_writes;
+        s.unknown_opcodes = d.unknown_opcodes;
+        s.unknown_registers = d.unknown_registers;
+        s.bad_packets = d.bad_packets;
+        s.bad_addresses = d.bad_addresses;
+        // since the thread started, if the first reading came before it
+        if (now.thread_ms >= 0) s.thread_ms = now.thread_ms - std::max(from.thread_ms, 0.0);
+        return s;
     }
 
     // what the emulated GPU was sent, as native_view stats reports it
@@ -765,6 +828,8 @@ private:
     render::CaptureProfile measure_profile_;
     render::GpuSkipStats measure_gpu_;
     double measure_cp_ms_ = -1;  // CpThreadMs
+    // the sync-only GPU's, with emulated_gpu off
+    render::sync_gpu::SyncGpuStats measure_sync_;
     // the frame cap's totals when present_stats last started over
     pacing::FrameCapStats present_cap_;
 };

@@ -17,6 +17,7 @@
 #include "src/Audio/usb_mic.h"
 #include "src/Input/input_system.h"
 #include "src/paths.h"
+#include "src/Render/sync_gpu/emulated_gpu_mode.h"
 #include "src/settings.h"
 #include "launcher_start.h"
 #include "launcher_style.h"
@@ -47,6 +48,11 @@ float ButtonWidth(const char* label) {
 }
 
 std::string Str(std::string_view s) { return std::string(s); }
+
+// emulated_gpu, as set now, asks for another mode than this run started in
+bool EmulatedGpuChanged() {
+    return render::sync_gpu::EmulatedGpuChanged(REXCVAR_GET(emulated_gpu));
+}
 
 std::string FormatNumber(double v) {
     char buffer[64];
@@ -407,6 +413,11 @@ void LauncherDialog::DrawRow(const Setting& setting) {
     }
     // the input system can't be swapped while band3 runs
     if (setting.cvar == "input_backend" && input::InputBackendChanged()) {
+        FontScope font(kSmallSize);
+        ImGui::TextColored(kMuted, "Applies when you press Play (band3 restarts)");
+    }
+    // nor the graphics system, chosen before the launcher showed
+    if (setting.cvar == "emulated_gpu" && EmulatedGpuChanged()) {
         FontScope font(kSmallSize);
         ImGui::TextColored(kMuted, "Applies when you press Play (band3 restarts)");
     }
@@ -1455,6 +1466,9 @@ void LauncherDialog::DrawPrompts() {
         if (input::InputBackendChanged()) {
             ImGui::TextColored(kWarn, "The new input backend applies only once it's saved.");
         }
+        if (EmulatedGpuChanged()) {
+            ImGui::TextColored(kWarn, "The new Emulated GPU setting applies only once it's saved.");
+        }
         ImGui::Spacing();
         if (ImGui::Button("Play anyway")) {
             ImGui::CloseCurrentPopup();
@@ -1517,13 +1531,17 @@ void LauncherDialog::Start() {
 
 void LauncherDialog::Begin() {
     if (stage_ != Stage::kEditing) return;
+    const bool gpu_changed = EmulatedGpuChanged();
     restart_ = RestartsForInput({
         .backend_changed = input::InputBackendChanged(),
         .saved = !save_failed_,
         .test_port = REXCVAR_GET(test_port) != 0,
+        .gpu_changed = gpu_changed,
     });
     REXLOG_INFO("Launcher: Play{}{}", save_failed_ ? ", without saving" : "",
-                restart_ ? ", restarting band3 for the new input backend" : "");
+                !restart_      ? ""
+                : gpu_changed ? ", restarting band3 for the new emulated_gpu setting"
+                              : ", restarting band3 for the new input backend");
     stage_ = Stage::kStarting;
     starting_frames_ = 0;
 }

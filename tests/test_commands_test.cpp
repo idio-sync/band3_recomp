@@ -900,6 +900,49 @@ TEST_CASE("native_view stats reports what the emulated GPU was sent per frame") 
     CHECK(Has(RunCommand("native_view stats", game), "\"cp_ms_per_frame\":0.000}"));
 }
 
+TEST_CASE("native_view stats says when there's no emulated GPU, and what the sync GPU did") {
+    FakeGame game;
+    NativeViewStats::EmulatedGpu& e = game.view.emulated_gpu;
+    // with the emulated GPU, as before: no `present`, no `sync`
+    CHECK_FALSE(Has(RunCommand("native_view stats", game), "\"present\""));
+    CHECK_FALSE(Has(RunCommand("native_view stats", game), "\"sync\""));
+
+    e.mode = "swap_only";
+    e.frames = 100;
+    e.present = false;
+    NativeViewStats::EmulatedGpu::Sync& s = e.sync;
+    s.packets = 25000;
+    s.opcodes = {{"SET_CONSTANT", 9000}, {"DRAW_INDX", 50}};
+    s.draws_skipped = 50;
+    s.waits = 300;
+    s.stalled_waits = 100;
+    s.wait_ms = 400;
+    s.wait_max_ms = 16.5;
+    s.interrupts = 100;
+    s.swaps = 100;
+    s.vblanks = 100;
+    s.fences = 250;
+    s.zpd_writes = 40;
+    s.thread_ms = 30;
+    const std::string reply = RunCommand("native_view stats", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"cp_ms_per_frame\":-1.000,\"present\":false,\"sync\":{"
+                     "\"packets_per_frame\":250.0,"
+                     "\"opcodes_per_frame\":{\"SET_CONSTANT\":90.0,\"DRAW_INDX\":0.5},"
+                     "\"draws_skipped_per_frame\":0.5,\"waits_per_frame\":3.0,"
+                     "\"stalled_waits\":100,\"wait_ms_per_frame\":4.000,\"wait_max_ms\":16.500,"
+                     "\"interrupts\":100,\"swaps\":100,\"vblanks\":100,\"fences_per_frame\":2.5,"
+                     "\"zpd_writes\":40,\"unknown_opcodes\":0,\"unknown_registers\":0,"
+                     "\"bad_packets\":0,\"bad_addresses\":0,\"sync_ms_per_frame\":0.300}}"));
+
+    // the thread's time unknown, and no frames: -1, and zeros
+    s.thread_ms = -1;
+    e.frames = 0;
+    const std::string none = RunCommand("native_view stats", game);
+    CHECK(Has(none, "\"packets_per_frame\":0.0,"));
+    CHECK(Has(none, "\"sync_ms_per_frame\":-1.000}}"));
+}
+
 TEST_CASE("native_view off reports the run it ends, then measures the game without it") {
     FakeGame game;
     REQUIRE(Ok(RunCommand("native_view on", game)));

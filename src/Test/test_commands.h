@@ -162,6 +162,27 @@ struct NativeViewStats {
         uint64_t kept_point_tests = 0;
         uint64_t passes_dropped = 0;
         double cp_ms = -1;
+        // With emulated_gpu off there's no emulated GPU (`present` false, and
+        // only then in the reply): the above is what the game still sent, and
+        // `sync` what band3's sync-only GPU made of it in the same time
+        // (src/Render/sync_gpu/sync_monitor.h's SyncCpDelta): packets, the
+        // opcodes most sent, draws skipped, waits (those that had to wait,
+        // their time, and the longest since the game started), interrupts,
+        // swaps, vblanks, fences, occlusion query writes, what it didn't know
+        // or couldn't read, and its thread's CPU time (-1 unknown); the reply
+        // divides the busy ones by the frames
+        bool present = true;
+        struct Sync {
+            uint64_t packets = 0;
+            std::vector<std::pair<std::string, uint64_t>> opcodes;
+            uint64_t draws_skipped = 0;
+            uint64_t waits = 0, stalled_waits = 0;
+            double wait_ms = 0, wait_max_ms = 0;
+            uint64_t interrupts = 0, swaps = 0, vblanks = 0, fences = 0, zpd_writes = 0;
+            uint64_t unknown_opcodes = 0, unknown_registers = 0, bad_packets = 0,
+                     bad_addresses = 0;
+            double thread_ms = -1;
+        } sync;
     } emulated_gpu;
     // The live view's frames by kind (src/Render/frame_compose.h's FrameKind,
     // in its order: world, post, between, full): each kind's frames drawn,

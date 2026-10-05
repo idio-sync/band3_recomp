@@ -248,6 +248,16 @@ REXCVAR_DEFINE_STRING(emulated_gpu_while_native, "skip_draws", "Band3/Graphics",
     "and other stale pictures until RB3 draws them again")
     .allowed({"full", "skip_draws", "swap_only"});
 
+// read once, by Band3App::OnPreSetup (src/Render/sync_gpu/emulated_gpu_mode.h)
+REXCVAR_DEFINE_STRING(emulated_gpu, "on", "Band3/Graphics",
+    "Experimental. on: run the emulated Xbox 360 GPU beside the native renderer, so F8 "
+    "switches between their pictures (A/B, as before). off: no emulated GPU at all; band3 "
+    "answers what the game waits on from its GPU itself and the native renderer is the only "
+    "picture: renderer is native whatever it says, F8 does nothing, and the test harness has "
+    "no emulated screenshot. Windows only for now. Applies at the next start")
+    .allowed({"on", "off"})
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 // Band3/Integrations
 
 REXCVAR_DEFINE_BOOL(events_enabled, false, "Band3/Integrations",
@@ -449,6 +459,17 @@ REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Debug",
     "presented it (about the slowest recent frame's), so frames that draw quickly (with "
     "even/odd rendering, every other one) don't reach a paint together with the one before; "
     "off publishes each as soon as it's drawn, to compare");
+
+REXCVAR_DEFINE_BOOL(native_present_request_paint, true, "Band3/Debug",
+    "With emulated_gpu off, ask the window to paint each time the native renderer has a new "
+    "frame for it, as the emulated GPU's swaps did; off leaves the window to paint when "
+    "something else asks, to compare");
+
+REXCVAR_DEFINE_INT32(native_query_sample_count, 1000, "Band3/Debug",
+    "With emulated_gpu off, the samples every occlusion query reports as drawn (the lens "
+    "flares' visibility tests), as the emulated GPU's query_occlusion_fake_sample_count does "
+    "(1000, its default, what RB3 has always got here); -1 leaves the queries unanswered")
+    .range(-1, 1000000);
 
 REXCVAR_DEFINE_BOOL(native_present_pipeline, false, "Band3/Debug",
     "With renderer = native on the zero-copy path, record the next frame while the GPU draws "

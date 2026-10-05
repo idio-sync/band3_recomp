@@ -13,6 +13,7 @@
 #include "generated/band3_init.h"
 #include "src/Hooks/frame_pacing.h"
 #include "src/Launcher/launcher_platform.h"
+#include "src/Render/sync_gpu/sync_graphics_system.h"
 #include "src/settings.h"
 
 extern "C" void __imp__BoxMapLighting__ApplyQueuedLights(PPCContext& ctx, uint8_t* base);
@@ -176,8 +177,14 @@ std::optional<bool> g_user_vsync;
 // The SDK's vsync (rexgpu-xenos's) off while the cap is on, and back as it
 // was when the cap goes off. Its "GPU VSync" thread reads it again every
 // millisecond, so either applies at once. The presenter never reads it: the
-// window is presented with a sync interval of 0 either way.
+// window is presented with a sync interval of 0 either way. With emulated_gpu
+// off there's no plugin and no vsync setting: band3's sync-only GPU raises
+// the vblanks, told directly.
 void SetVsyncForCap(bool on) {
+    if (auto* sync = render::sync_gpu::Active()) {
+        sync->SetVblankFreeRunning(on);
+        return;
+    }
     std::lock_guard lock(g_vsync_mutex);
     if (on == g_user_vsync.has_value()) return;
     if (on) {

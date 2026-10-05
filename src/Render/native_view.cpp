@@ -9,6 +9,7 @@
 #include "src/Render/png_writer.h"
 #include "src/Render/post_model.h"
 #include "src/Render/present_model.h"
+#include "src/Render/sync_gpu/emulated_gpu_mode.h"
 #include "src/crash_trace.h"
 #include "src/settings.h"
 #include "src/stall_watch.h"
@@ -349,6 +350,13 @@ class Renderer {
     void SetSettle(std::function<bool()> settle) {
         std::lock_guard lock(mutex_);
         settle_ = std::move(settle);
+    }
+    // called on the worker each time a frame is published for the window
+    // (emulated_gpu off's paint request); null to stop
+    void SetPublished(std::function<void()> published) {
+        std::lock_guard lock(mutex_);
+        published_ = published ? std::make_shared<const std::function<void()>>(std::move(published))
+                               : nullptr;
     }
     // A paint numbered `submission`, the GPU having finished those up to
     // `completed`: the newest output to show, marked as sampled by it, its
@@ -833,7 +841,7 @@ class Renderer {
             const int32_t slow_ms = REXCVAR_GET(native_slow_frame_ms);
             if (slow_ms > 0 && d.drew_gpu && d.gs.ms > slow_ms) LogSlow(d, skipped);
         }
-        std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
         // Never a frame the GPU may still be drawing: Publish would refuse
         // it, and abandoning it as refused would free a slot the GPU is
         // writing for the next frame to take. Every caller has waited for it
@@ -848,11 +856,15 @@ class Renderer {
         }
         // still the stretch it was drawn for (PresentSlots::Publish)
         const bool current = d.presenting && d.generation == slots_.Generation();
+        // told once the lock is let go, for a frame the window can now show
+        // (SetPublished)
+        std::shared_ptr<const std::function<void()>> published;
         if (d.slot >= 0) {
             if (d.drew_output && slots_.Publish(d.slot, d.generation)) {
                 outputs_[d.slot] = d.out;
                 slot_serial_[d.slot] = slots_.Serial();
                 slot_presented_[d.slot] = d.presented;
+                published = published_;
             } else {
                 slots_.Abandon(d.slot);
             }
@@ -903,8 +915,12 @@ class Renderer {
             // a screenshot asked for while presenting is of a frame
             // drawn for the window's stretch (Take's `for_present`)
             if (current || !present_) image_wanted_ = false;
+            // the upload path's picture for the window
+            if (current && d.slot < 0) published = published_;
         }
         stats_ = stats;
+        lock.unlock();
+        if (published) (*published)();
     }
 
     // native_slow_frame_ms's line for `d`, kSlowPerSecond a second at most;
@@ -1004,6 +1020,7 @@ class Renderer {
     uint64_t paints_ = 0;
     std::condition_variable paint_cv_;
     std::function<bool()> settle_;
+    std::shared_ptr<const std::function<void()>> published_;
     // the worker's alone: a frame has been in flight kGpuHung, and it
     // submits none until the GPU finishes it (WaitFlight)
     bool gpu_held_ = false;
@@ -1475,12 +1492,38 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         }
         // F4, F8 and the harness's `set` change it on the UI thread
         rex::cvar::RegisterChangeCallback("renderer", [this](std::string_view, std::string_view v) {
+            if (v != "native" && sync_gpu::NativeOnly())
+                REXLOG_INFO("renderer {}: {}", v, sync_gpu::kNoEmulatedGpuSwitch);
             Follow(v == "native");
         });
         Follow(REXCVAR_GET(renderer) == "native");
+        // With emulated_gpu off no emulated swap asks the window to paint, so
+        // each frame published for it does (on the UI thread, where the
+        // presenter takes the request); a request already on its way covers
+        // the frames published before it runs
+        if (sync_gpu::NativeOnly() && REXCVAR_GET(native_present_request_paint) && window_) {
+            paint_target_ = std::make_shared<PaintTarget>();
+            paint_target_->window = window_;
+            rex::ui::WindowedAppContext* app = &window_->app_context();
+            std::shared_ptr<PaintTarget> target = paint_target_;
+            Renderer::Get().SetPublished([app, target] {
+                if (target->pending.exchange(true)) return;
+                app->CallInUIThread([target] {
+                    target->pending.store(false);
+                    if (target->window) target->window->RequestPresenterUIPaintFromUIThread();
+                });
+            });
+            REXLOG_INFO("native present: asking for a paint with each frame (emulated_gpu off)");
+        }
     }
 
     void Stop() {
+        if (paint_target_) {
+            Renderer::Get().SetPublished(nullptr);
+            // a request still queued finds no window (both on the UI thread)
+            paint_target_->window = nullptr;
+            paint_target_.reset();
+        }
         SetEmulatedFreshCallback(nullptr);
         rex::cvar::UnregisterChangeCallbacks("renderer");
         presenter_->RemoveUIDrawerFromUIThread(this);
@@ -1505,8 +1548,10 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
     // (SkipLatch::Fresh: two, and with even/odd rendering a post frame after
     // a whole world frame; gpu_skip.cpp calls back then), or kMaxDrain has
     // gone by
-    // (`at_once`: at shutdown, without waiting)
+    // (`at_once`: at shutdown, without waiting). With emulated_gpu off it's
+    // the only picture: native whatever renderer says, until shutdown.
     void Follow(bool native, bool at_once = false) {
+        if (!at_once && sync_gpu::NativeOnly()) native = true;
         // native again while draining: it just goes on
         if (native) draining_ = false;
         if (native == active_) return;
@@ -1729,6 +1774,13 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
     bool upload_shown_ = false;
     std::chrono::steady_clock::time_point upload_presented_{};
     std::vector<uint32_t> upload_;
+    // emulated_gpu off: the window a published frame asks to paint (read and
+    // cleared on the UI thread), and whether a request is on its way (Start)
+    struct PaintTarget {
+        rex::ui::Window* window = nullptr;
+        std::atomic<bool> pending{false};
+    };
+    std::shared_ptr<PaintTarget> paint_target_;
 #ifdef _WIN32
     std::unique_ptr<D3D12Present> d3d12_;
     std::string d3d12_why_;

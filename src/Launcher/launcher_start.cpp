@@ -19,7 +19,7 @@ bool LauncherPossible(const StartInputs& in) {
 }
 
 bool RestartsForInput(const RestartInputs& in) {
-    return in.backend_changed && in.saved && !in.test_port;
+    return (in.backend_changed || in.gpu_changed) && in.saved && !in.test_port;
 }
 
 }

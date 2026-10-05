@@ -71,6 +71,7 @@ add_executable(band3_tests
     device_view_test.cpp
     dred_report_test.cpp
     sync_cp_test.cpp
+    sync_gpu_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp
@@ -110,6 +111,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Render/soft_raster.cpp
     ${BAND3_ROOT}/src/Render/spot_model.cpp
     ${BAND3_ROOT}/src/Render/sync_gpu/sync_cp.cpp
+    ${BAND3_ROOT}/src/Render/sync_gpu/sync_monitor.cpp
     ${BAND3_ROOT}/src/Test/game_state.cpp
     ${BAND3_ROOT}/src/Test/test_commands.cpp
     ${BAND3_ROOT}/src/Test/test_inputs.cpp

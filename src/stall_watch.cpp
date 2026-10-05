@@ -1,5 +1,6 @@
 #include "src/stall_watch.h"
 
+#include "src/Render/sync_gpu/emulated_gpu_mode.h"
 #include "src/settings.h"
 
 #include <rex/cvar.h>
@@ -163,8 +164,11 @@ double CpuMs(HANDLE thread) {
 }
 
 // the emulated GPU's command processor thread, by the name the SDK gives it
-// (as test_server.cpp's CpThreadMs finds it), or null
+// (as test_server.cpp's CpThreadMs finds it), or with emulated_gpu off the
+// sync-only GPU's (sync_graphics_system.h); or null
 HANDLE OpenCpThread() {
+    const wchar_t* const cp_name =
+        band3::render::sync_gpu::NativeOnly() ? L"band3 GPU sync" : L"GPU Commands";
     using GetDescription = HRESULT(WINAPI*)(HANDLE, PWSTR*);
     const auto get_description = reinterpret_cast<GetDescription>(reinterpret_cast<void*>(
         GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetThreadDescription")));
@@ -183,7 +187,7 @@ HANDLE OpenCpThread() {
         if (!h) continue;
         PWSTR name = nullptr;
         if (SUCCEEDED(get_description(h, &name)) && name) {
-            if (std::wcsstr(name, L"GPU Commands")) found = h;
+            if (std::wcsstr(name, cp_name)) found = h;
             LocalFree(name);
         }
         if (found != h) CloseHandle(h);

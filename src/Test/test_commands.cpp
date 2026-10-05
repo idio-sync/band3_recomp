@@ -659,9 +659,50 @@ std::string CaptureCostJson(const NativeViewStats::Capture& c) {
     return out;
 }
 
+// `emulated_gpu`'s `sync`, with emulated_gpu off: what the sync-only GPU did,
+// the busy counts per game frame (0 with no frames), the rare ones as they
+// are, and its thread's CPU milliseconds per frame (-1 unknown)
+std::string SyncGpuJson(const NativeViewStats::EmulatedGpu::Sync& s, double frames) {
+    auto per_frame = [&](double v) { return frames > 0 ? v / frames : 0.0; };
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "{\"packets_per_frame\":%.1f,\"opcodes_per_frame\":{",
+                  per_frame(double(s.packets)));
+    std::string out = buf;
+    for (size_t i = 0; i < s.opcodes.size(); i++) {
+        out += i ? "," : "";
+        AppendJsonString(out, s.opcodes[i].first);
+        std::snprintf(buf, sizeof(buf), ":%.1f", per_frame(double(s.opcodes[i].second)));
+        out += buf;
+    }
+    std::snprintf(buf, sizeof(buf),
+                  "},\"draws_skipped_per_frame\":%.1f,\"waits_per_frame\":%.1f,\"stalled_waits\":"
+                  "%llu,",
+                  per_frame(double(s.draws_skipped)), per_frame(double(s.waits)),
+                  static_cast<unsigned long long>(s.stalled_waits));
+    out += buf;
+    std::snprintf(buf, sizeof(buf), "\"wait_ms_per_frame\":%.3f,\"wait_max_ms\":%.3f,",
+                  per_frame(s.wait_ms), s.wait_max_ms);
+    out += buf;
+    out += "\"interrupts\":" + std::to_string(s.interrupts);
+    out += ",\"swaps\":" + std::to_string(s.swaps);
+    out += ",\"vblanks\":" + std::to_string(s.vblanks);
+    std::snprintf(buf, sizeof(buf), ",\"fences_per_frame\":%.1f", per_frame(double(s.fences)));
+    out += buf;
+    out += ",\"zpd_writes\":" + std::to_string(s.zpd_writes);
+    out += ",\"unknown_opcodes\":" + std::to_string(s.unknown_opcodes);
+    out += ",\"unknown_registers\":" + std::to_string(s.unknown_registers);
+    out += ",\"bad_packets\":" + std::to_string(s.bad_packets);
+    out += ",\"bad_addresses\":" + std::to_string(s.bad_addresses);
+    const double ms = s.thread_ms < 0 ? -1.0 : per_frame(s.thread_ms);
+    std::snprintf(buf, sizeof(buf), ",\"sync_ms_per_frame\":%.3f}", ms);
+    out += buf;
+    return out;
+}
+
 // native_view stats' `emulated_gpu`: what the emulated GPU was sent, the
 // calls per game frame (0 with no frames), and its command processor's CPU
-// milliseconds per frame (-1 unknown)
+// milliseconds per frame (-1 unknown); with emulated_gpu off, `present` false
+// and the sync-only GPU's numbers
 std::string EmulatedGpuJson(const NativeViewStats::EmulatedGpu& e) {
     const double frames = double(e.frames);
     auto per_frame = [&](uint64_t v) { return frames > 0 ? double(v) / frames : 0.0; };
@@ -690,8 +731,10 @@ std::string EmulatedGpuJson(const NativeViewStats::EmulatedGpu& e) {
     out += buf;
     out += ",\"passes_dropped\":" + std::to_string(e.passes_dropped);
     const double cp = e.cp_ms < 0 ? -1.0 : frames > 0 ? e.cp_ms / frames : 0.0;
-    std::snprintf(buf, sizeof(buf), ",\"cp_ms_per_frame\":%.3f}", cp);
+    std::snprintf(buf, sizeof(buf), ",\"cp_ms_per_frame\":%.3f", cp);
     out += buf;
+    if (!e.present) out += ",\"present\":false,\"sync\":" + SyncGpuJson(e.sync, frames);
+    out += "}";
     return out;
 }
 

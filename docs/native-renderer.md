@@ -107,6 +107,9 @@ been checked:
 |---|---|
 | `renderer` (Band3 → Graphics) | `native` (the default on Windows) or `emulated` (the default elsewhere) |
 | `emulated_gpu_while_native` (Band3 → Graphics) | with `renderer` native, `skip_draws` (the default) leaves the game's draws out of the emulated GPU's work as above; `full` has it draw everything; `swap_only` leaves it only what the game waits on, so F8 back may show black outfits and portraits for a while (above) |
+| `emulated_gpu` (Band3 → Graphics) | experimental: `on` (the default) runs the emulated GPU beside the native renderer, as above; `off` runs without it ([below](#running-without-the-emulated-gpu-emulated_gpu-off)). Applies at the next start (the launcher restarts band3 for it) |
+| `native_present_request_paint` (Band3 → Debug) | with `emulated_gpu` off, on (the default) asks the window to paint each time the native renderer has a frame for it; off leaves the window to paint when something else asks, to compare |
+| `native_query_sample_count` (Band3 → Debug) | with `emulated_gpu` off, the samples every occlusion query reports drawn (the lens flares' visibility tests): 1000 (the default), what the emulated GPU's `query_occlusion_fake_sample_count` gives; -1 leaves them unanswered |
 | `native_max_height` (Band3 → Graphics) | the most lines the native renderer draws: a taller window's picture is drawn this tall and scaled up to fill it, for 4K on a GPU that can't keep up at full size. 0 (the default) draws at the window's size |
 | `native_view_msaa` (Band3 → Graphics) | the samples a pixel the native renderer and the native view draw the overlay with (the track, the HUD, menus drawn after the world), averaged at its edges: 2 (the default) as RB3 does, 4 smoother than the game, 1 none. RB3 multisamples only those: the world, its post-processing and every texture pass are single-sampled, in the game and here. Where the GPU can't draw 2 samples it draws 4 (or 4 → 2, else 1; the log says so) |
 | `native_present_zero_copy` (Band3 → Debug) | on (the default) shows the GPU's frames where they are; off reads each back and uploads it, to compare |
@@ -143,6 +146,38 @@ start when the frame is submitted, so they include `submit`.
 
 Every other pass RB3 draws into a texture (outfits, the crowd's impostors, NgLight's
 projected shadow, heads' normal maps) is drawn at the game's size at any window size.
+
+## Running without the emulated GPU (emulated_gpu off)
+
+Experimental, and Windows (Direct3D 12) only for now. With `emulated_gpu` off (Band3 →
+Graphics, the launcher's Graphics tab, or `--emulated_gpu=off`; it applies at the next
+start) band3 doesn't load the emulated GPU at all. The game still sends its GPU commands
+and waits on what the GPU does with them, so band3's sync-only GPU
+(`src/Render/sync_gpu/`) reads them as the emulated GPU would and does only what the
+game waits on: the fences, the swap's interrupt, the vertical blanks, the occlusion
+queries' results (`native_query_sample_count`), the read pointer and the display gamma
+ramp. It draws nothing; the native renderer is the only picture, on the SDK's own
+presenter with its overlays (F3, F4 and the rest) as before.
+
+- `renderer` is native for the run whatever it says (the log says so if it wasn't), and
+  `emulated_gpu_while_native` is ignored: the game's draws never reach a GPU but the
+  native renderer's.
+- F8 (`bind_renderer`) does nothing but log `the emulated GPU is off this run
+  (emulated_gpu off); restart with it on to switch`; so does changing `renderer`.
+- The test harness's `screenshot` is the native renderer's picture and `screenshot
+  emulated` an error; `capture` holds a frame at once (no whole frames first), its
+  `<name>.png` is the native renderer's picture at the window's size, `<name>.gpu.png` is
+  drawn at 1280x720, and its reply's `emulated` is `none`. `native_view stats` has
+  `emulated_gpu.present` false and the sync-only GPU's numbers (`sync`).
+- The log has `sync gpu:` lines: the ring, the read pointer write-back and the interrupt
+  callback the game set up, a summary of what it sent every 10 s (packets by opcode,
+  waits, interrupts, swaps, vblanks, fences, and anything unknown), and a watchdog's
+  warning when the game has waited on the GPU for 2 s.
+- A GPU hang ends band3 (with the crash trace), as there's no emulated GPU's device
+  recovery to fall back on.
+- With the frame cap on (the default) the sync-only GPU's vertical blank runs every
+  millisecond and the cap paces the game, as the emulated GPU's vsync off did; with it
+  off, the vertical blank paces the game at `video_mode_refresh_rate`.
 
 ## Render checks
 
@@ -242,7 +277,7 @@ reply:
 | `proc_cmds` | what the frame drew: 7 everything; with even/odd rendering 1 the world, 2 post-processing; -1 unknown |
 | `composed`, `world_frame`, `game_frame` | the capture has the world of `world_frame` in front of the overlay of its own `game_frame` (a post frame, which shows the world frame before it) |
 | `held_fallback` | no such post frame came in 30 frames, so the capture took the last |
-| `emulated` | `full`: the emulated GPU drew the screenshot's frame (and the one before it) whole. With `renderer` native and `emulated_gpu_while_native` `skip_draws` or `swap_only`, `capture` has it draw whole frames for a moment first and holds one of those, so this is `full` too; `stale` if it couldn't |
+| `emulated` | `full`: the emulated GPU drew the screenshot's frame (and the one before it) whole. With `renderer` native and `emulated_gpu_while_native` `skip_draws` or `swap_only`, `capture` has it draw whole frames for a moment first and holds one of those, so this is `full` too; `stale` if it couldn't; `none` with `emulated_gpu` off, when the screenshot is the native renderer's |
 | `emulated_passes_dropped` | the passes RB3 draws into textures once whose draws the emulated GPU skipped under `swap_only` since the game started: more than 0, the screenshot may show black outfits or portraits RB3 hasn't drawn again since |
 | `gpu`, `gpu_ms`, `gpu_passes`, `gpu_rt_missing` | the GPU's `<name>.gpu.png` at the screenshot's size, its time, the texture passes it drew, and its draws that sampled a render target nothing had drawn (drawn transparent black). `gpu_error` instead when there's no GPU device or `native_view_backend` is `cpu` |
 | `gpu_presented` | with `renderer` native at another size than the screenshot's, the GPU's `<name>.gpu.presented.png` at the size it draws the window at, as it draws it there (replay's `--scale` checks it) |

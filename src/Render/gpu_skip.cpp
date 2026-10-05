@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "generated/band3_init.h"
+#include "src/Render/sync_gpu/emulated_gpu_mode.h"
 
 // See gpu_skip.h.
 
@@ -125,10 +126,16 @@ const char* SkipLevelName(SkipLevel level) {
 
 void LatchGpuSkip(bool capture_on, bool recording, int proc) {
     TrackSettings();
-    const SkipLevel want = WantedLevel(g_renderer_native.load(std::memory_order_relaxed),
-                                       SkipLevel(g_skip_setting.load(std::memory_order_relaxed)),
-                                       capture_on, recording);
-    const int full = g_full_requested.exchange(0);
+    // With emulated_gpu off nothing draws what the game sends but the native
+    // renderer, from capture: every frame is swap_only, whatever the setting
+    // and capture, and no whole frames are wanted
+    const bool native_only = sync_gpu::NativeOnly();
+    const SkipLevel want =
+        native_only ? SkipLevel::kSwapOnly
+                    : WantedLevel(g_renderer_native.load(std::memory_order_relaxed),
+                                  SkipLevel(g_skip_setting.load(std::memory_order_relaxed)),
+                                  capture_on, recording);
+    const int full = native_only ? 0 : g_full_requested.exchange(0);
     bool was_fresh, fresh;
     SkipLevel level;
     int whole;
@@ -165,13 +172,18 @@ void SetPassWantsDraws(bool wants) {
     g_pass_wants_draws.store(wants, std::memory_order_relaxed);
 }
 
-bool RendererNative() { return g_renderer_native.load(std::memory_order_relaxed); }
+// With emulated_gpu off the native renderer is the only one, there's no
+// emulated picture to be fresh, and no whole frames to ask for.
+bool RendererNative() {
+    return sync_gpu::NativeOnly() || g_renderer_native.load(std::memory_order_relaxed);
+}
 
-bool EmulatedPictureFresh() { return g_fresh.load(); }
+bool EmulatedPictureFresh() { return !sync_gpu::NativeOnly() && g_fresh.load(); }
 
-int EmulatedWholeFrames() { return g_whole.load(); }
+int EmulatedWholeFrames() { return sync_gpu::NativeOnly() ? 0 : g_whole.load(); }
 
 void RequestFullFrames(int frames) {
+    if (sync_gpu::NativeOnly()) return;
     int now = g_full_requested.load();
     while (now < frames && !g_full_requested.compare_exchange_weak(now, frames)) {
     }
@@ -194,9 +206,11 @@ GpuSkipStats GetGpuSkipStats() {
     s.frames = g_frames.load(std::memory_order_relaxed);
     s.frames_skipped = g_frames_skipped.load(std::memory_order_relaxed);
     s.level = g_renderer_native.load() ? SkipLevel(g_skip_setting.load()) : SkipLevel::kFull;
+    // emulated_gpu off: swap_only every frame (LatchGpuSkip)
+    if (sync_gpu::NativeOnly()) s.level = SkipLevel::kSwapOnly;
     s.skip_mode = s.level != SkipLevel::kFull;
     s.skipping = SkipLevel(g_frame_level.load()) != SkipLevel::kFull;
-    s.fresh = g_fresh.load();
+    s.fresh = EmulatedPictureFresh();
     return s;
 }
 
