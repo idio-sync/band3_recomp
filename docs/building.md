@@ -53,6 +53,22 @@ line, and the version a Liveless Rooms server sees). A build from source without
 `.git` is `unknown` unless the configure passes `-DBAND3_BUILD_TAG=<tag>`, as the Nix
 flake does with its revision.
 
+## Packaging
+
+To give a build to someone else, build it, then:
+
+```
+python tools/package.py
+python tools/package.py --build-dir out/build/linux-amd64-release
+```
+
+It writes `out/package/band3-<commit>-<build folder>.zip`: band3 and the libraries beside
+it, `band3_config.ini`, the licenses (band3's and those of the libraries built into it)
+and a `README.txt` with what to install, where the game files go and a link to the
+commit's source. No game files. `band3.map` goes beside the zip, not in it: keep it to
+resolve crash traces from that build. With uncommitted changes to tracked files it stops
+unless `--allow-dirty`.
+
 ## Checks
 
 These run on every push (`.github/workflows/ci.yml`) and don't need the game.
