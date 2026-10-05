@@ -100,7 +100,7 @@ struct Setting {
     Condition shown_when = {};
     // set by this row's widget too, and reset with it
     std::string_view companion = {};
-    // input_backend's xinput is Windows only
+    // input_backend's xinput, GoCentral and Liveless are Windows only
     bool windows_only = false;
 };
 
@@ -258,7 +258,8 @@ public:
     WindowMode GetWindowMode() const;
     bool SetWindowMode(WindowMode mode);
 
-    // a warning for the row, if it needs one (render scale above 1 on a Deck)
+    // a warning for the row, if it needs one (render scale above 1 on a Deck,
+    // GoCentral without a name of your own, a game to join that isn't an address)
     std::optional<std::string> Warning(std::string_view cvar) const;
     // what the row says when Set(cvar, value) was refused: "Not accepted:
     // "<value>"", and why when the limits tell (not a number, out of range,

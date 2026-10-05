@@ -48,6 +48,10 @@ band3 on the new backend (the row says so). Under the [test harness](test-harnes
 band3 doesn't restart itself, so the game keeps the old backend until the next start. A
 changed MIDI port reopens the kit a moment after you stop changing it.
 
+The Online tab turns on the web song browser, Discord, RB3Enhanced's events, and online
+play: [GoCentral and Liveless](integrations.md#gocentral-rock-central) (Windows only).
+Their settings are read as the game starts, so Play applies them without a restart.
+
 It opens:
 
 - the first time band3 starts, including the first start after updating to a version that
@@ -104,8 +108,11 @@ the next venue load).
 Without a keyboard, hold both stick clicks on a controller for a second to open the
 settings menu, or both stick clicks and the left bumper for the
 [Instrument Lab](instruments.md#instrument-lab). The same chord closes them.
-`menu_shortcut` (Band3 → Game) turns this off. It reads controllers through SDL, so it
-doesn't work with `input_backend = xinput`.
+`menu_shortcut` (Band3 → Game) turns this off. It works with either input backend: it
+watches the buttons the game reads from each player's controller, so it needs the
+controller connected as a player, and works once the game is running (not on the
+launcher). Instruments don't count, since a guitar's solo frets and a drum kit's pads and
+second kick send stick clicks too.
 
 ## Config files
 

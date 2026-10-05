@@ -78,6 +78,9 @@ REXCVAR_DECLARE(bool, liveless);
 REXCVAR_DECLARE(std::string, liveless_connect);
 REXCVAR_DECLARE(std::string, liveless_external_ip);
 REXCVAR_DECLARE(int32_t, liveless_port);
+REXCVAR_DECLARE(bool, liveless_port_mapping);
+REXCVAR_DECLARE(bool, liveless_rooms);
+REXCVAR_DECLARE(std::string, liveless_rooms_server);
 
 // Band3/Debug
 REXCVAR_DECLARE(bool, debug_overlay);
@@ -85,6 +88,8 @@ REXCVAR_DECLARE(bool, native_math);
 REXCVAR_DECLARE(bool, native_camera_shake);
 REXCVAR_DECLARE(bool, log_shake_timing);
 REXCVAR_DECLARE(bool, log_net_calls);
+REXCVAR_DECLARE(std::string, liveless_gateway);
+REXCVAR_DECLARE(std::string, liveless_upnp_url);
 REXCVAR_DECLARE(bool, autoplay);
 REXCVAR_DECLARE(bool, virtual_instrument);
 REXCVAR_DECLARE(std::string, virtual_instrument_type);
@@ -139,6 +144,11 @@ struct StartupSettings {
     std::string liveless_connect;
     std::string liveless_external_ip;
     int32_t liveless_port;
+    bool liveless_port_mapping;
+    bool liveless_rooms;
+    std::string liveless_rooms_server;
+    std::string liveless_gateway;
+    std::string liveless_upnp_url;
     bool native_camera_shake;
 };
 const StartupSettings& Startup();

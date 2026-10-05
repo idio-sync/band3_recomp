@@ -583,6 +583,61 @@ TEST_CASE("Deck warning for a render scale above 1") {
     CHECK_FALSE(deck.Warning("resolution_scale"));
 }
 
+TEST_CASE("GoCentral warns until the profile name is one of your own") {
+    Fixture f;
+    f.env.cvars["gocentral"] = Facts(ValueType::kBool, "false");
+    f.env.cvars["username"] = Facts(ValueType::kString, "User");
+    f.store.values["gocentral"] = "false";
+    f.store.values["username"] = "User";
+    const Setting table[] = {
+        {.cvar = "username", .tab = Tab::kGame, .section = "Profile", .label = "Profile name",
+         .widget = Widget::kText},
+        {.cvar = "gocentral", .tab = Tab::kOnline, .section = "GoCentral", .label = "GoCentral",
+         .widget = Widget::kCheckbox},
+    };
+    SettingsModel m(table, f.env, f.store);
+    // off, nothing to warn about
+    CHECK_FALSE(m.Warning("gocentral"));
+    m.Set("gocentral", "true");
+    CHECK(m.Warning("gocentral"));
+    m.Set("username", "  ");
+    CHECK(m.Warning("gocentral"));
+    m.Set("username", "Stagehand");
+    CHECK_FALSE(m.Warning("gocentral"));
+    CHECK_FALSE(m.Warning("username"));
+}
+
+TEST_CASE("Liveless warns when the game to join isn't an address") {
+    Fixture f;
+    f.env.cvars["liveless"] = Facts(ValueType::kBool, "false");
+    f.env.cvars["liveless_connect"] = Facts(ValueType::kString, "127.0.0.1");
+    f.env.cvars["liveless_port"] = Facts(ValueType::kInt, "9103");
+    f.store.values["liveless"] = "false";
+    f.store.values["liveless_connect"] = "";
+    f.store.values["liveless_port"] = "9103";
+    const Setting table[] = {
+        {.cvar = "liveless", .tab = Tab::kOnline, .section = "Online play", .label = "Liveless",
+         .widget = Widget::kCheckbox},
+        {.cvar = "liveless_connect", .tab = Tab::kOnline, .section = "Online play",
+         .label = "Game to join", .widget = Widget::kText, .shown_when = {"liveless", "true"}},
+        {.cvar = "liveless_port", .tab = Tab::kOnline, .section = "Online play",
+         .label = "Port", .widget = Widget::kIntStepper, .shown_when = {"liveless", "true"}},
+    };
+    SettingsModel m(table, f.env, f.store);
+    // hidden while Liveless is off
+    CHECK_FALSE(m.Visible(*m.Find("liveless_connect")));
+    CHECK_FALSE(m.Warning("liveless_connect"));
+    m.Set("liveless", "true");
+    CHECK(m.Visible(*m.Find("liveless_connect")));
+    CHECK(m.Warning("liveless_connect"));
+    m.Set("liveless_connect", "192.168.1.20:");
+    CHECK(m.Warning("liveless_connect"));
+    m.Set("liveless_connect", "192.168.1.20:9203");
+    CHECK_FALSE(m.Warning("liveless_connect"));
+    m.Set("liveless_connect", "127.0.0.1");
+    CHECK_FALSE(m.Warning("liveless_connect"));
+}
+
 TEST_CASE("folders are written relative inside the anchor, absolute outside") {
     const fs::path anchor = Anchor();
     CHECK(PathForConfig("songs", anchor) == "songs");
@@ -738,6 +793,24 @@ TEST_CASE("the launcher's table is consistent") {
                                "show_launcher", "steam_deck_defaults", "joypad_lag"}) {
         CHECK(FindSetting(table, wanted));
     }
+    // the online settings, on the Online tab; what they need shows only with them on
+    for (const char* online : {"gocentral", "gocentral_address", "liveless", "liveless_connect",
+                               "liveless_external_ip", "liveless_port"}) {
+        INFO(online);
+        const Setting* s = FindSetting(table, online);
+        REQUIRE(s);
+        CHECK(s->tab == Tab::kOnline);
+        CHECK(s->windows_only);
+    }
+    CHECK(FindSetting(table, "gocentral_address")->shown_when.cvar == "gocentral");
+    for (const char* needs_liveless : {"liveless_connect", "liveless_external_ip", "liveless_port"}) {
+        CHECK(FindSetting(table, needs_liveless)->shown_when.cvar == "liveless");
+    }
+    // liveless_port's own range (settings.cpp)
+    const Setting* port = FindSetting(table, "liveless_port");
+    REQUIRE(port->range);
+    CHECK(port->range->min == 1024);
+    CHECK(port->range->max == 65000);
     const auto sections = SectionsOf(table, Tab::kGame);
     REQUIRE_FALSE(sections.empty());
     CHECK(sections.front() == "Folders");

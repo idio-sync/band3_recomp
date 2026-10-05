@@ -1,0 +1,58 @@
+# Hosts a Liveless Rooms game that another band3 on this PC joins by its code,
+# and plays a song with it on autoplay to the results: the host's half of the
+# pair, liveless_rooms_join.b3t the joiner's. Against the mock server, never
+# the public one, so both launches name 127.0.0.1 (the mock signs its logins
+# with the address it's given). Start the mock, then the host first, so it gets
+# HOST0001 and the joiner JOIN0001:
+#   python tools/liveless_rooms_mock.py --address 127.0.0.1 --ping 2 --codes HOST0001,JOIN0001
+#   python tools/band3ctl.py --port 21181 launch --fresh -- --liveless=true --liveless_rooms=true --liveless_rooms_server=127.0.0.1 --username=host --log_net_calls=true --log_file=<abs path>/host.log
+#   python tools/band3ctl.py --port 21182 launch --fresh --user-data out/test_user_data_b -- --liveless=true --liveless_rooms=true --liveless_rooms_server=127.0.0.1 --username=joiner --liveless_port=9203 --log_net_calls=true --log_file=<abs path>/joiner.log
+# Take both online (liveless_online.b3t on each, one after the other), so the
+# host is online before the joiner asks for its code; then this one in the
+# background and the joiner's in front, as they wait on each other:
+#   python tools/band3ctl.py --port 21181 run tests/game/liveless_online.b3t
+#   python tools/band3ctl.py --port 21182 run tests/game/liveless_online.b3t
+#   python tools/band3ctl.py --port 21181 run tests/game/liveless_rooms_host.b3t   (background)
+#   python tools/band3ctl.py --port 21182 run tests/game/liveless_rooms_join.b3t
+# Both end on the results, where `state` on each has the band's score: the
+# same on both. python tools/liveless_rooms_play.py does all of it, the mock
+# and the quits too, and compares the scores.
+#
+# The host stays at the main hub, not searching: a join by code is an invite,
+# which a host there lets in. It waits for the join (`joined`: its
+# NetSession::CheckJoinable let a player in), picks Choose Songs and waits
+# ("Waiting for Xbox LIVE Players...") until the joiner picks it too, then
+# makes the setlist both see: 20th Century Boy, Finish Setlist.
+
+rooms_status state=logged_in code=HOST0001 game_socket=true
+set autoplay true
+wait joined timeout=180s
+sleep 3s
+# Play Now, Quickplay, Choose Songs
+press green
+sleep 3s
+press green
+sleep 3s
+press green
+wait screen=song_select_screen timeout=180s
+wait frames=60
+# past the 123 heading to 20th Century Boy; adding it puts Finish Setlist
+# above the songs, one up
+press down
+press down
+wait frames=30
+press green
+wait frames=60
+press up
+wait frames=30
+press green
+wait screen=part_difficulty_screen timeout=30s
+wait frames=90
+# Guitar, Expert; the song starts once the joiner has picked too
+press green
+wait frames=30
+press green
+wait in_game timeout=120s
+expect song=20thcenturyboy
+wait score>=1 timeout=60s
+wait screen=coop_endgame_screen timeout=300s

@@ -52,6 +52,11 @@ void GameState::SetScore(int64_t score) {
     state_.score = score;
 }
 
+void GameState::SetJoined() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.joined = true;
+}
+
 void GameState::CountFrame() {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.frame++;

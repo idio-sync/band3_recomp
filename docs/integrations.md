@@ -116,7 +116,8 @@ Rock Band 3's online features (leaderboards, Battles, setlists shared with frien
 Rock Central's goals) talked to Harmonix's Rock Central, which closed.
 [GoCentral](https://github.com/ihatecompvir/GoCentral) is a fan-run replacement that
 RB3Enhanced players use. Under F4 → Band3 → Online, set `username` (Band3 → Game)
-to a name of your own, turn on `gocentral`, then restart. band3 then logs into
+to a name of your own, turn on `gocentral`, then restart; or do it on the
+[launcher](settings.md#the-launcher)'s Game and Online tabs and press Play. band3 then logs into
 `gocentral_address`, RB3Enhanced's Xbox 360 server (`gocentral-xbox.rbenhanced.rocks`)
 unless you run your own, as RB3Enhanced does on a console with Xbox Live blocked.
 
@@ -134,7 +135,8 @@ Liveless plays without it, straight from one player's game to another's, and ban
 does the same, so band3 players can play together (and, the game's packets being
 the same, with RB3Enhanced players, though that's untested). Under F4 → Band3 →
 Online, turn on `liveless`, set `username` to your name (others see it), then
-restart.
+restart; or set them on the [launcher](settings.md#the-launcher)'s Online and Game
+tabs and press Play.
 
 One player hosts and the others join. Everyone presses Start for the overshell,
 picks **Play on Xbox Live**, backs out of it, then picks Play Now → Quickplay →
@@ -147,22 +149,127 @@ picks **Play on Xbox Live**, backs out of it, then picks Play Now → Quickplay 
   joins the host's band.
 
 Over the internet, as with RB3Enhanced, each player needs their `liveless_port` (UDP
-9103 unless changed) forwarded to their PC and `liveless_external_ip` set to their public IP: the games tell each
-other where to reach them. Only play on one PC and on a local network has been
-tested so far.
+9103 unless changed) forwarded to their PC, and the games tell each other where to
+reach them. band3 asks the router for both the forward and the public address itself
+(see [Port mapping](#port-mapping)); forward the port by hand and set
+`liveless_external_ip` to your public IP only when that doesn't work. Only play on one
+PC and on a local network has been tested so far.
 
 Once the others show in the host's band, the host picks **Play With Current
 Lineup** and everyone makes the setlist and plays together. There is no lobby or
 list of games: Live's matchmaking is gone, so searching finds one game, the one at
 `liveless_connect`.
 
-Players should both search: a player who joins a host that only went online from
-the overshell (without Find Xbox Live Players) is turned away, and their game then
-crashes. RB3Enhanced's Liveless Rooms server, for joining by code instead of
-address, isn't supported.
+Players should both search: a player who searches for a host that only went
+online from the overshell (without Find Xbox Live Players) is turned away.
+To join by code instead of address, see [Liveless Rooms](#liveless-rooms-joining-by-code).
 
 `liveless_port` moves the game to another UDP port, so two band3s on one PC can
 play each other: [`tests/game/liveless.b3t`](../tests/game/liveless.b3t) does that.
+
+### Port mapping
+
+With `liveless` on, band3 asks the router to forward `liveless_port` to this PC, as
+RB3Enhanced does, so players over the internet reach your game without a forward made
+by hand: by PCP first, then NAT-PMP if the router doesn't speak PCP, then UPnP. The
+router also says its public address, which band3 tells players joining you unless
+`liveless_external_ip` is set or the Rooms server saw another (the order is
+`liveless_external_ip`, the Rooms server's, the router's, then this PC's on the local
+network). A router that gives a private address (10.x, 172.16-31.x, 192.168.x,
+100.64-127.x: it's behind another router) still forwards the port, but band3 doesn't
+tell players that address. The mapping lasts an hour, renewed every half hour, and
+band3 deletes it when it closes. Turn `liveless_port_mapping` off (Band3 → Online, then
+restart) to leave the router alone.
+
+band3 asks when it starts, and a mapping that failed isn't asked for again during the
+session: if the router or the network comes up after band3 starts, restart band3. A
+crash or a killed band3 can leave the mapping behind: a leased one lapses within the
+hour, but a router that only keeps permanent mappings holds it until band3's next clean
+exit. On its next start band3 deletes that old mapping if the router won't replace it
+(UPnP's ConflictInMappingEntry); a mapping of the port to another PC, or by another
+program, it leaves alone, and says whose it is.
+
+The log's `port mapping:` lines say how it went, and the Rooms panel (F10) shows it
+under your code: `UDP 9103: mapped by PCP, public 203.0.113.5`, `mapping...`, or
+`not mapped:` and why. When it isn't mapped, forward the port by hand and set
+`liveless_external_ip`, as RB3Enhanced players do. A router can only forward to one PC,
+so two PCs behind one router can't both use 9103.
+
+The router's forward doesn't open Windows Firewall: if you declined its prompt when
+band3 first went online, allow band3.exe for UDP in Windows Security → Firewall &
+network protection → Allow an app through firewall.
+
+### Liveless Rooms (joining by code)
+
+RB3Enhanced's Liveless Rooms joins players by a room code instead of an
+address: each game logs in to a Rooms server, which gives it a code, and when another
+player asks for that code the server tells their game where the host's is. Under F4 →
+Band3 → Online, turn on `liveless` and `liveless_rooms`, set `username` (Band3 → Game)
+to your name, then restart. band3 then logs in to `liveless_rooms_server`,
+RB3Enhanced's (`liveless-testing.ipg.pw`) unless you run your own. Logging in
+registers your `username` there, and as with GoCentral the server knows you by that
+name alone, so band3 won't log in while it's blank or "User". Codes accept 1-8 letters
+and digits, in either case; the public server currently gives five-character codes.
+
+Your code shows in the Rooms panel: press **F10** (`bind_liveless_rooms`), or, once
+online, pick **Xbox Live Options** → **Invite Friends** in the overshell, which opens
+the panel instead of Xbox Live's friends list while Rooms is on. The panel also
+shows the server, the connection's state and the last thing that went wrong; with
+Rooms off, it says how to turn it on. Give your code to the players who'll join you.
+
+When the connection to the server goes, or no server answers, band3 connects again
+by itself: 5 s later, then 10, 30 and 60 s apart until it's back (the panel's state
+says "reconnecting in N s"), starting over at 5 s once it logs in again. **Connect**
+connects now instead. It doesn't try again when the server itself said no (turned the
+connection away, or refused the login): that takes a change on your side.
+
+To join someone:
+
+1. Go online first: press Start for the overshell, pick **Play on Xbox Live**, then
+   back out of it. Until then, and again once the game leaves Xbox Live, the panel's
+   **Join** stays greyed out ("Go online first: Play on Xbox Live in the overshell.").
+2. Open the panel, enter the host's code (type it, or pick its characters from the
+   grid under the field) and press **Join** (or Enter in the field).
+3. Your game joins the host's band, as when accepting an invite on a console. Then
+   you both pick the same mode: Play Now → Quickplay → **Choose Songs**. The host waits
+   ("Waiting for Xbox LIVE Players...") until the player who joined picks it too.
+
+With a controller: while the panel is open and in front, the d-pad moves around it,
+A presses, X deletes a character and B closes it (B first stops typing in the field,
+if A started it). The game reads no buttons until the panel closes or you click the
+game, so a guitar's strum doesn't also move the overshell.
+
+Joins by code always go to UDP port 9103, as RB3Enhanced's do, so a host keeps
+`liveless_port` at 9103 (the panel warns when it isn't), forwarded to their PC: band3
+asks the router for it ([Port mapping](#port-mapping)), or the host forwards it by
+hand, as RB3Enhanced players do. `liveless_external_ip` isn't needed: band3 tells the game
+its public address as the Rooms server saw it, unless `liveless_external_ip` is set,
+which wins. A player joins the host's public address, or its local network one when
+both have the same public address (the same network, or one PC). When a player
+joins, the server also has the host's game send them a packet first, which may get
+the join through some routers without the forward; don't count on it.
+
+What the panel's errors mean:
+
+| Error | |
+|---|---|
+| `no IPv4 address for <server>` | `liveless_rooms_server` didn't resolve: check it and the PC's connection. band3 tries again by itself (5 s, then longer); **Connect** does it now |
+| `no answer from <server>`, `<server> refused the connection` | nothing is taking connections at that address (port 19532 unless it has `:port`), or a firewall is in the way. band3 tries again by itself (5 s, then longer); **Connect** does it now |
+| `the server turned the connection away` | the server isn't taking this client. band3 doesn't ask again by itself |
+| `login refused: check that liveless_rooms_server matches the server's address, and username` | the server closed the connection before giving a code. It checks the login against its own name, so `liveless_rooms_server` must be that name as the server knows it (not, say, its IP address). band3 doesn't ask again by itself: fix the setting and restart |
+| `the server closed the connection` | the connection went after logging in (state `disconnected`). band3 connects again by itself (5 s, then longer), and the code may change; **Connect** does it now |
+| `the server stopped answering` | the server sent nothing for 30 s. State `disconnected` after logging in, `failed` before. band3 connects again by itself (5 s, then longer); **Connect** does it now |
+| `bad data from the server` | the server sent something band3 can't read. After logging in (state `disconnected`) band3 connects again by itself (5 s, then longer); before it (`failed`), the address isn't a Rooms server, and band3 doesn't try again. **Connect** does it now |
+| `not logged in to the Rooms server` | a join before the code came, or after the connection went |
+| `the game isn't online yet: Play on Xbox Live first` | a join while the game is offline: before Play on Xbox Live, or after leaving it |
+| `a code is 1-8 letters and digits` | the code is empty, longer than eight characters, or contains something other than ASCII letters and digits |
+| `no game with code <code>` | no one is logged in with that code: check it with the host, whose game must be running with Rooms on |
+| `join denied (reason <n>)` | the server turned the join away for a reason band3 doesn't know |
+| `the server gave no address for <user>` | the server found the host but gave no address to reach them at |
+
+The log's `rooms:` lines follow the connection: logging in, with the code and public
+address, and what each join did. band3 tells the server which build it is
+(`band3 <build>`, the build its log's `band3 build` line names), as RB3Enhanced does.
 
 ## RB3Enhanced compatibility
 
@@ -173,7 +280,7 @@ Band 3 Deluxe among them) can call them: `rb3e_get_song_name`, `rb3e_get_artist`
 `rb3e_get_album`, `rb3e_get_genre` and `rb3e_get_origin` (each takes a song ID),
 `rb3e_get_song_count`, `rb3e_set_venue` (for this session; `forced_venue` keeps its
 value), `rb3e_local_ip`, `rb3e_api_version` (0, the RB3E API band3 follows),
-`rb3e_build_tag`, `rb3e_commit`, `rb3e_is_emulator` (1), `rb3e_send_event_string`,
+`rb3e_build_tag` (`band3 <build>`), `rb3e_commit`, `rb3e_is_emulator` (1), `rb3e_send_event_string`,
 `rb3e_change_music_speed`, `rb3e_change_track_speed` and their `rb3e_get_` pairs (the
 `song_speed` and `track_speed` settings, for this session) and
 `print_debug`, which logs its argument. `rb3e_relaunch_game` starts band3 again with

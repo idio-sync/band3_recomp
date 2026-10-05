@@ -39,7 +39,7 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Searching [RhythmVerse](https://rhythmverse.co) for custom songs from that page, and downloading them into the game without a restart
 - RB3Enhanced's script functions, modifiers and unlock options, so Deluxe's RB3E features work
 - Rock Central's online features (leaderboards, Battles) through [GoCentral](https://github.com/ihatecompvir/GoCentral), as RB3Enhanced connects
-- Online play without Xbox Live, straight to another player's game, as RB3Enhanced's Liveless does
+- Online play without Xbox Live, straight to another player's game, as RB3Enhanced's Liveless does, or by code through RB3Enhanced's Liveless Rooms (F10)
 - Discord Rich Presence
 
 <img src="docs/images/web-song-browser.png" alt="band3's web song browser: the library with album art and part difficulties, and the song now playing" width="520">
@@ -163,6 +163,7 @@ band3 stands on the work of these projects:
 **Libraries**
 - [RtMidi](https://github.com/thestk/rtmidi) (MIDI input),
   [inih](https://github.com/benhoyt/inih) (INI parsing),
+  [miniupnpc](https://github.com/miniupnp/miniupnp) (UPnP port mapping),
   [stb_image_write](https://github.com/nothings/stb) (album art),
   [doctest](https://github.com/doctest/doctest) (unit tests),
   [Tracy](https://github.com/wolfpld/tracy) (profiling), and SDL3 through the ReXGlue SDK.

@@ -17,6 +17,7 @@
 #include <memory>
 #include <string>
 
+#include "build_tag.h"
 #include "config.h"
 #include "crash_trace.h"
 #include "game_writes.h"
@@ -41,6 +42,7 @@
 #include "Launcher/launcher_style.h"
 #include "Launcher/mic_meter.h"
 #include "Net/discord.h"
+#include "Net/liveless_rooms_panel.h"
 #include "Net/online_hooks.h"
 #include "Net/http_server.h"
 #include "Render/gpu_view.h"
@@ -79,6 +81,8 @@ class Band3App : public rex::ReXApp {
   std::unique_ptr<DebugOverlayDialog> debug_overlay_;
   std::unique_ptr<band3::input::InstrumentLabDialog> instrument_lab_;
   std::unique_ptr<band3::input::MenuShortcutDialog> menu_shortcut_;
+  // the Liveless Rooms panel, see src/Net/liveless_rooms_panel.h
+  std::unique_ptr<band3::rooms::RoomsPanelDialog> rooms_panel_;
   // the native view, see src/Render/native_view.h
   std::unique_ptr<band3::render::NativeViewDialog> native_view_;
   // the launcher while it's up, before the game starts (src/Launcher/)
@@ -125,6 +129,8 @@ class Band3App : public rex::ReXApp {
   // the window and input system don't exist yet, so everything set here applies
   // at startup
   void OnPostInitLogging() override {
+    // band3's first line, so any log says which build wrote it
+    REXLOG_INFO("band3 build {}", band3::BuildTag());
     // a relaunch (rb3e_relaunch_game) starts before the last run has closed
     band3::relaunch::WaitForPrevious();
     LogFolders(game_data_root(), user_data_root(), cache_root());
@@ -338,12 +344,17 @@ class Band3App : public rex::ReXApp {
 
   // while the launcher's settings are being edited and aren't saved, closing
   // the window asks first; once Play is pressed it closes as usual
+  // Closing the window ends the process without OnShutdown, so an accepted
+  // close also deletes the port mapping and closes the Rooms connection.
+  // The harness's quit closes without asking and stops online play itself
+  // (src/Test/test_server.cpp).
   bool OnWindowCloseRequested() override {
     if (launcher_ && !quit_confirmed_ && launcher_->IsEditing() &&
         launcher_->HasUnsavedChanges()) {
       launcher_->RequestQuit();
       return false;
     }
+    band3::online::Stop();
     return true;
   }
 
@@ -415,9 +426,15 @@ class Band3App : public rex::ReXApp {
     launcher_.reset();
     band3::pacing::StopFrameCap();
     band3::stall_watch::Stop();
+    // the Liveless Rooms client's thread reaches into the game (a join's
+    // invite, a NAT punch from the game's socket), so it ends while the kernel
+    // is still there, and before the test server that asks it for its status.
+    // Closing the window doesn't come here: the SDK exits the process at once
+    band3::online::Stop();
     band3::http::StopServer();
     band3::test::StopServer();
     rex::ui::UnregisterBind("bind_instrument_lab");
+    rex::ui::UnregisterBind("bind_liveless_rooms");
     rex::ui::UnregisterBind("bind_native_view");
     rex::ui::UnregisterBind("bind_renderer");
     // off the presenter, and the GPU done with the textures its paints read,
@@ -451,6 +468,12 @@ class Band3App : public rex::ReXApp {
         rex::cvar::SetFlagByName("renderer",
                                  REXCVAR_GET(renderer) == "native" ? "emulated" : "native");
       });
+      // also opened by the overshell's Invite Friends while Rooms is on, which
+      // the panel watches for itself
+      rooms_panel_ = std::make_unique<band3::rooms::RoomsPanelDialog>(drawer);
+      rex::ui::RegisterBind("bind_liveless_rooms", "F10", "Toggle the Liveless Rooms panel", [this] {
+        if (rooms_panel_ && !launcher_) rooms_panel_->Toggle();
+      });
       // deferred: opening the settings menu adds a dialog, and this runs while
       // the dialogs draw
       menu_shortcut_ = std::make_unique<band3::input::MenuShortcutDialog>(
@@ -464,6 +487,7 @@ class Band3App : public rex::ReXApp {
       debug_overlay_.reset();
       instrument_lab_.reset();
       menu_shortcut_.reset();
+      rooms_panel_.reset();
       native_view_.reset();
     }
   }

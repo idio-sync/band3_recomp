@@ -3,14 +3,17 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 #include <rex/types.h>
+#include <atomic>
 #include <cstring>
 #include <string>
 #include <string_view>
 #include "generated/band3_init.h"
+#include "src/Net/liveless_rooms.h"
 #include "src/Net/local_address.h"
 #include "src/Net/native_socket.h"
 #include "src/Net/online.h"
 #include "src/Net/online_hooks.h"
+#include "src/Net/port_mapping.h"
 #include "src/sdk_export.h"
 #include "src/settings.h"
 
@@ -46,10 +49,11 @@ bool g_live = false;
 bool g_gocentral = false;
 bool g_liveless = false;
 // names in guest memory for Quazal::InetAddress::SetAddress: the GoCentral
-// server, and the Liveless game to join
+// server, and the Liveless game to join, which an invite (SetLivelessJoin)
+// changes while the game runs
 uint32_t g_gocentral_server = 0;
-uint32_t g_liveless_join = 0;
-uint16_t g_liveless_join_port = band3::online::kGamePort;
+std::atomic<uint32_t> g_liveless_join{0};
+std::atomic<uint16_t> g_liveless_join_port{band3::online::kGamePort};
 uint16_t g_liveless_port = band3::online::kGamePort;
 uint32_t g_liveless_external = 0;
 
@@ -115,6 +119,37 @@ bool StartLiveless() {
     return true;
 }
 
+// Liveless Rooms only finds the game for Liveless to join, and logs in with
+// username, which the server then keeps as that player's, as GoCentral does
+void StartLivelessRooms() {
+    if (!band3::settings::Startup().liveless_rooms) return;
+    if (!g_liveless) {
+        REXLOG_ERROR("rooms: liveless_rooms needs liveless = true");
+        return;
+    }
+    if (!band3::online::IsOwnAccountName(band3::settings::Username())) {
+        REXLOG_ERROR("rooms: not connecting as '{}': set username to a name of your own "
+                     "first, it's your account on the Liveless Rooms server",
+                     band3::settings::Username());
+        return;
+    }
+    band3::rooms::Start();
+}
+
+// Liveless players reach this game on liveless_port, so the router is asked
+// to forward it here, as RB3Enhanced does. Under the test harness only the
+// overrides' mock is asked, never the real router (port_mapping.h).
+void StartPortMapping() {
+    const auto& startup = band3::settings::Startup();
+    if (!g_liveless || !startup.liveless_port_mapping) return;
+    band3::port_mapping::Config config;
+    config.port = g_liveless_port;
+    config.gateway = startup.liveless_gateway;
+    config.upnp_url = startup.liveless_upnp_url;
+    config.harness = REXCVAR_GET(test_port) != 0;
+    band3::port_mapping::Start(config);
+}
+
 }  // namespace
 
 namespace band3::online {
@@ -129,6 +164,13 @@ void Start() {
     g_gocentral = StartGoCentral();
     g_liveless = StartLiveless();
     g_live = g_gocentral || g_liveless;
+    StartPortMapping();
+    StartLivelessRooms();
+}
+
+void Stop() {
+    rooms::Stop();
+    port_mapping::Stop();
 }
 
 bool LiveSpoofed() { return g_live; }
@@ -137,6 +179,16 @@ bool Liveless() { return g_liveless; }
 uint16_t LivelessJoinPort() { return g_liveless_join_port; }
 uint16_t LivelessPort() { return g_liveless_port; }
 uint32_t LivelessExternalAddress() { return g_liveless_external; }
+
+bool SetLivelessJoin(const std::string& host, uint16_t port) {
+    // the old name stays allocated: Quazal may be looking it up as it changes
+    const uint32_t name = GuestCopy(host);
+    if (!name) return false;
+    g_liveless_join_port = port;
+    g_liveless_join = name;
+    REXLOG_INFO("liveless: the game to join is now {}:{}", host, port);
+    return true;
+}
 
 }  // namespace band3::online
 
@@ -148,8 +200,9 @@ extern "C" REX_FUNC(Quazal__InetAddress__SetAddress) {
         REXLOG_INFO("gocentral: {} -> {}", host, GuestString(base, g_gocentral_server));
         ctx.r4.u64 = g_gocentral_server;
     } else if (g_liveless && host == band3::online::kJoinStandInName) {
-        REXLOG_INFO("liveless: joining {}", GuestString(base, g_liveless_join));
-        ctx.r4.u64 = g_liveless_join;
+        const uint32_t join = g_liveless_join;
+        REXLOG_INFO("liveless: joining {}", GuestString(base, join));
+        ctx.r4.u64 = join;
     }
     __imp__Quazal__InetAddress__SetAddress(ctx, base);
 }

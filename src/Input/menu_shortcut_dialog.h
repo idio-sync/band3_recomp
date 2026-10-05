@@ -6,8 +6,8 @@
 namespace band3::input {
 
 // Watches the controllers for the menu shortcut (menu_shortcut.h) once a frame
-// and passes each chord to on_action. Draws nothing. Reads the pads the SDK's
-// SDL driver has open, so it does nothing with input_backend = xinput.
+// and passes each chord to on_action. Draws nothing. Reads the buttons the game
+// last read from each player (ChordPads), so it works with either input backend.
 // on_action runs while ImGui is drawing, so anything that adds or removes a
 // dialog has to be deferred.
 class MenuShortcutDialog : public rex::ui::ImGuiDialog {

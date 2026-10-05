@@ -82,8 +82,11 @@
             mkdir assets
             cp -a ${xex} assets/default.xex
             rexglue codegen band3_config.toml
+            # the source here has no .git for git describe; the flake's
+            # revision instead, or "dirty" for a tree with uncommitted changes
             cmake --preset=linux-amd64-release \
               -DCMAKE_INSTALL_PREFIX=$out \
+              -DBAND3_BUILD_TAG=${self.shortRev or "dirty"} \
               -DCMAKE_C_COMPILER=clang \
               -DCMAKE_CXX_COMPILER=clang++
           '';

@@ -50,6 +50,12 @@ public:
     std::vector<std::pair<std::string, std::string>> settings_set;
     std::vector<std::string> binds_pressed;
     GameFolders folders;
+    struct InviteRecord {
+        std::string host;
+        uint16_t port;
+        bool force_flag;
+    };
+    std::vector<InviteRecord> invites;
     std::string screenshot_name;
     ScreenshotSource screenshot_source = ScreenshotSource::kWindow;
     // renderer = native: the window's picture is the native renderer's, and
@@ -148,6 +154,28 @@ public:
         binds_pressed.emplace_back(bind);
         return {};
     }
+    std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) override {
+        if (host == "offline") return "liveless is off";
+        invites.push_back({host, port, force_flag});
+        return {};
+    }
+    band3::rooms::Status rooms;
+    std::vector<std::string> rooms_joins;
+    int rooms_connects = 0;
+    band3::rooms::Status RoomsStatus() override { return rooms; }
+    std::string RoomsJoin(const std::string& code) override {
+        if (rooms.state != band3::rooms::State::kLoggedIn) return "not logged in to the Rooms server";
+        if (!rooms.game_socket_seen) return "the game isn't online yet: Play on Xbox Live first";
+        rooms_joins.push_back(code);
+        return {};
+    }
+    std::string RoomsConnect() override {
+        if (rooms.state == band3::rooms::State::kOff) return "Liveless Rooms isn't running";
+        rooms_connects++;
+        return {};
+    }
+    band3::port_mapping::Status port_mapping;
+    band3::port_mapping::Status PortMappingStatus() override { return port_mapping; }
     std::string NativeViewOn(uint32_t width, uint32_t height, bool sized, bool post) override {
         if (width > 4000) return "no GPU target that big";
         if (sized && native) return "renderer is native: its size follows the window's";
@@ -944,6 +972,246 @@ TEST_CASE("bind presses a key bind, with or without its bind_ prefix") {
     CHECK_FALSE(Ok(RunCommand("p2 bind settings", game)));
 }
 
+TEST_CASE("liveless_invite accepts an invite to a game, on 9103 unless given a port") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("liveless_invite 127.0.0.1", game)));
+    CHECK(Ok(RunCommand("liveless_invite 192.168.1.20:9203 force_flag", game)));
+    REQUIRE(game.invites.size() == 2);
+    CHECK(game.invites[0].host == "127.0.0.1");
+    CHECK(game.invites[0].port == 9103);
+    CHECK_FALSE(game.invites[0].force_flag);
+    CHECK(game.invites[1].host == "192.168.1.20");
+    CHECK(game.invites[1].port == 9203);
+    CHECK(game.invites[1].force_flag);
+
+    const std::string refused = RunCommand("liveless_invite offline", game);
+    CHECK_FALSE(Ok(refused));
+    CHECK(Has(refused, "liveless is off"));
+    CHECK(Has(RunCommand("liveless_invite host:0", game), "isn't an address"));
+    CHECK_FALSE(Ok(RunCommand("liveless_invite", game)));
+    CHECK_FALSE(Ok(RunCommand("liveless_invite 127.0.0.1 force", game)));
+    CHECK_FALSE(Ok(RunCommand("p2 liveless_invite 127.0.0.1", game)));
+    CHECK(game.invites.size() == 2);
+}
+
+namespace {
+
+// logged in to a Rooms server on this PC, and joined a game at 192.168.1.2
+band3::rooms::Status LoggedInRooms() {
+    band3::rooms::Status rooms;
+    rooms.state = band3::rooms::State::kLoggedIn;
+    rooms.server = "127.0.0.1";
+    rooms.code = "HOST0001";
+    rooms.public_ipv4 = 0x0100007F;
+    rooms.advertised_ipv4 = 0x0100007F;
+    rooms.last_join_user = "host";
+    rooms.last_join_ipv4 = 0x0201A8C0;
+    rooms.game_socket_seen = true;
+    rooms.attempt = 1;
+    return rooms;
+}
+
+}  // namespace
+
+TEST_CASE("rooms_status reports Liveless Rooms' status, addresses dotted") {
+    FakeGame game;
+    const std::string off = RunCommand("rooms_status", game);
+    CHECK(off ==
+          "{\"ok\":true,\"rooms\":{\"state\":\"off\",\"server\":\"\",\"code\":\"\",\"public_ip\":\"\","
+          "\"advertised_ip\":\"\",\"error\":\"\",\"last_join_user\":\"\",\"last_join_ip\":\"\","
+          "\"game_socket\":false,\"retry_in\":0,\"attempt\":0}}");
+    game.rooms = LoggedInRooms();
+    game.rooms.error = "no game with code \"NOPE0000\"";
+    CHECK(RunCommand("rooms_status", game) ==
+          "{\"ok\":true,\"rooms\":{\"state\":\"logged_in\",\"server\":\"127.0.0.1\",\"code\":\"HOST0001\","
+          "\"public_ip\":\"127.0.0.1\",\"advertised_ip\":\"127.0.0.1\","
+          "\"error\":\"no game with code \\\"NOPE0000\\\"\",\"last_join_user\":\"host\","
+          "\"last_join_ip\":\"192.168.1.2\",\"game_socket\":true,\"retry_in\":0,\"attempt\":1}}");
+    CHECK_FALSE(Ok(RunCommand("p2 rooms_status", game)));
+}
+
+TEST_CASE("rooms_status says when the client connects again, and which connection it's on") {
+    FakeGame game;
+    game.rooms = LoggedInRooms();
+    game.rooms.state = band3::rooms::State::kDisconnected;
+    game.rooms.error = "the server closed the connection";
+    game.rooms.retry_in_s = 5;
+    CHECK(Has(RunCommand("rooms_status", game), "\"retry_in\":5,\"attempt\":1}"));
+    CHECK(Ok(RunCommand("rooms_status state=disconnected retry_in!=0 attempt=1", game)));
+    CHECK(Ok(RunCommand("rooms_status retry_in=5 code!=HOST0002", game)));
+    const std::string waiting = RunCommand("rooms_status retry_in=0", game);
+    CHECK_FALSE(Ok(waiting));
+    CHECK(Has(waiting, "rooms retry_in is \\\"5\\\", not \\\"0\\\""));
+    game.rooms = LoggedInRooms();
+    game.rooms.attempt = 2;
+    CHECK(Ok(RunCommand("rooms_status state=logged_in retry_in=0 attempt=2", game)));
+    const std::string not_waiting = RunCommand("rooms_status retry_in!=0", game);
+    CHECK_FALSE(Ok(not_waiting));
+    CHECK(Has(not_waiting, "rooms retry_in is \\\"0\\\", not other than \\\"0\\\""));
+    CHECK(Has(RunCommand("rooms_status !=0", game), "usage: rooms_status"));
+    CHECK(Has(RunCommand("rooms_status colour!=red", game), "rooms_status has no field colour"));
+}
+
+TEST_CASE("rooms_status checks fields, exactly or by what they contain") {
+    FakeGame game;
+    game.rooms = LoggedInRooms();
+    game.rooms.error = "no game with code NOPE0000";
+    CHECK(Ok(RunCommand("rooms_status state=logged_in code=HOST0001 public_ip=127.0.0.1", game)));
+    CHECK(Ok(RunCommand("rooms_status error~NOPE0000 game_socket=true advertised_ip=127.0.0.1", game)));
+    CHECK(Ok(RunCommand("rooms_status last_join_user=host last_join_ip=192.168.1.2", game)));
+    const std::string wrong = RunCommand("rooms_status state=logged_in code=JOIN0001", game);
+    CHECK_FALSE(Ok(wrong));
+    CHECK(Has(wrong, "rooms code is \\\"HOST0001\\\", not \\\"JOIN0001\\\""));
+    // the whole status comes with it
+    CHECK(Has(wrong, "public_ip"));
+    CHECK_FALSE(Ok(RunCommand("rooms_status error~EXIT0000", game)));
+    CHECK(Has(RunCommand("rooms_status colour=red", game), "rooms_status has no field colour"));
+    CHECK(Has(RunCommand("rooms_status logged_in", game), "usage: rooms_status"));
+    CHECK(Has(RunCommand("rooms_status =x", game), "usage: rooms_status"));
+    // an empty value is a field with nothing in it
+    game.rooms.error.clear();
+    CHECK(Ok(RunCommand("rooms_status error=", game)));
+}
+
+TEST_CASE("rooms_join asks for a game by code, in upper case") {
+    FakeGame game;
+    game.rooms = LoggedInRooms();
+    const std::string reply = RunCommand("rooms_join host0001", game);
+    CHECK(reply == "{\"ok\":true,\"code\":\"HOST0001\"}");
+    REQUIRE(game.rooms_joins.size() == 1);
+    CHECK(game.rooms_joins[0] == "HOST0001");
+
+    CHECK(RunCommand("rooms_join lcmee", game) == "{\"ok\":true,\"code\":\"LCMEE\"}");
+    REQUIRE(game.rooms_joins.size() == 2);
+    CHECK(game.rooms_joins[1] == "LCMEE");
+    CHECK(Has(RunCommand("rooms_join HOST00011", game), "a code is 1-8 letters and digits"));
+    CHECK(Has(RunCommand("rooms_join HOST-001", game), "a code is 1-8 letters and digits"));
+    CHECK(Has(RunCommand("rooms_join", game), "usage: rooms_join <code>"));
+    CHECK(Has(RunCommand("rooms_join HOST0001 JOIN0001", game), "usage: rooms_join <code>"));
+    game.rooms.state = band3::rooms::State::kDisconnected;
+    CHECK(Has(RunCommand("rooms_join HOST0001", game), "not logged in to the Rooms server"));
+    CHECK(game.rooms_joins.size() == 2);
+}
+
+TEST_CASE("rooms_join says so when the game isn't online") {
+    FakeGame game;
+    game.rooms = LoggedInRooms();
+    game.rooms.game_socket_seen = false;
+    const std::string reply = RunCommand("rooms_join HOST0001", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(Has(reply, "the game isn't online yet: Play on Xbox Live first"));
+    CHECK(game.rooms_joins.empty());
+}
+
+TEST_CASE("rooms_connect connects again") {
+    FakeGame game;
+    CHECK(Has(RunCommand("rooms_connect", game), "Liveless Rooms isn't running"));
+    game.rooms.state = band3::rooms::State::kFailed;
+    CHECK(Ok(RunCommand("rooms_connect", game)));
+    CHECK(game.rooms_connects == 1);
+    CHECK(Has(RunCommand("rooms_connect now", game), "usage: rooms_connect"));
+}
+
+TEST_CASE("wait rooms= waits for the Rooms connection to reach a state") {
+    FakeGame game;
+    game.state.rooms_state = "connecting";
+    game.on_sleep = [](FakeGame& g) {
+        if (g.slept >= 2s) g.state.rooms_state = "logged_in";
+    };
+    const std::string reply = RunCommand("wait rooms=logged_in timeout=10s", game);
+    CHECK(Ok(reply));
+    CHECK(game.slept >= 2s);
+    CHECK(game.slept < 3s);
+    // the state says it, once it's on
+    CHECK(Has(reply, "\"rooms\":\"logged_in\""));
+    CHECK(Ok(RunCommand("expect rooms=logged_in", game)));
+    CHECK_FALSE(Ok(RunCommand("expect rooms=failed timeout=1s", game)));
+
+    CHECK(Has(RunCommand("wait rooms=online", game), "rooms= takes off, connecting"));
+    CHECK(Has(RunCommand("wait rooms=", game), "rooms= takes off, connecting"));
+    FakeGame off;
+    CHECK(Ok(RunCommand("expect rooms=off", off)));
+    CHECK_FALSE(Has(RunCommand("state", off), "\"rooms\""));
+}
+
+TEST_CASE("port_mapping_status reports the router's mapping, and checks its fields") {
+    FakeGame game;
+    game.port_mapping.error = "skipped under the test harness";
+    CHECK(RunCommand("port_mapping_status", game) ==
+          "{\"ok\":true,\"port_mapping\":{\"state\":\"off\",\"method\":\"\",\"external_ip\":\"\","
+          "\"port\":0,\"lease_s\":0,\"error\":\"skipped under the test harness\"}}");
+    CHECK(Ok(RunCommand("port_mapping_status state=off error~harness", game)));
+
+    game.port_mapping = {};
+    game.port_mapping.state = band3::port_mapping::State::kMapped;
+    game.port_mapping.method = band3::port_mapping::Method::kNatPmp;
+    game.port_mapping.external_ipv4 = 0x057100CB;  // 203.0.113.5
+    game.port_mapping.port = 9103;
+    game.port_mapping.lease_s = 3600;
+    CHECK(RunCommand("port_mapping_status", game) ==
+          "{\"ok\":true,\"port_mapping\":{\"state\":\"mapped\",\"method\":\"natpmp\","
+          "\"external_ip\":\"203.0.113.5\",\"port\":9103,\"lease_s\":3600,\"error\":\"\"}}");
+    CHECK(Ok(RunCommand("port_mapping_status state=mapped method=natpmp external_ip=203.0.113.5 "
+                        "port=9103 lease_s=3600",
+                        game)));
+    const std::string wrong = RunCommand("port_mapping_status method=pcp", game);
+    CHECK_FALSE(Ok(wrong));
+    CHECK(Has(wrong, "port_mapping method is \\\"natpmp\\\", not \\\"pcp\\\""));
+    CHECK(Has(RunCommand("port_mapping_status lease", game), "usage: port_mapping_status"));
+    CHECK(Has(RunCommand("port_mapping_status colour=red", game),
+              "port_mapping_status has no field colour"));
+    CHECK_FALSE(Ok(RunCommand("p2 port_mapping_status", game)));
+}
+
+TEST_CASE("port_mapping_status checks a field isn't a value") {
+    FakeGame game;
+    game.port_mapping.state = band3::port_mapping::State::kMapped;
+    game.port_mapping.method = band3::port_mapping::Method::kUpnp;
+    game.port_mapping.port = 9103;
+    // a permanent UPnP mapping has lease 0; a leased one anything else
+    CHECK(Ok(RunCommand("port_mapping_status state!=failed method=upnp lease_s=0 error!=x", game)));
+    const std::string leased = RunCommand("port_mapping_status lease_s!=0", game);
+    CHECK_FALSE(Ok(leased));
+    CHECK(Has(leased, "port_mapping lease_s is \\\"0\\\", not other than \\\"0\\\""));
+    game.port_mapping.lease_s = 3600;
+    CHECK(Ok(RunCommand("port_mapping_status lease_s!=0", game)));
+    CHECK(Has(RunCommand("port_mapping_status !=0", game), "usage: port_mapping_status"));
+    CHECK(Has(RunCommand("port_mapping_status colour!=red", game),
+              "port_mapping_status has no field colour"));
+}
+
+TEST_CASE("wait port_mapping= waits for the router's mapping to reach a state") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("expect port_mapping=off", game)));
+    CHECK_FALSE(Has(RunCommand("state", game), "\"port_mapping\""));
+    game.state.port_mapping_state = "searching";
+    game.on_sleep = [](FakeGame& g) {
+        if (g.slept >= 2s) g.state.port_mapping_state = "mapped";
+    };
+    const std::string reply = RunCommand("wait port_mapping=mapped timeout=10s", game);
+    CHECK(Ok(reply));
+    CHECK(game.slept >= 2s);
+    CHECK(Has(reply, "\"port_mapping\":\"mapped\""));
+    CHECK_FALSE(Ok(RunCommand("expect port_mapping=failed timeout=1s", game)));
+    CHECK(Has(RunCommand("wait port_mapping=open", game), "port_mapping= takes off, searching"));
+}
+
+TEST_CASE("wait joined waits for an online band to form with the game in it") {
+    FakeGame game;
+    CHECK_FALSE(Has(RunCommand("state", game), "\"joined\""));
+    CHECK_FALSE(Ok(RunCommand("expect joined timeout=1s", game)));
+    game.on_sleep = [](FakeGame& g) {
+        if (g.slept >= 2s) g.state.joined = true;
+    };
+    const std::string reply = RunCommand("wait joined timeout=10s", game);
+    CHECK(Ok(reply));
+    CHECK(game.slept >= 2s);
+    CHECK(game.slept < 3s);
+    CHECK(Has(reply, "\"joined\":true"));
+    CHECK(Has(RunCommand("state", game), "\"joined\":true"));
+    CHECK(Has(RunCommand("wait joined=yes", game), "no condition joined=yes"));
+}
+
 TEST_CASE("pad reports what the game reads from a player") {
     FakeGame game;
     game.pad.buttons = input::xbox::kButtonA | input::xbox::kDpadUp;
@@ -1108,6 +1376,15 @@ TEST_CASE("the game state follows the song's position, unknown until it's read")
     CHECK(!state.InGame());
     state.SetInGame(true);
     CHECK(state.Snapshot().song_ms == -1);
+}
+
+TEST_CASE("the game state keeps that an online band formed, through songs") {
+    GameState state;
+    CHECK_FALSE(state.Snapshot().joined);
+    state.SetJoined();
+    state.SetInGame(true);
+    state.SetInGame(false);
+    CHECK(state.Snapshot().joined);
 }
 
 TEST_CASE("present_stats reports the window's paints, the native frames and the game's") {
