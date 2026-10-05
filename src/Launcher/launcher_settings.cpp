@@ -135,6 +135,8 @@ constexpr Setting kSettings[] = {
      .widget = kCheckbox},
     {.cvar = "gold_on_all_difficulties", .tab = kGame, .section = "Game",
      .label = "Gold stars on every difficulty", .widget = kCheckbox},
+    {.cvar = "game_origin_icons", .tab = kGame, .section = "Game",
+     .label = "Song source icons (Deluxe)", .widget = kCheckbox},
 
     // Graphics
     {.cvar = "monitor", .tab = kGraphics, .section = "Display", .label = "Monitor",

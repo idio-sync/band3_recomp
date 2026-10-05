@@ -148,6 +148,7 @@ Some options worth knowing about, by the names F4 and the command line use:
 | `controller_type`, `input_backend` | what gamepads play as, and SDL (the default) or XInput |
 | `fast_start`, `disable_metamusic`, `lang`, `username` | skip the splash screens, silence the menu music, force a language, set the displayed name |
 | `unlock_clothing`, `gold_on_all_difficulties` | RB3Enhanced's unlock options; see [Integrations](integrations.md#rb3enhanced-compatibility) |
+| `game_origin_icons` | on (the default), each song in the song list shows an icon for the game or pack it came from, given the files it needs; see [Song source icons](integrations.md#song-source-icons) |
 | `autosave` | off keeps play out of your profile; it then only saves from the options menu |
 | `skip_profile_prompt` | on (the default), players who join without a profile join as guests at once; off, the game asks each to choose a profile, as on a console |
 

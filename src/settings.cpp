@@ -130,6 +130,11 @@ REXCVAR_DEFINE_BOOL(unlock_clothing, false, "Band3/Game",
 REXCVAR_DEFINE_BOOL(gold_on_all_difficulties, false, "Band3/Game",
     "Let gold stars be earned on every difficulty, not only expert "
     "(RB3Enhanced's AllowGoldOnAllDifficulties). Applies from the next song");
+
+REXCVAR_DEFINE_BOOL(game_origin_icons, true, "Band3/Game",
+    "Show an icon in the song list for the game or pack each song came from "
+    "(RB3Enhanced's GameOriginIcons). Needs Rock Band 3 Deluxe's icons and a song list "
+    "with a game_origin_icon slot. Applies the next time the song list opens");
 REXCVAR_DEFINE_STRING(content_folders, "songs", "Band3/Game",
     "Folders RB3 reads DLC and custom songs from, without installing them, "
     "separated by '|'. Subfolders count too. A relative folder is relative to "
