@@ -392,6 +392,10 @@ class Band3App : public rex::ReXApp {
   // before the game starts, so its mic threads find the microphones running
   // and its first file opens find game:\ writable
   void OnPostSetup() override {
+#ifdef _WIN32
+    // after the runtime's own exception handlers, which handle MMIO and GPU writes
+    band3::crash_trace::WatchGuestFaults();
+#endif
     // a song cache rb3e_delete_songcache marked, before the game mounts it
     band3::song_cache::DeletePending(runtime()->user_data_root());
     band3::MountGameWrites(*runtime());

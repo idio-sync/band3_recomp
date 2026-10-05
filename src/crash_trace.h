@@ -23,6 +23,12 @@ void WatchD3D12Device(void* device, void* direct_queue);
 // (dred_report.h's IndexedDrawNamer): the native renderer's last frame
 // (GpuRenderer::DescribeIndexedDraw). Null lets it go.
 void SetIndexedDrawNamer(std::string (*namer)(uint32_t before, uint32_t total));
+
+// Logs, for a guest access violation the SDK can't handle, the guest
+// functions it happened in (each frame's guest address, from the recompiled
+// function it's in), innermost first. After the runtime's setup, so the SDK's
+// own handlers (MMIO, GPU write watches) come first.
+void WatchGuestFaults();
 #endif
 
 }  // namespace band3::crash_trace
