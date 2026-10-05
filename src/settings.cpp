@@ -499,7 +499,9 @@ REXCVAR_DEFINE_BOOL(native_present_pipeline, false, "Band3/Debug",
     "With renderer = native on the zero-copy path, record the next frame while the GPU draws "
     "the one before, waiting for the GPU only to hand a frame to the window, so a frame costs "
     "the longer of its CPU and GPU time rather than both (for 120 Hz); off waits for each "
-    "frame right after sending it. Off until it has been checked in game");
+    "frame right after sending it. Off until it has been checked in game. It currently grows "
+    "video memory steadily (about 10 MB a second at 120 Hz: the SDL_gpu allocations it makes "
+    "aren't released on this path), so it must stay off");
 
 REXCVAR_DEFINE_INT32(native_slow_frame_ms, 12, "Band3/Debug",
     "With renderer = native, log a line for each frame the native renderer takes longer "
