@@ -1,6 +1,6 @@
 """liveless_rooms_mock: a stand-in Liveless Rooms server, for testing band3 offline.
 
-RB3Enhanced's Liveless Rooms server hands every logged-in game an 8-character user
+RB3Enhanced's Liveless Rooms server hands every logged-in game a user
 code and, when one game asks to join another's code, tells each where to find the
 other. This speaks the same protocol (RB3E's net_liveless_online.c, TCP, packed
 big-endian structs) on 127.0.0.1 only, so band3's client can be tested without the
@@ -211,7 +211,7 @@ def decode_client_login(body):
 
 
 def encode_server_logged_in(logged_in):
-    # exactly 8 characters with no NUL after them: RB3E copies the 8 bytes
+    # eight bytes on the wire, NUL-padded when the code is shorter
     return frame(LOGGED_IN, _LOGGED_IN.pack(
         _ip(logged_in.public_ipv4), logged_in.code.encode("ascii")[:8]))
 
@@ -295,7 +295,7 @@ def rooms_xuid(username):
 
 def random_code(taken=()):
     while True:
-        code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))
+        code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(5))
         if code not in taken:
             return code
 
@@ -566,11 +566,11 @@ class RoomsServer:
 
 
 def parse_codes(text):
-    codes = [c.strip().upper() for c in text.split(",") if c.strip()]
+    codes = [c.strip() for c in text.split(",") if c.strip()]
     for code in codes:
-        if len(code) != 8 or not code.isascii():
-            raise argparse.ArgumentTypeError(f"{code!r} isn't 8 characters")
-    return codes
+        if not 1 <= len(code) <= 8 or not code.isascii() or not code.isalnum():
+            raise argparse.ArgumentTypeError(f"{code!r} isn't 1-8 letters and digits")
+    return [code.upper() for code in codes]
 
 
 def parse_ipv4(text):

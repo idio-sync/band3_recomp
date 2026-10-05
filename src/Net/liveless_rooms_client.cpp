@@ -107,13 +107,19 @@ bool SendAll(socket_t s, const Bytes& bytes) {
 
 }  // namespace
 
+bool IsValidCode(std::string_view code) {
+    return !code.empty() && code.size() <= kMaxCodeLength &&
+           std::all_of(code.begin(), code.end(), [](char c) {
+               return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                      (c >= '0' && c <= '9');
+           });
+}
+
 std::string NormalizeCode(std::string& code) {
-    bool ok = code.size() == 8;
     for (char& c : code) {
         if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-        ok &= (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
     }
-    return ok ? std::string() : "a code is 8 letters and digits";
+    return IsValidCode(code) ? std::string() : "a code is 1-8 letters and digits";
 }
 
 Session::Session(Config config, Callbacks callbacks)

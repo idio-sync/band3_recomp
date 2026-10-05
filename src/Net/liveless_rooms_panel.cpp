@@ -22,7 +22,6 @@ namespace {
 // every letter and digit: which ones a Rooms server makes codes of is its own
 // business, and a player with only a controller has to be able to type any
 constexpr std::string_view kCodeChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-constexpr size_t kCodeLength = 8;
 constexpr int kPickerColumns = 9;
 constexpr float kKeySize = 34.0f;
 
@@ -169,7 +168,7 @@ void RoomsPanelDialog::DrawOff() {
     const auto& startup = settings::Startup();
     if (!startup.liveless_rooms) {
         ImGui::TextUnformatted("Liveless Rooms is off.");
-        Hint("With it on, players join each other's games by an 8-character code instead "
+        Hint("With it on, players join each other's games by a room code instead "
              "of an address. Under F4 > Band3 > Online, turn on liveless and liveless_rooms, "
              "set username (Band3 > Game) to your name, then restart.");
     } else if (!startup.liveless) {
@@ -255,7 +254,7 @@ void RoomsPanelDialog::DrawRooms(const Status& status) {
     ImGui::Separator();
     ImGui::TextUnformatted("Join a game");
     const bool logged_in = status.state == State::kLoggedIn;
-    const bool can_join = logged_in && status.game_socket_seen && std::strlen(code_) == kCodeLength;
+    const bool can_join = logged_in && status.game_socket_seen && IsValidCode(code_);
     ImGui::SetNextItemWidth(PanelWidth());
     if (ImGui::InputTextWithHint("##code", "their code", code_, sizeof(code_),
                                  ImGuiInputTextFlags_CharsUppercase |
@@ -312,7 +311,7 @@ void RoomsPanelDialog::TryJoin() {
 
 void RoomsPanelDialog::AddChar(char c) {
     const size_t length = std::strlen(code_);
-    if (length >= kCodeLength) return;
+    if (length >= kMaxCodeLength) return;
     code_[length] = c;
     code_[length + 1] = '\0';
 }

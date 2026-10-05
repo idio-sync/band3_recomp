@@ -19,6 +19,8 @@ inline constexpr uint16_t kPort = 19532;
 inline constexpr uint16_t kMagic = 0x4C4C;  // "LL"
 inline constexpr uint8_t kProtocolVersion = 0;
 inline constexpr size_t kHeaderSize = 6, kMaxBody = 0x300, kProofSize = 0x228;
+// Codes occupy an eight-byte field; the public server currently assigns five characters.
+inline constexpr size_t kMaxCodeLength = 8;
 
 // Each direction numbers its packets from 0, so a type means nothing without one.
 enum class ClientType : uint8_t { Hello = 0, Login = 1, Pong = 2, JoinRequest = 3 };
@@ -60,7 +62,7 @@ struct ClientLogin {
 // Logged in: the player's address as the server saw it, and their code.
 struct ServerLoggedIn {
     uint32_t public_ipv4;
-    std::string code;  // 8 characters
+    std::string code;  // up to eight characters, NUL-padded in the packet
 };
 // Join the player with this code. The server ignores case; RB3Enhanced's codes
 // are upper case.

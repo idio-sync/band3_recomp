@@ -241,11 +241,22 @@ TEST_CASE("strings are cut and padded to their fields") {
     // a language is exactly three letters, with no NUL
     CHECK(BodyField(Encode(ClientHello{false, "english", "x"}), 1, 4) == std::string("\0eng", 4));
     CHECK(BodyField(Encode(ClientHello{true, "en", "x"}), 2, 3) == std::string("en\0", 3));
-    // a code is eight characters, NUL-padded when shorter, never NUL-terminated
+    // the code field is eight bytes, NUL-padded when the code is shorter
     CHECK(BodyField(Encode(JoinRequest{"AB12"}), 0, 8) == std::string("AB12\0\0\0\0", 8));
     CHECK(BodyField(Encode(JoinRequest{"ABCD23456"}), 0, 8) == "ABCD2345");
     CHECK(Encode(JoinRequest{"ABCD23456"}).size() == kHeaderSize + 8);
     CHECK(BodyField(Encode(ServerLoggedIn{kPublic, "AB"}), 4, 8) == std::string("AB\0\0\0\0\0\0", 8));
+}
+
+TEST_CASE("a public server's five-character code keeps the eight-byte wire field") {
+    const Bytes request = Encode(JoinRequest{"LCMEE"});
+    CHECK(request.size() == kHeaderSize + 8);
+    CHECK(BodyField(request, 0, 8) == std::string("LCMEE\0\0\0", 8));
+    const Frame parsed{static_cast<uint8_t>(ClientType::JoinRequest),
+                       Bytes(request.begin() + kHeaderSize, request.end())};
+    CHECK(As<JoinRequest>(DecodeClient(parsed)).code == "LCMEE");
+    const Bytes logged_in = Encode(ServerLoggedIn{kPublic, "LCMEE"});
+    CHECK(BodyField(logged_in, 4, 8) == std::string("LCMEE\0\0\0", 8));
 }
 
 TEST_CASE("decoded strings stop at the first NUL or the field's end") {

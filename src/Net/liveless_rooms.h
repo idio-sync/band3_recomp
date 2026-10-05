@@ -12,6 +12,9 @@
 // src/Hooks/liveless_rooms.cpp; the packets are liveless_rooms_protocol.h's.
 namespace band3::rooms {
 
+// Shared by the client, harness and panel: one to eight ASCII letters or digits.
+bool IsValidCode(std::string_view code);
+
 enum class State {
     kOff,           // liveless_rooms off, or not started
     kConnecting,    // looking up and connecting to the server
@@ -64,7 +67,7 @@ bool Enabled();
 // A copy of the client's status. Any thread (the panel's, the test server's).
 Status GetStatus();
 
-// Joins the game with `code` (any case; 8 letters and digits) once the server
+// Joins the game with `code` (any case; 1-8 letters and digits) once the server
 // answers. Returns an error (one is the game not being online), or empty when
 // the request went. Any thread (the panel's, the test server's); doesn't wait
 // for the server.

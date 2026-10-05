@@ -25,7 +25,7 @@ inline std::string Ipv4Text(uint32_t address) {
 }
 
 // A join code as the server keeps them, in upper case. Returns why `code`
-// isn't one (8 letters and digits), or empty.
+// isn't one (1-8 letters and digits), or empty.
 std::string NormalizeCode(std::string& code);
 
 // Who logs in, and where to.

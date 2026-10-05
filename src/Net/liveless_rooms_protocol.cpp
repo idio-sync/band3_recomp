@@ -12,14 +12,15 @@ namespace {
 // Bodies' sizes, as RB3Enhanced packs them
 constexpr size_t kClientHelloSize = 53;
 constexpr size_t kClientLoginSize = 28 + kProofSize;
-constexpr size_t kJoinRequestSize = 8;
+constexpr size_t kJoinRequestSize = kMaxCodeLength;
 constexpr size_t kServerHelloSize = 18;
 constexpr size_t kServerLoggedInSize = 12;
 constexpr size_t kJoinResponseSize = 33;
 constexpr size_t kJoinDeniedSize = 1;
 constexpr size_t kNatPunchRequestSize = 4;
 
-constexpr size_t kGamertagField = 16, kVersionField = 0x30, kLanguageField = 3, kCodeField = 8;
+constexpr size_t kGamertagField = 16, kVersionField = 0x30, kLanguageField = 3,
+                 kCodeField = kMaxCodeLength;
 
 // Lays out one packet: its header, then its body's fields in order.
 class Writer {

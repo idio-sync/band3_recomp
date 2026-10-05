@@ -908,13 +908,16 @@ TEST_CASE("rooms_join asks for a game by code, in upper case") {
     REQUIRE(game.rooms_joins.size() == 1);
     CHECK(game.rooms_joins[0] == "HOST0001");
 
-    CHECK(Has(RunCommand("rooms_join HOST001", game), "a code is 8 letters and digits"));
-    CHECK(Has(RunCommand("rooms_join HOST-001", game), "a code is 8 letters and digits"));
+    CHECK(RunCommand("rooms_join lcmee", game) == "{\"ok\":true,\"code\":\"LCMEE\"}");
+    REQUIRE(game.rooms_joins.size() == 2);
+    CHECK(game.rooms_joins[1] == "LCMEE");
+    CHECK(Has(RunCommand("rooms_join HOST00011", game), "a code is 1-8 letters and digits"));
+    CHECK(Has(RunCommand("rooms_join HOST-001", game), "a code is 1-8 letters and digits"));
     CHECK(Has(RunCommand("rooms_join", game), "usage: rooms_join <code>"));
     CHECK(Has(RunCommand("rooms_join HOST0001 JOIN0001", game), "usage: rooms_join <code>"));
     game.rooms.state = band3::rooms::State::kDisconnected;
     CHECK(Has(RunCommand("rooms_join HOST0001", game), "not logged in to the Rooms server"));
-    CHECK(game.rooms_joins.size() == 1);
+    CHECK(game.rooms_joins.size() == 2);
 }
 
 TEST_CASE("rooms_join says so when the game isn't online") {

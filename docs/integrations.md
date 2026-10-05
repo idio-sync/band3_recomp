@@ -199,14 +199,15 @@ network protection → Allow an app through firewall.
 
 ### Liveless Rooms (joining by code)
 
-RB3Enhanced's Liveless Rooms joins players by an 8-character code instead of an
+RB3Enhanced's Liveless Rooms joins players by a room code instead of an
 address: each game logs in to a Rooms server, which gives it a code, and when another
 player asks for that code the server tells their game where the host's is. Under F4 →
 Band3 → Online, turn on `liveless` and `liveless_rooms`, set `username` (Band3 → Game)
 to your name, then restart. band3 then logs in to `liveless_rooms_server`,
 RB3Enhanced's (`liveless-testing.ipg.pw`) unless you run your own. Logging in
 registers your `username` there, and as with GoCentral the server knows you by that
-name alone, so band3 won't log in while it's blank or "User".
+name alone, so band3 won't log in while it's blank or "User". Codes accept 1-8 letters
+and digits, in either case; the public server currently gives five-character codes.
 
 Your code shows in the Rooms panel: press **F10** (`bind_liveless_rooms`), or, once
 online, pick **Xbox Live Options** → **Invite Friends** in the overshell, which opens
@@ -259,7 +260,7 @@ What the panel's errors mean:
 | `bad data from the server` | the server sent something band3 can't read. After logging in (state `disconnected`) band3 connects again by itself (5 s, then longer); before it (`failed`), the address isn't a Rooms server, and band3 doesn't try again. **Connect** does it now |
 | `not logged in to the Rooms server` | a join before the code came, or after the connection went |
 | `the game isn't online yet: Play on Xbox Live first` | a join while the game is offline: before Play on Xbox Live, or after leaving it |
-| `a code is 8 letters and digits` | the code isn't 8 characters long |
+| `a code is 1-8 letters and digits` | the code is empty, longer than eight characters, or contains something other than ASCII letters and digits |
 | `no game with code <code>` | no one is logged in with that code: check it with the host, whose game must be running with Rooms on |
 | `join denied (reason <n>)` | the server turned the join away for a reason band3 doesn't know |
 | `the server gave no address for <user>` | the server found the host but gave no address to reach them at |

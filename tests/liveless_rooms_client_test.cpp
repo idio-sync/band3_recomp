@@ -387,12 +387,18 @@ TEST_CASE("a lost connection is worth another try, unless the server said no") {
     CHECK_FALSE(going.session.Retry());
 }
 
-TEST_CASE("a code is 8 letters and digits, in upper case") {
-    std::string code = "host0001";
-    CHECK(NormalizeCode(code).empty());
-    CHECK(code == "HOST0001");
-    for (std::string bad : {"HOST001", "HOST00011", "HOST 001", "", "HOST-001"}) {
-        CHECK(NormalizeCode(bad) == "a code is 8 letters and digits");
+TEST_CASE("a code accepts one to eight letters and digits, in upper case") {
+    for (const std::string input : {"a", "lcmee", "host001", "host0001"}) {
+        CHECK(IsValidCode(input));
+        std::string code = input;
+        CHECK(NormalizeCode(code).empty());
+        CHECK(code == (input == "a" ? "A" : input == "lcmee" ? "LCMEE" :
+                       input == "host001" ? "HOST001" : "HOST0001"));
+    }
+    for (std::string bad : std::vector<std::string>{"HOST00011", "HOST 001", "", "HOST-001",
+                                                   "LCMEE!", "H\xC3\xB6st", std::string("LCM\0E", 5)}) {
+        CHECK_FALSE(IsValidCode(bad));
+        CHECK(NormalizeCode(bad) == "a code is 1-8 letters and digits");
     }
 }
 
@@ -520,7 +526,7 @@ TEST_CASE("the client logs in, joins and hears the server hang up, over TCP") {
     CHECK(status.state == State::kLoggedIn);
     CHECK(status.code == "ABCD2345");
     CHECK(client.PublicAddress() == kLoopback);
-    CHECK(client.Join("abcd234") == "a code is 8 letters and digits");
+    CHECK(client.Join("abcd23456") == "a code is 1-8 letters and digits");
     CHECK(client.Join("abcd2345").empty());
     status = WaitFor(client, [](const ClientStatus& s) { return !s.error.empty(); });
     CHECK(status.error == "no game with code ABCD2345");

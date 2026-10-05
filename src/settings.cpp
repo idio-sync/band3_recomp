@@ -321,7 +321,7 @@ REXCVAR_DEFINE_BOOL(liveless_port_mapping, true, "Band3/Online",
     .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(liveless_rooms, false, "Band3/Online",
-    "Join friends by an 8-character room code through a Liveless Rooms server "
+    "Join friends by a room code (1-8 letters and digits) through a Liveless Rooms server "
     "(RB3Enhanced's), instead of typing an address. Needs liveless")
     .lifecycle(Lifecycle::kRequiresRestart);
 

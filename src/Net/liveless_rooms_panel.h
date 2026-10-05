@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <string>
 #include <rex/ui/imgui_dialog.h>
+#include "liveless_rooms_protocol.h"
 
 namespace band3::rooms {
 
@@ -44,7 +45,7 @@ private:
     bool visible_ = false;
     // focus the window the next time it draws: it was just opened
     bool focus_next_ = false;
-    char code_[9] = {};
+    char code_[kMaxCodeLength + 1] = {};
     // what the last Join or Connect said at once (the server's answer comes
     // in Status::error)
     std::string request_error_;

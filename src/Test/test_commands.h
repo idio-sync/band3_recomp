@@ -207,7 +207,7 @@ public:
     // returns an error, or empty
     virtual std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) = 0;
     // Liveless Rooms (src/Net/liveless_rooms.h): its status; a join by code
-    // (8 letters and digits, upper case), which goes without waiting for the
+    // (1-8 letters and digits, upper case), which goes without waiting for the
     // server's answer; connecting again. The last two return an error, or empty.
     virtual rooms::Status RoomsStatus() = 0;
     virtual std::string RoomsJoin(const std::string& code) = 0;

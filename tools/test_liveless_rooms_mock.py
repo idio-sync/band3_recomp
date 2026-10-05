@@ -6,6 +6,7 @@ does: one recv() per frame.
 """
 
 import hashlib
+import argparse
 import hmac
 import os
 import select
@@ -92,6 +93,22 @@ class GoldenTest(unittest.TestCase):
         request = self.roundtrip("join_request", rooms.JOIN_REQUEST,
                                  rooms.decode_join_request, rooms.encode_join_request)
         self.assertEqual(request, rooms.JoinRequest("ABCD2345"))
+
+    def test_short_codes_keep_the_eight_byte_wire_field(self):
+        packet = rooms.encode_join_request(rooms.JoinRequest("LCMEE"))
+        self.assertEqual(packet, bytes.fromhex("4C4C000300084C434D4545000000"))
+        self.assertEqual(rooms.decode_join_request(split_frame(packet)[1]).code, "LCMEE")
+
+    def test_mock_accepts_short_and_full_length_codes(self):
+        self.assertEqual(rooms.parse_codes("lcmee,HOST0001"), ["LCMEE", "HOST0001"])
+        for code in ["HOST00011", "HOST-001", "LCMEE!", "höst", "\u00df", "\u0131", "\ufb03"]:
+            with self.subTest(code=code), self.assertRaises(argparse.ArgumentTypeError):
+                rooms.parse_codes(code)
+
+    def test_random_codes_match_the_public_servers_length(self):
+        code = rooms.random_code()
+        self.assertEqual(len(code), 5)
+        self.assertTrue(all(c in rooms.CODE_ALPHABET for c in code))
 
     def test_join_response(self):
         response = self.roundtrip("join_response", rooms.JOIN_RESPONSE,
@@ -252,6 +269,19 @@ class ServerTest(unittest.TestCase):
 
 
 class SessionTest(ServerTest):
+    def test_a_full_length_client_joins_a_short_code(self):
+        port = self.start(codes=["LCMEE", "JOIN0001"])
+        host = self.connect(port)
+        joiner = self.connect(port)
+        self.assertEqual(host.login("short-host", "192.168.1.2").code, "LCMEE")
+        self.assertEqual(joiner.login("joiner", "192.168.1.3").code, "JOIN0001")
+        joiner.send(rooms.encode_join_request(rooms.JoinRequest("lcmee")))
+        self.assertEqual(host.expect(rooms.NAT_PUNCH, rooms.decode_nat_punch),
+                         rooms.NatPunchRequest("127.0.0.1"))
+        response = joiner.expect(rooms.JOIN_RESPONSE, rooms.decode_join_response)
+        self.assertEqual(response.user, "short-host")
+        self.assertEqual(response.private_ipv4, "192.168.1.2")
+
     def test_host_and_joiner(self):
         port = self.start(address="127.0.0.1", codes=["HOST0001", "JOIN0001"])
         host = self.connect(port)
@@ -332,7 +362,7 @@ class SessionTest(ServerTest):
     def test_codes_are_random_without_codes(self):
         port = self.start()
         code = self.connect(port).login("host", "10.0.0.2").code
-        self.assertEqual(len(code), 8)
+        self.assertEqual(len(code), 5)
         self.assertTrue(set(code) <= set(rooms.CODE_ALPHABET), code)
 
     def test_anything_but_a_hello_first_is_closed(self):
