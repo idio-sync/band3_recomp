@@ -1,0 +1,246 @@
+# Soaks the native renderer with no emulated GPU at all (emulated_gpu off):
+# soak_native.b3t's three songs on autoplay at 1.5x and its menu round trips
+# between them, without its F8 switches and emulated GPU screenshots (there's
+# no other picture to switch to). Starts and ends on the main menu with the
+# music library's cursor on 20th Century Boy, so it can be run again and again
+# in one launch; on a fresh profile soak_native_only_setup.b3t gets it there
+# from where boot.b3t leaves Rock Band 3 Deluxe (its first song's awards).
+# Launch at 60 Hz with the cap at 60 and restore the window off-screen, since
+# a minimized window doesn't paint (present_stats has nothing to measure) and
+# with emulated_gpu off the native renderer stops drawing while minimized:
+#   python tools/band3ctl.py launch --fresh -- --emulated_gpu=off --renderer=native --test_random_seed=21 --async_shader_compilation=false --frame_cap=60 --video_mode_refresh_rate=60
+#   python tools/band3ctl.py window offscreen
+#   python tools/band3ctl.py run tests/game/boot.b3t
+#   python tools/band3ctl.py run tests/game/soak_native_only_setup.b3t
+#   python tools/band3ctl.py run tests/game/soak_native_only.b3t
+#   python tools/band3ctl.py run tests/game/soak_native_only.b3t
+# Its screenshots have the same names each run: copy screenshots/ (next to the
+# exe) away between runs to keep them. A hang shows as a wait timing out (the
+# frame count or the screen stands still), a crash as the connection closing.
+# What the script can't check itself, look at afterwards:
+# - soak-r<n>-a.png and -b.png, frames 2 s apart, differ (the picture isn't
+#   stuck);
+# - each round's present_stats (`run` prints it): the game's fps at the cap
+#   (60) and few cap `resets`; and its native_view stats: the worker's ms p95,
+#   skipped_busy, and the sync-only GPU's CPU (emulated_gpu.sync's
+#   sync_ms_per_frame), which shouldn't creep up from round to round or run to
+#   run (nor should the process's VRAM: tools/perf_sample.py);
+# - the log has no "device removed", DEVICE_HUNG, "didn't finish", "sync gpu:
+#   watchdog", unknown opcode or register or bad packet lines (the sync GPU's
+#   summaries' zero counts aside) and no access violations past the two at boot.
+
+wait screen=main_hub_screen timeout=30s
+sleep 1s
+set autoplay true
+set song_speed 1.5
+
+# ---- round 1: arena_04 ----
+set forced_venue arena_04
+# Play Now, Quickplay, Choose Songs (a press while a submenu still slides in
+# is dropped, so these wait 1.5 s each)
+press green
+sleep 1500ms
+press green
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+# Guitar, Expert
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+present_stats reset
+# about a minute in, where soak_native.b3t takes its pictures
+wait frames=1800 timeout=120s
+wait frames=1800 timeout=120s
+screenshot soak-r1-a
+sleep 2s
+screenshot soak-r1-b
+# the native renderer's frame times for the rest of the song
+native_view on
+wait screen=coop_endgame_screen timeout=600s
+native_view stats
+present_stats
+native_view off
+sleep 2s
+# the results, then the music library (after a loading screen) and back to
+# the main menu
+press green until screen=song_select_screen timeout=60s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+
+# ---- menu round trip: Customize Band, the music library, practice ----
+# Customize, Customize Band
+press down
+sleep 333ms
+press down
+sleep 333ms
+press down
+sleep 500ms
+press green
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 2s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+# Play Now, Quickplay, Choose Songs: the music library
+press green
+sleep 1500ms
+press green
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 2s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+# Training, Practice, the song under the cursor, Guitar, Expert, Full Song,
+# 100%, 5 s of it, and back through its pause menu's Back to Music Library
+press down
+sleep 333ms
+press down
+sleep 500ms
+press green
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+press green
+sleep 500ms
+press green until screen=practice_sel_section_screen timeout=30s
+sleep 1s
+press green until screen=practice_sel_speed_screen timeout=30s
+sleep 1s
+press green until screen=practice_game_screen timeout=60s
+wait frames=300
+press start
+sleep 500ms
+press down
+press down
+press down
+press down
+press down
+sleep 333ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+screenshot soak-hub-r1
+
+# ---- round 2: the venue the game picks ----
+set forced_venue false
+press green
+sleep 1500ms
+press green
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+present_stats reset
+wait frames=1800 timeout=120s
+wait frames=1800 timeout=120s
+screenshot soak-r2-a
+sleep 2s
+screenshot soak-r2-b
+native_view on
+wait screen=coop_endgame_screen timeout=600s
+native_view stats
+present_stats
+native_view off
+sleep 2s
+press green until screen=song_select_screen timeout=60s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+
+# ---- menu round trip again ----
+press down
+sleep 333ms
+press down
+sleep 333ms
+press down
+sleep 500ms
+press green
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 2s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+press green
+sleep 1500ms
+press green
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 2s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+press down
+sleep 333ms
+press down
+sleep 500ms
+press green
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+press green
+sleep 500ms
+press green until screen=practice_sel_section_screen timeout=30s
+sleep 1s
+press green until screen=practice_sel_speed_screen timeout=30s
+sleep 1s
+press green until screen=practice_game_screen timeout=60s
+wait frames=300
+press start
+sleep 500ms
+press down
+press down
+press down
+press down
+press down
+sleep 333ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+screenshot soak-hub-r2
+
+# ---- round 3: a music-video venue ----
+set forced_venue video
+press green
+sleep 1500ms
+press green
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+present_stats reset
+wait frames=1800 timeout=120s
+wait frames=1800 timeout=120s
+screenshot soak-r3-a
+sleep 2s
+screenshot soak-r3-b
+native_view on
+wait screen=coop_endgame_screen timeout=600s
+native_view stats
+present_stats
+native_view off
+sleep 2s
+press green until screen=song_select_screen timeout=60s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 2s
+screenshot soak-hub-r3

@@ -1,0 +1,57 @@
+# Gets a fresh profile ready for soak_native_only.b3t: leaves the welcome hint
+# for the main menu and plays 20th Century Boy once (autoplay, 1.5x, arena_04)
+# through what a fresh profile's first song brings after it (two new awards
+# and a goal hint, with --test_random_seed=21), back to the main menu with the
+# music library's cursor on the song. soak_native_only.b3t can't do that
+# itself and still be replayed: a script can't branch, and a second run has
+# neither the hint nor the awards. Starts where boot.b3t leaves Rock Band 3
+# Deluxe; the launch is soak_native_only.b3t's.
+
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+set autoplay true
+set song_speed 1.5
+set forced_venue arena_04
+# Play Now, Quickplay, Choose Songs (a press while a submenu still slides in
+# is dropped, so these wait 1.5 s each)
+press green
+sleep 1500ms
+press green
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+# past the 123 heading to 20th Century Boy, where the cursor stays after
+press down
+press down
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+# Guitar, Expert
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+present_stats reset
+wait frames=1800 timeout=120s
+native_view on
+wait screen=coop_endgame_screen timeout=600s
+native_view stats
+present_stats
+native_view off
+sleep 2s
+# the results, a loading screen, two new awards and a goal hint, then the
+# music library and back to the main menu
+press green until screen=accomplishments_newaward_screen timeout=60s
+sleep 2s
+press green
+sleep 3s
+press green until screen=hint_goalcomplete_screen timeout=30s
+sleep 2s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
