@@ -112,7 +112,52 @@ struct GpuStats {
     // what Evict let go of after it
     uint32_t pipelines_made = 0, buffers_made = 0, textures_made = 0;
     uint32_t evicted_meshes = 0, evicted_textures = 0, evicted_rts = 0;
+    // what's on the GPU after it: meshes and textures kept, render targets,
+    // and the megabytes of the texture arrays (their mips counted as a third
+    // more) and of the arena
+    uint32_t resident_meshes = 0, resident_textures = 0, resident_rts = 0;
+    double texture_array_mb = 0, arena_mb = 0;
 };
+
+// What GpuRenderer keeps on the GPU between frames, by its frame serial (one
+// a frame drawn, and one each world pass before a frame, kPreBufferPasses).
+// Geometry drawn in two frames lives in the arena, and a texture drawn in two
+// frames in its array, until no frame has drawn them for kEvictAfter frames;
+// geometry and textures drawn in one frame only (particles, mutable meshes,
+// movie frames, a render target's guest pixels) are let go once they've gone
+// undrawn for `keep` frames (ResidencyKeepFrames). Under even/odd rendering
+// the world's draws are drawn by one frame in every world period (its post
+// frame: the others show the kept post buffer), so a keep shorter than that
+// would let them go between, and each post frame would send all of the
+// world's geometry and textures again (30 to 50 MB a frame in arena_04).
+
+// the frames something drawn in one frame is kept undrawn for, with the world
+// drawn every `world_period` frames (RasterOptions::world_period): the
+// period, and room for a frame drawn twice (new options, a screenshot) and a
+// frame's world passes, which each take a serial; 0 (let go once a frame
+// hasn't drawn it) with the world drawn every frame or not at all
+inline uint64_t ResidencyKeepFrames(uint32_t world_period) {
+    return world_period > 1 ? world_period + 1 + kPreBufferPasses : 0;
+}
+// whether a mesh last drawn in frame `used` is kept after frame `serial`:
+// drawn in it, in the arena and drawn within `evict_after` frames
+// (kEvictAfter), or else drawn within `keep`
+inline bool KeepMesh(uint64_t used, bool in_arena, uint64_t serial, uint64_t keep,
+                     uint64_t evict_after) {
+    return used == serial || used + (in_arena ? evict_after : keep) >= serial;
+}
+// whether a texture first drawn in frame `first` and last in `used` is kept
+// after frame `serial`: as a mesh, drawn in more than one frame counting as
+// in the arena
+inline bool KeepTexture(uint64_t first, uint64_t used, uint64_t serial, uint64_t keep,
+                        uint64_t evict_after) {
+    return KeepMesh(used, used != first, serial, keep, evict_after);
+}
+// whether a mesh drawn again in frame `serial`, first drawn (into its frame's
+// pool) in frame `first`, moves to the arena from that pool on the GPU: only
+// from the last frame's, as the pools alternate; else it's sent again from
+// the CPU, into the arena
+inline bool MeshFromLastPool(uint64_t first, uint64_t serial) { return first + 1 == serial; }
 
 // one of the presenter's output textures, as RenderFrameToOutput left it
 struct GpuOutput {

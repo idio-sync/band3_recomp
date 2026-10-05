@@ -203,6 +203,12 @@ struct RasterOptions {
     // wrong (a barrier out of step, a list executed still open) and AMD GPUs
     // hung, which waiting inside didn't.
     bool gpu_no_wait = false;
+    // On the GPU, the most frames apart the world is drawn now (the live
+    // view's: frame_pacing.h's WorldPeriod), which geometry and textures
+    // drawn in one frame are kept for (gpu_view.h's ResidencyKeepFrames), so
+    // the world's, drawn by one frame a period, aren't sent again each time.
+    // 0 lets them go once a frame doesn't draw them. The CPU ignores it.
+    uint32_t world_period = 0;
 };
 
 // whether the renderers draw d, as far as the options say

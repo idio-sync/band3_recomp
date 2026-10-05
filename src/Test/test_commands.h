@@ -167,7 +167,8 @@ struct NativeViewStats {
     // wait_ms as above, and totals over them that the reply divides by the
     // frames drawn: the worker's parts of each frame (parts_ms), what it drew,
     // sent, made and let go of (counts), and what capturing it cost the
-    // game's thread, by hook (capture_ms) and in counts (capture_counts)
+    // game's thread, by hook (capture_ms) and in counts (capture_counts);
+    // and the most of each it kept on the GPU after one of them (peak, as is)
     struct Kind {
         std::string name;
         uint64_t rendered = 0;
@@ -178,6 +179,7 @@ struct NativeViewStats {
         std::vector<std::pair<std::string, double>> counts;
         std::vector<std::pair<std::string, double>> capture_ms;
         std::vector<std::pair<std::string, double>> capture_counts;
+        std::vector<std::pair<std::string, double>> peak;
     };
     std::vector<Kind> by_kind;
 };

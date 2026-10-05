@@ -1,5 +1,6 @@
 #include "src/Render/native_view.h"
 
+#include "src/Hooks/frame_pacing.h"
 #include "src/Launcher/launcher_platform.h"
 #include "src/Render/capture_file.h"
 #include "src/Render/frame_compose.h"
@@ -143,6 +144,11 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.evicted_meshes += g.evicted_meshes;
     sum.evicted_textures += g.evicted_textures;
     sum.evicted_rts += g.evicted_rts;
+    sum.resident_meshes += g.resident_meshes;
+    sum.resident_textures += g.resident_textures;
+    sum.resident_rts += g.resident_rts;
+    sum.texture_array_mb += g.texture_array_mb;
+    sum.arena_mb += g.arena_mb;
 }
 
 void AddCost(FrameCapture::Cost& sum, const FrameCapture::Cost& c) {
@@ -565,6 +571,9 @@ class Renderer {
                 // each waited for once submitted
                 pipeline = REXCVAR_GET(native_present_pipeline);
                 o.gpu_no_wait = pipeline;
+                // what's drawn once a world period is kept that long on the
+                // GPU, not sent again each time (gpu_view.h's residency)
+                o.world_period = pacing::WorldPeriod();
             }
             // a capture published after this is a new one (the pacing's
             // wait, below)
@@ -875,6 +884,12 @@ class Renderer {
                 if (d.gs.shows_kept) kind.shows_kept++;
                 if (d.gs.arena_rebuilt) kind.arena_rebuilt++;
                 AddGpu(kind.gpu, d.gs);
+                kind.peak_meshes = std::max(kind.peak_meshes, d.gs.resident_meshes);
+                kind.peak_textures = std::max(kind.peak_textures, d.gs.resident_textures);
+                kind.peak_rts = std::max(kind.peak_rts, d.gs.resident_rts);
+                kind.peak_texture_array_mb =
+                    std::max(kind.peak_texture_array_mb, d.gs.texture_array_mb);
+                kind.peak_arena_mb = std::max(kind.peak_arena_mb, d.gs.arena_mb);
             }
         }
         live_drew_gpu_ = d.drew_gpu;

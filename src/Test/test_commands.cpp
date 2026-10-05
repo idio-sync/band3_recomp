@@ -723,6 +723,12 @@ std::string ByKindJson(const std::vector<NativeViewStats::Kind>& kinds) {
         out += ",\"capture\":{";
         list("ms_per_frame", kind.capture_ms, true, true);
         list("per_frame", kind.capture_counts, false);
+        out += "},\"peak\":{";
+        for (size_t i = 0; i < kind.peak.size(); i++) {
+            std::snprintf(buf, sizeof(buf), "%s\"%s\":%.1f", i ? "," : "",
+                          kind.peak[i].first.c_str(), kind.peak[i].second);
+            out += buf;
+        }
         out += "}}";
     }
     out += "}";

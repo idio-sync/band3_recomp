@@ -122,6 +122,10 @@ struct LiveViewStats {
         GpuStats gpu;
         uint64_t gpu_frames = 0, shows_kept = 0, arena_rebuilt = 0, composed = 0;
         FrameCapture::Cost cost;
+        // the most the GPU kept after one of them (GpuStats::resident_meshes
+        // and the rest)
+        uint32_t peak_meshes = 0, peak_textures = 0, peak_rts = 0;
+        double peak_texture_array_mb = 0, peak_arena_mb = 0;
     };
     Kind by_kind[kFrameKinds];
 };

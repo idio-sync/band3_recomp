@@ -777,6 +777,7 @@ TEST_CASE("native_view stats reports the frames drawn by kind, per frame drawn")
     post.counts = {{"mesh_bytes", 4096.0}};
     post.capture_ms = {{"mesh", 2.0}, {"present", 2.0}};
     post.capture_counts = {{"new_shades", 40.0}};
+    post.peak = {{"meshes", 3000.0}};
     NativeViewStats::Kind between;
     between.name = "between";
     game.view.by_kind = {post, between};
@@ -787,10 +788,12 @@ TEST_CASE("native_view stats reports the frames drawn by kind, per frame drawn")
     CHECK(Has(reply, "\"parts_ms_per_frame\":{\"plan\":2.000,\"upload\":5.000},"
                      "\"per_frame\":{\"mesh_bytes\":1024.000},"
                      "\"capture\":{\"ms_per_frame\":{\"total\":1.000,\"mesh\":0.500,"
-                     "\"present\":0.500},\"per_frame\":{\"new_shades\":10.000}}}"));
+                     "\"present\":0.500},\"per_frame\":{\"new_shades\":10.000}},"
+                     "\"peak\":{\"meshes\":3000.0}}"));
     // a kind with no frames: zeros, not a division by zero
     CHECK(Has(reply, ",\"between\":{\"rendered\":0,\"skipped_busy\":0,"));
-    CHECK(Has(reply, "\"capture\":{\"ms_per_frame\":{\"total\":0.000},\"per_frame\":{}}}}"));
+    CHECK(Has(reply, "\"capture\":{\"ms_per_frame\":{\"total\":0.000},\"per_frame\":{}},"
+                     "\"peak\":{}}}"));
 }
 
 TEST_CASE("native_view stats reports what capture cost the game's thread per frame") {

@@ -744,7 +744,12 @@ struct GpuRenderer::Impl {
                 std::vector<uint32_t>* rgba, GpuStats& stats, int pre_pass = 0);
     // reads `texture` (w x h) back into rgba; false if the GPU failed (logged)
     bool Download(SDL_GPUTexture* texture, uint32_t w, uint32_t h, std::vector<uint32_t>& rgba);
+    // lets go of what no frame has drawn for long enough (gpu_view.h's
+    // residency), after each frame
     void Evict();
+    // the frames geometry and textures drawn in one frame are kept for
+    // (ResidencyKeepFrames), from the frame's RasterOptions::world_period
+    uint64_t keep_frames = 0;
 };
 
 // SDL_CreateGPUDevice wants a video subsystem in band3's SDL copy, which is
@@ -2079,6 +2084,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     };
     if (!o.width || !o.height || !EnsureTargets(o.width, o.height)) return false;
     if (slot >= 0 && !EnsureOutput(slot, o.width, o.height)) return false;
+    keep_frames = ResidencyKeepFrames(o.world_period);
     // where the last pass, the gamma ramp's, puts the finished frame
     SDL_GPUTexture* const output = slot >= 0 ? outputs[slot].texture : graded;
     // the post buffer (RasterOptions::post_buffer): a post frame's picture
@@ -2167,10 +2173,15 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         if (m.in_arena) {
             // already there
         } else if (m.first != serial) {
-            // the last frame drew it too (Evict lets go of pool geometry a
-            // frame doesn't draw), from its pool: it stays
-            m.pool_vertex = m.first_vertex;
-            m.pool_index = m.first_index;
+            // drawn again (Evict keeps pool geometry ResidencyKeepFrames
+            // after): it stays, moved from the last frame's pool if that
+            // frame drew it, else sent again (its pool has been drawn over)
+            if (MeshFromLastPool(m.first, serial)) {
+                m.pool_vertex = m.first_vertex;
+                m.pool_index = m.first_index;
+            } else {
+                m.pool_vertex = ~0u;
+            }
             to_arena.push_back(&m);
         } else {
             m.first_vertex = pool_vert_count;
@@ -3561,12 +3572,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
 }
 
 void GpuRenderer::Impl::Evict() {
-    // geometry only this frame drew stays until the next, which moves it to
-    // the arena if it draws it too; the arena's space comes back when it's
-    // rebuilt
+    // geometry only one frame drew stays for keep_frames (gpu_view.h's
+    // residency), and moves to the arena if a frame draws it again; the
+    // arena's space comes back when it's rebuilt
     for (auto it = meshes.begin(); it != meshes.end();) {
         const Mesh& m = it->second;
-        if (m.used == serial || (m.in_arena && m.used + kEvictAfter >= serial)) {
+        if (KeepMesh(m.used, m.in_arena, serial, keep_frames, kEvictAfter)) {
             ++it;
             continue;
         }
@@ -3574,10 +3585,10 @@ void GpuRenderer::Impl::Evict() {
         counts.evicted_meshes++;
     }
     // likewise a texture drawn in one frame only, such as one RB3 rendered
-    // that frame, goes once a frame hasn't drawn it
+    // that frame or a movie's frame, goes keep_frames after
     for (auto it = textures.begin(); it != textures.end();) {
         const Tex& t = it->second;
-        if (t.used == serial || (t.used != t.first && t.used + kEvictAfter >= serial)) {
+        if (KeepTexture(t.first, t.used, serial, keep_frames, kEvictAfter)) {
             ++it;
             continue;
         }
@@ -3775,6 +3786,14 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
     stats.evicted_meshes = uint32_t(now.evicted_meshes - before.evicted_meshes);
     stats.evicted_textures = uint32_t(now.evicted_textures - before.evicted_textures);
     stats.evicted_rts = uint32_t(now.evicted_rts - before.evicted_rts);
+    stats.resident_meshes = uint32_t(impl_->meshes.size());
+    stats.resident_textures = uint32_t(impl_->textures.size());
+    stats.resident_rts = uint32_t(impl_->rts.size());
+    for (const auto& [size, a] : impl_->tex_arrays) {
+        const double layer = double(size >> 32) * double(size & 0xffffffffu) * 4;
+        stats.texture_array_mb += layer * a.layers * (a.levels > 1 ? 4.0 / 3 : 1) / 1048576;
+    }
+    stats.arena_mb = double(impl_->arena_verts.size + impl_->arena_indices.size) / 1048576;
     return true;
 }
 

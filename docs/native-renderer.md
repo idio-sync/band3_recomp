@@ -127,9 +127,18 @@ captures skipped while one of them was being drawn (`skipped_busy`, so the slow 
 one charged), `ms` and `wait_ms` as the totals', and per frame drawn: the worker's parts
 (`parts_ms_per_frame`: `pre`, `plan`, `upload`, `record`, `submit`, `wait`, `evict`), what it
 drew, sent, made and let go of (`per_frame`: `draws`, `world_draws`, `passes`, `pool_meshes`,
-`mesh_bytes`, `textures_sent`, `texture_bytes`, `evicted_meshes` and the rest), and what
-capturing it cost the game's thread (`capture`: `ms_per_frame` by hook, and `per_frame`
-counts, `game_ms` the game's frame). Without native_present_pipeline, `wait` (and `wait_ms`)
+`mesh_bytes`, `textures_sent`, `texture_bytes`, `evicted_meshes` and the rest, and what the
+GPU kept after it: `resident_meshes`, `resident_textures`, `resident_rts`,
+`texture_array_mb`, `arena_mb`), what capturing it cost the game's thread (`capture`:
+`ms_per_frame` by hook, and `per_frame` counts, `game_ms` the game's frame), and the most
+the GPU kept after one of them (`peak`).
+
+Under even/odd rendering the world's draws are drawn by the post frames alone, one in every
+world period, so the native renderer keeps geometry and textures a frame drew for the
+period and a little more (`gpu_view.h`'s residency) before letting them go; with a shorter
+keep each post frame sent the whole world again (30 to 50 MB in arena_04), which took it
+past a frame at 120 Hz. What's drawn once, a movie's frames say, goes as many frames
+later. Without native_present_pipeline, `wait` (and `wait_ms`)
 start when the frame is submitted, so they include `submit`.
 
 Every other pass RB3 draws into a texture (outfits, the crowd's impostors, NgLight's

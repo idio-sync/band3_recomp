@@ -27,6 +27,7 @@ FetchContent_MakeAvailable(tomlplusplus)
 add_executable(band3_tests
     main.cpp
     instruments_test.cpp
+    gpu_residency_test.cpp
     ps3_instruments_test.cpp
     ps4_instruments_test.cpp
     hid_capture_test.cpp
