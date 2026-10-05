@@ -148,6 +148,7 @@ Some options worth knowing about, by the names F4 and the command line use:
 | `controller_type`, `input_backend` | what gamepads play as, and SDL (the default) or XInput |
 | `fast_start`, `disable_metamusic`, `lang`, `username` | skip the splash screens, silence the menu music, force a language, set the displayed name |
 | `unlock_clothing`, `gold_on_all_difficulties` | RB3Enhanced's unlock options; see [Integrations](integrations.md#rb3enhanced-compatibility) |
+| `game_origin_icons` | on (the default), each song in the song list shows an icon for the game or pack it came from, given the files it needs; see [Song source icons](integrations.md#song-source-icons) |
 | `autosave` | off keeps play out of your profile; it then only saves from the options menu |
 | `skip_profile_prompt` | on (the default), players who join without a profile join as guests at once; off, the game asks each to choose a profile, as on a console |
 
@@ -196,8 +197,12 @@ custom characters can be installed without rebuilding the ARK. Put the file in t
 data folder (`assets` by default, or `game_data_root`) at the path it has inside the ARK,
 with its Xbox name (`gen` folders and `_xbox` extensions as in the ARK). A `..` in an ARK
 path becomes a folder named `(..)`, as RB3Enhanced lays them out, so files packaged for
-RB3Enhanced go in as they are. band3 checks for each file as the game opens it, so a file
-added while the game runs is used the next time the game loads it.
+RB3Enhanced go in as they are. Files the game writes to its own folder (the `game` folder
+in the user data root, see [Folders](#folders)) replace ARK files the same way. band3 lists
+these folders when it starts, so a file added while it runs is used from the next launch;
+a changed file that was already there is read again the next time the game loads it. A
+file whose path (with its `(..)` folders) is over 250 characters is left out, with a
+warning in the log, since the game can't open a path that long from disk.
 
 Each file read from disk instead of the ARK is logged as `NewFile: <path>`. If a mod
 doesn't show up, set `log_level = debug`: the log then also lists every file read from the

@@ -1,4 +1,5 @@
 #include "game_writes.h"
+#include <algorithm>
 #include <cstdio>
 #include <memory>
 #include <system_error>
@@ -11,6 +12,7 @@
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/string.h>
+#include "src/config.h"
 
 namespace band3 {
 
@@ -190,6 +192,22 @@ private:
     std::unique_ptr<GameDirEntry> root_;
 };
 
+// game:\'s device once MountGameWrites has mounted it, before the game starts
+GameDevice* g_game_device = nullptr;
+
+}
+
+bool GameFileExists(std::string_view path) {
+    std::string native(path);
+    std::replace(native.begin(), native.end(), '/', '\\');
+    if (g_game_device) {
+        const fs::Entry* entry = g_game_device->ResolvePath(native);
+        return entry && !(entry->attributes() & fs::kFileAttributeDirectory);
+    }
+    const std::filesystem::path& root = GameDataRoot();
+    if (root.empty()) return false;
+    std::error_code ec;
+    return std::filesystem::is_regular_file(root / rex::to_path(native), ec);
 }
 
 std::filesystem::path GameWritesFolder(const std::filesystem::path& user_data_root) {
@@ -207,6 +225,7 @@ bool MountGameWrites(rex::Runtime& runtime) {
         REXLOG_ERROR("game:\\ stays read-only: can't create {}", rex::path_to_utf8(writes));
         return false;
     }
+    g_game_device = device.get();
     vfs->RegisterDevice(std::move(device));
     for (const char* link : {"game:", "d:"}) {
         vfs->UnregisterSymbolicLink(link);

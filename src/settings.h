@@ -28,6 +28,7 @@ REXCVAR_DECLARE(double, song_speed);
 REXCVAR_DECLARE(double, track_speed);
 REXCVAR_DECLARE(bool, unlock_clothing);
 REXCVAR_DECLARE(bool, gold_on_all_difficulties);
+REXCVAR_DECLARE(bool, game_origin_icons);
 REXCVAR_DECLARE(std::string, content_folders);
 
 // Band3/MIDI drums

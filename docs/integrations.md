@@ -315,3 +315,21 @@ Two of RB3E's options are settings too (Band3 → Game, both off by default):
 `unlock_clothing` unlocks every piece of clothing, tattoo and face paint and the video
 venues without earning them, and `gold_on_all_difficulties` lets gold stars be earned
 below expert, from the next song.
+
+### Song source icons
+
+As RB3E does (its `GameOriginIcons`), band3 shows an icon at the left of each song in
+the song list for the game or pack the song came from: Rock Band 3, Rock Band 2, The
+Beatles, a track pack, customs and so on, from the song's `game_origin`. It's on unless
+`game_origin_icons` (Band3 → Game) is off, and needs two things band3 doesn't ship:
+
+- the icons, `ui/resource/game_origins/<origin>.png`, which Rock Band 3 Deluxe has (over
+  a hundred of them). A song whose origin has no icon shows none.
+- a song list with a mesh slot named `game_origin_icon` in its rows, which neither the
+  game's nor Deluxe's has yet. RB3E's edit of the game's
+  `ui/resource/list/gen/list_song_select_browser.milo_xbox` adds one; put it in the game
+  data folder at that path, as a [loose file](settings.md#loose-files-mods).
+
+The log says how many origins' icons it loaded each time the song list opens, and with
+`log_level = debug`, the slots the loaded song list has. Turning the setting off takes the
+icons away the next time the list redraws.

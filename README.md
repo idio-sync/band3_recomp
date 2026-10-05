@@ -38,6 +38,7 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - A web page for browsing the song library from a phone and picking the next song, plus RB3Enhanced's web API
 - Searching [RhythmVerse](https://rhythmverse.co) for custom songs from that page, and downloading them into the game without a restart
 - RB3Enhanced's script functions, modifiers and unlock options, so Deluxe's RB3E features work
+- RB3Enhanced's song source icons in the song list, from Deluxe's icons
 - Rock Central's online features (leaderboards, Battles) through [GoCentral](https://github.com/ihatecompvir/GoCentral), as RB3Enhanced connects
 - Online play without Xbox Live, straight to another player's game, as RB3Enhanced's Liveless does, or by code through RB3Enhanced's Liveless Rooms (F10)
 - Discord Rich Presence

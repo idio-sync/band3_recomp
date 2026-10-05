@@ -51,6 +51,7 @@ add_executable(band3_tests
     http_request_test.cpp
     album_art_test.cpp
     paths_test.cpp
+    loose_name_test.cpp
     package_scan_test.cpp
     json_test.cpp
     rhythmverse_test.cpp
