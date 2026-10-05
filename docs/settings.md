@@ -196,8 +196,12 @@ custom characters can be installed without rebuilding the ARK. Put the file in t
 data folder (`assets` by default, or `game_data_root`) at the path it has inside the ARK,
 with its Xbox name (`gen` folders and `_xbox` extensions as in the ARK). A `..` in an ARK
 path becomes a folder named `(..)`, as RB3Enhanced lays them out, so files packaged for
-RB3Enhanced go in as they are. band3 checks for each file as the game opens it, so a file
-added while the game runs is used the next time the game loads it.
+RB3Enhanced go in as they are. Files the game writes to its own folder (the `game` folder
+in the user data root, see [Folders](#folders)) replace ARK files the same way. band3 lists
+these folders when it starts, so a file added while it runs is used from the next launch;
+a changed file that was already there is read again the next time the game loads it. A
+file whose path (with its `(..)` folders) is over 250 characters is left out, with a
+warning in the log, since the game can't open a path that long from disk.
 
 Each file read from disk instead of the ARK is logged as `NewFile: <path>`. If a mod
 doesn't show up, set `log_level = debug`: the log then also lists every file read from the
