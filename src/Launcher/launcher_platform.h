@@ -26,6 +26,17 @@ RefreshRate DisplayRefresh(void* native_window);
 // the same in Hz; 0 when it can't be told
 double DisplayRefreshRate(void* native_window);
 
+// what can be seen of a native window (HWND)
+struct WindowShown {
+    bool minimized = false;
+    bool visible = true;
+    uint32_t client_w = 0, client_h = 0;  // its client area, in pixels
+};
+
+// Windows only, as the system tells it now: false elsewhere, or for no
+// window, leaving `out` as it was
+bool NativeWindowShown(void* native_window, WindowShown& out);
+
 }
 
 namespace band3::pacing {

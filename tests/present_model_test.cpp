@@ -470,6 +470,20 @@ TEST_CASE("each frame handed to the window is timed from its Present, painted or
     CHECK(r.Log().publish_latency_ms.empty());
 }
 
+TEST_CASE("a published frame asks for a paint only while the window can be seen") {
+    CHECK(PaintWanted(false, true, 1280, 720));
+    CHECK(PaintWanted(false, true, 1, 1));
+    // minimized: Windows reports its client area as 0x0 then, but either
+    // alone holds the paint back
+    CHECK_FALSE(PaintWanted(true, true, 0, 0));
+    CHECK_FALSE(PaintWanted(true, true, 1280, 720));
+    CHECK_FALSE(PaintWanted(false, true, 0, 0));
+    CHECK_FALSE(PaintWanted(false, true, 1280, 0));
+    CHECK_FALSE(PaintWanted(false, true, 0, 720));
+    // hidden
+    CHECK_FALSE(PaintWanted(false, false, 1280, 720));
+}
+
 // gpu_skip.h's SkipLatch: which frames the emulated GPU skips the game's draws
 // in, and when its picture is the game's again
 

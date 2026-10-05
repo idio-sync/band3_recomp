@@ -360,6 +360,11 @@ class Band3App : public rex::ReXApp {
     return true;
   }
 
+  // with emulated_gpu off the native renderer asks for the window's paints
+  // itself, none while it's minimized, and one as soon as it's restored
+  void OnWindowMinimized() override { band3::render::NativePresentMinimized(true); }
+  void OnWindowRestored() override { band3::render::NativePresentMinimized(false); }
+
   // the launcher's larger font: the fonts are set up before band3 decides
   // whether it shows (the game data check needs OnFinalizePaths' folders, and
   // Shift is read then), so they're added unless nothing could show it, and

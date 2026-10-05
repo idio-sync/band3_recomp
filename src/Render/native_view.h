@@ -150,6 +150,12 @@ void StartNativePresent(rex::ui::Presenter* presenter, rex::ui::GraphicsProvider
                         rex::ui::Window* window,
                         std::function<rex::ui::ImmediateDrawer*()> immediate_drawer);
 void StopNativePresent();
+// The SDK's window was minimized or restored (Band3App's OnWindowMinimized
+// and OnWindowRestored), on the UI thread. With emulated_gpu off, where each
+// frame published asks the window to paint, a restored window is asked at
+// once; where the system can't be asked whether the window can be seen (not
+// Windows), minimized holds the paints back until it's restored.
+void NativePresentMinimized(bool minimized);
 // whether the native renderer is drawing the window (renderer = native, started)
 bool NativePresenting();
 // The window's paints since their numbers last started over (`since`),

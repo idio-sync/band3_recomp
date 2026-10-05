@@ -245,6 +245,15 @@ class PublishPacer {
     int64_t interval_ns_ = 16666667;  // 60 Hz until measured
 };
 
+// With emulated_gpu off each frame the worker publishes asks the window to
+// paint (NativePresentDrawer::Start), which is GPU work no one sees while the
+// window can't be seen: minimized (its client area then 0x0), hidden, or with
+// no client area left. The first frame published once it can be seen again
+// asks again.
+inline bool PaintWanted(bool minimized, bool visible, uint32_t client_w, uint32_t client_h) {
+    return !minimized && visible && client_w > 0 && client_h > 0;
+}
+
 // The window's paints since the numbers last started over, for the harness's
 // present_stats: every paint, whichever renderer drew it, and on the native
 // renderer which of its frames each showed.

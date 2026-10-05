@@ -113,6 +113,25 @@ double DisplayRefreshRate(void* native_window) {
     return rate.num && rate.den ? double(rate.num) / rate.den : 0;
 }
 
+bool NativeWindowShown(void* native_window, WindowShown& out) {
+#ifdef _WIN32
+    const HWND hwnd = static_cast<HWND>(native_window);
+    RECT client{};
+    if (!hwnd || !GetClientRect(hwnd, &client)) return false;
+    out.minimized = IsIconic(hwnd) != FALSE;
+    // the window and every window it's inside shown
+    out.visible = IsWindowVisible(hwnd) != FALSE;
+    out.client_w = static_cast<uint32_t>(std::max<LONG>(0, client.right - client.left));
+    out.client_h = static_cast<uint32_t>(std::max<LONG>(0, client.bottom - client.top));
+    return true;
+#else
+    // band3's SDL copy isn't the one that owns the window (DisplayRefresh)
+    (void)native_window;
+    (void)out;
+    return false;
+#endif
+}
+
 }
 
 namespace band3::pacing {

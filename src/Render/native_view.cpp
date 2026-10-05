@@ -1518,7 +1518,8 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         // With emulated_gpu off no emulated swap asks the window to paint, so
         // each frame published for it does (on the UI thread, where the
         // presenter takes the request); a request already on its way covers
-        // the frames published before it runs
+        // the frames published before it runs. None while the window can't be
+        // seen (PaintTarget::Seen): it kept painting each frame minimized.
         if (sync_gpu::NativeOnly() && REXCVAR_GET(native_present_request_paint) && window_) {
             paint_target_ = std::make_shared<PaintTarget>();
             paint_target_->window = window_;
@@ -1528,7 +1529,8 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
                 if (target->pending.exchange(true)) return;
                 app->CallInUIThread([target] {
                     target->pending.store(false);
-                    if (target->window) target->window->RequestPresenterUIPaintFromUIThread();
+                    if (target->window && target->Seen())
+                        target->window->RequestPresenterUIPaintFromUIThread();
                 });
             });
             REXLOG_INFO("native present: asking for a paint with each frame (emulated_gpu off)");
@@ -1556,6 +1558,16 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         crash_trace::SetIndexedDrawNamer(nullptr);
 #endif
         for (auto& t : textures_) t.reset();
+    }
+
+    // on the UI thread; only with emulated_gpu off's paint requests, which a
+    // restored window has had none of while it was minimized (a frame
+    // published next would ask too, a frame later)
+    void SetMinimized(bool minimized) {
+        if (!paint_target_) return;
+        paint_target_->minimized = minimized;
+        if (!minimized && paint_target_->window && paint_target_->Seen())
+            paint_target_->window->RequestPresenterUIPaintFromUIThread();
     }
 
     // renderer, as it changes: the worker starts when it turns native, on the
@@ -1797,6 +1809,31 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
     struct PaintTarget {
         rex::ui::Window* window = nullptr;
         std::atomic<bool> pending{false};
+        // the UI thread's alone: the SDK's word (NativePresentMinimized), and
+        // whether the last request was held back, to log the change
+        bool minimized = false;
+        bool held = false;
+
+        // whether a paint would be seen (PaintWanted): the system's word
+        // where band3 can ask it (Windows), the SDK's elsewhere
+        bool Seen() {
+            launcher::WindowShown shown;
+            if (!launcher::NativeWindowShown(window->GetNativeWindowHandle(), shown)) {
+                shown.minimized = minimized;
+                shown.client_w = window->GetActualPhysicalWidth();
+                shown.client_h = window->GetActualPhysicalHeight();
+            }
+            const bool seen =
+                PaintWanted(shown.minimized, shown.visible, shown.client_w, shown.client_h);
+            if (seen == held) {
+                held = !seen;
+                REXLOG_INFO("native present: {} (minimized {}, visible {}, client {}x{})",
+                            seen ? "the window can be seen again, asking for paints"
+                                 : "the window can't be seen, asking for no paints",
+                            shown.minimized, shown.visible, shown.client_w, shown.client_h);
+            }
+            return seen;
+        }
     };
     std::shared_ptr<PaintTarget> paint_target_;
 #ifdef _WIN32
@@ -1828,6 +1865,10 @@ void StopNativePresent() {
     if (!g_present) return;
     g_present->Stop();
     g_present.reset();
+}
+
+void NativePresentMinimized(bool minimized) {
+    if (g_present) g_present->SetMinimized(minimized);
 }
 
 bool NativePresenting() { return Renderer::Get().Presenting(); }
