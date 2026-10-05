@@ -61,7 +61,8 @@ inline ImageRect LetterboxRect(uint32_t target_w, uint32_t target_h, bool letter
 //
 // Presenting comes and goes (F8), and each stretch of it shows only its own
 // frames: ones drawn for it (Publish's `generation`) from captures the game
-// published after it began (Fresh). The capture newest when F8 turns native
+// published after it began (Fresh), or after the window was last restored
+// (Resume). The capture newest when F8 turns native
 // again is the last one from before the switch (capture stops with the
 // emulated GPU), seconds old, and a frame the worker was still drawing as
 // presenting stopped would otherwise be the newest when it starts again.
@@ -83,6 +84,13 @@ class PresentSlots {
         newest_ = -1;
         generation_++;
     }
+    // The window was restored at `now_ns` after the worker drew nothing while
+    // it was minimized: the stretch goes on, its newest frame still shown
+    // (paints repeat it) until one is drawn from a capture published from
+    // now on (Fresh). The newest frame's slot was only ever sampled by paints
+    // and is finished, so keeping it is as any newest frame's; a frame drawn
+    // meanwhile (a screenshot) is still this stretch's.
+    void Resume(int64_t now_ns) { since_ns_ = now_ns; }
     // the stretch now, for the worker to note before it draws
     uint64_t Generation() const { return generation_; }
     // whether a capture the game published at `published_ns` may be drawn
@@ -253,6 +261,76 @@ class PublishPacer {
 inline bool PaintWanted(bool minimized, bool visible, uint32_t client_w, uint32_t client_h) {
     return !minimized && visible && client_w > 0 && client_h > 0;
 }
+
+// With emulated_gpu off the native renderer's worker draws nothing while the
+// window is minimized (NativePresentMinimized): every frame it drew there
+// was GPU work nobody saw, and the presenter keeps painting a minimized
+// window regardless, so holding paints back alone doesn't save it. The game
+// goes on capturing meanwhile and the worker leaves those captures be. This
+// keeps the pause's numbers for the harness's `native_view stats`: how long
+// the worker was paused, and the captures the game published meanwhile,
+// each counted up to now during a pause. Times are steady-clock nanoseconds,
+// frames the captures' numbers (FrameCapture::frame). Not thread-safe:
+// native_view.cpp holds its mutex around every call.
+class DrawPause {
+ public:
+    // the window was minimized at `now_ns`, the newest capture then `frame`;
+    // false if it already was
+    bool Pause(int64_t now_ns, uint64_t frame) {
+        if (paused_) return false;
+        paused_ = true;
+        since_ns_ = began_ns_ = now_ns;
+        since_frame_ = began_frame_ = frame;
+        return true;
+    }
+    // restored: false if it wasn't paused
+    bool Resume(int64_t now_ns, uint64_t frame) {
+        if (!paused_) return false;
+        paused_ = false;
+        ns_ += Since(now_ns, since_ns_);
+        captures_ += Since(frame, since_frame_);
+        last_ns_ = Since(now_ns, began_ns_);
+        last_captures_ = Since(frame, began_frame_);
+        return true;
+    }
+    bool Paused() const { return paused_; }
+    // the numbers start over, a pause going on counted from now
+    void Restart(int64_t now_ns, uint64_t frame) {
+        ns_ = 0;
+        captures_ = 0;
+        since_ns_ = now_ns;
+        since_frame_ = frame;
+    }
+    // milliseconds paused, and the captures the game published while paused,
+    // since the numbers started, up to `now_ns` and `frame` during a pause
+    double Ms(int64_t now_ns) const {
+        return double(ns_ + (paused_ ? Since(now_ns, since_ns_) : 0)) / 1e6;
+    }
+    uint64_t Captures(uint64_t frame) const {
+        return captures_ + (paused_ ? Since(frame, since_frame_) : 0);
+    }
+    // the last pause ended (Resume): its milliseconds and captures from its
+    // start, whether the numbers started over meanwhile or not, for the log
+    double LastMs() const { return double(last_ns_) / 1e6; }
+    uint64_t LastCaptures() const { return last_captures_; }
+
+ private:
+    // b to a, never less than nothing (a capture numbering that started over)
+    template <typename T>
+    static T Since(T a, T b) {
+        return a > b ? a - b : T(0);
+    }
+
+    bool paused_ = false;
+    int64_t ns_ = 0;
+    uint64_t captures_ = 0;
+    // where the numbers count a pause from (Restart moves it), and where the
+    // pause itself began
+    int64_t since_ns_ = 0, began_ns_ = 0;
+    uint64_t since_frame_ = 0, began_frame_ = 0;
+    int64_t last_ns_ = 0;
+    uint64_t last_captures_ = 0;
+};
 
 // The window's paints since the numbers last started over, for the harness's
 // present_stats: every paint, whichever renderer drew it, and on the native

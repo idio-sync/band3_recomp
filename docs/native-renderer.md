@@ -194,6 +194,15 @@ presenter with its overlays (F3, F4 and the rest) as before.
   the splash) runs nothing until the game writes its write pointer for it.
 - A GPU hang ends band3 (with the crash trace), as there's no emulated GPU's device
   recovery to fall back on.
+- While the window is minimized the native renderer draws nothing (the game runs and
+  captures on; a harness `screenshot` still gets a frame drawn), and asks for no paints.
+  Restored, the window shows the last frame drawn for it until the first from a capture
+  the game published since (a whole picture, not a world frame over the post buffer
+  kept from before), a frame or two later. The log says `native renderer:
+  the window is minimized; drawing nothing until it's restored` and, restored, how long
+  it was and the captures not drawn; `native_view stats` has `paused`, `paused_ms` and
+  `paused_captures`. With the emulated GPU on the native renderer draws on while
+  minimized, as the emulated GPU does.
 - With the frame cap on (the default) the sync-only GPU's vertical blank runs every
   millisecond and the cap paces the game, as the emulated GPU's vsync off did; with it
   off, the vertical blank paces the game at `video_mode_refresh_rate`, unless
@@ -433,7 +442,12 @@ and the shots, not every frame), so they're checked four ways:
   `skipped_pass` and `skipped_shadow`. Each name is `equal`, `equal*` (with notes:
   differences that don't fail it, such as `post:` on a moving screen) or `different`
   with what failed; it exits 1 if a pass list, gamma line or `rt_missing` differs, or a
-  draw count by more than allowed. Standard library only.
+  draw count by more than allowed. Each name also says whether R and N sample the same
+  textures (`textures same|differ`, listing R-only and N-only ones): the render targets
+  by their pass's name, the loaded textures by size and format (a capture has no names
+  for those). That holds across a moment's difference where the pass list may not, and
+  differs for other content (another venue, character or shot); it doesn't fail a name.
+  Standard library only.
 - `tools/parity.py --set N`: N against itself, `gpu-cpu` at 0.5 or less and `cpu` (the
   replay of N's capture against N's own picture) at a mean of 1 or less.
 - `tools/pairs.py --cross N R [names] [--crops] [--json <file>]`: N's `<name>.gpu.png`

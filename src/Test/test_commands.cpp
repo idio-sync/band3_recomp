@@ -831,6 +831,10 @@ std::string NativeViewJson(const NativeViewStats& s) {
     out += ",\"ms\":" + Distribution(s.frame_ms);
     out += ",\"wait_ms\":" + Distribution(s.wait_ms);
     out += ",\"in_flight_max\":" + std::to_string(s.in_flight_max);
+    std::snprintf(buf, sizeof(buf), ",\"paused\":%s,\"paused_ms\":%.1f,\"paused_captures\":%llu",
+                  s.paused ? "true" : "false", s.paused_ms,
+                  static_cast<unsigned long long>(s.paused_captures));
+    out += buf;
     std::snprintf(buf, sizeof(buf),
                   ",\"rt_recording\":{\"on\":%s,\"passes\":%llu,\"recorded\":%llu,",
                   s.rt_on ? "true" : "false", static_cast<unsigned long long>(s.rt_passes),

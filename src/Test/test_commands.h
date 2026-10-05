@@ -114,6 +114,12 @@ struct NativeViewStats {
     std::vector<double> wait_ms;
     // the most of the worker's frames the GPU had at once (LiveViewStats)
     uint32_t in_flight_max = 0;
+    // with emulated_gpu off, the worker's pause while the window is
+    // minimized (LiveViewStats): on now, its milliseconds and the captures
+    // left undrawn in that time
+    bool paused = false;
+    double paused_ms = 0;
+    uint64_t paused_captures = 0;
     // the texture passes recorded while capture was off, in the same time:
     // whether that's on (native_view_record_targets), passes the game drew,
     // those recorded, their draws, and the game thread's time recording them

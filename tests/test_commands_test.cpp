@@ -788,6 +788,18 @@ TEST_CASE("native_view stats reports what the live view drew and how long it too
     CHECK(Has(reply, "\"wait_ms\":{\"mean\":1.50,\"p50\":1.50,\"p95\":1.50,\"max\":1.50},"
                      "\"in_flight_max\":2"));
     CHECK(Has(reply, "\"rt_recording\":{\"on\":true,\"passes\":1200,\"recorded\":3,\"draws\":11,\"ms\":0.25}"));
+    // not minimized
+    CHECK(Has(reply, "\"in_flight_max\":2,\"paused\":false,\"paused_ms\":0.0,\"paused_captures\":0,"));
+}
+
+TEST_CASE("native_view stats reports the native renderer's pause while minimized") {
+    FakeGame game;
+    REQUIRE(Ok(RunCommand("native_view on", game)));
+    game.view.paused = true;
+    game.view.paused_ms = 5012.4;
+    game.view.paused_captures = 301;
+    CHECK(Has(RunCommand("native_view stats", game),
+              "\"paused\":true,\"paused_ms\":5012.4,\"paused_captures\":301"));
 }
 
 TEST_CASE("native_view stats reports the frames drawn by kind, per frame drawn") {

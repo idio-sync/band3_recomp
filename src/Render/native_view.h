@@ -107,6 +107,13 @@ struct LiveViewStats {
     // not finished): 1 unless native_present_pipeline is on, then 2 while it
     // records a frame as the GPU draws the one before, never more
     uint32_t in_flight_max = 0;
+    // with emulated_gpu off: whether the window is minimized now, so the
+    // worker draws nothing (NativePresentMinimized), and since the numbers
+    // started the milliseconds it was, and the captures the game published
+    // meanwhile, which it left undrawn (neither rendered nor skipped_busy)
+    bool paused = false;
+    double paused_ms = 0;
+    uint64_t paused_captures = 0;
     // The frames drawn by kind (frame_compose.h's FrameKind, by_kind's
     // index): how many, the captures skipped while one of them was being
     // drawn (so the frames that were too slow are the kind charged), each
@@ -151,10 +158,15 @@ void StartNativePresent(rex::ui::Presenter* presenter, rex::ui::GraphicsProvider
                         std::function<rex::ui::ImmediateDrawer*()> immediate_drawer);
 void StopNativePresent();
 // The SDK's window was minimized or restored (Band3App's OnWindowMinimized
-// and OnWindowRestored), on the UI thread. With emulated_gpu off, where each
-// frame published asks the window to paint, a restored window is asked at
-// once; where the system can't be asked whether the window can be seen (not
-// Windows), minimized holds the paints back until it's restored.
+// and OnWindowRestored), on the UI thread. With emulated_gpu off the worker
+// draws nothing while it's minimized (a screenshot asked for aside), and once
+// it's restored the window shows the last frame published until the first
+// from a capture published since (a whole picture, a frame or two later);
+// each frame published asks the
+// window to paint, so a restored window is asked at once, and where the
+// system can't be asked whether the window can be seen (not Windows),
+// minimized holds the paints back until it's restored. With the emulated GPU
+// on, nothing changes.
 void NativePresentMinimized(bool minimized);
 // whether the native renderer is drawing the window (renderer = native, started)
 bool NativePresenting();

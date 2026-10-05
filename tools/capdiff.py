@@ -22,6 +22,11 @@ name with a <name>.cap in both directories, this runs native_view_replay's
   post        what post-processing was set to do (post:, addresses left out),
               and the check: line against the composite's constants
   gamma       the gamma: line, exactly
+  textures    the render targets the draws sample, by their pass's name, and
+              the loaded textures, by size and format (the capture has no
+              names for those): the same sets are the same content; another
+              venue look, character or shot samples others. R-only and N-only
+              ones are listed; it doesn't fail a name
 
 and, with a run.log in both directories (the `band3ctl run` output, which
 prints each capture's reply), the replies' rt_missing, rt_filtered, proc_cmds,
@@ -81,6 +86,11 @@ PASS_RE = re.compile(
 # a pass's draws by draw mode, after its name: " mode 1 x12 (cull 6, SKINNED)"
 MODES_RE = re.compile(r" mode (\d+) x\d+ \(")
 HEX_RE = re.compile(r"\b[0-9A-F]{8}\b")
+# a draw's lines: what render target it samples, printed before the draw's own
+# line, which has its texture's size and format ("tex -0x0" none)
+SAMPLES_RE = re.compile(r"^ +samples render target ([0-9A-Fa-f]+) type 0x([0-9A-Fa-f]+) "
+                        r"version (\d+)")
+DRAW_RE = re.compile(r"^#\s*(\d+) mesh .*? tex (-?)(\d+)x(\d+) fmt (\d+) \|")
 
 # the capture reply's fields set side by side, and how
 REPLY_FIELDS = ("rt_missing", "rt_filtered", "proc_cmds", "composed", "skipped_pass",
@@ -89,9 +99,26 @@ REPLY_FIELDS = ("rt_missing", "rt_filtered", "proc_cmds", "composed", "skipped_p
 
 def parse_list(text):
     """What native_view_replay --list printed about a capture: its counts, the
-    post:/check:/gamma: lines and the pass list (draw lines aren't kept)."""
-    out = {"passes": [], "missing_rts": [], "skipped": {}}
+    post:/check:/gamma: lines, the pass list and what each draw samples: the
+    render target (address, type, version, and the size its draw line gives)
+    or, for the rest, the loaded texture's size and format."""
+    out = {"passes": [], "missing_rts": [], "skipped": {}, "rt_samples": [], "loaded": []}
+    sample = None  # the render target the next draw line's draw samples
     for line in text.splitlines():
+        m = SAMPLES_RE.match(line)
+        if m:
+            sample = {"address": m[1].upper(), "type": int(m[2], 16), "version": int(m[3]),
+                      "size": None}
+            out["rt_samples"].append(sample)
+            continue
+        m = DRAW_RE.match(line)
+        if m:
+            if sample is not None:
+                sample["size"] = f"{m[3]}x{m[4]}"
+            elif not m[2]:
+                out["loaded"].append(f"{m[3]}x{m[4]} fmt {m[5]}")
+            sample = None
+            continue
         m = HEADER_RE.match(line)
         if m:
             out.update(frame=int(m[1]), draws=int(m[2]), back_buffer_meshes=int(m[3]),
@@ -147,6 +174,54 @@ def pass_key(p):
         return "back buffer"
     return (f"texture {p['kind']} {p['size']} mips {p['mips']}"
             f"{' carried' if p['carried'] else ''}: {p['name']}")
+
+
+def texture_sets(c):
+    """(render targets, loaded textures) the capture's draws sample, as two
+    runs can agree on them. A render target by the name of the pass that drew
+    into its address (any version: one the capture misses still has the name
+    of the one it has), or its kind and size where the pass has none, or its
+    type and size where no pass drew into it. A loaded texture by its size and
+    format alone: the capture keeps no name for it."""
+    by_address = {}
+    for p in c["passes"]:
+        if p["target"] == "texture":
+            by_address.setdefault(p["address"].upper(), p)
+    rts = set()
+    for s in c["rt_samples"]:
+        p = by_address.get(s["address"])
+        if p is None:
+            rts.add(f"(no pass) type 0x{s['type']:X} {s['size'] or '?'}")
+        elif p["name"] != "-":
+            rts.add(p["name"])
+        else:
+            rts.add(f"- {p['kind']} {p['size']}")
+    return rts, set(c["loaded"])
+
+
+def compare_textures(r, n):
+    """What sets R's and N's sampled textures apart: {"same": bool, "rt": {"r_only",
+    "n_only"}, "loaded": {...}}, each list sorted. Two moments of one screen
+    sample the same textures even where the camera moved; another venue,
+    character or shot samples others. Informative, it doesn't fail a name."""
+    out = {"same": True}
+    for key, a, b in zip(("rt", "loaded"), texture_sets(r), texture_sets(n)):
+        out[key] = {"r_only": sorted(a - b), "n_only": sorted(b - a)}
+        if a != b:
+            out["same"] = False
+    return out
+
+
+def texture_text(t):
+    """compare_textures' result in a line."""
+    if t["same"]:
+        return "same content"
+    parts = []
+    for key, what in (("rt", "render targets"), ("loaded", "loaded textures")):
+        for side in ("r_only", "n_only"):
+            if t[key][side]:
+                parts.append(f"{what} {side[0].upper()} only: {', '.join(t[key][side])}")
+    return "content differs: " + "; ".join(parts)
 
 
 def without_addresses(line):
@@ -396,7 +471,7 @@ def main():
     if (r_log is None) != (n_log is None):
         print(f"run.log in only one of the two: the capture replies aren't compared")
 
-    results, failed = {}, []
+    results, failed, content = {}, [], []
     for name in names:
         r, n = parse_list(lists[(name, a.r_dir)]), parse_list(lists[(name, a.n_dir)])
         replies = (r_log.get(name), n_log.get(name)) if r_log is not None and \
@@ -411,24 +486,32 @@ def main():
             notes.append("no capture reply in " + " and ".join(
                 d for d, x in zip(("R's run.log", "N's run.log"), replies) if x is None))
         status = "different" if fails else ("equal" if not notes else "equal*")
+        textures = compare_textures(r, n)
         print(f"{name:28} {moving:6} {status:9} passes {len(r['passes'])}/{len(n['passes'])} "
-              f"draws {r['draws']}/{n['draws']} rt_missing {r['rt_missing']}/{n['rt_missing']}"
-              f"  ({why})")
+              f"draws {r['draws']}/{n['draws']} rt_missing {r['rt_missing']}/{n['rt_missing']} "
+              f"textures {'same' if textures['same'] else 'differ'}  ({why})")
         for f in fails:
             print(f"    FAIL {f}")
         for note in notes:
             print(f"    note {note}")
+        if not textures["same"]:
+            print(f"    textures {texture_text(textures)}")
         if fails:
             failed.append(name)
+        if not textures["same"]:
+            content.append(name)
         results[name] = {"moving": moving, "why": why, "fails": fails, "notes": notes,
                          "draws": [r["draws"], n["draws"]],
                          "passes": [len(r["passes"]), len(n["passes"])],
-                         "rt_missing": [r["rt_missing"], n["rt_missing"]]}
+                         "rt_missing": [r["rt_missing"], n["rt_missing"]],
+                         "textures": textures}
     print()
     if only:
         print(f"in one directory only: {', '.join(only)}")
     print(f"{len(names) - len(failed)} of {len(names)} the same (equal* has notes)"
           + (f"; different: {', '.join(failed)}" if failed else ""))
+    print(f"{len(names) - len(content)} of {len(names)} sample the same textures"
+          + (f"; other textures: {', '.join(content)}" if content else ""))
     if a.json:
         with open(a.json, "w") as f:
             json.dump(results, f, indent=1)

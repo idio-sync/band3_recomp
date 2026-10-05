@@ -196,6 +196,70 @@ class CompareTest(unittest.TestCase):
                                  "reply world frame 1 vs 2 before the game frame"])
 
 
+class TextureSetTest(unittest.TestCase):
+    def test_title_samples(self):
+        c = golden("capdiff_list_title.txt")
+        # draw 2 samples norm_output.tex's version 2 (its line has the size);
+        # the cut file ends on draw 3's sample, before its draw line
+        self.assertEqual(c["rt_samples"], [
+            {"address": "20F70D58", "type": 0x22, "version": 2, "size": "512x256"},
+            {"address": "20F75448", "type": 0x22, "version": 1, "size": None}])
+        self.assertEqual(c["loaded"], ["512x256 fmt 49", "512x256 fmt 49"])
+        self.assertEqual(capdiff.texture_sets(c), ({"norm_output.tex"}, {"512x256 fmt 49"}))
+
+    def test_song_samples(self):
+        c = golden("capdiff_list_song.txt")
+        # draw 0 samples nothing (tex -0x0); 1 and 2 a loaded texture
+        self.assertEqual(c["rt_samples"], [])
+        self.assertEqual(capdiff.texture_sets(c), (set(), {"512x256 fmt 20"}))
+
+    def test_the_same_capture_is_the_same_content(self):
+        c = golden("capdiff_list_title.txt")
+        t = capdiff.compare_textures(c, copy.deepcopy(c))
+        self.assertTrue(t["same"])
+        self.assertEqual(capdiff.texture_text(t), "same content")
+
+    def test_addresses_and_versions_dont_count(self):
+        r = golden("capdiff_list_title.txt")
+        n = copy.deepcopy(r)
+        # another run: norm_output.tex at another address, sampled at another version
+        for p in n["passes"]:
+            if p["target"] == "texture" and p["address"] == "20F70D58":
+                p["address"] = "21000000"
+        n["rt_samples"][0].update(address="21000000", version=9)
+        self.assertTrue(capdiff.compare_textures(r, n)["same"])
+
+    def test_unnamed_and_passless_targets(self):
+        c = golden("capdiff_list_title.txt")
+        # the post chain's 320x180 target has no name; 2636C910 has a pass
+        # (clouds_rnd.tex) whatever version is sampled; 12345678 has none
+        c["rt_samples"] = [
+            {"address": "2262A5E8", "type": 0x22, "version": 184, "size": "320x180"},
+            {"address": "2636C910", "type": 0x22, "version": 61, "size": "512x512"},
+            {"address": "12345678", "type": 0x1000, "version": 0, "size": "64x64"}]
+        self.assertEqual(capdiff.texture_sets(c)[0],
+                         {"- rendered-noz 320x180", "clouds_rnd.tex",
+                          "(no pass) type 0x1000 64x64"})
+
+    def test_differences_are_listed_by_side(self):
+        r = golden("capdiff_list_title.txt")
+        n = copy.deepcopy(r)
+        n["rt_samples"].append({"address": "2636C910", "type": 0x22, "version": 62,
+                                "size": "512x512"})
+        n["loaded"] = ["256x256 fmt 18"]
+        t = capdiff.compare_textures(r, n)
+        self.assertFalse(t["same"])
+        self.assertEqual(t["rt"], {"r_only": [], "n_only": ["clouds_rnd.tex"]})
+        self.assertEqual(t["loaded"], {"r_only": ["512x256 fmt 49"],
+                                       "n_only": ["256x256 fmt 18"]})
+        self.assertEqual(capdiff.texture_text(t),
+                         "content differs: render targets N only: clouds_rnd.tex; loaded "
+                         "textures R only: 512x256 fmt 49; loaded textures N only: "
+                         "256x256 fmt 18")
+        # informative: compare() doesn't fail on it
+        self.assertEqual(capdiff.compare(r, n, False), ([], []))
+
+
 class RunLogTest(unittest.TestCase):
     def test_run_output_and_bare_replies(self):
         log = "\n".join([

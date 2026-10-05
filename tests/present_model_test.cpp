@@ -484,6 +484,122 @@ TEST_CASE("a published frame asks for a paint only while the window can be seen"
     CHECK_FALSE(PaintWanted(false, false, 1280, 720));
 }
 
+TEST_CASE("a pause counts its time and the captures left undrawn, up to now while on") {
+    constexpr int64_t kMs = 1000000;
+    DrawPause p;
+    CHECK_FALSE(p.Paused());
+    CHECK(p.Ms(500 * kMs) == 0.0);
+    CHECK(p.Captures(30) == 0);
+    // not paused: nothing to resume
+    CHECK_FALSE(p.Resume(500 * kMs, 30));
+    REQUIRE(p.Pause(1000 * kMs, 60));
+    CHECK(p.Paused());
+    // minimized twice (the SDK and the system can both say so): one pause
+    CHECK_FALSE(p.Pause(1500 * kMs, 90));
+    CHECK(p.Ms(1500 * kMs) == doctest::Approx(500.0));
+    CHECK(p.Captures(90) == 30);
+    REQUIRE(p.Resume(2000 * kMs, 120));
+    CHECK_FALSE(p.Paused());
+    CHECK(p.LastMs() == doctest::Approx(1000.0));
+    CHECK(p.LastCaptures() == 60);
+    // over: the totals stay as they are
+    CHECK(p.Ms(9000 * kMs) == doctest::Approx(1000.0));
+    CHECK(p.Captures(500) == 60);
+    // a second pause adds to them
+    p.Pause(3000 * kMs, 180);
+    CHECK(p.Ms(3250 * kMs) == doctest::Approx(1250.0));
+    CHECK(p.Captures(195) == 75);
+    p.Resume(3500 * kMs, 210);
+    CHECK(p.Ms(3500 * kMs) == doctest::Approx(1500.0));
+    CHECK(p.Captures(210) == 90);
+    CHECK(p.LastMs() == doctest::Approx(500.0));
+    CHECK(p.LastCaptures() == 30);
+}
+
+TEST_CASE("a pause's numbers start over from now, a pause going on included") {
+    constexpr int64_t kMs = 1000000;
+    DrawPause p;
+    p.Pause(1000 * kMs, 60);
+    p.Restart(1400 * kMs, 84);
+    CHECK(p.Paused());
+    CHECK(p.Ms(1500 * kMs) == doctest::Approx(100.0));
+    CHECK(p.Captures(90) == 6);
+    p.Resume(2000 * kMs, 120);
+    CHECK(p.Ms(2000 * kMs) == doctest::Approx(600.0));
+    CHECK(p.Captures(120) == 36);
+    // the log's numbers are the whole pause's
+    CHECK(p.LastMs() == doctest::Approx(1000.0));
+    CHECK(p.LastCaptures() == 60);
+    // not paused: zero, and nothing counted after
+    p.Restart(2500 * kMs, 150);
+    CHECK(p.Ms(9000 * kMs) == 0.0);
+    CHECK(p.Captures(900) == 0);
+    // capture numbers that went back (capture started over) count nothing
+    p.Pause(3000 * kMs, 180);
+    CHECK(p.Captures(5) == 0);
+}
+
+TEST_CASE("restored after a pause, the window keeps its frame until one from a capture since") {
+    // as Renderer::SetPaused does (PresentSlots::Resume): the stretch goes on,
+    // the frame shown as the window was minimized stays the newest, so each
+    // paint until the next frame shows it (a repeat, not nothing), and only
+    // a capture published after the restore is drawn for it
+    PresentSlots s;
+    s.Start(100);
+    const uint64_t stretch = s.Generation();
+    const int before = s.Acquire();
+    REQUIRE(s.Publish(before));
+    const uint64_t serial = s.Serial();
+    // minimized at 200: the worker stops; the presenter goes on painting the
+    // newest, and its paints finish
+    for (uint64_t paint = 1; paint <= 10; paint++) {
+        s.Shown(s.Newest(), paint);
+        s.Completed(paint - 1);
+    }
+    // restored at 900
+    s.Resume(900);
+    CHECK(s.Generation() == stretch);
+    CHECK(s.Newest() == before);
+    CHECK(s.Serial() == serial);
+    // a capture from before the restore isn't drawn for it; one after is
+    CHECK_FALSE(s.Fresh(850));
+    CHECK_FALSE(s.Fresh(900));
+    CHECK(s.Fresh(917));
+    // the next frame goes into another output while paints sample the kept one
+    s.Shown(s.Newest(), 11);
+    const int after = s.Acquire();
+    REQUIRE(after >= 0);
+    CHECK(after != before);
+    s.Submitted(after);
+    CHECK_FALSE(s.Publish(after, stretch));
+    CHECK(s.Newest() == before);
+    s.Finished(after);
+    CHECK(s.Publish(after, stretch));
+    CHECK(s.Newest() == after);
+    CHECK(s.Serial() == serial + 1);
+    // the kept frame's output is free once the paints that sampled it are done
+    s.Shown(after, 12);
+    s.Completed(11);
+    int got[PresentSlots::kCount - 1];
+    bool before_free = false;
+    for (int& g : got) {
+        g = s.Acquire();
+        before_free |= g == before;
+    }
+    CHECK(before_free);
+}
+
+TEST_CASE("a frame drawn while minimized (a screenshot) is still the stretch's") {
+    PresentSlots s;
+    s.Start(100);
+    const int shot = s.Acquire();
+    REQUIRE(shot >= 0);
+    s.Resume(900);
+    // drawn from a capture before the restore, for the stretch it goes on
+    CHECK(s.Publish(shot, s.Generation()));
+    CHECK(s.Newest() == shot);
+}
+
 // gpu_skip.h's SkipLatch: which frames the emulated GPU skips the game's draws
 // in, and when its picture is the game's again
 

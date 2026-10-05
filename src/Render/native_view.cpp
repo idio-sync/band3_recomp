@@ -355,6 +355,47 @@ class Renderer {
         std::lock_guard lock(mutex_);
         settle_ = std::move(settle);
     }
+    // With emulated_gpu off, the window minimized (`paused`) or restored
+    // (DrawPause): while it's minimized the worker draws nothing for it but a
+    // screenshot asked for, keeping its outputs, and the captures the game
+    // publishes meanwhile go undrawn. Restored, the window goes on showing
+    // the last frame published (no new stretch: nothing would show, black
+    // with emulated_gpu off) until one from a capture published from then on
+    // is (PresentSlots::Resume); and that first one is a whole picture, as a
+    // stretch's first is (Run: the kept post buffer is from before the pause).
+    void SetPaused(bool paused) {
+        auto cap = LatestCapture();
+        const uint64_t frame = cap ? cap->frame : 0;
+        const int64_t now = Nanoseconds(std::chrono::steady_clock::now());
+        double last_ms = 0;
+        uint64_t last_captures = 0;
+        {
+            std::lock_guard lock(mutex_);
+            if (paused) {
+                if (!pause_.Pause(now, frame)) return;
+            } else {
+                if (!pause_.Resume(now, frame)) return;
+                if (present_) slots_.Resume(now);
+                resumes_++;
+                // the captures that came meanwhile weren't skipped for being
+                // busy (LiveViewStats::skipped_busy)
+                live_last_ = std::max(live_last_, frame);
+                options_changed_ = true;
+                last_ms = pause_.LastMs();
+                last_captures = pause_.LastCaptures();
+            }
+        }
+        if (paused) {
+            REXLOG_INFO("native renderer: the window is minimized; drawing nothing until it's "
+                        "restored");
+        } else {
+            REXLOG_INFO("native renderer: the window is restored; drawing again, after {:.0f} ms "
+                        "paused and {} captures not drawn",
+                        last_ms, last_captures);
+        }
+        WakeCaptureWaiters();
+        paint_cv_.notify_all();
+    }
     // called on the worker each time a frame is published for the window
     // (emulated_gpu off's paint request); null to stop
     void SetPublished(std::function<void()> published) {
@@ -399,6 +440,8 @@ class Renderer {
             serial = image_serial_;
         }
         WakeCaptureWaiters();
+        // a worker paused (minimized) waits on this instead
+        paint_cv_.notify_all();
         return serial;
     }
 
@@ -412,6 +455,7 @@ class Renderer {
         live_base_ = live_last_ = cap ? cap->frame : 0;
         live_last_kind_ = -1;
         live_drew_gpu_.reset();
+        pause_.Restart(Nanoseconds(std::chrono::steady_clock::now()), live_base_);
     }
 
     LiveViewStats LiveStats() {
@@ -425,6 +469,9 @@ class Renderer {
         // capturing stops with the last user, and the frame number with it
         if (users_ > 0 && cap && cap->frame > live_base_) s.captured = cap->frame - live_base_;
         else s.captured = live_last_ - live_base_;
+        s.paused = pause_.Paused();
+        s.paused_ms = pause_.Ms(Nanoseconds(std::chrono::steady_clock::now()));
+        s.paused_captures = pause_.Captures(cap ? cap->frame : 0);
         return s;
     }
 
@@ -504,9 +551,11 @@ class Renderer {
         // stretch pacer_generation
         PublishPacer pacer;
         uint64_t pacer_generation = 0;
-        // the presenting stretch the last frame was drawn for; and for the
-        // one starting, the captures seen while waiting for its first
+        // the presenting stretch the last frame was drawn for, and the window's
+        // restores by then (SetPaused); and for the one starting, the
+        // captures seen while waiting for its first
         uint64_t drawn_generation = 0, start_generation = 0, start_seen = 0;
+        uint64_t drawn_resumes = 0, start_resumes = 0;
         uint32_t start_waited = 0;
         gpu_held_ = false;
         // The zero-copy path's frame submitted and not yet published, which
@@ -536,8 +585,12 @@ class Renderer {
             RasterOptions o;
             std::string dump;
             bool changed, gpu, zero_copy, want_rgba, presenting, pace, pipeline;
-            // the presenting stretch this frame is drawn for (PresentSlots)
-            uint64_t generation;
+            // the window minimized (SetPaused), and no screenshot asked for:
+            // nothing to draw
+            bool paused;
+            // the presenting stretch this frame is drawn for (PresentSlots),
+            // and the window's restores so far
+            uint64_t generation, resumes;
             {
                 std::lock_guard lock(mutex_);
                 if (stop_) {
@@ -577,7 +630,9 @@ class Renderer {
                 changed = options_changed_;
                 options_changed_ = false;
                 presenting = present_;
+                paused = presenting && pause_.Paused() && !image_wanted_;
                 generation = slots_.Generation();
+                resumes = resumes_;
                 pace = presenting && REXCVAR_GET(native_present_pacing);
                 // the next frame recorded while the GPU draws this one, or
                 // each waited for once submitted
@@ -603,10 +658,14 @@ class Renderer {
             // publishes one, and the stretch's first frame is one whose
             // capture is its whole picture (StartsPicture), or else the
             // kStartWait-th. A setting changing meanwhile needs no redraw,
-            // the next capture being a new frame anyway.
-            if (cap && fresh && presenting && drawn_generation != generation) {
-                if (start_generation != generation) {
+            // the next capture being a new frame anyway. The same once the
+            // window is restored after a pause, whose kept post buffer is
+            // from before it, the window showing the last frame meanwhile.
+            if (cap && fresh && presenting &&
+                (drawn_generation != generation || drawn_resumes != resumes)) {
+                if (start_generation != generation || start_resumes != resumes) {
                     start_generation = generation;
+                    start_resumes = resumes;
                     start_waited = 0;
                 }
                 if (cap->frame != start_seen) {
@@ -616,8 +675,8 @@ class Renderer {
                 if (!StartsPicture(*cap) && start_waited < kStartWait) fresh = false;
             }
             // something to draw: a capture not drawn yet, or a setting or a
-            // user changed
-            const bool work = cap && fresh && (cap->frame != last_frame || changed);
+            // user changed, while the window isn't minimized
+            const bool work = cap && fresh && (cap->frame != last_frame || changed) && !paused;
             int slot = -1;
             if (flight) {
                 // The frame in flight is published once the GPU has finished
@@ -654,6 +713,18 @@ class Renderer {
                     }
                 }
             }
+            if (!work && paused) {
+                // Minimized: until it's restored, a screenshot is asked for
+                // or presenting stops, not woken by each capture the game
+                // publishes. A setting changing meanwhile needs no redraw:
+                // restored, the window waits for a new capture anyway.
+                std::unique_lock lock(mutex_);
+                paint_cv_.wait_for(lock, kIdleWait, [&] {
+                    return stop_ || !present_ || !pause_.Paused() || image_wanted_;
+                });
+                epoch = CaptureEpoch();
+                continue;
+            }
             if (!work) {
                 // until the game publishes a capture, or a setting or a user
                 // changes (WakeCaptureWaiters)
@@ -671,7 +742,10 @@ class Renderer {
             }
             const bool new_frame = cap->frame != last_frame;
             last_frame = cap->frame;
-            if (presenting) drawn_generation = generation;
+            if (presenting) {
+                drawn_generation = generation;
+                drawn_resumes = resumes;
+            }
             // dumping saves captures for tools/native_view_replay and leaves
             // the drawing to it
             if (!dump.empty()) {
@@ -1022,6 +1096,10 @@ class Renderer {
     uint32_t present_w_ = 1280, present_h_ = 720;
     bool present_zero_copy_ = false;
     PresentSlots slots_;
+    // the window minimized, with emulated_gpu off (SetPaused), and for how
+    // long; and the times it was restored, for the worker's first frame after
+    DrawPause pause_;
+    uint64_t resumes_ = 0;
     GpuOutput outputs_[PresentSlots::kCount];
     // each output's frame: its number as published, and when the game
     // presented it
@@ -1560,10 +1638,13 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         for (auto& t : textures_) t.reset();
     }
 
-    // on the UI thread; only with emulated_gpu off's paint requests, which a
-    // restored window has had none of while it was minimized (a frame
-    // published next would ask too, a frame later)
+    // On the UI thread, with emulated_gpu off: the worker draws nothing
+    // while the window is minimized (Renderer::SetPaused; with the emulated
+    // GPU on it draws on, as the emulated GPU does). And the paint requests,
+    // which a restored window has had none of while it was minimized: one at
+    // once (a frame published next would ask too, a frame later).
     void SetMinimized(bool minimized) {
+        if (sync_gpu::NativeOnly()) Renderer::Get().SetPaused(minimized);
         if (!paint_target_) return;
         paint_target_->minimized = minimized;
         if (!minimized && paint_target_->window && paint_target_->Seen())

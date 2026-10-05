@@ -458,6 +458,9 @@ public:
             out.frame_ms = std::move(live.ms);
             out.wait_ms = std::move(live.wait_ms);
             out.in_flight_max = live.in_flight_max;
+            out.paused = live.paused;
+            out.paused_ms = live.paused_ms;
+            out.paused_captures = live.paused_captures;
             for (int k = 0; k < render::kFrameKinds; k++)
                 out.by_kind.push_back(ByKind(render::FrameKind(k), live.by_kind[k]));
         }
