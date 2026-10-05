@@ -67,6 +67,33 @@ inline bool ShowsPostBuffer(const FrameCapture& fc) {
     return ProcKnown(fc) && !(fc.proc_cmds & kProcPost);
 }
 
+// What a frame drew under even/odd rendering, for the native renderer's
+// numbers by kind of frame (native_view.cpp): the world (1), which the live
+// view shows the post buffer for, drawing the world's texture passes and the
+// overlay; post-processing (2), the world frame's world composed in and
+// drawn, then post-processed; neither (0), between them when the background
+// runs at a lower rate (the post buffer again); or everything (7: even/odd
+// rendering off, its first frame, the background every frame) and frames that
+// don't say (menus), which draw their own world.
+enum class FrameKind { kWorld, kPost, kBetween, kFull };
+inline constexpr int kFrameKinds = 4;
+inline FrameKind KindOf(const FrameCapture& fc) {
+    if (!ProcKnown(fc)) return FrameKind::kFull;
+    const bool world = (fc.proc_cmds & kProcWorld) != 0, post = (fc.proc_cmds & kProcPost) != 0;
+    if (world && post) return FrameKind::kFull;
+    if (world) return FrameKind::kWorld;
+    return post ? FrameKind::kPost : FrameKind::kBetween;
+}
+inline const char* FrameKindName(FrameKind k) {
+    switch (k) {
+    case FrameKind::kWorld: return "world";
+    case FrameKind::kPost: return "post";
+    case FrameKind::kBetween: return "between";
+    case FrameKind::kFull: break;
+    }
+    return "full";
+}
+
 // Whether the frame's capture alone draws the game's whole picture of it: it
 // began with capture on (FrameCapture::whole), and it presents its own world
 // (PresentsCapturedWorld) or doesn't say. The native renderer starts showing

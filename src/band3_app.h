@@ -23,6 +23,7 @@
 #include "paths.h"
 #include "relaunch.h"
 #include "settings.h"
+#include "stall_watch.h"
 #include "steam_deck.h"
 #include "Audio/usb_mic_capture.h"
 #include "Content/content_hooks.h"
@@ -413,6 +414,7 @@ class Band3App : public rex::ReXApp {
     // before the ImGui drawer it's attached to goes
     launcher_.reset();
     band3::pacing::StopFrameCap();
+    band3::stall_watch::Stop();
     band3::http::StopServer();
     band3::test::StopServer();
     rex::ui::UnregisterBind("bind_instrument_lab");

@@ -762,6 +762,37 @@ TEST_CASE("native_view stats reports what the live view drew and how long it too
     CHECK(Has(reply, "\"rt_recording\":{\"on\":true,\"passes\":1200,\"recorded\":3,\"draws\":11,\"ms\":0.25}"));
 }
 
+TEST_CASE("native_view stats reports the frames drawn by kind, per frame drawn") {
+    FakeGame game;
+    REQUIRE(Ok(RunCommand("native_view on", game)));
+    // off: none
+    CHECK(Has(RunCommand("native_view stats", game), "\"by_kind\":{}}"));
+    NativeViewStats::Kind post;
+    post.name = "post";
+    post.rendered = 4;
+    post.skipped_busy = 3;
+    post.ms = {2, 4, 6, 20};
+    post.wait_ms = {1, 1, 1, 9};
+    post.parts_ms = {{"plan", 8.0}, {"upload", 20.0}};
+    post.counts = {{"mesh_bytes", 4096.0}};
+    post.capture_ms = {{"mesh", 2.0}, {"present", 2.0}};
+    post.capture_counts = {{"new_shades", 40.0}};
+    NativeViewStats::Kind between;
+    between.name = "between";
+    game.view.by_kind = {post, between};
+    const std::string reply = RunCommand("native_view stats", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"by_kind\":{\"post\":{\"rendered\":4,\"skipped_busy\":3,"
+                     "\"ms\":{\"mean\":8.00,"));
+    CHECK(Has(reply, "\"parts_ms_per_frame\":{\"plan\":2.000,\"upload\":5.000},"
+                     "\"per_frame\":{\"mesh_bytes\":1024.000},"
+                     "\"capture\":{\"ms_per_frame\":{\"total\":1.000,\"mesh\":0.500,"
+                     "\"present\":0.500},\"per_frame\":{\"new_shades\":10.000}}}"));
+    // a kind with no frames: zeros, not a division by zero
+    CHECK(Has(reply, ",\"between\":{\"rendered\":0,\"skipped_busy\":0,"));
+    CHECK(Has(reply, "\"capture\":{\"ms_per_frame\":{\"total\":0.000},\"per_frame\":{}}}}"));
+}
+
 TEST_CASE("native_view stats reports what capture cost the game's thread per frame") {
     FakeGame game;
     REQUIRE(Ok(RunCommand("native_view on", game)));

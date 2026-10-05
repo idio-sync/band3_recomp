@@ -428,6 +428,19 @@ REXCVAR_DEFINE_BOOL(native_present_pipeline, false, "Band3/Debug",
     "the longer of its CPU and GPU time rather than both (for 120 Hz); off waits for each "
     "frame right after sending it. Off until it has been checked in game");
 
+REXCVAR_DEFINE_INT32(native_slow_frame_ms, 12, "Band3/Debug",
+    "With renderer = native, log a line for each frame the native renderer takes longer "
+    "than this many milliseconds to draw (its GPU wait included), with what kind of frame "
+    "it was, where the time went and what it had to send or make; at most a few a second. "
+    "0 = off")
+    .range(0, 10000);
+
+REXCVAR_DEFINE_INT32(game_stall_log_ms, 100, "Band3/Debug",
+    "Log each of the game's frames that takes longer than this many milliseconds, with "
+    "samples of the game thread's stack and what else was going on (src/stall_watch.h); at "
+    "most one every two seconds. 0 = off")
+    .range(0, 100000);
+
 REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Debug",
     "Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, "
     "for the native view (experimental), even while it's off: some are drawn once, in the "

@@ -106,6 +106,8 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
     fc.velocity_objects = frame.velocity_objects;
     // and the gamma ramp the presenter applied to it
     fc.gamma = frame.gamma;
+    // what capturing it cost: the post frame's own
+    fc.cost = frame.cost;
     // the world's back buffer, cleared as the world frame cleared it, and its
     // cameras, then the frame's others (the overlay's)
     fc.has_clear_color = world.has_clear_color;

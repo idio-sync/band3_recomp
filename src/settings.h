@@ -97,6 +97,8 @@ REXCVAR_DECLARE(bool, native_present_zero_copy);
 REXCVAR_DECLARE(bool, dred);
 REXCVAR_DECLARE(bool, native_present_pacing);
 REXCVAR_DECLARE(bool, native_present_pipeline);
+REXCVAR_DECLARE(int32_t, native_slow_frame_ms);
+REXCVAR_DECLARE(int32_t, game_stall_log_ms);
 REXCVAR_DECLARE(bool, native_view_record_targets);
 REXCVAR_DECLARE(std::string, native_view_rt_fallback);
 REXCVAR_DECLARE(bool, native_view_normal_maps);

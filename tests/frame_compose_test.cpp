@@ -307,10 +307,28 @@ TEST_CASE("the native renderer starts the window's picture from a whole one") {
     CHECK_FALSE(StartsPicture(fc));
 }
 
+TEST_CASE("the native renderer's numbers tell frames by what they drew") {
+    FrameCapture fc;
+    CHECK(KindOf(fc) == FrameKind::kFull);  // doesn't say
+    fc.post_boundary = 0;
+    fc.proc_cmds = 7;
+    CHECK(KindOf(fc) == FrameKind::kFull);
+    fc.proc_cmds = kProcWorld;
+    CHECK(KindOf(fc) == FrameKind::kWorld);
+    fc.proc_cmds = kProcPost;
+    CHECK(KindOf(fc) == FrameKind::kPost);
+    fc.composed = 1;  // composed or not
+    CHECK(KindOf(fc) == FrameKind::kPost);
+    fc.proc_cmds = 0;
+    CHECK(KindOf(fc) == FrameKind::kBetween);
+    CHECK(std::strcmp(FrameKindName(FrameKind::kBetween), "between") == 0);
+}
+
 TEST_CASE("a composed frame has its post frame's post-processing and gamma ramp") {
     FrameCapture world = WorldFrame();
     FrameCapture post = PostFrame();
     world.post.valid = post.post.valid = 1;
+    post.cost.draws = 12;
     world.post.saturation = -10;
     post.post.saturation = -80;
     post.post_consts.valid = 1;
@@ -323,6 +341,8 @@ TEST_CASE("a composed frame has its post frame's post-processing and gamma ramp"
     CHECK(fc->post_consts.valid == 1);
     CHECK(fc->post_consts.c24[0] == 4.0f);
     CHECK(fc->gamma == post.gamma);
+    // and what capturing it cost the game's thread
+    CHECK(fc->cost.draws == 12);
 }
 
 TEST_CASE("a composed frame is cleared as its world frame was, with both frames' cameras") {

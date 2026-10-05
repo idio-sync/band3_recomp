@@ -426,6 +426,8 @@ public:
             out.frame_ms = std::move(live.ms);
             out.wait_ms = std::move(live.wait_ms);
             out.in_flight_max = live.in_flight_max;
+            for (int k = 0; k < render::kFrameKinds; k++)
+                out.by_kind.push_back(ByKind(render::FrameKind(k), live.by_kind[k]));
         }
         const render::PassRecordingStats rec = render::GetPassRecordingStats();
         const render::CaptureProfile profile = render::GetCaptureProfile();
@@ -668,6 +670,55 @@ private:
                 c.counts.emplace_back(std::string(P::kStepNames[i]) + "_n", p.step_calls[i]);
         c.sizes = {{"rts", p.rts}, {"geoms", p.geoms}, {"texs", p.texs}, {"map_texs", p.map_texs}};
         return c;
+    }
+
+    // a kind of frame's numbers as native_view stats reports them (totals,
+    // which the reply divides by the frames drawn)
+    static NativeViewStats::Kind ByKind(render::FrameKind which,
+                                        render::LiveViewStats::Kind& k) {
+        using P = render::CaptureProfile;
+        NativeViewStats::Kind out;
+        out.name = render::FrameKindName(which);
+        out.rendered = k.rendered;
+        out.skipped_busy = k.skipped_busy;
+        out.ms = std::move(k.ms);
+        out.wait_ms = std::move(k.wait_ms);
+        const render::GpuStats& g = k.gpu;
+        out.parts_ms = {{"pre", g.pre_ms},       {"plan", g.plan_ms},
+                        {"upload", g.upload_ms}, {"record", g.record_ms},
+                        {"submit", g.submit_ms}, {"wait", g.wait_ms},
+                        {"evict", g.evict_ms}};
+        out.counts = {{"gpu_frames", double(k.gpu_frames)},
+                      {"composed", double(k.composed)},
+                      {"shows_kept", double(k.shows_kept)},
+                      {"draws", double(g.draws)},
+                      {"world_draws", double(g.world_draws)},
+                      {"passes", double(g.passes)},
+                      {"pre_passes", double(g.pre_passes)},
+                      {"pool_meshes", double(g.pool_meshes)},
+                      {"arena_moved", double(g.arena_moved)},
+                      {"arena_sent", double(g.arena_sent)},
+                      {"arena_rebuilt", double(k.arena_rebuilt)},
+                      {"mesh_bytes", double(g.mesh_bytes)},
+                      {"textures_sent", double(g.textures_sent)},
+                      {"texture_bytes", double(g.texture_bytes)},
+                      {"bone_bytes", double(g.bone_bytes)},
+                      {"pipelines_made", double(g.pipelines_made)},
+                      {"buffers_made", double(g.buffers_made)},
+                      {"textures_made", double(g.textures_made)},
+                      {"evicted_meshes", double(g.evicted_meshes)},
+                      {"evicted_textures", double(g.evicted_textures)},
+                      {"evicted_rts", double(g.evicted_rts)}};
+        for (int i = 0; i < P::kNumHooks; i++)
+            out.capture_ms.emplace_back(P::kHookNames[i], double(k.cost.hook_ns[i]) / 1e6);
+        out.capture_counts = {{"draws", double(k.cost.draws)},
+                              {"new_shades", double(k.cost.new_shades)},
+                              {"allocs", double(k.cost.allocs)},
+                              {"bones", double(k.cost.bones)},
+                              {"geom_miss_bytes", double(k.cost.geom_miss_bytes)},
+                              {"tex_decode_bytes", double(k.cost.tex_decode_bytes)},
+                              {"game_ms", double(k.cost.game_ns) / 1e6}};
+        return out;
     }
 
     rex::Runtime* runtime_;

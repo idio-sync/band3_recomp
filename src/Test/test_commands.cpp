@@ -684,6 +684,51 @@ std::string EmulatedGpuJson(const NativeViewStats::EmulatedGpu& e) {
     return out;
 }
 
+// native_view stats' `by_kind`: each kind's frames, their times, and its
+// totals per frame drawn (0 with none drawn)
+std::string ByKindJson(const std::vector<NativeViewStats::Kind>& kinds) {
+    char buf[96];
+    std::string out = "{";
+    for (size_t k = 0; k < kinds.size(); k++) {
+        const NativeViewStats::Kind& kind = kinds[k];
+        const double frames = double(kind.rendered);
+        auto per_frame = [&](double v) { return frames > 0 ? v / frames : 0.0; };
+        // "name":{...} after a comma (`first`: without), with a "total" first
+        auto list = [&](const char* name, const std::vector<std::pair<std::string, double>>& l,
+                        bool total, bool first = false) {
+            out += first ? "\"" : ",\"";
+            out += name;
+            out += "\":{";
+            double sum = 0;
+            for (const auto& [n, v] : l) sum += v;
+            if (total) {
+                std::snprintf(buf, sizeof(buf), "\"total\":%.3f", per_frame(sum));
+                out += buf;
+            }
+            for (size_t i = 0; i < l.size(); i++) {
+                std::snprintf(buf, sizeof(buf), "%s\"%s\":%.3f", total || i ? "," : "",
+                              l[i].first.c_str(), per_frame(l[i].second));
+                out += buf;
+            }
+            out += "}";
+        };
+        if (k) out += ",";
+        AppendJsonString(out, kind.name);
+        out += ":{\"rendered\":" + std::to_string(kind.rendered);
+        out += ",\"skipped_busy\":" + std::to_string(kind.skipped_busy);
+        out += ",\"ms\":" + Distribution(kind.ms);
+        out += ",\"wait_ms\":" + Distribution(kind.wait_ms);
+        list("parts_ms_per_frame", kind.parts_ms, false);
+        list("per_frame", kind.counts, false);
+        out += ",\"capture\":{";
+        list("ms_per_frame", kind.capture_ms, true, true);
+        list("per_frame", kind.capture_counts, false);
+        out += "}}";
+    }
+    out += "}";
+    return out;
+}
+
 std::string NativeViewJson(const NativeViewStats& s) {
     std::string out = "\"stats\":{\"on\":";
     out += s.on ? "true" : "false";
@@ -715,6 +760,7 @@ std::string NativeViewJson(const NativeViewStats& s) {
     out += buf;
     out += ",\"capture\":" + CaptureCostJson(s.capture);
     out += ",\"emulated_gpu\":" + EmulatedGpuJson(s.emulated_gpu);
+    out += ",\"by_kind\":" + ByKindJson(s.by_kind);  // {} while it's off
     out += '}';
     return out;
 }

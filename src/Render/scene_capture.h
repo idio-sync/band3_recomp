@@ -697,6 +697,22 @@ struct FrameCapture {
     // none in captures from before them, whose renderers clear depth for
     // each camera instead (RasterOptions::clear_depth_per_camera)
     std::vector<CameraView> cameras;
+    // What capturing the frame cost the game's thread: CaptureProfile's
+    // counts from the end of the frame before to this one's (so the Present
+    // hook's own time is the frame before's), each hook's nanoseconds in
+    // CaptureProfile::Hook order; and the game's frame itself, from the end
+    // of the Present before to this one's. For the native renderer's numbers
+    // by kind of frame and its slow-frame log. A composed frame has its post
+    // frame's (its world's were the world frame's). Not saved: 0 in captures
+    // loaded from a file.
+    struct Cost {
+        static constexpr int kHooks = 7;
+        uint64_t hook_ns[kHooks] = {};
+        uint32_t draws = 0, new_shades = 0, allocs = 0, bones = 0;
+        uint64_t geom_miss_bytes = 0, tex_decode_bytes = 0;
+        uint64_t game_ns = 0;
+    };
+    Cost cost;
 };
 
 // the back-buffer camera `cam`'s view in fc.cameras, or null
@@ -801,6 +817,8 @@ struct CaptureProfile {
     // and maps
     uint64_t rts = 0, geoms = 0, texs = 0, map_texs = 0;
 };
+static_assert(CaptureProfile::kNumHooks == FrameCapture::Cost::kHooks,
+              "a frame's cost has every hook's time");
 CaptureProfile GetCaptureProfile();
 // what `now` counted since `before` (the sizes and steps_on are now's)
 CaptureProfile CaptureProfileSince(const CaptureProfile& now, const CaptureProfile& before);

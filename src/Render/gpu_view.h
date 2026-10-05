@@ -82,6 +82,36 @@ struct GpuStats {
     // after is its caller's to wait out (OutputDone).
     double ms = 0;
     double wait_ms = 0;
+    // Where a frame's time went and what it had to do, for the native
+    // renderer's slow-frame log and its numbers by kind of frame
+    // (native_view.cpp). The worker's milliseconds: the world passes before
+    // the frame (pre_passes of them, kPreBufferPasses for a refracting world
+    // with no pre-process buffer kept), working out what it draws and placing
+    // its meshes and textures, filling the upload buffer, recording its
+    // passes, submitting them (part of wait_ms, which starts at the
+    // submission, when the frame is waited for), and letting go of what no
+    // frame draws (Evict), after wait_ms.
+    double pre_ms = 0, plan_ms = 0, upload_ms = 0, record_ms = 0, submit_ms = 0, evict_ms = 0;
+    uint32_t pre_passes = 0;
+    // it showed the post buffer kept from the last post frame in place of
+    // its world (RasterOptions::post_buffer), and the back buffer's world
+    // draws it drew (before post_boundary; none when it showed the buffer)
+    bool shows_kept = false;
+    uint32_t world_draws = 0;
+    // meshes sent from the CPU this frame into its pool (new, or not drawn
+    // the frame before), moved from the last frame's pool into the arena on
+    // the GPU, and sent from the CPU into the arena (rebuilt: arena_rebuilt);
+    // their bytes from the CPU, the textures sent and theirs, and the bones'
+    uint32_t pool_meshes = 0, arena_moved = 0, arena_sent = 0;
+    bool arena_rebuilt = false;
+    uint64_t mesh_bytes = 0;
+    uint32_t textures_sent = 0;
+    uint64_t texture_bytes = 0, bone_bytes = 0;
+    // the device objects made for it (pipelines; buffers, the upload buffer
+    // included; textures: arrays grown, targets, outputs, kept buffers), and
+    // what Evict let go of after it
+    uint32_t pipelines_made = 0, buffers_made = 0, textures_made = 0;
+    uint32_t evicted_meshes = 0, evicted_textures = 0, evicted_rts = 0;
 };
 
 // one of the presenter's output textures, as RenderFrameToOutput left it

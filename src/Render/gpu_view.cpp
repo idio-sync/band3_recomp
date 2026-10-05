@@ -10,6 +10,7 @@
 #include "src/Render/shaders/mesh_shaders.gen.h"
 #include "src/Render/shaders/post_shaders.gen.h"
 #include "src/Render/shaders/velocity_shaders.gen.h"
+#include "src/stall_watch.h"
 
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_gpu.h>
@@ -624,6 +625,13 @@ struct GpuRenderer::Impl {
     // starts cleared
     enum : uint8_t { kRunDrawn = 1, kRunClearColor = 2, kRunClearDepth = 4 };
     std::vector<uint8_t> run_clear;
+    // Device objects made and things let go of since the device started,
+    // which Draw turns into a frame's (GpuStats::pipelines_made and the rest)
+    struct Counts {
+        uint64_t pipelines = 0, buffers = 0, textures = 0, arena_rebuilds = 0;
+        uint64_t evicted_meshes = 0, evicted_textures = 0, evicted_rts = 0;
+    };
+    Counts counts;
 
     bool StartVideo(const char* driver);
     void StopVideo();
@@ -1302,6 +1310,7 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(device, &pi);
     if (!p) REXLOG_WARN("native view gpu: no pipeline ({})", SDL_GetError());
     pipelines[key] = p;
+    counts.pipelines++;
     // one Prewarm doesn't make: a frame waited for it (add it there)
     if (warmed_up) {
         REXLOG_INFO("native view gpu: pipeline made after warm-up: {:#x} (pixel {}, cull {}, "
@@ -1337,6 +1346,7 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::OverlayStartPipeline(uint32_t sample
     SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(device, &pi);
     if (!p) REXLOG_WARN("native view gpu: no overlay start pipeline ({})", SDL_GetError());
     pipelines[key] = p;
+    counts.pipelines++;
     if (warmed_up) {
         REXLOG_INFO("native view gpu: pipeline made after warm-up: the overlay's start at {} "
                     "samples ({:.1f} ms)",
@@ -1461,6 +1471,7 @@ bool GpuRenderer::Impl::Reserve(Buffer& b, SDL_GPUBufferUsageFlags usage, uint32
     // room to grow, so a frame a little bigger than the last doesn't remake it
     bi.size = std::max(Align(bytes + bytes / 2, 1u << 16), 1u << 16);
     b.buffer = SDL_CreateGPUBuffer(device, &bi);
+    counts.buffers++;
     if (!b.buffer) {
         REXLOG_WARN("native view gpu: no {} byte buffer ({})", bi.size, SDL_GetError());
         return false;
@@ -1486,6 +1497,7 @@ bool GpuRenderer::Impl::PlaceInArena() {
         (arena_index_count + indices) * 2 > arena_indices.size) {
         // full: start over with the meshes this frame draws; the rest are let
         // go and come back through the pool if they're drawn again
+        counts.arena_rebuilds++;
         for (auto it = meshes.begin(); it != meshes.end();) {
             Mesh& m = it->second;
             if (!m.in_arena) {
@@ -1545,6 +1557,7 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx) {
             ti.layer_count_or_depth = layers;
             ti.num_levels = FullMipChain(w, h);
             grown = SDL_CreateGPUTexture(device, &ti);
+            counts.textures++;
         }
         if (!grown) {
             if (!texture_failure_logged) {
@@ -1626,6 +1639,7 @@ GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, u
     ti.layer_count_or_depth = 1;
     ti.num_levels = levels;
     rt.color = SDL_CreateGPUTexture(device, &ti);
+    counts.textures++;
     ti.type = SDL_GPU_TEXTURETYPE_2D;
     ti.format = kDepthFormat;
     ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
@@ -1729,6 +1743,7 @@ bool GpuRenderer::Impl::EnsureKept(PostBuffer& b, uint32_t w, uint32_t h) {
     ti.format = kColorFormat;
     ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
     b.tex = SDL_CreateGPUTexture(device, &ti);
+    counts.textures++;
     if (!b.tex) return false;
     b.w = w;
     b.h = h;
@@ -1738,6 +1753,7 @@ bool GpuRenderer::Impl::EnsureKept(PostBuffer& b, uint32_t w, uint32_t h) {
 bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     if (color && w == width && h == height) return true;
     ReleaseTargets();
+    counts.textures++;
 
     SDL_GPUTextureCreateInfo ti{};
     ti.type = SDL_GPU_TEXTURETYPE_2D;
@@ -1810,6 +1826,7 @@ bool GpuRenderer::Impl::EnsureScratch(Scratch& s, uint32_t w, uint32_t h) {
     ti.layer_count_or_depth = 1;
     ti.num_levels = 1;
     s.texture = SDL_CreateGPUTexture(device, &ti);
+    counts.textures++;
     s.w = s.texture ? w : 0;
     s.h = s.texture ? h : 0;
     if (!s.texture)
@@ -1972,6 +1989,7 @@ bool GpuRenderer::Impl::EnsureOutput(int slot, uint32_t w, uint32_t h) {
     out = Output{};
     const SDL_GPUTextureCreateInfo ti = OutputInfo(w, h);
     out.texture = SDL_CreateGPUTexture(device, &ti);
+    counts.textures++;
     if (!out.texture) {
         REXLOG_WARN("native view gpu: no {}x{} output ({})", w, h, SDL_GetError());
         return false;
@@ -2053,6 +2071,12 @@ bool GpuRenderer::Impl::Download(SDL_GPUTexture* texture, uint32_t w, uint32_t h
 
 bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o, int slot,
                                std::vector<uint32_t>* rgba, GpuStats& st, int pre_pass) {
+    // the frame's parts' times (GpuStats::plan_ms and the rest)
+    using Clock = std::chrono::steady_clock;
+    const auto render_start = Clock::now();
+    auto ms_since = [](Clock::time_point t) {
+        return std::chrono::duration<double, std::milli>(Clock::now() - t).count();
+    };
     if (!o.width || !o.height || !EnsureTargets(o.width, o.height)) return false;
     if (slot >= 0 && !EnsureOutput(slot, o.width, o.height)) return false;
     // where the last pass, the gamma ramp's, puts the finished frame
@@ -2066,6 +2090,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                             PostBufferFor(frame, post_buffer.game_frame);
     const bool keeps = kept_buffer && ProcKnown(frame) && (frame.proc_cmds & kProcPost) &&
                        EnsureKept(post_buffer, width, height);
+    st.shows_kept = shows_kept;
     // The world's REFRACT_WORLD draws read the pre-process buffer (soft_raster.h's
     // RefractsWorld, RasterOptions::pre_buffer): the one kept from the world
     // frames before, or else the world drawn kPreBufferPasses times first
@@ -2089,10 +2114,21 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             RasterOptions po = o;
             po.post = po.trails = po.post_buffer = po.pre_buffer = false;
             po.msaa = 1;
+            const auto pre_start = Clock::now();
             for (int k = 1; k <= kPreBufferPasses; k++) {
                 GpuStats ps;
                 if (!Render(frame, po, -1, nullptr, ps, k)) return false;
+                // the first sends what the world draws, which this frame
+                // then finds there
+                st.pre_passes++;
+                st.pool_meshes += ps.pool_meshes;
+                st.arena_moved += ps.arena_moved;
+                st.arena_sent += ps.arena_sent;
+                st.mesh_bytes += ps.mesh_bytes;
+                st.textures_sent += ps.textures_sent;
+                st.texture_bytes += ps.texture_bytes;
             }
+            st.pre_ms = ms_since(pre_start);
             world_behind = pre_scratch.texture;
         }
     }
@@ -2172,6 +2208,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             const DrawItem& it = frame.draws[d];
             if (!DrawnIn(run, frame, it, o)) continue;
             if (!run.pass && shows_kept && d < frame.post_boundary) continue;
+            if (!run.pass && d < frame.post_boundary) st.world_draws++;
             const ShadeState* state = shade::ShadeOf(frame, it);
             // the depth volume's blurs read a copy of it, not its quad's
             // texture (so they don't count as sampling a target nothing drew);
@@ -2349,6 +2386,20 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     };
     for (const Tex* tx : new_textures)
         for (uint32_t l = 0; l < tx->levels; l++) upload_bytes += level_bytes(*tx->keep, l);
+    // what of it comes from the CPU (GpuStats::mesh_bytes and the rest)
+    st.pool_meshes += uint32_t(to_pool.size());
+    st.mesh_bytes += uint64_t(pool_vert_count) * sizeof(Vertex) + uint64_t(pool_index_count) * 2;
+    for (const Mesh* m : to_arena) {
+        if (m->pool_vertex != ~0u) {
+            st.arena_moved++;
+            continue;
+        }
+        st.arena_sent++;
+        st.mesh_bytes += m->keep->verts.size() * sizeof(Vertex) + uint64_t(IndexSlots(*m->keep)) * 2;
+    }
+    st.textures_sent += uint32_t(new_textures.size());
+    st.texture_bytes += upload_bytes - textures_at;
+    st.bone_bytes += bone_bytes;
     if (pool_vert_count &&
         (!Reserve(pool_v, SDL_GPU_BUFFERUSAGE_VERTEX, pool_vert_count * sizeof(Vertex)) ||
          !Reserve(pool_i, SDL_GPU_BUFFERUSAGE_INDEX, pool_index_count * 2))) {
@@ -2358,12 +2409,15 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         !Reserve(bones, SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, bone_bytes)) {
         return false;
     }
+    st.plan_ms = ms_since(render_start) - st.pre_ms;
+    const auto upload_start = Clock::now();
     if (upload_bytes > upload_size) {
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
         SDL_GPUTransferBufferCreateInfo tbi{};
         tbi.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
         tbi.size = std::max(Align(upload_bytes + upload_bytes / 4, 1u << 16), upload_size);
         upload = SDL_CreateGPUTransferBuffer(device, &tbi);
+        counts.buffers++;
         upload_size = upload ? tbi.size : 0;
         if (!upload) {
             REXLOG_WARN("native view gpu: no {} byte upload buffer ({})", tbi.size,
@@ -2413,6 +2467,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         SDL_UnmapGPUTransferBuffer(device, upload);
     }
     st.uploads = uint32_t(to_pool.size() + to_arena.size() + new_textures.size());
+    st.upload_ms = ms_since(upload_start);
+    const auto record_start = Clock::now();
 
     SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device);
     if (!cmd) {
@@ -3444,6 +3500,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // its output's fence (OutputDone) before the presenter's queue may
     // sample it. Otherwise, and for RenderFrame's picture to read back, it
     // waits here.
+    st.record_ms = ms_since(record_start);
+    const auto submit_start = Clock::now();
     if (o.gpu_no_wait && (pre_pass || (slot >= 0 && !rgba))) {
         bool submitted;
         if (pre_pass) {
@@ -3460,7 +3518,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             REXLOG_WARN("native view gpu: the frame didn't submit ({})", SDL_GetError());
             return false;
         }
+        st.submit_ms = ms_since(submit_start);
+        const auto evict_start = Clock::now();
         Evict();
+        st.evict_ms = ms_since(evict_start);
         return true;
     }
     const auto submitted = std::chrono::steady_clock::now();
@@ -3469,7 +3530,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         REXLOG_WARN("native view gpu: the frame didn't submit ({})", SDL_GetError());
         return false;
     }
+    st.submit_ms = ms_since(submit_start);
+    stall_watch::SetWorker(stall_watch::Worker::kGpuWait);
     const bool done = SDL_WaitForGPUFences(device, true, &fence, 1);
+    stall_watch::SetWorker(stall_watch::Worker::kRecording);
     SDL_ReleaseGPUFence(device, fence);
     if (!done) {
         REXLOG_WARN("native view gpu: the frame didn't finish ({})", SDL_GetError());
@@ -3490,7 +3554,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     }
     st.wait_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                            submitted).count();
+    const auto evict_start = Clock::now();
     Evict();
+    st.evict_ms = ms_since(evict_start);
     return true;
 }
 
@@ -3505,6 +3571,7 @@ void GpuRenderer::Impl::Evict() {
             continue;
         }
         it = meshes.erase(it);
+        counts.evicted_meshes++;
     }
     // likewise a texture drawn in one frame only, such as one RB3 rendered
     // that frame, goes once a frame hasn't drawn it
@@ -3516,6 +3583,7 @@ void GpuRenderer::Impl::Evict() {
         }
         LetTextureGo(it->second);
         it = textures.erase(it);
+        counts.evicted_textures++;
     }
     // a render target no frame has drawn or sampled for a while
     for (auto it = rts.begin(); it != rts.end();) {
@@ -3525,6 +3593,7 @@ void GpuRenderer::Impl::Evict() {
         }
         ReleaseRt(it->second);
         it = rts.erase(it);
+        counts.evicted_rts++;
     }
     // an array whose textures have all gone goes after a while
     for (auto it = tex_arrays.begin(); it != tex_arrays.end();) {
@@ -3687,6 +3756,7 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
     // draw lit, as the CPU draws them without self_shadow
     RasterOptions o = options;
     o.self_shadow = options.self_shadow && impl_->shadow_maps;
+    const Impl::Counts before = impl_->counts;
     if (!impl_->Render(frame, o, slot, rgba, stats)) {
         // whatever went wrong would go wrong every frame; the CPU takes over
         REXLOG_WARN("native view gpu: giving up for this session, the native view draws on "
@@ -3697,6 +3767,14 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
     }
     stats.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                    .count();
+    const Impl::Counts& now = impl_->counts;
+    stats.pipelines_made = uint32_t(now.pipelines - before.pipelines);
+    stats.buffers_made = uint32_t(now.buffers - before.buffers);
+    stats.textures_made = uint32_t(now.textures - before.textures);
+    stats.arena_rebuilt = now.arena_rebuilds != before.arena_rebuilds;
+    stats.evicted_meshes = uint32_t(now.evicted_meshes - before.evicted_meshes);
+    stats.evicted_textures = uint32_t(now.evicted_textures - before.evicted_textures);
+    stats.evicted_rts = uint32_t(now.evicted_rts - before.evicted_rts);
     return true;
 }
 

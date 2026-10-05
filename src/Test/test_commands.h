@@ -161,6 +161,25 @@ struct NativeViewStats {
         uint64_t passes_dropped = 0;
         double cp_ms = -1;
     } emulated_gpu;
+    // The live view's frames by kind (src/Render/frame_compose.h's FrameKind,
+    // in its order: world, post, between, full): each kind's frames drawn,
+    // the captures skipped while one of them was being drawn, their ms and
+    // wait_ms as above, and totals over them that the reply divides by the
+    // frames drawn: the worker's parts of each frame (parts_ms), what it drew,
+    // sent, made and let go of (counts), and what capturing it cost the
+    // game's thread, by hook (capture_ms) and in counts (capture_counts)
+    struct Kind {
+        std::string name;
+        uint64_t rendered = 0;
+        uint64_t skipped_busy = 0;
+        std::vector<double> ms;
+        std::vector<double> wait_ms;
+        std::vector<std::pair<std::string, double>> parts_ms;
+        std::vector<std::pair<std::string, double>> counts;
+        std::vector<std::pair<std::string, double>> capture_ms;
+        std::vector<std::pair<std::string, double>> capture_counts;
+    };
+    std::vector<Kind> by_kind;
 };
 
 // The window's pacing (`present_stats`), since its numbers last started over:

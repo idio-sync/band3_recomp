@@ -114,6 +114,23 @@ been checked:
 | `native_present_pipeline` (Band3 → Debug) | on records the next frame while the GPU draws the one before, on the zero-copy path, as above; off (the default, until it has been checked in game) waits for the GPU after each frame. `set` changes it at once. Its frames are submitted without waiting, and that alone (with the worker waiting for each at once) had the Direct3D 12 debug layer report the SDK's command lists going wrong (a barrier out of step, a list executed still open) and AMD GPUs hang, so leave it off until that's understood |
 | `native_view_target_scale` (Band3 → Debug) | on (the default) draws the passes that are pictures of the screen (the spotlights' haze and the soft particles' smoke, made at 640x360 and 320x180 for the game's 1280x720) in proportion to the picture: 1.5 times at 1080p, 3 times at 4K. Off keeps the game's sizes, to compare |
 | `native_view_shadow_scale` (Band3 → Debug) | the characters' self-shadow maps at this many times the game's 512x512 (1, the default, to 4): sharper shadow edges, and less of the game's own shadow acne, so further from the game's picture |
+| `native_slow_frame_ms` (Band3 → Debug) | logs a line (`native renderer: slow frame ...`) for each frame the native renderer takes longer than this many milliseconds to draw, its GPU wait included (12, the default; 0 off), two a second at most: what kind of frame it was (as `by_kind` below), where its time went (the world passes before it, planning, filling the upload buffer, recording, submitting, waiting for the GPU, letting go), what it drew and sent (meshes into the pool and the arena, textures, bones, in MB), the pipelines, buffers and textures it made, what it let go of after, what capturing it cost the game's thread, and the captures skipped before it |
+| `game_stall_log_ms` (Band3 → Debug) | logs a warning (`game stall: ...`) for each of the game's frames longer than this many milliseconds (100, the default; 0 off), one every two seconds at most: the frame split at DxRnd::Present's hook (the game's own part, its Present, capture, the frame cap's wait), and over the part of it a watcher saw (from half the threshold on) the game thread's and the emulated GPU's command processor's CPU time, the process's file I/O and page faults, what the native renderer's worker was doing, and samples of those two threads' and the worker's stacks every 50 ms (module+RVA, as the crash trace's; `src/stall_watch.h`) |
+
+The test harness's `native_view stats` has `by_kind` too: the live view's frames by what
+they drew under even/odd rendering (`frame_compose.h`'s `FrameKind`): `world` (the game drew
+the world; the native renderer shows the kept post buffer and draws the world's texture
+passes and the overlay), `post` (the world frame's world composed in, drawn and
+post-processed), `between` (neither, at a background rate below half the game's) and `full`
+(everything, or a frame that doesn't say). Each has its frames drawn (`rendered`), the
+captures skipped while one of them was being drawn (`skipped_busy`, so the slow kind is the
+one charged), `ms` and `wait_ms` as the totals', and per frame drawn: the worker's parts
+(`parts_ms_per_frame`: `pre`, `plan`, `upload`, `record`, `submit`, `wait`, `evict`), what it
+drew, sent, made and let go of (`per_frame`: `draws`, `world_draws`, `passes`, `pool_meshes`,
+`mesh_bytes`, `textures_sent`, `texture_bytes`, `evicted_meshes` and the rest), and what
+capturing it cost the game's thread (`capture`: `ms_per_frame` by hook, and `per_frame`
+counts, `game_ms` the game's frame). Without native_present_pipeline, `wait` (and `wait_ms`)
+start when the frame is submitted, so they include `submit`.
 
 Every other pass RB3 draws into a texture (outfits, the crowd's impostors, NgLight's
 projected shadow, heads' normal maps) is drawn at the game's size at any window size.

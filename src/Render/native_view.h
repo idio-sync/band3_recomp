@@ -10,6 +10,8 @@
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/immediate_drawer.h>
 
+#include "src/Render/frame_compose.h"
+#include "src/Render/gpu_view.h"
 #include "src/Render/present_model.h"
 #include "src/Render/soft_raster.h"
 
@@ -105,6 +107,23 @@ struct LiveViewStats {
     // not finished): 1 unless native_present_pipeline is on, then 2 while it
     // records a frame as the GPU draws the one before, never more
     uint32_t in_flight_max = 0;
+    // The frames drawn by kind (frame_compose.h's FrameKind, by_kind's
+    // index): how many, the captures skipped while one of them was being
+    // drawn (so the frames that were too slow are the kind charged), each
+    // one's ms and wait_ms as above, and totals over them of the worker's
+    // parts and what it sent, made and let go of (GpuStats: the GPU's
+    // frames), the frames among them that showed the kept post buffer, that
+    // rebuilt the arena and that were composed, and what capturing them cost
+    // the game's thread (FrameCapture::Cost)
+    struct Kind {
+        uint64_t rendered = 0;
+        uint64_t skipped_busy = 0;
+        std::vector<double> ms, wait_ms;
+        GpuStats gpu;
+        uint64_t gpu_frames = 0, shows_kept = 0, arena_rebuilt = 0, composed = 0;
+        FrameCapture::Cost cost;
+    };
+    Kind by_kind[kFrameKinds];
 };
 // starts it, or starts its numbers over at a new size if it's on; on the UI
 // thread, as the GPU device starts there. `post` off leaves RB3's

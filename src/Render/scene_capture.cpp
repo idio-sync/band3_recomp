@@ -32,6 +32,7 @@
 #include "src/Render/gpu_skip.h"
 #include "src/Render/guest_formats.h"
 #include "src/settings.h"
+#include "src/stall_watch.h"
 
 // See scene_capture.h.
 
@@ -561,6 +562,10 @@ struct State {
     // started (Lap)
     CaptureProfile profile;
     std::chrono::steady_clock::time_point profile_mark;
+    // the profile as the last frame ended, and the game's frame ending now
+    // (from the Present before), for each frame's FrameCapture::cost
+    CaptureProfile cost_mark;
+    uint64_t game_ns = 0;
 };
 
 State& S() {
@@ -2584,6 +2589,18 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
     if (s.open.tex) DropOpenPass(s);
     const uint64_t game_frame = s.game_frame++;
     s.profile.frames++;
+    // what this frame cost the hooks since the last one ended
+    FrameCapture::Cost cost;
+    for (int i = 0; i < CaptureProfile::kNumHooks; i++)
+        cost.hook_ns[i] = s.profile.hook_ns[i] - s.cost_mark.hook_ns[i];
+    cost.draws = uint32_t(s.profile.draws - s.cost_mark.draws);
+    cost.new_shades = uint32_t(s.profile.new_shades - s.cost_mark.new_shades);
+    cost.allocs = uint32_t(s.profile.allocs - s.cost_mark.allocs);
+    cost.bones = uint32_t(s.profile.bones - s.cost_mark.bones);
+    cost.geom_miss_bytes = s.profile.geom_miss_bytes - s.cost_mark.geom_miss_bytes;
+    cost.tex_decode_bytes = s.profile.tex_decode_bytes - s.cost_mark.tex_decode_bytes;
+    cost.game_ns = s.game_ns;
+    s.cost_mark = s.profile;
     if (!g_enabled.load(std::memory_order_relaxed)) {
         FrameCapture& b = *s.building;
         if (!b.draws.empty() || !b.passes.empty() || b.post_boundary != FrameCapture::kNoPost ||
@@ -2606,6 +2623,7 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
     s.building->frame = ++s.frame;
     s.building->game_frame = game_frame;
     s.building->world_frame = game_frame;
+    s.building->cost = cost;
     s.building->gamma = ReadDisplayGamma();
     LogGammaIfChanged(s.building->gamma);
     if (const Guest g{base}; const uint32_t rnd = g.U32(kDrawModeHolder)) {
@@ -3259,19 +3277,26 @@ extern "C" REX_FUNC(RndSoftParticleBuffer__DoPost) {
 
 extern "C" REX_FUNC(DxRnd__Present) {
     SCOPE_profile_cpu_f("RB3 DxRnd::Present");
+    band3::stall_watch::PresentBegin();
     __imp__DxRnd__Present(ctx, base);
+    band3::stall_watch::PresentDone();
     TrackSettings();
+    uint64_t game_ns = 0;
     {
         const auto now = std::chrono::steady_clock::now();
         std::lock_guard lock(g_present_times_mutex);
+        if (g_present_count)
+            game_ns = Nanos(now - g_present_times[(g_present_count - 1) % kPresentTimes]);
         g_present_times[g_present_count++ % kPresentTimes] = now;
     }
     std::shared_ptr<const FrameCapture> done;
     {
         std::lock_guard lock(g_state_mutex);
         HookTimer timer(CaptureProfile::kHookPresent);
+        S().game_ns = game_ns;
         done = FinishFrame(base);
     }
+    band3::stall_watch::FinishDone();
     // whether the emulated GPU draws the next frame, now this one is captured
     // (so it's skipped only if capture has it whole), and before it's held
     LatchGpuSkip(g_enabled.load(std::memory_order_relaxed),
@@ -3282,7 +3307,9 @@ extern "C" REX_FUNC(DxRnd__Present) {
     // and before a render check's hold, after which the cap starts its beat
     // again (frame_pacing.h)
     band3::pacing::PaceFrame();
+    band3::stall_watch::PaceDone();
     // held without the lock, which a texture let go of on another thread
     // meanwhile takes
     if (done) HoldIfRequested(done);
+    band3::stall_watch::FrameEnd();
 }

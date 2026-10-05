@@ -10,6 +10,7 @@
 #include "src/Render/present_model.h"
 #include "src/crash_trace.h"
 #include "src/settings.h"
+#include "src/stall_watch.h"
 
 #include <imgui.h>
 #include <rex/cvar.h>
@@ -110,6 +111,86 @@ std::string DescribeGpu(const GpuStats& gs, bool output) {
 
 int64_t Nanoseconds(std::chrono::steady_clock::time_point t) {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
+}
+
+// `g` added into the totals `sum` (LiveViewStats::Kind's)
+void AddGpu(GpuStats& sum, const GpuStats& g) {
+    sum.draws += g.draws;
+    sum.skipped += g.skipped;
+    sum.uploads += g.uploads;
+    sum.passes += g.passes;
+    sum.rt_missing += g.rt_missing;
+    sum.ms += g.ms;
+    sum.wait_ms += g.wait_ms;
+    sum.pre_ms += g.pre_ms;
+    sum.plan_ms += g.plan_ms;
+    sum.upload_ms += g.upload_ms;
+    sum.record_ms += g.record_ms;
+    sum.submit_ms += g.submit_ms;
+    sum.evict_ms += g.evict_ms;
+    sum.pre_passes += g.pre_passes;
+    sum.world_draws += g.world_draws;
+    sum.pool_meshes += g.pool_meshes;
+    sum.arena_moved += g.arena_moved;
+    sum.arena_sent += g.arena_sent;
+    sum.mesh_bytes += g.mesh_bytes;
+    sum.textures_sent += g.textures_sent;
+    sum.texture_bytes += g.texture_bytes;
+    sum.bone_bytes += g.bone_bytes;
+    sum.pipelines_made += g.pipelines_made;
+    sum.buffers_made += g.buffers_made;
+    sum.textures_made += g.textures_made;
+    sum.evicted_meshes += g.evicted_meshes;
+    sum.evicted_textures += g.evicted_textures;
+    sum.evicted_rts += g.evicted_rts;
+}
+
+void AddCost(FrameCapture::Cost& sum, const FrameCapture::Cost& c) {
+    for (int i = 0; i < FrameCapture::Cost::kHooks; i++) sum.hook_ns[i] += c.hook_ns[i];
+    sum.draws += c.draws;
+    sum.new_shades += c.new_shades;
+    sum.allocs += c.allocs;
+    sum.bones += c.bones;
+    sum.geom_miss_bytes += c.geom_miss_bytes;
+    sum.tex_decode_bytes += c.tex_decode_bytes;
+    sum.game_ns += c.game_ns;
+}
+
+// native_slow_frame_ms's line for a GPU frame `fc` that took `gs`, after
+// `skipped` captures the worker never drew
+std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t skipped) {
+    uint64_t hooks_ns = 0;
+    for (uint64_t ns : fc.cost.hook_ns) hooks_ns += ns;
+    const FrameKind kind = KindOf(fc);
+    char world[64] = "";
+    if (fc.composed)
+        std::snprintf(world, sizeof(world), ", world from game frame %llu",
+                      static_cast<unsigned long long>(fc.world_frame));
+    char buf[1400];
+    std::snprintf(
+        buf, sizeof(buf),
+        "native renderer: slow frame %llu (game frame %llu, %s, proc_cmds %u%s): %.1f ms, "
+        "%.1f of it waiting for the GPU; pre %.1f (%u passes), plan %.1f, upload %.1f, record "
+        "%.1f, submit %.1f, evict %.1f ms; %u draws (%u of the world%s), %u texture passes; "
+        "sent %u meshes into the pool and %u into the arena (%.2f MB), %u textures (%.2f MB), "
+        "%u KB of bones; moved %u meshes to the arena%s; made %u pipelines, %u buffers, %u "
+        "textures; let go of %u meshes, %u textures, %u targets after; its capture cost the "
+        "game's thread %.2f ms (%u draws, %u new shades, %u allocations, %u bones, %llu KB of "
+        "geometry and %llu KB of textures decoded) in a %.1f ms game frame; %llu captures "
+        "skipped before it",
+        static_cast<unsigned long long>(fc.frame), static_cast<unsigned long long>(fc.game_frame),
+        FrameKindName(kind), fc.proc_cmds, world, gs.ms, gs.wait_ms, gs.pre_ms, gs.pre_passes,
+        gs.plan_ms, gs.upload_ms, gs.record_ms, gs.submit_ms, gs.evict_ms, gs.draws,
+        gs.world_draws, gs.shows_kept ? ", the kept post buffer shown" : "", gs.passes,
+        gs.pool_meshes, gs.arena_sent, gs.mesh_bytes / 1048576.0, gs.textures_sent,
+        gs.texture_bytes / 1048576.0, uint32_t(gs.bone_bytes >> 10), gs.arena_moved,
+        gs.arena_rebuilt ? " (rebuilt it)" : "", gs.pipelines_made, gs.buffers_made,
+        gs.textures_made, gs.evicted_meshes, gs.evicted_textures, gs.evicted_rts,
+        hooks_ns / 1e6, fc.cost.draws, fc.cost.new_shades, fc.cost.allocs, fc.cost.bones,
+        static_cast<unsigned long long>(fc.cost.geom_miss_bytes >> 10),
+        static_cast<unsigned long long>(fc.cost.tex_decode_bytes >> 10), fc.cost.game_ns / 1e6,
+        static_cast<unsigned long long>(skipped));
+    return buf;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +392,7 @@ class Renderer {
         live_measuring_ = measure;
         live_ = LiveViewStats{};
         live_base_ = live_last_ = cap ? cap->frame : 0;
+        live_last_kind_ = -1;
         live_drew_gpu_.reset();
     }
 
@@ -392,6 +474,8 @@ class Renderer {
     };
 
     void Run() {
+        // whose stack a game stall's log samples (stall_watch.h)
+        stall_watch::SetWorkerThread();
         uint64_t last_frame = 0;
         auto last_dump = std::chrono::steady_clock::now() - std::chrono::seconds(10);
         std::vector<uint32_t> rgba;
@@ -429,6 +513,8 @@ class Renderer {
             return pacer.Due(d.cap->frame, Nanoseconds(d.presented), done_ns);
         };
         while (true) {
+            // for a game stall's log (stall_watch.h)
+            stall_watch::SetWorker(stall_watch::Worker::kWaiting);
             RasterOptions o;
             std::string dump;
             bool changed, gpu, zero_copy, want_rgba, presenting, pace, pipeline;
@@ -439,6 +525,7 @@ class Renderer {
                 if (stop_) {
                     // a frame the GPU may still be drawing is nobody's
                     if (flight) slots_.Abandon(flight->slot);
+                    stall_watch::SetWorker(stall_watch::Worker::kIdle);
                     return;
                 }
                 o = options_;
@@ -581,6 +668,7 @@ class Renderer {
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 continue;
             }
+            stall_watch::SetWorker(stall_watch::Worker::kRecording);
             Drawn d;
             d.cap = cap;
             d.presented = presented;
@@ -693,6 +781,7 @@ class Renderer {
     // no more frames (the window keeps the last one published) until the
     // GPU finishes it, rather than pile them onto a GPU that may have hung.
     bool WaitFlight(Drawn& f, const uint64_t* seen) {
+        stall_watch::SetWorker(stall_watch::Worker::kGpuWait);
         const auto from = std::chrono::steady_clock::now();
         while (!PollFlight(f)) {
             {
@@ -724,6 +813,17 @@ class Renderer {
     void PublishDrawn(const Drawn& d, const std::vector<uint32_t>* rgba) {
         const std::string stats =
             Describe(*d.cap, d.drew_gpu ? DescribeGpu(d.gs, d.slot >= 0) : DescribeRaster(d.rs));
+        // native_slow_frame_ms: a new frame the GPU took too long over, and
+        // the captures the worker skipped before it
+        if (d.new_frame) {
+            const uint64_t skipped =
+                published_frame_ && d.cap->frame > published_frame_
+                    ? d.cap->frame - published_frame_ - 1
+                    : 0;
+            published_frame_ = std::max(published_frame_, d.cap->frame);
+            const int32_t slow_ms = REXCVAR_GET(native_slow_frame_ms);
+            if (slow_ms > 0 && d.drew_gpu && d.gs.ms > slow_ms) LogSlow(d, skipped);
+        }
         std::lock_guard lock(mutex_);
         // Never a frame the GPU may still be drawing: Publish would refuse
         // it, and abandoning it as refused would free a slot the GPU is
@@ -751,12 +851,31 @@ class Renderer {
         // a capture from before the numbers started over (one left from
         // the last time, or redrawn for new options) isn't counted
         if (live_measuring_ && d.cap->frame > live_last_) {
-            live_.skipped_busy += d.cap->frame - live_last_ - 1;
+            const uint64_t skipped = d.cap->frame - live_last_ - 1;
+            live_.skipped_busy += skipped;
             live_last_ = d.cap->frame;
             live_.rendered++;
             if (ProcKnown(*d.cap) && !DrawsWorld(*d.cap) && !d.cap->composed) live_.worldless++;
-            live_.ms.push_back(d.drew_gpu ? d.gs.ms : d.rs.ms);
+            const double ms = d.drew_gpu ? d.gs.ms : d.rs.ms;
+            live_.ms.push_back(ms);
             if (d.drew_gpu) live_.wait_ms.push_back(d.gs.wait_ms);
+            // by kind: the captures skipped are the frame before's, which
+            // they came in while it was drawn (this one's for the first)
+            const int k = int(KindOf(*d.cap));
+            LiveViewStats::Kind& kind = live_.by_kind[k];
+            live_.by_kind[live_last_kind_ >= 0 ? live_last_kind_ : k].skipped_busy += skipped;
+            live_last_kind_ = k;
+            kind.rendered++;
+            kind.ms.push_back(ms);
+            if (d.cap->composed) kind.composed++;
+            AddCost(kind.cost, d.cap->cost);
+            if (d.drew_gpu) {
+                kind.wait_ms.push_back(d.gs.wait_ms);
+                kind.gpu_frames++;
+                if (d.gs.shows_kept) kind.shows_kept++;
+                if (d.gs.arena_rebuilt) kind.arena_rebuilt++;
+                AddGpu(kind.gpu, d.gs);
+            }
         }
         live_drew_gpu_ = d.drew_gpu;
         if (rgba) {
@@ -771,6 +890,28 @@ class Renderer {
             if (current || !present_) image_wanted_ = false;
         }
         stats_ = stats;
+    }
+
+    // native_slow_frame_ms's line for `d`, kSlowPerSecond a second at most;
+    // the next logged says how many were left out
+    static constexpr uint32_t kSlowPerSecond = 2;
+    void LogSlow(const Drawn& d, uint64_t skipped) {
+        const int64_t now = Nanoseconds(std::chrono::steady_clock::now());
+        if (now - slow_since_ns_ >= 1'000'000'000) {
+            slow_since_ns_ = now;
+            slow_logged_ = 0;
+        }
+        if (slow_logged_ >= kSlowPerSecond) {
+            slow_left_out_++;
+            return;
+        }
+        slow_logged_++;
+        std::string line = DescribeSlow(*d.cap, d.gs, skipped);
+        if (slow_left_out_) {
+            line += " (" + std::to_string(slow_left_out_) + " more left out before it)";
+            slow_left_out_ = 0;
+        }
+        REXLOG_INFO("{}", line);
     }
 
     // A slot for the zero-copy path's next frame, or -1 after waiting for
@@ -858,7 +999,15 @@ class Renderer {
     bool live_measuring_ = false;
     LiveViewStats live_;
     uint64_t live_base_ = 0, live_last_ = 0;
+    // the newest counted frame's FrameKind, -1 none yet
+    int live_last_kind_ = -1;
     std::optional<bool> live_drew_gpu_;
+    // the worker's alone: the newest capture published, and the slow frames
+    // logged in the second from slow_since_ns_ and left out since the last
+    // logged (LogSlow)
+    uint64_t published_frame_ = 0;
+    int64_t slow_since_ns_ = 0;
+    uint32_t slow_logged_ = 0, slow_left_out_ = 0;
 };
 static_assert(PresentSlots::kCount == GpuRenderer::kOutputs,
               "a presenter slot is a gpu_view output");
