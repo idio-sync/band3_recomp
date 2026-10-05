@@ -1,8 +1,8 @@
 # Native renderer and render checks
 
 band3's own renderer for the game's frames, which draws the game's picture by default on
-Windows (the emulated Xbox 360 GPU is a switch away), and the tools that check its picture
-against the game's.
+Windows (the emulated Xbox 360 GPU is a switch away, unless `emulated_gpu` is off), and the
+tools that check its picture against the game's.
 
 ## Switching renderers
 
@@ -12,7 +12,9 @@ game sends at the window's size, under the SDK's overlays, or `emulated`, the em
 360 GPU. `native` is the default on Windows. Elsewhere `emulated` stays the default: the
 native renderer builds on Linux, but hasn't been run there yet. **F8** (`bind_renderer`)
 switches between them at once, without a restart; the emulated GPU keeps running either
-way, so its picture is always one key (or one setting) away. The picture keeps the game's
+way, so its picture is always one key (or one setting) away. The exception is `emulated_gpu`
+off (experimental, [below](#running-without-the-emulated-gpu-emulated_gpu-off)): then there's
+no emulated GPU, and F8 does nothing. The picture keeps the game's
 16:9 with black bars, or stretches when the SDK's `present_letterbox` is off. On Windows the frames go to the window without
 leaving the GPU; where that can't be done (other platforms, `native_view_backend` cpu, or
 `native_present_zero_copy` off) each frame is read back and uploaded instead. The log says
@@ -102,12 +104,14 @@ been checked:
   game's frames yet: about two in three in a song, where at 60 Hz it shows nearly all.
 - It has only run on Windows. Linux keeps `emulated` as the default until it has been run
   there (Vulkan, and each frame uploaded rather than shown in place).
+- Running without the emulated GPU (`emulated_gpu` off) has only run on Windows, on
+  Direct3D 12. Its Vulkan path for Linux is written but untested.
 
 | Setting | |
 |---|---|
 | `renderer` (Band3 → Graphics) | `native` (the default on Windows) or `emulated` (the default elsewhere) |
 | `emulated_gpu_while_native` (Band3 → Graphics) | with `renderer` native, `skip_draws` (the default) leaves the game's draws out of the emulated GPU's work as above; `full` has it draw everything; `swap_only` leaves it only what the game waits on, so F8 back may show black outfits and portraits for a while (above) |
-| `emulated_gpu` (Band3 → Graphics) | experimental: `on` (the default) runs the emulated GPU beside the native renderer, as above; `off` runs without it ([below](#running-without-the-emulated-gpu-emulated_gpu-off)). Applies at the next start (the launcher restarts band3 for it) |
+| `emulated_gpu` (Band3 → Graphics) | experimental: `on` (the default) runs the emulated GPU beside the native renderer, as above; `off` runs without it ([below](#running-without-the-emulated-gpu-emulated_gpu-off)). Applies at the next start (the launcher restarts band3 for it). `off` needs Direct3D 12 (Windows) or Vulkan (Linux, untested); a build with neither ignores it and logs why |
 | `native_present_request_paint` (Band3 → Debug) | with `emulated_gpu` off, on (the default) asks the window to paint each time the native renderer has a frame for it; off leaves the window to paint when something else asks, to compare |
 | `native_query_sample_count` (Band3 → Debug) | with `emulated_gpu` off, the samples every occlusion query reports drawn (the lens flares' visibility tests): 1000 (the default), what the emulated GPU's `query_occlusion_fake_sample_count` gives; -1 leaves them unanswered |
 | `native_query_log` (Band3 → Debug) | off by default. On, logs (`query log: D3DQuery_GetData ...`) what the game's first 50 reads of an occlusion query got, then one a second at most: the query, what the read returned (`S_OK`, or `S_FALSE` while the GPU hasn't answered) and the sample count it gave the game, with either GPU, to check the sync-only GPU's answers against the emulated GPU's. With `emulated_gpu` off it also logs (`sync gpu: query log: EVENT_WRITE_ZPD ...`) the sample counts the first 20 query packets found before clearing them, and whether each began or ended a query. Turning it on again logs as many more |
@@ -121,7 +125,7 @@ been checked:
 | `native_view_target_scale` (Band3 → Debug) | on (the default) draws the passes that are pictures of the screen (the spotlights' haze and the soft particles' smoke, made at 640x360 and 320x180 for the game's 1280x720) in proportion to the picture: 1.5 times at 1080p, 3 times at 4K. Off keeps the game's sizes, to compare |
 | `native_view_shadow_scale` (Band3 → Debug) | the characters' self-shadow maps at this many times the game's 512x512 (1, the default, to 4): sharper shadow edges, and less of the game's own shadow acne, so further from the game's picture |
 | `native_slow_frame_ms` (Band3 → Debug) | logs a line (`native renderer: slow frame ...`) for each frame the native renderer takes longer than this many milliseconds to draw, its GPU wait included (12, the default; 0 off), two a second at most: what kind of frame it was (as `by_kind` below), where its time went (the world passes before it, planning, filling the upload buffer, recording, submitting, waiting for the GPU, letting go), what it drew and sent (meshes into the pool and the arena, textures, bones, in MB), the pipelines, buffers and textures it made, what it let go of after, what capturing it cost the game's thread, and the captures skipped before it |
-| `game_stall_log_ms` (Band3 → Debug) | logs a warning (`game stall: ...`) for each of the game's frames longer than this many milliseconds (100, the default; 0 off), one every two seconds at most: the frame split at DxRnd::Present's hook (the game's own part, its Present, capture, the frame cap's wait), and over the part of it a watcher saw (from half the threshold on) the game thread's and the emulated GPU's command processor's CPU time, the process's file I/O and page faults, what the native renderer's worker was doing, and samples of those two threads' and the worker's stacks every 50 ms (module+RVA, as the crash trace's; `src/stall_watch.h`) |
+| `game_stall_log_ms` (Band3 → Debug) | logs a warning (`game stall: ...`) for each of the game's frames longer than this many milliseconds (100, the default; 0 off), one every two seconds at most: the frame split at DxRnd::Present's hook (the game's own part, its Present, capture, the frame cap's wait), and over the part of it a watcher saw (from half the threshold on) the game thread's and the emulated GPU's command processor's CPU time (with `emulated_gpu` off, the sync-only GPU's `band3 GPU sync` thread's), the process's file I/O and page faults, what the native renderer's worker was doing, and samples of those two threads' and the worker's stacks every 50 ms (module+RVA, as the crash trace's; `src/stall_watch.h`) |
 
 The test harness's `native_view stats` has `by_kind` too: the live view's frames by what
 they drew under even/odd rendering (`frame_compose.h`'s `FrameKind`): `world` (the game drew
@@ -152,7 +156,13 @@ projected shadow, heads' normal maps) is drawn at the game's size at any window 
 
 ## Running without the emulated GPU (emulated_gpu off)
 
-Experimental, and Windows (Direct3D 12) only for now. With `emulated_gpu` off (Band3 →
+Experimental. On Windows it presents on the SDK's Direct3D 12 device, the same device the
+native renderer draws on, so its frames are shown where they are (zero-copy). On Linux it
+presents with the SDK's Vulkan provider and presenter, each frame uploaded; that path is
+written but hasn't been run yet. A build with neither ignores `off` and logs
+`emulated_gpu off isn't available on this platform yet; running with the emulated GPU`.
+
+With `emulated_gpu` off (Band3 →
 Graphics, the launcher's Graphics tab, or `--emulated_gpu=off`; it applies at the next
 start) band3 doesn't load the emulated GPU at all. The game still sends its GPU commands
 and waits on what the GPU does with them, so band3's sync-only GPU

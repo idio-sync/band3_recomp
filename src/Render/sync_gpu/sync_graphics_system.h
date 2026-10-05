@@ -19,7 +19,9 @@
 //   and the window to them as it does the plugin's (rex_app.cpp:387-399) and
 //   the native renderer draws on them as it always has (zero-copy included:
 //   one device). Nothing ever refreshes the presenter's guest output; the
-//   native renderer's drawer is the picture. Windows only for now.
+//   native renderer's drawer is the picture. On Linux the SDK's Vulkan
+//   provider and presenter instead (untested); a build with neither keeps
+//   the emulated GPU (CanPresentNativeOnly).
 // - The guest's GPU: its MMIO window (0x7FC80000) to the sync-only command
 //   processor (sync_cp.h), which a thread of its own ("band3 GPU sync") runs
 //   whenever the guest moves the write pointer, acting on what the game waits
@@ -39,7 +41,7 @@
 //   packets (SyncCommandProcessor::SetQueryLog).
 //
 // A lost device (a GPU hang) isn't recovered: it's logged and band3 aborts,
-// so the crash trace has the device's DRED (crash_trace.h).
+// so the crash trace has the device's DRED (crash_trace.h, Windows).
 
 namespace band3::render::sync_gpu {
 
@@ -48,8 +50,8 @@ struct SyncGpuStats {
     SyncCpStats cp;
     uint64_t vblanks = 0;
     // the command processor thread's and the vblank thread's CPU time (kernel
-    // and user), -1 where it can't be told (off Windows, or before the thread
-    // started)
+    // and user), -1 where it can't be told (off Windows and Linux, or before
+    // the thread started)
     double thread_ms = -1;
     double vblank_thread_ms = -1;
 };
@@ -86,6 +88,11 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+// whether this build has something to present with but the emulated GPU:
+// the SDK's Direct3D 12 provider (Windows) or its Vulkan one (Linux), by the
+// runtime's REX_HAS_D3D12 / REX_HAS_VULKAN. PlanStartupGpu's `presentable`.
+bool CanPresentNativeOnly();
 
 // The sync-only GPU while it's the runtime's, from its construction in
 // Band3App::OnPreSetup to its destruction; null with the emulated GPU (every

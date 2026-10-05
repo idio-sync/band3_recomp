@@ -71,6 +71,10 @@ target_include_directories(band3_compile_check PRIVATE
     "${BAND3_ROOT}/src"
 )
 target_link_libraries(band3_compile_check PRIVATE rex::runtime)
+# as the band3 target has it, for the SDK's Vulkan headers
+if(NOT WIN32 AND TARGET rex::renderdoc)
+    target_link_libraries(band3_compile_check PRIVATE rex::renderdoc)
+endif()
 # as the band3 target defines it, for src/sdk_export.cpp
 target_compile_definitions(band3_compile_check PRIVATE
     BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")

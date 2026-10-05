@@ -228,7 +228,7 @@ REXCVAR_DEFINE_STRING(renderer, band3::settings::kDefaultRenderer, "Band3/Graphi
     "sent the GPU, at the window's size, under the overlays, or emulated, the emulated Xbox "
     "360 GPU. Native is the default on Windows, emulated elsewhere; on Microsoft's software "
     "rasterizer (Windows without a GPU driver) native draws on the CPU. The emulated GPU "
-    "keeps running either way, so it switches at once (F8)")
+    "keeps running either way, so it switches at once (F8), unless emulated_gpu is off")
     .allowed({"emulated", "native"});
 
 REXCVAR_DEFINE_INT32(native_max_height, 0, "Band3/Graphics",
@@ -245,7 +245,7 @@ REXCVAR_DEFINE_STRING(emulated_gpu_while_native, "skip_draws", "Band3/Graphics",
     "renderer = emulated. swap_only also skips clears, resolves, the flares' occlusion-test "
     "quads and the passes RB3 draws once, leaving only what the game waits on: a test and "
     "performance mode, after which F8 back to emulated may show black outfits, portraits "
-    "and other stale pictures until RB3 draws them again")
+    "and other stale pictures until RB3 draws them again. Ignored with emulated_gpu off")
     .allowed({"full", "skip_draws", "swap_only"});
 
 // read once, by Band3App::OnPreSetup (src/Render/sync_gpu/emulated_gpu_mode.h)
@@ -254,7 +254,8 @@ REXCVAR_DEFINE_STRING(emulated_gpu, "on", "Band3/Graphics",
     "switches between their pictures (A/B, as before). off: no emulated GPU at all; band3 "
     "answers what the game waits on from its GPU itself and the native renderer is the only "
     "picture: renderer is native whatever it says, F8 does nothing, and the test harness has "
-    "no emulated screenshot. Windows only for now. Applies at the next start")
+    "no emulated screenshot. off needs Direct3D 12 (Windows) or Vulkan (Linux, untested); "
+    "elsewhere it's ignored. Applies at the next start")
     .allowed({"on", "off"})
     .lifecycle(Lifecycle::kRequiresRestart);
 

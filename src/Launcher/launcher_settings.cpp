@@ -158,7 +158,8 @@ constexpr Setting kSettings[] = {
      .widget = kCheckbox, .shown_when = kWithoutFrameCap},
     {.cvar = "renderer", .tab = kGraphics, .section = "Rendering", .label = "Renderer",
      .widget = kCombo, .choices = kRenderers},
-    // experimental, and Direct3D 12 only for now (sync_graphics_system.h)
+    // experimental, and offered on Windows only until its Vulkan path
+    // (sync_graphics_system.h) has run on Linux
     {.cvar = "emulated_gpu", .tab = kGraphics, .section = "Rendering", .label = "Emulated GPU",
      .widget = kCombo, .choices = kEmulatedGpu, .windows_only = true},
     {.cvar = "resolution_scale", .tab = kGraphics, .section = "Rendering",

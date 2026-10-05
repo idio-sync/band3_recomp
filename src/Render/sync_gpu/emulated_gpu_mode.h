@@ -33,12 +33,26 @@ struct StartupGpuPlan {
     std::vector<std::string> log;
 };
 
+// what startup logs when emulated_gpu is off on a build that can't present
+// without the emulated GPU
+inline constexpr char kNotPresentableHere[] =
+    "emulated_gpu off isn't available on this platform yet; running with the emulated GPU";
+
 // Anything but off (on, or a value the setting wouldn't take) keeps the
 // emulated GPU, and the plugin; off drops a plugin named (the command line's
-// --gpu_plugin included).
-inline StartupGpuPlan PlanStartupGpu(std::string_view emulated_gpu, std::string_view gpu_plugin) {
+// --gpu_plugin included). `presentable` is whether this build has something
+// to present with on its own (CanPresentNativeOnly, sync_graphics_system.h):
+// without it, off is ignored and says so, since the SDK would stop band3 at
+// startup otherwise.
+inline StartupGpuPlan PlanStartupGpu(std::string_view emulated_gpu, std::string_view gpu_plugin,
+                                     bool presentable) {
     StartupGpuPlan plan;
-    plan.native_only = ParseEmulatedGpu(emulated_gpu) == std::optional<bool>(false);
+    const bool off = ParseEmulatedGpu(emulated_gpu) == std::optional<bool>(false);
+    if (off && !presentable) {
+        plan.log.push_back(kNotPresentableHere);
+        return plan;
+    }
+    plan.native_only = off;
     if (!plan.native_only) return plan;
     plan.log.push_back(
         "emulated_gpu off: no emulated GPU this run (experimental); band3's sync-only GPU "

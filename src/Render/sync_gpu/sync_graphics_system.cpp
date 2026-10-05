@@ -9,8 +9,21 @@
 #include <rex/system/xthread.h>
 #include <rex/ui/graphics_provider.h>
 #include <rex/ui/presenter.h>
-#ifdef _WIN32
+// the provider the SDK's runtime was built with, by its public define on
+// rex::runtime: REX_HAS_D3D12 (Windows) or REX_HAS_VULKAN (Linux)
+#if defined(REX_HAS_D3D12) && REX_HAS_D3D12
+#define BAND3_SYNC_PRESENT_D3D12 1
+#define BAND3_SYNC_PRESENT_VULKAN 0
 #include <rex/ui/d3d12/d3d12_provider.h>
+#elif defined(REX_HAS_VULKAN) && REX_HAS_VULKAN
+#define BAND3_SYNC_PRESENT_D3D12 0
+#define BAND3_SYNC_PRESENT_VULKAN 1
+#include <rex/ui/vulkan/provider.h>
+#else
+#define BAND3_SYNC_PRESENT_D3D12 0
+#define BAND3_SYNC_PRESENT_VULKAN 0
+#endif
+#ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -18,6 +31,14 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#elif defined(__linux__)
+// a thread's CPU clock (pthread_getcpuclockid), for its CPU time
+#include <pthread.h>
+#include <time.h>
+#define BAND3_THREAD_CPU_CLOCK 1
+#endif
+#ifndef BAND3_THREAD_CPU_CLOCK
+#define BAND3_THREAD_CPU_CLOCK 0
 #endif
 
 #include <atomic>
@@ -98,20 +119,22 @@ struct PhysicalMemory final : GuestMemory {
     }
 };
 
-#ifdef _WIN32
 // The presenter's device loss (a GPU hang): the plugin rebuilds its device,
 // but the SDK's drawers here have nothing to rebuild with, so band3 stops,
-// through abort() so the crash trace logs the device's DRED (crash_trace.h).
-void OnHostGpuLoss(bool is_responsible, bool statically_from_ui_thread) {
-    REXLOG_ERROR(
-        "sync gpu: the host GPU's device was lost ({}{}). Without the emulated GPU band3 "
-        "can't make it again, so it stops; band3_crash_trace.txt has the device's DRED "
-        "(with dred on)",
-        is_responsible ? "presenting caused it" : "lost elsewhere",
-        statically_from_ui_thread ? ", on the UI thread" : "");
+// through abort() so the crash trace logs what it can (on Windows the
+// device's DRED, crash_trace.h).
+[[maybe_unused]] void OnHostGpuLoss(bool is_responsible, bool statically_from_ui_thread) {
+#ifdef _WIN32
+    constexpr const char* kTrace = "; band3_crash_trace.txt has the device's DRED (with dred on)";
+#else
+    constexpr const char* kTrace = "";
+#endif
+    REXLOG_ERROR("sync gpu: the host GPU's device was lost ({}{}). Without the emulated GPU band3 "
+                 "can't make it again, so it stops{}",
+                 is_responsible ? "presenting caused it" : "lost elsewhere",
+                 statically_from_ui_thread ? ", on the UI thread" : "", kTrace);
     std::abort();
 }
-#endif
 
 // the guest's refresh rate, as the game asks for it
 double GuestRefreshHz() {
@@ -152,10 +175,19 @@ struct Band3GraphicsSystem::Impl {
 
     rex::system::object_ref<rex::system::XHostThread> cp_thread;
     rex::system::object_ref<rex::system::XHostThread> vblank_thread;
-    // the command processor's and the vblank thread's handles, for their CPU
-    // time (Windows)
-    std::atomic<void*> cp_thread_handle{nullptr};
-    std::atomic<void*> vblank_thread_handle{nullptr};
+    // what reads a thread's CPU time, which the thread sets as it starts: a
+    // handle to it (Windows) or its CPU clock (Linux)
+    struct ThreadClock {
+        std::atomic<void*> handle{nullptr};
+#if BAND3_THREAD_CPU_CLOCK
+        clockid_t clock{};
+        // clock is set before this, and never after
+        std::atomic<bool> has_clock{false};
+#endif
+    };
+    // the command processor's and the vblank thread's
+    ThreadClock cp_clock;
+    ThreadClock vblank_clock;
 
     Impl() : cp(memory, MakeHooks(), MakeConfig()) {
         cp.SetQueryLog(REXCVAR_GET(native_query_log));
@@ -163,8 +195,8 @@ struct Band3GraphicsSystem::Impl {
 
     ~Impl() {
 #ifdef _WIN32
-        for (auto* handle : {&cp_thread_handle, &vblank_thread_handle})
-            if (void* h = handle->exchange(nullptr)) CloseHandle(static_cast<HANDLE>(h));
+        for (ThreadClock* c : {&cp_clock, &vblank_clock})
+            if (void* h = c->handle.exchange(nullptr)) CloseHandle(static_cast<HANDLE>(h));
 #endif
     }
 
@@ -252,7 +284,7 @@ struct Band3GraphicsSystem::Impl {
     // Xenia's CommandProcessor::WorkerThreadMain, without its spin: run what
     // the guest wrote, then sleep until it writes more
     int CpMain() {
-        cp_thread_handle.store(DuplicateCurrentThread());
+        CaptureCurrentThread(cp_clock);
         while (running.load(std::memory_order_acquire)) {
             if (cp.ExecutePending()) continue;
             std::unique_lock lock(wake_mutex);
@@ -266,7 +298,7 @@ struct Band3GraphicsSystem::Impl {
     // Xenia's vsync worker and MarkVblank, on a fixed beat (FrameCapSchedule)
     // rather than its 1 ms poll; and the watchdog and the summary
     int VblankMain() {
-        vblank_thread_handle.store(DuplicateCurrentThread());
+        CaptureCurrentThread(vblank_clock);
         pacing::FrameCapSchedule schedule;
         StallWatch watch;
         double hz = 60;
@@ -326,22 +358,27 @@ struct Band3GraphicsSystem::Impl {
         return 0;
     }
 
-    // a handle to the calling thread that can read its times, null if none
-    // (or off Windows)
-    static void* DuplicateCurrentThread() {
+    // `clock` reads the calling thread's times from now on, where the
+    // platform can (Windows, Linux)
+    static void CaptureCurrentThread(ThreadClock& clock) {
 #ifdef _WIN32
         HANDLE self = nullptr;
         if (DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &self,
                             THREAD_QUERY_LIMITED_INFORMATION, FALSE, 0))
-            return self;
+            clock.handle.store(self);
+#elif BAND3_THREAD_CPU_CLOCK
+        if (pthread_getcpuclockid(pthread_self(), &clock.clock) == 0)
+            clock.has_clock.store(true, std::memory_order_release);
+#else
+        (void)clock;
 #endif
-        return nullptr;
     }
 
-    // the CPU time of the thread `handle` holds, -1 if it can't be told
-    static double ThreadMs(const std::atomic<void*>& handle) {
+    // the CPU time (kernel and user) of the thread `clock` reads, -1 if it
+    // can't be told
+    static double ThreadMs(const ThreadClock& clock) {
 #ifdef _WIN32
-        HANDLE h = static_cast<HANDLE>(handle.load());
+        HANDLE h = static_cast<HANDLE>(clock.handle.load());
         FILETIME created, exited, kernel, user;
         if (!h || !GetThreadTimes(h, &created, &exited, &kernel, &user)) return -1;
         auto ticks = [](const FILETIME& f) {
@@ -349,8 +386,15 @@ struct Band3GraphicsSystem::Impl {
         };
         // 100 ns ticks
         return double(ticks(kernel) + ticks(user)) / 1e4;
+#elif BAND3_THREAD_CPU_CLOCK
+        // a thread that has exited reads as an error
+        timespec t{};
+        if (!clock.has_clock.load(std::memory_order_acquire) ||
+            clock_gettime(clock.clock, &t) != 0)
+            return -1;
+        return double(t.tv_sec) * 1e3 + double(t.tv_nsec) / 1e6;
 #else
-        (void)handle;
+        (void)clock;
         return -1;
 #endif
     }
@@ -409,7 +453,7 @@ Band3GraphicsSystem::~Band3GraphicsSystem() {
 X_STATUS Band3GraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext*) {
     // idempotent, as IGraphicsSystem asks
     if (impl_->presenter) return X_STATUS_SUCCESS;
-#ifdef _WIN32
+#if BAND3_SYNC_PRESENT_D3D12
     // what the xenos plugin presents with: the SDK's Direct3D 12 provider and
     // its presenter (n7_design.md decision 3)
     std::unique_ptr<rex::ui::d3d12::D3D12Provider> provider =
@@ -428,13 +472,36 @@ X_STATUS Band3GraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext*) {
     impl_->presenter = std::move(presenter);
     REXLOG_INFO("sync gpu: presenting with the SDK's Direct3D 12 provider and presenter");
     return X_STATUS_SUCCESS;
+#elif BAND3_SYNC_PRESENT_VULKAN
+    // the same with the SDK's Vulkan provider (Linux), asked for presentation
+    // only, not GPU emulation. Written against the SDK's headers; untested.
+    std::unique_ptr<rex::ui::vulkan::VulkanProvider> provider =
+        rex::ui::vulkan::VulkanProvider::Create(/*with_gpu_emulation=*/false,
+                                                /*with_presentation=*/true);
+    if (!provider) {
+        REXLOG_ERROR("sync gpu: couldn't set up Vulkan (see above), so there's nothing to "
+                     "present with");
+        return X_STATUS_UNSUCCESSFUL;
+    }
+    std::unique_ptr<rex::ui::Presenter> presenter = provider->CreatePresenter(OnHostGpuLoss);
+    if (!presenter) {
+        REXLOG_ERROR("sync gpu: couldn't make the Vulkan presenter");
+        return X_STATUS_UNSUCCESSFUL;
+    }
+    impl_->provider = std::move(provider);
+    impl_->presenter = std::move(presenter);
+    REXLOG_INFO("sync gpu: presenting with the SDK's Vulkan provider and presenter");
+    return X_STATUS_SUCCESS;
 #else
-    // N7-5: the SDK's Vulkan provider, where it exports one
-    REXLOG_ERROR("sync gpu: emulated_gpu off presents with Direct3D 12, which this platform "
-                 "doesn't have yet; start with emulated_gpu on");
+    // startup keeps the emulated GPU here (CanPresentNativeOnly), so this
+    // isn't reached
+    REXLOG_ERROR("sync gpu: this build has neither Direct3D 12 nor Vulkan to present with; "
+                 "start with emulated_gpu on");
     return X_STATUS_NOT_IMPLEMENTED;
 #endif
 }
+
+bool CanPresentNativeOnly() { return BAND3_SYNC_PRESENT_D3D12 || BAND3_SYNC_PRESENT_VULKAN; }
 
 X_STATUS Band3GraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* function_dispatcher,
                                             rex::system::KernelState* kernel_state) {
@@ -520,8 +587,8 @@ SyncGpuStats Band3GraphicsSystem::Stats() const {
     SyncGpuStats s;
     s.cp = impl_->cp.stats();
     s.vblanks = impl_->vblanks.load(std::memory_order_relaxed);
-    s.thread_ms = Impl::ThreadMs(impl_->cp_thread_handle);
-    s.vblank_thread_ms = Impl::ThreadMs(impl_->vblank_thread_handle);
+    s.thread_ms = Impl::ThreadMs(impl_->cp_clock);
+    s.vblank_thread_ms = Impl::ThreadMs(impl_->vblank_clock);
     return s;
 }
 

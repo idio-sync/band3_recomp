@@ -13,6 +13,8 @@
   C++"; on Linux, `sudo apt install build-essential git cmake ninja-build clang
   libasound2-dev libcurl4-openssl-dev` (ALSA for MIDI drum kits, libcurl for
   [RhythmVerse](integrations.md#rhythmverse); band3 builds without them, less those).
+  band3 uses `std::format` and `std::byteswap`, so Linux needs GCC 13's libstdc++ or
+  later, which clang builds against too (Ubuntu 24.04 has it).
 
 ## Game files
 

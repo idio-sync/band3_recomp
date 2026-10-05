@@ -59,6 +59,8 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
     the emulated GPU (about 1.6 to 1.75 times)
   - Sharper: it draws at the window's size, 1080p or 4K, where the emulated GPU draws the
     console's 720p unless `resolution_scale` is raised, at a high GPU cost
+  - Experimental: `emulated_gpu = off` runs without the emulated GPU at all, the native
+    renderer the only picture and F8 doing nothing (Windows; written but untested on Linux)
   - [Native renderer](docs/native-renderer.md) has the details, the settings and what still
     differs (the lens flares aren't occluded, as on the emulated GPU; the store and RB3's
     error screens aren't checked)
@@ -117,10 +119,10 @@ Both renderers replace the same part of RB3, its platform render layer (`DxRnd`,
 around them.
 
 \* Partly done. The native renderer draws the picture by default on Windows (the emulated GPU
-stays the default on Linux until the native renderer has been run there), but the emulated
-GPU still runs under it, skipping the draws the native renderer has made, so F8 can switch
-back at once. Once it covers every screen, launching with `renderer = native` will leave the
-emulated GPU out entirely, and `emulated` will remain as a choice at launch.
+stays the default on Linux until the native renderer has been run there), but by default the
+emulated GPU still runs under it, skipping the draws the native renderer has made, so F8 can
+switch back at once. Launching with `emulated_gpu = off` leaves the emulated GPU out entirely
+now (experimental: Windows, and written but untested on Linux); `on`, the default, keeps it.
 
 ## Credits
 

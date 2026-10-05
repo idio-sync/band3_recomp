@@ -30,6 +30,7 @@
 
 #include "src/Render/sync_gpu/sync_cp.h"
 
+#include <cstdint>
 #include <cstring>
 #include <format>
 #include <iterator>
@@ -168,7 +169,7 @@ void SyncCommandProcessor::WriteBackReadPointer() {
     uint8_t* p = Translate(read_ptr_writeback_ptr_, 4);
     if (!p) return;
     const uint32_t be = std::byteswap(read_index());
-    if (reinterpret_cast<uintptr_t>(p) % 4 == 0) {
+    if (reinterpret_cast<std::uintptr_t>(p) % 4 == 0) {
         StoreHost32Release(p, be);
     } else {
         std::atomic_thread_fence(std::memory_order_release);
@@ -644,7 +645,7 @@ void SyncCommandProcessor::EventWriteShd(Reader& r) {
     if (uint8_t* p = Translate(address, 4)) {
         // release: what the packets before it wrote is seen before the fence
         const uint32_t swapped = GpuSwap(data_value, endianness);
-        if (reinterpret_cast<uintptr_t>(p) % 4 == 0) {
+        if (reinterpret_cast<std::uintptr_t>(p) % 4 == 0) {
             StoreHost32Release(p, swapped);
         } else {
             std::atomic_thread_fence(std::memory_order_release);

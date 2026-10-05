@@ -34,6 +34,13 @@ if(UNIX AND NOT APPLE)
                 $<TARGET_FILE_DIR:band3>)
 endif()
 
+# renderdoc_app.h, which the SDK's Vulkan headers include
+# (rex/ui/renderdoc_api.h) but rex::runtime doesn't bring along: for the
+# Vulkan presenter in src/Render/sync_gpu/sync_graphics_system.cpp
+if(NOT WIN32 AND TARGET rex::renderdoc)
+    target_link_libraries(band3 PRIVATE rex::renderdoc)
+endif()
+
 # UDP sockets for the RB3E network events (src/Net/events.cpp)
 if(WIN32)
     target_link_libraries(band3 PRIVATE ws2_32)

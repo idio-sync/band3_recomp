@@ -50,25 +50,42 @@ TEST_CASE("emulated_gpu is on or off, and only off goes without the emulated GPU
     CHECK_FALSE(ParseEmulatedGpu("").has_value());
     CHECK_FALSE(ParseEmulatedGpu("Off").has_value());
 
-    // on, or anything the setting wouldn't take: as before, nothing to say
+    // on, or anything the setting wouldn't take: as before, nothing to say,
+    // whatever the build can present with
     for (const char* v : {"on", "", "maybe"}) {
-        INFO(v);
-        const StartupGpuPlan plan = PlanStartupGpu(v, "xenos");
-        CHECK_FALSE(plan.native_only);
-        CHECK(plan.log.empty());
+        for (const bool presentable : {true, false}) {
+            INFO(v << (presentable ? " presentable" : " not presentable"));
+            const StartupGpuPlan plan = PlanStartupGpu(v, "xenos", presentable);
+            CHECK_FALSE(plan.native_only);
+            CHECK(plan.log.empty());
+        }
     }
 
-    const StartupGpuPlan off = PlanStartupGpu("off", "");
+    const StartupGpuPlan off = PlanStartupGpu("off", "", true);
     CHECK(off.native_only);
     REQUIRE(off.log.size() == 1);
     CHECK(Has(off.log[0], "emulated_gpu off: no emulated GPU this run"));
     CHECK(Has(off.log[0], "F8 is inert"));
 
     // a plugin named (band3.toml, --gpu_plugin) isn't loaded, and it says so
-    const StartupGpuPlan named = PlanStartupGpu("off", "xenos");
+    const StartupGpuPlan named = PlanStartupGpu("off", "xenos", true);
     CHECK(named.native_only);
     REQUIRE(named.log.size() == 2);
     CHECK(named.log[1] == "emulated_gpu off: gpu_plugin xenos isn't loaded");
+}
+
+TEST_CASE("emulated_gpu off is ignored on a build with nothing else to present with") {
+    // neither Direct3D 12 nor Vulkan: the emulated GPU stays, the plugin named
+    // with it, and the log says why
+    for (const char* plugin : {"", "xenos"}) {
+        INFO(plugin);
+        const StartupGpuPlan plan = PlanStartupGpu("off", plugin, false);
+        CHECK_FALSE(plan.native_only);
+        REQUIRE(plan.log.size() == 1);
+        CHECK(plan.log[0] ==
+              "emulated_gpu off isn't available on this platform yet; running with the "
+              "emulated GPU");
+    }
 }
 
 TEST_CASE("without the emulated GPU the renderer is native, and says so if it wasn't") {

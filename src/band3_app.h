@@ -387,14 +387,16 @@ class Band3App : public rex::ReXApp {
   // off (experimental) there's none: band3's sync-only GPU is the runtime's
   // graphics system instead (src/Render/sync_gpu/sync_graphics_system.h). Set
   // here, before the window exists, the SDK has it make its presenter and
-  // wires the window and the overlays to it as it does the plugin's.
+  // wires the window and the overlays to it as it does the plugin's. A build
+  // with nothing to present with but the plugin (neither Direct3D 12 nor
+  // Vulkan) keeps the emulated GPU whatever emulated_gpu says.
   void OnPreSetup(rex::RuntimeConfig& config) override {
     namespace sync_gpu = band3::render::sync_gpu;
-    const sync_gpu::StartupGpuPlan gpu =
-        sync_gpu::PlanStartupGpu(REXCVAR_GET(emulated_gpu), config.gpu_plugin);
+    const sync_gpu::StartupGpuPlan gpu = sync_gpu::PlanStartupGpu(
+        REXCVAR_GET(emulated_gpu), config.gpu_plugin, sync_gpu::CanPresentNativeOnly());
     sync_gpu::SetNativeOnly(gpu.native_only);
+    for (const std::string& line : gpu.log) REXLOG_INFO("{}", line);
     if (gpu.native_only) {
-      for (const std::string& line : gpu.log) REXLOG_INFO("{}", line);
       config.gpu_plugin.clear();
       config.graphics = std::make_unique<sync_gpu::Band3GraphicsSystem>();
     } else if (config.gpu_plugin.empty()) {
@@ -491,7 +493,8 @@ class Band3App : public rex::ReXApp {
         if (native_view_ && !launcher_) native_view_->Toggle();
       });
       rex::ui::RegisterBind("bind_renderer", "F8",
-                            "Switch between the native and the emulated renderer", [] {
+                            "Switch between the native and the emulated renderer (nothing with "
+                            "emulated_gpu off)", [] {
         // with emulated_gpu off there's nothing to switch to
         if (band3::render::sync_gpu::NativeOnly()) {
           REXLOG_INFO("F8: {}", band3::render::sync_gpu::kNoEmulatedGpuSwitch);
