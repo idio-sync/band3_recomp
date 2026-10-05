@@ -470,6 +470,38 @@ TEST_CASE("each frame handed to the window is timed from its Present, painted or
     CHECK(r.Log().publish_latency_ms.empty());
 }
 
+TEST_CASE("the game's Presents keep their newest times and count them all") {
+    PresentTimes t(4);
+    CHECK(t.Add(100 * kMs) == 0);  // the first: nothing before it
+    CHECK(t.Add(117 * kMs) == 17 * kMs);
+    CHECK(t.Since(0) == std::vector<int64_t>{100 * kMs, 117 * kMs});
+    for (int64_t ms : {133, 150, 167, 183}) t.Add(ms * kMs);
+    // six Presents, the newest four kept, oldest first
+    CHECK(t.Total() == 6);
+    CHECK(t.Since(0) == std::vector<int64_t>{133 * kMs, 150 * kMs, 167 * kMs, 183 * kMs});
+    CHECK(t.Since(150 * kMs) == std::vector<int64_t>{150 * kMs, 167 * kMs, 183 * kMs});
+    CHECK(t.Since(200 * kMs).empty());
+    // the interval to one already overwritten in the ring is still measured
+    CHECK(t.Add(200 * kMs) == 17 * kMs);
+}
+
+TEST_CASE("a stretch longer than the ring counts all its frames, timing the last") {
+    // present_stats' arithmetic: frames from Total where the stretch began,
+    // intervals from the kept times; at 60 Hz for 10 s with 64 kept, the fps
+    // is the stretch's, not the kept count over its seconds
+    constexpr int64_t kFrame = 16666667;
+    PresentTimes t(64);
+    const uint64_t began = t.Total();
+    for (int i = 0; i < 600; i++) t.Add((i + 1) * kFrame);
+    const uint64_t frames = t.Total() - began;
+    CHECK(frames == 600);
+    CHECK(double(frames) / 10.0 == doctest::Approx(60.0));
+    const std::vector<int64_t> kept = t.Since(0);
+    REQUIRE(kept.size() == 64);
+    CHECK(kept.front() == 537 * kFrame);
+    CHECK(kept.back() == 600 * kFrame);
+}
+
 TEST_CASE("a published frame asks for a paint only while the window can be seen") {
     CHECK(PaintWanted(false, true, 1280, 720));
     CHECK(PaintWanted(false, true, 1, 1));

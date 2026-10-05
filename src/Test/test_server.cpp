@@ -493,6 +493,9 @@ public:
         PresentStats out;
         const auto now = Clock::now();
         render::PresentPaintStats paints = render::GetPresentPaintStats(reset);
+        // just after a reset starts the paints' stretch over, so the next
+        // stretch's frames are counted from when it began
+        const uint64_t presented = render::GamePresentCount();
         out.renderer = render::NativePresenting() ? "native" : "emulated";
         out.path = paints.path;
         out.seconds = std::chrono::duration<double>(now - paints.since).count();
@@ -504,14 +507,17 @@ public:
         out.skipped = paints.log.skipped;
         out.latency_ms = std::move(paints.log.latency_ms);
         out.publish_latency_ms = std::move(paints.log.publish_latency_ms);
+        // the intervals are the stretch's last few thousand only (the ones
+        // GamePresentTimes keeps); its frames are all of them, counted
         const auto presents = render::GamePresentTimes(paints.since);
-        out.game_frames = presents.size();
         for (size_t i = 1; i < presents.size(); i++)
             out.game_ms.push_back(
                 std::chrono::duration<double, std::milli>(presents[i] - presents[i - 1]).count());
         // the cap's since present_stats last started over (or since startup)
         const pacing::FrameCapStats cap = pacing::GetFrameCapStats();
         std::lock_guard lock(measure_mutex_);
+        out.game_frames = presented - present_frames_;
+        if (reset) present_frames_ = presented;
         const pacing::FrameCapStats& from = present_cap_;
         const uint64_t frames = cap.frames - from.frames;
         out.cap.mode = pacing::FrameCapModeName(cap.mode);
@@ -842,8 +848,10 @@ private:
     double measure_cp_ms_ = -1;  // CpThreadMs
     // the sync-only GPU's, with emulated_gpu off
     render::sync_gpu::SyncGpuStats measure_sync_;
-    // the frame cap's totals when present_stats last started over
+    // the frame cap's totals and the game's Presents so far when
+    // present_stats last started over
     pacing::FrameCapStats present_cap_;
+    uint64_t present_frames_ = 0;
 };
 
 bool SendAll(socket_t s, const std::string& data) {

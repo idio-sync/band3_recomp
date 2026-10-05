@@ -12,8 +12,10 @@ the process's times, without the harness:
 
 each sample a JSON line (to --out, else stdout), then a summary line: each
 one's mean and peak, and every thread's CPU time over the run (kernel and
-user, in ms, from its times at the start and the end; a thread that started
-or ended meanwhile counts from or to that), by thread id, with its name
+user, in ms, from its times at the start and at the last sample: the threads
+are read with every sample, so a game that exits mid-run leaves its threads'
+times as of its last sample, `threads_at`; a thread that started or ended
+meanwhile counts from or to that), by thread id, with its name
 where it has one (SetThreadDescription) and, with --log, the first line the
 band3 log has from it: band3's log tags each line [t<id>] with the thread's
 id, so the game thread, the native renderer's worker and the sync-only
@@ -79,9 +81,34 @@ def instance_matches(name, pid, engine=None):
     return engine is None or name.endswith(f"engtype_{engine}")
 
 
-def summarize(samples, threads_start, threads_end, names=None, log_lines=None):
+class ThreadTimes:
+    """Each thread's (CPU ms, name) as a snapshot last saw it. A snapshot is
+    taken with every sample, so a thread that ends keeps the times it last
+    had, and a process that exits mid-run leaves its threads' times as of
+    the last sample rather than none at all (an empty snapshot, the process
+    gone, changes nothing)."""
+
+    def __init__(self):
+        self.last = {}      # tid -> (ms, name), the newest seen of each
+        self.alive = set()  # the threads in the newest snapshot
+        self.at = None      # when that was, in the run's seconds
+
+    def update(self, snapshot, t):
+        if not snapshot:
+            return
+        self.last.update(snapshot)
+        self.alive = set(snapshot)
+        self.at = t
+
+    def ended(self):
+        """Threads seen during the run that the newest snapshot no longer has."""
+        return set(self.last) - self.alive
+
+
+def summarize(samples, threads_start, threads_end, names=None, log_lines=None, ended=None):
     """The summary: each measure's mean and peak over the samples, and each
-    thread's CPU ms over the run, most first."""
+    thread's CPU ms over the run, most first. A thread is marked ended if it
+    is in `ended`, or with no `ended` given, if threads_end lacks it."""
     out = {"samples": len(samples)}
     for key in ("cpu_pct", "cpu_cores", "gpu3d_pct", "vram_mb"):
         values = [s[key] for s in samples if s.get(key) is not None]
@@ -93,7 +120,7 @@ def summarize(samples, threads_start, threads_end, names=None, log_lines=None):
         entry = {"tid": tid, "cpu_ms": round(ms, 1)}
         if tid not in threads_start:
             entry["started"] = True
-        if tid not in threads_end:
+        if (tid in ended) if ended is not None else (tid not in threads_end):
             entry["ended"] = True
         if names and names.get(tid):
             entry["name"] = names[tid]
@@ -311,6 +338,8 @@ def main():
     try:
         start_threads = sampler.threads()
         started = time.perf_counter()
+        seen = ThreadTimes()
+        seen.update(start_threads, 0.0)
         next_at = started + a.interval
         while True:
             time.sleep(max(0.0, next_at - time.perf_counter()))
@@ -320,6 +349,7 @@ def main():
                 break
             s = sampler.sample()
             s["t"] = round(time.perf_counter() - started, 3)
+            seen.update(sampler.threads(), s["t"])
             samples.append(s)
             out.write(json.dumps(s) + "\n")
             out.flush()
@@ -333,15 +363,16 @@ def main():
                 break
             if s["t"] >= a.seconds:
                 break
-        end_threads = {} if ended else sampler.threads()
     finally:
         sampler.close()
-    names = {tid: v[1] for d in (start_threads, end_threads) for tid, v in d.items() if v[1]}
+    names = {tid: v[1] for d in (start_threads, seen.last) for tid, v in d.items() if v[1]}
     summary = summarize(samples, {t: v[0] for t, v in start_threads.items()},
-                        {t: v[0] for t, v in end_threads.items()}, names,
-                        read_log_tags(a.log) if a.log else None)
+                        {t: v[0] for t, v in seen.last.items()}, names,
+                        read_log_tags(a.log) if a.log else None, ended=seen.ended())
+    # threads_at: the per-thread CPU covers the run up to then (the last
+    # snapshot; earlier than `seconds` only if the process ended)
     summary.update(pid=a.pid, seconds=round(samples[-1]["t"], 3) if samples else 0,
-                   aborted=aborted, process_ended=ended)
+                   threads_at=seen.at, aborted=aborted, process_ended=ended)
     out.write(json.dumps({"summary": summary}) + "\n")
     if out is not sys.stdout:
         out.close()

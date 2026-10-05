@@ -864,9 +864,11 @@ uint64_t WaitForCapture(uint64_t epoch, std::chrono::nanoseconds timeout);
 void WakeCaptureWaiters();
 
 // The game's frames: when each of the newest few thousand DxRnd::Presents
-// ended (captured or not), from `since` on, oldest first
+// ended (captured or not), from `since` on, oldest first; and how many there
+// have been since startup, kept or not (present_model.h's PresentTimes)
 std::vector<std::chrono::steady_clock::time_point> GamePresentTimes(
     std::chrono::steady_clock::time_point since);
+uint64_t GamePresentCount();
 
 // native_view_rt_fallback: whether render targets' textures carry the pixels
 // guest memory holds too ("guest", the default) or only their identity

@@ -247,7 +247,9 @@ struct PresentStats {
     // from the game's Present of each new frame the native renderer drew to
     // its handing it to the window, painted or not (present_model.h's PaintLog)
     std::vector<double> publish_latency_ms;
-    // the game's frames: between the ends of its Presents
+    // the game's frames in that time, and between the ends of its Presents
+    // (the last 8192 frames' only: a stretch longer than about two minutes
+    // at 60 Hz has more frames than intervals)
     uint64_t game_frames = 0;
     std::vector<double> game_ms;
     // the frame cap now (frame_cap): "off", "display", "auto" or "fixed", and

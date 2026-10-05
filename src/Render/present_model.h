@@ -405,4 +405,40 @@ class PaintRecorder {
     uint64_t last_serial_ = 0;
 };
 
+// The game's frames for present_stats: when each of the newest `kept`
+// DxRnd::Presents ended (steady-clock nanoseconds), a ring, and how many
+// there have been in all. The ring holds about two minutes at 60 frames a
+// second, so a longer stretch's frame times are its last `kept` only; its
+// frames are counted from Total, which the harness notes where the stretch
+// starts. Not thread-safe: scene_capture.cpp holds a mutex around every call.
+class PresentTimes {
+ public:
+    static constexpr size_t kKept = 8192;
+
+    explicit PresentTimes(size_t kept = kKept) : times_(kept ? kept : 1) {}
+
+    // a Present ended at `now_ns`: the time since the one before, 0 for the first
+    int64_t Add(int64_t now_ns) {
+        const int64_t since = total_ ? now_ns - times_[(total_ - 1) % times_.size()] : 0;
+        times_[total_++ % times_.size()] = now_ns;
+        return since;
+    }
+    // every Present so far, kept or not
+    uint64_t Total() const { return total_; }
+    // the kept ones that ended at or after `since_ns`, oldest first
+    std::vector<int64_t> Since(int64_t since_ns) const {
+        std::vector<int64_t> out;
+        const uint64_t kept = std::min<uint64_t>(total_, times_.size());
+        for (uint64_t i = total_ - kept; i < total_; i++) {
+            const int64_t t = times_[i % times_.size()];
+            if (t >= since_ns) out.push_back(t);
+        }
+        return out;
+    }
+
+ private:
+    std::vector<int64_t> times_;
+    uint64_t total_ = 0;
+};
+
 }  // namespace band3::render

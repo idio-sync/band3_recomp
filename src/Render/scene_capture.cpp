@@ -31,6 +31,7 @@
 #include "src/Render/frame_compose.h"
 #include "src/Render/gpu_skip.h"
 #include "src/Render/guest_formats.h"
+#include "src/Render/present_model.h"
 #include "src/Render/sync_gpu/emulated_gpu_mode.h"
 #include "src/Render/sync_gpu/sync_graphics_system.h"
 #include "src/settings.h"
@@ -739,12 +740,10 @@ std::condition_variable g_latest_cv;
 // any time this session: texture passes are recorded if either is
 // (g_record_targets)
 std::atomic<bool> g_record_targets_set{false}, g_renderer_was_native{false};
-// The game's frames: the newest kPresentTimes ends of DxRnd::Present, a ring,
-// for the harness's present_stats (about two minutes at 60 frames a second)
-constexpr size_t kPresentTimes = 8192;
+// The game's frames: when the newest few thousand DxRnd::Presents ended, and
+// how many there have been, for the harness's present_stats
 std::mutex g_present_times_mutex;
-std::chrono::steady_clock::time_point g_present_times[kPresentTimes];
-uint64_t g_present_count = 0;
+PresentTimes g_present_times;
 
 uint64_t Key(std::initializer_list<uint32_t> parts) {
     uint64_t h = 1469598103934665603ull;
@@ -2810,14 +2809,21 @@ void WakeCaptureWaiters() {
 
 std::vector<std::chrono::steady_clock::time_point> GamePresentTimes(
     std::chrono::steady_clock::time_point since) {
-    std::vector<std::chrono::steady_clock::time_point> out;
-    std::lock_guard lock(g_present_times_mutex);
-    const uint64_t kept = std::min<uint64_t>(g_present_count, kPresentTimes);
-    for (uint64_t i = g_present_count - kept; i < g_present_count; i++) {
-        const auto t = g_present_times[i % kPresentTimes];
-        if (t >= since) out.push_back(t);
+    using Clock = std::chrono::steady_clock;
+    std::vector<int64_t> ns;
+    {
+        std::lock_guard lock(g_present_times_mutex);
+        ns = g_present_times.Since(int64_t(Nanos(since.time_since_epoch())));
     }
+    std::vector<Clock::time_point> out;
+    out.reserve(ns.size());
+    for (int64_t t : ns) out.push_back(Clock::time_point(std::chrono::nanoseconds(t)));
     return out;
+}
+
+uint64_t GamePresentCount() {
+    std::lock_guard lock(g_present_times_mutex);
+    return g_present_times.Total();
 }
 
 PassRecordingStats GetPassRecordingStats() {
@@ -3320,9 +3326,8 @@ extern "C" REX_FUNC(DxRnd__Present) {
     {
         const auto now = std::chrono::steady_clock::now();
         std::lock_guard lock(g_present_times_mutex);
-        if (g_present_count)
-            game_ns = Nanos(now - g_present_times[(g_present_count - 1) % kPresentTimes]);
-        g_present_times[g_present_count++ % kPresentTimes] = now;
+        const int64_t since = g_present_times.Add(int64_t(Nanos(now.time_since_epoch())));
+        game_ns = uint64_t(std::max<int64_t>(0, since));
     }
     std::shared_ptr<const FrameCapture> done;
     {

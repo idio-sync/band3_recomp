@@ -53,6 +53,28 @@ class SummaryTest(unittest.TestCase):
             {"tid": 3, "cpu_ms": 0.0, "ended": True},
         ])
 
+    def test_a_process_that_exits_keeps_its_last_snapshot(self):
+        # the game's threads at the start, after two samples, then gone (the
+        # process exited: the snapshot comes back empty)
+        seen = perf_sample.ThreadTimes()
+        start = {1: (100.0, "game"), 2: (50.0, None), 3: (5.0, None)}
+        seen.update(start, 0.0)
+        seen.update({1: (200.0, "game"), 2: (55.0, None), 3: (6.0, None)}, 1.0)
+        # thread 3 ended between the samples, thread 4 started
+        seen.update({1: (300.0, "game"), 2: (60.0, None), 4: (7.0, None)}, 2.0)
+        seen.update({}, 3.0)
+        self.assertEqual(seen.at, 2.0)
+        self.assertEqual(seen.ended(), {3})
+        s = perf_sample.summarize([], {t: v[0] for t, v in start.items()},
+                                  {t: v[0] for t, v in seen.last.items()}, {1: "game"},
+                                  ended=seen.ended())
+        self.assertEqual(s["threads"], [
+            {"tid": 1, "cpu_ms": 200.0, "name": "game"},
+            {"tid": 2, "cpu_ms": 10.0},
+            {"tid": 4, "cpu_ms": 7.0, "started": True},
+            {"tid": 3, "cpu_ms": 1.0, "ended": True},
+        ])
+
     def test_no_samples(self):
         s = perf_sample.summarize([], {}, {})
         self.assertEqual((s["samples"], s["cpu_pct"], s["threads"]), (0, None, []))
