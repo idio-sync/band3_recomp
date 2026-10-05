@@ -13,6 +13,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 get_filename_component(BAND3_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
+# The launcher's config writer needs toml++, but these tests don't need the
+# ReXGlue SDK. Fetch the same header-only version shipped with the SDK.
+include(FetchContent)
+FetchContent_Declare(tomlplusplus
+    URL https://codeload.github.com/marzer/tomlplusplus/tar.gz/refs/tags/v3.4.0
+    URL_HASH SHA256=8517f65938a4faae9ccf8ebb36631a38c1cadfb5efa85d9a72e15b9e97d25155
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SYSTEM
+)
+FetchContent_MakeAvailable(tomlplusplus)
+
 add_executable(band3_tests
     main.cpp
     instruments_test.cpp
@@ -105,9 +116,7 @@ target_include_directories(band3_tests PRIVATE
     ${BAND3_ROOT}
     ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty
 )
-# toml++ (header-only), for the launcher's band3.toml writer; only toml++ is
-# used from the SDK's headers
-target_include_directories(band3_tests SYSTEM PRIVATE ${BAND3_ROOT}/.rexglue-sdk/include)
+target_link_libraries(band3_tests PRIVATE tomlplusplus::tomlplusplus)
 
 # src/Content/package_scan.cpp scans folders on threads of its own
 find_package(Threads REQUIRED)
@@ -129,7 +138,7 @@ add_executable(band3_write_config
     ${BAND3_ROOT}/src/Launcher/config_file.cpp
 )
 target_include_directories(band3_write_config PRIVATE ${BAND3_ROOT})
-target_include_directories(band3_write_config SYSTEM PRIVATE ${BAND3_ROOT}/.rexglue-sdk/include)
+target_link_libraries(band3_write_config PRIVATE tomlplusplus::tomlplusplus)
 if(MSVC)
     target_compile_options(band3_write_config PRIVATE /W4)
 else()

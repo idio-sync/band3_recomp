@@ -52,6 +52,10 @@ These run on every push (`.github/workflows/ci.yml`) and don't need the game.
 
 Unit tests (no SDK needed):
 
+The first configure downloads toml++ 3.4.0, the header-only dependency used by
+the launcher's config writer. It requires internet access and checks the archive's
+SHA-256 hash; subsequent builds reuse the download in the build directory.
+
 ```
 cmake -S tests -B out/tests
 cmake --build out/tests
