@@ -90,6 +90,21 @@ class RunScriptTest(unittest.TestCase):
         self.assertTrue(result.passed)
         self.assertEqual(reported, [(2, "native_view stats", {"rendered": 3})])
 
+    def test_capture_replies_are_reported(self):
+        class CaptureConnection(FakeConnection):
+            def command(self, line):
+                reply = super().command(line)
+                if line.startswith("capture"):
+                    reply.update(capture="screenshots/x.cap", rt_missing=0)
+                return reply
+
+        reported = []
+        band3ctl.run_script(
+            CaptureConnection(), [(1, "capture x"), (2, "screenshot x-again")], "render",
+            lambda number, command, reply: reported.append((number, command, reply)))
+        self.assertEqual(reported, [(1, "capture x", {"ok": True, "capture": "screenshots/x.cap",
+                                                      "rt_missing": 0})])
+
     def test_failure_screenshot_names_are_plain(self):
         conn = FakeConnection(failing={"state"})
         band3ctl.run_script(conn, [(2, "state")], "my script.v2")

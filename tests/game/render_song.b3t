@@ -18,6 +18,11 @@
 # for the same band every run (the poses and camera angles still vary a
 # little). With 21, Futurama's Fry, a cel-shaded Deluxe character, plays
 # guitar: he is in render-song-25s.
+# Each capture is followed by `screenshot <name>-again`, the window's picture
+# a command later (the emulated GPU's under these launches, the native
+# renderer's with --emulated_gpu=off): what moved by itself meanwhile, which
+# tools/pairs.py --cross leaves out when it sets a run without the emulated
+# GPU against this one (docs/native-renderer.md, Render checks).
 
 # the welcome hint, whose first choice customizes the
 # band; back out of that to the main menu
@@ -54,9 +59,13 @@ press green
 wait in_game timeout=60s
 expect song=20thcenturyboy
 capture render-song-start
+screenshot render-song-start-again
 wait frames=600 timeout=60s
 capture render-song-10s
+screenshot render-song-10s-again
 wait frames=900 timeout=60s
 capture render-song-25s
+screenshot render-song-25s-again
 wait frames=900 timeout=60s
 capture render-song-40s
+screenshot render-song-40s-again

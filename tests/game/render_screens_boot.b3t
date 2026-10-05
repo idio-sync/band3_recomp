@@ -13,6 +13,12 @@
 # frames composed with the world frame before them where RB3 draws by turns.
 # Captures are under screenshots/ next to the exe: <name>.png the game's,
 # <name>.cap the native view's capture, <name>.gpu.png its GPU drawing.
+# After each capture `screenshot <name>-again` is the window's picture a
+# command later (the emulated GPU's under the launch above, the native
+# renderer's with --emulated_gpu=off): what moved by itself meanwhile, which
+# tools/pairs.py --cross leaves out when it sets a run without the emulated
+# GPU against this one (docs/native-renderer.md, Render checks). The render
+# scripts below all take one.
 
 # The boot logos: a Bink movie RB3's splash thread draws into a texture
 # (TexMovie) and shows on a mesh, while the main thread loads. The frame count
@@ -20,17 +26,21 @@
 # by the clock, for a logo to be up.
 sleep 2s
 capture screen-boot-logos
+screenshot screen-boot-logos-again
 # the intro movie, a movie screen of its own
 wait screen=intro_movie_screen timeout=180s
 sleep 4s
 capture screen-intro-movie
+screenshot screen-intro-movie-again
 # the title (press start), over the city
 wait screen=splash_screen timeout=120s
 sleep 2s
 capture screen-title
+screenshot screen-title-again
 press start until screen=first_time_calibration timeout=30s
 sleep 1s
 capture screen-calibration-prompt
+screenshot screen-calibration-prompt-again
 # Continue, not Calibrate System
 press down
 press green
@@ -38,7 +48,9 @@ press green
 wait screen=dx_welcome_screen timeout=30s
 sleep 1s
 capture screen-dx-welcome
+screenshot screen-dx-welcome-again
 # Let's Rock!
 press green until screen=hint_rb3_welcome_screen timeout=30s
 sleep 1s
 capture screen-rb3-welcome
+screenshot screen-rb3-welcome-again

@@ -4,16 +4,20 @@
 # and character screens, the main menu, and practice mode from its song and
 # section choice through a practice frame and its pause menu. It leaves the
 # game on the main menu, with the music library's cursor on 20th Century Boy
-# for render_screens_song.b3t. Launch as render_screens_boot.b3t says.
+# for render_screens_song.b3t. Launch as render_screens_boot.b3t says. Each
+# capture is followed by `screenshot <name>-again`, the window's picture a
+# command later: render_screens_boot.b3t says why.
 
 # the welcome hint's first choice customizes the band
 sleep 1s
 press green until screen=manage_band_screen timeout=30s
 sleep 1500ms
 capture screen-manage-band
+screenshot screen-manage-band-again
 press red until screen=main_hub_screen timeout=30s
 sleep 2s
 capture screen-main-hub
+screenshot screen-main-hub-again
 
 # Customize, then Customize Character: a vignette (tv11_a_screen) while the
 # closet loads, then the closet with the band's first character
@@ -30,9 +34,11 @@ sleep 500ms
 press green until screen=tv11_a_screen timeout=30s
 sleep 1s
 capture screen-vignette
+screenshot screen-vignette-again
 wait screen=customize_clothing_screen timeout=60s
 sleep 2s
 capture screen-closet
+screenshot screen-closet-again
 press red until screen=main_hub_screen timeout=30s
 sleep 1s
 
@@ -58,6 +64,7 @@ sleep 500ms
 press green until screen=practice_sel_section_screen timeout=30s
 sleep 1s
 capture screen-practice-section
+screenshot screen-practice-section-again
 # Full Song
 press green until screen=practice_sel_speed_screen timeout=30s
 sleep 1s
@@ -66,10 +73,12 @@ press green until screen=practice_game_screen timeout=60s
 expect song=20thcenturyboy
 wait frames=300
 capture screen-practice
+screenshot screen-practice-again
 # its pause menu, an overlay on the same screen
 press start
 sleep 500ms
 capture screen-practice-pause
+screenshot screen-practice-pause-again
 # Back to Music Library, the last of six
 press down
 press down

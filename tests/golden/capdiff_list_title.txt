@@ -1,0 +1,149 @@
+frame 8, 493 draws (374 of them meshes to the back buffer), 4 cameras
+passes: 36 (25 into textures, 2 of them carried from earlier frames); game frame 886; render targets sampled 21, missing 1, their pass's draws all left out 0; snapshots 1; empty passes left out 0, unbalanced 0
+draws left out: skipped_shadow 0 (shadow draw modes outside their passes), skipped_velocity 0, skipped_draw_mode 0, skipped_no_geom 4, skipped_target 0
+material passes: after a mesh's first 12, without a material 1 (1 of them kept, with the default material; the rest in skipped_no_geom too); DrawFaces outside a DrawShowing 6
+  no pass for 2636C910 version 61 (rendered-noz), sampled by 2 draws
+post-processing: from draw 463, proc_cmds 2
+composed: the world (draws before 463) is game frame 885's, the rest game frame 886's
+post: boundary 463, proc_cmds 2, proc 226FF9F0; xfm enabled, mod 0.9961, rows [1.1954 -0.0996 -0.0996 | -0.0000] [-0.0996 1.1954 -0.0996 | -0.0000] [-0.0996 -0.0996 1.1954 | -0.0000] (hue 0.0 sat 20.0 light 0.0 contrast 0.0 bright 0.0); bloom colour 0.973 0.961 0.961 0.000 threshold 0.100 intensity 1.500; DOF off focal 1664.43 blurDepth 0.5000 min 0.0000 max 0.4000 (z scale 0.990076 bias 0.979250, width scale 1.000); cam 224E6C38 near 20.000 far 20000.0 zrange 0.100..1.000; emulate_fps 30.0
+check: flags DOF 0 bloom 1 glare 0 xfm 1 (ColorXfmEnabled 1); matrix*mod vs c92..c94 off by 0.000000; c24 recomputed 92.376396 -91.459610 0.0000 0.4000 vs captured 0.000000 0.000000 0.0000 0.0000, off by 92.376396; c6 bloom colour*intensity 1.4588 1.4412 1.4412 vs captured 1.4588 1.4412 1.4412, off by 0.000000; matrix rebuilt from hue..levels off by 0.000000
+  c92..c94 captured [1.1954 -0.0996 -0.0996 | -0.0000] [-0.0996 1.1954 -0.0996 | -0.0000] [-0.0996 -0.0996 1.1954 | -0.0000]
+  flags 0x26..0x3F: 00 01 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00; c15 0.025000 0.045455 -0.025000 -0.045455
+  spotlights: +0x25 01 c127 0.0100 0.0099 0.0000 0.0000 c91 32.0000 20000.0000 0.0000 0.0000
+  soft particles: +0x3F 00, surfaces 2387CB70 2387CC20
+  noise: +0x2D 00 +0x2E 00 (proc: intensity 0.0000 map 226EB100 midtone 1 stationary 0, so off); c112 0.0000 0.0000 0.0000 0.0000; c113 0.0000 0.0000 0.0000 0.0000 vs proc 8.0000 4.0000 1.3591 0.0000, off by 8.000000
+  velocity: +0x39 00 c122 0.0000 0.0000 0.0000 0.0000; buffer not read (a capture from before: no motion blur)
+  left out: motion blur +0x38 00; trails +0x2F 00 c125 1.0000 1.0000 0.0000 0.0000 (proc threshold 1.0000 duration 0.0000)
+  bloom blur taps (c31..c45 xy, weight c47..c61 x): (-0.02031 0.00000 0.01593) (-0.01719 0.00000 0.02708) (-0.01406 0.00000 0.04242) (-0.01094 0.00000 0.06125) (-0.00781 0.00000 0.08151) (-0.00469 0.00000 0.09997) (-0.00156 0.00000 0.11299) (0.00156 0.00000 0.11770) (0.00469 0.00000 0.11299) (0.00781 0.00000 0.09997) (0.01094 0.00000 0.08151) (0.01406 0.00000 0.06125) (0.01719 0.00000 0.04242) (0.02031 0.00000 0.02708) (0.02344 0.00000 0.01593)
+gamma: table; value: shown r/g/b 0:0/0/0 1:1/1/1 2:1/1/1 4:2/2/2 8:5/5/5 16:11/11/11 32:28/28/28 64:63/63/63 96:97/97/97 128:130/130/130 192:193/193/193 255:254/254/254; 645 of 768 values change
+  table (10-bit r/g/b by 8-bit value):
+     0:    0/   0/   0    3/   3/   3    6/   6/   6    8/   8/   8   10/  10/  10   13/  13/  13   15/  15/  15   17/  17/  17
+     8:   19/  19/  19   21/  21/  21   24/  24/  24   27/  27/  27   29/  29/  29   33/  33/  33   36/  36/  36   39/  39/  39
+    16:   43/  43/  43   46/  46/  46   49/  49/  49   53/  53/  53   57/  57/  57   61/  61/  61   65/  65/  65   70/  70/  70
+    24:   73/  73/  73   78/  78/  78   83/  83/  83   88/  88/  88   93/  93/  93   97/  97/  97  102/ 102/ 102  107/ 107/ 107
+    32:  111/ 111/ 111  116/ 116/ 116  121/ 121/ 121  125/ 125/ 125  130/ 130/ 130  134/ 134/ 134  139/ 139/ 139  143/ 143/ 143
+    40:  148/ 148/ 148  152/ 152/ 152  157/ 157/ 157  161/ 161/ 161  166/ 166/ 166  170/ 170/ 170  175/ 175/ 175  179/ 179/ 179
+    48:  183/ 183/ 183  188/ 188/ 188  192/ 192/ 192  196/ 196/ 196  201/ 201/ 201  206/ 206/ 206  210/ 210/ 210  215/ 215/ 215
+    56:  219/ 219/ 219  223/ 223/ 223  227/ 227/ 227  232/ 232/ 232  236/ 236/ 236  240/ 240/ 240  245/ 245/ 245  249/ 249/ 249
+    64:  254/ 254/ 254  258/ 258/ 258  262/ 262/ 262  266/ 266/ 266  270/ 270/ 270  275/ 275/ 275  280/ 280/ 280  284/ 284/ 284
+    72:  288/ 288/ 288  292/ 292/ 292  296/ 296/ 296  301/ 301/ 301  305/ 305/ 305  309/ 309/ 309  313/ 313/ 313  317/ 317/ 317
+    80:  321/ 321/ 321  327/ 327/ 327  331/ 331/ 331  335/ 335/ 335  339/ 339/ 339  343/ 343/ 343  348/ 348/ 348  352/ 352/ 352
+    88:  356/ 356/ 356  360/ 360/ 360  364/ 364/ 364  369/ 369/ 369  373/ 373/ 373  377/ 377/ 377  380/ 380/ 380  385/ 385/ 385
+    96:  389/ 389/ 389  393/ 393/ 393  397/ 397/ 397  401/ 401/ 401  406/ 406/ 406  410/ 410/ 410  414/ 414/ 414  418/ 418/ 418
+   104:  423/ 423/ 423  427/ 427/ 427  430/ 430/ 430  434/ 434/ 434  439/ 439/ 439  443/ 443/ 443  447/ 447/ 447  451/ 451/ 451
+   112:  456/ 456/ 456  459/ 459/ 459  463/ 463/ 463  467/ 467/ 467  472/ 472/ 472  476/ 476/ 476  480/ 480/ 480  484/ 484/ 484
+   120:  488/ 488/ 488  492/ 492/ 492  496/ 496/ 496  501/ 501/ 501  504/ 504/ 504  508/ 508/ 508  513/ 513/ 513  517/ 517/ 517
+   128:  521/ 521/ 521  524/ 524/ 524  529/ 529/ 529  533/ 533/ 533  537/ 537/ 537  541/ 541/ 541  545/ 545/ 545  549/ 549/ 549
+   136:  554/ 554/ 554  557/ 557/ 557  561/ 561/ 561  565/ 565/ 565  570/ 570/ 570  573/ 573/ 573  577/ 577/ 577  582/ 582/ 582
+   144:  585/ 585/ 585  589/ 589/ 589  594/ 594/ 594  598/ 598/ 598  601/ 601/ 601  606/ 606/ 606  610/ 610/ 610  613/ 613/ 613
+   152:  618/ 618/ 618  622/ 622/ 622  625/ 625/ 625  629/ 629/ 629  634/ 634/ 634  637/ 637/ 637  641/ 641/ 641  646/ 646/ 646
+   160:  649/ 649/ 649  654/ 654/ 654  658/ 658/ 658  661/ 661/ 661  666/ 666/ 666  669/ 669/ 669  673/ 673/ 673  678/ 678/ 678
+   168:  681/ 681/ 681  685/ 685/ 685  690/ 690/ 690  693/ 693/ 693  697/ 697/ 697  701/ 701/ 701  705/ 705/ 705  709/ 709/ 709
+   176:  713/ 713/ 713  717/ 717/ 717  720/ 720/ 720  725/ 725/ 725  729/ 729/ 729  732/ 732/ 732  737/ 737/ 737  740/ 740/ 740
+   184:  745/ 745/ 745  748/ 748/ 748  752/ 752/ 752  757/ 757/ 757  760/ 760/ 760  764/ 764/ 764  768/ 768/ 768  772/ 772/ 772
+   192:  775/ 775/ 775  780/ 780/ 780  783/ 783/ 783  788/ 788/ 788  792/ 792/ 792  795/ 795/ 795  800/ 800/ 800  803/ 803/ 803
+   200:  808/ 808/ 808  811/ 811/ 811  815/ 815/ 815  819/ 819/ 819  823/ 823/ 823  826/ 826/ 826  831/ 831/ 831  834/ 834/ 834
+   208:  839/ 839/ 839  842/ 842/ 842  846/ 846/ 846  850/ 850/ 850  854/ 854/ 854  857/ 857/ 857  862/ 862/ 862  865/ 865/ 865
+   216:  870/ 870/ 870  873/ 873/ 873  877/ 877/ 877  881/ 881/ 881  885/ 885/ 885  889/ 889/ 889  893/ 893/ 893  896/ 896/ 896
+   224:  901/ 901/ 901  904/ 904/ 904  909/ 909/ 909  912/ 912/ 912  915/ 915/ 915  920/ 920/ 920  923/ 923/ 923  928/ 928/ 928
+   232:  931/ 931/ 931  936/ 936/ 936  939/ 939/ 939  943/ 943/ 943  947/ 947/ 947  951/ 951/ 951  955/ 955/ 955  958/ 958/ 958
+   240:  962/ 962/ 962  966/ 966/ 966  970/ 970/ 970  974/ 974/ 974  978/ 978/ 978  981/ 981/ 981  985/ 985/ 985  989/ 989/ 989
+   248:  993/ 993/ 993  997/ 997/ 997 1001/1001/1001 1004/1004/1004 1008/1008/1008 1012/1012/1012 1016/1016/1016 1020/1020/1020
+clear: 0.000 0.000 0.000 1.000 (RGBA8 FF000000)
+cameras: 5; depth layered by z range, reference z = 1.001001 w + -20.020020, zrange 0.1000..1.0000: d = -0.000901 + 18.018017 / w
+  camera 224E6FA8 viewport 0,0 1280x720 of 1280x720, zrange 0.0000..1.0000, 0 mesh draws
+  camera 2449C3A0 viewport 0,0 1280x720 of 1280x720, zrange 0.1000..1.0000, 274 mesh draws from #4, depth (0.000000 w + 1.000000 + 0.000000 z) / w; z column -0.7678 0.5924 -0.2481 103.8405, w column -0.7670 0.5918 -0.2479 123.7367
+  camera 22703880 viewport 0,0 1280x720 of 1280x720, zrange 0.1000..1.0000, 95 mesh draws from #160, depth (0.000000 w + 1.000002 + 0.000000 z) / w; z column -0.7678 0.5924 0.2481 619.7792, w column -0.7670 0.5918 0.2479 639.1594
+  camera 263870A0 viewport 0,0 1280x720 of 1280x720, zrange 0.0000..1.0000, 2 mesh draws from #488, depth (-0.000006 w + 0.333330 + 0.000000 z) / w; z column 0.0000 1.0010 0.0000 762.7628, w column 0.0000 1.0000 0.0000 768.0000
+  camera 24F46288 viewport 0,0 1280x720 of 1280x720, zrange 0.0000..1.0000, 3 mesh draws from #490, depth (-0.000006 w + 0.055553 + 0.000000 z) / w; z column 0.0000 1.0010 0.0000 767.7678, w column 0.0000 1.0000 0.0000 768.0000
+pass   0 texture 20F75448 rendered-noz 512x256 mips 0, draws 0..1 (1 rects, 0 mip), clear 0F to 00000000 z 0, viewport 0,0 512x256, cam 224E6FA8, version 1, frame 825 (carried): norm_output.tex
+pass   1 texture 20F70D58 rendered-noz 512x256 mips 0, draws 1..2 (1 rects, 0 mip), clear 0F to 00000000 z 0, viewport 0,0 512x256, cam 224E6FA8, version 2, frame 825 (carried): norm_output.tex
+pass   2 texture 20F66FE8 rendered-noz 512x256 mips 0, draws 2..3 (1 rects, 0 mip), clear 0F to 00000000 z 0, viewport 0,0 512x256, cam 224E6FA8, version 32, frame 885: head_wrinkle_output.tex
+pass   3 texture 20F5D9E8 rendered-noz 512x256 mips 0, draws 3..4 (1 rects, 0 mip), clear 0F to 00000000 z 0, viewport 0,0 512x256, cam 224E6FA8, version 31, frame 885: head_wrinkle_output.tex
+pass   4 back buffer draws 4..28
+pass   5 texture 224EB788 shadow-map 512x512 mips 0, draws 28..38 (0 rects, 0 mip), clear 30 to 00000000 z 1, viewport 0,0 512x512, cam 2262A8F8, version 489, frame 885: - mode 1 x10 (cull 6,  x2; cull 6, SKINNED x8)
+pass   6 back buffer draws 38..48
+pass   7 texture 224EB788 shadow-map 512x512 mips 0, draws 48..57 (0 rects, 0 mip), clear 30 to 00000000 z 1, viewport 0,0 512x512, cam 2262A8F8, version 490, frame 885: - mode 1 x9 (cull 6,  x2; cull 6, SKINNED x7)
+pass   8 back buffer draws 57..72
+pass   9 texture 224EB788 shadow-map 512x512 mips 0, draws 72..82 (0 rects, 0 mip), clear 30 to 00000000 z 1, viewport 0,0 512x512, cam 2262A8F8, version 491, frame 885: - mode 1 x10 (cull 6,  x2; cull 6, SKINNED x8)
+pass  10 back buffer draws 82..92
+pass  11 texture 224EB788 shadow-map 512x512 mips 0, draws 92..102 (0 rects, 0 mip), clear 30 to 00000000 z 1, viewport 0,0 512x512, cam 2262A8F8, version 492, frame 885: - mode 1 x10 (cull 6,  x2; cull 6, SKINNED x8)
+pass  12 back buffer draws 102..112
+pass  13 texture 224EB788 shadow-map 512x512 mips 0, draws 112..121 (0 rects, 0 mip), clear 30 to 00000000 z 1, viewport 0,0 512x512, cam 2262A8F8, version 493, frame 885: - mode 1 x9 (cull 6,  x2; cull 6, SKINNED x7)
+pass  14 back buffer draws 121..130
+pass  15 texture 224EB788 shadow-map 512x512 mips 0, draws 130..141 (0 rects, 0 mip), clear 30 to 00000000 z 1, viewport 0,0 512x512, cam 2262A8F8, version 494, frame 885: - mode 1 x11 (cull 6,  x2; cull 6, SKINNED x9)
+pass  16 back buffer draws 141..154
+pass  17 texture 2636C910 rendered-noz 512x512 mips 0, draws 154..158 (0 rects, 0 mip), clear 0F to 00000000 z 0, viewport 0,0 512x512, cam 2636E1A8, version 62, frame 885: clouds_rnd.tex
+pass  18 back buffer draws 158..315 mode 7 x95 (cull 0, DIFFUSE_MAP PRELIT x4; cull 6, DIFFUSE_MAP GLOW_MAP REAL_LIGHTS APPROX_LIGHTS PSEUDO_HDR AO NUM_POINT=1 x23; cull 6, DIFFUSE_MAP REAL_LIGHTS APPROX_LIGHTS AO NUM_POINT=1 x9; cull 6, DIFFUSE_MAP REAL_LIGHTS APPROX_LIGHTS NUM_POINT=1 x2; cull 6, DIFFUSE_MAP REAL_LIGHTS APPROX_LIGHTS PSEUDO_HDR AO NUM_POINT=1 x27; cull 6, GLOW_MAP PSEUDO_HDR AO x2; cull 6, PER_PIXEL SPECULAR_MAP SPECULAR DIFFUSE_MAP REAL_LIGHTS APPROX_LIGHTS PSEUDO_HDR AO NUM_POINT=1 x2; cull 6, REAL_LIGHTS APPROX_LIGHTS NUM_POINT=1 REFRACT_WORLD x2; cull 6, REAL_LIGHTS APPROX_LIGHTS PSEUDO_HDR AO NUM_POINT=1 x24)
+pass  19 texture 224EB788 shadow-map 512x512 mips 0, draws 315..325 (0 rects, 0 mip), clear 30 to 00000000 z 1, viewport 0,0 512x512, cam 2262A8F8, version 495, frame 885: - mode 1 x10 (cull 6,  x2; cull 6, SKINNED x8)
+pass  20 back buffer draws 325..335
+pass  21 texture 224EB788 shadow-map 512x512 mips 0, draws 335..344 (0 rects, 0 mip), clear 30 to 00000000 z 1, viewport 0,0 512x512, cam 2262A8F8, version 496, frame 885: - mode 1 x9 (cull 6,  x2; cull 6, SKINNED x7)
+pass  22 back buffer draws 344..463
+pass  23 texture 241B5B88 depth-volume 640x360 mips 0, draws 463..475 (0 rects, 0 mip), clear 0F to FF000000 z 0, viewport 0,0 640x360, cam 226FD0F8, version 184, frame 886: -
+pass  24 texture 241B5B88 depth-volume 640x360 mips 0, draws 475..476 (1 rects, 0 mip), no clear, viewport 0,0 0x0, cam 00000000, version 185, frame 886: -
+pass  25 texture 241B5B88 depth-volume 640x360 mips 0, draws 476..477 (1 rects, 0 mip), no clear, viewport 0,0 0x0, cam 00000000, version 186, frame 886: -
+pass  26 texture 2262A5E8 rendered-noz 320x180 mips 0, draws 477..478 (1 rects, 0 mip), no clear, viewport 0,0 0x0, cam 00000000, version 184, frame 886: -
+pass  27 texture 2262A5E8 rendered-noz 320x180 mips 0, draws 478..479 (1 rects, 0 mip), no clear, viewport 0,0 0x0, cam 00000000, version 185, frame 886: -
+pass  28 texture 2262A5E8 rendered-noz 320x180 mips 0, draws 479..480 (1 rects, 0 mip), no clear, viewport 0,0 0x0, cam 00000000, version 186, frame 886: -
+pass  29 texture 2262A698 rendered-noz 80x45 mips 0, draws 480..481 (1 rects, 0 mip), no clear, viewport 0,0 0x0, cam 00000000, version 184, frame 886: -
+pass  30 texture 2262A698 rendered-noz 80x45 mips 0, draws 481..482 (1 rects, 0 mip), no clear, viewport 0,0 0x0, cam 00000000, version 185, frame 886: -
+pass  31 texture 2262A698 rendered-noz 80x45 mips 0, draws 482..483 (1 rects, 0 mip), no clear, viewport 0,0 0x0, cam 00000000, version 186, frame 886: -
+pass  32 texture 2262A7C8 rendered-noz 20x11 mips 0, draws 483..484 (1 rects, 0 mip), no clear, viewport 0,0 0x0, cam 00000000, version 184, frame 886: -
+pass  33 texture 2262A7C8 rendered-noz 20x11 mips 0, draws 484..485 (1 rects, 0 mip), no clear, viewport 0,0 0x0, cam 00000000, version 185, frame 886: -
+pass  34 texture 2262A7C8 rendered-noz 20x11 mips 0, draws 485..486 (1 rects, 0 mip), no clear, viewport 0,0 0x0, cam 00000000, version 186, frame 886: -
+pass  35 back buffer draws 486..493
+shadow: 8 shadow map passes, 78 draws; 65 SHADOW_BUFFER draws: s5 the shadow map 65 (of those, made by a pass here 65, by the shadow map pass just before it 65), s5 something else 0, none 0
+shadow: c40..c43 against the maker pass's view_proj x T over 65 draws: off by up to 0.000004 (1.95e-07 relative; u 0.000004 v 0.000000 z 0.000000 w 0.000000), the most at draw 142
+  cam 0x2449C3A0: 274 draws, 16182 sampled verts | as captured: 16150 front 14677 inside | transposed: 4010 front 4003 inside
+      [    0.7058    -0.4100    -0.7678    -0.7670]
+      [    0.9171     0.3034     0.5924     0.5918]
+      [    0.0056     1.9931    -0.2481    -0.2479]
+      [ -134.9658  -570.6800   103.8405   123.7367]
+  cam 0x22703880: 95 draws, 4950 sampled verts | as captured: 4950 front 3802 inside | transposed: 71 front 71 inside
+      [    0.7058    -0.4100    -0.7678    -0.7670]
+      [    0.9171     0.3034     0.5924     0.5918]
+      [   -0.0056    -1.9931     0.2481     0.2479]
+      [ -146.5323 -4714.7368   619.7792   639.1594]
+  cam 0x263870A0: 2 draws, 146 sampled verts | as captured: 146 front 146 inside | transposed: 60 front 60 inside
+      [    1.8107     0.0000     0.0000     0.0000]
+      [    0.0000     0.0000     1.0010     1.0000]
+      [    0.0000     3.2190     0.0000     0.0000]
+      [   -0.0905    -0.3219   762.7628   768.0000]
+  cam 0x24F46288: 3 draws, 130 sampled verts | as captured: 130 front 130 inside | transposed: 130 front 130 inside
+      [    1.8107     0.0000     0.0000     0.0000]
+      [    0.0000     0.0000     1.0010     1.0000]
+      [    0.0000     3.2189     0.0000     0.0000]
+      [    0.0000     0.0000   767.7678   768.0000]
+shades: 355 distinct for 493 of 493 draws; types 0:1 1:8 2:12 4:2 14:13 16:2 17:78 18:377
+  c0 not the material colour: VS 0 (0 premultiplied blend), PS 0
+  next_pass: 12 draws (2.4%)
+  use_environ 453, REAL_LIGHTS 356, APPROX_LIGHTS 354, box map nonzero 0
+  option word against the material: DIFFUSE_MAP differs 73, PRELIT differs 25; s0 bound = material's diffuse 284, other 0
+  eye (camera translation) against VS c16..c18.w: off by up to 0
+  NORMAL_MAP draws 37, their geometry with tangents 37; skin 22, NORM_DETAIL 26, VS c22 not (0,0,1) 0, the map a render target 0
+  normal    sampled by 44 draws, 44 decoded; bound = material's 37, other 0
+  specular  sampled by 50 draws, 50 decoded; bound = material's 50, other 0
+  glow      sampled by 65 draws, 65 decoded; bound = material's 65, other 0
+  projected sampled by 65 draws, 65 decoded; bound = material's 0, other 0
+  detail    sampled by 26 draws, 26 decoded; bound = material's 26, other 0
+  rim       sampled by 6 draws, 6 decoded; bound = material's 0, other 0
+    detail fmt 49 dim 1: 26 draws
+    glow fmt 18 dim 1: 64 draws
+    glow fmt 20 dim 1: 1 draws
+    normal fmt 49 dim 1: 44 draws
+    projected fmt 22 dim 1: 65 draws
+    rim fmt 6 dim 1: 6 draws
+    specular fmt 20 dim 1: 50 draws
+      into 20F75448 rect shader 6 [0.0 0.0 512.0 256.0] 
+#  0 mesh 224ED2A8 v    4 t    2 bones  0 blend 1 z 0 cull 0 cut 0/0 prelit 1 tex 512x256 fmt 49 | local [-1.0 -1.0 0.0]..[1.0 1.0 0.0] | ndc x -1.00..1.00 y -1.00..1.00 front 4 | col 1.00 1.00 1.00 1.00
+      opt 0000000000000010 type 18 shade 324 env 1 | c1 1.00 1.00 1.00 1.00 | box 0.00 | points 0/0 | mat 224ED2A8 next_pass 00000000
+      into 20F70D58 rect shader 6 [0.0 0.0 512.0 256.0] 
+#  1 mesh 224ED2A8 v    4 t    2 bones  0 blend 1 z 0 cull 0 cut 0/0 prelit 1 tex 512x256 fmt 49 | local [-1.0 -1.0 0.0]..[1.0 1.0 0.0] | ndc x -1.00..1.00 y -1.00..1.00 front 4 | col 1.00 1.00 1.00 1.00
+      opt 0000000000000010 type 18 shade 324 env 1 | c1 1.00 1.00 1.00 1.00 | box 0.00 | points 0/0 | mat 224ED2A8 next_pass 00000000
+      into 20F66FE8 rect shader 6 [0.0 0.0 512.0 256.0] 
+      samples render target 20F70D58 type 0x22 version 2 (guest pixels)
+#  2 mesh 224ED2A8 v    4 t    2 bones  0 blend 1 z 0 cull 0 cut 0/0 prelit 1 tex 512x256 fmt 6 | local [-1.0 -1.0 0.0]..[1.0 1.0 0.0] | ndc x -1.00..1.00 y -1.00..1.00 front 4 | col 1.00 1.00 1.00 1.00
+      opt 0000000000000010 type 18 shade 0 env 1 | c1 1.00 1.00 1.00 1.00 | box 0.00 | points 0/0 | mat 224ED2A8 next_pass 00000000
+      into 20F5D9E8 rect shader 6 [0.0 0.0 512.0 256.0] 
+      samples render target 20F75448 type 0x22 version 1 (guest pixels)
+out.png: 478 draws (12 texture passes, 0 sampled a render target nothing drew), 78202 tris, 4366404 pixels, 1444.2 ms

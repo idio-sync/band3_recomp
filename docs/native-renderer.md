@@ -112,6 +112,7 @@ been checked:
 | `native_query_sample_count` (Band3 → Debug) | with `emulated_gpu` off, the samples every occlusion query reports drawn (the lens flares' visibility tests): 1000 (the default), what the emulated GPU's `query_occlusion_fake_sample_count` gives; -1 leaves them unanswered |
 | `native_query_log` (Band3 → Debug) | off by default. On, logs (`query log: D3DQuery_GetData ...`) what the game's first 50 reads of an occlusion query got, then one a second at most: the query, what the read returned (`S_OK`, or `S_FALSE` while the GPU hasn't answered) and the sample count it gave the game, with either GPU, to check the sync-only GPU's answers against the emulated GPU's. With `emulated_gpu` off it also logs (`sync gpu: query log: EVENT_WRITE_ZPD ...`) the sample counts the first 20 query packets found before clearing them, and whether each began or ended a query. Turning it on again logs as many more |
 | `native_sync_short_wait_us` (Band3 → Debug) | with `emulated_gpu` off, how the sync-only GPU waits between polls of a wait whose interval is under 0x100: 0 (the default) yields and polls again at once, as the emulated GPU does (a spin, while the wait lasts); more sleeps that many microseconds instead, to compare. The log's summary says which waits stalled with which interval |
+| `native_vblank_free_running` (Band3 → Debug) | with `emulated_gpu` off, on raises the vertical blank every millisecond whatever the frame cap says, as the emulated GPU's `vsync` off does, so `--frame_cap=off --rnd_sync=0 --native_vblank_free_running=true` runs the game unpaced (the emulated GPU's `--frame_cap=off --rnd_sync=0 --vsync=false`), to measure. Off (the default), the vertical blank runs at `video_mode_refresh_rate` unless the frame cap paces the game (below). `set` changes it at once (`sync gpu: vblank ...` in the log). Nothing with `emulated_gpu` on |
 | `native_max_height` (Band3 → Graphics) | the most lines the native renderer draws: a taller window's picture is drawn this tall and scaled up to fill it, for 4K on a GPU that can't keep up at full size. 0 (the default) draws at the window's size |
 | `native_view_msaa` (Band3 → Graphics) | the samples a pixel the native renderer and the native view draw the overlay with (the track, the HUD, menus drawn after the world), averaged at its edges: 2 (the default) as RB3 does, 4 smoother than the game, 1 none. RB3 multisamples only those: the world, its post-processing and every texture pass are single-sampled, in the game and here. Where the GPU can't draw 2 samples it draws 4 (or 4 → 2, else 1; the log says so) |
 | `native_present_zero_copy` (Band3 → Debug) | on (the default) shows the GPU's frames where they are; off reads each back and uploads it, to compare |
@@ -185,7 +186,18 @@ presenter with its overlays (F3, F4 and the rest) as before.
   recovery to fall back on.
 - With the frame cap on (the default) the sync-only GPU's vertical blank runs every
   millisecond and the cap paces the game, as the emulated GPU's vsync off did; with it
-  off, the vertical blank paces the game at `video_mode_refresh_rate`.
+  off, the vertical blank paces the game at `video_mode_refresh_rate`, unless
+  `native_vblank_free_running` is on (with `rnd_sync` 0 too, nothing paces it).
+- `tools/perf_sample.py` measures what a run costs the machine from outside it, once a
+  second: the process's CPU, its GPU 3D engines' utilization and its dedicated video
+  memory (Windows' GPU counters, which see either GPU's work), and each thread's CPU
+  over the run, named by band3's log (`--log`: its lines' `[t<id>]` tags). `--guard`
+  stops a run whose GPU has been over 95% for 5 s, quitting the game on `--port`:
+
+  ```
+  python tools/perf_sample.py --pid <pid> --seconds 20 --out out/n7/perf/off.jsonl --log <band3 log>
+  python tools/perf_sample.py --pid <pid> --seconds 60 --guard --port 21095
+  ```
 
 ## Render checks
 
@@ -371,4 +383,57 @@ Each pair gets parity.py's columns and tier, and passes at a mean of 3 or less w
 4x4 cell over 20. `--take` takes the native picture again after F8 back, and the pair is
 graded by the closer of the two; `--still <mean>` leaves out what moved between them by
 itself, and `<set>/exclude.txt` rectangles by hand. `pairs_sheet.png` shows each pair
-and its difference.
+and its difference. `--crops` adds parity.py's HUD crops to each row and its tier.
+
+### Render checks without the emulated GPU
+
+With `emulated_gpu` off there's no emulated picture in the run to check against, so
+the render scripts run twice, on the same launch but for the GPU: R, the reference, on
+the emulated GPU, and N without it (the four-part script's launches add
+`--usb_mics=true --usb_mic_test_tone=220`):
+
+```
+python tools/band3ctl.py launch --fresh -- --renderer=emulated --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
+python tools/band3ctl.py run tests/game/render_screens_boot.b3t | tee out/n7/ab/menus/R/run.log
+...
+python tools/band3ctl.py launch --fresh -- --emulated_gpu=off --native_view_record_targets=true --test_random_seed=21 --async_shader_compilation=false
+python tools/band3ctl.py run tests/game/render_screens_boot.b3t | tee out/n7/ab/menus/N/run.log
+```
+
+then each run's `screenshots/` copied into its directory (`out/n7/ab/<set>/R` and
+`.../N`); `run` prints each capture's reply, which the run.log keeps. In R, as in every
+render check, `<name>.png` is the emulated GPU's picture and `<name>.gpu.png` the
+native renderer's drawing of the capture. In N, `<name>.png` is the native renderer's
+own picture at the window's size (1280x720 unless the window is resized) and
+`<name>.gpu.png` its drawing of the capture at 1280x720: the one to set against R's
+`<name>.png`. After each capture the scripts take `screenshot <name>-again`, the
+window's picture a command later: in R the emulated GPU's, showing what moved by itself
+in that moment. The two runs are two moments of the same game (the seed fixes the band
+and the shots, not every frame), so they're checked four ways:
+
+- `tools/capdiff.py N R` sets what each capture holds against R's, by
+  native_view_replay's `--list`: the texture passes (target kind, size, mips, name,
+  carried or not; not their addresses, which differ run to run), the draws (equal on a
+  still screen, within 10% on a moving one: one whose R `<name>.png` and
+  `<name>-again.png` differ by more than a mean of 2 in a 32x32 block, or that
+  `--moving` names), the render targets sampled, missing and filtered, the draws left
+  out, the `post:` and `check:` lines and the `gamma:` line (the ramp the sync-only GPU
+  read from the game, against the emulated GPU's), and from the run.logs the capture
+  replies' `rt_missing`, `rt_filtered`, `proc_cmds`, `composed`, world frame,
+  `skipped_pass` and `skipped_shadow`. Each name is `equal`, `equal*` (with notes:
+  differences that don't fail it, such as `post:` on a moving screen) or `different`
+  with what failed; it exits 1 if a pass list, gamma line or `rt_missing` differs, or a
+  draw count by more than allowed. Standard library only.
+- `tools/parity.py --set N`: N against itself, `gpu-cpu` at 0.5 or less and `cpu` (the
+  replay of N's capture against N's own picture) at a mean of 1 or less.
+- `tools/pairs.py --cross N R [names] [--crops] [--json <file>]`: N's `<name>.gpu.png`
+  against R's `<name>.png`, with the 32x32 blocks that moved between R's `<name>.png`
+  and `<name>-again.png` (a mean over `--still`, 2 by default here) and their
+  neighbours left out, and R's `exclude.txt` rectangles. `moved` is the share left out;
+  a screen with any is moving. `rel` is R's own `<name>.gpu.png` against its `<name>.png`
+  under the same mask, what the native renderer reaches within one run, and `delta` N's
+  mean less it. A still screen passes at Tier A, a moving one at Tier A or at Tier B with
+  a delta of 1 or less; it exits 1 if any doesn't, and `N/cross_sheet.png` shows N's
+  drawing, R's picture and their difference. `tools/parity.py --set N --reference R`
+  is the same without the mask, through the replay: each N capture against R's picture.
+- `tools/parity.py --set R`: R as every render check before, against its tables.

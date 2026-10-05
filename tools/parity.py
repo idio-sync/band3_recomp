@@ -29,6 +29,10 @@ not when the replay is rebuilt.
                                                   saves this run's numbers over it
   python tools/parity.py --replay-args=--no-gamma
                                                   every replay run with these options too
+  python tools/parity.py --set out/n7/ab/song/N --reference out/n7/ab/song/R
+                                                  each capture against another run's
+                                                  picture of it, <DIR>/<name>.png (the
+                                                  emulated GPU's, for a run without it)
 
 Numbers from different runs of the game aren't comparable (run to run the same
 moment differs by 5.5-9.3): a baseline compares re-renders of the same captures.
@@ -96,11 +100,14 @@ def run_replay(replay, args):
     }
 
 
-def jobs_for(cap, out_dir):
-    """The replay runs one capture needs, as (key, args)."""
+def jobs_for(cap, out_dir, reference=None):
+    """The replay runs one capture needs, as (key, args): against its own
+    screenshot, or with reference the one of that name there."""
     name = os.path.basename(cap)[:-4]
     base = cap[:-4]
     shot, gpu = base + ".png", base + ".gpu.png"
+    if reference:
+        shot = os.path.join(reference, name + ".png")
     out = lambda tag: os.path.join(out_dir, f"{name}.{tag}.png")
     if not os.path.exists(shot):
         return name, []
@@ -139,12 +146,12 @@ def grade(row):
     return "-", misses
 
 
-def measure(captures, replay, jobs, extra=()):
+def measure(captures, replay, jobs, extra=(), reference=None):
     results = {}
     with tempfile.TemporaryDirectory(prefix="parity") as out_dir:
         work = []
         for cap in captures:
-            name, cap_jobs = jobs_for(cap, out_dir)
+            name, cap_jobs = jobs_for(cap, out_dir, reference)
             results[name] = {}
             work += [(name, key, args + list(extra)) for key, args in cap_jobs]
         with ThreadPoolExecutor(max_workers=jobs) as pool:
@@ -231,6 +238,10 @@ def main():
                     help="more options for every replay run, space-separated (--no-gamma, "
                          "say: the CPU's rows without the display's gamma ramp; the gpu rows "
                          "are the .gpu.png as captured, so gpu-cpu then compares unlike)")
+    ap.add_argument("--reference", metavar="DIR",
+                    help="the game's picture of each capture from DIR/<name>.png instead of "
+                         "beside it: another run's (the emulated GPU's, against a run "
+                         "without it); a capture with none there gets no rows")
     ap.add_argument("captures", nargs="*", help="only these capture names (default: all)")
     a = ap.parse_args()
 
@@ -242,7 +253,7 @@ def main():
     if not captures:
         sys.exit(f"no captures in {a.set}")
 
-    results = measure(captures, a.replay, a.jobs, a.replay_args.split())
+    results = measure(captures, a.replay, a.jobs, a.replay_args.split(), a.reference)
     baseline = None
     if a.baseline and os.path.exists(a.baseline) and not a.write_baseline:
         with open(a.baseline) as f:

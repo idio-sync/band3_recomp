@@ -13,7 +13,9 @@
 #   python tools/band3ctl.py run tests/game/render_screens_more.b3t
 # Even/odd rendering stays on, as the game ships, as in
 # render_screens_menus.b3t. The main menu's cursor goes back to Play Now
-# each time it comes back to it.
+# each time it comes back to it. Each capture is followed by
+# `screenshot <name>-again`, the window's picture a command later, as
+# render_screens_boot.b3t says why.
 
 # the welcome hint: Continue, to the main menu
 wait screen=hint_rb3_welcome_screen timeout=30s
@@ -41,6 +43,7 @@ sleep 500ms
 press green until screen=charactercreator_screen timeout=60s
 wait frames=900
 capture screen-creator
+screenshot screen-creator-again
 # Modify Head, Customize Face: the face maker, close on the face
 press down
 sleep 333ms
@@ -53,10 +56,12 @@ sleep 2s
 press green
 sleep 3s
 capture screen-face-maker
+screenshot screen-face-maker-again
 # Randomize: RB3 blends the new face's textures (RndTexBlender)
 press green
 sleep 3s
 capture screen-face-random
+screenshot screen-face-random-again
 # back out to the creator's own menu, and once more for its leave dialog
 press red
 sleep 1s
@@ -65,6 +70,7 @@ sleep 1s
 press red until screen=charactercreator_leave_screen timeout=30s
 sleep 1s
 capture screen-creator-leave
+screenshot screen-creator-leave-again
 # Yes, leave
 press up
 sleep 333ms
@@ -82,6 +88,7 @@ sleep 1s
 press green until screen=accomplishment_screen timeout=30s
 sleep 2s
 capture screen-goals
+screenshot screen-goals-again
 press red until screen=main_hub_screen timeout=60s
 sleep 2s
 
@@ -98,6 +105,7 @@ sleep 500ms
 press green until screen=dx_playashow_intro_screen timeout=30s
 sleep 1500ms
 capture screen-play-a-show
+screenshot screen-play-a-show-again
 press green until screen=song_select_screen timeout=30s
 sleep 1500ms
 # from Random Song up to Setlists / Battles: the setlist browser
@@ -108,6 +116,7 @@ sleep 500ms
 press green
 sleep 2s
 capture screen-setlist-browser
+screenshot screen-setlist-browser-again
 # Make a Setlist: 20th Century Boy and 25 or 6 to 4, past Finish Setlist and
 # the 123 heading
 press green
@@ -125,6 +134,7 @@ sleep 500ms
 press green
 sleep 2s
 capture screen-setlist
+screenshot screen-setlist-again
 # back, without the setlist, to the main menu
 press red until screen=main_hub_screen timeout=60s
 sleep 2s
@@ -166,11 +176,13 @@ sleep 1s
 press green until screen=cal_welcome_screen timeout=30s
 sleep 1500ms
 capture screen-cal-welcome
+screenshot screen-cal-welcome-again
 # Calibrate Automatically, which a guitar offers first: its audio step, then
 # back, as the virtual guitar has no light or audio sensor
 press green until screen=cal_hw_audio_screen timeout=30s
 sleep 1s
 capture screen-cal-auto
+screenshot screen-cal-auto-again
 press red until screen=cal_welcome_screen timeout=30s
 sleep 1s
 # Calibrate Manually: audio first
@@ -179,6 +191,7 @@ sleep 500ms
 press green until screen=cal_audio_screen timeout=30s
 sleep 1s
 capture screen-cal-audio
+screenshot screen-cal-audio-again
 # its test, which nothing hits, fails; Enter Calibration Numbers, Continue
 press green until screen=cal_manual_failed_screen timeout=90s
 sleep 1s
@@ -191,6 +204,7 @@ press green
 wait screen=cal_visuals_screen timeout=30s
 sleep 1s
 capture screen-cal-video
+screenshot screen-cal-video-again
 press green until screen=cal_manual_failed_screen timeout=90s
 sleep 1s
 press down
@@ -224,15 +238,18 @@ sleep 500ms
 press a until screen=training_screen timeout=60s
 sleep 2s
 capture screen-trainers
+screenshot screen-trainers-again
 # Drums, Introduction to the Kit: its preview, then the lesson
 press a
 sleep 2s
 press a until screen=gem_preview_screen timeout=60s
 sleep 4s
 capture screen-drum-preview
+screenshot screen-drum-preview-again
 press a until screen=drum_trainer_screen timeout=30s
 wait frames=300
 capture screen-drum-trainer
+screenshot screen-drum-trainer-again
 # its pause menu's Back to Trainer Menu, Yes, then back to the main menu
 press start
 sleep 667ms

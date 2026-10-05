@@ -135,7 +135,13 @@ struct Band3GraphicsSystem::Impl {
     // VdSetGraphicsInterruptCallback's callback (high half) and its data
     std::atomic<uint64_t> interrupt{0};
     std::atomic<bool> running{false};
+    // the vblank every millisecond: the frame cap's ask (cap_free_running) or
+    // native_vblank_free_running's, whichever is on; free_running is what the
+    // vblank thread reads, set under free_running_mutex so two changes at
+    // once can't leave it stale
     std::atomic<bool> free_running{false};
+    std::atomic<bool> cap_free_running{false};
+    std::mutex free_running_mutex;
     std::atomic<uint64_t> vblanks{0};
     std::atomic<bool> warned_no_thread{false};
 
@@ -201,6 +207,23 @@ struct Band3GraphicsSystem::Impl {
         return config;
     }
 
+    // why the vblank is free-running, for the log
+    static std::string FreeRunningWhy() {
+        return REXCVAR_GET(native_vblank_free_running)
+                   ? "(native_vblank_free_running)"
+                   : "while the frame cap paces the game";
+    }
+
+    // free_running from the frame cap's ask and native_vblank_free_running,
+    // logged when it changes
+    void ApplyFreeRunning() {
+        std::lock_guard lock(free_running_mutex);
+        const bool free = REXCVAR_GET(native_vblank_free_running) || cap_free_running.load();
+        if (free_running.exchange(free) != free)
+            REXLOG_INFO("sync gpu: vblank {}", free ? "free-running (1 ms) " + FreeRunningWhy()
+                                                    : std::string("at the guest's refresh rate"));
+    }
+
     void Wake() {
         {
             std::lock_guard lock(wake_mutex);
@@ -261,9 +284,8 @@ struct Band3GraphicsSystem::Impl {
                     REXLOG_INFO("sync gpu: vblank at {:.5g} Hz (was {:.5g})", guest, hz);
                 else if (!next_mode)
                     REXLOG_INFO("sync gpu: vblank at {:.5g} Hz{}", guest,
-                                free_running.load() ? ", free-running (1 ms) while the frame "
-                                                      "cap paces the game"
-                                                    : "");
+                                free_running.load() ? ", free-running (1 ms) " + FreeRunningWhy()
+                                                    : std::string());
                 hz = guest;
                 next_mode = now + kModeReadNs;
             }
@@ -367,12 +389,19 @@ Band3GraphicsSystem::Band3GraphicsSystem() : impl_(std::make_unique<Impl>()) {
                                                                  std::string_view) {
         impl_->cp.SetQueryLog(REXCVAR_GET(native_query_log));
     });
+    // the vblank thread reads it each beat, so a change applies at once
+    impl_->ApplyFreeRunning();
+    rex::cvar::RegisterChangeCallback("native_vblank_free_running",
+                                      [this](std::string_view, std::string_view) {
+                                          impl_->ApplyFreeRunning();
+                                      });
 }
 
 Band3GraphicsSystem::~Band3GraphicsSystem() {
     Shutdown();
     rex::cvar::UnregisterChangeCallbacks("native_query_sample_count");
     rex::cvar::UnregisterChangeCallbacks("native_query_log");
+    rex::cvar::UnregisterChangeCallbacks("native_vblank_free_running");
     Band3GraphicsSystem* self = this;
     g_active.compare_exchange_strong(self, nullptr, std::memory_order_acq_rel);
 }
@@ -481,11 +510,8 @@ void Band3GraphicsSystem::Shutdown() {
 }
 
 void Band3GraphicsSystem::SetVblankFreeRunning(bool free_running) {
-    if (impl_->free_running.exchange(free_running) != free_running)
-        REXLOG_INFO("sync gpu: vblank {}", free_running
-                                               ? "free-running (1 ms) while the frame cap paces "
-                                                 "the game"
-                                               : "at the guest's refresh rate");
+    impl_->cap_free_running.store(free_running);
+    impl_->ApplyFreeRunning();
 }
 
 GammaRamp Band3GraphicsSystem::DisplayGamma() const { return impl_->cp.DisplayGamma(); }

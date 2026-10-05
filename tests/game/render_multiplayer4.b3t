@@ -13,7 +13,9 @@
 # The fourth part is the singer, not a fourth virtual instrument: with three
 # players joined, p4's Start (a guitar, then drums) opened player 1's menu
 # instead of joining a fourth.
-# Every frame draws everything, as in render_multiplayer.b3t.
+# Every frame draws everything, as in render_multiplayer.b3t. Each capture is
+# followed by `screenshot <name>-again`, the window's picture a command later:
+# render_song.b3t says why.
 
 # the game has connected mic slot 1 and takes its audio
 expect mic=1
@@ -73,6 +75,7 @@ sleep 500ms
 press green until screen=part_difficulty_screen timeout=30s
 sleep 1500ms
 capture screen-mp4-part
+screenshot screen-mp4-part-again
 # player 1: Guitar, Expert; player 2: Drums, its default difficulty
 press green
 sleep 500ms
@@ -99,17 +102,22 @@ wait screen=game_screen timeout=60s
 wait frames=600 timeout=60s
 expect mic=1
 capture screen-mp4-10s
+screenshot screen-mp4-10s-again
 wait frames=900 timeout=60s
 capture screen-mp4-25s
+screenshot screen-mp4-25s-again
 wait frames=900 timeout=60s
 capture screen-mp4-40s
+screenshot screen-mp4-40s-again
 # the pause menu, an overlay on the same screen, and on again
 press start
 sleep 500ms
 capture screen-mp4-pause
+screenshot screen-mp4-pause-again
 press green
 sleep 2s
 # the results
 wait screen=coop_endgame_screen timeout=300s
 sleep 2s
 capture screen-mp4-results
+screenshot screen-mp4-results-again

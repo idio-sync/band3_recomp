@@ -6,7 +6,8 @@
 # behind, the song, its pause menu, a music-video venue, the dialog a
 # disconnected controller brings up, and the results. Launch as
 # render_screens_boot.b3t says. Every frame draws everything here, as in
-# render_song.b3t.
+# render_song.b3t. Each capture is followed by `screenshot <name>-again`,
+# the window's picture a command later: render_screens_boot.b3t says why.
 
 set autoplay true
 set disable_even_odd_rendering true
@@ -21,10 +22,12 @@ sleep 1s
 press green until screen=song_select_screen timeout=30s
 sleep 1500ms
 capture screen-music-library
+screenshot screen-music-library-again
 # the cursor is still on 20th Century Boy, where practice left it
 press green until screen=part_difficulty_screen timeout=30s
 sleep 1500ms
 capture screen-part-difficulty
+screenshot screen-part-difficulty-again
 # Guitar, Expert
 press green
 sleep 500ms
@@ -33,14 +36,17 @@ press green
 wait screen~tv timeout=30s
 sleep 1s
 capture screen-song-loading
+screenshot screen-song-loading-again
 wait screen=game_screen timeout=60s
 expect song=20thcenturyboy
 wait frames=600 timeout=60s
 capture screen-song
+screenshot screen-song-again
 # the pause menu, an overlay on the same screen
 press start
 sleep 500ms
 capture screen-pause
+screenshot screen-pause-again
 # Back to Music Library, the fifth of six, and yes to losing the progress
 press down
 press down
@@ -78,12 +84,15 @@ p2 press green until screen=game_screen timeout=60s
 expect song=20thcenturyboy
 wait frames=600 timeout=60s
 capture screen-song-video
+screenshot screen-song-video-again
 p2 unplug
 sleep 1s
 capture screen-disconnect
+screenshot screen-disconnect-again
 # plugged in again, the song counts in and goes on
 p2 instrument guitar
 # the results
 wait screen=coop_endgame_screen timeout=300s
 sleep 2s
 capture screen-results
+screenshot screen-results-again

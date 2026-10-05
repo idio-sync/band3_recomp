@@ -106,6 +106,7 @@ REXCVAR_DECLARE(bool, native_present_request_paint);
 REXCVAR_DECLARE(int32_t, native_query_sample_count);
 REXCVAR_DECLARE(bool, native_query_log);
 REXCVAR_DECLARE(int32_t, native_sync_short_wait_us);
+REXCVAR_DECLARE(bool, native_vblank_free_running);
 REXCVAR_DECLARE(bool, native_present_pipeline);
 REXCVAR_DECLARE(int32_t, native_slow_frame_ms);
 REXCVAR_DECLARE(int32_t, game_stall_log_ms);

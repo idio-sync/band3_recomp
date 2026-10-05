@@ -19,6 +19,8 @@
 # Each capture's reply says proc_cmds 2 and composed true, with the world
 # frame it has (world_frame, the game frame before its own); `composed` makes
 # the capture fail if it isn't (it fell back to another frame: held_fallback).
+# Each capture is followed by `screenshot <name>-again`, the window's picture
+# a command later: render_song.b3t says why.
 
 # the welcome hint, whose first choice customizes the
 # band; back out of that to the main menu
@@ -55,9 +57,13 @@ press green
 wait in_game timeout=60s
 expect song=20thcenturyboy
 capture render-song-eo-start composed
+screenshot render-song-eo-start-again
 wait frames=600 timeout=60s
 capture render-song-eo-10s composed
+screenshot render-song-eo-10s-again
 wait frames=900 timeout=60s
 capture render-song-eo-25s composed
+screenshot render-song-eo-25s-again
 wait frames=900 timeout=60s
 capture render-song-eo-40s composed
+screenshot render-song-eo-40s-again

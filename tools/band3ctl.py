@@ -81,8 +81,10 @@ class ScriptResult:
 def run_script(conn, commands, name, report=None):
     """Sends each command in turn; stops at the first failure and screenshots it.
 
-    A reply with measurements in it (`stats`, from `native_view`) goes to
-    report(line number, command, reply) as well, for the script's reader.
+    A reply with measurements in it (`stats`, from `native_view`) or a
+    capture's (`capture`: its counts, which tools/capdiff.py sets against
+    another run's) goes to report(line number, command, reply) as well, for
+    the script's reader.
     """
     for number, command in commands:
         reply = conn.command(command)
@@ -90,7 +92,7 @@ def run_script(conn, commands, name, report=None):
             safe = re.sub(r"[^A-Za-z0-9_-]", "_", name)
             conn.command(f"screenshot fail-{safe}-line{number}")
             return ScriptResult(False, number, command, reply)
-        if report and "stats" in reply:
+        if report and ("stats" in reply or "capture" in reply):
             report(number, command, reply)
     return ScriptResult(True)
 
@@ -656,7 +658,8 @@ def run(args):
         result = run_script(
             conn, commands, name,
             lambda number, command, reply: print(
-                f"{args.script}:{number}: {command}: {json.dumps(reply['stats'])}"))
+                f"{args.script}:{number}: {command}: "
+                f"{json.dumps(reply['stats'] if 'stats' in reply else reply)}"))
     finally:
         conn.close()
     if result.passed:

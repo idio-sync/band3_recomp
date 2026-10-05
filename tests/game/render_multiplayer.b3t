@@ -7,7 +7,9 @@
 #   python tools/band3ctl.py run tests/game/boot.b3t
 #   python tools/band3ctl.py run tests/game/render_multiplayer.b3t
 # Every frame draws everything here, as in render_song.b3t, in the same venue.
-# render_multiplayer4.b3t is the same with four players.
+# render_multiplayer4.b3t is the same with four players. Each capture is
+# followed by `screenshot <name>-again`, the window's picture a command later:
+# render_song.b3t says why.
 
 # the welcome hint, whose first choice customizes the band; back out of that
 # to the main menu
@@ -41,6 +43,7 @@ sleep 500ms
 press green until screen=part_difficulty_screen timeout=30s
 sleep 1500ms
 capture screen-mp2-part
+screenshot screen-mp2-part-again
 # player 1: Guitar, Expert; player 2 (drums press A for green): Drums, its
 # default difficulty
 press green
@@ -54,17 +57,22 @@ wait in_game timeout=60s
 expect song=20thcenturyboy
 wait frames=600 timeout=60s
 capture screen-mp2-10s
+screenshot screen-mp2-10s-again
 wait frames=900 timeout=60s
 capture screen-mp2-25s
+screenshot screen-mp2-25s-again
 wait frames=900 timeout=60s
 capture screen-mp2-40s
+screenshot screen-mp2-40s-again
 # the pause menu, an overlay on the same screen, and on again
 press start
 sleep 500ms
 capture screen-mp2-pause
+screenshot screen-mp2-pause-again
 press green
 sleep 2s
 # the results
 wait screen=coop_endgame_screen timeout=300s
 sleep 2s
 capture screen-mp2-results
+screenshot screen-mp2-results-again

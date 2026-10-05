@@ -25,7 +25,8 @@
 //   whenever the guest moves the write pointer, acting on what the game waits
 //   on and skipping draws; and a vertical blank thread ("band3 GPU vblank") at
 //   the guest's refresh rate, or every millisecond while the frame cap paces
-//   the game (SetVblankFreeRunning). Both are kernel threads (XHostThread):
+//   the game (SetVblankFreeRunning) or native_vblank_free_running says so.
+//   Both are kernel threads (XHostThread):
 //   the guest's interrupt handler, which they run (source 0 a vblank, 1 the
 //   command processor's INTERRUPT packet), takes a spin lock and reads the
 //   kernel's clock. The two threads may run it at once, as the plugin's
@@ -73,7 +74,9 @@ public:
 
     // the vblank every millisecond rather than at the guest's refresh rate:
     // the frame cap's (frame_pacing.h's SetVsyncForCap), as the plugin's
-    // vsync off did. Any thread, before or after the threads start.
+    // vsync off did. native_vblank_free_running (Band3 → Debug) has it so
+    // whatever this is told, for a run nothing paces (frame_cap off,
+    // rnd_sync 0). Any thread, before or after the threads start.
     void SetVblankFreeRunning(bool free_running);
     // the display gamma ramp the guest's DC_LUT registers set
     GammaRamp DisplayGamma() const;

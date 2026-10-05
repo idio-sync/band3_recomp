@@ -483,6 +483,12 @@ REXCVAR_DEFINE_INT32(native_sync_short_wait_us, 0, "Band3/Debug",
     "emulated GPU does; more sleeps that many microseconds instead")
     .range(0, 16000);
 
+REXCVAR_DEFINE_BOOL(native_vblank_free_running, false, "Band3/Debug",
+    "With emulated_gpu off, raise the vertical blank every millisecond whatever the frame cap "
+    "says, as the emulated GPU's vsync off does: with frame_cap off and rnd_sync 0 too, "
+    "nothing paces the game (uncapped, to measure). Off, it runs at the game's refresh rate "
+    "unless the frame cap paces the game");
+
 REXCVAR_DEFINE_BOOL(native_present_pipeline, false, "Band3/Debug",
     "With renderer = native on the zero-copy path, record the next frame while the GPU draws "
     "the one before, waiting for the GPU only to hand a frame to the window, so a frame costs "
