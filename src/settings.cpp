@@ -94,8 +94,8 @@ REXCVAR_DEFINE_BOOL(menu_shortcut, true, "Band3/Game",
     "menu, or both stick clicks and the left bumper for the Instrument Lab");
 
 REXCVAR_DEFINE_BOOL(steam_deck_defaults, true, "Band3/Game",
-    "On a Steam Deck, start fullscreen and letterboxed with vsync on and the FPS counter "
-    "off, unless band3.toml or the command line set those")
+    "On a Steam Deck, start fullscreen and letterboxed at the console's 60 Hz with vsync on "
+    "and the FPS counter off, unless band3.toml or the command line set those")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_STRING(joypad_lag, "", "Band3/Game",
@@ -210,13 +210,13 @@ REXCVAR_DEFINE_INT32(background_fps, 0, "Band3/Graphics",
     .range(0, 240);
 
 // src/Hooks/frame_pacing.h says what the cap does in place of the vblank
-REXCVAR_DEFINE_STRING(frame_cap, "off", "Band3/Graphics",
+REXCVAR_DEFINE_STRING(frame_cap, "display", "Band3/Graphics",
     "What paces the game's frames. display: the display's refresh rate exactly "
-    "(119.88 Hz, not 120), for fixed-refresh displays. auto: a little under it (5% less, at "
-    "least 4 fps), for VRR displays (G-Sync, FreeSync), keeping each frame inside their range; "
-    "on a fixed-refresh display a cap under the refresh rate shows a frame twice every "
-    "1/(refresh - cap) seconds. A number of Hz (24 to 240), e.g. 117. off: the emulated "
-    "console's vertical blank, paced by vsync and refresh_rate (the default). With the cap on, "
+    "(119.88 Hz, not 120), for fixed-refresh displays (the default). auto: a little under "
+    "it (5% less, at least 4 fps), for VRR displays (G-Sync, FreeSync), keeping each frame "
+    "inside their range; on a fixed-refresh display a cap under the refresh rate shows a "
+    "frame twice every 1/(refresh - cap) seconds. A number of Hz (24 to 240), e.g. 117. off: the emulated "
+    "console's vertical blank, paced by vsync and refresh_rate (60 unless set). With the cap on, "
     "vsync is turned off and an unset refresh_rate follows the cap. Without a display whose "
     "rate can be told, display and auto are off")
     .validator([](std::string_view v) { return band3::pacing::ParseFrameCap(v).has_value(); });

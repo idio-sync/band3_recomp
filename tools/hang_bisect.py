@@ -34,7 +34,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BAND3CTL = os.path.join(REPO, "tools", "band3ctl.py")
 LOGS = os.path.join(REPO, "out", "build", "win-amd64-release", "logs")
 JOURNAL = os.path.join(REPO, "out", "hang_bisect.jsonl")
-COMMON = ["--video_mode_refresh_rate=120", "--test_random_seed=21"]
+COMMON = ["--video_mode_refresh_rate=120", "--frame_cap=off", "--test_random_seed=21"]
 CONFIGS = {
     "baseline": ["--renderer=native"],
     "no-zero-copy": ["--renderer=native", "--native_present_zero_copy=false"],
