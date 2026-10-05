@@ -169,19 +169,32 @@ struct NativeViewStats {
         // opcodes most sent, draws skipped, waits (those that had to wait,
         // their time, and the longest since the game started), interrupts,
         // swaps, vblanks, fences, occlusion query writes, what it didn't know
-        // or couldn't read, and its thread's CPU time (-1 unknown); the reply
-        // divides the busy ones by the frames
+        // or couldn't read, and its command processor's and vblank threads'
+        // CPU time (-1 unknown); the reply divides the busy ones by the
+        // frames. The waits that had to wait also by their wait interval's
+        // band (sync_cp.h's WaitBand, by name: how many, their time, and the
+        // polls that didn't match), and by the interval itself (in hex, most
+        // first)
         bool present = true;
         struct Sync {
+            struct Band {
+                std::string name;
+                uint64_t waits = 0;
+                double ms = 0;
+                uint64_t polls = 0;
+            };
             uint64_t packets = 0;
             std::vector<std::pair<std::string, uint64_t>> opcodes;
             uint64_t draws_skipped = 0;
             uint64_t waits = 0, stalled_waits = 0;
             double wait_ms = 0, wait_max_ms = 0;
+            std::vector<Band> stalled_by_band;
+            std::vector<std::pair<std::string, uint64_t>> wait_intervals;
             uint64_t interrupts = 0, swaps = 0, vblanks = 0, fences = 0, zpd_writes = 0;
             uint64_t unknown_opcodes = 0, unknown_registers = 0, bad_packets = 0,
                      bad_addresses = 0;
             double thread_ms = -1;
+            double vblank_thread_ms = -1;
         } sync;
     } emulated_gpu;
     // The live view's frames by kind (src/Render/frame_compose.h's FrameKind,
@@ -225,6 +238,9 @@ struct PresentStats {
     uint64_t shown = 0, repeats = 0, skipped = 0;
     // from the game's Present of each frame shown to the first paint showing it
     std::vector<double> latency_ms;
+    // from the game's Present of each new frame the native renderer drew to
+    // its handing it to the window, painted or not (present_model.h's PaintLog)
+    std::vector<double> publish_latency_ms;
     // the game's frames: between the ends of its Presents
     uint64_t game_frames = 0;
     std::vector<double> game_ms;

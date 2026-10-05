@@ -115,6 +115,10 @@ int64_t Nanoseconds(std::chrono::steady_clock::time_point t) {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
 }
 
+// the worker handed the window a new frame the game presented at `presented`,
+// for present_stats' publish latency (below, with the paints)
+void NotePublished(std::chrono::steady_clock::time_point presented);
+
 // `g` added into the totals `sum` (LiveViewStats::Kind's)
 void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.draws += g.draws;
@@ -859,12 +863,15 @@ class Renderer {
         // told once the lock is let go, for a frame the window can now show
         // (SetPublished)
         std::shared_ptr<const std::function<void()>> published;
+        // the window has the frame now, by either path
+        bool to_window = false;
         if (d.slot >= 0) {
             if (d.drew_output && slots_.Publish(d.slot, d.generation)) {
                 outputs_[d.slot] = d.out;
                 slot_serial_[d.slot] = slots_.Serial();
                 slot_presented_[d.slot] = d.presented;
                 published = published_;
+                to_window = true;
             } else {
                 slots_.Abandon(d.slot);
             }
@@ -916,10 +923,15 @@ class Renderer {
             // drawn for the window's stretch (Take's `for_present`)
             if (current || !present_) image_wanted_ = false;
             // the upload path's picture for the window
-            if (current && d.slot < 0) published = published_;
+            if (current && d.slot < 0) {
+                published = published_;
+                to_window = true;
+            }
         }
         stats_ = stats;
         lock.unlock();
+        // a frame drawn again (new options) isn't a new one to time
+        if (to_window && d.new_frame) NotePublished(d.presented);
         if (published) (*published)();
     }
 
@@ -1223,6 +1235,12 @@ void NotePaint(std::chrono::steady_clock::time_point now, bool native, int sourc
     std::lock_guard lock(g_paints_mutex);
     g_paints.Paint(Nanoseconds(now), native, source, serial,
                    presented.time_since_epoch().count() ? Nanoseconds(presented) : 0);
+}
+
+void NotePublished(std::chrono::steady_clock::time_point presented) {
+    const int64_t now = Nanoseconds(std::chrono::steady_clock::now());
+    std::lock_guard lock(g_paints_mutex);
+    g_paints.Published(now, presented.time_since_epoch().count() ? Nanoseconds(presented) : 0);
 }
 
 // the paths' numberings of their frames (PaintRecorder's sources); zero-copy

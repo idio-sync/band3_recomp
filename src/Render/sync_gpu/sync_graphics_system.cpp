@@ -146,14 +146,19 @@ struct Band3GraphicsSystem::Impl {
 
     rex::system::object_ref<rex::system::XHostThread> cp_thread;
     rex::system::object_ref<rex::system::XHostThread> vblank_thread;
-    // the command processor thread's handle, for its CPU time (Windows)
+    // the command processor's and the vblank thread's handles, for their CPU
+    // time (Windows)
     std::atomic<void*> cp_thread_handle{nullptr};
+    std::atomic<void*> vblank_thread_handle{nullptr};
 
-    Impl() : cp(memory, MakeHooks(), MakeConfig()) {}
+    Impl() : cp(memory, MakeHooks(), MakeConfig()) {
+        cp.SetQueryLog(REXCVAR_GET(native_query_log));
+    }
 
     ~Impl() {
 #ifdef _WIN32
-        if (void* h = cp_thread_handle.exchange(nullptr)) CloseHandle(static_cast<HANDLE>(h));
+        for (auto* handle : {&cp_thread_handle, &vblank_thread_handle})
+            if (void* h = handle->exchange(nullptr)) CloseHandle(static_cast<HANDLE>(h));
 #endif
     }
 
@@ -165,17 +170,24 @@ struct Band3GraphicsSystem::Impl {
         // wait. std::this_thread::sleep_for on Windows can take a whole
         // system timer tick (15.6 ms) without timeBeginPeriod, which would
         // hold every frame behind the vsync wait; band3's high-resolution
-        // timer wakes within a few hundred microseconds.
+        // timer wakes within a few hundred microseconds. A short wait (under
+        // 0x100) yields, as Xenia's does, unless native_sync_short_wait_us
+        // asks for a sleep instead (to try against the spin a yield makes).
         hooks.wait = [](uint32_t wait) {
-            if (wait >= 0x100)
+            if (wait >= 0x100) {
                 pacing::SleepFor(int64_t(wait / 0x100) * 1'000'000);
-            else
+            } else if (const int32_t us = REXCVAR_GET(native_sync_short_wait_us); us > 0) {
+                pacing::SleepFor(int64_t(us) * 1'000);
+            } else {
                 std::this_thread::yield();
+            }
         };
-        // the first swap's words are a layout check; the rest is something
-        // the processor didn't expect
+        // the first swap's words are a layout check and native_query_log's
+        // lines were asked for; the rest is something the processor didn't
+        // expect
         hooks.log = [](const std::string& line) {
-            if (line.find("first XE_SWAP") != std::string::npos)
+            if (line.find("first XE_SWAP") != std::string::npos ||
+                line.starts_with("sync gpu: query log:"))
                 REXLOG_INFO("{}", line);
             else
                 REXLOG_WARN("{}", line);
@@ -217,12 +229,7 @@ struct Band3GraphicsSystem::Impl {
     // Xenia's CommandProcessor::WorkerThreadMain, without its spin: run what
     // the guest wrote, then sleep until it writes more
     int CpMain() {
-#ifdef _WIN32
-        HANDLE self = nullptr;
-        if (DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &self,
-                            THREAD_QUERY_LIMITED_INFORMATION, FALSE, 0))
-            cp_thread_handle.store(self);
-#endif
+        cp_thread_handle.store(DuplicateCurrentThread());
         while (running.load(std::memory_order_acquire)) {
             if (cp.ExecutePending()) continue;
             std::unique_lock lock(wake_mutex);
@@ -236,6 +243,7 @@ struct Band3GraphicsSystem::Impl {
     // Xenia's vsync worker and MarkVblank, on a fixed beat (FrameCapSchedule)
     // rather than its 1 ms poll; and the watchdog and the summary
     int VblankMain() {
+        vblank_thread_handle.store(DuplicateCurrentThread());
         pacing::FrameCapSchedule schedule;
         StallWatch watch;
         double hz = 60;
@@ -296,9 +304,22 @@ struct Band3GraphicsSystem::Impl {
         return 0;
     }
 
-    double ThreadMs() const {
+    // a handle to the calling thread that can read its times, null if none
+    // (or off Windows)
+    static void* DuplicateCurrentThread() {
 #ifdef _WIN32
-        HANDLE h = static_cast<HANDLE>(cp_thread_handle.load());
+        HANDLE self = nullptr;
+        if (DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &self,
+                            THREAD_QUERY_LIMITED_INFORMATION, FALSE, 0))
+            return self;
+#endif
+        return nullptr;
+    }
+
+    // the CPU time of the thread `handle` holds, -1 if it can't be told
+    static double ThreadMs(const std::atomic<void*>& handle) {
+#ifdef _WIN32
+        HANDLE h = static_cast<HANDLE>(handle.load());
         FILETIME created, exited, kernel, user;
         if (!h || !GetThreadTimes(h, &created, &exited, &kernel, &user)) return -1;
         auto ticks = [](const FILETIME& f) {
@@ -307,6 +328,7 @@ struct Band3GraphicsSystem::Impl {
         // 100 ns ticks
         return double(ticks(kernel) + ticks(user)) / 1e4;
 #else
+        (void)handle;
         return -1;
 #endif
     }
@@ -340,11 +362,17 @@ Band3GraphicsSystem::Band3GraphicsSystem() : impl_(std::make_unique<Impl>()) {
                                           impl_->cp.SetFakeSampleCount(
                                               REXCVAR_GET(native_query_sample_count));
                                       });
+    // turned on, the next ZPD packets are logged
+    rex::cvar::RegisterChangeCallback("native_query_log", [this](std::string_view,
+                                                                 std::string_view) {
+        impl_->cp.SetQueryLog(REXCVAR_GET(native_query_log));
+    });
 }
 
 Band3GraphicsSystem::~Band3GraphicsSystem() {
     Shutdown();
     rex::cvar::UnregisterChangeCallbacks("native_query_sample_count");
+    rex::cvar::UnregisterChangeCallbacks("native_query_log");
     Band3GraphicsSystem* self = this;
     g_active.compare_exchange_strong(self, nullptr, std::memory_order_acq_rel);
 }
@@ -466,7 +494,8 @@ SyncGpuStats Band3GraphicsSystem::Stats() const {
     SyncGpuStats s;
     s.cp = impl_->cp.stats();
     s.vblanks = impl_->vblanks.load(std::memory_order_relaxed);
-    s.thread_ms = impl_->ThreadMs();
+    s.thread_ms = Impl::ThreadMs(impl_->cp_thread_handle);
+    s.vblank_thread_ms = Impl::ThreadMs(impl_->vblank_thread_handle);
     return s;
 }
 

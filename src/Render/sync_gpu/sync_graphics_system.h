@@ -28,10 +28,14 @@
 //   the game (SetVblankFreeRunning). Both are kernel threads (XHostThread):
 //   the guest's interrupt handler, which they run (source 0 a vblank, 1 the
 //   command processor's INTERRUPT packet), takes a spin lock and reads the
-//   kernel's clock.
+//   kernel's clock. The two threads may run it at once, as the plugin's
+//   vsync and command processor threads may: the guest's spin lock is what
+//   keeps them apart.
 // - A watchdog on the vblank thread logs a wait the command processor has been
 //   blocked in for 2 s (sync_monitor.h's StallWatch), and the log gets a
-//   summary of the packets every 10 s.
+//   summary of the packets every 10 s, the waits by their wait interval
+//   among them. native_query_log logs the occlusion queries' first ZPD
+//   packets (SyncCommandProcessor::SetQueryLog).
 //
 // A lost device (a GPU hang) isn't recovered: it's logged and band3 aborts,
 // so the crash trace has the device's DRED (crash_trace.h).
@@ -42,9 +46,11 @@ namespace band3::render::sync_gpu {
 struct SyncGpuStats {
     SyncCpStats cp;
     uint64_t vblanks = 0;
-    // the command processor thread's CPU time (kernel and user), -1 where it
-    // can't be told (off Windows, or before the thread started)
+    // the command processor thread's and the vblank thread's CPU time (kernel
+    // and user), -1 where it can't be told (off Windows, or before the thread
+    // started)
     double thread_ms = -1;
+    double vblank_thread_ms = -1;
 };
 
 class Band3GraphicsSystem final : public rex::system::IGraphicsSystem {

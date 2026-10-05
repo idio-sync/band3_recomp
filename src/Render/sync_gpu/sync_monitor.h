@@ -25,6 +25,9 @@ int64_t VblankPeriodNs(double refresh_hz, bool free_running);
 
 // a type-3 opcode's name (xenos_defs.h's pm4), or its number in hex
 std::string Pm4OpcodeName(uint32_t opcode);
+// a WaitBand's name for the log and the harness: "yield" (under 0x100),
+// "sleep" (0x100 to 0xFFF), "long_sleep" (0x1000 and up)
+const char* WaitBandName(int band);
 // WAIT_REG_MEM's compare function (wait_info & 7): never, <, <=, ==, !=, >=,
 // >, always
 const char* WaitFunctionName(uint32_t function);
@@ -39,6 +42,14 @@ struct SyncCpDelta {
     uint64_t draws_skipped = 0, predicated_skipped = 0;
     uint64_t waits = 0, stalled_waits = 0;
     double wait_ms = 0, wait_max_ms = 0;
+    // the stalled waits by their wait interval's WaitBand: how many, their
+    // time, and the polls that didn't match (each a yield or a sleep)
+    uint64_t stalled_by_band[kWaitBands] = {};
+    double wait_ms_by_band[kWaitBands] = {};
+    uint64_t polls_by_band[kWaitBands] = {};
+    // stalled waits by wait interval, for the intervals seen yet
+    // (SyncCpStats::wait_values) that stalled in this time, most first
+    std::vector<std::pair<uint32_t, uint64_t>> wait_values;
     uint64_t interrupts = 0, swaps = 0, fences = 0, sample_count_writes = 0;
     uint64_t register_writes = 0;
     uint64_t unknown_opcodes = 0, unknown_registers = 0, out_of_range_registers = 0;

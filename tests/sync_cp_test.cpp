@@ -69,10 +69,12 @@ struct Fixture {
         hooks.log = [this](const std::string& line) { logs.push_back(line); };
         return hooks;
     }
-    // the words from the write index on, and the write pointer after them
+    // the words from the write index on (from 0 on a ring just set up, as
+    // the guest writes them), and the write pointer after them
     void Write(const std::vector<uint32_t>& words) {
         const uint32_t capacity = cp.primary_buffer_size() / 4;
-        uint32_t w = cp.write_index() % capacity;
+        const uint32_t from = cp.write_index();
+        uint32_t w = from == SyncCommandProcessor::kNoWriteIndex ? 0 : from % capacity;
         for (uint32_t v : words) {
             mem.set_be(cp.primary_buffer_ptr() + w * 4, v);
             w = (w + 1) % capacity;
@@ -99,6 +101,34 @@ TEST_CASE("the ring's size is in qwords, as Xenia reads VdInitializeRingBuffer's
     f.cp.InitializeRingBuffer(0x4000, 6);
     CHECK(f.cp.primary_buffer_size() == 512);  // 1 << (6 + 3) bytes
     CHECK(f.cp.read_index() == 0);
+}
+
+TEST_CASE("a ring set up (again) runs nothing until the guest writes the write pointer") {
+    Fixture f;
+    CHECK(f.cp.write_index() == SyncCommandProcessor::kNoWriteIndex);
+    // packets in the ring before the first write of CP_RB_WPTR
+    f.mem.set_be(kRing, T0(kMarker, 1));
+    f.mem.set_be(kRing + 4, 1);
+    CHECK_FALSE(f.cp.ExecutePending());
+    CHECK(f.cp.ReadRegister(kMarker) == 0);
+    f.cp.MmioWrite(Mmio(reg::CP_RB_WPTR), 2);
+    CHECK(f.cp.ExecutePending());
+    CHECK(f.cp.ReadRegister(kMarker) == 1);
+    CHECK(f.cp.read_index() == 2);
+
+    // set up again, as the game does after the splash: the old write index
+    // (2) isn't run again from the new ring's start
+    f.cp.WriteRegister(kMarker, 0);
+    f.cp.InitializeRingBuffer(kRing, kRingLog2);
+    CHECK(f.cp.read_index() == 0);
+    CHECK(f.cp.write_index() == SyncCommandProcessor::kNoWriteIndex);
+    CHECK_FALSE(f.cp.ExecutePending());
+    CHECK(f.cp.ReadRegister(kMarker) == 0);
+    f.mem.set_be(kRing, T0(kMarker, 1));
+    f.mem.set_be(kRing + 4, 7);
+    f.cp.MmioWrite(Mmio(reg::CP_RB_WPTR), 2);
+    CHECK(f.cp.ExecutePending());
+    CHECK(f.cp.ReadRegister(kMarker) == 7);
 }
 
 TEST_CASE("a type-0 packet writes a run of registers, or one register over and over") {
@@ -312,6 +342,69 @@ TEST_CASE("WAIT_REG_MEM's always doesn't wait, and never waits until a stop") {
     CHECK_FALSE(f.cp.ExecutePending());
 }
 
+TEST_CASE("stalled waits are counted by their wait interval, and their polls by its band") {
+    // each wait polls 3 times without a match, then the hook releases it;
+    // the watchdog's view has the interval meanwhile
+    int polls = 0;
+    std::vector<uint32_t> seen;
+    Fixture* fp = nullptr;
+    SyncCpHooks hooks;
+    hooks.wait = [&](uint32_t wait) {
+        seen.push_back(fp->cp.current_wait().wait);
+        CHECK(wait == seen.back());
+        if (++polls % 3 == 0) fp->mem.set_be(0x6200, 1);
+    };
+    Fixture f(std::move(hooks));
+    fp = &f;
+    auto wait_for = [&](uint32_t interval) {
+        f.mem.set_be(0x6200, 0);
+        f.Run({T3(pm4::WAIT_REG_MEM, 5), 0x10 | 3, 0x6200 | 2, 1, ~0u, interval});
+    };
+    wait_for(0x20);
+    wait_for(0x100);
+    wait_for(0x20);
+    wait_for(0x3000);
+    // one that matches at once isn't stalled, whatever its interval
+    f.mem.set_be(0x6200, 1);
+    f.Run({T3(pm4::WAIT_REG_MEM, 5), 0x10 | 3, 0x6200 | 2, 1, ~0u, 0x40});
+
+    const SyncCpStats& s = f.cp.stats();
+    CHECK(s.waits.get() == 5);
+    CHECK(s.stalled_waits.get() == 4);
+    CHECK(s.stalled_by_band[kWaitYield].get() == 2);
+    CHECK(s.stalled_by_band[kWaitSleep].get() == 1);
+    CHECK(s.stalled_by_band[kWaitLongSleep].get() == 1);
+    CHECK(s.polls_by_band[kWaitYield].get() == 6);
+    CHECK(s.polls_by_band[kWaitSleep].get() == 3);
+    CHECK(s.polls_by_band[kWaitLongSleep].get() == 3);
+    // the intervals in the order first seen
+    REQUIRE(s.wait_value_count.get() == 3);
+    CHECK(s.wait_values[0].get() == 0x20);
+    CHECK(s.stalled_by_value[0].get() == 2);
+    CHECK(s.wait_values[1].get() == 0x100);
+    CHECK(s.wait_values[2].get() == 0x3000);
+    CHECK(s.stalled_by_value[2].get() == 1);
+    const std::vector<uint32_t> expected = {0x20, 0x20, 0x20, 0x100, 0x100, 0x100,
+                                            0x20, 0x20, 0x20, 0x3000, 0x3000, 0x3000};
+    CHECK(seen == expected);
+}
+
+TEST_CASE("more distinct wait intervals than are kept are counted in their bands alone") {
+    Fixture* fp = nullptr;
+    SyncCpHooks hooks;
+    hooks.wait = [&](uint32_t) { fp->mem.set_be(0x6300, 1); };
+    Fixture f(std::move(hooks));
+    fp = &f;
+    for (uint32_t i = 0; i < SyncCpStats::kWaitValues + 2; i++) {
+        f.mem.set_be(0x6300, 0);
+        f.Run({T3(pm4::WAIT_REG_MEM, 5), 0x10 | 3, 0x6300 | 2, 1, ~0u, i});
+    }
+    const SyncCpStats& s = f.cp.stats();
+    CHECK(s.wait_value_count.get() == SyncCpStats::kWaitValues);
+    CHECK(s.stalled_by_band[kWaitYield].get() == SyncCpStats::kWaitValues + 2);
+    CHECK(s.wait_values[SyncCpStats::kWaitValues - 1].get() == SyncCpStats::kWaitValues - 1);
+}
+
 namespace {
 
 // Runs the ring on a thread of its own until the processor waits, calls
@@ -493,6 +586,43 @@ TEST_CASE("EVENT_WRITE_ZPD clears a query's counts at its begin and reports them
     f.Run({T3(pm4::EVENT_WRITE_ZPD, 1), 0x15});
     CHECK(f.mem.be(kCounts + 16) == 0xFFFFFEED);
     CHECK(f.cp.stats().sample_count_writes.get() == 3);
+}
+
+TEST_CASE("the query log has the first ZPD packets' counts as they found them") {
+    SyncCpConfig config;
+    config.fake_sample_count = 7;
+    Fixture f({}, config);
+    constexpr uint32_t kCounts = 0x8000;
+    f.Run({T0(reg::RB_SAMPLE_COUNT_ADDR, 1), kCounts});
+    // off: nothing logged
+    f.Run({T3(pm4::EVENT_WRITE_ZPD, 1), 0x15});
+    CHECK(f.LogsWith("query log") == 0);
+
+    f.cp.SetQueryLog(true);
+    // a begin, over words left from before
+    std::memset(f.mem.at(kCounts), 0, 32);
+    f.mem.set_be(kCounts + 4, 0x01020304);
+    f.Run({T3(pm4::EVENT_WRITE_ZPD, 1), 0x15});
+    CHECK(f.LogsWith("sync gpu: query log: EVENT_WRITE_ZPD #1 (initiator 15) at 00008000, "
+                     "little-endian words before: 00000000 04030201 00000000 00000000 "
+                     "00000000 00000000 00000000 00000000; a begin, cleared") == 1);
+    // an end, as D3D marks it
+    f.mem.set_be(kCounts + 16, 0xFFFFFEED);
+    f.mem.set_be(kCounts + 20, 0xFFFFFEED);
+    f.Run({T3(pm4::EVENT_WRITE_ZPD, 1), 0x15});
+    CHECK(f.LogsWith("EDFEFFFF EDFEFFFF 00000000 00000000; an end (via ZPass), 7 samples "
+                     "written") == 1);
+    // only the first kQueryLogLines
+    for (uint32_t i = 0; i < SyncCommandProcessor::kQueryLogLines; i++)
+        f.Run({T3(pm4::EVENT_WRITE_ZPD, 1), 0x15});
+    CHECK(f.LogsWith("query log") == SyncCommandProcessor::kQueryLogLines);
+    // on again: as many more; off: none
+    f.cp.SetQueryLog(true);
+    f.Run({T3(pm4::EVENT_WRITE_ZPD, 1), 0x15});
+    CHECK(f.LogsWith("query log") == SyncCommandProcessor::kQueryLogLines + 1);
+    f.cp.SetQueryLog(false);
+    f.Run({T3(pm4::EVENT_WRITE_ZPD, 1), 0x15});
+    CHECK(f.LogsWith("query log") == SyncCommandProcessor::kQueryLogLines + 1);
 }
 
 TEST_CASE("EVENT_WRITE_EXT fakes the whole screen as the extents") {

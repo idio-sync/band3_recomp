@@ -590,7 +590,9 @@ std::string PresentJson(const PresentStats& s) {
     out += ",\"shown\":" + std::to_string(s.shown);
     out += ",\"repeats\":" + std::to_string(s.repeats);
     out += ",\"skipped\":" + std::to_string(s.skipped);
-    out += ",\"latency_ms\":" + Distribution(s.latency_ms) + "}";
+    out += ",\"latency_ms\":" + Distribution(s.latency_ms);
+    out += ",\"published\":" + std::to_string(s.publish_latency_ms.size());
+    out += ",\"publish_latency_ms\":" + Distribution(s.publish_latency_ms) + "}";
     std::snprintf(buf, sizeof(buf), ",\"game\":{\"frames\":%llu,\"fps\":%.1f",
                   static_cast<unsigned long long>(s.game_frames),
                   seconds > 0 ? double(s.game_frames) / seconds : 0.0);
@@ -661,7 +663,7 @@ std::string CaptureCostJson(const NativeViewStats::Capture& c) {
 
 // `emulated_gpu`'s `sync`, with emulated_gpu off: what the sync-only GPU did,
 // the busy counts per game frame (0 with no frames), the rare ones as they
-// are, and its thread's CPU milliseconds per frame (-1 unknown)
+// are, and its threads' CPU milliseconds per frame (-1 unknown)
 std::string SyncGpuJson(const NativeViewStats::EmulatedGpu::Sync& s, double frames) {
     auto per_frame = [&](double v) { return frames > 0 ? v / frames : 0.0; };
     char buf[128];
@@ -683,7 +685,24 @@ std::string SyncGpuJson(const NativeViewStats::EmulatedGpu::Sync& s, double fram
     std::snprintf(buf, sizeof(buf), "\"wait_ms_per_frame\":%.3f,\"wait_max_ms\":%.3f,",
                   per_frame(s.wait_ms), s.wait_max_ms);
     out += buf;
-    out += "\"interrupts\":" + std::to_string(s.interrupts);
+    // the stalled waits by their wait interval, as they are
+    out += "\"stalled_by_interval\":{";
+    for (size_t i = 0; i < s.stalled_by_band.size(); i++) {
+        const auto& b = s.stalled_by_band[i];
+        out += i ? "," : "";
+        AppendJsonString(out, b.name);
+        std::snprintf(buf, sizeof(buf), ":{\"waits\":%llu,\"ms\":%.3f,\"polls\":%llu}",
+                      static_cast<unsigned long long>(b.waits), b.ms,
+                      static_cast<unsigned long long>(b.polls));
+        out += buf;
+    }
+    out += "},\"wait_intervals\":{";
+    for (size_t i = 0; i < s.wait_intervals.size(); i++) {
+        out += i ? "," : "";
+        AppendJsonString(out, s.wait_intervals[i].first);
+        out += ":" + std::to_string(s.wait_intervals[i].second);
+    }
+    out += "},\"interrupts\":" + std::to_string(s.interrupts);
     out += ",\"swaps\":" + std::to_string(s.swaps);
     out += ",\"vblanks\":" + std::to_string(s.vblanks);
     std::snprintf(buf, sizeof(buf), ",\"fences_per_frame\":%.1f", per_frame(double(s.fences)));
@@ -694,7 +713,9 @@ std::string SyncGpuJson(const NativeViewStats::EmulatedGpu::Sync& s, double fram
     out += ",\"bad_packets\":" + std::to_string(s.bad_packets);
     out += ",\"bad_addresses\":" + std::to_string(s.bad_addresses);
     const double ms = s.thread_ms < 0 ? -1.0 : per_frame(s.thread_ms);
-    std::snprintf(buf, sizeof(buf), ",\"sync_ms_per_frame\":%.3f}", ms);
+    const double vblank_ms = s.vblank_thread_ms < 0 ? -1.0 : per_frame(s.vblank_thread_ms);
+    std::snprintf(buf, sizeof(buf), ",\"sync_ms_per_frame\":%.3f,\"vblank_ms_per_frame\":%.3f}",
+                  ms, vblank_ms);
     out += buf;
     return out;
 }

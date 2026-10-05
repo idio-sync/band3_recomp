@@ -121,6 +121,10 @@ class WindowHelpersTest(unittest.TestCase):
         # two monitors, the second left of the primary
         self.assertEqual(band3ctl.offscreen_origin((-1920, 0, 3840, 1080)), (2020, 0))
 
+    def test_onscreen_is_the_primary_work_areas_top_left(self):
+        # a taskbar along the top: the window goes below it
+        self.assertEqual(band3ctl.onscreen_origin((0, 40, 1920, 1080)), (0, 40))
+
     def test_only_this_checkouts_build_counts(self):
         repo = os.path.join("C:" + os.sep, "src", "band3")
         build = os.path.join(repo, "out", "build", "win-amd64-release", "band3.exe")

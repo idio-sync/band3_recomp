@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -499,6 +500,7 @@ public:
         out.repeats = paints.log.repeats;
         out.skipped = paints.log.skipped;
         out.latency_ms = std::move(paints.log.latency_ms);
+        out.publish_latency_ms = std::move(paints.log.publish_latency_ms);
         const auto presents = render::GamePresentTimes(paints.since);
         out.game_frames = presents.size();
         for (size_t i = 1; i < presents.size(); i++)
@@ -698,6 +700,11 @@ private:
         s.stalled_waits = d.stalled_waits;
         s.wait_ms = d.wait_ms;
         s.wait_max_ms = d.wait_max_ms;
+        for (int b = 0; b < render::sync_gpu::kWaitBands; b++)
+            s.stalled_by_band.push_back({render::sync_gpu::WaitBandName(b), d.stalled_by_band[b],
+                                         d.wait_ms_by_band[b], d.polls_by_band[b]});
+        for (const auto& [wait, n] : d.wait_values)
+            s.wait_intervals.emplace_back(std::format("0x{:X}", wait), n);
         s.interrupts = d.interrupts;
         s.swaps = d.swaps;
         s.vblanks = now.vblanks - from.vblanks;
@@ -709,6 +716,8 @@ private:
         s.bad_addresses = d.bad_addresses;
         // since the thread started, if the first reading came before it
         if (now.thread_ms >= 0) s.thread_ms = now.thread_ms - std::max(from.thread_ms, 0.0);
+        if (now.vblank_thread_ms >= 0)
+            s.vblank_thread_ms = now.vblank_thread_ms - std::max(from.vblank_thread_ms, 0.0);
         return s;
     }
 

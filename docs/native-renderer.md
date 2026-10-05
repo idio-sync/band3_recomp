@@ -110,6 +110,8 @@ been checked:
 | `emulated_gpu` (Band3 → Graphics) | experimental: `on` (the default) runs the emulated GPU beside the native renderer, as above; `off` runs without it ([below](#running-without-the-emulated-gpu-emulated_gpu-off)). Applies at the next start (the launcher restarts band3 for it) |
 | `native_present_request_paint` (Band3 → Debug) | with `emulated_gpu` off, on (the default) asks the window to paint each time the native renderer has a frame for it; off leaves the window to paint when something else asks, to compare |
 | `native_query_sample_count` (Band3 → Debug) | with `emulated_gpu` off, the samples every occlusion query reports drawn (the lens flares' visibility tests): 1000 (the default), what the emulated GPU's `query_occlusion_fake_sample_count` gives; -1 leaves them unanswered |
+| `native_query_log` (Band3 → Debug) | off by default. On, logs (`query log: D3DQuery_GetData ...`) what the game's first 50 reads of an occlusion query got, then one a second at most: the query, what the read returned (`S_OK`, or `S_FALSE` while the GPU hasn't answered) and the sample count it gave the game, with either GPU, to check the sync-only GPU's answers against the emulated GPU's. With `emulated_gpu` off it also logs (`sync gpu: query log: EVENT_WRITE_ZPD ...`) the sample counts the first 20 query packets found before clearing them, and whether each began or ended a query. Turning it on again logs as many more |
+| `native_sync_short_wait_us` (Band3 → Debug) | with `emulated_gpu` off, how the sync-only GPU waits between polls of a wait whose interval is under 0x100: 0 (the default) yields and polls again at once, as the emulated GPU does (a spin, while the wait lasts); more sleeps that many microseconds instead, to compare. The log's summary says which waits stalled with which interval |
 | `native_max_height` (Band3 → Graphics) | the most lines the native renderer draws: a taller window's picture is drawn this tall and scaled up to fill it, for 4K on a GPU that can't keep up at full size. 0 (the default) draws at the window's size |
 | `native_view_msaa` (Band3 → Graphics) | the samples a pixel the native renderer and the native view draw the overlay with (the track, the HUD, menus drawn after the world), averaged at its edges: 2 (the default) as RB3 does, 4 smoother than the game, 1 none. RB3 multisamples only those: the world, its post-processing and every texture pass are single-sampled, in the game and here. Where the GPU can't draw 2 samples it draws 4 (or 4 → 2, else 1; the log says so) |
 | `native_present_zero_copy` (Band3 → Debug) | on (the default) shows the GPU's frames where they are; off reads each back and uploads it, to compare |
@@ -172,7 +174,13 @@ presenter with its overlays (F3, F4 and the rest) as before.
 - The log has `sync gpu:` lines: the ring, the read pointer write-back and the interrupt
   callback the game set up, a summary of what it sent every 10 s (packets by opcode,
   waits, interrupts, swaps, vblanks, fences, and anything unknown), and a watchdog's
-  warning when the game has waited on the GPU for 2 s.
+  warning when the game has waited on the GPU for 2 s. The summary has the waits that
+  had to wait by their packet's wait interval: `yield` (under 0x100: the sync-only GPU
+  polls again at once, a spin, unless `native_sync_short_wait_us` is set), `sleep`
+  (0x100 to 0xFFF: it sleeps the interval / 0x100 ms between polls) and `long_sleep`
+  (0x1000 and up), each with their time and the polls that didn't match, then the
+  intervals themselves (the first 8 seen). A ring the game sets up again (it does after
+  the splash) runs nothing until the game writes its write pointer for it.
 - A GPU hang ends band3 (with the crash trace), as there's no emulated GPU's device
   recovery to fall back on.
 - With the frame cap on (the default) the sync-only GPU's vertical blank runs every

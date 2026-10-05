@@ -471,6 +471,18 @@ REXCVAR_DEFINE_INT32(native_query_sample_count, 1000, "Band3/Debug",
     "(1000, its default, what RB3 has always got here); -1 leaves the queries unanswered")
     .range(-1, 1000000);
 
+REXCVAR_DEFINE_BOOL(native_query_log, false, "Band3/Debug",
+    "Log what the occlusion queries (the lens flares' visibility tests) give the game: the "
+    "result of its first 50 reads of a query, then one a second at most, with either GPU; "
+    "with emulated_gpu off also the counts the first 20 query packets found. Turning it on "
+    "again logs as many more");
+
+REXCVAR_DEFINE_INT32(native_sync_short_wait_us, 0, "Band3/Debug",
+    "With emulated_gpu off, how the GPU's command processor waits between polls of a wait "
+    "whose interval is short (under 0x100): 0 yields and polls again at once, as the "
+    "emulated GPU does; more sleeps that many microseconds instead")
+    .range(0, 16000);
+
 REXCVAR_DEFINE_BOOL(native_present_pipeline, false, "Band3/Debug",
     "With renderer = native on the zero-copy path, record the next frame while the GPU draws "
     "the one before, waiting for the GPU only to hand a frame to the window, so a frame costs "

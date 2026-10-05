@@ -923,7 +923,10 @@ TEST_CASE("native_view stats says when there's no emulated GPU, and what the syn
     s.vblanks = 100;
     s.fences = 250;
     s.zpd_writes = 40;
+    s.stalled_by_band = {{"yield", 90, 300.5, 120000}, {"sleep", 10, 99.5, 12}};
+    s.wait_intervals = {{"0x20", 90}, {"0x100", 10}};
     s.thread_ms = 30;
+    s.vblank_thread_ms = 5;
     const std::string reply = RunCommand("native_view stats", game);
     CHECK(Ok(reply));
     CHECK(Has(reply, "\"cp_ms_per_frame\":-1.000,\"present\":false,\"sync\":{"
@@ -931,16 +934,25 @@ TEST_CASE("native_view stats says when there's no emulated GPU, and what the syn
                      "\"opcodes_per_frame\":{\"SET_CONSTANT\":90.0,\"DRAW_INDX\":0.5},"
                      "\"draws_skipped_per_frame\":0.5,\"waits_per_frame\":3.0,"
                      "\"stalled_waits\":100,\"wait_ms_per_frame\":4.000,\"wait_max_ms\":16.500,"
+                     "\"stalled_by_interval\":{"
+                     "\"yield\":{\"waits\":90,\"ms\":300.500,\"polls\":120000},"
+                     "\"sleep\":{\"waits\":10,\"ms\":99.500,\"polls\":12}},"
+                     "\"wait_intervals\":{\"0x20\":90,\"0x100\":10},"
                      "\"interrupts\":100,\"swaps\":100,\"vblanks\":100,\"fences_per_frame\":2.5,"
                      "\"zpd_writes\":40,\"unknown_opcodes\":0,\"unknown_registers\":0,"
-                     "\"bad_packets\":0,\"bad_addresses\":0,\"sync_ms_per_frame\":0.300}}"));
+                     "\"bad_packets\":0,\"bad_addresses\":0,\"sync_ms_per_frame\":0.300,"
+                     "\"vblank_ms_per_frame\":0.050}}"));
 
-    // the thread's time unknown, and no frames: -1, and zeros
+    // the threads' time unknown, and no frames: -1, and zeros
     s.thread_ms = -1;
+    s.vblank_thread_ms = -1;
+    s.stalled_by_band.clear();
+    s.wait_intervals.clear();
     e.frames = 0;
     const std::string none = RunCommand("native_view stats", game);
     CHECK(Has(none, "\"packets_per_frame\":0.0,"));
-    CHECK(Has(none, "\"sync_ms_per_frame\":-1.000}}"));
+    CHECK(Has(none, "\"stalled_by_interval\":{},\"wait_intervals\":{},"));
+    CHECK(Has(none, "\"sync_ms_per_frame\":-1.000,\"vblank_ms_per_frame\":-1.000}}"));
 }
 
 TEST_CASE("native_view off reports the run it ends, then measures the game without it") {
@@ -1445,6 +1457,7 @@ TEST_CASE("present_stats reports the window's paints, the native frames and the 
     game.present.repeats = 10;
     game.present.skipped = 3;
     game.present.latency_ms = {20.0, 30.0};
+    game.present.publish_latency_ms = {8.0, 12.0, 10.0};
     game.present.game_frames = 1196;
     game.present.game_ms.assign(20, 16.7);
     game.present.cap = {.mode = "display", .hz = 119.88, .late = 4, .resets = 1,
@@ -1457,6 +1470,9 @@ TEST_CASE("present_stats reports the window's paints, the native frames and the 
     CHECK(Has(reply, "\"hitches\":2,\"native\""));
     CHECK(Has(reply, "\"native\":{\"paints\":1200,\"shown\":1190,\"repeats\":10,\"skipped\":3"));
     CHECK(Has(reply, "\"latency_ms\":{\"mean\":25.00,\"p50\":20.00,\"p95\":30.00"));
+    // the frames handed to the window and how long after the game's Present
+    CHECK(Has(reply, "\"max\":30.00},\"published\":3,\"publish_latency_ms\":{\"mean\":10.00,"
+                     "\"p50\":10.00,\"p95\":12.00,\"max\":12.00}},\"game\""));
     CHECK(Has(reply, "\"game\":{\"frames\":1196,\"fps\":59.8"));
     CHECK(Has(reply, "\"hitches\":0,\"cap\":{\"mode\":\"display\",\"hz\":119.88,\"late\":4,"
                      "\"resets\":1,\"wait_ms\":2.500,\"spin_ms\":0.400}}}"));

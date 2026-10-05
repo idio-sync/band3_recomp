@@ -126,8 +126,12 @@ SyncCommandProcessor::SyncCommandProcessor(GuestMemory& memory, SyncCpHooks hook
 }
 
 void SyncCommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
-    // cp.cc:309-313: size_log2 counts qwords
+    // cp.cc:309-313: size_log2 counts qwords. Xenia resets only the read
+    // index; the write index goes back to kNoWriteIndex here too (at which
+    // ExecutePending runs nothing), so a ring set up again doesn't run up to
+    // the old ring's write index before the guest writes its own.
     read_index_.store(0, std::memory_order_release);
+    write_index_.store(kNoWriteIndex, std::memory_order_release);
     primary_buffer_ptr_ = ptr;
     primary_buffer_size_ = size_log2 + 3 < 32 ? uint32_t(1) << (size_log2 + 3) : 0;
 }
@@ -146,12 +150,12 @@ void SyncCommandProcessor::UpdateWritePointer(uint32_t value) {
 
 bool SyncCommandProcessor::ExecutePending() {
     // cp.cc:209-246, without the spin: the caller waits on
-    // write_pointer_updated between calls. 0xBAADF00D is the write index of
-    // a ring not set up yet.
+    // write_pointer_updated between calls. kNoWriteIndex is the write index
+    // of a ring the guest hasn't written the write pointer for yet.
     if (!running()) return false;
     const uint32_t write = write_index();
     const uint32_t read = read_index();
-    if (write == 0xBAADF00D || read == write) return false;
+    if (write == kNoWriteIndex || read == write) return false;
     read_index_.store(ExecutePrimaryBuffer(read, write), std::memory_order_release);
     WriteBackReadPointer();
     return true;
@@ -471,6 +475,7 @@ bool SyncCommandProcessor::WaitRegMem(Reader& r) {
         return true;
     }
     const auto endianness = static_cast<Endian>(poll_reg_addr & 3);
+    const int band = WaitBandOf(wait);
 
     bool stalled = false;
     for (;;) {
@@ -486,8 +491,8 @@ bool SyncCommandProcessor::WaitRegMem(Reader& r) {
             // the watchdog's view, only for a wait that waits
             stalled = true;
             std::lock_guard lock(wait_mutex_);
-            wait_ = CurrentWait{true, pm4::WAIT_REG_MEM, is_memory, poll_reg_addr, ref, mask,
-                                wait_info & 7, value & mask, {}};
+            wait_ = CurrentWait{true,          pm4::WAIT_REG_MEM, is_memory, poll_reg_addr, ref,
+                                mask,          wait_info & 7,     wait,      value & mask, {}};
             wait_start_ = std::chrono::steady_clock::now();
         } else {
             std::lock_guard lock(wait_mutex_);
@@ -495,6 +500,7 @@ bool SyncCommandProcessor::WaitRegMem(Reader& r) {
         }
         // Xenia leaves on a stop only after a long wait's sleep; any here
         if (!running()) break;
+        stats_.polls_by_band[band].add();
         Wait(wait);
     }
     if (stalled) {
@@ -510,9 +516,29 @@ bool SyncCommandProcessor::WaitRegMem(Reader& r) {
         stats_.stalled_waits.add();
         stats_.wait_ns_total.add(ns);
         stats_.wait_ns_max.raise_to(ns);
+        stats_.stalled_by_band[band].add();
+        stats_.wait_ns_by_band[band].add(ns);
+        CountWaitValue(wait);
     }
     // a stop ends the buffer (Xenia's "short-circuited exit")
     return running();
+}
+
+void SyncCommandProcessor::CountWaitValue(uint32_t wait) {
+    // the CP thread's alone to write; a new value is stored before the count
+    // that takes it in (relaxed, as statistics are: a reader racing the
+    // first stall at a new value may read it wrong until its next reading)
+    const uint64_t n = stats_.wait_value_count.get();
+    for (uint64_t i = 0; i < n; i++) {
+        if (stats_.wait_values[i].get() == wait) {
+            stats_.stalled_by_value[i].add();
+            return;
+        }
+    }
+    if (n >= SyncCpStats::kWaitValues) return;
+    stats_.wait_values[n].set(wait);
+    stats_.stalled_by_value[n].add();
+    stats_.wait_value_count.set(n + 1);
 }
 
 void SyncCommandProcessor::Wait(uint32_t wait) {
@@ -659,13 +685,32 @@ void SyncCommandProcessor::EventWriteZpd(Reader& r) {
     WriteRegister(reg::VGT_EVENT_INITIATOR, initiator & 0x3F);
     const int32_t fake_sample_count = fake_sample_count_.load(std::memory_order_relaxed);
     if (fake_sample_count < 0) return;
-    uint8_t* counts = Translate(LoadReg(reg::RB_SAMPLE_COUNT_ADDR), 32);
+    const uint32_t address = LoadReg(reg::RB_SAMPLE_COUNT_ADDR);
+    uint8_t* counts = Translate(address, 32);
     if (!counts) return;
     // the le<uint32_t> fields compared with byte_swap(0xFFFFFEED)
     const uint32_t kQueryFinished = std::byteswap(UINT32_C(0xFFFFFEED));
     auto field = [&](int i) { return LoadHost32(counts + i * 4); };
     const bool is_end_via_z_pass = field(4) == kQueryFinished && field(5) == kQueryFinished;
     const bool is_end_via_z_fail = field(2) == kQueryFinished && field(3) == kQueryFinished;
+    // native_query_log: what D3D left for the GPU, before it's cleared
+    // (counted down without going under 0 should SetQueryLog clear it meanwhile)
+    uint32_t left = query_log_left_.load(std::memory_order_relaxed);
+    while (left && !query_log_left_.compare_exchange_weak(left, left - 1,
+                                                          std::memory_order_relaxed)) {
+    }
+    if (left) {
+        std::string words;
+        for (int i = 0; i < 8; i++) words += std::format(" {:08X}", field(i));
+        Log(std::format("sync gpu: query log: EVENT_WRITE_ZPD #{} (initiator {:02X}) at {:08X}, "
+                        "little-endian words before:{}; {}",
+                        stats_.sample_count_writes.get(), initiator & 0x3F, address, words,
+                        is_end_via_z_pass   ? std::format("an end (via ZPass), {} samples written",
+                                                          fake_sample_count)
+                        : is_end_via_z_fail ? std::format("an end (via ZFail), {} samples written",
+                                                          fake_sample_count)
+                                            : std::string("a begin, cleared")));
+    }
     std::memset(counts, 0, 32);
     if (is_end_via_z_pass || is_end_via_z_fail) {
         StoreHost32(counts + 4 * 4, uint32_t(fake_sample_count));  // ZPass_A
@@ -885,6 +930,10 @@ GammaRamp SyncCommandProcessor::DisplayGamma() const {
     }
     g.mode = (LoadReg(reg::DC_LUT_RW_MODE) & 1) ? GammaRamp::kPwl : GammaRamp::kTable;
     return g;
+}
+
+void SyncCommandProcessor::SetQueryLog(bool on) {
+    query_log_left_.store(on ? kQueryLogLines : 0, std::memory_order_relaxed);
 }
 
 CurrentWait SyncCommandProcessor::current_wait() const {

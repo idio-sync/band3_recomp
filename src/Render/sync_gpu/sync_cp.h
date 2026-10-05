@@ -95,6 +95,7 @@ public:
         return *this;
     }
     void add(uint64_t n = 1) { v_.fetch_add(n, std::memory_order_relaxed); }
+    void set(uint64_t n) { v_.store(n, std::memory_order_relaxed); }
     void raise_to(uint64_t n) {
         uint64_t cur = get();
         while (n > cur && !v_.compare_exchange_weak(cur, n, std::memory_order_relaxed)) {
@@ -107,7 +108,22 @@ private:
     std::atomic<uint64_t> v_{0};
 };
 
+// WAIT_REG_MEM's wait interval, the packet's last word, in the bands Xenia's
+// wait treats apart (cp.cc:1018-1035): under 0x100 it yields and polls again
+// at once, a spin; 0x100 and up it sleeps wait / 0x100 ms (vsync on), 0x1000
+// and up 16 ms or more
+enum WaitBand : int { kWaitYield, kWaitSleep, kWaitLongSleep, kWaitBands };
+inline int WaitBandOf(uint32_t wait) {
+    return wait < 0x100 ? kWaitYield : wait < 0x1000 ? kWaitSleep : kWaitLongSleep;
+}
+
 struct SyncCpStats {
+    // the first kWaitValues distinct wait intervals of the waits that
+    // stalled, in the order seen, and how many stalled with each (a value's
+    // index never changes, so two readings subtract index by index); the
+    // rest are in the bands alone
+    static constexpr int kWaitValues = 8;
+
     StatCounter primary_buffers, indirect_buffers;
     StatCounter packets;  // of any type, zero words included
     StatCounter type0, type1, type2, type3;
@@ -118,6 +134,13 @@ struct SyncCpStats {
     StatCounter waits;                // WAIT_REG_MEM packets
     StatCounter stalled_waits;        // ...that didn't match at the first poll
     StatCounter wait_ns_total, wait_ns_max;  // the stalled ones' time
+    // the stalled ones by their wait interval's WaitBand, their time, and
+    // the polls that didn't match in each (each one a sleep or a yield: a
+    // spinning thread polls thousands of times a millisecond)
+    StatCounter stalled_by_band[kWaitBands], wait_ns_by_band[kWaitBands];
+    StatCounter polls_by_band[kWaitBands];
+    StatCounter wait_value_count;  // of wait_values used, up to kWaitValues
+    StatCounter wait_values[kWaitValues], stalled_by_value[kWaitValues];
     StatCounter interrupts, swaps, fences, sample_count_writes;
     StatCounter register_writes;
     StatCounter unknown_register_writes, unknown_register_reads;  // with a known table
@@ -132,6 +155,7 @@ struct CurrentWait {
     uint32_t opcode = 0;
     bool memory = false;  // poll_addr is a physical address, else a register
     uint32_t poll_addr = 0, ref = 0, mask = 0, function = 0;
+    uint32_t wait = 0;        // the packet's wait interval (WaitBandOf)
     uint32_t last_value = 0;  // the last value polled (masked)
     std::chrono::nanoseconds elapsed{0};
 };
@@ -144,6 +168,10 @@ struct GpuRegisters {
 
 class SyncCommandProcessor {
 public:
+    // the write index of a ring the guest hasn't written CP_RB_WPTR for yet
+    // (Xenia's "not set up" marker, cp.cc:209-246)
+    static constexpr uint32_t kNoWriteIndex = 0xBAADF00D;
+
     explicit SyncCommandProcessor(GuestMemory& memory, SyncCpHooks hooks = {},
                                   SyncCpConfig config = {});
     SyncCommandProcessor(const SyncCommandProcessor&) = delete;
@@ -151,7 +179,11 @@ public:
 
     // VdInitializeRingBuffer: the primary ring at physical `ptr`, of
     // 1 << (size_log2 + 3) bytes as Xenia reads size_log2 (in qwords); the
-    // read index back to 0. Call before the CP thread runs, or on it.
+    // read index back to 0, and the write index to kNoWriteIndex, so nothing
+    // runs until the guest writes CP_RB_WPTR for the new ring (the game sets
+    // its ring up again after the splash, and the old write index would run
+    // the new ring's words up to it, whatever they are). Call before the CP
+    // thread runs, or on it.
     void InitializeRingBuffer(uint32_t ptr, uint32_t size_log2);
     // VdEnableRingBufferRPtrWriteBack: where the read index is written back
     void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2);
@@ -217,6 +249,12 @@ public:
     void SetFakeSampleCount(int32_t count) {
         fake_sample_count_.store(count, std::memory_order_relaxed);
     }
+    // native_query_log: the next kQueryLogLines EVENT_WRITE_ZPD packets
+    // log the 8 words of their sample counts as they found them (before
+    // clearing them) and whether they ended a query; turning it on again
+    // logs as many more
+    static constexpr uint32_t kQueryLogLines = 20;
+    void SetQueryLog(bool on);
 
     const SyncCpStats& stats() const { return stats_; }
     CurrentWait current_wait() const;
@@ -259,11 +297,15 @@ private:
     void LogLimited(StatCounter& counter, const std::string& line);
     void NoteUnknownRegister(uint32_t index, bool write, uint32_t value);
     void Wait(uint32_t wait);
+    // a stalled wait's interval into SyncCpStats::wait_values
+    void CountWaitValue(uint32_t wait);
 
     GuestMemory& memory_;
     SyncCpHooks hooks_;
     bool sleep_in_waits_;
     std::atomic<int32_t> fake_sample_count_;
+    // ZPD packets left to log (SetQueryLog); the CP thread counts it down
+    std::atomic<uint32_t> query_log_left_{0};
     std::atomic<bool> running_{true};
 
     GpuRegisters regs_;
@@ -280,7 +322,7 @@ private:
     uint32_t read_ptr_update_freq_ = 0;
     uint32_t read_ptr_writeback_ptr_ = 0;
     std::atomic<uint32_t> read_index_{0};
-    std::atomic<uint32_t> write_index_{0};
+    std::atomic<uint32_t> write_index_{kNoWriteIndex};
     std::atomic<uint32_t> counter_{0};
     uint64_t bin_select_ = 0xFFFFFFFFull;
     uint64_t bin_mask_ = 0xFFFFFFFFull;

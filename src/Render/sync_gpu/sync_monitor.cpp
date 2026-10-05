@@ -63,6 +63,15 @@ std::string Pm4OpcodeName(uint32_t opcode) {
     }
 }
 
+const char* WaitBandName(int band) {
+    switch (band) {
+        case kWaitYield: return "yield";
+        case kWaitSleep: return "sleep";
+        case kWaitLongSleep: return "long_sleep";
+        default: return "?";
+    }
+}
+
 const char* WaitFunctionName(uint32_t function) {
     static constexpr const char* kNames[] = {"never", "<", "<=", "==", "!=", ">=", ">", "always"};
     return kNames[function & 7];
@@ -85,6 +94,22 @@ SyncCpDelta DeltaOf(const SyncCpStats& now, const SyncCpStats& before) {
     d.stalled_waits = minus(now.stalled_waits, before.stalled_waits);
     d.wait_ms = double(minus(now.wait_ns_total, before.wait_ns_total)) / 1e6;
     d.wait_max_ms = double(now.wait_ns_max.get()) / 1e6;
+    for (int b = 0; b < kWaitBands; b++) {
+        d.stalled_by_band[b] = minus(now.stalled_by_band[b], before.stalled_by_band[b]);
+        d.wait_ms_by_band[b] =
+            double(minus(now.wait_ns_by_band[b], before.wait_ns_by_band[b])) / 1e6;
+        d.polls_by_band[b] = minus(now.polls_by_band[b], before.polls_by_band[b]);
+    }
+    // a value's index is the same in both (SyncCpStats::wait_values); one
+    // `before` hadn't seen yet counts from 0
+    const uint64_t values = std::min<uint64_t>(now.wait_value_count.get(), SyncCpStats::kWaitValues);
+    for (uint64_t i = 0; i < values; i++) {
+        const uint64_t was = i < before.wait_value_count.get() ? before.stalled_by_value[i].get() : 0;
+        const uint64_t is = now.stalled_by_value[i].get();
+        if (is > was) d.wait_values.emplace_back(uint32_t(now.wait_values[i].get()), is - was);
+    }
+    std::stable_sort(d.wait_values.begin(), d.wait_values.end(),
+                     [](const auto& a, const auto& b) { return a.second > b.second; });
     d.interrupts = minus(now.interrupts, before.interrupts);
     d.swaps = minus(now.swaps, before.swaps);
     d.fences = minus(now.fences, before.fences);
@@ -104,6 +129,26 @@ SyncCpDelta DeltaOf(const SyncCpStats& now, const SyncCpStats& before) {
     return d;
 }
 
+namespace {
+
+// the summary's stalled waits by wait interval: each band's waits, time and
+// polls (a yield's polls are a spin's), then the intervals themselves
+std::string StalledWaits(const SyncCpDelta& d) {
+    std::string out = "stalled by wait interval:";
+    for (int b = 0; b < kWaitBands; b++) {
+        out += std::format("{} {} {} ({:.1f} ms, {} polls)", b ? "," : "", WaitBandName(b),
+                           d.stalled_by_band[b], d.wait_ms_by_band[b], d.polls_by_band[b]);
+    }
+    out += "; intervals";
+    for (size_t i = 0; i < d.wait_values.size(); i++)
+        out += std::format("{} 0x{:X} {}", i ? "," : "", d.wait_values[i].first,
+                           d.wait_values[i].second);
+    if (d.wait_values.empty()) out += " none";
+    return out;
+}
+
+}  // namespace
+
 std::string SummaryLine(const SyncCpDelta& d, double seconds, uint64_t vblanks, size_t top) {
     std::string opcodes;
     for (size_t i = 0; i < d.opcodes.size() && i < top; i++) {
@@ -115,13 +160,14 @@ std::string SummaryLine(const SyncCpDelta& d, double seconds, uint64_t vblanks, 
     return std::format(
         "sync gpu: the last {:.0f} s: {} packets (type 0 {}, type 1 {}, type 3 {}) in {} ring "
         "runs and {} indirect buffers; opcodes {}; draws skipped {}; waits {} ({} stalled, "
-        "{:.1f} ms in all, longest yet {:.1f} ms); interrupts {}, swaps {}, vblanks {}, fences "
-        "{}, ZPD {}; unknown opcodes {}, unknown registers {}, out of range {}, bad packets {}, "
-        "bad addresses {}",
+        "{:.1f} ms in all, longest yet {:.1f} ms); {}; interrupts {}, swaps {}, vblanks {}, "
+        "fences {}, ZPD {}; unknown opcodes {}, unknown registers {}, out of range {}, bad "
+        "packets {}, bad addresses {}",
         seconds, d.packets, d.type0, d.type1, d.type3, d.primary_buffers, d.indirect_buffers,
         opcodes, d.draws_skipped, d.waits, d.stalled_waits, d.wait_ms, d.wait_max_ms,
-        d.interrupts, d.swaps, vblanks, d.fences, d.sample_count_writes, d.unknown_opcodes,
-        d.unknown_registers, d.out_of_range_registers, d.bad_packets, d.bad_addresses);
+        StalledWaits(d), d.interrupts, d.swaps, vblanks, d.fences, d.sample_count_writes,
+        d.unknown_opcodes, d.unknown_registers, d.out_of_range_registers, d.bad_packets,
+        d.bad_addresses);
 }
 
 namespace {
@@ -147,10 +193,11 @@ bool SameWait(const CurrentWait& a, const CurrentWait& b) {
 std::string DescribeStall(const CurrentWait& w, uint32_t read, uint32_t write) {
     return std::format(
         "sync gpu: watchdog: the command processor has waited {:.1f} s in {} for {} & {:08X} "
-        "{} {:08X} (last read {:08X}); ring read index {:X}, write index {:X}. The game waits "
-        "behind it",
+        "{} {:08X} (last read {:08X}); ring read index {:X}, write index {:X}; wait interval "
+        "0x{:X} ({}). The game waits behind it",
         Seconds(w.elapsed), Pm4OpcodeName(w.opcode), Polled(w), w.mask,
-        WaitFunctionName(w.function), w.ref, w.last_value, read, write);
+        WaitFunctionName(w.function), w.ref, w.last_value, read, write, w.wait,
+        WaitBandName(WaitBandOf(w.wait)));
 }
 
 std::vector<std::string> StallWatch::Check(const CurrentWait& wait, uint32_t read,

@@ -454,6 +454,22 @@ TEST_CASE("an emulated paint or another source starts the frames' count over") {
     CHECK(log.repeats == 0);
 }
 
+TEST_CASE("each frame handed to the window is timed from its Present, painted or not") {
+    PaintRecorder r;
+    r.Published(110 * kMs, 100 * kMs);
+    r.Published(130 * kMs, 117 * kMs);
+    r.Published(140 * kMs, 0);  // no Present known: not timed
+    const PaintLog& log = r.Log();
+    REQUIRE(log.publish_latency_ms.size() == 2);
+    CHECK(log.publish_latency_ms[0] == doctest::Approx(10.0));
+    CHECK(log.publish_latency_ms[1] == doctest::Approx(13.0));
+    // not paints
+    CHECK(log.paints == 0);
+    CHECK(log.shown == 0);
+    r.Reset();
+    CHECK(r.Log().publish_latency_ms.empty());
+}
+
 // gpu_skip.h's SkipLatch: which frames the emulated GPU skips the game's draws
 // in, and when its picture is the game's again
 

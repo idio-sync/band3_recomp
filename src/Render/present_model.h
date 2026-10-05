@@ -257,6 +257,11 @@ struct PaintLog {
     uint64_t shown = 0, repeats = 0, skipped = 0;
     // from the game's Present of each frame shown to the first paint showing it
     std::vector<double> latency_ms;
+    // from the game's Present of each new frame the native renderer handed
+    // the window to its handing it over (Published), whether a paint ever
+    // showed it or not: the renderer's own latency, which a window that
+    // doesn't paint (off every monitor) can't hide
+    std::vector<double> publish_latency_ms;
 };
 
 // Keeps a PaintLog from each paint's time (steady-clock nanoseconds). Not
@@ -292,6 +297,13 @@ class PaintRecorder {
         if (presented_ns && log_.latency_ms.size() < kMaxSamples)
             log_.latency_ms.push_back(double(now_ns - presented_ns) / 1e6);
         last_serial_ = serial;
+    }
+
+    // The native renderer handed the window a new frame at `now_ns`, which
+    // the game presented at `presented_ns`.
+    void Published(int64_t now_ns, int64_t presented_ns) {
+        if (presented_ns && log_.publish_latency_ms.size() < kMaxSamples)
+            log_.publish_latency_ms.push_back(double(now_ns - presented_ns) / 1e6);
     }
 
     // The numbers start over; the last paint's time and frame are kept, so

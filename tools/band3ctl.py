@@ -10,6 +10,7 @@ band3 started with --test_port=<port> takes one command per line on
   python tools/band3ctl.py run tests/game/boot.b3t
   python tools/band3ctl.py "hold down; wait frames=90; release all"
   python tools/band3ctl.py window offscreen       restore the game's window off every monitor
+  python tools/band3ctl.py window onscreen        restore it on the primary monitor, unfocused
   python tools/band3ctl.py window shot out.png    what its window shows (not minimized)
   python tools/band3ctl.py window minimize
 
@@ -22,7 +23,8 @@ exits 1. It prints the replies that carry measurements (`native_view`'s stats). 
 for checking what the window presents (the harness's screenshots are the
 game's picture alone, the renderer's that `renderer` picks): a window launched minimized never paints, so
 `offscreen` restores it to the right of every monitor, where it paints but nobody
-sees it.
+sees it. `onscreen` restores it on the primary monitor instead, still unfocused,
+for pacing a monitor's vertical blank drives: it's then on the user's screen.
 
 Standard library only.
 """
@@ -280,6 +282,13 @@ def offscreen_origin(virtual_screen):
     return left + width + 100, top
 
 
+def onscreen_origin(work_area):
+    """Where `onscreen` puts a window: the top left of the primary monitor's
+    work area (left, top, right, bottom), clear of a taskbar on the left or top."""
+    left, top, _, _ = work_area
+    return left, top
+
+
 def is_build_exe(image, repo=REPO):
     """Whether a process's image is a band3.exe built under this checkout's
     out/build, not a worktree's (.claude/worktrees/<name>/out/build) or another's."""
@@ -337,6 +346,8 @@ class GameWindow:
                 (self.user32, "SetWindowPos", wintypes.BOOL, [H, H, I, I, I, I, wintypes.UINT]),
                 (self.user32, "ShowWindow", wintypes.BOOL, [H, I]),
                 (self.user32, "GetWindowLongW", wintypes.LONG, [H, I]),
+                (self.user32, "SystemParametersInfoW", wintypes.BOOL,
+                 [wintypes.UINT, wintypes.UINT, P, wintypes.UINT]),
                 (self.user32, "AdjustWindowRectExForDpi", wintypes.BOOL,
                  [P, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD, wintypes.UINT]),
                 (self.user32, "PrintWindow", wintypes.BOOL, [H, wintypes.HDC, wintypes.UINT]),
@@ -453,13 +464,21 @@ class GameWindow:
                 "client": [c.right - c.left, c.bottom - c.top],
                 "foreground": self.user32.GetForegroundWindow() == self.hwnd}
 
-    def offscreen(self):
-        """Restored (so it paints) but right of every monitor, never activated."""
-        x, y = offscreen_origin(self._virtual_screen())
+    def _work_area(self):
+        """The primary monitor's work area (left, top, right, bottom): the
+        monitor less the taskbar, in physical pixels."""
+        r = self.wt.RECT()
+        if not self.user32.SystemParametersInfoW(0x30, 0, self.ct.byref(r), 0):  # SPI_GETWORKAREA
+            raise RuntimeError(f"SystemParametersInfo failed ({self.ct.get_last_error()})")
+        return r.left, r.top, r.right, r.bottom
+
+    def _restore_at(self, x, y):
+        """Restored (so it paints) with its top left at screen (x, y), its size
+        kept, never activated."""
         p = self._placement()
         r = p.rcNormalPosition
         width, height = r.right - r.left, r.bottom - r.top
-        # the restored position first, so restoring doesn't show it on a monitor
+        # the restored position first, so restoring doesn't show it elsewhere
         r.left, r.top, r.right, r.bottom = x, y, x + width, y + height
         p.showCmd = self.SW_SHOWNOACTIVATE
         self._set_placement(p)
@@ -475,6 +494,16 @@ class GameWindow:
         flags = self.SWP_NOMOVE | self.SWP_NOZORDER | self.SWP_NOACTIVATE
         self.user32.SetWindowPos(self.hwnd, None, 0, 0, width, height + 1, flags)
         self.user32.SetWindowPos(self.hwnd, None, 0, 0, width, height, flags)
+
+    def offscreen(self):
+        """Restored (so it paints) but right of every monitor, never activated."""
+        self._restore_at(*offscreen_origin(self._virtual_screen()))
+
+    def onscreen(self):
+        """Restored on the primary monitor, at its work area's top left, its
+        size kept, never activated or brought to the front: where a monitor's
+        vertical blank paces its paints, and where the user sees it."""
+        self._restore_at(*onscreen_origin(self._work_area()))
 
     def minimize(self):
         """Minimized without activating; restoring it later puts it on the
@@ -586,6 +615,8 @@ def window(args):
         reply = {"ok": True}
         if args.what == "offscreen":
             w.offscreen()
+        elif args.what == "onscreen":
+            w.onscreen()
         elif args.what == "minimize":
             w.minimize()
         elif args.what == "size":
@@ -676,8 +707,11 @@ def main(argv):
     p = sub.add_parser(
         "window", help="move, size, minimize or screenshot the running game's window "
                        "without ever activating it (Windows)")
-    p.add_argument("what", choices=["offscreen", "shot", "minimize", "size", "click", "status"],
-                   help="offscreen: restored, right of every monitor; shot <png>: its client "
+    p.add_argument("what", choices=["offscreen", "onscreen", "shot", "minimize", "size", "click",
+                                    "status"],
+                   help="offscreen: restored, right of every monitor; onscreen: restored at the "
+                        "top left of the primary monitor, unfocused (on the user's screen); "
+                        "shot <png>: its client "
                         "area as drawn (not while minimized); minimize; size <W>x<H>: its "
                         "client area in physical pixels; click <X>,<Y>: a left click there, "
                         "in client pixels; status")

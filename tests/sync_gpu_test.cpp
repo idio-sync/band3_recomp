@@ -138,6 +138,22 @@ TEST_CASE("the summary counts what changed since the last one, opcodes most firs
     now.fences.add(200);
     now.unknown_register_writes.add(2);
     now.unknown_register_reads.add(1);
+    // the stalled waits: 55 yielding (0x20), 5 sleeping (0x100)
+    now.stalled_by_band[kWaitYield].add(55);
+    now.wait_ns_by_band[kWaitYield].add(200'000'000);
+    now.polls_by_band[kWaitYield].add(90000);
+    now.stalled_by_band[kWaitSleep].add(5);
+    now.wait_ns_by_band[kWaitSleep].add(50'000'000);
+    now.polls_by_band[kWaitSleep].add(9);
+    // 0x100 seen first; `before` had seen it alone, 3 times
+    before.wait_value_count.set(1);
+    before.wait_values[0].set(0x100);
+    before.stalled_by_value[0].add(3);
+    now.wait_value_count.set(2);
+    now.wait_values[0].set(0x100);
+    now.stalled_by_value[0].add(8);
+    now.wait_values[1].set(0x20);
+    now.stalled_by_value[1].add(55);
 
     const SyncCpDelta d = DeltaOf(now, before);
     CHECK(d.packets == 1000);
@@ -150,8 +166,18 @@ TEST_CASE("the summary counts what changed since the last one, opcodes most firs
     CHECK(d.opcodes[1].first == pm4::DRAW_INDX);
     CHECK(d.opcodes[2].first == pm4::EVENT_WRITE_SHD);
     CHECK(d.opcodes[3] == std::pair<uint32_t, uint64_t>{pm4::INTERRUPT, 50});
+    CHECK(d.stalled_by_band[kWaitYield] == 55);
+    CHECK(d.wait_ms_by_band[kWaitSleep] == doctest::Approx(50));
+    CHECK(d.polls_by_band[kWaitYield] == 90000);
+    // the intervals that stalled in this time, most first
+    REQUIRE(d.wait_values.size() == 2);
+    CHECK(d.wait_values[0] == std::pair<uint32_t, uint64_t>{0x20, 55});
+    CHECK(d.wait_values[1] == std::pair<uint32_t, uint64_t>{0x100, 5});
 
     const std::string line = SummaryLine(d, 10, 600, 3);
+    CHECK(Has(line, "longest yet 16.0 ms); stalled by wait interval: yield 55 (200.0 ms, 90000 "
+                    "polls), sleep 5 (50.0 ms, 9 polls), long_sleep 0 (0.0 ms, 0 polls); "
+                    "intervals 0x20 55, 0x100 5; interrupts"));
     CHECK(Has(line, "sync gpu: the last 10 s: 1000 packets (type 0 400, type 1 0, type 3 600)"));
     CHECK(Has(line, "opcodes SET_CONSTANT 300, DRAW_INDX 200, EVENT_WRITE_SHD 200 and 1 more;"));
     CHECK(Has(line, "draws skipped 200; waits 70 (60 stalled, 250.0 ms in all, longest yet 16.0 ms)"));
@@ -159,6 +185,7 @@ TEST_CASE("the summary counts what changed since the last one, opcodes most firs
     CHECK(Has(line, "unknown registers 3"));
 
     CHECK(Has(SummaryLine(DeltaOf(before, before), 10, 0), "opcodes none;"));
+    CHECK(Has(SummaryLine(DeltaOf(before, before), 10, 0), "intervals none;"));
 }
 
 TEST_CASE("the watchdog reports a wait once it has gone on 2 s, once, and when it ends") {
@@ -195,5 +222,13 @@ TEST_CASE("the watchdog names a register wait by its register") {
     w.memory = false;
     w.function = 5;
     w.last_value = 7;
+    w.wait = 0x40;
     CHECK(Has(DescribeStall(w, 1, 2), "for register 1951 & FFFFFFFF >= 00000001 (last read 00000007)"));
+    // its wait interval, and whether that yields or sleeps between polls
+    CHECK(Has(DescribeStall(w, 1, 2), "write index 2; wait interval 0x40 (yield)."));
+    CHECK(WaitBandOf(0xFF) == kWaitYield);
+    CHECK(WaitBandOf(0x100) == kWaitSleep);
+    CHECK(WaitBandOf(0xFFF) == kWaitSleep);
+    CHECK(WaitBandOf(0x1000) == kWaitLongSleep);
+    CHECK(std::string(WaitBandName(kWaitLongSleep)) == "long_sleep");
 }
