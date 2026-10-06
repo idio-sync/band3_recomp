@@ -61,7 +61,14 @@ constexpr Choice kRenderers[] = {
 
 constexpr Choice kNativeMsaa[] = {{"1", "Off"}, {"2", "2x (the game's)"}, {"4", "4x"}};
 
-constexpr Choice kMaxHeight[] = {{"0", "The window's"}};
+// native_max_height's: the most lines drawn, a taller window's picture scaled up
+constexpr Choice kNativeHeights[] = {
+    {"0", "The window's size"},
+    {"720", "Up to 720p"},
+    {"1080", "Up to 1080p"},
+    {"1440", "Up to 1440p"},
+    {"2160", "Up to 4K"},
+};
 
 constexpr Choice kEmulatedWhileNative[] = {
     {"skip_draws", "Skip what the native picture draws"},
@@ -183,8 +190,8 @@ constexpr Setting kSettings[] = {
      .label = "Anisotropic filtering", .widget = kCombo, .choices = kAnisotropic,
      .renderers = kWithNative},
     {.cvar = "native_max_height", .tab = kGraphics, .section = "Native renderer",
-     .label = "Max render height", .widget = kIntStepper, .choices = kMaxHeight,
-     .range = Range{0, 4320, 360}, .unit = "lines", .renderers = kWithNative},
+     .label = "Render resolution", .widget = kComboText, .choices = kNativeHeights,
+     .renderers = kWithNative},
     {.cvar = "resolution_scale", .tab = kGraphics, .section = "Emulated GPU",
      .label = "Render scale", .widget = kIntStepper, .range = Range{1, 8, 1}, .unit = "x",
      .renderers = kWithEmulatedGpu},

@@ -23,8 +23,11 @@ renderer hasn't been run yet), or **Native + emulated (debug)**, both side by si
 switching between their pictures in game. A line under it says what the chosen one does.
 Native to or from the other two applies when band3 starts, so Play restarts band3 for it.
 The tab's sections show only what the chosen renderer uses: **Display** and **Game** for
-all three, **Native renderer** (its anti-aliasing, anisotropic filtering and the most lines
-it draws) for Native and Native + emulated, **Emulated GPU** (render scale, FXAA,
+all three, **Native renderer** (its anti-aliasing, anisotropic filtering and **Render
+resolution**, [`native_max_height`](native-renderer.md): the window's size, the default, or
+the most lines the native renderer draws, a taller window's picture scaled up to fill it,
+for a GPU that can't keep up at the window's size; **Other...** takes a typed height) for
+Native and Native + emulated, **Emulated GPU** (render scale, FXAA,
 anisotropic filtering, VSync, and under Native + emulated what the emulated GPU still does
 while the native picture shows) for Emulated and Native + emulated, as does **Compress
 character textures**. The emulated GPU's own settings exist only while it runs, so

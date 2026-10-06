@@ -117,6 +117,7 @@ const char* HintFor(std::string_view cvar) {
     if (cvar == "midi_drums_device") return "A port's name, or part of one";
     if (cvar == "usb_mic_devices") return "A microphone's name, or part of one";
     if (cvar == "resolution") return "Width x height, e.g. 1600x900";
+    if (cvar == "native_max_height") return "Lines tall, e.g. 900";
     if (cvar == "forced_venue") return "A venue or a comma separated list";
     return "";
 }
