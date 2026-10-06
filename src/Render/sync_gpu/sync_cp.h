@@ -14,7 +14,7 @@
 #include "src/Render/sync_gpu/xenos_defs.h"
 
 // Experimental (N7, out/research/n7_design.md section 3): the "sync-only GPU"'s
-// command processor. With emulated_gpu = off there is no emulated GPU, but the
+// command processor. With renderer = native there is no emulated GPU, but the
 // game still writes its PM4 ring and waits on what the GPU does with it: the
 // fences D3D's BlockOnFence polls (EVENT_WRITE_SHD), the swap-complete word
 // the guest's interrupt handler writes (INTERRUPT), the read pointer

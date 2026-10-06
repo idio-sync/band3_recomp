@@ -17,7 +17,7 @@
 #include "src/Audio/usb_mic.h"
 #include "src/Input/input_system.h"
 #include "src/paths.h"
-#include "src/Render/sync_gpu/emulated_gpu_mode.h"
+#include "src/Render/renderer_switch.h"
 #include "src/settings.h"
 #include "launcher_start.h"
 #include "launcher_style.h"
@@ -49,9 +49,21 @@ float ButtonWidth(const char* label) {
 
 std::string Str(std::string_view s) { return std::string(s); }
 
-// emulated_gpu, as set now, asks for another mode than this run started in
-bool EmulatedGpuChanged() {
-    return render::sync_gpu::EmulatedGpuChanged(REXCVAR_GET(emulated_gpu));
+// renderer, as set now, needs another GPU than this run started with
+// (native, or the emulated GPU for emulated and both)
+bool RendererNeedsRestart() { return render::RendererRestartNeeded(REXCVAR_GET(renderer)); }
+
+// the renderer row's line about the value chosen
+const char* RendererLine(std::string_view value) {
+    switch (render::ParseRenderer(value).value_or(render::RendererMode::kEmulated)) {
+    case render::RendererMode::kNative:
+        return "band3's own renderer alone, at the window's size; no emulated Xbox 360 GPU";
+    case render::RendererMode::kEmulated: return "The emulated Xbox 360 GPU alone";
+    case render::RendererMode::kBoth:
+        return "Both run, the native picture shown; F8 switches to the emulated GPU's and back. "
+               "For comparing them: it costs the GPU both";
+    }
+    return "";
 }
 
 std::string FormatNumber(double v) {
@@ -367,10 +379,19 @@ void LauncherDialog::DrawSection(Tab tab, std::string_view section) {
     for (const auto& s : model_.Table()) {
         if (s.tab == tab && s.section == section && model_.Visible(s)) rows.push_back(&s);
     }
-    if (rows.empty()) return;
+
+    const std::optional<std::string> note = model_.SectionNote(tab, section);
+    if (rows.empty() && !note) return;
 
     const std::string name(section);
     SectionHeading(name.c_str());
+    if (note) {
+        FontScope font(kSmallSize);
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextColored(kMuted, "%s", note->c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::Dummy(ImVec2(0, Px(4)));
+    }
 
     const float width = ImGui::GetContentRegionAvail().x;
     const float label_width = std::clamp(width * 0.36f, Px(220), Px(420));
@@ -417,9 +438,14 @@ void LauncherDialog::DrawRow(const Setting& setting) {
         ImGui::TextColored(kMuted, "Applies when you press Play (band3 restarts)");
     }
     // nor the graphics system, chosen before the launcher showed
-    if (setting.cvar == "emulated_gpu" && EmulatedGpuChanged()) {
+    if (setting.cvar == "renderer") {
         FontScope font(kSmallSize);
-        ImGui::TextColored(kMuted, "Applies when you press Play (band3 restarts)");
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextColored(kMuted, "%s", RendererLine(model_.Value(setting.cvar)));
+        ImGui::PopTextWrapPos();
+        if (RendererNeedsRestart()) {
+            ImGui::TextColored(kMuted, "Applies when you press Play (band3 restarts)");
+        }
     }
     if (const auto warning = model_.Warning(setting.cvar)) {
         FontScope font(kSmallSize);
@@ -495,6 +521,8 @@ void LauncherDialog::DrawCombo(const Setting& s) {
     if (ImGui::BeginCombo("##value", preview.c_str())) {
         for (size_t i = 0; i < s.choices.size(); i++) {
             const bool selected = static_cast<int>(i) == index;
+            // a choice this platform doesn't offer shows only while it's the value
+            if (!selected && !model_.Offered(s.choices[i])) continue;
             if (ImGui::Selectable(Str(s.choices[i].label).c_str(), selected)) {
                 Apply(s.cvar, s.choices[i].value);
             }
@@ -1466,8 +1494,8 @@ void LauncherDialog::DrawPrompts() {
         if (input::InputBackendChanged()) {
             ImGui::TextColored(kWarn, "The new input backend applies only once it's saved.");
         }
-        if (EmulatedGpuChanged()) {
-            ImGui::TextColored(kWarn, "The new Emulated GPU setting applies only once it's saved.");
+        if (RendererNeedsRestart()) {
+            ImGui::TextColored(kWarn, "The new renderer applies only once it's saved.");
         }
         ImGui::Spacing();
         if (ImGui::Button("Play anyway")) {
@@ -1531,7 +1559,7 @@ void LauncherDialog::Start() {
 
 void LauncherDialog::Begin() {
     if (stage_ != Stage::kEditing) return;
-    const bool gpu_changed = EmulatedGpuChanged();
+    const bool gpu_changed = RendererNeedsRestart();
     restart_ = RestartsForInput({
         .backend_changed = input::InputBackendChanged(),
         .saved = !save_failed_,
@@ -1540,7 +1568,7 @@ void LauncherDialog::Begin() {
     });
     REXLOG_INFO("Launcher: Play{}{}", save_failed_ ? ", without saving" : "",
                 !restart_      ? ""
-                : gpu_changed ? ", restarting band3 for the new emulated_gpu setting"
+                : gpu_changed ? ", restarting band3 for the new renderer"
                               : ", restarting band3 for the new input backend");
     stage_ = Stage::kStarting;
     starting_frames_ = 0;

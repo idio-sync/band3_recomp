@@ -7,7 +7,7 @@ the window to the emulated GPU, which draws whole frames again, and
 back once its picture is the game's: 50-450 ms); then F8 back and `screenshot native`
 again. Unlike `capture`, nothing asks the emulated GPU for whole frames
 beforehand, so a pair shows what the window shows under each renderer as the
-player switches, skip_draws and all. With the game launched --renderer=native
+player switches, skip_draws and all. With the game launched --renderer=both
 on port <port> and its window off every monitor at the game's 1280x720
 (`window offscreen`, `window size 1280x720`), so both pictures are the same
 size:
@@ -44,7 +44,7 @@ crops (the score box and the track, scaled to the picture) to each row and to
 its Tier, as parity.py grades them (each 5 or less for A).
 
 Cross pairs: two runs of the render scripts, the reference R on the emulated
-GPU and N without it (--emulated_gpu=off; docs/native-renderer.md, Render
+GPU and N without it (--renderer=native; docs/native-renderer.md, Render
 checks), each with its captures in a directory:
 
   python tools/pairs.py --cross out/n7/ab/song/N out/n7/ab/song/R
@@ -310,7 +310,7 @@ def take(port, directory, name):
         r = shot("native", "native")
         if not r.get("ok") or r.get("renderer") != "native":
             sys.exit(f"{name}: no native picture ({r.get('error') or r.get('renderer')}): "
-                     "is renderer native?")
+                     "is renderer both, the native picture shown?")
         conn.command("bind renderer")
         started = time.monotonic()
         try:

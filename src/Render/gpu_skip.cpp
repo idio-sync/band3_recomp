@@ -9,7 +9,8 @@
 #include <utility>
 
 #include "generated/band3_init.h"
-#include "src/Render/sync_gpu/emulated_gpu_mode.h"
+#include "src/Render/renderer_switch.h"
+#include "src/Render/sync_gpu/native_only.h"
 
 // See gpu_skip.h.
 
@@ -34,8 +35,8 @@ std::atomic<bool> g_pass_wants_draws{false};
 thread_local bool t_point_tests = false;
 
 // the settings, kept by their change callbacks (registered at the first
-// Present, as scene_capture.cpp's are); the callbacks only store
-std::atomic<bool> g_renderer_native{false};
+// Present, as scene_capture.cpp's are); the callbacks only store. Which
+// picture shows is renderer_switch.h's (ShowsNativePicture).
 // emulated_gpu_while_native's SkipLevel
 std::atomic<int> g_skip_setting{int(SkipLevel::kSkipDraws)};
 // compress_character_textures: outfits are read back (DxTex::LockBitmap)
@@ -75,12 +76,8 @@ void TrackSettings() {
         auto compress = [](std::string_view v) {
             g_compress_textures.store(v == "true" || v == "1");
         };
-        g_renderer_native.store(rex::cvar::GetFlagByName("renderer") == "native");
         skip(rex::cvar::GetFlagByName("emulated_gpu_while_native"));
         compress(rex::cvar::GetFlagByName("compress_character_textures"));
-        rex::cvar::RegisterChangeCallback("renderer", [](std::string_view, std::string_view v) {
-            g_renderer_native.store(v == "native");
-        });
         rex::cvar::RegisterChangeCallback(
             "emulated_gpu_while_native",
             [skip](std::string_view, std::string_view v) { skip(v); });
@@ -126,13 +123,13 @@ const char* SkipLevelName(SkipLevel level) {
 
 void LatchGpuSkip(bool capture_on, bool recording, int proc) {
     TrackSettings();
-    // With emulated_gpu off nothing draws what the game sends but the native
+    // With renderer native nothing draws what the game sends but the native
     // renderer, from capture: every frame is swap_only, whatever the setting
     // and capture, and no whole frames are wanted
     const bool native_only = sync_gpu::NativeOnly();
     const SkipLevel want =
         native_only ? SkipLevel::kSwapOnly
-                    : WantedLevel(g_renderer_native.load(std::memory_order_relaxed),
+                    : WantedLevel(ShowsNativePicture(),
                                   SkipLevel(g_skip_setting.load(std::memory_order_relaxed)),
                                   capture_on, recording);
     const int full = native_only ? 0 : g_full_requested.exchange(0);
@@ -172,10 +169,10 @@ void SetPassWantsDraws(bool wants) {
     g_pass_wants_draws.store(wants, std::memory_order_relaxed);
 }
 
-// With emulated_gpu off the native renderer is the only one, there's no
+// With renderer native the native renderer is the only one, there's no
 // emulated picture to be fresh, and no whole frames to ask for.
 bool RendererNative() {
-    return sync_gpu::NativeOnly() || g_renderer_native.load(std::memory_order_relaxed);
+    return sync_gpu::NativeOnly() || ShowsNativePicture();
 }
 
 bool EmulatedPictureFresh() { return !sync_gpu::NativeOnly() && g_fresh.load(); }
@@ -205,8 +202,8 @@ GpuSkipStats GetGpuSkipStats() {
     s.passes_dropped = g_passes_dropped.load(std::memory_order_relaxed);
     s.frames = g_frames.load(std::memory_order_relaxed);
     s.frames_skipped = g_frames_skipped.load(std::memory_order_relaxed);
-    s.level = g_renderer_native.load() ? SkipLevel(g_skip_setting.load()) : SkipLevel::kFull;
-    // emulated_gpu off: swap_only every frame (LatchGpuSkip)
+    s.level = ShowsNativePicture() ? SkipLevel(g_skip_setting.load()) : SkipLevel::kFull;
+    // renderer native: swap_only every frame (LatchGpuSkip)
     if (sync_gpu::NativeOnly()) s.level = SkipLevel::kSwapOnly;
     s.skip_mode = s.level != SkipLevel::kFull;
     s.skipping = SkipLevel(g_frame_level.load()) != SkipLevel::kFull;

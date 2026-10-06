@@ -6,16 +6,17 @@
 
 #include "src/Render/frame_compose.h"
 
-// Experimental (N3): while the native renderer draws the window (renderer =
-// native), the emulated GPU stops drawing what nobody sees. gpu_skip.cpp
+// Experimental (N3): while the native renderer draws the window beside the
+// emulated GPU (renderer both, the native picture shown), the emulated GPU
+// stops drawing what nobody sees. gpu_skip.cpp
 // overrides the guest's D3D emitters (the generated functions are weak, so a
 // strong definition replaces them), which return without writing their
 // packets while a frame is skipped. Capture doesn't need the packets: it
 // reads guest objects and the device's CPU shadow (scene_capture.cpp), which
 // skipping leaves as it was. How much is skipped is emulated_gpu_while_native
-// (Band3 -> Graphics):
+// (Band3 -> Graphics -> Emulated GPU):
 //
-// - full: nothing, as under renderer = emulated.
+// - full: nothing, as with the emulated picture shown.
 // - skip_draws (the default): DrawIndexedVertices, the instanced draw and
 //   DrawVerticesUP. Clears, resolves, fences, swaps, BeginIndexedVertices
 //   and Begin/EndVertices still reach the emulated GPU, and so do these, so
@@ -46,7 +47,7 @@
 // Frames are skipped whole or not at all, at one level for the frame: what
 // the next one does is decided at the end of the game's DxRnd::Present
 // (scene_capture.cpp's hook, after the frame was captured), from the
-// setting, renderer, and capture being on with texture passes recorded, so
+// setting, the picture shown, and capture being on with texture passes recorded, so
 // anything is skipped only in frames the native renderer has whole.
 
 namespace band3::render {
@@ -56,9 +57,9 @@ namespace band3::render {
 enum class SkipLevel { kFull = 0, kSkipDraws = 1, kSwapOnly = 2 };
 
 // The level the next frame would be skipped at as things stand: the setting
-// only while renderer is native and capture records the frame with its
-// texture passes; whole otherwise, so under renderer = emulated nothing is
-// ever skipped
+// only while the native picture shows and capture records the frame with
+// its texture passes; whole otherwise, so with the emulated picture shown
+// nothing is ever skipped
 inline SkipLevel WantedLevel(bool renderer_native, SkipLevel setting, bool capture_on,
                              bool recording) {
     return renderer_native && capture_on && recording ? setting : SkipLevel::kFull;
@@ -165,7 +166,7 @@ struct GpuSkipStats {
     // the game's frames (Presents), and of those the ones skipped
     uint64_t frames = 0;
     uint64_t frames_skipped = 0;
-    // now: emulated_gpu_while_native's level while renderer is native (full
+    // now: emulated_gpu_while_native's level while the native picture shows (full
     // otherwise), skip_mode its level isn't full, the frame being drawn is
     // skipped, and the emulated picture is fresh
     SkipLevel level = SkipLevel::kFull;
@@ -196,7 +197,7 @@ GpuSkipStats GpuSkipStatsSince(const GpuSkipStats& now, const GpuSkipStats& befo
 // At the end of the game's DxRnd::Present hook, once the frame is captured:
 // decides whether the next frame is skipped. `capture_on`: capture is on;
 // `recording`: texture passes are recorded (native_view_record_targets, or
-// renderer has been native); `proc`: the frame's ProcCommands, -1 if its
+// the native picture has shown); `proc`: the frame's ProcCommands, -1 if its
 // DoPostProcess didn't run (SkipLatch::EndFrame).
 void LatchGpuSkip(bool capture_on, bool recording, int proc);
 

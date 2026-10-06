@@ -1,6 +1,6 @@
 #include "src/stall_watch.h"
 
-#include "src/Render/sync_gpu/emulated_gpu_mode.h"
+#include "src/Render/sync_gpu/native_only.h"
 #include "src/settings.h"
 
 #include <rex/cvar.h>
@@ -164,7 +164,7 @@ double CpuMs(HANDLE thread) {
 }
 
 // the emulated GPU's command processor thread, by the name the SDK gives it
-// (as test_server.cpp's CpThreadMs finds it), or with emulated_gpu off the
+// (as test_server.cpp's CpThreadMs finds it), or with renderer native the
 // sync-only GPU's (sync_graphics_system.h); or null
 HANDLE OpenCpThread() {
     const wchar_t* const cp_name =

@@ -47,7 +47,8 @@
 #include "Net/http_server.h"
 #include "Render/gpu_view.h"
 #include "Render/native_view.h"
-#include "Render/sync_gpu/emulated_gpu_mode.h"
+#include "Render/renderer_switch.h"
+#include "Render/sync_gpu/native_only.h"
 #include "Render/sync_gpu/sync_graphics_system.h"
 #include "Test/test_server.h"
 
@@ -153,6 +154,8 @@ class Band3App : public rex::ReXApp {
     }
 #endif
 
+    // before OnPreSetup reads renderer
+    band3::settings::MigrateRendererSettings();
     band3::AddSettingArgs();
     band3::settings::Init();
     band3::settings::SnapshotStartupSettings();
@@ -360,7 +363,7 @@ class Band3App : public rex::ReXApp {
     return true;
   }
 
-  // with emulated_gpu off the native renderer asks for the window's paints
+  // with renderer native the native renderer asks for the window's paints
   // itself, none while it's minimized, and one as soon as it's restored
   void OnWindowMinimized() override { band3::render::NativePresentMinimized(true); }
   void OnWindowRestored() override { band3::render::NativePresentMinimized(false); }
@@ -383,18 +386,22 @@ class Band3App : public rex::ReXApp {
   }
 
   // GPU emulation is a plugin (rexgpu-xenos) that the SDK leaves off unless
-  // named; keep any gpu_plugin the user set in band3.toml. With emulated_gpu
-  // off (experimental) there's none: band3's sync-only GPU is the runtime's
-  // graphics system instead (src/Render/sync_gpu/sync_graphics_system.h). Set
-  // here, before the window exists, the SDK has it make its presenter and
-  // wires the window and the overlays to it as it does the plugin's. A build
-  // with nothing to present with but the plugin (neither Direct3D 12 nor
-  // Vulkan) keeps the emulated GPU whatever emulated_gpu says.
+  // named; keep any gpu_plugin the user set in band3.toml. With renderer
+  // native there's none: band3's sync-only GPU is the runtime's graphics
+  // system instead (src/Render/sync_gpu/sync_graphics_system.h). Set here,
+  // before the window exists, the SDK has it make its presenter and wires the
+  // window and the overlays to it as it does the plugin's. A build with
+  // nothing to present with but the plugin (neither Direct3D 12 nor Vulkan)
+  // runs renderer native as emulated. This runs before the launcher shows
+  // (OnFinalizePaths), so the launcher's Play restarts band3 for a renderer
+  // that needs the other GPU (src/Render/renderer_mode.h).
   void OnPreSetup(rex::RuntimeConfig& config) override {
     namespace sync_gpu = band3::render::sync_gpu;
-    const sync_gpu::StartupGpuPlan gpu = sync_gpu::PlanStartupGpu(
-        REXCVAR_GET(emulated_gpu), config.gpu_plugin, sync_gpu::CanPresentNativeOnly());
+    const bool presentable = sync_gpu::CanPresentNativeOnly();
+    const band3::render::StartupGpuPlan gpu =
+        band3::render::PlanStartupGpu(REXCVAR_GET(renderer), config.gpu_plugin, presentable);
     sync_gpu::SetNativeOnly(gpu.native_only);
+    band3::render::StartRendererSwitch(gpu, presentable);
     for (const std::string& line : gpu.log) REXLOG_INFO("{}", line);
     if (gpu.native_only) {
       config.gpu_plugin.clear();
@@ -436,14 +443,6 @@ class Band3App : public rex::ReXApp {
     band3::discord::Start();
     band3::audio::StartUsbMics();
     band3::render::StartDumpIfRequested();
-    // emulated_gpu off: the native renderer is the only picture. Set here,
-    // once the launcher (which edits renderer) is gone, so a value saved in
-    // band3.toml for runs with the emulated GPU is left as it is.
-    if (const auto line = band3::render::sync_gpu::ForceRendererNative(
-            band3::render::sync_gpu::NativeOnly(), REXCVAR_GET(renderer))) {
-      REXLOG_INFO("{}", *line);
-      rex::cvar::SetFlagByName("renderer", "native");
-    }
     // the native renderer's drawer; here rather than in OnCreateDialogs,
     // which runs before the runtime has its graphics system
     if (auto* graphics = runtime()->graphics_system()) {
@@ -496,17 +495,11 @@ class Band3App : public rex::ReXApp {
       rex::ui::RegisterBind("bind_native_view", "F9", "Toggle the native view (experimental)", [this] {
         if (native_view_ && !launcher_) native_view_->Toggle();
       });
+      // the picture, not the renderer setting (renderer_switch.h)
       rex::ui::RegisterBind("bind_renderer", "F8",
-                            "Switch between the native and the emulated renderer (nothing with "
-                            "emulated_gpu off)", [] {
-        // with emulated_gpu off there's nothing to switch to
-        if (band3::render::sync_gpu::NativeOnly()) {
-          REXLOG_INFO("F8: {}", band3::render::sync_gpu::kNoEmulatedGpuSwitch);
-          return;
-        }
-        rex::cvar::SetFlagByName("renderer",
-                                 REXCVAR_GET(renderer) == "native" ? "emulated" : "native");
-      });
+                            "Switch between the native and the emulated GPU's picture (renderer "
+                            "both only)",
+                            [] { band3::render::PressRendererSwitch(); });
       // also opened by the overshell's Invite Friends while Rooms is on, which
       // the panel watches for itself
       rooms_panel_ = std::make_unique<band3::rooms::RoomsPanelDialog>(drawer);

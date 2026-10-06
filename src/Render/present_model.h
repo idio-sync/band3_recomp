@@ -6,7 +6,7 @@
 #include <vector>
 
 // Experimental: the arithmetic and bookkeeping of the native renderer's
-// presentation (renderer = native, native_view.cpp's NativePresentDrawer),
+// presentation (the native picture shown, native_view.cpp's NativePresentDrawer),
 // kept apart so the unit tests can check them: where the picture goes in the
 // window, which of the presenter's output textures the renderer's worker
 // may draw into while the SDK's presenter samples another, when each frame
@@ -253,7 +253,7 @@ class PublishPacer {
     int64_t interval_ns_ = 16666667;  // 60 Hz until measured
 };
 
-// With emulated_gpu off each frame the worker publishes asks the window to
+// With renderer native each frame the worker publishes asks the window to
 // paint (NativePresentDrawer::Start), which is GPU work no one sees while the
 // window can't be seen: minimized (its client area then 0x0), hidden, or with
 // no client area left. The first frame published once it can be seen again
@@ -262,7 +262,7 @@ inline bool PaintWanted(bool minimized, bool visible, uint32_t client_w, uint32_
     return !minimized && visible && client_w > 0 && client_h > 0;
 }
 
-// With emulated_gpu off the native renderer's worker draws nothing while the
+// With renderer native the native renderer's worker draws nothing while the
 // window is minimized (NativePresentMinimized): every frame it drew there
 // was GPU work nobody saw, and the presenter keeps painting a minimized
 // window regardless, so holding paints back alone doesn't save it. The game

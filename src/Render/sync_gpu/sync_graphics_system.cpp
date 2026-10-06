@@ -496,7 +496,7 @@ X_STATUS Band3GraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext*) {
     // startup keeps the emulated GPU here (CanPresentNativeOnly), so this
     // isn't reached
     REXLOG_ERROR("sync gpu: this build has neither Direct3D 12 nor Vulkan to present with; "
-                 "start with emulated_gpu on");
+                 "start with renderer emulated or both");
     return X_STATUS_NOT_IMPLEMENTED;
 #endif
 }

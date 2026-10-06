@@ -8,8 +8,8 @@
 #include "src/Render/gamma_ramp.h"
 #include "src/Render/sync_gpu/sync_cp.h"
 
-// Experimental (N7, out/research/n7_design.md): with emulated_gpu off
-// (emulated_gpu_mode.h), band3's graphics system in place of the SDK's
+// N7 (out/research/n7_design.md): with renderer native
+// (src/Render/renderer_mode.h), band3's graphics system in place of the SDK's
 // emulated GPU, set as the runtime's (Band3App::OnPreSetup). The kernel
 // reaches a graphics system only through IGraphicsSystem's virtuals
 // (rex/system/interfaces/graphics.h), so this is all the game's GPU is:
@@ -96,7 +96,7 @@ bool CanPresentNativeOnly();
 
 // The sync-only GPU while it's the runtime's, from its construction in
 // Band3App::OnPreSetup to its destruction; null with the emulated GPU (every
-// run with emulated_gpu on). Any thread.
+// run with renderer emulated or both). Any thread.
 Band3GraphicsSystem* Active();
 
 }  // namespace band3::render::sync_gpu

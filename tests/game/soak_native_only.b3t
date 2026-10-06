@@ -1,4 +1,4 @@
-# Soaks the native renderer with no emulated GPU at all (emulated_gpu off):
+# Soaks the native renderer with no emulated GPU at all (renderer native):
 # soak_native.b3t's three songs on autoplay at 1.5x and its menu round trips
 # between them, without its F8 switches and emulated GPU screenshots (there's
 # no other picture to switch to). Starts and ends on the main menu with the
@@ -7,8 +7,8 @@
 # from where boot.b3t leaves Rock Band 3 Deluxe (its first song's awards).
 # Launch at 60 Hz with the cap at 60 and restore the window off-screen, since
 # a minimized window doesn't paint (present_stats has nothing to measure) and
-# with emulated_gpu off the native renderer stops drawing while minimized:
-#   python tools/band3ctl.py launch --fresh -- --emulated_gpu=off --renderer=native --test_random_seed=21 --async_shader_compilation=false --frame_cap=60 --video_mode_refresh_rate=60
+# with renderer native the native renderer stops drawing while minimized:
+#   python tools/band3ctl.py launch --fresh -- --renderer=native --test_random_seed=21 --async_shader_compilation=false --frame_cap=60 --video_mode_refresh_rate=60
 #   python tools/band3ctl.py window offscreen
 #   python tools/band3ctl.py run tests/game/boot.b3t
 #   python tools/band3ctl.py run tests/game/soak_native_only_setup.b3t

@@ -3,8 +3,10 @@
 # frames captured and drawn, skipped_busy, each frame's ms and wait_ms) and the
 # window's (`present_stats`). Starts where boot.b3t leaves Rock Band 3 Deluxe
 # (on a fresh profile). Restore the window off-screen first: a minimized
-# window doesn't paint, which starves the native renderer's outputs.
-#   python tools/band3ctl.py launch --fresh -- --renderer=native --video_mode_refresh_rate=120 --frame_cap=off --test_random_seed=21
+# window doesn't paint, which starves the native renderer's outputs. Launch
+# with renderer both, the native renderer beside the emulated GPU (the setup
+# tools/hang_bisect.py bisects), or native for it alone:
+#   python tools/band3ctl.py launch --fresh -- --renderer=both --video_mode_refresh_rate=120 --frame_cap=off --test_random_seed=21
 #   python tools/band3ctl.py window offscreen
 #   python tools/band3ctl.py run tests/game/boot.b3t
 #   python tools/band3ctl.py run tests/game/pacing_song.b3t

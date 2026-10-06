@@ -740,7 +740,7 @@ TEST_CASE("the renderer's default is native on Windows, and an untouched one isn
         std::string_view(band3::settings::kDefaultRenderer) == "native" ? "emulated" : "native";
     Fixture f;
     f.env.cvars["renderer"] = Facts(ValueType::kString, band3::settings::kDefaultRenderer);
-    f.env.cvars["renderer"].allowed = {"emulated", "native"};
+    f.env.cvars["renderer"].allowed = {"native", "emulated", "both"};
     f.store.values["renderer"] = band3::settings::kDefaultRenderer;
     const Setting* row = FindSetting(SettingTable(), "renderer");
     REQUIRE(row);
@@ -759,6 +759,112 @@ TEST_CASE("the renderer's default is native on Windows, and an untouched one isn
     // and Reset takes it out again
     CHECK(m.Reset("renderer"));
     CHECK_FALSE(EditFor(m.Edits(), "renderer")->value);
+}
+
+namespace {
+
+// the real Graphics tab, every cvar there registered (`plugin`: the emulated
+// GPU's own too, as in a run with it), renderer set to `renderer`
+struct GraphicsTab {
+    Fixture f;
+    std::optional<SettingsModel> model;
+
+    GraphicsTab(const char* renderer, bool plugin = true) {
+        for (const Setting& s : SettingTable()) {
+            if (s.tab != Tab::kGraphics) continue;
+            f.env.cvars[std::string(s.cvar)] = Facts(ValueType::kString, "");
+        }
+        f.env.cvars["renderer"].registry_default = band3::settings::kDefaultRenderer;
+        f.env.cvars["renderer"].allowed = {"native", "emulated", "both"};
+        f.store.values["renderer"] = renderer;
+        // VSync shows only with the frame cap off
+        f.store.values["frame_cap"] = "off";
+        if (!plugin) {
+            for (const char* cvar :
+                 {"vsync", "resolution_scale", "swap_post_effect", "anisotropic_override"}) {
+                f.env.cvars[cvar].exists = false;
+            }
+        }
+        f.env.emulated_gpu_running = plugin;
+        model.emplace(SettingTable(), f.env, f.store);
+    }
+
+    std::set<std::string> Shown() const {
+        std::set<std::string> shown;
+        for (const Setting& s : SettingTable()) {
+            if (s.tab == Tab::kGraphics && model->Visible(s)) shown.insert(std::string(s.cvar));
+        }
+        return shown;
+    }
+};
+
+const std::set<std::string> kEveryRenderer = {
+    "monitor", "fullscreen", "resolution", "present_letterbox", "frame_cap", "renderer",
+    "rnd_sync", "background_fps", "disable_hair_shader", "disable_approximate_lights"};
+const std::set<std::string> kNativeRows = {"native_view_msaa", "native_anisotropic",
+                                           "native_max_height"};
+const std::set<std::string> kEmulatedRows = {"resolution_scale", "swap_post_effect",
+                                             "anisotropic_override", "vsync",
+                                             "compress_character_textures"};
+
+std::set<std::string> Union(std::initializer_list<std::set<std::string>> sets) {
+    std::set<std::string> out;
+    for (const auto& s : sets) out.insert(s.begin(), s.end());
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("the Graphics tab shows each group only for the renderers it applies to") {
+    CHECK(GraphicsTab("native").Shown() == Union({kEveryRenderer, kNativeRows}));
+    CHECK(GraphicsTab("emulated").Shown() == Union({kEveryRenderer, kEmulatedRows}));
+    // both: everything, and what the emulated GPU does while the native picture shows
+    CHECK(GraphicsTab("both").Shown() ==
+          Union({kEveryRenderer, kNativeRows, kEmulatedRows, {"emulated_gpu_while_native"}}));
+    // the groups have their own sections
+    const auto sections = SectionsOf(SettingTable(), Tab::kGraphics);
+    CHECK(sections == std::vector<std::string_view>{"Display", "Renderer", "Native renderer",
+                                                    "Emulated GPU", "Game"});
+}
+
+TEST_CASE("the emulated GPU's own settings, chosen in a run without it, wait for the restart") {
+    // renderer native at startup: the plugin's settings don't exist
+    GraphicsTab tab("emulated", false);
+    CHECK(tab.Shown() == Union({kEveryRenderer, {"compress_character_textures"}}));
+    const auto note = tab.model->SectionNote(Tab::kGraphics, "Emulated GPU");
+    REQUIRE(note);
+    CHECK(note->find("Play restarts band3") != std::string::npos);
+    // nothing to say for native, nor where the emulated GPU runs
+    CHECK_FALSE(GraphicsTab("native", false).model->SectionNote(Tab::kGraphics, "Emulated GPU"));
+    CHECK_FALSE(GraphicsTab("emulated").model->SectionNote(Tab::kGraphics, "Emulated GPU"));
+    CHECK_FALSE(tab.model->SectionNote(Tab::kGraphics, "Native renderer"));
+}
+
+TEST_CASE("renderer offers native on Windows only") {
+    const Setting* row = FindSetting(SettingTable(), "renderer");
+    REQUIRE(row);
+    REQUIRE(row->choices.size() == 3);
+    GraphicsTab windows("emulated");
+    for (const Choice& c : row->choices) CHECK(windows.model->Offered(c));
+    Fixture f;
+    f.env.windows = false;
+    SettingsModel elsewhere(SettingTable(), f.env, f.store);
+    for (const Choice& c : row->choices) {
+        INFO(c.value);
+        CHECK(elsewhere.Offered(c) == (c.value != "native"));
+    }
+}
+
+TEST_CASE("Save removes the retired emulated_gpu's key") {
+    // MigrateRendererSettings has cleared it: at its default, so Save takes
+    // the key out of band3.toml
+    GraphicsTab tab("both");
+    const auto edits = tab.model->Edits();
+    REQUIRE(EditFor(edits, "emulated_gpu"));
+    CHECK_FALSE(EditFor(edits, "emulated_gpu")->value);
+    const Setting* row = FindSetting(SettingTable(), "emulated_gpu");
+    REQUIRE(row);
+    CHECK_FALSE(tab.model->Visible(*row));
 }
 
 TEST_CASE("the launcher's table is consistent") {

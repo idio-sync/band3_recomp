@@ -60,7 +60,7 @@
 #include "src/Render/native_view.h"
 #include "src/Render/png_writer.h"
 #include "src/Render/scene_capture.h"
-#include "src/Render/sync_gpu/emulated_gpu_mode.h"
+#include "src/Render/sync_gpu/native_only.h"
 #include "src/Render/sync_gpu/sync_graphics_system.h"
 #include "src/Render/sync_gpu/sync_monitor.h"
 #include "src/settings.h"
@@ -188,11 +188,11 @@ public:
     // isn't the game's picture (capture asks for whole frames first)
     std::string Screenshot(const std::string& name, ScreenshotSource source,
                            ScreenshotInfo& out) override {
-        // emulated_gpu off: the window's picture is the native renderer's,
+        // renderer native: the window's picture is the native renderer's,
         // and there's no other
         if (render::sync_gpu::NativeOnly()) {
             if (source == ScreenshotSource::kEmulated)
-                return "no emulated GPU this run (emulated_gpu off)";
+                return "no emulated GPU this run (renderer native)";
             return Shot(name, true, out);
         }
         const bool native = source == ScreenshotSource::kNative ||
@@ -284,7 +284,7 @@ public:
     // first, enough for the held frame's wait (CaptureHeldFrame:
     // kWholeFramesToHold whole in a row, two to learn, thirty at most), so
     // the screenshot is the game's picture of the captured frame.
-    // With emulated_gpu off there's no emulated picture: no whole frames
+    // With renderer native there's no emulated picture: no whole frames
     // first, and the screenshot is the native renderer's (its drawing of the
     // held frame, the newest captured), `emulated` "none".
     std::string Capture(const std::string& name, CaptureInfo& out) override {
@@ -353,7 +353,7 @@ public:
         render::RasterOptions options;
         options.width = out.screenshot.width;
         options.height = out.screenshot.height;
-        // emulated_gpu off: the screenshot is the native renderer's, at the
+        // renderer native: the screenshot is the native renderer's, at the
         // window's size, so this one is at the game's, as with the emulated
         // GPU (the window's size is .gpu.presented.png's)
         if (render::sync_gpu::NativeOnly()) {
@@ -682,7 +682,7 @@ private:
         const render::CaptureProfile profile = render::GetCaptureProfile();
         const render::GpuSkipStats gpu = render::GetGpuSkipStats();
         const double cp_ms = CpThreadMs();
-        // emulated_gpu off: the sync-only GPU's numbers too
+        // renderer native: the sync-only GPU's numbers too
         auto* sync = render::sync_gpu::Active();
         std::lock_guard lock(measure_mutex_);
         measure_start_ = Clock::now();
@@ -695,7 +695,7 @@ private:
     }
 
     // what the sync-only GPU did between two readings, as native_view stats
-    // reports it (emulated_gpu off)
+    // reports it (renderer native)
     static NativeViewStats::EmulatedGpu::Sync SyncGpu(const render::sync_gpu::SyncGpuStats& now,
                                                       const render::sync_gpu::SyncGpuStats& from) {
         const render::sync_gpu::SyncCpDelta d = render::sync_gpu::DeltaOf(now.cp, from.cp);
@@ -846,7 +846,7 @@ private:
     render::CaptureProfile measure_profile_;
     render::GpuSkipStats measure_gpu_;
     double measure_cp_ms_ = -1;  // CpThreadMs
-    // the sync-only GPU's, with emulated_gpu off
+    // the sync-only GPU's, with renderer native
     render::sync_gpu::SyncGpuStats measure_sync_;
     // the frame cap's totals and the game's Presents so far when
     // present_stats last started over

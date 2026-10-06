@@ -55,7 +55,7 @@
 // sample count; where the device can't draw it, the other of 2 and 4, else 1
 // (logged).
 //
-// For the native renderer's presentation (renderer = native) that pass writes
+// For the native renderer's presentation (the native picture shown) that pass writes
 // one of kOutputs textures the SDK's presenter samples where they are, no
 // readback: on Windows SDL_gpu's Direct3D 12 device is the SDK's own (one
 // device per adapter in a process), so the ID3D12Resource behind SDL's

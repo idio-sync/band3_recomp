@@ -73,6 +73,8 @@ enum class Widget {
 struct Choice {
     std::string_view value;
     std::string_view label;
+    // offered on Windows only (renderer's native, until it has run on Linux)
+    bool windows_only = false;
 };
 
 struct Range {
@@ -87,6 +89,15 @@ struct Condition {
     std::string_view value;
 };
 
+// the renderer values (src/Render/renderer_mode.h) a row applies to: it shows
+// only while renderer is one of them
+enum Renderers : uint8_t {
+    kForNative = 1,
+    kForEmulated = 2,
+    kForBoth = 4,
+    kForAnyRenderer = kForNative | kForEmulated | kForBoth,
+};
+
 struct Setting {
     std::string_view cvar;
     Tab tab;
@@ -98,6 +109,8 @@ struct Setting {
     // after the number, e.g. "ms"
     std::string_view unit = {};
     Condition shown_when = {};
+    // and only for these renderers
+    uint8_t renderers = kForAnyRenderer;
     // set by this row's widget too, and reset with it
     std::string_view companion = {};
     // input_backend's xinput, GoCentral and Liveless are Windows only
@@ -202,6 +215,10 @@ struct Environment {
 #endif
     // what relative folders are relative to (IniAnchor)
     std::filesystem::path anchor;
+    // this run has the emulated GPU (renderer emulated or both at startup),
+    // so its own settings exist; with renderer native they don't until a
+    // restart (SectionNote)
+    bool emulated_gpu_running = true;
 };
 
 // the cvars' live values; the game's sets them with SetFlagByName
@@ -228,9 +245,15 @@ public:
     // the cvar exists and the platform has it; an unavailable setting isn't
     // shown and its key is left alone
     bool Available(const Setting& setting) const;
-    // Available, drawn (not kNone), on a Deck for the Deck banner, and its
-    // shown_when holds
+    // Available, drawn (not kNone), on a Deck for the Deck banner, its
+    // shown_when holds, and renderer is one it's for
     bool Visible(const Setting& setting) const;
+    // the choice is offered on this platform
+    bool Offered(const Choice& choice) const;
+    // what a section says under its heading, if anything: the emulated GPU's
+    // section, chosen while this run has none, that its settings show after
+    // the restart Play makes
+    std::optional<std::string> SectionNote(Tab tab, std::string_view section) const;
 
     std::string Value(std::string_view cvar) const;
     // sets the cvar now, so HotReload settings apply at once; false if it's
@@ -292,6 +315,8 @@ public:
     void MarkSaved();
 
 private:
+    // renderer's value is one of `renderers`
+    bool ForRenderer(uint8_t renderers) const;
     bool DeckPresetsOn() const;
     std::string DefaultFor(std::string_view cvar, bool deck_on) const;
     bool Same(std::string_view cvar, std::string_view a, std::string_view b) const;

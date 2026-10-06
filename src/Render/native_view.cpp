@@ -9,7 +9,8 @@
 #include "src/Render/png_writer.h"
 #include "src/Render/post_model.h"
 #include "src/Render/present_model.h"
-#include "src/Render/sync_gpu/emulated_gpu_mode.h"
+#include "src/Render/renderer_switch.h"
+#include "src/Render/sync_gpu/native_only.h"
 #include "src/crash_trace.h"
 #include "src/settings.h"
 #include "src/stall_watch.h"
@@ -280,8 +281,8 @@ class Renderer {
         dialog_open_ = open;
     }
 
-    // The presenter (renderer = native) as a user. While it is one, its size
-    // is the size drawn at, whatever the window or the live view set; and on
+    // The presenter (the native picture shown) as a user. While it is one,
+    // its size is the size drawn at, whatever the window or the live view set; and on
     // the zero-copy path each frame goes into one of the outputs (slots_),
     // not into RGBA. Each time it starts, it shows only frames drawn from
     // captures published from then on (PresentSlots::Start).
@@ -355,12 +356,12 @@ class Renderer {
         std::lock_guard lock(mutex_);
         settle_ = std::move(settle);
     }
-    // With emulated_gpu off, the window minimized (`paused`) or restored
+    // With renderer native, the window minimized (`paused`) or restored
     // (DrawPause): while it's minimized the worker draws nothing for it but a
     // screenshot asked for, keeping its outputs, and the captures the game
     // publishes meanwhile go undrawn. Restored, the window goes on showing
     // the last frame published (no new stretch: nothing would show, black
-    // with emulated_gpu off) until one from a capture published from then on
+    // with renderer native) until one from a capture published from then on
     // is (PresentSlots::Resume); and that first one is a whole picture, as a
     // stretch's first is (Run: the kept post buffer is from before the pause).
     void SetPaused(bool paused) {
@@ -397,7 +398,7 @@ class Renderer {
         paint_cv_.notify_all();
     }
     // called on the worker each time a frame is published for the window
-    // (emulated_gpu off's paint request); null to stop
+    // (renderer native's paint request); null to stop
     void SetPublished(std::function<void()> published) {
         std::lock_guard lock(mutex_);
         published_ = published ? std::make_shared<const std::function<void()>>(std::move(published))
@@ -1096,7 +1097,7 @@ class Renderer {
     uint32_t present_w_ = 1280, present_h_ = 720;
     bool present_zero_copy_ = false;
     PresentSlots slots_;
-    // the window minimized, with emulated_gpu off (SetPaused), and for how
+    // the window minimized, with renderer native (SetPaused), and for how
     // long; and the times it was restored, for the worker's first frame after
     DrawPause pause_;
     uint64_t resumes_ = 0;
@@ -1294,7 +1295,7 @@ void StopNativeView() {
 }
 
 // ---------------------------------------------------------------------------
-// the native renderer on the window (renderer = native)
+// the native renderer on the window (the native picture shown)
 
 namespace {
 
@@ -1586,14 +1587,11 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             SetEmulatedFreshCallback(
                 [app] { app->CallInUIThreadDeferred([] { FollowRendererLater(); }); });
         }
-        // F4, F8 and the harness's `set` change it on the UI thread
-        rex::cvar::RegisterChangeCallback("renderer", [this](std::string_view, std::string_view v) {
-            if (v != "native" && sync_gpu::NativeOnly())
-                REXLOG_INFO("renderer {}: {}", v, sync_gpu::kNoEmulatedGpuSwitch);
-            Follow(v == "native");
-        });
-        Follow(REXCVAR_GET(renderer) == "native");
-        // With emulated_gpu off no emulated swap asks the window to paint, so
+        // F8, and renderer set in F4 or by the harness's `set`, change the
+        // picture on the UI thread
+        picture_listener_ = AddShownPictureListener([this](bool native) { Follow(native); });
+        Follow(ShowsNativePicture());
+        // With renderer native no emulated swap asks the window to paint, so
         // each frame published for it does (on the UI thread, where the
         // presenter takes the request); a request already on its way covers
         // the frames published before it runs. None while the window can't be
@@ -1611,7 +1609,7 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
                         target->window->RequestPresenterUIPaintFromUIThread();
                 });
             });
-            REXLOG_INFO("native present: asking for a paint with each frame (emulated_gpu off)");
+            REXLOG_INFO("native present: asking for a paint with each frame (renderer native)");
         }
     }
 
@@ -1623,7 +1621,7 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             paint_target_.reset();
         }
         SetEmulatedFreshCallback(nullptr);
-        rex::cvar::UnregisterChangeCallbacks("renderer");
+        RemoveShownPictureListener(picture_listener_);
         presenter_->RemoveUIDrawerFromUIThread(this);
         Follow(false, true);
 #ifdef _WIN32
@@ -1638,7 +1636,7 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         for (auto& t : textures_) t.reset();
     }
 
-    // On the UI thread, with emulated_gpu off: the worker draws nothing
+    // On the UI thread, with renderer native: the worker draws nothing
     // while the window is minimized (Renderer::SetPaused; with the emulated
     // GPU on it draws on, as the emulated GPU does). And the paint requests,
     // which a restored window has had none of while it was minimized: one at
@@ -1651,16 +1649,16 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             paint_target_->window->RequestPresenterUIPaintFromUIThread();
     }
 
-    // renderer, as it changes: the worker starts when it turns native, on the
-    // UI thread where the GPU device starts, and is let go when it turns
-    // emulated, once the emulated GPU's picture is the game's again: while
-    // native it skipped the game's draws (gpu_skip.h), so it keeps drawing
-    // the window until the emulated GPU has swapped whole frames enough
+    // the picture shown (renderer_switch.h), as it changes: the worker starts
+    // when it turns native, on the UI thread where the GPU device starts, and
+    // is let go when it turns emulated, once the emulated GPU's picture is the
+    // game's again: while native it skipped the game's draws (gpu_skip.h), so
+    // it keeps drawing the window until the emulated GPU has swapped whole frames enough
     // (SkipLatch::Fresh: two, and with even/odd rendering a post frame after
     // a whole world frame; gpu_skip.cpp calls back then), or kMaxDrain has
     // gone by
-    // (`at_once`: at shutdown, without waiting). With emulated_gpu off it's
-    // the only picture: native whatever renderer says, until shutdown.
+    // (`at_once`: at shutdown, without waiting). With renderer native it's
+    // the only picture: native whatever else, until shutdown.
     void Follow(bool native, bool at_once = false) {
         if (!at_once && sync_gpu::NativeOnly()) native = true;
         // native again while draining: it just goes on
@@ -1729,7 +1727,7 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         // every paint is timed, whichever renderer it shows (present_stats)
         const auto now = std::chrono::steady_clock::now();
         // read every paint, as well as followed as it changes
-        Follow(REXCVAR_GET(renderer) == "native");
+        Follow(ShowsNativePicture());
         if (!active_) {
             NotePaint(now, false);
             return;
@@ -1885,7 +1883,9 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
     bool upload_shown_ = false;
     std::chrono::steady_clock::time_point upload_presented_{};
     std::vector<uint32_t> upload_;
-    // emulated_gpu off: the window a published frame asks to paint (read and
+    // AddShownPictureListener's, for Stop
+    int picture_listener_ = 0;
+    // renderer native: the window a published frame asks to paint (read and
     // cleared on the UI thread), and whether a request is on its way (Start)
     struct PaintTarget {
         rex::ui::Window* window = nullptr;
@@ -1928,7 +1928,7 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
 std::unique_ptr<NativePresentDrawer> g_present;
 
 void FollowRendererLater() {
-    if (g_present) g_present->Follow(REXCVAR_GET(renderer) == "native");
+    if (g_present) g_present->Follow(ShowsNativePicture());
 }
 
 }  // namespace

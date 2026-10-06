@@ -32,7 +32,9 @@
 #include "src/Render/gpu_skip.h"
 #include "src/Render/guest_formats.h"
 #include "src/Render/present_model.h"
-#include "src/Render/sync_gpu/emulated_gpu_mode.h"
+#include "src/Render/renderer_mode.h"
+#include "src/Render/renderer_switch.h"
+#include "src/Render/sync_gpu/native_only.h"
 #include "src/Render/sync_gpu/sync_graphics_system.h"
 #include "src/settings.h"
 #include "src/stall_watch.h"
@@ -662,8 +664,9 @@ struct MultiMeshDrawing {
 thread_local MultiMeshDrawing g_multimesh_drawing;
 // native_view_rt_fallback, kept by its change callback
 std::atomic<bool> g_rt_fallback_guest{true};
-// the SDK's anisotropic_override, which the game's own picture is sampled
-// with (guest_formats.h's DecodeSampler), kept by its change callback
+// the anisotropy textures are sampled with (guest_formats.h's
+// DecodeSampler): native_anisotropic, or the emulated GPU's
+// anisotropic_override (NativeAnisotropy), kept by their change callbacks
 std::atomic<int32_t> g_aniso_override{-1};
 // native_view_record_targets: texture passes are recorded while capture is
 // off too (off by default, when the game pays only the hooks' early-outs)
@@ -2441,7 +2444,7 @@ void HoldIfRequested(const std::shared_ptr<const FrameCapture>& frame) {
     // kWholeFramesToHold frames whole in a row, this one and the ones before
     // (what it builds up over frames back too, not just the frame), which
     // the harness's capture asks for (RequestFullFrames) before it holds one.
-    // With emulated_gpu off there's no emulated picture to wait for.
+    // With renderer native there's no emulated picture to wait for.
     if (!sync_gpu::NativeOnly() && EmulatedWholeFrames() < kWholeFramesToHold) return;
     if (g_held.skip > 0) {
         g_held.skip--;
@@ -2524,7 +2527,7 @@ GammaRamp CheckDisplayGamma(GammaRamp g, Warn&& warn) {
 // through the SDK headers' inline accessors, so right only while the GPU
 // plugin is built from the same headers: a table that doesn't look like a
 // gamma curve is taken as misread, logged once, and left out (kNone), as is
-// one never written. With emulated_gpu off, band3's sync-only GPU has the
+// one never written. With renderer native, band3's sync-only GPU has the
 // registers (sync_cp.h), checked the same way. Under g_state_mutex.
 GammaRamp ReadDisplayGamma() {
     static bool warned = false;
@@ -2902,41 +2905,52 @@ void TrackSettings() {
         rex::cvar::RegisterChangeCallback(
             "native_view_capture_profile",
             [profile_steps](std::string_view, std::string_view v) { profile_steps(v); });
-        // Recorded while renderer is native as well: it draws outfits and
-        // the like from passes RB3 draws once (in the main menu), which
-        // capture must have seen. Turning native on later doesn't bring back
-        // the ones drawn before. And recorded from then on, renderer native
-        // or not: turned off, recording would forget every pass it kept
-        // (FinishFrame clears s.rts) and F8 back to native would show the
-        // outfits wrong, so once native it stays on for the session.
+        // Recorded while the native picture shows as well: it draws outfits
+        // and the like from passes RB3 draws once (in the main menu), which
+        // capture must have seen. Shown later (renderer emulated, then both),
+        // it doesn't bring back the ones drawn before. And recorded from then
+        // on, native picture or not: turned off, recording would forget every
+        // pass it kept (FinishFrame clears s.rts) and F8 back to native would
+        // show the outfits wrong, so once native it stays on for the session.
         auto record = [] {
             g_record_targets.store(g_record_targets_set.load() || g_renderer_was_native.load());
         };
         g_record_targets_set.store(REXCVAR_GET(native_view_record_targets));
-        g_renderer_was_native.store(rex::cvar::GetFlagByName("renderer") == "native");
+        g_renderer_was_native.store(ShowsNativePicture());
         record();
         rex::cvar::RegisterChangeCallback("native_view_record_targets",
                                           [record](std::string_view, std::string_view v) {
                                               g_record_targets_set.store(v == "true" || v == "1");
                                               record();
                                           });
-        // (NativePresentDrawer's Stop takes every renderer callback off, this
-        // one too, but only at shutdown)
-        rex::cvar::RegisterChangeCallback("renderer",
-                                          [record](std::string_view, std::string_view v) {
-                                              if (v == "native") g_renderer_was_native.store(true);
-                                              record();
-                                          });
-        // the SDK's, by name: it lives in the GPU's DLL
-        auto aniso = [](std::string_view v) {
-            int32_t value = -1;
-            std::from_chars(v.data(), v.data() + v.size(), value);
-            g_aniso_override.store(value);
+        // for the session (renderer_switch.h)
+        AddShownPictureListener([record](bool native) {
+            if (native) g_renderer_was_native.store(true);
+            record();
+        });
+        // band3's own, else the SDK's by name: it lives in the GPU's DLL, and
+        // with renderer native there's none
+        auto aniso = [] {
+            const std::string emulated = rex::cvar::GetFlagByName("anisotropic_override");
+            std::optional<int> override_value;
+            if (rex::cvar::GetFlagInfo("anisotropic_override")) {
+                int value = -1;
+                std::from_chars(emulated.data(), emulated.data() + emulated.size(), value);
+                override_value = value;
+            }
+            g_aniso_override.store(
+                NativeAnisotropy(REXCVAR_GET(native_anisotropic), override_value));
         };
-        aniso(rex::cvar::GetFlagByName("anisotropic_override"));
-        rex::cvar::RegisterChangeCallback("anisotropic_override",
-                                          [aniso](std::string_view, std::string_view v) { aniso(v); });
-        REXLOG_INFO("native view: the host's anisotropic_override is {}", g_aniso_override.load());
+        aniso();
+        for (const char* name : {"native_anisotropic", "anisotropic_override"}) {
+            rex::cvar::RegisterChangeCallback(
+                name, [aniso](std::string_view, std::string_view) { aniso(); });
+        }
+        REXLOG_INFO("native view: anisotropy {} (native_anisotropic {}, anisotropic_override {})",
+                    g_aniso_override.load(), REXCVAR_GET(native_anisotropic),
+                    rex::cvar::GetFlagInfo("anisotropic_override")
+                        ? rex::cvar::GetFlagByName("anisotropic_override")
+                        : std::string("none: no emulated GPU"));
     });
 }
 
