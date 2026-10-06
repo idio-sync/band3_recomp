@@ -55,6 +55,26 @@ void ApplyStyle(ImGuiStyle& style, float scale);
 // a section's heading, in the accent colour over a hairline across the page
 void SectionHeading(const char* name);
 
+// a button's width, for lining up a row of them on the right
+inline float ButtonWidth(const char* label) {
+    return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2;
+}
+
+// a box across the page: Steam Deck, band3.toml problems
+template <typename Body>
+void Banner(const char* id, const ImVec4& background, Body&& body) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, background);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(16), Px(10)));
+    if (ImGui::BeginChild(id, ImVec2(0, 0),
+                          ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding,
+                          ImGuiWindowFlags_NoScrollbar)) {
+        body();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+}
+
 // the launcher's font at a 720p size, scaled with the page
 class FontScope {
 public:

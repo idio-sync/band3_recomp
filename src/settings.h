@@ -1,12 +1,17 @@
 #pragma once
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <rex/cvar.h>
 
-// band3's settings, as rex cvars: F4 edits them in game and "Save to config"
-// writes band3.toml. They can also be set with --name=value on the command line
-// or in band3.toml; band3_config.ini fills in whatever those leave unset.
+// band3's settings, as rex cvars: the launcher and the in-game settings (F4)
+// edit them and save the changed ones to band3.toml, and so does the SDK's
+// settings menu ("All settings..."), whose "Save to config" writes every one
+// that isn't its default. They can also be set with --name=value on the
+// command line or in band3.toml; band3_config.ini fills in whatever those
+// leave unset. Their categories (Band3/Game, ..., Band3/Advanced/...) follow
+// the in-game settings' tabs.
 
 // Band3/Game
 REXCVAR_DECLARE(bool, fast_start);
@@ -180,6 +185,18 @@ struct StartupSettings {
     bool native_camera_shake;
 };
 const StartupSettings& Startup();
+
+// Every setting's value (the SDK's too) as of the last
+// SnapshotStartupSettings: what the game started with. nullopt for a name that
+// wasn't registered then. UI thread.
+std::optional<std::string> StartupValue(std::string_view name);
+
+// The settings the game reads once, as it starts, though the registry has them
+// HotReload: what Startup() keeps, the emulated GPU's swap_post_effect (read
+// when the GPU is set up), input_backend (the input system is made once) and
+// the folders. A change to one in game applies at the next start, as with a
+// kRequiresRestart setting (the in-game settings say so).
+bool ReadAtStartupOnly(std::string_view name);
 
 // Copies of the string settings that can change in F4 while the game reads
 // them; read these instead of REXCVAR_GET, which would race with the UI thread.

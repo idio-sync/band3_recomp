@@ -3,7 +3,10 @@
 #include "Hooks/frame_pacing.h"
 #include "Render/renderer_mode.h"
 #include <rex/logging.h>
+#include <algorithm>
 #include <atomic>
+#include <iterator>
+#include <map>
 #include <mutex>
 #include <string_view>
 
@@ -634,6 +637,8 @@ std::atomic<double> g_song_speed{1.0};
 std::atomic<double> g_track_speed{1.0};
 TrackedString g_username;
 StartupSettings g_startup{};
+// every setting's value at the last snapshot (StartupValue)
+std::map<std::string, std::string, std::less<>> g_startup_values;
 
 void Track(TrackedString& tracked, std::string_view name) {
     tracked.Set(rex::cvar::GetFlagByName(name));
@@ -671,6 +676,37 @@ void SnapshotStartupSettings() {
         .liveless_upnp_url = REXCVAR_GET(liveless_upnp_url),
         .native_camera_shake = REXCVAR_GET(native_camera_shake),
     };
+    g_startup_values.clear();
+    for (const rex::cvar::FlagEntry& entry : rex::cvar::GetRegistry()) {
+        if (entry.type == rex::cvar::FlagType::Command || !entry.getter) continue;
+        g_startup_values[entry.name] = entry.getter();
+    }
+}
+
+std::optional<std::string> StartupValue(std::string_view name) {
+    const auto it = g_startup_values.find(name);
+    if (it == g_startup_values.end()) return std::nullopt;
+    return it->second;
+}
+
+bool ReadAtStartupOnly(std::string_view name) {
+    static constexpr std::string_view kNames[] = {
+        // SnapshotStartupSettings' (most are kRequiresRestart too)
+        "controller_type", "rnd_sync", "disable_metamusic", "main_heap_size", "char_heap_size",
+        "events_target", "events_port", "discord_enabled", "http_enabled", "http_port",
+        "http_address", "rb3e_mode", "gocentral", "gocentral_address", "liveless",
+        "liveless_connect", "liveless_external_ip", "liveless_port", "liveless_port_mapping",
+        "liveless_rooms", "liveless_rooms_server", "liveless_gateway", "liveless_upnp_url",
+        "native_camera_shake",
+        // the emulated GPU reads FXAA once, as it's set up (GraphicsSystem::SetupGuestGpu;
+        // see Band3App::StartFromLauncher)
+        "swap_post_effect",
+        // the input system is made once (input_system.h)
+        "input_backend",
+        // the folders the runtime was built with (Band3App::OnFinalizePaths)
+        "game_data_root", "user_data_root", "cache_root", "content_folders",
+    };
+    return std::ranges::find(kNames, name) != std::end(kNames);
 }
 
 namespace {
