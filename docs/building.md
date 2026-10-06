@@ -100,6 +100,8 @@ python3 tools/symbolize.py --elf band3 logs/crash-20261006-142122-29936.txt
 Frames in the SDK's libraries stay unnamed: the SDK ships no symbols for them.
 `BAND3_CRASH_TEST=abort`, `terminate`, `access-violation` or `stack-overflow` in the
 environment crashes band3 that way once the runtime is set up, to check all of it.
+`BAND3_FULL_DUMP=1` makes a Windows crash's minidump hold all of band3's memory, the
+guest's included (gigabytes), for finding what overwrote it.
 
 ## Checks
 
