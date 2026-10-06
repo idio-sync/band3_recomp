@@ -63,10 +63,9 @@ recording device unless `usb_mic_devices` names microphones (or parts of their n
 comma separated, one per slot, for harmonies. Microphones plugged in after the game starts
 are picked up.
 
-The game connects the mic, offers the vocal parts (Solo, Harmony) and scores what it hears:
-`tests/game/usb_mic.b3t` sings a song's vocals with the test tone and checks the score goes
-up. A USB microphone records and connects the same way; singing into one hasn't been
-scored in a test yet. To check the game hears a mic slot without a microphone, set
+The game connects the mic, offers the vocal parts (Solo, Harmony) and scores what it hears
+(tested with the test tone below; singing into a real microphone hasn't been scored in a
+test yet). To check the game hears a mic slot without a microphone, set
 `usb_mic_test_tone` to a pitch in Hz (e.g. 220): the first slot then sings that steady
 tone, which the vocal track's pitch arrow holds. The Instrument Lab's **Microphones** tab
 shows what records each slot, whether the game has connected it and how much audio it

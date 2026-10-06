@@ -56,9 +56,9 @@ band3 adds its own, which RB3E doesn't have:
 | `/song_details` | every listed song's `genre` (as the Music Library names it), `year`, `length_ms`, `vocal_parts` and `tiers`, the difficulty of each part it has (`band`, `guitar`, `bass`, `drum`, `vocals`, `keys`, `real_guitar`, `real_bass`, `real_keys`) from 0 (Warmup) to 6 (Impossible), as JSON by shortname |
 | `/status` | what the game is doing, as JSON: `screen`, `in_library` (the Music Library is open, so `/jump` can select) and `playing`, during a song its `shortname`, `title`, `artist`, `score`, `position_ms` (null until the song starts) and `length_ms`, else null |
 | `/album_art?shortname=<name>` | the song's album art as a JPEG, read as the game reads it for the Music Library (from the ARK, or a loose file that replaces it); 404 when the song has none, or no song has that shortname |
-| `/rv/search?text=<text>&page=<n>` | a page of 25 of [RhythmVerse](https://rhythmverse.co)'s Rock Band 3 (Xbox) songs matching the text, or its newest without; JSON with `total`, `page`, `page_size` and `songs`, each with its `file_id`, details, `tiers` as `/song_details` gives them, `song_id`, `download` (RhythmVerse hosts it, so band3 can download it), `downloaded` (its file is in the content folders), `in_library` (the game has a song with its song ID; null while the game is busy) and `update` (`available`, `pending` or empty). Optional: `sort=` `newest`, `updated`, `downloads`, `title`, `artist` or `length`; `downloadable=1` for only what band3 can download (pages of 100, the rest left out); `has=` parts (`keys`, `real_guitar`...), `harmonies=1`, `genre=` RhythmVerse's genres (`metal,rock`), `decade=1990,2000`, and `cap=<part>:<tier>` for a part's difficulty at most |
-| `POST /rv/download` | downloads `{"file_id": "<id>"}` (JSON) from a search into the songs folder, or with `"update": true` the newer version of one band3 downloaded (search results' `update` is `available`), for the next launch: 404 for a song no search has found, 409 for one RhythmVerse doesn't host, or has nothing newer of |
-| `/rv/downloads` | this session's downloads as JSON: the `folder` they go to, and each one's `state` (`queued`, `downloading`, `done`, `failed`), `received`, `total`, `error`, `song_id`, `update` and `in_library` (the game has taken it in; null while the game is busy, or before any is done) |
+| `/rv/search?text=<text>&page=<n>` | a page of 25 of [RhythmVerse](https://rhythmverse.co)'s Rock Band 3 (Xbox) songs matching the text, or its newest without, as JSON (`total`, `page`, `page_size`, `songs`). Each song has its `file_id`, details, `tiers` (as `/song_details`), `song_id`, `download` (band3 can download it), `downloaded` (its file is in the content folders), `in_library` (null while the game is busy) and `update` (`available`, `pending` or empty). Optional: `sort=` `newest`, `updated`, `downloads`, `title`, `artist` or `length`; `downloadable=1`; `has=` parts (`keys`, `real_guitar`...); `harmonies=1`; `genre=metal,rock`; `decade=1990,2000`; `cap=<part>:<tier>` for a part's difficulty at most |
+| `POST /rv/download` | downloads `{"file_id": "<id>"}` from a search into the songs folder, or with `"update": true` the newer version of one band3 downloaded: 404 for a song no search has found, 409 for one RhythmVerse doesn't host, or has nothing newer of |
+| `/rv/downloads` | this session's downloads as JSON: the `folder` they go to, and each one's `state` (`queued`, `downloading`, `done`, `failed`), `received`, `total`, `error`, `song_id`, `update` and `in_library` |
 
 `http_allow_cors` adds `Access-Control-Allow-Origin: *`, for pages served from somewhere
 else. Requests wait for the game's next frame, and get a 503 if it doesn't come within 5 s.
@@ -87,17 +87,14 @@ it and at its size; **Not in game yet** until the game has taken it in. **Simila
 library**: a song by its artist and title is in the game, another chart of it maybe.
 
 **Download** saves a song's package into a `rhythmverse` folder in the first of the
-content folders (`content_folders`; `songs\rhythmverse` unless you've changed it), and
-the game takes it in without a restart, as it took in songs bought from the Xbox store:
-band3 tells it new content is installed (the console's `XN_LIVE_CONTENT_INSTALLED`), and
-the game lists its content again at its next refresh, showing "Loading New Downloaded
-Content..." as it does. That's at once with the Music Library open (it keeps its place),
-once a song that's playing is over, and on the way into the Music Library from the main
-menu. Songs copied into the content folders by hand join the same way once a search has
-seen them (the folders' files are listed again a minute on). Only songs RhythmVerse hosts
-itself download this way; for those on other sites (MediaFire, Google Drive...), zipped
-ones and the official DLC, **Open** goes to the song's RhythmVerse page. A download that
-isn't a Rock Band package is thrown away.
+content folders (`songs\rhythmverse` unless you've changed `content_folders`), and the game
+takes it in without a restart, as it took in songs bought from the Xbox store (the
+console's `XN_LIVE_CONTENT_INSTALLED`, then "Loading New Downloaded Content..."): at once
+with the Music Library open, once a song that's playing is over, or on the way into the
+Music Library. Songs copied into the content folders by hand join the same way once a
+search has seen them. Only songs RhythmVerse hosts itself download this way; for those on
+other sites, zipped ones and the official DLC, **Open** goes to the song's RhythmVerse
+page. A download that isn't a Rock Band package is thrown away.
 
 band3 keeps what it downloaded in `rhythmverse.json` in the download folder, with
 RhythmVerse's hashes of each upload, and when they change the song shows **Update
@@ -157,11 +154,8 @@ PC and on a local network has been tested so far.
 
 Once the others show in the host's band, the host picks **Play With Current
 Lineup** and everyone makes the setlist and plays together. There is no lobby or
-list of games: Live's matchmaking is gone, so searching finds one game, the one at
-`liveless_connect`.
-
-Players should both search: a player who searches for a host that only went
-online from the overshell (without Find Xbox Live Players) is turned away.
+list of games: searching finds one game, the one at `liveless_connect`. The host has to
+search too: a host that only went online from the overshell turns joining players away.
 To join by code instead of address, see [Liveless Rooms](#liveless-rooms-joining-by-code).
 
 `liveless_port` moves the game to another UDP port, so two band3s on one PC can
@@ -240,27 +234,25 @@ if A started it). The game reads no buttons until the panel closes or you click 
 game, so a guitar's strum doesn't also move the overshell.
 
 Joins by code always go to UDP port 9103, as RB3Enhanced's do, so a host keeps
-`liveless_port` at 9103 (the panel warns when it isn't), forwarded to their PC: band3
-asks the router for it ([Port mapping](#port-mapping)), or the host forwards it by
-hand, as RB3Enhanced players do. `liveless_external_ip` isn't needed: band3 tells the game
-its public address as the Rooms server saw it, unless `liveless_external_ip` is set,
-which wins. A player joins the host's public address, or its local network one when
-both have the same public address (the same network, or one PC). When a player
-joins, the server also has the host's game send them a packet first, which may get
-the join through some routers without the forward; don't count on it.
+`liveless_port` at 9103 (the panel warns when it isn't), forwarded to their PC by band3
+([Port mapping](#port-mapping)) or by hand. `liveless_external_ip` isn't needed: band3
+tells the game its public address as the Rooms server saw it. A player joins the host's
+public address, or its local network one when both have the same public address. The
+server also has the host's game send the joining player a packet first, which may get the
+join through some routers without the forward; don't count on it.
 
-What the panel's errors mean:
+What the panel's errors mean (✓: band3 connects again by itself, as above):
 
-| Error | |
-|---|---|
-| `no IPv4 address for <server>` | `liveless_rooms_server` didn't resolve: check it and the PC's connection. band3 tries again by itself (5 s, then longer); **Connect** does it now |
-| `no answer from <server>`, `<server> refused the connection` | nothing is taking connections at that address (port 19532 unless it has `:port`), or a firewall is in the way. band3 tries again by itself (5 s, then longer); **Connect** does it now |
-| `the server turned the connection away` | the server isn't taking this client. band3 doesn't ask again by itself |
-| `login refused: check that liveless_rooms_server matches the server's address, and username` | the server closed the connection before giving a code. It checks the login against its own name, so `liveless_rooms_server` must be that name as the server knows it (not, say, its IP address). band3 doesn't ask again by itself: fix the setting and restart |
-| `the server closed the connection` | the connection went after logging in (state `disconnected`). band3 connects again by itself (5 s, then longer), and the code may change; **Connect** does it now |
-| `the server stopped answering` | the server sent nothing for 30 s. State `disconnected` after logging in, `failed` before. band3 connects again by itself (5 s, then longer); **Connect** does it now |
-| `bad data from the server` | the server sent something band3 can't read. After logging in (state `disconnected`) band3 connects again by itself (5 s, then longer); before it (`failed`), the address isn't a Rooms server, and band3 doesn't try again. **Connect** does it now |
-| `not logged in to the Rooms server` | a join before the code came, or after the connection went |
+| Error | | |
+|---|---|---|
+| `no IPv4 address for <server>` | `liveless_rooms_server` didn't resolve: check it and the PC's connection | ✓ |
+| `no answer from <server>`, `<server> refused the connection` | nothing is taking connections at that address (port 19532 unless it has `:port`), or a firewall is in the way | ✓ |
+| `the server turned the connection away` | the server isn't taking this client | |
+| `login refused: check that liveless_rooms_server matches the server's address, and username` | the server closed the connection before giving a code. It checks the login against its own name, so `liveless_rooms_server` must be that name as the server knows it (not, say, its IP address): fix the setting and restart | |
+| `the server closed the connection` | the connection went after logging in; the code may change | ✓ |
+| `the server stopped answering` | the server sent nothing for 30 s | ✓ |
+| `bad data from the server` | the server sent something band3 can't read. Before logging in, the address isn't a Rooms server | ✓ after logging in |
+| `not logged in to the Rooms server` | a join before the code came, or after the connection went | |
 | `the game isn't online yet: Play on Xbox Live first` | a join while the game is offline: before Play on Xbox Live, or after leaving it |
 | `a code is 1-8 letters and digits` | the code is empty, longer than eight characters, or contains something other than ASCII letters and digits |
 | `no game with code <code>` | no one is logged in with that code: check it with the host, whose game must be running with Rooms on |
