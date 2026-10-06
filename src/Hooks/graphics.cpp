@@ -291,6 +291,11 @@ void FollowCapWithGuestRate(double cap_hz) {
 
 }
 
+std::optional<bool> VsyncBeforeCap() {
+    std::lock_guard lock(g_vsync_mutex);
+    return g_user_vsync;
+}
+
 void StartFrameCap(void* native_window, std::function<void(std::function<void()>)> post_to_ui) {
     std::unique_lock lock(g_cap.mutex);
     if (g_cap.running) return;

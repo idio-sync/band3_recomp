@@ -125,6 +125,8 @@ private:
 
     Tab current_tab_ = Tab::kGame;
     std::optional<Tab> pending_tab_;
+    // the tab the settings were last scrolled for
+    std::optional<Tab> scrolled_tab_;
     // the last save's outcome, for the footer
     std::string save_message_;
     bool save_failed_ = false;

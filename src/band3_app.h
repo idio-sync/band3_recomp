@@ -551,8 +551,11 @@ class Band3App : public rex::ReXApp {
                   app_context().CallInUIThreadDeferred([this] { PressBind("bind_instrument_lab"); });
                 },
         });
+    // UnregisterBind leaves the bind's cvar registered, and RegisterBind
+    // would then log it as a duplicate: drop it too, and put the key back
     const std::string key = rex::cvar::GetFlagByName("bind_settings");
     rex::ui::UnregisterBind("bind_settings");
+    rex::cvar::UnregisterFlag("bind_settings");
     rex::ui::RegisterBind("bind_settings", "F4",
                           "Open band3's settings; their All settings... opens the SDK's", [this] {
                             if (ingame_settings_ && !launcher_) ingame_settings_->Toggle();

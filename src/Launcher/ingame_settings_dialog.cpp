@@ -289,6 +289,11 @@ void InGameSettingsDialog::DrawWindow(ImGuiIO& io) {
             std::max(ImGui::GetContentRegionAvail().y - footer_height, Px(80));
         if (ImGui::BeginChild("##settings", ImVec2(0, settings_height),
                               ImGuiChildFlags_NavFlattened)) {
+            // each tab from its top
+            if (scrolled_tab_ != current_tab_) {
+                ImGui::SetScrollY(0);
+                scrolled_tab_ = current_tab_;
+            }
             ImGui::Dummy(ImVec2(0, Px(4)));
             if (const char* intro = TabIntro(current_tab_)) {
                 FontScope font(kSmallSize);

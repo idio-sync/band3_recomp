@@ -4,10 +4,12 @@
 #include <iterator>
 #include "config_file.h"
 #include "src/config.h"
+#include "src/Hooks/frame_pacing.h"
 #include "src/Render/renderer_switch.h"
 #include "src/Render/sync_gpu/native_only.h"
 #include "src/settings.h"
 #include "src/steam_deck.h"
+#include "src/Test/test_server.h"
 
 namespace band3::launcher {
 
@@ -66,6 +68,11 @@ Lock LockFrom(rex::cvar::Source source) {
 }
 
 std::string RexCvarStore::Get(std::string_view name) const {
+    if (name == "vsync") {
+        if (const std::optional<bool> vsync = pacing::VsyncBeforeCap()) {
+            return *vsync ? "true" : "false";
+        }
+    }
     return rex::cvar::GetFlagByName(name);
 }
 
@@ -131,6 +138,11 @@ Environment ReadEnvironment(std::span<const Setting> table, const PathDefaults& 
     };
     // band3's shorter audio queue, unless something else set one
     if (auto* f = facts_of("audio_maxqframes")) f->startup_default = "3";
+    // the test harness plays the virtual instrument as player 1 (test::Init)
+    if (test::Enabled()) {
+        if (auto* f = facts_of("virtual_instrument")) f->startup_forced = "true";
+        if (auto* f = facts_of("virtual_instrument_player")) f->startup_forced = "1";
+    }
 #ifndef _WIN32
     // xinput is Windows only
     if (auto* f = facts_of("input_backend")) f->startup_forced = "sdl";

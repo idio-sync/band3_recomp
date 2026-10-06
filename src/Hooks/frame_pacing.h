@@ -199,6 +199,10 @@ inline FrameCap ResolveFrameCap(FrameCapSetting setting, uint32_t refresh_num,
 void StartFrameCap(void* native_window, std::function<void(std::function<void()>)> post_to_ui);
 void StopFrameCap();
 
+// The player's vsync while the cap holds the SDK's off for the session: what a
+// save should keep (the in-game settings' Save); nullopt while it isn't held.
+std::optional<bool> VsyncBeforeCap();
+
 // Called by the game thread at the end of each Present (scene_capture.cpp):
 // waits for the frame's beat while the cap is on
 void PaceFrame();

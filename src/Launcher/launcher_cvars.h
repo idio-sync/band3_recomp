@@ -12,7 +12,8 @@
 
 namespace band3::launcher {
 
-// GetFlagByName and SetFlagByName
+// GetFlagByName and SetFlagByName; vsync as the player had it while the frame
+// cap holds it off (pacing::VsyncBeforeCap), so a save doesn't keep the cap's
 class RexCvarStore final : public CvarStore {
 public:
     std::string Get(std::string_view name) const override;
