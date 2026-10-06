@@ -2915,19 +2915,20 @@ void TrackSettings() {
         auto record = [] {
             g_record_targets.store(g_record_targets_set.load() || g_renderer_was_native.load());
         };
+        // for the session (renderer_switch.h); listened to before the picture is
+        // read, so a change in between isn't missed
+        AddShownPictureListener([record](bool native) {
+            if (native) g_renderer_was_native.store(true);
+            record();
+        });
         g_record_targets_set.store(REXCVAR_GET(native_view_record_targets));
-        g_renderer_was_native.store(ShowsNativePicture());
+        if (ShowsNativePicture()) g_renderer_was_native.store(true);
         record();
         rex::cvar::RegisterChangeCallback("native_view_record_targets",
                                           [record](std::string_view, std::string_view v) {
                                               g_record_targets_set.store(v == "true" || v == "1");
                                               record();
                                           });
-        // for the session (renderer_switch.h)
-        AddShownPictureListener([record](bool native) {
-            if (native) g_renderer_was_native.store(true);
-            record();
-        });
         // band3's own, else the SDK's by name: it lives in the GPU's DLL, and
         // with renderer native there's none
         auto aniso = [] {

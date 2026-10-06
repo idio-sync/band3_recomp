@@ -686,7 +686,12 @@ void MigrateRendererSettings() {
     }
     // read once: the launcher's save then removes its key from band3.toml,
     // and F4's leaves it out (it writes only what isn't the default)
-    if (emulated_gpu.source != SettingSource::kUnset) rex::cvar::ResetToDefault("emulated_gpu");
+    // (a restart-only setting, which the SDK would otherwise list as waiting on
+    // one, as band3's startup does for audio_maxqframes)
+    if (emulated_gpu.source != SettingSource::kUnset) {
+        rex::cvar::ResetToDefault("emulated_gpu");
+        rex::cvar::ClearPendingRestartFlags();
+    }
 }
 
 void Init() {
