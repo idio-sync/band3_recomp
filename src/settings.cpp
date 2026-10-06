@@ -435,9 +435,9 @@ REXCVAR_DEFINE_BOOL(native_present_pipeline, false, "Band3/Advanced/Native rende
     "With the native picture shown, on the zero-copy path, record the next frame while the "
     "GPU draws the one before, waiting for the GPU only to hand a frame to the window, so a "
     "frame costs the longer of its CPU and GPU time rather than both (for 120 Hz); off waits "
-    "for each frame right after sending it. Off until it has been checked in game. It "
-    "currently grows video memory steadily (about 10 MB a second at 120 Hz: the SDL_gpu "
-    "allocations it makes aren't released on this path), so it must stay off");
+    "for each frame right after sending it. Keep it off: it hangs AMD GPUs and grows video "
+    "memory steadily (about 10 MB a second at 120 Hz: the SDL_gpu allocations it makes "
+    "aren't released on this path)");
 
 REXCVAR_DEFINE_INT32(native_query_sample_count, 1000, "Band3/Advanced/Native renderer",
     "With renderer native (no emulated GPU), the samples every occlusion query reports as "
