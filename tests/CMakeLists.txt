@@ -74,6 +74,7 @@ add_executable(band3_tests
     dred_report_test.cpp
     sync_cp_test.cpp
     sync_gpu_test.cpp
+    renderer_mode_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp

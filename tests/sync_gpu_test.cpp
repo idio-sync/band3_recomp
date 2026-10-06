@@ -1,14 +1,13 @@
 // Checks what the sync-only GPU's graphics system decides outside the SDK:
-// emulated_gpu's rules at startup (src/Render/sync_gpu/emulated_gpu_mode.h),
-// and its threads' vblank period, watchdog and log summary
-// (src/Render/sync_gpu/sync_monitor.h).
+// its threads' vblank period, watchdog and log summary
+// (src/Render/sync_gpu/sync_monitor.h). The renderer setting's rules, which
+// pick it, are in renderer_mode_test.cpp.
 
 #include <doctest/doctest.h>
 #include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
-#include "src/Render/sync_gpu/emulated_gpu_mode.h"
 #include "src/Render/sync_gpu/sync_monitor.h"
 #include "src/Render/sync_gpu/xenos_defs.h"
 
@@ -20,13 +19,6 @@ namespace {
 bool Has(const std::string& text, const std::string& part) {
     return text.find(part) != std::string::npos;
 }
-
-// SetNativeOnly for a test, put back after
-struct NativeOnlyFor {
-    bool was = NativeOnly();
-    explicit NativeOnlyFor(bool on) { SetNativeOnly(on); }
-    ~NativeOnlyFor() { SetNativeOnly(was); }
-};
 
 CurrentWait Waiting(std::chrono::nanoseconds elapsed, uint32_t addr = 0x1A2B3C42) {
     CurrentWait w;
@@ -43,73 +35,6 @@ CurrentWait Waiting(std::chrono::nanoseconds elapsed, uint32_t addr = 0x1A2B3C42
 }
 
 }  // namespace
-
-TEST_CASE("emulated_gpu is on or off, and only off goes without the emulated GPU") {
-    CHECK(ParseEmulatedGpu("on") == std::optional<bool>(true));
-    CHECK(ParseEmulatedGpu("off") == std::optional<bool>(false));
-    CHECK_FALSE(ParseEmulatedGpu("").has_value());
-    CHECK_FALSE(ParseEmulatedGpu("Off").has_value());
-
-    // on, or anything the setting wouldn't take: as before, nothing to say,
-    // whatever the build can present with
-    for (const char* v : {"on", "", "maybe"}) {
-        for (const bool presentable : {true, false}) {
-            INFO(v << (presentable ? " presentable" : " not presentable"));
-            const StartupGpuPlan plan = PlanStartupGpu(v, "xenos", presentable);
-            CHECK_FALSE(plan.native_only);
-            CHECK(plan.log.empty());
-        }
-    }
-
-    const StartupGpuPlan off = PlanStartupGpu("off", "", true);
-    CHECK(off.native_only);
-    REQUIRE(off.log.size() == 1);
-    CHECK(Has(off.log[0], "emulated_gpu off: no emulated GPU this run"));
-    CHECK(Has(off.log[0], "F8 is inert"));
-
-    // a plugin named (band3.toml, --gpu_plugin) isn't loaded, and it says so
-    const StartupGpuPlan named = PlanStartupGpu("off", "xenos", true);
-    CHECK(named.native_only);
-    REQUIRE(named.log.size() == 2);
-    CHECK(named.log[1] == "emulated_gpu off: gpu_plugin xenos isn't loaded");
-}
-
-TEST_CASE("emulated_gpu off is ignored on a build with nothing else to present with") {
-    // neither Direct3D 12 nor Vulkan: the emulated GPU stays, the plugin named
-    // with it, and the log says why
-    for (const char* plugin : {"", "xenos"}) {
-        INFO(plugin);
-        const StartupGpuPlan plan = PlanStartupGpu("off", plugin, false);
-        CHECK_FALSE(plan.native_only);
-        REQUIRE(plan.log.size() == 1);
-        CHECK(plan.log[0] ==
-              "emulated_gpu off isn't available on this platform yet; running with the "
-              "emulated GPU");
-    }
-}
-
-TEST_CASE("without the emulated GPU the renderer is native, and says so if it wasn't") {
-    CHECK_FALSE(ForceRendererNative(false, "emulated").has_value());
-    CHECK_FALSE(ForceRendererNative(true, "native").has_value());
-    const auto line = ForceRendererNative(true, "emulated");
-    REQUIRE(line.has_value());
-    CHECK(*line == "emulated_gpu off: renderer was emulated, native for this run");
-}
-
-TEST_CASE("a new emulated_gpu value is a change only against this run's mode") {
-    {
-        NativeOnlyFor run(false);
-        CHECK_FALSE(EmulatedGpuChanged("on"));
-        CHECK(EmulatedGpuChanged("off"));
-        CHECK_FALSE(EmulatedGpuChanged("nonsense"));
-    }
-    {
-        NativeOnlyFor run(true);
-        CHECK(NativeOnly());
-        CHECK(EmulatedGpuChanged("on"));
-        CHECK_FALSE(EmulatedGpuChanged("off"));
-    }
-}
 
 TEST_CASE("the vblank comes at the guest's refresh rate, or every millisecond free-running") {
     CHECK(VblankPeriodNs(60, false) == 16'666'667);

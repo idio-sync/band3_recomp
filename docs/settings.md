@@ -17,25 +17,27 @@ connected)" and stays chosen until you pick another, and **Other...** takes a ty
 or part of one.
 
 The Graphics tab's **Renderer** picks what draws the game's picture: **Native**, band3's own
-[native renderer](native-renderer.md) (the default on Windows), or **Emulated GPU** (the
-default on Linux, where the native renderer hasn't been run yet). F8 switches between them
-in game. Its **Frame rate cap** is [`frame_cap`](#config-files): the display's refresh rate
-(the default), Auto for a VRR display, Off, a rate from the list, or **Other...** for a
-typed one. **VSync** shows only with the cap off, since the cap turns it off.
+[native renderer](native-renderer.md) alone (the default on Windows, and offered there
+only), **Emulated**, the emulated Xbox 360 GPU alone (the default on Linux), or **Native +
+emulated (debug)**, both, F8 switching between their pictures in game. A change to or from
+Native applies when band3 starts, so Play restarts band3 for it. The tab shows only the
+sections the chosen renderer uses ([which settings apply](native-renderer.md#which-settings-apply)).
+The native renderer's **Resolution limit** ([`native_max_height`](native-renderer.md)) caps
+the lines it draws, scaling a taller window's picture up, for a GPU that can't keep up at
+the window's size. **Frame rate cap** is [`frame_cap`](#config-files); **VSync** shows only
+with the cap off, since the cap turns it off.
 
 The Controllers tab starts with a list of every controller and instrument band3 sees (Xbox
 pads and instruments, PS3/Wii/PS4/PS5 instruments on their dongles, a MIDI kit, the
 keyboard) and the player each one is, or "Not playing", and shows the selected one live
 below. Pick one (click its row, or press A on it) to test it: until you press Back on it, or
-click Stop, it plays the test view only and doesn't move around the launcher, so holding a
-fret or hitting a pad presses nothing. A guitar shows its frets, solo frets, strum, whammy,
-tilt and pickup switch as you play; a drum kit flashes each pad and cymbal as brightly as it
-was hit, with its velocity (an RB1 kit has none, so every hit shows at full strength), and
-both kick pedals; a controller shows its buttons, sticks and triggers, and the instrument
-"Gamepads play as" makes it in the game. With the SDL input backend an Xbox 360 guitar or
-kit shows as a controller too, and plays as that instrument. A MIDI kit also lists its last
-notes with their velocity and what they play. What it shows is what the game will read: the
-launcher reads the devices through band3's own input drivers.
+click Stop, it only drives the test view, not the launcher. A guitar shows its frets, solo
+frets, strum, whammy, tilt and pickup switch; a drum kit flashes each pad, cymbal and kick
+pedal as brightly as it was hit (an RB1 kit has no velocity, so every hit is full
+strength); a controller shows its buttons, sticks and triggers, and what "Gamepads play as"
+makes it in the game (with the SDL backend, an Xbox 360 guitar or kit shows as a controller
+but plays as its instrument). A MIDI kit also lists its last notes and what they play. It reads the
+devices through band3's own input drivers, so what it shows is what the game will read.
 
 Any controller can drive the launcher: the d-pad or left stick moves, A picks, B backs out,
 LB and RB switch tabs, and Start plays. A guitar's frets and a kit's pads act as the face
@@ -73,19 +75,15 @@ To get back to it, hold Shift while band3 starts, start it with `--launcher`, or
 out again afterwards. `launcher = true` in `band3.toml` is ignored: it's for one start, from
 the command line.
 
-The launcher saves to `band3.toml` beside the executable, and writes only the settings you
-changed: one that matches its default (what band3 would use without the file: the Steam
-Deck setting on a Deck, then `band3_config.ini`'s, then band3's own) is left out, and the
-file's other lines are kept. **Show this screen at startup** is the exception: every save
-writes it, as `show_launcher = true` or `false`. A changed setting has a **Reset** button that puts it back to
-its default and takes it out of the file at the next save. Folders are saved with forward
-slashes, and a folder inside the ini's folder (or the executable's, without an ini) is
-saved relative to it, so the install still moves as one folder. If `band3.toml` can't be
-read, the launcher says why; saving then replaces it and keeps the old file as
-`band3.toml.bak`. The launcher doesn't keep comments: the first time it saves over a
-`band3.toml` you wrote comments in, it keeps that file as `band3.toml.bak` too. If
-`band3.toml` can't be written (a read-only folder, say), Play says why and offers to play
-anyway with the settings as they are, for that session only.
+The launcher saves to `band3.toml` beside the executable, writing only the settings that
+differ from their default (what band3 would use without the file: the Steam Deck setting on
+a Deck, then `band3_config.ini`'s, then band3's own) and keeping the file's other lines.
+**Show this screen at startup** is always written. A changed setting's **Reset** button
+puts it back to its default. Folders inside the ini's folder (or the executable's, without
+an ini) are saved relative to it, so the install still moves as one folder. The launcher
+doesn't keep comments: saving over a `band3.toml` that has comments, or that it couldn't
+read, keeps the old file as `band3.toml.bak`. If `band3.toml` can't be written, Play offers
+to play anyway with the settings as they are, for that session only.
 
 A setting given on the command line or by a `REX_*` environment variable is shown but
 locked ("Set on the command line", "Set by an environment variable"), since a saved value
@@ -93,8 +91,8 @@ wouldn't win over it. On a Steam Deck a banner at the top says so, with the
 `steam_deck_defaults` switch: on, the [Deck's settings](#steam-deck) are the defaults and
 what you change wins over them.
 
-Some settings stay in F4 only: debug options, heap sizes, the native renderer's options and
-the virtual instrument.
+Some settings stay in F4 only: debug options, heap sizes, the native renderer's debug
+options and the virtual instrument.
 
 ## The settings menu
 
@@ -140,7 +138,7 @@ Some options worth knowing about, by the names F4 and the command line use:
 
 | Option | |
 |---|---|
-| `frame_cap` | what paces the game's frames, in place of the emulated console's vertical blank. `display` runs the game at the display's refresh rate exactly (119.88 Hz, not 120): best on a fixed-refresh display, and the default. `auto` runs it a little under (5% less, at least 4 fps: 114 at 120 Hz, 136.8 at 144): best on a VRR display (G-Sync, FreeSync), where it keeps every frame inside the display's range; on a fixed-refresh display a cap under its refresh rate shows a frame twice every 1/(refresh − cap) seconds. A number (24 to 240, e.g. `117`) caps there. `off` leaves the console's vertical blank to pace it, as `vsync` and `refresh_rate` say. With the cap on, `vsync` is turned off for the session (F4's Save to config then writes `vsync = false`, which matters only if `frame_cap` is later `off`), and `refresh_rate`, unless set, is set to the cap's rate. `display` and `auto` are off when the display's rate can't be told (on Linux, until the native view has run). Changes apply at once; the display is read again every 2 seconds |
+| `frame_cap` | what paces the game's frames, in place of the console's vertical blank. `display` (the default) runs the game at the display's exact refresh rate (119.88 Hz, not 120), best on a fixed-refresh display. `auto` runs it 5% under (at least 4 fps: 114 at 120 Hz), best on a VRR display (G-Sync, FreeSync), keeping every frame inside its range. A number (24 to 240) caps there. `off` leaves the console's vertical blank to pace it, as `vsync` and `refresh_rate` say. With the cap on, `vsync` is off for the session and `refresh_rate`, unless set, follows the cap. `display` and `auto` are off when the display's rate can't be told (on Linux, until the native view has run). Changes apply at once |
 | `refresh_rate` | the rate the game runs at, e.g. 120 for a 120 Hz monitor (0 keeps the console's 60, or follows `frame_cap`) |
 | `background_fps` | the venue's frame rate: 0 keeps the venue's own (30 in most) at any `refresh_rate`, or set one, up to `refresh_rate`. Rates that divide `refresh_rate` (30 at 120, 180 or 240) draw evenly |
 | `forced_venue` | a venue, a class of venues, or a comma-separated mix to pick from at random |
@@ -161,14 +159,13 @@ modifiers and playlists there (`dx_settings.dta`, `dx_playlist.dta` and so on), 
 deleting that folder resets them. Test runs have their own user data, so they don't
 change yours.
 
-`band3_config.ini` can also move band3's other folders: `user_data_root` (saves, profiles
-and the `game` folder; `Documents\band3` by default) and `cache_root` (the shader cache;
-`cache` in the user data folder by default), and so can `band3.toml`
-(`game_data_root`, `user_data_root`, `cache_root`; the launcher's Game tab), which wins over
-the ini. A relative path in either is relative to the ini's folder, or to the executable's
-folder when there is no ini, so `user_data_root = user_data` keeps everything band3 writes
-beside it, for a portable install. band3 looks for the ini in its working directory, then
-beside the executable.
+`game_data_root`, `user_data_root` (saves, profiles and the `game` folder;
+`Documents\band3` by default) and `cache_root` (the shader cache; `cache` in the user data
+folder by default) move band3's folders, from the launcher's Game tab, `band3.toml` or
+`band3_config.ini`. A relative path is relative to the ini's folder, or to the executable's
+when there is no ini, so `user_data_root = user_data` keeps everything band3 writes beside
+it, for a portable install. band3 looks for the ini in its working directory, then beside
+the executable.
 
 ## DLC and custom songs
 

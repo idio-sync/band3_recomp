@@ -1,6 +1,8 @@
 #include "settings.h"
 #include "renderer_default.h"
 #include "Hooks/frame_pacing.h"
+#include "Render/renderer_mode.h"
+#include <rex/logging.h>
 #include <atomic>
 #include <mutex>
 #include <string_view>
@@ -191,6 +193,20 @@ REXCVAR_DEFINE_INT32(usb_mic_test_tone, 0, "Band3/Microphones",
 
 // Band3/Graphics
 
+// native on Windows, emulated elsewhere: renderer_default.h says why it's
+// chosen at build time. src/Render/renderer_mode.h has its rules. Not
+// kRequiresRestart: emulated and both switch at once. First in Band3/Graphics,
+// whose cvars F4 lists in the order they're defined: its description says
+// which of the groups apply.
+REXCVAR_DEFINE_STRING(renderer, band3::settings::kDefaultRenderer, "Band3/Graphics",
+    "What draws the picture. native: band3's own renderer alone, no emulated Xbox 360 GPU "
+    "(the default on Windows). emulated: the emulated GPU alone (the default elsewhere). "
+    "both, Native + emulated (debug): the two, F8 switching between their pictures. "
+    "Native to or from the others applies at the next start. Band3/Graphics/Native applies "
+    "to native and both; Band3/Graphics/Emulated and the emulated GPU's own (under GPU, "
+    "there only in a run with it) to emulated and both")
+    .allowed({"native", "emulated", "both"});
+
 REXCVAR_DEFINE_BOOL(disable_approximate_lights, true, "Band3/Graphics",
     "Disable approximate lighting; works around a graphical bug in current ReXGlue");
 
@@ -202,8 +218,10 @@ REXCVAR_DEFINE_BOOL(fullbright, false, "Band3/Graphics",
     "Applies to materials loaded afterwards");
 
 REXCVAR_DEFINE_BOOL(compress_character_textures, false, "Band3/Graphics",
-    "Compress character textures. Needs readback resolve, or the textures appear bugged. "
-    "Applies to characters loaded afterwards");
+    "Compress character textures. Needs the emulated GPU (renderer emulated or both): it's "
+    "ignored with renderer native, where nothing composes the outfits to read back and they'd "
+    "show black. Needs readback resolve, or the textures appear bugged. Applies to "
+    "characters loaded afterwards");
 
 REXCVAR_DEFINE_BOOL(disable_even_odd_rendering, false, "Band3/Graphics",
     "Process every render command each frame instead of alternating even/odd frames");
@@ -216,52 +234,64 @@ REXCVAR_DEFINE_INT32(background_fps, 0, "Band3/Graphics",
 
 // src/Hooks/frame_pacing.h says what the cap does in place of the vblank
 REXCVAR_DEFINE_STRING(frame_cap, "display", "Band3/Graphics",
-    "What paces the game's frames. display: the display's refresh rate exactly "
-    "(119.88 Hz, not 120), for fixed-refresh displays (the default). auto: a little under "
-    "it (5% less, at least 4 fps), for VRR displays (G-Sync, FreeSync), keeping each frame "
-    "inside their range; on a fixed-refresh display a cap under the refresh rate shows a "
-    "frame twice every 1/(refresh - cap) seconds. A number of Hz (24 to 240), e.g. 117. off: the emulated "
-    "console's vertical blank, paced by vsync and refresh_rate (60 unless set). With the cap on, "
-    "vsync is turned off and an unset refresh_rate follows the cap. Without a display whose "
-    "rate can be told, display and auto are off")
+    "What paces the game's frames. display: the display's refresh rate exactly (119.88 Hz, "
+    "not 120), for fixed-refresh displays (the default). auto: a little under it (5% less, "
+    "at least 4 fps), for VRR displays (G-Sync, FreeSync), keeping each frame inside their "
+    "range; on a fixed-refresh display a cap under the refresh rate shows a frame twice "
+    "every 1/(refresh - cap) seconds. A number of Hz (24 to 240), e.g. 117. off: the "
+    "emulated console's vertical blank, paced by vsync and refresh_rate (60 unless set). "
+    "With the cap on, vsync is turned off and an unset refresh_rate follows the cap. Without "
+    "a display whose rate can be told, display and auto are off")
     .validator([](std::string_view v) { return band3::pacing::ParseFrameCap(v).has_value(); });
 
-// native on Windows, emulated elsewhere: renderer_default.h says why it's
-// chosen at build time
-REXCVAR_DEFINE_STRING(renderer, band3::settings::kDefaultRenderer, "Band3/Graphics",
-    "What draws the game's picture: native, band3's own renderer drawing what the game "
-    "sent the GPU, at the window's size, under the overlays, or emulated, the emulated Xbox "
-    "360 GPU. Native is the default on Windows, emulated elsewhere; on Microsoft's software "
-    "rasterizer (Windows without a GPU driver) native draws on the CPU. The emulated GPU "
-    "keeps running either way, so it switches at once (F8), unless emulated_gpu is off")
-    .allowed({"emulated", "native"});
+// Band3/Graphics/Native: the native renderer, with renderer native or both
 
-REXCVAR_DEFINE_INT32(native_max_height, 0, "Band3/Graphics",
-    "With renderer = native, the most lines the native renderer draws: a window taller "
+REXCVAR_DEFINE_INT32(native_max_height, 0, "Band3/Graphics/Native",
+    "Native renderer (renderer native or both): the most lines it draws: a window taller "
     "than this has its picture drawn this tall and scaled up to fill it, for 4K on a GPU "
     "that can't draw it at full size. 0 = the window's size")
     .range(0, 4320);
 
+// read by src/Render/scene_capture.cpp (NativeAnisotropy, renderer_mode.h)
+REXCVAR_DEFINE_INT32(native_anisotropic, -1, "Band3/Graphics/Native",
+    "Native renderer (renderer native or both): the anisotropic filtering it samples "
+    "textures with, as the emulated GPU's anisotropic_override counts it: 0 off, 1 = 1x, "
+    "2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x. -1 (the default) follows anisotropic_override where "
+    "the emulated GPU runs (both), so the two pictures match, and keeps the game's own "
+    "otherwise")
+    .range(-1, 5);
+
+REXCVAR_DEFINE_INT32(native_view_msaa, 2, "Band3/Graphics/Native",
+    "Native renderer (renderer native or both) and the native view (experimental): the "
+    "samples a pixel they draw the HUD, the track and the menus over the world with, "
+    "averaged at their edges: 2 = the game's (RB3 multisamples them, not the world), 4 "
+    "smoother, 1 none")
+    .range(1, 4)
+    .validator([](std::string_view v) { return v == "1" || v == "2" || v == "4"; });
+
+// Band3/Graphics/Emulated: the emulated GPU, with renderer emulated or both. The emulated GPU's
+// own settings (vsync, resolution_scale, ...) are the plugin's, in its categories.
+
 // read by src/Render/gpu_skip.cpp, by name
-REXCVAR_DEFINE_STRING(emulated_gpu_while_native, "skip_draws", "Band3/Graphics",
-    "With renderer = native, what the emulated GPU still does: skip_draws leaves out the "
-    "game's draws nobody sees (the native renderer draws them), keeping what RB3 draws once "
-    "(outfits) so F8 back shows the game's picture; full draws everything, as with "
-    "renderer = emulated. swap_only also skips clears, resolves, the flares' occlusion-test "
-    "quads and the passes RB3 draws once, leaving only what the game waits on: a test and "
-    "performance mode, after which F8 back to emulated may show black outfits, portraits "
-    "and other stale pictures until RB3 draws them again. Ignored with emulated_gpu off")
+REXCVAR_DEFINE_STRING(emulated_gpu_while_native, "skip_draws", "Band3/Graphics/Emulated",
+    "Renderer both only: what the emulated GPU still does while the native picture shows: "
+    "skip_draws leaves out the game's draws nobody sees (the native renderer draws them), "
+    "keeping what RB3 draws once (outfits) so F8 back shows the game's picture; full draws "
+    "everything, as with the emulated picture shown. swap_only also skips clears, resolves, "
+    "the flares' occlusion-test quads and the passes RB3 draws once, leaving only what the "
+    "game waits on: a test and performance mode, after which F8 back to emulated may show "
+    "black outfits, portraits and other stale pictures until RB3 draws them again")
     .allowed({"full", "skip_draws", "swap_only"});
 
-// read once, by Band3App::OnPreSetup (src/Render/sync_gpu/emulated_gpu_mode.h)
-REXCVAR_DEFINE_STRING(emulated_gpu, "on", "Band3/Graphics",
-    "Experimental. on: run the emulated Xbox 360 GPU beside the native renderer, so F8 "
-    "switches between their pictures (A/B, as before). off: no emulated GPU at all; band3 "
-    "answers what the game waits on from its GPU itself and the native renderer is the only "
-    "picture: renderer is native whatever it says, F8 does nothing, and the test harness has "
-    "no emulated screenshot. off needs Direct3D 12 (Windows) or Vulkan (Linux, untested); "
-    "elsewhere it's ignored. Applies at the next start")
-    .allowed({"on", "off"})
+// Retired: renderer took its place. Still read, once, so an old band3.toml or
+// command line keeps working (Band3App::OnPostInitLogging,
+// MigrateRendererSettings below); cleared once read, so neither save writes it
+// again (the launcher removes its key, F4 writes only what isn't the default).
+REXCVAR_DEFINE_STRING(emulated_gpu, "", "Band3/Debug",
+    "Retired: set renderer instead. Read at startup for one more release: off is renderer "
+    "native, on with renderer native is renderer both, on with renderer emulated stays "
+    "emulated (a renderer set on the command line, or already both, wins). Then cleared")
+    .allowed({"", "on", "off"})
     .lifecycle(Lifecycle::kRequiresRestart);
 
 // Band3/Integrations
@@ -451,9 +481,9 @@ REXCVAR_DEFINE_STRING(native_view_backend, "gpu", "Band3/Debug",
     .allowed({"cpu", "gpu"});
 
 REXCVAR_DEFINE_BOOL(native_present_zero_copy, true, "Band3/Debug",
-    "With renderer = native, show the GPU's frames where they are, on the GPU (Direct3D 12, "
-    "when band3's renderer shares the game's device); off reads each frame back and uploads "
-    "it, the way other platforms do, to compare");
+    "With the native picture shown (renderer native or both), show the GPU's frames where "
+    "they are, on the GPU (Direct3D 12, when band3's renderer shares the game's device); off "
+    "reads each frame back and uploads it, the way other platforms do, to compare");
 
 REXCVAR_DEFINE_BOOL(dred, false, "Band3/Debug",
     "Turn on Direct3D 12's Device Removed Extended Data at startup (Windows): if the GPU "
@@ -461,50 +491,51 @@ REXCVAR_DEFINE_BOOL(dred, false, "Band3/Debug",
     "small write per op; the test harness (band3ctl launch) turns it on");
 
 REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Debug",
-    "With renderer = native, publish each frame to the window a steady delay after the game "
-    "presented it (about the slowest recent frame's), so frames that draw quickly (with "
-    "even/odd rendering, every other one) don't reach a paint together with the one before; "
-    "off publishes each as soon as it's drawn, to compare");
+    "With the native picture shown, publish each frame to the window a steady delay after "
+    "the game presented it (about the slowest recent frame's), so frames that draw quickly "
+    "(with even/odd rendering, every other one) don't reach a paint together with the one "
+    "before; off publishes each as soon as it's drawn, to compare");
 
 REXCVAR_DEFINE_BOOL(native_present_request_paint, true, "Band3/Debug",
-    "With emulated_gpu off, ask the window to paint each time the native renderer has a new "
-    "frame for it, as the emulated GPU's swaps did; off leaves the window to paint when "
-    "something else asks, to compare");
+    "With renderer native (no emulated GPU), ask the window to paint each time the native "
+    "renderer has a new frame for it, as the emulated GPU's swaps did; off leaves the window "
+    "to paint when something else asks, to compare");
 
 REXCVAR_DEFINE_INT32(native_query_sample_count, 1000, "Band3/Debug",
-    "With emulated_gpu off, the samples every occlusion query reports as drawn (the lens "
-    "flares' visibility tests), as the emulated GPU's query_occlusion_fake_sample_count does "
-    "(1000, its default, what RB3 has always got here); -1 leaves the queries unanswered")
+    "With renderer native (no emulated GPU), the samples every occlusion query reports as "
+    "drawn (the lens flares' visibility tests), as the emulated GPU's "
+    "query_occlusion_fake_sample_count does (1000, its default, what RB3 has always got "
+    "here); -1 leaves the queries unanswered")
     .range(-1, 1000000);
 
 REXCVAR_DEFINE_BOOL(native_query_log, false, "Band3/Debug",
     "Log what the occlusion queries (the lens flares' visibility tests) give the game: the "
     "result of its first 50 reads of a query, then one a second at most, with either GPU; "
-    "with emulated_gpu off also the counts the first 20 query packets found. Turning it on "
+    "with renderer native also the counts the first 20 query packets found. Turning it on "
     "again logs as many more");
 
 REXCVAR_DEFINE_INT32(native_sync_short_wait_us, 0, "Band3/Debug",
-    "With emulated_gpu off, how the GPU's command processor waits between polls of a wait "
-    "whose interval is short (under 0x100): 0 yields and polls again at once, as the "
-    "emulated GPU does; more sleeps that many microseconds instead")
+    "With renderer native (no emulated GPU), how the GPU's command processor waits between "
+    "polls of a wait whose interval is short (under 0x100): 0 yields and polls again at "
+    "once, as the emulated GPU does; more sleeps that many microseconds instead")
     .range(0, 16000);
 
 REXCVAR_DEFINE_BOOL(native_vblank_free_running, false, "Band3/Debug",
-    "With emulated_gpu off, raise the vertical blank every millisecond whatever the frame cap "
-    "says, as the emulated GPU's vsync off does: with frame_cap off and rnd_sync 0 too, "
-    "nothing paces the game (uncapped, to measure). Off, it runs at the game's refresh rate "
-    "unless the frame cap paces the game");
+    "With renderer native (no emulated GPU), raise the vertical blank every millisecond "
+    "whatever the frame cap says, as the emulated GPU's vsync off does: with frame_cap off "
+    "and rnd_sync 0 too, nothing paces the game (uncapped, to measure). Off, it runs at the "
+    "game's refresh rate unless the frame cap paces the game");
 
 REXCVAR_DEFINE_BOOL(native_present_pipeline, false, "Band3/Debug",
-    "With renderer = native on the zero-copy path, record the next frame while the GPU draws "
-    "the one before, waiting for the GPU only to hand a frame to the window, so a frame costs "
-    "the longer of its CPU and GPU time rather than both (for 120 Hz); off waits for each "
-    "frame right after sending it. Off until it has been checked in game. It currently grows "
-    "video memory steadily (about 10 MB a second at 120 Hz: the SDL_gpu allocations it makes "
-    "aren't released on this path), so it must stay off");
+    "With the native picture shown, on the zero-copy path, record the next frame while the "
+    "GPU draws the one before, waiting for the GPU only to hand a frame to the window, so a "
+    "frame costs the longer of its CPU and GPU time rather than both (for 120 Hz); off waits "
+    "for each frame right after sending it. Off until it has been checked in game. It "
+    "currently grows video memory steadily (about 10 MB a second at 120 Hz: the SDL_gpu "
+    "allocations it makes aren't released on this path), so it must stay off");
 
 REXCVAR_DEFINE_INT32(native_slow_frame_ms, 12, "Band3/Debug",
-    "With renderer = native, log a line for each frame the native renderer takes longer "
+    "With the native picture shown, log a line for each frame the native renderer takes longer "
     "than this many milliseconds to draw (its GPU wait included), with what kind of frame "
     "it was, where the time went and what it had to send or make; at most a few a second. "
     "0 = off")
@@ -551,13 +582,6 @@ REXCVAR_DEFINE_INT32(native_view_shadow_scale, 1, "Band3/Debug",
     "native renderer and the native view (experimental): sharper shadow edges. 1 = the "
     "game's")
     .range(1, 4);
-
-REXCVAR_DEFINE_INT32(native_view_msaa, 2, "Band3/Graphics",
-    "Samples a pixel the native renderer and the native view (experimental) draw the HUD, "
-    "the track and the menus over the world with, averaged at their edges: 2 = the game's "
-    "(RB3 multisamples them, not the world), 4 smoother, 1 none")
-    .range(1, 4)
-    .validator([](std::string_view v) { return v == "1" || v == "2" || v == "4"; });
 
 REXCVAR_DEFINE_BOOL(native_view_capture_profile, false, "Band3/Debug",
     "Time each step of the native view's capture on the game's thread (geometry, textures, "
@@ -627,6 +651,47 @@ void SnapshotStartupSettings() {
         .liveless_upnp_url = REXCVAR_GET(liveless_upnp_url),
         .native_camera_shake = REXCVAR_GET(native_camera_shake),
     };
+}
+
+namespace {
+
+render::SettingSource SourceOf(std::string_view name) {
+    switch (rex::cvar::GetFlagSource(name)) {
+    case rex::cvar::Source::kDefault: return render::SettingSource::kUnset;
+    case rex::cvar::Source::kEnvironment: return render::SettingSource::kEnvironment;
+    case rex::cvar::Source::kCommandLine: return render::SettingSource::kCommandLine;
+    // nothing but the command line, the environment and band3.toml has set
+    // anything this early
+    default: return render::SettingSource::kConfig;
+    }
+}
+
+}
+
+void MigrateRendererSettings() {
+    using render::SettingSource;
+    const render::OldSetting emulated_gpu{REXCVAR_GET(emulated_gpu), SourceOf("emulated_gpu")};
+    const render::OldSetting renderer{REXCVAR_GET(renderer), SourceOf("renderer")};
+    const render::RendererMigration m = render::MigrateEmulatedGpu(emulated_gpu, renderer);
+    if (!m.log.empty()) REXLOG_INFO("settings: {}", m.log);
+    if (m.renderer) {
+        // from the command line (or the environment) it's as fixed as if
+        // renderer had been set there: the launcher shows it locked and
+        // doesn't save it
+        const bool fixed =
+            m.source == SettingSource::kCommandLine || m.source == SettingSource::kEnvironment;
+        const bool ok = fixed ? rex::cvar::SetFlagFromCommandLine("renderer", *m.renderer)
+                              : rex::cvar::SetFlagByName("renderer", *m.renderer);
+        if (!ok) REXLOG_WARN("settings: couldn't set renderer to {}", *m.renderer);
+    }
+    // read once: the launcher's save then removes its key from band3.toml,
+    // and F4's leaves it out (it writes only what isn't the default)
+    // (a restart-only setting, which the SDK would otherwise list as waiting on
+    // one, as band3's startup does for audio_maxqframes)
+    if (emulated_gpu.source != SettingSource::kUnset) {
+        rex::cvar::ResetToDefault("emulated_gpu");
+        rex::cvar::ClearPendingRestartFlags();
+    }
 }
 
 void Init() {

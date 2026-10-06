@@ -2,7 +2,7 @@
 
 The native-only renderer's checks (out/research/n7_3_design.md) run the render
 scripts twice: R, the reference, on the emulated GPU (--renderer=emulated), and
-N with --emulated_gpu=off, each into its own directory of the harness's
+N with --renderer=native, each into its own directory of the harness's
 `capture` files. Their pictures differ by more than the renderer (two runs are
 two moments), but what the game drew shouldn't: the texture passes, their
 targets and sizes, the draws, the display's gamma ramp the sync-only GPU read

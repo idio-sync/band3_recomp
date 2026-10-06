@@ -13,6 +13,7 @@
 #include "generated/band3_init.h"
 #include "src/Hooks/frame_pacing.h"
 #include "src/Launcher/launcher_platform.h"
+#include "src/Render/sync_gpu/native_only.h"
 #include "src/Render/sync_gpu/sync_graphics_system.h"
 #include "src/settings.h"
 
@@ -115,9 +116,21 @@ extern "C" REX_FUNC(ProcCounter__SetEmulateFPS)
         std::memory_order_relaxed);
 }
 
+// Compressing reads the composed outfits back from guest memory. With
+// renderer native nothing composes or resolves them there (the sync-only GPU
+// skips every draw), so it would replace them with what memory held, black:
+// the setting is ignored then, said once.
 extern "C" REX_FUNC(OutfitConfig__CompressTextures)
 {
     if (!REXCVAR_GET(compress_character_textures)) {
+        return;
+    }
+    if (band3::render::sync_gpu::NativeOnly()) {
+        static std::atomic<bool> said{false};
+        if (!said.exchange(true)) {
+            REXLOG_INFO("compress_character_textures: ignored with renderer native (no emulated "
+                        "GPU composes the outfits to compress; they'd show black)");
+        }
         return;
     }
     __imp__OutfitConfig__CompressTextures(ctx, base);
@@ -177,8 +190,8 @@ std::optional<bool> g_user_vsync;
 // The SDK's vsync (rexgpu-xenos's) off while the cap is on, and back as it
 // was when the cap goes off. Its "GPU VSync" thread reads it again every
 // millisecond, so either applies at once. The presenter never reads it: the
-// window is presented with a sync interval of 0 either way. With emulated_gpu
-// off there's no plugin and no vsync setting: band3's sync-only GPU raises
+// window is presented with a sync interval of 0 either way. With renderer
+// native there's no plugin and no vsync setting: band3's sync-only GPU raises
 // the vblanks, told directly.
 void SetVsyncForCap(bool on) {
     if (auto* sync = render::sync_gpu::Active()) {

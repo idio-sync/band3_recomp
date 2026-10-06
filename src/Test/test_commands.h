@@ -114,7 +114,7 @@ struct NativeViewStats {
     std::vector<double> wait_ms;
     // the most of the worker's frames the GPU had at once (LiveViewStats)
     uint32_t in_flight_max = 0;
-    // with emulated_gpu off, the worker's pause while the window is
+    // with renderer native, the worker's pause while the window is
     // minimized (LiveViewStats): on now, its milliseconds and the captures
     // left undrawn in that time
     bool paused = false;
@@ -171,7 +171,7 @@ struct NativeViewStats {
         uint64_t kept_point_tests = 0;
         uint64_t passes_dropped = 0;
         double cp_ms = -1;
-        // With emulated_gpu off there's no emulated GPU (`present` false, and
+        // With renderer native there's no emulated GPU (`present` false, and
         // only then in the reply): the above is what the game still sent, and
         // `sync` what band3's sync-only GPU made of it in the same time
         // (src/Render/sync_gpu/sync_monitor.h's SyncCpDelta): packets, the

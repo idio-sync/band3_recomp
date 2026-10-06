@@ -1,6 +1,7 @@
 #include "launcher_cvars.h"
 #include <rex/cvar.h>
 #include "src/config.h"
+#include "src/Render/sync_gpu/native_only.h"
 #include "src/steam_deck.h"
 
 namespace band3::launcher {
@@ -45,6 +46,8 @@ Environment ReadEnvironment(std::span<const Setting> table, const PathDefaults& 
     Environment env;
     env.steam_deck = steam_deck::IsSteamDeck();
     env.anchor = anchor;
+    // the GPU was chosen before the launcher showed (Band3App::OnPreSetup)
+    env.emulated_gpu_running = !render::sync_gpu::NativeOnly();
     for (const auto& setting : table) {
         CvarFacts facts;
         const auto* info = rex::cvar::GetFlagInfo(setting.cvar);

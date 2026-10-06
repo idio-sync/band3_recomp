@@ -661,7 +661,7 @@ std::string CaptureCostJson(const NativeViewStats::Capture& c) {
     return out;
 }
 
-// `emulated_gpu`'s `sync`, with emulated_gpu off: what the sync-only GPU did,
+// `emulated_gpu`'s `sync`, with renderer native: what the sync-only GPU did,
 // the busy counts per game frame (0 with no frames), the rare ones as they
 // are, and its threads' CPU milliseconds per frame (-1 unknown)
 std::string SyncGpuJson(const NativeViewStats::EmulatedGpu::Sync& s, double frames) {
@@ -722,7 +722,7 @@ std::string SyncGpuJson(const NativeViewStats::EmulatedGpu::Sync& s, double fram
 
 // native_view stats' `emulated_gpu`: what the emulated GPU was sent, the
 // calls per game frame (0 with no frames), and its command processor's CPU
-// milliseconds per frame (-1 unknown); with emulated_gpu off, `present` false
+// milliseconds per frame (-1 unknown); with renderer native, `present` false
 // and the sync-only GPU's numbers
 std::string EmulatedGpuJson(const NativeViewStats::EmulatedGpu& e) {
     const double frames = double(e.frames);

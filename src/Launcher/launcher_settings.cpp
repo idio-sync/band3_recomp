@@ -5,6 +5,7 @@
 #include <cstdio>
 #include "src/Input/joypad_lag_status.h"
 #include "src/Net/online.h"
+#include "src/Render/renderer_mode.h"
 #include "src/paths.h"
 
 namespace band3::launcher {
@@ -50,14 +51,29 @@ constexpr Choice kResolutions[] = {
 
 constexpr Choice kAspect[] = {{"true", "Letterbox"}, {"false", "Stretch"}};
 
+// renderer_mode.h's RendererLabel. Native is offered on Windows only until
+// its Vulkan path (sync_graphics_system.h) has run on Linux
 constexpr Choice kRenderers[] = {
-    {"emulated", "Emulated GPU"},
-    {"native", "Native"},
+    {"native", "Native", true},
+    {"emulated", "Emulated"},
+    {"both", "Native + emulated (debug)"},
 };
 
-constexpr Choice kEmulatedGpu[] = {
-    {"on", "On (A/B test mode, F8 switches)"},
-    {"off", "Off (native only)"},
+constexpr Choice kNativeMsaa[] = {{"1", "Off"}, {"2", "2x (the game's)"}, {"4", "4x"}};
+
+// native_max_height's: the most lines drawn, a taller window's picture scaled up
+constexpr Choice kNativeHeights[] = {
+    {"0", "None (the window's size)"},
+    {"720", "720p"},
+    {"1080", "1080p"},
+    {"1440", "1440p"},
+    {"2160", "4K"},
+};
+
+constexpr Choice kEmulatedWhileNative[] = {
+    {"skip_draws", "Skip what the native picture draws"},
+    {"full", "Everything"},
+    {"swap_only", "Only what the game waits on (test)"},
 };
 
 constexpr Choice kAntiAliasing[] = {
@@ -101,6 +117,11 @@ constexpr Condition kWithGoCentral{"gocentral", "true"};
 constexpr Condition kWithLiveless{"liveless", "true"};
 // vsync paces the game only with the frame cap off; the cap turns it off
 constexpr Condition kWithoutFrameCap{"frame_cap", "off"};
+
+// the native renderer runs with native and both, the emulated GPU with
+// emulated and both
+constexpr uint8_t kWithNative = kForNative | kForBoth;
+constexpr uint8_t kWithEmulatedGpu = kForEmulated | kForBoth;
 
 constexpr Range kSpeeds{0.5, 2.0, 0.05};
 constexpr Range kPorts{1, 65535, 1};
@@ -156,31 +177,48 @@ constexpr Setting kSettings[] = {
      .widget = kCombo, .choices = kAspect},
     {.cvar = "frame_cap", .tab = kGraphics, .section = "Display", .label = "Frame rate cap",
      .widget = kComboText, .choices = kFrameCaps},
-    {.cvar = "vsync", .tab = kGraphics, .section = "Display", .label = "VSync",
-     .widget = kCheckbox, .shown_when = kWithoutFrameCap},
-    {.cvar = "renderer", .tab = kGraphics, .section = "Rendering", .label = "Renderer",
+    {.cvar = "renderer", .tab = kGraphics, .section = "Renderer", .label = "Renderer",
      .widget = kCombo, .choices = kRenderers},
-    // experimental, and offered on Windows only until its Vulkan path
-    // (sync_graphics_system.h) has run on Linux
-    {.cvar = "emulated_gpu", .tab = kGraphics, .section = "Rendering", .label = "Emulated GPU",
-     .widget = kCombo, .choices = kEmulatedGpu, .windows_only = true},
-    {.cvar = "resolution_scale", .tab = kGraphics, .section = "Rendering",
-     .label = "Render scale", .widget = kIntStepper, .range = Range{1, 8, 1}, .unit = "x"},
-    {.cvar = "swap_post_effect", .tab = kGraphics, .section = "Rendering",
-     .label = "Anti-aliasing", .widget = kCombo, .choices = kAntiAliasing},
-    {.cvar = "anisotropic_override", .tab = kGraphics, .section = "Rendering",
-     .label = "Anisotropic filtering", .widget = kCombo, .choices = kAnisotropic},
-    {.cvar = "rnd_sync", .tab = kGraphics, .section = "Rendering", .label = "Game frame sync",
+    // retired (settings.cpp's MigrateRendererSettings clears it): not drawn,
+    // here so Save removes its key from band3.toml
+    {.cvar = "emulated_gpu", .tab = kGraphics, .section = "Renderer", .label = "Emulated GPU",
+     .widget = kNone},
+    {.cvar = "native_view_msaa", .tab = kGraphics, .section = "Native renderer",
+     .label = "Anti-aliasing (MSAA)", .widget = kCombo, .choices = kNativeMsaa,
+     .renderers = kWithNative},
+    {.cvar = "native_anisotropic", .tab = kGraphics, .section = "Native renderer",
+     .label = "Anisotropic filtering", .widget = kCombo, .choices = kAnisotropic,
+     .renderers = kWithNative},
+    {.cvar = "native_max_height", .tab = kGraphics, .section = "Native renderer",
+     .label = "Resolution limit", .widget = kComboText, .choices = kNativeHeights,
+     .renderers = kWithNative},
+    {.cvar = "resolution_scale", .tab = kGraphics, .section = "Emulated GPU",
+     .label = "Render scale", .widget = kIntStepper, .range = Range{1, 8, 1}, .unit = "x",
+     .renderers = kWithEmulatedGpu},
+    {.cvar = "swap_post_effect", .tab = kGraphics, .section = "Emulated GPU",
+     .label = "Anti-aliasing", .widget = kCombo, .choices = kAntiAliasing,
+     .renderers = kWithEmulatedGpu},
+    {.cvar = "anisotropic_override", .tab = kGraphics, .section = "Emulated GPU",
+     .label = "Anisotropic filtering", .widget = kCombo, .choices = kAnisotropic,
+     .renderers = kWithEmulatedGpu},
+    {.cvar = "vsync", .tab = kGraphics, .section = "Emulated GPU", .label = "VSync",
+     .widget = kCheckbox, .shown_when = kWithoutFrameCap, .renderers = kWithEmulatedGpu},
+    {.cvar = "emulated_gpu_while_native", .tab = kGraphics, .section = "Emulated GPU",
+     .label = "Emulated GPU work while native", .widget = kCombo,
+     .choices = kEmulatedWhileNative, .renderers = kForBoth},
+    {.cvar = "rnd_sync", .tab = kGraphics, .section = "Game", .label = "Game frame sync",
      .widget = kCombo, .choices = kFrameSync},
-    {.cvar = "background_fps", .tab = kGraphics, .section = "Rendering",
+    {.cvar = "background_fps", .tab = kGraphics, .section = "Game",
      .label = "Background frame rate", .widget = kIntStepper, .choices = kBackgroundFps,
      .range = Range{0, 240, 5}, .unit = "fps"},
-    {.cvar = "disable_hair_shader", .tab = kGraphics, .section = "Tweaks",
+    {.cvar = "disable_hair_shader", .tab = kGraphics, .section = "Game",
      .label = "Disable the hair shader", .widget = kCheckbox},
-    {.cvar = "disable_approximate_lights", .tab = kGraphics, .section = "Tweaks",
+    {.cvar = "disable_approximate_lights", .tab = kGraphics, .section = "Game",
      .label = "Disable approximate lighting", .widget = kCheckbox},
-    {.cvar = "compress_character_textures", .tab = kGraphics, .section = "Tweaks",
-     .label = "Compress character textures", .widget = kCheckbox},
+    // ignored with renderer native (Hooks/graphics.cpp)
+    {.cvar = "compress_character_textures", .tab = kGraphics, .section = "Game",
+     .label = "Compress character textures", .widget = kCheckbox,
+     .renderers = kWithEmulatedGpu},
 
     // Audio
     {.cvar = "usb_mics", .tab = kAudio, .section = "Microphones",
@@ -508,10 +546,41 @@ bool SettingsModel::Available(const Setting& setting) const {
 bool SettingsModel::Visible(const Setting& setting) const {
     if (!Available(setting) || setting.widget == Widget::kNone) return false;
     if (setting.tab == Tab::kSteamDeck && !env_.steam_deck) return false;
+    if (!ForRenderer(setting.renderers)) return false;
     if (setting.shown_when.cvar.empty()) return true;
     const CvarFacts* facts = Facts(setting.shown_when.cvar);
     if (!facts || !facts->exists) return true;
     return SameValue(facts->type, Value(setting.shown_when.cvar), setting.shown_when.value);
+}
+
+bool SettingsModel::ForRenderer(uint8_t renderers) const {
+    if (renderers == kForAnyRenderer) return true;
+    const CvarFacts* facts = Facts("renderer");
+    // a value it wouldn't take (nothing sets one) shows everything
+    const auto mode =
+        facts && facts->exists ? render::ParseRenderer(Value("renderer")) : std::nullopt;
+    if (!mode) return true;
+    switch (*mode) {
+    case render::RendererMode::kNative: return renderers & kForNative;
+    case render::RendererMode::kEmulated: return renderers & kForEmulated;
+    case render::RendererMode::kBoth: return renderers & kForBoth;
+    }
+    return true;
+}
+
+bool SettingsModel::Offered(const Choice& choice) const {
+    return !choice.windows_only || env_.windows;
+}
+
+std::optional<std::string> SettingsModel::SectionNote(Tab tab, std::string_view section) const {
+    // the emulated GPU's own settings are the plugin's, there only once it runs
+    if (tab == Tab::kGraphics && section == "Emulated GPU" && !env_.emulated_gpu_running &&
+        ForRenderer(kWithEmulatedGpu)) {
+        return "The emulated GPU's own settings (render scale, anti-aliasing, anisotropic "
+               "filtering, VSync) show here once band3 runs with it: Play restarts band3 for "
+               "the new renderer.";
+    }
+    return std::nullopt;
 }
 
 std::string SettingsModel::Value(std::string_view cvar) const {

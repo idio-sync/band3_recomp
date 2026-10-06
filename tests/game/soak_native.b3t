@@ -2,10 +2,10 @@
 # trips between them, switching renderers twice in each song (F8, `bind
 # renderer`), with the game's draws left out of the emulated GPU's work
 # (emulated_gpu_while_native, skip_draws by default). Starts where boot.b3t
-# leaves Rock Band 3 Deluxe (on a fresh profile). Launch with the native
-# renderer from the start, so the band's outfits are recorded when RB3
-# composes them:
-#   python tools/band3ctl.py launch --fresh -- --renderer=native --test_random_seed=21 --async_shader_compilation=false
+# leaves Rock Band 3 Deluxe (on a fresh profile). Launch with renderer both
+# (the native renderer beside the emulated GPU, the native picture shown
+# from the start, so the band's outfits are recorded when RB3 composes them):
+#   python tools/band3ctl.py launch --fresh -- --renderer=both --test_random_seed=21 --async_shader_compilation=false
 #   python tools/band3ctl.py run tests/game/boot.b3t
 #   python tools/band3ctl.py run tests/game/soak_native.b3t
 # Add --emulated_gpu_while_native=full to the launch to soak the emulated GPU
@@ -34,7 +34,7 @@ press green until screen=manage_band_screen timeout=30s
 sleep 1s
 press red until screen=main_hub_screen timeout=30s
 sleep 1s
-set renderer native
+set renderer both
 set autoplay true
 set song_speed 1.5
 

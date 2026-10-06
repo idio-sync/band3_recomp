@@ -53,7 +53,12 @@ REXCVAR_DECLARE(bool, disable_even_odd_rendering);
 REXCVAR_DECLARE(int32_t, background_fps);
 REXCVAR_DECLARE(std::string, frame_cap);
 REXCVAR_DECLARE(std::string, renderer);
+
+// Band3/Graphics/Native
 REXCVAR_DECLARE(int32_t, native_max_height);
+REXCVAR_DECLARE(int32_t, native_anisotropic);
+
+// retired (MigrateRendererSettings)
 REXCVAR_DECLARE(std::string, emulated_gpu);
 
 // Band3/Integrations
@@ -120,6 +125,12 @@ REXCVAR_DECLARE(int32_t, native_view_shadow_scale);
 REXCVAR_DECLARE(int32_t, native_view_msaa);
 
 namespace band3::settings {
+
+// Reads the retired emulated_gpu into renderer (src/Render/renderer_mode.h's
+// MigrateEmulatedGpu) and clears it. Call once, after band3.toml, the
+// environment and the command line are applied and before the runtime is
+// configured (Band3App::OnPreSetup reads renderer).
+void MigrateRendererSettings();
 
 // Starts tracking the string settings guest threads read. Call once, after the
 // config sources are applied and before the game runs.

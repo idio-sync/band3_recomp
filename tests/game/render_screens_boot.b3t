@@ -15,7 +15,7 @@
 # <name>.cap the native view's capture, <name>.gpu.png its GPU drawing.
 # After each capture `screenshot <name>-again` is the window's picture a
 # command later (the emulated GPU's under the launch above, the native
-# renderer's with --emulated_gpu=off): what moved by itself meanwhile, which
+# renderer's with --renderer=native): what moved by itself meanwhile, which
 # tools/pairs.py --cross leaves out when it sets a run without the emulated
 # GPU against this one (docs/native-renderer.md, Render checks). The render
 # scripts below all take one.

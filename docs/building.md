@@ -75,11 +75,8 @@ unless `--allow-dirty`.
 
 These run on every push (`.github/workflows/ci.yml`) and don't need the game.
 
-Unit tests (no SDK needed):
-
-The first configure downloads toml++ 3.4.0, the header-only dependency used by
-the launcher's config writer. It requires internet access and checks the archive's
-SHA-256 hash; subsequent builds reuse the download in the build directory.
+Unit tests (no SDK needed; the first configure downloads toml++ 3.4.0, for the launcher's
+config writer):
 
 ```
 cmake -S tests -B out/tests
@@ -121,6 +118,5 @@ Profiling is compiled into every build except Release. Build the `relwithdebinfo
 SDK's own zones, band3 marks RB3's engine systems (`RB3 Game::Poll`,
 `RB3 WorldCrowd::DrawShowing`, `RB3 DxRnd::DoPostProcess` and so on), so a capture shows
 where each frame goes. For captures that can be compared, turn on `autoplay`
-(Band3 → Debug) and play the same song in the same venue each time. Turning `autosave`
-off (Band3 → Game) keeps those runs out of your profile; it then only saves from the
-options menu.
+(Band3 → Debug) and play the same song in the same venue each time, with `autosave` off
+(Band3 → Game) to keep those runs out of your profile.

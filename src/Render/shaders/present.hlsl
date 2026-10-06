@@ -1,5 +1,5 @@
 // Experimental: the native renderer's picture on the game's window
-// (renderer = native, native_view.cpp's NativePresentDrawer). A triangle over
+// (the native picture shown, native_view.cpp's NativePresentDrawer). A triangle over
 // the whole of the SDK presenter's back buffer, on its own Direct3D 12 command
 // list, under the SDK's ImGui: black outside the picture's rectangle (the
 // letterbox), and inside it gpu_view's finished frame, texel for texel when

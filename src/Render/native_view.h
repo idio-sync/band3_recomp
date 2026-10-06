@@ -25,7 +25,7 @@ class Window;
 // sent to the back buffer last frame on the CPU, from guest memory alone,
 // beside the emulated GPU's picture.
 //
-// The native renderer (renderer = native, bind_renderer F8) draws the same
+// The native renderer (the native picture shown: renderer native, or both and F8) draws the same
 // pictures on the game's window in place of the emulated GPU's, under the
 // SDK's ImGui overlays, through a UI drawer on the SDK's presenter (z 0, ImGui
 // is 64). On Windows it samples gpu_view's output textures where they are
@@ -115,7 +115,7 @@ struct LiveViewStats {
     // not finished): 1 unless native_present_pipeline is on, then 2 while it
     // records a frame as the GPU draws the one before, never more
     uint32_t in_flight_max = 0;
-    // with emulated_gpu off: whether the window is minimized now, so the
+    // with renderer native: whether the window is minimized now, so the
     // worker draws nothing (NativePresentMinimized), and since the numbers
     // started the milliseconds it was, and the captures the game published
     // meanwhile, which it left undrawn (neither rendered nor skipped_busy)
@@ -180,7 +180,7 @@ void StartNativePresent(rex::ui::Presenter* presenter, rex::ui::GraphicsProvider
                         std::function<rex::ui::ImmediateDrawer*()> immediate_drawer);
 void StopNativePresent();
 // The SDK's window was minimized or restored (Band3App's OnWindowMinimized
-// and OnWindowRestored), on the UI thread. With emulated_gpu off the worker
+// and OnWindowRestored), on the UI thread. With renderer native the worker
 // draws nothing while it's minimized (a screenshot asked for aside), and once
 // it's restored the window shows the last frame published until the first
 // from a capture published since (a whole picture, a frame or two later);
@@ -190,7 +190,7 @@ void StopNativePresent();
 // minimized holds the paints back until it's restored. With the emulated GPU
 // on, nothing changes.
 void NativePresentMinimized(bool minimized);
-// whether the native renderer is drawing the window (renderer = native, started)
+// whether the native renderer is drawing the window (the native picture shown, started)
 bool NativePresenting();
 // The window's paints since their numbers last started over (`since`),
 // whichever renderer drew them, for the harness's present_stats; `reset`

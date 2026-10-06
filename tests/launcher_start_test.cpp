@@ -121,7 +121,7 @@ TEST_CASE("Play restarts band3 for a new input backend only once it's saved, out
     CHECK_FALSE(RestartsForInput({.backend_changed = true, .saved = true, .test_port = true}));
 }
 
-TEST_CASE("Play restarts band3 for a new emulated_gpu as it does for a new input backend") {
+TEST_CASE("Play restarts band3 for a renderer needing the other GPU as for a new input backend") {
     CHECK(RestartsForInput({.saved = true, .gpu_changed = true}));
     CHECK(RestartsForInput({.backend_changed = true, .saved = true, .gpu_changed = true}));
     CHECK_FALSE(RestartsForInput({.saved = false, .gpu_changed = true}));

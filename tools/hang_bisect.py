@@ -3,7 +3,7 @@
 of the renderers' interactions away, a few times each, and counts the runs
 that hung (DEVICE_HUNG or a removed device in the log).
 
-  baseline       renderer native, as it hangs
+  baseline       renderer both, as it hangs
   no-zero-copy   native_present_zero_copy off: frames read back and uploaded,
                  so none crosses from SDL_gpu's queue to the SDK's and band3
                  binds nothing in the SDK's command list
@@ -36,9 +36,9 @@ LOGS = os.path.join(REPO, "out", "build", "win-amd64-release", "logs")
 JOURNAL = os.path.join(REPO, "out", "hang_bisect.jsonl")
 COMMON = ["--video_mode_refresh_rate=120", "--frame_cap=off", "--test_random_seed=21"]
 CONFIGS = {
-    "baseline": ["--renderer=native"],
-    "no-zero-copy": ["--renderer=native", "--native_present_zero_copy=false"],
-    "emulated-full": ["--renderer=native", "--emulated_gpu_while_native=full"],
+    "baseline": ["--renderer=both"],
+    "no-zero-copy": ["--renderer=both", "--native_present_zero_copy=false"],
+    "emulated-full": ["--renderer=both", "--emulated_gpu_while_native=full"],
     "emulated": ["--renderer=emulated"],
 }
 HANG_MARKERS = ("DEVICE_HUNG", "device removed", "Device removed")
