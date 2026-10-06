@@ -28,7 +28,7 @@ has (`renderer native: ...`, `renderer emulated: ...`, `renderer both (debug): .
 | Group (the Graphics tab, on the launcher and in F4) | `native` | `emulated` | `both` |
 |---|---|---|---|
 | Display: monitor, window mode, resolution, aspect (`present_letterbox`), frame rate cap (`frame_cap`) | yes | yes | yes |
-| Native renderer (Band3 → Graphics → Native): `native_view_msaa`, `native_anisotropic`, `native_max_height` | yes | no | yes |
+| Native renderer (Band3 → Graphics → Native): `native_fill_window`, `native_view_msaa`, `native_anisotropic`, `native_max_height` | yes | no | yes |
 | Emulated GPU, the plugin's own (All settings: GPU): `resolution_scale`, `swap_post_effect` (FXAA), `anisotropic_override`, `vsync` (shown with the frame cap off, which turns it off otherwise) | no | yes | yes (the emulated picture) |
 | Emulated GPU, band3's (Band3 → Graphics → Emulated): `emulated_gpu_while_native` | no | no | yes |
 | Game (Band3 → Graphics): `rnd_sync`, `background_fps`, `disable_hair_shader`, `disable_approximate_lights` | yes | yes | yes |
@@ -43,12 +43,13 @@ only in a run with the emulated GPU.
 
 ## Presenting
 
-The picture keeps the game's 16:9 with black bars, or stretches with `present_letterbox`
-off. On Windows frames reach the window without leaving the GPU; elsewhere, with
-`native_view_backend` cpu, or with `native_present_zero_copy` off, each is read back and
-uploaded (the log says which: `native present: zero-copy` or `native present: uploading
-each frame (<why>)`). On Microsoft's software rasterizer (WARP) it draws on the CPU, since
-sharing the emulated GPU's Direct3D 12 device there crashes.
+With `native_fill_window` on (the default), the game draws at the window's shape
+([below](#filling-the-window)); off, the picture keeps the game's 16:9 with black bars, or
+stretches with `present_letterbox` off. On Windows frames reach the window without leaving
+the GPU; elsewhere, with `native_view_backend` cpu, or with `native_present_zero_copy` off,
+each is read back and uploaded (the log says which: `native present: zero-copy` or
+`native present: uploading each frame (<why>)`). On Microsoft's software rasterizer (WARP)
+it draws on the CPU, since sharing the emulated GPU's Direct3D 12 device there crashes.
 
 Its GPU pipelines are made as the native renderer starts (about 100 ms, once a session), so
 no frame waits for one; the log names any made later (`pipeline made after warm-up`). Each
@@ -106,6 +107,7 @@ they measure it. Where the native renderer still differs, or hasn't been checked
 |---|---|
 | `renderer` (Band3 → Graphics) | `native` (the default on Windows), `emulated` (the default elsewhere) or `both` ([above](#choosing-the-renderer)) |
 | `emulated_gpu_while_native` (Band3 → Graphics → Emulated) | with `renderer` both and the native picture shown: `skip_draws` (the default), `full` or `swap_only`, as above |
+| `native_fill_window` (Band3 → Graphics → Native) | the game drawn at the window's shape rather than 16:9 with black bars ([below](#filling-the-window)); on by default |
 | `native_max_height` (Band3 → Graphics → Native) | the most lines the native renderer draws: a taller window's picture is drawn this tall and scaled up, for 4K on a GPU that can't keep up. 0 (the default) draws at the window's size |
 | `native_anisotropic` (Band3 → Graphics → Native) | anisotropic filtering, counted as `anisotropic_override` counts it: 0 off, 1 to 5 for 1x to 16x. -1 (the default) follows `anisotropic_override` where the emulated GPU runs, so the two pictures match, and keeps the game's own samplers under `native` |
 | `native_view_msaa` (Band3 → Graphics → Native) | the samples a pixel of the overlay (the track, the HUD, menus drawn after the world), the only part RB3 multisamples: 2 (the default) as RB3 does, 4 smoother, 1 none |
@@ -148,6 +150,39 @@ and textures drawn in more than one world; outside a song, what the menus draw g
 before, so their texture arrays empty while a song loads (arrays never shrink). `by_kind`
 also counts the frames whose planning took over 8 ms (`plan_spikes`, `plan_spikes_at_cut`),
 and `camera` the cuts seen.
+
+## Filling the window
+
+RB3 draws 16:9. With `native_fill_window` on (the default, Fill the window on the Graphics
+tab), the native renderer has it draw at the window's shape instead, with no black bars:
+
+- A wider window (21:9, 32:9) shows more of the venue to the sides.
+- A taller one (16:10, 4:3) shows more above and below, at 16:9's width.
+- The HUD, the highways and the menus keep their size and shape in the middle 16:9; with
+  more players the highways stay there too.
+
+It changes what the game's cameras see, not the picture after: RB3 builds each camera's
+projection from its vertical field of view and `Rnd::YRatio` (height over width, 9/16), so
+band3 gives `YRatio` the window's height over width, and for a window taller than 16:9 widens
+each perspective camera's vertical field of view while the projection is built
+(`src/Hooks/aspect.cpp`, the numbers in `src/Hooks/aspect_model.h`). The game culls with the
+same frustum, so nothing is missing at the new edges. A camera built for another shape is
+rebuilt the next time it draws, so resizing the window, the setting and F8 apply at once (the
+log says `fill window: the game's cameras at <w>x<h>`, or `at 16:9`).
+
+Only the native renderer's picture fills the window. The emulated GPU draws the game's
+1280x720, so while its picture shows (`renderer` emulated, or F8 under `both`) the game's
+cameras stay 16:9, letterboxed or stretched by `present_letterbox` as before. The test
+harness's windows are 1280x720, so the render checks see the game's own 16:9.
+
+Not right yet:
+
+- Some menu art was drawn a little past 16:9's edges (the player bar along the bottom, the
+  song list's header, the results banner), and now ends short of the window's edge.
+- Venues were built for 16:9 shots, so a very wide window (32:9) may show their unfinished
+  edges.
+- One orthographic camera draws to the screen (the rest are perspective); it isn't widened,
+  and what it draws hasn't been identified.
 
 ## Renderer native: no emulated GPU
 

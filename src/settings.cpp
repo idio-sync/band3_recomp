@@ -164,6 +164,13 @@ REXCVAR_DEFINE_INT32(native_max_height, 0, "Band3/Graphics/Native",
     "that can't draw it at full size. 0 = the window's size")
     .range(0, 4320);
 
+// read by src/Render/native_view.cpp, which hands it to src/Hooks/aspect.cpp
+REXCVAR_DEFINE_BOOL(native_fill_window, true, "Band3/Graphics/Native",
+    "Native renderer (renderer native or both): draw the game at the window's shape rather "
+    "than 16:9 with black bars. A wider window (21:9) shows more to the sides, a taller one "
+    "(16:10) more above and below, with the HUD and tracks at their size in the middle 16:9. "
+    "The emulated GPU's picture stays 16:9");
+
 // read by src/Render/scene_capture.cpp (NativeAnisotropy, renderer_mode.h)
 REXCVAR_DEFINE_INT32(native_anisotropic, -1, "Band3/Graphics/Native",
     "Native renderer (renderer native or both): the anisotropic filtering it samples "

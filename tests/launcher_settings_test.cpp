@@ -803,8 +803,8 @@ struct GraphicsTab {
 const std::set<std::string> kEveryRenderer = {
     "monitor", "fullscreen", "resolution", "present_letterbox", "frame_cap", "renderer",
     "rnd_sync", "background_fps", "disable_hair_shader", "disable_approximate_lights"};
-const std::set<std::string> kNativeRows = {"native_view_msaa", "native_anisotropic",
-                                           "native_max_height"};
+const std::set<std::string> kNativeRows = {"native_fill_window", "native_view_msaa",
+                                           "native_anisotropic", "native_max_height"};
 const std::set<std::string> kEmulatedRows = {"resolution_scale", "swap_post_effect",
                                              "anisotropic_override", "vsync",
                                              "compress_character_textures"};

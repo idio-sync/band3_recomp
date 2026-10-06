@@ -1,5 +1,6 @@
 #include "src/Render/native_view.h"
 
+#include "src/Hooks/aspect.h"
 #include "src/Hooks/frame_pacing.h"
 #include "src/Launcher/launcher_platform.h"
 #include "src/Render/camera_cut.h"
@@ -1463,8 +1464,10 @@ void NotePublished(std::chrono::steady_clock::time_point presented) {
 constexpr int kUploadedFrames = 1;
 
 // the SDK's present_letterbox, which it reads where it paints; on if it isn't
-// there to read
+// there to read. Off while native_fill_window has the game draw at the
+// window's shape (src/Hooks/aspect.cpp).
 bool PresentLetterbox() {
+    if (REXCVAR_GET(native_fill_window)) return false;
     return !rex::cvar::GetFlagInfo("present_letterbox") ||
            rex::cvar::Query<bool>("present_letterbox");
 }
@@ -1819,6 +1822,8 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             draining_ = false;
             active_ = false;
             Renderer::Get().StopPresent();
+            // the emulated GPU's picture is the game's 16:9
+            band3::aspect::SetWindow(0, 0, false);
             REXLOG_INFO("native present: off, the emulated GPU's picture shows (after {:.0f} ms)",
                         waited);
             // whole frames don't bring back what RB3 drew once (gpu_skip.h)
@@ -1839,12 +1844,12 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         const bool zero_copy = ChoosePath();
         // before the first paint, the window's size (minimized, a paint may
         // not come for a while)
+        const uint32_t w = window_ ? window_->GetActualPhysicalWidth() : 0;
+        const uint32_t h = window_ ? window_->GetActualPhysicalHeight() : 0;
+        band3::aspect::SetWindow(w, h, REXCVAR_GET(native_fill_window));
         ImageRect rect = rect_;
-        if (!rect.w || !rect.h) {
-            const uint32_t w = window_ ? window_->GetActualPhysicalWidth() : 0;
-            const uint32_t h = window_ ? window_->GetActualPhysicalHeight() : 0;
+        if (!rect.w || !rect.h)
             rect = w && h ? LetterboxRect(w, h, PresentLetterbox()) : ImageRect{0, 0, 1280, 720};
-        }
         Renderer::Get().StartPresent(rect.w, rect.h, zero_copy);
         // the upload path's last picture is from before: none until this
         // stretch's first
@@ -1872,6 +1877,9 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             NotePaint(now, true);
             return;
         }
+        // the game's cameras at the window's shape, as it's resized and the
+        // setting changes
+        band3::aspect::SetWindow(tw, th, REXCVAR_GET(native_fill_window));
         rect_ = LetterboxRect(tw, th, PresentLetterbox());
         Renderer::Get().SetPresentSize(rect_.w, rect_.h);
         UpdateGpu();

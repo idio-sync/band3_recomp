@@ -44,6 +44,7 @@ REXCVAR_DECLARE(bool, debug_overlay);
 REXCVAR_DECLARE(int32_t, native_max_height);
 REXCVAR_DECLARE(int32_t, native_anisotropic);
 REXCVAR_DECLARE(int32_t, native_view_msaa);
+REXCVAR_DECLARE(bool, native_fill_window);
 
 // Band3/Audio
 REXCVAR_DECLARE(bool, usb_mics);

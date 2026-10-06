@@ -59,6 +59,9 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
   - Faster: uncapped in a song, 442 fps against 234 on the emulated GPU; at 60 Hz the GPU
     is 13% busy against 28%
   - Sharper: it draws at the window's size (1080p, 4K), not the console's 720p
+  - Fills ultrawide and 16:10 windows: the game draws at the window's shape, more of the
+    venue to the sides or above and below, with the HUD and highways at their size in the
+    middle and no black bars ([Filling the window](docs/native-renderer.md#filling-the-window))
   - `renderer` picks `native`, `emulated` (the Linux default) or `both` (F8 switches
     pictures); F9 opens its debug view
   - Tested only on Windows (Direct3D 12) so far; the Vulkan path for Linux is untested

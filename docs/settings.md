@@ -24,7 +24,12 @@ Native applies when band3 starts, so Play restarts band3 for it. The tab shows o
 sections the chosen renderer uses ([which settings apply](native-renderer.md#which-settings-apply)).
 The native renderer's **Resolution limit** ([`native_max_height`](native-renderer.md)) caps
 the lines it draws, scaling a taller window's picture up, for a GPU that can't keep up at
-the window's size. **Frame rate cap** is [`frame_cap`](#config-files); **VSync** shows only
+the window's size. **Fill the window** ([`native_fill_window`](native-renderer.md#filling-the-window),
+on by default) has the game draw at the window's shape with the native renderer: an
+ultrawide window shows more to the sides and a 16:10 one more above and below, the HUD and
+highways at their size in the middle, with no black bars. **Aspect** (letterbox or stretch)
+is for the game's 16:9 picture: the emulated GPU's, or the native renderer's with Fill the
+window off. **Frame rate cap** is [`frame_cap`](#config-files); **VSync** shows only
 with the cap off, since the cap turns it off.
 
 The Controllers tab starts with a list of every controller and instrument band3 sees (Xbox

@@ -175,6 +175,8 @@ constexpr Setting kSettings[] = {
      .widget = kResolution, .choices = kResolutions},
     {.cvar = "present_letterbox", .tab = kGraphics, .section = "Display", .label = "Aspect",
      .widget = kCombo, .choices = kAspect},
+    {.cvar = "native_fill_window", .tab = kGraphics, .section = "Display",
+     .label = "Fill the window", .widget = kCheckbox, .renderers = kWithNative},
     {.cvar = "frame_cap", .tab = kGraphics, .section = "Display", .label = "Frame rate cap",
      .widget = kComboText, .choices = kFrameCaps},
     {.cvar = "renderer", .tab = kGraphics, .section = "Renderer", .label = "Renderer",

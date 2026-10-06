@@ -27,6 +27,7 @@
 #include <utility>
 
 #include "generated/band3_init.h"
+#include "src/Hooks/aspect.h"
 #include "src/Hooks/frame_pacing.h"
 #include "src/Render/frame_compose.h"
 #include "src/Render/gpu_skip.h"
@@ -2964,6 +2965,8 @@ void TrackSettings() {
 
 extern "C" REX_FUNC(RndCam__Select) {
     const uint32_t cam = ctx.r3.u32;
+    // the camera at the window's shape (native_fill_window)
+    band3::aspect::BeforeSelect(base, cam);
     __imp__RndCam__Select(ctx, base);
     // kept while capture is off too if texture passes are recorded then
     if (!Active()) return;
