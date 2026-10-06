@@ -326,7 +326,7 @@ void RoomsPanelDialog::TakePad(ImGuiIO& io) {
     if (!system) return;
     const std::optional<uint16_t> read = ReadPads();
     if (!pad_taken_) {
-        system->AddUIInputBlocker();
+        input::AddGameInputBlocker(*system);
         pad_taken_ = true;
         // only what isn't on already, so letting go leaves the SDK's as it was
         config_flags_added_ = ImGuiConfigFlags_NavEnableGamepad & ~io.ConfigFlags;
@@ -371,7 +371,7 @@ void RoomsPanelDialog::ReleasePad(ImGuiIO& io) {
     pad_buttons_ = 0;
     pad_ignored_ = 0;
     if (rex::input::InputSystem* system = input::GameInputSystem()) {
-        system->RemoveUIInputBlocker();
+        input::RemoveGameInputBlocker(*system);
     }
     pad_taken_ = false;
 }

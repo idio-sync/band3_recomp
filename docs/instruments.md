@@ -93,3 +93,14 @@ uses. `joypad_lag` (the Controllers tab's Input lag, then restart) changes it pe
 separated: `5=20,8=30` gives Xbox guitars 20 ms and Xbox drums 30 ms. `type=ms/video/audio`
 also sets the lag the calibration tests assume, and a blank part keeps the game's number
 (`8=/30/`). It's per type, so a real Xbox instrument of the same type changes too.
+
+## Mouse in menus
+
+In the game's menus a left click presses A (select), a right click B (back), and each
+notch of the wheel presses the d-pad up or down. The click picks whatever the menu has
+highlighted, not what's under the pointer. The presses join player 1's controller (the
+SDK's stand-in one when nothing is plugged in, so the mouse works on its own). It stops
+while a song is on (from its loading screen until its results are left, pause menu
+included), where A and B would be frets. Clicks on band3's or the SDK's windows (F4, F6,
+F10, the SDK's dialogs) stay with them, and the mouse waits while F4 or the Rooms panel has
+the controller. `mouse_menus` (the Controllers tab's More settings) turns it off.

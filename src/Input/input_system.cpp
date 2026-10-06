@@ -1,6 +1,7 @@
 #include "input_system.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <mutex>
@@ -15,6 +16,7 @@
 #include "input_backend.h"
 #include "input_lock.h"
 #include "midi_drums_driver.h"
+#include "mouse_menus_driver.h"
 #include "player_slots.h"
 #include "restart_debounce.h"
 #include "src/settings.h"
@@ -317,6 +319,7 @@ Built Build() {
     if (virtual_driver->Setup() == X_STATUS_SUCCESS) {
         built.system->AddDriver(std::move(virtual_driver));
     }
+    built.system->AddDriver(CreateMouseMenusDriver());
     auto hid = std::make_unique<DriverSlot>();
     auto midi = std::make_unique<DriverSlot>();
     built.hid = hid.get();
@@ -382,6 +385,22 @@ std::unique_ptr<rex::system::IInputSystem> CreateInputSystem(bool tool_mode) {
 }
 
 rex::input::InputSystem* GameInputSystem() { return g_game_input; }
+
+namespace {
+std::atomic<int> g_game_input_blockers{0};
+}
+
+void AddGameInputBlocker(rex::input::InputSystem& system) {
+    system.AddUIInputBlocker();
+    g_game_input_blockers.fetch_add(1);
+}
+
+void RemoveGameInputBlocker(rex::input::InputSystem& system) {
+    g_game_input_blockers.fetch_sub(1);
+    system.RemoveUIInputBlocker();
+}
+
+bool GameInputBlocked() { return g_game_input_blockers.load() > 0; }
 
 void PrepareInputSystem(rex::ui::Window* window) {
     if (g_game_input) return;

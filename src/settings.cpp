@@ -231,6 +231,10 @@ REXCVAR_DEFINE_BOOL(menu_shortcut, true, "Band3/Controllers",
     "Open menus from a controller: hold both stick clicks for a second for this settings "
     "menu, or both stick clicks and the left bumper for the Instrument Lab");
 
+REXCVAR_DEFINE_BOOL(mouse_menus, true, "Band3/Controllers",
+    "Use the mouse in the game's menus: left click selects (A), right click goes back (B), "
+    "and the wheel moves up and down. Off during songs, where A and B are frets");
+
 REXCVAR_DEFINE_STRING(joypad_lag, "", "Band3/Controllers",
     "Change the extra lag the game builds in per controller type, as type=ms, comma "
     "separated (e.g. 5=20,8=30). type=ms/video/audio also sets the calibration tests' lag; "

@@ -120,7 +120,7 @@ void InGameSettingsDialog::HoldInput(ImGuiIO& io, bool hold) {
         // the game reads a neutral pad while any blocker is held; buttons
         // still held when the last goes stay masked until let go (the SDK)
         if (system) {
-            system->AddUIInputBlocker();
+            input::AddGameInputBlocker(*system);
             blocker_taken_ = true;
         }
         saved_config_flags_ = io.ConfigFlags;
@@ -134,7 +134,7 @@ void InGameSettingsDialog::HoldInput(ImGuiIO& io, bool hold) {
     nav_.reset();
     io.ConfigFlags = (io.ConfigFlags & ~ImGuiConfigFlags_NavEnableKeyboard) |
                      (saved_config_flags_ & ImGuiConfigFlags_NavEnableKeyboard);
-    if (blocker_taken_ && system) system->RemoveUIInputBlocker();
+    if (blocker_taken_ && system) input::RemoveGameInputBlocker(*system);
     blocker_taken_ = false;
     input_held_ = false;
 }

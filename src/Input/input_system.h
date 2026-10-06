@@ -29,6 +29,14 @@ std::unique_ptr<rex::system::IInputSystem> CreateInputSystem(bool tool_mode);
 // player's state directly; null before then
 rex::input::InputSystem* GameInputSystem();
 
+// The SDK's AddUIInputBlocker and RemoveUIInputBlocker, for band3's dialogs
+// that take the controller from the game, counted so GameInputBlocked can say
+// so: the mouse's presses (mouse_menus_driver.h) join the game's reads after
+// the SDK has blanked them, so they have to know to stay out too.
+void AddGameInputBlocker(rex::input::InputSystem& system);
+void RemoveGameInputBlocker(rex::input::InputSystem& system);
+bool GameInputBlocked();
+
 // The launcher's devices (Band3App::OnFinalizePaths). The launcher reads the
 // input system the game will get, built before the runtime, so it lists and
 // tests exactly what the game will see; the runtime then takes it over
