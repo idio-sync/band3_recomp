@@ -229,7 +229,7 @@ struct CvarFacts {
     std::optional<std::string> deck_preset;
     // band3_config.ini's value (LegacyIniValue); ignored if the cvar wouldn't take it
     std::optional<std::string> ini;
-    // band3's own default, set at startup when nothing else did (audio_maxqframes = 3)
+    // band3's own default, set at startup when nothing else did (audio_maxqframes = 4)
     std::optional<std::string> startup_default;
     std::string registry_default;
     // a folder setting's default instead of all the above: the folder the game

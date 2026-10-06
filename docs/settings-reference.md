@@ -107,7 +107,7 @@ Every setting the launcher and the in-game settings (F4) show, tab by tab, as th
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `audio_maxqframes`<br>Audio buffer | `3` | a whole number (frames) | Max buffered audio frames (range 4-64). Lower reduces latency but may cause stuttering. |
+| `audio_maxqframes`<br>Audio buffer | `4` | a whole number (frames) | Max buffered audio frames (range 4-64). Lower reduces latency but may cause stuttering. |
 
 ## Controllers
 

@@ -228,7 +228,7 @@ constexpr Setting kSettings[] = {
     {.cvar = "usb_mic_devices", .tab = kAudio, .section = "Microphones", .label = "Mics",
      .widget = kMicSlots, .shown_when = kWithUsbMics},
     {.cvar = "audio_maxqframes", .tab = kAudio, .section = "Output", .label = "Audio buffer",
-     .widget = kIntStepper, .range = Range{1, 64, 1}, .unit = "frames"},
+     .widget = kIntStepper, .range = Range{4, 64, 1}, .unit = "frames"},
 
     // Controllers
     {.cvar = "controller_type", .tab = kControllers, .section = "Instruments",
