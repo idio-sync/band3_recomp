@@ -322,6 +322,11 @@ public:
     // to, as the window would, without the window having focus; returns an
     // error, or empty
     virtual std::string PressBind(std::string_view bind) = 0;
+    // types on the window's keyboard as SDL would deliver it with the window
+    // focused, without it having focus: each token is text (letters, digits
+    // and - . , ' / `) or one key as {name}, with a name from TypeKeyNames;
+    // returns an error, or empty
+    virtual std::string TypeKeys(const std::vector<std::string>& tokens) = 0;
     // player 1 accepts an invite to the Liveless game at host:port (Liveless
     // on), with the BandUI's joined-by-invite flag set first if `force_flag`;
     // returns an error, or empty
@@ -375,6 +380,10 @@ bool ConditionHolds(const Condition& condition, const GameStateSnapshot& state,
 
 // runs one command; the reply is one line of JSON, without the newline
 std::string RunCommand(std::string_view line, TestTarget& target);
+
+// what `type` takes: the keys it presses by {name}, and the characters it types
+const std::vector<std::string_view>& TypeKeyNames();
+bool TypeableCharacter(char c);
 
 // lets go of everything held on every player, for a client that went away;
 // the instruments stay plugged in

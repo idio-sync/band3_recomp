@@ -55,6 +55,7 @@ REXCVAR_DECLARE(int32_t, controller_type);
 REXCVAR_DECLARE(bool, hid_instruments);
 REXCVAR_DECLARE(bool, menu_shortcut);
 REXCVAR_DECLARE(bool, mouse_menus);
+REXCVAR_DECLARE(bool, keyboard_search);
 REXCVAR_DECLARE(std::string, joypad_lag);
 
 // Band3/Controllers/MIDI drums

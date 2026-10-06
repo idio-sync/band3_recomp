@@ -41,6 +41,7 @@
 #include <rex/ui/keybinds.h>
 #include <rex/ui/presenter.h>
 #include <rex/ui/window.h>
+#include <rex/ui/window_sdl.h>
 #include <rex/ui/windowed_app_context.h>
 #include <rex/input/input_system.h>
 #include "src/Audio/usb_mic_capture.h"
@@ -48,6 +49,7 @@
 #include "src/Hooks/frame_pacing.h"
 #include "src/Input/input_lock.h"
 #include "src/Input/input_system.h"
+#include "src/Input/keyboard_search_driver.h"
 #include "src/Input/virtual_instrument.h"
 #include "src/Input/xinput_state.h"
 #include "src/Net/liveless_rooms.h"
@@ -593,6 +595,80 @@ public:
             rex::ui::ProcessKeyEvent(e);
         });
         return error;
+    }
+
+    // As the window gets keys with focus: SDL's events, handed to the window
+    // as its app context does (SDL only sends keys to the focused window).
+    // Each key goes down, then its character if the window was taking text as
+    // it went down (SDL makes the text before the window sees the key), then
+    // up. Tokens are as test_commands.h's TypeKeys says.
+    std::string TypeKeys(const std::vector<std::string>& tokens) override {
+        auto* window = static_cast<rex::ui::WindowSDL*>(window_);
+        if (!window) return "no window";
+        OnUIThread([&] {
+            input::TypeAsFocused(true);
+            const auto press = [window](SDL_Scancode scancode, SDL_Keycode key, bool shift,
+                                        char text) {
+                const bool taking_text = window->IsTextInputActive();
+                SDL_Event event{};
+                event.type = SDL_EVENT_KEY_DOWN;
+                event.key.scancode = scancode;
+                event.key.key = key;
+                event.key.mod = shift ? SDL_KMOD_LSHIFT : SDL_KMOD_NONE;
+                event.key.down = true;
+                window->HandleKeyEvent(event);
+                if (text && taking_text) {
+                    const char typed[2] = {text, 0};
+                    SDL_Event text_event{};
+                    text_event.type = SDL_EVENT_TEXT_INPUT;
+                    text_event.text.text = typed;
+                    window->HandleTextInputEvent(text_event);
+                }
+                event.type = SDL_EVENT_KEY_UP;
+                event.key.down = false;
+                window->HandleKeyEvent(event);
+            };
+            for (const std::string& token : tokens) {
+                if (token.starts_with('{')) {
+                    const std::string_view name = std::string_view(token).substr(1, token.size() - 2);
+                    if (name == "enter") press(SDL_SCANCODE_RETURN, SDLK_RETURN, false, 0);
+                    if (name == "back") press(SDL_SCANCODE_BACKSPACE, SDLK_BACKSPACE, false, 0);
+                    if (name == "tab") press(SDL_SCANCODE_TAB, SDLK_TAB, false, 0);
+                    if (name == "esc") press(SDL_SCANCODE_ESCAPE, SDLK_ESCAPE, false, 0);
+                    if (name == "space") press(SDL_SCANCODE_SPACE, SDLK_SPACE, false, ' ');
+                    if (name == "left") press(SDL_SCANCODE_LEFT, SDLK_LEFT, false, 0);
+                    if (name == "right") press(SDL_SCANCODE_RIGHT, SDLK_RIGHT, false, 0);
+                    if (name == "up") press(SDL_SCANCODE_UP, SDLK_UP, false, 0);
+                    if (name == "down") press(SDL_SCANCODE_DOWN, SDLK_DOWN, false, 0);
+                    if (name == "delete") press(SDL_SCANCODE_DELETE, SDLK_DELETE, false, 0);
+                    continue;
+                }
+                for (const char c : token) {
+                    // a US keyboard's key for it; SDL's key codes are the
+                    // unshifted characters
+                    if (c >= 'a' && c <= 'z') {
+                        press(static_cast<SDL_Scancode>(SDL_SCANCODE_A + (c - 'a')), c, false, c);
+                    } else if (c >= 'A' && c <= 'Z') {
+                        const char lower = static_cast<char>(c - 'A' + 'a');
+                        press(static_cast<SDL_Scancode>(SDL_SCANCODE_A + (c - 'A')), lower, true, c);
+                    } else if (c == '0') {
+                        press(SDL_SCANCODE_0, c, false, c);
+                    } else if (c >= '1' && c <= '9') {
+                        press(static_cast<SDL_Scancode>(SDL_SCANCODE_1 + (c - '1')), c, false, c);
+                    } else {
+                        const SDL_Scancode scancode = c == '-'    ? SDL_SCANCODE_MINUS
+                                                      : c == '.'  ? SDL_SCANCODE_PERIOD
+                                                      : c == ','  ? SDL_SCANCODE_COMMA
+                                                      : c == '\'' ? SDL_SCANCODE_APOSTROPHE
+                                                      : c == '/'  ? SDL_SCANCODE_SLASH
+                                                                  : SDL_SCANCODE_GRAVE;
+                        press(scancode, c, false, c);
+                    }
+                }
+            }
+            input::TypeAsFocused(false);
+        });
+        return {};
     }
 
     std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) override {

@@ -237,6 +237,12 @@ REXCVAR_DEFINE_BOOL(mouse_menus, true, "Band3/Controllers",
     "Use the mouse in the game's menus: left click selects (A), right click goes back (B), "
     "and the wheel moves up and down. Off during songs, where A and B are frets");
 
+REXCVAR_DEFINE_BOOL(keyboard_search, true, "Band3/Controllers",
+    "Type on the song list to search it, as RB3Enhanced does on the Xbox 360. Needs a Rock "
+    "Band 3 Deluxe with keyboard search. There the keys that type stop pressing their "
+    "controller buttons, and while the search is typed in, the arrows, Enter and Backspace "
+    "edit it. Off during songs");
+
 REXCVAR_DEFINE_STRING(joypad_lag, "", "Band3/Controllers",
     "Change the extra lag the game builds in per controller type, as type=ms, comma "
     "separated (e.g. 5=20,8=30). type=ms/video/audio also sets the calibration tests' lag; "

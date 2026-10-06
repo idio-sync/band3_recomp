@@ -156,6 +156,7 @@ Every setting the launcher and the in-game settings (F4) show, tab by tab, as th
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
+| `keyboard_search` | `true` | `true`, `false` | Type on the song list to search it, as RB3Enhanced does on the Xbox 360. Needs a Rock Band 3 Deluxe with keyboard search. There the keys that type stop pressing their controller buttons, and while the search is typed in, the arrows, Enter and Backspace edit it. Off during songs |
 | `menu_shortcut` | `true` | `true`, `false` | Open menus from a controller: hold both stick clicks for a second for this settings menu, or both stick clicks and the left bumper for the Instrument Lab |
 | `midi_drums_notes` | *(empty)* | text | Note overrides as note=Part, comma separated (e.g. 44=Kick,40=Snare), in RPCS3's format. Parts: Kick, HihatPedal, Snare, SnareRim, HiTom, LowTom, FloorTom, Hihat, Ride, Crash, None *Applies at the next start.* |
 | `midi_drums_pulse_ms` | `30` | `20` to `100` | How long each hit is held, in milliseconds. Two cymbals hit together are played one pulse apart, so it must outlast a game frame *Applies at the next start.* |

@@ -49,6 +49,7 @@ public:
     std::chrono::milliseconds slept{0};
     std::vector<std::pair<std::string, std::string>> settings_set;
     std::vector<std::string> binds_pressed;
+    std::vector<std::vector<std::string>> typed;
     GameFolders folders;
     struct InviteRecord {
         std::string host;
@@ -152,6 +153,10 @@ public:
     std::string PressBind(std::string_view bind) override {
         if (bind == "bind_nothing") return "no key bind bind_nothing";
         binds_pressed.emplace_back(bind);
+        return {};
+    }
+    std::string TypeKeys(const std::vector<std::string>& tokens) override {
+        typed.push_back(tokens);
         return {};
     }
     std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) override {
@@ -1055,6 +1060,24 @@ TEST_CASE("bind presses a key bind, with or without its bind_ prefix") {
     CHECK(Has(reply, "no key bind bind_nothing"));
     CHECK_FALSE(Ok(RunCommand("bind", game)));
     CHECK_FALSE(Ok(RunCommand("p2 bind settings", game)));
+}
+
+TEST_CASE("type types text and presses keys by name") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("type the {space} who {enter}", game)));
+    REQUIRE(game.typed.size() == 1);
+    CHECK(game.typed[0] == std::vector<std::string>{"the", "{space}", "who", "{enter}"});
+    CHECK(Ok(RunCommand("type AC/DC {back} {left} `", game)));
+
+    const std::string reply = RunCommand("type {return}", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(Has(reply, "no key {return}"));
+    CHECK(Has(reply, "{enter}"));
+    CHECK_FALSE(Ok(RunCommand("type {enter", game)));
+    CHECK(Has(RunCommand("type the{space}who", game), "can't type '{'"));
+    CHECK(Has(RunCommand("type abc!", game), "can't type '!'"));
+    CHECK_FALSE(Ok(RunCommand("type", game)));
+    CHECK(game.typed.size() == 2);
 }
 
 TEST_CASE("liveless_invite accepts an invite to a game, on 9103 unless given a port") {

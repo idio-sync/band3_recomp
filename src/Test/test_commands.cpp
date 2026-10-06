@@ -961,6 +961,38 @@ std::string Bind(TestTarget& target, const std::vector<std::string_view>& args) 
     return Ok();
 }
 
+// type <text|{key}>...: types on the window's keyboard, e.g.
+// `type the {space} who {enter}`
+std::string Type(TestTarget& target, const std::vector<std::string_view>& args) {
+    constexpr std::string_view kUsage = "usage: type <text|{key}>..., e.g. type abba {enter}";
+    if (args.size() < 2) return Error(target, kUsage);
+    std::vector<std::string> tokens;
+    for (size_t i = 1; i < args.size(); i++) {
+        const std::string_view token = args[i];
+        if (token.starts_with('{')) {
+            const std::string_view name = token.substr(1, token.size() - 1 - token.ends_with('}'));
+            const auto& names = TypeKeyNames();
+            if (!token.ends_with('}') || std::find(names.begin(), names.end(), name) == names.end()) {
+                std::string error = "no key " + std::string(token) + " (";
+                for (const std::string_view known : names) {
+                    if (error.back() != '(') error += ' ';
+                    error += "{" + std::string(known) + "}";
+                }
+                return Error(target, error + ")");
+            }
+        } else {
+            for (const char c : token) {
+                if (!TypeableCharacter(c)) {
+                    return Error(target, std::string("can't type '") + c + "'; " + std::string(kUsage));
+                }
+            }
+        }
+        tokens.emplace_back(token);
+    }
+    if (std::string error = target.TypeKeys(tokens); !error.empty()) return Error(target, error);
+    return Ok();
+}
+
 // liveless_invite <host[:port]> [force_flag]: player 1 accepts an invite to
 // the Liveless game there, on RB3Enhanced's 9103 unless given
 std::string LivelessInvite(TestTarget& target, const std::vector<std::string_view>& args) {
@@ -1214,6 +1246,17 @@ bool ConditionHolds(const Condition& condition, const GameStateSnapshot& state,
     return false;
 }
 
+const std::vector<std::string_view>& TypeKeyNames() {
+    static const std::vector<std::string_view> names = {
+        "enter", "back", "tab", "esc", "space", "left", "right", "up", "down", "delete"};
+    return names;
+}
+
+bool TypeableCharacter(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+           std::string_view("-.,'/`").find(c) != std::string_view::npos;
+}
+
 std::string RunCommand(std::string_view line, TestTarget& target) {
     std::vector<std::string_view> args = Words(line);
     if (args.empty()) return Error(target, "empty command");
@@ -1266,6 +1309,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "cvar") return Cvar(target, args);
     if (verb == "folders") return FoldersReply(target, args);
     if (verb == "bind") return Bind(target, args);
+    if (verb == "type") return Type(target, args);
     if (verb == "liveless_invite") return LivelessInvite(target, args);
     if (verb == "rooms_status") return RoomsStatus(target, args);
     if (verb == "rooms_join") return RoomsJoin(target, args);

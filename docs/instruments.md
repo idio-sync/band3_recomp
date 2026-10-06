@@ -104,3 +104,18 @@ while a song is on (from its loading screen until its results are left, pause me
 included), where A and B would be frets. Clicks on band3's or the SDK's windows (F4, F6,
 F10, the SDK's dialogs) stay with them, and the mouse waits while F4 or the Rooms panel has
 the controller. `mouse_menus` (the Controllers tab's More settings) turns it off.
+
+## Typing to search songs
+
+On the song list, start typing and Rock Band 3 Deluxe's search opens with what you typed,
+as RB3Enhanced brings back on the Xbox 360 and RPCS3. It needs a Deluxe with keyboard
+search (one with `dx_keyboard.dta`); with an older one, or none, the keyboard stays a
+controller. On the song list the keys that type a character (letters, digits, space,
+punctuation) type instead of pressing the buttons they're bound to; the arrows, Enter,
+Backspace, Escape and the function keys keep their binds. (`` ` `` opens Deluxe's console
+instead.) The first key of a search is read as on a US keyboard; the rest follow your
+layout. While the search is typed in, it also takes the arrows (left and right move the
+caret, up and down go through earlier searches), Enter (search), Tab (stop typing),
+Backspace, and ctrl+a, c, x and v. Escape keeps its bind, so bound to B it leaves the
+search. Nothing changes during a song or while F4 or the Rooms panel has the controller.
+`keyboard_search` (the Controllers tab's More settings) turns it off.

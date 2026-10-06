@@ -36,6 +36,7 @@ add_executable(band3_tests
     restart_debounce_test.cpp
     menu_shortcut_test.cpp
     mouse_menus_test.cpp
+    keyboard_search_test.cpp
     usb_mic_test.cpp
     game_status_test.cpp
     player_slots_test.cpp
@@ -89,6 +90,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/instrument_kind.cpp
     ${BAND3_ROOT}/src/Input/instruments.cpp
     ${BAND3_ROOT}/src/Input/joypad_lag_status.cpp
+    ${BAND3_ROOT}/src/Input/keyboard_search.cpp
     ${BAND3_ROOT}/src/Input/menu_shortcut.cpp
     ${BAND3_ROOT}/src/Input/midi_drums.cpp
     ${BAND3_ROOT}/src/Input/player_slots.cpp

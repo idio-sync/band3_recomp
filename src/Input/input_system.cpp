@@ -15,6 +15,7 @@
 #include "hid_instruments.h"
 #include "input_backend.h"
 #include "input_lock.h"
+#include "keyboard_search_driver.h"
 #include "midi_drums_driver.h"
 #include "mouse_menus_driver.h"
 #include "player_slots.h"
@@ -320,6 +321,7 @@ Built Build() {
         built.system->AddDriver(std::move(virtual_driver));
     }
     built.system->AddDriver(CreateMouseMenusDriver());
+    built.system->AddDriver(CreateKeyboardSearchDriver());
     auto hid = std::make_unique<DriverSlot>();
     auto midi = std::make_unique<DriverSlot>();
     built.hid = hid.get();
