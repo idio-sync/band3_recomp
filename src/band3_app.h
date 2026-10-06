@@ -170,6 +170,9 @@ class Band3App : public rex::ReXApp {
 #ifdef _WIN32
     // GPU hang reports, before SetupPresentation makes the SDK's device
     if (REXCVAR_GET(dred)) band3::crash_trace::EnableDred();
+    // the last run's crash, if it crashed: not for the test harness, which
+    // reads its own runs' reports
+    if (REXCVAR_GET(test_port) == 0) band3::crash_trace::ShowLastCrashNotice();
 #endif
   }
 
@@ -419,6 +422,7 @@ class Band3App : public rex::ReXApp {
 #ifdef _WIN32
     // after the runtime's own exception handlers, which handle MMIO and GPU writes
     band3::crash_trace::WatchGuestFaults();
+    band3::crash_trace::RunCrashTest();
 #endif
     // a song cache rb3e_delete_songcache marked, before the game mounts it
     band3::song_cache::DeletePending(runtime()->user_data_root());

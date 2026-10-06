@@ -195,8 +195,8 @@ details after that. Switching `instrument` reconnects it, so press Start to join
 
 `launch` starts band3 with `--dred=true` (Direct3D 12's Device Removed Extended Data;
 `--dred=false` leaves it off). When the GPU hangs (`DEVICE_HUNG` in the log), band3 aborts
-and `band3_crash_trace.txt`, in the folder it runs from (the repository root under the
-harness), gets the command lists the GPU hadn't finished and the op each stopped at; for
+and its crash report, `logs/crash-<start>-<pid>.txt` beside band3.exe (the log names it),
+gets the command lists the GPU hadn't finished and the op each stopped at; for
 an indexed draw in the native renderer's last frame, also its mesh, target, counts, blend
 and textures. Some hangs take the whole PC down instead, so nothing is written.
 

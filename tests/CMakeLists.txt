@@ -74,6 +74,7 @@ add_executable(band3_tests
     input_backend_test.cpp
     device_view_test.cpp
     dred_report_test.cpp
+    crash_report_test.cpp
     sync_cp_test.cpp
     sync_gpu_test.cpp
     renderer_mode_test.cpp

@@ -125,7 +125,8 @@ struct PhysicalMemory final : GuestMemory {
 // device's DRED, crash_trace.h).
 [[maybe_unused]] void OnHostGpuLoss(bool is_responsible, bool statically_from_ui_thread) {
 #ifdef _WIN32
-    constexpr const char* kTrace = "; band3_crash_trace.txt has the device's DRED (with dred on)";
+    constexpr const char* kTrace =
+        "; the crash report (logs/crash-*.txt) has the device's DRED (with dred on)";
 #else
     constexpr const char* kTrace = "";
 #endif

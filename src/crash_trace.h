@@ -29,6 +29,17 @@ void SetIndexedDrawNamer(std::string (*namer)(uint32_t before, uint32_t total));
 // function it's in), innermost first. After the runtime's setup, so the SDK's
 // own handlers (MMIO, GPU write watches) come first.
 void WatchGuestFaults();
+
+// If the last run ended in a crash (abort() or std::terminate), tells the
+// player in a message box: where its report is and, after a GPU hang with
+// band3's native renderer, that renderer = emulated may avoid it
+// (crash_report.h's Notice), with a button that opens the folder. Once: it
+// forgets the crash.
+void ShowLastCrashNotice();
+
+// With BAND3_CRASH_TEST=abort or terminate in the environment, crashes that
+// way, to check the report and the next start's notice.
+void RunCrashTest();
 #endif
 
 }  // namespace band3::crash_trace
