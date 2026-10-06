@@ -144,6 +144,7 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.targets_made += g.targets_made;
     sum.targets_new += g.targets_new;
     sum.targets_resized += g.targets_resized;
+    sum.targets_returning += g.targets_returning;
     sum.targets_ms += g.targets_ms;
     sum.textures_first += g.textures_first;
     sum.meshes_first += g.meshes_first;
@@ -166,11 +167,13 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.evicted_meshes += g.evicted_meshes;
     sum.evicted_textures += g.evicted_textures;
     sum.evicted_rts += g.evicted_rts;
+    sum.rts_released += g.rts_released;
     sum.resident_meshes += g.resident_meshes;
     sum.resident_textures += g.resident_textures;
     sum.resident_rts += g.resident_rts;
     sum.texture_array_mb += g.texture_array_mb;
     sum.arena_mb += g.arena_mb;
+    sum.rts_mb += g.rts_mb;
 }
 
 // the most of plan_ms and its parts in `most` (LiveViewStats::Kind's
@@ -215,12 +218,13 @@ std::string DescribePlan(const GpuStats& gs, const CameraCuts::Step& cam) {
     if (gs.arena_rebuilt) std::snprintf(arena, sizeof(arena), " (rebuilt, %.1f MB)", gs.arena_new_mb);
     char buf[640];
     std::snprintf(buf, sizeof(buf),
-                  "; plan: setup %.1f, walk %.1f (%u targets made in %.1f ms, %u of them "
-                  "resized; %u textures and %u meshes drawn for the first time; %u texture "
+                  "; plan: setup %.1f, walk %.1f (%u targets made in %.1f ms, %u returning, "
+                  "%u resized; %u textures and %u meshes drawn for the first time; %u texture "
                   "arrays grown in %.1f ms, %.1f MB), arena %.1f%s, reserve %.1f (%s) ms; "
                   "record's post plan %.1f ms",
                   gs.plan_setup_ms, gs.plan_walk_ms, gs.targets_made, gs.targets_ms,
-                  gs.targets_resized, gs.textures_first, gs.meshes_first, gs.arrays_grown,
+                  gs.targets_returning, gs.targets_resized, gs.textures_first, gs.meshes_first,
+                  gs.arrays_grown,
                   gs.arrays_ms, gs.arrays_mb, gs.plan_arena_ms, arena, gs.plan_reserve_ms,
                   grew.c_str(), gs.post_plan_ms);
     std::string s = buf;
@@ -280,8 +284,9 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         "%.1f, submit %.1f, evict %.1f ms; %u draws (%u of the world%s), %u texture passes; "
         "sent %u meshes into the pool and %u into the arena (%.2f MB), %u textures (%.2f MB), "
         "%u KB of bones; moved %u meshes to the arena%s; made %u pipelines, %u buffers, %u "
-        "textures; let go of %u meshes, %u textures, %u targets after; its capture cost the "
-        "game's thread %.2f ms (%u draws, %u new shades, %u allocations, %u bones, %llu KB of "
+        "textures; let go of %u meshes, %u textures, %u targets' pictures after, and released "
+        "%u targets (%.1f MB of targets kept); its capture cost the game's thread %.2f ms "
+        "(%u draws, %u new shades, %u allocations, %u bones, %llu KB of "
         "geometry and %llu KB of textures decoded) in a %.1f ms game frame; %llu captures "
         "skipped before it",
         static_cast<unsigned long long>(fc.frame), static_cast<unsigned long long>(fc.game_frame),
@@ -292,7 +297,8 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         gs.texture_bytes / 1048576.0, uint32_t(gs.bone_bytes >> 10), gs.arena_moved,
         gs.arena_rebuilt ? " (rebuilt it)" : "", gs.pipelines_made, gs.buffers_made,
         gs.textures_made, gs.evicted_meshes, gs.evicted_textures, gs.evicted_rts,
-        hooks_ns / 1e6, fc.cost.draws, fc.cost.new_shades, fc.cost.allocs, fc.cost.bones,
+        gs.rts_released, gs.rts_mb, hooks_ns / 1e6, fc.cost.draws, fc.cost.new_shades,
+        fc.cost.allocs, fc.cost.bones,
         static_cast<unsigned long long>(fc.cost.geom_miss_bytes >> 10),
         static_cast<unsigned long long>(fc.cost.tex_decode_bytes >> 10), fc.cost.game_ns / 1e6,
         static_cast<unsigned long long>(skipped));
@@ -1091,6 +1097,7 @@ class Renderer {
                 kind.peak_texture_array_mb =
                     std::max(kind.peak_texture_array_mb, d.gs.texture_array_mb);
                 kind.peak_arena_mb = std::max(kind.peak_arena_mb, d.gs.arena_mb);
+                kind.peak_rts_mb = std::max(kind.peak_rts_mb, d.gs.rts_mb);
             }
         }
         live_drew_gpu_ = d.drew_gpu;

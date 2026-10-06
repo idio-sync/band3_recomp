@@ -2,11 +2,14 @@
 // follows: under even/odd rendering the world's geometry and textures, drawn
 // by one frame a world period, stay on the GPU through the period rather than
 // being sent again by each post frame, and what's drawn once (a movie's
-// frames) is still let go, a few frames later.
+// frames) is still let go, a few frames later; and a texture pass's render
+// target, forgotten as before, keeps its textures for a while, so a camera cut
+// back to a character doesn't make its targets again.
 
 #include <doctest/doctest.h>
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 #include <vector>
 #include "src/Render/gpu_view.h"
 
@@ -110,4 +113,92 @@ TEST_CASE("textures drawn once, a movie's frames, stay bounded") {
     // and one drawn once goes `keep` frames after
     CHECK(KeepTexture(10, 10, 10 + keep, keep, kEvict));
     CHECK_FALSE(KeepTexture(10, 10, 11 + keep, keep, kEvict));
+}
+
+TEST_CASE("a render target is forgotten at kEvictAfter frames, released only once idle too") {
+    constexpr double kKeepSeconds = 30;
+    // within the frames it's kept as it is, however long ago that was (a
+    // low frame rate)
+    CHECK(KeepRt(10, 10, kEvict, 0, kKeepSeconds) == RtResidency::kKeep);
+    CHECK(KeepRt(10, 10 + kEvict, kEvict, 0, kKeepSeconds) == RtResidency::kKeep);
+    CHECK(KeepRt(10, 10 + kEvict, kEvict, 1000, kKeepSeconds) == RtResidency::kKeep);
+    // a frame past them its picture is forgotten, where it used to be
+    // released, but its textures stay until it's been idle the seconds
+    CHECK(KeepRt(10, 11 + kEvict, kEvict, 0, kKeepSeconds) == RtResidency::kForget);
+    CHECK(KeepRt(10, 11 + kEvict, kEvict, kKeepSeconds, kKeepSeconds) == RtResidency::kForget);
+    CHECK(KeepRt(10, 11 + kEvict, kEvict, kKeepSeconds + 0.001, kKeepSeconds) ==
+          RtResidency::kRelease);
+    CHECK(KeepRt(10, 5000, kEvict, 1000, kKeepSeconds) == RtResidency::kRelease);
+}
+
+TEST_CASE("a character's targets out of the shot for a while aren't made again at the cut back") {
+    // a target as GpuRenderer::Impl keeps it: made, drawn, last used
+    struct Target {
+        bool made = false;
+        bool drawn = false;
+        uint64_t used = 0;
+        double used_at = 0;
+    };
+    // 120 frames a second; its pass is drawn in the shot, and not for `out`
+    // seconds between two shots of it. What's made, and whether the frame
+    // back in the shot found it drawn before its pass drew it.
+    auto run = [](double out, int& made, bool& drawn_at_cut) {
+        Target t;
+        made = 0;
+        const uint64_t out_from = 240, back = out_from + uint64_t(out * 120);
+        for (uint64_t serial = 1; serial <= back + 10; serial++) {
+            const double now = double(serial) / 120;
+            if (serial < out_from || serial >= back) {
+                if (serial == back) drawn_at_cut = t.drawn;
+                if (!t.made) {
+                    t.made = true;
+                    made++;
+                }
+                t.drawn = true;
+                t.used = serial;
+                t.used_at = now;
+            }
+            switch (KeepRt(t.used, serial, kEvict, now - t.used_at, 30)) {
+                case RtResidency::kKeep: break;
+                case RtResidency::kForget: t.drawn = false; break;
+                case RtResidency::kRelease: t = Target{}; break;
+            }
+        }
+    };
+    int made = 0;
+    bool drawn_at_cut = true;
+    // out for half a second: kept as it is, as before
+    run(0.5, made, drawn_at_cut);
+    CHECK(made == 1);
+    CHECK(drawn_at_cut);
+    // out for 5 seconds: forgotten (undrawn, as it was released before) but
+    // not made again
+    run(5, made, drawn_at_cut);
+    CHECK(made == 1);
+    CHECK_FALSE(drawn_at_cut);
+    // out for 40: released, and made again
+    run(40, made, drawn_at_cut);
+    CHECK(made == 2);
+    CHECK_FALSE(drawn_at_cut);
+}
+
+TEST_CASE("past the cap the forgotten targets least recently used are released") {
+    // (used, DxTex)
+    std::vector<std::pair<uint64_t, uint32_t>> forgotten = {
+        {500, 1}, {300, 2}, {400, 3}, {300, 0}, {600, 4}};
+    // at or under the cap, none
+    CHECK(RtsOverCap(forgotten, 128, 128) == 0);
+    CHECK(RtsOverCap(forgotten, 20, 128) == 0);
+    // two over: the two used longest ago, ties by DxTex
+    REQUIRE(RtsOverCap(forgotten, 130, 128) == 2);
+    CHECK(forgotten[0] == std::pair<uint64_t, uint32_t>{300, 0});
+    CHECK(forgotten[1] == std::pair<uint64_t, uint32_t>{300, 2});
+    // further over than there are forgotten ones: all of them, oldest first
+    // (the ones drawn within kEvictAfter stay)
+    REQUIRE(RtsOverCap(forgotten, 200, 128) == forgotten.size());
+    CHECK(forgotten[2].first == 400);
+    CHECK(forgotten[3].first == 500);
+    CHECK(forgotten[4].first == 600);
+    std::vector<std::pair<uint64_t, uint32_t>> none;
+    CHECK(RtsOverCap(none, 200, 128) == 0);
 }

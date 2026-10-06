@@ -43,6 +43,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -55,8 +56,14 @@ constexpr SDL_GPUTextureFormat kColorFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNO
 constexpr SDL_GPUTextureFormat kDepthFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
 // a shadow map's target: its depth, clip z/w, as soft_raster.cpp keeps it
 constexpr SDL_GPUTextureFormat kShadowFormat = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
-// a mesh or texture no frame has drawn for this many frames is let go
+// a mesh or texture no frame has drawn for this many frames is let go (a
+// render target's picture is forgotten)
 constexpr uint64_t kEvictAfter = 120;
+// a forgotten render target's textures are released once it's been this
+// long unused, or at once while more than kMaxRts are kept, least recently
+// used first (gpu_view.h's residency; GpuStats::rts_mb is what they hold)
+constexpr double kRtKeepSeconds = 30;
+constexpr size_t kMaxRts = 128;
 // A texture array of a size class starts with layers to about this many
 // bytes, and doubles when full. Making a texture costs about half a
 // millisecond, so textures share them rather than have one each.
@@ -560,8 +567,9 @@ struct GpuRenderer::Impl {
     // texture, and a depth buffer; a shadow map's is R32_FLOAT, a plain 2D
     // texture (mesh.hlsl's shadow_tex), its depth alone. Kept between frames,
     // so a render target a frame samples but doesn't draw is what was drawn
-    // last (one it draws starts over: Render); let go when no frame has drawn
-    // or sampled it for kEvictAfter frames, and made again when its size
+    // last (one it draws starts over: Render); forgotten when no frame has
+    // drawn or sampled it for kEvictAfter frames, and released kRtKeepSeconds
+    // after (Evict, gpu_view.h's residency); made again when its size
     // changes.
     struct Rt {
         SDL_GPUTexture* color = nullptr;
@@ -574,10 +582,22 @@ struct GpuRenderer::Impl {
         bool drawn = false;     // by a pass, this frame or before
         uint64_t drawn_in = 0;  // the frame a pass last drew it
         uint32_t version = 0;   // the version that pass made
+        // the frame that last drew or sampled it, and when (frame_now)
         uint64_t used = 0;
+        std::chrono::steady_clock::time_point used_at;
     };
     std::unordered_map<uint32_t, Rt> rts;
     bool rt_failure_logged = false;
+    // the DxTexes a target has been made for since the device started, so
+    // one made again after it was released counts as returning
+    // (GpuStats::targets_returning)
+    std::unordered_set<uint32_t> rts_seen;
+    // the frame's time, taken once as its walk starts: what marks a target
+    // used (Rt::used_at), and what Evict measures its idle seconds from
+    std::chrono::steady_clock::time_point frame_now;
+    // Evict's forgotten targets (used, DxTex) for kMaxRts, kept between
+    // frames so it allocates nothing once grown
+    std::vector<std::pair<uint64_t, uint32_t>> rts_forgotten;
 
     // a frame's work, kept between frames so a frame allocates nothing once
     // they've grown
@@ -629,7 +649,7 @@ struct GpuRenderer::Impl {
     // which Draw turns into a frame's (GpuStats::pipelines_made and the rest)
     struct Counts {
         uint64_t pipelines = 0, buffers = 0, textures = 0, arena_rebuilds = 0;
-        uint64_t evicted_meshes = 0, evicted_textures = 0, evicted_rts = 0;
+        uint64_t evicted_meshes = 0, evicted_textures = 0, evicted_rts = 0, rts_released = 0;
     };
     Counts counts;
     // the frame whose walk is placing what it draws (Render), which
@@ -722,6 +742,11 @@ struct GpuRenderer::Impl {
     // the target for texture pass `p`, made (again) at w x h (PassTargetSize);
     // null if it couldn't be
     Rt* TargetFor(const Pass& p, uint32_t w, uint32_t h);
+    // marks `rt` drawn or sampled by this frame, for Evict
+    void UseRt(Rt& rt) {
+        rt.used = serial;
+        rt.used_at = frame_now;
+    }
     void ReleaseRt(Rt& rt);
     // output `slot` at w x h, made again (a new generation) if it isn't;
     // false if it couldn't be
@@ -1146,6 +1171,8 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     textures.clear();
     tex_arrays.clear();
     rts.clear();
+    rts_seen.clear();
+    rts_forgotten.clear();
     arena_vert_count = arena_index_count = 0;
     pipelines.clear();
     warm = false;
@@ -1634,7 +1661,7 @@ const GpuRenderer::Impl::Tex* GpuRenderer::Impl::TextureFor(const Texture* t) {
 
 GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, uint32_t h) {
     Rt& rt = rts[p.tex_obj];
-    rt.used = serial;
+    UseRt(rt);
     rt.game_w = p.width;
     rt.game_h = p.height;
     // the texture's mips (FinishDrawTarget's downsamples), down to 1x1 at most
@@ -1682,9 +1709,11 @@ GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, u
     rt.h = h;
     rt.levels = levels;
     rt.shadow = shadow;
+    const bool returning = !rts_seen.insert(p.tex_obj).second && !resized;
     if (walk_stats) {
         walk_stats->targets_made++;
         (resized ? walk_stats->targets_resized : walk_stats->targets_new)++;
+        if (returning) walk_stats->targets_returning++;
         walk_stats->targets_ms += std::chrono::duration<double, std::milli>(
                                       std::chrono::steady_clock::now() - start)
                                       .count();
@@ -2168,6 +2197,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         std::chrono::duration<double, std::milli>(walk_start - render_start).count() - st.pre_ms;
     walk_stats = &st;
     serial++;
+    frame_now = walk_start;
     Buffer& pool_v = pool_verts[serial & 1];
     Buffer& pool_i = pool_indices[serial & 1];
     const Buffer& last_pool_v = pool_verts[(serial - 1) & 1];
@@ -2265,7 +2295,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             // target (a copy of it), not their quad's texture
             if (run.pass && SoftBlur(frame, it, state, *run.pass)) {
                 spot_draw[d] = kSoftBlur;
-                if (auto f = rts.find(it.tex->tex_obj); f != rts.end()) f->second.used = serial;
+                if (auto f = rts.find(it.tex->tex_obj); f != rts.end()) UseRt(f->second);
                 continue;
             }
             if (run.pass && IsSoftParticle(it, state)) spot_draw[d] = kSoftParticle;
@@ -2287,7 +2317,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     const bool self = run.pass && run.pass->tex_obj == tex.tex_obj;
                     if (!self && f != rts.end() && f->second.drawn && !f->second.shadow) {
                         source = kSourceRt;
-                        f->second.used = serial;
+                        UseRt(f->second);
                     } else if (!self && o.rt_guest_pixels && !tex.rgba.empty()) {
                         source = kSourceTexture;
                     } else {
@@ -2328,7 +2358,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 if (o.texture_passes && !self && f != rts.end() && f->second.drawn &&
                     !f->second.shadow) {
                     source = kSourceRt;
-                    f->second.used = serial;
+                    UseRt(f->second);
                 } else if (o.rt_guest_pixels && !map->rgba.empty()) {
                     source = kSourceTexture;
                     UseTexture(state->maps[m]);
@@ -2352,7 +2382,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     if (!self && f != rts.end() && f->second.drawn_in == serial &&
                         f->second.version == map->version && !f->second.shadow) {
                         proj_source[d] = kSourceRt;
-                        f->second.used = serial;
+                        UseRt(f->second);
                     } else if (o.rt_guest_pixels && !map->rgba.empty()) {
                         UseTexture(state->maps[kMapProjected]);
                     } else {
@@ -2372,7 +2402,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 const bool self = run.pass && map && run.pass->tex_obj == map->tex_obj;
                 if (!self && f != rts.end() && f->second.shadow &&
                     f->second.drawn_in == serial && f->second.version == map->version)
-                    f->second.used = serial;
+                    UseRt(f->second);
                 else
                     flags &= ~shade::kShadeShadow;
             }
@@ -3648,15 +3678,41 @@ void GpuRenderer::Impl::Evict() {
         it = textures.erase(it);
         counts.evicted_textures++;
     }
-    // a render target no frame has drawn or sampled for a while
+    // a render target no frame has drawn or sampled for kEvictAfter frames
+    // is forgotten: undrawn, so what samples it finds nothing drawn, as it
+    // would with the target released (gpu_view.h's residency); counted once,
+    // as a release was (a forgotten one a frame samples again without
+    // drawing it stays forgotten). Its textures go kRtKeepSeconds after.
+    rts_forgotten.clear();
     for (auto it = rts.begin(); it != rts.end();) {
-        if (it->second.used + kEvictAfter >= serial) {
+        Rt& rt = it->second;
+        const double idle = std::chrono::duration<double>(frame_now - rt.used_at).count();
+        const RtResidency keep = KeepRt(rt.used, serial, kEvictAfter, idle, kRtKeepSeconds);
+        if (keep == RtResidency::kKeep) {
             ++it;
             continue;
         }
-        ReleaseRt(it->second);
+        if (rt.drawn || rt.drawn_in) {
+            rt.drawn = false;
+            rt.drawn_in = 0;
+            counts.evicted_rts++;
+        }
+        if (keep == RtResidency::kForget) {
+            rts_forgotten.emplace_back(rt.used, it->first);
+            ++it;
+            continue;
+        }
+        ReleaseRt(rt);
         it = rts.erase(it);
-        counts.evicted_rts++;
+        counts.rts_released++;
+    }
+    // and past kMaxRts the forgotten least recently used go at once
+    const size_t over = RtsOverCap(rts_forgotten, rts.size(), kMaxRts);
+    for (size_t i = 0; i < over; i++) {
+        const auto f = rts.find(rts_forgotten[i].second);
+        ReleaseRt(f->second);
+        rts.erase(f);
+        counts.rts_released++;
     }
     // an array whose textures have all gone goes after a while
     for (auto it = tex_arrays.begin(); it != tex_arrays.end();) {
@@ -3838,9 +3894,15 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
     stats.evicted_meshes = uint32_t(now.evicted_meshes - before.evicted_meshes);
     stats.evicted_textures = uint32_t(now.evicted_textures - before.evicted_textures);
     stats.evicted_rts = uint32_t(now.evicted_rts - before.evicted_rts);
+    stats.rts_released = uint32_t(now.rts_released - before.rts_released);
     stats.resident_meshes = uint32_t(impl_->meshes.size());
     stats.resident_textures = uint32_t(impl_->textures.size());
     stats.resident_rts = uint32_t(impl_->rts.size());
+    for (const auto& [obj, rt] : impl_->rts) {
+        // colour (RGBA8, or a shadow map's R32_FLOAT) and D32 depth
+        const double pixels = double(rt.w) * rt.h;
+        stats.rts_mb += pixels * 4 * ((rt.levels > 1 ? 4.0 / 3 : 1) + 1) / 1048576;
+    }
     for (const auto& [size, a] : impl_->tex_arrays) {
         const double layer = double(size >> 32) * double(size & 0xffffffffu) * 4;
         stats.texture_array_mb += layer * a.layers * (a.levels > 1 ? 4.0 / 3 : 1) / 1048576;

@@ -837,6 +837,7 @@ private:
                       {"targets_made", double(g.targets_made)},
                       {"targets_new", double(g.targets_new)},
                       {"targets_resized", double(g.targets_resized)},
+                      {"targets_returning", double(g.targets_returning)},
                       {"textures_first", double(g.textures_first)},
                       {"meshes_first", double(g.meshes_first)},
                       {"arrays_grown", double(g.arrays_grown)},
@@ -846,16 +847,19 @@ private:
                       {"evicted_meshes", double(g.evicted_meshes)},
                       {"evicted_textures", double(g.evicted_textures)},
                       {"evicted_rts", double(g.evicted_rts)},
+                      {"rts_released", double(g.rts_released)},
                       {"resident_meshes", double(g.resident_meshes)},
                       {"resident_textures", double(g.resident_textures)},
                       {"resident_rts", double(g.resident_rts)},
                       {"texture_array_mb", g.texture_array_mb},
-                      {"arena_mb", g.arena_mb}};
+                      {"arena_mb", g.arena_mb},
+                      {"rts_mb", g.rts_mb}};
         out.peak = {{"meshes", double(k.peak_meshes)},
                     {"textures", double(k.peak_textures)},
                     {"rts", double(k.peak_rts)},
                     {"texture_array_mb", k.peak_texture_array_mb},
-                    {"arena_mb", k.peak_arena_mb}};
+                    {"arena_mb", k.peak_arena_mb},
+                    {"rts_mb", k.peak_rts_mb}};
         for (int i = 0; i < P::kNumHooks; i++)
             out.capture_ms.emplace_back(P::kHookNames[i], double(k.cost.hook_ns[i]) / 1e6);
         out.capture_counts = {{"draws", double(k.cost.draws)},

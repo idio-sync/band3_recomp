@@ -1,8 +1,11 @@
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "src/Render/scene_capture.h"
@@ -103,13 +106,14 @@ struct GpuStats {
     double plan_setup_ms = 0, plan_walk_ms = 0, plan_arena_ms = 0, plan_reserve_ms = 0;
     double post_plan_ms = 0;
     // In the walk: the render targets made (a colour and a depth texture
-    // each), new (none kept by its DxTex: never drawn, or let go) or made
-    // again at another size or mip count (resized), and the time it took;
-    // the textures drawn for the first time since they were placed (or let
-    // go), and the meshes; the texture arrays made or doubled to hold them,
-    // their time (the old one's layers listed for the copy included) and
-    // their megabytes (mips a third more)
-    uint32_t targets_made = 0, targets_new = 0, targets_resized = 0;
+    // each), new (none kept by its DxTex: never drawn, or released) or made
+    // again at another size or mip count (resized), and of the new, those
+    // whose DxTex had one before (released, and back: returning), and the
+    // time it took; the textures drawn for the first time since they were
+    // placed (or let go), and the meshes; the texture arrays made or doubled
+    // to hold them, their time (the old one's layers listed for the copy
+    // included) and their megabytes (mips a third more)
+    uint32_t targets_made = 0, targets_new = 0, targets_resized = 0, targets_returning = 0;
     double targets_ms = 0;
     uint32_t textures_first = 0, meshes_first = 0;
     uint32_t arrays_grown = 0;
@@ -136,14 +140,19 @@ struct GpuStats {
     uint64_t texture_bytes = 0, bone_bytes = 0;
     // the device objects made for it (pipelines; buffers, the upload buffer
     // included; textures: arrays grown, targets, outputs, kept buffers), and
-    // what Evict let go of after it
+    // what Evict let go of after it: the render targets forgotten (their
+    // pictures, at kEvictAfter frames, as when they were released there) and,
+    // of those forgotten, the ones whose textures were released (residency
+    // below)
     uint32_t pipelines_made = 0, buffers_made = 0, textures_made = 0;
-    uint32_t evicted_meshes = 0, evicted_textures = 0, evicted_rts = 0;
-    // what's on the GPU after it: meshes and textures kept, render targets,
-    // and the megabytes of the texture arrays (their mips counted as a third
-    // more) and of the arena
+    uint32_t evicted_meshes = 0, evicted_textures = 0, evicted_rts = 0, rts_released = 0;
+    // what's on the GPU after it: meshes and textures kept, render targets
+    // (forgotten ones included), and the megabytes of the texture arrays
+    // (their mips counted as a third more), of the arena and of the render
+    // targets (colour and depth, 4 bytes a pixel each, the colour's mips a
+    // third more)
     uint32_t resident_meshes = 0, resident_textures = 0, resident_rts = 0;
-    double texture_array_mb = 0, arena_mb = 0;
+    double texture_array_mb = 0, arena_mb = 0, rts_mb = 0;
 };
 
 // What GpuRenderer keeps on the GPU between frames, by its frame serial (one
@@ -157,6 +166,18 @@ struct GpuStats {
 // frame: the others show the kept post buffer), so a keep shorter than that
 // would let them go between, and each post frame would send all of the
 // world's geometry and textures again (30 to 50 MB a frame in arena_04).
+//
+// A texture pass's render target is forgotten once no frame has drawn or
+// sampled it for kEvictAfter frames: what it was drawn with is no longer
+// there for a frame to sample (drawn and drawn_in reset), exactly as when the
+// target was released there, so every frame's picture is the same as it was
+// then. Its textures, though, are kept for kRtKeepSeconds of the clock since
+// it was last used: RB3 stops drawing a character's texture passes while the
+// character is out of the shot, and the cut back to them made each target
+// again (13 to 15 at a cut, about 0.9 ms each, most of a 12 to 25 ms plan at
+// 120 Hz, where kEvictAfter frames is a second). Seconds, not frames, so the
+// keep doesn't shrink as the frame rate goes up. At most kMaxRts are kept:
+// past that the forgotten ones least recently used are released at once.
 
 // the frames something drawn in one frame is kept undrawn for, with the world
 // drawn every `world_period` frames (RasterOptions::world_period): the
@@ -185,6 +206,30 @@ inline bool KeepTexture(uint64_t first, uint64_t used, uint64_t serial, uint64_t
 // from the last frame's, as the pools alternate; else it's sent again from
 // the CPU, into the arena
 inline bool MeshFromLastPool(uint64_t first, uint64_t serial) { return first + 1 == serial; }
+
+// what becomes of a render target last drawn or sampled in frame `used`, and
+// `idle_seconds` ago, after frame `serial`: kept as it is while drawn within
+// `evict_after` frames (kEvictAfter); after that forgotten (its picture, not
+// its textures), and released once it's been idle more than `keep_seconds`
+// (kRtKeepSeconds) too. Both must have passed: at 2 frames a second, a
+// target last used 40 seconds ago is 80 frames back, and stays as it is.
+enum class RtResidency { kKeep, kForget, kRelease };
+inline RtResidency KeepRt(uint64_t used, uint64_t serial, uint64_t evict_after,
+                          double idle_seconds, double keep_seconds) {
+    if (used + evict_after >= serial) return RtResidency::kKeep;
+    return idle_seconds > keep_seconds ? RtResidency::kRelease : RtResidency::kForget;
+}
+// With `resident` targets kept, more than `cap` (kMaxRts): of the forgotten
+// ones in `forgotten` (their `used` frame, and a key), how many are released,
+// least recently used first. They're moved to the front, oldest first (ties
+// by key, so it doesn't depend on the map's order), and the count returned.
+inline size_t RtsOverCap(std::vector<std::pair<uint64_t, uint32_t>>& forgotten, size_t resident,
+                         size_t cap) {
+    if (resident <= cap) return 0;
+    const size_t n = std::min(resident - cap, forgotten.size());
+    std::partial_sort(forgotten.begin(), forgotten.begin() + std::ptrdiff_t(n), forgotten.end());
+    return n;
+}
 
 // one of the presenter's output textures, as RenderFrameToOutput left it
 struct GpuOutput {
