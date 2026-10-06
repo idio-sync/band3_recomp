@@ -1655,3 +1655,29 @@ TEST_CASE("each of an overlay pixel's samples keeps its own depth") {
     CHECK(rgba[1 * 8 + 2] == 0xff008080u);  // (255 + 0 + 1) / 2 = 128 each
     CHECK(rgba[1 * 8 + 3] == kGreen);
 }
+
+TEST_CASE("an overlay draw past the game's 16:9 reaches the picture's edge; the world's doesn't") {
+    // a world quad and an overlay quad, each from -0.75 to 0.75: past the
+    // middle half that's the game's 16:9 in a picture twice as wide
+    FrameCapture f;
+    f.draws = {Item(Quad(-1, 1, kRed), 0), Item(Quad(-0.75f, 0.75f, kGreen), 0)};
+    f.passes = {BackBuffer(0, 2)};
+    f.post_boundary = 1;
+    RasterOptions o = Small();
+    std::vector<uint32_t> rgba;
+    Rasterize(f, o, rgba);
+    // without the edge, the overlay leaves the outer columns
+    CHECK(rgba[1 * 8 + 0] == kRed);
+    CHECK(rgba[1 * 8 + 3] == kGreen);
+    o.overlay_edge[0] = 0.5f;
+    Rasterize(f, o, rgba);
+    // to the edges: the first column half, D3D9's half-pixel offset moving
+    // the quad half a pixel right, as it does a 16:9 picture's
+    for (int x = 1; x < 8; x++) CHECK(rgba[1 * 8 + x] == kGreen);
+    CHECK(rgba[1 * 8 + 0] != kRed);
+    // a world draw past it is left as it is
+    f.draws = {Item(Quad(-0.75f, 0.75f, kGreen), 0), Item(Quad(-0.25f, 0.25f, kRed), 0)};
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 0] != kGreen);
+    CHECK(rgba[1 * 8 + 1] == kGreen);
+}

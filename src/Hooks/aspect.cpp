@@ -75,6 +75,10 @@ void BeforeSelect(uint8_t* base, uint32_t cam) {
     if (stale) REX_STORE_U32(cam + kCam_Aspect, 0xFFFFFFFFu);
 }
 
+void CurrentOverlayEdge(float out[2]) {
+    OverlayEdge(g_shape.load(std::memory_order_relaxed), out);
+}
+
 void SetWindow(uint32_t width, uint32_t height, bool fill) {
     if (fill && (!width || !height)) return;
     const uint64_t shape = ShapeFor(width, height, fill);

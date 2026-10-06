@@ -61,3 +61,18 @@ TEST_CASE("a taller window keeps 16:9's sides and shows more above and below") {
     const float widened = WidenedFov(0.6f, 0.5f, TallScale(square));
     CHECK(XScale(widened, YRatio(square)) == doctest::Approx(XScale(0.6f, 9.0 / 16.0)));
 }
+
+TEST_CASE("the overlay's edge is where the game's 16:9 ends in the picture") {
+    float edge[2];
+    OverlayEdge(0, edge);
+    CHECK(edge[0] == 1.0f);
+    CHECK(edge[1] == 1.0f);
+    // 21:9's 16:9 is the middle three quarters across
+    OverlayEdge(ShapeFor(2560, 1080, true), edge);
+    CHECK(edge[0] == doctest::Approx((16.0 / 9.0) / (2560.0 / 1080.0)));
+    CHECK(edge[1] == 1.0f);
+    // 16:10's the middle nine tenths down
+    OverlayEdge(ShapeFor(1920, 1200, true), edge);
+    CHECK(edge[0] == 1.0f);
+    CHECK(edge[1] == doctest::Approx(0.9));
+}

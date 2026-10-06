@@ -720,6 +720,11 @@ class Renderer {
                     o.width = present_w_;
                     o.height = present_h_;
                     CapHeight(o);
+                    band3::aspect::CurrentOverlayEdge(o.overlay_edge);
+                    // in a song the HUD under the track (the player's name)
+                    // runs past 16:9's bottom by design: a taller window
+                    // shows it whole rather than stretched
+                    if (InSong()) o.overlay_edge[1] = 1.0f;
                 }
                 ScaleForPicture(o);
                 o.normal_maps = REXCVAR_GET(native_view_normal_maps);

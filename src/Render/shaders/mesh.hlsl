@@ -51,6 +51,10 @@ VK_BINDING(0, 1) cbuffer VertexUniforms : register(b0, space1) {
     // DepthMap): (x w + y + z clip.z) / w in units of kNearW / w, 0 1 0 for
     // kNearW / w itself
     float4 depth_map;
+    // where the game's 16:9 ends in the picture, in clip x and y, for an
+    // overlay draw over the whole picture (soft_raster.h's
+    // RasterOptions::overlay_edge, StretchEdges); 1 1 for every other draw
+    float4 overlay_edge;
     ShadeParams vs_shade;  // the texture's transform, and a vertex-lit draw's light
 };
 
@@ -177,6 +181,19 @@ float4x4 Bone(uint i) {
                     asfloat(bones.Load4(at + 32)), asfloat(bones.Load4(at + 48)));
 }
 
+// native_fill_window: a vertex past the game's 16:9 (edge, in clip x and y;
+// 1 the picture's edge) moved out to the picture's edge, so menu art drawn a
+// little past 16:9 reaches the window's edge rather than stopping short; the
+// part past 16:9 stretches, what's inside it stays as it is
+float2 StretchEdges(float4 clip, float2 edge) {
+    float2 xy = clip.xy;
+    [unroll] for (int a = 0; a < 2; a++) {
+        if (clip.w > 0 && edge[a] < 1 && abs(xy[a]) > edge[a] * clip.w)
+            xy[a] = sign(xy[a]) * clip.w;
+    }
+    return xy;
+}
+
 PixelIn VSMain(VertexIn v) {
     // the vertex colour's SH direction turns as the normal does
     const float3 dir = AoShDirection(v.color);
@@ -222,6 +239,7 @@ PixelIn VSMain(VertexIn v) {
         wu = mul(float4(tangent, 0), world).xyz;
     }
     float4 clip = mul(float4(wp, 1), view_proj);
+    clip.xy = StretchEdges(clip, overlay_edge.xy);
     PixelIn o;
     o.clip = clip.xy;
     // the pixel this pipeline samples at x + .5 then sees what the game's

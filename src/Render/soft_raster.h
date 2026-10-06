@@ -187,6 +187,12 @@ struct RasterOptions {
     // D3DMULTISAMPLE_2_SAMPLES offscreen target), 4 smoother than the game,
     // 1 none, as the renderers drew before
     uint32_t msaa = 2;
+    // native_fill_window: where the game's 16:9 ends in the picture, in clip
+    // x and y (aspect_model.h's OverlayEdge). An overlay draw over the whole
+    // picture has its vertices past it moved out to the picture's edge, so
+    // menu art drawn a little past 16:9 reaches the window's edge rather
+    // than stopping short of it. 1 1 (the picture's edge) leaves them.
+    float overlay_edge[2] = {1.0f, 1.0f};
     // On the GPU, what each indexed draw of the frame is (mesh, target,
     // counts, textures and their samplers), kept while the GPU draws it
     // (GpuRenderer::DescribeIndexedDraw): with the dred setting, so a GPU

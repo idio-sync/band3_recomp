@@ -95,9 +95,12 @@ struct VertexUniforms {
     float clip_offset[4];  // ClipOffset's
     // the depth's DepthMap (soft_raster.h): p, q, r, then 0; 0 1 0 is 1/w
     float depth_map[4];
+    // RasterOptions::overlay_edge (x, y, then 0 0) for an overlay draw over
+    // the whole picture; 1 1 for every other
+    float overlay_edge[4] = {1.0f, 1.0f, 0.0f, 0.0f};
     shade::ShadeParams shade;
 };
-static_assert(sizeof(VertexUniforms) == 176 + sizeof(shade::ShadeParams));
+static_assert(sizeof(VertexUniforms) == 192 + sizeof(shade::ShadeParams));
 
 void SetDepthMap(const DepthMap& d, float out[4]) {
     out[0] = d.p;
@@ -3219,7 +3222,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // one draw into the open pass; `no_z` a texture without a depth buffer,
     // `shadow_depth` a shadow map's, into which it draws its depth alone
     auto draw = [&](size_t d, AlphaMode alpha, bool no_z, bool shadow_depth = false,
-                    const DepthMap& depth_map = DepthMap{}) {
+                    const DepthMap& depth_map = DepthMap{}, bool overlay_edge = false) {
         const DrawItem& it = frame.draws[d];
         const Mesh& m = meshes[it.geom.get()];
         const int blend = BlendFor(it, o);
@@ -3421,6 +3424,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         ClipOffset(it, bound_viewport[2], bound_viewport[3], vu.clip_offset);
         SetDepthMap(depth_map, vu.depth_map);
+        if (overlay_edge) {
+            vu.overlay_edge[0] = o.overlay_edge[0];
+            vu.overlay_edge[1] = o.overlay_edge[1];
+        }
         vu.shade = sp;
         SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
         PixelUniforms pu{};
@@ -3529,7 +3536,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 AlphaMode alpha = AlphaMode::kNone;
                 if (!resolved && WritesSceneAlpha(shade::ShadeOf(frame, it)))
                     alpha = AlphaMode::kScene;
-                draw(d, alpha, false, false, depth_map);
+                // the overlay's camera draws over the whole picture reach its
+                // edges (RasterOptions::overlay_edge); DrawRect's quads are
+                // in pixels, a camera's with a screen rect in its own
+                const bool whole = vp[0] == 0.0f && vp[1] == 0.0f &&
+                                   vp[2] == float(width) && vp[3] == float(height);
+                draw(d, alpha, false, false, depth_map,
+                     resolved && whole && it.rect_shader < 0);
                 depth_fresh = false;
             }
             continue;

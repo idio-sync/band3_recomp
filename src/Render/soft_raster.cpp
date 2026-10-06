@@ -189,6 +189,16 @@ struct DrawState {
 // lands it on the same pixels.
 float PixelCentre(const DrawItem& it) { return it.rect_shader >= 0 ? 0.5f : 0.0f; }
 
+// native_fill_window: mesh.hlsl's StretchEdges. A clip position past the
+// game's 16:9 (edge, RasterOptions::overlay_edge) moved out to the picture's
+// edge; null for a draw it doesn't apply to
+void StretchEdges(float p[4], const float* edge) {
+    if (!edge || p[3] <= 0) return;
+    for (int a = 0; a < 2; a++) {
+        if (edge[a] < 1 && std::abs(p[a]) > edge[a] * p[3]) p[a] = p[a] < 0 ? -p[3] : p[3];
+    }
+}
+
 // Where a multisampled pixel's samples are, from where it samples
 // (PixelCentre), in pixels, y down: D3D's standard 2x and 4x patterns
 // (D3D11_STANDARD_MULTISAMPLE_PATTERN, in 16ths of a pixel: 2x (4,4)
@@ -785,7 +795,8 @@ TexView NormalMap(const ShadeState* state, int map, const RasterOptions& o, cons
 
 void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const RasterOptions& o,
              const RtTargets& rts, Target& t, RasterStats& st, std::vector<ClipVert>& cv,
-             const TexView& density = {}, const DepthMap& depth = {}) {
+             const TexView& density = {}, const DepthMap& depth = {},
+             const float* overlay_edge = nullptr) {
     const Geometry& g = *it.geom;
     const bool skinned = o.skinning && !it.bones.empty();
     DrawState ds;
@@ -933,6 +944,7 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
         for (int col = 0; col < 4; col++)
             c.p[col] = wp[0] * it.view_proj.m[0][col] + wp[1] * it.view_proj.m[1][col] +
                        wp[2] * it.view_proj.m[2][col] + it.view_proj.m[3][col];
+        StretchEdges(c.p, overlay_edge);
         shade::TexGenUv(ds.shade, v.uv, c.uv);
         for (int k = 0; k < 3; k++) c.n[k] = wn[k];
         for (int k = 0; k < 3; k++) c.wp[k] = wp[k];
@@ -1378,7 +1390,14 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                 DepthMap dm;
                 PlaceBackBufferDraw(layout, frame, it, o.width, o.height, vp, dm);
                 back->SetViewport(vp[0], vp[1], vp[2], vp[3]);
-                DrawOne(it, int32_t(i), shade::ShadeOf(frame, it), o, rts, *back, st, cv, {}, dm);
+                // the overlay's camera draws over the whole picture reach its
+                // edges (RasterOptions::overlay_edge), as gpu_view.cpp's do
+                const bool whole = vp[0] == 0.0f && vp[1] == 0.0f &&
+                                   vp[2] == float(o.width) && vp[3] == float(o.height);
+                const float* edge =
+                    back == &overlay && whole && it.rect_shader < 0 ? o.overlay_edge : nullptr;
+                DrawOne(it, int32_t(i), shade::ShadeOf(frame, it), o, rts, *back, st, cv, {}, dm,
+                        edge);
             }
             continue;
         }

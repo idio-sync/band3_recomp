@@ -175,14 +175,21 @@ Only the native renderer's picture fills the window. The emulated GPU draws the 
 cameras stay 16:9, letterboxed or stretched by `present_letterbox` as before. The test
 harness's windows are 1280x720, so the render checks see the game's own 16:9.
 
-Not right yet:
+Much of RB3's menu art was drawn a little past 16:9's edges, for TVs that cut the picture's
+edges off: the player bar along the bottom, the screens' header banners, the bars behind
+submenu titles, the song list's rows, the results banner. In a wider or taller window that
+art would stop short of the window's edge, so the native renderer moves the vertices of the
+overlay's draws (menus and HUD, drawn after the world) that lie past the game's 16:9 out to
+the window's edge: the part past 16:9 stretches, what's inside it stays as it is
+(`RasterOptions::overlay_edge`, `mesh.hlsl`'s `StretchEdges`). It leaves the world's draws,
+a camera's with a screen rect of its own (the tracks with more players) and the game's
+full-screen quads alone, and in a song it works across only: the HUD under the track (the
+player's name) runs past 16:9's bottom by design, and a taller window shows it whole.
 
-- Some menu art was drawn a little past 16:9's edges (the player bar along the bottom, the
-  song list's header, the results banner), and now ends short of the window's edge.
-- Venues were built for 16:9 shots, so a very wide window (32:9) may show their unfinished
-  edges.
-- One orthographic camera draws to the screen (the rest are perspective); it isn't widened,
-  and what it draws hasn't been identified.
+All 32 venues were checked at 32:9 (`forced_venue`, intros and play): each fills the
+window, with nothing missing at its edges. Not right yet: one orthographic camera draws to
+the screen (the rest are perspective); it isn't widened, and what it draws hasn't been
+identified.
 
 ## Renderer native: no emulated GPU
 

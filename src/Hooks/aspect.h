@@ -13,4 +13,7 @@ void SetWindow(uint32_t width, uint32_t height, bool fill);
 // before RndCam::Select(cam): has it rebuild a camera built for another shape
 void BeforeSelect(uint8_t* base, uint32_t cam);
 
+// OverlayEdge for the shape the cameras are built for now
+void CurrentOverlayEdge(float out[2]);
+
 }  // namespace band3::aspect

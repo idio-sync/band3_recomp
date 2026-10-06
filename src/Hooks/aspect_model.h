@@ -57,4 +57,20 @@ inline float WidenedFov(float fov, float fov_scale, double tall) {
     return float(std::atan(std::tan(double(fov) * fov_scale) / tall) / fov_scale);
 }
 
+// where the game's 16:9 ends in a shape's picture, in clip x and y (1 the
+// picture's edge): 0.75 1 for 21:9, 1 0.9 for 16:10, 1 1 for 16:9. The
+// native renderer moves an overlay draw's vertices past it out to the edge,
+// so menu art drawn a little past 16:9 reaches the window's edge
+// (mesh.hlsl's StretchEdges).
+inline void OverlayEdge(uint64_t shape, float out[2]) {
+    out[0] = out[1] = 1.0f;
+    if (!shape) return;
+    const double ratio =
+        double(ShapeWidth(shape)) / double(ShapeHeight(shape)) / (16.0 / 9.0);
+    if (ratio > 1.0)
+        out[0] = float(1.0 / ratio);
+    else
+        out[1] = float(ratio);
+}
+
 }  // namespace band3::aspect
