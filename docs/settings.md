@@ -81,8 +81,9 @@ It opens:
 It never opens when RB3E's `rb3e_relaunch_game` restarts the game, nor for a
 [test harness](test-harness.md) run (`test_port`) unless that is started with `--launcher`.
 
-To get back to it, hold Shift while band3 starts, start it with `--launcher`, or turn
-`show_launcher` on in F4 (Band3 → Launcher). On a Steam Deck in Game Mode, add
+To get back to it, hold Shift while band3 starts, start it with `--launcher`, or tick
+**Show the launcher at startup** in the [in-game settings](#in-game-settings-f4) and save.
+On a Steam Deck in Game Mode, add
 `--launcher` to band3's launch options in Steam (Properties → Launch Options), and take it
 out again afterwards. `launcher = true` in `band3.toml` is ignored: it's for one start, from
 the command line.
@@ -107,22 +108,59 @@ wouldn't win over it. On a Steam Deck a banner at the top says so, with the
 `steam_deck_defaults` switch: on, the [Deck's settings](#steam-deck) are the defaults and
 what you change wins over them.
 
-Some settings stay in F4 only: debug options, heap sizes, the native renderer's debug
-options and the virtual instrument.
+Some settings are only in the [in-game settings](#in-game-settings-f4): the Advanced tab's
+(debug options, heap sizes, the native renderer's debug options, the test harness's and
+the virtual instrument) and each tab's **More settings**.
 
-## The settings menu
+## In-game settings (F4)
 
-Press **F4** in game to open the settings menu. band3's own options are under the
-**Band3** categories (Game, Graphics, Integrations, Online, MIDI drums, Microphones, Debug), next
-to the SDK's window, graphics, audio and input settings. Settings marked as needing a
-restart take effect the next time the game starts; the others apply immediately, or from
-the next time the game loads what they affect (for example, a forced venue applies from
-the next venue load).
+Press **F4** in game, or hold both stick clicks on a controller for a second, to open
+band3's settings over the game. They have the launcher's tabs and rows, from the same
+list, showing what the chosen renderer uses as the launcher does, and an **Advanced** tab.
+Changes apply as you make them: at once, or from the next time the game loads what they
+affect (a forced venue from the next venue load). A row whose change applies only from
+the next start says **Applies at the next start** once you change it: the folders, most of
+the Online tab, the instrument drivers, the input backend, the microphones, the emulated
+GPU's anti-aliasing, and the renderer from Native to the other two or back. Pointing at a
+setting shows what it does, and says if it's one of those. **Save** writes `band3.toml` as
+the launcher does: only what you changed, the file's other lines kept. The footer says
+when something isn't saved, and **Close** asks first; closing without saving keeps the
+changes until band3 closes. **Show the launcher at startup** is the launcher's
+[box](#the-launcher), saved with the rest.
+
+While they're open the game gets no input: the keyboard and the controllers drive the
+settings (arrows or the d-pad move, Enter or A picks, LB and RB switch tabs, and B, Start
+or Escape go back to the game), and the game reads nothing pressed. They don't pause the
+game, so a song keeps playing underneath: open them from a menu. They're drawn at the
+launcher's scale: at 720p and on a Steam Deck's 1280x800 screen they fill most of it, and
+they grow with the window. F4 does nothing while the launcher shows, as F6 and F9 don't.
+
+Two things of the launcher's aren't here, since the game is using the devices: the
+Controllers tab's device list and tester (the [Instrument Lab](instruments.md#instrument-lab),
+F6, shows what the game reads from each player), and the level meters beside the mic
+slots, which would record from the microphones the game captures from. The mic slots'
+dropdowns are.
+
+**Advanced** lists band3's technical settings by group, by the names the command line uses:
+Game code, Graphics, Logging, Memory (the heap sizes), Native renderer, Startup (read-only:
+`launcher` and `relaunch_wait_pid` are only set as band3 starts) and Test harness. Each tab
+also ends with **More settings**: band3's settings the launcher doesn't show, such as
+`liveless_rooms` and `http_address` on the Online tab and the FPS counter
+(`debug_overlay`) on Graphics. Both are made from band3's settings as they're registered,
+so a setting band3 adds shows up there by itself.
+
+**All settings...** opens the SDK's own settings menu, for the SDK's settings and the key
+binds: every setting by category, each by its name, with what it does when pointed at.
+band3's are under **Band3**, in the in-game settings' groups: Game, Graphics (with Native
+and Emulated), Audio, Controllers (with MIDI drums), Online, and Advanced (with Game code,
+Graphics, Logging, Memory, Native renderer, Retired, Startup and Test harness). Its **Save
+to config** writes `band3.toml` differently from band3's Save ([below](#config-files)); a
+note under it says so. F4, or its note's buttons, close it.
 
 Without a keyboard, hold both stick clicks on a controller for a second to open the
-settings menu, or both stick clicks and the left bumper for the
+settings, or both stick clicks and the left bumper for the
 [Instrument Lab](instruments.md#instrument-lab). The same chord closes them.
-`menu_shortcut` (Band3 → Game) turns this off. It works with either input backend: it
+`menu_shortcut` (the Controllers tab's More settings) turns this off. It works with either input backend: it
 watches the buttons the game reads from each player's controller, so it needs the
 controller connected as a player, and works once the game is running (not on the
 launcher). Instruments don't count, since a guitar's solo frets and a drum kit's pads and
@@ -131,14 +169,16 @@ second kick send stick clicks too.
 ## Config files
 
 `band3.toml` next to the executable holds band3's settings; the [launcher](#the-launcher)
-writes it. Any setting can also be passed on the command line, e.g.
+and the [in-game settings](#in-game-settings-f4) write it. Any setting can also be passed
+on the command line, e.g.
 `--forced_venue=arena_04`, or by a `REX_*` environment variable.
 
-F4's **Save to config** writes `band3.toml` too, but differently: it rewrites the whole file
-with every setting that differs from the SDK's default, whatever set it, so values from
-`band3_config.ini`, the Steam Deck settings and the command line are frozen into the file
-from then on, and anything else in the file is dropped. Prefer the launcher, which writes
-only what you change.
+The SDK's settings menu (F4, **All settings...**) has a **Save to config** that writes
+`band3.toml` too, but differently: it rewrites the whole file with every setting that
+differs from the SDK's default, whatever set it, so values from `band3_config.ini`, the
+Steam Deck settings and the command line are frozen into the file from then on, and
+anything else in the file is dropped. Prefer band3's Save, the launcher's or F4's, which
+writes only what you change.
 
 `band3_config.ini` is still read and documents every option. Where the same setting is
 set in more than one place, the first of these wins:
@@ -150,11 +190,11 @@ set in more than one place, the first of these wins:
 5. `band3_config.ini`
 6. the defaults
 
-Some options worth knowing about, by the names F4 and the command line use:
+Some options worth knowing about, by the names the command line and F4's All settings... use:
 
 | Option | |
 |---|---|
-| `frame_cap` | what paces the game's frames, in place of the emulated console's vertical blank. `display` runs the game at the display's refresh rate exactly (119.88 Hz, not 120): best on a fixed-refresh display, and the default. `auto` runs it a little under (5% less, at least 4 fps: 114 at 120 Hz, 136.8 at 144): best on a VRR display (G-Sync, FreeSync), where it keeps every frame inside the display's range; on a fixed-refresh display a cap under its refresh rate shows a frame twice every 1/(refresh − cap) seconds. A number (24 to 240, e.g. `117`) caps there. `off` leaves the console's vertical blank to pace it, as `vsync` and `refresh_rate` say. With the cap on, `vsync` is turned off for the session (F4's Save to config then writes `vsync = false`, which matters only if `frame_cap` is later `off`), and `refresh_rate`, unless set, is set to the cap's rate. `display` and `auto` are off when the display's rate can't be told (on Linux, until the native view has run). Changes apply at once; the display is read again every 2 seconds |
+| `frame_cap` | what paces the game's frames, in place of the emulated console's vertical blank. `display` runs the game at the display's refresh rate exactly (119.88 Hz, not 120): best on a fixed-refresh display, and the default. `auto` runs it a little under (5% less, at least 4 fps: 114 at 120 Hz, 136.8 at 144): best on a VRR display (G-Sync, FreeSync), where it keeps every frame inside the display's range; on a fixed-refresh display a cap under its refresh rate shows a frame twice every 1/(refresh − cap) seconds. A number (24 to 240, e.g. `117`) caps there. `off` leaves the console's vertical blank to pace it, as `vsync` and `refresh_rate` say. With the cap on, `vsync` is turned off for the session (the SDK's Save to config, under F4's All settings..., then writes `vsync = false`, which matters only if `frame_cap` is later `off`; band3's Save keeps your own), and `refresh_rate`, unless set, is set to the cap's rate. `display` and `auto` are off when the display's rate can't be told (on Linux, until the native view has run). Changes apply at once; the display is read again every 2 seconds |
 | `refresh_rate` | the rate the game runs at, e.g. 120 for a 120 Hz monitor (0 keeps the console's 60, or follows `frame_cap`) |
 | `background_fps` | the venue's frame rate: 0 keeps the venue's own (30 in most) at any `refresh_rate`, or set one, up to `refresh_rate`. Rates that divide `refresh_rate` (30 at 120, 180 or 240) draw evenly |
 | `forced_venue` | a venue, a class of venues, or a comma-separated mix to pick from at random |
@@ -188,7 +228,7 @@ beside the executable.
 
 band3 reads DLC and custom songs (Xbox 360 `CON`, `LIVE` and `PIRS` packages, Rock Band
 and Rock Band 2 DLC included, as RB3 reads them) straight from the folders
-`content_folders` names (Band3 → Game, or `[game]` in `band3_config.ini`);
+`content_folders` names (the Game tab, or `[game]` in `band3_config.ini`);
 nothing is installed or unpacked, and band3 never writes there. Separate folders with `|`;
 subfolders count, and a relative folder is relative to the ini's folder, as above (`songs`
 beside it by default). Changes apply at the next launch, except songs the web page's
@@ -228,7 +268,8 @@ On a Steam Deck, band3 starts fullscreen and letterboxed (the game is 16:9, the 
 16:10), at the console's 60 Hz (`frame_cap` off) with vsync on and the FPS counter off, since Steam's performance overlay does
 that job. These only fill in settings that `band3.toml` and the command line leave unset,
 but they win over `band3_config.ini`, whose window settings are for a desktop. Turn
-`steam_deck_defaults` off (Band3 → Game, then restart) to go back to the ini's.
+`steam_deck_defaults` off (the Steam Deck banner on the launcher or in F4, then restart) to go
+back to the ini's.
 
 band3 recognises a Deck from the `SteamDeck=1` Steam sets, or on Linux from the Deck's
 hardware ids. Keep `resolution_scale` at 1: the Deck's screen can't show more than the

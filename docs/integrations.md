@@ -3,7 +3,8 @@
 band3 implements much of [RB3Enhanced](https://github.com/RBEnhanced/RB3Enhanced)'s
 behaviour natively, so tools and mods written for RB3E (including
 [Rock Band 3 Deluxe](https://github.com/hmxmilohax/rock-band-3-deluxe)) work with it.
-All of these are under F4 → Band3 → Integrations unless noted.
+All of these are on the Online tab, on the launcher or in F4 (in F4's All settings, Band3 →
+Online), unless noted.
 
 ## Network events (Stage Kit, song and venue info)
 
@@ -115,7 +116,7 @@ follows.
 Rock Band 3's online features (leaderboards, Battles, setlists shared with friends,
 Rock Central's goals) talked to Harmonix's Rock Central, which closed.
 [GoCentral](https://github.com/ihatecompvir/GoCentral) is a fan-run replacement that
-RB3Enhanced players use. Under F4 → Band3 → Online, set `username` (Band3 → Game)
+RB3Enhanced players use. On the Online tab, set `username` (the Game tab's Profile name)
 to a name of your own, turn on `gocentral`, then restart; or do it on the
 [launcher](settings.md#the-launcher)'s Game and Online tabs and press Play. band3 then logs into
 `gocentral_address`, RB3Enhanced's Xbox 360 server (`gocentral-xbox.rbenhanced.rocks`)
@@ -125,7 +126,7 @@ GoCentral knows Xbox players by their name alone, with no password: anyone using
 your name logs in as you. band3 won't connect while `username` is blank or "User",
 every profile's name until you change it.
 
-To see how a connection goes, turn on `log_net_calls` (Band3 → Debug): the log then
+To see how a connection goes, turn on `log_net_calls` (F4's Advanced tab, Logging): the log then
 has each of the game's network calls and each step of its Rock Central login.
 
 ## Liveless (online play)
@@ -133,10 +134,10 @@ has each of the game's network calls and each step of its Rock Central login.
 Rock Band 3 plays online over Xbox Live, which band3 doesn't have. RB3Enhanced's
 Liveless plays without it, straight from one player's game to another's, and band3
 does the same, so band3 players can play together (and, the game's packets being
-the same, with RB3Enhanced players, though that's untested). Under F4 → Band3 →
-Online, turn on `liveless`, set `username` to your name (others see it), then
-restart; or set them on the [launcher](settings.md#the-launcher)'s Online and Game
-tabs and press Play.
+the same, with RB3Enhanced players, though that's untested). In F4's Online
+tab, turn on `liveless`, set `username` (the Game tab's Profile name) to your name (others
+see it), then restart; or set them on the [launcher](settings.md#the-launcher)'s Online
+and Game tabs and press Play.
 
 One player hosts and the others join. Everyone presses Start for the overshell,
 picks **Play on Xbox Live**, backs out of it, then picks Play Now → Quickplay →
@@ -178,7 +179,7 @@ router also says its public address, which band3 tells players joining you unles
 network). A router that gives a private address (10.x, 172.16-31.x, 192.168.x,
 100.64-127.x: it's behind another router) still forwards the port, but band3 doesn't
 tell players that address. The mapping lasts an hour, renewed every half hour, and
-band3 deletes it when it closes. Turn `liveless_port_mapping` off (Band3 → Online, then
+band3 deletes it when it closes. Turn `liveless_port_mapping` off (F4's Online tab, More settings; then
 restart) to leave the router alone.
 
 band3 asks when it starts, and a mapping that failed isn't asked for again during the
@@ -203,8 +204,8 @@ network protection → Allow an app through firewall.
 
 RB3Enhanced's Liveless Rooms joins players by a room code instead of an
 address: each game logs in to a Rooms server, which gives it a code, and when another
-player asks for that code the server tells their game where the host's is. Under F4 →
-Band3 → Online, turn on `liveless` and `liveless_rooms`, set `username` (Band3 → Game)
+player asks for that code the server tells their game where the host's is. On F4's
+Online tab, turn on `liveless` and `liveless_rooms` (More settings), set `username` (the Game tab)
 to your name, then restart. band3 then logs in to `liveless_rooms_server`,
 RB3Enhanced's (`liveless-testing.ipg.pw`) unless you run your own. Logging in
 registers your `username` there, and as with GoCentral the server knows you by that
@@ -311,7 +312,7 @@ As with RB3E, keys on guitar is always unlocked: the overshell's part list offer
 a guitar without the career unlock. (RB3E's other always-on patches are already in: the
 8000-song limit, and the song blacklist, whose check TU5 itself no longer makes.)
 
-Two of RB3E's options are settings too (Band3 → Game, both off by default):
+Two of RB3E's options are settings too (the Game tab, both off by default):
 `unlock_clothing` unlocks every piece of clothing, tattoo and face paint and the video
 venues without earning them, and `gold_on_all_difficulties` lets gold stars be earned
 below expert, from the next song.
@@ -321,7 +322,7 @@ below expert, from the next song.
 As RB3E does (its `GameOriginIcons`), band3 shows an icon at the left of each song in
 the song list for the game or pack the song came from: Rock Band 3, Rock Band 2, The
 Beatles, a track pack, customs and so on, from the song's `game_origin`. It's on unless
-`game_origin_icons` (Band3 → Game) is off, and needs two things band3 doesn't ship:
+`game_origin_icons` (the Game tab) is off, and needs two things band3 doesn't ship:
 
 - the icons, `ui/resource/game_origins/<origin>.png`, which Rock Band 3 Deluxe has (over
   a hundred of them). A song whose origin has no icon shows none.
