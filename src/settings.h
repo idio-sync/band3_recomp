@@ -137,11 +137,28 @@ REXCVAR_DECLARE(std::string, liveless_upnp_url);
 // Band3/Advanced/Startup
 REXCVAR_DECLARE(bool, launcher);
 REXCVAR_DECLARE(int32_t, relaunch_wait_pid);
+REXCVAR_DECLARE(std::string, settings_reference);
 
 // Band3/Advanced/Retired
 REXCVAR_DECLARE(std::string, emulated_gpu);
 
 namespace band3::settings {
+
+// band3's defaults for SDK settings, set at startup when nothing else set them
+// (Band3App::OnPostInitLogging): a shorter audio queue than the SDK's 8, and a
+// window rather than the SDK's fullscreen (the launcher, which opens first,
+// switches it). The launcher and the settings reference show them as the
+// defaults.
+struct StartupDefault {
+    std::string_view cvar;
+    std::string_view value;
+};
+inline constexpr StartupDefault kStartupDefaults[] = {
+    {"audio_maxqframes", "3"},
+    {"fullscreen", "false"},
+    {"window_width", "1280"},
+    {"window_height", "720"},
+};
 
 // Reads the retired emulated_gpu into renderer (src/Render/renderer_mode.h's
 // MigrateEmulatedGpu) and clears it. Call once, after band3.toml, the

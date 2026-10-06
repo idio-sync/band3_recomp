@@ -481,7 +481,7 @@ bool OnGuestFault(rex::arch::Exception* ex, void*) {
                                ? "read"
                                : "access";
     REXLOG_ERROR("Guest fault: {} of guest 0x{:08X} on thread {}; the guest functions it was in, "
-                 "innermost first (addresses as in band3_config.toml):{}",
+                 "innermost first (addresses as in band3_functions.toml):{}",
                  op, static_cast<uint32_t>(fault - membase), GetCurrentThreadId(),
                  GuestCallChain(*ex->thread_context()));
     if (auto logger = rex::GetLogger()) logger->flush();
@@ -548,10 +548,15 @@ void WriteDump(const CrashRequest& r) {
     if (file == INVALID_HANDLE_VALUE) return;
     MINIDUMP_EXCEPTION_INFORMATION exception{r.thread_id, r.info, FALSE};
     // every thread's stack and registers, and the memory they point at; not
-    // all memory, which with the guest's would run to gigabytes
-    const auto type =
-        MINIDUMP_TYPE(MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory |
-                      MiniDumpWithFullMemoryInfo | MiniDumpWithUnloadedModules);
+    // all memory, which with the guest's would run to gigabytes, unless
+    // BAND3_FULL_DUMP asks for it (to see what overwrote guest memory)
+    char full[8] = {};
+    const bool full_memory = GetEnvironmentVariableA("BAND3_FULL_DUMP", full, sizeof(full)) &&
+                             full[0] && full[0] != '0';
+    const auto type = MINIDUMP_TYPE(
+        MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory |
+        MiniDumpWithFullMemoryInfo | MiniDumpWithUnloadedModules |
+        (full_memory ? MiniDumpWithFullMemory : 0));
     const BOOL ok = g_write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, type,
                                  r.info ? &exception : nullptr, nullptr, nullptr);
     const DWORD error = ok ? 0 : GetLastError();

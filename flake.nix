@@ -81,7 +81,7 @@
           configurePhase = ''
             mkdir assets
             cp -a ${xex} assets/default.xex
-            rexglue codegen band3_config.toml
+            rexglue codegen band3_manifest.toml
             # the source here has no .git for git describe; the flake's
             # revision instead, or "dirty" for a tree with uncommitted changes
             cmake --preset=linux-amd64-release \

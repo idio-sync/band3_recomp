@@ -151,6 +151,20 @@ std::string ReadIniGameDataRoot() {
     return root.empty() ? "assets" : root;
 }
 
+std::span<const LegacyIniKey> LegacyIniKeys() {
+    static const std::vector<LegacyIniKey> keys = [] {
+        // OnConfigurePaths reads these (ReadIniGameDataRoot, ReadIniString)
+        std::vector<LegacyIniKey> out = {
+            {"game", "game_data_root", "game_data_root"},
+            {"game", "user_data_root", "user_data_root"},
+            {"game", "cache_root", "cache_root"},
+        };
+        for (const auto& s : kIniSettings) out.push_back({s.section, s.key, s.cvar});
+        return out;
+    }();
+    return keys;
+}
+
 std::optional<std::string> LegacyIniValue(std::string_view cvar) {
     for (const auto& s : kIniSettings) {
         if (cvar == s.cvar) return IniValue(ReadIni(), s);

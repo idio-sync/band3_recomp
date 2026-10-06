@@ -31,6 +31,11 @@ struct PathDefaults {
 // generated rows; commands left out
 std::vector<RegistryCvar> ReadRegistry();
 
+// Writes the settings reference (settings_reference.h) to `path`, from the
+// registry (band3 --settings_reference). False, logged, if the file couldn't
+// be written.
+bool WriteSettingsReference(const std::filesystem::path& path);
+
 // What the model needs to know about the table's cvars: types, descriptions,
 // limits and lifecycles from the registry, the default layers (band3's startup
 // values, the Steam Deck presets, band3_config.ini), and where each value came

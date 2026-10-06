@@ -96,12 +96,11 @@ CI runs and profiling.
 |---|---|
 | [Building](docs/building.md) | requirements, Windows and Linux builds, unit tests, compile check, profiling |
 | [Settings, folders and songs](docs/settings.md) | the launcher, the in-game settings (F4), config files, where band3 keeps things, DLC and custom songs, loose-file mods, Steam Deck |
+| [Settings reference](docs/settings-reference.md) | every setting: its default, the values it takes and what it does, generated from the build |
 | [Instruments and microphones](docs/instruments.md) | Instrument Lab, PlayStation/Wii dongles, MIDI drums, USB mics, pro instruments, controller lag |
 | [Integrations](docs/integrations.md) | network events, Discord, the web server and its API, GoCentral, Liveless online play, RB3Enhanced and Deluxe compatibility |
 | [Test harness](docs/test-harness.md) | `band3ctl`: driving the game from scripts, and the game tests |
 | [Native renderer](docs/native-renderer.md) | the native renderer, render checks, capture replay and parity measurement |
-
-`band3_config.ini` documents every option band3 reads.
 
 ## band3 and milo-native-engine
 

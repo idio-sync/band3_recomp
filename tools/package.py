@@ -8,7 +8,8 @@ Build first: this packages what the build folder holds. It writes
 out/package/band3-<commit>-<build folder>.zip, everything under a band3 folder:
 
   band3.exe (band3 on Linux) and the libraries beside it (rexruntime, rexgpu-xenos)
-  band3_config.ini, which documents every option
+  settings-reference.md: every setting, its default and what it does, as
+    docs/settings-reference.md has it (tools/settings_reference.py)
   LICENSE.md, and licenses/ for the libraries built into band3: each
     src/ThirdParty folder's LICENSE.txt (RtMidi's notice, from its header), and the
     SDK's licenses folder (SDL3)
@@ -23,6 +24,9 @@ public symbols name the frames in that build's minidumps, in WinDbg.
 The commit in the name is HEAD's, and README.txt links its source, as GPLv2
 asks of a binary. With uncommitted changes to tracked files the build may not
 be that commit, so it stops unless --allow-dirty, which adds -dirty to the name.
+A Windows build also writes its settings reference, and it stops if that isn't
+docs/settings-reference.md (also unless --allow-dirty), since the zip's would
+then be wrong for it.
 
 Standard library only.
 """
@@ -34,6 +38,8 @@ import shutil
 import subprocess
 import sys
 import zipfile
+
+import settings_reference
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_BUILD = os.path.join("out", "build", "win-amd64-release")
@@ -134,7 +140,7 @@ def readme(commit, full_commit, windows, dirty):
         + ("holding Shift as band3 starts brings back" if windows
            else "starting band3 with --launcher brings back")
         + ", and F4 in game.",
-        "band3_config.ini documents every option.",
+        "settings-reference.md lists every setting, its default and what it does.",
         "",
         "If band3 crashes, the next start says so. The logs folder beside band3 has",
         "the log and the crash report (crash-*.txt"
@@ -165,6 +171,12 @@ def main(argv):
     if dirty and not args.allow_dirty:
         sys.exit("tracked files have uncommitted changes, so the build may not be HEAD's: "
                  "commit them, or pass --allow-dirty")
+    # the checked-in reference is the Windows build's (its defaults are Windows')
+    if windows:
+        diff = settings_reference.stale(settings_reference.generate(build_dir))
+        if diff and not args.allow_dirty:
+            sys.exit(f"{diff}\ndocs/settings-reference.md isn't this build's: run "
+                     "python tools/settings_reference.py and commit it, or pass --allow-dirty")
     commit = git("rev-parse", "--short", "HEAD")
     full_commit = git("rev-parse", "HEAD")
     name = f"band3-{commit}{'-dirty' if dirty else ''}-{os.path.basename(os.path.normpath(build_dir))}"
@@ -179,7 +191,7 @@ def main(argv):
                 info.external_attr = 0o755 << 16
             with open(os.path.join(build_dir, f), "rb") as src:
                 z.writestr(info, src.read())
-        z.write(os.path.join(REPO, "band3_config.ini"), "band3/band3_config.ini")
+        z.write(settings_reference.REFERENCE, "band3/settings-reference.md")
         z.write(os.path.join(REPO, "LICENSE.md"), "band3/LICENSE.md")
         for license_name, text in third_party_licenses().items():
             z.writestr(f"band3/licenses/{license_name}", text)

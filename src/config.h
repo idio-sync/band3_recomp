@@ -1,6 +1,7 @@
 #pragma once
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,6 +37,16 @@ std::optional<std::string> LegacyIniValue(std::string_view cvar);
 
 // copies the ini's values onto the cvars nothing else has set
 void ApplyLegacyIni();
+
+// a band3_config.ini key and the setting it sets
+struct LegacyIniKey {
+    const char* section;
+    const char* key;
+    const char* cvar;
+};
+// every key the ini is read for: the folders (read on their own, before the
+// other settings), then what ApplyLegacyIni copies
+std::span<const LegacyIniKey> LegacyIniKeys();
 
 // adds the game arguments the settings drive (-fast, -lang, -define MHX_PC)
 // to GetArgs(), after the settings are loaded; calling it again replaces the

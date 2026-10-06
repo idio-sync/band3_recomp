@@ -33,6 +33,10 @@ struct RegistryCvar {
     std::optional<double> min;
     std::optional<double> max;
     std::vector<std::string> allowed;
+    // for the settings reference (settings_reference.h)
+    std::string description;
+    std::string default_value;
+    Lifecycle lifecycle = Lifecycle::kHotReload;
 };
 
 // where a band3 category's generated rows go: their tab and section, and the

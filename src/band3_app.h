@@ -38,6 +38,7 @@
 #include "Input/virtual_instrument.h"
 #include "Launcher/game_data_check.h"
 #include "Launcher/ingame_settings_dialog.h"
+#include "Launcher/launcher_cvars.h"
 #include "Launcher/launcher_dialog.h"
 #include "Launcher/launcher_platform.h"
 #include "Launcher/launcher_start.h"
@@ -140,6 +141,11 @@ class Band3App : public rex::ReXApp {
   void OnPostInitLogging() override {
     // band3's first line, so any log says which build wrote it
     REXLOG_INFO("band3 build {}", band3::BuildTag());
+    // --settings_reference=<file>: write it and quit, before anything else
+    // starts (no window, no game, nothing for a crash notice to report)
+    if (const std::string& out = REXCVAR_GET(settings_reference); !out.empty()) {
+      std::quick_exit(band3::launcher::WriteSettingsReference(rex::to_path(out)) ? 0 : 1);
+    }
     // a relaunch (rb3e_relaunch_game) starts before the last run has closed
     band3::relaunch::WaitForPrevious();
     LogFolders(game_data_root(), user_data_root(), cache_root());
@@ -147,10 +153,13 @@ class Band3App : public rex::ReXApp {
     band3::steam_deck::ApplyDefaults();
     band3::ApplyLegacyIni();
 
-    // band3 keeps a shorter audio queue than the SDK's 8 unless told otherwise
-    if (rex::cvar::GetFlagSource("audio_maxqframes") == rex::cvar::Source::kDefault) {
-      rex::cvar::SetFlagByName("audio_maxqframes", "3");
-      rex::cvar::ClearPendingRestartFlags();
+    // band3's defaults for SDK settings (a shorter audio queue, a window)
+    // unless told otherwise
+    for (const auto& d : band3::settings::kStartupDefaults) {
+      if (rex::cvar::GetFlagSource(d.cvar) == rex::cvar::Source::kDefault) {
+        rex::cvar::SetFlagByName(d.cvar, d.value);
+        rex::cvar::ClearPendingRestartFlags();
+      }
     }
 
 #ifndef _WIN32

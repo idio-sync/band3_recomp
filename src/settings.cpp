@@ -118,7 +118,7 @@ REXCVAR_DEFINE_STRING(renderer, band3::settings::kDefaultRenderer, "Band3/Graphi
     "there only in a run with it) to emulated and both")
     .allowed({"native", "emulated", "both"});
 
-REXCVAR_DEFINE_INT32(rnd_sync, -1, "Band3/Graphics",
+REXCVAR_DEFINE_INT32(rnd_sync, 1, "Band3/Graphics",
     "Vertical sync: -1 = don't override, 0 = off, 1 = on")
     .range(-1, 1)
     .lifecycle(Lifecycle::kRequiresRestart);
@@ -608,6 +608,12 @@ REXCVAR_DEFINE_BOOL(launcher, false, "Band3/Advanced/Startup",
 REXCVAR_DEFINE_INT32(relaunch_wait_pid, 0, "Band3/Advanced/Startup",
     "Set by band3 when it relaunches itself (rb3e_relaunch_game): the new one waits for "
     "this process to close before starting. Cleared once it has")
+    .lifecycle(Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(settings_reference, "", "Band3/Advanced/Startup",
+    "Write the settings reference (docs/settings-reference.md: every setting, its default, "
+    "values and description, from this build) to this file and quit without starting the "
+    "game. tools/settings_reference.py runs it")
     .lifecycle(Lifecycle::kInitOnly);
 
 // Band3/Advanced/Retired

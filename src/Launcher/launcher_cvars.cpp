@@ -1,8 +1,13 @@
 #include "launcher_cvars.h"
 #include <rex/cvar.h>
+#include <rex/filesystem.h>
+#include <rex/logging.h>
+#include <rex/system/gpu_plugin.h>
+#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include "config_file.h"
+#include "settings_reference.h"
 #include "src/config.h"
 #include "src/Hooks/frame_pacing.h"
 #include "src/Render/renderer_switch.h"
@@ -37,6 +42,21 @@ Lifecycle LifecycleFrom(rex::cvar::Lifecycle lifecycle) {
     case rex::cvar::Lifecycle::kInitOnly: return Lifecycle::kInitOnly;
     }
     return Lifecycle::kHotReload;
+}
+
+// nullopt for a command
+std::optional<RegistryCvar> AsRegistryCvar(const rex::cvar::FlagEntry& entry) {
+    const auto type = TypeOf(entry.type);
+    if (!type) return std::nullopt;
+    return RegistryCvar{.name = entry.name,
+                        .category = entry.category,
+                        .type = *type,
+                        .min = entry.constraints.min,
+                        .max = entry.constraints.max,
+                        .allowed = entry.constraints.allowed_values,
+                        .description = entry.description,
+                        .default_value = entry.default_value,
+                        .lifecycle = LifecycleFrom(entry.lifecycle)};
 }
 
 // band3.toml has `key = true`
@@ -83,16 +103,56 @@ bool RexCvarStore::Set(std::string_view name, std::string_view value) {
 std::vector<RegistryCvar> ReadRegistry() {
     std::vector<RegistryCvar> out;
     for (const rex::cvar::FlagEntry& entry : rex::cvar::GetRegistry()) {
-        const auto type = TypeOf(entry.type);
-        if (!type || !entry.category.starts_with("Band3/")) continue;
-        out.push_back({.name = entry.name,
-                       .category = entry.category,
-                       .type = *type,
-                       .min = entry.constraints.min,
-                       .max = entry.constraints.max,
-                       .allowed = entry.constraints.allowed_values});
+        if (!entry.category.starts_with("Band3/")) continue;
+        if (auto cvar = AsRegistryCvar(entry)) out.push_back(std::move(*cvar));
     }
     return out;
+}
+
+bool WriteSettingsReference(const std::filesystem::path& path) {
+    // the emulated GPU's settings (vsync, resolution_scale, ...) are registered
+    // as its plugin loads, which hasn't happened this early; loading it is
+    // enough, nothing of it starts. Kept, never set up: band3 quits after this
+    if (!rex::cvar::GetFlagInfo("vsync")) (void)rex::system::LoadGpuPlugin("xenos").release();
+
+    std::vector<RegistryCvar> cvars = ReadRegistry();
+    const GeneratedRows generated(cvars, SettingTable());
+    const std::vector<Setting> page = JoinTables(SettingTable(), generated.Rows());
+    auto add = [&cvars](std::string_view name) {
+        if (std::ranges::find(cvars, name, &RegistryCvar::name) != cvars.end()) return;
+        if (const auto* entry = rex::cvar::GetFlagInfo(name)) {
+            if (auto cvar = AsRegistryCvar(*entry)) cvars.push_back(std::move(*cvar));
+        }
+    };
+    for (const Setting& row : page) add(row.cvar);
+    for (const LegacyIniKey& key : LegacyIniKeys()) add(key.cvar);
+    for (RegistryCvar& cvar : cvars) {
+        for (const auto& d : settings::kStartupDefaults) {
+            if (cvar.name == d.cvar) cvar.default_value = d.value;
+        }
+        // F4 says a change to these waits for the next start, as for kRequiresRestart
+        if (cvar.lifecycle == Lifecycle::kHotReload && settings::ReadAtStartupOnly(cvar.name)) {
+            cvar.lifecycle = Lifecycle::kRequiresRestart;
+        }
+    }
+
+#ifdef _WIN32
+    constexpr std::string_view kPlatform = "Windows";
+#else
+    constexpr std::string_view kPlatform = "Linux";
+#endif
+    const std::string text = SettingsReference(
+        {.page = page, .cvars = cvars, .ini_keys = LegacyIniKeys(), .platform = kPlatform});
+    std::ofstream out(path, std::ios::binary);
+    out << text;
+    out.close();
+    if (!out) {
+        REXLOG_ERROR("Couldn't write the settings reference to {}", rex::path_to_utf8(path));
+        return false;
+    }
+    REXLOG_INFO("Wrote the settings reference ({} settings) to {}", cvars.size(),
+                rex::path_to_utf8(path));
+    return true;
 }
 
 Environment ReadEnvironment(std::span<const Setting> table, const PathDefaults& paths,
@@ -136,8 +196,10 @@ Environment ReadEnvironment(std::span<const Setting> table, const PathDefaults& 
         const auto it = env.cvars.find(cvar);
         return it == env.cvars.end() || !it->second.exists ? nullptr : &it->second;
     };
-    // band3's shorter audio queue, unless something else set one
-    if (auto* f = facts_of("audio_maxqframes")) f->startup_default = "3";
+    // band3's defaults for SDK settings (its audio queue, a window), unless something else set one
+    for (const auto& d : settings::kStartupDefaults) {
+        if (auto* f = facts_of(d.cvar)) f->startup_default = std::string(d.value);
+    }
     // the test harness plays the virtual instrument as player 1 (test::Init)
     if (test::Enabled()) {
         if (auto* f = facts_of("virtual_instrument")) f->startup_forced = "true";

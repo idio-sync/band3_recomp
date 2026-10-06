@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import function names from the rb3-xenon decomp into band3_config.toml.
+"""Import function names from the rb3-xenon decomp into band3_functions.toml.
 
 rb3-xenon (https://github.com/freeqaz/rb3-xenon, CC0) targets the same TU5
 image as band3. Its scripts/target_symbol_map.json maps addresses to MSVC
@@ -69,9 +69,11 @@ THUNK_SIZE = 4
 # --adopt leaves functions this small alone (see above)
 FOLDABLE_SIZE = 0x10
 
-# band3_config.toml as it was before the first import (ce5bf36); the addresses
+# band3_functions.toml as it was before the first import (ce5bf36); the addresses
 # anonymous there are the ones this tool names, and --refresh keeps current
 BASELINE_REF = 'ce5bf36~1'
+# its name before 2026-10 (BASELINE_REF has it only under this one)
+OLD_CONFIG_NAME = 'band3_config.toml'
 
 OPERATORS = {
     '=': 'assign', '==': 'eq', '!=': 'ne', '<': 'lt', '>': 'gt', '<=': 'le',
@@ -280,11 +282,15 @@ def classify(cur, ident, dem, addr):
 def baseline_anonymous(ref, config_path):
     """Addresses that were anonymous in the config at git `ref`."""
     rel = os.path.relpath(os.path.abspath(config_path), REPO).replace(os.sep, '/')
-    try:
-        text = subprocess.run(['git', '-C', REPO, 'show', f'{ref}:{rel}'],
-                              capture_output=True, text=True, check=True, encoding='utf-8').stdout
-    except (OSError, subprocess.CalledProcessError) as e:
-        sys.exit(f'--refresh needs the baseline config {ref}:{rel} from git ({e})')
+    for path in (rel, OLD_CONFIG_NAME):
+        try:
+            text = subprocess.run(['git', '-C', REPO, 'show', f'{ref}:{path}'],
+                                  capture_output=True, text=True, check=True, encoding='utf-8').stdout
+            break
+        except (OSError, subprocess.CalledProcessError) as e:
+            error = e
+    else:
+        sys.exit(f'--refresh needs the baseline config {ref}:{rel} from git ({error})')
     anonymous = set()
     for line in text.split('\n'):
         m = FUNC_RE.match(line)
@@ -296,10 +302,10 @@ def baseline_anonymous(ref, config_path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--map', required=True, help='rb3-xenon scripts/target_symbol_map.json')
-    ap.add_argument('--config', default=os.path.join(REPO, 'band3_config.toml'))
+    ap.add_argument('--config', default=os.path.join(REPO, 'band3_functions.toml'))
     ap.add_argument('--report', default=os.path.join(REPO, 'out', 'research', 'rb3xenon_names_report.md'))
     ap.add_argument('--undname', default=None, help='path to undname.exe (auto-detected)')
-    ap.add_argument('--apply', action='store_true', help='rewrite band3_config.toml')
+    ap.add_argument('--apply', action='store_true', help='rewrite band3_functions.toml')
     ap.add_argument('--refresh', action='store_true',
                     help='also update names this tool imported earlier to the decomp\'s current ones')
     ap.add_argument('--adopt', action='store_true',

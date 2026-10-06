@@ -65,11 +65,18 @@ python tools/package.py --build-dir out/build/linux-amd64-release
 ```
 
 It writes `out/package/band3-<commit>-<build folder>.zip`: band3 and the libraries beside
-it, `band3_config.ini`, the licenses (band3's and those of the libraries built into it)
+it, `settings-reference.md`, the licenses (band3's and those of the libraries built into it)
 and a `README.txt` with what to install, where the game files go and a link to the
 commit's source. No game files. `band3.map` and `band3.pdb` go beside the zip, not in
 it: keep them to read crash reports from that build. With uncommitted changes to tracked
 files it stops unless `--allow-dirty`.
+
+`docs/settings-reference.md` is generated: band3 writes it from its settings registry
+(`band3 --settings_reference=<file>` quits without starting the game). After changing a
+setting (its description in `src/settings.cpp`, or its row in
+`src/Launcher/launcher_settings.cpp`), build and run `python tools/settings_reference.py`
+to update it, from the Windows build, whose defaults it lists. `--check` only compares,
+and `tools/package.py` stops on a Windows build whose reference differs.
 
 ## Crash reports
 
@@ -83,7 +90,7 @@ every thread's stack, for WinDbg with the build's `band3.pdb`.
 
 Frames are module+offset. `tools/symbolize.py` names band3's: from the `band3.map` whose
 time stamp matches the report on Windows, with `addr2line` from the executable whose build
-id matches on Linux, and guest addresses from `band3_config.toml`:
+id matches on Linux, and guest addresses from `band3_functions.toml`:
 
 ```
 python tools/symbolize.py out/build/win-amd64-release/logs/crash-20261006-142122-29936.txt

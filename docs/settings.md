@@ -160,7 +160,10 @@ second kick send stick clicks too.
 `band3.toml` next to the executable holds band3's settings; the [launcher](#the-launcher)
 and the [in-game settings](#in-game-settings-f4) write it. Any setting can also be passed
 on the command line, e.g.
-`--forced_venue=arena_04`, or by a `REX_*` environment variable.
+`--forced_venue=arena_04`, or by a `REX_*` environment variable. The
+[settings reference](settings-reference.md) lists every one, with its default and what it
+does; band3 writes it from its settings registry (`python tools/settings_reference.py`), so
+it matches the build.
 
 The SDK's settings menu (F4, **All settings...**) has a **Save to config** that writes
 `band3.toml` too, but differently: it rewrites the whole file with every setting that
@@ -169,8 +172,12 @@ Steam Deck settings and the command line are frozen into the file from then on, 
 anything else in the file is dropped. Prefer band3's Save, the launcher's or F4's, which
 writes only what you change.
 
-`band3_config.ini` is still read and documents every option. Where the same setting is
-set in more than one place, the first of these wins:
+`band3_config.ini` is the settings file from before `band3.toml`. band3 still reads one
+if it finds it (in its working directory, then beside the executable), but releases no
+longer include it, and it has only some of the settings: the
+[reference](settings-reference.md#band3_configini) lists its keys. In this repository it
+also marks the folder that relative paths start from (see [Folders](#folders)). Where the
+same setting is set in more than one place, the first of these wins:
 
 1. the command line
 2. `REX_*` environment variables
@@ -179,13 +186,14 @@ set in more than one place, the first of these wins:
 5. `band3_config.ini`
 6. the defaults
 
-Some options worth knowing about, by the names the command line and F4's All settings... use:
+Some options worth knowing about, by the names the command line and `band3.toml` use (the
+[reference](settings-reference.md) has them all):
 
 | Option | |
 |---|---|
-| `frame_cap` | what paces the game's frames, in place of the console's vertical blank. `display` (the default) runs the game at the display's exact refresh rate (119.88 Hz, not 120), best on a fixed-refresh display. `auto` runs it 5% under (at least 4 fps: 114 at 120 Hz), best on a VRR display (G-Sync, FreeSync), keeping every frame inside its range. A number (24 to 240) caps there. `off` leaves the console's vertical blank to pace it, as `vsync` and `refresh_rate` say. With the cap on, `vsync` is off for the session (band3's Save keeps your own; the SDK's Save to config, under F4's All settings..., writes `vsync = false`) and `refresh_rate`, unless set, follows the cap. `display` and `auto` are off when the display's rate can't be told (on Linux, until the native view has run). Changes apply at once |
-| `refresh_rate` | the rate the game runs at, e.g. 120 for a 120 Hz monitor (0 keeps the console's 60, or follows `frame_cap`) |
-| `background_fps` | the venue's frame rate: 0 keeps the venue's own (30 in most) at any `refresh_rate`, or set one, up to `refresh_rate`. Rates that divide `refresh_rate` (30 at 120, 180 or 240) draw evenly |
+| `frame_cap` | what paces the game's frames, in place of the console's vertical blank. `display` (the default) runs the game at the display's exact refresh rate (119.88 Hz, not 120), best on a fixed-refresh display. `auto` runs it 5% under (at least 4 fps: 114 at 120 Hz), best on a VRR display (G-Sync, FreeSync), keeping every frame inside its range. A number (24 to 240) caps there. `off` leaves the console's vertical blank to pace it, as `vsync` and `video_mode_refresh_rate` say. With the cap on, `vsync` is off for the session (band3's Save keeps your own; the SDK's Save to config, under F4's All settings..., writes `vsync = false`) and `video_mode_refresh_rate`, unless set, follows the cap. `display` and `auto` are off when the display's rate can't be told (on Linux, until the native view has run). Changes apply at once |
+| `video_mode_refresh_rate` | the rate the game runs at, e.g. 120 for a 120 Hz monitor (0 keeps the console's 60, or follows `frame_cap`); `[rnd] refresh_rate` in `band3_config.ini` |
+| `background_fps` | the venue's frame rate: 0 keeps the venue's own (30 in most) at any refresh rate, or set one, up to the refresh rate. Rates that divide it (30 at 120, 180 or 240) draw evenly |
 | `forced_venue` | a venue, a class of venues, or a comma-separated mix to pick from at random |
 | `song_speed`, `track_speed` | play songs faster or slower, or scroll the highway faster |
 | `controller_type`, `input_backend` | what gamepads play as, and SDL (the default) or XInput |

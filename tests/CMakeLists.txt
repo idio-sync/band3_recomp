@@ -68,6 +68,7 @@ add_executable(band3_tests
     launcher_start_test.cpp
     launcher_settings_test.cpp
     generated_rows_test.cpp
+    settings_reference_test.cpp
     config_file_test.cpp
     relaunch_test.cpp
     instrument_decode_test.cpp
@@ -101,6 +102,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Launcher/generated_rows.cpp
     ${BAND3_ROOT}/src/Launcher/launcher_settings.cpp
     ${BAND3_ROOT}/src/Launcher/launcher_start.cpp
+    ${BAND3_ROOT}/src/Launcher/settings_reference.cpp
     ${BAND3_ROOT}/src/Launcher/mic_level.cpp
     ${BAND3_ROOT}/src/Net/album_art.cpp
     ${BAND3_ROOT}/src/Net/liveless_rooms_client.cpp

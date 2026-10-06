@@ -276,7 +276,7 @@ void OnTerminate() {
 // takes SIGSEGV and SIGILL, and doesn't hand one its handlers pass by on to
 // OnFatalSignal, so this is where a crash shows. A guest access violation is
 // logged with the host frames it happened in, which tools/symbolize.py names
-// (the recompiled functions are named as in band3_config.toml): the game may
+// (the recompiled functions are named as in band3_functions.toml): the game may
 // handle it. Any other is band3's crash.
 bool OnSdkException(rex::arch::Exception* ex, void*) {
     using rex::arch::Exception;

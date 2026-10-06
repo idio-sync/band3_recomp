@@ -6,7 +6,7 @@ name = "band3"
 file_path = "assets/default.xex"
 out_directory_path = "generated"
 includes = [
-  "band3_config.toml",
+  "band3_functions.toml",
   "band3_rb3dx.toml",
 ]
 

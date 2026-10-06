@@ -1,6 +1,6 @@
 # Rock Band 3 Deluxe code caves
 #
-# Included after band3_config.toml, so these rows replace its rows at the same
+# Included after band3_functions.toml, so these rows replace its rows at the same
 # address. Rock Band 3 Deluxe patches the TU5 default.xex with branches into code
 # caves; each cave needs a function entry here, and so does every place it
 # branches back to.

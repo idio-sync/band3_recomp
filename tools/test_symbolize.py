@@ -42,7 +42,7 @@ class MapTest(unittest.TestCase):
 
 class GuestTest(unittest.TestCase):
     def test_inside_a_function_only(self):
-        g = symbolize.GuestFunctions("band3_config.toml", CONFIG)
+        g = symbolize.GuestFunctions("band3_functions.toml", CONFIG)
         self.assertEqual(g.lookup(0x82270020), ("App__DrawRegular", 8))
         self.assertEqual(g.lookup(0x82270000), ("App_dt", 0))
         self.assertIsNone(g.lookup(0x82270014))  # past App_dt's end, before the next

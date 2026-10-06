@@ -9,7 +9,7 @@ code as guest addresses:
 
 This prints the text with each band3.exe frame named from the build's
 band3.map, and each guest address inside a known function named from
-band3_config.toml's [functions]:
+band3_functions.toml's [functions]:
 
   #08 band3.exe+0x45FBA2E [Band3App::OnPostSetup+0x1E]
   #03 guest 0x82517400 [CharClipSet__Load+0x0] (band3.exe+0x1234)
@@ -90,7 +90,7 @@ class MapFile:
 
 
 class GuestFunctions:
-    """band3_config.toml's [functions]: guest address -> name, size."""
+    """band3_functions.toml's [functions]: guest address -> name, size."""
 
     def __init__(self, path, text=None):
         if text is None:
@@ -362,8 +362,8 @@ def main(argv=None):
                     help="a band3.map to use (repeatable); matched by time stamp")
     ap.add_argument("--elf", action="append", default=[],
                     help="a Linux band3 executable to use (repeatable); matched by build id")
-    ap.add_argument("--config", default=os.path.join(ROOT, "band3_config.toml"),
-                    help="band3_config.toml, for guest function names")
+    ap.add_argument("--config", default=os.path.join(ROOT, "band3_functions.toml"),
+                    help="band3_functions.toml, for guest function names")
     ap.add_argument("--no-demangle", action="store_true", help="leave C++ names decorated")
     args = ap.parse_args(argv)
 

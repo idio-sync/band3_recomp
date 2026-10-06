@@ -4,7 +4,7 @@
    The SDK's runtime library calls band3's overrides of its exports by name
    (__imp__*, src/sdk_export.cpp), and C++ inline functions and their guard
    variables (_Z*) are shared as the C++ rules ask. Nothing else: the
-   recompiled guest functions keep the names band3_config.toml gives them, and
+   recompiled guest functions keep the names band3_functions.toml gives them, and
    some are a C library's (the game's zlib: crc32, inflate, deflate...). An
    executable exports every definition a shared library could call, so Mesa's
    Vulkan drivers (crc32) and libcurl (inflate) called the game's PowerPC
