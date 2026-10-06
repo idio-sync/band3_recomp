@@ -2855,6 +2855,15 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     bool clear_overlay_depth = false;
     bool back_begun = false;
     bool resolved = false;
+    // what holds the picture once the resolve is done, for the overlay's
+    // start and the gamma ramp's pass: `color`, or the post buffer itself
+    // where a frame showing it leaves it there (resolve), until a
+    // multisampled overlay pass resolves the picture into `color`
+    SDL_GPUTexture* picture = color;
+    // the picture as the resolve left it, for the overlay's REFRACT_WORLD
+    // draws: the post buffer where it's that picture already, else `behind`,
+    // the resolve's copy
+    SDL_GPUTexture* behind_now = behind;
     bool depth_fresh = false;  // the open pass's depth is cleared and untouched
     uint32_t pass_samples = 1;  // the open pass's targets'
     // The overlay's samples (soft_raster.h's OverlaySamples) as the device
@@ -2897,7 +2906,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             start_dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
             SDL_GPURenderPass* rp = BeginPass(cmd, &start_ct, 1, &start_dt);
             SDL_BindGPUGraphicsPipeline(rp, OverlayStartPipeline(overlay_samples));
-            const SDL_GPUTextureSamplerBinding tb[2] = {{color, sampler}, {world_depth, sampler}};
+            const SDL_GPUTextureSamplerBinding tb[2] = {{picture, sampler},
+                                                        {world_depth, sampler}};
             SDL_BindGPUFragmentSamplers(rp, 0, tb, 2);
             post::PostPass p{};
             const bool world = !layout.cameras && !clear_depth;
@@ -2910,6 +2920,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             depth_cleared = !world;
             clear_depth = false;
         }
+        // this pass resolves the picture into `color` as it ends
+        if (ms) picture = color;
         SDL_GPUColorTargetInfo ct{};
         ct.texture = ms ? color_ms : resolved ? color : scene;
         ct.clear_color = clear_color;
@@ -3181,8 +3193,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SDL_EndGPUCopyPass(copy);
             if (!pre_pass) pre_buffer.game_frame = WorldFrameOf(frame);
         }
-        // the post buffer as the picture, or the picture kept as it
-        if (shows_kept) {
+        // the post buffer as the picture, or the picture kept as it.
+        // Multisampled, the overlay's start reads the post buffer itself and
+        // its passes resolve into `color`, so it isn't copied there first
+        if (shows_kept && overlay_samples > 1) {
+            picture = post_buffer.tex;
+        } else if (shows_kept) {
             SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
             const SDL_GPUTextureLocation from{post_buffer.tex, 0, 0, 0, 0, 0};
             const SDL_GPUTextureLocation to{color, 0, 0, 0, 0, 0};
@@ -3203,7 +3219,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SDL_EndGPUCopyPass(copy);
             post_buffer.game_frame = frame.game_frame;
         }
-        if (refracts) {
+        // the picture behind the overlay's refracting draws: the post
+        // buffer, where it's this picture (shown or just kept), else a copy
+        if (refracts && (shows_kept || keeps)) {
+            behind_now = post_buffer.tex;
+        } else if (refracts) {
             SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
             const SDL_GPUTextureLocation from{color, 0, 0, 0, 0, 0};
             const SDL_GPUTextureLocation to{behind, 0, 0, 0, 0, 0};
@@ -3354,7 +3374,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // buffer (world_behind)
         if (sp.flags.x & shade::kShadeRefract) {
             if (resolved && refracts && alpha != AlphaMode::kTexture)
-                tex[kSlotBehind] = {behind, 0, width, height};
+                tex[kSlotBehind] = {behind_now, 0, width, height};
             else if (!resolved && alpha != AlphaMode::kTexture)
                 tex[kSlotBehind] = {world_behind, 0, width, height};
             else
@@ -3745,7 +3765,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         ct.store_op = SDL_GPU_STOREOP_STORE;
         SDL_GPURenderPass* rp = BeginPass(cmd, &ct, 1, nullptr);
         SDL_BindGPUGraphicsPipeline(rp, gamma_pipeline);
-        const SDL_GPUTextureSamplerBinding tb{color, sampler};
+        const SDL_GPUTextureSamplerBinding tb{picture, sampler};
         SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
         SDL_PushGPUFragmentUniformData(cmd, 0, packed, sizeof(packed));
         SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
