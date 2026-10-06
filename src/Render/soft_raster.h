@@ -209,6 +209,11 @@ struct RasterOptions {
     // the world's, drawn by one frame a period, aren't sent again each time.
     // 0 lets them go once a frame doesn't draw them. The CPU ignores it.
     uint32_t world_period = 0;
+    // On the GPU, the game is in a song (native_view.h's InSong): meshes and
+    // textures drawn in it are kept by the clock as well as by kEvictAfter
+    // frames (gpu_view.h's residency, ClockKeep). Off, by the frames alone.
+    // The CPU ignores it.
+    bool clock_keep = false;
 };
 
 // whether the renderers draw d, as far as the options say

@@ -157,6 +157,9 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.pool_meshes += g.pool_meshes;
     sum.arena_moved += g.arena_moved;
     sum.arena_sent += g.arena_sent;
+    sum.arena_copied += g.arena_copied;
+    sum.textures_pressured += g.textures_pressured;
+    sum.meshes_pressured += g.meshes_pressured;
     sum.mesh_bytes += g.mesh_bytes;
     sum.textures_sent += g.textures_sent;
     sum.texture_bytes += g.texture_bytes;
@@ -171,6 +174,8 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.resident_meshes += g.resident_meshes;
     sum.resident_textures += g.resident_textures;
     sum.resident_rts += g.resident_rts;
+    sum.meshes_by_time += g.meshes_by_time;
+    sum.textures_by_time += g.textures_by_time;
     sum.texture_array_mb += g.texture_array_mb;
     sum.arena_mb += g.arena_mb;
     sum.rts_mb += g.rts_mb;
@@ -214,9 +219,12 @@ std::string DescribePlan(const GpuStats& gs, const CameraCuts::Step& cam) {
     grown("pool indices", gs.pool_indices_kb);
     grown("bones", gs.bones_kb);
     if (grew.empty()) grew = "nothing grew";
-    char arena[48] = "";
-    if (gs.arena_rebuilt) std::snprintf(arena, sizeof(arena), " (rebuilt, %.1f MB)", gs.arena_new_mb);
-    char buf[640];
+    char arena[128] = "";
+    if (gs.arena_rebuilt)
+        std::snprintf(arena, sizeof(arena),
+                      " (rebuilt, %.1f MB, %u meshes kept copied on the GPU, %u let go for room)",
+                      gs.arena_new_mb, gs.arena_copied, gs.meshes_pressured);
+    char buf[720];
     std::snprintf(buf, sizeof(buf),
                   "; plan: setup %.1f, walk %.1f (%u targets made in %.1f ms, %u returning, "
                   "%u resized; %u textures and %u meshes drawn for the first time; %u texture "
@@ -276,7 +284,7 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
     if (fc.composed)
         std::snprintf(world, sizeof(world), ", world from game frame %llu",
                       static_cast<unsigned long long>(fc.world_frame));
-    char buf[1400];
+    char buf[1600];
     std::snprintf(
         buf, sizeof(buf),
         "native renderer: slow frame %llu (game frame %llu, %s, proc_cmds %u%s): %.1f ms, "
@@ -285,7 +293,8 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         "sent %u meshes into the pool and %u into the arena (%.2f MB), %u textures (%.2f MB), "
         "%u KB of bones; moved %u meshes to the arena%s; made %u pipelines, %u buffers, %u "
         "textures; let go of %u meshes, %u textures, %u targets' pictures after, and released "
-        "%u targets (%.1f MB of targets kept); its capture cost the game's thread %.2f ms "
+        "%u targets (%.1f MB of targets kept); kept %u meshes and %u textures by the clock, "
+        "let %u textures go for room; its capture cost the game's thread %.2f ms "
         "(%u draws, %u new shades, %u allocations, %u bones, %llu KB of "
         "geometry and %llu KB of textures decoded) in a %.1f ms game frame; %llu captures "
         "skipped before it",
@@ -297,7 +306,8 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         gs.texture_bytes / 1048576.0, uint32_t(gs.bone_bytes >> 10), gs.arena_moved,
         gs.arena_rebuilt ? " (rebuilt it)" : "", gs.pipelines_made, gs.buffers_made,
         gs.textures_made, gs.evicted_meshes, gs.evicted_textures, gs.evicted_rts,
-        gs.rts_released, gs.rts_mb, hooks_ns / 1e6, fc.cost.draws, fc.cost.new_shades,
+        gs.rts_released, gs.rts_mb, gs.meshes_by_time, gs.textures_by_time,
+        gs.textures_pressured, hooks_ns / 1e6, fc.cost.draws, fc.cost.new_shades,
         fc.cost.allocs, fc.cost.bones,
         static_cast<unsigned long long>(fc.cost.geom_miss_bytes >> 10),
         static_cast<unsigned long long>(fc.cost.tex_decode_bytes >> 10), fc.cost.game_ns / 1e6,
@@ -744,6 +754,10 @@ class Renderer {
                 // what's drawn once a world period is kept that long on the
                 // GPU, not sent again each time (gpu_view.h's residency)
                 o.world_period = pacing::WorldPeriod();
+                // and in a song, what's drawn in it is kept by the clock too
+                // (gpu_view.h's residency: not in the menus, whose textures
+                // kept into a song held their arrays from ever emptying)
+                o.clock_keep = InSong();
             }
             // a capture published after this is a new one (the pacing's
             // wait, below)
@@ -1098,6 +1112,10 @@ class Renderer {
                     std::max(kind.peak_texture_array_mb, d.gs.texture_array_mb);
                 kind.peak_arena_mb = std::max(kind.peak_arena_mb, d.gs.arena_mb);
                 kind.peak_rts_mb = std::max(kind.peak_rts_mb, d.gs.rts_mb);
+                kind.peak_meshes_by_time =
+                    std::max(kind.peak_meshes_by_time, d.gs.meshes_by_time);
+                kind.peak_textures_by_time =
+                    std::max(kind.peak_textures_by_time, d.gs.textures_by_time);
             }
         }
         live_drew_gpu_ = d.drew_gpu;
@@ -2070,6 +2088,12 @@ void NativePresentMinimized(bool minimized) {
 }
 
 bool NativePresenting() { return Renderer::Get().Presenting(); }
+
+namespace {
+std::atomic<bool> g_in_song{false};
+}  // namespace
+void SetInSong(bool in_song) { g_in_song.store(in_song, std::memory_order_relaxed); }
+bool InSong() { return g_in_song.load(std::memory_order_relaxed); }
 
 PresentPaintStats GetPresentPaintStats(bool reset) {
     const bool presenting = Renderer::Get().Presenting();

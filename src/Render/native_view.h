@@ -58,6 +58,14 @@ class Window;
 
 namespace band3::render {
 
+// Whether the game is in a song: RB3's Game exists, from the song's loading
+// screen until its results are left (rb3e_events.cpp's Game____ct and
+// Game____dt, which call SetInSong; the test harness's in_game, but kept
+// whether or not the harness is on). Any thread. The native renderer keeps
+// meshes and textures by the clock only then (RasterOptions::clock_keep).
+void SetInSong(bool in_song);
+bool InSong();
+
 class NativeViewDialog : public rex::ui::ImGuiDialog {
  public:
     using DrawerGetter = std::function<rex::ui::ImmediateDrawer*()>;
@@ -141,8 +149,9 @@ struct LiveViewStats {
         GpuStats plan_most;
         uint64_t plan_spikes = 0, plan_spikes_at_cut = 0;
         // the most the GPU kept after one of them (GpuStats::resident_meshes
-        // and the rest)
+        // and the rest, meshes_by_time and textures_by_time among them)
         uint32_t peak_meshes = 0, peak_textures = 0, peak_rts = 0;
+        uint32_t peak_meshes_by_time = 0, peak_textures_by_time = 0;
         double peak_texture_array_mb = 0, peak_arena_mb = 0, peak_rts_mb = 0;
     };
     Kind by_kind[kFrameKinds];

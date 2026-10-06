@@ -268,6 +268,9 @@ public:
         options.normal_maps = REXCVAR_GET(native_view_normal_maps);
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
+        // as the native renderer's frames keep what they draw, so this one
+        // doesn't let it go (gpu_view.h's residency)
+        options.clock_keep = render::InSong();
         bool ready = false;
         // SDL starts video on the main thread only
         if (REXCVAR_GET(native_view_backend) == "gpu")
@@ -363,6 +366,7 @@ public:
         options.normal_maps = REXCVAR_GET(native_view_normal_maps);
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
+        options.clock_keep = render::InSong();  // as NativePicture's
         std::vector<uint32_t> rgba;
         render::GpuStats stats;
         if (!render::GpuRenderer::Get().RenderFrame(frame, options, rgba, stats)) {
@@ -827,6 +831,7 @@ private:
                       {"arena_moved", double(g.arena_moved)},
                       {"arena_sent", double(g.arena_sent)},
                       {"arena_rebuilt", double(k.arena_rebuilt)},
+                      {"arena_copied", double(g.arena_copied)},
                       {"mesh_bytes", double(g.mesh_bytes)},
                       {"textures_sent", double(g.textures_sent)},
                       {"texture_bytes", double(g.texture_bytes)},
@@ -848,15 +853,21 @@ private:
                       {"evicted_textures", double(g.evicted_textures)},
                       {"evicted_rts", double(g.evicted_rts)},
                       {"rts_released", double(g.rts_released)},
+                      {"textures_pressured", double(g.textures_pressured)},
+                      {"meshes_pressured", double(g.meshes_pressured)},
                       {"resident_meshes", double(g.resident_meshes)},
                       {"resident_textures", double(g.resident_textures)},
                       {"resident_rts", double(g.resident_rts)},
+                      {"meshes_by_time", double(g.meshes_by_time)},
+                      {"textures_by_time", double(g.textures_by_time)},
                       {"texture_array_mb", g.texture_array_mb},
                       {"arena_mb", g.arena_mb},
                       {"rts_mb", g.rts_mb}};
         out.peak = {{"meshes", double(k.peak_meshes)},
                     {"textures", double(k.peak_textures)},
                     {"rts", double(k.peak_rts)},
+                    {"meshes_by_time", double(k.peak_meshes_by_time)},
+                    {"textures_by_time", double(k.peak_textures_by_time)},
                     {"texture_array_mb", k.peak_texture_array_mb},
                     {"arena_mb", k.peak_arena_mb},
                     {"rts_mb", k.peak_rts_mb}};

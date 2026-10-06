@@ -56,14 +56,19 @@ constexpr SDL_GPUTextureFormat kColorFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNO
 constexpr SDL_GPUTextureFormat kDepthFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
 // a shadow map's target: its depth, clip z/w, as soft_raster.cpp keeps it
 constexpr SDL_GPUTextureFormat kShadowFormat = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
-// a mesh or texture no frame has drawn for this many frames is let go (a
-// render target's picture is forgotten)
+// a mesh or texture no frame has drawn for this many frames, and kKeepSeconds,
+// is let go (a render target's picture is forgotten at the frames alone)
 constexpr uint64_t kEvictAfter = 120;
-// a forgotten render target's textures are released once it's been this
-// long unused, or at once while more than kMaxRts are kept, least recently
-// used first (gpu_view.h's residency; GpuStats::rts_mb is what they hold)
-constexpr double kRtKeepSeconds = 30;
+// the seconds unused after which, with kEvictAfter frames, a forgotten render
+// target's textures are let go, and in a song a mesh in the arena and a
+// texture drawn in more than one frame (by frames of more than one world:
+// ClockKeep); render targets too past kMaxRts kept, least recently used first
+// (gpu_view.h's residency; GpuStats::rts_mb is what they hold)
+constexpr double kKeepSeconds = 30;
 constexpr size_t kMaxRts = 128;
+// over this many bytes an arena rebuild keeps less than the clock would
+// (gpu_view.h's residency, ArenaRebuildKeep); a song's arena is 24 to 34 MB
+constexpr uint64_t kMaxArenaBytes = 256u << 20;
 // A texture array of a size class starts with layers to about this many
 // bytes, and doubles when full. Making a texture costs about half a
 // millisecond, so textures share them rather than have one each.
@@ -73,7 +78,7 @@ constexpr uint32_t kMaxTextureLayers = 2048;  // Direct3D 12's limit
 // offset aligned to kTextureOffsetAlign; textures are laid out so
 constexpr uint32_t kRowPitchAlign = 256;
 constexpr uint32_t kTextureOffsetAlign = 512;
-// the arena's least size; it's made half again as big as it needs
+// the arena's least size; it's made twice as big as it needs
 constexpr uint32_t kMinArenaBytes = 4u << 20;
 // the upload buffer's first size, which holds a song's usual frame: making it
 // bigger later costs a frame several milliseconds
@@ -515,29 +520,46 @@ struct GpuRenderer::Impl {
         uint32_t size = 0;
     };
     // Geometry drawn in more than one frame lives in the arena, appended to
-    // and, when full, rebuilt from the meshes still drawn. Geometry new this
-    // frame goes in the frame's pool: mutable meshes and particles are new
-    // every frame, and a buffer each costs far more than copying them. Neither
-    // makes a GPU buffer per mesh. The pool alternates between two buffers, so
-    // geometry the next frame draws again moves to the arena by a copy on the
-    // GPU rather than being sent again.
+    // and, when full, rebuilt from the meshes still within their keep, copied
+    // from the old one on the GPU (PlaceInArena). Geometry new this frame
+    // goes in the frame's pool: mutable meshes and particles are new every
+    // frame, and a buffer each costs far more than copying them. Neither
+    // makes a GPU buffer per mesh. The pool alternates between two buffers,
+    // so geometry the next frame draws again moves to the arena by a copy on
+    // the GPU rather than being sent again.
     Buffer arena_verts, arena_indices;
     uint32_t arena_vert_count = 0, arena_index_count = 0;
+    // the arena a rebuild this frame replaced, which its copy pass copies
+    // out of and then releases: SDL_ReleaseGPUBuffer's handle mustn't be
+    // used after, though SDL keeps the buffer until the GPU is done with it
+    Buffer old_arena_verts, old_arena_indices;
     Buffer pool_verts[2], pool_indices[2];  // by frame serial & 1
     Buffer bones;  // this frame's skinned draws' bones, one after another
 
     struct Mesh {
         std::shared_ptr<const Geometry> keep;  // so the key stays this geometry's
         uint64_t first = 0;                    // the frame that first drew it
+        // the frame that last drew it, and when (frame_now)
         uint64_t used = 0;
+        std::chrono::steady_clock::time_point used_at;
+        // the world of the frame that first drew it (frame_world), whether
+        // frames of another have drawn it too, and whether the frame that
+        // last drew it was in a song (ClockKeep)
+        uint64_t first_world = 0;
+        bool across_worlds = false;
+        bool drawn_in_song = false;
         bool in_arena = false;
         // where it starts in the arena, or else in its frame's pool
         uint32_t first_vertex = 0;
         uint32_t first_index = 0;
         // when moving to the arena: where it was in the last frame's pool,
-        // or ~0u to send it from the CPU
+        // or where it was in the old arena (kept by a rebuild); with neither
+        // (~0u) it's sent from the CPU
         uint32_t pool_vertex = ~0u;
         uint32_t pool_index = 0;
+        uint32_t arena_vertex = ~0u;
+        uint32_t arena_index = 0;
+        bool FromCpu() const { return pool_vertex == ~0u && arena_vertex == ~0u; }
     };
     std::unordered_map<const Geometry*, Mesh> meshes;
 
@@ -556,7 +578,12 @@ struct GpuRenderer::Impl {
         uint32_t layer = 0;
         uint32_t levels = 1;  // of the texture's, in it (LevelsOf)
         uint64_t first = 0;
+        // the frame that last drew it, and when (frame_now); as a Mesh's
         uint64_t used = 0;
+        std::chrono::steady_clock::time_point used_at;
+        uint64_t first_world = 0;
+        bool across_worlds = false;
+        bool drawn_in_song = false;
     };
     std::unordered_map<const Texture*, Tex> textures;
     uint64_t serial = 0;
@@ -568,7 +595,7 @@ struct GpuRenderer::Impl {
     // texture (mesh.hlsl's shadow_tex), its depth alone. Kept between frames,
     // so a render target a frame samples but doesn't draw is what was drawn
     // last (one it draws starts over: Render); forgotten when no frame has
-    // drawn or sampled it for kEvictAfter frames, and released kRtKeepSeconds
+    // drawn or sampled it for kEvictAfter frames, and released kKeepSeconds
     // after (Evict, gpu_view.h's residency); made again when its size
     // changes.
     struct Rt {
@@ -592,9 +619,27 @@ struct GpuRenderer::Impl {
     // one made again after it was released counts as returning
     // (GpuStats::targets_returning)
     std::unordered_set<uint32_t> rts_seen;
-    // the frame's time, taken once as its walk starts: what marks a target
-    // used (Rt::used_at), and what Evict measures its idle seconds from
+    // the frame's time, taken once as its walk starts: what marks a target,
+    // a mesh or a texture used (used_at), and what Evict measures their idle
+    // seconds from
     std::chrono::steady_clock::time_point frame_now;
+    // and its world's game frame (FrameCapture::world_frame), what tells
+    // meshes and textures the capture keeps between game frames, and whether
+    // the game is in a song (RasterOptions::clock_keep; ClockKeep)
+    uint64_t frame_world = 0;
+    bool frame_in_song = false;
+    // the seconds `m` (a Mesh or Tex) is kept by after this frame
+    template <typename T>
+    double KeepSecondsOf(const T& m) const {
+        return ClockKeep(frame_in_song, m.drawn_in_song, m.across_worlds, kKeepSeconds);
+    }
+    // seconds since `used_at`, at frame_now
+    double IdleSeconds(std::chrono::steady_clock::time_point used_at) const {
+        return std::chrono::duration<double>(frame_now - used_at).count();
+    }
+    // Evict's count of the meshes and textures it kept by the clock alone
+    // (GpuStats::meshes_by_time and textures_by_time)
+    uint32_t meshes_by_time = 0, textures_by_time = 0;
     // Evict's forgotten targets (used, DxTex) for kMaxRts, kept between
     // frames so it allocates nothing once grown
     std::vector<std::pair<uint64_t, uint32_t>> rts_forgotten;
@@ -650,6 +695,7 @@ struct GpuRenderer::Impl {
     struct Counts {
         uint64_t pipelines = 0, buffers = 0, textures = 0, arena_rebuilds = 0;
         uint64_t evicted_meshes = 0, evicted_textures = 0, evicted_rts = 0, rts_released = 0;
+        uint64_t textures_pressured = 0, meshes_pressured = 0;
     };
     Counts counts;
     // the frame whose walk is placing what it draws (Render), which
@@ -729,7 +775,8 @@ struct GpuRenderer::Impl {
     bool Reserve(Buffer& b, SDL_GPUBufferUsageFlags usage, uint32_t bytes);
     void ReleaseBuffer(Buffer& b);
     // places this frame's new arena meshes, rebuilding the arena if they
-    // don't fit; false if it couldn't grow
+    // don't fit (with what it keeps added to to_arena, from the old arena);
+    // false if it couldn't grow
     bool PlaceInArena();
     // marks `t` drawn this frame, giving it a layer and queueing its upload
     // if it's new
@@ -737,8 +784,12 @@ struct GpuRenderer::Impl {
     // the layer `t` has, or null (none, or it couldn't have one)
     const Tex* TextureFor(const Texture* t);
     // a layer of its size class's array for `tx`, growing the array if full
+    // and none of its textures can go for room
     bool PlaceTexture(Tex& tx);
     void LetTextureGo(Tex& tx);
+    // the texture arrays' MB, their mips counted as a third more
+    // (GpuStats::texture_array_mb)
+    double TextureArrayMb() const;
     // the target for texture pass `p`, made (again) at w x h (PassTargetSize);
     // null if it couldn't be
     Rt* TargetFor(const Pass& p, uint32_t w, uint32_t h);
@@ -1133,8 +1184,9 @@ bool GpuRenderer::Impl::Create() {
 void GpuRenderer::Impl::Release(bool stop_video) {
     if (device) {
         SDL_WaitForGPUIdle(device);
-        for (Buffer* b : {&arena_verts, &arena_indices, &pool_verts[0], &pool_verts[1],
-                          &pool_indices[0], &pool_indices[1], &bones})
+        for (Buffer* b : {&arena_verts, &arena_indices, &old_arena_verts, &old_arena_indices,
+                          &pool_verts[0], &pool_verts[1], &pool_indices[0], &pool_indices[1],
+                          &bones})
             ReleaseBuffer(*b);
         for (auto& [k, a] : tex_arrays)
             if (a.texture) SDL_ReleaseGPUTexture(device, a.texture);
@@ -1532,9 +1584,29 @@ bool GpuRenderer::Impl::PlaceInArena() {
     if (verts == 0) return true;
     if ((arena_vert_count + verts) * sizeof(Vertex) > arena_verts.size ||
         (arena_index_count + indices) * 2 > arena_indices.size) {
-        // full: start over with the meshes this frame draws; the rest are let
-        // go and come back through the pool if they're drawn again
+        // Full: it starts over in new buffers with the meshes still within
+        // their keep (the clock's included, gpu_view.h's residency) and this
+        // frame's new ones, as much as kMaxArenaBytes allows
+        // (ArenaRebuildKeep). What it keeps is copied from the old buffers on
+        // the GPU in this frame's copy pass (Mesh::arena_vertex), not sent
+        // again; the rest is let go, and comes back through the pool if it's
+        // drawn again.
         counts.arena_rebuilds++;
+        auto bytes_of = [](const Geometry& g) {
+            return uint64_t(g.verts.size()) * sizeof(Vertex) + uint64_t(IndexSlots(g)) * 2;
+        };
+        const uint64_t new_bytes = uint64_t(verts) * sizeof(Vertex) + uint64_t(indices) * 2;
+        uint64_t keep_bytes = new_bytes, frames_bytes = new_bytes;
+        for (const auto& [geom, m] : meshes) {
+            if (!m.in_arena) continue;
+            const double idle = IdleSeconds(m.used_at);
+            const double keep_seconds = KeepSecondsOf(m);
+            if (KeptByRebuild(ArenaKeep::kKeep, m.used, serial, kEvictAfter, idle, keep_seconds))
+                keep_bytes += bytes_of(*m.keep);
+            if (KeptByRebuild(ArenaKeep::kFrames, m.used, serial, kEvictAfter, idle, keep_seconds))
+                frames_bytes += bytes_of(*m.keep);
+        }
+        const ArenaKeep what = ArenaRebuildKeep(keep_bytes, frames_bytes, kMaxArenaBytes);
         for (auto it = meshes.begin(); it != meshes.end();) {
             Mesh& m = it->second;
             if (!m.in_arena) {
@@ -1542,26 +1614,42 @@ bool GpuRenderer::Impl::PlaceInArena() {
                 continue;
             }
             m.in_arena = false;
-            if (m.used != serial) {
+            const double idle = IdleSeconds(m.used_at);
+            const double keep_seconds = KeepSecondsOf(m);
+            if (!KeptByRebuild(what, m.used, serial, kEvictAfter, idle, keep_seconds)) {
+                // past its keep, or within it but let go for room
+                (KeptByRebuild(ArenaKeep::kKeep, m.used, serial, kEvictAfter, idle, keep_seconds)
+                     ? counts.meshes_pressured
+                     : counts.evicted_meshes)++;
                 it = meshes.erase(it);
                 continue;
             }
-            m.pool_vertex = ~0u;  // sent again from the CPU
+            m.pool_vertex = ~0u;
+            m.arena_vertex = m.first_vertex;
+            m.arena_index = m.first_index;
             to_arena.push_back(&m);
             verts += uint32_t(m.keep->verts.size());
             indices += IndexSlots(*m.keep);
             ++it;
         }
-        // everything in it is sent again this frame, so it starts empty in
-        // a new buffer: the frame before, which the GPU may still be
-        // drawing, reads the old one, which SDL keeps until it's done
+        // The old buffers stay this frame's until its copy pass has copied
+        // out of them, which releases them (SDL keeps them until the GPU is
+        // done with them: the frame before, which the GPU may still be
+        // drawing, reads them). Ones a failed frame left are released first.
+        ReleaseBuffer(old_arena_verts);
+        ReleaseBuffer(old_arena_indices);
+        old_arena_verts = std::exchange(arena_verts, Buffer{});
+        old_arena_indices = std::exchange(arena_indices, Buffer{});
         arena_vert_count = arena_index_count = 0;
-        ReleaseBuffer(arena_verts);
-        ReleaseBuffer(arena_indices);
+        // twice what goes in, so a rebuild is rare: Reserve makes a buffer
+        // half again as big as it's asked for
+        auto twice = [](uint64_t bytes, uint32_t least) {
+            return uint32_t(std::clamp<uint64_t>(bytes + bytes / 3, least, 1u << 30));
+        };
         if (!Reserve(arena_verts, SDL_GPU_BUFFERUSAGE_VERTEX,
-                     std::max<uint32_t>(verts * sizeof(Vertex), kMinArenaBytes)) ||
+                     twice(uint64_t(verts) * sizeof(Vertex), kMinArenaBytes)) ||
             !Reserve(arena_indices, SDL_GPU_BUFFERUSAGE_INDEX,
-                     std::max<uint32_t>(indices * 2, kMinArenaBytes / 4))) {
+                     twice(uint64_t(indices) * 2, kMinArenaBytes / 4))) {
             return false;
         }
     }
@@ -1580,6 +1668,27 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx) {
     uint32_t w, h;
     SizeClass(t.width, t.height, w, h);
     TexArray& a = tex_arrays[uint64_t(w) << 32 | h];
+    if (a.free.empty() && a.texture) {
+        // Full: before it grows, its textures no frame has drawn for
+        // kEvictAfter frames, kept by the clock alone (gpu_view.h's
+        // residency), go for room, as they went before the clock kept them.
+        // Their layers are safe to send this frame's into: no frame within
+        // kEvictAfter sampled them (so neither this frame's draws nor the
+        // frames the GPU may still be drawing), and in the copy pass an
+        // upload into a layer comes after this frame's ArrayCopy. One this
+        // frame draws later is placed and sent again, as after Evict.
+        for (auto it = textures.begin(); it != textures.end();) {
+            Tex& held = it->second;
+            if (&held == &tx || held.array != &a ||
+                WithinKeep(held.used, serial, kEvictAfter, 0, 0)) {
+                ++it;
+                continue;
+            }
+            LetTextureGo(held);
+            it = textures.erase(it);
+            counts.textures_pressured++;
+        }
+    }
     if (a.free.empty()) {
         const auto start = std::chrono::steady_clock::now();
         const uint32_t layers =
@@ -1647,10 +1756,23 @@ void GpuRenderer::Impl::UseTexture(const std::shared_ptr<const Texture>& t) {
     if (!tx.keep) {
         tx.keep = t;
         tx.first = serial;
+        tx.first_world = frame_world;
         if (walk_stats) walk_stats->textures_first++;
         if (PlaceTexture(tx)) new_textures.push_back(&tx);
     }
     tx.used = serial;
+    tx.used_at = frame_now;
+    tx.drawn_in_song = frame_in_song;
+    if (frame_world != tx.first_world) tx.across_worlds = true;
+}
+
+double GpuRenderer::Impl::TextureArrayMb() const {
+    double mb = 0;
+    for (const auto& [size, a] : tex_arrays) {
+        const double layer = double(size >> 32) * double(size & 0xffffffffu) * 4;
+        mb += layer * a.layers * (a.levels > 1 ? 4.0 / 3 : 1) / 1048576;
+    }
+    return mb;
 }
 
 const GpuRenderer::Impl::Tex* GpuRenderer::Impl::TextureFor(const Texture* t) {
@@ -2183,6 +2305,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 st.pool_meshes += ps.pool_meshes;
                 st.arena_moved += ps.arena_moved;
                 st.arena_sent += ps.arena_sent;
+                st.arena_copied += ps.arena_copied;
                 st.mesh_bytes += ps.mesh_bytes;
                 st.textures_sent += ps.textures_sent;
                 st.texture_bytes += ps.texture_bytes;
@@ -2198,6 +2321,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     walk_stats = &st;
     serial++;
     frame_now = walk_start;
+    frame_world = frame.world_frame;
+    frame_in_song = o.clock_keep;
     Buffer& pool_v = pool_verts[serial & 1];
     Buffer& pool_i = pool_indices[serial & 1];
     const Buffer& last_pool_v = pool_verts[(serial - 1) & 1];
@@ -2225,16 +2350,21 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         if (!m.keep) {
             m.keep = geom;
             m.first = serial;
+            m.first_world = frame_world;
             st.meshes_first++;
         }
         if (m.used == serial) return;
         m.used = serial;
+        m.used_at = frame_now;
+        m.drawn_in_song = frame_in_song;
+        if (frame_world != m.first_world) m.across_worlds = true;
         if (m.in_arena) {
             // already there
         } else if (m.first != serial) {
             // drawn again (Evict keeps pool geometry ResidencyKeepFrames
             // after): it stays, moved from the last frame's pool if that
             // frame drew it, else sent again (its pool has been drawn over)
+            m.arena_vertex = ~0u;
             if (MeshFromLastPool(m.first, serial)) {
                 m.pool_vertex = m.first_vertex;
                 m.pool_index = m.first_index;
@@ -2436,19 +2566,25 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     const auto arena_start = Clock::now();
     st.plan_walk_ms = std::chrono::duration<double, std::milli>(arena_start - walk_start).count();
     const uint64_t rebuilds = counts.arena_rebuilds;
+    // From here a frame that fails leaves to_arena's meshes marked in_arena
+    // at places their copies never reached (from the CPU, the last pool or
+    // the old arena), and new_textures in layers never sent. Harmless: a
+    // failed Render fails Draw, which gives up for the session and lets go
+    // of everything (Release: meshes, textures, the arena, the device), so
+    // no frame draws them after.
     if (!PlaceInArena()) return false;
     if (counts.arena_rebuilds != rebuilds)
         st.arena_new_mb = double(arena_verts.size + arena_indices.size) / 1048576;
     st.plan_arena_ms = ms_since(arena_start);
 
     // the upload: the pool's vertices and indices, the arena's new meshes that
-    // weren't in the last frame's pool, the bones, then the textures, each
-    // where a copy may start
+    // weren't in the last frame's pool (nor kept from the old arena), the
+    // bones, then the textures, each where a copy may start
     const uint32_t pool_index_at = Align(pool_vert_count * uint32_t(sizeof(Vertex)), 16);
     uint32_t at = Align(pool_index_at + pool_index_count * 2, 16);
     const uint32_t arena_at = at;
     for (const Mesh* m : to_arena) {
-        if (m->pool_vertex != ~0u) continue;
+        if (!m->FromCpu()) continue;
         at = Align(at + uint32_t(m->keep->verts.size() * sizeof(Vertex)), 16);
         at = Align(at + IndexSlots(*m->keep) * 2, 16);
     }
@@ -2466,7 +2602,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // what of it comes from the CPU (GpuStats::mesh_bytes and the rest)
     st.pool_meshes += uint32_t(to_pool.size());
     st.mesh_bytes += uint64_t(pool_vert_count) * sizeof(Vertex) + uint64_t(pool_index_count) * 2;
+    uint32_t arena_copied = 0;
     for (const Mesh* m : to_arena) {
+        if (m->arena_vertex != ~0u) {
+            arena_copied++;
+            continue;
+        }
         if (m->pool_vertex != ~0u) {
             st.arena_moved++;
             continue;
@@ -2474,6 +2615,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         st.arena_sent++;
         st.mesh_bytes += m->keep->verts.size() * sizeof(Vertex) + uint64_t(IndexSlots(*m->keep)) * 2;
     }
+    st.arena_copied += arena_copied;
     st.textures_sent += uint32_t(new_textures.size());
     st.texture_bytes += upload_bytes - textures_at;
     st.bone_bytes += bone_bytes;
@@ -2535,7 +2677,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         uint32_t mesh_at = arena_at;
         for (const Mesh* m : to_arena) {
-            if (m->pool_vertex != ~0u) continue;
+            if (!m->FromCpu()) continue;
             const Geometry& g = *m->keep;
             std::memcpy(base + mesh_at, g.verts.data(), g.verts.size() * sizeof(Vertex));
             mesh_at = Align(mesh_at + uint32_t(g.verts.size() * sizeof(Vertex)), 16);
@@ -2557,7 +2699,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         SDL_UnmapGPUTransferBuffer(device, upload);
     }
-    st.uploads = uint32_t(to_pool.size() + to_arena.size() + new_textures.size());
+    st.uploads = uint32_t(to_pool.size() + to_arena.size() - arena_copied + new_textures.size());
     st.upload_ms = ms_since(upload_start);
     const auto record_start = Clock::now();
 
@@ -2599,12 +2741,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // GPU still reads is left to it and SDL gives this frame another
         // (the copies to the arena read the last frame's pool, the one it
         // filled). The arena is appended to, into space no frame drew from
-        // since it was last rebuilt (in a new buffer, PlaceInArena), and a
-        // texture goes into a new layer or one Evict let go, which the
-        // frames still drawing don't sample but where a world pass before
-        // this frame (pre_pass) let go of the frame before's own textures;
-        // there, as with the targets every frame draws over, SDL's barriers
-        // hold this frame's copy on its queue until those reads are done.
+        // since it was last rebuilt (in a new buffer, PlaceInArena, which
+        // what it kept is copied into from the old one: the frames still
+        // drawing only read that too), and a texture goes into a new layer or
+        // one Evict or PlaceTexture let go, which the frames still drawing
+        // don't sample but where a world pass before this frame (pre_pass)
+        // let go of the frame before's own textures; there, as with the
+        // targets every frame draws over, SDL's barriers hold this frame's
+        // copy on its queue until those reads are done.
         auto send = [&](uint32_t from, const Buffer& to, uint32_t offset, uint32_t size,
                         bool cycle) {
             if (!size) return;
@@ -2621,14 +2765,23 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             const uint32_t isize = IndexSlots(g) * 2;
             const uint32_t vto = m->first_vertex * uint32_t(sizeof(Vertex));
             const uint32_t ito = m->first_index * 2;
-            if (m->pool_vertex != ~0u) {
-                const uint32_t vfrom = m->pool_vertex * uint32_t(sizeof(Vertex));
-                SDL_GPUBufferLocation src{last_pool_v.buffer, vfrom};
+            // from the old arena (kept by a rebuild) or the last frame's
+            // pool, into its place in the arena
+            auto copy_in = [&](const Buffer& verts, uint32_t vertex, const Buffer& indices,
+                               uint32_t index) {
+                SDL_GPUBufferLocation src{verts.buffer, vertex * uint32_t(sizeof(Vertex))};
                 SDL_GPUBufferLocation dst{arena_verts.buffer, vto};
                 SDL_CopyGPUBufferToBuffer(copy, &src, &dst, vsize, false);
-                src = {last_pool_i.buffer, m->pool_index * 2};
+                src = {indices.buffer, index * 2};
                 dst = {arena_indices.buffer, ito};
                 SDL_CopyGPUBufferToBuffer(copy, &src, &dst, isize, false);
+            };
+            if (m->arena_vertex != ~0u) {
+                copy_in(old_arena_verts, m->arena_vertex, old_arena_indices, m->arena_index);
+                continue;
+            }
+            if (m->pool_vertex != ~0u) {
+                copy_in(last_pool_v, m->pool_vertex, last_pool_i, m->pool_index);
                 continue;
             }
             send(mesh_at, arena_verts, vto, vsize, false);
@@ -2657,6 +2810,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         SDL_EndGPUCopyPass(copy);
     }
+    // a rebuilt arena's old buffers, copied out of above
+    ReleaseBuffer(old_arena_verts);
+    ReleaseBuffer(old_arena_indices);
 
     // The runs in order, a render pass each stretch: the back buffer's, split
     // where Rasterize() clears depth (a camera it hasn't seen yet starts
@@ -3655,11 +3811,16 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
 
 void GpuRenderer::Impl::Evict() {
     // geometry only one frame drew stays for keep_frames (gpu_view.h's
-    // residency), and moves to the arena if a frame draws it again; the
-    // arena's space comes back when it's rebuilt
+    // residency), and moves to the arena if a frame draws it again; there
+    // it stays until it's gone kEvictAfter frames undrawn, and in a song
+    // kKeepSeconds if frames of more than one world drew it (ClockKeep). The
+    // arena's space comes back when it's rebuilt.
+    meshes_by_time = textures_by_time = 0;
     for (auto it = meshes.begin(); it != meshes.end();) {
         const Mesh& m = it->second;
-        if (KeepMesh(m.used, m.in_arena, serial, keep_frames, kEvictAfter)) {
+        if (KeepMesh(m.used, m.in_arena, serial, keep_frames, kEvictAfter, IdleSeconds(m.used_at),
+                     KeepSecondsOf(m))) {
+            if (m.used + kEvictAfter < serial) meshes_by_time++;
             ++it;
             continue;
         }
@@ -3667,10 +3828,14 @@ void GpuRenderer::Impl::Evict() {
         counts.evicted_meshes++;
     }
     // likewise a texture drawn in one frame only, such as one RB3 rendered
-    // that frame or a movie's frame, goes keep_frames after
+    // that frame or a movie's frame, goes keep_frames after, and one drawn
+    // in more than one as a mesh in the arena (one kept by the clock goes
+    // sooner if its array is full: PlaceTexture)
     for (auto it = textures.begin(); it != textures.end();) {
         const Tex& t = it->second;
-        if (KeepTexture(t.first, t.used, serial, keep_frames, kEvictAfter)) {
+        if (KeepTexture(t.first, t.used, serial, keep_frames, kEvictAfter,
+                        IdleSeconds(t.used_at), KeepSecondsOf(t))) {
+            if (t.used + kEvictAfter < serial) textures_by_time++;
             ++it;
             continue;
         }
@@ -3682,12 +3847,12 @@ void GpuRenderer::Impl::Evict() {
     // is forgotten: undrawn, so what samples it finds nothing drawn, as it
     // would with the target released (gpu_view.h's residency); counted once,
     // as a release was (a forgotten one a frame samples again without
-    // drawing it stays forgotten). Its textures go kRtKeepSeconds after.
+    // drawing it stays forgotten). Its textures go kKeepSeconds after.
     rts_forgotten.clear();
     for (auto it = rts.begin(); it != rts.end();) {
         Rt& rt = it->second;
-        const double idle = std::chrono::duration<double>(frame_now - rt.used_at).count();
-        const RtResidency keep = KeepRt(rt.used, serial, kEvictAfter, idle, kRtKeepSeconds);
+        const RtResidency keep =
+            KeepRt(rt.used, serial, kEvictAfter, IdleSeconds(rt.used_at), kKeepSeconds);
         if (keep == RtResidency::kKeep) {
             ++it;
             continue;
@@ -3895,18 +4060,19 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
     stats.evicted_textures = uint32_t(now.evicted_textures - before.evicted_textures);
     stats.evicted_rts = uint32_t(now.evicted_rts - before.evicted_rts);
     stats.rts_released = uint32_t(now.rts_released - before.rts_released);
+    stats.textures_pressured = uint32_t(now.textures_pressured - before.textures_pressured);
+    stats.meshes_pressured = uint32_t(now.meshes_pressured - before.meshes_pressured);
     stats.resident_meshes = uint32_t(impl_->meshes.size());
     stats.resident_textures = uint32_t(impl_->textures.size());
     stats.resident_rts = uint32_t(impl_->rts.size());
+    stats.meshes_by_time = impl_->meshes_by_time;
+    stats.textures_by_time = impl_->textures_by_time;
     for (const auto& [obj, rt] : impl_->rts) {
         // colour (RGBA8, or a shadow map's R32_FLOAT) and D32 depth
         const double pixels = double(rt.w) * rt.h;
         stats.rts_mb += pixels * 4 * ((rt.levels > 1 ? 4.0 / 3 : 1) + 1) / 1048576;
     }
-    for (const auto& [size, a] : impl_->tex_arrays) {
-        const double layer = double(size >> 32) * double(size & 0xffffffffu) * 4;
-        stats.texture_array_mb += layer * a.layers * (a.levels > 1 ? 4.0 / 3 : 1) / 1048576;
-    }
+    stats.texture_array_mb = impl_->TextureArrayMb();
     stats.arena_mb = double(impl_->arena_verts.size + impl_->arena_indices.size) / 1048576;
     return true;
 }

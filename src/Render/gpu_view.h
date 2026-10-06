@@ -138,9 +138,17 @@ struct GpuStats {
     uint64_t mesh_bytes = 0;
     uint32_t textures_sent = 0;
     uint64_t texture_bytes = 0, bone_bytes = 0;
+    // a rebuild's meshes kept from the old arena, copied into the new one on
+    // the GPU (those it sent from the CPU are among arena_sent)
+    uint32_t arena_copied = 0;
+    // let go before their keep was out, for room (the residency below):
+    // textures, so that their array wouldn't grow, and meshes, at a rebuild
+    // that would have made the arena bigger than its cap
+    uint32_t textures_pressured = 0, meshes_pressured = 0;
     // the device objects made for it (pipelines; buffers, the upload buffer
     // included; textures: arrays grown, targets, outputs, kept buffers), and
-    // what Evict let go of after it: the render targets forgotten (their
+    // what Evict let go of after it (the meshes past their keep an arena
+    // rebuild let go among them): the render targets forgotten (their
     // pictures, at kEvictAfter frames, as when they were released there) and,
     // of those forgotten, the ones whose textures were released (residency
     // below)
@@ -150,34 +158,57 @@ struct GpuStats {
     // (forgotten ones included), and the megabytes of the texture arrays
     // (their mips counted as a third more), of the arena and of the render
     // targets (colour and depth, 4 bytes a pixel each, the colour's mips a
-    // third more)
+    // third more); and of the meshes and textures, those kept by the clock
+    // alone (undrawn for kEvictAfter frames, not yet kKeepSeconds)
     uint32_t resident_meshes = 0, resident_textures = 0, resident_rts = 0;
+    uint32_t meshes_by_time = 0, textures_by_time = 0;
     double texture_array_mb = 0, arena_mb = 0, rts_mb = 0;
 };
 
 // What GpuRenderer keeps on the GPU between frames, by its frame serial (one
 // a frame drawn, and one each world pass before a frame, kPreBufferPasses).
 // Geometry drawn in two frames lives in the arena, and a texture drawn in two
-// frames in its array, until no frame has drawn them for kEvictAfter frames;
-// geometry and textures drawn in one frame only (particles, mutable meshes,
-// movie frames, a render target's guest pixels) are let go once they've gone
-// undrawn for `keep` frames (ResidencyKeepFrames). Under even/odd rendering
-// the world's draws are drawn by one frame in every world period (its post
-// frame: the others show the kept post buffer), so a keep shorter than that
-// would let them go between, and each post frame would send all of the
-// world's geometry and textures again (30 to 50 MB a frame in arena_04).
+// frames in its array, until no frame has drawn them for kEvictAfter frames
+// and, in a song, if frames of more than one world drew them (ClockKeep),
+// kKeepSeconds of the clock as well (WithinKeep): RB3 stops drawing a
+// character while it's out of the shot, and when kEvictAfter frames (a second
+// at 120 Hz) let it go, the cut back sent it all again (at one cut 51
+// textures, 27 MB, and 233 meshes, 10 MB: 3 ms of upload and 5.6 of waiting
+// for the GPU). Seconds as well as frames, so the keep doesn't shrink as the
+// frame rate goes up. In a song only, from its loading screen to its
+// results: arrays never shrink, only go once empty, and the menus' textures
+// kept 30 s into a song's loading kept the menus' arrays from emptying, so
+// the song's textures filled them and each menu-to-song trip could leave a
+// size class an array doubling bigger (744 to 935 MB of video memory). What
+// the clock keeps holds its Geometry and Texture, their decoded data, in
+// memory too: about 100 MB more. Geometry and textures drawn in one frame
+// only (particles, mutable meshes, movie frames, a render target's guest
+// pixels) are let go once they've gone undrawn for `keep` frames
+// (ResidencyKeepFrames), not kept by the clock; drawn again by the same
+// world's frames, by kEvictAfter frames alone, as before. Under even/odd
+// rendering the
+// world's draws are drawn by one frame in every world period (its post frame:
+// the others show the kept post buffer), so a keep shorter than that would
+// let them go between, and each post frame would send all of the world's
+// geometry and textures again (30 to 50 MB a frame in arena_04).
+//
+// What the clock keeps is let go for room before its time, those undrawn
+// for kEvictAfter frames, as before the clock kept them: a texture array
+// that's full lets go of its own before it grows (doubling it for textures
+// kept idle would cost more than it saves). The arena is appended to and
+// rebuilt when full, made again twice the size of what it keeps, which is
+// copied over on the GPU rather than sent again; what it keeps is bounded by
+// kMaxArenaBytes (ArenaRebuildKeep).
 //
 // A texture pass's render target is forgotten once no frame has drawn or
 // sampled it for kEvictAfter frames: what it was drawn with is no longer
 // there for a frame to sample (drawn and drawn_in reset), exactly as when the
 // target was released there, so every frame's picture is the same as it was
-// then. Its textures, though, are kept for kRtKeepSeconds of the clock since
-// it was last used: RB3 stops drawing a character's texture passes while the
-// character is out of the shot, and the cut back to them made each target
+// then. Its textures, though, are kept for kKeepSeconds of the clock since
+// it was last used: the cut back to a character made each of its targets
 // again (13 to 15 at a cut, about 0.9 ms each, most of a 12 to 25 ms plan at
-// 120 Hz, where kEvictAfter frames is a second). Seconds, not frames, so the
-// keep doesn't shrink as the frame rate goes up. At most kMaxRts are kept:
-// past that the forgotten ones least recently used are released at once.
+// 120 Hz). At most kMaxRts are kept: past that the forgotten ones least
+// recently used are released at once.
 
 // the frames something drawn in one frame is kept undrawn for, with the world
 // drawn every `world_period` frames (RasterOptions::world_period): the
@@ -187,19 +218,69 @@ struct GpuStats {
 inline uint64_t ResidencyKeepFrames(uint32_t world_period) {
     return world_period > 1 ? world_period + 1 + kPreBufferPasses : 0;
 }
-// whether a mesh last drawn in frame `used` is kept after frame `serial`:
-// drawn in it, in the arena and drawn within `evict_after` frames
-// (kEvictAfter), or else drawn within `keep`
+// whether something drawn in more than one frame, last drawn in frame `used`
+// and `idle_seconds` ago, is within its keep after frame `serial`: drawn
+// within `evict_after` frames (kEvictAfter) or `keep_seconds` (kKeepSeconds),
+// so it goes once both have passed, as a render target's textures do
+// (KeepRt). With keep_seconds 0 (short of room) the frames alone.
+inline bool WithinKeep(uint64_t used, uint64_t serial, uint64_t evict_after, double idle_seconds,
+                       double keep_seconds) {
+    return used + evict_after >= serial || (keep_seconds > 0 && idle_seconds <= keep_seconds);
+}
+// whether a mesh last drawn in frame `used`, `idle_seconds` ago, is kept
+// after frame `serial`: drawn in it; in the arena and within its keep
+// (WithinKeep); or else drawn within `keep` frames, the clock aside
 inline bool KeepMesh(uint64_t used, bool in_arena, uint64_t serial, uint64_t keep,
-                     uint64_t evict_after) {
-    return used == serial || used + (in_arena ? evict_after : keep) >= serial;
+                     uint64_t evict_after, double idle_seconds, double keep_seconds) {
+    if (used == serial) return true;
+    return in_arena ? WithinKeep(used, serial, evict_after, idle_seconds, keep_seconds)
+                    : used + keep >= serial;
 }
 // whether a texture first drawn in frame `first` and last in `used` is kept
 // after frame `serial`: as a mesh, drawn in more than one frame counting as
 // in the arena
 inline bool KeepTexture(uint64_t first, uint64_t used, uint64_t serial, uint64_t keep,
-                        uint64_t evict_after) {
-    return KeepMesh(used, used != first, serial, keep, evict_after);
+                        uint64_t evict_after, double idle_seconds, double keep_seconds) {
+    return KeepMesh(used, used != first, serial, keep, evict_after, idle_seconds, keep_seconds);
+}
+// The seconds a mesh or texture drawn in more than one frame is kept by
+// (KeepMesh's keep_seconds): `keep_seconds` while the game is in a song
+// (`in_song`, RasterOptions::clock_keep), for one last drawn in it
+// (`drawn_in_song`, so the menus' last textures aren't kept into it) by
+// frames of more than one world (`across_worlds`, FrameCapture::world_frame:
+// geometry and textures the capture keeps from one game frame to the next, a
+// character's); else none, the frames alone, exactly as before the clock kept
+// anything. What the capture makes anew each game frame (particles, DrawRect's
+// quads, a movie's frames) is drawn again only by frames of the same world (a
+// post frame composed with its world frame, a world pass before a frame).
+inline double ClockKeep(bool in_song, bool drawn_in_song, bool across_worlds,
+                        double keep_seconds) {
+    return in_song && drawn_in_song && across_worlds ? keep_seconds : 0;
+}
+// What an arena rebuild keeps of the meshes in it (it's full: it's made again,
+// twice the size of what goes in, and what it keeps is copied over on the
+// GPU): every one within its keep (kKeep, KeepMesh's); if twice
+// `keep_bytes`, those and the frame's new ones, is over `cap`
+// (kMaxArenaBytes), those drawn within kEvictAfter frames (kFrames,
+// `frames_bytes`); and if twice that is over too, only those the frame draws
+// (kFrame), as before the clock kept them.
+enum class ArenaKeep { kKeep, kFrames, kFrame };
+inline ArenaKeep ArenaRebuildKeep(uint64_t keep_bytes, uint64_t frames_bytes, uint64_t cap) {
+    if (2 * keep_bytes <= cap) return ArenaKeep::kKeep;
+    if (2 * frames_bytes <= cap) return ArenaKeep::kFrames;
+    return ArenaKeep::kFrame;
+}
+// whether a rebuild that keeps `what` keeps a mesh in the arena last drawn in
+// frame `used`, `idle_seconds` ago, in frame `serial`
+inline bool KeptByRebuild(ArenaKeep what, uint64_t used, uint64_t serial, uint64_t evict_after,
+                          double idle_seconds, double keep_seconds) {
+    switch (what) {
+        case ArenaKeep::kKeep:
+            return KeepMesh(used, true, serial, 0, evict_after, idle_seconds, keep_seconds);
+        case ArenaKeep::kFrames: return KeepMesh(used, true, serial, 0, evict_after, 0, 0);
+        case ArenaKeep::kFrame: break;
+    }
+    return used == serial;
 }
 // whether a mesh drawn again in frame `serial`, first drawn (into its frame's
 // pool) in frame `first`, moves to the arena from that pool on the GPU: only
@@ -211,7 +292,7 @@ inline bool MeshFromLastPool(uint64_t first, uint64_t serial) { return first + 1
 // `idle_seconds` ago, after frame `serial`: kept as it is while drawn within
 // `evict_after` frames (kEvictAfter); after that forgotten (its picture, not
 // its textures), and released once it's been idle more than `keep_seconds`
-// (kRtKeepSeconds) too. Both must have passed: at 2 frames a second, a
+// (kKeepSeconds) too. Both must have passed: at 2 frames a second, a
 // target last used 40 seconds ago is 80 frames back, and stays as it is.
 enum class RtResidency { kKeep, kForget, kRelease };
 inline RtResidency KeepRt(uint64_t used, uint64_t serial, uint64_t evict_after,

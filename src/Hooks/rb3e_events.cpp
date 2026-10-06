@@ -8,10 +8,12 @@
 #include "src/Net/discord.h"
 #include "src/Net/events.h"
 #include "src/Net/http_server.h"
+#include "src/Render/native_view.h"
 #include "src/Test/game_state.h"
 #include "src/Test/test_server.h"
 
-// Reports game state to the RB3Enhanced network events, Discord presence, and
+// Reports game state to the RB3Enhanced network events, Discord presence, the
+// native renderer (whether a song is on: native_view.h's InSong), and
 // the test harness and web server's /status (band3::test::GameState),
 // from the same hook points and with the same data as RB3E (source/rb3enhanced.c,
 // source/GameHooks.c), and also from PresenceMgr::SetSongID, for a song that
@@ -213,6 +215,8 @@ extern "C" REX_FUNC(StageKit__SetState)
 
 extern "C" REX_FUNC(Game____ct)
 {
+    // for the native renderer's residency, harness or not
+    band3::render::SetInSong(true);
     bool events = band3::events::Enabled();
     bool discord = band3::discord::Enabled();
     bool record = Recording();
@@ -242,6 +246,7 @@ extern "C" REX_FUNC(Game____dt)
 {
     SendState(0);
     band3::test::GameState::Get().SetInGame(false);
+    band3::render::SetInSong(false);
     // the game can leave LEDs on after the score screen; turn everything off
     SendStagekit(0x00, 0xFF);
     band3::discord::SetMenus();
