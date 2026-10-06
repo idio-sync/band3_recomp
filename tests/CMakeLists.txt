@@ -64,6 +64,7 @@ add_executable(band3_tests
     frame_pacing_test.cpp
     launcher_start_test.cpp
     launcher_settings_test.cpp
+    generated_rows_test.cpp
     config_file_test.cpp
     relaunch_test.cpp
     instrument_decode_test.cpp
@@ -92,6 +93,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Launcher/device_names.cpp
     ${BAND3_ROOT}/src/Launcher/device_view_model.cpp
     ${BAND3_ROOT}/src/Launcher/game_data_check.cpp
+    ${BAND3_ROOT}/src/Launcher/generated_rows.cpp
     ${BAND3_ROOT}/src/Launcher/launcher_settings.cpp
     ${BAND3_ROOT}/src/Launcher/launcher_start.cpp
     ${BAND3_ROOT}/src/Launcher/mic_level.cpp

@@ -11,7 +11,9 @@
 #include "config_file.h"
 
 // The launcher's settings: the curated table of what each tab shows, and the
-// override model that decides what Save writes to band3.toml.
+// override model that decides what Save writes to band3.toml. The in-game
+// settings (F4, ingame_settings_dialog.h) show the same table with the same
+// model, plus rows generated from the registry (generated_rows.h).
 //
 // The launcher writes only overrides: a setting goes into band3.toml when its
 // value differs from its effective default (what it would be with no key
@@ -29,6 +31,8 @@ enum class Tab {
     kAudio,
     kControllers,
     kOnline,
+    // in game only: Band3/Advanced's settings, generated from the registry
+    kAdvanced,
     // the Steam Deck banner's toggle, shown only on a Deck
     kSteamDeck,
     // the footer's "Show this screen at startup"
@@ -45,6 +49,8 @@ enum class Widget {
     kIntStepper,
     kIntSlider,
     kFloatSlider,
+    // a number typed in, within the range if there is one (generated rows)
+    kFloatInput,
     // a 0..1 fraction shown as 0..100%
     kPercentSlider,
     kText,
@@ -164,6 +170,28 @@ std::string WithLag(std::string_view text, uint32_t type, std::optional<float> m
 
 enum class WindowMode { kWindowed, kBorderless, kExclusive };
 
+// Where the settings are edited: on the launcher, before the game starts, or
+// in game (F4), a window over the running game.
+enum class Where { kLauncher, kInGame };
+
+// What a settings page has, by where it shows.
+struct PageFeatures {
+    // the Controllers tab's device list and tester: it reads every device
+    // itself, which in game would be reading the game's input system from
+    // under it (the Instrument Lab, F6, tests devices in game)
+    bool device_tester = true;
+    // a level meter beside each mic slot: it records from the microphone,
+    // which in game the game is capturing from
+    bool mic_meters = true;
+    // the Advanced tab, and the generated rows of band3's settings the table
+    // doesn't have (generated_rows.h)
+    bool generated_rows = false;
+    // a row says when a change waits for the next start (WaitsForNextStart);
+    // on the launcher everything applies at Play, or Play restarts band3
+    bool next_start_notes = false;
+};
+PageFeatures FeaturesFor(Where where);
+
 // The model
 
 // where a setting's value came from when the launcher opened, if a saved value
@@ -172,6 +200,15 @@ enum class Lock { kNone, kCommandLine, kEnvironment };
 
 // "Set on the command line", ...; empty for kNone
 const char* LockReason(Lock lock);
+
+// when a change to a cvar takes effect, as the registry says (rex::cvar::Lifecycle)
+enum class Lifecycle {
+    kHotReload,
+    // the game reads it as it starts: a change applies at the next start
+    kRequiresRestart,
+    // set as band3 starts only (the command line, band3.toml), read-only after
+    kInitOnly,
+};
 
 // What the model knows about one cvar, besides its value.
 struct CvarFacts {
@@ -203,6 +240,14 @@ struct CvarFacts {
     Lock lock = Lock::kNone;
     // band3.toml set it (its source was the config file when the launcher opened)
     bool from_config = false;
+
+    Lifecycle lifecycle = Lifecycle::kHotReload;
+    // read once as the game starts though the registry says kHotReload (the
+    // emulated GPU's swap_post_effect, input_backend, the folders, what
+    // settings::Startup() keeps): a change in game applies at the next start
+    bool read_once = false;
+    // in game: its value as the game started, when that's known
+    std::optional<std::string> started_with;
 };
 
 struct Environment {
@@ -219,6 +264,12 @@ struct Environment {
     // so its own settings exist; with renderer native they don't until a
     // restart (SectionNote)
     bool emulated_gpu_running = true;
+    // the build could run renderer native alone (render::RendererState's
+    // presentable): with emulated_gpu_running, what RendererNeedsRestart compares
+    bool native_presentable = true;
+    // the settings are edited in game (Where::kInGame): the game has started
+    // with the values in started_with
+    bool in_game = false;
 };
 
 // the cvars' live values; the game's sets them with SetFlagByName
@@ -275,6 +326,23 @@ public:
     Lock LockOf(std::string_view cvar) const;
     bool IsLocked(std::string_view cvar) const { return LockOf(cvar) != Lock::kNone; }
 
+    // in game, a kInitOnly setting: shown, but it can't be changed, and Save
+    // leaves its key alone
+    bool ReadOnly(std::string_view cvar) const;
+    // in game, a change to it applies only from the next start: the registry
+    // says kRequiresRestart (or kInitOnly), or the game reads it once as it
+    // starts (CvarFacts::read_once). renderer isn't: emulated and both switch
+    // at once, and WaitsForNextStart tells by its value.
+    bool NextStartOnly(std::string_view cvar) const;
+    // renderer, as set now, needs another GPU than this run started with
+    // (render::RendererRestartNeeded): native, or the emulated GPU for
+    // emulated and both
+    bool RendererNeedsRestart() const;
+    // in game, it (or its companion) has a value the game didn't start with
+    // and won't use until the next start: NextStartOnly and changed from
+    // started_with, or renderer needing the other GPU. The row says so.
+    bool WaitsForNextStart(std::string_view cvar) const;
+
     // the index of the choice matching the value by type, or -1 (a typed value)
     int ChoiceIndex(const Setting& setting) const;
 
@@ -306,7 +374,7 @@ public:
 
     // what Save does to band3.toml, in table order: a changed setting's typed
     // value, or removing an unchanged one's key, and show_launcher from
-    // ShowAtStartup either way. Locked and unavailable settings, and keys
+    // ShowAtStartup either way. Locked, read-only and unavailable settings, and keys
     // outside the table, are left as they are.
     std::vector<ConfigEdit> Edits() const;
     // writes Edits() into the file (config_file.h); on success show_launcher

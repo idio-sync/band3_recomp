@@ -505,6 +505,18 @@ std::string WithLag(std::string_view text, uint32_t type, std::optional<float> m
     return out;
 }
 
+PageFeatures FeaturesFor(Where where) {
+    switch (where) {
+    case Where::kLauncher: return {};
+    case Where::kInGame:
+        return {.device_tester = false,
+                .mic_meters = false,
+                .generated_rows = true,
+                .next_start_notes = true};
+    }
+    return {};
+}
+
 const char* LockReason(Lock lock) {
     switch (lock) {
     case Lock::kCommandLine: return "Set on the command line";
@@ -576,9 +588,17 @@ std::optional<std::string> SettingsModel::SectionNote(Tab tab, std::string_view 
     // the emulated GPU's own settings are the plugin's, there only once it runs
     if (tab == Tab::kGraphics && section == "Emulated GPU" && !env_.emulated_gpu_running &&
         ForRenderer(kWithEmulatedGpu)) {
-        return "The emulated GPU's own settings (render scale, anti-aliasing, anisotropic "
-               "filtering, VSync) show here once band3 runs with it: Play restarts band3 for "
-               "the new renderer.";
+        return env_.in_game
+                   ? "The emulated GPU's own settings (render scale, anti-aliasing, anisotropic "
+                     "filtering, VSync) show here once band3 runs with it: the new renderer "
+                     "applies at the next start."
+                   : "The emulated GPU's own settings (render scale, anti-aliasing, anisotropic "
+                     "filtering, VSync) show here once band3 runs with it: Play restarts band3 "
+                     "for the new renderer.";
+    }
+    // the game has its folders: the game data, the user data and the songs
+    if (env_.in_game && tab == Tab::kGame && section == "Folders") {
+        return "Folders apply at the next start.";
     }
     return std::nullopt;
 }
@@ -640,7 +660,7 @@ bool SettingsModel::IsChanged(std::string_view cvar) const {
 
 bool SettingsModel::Set(std::string_view cvar, std::string_view value) {
     const CvarFacts* facts = Facts(cvar);
-    if (!facts || !facts->exists || facts->lock != Lock::kNone) return false;
+    if (!facts || !facts->exists || facts->lock != Lock::kNone || ReadOnly(cvar)) return false;
 
     const bool deck_toggle = cvar == "steam_deck_defaults" && env_.steam_deck;
     // the preset settings' defaults before the toggle
@@ -670,7 +690,7 @@ bool SettingsModel::Set(std::string_view cvar, std::string_view value) {
 
 bool SettingsModel::Reset(std::string_view cvar) {
     const Setting* setting = Find(cvar);
-    if (!setting || IsLocked(cvar)) return false;
+    if (!setting || IsLocked(cvar) || ReadOnly(cvar)) return false;
     auto reset = [this](std::string_view name) {
         const CvarFacts* facts = Facts(name);
         if (!facts || !facts->exists || facts->lock != Lock::kNone) return;
@@ -695,6 +715,37 @@ bool SettingsModel::Reset(std::string_view cvar) {
 Lock SettingsModel::LockOf(std::string_view cvar) const {
     const CvarFacts* facts = Facts(cvar);
     return facts ? facts->lock : Lock::kNone;
+}
+
+bool SettingsModel::ReadOnly(std::string_view cvar) const {
+    const CvarFacts* facts = Facts(cvar);
+    return env_.in_game && facts && facts->lifecycle == Lifecycle::kInitOnly;
+}
+
+bool SettingsModel::NextStartOnly(std::string_view cvar) const {
+    const CvarFacts* facts = Facts(cvar);
+    if (!env_.in_game || !facts || !facts->exists) return false;
+    return facts->lifecycle != Lifecycle::kHotReload || facts->read_once;
+}
+
+bool SettingsModel::RendererNeedsRestart() const {
+    const CvarFacts* facts = Facts("renderer");
+    if (!facts || !facts->exists) return false;
+    const render::RendererState run{.native_only = !env_.emulated_gpu_running,
+                                    .presentable = env_.native_presentable};
+    return render::RendererRestartNeeded(run, Value("renderer"));
+}
+
+bool SettingsModel::WaitsForNextStart(std::string_view cvar) const {
+    if (!env_.in_game) return false;
+    if (cvar == "renderer") return RendererNeedsRestart();
+    auto waits = [this](std::string_view name) {
+        const CvarFacts* facts = Facts(name);
+        return NextStartOnly(name) && facts->started_with &&
+               !Same(name, Value(name), *facts->started_with);
+    };
+    const Setting* setting = Find(cvar);
+    return waits(cvar) || (setting && !setting->companion.empty() && waits(setting->companion));
 }
 
 int SettingsModel::ChoiceIndex(const Setting& setting) const {
@@ -789,7 +840,7 @@ bool SettingsModel::SetShowAtStartup(bool on) {
 bool SettingsModel::HasUnsavedChanges() const {
     if (show_at_startup_ != saved_show_at_startup_) return true;
     for (const auto& s : table_) {
-        if (!Available(s) || IsLocked(s.cvar)) continue;
+        if (!Available(s) || IsLocked(s.cvar) || ReadOnly(s.cvar)) continue;
         const auto it = saved_.find(s.cvar);
         if (it == saved_.end() || !Same(s.cvar, Value(s.cvar), it->second)) return true;
     }
@@ -818,8 +869,8 @@ std::vector<ConfigEdit> SettingsModel::Edits() const {
     std::vector<ConfigEdit> edits;
     for (const auto& s : table_) {
         // a locked value wouldn't win, and saving it would keep it after the
-        // command line stops setting it
-        if (!Available(s) || IsLocked(s.cvar)) continue;
+        // command line stops setting it; a read-only one is band3.toml's own
+        if (!Available(s) || IsLocked(s.cvar) || ReadOnly(s.cvar)) continue;
         if (s.cvar == kShowLauncher) {
             edits.push_back({std::string(s.cvar), ConfigValue(show_at_startup_)});
             continue;
