@@ -1,0 +1,61 @@
+# The main menu's Quit, under Play a Show (Rock Band 3 Deluxe) or Music Store
+# (the game as it shipped). Deluxe makes it, as Exit Game, when its scripts see
+# MHX_PC, which band3 defines; on a game without it band3 makes its own
+# (src/Hooks/quit_button.cpp). Either way it's the main menu's sixth button and
+# its confirm screen is confirm_exit_game_screen, with Quit (or Exit Game) on
+# top and Keep Rockin' under it. Starts on the main menu (main_hub_screen), with
+# player 1 joined, the cursor on Play Now and no menu open. Ends by quitting:
+# band3 then closes by itself, so look for "Game requested exit" at the end of
+# its log.
+
+# down to Quit; it asks first, and Keep Rockin' goes back
+press down
+sleep 300ms
+press down
+sleep 300ms
+press down
+sleep 300ms
+press down
+sleep 300ms
+press down
+sleep 600ms
+press green until screen=confirm_exit_game_screen timeout=10s
+sleep 1500ms
+screenshot quit-confirm
+press down
+sleep 500ms
+press green until screen=main_hub_screen timeout=10s
+sleep 1s
+
+# hidden in Play Now's choices, there again on the main menu
+press up
+sleep 300ms
+press up
+sleep 300ms
+press up
+sleep 300ms
+press up
+sleep 300ms
+press up
+sleep 600ms
+press green
+sleep 2s
+screenshot quit-hidden-in-play-now
+press red
+sleep 2s
+screenshot quit-main-menu
+
+# and quits
+press down
+sleep 300ms
+press down
+sleep 300ms
+press down
+sleep 300ms
+press down
+sleep 300ms
+press down
+sleep 600ms
+press green until screen=confirm_exit_game_screen timeout=10s
+sleep 1500ms
+press green

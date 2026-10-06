@@ -180,6 +180,26 @@ tools/test_port_mapping_mock.py` checks the mock itself.
 `tests/game/usb_mic.b3t` sings a song's vocals through the USB mics' test tone (launch
 with `-- --usb_mics=true --usb_mic_test_tone=220`) and waits for the score to go up.
 
+## The main menu's Quit
+
+`tests/game/quit_button.b3t` opens the main menu's Quit, backs out with Keep Rockin',
+checks the button hides in Play Now's choices, and quits; the log then ends with "Game
+requested exit". Start it on the main menu with no menu open: `launch` with a profile past
+the first-run prompts, `wait screen=splash_screen timeout=120s`, `press start until
+screen=main_hub_screen timeout=60s`, then `press red` in case Start opened the player's
+menu (it does nothing on the main menu). Beside another band3, give it its own `--port`
+and a copy of `out/test_user_data` as its `--user-data`.
+
+On Rock Band 3 Deluxe the button is Deluxe's own Exit Game (its scripts make it when they
+see `MHX_PC`, which band3 defines); band3 makes its own Quit
+(`src/Hooks/quit_button.cpp`) only on the game as it shipped. Testing that one needs band3
+built from TU5's `default.xex` with TU5's `gen`, main and patch ARKs both
+([Building](building.md#game-files)). A folder with only the disc's main ARK won't do: a
+build from Deluxe's `default.xex` crashes there as it starts, in `Splash::PrepareNext`. On
+Deluxe, a build that leaves the `-define MHX_PC` out of `AddSettingArgs` (`src/config.cpp`)
+shows band3's Quit instead, on the same main menu and hint screens the game shipped with,
+since Deluxe keeps those.
+
 ## Inputs and timing
 
 Every instrument has `a b x y start back up down left right`; guitars add `green red

@@ -22,6 +22,7 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Local multiplayer: up to four players, each controller its own player
 - DLC and custom songs (`CON`/`LIVE`/`PIRS`) read straight from folders, nothing to install
 - Rock Band 3 Deluxe support
+- A Quit button on the main menu
 - Runs at the display's refresh rate (`frame_cap`)
 - Forced venue, song speed and highway speed
 - Steam Deck defaults: fullscreen, letterboxed, vsync
