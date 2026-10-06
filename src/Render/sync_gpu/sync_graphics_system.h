@@ -76,7 +76,7 @@ public:
 
     // the vblank every millisecond rather than at the guest's refresh rate:
     // the frame cap's (frame_pacing.h's SetVsyncForCap), as the plugin's
-    // vsync off did. native_vblank_free_running (Band3 → Debug) has it so
+    // vsync off did. native_vblank_free_running (Band3 → Advanced → Native renderer) has it so
     // whatever this is told, for a run nothing paces (frame_cap off,
     // rnd_sync 0). Any thread, before or after the threads start.
     void SetVblankFreeRunning(bool free_running);

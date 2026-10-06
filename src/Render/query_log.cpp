@@ -12,7 +12,7 @@
 #include "generated/band3_init.h"
 #include "src/settings.h"
 
-// native_query_log (Band3 → Debug): what the occlusion queries give the game,
+// native_query_log (Band3 → Advanced → Native renderer): what the occlusion queries give the game,
 // to check the sync-only GPU's EVENT_WRITE_ZPD answers against the emulated
 // GPU's (both report native_query_sample_count / query_occlusion_fake_sample_count
 // samples, 1000 by default, as passed). The other half, the sample counts the
