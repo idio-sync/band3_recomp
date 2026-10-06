@@ -51,17 +51,20 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Configurable save, cache and song folders, including a portable install
 
 **Graphics**
-- A native renderer, the default on Windows (F8 switches to the emulated GPU and back,
-  `renderer = emulated` keeps it, F9 opens its debug view; Linux keeps the emulated GPU as
-  the default until the native renderer has been run there). band3 draws each frame itself
-  with the game's own shaders, checked against the emulated GPU's picture pixel by pixel,
-  while the emulated GPU skips the draws nobody sees:
-  - Faster: uncapped, 257 fps in the main menu and 285 in a song, against 165 and 163 on
-    the emulated GPU (about 1.6 to 1.75 times)
+- A native renderer, the default on Windows, with no emulated Xbox 360 GPU at all. band3
+  draws each frame itself with the game's own shaders, checked against the emulated GPU's
+  picture pixel by pixel. One setting, `renderer`, picks what draws the picture: `native`,
+  `emulated` (the emulated GPU alone; the default on Linux until the native renderer has
+  been run there) or `both`, "Native + emulated (debug)", where F8 switches between their
+  pictures. F9 opens the native renderer's debug view.
+  - Faster: uncapped, 257 fps in the main menu and 285 in a song with the emulated GPU
+    still beside it, against 165 and 163 on the emulated GPU (about 1.6 to 1.75 times).
+    Without it, at 60 Hz in a song, the GPU is 13 % busy against 22 % beside it and 28 % on
+    the emulated GPU alone, and uses about 800 MB of video memory against 1.4 GB beside it
   - Sharper: it draws at the window's size, 1080p or 4K, where the emulated GPU draws the
     console's 720p unless `resolution_scale` is raised, at a high GPU cost
-  - Experimental: `emulated_gpu = off` runs without the emulated GPU at all, the native
-    renderer the only picture and F8 doing nothing (Windows; written but untested on Linux)
+  - Native alone has run on Windows (Direct3D 12); its Vulkan path for Linux is written
+    but untested
   - [Native renderer](docs/native-renderer.md) has the details, the settings and what still
     differs (the lens flares aren't occluded, as on the emulated GPU; the store and RB3's
     error screens aren't checked)
@@ -119,11 +122,10 @@ Both renderers replace the same part of RB3, its platform render layer (`DxRnd`,
 `DxTex`), and draw the same Milo meshes, materials and cameras. The difference is everything
 around them.
 
-\* Partly done. The native renderer draws the picture by default on Windows (the emulated GPU
-stays the default on Linux until the native renderer has been run there), but by default the
-emulated GPU still runs under it, skipping the draws the native renderer has made, so F8 can
-switch back at once. Launching with `emulated_gpu = off` leaves the emulated GPU out entirely
-now (experimental: Windows, and written but untested on Linux); `on`, the default, keeps it.
+\* Partly done. The native renderer draws the picture by default on Windows, with no
+emulated GPU (`renderer` native); the emulated GPU stays the default on Linux until the
+native renderer has been run there. `renderer` both runs the two side by side, F8 switching
+between their pictures, to compare them.
 
 ## Credits
 

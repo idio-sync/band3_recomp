@@ -17,11 +17,22 @@ connected)" and stays chosen until you pick another, and **Other...** takes a ty
 or part of one.
 
 The Graphics tab's **Renderer** picks what draws the game's picture: **Native**, band3's own
-[native renderer](native-renderer.md) (the default on Windows), or **Emulated GPU** (the
-default on Linux, where the native renderer hasn't been run yet). F8 switches between them
-in game. Its **Frame rate cap** is [`frame_cap`](#config-files): the display's refresh rate
-(the default), Auto for a VRR display, Off, a rate from the list, or **Other...** for a
-typed one. **VSync** shows only with the cap off, since the cap turns it off.
+[native renderer](native-renderer.md) alone (the default on Windows, and offered there
+only), **Emulated**, the emulated Xbox 360 GPU alone (the default on Linux, where the native
+renderer hasn't been run yet), or **Native + emulated (debug)**, both side by side, F8
+switching between their pictures in game. A line under it says what the chosen one does.
+Native to or from the other two applies when band3 starts, so Play restarts band3 for it.
+The tab's sections show only what the chosen renderer uses: **Display** and **Game** for
+all three, **Native renderer** (its anti-aliasing, anisotropic filtering and the most lines
+it draws) for Native and Native + emulated, **Emulated GPU** (render scale, FXAA,
+anisotropic filtering, VSync, and under Native + emulated what the emulated GPU still does
+while the native picture shows) for Emulated and Native + emulated, as does **Compress
+character textures**. The emulated GPU's own settings exist only while it runs, so
+choosing it from Native shows a note in their place until Play has restarted band3
+([which settings apply](native-renderer.md#which-settings-apply)). The tab's **Frame rate
+cap** is [`frame_cap`](#config-files): the display's refresh rate (the default), Auto for a
+VRR display, Off, a rate from the list, or **Other...** for a typed one. **VSync** shows
+only with the cap off, since the cap turns it off.
 
 The Controllers tab starts with a list of every controller and instrument band3 sees (Xbox
 pads and instruments, PS3/Wii/PS4/PS5 instruments on their dongles, a MIDI kit, the
@@ -93,8 +104,8 @@ wouldn't win over it. On a Steam Deck a banner at the top says so, with the
 `steam_deck_defaults` switch: on, the [Deck's settings](#steam-deck) are the defaults and
 what you change wins over them.
 
-Some settings stay in F4 only: debug options, heap sizes, the native renderer's options and
-the virtual instrument.
+Some settings stay in F4 only: debug options, heap sizes, the native renderer's debug
+options and the virtual instrument.
 
 ## The settings menu
 
