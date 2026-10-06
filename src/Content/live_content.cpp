@@ -139,6 +139,10 @@ void RunScan(std::string setting) {
 bool UnmountLocked(std::string_view root_name) {
     auto it = g_mounts.find(Lower(root_name));
     if (it == g_mounts.end()) return false;
+    // files the game still has open on the package go first, as the SDK's own
+    // close does: one left open points into the device about to be freed, and the
+    // SDK's next close walks every open file (std::bad_alloc from a freed path)
+    REX_KERNEL_STATE()->content_manager()->CloseOpenedFilesFromContent(root_name);
     g_vfs->UnregisterSymbolicLink(std::string(root_name) + ":");
     g_vfs->UnregisterDevice(it->second);
     g_mounts.erase(it);
