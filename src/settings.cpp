@@ -247,8 +247,9 @@ REXCVAR_DEFINE_STRING(midi_drums_notes, "", "Band3/Controllers/MIDI drums",
     .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_INT32(midi_drums_pulse_ms, 30, "Band3/Controllers/MIDI drums",
-    "How long each hit is held, in milliseconds")
-    .range(1, 100)
+    "How long each hit is held, in milliseconds. Two cymbals hit together are played one "
+    "pulse apart, so it must outlast a game frame")
+    .range(20, 100)
     .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_INT32(midi_drums_min_velocity, 10, "Band3/Controllers/MIDI drums",

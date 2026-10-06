@@ -51,7 +51,11 @@ NoteMap DefaultNoteMap();
 std::vector<std::string> ApplyOverrides(NoteMap& map, std::string_view overrides);
 
 struct Settings {
-    // how long each hit is held; RB3 misses a single-poll press
+    // How long each hit is held. RB3's joypad thread polls every 4 ms and keeps
+    // a press until the next frame reads it, so a short hit isn't missed; the
+    // length is for stagger_cymbals, whose second cymbal starts as the first
+    // one's pulse ends and needs a frame to read in between. Shorter than a
+    // frame (16.7 ms at 60 fps), both cymbals land in one read.
     std::chrono::milliseconds pulse{30};
     // quieter hits are ignored
     uint8_t min_velocity = 10;
