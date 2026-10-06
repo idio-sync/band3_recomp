@@ -5,12 +5,10 @@ namespace band3::input {
 std::array<std::vector<size_t>, kPlayers> AssignPlayers(
     const std::vector<SlotDevice>& devices, const std::array<bool, kPlayers>& reserved) {
     std::array<std::vector<size_t>, kPlayers> players;
+    std::array<bool, kPlayers> taken = reserved;
 
-    std::vector<uint32_t> skipped;
-    for (const auto& device : devices) {
-        if (device.kind == SlotDevice::Kind::kSkipped) skipped.push_back(device.ordinal);
-    }
-
+    // the pads that keep their seat; the rest wait for the free players
+    std::vector<size_t> unseated;
     for (size_t i = 0; i < devices.size(); i++) {
         const SlotDevice& device = devices[i];
         switch (device.kind) {
@@ -27,22 +25,24 @@ std::array<std::vector<size_t>, kPlayers> AssignPlayers(
             if (!reserved[0]) players[0].push_back(i);
             break;
         case SlotDevice::Kind::kPad: {
-            // the pads close up over any skipped copy that connected before them,
-            // then take the free players in order
-            uint32_t nth = device.ordinal;
-            for (uint32_t s : skipped) {
-                if (s < device.ordinal) nth--;
-            }
-            for (int p = 0; p < kPlayers; p++) {
-                if (reserved[p]) continue;
-                if (nth == 0) {
-                    players[p].push_back(i);
-                    break;
-                }
-                nth--;
+            const int seat = device.seat - 1;
+            if (seat >= 0 && seat < kPlayers && !taken[seat]) {
+                players[seat].push_back(i);
+                taken[seat] = true;
+            } else {
+                unseated.push_back(i);
             }
             break;
         }
+        }
+    }
+
+    for (size_t i : unseated) {
+        for (int p = 0; p < kPlayers; p++) {
+            if (taken[p]) continue;
+            players[p].push_back(i);
+            taken[p] = true;
+            break;
         }
     }
     return players;

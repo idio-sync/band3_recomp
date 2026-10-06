@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -48,6 +49,8 @@ DeviceKind KindOf(const DeviceInfo& device) {
 //   in the order they connected. A player stays reserved while its instrument is
 //   plugged in, including the moment a type change leaves it unplugged, so real
 //   pads never shift under it.
+// - a pad keeps its player while it's connected, wherever the others go, and a
+//   pad that connects takes the lowest free player.
 // - SDL's copy of an instrument the HID driver reads is left out, and the other
 //   pads close up over its slot, as if it had never connected.
 // - the keyboard and other synthetic devices feed player 1, as in the SDK, unless
@@ -70,8 +73,13 @@ public:
 
     // The players again for the same devices: which are SDL's copies of a HID
     // instrument depends on whether the HID driver runs, and the SDK only
-    // calls OnDevicesChanged when the devices themselves change.
-    void Reassign() { Assign(); }
+    // calls OnDevicesChanged when the devices themselves change. The pads take
+    // their players afresh: a stopped driver's devices stay in the SDK's list
+    // until it next looks, and mustn't keep a player from SDL's copy.
+    void Reassign() {
+        seats_.clear();
+        Assign();
+    }
 
     void DevicesForUser(uint32_t user_index, std::vector<DeviceId>& out) const override {
         out.clear();
@@ -104,7 +112,7 @@ private:
         slots.reserve(devices.size());
         for (const auto& device : devices) {
             SlotDevice slot;
-            slot.ordinal = device.ordinal;
+            if (auto seat = seats_.find(device.id); seat != seats_.end()) slot.seat = seat->second;
             if (int player = VirtualInstrumentPlayer(device)) {
                 slot.kind = SlotDevice::Kind::kVirtual;
                 slot.virtual_player = player;
@@ -124,11 +132,13 @@ private:
             seen[i].guid = devices[i].guid;
             seen[i].kind = KindOf(devices[i]);
         }
+        seats_.clear();
         for (uint32_t user = 0; user < kMaxGuestUsers; user++) {
             users_[user].clear();
             for (size_t i : players[user]) {
                 users_[user].push_back(devices[i].id);
                 if (seen[i].player == 0) seen[i].player = static_cast<int>(user) + 1;
+                if (slots[i].kind == SlotDevice::Kind::kPad) seats_[devices[i].id] = seen[i].player;
             }
         }
 
@@ -143,6 +153,8 @@ private:
 
     // the SDK's last list, for Reassign
     std::vector<DeviceInfo> devices_;
+    // the player (1-4) each pad had at the last assignment
+    std::map<DeviceId, int> seats_;
     std::vector<std::vector<DeviceId>> users_ = std::vector<std::vector<DeviceId>>(kMaxGuestUsers);
     std::optional<DeviceId> probe_;
     uint32_t probe_user_ = 0;

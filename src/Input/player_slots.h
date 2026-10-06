@@ -1,7 +1,6 @@
 #pragma once
 #include <array>
 #include <cstddef>
-#include <cstdint>
 #include <vector>
 
 // Which player each input device feeds, kept apart from the SDK so it can be
@@ -19,14 +18,20 @@ struct SlotDevice {
         kSkipped,    // SDL's copy of an instrument the HID driver reads
     };
     Kind kind = Kind::kPad;
-    // connection order, for pads and skipped copies
-    uint32_t ordinal = 0;
     // 1-4, for virtual instruments
     int virtual_player = 0;
+    // for pads: the player (1-4) it had at the last assignment, 0 for none
+    int seat = 0;
 };
 
 // For each player, the indices into `devices` of the devices that feed it.
-// `reserved`: the players kept for virtual instruments, plugged in or replugging.
+// `devices` come in the SDK's order, by ordinal: a pad that connects takes the
+// lowest free one. `reserved`: the players kept for virtual instruments,
+// plugged in or replugging.
+//
+// A pad keeps its seat while it's connected and its player isn't reserved; the
+// other pads take the lowest free players in order, so a pad never moves when
+// another device comes or goes.
 std::array<std::vector<size_t>, kPlayers> AssignPlayers(
     const std::vector<SlotDevice>& devices, const std::array<bool, kPlayers>& reserved);
 
