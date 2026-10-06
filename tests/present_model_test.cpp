@@ -425,6 +425,22 @@ TEST_CASE("a native frame shown again is a repeat, one never shown a skip") {
     CHECK(log.latency_ms[2] == doctest::Approx(10.0));
 }
 
+TEST_CASE("the recent latency follows the frames shown, and outlasts a reset") {
+    PaintRecorder r;
+    CHECK(r.RecentLatencyMs() == 0);
+    r.Paint(100 * kMs, true, 0, 1, 90 * kMs);
+    CHECK(r.RecentLatencyMs() == doctest::Approx(10.0));
+    // a repeat isn't a frame shown: it doesn't count
+    r.Paint(116 * kMs, true, 0, 1, 90 * kMs);
+    CHECK(r.RecentLatencyMs() == doctest::Approx(10.0));
+    // many frames at 4 ms bring it there
+    for (uint64_t serial = 2; serial < 300; serial++)
+        r.Paint(int64_t(200 + serial) * kMs, true, 0, serial, int64_t(196 + serial) * kMs);
+    CHECK(r.RecentLatencyMs() == doctest::Approx(4.0).epsilon(0.01));
+    r.Reset();
+    CHECK(r.RecentLatencyMs() == doctest::Approx(4.0).epsilon(0.01));
+}
+
 TEST_CASE("starting over keeps the last paint, so the next is measured against it") {
     PaintRecorder r;
     r.Paint(100 * kMs, true, 0, 7, 95 * kMs);

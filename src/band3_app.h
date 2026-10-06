@@ -72,7 +72,7 @@ class DebugOverlayDialog : public rex::ui::ImGuiDialog {
     if (hidden_ || !REXCVAR_GET(debug_overlay)) return;
     UpdateGameRate();
     ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(240, 76), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(260, 92), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.5f);
     if (ImGui::Begin("Debug##overlay", nullptr, ImGuiWindowFlags_NoCollapse)) {
       // the game's frames (what the frame cap paces, and hit timing follows),
@@ -80,6 +80,10 @@ class DebugOverlayDialog : public rex::ui::ImGuiDialog {
       ImGui::Text("Game   %.1f FPS (%.2f ms)", game_fps_,
                   game_fps_ > 0 ? 1000.0 / game_fps_ : 0.0);
       ImGui::Text("Window %.1f FPS", io.Framerate);
+      // how long a frame waits to be shown, which the frame cap and
+      // native_present_pacing trade against smoothness
+      if (const double latency = band3::render::RecentPaintLatencyMs(); latency > 0)
+        ImGui::Text("Frame to window %.1f ms", latency);
     }
     ImGui::End();
   }

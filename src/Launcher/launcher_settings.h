@@ -121,6 +121,9 @@ struct Setting {
     std::string_view companion = {};
     // input_backend's xinput, GoCentral and Liveless are Windows only
     bool windows_only = false;
+    // a line of small text under the row's control: what the choice does to
+    // the game, where the row's label can't say it
+    std::string_view note = {};
 };
 
 // every setting the launcher shows, in display order: tab, then section, then row
@@ -128,6 +131,12 @@ std::span<const Setting> SettingTable();
 const Setting* FindSetting(std::span<const Setting> table, std::string_view cvar);
 // a tab's sections, in order
 std::vector<std::string_view> SectionsOf(std::span<const Setting> table, Tab tab);
+
+// The Graphics tab's Lowest latency button's frame_cap for a display of
+// `display_hz` (0 when it can't be told): the most whole refreshes' worth of
+// frames up to 240, so the window's picture still steps evenly; 240 for a
+// display that can't be told
+std::string LowestLatencyCap(double display_hz);
 
 // Values
 

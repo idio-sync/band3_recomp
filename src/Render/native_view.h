@@ -204,6 +204,11 @@ struct PresentPaintStats {
     std::string path;
 };
 PresentPaintStats GetPresentPaintStats(bool reset);
+// from the game's Present of a frame to the paint that first showed it, in
+// milliseconds, averaged over the frames the native renderer showed lately
+// (PaintRecorder::RecentLatencyMs); 0 while it isn't drawing the window's
+// picture. Any thread.
+double RecentPaintLatencyMs();
 // the size it draws the window's picture at (the picture's, or less by
 // native_max_height), false while it isn't drawing it
 bool NativePresentDrawSize(uint32_t& width, uint32_t& height);

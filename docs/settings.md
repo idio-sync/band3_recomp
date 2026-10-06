@@ -29,8 +29,8 @@ on by default) has the game draw at the window's shape with the native renderer:
 ultrawide window shows more to the sides and a 16:10 one more above and below, the HUD and
 highways at their size in the middle, with no black bars. **Aspect** (letterbox or stretch)
 is for the game's 16:9 picture: the emulated GPU's, or the native renderer's with Fill the
-window off. **Frame rate cap** is [`frame_cap`](#config-files); **VSync** shows only
-with the cap off, since the cap turns it off.
+window off. **VSync** shows only with the frame rate cap off, since the cap turns it off.
+The tab starts with the settings that trade lag ([Playing with the least lag](#playing-with-the-least-lag)).
 
 The Controllers tab starts with a list of every controller and instrument band3 sees (Xbox
 pads and instruments, PS3/Wii/PS4/PS5 instruments on their dongles, a MIDI kit, the
@@ -100,6 +100,33 @@ what you change wins over them.
 Some settings are only in the [in-game settings](#in-game-settings-f4): the Advanced tab's
 (debug options, heap sizes, the native renderer's debug options, the test harness's and
 the virtual instrument) and each tab's **More settings**.
+
+## Playing with the least lag
+
+Rock Band 3 judges each hit on the game's frames: band3 reads the instrument every 4 ms, and
+the game counts a press at its next frame. So the game's frame rate, not the display's,
+sets how finely hits are timed: to within 16.7 ms at 60 fps, 8.3 ms at 120 and 4.2 ms at
+240. The Graphics tab's **Latency** section has the settings that trade lag:
+
+- **Frame rate cap** ([`frame_cap`](#config-files)) paces the game, and can run it faster
+  than the display refreshes: the window then shows the newest frame at each refresh, so
+  a higher cap also means a fresher picture. Up to 240, the most the SDK's video mode takes.
+- **Smooth frame pacing** (`native_present_pacing`, native renderer, on by default) hands
+  each frame to the window a steady delay after the game made it, so motion steps evenly.
+  Off hands it over as soon as it's drawn: about 3 to 4 ms sooner at 120 fps, with now and
+  then an uneven step.
+- **Lowest latency** sets both: smooth frame pacing off, and the cap at the most whole
+  refreshes' worth of frames up to 240 (240 on a 60 or 120 Hz display, 144 on a 144 Hz
+  one), so the picture still steps evenly. If the game can't hold that rate, lower the cap.
+
+The debug overlay (`debug_overlay`) shows the game's frame rate (**Game**), the window's
+(**Window**, which the display's refresh rate holds back: a 60 Hz TV shows 60 whatever the
+cap), and with the native renderer **Frame to window**, how long a frame waits before a
+paint shows it. On a 60 Hz display in testing, that wait was 12.6 ms at a 120 cap with
+smooth frame pacing, 9.0 ms without, and 7 to 8 ms at 240.
+
+After changing any of these, run the game's calibration again (in its Options), so your
+hits are judged against the lag you have now.
 
 ## In-game settings (F4)
 

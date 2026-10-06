@@ -41,6 +41,13 @@ Every setting the launcher and the in-game settings (F4) show, tab by tab, as th
 
 ## Graphics
 
+### Latency
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `frame_cap`<br>Frame rate cap | `display` | text; `display` The display's refresh rate, `auto` Auto (VRR: G-Sync, FreeSync), `off` Off (the console's vblank), `60` 60 fps, `120` 120 fps, `144` 144 fps, `180` 180 fps, `240` 240 fps | What paces the game's frames. display: the display's refresh rate exactly (119.88 Hz, not 120), for fixed-refresh displays (the default). auto: a little under it (5% less, at least 4 fps), for VRR displays (G-Sync, FreeSync), keeping each frame inside their range; on a fixed-refresh display a cap under the refresh rate shows a frame twice every 1/(refresh - cap) seconds. A number of Hz (24 to 240), e.g. 117. off: the emulated console's vertical blank, paced by vsync and video_mode_refresh_rate (60 unless set). With the cap on, vsync is turned off and an unset video_mode_refresh_rate follows the cap. Without a display whose rate can be told, display and auto are off |
+| `native_present_pacing`<br>Smooth frame pacing | `true` | `true`, `false` | With the native picture shown, publish each frame to the window a steady delay after the game presented it (about the slowest recent frame's), so frames that draw quickly (with even/odd rendering, every other one) don't reach a paint together with the one before; off publishes each as soon as it's drawn, to compare |
+
 ### Display
 
 | Setting | Default | Takes | What it does |
@@ -51,7 +58,6 @@ Every setting the launcher and the in-game settings (F4) show, tab by tab, as th
 | `resolution`<br>Resolution | *(empty)* | text; *(empty)* Default, `720p` 1280 x 720, `1080p` 1920 x 1080, `1440p` 2560 x 1440, `4k` 3840 x 2160 | Common resolution preset for both guest video mode and window (for example: 720p, 1080p, 1440p, 4k, 1280x720) |
 | `present_letterbox`<br>Aspect | `true` | `true`, `false` | Enable letterboxing for non-native aspect ratios |
 | `native_fill_window`<br>Fill the window | `true` | `true`, `false` | Native renderer (renderer native or both): draw the game at the window's shape rather than 16:9 with black bars. A wider window (21:9) shows more to the sides, a taller one (16:10) more above and below, with the HUD and tracks at their size in the middle 16:9. The emulated GPU's picture stays 16:9 |
-| `frame_cap`<br>Frame rate cap | `display` | text; `display` The display's refresh rate, `auto` Auto (VRR: G-Sync, FreeSync), `off` Off (the console's vblank), `60` 60 fps, `120` 120 fps, `144` 144 fps | What paces the game's frames. display: the display's refresh rate exactly (119.88 Hz, not 120), for fixed-refresh displays (the default). auto: a little under it (5% less, at least 4 fps), for VRR displays (G-Sync, FreeSync), keeping each frame inside their range; on a fixed-refresh display a cap under the refresh rate shows a frame twice every 1/(refresh - cap) seconds. A number of Hz (24 to 240), e.g. 117. off: the emulated console's vertical blank, paced by vsync and video_mode_refresh_rate (60 unless set). With the cap on, vsync is turned off and an unset video_mode_refresh_rate follows the cap. Without a display whose rate can be told, display and auto are off |
 
 ### Renderer
 
@@ -243,7 +249,6 @@ Every setting the launcher and the in-game settings (F4) show, tab by tab, as th
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `native_present_pacing` | `true` | `true`, `false` | With the native picture shown, publish each frame to the window a steady delay after the game presented it (about the slowest recent frame's), so frames that draw quickly (with even/odd rendering, every other one) don't reach a paint together with the one before; off publishes each as soon as it's drawn, to compare |
 | `native_present_pipeline` | `false` | `true`, `false` | With the native picture shown, on the zero-copy path, record the next frame while the GPU draws the one before, waiting for the GPU only to hand a frame to the window, so a frame costs the longer of its CPU and GPU time rather than both (for 120 Hz); off waits for each frame right after sending it. Keep it off: it hangs AMD GPUs and grows video memory steadily (about 10 MB a second at 120 Hz: the SDL_gpu allocations it makes aren't released on this path) |
 | `native_present_request_paint` | `true` | `true`, `false` | With renderer native (no emulated GPU), ask the window to paint each time the native renderer has a new frame for it, as the emulated GPU's swaps did; off leaves the window to paint when something else asks, to compare |
 | `native_present_zero_copy` | `true` | `true`, `false` | With the native picture shown (renderer native or both), show the GPU's frames where they are, on the GPU (Direct3D 12, when band3's renderer shares the game's device); off reads each frame back and uploads it, the way other platforms do, to compare |

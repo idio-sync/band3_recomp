@@ -108,6 +108,9 @@ private:
     void DrawSection(Tab tab, std::string_view section);
     void DrawRow(const Setting& setting);
     void DrawRowNotes(const Setting& setting);
+    // the Graphics tab's Latency section's button: frame_cap and
+    // native_present_pacing for the least lag (LowestLatencyCap)
+    void DrawLowestLatency();
     void DrawControl(const Setting& setting);
 
     // the widgets, one per Widget kind

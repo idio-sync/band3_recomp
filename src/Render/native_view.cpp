@@ -2129,6 +2129,12 @@ PresentPaintStats GetPresentPaintStats(bool reset) {
     return out;
 }
 
+double RecentPaintLatencyMs() {
+    if (!Renderer::Get().Presenting()) return 0;
+    std::lock_guard lock(g_paints_mutex);
+    return g_paints.RecentLatencyMs();
+}
+
 bool NativePresentDrawSize(uint32_t& width, uint32_t& height) {
     return Renderer::Get().PresentDrawSize(width, height);
 }

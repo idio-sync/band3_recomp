@@ -96,6 +96,8 @@ constexpr Choice kFrameCaps[] = {
     {"60", "60 fps"},
     {"120", "120 fps"},
     {"144", "144 fps"},
+    {"180", "180 fps"},
+    {"240", "240 fps"},
 };
 
 constexpr Choice kBackgroundFps[] = {{"0", "The venue's own"}};
@@ -165,6 +167,15 @@ constexpr Setting kSettings[] = {
      .label = "Song source icons (Deluxe)", .widget = kCheckbox},
 
     // Graphics
+    // first: what rhythm players tune for least lag
+    {.cvar = "frame_cap", .tab = kGraphics, .section = "Latency", .label = "Frame rate cap",
+     .widget = kComboText, .choices = kFrameCaps,
+     .note = "Higher means less input lag: the game judges your hits once a frame. It can run "
+             "above your display's refresh rate; the screen shows what it can"},
+    {.cvar = "native_present_pacing", .tab = kGraphics, .section = "Latency",
+     .label = "Smooth frame pacing", .widget = kCheckbox, .renderers = kWithNative,
+     .note = "Off shows each frame as soon as it's drawn: about 3 to 4 ms less lag, with "
+             "now and then an uneven step in motion"},
     {.cvar = "monitor", .tab = kGraphics, .section = "Display", .label = "Monitor",
      .widget = kMonitor, .choices = kMonitors},
     {.cvar = "fullscreen", .tab = kGraphics, .section = "Display", .label = "Window mode",
@@ -177,8 +188,6 @@ constexpr Setting kSettings[] = {
      .widget = kCombo, .choices = kAspect},
     {.cvar = "native_fill_window", .tab = kGraphics, .section = "Display",
      .label = "Fill the window", .widget = kCheckbox, .renderers = kWithNative},
-    {.cvar = "frame_cap", .tab = kGraphics, .section = "Display", .label = "Frame rate cap",
-     .widget = kComboText, .choices = kFrameCaps},
     {.cvar = "renderer", .tab = kGraphics, .section = "Renderer", .label = "Renderer",
      .widget = kCombo, .choices = kRenderers},
     // retired (settings.cpp's MigrateRendererSettings clears it): not drawn,
@@ -379,6 +388,13 @@ std::vector<std::string_view> SectionsOf(std::span<const Setting> table, Tab tab
         }
     }
     return sections;
+}
+
+std::string LowestLatencyCap(double display_hz) {
+    constexpr int kMax = 240;  // frame_cap's highest (frame_pacing.h's ParseFrameCap)
+    const int hz = static_cast<int>(std::lround(display_hz));
+    if (hz <= 0 || hz >= kMax) return std::to_string(kMax);
+    return std::to_string(hz * (kMax / hz));
 }
 
 bool AsBool(std::string_view value) {
@@ -587,6 +603,11 @@ bool SettingsModel::Offered(const Choice& choice) const {
 }
 
 std::optional<std::string> SettingsModel::SectionNote(Tab tab, std::string_view section) const {
+    // the game's calibration takes up what lag is left, as long as it doesn't change
+    if (tab == Tab::kGraphics && section == "Latency") {
+        return "After changing these, run the game's calibration again (in its Options), so "
+               "your hits are judged against the lag you have now.";
+    }
     // the emulated GPU's own settings are the plugin's, there only once it runs
     if (tab == Tab::kGraphics && section == "Emulated GPU" && !env_.emulated_gpu_running &&
         ForRenderer(kWithEmulatedGpu)) {

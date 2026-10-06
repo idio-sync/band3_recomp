@@ -17,6 +17,7 @@
 #include "src/paths.h"
 #include "src/Render/renderer_mode.h"
 #include "gamepad_nav.h"
+#include "launcher_platform.h"
 #include "launcher_style.h"
 
 namespace band3::launcher {
@@ -198,6 +199,7 @@ void SettingsPage::DrawSection(Tab tab, std::string_view section) {
         for (const Setting* s : rows) DrawRow(*s);
         ImGui::EndTable();
     }
+    if (tab == Tab::kGraphics && section == "Latency") DrawLowestLatency();
     ImGui::Dummy(ImVec2(0, Px(14)));
 }
 
@@ -250,7 +252,29 @@ void SettingsPage::DrawRow(const Setting& setting) {
     ImGui::PopID();
 }
 
+void SettingsPage::DrawLowestLatency() {
+    const double hz =
+        DisplayRefreshRate(host_.native_window ? host_.native_window() : nullptr);
+    const std::string cap = LowestLatencyCap(hz);
+    if (ImGui::Button("Lowest latency")) {
+        Apply("frame_cap", cap);
+        Apply("native_present_pacing", "false");
+    }
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    FontScope font(kSmallSize);
+    const std::string what =
+        hz > 0 ? "Frame rate cap " + cap + " (a whole number of frames for each of your display's " +
+                     std::to_string(std::lround(hz)) + " Hz) and smooth frame pacing off"
+               : "Frame rate cap " + cap + " and smooth frame pacing off";
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextColored(kMuted, "%s. If the debug overlay's Game rate falls short of the cap, "
+                               "lower it.", what.c_str());
+    ImGui::PopTextWrapPos();
+}
+
 void SettingsPage::DrawRowNotes(const Setting& setting) {
+    if (!setting.note.empty()) RowNote(kMuted, Str(setting.note).c_str());
     // what the renderer chosen does
     if (setting.cvar == "renderer") RowNote(kMuted, RendererLine(model_.Value(setting.cvar)));
     if (where_ == Where::kInGame) {

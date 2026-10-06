@@ -381,8 +381,12 @@ class PaintRecorder {
         }
         if (last_serial_ && serial > last_serial_ + 1) log_.skipped += serial - last_serial_ - 1;
         log_.shown++;
-        if (presented_ns && log_.latency_ms.size() < kMaxSamples)
-            log_.latency_ms.push_back(double(now_ns - presented_ns) / 1e6);
+        if (presented_ns) {
+            const double ms = double(now_ns - presented_ns) / 1e6;
+            if (log_.latency_ms.size() < kMaxSamples) log_.latency_ms.push_back(ms);
+            // about the last 30 frames shown, for the debug overlay
+            recent_latency_ms_ = recent_latency_ms_ > 0 ? recent_latency_ms_ * 0.97 + ms * 0.03 : ms;
+        }
         last_serial_ = serial;
     }
 
@@ -397,9 +401,13 @@ class PaintRecorder {
     // the next paint's interval and frame are measured against them.
     void Reset() { log_ = PaintLog{}; }
     const PaintLog& Log() const { return log_; }
+    // the latency (PaintLog's latency_ms) of the frames shown lately, averaged
+    // and kept through Reset; 0 before any
+    double RecentLatencyMs() const { return recent_latency_ms_; }
 
  private:
     PaintLog log_;
+    double recent_latency_ms_ = 0;
     int64_t last_ns_ = 0;
     int source_ = 0;
     uint64_t last_serial_ = 0;

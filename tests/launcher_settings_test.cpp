@@ -804,7 +804,8 @@ const std::set<std::string> kEveryRenderer = {
     "monitor", "fullscreen", "resolution", "present_letterbox", "frame_cap", "renderer",
     "rnd_sync", "background_fps", "disable_hair_shader", "disable_approximate_lights"};
 const std::set<std::string> kNativeRows = {"native_fill_window", "native_view_msaa",
-                                           "native_anisotropic", "native_max_height"};
+                                           "native_anisotropic", "native_max_height",
+                                           "native_present_pacing"};
 const std::set<std::string> kEmulatedRows = {"resolution_scale", "swap_post_effect",
                                              "anisotropic_override", "vsync",
                                              "compress_character_textures"};
@@ -825,8 +826,34 @@ TEST_CASE("the Graphics tab shows each group only for the renderers it applies t
           Union({kEveryRenderer, kNativeRows, kEmulatedRows, {"emulated_gpu_while_native"}}));
     // the groups have their own sections
     const auto sections = SectionsOf(SettingTable(), Tab::kGraphics);
-    CHECK(sections == std::vector<std::string_view>{"Display", "Renderer", "Native renderer",
-                                                    "Emulated GPU", "Game"});
+    CHECK(sections == std::vector<std::string_view>{"Latency", "Display", "Renderer",
+                                                    "Native renderer", "Emulated GPU", "Game"});
+}
+
+TEST_CASE("the Latency section says what its rows do and to calibrate again") {
+    for (const char* cvar : {"frame_cap", "native_present_pacing"}) {
+        const Setting* row = FindSetting(SettingTable(), cvar);
+        REQUIRE(row);
+        CHECK(row->section == "Latency");
+        CHECK_FALSE(row->note.empty());
+    }
+    const auto note = GraphicsTab("native").model->SectionNote(Tab::kGraphics, "Latency");
+    REQUIRE(note);
+    CHECK(note->find("calibration") != std::string::npos);
+}
+
+TEST_CASE("the Lowest latency cap is the most whole refreshes' worth up to 240") {
+    CHECK(LowestLatencyCap(60) == "240");
+    CHECK(LowestLatencyCap(59.94) == "240");
+    CHECK(LowestLatencyCap(120) == "240");
+    CHECK(LowestLatencyCap(144) == "144");
+    CHECK(LowestLatencyCap(165) == "165");
+    CHECK(LowestLatencyCap(75) == "225");
+    CHECK(LowestLatencyCap(100) == "200");
+    // the cap's top, for a display at or past it, or one that can't be told
+    CHECK(LowestLatencyCap(240) == "240");
+    CHECK(LowestLatencyCap(360) == "240");
+    CHECK(LowestLatencyCap(0) == "240");
 }
 
 TEST_CASE("the emulated GPU's own settings, chosen in a run without it, wait for the restart") {
