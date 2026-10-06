@@ -1,8 +1,15 @@
 #include "launcher_cvars.h"
 #include <rex/cvar.h>
+#include <fstream>
+#include <iterator>
+#include "config_file.h"
 #include "src/config.h"
+#include "src/Hooks/frame_pacing.h"
+#include "src/Render/renderer_switch.h"
 #include "src/Render/sync_gpu/native_only.h"
+#include "src/settings.h"
 #include "src/steam_deck.h"
+#include "src/Test/test_server.h"
 
 namespace band3::launcher {
 
@@ -23,6 +30,33 @@ std::optional<ValueType> TypeOf(rex::cvar::FlagType type) {
     return std::nullopt;
 }
 
+Lifecycle LifecycleFrom(rex::cvar::Lifecycle lifecycle) {
+    switch (lifecycle) {
+    case rex::cvar::Lifecycle::kHotReload: return Lifecycle::kHotReload;
+    case rex::cvar::Lifecycle::kRequiresRestart: return Lifecycle::kRequiresRestart;
+    case rex::cvar::Lifecycle::kInitOnly: return Lifecycle::kInitOnly;
+    }
+    return Lifecycle::kHotReload;
+}
+
+// band3.toml has `key = true`
+bool ConfigSaysTrue(const std::filesystem::path& file, std::string_view key) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return false;
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const ParsedConfig parsed = ParseConfig(text);
+    for (const ConfigLine& line : parsed.lines) {
+        if (line.key != key) continue;
+        const size_t equals = line.text.find('=');
+        if (equals == std::string::npos) return false;
+        std::string_view value = std::string_view(line.text).substr(equals + 1);
+        while (!value.empty() && value.front() == ' ') value.remove_prefix(1);
+        while (!value.empty() && value.back() == ' ') value.remove_suffix(1);
+        return value == "true";
+    }
+    return false;
+}
+
 Lock LockFrom(rex::cvar::Source source) {
     switch (source) {
     case rex::cvar::Source::kCommandLine: return Lock::kCommandLine;
@@ -34,6 +68,11 @@ Lock LockFrom(rex::cvar::Source source) {
 }
 
 std::string RexCvarStore::Get(std::string_view name) const {
+    if (name == "vsync") {
+        if (const std::optional<bool> vsync = pacing::VsyncBeforeCap()) {
+            return *vsync ? "true" : "false";
+        }
+    }
     return rex::cvar::GetFlagByName(name);
 }
 
@@ -41,13 +80,31 @@ bool RexCvarStore::Set(std::string_view name, std::string_view value) {
     return rex::cvar::SetFlagByName(name, value);
 }
 
+std::vector<RegistryCvar> ReadRegistry() {
+    std::vector<RegistryCvar> out;
+    for (const rex::cvar::FlagEntry& entry : rex::cvar::GetRegistry()) {
+        const auto type = TypeOf(entry.type);
+        if (!type || !entry.category.starts_with("Band3/")) continue;
+        out.push_back({.name = entry.name,
+                       .category = entry.category,
+                       .type = *type,
+                       .min = entry.constraints.min,
+                       .max = entry.constraints.max,
+                       .allowed = entry.constraints.allowed_values});
+    }
+    return out;
+}
+
 Environment ReadEnvironment(std::span<const Setting> table, const PathDefaults& paths,
-                            const std::filesystem::path& anchor) {
+                            const std::filesystem::path& anchor, Where where,
+                            const std::filesystem::path& config_path) {
     Environment env;
     env.steam_deck = steam_deck::IsSteamDeck();
     env.anchor = anchor;
+    env.in_game = where == Where::kInGame;
     // the GPU was chosen before the launcher showed (Band3App::OnPreSetup)
     env.emulated_gpu_running = !render::sync_gpu::NativeOnly();
+    env.native_presentable = render::CurrentRenderer().presentable;
     for (const auto& setting : table) {
         CvarFacts facts;
         const auto* info = rex::cvar::GetFlagInfo(setting.cvar);
@@ -65,6 +122,11 @@ Environment ReadEnvironment(std::span<const Setting> table, const PathDefaults& 
             const rex::cvar::Source source = rex::cvar::GetFlagSource(setting.cvar);
             facts.lock = LockFrom(source);
             facts.from_config = source == rex::cvar::Source::kConfig;
+            facts.lifecycle = LifecycleFrom(info->lifecycle);
+            if (env.in_game) {
+                facts.read_once = settings::ReadAtStartupOnly(setting.cvar);
+                facts.started_with = settings::StartupValue(setting.cvar);
+            }
         }
         env.cvars[std::string(setting.cvar)] = std::move(facts);
     }
@@ -76,6 +138,11 @@ Environment ReadEnvironment(std::span<const Setting> table, const PathDefaults& 
     };
     // band3's shorter audio queue, unless something else set one
     if (auto* f = facts_of("audio_maxqframes")) f->startup_default = "3";
+    // the test harness plays the virtual instrument as player 1 (test::Init)
+    if (test::Enabled()) {
+        if (auto* f = facts_of("virtual_instrument")) f->startup_forced = "true";
+        if (auto* f = facts_of("virtual_instrument_player")) f->startup_forced = "1";
+    }
 #ifndef _WIN32
     // xinput is Windows only
     if (auto* f = facts_of("input_backend")) f->startup_forced = "sdl";
@@ -83,6 +150,11 @@ Environment ReadEnvironment(std::span<const Setting> table, const PathDefaults& 
     // the folder settings fall back to the folders the game would start with
     if (auto* f = facts_of("game_data_root")) f->path_default = paths.game_data_root;
     if (auto* f = facts_of("user_data_root")) f->path_default = paths.user_data_root;
+    // the launcher's save sets show_launcher at runtime, so in game only the
+    // file says whether the box was ticked
+    if (auto* f = facts_of("show_launcher"); f && env.in_game && f->lock == Lock::kNone) {
+        f->from_config = ConfigSaysTrue(config_path, "show_launcher");
+    }
     return env;
 }
 

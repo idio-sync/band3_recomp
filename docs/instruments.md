@@ -18,7 +18,7 @@ below.
 
 ## PlayStation and Wii instruments (experimental)
 
-Turn on `hid_instruments` (F4, Band3 → Game, then restart) to play Rock Band guitars and
+Turn on `hid_instruments` (the Controllers tab, on the launcher or in F4, then restart) to play Rock Band guitars and
 drum kits through their USB dongles:
 
 - PS3 and Wii guitars and drum kits, and a PS3 or Wii MIDI Pro Adapter in drum mode
@@ -40,7 +40,7 @@ documentation, cross-checked against
 
 ## MIDI drum kits
 
-Turn on `midi_drums` (F4, Band3 → MIDI drums, then restart) to play an electronic drum kit
+Turn on `midi_drums` (the Controllers tab's MIDI drums, then restart) to play an electronic drum kit
 over MIDI as a Rock Band pro drum kit, without a MIDI Pro Adapter. It uses the first MIDI
 input unless `midi_drums_device` names one (or part of one's name), and picks up a kit
 plugged in after the game starts.
@@ -57,7 +57,7 @@ floor tom lets go). Turn these off with `midi_drums_combos`.
 
 ## Microphones (experimental)
 
-Turn on `usb_mics` (F4, Band3 → Microphones, then restart) to sing through microphones on
+Turn on `usb_mics` (the Audio tab, on the launcher or in F4, then restart) to sing through microphones on
 this PC as Xbox 360 USB microphones. The first mic slot uses the system's default
 recording device unless `usb_mic_devices` names microphones (or parts of their names),
 comma separated, one per slot, for harmonies. Microphones plugged in after the game starts
@@ -89,7 +89,7 @@ On top of calibration, RB3 builds in extra lag for each controller type, from th
 hardware's own delay (45 ms for an Xbox guitar, 36 ms for Xbox drums). band3's PlayStation,
 Wii and MIDI instruments reach the game as Xbox ones, so they get those numbers too. The
 Instrument Lab's **Lag** tab shows, per player, the type the game sees and the lag it
-uses. `joypad_lag` (Band3 → Game, then restart) changes it per type, as `type=ms`, comma
+uses. `joypad_lag` (the Controllers tab's Input lag, then restart) changes it per type, as `type=ms`, comma
 separated: `5=20,8=30` gives Xbox guitars 20 ms and Xbox drums 30 ms. `type=ms/video/audio`
 also sets the lag the calibration tests assume, and a blank part keeps the game's number
 (`8=/30/`). It's per type, so a real Xbox instrument of the same type changes too.

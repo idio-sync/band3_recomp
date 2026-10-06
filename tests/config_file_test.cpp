@@ -249,6 +249,8 @@ TEST_CASE("comments the rewrite would drop are found, and nothing else") {
     CHECK_FALSE(HasOwnComments("lang = \"eng\"\n"));
     CHECK_FALSE(HasOwnComments(std::string(kConfigHeader) + "\nlang = \"eng\"\n"));
     CHECK_FALSE(HasOwnComments(std::string(kSdkConfigHeader) + "\r\nlang = \"eng\"\r\n"));
+    // the header earlier builds wrote, so a file they saved isn't backed up again
+    CHECK_FALSE(HasOwnComments(std::string(kOldConfigHeader) + "\nlang = \"eng\"\n"));
     CHECK(HasOwnComments("# mine\nlang = \"eng\"\n"));
     CHECK(HasOwnComments("  # indented\n"));
     CHECK(HasOwnComments("lang = \"eng\" # after a value\n"));

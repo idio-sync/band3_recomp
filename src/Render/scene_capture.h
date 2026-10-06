@@ -741,7 +741,7 @@ PassRecordingStats GetPassRecordingStats();
 // What capture costs the game's render thread, since the game started: each
 // kind of hook's time past its early-out (taking g_state_mutex aside), always
 // counted while the hooks work (capture on, or texture passes recorded); and
-// with native_view_capture_profile (Band3/Debug, off by default) the steps
+// with native_view_capture_profile (Band3/Advanced/Native renderer, off by default) the steps
 // inside them, each the time since the step before it ended, so they add up
 // to the hooks' time (rest: what no step names), at a clock read each. The
 // harness's `native_view stats` reports it per game frame (its `capture`).

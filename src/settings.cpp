@@ -3,7 +3,10 @@
 #include "Hooks/frame_pacing.h"
 #include "Render/renderer_mode.h"
 #include <rex/logging.h>
+#include <algorithm>
 #include <atomic>
+#include <iterator>
+#include <map>
 #include <mutex>
 #include <string_view>
 
@@ -28,18 +31,6 @@ static int64_t EffectiveHeap(int64_t size, int64_t default_size) {
 
 // Band3/Game
 
-REXCVAR_DEFINE_INT32(controller_type, 7, "Band3/Game",
-    "Instrument gamepads and the keyboard play as: -1 = don't override, 1 = vocals, "
-    "7 = guitar, 8 = drums. Instruments that report their own type (Xbox 360 instruments "
-    "with input_backend = xinput, the virtual instrument) keep it")
-    .range(-1, 255)
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_INT32(rnd_sync, -1, "Band3/Game",
-    "Vertical sync: -1 = don't override, 0 = off, 1 = on")
-    .range(-1, 1)
-    .lifecycle(Lifecycle::kRequiresRestart);
-
 REXCVAR_DEFINE_BOOL(fast_start, false, "Band3/Game",
     "Skip the splash screens once the game has finished initializing")
     .lifecycle(Lifecycle::kRequiresRestart);
@@ -62,48 +53,9 @@ REXCVAR_DEFINE_STRING(username, "", "Band3/Game",
     "Override the username (up to 15 characters): the profile's gamertag wherever the game "
     "asks for it, online included. Empty keeps the profile's");
 
-REXCVAR_DEFINE_INT32(main_heap_size, 0, "Band3/Game",
-    "Main heap size in bytes, 0 = mem.dta's 105000000. Main and char together must stay "
-    "under 0x40000000")
-    .range(0, kMaxHeapTotal)
-    .validator([](std::string_view v) {
-        int64_t size;
-        return ParseHeapSize(v, size) &&
-               EffectiveHeap(size, kDefaultMainHeap) +
-                   EffectiveHeap(REXCVAR_GET(char_heap_size), kDefaultCharHeap) <= kMaxHeapTotal;
-    })
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_INT32(char_heap_size, 0, "Band3/Game",
-    "Character heap size in bytes, 0 = mem.dta's 32000000. Main and char together must "
-    "stay under 0x40000000")
-    .range(0, kMaxHeapTotal)
-    .validator([](std::string_view v) {
-        int64_t size;
-        return ParseHeapSize(v, size) &&
-               EffectiveHeap(REXCVAR_GET(main_heap_size), kDefaultMainHeap) +
-                   EffectiveHeap(size, kDefaultCharHeap) <= kMaxHeapTotal;
-    })
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_BOOL(hid_instruments, false, "Band3/Game",
-    "Experimental: play PS3, Wii, PS4 and PS5 Rock Band guitars and drum kits (and the "
-    "MIDI Pro Adapter in drum mode) through their USB dongles, as Xbox 360 instruments")
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_BOOL(menu_shortcut, true, "Band3/Game",
-    "Open menus from a controller: hold both stick clicks for a second for this settings "
-    "menu, or both stick clicks and the left bumper for the Instrument Lab");
-
 REXCVAR_DEFINE_BOOL(steam_deck_defaults, true, "Band3/Game",
     "On a Steam Deck, start fullscreen and letterboxed at the console's 60 Hz with vsync on "
     "and the FPS counter off, unless band3.toml or the command line set those")
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_STRING(joypad_lag, "", "Band3/Game",
-    "Change the extra lag the game builds in per controller type, as type=ms, comma "
-    "separated (e.g. 5=20,8=30). type=ms/video/audio also sets the calibration tests' lag; "
-    "a blank part keeps the game's. The Instrument Lab's Lag tab shows each player's type")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(autosave, true, "Band3/Game",
@@ -137,58 +89,17 @@ REXCVAR_DEFINE_BOOL(game_origin_icons, true, "Band3/Game",
     "Show an icon in the song list for the game or pack each song came from "
     "(RB3Enhanced's GameOriginIcons). Needs Rock Band 3 Deluxe's icons and a song list "
     "with a game_origin_icon slot. Applies the next time the song list opens");
+
 REXCVAR_DEFINE_STRING(content_folders, "songs", "Band3/Game",
     "Folders RB3 reads DLC and custom songs from, without installing them, "
     "separated by '|'. Subfolders count too. A relative folder is relative to "
     "band3_config.ini's folder (or band3's own folder if there is no ini)")
     .lifecycle(Lifecycle::kRequiresRestart);
 
-// Band3/MIDI drums
-
-REXCVAR_DEFINE_BOOL(midi_drums, false, "Band3/MIDI drums",
-    "Play a MIDI drum kit as a Rock Band pro drum kit, without a MIDI Pro Adapter")
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_STRING(midi_drums_device, "", "Band3/MIDI drums",
-    "MIDI input port to play, or part of its name. Empty uses the first one")
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_STRING(midi_drums_notes, "", "Band3/MIDI drums",
-    "Note overrides as note=Part, comma separated (e.g. 44=Kick,40=Snare), in RPCS3's "
-    "format. Parts: Kick, HihatPedal, Snare, SnareRim, HiTom, LowTom, FloorTom, Hihat, "
-    "Ride, Crash, None")
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_INT32(midi_drums_pulse_ms, 30, "Band3/MIDI drums",
-    "How long each hit is held, in milliseconds")
-    .range(1, 100)
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_INT32(midi_drums_min_velocity, 10, "Band3/MIDI drums",
-    "Quieter hits than this (1-127) are ignored")
-    .range(1, 127)
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_BOOL(midi_drums_combos, true, "Band3/MIDI drums",
-    "Menu buttons from the kit: hi-hat pedal three times, then snare for Start, rim for "
-    "Select, or kick to hold the kick (RB3's song category menu)")
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-// Band3/Microphones
-
-REXCVAR_DEFINE_BOOL(usb_mics, false, "Band3/Microphones",
-    "Experimental: sing through microphones on this PC, as Xbox 360 USB microphones")
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_STRING(usb_mic_devices, "", "Band3/Microphones",
-    "Microphones to sing through, or part of their names, comma separated, one per mic "
-    "slot (up to 4). Empty uses the system's default recording device")
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_INT32(usb_mic_test_tone, 0, "Band3/Microphones",
-    "Sing a steady tone at this pitch in Hz into the first mic slot instead of using "
-    "microphones, to check that the game hears it. 0 = off")
-    .range(0, 2000)
+REXCVAR_DEFINE_BOOL(show_launcher, true, "Band3/Game",
+    "Show the launcher, band3's setup screen, before the game starts. Off, band3 starts "
+    "the game straight away; hold Shift as it starts, or start it with --launcher, to see "
+    "the launcher anyway")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 // Band3/Graphics
@@ -207,24 +118,22 @@ REXCVAR_DEFINE_STRING(renderer, band3::settings::kDefaultRenderer, "Band3/Graphi
     "there only in a run with it) to emulated and both")
     .allowed({"native", "emulated", "both"});
 
+REXCVAR_DEFINE_INT32(rnd_sync, -1, "Band3/Graphics",
+    "Vertical sync: -1 = don't override, 0 = off, 1 = on")
+    .range(-1, 1)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 REXCVAR_DEFINE_BOOL(disable_approximate_lights, true, "Band3/Graphics",
     "Disable approximate lighting; works around a graphical bug in current ReXGlue");
 
 REXCVAR_DEFINE_BOOL(disable_hair_shader, false, "Band3/Graphics",
     "Don't use the hair shader variation on materials. Applies to materials loaded afterwards");
 
-REXCVAR_DEFINE_BOOL(fullbright, false, "Band3/Graphics",
-    "Force materials to not use an environ, making most things fullbright. "
-    "Applies to materials loaded afterwards");
-
 REXCVAR_DEFINE_BOOL(compress_character_textures, false, "Band3/Graphics",
     "Compress character textures. Needs the emulated GPU (renderer emulated or both): it's "
     "ignored with renderer native, where nothing composes the outfits to read back and they'd "
     "show black. Needs readback resolve, or the textures appear bugged. Applies to "
     "characters loaded afterwards");
-
-REXCVAR_DEFINE_BOOL(disable_even_odd_rendering, false, "Band3/Graphics",
-    "Process every render command each frame instead of alternating even/odd frames");
 
 REXCVAR_DEFINE_INT32(background_fps, 0, "Band3/Graphics",
     "The venue's frame rate under even/odd rendering: 0 = the venue's own (30 in most), "
@@ -243,6 +152,9 @@ REXCVAR_DEFINE_STRING(frame_cap, "display", "Band3/Graphics",
     "With the cap on, vsync is turned off and an unset refresh_rate follows the cap. Without "
     "a display whose rate can be told, display and auto are off")
     .validator([](std::string_view v) { return band3::pacing::ParseFrameCap(v).has_value(); });
+
+REXCVAR_DEFINE_BOOL(debug_overlay, true, "Band3/Graphics",
+    "Show band3's FPS counter");
 
 // Band3/Graphics/Native: the native renderer, with renderer native or both
 
@@ -283,82 +195,71 @@ REXCVAR_DEFINE_STRING(emulated_gpu_while_native, "skip_draws", "Band3/Graphics/E
     "black outfits, portraits and other stale pictures until RB3 draws them again")
     .allowed({"full", "skip_draws", "swap_only"});
 
-// Retired: renderer took its place. Still read, once, so an old band3.toml or
-// command line keeps working (Band3App::OnPostInitLogging,
-// MigrateRendererSettings below); cleared once read, so neither save writes it
-// again (the launcher removes its key, F4 writes only what isn't the default).
-REXCVAR_DEFINE_STRING(emulated_gpu, "", "Band3/Debug",
-    "Retired: set renderer instead. Read at startup for one more release: off is renderer "
-    "native, on with renderer native is renderer both, on with renderer emulated stays "
-    "emulated (a renderer set on the command line, or already both, wins). Then cleared")
-    .allowed({"", "on", "off"})
+// Band3/Audio
+
+REXCVAR_DEFINE_BOOL(usb_mics, false, "Band3/Audio",
+    "Experimental: sing through microphones on this PC, as Xbox 360 USB microphones")
     .lifecycle(Lifecycle::kRequiresRestart);
 
-// Band3/Integrations
-
-REXCVAR_DEFINE_BOOL(events_enabled, false, "Band3/Integrations",
-    "Send RB3Enhanced-compatible events over UDP: Stage Kit lighting, song, band, venue "
-    "and screen info, and RB3 Deluxe's rb3e_send_event_string data");
-
-REXCVAR_DEFINE_STRING(events_target, "255.255.255.255", "Band3/Integrations",
-    "Where events are sent. 255.255.255.255 broadcasts to the local network; if receivers "
-    "see nothing, use your subnet's broadcast address or one device's IP")
+REXCVAR_DEFINE_STRING(usb_mic_devices, "", "Band3/Audio",
+    "Microphones to sing through, or part of their names, comma separated, one per mic "
+    "slot (up to 4). Empty uses the system's default recording device")
     .lifecycle(Lifecycle::kRequiresRestart);
 
-REXCVAR_DEFINE_INT32(events_port, 21070, "Band3/Integrations",
-    "UDP port events are sent to")
-    .range(1, 65535)
+// Band3/Controllers
+
+REXCVAR_DEFINE_INT32(controller_type, 7, "Band3/Controllers",
+    "Instrument gamepads and the keyboard play as: -1 = don't override, 1 = vocals, "
+    "7 = guitar, 8 = drums. Instruments that report their own type (Xbox 360 instruments "
+    "with input_backend = xinput, the virtual instrument) keep it")
+    .range(-1, 255)
     .lifecycle(Lifecycle::kRequiresRestart);
 
-REXCVAR_DEFINE_BOOL(discord_enabled, false, "Band3/Integrations",
-    "Show the current song as Discord Rich Presence (needs the Discord desktop app)")
+REXCVAR_DEFINE_BOOL(hid_instruments, false, "Band3/Controllers",
+    "Experimental: play PS3, Wii, PS4 and PS5 Rock Band guitars and drum kits (and the "
+    "MIDI Pro Adapter in drum mode) through their USB dongles, as Xbox 360 instruments")
     .lifecycle(Lifecycle::kRequiresRestart);
 
-REXCVAR_DEFINE_BOOL(http_enabled, false, "Band3/Integrations",
-    "Serve RB3Enhanced's web page and API to this PC and the local network: browse the "
-    "song library from a phone and select songs in the Music Library")
+REXCVAR_DEFINE_BOOL(menu_shortcut, true, "Band3/Controllers",
+    "Open menus from a controller: hold both stick clicks for a second for this settings "
+    "menu, or both stick clicks and the left bumper for the Instrument Lab");
+
+REXCVAR_DEFINE_STRING(joypad_lag, "", "Band3/Controllers",
+    "Change the extra lag the game builds in per controller type, as type=ms, comma "
+    "separated (e.g. 5=20,8=30). type=ms/video/audio also sets the calibration tests' lag; "
+    "a blank part keeps the game's. The Instrument Lab's Lag tab shows each player's type")
     .lifecycle(Lifecycle::kRequiresRestart);
 
-REXCVAR_DEFINE_INT32(http_port, 21070, "Band3/Integrations",
-    "TCP port the web server listens on (RB3Enhanced's is 21070)")
-    .range(1, 65535)
+// Band3/Controllers/MIDI drums
+
+REXCVAR_DEFINE_BOOL(midi_drums, false, "Band3/Controllers/MIDI drums",
+    "Play a MIDI drum kit as a Rock Band pro drum kit, without a MIDI Pro Adapter")
     .lifecycle(Lifecycle::kRequiresRestart);
 
-REXCVAR_DEFINE_STRING(http_address, "0.0.0.0", "Band3/Integrations",
-    "Address the web server listens on: 0.0.0.0 for the local network, 127.0.0.1 for this "
-    "PC only")
+REXCVAR_DEFINE_STRING(midi_drums_device, "", "Band3/Controllers/MIDI drums",
+    "MIDI input port to play, or part of its name. Empty uses the first one")
     .lifecycle(Lifecycle::kRequiresRestart);
 
-REXCVAR_DEFINE_BOOL(http_allow_cors, false, "Band3/Integrations",
-    "Let web pages from other sites use the web server's API (Access-Control-Allow-Origin)");
-
-REXCVAR_DEFINE_BOOL(http_allow_scripts, false, "Band3/Integrations",
-    "Let the web server's /execute run DTA scripts sent to it. Anyone on the local network "
-    "could then run any script in the game");
-
-REXCVAR_DEFINE_BOOL(http_rhythmverse, true, "Band3/Integrations",
-    "Let the web page search RhythmVerse (rhythmverse.co) for custom songs and download the "
-    "ones it hosts into a rhythmverse folder in the first of content_folders. Downloaded "
-    "songs join the game without a restart, as songs bought from the Xbox store did");
-
-REXCVAR_DEFINE_BOOL(rb3e_mode, true, "Band3/Integrations",
-    "Tell the game's scripts RB3Enhanced is running (they see RB3E and RB3E_HAS_VERSION "
-    "defined), so Rock Band 3 Deluxe turns on its RB3E features: its version line, party "
-    "mode, song lookups, and clearing the song cache and restarting after an update")
+REXCVAR_DEFINE_STRING(midi_drums_notes, "", "Band3/Controllers/MIDI drums",
+    "Note overrides as note=Part, comma separated (e.g. 44=Kick,40=Snare), in RPCS3's "
+    "format. Parts: Kick, HihatPedal, Snare, SnareRim, HiTom, LowTom, FloorTom, Hihat, "
+    "Ride, Crash, None")
     .lifecycle(Lifecycle::kRequiresRestart);
 
-// Band3/Launcher
-
-REXCVAR_DEFINE_BOOL(show_launcher, true, "Band3/Launcher",
-    "Show the launcher, band3's setup screen, before the game starts. Off, band3 starts "
-    "the game straight away; hold Shift as it starts, or start it with --launcher, to see "
-    "the launcher anyway")
+REXCVAR_DEFINE_INT32(midi_drums_pulse_ms, 30, "Band3/Controllers/MIDI drums",
+    "How long each hit is held, in milliseconds")
+    .range(1, 100)
     .lifecycle(Lifecycle::kRequiresRestart);
 
-REXCVAR_DEFINE_BOOL(launcher, false, "Band3/Launcher",
-    "Show the launcher at this start whatever show_launcher says. Meant for the command "
-    "line (--launcher), e.g. in Steam's launch options, or the environment; a value in "
-    "band3.toml is ignored, and it's cleared once read, so \"Save to config\" can't keep it");
+REXCVAR_DEFINE_INT32(midi_drums_min_velocity, 10, "Band3/Controllers/MIDI drums",
+    "Quieter hits than this (1-127) are ignored")
+    .range(1, 127)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(midi_drums_combos, true, "Band3/Controllers/MIDI drums",
+    "Menu buttons from the kit: hi-hat pedal three times, then snare for Start, rim for "
+    "Select, or kick to hold the kick (RB3's song category menu)")
+    .lifecycle(Lifecycle::kRequiresRestart);
 
 // Band3/Online
 
@@ -409,184 +310,306 @@ REXCVAR_DEFINE_STRING(liveless_rooms_server, "liveless-testing.ipg.pw", "Band3/O
     "19532 by default). Logging in registers your username there")
     .lifecycle(Lifecycle::kRequiresRestart);
 
-// Band3/Debug
+REXCVAR_DEFINE_BOOL(events_enabled, false, "Band3/Online",
+    "Send RB3Enhanced-compatible events over UDP: Stage Kit lighting, song, band, venue "
+    "and screen info, and RB3 Deluxe's rb3e_send_event_string data");
 
-REXCVAR_DEFINE_BOOL(debug_overlay, true, "Band3/Debug",
-    "Show band3's FPS counter");
+REXCVAR_DEFINE_STRING(events_target, "255.255.255.255", "Band3/Online",
+    "Where events are sent. 255.255.255.255 broadcasts to the local network; if receivers "
+    "see nothing, use your subnet's broadcast address or one device's IP")
+    .lifecycle(Lifecycle::kRequiresRestart);
 
-REXCVAR_DEFINE_BOOL(native_math, true, "Band3/Debug",
+REXCVAR_DEFINE_INT32(events_port, 21070, "Band3/Online",
+    "UDP port events are sent to")
+    .range(1, 65535)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(discord_enabled, false, "Band3/Online",
+    "Show the current song as Discord Rich Presence (needs the Discord desktop app)")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(http_enabled, false, "Band3/Online",
+    "Serve RB3Enhanced's web page and API to this PC and the local network: browse the "
+    "song library from a phone and select songs in the Music Library")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_INT32(http_port, 21070, "Band3/Online",
+    "TCP port the web server listens on (RB3Enhanced's is 21070)")
+    .range(1, 65535)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(http_address, "0.0.0.0", "Band3/Online",
+    "Address the web server listens on: 0.0.0.0 for the local network, 127.0.0.1 for this "
+    "PC only")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(http_allow_cors, false, "Band3/Online",
+    "Let web pages from other sites use the web server's API (Access-Control-Allow-Origin)");
+
+REXCVAR_DEFINE_BOOL(http_allow_scripts, false, "Band3/Online",
+    "Let the web server's /execute run DTA scripts sent to it. Anyone on the local network "
+    "could then run any script in the game");
+
+REXCVAR_DEFINE_BOOL(http_rhythmverse, true, "Band3/Online",
+    "Let the web page search RhythmVerse (rhythmverse.co) for custom songs and download the "
+    "ones it hosts into a rhythmverse folder in the first of content_folders. Downloaded "
+    "songs join the game without a restart, as songs bought from the Xbox store did");
+
+REXCVAR_DEFINE_BOOL(rb3e_mode, true, "Band3/Online",
+    "Tell the game's scripts RB3Enhanced is running (they see RB3E and RB3E_HAS_VERSION "
+    "defined), so Rock Band 3 Deluxe turns on its RB3E features: its version line, party "
+    "mode, song lookups, and clearing the song cache and restarting after an update")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+// Band3/Advanced: the in-game settings' Advanced tab, by subcategory
+
+// Band3/Advanced/Memory
+
+REXCVAR_DEFINE_INT32(main_heap_size, 0, "Band3/Advanced/Memory",
+    "Main heap size in bytes, 0 = mem.dta's 105000000. Main and char together must stay "
+    "under 0x40000000")
+    .range(0, kMaxHeapTotal)
+    .validator([](std::string_view v) {
+        int64_t size;
+        return ParseHeapSize(v, size) &&
+               EffectiveHeap(size, kDefaultMainHeap) +
+                   EffectiveHeap(REXCVAR_GET(char_heap_size), kDefaultCharHeap) <= kMaxHeapTotal;
+    })
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_INT32(char_heap_size, 0, "Band3/Advanced/Memory",
+    "Character heap size in bytes, 0 = mem.dta's 32000000. Main and char together must "
+    "stay under 0x40000000")
+    .range(0, kMaxHeapTotal)
+    .validator([](std::string_view v) {
+        int64_t size;
+        return ParseHeapSize(v, size) &&
+               EffectiveHeap(REXCVAR_GET(main_heap_size), kDefaultMainHeap) +
+                   EffectiveHeap(size, kDefaultCharHeap) <= kMaxHeapTotal;
+    })
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+// Band3/Advanced/Game code
+
+REXCVAR_DEFINE_BOOL(native_math, true, "Band3/Advanced/Game code",
     "Use native C++ replacements for the game's math functions (sin, cos, pow, "
     "vector/matrix ops)");
 
-REXCVAR_DEFINE_BOOL(native_camera_shake, true, "Band3/Debug",
+REXCVAR_DEFINE_BOOL(native_camera_shake, true, "Band3/Advanced/Game code",
     "Use the frame-rate independent camera shake replacement")
     .lifecycle(Lifecycle::kRequiresRestart);
 
-REXCVAR_DEFINE_BOOL(log_shake_timing, false, "Band3/Debug",
-    "Log the game's frame time against the wall clock once a second while the camera "
-    "shake runs")
-    .debug_only();
+// Band3/Advanced/Graphics
 
-REXCVAR_DEFINE_BOOL(log_net_calls, false, "Band3/Debug",
-    "Log each of the game's network calls (sockets, XNet) and what it returned");
+REXCVAR_DEFINE_BOOL(fullbright, false, "Band3/Advanced/Graphics",
+    "Force materials to not use an environ, making most things fullbright. "
+    "Applies to materials loaded afterwards");
 
-REXCVAR_DEFINE_STRING(liveless_gateway, "", "Band3/Debug",
-    "Where liveless_port_mapping sends PCP and NAT-PMP (host[:port], port 5351 by default) "
-    "instead of the router, for testing against a stand-in. Empty asks the default gateway; "
-    "under the test harness, empty skips PCP and NAT-PMP")
-    .lifecycle(Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_BOOL(disable_even_odd_rendering, false, "Band3/Advanced/Graphics",
+    "Process every render command each frame instead of alternating even/odd frames");
 
-REXCVAR_DEFINE_STRING(liveless_upnp_url, "", "Band3/Debug",
-    "The UPnP router description liveless_port_mapping uses (http://host:port/desc.xml) "
-    "instead of looking for one on the network, for testing against a stand-in. Under the "
-    "test harness, empty skips UPnP")
-    .lifecycle(Lifecycle::kRequiresRestart);
+// Band3/Advanced/Native renderer
 
-REXCVAR_DEFINE_BOOL(autoplay, false, "Band3/Debug",
-    "The game plays every part itself, from the next song start: for repeatable profiling "
-    "runs and for checking a song without playing it");
-
-REXCVAR_DEFINE_BOOL(virtual_instrument, false, "Band3/Debug",
-    "Connect a virtual Xbox 360 instrument, played from the Instrument Lab (F6)");
-
-REXCVAR_DEFINE_STRING(virtual_instrument_type, "guitar", "Band3/Debug",
-    "Which instrument the virtual instrument is: guitar, drums, keys, pro_guitar_mustang "
-    "or pro_guitar_squier. Changing it unplugs the instrument for a moment")
-    .allowed({"guitar", "drums", "keys", "pro_guitar_mustang", "pro_guitar_squier"});
-
-REXCVAR_DEFINE_INT32(virtual_instrument_player, 2, "Band3/Debug",
-    "Player slot the virtual instrument connects as, 1-4. Other controllers keep their "
-    "order around it")
-    .range(1, 4);
-
-REXCVAR_DEFINE_INT32(test_port, 0, "Band3/Debug",
-    "Take test harness commands on this local TCP port (0 = off), for tools/band3ctl.py. "
-    "Connects the virtual instrument as player 1")
-    .range(0, 65535)
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_INT32(test_random_seed, 0, "Band3/Debug",
-    "Seed the game's random numbers with this instead of the clock (0 = off), so a fresh "
-    "profile gets the same band on every launch, for render checks")
-    .range(0, 2147483647)
-    .lifecycle(Lifecycle::kRequiresRestart);
-
-REXCVAR_DEFINE_INT32(relaunch_wait_pid, 0, "Band3/Debug",
-    "Set by band3 when it relaunches itself (rb3e_relaunch_game): the new one waits for "
-    "this process to close before starting. Cleared once it has");
-
-REXCVAR_DEFINE_STRING(native_view_backend, "gpu", "Band3/Debug",
+REXCVAR_DEFINE_STRING(native_view_backend, "gpu", "Band3/Advanced/Native renderer",
     "What draws the native view (F9, experimental) and the native renderer: gpu, or cpu for "
     "the reference rasterizer. The GPU falls back to the CPU when it can't start")
     .allowed({"cpu", "gpu"});
 
-REXCVAR_DEFINE_BOOL(native_present_zero_copy, true, "Band3/Debug",
+REXCVAR_DEFINE_BOOL(native_present_zero_copy, true, "Band3/Advanced/Native renderer",
     "With the native picture shown (renderer native or both), show the GPU's frames where "
     "they are, on the GPU (Direct3D 12, when band3's renderer shares the game's device); off "
     "reads each frame back and uploads it, the way other platforms do, to compare");
 
-REXCVAR_DEFINE_BOOL(dred, false, "Band3/Debug",
-    "Turn on Direct3D 12's Device Removed Extended Data at startup (Windows): if the GPU "
-    "hangs, the crash trace says which command list and op it stopped at. Costs the GPU a "
-    "small write per op; the test harness (band3ctl launch) turns it on");
-
-REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Debug",
+REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Advanced/Native renderer",
     "With the native picture shown, publish each frame to the window a steady delay after "
     "the game presented it (about the slowest recent frame's), so frames that draw quickly "
     "(with even/odd rendering, every other one) don't reach a paint together with the one "
     "before; off publishes each as soon as it's drawn, to compare");
 
-REXCVAR_DEFINE_BOOL(native_present_request_paint, true, "Band3/Debug",
+REXCVAR_DEFINE_BOOL(native_present_request_paint, true, "Band3/Advanced/Native renderer",
     "With renderer native (no emulated GPU), ask the window to paint each time the native "
     "renderer has a new frame for it, as the emulated GPU's swaps did; off leaves the window "
     "to paint when something else asks, to compare");
 
-REXCVAR_DEFINE_INT32(native_query_sample_count, 1000, "Band3/Debug",
+REXCVAR_DEFINE_BOOL(native_present_pipeline, false, "Band3/Advanced/Native renderer",
+    "With the native picture shown, on the zero-copy path, record the next frame while the "
+    "GPU draws the one before, waiting for the GPU only to hand a frame to the window, so a "
+    "frame costs the longer of its CPU and GPU time rather than both (for 120 Hz); off waits "
+    "for each frame right after sending it. Keep it off: it hangs AMD GPUs and grows video "
+    "memory steadily (about 10 MB a second at 120 Hz: the SDL_gpu allocations it makes "
+    "aren't released on this path)");
+
+REXCVAR_DEFINE_INT32(native_query_sample_count, 1000, "Band3/Advanced/Native renderer",
     "With renderer native (no emulated GPU), the samples every occlusion query reports as "
     "drawn (the lens flares' visibility tests), as the emulated GPU's "
     "query_occlusion_fake_sample_count does (1000, its default, what RB3 has always got "
     "here); -1 leaves the queries unanswered")
     .range(-1, 1000000);
 
-REXCVAR_DEFINE_BOOL(native_query_log, false, "Band3/Debug",
+REXCVAR_DEFINE_BOOL(native_query_log, false, "Band3/Advanced/Native renderer",
     "Log what the occlusion queries (the lens flares' visibility tests) give the game: the "
     "result of its first 50 reads of a query, then one a second at most, with either GPU; "
     "with renderer native also the counts the first 20 query packets found. Turning it on "
     "again logs as many more");
 
-REXCVAR_DEFINE_INT32(native_sync_short_wait_us, 0, "Band3/Debug",
+REXCVAR_DEFINE_INT32(native_sync_short_wait_us, 0, "Band3/Advanced/Native renderer",
     "With renderer native (no emulated GPU), how the GPU's command processor waits between "
     "polls of a wait whose interval is short (under 0x100): 0 yields and polls again at "
     "once, as the emulated GPU does; more sleeps that many microseconds instead")
     .range(0, 16000);
 
-REXCVAR_DEFINE_BOOL(native_vblank_free_running, false, "Band3/Debug",
+REXCVAR_DEFINE_BOOL(native_vblank_free_running, false, "Band3/Advanced/Native renderer",
     "With renderer native (no emulated GPU), raise the vertical blank every millisecond "
     "whatever the frame cap says, as the emulated GPU's vsync off does: with frame_cap off "
     "and rnd_sync 0 too, nothing paces the game (uncapped, to measure). Off, it runs at the "
     "game's refresh rate unless the frame cap paces the game");
 
-REXCVAR_DEFINE_BOOL(native_present_pipeline, false, "Band3/Debug",
-    "With the native picture shown, on the zero-copy path, record the next frame while the "
-    "GPU draws the one before, waiting for the GPU only to hand a frame to the window, so a "
-    "frame costs the longer of its CPU and GPU time rather than both (for 120 Hz); off waits "
-    "for each frame right after sending it. Off until it has been checked in game. It "
-    "currently grows video memory steadily (about 10 MB a second at 120 Hz: the SDL_gpu "
-    "allocations it makes aren't released on this path), so it must stay off");
-
-REXCVAR_DEFINE_INT32(native_slow_frame_ms, 12, "Band3/Debug",
+REXCVAR_DEFINE_INT32(native_slow_frame_ms, 12, "Band3/Advanced/Native renderer",
     "With the native picture shown, log a line for each frame the native renderer takes longer "
     "than this many milliseconds to draw (its GPU wait included), with what kind of frame "
     "it was, where the time went and what it had to send or make; at most a few a second. "
     "0 = off")
     .range(0, 10000);
 
-REXCVAR_DEFINE_INT32(game_stall_log_ms, 100, "Band3/Debug",
-    "Log each of the game's frames that takes longer than this many milliseconds, with "
-    "samples of the game thread's stack and what else was going on (src/stall_watch.h); at "
-    "most one every two seconds. 0 = off")
-    .range(0, 100000);
-
-REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Debug",
+REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Advanced/Native renderer",
     "Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, "
     "for the native view (experimental), even while it's off: some are drawn once, in the "
     "main menu, and a later capture needs them. Costs a little game-thread time while "
     "characters load; turn it on at launch (--native_view_record_targets=true)");
 
-REXCVAR_DEFINE_BOOL(native_view_normal_maps, true, "Band3/Debug",
+REXCVAR_DEFINE_BOOL(native_view_normal_maps, true, "Band3/Advanced/Native renderer",
     "Shade RB3's normal maps and detail maps in the native view (experimental), live and in "
     "the test harness's captures; off shades those materials with the vertex normal, to "
     "compare");
 
-REXCVAR_DEFINE_BOOL(native_view_texture_filtering, true, "Band3/Debug",
+REXCVAR_DEFINE_BOOL(native_view_texture_filtering, true, "Band3/Advanced/Native renderer",
     "Sample textures in the native view (experimental) as the game's samplers do: filtered, "
     "between mip levels by distance, and clamped or wrapped as each says, live and in the "
     "test harness's captures; off reads every texture's nearest texel at full size, to "
     "compare");
 
-REXCVAR_DEFINE_STRING(native_view_rt_fallback, "guest", "Band3/Debug",
+REXCVAR_DEFINE_STRING(native_view_rt_fallback, "guest", "Band3/Advanced/Native renderer",
     "What the native view's capture keeps of a texture RB3 draws at runtime (outfits, the "
     "crowd, blurs): guest also decodes what guest memory holds, right only with "
     "--readback_resolve=full; none keeps only which texture and version it is, for the "
     "texture passes the capture records")
     .allowed({"guest", "none"});
 
-REXCVAR_DEFINE_BOOL(native_view_target_scale, true, "Band3/Debug",
+REXCVAR_DEFINE_BOOL(native_view_target_scale, true, "Band3/Advanced/Native renderer",
     "Draw the native renderer's passes that are pictures of the screen (the spotlights' "
     "haze, the soft particles' smoke) in proportion to its picture: 1.5 times the game's "
     "size at 1080p, 3 times at 4K. Off keeps the game's sizes, made for 1280x720, to "
     "compare");
 
-REXCVAR_DEFINE_INT32(native_view_shadow_scale, 1, "Band3/Debug",
+REXCVAR_DEFINE_INT32(native_view_shadow_scale, 1, "Band3/Advanced/Native renderer",
     "Draw the characters' self-shadow maps this many times the game's 512x512 in the "
     "native renderer and the native view (experimental): sharper shadow edges. 1 = the "
     "game's")
     .range(1, 4);
 
-REXCVAR_DEFINE_BOOL(native_view_capture_profile, false, "Band3/Debug",
+REXCVAR_DEFINE_BOOL(native_view_capture_profile, false, "Band3/Advanced/Native renderer",
     "Time each step of the native view's capture on the game's thread (geometry, textures, "
     "shade states, bones...) for the test harness's native_view stats, at a clock read per "
     "step; its hooks' totals are timed either way");
+
+// Band3/Advanced/Logging
+
+REXCVAR_DEFINE_BOOL(log_shake_timing, false, "Band3/Advanced/Logging",
+    "Log the game's frame time against the wall clock once a second while the camera "
+    "shake runs")
+    .debug_only();
+
+REXCVAR_DEFINE_BOOL(log_net_calls, false, "Band3/Advanced/Logging",
+    "Log each of the game's network calls (sockets, XNet) and what it returned");
+
+REXCVAR_DEFINE_INT32(game_stall_log_ms, 100, "Band3/Advanced/Logging",
+    "Log each of the game's frames that takes longer than this many milliseconds, with "
+    "samples of the game thread's stack and what else was going on (src/stall_watch.h); at "
+    "most one every two seconds. 0 = off")
+    .range(0, 100000);
+
+REXCVAR_DEFINE_BOOL(dred, false, "Band3/Advanced/Logging",
+    "Turn on Direct3D 12's Device Removed Extended Data at startup (Windows): if the GPU "
+    "hangs, the crash trace says which command list and op it stopped at. Costs the GPU a "
+    "small write per op; the test harness (band3ctl launch) turns it on");
+
+// Band3/Advanced/Test harness
+
+REXCVAR_DEFINE_INT32(test_port, 0, "Band3/Advanced/Test harness",
+    "Take test harness commands on this local TCP port (0 = off), for tools/band3ctl.py. "
+    "Connects the virtual instrument as player 1")
+    .range(0, 65535)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_INT32(test_random_seed, 0, "Band3/Advanced/Test harness",
+    "Seed the game's random numbers with this instead of the clock (0 = off), so a fresh "
+    "profile gets the same band on every launch, for render checks")
+    .range(0, 2147483647)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(autoplay, false, "Band3/Advanced/Test harness",
+    "The game plays every part itself, from the next song start: for repeatable profiling "
+    "runs and for checking a song without playing it");
+
+REXCVAR_DEFINE_BOOL(virtual_instrument, false, "Band3/Advanced/Test harness",
+    "Connect a virtual Xbox 360 instrument, played from the Instrument Lab (F6)");
+
+REXCVAR_DEFINE_STRING(virtual_instrument_type, "guitar", "Band3/Advanced/Test harness",
+    "Which instrument the virtual instrument is: guitar, drums, keys, pro_guitar_mustang "
+    "or pro_guitar_squier. Changing it unplugs the instrument for a moment")
+    .allowed({"guitar", "drums", "keys", "pro_guitar_mustang", "pro_guitar_squier"});
+
+REXCVAR_DEFINE_INT32(virtual_instrument_player, 2, "Band3/Advanced/Test harness",
+    "Player slot the virtual instrument connects as, 1-4. Other controllers keep their "
+    "order around it")
+    .range(1, 4);
+
+REXCVAR_DEFINE_INT32(usb_mic_test_tone, 0, "Band3/Advanced/Test harness",
+    "Sing a steady tone at this pitch in Hz into the first mic slot instead of using "
+    "microphones, to check that the game hears it. 0 = off")
+    .range(0, 2000)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(liveless_gateway, "", "Band3/Advanced/Test harness",
+    "Where liveless_port_mapping sends PCP and NAT-PMP (host[:port], port 5351 by default) "
+    "instead of the router, for testing against a stand-in. Empty asks the default gateway; "
+    "under the test harness, empty skips PCP and NAT-PMP")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(liveless_upnp_url, "", "Band3/Advanced/Test harness",
+    "The UPnP router description liveless_port_mapping uses (http://host:port/desc.xml) "
+    "instead of looking for one on the network, for testing against a stand-in. Under the "
+    "test harness, empty skips UPnP")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+// Band3/Advanced/Startup: read once as band3 starts, then cleared by band3
+// itself. kInitOnly has the settings menus show them read-only; the SDK refuses
+// SetFlagByName on them only once rex::cvar::FinalizeInit has run, which
+// nothing calls (rexruntime.dll, 2026-10), so band3's own clearing still works.
+
+REXCVAR_DEFINE_BOOL(launcher, false, "Band3/Advanced/Startup",
+    "Show the launcher at this start whatever show_launcher says. Meant for the command "
+    "line (--launcher), e.g. in Steam's launch options, or the environment; a value in "
+    "band3.toml is ignored, and it's cleared once read, so \"Save to config\" can't keep it")
+    .lifecycle(Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_INT32(relaunch_wait_pid, 0, "Band3/Advanced/Startup",
+    "Set by band3 when it relaunches itself (rb3e_relaunch_game): the new one waits for "
+    "this process to close before starting. Cleared once it has")
+    .lifecycle(Lifecycle::kInitOnly);
+
+// Band3/Advanced/Retired
+
+// Retired: renderer took its place. Still read, once, so an old band3.toml or
+// command line keeps working (Band3App::OnPostInitLogging,
+// MigrateRendererSettings below); cleared once read, so neither save writes it
+// again (the launcher removes its key, F4 writes only what isn't the default).
+REXCVAR_DEFINE_STRING(emulated_gpu, "", "Band3/Advanced/Retired",
+    "Retired: set renderer instead. Read at startup for one more release: off is renderer "
+    "native, on with renderer native is renderer both, on with renderer emulated stays "
+    "emulated (a renderer set on the command line, or already both, wins). Then cleared")
+    .allowed({"", "on", "off"})
+    .lifecycle(Lifecycle::kRequiresRestart);
 
 namespace band3::settings {
 
@@ -614,6 +637,8 @@ std::atomic<double> g_song_speed{1.0};
 std::atomic<double> g_track_speed{1.0};
 TrackedString g_username;
 StartupSettings g_startup{};
+// every setting's value as the game started (SnapshotStartupValues)
+std::map<std::string, std::string, std::less<>> g_startup_values;
 
 void Track(TrackedString& tracked, std::string_view name) {
     tracked.Set(rex::cvar::GetFlagByName(name));
@@ -651,6 +676,40 @@ void SnapshotStartupSettings() {
         .liveless_upnp_url = REXCVAR_GET(liveless_upnp_url),
         .native_camera_shake = REXCVAR_GET(native_camera_shake),
     };
+}
+
+void SnapshotStartupValues() {
+    g_startup_values.clear();
+    for (const rex::cvar::FlagEntry& entry : rex::cvar::GetRegistry()) {
+        if (entry.type == rex::cvar::FlagType::Command || !entry.getter) continue;
+        g_startup_values[entry.name] = entry.getter();
+    }
+}
+
+std::optional<std::string> StartupValue(std::string_view name) {
+    const auto it = g_startup_values.find(name);
+    if (it == g_startup_values.end()) return std::nullopt;
+    return it->second;
+}
+
+bool ReadAtStartupOnly(std::string_view name) {
+    static constexpr std::string_view kNames[] = {
+        // SnapshotStartupSettings' (most are kRequiresRestart too)
+        "controller_type", "rnd_sync", "disable_metamusic", "main_heap_size", "char_heap_size",
+        "events_target", "events_port", "discord_enabled", "http_enabled", "http_port",
+        "http_address", "rb3e_mode", "gocentral", "gocentral_address", "liveless",
+        "liveless_connect", "liveless_external_ip", "liveless_port", "liveless_port_mapping",
+        "liveless_rooms", "liveless_rooms_server", "liveless_gateway", "liveless_upnp_url",
+        "native_camera_shake",
+        // the emulated GPU reads FXAA once, as it's set up (GraphicsSystem::SetupGuestGpu;
+        // see Band3App::StartFromLauncher)
+        "swap_post_effect",
+        // the input system is made once (input_system.h)
+        "input_backend",
+        // the folders the runtime was built with (Band3App::OnFinalizePaths)
+        "game_data_root", "user_data_root", "cache_root", "content_folders",
+    };
+    return std::ranges::find(kNames, name) != std::end(kNames);
 }
 
 namespace {

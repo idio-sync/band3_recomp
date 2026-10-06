@@ -12,6 +12,7 @@
 #include <string>
 #include <toml++/toml.hpp>
 #include "src/Input/joypad_lag_status.h"
+#include "src/Launcher/generated_rows.h"
 #include "src/Launcher/launcher_settings.h"
 #include "src/renderer_default.h"
 
@@ -923,11 +924,12 @@ TEST_CASE("the launcher's table is consistent") {
         if (!s.shown_when.cvar.empty()) CHECK(FindSetting(table, s.shown_when.cvar));
         if (!s.companion.empty()) CHECK(FindSetting(table, s.companion));
     }
-    // debug settings stay in F4
+    // debug settings aren't the launcher's: the in-game Advanced tab has them
     for (const char* debug : {"autoplay", "test_port", "native_view_backend",
                               "virtual_instrument", "main_heap_size", "char_heap_size"}) {
         CHECK_FALSE(FindSetting(table, debug));
     }
+    for (const auto& s : table) CHECK(s.tab != Tab::kAdvanced);
     for (const char* wanted : {"game_data_root", "user_data_root", "content_folders",
                                "show_launcher", "steam_deck_defaults", "joypad_lag"}) {
         CHECK(FindSetting(table, wanted));
@@ -953,4 +955,210 @@ TEST_CASE("the launcher's table is consistent") {
     const auto sections = SectionsOf(table, Tab::kGame);
     REQUIRE_FALSE(sections.empty());
     CHECK(sections.front() == "Folders");
+}
+
+// In game (F4)
+
+TEST_CASE("in game, the page leaves out what reads the devices or the microphones itself") {
+    const PageFeatures launcher = FeaturesFor(Where::kLauncher);
+    CHECK(launcher.device_tester);
+    CHECK(launcher.mic_meters);
+    CHECK_FALSE(launcher.generated_rows);
+    CHECK_FALSE(launcher.next_start_notes);
+
+    const PageFeatures in_game = FeaturesFor(Where::kInGame);
+    CHECK_FALSE(in_game.device_tester);
+    CHECK_FALSE(in_game.mic_meters);
+    CHECK(in_game.generated_rows);
+    CHECK(in_game.next_start_notes);
+
+    // the mic slots themselves stay: they're a setting, not a device
+    Fixture f;
+    f.env.in_game = true;
+    f.env.cvars["usb_mics"] = Facts(ValueType::kBool, "false");
+    f.env.cvars["usb_mic_devices"] = Facts(ValueType::kString, "");
+    f.store.values["usb_mics"] = "true";
+    f.store.values["usb_mic_devices"] = "";
+    SettingsModel m(SettingTable(), f.env, f.store);
+    CHECK(m.Visible(*m.Find("usb_mic_devices")));
+}
+
+namespace {
+
+// a fresh start's values, in game: what the game started with is what they are
+struct InGame : Fixture {
+    InGame() {
+        env.in_game = true;
+        for (auto& [name, facts] : env.cvars) {
+            if (facts.exists) facts.started_with = store.Get(name);
+        }
+        // the registry's lifecycles (settings.cpp)
+        env.cvars["lang"].lifecycle = Lifecycle::kRequiresRestart;
+        env.cvars["midi_drums"].lifecycle = Lifecycle::kRequiresRestart;
+        env.cvars["content_folders"].lifecycle = Lifecycle::kRequiresRestart;
+        // HotReload, but read once (ReadEnvironment's in-game list)
+        env.cvars["game_data_root"].read_once = true;
+        env.cvars["input_backend"].read_once = true;
+    }
+};
+
+}  // namespace
+
+TEST_CASE("in game, a row whose change waits for the next start says so") {
+    InGame f;
+    SettingsModel m(kTable, f.env, f.store);
+
+    SUBCASE("a restart-only setting, by its lifecycle, once it differs from the start's") {
+        CHECK(m.NextStartOnly("lang"));
+        CHECK_FALSE(m.WaitsForNextStart("lang"));
+        CHECK(m.Set("lang", "fre"));
+        CHECK(m.WaitsForNextStart("lang"));
+        // back to what the game started with: nothing waits
+        CHECK(m.Set("lang", ""));
+        CHECK_FALSE(m.WaitsForNextStart("lang"));
+    }
+    SUBCASE("a setting the game reads once as it starts, though it's HotReload") {
+        CHECK(m.NextStartOnly("input_backend"));
+        CHECK(m.Set("input_backend", "xinput"));
+        CHECK(m.WaitsForNextStart("input_backend"));
+        CHECK(m.NextStartOnly("game_data_root"));
+        CHECK(m.Set("game_data_root", "D:/rb3"));
+        CHECK(m.WaitsForNextStart("game_data_root"));
+    }
+    SUBCASE("a setting that applies at once never waits") {
+        CHECK_FALSE(m.NextStartOnly("song_speed"));
+        CHECK(m.Set("song_speed", "1.5"));
+        CHECK_FALSE(m.WaitsForNextStart("song_speed"));
+    }
+    SUBCASE("compared by type, as the row shows it") {
+        f.env.cvars["midi_drums"].started_with = "false";
+        SettingsModel typed(kTable, f.env, f.store);
+        CHECK(typed.Set("midi_drums", "0"));
+        CHECK_FALSE(typed.WaitsForNextStart("midi_drums"));
+    }
+    SUBCASE("on the launcher nothing waits: Play applies it, or restarts band3") {
+        f.env.in_game = false;
+        SettingsModel launcher(kTable, f.env, f.store);
+        CHECK_FALSE(launcher.NextStartOnly("lang"));
+        CHECK(launcher.Set("lang", "fre"));
+        CHECK_FALSE(launcher.WaitsForNextStart("lang"));
+    }
+}
+
+TEST_CASE("in game, renderer waits for the next start only for the other GPU") {
+    InGame f;
+    f.env.cvars["renderer"] = Facts(ValueType::kString, "native");
+    f.env.cvars["renderer"].allowed = {"native", "emulated", "both"};
+    const Setting row{.cvar = "renderer", .tab = Tab::kGraphics, .section = "Renderer",
+                      .label = "Renderer", .widget = Widget::kCombo};
+    const Setting table[] = {row};
+
+    SUBCASE("a native run: emulated and both need the emulated GPU") {
+        f.env.emulated_gpu_running = false;
+        f.store.values["renderer"] = "native";
+        SettingsModel m(table, f.env, f.store);
+        CHECK_FALSE(m.NextStartOnly("renderer"));
+        CHECK_FALSE(m.WaitsForNextStart("renderer"));
+        CHECK(m.Set("renderer", "both"));
+        CHECK(m.WaitsForNextStart("renderer"));
+        CHECK(m.Set("renderer", "emulated"));
+        CHECK(m.WaitsForNextStart("renderer"));
+    }
+    SUBCASE("an emulated run: emulated and both switch at once, native waits") {
+        f.env.emulated_gpu_running = true;
+        f.store.values["renderer"] = "emulated";
+        SettingsModel m(table, f.env, f.store);
+        CHECK(m.Set("renderer", "both"));
+        CHECK_FALSE(m.WaitsForNextStart("renderer"));
+        CHECK(m.Set("renderer", "native"));
+        CHECK(m.WaitsForNextStart("renderer"));
+    }
+    SUBCASE("a build that can't present native alone runs it as emulated") {
+        f.env.emulated_gpu_running = true;
+        f.env.native_presentable = false;
+        f.store.values["renderer"] = "emulated";
+        SettingsModel m(table, f.env, f.store);
+        CHECK(m.Set("renderer", "native"));
+        CHECK_FALSE(m.WaitsForNextStart("renderer"));
+    }
+}
+
+TEST_CASE("in game, the window mode's row waits when its companion does") {
+    InGame f;
+    f.env.cvars["fullscreen_exclusive"].lifecycle = Lifecycle::kRequiresRestart;
+    SettingsModel m(kTable, f.env, f.store);
+    CHECK_FALSE(m.WaitsForNextStart("fullscreen"));
+    CHECK(m.SetWindowMode(WindowMode::kExclusive));
+    CHECK(m.WaitsForNextStart("fullscreen"));
+}
+
+TEST_CASE("in game, a start-only setting is shown read-only and Save leaves its key") {
+    InGame f;
+    f.env.cvars["midi_drums_device"].lifecycle = Lifecycle::kInitOnly;
+    f.store.values["midi_drums_device"] = "kit";
+    SettingsModel m(kTable, f.env, f.store);
+    CHECK(m.ReadOnly("midi_drums_device"));
+    CHECK_FALSE(m.Set("midi_drums_device", "other"));
+    CHECK_FALSE(m.Reset("midi_drums_device"));
+    CHECK(f.store.values["midi_drums_device"] == "kit");
+    CHECK_FALSE(EditFor(m.Edits(), "midi_drums_device"));
+    CHECK_FALSE(m.HasUnsavedChanges());
+
+    // on the launcher, before the game starts, it's set as any other
+    f.env.in_game = false;
+    SettingsModel launcher(kTable, f.env, f.store);
+    CHECK_FALSE(launcher.ReadOnly("midi_drums_device"));
+}
+
+TEST_CASE("in game, the folders say they apply at the next start") {
+    InGame f;
+    SettingsModel in_game(kTable, f.env, f.store);
+    CHECK(in_game.SectionNote(Tab::kGame, "Folders"));
+    CHECK_FALSE(in_game.SectionNote(Tab::kGame, "Game"));
+    f.env.in_game = false;
+    SettingsModel launcher(kTable, f.env, f.store);
+    CHECK_FALSE(launcher.SectionNote(Tab::kGame, "Folders"));
+}
+
+TEST_CASE("in game, Save writes generated rows as the launcher would: overrides only") {
+    InGame f;
+    std::vector<RegistryCvar> registry(2);
+    registry[0].name = "dred";
+    registry[0].category = "Band3/Advanced/Logging";
+    registry[0].type = ValueType::kBool;
+    registry[1].name = "native_slow_frame_ms";
+    registry[1].category = "Band3/Advanced/Native renderer";
+    registry[1].type = ValueType::kInt;
+    const GeneratedRows generated(registry, kTable);
+    const std::vector<Setting> table = JoinTables(kTable, generated.Rows());
+    f.env.cvars["dred"] = Facts(ValueType::kBool, "false");
+    f.env.cvars["native_slow_frame_ms"] = Facts(ValueType::kInt, "12");
+    f.store.values["dred"] = "false";
+    f.store.values["native_slow_frame_ms"] = "20";
+
+    const fs::path file = fs::temp_directory_path() / "band3_ingame_save.toml";
+    {
+        std::ofstream out(file, std::ios::binary);
+        out << "log_level = \"debug\"\n"
+               "native_slow_frame_ms = 20\n"
+               "bind_settings = \"F5\"\n";
+    }
+    SettingsModel m(table, f.env, f.store);
+    CHECK(m.Set("dred", "true"));
+    CHECK(m.Reset("native_slow_frame_ms"));
+    CHECK(m.HasUnsavedChanges());
+    REQUIRE(m.Save(file).ok);
+    CHECK_FALSE(m.HasUnsavedChanges());
+
+    const toml::table saved = toml::parse_file(file.string());
+    // keys outside the page, the SDK's and the key binds, are kept
+    CHECK(saved["log_level"].value<std::string>() == "debug");
+    CHECK(saved["bind_settings"].value<std::string>() == "F5");
+    // the change is written, typed; the reset one's key goes
+    CHECK(saved["dred"].value<bool>() == true);
+    CHECK_FALSE(saved.contains("native_slow_frame_ms"));
+    // settings at their defaults aren't written
+    CHECK_FALSE(saved.contains("lang"));
+    CHECK_FALSE(saved.contains("song_speed"));
+    fs::remove(file);
 }
