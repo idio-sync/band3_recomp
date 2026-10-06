@@ -1,4 +1,4 @@
-# slopband3 - An AI assisted band3_recomp experiment
+# slopband3: an AI-assisted band3_recomp experiment
 
 A static recompilation of Rock Band 3 (Xbox 360, Title Update 5, or Rock Band 3 Deluxe)
 into a native PC game, built on the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk).
@@ -22,7 +22,8 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Local multiplayer: up to four players, each controller its own player
 - DLC and custom songs (`CON`/`LIVE`/`PIRS`) read straight from folders, nothing to install
 - Rock Band 3 Deluxe support
-- The display's refresh rate, high ones included (`frame_cap`), a forced venue, song and highway speed
+- Runs at the display's refresh rate (`frame_cap`)
+- Forced venue, song speed and highway speed
 - Steam Deck defaults: fullscreen, letterboxed, vsync
 
 **Instruments**
@@ -31,16 +32,17 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Electronic drum kits over MIDI, played as pro drums without a MIDI Pro Adapter
 - USB microphones, including harmonies (experimental)
 - Pro Keys and Pro Guitar data (untested)
-- Per-type controller lag, and the **Instrument Lab** (F6): a virtual instrument and a view of what the game reads from each one
+- Per-type controller lag
+- The **Instrument Lab** (F6): a virtual instrument and a view of what the game reads from each one
 
 **Integrations** (RB3Enhanced-compatible)
 - Network events over UDP: Stage Kit lighting, song, band and venue info
-- A web page for browsing the song library from a phone and picking the next song, plus RB3Enhanced's web API
+- A web page for browsing the song library from a phone and picking the next song, plus the RB3E web API
 - Searching [RhythmVerse](https://rhythmverse.co) for custom songs from that page, and downloading them into the game without a restart
-- RB3Enhanced's script functions, modifiers and unlock options, so Deluxe's RB3E features work
-- RB3Enhanced's song source icons in the song list, from Deluxe's icons
-- Rock Central's online features (leaderboards, Battles) through [GoCentral](https://github.com/ihatecompvir/GoCentral), as RB3Enhanced connects
-- Online play without Xbox Live, straight to another player's game, as RB3Enhanced's Liveless does, or by code through RB3Enhanced's Liveless Rooms (F10)
+- Script functions, modifiers and unlock options, so Deluxe's RB3E features work
+- Song source icons in the song list, from Deluxe's icons
+- Rock Central's online features (leaderboards, Battles) through [GoCentral](https://github.com/ihatecompvir/GoCentral), using RB3Enhanced's server (Windows)
+- Online play without Xbox Live (Liveless, Windows): by address, or by room code with Liveless Rooms (F10)
 - Discord Rich Presence
 
 <img src="docs/images/web-song-browser.png" alt="band3's web song browser: the library with album art and part difficulties, and the song now playing" width="520">
@@ -52,23 +54,15 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Configurable save, cache and song folders, including a portable install
 
 **Graphics**
-- A native renderer, the default on Windows, with no emulated Xbox 360 GPU at all. band3
-  draws each frame itself with the game's own shaders, checked against the emulated GPU's
-  picture pixel by pixel. One setting, `renderer`, picks what draws the picture: `native`,
-  `emulated` (the emulated GPU alone; the default on Linux until the native renderer has
-  been run there) or `both`, "Native + emulated (debug)", where F8 switches between their
-  pictures. F9 opens the native renderer's debug view.
-  - Faster: uncapped, 257 fps in the main menu and 285 in a song with the emulated GPU
-    still beside it, against 165 and 163 on the emulated GPU (about 1.6 to 1.75 times).
-    Without it, at 60 Hz in a song, the GPU is 13 % busy against 22 % beside it and 28 % on
-    the emulated GPU alone, and uses about 800 MB of video memory against 1.4 GB beside it
-  - Sharper: it draws at the window's size, 1080p or 4K, where the emulated GPU draws the
-    console's 720p unless `resolution_scale` is raised, at a high GPU cost
-  - Native alone has run on Windows (Direct3D 12); its Vulkan path for Linux is written
-    but untested
-  - [Native renderer](docs/native-renderer.md) has the details, the settings and what still
-    differs (the lens flares aren't occluded, as on the emulated GPU; the store and RB3's
-    error screens aren't checked)
+- A native renderer, the default on Windows: band3 draws each frame itself with the game's
+  own shaders and no emulated Xbox 360 GPU, checked pixel by pixel against the emulated GPU
+  - Faster: uncapped in a song, 442 fps against 234 on the emulated GPU; at 60 Hz the GPU
+    is 13% busy against 28%
+  - Sharper: it draws at the window's size (1080p, 4K), not the console's 720p
+  - `renderer` picks `native`, `emulated` (the Linux default) or `both` (F8 switches
+    pictures); F9 opens its debug view
+  - Tested only on Windows (Direct3D 12) so far; the Vulkan path for Linux is untested
+  - [Native renderer](docs/native-renderer.md) has the settings and what still differs
 
 **Development**
 - A scriptable test harness, render checks against the game's own picture, unit tests and CI
@@ -85,13 +79,15 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
    cmake --preset win-amd64-release
    cmake --build --preset win-amd64-release
    ```
+4. Run `out\build\win-amd64-release\band3.exe` from the repository root. The launcher opens
+   on the first run.
 
 See [Building](docs/building.md) for the full requirements, the Linux steps, the checks
 CI runs and profiling.
 
 ## Documentation
 
-| | |
+| Page | Covers |
 |---|---|
 | [Building](docs/building.md) | requirements, Windows and Linux builds, unit tests, compile check, profiling |
 | [Settings, folders and songs](docs/settings.md) | the launcher, the in-game settings (F4), config files, where band3 keeps things, DLC and custom songs, loose-file mods, Steam Deck |
@@ -114,19 +110,10 @@ statically recompiled.
 |---|---|---|
 | Game code | the Xbox 360 executable, recompiled from PowerPC; it runs in an emulated 32-bit address space, on ReXGlue's implementation of the Xbox kernel | the decompiled source, rebuilt as native 64-bit C++ |
 | What it needs | only the executable: every function runs, decompiled or not | a complete, working decompilation |
-| Rendering | a native renderer, which reproduces the game's own shaders and is checked against the game's picture pixel by pixel; it will replace the emulated Xbox 360 GPU\* | WebGPU, with shaders of its own |
+| Rendering | a native renderer, which reproduces the game's own shaders and is checked against the game's picture pixel by pixel | WebGPU, with shaders of its own |
 | Platforms | wherever ReXGlue runs: Windows and Linux | Windows, Linux, Mac and the web |
 | Pros | playable now; the whole game runs as it shipped, so gameplay, timing, DLC and Deluxe behave as on a 360; the picture aims to match the 360's exactly | runs anywhere, the web included; the game can be changed at the source; no emulation layer, and ordinary C++ to debug |
 | Cons | the emulated address space and kernel stay; changing the game means hooking recompiled functions; limited to ReXGlue's platforms | playable only once the decompilation is complete; the game behaves as the original only where the decompilation matches it; its own shaders don't reproduce the 360's picture |
-
-Both renderers replace the same part of RB3, its platform render layer (`DxRnd`, `DxMesh`,
-`DxTex`), and draw the same Milo meshes, materials and cameras. The difference is everything
-around them.
-
-\* Partly done. The native renderer draws the picture by default on Windows, with no
-emulated GPU (`renderer` native); the emulated GPU stays the default on Linux until the
-native renderer has been run there. `renderer` both runs the two side by side, F8 switching
-between their pictures, to compare them.
 
 ## Credits
 
@@ -153,7 +140,8 @@ band3 stands on the work of these projects:
 **Rock Band community**
 - [RB3Enhanced](https://github.com/RBEnhanced/RB3Enhanced): band3 follows its network
   event format, web API, script functions, modifiers and custom song IDs.
-- [Rock Band 3 Deluxe](https://github.com/hmxmilohax/rock-band-3-deluxe) by MiloHax.
+- [Rock Band 3 Deluxe](https://github.com/hmxmilohax/rock-band-3-deluxe) by MiloHax:
+  supported as a mod, and the source of the song source icons.
 - [PlasticBand](https://github.com/TheNathannator/PlasticBand) and
   [PlasticBand-Unity](https://github.com/TheNathannator/PlasticBand-Unity) by
   TheNathannator: the documentation behind band3's Xbox 360, PlayStation and Wii
