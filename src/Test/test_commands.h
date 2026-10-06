@@ -120,6 +120,9 @@ struct NativeViewStats {
     bool paused = false;
     double paused_ms = 0;
     uint64_t paused_captures = 0;
+    // the camera's cuts in the frames drawn, its motion blur's vel_frame
+    // resets, and the cuts a reset confirmed (LiveViewStats)
+    uint64_t camera_cuts = 0, vel_resets = 0, cuts_confirmed = 0;
     // the texture passes recorded while capture was off, in the same time:
     // whether that's on (native_view_record_targets), passes the game drew,
     // those recorded, their draws, and the game thread's time recording them
@@ -210,11 +213,16 @@ struct NativeViewStats {
     // frames drawn: the worker's parts of each frame (parts_ms), what it drew,
     // sent, made and let go of (counts), and what capturing it cost the
     // game's thread, by hook (capture_ms) and in counts (capture_counts);
-    // and the most of each it kept on the GPU after one of them (peak, as is)
+    // and the most of each it kept on the GPU after one of them (peak, as
+    // is); the most the worker's plan and its parts took in one of them
+    // (plan_max_ms, as is), and the frames whose plan took over 8 ms, and of
+    // those the ones at a camera cut or just after (LiveViewStats::Kind)
     struct Kind {
         std::string name;
         uint64_t rendered = 0;
         uint64_t skipped_busy = 0;
+        uint64_t plan_spikes = 0, plan_spikes_at_cut = 0;
+        std::vector<std::pair<std::string, double>> plan_max_ms;
         std::vector<double> ms;
         std::vector<double> wait_ms;
         std::vector<std::pair<std::string, double>> parts_ms;

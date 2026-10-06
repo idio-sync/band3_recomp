@@ -802,6 +802,17 @@ TEST_CASE("native_view stats reports the native renderer's pause while minimized
               "\"paused\":true,\"paused_ms\":5012.4,\"paused_captures\":301"));
 }
 
+TEST_CASE("native_view stats reports the camera's cuts") {
+    FakeGame game;
+    REQUIRE(Ok(RunCommand("native_view on", game)));
+    game.view.camera_cuts = 12;
+    game.view.vel_resets = 11;
+    game.view.cuts_confirmed = 10;
+    CHECK(Has(RunCommand("native_view stats", game),
+              "\"paused_captures\":0,\"camera\":{\"cuts\":12,\"vel_resets\":11,"
+              "\"cuts_confirmed\":10},"));
+}
+
 TEST_CASE("native_view stats reports the frames drawn by kind, per frame drawn") {
     FakeGame game;
     REQUIRE(Ok(RunCommand("native_view on", game)));
@@ -818,6 +829,9 @@ TEST_CASE("native_view stats reports the frames drawn by kind, per frame drawn")
     post.capture_ms = {{"mesh", 2.0}, {"present", 2.0}};
     post.capture_counts = {{"new_shades", 40.0}};
     post.peak = {{"meshes", 3000.0}};
+    post.plan_max_ms = {{"plan", 14.5}, {"targets", 11.25}};
+    post.plan_spikes = 3;
+    post.plan_spikes_at_cut = 2;
     NativeViewStats::Kind between;
     between.name = "between";
     game.view.by_kind = {post, between};
@@ -827,11 +841,15 @@ TEST_CASE("native_view stats reports the frames drawn by kind, per frame drawn")
                      "\"ms\":{\"mean\":8.00,"));
     CHECK(Has(reply, "\"parts_ms_per_frame\":{\"plan\":2.000,\"upload\":5.000},"
                      "\"per_frame\":{\"mesh_bytes\":1024.000},"
+                     // the most in one frame, and frames, as they are
+                     "\"plan_max_ms\":{\"plan\":14.50,\"targets\":11.25},"
+                     "\"plan_spikes\":3,\"plan_spikes_at_cut\":2,"
                      "\"capture\":{\"ms_per_frame\":{\"total\":1.000,\"mesh\":0.500,"
                      "\"present\":0.500},\"per_frame\":{\"new_shades\":10.000}},"
                      "\"peak\":{\"meshes\":3000.0}}"));
     // a kind with no frames: zeros, not a division by zero
     CHECK(Has(reply, ",\"between\":{\"rendered\":0,\"skipped_busy\":0,"));
+    CHECK(Has(reply, "\"plan_max_ms\":{},\"plan_spikes\":0,\"plan_spikes_at_cut\":0,"));
     CHECK(Has(reply, "\"capture\":{\"ms_per_frame\":{\"total\":0.000},\"per_frame\":{}},"
                      "\"peak\":{}}}"));
 }

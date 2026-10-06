@@ -632,6 +632,11 @@ struct GpuRenderer::Impl {
         uint64_t evicted_meshes = 0, evicted_textures = 0, evicted_rts = 0;
     };
     Counts counts;
+    // the frame whose walk is placing what it draws (Render), which
+    // TargetFor and PlaceTexture count what they make into
+    // (GpuStats::targets_made and the rest); null outside it, so a world
+    // pass before a frame counts into its own
+    GpuStats* walk_stats = nullptr;
 
     bool StartVideo(const char* driver);
     void StopVideo();
@@ -1549,6 +1554,7 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx) {
     SizeClass(t.width, t.height, w, h);
     TexArray& a = tex_arrays[uint64_t(w) << 32 | h];
     if (a.free.empty()) {
+        const auto start = std::chrono::steady_clock::now();
         const uint32_t layers =
             a.layers ? a.layers * 2 : std::clamp<uint32_t>(kTextureArrayBytes / (w * h * 4), 1, 64);
         SDL_GPUTexture* grown = nullptr;
@@ -1585,6 +1591,14 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx) {
         a.texture = grown;
         a.layers = layers;
         a.levels = FullMipChain(w, h);
+        if (walk_stats) {
+            walk_stats->arrays_grown++;
+            walk_stats->arrays_mb +=
+                double(w) * h * 4 * layers * (a.levels > 1 ? 4.0 / 3 : 1) / 1048576;
+            walk_stats->arrays_ms += std::chrono::duration<double, std::milli>(
+                                         std::chrono::steady_clock::now() - start)
+                                         .count();
+        }
     }
     tx.array = &a;
     tx.levels = std::min(LevelsOf(t), a.levels);
@@ -1606,6 +1620,7 @@ void GpuRenderer::Impl::UseTexture(const std::shared_ptr<const Texture>& t) {
     if (!tx.keep) {
         tx.keep = t;
         tx.first = serial;
+        if (walk_stats) walk_stats->textures_first++;
         if (PlaceTexture(tx)) new_textures.push_back(&tx);
     }
     tx.used = serial;
@@ -1634,6 +1649,8 @@ GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, u
     if (shadow) levels = 1;
     if (rt.color && rt.w == w && rt.h == h && rt.levels == levels && rt.shadow == shadow)
         return &rt;
+    const auto start = std::chrono::steady_clock::now();
+    const bool resized = rt.color != nullptr;
     ReleaseRt(rt);
     SDL_GPUTextureCreateInfo ti{};
     ti.type = shadow ? SDL_GPU_TEXTURETYPE_2D : SDL_GPU_TEXTURETYPE_2D_ARRAY;
@@ -1665,6 +1682,13 @@ GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, u
     rt.h = h;
     rt.levels = levels;
     rt.shadow = shadow;
+    if (walk_stats) {
+        walk_stats->targets_made++;
+        (resized ? walk_stats->targets_resized : walk_stats->targets_new)++;
+        walk_stats->targets_ms += std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - start)
+                                      .count();
+    }
     return &rt;
 }
 
@@ -2139,6 +2163,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
     }
     const bool keeps_pre_now = keeps_pre && EnsureKept(pre_buffer, width, height);
+    const auto walk_start = Clock::now();
+    st.plan_setup_ms =
+        std::chrono::duration<double, std::milli>(walk_start - render_start).count() - st.pre_ms;
+    walk_stats = &st;
     serial++;
     Buffer& pool_v = pool_verts[serial & 1];
     Buffer& pool_i = pool_indices[serial & 1];
@@ -2167,6 +2195,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         if (!m.keep) {
             m.keep = geom;
             m.first = serial;
+            st.meshes_first++;
         }
         if (m.used == serial) return;
         m.used = serial;
@@ -2373,7 +2402,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             }
         }
     }
+    walk_stats = nullptr;
+    const auto arena_start = Clock::now();
+    st.plan_walk_ms = std::chrono::duration<double, std::milli>(arena_start - walk_start).count();
+    const uint64_t rebuilds = counts.arena_rebuilds;
     if (!PlaceInArena()) return false;
+    if (counts.arena_rebuilds != rebuilds)
+        st.arena_new_mb = double(arena_verts.size + arena_indices.size) / 1048576;
+    st.plan_arena_ms = ms_since(arena_start);
 
     // the upload: the pool's vertices and indices, the arena's new meshes that
     // weren't in the last frame's pool, the bones, then the textures, each
@@ -2411,15 +2447,29 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     st.textures_sent += uint32_t(new_textures.size());
     st.texture_bytes += upload_bytes - textures_at;
     st.bone_bytes += bone_bytes;
+    // Reserve, noting a buffer it grew in `kb` (before and after)
+    const auto reserve_start = Clock::now();
+    auto reserve = [&](Buffer& b, SDL_GPUBufferUsageFlags usage, uint32_t bytes, uint32_t* kb) {
+        const uint32_t before = b.buffer ? b.size : 0;
+        if (!Reserve(b, usage, bytes)) return false;
+        if (b.size != before) {
+            st.reserve_grew++;
+            kb[0] = before >> 10;
+            kb[1] = b.size >> 10;
+        }
+        return true;
+    };
     if (pool_vert_count &&
-        (!Reserve(pool_v, SDL_GPU_BUFFERUSAGE_VERTEX, pool_vert_count * sizeof(Vertex)) ||
-         !Reserve(pool_i, SDL_GPU_BUFFERUSAGE_INDEX, pool_index_count * 2))) {
+        (!reserve(pool_v, SDL_GPU_BUFFERUSAGE_VERTEX, pool_vert_count * sizeof(Vertex),
+                  st.pool_verts_kb) ||
+         !reserve(pool_i, SDL_GPU_BUFFERUSAGE_INDEX, pool_index_count * 2, st.pool_indices_kb))) {
         return false;
     }
     if (bone_bytes &&
-        !Reserve(bones, SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, bone_bytes)) {
+        !reserve(bones, SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, bone_bytes, st.bones_kb)) {
         return false;
     }
+    st.plan_reserve_ms = ms_since(reserve_start);
     st.plan_ms = ms_since(render_start) - st.pre_ms;
     const auto upload_start = Clock::now();
     if (upload_bytes > upload_size) {
@@ -2725,8 +2775,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // CPU, into the RGBA8 levels: the DOF's, then bloom's, then the composite
     // into the picture
     post::PostPlan post_plan;
+    const auto post_plan_start = Clock::now();
     bool post_on = o.post && o.view == RasterView::kFinal &&
                    post::PlanPost(frame, o.post_only, post_plan, o.grain, o.velocity);
+    st.post_plan_ms = ms_since(post_plan_start);
     // depth of field blurs by the depth, which reads as 0 (all blurred)
     // without a sampled one: left out then (Create warns of it, once)
     if (post_on && !depth_sampled) {

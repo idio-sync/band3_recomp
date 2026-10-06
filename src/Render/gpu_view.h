@@ -93,6 +93,33 @@ struct GpuStats {
     // frame draws (Evict), after wait_ms.
     double pre_ms = 0, plan_ms = 0, upload_ms = 0, record_ms = 0, submit_ms = 0, evict_ms = 0;
     uint32_t pre_passes = 0;
+    // plan_ms's parts, the frame's own (its world passes' are in pre_ms):
+    // its targets, outputs and kept buffers made ready (setup); the walk over
+    // its passes and draws, placing each mesh and texture it draws and making
+    // the render targets and texture arrays they need (walk); its new meshes
+    // placed in the arena (arena, rebuilt or not); the pool's and the bones'
+    // buffers grown to hold the frame (reserve). post_plan_ms is
+    // post::PlanPost's, in record_ms.
+    double plan_setup_ms = 0, plan_walk_ms = 0, plan_arena_ms = 0, plan_reserve_ms = 0;
+    double post_plan_ms = 0;
+    // In the walk: the render targets made (a colour and a depth texture
+    // each), new (none kept by its DxTex: never drawn, or let go) or made
+    // again at another size or mip count (resized), and the time it took;
+    // the textures drawn for the first time since they were placed (or let
+    // go), and the meshes; the texture arrays made or doubled to hold them,
+    // their time (the old one's layers listed for the copy included) and
+    // their megabytes (mips a third more)
+    uint32_t targets_made = 0, targets_new = 0, targets_resized = 0;
+    double targets_ms = 0;
+    uint32_t textures_first = 0, meshes_first = 0;
+    uint32_t arrays_grown = 0;
+    double arrays_ms = 0, arrays_mb = 0;
+    // the arena's new buffers' megabytes, if it was rebuilt (arena_rebuilt)
+    double arena_new_mb = 0;
+    // the buffers reserve grew, and each one's kilobytes before and after
+    // (0 and 0 where it didn't): the pool's vertices and indices, the bones
+    uint32_t reserve_grew = 0;
+    uint32_t pool_verts_kb[2] = {}, pool_indices_kb[2] = {}, bones_kb[2] = {};
     // it showed the post buffer kept from the last post frame in place of
     // its world (RasterOptions::post_buffer), and the back buffer's world
     // draws it drew (before post_boundary; none when it showed the buffer)

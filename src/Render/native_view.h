@@ -114,6 +114,10 @@ struct LiveViewStats {
     bool paused = false;
     double paused_ms = 0;
     uint64_t paused_captures = 0;
+    // The camera's cuts in the frames drawn (camera_cut.h's CameraCuts),
+    // vel_frame's resets, and the cuts a reset confirmed; the slow-frame log
+    // leaves frames out, these don't
+    uint64_t camera_cuts = 0, vel_resets = 0, cuts_confirmed = 0;
     // The frames drawn by kind (frame_compose.h's FrameKind, by_kind's
     // index): how many, the captures skipped while one of them was being
     // drawn (so the frames that were too slow are the kind charged), each
@@ -129,12 +133,21 @@ struct LiveViewStats {
         GpuStats gpu;
         uint64_t gpu_frames = 0, shows_kept = 0, arena_rebuilt = 0, composed = 0;
         FrameCapture::Cost cost;
+        // the most plan_ms and each of its parts took in one of them (plan_ms,
+        // plan_setup_ms, plan_walk_ms, targets_ms, arrays_ms, plan_arena_ms,
+        // plan_reserve_ms, post_plan_ms; the rest 0); those whose plan took
+        // over kPlanSpikeMs, and of those the ones at a camera cut or
+        // kSpikeAfterCut game frames after one
+        GpuStats plan_most;
+        uint64_t plan_spikes = 0, plan_spikes_at_cut = 0;
         // the most the GPU kept after one of them (GpuStats::resident_meshes
         // and the rest)
         uint32_t peak_meshes = 0, peak_textures = 0, peak_rts = 0;
         double peak_texture_array_mb = 0, peak_arena_mb = 0;
     };
     Kind by_kind[kFrameKinds];
+    static constexpr double kPlanSpikeMs = 8;
+    static constexpr int64_t kSpikeAfterCut = 2;
 };
 // starts it, or starts its numbers over at a new size if it's on; on the UI
 // thread, as the GPU device starts there. `post` off leaves RB3's

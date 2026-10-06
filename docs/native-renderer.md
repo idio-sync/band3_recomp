@@ -124,7 +124,7 @@ been checked:
 | `native_present_pipeline` (Band3 → Debug) | on records the next frame while the GPU draws the one before, on the zero-copy path, as above; off (the default, until it has been checked in game) waits for the GPU after each frame. `set` changes it at once. Its frames are submitted without waiting, and that alone (with the worker waiting for each at once) had the Direct3D 12 debug layer report the SDK's command lists going wrong (a barrier out of step, a list executed still open) and AMD GPUs hang, so leave it off until that's understood. It also grows video memory steadily (about 10 MB a second at 120 Hz: the SDL_gpu allocations it makes aren't released on this path), so it must stay off |
 | `native_view_target_scale` (Band3 → Debug) | on (the default) draws the passes that are pictures of the screen (the spotlights' haze and the soft particles' smoke, made at 640x360 and 320x180 for the game's 1280x720) in proportion to the picture: 1.5 times at 1080p, 3 times at 4K. Off keeps the game's sizes, to compare |
 | `native_view_shadow_scale` (Band3 → Debug) | the characters' self-shadow maps at this many times the game's 512x512 (1, the default, to 4): sharper shadow edges, and less of the game's own shadow acne, so further from the game's picture |
-| `native_slow_frame_ms` (Band3 → Debug) | logs a line (`native renderer: slow frame ...`) for each frame the native renderer takes longer than this many milliseconds to draw, its GPU wait included (12, the default; 0 off), two a second at most: what kind of frame it was (as `by_kind` below), where its time went (the world passes before it, planning, filling the upload buffer, recording, submitting, waiting for the GPU, letting go), what it drew and sent (meshes into the pool and the arena, textures, bones, in MB), the pipelines, buffers and textures it made, what it let go of after, what capturing it cost the game's thread, and the captures skipped before it |
+| `native_slow_frame_ms` (Band3 → Debug) | logs a line (`native renderer: slow frame ...`) for each frame the native renderer takes longer than this many milliseconds to draw, its GPU wait included (12, the default; 0 off), two a second at most: what kind of frame it was (as `by_kind` below), where its time went (the world passes before it, planning, filling the upload buffer, recording, submitting, waiting for the GPU, letting go), what it drew and sent (meshes into the pool and the arena, textures, bones, in MB), the pipelines, buffers and textures it made, what it let go of after, what capturing it cost the game's thread, and the captures skipped before it; then planning's parts (`plan: setup`, the frame's targets and kept buffers made ready; `walk`, placing what it draws, with the render targets it made, a colour and a depth texture each, and how many of them were made again at another size, in how long, the textures and meshes drawn for the first time since they were placed or let go, and the texture arrays made or doubled for them, in how long and how many MB; `arena`, its new meshes placed, and the arena's new size if it was rebuilt; `reserve`, the pool's and the bones' buffers grown, each from and to how many KB), recording's `post plan` (working out the post-processing passes), and the camera (`src/Render/camera_cut.h`): how far its picture moved, in screens, and its view turned since the last world drawn and how many game frames before that was, and whether that was a cut (over 0.15 of a screen or 15 degrees), the motion blur's `vel_frame` (the frames since RB3's shot started) where the frame read it and whether it started over, and the game frames since the last cut |
 | `game_stall_log_ms` (Band3 → Debug) | logs a warning (`game stall: ...`) for each of the game's frames longer than this many milliseconds (100, the default; 0 off), one every two seconds at most: the frame split at DxRnd::Present's hook (the game's own part, its Present, capture, the frame cap's wait), and over the part of it a watcher saw (from half the threshold on) the game thread's and the emulated GPU's command processor's CPU time (with `emulated_gpu` off, the sync-only GPU's `band3 GPU sync` thread's), the process's file I/O and page faults, what the native renderer's worker was doing, and samples of those two threads' and the worker's stacks every 50 ms (module+RVA, as the crash trace's; `src/stall_watch.h`) |
 
 The test harness's `native_view stats` has `by_kind` too: the live view's frames by what
@@ -135,13 +135,28 @@ post-processed), `between` (neither, at a background rate below half the game's)
 (everything, or a frame that doesn't say). Each has its frames drawn (`rendered`), the
 captures skipped while one of them was being drawn (`skipped_busy`, so the slow kind is the
 one charged), `ms` and `wait_ms` as the totals', and per frame drawn: the worker's parts
-(`parts_ms_per_frame`: `pre`, `plan`, `upload`, `record`, `submit`, `wait`, `evict`), what it
-drew, sent, made and let go of (`per_frame`: `draws`, `world_draws`, `passes`, `pool_meshes`,
-`mesh_bytes`, `textures_sent`, `texture_bytes`, `evicted_meshes` and the rest, and what the
-GPU kept after it: `resident_meshes`, `resident_textures`, `resident_rts`,
-`texture_array_mb`, `arena_mb`), what capturing it cost the game's thread (`capture`:
-`ms_per_frame` by hook, and `per_frame` counts, `game_ms` the game's frame), and the most
-the GPU kept after one of them (`peak`).
+(`parts_ms_per_frame`: `pre`, `plan`, `upload`, `record`, `submit`, `wait`, `evict`; and
+parts of those, which don't add to the total: `plan_setup`, `plan_walk`, `plan_arena` and
+`plan_reserve` of `plan` as the slow-frame line has them, `plan_targets` and `plan_arrays`
+of `plan_walk`, the time making render targets and texture arrays, and `post_plan` of
+`record`), what it drew, sent, made and let go of (`per_frame`: `draws`, `world_draws`,
+`passes`, `pool_meshes`, `mesh_bytes`, `textures_sent`, `texture_bytes`, `evicted_meshes`
+and the rest, planning's `targets_made` (`targets_new`, `targets_resized`),
+`textures_first`, `meshes_first`, `arrays_grown`, `arrays_mb`, `arena_new_mb` and
+`reserve_grew`, and what the GPU kept after it: `resident_meshes`, `resident_textures`,
+`resident_rts`, `texture_array_mb`, `arena_mb`), the most `plan` and each of its parts took
+in one of them (`plan_max_ms`: `plan`, `setup`, `walk`, `targets`, `arrays`, `arena`,
+`reserve`, `post_plan`), the frames whose plan took over 8 ms (`plan_spikes`) and of those
+the ones at a camera cut or up to 2 game frames after one (`plan_spikes_at_cut`), every one
+of them counted where the slow-frame log leaves some out, what capturing it cost the game's
+thread (`capture`: `ms_per_frame` by hook, and `per_frame` counts, `game_ms` the game's
+frame), and the most the GPU kept after one of them (`peak`). Beside `by_kind`, `camera`
+counts the frames drawn that were at a camera cut (`cuts`), where the motion blur's
+`vel_frame` started over (`vel_resets`, seen a frame or two after the cut, where the
+velocity blur is read), and the cuts such a reset followed within 8 game frames
+(`cuts_confirmed`): `cuts` well above `cuts_confirmed` means `camera_cut.h`'s thresholds
+take the camera's motion within a shot for cuts, `vel_resets` well above it that they miss
+cuts.
 
 Under even/odd rendering the world's draws are drawn by the post frames alone, one in every
 world period, so the native renderer keeps geometry and textures a frame drew for the

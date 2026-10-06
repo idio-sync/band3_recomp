@@ -2,6 +2,7 @@
 
 #include "src/Hooks/frame_pacing.h"
 #include "src/Launcher/launcher_platform.h"
+#include "src/Render/camera_cut.h"
 #include "src/Render/capture_file.h"
 #include "src/Render/frame_compose.h"
 #include "src/Render/gpu_skip.h"
@@ -135,6 +136,22 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.submit_ms += g.submit_ms;
     sum.evict_ms += g.evict_ms;
     sum.pre_passes += g.pre_passes;
+    sum.plan_setup_ms += g.plan_setup_ms;
+    sum.plan_walk_ms += g.plan_walk_ms;
+    sum.plan_arena_ms += g.plan_arena_ms;
+    sum.plan_reserve_ms += g.plan_reserve_ms;
+    sum.post_plan_ms += g.post_plan_ms;
+    sum.targets_made += g.targets_made;
+    sum.targets_new += g.targets_new;
+    sum.targets_resized += g.targets_resized;
+    sum.targets_ms += g.targets_ms;
+    sum.textures_first += g.textures_first;
+    sum.meshes_first += g.meshes_first;
+    sum.arrays_grown += g.arrays_grown;
+    sum.arrays_ms += g.arrays_ms;
+    sum.arrays_mb += g.arrays_mb;
+    sum.arena_new_mb += g.arena_new_mb;
+    sum.reserve_grew += g.reserve_grew;
     sum.world_draws += g.world_draws;
     sum.pool_meshes += g.pool_meshes;
     sum.arena_moved += g.arena_moved;
@@ -156,6 +173,19 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.arena_mb += g.arena_mb;
 }
 
+// the most of plan_ms and its parts in `most` (LiveViewStats::Kind's
+// plan_most) or `g`'s
+void MostPlan(GpuStats& most, const GpuStats& g) {
+    most.plan_ms = std::max(most.plan_ms, g.plan_ms);
+    most.plan_setup_ms = std::max(most.plan_setup_ms, g.plan_setup_ms);
+    most.plan_walk_ms = std::max(most.plan_walk_ms, g.plan_walk_ms);
+    most.targets_ms = std::max(most.targets_ms, g.targets_ms);
+    most.arrays_ms = std::max(most.arrays_ms, g.arrays_ms);
+    most.plan_arena_ms = std::max(most.plan_arena_ms, g.plan_arena_ms);
+    most.plan_reserve_ms = std::max(most.plan_reserve_ms, g.plan_reserve_ms);
+    most.post_plan_ms = std::max(most.post_plan_ms, g.post_plan_ms);
+}
+
 void AddCost(FrameCapture::Cost& sum, const FrameCapture::Cost& c) {
     for (int i = 0; i < FrameCapture::Cost::kHooks; i++) sum.hook_ns[i] += c.hook_ns[i];
     sum.draws += c.draws;
@@ -167,9 +197,74 @@ void AddCost(FrameCapture::Cost& sum, const FrameCapture::Cost& c) {
     sum.game_ns += c.game_ns;
 }
 
+// native_slow_frame_ms's line's plan parts and camera, for DescribeSlow
+std::string DescribePlan(const GpuStats& gs, const CameraCuts::Step& cam) {
+    // the buffers reserve grew
+    std::string grew;
+    auto grown = [&](const char* name, const uint32_t (&kb)[2]) {
+        if (kb[0] == kb[1]) return;
+        char b[64];
+        std::snprintf(b, sizeof(b), "%s%s %u->%u KB", grew.empty() ? "" : ", ", name, kb[0], kb[1]);
+        grew += b;
+    };
+    grown("pool vertices", gs.pool_verts_kb);
+    grown("pool indices", gs.pool_indices_kb);
+    grown("bones", gs.bones_kb);
+    if (grew.empty()) grew = "nothing grew";
+    char arena[48] = "";
+    if (gs.arena_rebuilt) std::snprintf(arena, sizeof(arena), " (rebuilt, %.1f MB)", gs.arena_new_mb);
+    char buf[640];
+    std::snprintf(buf, sizeof(buf),
+                  "; plan: setup %.1f, walk %.1f (%u targets made in %.1f ms, %u of them "
+                  "resized; %u textures and %u meshes drawn for the first time; %u texture "
+                  "arrays grown in %.1f ms, %.1f MB), arena %.1f%s, reserve %.1f (%s) ms; "
+                  "record's post plan %.1f ms",
+                  gs.plan_setup_ms, gs.plan_walk_ms, gs.targets_made, gs.targets_ms,
+                  gs.targets_resized, gs.textures_first, gs.meshes_first, gs.arrays_grown,
+                  gs.arrays_ms, gs.arrays_mb, gs.plan_arena_ms, arena, gs.plan_reserve_ms,
+                  grew.c_str(), gs.post_plan_ms);
+    std::string s = buf;
+    // camera_cut.h's view of it
+    if (!cam.world_frame) {
+        s += "; camera: none in its world";
+    } else if (!cam.new_world) {
+        std::snprintf(buf, sizeof(buf), "; camera: game frame %llu's world, drawn before",
+                      static_cast<unsigned long long>(cam.world_frame));
+        s += buf;
+    } else if (cam.jump >= 0 || cam.turn >= 0) {
+        // (-1 for the one that can't be told)
+        std::snprintf(buf, sizeof(buf),
+                      "; camera: moved %.2f of the screen and turned %.1f degrees in %llu game "
+                      "frames%s",
+                      cam.jump, cam.turn, static_cast<unsigned long long>(cam.gap),
+                      cam.cut ? ", a cut" : "");
+        s += buf;
+    } else {
+        std::snprintf(buf, sizeof(buf), "; camera: not compared (%llu game frames since the last)",
+                      static_cast<unsigned long long>(cam.gap));
+        s += buf;
+    }
+    if (cam.vel_valid) {
+        std::snprintf(buf, sizeof(buf), ", vel_frame %u%s", cam.vel_frame,
+                      cam.confirmed ? " (reset, confirming the cut)"
+                      : cam.vel_reset ? " (reset)"
+                                      : "");
+        s += buf;
+    }
+    if (cam.since_cut >= 0) {
+        std::snprintf(buf, sizeof(buf), "; %lld game frames since the last cut",
+                      static_cast<long long>(cam.since_cut));
+        s += buf;
+    } else {
+        s += "; no cut seen yet";
+    }
+    return s;
+}
+
 // native_slow_frame_ms's line for a GPU frame `fc` that took `gs`, after
-// `skipped` captures the worker never drew
-std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t skipped) {
+// `skipped` captures the worker never drew, its camera as `cam` says
+std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t skipped,
+                         const CameraCuts::Step& cam) {
     uint64_t hooks_ns = 0;
     for (uint64_t ns : fc.cost.hook_ns) hooks_ns += ns;
     const FrameKind kind = KindOf(fc);
@@ -201,7 +296,7 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         static_cast<unsigned long long>(fc.cost.geom_miss_bytes >> 10),
         static_cast<unsigned long long>(fc.cost.tex_decode_bytes >> 10), fc.cost.game_ns / 1e6,
         static_cast<unsigned long long>(skipped));
-    return buf;
+    return buf + DescribePlan(gs, cam);
 }
 
 // ---------------------------------------------------------------------------
@@ -531,6 +626,8 @@ class Renderer {
         GpuOutput out;
         GpuStats gs;
         RasterStats rs;
+        // what its capture showed of the camera (cuts_)
+        CameraCuts::Step camera;
         uint32_t width = 0, height = 0;
         bool done = true;
         // steady-clock nanoseconds: recorded and submitted, seen done, and
@@ -775,6 +872,7 @@ class Renderer {
             d.want_rgba = want_rgba;
             d.width = o.width;
             d.height = o.height;
+            d.camera = cuts_.Next(*cap);
             // RenderFrame fails (and stays failed) without a device, and the
             // CPU draws instead
             if (slot >= 0) {
@@ -971,12 +1069,22 @@ class Renderer {
             kind.ms.push_back(ms);
             if (d.cap->composed) kind.composed++;
             AddCost(kind.cost, d.cap->cost);
+            if (d.camera.cut) live_.camera_cuts++;
+            if (d.camera.vel_reset) live_.vel_resets++;
+            if (d.camera.confirmed) live_.cuts_confirmed++;
             if (d.drew_gpu) {
                 kind.wait_ms.push_back(d.gs.wait_ms);
                 kind.gpu_frames++;
                 if (d.gs.shows_kept) kind.shows_kept++;
                 if (d.gs.arena_rebuilt) kind.arena_rebuilt++;
                 AddGpu(kind.gpu, d.gs);
+                MostPlan(kind.plan_most, d.gs);
+                if (d.gs.plan_ms > LiveViewStats::kPlanSpikeMs) {
+                    kind.plan_spikes++;
+                    if (d.camera.since_cut >= 0 &&
+                        d.camera.since_cut <= LiveViewStats::kSpikeAfterCut)
+                        kind.plan_spikes_at_cut++;
+                }
                 kind.peak_meshes = std::max(kind.peak_meshes, d.gs.resident_meshes);
                 kind.peak_textures = std::max(kind.peak_textures, d.gs.resident_textures);
                 kind.peak_rts = std::max(kind.peak_rts, d.gs.resident_rts);
@@ -1023,7 +1131,7 @@ class Renderer {
             return;
         }
         slow_logged_++;
-        std::string line = DescribeSlow(*d.cap, d.gs, skipped);
+        std::string line = DescribeSlow(*d.cap, d.gs, skipped, d.camera);
         if (slow_left_out_) {
             line += " (" + std::to_string(slow_left_out_) + " more left out before it)";
             slow_left_out_ = 0;
@@ -1130,6 +1238,8 @@ class Renderer {
     uint64_t published_frame_ = 0;
     int64_t slow_since_ns_ = 0;
     uint32_t slow_logged_ = 0, slow_left_out_ = 0;
+    // the worker's alone: the camera's cuts over the frames it draws
+    CameraCuts cuts_;
 };
 static_assert(PresentSlots::kCount == GpuRenderer::kOutputs,
               "a presenter slot is a gpu_view output");

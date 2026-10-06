@@ -461,6 +461,9 @@ public:
             out.paused = live.paused;
             out.paused_ms = live.paused_ms;
             out.paused_captures = live.paused_captures;
+            out.camera_cuts = live.camera_cuts;
+            out.vel_resets = live.vel_resets;
+            out.cuts_confirmed = live.cuts_confirmed;
             for (int k = 0; k < render::kFrameKinds; k++)
                 out.by_kind.push_back(ByKind(render::FrameKind(k), live.by_kind[k]));
         }
@@ -788,10 +791,31 @@ private:
         out.ms = std::move(k.ms);
         out.wait_ms = std::move(k.wait_ms);
         const render::GpuStats& g = k.gpu;
-        out.parts_ms = {{"pre", g.pre_ms},       {"plan", g.plan_ms},
-                        {"upload", g.upload_ms}, {"record", g.record_ms},
-                        {"submit", g.submit_ms}, {"wait", g.wait_ms},
+        out.parts_ms = {{"pre", g.pre_ms},
+                        {"plan", g.plan_ms},
+                        {"plan_setup", g.plan_setup_ms},
+                        {"plan_walk", g.plan_walk_ms},
+                        {"plan_targets", g.targets_ms},
+                        {"plan_arrays", g.arrays_ms},
+                        {"plan_arena", g.plan_arena_ms},
+                        {"plan_reserve", g.plan_reserve_ms},
+                        {"upload", g.upload_ms},
+                        {"record", g.record_ms},
+                        {"post_plan", g.post_plan_ms},
+                        {"submit", g.submit_ms},
+                        {"wait", g.wait_ms},
                         {"evict", g.evict_ms}};
+        const render::GpuStats& most = k.plan_most;
+        out.plan_max_ms = {{"plan", most.plan_ms},
+                           {"setup", most.plan_setup_ms},
+                           {"walk", most.plan_walk_ms},
+                           {"targets", most.targets_ms},
+                           {"arrays", most.arrays_ms},
+                           {"arena", most.plan_arena_ms},
+                           {"reserve", most.plan_reserve_ms},
+                           {"post_plan", most.post_plan_ms}};
+        out.plan_spikes = k.plan_spikes;
+        out.plan_spikes_at_cut = k.plan_spikes_at_cut;
         out.counts = {{"gpu_frames", double(k.gpu_frames)},
                       {"composed", double(k.composed)},
                       {"shows_kept", double(k.shows_kept)},
@@ -810,6 +834,15 @@ private:
                       {"pipelines_made", double(g.pipelines_made)},
                       {"buffers_made", double(g.buffers_made)},
                       {"textures_made", double(g.textures_made)},
+                      {"targets_made", double(g.targets_made)},
+                      {"targets_new", double(g.targets_new)},
+                      {"targets_resized", double(g.targets_resized)},
+                      {"textures_first", double(g.textures_first)},
+                      {"meshes_first", double(g.meshes_first)},
+                      {"arrays_grown", double(g.arrays_grown)},
+                      {"arrays_mb", g.arrays_mb},
+                      {"arena_new_mb", g.arena_new_mb},
+                      {"reserve_grew", double(g.reserve_grew)},
                       {"evicted_meshes", double(g.evicted_meshes)},
                       {"evicted_textures", double(g.evicted_textures)},
                       {"evicted_rts", double(g.evicted_rts)},

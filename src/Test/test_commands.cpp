@@ -795,6 +795,15 @@ std::string ByKindJson(const std::vector<NativeViewStats::Kind>& kinds) {
         out += ",\"wait_ms\":" + Distribution(kind.wait_ms);
         list("parts_ms_per_frame", kind.parts_ms, false);
         list("per_frame", kind.counts, false);
+        out += ",\"plan_max_ms\":{";
+        for (size_t i = 0; i < kind.plan_max_ms.size(); i++) {
+            std::snprintf(buf, sizeof(buf), "%s\"%s\":%.2f", i ? "," : "",
+                          kind.plan_max_ms[i].first.c_str(), kind.plan_max_ms[i].second);
+            out += buf;
+        }
+        out += "}";
+        out += ",\"plan_spikes\":" + std::to_string(kind.plan_spikes);
+        out += ",\"plan_spikes_at_cut\":" + std::to_string(kind.plan_spikes_at_cut);
         out += ",\"capture\":{";
         list("ms_per_frame", kind.capture_ms, true, true);
         list("per_frame", kind.capture_counts, false);
@@ -834,6 +843,12 @@ std::string NativeViewJson(const NativeViewStats& s) {
     std::snprintf(buf, sizeof(buf), ",\"paused\":%s,\"paused_ms\":%.1f,\"paused_captures\":%llu",
                   s.paused ? "true" : "false", s.paused_ms,
                   static_cast<unsigned long long>(s.paused_captures));
+    out += buf;
+    std::snprintf(buf, sizeof(buf),
+                  ",\"camera\":{\"cuts\":%llu,\"vel_resets\":%llu,\"cuts_confirmed\":%llu}",
+                  static_cast<unsigned long long>(s.camera_cuts),
+                  static_cast<unsigned long long>(s.vel_resets),
+                  static_cast<unsigned long long>(s.cuts_confirmed));
     out += buf;
     std::snprintf(buf, sizeof(buf),
                   ",\"rt_recording\":{\"on\":%s,\"passes\":%llu,\"recorded\":%llu,",
