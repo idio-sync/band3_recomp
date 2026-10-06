@@ -1,7 +1,7 @@
 // Checks the launcher's settings model (src/Launcher/launcher_settings.h):
 // effective defaults, typed comparison, reset, locks, the Steam Deck toggle,
-// what Save writes, the renderer's per-platform default, the native render
-// resolution's row, and the joypad_lag
+// what Save writes, the renderer's per-platform default, the native
+// resolution limit's row, and the joypad_lag
 // and folder helpers.
 
 #include <doctest/doctest.h>
@@ -868,7 +868,7 @@ TEST_CASE("Save removes the retired emulated_gpu's key") {
     CHECK_FALSE(tab.model->Visible(*row));
 }
 
-TEST_CASE("the native render resolution shows with the native renderer, and saves a number") {
+TEST_CASE("the native resolution limit shows with the native renderer, and saves a number") {
     Fixture f;
     f.env.cvars["renderer"] = Facts(ValueType::kString, "native");
     f.env.cvars["native_max_height"] = Facts(ValueType::kInt, "0");
