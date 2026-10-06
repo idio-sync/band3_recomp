@@ -186,9 +186,13 @@ struct StartupSettings {
 };
 const StartupSettings& Startup();
 
-// Every setting's value (the SDK's too) as of the last
-// SnapshotStartupSettings: what the game started with. nullopt for a name that
-// wasn't registered then. UI thread.
+// Takes every setting's value (the SDK's and the GPU plugin's too) as the game
+// starts with them, for StartupValue: Band3App calls it as the game starts,
+// with the launcher's Play or without the launcher, once the GPU plugin has
+// registered its settings.
+void SnapshotStartupValues();
+// A setting's value as of SnapshotStartupValues: what the game started with.
+// nullopt for a name that wasn't registered then. UI thread.
 std::optional<std::string> StartupValue(std::string_view name);
 
 // The settings the game reads once, as it starts, though the registry has them

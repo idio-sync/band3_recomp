@@ -22,6 +22,10 @@
 namespace band3::launcher {
 
 inline constexpr const char* kConfigHeader =
+    "# Written by band3's settings (the launcher, F4). All settings > Save to config rewrites "
+    "this file.";
+// the header earlier builds wrote, which isn't a comment of the player's either
+inline constexpr const char* kOldConfigHeader =
     "# Written by the band3 launcher. F4 > Save to config rewrites this file.";
 
 // the first line of a file F4's "Save to config" wrote (the SDK's SaveConfig)

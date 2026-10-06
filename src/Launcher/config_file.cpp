@@ -199,7 +199,10 @@ bool HasOwnComments(std::string_view text) {
                                          line.back() == '\t')) {
                     line.remove_suffix(1);
                 }
-                if (line != kConfigHeader && line != kSdkConfigHeader) return true;
+                if (line != kConfigHeader && line != kOldConfigHeader &&
+                    line != kSdkConfigHeader) {
+                    return true;
+                }
                 i = end;
             } else if (at(i, "\"\"\"")) {
                 in = In::kMultiBasic;

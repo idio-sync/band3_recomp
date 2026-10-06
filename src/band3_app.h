@@ -251,11 +251,13 @@ class Band3App : public rex::ReXApp {
     REXLOG_INFO("Launcher: {}", decision.reason);
     if (!decision.show) {
       StartFrameCap();
+      band3::settings::SnapshotStartupValues();
       return paths;
     }
     if (!imgui_drawer()) {
       REXLOG_WARN("Launcher: no ImGui to draw it with, starting the game");
       StartFrameCap();
+      band3::settings::SnapshotStartupValues();
       return paths;
     }
 
@@ -329,6 +331,7 @@ class Band3App : public rex::ReXApp {
       launcher_.reset();
       if (debug_overlay_) debug_overlay_->set_hidden(false);
       StartFrameCap();
+      band3::settings::SnapshotStartupValues();
       auto resume = std::move(resume_);
       resume(paths);
     });

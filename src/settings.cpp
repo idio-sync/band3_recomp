@@ -637,7 +637,7 @@ std::atomic<double> g_song_speed{1.0};
 std::atomic<double> g_track_speed{1.0};
 TrackedString g_username;
 StartupSettings g_startup{};
-// every setting's value at the last snapshot (StartupValue)
+// every setting's value as the game started (SnapshotStartupValues)
 std::map<std::string, std::string, std::less<>> g_startup_values;
 
 void Track(TrackedString& tracked, std::string_view name) {
@@ -676,6 +676,9 @@ void SnapshotStartupSettings() {
         .liveless_upnp_url = REXCVAR_GET(liveless_upnp_url),
         .native_camera_shake = REXCVAR_GET(native_camera_shake),
     };
+}
+
+void SnapshotStartupValues() {
     g_startup_values.clear();
     for (const rex::cvar::FlagEntry& entry : rex::cvar::GetRegistry()) {
         if (entry.type == rex::cvar::FlagType::Command || !entry.getter) continue;
