@@ -10,6 +10,7 @@
 #include <rex/logging.h>
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/keybinds.h>
+#include <rex/ui/overlay/settings_overlay.h>
 #include <imgui.h>
 
 #include <cstdlib>
@@ -36,6 +37,7 @@
 #include "Input/menu_shortcut_dialog.h"
 #include "Input/virtual_instrument.h"
 #include "Launcher/game_data_check.h"
+#include "Launcher/ingame_settings_dialog.h"
 #include "Launcher/launcher_dialog.h"
 #include "Launcher/launcher_platform.h"
 #include "Launcher/launcher_start.h"
@@ -90,6 +92,10 @@ class Band3App : public rex::ReXApp {
   std::unique_ptr<band3::render::NativeViewDialog> native_view_;
   // the launcher while it's up, before the game starts (src/Launcher/)
   std::unique_ptr<band3::launcher::LauncherDialog> launcher_;
+  // band3's settings in game, what F4 opens (src/Launcher/ingame_settings_dialog.h)
+  std::unique_ptr<band3::launcher::InGameSettingsDialog> ingame_settings_;
+  // the SDK's own settings menu, while its "All settings..." has it open
+  std::unique_ptr<rex::ui::SettingsDialog> all_settings_;
   // OnFinalizePaths' folders and resume, kept for the launcher's Play, and
   // what the path rule needs from the ini
   rex::PathConfig path_defaults_;
@@ -368,22 +374,9 @@ class Band3App : public rex::ReXApp {
   void OnWindowMinimized() override { band3::render::NativePresentMinimized(true); }
   void OnWindowRestored() override { band3::render::NativePresentMinimized(false); }
 
-  // the launcher's larger font: the fonts are set up before band3 decides
-  // whether it shows (the game data check needs OnFinalizePaths' folders, and
-  // Shift is read then), so they're added unless nothing could show it, and
-  // only a relaunch or a test run without --launcher rules it out this early
-  // (LauncherPossible)
-  void OnConfigureFonts(ImFontAtlas* atlas) override {
-    if (!band3::launcher::LauncherPossible({
-            .test_port = REXCVAR_GET(test_port) != 0,
-            .relaunched = band3::relaunch::WasRelaunched(),
-            .launcher_flag = LauncherFlag(),
-        })) {
-      REXLOG_INFO("Launcher: fonts skipped, it can't show in this run");
-      return;
-    }
-    band3::launcher::AddLauncherFonts(atlas);
-  }
+  // the launcher's larger font, which the in-game settings (F4) use too, so
+  // every run has it
+  void OnConfigureFonts(ImFontAtlas* atlas) override { band3::launcher::AddLauncherFonts(atlas); }
 
   // GPU emulation is a plugin (rexgpu-xenos) that the SDK leaves off unless
   // named; keep any gpu_plugin the user set in band3.toml. With renderer
@@ -469,6 +462,9 @@ class Band3App : public rex::ReXApp {
     rex::ui::UnregisterBind("bind_liveless_rooms");
     rex::ui::UnregisterBind("bind_native_view");
     rex::ui::UnregisterBind("bind_renderer");
+    // before the input system goes: it holds the game's input while open
+    all_settings_.reset();
+    ingame_settings_.reset();
     // off the presenter, and the GPU done with the textures its paints read,
     // before the GPU device goes
     band3::render::StopNativePresent();
@@ -515,7 +511,10 @@ class Band3App : public rex::ReXApp {
                                    : "bind_instrument_lab";
             app_context().CallInUIThreadDeferred([this, bind] { PressBind(bind); });
           });
+      CreateSettings(drawer);
     } else {
+      all_settings_.reset();
+      ingame_settings_.reset();
       debug_overlay_.reset();
       instrument_lab_.reset();
       menu_shortcut_.reset();
@@ -524,8 +523,63 @@ class Band3App : public rex::ReXApp {
     }
   }
 
+  // F4 (bind_settings) opens band3's own settings in game, in place of the
+  // SDK's settings menu, which their "All settings..." opens. The SDK's
+  // SetupOverlays registered the bind for its menu just before
+  // OnCreateDialogs; it's registered again for band3's, keeping a key the
+  // player bound it to. Like F6 and F9, it does nothing while the launcher
+  // is up.
+  void CreateSettings(rex::ui::ImGuiDrawer* drawer) {
+    ingame_settings_ = std::make_unique<band3::launcher::InGameSettingsDialog>(
+        drawer,
+        band3::launcher::InGameHost{
+            .config_path = [this] { return path_defaults_.config_path; },
+            .path_defaults =
+                [this] {
+                  return band3::launcher::PathDefaults{path_defaults_.game_data_root,
+                                                       path_defaults_.user_data_root};
+                },
+            .anchor = [this] { return anchor_; },
+            .game_data_root = [this] { return game_data_root(); },
+            .native_window =
+                [this]() -> void* { return window() ? window()->GetNativeWindowHandle() : nullptr; },
+            .open_all_settings = [this] { SetAllSettingsOpen(true); },
+            .close_all_settings = [this] { SetAllSettingsOpen(false); },
+            .all_settings_open = [this] { return all_settings_ != nullptr; },
+            .open_instrument_lab =
+                [this] {
+                  app_context().CallInUIThreadDeferred([this] { PressBind("bind_instrument_lab"); });
+                },
+        });
+    const std::string key = rex::cvar::GetFlagByName("bind_settings");
+    rex::ui::UnregisterBind("bind_settings");
+    rex::ui::RegisterBind("bind_settings", "F4",
+                          "Open band3's settings; their All settings... opens the SDK's", [this] {
+                            if (ingame_settings_ && !launcher_) ingame_settings_->Toggle();
+                          });
+    if (!key.empty() && rex::cvar::GetFlagByName("bind_settings") != key &&
+        !rex::cvar::SetFlagByName("bind_settings", key)) {
+      REXLOG_WARN("Settings: couldn't keep bind_settings = {}", key);
+    }
+  }
+
+  // the SDK's settings menu: made and dropped outside the dialogs' draw,
+  // since that's where "All settings..." asks
+  void SetAllSettingsOpen(bool open) {
+    app_context().CallInUIThreadDeferred([this, open] {
+      if (open && !all_settings_ && imgui_drawer()) {
+        all_settings_ =
+            std::make_unique<rex::ui::SettingsDialog>(imgui_drawer(), path_defaults_.config_path);
+        REXLOG_INFO("Settings: opened the SDK's settings menu");
+      } else if (!open && all_settings_) {
+        all_settings_.reset();
+        REXLOG_INFO("Settings: closed the SDK's settings menu");
+      }
+    });
+  }
+
   // presses whatever key a bind is set to, so the menu shortcut follows a
-  // rebound F4 or F6 (the SDK keeps its settings menu to itself)
+  // rebound F4 or F6
   void PressBind(const char* bind) {
     const auto key = rex::ui::ParseVirtualKey(rex::cvar::GetFlagByName(bind));
     if (key == rex::ui::VirtualKey::kNone || !window()) return;

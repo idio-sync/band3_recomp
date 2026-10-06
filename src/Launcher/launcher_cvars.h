@@ -3,6 +3,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
+#include "generated_rows.h"
 #include "launcher_settings.h"
 
 // The settings model's view of the real cvars (the game's build only; the
@@ -23,6 +25,10 @@ struct PathDefaults {
     std::filesystem::path game_data_root;
     std::filesystem::path user_data_root;
 };
+
+// band3's settings in the registry (Band3/...), for the in-game settings'
+// generated rows; commands left out
+std::vector<RegistryCvar> ReadRegistry();
 
 // What the model needs to know about the table's cvars: types, descriptions,
 // limits and lifecycles from the registry, the default layers (band3's startup

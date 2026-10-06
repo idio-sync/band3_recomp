@@ -73,6 +73,21 @@ bool RexCvarStore::Set(std::string_view name, std::string_view value) {
     return rex::cvar::SetFlagByName(name, value);
 }
 
+std::vector<RegistryCvar> ReadRegistry() {
+    std::vector<RegistryCvar> out;
+    for (const rex::cvar::FlagEntry& entry : rex::cvar::GetRegistry()) {
+        const auto type = TypeOf(entry.type);
+        if (!type || !entry.category.starts_with("Band3/")) continue;
+        out.push_back({.name = entry.name,
+                       .category = entry.category,
+                       .type = *type,
+                       .min = entry.constraints.min,
+                       .max = entry.constraints.max,
+                       .allowed = entry.constraints.allowed_values});
+    }
+    return out;
+}
+
 Environment ReadEnvironment(std::span<const Setting> table, const PathDefaults& paths,
                             const std::filesystem::path& anchor, Where where,
                             const std::filesystem::path& config_path) {
