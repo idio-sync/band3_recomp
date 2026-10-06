@@ -10,6 +10,7 @@
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_RC_COMPILER": "llvm-rc",
                 "CMAKE_C_FLAGS": "-march=x86-64-v3",
                 "CMAKE_CXX_FLAGS": "-march=x86-64-v3",
                 "CMAKE_PREFIX_PATH": "${sourceDir}/.rexglue-sdk"
