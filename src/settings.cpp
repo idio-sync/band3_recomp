@@ -155,7 +155,8 @@ REXCVAR_DEFINE_STRING(frame_cap, "display", "Band3/Graphics",
     .validator([](std::string_view v) { return band3::pacing::ParseFrameCap(v).has_value(); });
 
 REXCVAR_DEFINE_BOOL(debug_overlay, true, "Band3/Graphics",
-    "Show band3's FPS counter");
+    "Show band3's FPS counter: the game's frame rate (what frame_cap paces, and hit timing "
+    "follows) and the window's, which the display's refresh rate holds back");
 
 // Band3/Graphics/Native: the native renderer, with renderer native or both
 

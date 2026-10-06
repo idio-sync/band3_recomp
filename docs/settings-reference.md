@@ -92,7 +92,7 @@ Every setting the launcher and the in-game settings (F4) show, tab by tab, as th
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `debug_overlay` | `true` | `true`, `false` | Show band3's FPS counter |
+| `debug_overlay` | `true` | `true`, `false` | Show band3's FPS counter: the game's frame rate (what frame_cap paces, and hit timing follows) and the window's, which the display's refresh rate holds back |
 
 ## Audio
 

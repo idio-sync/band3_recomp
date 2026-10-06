@@ -13,6 +13,7 @@
 #include <rex/ui/overlay/settings_overlay.h>
 #include <imgui.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
@@ -51,6 +52,7 @@
 #include "Render/gpu_view.h"
 #include "Render/native_view.h"
 #include "Render/renderer_switch.h"
+#include "Render/scene_capture.h"
 #include "Render/sync_gpu/native_only.h"
 #include "Render/sync_gpu/sync_graphics_system.h"
 #include "Test/test_server.h"
@@ -68,17 +70,36 @@ class DebugOverlayDialog : public rex::ui::ImGuiDialog {
  protected:
   void OnDraw(ImGuiIO& io) override {
     if (hidden_ || !REXCVAR_GET(debug_overlay)) return;
+    UpdateGameRate();
     ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(220, 60), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(240, 76), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.5f);
     if (ImGui::Begin("Debug##overlay", nullptr, ImGuiWindowFlags_NoCollapse)) {
-      ImGui::Text("%.1f FPS (%.2f ms)", io.Framerate, 1000.0f / io.Framerate);
+      // the game's frames (what the frame cap paces, and hit timing follows),
+      // and the window's paints, which the display's refresh holds back
+      ImGui::Text("Game   %.1f FPS (%.2f ms)", game_fps_,
+                  game_fps_ > 0 ? 1000.0 / game_fps_ : 0.0);
+      ImGui::Text("Window %.1f FPS", io.Framerate);
     }
     ImGui::End();
   }
 
  private:
+  // the game's Presents a second, over the last half second or more
+  void UpdateGameRate() {
+    const auto now = std::chrono::steady_clock::now();
+    const uint64_t frames = band3::render::GamePresentCount();
+    const double seconds = std::chrono::duration<double>(now - rate_since_).count();
+    if (seconds < 0.5) return;
+    game_fps_ = (frames - rate_frames_) / seconds;
+    rate_frames_ = frames;
+    rate_since_ = now;
+  }
+
   bool hidden_ = false;
+  double game_fps_ = 0.0;
+  uint64_t rate_frames_ = 0;
+  std::chrono::steady_clock::time_point rate_since_ = std::chrono::steady_clock::now();
 };
 
 class Band3App : public rex::ReXApp {
