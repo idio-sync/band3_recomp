@@ -1,7 +1,14 @@
 // Experimental: logs a stack trace when the process is about to fast-fail
 // through abort(), std::terminate or a CRT invalid parameter, which otherwise
-// ends band3 with 0xC0000409 and nothing in the log. Frames are module+RVA;
-// tools/symbolize.py resolves band3.exe's against the build's band3.map.
+// ends band3 with 0xC0000409 and nothing in the log, and when an exception
+// nothing handles (an access violation outside the guest's memory, a stack
+// overflow) ends it. Frames are module+RVA; tools/symbolize.py resolves
+// band3.exe's against the build's band3.map.
+//
+// A crash that ends band3 also leaves a minidump beside its report
+// (crash-<start>-<pid>.dmp, the newest few kept): every thread's stack and
+// registers, for WinDbg with the build's band3.pdb. A thread started with
+// band3 writes it (CrashThread), since the crashed one may be out of stack.
 //
 // Each run's reports go to their own file in the logs folder beside band3.exe
 // (as the SDK's log does), crash-<start>-<pid>.txt, under a header naming the
@@ -23,6 +30,7 @@
 
 #include <windows.h>
 #include <d3d12.h>
+#include <dbghelp.h>
 #include <dxgi1_4.h>
 #include <shellapi.h>
 #include <wrl/client.h>
@@ -41,6 +49,7 @@
 #include "src/dred_report.h"
 #include "src/settings.h"
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -131,7 +140,7 @@ bool WriteReport(const std::string& text) {
     if (!g_report.header_written) {
         band3::crash_report::Run run;
         run.build = band3::BuildTag();
-        run.exe_timestamp = g_report.exe_timestamp;
+        run.exe = band3::crash_report::PeExeId(g_report.exe_timestamp);
         run.started = g_report.started;
         run.pid = GetCurrentProcessId();
         run.renderer = REXCVAR_GET(renderer);
@@ -304,9 +313,15 @@ bool DumpStack(const char* why) {
     return removed;
 }
 
+// hands a crash to CrashThread, for its minidump (below)
+void HandCrashOff(EXCEPTION_POINTERS* info, band3::crash_report::Kind kind);
+
 void OnAbort(int) {
     const bool removed = DumpStack("abort()");
-    RecordFatal(removed ? band3::crash_report::Kind::kGpuHang : band3::crash_report::Kind::kAbort);
+    const auto kind =
+        removed ? band3::crash_report::Kind::kGpuHang : band3::crash_report::Kind::kAbort;
+    RecordFatal(kind);
+    HandCrashOff(nullptr, kind);
 }
 
 void OnTerminate() {
@@ -322,6 +337,7 @@ void OnTerminate() {
     }
     DumpStack(what.c_str());
     RecordFatal(band3::crash_report::Kind::kTerminate);
+    HandCrashOff(nullptr, band3::crash_report::Kind::kTerminate);
     std::abort();
 }
 
@@ -410,17 +426,10 @@ std::string DescribeFrame(DWORD64 pc, bool return_address) {
     return where;
 }
 
-// the frames from the fault outward, unwound from the faulting context
-std::string GuestCallChain(const rex::arch::HostThreadContext& host) {
-    CONTEXT c{};
-    c.ContextFlags = CONTEXT_FULL;
-    c.Rip = host.rip;
-    c.Rax = host.rax, c.Rcx = host.rcx, c.Rdx = host.rdx, c.Rbx = host.rbx;
-    c.Rsp = host.rsp, c.Rbp = host.rbp, c.Rsi = host.rsi, c.Rdi = host.rdi;
-    c.R8 = host.r8, c.R9 = host.r9, c.R10 = host.r10, c.R11 = host.r11;
-    c.R12 = host.r12, c.R13 = host.r13, c.R14 = host.r14, c.R15 = host.r15;
+// the frames from a context outward, unwound, each on a line of its own
+std::string CallChain(CONTEXT c, int max_frames) {
     std::string text;
-    for (int i = 0; i < 24 && c.Rip; i++) {
+    for (int i = 0; i < max_frames && c.Rip; i++) {
         char line[24];
         std::snprintf(line, sizeof(line), "\n  #%02d ", i);
         text += line;
@@ -439,6 +448,18 @@ std::string GuestCallChain(const rex::arch::HostThreadContext& host) {
         }
     }
     return text;
+}
+
+// the frames from the fault outward, unwound from the faulting context
+std::string GuestCallChain(const rex::arch::HostThreadContext& host) {
+    CONTEXT c{};
+    c.ContextFlags = CONTEXT_FULL;
+    c.Rip = host.rip;
+    c.Rax = host.rax, c.Rcx = host.rcx, c.Rdx = host.rdx, c.Rbx = host.rbx;
+    c.Rsp = host.rsp, c.Rbp = host.rbp, c.Rsi = host.rsi, c.Rdi = host.rdi;
+    c.R8 = host.r8, c.R9 = host.r9, c.R10 = host.r10, c.R11 = host.r11;
+    c.R12 = host.r12, c.R13 = host.r13, c.R14 = host.r14, c.R15 = host.r15;
+    return CallChain(c, 24);
 }
 
 bool OnGuestFault(rex::arch::Exception* ex, void*) {
@@ -467,9 +488,162 @@ bool OnGuestFault(rex::arch::Exception* ex, void*) {
     return false;  // not handled: the game's own handler, if any, or the crash
 }
 
+// --- the crash thread: unhandled exceptions and minidumps ---
+
+using WriteDumpFn = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
+                                  PMINIDUMP_EXCEPTION_INFORMATION,
+                                  PMINIDUMP_USER_STREAM_INFORMATION,
+                                  PMINIDUMP_CALLBACK_INFORMATION);
+WriteDumpFn g_write_dump = nullptr;
+constexpr size_t kDumpsKept = 5;
+
+// the crash CrashThread writes up: the first of the run
+struct CrashRequest {
+    EXCEPTION_POINTERS* info = nullptr;  // null for abort() and std::terminate
+    DWORD thread_id = 0;
+    band3::crash_report::Kind kind = band3::crash_report::Kind::kAbort;
+};
+CrashRequest g_request;
+std::atomic<bool> g_request_claimed{false};
+// manual reset: a second thread crashing meanwhile waits on done too
+HANDLE g_request_ready = nullptr;
+HANDLE g_request_done = nullptr;
+DWORD g_crash_thread_id = 0;
+LPTOP_LEVEL_EXCEPTION_FILTER g_previous_filter = nullptr;
+
+// an unhandled exception's report: what it was and the crashed thread's
+// frames, unwound from its context
+void ReportException(const CrashRequest& r) {
+    const EXCEPTION_RECORD* rec = r.info->ExceptionRecord;
+    std::string text =
+        "[crash-trace] unhandled exception: " +
+        band3::crash_report::DescribeException(
+            rec->ExceptionCode, rec->NumberParameters,
+            rec->NumberParameters > 0 ? rec->ExceptionInformation[0] : 0,
+            rec->NumberParameters > 1 ? rec->ExceptionInformation[1] : 0) +
+        " on thread " + std::to_string(r.thread_id) + " at " +
+        band3::crash_report::FormatUtc(UtcNow()) + " UTC" + CallChain(*r.info->ContextRecord, 32) +
+        "\n";
+    AppendDred(text);
+    REXLOG_CRITICAL("{}", text);
+    if (WriteReport(text)) REXLOG_CRITICAL("Crash report: {}", Utf8(g_report.path.wstring()));
+}
+
+// the run's minidump, beside its report, after deleting the oldest so the
+// newest few stay
+void WriteDump(const CrashRequest& r) {
+    if (!g_write_dump || g_report.path.empty()) return;
+    std::filesystem::path path = g_report.path;
+    path.replace_extension(".dmp");
+    std::error_code ec;
+    std::vector<std::string> dumps;
+    for (const auto& e : std::filesystem::directory_iterator(g_report.folder, ec)) {
+        const std::string name = e.path().filename().string();
+        if (name.starts_with("crash-") && name.ends_with(".dmp")) dumps.push_back(name);
+    }
+    for (const auto& name : band3::crash_report::DumpsToRemove(dumps, kDumpsKept - 1))
+        std::filesystem::remove(g_report.folder / name, ec);
+    const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return;
+    MINIDUMP_EXCEPTION_INFORMATION exception{r.thread_id, r.info, FALSE};
+    // every thread's stack and registers, and the memory they point at; not
+    // all memory, which with the guest's would run to gigabytes
+    const auto type =
+        MINIDUMP_TYPE(MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory |
+                      MiniDumpWithFullMemoryInfo | MiniDumpWithUnloadedModules);
+    const BOOL ok = g_write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, type,
+                                 r.info ? &exception : nullptr, nullptr, nullptr);
+    const DWORD error = ok ? 0 : GetLastError();
+    CloseHandle(file);
+    std::string line;
+    if (ok) {
+        line = "Minidump: " + Utf8(path.wstring()) + "\n";
+    } else {
+        DeleteFileW(path.c_str());
+        char why[96];
+        std::snprintf(why, sizeof(why), "Minidump: couldn't write it (error 0x%08lX)\n", error);
+        line = why;
+    }
+    REXLOG_CRITICAL("{}", line);
+    WriteReport(line);
+    if (auto logger = rex::GetLogger()) logger->flush();
+}
+
+DWORD WINAPI CrashThread(void*) {
+    WaitForSingleObject(g_request_ready, INFINITE);
+    if (g_request.info) ReportException(g_request);
+    WriteDump(g_request);
+    if (g_request.info) RecordFatal(g_request.kind);
+    SetEvent(g_request_done);
+    return 0;
+}
+
+void StartCrashThread() {
+    // System32's, not one beside band3.exe
+    if (HMODULE dbghelp = LoadLibraryExW(L"dbghelp.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)) {
+        g_write_dump =
+            reinterpret_cast<WriteDumpFn>(GetProcAddress(dbghelp, "MiniDumpWriteDump"));
+    }
+    g_request_ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_request_done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    HANDLE thread = g_request_ready && g_request_done
+                        ? CreateThread(nullptr, 256 * 1024, CrashThread, nullptr, 0,
+                                       &g_crash_thread_id)
+                        : nullptr;
+    if (!thread) {
+        g_request_ready = nullptr;
+        return;
+    }
+    SetThreadDescription(thread, L"band3 crash reports");
+    CloseHandle(thread);
+}
+
+// Hands the run's first crash to CrashThread and waits for its report and
+// dump; a crash on another thread meanwhile waits too, so band3 doesn't end
+// halfway through. Little stack of its own: the crashed thread may have none.
+void HandCrashOff(EXCEPTION_POINTERS* info, band3::crash_report::Kind kind) {
+    if (!g_request_ready || GetCurrentThreadId() == g_crash_thread_id) return;
+    if (!g_request_claimed.exchange(true)) {
+        g_request = {info, GetCurrentThreadId(), kind};
+        SetEvent(g_request_ready);
+    }
+    WaitForSingleObject(g_request_done, 60000);
+}
+
+// An exception nothing handled, before Windows ends band3 (or the filter
+// that was there before, whose word stands).
+LONG WINAPI OnUnhandledException(EXCEPTION_POINTERS* info) {
+    // a filter that hands on to this one, as this one hands on to it
+    static thread_local bool in_filter = false;
+    if (in_filter) return EXCEPTION_CONTINUE_SEARCH;
+    in_filter = true;
+    // an uncaught C++ exception (MSVC's code) goes on to std::terminate: OnTerminate
+    constexpr DWORD kCppException = 0xE06D7363;
+    if (info->ExceptionRecord->ExceptionCode != kCppException)
+        HandCrashOff(info, band3::crash_report::Kind::kException);
+    const LONG result = g_previous_filter ? g_previous_filter(info) : EXCEPTION_CONTINUE_SEARCH;
+    in_filter = false;
+    return result;
+}
+
+void InstallUnhandledFilter() {
+    const LPTOP_LEVEL_EXCEPTION_FILTER previous = SetUnhandledExceptionFilter(OnUnhandledException);
+    if (previous != OnUnhandledException) g_previous_filter = previous;
+}
+
+// BAND3_CRASH_TEST's: past the end of a stack
+int Recurse(int depth) {
+    volatile char frame[4096];
+    frame[0] = char(depth);
+    return depth > 0 ? Recurse(depth + 1) + frame[0] : 0;
+}
+
 struct Install {
     Install() {
         SetUpReportFile();
+        StartCrashThread();
+        InstallUnhandledFilter();
         AddVectoredExceptionHandler(1, OnException);
         std::signal(SIGABRT, OnAbort);
         std::set_terminate(OnTerminate);
@@ -497,6 +671,8 @@ void WatchGuestFaults() {
         g_guest_functions.emplace(reinterpret_cast<uintptr_t>(m->host), static_cast<uint32_t>(m->guest));
     }
     rex::arch::ExceptionHandler::Install(OnGuestFault, nullptr);
+    // again, ahead of any filter the SDK set up meanwhile, which it hands on to
+    InstallUnhandledFilter();
 }
 
 void WatchD3D12Device(void* device, void* direct_queue) {
@@ -514,7 +690,13 @@ void RunCrashTest() {
     REXLOG_WARN("BAND3_CRASH_TEST={}: crashing on purpose", test);
     if (std::strcmp(test, "abort") == 0) std::abort();
     if (std::strcmp(test, "terminate") == 0) std::terminate();
-    REXLOG_WARN("BAND3_CRASH_TEST: unknown test (abort or terminate)");
+    if (std::strcmp(test, "access-violation") == 0) {
+        int* volatile nowhere = nullptr;
+        *nowhere = 1;
+    }
+    if (std::strcmp(test, "stack-overflow") == 0) Recurse(1);
+    REXLOG_WARN("BAND3_CRASH_TEST: unknown test (abort, terminate, access-violation or "
+                "stack-overflow)");
 }
 
 void ShowLastCrashNotice() {

@@ -51,6 +51,10 @@ if(WIN32)
     target_link_libraries(band3 PRIVATE ws2_32)
     # symbol map, to resolve the frames src/crash_trace.cpp logs
     target_link_options(band3 PRIVATE "LINKER:/MAP:${CMAKE_BINARY_DIR}/band3.map")
+    # band3.pdb with the public symbols (nothing is compiled with debug info),
+    # for WinDbg to name the frames in crash_trace.cpp's minidumps; /DEBUG
+    # would otherwise turn off the /OPT:REF and /OPT:ICF a release link has
+    target_link_options(band3 PRIVATE "LINKER:/DEBUG" "LINKER:/OPT:REF" "LINKER:/OPT:ICF")
 endif()
 
 # MIDI input for MIDI drum kits (src/Input/midi_drums_driver.cpp)

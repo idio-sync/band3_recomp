@@ -1,6 +1,6 @@
 #pragma once
 
-// See crash_trace.cpp.
+// See crash_trace.cpp (Windows) and crash_trace_posix.cpp (elsewhere).
 
 #include <cstdint>
 #include <string>
@@ -23,23 +23,26 @@ void WatchD3D12Device(void* device, void* direct_queue);
 // (dred_report.h's IndexedDrawNamer): the native renderer's last frame
 // (GpuRenderer::DescribeIndexedDraw). Null lets it go.
 void SetIndexedDrawNamer(std::string (*namer)(uint32_t before, uint32_t total));
+#endif
 
 // Logs, for a guest access violation the SDK can't handle, the guest
-// functions it happened in (each frame's guest address, from the recompiled
-// function it's in), innermost first. After the runtime's setup, so the SDK's
-// own handlers (MMIO, GPU write watches) come first.
+// functions it happened in (on Windows each frame's guest address, from the
+// recompiled function it's in; elsewhere the host frames), innermost first.
+// After the runtime's setup, so the SDK's own handlers (MMIO, GPU write
+// watches) come first; on Windows it also puts the crash trace's unhandled
+// exception filter back ahead of any the SDK set up.
 void WatchGuestFaults();
 
-// If the last run ended in a crash (abort() or std::terminate), tells the
-// player in a message box: where its report is and, after a GPU hang with
-// band3's native renderer, that renderer = emulated may avoid it
-// (crash_report.h's Notice), with a button that opens the folder. Once: it
-// forgets the crash.
+// If the last run ended in a crash (a fatal exception or signal, abort() or
+// std::terminate), tells the player in a message box: where its report is
+// and, after a GPU hang with band3's native renderer, that renderer = emulated
+// may avoid it (crash_report.h's Notice), with a button that opens the folder.
+// Once: it forgets the crash.
 void ShowLastCrashNotice();
 
-// With BAND3_CRASH_TEST=abort or terminate in the environment, crashes that
-// way, to check the report and the next start's notice.
+// With BAND3_CRASH_TEST=abort, terminate, access-violation or stack-overflow
+// in the environment, crashes that way, to check the report, the minidump (on
+// Windows) and the next start's notice.
 void RunCrashTest();
-#endif
 
 }  // namespace band3::crash_trace

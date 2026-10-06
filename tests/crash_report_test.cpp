@@ -4,6 +4,7 @@
 
 #include <doctest/doctest.h>
 #include <string>
+#include <vector>
 #include "src/crash_report.h"
 
 using namespace band3::crash_report;
@@ -26,7 +27,7 @@ TEST_CASE("a run's report file is named by when it started and its process") {
 TEST_CASE("the header names the build and band3.exe's time stamp as band3.map gives it") {
     Run run;
     run.build = "v1.2-3-gabc1234-dirty";
-    run.exe_timestamp = 0x6ac5002d;
+    run.exe = PeExeId(0x6ac5002d);
     run.started = kStarted;
     run.pid = 1234;
     run.renderer = "native";
@@ -38,7 +39,7 @@ TEST_CASE("the header names the build and band3.exe's time stamp as band3.map gi
 
 TEST_CASE("the header leaves out what isn't known") {
     Run run;
-    run.exe_timestamp = 0x1;
+    run.exe = PeExeId(0x1);
     run.started = kStarted;
     run.pid = 7;
     const std::string header = FormatHeader(run);
@@ -46,6 +47,18 @@ TEST_CASE("the header leaves out what isn't known") {
     CHECK(Has(header, "band3.exe 00000001"));
     CHECK_FALSE(Has(header, "renderer"));
     CHECK_FALSE(Has(header, "GPU"));
+}
+
+TEST_CASE("on Linux the header names the executable by its build id") {
+    Run run;
+    run.build = "v1.2";
+    run.exe = ElfExeId("0a1b2c");
+    run.started = kStarted;
+    run.pid = 9;
+    CHECK(FormatHeader(run) ==
+          "=== band3 v1.2 | band3 build-id 0a1b2c | started 2026-10-06 09:05:03 UTC | pid 9 "
+          "===\n");
+    CHECK(ElfExeId("") == "band3 build-id unknown");
 }
 
 TEST_CASE("last_crash.txt reads back as it was written") {
@@ -96,4 +109,34 @@ TEST_CASE("after a GPU hang the notice suggests the emulated renderer, unless it
     CHECK(Has(Notice(c), "setting renderer = emulated"));
     c.renderer = "emulated";
     CHECK_FALSE(Has(Notice(c), "renderer = emulated"));
+}
+
+TEST_CASE("an unhandled exception is named, with what an access violation tried and where") {
+    CHECK(DescribeException(0xC0000005, 2, 1, 0x10) ==
+          "access violation (0xC0000005), write of 0x0000000000000010");
+    CHECK(DescribeException(0xC0000005, 2, 0, 0) ==
+          "access violation (0xC0000005), read of 0x0000000000000000");
+    CHECK(DescribeException(0xC0000005, 2, 8, 0x1234) ==
+          "access violation (0xC0000005), execute of 0x0000000000001234");
+    CHECK(DescribeException(0xC0000005, 0, 1, 0x10) == "access violation (0xC0000005)");
+    CHECK(DescribeException(0xC00000FD, 0, 0, 0) == "stack overflow (0xC00000FD)");
+    CHECK(DescribeException(0x12345678, 0, 0, 0) == "exception (0x12345678)");
+}
+
+TEST_CASE("the oldest minidumps go, so the newest few stay") {
+    const std::vector<std::string> names = {
+        "crash-20261006-100000-3.dmp", "crash-20261004-090000-1.dmp",
+        "crash-20261005-120000-2.dmp"};
+    CHECK(DumpsToRemove(names, 5).empty());
+    CHECK(DumpsToRemove(names, 3).empty());
+    const std::vector<std::string> oldest = {"crash-20261004-090000-1.dmp",
+                                             "crash-20261005-120000-2.dmp"};
+    CHECK(DumpsToRemove(names, 1) == oldest);
+    CHECK(DumpsToRemove(names, 0).size() == 3);
+}
+
+TEST_CASE("an exception crash reads back from last_crash.txt") {
+    const auto c = ParseLastCrash("report=r.txt\nkind=exception\n");
+    REQUIRE(c);
+    CHECK(c->kind == Kind::kException);
 }

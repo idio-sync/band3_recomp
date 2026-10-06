@@ -67,9 +67,32 @@ python tools/package.py --build-dir out/build/linux-amd64-release
 It writes `out/package/band3-<commit>-<build folder>.zip`: band3 and the libraries beside
 it, `band3_config.ini`, the licenses (band3's and those of the libraries built into it)
 and a `README.txt` with what to install, where the game files go and a link to the
-commit's source. No game files. `band3.map` goes beside the zip, not in it: keep it to
-resolve crash traces from that build. With uncommitted changes to tracked files it stops
-unless `--allow-dirty`.
+commit's source. No game files. `band3.map` and `band3.pdb` go beside the zip, not in
+it: keep them to read crash reports from that build. With uncommitted changes to tracked
+files it stops unless `--allow-dirty`.
+
+## Crash reports
+
+When band3 crashes (`abort()`, `std::terminate`, an exception or fatal signal nothing
+handles), it writes the stack to the log and to `logs/crash-<start>-<pid>.txt` beside the
+executable, under a header naming the build and the binary (band3.exe's link time stamp,
+or the Linux executable's build id). The next start tells the player where it is, and
+after a GPU hang with the native renderer suggests `renderer = emulated`. On Windows a
+minidump goes beside the report (`crash-<start>-<pid>.dmp`, the newest five kept), with
+every thread's stack, for WinDbg with the build's `band3.pdb`.
+
+Frames are module+offset. `tools/symbolize.py` names band3's: from the `band3.map` whose
+time stamp matches the report on Windows, with `addr2line` from the executable whose build
+id matches on Linux, and guest addresses from `band3_config.toml`:
+
+```
+python tools/symbolize.py out/build/win-amd64-release/logs/crash-20261006-142122-29936.txt
+python3 tools/symbolize.py --elf band3 logs/crash-20261006-142122-29936.txt
+```
+
+Frames in the SDK's libraries stay unnamed: the SDK ships no symbols for them.
+`BAND3_CRASH_TEST=abort`, `terminate`, `access-violation` or `stack-overflow` in the
+environment crashes band3 that way once the runtime is set up, to check all of it.
 
 ## Checks
 

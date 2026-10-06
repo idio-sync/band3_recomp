@@ -17,6 +17,8 @@ out/package/band3-<commit>-<build folder>.zip, everything under a band3 folder:
 No game files: the player brings their own. band3.map goes beside the zip
 (band3-<commit>-<build folder>.map), not in it: it resolves the frames a crash
 trace from that build logs, so keep it for as long as the build is out there.
+band3.pdb goes beside it the same way (band3-<commit>-<build folder>.pdb): its
+public symbols name the frames in that build's minidumps, in WinDbg.
 
 The commit in the name is HEAD's, and README.txt links its source, as GPLv2
 asks of a binary. With uncommitted changes to tracked files the build may not
@@ -134,6 +136,11 @@ def readme(commit, full_commit, windows, dirty):
         + ", and F4 in game.",
         "band3_config.ini documents every option.",
         "",
+        "If band3 crashes, the next start says so. The logs folder beside band3 has",
+        "the log and the crash report (crash-*.txt"
+        + (", and a crash-*.dmp beside it" if windows else "")
+        + "): include them when you report the problem.",
+        "",
         f"Source: {source_url()}/tree/{full_commit} (GPLv2, see LICENSE.md).",
         "licenses/ holds the licenses of the libraries band3 is built with.",
         "",
@@ -186,6 +193,10 @@ def main(argv):
     if os.path.isfile(map_file):
         shutil.copy2(map_file, os.path.join(OUT, name + ".map"))
         print(os.path.join(OUT, name + ".map"), "(keep: resolves this build's crash traces)")
+    pdb_file = os.path.join(build_dir, "band3.pdb")
+    if os.path.isfile(pdb_file):
+        shutil.copy2(pdb_file, os.path.join(OUT, name + ".pdb"))
+        print(os.path.join(OUT, name + ".pdb"), "(keep: names the frames in this build's minidumps)")
     return 0
 
 
