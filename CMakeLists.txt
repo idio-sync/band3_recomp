@@ -32,6 +32,11 @@ if(UNIX AND NOT APPLE)
     add_custom_command(TARGET band3 POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:rex::runtime>
                 $<TARGET_FILE_DIR:band3>)
+    # only the SDK's overrides and C++ names exported: not the guest functions
+    # named as a C library's (cmake/linux_exports.map)
+    set(BAND3_EXPORTS ${CMAKE_CURRENT_SOURCE_DIR}/cmake/linux_exports.map)
+    target_link_options(band3 PRIVATE "LINKER:--version-script=${BAND3_EXPORTS}")
+    set_property(TARGET band3 APPEND PROPERTY LINK_DEPENDS ${BAND3_EXPORTS})
 endif()
 
 # renderdoc_app.h, which the SDK's Vulkan headers include
