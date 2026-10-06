@@ -55,6 +55,15 @@ constexpr Choice kRenderers[] = {
     {"native", "Native"},
 };
 
+// native_max_height's: the most lines drawn, a taller window's picture scaled up
+constexpr Choice kNativeHeights[] = {
+    {"0", "The window's size"},
+    {"720", "Up to 720p"},
+    {"1080", "Up to 1080p"},
+    {"1440", "Up to 1440p"},
+    {"2160", "Up to 4K"},
+};
+
 constexpr Choice kEmulatedGpu[] = {
     {"on", "On (A/B test mode, F8 switches)"},
     {"off", "Off (native only)"},
@@ -101,6 +110,7 @@ constexpr Condition kWithGoCentral{"gocentral", "true"};
 constexpr Condition kWithLiveless{"liveless", "true"};
 // vsync paces the game only with the frame cap off; the cap turns it off
 constexpr Condition kWithoutFrameCap{"frame_cap", "off"};
+constexpr Condition kWithNativeRenderer{"renderer", "native"};
 
 constexpr Range kSpeeds{0.5, 2.0, 0.05};
 constexpr Range kPorts{1, 65535, 1};
@@ -164,6 +174,9 @@ constexpr Setting kSettings[] = {
     // (sync_graphics_system.h) has run on Linux
     {.cvar = "emulated_gpu", .tab = kGraphics, .section = "Rendering", .label = "Emulated GPU",
      .widget = kCombo, .choices = kEmulatedGpu, .windows_only = true},
+    {.cvar = "native_max_height", .tab = kGraphics, .section = "Rendering",
+     .label = "Render resolution", .widget = kComboText, .choices = kNativeHeights,
+     .shown_when = kWithNativeRenderer},
     {.cvar = "resolution_scale", .tab = kGraphics, .section = "Rendering",
      .label = "Render scale", .widget = kIntStepper, .range = Range{1, 8, 1}, .unit = "x"},
     {.cvar = "swap_post_effect", .tab = kGraphics, .section = "Rendering",

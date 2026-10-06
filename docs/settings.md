@@ -19,7 +19,11 @@ or part of one.
 The Graphics tab's **Renderer** picks what draws the game's picture: **Native**, band3's own
 [native renderer](native-renderer.md) (the default on Windows), or **Emulated GPU** (the
 default on Linux, where the native renderer hasn't been run yet). F8 switches between them
-in game. Its **Frame rate cap** is [`frame_cap`](#config-files): the display's refresh rate
+in game. With Native, **Render resolution** is
+[`native_max_height`](native-renderer.md): the window's size (the default), or the most lines
+the native renderer draws, a taller window's picture scaled up to fill it, for a GPU that
+can't keep up at the window's size; **Other...** takes a typed height. **Render scale** is
+the emulated GPU's. The tab's **Frame rate cap** is [`frame_cap`](#config-files): the display's refresh rate
 (the default), Auto for a VRR display, Off, a rate from the list, or **Other...** for a
 typed one. **VSync** shows only with the cap off, since the cap turns it off.
 

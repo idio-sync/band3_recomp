@@ -1,6 +1,7 @@
 // Checks the launcher's settings model (src/Launcher/launcher_settings.h):
 // effective defaults, typed comparison, reset, locks, the Steam Deck toggle,
-// what Save writes, the renderer's per-platform default, and the joypad_lag
+// what Save writes, the renderer's per-platform default, the native render
+// resolution's row, and the joypad_lag
 // and folder helpers.
 
 #include <doctest/doctest.h>
@@ -759,6 +760,35 @@ TEST_CASE("the renderer's default is native on Windows, and an untouched one isn
     // and Reset takes it out again
     CHECK(m.Reset("renderer"));
     CHECK_FALSE(EditFor(m.Edits(), "renderer")->value);
+}
+
+TEST_CASE("the native render resolution shows with the native renderer, and saves a number") {
+    Fixture f;
+    f.env.cvars["renderer"] = Facts(ValueType::kString, "native");
+    f.env.cvars["native_max_height"] = Facts(ValueType::kInt, "0");
+    f.env.cvars["native_max_height"].min = 0;
+    f.env.cvars["native_max_height"].max = 4320;
+    f.store.values["renderer"] = "native";
+    f.store.values["native_max_height"] = "0";
+    const Setting* renderer = FindSetting(SettingTable(), "renderer");
+    const Setting* height = FindSetting(SettingTable(), "native_max_height");
+    REQUIRE(renderer);
+    REQUIRE(height);
+    const Setting table[] = {*renderer, *height};
+    SettingsModel m(table, f.env, f.store);
+    CHECK(m.Visible(table[1]));
+    CHECK(m.ChoiceIndex(table[1]) == 0);
+    CHECK_FALSE(m.IsChanged("native_max_height"));
+    // a preset, then a typed height, saved as numbers
+    CHECK(m.Set("native_max_height", "1080"));
+    CHECK(m.ChoiceIndex(table[1]) >= 0);
+    CHECK(*EditFor(m.Edits(), "native_max_height")->value == ConfigValue(int64_t{1080}));
+    CHECK(m.Set("native_max_height", "900"));
+    CHECK(m.ChoiceIndex(table[1]) == -1);
+    CHECK(*EditFor(m.Edits(), "native_max_height")->value == ConfigValue(int64_t{900}));
+    // the emulated GPU draws at its own resolution (Render scale)
+    CHECK(m.Set("renderer", "emulated"));
+    CHECK_FALSE(m.Visible(table[1]));
 }
 
 TEST_CASE("the launcher's table is consistent") {
