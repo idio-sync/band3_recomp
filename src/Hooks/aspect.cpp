@@ -30,6 +30,9 @@ using namespace band3::aspect;
 // ShapeFor's, 0 (16:9) until the native renderer presents
 std::atomic<uint64_t> g_shape{0};
 
+// whether the screen up is the song list (SetScreen)
+std::atomic<bool> g_song_list{false};
+
 // each camera's shape as UpdateLocal last built it
 std::mutex g_built_mutex;
 std::unordered_map<uint32_t, uint64_t> g_built;
@@ -74,6 +77,12 @@ void BeforeSelect(uint8_t* base, uint32_t cam) {
     // no Rnd::Aspect, so Select rebuilds it
     if (stale) REX_STORE_U32(cam + kCam_Aspect, 0xFFFFFFFFu);
 }
+
+void SetScreen(const char* name) {
+    g_song_list.store(name && IsSongList(name), std::memory_order_relaxed);
+}
+
+bool SongListShowing() { return g_song_list.load(std::memory_order_relaxed); }
 
 void CurrentOverlayEdge(float out[2]) {
     OverlayEdge(g_shape.load(std::memory_order_relaxed), out);

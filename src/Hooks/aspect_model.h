@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string_view>
 
 namespace band3::aspect {
 
@@ -72,5 +73,19 @@ inline void OverlayEdge(uint64_t shape, float out[2]) {
     else
         out[1] = float(ratio);
 }
+
+// The song list's rows run off the left edge of a 16:9 screen, as RB3 drew
+// them for TVs that cut the picture's edges. Stretched out to a wider
+// window's edge they'd stretch the selected row's tab into a long slab, so
+// on the song list the native renderer cuts the rows where a 16:9 screen
+// does instead (RasterOptions::overlay_cut): the menu draws lying wholly
+// between the bar above the list ("viewing all ... songs", from 0.78 down to
+// 0.68 in the 16:9 frame's clip y) and the hint bar below it (from -0.68
+// down), with room for neither. The bars themselves, and the player bar,
+// still reach the window's edges, as on every screen.
+inline constexpr float kSongListCut[2] = {-0.70f, 0.70f};
+
+// the screens that are the song list (UIScreen names)
+inline bool IsSongList(std::string_view screen) { return screen == "song_select_screen"; }
 
 }  // namespace band3::aspect

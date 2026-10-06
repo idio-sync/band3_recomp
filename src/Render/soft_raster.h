@@ -75,6 +75,14 @@ struct PostHistory;
 // at post_boundary, without the overlay
 enum class RasterView { kFinal, kSceneAlpha, kSceneDepth };
 
+struct RasterOptions;
+struct DrawItem;
+// whether an overlay draw over the whole picture is cut at the game's 16:9
+// (RasterOptions::overlay_cut): its vertices' clip y, in the game's 16:9
+// frame, all within the cut's; the renderers then leave it unstretched and
+// draw it only in the 16:9 frame's columns
+bool InOverlayCut(const DrawItem& it, const RasterOptions& o);
+
 struct RasterOptions {
     uint32_t width = 640;
     uint32_t height = 360;
@@ -193,6 +201,11 @@ struct RasterOptions {
     // menu art drawn a little past 16:9 reaches the window's edge rather
     // than stopping short of it. 1 1 (the picture's edge) leaves them.
     float overlay_edge[2] = {1.0f, 1.0f};
+    // With overlay_edge, the song list's (aspect_model.h's kSongListCut): an
+    // overlay draw over the whole picture lying wholly between these clip y
+    // (bottom, top; in the game's 16:9 frame) is cut at the game's 16:9 across
+    // rather than stretched, as a 16:9 screen cuts it (InOverlayCut). 0 0 none.
+    float overlay_cut[2] = {0.0f, 0.0f};
     // On the GPU, what each indexed draw of the frame is (mesh, target,
     // counts, textures and their samplers), kept while the GPU draws it
     // (GpuRenderer::DescribeIndexedDraw): with the dred setting, so a GPU

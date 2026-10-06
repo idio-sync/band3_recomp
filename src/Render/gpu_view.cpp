@@ -2828,9 +2828,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     SDL_GPUBuffer* bound_verts = nullptr;
     SDL_GPUTexture* bound_tex[kNumSpotSlots] = {};
     float bound_viewport[4] = {};
+    // the open pass's scissor is the song list's cut (InOverlayCut), not the
+    // whole target
+    bool scissor_cut = false;
     auto begin_pass = [&](const SDL_GPUColorTargetInfo& ct,
                           const SDL_GPUDepthStencilTargetInfo& dt) {
         pass = BeginPass(cmd, &ct, 1, &dt);
+        scissor_cut = false;
         SDL_BindGPUVertexStorageBuffers(pass, 0, &bone_buffer, 1);
         bound = nullptr;
         bound_verts = nullptr;
@@ -3541,8 +3545,19 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 // in pixels, a camera's with a screen rect in its own
                 const bool whole = vp[0] == 0.0f && vp[1] == 0.0f &&
                                    vp[2] == float(width) && vp[3] == float(height);
-                draw(d, alpha, false, false, depth_map,
-                     resolved && whole && it.rect_shader < 0);
+                const bool overlay_whole = resolved && whole && it.rect_shader < 0;
+                // the song list's rows cut at 16:9 instead (InOverlayCut): to
+                // the 16:9 frame's columns
+                const bool cut = overlay_whole && InOverlayCut(it, o);
+                if (cut != scissor_cut) {
+                    const float e = o.overlay_edge[0];
+                    const int x0 = cut ? int(std::lround((1 - e) / 2 * float(width))) : 0;
+                    const int x1 = cut ? int(std::lround((1 + e) / 2 * float(width))) : int(width);
+                    const SDL_Rect r{x0, 0, x1 - x0, int(height)};
+                    SDL_SetGPUScissor(pass, &r);
+                    scissor_cut = cut;
+                }
+                draw(d, alpha, false, false, depth_map, overlay_whole && !cut);
                 depth_fresh = false;
             }
             continue;

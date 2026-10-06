@@ -16,4 +16,11 @@ void BeforeSelect(uint8_t* base, uint32_t cam);
 // OverlayEdge for the shape the cameras are built for now
 void CurrentOverlayEdge(float out[2]);
 
+// the screen up, by its UIScreen name (rb3e_events.cpp's
+// PresenceMgr::UpdatePresence, which the game calls on screen changes); and
+// whether it's the song list, whose rows the native renderer cuts at 16:9
+// (aspect_model.h's kSongListCut)
+void SetScreen(const char* name);
+bool SongListShowing();
+
 }  // namespace band3::aspect

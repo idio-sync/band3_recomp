@@ -186,6 +186,13 @@ a camera's with a screen rect of its own (the tracks with more players) and the 
 full-screen quads alone, and in a song it works across only: the HUD under the track (the
 player's name) runs past 16:9's bottom by design, and a taller window shows it whole.
 
+The song list (`song_select_screen`, Play a Show's too) is the exception: its rows run off a
+16:9 screen's left edge, and stretched out to a wider window's edge the selected row's tab
+would become a long slab. There the draws lying between the "viewing all ... songs" bar and
+the hint bar are cut where a 16:9 screen cuts them instead (`RasterOptions::overlay_cut`,
+`aspect_model.h`'s `kSongListCut`), so the list looks as it does at 16:9 and the side shows
+the background; the bars above and below it, and the player bar, still span the window.
+
 All 32 venues were checked at 32:9 (`forced_venue`, intros and play): each fills the
 window, with nothing missing at its edges. Not right yet: one orthographic camera draws to
 the screen (the rest are perspective); it isn't widened, and what it draws hasn't been

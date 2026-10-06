@@ -1,6 +1,7 @@
 #include "src/Render/native_view.h"
 
 #include "src/Hooks/aspect.h"
+#include "src/Hooks/aspect_model.h"
 #include "src/Hooks/frame_pacing.h"
 #include "src/Launcher/launcher_platform.h"
 #include "src/Render/camera_cut.h"
@@ -725,6 +726,12 @@ class Renderer {
                     // runs past 16:9's bottom by design: a taller window
                     // shows it whole rather than stretched
                     if (InSong()) o.overlay_edge[1] = 1.0f;
+                    // and the song list's rows cut where a 16:9 screen cuts
+                    // them (aspect_model.h's kSongListCut)
+                    if (band3::aspect::SongListShowing()) {
+                        o.overlay_cut[0] = band3::aspect::kSongListCut[0];
+                        o.overlay_cut[1] = band3::aspect::kSongListCut[1];
+                    }
                 }
                 ScaleForPicture(o);
                 o.normal_maps = REXCVAR_GET(native_view_normal_maps);

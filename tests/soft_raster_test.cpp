@@ -1681,3 +1681,29 @@ TEST_CASE("an overlay draw past the game's 16:9 reaches the picture's edge; the 
     CHECK(rgba[1 * 8 + 0] != kGreen);
     CHECK(rgba[1 * 8 + 1] == kGreen);
 }
+
+TEST_CASE("on the song list, an overlay draw within the cut's band is cut at 16:9, not stretched") {
+    // the middle half is the game's 16:9; a row-like quad in the band (y
+    // 0.6..-0.6) and a bar over the whole height, both past 16:9 across
+    FrameCapture f;
+    f.draws = {Item(Quad(-1, 1, kRed), 0), Item(Quad(-0.75f, 0.75f, kGreen, 0.6f, -0.6f), 0)};
+    f.passes = {BackBuffer(0, 2)};
+    f.post_boundary = 1;
+    RasterOptions o = Small();
+    o.overlay_edge[0] = 0.5f;
+    o.overlay_cut[0] = -0.7f;
+    o.overlay_cut[1] = 0.7f;
+    std::vector<uint32_t> rgba;
+    Rasterize(f, o, rgba);
+    // drawn in 16:9's columns (2..5) alone, where 16:9 would show it (row 2,
+    // which the quad covers whole past D3D9's half-pixel offset)
+    CHECK(rgba[2 * 8 + 0] == kRed);
+    CHECK(rgba[2 * 8 + 1] == kRed);
+    for (int x = 2; x < 6; x++) CHECK(rgba[2 * 8 + x] == kGreen);
+    CHECK(rgba[2 * 8 + 6] == kRed);
+    CHECK(rgba[2 * 8 + 7] == kRed);
+    // past the band (the whole height): stretched to the picture's edges
+    f.draws[1] = Item(Quad(-0.75f, 0.75f, kGreen), 0);
+    Rasterize(f, o, rgba);
+    for (int x = 1; x < 8; x++) CHECK(rgba[1 * 8 + x] == kGreen);
+}

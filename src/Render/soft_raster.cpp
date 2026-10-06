@@ -1394,8 +1394,15 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                 // edges (RasterOptions::overlay_edge), as gpu_view.cpp's do
                 const bool whole = vp[0] == 0.0f && vp[1] == 0.0f &&
                                    vp[2] == float(o.width) && vp[3] == float(o.height);
-                const float* edge =
-                    back == &overlay && whole && it.rect_shader < 0 ? o.overlay_edge : nullptr;
+                const bool overlay_whole = back == &overlay && whole && it.rect_shader < 0;
+                // the song list's rows cut at 16:9 instead (InOverlayCut)
+                const bool cut = overlay_whole && InOverlayCut(it, o);
+                if (cut) {
+                    const float e = o.overlay_edge[0];
+                    back->x0 = std::max(back->x0, int(std::lround((1 - e) / 2 * float(o.width))));
+                    back->x1 = std::min(back->x1, int(std::lround((1 + e) / 2 * float(o.width))));
+                }
+                const float* edge = overlay_whole && !cut ? o.overlay_edge : nullptr;
                 DrawOne(it, int32_t(i), shade::ShadeOf(frame, it), o, rts, *back, st, cv, {}, dm,
                         edge);
             }
@@ -1491,6 +1498,22 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
 }
 
 }  // namespace
+
+bool InOverlayCut(const DrawItem& it, const RasterOptions& o) {
+    if (o.overlay_edge[0] >= 1.0f || o.overlay_cut[0] >= o.overlay_cut[1]) return false;
+    if (!it.geom || it.geom->verts.empty() || !it.bones.empty()) return false;
+    for (const Vertex& v : it.geom->verts) {
+        float p[3], c[4];
+        Point(v.pos, it.world, p);
+        for (int col = 0; col < 4; col++)
+            c[col] = p[0] * it.view_proj.m[0][col] + p[1] * it.view_proj.m[1][col] +
+                     p[2] * it.view_proj.m[2][col] + it.view_proj.m[3][col];
+        if (c[3] <= 0) return false;
+        const float y = c[1] / c[3] / o.overlay_edge[1];
+        if (y < o.overlay_cut[0] || y > o.overlay_cut[1]) return false;
+    }
+    return true;
+}
 
 bool SoftBlur(const FrameCapture& f, const DrawItem& d, const ShadeInputs* s, const Pass& p) {
     const uint32_t* surface = f.post_consts.soft_surface;

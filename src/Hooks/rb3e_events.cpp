@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include "src/Hooks/aspect.h"
 #include "src/Net/discord.h"
 #include "src/Net/events.h"
 #include "src/Net/http_server.h"
@@ -276,14 +277,16 @@ extern "C" REX_FUNC(PresenceMgr__SetSongID)
     __imp__PresenceMgr__SetSongID(ctx, base);
 }
 
-// the game updates presence on screen changes; report the new screen's name
+// the game updates presence on screen changes; report the new screen's name,
+// and tell the native renderer (aspect.h's SetScreen) whichever is on
 extern "C" REX_FUNC(PresenceMgr__UpdatePresence)
 {
     const bool events = band3::events::Enabled();
     const bool record = Recording();
-    if (events || record) {
+    {
         uint32_t screen = Load32(base, kTheBandUI + kBandUI_CurrentScreen);
         uint32_t name = screen ? Load32(base, screen + kUIScreen_Name) : 0;
+        band3::aspect::SetScreen(name ? GuestStr(base, name) : nullptr);
         if (name && events) {
             band3::events::SendString(band3::events::kScreenName, GuestStr(base, name));
         }
