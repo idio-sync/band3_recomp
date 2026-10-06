@@ -151,7 +151,10 @@ void LatchGpuSkip(bool capture_on, bool recording, int proc) {
     // Both renderers would sample an outfit that was never composed: it's
     // read back to be compressed, and swap_only skipped the draws and the
     // resolve it's read back from
-    if (level == SkipLevel::kSwapOnly && g_compress_textures.load(std::memory_order_relaxed) &&
+    // (With renderer native the game's compression is skipped instead:
+    // Hooks/graphics.cpp.)
+    if (level == SkipLevel::kSwapOnly && !native_only &&
+        g_compress_textures.load(std::memory_order_relaxed) &&
         !g_warned_compress.exchange(true)) {
         REXLOG_WARN("emulated GPU: swap_only with compress_character_textures on: outfits "
                     "composed now aren't drawn or resolved before they're read back to be "

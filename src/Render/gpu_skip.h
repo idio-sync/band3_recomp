@@ -14,7 +14,7 @@
 // packets while a frame is skipped. Capture doesn't need the packets: it
 // reads guest objects and the device's CPU shadow (scene_capture.cpp), which
 // skipping leaves as it was. How much is skipped is emulated_gpu_while_native
-// (Band3 -> Graphics -> Emulated GPU):
+// (Band3 -> Graphics -> Emulated):
 //
 // - full: nothing, as with the emulated picture shown.
 // - skip_draws (the default): DrawIndexedVertices, the instanced draw and

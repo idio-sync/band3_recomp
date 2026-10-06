@@ -193,6 +193,20 @@ REXCVAR_DEFINE_INT32(usb_mic_test_tone, 0, "Band3/Microphones",
 
 // Band3/Graphics
 
+// native on Windows, emulated elsewhere: renderer_default.h says why it's
+// chosen at build time. src/Render/renderer_mode.h has its rules. Not
+// kRequiresRestart: emulated and both switch at once. First in Band3/Graphics,
+// whose cvars F4 lists in the order they're defined: its description says
+// which of the groups apply.
+REXCVAR_DEFINE_STRING(renderer, band3::settings::kDefaultRenderer, "Band3/Graphics",
+    "What draws the picture. native: band3's own renderer alone, no emulated Xbox 360 GPU "
+    "(the default on Windows). emulated: the emulated GPU alone (the default elsewhere). "
+    "both, Native + emulated (debug): the two, F8 switching between their pictures. "
+    "Native to or from the others applies at the next start. Band3/Graphics/Native applies "
+    "to native and both; Band3/Graphics/Emulated and the emulated GPU's own (under GPU, "
+    "there only in a run with it) to emulated and both")
+    .allowed({"native", "emulated", "both"});
+
 REXCVAR_DEFINE_BOOL(disable_approximate_lights, true, "Band3/Graphics",
     "Disable approximate lighting; works around a graphical bug in current ReXGlue");
 
@@ -230,32 +244,16 @@ REXCVAR_DEFINE_STRING(frame_cap, "display", "Band3/Graphics",
     "a display whose rate can be told, display and auto are off")
     .validator([](std::string_view v) { return band3::pacing::ParseFrameCap(v).has_value(); });
 
-// native on Windows, emulated elsewhere: renderer_default.h says why it's
-// chosen at build time. src/Render/renderer_mode.h has its rules. Not
-// kRequiresRestart: emulated and both switch at once.
-REXCVAR_DEFINE_STRING(renderer, band3::settings::kDefaultRenderer, "Band3/Graphics",
-    "What draws the game's picture. native: band3's own renderer alone, drawing what the "
-    "game sends its GPU at the window's size, with no emulated Xbox 360 GPU (the default on "
-    "Windows; Direct3D 12, or Vulkan on Linux, untested). emulated: the emulated GPU alone "
-    "(the default elsewhere). both, Native + emulated (debug): the two side by side, the "
-    "native picture shown, F8 switching between them. Settings that apply: Band3/Graphics "
-    "with any; Band3/Graphics/Native renderer with native and both; "
-    "Band3/Graphics/Emulated GPU and the emulated GPU's own (GPU, Display: vsync, "
-    "resolution_scale, swap_post_effect, anisotropic_override; there only while it runs) "
-    "with emulated and both. A change between native and the other two applies at the next "
-    "start; between emulated and both at once")
-    .allowed({"native", "emulated", "both"});
+// Band3/Graphics/Native: the native renderer, with renderer native or both
 
-// Band3/Graphics/Native renderer: renderer native or both
-
-REXCVAR_DEFINE_INT32(native_max_height, 0, "Band3/Graphics/Native renderer",
+REXCVAR_DEFINE_INT32(native_max_height, 0, "Band3/Graphics/Native",
     "Native renderer (renderer native or both): the most lines it draws: a window taller "
     "than this has its picture drawn this tall and scaled up to fill it, for 4K on a GPU "
     "that can't draw it at full size. 0 = the window's size")
     .range(0, 4320);
 
 // read by src/Render/scene_capture.cpp (NativeAnisotropy, renderer_mode.h)
-REXCVAR_DEFINE_INT32(native_anisotropic, -1, "Band3/Graphics/Native renderer",
+REXCVAR_DEFINE_INT32(native_anisotropic, -1, "Band3/Graphics/Native",
     "Native renderer (renderer native or both): the anisotropic filtering it samples "
     "textures with, as the emulated GPU's anisotropic_override counts it: 0 off, 1 = 1x, "
     "2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x. -1 (the default) follows anisotropic_override where "
@@ -263,7 +261,7 @@ REXCVAR_DEFINE_INT32(native_anisotropic, -1, "Band3/Graphics/Native renderer",
     "otherwise")
     .range(-1, 5);
 
-REXCVAR_DEFINE_INT32(native_view_msaa, 2, "Band3/Graphics/Native renderer",
+REXCVAR_DEFINE_INT32(native_view_msaa, 2, "Band3/Graphics/Native",
     "Native renderer (renderer native or both) and the native view (experimental): the "
     "samples a pixel they draw the HUD, the track and the menus over the world with, "
     "averaged at their edges: 2 = the game's (RB3 multisamples them, not the world), 4 "
@@ -271,11 +269,11 @@ REXCVAR_DEFINE_INT32(native_view_msaa, 2, "Band3/Graphics/Native renderer",
     .range(1, 4)
     .validator([](std::string_view v) { return v == "1" || v == "2" || v == "4"; });
 
-// Band3/Graphics/Emulated GPU: renderer emulated or both. The emulated GPU's
+// Band3/Graphics/Emulated: the emulated GPU, with renderer emulated or both. The emulated GPU's
 // own settings (vsync, resolution_scale, ...) are the plugin's, in its categories.
 
 // read by src/Render/gpu_skip.cpp, by name
-REXCVAR_DEFINE_STRING(emulated_gpu_while_native, "skip_draws", "Band3/Graphics/Emulated GPU",
+REXCVAR_DEFINE_STRING(emulated_gpu_while_native, "skip_draws", "Band3/Graphics/Emulated",
     "Renderer both only: what the emulated GPU still does while the native picture shows: "
     "skip_draws leaves out the game's draws nobody sees (the native renderer draws them), "
     "keeping what RB3 draws once (outfits) so F8 back shows the game's picture; full draws "

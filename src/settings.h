@@ -54,7 +54,7 @@ REXCVAR_DECLARE(int32_t, background_fps);
 REXCVAR_DECLARE(std::string, frame_cap);
 REXCVAR_DECLARE(std::string, renderer);
 
-// Band3/Graphics/Native renderer
+// Band3/Graphics/Native
 REXCVAR_DECLARE(int32_t, native_max_height);
 REXCVAR_DECLARE(int32_t, native_anisotropic);
 
