@@ -1,8 +1,13 @@
 // Checks the settings reference (src/Launcher/settings_reference.h): tabs and
 // sections in the page's order, what each row says, and what a table cell
-// can't hold.
+// can't hold; and that the checked-in docs/settings-reference.md has every
+// setting src/settings.cpp defines, with its description, so CI catches a
+// reference nobody regenerated.
 
 #include <doctest/doctest.h>
+#include <cctype>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 #include "src/Launcher/settings_reference.h"
@@ -155,4 +160,82 @@ TEST_CASE("a cell keeps its text whole: |, <...> and * are escaped") {
     CHECK(text.find("The defaults are the Linux build's.") != std::string::npos);
     // no ini keys, no ini sections
     CHECK(text.find("band3_config.ini\n") == std::string::npos);
+}
+
+namespace {
+
+std::string ReadFile(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    // git may check the reference out with \r\n
+    std::erase(text, '\r');
+    return text;
+}
+
+struct Defined {
+    std::string name;
+    std::string description;
+};
+
+// one C string literal at `at` (a '"'), its escapes undone; `at` moves past it
+std::string Literal(const std::string& src, size_t& at) {
+    std::string out;
+    for (at++; at < src.size() && src[at] != '"'; at++) {
+        if (src[at] == '\\' && at + 1 < src.size()) {
+            at++;
+            out += src[at] == 'n' ? '\n' : src[at];
+        } else {
+            out += src[at];
+        }
+    }
+    at++;
+    return out;
+}
+
+void SkipSpace(const std::string& src, size_t& at) {
+    while (at < src.size() && std::isspace(static_cast<unsigned char>(src[at]))) at++;
+}
+
+// each REXCVAR_DEFINE_<type>(name, default, "category", "description" "...")
+std::vector<Defined> DefinedSettings(const std::string& src) {
+    std::vector<Defined> out;
+    constexpr std::string_view kMacro = "REXCVAR_DEFINE_";
+    for (size_t at = src.find(kMacro); at != std::string::npos; at = src.find(kMacro, at)) {
+        at = src.find('(', at) + 1;
+        const size_t comma = src.find(',', at);
+        Defined d{.name = src.substr(at, comma - at), .description = {}};
+        at = comma + 1;
+        SkipSpace(src, at);
+        // the default: a literal, or a number or name up to the comma
+        if (src[at] == '"') Literal(src, at);
+        at = src.find(',', at) + 1;
+        SkipSpace(src, at);
+        Literal(src, at);  // the category
+        at = src.find(',', at) + 1;
+        for (SkipSpace(src, at); at < src.size() && src[at] == '"'; SkipSpace(src, at)) {
+            d.description += Literal(src, at);
+        }
+        out.push_back(std::move(d));
+    }
+    return out;
+}
+
+}
+
+TEST_CASE("docs/settings-reference.md has every setting src/settings.cpp defines, as it describes it") {
+    const std::string src = ReadFile(std::string(BAND3_ROOT_DIR) + "/src/settings.cpp");
+    const std::string reference = ReadFile(std::string(BAND3_ROOT_DIR) + "/docs/settings-reference.md");
+    REQUIRE_FALSE(src.empty());
+    REQUIRE_FALSE(reference.empty());
+    const std::vector<Defined> defined = DefinedSettings(src);
+    CHECK(defined.size() > 50);
+    for (const Defined& d : defined) {
+        INFO("run python tools/settings_reference.py after changing ", d.name);
+        CHECK_FALSE(d.description.empty());
+        const std::string row = Row(reference, d.name);
+        CHECK_MESSAGE(!row.empty(), d.name, " isn't in the reference");
+        if (row.empty()) continue;
+        CHECK_MESSAGE(row.find(" | " + ReferenceText(d.description)) != std::string::npos,
+                      d.name, "'s description in the reference isn't src/settings.cpp's");
+    }
 }

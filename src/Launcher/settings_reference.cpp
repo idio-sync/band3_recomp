@@ -9,6 +9,21 @@
 
 namespace band3::launcher {
 
+std::string ReferenceText(std::string_view text) {
+    std::string out;
+    for (const char c : text) {
+        switch (c) {
+        case '|': out += "\\|"; break;
+        case '<': out += "&lt;"; break;
+        case '>': out += "&gt;"; break;
+        case '*': out += "\\*"; break;
+        case '\n': out += ' '; break;
+        default: out += c;
+        }
+    }
+    return out;
+}
+
 namespace {
 
 constexpr std::pair<Tab, std::string_view> kTabNames[] = {
@@ -25,22 +40,6 @@ constexpr std::pair<Tab, std::string_view> kTabNames[] = {
 constexpr std::string_view kTableHead =
     "| Setting | Default | Takes | What it does |\n|---|---|---|---|\n";
 
-// text in a table cell: a | would end the cell, a <...> would read as HTML and
-// a * as emphasis
-std::string Cell(std::string_view text) {
-    std::string out;
-    for (const char c : text) {
-        switch (c) {
-        case '|': out += "\\|"; break;
-        case '<': out += "&lt;"; break;
-        case '>': out += "&gt;"; break;
-        case '*': out += "\\*"; break;
-        case '\n': out += ' '; break;
-        default: out += c;
-        }
-    }
-    return out;
-}
 
 // a value, as typed: in a code span, where a | still ends the cell
 std::string Code(std::string_view value) {
@@ -89,7 +88,7 @@ std::string Takes(const Setting* row, const RegistryCvar& c) {
         std::string text = Code(value);
         const auto it = std::ranges::find(choices, value, &Choice::value);
         if (it != choices.end() && !it->label.empty() && it->label != value) {
-            text += " " + Cell(it->label);
+            text += " " + ReferenceText(it->label);
         }
         return text;
     };
@@ -122,14 +121,14 @@ std::string Takes(const Setting* row, const RegistryCvar& c) {
         }
     }
     if (row && !row->unit.empty() && c.type != ValueType::kString) {
-        text += " (" + Cell(row->unit) + ")";
+        text += " (" + ReferenceText(row->unit) + ")";
     }
     if (!choices.empty()) text += "; " + choice_list();
     return text;
 }
 
 std::string Description(const Setting* row, const RegistryCvar& c) {
-    std::string text = Cell(c.description);
+    std::string text = ReferenceText(c.description);
     if (c.lifecycle == Lifecycle::kRequiresRestart) text += " *Applies at the next start.*";
     if (c.lifecycle == Lifecycle::kInitOnly) text += " *Read as band3 starts.*";
     if (row && row->windows_only) text += " *Windows only.*";
@@ -138,7 +137,7 @@ std::string Description(const Setting* row, const RegistryCvar& c) {
 
 std::string Line(const Setting* row, const RegistryCvar& c) {
     std::string name = Code(c.name);
-    if (row && !row->label.empty() && row->label != c.name) name += "<br>" + Cell(row->label);
+    if (row && !row->label.empty() && row->label != c.name) name += "<br>" + ReferenceText(row->label);
     return "| " + name + " | " + DefaultText(c) + " | " + Takes(row, c) + " | " +
            Description(row, c) + " |\n";
 }
@@ -178,7 +177,7 @@ std::string SettingsReference(const ReferenceInputs& in) {
             }
             if (rows.empty()) continue;
             // a tab with one section needs no heading for it
-            if (sections.size() > 1) tab_text += "\n### " + Cell(section) + "\n";
+            if (sections.size() > 1) tab_text += "\n### " + ReferenceText(section) + "\n";
             tab_text += "\n" + std::string(kTableHead) + rows;
         }
         if (!tab_text.empty()) out += "\n## " + std::string(tab_name) + "\n" + tab_text;

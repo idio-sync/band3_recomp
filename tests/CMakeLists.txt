@@ -129,10 +129,13 @@ add_executable(band3_tests
 )
 # instrument captures replayed by hid_capture_test.cpp, and the Liveless Rooms
 # packets liveless_rooms_protocol_test.cpp shares with tools/liveless_rooms_mock.py (and
-# port_mapping_protocol_test.cpp's with tools/port_mapping_mock.py)
+# port_mapping_protocol_test.cpp's with tools/port_mapping_mock.py); the repository,
+# for settings_reference_test.cpp to check docs/settings-reference.md against
+# src/settings.cpp
 target_compile_definitions(band3_tests PRIVATE
     BAND3_CAPTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/captures"
     BAND3_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden"
+    BAND3_ROOT_DIR="${BAND3_ROOT}"
 )
 # capture_file.cpp saves with fopen, as band3's own build lets it
 set_source_files_properties(${BAND3_ROOT}/src/Render/capture_file.cpp PROPERTIES

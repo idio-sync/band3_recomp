@@ -186,22 +186,15 @@ same setting is set in more than one place, the first of these wins:
 5. `band3_config.ini`
 6. the defaults
 
-Some options worth knowing about, by the names the command line and `band3.toml` use (the
-[reference](settings-reference.md) has them all):
-
-| Option | |
-|---|---|
-| `frame_cap` | what paces the game's frames, in place of the console's vertical blank. `display` (the default) runs the game at the display's exact refresh rate (119.88 Hz, not 120), best on a fixed-refresh display. `auto` runs it 5% under (at least 4 fps: 114 at 120 Hz), best on a VRR display (G-Sync, FreeSync), keeping every frame inside its range. A number (24 to 240) caps there. `off` leaves the console's vertical blank to pace it, as `vsync` and `video_mode_refresh_rate` say. With the cap on, `vsync` is off for the session (band3's Save keeps your own; the SDK's Save to config, under F4's All settings..., writes `vsync = false`) and `video_mode_refresh_rate`, unless set, follows the cap. `display` and `auto` are off when the display's rate can't be told (on Linux, until the native view has run). Changes apply at once |
-| `video_mode_refresh_rate` | the rate the game runs at, e.g. 120 for a 120 Hz monitor (0 keeps the console's 60, or follows `frame_cap`); `[rnd] refresh_rate` in `band3_config.ini` |
-| `background_fps` | the venue's frame rate: 0 keeps the venue's own (30 in most) at any refresh rate, or set one, up to the refresh rate. Rates that divide it (30 at 120, 180 or 240) draw evenly |
-| `forced_venue` | a venue, a class of venues, or a comma-separated mix to pick from at random |
-| `song_speed`, `track_speed` | play songs faster or slower, or scroll the highway faster |
-| `controller_type`, `input_backend` | what gamepads play as, and SDL (the default) or XInput |
-| `fast_start`, `disable_metamusic`, `lang`, `username` | skip the splash screens, silence the menu music, force a language, set the displayed name |
-| `unlock_clothing`, `gold_on_all_difficulties` | RB3Enhanced's unlock options; see [Integrations](integrations.md#rb3enhanced-compatibility) |
-| `game_origin_icons` | on (the default), each song in the song list shows an icon for the game or pack it came from, given the files it needs; see [Song source icons](integrations.md#song-source-icons) |
-| `autosave` | off keeps play out of your profile; it then only saves from the options menu |
-| `skip_profile_prompt` | on (the default), players who join without a profile join as guests at once; off, the game asks each to choose a profile, as on a console |
+The [settings reference](settings-reference.md) has every setting, its default and what it
+does, by the names the command line and `band3.toml` use. Ones worth knowing about:
+`frame_cap` and `background_fps`, which pace the game and its venues
+([Graphics](settings-reference.md#graphics)), with `video_mode_refresh_rate`
+([the SDK's](settings-reference.md#more-of-the-sdks-settings)); `forced_venue`, `song_speed` and
+`track_speed` ([Game](settings-reference.md#game)); `controller_type` and `input_backend`
+([Controllers](settings-reference.md#controllers)). RB3Enhanced's `unlock_clothing` and
+`gold_on_all_difficulties` are in [Integrations](integrations.md#rb3enhanced-compatibility),
+and `game_origin_icons` in [Song source icons](integrations.md#song-source-icons).
 
 ## Folders
 

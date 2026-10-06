@@ -34,4 +34,8 @@ struct ReferenceInputs {
 
 std::string SettingsReference(const ReferenceInputs& in);
 
+// `text` as a table cell of the reference holds it: a | would end the cell, a
+// <...> would read as HTML and a * as emphasis
+std::string ReferenceText(std::string_view text);
+
 }
