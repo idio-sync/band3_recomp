@@ -94,6 +94,8 @@ std::string StateJson(const GameStateSnapshot& s, TestTarget& target) {
     AppendJsonString(out, s.screen);
     out += ",\"in_game\":";
     out += s.in_game ? "true" : "false";
+    out += ",\"paused\":";
+    out += s.paused ? "true" : "false";
     out += ",\"song\":{\"name\":";
     AppendJsonString(out, s.song_name);
     out += ",\"artist\":";
@@ -133,6 +135,10 @@ std::string StateJson(const GameStateSnapshot& s, TestTarget& target) {
     if (s.port_mapping_state != "off") {
         out += ",\"port_mapping\":";
         AppendJsonString(out, s.port_mapping_state);
+    }
+    if (s.ha_state != "off") {
+        out += ",\"ha_state\":";
+        AppendJsonString(out, s.ha_state);
     }
     if (s.joined) out += ",\"joined\":true";
     out += ",\"instruments\":[";

@@ -116,14 +116,16 @@ TEST_CASE("the status is JSON, with what's playing or null") {
     Status idle;
     idle.screen = "main_hub_screen";
     CHECK(FormatStatus(idle) ==
-          R"({"screen":"main_hub_screen","in_library":false,"playing":null})");
+          R"({"screen":"main_hub_screen","in_library":false,"ha_state":"off","playing":null})");
 
     Status playing;
     playing.screen = "song_select_screen";
     playing.in_library = true;
+    playing.ha_state = "retrying in 5 s";
     playing.playing = Status::Playing{"rehab", "Rehab", "Amy Winehouse", 123450, 61000, 214000};
     CHECK(FormatStatus(playing) ==
-          R"({"screen":"song_select_screen","in_library":true,"playing":{"shortname":"rehab",)"
+          R"({"screen":"song_select_screen","in_library":true,"ha_state":"retrying in 5 s",)"
+          R"("playing":{"shortname":"rehab",)"
           R"("title":"Rehab","artist":"Amy Winehouse","score":123450,"position_ms":61000,)"
           R"("length_ms":214000}})");
 }

@@ -249,7 +249,7 @@ std::string JsonString(std::string_view text) {
 std::string FormatStatus(const Status& status) {
     std::string out = "{\"screen\":" + JsonString(status.screen) +
                       ",\"in_library\":" + (status.in_library ? "true" : "false") +
-                      ",\"playing\":";
+                      ",\"ha_state\":" + JsonString(status.ha_state) + ",\"playing\":";
     if (!status.playing) return out + "null}";
     const Status::Playing& p = *status.playing;
     out += "{\"shortname\":" + JsonString(p.shortname) + ",\"title\":" + JsonString(p.title) +

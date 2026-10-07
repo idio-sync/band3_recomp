@@ -96,10 +96,12 @@ struct Status {
     std::string screen;
     // the Music Library is up, so /jump can select a song
     bool in_library = false;
+    // the Home Assistant connection's state, as home_assistant.h's StateName says it
+    std::string ha_state = "off";
     std::optional<Playing> playing;  // during a song
 };
 
-// {"screen":..., "in_library":..., "playing": {...} or null}
+// {"screen":..., "in_library":..., "ha_state":..., "playing": {...} or null}
 std::string FormatStatus(const Status& status);
 
 // what /song_details says of a song, beyond /list_songs

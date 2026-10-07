@@ -44,6 +44,7 @@
 #include "src/game_writes.h"
 #include "src/settings.h"
 #include "src/Test/game_state.h"
+#include "home_assistant.h"
 #include "album_art.h"
 #include "http_game.h"
 #include "http_page.h"
@@ -154,6 +155,7 @@ Status CurrentStatus() {
     status.screen = game.screen;
     // the Music Library's screen; /jump checks its panel is up as well
     status.in_library = game.screen == "song_select_screen";
+    status.ha_state = ha::StateName();
     if (game.in_game) {
         status.playing = Status::Playing{game.song_shortname, game.song_name, game.song_artist,
                                          game.score, game.song_ms, game.song_length_ms};

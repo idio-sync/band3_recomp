@@ -9,6 +9,7 @@
 #include "src/Hooks/song_pause.h"
 #include "src/Net/discord.h"
 #include "src/Net/events.h"
+#include "src/Net/home_assistant.h"
 #include "src/Net/http_server.h"
 #include "src/Render/native_view.h"
 #include "src/Test/game_state.h"
@@ -16,7 +17,8 @@
 
 // Reports game state to the RB3Enhanced network events, Discord presence, the
 // native renderer (whether a song is on: native_view.h's InSong), and
-// the test harness and web server's /status (band3::test::GameState),
+// the test harness, the web server's /status and Home Assistant
+// (band3::test::GameState, and the Stage Kit's lights for home_assistant.h),
 // from the same hook points and with the same data as RB3E (source/rb3enhanced.c,
 // source/GameHooks.c), and also from PresenceMgr::SetSongID, for a song that
 // starts without a new Game.
@@ -71,9 +73,12 @@ PPCContext CallContext(const PPCContext& ctx, uint32_t reserve) {
     return call;
 }
 
+// to the RB3E events and to Home Assistant's Stage Kit entities (each checks
+// its own setting, cheaply)
 void SendStagekit(uint8_t left, uint8_t right) {
     const uint8_t data[2] = {left, right};
     band3::events::Send(band3::events::kStagekit, data, sizeof(data));
+    band3::ha::NoteStageKit(left, right);
 }
 
 void SendState(uint8_t in_game) {
@@ -176,8 +181,11 @@ void RecordSong(const SongInfo& song) {
                                           song.length_ms);
 }
 
-// GameState is kept for the test harness and the web server's /status
-bool Recording() { return band3::test::Enabled() || band3::http::Enabled(); }
+// GameState is kept for the test harness, the web server's /status and Home
+// Assistant
+bool Recording() {
+    return band3::test::Enabled() || band3::http::Enabled() || band3::ha::Configured();
+}
 
 void RecordBand(const band3::events::BandInfo& info) {
     std::array<band3::test::BandMember, 4> band{};

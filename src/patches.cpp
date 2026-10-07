@@ -10,6 +10,7 @@
 #include "settings.h"
 #include "src/Input/instruments.h"
 #include "src/Net/events.h"
+#include "src/Net/home_assistant.h"
 #include "src/Game/Modifiers.h"
 #include "src/Game/Symbol.h"
 #include "src/Test/game_state.h"
@@ -224,12 +225,12 @@ extern "C" REX_FUNC(SongMgr__IsDemo)
 //Set venue from the forced_venue setting, read each time so it can be changed mid-game
 extern "C" void __imp__MetaPerformer__SetVenue(PPCContext& ctx, uint8_t* base);
 // reports the venue actually being set (r4 = venue Symbol) as an RB3E event
-// and to the test harness
+// and to GameState, for the test harness and Home Assistant
 static void SetVenueAndReport(PPCContext& ctx, uint8_t* base) {
     if (band3::events::Enabled() && ctx.r4.u32)
         band3::events::SendString(band3::events::kVenueName,
                                   reinterpret_cast<const char*>(base + ctx.r4.u32));
-    if (band3::test::Enabled() && ctx.r4.u32)
+    if ((band3::test::Enabled() || band3::ha::Configured()) && ctx.r4.u32)
         band3::test::GameState::Get().SetVenue(reinterpret_cast<const char*>(base + ctx.r4.u32));
     __imp__MetaPerformer__SetVenue(ctx, base);
 }

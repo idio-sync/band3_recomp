@@ -55,6 +55,7 @@
 #include "src/Input/mouse_menus_driver.h"
 #include "src/Input/virtual_instrument.h"
 #include "src/Input/xinput_state.h"
+#include "src/Net/home_assistant.h"
 #include "src/Net/liveless_rooms.h"
 #include "src/Net/online_hooks.h"
 #include "src/Net/port_mapping.h"
@@ -185,6 +186,7 @@ public:
         }
         state.rooms_state = rooms::StateName(rooms::GetStatus().state);
         state.port_mapping_state = port_mapping::StateName(port_mapping::GetStatus().state);
+        state.ha_state = ha::StateName();
         return state;
     }
 

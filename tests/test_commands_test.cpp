@@ -276,8 +276,21 @@ TEST_CASE("state reports the game state and the instrument") {
     CHECK(Has(reply, "\"instruments\":[\"drums\",null,null,null]"));
     CHECK(Has(reply, "{\"exists\":true,\"difficulty\":3,\"track\":2}"));
     CHECK(Has(reply, "\"score\":0"));
+    CHECK(Has(reply, "\"paused\":false"));
     // no USB mics recording, so no mic slots
     CHECK_FALSE(Has(reply, "\"mics\""));
+    // nor Home Assistant
+    CHECK_FALSE(Has(reply, "\"ha_state\""));
+}
+
+TEST_CASE("state reports a paused song and Home Assistant's connection") {
+    FakeGame game;
+    game.state.in_game = true;
+    game.state.paused = true;
+    game.state.ha_state = "retrying in 10 s";
+    const std::string reply = RunCommand("state", game);
+    CHECK(Has(reply, "\"paused\":true"));
+    CHECK(Has(reply, "\"ha_state\":\"retrying in 10 s\""));
 }
 
 TEST_CASE("state reports the score and the USB mic slots") {
