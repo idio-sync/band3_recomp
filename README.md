@@ -31,7 +31,8 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 
 **Instruments**
 - Xbox 360 instruments and gamepads, through SDL or XInput
-- PS3, Wii, PS4 and PS5 Rock Band guitars and drums through their USB dongles (experimental)
+- PS3, Wii, PS4 and PS5 Rock Band guitars and drums through their USB dongles, and Xbox One
+  ones on Windows (experimental)
 - Electronic drum kits over MIDI, played as pro drums without a MIDI Pro Adapter
 - MIDI keyboards, played as the keytar for Keys and Pro Keys, menus, pausing and overdrive included
 - USB microphones, including harmonies (experimental)
@@ -102,7 +103,7 @@ CI runs and profiling.
 | [Building](docs/building.md) | requirements, Windows and Linux builds, unit tests, compile check, profiling |
 | [Settings, folders and songs](docs/settings.md) | the launcher, the pause menu and in-game settings, config files, where band3 keeps things, DLC and custom songs, loose-file mods, Steam Deck |
 | [Settings reference](docs/settings-reference.md) | every setting: its default, the values it takes and what it does, generated from the build |
-| [Instruments and microphones](docs/instruments.md) | Instrument Lab, PlayStation/Wii dongles, MIDI drums and keyboards, USB mics, pro instruments, controller lag |
+| [Instruments and microphones](docs/instruments.md) | Instrument Lab, PlayStation/Wii dongles, Xbox One instruments, MIDI drums and keyboards, USB mics, pro instruments, controller lag |
 | [Integrations](docs/integrations.md) | network events, Stage Kit lights, Discord, the web server and its API, GoCentral, Liveless online play, RB3Enhanced and Deluxe compatibility |
 | [Test harness](docs/test-harness.md) | `band3ctl`: driving the game from scripts, and the game tests |
 | [Native renderer](docs/native-renderer.md) | the native renderer, render checks, capture replay and parity measurement |
@@ -153,8 +154,9 @@ band3 stands on the work of these projects:
   supported as a mod, and the source of the song source icons.
 - [PlasticBand](https://github.com/TheNathannator/PlasticBand) and
   [PlasticBand-Unity](https://github.com/TheNathannator/PlasticBand-Unity) by
-  TheNathannator: the documentation behind band3's Xbox 360, PlayStation and Wii
-  instrument support.
+  TheNathannator: the documentation behind band3's Xbox 360, PlayStation, Wii and Xbox One
+  instrument support, and [RB4InstrumentMapper](https://github.com/TheNathannator/RB4InstrumentMapper),
+  which the Xbox One support was checked against.
 
 **Emulators**
 - [RPCS3](https://github.com/RPCS3/rpcs3): band3's MIDI drum support is adapted from its

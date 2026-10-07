@@ -37,6 +37,11 @@ cmake --preset win-amd64-release
 cmake --build --preset win-amd64-release
 ```
 
+The first configure downloads Microsoft's GameInput 3 package from NuGet (its header and
+loader, for [Xbox One instruments](instruments.md#xbox-one-instruments-experimental)) into
+the build folder. Without a connection the build goes on without Xbox One instruments,
+saying so.
+
 ## Linux
 
 ```

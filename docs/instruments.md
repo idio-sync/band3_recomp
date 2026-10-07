@@ -45,6 +45,37 @@ The report layouts come from [PlasticBand](https://github.com/TheNathannator/Pla
 documentation, cross-checked against
 [PlasticBand-Unity](https://github.com/TheNathannator/PlasticBand-Unity).
 
+## Xbox One instruments (experimental)
+
+On Windows, the same `hid_instruments` setting also plays Rock Band 4's Xbox One instruments:
+
+- Guitars: MadCatz Stratocaster, PDP Jaguar, PDP Riffmaster, and the CRKD and Red Octane
+  guitars in Xbox mode
+- Drum kits: MadCatz, PDP and Red Octane
+
+Xbox One instruments don't use the USB HID protocol, and XInput doesn't list them, so band3 reads them through
+Microsoft's GameInput, version 3 or newer. Many games install it; if band3's log says
+GameInput 3 isn't installed, install Microsoft's GameInput redistributable. Wireless
+instruments connect through an Xbox Wireless Adapter for Windows (not the Xbox 360
+receiver), the same way they pair with a console; a Jaguar needs its firmware updated
+first. Nothing else is needed: no driver change, and no RB4InstrumentMapper (close it while
+band3 runs, or both read the same instrument).
+
+They show up as Xbox 360 instruments, each as its own player, in the Instrument Lab's
+**Connected instruments** tab like the dongles, with the same **Save a 5 second capture**
+button. This hasn't been tried on hardware yet: if you have one of these, a capture of each
+fret, strum, the whammy, tilt and pickup switch (or each pad, cymbal and pedal), with
+what went wrong, is the most useful thing to send. Drum velocity is the least certain part:
+the kits report 16 steps, and how hard a hit reaches the top of them is unknown.
+
+The Rock Band 4 wireless legacy adapter, which connects Xbox 360 wireless instruments to an
+Xbox One, isn't read yet; band3's log names it when it connects. A 360 instrument plays
+through an Xbox 360 wireless receiver for Windows instead.
+
+The report layouts come from PlasticBand's documentation, cross-checked against
+[RB4InstrumentMapper](https://github.com/TheNathannator/RB4InstrumentMapper) and SDL's
+GameInput driver.
+
 ## MIDI drum kits
 
 Turn on `midi_drums` (the Controllers tab's MIDI drums, then restart) to play an electronic drum kit
@@ -161,8 +192,8 @@ time while the FPS counter (`debug_overlay`) or any other band3 window is up. So
 controller can be up to a refresh behind (16.7 ms at 60 Hz, by the SDK's code; not yet
 measured on a local display), and over Remote Desktop it was about 30 ms. XInput (`input_backend = xinput`, Windows) reads each controller
 when the game asks, every 4 ms or so, so Xbox 360 instruments and other XInput controllers
-can use it to avoid that lag. The PlayStation and Wii dongles, MIDI and the Instrument Lab
-don't go through SDL and aren't affected. The fix belongs in the SDK, which reads SDL only on
+can use it to avoid that lag. The PlayStation, Wii and Xbox One instruments `hid_instruments`
+reads, MIDI and the Instrument Lab don't go through SDL and aren't affected. The fix belongs in the SDK, which reads SDL only on
 the window's thread; `present_stats`' `ui_round_trip` ([test harness](test-harness.md))
 measures that thread's delay.
 
