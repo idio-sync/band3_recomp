@@ -112,7 +112,7 @@ DtaSong Dta(std::string shortname, int32_t id, std::string title, std::string ar
     return {std::move(shortname), id, std::move(title), std::move(artist)};
 }
 
-PackageSongs Package(std::string path, std::vector<DtaSong> songs) {
+PackageSongs SongsIn(std::string path, std::vector<DtaSong> songs) {
     PackageSongs package;
     package.path = std::move(path);
     package.size = 1000;
@@ -124,8 +124,8 @@ PackageSongs Package(std::string path, std::vector<DtaSong> songs) {
 
 TEST_CASE("the cache reads back as written, times and all") {
     std::vector<PackageSongs> packages = {
-        Package("C:\\songs\\a \"quoted\"", {Dta("one", 1, "One"), Dta("two", 2, "Caf\xC3\xA9")}),
-        Package("C:\\songs\\b", {})};
+        SongsIn("C:\\songs\\a \"quoted\"", {Dta("one", 1, "One"), Dta("two", 2, "Caf\xC3\xA9")}),
+        SongsIn("C:\\songs\\b", {})};
     packages[0].modified = 133423456789012345;  // more than a double keeps exactly
     packages[1].unreadable = true;
     const auto back = ParseInventoryCache(FormatInventoryCache(packages));
@@ -144,8 +144,8 @@ TEST_CASE("the cache reads back as written, times and all") {
 TEST_CASE("songs with the same song_id: the game has the first loaded") {
     // as tried in the game: GTAVIThemX, with GTAVITheme's song_id, after it
     const std::vector<PackageSongs> packages = {
-        Package("a_gtavi", {Dta("GTAVITheme", 2133017793, "Welcome To Vice City")}),
-        Package("b_gtavi_sameid", {Dta("GTAVIThemX", 2133017793, "Welcome To Vice CitX")})};
+        SongsIn("a_gtavi", {Dta("GTAVITheme", 2133017793, "Welcome To Vice City")}),
+        SongsIn("b_gtavi_sameid", {Dta("GTAVIThemX", 2133017793, "Welcome To Vice CitX")})};
     const auto groups = FindDuplicates(packages, {});
     REQUIRE(groups.size() == 1);
     CHECK(groups[0].kind == DuplicateKind::kSongId);
@@ -159,9 +159,9 @@ TEST_CASE("songs with the same song_id: the game has the first loaded") {
 
 TEST_CASE("songs with the same shortname clash, the disc's too") {
     const std::vector<PackageSongs> packages = {
-        Package("a_cuthands", {Dta("cut_hands", 2131221630, "cut hands", "Deftones")}),
-        Package("b_cuthands", {Dta("cut_hands", 2131221631, "cut handX", "Deftones")}),
-        Package("b_crazytrain", {Dta("crazytrain", 2133017799, "Welcome To Vice Ci3y")})};
+        SongsIn("a_cuthands", {Dta("cut_hands", 2131221630, "cut hands", "Deftones")}),
+        SongsIn("b_cuthands", {Dta("cut_hands", 2131221631, "cut handX", "Deftones")}),
+        SongsIn("b_crazytrain", {Dta("crazytrain", 2133017799, "Welcome To Vice Ci3y")})};
     // the game lists the packages' songs and its own; only its own are new here
     const std::vector<GameSong> game = {{"crazytrain", 1012, "Crazy Train", "Ozzy Osbourne"},
                                         {"cut_hands", 2131221630, "cut hands", "Deftones"},
@@ -184,8 +184,8 @@ TEST_CASE("songs with the same shortname clash, the disc's too") {
 
 TEST_CASE("another chart of the same artist and title is similar, and a pack counts") {
     const std::vector<PackageSongs> packages = {
-        Package("pack", {Dta("thebest_pack", 5001, "The Best!", "Some Band"), Dta("other", 5002, "Other")}),
-        Package("single", {Dta("thebest", 7001, "the best", "SOME BAND")})};
+        SongsIn("pack", {Dta("thebest_pack", 5001, "The Best!", "Some Band"), Dta("other", 5002, "Other")}),
+        SongsIn("single", {Dta("thebest", 7001, "the best", "SOME BAND")})};
     const auto groups = FindDuplicates(packages, {});
     REQUIRE(groups.size() == 1);
     CHECK(groups[0].kind == DuplicateKind::kSimilar);
@@ -206,16 +206,26 @@ TEST_CASE("another chart of the same artist and title is similar, and a pack cou
     CHECK(copies[0]["size"].Number() == 1000);
     CHECK(copies[0]["in_use"].Bool() == true);
     CHECK(copies[1]["shortname"].Text() == "thebest");
+    CHECK((*json)["set_aside"].Items().empty());
+
+    const auto listed = band3::json::Parse(
+        FormatDuplicates({}, {}, {}, {{"C:\\songs\\Old_1", false}, {"C:\\songs\\Next_2", true}}));
+    REQUIRE(listed);
+    const auto& set_aside = (*listed)["set_aside"].Items();
+    REQUIRE(set_aside.size() == 2);
+    CHECK(set_aside[0]["file"].Text() == "C:\\songs\\Old_1");
+    CHECK(set_aside[0]["next_launch"].Bool(true) == false);
+    CHECK(set_aside[1]["next_launch"].Bool() == true);
 }
 
 TEST_CASE("a song only once, or a clash said already, isn't listed again") {
     const std::vector<PackageSongs> packages = {
-        Package("a", {Dta("one", 1, "Same", "Band")}), Package("b", {Dta("one", 2, "Same", "Band")}),
-        Package("c", {Dta("three", 3, "Three")})};
+        SongsIn("a", {Dta("one", 1, "Same", "Band")}), SongsIn("b", {Dta("one", 2, "Same", "Band")}),
+        SongsIn("c", {Dta("three", 3, "Three")})};
     const auto groups = FindDuplicates(packages, {});
     // a shortname clash, not also "similar"
     REQUIRE(groups.size() == 1);
     CHECK(groups[0].kind == DuplicateKind::kShortname);
 
-    CHECK(FindDuplicates({Package("x", {Dta("solo", 9, "Solo")})}, {{"solo", 9, "Solo", "Artist"}}).empty());
+    CHECK(FindDuplicates({SongsIn("x", {Dta("solo", 9, "Solo")})}, {{"solo", 9, "Solo", "Artist"}}).empty());
 }

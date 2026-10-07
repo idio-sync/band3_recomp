@@ -1,5 +1,6 @@
 #include "package_songs.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -16,6 +17,7 @@
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/system/xtypes.h>
+#include "src/settings.h"
 #include "live_content.h"
 #include "package_scan.h"
 
@@ -34,6 +36,7 @@ struct State {
     std::mutex mutex;
     std::vector<PackageSongs> packages;  // the last read in full
     std::vector<fs::path> listed;        // the packages it was of (or is, while reading)
+    std::vector<SetAsideFile> set_aside;
     bool reading = false;
     size_t read = 0;
     size_t total = 0;
@@ -127,8 +130,10 @@ void ReadAll(std::vector<fs::path> paths) {
     // what's gone from the folders goes from the cache too
     if (opened || packages.size() != cache.size()) WriteCache(packages);
     REXLOG_INFO("Package songs: {} packages, {} of them read now", packages.size(), opened);
+    std::vector<SetAsideFile> set_aside = FindSetAside(ContentFolders(REXCVAR_GET(content_folders)));
     std::lock_guard lock(state.mutex);
     state.packages = std::move(packages);
+    state.set_aside = std::move(set_aside);
     state.reading = false;
 }
 
@@ -150,7 +155,69 @@ PackageSongsSnapshot CurrentPackageSongs() {
     PackageSongsSnapshot snapshot;
     snapshot.packages = state.packages;
     snapshot.status = {state.reading, state.read, state.total, false};
+    snapshot.set_aside = state.set_aside;
     return snapshot;
+}
+
+namespace {
+
+// the state's mutex held
+std::string RequestLocked(State& state, const PackageSongs& package) {
+    const fs::path file = rex::to_path(package.path);
+    const bool asked = std::ranges::any_of(state.set_aside, [&](const SetAsideFile& s) { return s.file == file; });
+    if (asked) return {};
+    if (std::string problem = RequestSetAside(file); !problem.empty()) return problem;
+    state.set_aside.push_back({file, true});
+    REXLOG_INFO("Package songs: {} is set aside at the next launch", package.path);
+    return {};
+}
+
+}
+
+std::string SetAsidePackage(std::string_view file) {
+    auto& state = TheState();
+    std::lock_guard lock(state.mutex);
+    if (state.reading) return "band3 is still reading the packages: try again in a moment";
+    for (const PackageSongs& package : state.packages) {
+        if (package.path != file) continue;
+        if (package.unreadable || package.songs.size() != 1) {
+            return "it holds more than one song (or none band3 could read): move it out of the "
+                   "song folders yourself if you mean to";
+        }
+        return RequestLocked(state, package);
+    }
+    return "it isn't one of the packages band3 has read";
+}
+
+std::string SetAsideLeftOut(size_t& count) {
+    count = 0;
+    auto& state = TheState();
+    std::lock_guard lock(state.mutex);
+    if (state.reading) return "band3 is still reading the packages: try again in a moment";
+    for (const DuplicateGroup& group : FindDuplicates(state.packages, {})) {
+        if (group.kind != DuplicateKind::kSongId) continue;
+        for (const SongCopy& copy : group.copies) {
+            const PackageSongs& package = state.packages[copy.package];
+            if (copy.in_use || package.songs.size() != 1) continue;
+            if (std::string problem = RequestLocked(state, package); !problem.empty()) return problem;
+            count++;
+        }
+    }
+    return {};
+}
+
+std::string PutBackPackage(std::string_view file) {
+    auto& state = TheState();
+    std::lock_guard lock(state.mutex);
+    const auto it = std::ranges::find_if(state.set_aside, [&](const SetAsideFile& s) {
+        return rex::path_to_utf8(s.file) == file;
+    });
+    if (it == state.set_aside.end()) return "it isn't one band3 has set aside";
+    if (std::string problem = PutBack(*it); !problem.empty()) return problem;
+    REXLOG_INFO("Package songs: {} is put back{}", rex::path_to_utf8(it->file),
+                it->next_launch ? "" : ", for the next launch");
+    state.set_aside.erase(it);
+    return {};
 }
 
 }

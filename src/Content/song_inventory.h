@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "package_scan.h"
 #include "song_dta.h"
 
 // What's in each of band3's packages (package_songs.h reads them), and the
@@ -74,9 +75,11 @@ struct InventoryStatus {
 // whose songs couldn't be read, "game":, "groups": [{"kind": "song_id",
 // "shortname" or "similar", "key":, "copies": [{"shortname":, "song_id":,
 // "title":, "artist":, "file": the package's path ("" for the game's own),
-// "songs_in_file":, "size":, "in_use":}]}]}
+// "songs_in_file":, "size":, "in_use":}]}], "set_aside": [{"file": its own
+// path, "next_launch": not done yet}]}
 std::string FormatDuplicates(const std::vector<DuplicateGroup>& groups,
                              const std::vector<PackageSongs>& packages,
-                             const InventoryStatus& status);
+                             const InventoryStatus& status,
+                             const std::vector<SetAsideFile>& set_aside = {});
 
 }

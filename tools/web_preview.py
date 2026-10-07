@@ -400,9 +400,31 @@ class FakeUpdates:
                 'downloads': 12, 'updates': updates}
 
 
-def fake_duplicates(started, now):
+def fake_set_aside(report, set_aside, request, put_back):
+    """band3's POST /library/set_aside and /library/put_back on the made-up
+    report: (status, text), changing set_aside ({file: next_launch})."""
+    file = str(request.get('file', ''))
+    if put_back:
+        if file not in set_aside:
+            return 409, "it isn't one band3 has set aside"
+        del set_aside[file]
+        return 200, 'Put back'
+    standalone = [(g, c) for g in report['groups'] for c in g['copies']
+                  if c['file'] and c['songs_in_file'] == 1 and g['kind'] != 'similar']
+    if request.get('left_out') is True:
+        files = [c['file'] for g, c in standalone if g['kind'] == 'song_id' and not c['in_use']]
+        set_aside.update({f: True for f in files})
+        return 200, f'{len(files)} set aside at the next launch'
+    if not any(c['file'] == file for _, c in standalone):
+        return 409, "it isn't one of the packages band3 has read"
+    set_aside[file] = True
+    return 200, 'Set aside at the next launch'
+
+
+def fake_duplicates(started, now, set_aside=None):
     """band3's /library/duplicates, made up: the packages take a few seconds to
-    read, then show one group of each kind."""
+    read, then show one group of each kind, and what's set aside (a file once
+    put back is set aside already)."""
     total = 240
     read = min(total, int((now - started) * 120))
 
@@ -416,7 +438,9 @@ def fake_duplicates(started, now):
             copy('GTAVITheme', 2133017793, 'Welcome To Vice City', 'Rockstar Games',
                  'songs\\GTAVITheme_rb3con'),
             copy('GTAVIThemeV2', 2133017793, 'Welcome To Vice City', 'Rockstar Games',
-                 'songs\\packs\\Rockstar Pack_rb3con', songs=12, in_use=False)]},
+                 'songs\\packs\\Rockstar Pack_rb3con', songs=12, in_use=False),
+            copy('GTAVIThemeOld', 2133017793, 'Welcome To Vice City (old)', 'Rockstar Games',
+                 'songs\\old\\GTAVITheme_v1_rb3con', in_use=False)]},
         {'kind': 'shortname', 'key': 'crazytrain', 'copies': [
             copy('crazytrain', 2133017799, 'Crazy Train (Live)', 'Ozzy Osbourne',
                  'songs\\CrazyTrainLive_rb3con'),
@@ -428,7 +452,8 @@ def fake_duplicates(started, now):
     ]
     reading = read < total
     return {'reading': reading, 'read': read, 'total': total, 'unreadable': 1, 'game': not reading,
-            'groups': [] if reading else groups}
+            'groups': [] if reading else groups,
+            'set_aside': [{'file': f, 'next_launch': n} for f, n in sorted((set_aside or {}).items())]}
 
 
 def _from565(c):
@@ -562,6 +587,7 @@ class Preview:
         self.lock = threading.Lock()
         self.downloads = FakeDownloads()
         self.updates = FakeUpdates(self.downloads)
+        self.set_aside = {}  # Duplicates' made-up set-aside packages: {file: next_launch}
 
     def rv_search(self, query):
         """band3's /rv/search, asked of RhythmVerse: (status, body)."""
@@ -637,7 +663,7 @@ def handler(preview):
             elif path == '/rv/downloads':
                 self.reply(200, 'application/json', json.dumps(preview.downloads.report()).encode())
             elif path == '/library/duplicates':
-                report = fake_duplicates(preview.started, time.monotonic())
+                report = fake_duplicates(preview.started, time.monotonic(), preview.set_aside)
                 self.reply(200, 'application/json', json.dumps(report).encode())
             elif path == '/rv/updates':
                 self.reply(200, 'application/json', json.dumps(preview.updates.report()).encode())
@@ -646,7 +672,7 @@ def handler(preview):
 
         def do_POST(self):
             text = 'text/plain; charset=utf-8'
-            if self.path not in ('/rv/download', '/rv/check'):
+            if self.path not in ('/rv/download', '/rv/check', '/library/set_aside', '/library/put_back'):
                 self.reply(405, text, b'Only GET is supported')
                 return
             if not (self.headers.get('Content-Type') or '').startswith('application/json'):
@@ -658,7 +684,13 @@ def handler(preview):
                 file_id = str(request.get('file_id', ''))
                 update = request.get('update') is True
             except (ValueError, AttributeError):
-                file_id, update = '', False
+                request, file_id, update = {}, '', False
+            if self.path.startswith('/library/'):
+                report = fake_duplicates(preview.started, time.monotonic())
+                status, body = fake_set_aside(report, preview.set_aside, request,
+                                              self.path == '/library/put_back')
+                self.reply(status, text, body.encode())
+                return
             if self.path == '/rv/check':
                 preview.updates.check()
                 self.reply(200, text, b'Checking')

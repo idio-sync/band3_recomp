@@ -46,6 +46,8 @@ enum class Endpoint {
     kStatus,     // /status            what the game is doing (band3's)
     kSongDetails,  // /song_details    every song's genre, year, parts... (band3's)
     kDuplicates,   // /library/duplicates  songs that are in more than one package (band3's)
+    kSetAside,     // POST /library/set_aside {"file": ...} or {"left_out": true}  at the next launch
+    kPutBack,      // POST /library/put_back {"file": ...}  a package set aside
     // RhythmVerse (band3's; src/Net/rhythmverse.h)
     kRvSearch,     // /rv/search?text=&page=  a page of RhythmVerse's songs
     kRvDownload,   // POST /rv/download {"file_id": ...}  download one to the songs folder

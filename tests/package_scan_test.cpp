@@ -168,10 +168,69 @@ TEST_CASE("a scan puts pending updates in place and keeps what they replace") {
     fs::remove_all(root);
 }
 
+TEST_CASE("a package asked to be set aside is renamed at the next scan, and can be put back") {
+    const fs::path root = fs::temp_directory_path() / "band3_set_aside_test";
+    fs::remove_all(root);
+    Write(root / "Keep_1", MakeHeader("CON ", 1, kRb3TitleId, 0x10, u"Keep"));
+    Write(root / "sub" / "Dupe_2", MakeHeader("CON ", 1, kRb3TitleId, 0x40, u"Dupe"));
+    CHECK(RequestSetAside(root / "sub" / "Dupe_2").empty());
+    CHECK(!RequestSetAside(root / "Missing_3").empty());
+    // asked for: still read until the next scan
+    CHECK(fs::exists(root / "sub" / "Dupe_2"));
+    auto listed = FindSetAside({root});
+    REQUIRE(listed.size() == 1);
+    CHECK(listed[0].file == root / "sub" / "Dupe_2");
+    CHECK(listed[0].next_launch);
+
+    // taken back before the scan: nothing happens
+    CHECK(PutBack(listed[0]).empty());
+    CHECK(FindSetAside({root}).empty());
+    CHECK(RequestSetAside(root / "sub" / "Dupe_2").empty());
+
+    std::vector<std::string> problems;
+    auto found = ScanFolders({root}, kRb3TitleIds, &problems);
+    CHECK(problems.empty());
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].header.display_name == u"Keep");
+    CHECK(fs::exists(root / "sub" / "Dupe_2.setaside"));
+    CHECK(!fs::exists(root / "sub" / "Dupe_2"));
+    CHECK(!fs::exists(root / "sub" / "Dupe_2.setaside-next"));
+    listed = FindSetAside({root, root / "sub"});  // overlapping folders list it once
+    REQUIRE(listed.size() == 1);
+    CHECK(!listed[0].next_launch);
+
+    // the same name set aside twice isn't: the first goes back or away first
+    Write(root / "sub" / "Dupe_2", MakeHeader("CON ", 1, kRb3TitleId, 0x40, u"Dupe again"));
+    CHECK(!RequestSetAside(root / "sub" / "Dupe_2").empty());
+    CHECK(!PutBack(listed[0]).empty());  // a file by its name is there again
+    fs::remove(root / "sub" / "Dupe_2");
+
+    CHECK(PutBack(listed[0]).empty());
+    CHECK(fs::exists(root / "sub" / "Dupe_2"));
+    CHECK(FindSetAside({root}).empty());
+    CHECK(ScanFolders({root}, kRb3TitleIds, nullptr).size() == 2);
+    fs::remove_all(root);
+}
+
+TEST_CASE("a request for a package that's gone is dropped, saying so") {
+    const fs::path root = fs::temp_directory_path() / "band3_set_aside_gone_test";
+    fs::remove_all(root);
+    Write(root / "Gone_1", MakeHeader("CON ", 1, kRb3TitleId, 0x10, u"Gone"));
+    CHECK(RequestSetAside(root / "Gone_1").empty());
+    fs::remove(root / "Gone_1");
+    std::vector<std::string> problems;
+    ScanFolders({root}, kRb3TitleIds, &problems);
+    CHECK(problems.size() == 1);
+    CHECK(!fs::exists(root / "Gone_1.setaside-next"));
+    fs::remove_all(root);
+}
+
 TEST_CASE("files waiting or replaced are set aside") {
     CHECK(IsSetAside("a/Song_1.part"));
     CHECK(IsSetAside("a/Song_1.pending"));
     CHECK(IsSetAside("a/Song_1.2.replaced"));
+    CHECK(IsSetAside("a/Song_1.setaside"));
+    CHECK(IsSetAside("a/Song_1.setaside-next"));
     CHECK(!IsSetAside("a/Song_1"));
     CHECK(!IsSetAside("a/DVNeverGonnaStopFinal_595481a7cbc158.68319817"));
 }

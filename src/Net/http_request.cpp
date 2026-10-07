@@ -181,6 +181,10 @@ Route MatchRoute(std::string_view target) {
         route.endpoint = Endpoint::kSongDetails;
     } else if (path == "/library/duplicates") {
         route.endpoint = Endpoint::kDuplicates;
+    } else if (target == "/library/set_aside") {
+        route.endpoint = Endpoint::kSetAside;
+    } else if (target == "/library/put_back") {
+        route.endpoint = Endpoint::kPutBack;
     } else if (path.starts_with("/song_")) {
         const char* begin = path.data() + 6;
         const char* end = path.data() + path.size();

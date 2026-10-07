@@ -167,7 +167,8 @@ std::vector<DuplicateGroup> FindDuplicates(const std::vector<PackageSongs>& pack
 
 std::string FormatDuplicates(const std::vector<DuplicateGroup>& groups,
                              const std::vector<PackageSongs>& packages,
-                             const InventoryStatus& status) {
+                             const InventoryStatus& status,
+                             const std::vector<SetAsideFile>& set_aside) {
     const auto unreadable = std::ranges::count_if(packages, [](const auto& p) { return p.unreadable; });
     std::string out = std::string("{\"reading\":") + (status.reading ? "true" : "false") +
                       ",\"read\":" + std::to_string(status.read) +
@@ -194,6 +195,13 @@ std::string FormatDuplicates(const std::vector<DuplicateGroup>& groups,
                    ",\"in_use\":" + (copy.in_use ? "true" : "false") + "}";
         }
         out += "]}";
+    }
+    out += "],\"set_aside\":[";
+    for (size_t i = 0; i < set_aside.size(); i++) {
+        const auto file = set_aside[i].file.u8string();
+        if (i) out += ',';
+        out += "{\"file\":" + JsonString(std::string(file.begin(), file.end())) +
+               ",\"next_launch\":" + (set_aside[i].next_launch ? "true" : "false") + "}";
     }
     return out + "]}";
 }

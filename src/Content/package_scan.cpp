@@ -39,6 +39,7 @@ FolderScan ScanFolder(const fs::path& folder, std::span<const uint32_t> title_id
     }
     std::vector<fs::directory_iterator> listing;  // the folders being listed, innermost last
     std::vector<fs::path> pending;  // updates to put in place
+    std::vector<fs::path> set_aside;  // requests to set packages aside
     auto enter = [&](const fs::path& dir) {
         std::error_code error;
         fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, error);
@@ -73,6 +74,10 @@ FolderScan ScanFolder(const fs::path& folder, std::span<const uint32_t> title_id
             pending.push_back(entry.path());
             continue;
         }
+        if (entry.path().extension() == fs::path(kSetAsideRequestSuffix)) {
+            set_aside.push_back(entry.path());
+            continue;
+        }
         if (auto package = ReadPackage(entry.path(), title_ids)) out.packages.push_back(std::move(*package));
     }
     // after the walk, which may have read the old file already; one at a time,
@@ -94,6 +99,17 @@ FolderScan ScanFolder(const fs::path& folder, std::span<const uint32_t> title_id
         const fs::path target = fs::path(update).replace_extension();
         std::erase_if(out.packages, [&](const Package& p) { return p.path == target; });
         if (auto package = ReadPackage(target, title_ids)) out.packages.push_back(std::move(*package));
+    }
+    // then the packages asked to be set aside, which may have been read too
+    for (const fs::path& request : set_aside) {
+        std::lock_guard lock(updates_mutex);
+        std::error_code exists_ec;
+        if (!fs::exists(request, exists_ec)) continue;  // done by another thread
+        if (std::string problem = ApplySetAside(request); !problem.empty()) out.problems.push_back(problem);
+        const fs::path target = fs::path(request).replace_extension();
+        if (!fs::exists(target, exists_ec)) {
+            std::erase_if(out.packages, [&](const Package& p) { return p.path == target; });
+        }
     }
     return out;
 }
@@ -127,7 +143,80 @@ std::optional<PackageHeader> ParsePackageHeader(std::span<const uint8_t> b) {
 bool IsSetAside(const fs::path& path) {
     const fs::path ext = path.extension();
     return ext == fs::path(kPartialSuffix) || ext == fs::path(kPendingSuffix) ||
-           ext == fs::path(kReplacedSuffix);
+           ext == fs::path(kReplacedSuffix) || ext == fs::path(kSetAsideSuffix) ||
+           ext == fs::path(kSetAsideRequestSuffix);
+}
+
+std::string RequestSetAside(const fs::path& file) {
+    std::error_code ec;
+    if (!fs::is_regular_file(file, ec)) return Utf8(file) + " isn't there";
+    fs::path done = file, request = file;
+    done += kSetAsideSuffix;
+    request += kSetAsideRequestSuffix;
+    if (fs::exists(done, ec)) return Utf8(done) + " is there already: put it back or move it first";
+    std::ofstream marker(request, std::ios::binary | std::ios::trunc);
+    if (!marker) return "couldn't write " + Utf8(request);
+    return {};
+}
+
+std::string ApplySetAside(const fs::path& request) {
+    const fs::path file = fs::path(request).replace_extension();
+    fs::path done = file;
+    done += kSetAsideSuffix;
+    std::error_code ec;
+    std::string problem;
+    if (!fs::exists(file, ec)) {
+        problem = Utf8(file) + ": gone before it could be set aside";
+    } else if (fs::exists(done, ec)) {
+        problem = Utf8(file) + ": not set aside, as " + Utf8(done) + " is there already";
+    } else {
+        fs::rename(file, done, ec);
+        if (ec) return Utf8(file) + ": couldn't set it aside: " + ec.message();  // asked again next time
+    }
+    fs::remove(request, ec);
+    return problem;
+}
+
+std::vector<SetAsideFile> FindSetAside(const std::vector<fs::path>& folders) {
+    std::vector<SetAsideFile> found;
+    for (const fs::path& folder : folders) {
+        std::error_code ec;
+        fs::recursive_directory_iterator it(folder, fs::directory_options::skip_permission_denied, ec);
+        for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            std::error_code file_ec;
+            if (!it->is_regular_file(file_ec)) continue;
+            const fs::path ext = it->path().extension();
+            const bool request = ext == fs::path(kSetAsideRequestSuffix);
+            if (request || ext == fs::path(kSetAsideSuffix)) {
+                found.push_back({fs::path(it->path()).replace_extension(), request});
+            }
+        }
+    }
+    std::ranges::sort(found, {}, &SetAsideFile::file);
+    // folders that overlap meet the same file twice
+    const auto same = [](const SetAsideFile& a, const SetAsideFile& b) {
+        return a.file == b.file && a.next_launch == b.next_launch;
+    };
+    found.erase(std::unique(found.begin(), found.end(), same), found.end());
+    return found;
+}
+
+std::string PutBack(const SetAsideFile& set_aside) {
+    std::error_code ec;
+    fs::path from = set_aside.file;
+    if (set_aside.next_launch) {
+        from += kSetAsideRequestSuffix;
+        fs::remove(from, ec);  // gone already is as good
+        if (ec) return "couldn't take back " + Utf8(from) + ": " + ec.message();
+        return {};
+    }
+    from += kSetAsideSuffix;
+    if (fs::exists(set_aside.file, ec)) {
+        return Utf8(set_aside.file) + " is there again: move it before putting this one back";
+    }
+    fs::rename(from, set_aside.file, ec);
+    if (ec) return "couldn't put back " + Utf8(set_aside.file) + ": " + ec.message();
+    return {};
 }
 
 std::string ApplyPendingUpdate(const fs::path& pending) {

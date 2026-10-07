@@ -100,6 +100,8 @@ TEST_CASE("targets pick the RhythmVerse endpoints") {
     CHECK(MatchRoute("/rv/check").endpoint == Endpoint::kRvCheck);
     CHECK(MatchRoute("/library/duplicates").endpoint == Endpoint::kDuplicates);
     CHECK(MatchRoute("/library/").endpoint == Endpoint::kNotFound);
+    CHECK(MatchRoute("/library/set_aside").endpoint == Endpoint::kSetAside);
+    CHECK(MatchRoute("/library/put_back").endpoint == Endpoint::kPutBack);
     CHECK(MatchRoute("/rv/searches").endpoint == Endpoint::kNotFound);
     CHECK(MatchRoute("/rv/").endpoint == Endpoint::kNotFound);
 }

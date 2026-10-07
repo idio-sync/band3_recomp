@@ -253,7 +253,35 @@ std::string LibraryDuplicates(bool cors) {
     }
     const auto groups = content::FindDuplicates(snapshot.packages, game);
     return Response(200, "application/json",
-                    content::FormatDuplicates(groups, snapshot.packages, snapshot.status), cors);
+                    content::FormatDuplicates(groups, snapshot.packages, snapshot.status,
+                                              snapshot.set_aside),
+                    cors);
+}
+
+// POST /library/set_aside {"file": ...} or {"left_out": true}, and POST
+// /library/put_back {"file": ...}: JSON only, as /rv/download, so another
+// site's page can't send one. Nothing changes in the game until it next starts.
+std::string LibrarySetAside(const Request& request, bool put_back, bool cors) {
+    if (!request.content_type.starts_with("application/json")) {
+        return Response(415, kText, "Send the request as JSON", cors);
+    }
+    const auto body = json::Parse(request.body);
+    const std::string file = body ? (*body)["file"].Text() : std::string();
+    std::string problem;
+    std::string done;
+    if (put_back) {
+        problem = content::PutBackPackage(file);
+        done = "Put back";
+    } else if (body && (*body)["left_out"].Bool()) {
+        size_t count = 0;
+        problem = content::SetAsideLeftOut(count);
+        done = fmt::format("{} set aside at the next launch", count);
+    } else {
+        problem = content::SetAsidePackage(file);
+        done = "Set aside at the next launch";
+    }
+    if (!problem.empty()) return Response(409, kText, problem, cors);
+    return Response(200, kText, done, cors);
 }
 
 // Album art sent so far, as JPEGs by shortname, so a page scrolled back and
@@ -403,7 +431,8 @@ std::string Handle(const Request& request) {
     const bool cors = REXCVAR_GET(http_allow_cors);
     const Route route = MatchRoute(request.target);
     // POST for what changes things beyond the game, GET for the rest
-    const bool post = route.endpoint == Endpoint::kRvDownload || route.endpoint == Endpoint::kRvCheck;
+    const bool post = route.endpoint == Endpoint::kRvDownload || route.endpoint == Endpoint::kRvCheck ||
+                      route.endpoint == Endpoint::kSetAside || route.endpoint == Endpoint::kPutBack;
     if (request.method != (post ? "POST" : "GET")) {
         return Response(405, kText, post ? "Only POST is supported" : "Only GET is supported", cors);
     }
@@ -493,6 +522,9 @@ std::string Handle(const Request& request) {
         }
         case Endpoint::kDuplicates:
             return LibraryDuplicates(cors);
+        case Endpoint::kSetAside:
+        case Endpoint::kPutBack:
+            return LibrarySetAside(request, route.endpoint == Endpoint::kPutBack, cors);
         case Endpoint::kAlbumArt: {
             bool busy = false;
             if (auto jpeg = AlbumArt(route.argument, busy)) {

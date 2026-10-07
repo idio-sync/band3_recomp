@@ -98,11 +98,13 @@ button.dl { min-width: 104px; }
 .updates-bar button { padding: 7px 12px; }
 /* a song in more than one package: each copy, and whether the game has it */
 .dupe {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; column-gap: 8px;
   padding: 6px 0; border-top: 1px solid var(--line);
 }
 .dupe .title, .dupe .sub { grid-column: 1; }
 .dupe .tag { display: inline; grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+.dupe button { grid-column: 3; grid-row: 1 / span 2; align-self: center; padding: 5px 10px; font-size: 14px; }
+.sheet .bulk { margin-top: 12px; }
 .sheet h3 .key { text-transform: none; letter-spacing: 0; }
 
 /* what the game is doing, from band3's /status */
@@ -609,6 +611,16 @@ function showDupes() {
   if (dupes.unreadable) notes.push((dupes.unreadable === 1 ? "1 package's" : dupes.unreadable + " packages'") + " songs couldn't be read.");
   if (!dupes.reading && !dupes.game) notes.push("The game hasn't said what songs it has yet (it's busy, or still loading them), so its own songs aren't compared yet.");
   for (const note of notes) body.append(el("div", "facts", note));
+  // file -> true when it's set aside at the next launch, false when it's done
+  const aside = new Map((dupes.set_aside || []).map(s => [s.file, s.next_launch]));
+  const leftOut = dupes.groups.filter(g => g.kind === "song_id")
+    .flatMap(g => g.copies).filter(c => !c.in_use && c.songs_in_file === 1 && !aside.has(c.file)).length;
+  if (leftOut) {
+    const bulk = el("button", "plain bulk", "Set aside the left-out copies (" + leftOut + ")");
+    bulk.title = "Each is a song on its own the game leaves out already: when band3 next starts, it renames them to end in .setaside and passes them over";
+    bulk.onclick = () => setAside({left_out: true});
+    body.append(bulk);
+  }
   for (const g of dupes.groups) {
     const [label, why] = DUPE_KINDS[g.kind];
     // the key as it is: shortnames are told apart by case
@@ -623,7 +635,34 @@ function showDupes() {
       const sub = el("div", "sub", c.shortname + " · " + where);
       if (c.file) sub.title = c.file;
       row.append(el("div", "title", c.title + " – " + c.artist), sub);
-      if (g.kind === "song_id") row.append(el("span", c.in_use ? "tag have" : "tag", c.in_use ? "In use" : "Left out"));
+      if (aside.has(c.file)) row.append(el("span", "tag", "Set aside at next launch"));
+      else if (g.kind === "song_id") row.append(el("span", c.in_use ? "tag have" : "tag", c.in_use ? "In use" : "Left out"));
+      // a song on its own, never a pack's: its other songs would go with it
+      if (g.kind !== "similar" && c.file && c.songs_in_file === 1) {
+        if (aside.has(c.file)) {
+          row.append(putBackButton(c.file, true));
+        } else {
+          const b = el("button", "plain", "Set aside");
+          b.title = g.kind === "song_id" && c.in_use
+            ? "When band3 next starts, it renames this one to end in .setaside and passes it over: the next copy takes its place"
+            : "When band3 next starts, it renames this one to end in .setaside and passes it over";
+          b.onclick = () => setAside({file: c.file});
+          row.append(b);
+        }
+      }
+      body.append(row);
+    }
+  }
+  // what's set aside, to put back
+  if (dupes.set_aside && dupes.set_aside.length) {
+    body.append(el("h3", "", "Set aside"),
+                el("div", "facts", "Renamed to end in .setaside, which band3 passes over; Put back renames them back, for the next launch."));
+    for (const s of dupes.set_aside) {
+      const row = el("div", "dupe");
+      const sub = el("div", "sub", s.file);
+      sub.title = s.file;
+      row.append(el("div", "title", s.file.split(/[\\/]/).pop()), sub,
+                 el("span", "tag", s.next_launch ? "At next launch" : "Set aside"), putBackButton(s.file, s.next_launch));
       body.append(row);
     }
   }
@@ -632,6 +671,28 @@ function showDupes() {
   close.onclick = () => $("sheet").close();
   actions.append(close);
   body.append(actions);
+}
+
+// band3's answer as a toast, and the list again
+async function dupeAction(path, request) {
+  try {
+    const r = await fetch(path, {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(request),
+    });
+    toast(await r.text());
+  } catch (e) {
+    toast("band3 didn't answer");
+  }
+  loadDupes();
+}
+function setAside(request) { dupeAction("/library/set_aside", request); }
+
+// Cancel for one set aside at the next launch, Put back for one set aside already
+function putBackButton(file, next_launch) {
+  const b = el("button", "plain", next_launch ? "Cancel" : "Put back");
+  b.title = next_launch ? "Leave it as it is" : "Rename it back, for band3's next launch";
+  b.onclick = () => dupeAction("/library/put_back", {file});
+  return b;
 }
 
 $("dupes").onclick = () => {

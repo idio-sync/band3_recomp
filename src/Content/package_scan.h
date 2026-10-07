@@ -41,12 +41,35 @@ inline constexpr std::string_view kPartialSuffix = ".part";
 inline constexpr std::string_view kPendingSuffix = ".pending";
 inline constexpr std::string_view kReplacedSuffix = ".replaced";
 
+// A package set aside from the web page's Duplicates (src/Net/http_server.cpp):
+// X.setaside-next, an empty file beside X, asks for it, since the game may have
+// X open; the next scan renames X to X.setaside, which scans skip, and the
+// request goes. Nothing is deleted, and putting X back is renaming it back.
+inline constexpr std::string_view kSetAsideSuffix = ".setaside";
+inline constexpr std::string_view kSetAsideRequestSuffix = ".setaside-next";
+
 // a file a scan leaves out: one still downloading, waiting to replace
-// another, or replaced
+// another, replaced, set aside, or asking for that
 bool IsSetAside(const std::filesystem::path& path);
 
 // puts pending (X.pending) in X's place, keeping X as X.replaced; "" or why not
 std::string ApplyPendingUpdate(const std::filesystem::path& pending);
+
+// asks the next scan to set file (X) aside: writes X.setaside-next; "" or why not
+std::string RequestSetAside(const std::filesystem::path& file);
+// does what request (X.setaside-next) asks: X becomes X.setaside, and the
+// request goes; "" or why not
+std::string ApplySetAside(const std::filesystem::path& request);
+
+// a package set aside, or to be at the next scan, by its own name (X)
+struct SetAsideFile {
+    std::filesystem::path file;
+    bool next_launch = false;  // X.setaside-next: asked for, not done yet
+};
+// every one in folders and their subfolders, by path
+std::vector<SetAsideFile> FindSetAside(const std::vector<std::filesystem::path>& folders);
+// takes back a request (next_launch), or renames X.setaside back to X; "" or why not
+std::string PutBack(const SetAsideFile& set_aside);
 
 std::optional<PackageHeader> ParsePackageHeader(std::span<const uint8_t> bytes);
 

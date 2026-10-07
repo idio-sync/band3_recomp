@@ -284,7 +284,24 @@ class FakeDuplicatesTest(unittest.TestCase):
         self.assertEqual([g['kind'] for g in done['groups']], ['song_id', 'shortname', 'similar'])
         for key in ('shortname', 'song_id', 'title', 'artist', 'file', 'songs_in_file', 'size', 'in_use'):
             self.assertIn(key, done['groups'][0]['copies'][0])
-        self.assertEqual([c['in_use'] for c in done['groups'][0]['copies']], [True, False])
+        self.assertEqual([c['in_use'] for c in done['groups'][0]['copies']], [True, False, False])
+        self.assertEqual(done['set_aside'], [])
+
+    def test_set_aside_only_songs_on_their_own_and_put_back(self):
+        report = web_preview.fake_duplicates(0, 60)
+        set_aside = {}
+        pack = report['groups'][0]['copies'][1]['file']
+        self.assertEqual(web_preview.fake_set_aside(report, set_aside, {'file': pack}, False)[0], 409)
+        # the left-out copies on their own: not the pack's
+        self.assertEqual(web_preview.fake_set_aside(report, set_aside, {'left_out': True}, False),
+                         (200, '1 set aside at the next launch'))
+        old = report['groups'][0]['copies'][2]['file']
+        self.assertEqual(set_aside, {old: True})
+        self.assertEqual(web_preview.fake_duplicates(0, 60, set_aside)['set_aside'],
+                         [{'file': old, 'next_launch': True}])
+        self.assertEqual(web_preview.fake_set_aside(report, set_aside, {'file': old}, True)[0], 200)
+        self.assertEqual(set_aside, {})
+        self.assertEqual(web_preview.fake_set_aside(report, set_aside, {'file': old}, True)[0], 409)
 
 
 class FakeUpdatesTest(unittest.TestCase):
