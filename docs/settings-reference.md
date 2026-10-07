@@ -161,7 +161,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `menu_shortcut` | `true` | `true`, `false` | Open menus from a controller: hold both stick clicks for a second for this settings menu, or both stick clicks and the left bumper for the Instrument Lab |
 | `midi_drums_notes` | *(empty)* | text | Note overrides as note=Part, comma separated (e.g. 44=Kick,40=Snare), in RPCS3's format. Parts: Kick, HihatPedal, Snare, SnareRim, HiTom, LowTom, FloorTom, Hihat, Ride, Crash, None *Applies at the next start.* |
 | `midi_drums_pulse_ms` | `30` | `20` to `100` | How long each hit is held, in milliseconds. Two cymbals hit together are played one pulse apart, so it must outlast a game frame *Applies at the next start.* |
-| `mouse_menus` | `true` | `true`, `false` | Use the mouse in the game's menus: left click selects (A), right click goes back (B), and the wheel moves up and down. Off during songs, where A and B are frets |
+| `mouse_menus` | `true` | `true`, `false` | Use the mouse in the game's menus: pointing at a button or a list's row highlights it, left click selects (A), right click goes back (B), and the wheel moves up and down. Off during songs, where A and B are frets |
 
 ## Online
 

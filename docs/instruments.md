@@ -103,12 +103,23 @@ also sets the lag the calibration tests assume, and a blank part keeps the game'
 
 ## Mouse in menus
 
-In the game's menus a left click presses A (select), a right click B (back), and each
-notch of the wheel presses the d-pad up or down. The click picks whatever the menu has
-highlighted, not what's under the pointer. The presses join player 1's controller (the
-SDK's stand-in one when nothing is plugged in, so the mouse works on its own). It stops
-while a song is on (from its loading screen until its results are left, pause menu
-included), where A and B would be frets. Clicks on band3's or the SDK's windows (the pause menu, F6,
+In the game's menus, pointing at a button or a list's row highlights it, a left click
+presses A (select), a right click B (back), and each notch of the wheel presses the d-pad
+up or down. A click goes to what the pointer is over: it waits for the highlight to get
+there first. The presses join player 1's controller (the SDK's stand-in one when nothing
+is plugged in, so the mouse works on its own). It stops while a song is on (from its
+loading screen until its results are left, pause menu included), where A and B would be
+frets.
+
+Pointing highlights only what a controller could move to from where the menu is: the
+focused menu's buttons and lists. A list's row is highlighted only where the list can
+highlight it without scrolling (the music library scrolls once the highlight gets near its
+bottom), so the rows don't run on under a still pointer; the wheel scrolls to the others.
+A list that scrolls round a fixed highlight (a carousel) only scrolls with the wheel.
+Headers in the music library can't be pointed at, as they can't be highlighted with a
+controller. While a player's overshell menu is open (Start), pointing changes nothing: the
+mouse's presses go to that menu. Buttons are found by their text, so pointing beside a
+button's text, or at the music library's columns right of a song's title, misses it. Clicks on band3's or the SDK's windows (the pause menu, F6,
 F10, the SDK's dialogs) stay with them, and the mouse waits while the pause menu or the Rooms panel has
 the controller. `mouse_menus` (the Controllers tab's More settings) turns it off.
 

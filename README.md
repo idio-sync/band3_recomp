@@ -23,7 +23,7 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - DLC and custom songs (`CON`/`LIVE`/`PIRS`) read straight from folders, nothing to install
 - Rock Band 3 Deluxe support
 - A Quit button on the main menu
-- The mouse in menus: left click selects, right click goes back, the wheel scrolls
+- The mouse in menus: point at a button or a song to highlight it, click to pick it, right click to go back
 - Type on the song list to search it, with a Rock Band 3 Deluxe that has keyboard search
 - Runs at the display's refresh rate (`frame_cap`)
 - Forced venue, song speed and highway speed

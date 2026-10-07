@@ -297,6 +297,43 @@ struct GameFolders {
     std::vector<std::string> content;
 };
 
+// what the mouse's hover sees of the focused component (src/Hooks/mouse_hover.h),
+// in the window's pixels
+struct MouseRow {
+    int display = 0;
+    int showing = 0;
+    int data = 0;
+    float x = 0, y = 0;
+    bool pickable = false;
+    bool highlighted = false;
+};
+
+struct MouseView {
+    std::string screen;
+    // the focused component is a list the game drew
+    bool list = false;
+    uint32_t window_width = 0, window_height = 0;
+    // where the picture lies in the window
+    int32_t picture_x = 0, picture_y = 0, picture_w = 0, picture_h = 0;
+    // the list's bounds
+    float left = 0, top = 0, right = 0, bottom = 0;
+    // the rows' anchors, in the order drawn
+    std::vector<MouseRow> rows;
+    // the pointer moves the game has acted on
+    uint64_t moves = 0;
+    // for finding out why a screen has no list: the focused component and
+    // each list drawn, as address and class
+    std::string focus;
+    std::vector<std::string> drawn;
+    // the focused panel's components the pointer can move the focus to, and
+    // their boxes (left, top, right, bottom), top to bottom then left to right
+    struct Target {
+        std::string what;
+        float left = 0, top = 0, right = 0, bottom = 0;
+    };
+    std::vector<Target> targets;
+};
+
 class TestTarget {
 public:
     using Clock = std::chrono::steady_clock;
@@ -335,6 +372,15 @@ public:
     // and - . , ' / `) or one key as {name}, with a name from TypeKeyNames;
     // returns an error, or empty
     virtual std::string TypeKeys(const std::vector<std::string>& tokens) = 0;
+    // the mouse as SDL would deliver it with the window focused, without it
+    // having focus: the pointer to window pixel (x, y); a button pressed and
+    // let go where the pointer is; the wheel turned `notches` (up positive).
+    // Each returns an error, or empty
+    virtual std::string MouseMove(int32_t x, int32_t y) = 0;
+    virtual std::string MouseClick(bool right) = 0;
+    virtual std::string MouseWheel(int notches) = 0;
+    // the next frame's MouseView; nullopt if the game draws none in time
+    virtual std::optional<MouseView> MouseRows() = 0;
     // player 1 accepts an invite to the Liveless game at host:port (Liveless
     // on), with the BandUI's joined-by-invite flag set first if `force_flag`;
     // returns an error, or empty

@@ -243,8 +243,9 @@ REXCVAR_DEFINE_BOOL(menu_shortcut, true, "Band3/Controllers",
     "menu, or both stick clicks and the left bumper for the Instrument Lab");
 
 REXCVAR_DEFINE_BOOL(mouse_menus, true, "Band3/Controllers",
-    "Use the mouse in the game's menus: left click selects (A), right click goes back (B), "
-    "and the wheel moves up and down. Off during songs, where A and B are frets");
+    "Use the mouse in the game's menus: pointing at a button or a list's row highlights it, "
+    "left click selects (A), right click goes back (B), and the wheel moves up and down. "
+    "Off during songs, where A and B are frets");
 
 REXCVAR_DEFINE_BOOL(keyboard_search, true, "Band3/Controllers",
     "Type on the song list to search it, as RB3Enhanced does on the Xbox 360. Needs a Rock "

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "generated/band3_init.h"
 #include "src/Hooks/keyboard_search.h"
+#include "src/Hooks/mouse_hover.h"
 #include "src/Net/http_server.h"
 #include "src/Test/game_state.h"
 #include "src/Test/test_server.h"
@@ -13,7 +14,8 @@
 // Counts the frames RB3 draws, for the test harness's `wait frames=N`, keeps
 // the song's position for the web server's /status, runs the game work the
 // web server's requests wait on (src/Net/http_server.h), and sends the game
-// the keys typed into Deluxe's search (keyboard_search.h).
+// the keys typed into Deluxe's search (keyboard_search.h), and hovers the
+// mouse over the focused list's rows (mouse_hover.h).
 // App::DrawRegular runs once per frame; profiling builds also give it its zone
 // here, next to the others in profile_zones.cpp.
 
@@ -55,5 +57,6 @@ extern "C" REX_FUNC(App__DrawRegular)
     if (band3::test::Enabled() || band3::http::Enabled()) RecordSongTime(base);
     band3::http::RunGameJobs(ctx, base);
     band3::keyboard_search::RunFrame(ctx, base);
+    band3::mouse_hover::RunFrame(ctx, base);
     __imp__App__DrawRegular(ctx, base);
 }

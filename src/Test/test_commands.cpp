@@ -6,6 +6,7 @@
 #include <optional>
 #include <utility>
 #include <vector>
+#include "src/Input/mouse_hover.h"
 #include "src/Net/liveless_rooms_client.h"
 #include "src/Net/online.h"
 #include "test_inputs.h"
@@ -1010,6 +1011,112 @@ std::string Type(TestTarget& target, const std::vector<std::string_view>& args) 
     return Ok();
 }
 
+std::string MouseRowsJson(const MouseView& view) {
+    const auto num = [](float f) { return std::to_string(static_cast<int>(f + (f < 0 ? -0.5f : 0.5f))); };
+    std::string out = "\"screen\":";
+    AppendJsonString(out, view.screen);
+    out += ",\"list\":" + std::string(view.list ? "true" : "false");
+    out += ",\"window\":[" + std::to_string(view.window_width) + "," +
+           std::to_string(view.window_height) + "]";
+    out += ",\"picture\":[" + std::to_string(view.picture_x) + "," + std::to_string(view.picture_y) +
+           "," + std::to_string(view.picture_w) + "," + std::to_string(view.picture_h) + "]";
+    out += ",\"moves\":" + std::to_string(view.moves);
+    out += ",\"focus\":";
+    AppendJsonString(out, view.focus);
+    out += ",\"drawn\":[";
+    for (size_t i = 0; i < view.drawn.size(); i++) {
+        if (i) out += ',';
+        AppendJsonString(out, view.drawn[i]);
+    }
+    out += "],\"targets\":[";
+    for (size_t i = 0; i < view.targets.size(); i++) {
+        const MouseView::Target& t = view.targets[i];
+        if (i) out += ',';
+        out += "{\"what\":";
+        AppendJsonString(out, t.what);
+        out += ",\"box\":[" + num(t.left) + "," + num(t.top) + "," + num(t.right) + "," +
+               num(t.bottom) + "]}";
+    }
+    out += ']';
+    if (view.list) {
+        out += ",\"bounds\":[" + num(view.left) + "," + num(view.top) + "," + num(view.right) + "," +
+               num(view.bottom) + "]";
+    }
+    out += ",\"rows\":[";
+    for (size_t i = 0; i < view.rows.size(); i++) {
+        const MouseRow& r = view.rows[i];
+        if (i) out += ',';
+        out += "{\"display\":" + std::to_string(r.display) + ",\"showing\":" +
+               std::to_string(r.showing) + ",\"data\":" + std::to_string(r.data) + ",\"x\":" +
+               num(r.x) + ",\"y\":" + num(r.y);
+        if (!r.pickable) out += ",\"pickable\":false";
+        if (r.highlighted) out += ",\"highlighted\":true";
+        out += '}';
+    }
+    return out + "]";
+}
+
+// mouse move <x> <y> | click [left|right] | wheel <notches> | rows |
+// hover <display> | target <n>: the window's mouse, in its pixels. `rows`
+// replies with what the hover sees: the focused list's rows, and the
+// components it can move the focus to (targets, top to bottom). `hover` moves
+// the pointer to the middle of the row drawn at that place (its "display"),
+// `target` to the middle of the nth target (from 0); both reply with the view
+// from before
+std::string Mouse(TestTarget& target, const std::vector<std::string_view>& args) {
+    constexpr std::string_view kUsage = "usage: mouse move <x> <y> | click [left|right] | "
+                                        "wheel <notches> | rows | hover <display> | target <n>";
+    if (args.size() < 2) return Error(target, kUsage);
+    const std::string_view what = args[1];
+    std::string error;
+    if (what == "move" && args.size() == 4) {
+        const auto x = ParseNumber<int32_t>(args[2]), y = ParseNumber<int32_t>(args[3]);
+        if (!x || !y) return Error(target, kUsage);
+        error = target.MouseMove(*x, *y);
+    } else if (what == "click" && args.size() <= 3) {
+        const std::string_view button = args.size() == 3 ? args[2] : "left";
+        if (button != "left" && button != "right") return Error(target, kUsage);
+        error = target.MouseClick(button == "right");
+    } else if (what == "wheel" && args.size() == 3) {
+        const auto notches = ParseNumber<int>(args[2]);
+        if (!notches) return Error(target, kUsage);
+        error = target.MouseWheel(*notches);
+    } else if ((what == "rows" && args.size() == 2) ||
+               ((what == "hover" || what == "target") && args.size() == 3)) {
+        const auto view = target.MouseRows();
+        if (!view) return Error(target, "the game drew no frame to read the rows from");
+        if (what == "rows") return Ok(MouseRowsJson(*view));
+        const auto display = ParseNumber<int>(args[2]);
+        if (!display) return Error(target, kUsage);
+        if (what == "target") {
+            if (*display < 0 || size_t(*display) >= view->targets.size()) {
+                return Error(target, "no target " + std::string(args[2]) + " (" + MouseRowsJson(*view) + ")");
+            }
+            const MouseView::Target& t = view->targets[*display];
+            error = target.MouseMove(static_cast<int32_t>((t.left + t.right) / 2),
+                                     static_cast<int32_t>((t.top + t.bottom) / 2));
+            if (error.empty()) return Ok(MouseRowsJson(*view));
+            return Error(target, error);
+        }
+        if (!view->list) return Error(target, "the focused component isn't a list (" + MouseRowsJson(*view) + ")");
+        std::vector<input::mouse_hover::Row> rows;
+        for (const MouseRow& r : view->rows) rows.push_back({.showing = r.showing, .at = {r.x, r.y}});
+        const input::mouse_hover::Box2 bounds{{view->left, view->top}, {view->right, view->bottom}};
+        const auto shift = input::mouse_hover::AnchorShift(rows, bounds);
+        const auto row = std::find_if(view->rows.begin(), view->rows.end(),
+                                      [&](const MouseRow& r) { return r.display == *display; });
+        if (row == view->rows.end()) {
+            return Error(target, "no row drawn at " + std::string(args[2]) + " (" + MouseRowsJson(*view) + ")");
+        }
+        error = target.MouseMove(static_cast<int32_t>(row->x + shift.x), static_cast<int32_t>(row->y + shift.y));
+        if (error.empty()) return Ok(MouseRowsJson(*view));
+    } else {
+        return Error(target, kUsage);
+    }
+    if (!error.empty()) return Error(target, error);
+    return Ok();
+}
+
 // liveless_invite <host[:port]> [force_flag]: player 1 accepts an invite to
 // the Liveless game there, on RB3Enhanced's 9103 unless given
 std::string LivelessInvite(TestTarget& target, const std::vector<std::string_view>& args) {
@@ -1327,6 +1434,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "folders") return FoldersReply(target, args);
     if (verb == "bind") return Bind(target, args);
     if (verb == "type") return Type(target, args);
+    if (verb == "mouse") return Mouse(target, args);
     if (verb == "liveless_invite") return LivelessInvite(target, args);
     if (verb == "rooms_status") return RoomsStatus(target, args);
     if (verb == "rooms_join") return RoomsJoin(target, args);

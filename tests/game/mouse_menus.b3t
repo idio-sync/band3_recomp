@@ -1,0 +1,42 @@
+# Goes through the menus with the mouse alone (mouse_menus): hovers and clicks
+# the main menu's buttons and Training's, hovers a row of the music library
+# and turns the wheel there, and right-clicks back. Each click lands on what
+# the pointer is over, not on what was highlighted, so a hover that failed
+# shows as the wrong screen. Launch as boot.b3t says, with the window
+# restored (`mouse` needs its size), and run boot.b3t first:
+#   python tools/band3ctl.py launch --fresh
+#   python tools/band3ctl.py window offscreen
+#   python tools/band3ctl.py run tests/game/boot.b3t
+#   python tools/band3ctl.py run tests/game/mouse_menus.b3t
+
+# the welcome hint's first choice customizes the band; back from there is the
+# main menu
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1500ms
+press red until screen=main_hub_screen timeout=30s
+sleep 2s
+
+# Training, the third button: its own buttons open on the same screen
+mouse target 2
+sleep 500ms
+mouse click
+sleep 2s
+# Practice, the first of them, goes to the music library
+mouse target 0
+sleep 500ms
+mouse click
+wait screen=song_select_screen timeout=30s
+sleep 2s
+
+# the third row, then a notch down
+mouse hover 2
+sleep 500ms
+screenshot mouse-library-hover
+mouse wheel -1
+sleep 500ms
+screenshot mouse-library-wheel
+
+# right click goes back
+mouse click right
+wait screen=main_hub_screen timeout=30s

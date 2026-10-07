@@ -159,6 +159,21 @@ public:
         typed.push_back(tokens);
         return {};
     }
+    std::vector<std::string> mouse_events;
+    std::optional<band3::test::MouseView> mouse_view;
+    std::string MouseMove(int32_t x, int32_t y) override {
+        mouse_events.push_back("move " + std::to_string(x) + " " + std::to_string(y));
+        return {};
+    }
+    std::string MouseClick(bool right) override {
+        mouse_events.push_back(right ? "click right" : "click left");
+        return {};
+    }
+    std::string MouseWheel(int notches) override {
+        mouse_events.push_back("wheel " + std::to_string(notches));
+        return {};
+    }
+    std::optional<band3::test::MouseView> MouseRows() override { return mouse_view; }
     std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) override {
         if (host == "offline") return "liveless is off";
         invites.push_back({host, port, force_flag});
@@ -1078,6 +1093,67 @@ TEST_CASE("type types text and presses keys by name") {
     CHECK(Has(RunCommand("type abc!", game), "can't type '!'"));
     CHECK_FALSE(Ok(RunCommand("type", game)));
     CHECK(game.typed.size() == 2);
+}
+
+TEST_CASE("mouse moves, clicks and turns the wheel") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("mouse move 640 360", game)));
+    CHECK(Ok(RunCommand("mouse click", game)));
+    CHECK(Ok(RunCommand("mouse click right", game)));
+    CHECK(Ok(RunCommand("mouse wheel -2", game)));
+    CHECK(game.mouse_events ==
+          std::vector<std::string>{"move 640 360", "click left", "click right", "wheel -2"});
+    CHECK_FALSE(Ok(RunCommand("mouse", game)));
+    CHECK_FALSE(Ok(RunCommand("mouse move 640", game)));
+    CHECK_FALSE(Ok(RunCommand("mouse click middle", game)));
+    CHECK_FALSE(Ok(RunCommand("mouse wheel up", game)));
+    CHECK(game.mouse_events.size() == 4);
+}
+
+TEST_CASE("mouse rows reports the hover's view, and hover moves to a row's middle") {
+    FakeGame game;
+    CHECK(Has(RunCommand("mouse rows", game), "drew no frame"));
+
+    MouseView view;
+    view.screen = "main_screen";
+    view.window_width = 1280;
+    view.window_height = 720;
+    view.picture_w = 1280;
+    view.picture_h = 720;
+    game.mouse_view = view;
+    std::string reply = RunCommand("mouse rows", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"list\":false"));
+    CHECK(Has(reply, "\"picture\":[0,0,1280,720]"));
+    CHECK(Has(RunCommand("mouse hover 0", game), "isn't a list"));
+
+    // three rows anchored at their top left, in bounds 300 wide and 120 tall
+    view.list = true;
+    view.left = 100;
+    view.top = 200;
+    view.right = 400;
+    view.bottom = 320;
+    for (int i = 0; i < 3; i++) {
+        view.rows.push_back(MouseRow{.display = i, .showing = 7 + i, .data = 7 + i,
+                                     .x = 100, .y = 200.0f + 40 * i, .pickable = true,
+                                     .highlighted = i == 0});
+    }
+    game.mouse_view = view;
+    reply = RunCommand("mouse rows", game);
+    CHECK(Has(reply, "\"bounds\":[100,200,400,320]"));
+    CHECK(Has(reply, "{\"display\":1,\"showing\":8,\"data\":8,\"x\":100,\"y\":240}"));
+    CHECK(Has(reply, "\"highlighted\":true"));
+    CHECK(Ok(RunCommand("mouse hover 2", game)));
+    CHECK(game.mouse_events.back() == "move 250 300");
+    CHECK(Has(RunCommand("mouse hover 5", game), "no row drawn at 5"));
+
+    view.targets = {{"BandButton", 100, 200, 300, 260}, {"BandButton", 100, 260, 340, 320}};
+    game.mouse_view = view;
+    CHECK(Has(RunCommand("mouse rows", game), "\"targets\":[{\"what\":\"BandButton\",\"box\":[100,200,300,260]}"));
+    CHECK(Ok(RunCommand("mouse target 1", game)));
+    CHECK(game.mouse_events.back() == "move 220 290");
+    CHECK(Has(RunCommand("mouse target 2", game), "no target 2"));
+    CHECK_FALSE(Ok(RunCommand("mouse target first", game)));
 }
 
 TEST_CASE("liveless_invite accepts an invite to a game, on 9103 unless given a port") {

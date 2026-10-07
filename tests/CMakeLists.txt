@@ -36,6 +36,7 @@ add_executable(band3_tests
     restart_debounce_test.cpp
     menu_shortcut_test.cpp
     mouse_menus_test.cpp
+    mouse_hover_test.cpp
     keyboard_search_test.cpp
     song_pause_test.cpp
     usb_mic_test.cpp
@@ -99,6 +100,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/menu_shortcut.cpp
     ${BAND3_ROOT}/src/Input/midi_drums.cpp
     ${BAND3_ROOT}/src/Input/player_slots.cpp
+    ${BAND3_ROOT}/src/Input/mouse_hover.cpp
     ${BAND3_ROOT}/src/Input/mouse_menus.cpp
     ${BAND3_ROOT}/src/Input/ps3_instruments.cpp
     ${BAND3_ROOT}/src/Input/ps4_instruments.cpp

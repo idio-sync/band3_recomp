@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
@@ -47,9 +48,11 @@
 #include "src/Audio/usb_mic_capture.h"
 #include "src/Content/live_content.h"
 #include "src/Hooks/frame_pacing.h"
+#include "src/Hooks/mouse_hover.h"
 #include "src/Input/input_lock.h"
 #include "src/Input/input_system.h"
 #include "src/Input/keyboard_search_driver.h"
+#include "src/Input/mouse_menus_driver.h"
 #include "src/Input/virtual_instrument.h"
 #include "src/Input/xinput_state.h"
 #include "src/Net/liveless_rooms.h"
@@ -671,6 +674,96 @@ public:
         return {};
     }
 
+    // As the window gets the mouse with focus: SDL's events, in its window
+    // coordinates (the window's pixels over its pixel density), handed to the
+    // window as its app context does. The pointer stays where it was moved.
+    std::string MouseMove(int32_t x, int32_t y) override {
+        mouse_x_ = x;
+        mouse_y_ = y;
+        const auto move = [&](rex::ui::WindowSDL& window, float scale) {
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_MOTION;
+            event.motion.x = float(x) * scale;
+            event.motion.y = float(y) * scale;
+            window.HandleMouseEvent(event);
+        };
+        std::string error = MouseEvent(move);
+        // The window keeps its pixel density to itself: the first move goes as
+        // if it were 1, and where the pointer landed says what it is
+        if (error.empty() && !mouse_scale_) {
+            const input::HoverPointer landed = input::LastHoverPointer();
+            mouse_scale_ = landed.moves && landed.x > 0 && x > 0 ? float(x) / float(landed.x) : 1.0f;
+            if (std::abs(mouse_scale_ - 1.0f) > 0.01f) error = MouseEvent(move);
+        }
+        return error;
+    }
+
+    std::string MouseClick(bool right) override {
+        return MouseEvent([&](rex::ui::WindowSDL& window, float scale) {
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            event.button.button = uint8_t(right ? SDL_BUTTON_RIGHT : SDL_BUTTON_LEFT);
+            event.button.down = true;
+            event.button.clicks = 1;
+            event.button.x = float(mouse_x_) * scale;
+            event.button.y = float(mouse_y_) * scale;
+            window.HandleMouseEvent(event);
+            event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            event.button.down = false;
+            window.HandleMouseEvent(event);
+        });
+    }
+
+    std::string MouseWheel(int notches) override {
+        return MouseEvent([&](rex::ui::WindowSDL& window, float scale) {
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_WHEEL;
+            event.wheel.y = float(notches);
+            event.wheel.mouse_x = float(mouse_x_) * scale;
+            event.wheel.mouse_y = float(mouse_y_) * scale;
+            window.HandleMouseEvent(event);
+        });
+    }
+
+    std::optional<MouseView> MouseRows() override {
+        rex::ui::Window* window = window_;
+        if (!window) return std::nullopt;
+        uint32_t width = 0, height = 0;
+        OnUIThread([&] {
+            width = window->GetActualPhysicalWidth();
+            height = window->GetActualPhysicalHeight();
+        });
+        const auto report = mouse_hover::RequestReport(width, height, std::chrono::seconds(2));
+        if (!report) return std::nullopt;
+        MouseView view;
+        view.screen = report->screen;
+        view.list = report->list;
+        view.window_width = width;
+        view.window_height = height;
+        view.picture_x = report->picture.x;
+        view.picture_y = report->picture.y;
+        view.picture_w = report->picture.w;
+        view.picture_h = report->picture.h;
+        view.left = report->bounds.min.x;
+        view.top = report->bounds.min.y;
+        view.right = report->bounds.max.x;
+        view.bottom = report->bounds.max.y;
+        view.moves = report->moves;
+        view.focus = report->focus;
+        view.drawn = report->drawn;
+        for (const auto& [what, box] : report->targets) {
+            view.targets.push_back({what, box.min.x, box.min.y, box.max.x, box.max.y});
+        }
+        std::sort(view.targets.begin(), view.targets.end(), [](const auto& a, const auto& b) {
+            return a.top != b.top ? a.top < b.top : a.left < b.left;
+        });
+        for (const auto& row : report->rows) {
+            view.rows.push_back(MouseRow{row.display, row.showing, row.data, row.at.x, row.at.y,
+                                         row.pickable, row.highlighted});
+        }
+        return view;
+    }
+
     std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) override {
         return online::FakeInvite(host, port, force_flag);
     }
@@ -729,6 +822,26 @@ private:
     // cvars and their change callbacks belong to the UI thread
     void OnUIThread(const std::function<void()>& function) {
         app_context_->CallInUIThreadSynchronous(function);
+    }
+
+    // hands the window a mouse event, on the UI thread, as a focused window's
+    // (MouseAsFocused); `scale` takes the window's pixels to SDL's window
+    // coordinates (mouse_scale_)
+    std::string MouseEvent(const std::function<void(rex::ui::WindowSDL&, float)>& send) {
+        auto* window = static_cast<rex::ui::WindowSDL*>(window_);
+        if (!window) return "no window";
+        std::string error;
+        OnUIThread([&] {
+            const uint32_t physical = window->GetActualPhysicalWidth();
+            if (!physical) {
+                error = "the window is minimized (window offscreen restores it)";
+                return;
+            }
+            input::MouseAsFocused(true);
+            send(*window, mouse_scale_ ? mouse_scale_ : 1.0f);
+            input::MouseAsFocused(false);
+        });
+        return error;
     }
 
     static std::string SourceName(rex::cvar::Source source) {
@@ -976,6 +1089,10 @@ private:
     rex::Runtime* runtime_;
     rex::ui::WindowedAppContext* app_context_;
     rex::ui::Window* window_;
+    // where `mouse move` last put the pointer, in the window's pixels, and
+    // SDL's window coordinates per pixel, once the first move has shown it
+    int32_t mouse_x_ = 0, mouse_y_ = 0;
+    float mouse_scale_ = 0;
     const std::atomic<bool>& stopping_;
     std::mutex measure_mutex_;
     Clock::time_point measure_start_ = Clock::now();

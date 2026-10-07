@@ -8,6 +8,8 @@
 #include <rex/ui/window.h>
 #include <rex/ui/window_listener.h>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <mutex>
 #include <optional>
 #include "src/Input/input_system.h"
@@ -36,7 +38,25 @@ struct Shared {
     // the presses last added, and how far the packet numbers have been moved
     uint16_t added = 0;
     uint32_t packets = 0;
+
+    // where the pointer last moved on the game, counted by `moves`, for the
+    // hover (TakeHoverPointer)
+    HoverPointer pointer;
+    // the last move the game thread has acted on (HoverApplied), and the move
+    // a click came with: the click's presses wait for the game to act on it,
+    // so it lands on the row under the pointer, not the one highlighted before
+    std::atomic<uint64_t> applied{0};
+    uint64_t click_move = 0;
+    MouseMenus::Clock::time_point click_at{};
 };
+
+// longest a click waits for the game to act on its move: the game thread may
+// be loading, or not drawing a list at all
+constexpr auto kClickWait = std::chrono::milliseconds(100);
+
+// UI thread: the test harness's `mouse` hands the window events while it
+// doesn't have focus; they count as a focused window's while this is on
+bool g_mouse_as_focused = false;
 
 Shared& State() {
     static Shared shared;
@@ -97,8 +117,19 @@ public:
     void OnMouseDown(MouseEvent& e) override {
         const auto button = ButtonFor(e.button());
         if (!button || !TakesClicks()) return;
+        Shared& shared = State();
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        // a click with no move before it (a touch) still hovers first
+        MoveLocked(e);
+        shared.click_move = shared.pointer.moves;
+        shared.click_at = MouseMenus::Clock::now();
+        shared.mouse.Press(*button);
+    }
+
+    void OnMouseMove(MouseEvent& e) override {
+        if (!TakesClicks()) return;
         std::lock_guard<std::mutex> lock(State().mutex);
-        State().mouse.Press(*button);
+        MoveLocked(e);
     }
 
     // always: a press taken must end, wherever the button comes up
@@ -129,8 +160,19 @@ private:
     // SDK draws, and whenever a modal dialog is up (the SDK's message boxes
     // and keyboard).
     bool TakesClicks() const {
-        if (!GameTakesPresses() || !is_active()) return false;
+        if (!GameTakesPresses() || !(is_active() || g_mouse_as_focused)) return false;
         return !(ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureMouse);
+    }
+
+    // with State().mutex held
+    void MoveLocked(const MouseEvent& e) {
+        HoverPointer& pointer = State().pointer;
+        if (pointer.moves && pointer.x == e.x() && pointer.y == e.y()) return;
+        pointer.x = e.x();
+        pointer.y = e.y();
+        pointer.width = window_ ? window_->GetActualPhysicalWidth() : 0;
+        pointer.height = window_ ? window_->GetActualPhysicalHeight() : 0;
+        pointer.moves++;
     }
 
     void Detach() {
@@ -163,8 +205,12 @@ void AddMouseMenuPresses(uint32_t user, rex::input::X_INPUT_STATE* state) {
     }
 
     uint16_t presses = 0;
+    const auto now = MouseMenus::Clock::now();
     if (GameTakesPresses()) {
-        presses = shared.mouse.Buttons(MouseMenus::Clock::now());
+        // a click waits for the game to hover where it is
+        const bool waiting = shared.applied.load() < shared.click_move &&
+                             now - shared.click_at < kClickWait;
+        if (!waiting) presses = shared.mouse.Buttons(now);
     } else {
         // a press waiting as a song starts mustn't land once it ends
         shared.mouse.Clear();
@@ -176,5 +222,31 @@ void AddMouseMenuPresses(uint32_t user, rex::input::X_INPUT_STATE* state) {
     state->gamepad.buttons = static_cast<uint16_t>(state->gamepad.buttons | presses);
     state->packet_number = state->packet_number + shared.packets;
 }
+
+std::optional<HoverPointer> TakeHoverPointer(uint64_t seen) {
+    Shared& shared = State();
+    std::lock_guard<std::mutex> lock(shared.mutex);
+    if (shared.pointer.moves == seen) return std::nullopt;
+    return shared.pointer;
+}
+
+HoverPointer LastHoverPointer() {
+    Shared& shared = State();
+    std::lock_guard<std::mutex> lock(shared.mutex);
+    return shared.pointer;
+}
+
+void HoverApplied(uint64_t moves) { State().applied.store(moves); }
+
+uint32_t MouseMenuPlayer() {
+    Shared& shared = State();
+    std::lock_guard<std::mutex> lock(shared.mutex);
+    for (uint32_t user = 0; user < kMaxGuestUsers; user++) {
+        if (shared.connected[user]) return user;
+    }
+    return 0;
+}
+
+void MouseAsFocused(bool on) { g_mouse_as_focused = on; }
 
 }
