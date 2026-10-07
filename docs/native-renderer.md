@@ -156,8 +156,8 @@ settings), each described there (`src/settings.cpp`):
   the crowd...), the blurs in them, their mips, post-processing (`velocity`, `dof`, `bloom`,
   `composite`), the overlay and its multisampled resolves, the gamma pass, and a world drawn
   ahead or before the frame. `idle` is the GPU waiting for the CPU to send the next command
-  buffer (a texture pass's mips go in one of their own) and isn't in the frame's total, its
-  busy time. The slow-frame log ends with the split ("GPU 1.5 ms busy: world 0.5, ...").
+  buffer (a frame goes to the GPU in parts, submitted after each texture pass with mips) and
+  isn't in the frame's total, its busy time. The slow-frame log ends with the split ("GPU 1.5 ms busy: world 0.5, ...").
   Direct3D 12 only: the timestamps go into SDL_gpu's own command list, reached through SDL
   3.4.14's private layout and checked first; where the checks fail, or on Vulkan, there are
   no times (one log line) and nothing else changes. About 60 timestamps a frame in a song,
@@ -165,7 +165,24 @@ settings), each described there (`src/settings.cpp`):
   of run-to-run noise; the frames shown and skipped don't change), so it's off unless
   measuring. At 1600x900 in arena_04 the GPU is busy about 0.7 ms on a world frame
   (mostly `pass_other`) and 1.5 ms on a post frame (`pass_other` and `world` half a
-  millisecond each), with 0.5 to 0.8 ms idle around the mips.
+  millisecond each), with 0.5 to 0.8 ms idle around the mips (before `native_view_inline_mips`).
+- `native_view_inline_mips` (on): makes the mips of the textures RB3 draws into (in a song the
+  crowd's 256x512 target, four levels, several times a frame) at the end of the command buffer
+  the frame submits there, by `src/Render/shaders/mips.hlsl`, a pass a level drawn as SDL_gpu's
+  `SDL_GenerateMipmapsForGPUTexture` draws it on Direct3D 12 (the same triangle, sampler and
+  calls). SDL's own mips take a sampler each, which would put the command buffer's sampler heap
+  off the step `gpu_view.cpp`'s `kSamplerBatch` keeps it on (the AMD hangs), so off they go in
+  a command buffer of their own between the frame's work so far and the rest: two command
+  buffers each time where on takes one. The levels come out byte for byte as SDL's (random
+  texels at even and odd sizes, and the crowd's target in render_song's captures); a level
+  whose side halves to 0 is drawn by neither. Direct3D 12 only (elsewhere SDL's, as before).
+  The frame is still submitted there, mips or not: the GPU draws the frame's first parts while
+  the worker records the rest, and recording the frame whole and submitting it once (tried)
+  had post frames wait 2.2 ms for the GPU rather than 1.2. In 20th Century Boy's 60 s slice at
+  60 Hz, on against off: the GPU's `idle` 0.2 rather than 0.5 ms a world frame and 0.4 to 0.5
+  rather than 0.7 to 0.8 a post frame; the worker's wait for the GPU on world frames 1.03 to
+  1.09 ms p50 and 2.2 to 2.3 p95 rather than 1.2 and 2.6, its whole world frame 0.2 ms
+  shorter and its post frame 0.2 to 0.3; post frames' wait the same.
 - `native_bc_textures` (on): keeps RB3's block-compressed textures (DXT1, DXT2/3, DXT4/5 and
   DXN, most of what it loads) compressed on the GPU, as BC1, BC2, BC3 and BC5, in texture
   arrays of their own. The worker's decode of a texture seen first (`decode` in the slow-frame

@@ -231,6 +231,12 @@ struct RasterOptions {
     // between the frame's parts, into GpuStats::gpu_ms once the GPU has
     // finished it (gpu_timing_model.h). The CPU ignores it.
     bool gpu_timestamps = false;
+    // On the GPU (native_view_inline_mips), Direct3D 12 only: a texture
+    // pass's mips drawn at the end of the command buffer the frame submits
+    // there, as SDL's GenerateMipmaps makes them (gpu_view.cpp's mips.hlsl);
+    // off, SDL's own, in a command buffer of their own between that one and
+    // the next. The CPU ignores it.
+    bool inline_mips = true;
     // On the GPU (native_bc_textures), block-compressed textures (DXT1,
     // DXT2_3, DXT4_5, DXN) are kept as blocks, sent and sampled as BC1, BC2,
     // BC3 and BC5 where the device has those formats, and the capture's

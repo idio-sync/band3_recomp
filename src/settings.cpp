@@ -581,6 +581,13 @@ REXCVAR_DEFINE_BOOL(native_bc_textures, true, "Band3/Advanced/Native renderer",
     "colour by a step or two. Off decodes them to RGBA as before, to compare; applies to "
     "textures seen after the change");
 
+REXCVAR_DEFINE_BOOL(native_view_inline_mips, true, "Band3/Advanced/Native renderer",
+    "Make the mips of the textures RB3 draws into (the crowd's, in a song, several times a "
+    "frame) in the native renderer's own command buffers, exactly as SDL's mipmap "
+    "generation makes them, rather than in one more command buffer each: half the command "
+    "buffers a frame and a little less of the GPU waiting for the CPU. Direct3D 12 only. Off "
+    "has SDL make them, as before, to compare");
+
 REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Advanced/Native renderer",
     "Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, "
     "for the native view (experimental), even while it's off: some are drawn once, in the "

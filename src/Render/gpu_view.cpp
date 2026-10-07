@@ -10,6 +10,7 @@
 #include "src/Render/spot_model.h"
 #include "src/Render/shaders/gamma_shaders.gen.h"
 #include "src/Render/shaders/mesh_shaders.gen.h"
+#include "src/Render/shaders/mips_shaders.gen.h"
 #include "src/Render/shaders/post_shaders.gen.h"
 #include "src/Render/shaders/velocity_shaders.gen.h"
 #include "src/stall_watch.h"
@@ -416,6 +417,16 @@ struct GpuRenderer::Impl {
     // gamma.hlsl's: the display gamma ramp over the finished picture
     SDL_GPUShader* gamma_shader = nullptr;
     SDL_GPUGraphicsPipeline* gamma_pipeline = nullptr;
+    // mips.hlsl's: a texture pass's mips drawn in the frame's command buffer
+    // (RasterOptions::inline_mips), each level from the one above as SDL's
+    // GenerateMipmaps blits them on Direct3D 12, with its blits' linear
+    // sampler: clamping, and no LOD clamp (linear_sampler's keeps SampleLevel
+    // at level 0). Direct3D 12 only (inline_mips_ok); elsewhere SDL's own mips.
+    SDL_GPUShader* mip_vertex_shader = nullptr;
+    SDL_GPUShader* mip_shader = nullptr;
+    SDL_GPUGraphicsPipeline* mip_pipeline = nullptr;
+    SDL_GPUSampler* mip_sampler = nullptr;
+    bool inline_mips_ok = false;
     // by blend mode, DepthRules::Key, AlphaMode, CullWinding, PixelKind and
     // sample count, all made before the first frame; and the overlay's
     // start's, by sample count (OverlayStartPipeline)
@@ -819,6 +830,11 @@ struct GpuRenderer::Impl {
     // a render pass, its kSamplerBatch fragment samplers bound to white first
     SDL_GPURenderPass* BeginPass(SDL_GPUCommandBuffer* cmd, const SDL_GPUColorTargetInfo* ct,
                                  uint32_t targets, const SDL_GPUDepthStencilTargetInfo* dt);
+    // `texture`'s (w x h, a 2D array of one layer, RGBA8) levels 1 to
+    // levels - 1 in `cmd`, each from the one above as SDL's GenerateMipmaps
+    // blits them on Direct3D 12, by mips.hlsl through BeginPass (inline_mips_ok)
+    void DrawMips(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* texture, uint32_t w, uint32_t h,
+                  uint32_t levels);
     // one of the generated shaders, in `format` (DXBC or SPIR-V)
     SDL_GPUShader* MakeShader(SDL_GPUShaderFormat format, SDL_GPUShaderStage stage,
                               const unsigned char* dxbc, size_t dxbc_size,
@@ -843,9 +859,11 @@ struct GpuRenderer::Impl {
         return Pipeline(kBlendSrc, {true, false, true}, AlphaMode::kNone, cull,
                         PixelKind::kShadowDepth);
     }
-    // a full-screen pass's pipeline: post.hlsl's triangle and `pixel`, into RGBA8
+    // a full-screen pass's pipeline: post.hlsl's triangle (or `vertex`'s) and
+    // `pixel`, into RGBA8
     SDL_GPUGraphicsPipeline* MakeFullscreenPipeline(SDL_GPUShader* pixel, const char* name,
-                                                    uint32_t targets = 1);
+                                                    uint32_t targets = 1,
+                                                    SDL_GPUShader* vertex = nullptr);
     // the motion blur's object pass's (velocity.hlsl), culling as `cull`
     // says: into the velocity texture, SrcAlpha (alpha 1 or 0), its depth
     // smaller-or-equal tested and written
@@ -1047,13 +1065,44 @@ SDL_GPURenderPass* GpuRenderer::Impl::BeginPass(SDL_GPUCommandBuffer* cmd,
     return rp;
 }
 
+void GpuRenderer::Impl::DrawMips(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* texture, uint32_t w,
+                                 uint32_t h, uint32_t levels) {
+    // SDL_GenerateMipmapsForGPUTexture's blits, call for call: a pass a
+    // level, its load DONT_CARE, the blit's viewport (the level's size, at
+    // least 1) and no scissor of its own, as the blit sets none. Every level
+    // comes out as SDL's, odd sizes too (checked against them, random texels
+    // at 256x512, 37x23, 100x60, 33x65...: the same bytes). So does a level
+    // whose side halves to 0 (1x1 under 256x512): SDL sizes a pass by the
+    // texture's size shifted down by the level, 0 there, and neither draws
+    // it; it's left as it was. (RB3's crowd target has 4 levels, all drawn.)
+    for (uint32_t l = 1; l < levels; l++) {
+        SDL_GPUColorTargetInfo ct{};
+        ct.texture = texture;
+        ct.mip_level = l;
+        ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
+        ct.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPURenderPass* rp = BeginPass(cmd, &ct, 1, nullptr);
+        const SDL_GPUViewport v{0.0f, 0.0f, float(std::max(w >> l, 1u)),
+                                float(std::max(h >> l, 1u)), 0.0f, 1.0f};
+        SDL_SetGPUViewport(rp, &v);
+        SDL_BindGPUGraphicsPipeline(rp, mip_pipeline);
+        const SDL_GPUTextureSamplerBinding tb{texture, mip_sampler};
+        SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
+        const uint32_t level[4] = {l - 1, 0, 0, 0};
+        SDL_PushGPUFragmentUniformData(cmd, 0, level, sizeof(level));
+        SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+        SDL_EndGPURenderPass(rp);
+    }
+}
+
 SDL_GPUGraphicsPipeline* GpuRenderer::Impl::MakeFullscreenPipeline(SDL_GPUShader* pixel,
                                                                     const char* name,
-                                                                    uint32_t targets) {
+                                                                    uint32_t targets,
+                                                                    SDL_GPUShader* vertex) {
     SDL_GPUColorTargetDescription target[2]{};
     target[0].format = target[1].format = kColorFormat;
     SDL_GPUGraphicsPipelineCreateInfo pi{};
-    pi.vertex_shader = fullscreen_shader;
+    pi.vertex_shader = vertex ? vertex : fullscreen_shader;
     pi.fragment_shader = pixel;
     pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
     pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
@@ -1265,6 +1314,28 @@ bool GpuRenderer::Impl::Create() {
     si.address_mode_u = si.address_mode_v = si.address_mode_w =
         SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
     linear_sampler = SDL_CreateGPUSampler(device, &si);
+    // A texture pass's mips drawn in the frame's command buffer: on Direct3D
+    // 12 only, whose GenerateMipmaps they're drawn as (Vulkan's makes its
+    // mips another way, untested here: SDL's there, as before); without them,
+    // SDL's in a command buffer of their own. The sampler is SDL's blits'
+    // linear one: every level reachable (max_lod 1000).
+    if (std::strcmp(SDL_GetGPUDeviceDriver(device), "direct3d12") == 0) {
+        mip_vertex_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_VERTEX, kMipVertexDxbc,
+                                       sizeof(kMipVertexDxbc), kMipVertexSpirv,
+                                       sizeof(kMipVertexSpirv), "VSMip", 0, 0, 0);
+        mip_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kMipPixelDxbc,
+                                sizeof(kMipPixelDxbc), kMipPixelSpirv, sizeof(kMipPixelSpirv),
+                                "PSMip", 1, 0, 1);
+        if (mip_vertex_shader && mip_shader)
+            mip_pipeline = MakeFullscreenPipeline(mip_shader, "mips", 1, mip_vertex_shader);
+        si.max_lod = 1000.0f;
+        mip_sampler = SDL_CreateGPUSampler(device, &si);
+        inline_mips_ok = mip_pipeline && mip_sampler;
+        if (!inline_mips_ok)
+            REXLOG_WARN("native view gpu: no pipeline for the texture passes' mips ({}); SDL "
+                        "makes them, in command buffers of their own",
+                        SDL_GetError());
+    }
 
     SDL_GPUTextureCreateInfo ti{};
     ti.type = SDL_GPU_TEXTURETYPE_2D_ARRAY;
@@ -1348,17 +1419,19 @@ void GpuRenderer::Impl::Release(bool stop_video) {
              {resolve_pipeline, downsample_pipeline, blur_pipeline, glare_pipeline,
               composite_pipeline, composite_history_pipeline, velocity_pipeline, gamma_pipeline,
               velocity_object_pipelines[0], velocity_object_pipelines[1],
-              velocity_object_pipelines[2]})
+              velocity_object_pipelines[2], mip_pipeline})
             if (p) SDL_ReleaseGPUGraphicsPipeline(device, p);
         for (SDL_GPUShader* sh : {vertex_shader, pixel_shader, spot_shader, soft_shader,
                                   shadow_shader, fullscreen_shader, resolve_shader,
                                   overlay_start_shader,
                                   downsample_shader, blur_shader, glare_shader, composite_shader,
                                   composite_history_shader, velocity_shader, velocity_object_vs,
-                                  velocity_object_ps, gamma_shader})
+                                  velocity_object_ps, gamma_shader, mip_vertex_shader,
+                                  mip_shader})
             if (sh) SDL_ReleaseGPUShader(device, sh);
         if (sampler) SDL_ReleaseGPUSampler(device, sampler);
         if (linear_sampler) SDL_ReleaseGPUSampler(device, linear_sampler);
+        if (mip_sampler) SDL_ReleaseGPUSampler(device, mip_sampler);
         if (white) SDL_ReleaseGPUTexture(device, white);
         if (black) SDL_ReleaseGPUTexture(device, black);
         if (no_depth) SDL_ReleaseGPUTexture(device, no_depth);
@@ -1401,6 +1474,10 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     resolve_pipeline = downsample_pipeline = blur_pipeline = glare_pipeline = nullptr;
     composite_pipeline = composite_history_pipeline = velocity_pipeline = nullptr;
     gamma_pipeline = nullptr;
+    mip_vertex_shader = mip_shader = nullptr;
+    mip_pipeline = nullptr;
+    mip_sampler = nullptr;
+    inline_mips_ok = false;
     sampler = linear_sampler = nullptr;
     white = black = no_depth = nullptr;
     ReleaseTargets();  // released above: forgets them
@@ -4298,26 +4375,45 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             draw(d, AlphaMode::kTexture, no_z, shadow_map);
         }
         end_pass();
-        // in place of FinishDrawTarget's downsamples. SDL makes them with
-        // blits of its own, a sampler each, which would put the command
-        // buffer's sampler heap off kSamplerBatch's step (BeginPass); so in a
-        // command buffer of their own, the frame's work so far submitted
-        // before it and the rest in a new one (each starts its heaps afresh).
-        // One queue runs them in order, so the frame's fence still waits out
-        // all of it.
+        // in place of FinishDrawTarget's downsamples, then the frame's work so
+        // far submitted and the rest recorded into a new command buffer
+        // (gpu_timing_model.h's kIdle: the GPU waits for the CPU between
+        // them). The submit is worth its idle: the GPU draws what's recorded
+        // while the CPU records the rest, and a frame recorded whole, its
+        // mips drawn inline but submitted once at the end, waited a
+        // millisecond longer for its post frames' GPU (1.2 to 2.2 ms p50).
+        // One queue runs the command buffers in order, so the frame's fence
+        // still waits out all of it.
         if (rt.levels > 1) {
             SDL_GPUCommandBuffer* next = nullptr;
-            // the GPU's time from this command buffer's end to the mips'
-            // start, and from theirs to the next's, is spent waiting for the
-            // CPU to submit them (gpu_timing_model.h's kIdle)
-            MarkTime(cmd, gpu_timing::kIdle);
-            if (SDL_SubmitGPUCommandBuffer(cmd)) {
-                if (SDL_GPUCommandBuffer* mips = SDL_AcquireGPUCommandBuffer(device)) {
-                    MarkTime(mips, gpu_timing::kMips);
-                    SDL_GenerateMipmapsForGPUTexture(mips, rt.color);
-                    MarkTime(mips, gpu_timing::kIdle);
-                    if (SDL_SubmitGPUCommandBuffer(mips))
-                        next = SDL_AcquireGPUCommandBuffer(device);
+            if (o.inline_mips && inline_mips_ok) {
+                // each level drawn from the one above, in this command
+                // buffer, as SDL's GenerateMipmaps blits them on Direct3D 12
+                // (DrawMips: the same triangle, sampler, viewport and calls,
+                // so the same texels), but through BeginPass, so the sampler
+                // heap stays on kSamplerBatch's step. A pass reads the level
+                // above while it draws into its own, as SDL's blits do: SDL
+                // makes the pass's level a render target, the others stay
+                // readable.
+                MarkTime(cmd, gpu_timing::kMips);
+                DrawMips(cmd, rt.color, rt.w, rt.h, rt.levels);
+                MarkTime(cmd, gpu_timing::kIdle);
+                if (SDL_SubmitGPUCommandBuffer(cmd)) next = SDL_AcquireGPUCommandBuffer(device);
+            } else {
+                // Off (or not on Direct3D 12), SDL makes them, with blits of
+                // its own, a sampler each, which would put the command
+                // buffer's sampler heap off kSamplerBatch's step (BeginPass);
+                // so in a command buffer of their own, between the frame's
+                // work so far and the rest (each starts its heaps afresh)
+                MarkTime(cmd, gpu_timing::kIdle);
+                if (SDL_SubmitGPUCommandBuffer(cmd)) {
+                    if (SDL_GPUCommandBuffer* mips = SDL_AcquireGPUCommandBuffer(device)) {
+                        MarkTime(mips, gpu_timing::kMips);
+                        SDL_GenerateMipmapsForGPUTexture(mips, rt.color);
+                        MarkTime(mips, gpu_timing::kIdle);
+                        if (SDL_SubmitGPUCommandBuffer(mips))
+                            next = SDL_AcquireGPUCommandBuffer(device);
+                    }
                 }
             }
             if (!next) {

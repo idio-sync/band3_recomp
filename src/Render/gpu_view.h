@@ -25,7 +25,9 @@
 // It draws what Rasterize() does, the same way: every blend mode, skinning on
 // the GPU, depth as 1/w, and the texture passes the frame samples, each into a
 // render target of its own (kept between frames, by DxTex) between stretches of
-// the back buffer's draws, with the texture's mips made after it; the
+// the back buffer's draws, with the texture's mips made after it (by
+// shaders/mips.hlsl in the frame's command buffer, as SDL's mipmap blits
+// would: RasterOptions::inline_mips); the
 // materials' textures, mip chains and all, filtered by the game's samplers in
 // the shader (sample_model.h; its LOD from ddx_fine/ddy_fine, which the CPU
 // works out the same way), not by hardware samplers, which couldn't wrap a

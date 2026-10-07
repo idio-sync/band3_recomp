@@ -3,12 +3,12 @@
   python tools/shaders/build_shaders.py [present.hlsl ...]
 
 Compiles src/Render/shaders/mesh.hlsl (and the shade*.hlsli and spot*.hlsli it
-includes), post.hlsl (and the post*.hlsli it includes) and gamma.hlsl twice
-each: DXBC (fxc, shader model 5.1) for SDL_gpu's Direct3D 12 backend and SPIR-V
+includes), post.hlsl (and the post*.hlsli it includes), velocity.hlsl,
+gamma.hlsl and mips.hlsl twice each: DXBC (fxc, shader model 5.1) for SDL_gpu's Direct3D 12 backend and SPIR-V
 (dxc) for its Vulkan backend, checks the SPIR-V (spirv-val, and spirv-cross
 --reflect for the descriptor sets SDL_gpu expects), and writes
-src/Render/shaders/mesh_shaders.gen.h, post_shaders.gen.h and
-gamma_shaders.gen.h with the bytes, so building band3 needs none of these tools.
+src/Render/shaders/mesh_shaders.gen.h, post_shaders.gen.h and the others'
+<name>_shaders.gen.h with the bytes, so building band3 needs none of these tools.
 present.hlsl, the native renderer's picture drawn on the SDK presenter's own
 Direct3D 12 command list, is DXBC alone, into present_shaders.gen.h.
 Run it after changing a shader and check in the headers; name shader files to
@@ -101,6 +101,13 @@ SHADERS = [
     ("gamma.hlsl", "gamma_shaders.gen.h", [
         ("kGammaPixel", "PSGamma", "ps_5_1", "ps_6_0",
          {("ubos", "GammaUniforms", 3, 0), ("textures", "color_tex", 2, 0)}),
+    ]),
+    # a texture pass's mips, each level from the one above as SDL's blits
+    # make them
+    ("mips.hlsl", "mips_shaders.gen.h", [
+        ("kMipVertex", "VSMip", "vs_5_1", "vs_6_0", set()),
+        ("kMipPixel", "PSMip", "ps_5_1", "ps_6_0",
+         {("ubos", "MipUniforms", 3, 0), ("textures", "source_tex", 2, 0)}),
     ]),
     # the native renderer's picture on the window, on the SDK presenter's
     # Direct3D 12 command list: DXBC alone (no dxc profile), with the root
