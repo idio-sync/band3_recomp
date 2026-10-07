@@ -74,6 +74,9 @@ bool IsSantrollerStageKit(uint16_t vendor, uint16_t product, uint16_t release);
 // SDL's joystick GUID (32 hex digits) of a Santroller Stage Kit, or of an
 // XInput device of subtype 9
 bool IsStageKitGuid(std::string_view guid);
+// an input device that's a Stage Kit, from the subtype it reports and SDL's
+// GUID (empty from the XInput backend): band3 lights it, and it's no player
+bool IsStageKitDevice(uint8_t subtype, std::string_view guid);
 
 // the output report a Santroller Stage Kit in HID mode takes: report id 1,
 // Santroller's command 0x5A, then left and right

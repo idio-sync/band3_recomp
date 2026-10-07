@@ -17,6 +17,7 @@
 #include "input_backend.h"
 #include "input_lock.h"
 #include "keyboard_search_driver.h"
+#include "src/Lights/stagekit.h"
 #include "midi_drums_driver.h"
 #include "midi_keys_driver.h"
 #include "mouse_menus_driver.h"
@@ -40,8 +41,15 @@ namespace {
 std::mutex g_devices_mutex;
 std::vector<InputDevice> g_devices;
 
+// band3 lights a Stage Kit itself (src/Lights/), so it's no player, as on the
+// Xbox 360, where one takes a controller's place
+bool IsStageKit(const DeviceInfo& device) {
+    return lights::IsStageKitDevice(device.subtype, device.guid);
+}
+
 DeviceKind KindOf(const DeviceInfo& device) {
     if (VirtualInstrumentPlayer(device)) return DeviceKind::kVirtual;
+    if (IsStageKit(device)) return DeviceKind::kStageKit;
     if (IsSdlCopyOfHidInstrument(device)) return DeviceKind::kSdlCopy;
     if (IsHidInstrument(device)) return DeviceKind::kHidInstrument;
     if (IsMidiDrums(device)) return DeviceKind::kMidiDrums;
@@ -58,7 +66,8 @@ DeviceKind KindOf(const DeviceInfo& device) {
 // - a pad keeps its player while it's connected, wherever the others go, and a
 //   pad that connects takes the lowest free player.
 // - SDL's copy of an instrument the HID driver reads is left out, and the other
-//   pads close up over its slot, as if it had never connected.
+//   pads close up over its slot, as if it had never connected. So is a Stage
+//   Kit, which band3 lights itself.
 // - the keyboard and other synthetic devices feed player 1, as in the SDK, unless
 //   a virtual instrument has player 1: then it has the slot to itself, so a type
 //   change empties the slot and RB3 reads the new type when it comes back (RB3
@@ -122,7 +131,7 @@ private:
             if (int player = VirtualInstrumentPlayer(device)) {
                 slot.kind = SlotDevice::Kind::kVirtual;
                 slot.virtual_player = player;
-            } else if (IsSdlCopyOfHidInstrument(device)) {
+            } else if (IsSdlCopyOfHidInstrument(device) || IsStageKit(device)) {
                 slot.kind = SlotDevice::Kind::kSkipped;
             } else if (device.synthetic) {
                 slot.kind = SlotDevice::Kind::kSynthetic;

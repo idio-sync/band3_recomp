@@ -107,6 +107,16 @@ TEST_CASE("SDL's GUID of a Stage Kit") {
     CHECK_FALSE(IsStageKitGuid("not a guid at all, thirty-two ch"));
 }
 
+TEST_CASE("an input device is a Stage Kit by its subtype or its GUID") {
+    // the XInput backend's: the subtype the device reports
+    CHECK(IsStageKitDevice(kSubtypeStageKit, ""));
+    // SDL's: a Santroller kit's GUID, whatever the subtype says
+    CHECK(IsStageKitDevice(1, "03001234091200008228000000090000"));
+    // a gamepad, a guitar
+    CHECK_FALSE(IsStageKitDevice(1, "030000005e0400008e02000000007801"));
+    CHECK_FALSE(IsStageKitDevice(6, ""));
+}
+
 TEST_CASE("a Santroller kit's HID report") {
     CHECK(HidReport({0x55, kRed}) == std::array<uint8_t, 4>{0x01, 0x5A, 0x55, kRed});
     CHECK(HidReport(kAllOffCommand) == std::array<uint8_t, 4>{0x01, 0x5A, 0x00, 0xFF});

@@ -15,7 +15,7 @@ struct SlotDevice {
         kPad,        // a physical controller
         kSynthetic,  // the SDK's keyboard/mouse device or its stand-in
         kVirtual,    // a virtual instrument
-        kSkipped,    // SDL's copy of an instrument the HID driver reads
+        kSkipped,    // SDL's copy of an instrument the HID driver reads, a Stage Kit
     };
     Kind kind = Kind::kPad;
     // 1-4, for virtual instruments

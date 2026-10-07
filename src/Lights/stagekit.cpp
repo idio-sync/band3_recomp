@@ -109,6 +109,10 @@ bool IsStageKitGuid(std::string_view guid) {
     return vendor && product && version && IsSantrollerStageKit(*vendor, *product, *version);
 }
 
+bool IsStageKitDevice(uint8_t subtype, std::string_view guid) {
+    return subtype == kSubtypeStageKit || IsStageKitGuid(guid);
+}
+
 std::array<uint8_t, 4> HidReport(Command command) {
     return {0x01, 0x5A, command.left, command.right};
 }
