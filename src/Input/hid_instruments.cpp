@@ -3,6 +3,7 @@
 #include <SDL3/SDL_guid.h>
 #include <SDL3/SDL_hidapi.h>
 #include <SDL3/SDL_joystick.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -18,8 +19,10 @@
 #include <vector>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
+#include "gameinput_instruments.h"
 #include "hid_capture.h"
 #include "hid_instrument_types.h"
+#include "report_source.h"
 #include "xinput_state.h"
 
 namespace band3::input {
@@ -46,8 +49,11 @@ std::set<uint16_t> KnownVendors() {
     return vendors;
 }
 
-// set while a HID driver is running, for IsSdlCopyOfHidInstrument
+// set while a HID driver is running
 std::atomic<bool> g_active{false};
+// which of its sources it reads, for IsSdlCopyOfHidInstrument
+std::atomic<bool> g_reading_hid{false};
+std::atomic<bool> g_reading_gip{false};
 // counts across drivers, since the launcher restarts the driver inside one
 // input system, which never takes an id back
 std::atomic<uint64_t> g_generation{0};
@@ -93,17 +99,35 @@ void SaveCapture(const HidCapture& capture) {
 }
 
 const char* NameOf(uint16_t vendor, uint16_t product) {
-    for (const auto& known : KnownHidInstruments()) {
-        if (known.vendor == vendor && known.product == product) return known.name;
+    for (const auto table : {KnownHidInstruments(), KnownGipInstruments()}) {
+        for (const auto& known : table) {
+            if (known.vendor == vendor && known.product == product) return known.name;
+        }
     }
     return "Rock Band instrument";
 }
 
+// a dongle's reports through SDL's HID API
+class HidSource final : public ReportSource {
+public:
+    explicit HidSource(SDL_hid_device* handle) : handle_(handle) {}
+    ~HidSource() override { SDL_hid_close(handle_); }
+
+    int Read(uint8_t* buffer, size_t size, int timeout_ms) override {
+        return SDL_hid_read_timeout(handle_, buffer, size, timeout_ms);
+    }
+
+private:
+    SDL_hid_device* const handle_;
+};
+
 struct Device {
     Device(DeviceId id, HidInstrumentType instrument, uint16_t vendor, uint16_t product,
-           uint16_t release, std::string path, std::string name, SDL_hid_device* handle)
+           uint16_t release, std::string path, std::string name,
+           std::unique_ptr<ReportSource> source)
         : id(id), instrument(instrument), vendor(vendor), product(product), release(release),
-          path(std::move(path)), name(std::move(name)), handle(handle), translator(instrument) {}
+          path(std::move(path)), name(std::move(name)), source(std::move(source)),
+          translator(instrument) {}
 
     const DeviceId id;
     const HidInstrumentType instrument;
@@ -112,7 +136,8 @@ struct Device {
     const uint16_t release;
     const std::string path;
     const std::string name;
-    SDL_hid_device* const handle;
+    // the reader thread's; closed when the device is reaped
+    const std::unique_ptr<ReportSource> source;
     std::atomic<bool> connected{true};
     std::thread reader;
 
@@ -138,19 +163,25 @@ public:
     ~HidInstrumentDriver() override { Stop(); }
 
     X_STATUS Setup() override {
-        if (SDL_hid_init() != 0) {
-            REXLOG_WARN("HID instruments: SDL's HID API didn't start ({}), so PS3 and Wii "
-                        "instruments won't be read", SDL_GetError());
-            return X_STATUS_UNSUCCESSFUL;
+        if (SDL_hid_init() == 0) {
+            hid_started_ = true;
+        } else {
+            REXLOG_WARN("HID instruments: SDL's HID API didn't start ({}), so PlayStation and "
+                        "Wii instruments won't be read", SDL_GetError());
         }
-        hid_started_ = true;
+        gip_ = StartGipWatch();
+        if (!hid_started_ && !gip_) return X_STATUS_UNSUCCESSFUL;
         g_active = true;
+        g_reading_hid = hid_started_;
+        g_reading_gip = gip_ != nullptr;
         scanner_ = std::thread([this] { ScanLoop(); });
         {
             std::lock_guard<std::mutex> lock(driver_mutex());
             driver() = this;
         }
-        REXLOG_INFO("HID instruments: looking for PS3 and Wii Rock Band instruments");
+        if (hid_started_) {
+            REXLOG_INFO("HID instruments: looking for PlayStation and Wii Rock Band instruments");
+        }
         return X_STATUS_SUCCESS;
     }
 
@@ -265,13 +296,16 @@ private:
         while (!stop_) {
             lock.unlock();
             // a count of 0 means the platform can't tell, so look every time
-            const uint32_t change = SDL_hid_device_change_count();
-            if (first || change == 0 || change != last_change) {
-                first = false;
-                last_change = change;
-                Scan();
+            if (hid_started_) {
+                const uint32_t change = SDL_hid_device_change_count();
+                if (first || change == 0 || change != last_change) {
+                    first = false;
+                    last_change = change;
+                    Scan();
+                }
             }
             Reap();
+            OpenGipArrivals();
             lock.lock();
             stop_cv_.wait_for(lock, kScanInterval, [this] { return stop_.load(); });
         }
@@ -299,10 +333,23 @@ private:
                     continue;
                 }
                 Open(*instrument, info->vendor_id, info->product_id, info->release_number,
-                     info->path, handle);
+                     info->path, std::make_unique<HidSource>(handle));
             }
             SDL_hid_free_enumeration(list);
         }
+    }
+
+    // opens the Xbox One instruments GameInput saw connect
+    void OpenGipArrivals() {
+        if (!gip_) return;
+        for (auto& arrival : gip_->TakeArrivals()) gip_pending_.push_back(std::move(arrival));
+        std::erase_if(gip_pending_, [this](GipInstrument& gip) {
+            // back before its last connection's reader stopped: next time round
+            if (IsOpen(gip.path.c_str())) return false;
+            Open(gip.instrument, gip.vendor, gip.product, gip.release, gip.path.c_str(),
+                 std::move(gip.source));
+            return true;
+        });
     }
 
     bool IsOpen(const char* path) {
@@ -314,10 +361,10 @@ private:
     }
 
     void Open(HidInstrumentType instrument, uint16_t vendor, uint16_t product, uint16_t release,
-              const char* path, SDL_hid_device* handle) {
+              const char* path, std::unique_ptr<ReportSource> source) {
         auto device = std::make_unique<Device>(static_cast<DeviceId>(kDeviceIdBase + ++g_generation),
                                                instrument, vendor, product, release, path,
-                                               NameOf(vendor, product), handle);
+                                               NameOf(vendor, product), std::move(source));
         REXLOG_INFO("HID instruments: {} connected ({:04X}:{:04X})", device->name, vendor, product);
         Device* raw = device.get();
         raw->reader = std::thread([this, raw] { ReadLoop(*raw); });
@@ -328,8 +375,7 @@ private:
     void ReadLoop(Device& device) {
         uint8_t report[64];
         while (!stop_ && device.connected) {
-            const int size = SDL_hid_read_timeout(device.handle, report, sizeof(report),
-                                                  kReadTimeoutMs);
+            const int size = device.source->Read(report, sizeof(report), kReadTimeoutMs);
             if (size < 0) {
                 REXLOG_INFO("HID instruments: {} disconnected", device.name);
                 device.connected = false;
@@ -385,7 +431,6 @@ private:
         std::erase_if(devices_, [](const std::unique_ptr<Device>& device) {
             if (device->connected) return false;
             if (device->reader.joinable()) device->reader.join();
-            SDL_hid_close(device->handle);
             return true;
         });
     }
@@ -406,14 +451,16 @@ private:
             std::lock_guard<std::mutex> lock(devices_mutex_);
             for (const auto& device : devices_) {
                 if (device->reader.joinable()) device->reader.join();
-                SDL_hid_close(device->handle);
             }
+            // closes their dongles and devices, before HID and GameInput go
             devices_.clear();
         }
-        if (hid_started_) {
-            SDL_hid_exit();
-            g_active = false;
-        }
+        gip_pending_.clear();
+        gip_.reset();
+        if (hid_started_) SDL_hid_exit();
+        g_active = false;
+        g_reading_hid = false;
+        g_reading_gip = false;
     }
 
     std::mutex stop_mutex_;
@@ -421,12 +468,15 @@ private:
     std::atomic<bool> stop_{false};
     std::thread scanner_;
     bool hid_started_ = false;
+    std::unique_ptr<GipWatch> gip_;
 
     std::mutex devices_mutex_;
     std::vector<std::unique_ptr<Device>> devices_;
 
     // scanner thread only
     std::set<std::string> open_failed_;
+    // Xbox One instruments waiting for their last connection to be reaped
+    std::vector<GipInstrument> gip_pending_;
 };
 
 }
@@ -466,10 +516,15 @@ bool IsSdlCopyOfHidInstrument(const DeviceInfo& device) {
     Uint16 vendor = 0, product = 0, version = 0, crc = 0;
     SDL_GetJoystickGUIDInfo(SDL_StringToGUID(device.guid.c_str()), &vendor, &product, &version,
                             &crc);
-    for (const auto& known : KnownHidInstruments()) {
-        if (known.vendor == vendor && known.product == product) return true;
-    }
-    return false;
+    const auto read = [&](std::span<const KnownHidInstrument> known) {
+        return std::ranges::any_of(known, [&](const KnownHidInstrument& k) {
+            return k.vendor == vendor && k.product == product;
+        });
+    };
+    // an Xbox One instrument too, in case SDL lists one (Windows.Gaming.Input
+    // may offer it as a plain controller)
+    return (g_reading_hid && read(KnownHidInstruments())) ||
+           (g_reading_gip && read(KnownGipInstruments()));
 }
 
 }

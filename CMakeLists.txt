@@ -73,6 +73,10 @@ endif()
 include(cmake/rtmidi.cmake)
 band3_setup_rtmidi(band3 ${CMAKE_CURRENT_SOURCE_DIR}/src/ThirdParty/rtmidi/RtMidi.cpp)
 
+# Xbox One instruments through GameInput (src/Input/gameinput_instruments.cpp)
+include(cmake/gameinput.cmake)
+band3_setup_gameinput(band3)
+
 # HTTPS requests for RhythmVerse's songs (src/Net/web_client.cpp)
 include(cmake/web_client.cmake)
 band3_setup_web_client(band3)

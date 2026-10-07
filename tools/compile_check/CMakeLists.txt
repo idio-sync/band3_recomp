@@ -83,6 +83,10 @@ target_compile_definitions(band3_compile_check PRIVATE
 include(${BAND3_ROOT}/cmake/rtmidi.cmake)
 band3_setup_rtmidi(band3_compile_check ${BAND3_ROOT}/src/ThirdParty/rtmidi/RtMidi.cpp)
 
+# the same GameInput header, for src/Input/gameinput_instruments.cpp
+include(${BAND3_ROOT}/cmake/gameinput.cmake)
+band3_setup_gameinput(band3_compile_check)
+
 # the same HTTPS client as the real build
 include(${BAND3_ROOT}/cmake/web_client.cmake)
 band3_setup_web_client(band3_compile_check)

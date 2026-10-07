@@ -9,8 +9,9 @@
 #include "hid_instrument_types.h"
 
 // PlayStation and Wii Rock Band instruments (hid_instrument_types.h lists them),
-// read straight from their USB dongles with SDL's HID API and reported as Xbox
-// 360 instruments.
+// read straight from their USB dongles with SDL's HID API, and on Windows Xbox
+// One ones, read through GameInput (gameinput_instruments.h), all reported as
+// Xbox 360 instruments.
 // Turned on by the hid_instruments setting. On Linux the dongles' hidraw nodes
 // need to be readable, which usually takes a udev rule.
 

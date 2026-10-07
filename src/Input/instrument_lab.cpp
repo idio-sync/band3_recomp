@@ -210,9 +210,9 @@ void DrawHex(const std::vector<uint8_t>& bytes) {
 
 void DrawConnectedInstruments() {
     if (!REXCVAR_GET(hid_instruments)) {
-        ImGui::TextWrapped("PS3 and Wii Rock Band instruments are read when the hid_instruments "
-                           "setting is on (Escape > Settings, the Controllers tab). It takes a "
-                           "restart.");
+        ImGui::TextWrapped("PlayStation, Wii and Xbox One Rock Band instruments are read when "
+                           "the hid_instruments setting is on (Escape > Settings, the "
+                           "Controllers tab). It takes a restart.");
         return;
     }
     if (!HidInstrumentsActive()) {
@@ -223,8 +223,9 @@ void DrawConnectedInstruments() {
 
     const auto statuses = HidInstrumentStatuses();
     if (statuses.empty()) {
-        ImGui::TextWrapped("No PS3 or Wii instruments found. Plug in a dongle; it shows up "
-                           "within a second or so.");
+        ImGui::TextWrapped("No instruments found. Plug in a dongle, or connect an Xbox One "
+                           "instrument; it shows up within a second or so. Xbox One "
+                           "instruments need GameInput 3 (the log says if it's missing).");
     }
     for (const auto& status : statuses) {
         char header[160];

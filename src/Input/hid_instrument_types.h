@@ -5,9 +5,10 @@
 #include "instruments.h"
 #include "ps3_instruments.h"
 
-// Every HID instrument band3 reads (see hid_instruments.h): which USB ids are
-// which instrument, what each reports itself as to RB3, and how its reports
-// are translated.
+// Every instrument band3 reads from its dongle or adapter (see
+// hid_instruments.h): the HID ones, and the Xbox One ones read through
+// GameInput. Which USB ids are which instrument, what each reports itself as
+// to RB3, and how its reports are translated.
 
 namespace band3::input {
 
@@ -18,6 +19,8 @@ enum class HidInstrumentType {
     kPs4Guitar,     // PS4 guitars, and the Riffmaster and CRKD SG in PS4 mode
     kPs5Guitar,     // the Riffmaster and CRKD SG in PS5 mode
     kPs4Drums,
+    kXboxOneGuitar,  // through GameInput, as are the rest
+    kXboxOneDrums,
 };
 
 struct KnownHidInstrument {
@@ -32,6 +35,16 @@ std::span<const KnownHidInstrument> KnownHidInstruments();
 // which instrument a HID device is, from its USB ids and release number
 std::optional<HidInstrumentType> IdentifyHidInstrument(uint16_t vendor, uint16_t product,
                                                        uint16_t release);
+
+// the Xbox One instruments, which GameInput reads
+std::span<const KnownHidInstrument> KnownGipInstruments();
+
+// which instrument an Xbox One device is, from its USB ids
+std::optional<HidInstrumentType> IdentifyGipInstrument(uint16_t vendor, uint16_t product);
+
+// either of the above: the HID ids and the Xbox One ids don't overlap
+std::optional<HidInstrumentType> IdentifyInstrument(uint16_t vendor, uint16_t product,
+                                                    uint16_t release);
 
 // for the Instrument Lab, e.g. "a PS4 guitar"
 const char* HidInstrumentTypeLabel(HidInstrumentType type);

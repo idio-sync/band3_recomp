@@ -1,0 +1,15 @@
+# band3 HID capture
+# Synthetic: written by hand from PlasticBand's Xbox One drum layout, not
+# recorded from hardware. Each report is its ID (0x20, the input state) and its
+# data, as band3 records GameInput's reports. A red pad hit (sent twice, as
+# these kits do), then a yellow cymbal hit, with rests between.
+device: Xbox One MadCatz drums
+usb: 0738:4262
+release: 0000
+---
+0 20 00 00 00 00 00 00
+16 20 20 00 70 00 00 00
+17 20 20 00 70 00 00 00
+33 20 00 00 00 00 00 00
+50 20 00 00 00 00 70 00
+66 20 00 00 00 00 00 00

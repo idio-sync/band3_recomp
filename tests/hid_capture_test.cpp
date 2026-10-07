@@ -1,6 +1,7 @@
 // Checks the HID capture format (src/Input/hid_capture.cpp), and replays every
-// capture in tests/captures through the PS3/Wii translator. Captures saved from
-// the Instrument Lab can be dropped into that folder to keep them working.
+// capture in tests/captures through its instrument's translator (the Xbox One
+// ones' too, which the Lab saves the same way). Captures saved from the
+// Instrument Lab can be dropped into that folder to keep them working.
 
 #include <doctest/doctest.h>
 #include <filesystem>
@@ -72,7 +73,7 @@ TEST_CASE("every saved capture replays through the translator") {
         const auto capture = ParseHidCapture(ReadFile(entry.path()));
         REQUIRE(capture.has_value());
         const auto instrument =
-            IdentifyHidInstrument(capture->vendor, capture->product, capture->release);
+            IdentifyInstrument(capture->vendor, capture->product, capture->release);
         REQUIRE(instrument.has_value());
 
         HidInstrumentTranslator translator(*instrument);
@@ -103,4 +104,25 @@ TEST_CASE("the synthetic drum capture hits the red pad, then the yellow cymbal")
     CHECK(states[3].buttons == (kY | kRightShoulder | kDpadUp));
     CHECK(u16(states[3].thumb_ly) == (0x8000 | 0x10 * 0x7FFF / 0xFF));
     CHECK(states[4].buttons == 0);
+}
+
+TEST_CASE("the synthetic Xbox One drum capture hits the red pad, then the yellow cymbal") {
+    const auto capture = ParseHidCapture(
+        ReadFile(std::filesystem::path(BAND3_CAPTURE_DIR) / "synthetic-xbox-one-drums.txt"));
+    REQUIRE(capture.has_value());
+    REQUIRE(capture->reports.size() == 6);
+    REQUIRE(IdentifyInstrument(capture->vendor, capture->product, capture->release) ==
+            HidInstrumentType::kXboxOneDrums);
+
+    HidInstrumentTranslator translator(HidInstrumentType::kXboxOneDrums);
+    std::vector<Gamepad360> states;
+    for (const auto& report : capture->reports) states.push_back(*translator.Translate(report.bytes));
+
+    CHECK(states[0].buttons == 0);
+    CHECK(states[1].buttons == (kB | kRightThumb));
+    CHECK(DrumSlot(JoypadButtonFor(SlotButtons(states[1].buttons))) == 1);  // red
+    CHECK(states[2].buttons == states[1].buttons);
+    CHECK(states[3].buttons == 0);
+    CHECK(states[4].buttons == (kY | kRightShoulder | kDpadUp));
+    CHECK(states[5].buttons == 0);
 }

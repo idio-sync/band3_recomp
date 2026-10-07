@@ -31,6 +31,7 @@ add_executable(band3_tests
     camera_cut_test.cpp
     ps3_instruments_test.cpp
     ps4_instruments_test.cpp
+    gip_instruments_test.cpp
     hid_capture_test.cpp
     midi_drums_test.cpp
     midi_keys_test.cpp
@@ -99,6 +100,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Content/song_dta.cpp
     ${BAND3_ROOT}/src/Content/song_inventory.cpp
     ${BAND3_ROOT}/src/Game/song_id.cpp
+    ${BAND3_ROOT}/src/Input/gip_instruments.cpp
     ${BAND3_ROOT}/src/Input/hid_capture.cpp
     ${BAND3_ROOT}/src/Input/hid_instrument_types.cpp
     ${BAND3_ROOT}/src/Input/instrument_kind.cpp

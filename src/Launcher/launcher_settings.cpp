@@ -254,7 +254,7 @@ constexpr Setting kSettings[] = {
     {.cvar = "guitar_type", .tab = kControllers, .section = "Instruments",
      .label = "Guitars play as", .widget = kCombo, .choices = kGuitarTypes},
     {.cvar = "hid_instruments", .tab = kControllers, .section = "Instruments",
-     .label = "PS3, Wii, PS4 and PS5 instruments (USB dongles)", .widget = kCheckbox},
+     .label = "PlayStation, Wii and Xbox One instruments", .widget = kCheckbox},
     {.cvar = "midi_drums", .tab = kControllers, .section = "MIDI drums",
      .label = "Play a MIDI drum kit", .widget = kCheckbox},
     {.cvar = "midi_drums_device", .tab = kControllers, .section = "MIDI drums",

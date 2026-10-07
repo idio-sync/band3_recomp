@@ -235,7 +235,8 @@ REXCVAR_DEFINE_STRING(guitar_type, "auto", "Band3/Controllers",
 
 REXCVAR_DEFINE_BOOL(hid_instruments, false, "Band3/Controllers",
     "Experimental: play PS3, Wii, PS4 and PS5 Rock Band guitars and drum kits (and the "
-    "MIDI Pro Adapter in drum mode) through their USB dongles, as Xbox 360 instruments")
+    "MIDI Pro Adapter in drum mode) through their USB dongles, and on Windows Xbox One ones "
+    "through GameInput 3, as Xbox 360 instruments")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(menu_shortcut, true, "Band3/Controllers",
