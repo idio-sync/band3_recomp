@@ -813,7 +813,24 @@ std::string ByKindJson(const std::vector<NativeViewStats::Kind>& kinds) {
                           kind.peak[i].first.c_str(), kind.peak[i].second);
             out += buf;
         }
-        out += "}}";
+        out += "}";
+        // native_gpu_timestamps: per frame timed, and only with some
+        if (kind.gpu_timed) {
+            const double timed = double(kind.gpu_timed);
+            out += ",\"gpu_timed\":" + std::to_string(kind.gpu_timed);
+            out += ",\"gpu_total_ms\":" + Distribution(kind.gpu_total_ms);
+            out += ",\"gpu_ms\":{";
+            for (size_t i = 0; i < kind.gpu_ms.size(); i++) {
+                std::snprintf(buf, sizeof(buf), "%s\"%s\":%.3f", i ? "," : "",
+                              kind.gpu_ms[i].first.c_str(), kind.gpu_ms[i].second / timed);
+                out += buf;
+            }
+            std::snprintf(buf, sizeof(buf), "},\"gpu_marks_dropped\":%llu,\"gpu_bad_spans\":%llu",
+                          static_cast<unsigned long long>(kind.gpu_marks_dropped),
+                          static_cast<unsigned long long>(kind.gpu_bad_spans));
+            out += buf;
+        }
+        out += "}";
     }
     out += "}";
     return out;

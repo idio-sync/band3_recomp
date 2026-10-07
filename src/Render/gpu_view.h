@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "src/Render/gpu_timing_model.h"
 #include "src/Render/scene_capture.h"
 #include "src/Render/soft_raster.h"
 
@@ -70,6 +71,18 @@
 // band3's frames and the emulated GPU's run on it together, whether or not
 // they're presented in place; native_view.cpp refuses the device
 // (RefuseDevice) and the native view draws on the CPU.
+//
+// With RasterOptions::gpu_timestamps (native_gpu_timestamps) on that device,
+// a frame writes a timestamp at each boundary between its parts
+// (gpu_timing_model.h) into SDL's command list itself, reached the way the
+// textures are, through SDL 3.4.14's private command buffer layout, checked
+// once (CheckTimingOnce) and its pointers again at every command buffer; the
+// frame's last command buffer resolves them into a readback buffer, read
+// once the GPU has finished it (GpuStats::gpu_ms). Timestamps change no
+// state SDL tracks (no pipeline, binding, barrier or descriptor heap), so
+// the picture and SDL's sampler batches (kSamplerBatch) are as without.
+// Where the checks fail, or on Vulkan, there are no timings (logged once)
+// and nothing else changes.
 
 namespace band3::render {
 
@@ -171,6 +184,18 @@ struct GpuStats {
     uint32_t resident_meshes = 0, resident_textures = 0, resident_rts = 0;
     uint32_t meshes_by_time = 0, textures_by_time = 0;
     double texture_array_mb = 0, arena_mb = 0, rts_mb = 0;
+    // native_gpu_timestamps (RasterOptions::gpu_timestamps), Direct3D 12
+    // only: the GPU's milliseconds on the frame by part (gpu_timing_model.h),
+    // the world passes before it and the world drawn ahead for it included,
+    // and all of them but kIdle (the GPU waiting for the CPU between its
+    // command buffers): its busy time. Once the GPU has finished it
+    // (gpu_timed; else none).
+    // The marks a full ladder dropped (their time charged to the part before)
+    // and the spans left out as unwritten or backwards.
+    bool gpu_timed = false;
+    double gpu_ms[gpu_timing::kParts] = {};
+    double gpu_total_ms = 0;
+    uint32_t gpu_marks_dropped = 0, gpu_bad_spans = 0;
 };
 
 // What GpuRenderer keeps on the GPU between frames, by its frame serial (one
@@ -370,8 +395,10 @@ class GpuRenderer {
     // Whether the GPU has finished the frame RenderFrameToOutput last drew
     // into `slot`: never waits (SDL_gpu's own wait has no timeout, and the
     // caller watches for a GPU that never finishes), so the caller polls it.
-    // True with no frame in flight there, or no device.
-    bool OutputDone(int slot);
+    // True with no frame in flight there, or no device. Once it's finished,
+    // its GPU timings (GpuStats::gpu_ms, if it has them) into `times`; a
+    // frame waited for before RenderFrameToOutput returned has them already.
+    bool OutputDone(int slot, GpuStats* times = nullptr);
     // native_world_ahead: a world frame's world alone (its texture passes
     // and back-buffer draws before post_boundary, and the pre-process buffer
     // kept from it) into the scene target, submitted and not waited for, so
@@ -397,8 +424,10 @@ class GpuRenderer {
     std::string DescribeIndexedDraw(uint32_t before, uint32_t total);
     // The SDK's ID3D12Device, which the outputs must live on for its presenter
     // to sample them in place, or null when its presenter isn't Direct3D 12.
-    // On the UI thread, before CheckZeroCopy.
-    void SetPresentDevice(void* d3d12_device);
+    // On the UI thread, before CheckZeroCopy. `timestamp_frequency`: the
+    // ticks a second of its direct queue's timestamps (0 unknown: no GPU
+    // timings), which SDL_gpu's own direct queue on the same device shares.
+    void SetPresentDevice(void* d3d12_device, uint64_t timestamp_frequency = 0);
     // No device for the session, and why (Init logs it once; CheckZeroCopy
     // gives it as its why not): the SDK's GPU is one SDL_gpu mustn't share.
     // On the UI thread, before Init; after it, a device made is let go and

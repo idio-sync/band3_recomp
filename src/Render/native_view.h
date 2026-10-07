@@ -153,6 +153,11 @@ struct LiveViewStats {
         uint32_t peak_meshes = 0, peak_textures = 0, peak_rts = 0;
         uint32_t peak_meshes_by_time = 0, peak_textures_by_time = 0;
         double peak_texture_array_mb = 0, peak_arena_mb = 0, peak_rts_mb = 0;
+        // native_gpu_timestamps: of the GPU's frames, those with GPU timings
+        // (GpuStats::gpu_timed; gpu's gpu_ms is their parts' totals) and
+        // each one's gpu_total_ms
+        uint64_t gpu_timed = 0;
+        std::vector<double> gpu_total_ms;
     };
     Kind by_kind[kFrameKinds];
     static constexpr double kPlanSpikeMs = 8;

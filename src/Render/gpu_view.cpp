@@ -512,6 +512,42 @@ struct GpuRenderer::Impl {
     // zero_copy_mutex)
     std::string refused;
 
+    // GPU timings (RasterOptions::gpu_timestamps; gpu_view.h, and
+    // gpu_timing_model.h): the SDK's direct queue's ticks a second
+    // (SetPresentDevice), and whether SDL's command list passed
+    // CheckTimingOnce's checks (once: logged if not), which made the query
+    // heap and its readback buffer on the SDK's device. A heap region of
+    // kTimingSlots timestamps per frame being drawn: each output's, RenderFrame's
+    // (kOutputs), and the aside's (kAsideRegion), where a world pass before a
+    // frame or the world drawn ahead, submitted without a fence of their own,
+    // mark theirs until the next whole frame resolves them with its own. The
+    // readback buffer has two regions' room for each frame's (its own, then
+    // the aside's), so neither is written over before it's read: an output's
+    // isn't drawn again until its fence was seen (native_view.cpp's
+    // PresentSlots), and RenderFrame's is read before it returns.
+    static constexpr uint32_t kTimingSlots = 256;
+    static constexpr int kFrameRegions = kOutputs + 1;
+    static constexpr int kAsideRegion = kOutputs + 1;
+    uint64_t timestamp_frequency = 0;
+    bool timing_checked = false, timing_ok = false;
+#ifdef _WIN32
+    ID3D12QueryHeap* query_heap = nullptr;
+    ID3D12Resource* query_readback = nullptr;
+#endif
+    // the frame being recorded's ladder, and the aside's; the region it marks
+    // (-1 untimed: off, or its command buffer failed the checks), and whether
+    // it marks the aside (a world pass before a frame, or the world ahead)
+    gpu_timing::Ladder ladder{kTimingSlots}, aside_ladder{kTimingSlots};
+    int timing_region = -1;
+    bool timing_aside = false;
+    // a frame region's ladders as resolved, until its frame's times are read
+    struct Timed {
+        std::vector<uint8_t> labels, aside;
+        uint32_t dropped = 0;
+        bool pending = false;
+    };
+    Timed timed[kFrameRegions];
+
     // Everything a frame sends goes through this one transfer buffer and one
     // copy pass. It's mapped cycling, so a frame never waits on an earlier one
     // still reading it.
@@ -818,6 +854,34 @@ struct GpuRenderer::Impl {
     // a zero-copy check's result, for CheckZeroCopy (the presenter's drawer
     // logs a change)
     void SetZeroCopy(bool ok, const std::string& why);
+    // SDL's ID3D12GraphicsCommandList behind `cmd` (as void*), if the
+    // pointers of SDL 3.4.14's command buffer layout check out (no call made
+    // on any of them), else null
+    void* TimingList(SDL_GPUCommandBuffer* cmd);
+    // whether GPU timings can be taken in `cmd`: the first time, the whole of
+    // the checks on it (its command list's and allocator's interfaces, the
+    // list's type and device), and the query heap and readback buffer made;
+    // after, whether they passed then and `cmd`'s pointers check out now
+    bool CheckTimingOnce(SDL_GPUCommandBuffer* cmd);
+    // A Render's timing, its command buffer just acquired: untimed without
+    // RasterOptions::gpu_timestamps or if the checks fail; a world pass
+    // before a frame (`pre_pass`) or the world ahead (`ahead_pass`) on the
+    // aside's ladder, as one part each; a frame on its own region's (`slot`'s,
+    // or RenderFrame's), from kUpload.
+    void StartTiming(SDL_GPUCommandBuffer* cmd, const RasterOptions& o, int slot, int pre_pass,
+                     bool ahead_pass);
+    // a timestamp in `cmd` from which the GPU's time goes to `part`, if the
+    // frame is timed and the part changes (gpu_timing::Ladder::Mark); on the
+    // aside's ladder, only its start and its end (kNone)
+    void MarkTime(SDL_GPUCommandBuffer* cmd, uint8_t part);
+    // a frame's last command buffer, before it's submitted: its ladder ended
+    // and resolved into its region of the readback buffer, and the aside's
+    // with it (then started over)
+    void ResolveTimes(SDL_GPUCommandBuffer* cmd);
+    // once the GPU has finished frame region `region`'s frame: its times into
+    // `st` (GpuStats::gpu_ms), if it has any not read yet
+    void ReadTimes(int region, GpuStats& st);
+    void ReleaseTiming();
     // Draws `frame` into output `slot`, or with -1 into `graded`, which it
     // reads back into rgba. With `pre_pass` (from 1) it's that one of the
     // world passes before a frame whose world refracts (soft_raster.h's
@@ -1232,6 +1296,8 @@ void GpuRenderer::Impl::Release(bool stop_video) {
         ReleaseKept(pre_buffer);
         ReleaseOutputs();
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
+        // (the GPU idle: no command list still writes the heap)
+        ReleaseTiming();
         SDL_DestroyGPUDevice(device);
     }
     meshes.clear();
@@ -2068,6 +2134,60 @@ struct SdlD3D12Texture {
     // the SRV's staging descriptor and the reference count follow
 };
 
+// SDL 3.4.14's private command buffer (SDL_sysgpu.h's
+// CommandBufferCommonHeader and its passes, SDL_gpu_d3d12.c's
+// D3D12CommandBuffer, checked against release-3.4.14's source): an
+// SDL_GPUCommandBuffer* is a D3D12CommandBuffer*, the common header first,
+// none of it under an #ifdef. Read only, for the command list the GPU
+// timings' timestamps go into (TimingList); nothing is trusted until the
+// checks pass.
+struct SdlPass {
+    SDL_GPUCommandBuffer* command_buffer;
+    bool in_progress;
+};
+struct SdlComputePass {
+    SDL_GPUCommandBuffer* command_buffer;
+    bool in_progress;
+    SDL_GPUComputePipeline* compute_pipeline;
+    // MAX_TEXTURE_SAMPLERS_PER_STAGE, MAX_STORAGE_TEXTURES_PER_STAGE,
+    // MAX_STORAGE_BUFFERS_PER_STAGE, MAX_COMPUTE_WRITE_TEXTURES and _BUFFERS
+    bool sampler_bound[16];
+    bool read_only_storage_texture_bound[8];
+    bool read_only_storage_buffer_bound[8];
+    bool read_write_storage_texture_bound[8];
+    bool read_write_storage_buffer_bound[8];
+};
+struct SdlRenderPass {
+    SDL_GPUCommandBuffer* command_buffer;
+    bool in_progress;
+    SDL_GPUTexture* color_targets[8];  // MAX_COLOR_TARGET_BINDINGS
+    Uint32 num_color_targets;
+    SDL_GPUTexture* depth_stencil_target;
+    SDL_GPUGraphicsPipeline* graphics_pipeline;
+    bool vertex_sampler_bound[16];
+    bool vertex_storage_texture_bound[8];
+    bool vertex_storage_buffer_bound[8];
+    bool fragment_sampler_bound[16];
+    bool fragment_storage_texture_bound[8];
+    bool fragment_storage_buffer_bound[8];
+};
+struct SdlCommandBufferCommonHeader {
+    SDL_GPUDevice* device;
+    SdlRenderPass render_pass;
+    SdlComputePass compute_pass;
+    SdlPass copy_pass;
+    bool swapchain_texture_acquired;
+    bool submitted;
+    bool ignore_render_pass_texture_validation;
+};
+struct SdlD3D12CommandBuffer {
+    SdlCommandBufferCommonHeader common;
+    void* renderer;  // D3D12Renderer*, whose layout has #ifdefs: never walked
+    ID3D12CommandAllocator* command_allocator;
+    ID3D12GraphicsCommandList* graphics_command_list;
+    // the in-flight fence and the rest follow
+};
+
 // an object's identity: COM's rule is that its IUnknown pointer is the same
 // however it's reached
 IUnknown* Identity(IUnknown* object) {
@@ -2172,6 +2292,241 @@ void GpuRenderer::Impl::CheckZeroCopyOnce() {
     const bool ok = SdkResource(texture, ti, why) != nullptr;
     SDL_ReleaseGPUTexture(device, texture);
     SetZeroCopy(ok, why);
+}
+
+void* GpuRenderer::Impl::TimingList(SDL_GPUCommandBuffer* cmd) {
+#ifdef _WIN32
+    if (!cmd) return nullptr;
+    const auto* c = reinterpret_cast<const SdlD3D12CommandBuffer*>(cmd);
+    // (a) SDL_AcquireGPUCommandBuffer sets the header's device and each
+    // pass's command buffer to its own, every time; (b) and what's after it
+    // is there. Pointers compared only: nothing is called on them here.
+    if (c->common.device != device || c->common.render_pass.command_buffer != cmd ||
+        c->common.compute_pass.command_buffer != cmd || c->common.copy_pass.command_buffer != cmd)
+        return nullptr;
+    if (!c->renderer || !c->command_allocator || !c->graphics_command_list) return nullptr;
+    return c->graphics_command_list;
+#else
+    (void)cmd;
+    return nullptr;
+#endif
+}
+
+bool GpuRenderer::Impl::CheckTimingOnce(SDL_GPUCommandBuffer* cmd) {
+    if (timing_checked) return timing_ok && TimingList(cmd);
+    timing_checked = true;
+    std::string why;
+#ifdef _WIN32
+    auto check = [&]() -> bool {
+        if (!present_device) {
+            why = "the SDK's presenter isn't Direct3D 12";
+            return false;
+        }
+        if (std::strcmp(SDL_GetGPUDeviceDriver(device), "direct3d12") != 0) {
+            why = std::string("SDL_gpu's device is ") + SDL_GetGPUDeviceDriver(device);
+            return false;
+        }
+        if (!timestamp_frequency) {
+            why = "the SDK's direct queue has no timestamp frequency";
+            return false;
+        }
+        // the layout of SDL 3.4.14, the version these headers are; a newer
+        // SDL that moved anything fails here before anything is called on it
+        auto* list = static_cast<ID3D12GraphicsCommandList*>(TimingList(cmd));
+        if (!list) {
+            why = fmt::format("SDL {}.{}.{}'s command buffer doesn't have the layout of 3.4.14's",
+                              SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
+            return false;
+        }
+        const auto* c = reinterpret_cast<const SdlD3D12CommandBuffer*>(cmd);
+        // (c) a graphics command list, direct, on the SDK's device, and a
+        // command allocator, however reached
+        ID3D12GraphicsCommandList* as_list = nullptr;
+        if (FAILED(list->QueryInterface(IID_PPV_ARGS(&as_list))) || !as_list) {
+            why = "SDL's command list isn't an ID3D12GraphicsCommandList";
+            return false;
+        }
+        const bool direct = as_list->GetType() == D3D12_COMMAND_LIST_TYPE_DIRECT;
+        ID3D12Device* list_device = nullptr;
+        const bool has_device = SUCCEEDED(as_list->GetDevice(IID_PPV_ARGS(&list_device))) &&
+                                list_device;
+        as_list->Release();
+        const bool same = has_device && Identity(list_device) &&
+                          Identity(list_device) ==
+                              Identity(static_cast<ID3D12Device*>(present_device));
+        if (list_device) list_device->Release();
+        if (!direct || !same) {
+            why = !direct ? "SDL's command list isn't a direct one"
+                          : "SDL's command list isn't on the SDK's device";
+            return false;
+        }
+        ID3D12CommandAllocator* allocator = nullptr;
+        if (FAILED(c->command_allocator->QueryInterface(IID_PPV_ARGS(&allocator))) ||
+            !allocator) {
+            why = "SDL's command allocator isn't an ID3D12CommandAllocator";
+            return false;
+        }
+        allocator->Release();
+        // the heap, a region per frame being drawn and the aside's, and the
+        // readback buffer the frames' regions resolve into, two each
+        auto* d3d = static_cast<ID3D12Device*>(present_device);
+        D3D12_QUERY_HEAP_DESC qd{};
+        qd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+        qd.Count = (kAsideRegion + 1) * kTimingSlots;
+        if (FAILED(d3d->CreateQueryHeap(&qd, IID_PPV_ARGS(&query_heap)))) {
+            query_heap = nullptr;
+            why = "no timestamp query heap";
+            return false;
+        }
+        D3D12_HEAP_PROPERTIES hp{};
+        hp.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = uint64_t(kFrameRegions) * 2 * kTimingSlots * sizeof(uint64_t);
+        rd.Height = 1;
+        rd.DepthOrArraySize = 1;
+        rd.MipLevels = 1;
+        rd.Format = DXGI_FORMAT_UNKNOWN;
+        rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(d3d->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                                D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                IID_PPV_ARGS(&query_readback)))) {
+            query_readback = nullptr;
+            why = "no readback buffer for the timestamps";
+            return false;
+        }
+        return true;
+    };
+    timing_ok = check();
+    if (!timing_ok) ReleaseTiming();
+#else
+    why = "they're Direct3D 12 only";
+#endif
+    if (timing_ok)
+        REXLOG_INFO("native view gpu: GPU timings on ({} timestamp ticks a second)",
+                    timestamp_frequency);
+    else
+        REXLOG_INFO("native view gpu: GPU timings off: {}", why);
+    return timing_ok;
+}
+
+void GpuRenderer::Impl::StartTiming(SDL_GPUCommandBuffer* cmd, const RasterOptions& o, int slot,
+                                    int pre_pass, bool ahead_pass) {
+    timing_region = -1;
+    const bool aside = pre_pass || ahead_pass;
+    if (!o.gpu_timestamps || !CheckTimingOnce(cmd)) {
+        // nothing of the aside's is left for a later frame to be charged
+        if (!aside) aside_ladder.Reset();
+        return;
+    }
+    timing_aside = aside;
+    timing_region = aside ? kAsideRegion : slot >= 0 ? slot : kOutputs;
+    if (!aside) {
+        ladder.Reset();
+        timed[timing_region].pending = false;
+    }
+    MarkTime(cmd, ahead_pass ? gpu_timing::kWorldAhead
+                  : pre_pass ? gpu_timing::kPreWorld
+                             : gpu_timing::kUpload);
+}
+
+void GpuRenderer::Impl::MarkTime(SDL_GPUCommandBuffer* cmd, uint8_t part) {
+#ifdef _WIN32
+    if (timing_region < 0) return;
+    auto* list = static_cast<ID3D12GraphicsCommandList*>(TimingList(cmd));
+    if (!list) {
+        // a command buffer that doesn't check out: the frame goes untimed,
+        // and the aside's ladder, which it may have left open, starts over
+        if (timing_aside) aside_ladder.Reset();
+        timing_region = -1;
+        return;
+    }
+    gpu_timing::Ladder& l = timing_aside ? aside_ladder : ladder;
+    // the aside's are one part each, from start to end
+    if (timing_aside && part != gpu_timing::kNone && l.Open()) return;
+    const int at = l.Mark(part);
+    if (at < 0) return;
+    list->EndQuery(query_heap, D3D12_QUERY_TYPE_TIMESTAMP,
+                   uint32_t(timing_region) * kTimingSlots + uint32_t(at));
+#else
+    (void)cmd;
+    (void)part;
+#endif
+}
+
+void GpuRenderer::Impl::ResolveTimes(SDL_GPUCommandBuffer* cmd) {
+#ifdef _WIN32
+    if (timing_region < 0 || timing_aside) return;
+    MarkTime(cmd, gpu_timing::kNone);
+    if (timing_region < 0) return;
+    auto* list = static_cast<ID3D12GraphicsCommandList*>(TimingList(cmd));
+    const int r = timing_region;
+    const uint64_t at = uint64_t(r) * 2 * kTimingSlots * sizeof(uint64_t);
+    list->ResolveQueryData(query_heap, D3D12_QUERY_TYPE_TIMESTAMP, uint32_t(r) * kTimingSlots,
+                           ladder.Count(), query_readback, at);
+    Timed& t = timed[r];
+    t.labels = ladder.Labels();
+    t.dropped = ladder.Dropped();
+    t.aside.clear();
+    // the world passes before it and the world drawn ahead for it, ended
+    // (one left open was cut short: not counted)
+    if (aside_ladder.Count() && !aside_ladder.Open()) {
+        list->ResolveQueryData(query_heap, D3D12_QUERY_TYPE_TIMESTAMP,
+                               uint32_t(kAsideRegion) * kTimingSlots, aside_ladder.Count(),
+                               query_readback, at + kTimingSlots * sizeof(uint64_t));
+        t.aside = aside_ladder.Labels();
+        t.dropped += aside_ladder.Dropped();
+    }
+    aside_ladder.Reset();
+    t.pending = true;
+    timing_region = -1;
+#else
+    (void)cmd;
+#endif
+}
+
+void GpuRenderer::Impl::ReadTimes(int region, GpuStats& st) {
+#ifdef _WIN32
+    if (region < 0 || region >= kFrameRegions || !query_readback) return;
+    Timed& t = timed[region];
+    if (!t.pending) return;
+    t.pending = false;
+    const size_t at = size_t(region) * 2 * kTimingSlots * sizeof(uint64_t);
+    const D3D12_RANGE range{at, at + 2 * kTimingSlots * sizeof(uint64_t)};
+    void* data = nullptr;
+    // (a device removed fails here: no times)
+    if (FAILED(query_readback->Map(0, &range, &data)) || !data) return;
+    const auto* ticks = reinterpret_cast<const uint64_t*>(static_cast<const char*>(data) + at);
+    gpu_timing::Times times;
+    gpu_timing::Accumulate(t.labels.data(), ticks, t.labels.size(), timestamp_frequency, times);
+    gpu_timing::Accumulate(t.aside.data(), ticks + kTimingSlots, t.aside.size(),
+                           timestamp_frequency, times);
+    const D3D12_RANGE none{0, 0};
+    query_readback->Unmap(0, &none);
+    st.gpu_timed = true;
+    std::copy(std::begin(times.ms), std::end(times.ms), st.gpu_ms);
+    st.gpu_total_ms = times.total_ms;
+    st.gpu_marks_dropped = t.dropped;
+    st.gpu_bad_spans = times.bad;
+#else
+    (void)region;
+    (void)st;
+#endif
+}
+
+void GpuRenderer::Impl::ReleaseTiming() {
+#ifdef _WIN32
+    if (query_heap) query_heap->Release();
+    if (query_readback) query_readback->Release();
+    query_heap = nullptr;
+    query_readback = nullptr;
+#endif
+    timing_ok = false;
+    timing_region = -1;
+    ladder.Reset();
+    aside_ladder.Reset();
+    for (Timed& t : timed) t = Timed{};
 }
 
 bool GpuRenderer::Impl::EnsureOutput(int slot, uint32_t w, uint32_t h) {
@@ -2753,6 +3108,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         REXLOG_WARN("native view gpu: no command buffer ({})", SDL_GetError());
         return false;
     }
+    // GPU timings: its first timestamp, the upload's start
+    StartTiming(cmd, o, slot, pre_pass, ahead_pass);
     // RasterOptions::gpu_labels: what each indexed draw is, in the order
     // they're recorded, a list per command buffer, handed to draw_log as the
     // frame is submitted; callers check gpu_labels first, so the text is
@@ -2873,6 +3230,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // the open pass's scissor is the song list's cut (InOverlayCut), not the
     // whole target
     bool scissor_cut = false;
+    uint32_t pass_samples = 1;  // the open pass's targets'
     auto begin_pass = [&](const SDL_GPUColorTargetInfo& ct,
                           const SDL_GPUDepthStencilTargetInfo& dt) {
         pass = BeginPass(cmd, &ct, 1, &dt);
@@ -2884,7 +3242,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         std::fill(std::begin(bound_viewport), std::end(bound_viewport), 0.0f);
     };
     auto end_pass = [&] {
-        if (pass) SDL_EndGPURenderPass(pass);
+        if (pass) {
+            // a multisampled overlay pass resolves into the picture as it
+            // ends: timed apart, until whatever comes next marks its own
+            if (pass_samples > 1) MarkTime(cmd, gpu_timing::kOverlayResolve);
+            SDL_EndGPURenderPass(pass);
+        }
         pass = nullptr;
     };
 
@@ -2907,7 +3270,6 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // the resolve's copy
     SDL_GPUTexture* behind_now = behind;
     bool depth_fresh = false;  // the open pass's depth is cleared and untouched
-    uint32_t pass_samples = 1;  // the open pass's targets'
     // The overlay's samples (soft_raster.h's OverlaySamples) as the device
     // draws them, into its multisampled targets; 1 into `color`, over the
     // world's depth, as before. A capture from before the cameras were kept
@@ -2926,6 +3288,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                                     float(clear_rgba >> 8 & 0xff) / 255.0f,
                                     float(clear_rgba >> 16 & 0xff) / 255.0f, 0.0f};
     auto begin_back = [&](bool clear_depth) {
+        // the GPU's time from here is the world's or the overlay's (marked
+        // here rather than as each texture pass ends: nothing goes between,
+        // and back to back passes then take one timestamp each)
+        MarkTime(cmd, resolved ? gpu_timing::kOverlay : gpu_timing::kWorld);
         // the overlay's, multisampled: each of its passes resolves into the
         // picture as it ends
         const bool ms = resolved && overlay_samples > 1;
@@ -3120,18 +3486,21 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // the velocity pass, from the scene's depth (t1), then the objects
         // with their own motion over it
         if (flags & post::kPostVelocity) {
+            MarkTime(cmd, gpu_timing::kVelocity);
             p.mode = {0, width, height, 0};
             fullscreen(post_velocity, velocity_w, velocity_h, velocity_pipeline,
                        {scene, scene_depth}, p);
             velocity_objects();
         }
         if (flags & post::kPostDof) {
+            MarkTime(cmd, gpu_timing::kDof);
             downsample(scene, width, height, post_dof, 0, false);
             blur(post_dof, 0, post_plan.dof_taps[0], post_plan.dof_taps[1], 8);
         }
         // the level 0 the composite reads
         SDL_GPUTexture* bloom0 = post_bloom[0];
         if (flags & (post::kPostBloom | post::kPostGlare)) {
+            MarkTime(cmd, gpu_timing::kBloom);
             // glare has level 0 only
             const int levels = (flags & post::kPostBloom) ? 3 : 1;
             for (int k = 0; k < levels; k++) {
@@ -3178,6 +3547,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         // the levels an effect that's off didn't draw are bound all the same,
         // and not read
+        MarkTime(cmd, gpu_timing::kComposite);
         p.mode = {0, 0, 0, 0};
         // The live view's composite keeps the post buffer the trails read:
         // a post frame's goes into the history's other texture, which is
@@ -3233,6 +3603,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // the scene as the world left it, before post-processing, as
         // DoWorldEnd's SavePreBuffer keeps it: for the next world frame's
         // REFRACT_WORLD draws, or the next world pass's
+        MarkTime(cmd, gpu_timing::kCopies);
         if (pre_pass || keeps_pre_now) {
             SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
             const SDL_GPUTextureLocation from{scene, 0, 0, 0, 0, 0};
@@ -3262,10 +3633,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         } else if (post_on) {
             post_process();
         } else {
+            MarkTime(cmd, gpu_timing::kComposite);
             post::PostPass p{};
             p.mode = {uint32_t(o.view), 0, 0, 0};
             fullscreen(color, width, height, resolve_pipeline, {scene, scene_depth}, p);
         }
+        MarkTime(cmd, gpu_timing::kCopies);
         if (keeps) {
             SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
             const SDL_GPUTextureLocation from{color, 0, 0, 0, 0, 0};
@@ -3286,6 +3659,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SDL_EndGPUCopyPass(copy);
         }
         resolved = true;
+        // the back buffer's draws from here on are the overlay's
+        MarkTime(cmd, gpu_timing::kOverlay);
         // the overlay's depth starts cleared with the capture's cameras, as
         // on the CPU (Rasterize's resolve); multisampled, the overlay's first
         // pass starts its targets
@@ -3650,6 +4025,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // nothing has drawn it yet (soft_raster.cpp's RtTarget::zw)
         const bool shadow_map = rt.shadow;
         const float clear_z = (p.clear_flags & 0x30) ? p.clear_z : 1.0f;
+        // its GPU time's part (the blurs in it apart)
+        const uint8_t pass_part =
+            shadow_map ? gpu_timing::kPassShadow
+            : p.tex_type == kTexTypeDepthVolume || p.tex_type == kTexTypeDensityMap
+                ? gpu_timing::kPassSpot
+                : gpu_timing::kPassOther;
+        MarkTime(cmd, pass_part);
         // into its target, cleared as the run says the first time; again
         // after a blur, as the blur left it
         auto begin_rt = [&](bool first) {
@@ -3699,6 +4081,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     st.skipped++;
                     continue;
                 }
+                MarkTime(cmd, gpu_timing::kPassBlur);
                 SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
                 const SDL_GPUTextureLocation from{rt.color, 0, 0, 0, 0, 0};
                 const SDL_GPUTextureLocation to{scratch.texture, 0, 0, 0, 0, 0};
@@ -3726,6 +4109,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 // Src as its material blends; transparent black (no_depth's
                 // 0) if no pass drew it
                 end_pass();
+                MarkTime(cmd, gpu_timing::kPassBlur);
                 SDL_GPUTexture* source = no_depth;
                 const auto f = rts.find(it.tex->tex_obj);
                 if (f != rts.end() && f->second.drawn_in == serial) {
@@ -3755,7 +4139,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 st.draws++;
                 continue;
             }
-            if (!pass) begin_rt(false);
+            if (!pass) {
+                MarkTime(cmd, pass_part);  // after a blur
+                begin_rt(false);
+            }
             // the camera's viewport, scaled with the target; DrawRect's quads
             // are in the target's pixels, over all of it (soft_raster.cpp
             // likewise)
@@ -3779,9 +4166,15 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // all of it.
         if (rt.levels > 1) {
             SDL_GPUCommandBuffer* next = nullptr;
+            // the GPU's time from this command buffer's end to the mips'
+            // start, and from theirs to the next's, is spent waiting for the
+            // CPU to submit them (gpu_timing_model.h's kIdle)
+            MarkTime(cmd, gpu_timing::kIdle);
             if (SDL_SubmitGPUCommandBuffer(cmd)) {
                 if (SDL_GPUCommandBuffer* mips = SDL_AcquireGPUCommandBuffer(device)) {
+                    MarkTime(mips, gpu_timing::kMips);
                     SDL_GenerateMipmapsForGPUTexture(mips, rt.color);
+                    MarkTime(mips, gpu_timing::kIdle);
                     if (SDL_SubmitGPUCommandBuffer(mips))
                         next = SDL_AcquireGPUCommandBuffer(device);
                 }
@@ -3809,6 +4202,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             draw_log_frame = frame_label + " (world ahead)";
             draw_log = std::move(indexed_draws);
         }
+        // its GPU time's end, on the aside's ladder: the post frame after
+        // it resolves and reads it with its own
+        MarkTime(cmd, gpu_timing::kNone);
         st.record_ms = ms_since(record_start);
         const auto submit_start = Clock::now();
         if (!SDL_SubmitGPUCommandBuffer(cmd)) {
@@ -3828,6 +4224,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // byte, four to a uint4. Every frame ends in this pass, into its output:
     // with no ramp (or a view, or the ramp off) the lookup is the identity,
     // which gives each 8-bit value back as it was, alpha the resolve's 1
+    MarkTime(cmd, gpu_timing::kGamma);
     {
         uint8_t lut[3][256];
         if (o.gamma && o.view == RasterView::kFinal && frame.gamma.mode != GammaRamp::kNone) {
@@ -3856,6 +4253,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // RenderFrame's is read back in the same submission; the presenter's
     // stays on the GPU
     if (rgba) {
+        MarkTime(cmd, gpu_timing::kReadback);
         SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
         SDL_GPUTextureRegion src{};
         src.texture = output;
@@ -3866,6 +4264,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         SDL_DownloadFromGPUTexture(copy, &src, &dst);
         SDL_EndGPUCopyPass(copy);
     }
+    // the GPU timings' last timestamp: a world pass's end on the aside's
+    // ladder, or the frame's, resolved with the aside's for reading once
+    // it's finished (below, or OutputDone)
+    if (pre_pass) MarkTime(cmd, gpu_timing::kNone);
+    ResolveTimes(cmd);
     if (o.gpu_labels) {
         std::lock_guard lock(draw_log_mutex);
         draw_log_frame = frame_label;
@@ -3932,6 +4335,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     }
     st.wait_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                            submitted).count();
+    // the frame's GPU timings, finished with it (a world pass's are its
+    // frame's, read with them)
+    if (!pre_pass) ReadTimes(slot >= 0 ? slot : kOutputs, st);
     const auto evict_start = Clock::now();
     Evict();
     st.evict_ms = ms_since(evict_start);
@@ -4073,13 +4479,14 @@ bool GpuRenderer::RenderFrameToOutput(const FrameCapture& frame, const RasterOpt
     return true;
 }
 
-bool GpuRenderer::OutputDone(int slot) {
+bool GpuRenderer::OutputDone(int slot, GpuStats* times) {
     if (slot < 0 || slot >= kOutputs) return true;
     std::lock_guard lock(impl_->mutex);
     Impl::Output& o = impl_->outputs[slot];
     if (!impl_->device || !o.fence) return true;
     if (!SDL_QueryGPUFence(impl_->device, o.fence)) return false;
     impl_->ReleaseFence(o);
+    if (times) impl_->ReadTimes(slot, *times);
     return true;
 }
 
@@ -4146,9 +4553,10 @@ void GpuRenderer::Prewarm(uint32_t overlay_samples) {
     if (impl_->device && !impl_->warm) impl_->Prewarm(overlay_samples);
 }
 
-void GpuRenderer::SetPresentDevice(void* d3d12_device) {
+void GpuRenderer::SetPresentDevice(void* d3d12_device, uint64_t timestamp_frequency) {
     std::lock_guard lock(impl_->mutex);
     impl_->present_device = d3d12_device;
+    impl_->timestamp_frequency = timestamp_frequency;
 }
 
 void GpuRenderer::RefuseDevice(std::string why) {

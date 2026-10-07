@@ -186,6 +186,11 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.texture_array_mb += g.texture_array_mb;
     sum.arena_mb += g.arena_mb;
     sum.rts_mb += g.rts_mb;
+    // the GPU's times, of the frames that have them (gpu_timed)
+    for (int p = 0; p < gpu_timing::kParts; p++) sum.gpu_ms[p] += g.gpu_ms[p];
+    sum.gpu_total_ms += g.gpu_total_ms;
+    sum.gpu_marks_dropped += g.gpu_marks_dropped;
+    sum.gpu_bad_spans += g.gpu_bad_spans;
 }
 
 // the most of plan_ms and its parts in `most` (LiveViewStats::Kind's
@@ -280,6 +285,34 @@ std::string DescribePlan(const GpuStats& gs, const CameraCuts::Step& cam) {
     return s;
 }
 
+// native_slow_frame_ms's line's GPU timings (native_gpu_timestamps), for
+// DescribeSlow: the GPU's busy time on the frame and its parts (idle among
+// them), most first, those under 0.05 ms left out; "" for a frame without
+std::string DescribeGpuTimes(const GpuStats& gs) {
+    if (!gs.gpu_timed) return "";
+    int order[gpu_timing::kParts];
+    for (int p = 0; p < gpu_timing::kParts; p++) order[p] = p;
+    std::stable_sort(std::begin(order), std::end(order),
+                     [&](int a, int b) { return gs.gpu_ms[a] > gs.gpu_ms[b]; });
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "; GPU %.1f ms busy:", gs.gpu_total_ms);
+    std::string s = buf;
+    bool first = true;
+    for (int p : order) {
+        if (gs.gpu_ms[p] < 0.05) break;
+        std::snprintf(buf, sizeof(buf), "%s %s %.1f", first ? "" : ",",
+                      gpu_timing::PartName(uint8_t(p)), gs.gpu_ms[p]);
+        s += buf;
+        first = false;
+    }
+    if (gs.gpu_marks_dropped || gs.gpu_bad_spans) {
+        std::snprintf(buf, sizeof(buf), " (%u timestamps dropped, %u spans left out)",
+                      gs.gpu_marks_dropped, gs.gpu_bad_spans);
+        s += buf;
+    }
+    return s;
+}
+
 // native_slow_frame_ms's line for a GPU frame `fc` that took `gs`, after
 // `skipped` captures the worker never drew, its camera as `cam` says
 std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t skipped,
@@ -319,7 +352,7 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         static_cast<unsigned long long>(fc.cost.geom_miss_bytes >> 10),
         static_cast<unsigned long long>(fc.cost.tex_decode_bytes >> 10), fc.cost.game_ns / 1e6,
         static_cast<unsigned long long>(skipped));
-    return buf + DescribePlan(gs, cam);
+    return buf + DescribePlan(gs, cam) + DescribeGpuTimes(gs);
 }
 
 // ---------------------------------------------------------------------------
@@ -757,6 +790,8 @@ class Renderer {
                 o.pre_buffer = true;
                 // what each GPU draw is, for a GPU hang's DRED report
                 o.gpu_labels = REXCVAR_GET(dred);
+                // where each frame's GPU time goes (GpuStats::gpu_ms)
+                o.gpu_timestamps = REXCVAR_GET(native_gpu_timestamps);
                 gpu = gpu_;
                 dump = dump_path_;
                 zero_copy = present_ && present_zero_copy_ && gpu && dump.empty();
@@ -1024,7 +1059,8 @@ class Renderer {
     // no longer held, if it was (WaitFlight).
     bool PollFlight(Drawn& f) {
         if (f.done) return true;
-        if (!GpuRenderer::Get().OutputDone(f.slot)) return false;
+        // (and its GPU timings, now that it's finished)
+        if (!GpuRenderer::Get().OutputDone(f.slot, &f.gs)) return false;
         f.done = true;
         f.done_ns = Nanoseconds(std::chrono::steady_clock::now());
         if (gpu_held_) {
@@ -1075,8 +1111,13 @@ class Renderer {
     // (`rgba`, if it has one) to F9's window, a screenshot and the upload
     // path, and its description to F9's window. A slot's frame must be done.
     void PublishDrawn(const Drawn& d, const std::vector<uint32_t>* rgba) {
+        // only F9's window reads the description, which costs a string per
+        // draw, so only while it's open (it keeps the last one meanwhile)
+        const bool describe = dialog_open_.load(std::memory_order_relaxed);
         const std::string stats =
-            Describe(*d.cap, d.drew_gpu ? DescribeGpu(d.gs, d.slot >= 0) : DescribeRaster(d.rs));
+            describe ? Describe(*d.cap, d.drew_gpu ? DescribeGpu(d.gs, d.slot >= 0)
+                                                   : DescribeRaster(d.rs))
+                     : std::string();
         // native_slow_frame_ms: a new frame the GPU took too long over, and
         // the captures the worker skipped before it
         if (d.new_frame) {
@@ -1146,6 +1187,10 @@ class Renderer {
             if (d.drew_gpu) {
                 kind.wait_ms.push_back(d.gs.wait_ms);
                 kind.gpu_frames++;
+                if (d.gs.gpu_timed) {
+                    kind.gpu_timed++;
+                    kind.gpu_total_ms.push_back(d.gs.gpu_total_ms);
+                }
                 if (d.gs.shows_kept) kind.shows_kept++;
                 if (d.gs.arena_rebuilt) kind.arena_rebuilt++;
                 AddGpu(kind.gpu, d.gs);
@@ -1186,7 +1231,7 @@ class Renderer {
                 to_window = true;
             }
         }
-        stats_ = stats;
+        if (describe) stats_ = stats;
         lock.unlock();
         // a frame drawn again (new options) isn't a new one to time
         if (to_window && d.new_frame) NotePublished(d.presented);
@@ -1262,7 +1307,8 @@ class Renderer {
     RasterOptions options_;
     bool gpu_ = false;
     bool options_changed_ = false;
-    bool dialog_open_ = false;
+    // set under mutex_; atomic for PublishDrawn's look before taking it
+    std::atomic<bool> dialog_open_{false};
     std::string dump_path_;
     std::vector<uint32_t> image_;
     uint32_t image_w_ = 0, image_h_ = 0;
@@ -1746,7 +1792,12 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
                     "the SDK's GPU is Microsoft's software rasterizer (WARP), whose Direct3D 12 "
                     "device band3's GPU drawing would share with the emulated GPU, and that "
                     "crashes there");
-            GpuRenderer::Get().SetPresentDevice(d3d12.GetDevice());
+            // and its direct queue's timestamp ticks a second, for the GPU
+            // timings (native_gpu_timestamps)
+            UINT64 frequency = 0;
+            ID3D12CommandQueue* queue = d3d12.GetDirectQueue();
+            if (!queue || FAILED(queue->GetTimestampFrequency(&frequency))) frequency = 0;
+            GpuRenderer::Get().SetPresentDevice(d3d12.GetDevice(), frequency);
             // the crash trace's DRED report if the device is removed (a GPU
             // hang), whichever renderer is on; here, as the one place band3
             // has the SDK's device from the start

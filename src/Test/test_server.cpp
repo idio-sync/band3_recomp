@@ -960,6 +960,12 @@ private:
                               {"geom_miss_bytes", double(k.cost.geom_miss_bytes)},
                               {"tex_decode_bytes", double(k.cost.tex_decode_bytes)},
                               {"game_ms", double(k.cost.game_ns) / 1e6}};
+        out.gpu_timed = k.gpu_timed;
+        for (int p = 0; p < render::gpu_timing::kParts; p++)
+            out.gpu_ms.emplace_back(render::gpu_timing::PartName(uint8_t(p)), g.gpu_ms[p]);
+        out.gpu_total_ms = std::move(k.gpu_total_ms);
+        out.gpu_marks_dropped = g.gpu_marks_dropped;
+        out.gpu_bad_spans = g.gpu_bad_spans;
         return out;
     }
 

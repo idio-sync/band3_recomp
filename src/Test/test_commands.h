@@ -230,6 +230,14 @@ struct NativeViewStats {
         std::vector<std::pair<std::string, double>> capture_ms;
         std::vector<std::pair<std::string, double>> capture_counts;
         std::vector<std::pair<std::string, double>> peak;
+        // native_gpu_timestamps: the frames with GPU timings, the GPU's
+        // milliseconds by part totalled over them (which the reply divides by
+        // gpu_timed, not by the frames drawn), each one's total, and the
+        // timestamps dropped and spans left out over them
+        uint64_t gpu_timed = 0;
+        std::vector<std::pair<std::string, double>> gpu_ms;
+        std::vector<double> gpu_total_ms;
+        uint64_t gpu_marks_dropped = 0, gpu_bad_spans = 0;
     };
     std::vector<Kind> by_kind;
 };

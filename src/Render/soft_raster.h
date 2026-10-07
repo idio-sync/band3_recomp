@@ -227,6 +227,10 @@ struct RasterOptions {
     // processes that scene rather than drawing the world again. The CPU
     // ignores it.
     bool world_ahead = false;
+    // On the GPU (native_gpu_timestamps), Direct3D 12 only: timestamps
+    // between the frame's parts, into GpuStats::gpu_ms once the GPU has
+    // finished it (gpu_timing_model.h). The CPU ignores it.
+    bool gpu_timestamps = false;
     // On the GPU, the most frames apart the world is drawn now (the live
     // view's: frame_pacing.h's WorldPeriod), which geometry and textures
     // drawn in one frame are kept for (gpu_view.h's ResidencyKeepFrames), so

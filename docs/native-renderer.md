@@ -145,6 +145,22 @@ settings), each described there (`src/settings.cpp`):
   frames slower than 100 ms, with where the time went: for a native frame its planning's
   parts too (the render targets and texture arrays it made, the textures and meshes drawn for
   the first time) and the camera (`src/Render/camera_cut.h`: whether the frame is at a cut).
+- `native_gpu_timestamps` (off): times each frame's parts on the GPU with timestamps written
+  between them (`src/Render/gpu_timing_model.h`): its upload, the world, the texture passes
+  (`pass_shadow`, `pass_spot` for the spotlights' targets, `pass_other` for the rest: outfits,
+  the crowd...), the blurs in them, their mips, post-processing (`velocity`, `dof`, `bloom`,
+  `composite`), the overlay and its multisampled resolves, the gamma pass, and a world drawn
+  ahead or before the frame. `idle` is the GPU waiting for the CPU to send the next command
+  buffer (a texture pass's mips go in one of their own) and isn't in the frame's total, its
+  busy time. The slow-frame log ends with the split ("GPU 1.5 ms busy: world 0.5, ...").
+  Direct3D 12 only: the timestamps go into SDL_gpu's own command list, reached through SDL
+  3.4.14's private layout and checked first; where the checks fail, or on Vulkan, there are
+  no times (one log line) and nothing else changes. About 60 timestamps a frame in a song,
+  which cost about 0.1 to 0.2 ms of the worker's frame, in its wait for the GPU (at the edge
+  of run-to-run noise; the frames shown and skipped don't change), so it's off unless
+  measuring. At 1600x900 in arena_04 the GPU is busy about 0.7 ms on a world frame
+  (mostly `pass_other`) and 1.5 ms on a post frame (`pass_other` and `world` half a
+  millisecond each), with 0.5 to 0.8 ms idle around the mips.
 
 `native_view stats`' `by_kind` splits the live view's frames by what they drew under
 even/odd rendering (`frame_compose.h`'s `FrameKind`): `world` (the game drew the world; the
@@ -155,7 +171,9 @@ that doesn't say). Each kind has `rendered`, `skipped_busy` (captures skipped wh
 its frames was drawn), `ms` and `wait_ms`, and per frame drawn the worker's parts
 (`parts_ms_per_frame`), what it drew, sent, made and let go of and what the GPU kept after
 (`per_frame`), what capturing it cost the game's thread (`capture`), and the most the GPU
-kept after one (`peak`). Since only post frames draw the world, the native renderer keeps
+kept after one (`peak`); with `native_gpu_timestamps`, the frames timed (`gpu_timed`), the
+GPU's milliseconds by part per frame timed (`gpu_ms`) and each frame's busy total
+(`gpu_total_ms`). Since only post frames draw the world, the native renderer keeps
 the geometry and textures a frame drew for a world period and a little more (`gpu_view.h`'s
 residency) before letting them go. RB3 stops drawing a character while it's out of the shot,
 so a camera cut back to it would make its render targets and send its textures and meshes
