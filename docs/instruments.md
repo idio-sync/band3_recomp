@@ -154,6 +154,18 @@ separated: `5=20,8=30` gives Xbox guitars 20 ms and Xbox drums 30 ms. `type=ms/v
 also sets the lag the calibration tests assume, and a blank part keeps the game's number
 (`8=/30/`). It's per type, so a real Xbox instrument of the same type changes too.
 
+Through SDL (the default `input_backend`) a controller's state is as fresh as the window's
+thread last had a moment to read it: the SDK reads SDL there, and with a frame cap on (the
+default) that thread waits for the display's refresh before each paint, and paints all the
+time while the FPS counter (`debug_overlay`) or any other band3 window is up. So an SDL
+controller can be up to a refresh behind (16.7 ms at 60 Hz, by the SDK's code; not yet
+measured on a local display), and over Remote Desktop it was about 30 ms. XInput (`input_backend = xinput`, Windows) reads each controller
+when the game asks, every 4 ms or so, so Xbox 360 instruments and other XInput controllers
+can use it to avoid that lag. The PlayStation and Wii dongles, MIDI and the Instrument Lab
+don't go through SDL and aren't affected. The fix belongs in the SDK, which reads SDL only on
+the window's thread; `present_stats`' `ui_round_trip` ([test harness](test-harness.md))
+measures that thread's delay.
+
 ## Mouse in menus
 
 In the game's menus, pointing at a button or a list's row highlights it, a left click

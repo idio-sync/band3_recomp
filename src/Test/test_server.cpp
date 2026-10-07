@@ -279,6 +279,7 @@ public:
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
+        options.inline_mips = REXCVAR_GET(native_view_inline_mips);
         // as the native renderer's frames keep what they draw, so this one
         // doesn't let it go (gpu_view.h's residency)
         options.clock_keep = render::InSong();
@@ -378,6 +379,7 @@ public:
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
+        options.inline_mips = REXCVAR_GET(native_view_inline_mips);
         options.clock_keep = render::InSong();  // as NativePicture's
         std::vector<uint32_t> rgba;
         render::GpuStats stats;

@@ -105,6 +105,7 @@ uint32_t TargetAt(const std::vector<Target>& targets, const Vec2& pointer) {
 }
 
 std::vector<uint32_t> Joined(const std::vector<std::pair<uint32_t, uint32_t>>& links, uint32_t from) {
+    if (!from) return {};
     std::vector<uint32_t> joined{from};
     for (size_t i = 0; i < joined.size(); i++) {
         for (const auto& [a, b] : links) {
