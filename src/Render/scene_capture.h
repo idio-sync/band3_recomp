@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -63,6 +64,8 @@ struct Vertex {
 // indices)
 struct DeferredGeometry {
     std::once_flag once;
+    // set once they're decoded (deferred_decode.h's GatherPending)
+    std::atomic<bool> done{false};
     std::vector<uint8_t> vb, ib;
     uint32_t num_verts = 0, num_indices = 0;
     bool faces = false;
@@ -174,6 +177,8 @@ static_assert(sizeof(TexSampler) == 16, "TexSampler has no padding");
 // its fetch constant
 struct DeferredPixels {
     std::once_flag once;
+    // set once they're decoded (deferred_decode.h's GatherPending)
+    std::atomic<bool> done{false};
     std::vector<uint8_t> bytes;
     std::vector<uint8_t> mips;
     uint32_t fetch[6] = {};

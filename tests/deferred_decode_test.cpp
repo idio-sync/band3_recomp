@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <thread>
 #include <vector>
 #include "src/Render/deferred_decode.h"
 #include "src/Render/guest_formats.h"
@@ -562,4 +563,149 @@ TEST_CASE("a frame's textures kept as blocks all have their rgba for a capture f
     EnsureRgba(fc);
     CHECK(draw_tex->rgba.size() == 256);
     CHECK(map->rgba.size() == 256);
+}
+
+namespace {
+
+// a mesh's buffers as CaptureGeometry copies them, `verts` vertices and a
+// triangle per three
+std::shared_ptr<Geometry> DeferredMesh(uint32_t verts, uint32_t seed) {
+    auto g = std::make_shared<Geometry>();
+    g->tangents = true;
+    auto d = std::make_shared<DeferredGeometry>();
+    d->vb.resize(size_t(verts) * kPackedVertSize);
+    Fill(d->vb, seed);
+    d->ib.resize(size_t(verts) * 2);
+    for (uint32_t i = 0; i < verts; i++) {
+        d->ib[i * 2] = uint8_t(i >> 8);
+        d->ib[i * 2 + 1] = uint8_t(i);
+    }
+    d->num_verts = verts;
+    d->num_indices = verts;
+    d->faces = verts >= 3;
+    g->deferred = d;
+    return g;
+}
+
+// a linear k_8_8_8_8 texture of `size` x `size`, its bytes from `seed`
+std::shared_ptr<Texture> DeferredRgba(uint32_t size, uint32_t seed) {
+    uint32_t f[6];
+    Fetch(f, 6, size, size, std::max(size, 32u), false, false, 0);
+    std::vector<uint8_t> base(BaseLevelBytes(f));
+    Fill(base, seed);
+    return Deferred(f, base, nullptr);
+}
+
+// threads helping DecodeDeferred(FrameCapture), for a test's length
+struct DecodeThreads {
+    explicit DecodeThreads(unsigned n) { SetDecodeThreads(n); }
+    ~DecodeThreads() { SetDecodeThreads(0); }
+};
+
+}  // namespace
+
+TEST_CASE("a frame's pending textures and meshes are gathered once each, biggest first") {
+    auto small = DeferredRgba(16, 1);  // 4 KB (its rows 256 bytes)
+    auto big = DeferredRgba(64, 2);    // 16 KB
+    auto mesh = DeferredMesh(200, 3);  // 200 vertices and 200 indices
+    auto done = DeferredRgba(32, 4);
+    DecodeDeferred(*done);
+    FrameCapture fc;
+    DrawItem item{};
+    item.tex = small;
+    item.geom = mesh;
+    fc.draws.push_back(item);
+    item.tex = big;
+    fc.draws.push_back(item);
+    item.tex = done;
+    item.geom = nullptr;
+    fc.draws.push_back(item);
+    ShadeState shade{};
+    shade.maps[kMapSpecular] = small;
+    shade.maps[kMapNormal] = big;
+    fc.shades.push_back(shade);
+    fc.noise_map = small;
+    VelocityObject o;
+    o.geom = mesh;
+    fc.velocity_objects.push_back(o);
+
+    const std::vector<PendingDecode> pending = GatherPending(fc);
+    REQUIRE(pending.size() == 3);
+    CHECK(pending[0].tex == big.get());
+    CHECK(pending[0].bytes == BaseLevelBytes(big->deferred->fetch));
+    CHECK(pending[1].geom == mesh.get());
+    CHECK(pending[1].bytes == 200 * kPackedVertSize + 200 * 2);
+    CHECK(pending[2].tex == small.get());
+    CHECK(pending[2].bytes == BaseLevelBytes(small->deferred->fetch));
+    DecodeDeferred(fc);
+    CHECK(GatherPending(fc).empty());
+}
+
+TEST_CASE("how many helpers decode a frame's pending textures and meshes") {
+    const auto of = [](std::vector<uint64_t> sizes) {
+        std::vector<PendingDecode> pending;
+        for (uint64_t bytes : sizes) pending.push_back({nullptr, nullptr, bytes});
+        return pending;
+    };
+    const uint64_t enough = kParallelDecodeBytes;
+    // none asked for; one alone; too little in all
+    CHECK(DecodeHelpers(of({enough, enough, enough}), 0) == 0);
+    CHECK(DecodeHelpers(of({8 * enough}), 3) == 0);
+    CHECK(DecodeHelpers(of({enough / 4, enough / 4, enough / 4}), 3) == 0);
+    CHECK(DecodeHelpers({}, 3) == 0);
+    // as many as asked, at most one for each besides the asking thread's
+    CHECK(DecodeHelpers(of({enough / 2, enough / 2}), 3) == 1);
+    CHECK(DecodeHelpers(of({enough, 1, 1, 1, 1}), 2) == 2);
+    CHECK(DecodeHelpers(of({enough, 1, 1, 1, 1}), 3) == 3);
+    CHECK(DecodeHelpers(of({enough, 1, 1}), 3) == 2);
+}
+
+TEST_CASE("a frame decoded on helper threads decodes each once, as on one") {
+    // over kParallelDecodeBytes of textures and meshes, some shared between
+    // draws, decoded inline and on three helpers; and on two threads asking
+    // at once (the worker and the harness's capture), each still once
+    std::vector<std::shared_ptr<Texture>> texs, texs_inline;
+    std::vector<std::shared_ptr<Geometry>> geoms, geoms_inline;
+    for (uint32_t i = 0; i < 24; i++) {
+        texs.push_back(DeferredRgba(16u << (i % 6), i));
+        texs_inline.push_back(DeferredRgba(16u << (i % 6), i));
+        geoms.push_back(DeferredMesh(30 + 700 * (i % 7), i));
+        geoms_inline.push_back(DeferredMesh(30 + 700 * (i % 7), i));
+    }
+    const auto frame = [](const auto& t, const auto& g) {
+        FrameCapture fc;
+        for (size_t i = 0; i < t.size() * 2; i++) {
+            DrawItem item{};
+            item.tex = t[i % t.size()];
+            item.geom = g[(i * 5) % g.size()];
+            fc.draws.push_back(item);
+        }
+        return fc;
+    };
+    const FrameCapture fc = frame(texs, geoms), fc_inline = frame(texs_inline, geoms_inline);
+    REQUIRE(DecodeHelpers(GatherPending(fc), 3) == 3);
+
+    DecodeDeferred(fc_inline);
+    const uint64_t decodes = g_deferred_decode.decodes.load();
+    {
+        DecodeThreads threads(3);
+        std::thread other([&] { DecodeDeferred(fc); });
+        DecodeDeferred(fc);
+        other.join();
+    }
+    CHECK(g_deferred_decode.decodes.load() == decodes + texs.size() + geoms.size());
+    CHECK(GatherPending(fc).empty());
+    for (size_t i = 0; i < texs.size(); i++) {
+        CHECK(texs[i]->rgba == texs_inline[i]->rgba);
+        CHECK(texs[i]->deferred->bytes.empty());
+    }
+    for (size_t i = 0; i < geoms.size(); i++) {
+        CHECK(SameVerts(geoms[i]->verts, geoms_inline[i]->verts));
+        CHECK(geoms[i]->indices == geoms_inline[i]->indices);
+    }
+
+    // and again, the helpers asleep since: nothing more
+    DecodeThreads threads(3);
+    DecodeDeferred(fc);
+    CHECK(g_deferred_decode.decodes.load() == decodes + texs.size() + geoms.size());
 }

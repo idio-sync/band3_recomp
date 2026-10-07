@@ -148,7 +148,8 @@ settings), each described there (`src/settings.cpp`):
   (`src/Render/camera_cut.h`: whether the frame is at a cut). At first sight of a song's or a
   shot's textures and meshes the game's thread only copies their bytes (a few MB, 2 to 10 ms
   of a frame's capture), and the worker decodes them before the frame (`decode` in the line,
-  `src/Render/deferred_decode.h`), as the same decoder would have from the same bytes:
+  `src/Render/deferred_decode.h`; with helper threads, `native_deferred_decode_threads` below),
+  as the same decoder would have from the same bytes:
   decoding them where they were drawn cost the game's thread 30 to 70 ms on those frames.
 - `native_gpu_timestamps` (off): times each frame's parts on the GPU with timestamps written
   between them (`src/Render/gpu_timing_model.h`): its upload, the world, the texture passes
@@ -227,6 +228,24 @@ settings), each described there (`src/settings.cpp`):
   on. `native_view stats`' `capture` counts `deferred_bc_blocks` (textures kept as blocks),
   `deferred_bc_swizzled` (kept RGBA for their swizzle) and `deferred_bc_rgba` (kept as blocks,
   then decoded to RGBA).
+- `native_deferred_decode_threads` (2): how many helper threads decode a frame's first-sight
+  textures and meshes with the worker (`deferred_decode.h`'s `GatherPending`, `DecodeHelpers`):
+  where those not yet decoded come to 4 MB or more of the game thread's copies (a song's first
+  frames and its camera cuts have 5 to 15 MB; a movie's planes, decoded again each of its
+  frames, 1.4 MB), each thread takes the biggest left until none are, the worker included,
+  and the frame waits for all of them. Each is still decoded once, by the same decoder (its
+  `call_once`), so the picture is the same; `deferred_decode_us` sums the threads' time. The
+  helpers start when first wanted and sleep on a condition variable between such frames (none
+  of their CPU in a 60 s slice of a song); perf_sample names them `band3 decode <n>`. 0 decodes
+  on the worker alone, as before. At 20th Century Boy's start (`songstart.b3t`), its four
+  first-sight frames' decode with 0, 2 and 3: 9.8, 14.1 to 14.7, 16.1 to 18.3 and 21.8 to 22.1
+  ms; 3.8, 5.0 to 5.6, 5.8 to 7.2 and 7.8 to 8.6; 2.9 to 3.0, 3.8 to 4.0, 5.2 to 5.9 and 6.1 to
+  6.3; the four frames' worker time in all 182 to 196 ms with 0, 150 to 165 with 2 and 156 to
+  158 with 3 (two runs each). 2 is the default: 3 decodes a millisecond or two less but leaves
+  the frames no shorter, and the Steam Deck's eight threads have the game's, the worker's, the
+  command processor's and the audio's busy. What's left of those frames is the planning's
+  render targets made (25 in 23 to 24 ms on the third), the world passes before the frame (35
+  to 37 ms on the first) and recording (17 to 35 ms on the fourth).
 
 `native_view stats`' `by_kind` splits the live view's frames by what they drew under
 even/odd rendering (`frame_compose.h`'s `FrameKind`): `world` (the game drew the world; the

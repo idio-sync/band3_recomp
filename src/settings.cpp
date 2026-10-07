@@ -595,6 +595,13 @@ REXCVAR_DEFINE_BOOL(native_bc_textures, true, "Band3/Advanced/Native renderer",
     "colour by a step or two. Off decodes them to RGBA as before, to compare; applies to "
     "textures seen after the change");
 
+REXCVAR_DEFINE_INT32(native_deferred_decode_threads, 2, "Band3/Advanced/Native renderer",
+    "How many threads help the native renderer decode the textures and meshes a song's first "
+    "frames and a camera cut show for the first time (over 4 MB of them), so it holds the "
+    "last frame for less time; they sleep the rest of the time. 0 decodes them on the "
+    "renderer's own thread, as before. The picture is the same either way")
+    .range(0, 3);
+
 REXCVAR_DEFINE_BOOL(native_view_inline_mips, true, "Band3/Advanced/Native renderer",
     "Make the mips of the textures RB3 draws into (the crowd's, in a song, several times a "
     "frame) in the native renderer's own command buffers, exactly as SDL's mipmap "

@@ -6,6 +6,7 @@
 #include "src/Launcher/launcher_platform.h"
 #include "src/Render/camera_cut.h"
 #include "src/Render/capture_file.h"
+#include "src/Render/deferred_decode.h"
 #include "src/Render/frame_compose.h"
 #include "src/Render/gpu_skip.h"
 #include "src/Render/gpu_view.h"
@@ -700,6 +701,14 @@ class Renderer {
     void Run() {
         // whose stack a game stall's log samples (stall_watch.h)
         stall_watch::SetWorkerThread();
+#ifdef _WIN32
+        // and the threads that help it decode named, for a profile
+        // (deferred_decode.h's DecodeHelpers)
+        g_decode_thread_started.store(+[](unsigned index) {
+            const std::wstring name = L"band3 decode " + std::to_wstring(index);
+            SetThreadDescription(GetCurrentThread(), name.c_str());
+        });
+#endif
         uint64_t last_frame = 0;
         auto last_dump = std::chrono::steady_clock::now() - std::chrono::seconds(10);
         std::vector<uint32_t> rgba;
@@ -841,6 +850,8 @@ class Renderer {
             // (and what the game's thread left it to decode, decoded: the
             // next frame drawn's time, decode_ms)
             double decode_ms = 0;
+            // on this many helpers too, where there's much of it
+            SetDecodeThreads(uint32_t(REXCVAR_GET(native_deferred_decode_threads)));
             auto cap = LatestCapture(presented, &decode_ms);
             decode_pending_ms += decode_ms;
             bool fresh = true;
