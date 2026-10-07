@@ -11,6 +11,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(generated/rexglue.cmake)
 
+# rexglue.cmake compiles the generated code with asynchronous EH for guest SEH
+# scopes, which band3's codegen doesn't emit (generateExceptionHandlers is off:
+# no SEH_TRY in generated/); guest faults resume through the SDK's exception
+# handler, not by unwinding. Asynchronous EH makes every memory access a
+# possible throw, which keeps clang from reordering or keeping values in
+# registers across them, so it goes.
+list(REMOVE_ITEM REXGLUE_RECOMP_OPTIONS -fasync-exceptions /EHa)
+if(REXGLUE_ENTRYPOINT_GENERATED_SOURCES)
+    set_source_files_properties(${REXGLUE_ENTRYPOINT_GENERATED_SOURCES}
+        PROPERTIES COMPILE_OPTIONS "${REXGLUE_RECOMP_OPTIONS}")
+endif()
+
 # Sources
 file(GLOB_RECURSE BAND3_SOURCES src/*.cpp src/*.c)
 
