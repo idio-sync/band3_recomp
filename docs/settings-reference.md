@@ -241,7 +241,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
 | `stagekit_usb`<br>Stage Kits plugged in by USB | `true` | `true`, `false` | Light the Stage Kits plugged into this PC as the game lights them: Santroller Stage Kits (which a PC sees in HID mode) and Xbox 360 Stage Kits (XInput, each taking one of Windows' four XInput slots). They don't take a player's place |
-| `pico_discovery`<br>Find wireless Stage Kits (Pico W) | `true` | `true`, `false` | Find the RB3E Dashboard's wireless Stage Kits (Pico W) on the network, to list and test them in the Lights tab. A Pico answers whichever program found it last, so turn this off while the RB3E Dashboard runs. They follow the game through the RB3Enhanced events |
+| `pico_discovery`<br>Find wireless Stage Kits (Pico W) | `true` | `true`, `false` | Find the RB3E Dashboard's wireless Stage Kits (Pico W) on the network, to list and test them in the Lights tab. A Pico answers whichever program found it last, so turn this off while the RB3E Dashboard runs. They follow the game through the RB3Enhanced events. Under the test harness nothing is broadcast, so the network's Picos are left alone |
 
 ## Advanced
 

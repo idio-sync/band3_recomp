@@ -1310,6 +1310,67 @@ std::string RoomsConnect(TestTarget& target, const std::vector<std::string_view>
     return Ok();
 }
 
+// lights: the Stage Kits found (each with the key lights_test names it by),
+// the [left, right] commands the pretend kit (stagekit_fake) has been sent
+// since the last lights, and why Picos can't be found, if they can't
+std::string Lights(TestTarget& target, const std::vector<std::string_view>& args) {
+    if (args.size() != 1) return Error(target, "usage: lights");
+    const LightsView view = target.Lights();
+    std::string out = "\"lights\":{\"devices\":[";
+    for (size_t i = 0; i < view.devices.size(); i++) {
+        const lights::DeviceRow& d = view.devices[i];
+        if (i) out += ',';
+        out += "{\"key\":";
+        AppendJsonString(out, d.key);
+        out += ",\"kind\":";
+        AppendJsonString(out, d.kind);
+        out += ",\"name\":";
+        AppendJsonString(out, d.name);
+        out += ",\"detail\":";
+        AppendJsonString(out, d.detail);
+        out += d.online ? ",\"online\":true}" : ",\"online\":false}";
+    }
+    out += "],\"fake\":[";
+    for (size_t i = 0; i < view.fake.size(); i++) {
+        if (i) out += ',';
+        out += '[' + std::to_string(view.fake[i].left) + ',' + std::to_string(view.fake[i].right) +
+               ']';
+    }
+    out += "],\"problem\":";
+    AppendJsonString(out, view.problem);
+    out += '}';
+    return Ok(out);
+}
+
+// a byte, as decimal or 0x hex
+std::optional<uint8_t> ParseByte(std::string_view text) {
+    int base = 10;
+    if (text.starts_with("0x") || text.starts_with("0X")) {
+        text.remove_prefix(2);
+        base = 16;
+    }
+    unsigned value = 0;
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value, base);
+    if (text.empty() || error != std::errc{} || end != text.data() + text.size() || value > 255) {
+        return std::nullopt;
+    }
+    return static_cast<uint8_t>(value);
+}
+
+// lights_test <left> <right> [<device>]: a Stage Kit command (bytes, decimal
+// or 0x hex) for the device a lights key names, or every device
+std::string LightsTest(TestTarget& target, const std::vector<std::string_view>& args) {
+    constexpr std::string_view kUsage = "usage: lights_test <left> <right> [<device>]";
+    if (args.size() != 3 && args.size() != 4) return Error(target, kUsage);
+    const auto left = ParseByte(args[1]);
+    const auto right = ParseByte(args[2]);
+    if (!left || !right) return Error(target, kUsage);
+    std::optional<std::string> key;
+    if (args.size() == 4) key = std::string(args[3]);
+    target.LightsTest({*left, *right}, key);
+    return Ok();
+}
+
 // Liveless' port mapping, each field as text: the address dotted, empty for
 // none; port and lease_s are numbers in the JSON
 StatusFields PortMappingFields(const port_mapping::Status& s) {
@@ -1542,6 +1603,8 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "rooms_status") return RoomsStatus(target, args);
     if (verb == "rooms_join") return RoomsJoin(target, args);
     if (verb == "rooms_connect") return RoomsConnect(target, args);
+    if (verb == "lights") return Lights(target, args);
+    if (verb == "lights_test") return LightsTest(target, args);
     if (verb == "port_mapping_status") return PortMappingStatus(target, args);
     if (verb == "native_view") return NativeView(target, args);
     if (verb == "present_stats") return PresentStatsCommand(target, args);

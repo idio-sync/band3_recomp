@@ -451,7 +451,8 @@ REXCVAR_DEFINE_BOOL(stagekit_usb, true, "Band3/Lights",
 REXCVAR_DEFINE_BOOL(pico_discovery, true, "Band3/Lights",
     "Find the RB3E Dashboard's wireless Stage Kits (Pico W) on the network, to list and test "
     "them in the Lights tab. A Pico answers whichever program found it last, so turn this off "
-    "while the RB3E Dashboard runs. They follow the game through the RB3Enhanced events");
+    "while the RB3E Dashboard runs. They follow the game through the RB3Enhanced events. Under "
+    "the test harness nothing is broadcast, so the network's Picos are left alone");
 
 // Band3/Advanced: the in-game settings' Advanced tab, by subcategory
 

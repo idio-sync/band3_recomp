@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 #include "src/Input/instrument_kind.h"
+#include "src/Lights/lights_view.h"
 #include "src/Net/liveless_rooms.h"
 #include "src/Net/port_mapping.h"
 #include "game_state.h"
@@ -342,6 +343,14 @@ struct MouseView {
     std::vector<Target> targets;
 };
 
+// the lights command's: the Stage Kits found, what the pretend kit
+// (stagekit_fake) was sent, and why Picos can't be found, if they can't
+struct LightsView {
+    std::vector<lights::DeviceRow> devices;
+    std::vector<lights::Command> fake;
+    std::string problem;
+};
+
 class TestTarget {
 public:
     using Clock = std::chrono::steady_clock;
@@ -404,6 +413,11 @@ public:
     virtual std::string RoomsConnect() = 0;
     // Liveless' port mapping on the router (src/Net/port_mapping.h)
     virtual port_mapping::Status PortMappingStatus() = 0;
+    // the Stage Kits (src/Lights/lights.h): those found, and the commands the
+    // pretend kit was sent since the last call; a test command for one device
+    // (its row's key) or all of them
+    virtual LightsView Lights() = 0;
+    virtual void LightsTest(lights::Command command, const std::optional<std::string>& key) = 0;
     // the live native view, drawing every frame the game captures at width x
     // height as F9's window does (without post-processing unless `post`), and
     // its numbers, which on and off reset; on returns an error, or empty.

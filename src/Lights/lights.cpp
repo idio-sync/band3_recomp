@@ -330,6 +330,10 @@ Picos g_picos;
 
 uint32_t Broadcast() { return INADDR_BROADCAST; }
 
+// a test harness run (test_port set) broadcasts nothing, so the Picos on the
+// network aren't taken from whatever found them, nor lit by a test
+bool UnderHarness() { return REXCVAR_GET(test_port) != 0; }
+
 // this PC's subnet's broadcast address, guessed as a /24 from the address the
 // default route leaves from, as the dashboard does; 0 if there's none
 uint32_t SubnetBroadcast() {
@@ -397,7 +401,9 @@ public:
             }
             if (!want) SetProblem("");
             if (telemetry_ != kNoSocket) {
-                if (now >= next_discovery_) {
+                // under the test harness the network's Picos are left alone:
+                // tools/fake_pico.py sends its telemetry unasked
+                if (now >= next_discovery_ && !UnderHarness()) {
                     Discover();
                     next_discovery_ = now + kDiscoveryInterval;
                 }
@@ -496,11 +502,13 @@ private:
             return;
         }
         // every Pico: each one listed, or the network's broadcast if none is
+        // (not under the harness, as Discover)
         const auto picos = fleet_.List(Clock::now());
         if (!picos.empty()) {
             for (const auto& pico : picos) to(pico.address);
             return;
         }
+        if (UnderHarness()) return;
         to(Broadcast());
         if (const uint32_t subnet = SubnetBroadcast()) to(subnet);
     }

@@ -207,6 +207,17 @@ public:
     }
     band3::port_mapping::Status port_mapping;
     band3::port_mapping::Status PortMappingStatus() override { return port_mapping; }
+    LightsView lights;
+    std::vector<std::pair<band3::lights::Command, std::optional<std::string>>> light_tests;
+    // the pretend kit's commands are taken, as lights::TakeFakeCommands does
+    LightsView Lights() override {
+        LightsView shown = lights;
+        lights.fake.clear();
+        return shown;
+    }
+    void LightsTest(band3::lights::Command command, const std::optional<std::string>& key) override {
+        light_tests.emplace_back(command, key);
+    }
     std::string NativeViewOn(uint32_t width, uint32_t height, bool sized, bool post) override {
         if (width > 4000) return "no GPU target that big";
         if (sized && native) return "renderer is native: its size follows the window's";
@@ -1320,6 +1331,44 @@ TEST_CASE("rooms_join says so when the game isn't online") {
     CHECK_FALSE(Ok(reply));
     CHECK(Has(reply, "the game isn't online yet: Play on Xbox Live first"));
     CHECK(game.rooms_joins.empty());
+}
+
+TEST_CASE("lights lists the Stage Kits found and what the pretend kit was sent") {
+    FakeGame game;
+    game.lights.devices = {
+        {"usb:fake", "USB", "Pretend Stage Kit", "plugged in", true},
+        {"pico:192.168.1.40", "Wi-Fi", "Pico 1a:2b", "192.168.1.40  offline", false}};
+    game.lights.fake = {{0x00, 0xFF}, {0x55, 0x80}};
+    game.lights.problem = "Port 21071 is in use";
+    CHECK(RunCommand("lights", game) ==
+          "{\"ok\":true,\"lights\":{\"devices\":["
+          "{\"key\":\"usb:fake\",\"kind\":\"USB\",\"name\":\"Pretend Stage Kit\","
+          "\"detail\":\"plugged in\",\"online\":true},"
+          "{\"key\":\"pico:192.168.1.40\",\"kind\":\"Wi-Fi\",\"name\":\"Pico 1a:2b\","
+          "\"detail\":\"192.168.1.40  offline\",\"online\":false}],"
+          "\"fake\":[[0,255],[85,128]],\"problem\":\"Port 21071 is in use\"}}");
+    // what the pretend kit was sent is taken
+    CHECK(Has(RunCommand("lights", game), "\"fake\":[]"));
+    CHECK(Has(RunCommand("lights now", game), "usage: lights"));
+}
+
+TEST_CASE("lights_test sends a test command to a device or every device") {
+    FakeGame game;
+    CHECK(RunCommand("lights_test 0x55 0x80", game) == "{\"ok\":true}");
+    CHECK(RunCommand("lights_test 255 32 usb:fake", game) == "{\"ok\":true}");
+    REQUIRE(game.light_tests.size() == 2);
+    CHECK(game.light_tests[0].first == band3::lights::Command{0x55, 0x80});
+    CHECK_FALSE(game.light_tests[0].second);
+    CHECK(game.light_tests[1].first == band3::lights::Command{255, 32});
+    CHECK(game.light_tests[1].second == "usb:fake");
+
+    const char* usage = "usage: lights_test <left> <right> [<device>]";
+    CHECK(Has(RunCommand("lights_test", game), usage));
+    CHECK(Has(RunCommand("lights_test 1", game), usage));
+    CHECK(Has(RunCommand("lights_test 256 1", game), usage));
+    CHECK(Has(RunCommand("lights_test x 1", game), usage));
+    CHECK(Has(RunCommand("lights_test 1 0x1G", game), usage));
+    CHECK(game.light_tests.size() == 2);
 }
 
 TEST_CASE("rooms_connect connects again") {
