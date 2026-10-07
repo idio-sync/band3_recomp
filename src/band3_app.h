@@ -58,7 +58,7 @@
 #include "Test/test_server.h"
 
 // always attached, and draws nothing while debug_overlay is off, so the
-// setting can be flipped in F4
+// setting can be flipped in the in-game settings
 class DebugOverlayDialog : public rex::ui::ImGuiDialog {
  public:
   explicit DebugOverlayDialog(rex::ui::ImGuiDrawer* imgui_drawer)
@@ -118,7 +118,8 @@ class Band3App : public rex::ReXApp {
   std::unique_ptr<band3::render::NativeViewDialog> native_view_;
   // the launcher while it's up, before the game starts (src/Launcher/)
   std::unique_ptr<band3::launcher::LauncherDialog> launcher_;
-  // band3's settings in game, what F4 opens (src/Launcher/ingame_settings_dialog.h)
+  // band3's pause menu (Escape) and its settings in game
+  // (src/Launcher/ingame_settings_dialog.h)
   std::unique_ptr<band3::launcher::InGameSettingsDialog> ingame_settings_;
   // the SDK's own settings menu, while its "All settings..." has it open
   std::unique_ptr<rex::ui::SettingsDialog> all_settings_;
@@ -323,8 +324,8 @@ class Band3App : public rex::ReXApp {
     return std::nullopt;
   }
 
-  // --launcher, for this start only: a value saved in band3.toml (F4's "Save
-  // to config" of a run started with it) doesn't count. Read once, since
+  // --launcher, for this start only: a value saved in band3.toml (All
+  // settings' "Save to config" of a run started with it) doesn't count. Read once, since
   // OnFinalizePaths clears the setting once it has decided.
   bool LauncherFlag() {
     if (!launcher_flag_) {
@@ -358,8 +359,8 @@ class Band3App : public rex::ReXApp {
     // restart. That holds for swap_post_effect (FXAA) too: it's read once,
     // when the guest GPU is set up (GraphicsSystem::SetupGuestGpu, through
     // CommandProcessor::SetDesiredSwapPostEffect), which Runtime::Setup runs
-    // inside resume, so the launcher's value applies without a relaunch; an F4
-    // change to it in game applies at the next start.
+    // inside resume, so the launcher's value applies without a relaunch; a
+    // change to it in the in-game settings applies at the next start.
     rex::cvar::ClearPendingRestartFlags();
     rex::PathConfig paths = FinalPaths();
     // not inside the launcher's draw: resume builds the runtime and starts the
@@ -414,8 +415,8 @@ class Band3App : public rex::ReXApp {
   void OnWindowMinimized() override { band3::render::NativePresentMinimized(true); }
   void OnWindowRestored() override { band3::render::NativePresentMinimized(false); }
 
-  // the launcher's larger font, which the in-game settings (F4) use too, so
-  // every run has it
+  // the launcher's larger font, which the pause menu and the in-game settings
+  // use too, so every run has it
   void OnConfigureFonts(ImFontAtlas* atlas) override { band3::launcher::AddLauncherFonts(atlas); }
 
   // GPU emulation is a plugin (rexgpu-xenos) that the SDK leaves off unless
@@ -497,6 +498,7 @@ class Band3App : public rex::ReXApp {
     band3::online::Stop();
     band3::http::StopServer();
     band3::test::StopServer();
+    rex::ui::UnregisterBind("bind_pause_menu");
     rex::ui::UnregisterBind("bind_instrument_lab");
     rex::ui::UnregisterBind("bind_liveless_rooms");
     rex::ui::UnregisterBind("bind_native_view");
@@ -541,12 +543,12 @@ class Band3App : public rex::ReXApp {
       rex::ui::RegisterBind("bind_liveless_rooms", "F10", "Toggle the Liveless Rooms panel", [this] {
         if (rooms_panel_ && !launcher_) rooms_panel_->Toggle();
       });
-      // deferred: opening the settings menu adds a dialog, and this runs while
-      // the dialogs draw
+      // deferred: this runs while the dialogs draw, and a key bind's press
+      // can add or remove a dialog
       menu_shortcut_ = std::make_unique<band3::input::MenuShortcutDialog>(
           drawer, [this](band3::input::MenuShortcutAction action) {
-            const char* bind = action == band3::input::MenuShortcutAction::kSettings
-                                   ? "bind_settings"
+            const char* bind = action == band3::input::MenuShortcutAction::kPauseMenu
+                                   ? "bind_pause_menu"
                                    : "bind_instrument_lab";
             app_context().CallInUIThreadDeferred([this, bind] { PressBind(bind); });
           });
@@ -562,12 +564,11 @@ class Band3App : public rex::ReXApp {
     }
   }
 
-  // F4 (bind_settings) opens band3's own settings in game, in place of the
-  // SDK's settings menu, which their "All settings..." opens. The SDK's
-  // SetupOverlays registered the bind for its menu just before
-  // OnCreateDialogs; it's registered again for band3's, keeping a key the
-  // player bound it to. Like F6 and F9, it does nothing while the launcher
-  // is up.
+  // Escape (bind_pause_menu) opens band3's pause menu, whose Settings are
+  // band3's own settings in game, in place of the SDK's settings menu on F4,
+  // which their "All settings..." opens. The SDK's SetupOverlays registered
+  // F4 (bind_settings) for its menu just before OnCreateDialogs; that bind
+  // goes. Like F6 and F9, Escape does nothing while the launcher is up.
   void CreateSettings(rex::ui::ImGuiDrawer* drawer) {
     ingame_settings_ = std::make_unique<band3::launcher::InGameSettingsDialog>(
         drawer,
@@ -589,20 +590,26 @@ class Band3App : public rex::ReXApp {
                 [this] {
                   app_context().CallInUIThreadDeferred([this] { PressBind("bind_instrument_lab"); });
                 },
+            .quit = [this] { QuitFromPauseMenu(); },
         });
-    // UnregisterBind leaves the bind's cvar registered, and RegisterBind
-    // would then log it as a duplicate: drop it too, and put the key back
-    const std::string key = rex::cvar::GetFlagByName("bind_settings");
+    // UnregisterBind leaves the bind's cvar registered, so it goes too
     rex::ui::UnregisterBind("bind_settings");
     rex::cvar::UnregisterFlag("bind_settings");
-    rex::ui::RegisterBind("bind_settings", "F4",
-                          "Open band3's settings; their All settings... opens the SDK's", [this] {
-                            if (ingame_settings_ && !launcher_) ingame_settings_->Toggle();
+    rex::ui::RegisterBind("bind_pause_menu", "Escape",
+                          "Open band3's pause menu: resume, settings, the Instrument Lab, quit",
+                          [this] {
+                            if (ingame_settings_ && !launcher_) ingame_settings_->TogglePause();
                           });
-    if (!key.empty() && rex::cvar::GetFlagByName("bind_settings") != key &&
-        !rex::cvar::SetFlagByName("bind_settings", key)) {
-      REXLOG_WARN("Settings: couldn't keep bind_settings = {}", key);
-    }
+  }
+
+  // as the window's close button: RequestClose skips the close request the
+  // button makes (OnWindowCloseRequested), so online play lets go of the
+  // router's port mapping and the Rooms server here first
+  void QuitFromPauseMenu() {
+    app_context().CallInUIThreadDeferred([this] {
+      band3::online::Stop();
+      if (window()) window()->RequestClose();
+    });
   }
 
   // the SDK's settings menu: made and dropped outside the dialogs' draw,
@@ -621,7 +628,7 @@ class Band3App : public rex::ReXApp {
   }
 
   // presses whatever key a bind is set to, so the menu shortcut follows a
-  // rebound F4 or F6
+  // rebound Escape or F6
   void PressBind(const char* bind) {
     const auto key = rex::ui::ParseVirtualKey(rex::cvar::GetFlagByName(bind));
     if (key == rex::ui::VirtualKey::kNone || !window()) return;

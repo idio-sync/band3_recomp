@@ -3,6 +3,7 @@
 #include <charconv>
 #include <cmath>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <system_error>
 #include <toml++/toml.hpp>
@@ -199,8 +200,8 @@ bool HasOwnComments(std::string_view text) {
                                          line.back() == '\t')) {
                     line.remove_suffix(1);
                 }
-                if (line != kConfigHeader && line != kOldConfigHeader &&
-                    line != kSdkConfigHeader) {
+                if (line != kConfigHeader && line != kSdkConfigHeader &&
+                    std::ranges::find(kOldConfigHeaders, line) == std::end(kOldConfigHeaders)) {
                     return true;
                 }
                 i = end;

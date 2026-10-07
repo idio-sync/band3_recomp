@@ -158,7 +158,8 @@ std::string SettingsReference(const ReferenceInputs& in) {
         "     src/settings.cpp (or the SDK), its label and section in\n"
         "     src/Launcher/launcher_settings.cpp. -->\n"
         "\n"
-        "Every setting the launcher and the in-game settings (F4) show, tab by tab, as this "
+        "Every setting the launcher and the in-game settings (Escape > Settings) show, tab by "
+        "tab, as this "
         "build of band3 registers them. Each can be saved in `band3.toml` as `name = value` "
         "or passed on the command line as `--name=value`; [Settings, folders and "
         "songs](settings.md#config-files) says which wins when several places set one. The "
@@ -194,9 +195,9 @@ std::string SettingsReference(const ReferenceInputs& in) {
     }
     if (!sdk_rows.empty()) {
         out += "\n## More of the SDK's settings\n\n"
-               "The SDK's settings band3_config.ini sets that the launcher and F4's tabs "
-               "don't show. F4's **All settings...** lists these with the rest of the "
-               "SDK's.\n\n";
+               "The SDK's settings band3_config.ini sets that the launcher's and the in-game "
+               "settings' tabs don't show. The in-game settings' **All settings...** lists "
+               "these with the rest of the SDK's.\n\n";
         out += kTableHead;
         out += sdk_rows;
     }

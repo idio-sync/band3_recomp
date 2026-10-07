@@ -32,7 +32,8 @@ bool TypesCharacter(uint16_t vk) {
 
 // Dance Central 3's TranslateVK (RB3Enhanced's xbox_keyboard.c), for the keys
 // Deluxe's input field edits with. Escape (0x12E) and the function keys aren't
-// here: Escape stays B, and band3 and the SDK have the function keys.
+// here: Escape opens band3's pause menu, and band3 and the SDK have the
+// function keys.
 std::optional<int> EditCode(uint16_t vk) {
     switch (vk) {
     case kVkBack: return 0x08;

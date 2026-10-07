@@ -18,7 +18,7 @@ below.
 
 ## PlayStation and Wii instruments (experimental)
 
-Turn on `hid_instruments` (the Controllers tab, on the launcher or in F4, then restart) to play Rock Band guitars and
+Turn on `hid_instruments` (the Controllers tab, on the launcher or in the in-game settings, then restart) to play Rock Band guitars and
 drum kits through their USB dongles:
 
 - PS3 and Wii guitars and drum kits, and a PS3 or Wii MIDI Pro Adapter in drum mode
@@ -57,7 +57,7 @@ floor tom lets go). Turn these off with `midi_drums_combos`.
 
 ## Microphones (experimental)
 
-Turn on `usb_mics` (the Audio tab, on the launcher or in F4, then restart) to sing through microphones on
+Turn on `usb_mics` (the Audio tab, on the launcher or in the in-game settings, then restart) to sing through microphones on
 this PC as Xbox 360 USB microphones. The first mic slot uses the system's default
 recording device unless `usb_mic_devices` names microphones (or parts of their names),
 comma separated, one per slot, for harmonies. Microphones plugged in after the game starts
@@ -101,8 +101,8 @@ notch of the wheel presses the d-pad up or down. The click picks whatever the me
 highlighted, not what's under the pointer. The presses join player 1's controller (the
 SDK's stand-in one when nothing is plugged in, so the mouse works on its own). It stops
 while a song is on (from its loading screen until its results are left, pause menu
-included), where A and B would be frets. Clicks on band3's or the SDK's windows (F4, F6,
-F10, the SDK's dialogs) stay with them, and the mouse waits while F4 or the Rooms panel has
+included), where A and B would be frets. Clicks on band3's or the SDK's windows (the pause menu, F6,
+F10, the SDK's dialogs) stay with them, and the mouse waits while the pause menu or the Rooms panel has
 the controller. `mouse_menus` (the Controllers tab's More settings) turns it off.
 
 ## Typing to search songs
@@ -112,10 +112,12 @@ as RB3Enhanced brings back on the Xbox 360 and RPCS3. It needs a Deluxe with key
 search (one with `dx_keyboard.dta`); with an older one, or none, the keyboard stays a
 controller. On the song list the keys that type a character (letters, digits, space,
 punctuation) type instead of pressing the buttons they're bound to; the arrows, Enter,
-Backspace, Escape and the function keys keep their binds. (`` ` `` opens Deluxe's console
+Backspace and the function keys keep their binds, and Escape opens band3's pause menu.
+(`` ` `` opens Deluxe's console
 instead.) The first key of a search is read as on a US keyboard; the rest follow your
-layout. While the search is typed in, it also takes the arrows (left and right move the
-caret, up and down go through earlier searches), Enter (search), Tab (stop typing),
-Backspace, and ctrl+a, c, x and v. Escape keeps its bind, so bound to B it leaves the
-search. Nothing changes during a song or while F4 or the Rooms panel has the controller.
-`keyboard_search` (the Controllers tab's More settings) turns it off.
+layout. While the search is typed in,
+it also takes the arrows (left and right move the caret, up and down go through earlier
+searches), Enter (search), Tab (stop typing), Backspace, and ctrl+a, c, x and v. Escape
+still opens the pause menu. Nothing changes during a song or while
+the pause menu or the Rooms panel has the controller. `keyboard_search` (the Controllers tab's
+More settings) turns it off.

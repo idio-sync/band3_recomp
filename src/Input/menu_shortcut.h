@@ -6,8 +6,8 @@
 #include <optional>
 
 // Opens band3's menus from a controller, for when there's no keyboard (a Steam
-// Deck in Game Mode): hold both stick clicks for a second for the settings menu
-// (bind_settings, F4), or both stick clicks and the left bumper for the
+// Deck in Game Mode): hold both stick clicks for a second for the pause menu
+// (bind_pause_menu, Escape), or both stick clicks and the left bumper for the
 // Instrument Lab (bind_instrument_lab, F6). Only controllers count: a guitar's
 // solo frets and a drum kit's pads and second kick send stick clicks too
 // (instruments.cpp), so playing an instrument never triggers it. A chord fires
@@ -15,7 +15,7 @@
 
 namespace band3::input {
 
-enum class MenuShortcutAction { kNone, kSettings, kInstrumentLab };
+enum class MenuShortcutAction { kNone, kPauseMenu, kInstrumentLab };
 
 class MenuShortcut {
 public:

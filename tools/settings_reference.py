@@ -6,7 +6,7 @@
 
 band3 --settings_reference=<file> writes the reference from its settings
 registry and quits without starting the game (src/Launcher/settings_reference.h):
-every setting the launcher and F4 show, with its default, the values it takes
+every setting the launcher and the in-game settings show, with its default, the values it takes
 and its description. So it lists what that build registers, with the defaults
 of the platform it was built for; the checked-in one is the Windows build's.
 Change a setting's description in src/settings.cpp (or its label in

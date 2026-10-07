@@ -75,7 +75,7 @@ It never opens when RB3E's `rb3e_relaunch_game` restarts the game, nor for a
 [test harness](test-harness.md) run (`test_port`) unless that is started with `--launcher`.
 
 To get back to it, hold Shift while band3 starts, start it with `--launcher`, or tick
-**Show the launcher at startup** in the [in-game settings](#in-game-settings-f4) and save.
+**Show the launcher at startup** in the [in-game settings](#pause-menu-and-in-game-settings) and save.
 On a Steam Deck in Game Mode, add
 `--launcher` to band3's launch options in Steam (Properties → Launch Options), and take it
 out again afterwards. `launcher = true` in `band3.toml` is ignored: it's for one start, from
@@ -97,7 +97,7 @@ wouldn't win over it. On a Steam Deck a banner at the top says so, with the
 `steam_deck_defaults` switch: on, the [Deck's settings](#steam-deck) are the defaults and
 what you change wins over them.
 
-Some settings are only in the [in-game settings](#in-game-settings-f4): the Advanced tab's
+Some settings are only in the [in-game settings](#pause-menu-and-in-game-settings): the Advanced tab's
 (debug options, heap sizes, the native renderer's debug options, the test harness's and
 the virtual instrument) and each tab's **More settings**.
 
@@ -128,10 +128,25 @@ smooth frame pacing, 9.0 ms without, and 7 to 8 ms at 240.
 After changing any of these, run the game's calibration again (in its Options), so your
 hits are judged against the lag you have now.
 
-## In-game settings (F4)
+## Pause menu and in-game settings
 
-Press **F4** in game, or hold both stick clicks on a controller for a second, to open
-band3's settings over the game. They have the launcher's tabs and rows, from the same
+Press **Escape** in game, or hold both stick clicks on a controller for a second, to open
+band3's pause menu: **Resume**, **Settings**, **Instrument Lab** and **Quit game**. During
+a song it pauses the song too, the way your Start button would, so the song's own pause
+menu is underneath; **Resume** (or Escape, B or Start) closes the menu and resumes the
+song. A song you'd already paused yourself stays paused. On the song's first couple of
+seconds, when the game doesn't take a pause yet, the menu opens over the song as it plays.
+In the game's menus nothing is paused, but the game reads no input while the menu is open.
+**Instrument Lab** closes the pause menu and opens the
+[Instrument Lab](instruments.md#instrument-lab), leaving a song paused for its own pause
+menu to resume. **Quit game** asks, then closes band3. Escape does nothing while the
+launcher shows, as F6 and F9 don't.
+
+Escape isn't one of the keys the keyboard plays the controller with (B, back, is
+Backspace), so nothing else moves for it. The pause menu's key is `bind_pause_menu`, with
+the other key binds in **All settings...**.
+
+**Settings** opens band3's settings over the game. They have the launcher's tabs and rows, from the same
 list, showing what the chosen renderer uses as the launcher does, and an **Advanced** tab.
 Changes apply as you make them: at once, or from the next time the game loads what they
 affect (a forced venue from the next venue load). A row whose change applies only from
@@ -140,16 +155,15 @@ the Online tab, the instrument drivers, the input backend, the microphones, the 
 GPU's anti-aliasing, and the renderer from Native to the other two or back. Pointing at a
 setting shows what it does, and says if it's one of those. **Save** writes `band3.toml` as
 the launcher does: only what you changed, the file's other lines kept. The footer says
-when something isn't saved, and **Close** asks first; closing without saving keeps the
+when something isn't saved, and **Back** asks first; going back without saving keeps the
 changes until band3 closes. **Show the launcher at startup** is the launcher's
 [box](#the-launcher), saved with the rest.
 
 While they're open the game gets no input: the keyboard and the controllers drive the
 settings (arrows or the d-pad move, Enter or A picks, LB and RB switch tabs, and B, Start
-or Escape go back to the game), and the game reads nothing pressed. They don't pause the
-game, so a song keeps playing underneath: open them from a menu. They're drawn at the
-launcher's scale: at 720p and on a Steam Deck's 1280x800 screen they fill most of it, and
-they grow with the window. F4 does nothing while the launcher shows, as F6 and F9 don't.
+or Escape go back to the pause menu), and the game reads nothing pressed. They're drawn at
+the launcher's scale: at 720p and on a Steam Deck's 1280x800 screen they fill most of it,
+and they grow with the window.
 
 Two things of the launcher's aren't here, since the game is using the devices: the
 Controllers tab's device list and tester (the [Instrument Lab](instruments.md#instrument-lab),
@@ -171,10 +185,11 @@ band3's are under **Band3**, in the in-game settings' groups: Game, Graphics (wi
 and Emulated), Audio, Controllers (with MIDI drums), Online, and Advanced (with Game code,
 Graphics, Logging, Memory, Native renderer, Retired, Startup and Test harness). Its **Save
 to config** writes `band3.toml` differently from band3's Save ([below](#config-files)); a
-note under it says so. F4, or its note's buttons, close it.
+note under it says so. Escape, or its note's buttons, close it and go back to the pause
+menu.
 
 Without a keyboard, hold both stick clicks on a controller for a second to open the
-settings, or both stick clicks and the left bumper for the
+pause menu, or both stick clicks and the left bumper for the
 [Instrument Lab](instruments.md#instrument-lab). The same chord closes them.
 `menu_shortcut` (the Controllers tab's More settings) turns this off. It works with either input backend: it
 watches the buttons the game reads from each player's controller, so it needs the
@@ -185,18 +200,18 @@ second kick send stick clicks too.
 ## Config files
 
 `band3.toml` next to the executable holds band3's settings; the [launcher](#the-launcher)
-and the [in-game settings](#in-game-settings-f4) write it. Any setting can also be passed
+and the [in-game settings](#pause-menu-and-in-game-settings) write it. Any setting can also be passed
 on the command line, e.g.
 `--forced_venue=arena_04`, or by a `REX_*` environment variable. The
 [settings reference](settings-reference.md) lists every one, with its default and what it
 does; band3 writes it from its settings registry (`python tools/settings_reference.py`), so
 it matches the build.
 
-The SDK's settings menu (F4, **All settings...**) has a **Save to config** that writes
+The SDK's settings menu (the in-game settings' **All settings...**) has a **Save to config** that writes
 `band3.toml` too, but differently: it rewrites the whole file with every setting that
 differs from the SDK's default, whatever set it, so values from `band3_config.ini`, the
 Steam Deck settings and the command line are frozen into the file from then on, and
-anything else in the file is dropped. Prefer band3's Save, the launcher's or F4's, which
+anything else in the file is dropped. Prefer band3's Save, the launcher's or the in-game settings', which
 writes only what you change.
 
 `band3_config.ini` is the settings file from before `band3.toml`. band3 still reads one
@@ -284,7 +299,7 @@ On a Steam Deck, band3 starts fullscreen and letterboxed (the game is 16:9, the 
 16:10), at the console's 60 Hz (`frame_cap` off) with vsync on and the FPS counter off, since Steam's performance overlay does
 that job. These only fill in settings that `band3.toml` and the command line leave unset,
 but they win over `band3_config.ini`, whose window settings are for a desktop. Turn
-`steam_deck_defaults` off (the Steam Deck banner on the launcher or in F4, then restart) to go
+`steam_deck_defaults` off (the Steam Deck banner on the launcher or in the in-game settings, then restart) to go
 back to the ini's.
 
 band3 recognises a Deck from the `SteamDeck=1` Steam sets, or on Linux from the Deck's

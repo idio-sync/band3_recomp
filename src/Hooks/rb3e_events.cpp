@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string>
 #include "src/Hooks/aspect.h"
+#include "src/Hooks/song_pause.h"
 #include "src/Net/discord.h"
 #include "src/Net/events.h"
 #include "src/Net/http_server.h"
@@ -218,6 +219,7 @@ extern "C" REX_FUNC(Game____ct)
 {
     // for the native renderer's residency, harness or not
     band3::render::SetInSong(true);
+    band3::song_pause::ResetPaused();
     bool events = band3::events::Enabled();
     bool discord = band3::discord::Enabled();
     bool record = Recording();
@@ -248,6 +250,7 @@ extern "C" REX_FUNC(Game____dt)
     SendState(0);
     band3::test::GameState::Get().SetInGame(false);
     band3::render::SetInSong(false);
+    band3::song_pause::ResetPaused();
     // the game can leave LEDs on after the score screen; turn everything off
     SendStagekit(0x00, 0xFF);
     band3::discord::SetMenus();

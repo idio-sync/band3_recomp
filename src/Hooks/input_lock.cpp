@@ -5,6 +5,7 @@
 #include <mutex>
 #include <optional>
 #include "generated/band3_init.h"
+#include "src/Hooks/song_pause.h"
 #include "src/Input/input_lock.h"
 #include "src/Input/menu_shortcut.h"
 #include "src/Input/mouse_menus_driver.h"
@@ -35,7 +36,8 @@ std::recursive_mutex& InputLock() {
 // XInputGetState(user, state): XamInputGetState(user, 1, state). The game's
 // joypad loop (RunXinputJoypadLoop) reads every player through it each pass.
 // The mouse's menu presses join the lowest connected player's here
-// (mouse_menus_driver.h).
+// (mouse_menus_driver.h), and the pause menu's Start the player it's for
+// (song_pause.h).
 extern "C" void __imp__rex_sub_8283FB80(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(rex_sub_8283FB80) {
     const uint32_t user = ctx.r3.u32;
@@ -49,6 +51,7 @@ extern "C" REX_FUNC(rex_sub_8283FB80) {
         read = reinterpret_cast<rex::input::X_INPUT_STATE*>(base + state);
     }
     band3::input::AddMouseMenuPresses(user, read);
+    band3::song_pause::AddPress(user, read, base);
     std::optional<uint16_t> buttons;
     if (read) buttons = read->gamepad.buttons;
     band3::input::GameChordPads().OnState(user, buttons, band3::input::ChordPads::Clock::now());

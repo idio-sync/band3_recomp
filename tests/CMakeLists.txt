@@ -37,6 +37,7 @@ add_executable(band3_tests
     menu_shortcut_test.cpp
     mouse_menus_test.cpp
     keyboard_search_test.cpp
+    song_pause_test.cpp
     usb_mic_test.cpp
     game_status_test.cpp
     player_slots_test.cpp
@@ -97,6 +98,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/mouse_menus.cpp
     ${BAND3_ROOT}/src/Input/ps3_instruments.cpp
     ${BAND3_ROOT}/src/Input/ps4_instruments.cpp
+    ${BAND3_ROOT}/src/Input/song_pause.cpp
     ${BAND3_ROOT}/src/Launcher/config_file.cpp
     ${BAND3_ROOT}/src/Launcher/device_names.cpp
     ${BAND3_ROOT}/src/Launcher/device_view_model.cpp

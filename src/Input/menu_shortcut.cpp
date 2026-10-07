@@ -8,11 +8,11 @@ namespace {
 constexpr uint16_t kChordButtons = xbox::kLeftThumb | xbox::kRightThumb | xbox::kLeftShoulder;
 
 // the other buttons don't matter; the chord's own must match exactly, so adding
-// the bumper to a held settings chord switches to the Instrument Lab one
+// the bumper to a held pause menu chord switches to the Instrument Lab one
 MenuShortcutAction ChordFor(uint16_t buttons) {
     switch (buttons & kChordButtons) {
     case xbox::kLeftThumb | xbox::kRightThumb:
-        return MenuShortcutAction::kSettings;
+        return MenuShortcutAction::kPauseMenu;
     case xbox::kLeftThumb | xbox::kRightThumb | xbox::kLeftShoulder:
         return MenuShortcutAction::kInstrumentLab;
     default:

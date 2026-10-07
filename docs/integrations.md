@@ -3,7 +3,7 @@
 band3 implements much of [RB3Enhanced](https://github.com/RBEnhanced/RB3Enhanced)'s
 behaviour natively, so tools and mods written for RB3E (including
 [Rock Band 3 Deluxe](https://github.com/hmxmilohax/rock-band-3-deluxe)) work with it.
-All of these are on the Online tab, on the launcher or in F4 (in F4's All settings, Band3 →
+All of these are on the Online tab, on the launcher or in the in-game settings (in their All settings, Band3 →
 Online), unless noted.
 
 ## Network events (Stage Kit, song and venue info)
@@ -123,7 +123,7 @@ GoCentral knows Xbox players by their name alone, with no password: anyone using
 your name logs in as you. band3 won't connect while `username` is blank or "User",
 every profile's name until you change it.
 
-To see how a connection goes, turn on `log_net_calls` (F4's Advanced tab, Logging): the log then
+To see how a connection goes, turn on `log_net_calls` (the in-game settings' Advanced tab, Logging): the log then
 has each of the game's network calls and each step of its Rock Central login.
 
 ## Liveless (online play)
@@ -131,8 +131,8 @@ has each of the game's network calls and each step of its Rock Central login.
 Rock Band 3 plays online over Xbox Live, which band3 doesn't have. RB3Enhanced's
 Liveless plays without it, straight from one player's game to another's, and band3
 does the same, so band3 players can play together (and, the game's packets being
-the same, with RB3Enhanced players, though that's untested). In F4's Online
-tab, turn on `liveless`, set `username` (the Game tab's Profile name) to your name (others
+the same, with RB3Enhanced players, though that's untested). In the in-game settings'
+Online tab, turn on `liveless`, set `username` (the Game tab's Profile name) to your name (others
 see it), then restart; or set them on the [launcher](settings.md#the-launcher)'s Online
 and Game tabs and press Play.
 
@@ -173,7 +173,7 @@ router also says its public address, which band3 tells players joining you unles
 network). A router that gives a private address (10.x, 172.16-31.x, 192.168.x,
 100.64-127.x: it's behind another router) still forwards the port, but band3 doesn't
 tell players that address. The mapping lasts an hour, renewed every half hour, and
-band3 deletes it when it closes. Turn `liveless_port_mapping` off (F4's Online tab, More settings; then
+band3 deletes it when it closes. Turn `liveless_port_mapping` off (the in-game settings' Online tab, More settings; then
 restart) to leave the router alone.
 
 band3 asks when it starts, and a mapping that failed isn't asked for again during the
@@ -198,8 +198,8 @@ network protection → Allow an app through firewall.
 
 RB3Enhanced's Liveless Rooms joins players by a room code instead of an
 address: each game logs in to a Rooms server, which gives it a code, and when another
-player asks for that code the server tells their game where the host's is. On F4's
-Online tab, turn on `liveless` and `liveless_rooms` (More settings), set `username` (the Game tab)
+player asks for that code the server tells their game where the host's is. In the in-game
+settings' Online tab, turn on `liveless` and `liveless_rooms` (More settings), set `username` (the Game tab)
 to your name, then restart. band3 then logs in to `liveless_rooms_server`,
 RB3Enhanced's (`liveless-testing.ipg.pw`) unless you run your own. Logging in
 registers your `username` there, and as with GoCentral the server knows you by that

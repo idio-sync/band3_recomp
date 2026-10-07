@@ -7,9 +7,11 @@
 #include <mutex>
 #include <string>
 #include <utility>
+#include "src/Hooks/song_pause.h"
 #include "src/Input/input_lock.h"
 #include "src/Input/input_system.h"
 #include "src/Input/xinput_state.h"
+#include "src/Render/native_view.h"
 #include "config_file.h"
 #include "launcher_style.h"
 
@@ -18,6 +20,7 @@ namespace band3::launcher {
 namespace {
 
 constexpr const char* kClosePrompt = "Close without saving?";
+constexpr const char* kQuitPrompt = "Quit band3?";
 
 constexpr std::pair<Tab, const char*> kTabs[] = {
     {Tab::kGame, "Game"},
@@ -56,42 +59,80 @@ InGameSettingsDialog::~InGameSettingsDialog() {
                      (saved_config_flags_ & ImGuiConfigFlags_NavEnableKeyboard);
 }
 
-void InGameSettingsDialog::Toggle() {
+void InGameSettingsDialog::TogglePause() {
     if (host_.all_settings_open && host_.all_settings_open()) {
         if (host_.close_all_settings) host_.close_all_settings();
+        SetView(View::kPause);
         return;
     }
-    if (open_) {
-        RequestClose();
-    } else {
-        Open();
+    switch (view_) {
+    case View::kClosed:
+        OpenPause();
+        break;
+    // asked for and not open (yet): the song is paused already
+    case View::kAllSettings:
+        SetView(View::kPause);
+        break;
+    case View::kPause:
+    case View::kSettings:
+        // the frame decides, so the Escape that closes a dropdown, a field or
+        // a prompt doesn't also go back
+        back_requested_ = true;
+        break;
     }
 }
 
-void InGameSettingsDialog::Open() {
+void InGameSettingsDialog::SetView(View view) {
+    view_ = view;
+    view_frame_ = ImGui::GetFrameCount();
+    appearing_ = view != View::kClosed;
+    back_requested_ = false;
+    all_settings_seen_ = false;
+}
+
+void InGameSettingsDialog::OpenPause() {
+    band3::song_pause::Pause();
+    SetView(View::kPause);
+    REXLOG_INFO("Pause menu: opened");
+}
+
+void InGameSettingsDialog::Resume() {
+    band3::song_pause::Resume();
+    SetView(View::kClosed);
+    REXLOG_INFO("Pause menu: closed");
+}
+
+void InGameSettingsDialog::OpenSettings() {
     EnsureModel();
-    open_ = true;
-    appearing_ = true;
     save_message_.clear();
     save_failed_ = false;
+    SetView(View::kSettings);
     REXLOG_INFO("Settings: opened");
 }
 
-void InGameSettingsDialog::RequestClose() {
+void InGameSettingsDialog::RequestCloseSettings() {
     if (model_ && model_->HasUnsavedChanges()) {
         open_close_prompt_ = true;
         return;
     }
-    Close();
+    CloseSettings();
 }
 
-void InGameSettingsDialog::Close() {
-    open_ = false;
+void InGameSettingsDialog::CloseSettings() {
     open_close_prompt_ = false;
     // lets go of SDL's audio, which the mic slots' list keeps started
     if (page_) page_->CloseMeters();
     REXLOG_INFO("Settings: closed{}",
                 model_ && model_->HasUnsavedChanges() ? " with unsaved changes" : "");
+    SetView(View::kPause);
+}
+
+bool InGameSettingsDialog::BackPressed() {
+    const bool requested = std::exchange(back_requested_, false);
+    // the frame the view changed in, and the next, which has its Escape
+    if (ImGui::GetFrameCount() <= view_frame_ + 1) return false;
+    return requested || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+           ImGui::IsKeyPressed(ImGuiKey_Escape, false);
 }
 
 void InGameSettingsDialog::EnsureModel() {
@@ -180,21 +221,36 @@ InGameSettingsDialog::PadReading InGameSettingsDialog::ReadPads() {
 }
 
 void InGameSettingsDialog::HandleNav(const NavEdges& edges) {
-    if (edges.tab_previous || edges.tab_next) {
+    if (view_ == View::kSettings && (edges.tab_previous || edges.tab_next)) {
         const int count = static_cast<int>(std::size(kTabs));
         int i = 0;
         while (i < count && kTabs[i].first != current_tab_) i++;
         i = (i + (edges.tab_next ? 1 : count - 1)) % count;
         pending_tab_ = kTabs[i].first;
     }
-    // Start goes back to the game; not while a prompt or a dropdown is open
-    if (edges.start && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) RequestClose();
+    // Start goes back a step, to the game from the pause menu; not while a
+    // prompt or a dropdown is open
+    if (!edges.start || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) return;
+    if (view_ == View::kPause) {
+        Resume();
+    } else if (view_ == View::kSettings) {
+        RequestCloseSettings();
+    }
 }
 
 void InGameSettingsDialog::OnDraw(ImGuiIO& io) {
     const bool all_settings = host_.all_settings_open && host_.all_settings_open();
-    HoldInput(io, open_ || all_settings);
-    if (!open_ && !all_settings) return;
+    // the SDK's menu opens a moment after it's asked for; once it has, its
+    // own close goes back to the pause menu too, as does its not opening
+    if (view_ == View::kAllSettings) {
+        if (all_settings) {
+            all_settings_seen_ = true;
+        } else if (all_settings_seen_ || ImGui::GetFrameCount() > view_frame_ + 30) {
+            SetView(View::kPause);
+        }
+    }
+    HoldInput(io, view_ != View::kClosed || all_settings);
+    if (view_ == View::kClosed && !all_settings) return;
 
     ImGuiStyle& style = ImGui::GetStyle();
     const ImGuiStyle sdk_style = style;
@@ -207,16 +263,15 @@ void InGameSettingsDialog::OnDraw(ImGuiIO& io) {
         // the menu shortcut's chords, which the game can't see while it's blocked
         const input::MenuShortcutAction chord =
             shortcut_.Update(pads.chord_buttons, input::MenuShortcut::Clock::now());
-        if (chord == input::MenuShortcutAction::kSettings) {
-            if (open_) {
-                RequestClose();
-            } else if (host_.close_all_settings) {
-                host_.close_all_settings();
-            }
+        if (chord == input::MenuShortcutAction::kPauseMenu) {
+            TogglePause();
         } else if (chord == input::MenuShortcutAction::kInstrumentLab && host_.open_instrument_lab) {
             host_.open_instrument_lab();
         }
-        if (open_) {
+        if (view_ == View::kPause) {
+            HandleNav(edges);
+            DrawPauseWindow(io);
+        } else if (view_ == View::kSettings) {
             HandleNav(edges);
             page_->BeginFrame();
             DrawWindow(io);
@@ -225,6 +280,88 @@ void InGameSettingsDialog::OnDraw(ImGuiIO& io) {
         if (all_settings) DrawAllSettingsNote(io);
     }
     style = sdk_style;
+}
+
+void InGameSettingsDialog::DrawPauseWindow(ImGuiIO& io) {
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowBgAlpha(0.97f);
+    if (appearing_) {
+        ImGui::SetNextWindowFocus();
+        appearing_ = false;
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, Px(8));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(28), Px(22)));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_AlwaysAutoResize;
+    const bool shown = ImGui::Begin("Paused##band3_pause", nullptr, flags);
+    ImGui::PopStyleVar(3);
+    if (shown) {
+        const bool back = BackPressed();
+        {
+            FontScope font(kHeadingSize);
+            ImGui::TextUnformatted("Paused");
+        }
+        ImGui::Dummy(ImVec2(0, Px(6)));
+        const ImVec2 size(Px(320), ImGui::GetFrameHeight() + Px(10));
+        if (ImGui::Button("Resume", size)) Resume();
+        ImGui::SetItemDefaultFocus();
+        if (ImGui::Button("Settings", size)) OpenSettings();
+        if (ImGui::Button("Instrument Lab", size)) {
+            // the lab shows what the game reads, which it reads nothing of
+            // while the menu has the controllers: the menu closes, and a song
+            // stays paused for its own pause menu to resume
+            band3::song_pause::Forget();
+            SetView(View::kClosed);
+            REXLOG_INFO("Pause menu: closed for the Instrument Lab");
+            if (host_.open_instrument_lab) host_.open_instrument_lab();
+        }
+        if (ImGui::Button("Quit game", size)) open_quit_prompt_ = true;
+        ImGui::Dummy(ImVec2(0, Px(4)));
+        {
+            FontScope font(kSmallSize);
+            ImGui::TextColored(kMuted, "Escape, B or Start goes back to the game.");
+        }
+
+        const bool busy = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
+        DrawQuitPrompt(back);
+        if (back && !busy && view_ == View::kPause &&
+            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+            Resume();
+        }
+    }
+    ImGui::End();
+}
+
+void InGameSettingsDialog::DrawQuitPrompt(bool back) {
+    if (open_quit_prompt_) {
+        ImGui::OpenPopup(kQuitPrompt);
+        open_quit_prompt_ = false;
+    }
+    const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(22), Px(18)));
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal(kQuitPrompt, nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+        ImGui::TextUnformatted("Rock Band 3 closes.");
+        if (render::InSong()) ImGui::TextColored(kMuted, "The song you're playing isn't kept.");
+        if (model_ && model_->HasUnsavedChanges()) {
+            ImGui::TextColored(kWarn, "Your settings changes aren't saved.");
+        }
+        ImGui::Spacing();
+        if (ImGui::Button("Quit")) {
+            ImGui::CloseCurrentPopup();
+            REXLOG_INFO("Pause menu: quitting");
+            if (host_.quit) host_.quit();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || back) ImGui::CloseCurrentPopup();
+        ImGui::SetItemDefaultFocus();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
 }
 
 void InGameSettingsDialog::DrawWindow(ImGuiIO& io) {
@@ -309,15 +446,14 @@ void InGameSettingsDialog::DrawWindow(ImGuiIO& io) {
         DrawFooter();
         DrawPrompts();
 
-        // B on a controller, or Escape, goes back to the game, unless it was
-        // closing a dropdown or leaving a text field (as in the frame before)
+        // B on a controller, or Escape, goes back to the pause menu, unless it
+        // was closing a dropdown or leaving a text field (as in the frame
+        // before)
         const bool busy = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) ||
                           ImGui::IsAnyItemActive();
-        const bool back = ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
-                          ImGui::IsKeyPressed(ImGuiKey_Escape, false);
-        if (back && !busy && !busy_last_frame_ &&
+        if (BackPressed() && !busy && !busy_last_frame_ && view_ == View::kSettings &&
             ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
-            RequestClose();
+            RequestCloseSettings();
         }
         busy_last_frame_ = busy;
     }
@@ -360,18 +496,18 @@ void InGameSettingsDialog::DrawFooter() {
     page_->DrawDescription([&] {
         ImGui::TextColored(kMuted, "Point at a setting to see what it does. Changes apply as you "
                                    "make them, some at the next start (the row says so); Save "
-                                   "keeps them for next time. The game keeps running.");
+                                   "keeps them for next time.");
         const bool controller =
             std::ranges::any_of(caps_, [](const auto& caps) { return caps.has_value(); });
         if (controller) {
             ImGui::TextColored(kMuted, "With a controller: LB and RB switch tabs, B or Start "
-                                       "goes back to the game.");
+                                       "goes back to the pause menu.");
         }
     });
 
     // the bottom row: the startup box, what saving did, and the buttons
     page_->DrawStartupBox();
-    const float buttons = ButtonWidth(kAllSettings) + ButtonWidth("Save") + ButtonWidth("Close") +
+    const float buttons = ButtonWidth(kAllSettings) + ButtonWidth("Save") + ButtonWidth("Back") +
                           style.ItemSpacing.x * 2;
     const float right = ImGui::GetWindowContentRegionMax().x;
     ImGui::SameLine();
@@ -401,8 +537,10 @@ void InGameSettingsDialog::DrawFooter() {
 
     ImGui::SetCursorPosX(right - buttons);
     if (ImGui::Button(kAllSettings) && host_.open_all_settings) {
-        // one settings window at a time; F4 closes the SDK's
-        Close();
+        // one settings window at a time; Escape goes back from the SDK's to
+        // the pause menu
+        if (page_) page_->CloseMeters();
+        SetView(View::kAllSettings);
         host_.open_all_settings();
     }
     if (ImGui::IsItemHovered()) {
@@ -413,7 +551,7 @@ void InGameSettingsDialog::DrawFooter() {
     ImGui::SameLine();
     if (ImGui::Button("Save")) Save();
     ImGui::SameLine();
-    if (ImGui::Button("Close")) RequestClose();
+    if (ImGui::Button("Back")) RequestCloseSettings();
 
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -435,12 +573,12 @@ void InGameSettingsDialog::DrawPrompts() {
         if (ImGui::Button("Save and close")) {
             ImGui::CloseCurrentPopup();
             Save();
-            if (!save_failed_) Close();
+            if (!save_failed_) CloseSettings();
         }
         ImGui::SameLine();
         if (ImGui::Button("Close without saving")) {
             ImGui::CloseCurrentPopup();
-            Close();
+            CloseSettings();
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
@@ -474,15 +612,16 @@ void InGameSettingsDialog::DrawAllSettingsNote(ImGuiIO& io) {
         ImGui::PopTextWrapPos();
         if (ImGui::Button("Back to band3's settings")) {
             if (host_.close_all_settings) host_.close_all_settings();
-            Open();
+            OpenSettings();
         }
         ImGui::SameLine();
         if (ImGui::Button("Close")) {
             if (host_.close_all_settings) host_.close_all_settings();
+            SetView(View::kPause);
         }
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(kMuted, "F4 closes it too.");
+        ImGui::TextColored(kMuted, "Escape goes back to the pause menu.");
     }
     ImGui::End();
 }

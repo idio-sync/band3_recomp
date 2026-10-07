@@ -169,14 +169,15 @@ void RoomsPanelDialog::DrawOff() {
     if (!startup.liveless_rooms) {
         ImGui::TextUnformatted("Liveless Rooms is off.");
         Hint("With it on, players join each other's games by a room code instead "
-             "of an address. On F4's Online tab, turn on liveless and liveless_rooms, set "
+             "of an address. In Escape > Settings, the Online tab, turn on liveless and "
+             "liveless_rooms, set "
              "the profile name (the Game tab) to your name, then restart.");
     } else if (!startup.liveless) {
         Wrapped(kBad, "Liveless Rooms didn't start: it needs liveless.");
-        Hint("Turn on liveless on F4's Online tab, then restart.");
+        Hint("Turn on liveless in Escape > Settings, the Online tab, then restart.");
     } else if (!online::IsOwnAccountName(settings::Username())) {
         Wrapped(kBad, "Liveless Rooms didn't start: it needs a username.");
-        Hint("Set the profile name (F4, the Game tab) to your own name, not blank or \"User\": "
+        Hint("Set the profile name (Escape > Settings, the Game tab) to your own name, not blank or \"User\": "
              "the Rooms server knows you by it. Then restart.");
     } else {
         Wrapped(kBad, "Liveless Rooms didn't start.");

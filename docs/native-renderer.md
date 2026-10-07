@@ -6,7 +6,7 @@ the game's.
 
 ## Choosing the renderer
 
-`renderer` (the Graphics tab, on the launcher or in F4) picks what draws the game's
+`renderer` (the Graphics tab, on the launcher or in the in-game settings) picks what draws the game's
 picture:
 
 | `renderer` | Launcher | |
@@ -16,7 +16,7 @@ picture:
 | `both` | Native + emulated (debug) | the two side by side, the native picture shown; **F8** (`bind_renderer`) switches to the emulated GPU's picture and back. For comparing them (the checks below); it costs the GPU both |
 
 Whether the emulated GPU runs is decided as band3 starts, so a change to or from `native`
-applies at the next start (the launcher's Play restarts band3 for it, and F4's row
+applies at the next start (the launcher's Play restarts band3 for it, and the in-game settings' row
 says **Applies at the next start**); between `emulated`
 and `both` it applies at once. F8 only switches the picture under `both`, logs why not
 under the others, and doesn't change the setting. A build that can present with neither
@@ -25,7 +25,7 @@ has (`renderer native: ...`, `renderer emulated: ...`, `renderer both (debug): .
 
 ### Which settings apply
 
-| Group (the Graphics tab, on the launcher and in F4) | `native` | `emulated` | `both` |
+| Group (the Graphics tab, on the launcher and in the in-game settings) | `native` | `emulated` | `both` |
 |---|---|---|---|
 | Display: monitor, window mode, resolution, aspect (`present_letterbox`), frame rate cap (`frame_cap`) | yes | yes | yes |
 | Native renderer (Band3 → Graphics → Native): `native_fill_window`, `native_view_msaa`, `native_anisotropic`, `native_max_height` | yes | no | yes |
@@ -34,10 +34,10 @@ has (`renderer native: ...`, `renderer emulated: ...`, `renderer both (debug): .
 | Game (Band3 → Graphics): `rnd_sync`, `background_fps`, `disable_hair_shader`, `disable_approximate_lights` | yes | yes | yes |
 | `compress_character_textures` | no: ignored ([below](#renderer-native-no-emulated-gpu)) | yes | yes |
 
-The launcher and the in-game settings (F4) show only the rows for the chosen renderer. The
+The launcher and the in-game settings (Escape > Settings) show only the rows for the chosen renderer. The
 emulated GPU's own settings belong to its plugin, which a `native` run doesn't load, so
 choosing `emulated` or `both` there shows a note in their place until band3 restarts (the
-launcher's Play does it). The SDK's own menu (F4, **All settings...**) lists every setting
+launcher's Play does it). The SDK's own menu (the in-game settings' **All settings...**) lists every setting
 by category, each description saying which renderers it applies to; the plugin's appear
 only in a run with the emulated GPU.
 
@@ -112,7 +112,7 @@ they measure it. Where the native renderer still differs, or hasn't been checked
 | `native_anisotropic` (Band3 → Graphics → Native) | anisotropic filtering, counted as `anisotropic_override` counts it: 0 off, 1 to 5 for 1x to 16x. -1 (the default) follows `anisotropic_override` where the emulated GPU runs, so the two pictures match, and keeps the game's own samplers under `native` |
 | `native_view_msaa` (Band3 → Graphics → Native) | the samples a pixel of the overlay (the track, the HUD, menus drawn after the world), the only part RB3 multisamples: 2 (the default) as RB3 does, 4 smoother, 1 none |
 
-The rest are on F4's Advanced tab (`emulated_gpu` under Band3 → Advanced → Retired in All
+The rest are on the in-game settings' Advanced tab (`emulated_gpu` under Band3 → Advanced → Retired in All
 settings), each described there (`src/settings.cpp`):
 
 - `emulated_gpu`: retired, still read at startup into `renderer` (`off` is `native`; `on`
@@ -208,7 +208,7 @@ sync-only GPU (`src/Render/sync_gpu/`) reads them and does only what the game wa
 fences, the swap's interrupt, the vertical blanks, the occlusion queries' results
 (`native_query_sample_count`), the read pointer and the display gamma ramp. It draws
 nothing; the native renderer is the only picture, on the SDK's presenter with its overlays
-(F3, F4 and the rest).
+(F3, band3's menus and the rest).
 
 - `emulated_gpu_while_native` doesn't apply, and F8 only logs that it needs `both`.
 - `compress_character_textures` is ignored (logged once). Compressing reads the outfits
@@ -248,7 +248,7 @@ maps, blurs), its post-processing (motion blur, depth of field, bloom or glare, 
 spotlights' beams and haze, soft particles such as stage smoke, the colour matrix) and,
 last, the display's gamma ramp. Render checks set its picture against the game's.
 
-Its settings are on F4's Advanced tab (Native renderer), each described there: `native_view_backend` (`gpu`,
+Its settings are on the in-game settings' Advanced tab (Native renderer), each described there: `native_view_backend` (`gpu`,
 the default, or `cpu`, the reference rasterizer, which the GPU falls back to when it can't
 start); `native_view_record_targets`, which records the passes RB3 draws into textures even
 while the native view is off (render checks need it from launch, as RB3 composes a band's

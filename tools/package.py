@@ -139,7 +139,7 @@ def readme(commit, full_commit, windows, dirty):
         "Settings: the launcher, which "
         + ("holding Shift as band3 starts brings back" if windows
            else "starting band3 with --launcher brings back")
-        + ", and F4 in game.",
+        + ", and Escape > Settings in game.",
         "settings-reference.md lists every setting, its default and what it does.",
         "",
         "If band3 crashes, the next start says so. The logs folder beside band3 has",

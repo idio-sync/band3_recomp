@@ -210,7 +210,8 @@ void DrawHex(const std::vector<uint8_t>& bytes) {
 void DrawConnectedInstruments() {
     if (!REXCVAR_GET(hid_instruments)) {
         ImGui::TextWrapped("PS3 and Wii Rock Band instruments are read when the hid_instruments "
-                           "setting is on (F4, the Controllers tab). It takes a restart.");
+                           "setting is on (Escape > Settings, the Controllers tab). It takes a "
+                           "restart.");
         return;
     }
     if (!HidInstrumentsActive()) {
@@ -258,8 +259,8 @@ void DrawConnectedInstruments() {
 
 void DrawMidiDrums() {
     if (!REXCVAR_GET(midi_drums)) {
-        ImGui::TextWrapped("MIDI drum kits are read when the midi_drums setting is on (F4, "
-                           "the Controllers tab's MIDI drums). It takes a restart.");
+        ImGui::TextWrapped("MIDI drum kits are read when the midi_drums setting is on (Escape > "
+                           "Settings, the Controllers tab's MIDI drums). It takes a restart.");
         return;
     }
     const MidiDrumsStatus status = GetMidiDrumsStatus();
@@ -308,7 +309,7 @@ void DrawMidiDrums() {
         }
         ImGui::EndTable();
     }
-    ImGui::TextWrapped("To change what a note plays, set midi_drums_notes (F4), e.g. "
+    ImGui::TextWrapped("To change what a note plays, set midi_drums_notes (Escape > Settings), e.g. "
                        "44=Kick,40=Snare. It takes a restart.");
 }
 
@@ -382,8 +383,8 @@ void DrawProInstruments() {
 
 void DrawUsbMics() {
     if (!REXCVAR_GET(usb_mics)) {
-        ImGui::TextWrapped("Microphones are used when the usb_mics setting is on (F4, the Audio "
-                           "tab). It takes a restart.");
+        ImGui::TextWrapped("Microphones are used when the usb_mics setting is on (Escape > "
+                           "Settings, the Audio tab). It takes a restart.");
         return;
     }
     const audio::UsbMicStatus status = audio::GetUsbMicStatus();
@@ -517,8 +518,8 @@ void DrawLag() {
     }
     ImGui::TextWrapped("The extra lag, in ms, RB3 builds in for each player's controller type, "
                        "on top of calibration. band3's instruments reach the game as Xbox ones, "
-                       "so they get the Xbox hardware's numbers unless joypad_lag (F4, the "
-                       "Controllers tab's Input lag) changes them, by the type number shown "
+                       "so they get the Xbox hardware's numbers unless joypad_lag (Escape > "
+                       "Settings, the Controllers tab's Input lag) changes them, by the type number shown "
                        "here. The game sets these at startup.");
 
     const auto pads = ProPadStatuses();

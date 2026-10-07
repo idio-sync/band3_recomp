@@ -52,7 +52,9 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 
 **Settings**
 - A launcher: a setup screen for folders, graphics, audio, controllers and online features, shown on the first run (Shift at startup brings it back on Windows)
-- In-game settings (F4, or both stick clicks): the launcher's tabs over the running game, plus
+- A pause menu (Escape, or both stick clicks) that pauses a song, with Resume, Settings, the
+  Instrument Lab and Quit game
+- In-game settings (the pause menu's Settings): the launcher's tabs over the running game, plus
   band3's technical settings, saved to `band3.toml`; All settings... opens the SDK's own menu
 - Configurable save, cache and song folders, including a portable install
 
@@ -96,7 +98,7 @@ CI runs and profiling.
 | Page | Covers |
 |---|---|
 | [Building](docs/building.md) | requirements, Windows and Linux builds, unit tests, compile check, profiling |
-| [Settings, folders and songs](docs/settings.md) | the launcher, the in-game settings (F4), config files, where band3 keeps things, DLC and custom songs, loose-file mods, Steam Deck |
+| [Settings, folders and songs](docs/settings.md) | the launcher, the pause menu and in-game settings, config files, where band3 keeps things, DLC and custom songs, loose-file mods, Steam Deck |
 | [Settings reference](docs/settings-reference.md) | every setting: its default, the values it takes and what it does, generated from the build |
 | [Instruments and microphones](docs/instruments.md) | Instrument Lab, PlayStation/Wii dongles, MIDI drums, USB mics, pro instruments, controller lag |
 | [Integrations](docs/integrations.md) | network events, Discord, the web server and its API, GoCentral, Liveless online play, RB3Enhanced and Deluxe compatibility |
