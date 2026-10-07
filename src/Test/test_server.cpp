@@ -280,6 +280,7 @@ public:
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);
+        options.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
         // as the native renderer's frames keep what they draw, so this one
         // doesn't let it go (gpu_view.h's residency)
         options.clock_keep = render::InSong();
@@ -380,6 +381,7 @@ public:
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);
+        options.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
         options.clock_keep = render::InSong();  // as NativePicture's
         std::vector<uint32_t> rgba;
         render::GpuStats stats;
@@ -1054,6 +1056,7 @@ private:
                       {"ahead_fallback_passes", double(g.ahead_fallback_passes)},
                       {"passes", double(g.passes)},
                       {"pre_passes", double(g.pre_passes)},
+                      {"submits", double(g.submits)},
                       {"pool_meshes", double(g.pool_meshes)},
                       {"arena_moved", double(g.arena_moved)},
                       {"arena_sent", double(g.arena_sent)},

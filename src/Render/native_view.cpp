@@ -140,6 +140,7 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.submit_ms += g.submit_ms;
     sum.evict_ms += g.evict_ms;
     sum.pre_passes += g.pre_passes;
+    sum.submits += g.submits;
     sum.plan_setup_ms += g.plan_setup_ms;
     sum.plan_walk_ms += g.plan_walk_ms;
     sum.plan_arena_ms += g.plan_arena_ms;
@@ -331,7 +332,7 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         buf, sizeof(buf),
         "native renderer: slow frame %llu (game frame %llu, %s, proc_cmds %u%s): %.1f ms, "
         "%.1f of it waiting for the GPU; decode %.1f, pre %.1f (%u passes), plan %.1f, upload "
-        "%.1f, record %.1f, submit %.1f, evict %.1f ms; %u draws (%u of the world%s), %u "
+        "%.1f, record %.1f, submit %.1f (%u command buffers), evict %.1f ms; %u draws (%u of the world%s), %u "
         "texture passes; "
         "sent %u meshes into the pool and %u into the arena (%.2f MB), %u textures (%.2f MB), "
         "%u KB of bones; moved %u meshes to the arena%s; made %u pipelines, %u buffers, %u "
@@ -344,7 +345,7 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         static_cast<unsigned long long>(fc.frame), static_cast<unsigned long long>(fc.game_frame),
         FrameKindName(kind), fc.proc_cmds, world, gs.ms, gs.wait_ms, gs.decode_ms, gs.pre_ms,
         gs.pre_passes,
-        gs.plan_ms, gs.upload_ms, gs.record_ms, gs.submit_ms, gs.evict_ms, gs.draws,
+        gs.plan_ms, gs.upload_ms, gs.record_ms, gs.submit_ms, gs.submits, gs.evict_ms, gs.draws,
         gs.world_draws, gs.shows_kept ? ", the kept post buffer shown" : "", gs.passes,
         gs.pool_meshes, gs.arena_sent, gs.mesh_bytes / 1048576.0, gs.textures_sent,
         gs.texture_bytes / 1048576.0, uint32_t(gs.bone_bytes >> 10), gs.arena_moved,
@@ -802,6 +803,8 @@ class Renderer {
                 o.gpu_timestamps = REXCVAR_GET(native_gpu_timestamps);
                 // texture passes' mips in the frame's command buffer
                 o.inline_mips = REXCVAR_GET(native_view_inline_mips);
+                // where else a frame goes to the GPU in parts (at the resolve)
+                o.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
                 // block-compressed textures kept as blocks on the GPU
                 o.bc_textures = REXCVAR_GET(native_bc_textures);
                 gpu = gpu_;

@@ -3460,6 +3460,44 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         pass = nullptr;
     };
+    // A submission before the frame's end (each into GpuStats::submit_ms and
+    // submits, with the last's): at a texture pass's mips and, with
+    // RasterOptions::submit_points, at the resolve
+    auto submit_part = [&](SDL_GPUCommandBuffer* c) {
+        const auto t = Clock::now();
+        const bool ok = SDL_SubmitGPUCommandBuffer(c);
+        st.submit_ms += ms_since(t);
+        if (ok) st.submits++;
+        return ok;
+    };
+    // the draws recorded by the last submission (draws_since_submit)
+    uint32_t draws_at_submit = 0;
+    // The frame's work so far submitted and the rest recorded into a new
+    // command buffer, between passes (never inside one): the GPU draws what's
+    // submitted while the CPU records the rest, waiting for it in between
+    // (gpu_timing_model.h's kIdle, its time from this command buffer's last
+    // timestamp to the next one's first). One queue runs them in order, so
+    // the frame's fence waits out all of it, and SDL's resource states are
+    // per resource, so no barrier is lost. The new command buffer has nothing
+    // bound (SDL's acquire zeroes it) and its own heaps, which BeginPass
+    // starts on kSamplerBatch's step; every pass begins bound afresh, the
+    // caches below forgotten all the same, as begin_pass forgets them. With
+    // gpu_labels its draws are a list of their own. False if it couldn't
+    // (logged by the caller), the frame given up.
+    auto next_part = [&]() -> bool {
+        MarkTime(cmd, gpu_timing::kIdle);
+        SDL_GPUCommandBuffer* next =
+            submit_part(cmd) ? SDL_AcquireGPUCommandBuffer(device) : nullptr;
+        if (!next) return false;
+        cmd = next;
+        bound = nullptr;
+        bound_verts = nullptr;
+        std::fill(std::begin(bound_tex), std::end(bound_tex), nullptr);
+        std::fill(std::begin(bound_viewport), std::end(bound_viewport), 0.0f);
+        if (o.gpu_labels) indexed_draws.emplace_back();
+        draws_at_submit = st.draws;
+        return true;
+    };
 
     // the back buffer: the world's draws into the scene target, cleared to
     // the frame's clear colour (alpha 0) the first time, and the overlay's
@@ -3799,8 +3837,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     }
 
     // the scene into the picture, at post_boundary or the frame's end:
-    // post-processed, or as it is, or the view of the scene target asked for
-    auto resolve = [&] {
+    // post-processed, or as it is, or the view of the scene target asked for.
+    // False if the submission before it failed (logged).
+    auto resolve = [&]() -> bool {
         end_pass();
         // the scene cleared, if nothing drew to it (the world drawn ahead
         // did, and the overlay goes on over its depth as over the world's)
@@ -3809,6 +3848,15 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         } else if (!back_begun) {
             begin_back(true);
             end_pass();
+        }
+        // RasterOptions::submit_points: the world and the texture passes
+        // submitted, for the GPU to draw while the CPU records the post-
+        // processing, the overlay and the gamma ramp's pass (SubmitAtResolve)
+        if (SubmitAtResolve(o.submit_points, pre_pass || ahead_pass,
+                            st.draws - draws_at_submit) &&
+            !next_part()) {
+            REXLOG_WARN("native view gpu: the frame's world didn't submit ({})", SDL_GetError());
+            return false;
         }
         // the scene as the world left it, before post-processing, as
         // DoWorldEnd's SavePreBuffer keeps it: for the next world frame's
@@ -3827,7 +3875,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // after it post-processes
         if (ahead_pass) {
             resolved = true;
-            return;
+            return true;
         }
         // the post buffer as the picture, or the picture kept as it.
         // Multisampled, the overlay's start reads the post buffer itself and
@@ -3876,6 +3924,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // pass starts its targets
         clear_overlay_depth = layout.cameras;
         overlay_start = overlay_samples > 1;
+        return true;
     };
 
     // the density map the spotlights' cones read: the last drawn, as on the
@@ -4177,7 +4226,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 const DrawItem& it = frame.draws[d];
                 if (!DrawnToBackBuffer(it) || (shows_kept && d < frame.post_boundary)) continue;
                 if (d < ahead_end) continue;
-                if (!resolved && d >= frame.post_boundary) resolve();
+                if (!resolved && d >= frame.post_boundary && !resolve()) return false;
                 if (resolved && (o.view != RasterView::kFinal || pre_pass || ahead_pass)) break;
                 bool clear_depth = false;
                 // (a DrawRect quad has no camera of its own)
@@ -4377,15 +4426,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         end_pass();
         // in place of FinishDrawTarget's downsamples, then the frame's work so
         // far submitted and the rest recorded into a new command buffer
-        // (gpu_timing_model.h's kIdle: the GPU waits for the CPU between
-        // them). The submit is worth its idle: the GPU draws what's recorded
-        // while the CPU records the rest, and a frame recorded whole, its
-        // mips drawn inline but submitted once at the end, waited a
-        // millisecond longer for its post frames' GPU (1.2 to 2.2 ms p50).
-        // One queue runs the command buffers in order, so the frame's fence
-        // still waits out all of it.
+        // (next_part). The submit is worth its idle: the GPU draws what's
+        // recorded while the CPU records the rest, and a frame recorded
+        // whole, its mips drawn inline but submitted once at the end, waited
+        // a millisecond longer for its post frames' GPU (1.2 to 2.2 ms p50).
         if (rt.levels > 1) {
-            SDL_GPUCommandBuffer* next = nullptr;
+            bool next = false;
             if (o.inline_mips && inline_mips_ok) {
                 // each level drawn from the one above, in this command
                 // buffer, as SDL's GenerateMipmaps blits them on Direct3D 12
@@ -4397,23 +4443,17 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 // readable.
                 MarkTime(cmd, gpu_timing::kMips);
                 DrawMips(cmd, rt.color, rt.w, rt.h, rt.levels);
-                MarkTime(cmd, gpu_timing::kIdle);
-                if (SDL_SubmitGPUCommandBuffer(cmd)) next = SDL_AcquireGPUCommandBuffer(device);
+                next = next_part();
             } else {
                 // Off (or not on Direct3D 12), SDL makes them, with blits of
                 // its own, a sampler each, which would put the command
                 // buffer's sampler heap off kSamplerBatch's step (BeginPass);
                 // so in a command buffer of their own, between the frame's
                 // work so far and the rest (each starts its heaps afresh)
-                MarkTime(cmd, gpu_timing::kIdle);
-                if (SDL_SubmitGPUCommandBuffer(cmd)) {
-                    if (SDL_GPUCommandBuffer* mips = SDL_AcquireGPUCommandBuffer(device)) {
-                        MarkTime(mips, gpu_timing::kMips);
-                        SDL_GenerateMipmapsForGPUTexture(mips, rt.color);
-                        MarkTime(mips, gpu_timing::kIdle);
-                        if (SDL_SubmitGPUCommandBuffer(mips))
-                            next = SDL_AcquireGPUCommandBuffer(device);
-                    }
+                if (next_part()) {
+                    MarkTime(cmd, gpu_timing::kMips);
+                    SDL_GenerateMipmapsForGPUTexture(cmd, rt.color);
+                    next = next_part();
                 }
             }
             if (!next) {
@@ -4421,11 +4461,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                             SDL_GetError());
                 return false;
             }
-            cmd = next;
-            if (o.gpu_labels) indexed_draws.emplace_back();
         }
     }
-    if (!resolved) resolve();
+    if (!resolved && !resolve()) return false;
     end_pass();
 
     // The world drawn ahead is submitted and left to the GPU, with no fence
@@ -4448,7 +4486,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             REXLOG_WARN("native view gpu: the world ahead didn't submit ({})", SDL_GetError());
             return false;
         }
-        st.submit_ms = ms_since(submit_start);
+        st.submit_ms += ms_since(submit_start);
+        st.submits++;
         const auto evict_start = Clock::now();
         Evict();
         st.evict_ms = ms_since(evict_start);
@@ -4536,7 +4575,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             REXLOG_WARN("native view gpu: the frame didn't submit ({})", SDL_GetError());
             return false;
         }
-        st.submit_ms = ms_since(submit_start);
+        st.submit_ms += ms_since(submit_start);
+        st.submits++;
         const auto evict_start = Clock::now();
         Evict();
         st.evict_ms = ms_since(evict_start);
@@ -4548,7 +4588,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         REXLOG_WARN("native view gpu: the frame didn't submit ({})", SDL_GetError());
         return false;
     }
-    st.submit_ms = ms_since(submit_start);
+    st.submit_ms += ms_since(submit_start);
+    st.submits++;
     stall_watch::SetWorker(stall_watch::Worker::kGpuWait);
     const bool done = SDL_WaitForGPUFences(device, true, &fence, 1);
     stall_watch::SetWorker(stall_watch::Worker::kRecording);

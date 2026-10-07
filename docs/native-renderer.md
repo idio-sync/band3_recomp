@@ -156,7 +156,8 @@ settings), each described there (`src/settings.cpp`):
   the crowd...), the blurs in them, their mips, post-processing (`velocity`, `dof`, `bloom`,
   `composite`), the overlay and its multisampled resolves, the gamma pass, and a world drawn
   ahead or before the frame. `idle` is the GPU waiting for the CPU to send the next command
-  buffer (a frame goes to the GPU in parts, submitted after each texture pass with mips) and
+  buffer (a frame goes to the GPU in parts, submitted after each texture pass with mips and,
+  with `native_view_submit_points`, at the resolve) and
   isn't in the frame's total, its busy time. The slow-frame log ends with the split ("GPU 1.5 ms busy: world 0.5, ...").
   Direct3D 12 only: the timestamps go into SDL_gpu's own command list, reached through SDL
   3.4.14's private layout and checked first; where the checks fail, or on Vulkan, there are
@@ -183,6 +184,26 @@ settings), each described there (`src/settings.cpp`):
   rather than 0.7 to 0.8 a post frame; the worker's wait for the GPU on world frames 1.03 to
   1.09 ms p50 and 2.2 to 2.3 p95 rather than 1.2 and 2.6, its whole world frame 0.2 ms
   shorter and its post frame 0.2 to 0.3; post frames' wait the same.
+- `native_view_submit_points` (1): where else a frame goes to the GPU in parts. With 0 only at
+  the texture passes with mips (above); with 1 also at the resolve, once the world and its
+  texture passes are recorded (after the last world draw's pass ends, before the resolve's
+  copies), so the GPU draws them while the worker records post-processing, the overlay and the
+  gamma pass, rather than waiting for all of it. Not for a world pass before the frame or the
+  world drawn ahead (they end there and are submitted anyway), nor with nothing drawn since the
+  last submission (a world frame whose last texture pass made mips). A submission costs the
+  worker about 0.03 ms and the GPU a short wait for the next command buffer; the new command
+  buffer starts with nothing bound and its own descriptor heaps, which `BeginPass` starts on
+  `kSamplerBatch`'s step as at every pass. The picture is the same to the byte: 11 captures
+  (render_song_evenodd's and render_screens_menus') drawn with 0 and with 1 had no pixel
+  different. native_view stats' `by_kind` counts the command buffers (`per_frame`'s
+  `submits`) and their submissions' time (`parts_ms_per_frame`'s `submit`).
+  In 20th Century Boy's 60 s slice at 60 Hz (1280x720, arena_04), 1 against 0, three runs
+  each: post frames' wait for the GPU 0.82 to 0.90 ms p50 rather than 1.10 to 1.22 (0.29 less
+  on average) and 2.81 p95 rather than 3.06, their whole frame 3.27 ms p50 rather than 3.44;
+  world frames' wait 0.96 rather than 1.04 ms p50; the GPU's busy time the same (1.71 against
+  1.72 ms a post frame, p95 3.06 against 3.10) and its `idle` on post frames 0.35 rather than
+  0.44 ms; 7.2 command buffers a post frame rather than 6.3, their submissions 0.25 ms in all
+  rather than 0.23. The soak (`soak_native_only.b3t`) passed with 1 and with 0.
 - `native_bc_textures` (on): keeps RB3's block-compressed textures (DXT1, DXT2/3, DXT4/5 and
   DXN, most of what it loads) compressed on the GPU, as BC1, BC2, BC3 and BC5, in texture
   arrays of their own. The worker's decode of a texture seen first (`decode` in the slow-frame

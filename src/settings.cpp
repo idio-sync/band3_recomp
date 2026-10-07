@@ -602,6 +602,14 @@ REXCVAR_DEFINE_BOOL(native_view_inline_mips, true, "Band3/Advanced/Native render
     "buffers a frame and a little less of the GPU waiting for the CPU. Direct3D 12 only. Off "
     "has SDL make them, as before, to compare");
 
+REXCVAR_DEFINE_INT32(native_view_submit_points, 1, "Band3/Advanced/Native renderer",
+    "Where the native renderer hands a frame to the GPU in parts, so the GPU draws the first "
+    "while the worker records the rest: 0 = only after each texture pass with mips (the "
+    "crowd's, in a song); 1 = also once the world is recorded, so the GPU draws it while "
+    "the worker records post-processing and the HUD (in a song its post frames waited about "
+    "0.3 ms less for the GPU; the picture is the same)")
+    .range(0, 1);
+
 REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Advanced/Native renderer",
     "Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, "
     "for the native view (experimental), even while it's off: some are drawn once, in the "

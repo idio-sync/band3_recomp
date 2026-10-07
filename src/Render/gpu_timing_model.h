@@ -13,14 +13,14 @@
 // started (Ladder), and once the GPU has finished the frame its ticks become
 // milliseconds by part (Accumulate). One queue runs SDL_gpu's command buffers
 // in order, so a ladder carries on across the command buffers a frame takes
-// (it's submitted after each texture pass with mips, and with
+// (it's submitted after each texture pass with mips, with
+// native_view_submit_points at the resolve too, and with
 // native_view_inline_mips off the mips are made in one of their own): the
 // span from the last timestamp of one to the first of the next is the part
 // it started, kIdle there. The GPU starts on a command buffer once it's
 // submitted, and a frame's first is submitted while the CPU still records
 // the rest (at the first mips), so between them the GPU waits for the CPU:
-// that's kIdle's,
-// which is no work of the frame's and isn't in its total. Spans whose end or
+// that's kIdle's, which is no work of the frame's and isn't in its total. Spans whose end or
 // start the GPU didn't write (0) or that run backwards are left out and
 // counted, never charged.
 
@@ -35,7 +35,7 @@ enum Part : uint8_t {
     kPassOther,      // every other texture pass: outfits, the crowd, NgLight's shadow, heads...
     kPassBlur,       // a blur inside a texture pass, its copy included (depth volume, soft particles)
     kMips,           // a texture pass's mips (inline_mips off: in a command buffer of their own)
-    kIdle,           // waiting for the CPU to submit the next command buffer (around the mips')
+    kIdle,           // waiting for the CPU to submit the next command buffer (at mips, the resolve)
     kCopies,         // the resolve's copies: the scene and the picture kept for later frames
     kVelocity,       // the camera motion blur's velocity pass and its objects
     kDof,            // depth of field's downsample and blurs

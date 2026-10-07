@@ -113,11 +113,14 @@ struct GpuStats {
     // the frame (pre_passes of them, kPreBufferPasses for a refracting world
     // with no pre-process buffer kept), working out what it draws and placing
     // its meshes and textures, filling the upload buffer, recording its
-    // passes, submitting them (part of wait_ms, which starts at the
-    // submission, when the frame is waited for), and letting go of what no
-    // frame draws (Evict), after wait_ms.
+    // passes, submitting them, and letting go of what no frame draws (Evict),
+    // after wait_ms. submit_ms is all the frame's `submits` (its command
+    // buffers: one more at each texture pass with mips and at the resolve,
+    // SubmitAtResolve), those before its end in record_ms too, and the last
+    // part of wait_ms where the frame is waited for (which starts at it).
     double pre_ms = 0, plan_ms = 0, upload_ms = 0, record_ms = 0, submit_ms = 0, evict_ms = 0;
     uint32_t pre_passes = 0;
+    uint32_t submits = 0;
     // plan_ms's parts, the frame's own (its world passes' are in pre_ms):
     // its targets, outputs and kept buffers made ready (setup); the walk over
     // its passes and draws, placing each mesh and texture it draws and making
@@ -206,6 +209,19 @@ struct GpuStats {
     double gpu_total_ms = 0;
     uint32_t gpu_marks_dropped = 0, gpu_bad_spans = 0;
 };
+
+// Whether a frame submits what it has recorded at its resolve, going on in a
+// new command buffer (RasterOptions::submit_points, native_view_submit_points
+// 1 or more): the GPU draws the world and the texture passes while the CPU
+// records post-processing, the overlay and the gamma ramp's pass, rather than
+// waiting for them. Not for a world pass before the frame or the world drawn
+// ahead (`aside`), which end there and are submitted at once; nor with no
+// draws recorded since the last submission (`draws_since_submit`: a frame
+// showing the kept post buffer whose last texture pass made mips), which
+// would cost a submission and give the GPU nothing to start on.
+inline bool SubmitAtResolve(uint32_t submit_points, bool aside, uint32_t draws_since_submit) {
+    return submit_points >= 1 && !aside && draws_since_submit > 0;
+}
 
 // What GpuRenderer keeps on the GPU between frames, by its frame serial (one
 // a frame drawn, and one each world pass before a frame, kPreBufferPasses).

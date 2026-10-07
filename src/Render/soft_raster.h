@@ -237,6 +237,11 @@ struct RasterOptions {
     // off, SDL's own, in a command buffer of their own between that one and
     // the next. The CPU ignores it.
     bool inline_mips = true;
+    // On the GPU (native_view_submit_points), where a frame submits what it
+    // has recorded so far besides each texture pass with mips: 0 nowhere
+    // else, 1 at the resolve too (gpu_view.h's SubmitAtResolve). The CPU
+    // ignores it.
+    uint32_t submit_points = 0;
     // On the GPU (native_bc_textures), block-compressed textures (DXT1,
     // DXT2_3, DXT4_5, DXN) are kept as blocks, sent and sampled as BC1, BC2,
     // BC3 and BC5 where the device has those formats, and the capture's

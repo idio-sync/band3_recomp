@@ -133,6 +133,7 @@ REXCVAR_DECLARE(int32_t, native_slow_frame_ms);
 REXCVAR_DECLARE(bool, native_gpu_timestamps);
 REXCVAR_DECLARE(bool, native_bc_textures);
 REXCVAR_DECLARE(bool, native_view_inline_mips);
+REXCVAR_DECLARE(int32_t, native_view_submit_points);
 REXCVAR_DECLARE(bool, native_view_record_targets);
 REXCVAR_DECLARE(bool, native_view_normal_maps);
 REXCVAR_DECLARE(bool, native_view_texture_filtering);
