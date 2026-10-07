@@ -96,6 +96,8 @@ TEST_CASE("targets pick the RhythmVerse endpoints") {
 
     CHECK(MatchRoute("/rv/download").endpoint == Endpoint::kRvDownload);
     CHECK(MatchRoute("/rv/downloads").endpoint == Endpoint::kRvDownloads);
+    CHECK(MatchRoute("/rv/updates").endpoint == Endpoint::kRvUpdates);
+    CHECK(MatchRoute("/rv/check").endpoint == Endpoint::kRvCheck);
     CHECK(MatchRoute("/rv/searches").endpoint == Endpoint::kNotFound);
     CHECK(MatchRoute("/rv/").endpoint == Endpoint::kNotFound);
 }

@@ -34,6 +34,16 @@ constexpr int64_t kMaxBytes = int64_t{4} << 30;
 // how long LocalFiles' listing is kept: songs copied into the folders show up
 // as downloaded this long after
 constexpr std::chrono::seconds kListingAge{60};
+// The update check at launch waits for the game's own loading first, and asks
+// nothing when the last check was this recent (a launch after a launch);
+// asked for on the page, it goes straight away
+constexpr std::chrono::seconds kCheckDelay{30};
+constexpr int64_t kCheckInterval = 12 * 60 * 60;
+// between the pages it reads, as RhythmVerse's API isn't band3's to load
+constexpr std::chrono::seconds kCheckPause{2};
+// past this many, the check stops where it is: years of RhythmVerse's updates,
+// which only a download folder older than band3's downloading would need
+constexpr int32_t kMaxCheckPages = 50;
 
 // leaked, so a download still running when band3 closes never touches a
 // destroyed object
@@ -53,7 +63,14 @@ struct State {
     bool files_stale = true;
     // rhythmverse.json's, read when first needed (mutex held)
     DownloadRecords records;
+    CheckState check;
     bool records_loaded = false;
+    // the update check: its thread running, asking RhythmVerse, asked for on
+    // the page, and why the last one failed
+    bool check_thread = false;
+    bool checking = false;
+    bool check_asked = false;
+    std::string check_error;
 };
 
 State& TheState() {
@@ -80,6 +97,12 @@ std::string CheckPackage(std::string_view first) {
 }
 
 fs::path RecordsPath() { return DownloadFolder() / "rhythmverse.json"; }
+
+int64_t NowSeconds() {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
 
 // rhythmverse.json as written (FormatRecords); the state's mutex not held,
 // since the folder may be on a slow drive. Writes go one at a time.
@@ -115,19 +138,39 @@ DownloadRecords CurrentRecords() {
         loaded = state.records_loaded;
     }
     if (!loaded) {
-        DownloadRecords read;
+        std::string text;
         if (std::ifstream file(RecordsPath(), std::ios::binary); file) {
-            std::ostringstream text;
-            text << file.rdbuf();
-            read = ParseRecords(text.str());
+            std::ostringstream stream;
+            stream << file.rdbuf();
+            text = stream.str();
         }
-        std::lock_guard lock(state.mutex);
-        if (!state.records_loaded) {
-            // a download that finished meanwhile is newer than the file
-            for (auto& [id, record] : state.records) read.insert_or_assign(id, record);
-            state.records = std::move(read);
-            state.records_loaded = true;
+        DownloadRecords read = ParseRecords(text);
+        // a record from before band3 kept when it downloaded: its file's time
+        bool filled = false;
+        for (auto& [file_id, record] : read) {
+            if (record.downloaded) continue;
+            std::error_code ec;
+            const auto time = fs::last_write_time(folder / rex::to_path(record.file_name), ec);
+            if (ec) continue;
+            record.downloaded = std::chrono::duration_cast<std::chrono::seconds>(
+                                    std::chrono::clock_cast<std::chrono::system_clock>(time)
+                                        .time_since_epoch())
+                                    .count();
+            filled = true;
         }
+        std::string written;
+        {
+            std::lock_guard lock(state.mutex);
+            if (!state.records_loaded) {
+                // a download that finished meanwhile is newer than the file
+                for (auto& [id, record] : state.records) read.insert_or_assign(id, record);
+                state.records = std::move(read);
+                state.check = ParseCheckState(text);
+                state.records_loaded = true;
+                if (filled) written = FormatRecords(state.records, state.check);
+            }
+        }
+        if (!written.empty()) WriteRecords(written);
     }
     DownloadRecords records;
     {
@@ -154,7 +197,7 @@ DownloadRecords CurrentRecords() {
             it->second.pending_hash.clear();
         }
         records = state.records;
-        text = FormatRecords(state.records);
+        text = FormatRecords(state.records, state.check);
     }
     WriteRecords(text);
     return records;
@@ -251,11 +294,19 @@ void Work() {
             if (error.empty()) {
                 // what was downloaded, to tell when there's a newer version
                 if (update) {
-                    state.records[song.file_id].pending_hash = song.hash;
+                    DownloadRecord& record = state.records[song.file_id];
+                    record.pending_hash = song.hash;
+                    record.latest = song;
                 } else {
-                    state.records[song.file_id] = {rex::path_to_utf8(path.filename()), song.hash, {}};
+                    state.records[song.file_id] = {
+                        .file_name = rex::path_to_utf8(path.filename()),
+                        .hash = song.hash,
+                        .pending_hash = {},
+                        .downloaded = NowSeconds(),
+                        .latest = song,
+                    };
                 }
-                records_text = FormatRecords(state.records);
+                records_text = FormatRecords(state.records, state.check);
             }
             if (Download* d = FindDownload(state, song.file_id)) {
                 d->state = error.empty() ? Download::State::kDone : Download::State::kFailed;
@@ -267,6 +318,108 @@ void Work() {
         // next launch
         if (error.empty() && !update) content::AddLivePackages({path});
     }
+}
+
+// a while, or less once band3 is closing (false) or, with `until_asked`, once
+// the page asks for a check
+bool Wait(std::chrono::seconds time, bool until_asked) {
+    auto& state = TheState();
+    constexpr std::chrono::milliseconds kStep{200};
+    for (std::chrono::milliseconds waited{0}; waited < time; waited += kStep) {
+        if (state.stopping) return false;
+        if (until_asked) {
+            std::lock_guard lock(state.mutex);
+            if (state.check_asked) return true;
+        }
+        std::this_thread::sleep_for(kStep);
+    }
+    return !state.stopping;
+}
+
+// the check's end: how far it read when it got to the end, why not when it
+// failed, or neither when there was nothing to ask
+void EndCheck(const std::optional<CheckState>& check, const std::string& error) {
+    auto& state = TheState();
+    std::string text;
+    size_t updates = 0;
+    {
+        std::lock_guard lock(state.mutex);
+        state.check_thread = false;
+        state.checking = false;
+        state.check_asked = false;
+        state.check_error = error;
+        if (check) {
+            state.check = *check;
+            text = FormatRecords(state.records, state.check);
+        }
+        for (const auto& [file_id, record] : state.records) {
+            if (RecordUpdate(file_id, state.records) == UpdateState::kAvailable) updates++;
+        }
+    }
+    if (!text.empty()) WriteRecords(text);
+    if (!error.empty()) {
+        REXLOG_WARN("RhythmVerse: couldn't check for updates: {}", error);
+    } else if (check) {
+        REXLOG_INFO("RhythmVerse: checked for updates, {} available", updates);
+    }
+}
+
+// RhythmVerse's uploads, the most recently updated first, back to what the
+// records need (FeedStop), noting the versions of those band3 downloaded
+void CheckWork() {
+    auto& state = TheState();
+    bool asked;
+    {
+        std::lock_guard lock(state.mutex);
+        asked = state.check_asked;
+    }
+    if (!asked && !Wait(kCheckDelay, true)) return EndCheck(std::nullopt, {});
+    {
+        std::lock_guard lock(state.mutex);
+        asked = state.check_asked;
+    }
+    const DownloadRecords records = CurrentRecords();
+    CheckState check;
+    {
+        std::lock_guard lock(state.mutex);
+        check = state.check;
+    }
+    const auto stop = FeedStop(records, check);
+    if (!stop || (!asked && check.at && NowSeconds() - check.at < kCheckInterval)) {
+        return EndCheck(std::nullopt, {});
+    }
+    {
+        std::lock_guard lock(state.mutex);
+        state.checking = true;
+        state.check_error.clear();
+    }
+    int64_t newest = check.through;
+    for (int32_t page = 1;; page++) {
+        if (page > 1 && !Wait(kCheckPause, false)) return EndCheck(std::nullopt, {});
+        const SearchRequest request = UpdateFeed(page);
+        const web::Reply reply = web::PostForm(request.url, request.form);
+        if (!reply.error.empty()) return EndCheck(std::nullopt, "couldn't reach RhythmVerse: " + reply.error);
+        if (reply.status != 200) {
+            return EndCheck(std::nullopt, "RhythmVerse answered " + std::to_string(reply.status));
+        }
+        const auto result = ParseSearch(reply.body);
+        if (!result) return EndCheck(std::nullopt, "RhythmVerse's reply wasn't one band3 can read");
+        for (const Song& song : result->songs) newest = std::max(newest, song.updated);
+        std::string text;
+        {
+            std::lock_guard lock(state.mutex);
+            if (NoteLatest(state.records, result->songs)) text = FormatRecords(state.records, state.check);
+        }
+        if (!text.empty()) WriteRecords(text);
+        if (FeedReachedBack(result->songs, *stop) || int64_t{page} * request.page_size >= result->total) {
+            break;
+        }
+        if (page == kMaxCheckPages) {
+            REXLOG_WARN("RhythmVerse: the update check stopped after {} pages", page);
+            break;
+        }
+    }
+    EndCheck(CheckState{newest, NowSeconds()}, {});
 }
 
 }
@@ -309,7 +462,17 @@ QueueResult QueueDownload(std::string_view file_id, bool update) {
 
     auto& state = TheState();
     std::lock_guard lock(state.mutex);
-    const auto it = state.known.find(std::string(file_id));
+    auto it = state.known.find(std::string(file_id));
+    // an update goes by the latest version the record has seen: the update
+    // check finds songs no search has
+    if (update) {
+        const auto record = local.records.find(std::string(file_id));
+        if (record != local.records.end() && record->second.latest) {
+            const auto [at, added] = state.known.insert_or_assign(record->first, *record->second.latest);
+            if (added) state.known_order.push_back(record->first);
+            it = at;
+        }
+    }
     if (it == state.known.end()) return QueueResult::kUnknown;
     const Song& song = it->second;
     if (song.download_url.empty()) return QueueResult::kNotHosted;
@@ -343,6 +506,33 @@ QueueResult QueueDownload(std::string_view file_id, bool update) {
 }
 
 DownloadRecords Records() { return CurrentRecords(); }
+
+void NoteSeen(const std::vector<Song>& songs) {
+    // read first, so a record noted here isn't taken for one newer than the file's
+    CurrentRecords();
+    auto& state = TheState();
+    std::string text;
+    {
+        std::lock_guard lock(state.mutex);
+        if (NoteLatest(state.records, songs)) text = FormatRecords(state.records, state.check);
+    }
+    if (!text.empty()) WriteRecords(text);
+}
+
+void CheckForUpdates(bool at_launch) {
+    auto& state = TheState();
+    std::lock_guard lock(state.mutex);
+    if (!at_launch) state.check_asked = true;
+    if (state.check_thread || state.stopping) return;
+    state.check_thread = true;
+    std::thread(CheckWork).detach();
+}
+
+UpdateCheckStatus CheckStatus() {
+    auto& state = TheState();
+    std::lock_guard lock(state.mutex);
+    return {state.checking, state.check.at, state.check_error};
+}
 
 std::vector<Download> Downloads() {
     auto& state = TheState();

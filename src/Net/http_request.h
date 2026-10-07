@@ -49,6 +49,8 @@ enum class Endpoint {
     kRvSearch,     // /rv/search?text=&page=  a page of RhythmVerse's songs
     kRvDownload,   // POST /rv/download {"file_id": ...}  download one to the songs folder
     kRvDownloads,  // /rv/downloads    the downloads, and how far along they are
+    kRvUpdates,    // /rv/updates      newer versions of what band3 downloaded
+    kRvCheck,      // POST /rv/check   check RhythmVerse for them now
 };
 
 struct Route {

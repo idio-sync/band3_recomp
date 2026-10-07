@@ -165,6 +165,10 @@ Route MatchRoute(std::string_view target) {
         route.endpoint = Endpoint::kRvDownload;
     } else if (target == "/rv/downloads") {
         route.endpoint = Endpoint::kRvDownloads;
+    } else if (target == "/rv/updates") {
+        route.endpoint = Endpoint::kRvUpdates;
+    } else if (target == "/rv/check") {
+        route.endpoint = Endpoint::kRvCheck;
     } else if (path == "/") {
         route.endpoint = Endpoint::kIndex;
     } else if (path == "/list_songs") {

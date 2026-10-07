@@ -37,6 +37,18 @@ QueueResult QueueDownload(std::string_view file_id, bool update = false);
 // what band3 has downloaded, from the download folder's rhythmverse.json
 DownloadRecords Records();
 
+// songs a search found: the records of those band3 downloaded take them as
+// their latest version (NoteLatest), so an update shows without searching again
+void NoteSeen(const std::vector<Song>& songs);
+
+// Checks RhythmVerse for newer versions of what band3 downloaded, on a thread
+// of its own, unless a check is running already: a few requests to its
+// recently updated uploads (UpdateFeed), noting what it finds in the records.
+// At launch it waits a while first, and asks nothing when the last check was
+// recent; asked for on the page, it goes now. Without downloads it asks nothing.
+void CheckForUpdates(bool at_launch);
+UpdateCheckStatus CheckStatus();
+
 // this session's downloads, in the order they were asked for
 std::vector<Download> Downloads();
 

@@ -269,5 +269,42 @@ class RhythmVerseTest(unittest.TestCase):
             ('tier[]', '1'), ('tier[]', '2'), ('tier[]', '3')])
 
 
+class FakeUpdatesTest(unittest.TestCase):
+    """The made-up /rv/updates and /rv/check, as the page reads them."""
+
+    def setUp(self):
+        self.downloads = web_preview.FakeDownloads()
+        self.updates = web_preview.FakeUpdates(self.downloads)
+
+    def test_reports_as_band3_does(self):
+        report = self.updates.report()
+        self.assertFalse(report['checking'])
+        self.assertGreater(report['checked'], 0)
+        self.assertEqual(report['error'], '')
+        self.assertEqual([s['update'] for s in report['updates']], ['available', 'available'])
+        for key in ('file_id', 'title', 'artist', 'tiers', 'art', 'page', 'download', 'downloaded',
+                    'song_id', 'in_library', 'size'):
+            self.assertIn(key, report['updates'][0])
+
+    def test_a_check_runs_a_while(self):
+        self.updates.check()
+        self.assertTrue(self.updates.report()['checking'])
+        self.updates.started -= web_preview.FakeUpdates.SECONDS
+        self.assertFalse(self.updates.report()['checking'])
+
+    def test_an_update_downloads_and_waits_for_the_next_launch(self):
+        file_id = self.updates.songs[0]['file_id']
+        self.assertEqual(self.downloads.queue(file_id, update=True), (200, 'Updating'))
+        report = self.downloads.report()['downloads']
+        self.assertEqual([(d['file_id'], d['update']) for d in report], [(file_id, True)])
+        song, start, update = self.downloads.started[file_id]
+        self.downloads.started[file_id] = (song, start - web_preview.FakeDownloads.SECONDS, update)
+        self.assertEqual(self.updates.report()['updates'][0]['update'], 'pending')
+
+    def test_only_songs_with_an_update_update(self):
+        self.downloads.remember([dict(self.updates.songs[0], file_id='x.1', update='')])
+        self.assertEqual(self.downloads.queue('x.1', update=True)[0], 409)
+
+
 if __name__ == '__main__':
     unittest.main()

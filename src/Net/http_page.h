@@ -90,6 +90,12 @@ a.button {
 .note[hidden] { display: none; }
 .tag.have { color: var(--accent); }
 button.dl { min-width: 104px; }
+/* newer versions of songs band3 downloaded, above RhythmVerse's songs */
+#rv-updates { margin-bottom: 12px; }
+#rv-updates[hidden] { display: none; }
+.updates-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0; font-size: 14px; color: var(--muted); }
+.updates-bar span { flex: 1; min-width: 12em; }
+.updates-bar button { padding: 7px 12px; }
 
 /* what the game is doing, from band3's /status */
 #banner {
@@ -244,6 +250,14 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
     <button id="more" class="plain" hidden>Show more</button>
   </section>
   <section id="rv" hidden>
+    <div id="rv-updates" hidden>
+      <div class="updates-bar">
+        <span id="rv-updates-text"></span>
+        <button class="plain" id="rv-check">Check for updates</button>
+        <button id="rv-update-all" hidden>Update all</button>
+      </div>
+      <ul id="rv-update-list"></ul>
+    </div>
     <div class="note" id="rv-note" hidden></div>
     <div id="rv-message"></div>
     <ul id="rv-list"></ul>
@@ -637,6 +651,8 @@ const rv = {
   rows: new Map(),   // file_id -> {s, li}: the row's song and its element
   downloads: new Map(),  // file_id -> this session's download, from /rv/downloads
   folder: "",
+  updates: null,     // /rv/updates' last answer
+  updateRows: new Map(),  // as rows, for the updates' list
 };
 const searchText = {library: "", rv: ""};
 
@@ -865,7 +881,7 @@ function libraryTag(s) {
   return [null, null];
 }
 
-function rvRow(s) {
+function rvRow(s, rows = rv.rows) {
   const li = el("li");
   li.append(rvArt(s));
   const info = el("div", "info");
@@ -877,15 +893,92 @@ function rvRow(s) {
   const action = rvAction(s);
   li.append(info, tag, action, meters(s));
   li.onclick = () => openRvSong(s);
-  rv.rows.set(s.file_id, {s, li});
+  rows.set(s.file_id, {s, li});
   return li;
 }
 
-// a row again, for a download's progress
+// a row again, in RhythmVerse's songs and the updates, for a download's progress
 function refreshRow(fileId) {
-  const row = rv.rows.get(fileId);
-  if (row) row.li.replaceWith(rvRow(row.s));
+  for (const rows of [rv.rows, rv.updateRows]) {
+    const row = rows.get(fileId);
+    if (row) row.li.replaceWith(rvRow(row.s, rows));
+  }
+  showUpdatesBar();
 }
+
+// ---- updates: newer versions on RhythmVerse of songs band3 downloaded, found
+// by band3's check at launch, a search, or Check for updates (/rv/updates)
+let updatesTimer = null;
+
+function ago(seconds) {
+  const s = Math.max(0, Date.now() / 1000 - seconds);
+  if (s < 90) return "just now";
+  if (s < 90 * 60) return Math.round(s / 60) + " minutes ago";
+  if (s < 36 * 3600) return Math.round(s / 3600) + " hours ago";
+  return Math.round(s / 86400) + " days ago";
+}
+
+// what the check says, its buttons, and the count on the tab
+function showUpdatesBar() {
+  const u = rv.updates;
+  const available = u ? u.updates.filter(updateAvailable).length : 0;
+  $("tabs").children[1].textContent = available ? "RhythmVerse (" + available + ")" : "RhythmVerse";
+  if (!u) return;
+  const songs = u.downloads === 1 ? "the song" : "the " + u.downloads + " songs";
+  $("rv-updates-text").textContent = u.checking ? "Checking RhythmVerse for updates…"
+    : u.error ? "Couldn't check for updates: " + u.error
+    : available ? (available === 1 ? "1 update" : available + " updates") + " for songs band3 downloaded"
+    : u.updates.length ? "Updates downloaded, for band3's next launch"
+    : u.checked ? "No updates for " + songs + " band3 downloaded (checked " + ago(u.checked) + ")"
+    : "Not checked for updates yet";
+  $("rv-check").disabled = u.checking;
+  $("rv-check").textContent = u.checking ? "Checking…" : "Check for updates";
+  $("rv-update-all").hidden = available < 2;
+}
+
+function showUpdates() {
+  const u = rv.updates;
+  // nothing band3 downloaded, nothing to check
+  $("rv-updates").hidden = !u.downloads;
+  rv.updateRows.clear();
+  $("rv-update-list").replaceChildren(...u.updates.map(s => rvRow(s, rv.updateRows)));
+  showUpdatesBar();
+}
+
+// asked again every couple of seconds while a check runs
+async function loadUpdates() {
+  clearTimeout(updatesTimer);
+  try {
+    const r = await fetch("/rv/updates");
+    if (!r.ok) return;
+    rv.updates = await r.json();
+  } catch (e) {
+    return;
+  }
+  showUpdates();
+  if (rv.updates.checking) updatesTimer = setTimeout(loadUpdates, 2000);
+}
+
+$("rv-check").onclick = async () => {
+  try {
+    const r = await fetch("/rv/check", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: "{}",
+    });
+    if (!r.ok) { toast(await r.text()); return; }
+  } catch (e) {
+    toast("band3 didn't answer");
+    return;
+  }
+  rv.updates.checking = true;
+  rv.updates.error = "";
+  showUpdatesBar();
+  clearTimeout(updatesTimer);
+  updatesTimer = setTimeout(loadUpdates, 1000);
+};
+
+$("rv-update-all").onclick = async () => {
+  for (const s of rv.updates.updates.filter(updateAvailable)) await download(s, true);
+};
 
 function openRvSong(s) {
   const body = $("sheet-body");
@@ -937,7 +1030,7 @@ async function rvSearch(more) {
     if (seq !== rvSeq) return;
     rv.page = res.page;
     rv.total = res.total;
-    $("rv-list").append(...res.songs.map(rvRow));
+    $("rv-list").append(...res.songs.map(s => rvRow(s)));
     const last = rv.page * res.page_size >= rv.total;
     $("rv-more").hidden = last;
     // with Downloadable only, a page can have none: on to the next, a few at most
@@ -1057,6 +1150,7 @@ function setMode(next) {
   $("search").placeholder = mode === "rv" ? "Search RhythmVerse's custom songs"
                                           : "Search songs, artists, albums";
   if (mode === "rv" && rv.text === null) rvSearch(false);
+  if (mode === "rv") loadUpdates();
   showCount();
 }
 for (const b of $("tabs").children) b.onclick = () => { if (b.dataset.mode !== mode) setMode(b.dataset.mode); };
@@ -1075,6 +1169,7 @@ async function initRhythmVerse() {
   let saved = null;
   try { saved = localStorage.getItem("band3.mode"); } catch (e) {}
   if (saved === "rv") setMode("rv");
+  else loadUpdates();  // for the count of them on the tab
 }
 
 // ---- loading

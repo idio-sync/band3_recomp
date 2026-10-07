@@ -209,6 +209,8 @@ band3 adds its own, which RB3E doesn't have:
 | `/rv/search?text=<text>&page=<n>` | a page of 25 of [RhythmVerse](https://rhythmverse.co)'s Rock Band 3 (Xbox) songs matching the text, or its newest without, as JSON (`total`, `page`, `page_size`, `songs`). Each song has its `file_id`, details, `tiers` (as `/song_details`), `song_id`, `download` (band3 can download it), `downloaded` (its file is in the content folders), `in_library` (null while the game is busy) and `update` (`available`, `pending` or empty). Optional: `sort=` `newest`, `updated`, `downloads`, `title`, `artist` or `length`; `downloadable=1`; `has=` parts (`keys`, `real_guitar`...); `harmonies=1`; `genre=metal,rock`; `decade=1990,2000`; `cap=<part>:<tier>` for a part's difficulty at most |
 | `POST /rv/download` | downloads `{"file_id": "<id>"}` from a search into the songs folder, or with `"update": true` the newer version of one band3 downloaded: 404 for a song no search has found, 409 for one RhythmVerse doesn't host, or has nothing newer of |
 | `/rv/downloads` | this session's downloads as JSON: the `folder` they go to, and each one's `state` (`queued`, `downloading`, `done`, `failed`), `received`, `total`, `error`, `song_id`, `update` and `in_library` |
+| `/rv/updates` | newer versions on RhythmVerse of the songs band3 downloaded, as JSON: `checking` (a check is running), `checked` (when the last one finished, in seconds since 1970; 0 for never), `error` (why the last one failed), `downloads` (how many songs band3 has downloaded) and `updates`, songs as `/rv/search` gives them, with `update` `available`, or `pending` once downloaded |
+| `POST /rv/check` | checks RhythmVerse for those updates now (send `{}` as JSON); `/rv/updates` says when it's done |
 
 `http_allow_cors` adds `Access-Control-Allow-Origin: *`, for pages served from somewhere
 else. Requests wait for the game's next frame, and get a 503 if it doesn't come within 5 s.
@@ -220,7 +222,8 @@ http://127.0.0.1:21080/ with the songs, their details and album art read from th
 data. The page comes from `src/Net/http_page.h` on every load, so an edit shows on a
 refresh, without a rebuild; **Select** can't work there, and `/status` says what
 `--status` (`menu`, `library` or `playing`) tells it to. Its RhythmVerse tab searches
-RhythmVerse, but its downloads are made up and save nothing.
+RhythmVerse, but its downloads are made up and save nothing, and its updates are two
+made-up songs.
 
 ### RhythmVerse
 
@@ -252,6 +255,16 @@ available**. **Update** downloads the new version beside the old one as `<name>.
 the game has the old one open, so band3 puts the new one in its place when it next
 starts, keeping the old one beside it as `<name>.replaced` (nothing is deleted; clear
 them out when you like). Songs you got some other way aren't checked for updates.
+
+band3 checks for those updates by itself, half a minute after it starts, unless it
+checked in the last 12 hours, and **Check for updates** at the top of the tab checks now.
+Rather than look up each song, it reads RhythmVerse's list of uploads by when they last
+changed, newest first, back to its last check (or the oldest download, if that's later),
+less a day for RhythmVerse's time zone: a request or two, however many songs you have,
+with a pause between them. Songs with a newer version are listed above RhythmVerse's songs,
+and counted on the tab, with **Update** on each and **Update all**. A search that shows a
+song you downloaded notes its version as well. Without anything band3 downloaded, nothing
+is checked.
 
 Turn `http_rhythmverse` off (`[http] rhythmverse = false`) to leave the tab out.
 RhythmVerse's API isn't documented, so a change on its side can break the tab until band3

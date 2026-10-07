@@ -84,6 +84,9 @@ struct Song {
     // official DLC's store page.
     std::string download_url;
     std::string host;  // the other site's name, e.g. www.mediafire.com
+    // when RhythmVerse last changed the upload (its update_date), as RvTime
+    // reads it; 0 when it doesn't say
+    int64_t updated = 0;
 };
 
 struct SearchResult {
@@ -96,6 +99,11 @@ struct SearchResult {
 // nullopt unless `json` is a successful reply to Search (one that found
 // nothing has "songs": false)
 std::optional<SearchResult> ParseSearch(std::string_view json);
+
+// RhythmVerse's "2026-10-06 13:54:57" as seconds since 1970, read as UTC (its
+// own time zone isn't known, so its times are only compared, with a margin);
+// nullopt for anything else, its "0000-00-00 00:00:00" too
+std::optional<int64_t> RvTime(std::string_view text);
 
 // RhythmVerse's custom_id as the game's song ID: a number as it is, text as
 // band3 corrects a text song_id; 0 for none, or a number no song ID can be
@@ -127,14 +135,30 @@ struct DownloadRecord {
     std::string file_name;     // the file it's in, in the download folder
     std::string hash;          // Song::hash, as downloaded
     std::string pending_hash;  // an update's, waiting for the next launch (file_name + .pending)
+    // when band3 downloaded it, in seconds since 1970; 0 for a record from
+    // before band3 kept it, until the file's time stands in for it
+    int64_t downloaded = 0;
+    // the upload as RhythmVerse last showed it, in a search or an update
+    // check, to tell of an update without searching for the song; nullopt for
+    // a record from before band3 kept it, until RhythmVerse shows it again
+    std::optional<Song> latest;
 };
 // by file ID
 using DownloadRecords = std::map<std::string, DownloadRecord>;
 
-// {"<file_id>": {"file": , "hash": , "pending": }, ...}; records it can't read
-// are left out
+// How far the last update check read back through RhythmVerse's uploads, the
+// most recently updated first
+struct CheckState {
+    int64_t through = 0;  // the newest upload's Song::updated it saw; 0 before the first
+    int64_t at = 0;       // when it finished, in seconds since 1970; 0 before the first
+};
+
+// {"<file_id>": {"file": , "hash": , "pending": , "downloaded": , "latest":
+// {the song}}, ..., "_check": {"through": , "at": }}; records it can't read
+// are left out. "_check" isn't a file ID, so a band3 from before it skips it.
 DownloadRecords ParseRecords(std::string_view json);
-std::string FormatRecords(const DownloadRecords& records);
+CheckState ParseCheckState(std::string_view json);
+std::string FormatRecords(const DownloadRecords& records, const CheckState& check = {});
 
 // what's become of an upload band3 downloaded
 enum class UpdateState {
@@ -143,6 +167,27 @@ enum class UpdateState {
     kPending,    // the latest is downloaded, for the next launch
 };
 UpdateState UpdateOf(const Song& song, const DownloadRecords& records);
+// as UpdateOf, for the latest version the upload's record has seen
+UpdateState RecordUpdate(std::string_view file_id, const DownloadRecords& records);
+
+// Songs a search or an update check found: the records of those band3
+// downloaded take them as their latest. True when that changed a record's
+// version (its hash or download), so the records are worth writing.
+bool NoteLatest(DownloadRecords& records, const std::vector<Song>& songs);
+
+// The update check reads RhythmVerse's uploads the most recently updated
+// first, a page at a time, back to FeedStop: one or two pages for a check a
+// day or so after the last, without asking about each song.
+inline constexpr int64_t kFeedMargin = 24 * 60 * 60;
+SearchRequest UpdateFeed(int32_t page);
+// The last check's newest upload, or the oldest download if that's later
+// (nothing older can be newer than what was downloaded), less kFeedMargin:
+// RhythmVerse's times are in a time zone of its own, and its order by them
+// isn't quite exact. nullopt with no records, so nothing to check.
+std::optional<int64_t> FeedStop(const DownloadRecords& records, const CheckState& check);
+// a feed page whose uploads were all updated before stop (or an empty one) is
+// the last to read
+bool FeedReachedBack(const std::vector<Song>& page, int64_t stop);
 
 // The songs already here, to tell a search's songs by: the files in the
 // content folders, however they got there, and the songs the game has.
@@ -176,5 +221,17 @@ std::string FormatSearch(const SearchResult& result, const LocalSongs& local);
 // song ID (null when game_ids is)}, ...]}
 std::string FormatDownloads(const std::vector<Download>& downloads, std::string_view folder,
                             const std::optional<std::set<int32_t>>& game_ids);
+
+struct UpdateCheckStatus {
+    bool checking = false;
+    int64_t checked = 0;  // CheckState::at
+    std::string error;    // why the last check failed; "" when it didn't
+};
+
+// /rv/updates: {"checking":, "checked": seconds since 1970 (0 for never),
+// "error":, "downloads": how many uploads band3 has records of, "updates":
+// [the songs RhythmVerse has newer versions of, as /rv/search gives them, with
+// "update" "available", or "pending" once downloaded], by artist then title}
+std::string FormatUpdates(const LocalSongs& local, const UpdateCheckStatus& status);
 
 }

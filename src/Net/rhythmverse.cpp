@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include "src/Game/song_id.h"
 #include "http_request.h"
@@ -98,6 +99,7 @@ std::optional<Song> ParseSong(const json::Value& entry) {
     } else {
         song.host = hosted ? "rhythmverse.co" : host;
     }
+    song.updated = RvTime(file["update_date"].Text()).value_or(0);
     return song;
 }
 
@@ -153,6 +155,103 @@ void AppendField(std::string& out, std::string_view key, std::string_view json) 
     out += key;
     out += "\":";
     out += json;
+}
+
+std::string TiersJson(const Song& s) {
+    std::string tiers = "{";
+    for (const auto& [part, tier] : s.tiers) {
+        if (tiers.size() > 1) tiers += ',';
+        tiers += JsonString(part) + ":" + std::to_string(tier);
+    }
+    return tiers + "}";
+}
+
+// a song as /rv/search and /rv/updates give it
+void AppendSong(std::string& out, const Song& s, const LocalSongs& local) {
+    out += '{';
+    AppendField(out, "file_id", JsonString(s.file_id));
+    AppendField(out, "title", JsonString(s.title));
+    AppendField(out, "artist", JsonString(s.artist));
+    AppendField(out, "album", JsonString(s.album));
+    AppendField(out, "genre", JsonString(s.genre));
+    AppendField(out, "author", JsonString(s.author));
+    AppendField(out, "year", std::to_string(s.year));
+    AppendField(out, "length_ms", std::to_string(int64_t{s.length_s} * 1000));
+    AppendField(out, "vocal_parts", std::to_string(s.vocal_parts));
+    AppendField(out, "size", std::to_string(s.size));
+    AppendField(out, "downloads", std::to_string(s.downloads));
+    AppendField(out, "tiers", TiersJson(s));
+    AppendField(out, "art", JsonString(s.art_url));
+    AppendField(out, "page", JsonString(s.page_url));
+    AppendField(out, "host", JsonString(s.host));
+    AppendField(out, "download", s.download_url.empty() ? "false" : "true");
+    AppendField(out, "downloaded", IsDownloaded(s, local) ? "true" : "false");
+    AppendField(out, "song_id", std::to_string(s.song_id));
+    AppendField(out, "in_library", InLibrary(s.song_id, local.game_ids));
+    const UpdateState update = UpdateOf(s, local.records);
+    AppendField(out, "update", update == UpdateState::kAvailable ? "\"available\""
+                               : update == UpdateState::kPending  ? "\"pending\""
+                                                                  : "\"\"");
+    out += '}';
+}
+
+// a record's latest version, as rhythmverse.json keeps it
+std::string StoredSong(const Song& s) {
+    std::string out = "{";
+    AppendField(out, "title", JsonString(s.title));
+    AppendField(out, "artist", JsonString(s.artist));
+    AppendField(out, "album", JsonString(s.album));
+    AppendField(out, "genre", JsonString(s.genre));
+    AppendField(out, "author", JsonString(s.author));
+    AppendField(out, "year", std::to_string(s.year));
+    AppendField(out, "length_s", std::to_string(s.length_s));
+    AppendField(out, "vocal_parts", std::to_string(s.vocal_parts));
+    AppendField(out, "size", std::to_string(s.size));
+    AppendField(out, "tiers", TiersJson(s));
+    AppendField(out, "art", JsonString(s.art_url));
+    AppendField(out, "page", JsonString(s.page_url));
+    AppendField(out, "file_name", JsonString(s.file_name));
+    AppendField(out, "song_id", std::to_string(s.song_id));
+    AppendField(out, "hash", JsonString(s.hash));
+    AppendField(out, "download_url", JsonString(s.download_url));
+    AppendField(out, "host", JsonString(s.host));
+    AppendField(out, "updated", std::to_string(s.updated));
+    return out + "}";
+}
+
+int32_t Whole32(const json::Value& value) {
+    return static_cast<int32_t>(std::clamp<int64_t>(Whole(value), INT32_MIN, INT32_MAX));
+}
+
+Song ReadStoredSong(const json::Value& v, const std::string& file_id) {
+    Song s;
+    s.file_id = file_id;
+    s.title = v["title"].Text();
+    s.artist = v["artist"].Text();
+    s.album = v["album"].Text();
+    s.genre = v["genre"].Text();
+    s.author = v["author"].Text();
+    s.year = Whole32(v["year"]);
+    s.length_s = Whole32(v["length_s"]);
+    s.vocal_parts = Whole32(v["vocal_parts"]);
+    s.size = std::max<int64_t>(Whole(v["size"]), 0);
+    for (const auto& [key, part] : kParts) {
+        const json::Value& tier = v["tiers"][part];
+        if (tier.IsNumber()) {
+            s.tiers.emplace_back(part, static_cast<int32_t>(std::clamp<int64_t>(Whole(tier), 0, 6)));
+        }
+    }
+    s.art_url = v["art"].Text();
+    s.page_url = v["page"].Text();
+    s.file_name = v["file_name"].Text();
+    s.song_id = Whole32(v["song_id"]);
+    s.hash = v["hash"].Text();
+    // only ever one of RhythmVerse's, whatever the file says
+    s.download_url = v["download_url"].Text();
+    if (!s.download_url.starts_with(std::string(kSite) + "/")) s.download_url.clear();
+    s.host = v["host"].Text();
+    s.updated = Whole(v["updated"]);
+    return s;
 }
 
 }
@@ -312,23 +411,46 @@ DownloadRecords ParseRecords(std::string_view text) {
     const auto json = json::Parse(text);
     if (!json || !json->IsObject()) return records;
     for (const auto& [file_id, value] : json->Members()) {
-        DownloadRecord record{value["file"].Text(), value["hash"].Text(), value["pending"].Text()};
+        DownloadRecord record{
+            .file_name = value["file"].Text(),
+            .hash = value["hash"].Text(),
+            .pending_hash = value["pending"].Text(),
+            .downloaded = std::max<int64_t>(Whole(value["downloaded"]), 0),
+            .latest = std::nullopt,
+        };
         // a file in the download folder, not a path that leaves it
         const std::string& name = record.file_name;
         const bool bare = !name.empty() && name != "." && name != ".." &&
                           name.find_first_of("/\\:") == std::string::npos;
-        if (ValidFileId(file_id) && bare) records.emplace(file_id, std::move(record));
+        if (!ValidFileId(file_id) || !bare) continue;
+        if (value["latest"].IsObject()) record.latest = ReadStoredSong(value["latest"], file_id);
+        records.emplace(file_id, std::move(record));
     }
     return records;
 }
 
-std::string FormatRecords(const DownloadRecords& records) {
+CheckState ParseCheckState(std::string_view text) {
+    const auto json = json::Parse(text);
+    if (!json || !json->IsObject()) return {};
+    const json::Value& check = (*json)["_check"];
+    return {std::max<int64_t>(Whole(check["through"]), 0), std::max<int64_t>(Whole(check["at"]), 0)};
+}
+
+std::string FormatRecords(const DownloadRecords& records, const CheckState& check) {
     std::string out = "{";
     for (const auto& [file_id, record] : records) {
         if (out.size() > 1) out += ",";
         out += "\n  " + JsonString(file_id) + ": {\"file\": " + JsonString(record.file_name) +
                ", \"hash\": " + JsonString(record.hash) +
-               ", \"pending\": " + JsonString(record.pending_hash) + "}";
+               ", \"pending\": " + JsonString(record.pending_hash) +
+               ", \"downloaded\": " + std::to_string(record.downloaded);
+        if (record.latest) out += ",\n    \"latest\": " + StoredSong(*record.latest);
+        out += "}";
+    }
+    if (check.through || check.at) {
+        if (out.size() > 1) out += ",";
+        out += "\n  \"_check\": {\"through\": " + std::to_string(check.through) +
+               ", \"at\": " + std::to_string(check.at) + "}";
     }
     return out + "\n}\n";
 }
@@ -343,6 +465,67 @@ UpdateState UpdateOf(const Song& song, const DownloadRecords& records) {
     // a record from before band3 kept hashes says nothing
     if (record.hash.empty() || record.hash == song.hash) return UpdateState::kNone;
     return UpdateState::kAvailable;
+}
+
+UpdateState RecordUpdate(std::string_view file_id, const DownloadRecords& records) {
+    const auto it = records.find(std::string(file_id));
+    if (it == records.end() || !it->second.latest) return UpdateState::kNone;
+    return UpdateOf(*it->second.latest, records);
+}
+
+bool NoteLatest(DownloadRecords& records, const std::vector<Song>& songs) {
+    bool changed = false;
+    for (const Song& song : songs) {
+        const auto it = records.find(song.file_id);
+        if (it == records.end()) continue;
+        std::optional<Song>& latest = it->second.latest;
+        if (latest && latest->hash == song.hash && latest->download_url == song.download_url) continue;
+        latest = song;
+        changed = true;
+    }
+    return changed;
+}
+
+SearchRequest UpdateFeed(int32_t page) {
+    SearchOptions options;
+    options.sort = "updated";
+    // only what band3 can download can have been downloaded by it, and the
+    // bigger pages mean fewer requests
+    options.downloadable_only = true;
+    options.page = page;
+    return Search(options);
+}
+
+std::optional<int64_t> FeedStop(const DownloadRecords& records, const CheckState& check) {
+    if (records.empty()) return std::nullopt;
+    // a record with no time to go by (its file gone) doesn't hold the check back
+    int64_t oldest = 0;
+    for (const auto& [file_id, record] : records) {
+        if (record.downloaded && (!oldest || record.downloaded < oldest)) oldest = record.downloaded;
+    }
+    return std::max(oldest, check.through) - kFeedMargin;
+}
+
+bool FeedReachedBack(const std::vector<Song>& page, int64_t stop) {
+    // an upload without a time doesn't say either way
+    return std::ranges::none_of(page, [&](const Song& s) { return s.updated && s.updated >= stop; });
+}
+
+std::optional<int64_t> RvTime(std::string_view text) {
+    if (text.size() != 19) return std::nullopt;
+    for (size_t i = 0; i < text.size(); i++) {
+        const char want = i == 4 || i == 7 ? '-' : i == 10 ? ' ' : i == 13 || i == 16 ? ':' : '0';
+        const bool ok = want == '0' ? text[i] >= '0' && text[i] <= '9' : text[i] == want;
+        if (!ok) return std::nullopt;
+    }
+    const auto number = [&](size_t at, size_t length) { return *WholeOf(text.substr(at, length)); };
+    const std::chrono::year_month_day day{std::chrono::year{number(0, 4)},
+                                          std::chrono::month{static_cast<unsigned>(number(5, 2))},
+                                          std::chrono::day{static_cast<unsigned>(number(8, 2))}};
+    const int32_t hour = number(11, 2), minute = number(14, 2), second = number(17, 2);
+    if (!day.ok() || hour > 23 || minute > 59 || second > 59) return std::nullopt;
+    const int64_t days = std::chrono::sys_days(day).time_since_epoch().count();
+    return days * 86400 + hour * 3600 + minute * 60 + second;
 }
 
 bool ValidFileId(std::string_view file_id) {
@@ -374,38 +557,27 @@ std::string FormatSearch(const SearchResult& result, const LocalSongs& local) {
                       ",\"page\":" + std::to_string(result.page) +
                       ",\"page_size\":" + std::to_string(result.page_size) + ",\"songs\":[";
     for (size_t i = 0; i < result.songs.size(); i++) {
-        const Song& s = result.songs[i];
         if (i) out += ',';
-        out += '{';
-        AppendField(out, "file_id", JsonString(s.file_id));
-        AppendField(out, "title", JsonString(s.title));
-        AppendField(out, "artist", JsonString(s.artist));
-        AppendField(out, "album", JsonString(s.album));
-        AppendField(out, "genre", JsonString(s.genre));
-        AppendField(out, "author", JsonString(s.author));
-        AppendField(out, "year", std::to_string(s.year));
-        AppendField(out, "length_ms", std::to_string(int64_t{s.length_s} * 1000));
-        AppendField(out, "vocal_parts", std::to_string(s.vocal_parts));
-        AppendField(out, "size", std::to_string(s.size));
-        AppendField(out, "downloads", std::to_string(s.downloads));
-        std::string tiers = "{";
-        for (const auto& [part, tier] : s.tiers) {
-            if (tiers.size() > 1) tiers += ',';
-            tiers += JsonString(part) + ":" + std::to_string(tier);
-        }
-        AppendField(out, "tiers", tiers + "}");
-        AppendField(out, "art", JsonString(s.art_url));
-        AppendField(out, "page", JsonString(s.page_url));
-        AppendField(out, "host", JsonString(s.host));
-        AppendField(out, "download", s.download_url.empty() ? "false" : "true");
-        AppendField(out, "downloaded", IsDownloaded(s, local) ? "true" : "false");
-        AppendField(out, "song_id", std::to_string(s.song_id));
-        AppendField(out, "in_library", InLibrary(s.song_id, local.game_ids));
-        const UpdateState update = UpdateOf(s, local.records);
-        AppendField(out, "update", update == UpdateState::kAvailable ? "\"available\""
-                                   : update == UpdateState::kPending  ? "\"pending\""
-                                                                      : "\"\"");
-        out += '}';
+        AppendSong(out, result.songs[i], local);
+    }
+    return out + "]}";
+}
+
+std::string FormatUpdates(const LocalSongs& local, const UpdateCheckStatus& status) {
+    std::vector<const Song*> songs;
+    for (const auto& [file_id, record] : local.records) {
+        if (RecordUpdate(file_id, local.records) != UpdateState::kNone) songs.push_back(&*record.latest);
+    }
+    std::ranges::sort(songs, {}, [](const Song* s) {
+        return std::pair(LowerAscii(s->artist), LowerAscii(s->title));
+    });
+    std::string out = "{\"checking\":" + std::string(status.checking ? "true" : "false") +
+                      ",\"checked\":" + std::to_string(status.checked) +
+                      ",\"error\":" + JsonString(status.error) +
+                      ",\"downloads\":" + std::to_string(local.records.size()) + ",\"updates\":[";
+    for (size_t i = 0; i < songs.size(); i++) {
+        if (i) out += ',';
+        AppendSong(out, *songs[i], local);
     }
     return out + "]}";
 }

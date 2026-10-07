@@ -289,6 +289,8 @@ std::string RhythmVerseSearch(const Request& request, bool cors) {
         return Response(502, kText, "RhythmVerse's reply wasn't one band3 can read", cors);
     }
     result->page_size = search.page_size;
+    // what RhythmVerse has now of songs band3 downloaded, for /rv/updates
+    rhythmverse::NoteSeen(result->songs);
     // RhythmVerse can't leave them out itself
     if (options.downloadable_only) {
         std::erase_if(result->songs, [](const auto& s) { return s.download_url.empty(); });
@@ -331,17 +333,33 @@ std::string RhythmVerseDownload(const Request& request, bool cors) {
     return Response(404, kText, "No search has found that song; search for it again", cors);
 }
 
+// /rv/updates: what the records say RhythmVerse has newer versions of
+std::string RhythmVerseUpdates(bool cors) {
+    rhythmverse::LocalSongs local;
+    local.records = rhythmverse::Records();
+    local.files = rhythmverse::LocalFiles();
+    // the game asked whether it has them only when there are some to say it of
+    const bool any = std::ranges::any_of(local.records, [&](const auto& entry) {
+        return rhythmverse::RecordUpdate(entry.first, local.records) != rhythmverse::UpdateState::kNone;
+    });
+    if (any) local.game_ids = GameSongIds();
+    return Response(200, "application/json",
+                    rhythmverse::FormatUpdates(local, rhythmverse::CheckStatus()), cors);
+}
+
 std::string Handle(const Request& request) {
     const bool cors = REXCVAR_GET(http_allow_cors);
     const Route route = MatchRoute(request.target);
     // POST for what changes things beyond the game, GET for the rest
-    const bool post = route.endpoint == Endpoint::kRvDownload;
+    const bool post = route.endpoint == Endpoint::kRvDownload || route.endpoint == Endpoint::kRvCheck;
     if (request.method != (post ? "POST" : "GET")) {
         return Response(405, kText, post ? "Only POST is supported" : "Only GET is supported", cors);
     }
     const bool rhythmverse = route.endpoint == Endpoint::kRvSearch ||
                              route.endpoint == Endpoint::kRvDownload ||
-                             route.endpoint == Endpoint::kRvDownloads;
+                             route.endpoint == Endpoint::kRvDownloads ||
+                             route.endpoint == Endpoint::kRvUpdates ||
+                             route.endpoint == Endpoint::kRvCheck;
     if (rhythmverse && !REXCVAR_GET(http_rhythmverse)) {
         return Response(403, kText, "RhythmVerse is off (http_rhythmverse)", cors);
     }
@@ -445,6 +463,18 @@ std::string Handle(const Request& request) {
                                 done ? GameSongIds() : std::nullopt),
                             cors);
         }
+        case Endpoint::kRvUpdates:
+            return RhythmVerseUpdates(cors);
+        case Endpoint::kRvCheck:
+            // JSON only, as /rv/download: another site's page can't ask
+            if (!request.content_type.starts_with("application/json")) {
+                return Response(415, kText, "Send the request as JSON", cors);
+            }
+            if (rhythmverse::DownloadFolder().empty()) {
+                return Response(409, kText, "content_folders names no folder to download to", cors);
+            }
+            rhythmverse::CheckForUpdates(false);
+            return Response(200, kText, "Checking", cors);
         case Endpoint::kNotFound:
             break;
     }
@@ -537,6 +567,8 @@ public:
         }
         REXLOG_INFO("Web server: listening on {}:{}, open http://{}:{}/",
                     startup.http_address, port, shown, port);
+        // newer versions of what band3 downloaded, for the RhythmVerse tab
+        if (REXCVAR_GET(http_rhythmverse)) rhythmverse::CheckForUpdates(true);
     }
 
     void Stop() {

@@ -7,7 +7,8 @@ data as the game finds them: a loose file in the game data root first, then
 the title update's archive (patch_xbox.hdr), then the main one. Select can't
 work without the game; it answers 409. /status makes up what the game is doing
 (--status), to work on the page's banner. The RhythmVerse tab searches
-RhythmVerse itself, but its downloads are made up: nothing is saved.
+RhythmVerse itself, but its downloads are made up: nothing is saved. So are its
+updates: two made-up songs, whatever Check for updates finds.
 
 Usage:
   python tools/web_preview.py                 open http://127.0.0.1:21080/
@@ -318,7 +319,7 @@ class FakeDownloads:
         with self.lock:
             self.known.update({s['file_id']: s for s in songs})
 
-    def queue(self, file_id):
+    def queue(self, file_id, update=False):
         """(status, text) as band3's POST /rv/download answers."""
         with self.lock:
             song = self.known.get(file_id)
@@ -326,30 +327,76 @@ class FakeDownloads:
                 return 404, 'No search has found that song; search for it again'
             if not song['download']:
                 return 409, "RhythmVerse doesn't host this one: download it from its page"
+            if update and song.get('update') != 'available':
+                return 409, 'RhythmVerse has nothing newer of it'
             if file_id in self.started:
-                return 200, 'Downloading'
-            self.started[file_id] = (song, time.monotonic())
-            return 200, 'Downloading'
+                return 200, 'Updating' if update else 'Downloading'
+            self.started[file_id] = (song, time.monotonic(), update)
+            return 200, 'Updating' if update else 'Downloading'
 
     def downloaded(self):
         now = time.monotonic()
         with self.lock:
-            return {i for i, (_, t) in self.started.items() if now - t >= self.SECONDS}
+            return {i for i, (_, t, _) in self.started.items() if now - t >= self.SECONDS}
 
     def report(self):
         now = time.monotonic()
         out = []
         with self.lock:
-            for file_id, (song, start) in self.started.items():
+            for file_id, (song, start, update) in self.started.items():
                 total = song['size'] or 50 * 1048576
                 part = min((now - start) / self.SECONDS, 1)
                 # the game takes it in as long again after
                 out.append({'file_id': file_id, 'title': song['title'], 'artist': song['artist'],
                             'state': 'done' if part >= 1 else 'downloading',
-                            'song_id': song['song_id'],
+                            'song_id': song['song_id'], 'update': update,
                             'received': int(total * part), 'total': total, 'error': '',
                             'in_library': now - start >= 2 * self.SECONDS})
         return {'folder': 'songs\\rhythmverse (web_preview: nothing is saved)', 'downloads': out}
+
+
+def fake_updates():
+    """Made-up songs band3 downloaded that RhythmVerse has newer versions of,
+    as /rv/updates gives them."""
+    song = {'album': '', 'genre': 'Rock', 'author': 'web_preview', 'year': 2001,
+            'length_ms': 200000, 'vocal_parts': 1, 'size': 30 * 1048576, 'downloads': 0,
+            'tiers': {'band': 3, 'guitar': 4, 'bass': 2, 'drum': 3, 'vocals': 1},
+            'art': '', 'page': RHYTHMVERSE + '/', 'host': '', 'download': True,
+            'downloaded': True, 'song_id': 0, 'in_library': None, 'update': 'available'}
+    return [dict(song, file_id='preview.1', title='A Made-Up Song', artist='The Previews'),
+            dict(song, file_id='preview.2', title='Another Version', artist='Web Preview')]
+
+
+class FakeUpdates:
+    """band3's update check, made up: a check takes a few seconds and finds the
+    same updates, which are downloaded once asked for (FakeDownloads)."""
+
+    SECONDS = 3
+
+    def __init__(self, downloads):
+        self.downloads = downloads
+        self.lock = threading.Lock()
+        self.songs = fake_updates()
+        downloads.remember(self.songs)
+        self.checked = time.time() - 3 * 3600
+        self.started = None  # when the check asked for began, monotonic
+
+    def check(self):
+        with self.lock:
+            if self.started is None:
+                self.started = time.monotonic()
+
+    def report(self):
+        with self.lock:
+            checking = self.started is not None and time.monotonic() - self.started < self.SECONDS
+            if self.started is not None and not checking:
+                self.started = None
+                self.checked = time.time()
+        done = self.downloads.downloaded()
+        updates = [dict(s, update='pending' if s['file_id'] in done else 'available')
+                   for s in self.songs]
+        return {'checking': checking, 'checked': int(self.checked), 'error': '',
+                'downloads': 12, 'updates': updates}
 
 
 def _from565(c):
@@ -482,6 +529,7 @@ class Preview:
         self.art = {}
         self.lock = threading.Lock()
         self.downloads = FakeDownloads()
+        self.updates = FakeUpdates(self.downloads)
 
     def rv_search(self, query):
         """band3's /rv/search, asked of RhythmVerse: (status, body)."""
@@ -556,23 +604,31 @@ def handler(preview):
                 self.reply(status, 'application/json' if status == 200 else text, body.encode())
             elif path == '/rv/downloads':
                 self.reply(200, 'application/json', json.dumps(preview.downloads.report()).encode())
+            elif path == '/rv/updates':
+                self.reply(200, 'application/json', json.dumps(preview.updates.report()).encode())
             else:
                 self.reply(404, text, b'Not Found')
 
         def do_POST(self):
             text = 'text/plain; charset=utf-8'
-            if self.path != '/rv/download':
+            if self.path not in ('/rv/download', '/rv/check'):
                 self.reply(405, text, b'Only GET is supported')
                 return
             if not (self.headers.get('Content-Type') or '').startswith('application/json'):
-                self.reply(415, text, b'Send the file ID as JSON')
+                self.reply(415, text, b'Send the request as JSON')
                 return
             length = int(self.headers.get('Content-Length') or 0)
             try:
-                file_id = str(json.loads(self.rfile.read(length)).get('file_id', ''))
+                request = json.loads(self.rfile.read(length))
+                file_id = str(request.get('file_id', ''))
+                update = request.get('update') is True
             except (ValueError, AttributeError):
-                file_id = ''
-            status, body = preview.downloads.queue(file_id)
+                file_id, update = '', False
+            if self.path == '/rv/check':
+                preview.updates.check()
+                self.reply(200, text, b'Checking')
+                return
+            status, body = preview.downloads.queue(file_id, update)
             self.reply(status, text, body.encode())
 
         def log_message(self, *args):

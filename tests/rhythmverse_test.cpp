@@ -49,6 +49,15 @@ constexpr std::string_view kReply = R"json({"status":"success","data":{
     {"data":{"artist":"Band","title":"Broken"},"file":{"file_id":"../../evil"}}
   ]}})json";
 
+DownloadRecord Rec(std::string file, std::string hash, std::string pending, int64_t downloaded = 0) {
+    DownloadRecord record;
+    record.file_name = std::move(file);
+    record.hash = std::move(hash);
+    record.pending_hash = std::move(pending);
+    record.downloaded = downloaded;
+    return record;
+}
+
 }
 
 TEST_CASE("a search reply gives each song's details") {
@@ -340,8 +349,8 @@ TEST_CASE("downloads are JSON, with their state and progress") {
 
 TEST_CASE("download records read back as written, leaving out what isn't one") {
     DownloadRecords records;
-    records["595481a7cbc158.68319817"] = {"DVNeverGonnaStopFinal_595481a7cbc158.68319817", "a/b/c", ""};
-    records["9b8f"] = {"Other \"quoted\" name_9b8f", "d/e/f", "g/h/i"};
+    records["595481a7cbc158.68319817"] = Rec("DVNeverGonnaStopFinal_595481a7cbc158.68319817", "a/b/c", "");
+    records["9b8f"] = Rec("Other \"quoted\" name_9b8f", "d/e/f", "g/h/i");
     CHECK(ParseRecords(FormatRecords(records)).size() == 2);
     const auto back = ParseRecords(FormatRecords(records));
     CHECK(back.at("9b8f").file_name == "Other \"quoted\" name_9b8f");
@@ -364,7 +373,7 @@ TEST_CASE("an update is available when RhythmVerse's hashes change from what ban
     song.download_url = "https://rhythmverse.co/download_file/u/f1/x";
     DownloadRecords records;
     CHECK(UpdateOf(song, records) == UpdateState::kNone);  // not band3's download
-    records["f1"] = {"x_f1", "new", ""};
+    records["f1"] = Rec("x_f1", "new", "");
     CHECK(UpdateOf(song, records) == UpdateState::kNone);  // the same version
     records["f1"].hash = "old";
     CHECK(UpdateOf(song, records) == UpdateState::kAvailable);
@@ -373,7 +382,7 @@ TEST_CASE("an update is available when RhythmVerse's hashes change from what ban
     records["f1"].pending_hash = "newer than that";
     CHECK(UpdateOf(song, records) == UpdateState::kAvailable);  // RhythmVerse moved on again
 
-    records["f1"] = {"x_f1", "", ""};
+    records["f1"] = Rec("x_f1", "", "");
     CHECK(UpdateOf(song, records) == UpdateState::kNone);  // a record without a hash says nothing
     records["f1"].hash = "old";
     song.hash.clear();
@@ -390,7 +399,7 @@ TEST_CASE("a song band3 downloaded is downloaded under the name its record gives
     LocalSongs local;
     local.files = {{"oldname_f1", 123}};
     CHECK(!IsDownloaded(song, local));
-    local.records["f1"] = {"OldName_f1", "h", ""};
+    local.records["f1"] = Rec("OldName_f1", "h", "");
     CHECK(IsDownloaded(song, local));
 }
 
@@ -402,7 +411,7 @@ TEST_CASE("search results say when there's an update, or one waiting") {
     song.download_url = "https://rhythmverse.co/download_file/u/f1/x";
     result.songs = {song};
     LocalSongs local;
-    local.records["f1"] = {"x_f1", "old", ""};
+    local.records["f1"] = Rec("x_f1", "old", "");
     auto page = band3::json::Parse(FormatSearch(result, local));
     REQUIRE(page);
     CHECK((*page)["songs"].Items()[0]["update"].Text() == "available");
@@ -412,4 +421,200 @@ TEST_CASE("search results say when there's an update, or one waiting") {
     local.records.clear();
     page = band3::json::Parse(FormatSearch(result, local));
     CHECK((*page)["songs"].Items()[0]["update"].Text().empty());
+}
+
+TEST_CASE("RhythmVerse's times read as seconds since 1970") {
+    CHECK(RvTime("1970-01-01 00:00:00") == 0);
+    CHECK(RvTime("2026-10-06 13:54:57") == 1791294897);
+    CHECK(RvTime("2024-02-29 23:59:59") == 1709251199);
+    CHECK(!RvTime("0000-00-00 00:00:00"));  // what RhythmVerse gives for none
+    CHECK(!RvTime("2023-02-29 00:00:00"));
+    CHECK(!RvTime("2026-10-06 24:00:00"));
+    CHECK(!RvTime("2026-10-06T13:54:57"));
+    CHECK(!RvTime("2026-10-06 13:54"));
+    CHECK(!RvTime("2026-1a-06 13:54:57"));
+    CHECK(!RvTime("-026-10-06 13:54:57"));
+    CHECK(!RvTime(""));
+}
+
+TEST_CASE("a song says when RhythmVerse last updated it") {
+    const auto result = ParseSearch(R"json({"status":"success","data":{"songs":[
+        {"data":{},"file":{"file_id":"a1","update_date":"2026-10-06 13:54:57"}},
+        {"data":{},"file":{"file_id":"a2","update_date":"0000-00-00 00:00:00"}},
+        {"data":{},"file":{"file_id":"a3"}}]}})json");
+    REQUIRE(result);
+    REQUIRE(result->songs.size() == 3);
+    CHECK(result->songs[0].updated == 1791294897);
+    CHECK(result->songs[1].updated == 0);
+    CHECK(result->songs[2].updated == 0);
+}
+
+namespace {
+
+// a song band3 downloaded, as RhythmVerse shows it now
+Song Upload(std::string file_id, std::string hash) {
+    Song song;
+    song.file_id = file_id;
+    song.title = "Title " + file_id;
+    song.artist = "Artist";
+    song.hash = std::move(hash);
+    song.download_url = "https://rhythmverse.co/download_file/u/" + file_id + "/x";
+    return song;
+}
+
+}
+
+TEST_CASE("records keep when they were downloaded, the latest version seen, and the last check") {
+    DownloadRecords records;
+    records["f1"] = Rec("x_f1", "old", "", 1791000000);
+    Song latest = Upload("f1", "new");
+    latest.album = "Album \"quoted\"";
+    latest.genre = "Rock";
+    latest.author = "someone";
+    latest.year = 2001;
+    latest.length_s = 190;
+    latest.vocal_parts = 3;
+    latest.size = 3706880;
+    latest.tiers = {{"band", 3}, {"guitar", 6}, {"real_keys", 0}};
+    latest.art_url = "https://rhythmverse.co/assets/album_art/u/f1.png";
+    latest.page_url = "https://rhythmverse.co/songfile/f1";
+    latest.file_name = "x";
+    latest.song_id = 1689100131;
+    latest.updated = 1791294897;
+    records["f1"].latest = latest;
+    records["f2"] = Rec("x_f2", "h", "", 0);  // from before band3 kept these
+    const CheckState check{1791294897, 1791300000};
+
+    const std::string text = FormatRecords(records, check);
+    const auto back = ParseRecords(text);
+    REQUIRE(back.size() == 2);  // "_check" isn't a record
+    CHECK(back.at("f1").downloaded == 1791000000);
+    REQUIRE(back.at("f1").latest);
+    const Song& s = *back.at("f1").latest;
+    CHECK(s.file_id == "f1");
+    CHECK(s.title == latest.title);
+    CHECK(s.album == latest.album);
+    CHECK(s.genre == "Rock");
+    CHECK(s.author == "someone");
+    CHECK(s.year == 2001);
+    CHECK(s.length_s == 190);
+    CHECK(s.vocal_parts == 3);
+    CHECK(s.size == 3706880);
+    CHECK(s.tiers == latest.tiers);
+    CHECK(s.art_url == latest.art_url);
+    CHECK(s.page_url == latest.page_url);
+    CHECK(s.file_name == "x");
+    CHECK(s.song_id == 1689100131);
+    CHECK(s.hash == "new");
+    CHECK(s.download_url == latest.download_url);
+    CHECK(s.updated == 1791294897);
+    CHECK(back.at("f2").downloaded == 0);
+    CHECK(!back.at("f2").latest);
+
+    const CheckState read = ParseCheckState(text);
+    CHECK(read.through == check.through);
+    CHECK(read.at == check.at);
+    CHECK(ParseCheckState(FormatRecords(records)).at == 0);
+    CHECK(ParseCheckState("").through == 0);
+    // nothing to check, nothing written about it
+    CHECK(FormatRecords({}) == "{\n}\n");
+}
+
+TEST_CASE("a record's latest version downloads only from RhythmVerse") {
+    const auto records = ParseRecords(R"({"f1": {"file": "x_f1", "hash": "a",
+        "latest": {"hash": "b", "download_url": "https://evil.example/x", "tiers": {"guitar": 9}}}})");
+    REQUIRE(records.at("f1").latest);
+    CHECK(records.at("f1").latest->download_url.empty());
+    using Tiers = std::vector<std::pair<std::string, int32_t>>;
+    CHECK(records.at("f1").latest->tiers == Tiers{{"guitar", 6}});
+    // so there's nothing band3 can download, and no update
+    CHECK(RecordUpdate("f1", records) == UpdateState::kNone);
+}
+
+TEST_CASE("an update shows from the latest version a record has seen") {
+    DownloadRecords records;
+    records["f1"] = Rec("x_f1", "old", "");
+    CHECK(RecordUpdate("f1", records) == UpdateState::kNone);  // RhythmVerse hasn't shown it yet
+    CHECK(RecordUpdate("nope", records) == UpdateState::kNone);
+
+    CHECK(NoteLatest(records, {Upload("f1", "old"), Upload("other", "x")}));
+    CHECK(!records.contains("other"));  // not band3's download
+    CHECK(RecordUpdate("f1", records) == UpdateState::kNone);
+    CHECK(!NoteLatest(records, {Upload("f1", "old")}));  // the same version: nothing to write
+
+    CHECK(NoteLatest(records, {Upload("f1", "new")}));
+    CHECK(RecordUpdate("f1", records) == UpdateState::kAvailable);
+    records["f1"].pending_hash = "new";
+    CHECK(RecordUpdate("f1", records) == UpdateState::kPending);
+}
+
+TEST_CASE("the update check reads the most recently updated uploads, a big page at a time") {
+    const auto feed = UpdateFeed(2);
+    CHECK(feed.url == "https://rhythmverse.co/api/rb3xbox/songfiles/list");
+    CHECK(feed.form ==
+          "records=100&page=2&data_type=full&sort%5B0%5D%5Bsort_by%5D=update_date&"
+          "sort%5B0%5D%5Bsort_order%5D=DESC");
+    CHECK(feed.page_size == 100);
+}
+
+TEST_CASE("the update check reads back to the last check, or the oldest download if later") {
+    DownloadRecords records;
+    CHECK(!FeedStop(records, {}));  // nothing downloaded, nothing asked
+    records["f1"] = Rec("x_f1", "h", "", 5000000);
+    records["f2"] = Rec("x_f2", "h", "", 3000000);
+    records["f3"] = Rec("x_f3", "h", "", 0);  // no time: it doesn't hold the check back
+    CHECK(FeedStop(records, {}) == 3000000 - kFeedMargin);
+    CHECK(FeedStop(records, {4000000, 1}) == 4000000 - kFeedMargin);
+    CHECK(FeedStop(records, {2000000, 1}) == 3000000 - kFeedMargin);
+    records.erase("f1");
+    records.erase("f2");
+    CHECK(FeedStop(records, {}) == -kFeedMargin);  // all of it, as far as the check goes
+}
+
+TEST_CASE("a feed page is the last when everything on it is older than where the check stops") {
+    std::vector<Song> page(3);
+    page[0].updated = 300;
+    page[1].updated = 0;  // no time says nothing
+    page[2].updated = 100;
+    CHECK(!FeedReachedBack(page, 200));
+    CHECK(!FeedReachedBack(page, 300));
+    CHECK(FeedReachedBack(page, 301));
+    CHECK(FeedReachedBack({}, 0));
+}
+
+TEST_CASE("/rv/updates lists the songs with newer versions, by artist and title") {
+    LocalSongs local;
+    local.records["f1"] = Rec("x_f1", "old", "");
+    local.records["f2"] = Rec("x_f2", "same", "");
+    local.records["f3"] = Rec("x_f3", "old", "new");
+    local.records["f4"] = Rec("x_f4", "old", "");
+    Song a = Upload("f1", "new");
+    a.artist = "beta";
+    Song c = Upload("f3", "new");
+    c.artist = "Alpha";
+    NoteLatest(local.records, {a, Upload("f2", "same"), c});
+    local.files = {{"x_f1", 1}, {"x_f3", 1}};
+    local.game_ids = std::set<int32_t>{};
+    const auto json =
+        band3::json::Parse(FormatUpdates(local, {true, 1791300000, "the site answered 500"}));
+    REQUIRE(json);
+    CHECK((*json)["checking"].Bool() == true);
+    CHECK((*json)["checked"].Number() == 1791300000);
+    CHECK((*json)["error"].Text() == "the site answered 500");
+    CHECK((*json)["downloads"].Number() == 4);
+    const auto& updates = (*json)["updates"].Items();
+    REQUIRE(updates.size() == 2);
+    CHECK(updates[0]["file_id"].Text() == "f3");
+    CHECK(updates[0]["update"].Text() == "pending");
+    CHECK(updates[1]["file_id"].Text() == "f1");
+    CHECK(updates[1]["update"].Text() == "available");
+    CHECK(updates[1]["downloaded"].Bool() == true);
+    CHECK(updates[1]["download"].Bool() == true);
+    CHECK(updates[1]["title"].Text() == "Title f1");
+
+    const auto none = band3::json::Parse(FormatUpdates({}, {}));
+    REQUIRE(none);
+    CHECK((*none)["checking"].Bool(true) == false);
+    CHECK((*none)["checked"].Number() == 0);
+    CHECK((*none)["updates"].Items().empty());
 }
