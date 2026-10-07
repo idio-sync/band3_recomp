@@ -122,6 +122,10 @@ constexpr uint32_t kMaxInstances = 10000;
 constexpr uint32_t kPart_Active = 0x100;
 constexpr uint32_t kPart_NumActive = 0x104;
 constexpr uint32_t kPart_Mat = 0x1d4 + 8;  // ObjPtr<RndMat>
+// mRelativeXfm (a Transform), which DxParticleSys::DrawShowing draws the
+// particles through (SetTransform: VS c92..c94); DrawShowing's this is the
+// drawable, 0xCC in, so retail reads it at +0x118 there
+constexpr uint32_t kPart_RelativeXfm = 0x1e4;
 constexpr uint32_t kParticle_Color = 0x0;
 constexpr uint32_t kParticle_Pos = 0x20;
 constexpr uint32_t kParticle_Size = 0x48;
@@ -1768,7 +1772,8 @@ void CaptureParticles(uint8_t* base, uint32_t sys) {
     // before DrawParticles draws: the camera's axes as it transforms them,
     // scaled by half, the up axis by a float of the system's too (+0x2c0),
     // so c48 is 0.15..0.5 long where c47 is 0.5 in the draws seen. The
-    // camera's halved without a device.
+    // camera's halved without a device (in world space: right only for a
+    // system whose mRelativeXfm is the identity).
     const Mat4 cam = ReadXfm(g, s.cam + kTrans_WorldXfm);
     float right[3], up[3];
     for (int i = 0; i < 3; i++) {
@@ -1814,6 +1819,12 @@ void CaptureParticles(uint8_t* base, uint32_t sys) {
     if (geom->indices.empty()) return;
     sink->fc.particles += n;
     DrawItem item = MakeItem(g, s, *sink, mat, sys, std::move(geom));
+    // the particles' positions, and c47 and c48 (the camera's axes through
+    // its inverse), are in the space of mRelativeXfm, which the VS takes them
+    // out of: a system that moves relative to its parent (the track's) has
+    // one that isn't the identity, and drawn without it its quads turn edge
+    // on to the camera and stretch across the screen
+    item.world = ReadXfm(g, sys + kPart_RelativeXfm);
     item.prelit = true;  // the particle colour is the vertex colour
     PushDraw(s, *sink, std::move(item));
 }
