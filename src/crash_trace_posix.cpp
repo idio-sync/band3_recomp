@@ -12,9 +12,10 @@
 // runtime is set up. The SDK then takes SIGSEGV and SIGILL for the guest's
 // MMIO and GPU write watches, and doesn't hand on a fault its handlers pass
 // by, so after that a fault reaches band3 as the last of the SDK's handlers
-// (OnSdkException, from WatchGuestFaults). Only the main thread has an
-// alternate signal stack, so a stack overflow on another thread ends band3
-// without a report.
+// (OnSdkException, from WatchGuestFaults). A stack overflow leaves no stack
+// to run a handler on, so the main thread has an alternate one, which
+// WatchGuestFaults has the SDK's handlers use too; the SDK's threads have
+// none, so a stack overflow on one of them ends band3 without a report.
 
 #ifndef _WIN32
 
@@ -23,6 +24,7 @@
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <link.h>
+#include <pthread.h>
 #include <signal.h>
 #include <sys/syscall.h>
 #include <time.h>
@@ -204,10 +206,28 @@ void DumpStack(const std::string& why, uintptr_t from = 0) {
     if (auto logger = rex::GetLogger()) logger->flush();
 }
 
+// whether a fault at `address` is this thread running off the end of its
+// stack: in the guard pages below it, or its last pages
+bool StackOverflow(uintptr_t address) {
+    pthread_attr_t attr;
+    if (pthread_getattr_np(pthread_self(), &attr) != 0) return false;
+    void* low = nullptr;
+    size_t size = 0;
+    pthread_attr_getstack(&attr, &low, &size);
+    pthread_attr_destroy(&attr);
+    constexpr uintptr_t kSlack = 64 * 1024;
+    const uintptr_t bottom = reinterpret_cast<uintptr_t>(low);
+    return address + kSlack >= bottom && address < bottom + kSlack;
+}
+
 std::string DescribeSignal(int sig, const siginfo_t* info) {
     std::string text;
     switch (sig) {
-        case SIGSEGV: text = "segmentation fault (SIGSEGV)"; break;
+        case SIGSEGV:
+            text = info && StackOverflow(reinterpret_cast<uintptr_t>(info->si_addr))
+                       ? "stack overflow (SIGSEGV)"
+                       : "segmentation fault (SIGSEGV)";
+            break;
         case SIGBUS: text = "bus error (SIGBUS)"; break;
         case SIGILL: text = "illegal instruction (SIGILL)"; break;
         case SIGFPE: text = "arithmetic error (SIGFPE)"; break;
@@ -304,7 +324,8 @@ bool OnSdkException(rex::arch::Exception* ex, void*) {
     }
     char why[96];
     if (access) {
-        std::snprintf(why, sizeof(why), "segmentation fault (SIGSEGV), %s 0x%016llX", op,
+        std::snprintf(why, sizeof(why), "%s (SIGSEGV), %s 0x%016llX",
+                      StackOverflow(fault) ? "stack overflow" : "segmentation fault", op,
                       static_cast<unsigned long long>(fault));
     } else {
         std::snprintf(why, sizeof(why), "illegal instruction (SIGILL)");
@@ -323,8 +344,23 @@ int Recurse(int depth) {
     return depth > 0 ? Recurse(depth + 1) + frame[0] : 0;
 }
 
-// the main thread's alternate signal stack, for its stack overflow
-alignas(16) char g_signal_stack[64 * 1024];
+// the main thread's alternate signal stack, for its stack overflow: room for
+// the SDK's handler and the report, which formats and logs
+alignas(16) char g_signal_stack[256 * 1024];
+
+// The SDK's SIGSEGV, SIGBUS and SIGILL handlers on the alternate stack, where
+// a thread has one, as band3's are: the SDK installs them without, so a stack
+// overflow killed band3 with no handler run.
+void SdkHandlersOnAlternateStack() {
+    for (int sig : {SIGSEGV, SIGBUS, SIGILL}) {
+        struct sigaction action{};
+        if (sigaction(sig, nullptr, &action) != 0) continue;
+        if (action.sa_handler == SIG_DFL || action.sa_handler == SIG_IGN) continue;
+        if (action.sa_flags & SA_ONSTACK) continue;
+        action.sa_flags |= SA_ONSTACK;
+        sigaction(sig, &action, nullptr);
+    }
+}
 
 struct Install {
     Install() {
@@ -346,7 +382,10 @@ struct Install {
 
 namespace band3::crash_trace {
 
-void WatchGuestFaults() { rex::arch::ExceptionHandler::Install(OnSdkException, nullptr); }
+void WatchGuestFaults() {
+    rex::arch::ExceptionHandler::Install(OnSdkException, nullptr);
+    SdkHandlersOnAlternateStack();
+}
 
 void RunCrashTest() {
     const char* test = std::getenv("BAND3_CRASH_TEST");

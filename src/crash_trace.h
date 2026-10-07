@@ -29,8 +29,10 @@ void SetIndexedDrawNamer(std::string (*namer)(uint32_t before, uint32_t total));
 // functions it happened in (on Windows each frame's guest address, from the
 // recompiled function it's in; elsewhere the host frames), innermost first.
 // After the runtime's setup, so the SDK's own handlers (MMIO, GPU write
-// watches) come first; on Windows it also puts the crash trace's unhandled
-// exception filter back ahead of any the SDK set up.
+// watches) come first. On Windows it also puts the crash trace's unhandled
+// exception filter back ahead of any the SDK set up; elsewhere it has the
+// SDK's signal handlers run on the alternate signal stack, for a stack
+// overflow.
 void WatchGuestFaults();
 
 // If the last run ended in a crash (a fatal exception or signal, abort() or
