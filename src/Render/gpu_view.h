@@ -130,12 +130,13 @@ struct GpuStats {
     bool shows_kept = false;
     uint32_t world_draws = 0;
     // native_world_ahead: on a world frame, the worker's milliseconds drawing
-    // its world ahead (RenderWorldAhead, not in ms); on a post frame, whether
-    // it post-processed that scene (1), and the world's texture passes it
-    // drew itself all the same, the world ahead not having drawn their
-    // targets (0 expected)
+    // its world ahead (RenderWorldAhead, not in ms), or that it didn't, as it
+    // skipped more captures than not (gated: present_model.h's
+    // AheadChooser); on a post frame, whether it post-processed that scene
+    // (1), and the world's texture passes it drew itself all the same, the
+    // world ahead not having drawn their targets (0 expected)
     double ahead_ms = 0;
-    uint32_t ahead_used = 0, ahead_fallback_passes = 0;
+    uint32_t ahead_gated = 0, ahead_used = 0, ahead_fallback_passes = 0;
     // meshes sent from the CPU this frame into its pool (new, or not drawn
     // the frame before), moved from the last frame's pool into the arena on
     // the GPU, and sent from the CPU into the arena (rebuilt: arena_rebuilt);

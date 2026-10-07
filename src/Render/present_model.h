@@ -253,6 +253,69 @@ class PublishPacer {
     int64_t interval_ns_ = 16666667;  // 60 Hz until measured
 };
 
+// Whether native_world_ahead draws the world ahead now. It helps while the
+// GPU keeps up and while it's far behind, but between, where post frames
+// drawn with it still run about a frame's time, it feeds itself: one too
+// slow skips the next world frame's capture, so the world it drew ahead is
+// wasted and the post frame after has none and draws the whole world, too
+// slow again (with it off a skip costs nothing more). Which it is depends on
+// the GPU's state, which changes as other programs use it, so the worker
+// measures: the captures skipped per capture over windows of kWindowNs,
+// with it on and with it off, each kept as a running mean of its windows in a
+// row, and the next window has the one that skips fewer (on where they're
+// within kMargin: it shows frames sooner). Every kProbeEvery-th window tries
+// the other, whose mean that window then is, so a change in the GPU's state
+// is seen at the next probe. On until it has measured both. Not thread-safe:
+// the worker's alone.
+class AheadChooser {
+ public:
+    static constexpr int64_t kWindowNs = 2000000000;
+    static constexpr uint32_t kProbeEvery = 8;
+    static constexpr double kMargin = 0.01;
+
+    // whether the next world frame's world is drawn ahead
+    bool On() const { return on_; }
+    // a capture drawn at `now_ns` (steady-clock nanoseconds), `skipped`
+    // captures after the one drawn before it
+    void Drawn(int64_t now_ns, uint64_t skipped) {
+        if (!started_) {
+            started_ = true;
+            start_ns_ = now_ns;
+        }
+        drawn_++;
+        skipped_ += skipped;
+        if (now_ns - start_ns_ < kWindowNs) return;
+        const double rate = double(skipped_) / double(drawn_ + skipped_);
+        Mean& m = on_ ? on_mean_ : off_mean_;
+        m.rate = m.seen && !probing_ ? (m.rate + rate) / 2 : rate;
+        m.seen = true;
+        start_ns_ = now_ns;
+        drawn_ = skipped_ = 0;
+        windows_++;
+        bool best = true;
+        if (on_mean_.seen && off_mean_.seen) best = on_mean_.rate <= off_mean_.rate + kMargin;
+        else if (on_mean_.seen) best = false;  // off measured next
+        probing_ = windows_ % kProbeEvery == 0;
+        on_ = probing_ ? !best : best;
+    }
+    // what it measured is no longer the case: the setting turned on again,
+    // or presenting started over
+    void Reset() { *this = AheadChooser{}; }
+
+ private:
+    struct Mean {
+        double rate = 0;
+        bool seen = false;
+    };
+    bool on_ = true;
+    bool probing_ = false;  // this window tries the one that skips more
+    bool started_ = false;
+    int64_t start_ns_ = 0;
+    uint64_t drawn_ = 0, skipped_ = 0;
+    uint64_t windows_ = 0;
+    Mean on_mean_, off_mean_;
+};
+
 // With renderer native each frame the worker publishes asks the window to
 // paint (NativePresentDrawer::Start), which is GPU work no one sees while the
 // window can't be seen: minimized (its client area then 0x0), hidden, or with

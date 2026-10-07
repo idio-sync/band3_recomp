@@ -902,6 +902,7 @@ private:
                       {"shows_kept", double(k.shows_kept)},
                       {"draws", double(g.draws)},
                       {"world_draws", double(g.world_draws)},
+                      {"ahead_gated", double(g.ahead_gated)},
                       {"ahead_used", double(g.ahead_used)},
                       {"ahead_fallback_passes", double(g.ahead_fallback_passes)},
                       {"passes", double(g.passes)},

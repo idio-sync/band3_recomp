@@ -160,6 +160,7 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.ahead_ms += g.ahead_ms;
     sum.ahead_used += g.ahead_used;
     sum.ahead_fallback_passes += g.ahead_fallback_passes;
+    sum.ahead_gated += g.ahead_gated;
     sum.pool_meshes += g.pool_meshes;
     sum.arena_moved += g.arena_moved;
     sum.arena_sent += g.arena_sent;
@@ -670,6 +671,10 @@ class Renderer {
         // stretch pacer_generation
         PublishPacer pacer;
         uint64_t pacer_generation = 0;
+        // whether native_world_ahead draws the world ahead, by what it
+        // measures through a presenting stretch and the window's restores
+        AheadChooser ahead_choice;
+        uint64_t ahead_generation = 0, ahead_resumes = 0;
         // the presenting stretch the last frame was drawn for, and the window's
         // restores by then (SetPaused); and for the one starting, the
         // captures seen while waiting for its first
@@ -878,7 +883,17 @@ class Renderer {
                 }
             }
             const bool new_frame = cap->frame != last_frame;
+            // the captures skipped since the last drawn: while it was drawn
+            const uint64_t skipped =
+                new_frame && last_frame && cap->frame > last_frame ? cap->frame - last_frame - 1 : 0;
             last_frame = cap->frame;
+            if (!o.world_ahead || generation != ahead_generation || resumes != ahead_resumes) {
+                ahead_choice.Reset();
+                ahead_generation = generation;
+                ahead_resumes = resumes;
+            }
+            if (o.world_ahead && presenting && new_frame)
+                ahead_choice.Drawn(Nanoseconds(std::chrono::steady_clock::now()), skipped);
             if (presenting) {
                 drawn_generation = generation;
                 drawn_resumes = resumes;
@@ -985,10 +1000,17 @@ class Renderer {
             // native_world_ahead: a world frame's world drawn now, left to
             // the GPU while this frame waits to be published and the post
             // frame's capture comes. The pacer is told when the frame itself
-            // was done, so its delay doesn't grow by this.
+            // was done, so its delay doesn't grow by this. Not while it
+            // skips more captures than drawing the world on the post frame
+            // does (AheadChooser), counted.
             if (o.world_ahead && d.drew_gpu && KindOf(*cap) == FrameKind::kWorld) {
-                GpuStats ahead;
-                if (GpuRenderer::Get().RenderWorldAhead(*cap, o, ahead)) d.gs.ahead_ms = ahead.ms;
+                if (ahead_choice.On()) {
+                    GpuStats ahead;
+                    if (GpuRenderer::Get().RenderWorldAhead(*cap, o, ahead))
+                        d.gs.ahead_ms = ahead.ms;
+                } else {
+                    d.gs.ahead_gated = 1;
+                }
             }
             const int64_t due = due_of(d, now);
             const int64_t after = Nanoseconds(std::chrono::steady_clock::now());

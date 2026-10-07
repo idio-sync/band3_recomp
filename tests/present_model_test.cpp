@@ -876,3 +876,55 @@ TEST_CASE("which emitters write their packets at each level") {
         }
     }
 }
+
+namespace {
+// one of AheadChooser's windows: a capture drawn a frame apart, `skipped`
+// skipped before every `every`-th, until the window ends; the time after it
+int64_t AheadWindow(AheadChooser& c, int64_t t, uint64_t skipped, int every) {
+    constexpr int64_t kFrame = 16666667;
+    const int64_t end = t + AheadChooser::kWindowNs;
+    for (int n = 0; t < end + kFrame; n++, t += kFrame) c.Drawn(t, n % every == 0 ? skipped : 0);
+    return t;
+}
+}  // namespace
+
+TEST_CASE("the world is drawn ahead while it skips no more captures than not") {
+    AheadChooser c;
+    CHECK(c.On());
+    // on skips none: off is measured once, then it's on, as it skips none either
+    int64_t t = AheadWindow(c, 1, 0, 1);
+    CHECK_FALSE(c.On());
+    t = AheadWindow(c, t, 0, 1);
+    CHECK(c.On());
+    // both the same: on, but for every kProbeEvery-th window, which tries off
+    int offs = 0;
+    for (uint32_t w = 0; w < 2 * AheadChooser::kProbeEvery; w++) {
+        t = AheadWindow(c, t, 0, 1);
+        if (!c.On()) offs++;
+    }
+    CHECK(offs == 2);
+}
+
+TEST_CASE("the world isn't drawn ahead where that skips more captures") {
+    AheadChooser c;
+    // on skips one capture in four, off none
+    int64_t t = AheadWindow(c, 1, 1, 4);
+    REQUIRE_FALSE(c.On());
+    t = AheadWindow(c, t, 0, 1);
+    CHECK_FALSE(c.On());
+    // and it stays off, but for its probes of on, which still skip as much
+    int ons = 0;
+    for (uint32_t w = 0; w < 2 * AheadChooser::kProbeEvery; w++) {
+        t = AheadWindow(c, t, c.On() ? 1 : 0, c.On() ? 4 : 1);
+        if (c.On()) ons++;
+    }
+    CHECK(ons == 2);
+    // the GPU catches up (on skips none): a probe sees it and on comes back
+    for (uint32_t w = 0; w < 2 * AheadChooser::kProbeEvery && !c.On(); w++)
+        t = AheadWindow(c, t, 0, 1);
+    for (int w = 0; w < 3; w++) t = AheadWindow(c, t, 0, 1);
+    CHECK(c.On());
+
+    c.Reset();
+    CHECK(c.On());
+}

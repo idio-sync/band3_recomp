@@ -127,8 +127,14 @@ settings), each described there (`src/settings.cpp`):
   half of the pair. On a 60 Hz laptop in a paused song post frames went from 14 to 8 ms and
   latency fell 4 ms, the picture the same, but the frames shown barely changed there (the
   missing ones were pacing's, not the renderer's); it's meant for 120 Hz, where a post frame
-  over 8.3 ms costs the next. `native_view stats`' `by_kind` has `ahead` (the world frames'
-  milliseconds drawing it), `ahead_used` (post frames that used it) and
+  over 8.3 ms costs the next. Where post frames drawn this way still run about a frame's
+  time it backfires (one too slow skips the next world frame, so the world drawn ahead is
+  wasted and the post frame after draws the whole world, too slow again), so it measures the
+  frames skipped with it and without in 2 s windows, keeps the one that skips fewer, and
+  tries the other every eighth window (`present_model.h`'s `AheadChooser`): in that case
+  it then stays within noise of off, where drawing ahead regardless skipped 18% more frames.
+  `native_view stats`' `by_kind` has `ahead` (the world frames' milliseconds drawing it),
+  `ahead_gated` (world frames it chose not to), `ahead_used` (post frames that used it) and
   `ahead_fallback_passes` (world texture passes a post frame drew itself all the same).
 - `native_query_sample_count`, `native_query_log`, `native_sync_short_wait_us`,
   `native_vblank_free_running`: the sync-only GPU's query answers and pacing.

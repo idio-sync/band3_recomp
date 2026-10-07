@@ -477,10 +477,12 @@ REXCVAR_DEFINE_BOOL(native_world_ahead, false, "Band3/Advanced/Native renderer",
     "Experimental: with RB3's even/odd rendering, draw each world frame's venue on the GPU "
     "right after that frame, without waiting for it, so the post frame after it only "
     "post-processes it and draws the track and HUD. The world's GPU time moves into the world "
-    "frame's half of the pair: on a 60 Hz laptop in a paused song post frames went from 14 to "
-    "8 ms and the picture's latency fell 4 ms, the picture the same. Off by default: it sends "
-    "GPU work it doesn't wait for, as the setup that once hung AMD GPUs did (not seen with this "
-    "one); for trying at 120 Hz");
+    "frame's half of the pair: on a 60 Hz laptop post frames went from 14 to 8 ms and the "
+    "picture's latency fell 3 to 6 ms, the picture the same. Where post frames drawn this way "
+    "still run about a frame's time it skips more frames than without, so it measures both "
+    "every few seconds and keeps the one that skips fewer. Off by default: it sends GPU work it "
+    "doesn't wait for, as the setup that once hung AMD GPUs did (not seen with this one); for "
+    "trying at 120 Hz");
 
 REXCVAR_DEFINE_INT32(native_query_sample_count, 1000, "Band3/Advanced/Native renderer",
     "With renderer native (no emulated GPU), the samples every occlusion query reports as "
