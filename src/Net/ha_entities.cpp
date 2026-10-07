@@ -139,42 +139,6 @@ std::string PcId(std::string_view pc_name) {
     return id;
 }
 
-StageKit ApplyStageKit(StageKit state, uint8_t left, uint8_t right) {
-    switch (right) {
-    case 0x20: state.blue = left; break;
-    case 0x40: state.green = left; break;
-    case 0x60: state.yellow = left; break;
-    case 0x80: state.red = left; break;
-    case 0x01: state.fog = true; break;
-    case 0x02: state.fog = false; break;
-    case 0x03:
-    case 0x04:
-    case 0x05:
-    case 0x06: state.strobe = static_cast<uint8_t>(right - 0x02); break;
-    case 0x07: state.strobe = 0; break;
-    case 0xFF: state = {}; break;
-    default: break;  // not a command the Stage Kit knows
-    }
-    return state;
-}
-
-uint64_t PackStageKit(const StageKit& state) {
-    return uint64_t(state.red) | uint64_t(state.yellow) << 8 | uint64_t(state.green) << 16 |
-           uint64_t(state.blue) << 24 | uint64_t(state.strobe) << 32 |
-           uint64_t(state.fog ? 1 : 0) << 40;
-}
-
-StageKit UnpackStageKit(uint64_t packed) {
-    StageKit state;
-    state.red = static_cast<uint8_t>(packed);
-    state.yellow = static_cast<uint8_t>(packed >> 8);
-    state.green = static_cast<uint8_t>(packed >> 16);
-    state.blue = static_cast<uint8_t>(packed >> 24);
-    state.strobe = static_cast<uint8_t>(packed >> 32);
-    state.fog = ((packed >> 40) & 1) != 0;
-    return state;
-}
-
 std::string StatusTopic(const Options& options) { return StateTopic(Id(options), "status"); }
 
 std::vector<mqtt::Message> Discovery(const Options& options) {

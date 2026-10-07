@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include "mqtt_protocol.h"
+#include "src/Lights/stagekit.h"
 
 // What band3 tells Home Assistant, without a connection: the MQTT discovery
 // configs of its entities, their state topics and what changed since they were
@@ -19,20 +20,11 @@ namespace band3::ha {
 // when the name is empty
 std::string PcId(std::string_view pc_name);
 
-// The Stage Kit's lights: which of each colour's eight LEDs are lit, the
-// strobe's speed and the fog machine.
-struct StageKit {
-    uint8_t red = 0, yellow = 0, green = 0, blue = 0;
-    uint8_t strobe = 0;  // 0 off, 1-4
-    bool fog = false;
-};
-
-// one StageKit::SetState(left, right) command applied, as RB3E's protocol reads
-// it: `right` says what to set and `left` is the colour's LED mask
-StageKit ApplyStageKit(StageKit state, uint8_t left, uint8_t right);
-// in one word, so the game thread can update it with a compare-and-swap
-uint64_t PackStageKit(const StageKit& state);
-StageKit UnpackStageKit(uint64_t packed);
+// the Stage Kit's lights and their commands (src/Lights/stagekit.h)
+using lights::ApplyStageKit;
+using lights::PackStageKit;
+using lights::StageKit;
+using lights::UnpackStageKit;
 
 // what HA is told, already UTF-8 (the caller converts the game's strings)
 struct GameView {
