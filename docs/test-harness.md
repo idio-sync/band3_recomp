@@ -223,6 +223,16 @@ screen. Submenus inside one screen (Play Now, Quickplay) don't change the screen
 song counts as `in_game` until you leave its results, and `state` keeps the last song's
 details after that. Switching `instrument` reconnects it, so press Start to join again.
 
+## Overdrive
+
+band3's `autoplay` never deploys overdrive: an autoplaying player ignores the deploy
+buttons and the tilt. Rock Band 3 Deluxe's own Autoplay modifier does (its bots deploy
+once their meters are half full), and `python tools/overdrive_check.py` turns it on
+through the pause menu, plays a song, captures the moments after the first deploy and
+sets the native renderer's picture of each against the emulated GPU's, for the
+overdrive flames the native renderer once streaked across the venue. Its docstring has
+the launch line and how to load a track theme into the test profile.
+
 ## GPU hangs
 
 `launch` starts band3 with `--dred=true` (Direct3D 12's Device Removed Extended Data;
