@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "src/Render/deferred_decode.h"
+
 // See capture_file.h. Host byte order, same machine only.
 //
 // Version 3 (B3CAP003) is a list of sections, each with its own id, version
@@ -382,6 +384,10 @@ std::shared_ptr<FrameCapture> LoadOld(Reader& r, bool v1) {
 }  // namespace
 
 bool SaveCapture(const std::string& path, const FrameCapture& fc) {
+    // what capture left to decode later, decoded (LatestCapture and
+    // CaptureHeldFrame's have been): a texture's rgba or a mesh's faces
+    // still empty would be saved as none
+    DecodeDeferred(fc);
     std::unordered_map<const Geometry*, uint32_t> geoms;
     std::unordered_map<const Texture*, uint32_t> texs;
     std::vector<const Geometry*> geom_list;

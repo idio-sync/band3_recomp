@@ -11,9 +11,10 @@
 
 // Experimental: the 360 formats the native view's capture (scene_capture.cpp)
 // decodes RB3's meshes and textures from, apart from guest memory so the
-// unit tests can check them: DxMesh's packed vertex, the texture blocks, the
-// tiled layout and the mip chain, and the sampler a texture fetch constant
-// describes.
+// unit tests can check them: DxMesh's packed vertex and index buffers, the
+// texture blocks, the tiled layout and the mip chain (and the bytes of each
+// that capture copies to decode later), and the sampler a texture fetch
+// constant describes.
 
 namespace band3::render::guest_format {
 
@@ -83,6 +84,39 @@ inline Vertex DecodePacked(const uint8_t* p) {
     const uint32_t bi = Be32(p + 32);
     for (int i = 0; i < 4; i++) v.bone[i] = uint8_t(bi >> (8 * i));
     return v;
+}
+
+inline constexpr uint32_t kPackedVertSize = 36;
+
+inline uint16_t Be16(const uint8_t* p) { return uint16_t(p[0] << 8 | p[1]); }
+
+// A DxMesh's vertex buffer (num_verts packed vertices, DecodePacked) and its
+// index buffer (num_indices big-endian u16s, a triangle list) as Geometry,
+// tangents and all: a triangle with a corner past the vertices is left out
+// (whatever the buffers hold past their faces), and a last partial one
+inline void DecodeGeometryBytes(const uint8_t* vb, uint32_t num_verts, const uint8_t* ib,
+                                uint32_t num_indices, Geometry& out) {
+    out.verts.resize(num_verts);
+    for (uint32_t i = 0; i < num_verts; i++) out.verts[i] = DecodePacked(vb + i * kPackedVertSize);
+    out.tangents = true;
+    out.indices.clear();
+    out.indices.reserve(num_indices);
+    for (uint32_t i = 0; i + 2 < num_indices; i += 3) {
+        const uint16_t a = Be16(ib + i * 2), b = Be16(ib + i * 2 + 2), c = Be16(ib + i * 2 + 4);
+        if (a >= num_verts || b >= num_verts || c >= num_verts) continue;
+        out.indices.insert(out.indices.end(), {a, b, c});
+    }
+}
+
+// whether DecodeGeometryBytes would keep a triangle of these, looking no
+// further than the first it keeps (usually the first): what tells a mesh
+// with faces before its geometry is decoded
+inline bool HasKeptFace(uint32_t num_verts, const uint8_t* ib, uint32_t num_indices) {
+    for (uint32_t i = 0; i + 2 < num_indices; i += 3)
+        if (Be16(ib + i * 2) < num_verts && Be16(ib + i * 2 + 2) < num_verts &&
+            Be16(ib + i * 2 + 4) < num_verts)
+            return true;
+    return false;
 }
 
 // a DXT5 alpha block (8 bytes, after its endian swap): 16 values
@@ -385,24 +419,49 @@ inline LevelPlace PlaceLevel(const FetchLayout& l, const FormatInfo& info, uint3
     return p;
 }
 
-// The bytes from the base address that hold the base level, as DecodeLevel
-// reads them (whole rows when linear; tiled, whole 32x32-block tiles, which
+// The bytes from the start of a level's image (p.offset on from its memory's
+// start) that hold a w x h level placed at p, as DecodeLevel reads them
+// (whole rows when linear; tiled, whole 32x32-block tiles, which
 // TiledOffset2D lays out in 4 KB groups: a tile of 1- or 2-byte blocks, 1 or
 // 2 KB, shares its group with the next ones, its rows 16-31 2 KB on, so the
-// last tile's texels reach to its group's end), or 0 for a format not decoded
-inline uint32_t BaseLevelBytes(const uint32_t f[6]) {
-    const FetchLayout l = ReadFetchLayout(f);
-    FormatInfo info;
-    if (!GetFormatInfo(l.format, info)) return 0;
-    const LevelPlace p = PlaceLevel(l, info, 0);
-    const uint32_t blocks_x = p.x_blocks + (l.width + info.block - 1) / info.block;
-    const uint32_t blocks_y = p.y_blocks + (l.height + info.block - 1) / info.block;
+// last tile's texels reach to its group's end)
+inline uint32_t LevelBytes(const FetchLayout& l, const FormatInfo& info, const LevelPlace& p,
+                           uint32_t w, uint32_t h) {
+    const uint32_t blocks_x = p.x_blocks + (w + info.block - 1) / info.block;
+    const uint32_t blocks_y = p.y_blocks + (h + info.block - 1) / info.block;
     if (l.tiled) {
         const uint32_t tiles =
             AlignUp(std::max(p.pitch_blocks, blocks_x), 32) / 32 * (AlignUp(blocks_y, 32) / 32);
         return AlignUp(tiles << (info.bpb_log2 + 7), 512) << 3;
     }
     return p.row_bytes * blocks_y;
+}
+
+// The bytes from the base address that hold the base level, as DecodeLevel
+// reads them (LevelBytes), or 0 for a format not decoded
+inline uint32_t BaseLevelBytes(const uint32_t f[6]) {
+    const FetchLayout l = ReadFetchLayout(f);
+    FormatInfo info;
+    if (!GetFormatInfo(l.format, info)) return 0;
+    return LevelBytes(l, info, PlaceLevel(l, info, 0), l.width, l.height);
+}
+
+// The bytes from the mip address that hold levels 1..mip_max, as
+// DecodeTextureLevels reads them: the furthest any level's image reaches
+// (its offset, then LevelBytes; a packed tail's levels share one), or 0
+// for none or a format not decoded. With BaseLevelBytes, what a texture's
+// texels are copied as to decode later (scene_capture.cpp's CopyForLater).
+inline uint32_t MipChainBytes(const uint32_t f[6]) {
+    const FetchLayout l = ReadFetchLayout(f);
+    FormatInfo info;
+    if (!l.mip_max || !GetFormatInfo(l.format, info)) return 0;
+    uint32_t end = 0;
+    for (uint32_t level = 1; level <= l.mip_max; level++) {
+        const LevelPlace p = PlaceLevel(l, info, level);
+        const uint32_t w = std::max(l.width >> level, 1u), h = std::max(l.height >> level, 1u);
+        end = std::max(end, p.offset + LevelBytes(l, info, p, w, h));
+    }
+    return end;
 }
 
 // DecodeLevel, block by block: every format's way, a texel's address, block

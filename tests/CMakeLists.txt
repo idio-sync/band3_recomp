@@ -47,6 +47,7 @@ add_executable(band3_tests
     shade_model_test.cpp
     soft_raster_test.cpp
     sample_model_test.cpp
+    deferred_decode_test.cpp
     frame_compose_test.cpp
     post_params_test.cpp
     post_model_test.cpp

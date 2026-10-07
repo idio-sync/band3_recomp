@@ -56,6 +56,18 @@ struct Vertex {
     float tan[4];
 };
 
+// A mesh's vertex and index buffers as capture took them, for decoding later
+// (Geometry::deferred): their bytes as guest memory held them, how many
+// vertices and indices DecodeGeometryBytes reads of them, and whether it
+// keeps a face (the game's thread's question, which it can't ask of
+// indices)
+struct DeferredGeometry {
+    std::once_flag once;
+    std::vector<uint8_t> vb, ib;
+    uint32_t num_verts = 0, num_indices = 0;
+    bool faces = false;
+};
+
 struct Geometry {
     std::vector<Vertex> verts;
     std::vector<uint16_t> indices;  // triangle list
@@ -64,6 +76,13 @@ struct Geometry {
     // and in captures from before they were kept, whose normal maps the
     // renderers leave out
     bool tangents = false;
+    // A vertex buffer's mesh (scene_capture.cpp's CaptureGeometry): the
+    // game's thread only copies its buffers' bytes, and verts and indices
+    // are decoded from them once, by whoever takes a capture with it first
+    // (deferred_decode.h), before they hand it on; tangents is set from the
+    // start. Null for every other geometry, and in captures loaded from a
+    // file.
+    std::shared_ptr<DeferredGeometry> deferred;
 };
 
 // Corner k (0..3) of a particle's quad, as RB3's particle VS builds it from
@@ -148,11 +167,15 @@ struct TexSampler {
 };
 static_assert(sizeof(TexSampler) == 16, "TexSampler has no padding");
 
-// A movie's plane as capture took it, for decoding later (Texture::deferred):
-// its base level's bytes as guest memory held them, and its fetch constant
+// A texture as capture took it, for decoding later (Texture::deferred): its
+// base level's bytes as guest memory held them (guest_formats.h's
+// BaseLevelBytes from the base address), its mip chain's (MipChainBytes from
+// the mip address; empty where it has none, or none were there to read), and
+// its fetch constant
 struct DeferredPixels {
     std::once_flag once;
     std::vector<uint8_t> bytes;
+    std::vector<uint8_t> mips;
     uint32_t fetch[6] = {};
 };
 
@@ -175,12 +198,15 @@ struct Texture {
     uint32_t tex_obj = 0;
     uint32_t tex_type = 0;
     uint32_t version = 0;
-    // A movie's plane (scene_capture.cpp's DecodeCached): the CPU writes it
-    // anew for each movie frame, so the game's thread only copies its bytes,
-    // and rgba is decoded from them once, by whoever takes the capture first
-    // (LatestCapture, CaptureHeldFrame), before they hand it on; width,
-    // height and format are set from the start. Null for every other
-    // texture, and in captures loaded from a file.
+    // A texture loaded or written by the CPU (a movie's plane), decoded
+    // where it's first seen or changed (scene_capture.cpp's DecodeCached):
+    // the game's thread only copies its bytes, and rgba and mips are
+    // decoded from them once, by whoever takes a capture with it first
+    // (LatestCapture, CaptureHeldFrame: deferred_decode.h), before they hand
+    // it on; width, height and format are set from the start. Null for one
+    // the game's thread decodes itself (a render target's guest pixels, the
+    // film grain's noise map), one in a format not decoded, and in captures
+    // loaded from a file.
     std::shared_ptr<DeferredPixels> deferred;
 };
 
@@ -714,7 +740,9 @@ struct FrameCapture {
         static constexpr int kHooks = 7;
         uint64_t hook_ns[kHooks] = {};
         uint32_t draws = 0, new_shades = 0, allocs = 0, bones = 0;
-        uint64_t geom_miss_bytes = 0, tex_decode_bytes = 0;
+        // CaptureProfile's bytes: copied to decode later, decoded on the
+        // game's thread
+        uint64_t geom_copy_bytes = 0, tex_copy_bytes = 0, tex_decode_bytes = 0;
         uint64_t game_ns = 0;
     };
     Cost cost;
@@ -766,14 +794,16 @@ struct CaptureProfile {
     enum Step {
         kStepTarget,        // where a draw goes (Target)
         kStepGeomHit,       // a vertex buffer's geometry found in the cache
-        kStepGeomMiss,      // and decoded (bytes: the Geometry's)
+        kStepGeomMiss,      // and its buffers copied to decode later (bytes:
+                            // those)
         kStepGeomMutable,   // a mutable mesh's CPU verts, decoded each draw
         kStepParticleGeom,  // a particle system's quads
         kStepRectGeom,      // a DrawRect's quad
         kStepItem,          // the material's fields, the view-projection
         kStepTexLookup,     // a loaded texture's key hashed and found
-        kStepTexDecode,     // and decoded (bytes: its levels'), or a movie's
-                            // plane copied to decode later (bytes: those)
+        kStepTexDecode,     // and its levels copied to decode later (bytes:
+                            // those), or decoded here (a render target's
+                            // guest pixels, the noise map; bytes: RGBA's)
         kStepTexRt,         // a render target's identity and version
         kStepShadeRead,     // the shade's constants and fetch constants read
         kStepShadeRtsScan,  // its maps bound to render targets looked for
@@ -810,14 +840,22 @@ struct CaptureProfile {
     uint64_t draws = 0;
     uint64_t new_shades = 0;
     uint64_t allocs = 0;
-    uint64_t geom_miss_bytes = 0;
+    // the bytes the game's thread copied out of guest memory to decode later
+    // (Geometry::deferred, Texture::deferred), and the textures' it decoded
+    // itself (RGBA, levels and all: a render target's guest pixels, the
+    // noise map)
+    uint64_t geom_copy_bytes = 0;
+    uint64_t tex_copy_bytes = 0;
     uint64_t tex_decode_bytes = 0;
     uint64_t bones = 0;
-    // movie planes decoded off the game's thread (Texture::deferred), by
-    // whoever took the capture first (the native renderer's worker, a
-    // harness capture), and the microseconds that took them: not the game's
+    // textures and geometry decoded off the game's thread from those copies
+    // (deferred_decode.h), by whoever took a capture with them first (the
+    // native renderer's worker, a harness capture): how many, the
+    // microseconds that took them and the bytes they came to (RGBA, levels
+    // and all; Vertex and index); not the game's
     uint64_t deferred_decodes = 0;
     uint64_t deferred_decode_us = 0;
+    uint64_t deferred_decode_bytes = 0;
     // the caches' sizes now: render targets known, geometry, loaded textures
     // and maps
     uint64_t rts = 0, geoms = 0, texs = 0, map_texs = 0;
@@ -850,14 +888,19 @@ std::shared_ptr<const FrameCapture> CaptureHeldFrame(
     bool* fell_back = nullptr);
 
 // the latest complete frame, composed with the world before it if it drew
-// none (frame_compose.h), or null before the first. Its movie planes
-// (Texture::deferred) are decoded first, on the caller's thread, if no one
-// has yet, as CaptureHeldFrame's are once the game goes on.
+// none (frame_compose.h), or null before the first. Its textures and
+// geometry seen first or changed (Texture::deferred, Geometry::deferred)
+// are decoded first, on the caller's thread, if no one has yet, as
+// CaptureHeldFrame's are once the game goes on.
 std::shared_ptr<const FrameCapture> LatestCapture();
 // and when it was published, at the end of the game's DxRnd::Present: where
-// the native renderer's latency starts
+// the native renderer's latency starts; and, `decode_ms` not null, the
+// milliseconds this call spent decoding
 std::shared_ptr<const FrameCapture> LatestCapture(
-    std::chrono::steady_clock::time_point& published);
+    std::chrono::steady_clock::time_point& published, double* decode_ms = nullptr);
+// the latest frame's number (FrameCapture::frame), 0 before the first, with
+// nothing decoded: for a thread that wants no more of it than that
+uint64_t LatestCaptureFrame();
 
 // A number that moves on with each capture published and each
 // WakeCaptureWaiters, so the native renderer's worker can sleep until there

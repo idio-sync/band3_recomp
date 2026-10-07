@@ -132,6 +132,7 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.rt_missing += g.rt_missing;
     sum.ms += g.ms;
     sum.wait_ms += g.wait_ms;
+    sum.decode_ms += g.decode_ms;
     sum.pre_ms += g.pre_ms;
     sum.plan_ms += g.plan_ms;
     sum.upload_ms += g.upload_ms;
@@ -212,7 +213,8 @@ void AddCost(FrameCapture::Cost& sum, const FrameCapture::Cost& c) {
     sum.new_shades += c.new_shades;
     sum.allocs += c.allocs;
     sum.bones += c.bones;
-    sum.geom_miss_bytes += c.geom_miss_bytes;
+    sum.geom_copy_bytes += c.geom_copy_bytes;
+    sum.tex_copy_bytes += c.tex_copy_bytes;
     sum.tex_decode_bytes += c.tex_decode_bytes;
     sum.game_ns += c.game_ns;
 }
@@ -324,22 +326,24 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
     if (fc.composed)
         std::snprintf(world, sizeof(world), ", world from game frame %llu",
                       static_cast<unsigned long long>(fc.world_frame));
-    char buf[1600];
+    char buf[2048];
     std::snprintf(
         buf, sizeof(buf),
         "native renderer: slow frame %llu (game frame %llu, %s, proc_cmds %u%s): %.1f ms, "
-        "%.1f of it waiting for the GPU; pre %.1f (%u passes), plan %.1f, upload %.1f, record "
-        "%.1f, submit %.1f, evict %.1f ms; %u draws (%u of the world%s), %u texture passes; "
+        "%.1f of it waiting for the GPU; decode %.1f, pre %.1f (%u passes), plan %.1f, upload "
+        "%.1f, record %.1f, submit %.1f, evict %.1f ms; %u draws (%u of the world%s), %u "
+        "texture passes; "
         "sent %u meshes into the pool and %u into the arena (%.2f MB), %u textures (%.2f MB), "
         "%u KB of bones; moved %u meshes to the arena%s; made %u pipelines, %u buffers, %u "
         "textures; let go of %u meshes, %u textures, %u targets' pictures after, and released "
         "%u targets (%.1f MB of targets kept); kept %u meshes and %u textures by the clock, "
         "let %u textures go for room; its capture cost the game's thread %.2f ms "
-        "(%u draws, %u new shades, %u allocations, %u bones, %llu KB of "
-        "geometry and %llu KB of textures decoded) in a %.1f ms game frame; %llu captures "
-        "skipped before it",
+        "(%u draws, %u new shades, %u allocations, %u bones, %llu KB of geometry and %llu KB "
+        "of textures copied to decode later, %llu KB of textures decoded) in a %.1f ms game "
+        "frame; %llu captures skipped before it",
         static_cast<unsigned long long>(fc.frame), static_cast<unsigned long long>(fc.game_frame),
-        FrameKindName(kind), fc.proc_cmds, world, gs.ms, gs.wait_ms, gs.pre_ms, gs.pre_passes,
+        FrameKindName(kind), fc.proc_cmds, world, gs.ms, gs.wait_ms, gs.decode_ms, gs.pre_ms,
+        gs.pre_passes,
         gs.plan_ms, gs.upload_ms, gs.record_ms, gs.submit_ms, gs.evict_ms, gs.draws,
         gs.world_draws, gs.shows_kept ? ", the kept post buffer shown" : "", gs.passes,
         gs.pool_meshes, gs.arena_sent, gs.mesh_bytes / 1048576.0, gs.textures_sent,
@@ -349,7 +353,8 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         gs.rts_released, gs.rts_mb, gs.meshes_by_time, gs.textures_by_time,
         gs.textures_pressured, hooks_ns / 1e6, fc.cost.draws, fc.cost.new_shades,
         fc.cost.allocs, fc.cost.bones,
-        static_cast<unsigned long long>(fc.cost.geom_miss_bytes >> 10),
+        static_cast<unsigned long long>(fc.cost.geom_copy_bytes >> 10),
+        static_cast<unsigned long long>(fc.cost.tex_copy_bytes >> 10),
         static_cast<unsigned long long>(fc.cost.tex_decode_bytes >> 10), fc.cost.game_ns / 1e6,
         static_cast<unsigned long long>(skipped));
     return buf + DescribePlan(gs, cam) + DescribeGpuTimes(gs);
@@ -515,8 +520,7 @@ class Renderer {
     // is (PresentSlots::Resume); and that first one is a whole picture, as a
     // stretch's first is (Run: the kept post buffer is from before the pause).
     void SetPaused(bool paused) {
-        auto cap = LatestCapture();
-        const uint64_t frame = cap ? cap->frame : 0;
+        const uint64_t frame = LatestCaptureFrame();
         const int64_t now = Nanoseconds(std::chrono::steady_clock::now());
         double last_ms = 0;
         uint64_t last_captures = 0;
@@ -599,18 +603,19 @@ class Renderer {
     // the live view's numbers start over, from the next frame captured, and
     // are kept while `measure`; the window alone keeps none
     void ResetLiveStats(bool measure) {
-        auto cap = LatestCapture();
+        const uint64_t frame = LatestCaptureFrame();
         std::lock_guard lock(mutex_);
         live_measuring_ = measure;
         live_ = LiveViewStats{};
-        live_base_ = live_last_ = cap ? cap->frame : 0;
+        live_base_ = live_last_ = frame;
         live_last_kind_ = -1;
         live_drew_gpu_.reset();
         pause_.Restart(Nanoseconds(std::chrono::steady_clock::now()), live_base_);
     }
 
     LiveViewStats LiveStats() {
-        auto cap = LatestCapture();
+        // (only its number: what it has to decode is the worker's to)
+        const uint64_t frame = LatestCaptureFrame();
         std::lock_guard lock(mutex_);
         LiveViewStats s = live_;
         s.gpu = live_drew_gpu_.value_or(gpu_);
@@ -618,11 +623,11 @@ class Renderer {
         s.height = present_ ? present_h_ : options_.height;
         s.post = options_.post;
         // capturing stops with the last user, and the frame number with it
-        if (users_ > 0 && cap && cap->frame > live_base_) s.captured = cap->frame - live_base_;
+        if (users_ > 0 && frame > live_base_) s.captured = frame - live_base_;
         else s.captured = live_last_ - live_base_;
         s.paused = pause_.Paused();
         s.paused_ms = pause_.Ms(Nanoseconds(std::chrono::steady_clock::now()));
-        s.paused_captures = pause_.Captures(cap ? cap->frame : 0);
+        s.paused_captures = pause_.Captures(frame);
         return s;
     }
 
@@ -714,6 +719,9 @@ class Renderer {
         uint64_t drawn_generation = 0, start_generation = 0, start_seen = 0;
         uint64_t drawn_resumes = 0, start_resumes = 0;
         uint32_t start_waited = 0;
+        // the milliseconds LatestCapture spent decoding since the last frame
+        // was drawn (GpuStats::decode_ms)
+        double decode_pending_ms = 0;
         gpu_held_ = false;
         // The zero-copy path's frame submitted and not yet published, which
         // the GPU may still be drawing. One at most: with
@@ -823,7 +831,11 @@ class Renderer {
             // wait, below)
             const uint64_t seen = CaptureEpoch();
             std::chrono::steady_clock::time_point presented;
-            auto cap = LatestCapture(presented);
+            // (and what the game's thread left it to decode, decoded: the
+            // next frame drawn's time, decode_ms)
+            double decode_ms = 0;
+            auto cap = LatestCapture(presented, &decode_ms);
+            decode_pending_ms += decode_ms;
             bool fresh = true;
             if (cap && presenting) {
                 std::lock_guard lock(mutex_);
@@ -900,6 +912,8 @@ class Renderer {
                     return stop_ || !present_ || !pause_.Paused() || image_wanted_;
                 });
                 epoch = CaptureEpoch();
+                // (a decode meanwhile is no frame's)
+                decode_pending_ms = 0;
                 continue;
             }
             if (!work) {
@@ -948,6 +962,7 @@ class Renderer {
                     }
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                decode_pending_ms = 0;
                 continue;
             }
             stall_watch::SetWorker(stall_watch::Worker::kRecording);
@@ -996,6 +1011,13 @@ class Renderer {
                 d.rs = Rasterize(*cap, o, rgba);
                 d.want_rgba = true;
             }
+            // the capture's decode before it is the frame's time too: at first
+            // sight of a song's or a shot's content, what the game's thread
+            // no longer decodes
+            d.gs.decode_ms = decode_pending_ms;
+            if (d.drew_gpu) d.gs.ms += decode_pending_ms;
+            else d.rs.ms += decode_pending_ms;
+            decode_pending_ms = 0;
             if (flight && slot >= 0 && !d.drew_output) {
                 // the GPU failed, and gpu_view let its device go, the frame
                 // before's output with it: nobody's

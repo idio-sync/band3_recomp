@@ -29,6 +29,7 @@
 #include "generated/band3_init.h"
 #include "src/Hooks/aspect.h"
 #include "src/Hooks/frame_pacing.h"
+#include "src/Render/deferred_decode.h"
 #include "src/Render/frame_compose.h"
 #include "src/Render/gpu_skip.h"
 #include "src/Render/guest_formats.h"
@@ -89,7 +90,8 @@ constexpr uint32_t kMaxBones = 256;
 // RndMesh::Vert, the CPU copy that mutable meshes keep
 constexpr uint32_t kVert_Size = 0x60;
 // CompressedVertex_Xbox, what DxMesh::OnSync fills the vertex buffer with
-constexpr uint32_t kPackedVert_Size = 36;
+// (guest_formats.h's DecodePacked)
+constexpr uint32_t kPackedVert_Size = guest_format::kPackedVertSize;
 // RndMat (rndobj/BaseMaterial.h)
 constexpr uint32_t kMat_Blend = 0x28;
 constexpr uint32_t kMat_Color = 0x2c;
@@ -294,11 +296,6 @@ uint32_t Be32(const uint8_t* p) {
     std::memcpy(&v, p, 4);
     return __builtin_bswap32(v);
 }
-uint16_t Be16(const uint8_t* p) {
-    uint16_t v;
-    std::memcpy(&v, p, 2);
-    return __builtin_bswap16(v);
-}
 float BeF32(const uint8_t* p) {
     const uint32_t u = Be32(p);
     float f;
@@ -365,9 +362,6 @@ Mat4 ReadMatrix4(const Guest& g, uint32_t a) {
         for (int c = 0; c < 4; c++) r.m[row][c] = g.F32(a + (row * 4 + c) * 4);
     return r;
 }
-
-// DxMesh's packed vertex (guest_formats.h)
-using guest_format::DecodePacked;
 
 // FNV-style mixing in four lanes, 32 bytes a round, which don't wait on each
 // other's multiplies, so the CPU runs them side by side (about four times as
@@ -791,22 +785,21 @@ std::shared_ptr<const Geometry> CaptureGeometry(const Guest& g, uint32_t geom,
             Lap(S(), CaptureProfile::kStepGeomHit);
             return it->second.geom;
         }
+        // the buffers' bytes copied, decoded off this thread (deferred_decode.h):
+        // a song's or a shot's first frame decoding its meshes here cost the
+        // game's thread up to 16 MB of Vertex, several milliseconds
         auto out = std::make_shared<Geometry>();
         S().profile.allocs++;
-        out->verts.resize(num_verts);
-        for (uint32_t i = 0; i < num_verts; i++)
-            out->verts[i] = DecodePacked(vsrc + i * kPackedVert_Size);
         out->tangents = true;
-        out->indices.reserve(num_indices);
-        for (uint32_t i = 0; i + 2 < num_indices; i += 3) {
-            const uint16_t a = Be16(isrc + i * 2), b = Be16(isrc + i * 2 + 2),
-                           c = Be16(isrc + i * 2 + 4);
-            if (a >= num_verts || b >= num_verts || c >= num_verts) continue;
-            out->indices.insert(out->indices.end(), {a, b, c});
-        }
+        auto d = std::make_shared<DeferredGeometry>();
+        d->num_verts = num_verts;
+        d->num_indices = num_indices;
+        d->vb.assign(vsrc, vsrc + size_t(num_verts) * kPackedVert_Size);
+        d->ib.assign(isrc, isrc + size_t(num_indices) * 2);
+        d->faces = guest_format::HasKeptFace(num_verts, isrc, num_indices);
+        S().profile.geom_copy_bytes += d->vb.size() + d->ib.size();
+        out->deferred = std::move(d);
         S().geoms[geom] = GeomEntry{key, out};
-        S().profile.geom_miss_bytes +=
-            out->verts.size() * sizeof(Vertex) + out->indices.size() * sizeof(uint16_t);
         Lap(S(), CaptureProfile::kStepGeomMiss);
         return out;
     }
@@ -848,25 +841,43 @@ std::shared_ptr<const Geometry> CaptureGeometry(const Guest& g, uint32_t geom,
 constexpr uint32_t kFetchTexelBits[6] = {0xFFC00000u, 0xFFFFFFFFu, 0xFFFFFFFFu,
                                          0x00001FFEu, 0x000003FCu, 0xFFFFFE00u};
 
-// the deferred decodes done (CaptureProfile::deferred_decodes), on any thread
-std::atomic<uint64_t> g_deferred_decodes{0}, g_deferred_decode_ns{0};
+// deferred_decode.h decodes what CopyForLater keeps with DecodeTextureLevels'
+// own limit
+static_assert(kMaxTextureSize <= 4096, "deferred textures decode at up to 4096 texels a side");
 
-// A movie's plane with its base level's bytes copied as guest memory holds
-// them now, for DecodeDeferred to decode later (Texture::deferred), or null
-// where DecodeTexture wouldn't decode it or it has mips (a plane has none)
-std::shared_ptr<Texture> CopyForLater(const uint8_t* src, const uint32_t f[6]) {
+// `n` bytes of guest memory from `src` (`address`, a fetch constant's base or
+// mip address) into `out`, as far as guest memory goes (its 512 MB of
+// physical memory, or the 4 GB of addresses whose views of it RB3's are),
+// zeros after: what DecodeTextureLevels would read there in place
+void CopyGuestBytes(const uint8_t* src, uint32_t address, uint32_t n, std::vector<uint8_t>& out) {
+    const uint64_t left = address >= 0xA0000000u ? (uint64_t(1) << 32) - address
+                                                 : 0x20000000u - (address & 0x1FFFFFFFu);
+    const size_t copied = size_t(std::min<uint64_t>(n, left));
+    out.assign(src, src + copied);
+    out.resize(n, 0);
+}
+
+// A texture with its base level's and its mip chain's bytes copied as guest
+// memory holds them now (guest_formats.h's BaseLevelBytes, MipChainBytes),
+// for DecodeDeferred to decode later (Texture::deferred), or null where
+// DecodeTexture wouldn't decode it. Its mips are copied where DecodeTexture
+// would read them (a mip address and levels under it, there in memory).
+std::shared_ptr<Texture> CopyForLater(const Guest& g, const uint8_t* src, const uint32_t f[6]) {
     const guest_format::FetchLayout l = guest_format::ReadFetchLayout(f);
     guest_format::FormatInfo info{};
     const uint32_t bytes = guest_format::BaseLevelBytes(f);
     if (!src || !bytes || l.dimension != 1 || !guest_format::GetFormatInfo(l.format, info) ||
-        l.width > kMaxTextureSize || l.height > kMaxTextureSize || (l.mip_address && l.mip_max))
+        l.width > kMaxTextureSize || l.height > kMaxTextureSize)
         return nullptr;
     auto tex = std::make_shared<Texture>();
     tex->width = l.width;
     tex->height = l.height;
     tex->format = l.format;
     auto d = std::make_shared<DeferredPixels>();
-    d->bytes.assign(src, src + bytes);
+    CopyGuestBytes(src, l.base_address, bytes, d->bytes);
+    if (l.mip_address && l.mip_max)
+        if (const uint8_t* mips = GpuHost(g, l.mip_address))
+            CopyGuestBytes(mips, l.mip_address, guest_format::MipChainBytes(f), d->mips);
     std::copy(f, f + 6, d->fetch);
     tex->deferred = std::move(d);
     return tex;
@@ -879,11 +890,13 @@ std::shared_ptr<Texture> CopyForLater(const uint8_t* src, const uint32_t f[6]) {
 // rows are often the same black from one frame to the next. Not every
 // texture: hashing each of 256 KB or less whole cost the capture 5-11 ms a
 // frame in the music library (30 MB: each draw's), a movie's planes cost it
-// 0.07 ms there (384 KB; 1.4 MB at 1280x720). With `defer` too, a changed
-// plane's bytes are only copied (CopyForLater), and decoded off the game's
-// thread: decoding a video venue's 1280x720 planes here cost the game's
-// thread 5-6 ms a frame. Empty rgba if its format isn't decoded, but for a
-// deferred one, whose rgba the game's thread mustn't read (HasPixels).
+// 0.07 ms there (384 KB; 1.4 MB at 1280x720). With `defer`, a new or changed
+// texture's bytes are only copied (CopyForLater), and decoded off the game's
+// thread (deferred_decode.h): decoding a video venue's 1280x720 planes here
+// cost the game's thread 5-6 ms a frame, and a song's or a shot's first
+// frame's textures 22-47 MB of RGBA, 30-60 ms. Empty rgba if its format
+// isn't decoded, but for a deferred one, whose rgba the game's thread
+// mustn't read (HasPixels).
 std::shared_ptr<const Texture> DecodeCached(const Guest& g, const uint32_t f[6], uint32_t where,
                                             std::unordered_map<uint32_t, TexEntry>& cache,
                                             FrameCapture& fc, bool whole = false,
@@ -907,63 +920,29 @@ std::shared_ptr<const Texture> DecodeCached(const Guest& g, const uint32_t f[6],
         return it->second.tex;
     }
     Lap(s, CaptureProfile::kStepTexLookup);
-    std::shared_ptr<const Texture> tex = whole && defer ? CopyForLater(src, f) : nullptr;
-    uint64_t bytes = 0;
+    std::shared_ptr<const Texture> tex = defer ? CopyForLater(g, src, f) : nullptr;
     if (tex) {
-        bytes = tex->deferred->bytes.size();
+        s.profile.tex_copy_bytes += tex->deferred->bytes.size() + tex->deferred->mips.size();
     } else {
         tex = DecodeTexture(g, f);
-        bytes = tex->rgba.size() * 4;
+        uint64_t bytes = tex->rgba.size() * 4;
         for (const auto& level : tex->mips) bytes += level.size() * 4;
+        s.profile.tex_decode_bytes += bytes;
     }
     cache[where] = TexEntry{key, tex};
     s.profile.allocs++;
-    s.profile.tex_decode_bytes += bytes;
     Lap(s, CaptureProfile::kStepTexDecode);
     return tex;
 }
 
-// a deferred texture's rgba decoded from the bytes copied, once, whichever
-// thread asks first; the others wait for it. Only rgba (and mips, which a
-// plane has none of) is written: the game's thread may be reading the rest.
-// The same decode as DecodeTexture's, from the same bytes.
-void DecodeDeferred(const Texture& t) {
-    DeferredPixels& d = *t.deferred;
-    std::call_once(d.once, [&] {
-        const auto start = std::chrono::steady_clock::now();
-        Texture decoded;
-        if (guest_format::DecodeTextureLevels(d.bytes.data(), nullptr, d.fetch, decoded,
-                                              kMaxTextureSize)) {
-            auto& out = const_cast<Texture&>(t);
-            out.rgba = std::move(decoded.rgba);
-            out.mips = std::move(decoded.mips);
-        }
-        d.bytes = {};
-        g_deferred_decodes.fetch_add(1, std::memory_order_relaxed);
-        g_deferred_decode_ns.fetch_add(
-            uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         std::chrono::steady_clock::now() - start)
-                         .count()),
-            std::memory_order_relaxed);
-    });
-}
-
-// every deferred texture a frame draws with decoded, before it's handed on:
-// its draws' and its shades' (a pass carried in from an earlier frame, or a
-// composed frame's world, brings its own along, perhaps never decoded if no
-// one took that frame)
-void DecodeDeferred(const FrameCapture& fc) {
-    for (const DrawItem& d : fc.draws)
-        if (d.tex && d.tex->deferred) DecodeDeferred(*d.tex);
-    for (const ShadeState& st : fc.shades)
-        for (const auto& m : st.maps)
-            if (m && m->deferred) DecodeDeferred(*m);
-}
-
-// whether a texture has pixels to draw, or will have (a movie's plane,
-// decoded later): what the game's thread asks, which never reads a deferred
-// one's rgba, as another thread may be decoding it
+// whether a texture has pixels to draw, or will have (decoded later): what
+// the game's thread asks, which never reads a deferred one's rgba, as
+// another thread may be decoding it
 bool HasPixels(const Texture& t) { return t.deferred || !t.rgba.empty(); }
+
+// whether a mesh's geometry has faces to draw, decoded or not (as
+// HasPixels): what the game's thread asks of geometry it has captured
+bool HasFaces(const Geometry& g) { return g.deferred ? g.deferred->faces : !g.indices.empty(); }
 
 // RndTex::Type's kMovie bit: a movie's plane, which the CPU writes
 constexpr uint32_t kTexTypeMovie = 4;
@@ -977,7 +956,7 @@ std::shared_ptr<const Texture> GuestPixels(const Guest& g, uint32_t tex_obj, Fra
     const uint32_t type = g.U32(tex_obj + kTex_Type);
     const bool movie = (type & kTexTypeMovie) != 0;
     // a render target's pixels are copied on this thread (CaptureTexture), so
-    // decoded here
+    // decoded here; any other's later, off it
     std::shared_ptr<const Texture> tex =
         DecodeCached(g, f, d3d, S().texs, fc, movie, !IsRenderedType(type));
     if (!HasPixels(*tex)) {
@@ -1028,6 +1007,10 @@ std::shared_ptr<const Texture> CaptureTexture(const Guest& g, State& s, Sink& si
     tex->tex_type = type;
     tex->version = version;
     if (pixels) {
+        // (decoded here, as GuestPixels decodes a render target's; one found
+        // deferred in the cache, from another fetch of the same texture, is
+        // decoded now, the worker waiting for it if it's there too)
+        if (pixels->deferred) DecodeDeferred(*pixels);
         tex->width = pixels->width;
         tex->height = pixels->height;
         tex->format = pixels->format;
@@ -1179,8 +1162,9 @@ bool MapSampled(const ShadeInputs& in, int map) {
     }
 }
 
-// a 2D map the device has bound, decoded (and counted), or null for a cube or
-// a format not decoded; `whole` a movie's plane (DecodeCached)
+// a 2D map the device has bound, decoded off this thread (and counted), or
+// null for a cube or a format not decoded; `whole` a movie's plane
+// (DecodeCached)
 std::shared_ptr<const Texture> CaptureMap(const Guest& g, const uint32_t f[6],
                                           FrameCapture& fc, bool whole = false) {
     const uint32_t dimension = (f[5] >> 9) & 3;
@@ -1189,7 +1173,7 @@ std::shared_ptr<const Texture> CaptureMap(const Guest& g, const uint32_t f[6],
         return nullptr;
     }
     std::shared_ptr<const Texture> tex =
-        DecodeCached(g, f, f[1] & 0xfffff000u, S().map_texs, fc, whole, whole);
+        DecodeCached(g, f, f[1] & 0xfffff000u, S().map_texs, fc, whole, true);
     if (!tex || !HasPixels(*tex)) {
         fc.maps_other_format++;
         return nullptr;
@@ -1405,7 +1389,7 @@ bool MeshParts(const Guest& g, FrameCapture& fc, uint32_t mesh, uint32_t& mat,
         return false;
     }
     geometry = CaptureGeometry(g, geom, fc);
-    if (!geometry || geometry->indices.empty()) {
+    if (!geometry || !HasFaces(*geometry)) {
         fc.skipped_no_geom++;
         return false;
     }
@@ -1423,7 +1407,7 @@ void CaptureSpotCone(const Guest& g, State& s, Sink& sink, uint32_t mesh) {
     uint32_t geom = g.U32(mesh + kMesh_GeomOwner);
     if (!geom) geom = mesh;
     std::shared_ptr<const Geometry> geometry = CaptureGeometry(g, geom, fc);
-    if (!geometry || geometry->indices.empty()) {
+    if (!geometry || !HasFaces(*geometry)) {
         fc.skipped_no_geom++;
         return;
     }
@@ -1489,6 +1473,8 @@ std::string VirtualBaseName(const Guest& g, uint32_t obj) {
 void LogNoMaterial(const Guest& g, const State& s, const Sink& sink, const DrawItem& it,
                    const char* kind) {
     const Geometry& geom = *it.geom;
+    // (its verts decoded here, a diagnostic's cost)
+    if (geom.deferred) DecodeDeferred(geom);
     float lo[2] = {1e30f, 1e30f}, hi[2] = {-1e30f, -1e30f};
     uint32_t front = 0, colors = 0;
     for (const Vertex& v : geom.verts) {
@@ -1559,7 +1545,7 @@ void CaptureVelocityObject(const Guest& g, State& s, uint32_t mesh) {
     uint32_t owner = g.U32(mesh + kMesh_GeomOwner);
     if (!owner) owner = mesh;
     std::shared_ptr<const Geometry> geometry = CaptureGeometry(g, owner, fc);
-    if (!geometry || geometry->indices.empty()) return;
+    if (!geometry || !HasFaces(*geometry)) return;
     const uint32_t bones = g.U32(owner + kMesh_BonesBegin);
     const uint32_t bones_end = g.U32(owner + kMesh_BonesEnd);
     const uint32_t n = bones && bones_end > bones ? (bones_end - bones) / kBone_Size : 0;
@@ -1632,7 +1618,7 @@ void EmulateVelocityObjects(const Guest& g, State& s, FrameCapture& fc,
         }
         if (!cached) continue;
         std::shared_ptr<const Geometry> geometry = CaptureGeometry(g, owner, fc);
-        if (!geometry || geometry->indices.empty()) continue;
+        if (!geometry || !HasFaces(*geometry)) continue;
         VelocityObject o;
         o.geom = std::move(geometry);
         o.mesh = m.mesh;
@@ -2384,7 +2370,9 @@ void ReadPostConsts(const Guest& g, PostConsts& pc) {
 // TheShaderMgr + 0x2D says the noise is on: sampler 13's fetch constant, as
 // NgPostProc::CheckNoise bound it (the map, its filter linear and its
 // addressing wrap), and its pixels and mips. A static texture, so decoded
-// once and found in the cache after. Kept for the world frames after it.
+// once and found in the cache after (deferred, if a shade's map found it
+// first: decoded with the frame, deferred_decode.h). Kept for the world
+// frames after it.
 void CaptureNoise(const Guest& g, FrameCapture& fc) {
     const uint32_t dev = g.U32(kD3DDeviceHolder);
     if (!dev) return;
@@ -2409,7 +2397,7 @@ void CaptureNoise(const Guest& g, FrameCapture& fc) {
             sampler.clamp_x = sampler.clamp_y = 0;
         }
     }
-    if (!tex || tex->rgba.empty()) return;
+    if (!tex || !HasPixels(*tex)) return;
     fc.noise_map = tex;
     fc.noise_sampler = sampler;
     State& s = S();
@@ -2635,7 +2623,8 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
     cost.new_shades = uint32_t(s.profile.new_shades - s.cost_mark.new_shades);
     cost.allocs = uint32_t(s.profile.allocs - s.cost_mark.allocs);
     cost.bones = uint32_t(s.profile.bones - s.cost_mark.bones);
-    cost.geom_miss_bytes = s.profile.geom_miss_bytes - s.cost_mark.geom_miss_bytes;
+    cost.geom_copy_bytes = s.profile.geom_copy_bytes - s.cost_mark.geom_copy_bytes;
+    cost.tex_copy_bytes = s.profile.tex_copy_bytes - s.cost_mark.tex_copy_bytes;
     cost.tex_decode_bytes = s.profile.tex_decode_bytes - s.cost_mark.tex_decode_bytes;
     cost.game_ns = s.game_ns;
     s.cost_mark = s.profile;
@@ -2765,31 +2754,37 @@ std::shared_ptr<const FrameCapture> CaptureHeldFrame(const std::function<void()>
         lock.unlock();
     }
     ReleaseCapture();
-    // its movie planes decoded now the game has gone on
+    // its deferred textures and geometry decoded now the game has gone on
     if (got && frame) DecodeDeferred(*frame);
     return got ? frame : nullptr;
 }
 
 std::shared_ptr<const FrameCapture> LatestCapture() {
-    std::shared_ptr<const FrameCapture> latest;
-    {
-        std::lock_guard lock(g_latest_mutex);
-        latest = g_latest;
-    }
-    if (latest) DecodeDeferred(*latest);
-    return latest;
+    std::chrono::steady_clock::time_point published;
+    return LatestCapture(published);
 }
 
 std::shared_ptr<const FrameCapture> LatestCapture(
-    std::chrono::steady_clock::time_point& published) {
+    std::chrono::steady_clock::time_point& published, double* decode_ms) {
     std::shared_ptr<const FrameCapture> latest;
     {
         std::lock_guard lock(g_latest_mutex);
         published = g_latest_published;
         latest = g_latest;
     }
-    if (latest) DecodeDeferred(*latest);
+    if (!latest) return latest;
+    const auto start = std::chrono::steady_clock::now();
+    DecodeDeferred(*latest);
+    if (decode_ms)
+        *decode_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                               start)
+                         .count();
     return latest;
+}
+
+uint64_t LatestCaptureFrame() {
+    std::lock_guard lock(g_latest_mutex);
+    return g_latest ? g_latest->frame : 0;
 }
 
 uint64_t CaptureEpoch() {
@@ -2849,8 +2844,9 @@ CaptureProfile GetCaptureProfile() {
     p.geoms = s.geoms.size();
     p.texs = s.texs.size();
     p.map_texs = s.map_texs.size();
-    p.deferred_decodes = g_deferred_decodes.load(std::memory_order_relaxed);
-    p.deferred_decode_us = g_deferred_decode_ns.load(std::memory_order_relaxed) / 1000;
+    p.deferred_decodes = g_deferred_decode.decodes.load(std::memory_order_relaxed);
+    p.deferred_decode_us = g_deferred_decode.ns.load(std::memory_order_relaxed) / 1000;
+    p.deferred_decode_bytes = g_deferred_decode.bytes.load(std::memory_order_relaxed);
     return p;
 }
 
@@ -2869,11 +2865,13 @@ CaptureProfile CaptureProfileSince(const CaptureProfile& now, const CaptureProfi
     p.draws -= before.draws;
     p.new_shades -= before.new_shades;
     p.allocs -= before.allocs;
-    p.geom_miss_bytes -= before.geom_miss_bytes;
+    p.geom_copy_bytes -= before.geom_copy_bytes;
+    p.tex_copy_bytes -= before.tex_copy_bytes;
     p.tex_decode_bytes -= before.tex_decode_bytes;
     p.bones -= before.bones;
     p.deferred_decodes -= before.deferred_decodes;
     p.deferred_decode_us -= before.deferred_decode_us;
+    p.deferred_decode_bytes -= before.deferred_decode_bytes;
     return p;
 }
 

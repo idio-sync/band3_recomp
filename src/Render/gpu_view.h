@@ -98,6 +98,11 @@ struct GpuStats {
     // after is its caller's to wait out (OutputDone).
     double ms = 0;
     double wait_ms = 0;
+    // The native renderer's worker adds into ms the time it took the capture
+    // decoding what the game's thread left to decode (scene_capture.h's
+    // LatestCapture: textures and meshes seen first), before the frame:
+    // decode_ms
+    double decode_ms = 0;
     // Where a frame's time went and what it had to do, for the native
     // renderer's slow-frame log and its numbers by kind of frame
     // (native_view.cpp). The worker's milliseconds: the world passes before

@@ -847,11 +847,13 @@ private:
             if (p.step_calls[i]) c.steps_ms.emplace_back(P::kStepNames[i], double(p.step_ns[i]) / 1e6);
         c.counts = {{"new_shades", p.new_shades},
                     {"allocs", p.allocs},
-                    {"geom_miss_bytes", p.geom_miss_bytes},
+                    {"geom_copy_bytes", p.geom_copy_bytes},
+                    {"tex_copy_bytes", p.tex_copy_bytes},
                     {"tex_decode_bytes", p.tex_decode_bytes},
                     {"bones", p.bones},
                     {"deferred_decodes", p.deferred_decodes},
-                    {"deferred_decode_us", p.deferred_decode_us}};
+                    {"deferred_decode_us", p.deferred_decode_us},
+                    {"deferred_decode_bytes", p.deferred_decode_bytes}};
         for (int i = 0; i < P::kNumSteps; i++)
             if (p.step_calls[i])
                 c.counts.emplace_back(std::string(P::kStepNames[i]) + "_n", p.step_calls[i]);
@@ -871,7 +873,8 @@ private:
         out.ms = std::move(k.ms);
         out.wait_ms = std::move(k.wait_ms);
         const render::GpuStats& g = k.gpu;
-        out.parts_ms = {{"pre", g.pre_ms},
+        out.parts_ms = {{"decode", g.decode_ms},
+                        {"pre", g.pre_ms},
                         {"plan", g.plan_ms},
                         {"plan_setup", g.plan_setup_ms},
                         {"plan_walk", g.plan_walk_ms},
@@ -957,7 +960,8 @@ private:
                               {"new_shades", double(k.cost.new_shades)},
                               {"allocs", double(k.cost.allocs)},
                               {"bones", double(k.cost.bones)},
-                              {"geom_miss_bytes", double(k.cost.geom_miss_bytes)},
+                              {"geom_copy_bytes", double(k.cost.geom_copy_bytes)},
+                              {"tex_copy_bytes", double(k.cost.tex_copy_bytes)},
                               {"tex_decode_bytes", double(k.cost.tex_decode_bytes)},
                               {"game_ms", double(k.cost.game_ns) / 1e6}};
         out.gpu_timed = k.gpu_timed;

@@ -144,7 +144,12 @@ settings), each described there (`src/settings.cpp`):
 - `native_slow_frame_ms`, `game_stall_log_ms`: log native frames slower than 12 ms and game
   frames slower than 100 ms, with where the time went: for a native frame its planning's
   parts too (the render targets and texture arrays it made, the textures and meshes drawn for
-  the first time) and the camera (`src/Render/camera_cut.h`: whether the frame is at a cut).
+  the first time), its capture's cost to the game's thread and the camera
+  (`src/Render/camera_cut.h`: whether the frame is at a cut). At first sight of a song's or a
+  shot's textures and meshes the game's thread only copies their bytes (a few MB, 2 to 10 ms
+  of a frame's capture), and the worker decodes them before the frame (`decode` in the line,
+  `src/Render/deferred_decode.h`), as the same decoder would have from the same bytes:
+  decoding them where they were drawn cost the game's thread 30 to 70 ms on those frames.
 - `native_gpu_timestamps` (off): times each frame's parts on the GPU with timestamps written
   between them (`src/Render/gpu_timing_model.h`): its upload, the world, the texture passes
   (`pass_shadow`, `pass_spot` for the spotlights' targets, `pass_other` for the rest: outfits,
