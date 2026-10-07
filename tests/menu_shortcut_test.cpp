@@ -196,7 +196,7 @@ TEST_CASE("the Steam Deck presets win over band3_config.ini, even at the cvar's 
 TEST_CASE("the launcher reads the same presets ApplyDefaults sets") {
     using band3::steam_deck::Preset;
     CHECK(Preset("fullscreen") == "true");
-    CHECK(Preset("frame_cap") == "off");
+    CHECK(Preset("frame_cap") == "60");
     CHECK(Preset("rnd_sync") == "1");
     CHECK_FALSE(Preset("lang"));
 }

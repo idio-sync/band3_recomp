@@ -296,7 +296,7 @@ ARK, marked `(ARK)`, with the path its replacement needs.
 ## Steam Deck
 
 On a Steam Deck, band3 starts fullscreen and letterboxed (the game is 16:9, the screen
-16:10), at the console's 60 Hz (`frame_cap` off) with vsync on and the FPS counter off, since Steam's performance overlay does
+16:10), at the console's 60 Hz (`frame_cap` 60) with vsync on and the FPS counter off, since Steam's performance overlay does
 that job. These only fill in settings that `band3.toml` and the command line leave unset,
 but they win over `band3_config.ini`, whose window settings are for a desktop. Turn
 `steam_deck_defaults` off (the Steam Deck banner on the launcher or in the in-game settings, then restart) to go

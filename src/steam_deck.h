@@ -34,9 +34,11 @@ inline constexpr DeckDefault kPresets[] = {
     {"fullscreen", "true"},
     // the 16:9 game on the Deck's 16:10 screen
     {"present_letterbox", "true"},
-    // one frame per refresh saves battery; the refresh rate stays the console's 60,
-    // not the display's (the OLED Deck's 90)
-    {"frame_cap", "off"},
+    // the console's 60, not the display's (the OLED Deck's 90), to save battery.
+    // Capped rather than left to the vertical blank: with the cap off the game's
+    // thread spins in guest D3D's fence poll (BlockOnFence) until each vertical
+    // blank, a whole core; the cap's timer lets it sleep instead
+    {"frame_cap", "60"},
     {"rnd_sync", "1"},
     // Steam's performance overlay does this job on a Deck
     {"debug_overlay", "false"},
