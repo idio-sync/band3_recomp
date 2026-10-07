@@ -1,18 +1,13 @@
-// A texture pass's mips, for the GPU backend (gpu_view.cpp): each level drawn
-// from the one above it in the frame's own command buffer, as SDL_gpu's
-// SDL_GenerateMipmapsForGPUTexture draws them on Direct3D 12 (a blit a level:
-// its full-screen triangle and texture coordinates, and BlitFrom2DArray's
-// SampleLevel of the level above, linear and clamping, at those coordinates),
-// so each level comes out as SDL's did: a 2x2 box where the level above is
-// even, its own taps where it's odd. SDL's own take a sampler outside
-// gpu_view.cpp's kSamplerBatch step, which these, drawn through BeginPass,
-// don't.
+// A texture pass's mips for the GPU backend, drawn in the frame's own command
+// buffer exactly as SDL_GenerateMipmapsForGPUTexture's D3D12 blits draw them.
+// Unlike SDL's, these go through BeginPass, so they don't take a sampler
+// outside gpu_view.cpp's kSamplerBatch step.
 //
 // Registers follow SDL_gpu's layout as post.hlsl's do: pixel resources in
 // space2, pixel uniforms in space3.
 //
-// tools/shaders/build_shaders.py compiles it into mips_shaders.gen.h; run it
-// after changing this file.
+// tools/shaders/build_shaders.py compiles it into mips_shaders.gen.h; rerun
+// it after changing this file.
 
 #ifdef __spirv__
 #define VK_BINDING(n, set) [[vk::binding(n, set)]]
@@ -22,8 +17,7 @@
 #define VK_SAMPLER
 #endif
 
-// t0 the target, every level; the pass draws into one and reads the one
-// above it
+// the target itself; a pass reads the level above the one it draws
 VK_SAMPLER VK_BINDING(0, 2) Texture2DArray<float4> source_tex : register(t0, space2);
 VK_SAMPLER VK_BINDING(0, 2) SamplerState source_sampler : register(s0, space2);
 
@@ -38,8 +32,7 @@ struct MipIn {
     float4 pos : SV_Position;
 };
 
-// SDL's FullscreenVert: one triangle over the whole target, uv 0..1 across
-// it from the top left
+// SDL's FullscreenVert
 MipIn VSMip(uint id : SV_VertexID) {
     const float2 p = float2((id << 1) & 2, id & 2);
     MipIn o;
@@ -48,8 +41,7 @@ MipIn VSMip(uint id : SV_VertexID) {
     return o;
 }
 
-// SDL's BlitFrom2DArray over the whole of the level above (its uv offset 0
-// and scale 1) from layer 0
+// SDL's BlitFrom2DArray, uv offset 0, scale 1, layer 0
 float4 PSMip(MipIn i) : SV_Target0 {
     return source_tex.SampleLevel(source_sampler, float3(i.uv, 0.0), float(level.x));
 }

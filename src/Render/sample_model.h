@@ -7,21 +7,16 @@
 
 #include "src/Render/scene_capture.h"
 
-// Experimental: how the native view reads a material's textures, the way the
-// game's samplers do (scene_capture.h's TexSampler, from the draws' fetch
-// constants): filtered, between mip levels by the LOD of the pixel's
-// footprint, with anisotropy and per-axis addressing. Both backends sample
-// with the same code, src/Render/shaders/sample_model.hlsli, which mesh.hlsl
-// compiles for the GPU and soft_raster.cpp as C++ for the CPU, from the
-// sampler packed as a uint4 (PackSampler). A sampler that isn't the game's
-// (TexSampler::filtered 0: none bound, a capture from before they were kept,
-// or RasterOptions::filtering off) is read as before, nearest and wrapping
-// at level 0, by each backend's Texel().
+// Texture sampling as the game's samplers do it (TexSampler, from the fetch
+// constants): filtered, mipmapped by footprint LOD, anisotropic, per-axis
+// addressing. Both backends share shaders/sample_model.hlsli (mesh.hlsl for
+// the GPU, soft_raster.cpp as C++), taking the sampler packed by PackSampler.
+// TexSampler::filtered 0 falls back to each backend's Texel(): nearest,
+// wrapping, level 0.
 
 namespace band3::render {
 
-// A texture's levels as the CPU samples them: level 0 (w x h RGBA8, R in the
-// low byte), then its mips, each half the one before (at least 1)
+// level 0 is w x h RGBA8 (R in the low byte); each mip halves (min 1)
 struct TexLevels {
     uint32_t w = 0, h = 0;
     const uint32_t* px = nullptr;
@@ -31,12 +26,10 @@ struct TexLevels {
     const uint32_t* Level(uint32_t l) const { return l ? (*mips)[l - 1].data() : px; }
 };
 
-// sample_model.hlsli's kSampleFiltered: the sampler's word x has it when it's
-// the game's
+// matches sample_model.hlsli's kSampleFiltered (word x)
 inline constexpr uint32_t kSampleFiltered = 1u << 11;
 
-// TexSampler as sample_model.hlsli reads it, for a texture with `levels`
-// levels (level 0 and its mips; 16 at most)
+// packs for sample_model.hlsli; `levels` counts level 0 (16 at most)
 inline void PackSampler(const TexSampler& s, uint32_t levels, uint32_t out[4]) {
     out[0] = uint32_t(s.clamp_x & 7) | uint32_t(s.clamp_y & 7) << 3 |
              uint32_t(s.mag_linear ? 1 : 0) << 6 | uint32_t(s.min_linear ? 1 : 0) << 7 |
@@ -49,23 +42,20 @@ inline void PackSampler(const TexSampler& s, uint32_t levels, uint32_t out[4]) {
     out[3] = std::max<uint32_t>(s.aniso, 1);
 }
 
-// `t` at uv, whose derivatives across the screen (one pixel right, one down)
-// are dx and dy, by the packed sampler s (sample_model.hlsli's SampleTexture);
-// RGBA 0..1
+// sample_model.hlsli's SampleTexture; dx/dy are uv's screen derivatives;
+// out is RGBA 0..1
 void SampleTextureCpu(const TexLevels& t, const uint32_t s[4], const float uv[2],
                       const float dx[2], const float dy[2], float out[4]);
 
-// how many levels a w x h image's chain has, down to 1x1
+// levels down to 1x1
 inline uint32_t FullMipChain(uint32_t w, uint32_t h) {
     uint32_t n = 1;
     for (uint32_t s = std::max(w, h); s > 1; s >>= 1) n++;
     return n;
 }
 
-// Levels 1 .. levels-1 of a w x h RGBA8 image into out, each from the one
-// before as SDL_GenerateMipmapsForGPUTexture makes a render target's on the
-// GPU: a linear blit, each texel the bilinear sample (clamped) at its centre,
-// which halving a side makes the box average of the four under it
+// Levels 1 .. levels-1, each from the one before, matching
+// SDL_GenerateMipmapsForGPUTexture's clamped bilinear blit (a 2x2 box average)
 void BuildMips(const uint32_t* px, uint32_t w, uint32_t h, uint32_t levels,
                std::vector<std::vector<uint32_t>>& out);
 

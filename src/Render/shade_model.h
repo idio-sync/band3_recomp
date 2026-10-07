@@ -5,11 +5,9 @@
 #include "src/Render/scene_capture.h"
 #include "src/Render/soft_raster.h"
 
-// Experimental: RB3's material lighting for the native view, from a draw's
-// ShadeState. PackShade turns what the game's shaders were given into the
-// numbers the shading reads (ShadeParams); both backends shade from them with
-// the same code, src/Render/shaders/shade.hlsli, which mesh.hlsl compiles for
-// the GPU and shade_model.cpp compiles as C++ for the CPU.
+// RB3's material lighting. PackShade turns a draw's ShadeState into
+// ShadeParams; both backends shade with src/Render/shaders/shade.hlsli,
+// compiled here as C++ for the CPU.
 
 namespace band3::render::shade {
 
@@ -32,73 +30,50 @@ struct uint4 {
 
 static_assert(sizeof(ShadeParams) == 44 * 16, "ShadeParams is float4s only, as HLSL packs it");
 
-// What a draw shades with. Without a ShadeState (a capture from before them),
-// with options.legacy_light, it's the placeholder from before; options.lighting
-// off draws the game's shading unlit. `textured`: the draw has a diffuse
-// texture the backend samples. The maps (specular, glow, normal, detail) are
-// flagged when the option word samples them and the capture decoded them, the
-// normal maps only where the geometry has its tangents. A DrawRect quad that
-// DxRnd drew with a shader of its own is its texture times its vertex colour,
-// but a movie's frame (IsMovie), its planes to RGB (kShadeYuv, with the
-// chroma planes as the specular and glow maps); a draw into a texture keeps
-// its alpha (no PSEUDO_HDR luminance).
+// Null state or options.legacy_light gives the placeholder; options.lighting
+// off draws unlit. `textured`: the backend samples a diffuse texture. Maps are
+// flagged only when sampled and decoded, normal maps only with tangents. A
+// DxRnd DrawRect quad is texture times vertex colour, except a movie
+// (kShadeYuv); a draw into a texture keeps its alpha (no PSEUDO_HDR).
 void PackShade(const DrawItem& item, const ShadeState* state, const RasterOptions& options,
                bool textured, ShadeParams& out);
 
-// A shadow map drawn at w x h rather than the game's game_w x game_h
-// (RasterOptions::shadow_scale): the coordinate's half-texel offset (the .5 /
-// 512 in shade.hlsli's ShadowCoord's .5009765625 w) made half of the new
-// texel, so the taps' bilinear centre is still the texel the map drew there
+// For a shadow map drawn at w x h instead of game_w x game_h
+// (RasterOptions::shadow_scale): moves ShadowCoord's half-texel offset to half
+// the new texel
 void RescaleShadowCoord(ShadeParams& sp, uint32_t game_w, uint32_t game_h, uint32_t w,
                         uint32_t h);
 
-// the draw's shade state, or null
 inline const ShadeState* ShadeOf(const FrameCapture& frame, const DrawItem& item) {
     return item.shade >= 0 && size_t(item.shade) < frame.shades.size() ? &frame.shades[item.shade]
                                                                          : nullptr;
 }
 
-// shade.hlsli's TexGen, TextureFrame, Bitangent, DetailUv, AoSh*, ProjUv,
-// Shadow*, Light and ShadePixel, on the CPU; the frame's and the AoSh ones
-// are per vertex (AoShVertexCpu's two are the ao_sh the pixels take
-// interpolated; TextureFrameCpu's two, turned into the world, and
-// BitangentCpu's the normal map's frame), as is LightVertexCpu, for
-// kShadePerVertex, whose pixels take its two colours interpolated.
-// ShadePixelCpu's proj and gobo are the projected light's texels at ProjUvCpu
-// (null: 0), lit the shadow buffer's ShadowLitCpu (unread without
-// kShadeShadow), normal_map the normal map's inputs (null: none; unread
-// without kShadeNormalMap).
+// shade.hlsli's functions on the CPU. ShadePixelCpu's null proj and gobo read
+// as 0, null normal_map as none.
 void TexGenUv(const ShadeParams& sp, const float uv[2], float out[2]);
-// shade.hlsli's Billboard of v, plus t (the instance's translation for a
-// position, zero for a direction)
+// t: the instance's translation for a position, zero for a direction
 void BillboardCpu(const ShadeParams& sp, const float v[3], const float t[3], float out[3]);
 void TextureFrameCpu(const ShadeParams& sp, const float n[3], const float t[4], float n_out[3],
                      float u_out[3]);
 void BitangentCpu(const float n[3], const float u[3], float w, float out[3]);
 void DetailUvCpu(const ShadeParams& sp, const float uv[2], float out[2]);
-// a normal-mapped pixel's tangent and bitangent (interpolated), and its
-// normal map's and detail map's texels
+// interpolated tangent and bitangent, and the two maps' texels
 struct NormalMapInputs {
     float u[3], b[3];
     float map[4], detail[4];
 };
 void ProjUvCpu(const ShadeParams& sp, const float p[3], float out[2]);
-// RefractUv: where a REFRACT_WORLD pixel at clip position (clip, w) reads the
-// picture behind it, map its refract normal map's texel (unread without
-// kShadeRefractMap)
 void RefractUvCpu(const ShadeParams& sp, const float clip[2], float w, const float map[4],
                   float out[2]);
 void ShadowCoordCpu(const ShadeParams& sp, const float p[3], float out[4]);
-// ShadowTaps of coordinate s (ShadowCoordCpu's) in a w x h map: the texels'
-// columns and rows, their weights, and the pixel's depth
 struct ShadowTapsCpu {
     int x[4], y[4];
     float weight[4];
     float depth;
 };
 ShadowTapsCpu ShadowTapsOf(const float s[4], uint32_t w, uint32_t h);
-// ShadowLit at world position p, its taps read from a w x h map of depths
-// (clip z/w, row by row)
+// depth: a w x h map of clip z/w, row by row
 float ShadowLitCpu(const ShadeParams& sp, const float p[3], const float* depth, uint32_t w,
                    uint32_t h);
 void AoShDirectionCpu(const float vc[4], float out[3]);
@@ -115,9 +90,7 @@ void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], co
                    const float proj[4] = nullptr, const float gobo[4] = nullptr,
                    float lit = 1.0f, const NormalMapInputs* normal_map = nullptr);
 bool AlphaCutCpu(const ShadeParams& sp, float alpha);
-// shade.hlsli's SoftFade, of the scene depth SoftSceneDepth gives for
-// inv_w (1/w, 0 where nothing drew) with the camera's far plane: a soft
-// particle's alpha scale at view depth w
+// SoftFade(SoftSceneDepth(far_plane, inv_w), w)
 float SoftFadeCpu(float far_plane, float inv_w, float w);
 
 }  // namespace band3::render::shade

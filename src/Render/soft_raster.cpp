@@ -25,19 +25,18 @@ constexpr uint32_t kClearColor = 0xff202020u;
 // what a render target nothing has drawn samples as
 constexpr uint32_t kTransparentBlack = 0;
 
-// a vertex after the view-projection, with what the pixels interpolate
 struct ClipVert {
     float p[4];  // clip x, y, z, w
     float uv[2];
     float n[3];
     float c[4];
     float wp[3];  // world position
-    // a vertex-lit material's Lighting (shade.hlsli), diffuse and added
+    // vertex-lit Lighting (shade.hlsli), diffuse and added
     float ld[3];
     float la[3];
     float ao[2];  // the point lights' AoShVertex
-    // a normal-mapped draw's tangent and bitangent (shade.hlsli's
-    // TextureFrame and Bitangent, in the world)
+    // normal-mapped: world tangent and bitangent (shade.hlsli's TextureFrame
+    // and Bitangent)
     float u[3];
     float b[3];
 };
@@ -66,12 +65,11 @@ void Dir(const float d[3], const Mat4& m, float out[3]) {
     for (int c = 0; c < 3; c++) out[c] = d[0] * m.m[0][c] + d[1] * m.m[1][c] + d[2] * m.m[2][c];
 }
 
-// what a target does with alpha: the picture keeps it 1, a texture blends
-// it by the colour's factors, the scene target as RB3's back buffer does
-// (WritesSceneAlpha)
+// picture: alpha stays 1; texture: blended by the colour's factors; scene:
+// as RB3's back buffer (WritesSceneAlpha)
 enum class TargetAlpha { kOpaque, kTexture, kScene };
 
-// what a draw does with its target's alpha: Blend()
+// see Blend()
 enum class AlphaRule { kOpaque, kColorFactors, kKeep, kMax };
 
 struct Target {
@@ -79,29 +77,26 @@ struct Target {
     std::vector<uint32_t>& color;
     std::vector<float>& depth;  // 1/w, larger is nearer, 0 is cleared
     std::vector<int32_t>* ids;  // the draw that last wrote each pixel, if wanted
-    // a shadow map's pass: its depth, clip z/w (0 near, cleared to 1), which
-    // its draws write where they're nearer, and nothing else
+    // shadow map pass: clip z/w (0 near, cleared to 1), the only thing written
     float* zw = nullptr;
     TargetAlpha alpha = TargetAlpha::kOpaque;
-    // a texture pass's: the texture it draws into, which its draws can't sample
+    // texture pass: the texture drawn into, which its draws can't sample
     uint32_t tex_obj = 0;
     bool no_z = false;  // no depth buffer: nothing tests or writes depth
-    // the picture's, once the scene is resolved into it: a copy of it as the
-    // resolve left it, w x h, which REFRACT_WORLD draws read (RefractsWorld)
+    // the picture as the scene resolve left it, w x h, for REFRACT_WORLD
+    // draws (RefractsWorld)
     const uint32_t* behind = nullptr;
-    // a texture pass's: the scene's depth (1/w), scene_w x scene_h, which a
-    // spotlight's cone reads where its pixel is on the screen (the game's s9,
-    // the world's depth: the cones draw after it, before the overlay's)
+    // texture pass: the scene's depth (1/w), scene_w x scene_h, read at the
+    // pixel's screen position (the game's s9)
     const float* scene_depth = nullptr;
     uint32_t scene_w = 0, scene_h = 0;
-    // the overlay's, multisampled (OverlaySamples): `samples` colours and
-    // depths per pixel, a pixel's one after another, which its draws write
-    // instead of color and depth, and the frame's end averages into color
+    // multisampled overlay (OverlaySamples): `samples` colours and depths per
+    // pixel, contiguous, written instead of color and depth and averaged into
+    // color at the frame's end
     uint32_t samples = 1;
     uint32_t* ms_color = nullptr;
     float* ms_depth = nullptr;
-    // the viewport (clip space -1..1 maps to x..x+w, y..y+h), and the pixels
-    // it covers, which is all a triangle can reach
+    // viewport (clip -1..1 maps to x..x+w, y..y+h) and the pixels it covers
     float vx = 0, vy = 0, vw = 0, vh = 0;
     int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
 
@@ -117,15 +112,13 @@ struct Target {
     }
 };
 
-// a texture to sample: its size, pixels (RGBA8, R low; null for none) and
-// mips, if it has any
 using TexView = TexLevels;
 
 using MipChain = std::vector<std::vector<uint32_t>>;
 const MipChain* MipsOf(const MipChain& m) { return m.empty() ? nullptr : &m; }
 
 TexView View(const Texture* t) {
-    // (one kept as blocks for the GPU: its rgba, decoded the first time)
+    // kept as blocks for the GPU: decode rgba on first use
     if (t && t->blocks) EnsureRgba(*t);
     if (!t || t->rgba.empty()) return {};
     return {t->width, t->height, t->rgba.data(), MipsOf(t->mips)};
@@ -133,15 +126,13 @@ TexView View(const Texture* t) {
 
 struct DrawState {
     int32_t index;  // in the frame's draws
-    // a spotlight's cone (IsSpotCone) shades with these instead of `shade`:
-    // its tex is the cross-section texture, density the density map drawn
-    // before it (none: 0)
+    // spotlight cone (IsSpotCone): shades with these instead of `shade`; tex
+    // is the cross-section, density the density map drawn before it
     bool spot = false;
     spot::SpotParams spot_params;
     TexView density;
-    // a soft particle (IsSoftParticle) shades as `shade` says, its alpha
-    // faded by the scene's depth behind it (SoftPixelFade); soft_far is the
-    // camera's far plane (PS c89.y), the depth where nothing drew
+    // soft particle (IsSoftParticle): alpha faded by scene depth
+    // (SoftPixelFade); soft_far is the far plane (PS c89.y)
     bool soft = false;
     float soft_far = 0;
     TexView tex;
@@ -151,18 +142,16 @@ struct DrawState {
     TexView detail;
     TexView proj;  // the projected light's s5 and s10, likewise
     TexView gobo;
-    // kShadeShadow: the shadow map's depth (clip z/w) as its pass left it
+    // kShadeShadow: the shadow map's clip z/w
     const float* shadow = nullptr;
     uint32_t shadow_w = 0, shadow_h = 0;
     // into a shadow map (Target::zw): depth alone
     bool depth_only = false;
-    // the target's behind, for kShadeRefract, and its viewport (x, y, w, h),
-    // from which a pixel's clip position is worked out (RefractUv)
+    // kShadeRefract: the target's behind, and its viewport (x, y, w, h) for
+    // the pixel's clip position (RefractUv)
     TexView behind;
     float view[4] = {};
-    // the samplers tex, spec_map, glow, normal and detail are read with
-    // (sample_model.h's PackSampler), and whether any of them is the game's,
-    // which reads the uv's derivatives
+    // PackSampler'd samplers; lod: any is the game's, needing uv derivatives
     uint32_t samp_tex[4], samp_spec[4], samp_glow[4], samp_normal[4], samp_detail[4];
     bool lod = false;
     shade::ShadeParams shade;
@@ -174,27 +163,21 @@ struct DrawState {
     bool z_equal_passes;
     bool z_write;
     uint8_t cull;  // DrawItem::cull, 0 with RasterOptions::culling off
-    // where in a pixel it samples (PixelCentre)
-    float centre;
-    // the depth it tests and writes, if not 1/w (a back-buffer draw's
-    // camera's: LayoutBackBuffer)
+    float centre;  // PixelCentre
+    // depth tested and written, if not 1/w (LayoutBackBuffer)
     bool depth_mapped = false;
     DepthMap depth_map;
 };
 
-// Where a draw samples pixel x: at x + PixelCentre in the target's pixels
-// (the viewport maps clip -1..1 to its edges). RB3 draws with D3D9's pixel
-// centres, on the integers (the 360's HalfPixelOffset render state off,
-// PA_SU_VTX_CNTL's pix_center kD3DZero), but its DrawRect quads with the
-// state on, at .5 as D3D10's are (rb3-xenon rnddx9/Rnd.cpp's DrawRect): their
-// rects are in pixels, edge to edge. gpu_view.cpp moves a mesh draw's clip
-// position half a pixel right and down instead (mesh.hlsl's VSMain), which
-// lands it on the same pixels.
+// A draw samples pixel x at x + PixelCentre. RB3 uses D3D9 centres on the
+// integers (HalfPixelOffset off, PA_SU_VTX_CNTL pix_center kD3DZero), but
+// DrawRect quads turn it on, at .5 (rb3-xenon rnddx9/Rnd.cpp's DrawRect).
+// gpu_view.cpp instead shifts mesh draws half a pixel (mesh.hlsl's VSMain).
 float PixelCentre(const DrawItem& it) { return it.rect_shader >= 0 ? 0.5f : 0.0f; }
 
-// native_fill_window: mesh.hlsl's StretchEdges. A clip position past the
-// game's 16:9 (edge, RasterOptions::overlay_edge) moved out to the picture's
-// edge; null for a draw it doesn't apply to
+// native_fill_window (mesh.hlsl's StretchEdges): positions past the game's
+// 16:9 (RasterOptions::overlay_edge) move to the picture's edge; edge null:
+// not applied
 void StretchEdges(float p[4], const float* edge) {
     if (!edge || p[3] <= 0) return;
     for (int a = 0; a < 2; a++) {
@@ -202,14 +185,9 @@ void StretchEdges(float p[4], const float* edge) {
     }
 }
 
-// Where a multisampled pixel's samples are, from where it samples
-// (PixelCentre), in pixels, y down: D3D's standard 2x and 4x patterns
-// (D3D11_STANDARD_MULTISAMPLE_PATTERN, in 16ths of a pixel: 2x (4,4)
-// (-4,-4); 4x (-2,-6) (6,-2) (-6,2) (2,6)), which the GPU's multisampled
-// targets have (Direct3D 12 and Vulkan both) and the emulated GPU's 2x
-// (diagonal, top left and bottom right) is too. gpu_view.cpp's half-pixel
-// move of a mesh draw moves its samples with it, so they're these about
-// the game's pixel centre either way.
+// Sample offsets from PixelCentre, in pixels, y down: D3D's standard 2x and
+// 4x patterns (D3D11_STANDARD_MULTISAMPLE_PATTERN), as D3D12 and Vulkan
+// targets use; the emulated GPU's 2x matches.
 constexpr float kSamples2[2][2] = {{0.25f, 0.25f}, {-0.25f, -0.25f}};
 constexpr float kSamples4[4][2] = {
     {-0.125f, -0.375f}, {0.375f, -0.125f}, {-0.375f, 0.125f}, {0.125f, 0.375f}};
@@ -217,10 +195,8 @@ const float (*SamplePositions(uint32_t samples))[2] {
     return samples == 4 ? kSamples4 : kSamples2;
 }
 
-// A multisampled pixel's samples averaged, as the GPU's resolve does
-// (SDL_GPU_STOREOP_RESOLVE, Direct3D 12's ResolveSubresource: the mean of
-// the samples' UNORM values, back to 8 bits rounding to nearest, half up),
-// and RB3's EndTiling (the mean of its two)
+// Mean of the samples rounded half up, as the GPU's resolve
+// (ResolveSubresource) and RB3's EndTiling do
 uint32_t ResolvePixel(const uint32_t* s, uint32_t samples) {
     uint32_t r = 0;
     for (int c = 0; c < 4; c++) {
@@ -240,7 +216,7 @@ void Texel(const TexView& t, const float uv[2], float out[4]) {
     for (int i = 0; i < 4; i++) out[i] = float((c >> (8 * i)) & 0xff) / 255.0f;
 }
 
-// the texel at u, v (0..1), nearest, clamped to the edge
+// nearest, clamped to the edge
 void TexelClamped(const TexView& t, float u, float v, float out[4]) {
     const uint32_t x = std::min(uint32_t(std::clamp(u, 0.0f, 1.0f) * float(t.w)), t.w - 1);
     const uint32_t y = std::min(uint32_t(std::clamp(v, 0.0f, 1.0f) * float(t.h)), t.h - 1);
@@ -248,8 +224,8 @@ void TexelClamped(const TexView& t, float u, float v, float out[4]) {
     for (int i = 0; i < 4; i++) out[i] = float((c >> (8 * i)) & 0xff) / 255.0f;
 }
 
-// bilinear at u, v (0..1), clamped to the edge: the linear clamp sampler the
-// spotlight drawer sets for its density map and its blurs' taps
+// bilinear, clamped: the spotlight drawer's sampler for its density map and
+// blurs
 void SampleLinear(const TexView& t, float u, float v, float out[4]) {
     const float x = u * float(t.w) - 0.5f, y = v * float(t.h) - 0.5f;
     const float fx = std::floor(x), fy = std::floor(y);
@@ -266,9 +242,8 @@ void SampleLinear(const TexView& t, float u, float v, float out[4]) {
     }
 }
 
-// bilinear at u, v (0..1), outside the texture a transparent black border:
-// the projected light's maps' sampler (their fetch constants clamp to a black
-// border, filter linear); mesh.hlsl's ProjTexel does the same arithmetic
+// bilinear with a transparent black border: the projected light's maps'
+// sampler; mesh.hlsl's ProjTexel does the same arithmetic
 void SampleBorder(const TexView& t, float u, float v, float out[4]) {
     for (int c = 0; c < 4; c++) out[c] = 0;
     // beyond 2 every tap is the border; NaN (on the light's plane) is too
@@ -288,10 +263,9 @@ void SampleBorder(const TexView& t, float u, float v, float out[4]) {
     }
 }
 
-// The scene's depth (1/w, 0 where nothing drew) where a texture pass's pixel
-// u, v (0..1 across its viewport) is on the screen, point-sampled: the game
-// reads its depth texture there (s9) for the spotlights' cones and the soft
-// particles, which draw after the world into targets of their own sizes
+// Scene depth (1/w, 0 where nothing drew) point-sampled at a texture pass's
+// u, v (0..1 across its viewport), as the game reads s9 for spotlight cones
+// and soft particles
 float SceneInvW(const Target& t, float u, float v) {
     if (!t.scene_depth) return 0;
     const uint32_t sx =
@@ -301,11 +275,8 @@ float SceneInvW(const Target& t, float u, float v) {
     return t.scene_depth[size_t(sy) * t.scene_w + sx];
 }
 
-// A spotlight cone's colour at pixel x, y of the depth volume, wp the
-// proxy's world position there and w its clip w (spot_model.hlsli's
-// SpotCone). The shader takes where the pixel is on the screen from its clip
-// position, where the pixel samples it (DrawState::centre), and reads the
-// scene's depth there point-sampled, the density map bilinear.
+// spot_model.hlsli's SpotCone at depth-volume pixel x, y; wp the proxy's
+// world position, w its clip w. Scene depth point-sampled, density bilinear.
 void SpotPixel(const DrawState& ds, const Target& t, int x, int y, const float wp[3], float w,
                float out[4]) {
     const float u = (float(x) + ds.centre - t.vx) / t.vw;
@@ -320,19 +291,15 @@ void SpotPixel(const DrawState& ds, const Target& t, int x, int y, const float w
     out[3] = 0;
 }
 
-// A soft particle's alpha scale at pixel x, y of the soft-particle buffer, w
-// its clip w there (shade.hlsli's SoftFade): the scene's depth read where the
-// pixel is on the screen, as SpotPixel reads it. For the 320x180 buffer of a
-// 1280x720 picture that's the depth at (4x, 4y), the texel the game's
-// shader reads.
+// shade.hlsli's SoftFade: a soft particle's alpha scale, w its clip w
 float SoftPixelFade(const DrawState& ds, const Target& t, int x, int y, float w) {
     const float u = (float(x) + ds.centre - t.vx) / t.vw;
     const float v = (float(y) + ds.centre - t.vy) / t.vh;
     return shade::SoftFadeCpu(ds.soft_far, SceneInvW(t, u, v), w);
 }
 
-// A texel of t at uv: by sampler s, the game's (sample_model.h), with the
-// uv's derivatives d (across, then down), or else nearest at level 0
+// by the game's sampler s (sample_model.h) with uv derivatives d (x, then
+// y), or nearest at level 0
 void Read(const TexView& t, const uint32_t s[4], const float uv[2], const float d[4],
           float out[4]) {
     if (s[0] & kSampleFiltered)
@@ -341,12 +308,9 @@ void Read(const TexView& t, const uint32_t s[4], const float uv[2], const float 
         Texel(t, uv, out);
 }
 
-// pixel x, y's colour; the picture behind it is read where RefractUv puts
-// it, across the target (mesh.hlsl reads it likewise); u and b the
-// tangent and bitangent of a normal-mapped draw. With ds.lod, quad has the
-// uv at the pixels its derivatives are taken between, as the GPU's
-// ddx_fine and ddy_fine take them (RasterTri): the two of its 2x2 quad in
-// its row, then the two in its column.
+// u, b: a normal-mapped draw's tangent and bitangent. With ds.lod, quad holds
+// the uvs ddx_fine and ddy_fine difference (RasterTri): the pixel's row pair
+// in its 2x2 quad, then its column pair.
 void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3],
            const float vc[4], const float wp[3], float depth, const float ao[2],
            const float ld[3], const float la[3], const float u[3], const float b[3],
@@ -372,8 +336,6 @@ void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3
             float duv[2], dd[4] = {0, 0, 0, 0};
             shade::DetailUvCpu(ds.shade, uv, duv);
             if (ds.lod) {
-                // the detail map's uv is the uv scaled: its derivatives are
-                // taken between the same pixels' (mesh.hlsl's likewise)
                 float q[8];
                 for (int k = 0; k < 4; k++) shade::DetailUvCpu(ds.shade, quad + 2 * k, q + 2 * k);
                 dd[0] = q[2] - q[0];
@@ -385,9 +347,8 @@ void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3
         }
     }
     if (ds.behind.px) {
-        // the clip position the game's pixel shader is given there (its x, y
-        // over w are where in the viewport the pixel samples), and where its
-        // refract normal map moves that, read bilinear and clamped
+        // the clip position the game's pixel shader gets, offset by the
+        // refract map, read bilinear and clamped
         const float sx = (float(x) + ds.centre - ds.view[0]) / ds.view[2];
         const float sy = (float(y) + ds.centre - ds.view[1]) / ds.view[3];
         const float clip[2] = {(sx * 2 - 1) * depth, (1 - sy * 2) * depth};
@@ -410,20 +371,15 @@ void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3
                          out, proj, gobo, lit, ds.normal_map ? &nm : nullptr);
 }
 
-// The colour by the material's blend mode (Dest keeps it), and alpha by
-// `alpha`: 1, blended by the colour's factors (a texture's, as gpu_view.cpp's
-// pipelines do), kept, or RB3's back buffer's ONE ONE MAX, the larger of the
-// two where the mode blends (any but Src, which Blend() draws other modes as).
-// The colour and alpha are clamped to 0..1 first, as an 8-bit target clamps
-// what reaches its blender, so before SrcAlpha's scaling too: a lit colour of
-// 1.5 multiplies by 1 and adds a * 1. The game's pictures agree: the menus'
-// blue header, Multiply and SrcAlphaAdd layers lit above 1, matches them only
-// clamped this way. gpu_view.cpp's UNORM target and mesh.hlsl's FinishMesh do
-// the same.
-// RndMat's Screen, Lighten and Darken (8..10) are drawn as Src too: NgMat's
-// SetupShader sets no blend state for them (rb3-xenon Mat_NG.cpp's switch
-// falls to default, and the second one asserts), so on the 360 they never
-// appear.
+// Colour by the material's blend mode; alpha by `alpha`: 1, blended by the
+// colour's factors (a texture's), kept, or RB3's back buffer's ONE ONE MAX
+// where the mode blends (not Src). Colour and alpha are clamped to 0..1
+// first, as an 8-bit target clamps its blender's input (so before SrcAlpha
+// scales); the menus' blue header only matches this way. gpu_view.cpp's
+// UNORM target and mesh.hlsl's FinishMesh agree.
+// RndMat's Screen, Lighten and Darken (8..10) are drawn as Src: NgMat's
+// SetupShader sets no blend for them (rb3-xenon Mat_NG.cpp), so the 360
+// never shows them.
 uint32_t Blend(int mode, const float s[4], uint32_t dst, AlphaRule alpha) {
     float d[4];
     for (int i = 0; i < 4; i++) d[i] = float((dst >> (8 * i)) & 0xff) / 255.0f;
@@ -438,8 +394,8 @@ uint32_t Blend(int mode, const float s[4], uint32_t dst, AlphaRule alpha) {
             case 4: o[i] = d[i] + c[i] * a; break;               // SrcAlphaAdd
             case 5: o[i] = d[i] - c[i]; break;                   // Subtract
             case 6: o[i] = d[i] * c[i]; break;                   // Multiply
-            // PreMultAlpha, ONE INVSRCALPHA: the colour comes scaled by alpha
-            // (c0 by SetupShader's PreMultiplyAlpha, the texture as it is)
+            // PreMultAlpha, ONE INVSRCALPHA: colour arrives premultiplied
+            // (c0 by SetupShader's PreMultiplyAlpha)
             case 7: o[i] = c[i] + d[i] * (1.0f - a); break;
             case 0: o[i] = d[i]; break;  // Dest
             default: o[i] = c[i]; break;  // Src
@@ -478,8 +434,7 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
         sx[i] = t.vx + (v[i]->p[0] * iw[i] * 0.5f + 0.5f) * t.vw;
         sy[i] = t.vy + (0.5f - v[i]->p[1] * iw[i] * 0.5f) * t.vh;
     }
-    // the depth each corner tests and writes, (p w + q + r z) / w, which
-    // runs straight across the screen as 1/w does
+    // per-corner depth (p w + q + r z) / w, linear in screen space as 1/w is
     float dv[3] = {iw[0], iw[1], iw[2]};
     if (ds.depth_mapped)
         for (int i = 0; i < 3; i++)
@@ -495,18 +450,14 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
     if (min_x > max_x || min_y > max_y) return;
     st.triangles++;
     const float inv_area = 1.0f / area;
-    // D3D's top-left rule, as the GPU fills: a pixel centre on an edge is
-    // the triangle's only if that's a left edge (the inside to its right) or
-    // a top one (level, the inside below), so of two triangles sharing an
-    // edge (a quad's diagonal) only one draws it, and a blended quad blends
-    // once. Edge k is opposite vertex k; (gx, gy) is where its l grows.
+    // D3D's top-left rule, so a shared edge is drawn (and blended) once. Edge
+    // k is opposite vertex k; (gx, gy) is where its l grows.
     auto owns = [&](int a, int b) {
         const float gx = -(sy[b] - sy[a]) * inv_area, gy = (sx[b] - sx[a]) * inv_area;
         return gx > 0 || (gx == 0 && gy > 0);
     };
     const bool own0 = owns(1, 2), own1 = owns(2, 0), own2 = owns(0, 1);
 
-    // the barycentrics at (qx, qy), inside the triangle or not
     auto bary = [&](float qx, float qy, float l[3]) {
         l[0] = ((sx[2] - sx[1]) * (qy - sy[1]) - (sy[2] - sy[1]) * (qx - sx[1])) * inv_area;
         l[1] = ((sx[0] - sx[2]) * (qy - sy[2]) - (sy[0] - sy[2]) * (qx - sx[2])) * inv_area;
@@ -516,21 +467,18 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
         if (l[0] < 0 || l[1] < 0 || l[2] < 0) return false;
         return !((l[0] == 0 && !own0) || (l[1] == 0 && !own1) || (l[2] == 0 && !own2));
     };
-    // the depth tested and written where the barycentrics are l
     auto depth_at = [&](const float l[3]) {
         return ds.depth_mapped ? l[0] * dv[0] + l[1] * dv[1] + l[2] * dv[2]
                                : l[0] * iw[0] + l[1] * iw[1] + l[2] * iw[2];
     };
-    // pixel x, y's colour, shaded where it samples (px, py; barycentrics l
-    // there, z its 1/w); false if the alpha test drops it
+    // shaded at (px, py), barycentrics l, z its 1/w; false if alpha-tested out
     auto shade_at = [&](int x, int y, float px, float py, const float l[3], float z,
                         float col[4]) {
         const float q0 = l[0] * iw[0] / z, q1 = l[1] * iw[1] / z, q2 = l[2] * iw[2] / z;
         float uv[2], n[3], vc[4], wp[3];
         for (int i = 0; i < 2; i++) uv[i] = q0 * a.uv[i] + q1 * b.uv[i] + q2 * c.uv[i];
-        // the uv where the GPU takes its derivatives (Shade): on the
-        // plane the pixel's uv is on, perspective-correct, at the other
-        // pixels of its 2x2 quad, inside the triangle or not
+        // perspective-correct uv at the 2x2 quad's other pixels, inside the
+        // triangle or not, for derivatives (Shade)
         float quad[8] = {};
         if (ds.lod) {
             auto uv_at = [&](float qx, float qy, float* out) {
@@ -569,16 +517,12 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
         }
         return !shade::AlphaCutCpu(ds.shade, col[3]);
     };
-    // whether depth dz passes the test against d, what's there
     auto passes = [&](float dz, float d) {
         return !ds.z_test || (ds.z_equal_passes ? !(dz < d * 0.9999f) : !(dz <= d));
     };
 
-    // Multisampled (the overlay's: Target::samples), as a GPU's MSAA: the
-    // samples the triangle covers, by the same rule as a pixel's centre; a
-    // pixel with any is shaded once, where it samples (its centre, inside the
-    // triangle or not, as the GPU's interpolants are without centroid), and
-    // each covered sample whose depth, its own, passes takes the colour
+    // MSAA as a GPU does it: coverage and depth per sample, shaded once per
+    // pixel at its centre (inside the triangle or not: no centroid)
     if (t.samples > 1) {
         const uint32_t ns = t.samples;
         const float(*pos)[2] = SamplePositions(ns);
@@ -628,7 +572,7 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
             if (!inside(l)) continue;
             const size_t idx = size_t(y) * t.w + x;
             if (ds.depth_only) {
-                // clip z/w, which runs straight across the screen; LESS
+                // clip z/w, linear in screen space; LESS
                 const float zw =
                     l[0] * a.p[2] * iw[0] + l[1] * b.p[2] * iw[1] + l[2] * c.p[2] * iw[2];
                 if (zw < t.zw[idx]) t.zw[idx] = zw;
@@ -651,16 +595,12 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
     }
 }
 
-// The clip planes, as distances that are >= 0 inside: the near plane, then a
-// guard band kGuard times the screen's half-size each side. A triangle that
-// crosses the near plane projects up to ~1e9 pixels away, where RasterTri's
-// float edge functions lose the pixel position altogether (stripes and blocks
-// across the screen); clipped to the band, no corner is more than a few
-// thousand pixels out. The band's planes pass through the eye, so clipping to
-// them moves no pixel: they only cut away what's off screen anyway. A depth
-// draw (a shadow map's) is clipped at z 0 too, the light camera's near plane,
-// as the game's device clips it: its depth isn't 1/w but clip z/w, and what's
-// in front of that plane would be stored nearer than anything.
+// Clip planes as distances >= 0 inside: near, then a guard band kGuard times
+// the screen's half-size each side. Near-plane crossers can project ~1e9
+// pixels out, where RasterTri's float edge functions break down; the band
+// (through the eye, so it moves no pixel) keeps corners within a few
+// thousand. Depth draws (shadow maps) also clip at z 0, as the game's device
+// does: their depth is clip z/w, so anything in front would store nearest.
 constexpr float kGuard = 8.0f;
 constexpr int kClipPlanes = 5;
 constexpr int kDepthClipPlanes = kClipPlanes + 1;
@@ -676,8 +616,6 @@ float PlaneDist(const ClipVert& v, int plane) {
     }
 }
 
-// clips against the near plane and the guard band (and z 0, a depth draw),
-// then draws the fan
 void ClipAndRaster(const ClipVert& a, const ClipVert& b, const ClipVert& c,
                    const DrawState& ds, Target& t, RasterStats& st) {
     const int planes = ds.depth_only ? kDepthClipPlanes : kClipPlanes;
@@ -713,16 +651,13 @@ void ClipAndRaster(const ClipVert& a, const ClipVert& b, const ClipVert& c,
     for (int i = 1; i + 1 < n; i++) RasterTri(poly[0], poly[i], poly[i + 1], ds, t, st);
 }
 
-// a texture pass's target, kept for the frame: what its passes have drawn,
-// up to the one that made `version`
+// a texture pass's target for the frame, as of the pass that made `version`
 struct RtTarget {
     uint32_t w = 0, h = 0;
-    // its pass's size in the game (Pass::width, height), which w x h is
-    // unless it's drawn bigger (PassTargetSize)
+    // Pass::width, height; w x h differs if drawn bigger (PassTargetSize)
     uint32_t game_w = 0, game_h = 0;
     std::vector<uint32_t> color;
-    // its mips, made after each pass from what it drew (BuildMips), where
-    // the texture has them and filtering is on; empty otherwise
+    // BuildMips after each pass, if the texture has mips and filtering is on
     MipChain mips;
     std::vector<float> depth;
     std::vector<float> zw;  // a shadow map's depth (Target::zw); empty for the rest
@@ -730,13 +665,10 @@ struct RtTarget {
 };
 using RtTargets = std::unordered_map<uint32_t, RtTarget>;
 
-// What a draw's diffuse texture samples. A render target is what its passes
-// have drawn so far this frame, else guest memory's pixels if they're kept
-// and wanted, else transparent black (counted); the target being drawn can't
-// sample itself, so it's black too. Without texture passes, a render target
-// is its guest pixels if wanted. A texture without pixels (a render target
-// kept without them, or a format that isn't decoded) draws untextured, as
-// does a draw whose shader doesn't sample it (SamplesDiffuse).
+// A render target samples what its passes drew this frame, else its guest
+// pixels if kept and wanted, else transparent black (counted; also when a
+// target would sample itself). A texture without pixels, or a shader that
+// doesn't sample it (SamplesDiffuse), draws untextured.
 TexView Diffuse(const DrawItem& it, const RasterOptions& o, const RtTargets& rts,
                 const Target& t, RasterStats& st) {
     static constexpr uint32_t kBlack = kTransparentBlack;
@@ -755,12 +687,10 @@ TexView Diffuse(const DrawItem& it, const RasterOptions& o, const RtTargets& rts
     return View(&tex);
 }
 
-// The projected light's s5. A texture RB3 draws (ProjectedTargetOf: NgLight's
-// shadow) is its target as its passes left it, where the last of them made
-// the version the draw reads, else guest memory's pixels if they're kept and
-// wanted, else none (counted); without texture passes, its guest pixels if
-// wanted. Any other is the capture's decoded map. None leaves the projected
-// light out, as gpu_view.cpp does.
+// The projected light's s5. A drawn one (ProjectedTargetOf: NgLight's
+// shadow) is its target if at the version the draw reads, else guest pixels
+// if kept and wanted, else none (counted), which drops the projected light
+// as gpu_view.cpp does.
 TexView Projected(const ShadeState* state, const RasterOptions& o, const RtTargets& rts,
                   const Target& t, RasterStats& st) {
     const Texture* map = state->maps[kMapProjected].get();
@@ -777,11 +707,8 @@ TexView Projected(const ShadeState* state, const RasterOptions& o, const RtTarge
     return o.rt_guest_pixels ? View(rt) : TexView{};
 }
 
-// A normal or detail map. One RB3 draws (MapTargetOf: a head's normal map)
-// is its target as its passes have drawn it so far, as a diffuse render
-// target is (Diffuse), else guest memory's pixels if they're kept and wanted,
-// else none (counted), which leaves the map out, as gpu_view.cpp does. Any
-// other is the capture's decoded map.
+// A normal or detail map. A drawn one (MapTargetOf: a head's normal map)
+// resolves as in Diffuse; none (counted) drops the map, as gpu_view.cpp does.
 TexView NormalMap(const ShadeState* state, int map, const RasterOptions& o, const RtTargets& rts,
                   const Target& t, RasterStats& st) {
     const Texture* tex = state->maps[map].get();
@@ -809,10 +736,10 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     ds.cull = o.culling ? it.cull : 0;
     ds.centre = PixelCentre(it);
     ds.tex = Diffuse(it, o, rts, t, st);
-    // a cone shades only into a texture: the depth volume
+    // cones shade only into a texture (the depth volume), soft particles
+    // likewise (the soft-particle buffer)
     ds.spot = t.tex_obj && IsSpotCone(it, state) && spot::PackSpot(*state, t.w, t.h, ds.spot_params);
     if (ds.spot) ds.density = density;
-    // a soft particle fades only into a texture: the soft-particle buffer
     ds.soft = t.tex_obj && IsSoftParticle(it, state);
     if (ds.soft) ds.soft_far = state->Ps(89)[1];
     shade::PackShade(it, state, o, ds.tex.px != nullptr, ds.shade);
@@ -840,8 +767,7 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
             ds.proj = ds.gobo = {};
         }
     }
-    // the shadow map, as the pass that made the version it reads left it; one
-    // the frame drew no pass of, or another version of since, leaves it lit
+    // only the version it reads; otherwise lit
     if (ds.shade.flags.x & shade::kShadeShadow) {
         const Texture* map = ShadowMapOf(state);
         const auto f = map ? rts.find(map->tex_obj) : rts.end();
@@ -856,8 +782,7 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
             ds.shade.flags.x &= ~shade::kShadeShadow;
         }
     }
-    // the samplers they're read with: the game's where the capture kept them
-    // and filtering is on, else the old nearest (TexSampler's default)
+    // the game's samplers with filtering on, else nearest (TexSampler's default)
     {
         const TexSampler none;
         auto pack = [&](const TexSampler& s, const TexView& v, uint32_t out[4]) {
@@ -869,14 +794,14 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
         pack(state ? state->samplers[kMapGlow] : none, ds.glow, ds.samp_glow);
         pack(state ? state->samplers[kMapNormal] : none, ds.normal, ds.samp_normal);
         pack(state ? state->samplers[kMapDetailNormal] : none, ds.detail, ds.samp_detail);
-        // a cone reads its cross-section texture its own way (SpotPixel)
+        // cones sample their own way (SpotPixel)
         if (ds.spot) ds.lod = false;
     }
     ds.depth_only = t.zw != nullptr;
     ds.per_vertex = (ds.shade.flags.x & shade::kShadePerVertex) != 0;
     ds.normal_map = (ds.shade.flags.x & shade::kShadeNormalMap) != 0;
-    // REFRACT_WORLD reads the picture behind it: in the picture, once
-    // resolved; in the world, the pre-process buffer (Run's world_behind)
+    // REFRACT_WORLD reads the resolved picture, or in the world the
+    // pre-process buffer (Run's world_behind)
     if (ds.shade.flags.x & shade::kShadeRefract) {
         if (t.behind) {
             ds.behind = {t.w, t.h, t.behind};
@@ -898,8 +823,7 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
         // the vertex colour's SH direction turns as the normal does
         float dir[3] = {0, 0, 0};
         if (ao_sh) shade::AoShDirectionCpu(c.c, dir);
-        // a normal-mapped draw's normal is its frame's, which turns with
-        // its tangent
+        // normal-mapped: the normal comes from the texture frame
         float nrm[3] = {v.nrm[0], v.nrm[1], v.nrm[2]}, tangent[3] = {0, 0, 0};
         if (ds.normal_map) shade::TextureFrameCpu(ds.shade, v.nrm, v.tan, nrm, tangent);
         float wp[3] = {0, 0, 0}, wn[3] = {0, 0, 0}, wd[3] = {0, 0, 0}, wu[3] = {0, 0, 0};
@@ -985,15 +909,12 @@ bool Drawable(const DrawItem& it) {
     return it.geom && !it.geom->verts.empty() && it.geom->indices.size() >= 3;
 }
 
-// A DrawRect blur's taps (shader 1: c31.. their uv offsets, c47.. their
-// weights per channel) from `src` into its rect of `t`: each pixel the taps'
-// weighted sum, bilinear and clamped, at the quad's uv plus each tap's
-// offset, blended by its material. The spotlights' blur and NgLight's read
-// their own target as it was (spot::SpotBlur: whole texels apart, so point), the soft
-// particles' the other surface (SoftBlur: half-texel taps, so bilinear).
-// In pass p's target drawn bigger than the game's (PassTargetSize), the
-// rect, in the game's texels, is scaled with it, and each tap reads the
-// texels the game's covers (BlurSubTaps); null p (or its size) is the game's.
+// A DrawRect blur (shader 1: c31.. tap uv offsets, c47.. per-channel
+// weights) from `src` into its rect of `t`, taps bilinear and clamped,
+// blended by its material. Spotlight and NgLight blurs read their own target
+// (spot::SpotBlur), soft particles the other surface (SoftBlur). If pass p's
+// target is bigger than the game's (PassTargetSize), the rect is scaled and
+// each tap averages the texels the game's covered (BlurSubTaps).
 void TapBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o,
                  const TexView& src, Target& t, RasterStats& st, const Pass* p = nullptr) {
     float rect[4] = {it.rect[0], it.rect[1], it.rect[2], it.rect[3]};
@@ -1046,8 +967,7 @@ void TapBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o
     st.draws++;
 }
 
-// The blur into the target it samples (spot::SpotBlur), as the game does it
-// in place by a resolve: from a copy of the target as it was before it
+// in place (the game resolves first), so from a copy
 void SpotBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& o, Target& t,
                   RasterStats& st, const Pass& p) {
     const std::vector<uint32_t> before = t.color;
@@ -1055,9 +975,9 @@ void SpotBlurDraw(const DrawItem& it, const ShadeState& s, const RasterOptions& 
 }
 
 
-// NgSpotlightDrawer's targets and RndSoftParticleBuffer's surfaces: drawn
-// after post-processing starts, for the composite, so kept when something
-// wants them though the rest of post-processing's passes aren't
+// NgSpotlightDrawer's targets and RndSoftParticleBuffer's surfaces are drawn
+// after post-processing starts, for the composite, so kept unlike other
+// post-processing passes
 bool SpotTarget(const Pass& p) {
     return p.tex_type == kTexTypeDepthVolume || p.tex_type == kTexTypeDensityMap;
 }
@@ -1066,9 +986,8 @@ bool SoftTarget(const FrameCapture& f, const Pass& p) {
                          p.tex_obj == f.post_consts.soft_surface[1]);
 }
 
-// PlanPasses, with `also` (a DxTex, 0 none) wanted whatever samples it,
-// even after post-processing starts: at the frame's end, and its pass of
-// `also_version` (0 none) too
+// PlanPasses, also keeping DxTex `also` (0 none) and its pass of
+// `also_version` (0 none), even after post-processing starts
 std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_t also,
                           uint32_t also_version) {
     std::vector<PassRun> runs;
@@ -1077,30 +996,21 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
         runs.push_back({nullptr, 0, n});
         return runs;
     }
-    // backwards, so a pass is drawn only if something after it samples its
-    // texture
+    // backwards: a pass is drawn only if something after it samples it
     std::unordered_set<uint32_t> needed;
     if (also) needed.insert(also);
-    // the composite's spotlight term reads the depth volume (and through its
-    // cones the density map) at the frame's end, its soft particles' term
-    // the soft-particle surface
+    // the composite reads the depth volume and the soft-particle surface
     post::PostPlan post_plan;
     if (o.post && o.view == RasterView::kFinal &&
         post::PlanPost(f, o.post_only, post_plan, o.grain, o.velocity)) {
         if (post_plan.composite.flags.x & post::kPostSpot) needed.insert(post_plan.spot_volume);
         if (post_plan.composite.flags.x & post::kPostSoft) needed.insert(post_plan.soft);
     }
-    // A draw that samples a version of a texture no pass here made, where a
-    // pass later in the frame makes the next one: a texture drawn every frame
-    // (the title's clouds), sampled before this frame's pass draws it again,
-    // whose pass of the frame before the capture didn't record (BeginPass in
-    // scene_capture.cpp records a regular one only while capturing). That
-    // pass is drawn first instead, a frame newer than the one sampled, which
-    // the diffuse texture and normal maps read whatever its version is
-    // (Diffuse, NormalMap): one frame of the clouds' drift, where without it
-    // they'd be black. Not for version 0, which no pass ever made, a shadow
-    // map, or a pass from post-processing on, which draws from this frame's
-    // picture.
+    // Stand-ins: a texture drawn every frame (the title's clouds) can be
+    // sampled before this frame's pass redraws it, its previous version made
+    // in an uncaptured frame (scene_capture.cpp's BeginPass). The later pass
+    // is drawn first instead, one frame newer, rather than black. Not for
+    // version 0, shadow maps, or passes from post_boundary on.
     std::unordered_set<uint64_t> made;
     for (const Pass& p : f.passes)
         if (p.tex_obj) made.insert(uint64_t(p.tex_obj) << 32 | p.version);
@@ -1126,13 +1036,13 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
                 stand_in(it.tex.get(), d);
             }
             const ShadeState* state = shade::ShadeOf(f, it);
-            // the projected light's s5, NgLight's shadow
+            // projected light's s5 (NgLight's shadow)
             if (o.textures)
                 if (const Texture* map = ProjectedTargetOf(state)) needed.insert(map->tex_obj);
-            // a SHADOW_BUFFER draw's shadow map (s5)
+            // SHADOW_BUFFER's shadow map (s5)
             if (o.self_shadow)
                 if (const Texture* map = ShadowMapOf(state)) needed.insert(map->tex_obj);
-            // a head's normal map (s1), or a detail map RB3 draws (s14)
+            // a head's normal map (s1), or a drawn detail map (s14)
             if (o.textures && o.normal_maps)
                 for (int m : {kMapNormal, kMapDetailNormal}) {
                     if (const Texture* map = MapTargetOf(state, m)) {
@@ -1156,11 +1066,11 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
         if (!o.texture_passes || !p.width || !p.height) continue;
         if (shadow_map && !o.self_shadow && !wanted) continue;
         if (!needed.count(p.tex_obj) && !(wanted && p.version == also_version)) continue;
-        // (a shadow map is drawn for the character after it, wherever that is)
+        // shadow maps are drawn wherever their character is
         if (first >= f.post_boundary && !wanted && !SpotTarget(p) && !SoftTarget(f, p) &&
             !shadow_map)
             continue;
-        // what it drew over isn't seen: a shadow map's clear is its depth's
+        // a clear hides earlier passes (a shadow map's is its depth clear)
         if ((PassClearFlags(f, p) & 0x0f) || (shadow_map && (p.clear_flags & 0x30)))
             needed.erase(p.tex_obj);
         runs.push_back({&p, first, end});
@@ -1174,8 +1084,7 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
             }
         }
     }
-    // the stand-ins first, whether or not something after them wanted them
-    // where they are
+    // stand-ins go first, even if also wanted where they are
     if (o.texture_passes) {
         for (const Pass* p : early) {
             const bool kept = std::any_of(runs.begin(), runs.end(),
@@ -1193,18 +1102,16 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
     return runs;
 }
 
-// One of the world passes drawn before a frame whose world refracts, with
-// no pre-process buffer kept for it (kPreBufferPasses): its REFRACT_WORLD
-// draws read `behind` (width x height), and the scene its world leaves goes
-// into `scene`, where it ends
+// A world pass before a refracting frame with no kept pre-process buffer
+// (kPreBufferPasses): REFRACT_WORLD reads `behind`; the scene goes to `scene`
 struct PrePass {
     const uint32_t* behind;
     std::vector<uint32_t>* scene;
 };
 
-// Rasterize(), and the texture targets it drew: `stop` (a DxTex, 0 none)
-// ends the frame after `stop_version` of it (0 its last) is drawn; with
-// `pre`, it's that world pass and ends at post_boundary
+// Rasterize(), filling rts. `stop` (a DxTex, 0 none) ends the frame after its
+// `stop_version` (0 the last); with `pre`, draws that world pass and ends at
+// post_boundary
 RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<uint32_t>& rgba,
                 std::vector<int32_t>* ids, RtTargets& rts, uint32_t stop,
                 uint32_t stop_version, const PrePass* pre = nullptr) {
@@ -1215,9 +1122,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     rgba.assign(pixels, clear);
     if (ids) ids->assign(pixels, -1);
     std::vector<float> depth(pixels, 0.0f);
-    // the world's draws into the scene target, cleared with alpha 0; the
-    // overlay's into the picture, over the depth the world left (cleared, in
-    // a capture with its cameras)
+    // world into the scene target (alpha 0); overlay into the picture
     std::vector<uint32_t> scene(pixels, clear & 0x00ffffffu);
     Target world{o.width, o.height, scene, depth, ids};
     world.alpha = TargetAlpha::kScene;
@@ -1225,11 +1130,10 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     Target overlay{o.width, o.height, rgba, depth, ids};
     overlay.SetViewport(0, 0, float(o.width), float(o.height));
     Target* back = &world;
-    // the overlay's samples, if it's multisampled (OverlaySamples)
     const uint32_t samples = OverlaySamples(o);
     std::vector<uint32_t> ms_color;
     std::vector<float> ms_depth;
-    // the picture as the resolve leaves it, kept if an overlay draw reads it
+    // the resolved picture, kept if an overlay draw refracts
     std::vector<uint32_t> behind;
     bool refracts = false;
     for (size_t i = frame.post_boundary; i < frame.draws.size() && !refracts; i++) {
@@ -1239,20 +1143,18 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     post::PostPlan post_plan;
     const bool post_on = o.post && o.view == RasterView::kFinal &&
                          post::PlanPost(frame, o.post_only, post_plan, o.grain, o.velocity);
-    // the post buffer (RasterOptions::post_buffer): a post frame's picture
-    // kept, and shown by the frames after it that post-process nothing, in
-    // place of their world, which isn't drawn
+    // RasterOptions::post_buffer: a post frame's picture, shown in place of
+    // the (undrawn) world by following frames that post-process nothing
     post::PostHistory* const kept =
         o.post_buffer && o.view == RasterView::kFinal ? o.post_history : nullptr;
     const bool shows_kept = kept && ShowsPostBuffer(frame) && kept->picture_w == o.width &&
                             kept->picture_h == o.height &&
                             PostBufferFor(frame, kept->picture_frame);
     const bool keeps = kept && ProcKnown(frame) && (frame.proc_cmds & kProcPost);
-    // The world's REFRACT_WORLD draws read the pre-process buffer (RefractsWorld,
-    // RasterOptions::pre_buffer): the one kept from the world frames before,
-    // or else the world drawn kPreBufferPasses times first; black where
-    // neither (a view of the scene target, whose alpha and depth they don't
-    // change, or a texture target's dump). This frame's world is kept in turn.
+    // World REFRACT_WORLD draws read the pre-process buffer
+    // (RasterOptions::pre_buffer): kept from earlier world frames, else the
+    // world drawn kPreBufferPasses times first; black for scene-target views
+    // and texture dumps. This frame's world is kept in turn.
     std::vector<uint32_t> world_behind;
     const bool world_refracts = !shows_kept && WorldRefracts(frame);
     post::PostHistory* const pre_kept =
@@ -1267,8 +1169,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         } else {
             world_behind.assign(pixels, 0);
             if (o.view == RasterView::kFinal && !stop) {
-                // the world alone, on its own targets, with nothing of the
-                // live view's: no post-processing, history or samples
+                // the world alone: no post-processing, history or MSAA
                 RasterOptions po = o;
                 po.post = po.trails = po.post_buffer = po.pre_buffer = false;
                 po.post_history = nullptr;
@@ -1286,20 +1187,16 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         }
     }
     const BackBufferLayout layout = LayoutBackBuffer(frame);
-    // the scene into the picture, at post_boundary (or the frame's end):
-    // post-processed, or as it is. A view of the scene target ends the frame
-    // there. With the capture's cameras, the overlay's depth starts cleared
-    // after it, as RB3's does (DxRnd::DoPostProcess clears its offscreen
-    // target's to 0 before the overlay draws: BeginTiling). Multisampled,
-    // the overlay's samples start as the picture, each of them, as RB3's
-    // CopyPostProcess draws it into its 2x target, and their depth cleared,
-    // with the cameras, or else the world's (`overlay_follows`: there are
-    // overlay draws to come, not the frame's end).
+    // The scene into the picture at post_boundary (or the end), post-processed
+    // or not; a scene-target view ends there. With the capture's cameras the
+    // overlay's depth then starts cleared (DxRnd::DoPostProcess's
+    // BeginTiling). Multisampled, every sample starts as the picture (RB3's
+    // CopyPostProcess into its 2x target), depth cleared with cameras or else
+    // the world's. `overlay_follows`: overlay draws come next.
     auto resolve = [&](bool overlay_follows) {
         back = &overlay;
-        // the scene as the world left it, before post-processing, as
-        // DoWorldEnd's SavePreBuffer keeps it: for the next world frame's
-        // REFRACT_WORLD draws, or the next world pass's
+        // the pre-post scene, as DoWorldEnd's SavePreBuffer keeps it, for the
+        // next world frame's (or world pass's) REFRACT_WORLD draws
         if (pre) {
             *pre->scene = scene;
         } else if (pre_kept) {
@@ -1311,13 +1208,12 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         if (shows_kept) {
             rgba = kept->picture;
         } else if (post_on) {
-            // the spotlights' passes, drawn before it (Plan keeps them)
+            // passes Plan kept for the composite
             auto image = [&](uint32_t tex_obj) {
                 const auto f = rts.find(tex_obj);
                 if (!tex_obj || f == rts.end()) return post::PostImage{};
                 return post::PostImage{f->second.color.data(), f->second.w, f->second.h};
             };
-            // the depth buffer has 1/w, as RunPost wants it
             post::RunPost(post_plan, scene, depth, o.width, o.height,
                           image(post_plan.spot_volume), image(post_plan.spot_density),
                           image(post_plan.soft), rgba, o.post_bloom0,
@@ -1366,7 +1262,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     std::vector<ClipVert> cv;
     std::unordered_set<uint32_t> cams_seen;
     uint32_t last_cam = 0;
-    // the density map the spotlights' cones read: the last drawn
+    // the last density map drawn, which the cones read
     uint32_t density = 0;
     for (const PassRun& run : Plan(frame, o, stop, stop_version)) {
         // a world pass ends with the world
@@ -1377,7 +1273,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                 if (!DrawnToBackBuffer(it) || (shows_kept && i < frame.post_boundary)) continue;
                 if (back == &world && i >= frame.post_boundary) resolve(true);
                 if (back == &overlay && (o.view != RasterView::kFinal || pre)) break;
-                // (a DrawRect quad has no camera of its own)
+                // DrawRect quads have no camera of their own
                 if (it.rect_shader < 0) {
                     if (o.clear_depth_per_camera && !layout.cameras && it.cam != last_cam &&
                         cams_seen.insert(it.cam).second) {
@@ -1393,8 +1289,8 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                 DepthMap dm;
                 PlaceBackBufferDraw(layout, frame, it, o.width, o.height, vp, dm);
                 back->SetViewport(vp[0], vp[1], vp[2], vp[3]);
-                // the overlay's camera draws over the whole picture reach its
-                // edges (RasterOptions::overlay_edge), as gpu_view.cpp's do
+                // whole-picture overlay camera draws stretch to the edges
+                // (RasterOptions::overlay_edge)
                 const bool whole = vp[0] == 0.0f && vp[1] == 0.0f &&
                                    vp[2] == float(o.width) && vp[3] == float(o.height);
                 const bool overlay_whole = back == &overlay && whole && it.rect_shader < 0;
@@ -1411,9 +1307,8 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             }
             continue;
         }
-        // into the texture's own target, made at its size (again if that
-        // changed) and cleared as DxCam::Select cleared it; one no camera
-        // cleared (or NgLight cleared: PassClearFlags) starts transparent black
+        // the texture's target, (re)made at its size and cleared as
+        // DxCam::Select (or NgLight: PassClearFlags) did; else transparent black
         const Pass& p = *run.pass;
         RtTarget& rt = rts[p.tex_obj];
         const bool shadow_map = p.tex_type == kTexTypeShadowMap;
@@ -1428,7 +1323,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             rt.depth.assign(size_t(rt.w) * rt.h, 0.0f);
             rt.zw.clear();
         }
-        // a shadow map's depth: nothing drawn is as far as it goes
+        // shadow map depth starts at the far plane
         if (shadow_map && rt.zw.empty()) rt.zw.assign(size_t(rt.w) * rt.h, 1.0f);
         if (PassClearFlags(frame, p) & 0x0f)
             std::fill(rt.color.begin(), rt.color.end(), ArgbToRgba(p.clear_color));
@@ -1459,8 +1354,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                 continue;
             }
             if (SoftBlur(frame, it, state, p)) {
-                // the other surface as its pass left it (transparent black,
-                // counted, if none did)
+                // the other surface; transparent black (counted) if undrawn
                 static constexpr uint32_t kBlack = kTransparentBlack;
                 TexView src{1, 1, &kBlack};
                 if (auto s = rts.find(it.tex->tex_obj); s != rts.end())
@@ -1470,8 +1364,8 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                 TapBlurDraw(it, *state, o, src, rtt, st, &p);
                 continue;
             }
-            // the camera's viewport, scaled with the target; DrawRect's quads
-            // are in the target's pixels, over all of it
+            // the camera's viewport scaled with the target; DrawRect quads
+            // cover the whole target
             if (it.rect_shader < 0 && p.viewport[2] > 0 && p.viewport[3] > 0) {
                 float vp[4];
                 ScalePassViewport(p, rt.w, rt.h, vp);
@@ -1481,8 +1375,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             }
             DrawOne(it, int32_t(i), state, o, rts, rtt, st, cv, density_view);
         }
-        // its mips, from what it holds now, as the GPU makes them after the
-        // pass (gpu_view.cpp's TargetFor and SDL_GenerateMipmapsForGPUTexture)
+        // as the GPU makes them after the pass (gpu_view.cpp's TargetFor)
         rt.mips.clear();
         if (o.filtering && !shadow_map && p.num_mips > 1)
             BuildMips(rt.color.data(), rt.w, rt.h, std::min(p.num_mips, FullMipChain(rt.w, rt.h)),
@@ -1491,8 +1384,6 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         if (stop && p.tex_obj == stop && p.version == stop_version) break;
     }
     if (back == &world) resolve(false);
-    // the overlay's samples averaged into the picture, as the GPU's resolve
-    // and RB3's EndTiling do
     if (overlay.samples > 1)
         for (size_t i = 0; i < pixels; i++) rgba[i] = ResolvePixel(&ms_color[i * samples], samples);
     st.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
@@ -1547,7 +1438,7 @@ BlurSubTaps BlurSubTapsFor(const ShadeInputs& s, int taps, const Pass& p, uint32
                            uint32_t h) {
     BlurSubTaps sub;
     if (!p.width || !p.height || (w <= p.width && h <= p.height)) return sub;
-    // the line the taps lie along: the axis their offsets spread over most
+    // the taps' axis: the one their offsets spread over most
     float lo[2] = {0, 0}, hi[2] = {0, 0};
     for (int i = 0; i < taps; i++) {
         for (int k = 0; k < 2; k++) {
@@ -1597,10 +1488,8 @@ uint32_t ClearRgba(const FrameCapture& frame) {
 
 namespace {
 
-// the a and b of view_proj's clip z = a w + b, false if its z isn't a
-// multiple of its w plus a constant (an oblique or orthographic projection).
-// Rows are vectors (v' = v M), so z and w are columns 2 and 3: z's xyz a
-// times w's, and its translation a times w's plus b.
+// a and b of clip z = a w + b; false for oblique or orthographic projections.
+// Row vectors (v' = v M), so z and w are columns 2 and 3.
 bool PerspectiveZ(const Mat4& m, float& a, float& b) {
     double c2[3], c3[3], n3 = 0, n2 = 0, dot = 0;
     for (int i = 0; i < 3; i++) {
@@ -1725,7 +1614,7 @@ bool RasterizeTarget(const FrameCapture& frame, const RasterOptions& options, ui
     rgba = it->second.color;
     width = it->second.w;
     height = it->second.h;
-    // a shadow map's depth, near white to far (or nothing) black, opaque
+    // shadow map depth: near white, far black
     if (!it->second.zw.empty()) {
         for (size_t i = 0; i < rgba.size(); i++) {
             const float g = 1.0f - std::clamp(it->second.zw[i], 0.0f, 1.0f);
@@ -1739,7 +1628,7 @@ bool RasterizeTarget(const FrameCapture& frame, const RasterOptions& options, ui
 namespace sample_cpu {
 namespace {
 
-// HLSL's types and functions, for sample_model.hlsli: only what it uses
+// the HLSL types and functions sample_model.hlsli uses
 using shade::float2;
 using shade::float4;
 using shade::uint;

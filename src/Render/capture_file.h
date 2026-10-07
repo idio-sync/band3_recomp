@@ -5,10 +5,9 @@
 
 #include "src/Render/scene_capture.h"
 
-// Experimental: a FrameCapture on disk, so the rasterizer can be worked on
-// offline (tools/native_view_replay) without running the game each time.
-// Textures larger than 512 are downsampled to keep the file small: from
-// their mip chain where they have one (the level a sampler would read there).
+// Experimental: a FrameCapture on disk, for offline work in
+// tools/native_view_replay. Textures over 512 are downsampled, from their mip
+// chain where they have one.
 
 namespace band3::render {
 

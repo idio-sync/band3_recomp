@@ -12,20 +12,16 @@
 #include "generated/band3_init.h"
 #include "src/settings.h"
 
-// native_query_log (Band3 → Advanced → Native renderer): what the occlusion queries give the game,
-// to check the sync-only GPU's EVENT_WRITE_ZPD answers against the emulated
-// GPU's (both report native_query_sample_count / query_occlusion_fake_sample_count
-// samples, 1000 by default, as passed). The other half, the sample counts the
-// packets find, is the sync-only GPU's (SyncCommandProcessor::SetQueryLog).
+// native_query_log: logs what occlusion queries return to the game, to check
+// the sync-only GPU's EVENT_WRITE_ZPD answers against the emulated GPU's. The
+// packet side is SyncCommandProcessor::SetQueryLog.
 //
-// D3DQuery_GetData (0x82859348, band3_recomp.68.cpp): r3 the query, r4 where
-// its data goes, r5 that buffer's size in bytes; nothing reads r6 (there are
-// no flags). The query's type is at +4 (D3D9's numbering: 8 an event, 9 an
-// occlusion query, 10 a timestamp), its "issued" bit is 0x40 of the byte at
-// +20. An occlusion query writes its passed samples at r4 (with 16 bytes or
-// more, three more words) and returns 0 (S_OK) with the result, 1 (S_FALSE)
-// while its counts still hold D3D's 0xFFFFFEED marker (data 1), or
-// 0x8876086A (D3DERR_NOTAVAILABLE) for a query never issued.
+// D3DQuery_GetData (0x82859348): r3 the query, r4 the data buffer, r5 its
+// size in bytes; r6 is unused. Type at +4 (D3D9: 8 event, 9 occlusion,
+// 10 timestamp); "issued" is bit 0x40 of the byte at +20. Occlusion writes
+// passed samples at r4 (three more words if >= 16 bytes) and returns S_OK,
+// S_FALSE while the counts hold D3D's 0xFFFFFEED marker, or 0x8876086A
+// (D3DERR_NOTAVAILABLE) if never issued.
 
 extern "C" void __imp__D3DQuery_GetData(PPCContext& ctx, uint8_t* base);
 
@@ -35,8 +31,8 @@ namespace {
 constexpr uint64_t kFirstReads = 50;
 constexpr int64_t kLogEveryNs = 1'000'000'000;
 
-// the reads logged since native_query_log last turned on, and those since the
-// last one logged that weren't
+// reads since native_query_log turned on, and those not logged since the last
+// logged one
 std::atomic<bool> g_was_on{false};
 std::atomic<uint64_t> g_reads{0};
 std::atomic<uint64_t> g_left_out{0};
@@ -61,7 +57,6 @@ const char* Result(uint32_t hr) {
     }
 }
 
-// whether this read is logged (the first kFirstReads, then one a second)
 bool Logged() {
     const uint64_t n = g_reads.fetch_add(1, std::memory_order_relaxed);
     if (n < kFirstReads) return true;
@@ -76,15 +71,13 @@ bool Logged() {
 
 }  // namespace
 
-// The read itself, as the game made it; with native_query_log on, then
-// logged. Off, it costs a load of the setting and of g_was_on.
 extern "C" REX_FUNC(D3DQuery_GetData) {
     if (!REXCVAR_GET(native_query_log)) {
         if (g_was_on.load(std::memory_order_relaxed)) g_was_on.store(false, std::memory_order_relaxed);
         __imp__D3DQuery_GetData(ctx, base);
         return;
     }
-    // turned on (again): the first reads are logged again
+    // turned on again: restart the first-reads window
     if (!g_was_on.exchange(true, std::memory_order_relaxed)) {
         g_reads.store(0, std::memory_order_relaxed);
         g_left_out.store(0, std::memory_order_relaxed);

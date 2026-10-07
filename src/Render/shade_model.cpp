@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <cmath>
 
-// See shade_model.h.
-
 namespace band3::render::shade {
 namespace {
 
@@ -196,8 +194,7 @@ void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], co
 void RescaleShadowCoord(ShadeParams& sp, uint32_t game_w, uint32_t game_h, uint32_t w,
                         uint32_t h) {
     if (!game_w || !game_h || !w || !h || (w == game_w && h == game_h)) return;
-    // u = .5x + (.5 + .5 / game_w) w, so moving its offset is adding w times
-    // the difference; v likewise
+    // u = .5x + (.5 + .5 / game_w) w; v likewise
     const float du = 0.5f / float(w) - 0.5f / float(game_w);
     const float dv = 0.5f / float(h) - 0.5f / float(game_h);
     float4& u = sp.shadow[0];
@@ -232,8 +229,7 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     sp.alpha_cut.x = float(it.alpha_threshold);
     sp.texgen[0] = {1, 0, 0, 0};
     sp.texgen[1] = {0, 1, 0, 0};
-    // a movie's frame: its three planes to RGB (MovieRgb), the chroma planes
-    // read as the maps where the capture has them (not before it kept them)
+    // the chroma planes ride the specular and glow maps' slots
     if (IsMovie(it)) {
         f |= kShadeYuv;
         if (s && o.textures && s->maps[kMapSpecular] && s->maps[kMapGlow])
@@ -241,17 +237,13 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
         return;
     }
     if (it.rect_shader >= 0 && (!s || s->shader_type != kStandardShader)) {
-        // a DrawRect quad drawn with one of DxRnd's own shaders (blurs,
-        // downsamples) or no material: the texture times the
-        // colour DrawRect gave its vertices. Those with a material's shader
-        // (the outfit layers, TexBlender) are shaded as it says, below.
+        // DxRnd's own shaders (blurs, downsamples) or no material. Quads with
+        // a material's shader (outfit layers, TexBlender) shade below.
         sp.color = {1, 1, 1, 1};
         f |= kShadePrelit;
         return;
     }
-    // where the vertices are, whatever the lighting: a BILLBOARD draw's are
-    // turned to the camera (shade.hlsli's Billboard), by the inverse view's
-    // columns, VS c16..c18
+    // whatever the lighting, as it places the vertices
     if (s && s->Option(kBillboard)) {
         f |= kShadeBillboard;
         for (int i = 0; i < 3; i++)
@@ -265,9 +257,8 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     }
 
     f |= kShadeModel;
-    // the pixel shader's registers (c0 is premultiplied for PreMultAlpha,
-    // unlike the material's colour), but the texture transform and the
-    // occlusion's strength, which only the vertex shader has
+    // PS registers where there are any (c0 is premultiplied for PreMultAlpha,
+    // unlike the material's colour)
     Copy(s->Ps(0), sp.color);
     Copy(s->Ps(1), sp.ambient);
     Copy(s->Ps(2), sp.specular);
@@ -295,36 +286,28 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     Copy(s->Ps(107), sp.shadow_color);
     Copy(s->Ps(108), sp.shadow_dir);
 
-    // Registers the option word doesn't use may hold anything from an earlier
-    // draw, so every term is the option word's
+    // Registers the option word doesn't use may be stale from an earlier
+    // draw, so every term is gated on the option word
     const bool particles = s->shader_type == 14;
     if (s->Option(kPrelit)) f |= kShadePrelit;
-    // NgLight's shadow casters (draw mode 3), whose shader's options are
-    // SKINNED alone (RndShaderStandard::CalcShaderOpts): untextured (the
-    // renderers bind no diffuse texture: SamplesDiffuse), unlit and opaque
-    // white whatever the material's colour, as guest memory's copies of the
-    // shadow have them (r = g = b = a, with c0 brown); the projected light
-    // reads its alpha alone
+    // NgLight's shadow casters (draw mode 3; options SKINNED alone,
+    // RndShaderStandard::CalcShaderOpts): untextured, unlit opaque white
+    // whatever c0, as guest memory's copies of the shadow have them
     if (it.draw_mode == kDrawModeShadowCasters) {
         f &= ~(kShadeTextured | kShadePrelit);
         sp.color = sp.ambient = {1, 1, 1, 1};
         return;
     }
     if (s->Option(kIntensify)) f |= kShadeIntensify;
-    // the backend takes it off where it has no picture to read (before the
-    // resolve, or into a texture). Where it reads it moves by the refract
-    // normal map, s1, which NgMat::SetupShader binds with c119 (the strength,
-    // in all four) for this shader whatever the option word's NORMAL_MAP:
-    // where the capture decoded it (scene_capture.cpp keeps s1 for a
-    // REFRACT_WORLD draw), and the backend has it (as a normal map's).
+    // The backend drops it where it has no picture to read. NgMat::SetupShader
+    // binds the refract normal map s1 and c119 whatever NORMAL_MAP says.
     if (RefractsWorld(s)) {
         f |= kShadeRefract;
         sp.refract = {s->Ps(119)[3], 0, 0, 0};
         if (o.textures && s->maps[kMapNormal]) f |= kShadeRefractMap;
     }
-    // the luminance in alpha is for the back buffer's bloom: RB3's shaders
-    // keep alpha into a texture ("not the main target", out/research/
-    // m3_design.md 3), where it's the impostor's cut-out and a layer's blend
+    // luminance in alpha is for the back buffer's bloom; into a texture RB3
+    // keeps alpha (m3_design.md 3)
     if (s->Option(kPseudoHdr) && !it.target) f |= kShadePseudoHdr;
     const bool maps = o.textures;
     if (s->Option(kGlowMap) && maps && s->maps[kMapGlow]) f |= kShadeGlow;
@@ -334,18 +317,15 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
         default: break;
     }
     if (particles) {
-        // colour = vertex colour times VS c1 times c0 (the particle VS,
-        // 2E5F05321D973646 instrs 82 and 84; its PS is texture times that):
-        // c1 is the ambient colour the draw was given, which tints fog and
-        // smoke (the spotlight drawer's: green at the intro, blue in the
-        // arena, out/research/spotlight_survey.md 3). The VS's own registers,
-        // as the PS doesn't read them.
+        // vertex colour times VS c1 times c0 (VS 2E5F05321D973646 instrs 82,
+        // 84); c1 tints fog and smoke (spotlight_survey.md 3). The PS doesn't
+        // read them.
         Copy(s->Vs(0), sp.color);
         Copy(s->Vs(1), sp.ambient);
     }
     const bool lit = !particles && (s->Option(kRealLights) || s->Option(kApproxLights));
     if (!o.lighting || !lit) {
-        // unlit; lighting off draws lit materials so too, with no ambient
+        // lighting off draws lit materials unlit, without ambient
         if (!o.lighting) sp.ambient = {1, 1, 1, 1};
         return;
     }
@@ -359,21 +339,16 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
     if (s->Option(kRealLights)) sp.flags.y = std::min<uint>(s->OptionBits(kNumPoint, 2), 2);
     if (s->Option(kSpecular)) f |= kShadeSpecular;
     if (s->Option(kSpecularMap) && maps && s->maps[kMapSpecular]) f |= kShadeSpecMap;
-    // a billboard's vertex shader has no AO, though the crowd's option word
-    // asks for it (4B19F15CA3B46FEB reads no vertex colour)
+    // the crowd asks for AO but its VS (4B19F15CA3B46FEB) reads no vertex
+    // colour
     const bool ao = s->Option(kEnableAO) && !s->Option(kBillboard);
     if (ao) f |= kShadeAO;
-    // every AO shader the dumps have with a point light occludes it by the
-    // vertex colour's SH, none of those without one (out/research/
-    // parity_diag_ao_refract.md)
+    // every dumped AO shader with a point light uses SH
+    // (parity_diag_ao_refract.md)
     if (ao && sp.flags.y >= 1) f |= kShadeAoSh;
-    // the projected light, where its maps were decoded: the multiply form
-    // reads s5 alone, the gobo s10 too. The 18 pixel shaders the dumps have
-    // that read it (c95) all light per pixel (fam3.py matches each); a
-    // vertex-lit material's is left out. The multiply form's s5 is a texture
-    // RB3 draws (NgLight's shadow: its casters' silhouettes, blurred), which
-    // the backends draw too (scene_capture.h's ProjectedTargetOf) and drop
-    // the flags where they have neither that nor guest memory's copy.
+    // Every dumped PS reading c95 lights per pixel, so vertex-lit ones skip
+    // it. The multiply form's s5 is NgLight's blurred shadow, which the
+    // backends draw too (ProjectedTargetOf) and drop the flags without.
     if (s->OptionBits(kNumProj, 2) != 0 && s->Option(kPerPixel) && maps &&
         s->maps[kMapProjected]) {
         if (s->Option(kProjLightMultiply))
@@ -381,16 +356,12 @@ void PackShade(const DrawItem& it, const ShadeState* s, const RasterOptions& o, 
         else if (s->maps[kMapGobo])
             f |= kShadeProjGobo;
     }
-    // the shadow buffer, where s5 is the shadow map the capture has the pass
-    // of: the backend drops the flag where it hasn't drawn it. Every pixel
-    // shader the dumps have that reads it (c107) lights per pixel; a
-    // vertex-lit material's is left out.
+    // per pixel only, as every dumped PS reading c107; the backend drops the
+    // flag where it hasn't drawn the map
     if (s->Option(kPerPixel) && o.self_shadow && o.texture_passes && ShadowMapOf(s))
         f |= kShadeShadow;
-    // the normal map, and the detail map with it, where the capture decoded
-    // them and has the geometry's tangents (a capture from before them
-    // hasn't): each pixel shader the dumps have that reads s1 or c14 lights
-    // per pixel (out/research/m2_shader_ucode.md 6)
+    // per pixel only, as every dumped PS reading s1 or c14
+    // (m2_shader_ucode.md 6)
     if (s->Option(kNormalMap) && s->Option(kPerPixel) && maps && o.normal_maps &&
         s->maps[kMapNormal] && it.geom && it.geom->tangents) {
         f |= kShadeNormalMap;

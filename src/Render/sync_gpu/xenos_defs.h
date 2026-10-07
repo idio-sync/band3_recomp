@@ -34,17 +34,13 @@
 #include <cstdint>
 #include <cstring>
 
-// The few Xenos GPU constants band3's sync-only command processor (sync_cp.h)
-// needs, defined here rather than taken from the SDK's rex/graphics headers:
-// those pull in rex/memory.h and the rest of the runtime, and the unit tests
-// build without the SDK (CI has none). Each value cites the SDK header line it
-// comes from (.rexglue-sdk/include/rex/graphics/...), which are Xenia's.
+// Xenos constants for sync_cp.h, copied rather than included because the SDK's
+// rex/graphics headers pull in the runtime and the unit tests build without
+// the SDK. Line citations are to .rexglue-sdk/include/rex/graphics/.
 
 namespace band3::render::sync_gpu {
 
-// guest memory is big-endian, and the host order the stores below assume
-// (Xenia's xe::store is a plain host store) is little-endian, as on every
-// platform band3 builds for
+// the host-order loads/stores below assume little-endian
 static_assert(std::endian::native == std::endian::little);
 
 // Register indices, in dwords (an MMIO address's (addr & 0xFFFF) / 4).
@@ -68,12 +64,12 @@ inline constexpr uint32_t DC_LUT_PWL_DATA = 0x1924;       // :452
 inline constexpr uint32_t DC_LUT_30_COLOR = 0x1925;       // :456
 inline constexpr uint32_t DC_LUT_WRITE_EN_MASK = 0x1927;  // :465
 inline constexpr uint32_t VGT_EVENT_INITIATOR = 0x21F9;   // :536
-// what n7_design.md calls RB_SAMPLE_COUNT_BASE: the occlusion query's
-// xe_gpu_depth_sample_counts, which EVENT_WRITE_ZPD fills
+// aka RB_SAMPLE_COUNT_BASE: xe_gpu_depth_sample_counts, filled by
+// EVENT_WRITE_ZPD
 inline constexpr uint32_t RB_SAMPLE_COUNT_ADDR = 0x2325;  // :614
 
-// Registers the MMIO read path answers with a constant rather than the file
-// (Xenia's GraphicsSystem::ReadRegister): not in register_table.inc.
+// Answered with constants by the MMIO read path (Xenia's
+// GraphicsSystem::ReadRegister); not in register_table.inc.
 inline constexpr uint32_t RB_EDRAM_TIMING = 0x0F00;
 inline constexpr uint32_t RB_BC_CONTROL = 0x0F01;
 inline constexpr uint32_t D1MODE_V_COUNTER = 0x194C;
@@ -121,7 +117,7 @@ inline constexpr uint32_t SET_BIN_MASK_LO = 0x60;
 inline constexpr uint32_t SET_BIN_MASK_HI = 0x61;
 inline constexpr uint32_t SET_BIN_SELECT_LO = 0x62;
 inline constexpr uint32_t SET_BIN_SELECT_HI = 0x63;
-// Xenia only (and ReXGlue's kernel): VdSwap writes it to have the GPU swap
+// Xenia/ReXGlue only: written by VdSwap
 inline constexpr uint32_t XE_SWAP = 0x64;
 }  // namespace pm4
 
@@ -132,8 +128,7 @@ inline constexpr uint32_t kEventVizQueryEnd = 8;
 // xenos.h:1130, kTexture2DCubeMaxWidthHeight: EVENT_WRITE_EXT's fake extents
 inline constexpr uint32_t kTexture2DCubeMaxWidthHeight = 1 << 13;
 
-// The byte order of a word the GPU reads or writes in memory, the low 2 bits
-// of the packets' addresses (xenos.h:192).
+// The low 2 bits of packet addresses (xenos.h:192).
 enum class Endian : uint32_t { kNone = 0, k8in16 = 1, k8in32 = 2, k16in32 = 3 };
 
 // xenos.h:1039, GpuSwap(uint32_t, Endian)
@@ -147,7 +142,7 @@ inline uint32_t GpuSwap(uint32_t value, Endian endianness) {
     }
 }
 
-// Xenia's xe::load / xe::store: the host's order, unaligned
+// Xenia's xe::load / xe::store: host order, unaligned
 inline uint32_t LoadHost32(const uint8_t* p) {
     uint32_t v;
     std::memcpy(&v, p, sizeof(v));
@@ -155,13 +150,11 @@ inline uint32_t LoadHost32(const uint8_t* p) {
 }
 inline void StoreHost32(uint8_t* p, uint32_t v) { std::memcpy(p, &v, sizeof(v)); }
 
-// xe::load_and_swap / store_and_swap: big-endian, the guest's order
+// xe::load_and_swap / store_and_swap: big-endian
 inline uint32_t LoadBE32(const uint8_t* p) { return std::byteswap(LoadHost32(p)); }
 inline void StoreBE32(uint8_t* p, uint32_t v) { StoreHost32(p, std::byteswap(v)); }
 
-// A word another thread writes (the guest's CPU, or the MMIO path), read
-// while polling it; p is 4-aligned (the packets' addresses with the endian
-// bits cleared)
+// For words other threads write (guest CPU, MMIO path); p must be 4-aligned
 inline uint32_t LoadHost32Acquire(const uint8_t* p) {
     return std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(const_cast<uint8_t*>(p)))
         .load(std::memory_order_acquire);

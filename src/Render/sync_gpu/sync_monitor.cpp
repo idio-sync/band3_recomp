@@ -100,8 +100,8 @@ SyncCpDelta DeltaOf(const SyncCpStats& now, const SyncCpStats& before) {
             double(minus(now.wait_ns_by_band[b], before.wait_ns_by_band[b])) / 1e6;
         d.polls_by_band[b] = minus(now.polls_by_band[b], before.polls_by_band[b]);
     }
-    // a value's index is the same in both (SyncCpStats::wait_values); one
-    // `before` hadn't seen yet counts from 0
+    // indices match in both (SyncCpStats::wait_values); one new since
+    // `before` counts from 0
     const uint64_t values = std::min<uint64_t>(now.wait_value_count.get(), SyncCpStats::kWaitValues);
     for (uint64_t i = 0; i < values; i++) {
         const uint64_t was = i < before.wait_value_count.get() ? before.stalled_by_value[i].get() : 0;
@@ -131,8 +131,7 @@ SyncCpDelta DeltaOf(const SyncCpStats& now, const SyncCpStats& before) {
 
 namespace {
 
-// the summary's stalled waits by wait interval: each band's waits, time and
-// polls (a yield's polls are a spin's), then the intervals themselves
+// stalled waits per wait band (waits, time, polls), then the intervals
 std::string StalledWaits(const SyncCpDelta& d) {
     std::string out = "stalled by wait interval:";
     for (int b = 0; b < kWaitBands; b++) {

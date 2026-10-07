@@ -59,22 +59,18 @@ constexpr SDL_GPUTextureFormat kColorFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNO
 constexpr SDL_GPUTextureFormat kDepthFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
 // a shadow map's target: its depth, clip z/w, as soft_raster.cpp keeps it
 constexpr SDL_GPUTextureFormat kShadowFormat = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
-// a mesh or texture no frame has drawn for this many frames, and kKeepSeconds,
-// is let go (a render target's picture is forgotten at the frames alone)
+// frames unused (and kKeepSeconds) before a mesh or texture is let go; a
+// render target's picture is forgotten at the frames alone
 constexpr uint64_t kEvictAfter = 120;
-// the seconds unused after which, with kEvictAfter frames, a forgotten render
-// target's textures are let go, and in a song a mesh in the arena and a
-// texture drawn in more than one frame (by frames of more than one world:
-// ClockKeep); render targets too past kMaxRts kept, least recently used first
-// (gpu_view.h's residency; GpuStats::rts_mb is what they hold)
+// seconds unused before a forgotten target's textures go, and what ClockKeep
+// keeps in a song; past kMaxRts, targets go LRU first (gpu_view.h's residency)
 constexpr double kKeepSeconds = 30;
 constexpr size_t kMaxRts = 128;
-// over this many bytes an arena rebuild keeps less than the clock would
-// (gpu_view.h's residency, ArenaRebuildKeep); a song's arena is 24 to 34 MB
+// over this an arena rebuild keeps less than the clock would
+// (ArenaRebuildKeep); a song's arena is 24 to 34 MB
 constexpr uint64_t kMaxArenaBytes = 256u << 20;
-// A texture array of a size class starts with layers to about this many
-// bytes, and doubles when full. Making a texture costs about half a
-// millisecond, so textures share them rather than have one each.
+// A size class's texture array starts at about this many bytes and doubles
+// when full. Textures share arrays: making a texture costs ~0.5 ms.
 constexpr uint32_t kTextureArrayBytes = 4u << 20;
 constexpr uint32_t kMaxTextureLayers = 2048;  // Direct3D 12's limit
 // Direct3D 12 copies texture rows from an upload at this pitch, starting at an
@@ -83,8 +79,7 @@ constexpr uint32_t kRowPitchAlign = 256;
 constexpr uint32_t kTextureOffsetAlign = 512;
 // the arena's least size; it's made twice as big as it needs
 constexpr uint32_t kMinArenaBytes = 4u << 20;
-// the upload buffer's first size, which holds a song's usual frame: making it
-// bigger later costs a frame several milliseconds
+// holds a song's usual frame: growing it later costs a frame several ms
 constexpr uint32_t kInitialUploadBytes = 32u << 20;
 
 // mesh.hlsl's cbuffers, as they lie in memory
@@ -98,8 +93,7 @@ struct VertexUniforms {
     float clip_offset[4];  // ClipOffset's
     // the depth's DepthMap (soft_raster.h): p, q, r, then 0; 0 1 0 is 1/w
     float depth_map[4];
-    // RasterOptions::overlay_edge (x, y, then 0 0) for an overlay draw over
-    // the whole picture; 1 1 for every other
+    // RasterOptions::overlay_edge for a whole-picture overlay draw; 1 1 otherwise
     float overlay_edge[4] = {1.0f, 1.0f, 0.0f, 0.0f};
     shade::ShadeParams shade;
 };
@@ -113,9 +107,8 @@ void SetDepthMap(const DepthMap& d, float out[4]) {
 }
 
 // What mesh.hlsl adds to a draw's clip x, y (times w) in a viewport vw x vh:
-// half a pixel right and down, so that the pixel SDL_gpu samples at its
-// centre, x + .5, sees what the game's device sampled at x, on D3D9's pixel
-// centres; none for DrawRect's quads, which RB3 draws on D3D10's
+// half a pixel right and down, so SDL_gpu's centre x + .5 sees what D3D9's
+// pixel centre x did; none for DrawRect's quads, which RB3 draws on D3D10's
 // (soft_raster.cpp's PixelCentre)
 void ClipOffset(const DrawItem& it, float vw, float vh, float out[4]) {
     const bool rect = it.rect_shader >= 0;
@@ -129,14 +122,13 @@ struct PixelUniforms {
     // diffuse, specular map, glow map, projected light, gobo, normal map,
     // detail map
     uint32_t tex_layer[8];
-    // each one's own width and height: the five before the normal map, then
-    // the shadow map's, the normal map's and the detail map's
+    // width and height: the five before the normal map, then the shadow
+    // map's, the normal map's and the detail map's
     uint32_t tex_size[8][4];
-    // x: kPremultiply; y: the maps, by tex_layer's order, that are DXN kept
-    // as BC5 (mesh.hlsl's DxnTexel)
+    // x: kPremultiply; y: bits, in tex_layer's order, of the DXN maps kept as
+    // BC5 (mesh.hlsl's DxnTexel)
     uint32_t flags[4];
-    // the samplers they're read with (sample_model.h's PackSampler), in
-    // tex_layer's order
+    // sample_model.h's PackSampler, in tex_layer's order
     uint32_t tex_sampler[8][4];
 };
 static_assert(sizeof(PixelUniforms) == sizeof(shade::ShadeParams) + 304);
@@ -152,11 +144,10 @@ struct SpotUniforms {
 };
 static_assert(sizeof(SpotUniforms) == sizeof(spot::SpotParams) + 32);
 
-// the textures a draw samples, in mesh.hlsl's sampler order: the maps, which
-// PixelUniforms sizes, then the picture behind (kShadeRefract), the shadow
-// map (kShadeShadow, sized after the maps) and the normal map and the detail
-// map (kShadeNormalMap, kShadeDetailMap, sized after the shadow map); a
-// spotlight's cone reads two more, the scene's depth and the density map
+// the textures a draw samples, in mesh.hlsl's sampler order: the maps, the
+// picture behind (kShadeRefract), the shadow map (kShadeShadow), the normal
+// and detail maps (kShadeNormalMap, kShadeDetailMap); a spotlight's cone reads
+// two more, the scene's depth and the density map
 enum {
     kSlotDiffuse,
     kSlotSpecular,
@@ -187,17 +178,14 @@ enum : int {
 };
 static_assert(kBlendPreMultAlpha < 8, "Pipeline()'s key keeps the mode in 3 bits");
 
-// What a draw's pipeline does with its target's alpha: leaves it (the
-// picture's stays the resolve's 1, and a world draw that doesn't write it
-// keeps the scene's), blends it by the colour's factors (into a texture), or
-// as RB3's back buffer does (WritesSceneAlpha: ONE ONE MAX where it blends)
+// What a draw's pipeline does with its target's alpha: leaves it, blends it
+// by the colour's factors (into a texture), or as RB3's back buffer does
+// (WritesSceneAlpha: ONE ONE MAX where it blends)
 enum class AlphaMode { kNone, kTexture, kScene };
 constexpr int kNumAlphaModes = 3;
 
-// which of mesh.hlsl's pixel shaders a draw's pipeline runs: PSMain,
-// PSSpotCone for a spotlight's cone, PSSoftParticle for a soft particle,
-// PSShadowDepth for a shadow map's draw (into its R32_FLOAT target, LESS
-// against its depth cleared to the pass's clear_z, no blend)
+// mesh.hlsl's PSMain, PSSpotCone, PSSoftParticle, PSShadowDepth (R32_FLOAT
+// target, LESS against depth cleared to the pass's clear_z, no blend)
 enum class PixelKind { kMesh, kSpot, kSoft, kShadowDepth };
 
 // a target's sample count (1, 2 or 4) as SDL has it, and in Pipeline()'s key
@@ -282,9 +270,8 @@ std::string FormatNames(SDL_GPUShaderFormat f) {
 
 uint32_t Align(uint32_t v, uint32_t a) { return (v + a - 1) / a * a; }
 
-// how many of a texture's levels the GPU gets: level 0 and the mips after it
-// that are the size they should be; of its blocks (Texture::blocks), with
-// `blocks`
+// level 0 and the following mips that have their proper size; of
+// Texture::blocks with `blocks`
 uint32_t LevelsOf(const Texture& t, bool blocks = false) {
     uint32_t n = 1;
     if (blocks) {
@@ -306,11 +293,9 @@ uint32_t LevelsOf(const Texture& t, bool blocks = false) {
     return n;
 }
 
-// Block-compressed textures kept as blocks (RasterOptions::bc_textures): the
-// GPU's format for each Xenos one (BlockPixels::format), INVALID for the rest.
-// Its Load gives a texel as guest_formats.h's DecodeBlock does, but BC5's
-// (x, y, 0, 1) for DecodeBlock's (x, y, y, y): mesh.hlsl's DxnTexel puts y
-// back in z and w (PixelUniforms::flags[1]).
+// The GPU format for a Xenos block format (BlockPixels::format) kept as blocks
+// (RasterOptions::bc_textures), else INVALID. Loads match DecodeBlock but for
+// BC5's (x, y, 0, 1) vs (x, y, y, y), which mesh.hlsl's DxnTexel fixes.
 SDL_GPUTextureFormat BcFormat(uint32_t xenos_format) {
     switch (xenos_format) {
         case 18: return SDL_GPU_TEXTUREFORMAT_BC1_RGBA_UNORM;
@@ -340,10 +325,9 @@ uint32_t NextPow2(uint32_t v) {
     return p;
 }
 
-// A texture's size class, the layer size of the array it goes in: powers of
-// two that hold it, at least kMinClassSize and at most 2:1, so a frame's
-// textures need few arrays. An array has every level of its class's chain;
-// a texture's levels go in its layer's corner of each, as its level 0 does.
+// A texture's size class (its array's layer size): powers of two, at least
+// kMinClassSize, at most 2:1, so few arrays are needed. An array has its
+// class's full chain; a texture's levels sit in each level's corner.
 constexpr uint32_t kMinClassSize = 64;
 
 void SizeClass(uint32_t w, uint32_t h, uint32_t& cw, uint32_t& ch) {
@@ -367,42 +351,37 @@ struct GpuRenderer::Impl {
     SDL_GPUDevice* device = nullptr;
     SDL_GPUShader* vertex_shader = nullptr;
     SDL_GPUShader* pixel_shader = nullptr;
-    // mesh.hlsl's PSSpotCone, for the spotlights' cones, PSSoftParticle, for
-    // the soft particles, and PSShadowDepth, for the shadow maps
+    // mesh.hlsl's PSSpotCone, PSSoftParticle and PSShadowDepth
     SDL_GPUShader* spot_shader = nullptr;
     SDL_GPUShader* soft_shader = nullptr;
     SDL_GPUShader* shadow_shader = nullptr;
     // whether the device draws into and samples R32_FLOAT, the shadow maps'
     // format; without, the characters are drawn without their self-shadows
     bool shadow_maps = false;
-    // whether the device samples BC1, BC2, BC3 and BC5 texture arrays (all
-    // four, checked at Create), so RasterOptions::bc_textures can keep
-    // textures as blocks; and this frame's choice (Render), which UseTexture
-    // places new textures by
+    // whether the device samples BC1/2/3/5 texture arrays (checked at
+    // Create), so RasterOptions::bc_textures can keep blocks; bc_now is this
+    // frame's choice, by which UseTexture places new textures
     bool bc_formats = false;
     bool bc_now = false;
-    // Direct3D 12 copies a BC texture's regions by its "physical" size, whole
-    // blocks, even a level under 4 texels on a side; Vulkan's (and Metal's)
-    // end at the level's edge (BcExtent)
+    // Direct3D 12 copies a BC texture's regions in whole blocks, even a level
+    // under 4 texels on a side; Vulkan's and Metal's end at the level's edge
+    // (BcExtent)
     bool bc_whole_blocks = false;
-    // post.hlsl's: the full-screen triangle; the resolve, the scene into the
-    // picture as it is; and post-processing's downsample, blur, glare pass
-    // and composite
+    // post.hlsl's: the full-screen triangle, the resolve and post-processing
     SDL_GPUShader* fullscreen_shader = nullptr;
     SDL_GPUShader* resolve_shader = nullptr;
-    // the overlay's start in its multisampled target: the picture copied
-    // into every sample, and its depth (PSOverlayStart)
+    // copies the picture and its depth into every sample of the overlay's
+    // multisampled target (PSOverlayStart)
     SDL_GPUShader* overlay_start_shader = nullptr;
     SDL_GPUShader* downsample_shader = nullptr;
     SDL_GPUShader* blur_shader = nullptr;
     SDL_GPUShader* glare_shader = nullptr;
     SDL_GPUShader* composite_shader = nullptr;
-    // the live view's composite, which also keeps the post buffer the
-    // trails read (PSCompositeHistory: two targets)
+    // also keeps the post buffer the trails read (PSCompositeHistory: two
+    // targets)
     SDL_GPUShader* composite_history_shader = nullptr;
-    // the camera motion blur's velocity pass (PSVelocity), and its object
-    // pass (velocity.hlsl): a pipeline for each way it culls (CullWinding's
-    // first three)
+    // camera motion blur's velocity pass (PSVelocity) and object pass
+    // (velocity.hlsl), with a pipeline per CullWinding but kAll
     SDL_GPUShader* velocity_shader = nullptr;
     SDL_GPUShader* velocity_object_vs = nullptr;
     SDL_GPUShader* velocity_object_ps = nullptr;
@@ -417,28 +396,24 @@ struct GpuRenderer::Impl {
     // gamma.hlsl's: the display gamma ramp over the finished picture
     SDL_GPUShader* gamma_shader = nullptr;
     SDL_GPUGraphicsPipeline* gamma_pipeline = nullptr;
-    // mips.hlsl's: a texture pass's mips drawn in the frame's command buffer
-    // (RasterOptions::inline_mips), each level from the one above as SDL's
-    // GenerateMipmaps blits them on Direct3D 12, with its blits' linear
-    // sampler: clamping, and no LOD clamp (linear_sampler's keeps SampleLevel
-    // at level 0). Direct3D 12 only (inline_mips_ok); elsewhere SDL's own mips.
+    // mips.hlsl's: texture pass mips drawn inline (RasterOptions::inline_mips)
+    // as SDL's GenerateMipmaps does on Direct3D 12 (inline_mips_ok only).
+    // mip_sampler has no LOD clamp; linear_sampler's pins level 0.
     SDL_GPUShader* mip_vertex_shader = nullptr;
     SDL_GPUShader* mip_shader = nullptr;
     SDL_GPUGraphicsPipeline* mip_pipeline = nullptr;
     SDL_GPUSampler* mip_sampler = nullptr;
     bool inline_mips_ok = false;
     // by blend mode, DepthRules::Key, AlphaMode, CullWinding, PixelKind and
-    // sample count, all made before the first frame; and the overlay's
-    // start's, by sample count (OverlayStartPipeline)
+    // sample count, all made before the first frame; and the overlay start's,
+    // by sample count (OverlayStartPipeline)
     std::unordered_map<int, SDL_GPUGraphicsPipeline*> pipelines;
-    // Prewarm has started (read without the mutex by GpuRenderer::Prewarm),
-    // and has finished: a pipeline made after it is one it doesn't make,
-    // which a frame waited for (logged)
+    // Prewarm has started (read without the mutex) / finished; a pipeline made
+    // after it is one it missed, which a frame waited for (logged)
     std::atomic<bool> warm{false};
     bool warmed_up = false;
-    // RasterOptions::gpu_labels: the last frame submitted, and what each of
-    // its indexed draws is, in order, a list per command buffer it took
-    // (DescribeIndexedDraw)
+    // RasterOptions::gpu_labels: the last frame submitted and its indexed
+    // draws in order, a list per command buffer (DescribeIndexedDraw)
     std::mutex draw_log_mutex;
     std::string draw_log_frame;
     std::vector<std::vector<std::string>> draw_log;
@@ -449,75 +424,61 @@ struct GpuRenderer::Impl {
     SDL_GPUTexture* black = nullptr;     // transparent: a render target nothing has drawn
     SDL_GPUBuffer* no_bones = nullptr;   // one identity bone, bound when nothing is skinned
 
-    // The world's draws go to the scene target (its alpha the bloom weight),
-    // which the resolve reads into the picture, `color`; the overlay's go on
-    // top of that. The depth buffer is both's, and readable by the resolve
-    // where the device can sample D32 (depth_sampled); where it can't, the
-    // resolve reads no_depth, which is 0 (nothing drew), and post-processing
-    // leaves depth of field out.
+    // The world draws to `scene` (alpha: bloom weight), resolved into
+    // `color`; the overlay draws on top. They share `depth`, sampled by the
+    // resolve if the device can (depth_sampled), else no_depth (0), no DOF.
     SDL_GPUTexture* scene = nullptr;
     SDL_GPUTexture* color = nullptr;
     SDL_GPUTexture* depth = nullptr;
-    // The overlay's multisampled targets (soft_raster.h's OverlaySamples),
-    // ms_samples a pixel: its colour, which each of its passes resolves into
-    // `color` as it ends (the mean of each pixel's samples, as RB3's
-    // EndTiling), and its own depth, so the world's stays as the world left
-    // it. Render targets alone: SDL can't sample a multisampled texture.
-    // Made at the picture's size when a frame first draws an overlay.
+    // The overlay's multisampled targets (soft_raster.h's OverlaySamples):
+    // colour, resolved into `color` as each pass ends (the samples' mean, as
+    // RB3's EndTiling), and its own depth, leaving the world's intact. SDL
+    // can't sample them. Made at the picture's size on a frame's first overlay.
     SDL_GPUTexture* color_ms = nullptr;
     SDL_GPUTexture* depth_ms = nullptr;
     uint32_t ms_samples = 1, ms_w = 0, ms_h = 0;
-    // whether the device draws kColorFormat and kDepthFormat multisampled,
-    // [0] at 2 samples and [1] at 4; and the counts asked for that it
-    // couldn't, logged once each, and whether making the targets failed
-    // (logged once)
+    // whether the device draws kColorFormat and kDepthFormat at [0] 2 and [1]
+    // 4 samples; the unsupported counts and failures already logged
     bool ms_supported[2] = {};
     uint32_t ms_fallback_logged = 0;
     bool ms_failure_logged = false;
-    // a copy of `color` as the resolve left it, for the overlay's
-    // REFRACT_WORLD draws (RefractsWorld), made on frames that have one
+    // `color` as the resolve left it, for the overlay's REFRACT_WORLD draws
+    // (RefractsWorld), made on frames that have one
     SDL_GPUTexture* behind = nullptr;
-    // RenderFrame's output: the finished picture through the frame's gamma
-    // ramp (or the identity), which it reads back
+    // RenderFrame's output, read back: the picture through the frame's gamma
+    // ramp (or the identity)
     SDL_GPUTexture* graded = nullptr;
     bool depth_sampled = false;
     SDL_GPUTexture* no_depth = nullptr;
     SDL_GPUTransferBuffer* readback = nullptr;
     uint32_t width = 0, height = 0;
-    // post-processing's levels (post_model.h), RGBA8 as the 360's: the DOF's
-    // at a quarter of the picture's size, bloom's at a quarter, a sixteenth
-    // and a sixty-fourth, and one of each size for a blur's first direction;
-    // and the camera motion blur's velocity texture, half the picture's size
+    // post-processing's levels (post_model.h), RGBA8 as the 360's: DOF at a
+    // quarter of the picture's size, bloom at a quarter, a sixteenth and a
+    // sixty-fourth, a blur's first direction at each; velocity at half size
     SDL_GPUTexture* post_dof = nullptr;
     SDL_GPUTexture* post_velocity = nullptr;
     uint32_t velocity_w = 0, velocity_h = 0;
-    // the object pass's depth, at the velocity texture's size
     SDL_GPUTexture* post_velocity_depth = nullptr;
-    // where each of the frame's velocity objects' palettes start in the
-    // frame's bones (its two, this frame's then the last's)
+    // where each velocity object's two palettes (this frame's, then the
+    // last's) start in the frame's bones
     std::vector<uint32_t> velocity_bone_base;
     SDL_GPUTexture* post_bloom[3] = {};
     SDL_GPUTexture* post_tmp[3] = {};
     uint32_t post_w[3] = {}, post_h[3] = {};
-    // a texture pass's target copied for a blur to read, RGBA8 at its size, a
-    // plain 2D texture as the blur's source is (a target is an array of one
-    // layer): the depth volume as it was before a blur (the game blurs it in
-    // place, through a resolve), NgLight's shadow likewise, and the
-    // soft-particle surface a blur reads into the other
+    // a texture pass's target copied to a plain 2D RGBA8 texture for a blur
+    // to read: the depth volume before a blur (the game blurs it in place,
+    // through a resolve), NgLight's shadow likewise, the soft-particle
+    // surface; and the scene a world pass left (soft_raster.h's
+    // kPreBufferPasses) for the next one's REFRACT_WORLD draws
     struct Scratch {
         SDL_GPUTexture* texture = nullptr;
         uint32_t w = 0, h = 0;
     };
-    // and the scene a world pass left (soft_raster.h's kPreBufferPasses),
-    // which the next one's REFRACT_WORLD draws read, and the frame's after
-    // them
     Scratch spot_scratch, light_scratch, soft_scratch, pre_scratch;
-    // The post buffer the trails read (RasterOptions::trails, the live
-    // view's): the last post frame's composite, its colour and alpha, at the
-    // picture's size, in tex[cur] (-1 none yet), from game frame game_frame;
-    // the composite of a post frame writes the other and makes it cur.
-    // Apart from the frame's targets, so a capture drawn at another size in
-    // between leaves it be.
+    // The trails' post buffer (RasterOptions::trails): the last post frame's
+    // composite in tex[cur] (-1 none); the next writes the other. Like the
+    // buffers below, apart from the frame's targets so captures at another
+    // size leave it be.
     struct History {
         SDL_GPUTexture* tex[2] = {};
         uint32_t w = 0, h = 0;
@@ -525,31 +486,22 @@ struct GpuRenderer::Impl {
         uint64_t game_frame = 0;
     };
     History history;
-    // The post buffer as the screen shows it (RasterOptions::post_buffer,
-    // the live view's): the last post frame's picture before its overlay, at
-    // the picture's size, from game frame game_frame (0 none), which the
-    // frames after it that post-process nothing show under their own
-    // overlay. Apart from the frame's targets, as the history is.
+    // RasterOptions::post_buffer: the last post frame's picture before its
+    // overlay (game_frame 0: none), shown under later frames' overlays
     struct PostBuffer {
         SDL_GPUTexture* tex = nullptr;
         uint32_t w = 0, h = 0;
         uint64_t game_frame = 0;
     };
     PostBuffer post_buffer;
-    // The pre-process buffer (RasterOptions::pre_buffer, the live view's):
-    // the last world frame's scene before post-processing, at the picture's
-    // size, from the world of game frame game_frame (0 none), kept where that
-    // world has a REFRACT_WORLD draw, which the next one's read. Apart from
-    // the frame's targets, as the post buffer is.
+    // RasterOptions::pre_buffer: the last refracting world frame's scene
+    // before post-processing, for the next one's REFRACT_WORLD draws
     PostBuffer pre_buffer;
 
-    // The presenter's outputs (RenderFrameToOutput), each at the size it was
-    // last drawn at: apart from the frame's targets, so a frame drawn at
-    // another size (a capture's) leaves them be. COLOR_TARGET and SAMPLER,
-    // which SDL leaves in ALL_SHADER_RESOURCE after its passes, so the SDK's
-    // command list samples one without a barrier. Never cycled: SDL's texture
-    // behind each stays the one that was checked. `fence` is the submission
-    // of the frame last drawn into it until OutputDone finds it signalled.
+    // The presenter's outputs (RenderFrameToOutput). SDL leaves them in
+    // ALL_SHADER_RESOURCE, so the SDK samples them barrier-free. Never cycled,
+    // so the texture stays the one checked. `fence`: the last frame drawn
+    // into it, until OutputDone sees it signal.
     struct Output {
         SDL_GPUTexture* texture = nullptr;
         uint32_t w = 0, h = 0;
@@ -569,23 +521,16 @@ struct GpuRenderer::Impl {
     std::atomic<bool> zero_copy{false};
     std::mutex zero_copy_mutex;
     std::string zero_copy_why = "not checked yet";
-    // RefuseDevice's why, which keeps Init from making the device (under
+    // RefuseDevice's reason; keeps Init from making the device (under
     // zero_copy_mutex)
     std::string refused;
 
-    // GPU timings (RasterOptions::gpu_timestamps; gpu_view.h, and
-    // gpu_timing_model.h): the SDK's direct queue's ticks a second
-    // (SetPresentDevice), and whether SDL's command list passed
-    // CheckTimingOnce's checks (once: logged if not), which made the query
-    // heap and its readback buffer on the SDK's device. A heap region of
-    // kTimingSlots timestamps per frame being drawn: each output's, RenderFrame's
-    // (kOutputs), and the aside's (kAsideRegion), where a world pass before a
-    // frame or the world drawn ahead, submitted without a fence of their own,
-    // mark theirs until the next whole frame resolves them with its own. The
-    // readback buffer has two regions' room for each frame's (its own, then
-    // the aside's), so neither is written over before it's read: an output's
-    // isn't drawn again until its fence was seen (native_view.cpp's
-    // PresentSlots), and RenderFrame's is read before it returns.
+    // GPU timings (RasterOptions::gpu_timestamps; gpu_timing_model.h). Heap
+    // regions of kTimingSlots: each output's, RenderFrame's (kOutputs), and
+    // the aside's (kAsideRegion) for fenceless pre passes and world-ahead work
+    // until the next frame resolves it. The readback has two regions per frame
+    // (its own, the aside's), never overwritten before read: outputs wait for
+    // their fence (native_view.cpp's PresentSlots), RenderFrame reads at once.
     static constexpr uint32_t kTimingSlots = 256;
     static constexpr int kFrameRegions = kOutputs + 1;
     static constexpr int kAsideRegion = kOutputs + 1;
@@ -595,9 +540,8 @@ struct GpuRenderer::Impl {
     ID3D12QueryHeap* query_heap = nullptr;
     ID3D12Resource* query_readback = nullptr;
 #endif
-    // the frame being recorded's ladder, and the aside's; the region it marks
-    // (-1 untimed: off, or its command buffer failed the checks), and whether
-    // it marks the aside (a world pass before a frame, or the world ahead)
+    // the recording frame's ladder and the aside's; its region (-1 untimed),
+    // and whether it marks the aside
     gpu_timing::Ladder ladder{kTimingSlots}, aside_ladder{kTimingSlots};
     int timing_region = -1;
     bool timing_aside = false;
@@ -610,8 +554,7 @@ struct GpuRenderer::Impl {
     Timed timed[kFrameRegions];
 
     // Everything a frame sends goes through this one transfer buffer and one
-    // copy pass. It's mapped cycling, so a frame never waits on an earlier one
-    // still reading it.
+    // copy pass, mapped cycling so a frame never waits on an earlier one.
     SDL_GPUTransferBuffer* upload = nullptr;
     uint32_t upload_size = 0;
 
@@ -619,19 +562,14 @@ struct GpuRenderer::Impl {
         SDL_GPUBuffer* buffer = nullptr;
         uint32_t size = 0;
     };
-    // Geometry drawn in more than one frame lives in the arena, appended to
-    // and, when full, rebuilt from the meshes still within their keep, copied
-    // from the old one on the GPU (PlaceInArena). Geometry new this frame
-    // goes in the frame's pool: mutable meshes and particles are new every
-    // frame, and a buffer each costs far more than copying them. Neither
-    // makes a GPU buffer per mesh. The pool alternates between two buffers,
-    // so geometry the next frame draws again moves to the arena by a copy on
-    // the GPU rather than being sent again.
+    // Geometry drawn in more than one frame lives in the arena (appended;
+    // rebuilt on the GPU when full: PlaceInArena); new geometry in the frame's
+    // pool, no buffer per mesh. The pool alternates two buffers, so geometry
+    // drawn again next frame moves to the arena by a GPU copy.
     Buffer arena_verts, arena_indices;
     uint32_t arena_vert_count = 0, arena_index_count = 0;
-    // the arena a rebuild this frame replaced, which its copy pass copies
-    // out of and then releases: SDL_ReleaseGPUBuffer's handle mustn't be
-    // used after, though SDL keeps the buffer until the GPU is done with it
+    // the arena a rebuild this frame replaced; the copy pass copies out of it
+    // and then releases it (the handle mustn't be used after release)
     Buffer old_arena_verts, old_arena_indices;
     Buffer pool_verts[2], pool_indices[2];  // by frame serial & 1
     Buffer bones;  // this frame's skinned draws' bones, one after another
@@ -642,9 +580,8 @@ struct GpuRenderer::Impl {
         // the frame that last drew it, and when (frame_now)
         uint64_t used = 0;
         std::chrono::steady_clock::time_point used_at;
-        // the world of the frame that first drew it (frame_world), whether
-        // frames of another have drawn it too, and whether the frame that
-        // last drew it was in a song (ClockKeep)
+        // for ClockKeep: the first drawing frame's world (frame_world),
+        // whether another world's frames drew it, whether last drawn in a song
         uint64_t first_world = 0;
         bool across_worlds = false;
         bool drawn_in_song = false;
@@ -652,9 +589,9 @@ struct GpuRenderer::Impl {
         // where it starts in the arena, or else in its frame's pool
         uint32_t first_vertex = 0;
         uint32_t first_index = 0;
-        // when moving to the arena: where it was in the last frame's pool,
-        // or where it was in the old arena (kept by a rebuild); with neither
-        // (~0u) it's sent from the CPU
+        // when moving to the arena: where it was in the last frame's pool or
+        // the old arena (kept by a rebuild); with neither (~0u) it's sent
+        // from the CPU
         uint32_t pool_vertex = ~0u;
         uint32_t pool_index = 0;
         uint32_t arena_vertex = ~0u;
@@ -681,7 +618,7 @@ struct GpuRenderer::Impl {
         uint32_t layer = 0;
         uint32_t levels = 1;  // of the texture's, in it (LevelsOf)
         uint64_t first = 0;
-        // the frame that last drew it, and when (frame_now); as a Mesh's
+        // as a Mesh's
         uint64_t used = 0;
         std::chrono::steady_clock::time_point used_at;
         uint64_t first_world = 0;
@@ -692,21 +629,16 @@ struct GpuRenderer::Impl {
     uint64_t serial = 0;
     bool texture_failure_logged = false;
 
-    // A texture pass's target, by DxTex: RGBA8 with the texture's mips, a 2D
-    // array of one layer so draws sample it through the same binding as any
-    // texture, and a depth buffer; a shadow map's is R32_FLOAT, a plain 2D
-    // texture (mesh.hlsl's shadow_tex), its depth alone. Kept between frames,
-    // so a render target a frame samples but doesn't draw is what was drawn
-    // last (one it draws starts over: Render); forgotten when no frame has
-    // drawn or sampled it for kEvictAfter frames, and released kKeepSeconds
-    // after (Evict, gpu_view.h's residency); made again when its size
-    // changes.
+    // A texture pass's target, by DxTex: a one-layer RGBA8 2D array with mips
+    // (bound like any texture) plus depth; a shadow map's is plain R32_FLOAT
+    // 2D (mesh.hlsl's shadow_tex). Kept between frames (Evict); remade when
+    // its size changes.
     struct Rt {
         SDL_GPUTexture* color = nullptr;
         SDL_GPUTexture* depth = nullptr;
         uint32_t w = 0, h = 0, levels = 1;
-        // its pass's size in the game, which w x h is unless the pass is
-        // drawn bigger (soft_raster.h's PassTargetSize)
+        // the pass's size in the game; w x h unless drawn bigger
+        // (soft_raster.h's PassTargetSize)
         uint32_t game_w = 0, game_h = 0;
         bool shadow = false;    // a shadow map's
         bool drawn = false;     // by a pass, this frame or before
@@ -718,20 +650,17 @@ struct GpuRenderer::Impl {
     };
     std::unordered_map<uint32_t, Rt> rts;
     bool rt_failure_logged = false;
-    // the DxTexes a target has been made for since the device started, so
-    // one made again after it was released counts as returning
-    // (GpuStats::targets_returning)
+    // DxTexes with a target made since the device started, for
+    // GpuStats::targets_returning
     std::unordered_set<uint32_t> rts_seen;
-    // the frame's time, taken once as its walk starts: what marks a target,
-    // a mesh or a texture used (used_at), and what Evict measures their idle
-    // seconds from
+    // the frame's time, taken as its walk starts: the used_at it stamps, and
+    // what Evict measures idle seconds from
     std::chrono::steady_clock::time_point frame_now;
-    // and its world's game frame (FrameCapture::world_frame), what tells
-    // meshes and textures the capture keeps between game frames, and whether
-    // the game is in a song (RasterOptions::clock_keep; ClockKeep)
+    // its world's game frame (FrameCapture::world_frame), and whether the game
+    // is in a song (RasterOptions::clock_keep; ClockKeep)
     uint64_t frame_world = 0;
     bool frame_in_song = false;
-    // the seconds `m` (a Mesh or Tex) is kept by after this frame
+    // seconds a Mesh or Tex is kept after this frame
     template <typename T>
     double KeepSecondsOf(const T& m) const {
         return ClockKeep(frame_in_song, m.drawn_in_song, m.across_worlds, kKeepSeconds);
@@ -740,23 +669,19 @@ struct GpuRenderer::Impl {
     double IdleSeconds(std::chrono::steady_clock::time_point used_at) const {
         return std::chrono::duration<double>(frame_now - used_at).count();
     }
-    // Evict's count of the meshes and textures it kept by the clock alone
-    // (GpuStats::meshes_by_time and textures_by_time)
+    // Evict's meshes and textures kept by the clock alone
+    // (GpuStats::meshes_by_time, textures_by_time)
     uint32_t meshes_by_time = 0, textures_by_time = 0;
-    // Evict's forgotten targets (used, DxTex) for kMaxRts, kept between
-    // frames so it allocates nothing once grown
+    // Evict's forgotten targets (used, DxTex) for kMaxRts; kept to avoid
+    // allocating
     std::vector<std::pair<uint64_t, uint32_t>> rts_forgotten;
 
-    // a frame's work, kept between frames so a frame allocates nothing once
-    // they've grown
+    // a frame's work, kept between frames to avoid allocating
     std::vector<Mesh*> to_pool, to_arena;
     std::vector<Tex*> new_textures;
-    // An array that grew: the layers of the old one holding textures sent in
-    // an earlier frame, each with its levels written (Tex::levels), go over
-    // to the new one. Nothing else is copied, as nothing else was written: a
-    // layer placed this frame is sent to the new array, and an array made
-    // this frame (more of a size arriving at once than it holds) holds
-    // nothing yet.
+    // An array that grew: only the old layers holding textures sent in an
+    // earlier frame are copied, with their written levels (Tex::levels); a
+    // layer placed this frame is sent to the new array directly.
     struct ArrayCopy {
         SDL_GPUTexture* from;
         SDL_GPUTexture* to;
@@ -769,18 +694,17 @@ struct GpuRenderer::Impl {
     std::vector<uint32_t> bone_base;  // per draw, where its bones start
     std::vector<shade::ShadeParams> shades;  // per draw
     std::vector<uint32_t> cams_seen;
-    // per draw, what its diffuse texture samples, and its projected light's
-    // s5 (kSourceNone the capture's map, or none)
+    // per draw, what its diffuse texture and its projected light's s5 sample
+    // (kSourceNone: the capture's map, or none)
     enum Source : uint8_t { kSourceNone, kSourceTexture, kSourceRt, kSourceBlack };
     std::vector<uint8_t> diffuse_source;
     std::vector<uint8_t> proj_source;
-    // the normal map's and the detail map's (MapTargetOf: a head's normal map
-    // is a target's), kSourceTexture or kSourceRt
+    // the normal and detail maps' (a head's normal map is a target's:
+    // MapTargetOf)
     std::vector<uint8_t> normal_source[2];
-    // per draw, a spotlight drawer's: a cone (PSSpotCone), one left out (no
-    // scene depth to read), or a blur of the depth volume into itself; or
-    // the soft-particle buffer's: a particle (PSSoftParticle), or a blur of
-    // one of its surfaces into the other
+    // per draw: a spotlight cone (PSSpotCone), one skipped (no scene depth),
+    // a depth volume blur into itself, a soft particle (PSSoftParticle), or a
+    // blur of one soft-particle surface into the other
     enum SpotDraw : uint8_t {
         kSpotNone,
         kSpotCone,
@@ -790,22 +714,19 @@ struct GpuRenderer::Impl {
         kSoftBlur
     };
     std::vector<uint8_t> spot_draw;
-    // per run, a texture pass's: drawn (it has a target), and whether that
-    // starts cleared
+    // per texture pass run: drawn (has a target), and what starts cleared
     enum : uint8_t { kRunDrawn = 1, kRunClearColor = 2, kRunClearDepth = 4 };
     std::vector<uint8_t> run_clear;
-    // Device objects made and things let go of since the device started,
-    // which Draw turns into a frame's (GpuStats::pipelines_made and the rest)
+    // made and let go since the device started; Draw turns these into a
+    // frame's (GpuStats::pipelines_made and the rest)
     struct Counts {
         uint64_t pipelines = 0, buffers = 0, textures = 0, arena_rebuilds = 0;
         uint64_t evicted_meshes = 0, evicted_textures = 0, evicted_rts = 0, rts_released = 0;
         uint64_t textures_pressured = 0, meshes_pressured = 0;
     };
     Counts counts;
-    // the frame whose walk is placing what it draws (Render), which
-    // TargetFor and PlaceTexture count what they make into
-    // (GpuStats::targets_made and the rest); null outside it, so a world
-    // pass before a frame counts into its own
+    // the stats of the frame whose walk is placing (Render), where TargetFor
+    // and PlaceTexture count what they make; null outside it
     GpuStats* walk_stats = nullptr;
 
     bool StartVideo(const char* driver);
@@ -814,25 +735,20 @@ struct GpuRenderer::Impl {
     // stop_video: on the UI thread only, as SDL wants
     void Release(bool stop_video);
     // SDL's Direct3D 12 backend copies a pipeline's fragment samplers into
-    // its command buffer's GPU sampler heap (2048 of them) as one batch each
-    // time they're bound again, checking for room before the batch only and
-    // skipping null slots without counting them (SDL 3.4, and main as of
-    // 2026-10: "FIXME: need to error on overflow"). A batch that starts short
-    // of the heap's end runs past it: descriptors copied outside any heap
-    // (the debug layer's INVALID_DESCRIPTOR_HANDLE), which the GPU then reads,
-    // and AMD GPUs hung on the next draw (DEVICE_HUNG). So every fragment
-    // shader that samples declares kSamplerBatch samplers (MakeShader) and
-    // every pass binds all of them first (BeginPass): each batch is
-    // kSamplerBatch, which divides the heap, so batches end on its end
-    // exactly, where SDL moves to a fresh heap (the view heap with it).
+    // the command buffer's 2048-entry sampler heap as a batch on each rebind,
+    // checking room only before the batch (SDL 3.4 and main as of 2026-10:
+    // "FIXME: need to error on overflow"). A batch straddling the heap's end
+    // writes outside it (INVALID_DESCRIPTOR_HANDLE) and AMD GPUs hang on the
+    // next draw (DEVICE_HUNG). So every sampling fragment shader declares
+    // kSamplerBatch samplers (MakeShader) and every pass binds them all
+    // (BeginPass): batches then end exactly on the heap's end.
     static constexpr uint32_t kSamplerBatch = 16;
     static_assert(2048 % kSamplerBatch == 0, "a batch divides SDL's sampler heap");
     // a render pass, its kSamplerBatch fragment samplers bound to white first
     SDL_GPURenderPass* BeginPass(SDL_GPUCommandBuffer* cmd, const SDL_GPUColorTargetInfo* ct,
                                  uint32_t targets, const SDL_GPUDepthStencilTargetInfo* dt);
-    // `texture`'s (w x h, a 2D array of one layer, RGBA8) levels 1 to
-    // levels - 1 in `cmd`, each from the one above as SDL's GenerateMipmaps
-    // blits them on Direct3D 12, by mips.hlsl through BeginPass (inline_mips_ok)
+    // `texture`'s (w x h, one-layer RGBA8 array) levels 1 to levels - 1, as
+    // SDL's GenerateMipmaps blits them on Direct3D 12 (inline_mips_ok)
     void DrawMips(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* texture, uint32_t w, uint32_t h,
                   uint32_t levels);
     // one of the generated shaders, in `format` (DXBC or SPIR-V)
@@ -848,69 +764,60 @@ struct GpuRenderer::Impl {
     // PSOverlayStart's, into the overlay's targets at `samples`: depth
     // written, not tested
     SDL_GPUGraphicsPipeline* OverlayStartPipeline(uint32_t samples);
-    // the overlay's samples for a frame that asks for `want` (OverlaySamples):
-    // `want` if the device can, else the other of 2 and 4, else 1 (logged once)
+    // the overlay's samples for `want` (OverlaySamples): `want` if the device
+    // can, else the other of 2 and 4, else 1 (logged once)
     uint32_t DeviceSamples(uint32_t want);
-    // the overlay's targets at the picture's size and `samples`; false if
-    // they couldn't be made (logged)
+    // the overlay's targets at the picture's size; false if they couldn't be
+    // made (logged)
     bool EnsureOverlayTargets(uint32_t samples);
-    // a shadow map's draw's: PSShadowDepth into R32_FLOAT, LESS, no blend
     SDL_GPUGraphicsPipeline* ShadowDepthPipeline(CullWinding cull) {
         return Pipeline(kBlendSrc, {true, false, true}, AlphaMode::kNone, cull,
                         PixelKind::kShadowDepth);
     }
-    // a full-screen pass's pipeline: post.hlsl's triangle (or `vertex`'s) and
-    // `pixel`, into RGBA8
+    // post.hlsl's triangle (or `vertex`) and `pixel`, into RGBA8
     SDL_GPUGraphicsPipeline* MakeFullscreenPipeline(SDL_GPUShader* pixel, const char* name,
                                                     uint32_t targets = 1,
                                                     SDL_GPUShader* vertex = nullptr);
-    // the motion blur's object pass's (velocity.hlsl), culling as `cull`
-    // says: into the velocity texture, SrcAlpha (alpha 1 or 0), its depth
-    // smaller-or-equal tested and written
+    // velocity.hlsl's object pass: SrcAlpha (alpha 1 or 0), depth LEQUAL
+    // tested and written
     SDL_GPUGraphicsPipeline* MakeVelocityObjectPipeline(CullWinding cull);
     bool EnsureHistory(uint32_t w, uint32_t h);
     void ReleaseHistory();
-    // the post buffer or the pre-process buffer `b` at w x h, emptied
-    // (game_frame 0) if it's made again
+    // emptied (game_frame 0) if made again
     bool EnsureKept(PostBuffer& b, uint32_t w, uint32_t h);
     void ReleaseKept(PostBuffer& b);
     void ReleaseTargets();
-    // makes every pipeline a frame can ask for and the upload buffer's usual
-    // size, so no frame stalls making them: the overlay's at overlay_samples
-    // (RasterOptions::msaa) as the device draws them (DeviceSamples)
+    // makes every pipeline a frame can ask for (the overlay's at
+    // DeviceSamples(overlay_samples)) and the usual upload buffer, so no
+    // frame stalls on them
     void Prewarm(uint32_t overlay_samples);
     bool EnsureTargets(uint32_t w, uint32_t h);
-    // `s` at w x h; false if it couldn't be made
     bool EnsureScratch(Scratch& s, uint32_t w, uint32_t h);
-    // grows `b` to hold `bytes`; what it held is lost when it grows
+    // grows `b` to hold `bytes`, losing its contents
     bool Reserve(Buffer& b, SDL_GPUBufferUsageFlags usage, uint32_t bytes);
     void ReleaseBuffer(Buffer& b);
     // places this frame's new arena meshes, rebuilding the arena if they
-    // don't fit (with what it keeps added to to_arena, from the old arena);
-    // false if it couldn't grow
+    // don't fit (adding what it keeps to to_arena); false if it couldn't grow
     bool PlaceInArena();
-    // marks `t` drawn this frame, giving it a layer and queueing its upload
-    // if it's new
+    // marks `t` drawn this frame; a new one gets a layer and an upload
     void UseTexture(const std::shared_ptr<const Texture>& t);
-    // the layer `t` has, or null (none, or it couldn't have one)
+    // null if `t` has no layer
     const Tex* TextureFor(const Texture* t);
-    // a layer of its size class's array in `format` (RGBA8, or a BC format
-    // for one kept as blocks) for `tx`, growing the array if full and none
-    // of its textures can go for room
+    // a layer in its size class's `format` array, growing the array if full
+    // and none of its textures can go
     bool PlaceTexture(Tex& tx, SDL_GPUTextureFormat format);
-    // the texels a copy into a BC array's level spans along a side, for a
-    // level of a texture `texels` long into its class's level `level_size`
-    // long: whole blocks, which on Vulkan end at the level's edge
+    // the texels a copy of a `texels`-long level into a BC array's
+    // `level_size`-long level spans: whole blocks, which on Vulkan stop at the
+    // level's edge
     uint32_t BcExtent(uint32_t texels, uint32_t level_size) const {
         const uint32_t whole = guest_format::AlignUp(texels, 4);
         return bc_whole_blocks ? whole : std::min(whole, level_size);
     }
     void LetTextureGo(Tex& tx);
-    // the texture arrays' MB, their mips counted as a third more
-    // (GpuStats::texture_array_mb)
+    // mips counted as a third more (GpuStats::texture_array_mb)
     double TextureArrayMb() const;
-    // the target for texture pass `p`, made (again) at w x h (PassTargetSize);
-    // null if it couldn't be
+    // the target for texture pass `p`, remade if not w x h (PassTargetSize);
+    // null on failure
     Rt* TargetFor(const Pass& p, uint32_t w, uint32_t h);
     // marks `rt` drawn or sampled by this frame, for Evict
     void UseRt(Rt& rt) {
@@ -918,77 +825,64 @@ struct GpuRenderer::Impl {
         rt.used_at = frame_now;
     }
     void ReleaseRt(Rt& rt);
-    // output `slot` at w x h, made again (a new generation) if it isn't;
-    // false if it couldn't be
+    // remade (a new generation) if not w x h; false on failure
     bool EnsureOutput(int slot, uint32_t w, uint32_t h);
     void ReleaseOutputs();
-    // lets go of `out`'s fence, signalled or not (SDL's own reference keeps
-    // it until its submission is done)
+    // signalled or not: SDL's own reference keeps it until the submission ends
     void ReleaseFence(Output& out);
-    // the ID3D12Resource behind `texture`, made with `info`, if the SDK's
-    // presenter can sample it in place; null, and why not, otherwise
+    // the ID3D12Resource behind `texture` if the SDK's presenter can sample
+    // it in place; else null, with why
     void* SdkResource(SDL_GPUTexture* texture, const SDL_GPUTextureCreateInfo& info,
                       std::string& why);
     // CheckZeroCopy's first check, with a texture of its own
     void CheckZeroCopyOnce();
-    // a zero-copy check's result, for CheckZeroCopy (the presenter's drawer
-    // logs a change)
     void SetZeroCopy(bool ok, const std::string& why);
-    // SDL's ID3D12GraphicsCommandList behind `cmd` (as void*), if the
-    // pointers of SDL 3.4.14's command buffer layout check out (no call made
-    // on any of them), else null
+    // SDL's ID3D12GraphicsCommandList behind `cmd` if SDL 3.4.14's command
+    // buffer layout checks out (no calls made through it), else null
     void* TimingList(SDL_GPUCommandBuffer* cmd);
-    // whether GPU timings can be taken in `cmd`: the first time, the whole of
-    // the checks on it (its command list's and allocator's interfaces, the
-    // list's type and device), and the query heap and readback buffer made;
-    // after, whether they passed then and `cmd`'s pointers check out now
+    // whether GPU timings can be taken in `cmd`: the first time, full checks
+    // (the list's and allocator's interfaces, type, device) and making the
+    // query heap and readback; after, those results and `cmd`'s pointers
     bool CheckTimingOnce(SDL_GPUCommandBuffer* cmd);
-    // A Render's timing, its command buffer just acquired: untimed without
-    // RasterOptions::gpu_timestamps or if the checks fail; a world pass
-    // before a frame (`pre_pass`) or the world ahead (`ahead_pass`) on the
-    // aside's ladder, as one part each; a frame on its own region's (`slot`'s,
-    // or RenderFrame's), from kUpload.
+    // A Render's timing, its command buffer just acquired: a pre pass or the
+    // world ahead goes on the aside's ladder as one part; a frame on its own
+    // region's (`slot`'s or RenderFrame's), from kUpload.
     void StartTiming(SDL_GPUCommandBuffer* cmd, const RasterOptions& o, int slot, int pre_pass,
                      bool ahead_pass);
-    // a timestamp in `cmd` from which the GPU's time goes to `part`, if the
-    // frame is timed and the part changes (gpu_timing::Ladder::Mark); on the
-    // aside's ladder, only its start and its end (kNone)
+    // GPU time from here goes to `part` (gpu_timing::Ladder::Mark); the
+    // aside's ladder marks only its start and end (kNone)
     void MarkTime(SDL_GPUCommandBuffer* cmd, uint8_t part);
-    // a frame's last command buffer, before it's submitted: its ladder ended
-    // and resolved into its region of the readback buffer, and the aside's
-    // with it (then started over)
+    // in a frame's last command buffer before submit: ends its ladder and
+    // the aside's, resolving both into the frame's readback region
     void ResolveTimes(SDL_GPUCommandBuffer* cmd);
-    // once the GPU has finished frame region `region`'s frame: its times into
-    // `st` (GpuStats::gpu_ms), if it has any not read yet
+    // once the GPU has finished `region`'s frame: its unread times into `st`
+    // (GpuStats::gpu_ms)
     void ReadTimes(int region, GpuStats& st);
     void ReleaseTiming();
-    // Draws `frame` into output `slot`, or with -1 into `graded`, which it
-    // reads back into rgba. With `pre_pass` (from 1) it's that one of the
-    // world passes before a frame whose world refracts (soft_raster.h's
-    // kPreBufferPasses): its world alone, which leaves its scene in
+    // Draws `frame` into output `slot`, or with -1 into `graded`, read back
+    // into rgba. `pre_pass` (from 1): that world pass before a refracting
+    // frame (soft_raster.h's kPreBufferPasses), world alone, scene left in
     // pre_scratch, its REFRACT_WORLD draws reading the last pass's there (the
-    // first black). With `ahead_pass` (RenderWorldAhead) it's a world
-    // frame's world alone, left in the scene target and submitted unwaited.
+    // first black). `ahead_pass` (RenderWorldAhead): the world alone, left in
+    // the scene target and submitted unwaited.
     bool Render(const FrameCapture& frame, const RasterOptions& o, int slot,
                 std::vector<uint32_t>* rgba, GpuStats& stats, int pre_pass = 0,
                 bool ahead_pass = false);
-    // The world RenderWorldAhead left in the scene target (and its depth):
-    // drawn as frame `serial` (0 none), of game frame world_frame, at w x h.
-    // Every Render forgets it as it starts, so only the one right after it
-    // can post-process it: one in between (a capture's, say) draws over the
-    // scene target, or may.
+    // The world RenderWorldAhead left in the scene target and depth, drawn as
+    // frame `serial` (0 none). Every Render forgets it as it starts, so only
+    // the very next one can post-process it: another might draw over it.
     struct Ahead {
         uint64_t serial = 0, world_frame = 0;
         uint32_t w = 0, h = 0;
     };
     Ahead ahead;
-    // reads `texture` (w x h) back into rgba; false if the GPU failed (logged)
+    // false if the GPU failed (logged)
     bool Download(SDL_GPUTexture* texture, uint32_t w, uint32_t h, std::vector<uint32_t>& rgba);
-    // lets go of what no frame has drawn for long enough (gpu_view.h's
-    // residency), after each frame
+    // after each frame: lets go of what's gone unused long enough
+    // (gpu_view.h's residency)
     void Evict();
-    // the frames geometry and textures drawn in one frame are kept for
-    // (ResidencyKeepFrames), from the frame's RasterOptions::world_period
+    // frames that one frame's geometry and textures are kept
+    // (ResidencyKeepFrames, from RasterOptions::world_period)
     uint64_t keep_frames = 0;
 };
 
@@ -996,14 +890,13 @@ struct GpuRenderer::Impl {
 // otherwise used for audio and HID only
 bool GpuRenderer::Impl::StartVideo(const char* driver) {
     if (driver) {
-        // over an SDL_VIDEO_DRIVER in the environment, which would otherwise
-        // win and could make this copy open windows
+        // over an SDL_VIDEO_DRIVER in the environment, which could open windows
         SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, driver, SDL_HINT_OVERRIDE);
     } else {
         SDL_ResetHint(SDL_HINT_VIDEO_DRIVER);
 #ifdef _WIN32
-        // the window class rexruntime's copy registers is SDL_app; this copy
-        // takes a name of its own so the two can't collide
+        // rexruntime's SDL copy registers SDL_app; a name of our own avoids a
+        // collision
         if (!app_registered) app_registered = SDL_RegisterApp("band3_native_view", 0, nullptr);
 #endif
     }
@@ -1067,14 +960,10 @@ SDL_GPURenderPass* GpuRenderer::Impl::BeginPass(SDL_GPUCommandBuffer* cmd,
 
 void GpuRenderer::Impl::DrawMips(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* texture, uint32_t w,
                                  uint32_t h, uint32_t levels) {
-    // SDL_GenerateMipmapsForGPUTexture's blits, call for call: a pass a
-    // level, its load DONT_CARE, the blit's viewport (the level's size, at
-    // least 1) and no scissor of its own, as the blit sets none. Every level
-    // comes out as SDL's, odd sizes too (checked against them, random texels
-    // at 256x512, 37x23, 100x60, 33x65...: the same bytes). So does a level
-    // whose side halves to 0 (1x1 under 256x512): SDL sizes a pass by the
-    // texture's size shifted down by the level, 0 there, and neither draws
-    // it; it's left as it was. (RB3's crowd target has 4 levels, all drawn.)
+    // SDL_GenerateMipmapsForGPUTexture's blits, call for call: a pass per
+    // level, load DONT_CARE, the blit's viewport (the level's size, at least
+    // 1), no scissor. Byte-identical to SDL's, odd sizes too. A level whose
+    // side halves to 0 (1x1 under 256x512) is drawn by neither and left as is.
     for (uint32_t l = 1; l < levels; l++) {
         SDL_GPUColorTargetInfo ct{};
         ct.texture = texture;
@@ -1161,8 +1050,7 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::MakeVelocityObjectPipeline(CullWindi
 }
 
 bool GpuRenderer::Impl::Create() {
-    // offscreen first: it makes no windows at all; the platform's own driver
-    // is the fallback
+    // offscreen first (no windows), then the platform's own driver
     for (const char* driver : {"offscreen", static_cast<const char*>(nullptr)}) {
         if (!StartVideo(driver)) continue;
         device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_DXBC | SDL_GPU_SHADERFORMAT_SPIRV,
@@ -1268,8 +1156,7 @@ bool GpuRenderer::Impl::Create() {
         !velocity_object_pipelines[0] || !velocity_object_pipelines[1] ||
         !velocity_object_pipelines[2] || !gamma_pipeline)
         return false;
-    // the scene's depth, read after the world's draws: D32 the resolve samples
-    // where the device can (Direct3D 12 and Vulkan both should)
+    // Direct3D 12 and Vulkan both should
     depth_sampled = SDL_GPUTextureSupportsFormat(
         device, kDepthFormat, SDL_GPU_TEXTURETYPE_2D,
         SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
@@ -1277,16 +1164,15 @@ bool GpuRenderer::Impl::Create() {
         REXLOG_WARN("native view gpu: the device can't sample a D32 depth buffer; the scene's "
                     "depth reads as 0, post-processing has no depth of field, the "
                     "spotlights' cones aren't drawn and the soft particles don't fade");
-    // the shadow maps' depth, drawn as a colour and read by Load (Direct3D 12
-    // and Vulkan both should)
+    // shadow depth is drawn as a colour and read by Load (Direct3D 12 and
+    // Vulkan both should support it)
     shadow_maps = SDL_GPUTextureSupportsFormat(
         device, kShadowFormat, SDL_GPU_TEXTURETYPE_2D,
         SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
     if (!shadow_maps)
         REXLOG_WARN("native view gpu: the device can't draw into an R32_FLOAT texture; the "
                     "characters are drawn without their self-shadows");
-    // the block-compressed formats RB3's textures are kept as (BcFormat):
-    // every one, or the textures are all RGBA8, as before
+    // all four BcFormat formats, or every texture is RGBA8
     bc_formats = true;
     for (uint32_t xenos : {18u, 19u, 20u, 49u})
         bc_formats = bc_formats && SDL_GPUTextureSupportsFormat(device, BcFormat(xenos),
@@ -1296,8 +1182,7 @@ bool GpuRenderer::Impl::Create() {
     if (!bc_formats)
         REXLOG_WARN("native view gpu: the device can't sample BC1, BC2, BC3 or BC5 texture "
                     "arrays; compressed textures are sent as RGBA (native_bc_textures)");
-    // the overlay's multisampled targets (Direct3D 12 and Vulkan both must
-    // have 4 samples; 2 every desktop GPU has)
+    // Direct3D 12 and Vulkan both require 4 samples; every desktop GPU has 2
     for (int k = 0; k < 2; k++) {
         const SDL_GPUSampleCount count = k ? SDL_GPU_SAMPLECOUNT_4 : SDL_GPU_SAMPLECOUNT_2;
         ms_supported[k] = SDL_GPUTextureSupportsSampleCount(device, kColorFormat, count) &&
@@ -1314,11 +1199,9 @@ bool GpuRenderer::Impl::Create() {
     si.address_mode_u = si.address_mode_v = si.address_mode_w =
         SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
     linear_sampler = SDL_CreateGPUSampler(device, &si);
-    // A texture pass's mips drawn in the frame's command buffer: on Direct3D
-    // 12 only, whose GenerateMipmaps they're drawn as (Vulkan's makes its
-    // mips another way, untested here: SDL's there, as before); without them,
-    // SDL's in a command buffer of their own. The sampler is SDL's blits'
-    // linear one: every level reachable (max_lod 1000).
+    // Inline mips on Direct3D 12 only, whose GenerateMipmaps they copy
+    // (Vulkan's differs, untested); otherwise SDL's in a command buffer of
+    // their own. The sampler is SDL's blit one: every level reachable.
     if (std::strcmp(SDL_GetGPUDeviceDriver(device), "direct3d12") == 0) {
         mip_vertex_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_VERTEX, kMipVertexDxbc,
                                        sizeof(kMipVertexDxbc), kMipVertexSpirv,
@@ -1346,7 +1229,7 @@ bool GpuRenderer::Impl::Create() {
     ti.num_levels = 1;
     white = SDL_CreateGPUTexture(device, &ti);
     black = SDL_CreateGPUTexture(device, &ti);
-    // a plain 2D texture, as the resolve's depth binding is: a depth of 0
+    // plain 2D, as the resolve's depth binding is: a depth of 0
     ti.type = SDL_GPU_TEXTURETYPE_2D;
     no_depth = SDL_CreateGPUTexture(device, &ti);
 
@@ -1515,13 +1398,10 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     };
     SDL_GPUColorTargetDescription target{};
     target.format = kColorFormat;
-    // Blend() in soft_raster.cpp. The picture's alpha is never written after
-    // the resolve's 1, as the CPU's picture has it, so the readback is the
-    // picture. A texture's blends alpha by the colour's factors; the scene's,
-    // where the draw writes it, is ONE ONE MAX (AlphaMode). The target clamps
-    // the colour to 0-1 before blending, as Blend() does; SrcAlpha's scaling
-    // happens in the shader (kPremultiply), to the colour only, after the
-    // shader's own clamp
+    // Blend() in soft_raster.cpp. The picture's alpha stays the resolve's 1,
+    // as on the CPU. The target clamps colour to 0-1 before blending, as
+    // Blend() does; SrcAlpha's scaling is done in the shader (kPremultiply),
+    // to colour only, after its clamp
     SDL_GPUColorTargetBlendState& bs = target.blend_state;
     bs.enable_color_write_mask = true;
     SDL_GPUColorComponentFlags mask =
@@ -1573,8 +1453,7 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
         default:  // Src, and Dest, which writes no colour
             break;
     }
-    // the scene's alpha, where a draw writes it: the larger of the two
-    // wherever RB3 blends (any mode but Src), the draw's own where it doesn't
+    // the scene's alpha: MAX wherever RB3 blends (any mode but Src)
     if (alpha == AlphaMode::kScene && blend != kBlendSrc) {
         if (blend == kBlendDest) {
             bs.enable_blend = true;
@@ -1585,7 +1464,7 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
         bs.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
         bs.alpha_blend_op = SDL_GPU_BLENDOP_MAX;
     }
-    // a shadow map's depth, as it is: soft_raster.cpp's Target::zw
+    // soft_raster.cpp's Target::zw
     const bool shadow = pixel == PixelKind::kShadowDepth;
     if (shadow) {
         target.format = kShadowFormat;
@@ -1603,7 +1482,7 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     pi.vertex_input_state.vertex_attributes = attributes;
     pi.vertex_input_state.num_vertex_attributes = uint32_t(std::size(attributes));
     pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-    // the culling RasterTri does: SDL's winding is the screen's, as D3D's is;
+    // RasterTri's culling: SDL's winding is the screen's, as D3D's is;
     // clipping at depth 1 is the CPU's near plane (mesh.hlsl)
     pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
     pi.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
@@ -1612,15 +1491,15 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
                                         ? SDL_GPU_CULLMODE_FRONT
                                         : SDL_GPU_CULLMODE_NONE;
     pi.rasterizer_state.enable_depth_clip = true;
-    // depth is larger-is-nearer, cleared to 0. A draw that writes without
-    // testing tests "always", since a pipeline that doesn't test can't write
+    // depth is larger-is-nearer, cleared to 0. Write-without-test uses
+    // ALWAYS: a pipeline that doesn't test can't write
     pi.depth_stencil_state.enable_depth_test = rules.test || rules.write;
     pi.depth_stencil_state.enable_depth_write = rules.write;
     pi.depth_stencil_state.compare_op = !rules.test          ? SDL_GPU_COMPAREOP_ALWAYS
                                         : rules.equal_passes ? SDL_GPU_COMPAREOP_GREATER_OR_EQUAL
                                                              : SDL_GPU_COMPAREOP_GREATER;
-    // a shadow map's is clip z/w, smaller nearer, cleared to its pass's
-    // clear_z, LESS as RndShadowMap's ZFunc (soft_raster.cpp's RasterTri)
+    // a shadow map's is clip z/w, smaller nearer, cleared to the pass's
+    // clear_z, LESS as RndShadowMap's ZFunc
     if (shadow) {
         pi.depth_stencil_state.enable_depth_test = true;
         pi.depth_stencil_state.enable_depth_write = true;
@@ -1635,7 +1514,7 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     if (!p) REXLOG_WARN("native view gpu: no pipeline ({})", SDL_GetError());
     pipelines[key] = p;
     counts.pipelines++;
-    // one Prewarm doesn't make: a frame waited for it (add it there)
+    // Prewarm missed it and a frame waited (add it there)
     if (warmed_up) {
         REXLOG_INFO("native view gpu: pipeline made after warm-up: {:#x} (pixel {}, cull {}, "
                     "alpha {}, blend {}, depth rules {}, samples {}) ({:.1f} ms)",
@@ -1732,9 +1611,8 @@ bool GpuRenderer::Impl::EnsureOverlayTargets(uint32_t samples) {
 void GpuRenderer::Impl::Prewarm(uint32_t overlay_samples) {
     warm = true;
     const auto start = std::chrono::steady_clock::now();
-    // RulesFor's, with blending on and off, culling nothing, what RndMat's
-    // cull flag does (D3DCULL_CW) or the other side (D3DCULL_CCW: the
-    // reflections, and a song draws it with several blends and alphas)
+    // RulesFor's, blending on and off; culling none, D3DCULL_CW (RndMat's
+    // cull flag) or D3DCULL_CCW (reflections, with several blends and alphas)
     constexpr DepthRules kRules[] = {{false, false, false}, {true, true, false},
                                      {false, false, true},  {true, true, true},
                                      {true, false, true}};
@@ -1743,26 +1621,23 @@ void GpuRenderer::Impl::Prewarm(uint32_t overlay_samples) {
         for (int alpha = 0; alpha < kNumAlphaModes; alpha++)
             for (int blend = kBlendDest; blend <= kBlendPreMultAlpha; blend++)
                 for (const DepthRules& r : kRules) Pipeline(blend, r, AlphaMode(alpha), cull);
-    // the spotlights' cones: Add into the depth volume, which has no depth,
-    // culled as each cone's draw says (RenderConeDefs sets D3DCULL_CCW)
+    // spotlight cones: Add into the depthless depth volume (RenderConeDefs
+    // sets D3DCULL_CCW)
     for (CullWinding cull :
          {CullWinding::kNone, CullWinding::kClockwise, CullWinding::kCounterClockwise})
         Pipeline(kBlendAdd, {false, false, false}, AlphaMode::kTexture, cull, PixelKind::kSpot);
-    // the soft particles: into the soft-particle buffer, which has no depth,
-    // by their materials' blends, culling nothing (particles have no cull mode)
+    // soft particles: into the depthless soft-particle buffer, never culled
     for (int blend = kBlendDest; blend <= kBlendPreMultAlpha; blend++)
         Pipeline(blend, {false, false, false}, AlphaMode::kTexture, CullWinding::kNone,
                  PixelKind::kSoft);
-    // the shadow maps' depth, culled as each draw says (PrepShadow's
-    // D3DCULL_CCW; ShadowDepthPipeline)
+    // shadow maps (PrepShadow sets D3DCULL_CCW)
     if (shadow_maps)
         for (CullWinding cull :
              {CullWinding::kNone, CullWinding::kClockwise, CullWinding::kCounterClockwise})
             ShadowDepthPipeline(cull);
-    // the overlay's, multisampled: its start, and its draws, which leave
-    // the picture's alpha be (AlphaMode::kNone); at the game's 2 samples
-    // whatever the setting is now, so turning it back on doesn't wait for
-    // them, and at the setting's (the same ones again are found made)
+    // the multisampled overlay's (AlphaMode::kNone): at the game's 2 samples
+    // whatever the setting, so turning it back on doesn't stall, and at the
+    // setting's
     for (uint32_t samples : {DeviceSamples(2), DeviceSamples(overlay_samples)}) {
         if (samples <= 1) continue;
         OverlayStartPipeline(samples);
@@ -1819,13 +1694,10 @@ bool GpuRenderer::Impl::PlaceInArena() {
     if (verts == 0) return true;
     if ((arena_vert_count + verts) * sizeof(Vertex) > arena_verts.size ||
         (arena_index_count + indices) * 2 > arena_indices.size) {
-        // Full: it starts over in new buffers with the meshes still within
-        // their keep (the clock's included, gpu_view.h's residency) and this
-        // frame's new ones, as much as kMaxArenaBytes allows
-        // (ArenaRebuildKeep). What it keeps is copied from the old buffers on
-        // the GPU in this frame's copy pass (Mesh::arena_vertex), not sent
-        // again; the rest is let go, and comes back through the pool if it's
-        // drawn again.
+        // Full: start over with the meshes still kept plus this frame's new
+        // ones, within kMaxArenaBytes (ArenaRebuildKeep). Kept meshes are
+        // copied from the old buffers on the GPU (Mesh::arena_vertex); the
+        // rest come back through the pool if drawn again.
         counts.arena_rebuilds++;
         auto bytes_of = [](const Geometry& g) {
             return uint64_t(g.verts.size()) * sizeof(Vertex) + uint64_t(IndexSlots(g)) * 2;
@@ -1867,17 +1739,14 @@ bool GpuRenderer::Impl::PlaceInArena() {
             indices += IndexSlots(*m.keep);
             ++it;
         }
-        // The old buffers stay this frame's until its copy pass has copied
-        // out of them, which releases them (SDL keeps them until the GPU is
-        // done with them: the frame before, which the GPU may still be
-        // drawing, reads them). Ones a failed frame left are released first.
+        // The old buffers live until this frame's copy pass copies out of
+        // them and releases them. Ones a failed frame left go first.
         ReleaseBuffer(old_arena_verts);
         ReleaseBuffer(old_arena_indices);
         old_arena_verts = std::exchange(arena_verts, Buffer{});
         old_arena_indices = std::exchange(arena_indices, Buffer{});
         arena_vert_count = arena_index_count = 0;
-        // twice what goes in, so a rebuild is rare: Reserve makes a buffer
-        // half again as big as it's asked for
+        // twice what goes in, with Reserve's extra half, so rebuilds are rare
         auto twice = [](uint64_t bytes, uint32_t least) {
             return uint32_t(std::clamp<uint64_t>(bytes + bytes / 3, least, 1u << 30));
         };
@@ -1906,17 +1775,13 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx, SDL_GPUTextureFormat format) {
     a.w = w;
     a.h = h;
     a.format = format;
-    // a layer's bytes, its level 0's
+    // level 0's
     const uint64_t layer_bytes = uint64_t(w) * h * TexelBits(format) / 8;
     if (a.free.empty() && a.texture) {
-        // Full: before it grows, its textures no frame has drawn for
-        // kEvictAfter frames, kept by the clock alone (gpu_view.h's
-        // residency), go for room, as they went before the clock kept them.
-        // Their layers are safe to send this frame's into: no frame within
-        // kEvictAfter sampled them (so neither this frame's draws nor the
-        // frames the GPU may still be drawing), and in the copy pass an
-        // upload into a layer comes after this frame's ArrayCopy. One this
-        // frame draws later is placed and sent again, as after Evict.
+        // Full: before growing, textures kept by the clock alone (unused for
+        // kEvictAfter frames) make room. Their layers are safe to reuse: no
+        // frame in flight samples them, and uploads come after this frame's
+        // ArrayCopy. One drawn later this frame is placed and sent again.
         for (auto it = textures.begin(); it != textures.end();) {
             Tex& held = it->second;
             if (&held == &tx || held.array != &a ||
@@ -1957,8 +1822,7 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx, SDL_GPUTextureFormat format) {
             return false;
         }
         if (a.texture) {
-            // what the old one holds goes over in this frame's copy pass,
-            // before anything is sent to the new one (ArrayCopy)
+            // copied in this frame's copy pass before any upload (ArrayCopy)
             ArrayCopy c{a.texture, grown, w, h, IsBc(format), {}};
             for (const auto& [key, held] : textures)
                 if (held.array == &a && held.first < serial)
@@ -1996,11 +1860,9 @@ void GpuRenderer::Impl::UseTexture(const std::shared_ptr<const Texture>& t) {
     if (!t || !t->width || !t->height) return;
     auto it = textures.find(t.get());
     if (it == textures.end()) {
-        // New: as blocks if it was kept so and this frame keeps them
-        // (RasterOptions::bc_textures), else its RGBA, decoded from its
-        // blocks if it has those (EnsureRgba). The way it's placed stays
-        // until it's let go. (Decoded with its capture, which this waits
-        // for if another thread is at it: blocks is written there.)
+        // New: as blocks if it has them and this frame keeps them
+        // (RasterOptions::bc_textures), else RGBA (EnsureRgba); fixed until
+        // it's let go. DecodeDeferred waits if another thread is decoding it.
         if (t->deferred) DecodeDeferred(*t);
         SDL_GPUTextureFormat format = kColorFormat;
         if (bc_now && t->blocks &&
@@ -2046,14 +1908,14 @@ GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, u
     UseRt(rt);
     rt.game_w = p.width;
     rt.game_h = p.height;
-    // the texture's mips (FinishDrawTarget's downsamples), down to 1x1 at most
+    // FinishDrawTarget's downsamples, down to 1x1 at most
     uint32_t levels = 1;
     if (p.num_mips > 1) {
         uint32_t chain = 1;
         for (uint32_t s = std::max(w, h); s > 1; s >>= 1) chain++;
         levels = std::min(p.num_mips, chain);
     }
-    // a shadow map's depth, read by Load: no mips
+    // read by Load: no mips
     const bool shadow = p.tex_type == kTexTypeShadowMap;
     if (shadow) levels = 1;
     if (rt.color && rt.w == w && rt.h == h && rt.levels == levels && rt.shadow == shadow)
@@ -2218,7 +2080,7 @@ bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     tbi.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
     tbi.size = w * h * 4;
     readback = SDL_CreateGPUTransferBuffer(device, &tbi);
-    // post-processing's levels, each a quarter of the one before
+    // post-processing's levels, each a quarter of the last
     ti.format = kColorFormat;
     ti.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
     bool levels = true;
@@ -2289,10 +2151,9 @@ SDL_GPUTextureCreateInfo OutputInfo(uint32_t w, uint32_t h) {
 }
 
 #ifdef _WIN32
-// SDL 3.4.14's private Direct3D 12 texture (src/gpu/d3d12/SDL_gpu_d3d12.c's
-// D3D12TextureContainer and D3D12Texture, SDL_sysgpu.h's TextureCommonHeader):
-// an SDL_GPUTexture* is a container, its create info first. Nothing here is
-// trusted until SdkResource's checks pass, and none of it is written.
+// SDL 3.4.14's private Direct3D 12 texture (SDL_gpu_d3d12.c's
+// D3D12TextureContainer and D3D12Texture, SDL_sysgpu.h's TextureCommonHeader).
+// Read only, and untrusted until SdkResource's checks pass.
 struct SdlD3D12Texture;
 struct SdlD3D12TextureContainer {
     SDL_GPUTextureCreateInfo info;
@@ -2313,11 +2174,8 @@ struct SdlD3D12Texture {
 };
 
 // SDL 3.4.14's private command buffer (SDL_sysgpu.h's
-// CommandBufferCommonHeader and its passes, SDL_gpu_d3d12.c's
-// D3D12CommandBuffer, checked against release-3.4.14's source): an
-// SDL_GPUCommandBuffer* is a D3D12CommandBuffer*, the common header first,
-// none of it under an #ifdef. Read only, for the command list the GPU
-// timings' timestamps go into (TimingList); nothing is trusted until the
+// CommandBufferCommonHeader and passes, SDL_gpu_d3d12.c's D3D12CommandBuffer;
+// no #ifdefs). Read only, for TimingList's command list; untrusted until the
 // checks pass.
 struct SdlPass {
     SDL_GPUCommandBuffer* command_buffer;
@@ -2366,8 +2224,7 @@ struct SdlD3D12CommandBuffer {
     // the in-flight fence and the rest follow
 };
 
-// an object's identity: COM's rule is that its IUnknown pointer is the same
-// however it's reached
+// COM identity: the IUnknown pointer is the same however it's reached
 IUnknown* Identity(IUnknown* object) {
     IUnknown* unknown = nullptr;
     if (!object || FAILED(object->QueryInterface(IID_PPV_ARGS(&unknown)))) return nullptr;
@@ -2390,12 +2247,10 @@ void* GpuRenderer::Impl::SdkResource(SDL_GPUTexture* texture, const SDL_GPUTextu
               ", not Direct3D 12";
         return nullptr;
     }
-    // the checks the N2 kill test ran (out/research/n2_design.md), on the
-    // layout of SDL 3.4.14, the version these headers are; a newer SDL that
-    // moved anything fails one of them before anything is called on it
+    // the N2 kill test's checks (out/research/n2_design.md) on SDL 3.4.14's
+    // layout; a newer SDL that moved anything fails one before any call
     const auto* c = reinterpret_cast<const SdlD3D12TextureContainer*>(texture);
-    // (a) the create info, all but props: SDL gives the container a
-    // properties object of its own
+    // (a) the create info, but props: SDL gives the container its own
     if (c->info.type != ti.type || c->info.format != ti.format || c->info.usage != ti.usage ||
         c->info.width != ti.width || c->info.height != ti.height ||
         c->info.layer_count_or_depth != ti.layer_count_or_depth ||
@@ -2477,8 +2332,8 @@ void* GpuRenderer::Impl::TimingList(SDL_GPUCommandBuffer* cmd) {
     if (!cmd) return nullptr;
     const auto* c = reinterpret_cast<const SdlD3D12CommandBuffer*>(cmd);
     // (a) SDL_AcquireGPUCommandBuffer sets the header's device and each
-    // pass's command buffer to its own, every time; (b) and what's after it
-    // is there. Pointers compared only: nothing is called on them here.
+    // pass's command buffer every time; (b) the fields after it are set.
+    // Pointers compared only, nothing called.
     if (c->common.device != device || c->common.render_pass.command_buffer != cmd ||
         c->common.compute_pass.command_buffer != cmd || c->common.copy_pass.command_buffer != cmd)
         return nullptr;
@@ -2508,8 +2363,7 @@ bool GpuRenderer::Impl::CheckTimingOnce(SDL_GPUCommandBuffer* cmd) {
             why = "the SDK's direct queue has no timestamp frequency";
             return false;
         }
-        // the layout of SDL 3.4.14, the version these headers are; a newer
-        // SDL that moved anything fails here before anything is called on it
+        // a newer SDL that moved anything fails here before any call
         auto* list = static_cast<ID3D12GraphicsCommandList*>(TimingList(cmd));
         if (!list) {
             why = fmt::format("SDL {}.{}.{}'s command buffer doesn't have the layout of 3.4.14's",
@@ -2545,8 +2399,8 @@ bool GpuRenderer::Impl::CheckTimingOnce(SDL_GPUCommandBuffer* cmd) {
             return false;
         }
         allocator->Release();
-        // the heap, a region per frame being drawn and the aside's, and the
-        // readback buffer the frames' regions resolve into, two each
+        // a heap region per frame in flight plus the aside's; readback, two
+        // regions per frame
         auto* d3d = static_cast<ID3D12Device*>(present_device);
         D3D12_QUERY_HEAP_DESC qd{};
         qd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
@@ -2594,7 +2448,7 @@ void GpuRenderer::Impl::StartTiming(SDL_GPUCommandBuffer* cmd, const RasterOptio
     timing_region = -1;
     const bool aside = pre_pass || ahead_pass;
     if (!o.gpu_timestamps || !CheckTimingOnce(cmd)) {
-        // nothing of the aside's is left for a later frame to be charged
+        // so a later frame isn't charged the aside's
         if (!aside) aside_ladder.Reset();
         return;
     }
@@ -2614,8 +2468,7 @@ void GpuRenderer::Impl::MarkTime(SDL_GPUCommandBuffer* cmd, uint8_t part) {
     if (timing_region < 0) return;
     auto* list = static_cast<ID3D12GraphicsCommandList*>(TimingList(cmd));
     if (!list) {
-        // a command buffer that doesn't check out: the frame goes untimed,
-        // and the aside's ladder, which it may have left open, starts over
+        // fails the checks: untimed, and the aside's ladder starts over
         if (timing_aside) aside_ladder.Reset();
         timing_region = -1;
         return;
@@ -2647,8 +2500,7 @@ void GpuRenderer::Impl::ResolveTimes(SDL_GPUCommandBuffer* cmd) {
     t.labels = ladder.Labels();
     t.dropped = ladder.Dropped();
     t.aside.clear();
-    // the world passes before it and the world drawn ahead for it, ended
-    // (one left open was cut short: not counted)
+    // the aside's, if ended (one left open was cut short: not counted)
     if (aside_ladder.Count() && !aside_ladder.Open()) {
         list->ResolveQueryData(query_heap, D3D12_QUERY_TYPE_TIMESTAMP,
                                uint32_t(kAsideRegion) * kTimingSlots, aside_ladder.Count(),
@@ -2673,7 +2525,7 @@ void GpuRenderer::Impl::ReadTimes(int region, GpuStats& st) {
     const size_t at = size_t(region) * 2 * kTimingSlots * sizeof(uint64_t);
     const D3D12_RANGE range{at, at + 2 * kTimingSlots * sizeof(uint64_t)};
     void* data = nullptr;
-    // (a device removed fails here: no times)
+    // fails if the device was removed
     if (FAILED(query_readback->Map(0, &range, &data)) || !data) return;
     const auto* ticks = reinterpret_cast<const uint64_t*>(static_cast<const char*>(data) + at);
     gpu_timing::Times times;
@@ -2710,9 +2562,9 @@ void GpuRenderer::Impl::ReleaseTiming() {
 bool GpuRenderer::Impl::EnsureOutput(int slot, uint32_t w, uint32_t h) {
     Output& out = outputs[slot];
     if (out.texture && out.w == w && out.h == h) return true;
-    // SDL lets it go once its own work on it is done; the presenter holds the
-    // Direct3D 12 texture itself for as long as its paints need it, and
-    // native_view.cpp only has a slot drawn again once they're done with it
+    // SDL frees it after its own work; the presenter holds the Direct3D 12
+    // texture as long as it needs it (native_view.cpp redraws a slot only
+    // once it's done)
     if (out.texture) SDL_ReleaseGPUTexture(device, out.texture);
     ReleaseFence(out);
     out = Output{};
@@ -2726,7 +2578,7 @@ bool GpuRenderer::Impl::EnsureOutput(int slot, uint32_t w, uint32_t h) {
     out.w = w;
     out.h = h;
     out.generation = ++output_generations;
-    // each one checked as the test texture was, while zero-copy is on
+    // each checked as the test texture was
     if (zero_copy) {
         std::string why;
         out.resource = SdkResource(out.texture, ti, why);
@@ -2801,10 +2653,8 @@ bool GpuRenderer::Impl::Download(SDL_GPUTexture* texture, uint32_t w, uint32_t h
 bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o, int slot,
                                std::vector<uint32_t>* rgba, GpuStats& st, int pre_pass,
                                bool ahead_pass) {
-    // the world drawn ahead into the scene target, if the Render just before
-    // this one did that (Ahead)
     const Ahead ahead_was = std::exchange(ahead, Ahead{});
-    // the frame's parts' times (GpuStats::plan_ms and the rest)
+    // for GpuStats::plan_ms and the rest
     using Clock = std::chrono::steady_clock;
     const auto render_start = Clock::now();
     auto ms_since = [](Clock::time_point t) {
@@ -2813,14 +2663,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     if (!o.width || !o.height || !EnsureTargets(o.width, o.height)) return false;
     if (slot >= 0 && !EnsureOutput(slot, o.width, o.height)) return false;
     keep_frames = ResidencyKeepFrames(o.world_period);
-    // textures this frame places for the first time kept as blocks, where
-    // they were decoded so (UseTexture)
     bc_now = bc_formats && o.bc_textures;
     // where the last pass, the gamma ramp's, puts the finished frame
     SDL_GPUTexture* const output = slot >= 0 ? outputs[slot].texture : graded;
-    // the post buffer (RasterOptions::post_buffer): a post frame's picture
-    // kept, and shown by the frames after it that post-process nothing, in
-    // place of their world, whose draws are left out
+    // RasterOptions::post_buffer: frames that post-process nothing show the
+    // kept picture instead of drawing their world
     const bool kept_buffer = o.post_buffer && o.view == RasterView::kFinal;
     const bool shows_kept = kept_buffer && ShowsPostBuffer(frame) && post_buffer.tex &&
                             post_buffer.w == width && post_buffer.h == height &&
@@ -2828,10 +2675,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     const bool keeps = kept_buffer && ProcKnown(frame) && (frame.proc_cmds & kProcPost) &&
                        EnsureKept(post_buffer, width, height);
     st.shows_kept = shows_kept;
-    // RasterOptions::world_ahead: this composed post frame's world is in the
-    // scene target already, drawn ahead by the Render just before (serial is
-    // still that one's), so its draws [0, composed_world_end) are left out
-    // and it goes on from the resolve
+    // RasterOptions::world_ahead: the previous Render (serial is still its)
+    // drew this composed post frame's world into the scene target, so draws
+    // [0, composed_world_end) are skipped and it goes on from the resolve
     const bool uses_ahead = !ahead_pass && !pre_pass && o.world_ahead && frame.composed &&
                             frame.composed_world_end && !shows_kept &&
                             o.view == RasterView::kFinal && ahead_was.serial &&
@@ -2840,13 +2686,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                             ahead_was.w == width && ahead_was.h == height;
     const uint32_t ahead_end = uses_ahead ? frame.composed_world_end : 0;
     st.ahead_used = uses_ahead ? 1 : 0;
-    // The world's REFRACT_WORLD draws read the pre-process buffer (soft_raster.h's
-    // RefractsWorld, RasterOptions::pre_buffer): the one kept from the world
-    // frames before, or else the world drawn kPreBufferPasses times first
-    // (each a Render of its own, before this one starts), as Rasterize()
-    // does; black (no_depth's 0) where neither, as in a view of the scene
-    // target, whose alpha and depth they don't change. This frame's world is
-    // kept in turn.
+    // The world's REFRACT_WORLD draws (RefractsWorld) read the pre-process
+    // buffer (RasterOptions::pre_buffer) kept from earlier world frames, or
+    // else the world drawn kPreBufferPasses times first, each its own Render,
+    // as Rasterize() does; black (no_depth) where neither. This frame's world
+    // is kept in turn.
     const bool world_refracts = !shows_kept && !uses_ahead && WorldRefracts(frame);
     const bool keeps_pre =
         world_refracts && !pre_pass && o.pre_buffer && o.view == RasterView::kFinal;
@@ -2858,8 +2702,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                    pre_buffer.h == height && PreBufferFor(frame, pre_buffer.game_frame)) {
             world_behind = pre_buffer.tex;
         } else if (o.view == RasterView::kFinal && EnsureScratch(pre_scratch, width, height)) {
-            // the world alone, with nothing of the live view's: no
-            // post-processing, history or samples
+            // the world alone: no post-processing, history or MSAA
             RasterOptions po = o;
             po.post = po.trails = po.post_buffer = po.pre_buffer = false;
             po.msaa = 1;
@@ -2867,8 +2710,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             for (int k = 1; k <= kPreBufferPasses; k++) {
                 GpuStats ps;
                 if (!Render(frame, po, -1, nullptr, ps, k)) return false;
-                // the first sends what the world draws, which this frame
-                // then finds there
+                // the first uploads the world's data, which this frame reuses
                 st.pre_passes++;
                 st.pool_meshes += ps.pool_meshes;
                 st.arena_moved += ps.arena_moved;
@@ -2911,8 +2753,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     const std::vector<PassRun> runs = PlanPasses(frame, o);
     run_clear.assign(runs.size(), 0);
     uint32_t pool_vert_count = 0, pool_index_count = 0;
-    // a geometry this frame draws: in the arena already, or into it from
-    // the last frame's pool, or into this frame's pool
+    // in the arena already, into it from the last frame's pool, or into this
+    // frame's pool
     auto use_mesh = [&](const std::shared_ptr<const Geometry>& geom) {
         Mesh& m = meshes[geom.get()];
         if (!m.keep) {
@@ -2929,9 +2771,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         if (m.in_arena) {
             // already there
         } else if (m.first != serial) {
-            // drawn again (Evict keeps pool geometry ResidencyKeepFrames
-            // after): it stays, moved from the last frame's pool if that
-            // frame drew it, else sent again (its pool has been drawn over)
+            // drawn again: to the arena, from the last frame's pool if that
+            // frame drew it, else sent again (its pool was overwritten)
             m.arena_vertex = ~0u;
             if (MeshFromLastPool(m.first, serial)) {
                 m.pool_vertex = m.first_vertex;
@@ -2951,20 +2792,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     for (size_t r = 0; r < runs.size(); r++) {
         const PassRun& run = runs[r];
         // a texture pass's target, cleared where its camera (or NgLight)
-        // cleared it and where nothing in this frame has drawn it yet
-        // (transparent black, as on the CPU, whose targets are the frame's
-        // own): what an earlier frame left in it is never drawn over, so a
-        // frame's picture doesn't depend on what was drawn before it (a
-        // capture's on the live view's or the last capture's; the depth
-        // volume's blurs in a frame with no cone would blur the last shot's
-        // beams). One the frame samples but doesn't draw still reads what
-        // was drawn last.
+        // cleared it and where this frame hasn't drawn it yet (transparent
+        // black, as on the CPU), so a frame never draws over an earlier
+        // frame's (e.g. depth volume blurs would blur the last shot's beams).
+        // One sampled but not drawn still reads what was drawn last.
         Rt* target = nullptr;
-        // The world drawn ahead draws the world's texture passes, not the
-        // overlay's. A post frame using it leaves out the world's whose
-        // targets it drew, and draws any other itself (counted: one the world
-        // frame's capture planned without, which only the post frame's own
-        // overlay samples).
+        // The world ahead draws the world's texture passes, not the
+        // overlay's. A post frame using it skips those whose targets it drew
+        // and draws any other itself (counted).
         if (run.pass && ahead_pass && run.first >= frame.post_boundary) continue;
         if (run.pass && run.first < ahead_end) {
             const auto f = rts.find(run.pass->tex_obj);
@@ -2991,9 +2826,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             if (!run.pass && (d < ahead_end || (ahead_pass && d >= frame.post_boundary))) continue;
             if (!run.pass && d < frame.post_boundary) st.world_draws++;
             const ShadeState* state = shade::ShadeOf(frame, it);
-            // the depth volume's blurs read a copy of it, not its quad's
-            // texture (so they don't count as sampling a target nothing drew);
-            // its cones read the scene's depth, without which they're left out
+            // depth volume blurs read a copy of it, not the quad's texture;
+            // cones need the scene's depth or are skipped
             if (run.pass && spot::SpotBlur(it, state, *run.pass)) {
                 spot_draw[d] = kSpotBlur;
                 continue;
@@ -3002,8 +2836,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 spot_draw[d] = depth_sampled ? kSpotCone : kSpotConeSkipped;
                 if (!depth_sampled) continue;
             }
-            // the soft-particle buffer's blurs read the other surface's
-            // target (a copy of it), not their quad's texture
+            // soft-particle blurs read a copy of the other surface's target
             if (run.pass && SoftBlur(frame, it, state, *run.pass)) {
                 spot_draw[d] = kSoftBlur;
                 if (auto f = rts.find(it.tex->tex_obj); f != rts.end()) UseRt(f->second);
@@ -3015,11 +2848,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 bone_base[d] = uint32_t(frame_bones.size());
                 frame_bones.insert(frame_bones.end(), it.bones.begin(), it.bones.end());
             }
-            // what the diffuse texture is, as soft_raster.cpp's Diffuse() has
-            // it: a render target is its pass's target if one has drawn it (by
-            // this frame's runs before this one, or an earlier frame's), else
-            // guest pixels if kept and wanted, else transparent black; a target
-            // never samples itself (nor a shadow map's, which isn't a colour)
+            // as soft_raster.cpp's Diffuse(): a render target is its pass's
+            // target if drawn (this frame or earlier), else guest pixels if
+            // kept and wanted, else transparent black; never itself or a
+            // shadow map
             uint8_t& source = diffuse_source[d];
             if (o.textures && it.tex && SamplesDiffuse(it)) {
                 const Texture& tex = *it.tex;
@@ -3040,17 +2872,16 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 }
                 if (source == kSourceTexture) UseTexture(it.tex);
             }
-            // textured or not is settled when it draws, once the texture has
-            // its layer; the maps are the shade's
+            // textured or not is settled at draw time, once the texture has
+            // its layer
             shade::PackShade(it, state, o, false, shades[d]);
             uint32_t& flags = shades[d].flags.x;
             if (flags & shade::kShadeSpecMap) UseTexture(state->maps[kMapSpecular]);
             if (flags & shade::kShadeGlow) UseTexture(state->maps[kMapGlow]);
-            // the normal map and the detail map, as soft_raster.cpp's
-            // NormalMap() has them: one RB3 draws (a head's) is its pass's
-            // target if one has drawn it, else guest pixels if kept and
-            // wanted, else it's left out (counted). REFRACT_WORLD's refract
-            // normal map is s1 too, in the normal map's slot.
+            // as soft_raster.cpp's NormalMap(): one RB3 draws (a head's) is
+            // its pass's target if drawn, else guest pixels if kept and
+            // wanted, else left out (counted). REFRACT_WORLD's refract normal
+            // map is s1 too, in the normal map's slot.
             constexpr uint32_t kNormalSlotBits =
                 shade::kShadeNormalMap | shade::kShadeRefractMap;
             for (int k = 0; k < 2; k++) {
@@ -3080,11 +2911,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     if (!k) break;
                 }
             }
-            // the projected light's s5, as soft_raster.cpp's Projected() has
-            // it: a texture RB3 draws (NgLight's shadow) is its target where
-            // this frame's last pass of it made the version the draw reads,
-            // else guest pixels if kept and wanted, else the light is left
-            // out (counted)
+            // the projected light's s5, as soft_raster.cpp's Projected(): one
+            // RB3 draws (NgLight's shadow) is its target if this frame drew
+            // the version read, else guest pixels if kept and wanted, else
+            // the light is left out (counted)
             if (flags & (shade::kShadeProjMultiply | shade::kShadeProjGobo)) {
                 const Texture* map = ProjectedTargetOf(state);
                 if (map && o.texture_passes) {
@@ -3105,8 +2935,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 }
             }
             if (flags & shade::kShadeProjGobo) UseTexture(state->maps[kMapGobo]);
-            // the shadow map, where this frame's last pass of it made the
-            // version the draw reads (soft_raster.cpp's DrawOne); else lit
+            // the shadow map if this frame drew the version read
+            // (soft_raster.cpp's DrawOne); else lit
             if (flags & shade::kShadeShadow) {
                 const Texture* map = ShadowMapOf(state);
                 auto f = map ? rts.find(map->tex_obj) : rts.end();
@@ -3124,10 +2954,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             target->version = run.pass->version;
         }
     }
-    // the composite's noise map, a texture like a draw's
+    // the composite's noise map
     if (o.post && o.view == RasterView::kFinal && frame.noise_map) UseTexture(frame.noise_map);
-    // the motion blur's object pass's meshes, and its palettes as bones:
-    // each entry's three rows, as the shader reads them
+    // the motion blur object pass's meshes, and its palettes as bones (each
+    // entry's three rows, as the shader reads them)
     velocity_bone_base.assign(frame.velocity_objects.size(), 0);
     if (o.post && o.velocity && o.view == RasterView::kFinal && depth_sampled) {
         for (size_t i = 0; i < frame.velocity_objects.size(); i++) {
@@ -3147,20 +2977,16 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     const auto arena_start = Clock::now();
     st.plan_walk_ms = std::chrono::duration<double, std::milli>(arena_start - walk_start).count();
     const uint64_t rebuilds = counts.arena_rebuilds;
-    // From here a frame that fails leaves to_arena's meshes marked in_arena
-    // at places their copies never reached (from the CPU, the last pool or
-    // the old arena), and new_textures in layers never sent. Harmless: a
-    // failed Render fails Draw, which gives up for the session and lets go
-    // of everything (Release: meshes, textures, the arena, the device), so
-    // no frame draws them after.
+    // A failure from here leaves meshes marked in_arena and textures placed
+    // but never sent. Harmless: a failed Render fails Draw, which gives up
+    // for the session and releases everything.
     if (!PlaceInArena()) return false;
     if (counts.arena_rebuilds != rebuilds)
         st.arena_new_mb = double(arena_verts.size + arena_indices.size) / 1048576;
     st.plan_arena_ms = ms_since(arena_start);
 
-    // the upload: the pool's vertices and indices, the arena's new meshes that
-    // weren't in the last frame's pool (nor kept from the old arena), the
-    // bones, then the textures, each where a copy may start
+    // the upload: the pool's vertices and indices, arena meshes from the CPU,
+    // the bones, then the textures, each aligned for its copy
     const uint32_t pool_index_at = Align(pool_vert_count * uint32_t(sizeof(Vertex)), 16);
     uint32_t at = Align(pool_index_at + pool_index_count * 2, 16);
     const uint32_t arena_at = at;
@@ -3173,11 +2999,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     const uint32_t bone_bytes = uint32_t(frame_bones.size() * sizeof(Mat4));
     const uint32_t textures_at = Align(bones_at + bone_bytes, kTextureOffsetAlign);
     uint32_t upload_bytes = textures_at;
-    // How a new texture's level l goes up: its rows of texels (RGBA8), or of
-    // blocks for one kept as blocks, `pitch` apart in the upload, `bytes` in
-    // all (where the next level may start); into its layer's level's corner
-    // `w` x `h`, which for blocks is whole blocks (BcExtent: SDL takes the
-    // rows as pixels_per_row texels and rows_per_layer, each a multiple of 4)
+    // A new texture's level l: rows of texels or blocks, `pitch` apart,
+    // `bytes` in all; into its layer's level's `w` x `h` corner, whole blocks
+    // for BC (BcExtent; SDL takes pixels_per_row and rows_per_layer in texels,
+    // multiples of 4)
     struct LevelUpload {
         const uint8_t* src;
         uint32_t row_bytes, rows, pitch, bytes;
@@ -3212,7 +3037,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     };
     for (const Tex* tx : new_textures)
         for (uint32_t l = 0; l < tx->levels; l++) upload_bytes += level_upload(*tx, l).bytes;
-    // what of it comes from the CPU (GpuStats::mesh_bytes and the rest)
+    // what comes from the CPU (GpuStats::mesh_bytes and the rest)
     st.pool_meshes += uint32_t(to_pool.size());
     st.mesh_bytes += uint64_t(pool_vert_count) * sizeof(Vertex) + uint64_t(pool_index_count) * 2;
     uint32_t arena_copied = 0;
@@ -3319,12 +3144,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         REXLOG_WARN("native view gpu: no command buffer ({})", SDL_GetError());
         return false;
     }
-    // GPU timings: its first timestamp, the upload's start
     StartTiming(cmd, o, slot, pre_pass, ahead_pass);
-    // RasterOptions::gpu_labels: what each indexed draw is, in the order
-    // they're recorded, a list per command buffer, handed to draw_log as the
-    // frame is submitted; callers check gpu_labels first, so the text is
-    // only made when it's on
+    // RasterOptions::gpu_labels: each indexed draw in record order, a list
+    // per command buffer, handed to draw_log on submit; callers check
+    // gpu_labels first so the text is only made when it's on
     std::vector<std::vector<std::string>> indexed_draws(1);
     auto label = [&](std::string text) { indexed_draws.back().push_back(std::move(text)); };
     const std::string frame_label =
@@ -3335,8 +3158,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                      : std::string();
     if (upload_bytes || !to_arena.empty() || !array_copies.empty()) {
         SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-        // texture arrays that grew: the old one's layers into the new one
-        // first, then it can go (SDL keeps it until the copy is done)
+        // grown texture arrays first; SDL keeps the old one until the copy
+        // is done
         for (const ArrayCopy& c : array_copies) {
             for (const auto& [l, levels] : c.layers) {
                 for (uint32_t m = 0; m < levels; m++) {
@@ -3349,20 +3172,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             }
             SDL_ReleaseGPUTexture(device, c.from);
         }
-        // The frame before may still be drawing as this one is sent
-        // (RenderFrameToOutput doesn't wait for it). The pools and the
-        // bones, which each frame fills from the start, cycle: a buffer the
-        // GPU still reads is left to it and SDL gives this frame another
-        // (the copies to the arena read the last frame's pool, the one it
-        // filled). The arena is appended to, into space no frame drew from
-        // since it was last rebuilt (in a new buffer, PlaceInArena, which
-        // what it kept is copied into from the old one: the frames still
-        // drawing only read that too), and a texture goes into a new layer or
-        // one Evict or PlaceTexture let go, which the frames still drawing
-        // don't sample but where a world pass before this frame (pre_pass)
-        // let go of the frame before's own textures; there, as with the
-        // targets every frame draws over, SDL's barriers hold this frame's
-        // copy on its queue until those reads are done.
+        // The frame before may still be drawing (RenderFrameToOutput doesn't
+        // wait). The pools and bones, refilled each frame, cycle so SDL gives
+        // this frame a buffer the GPU isn't reading. The arena is only
+        // appended to, into space no in-flight frame reads. A texture goes
+        // into a new layer or one Evict or PlaceTexture freed, which in-flight
+        // frames don't sample, except after a pre_pass freed the previous
+        // frame's; there SDL's barriers hold this copy until those reads end.
         auto send = [&](uint32_t from, const Buffer& to, uint32_t offset, uint32_t size,
                         bool cycle) {
             if (!size) return;
@@ -3379,8 +3195,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             const uint32_t isize = IndexSlots(g) * 2;
             const uint32_t vto = m->first_vertex * uint32_t(sizeof(Vertex));
             const uint32_t ito = m->first_index * 2;
-            // from the old arena (kept by a rebuild) or the last frame's
-            // pool, into its place in the arena
+            // from the old arena (kept by a rebuild) or the last frame's pool
             auto copy_in = [&](const Buffer& verts, uint32_t vertex, const Buffer& indices,
                                uint32_t index) {
                 SDL_GPUBufferLocation src{verts.buffer, vertex * uint32_t(sizeof(Vertex))};
@@ -3422,23 +3237,20 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         SDL_EndGPUCopyPass(copy);
     }
-    // a rebuilt arena's old buffers, copied out of above
     ReleaseBuffer(old_arena_verts);
     ReleaseBuffer(old_arena_indices);
 
-    // The runs in order, a render pass each stretch: the back buffer's, split
-    // where Rasterize() clears depth (a camera it hasn't seen yet starts
-    // drawing) and resumed after each texture pass; each texture pass into
-    // its target, then its mips made
+    // The runs in order: the back buffer's render pass, split where
+    // Rasterize() clears depth (a new camera) and resumed after each texture
+    // pass; each texture pass into its target, then its mips
     SDL_GPUBuffer* bone_buffer = bone_bytes ? bones.buffer : no_bones;
     SDL_GPURenderPass* pass = nullptr;
-    // what's bound in the pass, so a draw binds only what changes
+    // bound state, so a draw binds only what changes
     SDL_GPUGraphicsPipeline* bound = nullptr;
     SDL_GPUBuffer* bound_verts = nullptr;
     SDL_GPUTexture* bound_tex[kNumSpotSlots] = {};
     float bound_viewport[4] = {};
-    // the open pass's scissor is the song list's cut (InOverlayCut), not the
-    // whole target
+    // the scissor is the song list's cut (InOverlayCut)
     bool scissor_cut = false;
     uint32_t pass_samples = 1;  // the open pass's targets'
     auto begin_pass = [&](const SDL_GPUColorTargetInfo& ct,
@@ -3453,16 +3265,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     };
     auto end_pass = [&] {
         if (pass) {
-            // a multisampled overlay pass resolves into the picture as it
-            // ends: timed apart, until whatever comes next marks its own
+            // a multisampled overlay pass resolves as it ends: timed apart
             if (pass_samples > 1) MarkTime(cmd, gpu_timing::kOverlayResolve);
             SDL_EndGPURenderPass(pass);
         }
         pass = nullptr;
     };
-    // A submission before the frame's end (each into GpuStats::submit_ms and
-    // submits, with the last's): at a texture pass's mips and, with
-    // RasterOptions::submit_points, at the resolve
+    // a mid-frame submission (at a texture pass's mips and, with
+    // RasterOptions::submit_points, the resolve), counted in GpuStats
     auto submit_part = [&](SDL_GPUCommandBuffer* c) {
         const auto t = Clock::now();
         const bool ok = SDL_SubmitGPUCommandBuffer(c);
@@ -3472,18 +3282,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     };
     // the draws recorded by the last submission (draws_since_submit)
     uint32_t draws_at_submit = 0;
-    // The frame's work so far submitted and the rest recorded into a new
-    // command buffer, between passes (never inside one): the GPU draws what's
-    // submitted while the CPU records the rest, waiting for it in between
-    // (gpu_timing_model.h's kIdle, its time from this command buffer's last
-    // timestamp to the next one's first). One queue runs them in order, so
-    // the frame's fence waits out all of it, and SDL's resource states are
-    // per resource, so no barrier is lost. The new command buffer has nothing
-    // bound (SDL's acquire zeroes it) and its own heaps, which BeginPass
-    // starts on kSamplerBatch's step; every pass begins bound afresh, the
-    // caches below forgotten all the same, as begin_pass forgets them. With
-    // gpu_labels its draws are a list of their own. False if it couldn't
-    // (logged by the caller), the frame given up.
+    // Submits the work so far and continues in a new command buffer (between
+    // passes only) so the GPU draws while the CPU records; the gap is
+    // kIdle. One queue keeps order and SDL tracks per-resource states, so the
+    // frame's fence covers all and no barrier is lost. The new buffer has
+    // nothing bound, so the caches reset. False on failure (caller logs).
     auto next_part = [&]() -> bool {
         MarkTime(cmd, gpu_timing::kIdle);
         SDL_GPUCommandBuffer* next =
@@ -3499,30 +3302,25 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         return true;
     };
 
-    // the back buffer: the world's draws into the scene target, cleared to
-    // the frame's clear colour (alpha 0) the first time, and the overlay's
-    // into the picture once the resolve has filled it; depth cleared the
-    // first time and, in a capture from before its cameras were kept,
-    // whenever a new camera starts, else after the resolve
+    // the back buffer: the world into `scene` (first cleared, alpha 0), the
+    // overlay into the picture after the resolve; depth cleared at first and
+    // after the resolve, or per new camera in pre-camera captures
     const BackBufferLayout layout = LayoutBackBuffer(frame);
     bool clear_overlay_depth = false;
     bool back_begun = false;
     bool resolved = false;
-    // what holds the picture once the resolve is done, for the overlay's
-    // start and the gamma ramp's pass: `color`, or the post buffer itself
-    // where a frame showing it leaves it there (resolve), until a
-    // multisampled overlay pass resolves the picture into `color`
+    // the picture after the resolve, for the overlay's start and the gamma
+    // pass: `color`, or the post buffer a frame showing it leaves there,
+    // until a multisampled overlay pass resolves into `color`
     SDL_GPUTexture* picture = color;
-    // the picture as the resolve left it, for the overlay's REFRACT_WORLD
-    // draws: the post buffer where it's that picture already, else `behind`,
-    // the resolve's copy
+    // the picture as resolved, for the overlay's REFRACT_WORLD draws: the
+    // post buffer if it's that already, else `behind`
     SDL_GPUTexture* behind_now = behind;
     bool depth_fresh = false;  // the open pass's depth is cleared and untouched
-    // The overlay's samples (soft_raster.h's OverlaySamples) as the device
-    // draws them, into its multisampled targets; 1 into `color`, over the
-    // world's depth, as before. A capture from before the cameras were kept
-    // has its overlay go on over the world's depth, which the overlay's start
-    // reads: single-sampled where the device can't sample it.
+    // The overlay's samples (OverlaySamples) as the device draws them; 1
+    // draws into `color` over the world's depth. A capture from before
+    // cameras were kept draws its overlay over the world's depth, which the
+    // overlay's start must sample: single-sampled if it can't.
     SDL_GPUTexture* const world_depth = depth_sampled ? depth : no_depth;
     uint32_t overlay_samples = DeviceSamples(OverlaySamples(o));
     if (overlay_samples > 1 &&
@@ -3530,26 +3328,21 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
          !OverlayStartPipeline(overlay_samples)))
         overlay_samples = 1;
     bool overlay_start = false;  // the overlay's targets are yet to be started
-    // the frame's clear colour (soft_raster.h's ClearRgba), the scene's alpha 0
+    // the scene's alpha 0
     const uint32_t clear_rgba = ClearRgba(frame);
     const SDL_FColor clear_color = {float(clear_rgba & 0xff) / 255.0f,
                                     float(clear_rgba >> 8 & 0xff) / 255.0f,
                                     float(clear_rgba >> 16 & 0xff) / 255.0f, 0.0f};
     auto begin_back = [&](bool clear_depth) {
-        // the GPU's time from here is the world's or the overlay's (marked
-        // here rather than as each texture pass ends: nothing goes between,
-        // and back to back passes then take one timestamp each)
+        // marked here, not at each texture pass's end, so back-to-back
+        // passes take one timestamp each
         MarkTime(cmd, resolved ? gpu_timing::kOverlay : gpu_timing::kWorld);
-        // the overlay's, multisampled: each of its passes resolves into the
-        // picture as it ends
         const bool ms = resolved && overlay_samples > 1;
         bool depth_cleared = false;
         if (ms && overlay_start) {
-            // RB3's DoPostProcess clears its 2x target and draws the post
-            // picture into it (BeginTiling, CopyPostProcess): here the
-            // picture into every sample, and the overlay's depth 0, or the
-            // world's where a capture from before the cameras goes on over
-            // it (and no new camera clears it)
+            // as RB3's DoPostProcess (BeginTiling, CopyPostProcess): the
+            // picture into every sample, depth 0, or the world's for a
+            // capture from before cameras were kept (if no camera clears it)
             SDL_GPUColorTargetInfo start_ct{};
             start_ct.texture = color_ms;
             start_ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
@@ -3576,7 +3369,6 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             depth_cleared = !world;
             clear_depth = false;
         }
-        // this pass resolves the picture into `color` as it ends
         if (ms) picture = color;
         SDL_GPUColorTargetInfo ct{};
         ct.texture = ms ? color_ms : resolved ? color : scene;
@@ -3596,8 +3388,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
         dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
         begin_pass(ct, dt);
-        // SDL_gpu's default viewport, all of the target, until a draw's
-        // camera has another (PlaceBackBufferDraw)
+        // SDL_gpu's default viewport, until a draw's camera sets another
+        // (PlaceBackBufferDraw)
         bound_viewport[2] = float(width);
         bound_viewport[3] = float(height);
         back_begun = true;
@@ -3605,9 +3397,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         pass_samples = ms ? overlay_samples : 1;
     };
 
-    // one of post.hlsl's full-screen passes: `pipeline` into all of `target`
-    // (w x h), and of `second` (as big) if given, reading `sources` at t0,
-    // t1... with `params`
+    // a post.hlsl full-screen pass into `target` (w x h) and `second` if
+    // given, reading `sources` at t0, t1...
     auto fullscreen = [&](SDL_GPUTexture* target, uint32_t w, uint32_t h,
                           SDL_GPUGraphicsPipeline* pipeline,
                           std::initializer_list<SDL_GPUTexture*> sources, post::PostPass& params,
@@ -3632,23 +3423,20 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     };
     SDL_GPUTexture* const scene_depth = depth_sampled ? depth : no_depth;
 
-    // RB3's post-processing (post_model.h), the passes RunPost runs on the
-    // CPU, into the RGBA8 levels: the DOF's, then bloom's, then the composite
-    // into the picture
+    // RB3's post-processing (post_model.h), RunPost's passes: DOF, bloom,
+    // then the composite into the picture
     post::PostPlan post_plan;
     const auto post_plan_start = Clock::now();
     bool post_on = o.post && o.view == RasterView::kFinal &&
                    post::PlanPost(frame, o.post_only, post_plan, o.grain, o.velocity);
     st.post_plan_ms = ms_since(post_plan_start);
-    // depth of field blurs by the depth, which reads as 0 (all blurred)
-    // without a sampled one: left out then (Create warns of it, once)
+    // without sampled depth DOF would blur everything: left out
     if (post_on && !depth_sampled) {
         post_plan.composite.flags.x &= ~(post::kPostDof | post::kPostVelocity);
         post_on = post_plan.composite.flags.x != 0;
     }
-    // the motion blur's object pass (velocity.hlsl), over the camera pass's
-    // texels: each object's mesh, its palettes in the frame's bones, its
-    // depth in a buffer of its own cleared to 1
+    // the motion blur's object pass (velocity.hlsl) over the camera pass's
+    // texels, with its own depth cleared to 1
     auto velocity_objects = [&] {
         if (post_plan.velocity_objects.empty() || frame.velocity_objects.empty()) return;
         SDL_GPUColorTargetInfo ct{};
@@ -3713,16 +3501,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     auto post_process = [&] {
         post::PostPass p = post_plan.composite;
         const uint32_t flags = p.flags.x;
-        // the 4x downsample (or the bright pass) of `src`, sw x sh, into
-        // `dst` at level k's size
+        // 4x downsample (or bright pass) of `src` into `dst` at level k's size
         auto downsample = [&](SDL_GPUTexture* src, uint32_t sw, uint32_t sh, SDL_GPUTexture* dst,
                               int k, bool bright) {
             p.mode = {0, bright ? 1u : 0u, 0, 0};
             p.half_pixel = {0.5f / float(sw), 0.5f / float(sh), 0, 0};
             fullscreen(dst, post_w[k], post_h[k], downsample_pipeline, {src}, p);
         };
-        // `level` (level k's size) blurred across into k's spare, then down
-        // back into it
+        // across into k's spare, then down back into `level`
         auto blur = [&](SDL_GPUTexture* level, int k, const post::float4* across,
                         const post::float4* down, uint32_t taps) {
             p.mode = {0, 0, taps, 0};
@@ -3731,8 +3517,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             std::copy(down, down + taps, p.taps);
             fullscreen(level, post_w[k], post_h[k], blur_pipeline, {post_tmp[k]}, p);
         };
-        // the velocity pass, from the scene's depth (t1), then the objects
-        // with their own motion over it
+        // camera velocity from the scene's depth (t1), then the objects over it
         if (flags & post::kPostVelocity) {
             MarkTime(cmd, gpu_timing::kVelocity);
             p.mode = {0, width, height, 0};
@@ -3759,27 +3544,24 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     downsample(scene, width, height, post_bloom[0], 0, true);
                 blur(post_bloom[k], k, post_plan.bloom_taps[k][0], post_plan.bloom_taps[k][1], 15);
             }
-            // and its glare pass, into level 0's spare
+            // glare into level 0's spare
             if (flags & post::kPostGlare) {
                 p.mode = {0, 0, 0, 0};
                 fullscreen(post_tmp[0], post_w[0], post_h[0], glare_pipeline, {post_bloom[0]}, p);
                 bloom0 = post_tmp[0];
             }
         }
-        // the spotlights' depth volume and density map, and the soft-particle
-        // surface, as this frame's passes drew them (transparent black if
-        // none did)
+        // a target this frame (or its world ahead) drew, else transparent
+        // black
         auto drawn_now = [&](uint32_t tex_obj) {
             const auto f = rts.find(tex_obj);
-            // (or by the world drawn ahead, which drew this frame's world)
             return tex_obj && f != rts.end() &&
                            (f->second.drawn_in == serial ||
                             (uses_ahead && f->second.drawn_in == ahead_was.serial))
                        ? f->second.color
                        : black;
         };
-        // the noise map's layer, its sampler packed for the levels it has
-        // there; none (no layer for it) leaves the noise out
+        // without a layer the noise is left out
         SDL_GPUTexture* noise = black;
         if (flags & post::kPostNoise) {
             const Tex* tx = TextureFor(post_plan.noise);
@@ -3793,15 +3575,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 p.flags.x &= ~(post::kPostNoise | post::kPostNoiseMidtone);
             }
         }
-        // the levels an effect that's off didn't draw are bound all the same,
-        // and not read
+        // levels of effects that are off are bound but not read
         MarkTime(cmd, gpu_timing::kComposite);
         p.mode = {0, 0, 0, 0};
-        // The live view's composite keeps the post buffer the trails read:
-        // a post frame's goes into the history's other texture, which is
-        // then the current one (once a game frame); a world frame's (no
-        // constants) only reads it. The trails need a post frame from
-        // before this one.
+        // The live view's composite also writes the trails' post buffer into
+        // the history's other texture, which a post frame makes current
+        // (once per game frame); trails need an earlier post frame.
         if (o.trails && EnsureHistory(width, height)) {
             const bool have_prev = history.cur >= 0 && history.game_frame &&
                                    history.game_frame < frame.game_frame;
@@ -3828,39 +3607,36 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                    p);
     };
 
-    // whether an overlay draw reads the picture behind it, for which the
-    // resolve keeps a copy of it
+    // whether an overlay draw reads the picture behind it, so the resolve
+    // keeps a copy
     bool refracts = false;
     for (size_t d = frame.post_boundary; d < frame.draws.size() && !refracts; d++) {
         const DrawItem& it = frame.draws[d];
         refracts = DrawnToBackBuffer(it) && RefractsWorld(shade::ShadeOf(frame, it));
     }
 
-    // the scene into the picture, at post_boundary or the frame's end:
-    // post-processed, or as it is, or the view of the scene target asked for.
-    // False if the submission before it failed (logged).
+    // the scene into the picture at post_boundary or the frame's end:
+    // post-processed, as is, or the requested view. False if the submission
+    // before it failed (logged).
     auto resolve = [&]() -> bool {
         end_pass();
-        // the scene cleared, if nothing drew to it (the world drawn ahead
-        // did, and the overlay goes on over its depth as over the world's)
+        // the scene cleared if nothing drew to it (the world ahead counts)
         if (!back_begun && uses_ahead) {
             back_begun = true;
         } else if (!back_begun) {
             begin_back(true);
             end_pass();
         }
-        // RasterOptions::submit_points: the world and the texture passes
-        // submitted, for the GPU to draw while the CPU records the post-
-        // processing, the overlay and the gamma ramp's pass (SubmitAtResolve)
+        // RasterOptions::submit_points: submit the world so the GPU draws it
+        // while the CPU records the rest (SubmitAtResolve)
         if (SubmitAtResolve(o.submit_points, pre_pass || ahead_pass,
                             st.draws - draws_at_submit) &&
             !next_part()) {
             REXLOG_WARN("native view gpu: the frame's world didn't submit ({})", SDL_GetError());
             return false;
         }
-        // the scene as the world left it, before post-processing, as
-        // DoWorldEnd's SavePreBuffer keeps it: for the next world frame's
-        // REFRACT_WORLD draws, or the next world pass's
+        // the pre-post scene, as DoWorldEnd's SavePreBuffer keeps it, for the
+        // next world frame's or world pass's REFRACT_WORLD draws
         MarkTime(cmd, gpu_timing::kCopies);
         if (pre_pass || keeps_pre_now) {
             SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
@@ -3871,15 +3647,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SDL_EndGPUCopyPass(copy);
             if (!pre_pass) pre_buffer.game_frame = WorldFrameOf(frame);
         }
-        // the world drawn ahead ends with its scene, which the post frame
-        // after it post-processes
+        // the next post frame post-processes it
         if (ahead_pass) {
             resolved = true;
             return true;
         }
-        // the post buffer as the picture, or the picture kept as it.
-        // Multisampled, the overlay's start reads the post buffer itself and
-        // its passes resolve into `color`, so it isn't copied there first
+        // Multisampled, the overlay's start reads the post buffer directly
+        // and resolves into `color`, so no copy is needed
         if (shows_kept && overlay_samples > 1) {
             picture = post_buffer.tex;
         } else if (shows_kept) {
@@ -3905,8 +3679,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SDL_EndGPUCopyPass(copy);
             post_buffer.game_frame = frame.game_frame;
         }
-        // the picture behind the overlay's refracting draws: the post
-        // buffer, where it's this picture (shown or just kept), else a copy
+        // the post buffer if it's this picture, else a copy
         if (refracts && (shows_kept || keeps)) {
             behind_now = post_buffer.tex;
         } else if (refracts) {
@@ -3917,30 +3690,28 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SDL_EndGPUCopyPass(copy);
         }
         resolved = true;
-        // the back buffer's draws from here on are the overlay's
         MarkTime(cmd, gpu_timing::kOverlay);
         // the overlay's depth starts cleared with the capture's cameras, as
-        // on the CPU (Rasterize's resolve); multisampled, the overlay's first
-        // pass starts its targets
+        // Rasterize's resolve does
         clear_overlay_depth = layout.cameras;
         overlay_start = overlay_samples > 1;
         return true;
     };
 
-    // the density map the spotlights' cones read: the last drawn, as on the
-    // CPU (0 none); and the texture pass being drawn, its target's
+    // the last density map drawn (0 none), which cones read; the current
+    // texture pass's target
     uint32_t density_obj = 0;
     const Rt* pass_rt = nullptr;
 
-    // one draw into the open pass; `no_z` a texture without a depth buffer,
-    // `shadow_depth` a shadow map's, into which it draws its depth alone
+    // one draw into the open pass; `no_z`: target without depth;
+    // `shadow_depth`: into a shadow map, depth alone
     auto draw = [&](size_t d, AlphaMode alpha, bool no_z, bool shadow_depth = false,
                     const DepthMap& depth_map = DepthMap{}, bool overlay_edge = false) {
         const DrawItem& it = frame.draws[d];
         const Mesh& m = meshes[it.geom.get()];
         const int blend = BlendFor(it, o);
         const CullWinding cull = CullFor(it, o);
-        if (cull == CullWinding::kAll) return;  // culls both sides: draws nothing
+        if (cull == CullWinding::kAll) return;
         const bool cone = spot_draw[d] == kSpotCone;
         const bool soft = spot_draw[d] == kSoftParticle;
         const PixelKind kind = cone ? PixelKind::kSpot : soft ? PixelKind::kSoft : PixelKind::kMesh;
@@ -3963,7 +3734,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_16BIT);
             bound_verts = verts;
         }
-        // a shadow map's depth reads nothing but where the vertices are
+        // needs only the vertex positions
         if (shadow_depth) {
             VertexUniforms vu{};
             vu.world = it.world;
@@ -3989,8 +3760,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             return;
         }
 
-        // the textures the shade samples: a layer of a size class's array,
-        // or a render target's own; a map that couldn't have a layer is left
+        // an array layer or a render target; a map without a layer is left
         // out, as if the capture had none
         struct Sampled {
             SDL_GPUTexture* texture = nullptr;
@@ -4040,8 +3810,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 sp.flags.x &= ~(shade::kShadeNormalMap | shade::kShadeDetailMap |
                                 shade::kShadeRefractMap);
         }
-        // the shadow map's target, as its pass left it (the plan kept the
-        // flag only where that's the version the draw reads)
+        // the plan kept the flag only where the target has the right version
         if (sp.flags.x & shade::kShadeShadow) {
             const Rt& rt = rts[ShadowMapOf(state)->tex_obj];
             tex[kSlotShadow] = {rt.color, 0, rt.w, rt.h};
@@ -4060,9 +3829,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 ((sp.flags.x & shade::kShadeProjGobo) && !tex[kSlotGobo].texture))
                 sp.flags.x &= ~(shade::kShadeProjMultiply | shade::kShadeProjGobo);
         }
-        // REFRACT_WORLD reads the picture behind it: into the picture, once
-        // the resolve has kept a copy of it; into the world, the pre-process
-        // buffer (world_behind)
+        // REFRACT_WORLD reads the picture behind it: in the overlay, the
+        // resolve's copy; in the world, world_behind
         if (sp.flags.x & shade::kShadeRefract) {
             if (resolved && refracts && alpha != AlphaMode::kTexture)
                 tex[kSlotBehind] = {behind_now, 0, width, height};
@@ -4072,8 +3840,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 sp.flags.x &= ~(shade::kShadeRefract | shade::kShadeRefractMap);
         }
         for (int s = 0; s < kNumSlots; s++) {
-            // behind's and the shadow map's bindings are plain 2D textures;
-            // no_depth is one
+            // behind's and the shadow map's bindings are plain 2D, as is
+            // no_depth
             SDL_GPUTexture* sampled = tex[s].texture                            ? tex[s].texture
                                       : s == kSlotBehind || s == kSlotShadow ? no_depth
                                                                              : white;
@@ -4082,9 +3850,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SDL_BindGPUFragmentSamplers(pass, uint32_t(s), &ts, 1);
             bound_tex[s] = sampled;
         }
-        // a cone reads the scene's depth where its pixel is on the screen,
-        // and the density map drawn before it (black if none: 0), with its
-        // numbers in a second buffer (soft_raster.cpp's SpotPixel)
+        // a cone reads the scene's depth at its screen pixel and the last
+        // density map (black if none), with uniforms in a second buffer
+        // (soft_raster.cpp's SpotPixel)
         if (cone) {
             SDL_GPUTexture* density = black;
             if (auto f = rts.find(density_obj);
@@ -4108,9 +3876,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             su.sizes[1] = height;
             SDL_PushGPUFragmentUniformData(cmd, 1, &su, sizeof(su));
         }
-        // a soft particle reads the scene's depth there too (0 where the
-        // device can't sample it: unfaded), and the camera's far plane, in
-        // the second buffer's depth range (soft_raster.cpp's SoftPixelFade)
+        // a soft particle reads the scene's depth too (0, unfaded, if it
+        // can't be sampled) and the far plane in depth_range
+        // (soft_raster.cpp's SoftPixelFade)
         if (soft) {
             if (scene_depth != bound_tex[kSlotSceneDepth]) {
                 const SDL_GPUTextureSamplerBinding ts{scene_depth, sampler};
@@ -4161,9 +3929,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             pu.tex_size[s - 1][0] = tex[s].w;
             pu.tex_size[s - 1][1] = tex[s].h;
         }
-        // the samplers they're read with: the game's where the capture kept
-        // them and filtering is on, else the old nearest (soft_raster.cpp's
-        // DrawOne likewise)
+        // the game's samplers if kept and filtering is on, else nearest (as
+        // soft_raster.cpp's DrawOne)
         {
             const TexSampler none;
             auto sampler_of = [&](int slot) -> const TexSampler& {
@@ -4174,7 +3941,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     case kSlotGlow: return state->samplers[kMapGlow];
                     case kSlotNormal: return state->samplers[kMapNormal];
                     case kSlotDetail: return state->samplers[kMapDetailNormal];
-                    default: return none;  // the projected light's: bilinear, its own way
+                    default: return none;  // the projected light filters its own way
                 }
             };
             for (int s : {kSlotDiffuse, kSlotSpecular, kSlotGlow, kSlotNormal, kSlotDetail}) {
@@ -4184,16 +3951,16 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             }
         }
         pu.flags[0] = blend == kBlendSrcAlpha || blend == kBlendSrcAlphaAdd ? kPremultiply : 0;
-        // the DXN textures kept as BC5, by tex_layer's order: their y in z and
-        // w too, as DecodeBlock has them (a head's normal map is a texture
-        // pass's diffuse texture, its alpha read; mesh.hlsl's DxnTexel)
+        // DXN kept as BC5, in tex_layer's order: y copied to z and w as
+        // DecodeBlock has it (mesh.hlsl's DxnTexel; a head's normal map pass
+        // reads the alpha)
         for (int s : {kSlotDiffuse, kSlotSpecular, kSlotGlow, kSlotProjected, kSlotGobo,
                       kSlotNormal, kSlotDetail})
             if (tex[s].dxn) pu.flags[1] |= 1u << (s >= kSlotNormal ? s - 2 : s);
         SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
 
         if (o.gpu_labels) {
-            // each texture's size and its sampler's anisotropy, in tex_layer's order
+            // size and sampler anisotropy, in tex_layer's order
             std::string textures;
             for (int t = 0; t < 8; t++)
                 if (pu.tex_size[t][0])
@@ -4215,11 +3982,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
 
     cams_seen.clear();
     uint32_t last_cam = 0;
-    // the back buffer's draws in their cameras' viewports, layered by their z
-    // ranges (soft_raster.h's LayoutBackBuffer, which Rasterize() follows)
+    // back buffer draws in their cameras' viewports, layered by z range
+    // (soft_raster.h's LayoutBackBuffer, as Rasterize())
     for (size_t r = 0; r < runs.size(); r++) {
         const PassRun& run = runs[r];
-        // a world pass ends with the world
         if ((pre_pass || ahead_pass) && resolved) break;
         if (!run.pass) {
             for (size_t d = run.first; d < run.end; d++) {
@@ -4229,7 +3995,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 if (!resolved && d >= frame.post_boundary && !resolve()) return false;
                 if (resolved && (o.view != RasterView::kFinal || pre_pass || ahead_pass)) break;
                 bool clear_depth = false;
-                // (a DrawRect quad has no camera of its own)
+                // DrawRect quads have no camera
                 if (it.rect_shader < 0) {
                     if (o.clear_depth_per_camera && !layout.cameras && it.cam != last_cam &&
                         std::find(cams_seen.begin(), cams_seen.end(), it.cam) ==
@@ -4258,14 +4024,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 AlphaMode alpha = AlphaMode::kNone;
                 if (!resolved && WritesSceneAlpha(shade::ShadeOf(frame, it)))
                     alpha = AlphaMode::kScene;
-                // the overlay's camera draws over the whole picture reach its
-                // edges (RasterOptions::overlay_edge); DrawRect's quads are
-                // in pixels, a camera's with a screen rect in its own
+                // whole-picture overlay camera draws reach the edges
+                // (RasterOptions::overlay_edge); DrawRect's quads are in
+                // pixels
                 const bool whole = vp[0] == 0.0f && vp[1] == 0.0f &&
                                    vp[2] == float(width) && vp[3] == float(height);
                 const bool overlay_whole = resolved && whole && it.rect_shader < 0;
-                // the song list's rows cut at 16:9 instead (InOverlayCut): to
-                // the 16:9 frame's columns
+                // except the song list's rows, scissored to 16:9 (InOverlayCut)
                 const bool cut = overlay_whole && InOverlayCut(it, o);
                 if (cut != scissor_cut) {
                     const float e = o.overlay_edge[0];
@@ -4287,20 +4052,18 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         pass_rt = &rt;
         if (p.tex_type == kTexTypeDensityMap) density_obj = p.tex_obj;
         const bool no_z = (p.tex_type & kTexTypeNoZ) != 0;
-        // a shadow map's: its depth alone, its colour the same depth (clip
-        // z/w), both cleared to the pass's clear_z, or as far as it goes where
-        // nothing has drawn it yet (soft_raster.cpp's RtTarget::zw)
+        // a shadow map's colour is its depth (clip z/w), both cleared to the
+        // pass's clear_z, else the far plane (soft_raster.cpp's RtTarget::zw)
         const bool shadow_map = rt.shadow;
         const float clear_z = (p.clear_flags & 0x30) ? p.clear_z : 1.0f;
-        // its GPU time's part (the blurs in it apart)
+        // blurs are timed apart
         const uint8_t pass_part =
             shadow_map ? gpu_timing::kPassShadow
             : p.tex_type == kTexTypeDepthVolume || p.tex_type == kTexTypeDensityMap
                 ? gpu_timing::kPassSpot
                 : gpu_timing::kPassOther;
         MarkTime(cmd, pass_part);
-        // into its target, cleared as the run says the first time; again
-        // after a blur, as the blur left it
+        // cleared as the run says the first time; loaded after a blur
         auto begin_rt = [&](bool first) {
             SDL_GPUColorTargetInfo ct{};
             ct.texture = rt.color;
@@ -4335,12 +4098,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 continue;
             }
             if (spot_draw[d] == kSpotBlur) {
-                // The depth volume's blur (or NgLight's shadow's), as
-                // soft_raster.cpp's SpotBlurDraw: the target copied as it is,
-                // then the copy's taps (offsets c31.., weights c47..: the same
-                // in every channel) into all of it, which is the rect BlurRT
-                // (BlurShadowRT) draws, with Src as its material blends. Each
-                // has a copy of its own size, so neither remakes the other's.
+                // The depth volume's (or NgLight's shadow's) blur, as
+                // soft_raster.cpp's SpotBlurDraw and BlurRT (BlurShadowRT):
+                // taps of a copy (offsets c31.., weights c47..) over the whole
+                // target with Src. Separate scratches so neither remakes the other's.
                 end_pass();
                 Scratch& scratch =
                     p.tex_type == kTexTypeDepthVolume ? spot_scratch : light_scratch;
@@ -4356,8 +4117,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 SDL_EndGPUCopyPass(copy);
                 const ShadeState& state = *shade::ShadeOf(frame, it);
                 post::PostPass blur{};
-                // in a target bigger than the game's, each tap over the
-                // texels the game's covers (soft_raster.h's BlurSubTaps)
+                // a target bigger than the game's: each tap covers the game's
+                // texel (soft_raster.h's BlurSubTaps)
                 const BlurSubTaps sub = BlurSubTapsFor(state, spot::kSpotBlurTaps, p, rt.w, rt.h);
                 blur.mode = {0, 0, uint32_t(spot::kSpotBlurTaps), sub.count};
                 blur.half_pixel = {0, 0, sub.step[0], sub.step[1]};
@@ -4369,12 +4130,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 continue;
             }
             if (spot_draw[d] == kSoftBlur) {
-                // The soft-particle buffer's blur, as soft_raster.cpp's
-                // TapBlurDraw: the other surface as this frame's pass left it
-                // (copied: the blur reads a plain 2D texture), its taps into
-                // all of this one, which is the rect BlurSurface draws, with
-                // Src as its material blends; transparent black (no_depth's
-                // 0) if no pass drew it
+                // The soft-particle blur, as soft_raster.cpp's TapBlurDraw:
+                // a copy of the other surface (the blur reads plain 2D), its
+                // taps over all of this one, as BlurSurface draws with Src;
+                // transparent black (no_depth) if no pass drew it
                 end_pass();
                 MarkTime(cmd, gpu_timing::kPassBlur);
                 SDL_GPUTexture* source = no_depth;
@@ -4410,9 +4169,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 MarkTime(cmd, pass_part);  // after a blur
                 begin_rt(false);
             }
-            // the camera's viewport, scaled with the target; DrawRect's quads
-            // are in the target's pixels, over all of it (soft_raster.cpp
-            // likewise)
+            // the camera's viewport scaled with the target; DrawRect's quads
+            // cover all of it in pixels (as soft_raster.cpp)
             float vp[4] = {0, 0, float(rt.w), float(rt.h)};
             if (it.rect_shader < 0 && p.viewport[2] > 0 && p.viewport[3] > 0)
                 ScalePassViewport(p, rt.w, rt.h, vp);
@@ -4424,32 +4182,21 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             draw(d, AlphaMode::kTexture, no_z, shadow_map);
         }
         end_pass();
-        // in place of FinishDrawTarget's downsamples, then the frame's work so
-        // far submitted and the rest recorded into a new command buffer
-        // (next_part). The submit is worth its idle: the GPU draws what's
-        // recorded while the CPU records the rest, and a frame recorded
-        // whole, its mips drawn inline but submitted once at the end, waited
-        // a millisecond longer for its post frames' GPU (1.2 to 2.2 ms p50).
+        // FinishDrawTarget's downsamples, then submit (next_part): worth the
+        // idle, since a frame submitted only at the end waited 1 ms longer
+        // for its post frames' GPU (1.2 vs 2.2 ms p50)
         if (rt.levels > 1) {
             bool next = false;
             if (o.inline_mips && inline_mips_ok) {
-                // each level drawn from the one above, in this command
-                // buffer, as SDL's GenerateMipmaps blits them on Direct3D 12
-                // (DrawMips: the same triangle, sampler, viewport and calls,
-                // so the same texels), but through BeginPass, so the sampler
-                // heap stays on kSamplerBatch's step. A pass reads the level
-                // above while it draws into its own, as SDL's blits do: SDL
-                // makes the pass's level a render target, the others stay
-                // readable.
+                // same texels as SDL's blits, but through BeginPass so the
+                // sampler heap stays on kSamplerBatch's step
                 MarkTime(cmd, gpu_timing::kMips);
                 DrawMips(cmd, rt.color, rt.w, rt.h, rt.levels);
                 next = next_part();
             } else {
-                // Off (or not on Direct3D 12), SDL makes them, with blits of
-                // its own, a sampler each, which would put the command
-                // buffer's sampler heap off kSamplerBatch's step (BeginPass);
-                // so in a command buffer of their own, between the frame's
-                // work so far and the rest (each starts its heaps afresh)
+                // SDL's blits bind one sampler each, which would put the heap
+                // off kSamplerBatch's step (BeginPass), so they get a command
+                // buffer of their own, with fresh heaps
                 if (next_part()) {
                     MarkTime(cmd, gpu_timing::kMips);
                     SDL_GenerateMipmapsForGPUTexture(cmd, rt.color);
@@ -4466,19 +4213,17 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     if (!resolved && !resolve()) return false;
     end_pass();
 
-    // The world drawn ahead is submitted and left to the GPU, with no fence
-    // of its own: the next Render goes after it on SDL's one queue, and its
-    // fence (waited for, the post frame's or any other) waits it out too. As
-    // the world passes before a frame (pre_pass, gpu_no_wait) do; a fence
-    // polled from outside is what hung AMD GPUs (RasterOptions::gpu_no_wait).
+    // The world ahead is submitted without a fence of its own: the next
+    // Render follows on SDL's one queue and its fence covers both. Likewise
+    // the pre passes; a fence polled from outside hung AMD GPUs
+    // (RasterOptions::gpu_no_wait).
     if (ahead_pass) {
         if (o.gpu_labels) {
             std::lock_guard lock(draw_log_mutex);
             draw_log_frame = frame_label + " (world ahead)";
             draw_log = std::move(indexed_draws);
         }
-        // its GPU time's end, on the aside's ladder: the post frame after
-        // it resolves and reads it with its own
+        // ends the aside's ladder; the next post frame resolves it
         MarkTime(cmd, gpu_timing::kNone);
         st.record_ms = ms_since(record_start);
         const auto submit_start = Clock::now();
@@ -4495,11 +4240,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         return true;
     }
 
-    // the display's gamma ramp over all of it, as the presenter applies it
-    // (gamma_ramp.h), by the CPU's lookup: each value's entry, red in the low
-    // byte, four to a uint4. Every frame ends in this pass, into its output:
-    // with no ramp (or a view, or the ramp off) the lookup is the identity,
-    // which gives each 8-bit value back as it was, alpha the resolve's 1
+    // the display's gamma ramp, as the presenter applies it (gamma_ramp.h):
+    // a LUT entry per value, red in the low byte, four to a uint4. Every
+    // frame ends in this pass into its output; without a ramp the LUT is the
+    // identity
     MarkTime(cmd, gpu_timing::kGamma);
     {
         uint8_t lut[3][256];
@@ -4540,9 +4284,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         SDL_DownloadFromGPUTexture(copy, &src, &dst);
         SDL_EndGPUCopyPass(copy);
     }
-    // the GPU timings' last timestamp: a world pass's end on the aside's
-    // ladder, or the frame's, resolved with the aside's for reading once
-    // it's finished (below, or OutputDone)
+    // the last timestamp: a pre pass ends the aside's ladder; a frame
+    // resolves its own with the aside's, read once it finishes (below, or
+    // OutputDone)
     if (pre_pass) MarkTime(cmd, gpu_timing::kNone);
     ResolveTimes(cmd);
     if (o.gpu_labels) {
@@ -4550,13 +4294,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         draw_log_frame = frame_label;
         draw_log = std::move(indexed_draws);
     }
-    // With gpu_no_wait, a world pass before the frame (pre_pass) and the
-    // presenter's frame aren't waited for: what comes after them on SDL's
-    // one queue (this frame's passes, RenderFrame's wait, the next frame)
-    // goes after them on the GPU too, and the presenter's caller waits for
-    // its output's fence (OutputDone) before the presenter's queue may
-    // sample it. Otherwise, and for RenderFrame's picture to read back, it
-    // waits here.
+    // With gpu_no_wait, pre passes and presenter frames aren't waited for:
+    // later work on SDL's one queue follows them, and the presenter's caller
+    // waits for the output's fence (OutputDone) before sampling it.
+    // Otherwise, and for RenderFrame's readback, wait here.
     st.record_ms = ms_since(record_start);
     const auto submit_start = Clock::now();
     if (o.gpu_no_wait && (pre_pass || (slot >= 0 && !rgba))) {
@@ -4605,16 +4346,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             REXLOG_WARN("native view gpu: couldn't read the frame back ({})", SDL_GetError());
             return false;
         }
-        // alpha is the resolve's 0xff throughout: the passes after it, the
-        // gamma ramp's too, write 1
+        // alpha is the resolve's 0xff throughout
         rgba->resize(size_t(width) * height);
         std::memcpy(rgba->data(), px, rgba->size() * sizeof(uint32_t));
         SDL_UnmapGPUTransferBuffer(device, readback);
     }
     st.wait_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                            submitted).count();
-    // the frame's GPU timings, finished with it (a world pass's are its
-    // frame's, read with them)
+    // a pre pass's timings are read with its frame's
     if (!pre_pass) ReadTimes(slot >= 0 ? slot : kOutputs, st);
     const auto evict_start = Clock::now();
     Evict();
@@ -4623,11 +4362,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
 }
 
 void GpuRenderer::Impl::Evict() {
-    // geometry only one frame drew stays for keep_frames (gpu_view.h's
-    // residency), and moves to the arena if a frame draws it again; there
-    // it stays until it's gone kEvictAfter frames undrawn, and in a song
-    // kKeepSeconds if frames of more than one world drew it (ClockKeep). The
-    // arena's space comes back when it's rebuilt.
+    // gpu_view.h's residency: pool geometry stays keep_frames; arena
+    // geometry kEvictAfter frames, or kKeepSeconds per ClockKeep. Arena
+    // space comes back on a rebuild.
     meshes_by_time = textures_by_time = 0;
     for (auto it = meshes.begin(); it != meshes.end();) {
         const Mesh& m = it->second;
@@ -4640,10 +4377,8 @@ void GpuRenderer::Impl::Evict() {
         it = meshes.erase(it);
         counts.evicted_meshes++;
     }
-    // likewise a texture drawn in one frame only, such as one RB3 rendered
-    // that frame or a movie's frame, goes keep_frames after, and one drawn
-    // in more than one as a mesh in the arena (one kept by the clock goes
-    // sooner if its array is full: PlaceTexture)
+    // likewise textures (one kept by the clock goes sooner if its array is
+    // full: PlaceTexture)
     for (auto it = textures.begin(); it != textures.end();) {
         const Tex& t = it->second;
         if (KeepTexture(t.first, t.used, serial, keep_frames, kEvictAfter,
@@ -4656,11 +4391,8 @@ void GpuRenderer::Impl::Evict() {
         it = textures.erase(it);
         counts.evicted_textures++;
     }
-    // a render target no frame has drawn or sampled for kEvictAfter frames
-    // is forgotten: undrawn, so what samples it finds nothing drawn, as it
-    // would with the target released (gpu_view.h's residency); counted once,
-    // as a release was (a forgotten one a frame samples again without
-    // drawing it stays forgotten). Its textures go kKeepSeconds after.
+    // a render target unused for kEvictAfter frames is forgotten (marked
+    // undrawn, counted once) and its textures released kKeepSeconds after
     rts_forgotten.clear();
     for (auto it = rts.begin(); it != rts.end();) {
         Rt& rt = it->second;
@@ -4684,7 +4416,7 @@ void GpuRenderer::Impl::Evict() {
         it = rts.erase(it);
         counts.rts_released++;
     }
-    // and past kMaxRts the forgotten least recently used go at once
+    // past kMaxRts the least recently used forgotten ones go at once
     const size_t over = RtsOverCap(rts_forgotten, rts.size(), kMaxRts);
     for (size_t i = 0; i < over; i++) {
         const auto f = rts.find(rts_forgotten[i].second);
@@ -4692,7 +4424,7 @@ void GpuRenderer::Impl::Evict() {
         rts.erase(f);
         counts.rts_released++;
     }
-    // an array whose textures have all gone goes after a while
+    // empty arrays go after kEvictAfter frames
     for (auto it = tex_arrays.begin(); it != tex_arrays.end();) {
         const TexArray& a = it->second;
         if (a.free.size() < a.layers || a.empty_since + kEvictAfter >= serial) {
@@ -4771,7 +4503,7 @@ bool GpuRenderer::OutputDone(int slot, GpuStats* times) {
 bool GpuRenderer::RenderWorldAhead(const FrameCapture& world, const RasterOptions& options,
                                    GpuStats& stats) {
     std::lock_guard lock(impl_->mutex);
-    // (after a frame Draw has drawn: warm, the device set up)
+    // only after Draw has set up and warmed the device
     if (!impl_->device || !impl_->warm) return false;
     const auto start = std::chrono::steady_clock::now();
     stats = GpuStats{};
@@ -4808,8 +4540,8 @@ std::string GpuRenderer::DescribeIndexedDraw(uint32_t before, uint32_t total) {
     if (!lock) return "";
     const auto& log = impl_->draw_log;
     if (log.empty()) return "the native renderer kept no draws (gpu_labels off, or no frame yet)";
-    // the last of its command buffers with that many indexed draws: the one
-    // the GPU got furthest into
+    // the last command buffer with that many indexed draws (the GPU got
+    // furthest into it)
     for (size_t i = log.size(); i-- > 0;) {
         if (log[i].size() != total || before >= total) continue;
         return fmt::format("the native renderer's {}, command buffer {} of {}\n  its indexed "
@@ -4825,7 +4557,7 @@ std::string GpuRenderer::DescribeIndexedDraw(uint32_t before, uint32_t total) {
 }
 
 void GpuRenderer::Prewarm(uint32_t overlay_samples) {
-    // done already, without waiting for a frame being drawn
+    // checked without waiting out a frame
     if (impl_->warm) return;
     std::lock_guard lock(impl_->mutex);
     if (impl_->device && !impl_->warm) impl_->Prewarm(overlay_samples);
@@ -4842,8 +4574,8 @@ void GpuRenderer::RefuseDevice(std::string why) {
         std::lock_guard lock(impl_->zero_copy_mutex);
         impl_->refused = std::move(why);
     }
-    // made already: a frame being drawn finishes first, and the next finds
-    // no device (Draw) and is drawn on the CPU
+    // already made: a frame in progress finishes first; the next is drawn
+    // on the CPU
     std::lock_guard lock(impl_->mutex);
     if (!impl_->device) return;
     impl_->ready = false;
@@ -4870,17 +4602,17 @@ bool GpuRenderer::CheckZeroCopy(std::string& why) {
 bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, int slot,
                        std::vector<uint32_t>* rgba, GpuStats& stats) {
     if (!impl_->device) return false;
-    // before the clock starts: it's the device's setting up, not a frame's
+    // before the clock starts: device setup, not frame time
     if (!impl_->warm) impl_->Prewarm(OverlaySamples(options));
     const auto start = std::chrono::steady_clock::now();
     stats = GpuStats{};
-    // without R32_FLOAT targets, no shadow map's pass: every SHADOW_BUFFER
-    // draw lit, as the CPU draws them without self_shadow
+    // without R32_FLOAT targets, SHADOW_BUFFER draws are lit, as on the CPU
+    // without self_shadow
     RasterOptions o = options;
     o.self_shadow = options.self_shadow && impl_->shadow_maps;
     const Impl::Counts before = impl_->counts;
     if (!impl_->Render(frame, o, slot, rgba, stats)) {
-        // whatever went wrong would go wrong every frame; the CPU takes over
+        // it would fail every frame; the CPU takes over
         REXLOG_WARN("native view gpu: giving up for this session, the native view draws on "
                     "the CPU");
         impl_->ready = false;
@@ -4888,8 +4620,7 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
         SetKeepBlocks(false);
         return false;
     }
-    // the captures decoded after it keep block-compressed textures as blocks
-    // as this frame placed them (deferred_decode.h)
+    // later captures keep BC textures as blocks to match (deferred_decode.h)
     SetKeepBlocks(impl_->bc_now);
     stats.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                    .count();

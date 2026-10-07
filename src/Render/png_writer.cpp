@@ -12,7 +12,7 @@ namespace {
 
 
 // ---------------------------------------------------------------------------
-// PNG, stored (uncompressed) deflate, so no library is needed
+// stored (uncompressed) deflate
 
 uint32_t Crc32(const uint8_t* p, size_t n, uint32_t crc = 0) {
     static uint32_t table[256];

@@ -25,30 +25,23 @@ extern "C" void __imp__DxRnd__DoPointTests(PPCContext& ctx, uint8_t* base);
 namespace band3::render {
 namespace {
 
-// the frame being drawn's SkipLevel: written at the end of each Present
-// (LatchGpuSkip), read by every emitter
+// the frame being drawn's SkipLevel, written by LatchGpuSkip
 std::atomic<int> g_frame_level{int(SkipLevel::kFull)};
-// a texture pass that isn't drawn regularly is open (SetPassWantsDraws)
 std::atomic<bool> g_pass_wants_draws{false};
-// inside DxRnd::DoPointTests on this thread: its DrawVerticesUP are the
-// flares' occlusion-test quads, whose queries the game reads back
+// inside DxRnd::DoPointTests on this thread
 thread_local bool t_point_tests = false;
 
-// the settings, kept by their change callbacks (registered at the first
-// Present, as scene_capture.cpp's are); the callbacks only store. Which
-// picture shows is renderer_switch.h's (ShowsNativePicture).
-// emulated_gpu_while_native's SkipLevel
+// settings, stored by change callbacks registered at the first Present
 std::atomic<int> g_skip_setting{int(SkipLevel::kSkipDraws)};
-// compress_character_textures: outfits are read back (DxTex::LockBitmap)
-// after they're composed, which swap_only skips
+// outfits are read back (DxTex::LockBitmap) after composing, which
+// swap_only skips
 std::atomic<bool> g_compress_textures{false};
 std::atomic<bool> g_warned_compress{false};
 
-// the latch, on the game's render thread (the splash thread's at boot, the
-// main thread's after, never both at once; the lock is for that handover)
+// on the game's render thread: the splash thread's at boot, the main
+// thread's after; the lock covers that handover
 std::mutex g_latch_mutex;
 SkipLatch g_latch;
-// whole frames asked for and not yet handed to the latch
 std::atomic<int> g_full_requested{0};
 // SkipLatch::Fresh and WholeFrames, for any thread
 std::atomic<bool> g_fresh{true};
@@ -61,8 +54,6 @@ std::atomic<uint64_t> g_emitted[GpuSkipStats::kNumKinds], g_skipped[GpuSkipStats
 std::atomic<uint64_t> g_kept_pass{0}, g_kept_point_tests{0}, g_passes_dropped{0};
 std::atomic<uint64_t> g_frames{0}, g_frames_skipped{0};
 
-// emulated_gpu_while_native's values; anything else (the setting allows
-// none) is the default
 SkipLevel ParseSkipLevel(std::string_view v) {
     if (v == "full") return SkipLevel::kFull;
     if (v == "swap_only") return SkipLevel::kSwapOnly;
@@ -87,9 +78,7 @@ void TrackSettings() {
     });
 }
 
-// Whether a call of `kind` is emitted (EmitDraw), counted either way. The
-// frame's level and the open pass are relaxed loads of rarely written
-// atomics; the rest is this thread's.
+// EmitDraw, counted either way
 bool Emit(int kind) {
     const auto level = SkipLevel(g_frame_level.load(std::memory_order_relaxed));
     const bool pass = g_pass_wants_draws.load(std::memory_order_relaxed);
@@ -98,7 +87,6 @@ bool Emit(int kind) {
         return false;
     }
     g_emitted[kind].fetch_add(1, std::memory_order_relaxed);
-    // a draw a skip_draws frame kept, and why
     if (level == SkipLevel::kSkipDraws &&
         (kind == GpuSkipStats::kIndexed || kind == GpuSkipStats::kInstanced ||
          kind == GpuSkipStats::kUp)) {
@@ -123,9 +111,7 @@ const char* SkipLevelName(SkipLevel level) {
 
 void LatchGpuSkip(bool capture_on, bool recording, int proc) {
     TrackSettings();
-    // With renderer native nothing draws what the game sends but the native
-    // renderer, from capture: every frame is swap_only, whatever the setting
-    // and capture, and no whole frames are wanted
+    // renderer native: every frame is swap_only, no whole frames wanted
     const bool native_only = sync_gpu::NativeOnly();
     const SkipLevel want =
         native_only ? SkipLevel::kSwapOnly
@@ -148,11 +134,8 @@ void LatchGpuSkip(bool capture_on, bool recording, int proc) {
     if (level != SkipLevel::kFull) g_frames_skipped.fetch_add(1, std::memory_order_relaxed);
     g_fresh.store(fresh);
     g_frame_level.store(int(level));
-    // Both renderers would sample an outfit that was never composed: it's
-    // read back to be compressed, and swap_only skipped the draws and the
-    // resolve it's read back from
-    // (With renderer native the game's compression is skipped instead:
-    // Hooks/graphics.cpp.)
+    // swap_only skips the draws and resolve an outfit is read back from for
+    // compression (renderer native skips the compression: Hooks/graphics.cpp)
     if (level == SkipLevel::kSwapOnly && !native_only &&
         g_compress_textures.load(std::memory_order_relaxed) &&
         !g_warned_compress.exchange(true)) {
@@ -172,8 +155,7 @@ void SetPassWantsDraws(bool wants) {
     g_pass_wants_draws.store(wants, std::memory_order_relaxed);
 }
 
-// With renderer native the native renderer is the only one, there's no
-// emulated picture to be fresh, and no whole frames to ask for.
+// Renderer native has no emulated picture to be fresh and no whole frames.
 bool RendererNative() {
     return sync_gpu::NativeOnly() || ShowsNativePicture();
 }
@@ -206,7 +188,6 @@ GpuSkipStats GetGpuSkipStats() {
     s.frames = g_frames.load(std::memory_order_relaxed);
     s.frames_skipped = g_frames_skipped.load(std::memory_order_relaxed);
     s.level = ShowsNativePicture() ? SkipLevel(g_skip_setting.load()) : SkipLevel::kFull;
-    // renderer native: swap_only every frame (LatchGpuSkip)
     if (sync_gpu::NativeOnly()) s.level = SkipLevel::kSwapOnly;
     s.skip_mode = s.level != SkipLevel::kFull;
     s.skipping = SkipLevel(g_frame_level.load()) != SkipLevel::kFull;
@@ -232,12 +213,11 @@ GpuSkipStats GpuSkipStatsSince(const GpuSkipStats& now, const GpuSkipStats& befo
 
 using band3::render::GpuSkipStats;
 
-// The emitters (out/n3/experiment.md 0; their call sites there). Each writes
-// its draw's packets into the ring; skipped, the device's CPU shadow keeps
-// the state the draw would have flushed, and the next one emitted flushes it.
+// The emitters. A skipped one leaves its state pending in the device's CPU
+// shadow for the next emitted one to flush.
 
-// D3DDevice_BeginIndexedVertices: kept, counted. DxMesh::DrawFaces' mutable
-// path copies its indices and vertices through the pointers it hands out.
+// D3DDevice_BeginIndexedVertices: never skipped; DxMesh::DrawFaces writes
+// through the pointers it returns
 extern "C" REX_FUNC(rex_sub_82863BB8) {
     band3::render::Emit(GpuSkipStats::kBeginIndexed);
     __imp__rex_sub_82863BB8(ctx, base);
@@ -253,40 +233,30 @@ extern "C" REX_FUNC(rex_sub_828640D0) {
     if (band3::render::Emit(GpuSkipStats::kInstanced)) __imp__rex_sub_828640D0(ctx, base);
 }
 
-// D3DDevice_DrawVerticesUP (BeginVertices, a copy, the draw): DrawRect's and
-// the rest, kept inside DoPointTests at skip_draws
+// D3DDevice_DrawVerticesUP
 extern "C" REX_FUNC(rex_sub_82863B70) {
     if (band3::render::Emit(GpuSkipStats::kUp)) __imp__rex_sub_82863B70(ctx, base);
 }
 
-// The clear path under D3DDevice_Clear (once, or once per rect) and
-// D3DDevice_BeginTiling (band3_recomp.188.cpp, .176.cpp): it reads the
-// render targets' size into its stack and calls the emitter (0x82862E30),
-// which flushes the pending state, writes the clear's packets and marks
-// what it overwrote pending again. Skipped, only those packets, the ring
-// cursor, the pending bits and two of the device's flag bytes (+10941,
-// +10943) are left as they were, as a skipped draw leaves them. Both
-// callers are done with r3 when it returns: Clear is void, and BeginTiling
-// sets r3 again before its next call.
+// The clear path under D3DDevice_Clear (per rect) and D3DDevice_BeginTiling;
+// calls the emitter 0x82862E30. Skipping leaves the ring, pending bits and
+// device flag bytes +10941/+10943 untouched, as a skipped draw does. Both
+// callers ignore r3 after it.
 extern "C" REX_FUNC(rex_sub_828634E0) {
     if (band3::render::Emit(GpuSkipStats::kClear)) __imp__rex_sub_828634E0(ctx, base);
 }
 
-// D3DDevice_Resolve: every resolve RB3 makes (DxRnd's Save{Pre,Post}Buffer,
-// GetCurrentFrameTex, EndTiling, ModalDraw; DxTex's Select, ResolveMipChain
-// and LockBitmap; the spotlights' BlurRT) and D3DDevice_EndTiling's per tile.
-// It's void, and no caller reads r3 after it. Skipped, what it would have
-// left on the CPU side stays as it was: the resolve's shadow registers
-// (device +10776..+10820), the pending masks, the device's flag bytes
-// (+10941..+10943), the destination texture's fence and its record in the
-// buffer-resource space (+13736). Of those only the fence is read by RB3
-// (a Lock waits for it), which then doesn't wait: nothing was written.
+// D3DDevice_Resolve, all of RB3's and EndTiling's per tile. Void; no caller
+// reads r3. Skipped, its CPU-side state stays as it was (shadow registers
+// device +10776..+10820, pending masks, flags +10941..+10943, the
+// destination's fence, its record at +13736); RB3 reads only the fence, so a
+// Lock doesn't wait.
 extern "C" REX_FUNC(rex_sub_82855F18) {
     if (band3::render::Emit(GpuSkipStats::kResolve)) __imp__rex_sub_82855F18(ctx, base);
 }
 
-// DxRnd::DoPointTests: the lens flares' occlusion queries, issued and read
-// back (BlockOnFence) whatever the frame; their quads drawn but at swap_only
+// DxRnd::DoPointTests: lens flare occlusion queries, read back via
+// BlockOnFence; quads drawn except at swap_only
 extern "C" REX_FUNC(DxRnd__DoPointTests) {
     band3::render::t_point_tests = true;
     __imp__DxRnd__DoPointTests(ctx, base);

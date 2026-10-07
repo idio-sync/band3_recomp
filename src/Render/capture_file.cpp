@@ -13,61 +13,39 @@
 
 // See capture_file.h. Host byte order, same machine only.
 //
-// Version 3 (B3CAP003) is a list of sections, each with its own id, version
-// and size, so a reader skips what it doesn't know and a struct can grow
-// without every older file going unreadable:
-//   FRAM  frame numbers, post-processing boundary and counts (a counted list),
-//         then the world's frame (a file without it: the frame's own), then
-//         the render targets rt_filtered counts (a counted list; a file
-//         without it: none), then whether it has TheRnd's clear colour and
-//         the colour (a file without them: none)
-//   GEOM  geometry, with the vertex's size: Vertex only ever grows at the end,
-//         so a file with another size keeps the fields both have; version 2
-//         adds whether each one's verts have their tangents (Geometry::
-//         tangents: a version 1 file's have none, and its normal maps are
-//         left out)
-//   TEXS  textures, with render targets' identity; one whose pixels another
-//         has already points at those
-//   SHAD  shade states field by field, with the register list and the number
-//         of maps they were saved with, matched by register on load
-//   DRAW  draws; version 2 adds each one's cull mode (a version 1 file's
-//         draws cull nothing), version 3 its draw mode (an older file's are
-//         all 0, the colour pass's: it kept no others)
+// Version 3 (B3CAP003) is a list of sections, each with id, version and size,
+// so readers skip what they don't know. Structs saved as size + bytes only
+// grow at the end; a reader keeps the fields both builds have.
+//   FRAM  frame numbers, post boundary, counts (counted list), then, each
+//         read only if present: world frame, rt_filtered keys (counted
+//         list), TheRnd's clear colour
+//   GEOM  Vertex's size, then geometry; v2 adds Geometry::tangents (v1: none,
+//         so no normal maps)
+//   TEXS  textures with render targets' identity; pixels another entry
+//         already has are an index to it
+//   SHAD  shade states field by field, with the register list and map count
+//         they were saved with, matched by register on load
+//   DRAW  draws; v2 adds the cull mode (v1: no culling), v3 the draw mode
+//         (older: all 0, the colour pass)
 //   PASS  passes
-//   POST  what post-processing was set to do and the constants RB3's composite
-//         drew with (post_params.h), each as its size and its bytes: the
-//         structs only grow at the end, so a file with other sizes keeps the
-//         fields both have (a file without it: none read)
-//   GAMA  the display gamma ramp (gamma_ramp.h): which applies, the 256-entry
-//         table and the PWL ramp (a file without it: none, the picture as RB3
-//         drew it)
-//   MIPS  the textures' mip chains (Texture::mips), for those TEXS keeps the
-//         pixels of: each one's index, its level count and the levels, each
-//         half the one before; one whose pixels are another's has its mips
-//         too (a file without it: no texture has mips)
-//   SMPL  the shades' samplers (ShadeState::diffuse_sampler, samplers), as
-//         TexSampler's size and bytes, the diffuse texture's then each map's
-//         for every shade (a file without it, or with another number of
-//         shades or maps: every texture nearest at level 0, as before)
-//   CAMS  the back buffer's cameras (FrameCapture::cameras), as CameraView's
-//         size and each one's bytes: the struct only grows at the end (a
-//         file without it: none, and the renderers clear depth per camera)
-//   NOIS  the composite's noise map (FrameCapture::noise_map), as its index
-//         in TEXS (-1 none), and its sampler as TexSampler's size and bytes
-//         (a file without it: none, and no grain)
-//   VOBJ  the camera motion blur's object pass (FrameCapture::
-//         velocity_objects): each one's geometry as its index in GEOM, mesh,
-//         cull, skinned, palette entries, VS c0..c7, PS c8 and the two
-//         palettes' rows (a file without it: none, and the motion blur is the
-//         camera's alone)
-// A section newer than this reader skips if it's SHAD, PASS, FRAM, POST,
-// GAMA, MIPS, SMPL, CAMS, NOIS or VOBJ (the file loads without it) and fails
-// the load if it's GEOM, TEXS or DRAW.
+//   POST  PostParams and PostConsts (post_params.h), each as size + bytes
+//   GAMA  gamma ramp (gamma_ramp.h): mode, 256-entry table, PWL ramp
+//   MIPS  mip chains of TEXS's own-pixel entries: index, level count, levels;
+//         entries sharing pixels share mips
+//   SMPL  each shade's diffuse then map TexSamplers; another size or map
+//         count reads as none
+//   CAMS  FrameCapture::cameras as size + bytes
+//   NOIS  FrameCapture::noise_map's TEXS index (-1 none) and its TexSampler
+//   VOBJ  FrameCapture::velocity_objects: GEOM index, mesh, cull, skinned,
+//         palette entries, VS c0..c7, PS c8, both palettes' rows
+// A section newer than this reader is skipped, except GEOM, TEXS and DRAW,
+// which fail the load. A missing optional section reads as empty: no post,
+// gamma, mips, cameras (depth cleared per camera), noise or velocity objects,
+// and every sampler nearest at level 0.
 //
 // Versions 1 and 2 still load: 1 is frame, geometry, textures and draws; 2
-// adds the draws' ShadeStates, kept as their ShadeInputs were in memory (so
-// only while that struct is the same size), and their maps among the
-// textures.
+// adds ShadeInputs as raw memory (only while that struct is the same size)
+// and their maps among the textures.
 
 namespace band3::render {
 namespace {
@@ -75,17 +53,11 @@ namespace {
 constexpr char kMagic[8] = {'B', '3', 'C', 'A', 'P', '0', '0', '3'};
 constexpr char kMagicV2[8] = {'B', '3', 'C', 'A', 'P', '0', '0', '2'};
 constexpr char kMagicV1[8] = {'B', '3', 'C', 'A', 'P', '0', '0', '1'};
-// Textures and a ShadeState's maps are kept at up to 2048 a side, which is
-// every one RB3 loads at its full size, so the CPU's drawing of a capture
-// samples what the GPU's drew in the game (at 512, and 256 for the maps,
-// the CPU's was a step blurrier than the capture's .gpu.png: gpu-cpu over
-// 0.5 on the menus). It makes the captures several times bigger.
+// 2048 keeps every texture RB3 loads at full size, so replay samples what the
+// game drew (smaller limits visibly blurred it), at several times the size
 constexpr uint32_t kMaxSavedTexture = 2048;
 constexpr uint32_t kMaxSavedMap = 2048;
-// a movie's planes (IsMovie) are kept whole: at 512 the intro's 1280x720 Y
-// plane was kept at 320x180, and the movie offline as blurred as that. They
-// add about 5.5 MB to a capture with a 1280x720 movie in it. The noise map
-// too, whose grain is a texel or so a pixel.
+// movie planes (IsMovie) and the noise map, which are detailed per pixel
 constexpr uint32_t kWhole = ~0u;
 
 constexpr uint32_t FourCC(const char (&s)[5]) {
@@ -105,7 +77,6 @@ constexpr uint32_t kSecSamplers = FourCC("SMPL");
 constexpr uint32_t kSecCameras = FourCC("CAMS");
 constexpr uint32_t kSecNoise = FourCC("NOIS");
 constexpr uint32_t kSecVelocity = FourCC("VOBJ");
-// the versions this build writes and reads
 constexpr uint32_t kFrameVersion = 1;
 constexpr uint32_t kGeometryVersion = 2;
 constexpr uint32_t kTexturesVersion = 1;
@@ -122,7 +93,7 @@ constexpr uint32_t kVelocityVersion = 1;
 
 // TEXS: where a texture's pixels are
 constexpr int32_t kOwnPixels = -1;  // they follow
-constexpr int32_t kNoPixels = -2;   // none (a render target kept by identity alone)
+constexpr int32_t kNoPixels = -2;   // a render target kept by identity alone
 
 struct Writer {
     std::vector<uint8_t> out;
@@ -175,9 +146,8 @@ struct Reader {
     }
 };
 
-// `t` at most `most` texels a side: from its mip chain where it has the level
-// (the level the sampler would read there, and the ones after it), else
-// every step-th texel
+// `t` at most `most` texels a side: from its mip chain where it has the
+// level, else every step-th texel
 Texture Downsample(const Texture& t, uint32_t most) {
     uint32_t step = 1, level = 0;
     while (t.width / step > most || t.height / step > most) {
@@ -222,7 +192,6 @@ bool SamePixels(const Texture& a, const Texture& b) {
            a.rgba == b.rgba && a.mips == b.mips;
 }
 
-// ShadeInputs field by field, its registers and maps as the section says
 void PutShade(Writer& w, const ShadeInputs& s) {
     w.Put(s.options);
     w.Put(s.shader_type);
@@ -281,8 +250,7 @@ void GetShade(Reader& r, ShadeInputs& s, const std::vector<uint32_t>& regs, uint
     per_map(s.fetch, sizeof(s.fetch[0]));
 }
 
-// a struct that only grows at the end, saved as its size and bytes: the
-// fields both builds have, the rest left as they are
+// a struct saved as size + bytes: the fields both builds have, the rest left
 template <typename T>
 void GetGrown(Reader& r, T& out) {
     uint32_t size;
@@ -384,10 +352,8 @@ std::shared_ptr<FrameCapture> LoadOld(Reader& r, bool v1) {
 }  // namespace
 
 bool SaveCapture(const std::string& path, const FrameCapture& fc) {
-    // what capture left to decode later, decoded (LatestCapture and
-    // CaptureHeldFrame's have been), and the textures kept as blocks for the
-    // GPU decoded to RGBA (a file keeps RGBA alone): a texture's rgba or a
-    // mesh's faces still empty would be saved as none
+    // finish deferred decodes and decode GPU block textures to RGBA, or
+    // empty rgba or faces would be saved as none
     EnsureRgba(fc);
     std::unordered_map<const Geometry*, uint32_t> geoms;
     std::unordered_map<const Texture*, uint32_t> texs;
@@ -398,10 +364,9 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
         int32_t pixels = kOwnPixels;  // or kNoPixels, or the entry that has them
     };
     std::vector<Saved> tex_list;
-    // A texture with the same pixels as one already kept (the material's
-    // colour texture as its specular map, say) is kept once, at the larger
-    // size. A render target sampled at several versions keeps each, but its
-    // pixels (guest memory's, which don't change between them) once.
+    // Identical pixels are kept once, at the larger size. A render target
+    // sampled at several versions keeps each entry but its pixels (guest
+    // memory's, the same for all) once.
     std::unordered_multimap<uint64_t, uint32_t> by_pixels;
     std::unordered_map<uint64_t, uint32_t> by_identity;  // pixel-less render targets
     auto add_tex = [&](const Texture* t, uint32_t most) {
@@ -665,12 +630,11 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
     auto fc = std::make_shared<FrameCapture>();
     std::vector<std::shared_ptr<const Geometry>> geoms;
     std::vector<std::shared_ptr<const Texture>> texs;
-    // TEXS's entries: where each one's pixels came from (its own index if
-    // they followed it), whose mips it takes; and SMPL's samplers, set on
-    // the shades once both are read
+    // each TEXS entry's pixel owner (itself if own), whose mips it takes
     std::vector<uint32_t> pixel_owner;
+    // set on the shades once all sections are read
     std::vector<TexSampler> samplers;
-    // NOIS's texture, set once MIPS has given the textures their mips
+    // set after MIPS has given the textures their mips
     int32_t noise_tex = -1;
     bool have_geoms = false, have_texs = false, have_draws = false, shades_skipped = false;
     while (r.ok && r.pos < data.size()) {
@@ -740,7 +704,6 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                 if (stride == sizeof(Vertex)) {
                     r.Raw(geom->verts.data(), size_t(nv) * sizeof(Vertex));
                 } else {
-                    // the fields both builds' Vertex have
                     for (Vertex& v : geom->verts) {
                         r.Raw(vert.data(), stride);
                         std::memcpy(&v, vert.data(), std::min<size_t>(stride, sizeof(Vertex)));
@@ -883,7 +846,7 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                 }
                 texs[i] = std::move(tex);
             }
-            // the entries that share an owner's pixels share its mips
+            // entries sharing an owner's pixels share its mips
             for (size_t i = 0; i < texs.size(); i++) {
                 if (pixel_owner[i] == i || texs[pixel_owner[i]]->mips.empty()) continue;
                 auto tex = std::make_shared<Texture>(*texs[i]);
@@ -950,8 +913,7 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
         }
     }
     if (noise_tex >= 0) fc->noise_map = texs[noise_tex];
-    // draws that point past the shades: none if a newer build's shades were
-    // skipped, else a broken file
+    // shade indices past the end: fine if a newer SHAD was skipped, else broken
     for (DrawItem& d : fc->draws) {
         if (d.shade < int32_t(fc->shades.size())) continue;
         if (!shades_skipped) return nullptr;

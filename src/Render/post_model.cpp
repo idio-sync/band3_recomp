@@ -15,7 +15,7 @@ namespace {
 using shade::float2;
 using shade::float3;
 
-// HLSL's operators and functions, for post_model.hlsli: only what it uses
+// what post_model.hlsli uses of HLSL
 float3 operator+(float3 a, float3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
 float3 operator*(float3 a, float3 b) { return {a.x * b.x, a.y * b.y, a.z * b.z}; }
 float3 operator*(float3 a, float s) { return {a.x * s, a.y * s, a.z * s}; }
@@ -55,8 +55,7 @@ constexpr float kDofTapsDown[8][2] = {
     {-0.9158858061f, 0.4577143192f}, {-0.8154423237f, -0.8791246414f},
     {-0.3827754259f, 0.276768446f}, {0.9748439789f, 0.7564837933f}};
 
-// A post-processing level on the CPU: RGBA as floats, each an 8-bit value as
-// the GPU's RGBA8 targets (and the 360's) keep it
+// RGBA floats, each holding an 8-bit value
 struct Level {
     uint32_t w = 0, h = 0;
     std::vector<float4> px;
@@ -67,13 +66,9 @@ struct Level {
     }
 };
 
-// What an RGBA8 target keeps of a value: the nearest of 256 steps, and of a
-// value halfway between two, to float error, the lower, as the GPU backend's
-// levels have it. The 4x downsample averages four texels, so a quarter of its
-// values are halfway; rounding them up, as the CPU did, left its bloom and
-// DOF levels a step brighter there, which the colour matrix of a desaturated
-// frame (rows summing to over 2) made a mean of 0.4 over the picture
-// (out/parity4's default-25s).
+// What an RGBA8 target keeps: the nearest of 256 steps, halfway rounding down
+// as the GPU's do. A quarter of the 4x downsample's values are halfway, so
+// rounding up visibly brightens bloom and DOF under a desaturating matrix.
 float Unorm8(float v) { return std::floor(saturate(v) * 255.0f + (0.5f - 1.0f / 1024)) / 255.0f; }
 float4 Unorm8(float4 v) { return {Unorm8(v.x), Unorm8(v.y), Unorm8(v.z), Unorm8(v.w)}; }
 
@@ -88,8 +83,7 @@ float4 Load(const Level& l, int x, int y) {
     return l.px[size_t(y) * l.w + x];
 }
 
-// bilinear, clamped to the edge: the GPU's linear clamp sampler, which RB3
-// sets for these taps
+// bilinear clamp, the sampler RB3 sets for these taps
 float4 Sample(const Level& l, float2 uv) {
     const float x = uv.x * float(l.w) - 0.5f, y = uv.y * float(l.h) - 0.5f;
     const float fx = std::floor(x), fy = std::floor(y);
@@ -100,12 +94,11 @@ float4 Sample(const Level& l, float2 uv) {
     return Lerp4(top, bottom, ty);
 }
 
-// the pixel's centre in uv
 float2 Uv(uint32_t x, uint32_t y, const Level& l) {
     return {(float(x) + 0.5f) / float(l.w), (float(y) + 0.5f) / float(l.h)};
 }
 
-// the bright pass or the 4x downsample, from `src` into `dst` (sized)
+// the bright pass or the 4x downsample; `dst` is sized by the caller
 void Downsample(const Level& src, bool bright, Level& dst) {
     const float4 half_pixel{0.5f / float(src.w), 0.5f / float(src.h), 0, 0};
     for (uint32_t y = 0; y < dst.h; y++) {
@@ -118,7 +111,7 @@ void Downsample(const Level& src, bool bright, Level& dst) {
     }
 }
 
-// the Gaussian or the DOF's blur: `n` taps (uv offset, weight) at the same size
+// `n` taps of (uv offset, weight)
 void Blur(const Level& src, const float4* taps, int n, Level& dst) {
     dst.Resize(src.w, src.h);
     for (uint32_t y = 0; y < dst.h; y++) {
@@ -132,7 +125,6 @@ void Blur(const Level& src, const float4* taps, int n, Level& dst) {
     }
 }
 
-// the glare pass over level 0 `src`, into `dst`
 void Glare(const Level& src, Level& dst) {
     dst.Resize(src.w, src.h);
     for (uint32_t y = 0; y < dst.h; y++) {
@@ -155,9 +147,8 @@ void Glare(const Level& src, Level& dst) {
 float3 Rgb(const float* v) { return {v[0], v[1], v[2]}; }
 float4 Rgba(const float* v) { return {v[0], v[1], v[2], v[3]}; }
 
-// a world frame's noise seeds (c112), which the game draws at random each
-// frame: four numbers in 0..1 from its frame number, so the grain moves as
-// the game's does and both backends draw the same
+// a world frame's noise seeds (c112), random in the game: hashed from the
+// frame number so both backends agree
 float4 FrameSeeds(uint64_t frame) {
     uint64_t h = frame * 0x9E3779B97F4A7C15ull + 0x632BE59BD9B4E019ull;
     float out[4];
@@ -170,9 +161,8 @@ float4 FrameSeeds(uint64_t frame) {
     return {out[0], out[1], out[2], out[3]};
 }
 
-// A vertex of object o placed by its palettes (VS 21A0C657 / F922317D): the
-// world position by this frame's (rows 0..) and the last frame's (rows
-// bones * 3 on), each through its view-projection
+// As VS 21A0C657 / F922317D: this frame's palette is rows 0.., the last
+// frame's rows bones * 3 on
 void ObjectVertex(const VelocityObject& o, const VelocityObjectPass& pass, const Vertex& v,
                   float4& cur, float4& prev) {
     const float4 at{v.pos[0], v.pos[1], v.pos[2], 1.0f};
@@ -201,15 +191,11 @@ void ObjectVertex(const VelocityObject& o, const VelocityObjectPass& pass, const
     prev = place(true);
 }
 
-// The object pass on the CPU, over `vel` (the camera pass's texels, RGBA8 as
-// floats), from the scene's `depth` (1/w, width x height): each object's
-// triangles clipped at the camera's near plane (w at least c8.x, the clip z
-// both backends give, VelocityObjectDepth), on D3D9's pixel centres as the
-// game's mesh draws are (soft_raster.cpp's PixelCentre), culled by its cull
-// mode, filled by D3D's top-left rule, their depth tested (smaller or equal
-// passes) and written in a buffer of their own, cleared to 1, and where a
-// pixel passes, the texel VelocityObjectTexel gives replacing the camera's
-// where its alpha is 1 (SrcAlpha, by 1 or 0)
+// The object pass over the camera pass's `vel`: triangles clipped at w = c8.x
+// (VelocityObjectDepth), on D3D9 pixel centres (soft_raster.cpp's
+// PixelCentre), culled, top-left filled, depth tested <= against their own
+// buffer cleared to 1; VelocityObjectTexel replaces the texel where its alpha
+// is 1 (SrcAlpha, 1 or 0)
 void ObjectPass(const PostPlan& plan, Level& vel, const std::vector<float>& depth,
                 uint32_t width, uint32_t height) {
     if (plan.velocity_objects.empty()) return;
@@ -279,8 +265,7 @@ void ObjectPass(const PostPlan& plan, Level& vel, const std::vector<float>& dept
                 }
             }
         };
-        // clipped at w = near: each triangle's corners in front of it, and
-        // where its edges cross it
+        // clipped at w = near
         for (size_t i = 0; i + 2 < g.indices.size(); i += 3) {
             const Corner* tri[3] = {&corners[g.indices[i]], &corners[g.indices[i + 1]],
                                     &corners[g.indices[i + 2]]};
@@ -301,32 +286,26 @@ void ObjectPass(const PostPlan& plan, Level& vel, const std::vector<float>& dept
     }
 }
 
-// The velocity pass's numbers (PostPass::vel_*), from the velocity buffer as
-// DoPostProcess found it (PostParams::vel_*), and the blur's step scale
-// (c122.x, or the buffer's last)
+// PostPass::vel_* from PostParams::vel_*; `scale` is c122.x
 void PlanVelocity(const PostParams& p, float scale, PostPass& pass) {
-    // c134..c137 as Draw uploads the previous matrix: its columns (the
-    // clip position's x is the first column's dot with the world position,
-    // Milo's row vectors)
+    // c134..c137 are the previous matrix's columns (Milo's row vectors)
     for (int r = 0; r < 4; r++) {
         pass.vel_prev[r] = {p.vel_prev_view_proj[0][r], p.vel_prev_view_proj[1][r],
                             p.vel_prev_view_proj[2][r], p.vel_prev_view_proj[3][r]};
     }
     const float near_plane = p.vel_depth_range[0], far_plane = p.vel_depth_range[1];
     pass.vel_near = {p.vel_near[0], p.vel_near[1], p.vel_near[2], far_plane};
-    // DrawRectDepth's four vertices, a strip over the target: (-1, 1),
-    // (-1, -1), (1, 1), (1, -1) with uv (0, 0), (0, 1), (1, 0), (1, 1), the
-    // corner rays in that order. The far plane's corners are a rectangle, so
-    // the ray at uv is the top left's plus u across and v down
+    // DrawRectDepth's strip has uv (0, 0), (0, 1), (1, 0), (1, 1), the
+    // corner rays in that order; the far plane is a rectangle, so the ray at
+    // uv is the top left's plus u across and v down
     const float* c = p.vel_corners[0];
     const float* down = p.vel_corners[1];
     const float* across = p.vel_corners[2];
     pass.vel_corner[0] = {c[0], c[1], c[2], 0};
     pass.vel_corner[1] = {across[0] - c[0], across[1] - c[1], across[2] - c[2], 0};
     pass.vel_corner[2] = {down[0] - c[0], down[1] - c[1], down[2] - c[2], 0};
-    // where nothing drew, the depth texture's 0 (cleared, reverse Z) as
-    // the shader takes it through c89: z = c89.z - c89.w, w = near far /
-    // (far - z (far - near)); w / far
+    // w / far where nothing drew: the depth texture's cleared 0 (reverse Z)
+    // through c89, z = c89.z - c89.w, w = near far / (far - z (far - near))
     const float z = p.vel_depth_range[2] - p.vel_depth_range[3];
     const float w = near_plane * far_plane / (far_plane - z * (far_plane - near_plane));
     pass.vel_depth = {w * (1.0f / far_plane), scale, 0, 0};
@@ -342,8 +321,7 @@ void BloomTaps(bool vertical, uint32_t size, float4 taps[15]) {
 }
 
 void DofTaps(bool vertical, float width_scale, float4 taps[8]) {
-    // SetVHBlurWeights's, for the game's DOF level: 4.8828124e-06 is
-    // 1/204800 and 1.5432099e-05 1/64800
+    // SetVHBlurWeights's constants: 1/204800 and 1/64800
     const float f = width_scale * kDofWidthFactor;
     const float sx = float(Quarter(kGameWidth)) * f * 4.8828124e-06f;
     const float sy = float(Quarter(kGameHeight)) * f * 1.5432099e-05f;
@@ -358,25 +336,16 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noi
     const PostParams& p = frame.post;
     const PostConsts& c = frame.post_consts;
     if (!p.valid || p.disabled) return false;
-    // The game post-processes where FinishPostProcess runs, on frames whose
-    // ProcCommands has kProcPost (7, or 2 with even/odd rendering; a composed
-    // frame is its post frame), and the capture has the composite's constants
-    // there; a post frame without them drew no post, nor does a frame that
-    // does neither (0). A world frame (1) draws none either, but the next
-    // frame post-processes its world, by then with that frame's numbers: a
-    // capture of one alone (replay; the live view shows the post buffer
-    // there instead, RasterOptions::post_buffer) gets the post worked out
-    // from its own PostParams, which needs a proc. With the constants there
-    // is no need: with no proc current (the results screen) Rnd::
-    // DoPostProcess runs the other post-processors (NgDOFProc, the
-    // spotlights) and FinishPostProcess composites by TheShaderMgr's flags
-    // all the same.
+    // Post frames (kProcPost) need the composite's constants. A world-only
+    // frame draws no post itself, so it's worked out from its own proc
+    // (replay; the live view shows the post buffer instead). With constants
+    // no proc is needed: without one (the results screen) FinishPostProcess
+    // still composites by TheShaderMgr's flags.
     const bool world_only =
         (frame.proc_cmds & kProcWorld) && !(frame.proc_cmds & kProcPost);
     if (world_only ? !p.proc : (!(frame.proc_cmds & kProcPost) || !c.valid)) return false;
     const bool consts = !world_only;
-    // the flags the game's composite was picked by, or as NgDOFProc::DoPost
-    // and NgPostProc::DoBloom would set them
+    // the game's, or as NgDOFProc::DoPost and NgPostProc::DoBloom would set them
     uint32_t flags = 0;
     if (consts) {
         if (c.flags[kPostFlagDof]) flags |= kPostDof;
@@ -390,12 +359,11 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noi
             flags |= p.bloom_glare ? kPostGlare : kPostBloom;
         if (ColorXfmEnabled(p)) flags |= kPostXfm;
     }
-    // depth of field needs the world camera's planes to read the depth by
+    // depth of field reads the depth by the camera's planes
     if (!(p.cam_near > 0 && p.cam_far > p.cam_near)) flags &= ~kPostDof;
-    // The spotlights' term reads the depth volume NgSpotlightDrawer drew
-    // after DoPostProcess started (its last version: the blurs' in place),
-    // and the density map drawn before its cones. On world frames the
-    // drawer doesn't run (even/odd: post frames only), so they have none.
+    // The depth volume NgSpotlightDrawer last drew after DoPostProcess
+    // started (the blurs work in place), and the density map before it. The
+    // drawer runs on post frames only.
     uint32_t spot_volume = 0, spot_density = 0;
     if (consts && c.spot_flag) {
         for (size_t i = frame.passes.size(); i-- > 0 && !spot_volume;) {
@@ -410,11 +378,9 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noi
         }
         if (spot_volume) flags |= kPostSpot;
     }
-    // The soft particles' term reads the first surface of
-    // RndSoftParticleBuffer, which its DoPost cleared and drew its particles
-    // into after DoPostProcess started (and blurred into the second and
-    // back). Without that pass the capture has no particles to draw (one
-    // from before, or a frame whose queue held none it keeps).
+    // RndSoftParticleBuffer's first surface, which its DoPost clears and
+    // draws into after DoPostProcess starts; without that pass there are no
+    // particles to draw
     uint32_t soft = 0;
     if (consts && c.flags[kPostFlagSoft] && c.soft_surface[0]) {
         for (const Pass& s : frame.passes) {
@@ -426,8 +392,6 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noi
             }
         }
     }
-    // The noise reads the map the capture kept (none: no grain), by the
-    // composite's seeds and scales, or on a world frame by the proc's
     const Texture* noise_map = frame.noise_map.get();
     const bool noise_kept = noise && noise_map && noise_map->width && noise_map->height &&
                             noise_map->rgba.size() == size_t(noise_map->width) * noise_map->height;
@@ -437,11 +401,7 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noi
             flags |= kPostNoiseMidtone;
     }
     if (consts ? c.flags[kPostFlagBlendPrevious] != 0 : BlendPrevious(p)) flags |= kPostTrails;
-    // The camera motion blur, where the game's composite had it (TheShaderMgr
-    // + 0x39), or on a world frame where DoVelocity would turn it on
-    // (VelocityExpected). It needs the velocity buffer's cameras, which
-    // captures from before don't have: none there. With `velocity` false
-    // it's left off.
+    // older captures lack the velocity buffer's cameras
     const bool vel_known = p.vel_read && p.vel_depth_range[1] > 0;
     if (velocity && vel_known &&
         (consts ? c.flags[kPostFlagVelocity] != 0 : VelocityExpected(p)))
@@ -494,9 +454,8 @@ bool PlanPost(const FrameCapture& frame, uint32_t only, PostPlan& plan, bool noi
         if (consts) {
             pass.trails = Rgba(c.c125);
         } else {
-            // UpdateBlendPrevious's, with a post frame's time at the rate
-            // even/odd rendering runs post-processing at (every frame
-            // without it)
+            // UpdateBlendPrevious's, dt a post frame at even/odd rendering's
+            // rate
             const float dt = 1.0f / (p.emulate_fps > 0 ? p.emulate_fps : 60.0f);
             pass.trails = {p.trail_threshold, dt / p.trail_duration, 1.0f / 3.0f, 0};
         }
@@ -535,8 +494,6 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
              std::vector<uint32_t>& out, std::vector<uint32_t>* bloom0,
              PostHistory* history, uint64_t game_frame) {
     const PostPass& pass = plan.composite;
-    // the trails read the previous post frame, where there's one of this
-    // size from an earlier frame
     const bool have_prev = history && history->w == width && history->h == height &&
                            history->game_frame && history->game_frame < game_frame &&
                            history->rgba.size() == size_t(width) * height;
@@ -545,9 +502,8 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
     src.Resize(width, height);
     for (size_t i = 0; i < src.px.size(); i++) src.px[i] = Unpack(scene[i]);
 
-    // the velocity pass, into a level half the picture's size, each texel
-    // from the depth texel its uv lands in (the game's s9, point: depth's
-    // width over the level's times x + .5, in integers, as the GPU's)
+    // the velocity pass at half size, point-sampling depth (the game's s9)
+    // in integers as the GPU does
     Level vel;
     if (flags & kPostVelocity) {
         vel.Resize(std::max(width / 2, 1u), std::max(height / 2, 1u));
@@ -559,13 +515,11 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
                     Unorm8(VelocityTexel(pass, Uv(x, y, vel), depth[size_t(dy) * width + dx]));
             }
         }
-        // and the objects with their own motion over it
         ObjectPass(plan, vel, depth, width, height);
     }
 
     Level dof, tmp, bloom[3];
     if (flags & kPostDof) {
-        // the scene 4x smaller, blurred across then down
         dof.Resize(Quarter(width), Quarter(height));
         Downsample(src, false, dof);
         Blur(dof, plan.dof_taps[0], 8, tmp);
@@ -573,8 +527,7 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
     }
     const bool bloom_on = (flags & (kPostBloom | kPostGlare)) != 0;
     if (bloom_on) {
-        // the bright pass into level 0; with bloom (not glare) two more, each
-        // 4x smaller than the one before; each blurred across then down
+        // glare has level 0 only
         const int levels = (flags & kPostBloom) ? 3 : 1;
         for (int k = 0; k < levels; k++) {
             const Level& from = k ? bloom[k - 1] : src;
@@ -583,7 +536,6 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
             Blur(bloom[k], plan.bloom_taps[k][0], 15, tmp);
             Blur(tmp, plan.bloom_taps[k][1], 15, bloom[k]);
         }
-        // with glare, its pass over level 0, which the composite reads
         if (flags & kPostGlare) {
             Glare(bloom[0], tmp);
             std::swap(bloom[0], tmp);
@@ -601,8 +553,6 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
         bloom0->clear();
     }
 
-    // the spotlights' depth volume and density map, and the soft-particle
-    // surface, as they were drawn
     auto load = [](const PostImage& image, Level& l) {
         if (!image.px || !image.w || !image.h) return;
         l.Resize(image.w, image.h);
@@ -615,8 +565,7 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
     }
     if (flags & kPostSoft) load(soft, soft_level);
 
-    // the noise map, read by its sampler at each tap (sample_model.h); the
-    // composite's target size gives the taps' derivatives
+    // the target size gives the noise taps' derivatives
     PostPass composite = pass;
     composite.flags.x = flags;
     composite.target = {float(width), float(height), 1.0f / float(width), 1.0f / float(height)};
@@ -640,8 +589,7 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
 
     out.resize(size_t(width) * height);
     const float4 none{0, 0, 0, 0};
-    // a post frame's composite, which the next frame's trails read (once a
-    // frame: drawn again, it's kept as it was)
+    // once per game frame: a redraw keeps the first
     const bool keep = history && plan.trails_update && game_frame &&
                       !(history->game_frame == game_frame && history->w == width &&
                         history->h == height);
@@ -680,7 +628,6 @@ void RunPost(const PostPlan& plan, const std::vector<uint32_t>& scene,
                 n0 = noise_tap(uv, 0);
                 n1 = noise_tap(uv, 1);
             }
-            // the scene, blurred along the motion where the velocity says
             float4 scene_px = src.px[i];
             if (!vel.px.empty()) {
                 const float4 v = Sample(vel, uv);

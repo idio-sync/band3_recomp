@@ -36,18 +36,14 @@
 #include <iterator>
 #include <thread>
 
-// Line references "cp.cc:N" are to Xenia's command_processor.cc at master
-// (2022 header; fetched 2026-10-05), "gs.cc:N" to its graphics_system.cc.
-// ReXGlue's xenos plugin declares the same handlers (rex/graphics/
-// command_processor.h:175-215) but its source isn't available; where it may
-// differ (its D3D12 backend overrides EVENT_WRITE_ZPD) this follows Xenia.
+// "cp.cc:N" / "gs.cc:N": Xenia's command_processor.cc / graphics_system.cc at
+// master (fetched 2026-10-05). ReXGlue's xenos plugin source isn't available;
+// where it may differ (its D3D12 EVENT_WRITE_ZPD) this follows Xenia.
 
 namespace band3::render::sync_gpu {
 
-// A ring of dwords at host memory, read as Xenia's RingBuffer reads a
-// command buffer (xenia/base/ring_buffer.h), in dwords rather than bytes:
-// read == write is empty, so a buffer of exactly `capacity` dwords starts
-// "empty" and is run with a do-while, as Xenia runs it.
+// Xenia's RingBuffer (base/ring_buffer.h) in dwords. read == write is empty,
+// so a full `capacity` buffer starts "empty" and is run with a do-while.
 struct SyncCommandProcessor::Reader {
     const uint8_t* base;
     uint32_t capacity;  // dwords, nonzero
@@ -58,7 +54,7 @@ struct SyncCommandProcessor::Reader {
         if (read < write) return write - read;
         return capacity - read + write;
     }
-    // ReadAndSwap<uint32_t>: the guest's big-endian word
+    // ReadAndSwap<uint32_t>
     uint32_t Read() {
         const uint32_t v = LoadBE32(base + size_t(read) * 4);
         read = read + 1 == capacity ? 0 : read + 1;
@@ -99,8 +95,7 @@ void SetField10(uint32_t& entry, uint32_t shift, uint32_t value) {
     entry = (entry & ~(0x3FFu << shift)) | ((value & 0x3FF) << shift);
 }
 
-// DC_LUT_RW_INDEX keeps its index in bits 0..7 (registers.h:911-918), the
-// rest written back as it was
+// index in bits 0..7 (registers.h:911-918), the rest preserved
 uint32_t WithRwIndex(uint32_t reg_value, uint32_t index) {
     return (reg_value & ~0xFFu) | (index & 0xFF);
 }
@@ -113,8 +108,7 @@ SyncCommandProcessor::SyncCommandProcessor(GuestMemory& memory, SyncCpHooks hook
       hooks_(std::move(hooks)),
       sleep_in_waits_(config.sleep_in_waits),
       fake_sample_count_(config.fake_sample_count) {
-    // The linear ramps Xenia's CommandProcessor::Initialize starts with
-    // (cp.cc:56-70), what games set for VdGetCurrentDisplayGamma's sRGB.
+    // Xenia's initial linear ramps (cp.cc:56-70)
     for (uint32_t i = 0; i < 256; ++i) {
         const uint32_t value = i * 0x3FF / 0xFF;
         gamma_table_[i] = value << kBlueShift | value << kGreenShift | value << kRedShift;
@@ -127,10 +121,8 @@ SyncCommandProcessor::SyncCommandProcessor(GuestMemory& memory, SyncCpHooks hook
 }
 
 void SyncCommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
-    // cp.cc:309-313: size_log2 counts qwords. Xenia resets only the read
-    // index; the write index goes back to kNoWriteIndex here too (at which
-    // ExecutePending runs nothing), so a ring set up again doesn't run up to
-    // the old ring's write index before the guest writes its own.
+    // cp.cc:309-313; size_log2 counts qwords. Resetting the write index is
+    // band3's (see the declaration).
     read_index_.store(0, std::memory_order_release);
     write_index_.store(kNoWriteIndex, std::memory_order_release);
     primary_buffer_ptr_ = ptr;
@@ -138,8 +130,7 @@ void SyncCommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2
 }
 
 void SyncCommandProcessor::EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2) {
-    // cp.cc:315-324; the update frequency is kept but, as in Xenia, unused:
-    // the read index is written back after each primary buffer
+    // cp.cc:315-324; the update frequency is unused, as in Xenia
     read_ptr_writeback_ptr_ = ptr;
     read_ptr_update_freq_ = block_size_log2 < 32 ? uint32_t(1) << block_size_log2 >> 2 : 0;
 }
@@ -150,9 +141,7 @@ void SyncCommandProcessor::UpdateWritePointer(uint32_t value) {
 }
 
 bool SyncCommandProcessor::ExecutePending() {
-    // cp.cc:209-246, without the spin: the caller waits on
-    // write_pointer_updated between calls. kNoWriteIndex is the write index
-    // of a ring the guest hasn't written the write pointer for yet.
+    // cp.cc:209-246, without the spin
     if (!running()) return false;
     const uint32_t write = write_index();
     const uint32_t read = read_index();
@@ -163,8 +152,7 @@ bool SyncCommandProcessor::ExecutePending() {
 }
 
 void SyncCommandProcessor::WriteBackReadPointer() {
-    // cp.cc:243-246, store_and_swap: big-endian. The release orders the
-    // packets' memory writes before it, as the guest reads them after it.
+    // cp.cc:243-246. Release: the guest reads the packets' writes after it.
     if (!read_ptr_writeback_ptr_) return;
     uint8_t* p = Translate(read_ptr_writeback_ptr_, 4);
     if (!p) return;
@@ -191,15 +179,13 @@ uint32_t SyncCommandProcessor::ExecutePrimaryBuffer(uint32_t read_index, uint32_
         return write_index;
     }
     Reader r{base, capacity, read_index % capacity, write_index % capacity};
-    // Xenia asserts read != write here; a write index a whole ring ahead
-    // would leave nothing to read rather than a wrap's worth
+    // Xenia asserts read != write; a write a whole ring ahead reads nothing
     if (r.ReadCount()) ExecuteBuffer(r, "primary ring");
     return write_index;
 }
 
 void SyncCommandProcessor::ExecuteIndirectBuffer(uint32_t ptr, uint32_t count) {
-    // cp.cc:575-593. An empty buffer is skipped: Xenia's RingBuffer of 0
-    // bytes divides by zero.
+    // cp.cc:575-593. Empty is skipped: Xenia's would divide by zero.
     stats_.indirect_buffers.add();
     if (!count) return;
     const uint8_t* base = Translate(ptr, count * 4);
@@ -209,8 +195,7 @@ void SyncCommandProcessor::ExecuteIndirectBuffer(uint32_t ptr, uint32_t count) {
 }
 
 void SyncCommandProcessor::ExecuteBuffer(Reader& r, const char* what) {
-    // cp.cc:559-566 and 583-590: a bad packet drops the rest of the buffer.
-    // A stop (RequestStop) does too, which Xenia leaves to its waits.
+    // cp.cc:559-566 and 583-590: a bad packet or RequestStop drops the rest
     do {
         if (!ExecutePacket(r)) {
             if (running()) {
@@ -266,8 +251,7 @@ bool SyncCommandProcessor::ExecutePacketType0(Reader& r, uint32_t packet) {
 }
 
 bool SyncCommandProcessor::ExecutePacketType1(Reader& r, uint32_t packet) {
-    // cp.cc:663-675: two registers. Unchecked against the buffer's end, as
-    // in Xenia.
+    // cp.cc:663-675. Unchecked against the buffer's end, as in Xenia.
     stats_.type1.add();
     const uint32_t reg_index_1 = packet & 0x7FF;
     const uint32_t reg_index_2 = (packet >> 11) & 0x7FF;
@@ -305,9 +289,7 @@ bool SyncCommandProcessor::ExecutePacketType3(Reader& r, uint32_t packet) {
 
     bool result = true;
     switch (opcode) {
-        // what a sync-only GPU doesn't need: shader microcode, state
-        // invalidation and the micro-engine's init (cp.cc:880-898,
-        // 1528-1599). Skipped with the rest of the body below.
+        // not needed without drawing (cp.cc:880-898, 1528-1599)
         case pm4::ME_INIT:
         case pm4::NOP:
         case pm4::IM_LOAD:
@@ -316,15 +298,12 @@ bool SyncCommandProcessor::ExecutePacketType3(Reader& r, uint32_t packet) {
         // Xenia reads one word, logs and asserts on it (cp.cc:829-844)
         case pm4::CONTEXT_UPDATE:
         case pm4::WAIT_FOR_IDLE:
-        // not in Xenia's switch (its default skips them as unknown), listed
-        // in n7_design.md section 3 as nothing to wait on: the bin base offset, the
-        // cache flush event
+        // unknown to Xenia; nothing waits on them
         case pm4::SET_BIN_BASE_OFFSET:
         case pm4::EVENT_WRITE_CFL: break;
 
-        // Draws: skipped whole. Xenia's ExecutePacketType3Draw (cp.cc:1284)
-        // also writes VGT_DRAW_INITIATOR and VGT_DMA_BASE/SIZE, which nothing
-        // the guest waits on reads. The binned draws are unknown to Xenia.
+        // Xenia's ExecutePacketType3Draw (cp.cc:1284) also writes
+        // VGT_DRAW_INITIATOR and VGT_DMA_BASE/SIZE, which nothing waits on
         case pm4::DRAW_INDX:
         case pm4::DRAW_INDX_2:
         case pm4::DRAW_INDX_BIN:
@@ -349,7 +328,7 @@ bool SyncCommandProcessor::ExecutePacketType3(Reader& r, uint32_t packet) {
         case pm4::LOAD_ALU_CONSTANT: LoadAluConstant(r); break;
         case pm4::VIZ_QUERY: VizQuery(r); break;
 
-        // the bins the predicate above tests (cp.cc:793-828)
+        // cp.cc:793-828
         case pm4::SET_BIN_MASK_LO:
             bin_mask_ = (bin_mask_ & 0xFFFFFFFF00000000ull) | r.Read();
             break;
@@ -373,10 +352,8 @@ bool SyncCommandProcessor::ExecutePacketType3(Reader& r, uint32_t packet) {
             bin_select_ = (hi << 32) | lo;
         } break;
 
-        // Unknown (cp.cc:846-851): skipped. WAIT_REG_EQ and WAIT_REG_GTE
-        // land here too, as in Xenia and ReXGlue (no handler for either in
-        // rex/graphics/command_processor.h): their layout is undocumented,
-        // and a wait read wrong would block the ring for good.
+        // cp.cc:846-851. WAIT_REG_EQ/GTE too, as in Xenia and ReXGlue: their
+        // layout is undocumented and a misread wait would block the ring.
         default: {
             stats_.unknown_opcodes.add();
             std::lock_guard lock(log_mutex_);
@@ -389,10 +366,8 @@ bool SyncCommandProcessor::ExecutePacketType3(Reader& r, uint32_t packet) {
             }
         } break;
     }
-    // Each handler reads what Xenia's does, which for a well-formed packet
-    // is its body or less (Xenia asserts the reader ends at the body's end,
-    // cp.cc:874-876, and its NOP-like handlers advance there); skipping to
-    // the end keeps a short or malformed packet from shifting the stream.
+    // Handlers may read less than the body; skip to its end so a short or
+    // malformed packet can't shift the stream (cp.cc:874-876).
     r.read = body_end;
     return result;
 }
@@ -409,9 +384,7 @@ void SyncCommandProcessor::Interrupt(Reader& r) {
 }
 
 void SyncCommandProcessor::XeSwap(Reader& r, uint32_t count) {
-    // cp.cc:915-941: the 'SWAP' fourcc, the front buffer and its size, the
-    // rest skipped; then the counter. All of its words are kept for the hook
-    // (and the first swap's for the log), which Xenia doesn't.
+    // cp.cc:915-941; unlike Xenia, keeps every word for the hook
     swap_body_.resize(count);
     for (uint32_t i = 0; i < count; i++) swap_body_[i] = r.Read();
     SwapPacket swap;
@@ -431,15 +404,13 @@ void SyncCommandProcessor::XeSwap(Reader& r, uint32_t count) {
         Log(std::format("sync gpu: first XE_SWAP, {} dwords:{}{}", count, words,
                         count > 16 ? " ..." : ""));
     }
-    // Xenia's IssueSwap, then the counter
     if (hooks_.swap) hooks_.swap(swap);
     IncrementCounter();
     stats_.swaps.add();
 }
 
 void SyncCommandProcessor::IndirectBuffer(Reader& r) {
-    // cp.cc:943-953: CpuToGpu (& 0x1FFFFFFF) of the address, 20 bits of
-    // length in dwords. Nesting is limited here: Xenia recurses without one.
+    // cp.cc:943-953; nesting limited here, unlike Xenia
     const uint32_t list_ptr = r.Read() & 0x1FFFFFFF;
     const uint32_t list_length = r.Read() & 0xFFFFF;
     if (indirect_depth_ >= 8) {
@@ -489,7 +460,6 @@ bool SyncCommandProcessor::WaitRegMem(Reader& r) {
         }
         if (Compare(wait_info, value & mask, ref)) break;
         if (!stalled) {
-            // the watchdog's view, only for a wait that waits
             stalled = true;
             std::lock_guard lock(wait_mutex_);
             wait_ = CurrentWait{true,          pm4::WAIT_REG_MEM, is_memory, poll_reg_addr, ref,
@@ -499,7 +469,7 @@ bool SyncCommandProcessor::WaitRegMem(Reader& r) {
             std::lock_guard lock(wait_mutex_);
             wait_.last_value = value & mask;
         }
-        // Xenia leaves on a stop only after a long wait's sleep; any here
+        // Xenia checks for a stop only after a long sleep
         if (!running()) break;
         stats_.polls_by_band[band].add();
         Wait(wait);
@@ -526,9 +496,8 @@ bool SyncCommandProcessor::WaitRegMem(Reader& r) {
 }
 
 void SyncCommandProcessor::CountWaitValue(uint32_t wait) {
-    // the CP thread's alone to write; a new value is stored before the count
-    // that takes it in (relaxed, as statistics are: a reader racing the
-    // first stall at a new value may read it wrong until its next reading)
+    // CP thread only. Relaxed: a reader racing a new value may misread it
+    // once.
     const uint64_t n = stats_.wait_value_count.get();
     for (uint64_t i = 0; i < n; i++) {
         if (stats_.wait_values[i].get() == wait) {
@@ -579,8 +548,7 @@ void SyncCommandProcessor::RegToMem(Reader& r) {
 }
 
 void SyncCommandProcessor::MemWrite(Reader& r, uint32_t count) {
-    // cp.cc:1092-1108: each word's endianness from the address, which
-    // advances by 4 and so keeps its endian bits
+    // cp.cc:1092-1108; the address keeps its endian bits as it advances
     uint32_t write_addr = r.Read();
     for (uint32_t i = 0; i + 1 < count; i++) {
         const uint32_t write_data = r.Read();
@@ -625,15 +593,13 @@ void SyncCommandProcessor::CondWrite(Reader& r) {
 }
 
 void SyncCommandProcessor::EventWrite(Reader& r) {
-    // cp.cc:1177-1192: the initiator only; a longer packet's address words
-    // are skipped
+    // cp.cc:1177-1192
     const uint32_t initiator = r.Read();
     WriteRegister(reg::VGT_EVENT_INITIATOR, initiator & 0x3F);
 }
 
 void SyncCommandProcessor::EventWriteShd(Reader& r) {
-    // cp.cc:1194-1217: the fence. Bit 31 of the initiator writes the swap
-    // and vblank counter instead of the packet's value.
+    // cp.cc:1194-1217: the fence; initiator bit 31 writes counter() instead
     const uint32_t initiator = r.Read();
     uint32_t address = r.Read();
     const uint32_t value = r.Read();
@@ -643,7 +609,7 @@ void SyncCommandProcessor::EventWriteShd(Reader& r) {
     address &= ~uint32_t(3);
     stats_.fences.add();
     if (uint8_t* p = Translate(address, 4)) {
-        // release: what the packets before it wrote is seen before the fence
+        // release: earlier packets' writes are visible before the fence
         const uint32_t swapped = GpuSwap(data_value, endianness);
         if (reinterpret_cast<std::uintptr_t>(p) % 4 == 0) {
             StoreHost32Release(p, swapped);
@@ -655,10 +621,9 @@ void SyncCommandProcessor::EventWriteShd(Reader& r) {
 }
 
 void SyncCommandProcessor::EventWriteExt(Reader& r) {
-    // cp.cc:1219-1247: the screen extents of the draws before it, faked as
-    // the whole 8192x8192 surface: min x, max x, min y, max y (in 8-pixel
-    // units), min z, max z, as big-endian 16-bit words (copy_and_swap_16,
-    // whatever the address's endian bits; Xenia asserts 8in16)
+    // cp.cc:1219-1247: extents faked as the whole 8192x8192 surface: min/max
+    // x, min/max y (8-pixel units), min/max z, as big-endian 16-bit words
+    // regardless of endian bits (Xenia asserts 8in16)
     const uint32_t initiator = r.Read();
     uint32_t address = r.Read();
     WriteRegister(reg::VGT_EVENT_INITIATOR, initiator & 0x3F);
@@ -676,11 +641,10 @@ void SyncCommandProcessor::EventWriteExt(Reader& r) {
 }
 
 void SyncCommandProcessor::EventWriteZpd(Reader& r) {
-    // cp.cc:1249-1282: an occlusion query's begin or end. D3D writes
-    // 0xFFFFFEED (big-endian) into ZPass_A and B (older D3Ds ZFail_A and B)
-    // at the end only; the GPU clears the counts at either, and for an end
-    // reports the fake count as passed and total samples.
-    // xe_gpu_depth_sample_counts (xenos.h:1509-1521): 8 little-endian
+    // cp.cc:1249-1282: query begin or end. D3D marks an end by writing
+    // 0xFFFFFEED (big-endian) to ZPass_A/B (older D3Ds: ZFail_A/B). Counts
+    // are cleared either way; an end reports the fake count as passed and
+    // total. xe_gpu_depth_sample_counts (xenos.h:1509-1521): 8 little-endian
     // words, Total_A/B, ZFail_A/B, ZPass_A/B, StencilFail_A/B.
     const uint32_t initiator = r.Read();
     WriteRegister(reg::VGT_EVENT_INITIATOR, initiator & 0x3F);
@@ -689,13 +653,11 @@ void SyncCommandProcessor::EventWriteZpd(Reader& r) {
     const uint32_t address = LoadReg(reg::RB_SAMPLE_COUNT_ADDR);
     uint8_t* counts = Translate(address, 32);
     if (!counts) return;
-    // the le<uint32_t> fields compared with byte_swap(0xFFFFFEED)
     const uint32_t kQueryFinished = std::byteswap(UINT32_C(0xFFFFFEED));
     auto field = [&](int i) { return LoadHost32(counts + i * 4); };
     const bool is_end_via_z_pass = field(4) == kQueryFinished && field(5) == kQueryFinished;
     const bool is_end_via_z_fail = field(2) == kQueryFinished && field(3) == kQueryFinished;
-    // native_query_log: what D3D left for the GPU, before it's cleared
-    // (counted down without going under 0 should SetQueryLog clear it meanwhile)
+    // CAS so a concurrent SetQueryLog(false) can't make it underflow
     uint32_t left = query_log_left_.load(std::memory_order_relaxed);
     while (left && !query_log_left_.compare_exchange_weak(left, left - 1,
                                                           std::memory_order_relaxed)) {
@@ -721,7 +683,7 @@ void SyncCommandProcessor::EventWriteZpd(Reader& r) {
 }
 
 void SyncCommandProcessor::SetConstant(Reader& r, uint32_t count) {
-    // cp.cc:1428-1463: 11 bits of index into the block of its type
+    // cp.cc:1428-1463
     const uint32_t offset_type = r.Read();
     uint32_t index = offset_type & 0x7FF;
     uint32_t base;
@@ -731,14 +693,14 @@ void SyncCommandProcessor::SetConstant(Reader& r, uint32_t count) {
 }
 
 void SyncCommandProcessor::SetConstantRun(Reader& r, uint32_t count) {
-    // cp.cc:1465-1475 and 1517-1526: a register index in the low 16 bits
+    // cp.cc:1465-1475 and 1517-1526
     const uint32_t offset_type = r.Read();
     uint32_t index = offset_type & 0xFFFF;
     for (uint32_t n = 0; n + 1 < count; n++, index++) WriteRegister(index, r.Read());
 }
 
 void SyncCommandProcessor::LoadAluConstant(Reader& r) {
-    // cp.cc:1477-1515: the constants from memory, big-endian
+    // cp.cc:1477-1515
     const uint32_t address = r.Read() & 0x3FFFFFFF;
     const uint32_t offset_type = r.Read();
     const uint32_t size_dwords = r.Read() & 0xFFF;
@@ -766,8 +728,7 @@ void SyncCommandProcessor::VizQuery(Reader& r) {
 }
 
 void SyncCommandProcessor::MakeCoherent() {
-    // cp.cc:486-524: a dirty COHER_STATUS_HOST is marked coherent (there
-    // are no caches here to flush)
+    // cp.cc:486-524; no caches to flush
     if (LoadReg(reg::COHER_STATUS_HOST)) StoreReg(reg::COHER_STATUS_HOST, 0);
 }
 
@@ -789,7 +750,7 @@ void SyncCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
     if (has_known_registers_ && !known_registers_[index]) NoteUnknownRegister(index, true, value);
 
     if (index >= reg::SCRATCH_REG0 && index <= reg::SCRATCH_REG7) {
-        // scratch write-back, big-endian, for each register its mask enables
+        // scratch write-back, per SCRATCH_UMSK
         const uint32_t scratch_reg = index - reg::SCRATCH_REG0;
         if ((1u << scratch_reg) & LoadReg(reg::SCRATCH_UMSK)) {
             const uint32_t mem_addr = LoadReg(reg::SCRATCH_ADDR) + scratch_reg * 4;
@@ -811,23 +772,21 @@ void SyncCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
 }
 
 void SyncCommandProcessor::WriteGammaRegister(uint32_t index, uint32_t value) {
-    // cp.cc:363-481. Xenia's increments of DC_LUT_RW_INDEX write it through
-    // WriteRegister, which only stores it and resets the component; done in
-    // place here, under the lock.
+    // cp.cc:363-481. Xenia bumps DC_LUT_RW_INDEX through WriteRegister,
+    // which also resets the component; done in place here, under the lock.
     std::lock_guard lock(gamma_mutex_);
     const uint32_t rw_index_reg = LoadReg(reg::DC_LUT_RW_INDEX);
     const uint32_t rw_index = rw_index_reg & 0xFF;
     const uint32_t write_enable_mask = LoadReg(reg::DC_LUT_WRITE_EN_MASK);
     switch (index) {
         case reg::DC_LUT_RW_INDEX:
-            // resets the sequential component index (M56 DC_LUT_SEQ_COLOR)
+            // M56 DC_LUT_SEQ_COLOR
             gamma_rw_component_ = 0;
             break;
 
         case reg::DC_LUT_SEQ_COLOR: {
-            // the table's entries a component at a time, red, green, blue,
-            // where the write enable mask is blue, green, red; bits 0..5 of
-            // the 16-bit value are hardwired to zero
+            // components in R, G, B order; the enable mask is B, G, R. Bits
+            // 0..5 of the 16-bit value are hardwired to zero.
             if (write_enable_mask & (UINT32_C(1) << (2 - gamma_rw_component_))) {
                 static constexpr uint32_t kShifts[] = {kRedShift, kGreenShift, kBlueShift};
                 SetField10(gamma_table_[rw_index], kShifts[gamma_rw_component_],
@@ -840,9 +799,8 @@ void SyncCommandProcessor::WriteGammaRegister(uint32_t index, uint32_t value) {
         } break;
 
         case reg::DC_LUT_PWL_DATA: {
-            // PWL steps a component at a time (likely red, green, blue as
-            // SEQ_COLOR), bit 7 of the index ignored; base and delta keep
-            // bits 6..15
+            // likely R, G, B order as SEQ_COLOR; index bit 7 ignored; base
+            // and delta keep bits 6..15
             const uint32_t pwl_index = rw_index & 0x7F;
             if (write_enable_mask & (UINT32_C(1) << (2 - gamma_rw_component_))) {
                 const uint32_t base = value & 0xFFFF & ~UINT32_C(0x3F);
@@ -858,8 +816,7 @@ void SyncCommandProcessor::WriteGammaRegister(uint32_t index, uint32_t value) {
         } break;
 
         case reg::DC_LUT_30_COLOR: {
-            // a whole entry, the channels the mask enables (bit 0 blue,
-            // 1 green, 2 red), and on to the next
+            // a whole entry; mask bit 0 blue, 1 green, 2 red
             const uint32_t mask = write_enable_mask & 0b111;
             uint32_t& entry = gamma_table_[rw_index];
             if (mask & 0b001) SetField10(entry, kBlueShift, value >> kBlueShift);
@@ -950,8 +907,7 @@ std::vector<uint32_t> SyncCommandProcessor::first_swap_body() const {
 }
 
 uint32_t SyncCommandProcessor::LoadReg(uint32_t index) const {
-    // the MMIO path writes from the guest's threads while the CP thread
-    // polls (Xenia: a volatile access)
+    // MMIO writes from guest threads while the CP thread polls
     return std::atomic_ref<uint32_t>(const_cast<uint32_t&>(regs_.values[index]))
         .load(std::memory_order_acquire);
 }
@@ -974,7 +930,7 @@ void SyncCommandProcessor::Log(const std::string& line) {
 }
 
 void SyncCommandProcessor::LogLimited(StatCounter& counter, const std::string& line) {
-    // the first few of a kind: a broken stream would repeat it every frame
+    // a broken stream would repeat every frame
     const uint64_t n = counter.get();
     counter.add();
     if (n < 8) Log(line);

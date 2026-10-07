@@ -5,34 +5,28 @@
 #include <cstdint>
 #include <vector>
 
-// Experimental: the arithmetic and bookkeeping of the native renderer's
-// presentation (the native picture shown, native_view.cpp's NativePresentDrawer),
-// kept apart so the unit tests can check them: where the picture goes in the
-// window, which of the presenter's output textures the renderer's worker
-// may draw into while the SDK's presenter samples another, when each frame
-// reaches them, and the paints' pacing as the harness's present_stats
-// reports it.
+// Experimental: the native renderer's presentation bookkeeping
+// (native_view.cpp's NativePresentDrawer), kept apart for unit tests:
+// letterboxing, output slot ownership, publish pacing, and the harness's
+// present_stats.
 
 namespace band3::render {
 
-// where the picture goes in a render target, in its pixels
+// in the render target's pixels
 struct ImageRect {
     uint32_t x = 0, y = 0, w = 0, h = 0;
 };
 
-// The largest ar_x:ar_y rectangle that fits target_w x target_h, centred (the
-// bars split as evenly as whole pixels can), as the SDK's presenter
-// letterboxes the emulated picture; all of the target with `letterbox` off
-// (the SDK's present_letterbox), which stretches it as the SDK does.
+// The largest centred ar_x:ar_y rectangle in the target, as the SDK's
+// presenter letterboxes; the whole target (stretched) with `letterbox` off
+// (the SDK's present_letterbox).
 inline ImageRect LetterboxRect(uint32_t target_w, uint32_t target_h, bool letterbox,
                                uint32_t ar_x = 16, uint32_t ar_y = 9) {
     ImageRect r{0, 0, target_w, target_h};
     if (!letterbox || !target_w || !target_h || !ar_x || !ar_y) return r;
-    // in 64 bits: 7680 * 16 doesn't overflow 32, but a caller's aspect might
+    // 64 bits: a caller's large aspect could overflow 32
     const uint64_t wide = uint64_t(target_w) * ar_y, tall = uint64_t(target_h) * ar_x;
     if (wide > tall) {
-        // wider than the picture: bars left and right, the width rounded to
-        // the nearest pixel
         r.w = uint32_t((tall + ar_y / 2) / ar_y);
         if (r.w == 0) r.w = 1;
         r.x = (target_w - r.w) / 2;
@@ -44,61 +38,46 @@ inline ImageRect LetterboxRect(uint32_t target_w, uint32_t target_h, bool letter
     return r;
 }
 
-// The presenter's output textures and who may touch which. The worker draws
-// a frame into one and publishes it as the newest; each paint samples the
-// newest on the SDK's GPU queue, noting the paint's submission index on it,
-// and passes on the newest submission the GPU has finished. The worker draws
-// only into a slot that isn't the newest (the next paint may sample it) and
-// that no unfinished paint sampled (its index <= completed). With three, one is always free while paints keep
-// finishing: the newest, the one the last unfinished paint sampled, and the
-// other. Not thread-safe: native_view.cpp holds its mutex around every call.
+// Ownership of the presenter's output textures. The worker publishes a drawn
+// slot as newest; each paint samples the newest on the SDK's queue, noting
+// its submission index, and reports the newest completed submission. The
+// worker draws only into a slot that isn't newest and that no unfinished
+// paint sampled. With three, one is always free while paints finish. Not
+// thread-safe: native_view.cpp holds its mutex around every call.
 //
-// The worker submits a frame and records the next while the GPU draws it
-// (native_view.cpp's Renderer::Run), so a slot drawn into can be submitted
-// and not yet finished (Submitted): it stays taken, and isn't published until
-// the GPU has finished it (Finished), as the paints sample it on another
-// queue, which nothing but the worker's wait orders after SDL's.
+// A submitted slot stays taken until Finished and isn't published before:
+// paints sample on another queue that nothing but the worker's wait orders
+// after SDL's.
 //
-// Presenting comes and goes (F8), and each stretch of it shows only its own
-// frames: ones drawn for it (Publish's `generation`) from captures the game
-// published after it began (Fresh), or after the window was last restored
-// (Resume). The capture newest when F8 turns native
-// again is the last one from before the switch (capture stops with the
-// emulated GPU), seconds old, and a frame the worker was still drawing as
-// presenting stopped would otherwise be the newest when it starts again.
+// Each presenting stretch (F8 toggles it) shows only frames drawn for it
+// (Publish's `generation`) from captures published after it began or the
+// window was restored (Fresh): the capture newest at the switch is seconds
+// old (capture stops with the emulated GPU), as is a frame still being drawn
+// when presenting stopped.
 class PresentSlots {
  public:
     static constexpr int kCount = 3;
 
-    // presenting starts, at `now_ns` (steady-clock nanoseconds): a stretch
-    // with nothing to show until a frame is published for it
+    // steady-clock nanoseconds
     void Start(int64_t now_ns) {
         newest_ = -1;
         generation_++;
         since_ns_ = now_ns;
     }
-    // presenting stopped: nothing is newest, a frame being drawn is
-    // published to nobody, and the paints' indices are kept (the GPU may
-    // still be reading a slot)
+    // presenting stopped; paints' indices are kept (the GPU may still be
+    // reading a slot)
     void Forget() {
         newest_ = -1;
         generation_++;
     }
-    // The window was restored at `now_ns` after the worker drew nothing while
-    // it was minimized: the stretch goes on, its newest frame still shown
-    // (paints repeat it) until one is drawn from a capture published from
-    // now on (Fresh). The newest frame's slot was only ever sampled by paints
-    // and is finished, so keeping it is as any newest frame's; a frame drawn
-    // meanwhile (a screenshot) is still this stretch's.
+    // Restored after a minimized pause: the stretch goes on, its newest frame
+    // repeated until one is drawn from a capture published from now (Fresh).
     void Resume(int64_t now_ns) { since_ns_ = now_ns; }
-    // the stretch now, for the worker to note before it draws
+    // noted by the worker before it draws
     uint64_t Generation() const { return generation_; }
-    // whether a capture the game published at `published_ns` may be drawn
-    // for this stretch: one published after it started
     bool Fresh(int64_t published_ns) const { return published_ns > since_ns_; }
 
-    // the worker: the slot to draw the next frame into, marked as being
-    // drawn, or -1 if none is free
+    // -1 if none is free
     int Acquire() {
         for (int i = 0; i < kCount; i++) {
             Slot& s = slots_[i];
@@ -108,28 +87,22 @@ class PresentSlots {
         }
         return -1;
     }
-    // the slot being drawn is submitted, and the GPU may still be drawing it:
-    // taken still, and not published until Finished
     void Submitted(int slot) {
         if (Valid(slot) && slots_[slot].drawing) slots_[slot].in_flight = true;
     }
-    // the GPU has finished drawing the slot Submitted
     void Finished(int slot) {
         if (Valid(slot)) slots_[slot].in_flight = false;
     }
-    // whether `slot` is submitted and the GPU hasn't finished it: Publish
-    // refuses it, and the worker mustn't Abandon it as refused (the next
-    // frame could take it while the GPU still writes it)
+    // Publish refuses an unfinished slot, and the worker mustn't Abandon it
+    // then (the next frame could take it while the GPU still writes it)
     bool Unfinished(int slot) const { return Valid(slot) && slots_[slot].in_flight; }
-    // slots submitted that the GPU hasn't finished
     int InFlight() const {
         int n = 0;
         for (const Slot& s : slots_) n += s.in_flight ? 1 : 0;
         return n;
     }
-    // Drawn for stretch `generation`: the newest from now on, or, if that
-    // stretch is over, free again and false. A slot the GPU hasn't finished
-    // (Submitted) is never published: false, and it stays as it was.
+    // Makes `slot` the newest; false, and freed, if `generation`'s stretch is
+    // over; false and unchanged if unfinished.
     bool Publish(int slot, uint64_t generation) {
         if (!Valid(slot) || slots_[slot].in_flight) return false;
         slots_[slot].drawing = false;
@@ -139,28 +112,26 @@ class PresentSlots {
         return true;
     }
     bool Publish(int slot) { return Publish(slot, generation_); }
-    // not drawn after all (the GPU failed, or the worker stopped): free
-    // again, as it was. The GPU may still be drawing it if it was Submitted;
-    // nothing samples a slot until it's published, and the next frame drawn
-    // into it goes after that on SDL's queue.
+    // GPU failed or worker stopped. Safe even if the GPU is still drawing it:
+    // nothing samples it unpublished, and the next draw into it follows on
+    // SDL's queue.
     void Abandon(int slot) {
         if (!Valid(slot)) return;
         slots_[slot].drawing = false;
         slots_[slot].in_flight = false;
     }
 
-    // the drawer: the paint numbered `submission` samples `slot`
+    // the drawer: paint `submission` samples `slot`
     void Shown(int slot, uint64_t submission) {
         if (!Valid(slot)) return;
         Slot& s = slots_[slot];
         if (submission > s.used) s.used = submission;
     }
-    // the GPU has finished every paint up to `completed`
     void Completed(uint64_t completed) {
         if (completed > completed_) completed_ = completed;
     }
-    // the newest paint any slot was sampled in, for settling them all at once
-    // when paints stop (minimized: no paints, so no completed index either)
+    // for settling all slots at once when paints stop (minimized: no
+    // completed index either)
     uint64_t LastUsed() const {
         uint64_t last = 0;
         for (const Slot& s : slots_)
@@ -168,7 +139,6 @@ class PresentSlots {
         return last;
     }
 
-    // the newest frame drawn, or -1 before the first
     int Newest() const { return newest_; }
     // published frames so far, to tell a new one
     uint64_t Serial() const { return serial_; }
@@ -178,7 +148,7 @@ class PresentSlots {
     struct Slot {
         bool drawing = false;
         bool in_flight = false;  // submitted, not finished (drawing too)
-        uint64_t used = 0;       // the last paint that sampled it
+        uint64_t used = 0;       // last paint that sampled it
     };
     static bool Valid(int slot) { return slot >= 0 && slot < kCount; }
 
@@ -190,28 +160,21 @@ class PresentSlots {
     int64_t since_ns_ = 0;
 };
 
-// When the worker's frames reach the window. A frame takes as long to draw as
-// what it draws: with RB3's even/odd rendering a post frame (the world and its
-// post-processing) takes several times what a world frame (the post buffer
-// under its overlay) does, so frames published as soon as they're drawn come
-// out about 8 and 25 ms apart rather than every 16.7, and one paint (one
-// refresh, on a monitor) can find two new frames, of which the first is never
-// shown. So each frame is published a steady delay after the game presented
-// it: about the slowest of the last few frames' own (the second slowest, so
-// one hitch doesn't hold the next few back), never more than the game's
-// frame interval less a millisecond, by when the next frame is there to
-// draw. A frame slower than that is published as soon as it's drawn. Not
-// thread-safe: the worker's alone.
+// When the worker's frames reach the window. Under even/odd rendering post
+// frames take several times longer than world frames, so publishing on
+// completion lands frames ~8 and ~25 ms apart and a paint can find two new
+// ones, dropping the first. So each frame is published a steady delay after
+// the game presented it: the second slowest of recent frames (one hitch
+// doesn't hold back the rest), capped at the game's frame interval less 1 ms.
+// Slower frames publish when drawn. Worker thread only.
 class PublishPacer {
  public:
     static constexpr int kHistory = 8;
     static constexpr int64_t kMs = 1000000;  // a millisecond in nanoseconds
 
-    // Capture `frame` (numbered as captured), which the game presented at
-    // `presented_ns`, drawn by `now_ns`: when to publish it, from `now_ns`
-    // on (steady-clock nanoseconds).
+    // When to publish capture `frame`, presented at `presented_ns` and drawn
+    // by `now_ns` (steady-clock nanoseconds); never before `now_ns`.
     int64_t Due(uint64_t frame, int64_t presented_ns, int64_t now_ns) {
-        // the game's frame interval, from consecutive captures' times
         if (last_frame_ && frame > last_frame_ && frame - last_frame_ <= 4 &&
             presented_ns > last_presented_ns_) {
             const int64_t step = (presented_ns - last_presented_ns_) / int64_t(frame - last_frame_);
@@ -224,8 +187,6 @@ class PublishPacer {
         const int64_t own = std::max<int64_t>(0, now_ns - presented_ns);
         own_ns_[next_++ % kHistory] = own;
         if (count_ < kHistory) count_++;
-        // the second slowest of the last kHistory, or with fewer than two
-        // this frame's own
         int64_t first = 0, second = 0;
         for (int i = 0; i < count_; i++) {
             const int64_t v = own_ns_[i];
@@ -240,7 +201,6 @@ class PublishPacer {
         delay = std::min(delay, std::max<int64_t>(0, interval_ns_ - kMs));
         return std::max(now_ns, presented_ns + delay);
     }
-    // the game's frame interval as measured, in nanoseconds
     int64_t IntervalNs() const { return interval_ns_; }
     void Reset() { *this = PublishPacer{}; }
 
@@ -254,29 +214,22 @@ class PublishPacer {
 };
 
 // Whether native_world_ahead draws the world ahead now. It helps while the
-// GPU keeps up and while it's far behind, but between, where post frames
-// drawn with it still run about a frame's time, it feeds itself: one too
-// slow skips the next world frame's capture, so the world it drew ahead is
-// wasted and the post frame after has none and draws the whole world, too
-// slow again (with it off a skip costs nothing more). Which it is depends on
-// the GPU's state, which changes as other programs use it, so the worker
-// measures: the captures skipped per capture over windows of kWindowNs,
-// with it on and with it off, each kept as a running mean of its windows in a
-// row, and the next window has the one that skips fewer (on where they're
-// within kMargin: it shows frames sooner). Every kProbeEvery-th window tries
-// the other, whose mean that window then is, so a change in the GPU's state
-// is seen at the next probe. On until it has measured both. Not thread-safe:
-// the worker's alone.
+// GPU keeps up and while it's far behind, but in between it feeds itself: a
+// slow post frame skips the next world capture, wasting the world drawn
+// ahead, so the post frame after draws the whole world and is slow again.
+// That depends on the GPU's (changing) load, so the worker measures captures
+// skipped per capture over kWindowNs windows, a running mean each for on and
+// off, and picks the lower (on within kMargin: it shows frames sooner).
+// Every kProbeEvery-th window tries the other, replacing its mean, so load
+// changes are seen. On until both are measured. Worker thread only.
 class AheadChooser {
  public:
     static constexpr int64_t kWindowNs = 2000000000;
     static constexpr uint32_t kProbeEvery = 8;
     static constexpr double kMargin = 0.01;
 
-    // whether the next world frame's world is drawn ahead
     bool On() const { return on_; }
-    // a capture drawn at `now_ns` (steady-clock nanoseconds), `skipped`
-    // captures after the one drawn before it
+    // `skipped` captures since the last one drawn; steady-clock nanoseconds
     void Drawn(int64_t now_ns, uint64_t skipped) {
         if (!started_) {
             started_ = true;
@@ -298,8 +251,7 @@ class AheadChooser {
         probing_ = windows_ % kProbeEvery == 0;
         on_ = probing_ ? !best : best;
     }
-    // what it measured is no longer the case: the setting turned on again,
-    // or presenting started over
+    // setting turned on again, or presenting started over
     void Reset() { *this = AheadChooser{}; }
 
  private:
@@ -316,29 +268,21 @@ class AheadChooser {
     Mean on_mean_, off_mean_;
 };
 
-// With renderer native each frame the worker publishes asks the window to
-// paint (NativePresentDrawer::Start), which is GPU work no one sees while the
-// window can't be seen: minimized (its client area then 0x0), hidden, or with
-// no client area left. The first frame published once it can be seen again
-// asks again.
+// Whether a published frame should ask the window to paint
+// (NativePresentDrawer::Start); no point while it can't be seen.
 inline bool PaintWanted(bool minimized, bool visible, uint32_t client_w, uint32_t client_h) {
     return !minimized && visible && client_w > 0 && client_h > 0;
 }
 
-// With renderer native the native renderer's worker draws nothing while the
-// window is minimized (NativePresentMinimized): every frame it drew there
-// was GPU work nobody saw, and the presenter keeps painting a minimized
-// window regardless, so holding paints back alone doesn't save it. The game
-// goes on capturing meanwhile and the worker leaves those captures be. This
-// keeps the pause's numbers for the harness's `native_view stats`: how long
-// the worker was paused, and the captures the game published meanwhile,
-// each counted up to now during a pause. Times are steady-clock nanoseconds,
-// frames the captures' numbers (FrameCapture::frame). Not thread-safe:
-// native_view.cpp holds its mutex around every call.
+// The worker draws nothing while the window is minimized
+// (NativePresentMinimized); the presenter paints a minimized window anyway,
+// so holding back paints alone saves nothing. This keeps the pause's numbers
+// for `native_view stats`: time paused and captures published meanwhile.
+// Times in steady-clock nanoseconds, frames are FrameCapture::frame. Not
+// thread-safe: native_view.cpp holds its mutex around every call.
 class DrawPause {
  public:
-    // the window was minimized at `now_ns`, the newest capture then `frame`;
-    // false if it already was
+    // false if already paused
     bool Pause(int64_t now_ns, uint64_t frame) {
         if (paused_) return false;
         paused_ = true;
@@ -346,7 +290,7 @@ class DrawPause {
         since_frame_ = began_frame_ = frame;
         return true;
     }
-    // restored: false if it wasn't paused
+    // false if not paused
     bool Resume(int64_t now_ns, uint64_t frame) {
         if (!paused_) return false;
         paused_ = false;
@@ -357,28 +301,26 @@ class DrawPause {
         return true;
     }
     bool Paused() const { return paused_; }
-    // the numbers start over, a pause going on counted from now
+    // an ongoing pause counts from now
     void Restart(int64_t now_ns, uint64_t frame) {
         ns_ = 0;
         captures_ = 0;
         since_ns_ = now_ns;
         since_frame_ = frame;
     }
-    // milliseconds paused, and the captures the game published while paused,
-    // since the numbers started, up to `now_ns` and `frame` during a pause
+    // since Restart, an ongoing pause counted up to `now_ns` / `frame`
     double Ms(int64_t now_ns) const {
         return double(ns_ + (paused_ ? Since(now_ns, since_ns_) : 0)) / 1e6;
     }
     uint64_t Captures(uint64_t frame) const {
         return captures_ + (paused_ ? Since(frame, since_frame_) : 0);
     }
-    // the last pause ended (Resume): its milliseconds and captures from its
-    // start, whether the numbers started over meanwhile or not, for the log
+    // the last completed pause in full, regardless of Restart, for the log
     double LastMs() const { return double(last_ns_) / 1e6; }
     uint64_t LastCaptures() const { return last_captures_; }
 
  private:
-    // b to a, never less than nothing (a capture numbering that started over)
+    // clamped at 0 (capture numbering can start over)
     template <typename T>
     static T Since(T a, T b) {
         return a > b ? a - b : T(0);
@@ -387,52 +329,45 @@ class DrawPause {
     bool paused_ = false;
     int64_t ns_ = 0;
     uint64_t captures_ = 0;
-    // where the numbers count a pause from (Restart moves it), and where the
-    // pause itself began
+    // since_*: counting start (Restart moves it); began_*: the pause's start
     int64_t since_ns_ = 0, began_ns_ = 0;
     uint64_t since_frame_ = 0, began_frame_ = 0;
     int64_t last_ns_ = 0;
     uint64_t last_captures_ = 0;
 };
 
-// The window's paints since the numbers last started over, for the harness's
-// present_stats: every paint, whichever renderer drew it, and on the native
-// renderer which of its frames each showed.
+// The window's paints since the last Reset, for present_stats: every paint,
+// whichever renderer drew it, and on the native renderer which frame each
+// showed.
 struct PaintLog {
     uint64_t paints = 0;
-    std::vector<double> interval_ms;  // between each paint and the one before
-    uint64_t native_paints = 0;       // paints the native renderer drew in
-    // of those, the ones showing a frame no paint had shown, and the ones
-    // showing the same frame again; and frames drawn that no paint showed
+    std::vector<double> interval_ms;  // since the previous paint
+    uint64_t native_paints = 0;
+    // of those, new frames and repeats; and frames drawn that no paint showed
     uint64_t shown = 0, repeats = 0, skipped = 0;
-    // from the game's Present of each frame shown to the first paint showing it
+    // game's Present to the first paint showing the frame
     std::vector<double> latency_ms;
-    // from the game's Present of each new frame the native renderer handed
-    // the window to its handing it over (Published), whether a paint ever
-    // showed it or not: the renderer's own latency, which a window that
-    // doesn't paint (off every monitor) can't hide
+    // game's Present to Published, shown or not: the renderer's own latency,
+    // visible even when the window doesn't paint (off every monitor)
     std::vector<double> publish_latency_ms;
 };
 
-// Keeps a PaintLog from each paint's time (steady-clock nanoseconds). Not
-// thread-safe: native_view.cpp holds a mutex around every call.
+// Times in steady-clock nanoseconds. Not thread-safe: native_view.cpp holds a
+// mutex around every call.
 class PaintRecorder {
  public:
-    // at most this many intervals and latencies: about 18 minutes at 60 Hz
+    // about 18 minutes at 60 Hz
     static constexpr size_t kMaxSamples = size_t(1) << 16;
 
-    // A paint at `now_ns`. With `native`, it showed native frame `serial`
-    // (frames numbered from 1 as they were drawn, 0 none yet) from
-    // `source` (the frames' numbering: zero-copy outputs or uploaded
-    // pictures), which the game presented at `presented_ns`.
+    // With `native`, it showed frame `serial` (from 1; 0 none yet) of
+    // `source`'s numbering (zero-copy outputs or uploaded pictures).
     void Paint(int64_t now_ns, bool native, int source = 0, uint64_t serial = 0,
                int64_t presented_ns = 0) {
         log_.paints++;
         if (last_ns_ && log_.interval_ms.size() < kMaxSamples)
             log_.interval_ms.push_back(double(now_ns - last_ns_) / 1e6);
         last_ns_ = now_ns;
-        // a stretch of the native renderer's paints is counted on its own,
-        // as is one from the other source
+        // each run of native paints from one source counts on its own
         if (!native || source != source_) last_serial_ = 0;
         source_ = source;
         if (!native) return;
@@ -447,25 +382,21 @@ class PaintRecorder {
         if (presented_ns) {
             const double ms = double(now_ns - presented_ns) / 1e6;
             if (log_.latency_ms.size() < kMaxSamples) log_.latency_ms.push_back(ms);
-            // about the last 30 frames shown, for the debug overlay
+            // ~last 30 frames, for the debug overlay
             recent_latency_ms_ = recent_latency_ms_ > 0 ? recent_latency_ms_ * 0.97 + ms * 0.03 : ms;
         }
         last_serial_ = serial;
     }
 
-    // The native renderer handed the window a new frame at `now_ns`, which
-    // the game presented at `presented_ns`.
     void Published(int64_t now_ns, int64_t presented_ns) {
         if (presented_ns && log_.publish_latency_ms.size() < kMaxSamples)
             log_.publish_latency_ms.push_back(double(now_ns - presented_ns) / 1e6);
     }
 
-    // The numbers start over; the last paint's time and frame are kept, so
-    // the next paint's interval and frame are measured against them.
+    // keeps the last paint's time and frame to measure the next against
     void Reset() { log_ = PaintLog{}; }
     const PaintLog& Log() const { return log_; }
-    // the latency (PaintLog's latency_ms) of the frames shown lately, averaged
-    // and kept through Reset; 0 before any
+    // averaged latency_ms of recent frames, kept through Reset; 0 before any
     double RecentLatencyMs() const { return recent_latency_ms_; }
 
  private:
@@ -476,27 +407,24 @@ class PaintRecorder {
     uint64_t last_serial_ = 0;
 };
 
-// The game's frames for present_stats: when each of the newest `kept`
-// DxRnd::Presents ended (steady-clock nanoseconds), a ring, and how many
-// there have been in all. The ring holds about two minutes at 60 frames a
-// second, so a longer stretch's frame times are its last `kept` only; its
-// frames are counted from Total, which the harness notes where the stretch
-// starts. Not thread-safe: scene_capture.cpp holds a mutex around every call.
+// For present_stats: a ring of when the newest `kept` DxRnd::Presents ended
+// (steady-clock nanoseconds; ~2 minutes at 60 fps), plus the total count,
+// which the harness notes to count a longer stretch's frames. Not
+// thread-safe: scene_capture.cpp holds a mutex around every call.
 class PresentTimes {
  public:
     static constexpr size_t kKept = 8192;
 
     explicit PresentTimes(size_t kept = kKept) : times_(kept ? kept : 1) {}
 
-    // a Present ended at `now_ns`: the time since the one before, 0 for the first
+    // returns the time since the previous Present, 0 for the first
     int64_t Add(int64_t now_ns) {
         const int64_t since = total_ ? now_ns - times_[(total_ - 1) % times_.size()] : 0;
         times_[total_++ % times_.size()] = now_ns;
         return since;
     }
-    // every Present so far, kept or not
     uint64_t Total() const { return total_; }
-    // the kept ones that ended at or after `since_ns`, oldest first
+    // kept ones ending at or after `since_ns`, oldest first
     std::vector<int64_t> Since(int64_t since_ns) const {
         std::vector<int64_t> out;
         const uint64_t kept = std::min<uint64_t>(total_, times_.size());

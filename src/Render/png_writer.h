@@ -4,9 +4,8 @@
 #include <string>
 #include <vector>
 
-// Experimental: RGBA8 (R in the low byte) to an uncompressed PNG, so the
-// native view needs no image library, and back from one written here (the
-// test harness's screenshots). ReadPng takes nothing else: it can't inflate.
+// Experimental: RGBA8 (R in the low byte) to and from uncompressed PNG, with
+// no image library. ReadPng can't inflate, so it reads only PNGs written here.
 
 namespace band3::render {
 

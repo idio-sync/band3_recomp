@@ -6,75 +6,54 @@
 
 #include "src/Render/scene_capture.h"
 
-// Experimental: what the native view draws of a frame under RB3's even/odd
-// rendering (out/research/m3_design.md 4). ProcCounter, emulating 30 fps,
-// has a frame draw the world (proc_cmds 1: the venue, its crowd, shadows and
-// blends, resolved to the pre-process buffer) and the next post-process it
-// (2: post-processing on the saved buffer); both then copy the newest
-// post-processed picture to the screen (DxRnd::DoPostProcess) and draw their
-// own overlay (track, HUD) over it. So a post frame presents the world frame
-// before it with its own overlay, which its capture alone doesn't have: its
-// draws before post_boundary are no world. Composed, it has.
+// RB3's even/odd rendering (out/research/m3_design.md 4): ProcCounter,
+// emulating 30 fps, has one frame draw the world (proc_cmds 1, resolved to
+// the pre-process buffer) and the next post-process it (2). Both copy the
+// newest post-processed picture to the screen (DxRnd::DoPostProcess) and
+// draw their own overlay over it. A post frame's capture has no world, so it
+// is composed with the world frame before it.
 //
-// A world frame's capture is published as it is, its own world with its own
-// overlay, but the game presents the post buffer there, the last post
-// frame's picture (the world frame before it, post-processed), under the
-// world frame's overlay: so does the live view, which keeps that picture
-// (soft_raster.h's RasterOptions::post_buffer, ShowsPostBuffer). Drawn
-// alone (replay), it's its own world, post-processed as its parameters say.
-// Render checks pair the game's picture with a post frame's capture, where
-// the two are the same world and the same overlay (PresentsCapturedWorld).
+// The game shows a world frame as the last post buffer under its own
+// overlay; so does the live view (RasterOptions::post_buffer,
+// ShowsPostBuffer). Replay draws it with its own world, post-processed.
 //
-// With even/odd rendering off every frame is 7 (world, post and characters),
-// and nothing is composed.
+// With even/odd rendering off every frame is 7 and nothing is composed.
 
 namespace band3::render {
 
-// ProcCounter's ProcCmd bits (rb3-xenon rndobj/Rnd.h), as
-// ProcCounter::ProcCommands returns them: 7 every frame without even/odd
-// rendering (and on the first frame with it), else 1 and 2 by turns, and 0 on
-// frames that do neither when it emulates a lower rate
+// ProcCounter::ProcCommands' bits (rb3-xenon rndobj/Rnd.h): 7 without
+// even/odd rendering (and on its first frame), else 1 and 2 by turns, and 0
+// on frames doing neither at lower emulated rates
 inline constexpr uint32_t kProcWorld = 1;
 inline constexpr uint32_t kProcPost = 2;
 
-// whether the frame says what it drew: DxRnd::DoPostProcess ran, which
-// recorded post_boundary and proc_cmds (menus' frames don't all run it, nor
-// did captures from before)
+// DxRnd::DoPostProcess ran and recorded post_boundary and proc_cmds (not all
+// menu frames run it, nor did older captures)
 inline bool ProcKnown(const FrameCapture& fc) { return fc.post_boundary != FrameCapture::kNoPost; }
 
-// whether the frame drew its own world (or might have: unknown)
+// or might have: unknown
 inline bool DrawsWorld(const FrameCapture& fc) {
     return !ProcKnown(fc) || (fc.proc_cmds & kProcWorld) != 0;
 }
 
-// Whether the game's picture of this frame shows the world and overlay its
-// capture has, for a frame that says (ProcKnown): one that post-processed
-// the world it drew itself (7), or a post frame composed with the world
-// before it. A world frame presents the previous world, and a post frame
-// left uncomposed has none.
+// Whether the game's picture shows the capture's world and overlay: a 7
+// frame, or a post frame composed with the world before it. Render checks
+// compare only these.
 inline bool PresentsCapturedWorld(const FrameCapture& fc) {
     if (!(fc.proc_cmds & kProcPost)) return false;
     return (fc.proc_cmds & kProcWorld) || fc.composed;
 }
 
-// Whether the game's picture of the frame is the post buffer as the last
-// post frame left it (its picture before the overlay), under the frame's own
-// overlay: a frame that says what it drew and post-processed nothing, a world
-// frame (1) or one that drew neither (0). DxRnd::DoPostProcess copies the
-// post buffer to the screen every frame (CopyPostProcess), and only a post
-// frame's FinishPostProcess makes it anew (SavePostBuffer).
+// Whether the game shows the last post buffer under this frame's overlay
+// (frames 1 and 0): DoPostProcess copies it to the screen every frame
+// (CopyPostProcess), and only a post frame's FinishPostProcess remakes it
+// (SavePostBuffer).
 inline bool ShowsPostBuffer(const FrameCapture& fc) {
     return ProcKnown(fc) && !(fc.proc_cmds & kProcPost);
 }
 
-// What a frame drew under even/odd rendering, for the native renderer's
-// numbers by kind of frame (native_view.cpp): the world (1), which the live
-// view shows the post buffer for, drawing the world's texture passes and the
-// overlay; post-processing (2), the world frame's world composed in and
-// drawn, then post-processed; neither (0), between them when the background
-// runs at a lower rate (the post buffer again); or everything (7: even/odd
-// rendering off, its first frame, the background every frame) and frames that
-// don't say (menus), which draw their own world.
+// For native_view.cpp's per-kind stats: kWorld 1, kPost 2, kBetween 0, kFull 7
+// or unknown (menus)
 enum class FrameKind { kWorld, kPost, kBetween, kFull };
 inline constexpr int kFrameKinds = 4;
 inline FrameKind KindOf(const FrameCapture& fc) {
@@ -94,65 +73,47 @@ inline const char* FrameKindName(FrameKind k) {
     return "full";
 }
 
-// Whether the frame's capture alone draws the game's whole picture of it: it
-// began with capture on (FrameCapture::whole), and it presents its own world
-// (PresentsCapturedWorld) or doesn't say. The native renderer starts showing
-// frames on the window (F8) from one that does, rather than from the part of
-// a frame captured as capture turned on, a post frame with no world before
-// it, or a world frame, whose picture is a post buffer it doesn't have yet.
+// Whether the capture alone draws the game's whole picture, so the native
+// view (F8) can start showing frames from it
 inline bool StartsPicture(const FrameCapture& fc) {
     return fc.whole && (!ProcKnown(fc) || PresentsCapturedWorld(fc));
 }
 
-// The most game frames after the post frame whose picture it is that the
-// live view shows the post buffer (RasterOptions::post_buffer): even/odd
-// rendering's longest period (frame_pacing.h, 6 at background_fps 20 and
-// refresh_rate 120) and frames the live view didn't get to, with room to
-// spare; one older is another moment's (the view was off, or the capture),
-// and the frame draws its own world instead.
+// How old a kept post buffer may be and still be shown: even/odd rendering's
+// longest period (6, frame_pacing.h) plus dropped frames, with room to spare.
+// Older means the view was off; the frame draws its own world instead.
 inline constexpr uint64_t kPostBufferFrames = 16;
 
-// whether a post buffer from game frame `kept` (0 none) is for `fc`'s
+// `kept` is a game frame, 0 none
 inline bool PostBufferFor(const FrameCapture& fc, uint64_t kept) {
     return kept && kept < fc.game_frame && fc.game_frame - kept <= kPostBufferFrames;
 }
 
-// the game frame whose world `fc` draws: the world frame it's composed with,
-// or its own
 inline uint64_t WorldFrameOf(const FrameCapture& fc) {
     return fc.composed && fc.world_frame ? fc.world_frame : fc.game_frame;
 }
 
-// Whether a pre-process buffer kept from the world of game frame `kept` (0
-// none: soft_raster.h's RasterOptions::pre_buffer) is the one `fc`'s world
-// reads: from its world frame or the last few before it. The same frame's
-// counts, for a frame drawn again (new options, a screenshot): the game's
-// world reads its own last frame there, which a still screen has the same.
+// Whether the pre-process buffer kept from game frame `kept` (0 none,
+// RasterOptions::pre_buffer) is what `fc`'s world reads. The same frame
+// counts, for a redraw: the game reads its own last frame, the same on a
+// still screen.
 inline bool PreBufferFor(const FrameCapture& fc, uint64_t kept) {
     const uint64_t world = WorldFrameOf(fc);
     return kept && kept <= world && world - kept <= kPostBufferFrames;
 }
 
-// `frame` (a frame that drew no world) with `world`'s in front of its overlay:
-// world's draws before its post_boundary and the passes they're in, then
-// frame's texture passes from before its own (carried ones, say, that its
-// overlay samples; those world already has are left out), then frame's draws
-// from its post_boundary on, which is where the result's is. Its other
-// fields are frame's (its post-processing and gamma ramp too, which the game ran on world's
-// picture), but composed (1) and world_frame (world's game_frame), the clear
-// colour (world's, whose back buffer it shows) and the cameras (world's,
-// then frame's others);
-// counts of what was skipped, decoded and so on are the two frames' together,
-// and the render targets sampled, missing and filtered are counted again over
-// what it has. frame's back-buffer draws before its post_boundary are left
-// out (a post frame has none of the world's to draw).
+// `frame` (which drew no world) with `world`'s world before its overlay:
+// world's draws before its post_boundary and their passes, then frame's
+// texture passes before its boundary (minus those world has), then frame's
+// draws from its boundary, the result's boundary. Other fields are frame's
+// (its post-processing and gamma ran on world's picture), except composed,
+// world_frame, the clear colour (world's) and cameras (world's, then
+// frame's others). Counts are summed; the render target counts are redone.
 std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const FrameCapture& frame);
 
-// render targets the frame's draws sample (as their diffuse texture, or as
-// s5: the shadow map), by (texture, version), and of those no pass in it
-// made, the ones in `left_out` (made by a pass whose draws were all left out:
-// FrameCapture::rt_filtered_keys) and how many others: FrameCapture::
-// rt_sampled, rt_filtered_keys and rt_missing
+// FrameCapture::rt_sampled, rt_filtered_keys and rt_missing: render targets
+// sampled (as diffuse or s5, the shadow map) by (texture, version); of those
+// no pass made, the ones in `left_out` and the count of others
 void CountRenderTargets(const FrameCapture& fc, const std::vector<uint64_t>& left_out,
                         uint32_t& sampled, uint32_t& missing, std::vector<uint64_t>& filtered);
 

@@ -1,17 +1,13 @@
-// Experimental: the camera motion blur's object pass, for the GPU backend
-// (gpu_view.cpp's post_process): each mesh RB3 draws into the velocity
-// texture with its own motion (scene_capture.h's VelocityObject), over the
-// camera pass's texels (post.hlsl's PSVelocity), as RndVelocityBuffer::
-// DrawMesh draws it. The maths is post_model.hlsli's VelocityObject*, which
-// the CPU runs too (post_model.cpp's ObjectPass), from VelocityObjectPass
-// (post_params.hlsli).
+// The GPU backend's motion blur object pass (RndVelocityBuffer::DrawMesh;
+// VelocityObject), over PSVelocity's texels. Maths in post_model.hlsli's
+// VelocityObject*, shared with the CPU's ObjectPass.
 //
 // Registers follow SDL_gpu's layout as mesh.hlsl's do: vertex resources in
-// space0 (the frame's bones, mesh.hlsl's buffer), vertex uniforms in space1,
-// pixel resources in space2, pixel uniforms in space3.
+// space0 (mesh.hlsl's bones buffer), vertex uniforms in space1, pixel
+// resources in space2, pixel uniforms in space3.
 //
-// tools/shaders/build_shaders.py compiles it into velocity_shaders.gen.h; run
-// it after changing this file or the .hlsli it includes.
+// tools/shaders/build_shaders.py compiles it into velocity_shaders.gen.h;
+// rerun it after changing this file or the .hlsli it includes.
 
 #ifdef __spirv__
 #define VK_BINDING(n, set) [[vk::binding(n, set)]]
@@ -31,13 +27,11 @@ VK_BINDING(0, 1) cbuffer ObjectVertexUniforms : register(b0, space1) {
     VelocityObjectPass vobj;
 };
 
-// The frame's bones as gpu_view.cpp packs them, 64 bytes each: an object's
-// palette entries, this frame's from vobj.mesh.z and the last frame's after
-// them, each its three rows (VS c9.. and c129..) and a fourth unread
+// 64 bytes per entry: this frame's palette from vobj.mesh.z, then the last
+// frame's; three rows each (VS c9.. and c129..), a fourth unread
 VK_BINDING(0, 0) ByteAddressBuffer bones : register(t0, space0);
 
-// the scene's depth as the world's draws left it (kNearW / w, 0 where nothing
-// drew), read texel for texel as the game's pixel shader reads s9 (point)
+// kNearW / w, 0 where nothing drew; point-read as the game's s9
 VK_SAMPLER VK_BINDING(0, 2) Texture2D<float> depth_tex : register(t0, space2);
 VK_SAMPLER VK_BINDING(0, 2) SamplerState depth_sampler : register(s0, space2);
 
@@ -58,15 +52,12 @@ struct VertexIn {
     VK_LOCATION(6) float4 tan : TEXCOORD6;
 };
 
-// this frame's clip position, as the game's vertex shader gives it, and the
-// last frame's
 struct ObjectOut {
     float4 pos : SV_Position;
     float4 cur : TEXCOORD0;
     float4 prev : TEXCOORD1;
 };
 
-// palette entry `entry`'s world position of `at`
 float3 PaletteWorld(uint entry, float4 at) {
     const uint a = entry * 64;
     return float3(dot(asfloat(bones.Load4(a)), at), dot(asfloat(bones.Load4(a + 16)), at),
@@ -92,9 +83,7 @@ ObjectOut VSVelocityObject(VertexIn v) {
     ObjectOut o;
     o.cur = VelocityObjectClip(vobj, cur, false);
     o.prev = VelocityObjectClip(vobj, prev, true);
-    // on D3D9's pixel centres, half a pixel right and down (mesh.hlsl's
-    // clip_offset), and clipped at the camera's near plane, depth 1 - near /
-    // w (VelocityObjectDepth)
+    // half a pixel for D3D9's pixel centres; z gives VelocityObjectDepth
     o.pos = float4(o.cur.x + vobj.target.z * o.cur.w, o.cur.y - vobj.target.w * o.cur.w,
                    o.cur.w - vobj.depth_range.x, o.cur.w);
     return o;

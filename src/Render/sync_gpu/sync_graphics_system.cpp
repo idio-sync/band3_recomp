@@ -9,8 +9,8 @@
 #include <rex/system/xthread.h>
 #include <rex/ui/graphics_provider.h>
 #include <rex/ui/presenter.h>
-// the provider the SDK's runtime was built with, by its public define on
-// rex::runtime: REX_HAS_D3D12 (Windows) or REX_HAS_VULKAN (Linux)
+// the provider the SDK's runtime was built with (public defines on
+// rex::runtime)
 #if defined(REX_HAS_D3D12) && REX_HAS_D3D12
 #define BAND3_SYNC_PRESENT_D3D12 1
 #define BAND3_SYNC_PRESENT_VULKAN 0
@@ -32,7 +32,7 @@
 #endif
 #include <windows.h>
 #elif defined(__linux__)
-// a thread's CPU clock (pthread_getcpuclockid), for its CPU time
+// pthread_getcpuclockid
 #include <pthread.h>
 #include <time.h>
 #define BAND3_THREAD_CPU_CLOCK 1
@@ -68,9 +68,7 @@ namespace {
 
 std::atomic<Band3GraphicsSystem*> g_active{nullptr};
 
-// The registers the guest may know of, register_table.inc's (an X-macro list
-// of XE_GPU_REGISTER(index, type, name)), for the command processor's
-// unknown-register counts. Without the file every register counts as known.
+// For unknown-register counts; without the file all count as known.
 #if __has_include(<rex/graphics/register_table.inc>)
 #define BAND3_HAVE_REGISTER_TABLE 1
 constexpr uint32_t kKnownRegisters[] = {
@@ -82,19 +80,17 @@ constexpr uint32_t kKnownRegisters[] = {
 #define BAND3_HAVE_REGISTER_TABLE 0
 #endif
 
-// the guest's GPU registers, as the plugin maps them (n7_design.md section 1)
+// as the plugin maps them
 constexpr uint32_t kMmioBase = 0x7FC80000;
 constexpr uint32_t kMmioMask = 0xFFFF0000;
 constexpr uint32_t kMmioSize = 0x10000;
 
-// Xenia's thread stacks for its GPU threads
+// Xenia's GPU thread stack size
 constexpr uint32_t kThreadStack = 128 * 1024;
 
-// how long the command processor's thread sleeps with nothing to run before
-// it looks again (Xenia's WorkerThreadMain: 100 ms), if no write wakes it
+// as Xenia's WorkerThreadMain
 constexpr auto kIdleWait = std::chrono::milliseconds(100);
-// how often the vblank thread reads the guest's refresh rate again, runs the
-// watchdog and logs the summary
+// vblank thread: refresh-rate reread, watchdog and summary intervals
 constexpr int64_t kModeReadNs = 1'000'000'000;
 constexpr int64_t kWatchNs = 1'000'000'000;
 constexpr int64_t kSummaryNs = 10'000'000'000;
@@ -105,9 +101,7 @@ int64_t NowNs() {
         .count();
 }
 
-// Guest physical memory for the command processor, as Xenia's
-// Memory::TranslatePhysical reaches it: the low 29 bits of an address, null
-// past the 512 MB.
+// As Xenia's Memory::TranslatePhysical: low 29 bits, null past 512 MB.
 struct PhysicalMemory final : GuestMemory {
     rex::memory::Memory* memory = nullptr;
 
@@ -119,10 +113,8 @@ struct PhysicalMemory final : GuestMemory {
     }
 };
 
-// The presenter's device loss (a GPU hang): the plugin rebuilds its device,
-// but the SDK's drawers here have nothing to rebuild with, so band3 stops,
-// through abort() so the crash trace logs what it can (on Windows the
-// device's DRED, crash_trace.h).
+// Unlike the plugin, nothing here can rebuild the device; abort() so the
+// crash trace gets DRED (Windows).
 [[maybe_unused]] void OnHostGpuLoss(bool is_responsible, bool statically_from_ui_thread) {
 #ifdef _WIN32
     constexpr const char* kTrace =
@@ -137,7 +129,6 @@ struct PhysicalMemory final : GuestMemory {
     std::abort();
 }
 
-// the guest's refresh rate, as the game asks for it
 double GuestRefreshHz() {
     rex::system::X_VIDEO_MODE mode{};
     rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
@@ -156,28 +147,24 @@ struct Band3GraphicsSystem::Impl {
 
     rex::runtime::FunctionDispatcher* dispatcher = nullptr;
     rex::system::KernelState* kernel_state = nullptr;
-    // VdSetGraphicsInterruptCallback's callback (high half) and its data
+    // VdSetGraphicsInterruptCallback's callback (high half) and data
     std::atomic<uint64_t> interrupt{0};
     std::atomic<bool> running{false};
-    // the vblank every millisecond: the frame cap's ask (cap_free_running) or
-    // native_vblank_free_running's, whichever is on; free_running is what the
-    // vblank thread reads, set under free_running_mutex so two changes at
-    // once can't leave it stale
+    // cap_free_running || native_vblank_free_running, set under
+    // free_running_mutex so concurrent changes can't leave it stale
     std::atomic<bool> free_running{false};
     std::atomic<bool> cap_free_running{false};
     std::mutex free_running_mutex;
     std::atomic<uint64_t> vblanks{0};
     std::atomic<bool> warned_no_thread{false};
 
-    // the command processor's thread sleeps on this until the write pointer moves
     std::mutex wake_mutex;
     std::condition_variable wake_cv;
     bool wake = false;
 
     rex::system::object_ref<rex::system::XHostThread> cp_thread;
     rex::system::object_ref<rex::system::XHostThread> vblank_thread;
-    // what reads a thread's CPU time, which the thread sets as it starts: a
-    // handle to it (Windows) or its CPU clock (Linux)
+    // set by the thread as it starts: a handle (Windows) or CPU clock (Linux)
     struct ThreadClock {
         std::atomic<void*> handle{nullptr};
 #if BAND3_THREAD_CPU_CLOCK
@@ -186,7 +173,6 @@ struct Band3GraphicsSystem::Impl {
         std::atomic<bool> has_clock{false};
 #endif
     };
-    // the command processor's and the vblank thread's
     ThreadClock cp_clock;
     ThreadClock vblank_clock;
 
@@ -205,13 +191,9 @@ struct Band3GraphicsSystem::Impl {
         SyncCpHooks hooks;
         hooks.interrupt = [this](uint32_t source, uint32_t cpu) { DispatchInterrupt(source, cpu); };
         hooks.write_pointer_updated = [this] { Wake(); };
-        // A poll that didn't match: Xenia sleeps wait / 0x100 ms for a long
-        // wait. std::this_thread::sleep_for on Windows can take a whole
-        // system timer tick (15.6 ms) without timeBeginPeriod, which would
-        // hold every frame behind the vsync wait; band3's high-resolution
-        // timer wakes within a few hundred microseconds. A short wait (under
-        // 0x100) yields, as Xenia's does, unless native_sync_short_wait_us
-        // asks for a sleep instead (to try against the spin a yield makes).
+        // pacing::SleepFor, not sleep_for: on Windows that can take a whole
+        // 15.6 ms timer tick and stall every frame behind the vsync wait.
+        // Short waits yield as in Xenia unless native_sync_short_wait_us.
         hooks.wait = [](uint32_t wait) {
             if (wait >= 0x100) {
                 pacing::SleepFor(int64_t(wait / 0x100) * 1'000'000);
@@ -221,9 +203,7 @@ struct Band3GraphicsSystem::Impl {
                 std::this_thread::yield();
             }
         };
-        // the first swap's words are a layout check and native_query_log's
-        // lines were asked for; the rest is something the processor didn't
-        // expect
+        // all but the first swap and query log lines are unexpected
         hooks.log = [](const std::string& line) {
             if (line.find("first XE_SWAP") != std::string::npos ||
                 line.starts_with("sync gpu: query log:"))
@@ -240,15 +220,12 @@ struct Band3GraphicsSystem::Impl {
         return config;
     }
 
-    // why the vblank is free-running, for the log
     static std::string FreeRunningWhy() {
         return REXCVAR_GET(native_vblank_free_running)
                    ? "(native_vblank_free_running)"
                    : "while the frame cap paces the game";
     }
 
-    // free_running from the frame cap's ask and native_vblank_free_running,
-    // logged when it changes
     void ApplyFreeRunning() {
         std::lock_guard lock(free_running_mutex);
         const bool free = REXCVAR_GET(native_vblank_free_running) || cap_free_running.load();
@@ -265,8 +242,8 @@ struct Band3GraphicsSystem::Impl {
         wake_cv.notify_one();
     }
 
-    // Xenia's GraphicsSystem::DispatchInterruptCallback: the guest's handler
-    // on this (kernel) thread, as hardware thread `cpu`
+    // Xenia's GraphicsSystem::DispatchInterruptCallback, on this kernel
+    // thread as hardware thread `cpu`
     void DispatchInterrupt(uint32_t source, uint32_t cpu) {
         const uint64_t packed = interrupt.load(std::memory_order_acquire);
         const uint32_t callback = uint32_t(packed >> 32);
@@ -282,8 +259,7 @@ struct Band3GraphicsSystem::Impl {
         dispatcher->ExecuteInterrupt(thread->thread_state(), callback, args, std::size(args));
     }
 
-    // Xenia's CommandProcessor::WorkerThreadMain, without its spin: run what
-    // the guest wrote, then sleep until it writes more
+    // Xenia's CommandProcessor::WorkerThreadMain, without its spin
     int CpMain() {
         CaptureCurrentThread(cp_clock);
         while (running.load(std::memory_order_acquire)) {
@@ -296,8 +272,8 @@ struct Band3GraphicsSystem::Impl {
         return 0;
     }
 
-    // Xenia's vsync worker and MarkVblank, on a fixed beat (FrameCapSchedule)
-    // rather than its 1 ms poll; and the watchdog and the summary
+    // Xenia's vsync worker and MarkVblank on a fixed beat (FrameCapSchedule)
+    // instead of its 1 ms poll; plus the watchdog and summary
     int VblankMain() {
         CaptureCurrentThread(vblank_clock);
         pacing::FrameCapSchedule schedule;
@@ -326,8 +302,7 @@ struct Band3GraphicsSystem::Impl {
             schedule.SetPeriod(VblankPeriodNs(hz, free));
             const int64_t go = schedule.Next(now);
             if (go > now) {
-                // the vblank paces the game only without the frame cap: then
-                // to the beat (a spin at the end); free-running, a sleep will do
+                // only a pacing vblank needs WaitUntil's precision
                 if (free)
                     pacing::SleepFor(go - now);
                 else
@@ -359,8 +334,6 @@ struct Band3GraphicsSystem::Impl {
         return 0;
     }
 
-    // `clock` reads the calling thread's times from now on, where the
-    // platform can (Windows, Linux)
     static void CaptureCurrentThread(ThreadClock& clock) {
 #ifdef _WIN32
         HANDLE self = nullptr;
@@ -375,8 +348,7 @@ struct Band3GraphicsSystem::Impl {
 #endif
     }
 
-    // the CPU time (kernel and user) of the thread `clock` reads, -1 if it
-    // can't be told
+    // kernel + user; -1 if unknown
     static double ThreadMs(const ThreadClock& clock) {
 #ifdef _WIN32
         HANDLE h = static_cast<HANDLE>(clock.handle.load());
@@ -407,7 +379,7 @@ struct Band3GraphicsSystem::Impl {
         static_cast<Impl*>(context)->cp.MmioWrite(addr, value);
     }
 
-    // a kernel thread running `body`, named, started; null if it couldn't be
+    // null on failure
     rex::system::object_ref<rex::system::XHostThread> StartThread(const char* name,
                                                                   std::function<int()> body) {
         auto thread = rex::system::object_ref<rex::system::XHostThread>(
@@ -423,18 +395,15 @@ struct Band3GraphicsSystem::Impl {
 
 Band3GraphicsSystem::Band3GraphicsSystem() : impl_(std::make_unique<Impl>()) {
     g_active.store(this, std::memory_order_release);
-    // F4 changes it at once
     rex::cvar::RegisterChangeCallback("native_query_sample_count",
                                       [this](std::string_view, std::string_view) {
                                           impl_->cp.SetFakeSampleCount(
                                               REXCVAR_GET(native_query_sample_count));
                                       });
-    // turned on, the next ZPD packets are logged
     rex::cvar::RegisterChangeCallback("native_query_log", [this](std::string_view,
                                                                  std::string_view) {
         impl_->cp.SetQueryLog(REXCVAR_GET(native_query_log));
     });
-    // the vblank thread reads it each beat, so a change applies at once
     impl_->ApplyFreeRunning();
     rex::cvar::RegisterChangeCallback("native_vblank_free_running",
                                       [this](std::string_view, std::string_view) {
@@ -455,8 +424,7 @@ X_STATUS Band3GraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext*) {
     // idempotent, as IGraphicsSystem asks
     if (impl_->presenter) return X_STATUS_SUCCESS;
 #if BAND3_SYNC_PRESENT_D3D12
-    // what the xenos plugin presents with: the SDK's Direct3D 12 provider and
-    // its presenter (n7_design.md decision 3)
+    // what the xenos plugin presents with
     std::unique_ptr<rex::ui::d3d12::D3D12Provider> provider =
         rex::ui::d3d12::D3D12Provider::Create();
     if (!provider) {
@@ -474,8 +442,7 @@ X_STATUS Band3GraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext*) {
     REXLOG_INFO("sync gpu: presenting with the SDK's Direct3D 12 provider and presenter");
     return X_STATUS_SUCCESS;
 #elif BAND3_SYNC_PRESENT_VULKAN
-    // the same with the SDK's Vulkan provider (Linux), asked for presentation
-    // only, not GPU emulation. Written against the SDK's headers; untested.
+    // untested
     std::unique_ptr<rex::ui::vulkan::VulkanProvider> provider =
         rex::ui::vulkan::VulkanProvider::Create(/*with_gpu_emulation=*/false,
                                                 /*with_presentation=*/true);
@@ -494,8 +461,7 @@ X_STATUS Band3GraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext*) {
     REXLOG_INFO("sync gpu: presenting with the SDK's Vulkan provider and presenter");
     return X_STATUS_SUCCESS;
 #else
-    // startup keeps the emulated GPU here (CanPresentNativeOnly), so this
-    // isn't reached
+    // unreachable: startup keeps the emulated GPU (CanPresentNativeOnly)
     REXLOG_ERROR("sync gpu: this build has neither Direct3D 12 nor Vulkan to present with; "
                  "start with renderer emulated or both");
     return X_STATUS_NOT_IMPLEMENTED;
@@ -567,7 +533,7 @@ void Band3GraphicsSystem::Shutdown() {
     if (!s.running.exchange(false)) return;
     s.cp.RequestStop();
     s.Wake();
-    // as Xenia's GraphicsSystem::Shutdown waits for its threads
+    // as Xenia's GraphicsSystem::Shutdown
     for (auto* thread : {&s.cp_thread, &s.vblank_thread}) {
         if (*thread) {
             (*thread)->Wait(0, 0, 0, nullptr);

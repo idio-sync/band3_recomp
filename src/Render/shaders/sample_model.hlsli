@@ -1,38 +1,22 @@
-// Experimental: how the native view's backends read a material's texture
-// through the sampler its fetch constant describes (scene_capture.h's
-// TexSampler, packed by sample_model.h's PackSampler), for both of them:
-// mesh.hlsl compiles it as HLSL, soft_raster.cpp as C++ for the CPU, with
-// HLSL's types and functions from its own shim, so the two can't drift apart
-// (as shade.hlsli does for lighting). Keep to what both languages share:
-// float2/4 built from every component, .x .y .z .w, the shim's functions
-// (soft_raster.cpp), `f` on float literals, and the includer's macros:
-// SAMPLE_TEX, the texture's parameters (a texture array and the layer on the
-// GPU, its levels on the CPU), SAMPLE_ARGS, those passed on,
-// SAMPLE_LOAD(level, x, y), its texel there (in range: the addressing below
-// has wrapped or clamped it), and SAMPLE_LOOP, HLSL's [loop] (nothing in C++).
+// Texture sampling by a fetch constant's sampler (TexSampler, packed by
+// PackSampler), shared by both backends: mesh.hlsl compiles it as HLSL,
+// soft_raster.cpp as C++ through its shim. Keep to what both languages share:
+// float2/4 built from every component, .x .y .z .w, the shim's functions, `f`
+// on float literals, and the includer's macros: SAMPLE_TEX (the texture's
+// parameters), SAMPLE_ARGS (them passed on), SAMPLE_LOAD(level, x, y) (an
+// in-range texel) and SAMPLE_LOOP (HLSL's [loop]).
 //
-// A sample is the D3D one: the footprint of a pixel in the texture, from its
-// uv's derivatives across the screen (the GPU's ddx_fine/ddy_fine, which the
-// CPU works out the same way from the triangle's attribute plane), in level
-// 0's texels; LOD log2 of its longer side (divided by the probes, with
-// anisotropy) plus the sampler's bias; magnification at LOD 0 or less, with
-// its own filter; the level, or the two around it, from the LOD clamped to
-// the sampler's mip range and the levels the texture has; each point or
-// bilinear (texel centres at .5); with anisotropy up to its ratio of such
-// samples spread along the footprint's long side, averaged (the Vulkan
-// spec's approximation; its sides clamped to a texel for the ratio, as
-// D3D's is, so a magnified footprint takes one). Addressing per axis, as the sampler's clamp modes
-// say: repeat, mirror, clamp to the edge or to the border, or mirror once
-// then clamp (halfway is drawn as the edge). The Xenos' own filter weights
-// and LOD precision aren't modelled.
+// D3D-style: LOD from the uv derivatives' footprint in level 0 texels, plus
+// bias; anisotropy averages up to its ratio of probes along the long side
+// (Vulkan's approximation). Mirror-once-then-clamp's halfway mode draws as
+// the edge. The Xenos' own filter weights and LOD precision aren't modelled.
 
-// TexSampler as a uint4: x the modes, y the LOD bias's bits, z the mip range
-// and the texture's last level, w the anisotropy
+// x the modes, y the LOD bias's bits, z the mip range and the texture's last
+// level, w the anisotropy
 static const uint kSampleFiltered = 1u << 11;
 
-// texel i of n along an axis, by clamp mode `mode`; -1 is the border. i is
-// within a period of the texture either side, where SampleWrap's coordinate
-// puts it: no modulo, which costs the GPU dearly
+// -1 is the border. i is within a period either side (SampleWrap), so no
+// modulo, which costs the GPU dearly
 int SampleAddress(int i, int n, uint mode) {
     if (mode == 0u) return i < 0 ? i + n : i >= n ? i - n : i;
     if (mode == 1u) {
@@ -47,16 +31,14 @@ int SampleAddress(int i, int n, uint mode) {
     return j < 0 ? 0 : j >= n ? n - 1 : j;
 }
 
-// a coordinate brought near the texture first, so it stays exact in float
-// and in int: the wrapping modes by their period, the others to a texture
-// either side, past which every mode reads the same
+// brings u near the texture so it stays exact in float and int; past a
+// texture either side the non-wrapping modes all read the same
 float SampleWrap(float u, uint mode) {
     if (mode == 0u) return u - floor(u);
     if (mode == 1u) return u - 2.0f * floor(u * 0.5f);
     return u < -2.0f ? -2.0f : u > 2.0f ? 2.0f : u;
 }
 
-// texel x, y of a level (addressed already: -1 the border), or the border
 float4 SampleTap(SAMPLE_TEX, uint level, int x, int y, float4 border) {
     return x < 0 || y < 0 ? border : SAMPLE_LOAD(level, x, y);
 }
@@ -66,7 +48,6 @@ float4 SampleLerp(float4 a, float4 b, float t) {
                   a.w + (b.w - a.w) * t);
 }
 
-// one level at u, v (wrapped), point or bilinear
 float4 SampleLevelAt(SAMPLE_TEX, uint2 size, uint level, bool bilinear, uint4 s, float u, float v) {
     const int w = int(max(size.x >> level, 1u));
     const int h = int(max(size.y >> level, 1u));
@@ -91,8 +72,6 @@ float4 SampleLevelAt(SAMPLE_TEX, uint2 size, uint level, bool bilinear, uint4 s,
     return SampleLerp(top, bottom, y - fy);
 }
 
-// What a sample reads before its taps: the levels and their blend, the
-// filter, and the probes along the long side (step from one to the next)
 struct SamplePlan {
     uint level0;
     uint level1;
@@ -112,12 +91,9 @@ SamplePlan PlanSample(uint2 size, uint4 s, float2 dx, float2 dy) {
     const float pmax = max(px, py);
     const float pmin = min(px, py);
     const uint ratio = max(s.w, 1u);
-    // the probes: the ratio of the sides with the short one clamped to a
-    // texel, as D3D's anisotropic LOD has it (the D3D11.3 spec's 7.18.11:
-    // under a texel along the minor axis the ratio becomes max(1, major)),
-    // which is the host GPU's filter the game's picture comes from. So a
-    // footprint under a texel both ways is magnified with one sample, not
-    // probes a fraction of a texel apart that blur the axis it's 1:1 on
+    // the short side clamped to a texel, as D3D11.3 7.18.11 has it, so a
+    // magnified footprint takes one sample rather than blurring sub-texel
+    // probes
     float n = 1.0f;
     if (ratio > 1u && pmax > 1.0f) n = min(ceil(pmax / max(pmin, 1.0f)), float(ratio));
     const float lod = (pmax > 0.0f ? log2(pmax / n) : -64.0f) + asfloat(s.y);
@@ -144,14 +120,13 @@ SamplePlan PlanSample(uint2 size, uint4 s, float2 dx, float2 dy) {
     return p;
 }
 
-// The texture at uv, whose derivatives across the screen are dx and dy, by
-// sampler s; size is level 0's
+// size is level 0's
 float4 SampleTexture(SAMPLE_TEX, uint2 size, uint4 s, float2 uv, float2 dx, float2 dy) {
     const SamplePlan p = PlanSample(size, s, dx, dy);
     float4 sum = float4(0.0f, 0.0f, 0.0f, 0.0f);
     const float first = -0.5f * float(p.probes - 1u);
-    // each probe's one or two levels, as one loop: one copy of the level's
-    // taps in the GPU's code, not four (the shader reads five textures so)
+    // probes and levels in one loop, so the GPU code holds one copy of the
+    // taps (it's inlined for five textures)
     const uint two = p.blend > 0.0f ? 1u : 0u;
     const float k = 1.0f / float(p.probes);
     SAMPLE_LOOP for (uint tap = 0u; tap < (p.probes << two); tap++) {

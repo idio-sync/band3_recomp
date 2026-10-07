@@ -13,12 +13,10 @@ namespace {
 
 uint64_t RtKey(uint32_t tex, uint32_t version) { return uint64_t(tex) << 32 | version; }
 
-// draws [first, end) of `from` to the end of `to`, in the passes they're in
-// (cut to the range; the draws of a live capture are all in one), their
-// shades moved on by `shade_base`; texture passes only if `textures_only`,
-// and none of those `skip` has. A texture pass with no draws (one that only
-// cleared) is in the range it starts in, and one after the last draw in the
-// range that runs to the frame's end (`to_end`).
+// appends draws [first, end) of `from` with their passes cut to the range,
+// shades offset by `shade_base`; with `textures_only`, texture passes only,
+// minus those in `skip`. A clear-only texture pass belongs to the range it
+// starts in; one after the last draw, to the range with `to_end`.
 void AppendRange(FrameCapture& to, const FrameCapture& from, uint32_t first, uint32_t end,
                  int32_t shade_base, bool textures_only, bool to_end,
                  const std::set<uint64_t>* skip = nullptr) {
@@ -44,7 +42,6 @@ void AppendRange(FrameCapture& to, const FrameCapture& from, uint32_t first, uin
     }
 }
 
-// what both frames skipped, decoded and so on
 void AddCounts(FrameCapture& to, const FrameCapture& from) {
     for (uint32_t FrameCapture::*f :
          {&FrameCapture::cams, &FrameCapture::skipped_target, &FrameCapture::skipped_velocity,
@@ -96,27 +93,21 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
     fc.proc_cmds = frame.proc_cmds;
     fc.composed = 1;
     fc.world_frame = world.game_frame;
-    // post-processing as the post frame ran it, on the world it presents
+    // post-processing, motion blur object pass, gamma and cost: the post frame's
     fc.post = frame.post;
     fc.post_consts = frame.post_consts;
     fc.noise_map = frame.noise_map;
     fc.noise_sampler = frame.noise_sampler;
-    // the motion blur's object pass, which the post frame drew over its
-    // velocity texture from the world's depth
     fc.velocity_objects = frame.velocity_objects;
-    // and the gamma ramp the presenter applied to it
     fc.gamma = frame.gamma;
-    // what capturing it cost: the post frame's own
     fc.cost = frame.cost;
-    // the world's back buffer, cleared as the world frame cleared it, and its
-    // cameras, then the frame's others (the overlay's)
+    // the world's clear and cameras, then the frame's other (overlay) cameras
     fc.has_clear_color = world.has_clear_color;
     std::copy(std::begin(world.clear_color), std::end(world.clear_color), fc.clear_color);
     fc.cameras = world.cameras;
     for (const CameraView& c : frame.cameras)
         if (!CameraOf(fc, c.cam)) fc.cameras.push_back(c);
 
-    // shades: the world's, then the frame's
     fc.shades.reserve(world.shades.size() + frame.shades.size());
     fc.shades.insert(fc.shades.end(), world.shades.begin(), world.shades.end());
     fc.shades.insert(fc.shades.end(), frame.shades.begin(), frame.shades.end());
@@ -141,7 +132,7 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
         if (p.from_frame >= world.game_frame) fc.passes_own++;
         else fc.passes_carried++;
     }
-    // a target whose pass's draws were all left out, in either frame
+    // targets whose passes' draws were all left out, in either frame
     std::vector<uint64_t> left_out = world.rt_filtered_keys;
     left_out.insert(left_out.end(), frame.rt_filtered_keys.begin(), frame.rt_filtered_keys.end());
     CountRenderTargets(fc, left_out, fc.rt_sampled, fc.rt_missing, fc.rt_filtered_keys);

@@ -1,9 +1,6 @@
-// Experimental: what the native view's shading reads for one draw, packed
-// from its ShadeState by PackShade (shade_model.cpp). Shared by mesh.hlsl,
-// where it's part of the pixel uniforms, and the CPU (shade_model.h includes
-// it as C++, with float4 and uint4 its own), so both backends read the same
-// numbers. Everything is a float4 or uint4: HLSL's cbuffer packing and C++'s
-// layout are then the same.
+// One draw's shading inputs, packed by PackShade (shade_model.cpp). Included
+// by mesh.hlsl and, as C++, by shade_model.h. Only float4 and uint4, so HLSL's
+// cbuffer packing matches the C++ layout.
 
 // flags.x
 static const uint kShadeModel = 1u;        // RB3's shading; without it, the placeholder
@@ -28,49 +25,32 @@ static const uint kShadeAlphaCut = 131072u;
 static const uint kShadeLegacyLight = 262144u;
 // no PER_PIXEL: lit per vertex, Light() in the vertex shader
 static const uint kShadePerVertex = 524288u;
-// REFRACT_WORLD (option bit 46): the texture's rgb times the picture behind
-// the pixel as post-processing left it (soft_raster.h's RefractsWorld), read
-// where shade.hlsli's RefractUv puts it; set only where the backend has that
-// (an overlay draw, after the resolve)
+// REFRACT_WORLD (option bit 46): only on overlay draws after the resolve
 static const uint kShadeRefract = 1048576u;
-// ENABLE_AO with a point light: the point lights' occlusion is the vertex
-// colour's directional (SH) visibility toward each, AoShVertex, per vertex
+// ENABLE_AO with a point light: per-vertex SH occlusion (AoShVertex)
 static const uint kShadeAoSh = 2097152u;
-// NUM_PROJ, the projected light (kFakeSpot), per pixel: s5's alpha, sampled
-// where ProjUv puts the pixel, darkens the light by the multiply form
-// (PROJ_MULTIPLY, the stage's shadows), or masks the gobo's (s10) light added
+// NUM_PROJ (kFakeSpot): s5's alpha darkens (PROJ_MULTIPLY, the stage's
+// shadows) or masks the gobo's s10 light
 static const uint kShadeProjMultiply = 4194304u;
 static const uint kShadeProjGobo = 8388608u;
-// SHADOW_BUFFER, the character's self-shadow, per pixel: the shadow map
-// (s5, a depth the backend drew natively), read where ShadowCoord puts the
-// pixel, darkens the point lights (shade.hlsli's ShadowLit); set only where
-// the backend has that map
+// SHADOW_BUFFER, the character's self-shadow; only where the backend drew the
+// map
 static const uint kShadeShadow = 16777216u;
-// NORMAL_MAP, per pixel: s1 (DXN, x and y) tilts the normal in the tangent
-// frame the vertex shader builds (shade.hlsli's TextureFrame, MappedNormals);
-// set only where the backend has the map and the geometry its tangents
-// (Geometry::tangents)
+// NORMAL_MAP, s1 (DXN); only with the map and Geometry::tangents
 static const uint kShadeNormalMap = 33554432u;
-// NORM_DETAIL, with kShadeNormalMap: s14, a second normal map at uv times
-// c106.y, adds c106.x of its tilt
+// NORM_DETAIL, with kShadeNormalMap: s14
 static const uint kShadeDetailMap = 67108864u;
-// BILLBOARD (option bit 25, the crowd's impostor quads): the vertex shader
-// turns the mesh to the camera (shade.hlsli's Billboard), and its point
-// lights light it by their falloff alone, no N.L and no AO
+// BILLBOARD (option bit 25, the crowd's impostors): lit by falloff alone, no
+// N.L and no AO
 static const uint kShadeBillboard = 134217728u;
-// a movie's frame (scene_capture.h's IsMovie): the diffuse texture is its Y
-// plane, s2 (kShadeSpecMap) its cR and s3 (kShadeGlow) its cB, which
-// shade.hlsli's MovieRgb turns to RGB as the game's shader does; a plane the
-// backend doesn't have is neutral
+// a movie (IsMovie): the diffuse texture is Y, s2 (kShadeSpecMap) cR and s3
+// (kShadeGlow) cB; a missing plane is neutral
 static const uint kShadeYuv = 268435456u;
-// with kShadeRefract: s1, the material's refract normal map, read in the
-// normal map's slot at the texture's uv, moves where the picture behind is
-// read (RefractUv); without it (none bound, a format not decoded, or a
-// capture from before s1 was kept for it) the picture is read straight behind
+// with kShadeRefract: s1 is the refract normal map; without it the picture is
+// read straight behind
 static const uint kShadeRefractMap = 536870912u;
 
-// Register names are the game shaders' (scene_capture.h's kShadeRegs), PS
-// unless VS is said.
+// Register names are the game shaders' (kShadeRegs), PS unless VS is said.
 struct ShadeParams {
     uint4 flags;           // x the bits above, y point lights (0-2)
     float4 color;          // c0, the material colour
@@ -94,18 +74,12 @@ struct ShadeParams {
     float4 shadow[4];      // VS c40..c43: the shadow map's coordinate S = (c40 P, .., c43 P)
     float4 shadow_color;   // c107: 1 - the shadow's colour
     float4 shadow_dir;     // c108: the light camera's forward
-    // the normal map's: x c14.x (1 - de_normal), how much of its tilt the
-    // normal takes; y c106.x, the detail map's share, z c106.y, its uv scale
+    // x c14.x (1 - de_normal), the tilt's strength; y c106.x, the detail
+    // map's share; z c106.y, its uv scale
     float4 normal_map;
-    // VS c22, the texgen matrix's third row: the tangent frame's normal is
-    // c22.x T + c22.y B + c22.z N, as its tangent is c20's (TextureFrame)
-    float4 texgen_n;
-    // kShadeBillboard's camera right, up and forward (xyz): VS c16..c18's
-    // columns, the inverse view
+    float4 texgen_n;       // VS c22, the texgen matrix's third row
+    // camera right, up, forward (xyz): VS c16..c18's columns, the inverse view
     float4 billboard[3];
-    // REFRACT_WORLD's: x c119.w, how far the refract normal map moves where
-    // the picture behind is read, in clip units (RefractUv)
-    float4 refract;
-    // c19, specular2: the hair's strand highlight's second colour (Light)
-    float4 specular2;
+    float4 refract;        // x c119.w, the refract offset in clip units
+    float4 specular2;      // c19, the hair's second strand colour
 };

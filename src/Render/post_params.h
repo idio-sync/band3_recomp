@@ -5,33 +5,29 @@
 #include <cstdint>
 #include <cstring>
 
-// Experimental: what RB3's post-processing is set to do on a frame, as the
-// native view captures it (scene_capture.cpp), and the constants RB3's own
-// composite was given, to check the one against the other
-// (out/research/m4_design.md 2, m4_postproc.md 2 and 6). Plain data, so a
-// .cap keeps them as they are; both structs only ever grow at the end.
+// RB3's post-processing settings for a frame and the constants its composite
+// was given (out/research/m4_postproc.md). Plain data stored as-is in a .cap:
+// both structs only ever grow at the end.
 
 namespace band3::render {
 
-// Read at DxRnd::DoPostProcess's start, every frame: the RndPostProc that runs
-// (TheRnd's override, else RndPostProc::sCurrent) and TheDOFProc, as
-// BandDirector and the camera shot left them. Offsets are rb3-xenon's
-// (rndobj/PostProc.h, ColorXfm.h, DOFProc_NG.h), checked against the
-// recompiled RndPostProc::ColorXfmEnabled and NgDOFProc::Set.
+// Read at DxRnd::DoPostProcess's start: the RndPostProc that runs (TheRnd's
+// override, else RndPostProc::sCurrent) and TheDOFProc. Offsets are
+// rb3-xenon's (rndobj/PostProc.h, ColorXfm.h, DOFProc_NG.h).
 struct PostParams {
-    uint32_t valid = 0;     // read this frame (TheRnd was there)
-    uint32_t disabled = 0;  // TheRnd's mDisablePostProc (+0x105): no post-processing at all
-    uint32_t proc = 0;      // the RndPostProc read, 0 none (menus can have none)
-    // it's TheRnd's mPostProcOverride (+0x124), which runs alone: no DOF then
+    uint32_t valid = 0;     // TheRnd was there
+    uint32_t disabled = 0;  // TheRnd's mDisablePostProc (+0x105)
+    uint32_t proc = 0;      // 0 none (menus can have none)
+    // TheRnd's mPostProcOverride (+0x124), which runs alone: no DOF then
     uint32_t overridden = 0;
-    // the colour matrix AdjustColorXfm built (+0xB8, rows +0xB8 +0xC8 +0xD8):
-    // c' = c * M + v, Milo's row vectors
+    // AdjustColorXfm's matrix (+0xB8, rows 16 bytes apart): c' = c * M + v,
+    // Milo's row vectors
     float xfm[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
     float xfm_offset[3] = {};  // v (+0xE8)
-    // mColorModulation (+0x12C), flicker: scales M only. Read again at
-    // FinishPostProcess on frames that post-process: DoPost moves it on.
+    // mColorModulation (+0x12C), flicker: scales M only. Re-read at
+    // FinishPostProcess, as DoPost moves it on.
     float color_mod = 1;
-    // what the matrix is built from (RndColorXfm at +0x64)
+    // the matrix's inputs (RndColorXfm at +0x64)
     float hue = 0, saturation = 0, lightness = 0, contrast = 0, brightness = 0;
     float level_in_lo[4] = {}, level_in_hi[4] = {1, 1, 1, 1};
     float level_out_lo[4] = {}, level_out_hi[4] = {1, 1, 1, 1};
@@ -45,26 +41,24 @@ struct PostParams {
     // TheDOFProc (0x82CC6368), an NgDOFProc, as NgDOFProc::Set left it
     uint32_t dof = 0;
     uint32_t dof_enabled = 0;  // +0x2C: Set's max blur above 0
-    // +0x30, +0x34: the z-buffer values of the focal plane and of where the
-    // blur starts in front of it, focal * (1 - blur depth)
+    // +0x30, +0x34: z-buffer values of the focal plane and of where blur
+    // starts, focal * (1 - blur depth)
     float dof_scale = 0, dof_bias = 0;
     float dof_focal = 0;       // +0x38, world units
     float dof_blur_depth = 0;  // +0x3C
     float dof_min_blur = 0;    // +0x40
     float dof_max_blur = 0;    // +0x44
     float blur_width_scale = 1;  // RndPostProc::sDOFOverride's last (0x82C70440 + 0x18)
-    // TheRnd's copy of the world camera (+0xA4): near, far and z range
+    // TheRnd's copy of the world camera (+0xA4)
     uint32_t cam = 0;
     float cam_near = 0, cam_far = 0;
     float cam_zrange[2] = {};
-    // The noise (film grain) fields NgPostProc::CheckNoise reads
-    // (out/research/n1_post_noise.md 1): base scale (+0x130, +0x134), top
+    // Film grain, as NgPostProc::CheckNoise reads it
+    // (out/research/n1_post_noise.md): base scale (+0x130, +0x134), top
     // scale (+0x138), intensity (+0x13C, 0 off), stationary (+0x140),
     // midtone (+0x141), the map's RndTex (+0x14C, 0 none) and its texture's
-    // base address (physical, as a fetch constant has it), and the
-    // stationary seeds (NgPostProc's +0x20C, +0x210). The composite draws
-    // with PostConsts' c112/c113 (random seeds each frame); these check them,
-    // and give a world frame its grain (post_model.h's PlanPost).
+    // physical base address, and the stationary seeds (NgPostProc +0x20C,
+    // +0x210)
     float noise_base[2] = {};
     float noise_top = 0;
     float noise_intensity = 0;
@@ -75,49 +69,41 @@ struct PostParams {
     uint32_t noise_map_base = 0;
     float noise_seeds[2] = {};
     // the trails (blend previous): mTrailThreshold (+0x150) and
-    // mTrailDuration (+0x154), on (TheShaderMgr + 0x2F) where the threshold
-    // is under 1 and the duration over 0 (RndPostProc::BlendPrevious)
+    // mTrailDuration (+0x154)
     float trail_threshold = 0;
     float trail_duration = 0;
-    // The camera motion blur's (velocity blur: NgPostProc::DoVelocity,
-    // RndVelocityBuffer::Draw; out/research/n5_hub_soft.md 3): what
-    // RndVelocityBuffer::sSingleton (0x82E12BA0) holds as DoPostProcess
-    // starts, which a post frame's Draw then reprojects the pre-pass depth
-    // with. vel_read: the singleton has its velocity texture (+0x36C74,
-    // AllocateData ran); vel_on: the proc's mMotionBlurVelocity (+0x1A4);
+    // Camera motion blur (NgPostProc::DoVelocity, RndVelocityBuffer::Draw;
+    // out/research/n5_hub_soft.md): RndVelocityBuffer::sSingleton
+    // (0x82E12BA0) at DoPostProcess's start. vel_read: it has its velocity
+    // texture (+0x36C74); vel_on: the proc's mMotionBlurVelocity (+0x1A4);
     // vel_pre_depth: DxRnd's pre-pass depth texture (+0x340), without which
-    // Draw draws nothing; vel_same_cam: its mCam (+0xA8, the camera
-    // CacheCameraSettings cached) and mLastFrameCamera (+0x36C7C) are TheRnd's
-    // world camera, as Draw is given; vel_frame its mFrame (+0x36C70: frames
-    // since a shot started, CamShot::StartAnim resetting it) and vel_scale its
-    // last c122 (+0x36BE8, min(2, 41.67 / (ms + 1))). Zero in captures from
-    // before (no velocity blur).
+    // Draw draws nothing; vel_same_cam: its mCam (+0xA8) and
+    // mLastFrameCamera (+0x36C7C) are TheRnd's world camera; vel_frame: its
+    // mFrame (+0x36C70, frames since CamShot::StartAnim); vel_scale: its last
+    // c122 (+0x36BE8, min(2, 41.67 / (ms + 1))). Zero in older captures.
     uint8_t vel_read = 0;
     uint8_t vel_on = 0;
     uint8_t vel_pre_depth = 0;
     uint8_t vel_same_cam = 0;
     uint32_t vel_frame = 0;
     float vel_scale = 0;
-    // mViewProjXfm (+0x8), the world camera's view times projection as
-    // CacheCameraSettings left it, and the previous frame's, unk36bec[idx ^
-    // 1] (+0x36BEC + 64 * (idx ^ 1), idx +0x36C6C), which Draw uploads as PS
-    // c134..c137: both as the singleton keeps them (Hmx::Matrix4, rows)
+    // mViewProjXfm (+0x8) and the previous frame's, unk36bec[idx ^ 1]
+    // (+0x36BEC + 64 * (idx ^ 1), idx +0x36C6C), which Draw uploads as PS
+    // c134..c137 (Hmx::Matrix4, rows)
     float vel_view_proj[4][4] = {};
     float vel_prev_view_proj[4][4] = {};
-    // mDepthRangeValues (+0x48), which DrawRectDepth sets as PS c89 (near,
-    // far, and the depth texture's scale and bias back to z), and the
-    // camera's frustum (GetCamFrustum: mFrustumNear +0x58 and the four
-    // corner rays mFrustumCorners +0x68, 16 bytes apart), DrawRectDepth's
-    // vertices' TEXCOORD1 and 2
+    // mDepthRangeValues (+0x48), DrawRectDepth's PS c89 (near, far, depth
+    // scale and bias back to z), and the frustum: mFrustumNear (+0x58) and
+    // the four corner rays mFrustumCorners (+0x68, 16 bytes apart),
+    // DrawRectDepth's TEXCOORD1 and 2
     float vel_depth_range[4] = {};
     float vel_near[4] = {};
     float vel_corners[4][4] = {};
 };
 
-// What RB3's composite drew with, read at DxRnd::FinishPostProcess's start on
-// frames that post-process (the pixel shader constants from the device's
-// shadow, and TheShaderMgr's post flags), and what the DOF and bloom blurs
-// were given, to pin their taps.
+// What RB3's composite drew with, read at DxRnd::FinishPostProcess's start
+// (PS constants from the device's shadow, TheShaderMgr's post flags), and
+// what the DOF and bloom blurs were given.
 struct PostConsts {
     uint32_t valid = 0;  // FinishPostProcess ran this frame
     // c6 bloom colour, c15 half pixel, c24 DOF, c91 spotlights (x the
@@ -139,33 +125,29 @@ struct PostConsts {
     // first direction)
     uint32_t bloom_survey = 0;
     float bloom_offsets[15][4] = {}, bloom_weights[15][4] = {};
-    // TheShaderMgr + 0x25, below flags' range: NgSpotlightDrawer::RenderScene
-    // sets it each frame it runs, and it turns on the composite's spotlight
-    // term (option bit 51), rgb += s12.rgb * (c127.x + c127.y * s5.r) * c91.x
-    // with s12 the blurred depth volume and s5 the density map
-    // (out/research/spotlight_survey.md 2); 0 in captures from before
+    // TheShaderMgr + 0x25, set by NgSpotlightDrawer::RenderScene: the
+    // composite's spotlight term (option bit 51), rgb += s12.rgb * (c127.x +
+    // c127.y * s5.r) * c91.x, s12 the blurred depth volume and s5 the
+    // density map (out/research/spotlight_survey.md); 0 in older captures
     uint32_t spot_flag = 0;
-    // RndSoftParticleBuffer's two 320x180 surfaces (its PostProcessor + 4 and
-    // + 8, DxTex), read when its DoPost runs: the particles draw into [0],
-    // its blur goes [0] -> [1] -> [0], and the composite adds [0] (s4) where
-    // TheShaderMgr + 0x3F is set (out/research/softparticle_survey.md 1); 0
-    // when DoPost didn't run, and in captures from before
+    // RndSoftParticleBuffer's two 320x180 surfaces (PostProcessor + 4, + 8,
+    // DxTex) when its DoPost runs: particles draw into [0], the blur goes
+    // [0] -> [1] -> [0], the composite adds [0] (s4) where TheShaderMgr +
+    // 0x3F is set (out/research/softparticle_survey.md); 0 if DoPost didn't
+    // run, and in older captures
     uint32_t soft_surface[2] = {};
-    // the texture fetch constant of sampler 13 where TheShaderMgr + 0x2D (the
-    // noise) is set: the noise map NgPostProc::CheckNoise bound there, with
-    // the filter and wrap it set (FrameCapture::noise_map is its pixels);
-    // zero otherwise, and in captures from before
+    // sampler 13's fetch constant where TheShaderMgr + 0x2D is set: the noise
+    // map CheckNoise bound (FrameCapture::noise_map has its pixels); zero
+    // otherwise, and in older captures
     uint32_t noise_fetch[6] = {};
-    // c125, the trails' (NgPostProc::CheckBlendPrevious): (threshold,
-    // dt / duration, 1/3, 0), which the composite reads with the previous
-    // post frame (s14) where TheShaderMgr + 0x2F is set; zero in captures
-    // from before
+    // c125, from NgPostProc::CheckBlendPrevious: (threshold, dt / duration,
+    // 1/3, 0), read with the previous post frame (s14) where TheShaderMgr +
+    // 0x2F is set; zero in older captures
     float c125[4] = {};
-    // The velocity blur's, to check PostParams' against (zero in captures
-    // from before): PS c89 and c134..c137 as RndVelocityBuffer::Draw left
-    // them (the depth range and the previous view-projection its pass read),
-    // and the texture fetch constants of sampler 6 (the scene the composite
-    // blurs) and 10 (the velocity texture)
+    // The velocity blur's, to check PostParams' against (zero in older
+    // captures): PS c89 and c134..c137 as RndVelocityBuffer::Draw left them,
+    // and the fetch constants of sampler 6 (the scene) and 10 (the velocity
+    // texture)
     float c89[4] = {};
     float c134[4][4] = {};
     uint32_t scene_fetch[6] = {};
@@ -178,20 +160,18 @@ inline constexpr int kPostFlagDof = 0x26 - kPostFlagBase;
 inline constexpr int kPostFlagBloom = 0x27 - kPostFlagBase;
 inline constexpr int kPostFlagGlare = 0x28 - kPostFlagBase;
 inline constexpr int kPostFlagColorXfm = 0x2A - kPostFlagBase;
-// the noise, and its weight by the midtones (mNoiseMidtone)
 inline constexpr int kPostFlagNoise = 0x2D - kPostFlagBase;
 inline constexpr int kPostFlagNoiseMidtone = 0x2E - kPostFlagBase;
 // the trails: the previous post frame, faded, kept where it's brighter
 inline constexpr int kPostFlagBlendPrevious = 0x2F - kPostFlagBase;
-// the camera motion blur (NgPostProc::DoVelocity: RndVelocityBuffer::Draw
-// drew the velocity texture)
+// camera motion blur (NgPostProc::DoVelocity)
 inline constexpr int kPostFlagVelocity = 0x39 - kPostFlagBase;
 inline constexpr int kPostFlagSoft = 0x3F - kPostFlagBase;
-// and PostConsts::spot_flag's, before them
+// PostConsts::spot_flag's, outside flags
 inline constexpr int kPostFlagSpot = 0x25;
 
-// Hmx::Color::Pack, as the retail code does it: each channel times 255,
-// truncated (fctiwz, which saturates), its low byte; red lowest
+// Hmx::Color::Pack as retail does it: channel * 255 truncated (fctiwz,
+// saturating), low byte; red lowest
 inline uint32_t PackColor(const float c[3]) {
     auto chan = [](float v) {
         const float s = v * 255.0f;
@@ -205,8 +185,7 @@ inline uint32_t PackColor(const float c[3]) {
     return chan(c[0]) | chan(c[1]) << 8 | chan(c[2]) << 16;
 }
 
-// RndPostProc::ColorXfmEnabled (rb3-xenon PostProc.cpp:709-718, retail
-// 0x8242F7E8): whether the composite applies the colour matrix
+// RndPostProc::ColorXfmEnabled (retail 0x8242F7E8)
 inline bool ColorXfmEnabled(const PostParams& p) {
     return p.color_mod != 1 || p.hue != 0 || p.saturation != 0 || p.lightness != 0 ||
            p.contrast != 0 || p.brightness != 0 || PackColor(p.level_in_lo) != 0 ||
@@ -214,9 +193,8 @@ inline bool ColorXfmEnabled(const PostParams& p) {
            PackColor(p.level_out_hi) != 0xffffff;
 }
 
-// The colour matrix as the composite reads it, c92..c94 (NgPostProc::
-// ModulateColorXfm): output channel j = dot(rows[j].xyz, rgb) + rows[j].w, so
-// row j is M's column j times the modulation, and v[j]
+// c92..c94 (NgPostProc::ModulateColorXfm): out[j] = dot(rows[j].xyz, rgb) +
+// rows[j].w, so row j is M's column j times the modulation
 inline void ModulatedXfm(const PostParams& p, float rows[3][4]) {
     for (int j = 0; j < 3; j++) {
         for (int i = 0; i < 3; i++) rows[j][i] = p.xfm[i][j] * p.color_mod;
@@ -235,33 +213,30 @@ inline void DofConstants(const PostParams& p, float out[4]) {
     out[3] = p.dof_max_blur >= 0 ? p.dof_max_blur : 1.0f;
 }
 
-// PS c6 as NgPostProc::DoBloom sets it: the bloom colour times its intensity
+// PS c6 as NgPostProc::DoBloom sets it
 inline void BloomConstant(const PostParams& p, float out[4]) {
     for (int i = 0; i < 3; i++) out[i] = p.bloom_color[i] * p.bloom_intensity;
     out[3] = 0;
 }
 
-// whether NgPostProc::CheckNoise turns the noise on: an intensity and a map
+// as NgPostProc::CheckNoise decides
 inline bool NoiseEnabled(const PostParams& p) {
     return p.noise_intensity != 0 && p.noise_map != 0;
 }
 
-// whether RndPostProc::BlendPrevious turns the trails on (TheShaderMgr +
-// 0x2F): a threshold under 1 and a duration
+// as RndPostProc::BlendPrevious decides (TheShaderMgr + 0x2F)
 inline bool BlendPrevious(const PostParams& p) {
     return p.trail_threshold < 1 && p.trail_duration > 0;
 }
 
-// whether NgPostProc::DoVelocity would turn the velocity blur on (TheShaderMgr
-// + 0x39), as far as DoPostProcess's start can tell: the proc has it, Draw has
-// its texture, the pre-pass depth and the camera it cached, and its
-// AdvanceFrame makes this the shot's second frame or later (mFrame + 1 >= 2)
+// whether NgPostProc::DoVelocity would set TheShaderMgr + 0x39, as far as
+// DoPostProcess's start can tell. vel_frame >= 1: after AdvanceFrame this is
+// the shot's second frame or later.
 inline bool VelocityExpected(const PostParams& p) {
     return p.vel_read && p.vel_on && p.vel_pre_depth && p.vel_same_cam && p.vel_frame >= 1;
 }
 
-// PS c113 as NgPostProc::CheckNoise sets it: (base scale x, y, the top
-// scale or 1 if stationary, the intensity)
+// PS c113 as NgPostProc::CheckNoise sets it
 inline void NoiseConstant(const PostParams& p, float out[4]) {
     out[0] = p.noise_base[0];
     out[1] = p.noise_base[1];
@@ -269,10 +244,9 @@ inline void NoiseConstant(const PostParams& p, float out[4]) {
     out[3] = p.noise_intensity;
 }
 
-// RndColorXfm::AdjustColorXfm (rb3-xenon ColorXfm.cpp): the colour matrix
-// from hue, saturation, lightness, contrast, brightness and levels, in that
-// order, each applied after the ones before (Milo's Multiply(a, b): a then
-// b). RB3 keeps the result in the proc; this is for checking it.
+// RndColorXfm::AdjustColorXfm (rb3-xenon ColorXfm.cpp), to check the proc's
+// matrix: each step applied after the ones before (Milo's Multiply(a, b): a
+// then b)
 inline void AdjustColorXfm(const PostParams& p, float m[3][3], float v[3]) {
     struct Xfm {
         float m[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};

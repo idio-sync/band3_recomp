@@ -1,17 +1,12 @@
-// Experimental: the native view's full-screen passes, for the GPU backend
-// (gpu_view.cpp): what happens to the scene target between the world's draws
-// and the overlay's (soft_raster.h). RB3's post-processing (post_model.h):
-// the 4x downsample (or bright pass), the blurs, glare's pass over bloom's
-// level 0 and the composite, whose maths is post_model.hlsli's, which the CPU
-// runs too; and the resolve, the scene into the picture as it is (or, to check
-// the scene target, its alpha or its depth as grey) on frames without
-// post-processing; and the overlay's start in its multisampled target.
+// The GPU backend's full-screen passes between the world's draws and the
+// overlay's: RB3's post-processing (maths in post_model.hlsli, shared with
+// the CPU), the resolve for frames without it, and the overlay's start.
 //
 // Registers follow SDL_gpu's layout as mesh.hlsl's do: pixel resources in
 // space2, pixel uniforms in space3; the vertex shader has none.
 //
-// tools/shaders/build_shaders.py compiles it into post_shaders.gen.h; run it
-// after changing this file or the .hlsli it includes.
+// tools/shaders/build_shaders.py compiles it into post_shaders.gen.h; rerun
+// it after changing this file or the .hlsli it includes.
 
 #ifdef __spirv__
 #define VK_BINDING(n, set) [[vk::binding(n, set)]]
@@ -25,17 +20,12 @@
 #include "post_params.hlsli"
 #include "post_model.hlsli"
 
-// t0 the pass's source: the scene target's colour (alpha the bloom weight),
-// read texel for texel by the resolve and the composite, or the level a
-// downsample or blur reads, bilinear; t1 the scene's depth (kNearW / w,
-// larger is nearer, 0 where nothing drew); t2 the DOF's level; t3..t5
-// bloom's; t6 the spotlights' depth volume and t7 their density map, t8 the
-// soft-particle buffer, render targets of texture passes (gpu_view.cpp's,
-// arrays of one layer); t9 the noise map, a layer (params.noise_tex.z) of
-// a texture array, read texel by texel through sample_model.hlsli as the CPU
-// reads it; t10 the velocity texture (PSVelocity's, half the picture's
-// size); t11 the previous post frame the trails read (the live view's,
-// PSCompositeHistory). The samplers are linear and clamp, as RB3 sets them.
+// t0 the source (scene colour, alpha the bloom weight, or a downsample/blur
+// level); t1 the scene's depth (kNearW / w, 0 where nothing drew); t2 DOF;
+// t3..t5 bloom; t6..t8 spotlight volume, density, soft particles (one-layer
+// arrays); t9 the noise map, layer params.noise_tex.z, filtered by
+// sample_model.hlsli; t10 velocity; t11 the previous post frame. Samplers are
+// linear clamp, as RB3 sets them.
 VK_SAMPLER VK_BINDING(0, 2) Texture2D<float4> color_tex : register(t0, space2);
 VK_SAMPLER VK_BINDING(0, 2) SamplerState color_sampler : register(s0, space2);
 VK_SAMPLER VK_BINDING(1, 2) Texture2D<float> depth_tex : register(t1, space2);
@@ -92,7 +82,6 @@ float DepthViewGrey(float depth) {
     return saturate(1.0 - (log2(max(w, 1.0)) - 4.0) / 8.0);
 }
 
-// the pixel's centre in uv
 float2 PixelUv(PostIn i) { return i.pos.xy * params.target.zw; }
 
 float4 PSResolve(PostIn i) : SV_Target0 {
@@ -106,12 +95,9 @@ float4 PSResolve(PostIn i) : SV_Target0 {
     return float4(c.rgb, 1.0);
 }
 
-// The overlay's start, into its multisampled target (gpu_view.cpp's
-// begin_back): the picture in every sample, as DxRnd::DoPostProcess's
-// CopyPostProcess draws it into its 2x target, and the depth the overlay
-// starts with: 0, cleared as BeginTiling clears it, or with mode.y the
-// world's (a capture from before the cameras were kept, whose overlay went on
-// over the world's depth)
+// The overlay's multisampled target's start (begin_back): the picture, as
+// DxRnd::DoPostProcess's CopyPostProcess, and depth 0 as BeginTiling clears
+// it, or with mode.y the world's (old captures without cameras)
 struct OverlayStartOut {
     float4 color : SV_Target0;
     float depth : SV_Depth;
@@ -134,9 +120,8 @@ float4 PSDownsample(PostIn i) : SV_Target0 {
     return Quad(t[0], t[1], t[2], t[3], params.mode.y != 0u);
 }
 
-// a blur: mode.z taps of params.taps; with mode.w above 1 (a texture pass
-// drawn bigger than the game's: soft_raster.h's BlurSubTaps), each tap the
-// mean of mode.w samples half_pixel.zw apart, centred on it
+// mode.w > 1 (BlurSubTaps): each tap averages mode.w samples half_pixel.zw
+// apart
 float4 PSBlur(PostIn i) : SV_Target0 {
     const float2 uv = PixelUv(i);
     float4 sum = 0.0;
@@ -159,7 +144,6 @@ float4 PSBlur(PostIn i) : SV_Target0 {
     return sum;
 }
 
-// the glare pass over bloom's blurred level 0 (post_model.hlsli's Glare*)
 float4 PSGlare(PostIn i) : SV_Target0 {
     const float2 uv = PixelUv(i);
     const float2 stride = GlareStep(uv);
@@ -172,9 +156,7 @@ float4 PSGlare(PostIn i) : SV_Target0 {
     return float4(GlareOut(sum), 1.0);
 }
 
-// The velocity pass (post_model.hlsli's VelocityTexel), into a target half
-// the picture's size: each texel from the depth texel its uv lands in (the
-// game's s9, point), mode.yz the depth's size, in integers as the CPU's
+// depth point-sampled (s9) in integers as the CPU does; mode.yz its size
 float4 PSVelocity(PostIn i) : SV_Target0 {
     const uint2 v = uint2(i.pos.xy);
     const uint2 size = params.mode.yz;
@@ -183,14 +165,12 @@ float4 PSVelocity(PostIn i) : SV_Target0 {
     return VelocityTexel(params, PixelUv(i), depth_tex.Load(int3(int2(at), 0)) / kNearW);
 }
 
-// The composite's colour at a pixel, unsaturated (post_model.hlsli's
-// CompositeColor), and in `alpha` its alpha (CompositeAlpha)
+// unsaturated CompositeColor, and CompositeAlpha
 float3 CompositeAt(PostIn i, out float alpha) {
     const int3 at = int3(int2(i.pos.xy), 0);
     const float2 uv = PixelUv(i);
     const uint f = params.flags.x;
     float4 scene = color_tex.Load(at);
-    // the scene blurred along the motion, where the velocity texture says
     if ((f & kPostVelocity) != 0u) {
         const float4 v = velocity_tex.SampleLevel(velocity_sampler, uv, 0);
         if (VelocityBlurs(params, v)) {
@@ -220,8 +200,6 @@ float3 CompositeAt(PostIn i, out float alpha) {
     }
     float3 soft = 0.0;
     if ((f & kPostSoft) != 0u) soft = soft_tex.SampleLevel(soft_sampler, float3(uv, 0.0), 0).rgb;
-    // the noise map's two taps, by its sampler, at the levels their fixed
-    // derivatives pick
     float3 noise[2] = {float3(0.0, 0.0, 0.0), float3(0.0, 0.0, 0.0)};
     if ((f & kPostNoise) != 0u) {
         [unroll] for (int k = 0; k < 2; k++)
@@ -234,17 +212,14 @@ float3 CompositeAt(PostIn i, out float alpha) {
                           noise[1]);
 }
 
-// the composite into the picture, opaque: the overlay draws over it
+// opaque: the overlay draws over it
 float4 PSComposite(PostIn i) : SV_Target0 {
     float alpha;
     return float4(saturate(CompositeAt(i, alpha)), 1.0);
 }
 
-// The live view's composite, which keeps each post frame's for the next
-// frame's trails: the picture as PSComposite's (the trails over it where
-// params.flags has them, from t11), and the post buffer as the game's
-// resolve keeps it, the same colour with the composite's alpha (or the
-// trails': 1 where the trail was kept)
+// The live view's composite, also writing the post buffer (colour and
+// alpha, as the game's resolve keeps it) for the next frame's trails
 struct CompositeOut {
     float4 color : SV_Target0;
     float4 history : SV_Target1;

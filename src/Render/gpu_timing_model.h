@@ -4,29 +4,17 @@
 #include <cstdint>
 #include <vector>
 
-// The native renderer's GPU timings (native_gpu_timestamps): where a frame's
-// time on the GPU goes, by part (the world, its texture passes, post-
-// processing, the overlay...), for native_view stats' by_kind and the slow-
-// frame log. On Direct3D 12 only: gpu_view.cpp writes a timestamp into the
-// command list at each boundary between parts, a ladder rather than pairs,
-// so the span from one timestamp to the next is the part the first one
-// started (Ladder), and once the GPU has finished the frame its ticks become
-// milliseconds by part (Accumulate). One queue runs SDL_gpu's command buffers
-// in order, so a ladder carries on across the command buffers a frame takes
-// (it's submitted after each texture pass with mips, with
-// native_view_submit_points at the resolve too, and with
-// native_view_inline_mips off the mips are made in one of their own): the
-// span from the last timestamp of one to the first of the next is the part
-// it started, kIdle there. The GPU starts on a command buffer once it's
-// submitted, and a frame's first is submitted while the CPU still records
-// the rest (at the first mips), so between them the GPU waits for the CPU:
-// that's kIdle's, which is no work of the frame's and isn't in its total. Spans whose end or
-// start the GPU didn't write (0) or that run backwards are left out and
-// counted, never charged.
+// GPU time per frame by part (native_gpu_timestamps; Direct3D 12 only), for
+// native_view stats' by_kind and the slow-frame log. gpu_view.cpp writes one
+// timestamp at each part boundary (a ladder, not pairs): each span belongs
+// to the part its start began. One queue runs the frame's command buffers in
+// order, so the ladder spans them; the gap between buffers is kIdle (GPU
+// waiting on the CPU to submit), excluded from the total. Spans with an
+// unwritten (0) or backwards timestamp are counted bad, never charged.
 
 namespace band3::render::gpu_timing {
 
-// What a span of the GPU's time went on, in a frame's order
+// in a frame's order
 enum Part : uint8_t {
     kUpload,         // the frame's copy pass: meshes, textures, bones
     kWorld,          // the back buffer's draws before the resolve: the world into the scene
@@ -52,7 +40,6 @@ enum Part : uint8_t {
 // a mark that starts no part: the end of a ladder, or a gap that isn't one
 inline constexpr uint8_t kNone = 0xff;
 
-// for the harness's by_kind and the slow-frame log
 inline const char* PartName(uint8_t p) {
     static constexpr const char* kNames[kParts] = {
         "upload", "world", "pass_shadow", "pass_spot", "pass_other", "pass_blur",
@@ -61,18 +48,15 @@ inline const char* PartName(uint8_t p) {
     return p < kParts ? kNames[p] : "none";
 }
 
-// One frame's timestamps, as recorded: each one's part (what the GPU's time
-// goes on from it to the next), at most `capacity` of them (the query
-// heap's slots the frame has).
+// One frame's timestamp labels; `capacity` is the frame's query heap slots.
 class Ladder {
  public:
     explicit Ladder(uint32_t capacity = 0) : capacity_(capacity) {}
 
-    // The slot for a timestamp from which the GPU's time goes to `part`
-    // (kNone: nothing, the ladder's end), or -1 for none: the time goes there
-    // already (no new span), or the ladder is full. The last slot is kept
-    // for the end, so a full ladder still ends: the parts that didn't fit
-    // are counted (dropped) and their time charged to the last that did.
+    // The slot for a timestamp starting `part` (kNone ends the ladder), or -1
+    // if already in that part or full. The last slot is reserved for the end;
+    // parts that don't fit are counted dropped and charged to the last that
+    // did.
     int Mark(uint8_t part) {
         const uint8_t now = labels_.empty() ? kNone : labels_.back();
         if (part == now) return -1;
@@ -99,22 +83,18 @@ class Ladder {
     uint32_t dropped_ = 0;
 };
 
-// A frame's milliseconds by part, and all of them but kIdle's (the GPU busy
-// on the frame); `bad` the spans left out
+// total_ms excludes kIdle; `bad` counts spans left out
 struct Times {
     double ms[kParts] = {};
     double total_ms = 0;
     uint32_t bad = 0;
 };
 
-// a span longer than this is no frame's: garbage, left out as bad
+// longer spans are garbage, counted bad
 inline constexpr double kMaxSpanMs = 10000;
 
-// Adds the spans of a ladder of `count` timestamps (`labels` each one's part,
-// `ticks` what the GPU wrote, at `frequency` ticks a second) into `t`. A
-// span starting at kNone is a gap and adds nothing, one at kIdle adds to its
-// part but not the total; one with a 0 end, one
-// that runs backwards or one over kMaxSpanMs is counted bad and adds nothing.
+// Adds a ladder's spans into `t`; `frequency` in ticks per second. Spans
+// starting at kNone are gaps.
 inline void Accumulate(const uint8_t* labels, const uint64_t* ticks, size_t count,
                        uint64_t frequency, Times& t) {
     if (!frequency) return;

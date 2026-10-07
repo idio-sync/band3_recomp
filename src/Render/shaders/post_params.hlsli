@@ -1,92 +1,67 @@
-// Experimental: what one of the native view's full-screen passes reads
-// (post.hlsl's PostUniforms), packed by post_model.cpp from a frame's
-// PostParams and PostConsts (src/Render/post_params.h). Shared by post.hlsl
-// and the CPU (post_model.h includes it as C++, with float4 and uint4 its
-// own), as shade_params.hlsli is for shading. Everything is a float4 or
-// uint4: HLSL's cbuffer packing and C++'s layout are then the same.
+// One full-screen pass's inputs (post.hlsl's PostUniforms), packed by
+// post_model.cpp. Included as C++ by post_model.h. Only float4 and uint4, so
+// HLSL's cbuffer packing matches the C++ layout.
 
-// flags.x: what the composite applies, as the flags RB3's shader manager
-// picks its composite by (TheShaderMgr + 0x26 DOF, 0x27 bloom, 0x28 glare,
-// 0x2A colour matrix, 0x25 spotlights, 0x3F soft particles, 0x2D noise and
+// flags.x, after TheShaderMgr's composite flags (+0x26 DOF, 0x27 bloom, 0x28
+// glare, 0x2A colour matrix, 0x25 spotlights, 0x3F soft particles, 0x2D noise,
 // 0x2E its midtone weight, 0x2F trails, 0x39 velocity blur;
-// out/research/m4_shader_check.md, spotlight_survey.md 2,
-// softparticle_survey.md 1, n1_post_noise.md, n5_hub_soft.md)
-static const uint kPostDof = 1u;    // depth of field: the blurred scene, by c24 and the depth
-static const uint kPostBloom = 2u;  // bloom's three levels, screen-blended by c6
-// glare: half of bloom's level 0 (after its glare pass) times c6, added
+// m4_shader_check.md, spotlight_survey.md 2, softparticle_survey.md 1,
+// n1_post_noise.md, n5_hub_soft.md)
+static const uint kPostDof = 1u;
+static const uint kPostBloom = 2u;
 static const uint kPostGlare = 4u;
 static const uint kPostXfm = 8u;    // the colour matrix, c92..c94
-// the spotlights' depth volume, added by the density map's red (spot)
 static const uint kPostSpot = 16u;
-// the soft-particle buffer (s4), added after the DOF, before bloom
-static const uint kPostSoft = 32u;
-// the noise (film grain): the noise map overlaid by c112/c113, after the
-// spotlights' term, before the colour matrix; with kPostNoiseMidtone
-// weighted by the luminance's midtones
+static const uint kPostSoft = 32u;  // s4
 static const uint kPostNoise = 64u;
 static const uint kPostNoiseMidtone = 128u;
-// the trails (blend previous): the previous post frame faded, kept where
-// it's brighter, last; on where the renderer has its previous frame
+// only where the renderer has its previous frame
 static const uint kPostTrails = 256u;
-// the camera motion blur (velocity blur): the scene blurred along each
-// pixel's motion since the last frame, which the velocity pass works out from
-// the depth and the previous frame's camera; first, before the DOF
 static const uint kPostVelocity = 512u;
 
-// the most taps a blur has (the bloom's Gaussian; the DOF's has 8)
+// the bloom's Gaussian; the DOF's has 8
 static const uint kPostMaxTaps = 15u;
 
 struct PostPass {
-    // x: soft_raster.h's RasterView, for the resolve (0 the picture, 1 the
-    // scene's alpha, 2 its depth); y: 1 when the 4x downsample is the bright
-    // pass; z: the blur's taps; w: a texture pass's blur's samples per tap
-    // (soft_raster.h's BlurSubTaps), 0 or 1 one
+    // x: RasterView for the resolve (0 picture, 1 scene alpha, 2 depth); y: 1
+    // when the 4x downsample is the bright pass; z: blur taps; w: a texture
+    // pass's blur samples per tap (BlurSubTaps), 0 meaning 1
     uint4 mode;
     uint4 flags;          // x: the kPost bits above
-    float4 target;        // the pass's target: width, height, 1/width, 1/height
-    // c15: half a texel of the source, uv (xy); zw a texture pass's blur's
-    // step between a tap's samples (BlurSubTaps)
+    float4 target;        // width, height, 1/width, 1/height
+    // c15: half a source texel in uv (xy); zw the BlurSubTaps step
     float4 half_pixel;
-    float4 taps[15];      // a blur's taps: uv offset (xy) and weight (z)
+    float4 taps[15];      // uv offset (xy) and weight (z)
     float4 c6;            // the bloom colour times its intensity
     float4 c24;           // the DOF's: (1/(scale-bias), -scale/(scale-bias), min, max)
     float4 xfm[3];        // c92..c94: output channel j = dot(xfm[j].xyz, rgb) + xfm[j].w
     float4 camera;        // the world camera's near, far and z range (lo, hi)
-    // the spotlights' term: (c127.x, c127.y, c91.x), the volume times x + y *
-    // the density, times z
+    // (c127.x, c127.y, c91.x): volume * (x + y * density) * z
     float4 spot;
-    // the noise's: c112, the seeds (the two taps' uv offsets), and c113,
-    // (base scale x, y, the second tap's scale on top, intensity)
+    // c112, the two taps' uv offsets; c113, (scale x, y, tap 1's extra scale,
+    // intensity)
     float4 noise_seeds;
     float4 noise;
-    // the noise map's sampler (sample_model.h's PackSampler), and its size
-    // (x, y) and, on the GPU, its layer in its texture array (z)
+    // PackSampler's; size (xy) and, on the GPU, array layer (z)
     uint4 noise_sampler;
     uint4 noise_tex;
-    // c125, the trails': (threshold, fade (dt / duration), 1/3, 0)
+    // c125: (threshold, dt / duration, 1/3, 0)
     float4 trails;
-    // The velocity pass's (post_model.hlsli's VelocityTexel): the previous
-    // frame's view-projection, rows as PS c134..c137 have them (the clip
-    // position's x, y, z, w are their dots with the world position); the
-    // camera's frustum: its near point (xyz) and far plane (w, c89.y), and
-    // its corner ray at the picture's top left (vel_corner[0]) and the rays'
-    // change across it (1, uv's u 0 to 1) and down it (2); x of
-    // vel_depth: w / far where nothing drew (the depth texture's 0, through
-    // c89), y: c122.x, the blur's step scale
+    // VelocityTexel's: vel_prev the previous view-projection's rows (PS
+    // c134..c137); vel_near the frustum's near point (xyz) and far plane (w,
+    // c89.y); vel_corner the top-left ray and its change across u (1) and
+    // down v (2); vel_depth x: w / far where nothing drew, y: c122.x, the step
+    // scale
     float4 vel_prev[4];
     float4 vel_near;
     float4 vel_corner[3];
     float4 vel_depth;
 };
 
-// The camera motion blur's object pass (scene_capture.h's VelocityObject;
-// post_model.hlsli's VelocityObject*): one mesh drawn into the velocity
-// texture with its own motion. view_proj VS c0..c3 (this frame's) and
-// c4..c7 (the last's), depth_range PS c8; target the velocity texture's
-// size (w, h, 1/w, 1/h); mesh.x 1 when the vertices' bones and weights place
-// them, y the palette's entries, z where this frame's palette starts in the
-// frame's bones on the GPU (the last frame's follows it), w unused; depth the
-// scene depth's size (xy).
+// The motion blur's object pass (VelocityObject): view_proj VS c0..c3 (this
+// frame) and c4..c7 (last), depth_range PS c8; target (w, h, 1/w, 1/h); mesh.x
+// skinned, y palette entries, z this frame's palette start in the GPU's bones
+// (the last frame's follows); depth the scene depth's size (xy).
 struct VelocityObjectPass {
     float4 view_proj[8];
     float4 depth_range;

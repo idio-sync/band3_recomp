@@ -13,52 +13,37 @@
 #include "src/Render/guest_formats.h"
 #include "src/Render/scene_capture.h"
 
-// What a capture's game-thread copies (Texture::deferred, Geometry::deferred)
-// are decoded into, off the game's thread: at first sight of a song's or a
-// shot's textures and meshes, decoding them where they were drawn cost the
-// game's thread 33-69 ms a frame (22-47 MB of RGBA, 7-16 MB of geometry), so
-// it copies their bytes as guest memory holds them (a few milliseconds) and
-// whoever takes a capture first decodes them (scene_capture.h's
-// LatestCapture, CaptureHeldFrame), as the same decoder would have from the
-// same bytes. Apart from scene_capture.cpp so capture files (SaveCapture)
-// and the unit tests reach it too.
+// Decodes a capture's game-thread copies (Texture::deferred,
+// Geometry::deferred) off the game's thread: decoding a song's or shot's new
+// textures and meshes where drawn cost it 33-69 ms a frame, so it copies the
+// raw guest bytes and whoever takes the capture first decodes them
+// (LatestCapture, CaptureHeldFrame). Kept out of scene_capture.cpp for
+// SaveCapture and the unit tests.
 //
-// Each is decoded once, whichever thread asks first; the others wait for it.
-// Only the decoded fields (rgba and mips, or blocks; verts and indices) are
-// written, and the game's thread never reads those of an object with
-// `deferred` set (scene_capture.cpp's HasPixels, HasFaces), so it may go on
-// using the same object meanwhile.
+// Each is decoded once, whichever thread asks first; the others wait. Only
+// the decoded fields are written, and the game's thread never reads those of
+// an object with `deferred` set (scene_capture.cpp's HasPixels, HasFaces), so
+// it may keep using the object meanwhile.
 //
-// A frame with much to decode (a song's first frames, a camera cut's) is
-// decoded on a few helper threads besides the one asking, biggest first
-// (native_deferred_decode_threads, DecodeHelpers), as each texture or mesh is
-// decoded once all the same.
-//
-// With native_bc_textures on, while the GPU draws with it (gpu_view.cpp sets
-// SetKeepBlocks), a block-compressed texture (DXT1, DXT2_3, DXT4_5, DXN) is
-// decoded only as far as its blocks, untiled and swapped (Texture::blocks),
-// which the GPU samples as they are: decoding them to RGBA took the worker
-// 17-70 ms at a song's first frames, and four to eight times the bytes to
-// send and keep. Its rgba and mips are decoded from the blocks the first time
-// something asks for them (EnsureRgba), by the same decoder, to the same
-// texels. With it off, as before: rgba and mips at once.
+// With native_bc_textures on and the GPU drawing (SetKeepBlocks), a
+// block-compressed texture is decoded only to untiled, swapped blocks
+// (Texture::blocks) for the GPU to sample; rgba and mips come from the blocks
+// on first request (EnsureRgba), to the same texels.
 
 namespace band3::render {
 
-// what DecodeDeferred has done, on any thread (CaptureProfile's deferred_*);
-// ns each decoding thread's time, summed: more than the time a frame waited
-// for them when helpers decoded it (DecodeHelpers)
+// CaptureProfile's deferred_*; ns sums every decoding thread's time, so
+// exceeds the wait when helpers ran
 struct DeferredDecodeCounts {
     std::atomic<uint64_t> decodes{0}, ns{0}, bytes{0};
-    // block-compressed textures kept as blocks, decoded to RGBA all the same
-    // for their swizzle, and kept as blocks then decoded to RGBA (EnsureRgba)
+    // BC textures kept as blocks, decoded to RGBA anyway for their swizzle,
+    // and kept as blocks then decoded to RGBA (EnsureRgba)
     std::atomic<uint64_t> bc_blocks{0}, bc_swizzled{0}, bc_rgba{0};
 };
 inline DeferredDecodeCounts g_deferred_decode;
 
-// whether DecodeDeferred keeps block-compressed textures as blocks: what the
-// GPU drawing them last asked for (native_bc_textures, and formats it has);
-// off until it has drawn a frame, and for the CPU's rasterizer
+// whether DecodeDeferred keeps BC textures as blocks, as the GPU last asked;
+// off until it has drawn a frame, and for the CPU rasterizer
 inline std::atomic<bool> g_keep_blocks{false};
 inline void SetKeepBlocks(bool keep) { g_keep_blocks.store(keep, std::memory_order_relaxed); }
 
@@ -74,10 +59,7 @@ inline void Count(std::chrono::steady_clock::time_point start, uint64_t bytes) {
 }
 }  // namespace deferred_detail
 
-// a deferred texture's rgba and mips from the bytes copied (DecodeTexture's
-// decode, guest_formats.h's DecodeTextureLevels, from the same bytes), or its
-// blocks (g_keep_blocks: DecodeTextureBlocks, the GPU's to sample); the
-// copies let go of after
+// rgba and mips, or blocks with g_keep_blocks; frees the copies after
 inline void DecodeDeferred(const Texture& t) {
     DeferredPixels& d = *t.deferred;
     std::call_once(d.once, [&] {
@@ -109,11 +91,9 @@ inline void DecodeDeferred(const Texture& t) {
     });
 }
 
-// A texture's rgba and mips, decoded if they're not yet: a deferred one's
-// (DecodeDeferred), and a block-compressed one kept as blocks, from them
-// (guest_formats.h's DecodeRgbaFromBlocks: DecodeTextureLevels' texels). What
-// reads a texture's rgba calls it first, but for the game's thread on one
-// it hasn't captured deferred; any thread, once each, the others waiting.
+// Decodes a texture's rgba and mips if not yet, from its deferred copy or its
+// blocks. Call before reading rgba (except the game's thread on a texture it
+// didn't capture deferred); once per texture, other threads waiting.
 inline void EnsureRgba(const Texture& t) {
     if (t.deferred) DecodeDeferred(t);
     if (!t.blocks) return;
@@ -125,8 +105,7 @@ inline void EnsureRgba(const Texture& t) {
     });
 }
 
-// a deferred mesh's verts and indices from the buffers' bytes copied
-// (guest_formats.h's DecodeGeometryBytes); the copies let go of after
+// frees the copies after
 inline void DecodeDeferred(const Geometry& g) {
     DeferredGeometry& d = *g.deferred;
     std::call_once(d.once, [&] {
@@ -145,24 +124,16 @@ inline void DecodeDeferred(const Geometry& g) {
     });
 }
 
-// One of a frame's deferred textures or meshes not decoded yet
-// (GatherPending), and the bytes the game's thread copied of it, what decoding
-// it costs, roughly: a texture's levels (guest_formats.h's BaseLevelBytes and
-// MipChainBytes, from its fetch constant), a mesh's buffers. Weighed from
-// what doesn't change, not the copies, which a decode on another thread may
-// be letting go of meanwhile.
+// `bytes` approximates the decode cost. It's computed from the fetch constant
+// or counts, not the copies, which another thread's decode may be freeing.
 struct PendingDecode {
     const Texture* tex = nullptr;
     const Geometry* geom = nullptr;
     uint64_t bytes = 0;
 };
 
-// A frame's textures and meshes DecodeDeferred has yet to decode: its draws',
-// its shades' maps, its noise map and its motion blur objects' geometry, each
-// once (a texture is drawn and shaded with many times), biggest first, so
-// that decoding them on several threads (DecodeHelpers) doesn't leave the
-// biggest to start last. None once they're done, the frames between a
-// song's or a shot's first.
+// A frame's undecoded textures and meshes, each once, biggest first so the
+// biggest doesn't start last on the helpers
 inline std::vector<PendingDecode> GatherPending(const FrameCapture& fc) {
     std::vector<PendingDecode> out;
     const auto tex = [&](const Texture* t) {
@@ -204,17 +175,12 @@ inline std::vector<PendingDecode> GatherPending(const FrameCapture& fc) {
     return out;
 }
 
-// Under this many bytes in all, a frame's pending decodes stay on the thread
-// that asks (DecodeHelpers): some 5 ms of decoding at a song's first frames'
-// rate (0.7 MB a millisecond), where they have 5 to 15 MB. A movie's planes,
-// decoded again each of its frames (1.4 MB of them in the menus), stay
-// there: split, they'd save half a millisecond a frame for waking the
-// helpers 30 times a second.
+// Below this (~5 ms of decoding), a frame decodes on the asking thread alone;
+// it keeps a movie's per-frame planes (~1.4 MB) from waking the helpers 30
+// times a second
 inline constexpr uint64_t kParallelDecodeBytes = 4u << 20;
 
-// How many helper threads decode `pending` with the thread that asks: none
-// for `threads` 0, a single one or fewer than kParallelDecodeBytes in all,
-// else `threads`, but no more than there are others to decode
+// helpers to use besides the asking thread, at most one per remaining item
 inline unsigned DecodeHelpers(const std::vector<PendingDecode>& pending, unsigned threads) {
     if (threads == 0 || pending.size() < 2) return 0;
     uint64_t bytes = 0;
@@ -223,8 +189,7 @@ inline unsigned DecodeHelpers(const std::vector<PendingDecode>& pending, unsigne
     return unsigned(std::min<size_t>(threads, pending.size() - 1));
 }
 
-// how many threads help DecodeDeferred(FrameCapture) decode a frame's
-// pending textures and meshes (native_deferred_decode_threads); 0, inline
+// native_deferred_decode_threads; 0 decodes inline
 inline std::atomic<unsigned> g_decode_threads{0};
 inline void SetDecodeThreads(unsigned threads) {
     g_decode_threads.store(threads, std::memory_order_relaxed);
@@ -234,16 +199,13 @@ inline std::atomic<void (*)(unsigned)> g_decode_thread_started{nullptr};
 
 namespace deferred_detail {
 
-// The helpers, started as first wanted and kept for the next frame that
-// wants them, asleep on a condition variable meanwhile (a song's first frames
-// and its camera cuts each want them for a few milliseconds). Never
-// destroyed: they sleep through the process's exit.
+// Helpers started on demand and kept asleep between uses. Never destroyed:
+// they sleep through the process's exit.
 class DecodePool {
 public:
-    // `work` on this thread and on `helpers` of the pool's at once, each
-    // taking what's left until nothing is; back once all that took it have
-    // finished. One caller at a time: another (the harness's `capture` while
-    // the worker decodes) does its work alone.
+    // Runs `work` on this thread and `helpers` others; returns once all that
+    // took it have finished. One caller at a time: a concurrent caller (the
+    // harness's `capture` during the worker's decode) runs its work alone.
     void Run(const std::function<void()>& work, unsigned helpers) {
         std::unique_lock run(run_mutex_, std::try_to_lock);
         if (!run.owns_lock()) {
@@ -307,15 +269,9 @@ inline DecodePool& Pool() {
 
 }  // namespace deferred_detail
 
-// Everything deferred a frame draws with decoded, before it's handed on
-// (GatherPending's). A pass carried in from an earlier frame or a composed
-// frame's world is among its draws, and brings its own along, perhaps never
-// decoded if no one took that frame. With g_decode_threads, and enough to
-// decode (DecodeHelpers), on that many helpers too, each taking the biggest
-// left: a song's first frames and its camera cuts decoded 10-24 ms of it on
-// the worker alone. Each is still decoded once (DecodeDeferred's call_once),
-// and counted once, its ns the decoding thread's. Idempotent, and cheap once
-// done.
+// Decodes everything deferred a frame draws with, including carried-in passes
+// and a composed frame's world, whose earlier frame may never have been
+// taken. Idempotent, and cheap once done.
 inline void DecodeDeferred(const FrameCapture& fc) {
     const std::vector<PendingDecode> pending = GatherPending(fc);
     if (pending.empty()) return;
@@ -336,8 +292,7 @@ inline void DecodeDeferred(const FrameCapture& fc) {
         deferred_detail::Pool().Run(work, helpers);
 }
 
-// DecodeDeferred's, and every texture's rgba and mips there too (EnsureRgba):
-// for what reads them all, a capture file
+// DecodeDeferred plus every texture's rgba, for a capture file
 inline void EnsureRgba(const FrameCapture& fc) {
     DecodeDeferred(fc);
     for (const DrawItem& d : fc.draws)

@@ -9,12 +9,8 @@
 
 #include "src/Render/scene_capture.h"
 
-// Experimental: the 360 formats the native view's capture (scene_capture.cpp)
-// decodes RB3's meshes and textures from, apart from guest memory so the
-// unit tests can check them: DxMesh's packed vertex and index buffers, the
-// texture blocks, the tiled layout and the mip chain (and the bytes of each
-// that capture copies to decode later), and the sampler a texture fetch
-// constant describes.
+// Experimental: the 360 mesh, texture and sampler formats capture
+// (scene_capture.cpp) decodes, kept apart from guest memory for unit tests.
 
 namespace band3::render::guest_format {
 
@@ -44,9 +40,8 @@ inline float HalfToFloat(uint16_t h) {
     return sign ? -v : v;
 }
 
-// the low `bits` bits as a signed normalised number, as a vfetch of
-// 2_10_10_10 with Signed reads it: v / (2^(bits-1) - 1), at least -1. A 2-bit
-// w is then -1, 0 or 1.
+// the low `bits` bits as a vfetch of signed 2_10_10_10 reads them:
+// v / (2^(bits-1) - 1), clamped to -1
 inline float Snorm(uint32_t v, int bits) {
     const int32_t half = 1 << (bits - 1);
     int32_t s = int32_t(v & ((1u << bits) - 1));
@@ -54,12 +49,11 @@ inline float Snorm(uint32_t v, int bits) {
     return std::max(-1.0f, float(s) / float(half - 1));
 }
 
-// CompressedVertex_Xbox (36 bytes), what DxMesh::OnSync fills the vertex
-// buffer with (FillCompressedVertex) and its vertex shaders fetch
-// (837915E757EEC6DC, 18A3E6C52471D288): the position, ARGB colour, uv as
-// two halves, then the normal and the tangent as 2_10_10_10 (x in the low
-// bits, the tangent's w its handedness: RndMesh::Vert's +0x50), the weights
-// as three 10-bit fractions (the fourth makes them 1) and four bone bytes
+// CompressedVertex_Xbox (36 bytes), from DxMesh::OnSync's FillCompressedVertex,
+// fetched by shaders 837915E757EEC6DC and 18A3E6C52471D288: position, ARGB
+// colour, uv as two halves, normal and tangent as 2_10_10_10 (x low; the
+// tangent's w is handedness, RndMesh::Vert's +0x50), three 10-bit weights
+// (the fourth makes them sum to 1), four bone bytes
 inline Vertex DecodePacked(const uint8_t* p) {
     Vertex v{};
     for (int i = 0; i < 3; i++) v.pos[i] = BeF32(p + i * 4);
@@ -90,10 +84,9 @@ inline constexpr uint32_t kPackedVertSize = 36;
 
 inline uint16_t Be16(const uint8_t* p) { return uint16_t(p[0] << 8 | p[1]); }
 
-// A DxMesh's vertex buffer (num_verts packed vertices, DecodePacked) and its
-// index buffer (num_indices big-endian u16s, a triangle list) as Geometry,
-// tangents and all: a triangle with a corner past the vertices is left out
-// (whatever the buffers hold past their faces), and a last partial one
+// A DxMesh's packed vertices and big-endian u16 triangle list as Geometry;
+// triangles indexing past the vertices (buffer slack) and a trailing partial
+// one are dropped
 inline void DecodeGeometryBytes(const uint8_t* vb, uint32_t num_verts, const uint8_t* ib,
                                 uint32_t num_indices, Geometry& out) {
     out.verts.resize(num_verts);
@@ -108,9 +101,7 @@ inline void DecodeGeometryBytes(const uint8_t* vb, uint32_t num_verts, const uin
     }
 }
 
-// whether DecodeGeometryBytes would keep a triangle of these, looking no
-// further than the first it keeps (usually the first): what tells a mesh
-// with faces before its geometry is decoded
+// whether DecodeGeometryBytes would keep any triangle, without decoding
 inline bool HasKeptFace(uint32_t num_verts, const uint8_t* ib, uint32_t num_indices) {
     for (uint32_t i = 0; i + 2 < num_indices; i += 3)
         if (Be16(ib + i * 2) < num_verts && Be16(ib + i * 2 + 2) < num_verts &&
@@ -137,10 +128,8 @@ inline void DecodeDxt5Alpha(const uint8_t* b, uint8_t out[16]) {
 }
 
 // A DXN (ATI2, BC5) block, 16 bytes after its endian swap: two DXT5 alpha
-// blocks, the first the fetch's x (red), the second its y (green), as Xenia
-// reads it (its host BC5 and its DXN to RG8 decompression alike), which is
-// what the game's pictures under band3 show. RB3's normal-mapped shaders
-// pair x with the bitangent and y with the tangent (shaders/shade.hlsli's
+// blocks, x (red) then y (green), as Xenia reads it. RB3's normal-mapped
+// shaders pair x with the bitangent, y with the tangent (shade.hlsli's
 // MappedNormals).
 inline void DecodeDxnBlock(const uint8_t* b, uint8_t x[16], uint8_t y[16]) {
     DecodeDxt5Alpha(b, x);
@@ -273,12 +262,9 @@ inline void DecodeBlock(uint32_t format, const uint8_t* b, Rgba out[16]) {
             break;
         }
         case 49: {
-            // normal maps' tangent-space x and y (DecodeDxnBlock), y in z
-            // and w too: a fetch fills a format's missing components with
-            // its last, as Xenia's texture cache does for DXN (RGGG,
-            // rex/graphics/pipeline/texture/cache.h's GetHostFormatSwizzle).
-            // TexBlender's copy of a head's normal map into norm_output.tex
-            // writes them out, which guest memory's copy shows.
+            // RGGG: missing components repeat the last, as Xenia's texture
+            // cache does for DXN (cache.h's GetHostFormatSwizzle); TexBlender's
+            // copy into norm_output.tex writes them out.
             uint8_t x[16], y[16];
             DecodeDxnBlock(b, x, y);
             for (int i = 0; i < 16; i++) out[i] = Rgba{{x[i], y[i], y[i], y[i]}};
@@ -303,18 +289,16 @@ inline uint32_t Log2Floor(uint32_t v) {
 inline uint32_t NextPow2(uint32_t v) { return 1u << Log2Ceil(v); }
 inline uint32_t AlignUp(uint32_t v, uint32_t a) { return (v + a - 1) / a * a; }
 
-// The level a texture's packed mip tail starts at: the first whose shorter
-// side is 16 texels or less (Xenia's texture_util GetPackedMipLevel). With
-// packed mips, that level and every smaller one share one 32x32-texel tile.
+// First level whose shorter side is <= 16 texels (Xenia's GetPackedMipLevel);
+// it and all smaller levels share one 32x32-texel tile.
 inline uint32_t PackedMipLevel(uint32_t width, uint32_t height) {
     const uint32_t log2_size = Log2Ceil(std::min(width, height));
     return log2_size > 4 ? log2_size - 4 : 0;
 }
 
-// Where `mip` of a width x height texture is in its packed tail, in blocks
-// of `block` texels, or false if it isn't packed (Xenia's texture_util
-// GetPackedMipOffset, for 2D): a wide texture's tail goes down then across,
-// a tall or square one's across then down
+// `mip`'s offset in its packed tail, in blocks; false if not packed (Xenia's
+// GetPackedMipOffset, 2D). Wide textures' tails go down then across, others
+// across then down
 inline bool PackedMipOffset(uint32_t width, uint32_t height, uint32_t block, uint32_t mip,
                             uint32_t& x_blocks, uint32_t& y_blocks) {
     const uint32_t log2_width = Log2Ceil(width), log2_height = Log2Ceil(height);
@@ -348,7 +332,7 @@ struct FetchLayout {
     uint32_t swizzle = 0;
     uint32_t dimension = 0;  // 1 2D, 3 cube
     bool packed_mips = false;
-    // the last level stored under mip_address (0: none), Xenia's
+    // last level under mip_address (0: none); Xenia's
     // GetSubresourcesFromFetchConstant's mip_max_level
     uint32_t mip_max = 0;
 };
@@ -372,16 +356,14 @@ inline FetchLayout ReadFetchLayout(const uint32_t f[6]) {
     return l;
 }
 
-// Where a level's texels are: the bytes from its memory's start (the base
-// address for level 0, the mip address for the rest) to the 32x32-block-
-// padded image it's stored in, that image's row pitch in blocks (tiled) or
-// bytes (linear), and its own offset in that image in blocks (non-zero in a
-// packed mip tail), as Xenia's GetGuestTextureLayout lays them out: the base
-// at the fetch's pitch; mips each padded to max(next_pow2(size) >> level, 1)
-// in 32-block tiles, 4 KB aligned, one after another from the mip address;
-// with packed mips, every level from PackedMipLevel on in that level's image
-// (the mips' tail like level 0's, under the mip address, when the texture's
-// shorter side is 16 or less, and then the base in a tail of its own too).
+// Where a level's texels are, per Xenia's GetGuestTextureLayout: offset from
+// its memory (base address for level 0, mip address otherwise) to its
+// 32x32-block-padded image, the image's pitch, and the level's block offset
+// within it (packed tail). The base uses the fetch's pitch; mips are each
+// padded to max(next_pow2(size) >> level, 1) in 32-block tiles, 4 KB aligned,
+// consecutive from the mip address; with packed mips, levels from
+// PackedMipLevel on share that level's image (if the shorter side is <= 16,
+// the base sits in a tail of its own too).
 struct LevelPlace {
     uint32_t offset = 0;
     uint32_t pitch_blocks = 0;
@@ -397,7 +379,6 @@ inline LevelPlace PlaceLevel(const FetchLayout& l, const FormatInfo& info, uint3
         p.pitch_blocks =
             std::max(blocks_x, (std::max(l.pitch_texels, l.width) + info.block - 1) / info.block);
     } else {
-        // the image it's stored in, and the bytes of each image before it
         const uint32_t stored = std::min(level, packed);
         auto pitch_of = [&](uint32_t s) {
             const uint32_t texels = std::max(NextPow2(l.width) >> s, 1u);
@@ -419,12 +400,10 @@ inline LevelPlace PlaceLevel(const FetchLayout& l, const FormatInfo& info, uint3
     return p;
 }
 
-// The bytes from the start of a level's image (p.offset on from its memory's
-// start) that hold a w x h level placed at p, as DecodeLevel reads them
-// (whole rows when linear; tiled, whole 32x32-block tiles, which
-// TiledOffset2D lays out in 4 KB groups: a tile of 1- or 2-byte blocks, 1 or
-// 2 KB, shares its group with the next ones, its rows 16-31 2 KB on, so the
-// last tile's texels reach to its group's end)
+// Bytes from p.offset that DecodeLevel reads for a w x h level: whole rows
+// when linear; tiled, whole tiles rounded to TiledOffset2D's 4 KB groups (a
+// 1 or 2 KB tile of small blocks has rows 16-31 2 KB on, so its texels reach
+// the group's end)
 inline uint32_t LevelBytes(const FetchLayout& l, const FormatInfo& info, const LevelPlace& p,
                            uint32_t w, uint32_t h) {
     const uint32_t blocks_x = p.x_blocks + (w + info.block - 1) / info.block;
@@ -437,8 +416,7 @@ inline uint32_t LevelBytes(const FetchLayout& l, const FormatInfo& info, const L
     return p.row_bytes * blocks_y;
 }
 
-// The bytes from the base address that hold the base level, as DecodeLevel
-// reads them (LevelBytes), or 0 for a format not decoded
+// LevelBytes of the base level; 0 for an undecoded format
 inline uint32_t BaseLevelBytes(const uint32_t f[6]) {
     const FetchLayout l = ReadFetchLayout(f);
     FormatInfo info;
@@ -446,11 +424,8 @@ inline uint32_t BaseLevelBytes(const uint32_t f[6]) {
     return LevelBytes(l, info, PlaceLevel(l, info, 0), l.width, l.height);
 }
 
-// The bytes from the mip address that hold levels 1..mip_max, as
-// DecodeTextureLevels reads them: the furthest any level's image reaches
-// (its offset, then LevelBytes; a packed tail's levels share one), or 0
-// for none or a format not decoded. With BaseLevelBytes, what a texture's
-// texels are copied as to decode later (scene_capture.cpp's CopyForLater).
+// Bytes from the mip address that levels 1..mip_max reach; 0 for none or an
+// undecoded format. With BaseLevelBytes, what CopyForLater copies.
 inline uint32_t MipChainBytes(const uint32_t f[6]) {
     const FetchLayout l = ReadFetchLayout(f);
     FormatInfo info;
@@ -464,8 +439,7 @@ inline uint32_t MipChainBytes(const uint32_t f[6]) {
     return end;
 }
 
-// DecodeLevel, block by block: every format's way, a texel's address, block
-// decode and swizzle at a time
+// DecodeLevel's general path, any format
 inline void DecodeLevelBlocks(const uint8_t* src, const FetchLayout& l, const FormatInfo& info,
                               const LevelPlace& p, uint32_t w, uint32_t h, uint32_t* out) {
     const uint32_t blocks_x = (w + info.block - 1) / info.block;
@@ -501,13 +475,10 @@ inline void DecodeLevelBlocks(const uint8_t* src, const FetchLayout& l, const Fo
     }
 }
 
-// DecodeLevel for k_8, the same texels faster: a byte a texel, no endian
-// swap, its block (byte, 0, 0, 255) swizzled into a texel byte * mul | konst,
-// the channels that take the byte in mul, those that are 255 in konst. Tiled,
-// texels x..x+7 are side by side when x is a multiple of 8 (TiledOffset2D
-// leaves the low three bits of x as they are), so a run of eight takes one
-// address. Bink's movie planes are k_8: a 1280x720 Y plane and its two
-// 640x360 chroma planes take the general loop 10-12 ms, this 0.3-0.9 ms.
+// DecodeLevel fast path for k_8 (Bink movie planes: 10-12 ms a 720p frame by
+// the general loop, 0.3-0.9 ms here). The swizzled texel is byte * mul |
+// konst. Tiled, x..x+7 are contiguous when x % 8 == 0 (TiledOffset2D keeps
+// x's low three bits), so runs of eight share one address.
 inline void DecodeLevel8(const uint8_t* src, const FetchLayout& l, const LevelPlace& p,
                          uint32_t w, uint32_t h, uint32_t* out) {
     uint32_t mul = 0, konst = 0;
@@ -538,20 +509,16 @@ inline void DecodeLevel8(const uint8_t* src, const FetchLayout& l, const LevelPl
     }
 }
 
-// Decodes level `level` (w x h texels) from src, where PlaceLevel says it is,
-// into out (w * h RGBA8, R in the low byte, swizzled as the fetch says)
+// into out: w * h RGBA8, R in the low byte, swizzled per the fetch
 inline void DecodeLevel(const uint8_t* src, const FetchLayout& l, const FormatInfo& info,
                         const LevelPlace& p, uint32_t w, uint32_t h, uint32_t* out) {
     if (l.format == 2) DecodeLevel8(src, l, p, w, h, out);
     else DecodeLevelBlocks(src, l, info, p, w, h, out);
 }
 
-// A 2D texture's base level and mip chain, from its base level's memory
-// (`base`, the fetch's base address) and its mips' (`mips`, its mip address;
-// null for none), as the fetch constant `f` lays them out. False, out left
-// empty, for a format not decoded or a texture that isn't 2D. Levels that are
-// the base itself in a packed tail (a texture 16 or less on its short side)
-// are read where the tail puts them.
+// A 2D texture's base level and mips from the memory at the fetch's base and
+// mip addresses (`mips` null: none). False, out empty, for an undecoded
+// format or non-2D texture.
 inline bool DecodeTextureLevels(const uint8_t* base, const uint8_t* mips, const uint32_t f[6],
                                 Texture& out, uint32_t max_size = 4096) {
     const FetchLayout l = ReadFetchLayout(f);
@@ -578,24 +545,18 @@ inline bool DecodeTextureLevels(const uint8_t* base, const uint8_t* mips, const 
 // ---------------------------------------------------------------------------
 // block-compressed textures kept as blocks (scene_capture.h's BlockPixels)
 
-// the Xenos formats the GPU samples as blocks of its own: DXT1, DXT2_3, DXT4_5
-// and DXN, which BC1, BC2, BC3 and BC5 decode bit for bit as DecodeBlock does
-// (DXT2 and DXT4 differ from DXT3 and DXT5 only in what the colour means,
-// premultiplied, which neither the GPU nor DecodeBlock undoes)
+// DXT1, DXT2_3, DXT4_5 and DXN: BC1/2/3/5 decode them bit for bit as
+// DecodeBlock does (DXT2/4's premultiplication is undone by neither)
 inline bool IsBlockCompressed(uint32_t format) {
     return format == 18 || format == 19 || format == 20 || format == 49;
 }
 
-// a fetch's swizzle that leaves x, y, z and w where they are: the GPU's blocks
-// give texels as DecodeBlock does only with it
+// GPU blocks match DecodeBlock only under this swizzle
 inline constexpr uint32_t kIdentitySwizzle = 0 | 1 << 3 | 2 << 6 | 3 << 9;
 
-// The blocks of level `level`'s w x h texels placed at p, as DecodeLevelBlocks
-// reads them, into out: ceil(w/4) x ceil(h/4) blocks in rows, endian-swapped,
-// as the GPU's BC formats take them. A tiled level's blocks are each where
-// TiledOffset2D puts them (8- and 16-byte blocks aren't side by side there, as
-// k_8's texels are: a row's pairs interleave with the next row's), a linear
-// level's rows whole.
+// A level's blocks into out as ceil(w/4) x ceil(h/4) rows, endian-swapped,
+// as BC formats take them. Tiled blocks are fetched one at a time (unlike
+// k_8's texels, 8- and 16-byte blocks aren't contiguous in a row).
 inline void UntileLevelBlocks(const uint8_t* src, const FetchLayout& l, const FormatInfo& info,
                               const LevelPlace& p, uint32_t w, uint32_t h, uint8_t* out) {
     const uint32_t blocks_x = (w + info.block - 1) / info.block;
@@ -618,7 +579,6 @@ inline void UntileLevelBlocks(const uint8_t* src, const FetchLayout& l, const Fo
     SwapEndian(out, uint32_t(row_bytes * blocks_y), l.endian);
 }
 
-// the bytes of a w x h level's blocks (UntileLevelBlocks')
 inline size_t LevelBlockBytes(uint32_t format, uint32_t w, uint32_t h) {
     FormatInfo info;
     if (!GetFormatInfo(format, info)) return 0;
@@ -626,9 +586,8 @@ inline size_t LevelBlockBytes(uint32_t format, uint32_t w, uint32_t h) {
            info.bpb;
 }
 
-// DecodeTextureLevels' texture as blocks (out.blocks; rgba and mips left
-// empty), from the same bytes: false, out untouched, for one DecodeTextureLevels
-// wouldn't decode, one not block-compressed, or one whose fetch swizzles it
+// DecodeTextureLevels' texture as blocks (out.blocks; rgba and mips empty).
+// False, out untouched, if undecodable, not block-compressed, or swizzled
 inline bool DecodeTextureBlocks(const uint8_t* base, const uint8_t* mips, const uint32_t f[6],
                                 Texture& out, uint32_t max_size = 4096) {
     const FetchLayout l = ReadFetchLayout(f);
@@ -657,9 +616,7 @@ inline bool DecodeTextureBlocks(const uint8_t* base, const uint8_t* mips, const 
     return true;
 }
 
-// a w x h level's texels from its blocks (UntileLevelBlocks') into out (w * h
-// RGBA8, R in the low byte): DecodeLevelBlocks' texels for the same level
-// under the identity swizzle
+// same texels as DecodeLevelBlocks under the identity swizzle
 inline void DecodeLevelFromBlocks(uint32_t format, const uint8_t* blocks, uint32_t w, uint32_t h,
                                   uint32_t* out) {
     FormatInfo info;
@@ -685,8 +642,7 @@ inline void DecodeLevelFromBlocks(uint32_t format, const uint8_t* blocks, uint32
     }
 }
 
-// a width x height texture's rgba and mips from its blocks, as
-// DecodeTextureLevels would have decoded them
+// as DecodeTextureLevels would have decoded them
 inline void DecodeRgbaFromBlocks(const BlockPixels& b, uint32_t width, uint32_t height,
                                  std::vector<uint32_t>& rgba,
                                  std::vector<std::vector<uint32_t>>& mips) {
@@ -702,22 +658,16 @@ inline void DecodeRgbaFromBlocks(const BlockPixels& b, uint32_t width, uint32_t 
     }
 }
 
-// The sampler a texture fetch constant describes (scene_capture.h's
-// TexSampler): its clamp modes, filters, anisotropy, mip range and LOD bias
-// (5 fractional bits) and border colour. Filters 2 and 3 (base map, "use the
-// fetch constant") mean linear for mag and min; anisotropy 1 is 1:1 and 7
-// "the fetch constant's", both isotropic.
+// The sampler a texture fetch constant describes (TexSampler). LOD bias has
+// 5 fractional bits. Filters 2 and 3 (base map, "use the fetch constant")
+// mean linear; anisotropy 1 (1:1) and 7 (fetch constant's) are isotropic.
 //
-// As the game's own picture under band3 has it: the SDK draws it on the host
-// GPU through Xenia's texture cache, which takes the sampler from the same
-// fetch constant, and then `aniso_override` (the SDK's anisotropic_override
-// setting: -1 none, 0 off, 1..5 1:1..16:1) replaces the anisotropy of a
-// sampler that's linear both ways, nearest or linear between levels, on a
-// texture with more than one level (xenia-canary's D3D12TextureCache::
-// GetSamplerParameters); anisotropy of any ratio filters linearly in all
-// three ways, as there. RB3's material shaders take every filter from the
-// fetch constant (their tfetch instructions override none), so the override
-// is the only difference.
+// Matches the emulated picture: `aniso_override` (the SDK's
+// anisotropic_override: -1 none, 0 off, 1..5 1:1..16:1) replaces the
+// anisotropy of a sampler linear for mag and min, nearest or linear between
+// levels, on a mipped texture (xenia-canary's D3D12TextureCache::
+// GetSamplerParameters); any anisotropy filters linearly all three ways. RB3's
+// tfetches override no filter, so this is the only difference.
 inline TexSampler DecodeSampler(const uint32_t f[6], int32_t aniso_override = -1) {
     TexSampler s;
     if (!f[1]) return s;

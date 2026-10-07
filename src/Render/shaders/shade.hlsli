@@ -1,38 +1,27 @@
-// Experimental: RB3's material lighting, for both of the native view's
-// backends. mesh.hlsl compiles it as HLSL; shade_model.cpp compiles it as C++
-// for the CPU, with HLSL's vector types and functions from its own shim, so
-// the two can't drift apart. Keep to what both languages share: float2/3/4
-// built from every component, .x .y .z .w, the operators, the shim's
-// functions (shade_model.cpp), `f` on float literals and SHADE_IN for a
-// ShadeParams argument.
+// RB3's material lighting, shared by both backends: mesh.hlsl compiles it as
+// HLSL, shade_model.cpp as C++ through its shim. Keep to what both languages
+// share: float2/3/4 built from every component, .x .y .z .w, the operators,
+// the shim's functions, `f` on float literals, SHADE_IN for a ShadeParams.
 //
-// The maths is out/research/m2_shader_ucode.md's, which read it from the
-// game's shader microcode and checked it by running them; its Python models
-// (tools/shaders/research: fam3.py standard, skin2.py skin, hair3.py hair) are
-// the reference, and tests/shade_model_test.cpp checks this against them.
-// Left out: the environment cube (not decoded), the projected light and the
-// shadow buffer of a vertex-lit material, and normal maps (with them the
-// hair's strand highlight, which runs along their bitangent) in captures from
-// before they kept the tangents.
+// From out/research/m2_shader_ucode.md; the reference models are
+// tools/shaders/research (fam3.py, skin2.py, hair3.py), checked by
+// tests/shade_model_test.cpp. Left out: the environment cube, a vertex-lit
+// material's projected light and shadow buffer, and normal maps (and so the
+// hair's strand highlight) in captures without tangents.
 
 float3 Xyz(float4 v) { return float3(v.x, v.y, v.z); }
 
 // normalize, but zero stays zero instead of NaN, alike on both backends
 float3 SafeNormalize(float3 v) { return v * rsqrt(max(dot(v, v), 1e-20f)); }
 
-// x^p for x in [0, 1]; 0 at 0, where HLSL's pow (exp2(p * log2 x)) and C's
-// could disagree
+// x^p for x in [0, 1]; 0 at 0, where HLSL's pow and C's could disagree
 float PowSat(float x, float p) { return x > 0.0f ? pow(x, p) : 0.0f; }
 
-// The normal map's frame (NORMAL_MAP; out/research/m2_shader_ucode.md 6),
-// as the game's vertex shaders build it (837915E757EEC6DC, skinned
-// 18A3E6C52471D288): from the vertex's tangent T (w its handedness, +-1) and
-// normal N, the bitangent B = T.w (N x T), then the frame turned by the
-// texgen matrix, the tangent U = c20.x T + c20.y B + c20.z N and the normal
-// N' = c22.x T + c22.y B + c22.z N (T and N where it's the identity), in the
-// mesh's space. The backends turn both into the world as they do a normal
-// (by the bones, or world) and the pixels take them interpolated, with the
-// bitangent T.w (N'w x Uw) (Bitangent); none of them normalised.
+// The normal map's frame in mesh space (NORMAL_MAP; m2_shader_ucode.md 6;
+// VS 837915E757EEC6DC, skinned 18A3E6C52471D288): T the tangent (w its
+// handedness), B = T.w (N x T), U = c20.x T + c20.y B + c20.z N,
+// N' = c22.x T + c22.y B + c22.z N. The backends turn both to the world like a
+// normal; pixels rebuild the bitangent with Bitangent. None normalised.
 struct TangentFrame {
     float3 n;  // N'
     float3 u;  // U
@@ -50,24 +39,19 @@ TangentFrame TextureFrame(SHADE_IN(ShadeParams) sp, float3 n, float4 t) {
 // n and u in the world, w the tangent's handedness
 float3 Bitangent(float3 n, float3 u, float w) { return cross(n, u) * w; }
 
-// The normals a pixel lights with: `diffuse` for the diffuse light, the box
-// map, the projected light and the shadow's diffuse darkening, `specular`
-// for the specular, the point lights' rim and their shadow. Only the skin
-// family's two differ.
+// `specular` lights the specular and rim and their shadow, `diffuse` the rest.
+// Only the skin family's two differ.
 struct Normals {
     float3 diffuse;
     float3 specular;
 };
 
-// n, u and b are the interpolated normal, tangent and bitangent (the frame's,
-// with kShadeNormalMap), map s1's texel and detail s14's. The game's pixel
-// shaders (7C6659287B361841, detail 74DC45137476D064; skin FF3F7B88EB727BF9):
-// x = 2 s1.x - 1 pairs with the bitangent and y = 2 s1.y - 1 with the tangent,
-// z = sat(1 - x^2 - y^2) (no square root) with the normal, and
-//   N = normalize(z n + c14.x (x b + y u));
-// the detail map adds c106.x of its own x, y and z to those first. The skin
-// family lights its diffuse with that but without the detail map, and its
-// specular with the detail map and without c14's softening.
+// map is s1's texel, detail s14's (PS 7C6659287B361841, detail
+// 74DC45137476D064, skin FF3F7B88EB727BF9):
+//   N = normalize(z n + c14.x (x b + y u)), x = 2 s1.x - 1, y = 2 s1.y - 1,
+//   z = sat(1 - x^2 - y^2) (no square root);
+// the detail map adds c106.x of its own x, y, z first. Skin's diffuse skips
+// the detail map; its specular skips c14's softening.
 Normals MappedNormals(SHADE_IN(ShadeParams) sp, float3 n, float3 u, float3 b, float4 map,
                       float4 detail) {
     const uint f = sp.flags.x;
@@ -98,7 +82,7 @@ Normals MappedNormals(SHADE_IN(ShadeParams) sp, float3 n, float3 u, float3 b, fl
     return o;
 }
 
-// where the detail map is read: the texture's uv times c106.y
+// uv times c106.y
 float2 DetailUv(SHADE_IN(ShadeParams) sp, float2 uv) {
     return float2(uv.x * sp.normal_map.z, uv.y * sp.normal_map.z);
 }
@@ -109,14 +93,11 @@ float2 TexGen(SHADE_IN(ShadeParams) sp, float2 uv) {
                   sp.texgen[1].x * uv.x + sp.texgen[1].y * uv.y + sp.texgen[1].w);
 }
 
-// A BILLBOARD draw's vertex turned to the camera (kShadeBillboard): the
-// crowd's impostor quads, one DxMultiMesh instance each, lie in their mesh's
-// XZ, and the game's vertex shaders (4B19F15CA3B46FEB lit, 7D050DB197258C07
-// unlit; tools/shaders/research/crowd.py) place local v at
-//   P = T + v.x R + v.y F + v.z U
-// with R, U and F the camera's right, up and forward (VS c16..c18's
-// columns) and T the instance's translation: its rotation and scale are left
-// out. The normal turns the same way, without T. Returns the turned v.
+// A BILLBOARD vertex turned to the camera (kShadeBillboard; the crowd's
+// impostor quads, in their mesh's XZ). VS 4B19F15CA3B46FEB lit,
+// 7D050DB197258C07 unlit (crowd.py): P = T + v.x R + v.y F + v.z U, R U F the
+// camera's right, up, forward (VS c16..c18's columns), T the instance's
+// translation; its rotation and scale are ignored. Returns v turned, without T.
 float3 Billboard(SHADE_IN(ShadeParams) sp, float3 v) {
     return Xyz(sp.billboard[0]) * v.x + Xyz(sp.billboard[2]) * v.y + Xyz(sp.billboard[1]) * v.z;
 }
@@ -135,37 +116,29 @@ float3 BoxSpecular(SHADE_IN(ShadeParams) sp, float3 r, float p) {
            Xyz(sp.box[4]) * PowSat(saturate(r.z), p) + Xyz(sp.box[5]) * PowSat(saturate(-r.z), p);
 }
 
-// Where the projected light's maps (s5, s10) are read at world position p:
-// PS c95..c97 projectively, as the game's pixel shaders do it (B8FEEA37CC970356
-// instrs 4-8, a reciprocal and a multiply), unguarded behind the light. The
-// backends sample there bilinearly, clamped to a transparent black border, as
-// every capture's s5 fetch constant says.
+// The projected light's maps' (s5, s10) uv at world p: PS c95..c97
+// projectively (B8FEEA37CC970356 instrs 4-8), unguarded behind the light.
+// Sampled bilinear with a transparent black border, per s5's fetch constant.
 float2 ProjUv(SHADE_IN(ShadeParams) sp, float3 p) {
     const float4 q = float4(p.x, p.y, p.z, 1.0f);
     const float iw = 1.0f / dot(sp.proj[2], q);
     return float2(dot(sp.proj[0], q) * iw, dot(sp.proj[1], q) * iw);
 }
 
-// The shadow buffer (SHADOW_BUFFER, kShadeShadow; out/research/
-// m2_shader_ucode.md 5, the game's A46F95815504AFE1): RndShadowMap::PrepShadow
-// draws the character's depth (clip z/w, 0 near, cleared to 1) from a light
-// camera into a 512x512 map, and its pixels read s5 there. The coordinate is
-// the VS's c40..c43 times the world position, which hold the light camera's
-// view-projection times the texture's (u = .5x + .5009765625w, v = -.5y +
-// .5009765625w, as the captures have them: half a texel on, so the taps'
-// bilinear centre is the texel the map drew at that pixel, on D3D9's pixel
-// centres), and the pixel shader divides it by its w.
+// The shadow buffer's coordinate (SHADOW_BUFFER; m2_shader_ucode.md 5,
+// A46F95815504AFE1): RndShadowMap::PrepShadow draws the character's depth
+// (clip z/w, 0 near, cleared to 1) from a light camera into a 512x512 s5.
+// VS c40..c43 is the light's view-projection times u = .5x + .5009765625w,
+// v = -.5y + .5009765625w (half a texel on, for D3D9's pixel centres); the
+// pixel divides by w.
 float4 ShadowCoord(SHADE_IN(ShadeParams) sp, float3 p) {
     const float4 q = float4(p.x, p.y, p.z, 1.0f);
     return float4(dot(sp.shadow[0], q), dot(sp.shadow[1], q), dot(sp.shadow[2], q),
                   dot(sp.shadow[3], q));
 }
 
-// The four texels the game's shader reads, point-sampled at uv half a texel
-// up-left, up-right, down-left and down-right (instrs 6-9), and the bilinear
-// weights getWeights2D gives them (instr 10, 20): x = u size - 0.5, the taps
-// floor(x) and floor(x) + 1, clamped to the map, weighted by x's fraction;
-// likewise y. depth is the pixel's own, S.z / S.w.
+// The game's four point-sampled taps (instrs 6-9) and getWeights2D's bilinear
+// weights (instrs 10, 20), clamped to the map. depth is the pixel's, S.z / S.w.
 struct ShadowTapSet {
     float4 x;       // columns: i, i + 1, i, i + 1
     float4 y;       // rows: j, j, j + 1, j + 1
@@ -194,38 +167,29 @@ ShadowTapSet ShadowTaps(float4 s, float2 size) {
     return t;
 }
 
-// How lit the pixel is, 0..1: each tap lit where the depth the map holds
-// there is at or behind the pixel's (sge, instr 17), weighted (instr 22)
+// 0..1; a tap is lit where the map's depth >= the pixel's (sge, instr 17)
 float ShadowLit(ShadowTapSet t, float4 stored) {
     const float4 lit = float4(stored.x >= t.depth ? 1.0f : 0.0f, stored.y >= t.depth ? 1.0f : 0.0f,
                               stored.z >= t.depth ? 1.0f : 0.0f, stored.w >= t.depth ? 1.0f : 0.0f);
     return dot(t.weight, lit);
 }
 
-// true if alpha test throws the pixel away
 bool AlphaCut(SHADE_IN(ShadeParams) sp, float alpha) {
     return (sp.flags.x & kShadeAlphaCut) != 0u && alpha * 255.0f < sp.alpha_cut.x;
 }
 
-// The AO the game's shaders with a point light have (kShadeAoSh; out/
-// research/m2_shader_ucode.md 3): the vertex colour holds the occlusion as
-// spherical harmonics, red the constant term and alpha, green and blue the
-// linear ones along x, y and z, and each point light is dimmed by what's
-// visible toward it over what a bare surface would see (a second light by
-// its own: VS 59D4812E2C2329A3, DFA2CEAD6EF11301). Their vertex shaders work
-// it out per vertex and their pixels take it interpolated, as the backends
-// do.
+// Point-light AO (kShadeAoSh; m2_shader_ucode.md 3; VS 59D4812E2C2329A3,
+// DFA2CEAD6EF11301): the vertex colour holds spherical harmonics, red the
+// constant term, alpha green blue the linear x y z; each point light is
+// dimmed by visible over bare toward it. Per vertex, interpolated.
 //
-// The linear terms, in the mesh's own space. The backends turn them into the
-// world as they do the normal (by the bones, or world), and don't normalise
-// either: the game dots both raw with the light turned into the mesh's space
-// by the transposed world matrix, which comes to the same.
+// The linear terms in mesh space; turned to the world like the normal and,
+// as in the game, not normalised.
 float3 AoShDirection(float4 vc) {
     return float3(vc.w * 2.0f - 1.0f, vc.y * 2.0f - 1.0f, vc.z * 2.0f - 1.0f);
 }
 
-// visible over bare toward point light i from p, n and dir turned as above,
-// r the vertex colour's red; 1 where bare is 0 or less
+// r the vertex colour's red; 1 where bare <= 0
 float AoShRatio(SHADE_IN(ShadeParams) sp, uint i, float3 p, float3 n, float3 dir, float r) {
     const float3 L = SafeNormalize(Xyz(sp.point_pos[i]) - p);
     const float vis = 0.282095f * r + 0.488603f * dot(dir, L);
@@ -233,8 +197,7 @@ float AoShRatio(SHADE_IN(ShadeParams) sp, uint i, float3 p, float3 n, float3 dir
     return bare > 0.0f ? vis / bare : 1.0f;
 }
 
-// the point lights' occlusion at a vertex, for Light's ao_sh: x light 0's,
-// y light 1's; 1 without kShadeAoSh or the light
+// Light's ao_sh: x light 0's, y light 1's; 1 without kShadeAoSh or the light
 float2 AoShVertex(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 dir, float4 vc) {
     float2 ao = float2(1.0f, 1.0f);
     if ((sp.flags.x & kShadeAoSh) == 0u) return ao;
@@ -244,25 +207,15 @@ float2 AoShVertex(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 dir, floa
     return ao;
 }
 
-// A lit material's light at a point: its colour is base * diffuse + added,
-// base the texture. The per-pixel shaders work it out per pixel; the
-// vertex-lit ones (no PER_PIXEL) per vertex, and their pixels add up the
-// interpolated two.
+// colour = texture * diffuse + added; per vertex without PER_PIXEL
 struct Lighting {
     float3 diffuse;  // times the texture
     float3 added;    // after it: specular, and the rim's own light
 };
 
-// p is the world position, n the world normal (any length) and n_spec the
-// specular one (MappedNormals': n but for a normal-mapped skin), vc the
-// vertex colour, spec_map the specular map's texel (1 where sp doesn't
-// sample it),
-// ao_sh the AoShVertex (interpolated, in a pixel), proj and gobo the
-// projected light's maps' texels at ProjUv (s5 and s10; per pixel only, and
-// unread where sp doesn't sample them), lit the shadow buffer's ShadowLit
-// (per pixel only, unread without kShadeShadow), strand the hair's: the
-// normal map's interpolated bitangent, as it is (read with kShadeHair and
-// kShadeNormalMap)
+// World p; n and n_spec any length (MappedNormals'); spec_map 1 where not
+// sampled; proj and gobo s5 and s10 at ProjUv and lit ShadowLit (per pixel
+// only); strand the unnormalised bitangent (kShadeHair with kShadeNormalMap)
 Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, float4 vc,
                float4 spec_map, float2 ao_sh, float4 proj, float4 gobo, float lit,
                float3 strand) {
@@ -274,19 +227,17 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, floa
     const float3 V = SafeNormalize(Xyz(sp.eye) - p);
     const float vn = saturate(dot(N, V));
     const float up = 0.5f * N.z + 0.5f;  // world Z is up
-    // and the specular normal's (N's but for a normal-mapped skin)
     const float3 N2 = SafeNormalize(n_spec);
     const float nv2 = dot(N2, V);
     const float vn2 = saturate(nv2);
-    const float3 R = N2 * (2.0f * nv2) - V;  // the eye's reflection
+    const float3 R = N2 * (2.0f * nv2) - V;
     const float up2 = 0.5f * N2.z + 0.5f;
 
-    // ambient occlusion from the vertex colour's red: point light 0 gets the
-    // stronger aoD, the rest of the light aoA; with a point light, the point
-    // lights get their directional ones
+    // AO from the vertex colour's red: point light 0 gets the stronger aoD,
+    // the rest aoA; kShadeAoSh replaces the point lights'
     float ao_a = 1.0f;
-    float ao_0 = 1.0f;  // point light 0's
-    float ao_1 = 1.0f;  // point light 1's
+    float ao_0 = 1.0f;
+    float ao_1 = 1.0f;
     if ((f & kShadeAO) != 0u) {
         ao_a = saturate(1.0f + sp.ao.x * (1.128379f * vc.x - 1.0f));
         ao_0 = saturate(1.0f + sp.ao.x * (1.504505f * vc.x - 1.0f));
@@ -319,13 +270,9 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, floa
     const float3 one = float3(1.0f, 1.0f, 1.0f);
 
     // The hair's strand highlight (hair3.py; 47D5A8EE975C7558 instrs 62-80):
-    // brightest where the eye's reflection crosses the strands, which run
-    // along the normal map's bitangent, taken as interpolated (not
-    // normalised), in two colours, c2 on its narrow core and c19 on the
-    // broader sheen around it. Its point lights' specular is that colour
-    // times sat(L.R), with no power of its own. Every hair shader the dumps
-    // have is normal-mapped; without the frame (a capture from before it) it's
-    // left out.
+    // where R crosses the strands (the bitangent), c2 on the core and c19 on
+    // the sheen; the point lights' specular is it times sat(L.R). Skipped
+    // without the frame.
     float3 strand_color = zero;
     if (hair && (f & kShadeNormalMap) != 0u) {
         const float rt = dot(R, strand);
@@ -335,12 +282,10 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, floa
         strand_color = Xyz(sp.specular) * a4 + Xyz(sp.specular2) * (a2 * (1.0f - a4));
     }
 
-    // The projected light (NUM_PROJ; m2_shader_ucode.md 5, fam3.py). The
-    // multiply form darkens the box map, the point lights, their specular
-    // and the rim by up to 0.75 c69 where s5's alpha is, as far as the
-    // surface faces it, but not the ambient c1. The gobo form adds c69 times
-    // s10's colour where s5's alpha leaves it, occluded by the VS's ao.y:
-    // light 1's (SH, with two) or aoA (B3ACFB8F2C183C5B, 7928EF7EADF085F6).
+    // The projected light (NUM_PROJ; m2_shader_ucode.md 5, fam3.py). Multiply
+    // darkens all but the ambient c1 by up to 0.75 c69 by s5's alpha and
+    // facing. Gobo adds c69 times s10 where s5's alpha leaves it, occluded by
+    // the VS's ao.y: light 1's or aoA (B3ACFB8F2C183C5B, 7928EF7EADF085F6).
     float3 proj_mul = one;
     float3 proj_add = zero;
     if ((f & (kShadeProjMultiply | kShadeProjGobo)) != 0u) {
@@ -353,12 +298,9 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, floa
         }
     }
 
-    // The shadow buffer (A46F95815504AFE1 instrs 15-29): where the map has
-    // the character nearer the light than the pixel, every point light, its
-    // specular and its rim are darkened by up to 0.75 c107 (1 - the shadow's
-    // colour), as far as the surface faces away from the light camera's
-    // forward c108; not the ambient, the box map or the projected light's
-    // gobo. The specular and the rim take it by the specular normal.
+    // The shadow buffer (A46F95815504AFE1 instrs 15-29) darkens the point
+    // lights by up to 0.75 c107 (1 - shadow colour) as the surface faces away
+    // from c108, the light camera's forward; specular and rim by N2.
     float3 shadow = one;
     float3 shadow2 = one;
     if ((f & kShadeShadow) != 0u) {
@@ -368,7 +310,7 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, floa
         shadow2 = one - Xyz(sp.shadow_color) * (0.75f * away2 * (1.0f - lit));
     }
 
-    float3 lights = proj_add;  // the point lights' diffuse, and the gobo's
+    float3 lights = proj_add;
     float3 lights_spec = zero;
     float3 lights_rim = zero;
     for (uint i = 0u; i < 2u; i++) {
@@ -379,10 +321,9 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, floa
         const float att = saturate(d * sp.point_pos[i].w + sp.point_color[i].w);
         const float3 lc_own =
             Xyz(sp.point_color[i]) * proj_mul * (att * (i == 0u ? ao_0 : ao_1));
-        const float3 lc = lc_own * shadow;    // for the diffuse
-        const float3 lc2 = lc_own * shadow2;  // the specular and the rim
-        // a billboard's light is the falloff alone (4B19F15CA3B46FEB instrs
-        // 37-40): its quad faces the camera, not the light
+        const float3 lc = lc_own * shadow;
+        const float3 lc2 = lc_own * shadow2;
+        // a billboard's light is the falloff alone (4B19F15CA3B46FEB 37-40)
         const float nl = (f & kShadeBillboard) != 0u ? 1.0f : dot(N, L);
         if (skin || hair) {
             lights = lights + lc * saturate(wrap_a * nl + wrap_b);
@@ -430,7 +371,7 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, floa
         } else {
             const float fresnel = (1.0f - vn2) * up2 + 0.25f;
             const float3 s = lights_spec + box_r * (fresnel * spec_norm * ao_a);
-            // the hair's colour is its map's alone (its strands' are in s)
+            // hair's colour is its map's alone; the strands' is in s
             l.added = s * (hair ? Xyz(spec_map) : spec_color);
         }
     }
@@ -444,12 +385,9 @@ Lighting Light(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 n_spec, floa
     return l;
 }
 
-// A movie's frame, as its pixel shader (22F426E8D3A1F1B5, ShaderType 11)
-// turns its planes' texels (each 0..1) to RGB: Bink's BT.601 matrix with its
-// offsets folded in, the shader's literals (c254, c255) exactly, opaque. It
-// reads neither the material's colour nor the vertex colour, and doesn't
-// clamp (the target does). tools/shaders/research/movie.py checks this
-// against the microcode.
+// A movie's YUV texels to RGB (PS 22F426E8D3A1F1B5, ShaderType 11; movie.py):
+// Bink's BT.601 with offsets, the shader's c254/c255 literals exactly.
+// Unclamped; the target clamps.
 float4 MovieRgb(float y, float cr, float cb) {
     const float a = 1.16412353515625f * y;
     return float4(a + 1.595794677734375f * cr - 0.8706550598144531f,
@@ -457,15 +395,10 @@ float4 MovieRgb(float y, float cr, float cb) {
                   a + 2.017822265625f * cb - 1.0816688537597656f, 1.0f);
 }
 
-// Where REFRACT_WORLD's pixel shader (FC53125B5EB914F8) reads the picture
-// behind a pixel, 0..1 across it: its clip position (xy, and w), as the
-// vertex shader passes it on, moved by c119.w times the refract normal map's
-// texel (s1 at the texture's uv) * 2 - 1, its green across and its red up
-// and down, then
-//   uv = (clip.xy + offset) / w * (0.5, -0.5) + 0.5
-// (c255's literals). Without kShadeRefractMap it's straight behind. The
-// picture is read bilinear, clamped to its edges (NgMat::SetupShader's s6).
-// tools/shaders/research/refract.py checks this against the microcode.
+// Where REFRACT_WORLD (PS FC53125B5EB914F8; refract.py) reads the picture
+// behind, 0..1: uv = (clip.xy + offset) / w * (0.5, -0.5) + 0.5, offset
+// c119.w times s1 * 2 - 1, green across and red down. Read bilinear, clamped
+// (NgMat::SetupShader's s6).
 float2 RefractUv(SHADE_IN(ShadeParams) sp, float2 clip, float w, float4 map) {
     float2 c = clip;
     if ((sp.flags.x & kShadeRefractMap) != 0u) {
@@ -475,16 +408,9 @@ float2 RefractUv(SHADE_IN(ShadeParams) sp, float2 clip, float w, float4 map) {
     return float2(c.x / w * 0.5f + 0.5f, c.y / w * -0.5f + 0.5f);
 }
 
-// One pixel's colour and alpha. p is its world position, n its interpolated
-// world normal and u and b its tangent and bitangent (TextureFrame's and
-// Bitangent's, read with kShadeNormalMap), vc its vertex colour, depth its
-// clip w; texel, spec_map and glow are the maps' texels where sp samples
-// them (1 where it doesn't), normal and detail the normal map's and the
-// detail map's (MappedNormals'), behind the post-processed picture at
-// RefractUv for kShadeRefract; ao_sh is the interpolated AoShVertex, proj and
-// gobo the projected light's maps' texels at ProjUv (Light's), lit the
-// shadow buffer's ShadowLit (Light's), vertex the interpolated Lighting of a
-// vertex-lit material's vertices.
+// World p, n, u, b; depth is clip w; maps not sampled are 1; behind is the
+// picture at RefractUv; vertex the interpolated Lighting of a vertex-lit
+// material. Other arguments as Light's.
 float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 u, float3 b, float4 vc,
                   float4 texel, float4 spec_map, float4 glow, float4 normal, float4 detail,
                   float4 behind, float depth, float2 ao_sh, float4 proj, float4 gobo, float lit,
@@ -496,15 +422,11 @@ float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 u, float3
         return MovieRgb(texel.x, (f & kShadeSpecMap) != 0u ? spec_map.x : neutral,
                         (f & kShadeGlow) != 0u ? glow.x : neutral);
     }
-    // REFRACT_WORLD's pixel shader (FC53125B5EB914F8): the texture's rgb
-    // times the picture behind it (read where RefractUv says), alpha the
-    // texture's
     if ((f & kShadeRefract) != 0u) {
         texel = float4(texel.x * behind.x, texel.y * behind.y, texel.z * behind.z, texel.w);
     }
     if ((f & kShadeModel) == 0u) {
-        // the placeholder from before: colour times texture, times the vertex
-        // colour if prelit, else a fixed light from above (Milo is z up)
+        // placeholder; Milo is z up
         float4 c = sp.color * texel;
         if ((f & kShadePrelit) != 0u) {
             c = c * vc;
@@ -527,8 +449,7 @@ float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 u, float3
     float3 rgb;
     float alpha;
     if ((f & kShadeLit) == 0u) {
-        // the unlit shaders: the VS's colour c0 c1 (times the vertex colour
-        // if prelit, as particles are) times the texture
+        // unlit: the VS's c0 c1
         float4 col = sp.color * sp.ambient;
         if ((f & kShadePrelit) != 0u) col = col * vc;
         rgb = base * Xyz(col);
@@ -560,18 +481,13 @@ float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 u, float3
     return float4(rgb.x, rgb.y, rgb.z, alpha);
 }
 
-// A soft particle (scene_capture.h's IsSoftParticle; the game's pixel shader
-// 66C00A7A56838997, out/research/softparticle_survey.md 2) is the particle's
-// colour with its alpha times SoftFade: it fades out over the last 48 units
-// of view depth before it meets the scene behind it. The game reads that
-// scene depth back from its depth buffer (s9, point-sampled where the pixel
-// is on the screen) by the camera's range, c89:
-//   Zs = near far / (far - ((1 - s9) c89.z - c89.w) (far - near)),
-// which is the view depth the scene was drawn at, and the far plane where
-// nothing drew. The native depth is 1/w (inv_w, 0 where nothing drew).
+// A soft particle (IsSoftParticle; PS 66C00A7A56838997,
+// softparticle_survey.md 2) fades its alpha over the last 48 units of view
+// depth before the scene. The game reads s9's depth back by c89; the native
+// depth is 1/w, 0 where nothing drew (then the far plane).
 float SoftSceneDepth(float far_plane, float inv_w) {
     return inv_w > 0.0f ? 1.0f / inv_w : far_plane;
 }
 
-// scene_depth SoftSceneDepth's, w the particle's own view depth (clip w)
+// w is the particle's clip w
 float SoftFade(float scene_depth, float w) { return saturate((scene_depth - w) / 48.0f); }
