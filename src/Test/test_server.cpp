@@ -884,7 +884,8 @@ private:
                         {"post_plan", g.post_plan_ms},
                         {"submit", g.submit_ms},
                         {"wait", g.wait_ms},
-                        {"evict", g.evict_ms}};
+                        {"evict", g.evict_ms},
+                        {"ahead", g.ahead_ms}};
         const render::GpuStats& most = k.plan_most;
         out.plan_max_ms = {{"plan", most.plan_ms},
                            {"setup", most.plan_setup_ms},
@@ -901,6 +902,8 @@ private:
                       {"shows_kept", double(k.shows_kept)},
                       {"draws", double(g.draws)},
                       {"world_draws", double(g.world_draws)},
+                      {"ahead_used", double(g.ahead_used)},
+                      {"ahead_fallback_passes", double(g.ahead_fallback_passes)},
                       {"passes", double(g.passes)},
                       {"pre_passes", double(g.pre_passes)},
                       {"pool_meshes", double(g.pool_meshes)},

@@ -117,6 +117,10 @@ TEST_CASE("a post frame's capture gets the world frame's world in front of its o
     // the post frame's from its post-processing on
     CHECK(Meshes(*fc) == std::vector<uint32_t>{1, 2, 3, 10, 13, 14, 15});
     CHECK(fc->post_boundary == 4);
+    // the world's draws come first, the post frame's carried pass after them
+    // (native_world_ahead leaves out [0, composed_world_end))
+    CHECK(fc->composed_world_end == 3);
+    CHECK(world.composed_world_end == 0);
     REQUIRE(fc->passes.size() == 5);
     CHECK(fc->passes[0].tex_obj == kImpostor);
     CHECK(fc->passes[0].first_draw == 0);

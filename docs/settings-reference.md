@@ -267,6 +267,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `native_view_shadow_scale` | `1` | `1` to `4` | Draw the characters' self-shadow maps this many times the game's 512x512 in the native renderer and the native view (experimental): sharper shadow edges. 1 = the game's |
 | `native_view_target_scale` | `true` | `true`, `false` | Draw the native renderer's passes that are pictures of the screen (the spotlights' haze, the soft particles' smoke) in proportion to its picture: 1.5 times the game's size at 1080p, 3 times at 4K. Off keeps the game's sizes, made for 1280x720, to compare |
 | `native_view_texture_filtering` | `true` | `true`, `false` | Sample textures in the native view (experimental) as the game's samplers do: filtered, between mip levels by distance, and clamped or wrapped as each says, live and in the test harness's captures; off reads every texture's nearest texel at full size, to compare |
+| `native_world_ahead` | `false` | `true`, `false` | Experimental: with RB3's even/odd rendering, draw each world frame's venue on the GPU right after that frame, without waiting for it, so the post frame after it only post-processes it and draws the track and HUD. The world's GPU time moves into the world frame's half of the pair: on a 60 Hz laptop in a paused song post frames went from 14 to 8 ms and the picture's latency fell 4 ms, the picture the same. Off by default: it sends GPU work it doesn't wait for, as the setup that once hung AMD GPUs did (not seen with this one); for trying at 120 Hz |
 
 ### Startup
 

@@ -157,6 +157,9 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.arena_new_mb += g.arena_new_mb;
     sum.reserve_grew += g.reserve_grew;
     sum.world_draws += g.world_draws;
+    sum.ahead_ms += g.ahead_ms;
+    sum.ahead_used += g.ahead_used;
+    sum.ahead_fallback_passes += g.ahead_fallback_passes;
     sum.pool_meshes += g.pool_meshes;
     sum.arena_moved += g.arena_moved;
     sum.arena_sent += g.arena_sent;
@@ -765,6 +768,9 @@ class Renderer {
                 // each waited for once submitted
                 pipeline = REXCVAR_GET(native_present_pipeline);
                 o.gpu_no_wait = pipeline;
+                // each world frame's world drawn ahead, for the post frame
+                // after it (not with the pipeline, which waits differently)
+                o.world_ahead = REXCVAR_GET(native_world_ahead) && !pipeline;
                 // what's drawn once a world period is kept that long on the
                 // GPU, not sent again each time (gpu_view.h's residency)
                 o.world_period = pacing::WorldPeriod();
@@ -976,8 +982,17 @@ class Renderer {
             }
             // drawn, and finished: published when due
             const int64_t now = Nanoseconds(std::chrono::steady_clock::now());
+            // native_world_ahead: a world frame's world drawn now, left to
+            // the GPU while this frame waits to be published and the post
+            // frame's capture comes. The pacer is told when the frame itself
+            // was done, so its delay doesn't grow by this.
+            if (o.world_ahead && d.drew_gpu && KindOf(*cap) == FrameKind::kWorld) {
+                GpuStats ahead;
+                if (GpuRenderer::Get().RenderWorldAhead(*cap, o, ahead)) d.gs.ahead_ms = ahead.ms;
+            }
             const int64_t due = due_of(d, now);
-            if (due > now) WaitForCapture(seen, std::chrono::nanoseconds(due - now));
+            const int64_t after = Nanoseconds(std::chrono::steady_clock::now());
+            if (due > after) WaitForCapture(seen, std::chrono::nanoseconds(due - after));
             PublishDrawn(d, d.want_rgba ? &rgba : nullptr);
         }
     }

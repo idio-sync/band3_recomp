@@ -129,6 +129,13 @@ struct GpuStats {
     // draws it drew (before post_boundary; none when it showed the buffer)
     bool shows_kept = false;
     uint32_t world_draws = 0;
+    // native_world_ahead: on a world frame, the worker's milliseconds drawing
+    // its world ahead (RenderWorldAhead, not in ms); on a post frame, whether
+    // it post-processed that scene (1), and the world's texture passes it
+    // drew itself all the same, the world ahead not having drawn their
+    // targets (0 expected)
+    double ahead_ms = 0;
+    uint32_t ahead_used = 0, ahead_fallback_passes = 0;
     // meshes sent from the CPU this frame into its pool (new, or not drawn
     // the frame before), moved from the last frame's pool into the arena on
     // the GPU, and sent from the CPU into the arena (rebuilt: arena_rebuilt);
@@ -364,6 +371,17 @@ class GpuRenderer {
     // caller watches for a GPU that never finishes), so the caller polls it.
     // True with no frame in flight there, or no device.
     bool OutputDone(int slot);
+    // native_world_ahead: a world frame's world alone (its texture passes
+    // and back-buffer draws before post_boundary, and the pre-process buffer
+    // kept from it) into the scene target, submitted and not waited for, so
+    // the composed post frame drawn next (RasterOptions::world_ahead) only
+    // post-processes it and draws its overlay: the world's GPU time moves
+    // into the world frame's half of the pair. That post frame's fence, after
+    // it on SDL_gpu's one queue, waits it out too. Any frame drawn in
+    // between, or at another size, and the post frame draws its world
+    // itself. False as RenderFrame.
+    bool RenderWorldAhead(const FrameCapture& world, const RasterOptions& options,
+                          GpuStats& stats);
     // reads output `slot` back as RenderFrame's rgba, at its size; false if
     // it has no picture (or no device)
     bool DownloadOutput(int slot, std::vector<uint32_t>& rgba, uint32_t& width,

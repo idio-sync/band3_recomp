@@ -222,6 +222,11 @@ struct RasterOptions {
     // wrong (a barrier out of step, a list executed still open) and AMD GPUs
     // hung, which waiting inside didn't.
     bool gpu_no_wait = false;
+    // On the GPU (native_world_ahead), a composed post frame whose world was
+    // drawn ahead, by GpuRenderer::RenderWorldAhead just before it, post-
+    // processes that scene rather than drawing the world again. The CPU
+    // ignores it.
+    bool world_ahead = false;
     // On the GPU, the most frames apart the world is drawn now (the live
     // view's: frame_pacing.h's WorldPeriod), which geometry and textures
     // drawn in one frame are kept for (gpu_view.h's ResidencyKeepFrames), so

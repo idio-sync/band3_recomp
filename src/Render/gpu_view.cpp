@@ -823,9 +823,21 @@ struct GpuRenderer::Impl {
     // world passes before a frame whose world refracts (soft_raster.h's
     // kPreBufferPasses): its world alone, which leaves its scene in
     // pre_scratch, its REFRACT_WORLD draws reading the last pass's there (the
-    // first black).
+    // first black). With `ahead_pass` (RenderWorldAhead) it's a world
+    // frame's world alone, left in the scene target and submitted unwaited.
     bool Render(const FrameCapture& frame, const RasterOptions& o, int slot,
-                std::vector<uint32_t>* rgba, GpuStats& stats, int pre_pass = 0);
+                std::vector<uint32_t>* rgba, GpuStats& stats, int pre_pass = 0,
+                bool ahead_pass = false);
+    // The world RenderWorldAhead left in the scene target (and its depth):
+    // drawn as frame `serial` (0 none), of game frame world_frame, at w x h.
+    // Every Render forgets it as it starts, so only the one right after it
+    // can post-process it: one in between (a capture's, say) draws over the
+    // scene target, or may.
+    struct Ahead {
+        uint64_t serial = 0, world_frame = 0;
+        uint32_t w = 0, h = 0;
+    };
+    Ahead ahead;
     // reads `texture` (w x h) back into rgba; false if the GPU failed (logged)
     bool Download(SDL_GPUTexture* texture, uint32_t w, uint32_t h, std::vector<uint32_t>& rgba);
     // lets go of what no frame has drawn for long enough (gpu_view.h's
@@ -1254,6 +1266,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     ReleaseKept(post_buffer);
     ReleaseKept(pre_buffer);
     ReleaseOutputs();
+    ahead = Ahead{};
     depth_sampled = false;
     no_bones = nullptr;
     upload = nullptr;
@@ -2253,7 +2266,11 @@ bool GpuRenderer::Impl::Download(SDL_GPUTexture* texture, uint32_t w, uint32_t h
 }
 
 bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o, int slot,
-                               std::vector<uint32_t>* rgba, GpuStats& st, int pre_pass) {
+                               std::vector<uint32_t>* rgba, GpuStats& st, int pre_pass,
+                               bool ahead_pass) {
+    // the world drawn ahead into the scene target, if the Render just before
+    // this one did that (Ahead)
+    const Ahead ahead_was = std::exchange(ahead, Ahead{});
     // the frame's parts' times (GpuStats::plan_ms and the rest)
     using Clock = std::chrono::steady_clock;
     const auto render_start = Clock::now();
@@ -2275,6 +2292,18 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     const bool keeps = kept_buffer && ProcKnown(frame) && (frame.proc_cmds & kProcPost) &&
                        EnsureKept(post_buffer, width, height);
     st.shows_kept = shows_kept;
+    // RasterOptions::world_ahead: this composed post frame's world is in the
+    // scene target already, drawn ahead by the Render just before (serial is
+    // still that one's), so its draws [0, composed_world_end) are left out
+    // and it goes on from the resolve
+    const bool uses_ahead = !ahead_pass && !pre_pass && o.world_ahead && frame.composed &&
+                            frame.composed_world_end && !shows_kept &&
+                            o.view == RasterView::kFinal && ahead_was.serial &&
+                            ahead_was.serial == serial &&
+                            ahead_was.world_frame == frame.world_frame &&
+                            ahead_was.w == width && ahead_was.h == height;
+    const uint32_t ahead_end = uses_ahead ? frame.composed_world_end : 0;
+    st.ahead_used = uses_ahead ? 1 : 0;
     // The world's REFRACT_WORLD draws read the pre-process buffer (soft_raster.h's
     // RefractsWorld, RasterOptions::pre_buffer): the one kept from the world
     // frames before, or else the world drawn kPreBufferPasses times first
@@ -2282,7 +2311,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // does; black (no_depth's 0) where neither, as in a view of the scene
     // target, whose alpha and depth they don't change. This frame's world is
     // kept in turn.
-    const bool world_refracts = !shows_kept && WorldRefracts(frame);
+    const bool world_refracts = !shows_kept && !uses_ahead && WorldRefracts(frame);
     const bool keeps_pre =
         world_refracts && !pre_pass && o.pre_buffer && o.view == RasterView::kFinal;
     SDL_GPUTexture* world_behind = no_depth;
@@ -2395,6 +2424,18 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // beams). One the frame samples but doesn't draw still reads what
         // was drawn last.
         Rt* target = nullptr;
+        // The world drawn ahead draws the world's texture passes, not the
+        // overlay's. A post frame using it leaves out the world's whose
+        // targets it drew, and draws any other itself (counted: one the world
+        // frame's capture planned without, which only the post frame's own
+        // overlay samples).
+        if (run.pass && ahead_pass && run.first >= frame.post_boundary) continue;
+        if (run.pass && run.first < ahead_end) {
+            const auto f = rts.find(run.pass->tex_obj);
+            if (f != rts.end() && f->second.drawn && f->second.drawn_in == ahead_was.serial)
+                continue;
+            st.ahead_fallback_passes++;
+        }
         if (run.pass) {
             uint32_t tw, th;
             PassTargetSize(frame, *run.pass, o, tw, th);
@@ -2411,6 +2452,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             const DrawItem& it = frame.draws[d];
             if (!DrawnIn(run, frame, it, o)) continue;
             if (!run.pass && shows_kept && d < frame.post_boundary) continue;
+            if (!run.pass && (d < ahead_end || (ahead_pass && d >= frame.post_boundary))) continue;
             if (!run.pass && d < frame.post_boundary) st.world_draws++;
             const ShadeState* state = shade::ShadeOf(frame, it);
             // the depth volume's blurs read a copy of it, not its quad's
@@ -3112,8 +3154,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // none did)
         auto drawn_now = [&](uint32_t tex_obj) {
             const auto f = rts.find(tex_obj);
-            return tex_obj && f != rts.end() && f->second.drawn_in == serial ? f->second.color
-                                                                            : black;
+            // (or by the world drawn ahead, which drew this frame's world)
+            return tex_obj && f != rts.end() &&
+                           (f->second.drawn_in == serial ||
+                            (uses_ahead && f->second.drawn_in == ahead_was.serial))
+                       ? f->second.color
+                       : black;
         };
         // the noise map's layer, its sampler packed for the levels it has
         // there; none (no layer for it) leaves the noise out
@@ -3176,8 +3222,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // post-processed, or as it is, or the view of the scene target asked for
     auto resolve = [&] {
         end_pass();
-        // the scene cleared, if nothing drew to it
-        if (!back_begun) {
+        // the scene cleared, if nothing drew to it (the world drawn ahead
+        // did, and the overlay goes on over its depth as over the world's)
+        if (!back_begun && uses_ahead) {
+            back_begun = true;
+        } else if (!back_begun) {
             begin_back(true);
             end_pass();
         }
@@ -3192,6 +3241,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SDL_CopyGPUTextureToTexture(copy, &from, &to, width, height, 1, false);
             SDL_EndGPUCopyPass(copy);
             if (!pre_pass) pre_buffer.game_frame = WorldFrameOf(frame);
+        }
+        // the world drawn ahead ends with its scene, which the post frame
+        // after it post-processes
+        if (ahead_pass) {
+            resolved = true;
+            return;
         }
         // the post buffer as the picture, or the picture kept as it.
         // Multisampled, the overlay's start reads the post buffer itself and
@@ -3523,13 +3578,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     for (size_t r = 0; r < runs.size(); r++) {
         const PassRun& run = runs[r];
         // a world pass ends with the world
-        if (pre_pass && resolved) break;
+        if ((pre_pass || ahead_pass) && resolved) break;
         if (!run.pass) {
             for (size_t d = run.first; d < run.end; d++) {
                 const DrawItem& it = frame.draws[d];
                 if (!DrawnToBackBuffer(it) || (shows_kept && d < frame.post_boundary)) continue;
+                if (d < ahead_end) continue;
                 if (!resolved && d >= frame.post_boundary) resolve();
-                if (resolved && (o.view != RasterView::kFinal || pre_pass)) break;
+                if (resolved && (o.view != RasterView::kFinal || pre_pass || ahead_pass)) break;
                 bool clear_depth = false;
                 // (a DrawRect quad has no camera of its own)
                 if (it.rect_shader < 0) {
@@ -3741,6 +3797,31 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     }
     if (!resolved) resolve();
     end_pass();
+
+    // The world drawn ahead is submitted and left to the GPU, with no fence
+    // of its own: the next Render goes after it on SDL's one queue, and its
+    // fence (waited for, the post frame's or any other) waits it out too. As
+    // the world passes before a frame (pre_pass, gpu_no_wait) do; a fence
+    // polled from outside is what hung AMD GPUs (RasterOptions::gpu_no_wait).
+    if (ahead_pass) {
+        if (o.gpu_labels) {
+            std::lock_guard lock(draw_log_mutex);
+            draw_log_frame = frame_label + " (world ahead)";
+            draw_log = std::move(indexed_draws);
+        }
+        st.record_ms = ms_since(record_start);
+        const auto submit_start = Clock::now();
+        if (!SDL_SubmitGPUCommandBuffer(cmd)) {
+            REXLOG_WARN("native view gpu: the world ahead didn't submit ({})", SDL_GetError());
+            return false;
+        }
+        st.submit_ms = ms_since(submit_start);
+        const auto evict_start = Clock::now();
+        Evict();
+        st.evict_ms = ms_since(evict_start);
+        ahead = {serial, frame.game_frame, width, height};
+        return true;
+    }
 
     // the display's gamma ramp over all of it, as the presenter applies it
     // (gamma_ramp.h), by the CPU's lookup: each value's entry, red in the low
@@ -3999,6 +4080,29 @@ bool GpuRenderer::OutputDone(int slot) {
     if (!impl_->device || !o.fence) return true;
     if (!SDL_QueryGPUFence(impl_->device, o.fence)) return false;
     impl_->ReleaseFence(o);
+    return true;
+}
+
+bool GpuRenderer::RenderWorldAhead(const FrameCapture& world, const RasterOptions& options,
+                                   GpuStats& stats) {
+    std::lock_guard lock(impl_->mutex);
+    // (after a frame Draw has drawn: warm, the device set up)
+    if (!impl_->device || !impl_->warm) return false;
+    const auto start = std::chrono::steady_clock::now();
+    stats = GpuStats{};
+    RasterOptions o = options;
+    o.self_shadow = options.self_shadow && impl_->shadow_maps;
+    // its own world, not the post buffer a world frame shows
+    o.post_buffer = false;
+    if (!impl_->Render(world, o, -1, nullptr, stats, 0, true)) {
+        REXLOG_WARN("native view gpu: the world ahead failed; giving up for this session, the "
+                    "native view draws on the CPU");
+        impl_->ready = false;
+        impl_->Release(false);
+        return false;
+    }
+    stats.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                   .count();
     return true;
 }
 

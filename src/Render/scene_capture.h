@@ -620,6 +620,11 @@ struct FrameCapture {
     // the world is the frame's own: world_frame is its game_frame.
     uint32_t composed = 0;
     uint64_t world_frame = 0;
+    // a composed frame's draws from its world frame, which come first: [0,
+    // composed_world_end), its texture passes' and the world's back buffer's
+    // (native_world_ahead leaves them out where they were drawn ahead); 0 in
+    // a frame that isn't composed
+    uint32_t composed_world_end = 0;
     // 0 for the first frame captured after capture turned on, which began
     // before and has only the draws made since; 1 otherwise (not saved:
     // capture files hold whole frames)

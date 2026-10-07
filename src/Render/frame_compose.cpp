@@ -126,6 +126,7 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
     const uint32_t world_end = ProcKnown(world) ? world.post_boundary : uint32_t(world.draws.size());
     const uint32_t frame_post = ProcKnown(frame) ? frame.post_boundary : 0;
     AppendRange(fc, world, 0, world_end, 0, false, !ProcKnown(world));
+    fc.composed_world_end = uint32_t(fc.draws.size());
     std::set<uint64_t> have;
     for (const Pass& p : fc.passes)
         if (p.tex_obj) have.insert(RtKey(p.tex_obj, p.version));

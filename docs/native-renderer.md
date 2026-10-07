@@ -121,6 +121,15 @@ settings), each described there (`src/settings.cpp`):
   turn off the presenting above, to compare.
 - `native_present_pipeline`: records the next frame while the GPU draws the one before.
   Keep it off: it hangs AMD GPUs and grows video memory.
+- `native_world_ahead` (experimental, off): with even/odd rendering, draws each world frame's
+  venue right after that frame without waiting for it, so the post frame after it only
+  post-processes it and draws its overlay; the world's GPU time moves into the world frame's
+  half of the pair. On a 60 Hz laptop in a paused song post frames went from 14 to 8 ms and
+  latency fell 4 ms, the picture the same, but the frames shown barely changed there (the
+  missing ones were pacing's, not the renderer's); it's meant for 120 Hz, where a post frame
+  over 8.3 ms costs the next. `native_view stats`' `by_kind` has `ahead` (the world frames'
+  milliseconds drawing it), `ahead_used` (post frames that used it) and
+  `ahead_fallback_passes` (world texture passes a post frame drew itself all the same).
 - `native_query_sample_count`, `native_query_log`, `native_sync_short_wait_us`,
   `native_vblank_free_running`: the sync-only GPU's query answers and pacing.
 - `native_view_target_scale`: the haze and smoke passes in proportion to the picture (on by
