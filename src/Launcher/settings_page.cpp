@@ -301,6 +301,7 @@ void SettingsPage::DrawControl(const Setting& setting) {
     case Widget::kFloatInput: DrawFloatInput(setting); break;
     case Widget::kPercentSlider: DrawFloatSlider(setting, true); break;
     case Widget::kText: DrawText(setting); break;
+    case Widget::kPassword: DrawText(setting, true); break;
     case Widget::kPath: DrawPath(setting); break;
     case Widget::kFolderList: DrawFolderList(setting); break;
     case Widget::kMicSlots: DrawMicSlots(setting); break;
@@ -439,9 +440,9 @@ void SettingsPage::DrawFloatInput(const Setting& s) {
     }
 }
 
-void SettingsPage::DrawText(const Setting& s) {
+void SettingsPage::DrawText(const Setting& s, bool password) {
     std::string value = model_.Value(s.cvar);
-    if (EditText("##value", HintFor(s.cvar), value, ImGui::GetContentRegionAvail().x)) {
+    if (EditText("##value", HintFor(s.cvar), value, ImGui::GetContentRegionAvail().x, password)) {
         Apply(s.cvar, value);
     }
 }
@@ -1086,7 +1087,8 @@ void SettingsPage::DrawWindowMode(const Setting& s) {
     }
 }
 
-bool SettingsPage::EditText(const char* id, const char* hint, std::string& value, float width) {
+bool SettingsPage::EditText(const char* id, const char* hint, std::string& value, float width,
+                            bool password) {
     TextField& field = text_fields_[ImGui::GetID(id)];
     // the setting's value until the field is being edited
     if (!field.editing || field.text.empty()) {
@@ -1094,8 +1096,11 @@ bool SettingsPage::EditText(const char* id, const char* hint, std::string& value
         field.text.resize(std::max<size_t>(value.size() + 1, 256), '\0');
     }
     ImGui::SetNextItemWidth(std::max(width, Px(80)));
-    ImGui::InputTextWithHint(id, hint, field.text.data(), field.text.size(),
-                             ImGuiInputTextFlags_CallbackResize, ResizeText, &field.text);
+    // ImGui's password fields also refuse to copy or cut their text
+    const ImGuiInputTextFlags flags =
+        ImGuiInputTextFlags_CallbackResize | (password ? ImGuiInputTextFlags_Password : 0);
+    ImGui::InputTextWithHint(id, hint, field.text.data(), field.text.size(), flags, ResizeText,
+                             &field.text);
     field.editing = ImGui::IsItemActive();
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         value = field.text.data();
@@ -1111,7 +1116,11 @@ bool SettingsPage::Apply(std::string_view cvar, std::string_view value) {
         }
         return true;
     }
-    REXLOG_WARN("Launcher: {} didn't accept \"{}\"", cvar, value);
+    if (model_.Secret(cvar)) {
+        REXLOG_WARN("Launcher: {} didn't accept the value", cvar);
+    } else {
+        REXLOG_WARN("Launcher: {} didn't accept \"{}\"", cvar, value);
+    }
     row_problems_[Str(cvar)] = model_.Refusal(cvar, value);
     return false;
 }

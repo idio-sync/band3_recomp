@@ -188,6 +188,18 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `events_target`<br>Send to | `255.255.255.255` | text | Where events are sent. 255.255.255.255 broadcasts to the local network; if receivers see nothing, use your subnet's broadcast address or one device's IP *Applies at the next start.* |
 | `events_port`<br>Port | `21070` | `1` to `65535` | UDP port events are sent to *Applies at the next start.* |
 
+### Home Assistant
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `ha_mqtt_host`<br>MQTT broker | *(empty)* | text | Home Assistant's MQTT broker (host name or address), which band3 tells the song, score, screen and more as Home Assistant entities. Empty leaves MQTT off *Applies at the next start.* |
+| `ha_mqtt_port`<br>Port | `1883` | `1` to `65535` | TCP port of Home Assistant's MQTT broker (1883 unless it was changed) *Applies at the next start.* |
+| `ha_mqtt_username`<br>User name | *(empty)* | text | User name for the MQTT broker. Empty connects without one *Applies at the next start.* |
+| `ha_mqtt_password`<br>Password | *(empty)* | text | Password for the MQTT broker, sent only with a user name. band3 never writes it to its log *Applies at the next start.* |
+| `ha_discovery_prefix`<br>Discovery prefix | `homeassistant` | text | Home Assistant's MQTT discovery prefix (homeassistant unless it was changed) *Applies at the next start.* |
+| `ha_stagekit`<br>Stage Kit lights | `false` | `true`, `false` | Also tell Home Assistant the Stage Kit's lights, strobe and fog. They change many times a second, so leave them out of Home Assistant's recorder *Applies at the next start.* |
+| `ha_webhook_url`<br>Webhook URL | *(empty)* | text | A Home Assistant webhook URL told when a song starts, ends and changes, as the RB3E Dashboard tells it, so its rb3e_lighting automation works unchanged. Empty leaves it off *Applies at the next start.* |
+
 ### GoCentral
 
 | Setting | Default | Takes | What it does |
@@ -355,6 +367,13 @@ band3 still reads a `band3_config.ini` from the folder it starts in, or the one 
 | `[http]` | `allow_cors` | `http_allow_cors` |
 | `[http]` | `allow_scripts` | `http_allow_scripts` |
 | `[http]` | `rhythmverse` | `http_rhythmverse` |
+| `[homeassistant]` | `mqtt_host` | `ha_mqtt_host` |
+| `[homeassistant]` | `mqtt_port` | `ha_mqtt_port` |
+| `[homeassistant]` | `mqtt_username` | `ha_mqtt_username` |
+| `[homeassistant]` | `mqtt_password` | `ha_mqtt_password` |
+| `[homeassistant]` | `discovery_prefix` | `ha_discovery_prefix` |
+| `[homeassistant]` | `stagekit` | `ha_stagekit` |
+| `[homeassistant]` | `webhook_url` | `ha_webhook_url` |
 | `[gocentral]` | `enabled` | `gocentral` |
 | `[gocentral]` | `address` | `gocentral_address` |
 | `[liveless]` | `enabled` | `liveless` |

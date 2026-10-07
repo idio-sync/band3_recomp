@@ -385,6 +385,39 @@ REXCVAR_DEFINE_BOOL(http_rhythmverse, true, "Band3/Online",
     "ones it hosts into a rhythmverse folder in the first of content_folders. Downloaded "
     "songs join the game without a restart, as songs bought from the Xbox store did");
 
+// Home Assistant (src/Net/home_assistant.h): a host or a webhook URL turns it on
+REXCVAR_DEFINE_STRING(ha_mqtt_host, "", "Band3/Online",
+    "Home Assistant's MQTT broker (host name or address), which band3 tells the song, score, "
+    "screen and more as Home Assistant entities. Empty leaves MQTT off")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_INT32(ha_mqtt_port, 1883, "Band3/Online",
+    "TCP port of Home Assistant's MQTT broker (1883 unless it was changed)")
+    .range(1, 65535)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(ha_mqtt_username, "", "Band3/Online",
+    "User name for the MQTT broker. Empty connects without one")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(ha_mqtt_password, "", "Band3/Online",
+    "Password for the MQTT broker, sent only with a user name. band3 never writes it to its log")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(ha_discovery_prefix, "homeassistant", "Band3/Online",
+    "Home Assistant's MQTT discovery prefix (homeassistant unless it was changed)")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(ha_stagekit, false, "Band3/Online",
+    "Also tell Home Assistant the Stage Kit's lights, strobe and fog. They change many times a "
+    "second, so leave them out of Home Assistant's recorder")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(ha_webhook_url, "", "Band3/Online",
+    "A Home Assistant webhook URL told when a song starts, ends and changes, as the RB3E "
+    "Dashboard tells it, so its rb3e_lighting automation works unchanged. Empty leaves it off")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 REXCVAR_DEFINE_BOOL(rb3e_mode, true, "Band3/Online",
     "Tell the game's scripts RB3Enhanced is running (they see RB3E and RB3E_HAS_VERSION "
     "defined), so Rock Band 3 Deluxe turns on its RB3E features: its version line, party "
@@ -721,6 +754,13 @@ void SnapshotStartupSettings() {
         .http_enabled = REXCVAR_GET(http_enabled),
         .http_port = REXCVAR_GET(http_port),
         .http_address = REXCVAR_GET(http_address),
+        .ha_mqtt_host = REXCVAR_GET(ha_mqtt_host),
+        .ha_mqtt_port = REXCVAR_GET(ha_mqtt_port),
+        .ha_mqtt_username = REXCVAR_GET(ha_mqtt_username),
+        .ha_mqtt_password = REXCVAR_GET(ha_mqtt_password),
+        .ha_discovery_prefix = REXCVAR_GET(ha_discovery_prefix),
+        .ha_stagekit = REXCVAR_GET(ha_stagekit),
+        .ha_webhook_url = REXCVAR_GET(ha_webhook_url),
         .rb3e_mode = REXCVAR_GET(rb3e_mode),
         .gocentral = REXCVAR_GET(gocentral),
         .gocentral_address = REXCVAR_GET(gocentral_address),
@@ -756,7 +796,8 @@ bool ReadAtStartupOnly(std::string_view name) {
         // SnapshotStartupSettings' (most are kRequiresRestart too)
         "controller_type", "guitar_type", "rnd_sync", "disable_metamusic", "main_heap_size", "char_heap_size",
         "events_target", "events_port", "discord_enabled", "http_enabled", "http_port",
-        "http_address", "rb3e_mode", "gocentral", "gocentral_address", "liveless",
+        "http_address", "ha_mqtt_host", "ha_mqtt_port", "ha_mqtt_username", "ha_mqtt_password",
+        "ha_discovery_prefix", "ha_stagekit", "ha_webhook_url", "rb3e_mode", "gocentral", "gocentral_address", "liveless",
         "liveless_connect", "liveless_external_ip", "liveless_port", "liveless_port_mapping",
         "liveless_rooms", "liveless_rooms_server", "liveless_gateway", "liveless_upnp_url",
         "native_camera_shake",

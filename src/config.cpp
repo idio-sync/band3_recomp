@@ -65,6 +65,13 @@ constexpr IniSetting kIniSettings[] = {
     {"http", "allow_cors", "http_allow_cors"},
     {"http", "allow_scripts", "http_allow_scripts"},
     {"http", "rhythmverse", "http_rhythmverse"},
+    {"homeassistant", "mqtt_host", "ha_mqtt_host"},
+    {"homeassistant", "mqtt_port", "ha_mqtt_port"},
+    {"homeassistant", "mqtt_username", "ha_mqtt_username"},
+    {"homeassistant", "mqtt_password", "ha_mqtt_password"},
+    {"homeassistant", "discovery_prefix", "ha_discovery_prefix"},
+    {"homeassistant", "stagekit", "ha_stagekit"},
+    {"homeassistant", "webhook_url", "ha_webhook_url"},
     {"gocentral", "enabled", "gocentral"},
     {"gocentral", "address", "gocentral_address"},
     {"liveless", "enabled", "liveless"},
@@ -204,8 +211,13 @@ void ApplyLegacyIni() {
             continue;
         }
         if (!rex::cvar::SetFlagByName(s.cvar, *value)) {
-            REXLOG_WARN("{}: [{}] {} = {} is not valid, keeping {}", path, s.section, s.key,
-                        *value, rex::cvar::GetFlagByName(s.cvar));
+            // the MQTT password stays out of the log, whatever it is
+            if (std::string_view(s.cvar) == "ha_mqtt_password") {
+                REXLOG_WARN("{}: [{}] {} is not valid", path, s.section, s.key);
+            } else {
+                REXLOG_WARN("{}: [{}] {} = {} is not valid, keeping {}", path, s.section, s.key,
+                            *value, rex::cvar::GetFlagByName(s.cvar));
+            }
             continue;
         }
         applied++;

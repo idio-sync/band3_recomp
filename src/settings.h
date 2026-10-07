@@ -87,6 +87,13 @@ REXCVAR_DECLARE(std::string, http_address);
 REXCVAR_DECLARE(bool, http_allow_cors);
 REXCVAR_DECLARE(bool, http_allow_scripts);
 REXCVAR_DECLARE(bool, http_rhythmverse);
+REXCVAR_DECLARE(std::string, ha_mqtt_host);
+REXCVAR_DECLARE(int32_t, ha_mqtt_port);
+REXCVAR_DECLARE(std::string, ha_mqtt_username);
+REXCVAR_DECLARE(std::string, ha_mqtt_password);
+REXCVAR_DECLARE(std::string, ha_discovery_prefix);
+REXCVAR_DECLARE(bool, ha_stagekit);
+REXCVAR_DECLARE(std::string, ha_webhook_url);
 REXCVAR_DECLARE(bool, rb3e_mode);
 
 // Band3/Advanced/Memory
@@ -195,6 +202,13 @@ struct StartupSettings {
     bool http_enabled;
     int32_t http_port;
     std::string http_address;
+    std::string ha_mqtt_host;
+    int32_t ha_mqtt_port;
+    std::string ha_mqtt_username;
+    std::string ha_mqtt_password;
+    std::string ha_discovery_prefix;
+    bool ha_stagekit;
+    std::string ha_webhook_url;
     bool rb3e_mode;
     bool gocentral;
     std::string gocentral_address;

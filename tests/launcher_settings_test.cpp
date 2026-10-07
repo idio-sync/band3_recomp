@@ -640,6 +640,52 @@ TEST_CASE("Liveless warns when the game to join isn't an address") {
     CHECK_FALSE(m.Warning("liveless_connect"));
 }
 
+TEST_CASE("a row shown while a setting isn't empty follows any value of it") {
+    Fixture f;
+    f.env.cvars["ha_mqtt_host"] = Facts(ValueType::kString, "");
+    f.env.cvars["ha_mqtt_port"] = Facts(ValueType::kInt, "1883");
+    f.store.values["ha_mqtt_host"] = "";
+    f.store.values["ha_mqtt_port"] = "1883";
+    const Setting table[] = {
+        {.cvar = "ha_mqtt_host", .tab = Tab::kOnline, .section = "Home Assistant",
+         .label = "MQTT broker", .widget = Widget::kText},
+        {.cvar = "ha_mqtt_port", .tab = Tab::kOnline, .section = "Home Assistant",
+         .label = "Port", .widget = Widget::kIntStepper,
+         .shown_when = {.cvar = "ha_mqtt_host", .not_empty = true}},
+    };
+    SettingsModel m(table, f.env, f.store);
+    CHECK_FALSE(m.Visible(*m.Find("ha_mqtt_port")));
+    m.Set("ha_mqtt_host", "homeassistant.local");
+    CHECK(m.Visible(*m.Find("ha_mqtt_port")));
+    // "false" or "0" are still a host name
+    m.Set("ha_mqtt_host", "0");
+    CHECK(m.Visible(*m.Find("ha_mqtt_port")));
+    m.Set("ha_mqtt_host", "");
+    CHECK_FALSE(m.Visible(*m.Find("ha_mqtt_port")));
+}
+
+TEST_CASE("a password row's refusal doesn't repeat what was typed") {
+    Fixture f;
+    f.env.cvars["ha_mqtt_username"] = Facts(ValueType::kString, "");
+    f.env.cvars["ha_mqtt_password"] = Facts(ValueType::kString, "");
+    const Setting table[] = {
+        {.cvar = "ha_mqtt_username", .tab = Tab::kOnline, .section = "Home Assistant",
+         .label = "User name", .widget = Widget::kText},
+        {.cvar = "ha_mqtt_password", .tab = Tab::kOnline, .section = "Home Assistant",
+         .label = "Password", .widget = Widget::kPassword},
+    };
+    SettingsModel m(table, f.env, f.store);
+    CHECK(m.Secret("ha_mqtt_password"));
+    CHECK_FALSE(m.Secret("ha_mqtt_username"));
+    CHECK_FALSE(m.Secret("not_in_the_table"));
+    CHECK(m.Refusal("ha_mqtt_password", "hunter2") == "Not accepted");
+    CHECK(m.Refusal("ha_mqtt_username", "pat") == "Not accepted: \"pat\"");
+    // it's still saved as any text is
+    m.Set("ha_mqtt_password", "hunter2");
+    CHECK(m.Value("ha_mqtt_password") == "hunter2");
+    CHECK(m.IsChanged("ha_mqtt_password"));
+}
+
 TEST_CASE("folders are written relative inside the anchor, absolute outside") {
     const fs::path anchor = Anchor();
     CHECK(PathForConfig("songs", anchor) == "songs");
@@ -974,6 +1020,20 @@ TEST_CASE("the launcher's table is consistent") {
     for (const char* needs_liveless : {"liveless_connect", "liveless_external_ip", "liveless_port"}) {
         CHECK(FindSetting(table, needs_liveless)->shown_when.cvar == "liveless");
     }
+    // Home Assistant: the broker's settings show once there's a broker; the
+    // webhook doesn't need one
+    for (const char* needs_broker : {"ha_mqtt_port", "ha_mqtt_username", "ha_mqtt_password",
+                                     "ha_discovery_prefix", "ha_stagekit"}) {
+        INFO(needs_broker);
+        const Setting* s = FindSetting(table, needs_broker);
+        REQUIRE(s);
+        CHECK(s->tab == Tab::kOnline);
+        CHECK(s->shown_when.cvar == "ha_mqtt_host");
+        CHECK(s->shown_when.not_empty);
+    }
+    CHECK(FindSetting(table, "ha_mqtt_host")->shown_when.cvar.empty());
+    CHECK(FindSetting(table, "ha_webhook_url")->shown_when.cvar.empty());
+    CHECK(FindSetting(table, "ha_mqtt_password")->widget == Widget::kPassword);
     // liveless_port's own range (settings.cpp)
     const Setting* port = FindSetting(table, "liveless_port");
     REQUIRE(port->range);

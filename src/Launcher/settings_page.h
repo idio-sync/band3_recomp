@@ -121,7 +121,7 @@ private:
     void DrawIntSlider(const Setting& s);
     void DrawFloatSlider(const Setting& s, bool percent);
     void DrawFloatInput(const Setting& s);
-    void DrawText(const Setting& s);
+    void DrawText(const Setting& s, bool password = false);
     void DrawPath(const Setting& s);
     void DrawFolderList(const Setting& s);
     void DrawMicSlots(const Setting& s);
@@ -157,8 +157,10 @@ private:
     bool FolderExists(const std::filesystem::path& folder);
 
     // a one-line text field over `value`, applied when the field is left (or
-    // Enter is pressed): returns true then, with `value` the new text
-    bool EditText(const char* id, const char* hint, std::string& value, float width);
+    // Enter is pressed): returns true then, with `value` the new text. A
+    // password's field shows its characters as dots.
+    bool EditText(const char* id, const char* hint, std::string& value, float width,
+                  bool password = false);
     // sets a row's setting; a value its cvar refuses is named under the row
     // rather than dropped without a word. False if it was refused.
     bool Apply(std::string_view cvar, std::string_view value);

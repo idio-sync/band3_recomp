@@ -123,6 +123,8 @@ constexpr Condition kWithHttp{"http_enabled", "true"};
 constexpr Condition kWithEvents{"events_enabled", "true"};
 constexpr Condition kWithGoCentral{"gocentral", "true"};
 constexpr Condition kWithLiveless{"liveless", "true"};
+// a broker's host turns Home Assistant's MQTT on
+constexpr Condition kWithHaBroker{.cvar = "ha_mqtt_host", .not_empty = true};
 // vsync paces the game only with the frame cap off; the cap turns it off
 constexpr Condition kWithoutFrameCap{"frame_cap", "off"};
 
@@ -288,6 +290,20 @@ constexpr Setting kSettings[] = {
      .widget = kText, .shown_when = kWithEvents},
     {.cvar = "events_port", .tab = kOnline, .section = "RB3Enhanced", .label = "Port",
      .widget = kIntStepper, .range = kPorts, .shown_when = kWithEvents},
+    {.cvar = "ha_mqtt_host", .tab = kOnline, .section = "Home Assistant", .label = "MQTT broker",
+     .widget = kText},
+    {.cvar = "ha_mqtt_port", .tab = kOnline, .section = "Home Assistant", .label = "Port",
+     .widget = kIntStepper, .range = kPorts, .shown_when = kWithHaBroker},
+    {.cvar = "ha_mqtt_username", .tab = kOnline, .section = "Home Assistant",
+     .label = "User name", .widget = kText, .shown_when = kWithHaBroker},
+    {.cvar = "ha_mqtt_password", .tab = kOnline, .section = "Home Assistant", .label = "Password",
+     .widget = kPassword, .shown_when = kWithHaBroker},
+    {.cvar = "ha_discovery_prefix", .tab = kOnline, .section = "Home Assistant",
+     .label = "Discovery prefix", .widget = kText, .shown_when = kWithHaBroker},
+    {.cvar = "ha_stagekit", .tab = kOnline, .section = "Home Assistant",
+     .label = "Stage Kit lights", .widget = kCheckbox, .shown_when = kWithHaBroker},
+    {.cvar = "ha_webhook_url", .tab = kOnline, .section = "Home Assistant", .label = "Webhook URL",
+     .widget = kText},
     // only on Windows for now (online::Start)
     {.cvar = "gocentral", .tab = kOnline, .section = "GoCentral",
      .label = "Leaderboards, battles and setlists (GoCentral)", .widget = kCheckbox,
@@ -588,6 +604,7 @@ bool SettingsModel::Visible(const Setting& setting) const {
     if (setting.shown_when.cvar.empty()) return true;
     const CvarFacts* facts = Facts(setting.shown_when.cvar);
     if (!facts || !facts->exists) return true;
+    if (setting.shown_when.not_empty) return !Value(setting.shown_when.cvar).empty();
     return SameValue(facts->type, Value(setting.shown_when.cvar), setting.shown_when.value);
 }
 
@@ -830,7 +847,13 @@ std::optional<std::string> SettingsModel::Warning(std::string_view cvar) const {
     return std::nullopt;
 }
 
+bool SettingsModel::Secret(std::string_view cvar) const {
+    const Setting* setting = Find(cvar);
+    return setting && setting->widget == Widget::kPassword;
+}
+
 std::string SettingsModel::Refusal(std::string_view cvar, std::string_view value) const {
+    if (Secret(cvar)) return "Not accepted";
     std::string text = "Not accepted: \"" + std::string(value) + "\"";
     const CvarFacts* facts = Facts(cvar);
     if (!facts) return text;

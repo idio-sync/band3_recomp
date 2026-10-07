@@ -54,6 +54,9 @@ enum class Widget {
     // a 0..1 fraction shown as 0..100%
     kPercentSlider,
     kText,
+    // text drawn as dots, a password: its value is never shown, nor written to
+    // the log or to a row's refusal (ha_mqtt_password)
+    kPassword,
     // a folder: an editable path with Browse...; empty means the default folder
     kPath,
     // folders separated by '|' (paths::SplitList), shown resolved
@@ -93,6 +96,9 @@ struct Range {
 struct Condition {
     std::string_view cvar;
     std::string_view value;
+    // shown only while `cvar` isn't empty instead, whatever it is (a host name
+    // that turns a feature on, as ha_mqtt_host does); `value` is unused
+    bool not_empty = false;
 };
 
 // the renderer values (src/Render/renderer_mode.h) a row applies to: it shows
@@ -363,8 +369,10 @@ public:
     std::optional<std::string> Warning(std::string_view cvar) const;
     // what the row says when Set(cvar, value) was refused: "Not accepted:
     // "<value>"", and why when the limits tell (not a number, out of range,
-    // not one of the allowed values)
+    // not one of the allowed values); a Secret's value isn't repeated
     std::string Refusal(std::string_view cvar, std::string_view value) const;
+    // its row is a password (kPassword): its value isn't shown or logged
+    bool Secret(std::string_view cvar) const;
 
     // The footer's "Show this screen at startup", saved as show_launcher.
     // show_launcher is on by default, so a first run shows the launcher, but
