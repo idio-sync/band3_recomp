@@ -109,6 +109,12 @@ constexpr Choice kControllerTypes[] = {
     {"8", "Drums"},
 };
 
+constexpr Choice kGuitarTypes[] = {
+    {"auto", "What each guitar reports"},
+    {"rock_band", "Rock Band guitars"},
+    {"guitar_hero", "Guitar Hero guitars"},
+};
+
 constexpr Choice kInputBackends[] = {{"sdl", "SDL"}, {"xinput", "XInput"}};
 
 constexpr Condition kWithMidiDrums{"midi_drums", "true"};
@@ -242,6 +248,8 @@ constexpr Setting kSettings[] = {
     // Controllers
     {.cvar = "controller_type", .tab = kControllers, .section = "Instruments",
      .label = "Gamepads play as", .widget = kCombo, .choices = kControllerTypes},
+    {.cvar = "guitar_type", .tab = kControllers, .section = "Instruments",
+     .label = "Guitars play as", .widget = kCombo, .choices = kGuitarTypes},
     {.cvar = "hid_instruments", .tab = kControllers, .section = "Instruments",
      .label = "PS3, Wii, PS4 and PS5 instruments (USB dongles)", .widget = kCheckbox},
     {.cvar = "midi_drums", .tab = kControllers, .section = "MIDI drums",

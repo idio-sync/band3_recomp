@@ -93,6 +93,11 @@ struct InputDevice {
 // since nothing else asks the input system yet; once the game runs, any thread.
 std::vector<InputDevice> PlayerDevices();
 
+// The subtype the game is to read for `user`'s device, which the input system
+// reported as `reported`: a guitar becomes the kind guitar_type says, as it
+// was when the game started (guitar_type.h). Anything else is left alone.
+uint8_t GameGuitarSubtype(uint32_t user, uint8_t reported);
+
 // One device's capabilities, or its state, as the game would read them on its
 // player; nullopt once it's gone, or once the game has the input system. Read
 // on a player the device doesn't feed, so the read can't change which of a

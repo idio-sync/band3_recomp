@@ -52,6 +52,7 @@ REXCVAR_DECLARE(std::string, usb_mic_devices);
 
 // Band3/Controllers
 REXCVAR_DECLARE(int32_t, controller_type);
+REXCVAR_DECLARE(std::string, guitar_type);
 REXCVAR_DECLARE(bool, hid_instruments);
 REXCVAR_DECLARE(bool, menu_shortcut);
 REXCVAR_DECLARE(bool, mouse_menus);
@@ -180,6 +181,7 @@ void SnapshotStartupSettings();
 // these instead, keeping the change for the next launch.
 struct StartupSettings {
     int32_t controller_type;
+    std::string guitar_type;
     int32_t rnd_sync;
     bool disable_metamusic;
     int32_t main_heap_size;

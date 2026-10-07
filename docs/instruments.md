@@ -5,6 +5,13 @@ Controllers are read through SDL by default, or through XInput on Windows with
 keyboard play as `controller_type` (a guitar by default); real Xbox 360 instruments keep
 their own type.
 
+A Rock Band guitar's pickup switch picks the overdrive effect. A Guitar Hero guitar has no
+such switch: its tilt sensor sends on the same input, so if the game takes it for a Rock
+Band guitar, turning it face up changes the effect mid-song. As on the Xbox 360, band3
+plays each guitar as the kind it reports itself (`guitar_type`, the Controllers tab's
+**Guitars play as**). It can't tell on Linux, or for a guitar that isn't an Xbox 360 one;
+choose Guitar Hero guitars there, or Rock Band guitars to keep a guitar's effect switch.
+
 ## Instrument Lab
 
 Press **F6** to open the Instrument Lab. It connects a virtual Xbox 360 instrument

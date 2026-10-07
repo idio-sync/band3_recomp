@@ -7,6 +7,7 @@
 #include "generated/band3_init.h"
 #include "src/Hooks/song_pause.h"
 #include "src/Input/input_lock.h"
+#include "src/Input/input_system.h"
 #include "src/Input/menu_shortcut.h"
 #include "src/Input/mouse_menus_driver.h"
 
@@ -58,7 +59,10 @@ extern "C" REX_FUNC(rex_sub_8283FB80) {
 }
 
 // XInputGetCapabilities(user, flags, caps): XamInputGetCapabilities. The game
-// reads a player's type through it when the player connects.
+// reads a player's type through it when the player connects, and keeps it
+// (JoypadGetCachedXInputCaps). A guitar's type is the one guitar_type says
+// (input_system.h), which decides whether RB3 reads its left trigger as the
+// effect switch.
 extern "C" void __imp__sub_8283FB78(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(sub_8283FB78) {
     const uint32_t user = ctx.r3.u32;
@@ -68,8 +72,9 @@ extern "C" REX_FUNC(sub_8283FB78) {
         __imp__sub_8283FB78(ctx, base);
     }
     if (ctx.r3.u32 == 0 && caps) {
-        band3::input::GameChordPads().OnCapabilities(
-            user, reinterpret_cast<const rex::input::X_INPUT_CAPABILITIES*>(base + caps)->sub_type);
+        auto* read = reinterpret_cast<rex::input::X_INPUT_CAPABILITIES*>(base + caps);
+        read->sub_type = band3::input::GameGuitarSubtype(user, read->sub_type);
+        band3::input::GameChordPads().OnCapabilities(user, read->sub_type);
     }
 }
 

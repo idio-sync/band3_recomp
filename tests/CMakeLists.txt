@@ -76,6 +76,7 @@ add_executable(band3_tests
     instrument_decode_test.cpp
     device_lists_test.cpp
     input_backend_test.cpp
+    guitar_type_test.cpp
     device_view_test.cpp
     dred_report_test.cpp
     crash_report_test.cpp
@@ -89,6 +90,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/hid_capture.cpp
     ${BAND3_ROOT}/src/Input/hid_instrument_types.cpp
     ${BAND3_ROOT}/src/Input/instrument_kind.cpp
+    ${BAND3_ROOT}/src/Input/guitar_type.cpp
     ${BAND3_ROOT}/src/Input/instruments.cpp
     ${BAND3_ROOT}/src/Input/joypad_lag_status.cpp
     ${BAND3_ROOT}/src/Input/keyboard_search.cpp

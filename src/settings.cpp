@@ -224,6 +224,15 @@ REXCVAR_DEFINE_INT32(controller_type, 7, "Band3/Controllers",
     .range(-1, 255)
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_STRING(guitar_type, "auto", "Band3/Controllers",
+    "What RB3 takes guitars for: auto = what each reports itself, rock_band = Rock Band "
+    "guitars, whose pickup switch picks the overdrive effect, guitar_hero = Guitar Hero "
+    "guitars, which have no effect switch. A Guitar Hero guitar played as a Rock Band one "
+    "changes the effect when it's turned face up. auto can't tell on Linux, or for a guitar "
+    "that isn't an Xbox 360 one; choose guitar_hero for a Guitar Hero guitar there")
+    .allowed({"auto", "rock_band", "guitar_hero"})
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 REXCVAR_DEFINE_BOOL(hid_instruments, false, "Band3/Controllers",
     "Experimental: play PS3, Wii, PS4 and PS5 Rock Band guitars and drum kits (and the "
     "MIDI Pro Adapter in drum mode) through their USB dongles, as Xbox 360 instruments")
@@ -678,6 +687,7 @@ void Track(TrackedString& tracked, std::string_view name) {
 void SnapshotStartupSettings() {
     g_startup = {
         .controller_type = REXCVAR_GET(controller_type),
+        .guitar_type = REXCVAR_GET(guitar_type),
         .rnd_sync = REXCVAR_GET(rnd_sync),
         .disable_metamusic = REXCVAR_GET(disable_metamusic),
         .main_heap_size = REXCVAR_GET(main_heap_size),
@@ -721,7 +731,7 @@ std::optional<std::string> StartupValue(std::string_view name) {
 bool ReadAtStartupOnly(std::string_view name) {
     static constexpr std::string_view kNames[] = {
         // SnapshotStartupSettings' (most are kRequiresRestart too)
-        "controller_type", "rnd_sync", "disable_metamusic", "main_heap_size", "char_heap_size",
+        "controller_type", "guitar_type", "rnd_sync", "disable_metamusic", "main_heap_size", "char_heap_size",
         "events_target", "events_port", "discord_enabled", "http_enabled", "http_port",
         "http_address", "rb3e_mode", "gocentral", "gocentral_address", "liveless",
         "liveless_connect", "liveless_external_ip", "liveless_port", "liveless_port_mapping",

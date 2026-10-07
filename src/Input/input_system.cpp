@@ -12,6 +12,7 @@
 #include <rex/input/device_assignment.h>
 #include <rex/input/input_system.h>
 #include <rex/logging.h>
+#include "guitar_type.h"
 #include "hid_instruments.h"
 #include "input_backend.h"
 #include "input_lock.h"
@@ -453,6 +454,46 @@ std::vector<InputDevice> PlayerDevices() {
     }
     std::lock_guard<std::mutex> lock(g_devices_mutex);
     return g_devices;
+}
+
+uint8_t GameGuitarSubtype(uint32_t user, uint8_t reported) {
+    if (!IsGuitarSubtype(reported)) return reported;
+    const GuitarType type =
+        ParseGuitarType(settings::Startup().guitar_type).value_or(GuitarType::kAuto);
+
+    // the subtype of the player's own guitar, where its GUID keeps it
+    std::optional<uint8_t> native;
+    std::string name;
+    {
+        std::lock_guard<std::mutex> lock(g_devices_mutex);
+        for (const InputDevice& device : g_devices) {
+            if (device.player != static_cast<int>(user) + 1 || device.kind != DeviceKind::kPad) {
+                continue;
+            }
+            const auto subtype = XInputSubtypeFromGuid(device.guid);
+            if (subtype && IsGuitarSubtype(*subtype)) {
+                native = subtype;
+                name = device.name;
+                break;
+            }
+        }
+    }
+
+    const uint8_t played = GuitarSubtypeFor(type, reported, native);
+    // the game reads a player's type when it connects, so once per change
+    static std::mutex logged_mutex;
+    static std::array<int, kMaxGuestUsers> logged{-1, -1, -1, -1};
+    std::lock_guard<std::mutex> lock(logged_mutex);
+    if (user < kMaxGuestUsers && logged[user] != played) {
+        logged[user] = played;
+        REXLOG_INFO("Input: player {}'s guitar{} reports type {}{}; plays as a {} guitar ({}), "
+                    "from guitar_type = {}",
+                    user + 1, name.empty() ? "" : " (" + name + ")", reported,
+                    native ? ", its own " + std::to_string(*native) : std::string(),
+                    played == kSubtypeGuitarAlternate ? "Guitar Hero" : "Rock Band", played,
+                    settings::Startup().guitar_type);
+    }
+    return played;
 }
 
 namespace {

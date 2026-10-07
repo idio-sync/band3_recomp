@@ -122,6 +122,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
 | `controller_type`<br>Gamepads play as | `7` | `-1` Don't override, `1` Vocals, `7` Guitar, `8` Drums | Instrument gamepads and the keyboard play as: -1 = don't override, 1 = vocals, 7 = guitar, 8 = drums. Instruments that report their own type (Xbox 360 instruments with input_backend = xinput, the virtual instrument) keep it *Applies at the next start.* |
+| `guitar_type`<br>Guitars play as | `auto` | `auto` What each guitar reports, `rock_band` Rock Band guitars, `guitar_hero` Guitar Hero guitars | What RB3 takes guitars for: auto = what each reports itself, rock_band = Rock Band guitars, whose pickup switch picks the overdrive effect, guitar_hero = Guitar Hero guitars, which have no effect switch. A Guitar Hero guitar played as a Rock Band one changes the effect when it's turned face up. auto can't tell on Linux, or for a guitar that isn't an Xbox 360 one; choose guitar_hero for a Guitar Hero guitar there *Applies at the next start.* |
 | `hid_instruments`<br>PS3, Wii, PS4 and PS5 instruments (USB dongles) | `false` | `true`, `false` | Experimental: play PS3, Wii, PS4 and PS5 Rock Band guitars and drum kits (and the MIDI Pro Adapter in drum mode) through their USB dongles, as Xbox 360 instruments *Applies at the next start.* |
 
 ### MIDI drums
