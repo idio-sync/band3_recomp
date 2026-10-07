@@ -124,7 +124,7 @@ uint32_t TargetAt(const std::vector<Target>& targets, const Vec2& pointer);
 
 // `from` and everything joined to it by `links` (from, to), either way, in
 // the order found: the components a controller can move the focus to from
-// `from`, given their down and right links
+// `from`, given their down and right links; none for no focus (0)
 std::vector<uint32_t> Joined(const std::vector<std::pair<uint32_t, uint32_t>>& links, uint32_t from);
 
 }

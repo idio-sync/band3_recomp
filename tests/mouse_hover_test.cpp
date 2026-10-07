@@ -176,6 +176,8 @@ TEST_CASE("the components joined to the focus, either way along their links") {
     CHECK(Joined(links, 8) == std::vector<uint32_t>{8, 7});
     CHECK(Joined(links, 5) == std::vector<uint32_t>{5});
     CHECK(Joined({{1, 2}, {2, 1}}, 1) == std::vector<uint32_t>{1, 2});
+    // no focus (a screen between panels): nothing, not a null component
+    CHECK(Joined(links, 0).empty());
 }
 
 TEST_CASE("a list's highlight moves without scrolling only within its band") {
