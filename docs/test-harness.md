@@ -180,6 +180,15 @@ old band3 mapping (`--upnp-error 718`) or another PC's, the harness guard,
 `liveless_external_ip` winning), checking each quit deletes the mapping. `python
 tools/test_port_mapping_mock.py` checks the mock itself.
 
+`python tools/test_home_assistant.py` checks the [Home Assistant](integrations.md) link
+against `tools/ha_fake_broker.py`, a fake MQTT broker and webhook receiver on 127.0.0.1
+(`python tools/ha_fake_broker.py --mqtt-port 1883 --webhook-port 8124` runs it alone,
+printing what arrives). It launches band3 pointed at it, plays 20th Century Boy on
+autoplay, pauses and leaves it, then kills band3: the discovery configs, the song,
+playing, paused, progress and score topics, the webhook's payloads and the will's
+`offline` on the status topic are all checked. `python tools/test_ha_fake_broker.py`
+checks the fake itself, offline.
+
 `tests/game/usb_mic.b3t` sings a song's vocals through the USB mics' test tone (launch
 with `-- --usb_mics=true --usb_mic_test_tone=220`) and waits for the score to go up.
 
