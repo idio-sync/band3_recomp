@@ -1,21 +1,26 @@
 #include <rex/hook.h>
 #include <rex/logging.h>
+#include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 #include <rex/types.h>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include "src/Game/Modifiers.h"
 #include "src/Game/Script.h"
 
 // RB3Enhanced's six modifiers: added to the game's list when ModifierMgr is
-// made, and applied where RB3E applies them (source/rb3enhanced.c,
-// source/GemHooks.c, source/SongParserHooks.c; the black background is in
-// the venue hook in src/patches.cpp). Layouts are rb3-xenon's (GameGem.h,
-// SongParser.h) for the same TU5 executable.
+// made, named where the game's locale doesn't, and applied where RB3E applies
+// them (source/rb3enhanced.c, source/LocaleHooks.c, source/GemHooks.c,
+// source/SongParserHooks.c; the black background is in the venue hook in
+// src/patches.cpp). Layouts are rb3-xenon's (GameGem.h, SongParser.h) for the
+// same TU5 executable.
 
 extern "C" void __imp__ModifierManager____ct(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__Locale__Localize(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__GameGemList__WillBeNoStrum(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__GameGemList__AddGameGem(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__GemManager__GetWidgetByName(PPCContext& ctx, uint8_t* base);
@@ -96,13 +101,39 @@ uint32_t ShuffledFrom(PPCContext& ctx, uint8_t* base, const char* const (&group)
 // makes vanilla Wii profiles unloadable.
 extern "C" REX_FUNC(ModifierManager____ct)
 {
-    for (const char* name : band3::modifiers::kRb3eModifiers) {
+    for (const auto& modifier : band3::modifiers::kRb3eModifiers) {
         band3::RunScript(ctx, base,
                          std::string("{do {push_back {find $syscfg modifiers modifiers} (") +
-                             name + ")}}");
+                             modifier.name + ")}}");
     }
     REXLOG_INFO("Added RB3Enhanced's modifiers");
     __imp__ModifierManager____ct(ctx, base);
+}
+
+// Locale::Localize(Locale*, Symbol, bool fail) -> const char*, null for none:
+// an RB3E modifier the locale has no name for gets RB3E's. Rock Band 3 Deluxe
+// names only four, so the overshell showed gem shuffle and double bass blank.
+// The game's own strings win, as in RB3E's LocalizeHook.
+extern "C" REX_FUNC(Locale__Localize)
+{
+    const uint32_t token = ctx.r4.u32;
+    __imp__Locale__Localize(ctx, base);
+    if (ctx.r3.u32 || !token) return;
+    const char* label =
+        band3::modifiers::FallbackName(rex::memory::GuestPtr<const char*>(base, token));
+    if (!label) return;
+
+    // each name copied into guest memory once; the game keeps the pointer
+    static std::mutex mutex;
+    static std::unordered_map<const char*, uint32_t> copies;
+    std::lock_guard lock(mutex);
+    uint32_t& copy = copies[label];
+    if (!copy) {
+        const uint32_t size = static_cast<uint32_t>(std::strlen(label) + 1);
+        copy = rex::system::kernel_memory()->SystemHeapAlloc(size, 1);
+        std::memcpy(base + copy, label, size);
+    }
+    ctx.r3.u64 = copy;
 }
 
 // GameGemList::WillBeNoStrum(GameGemList*, MultiGemInfo*): force HOPOs makes

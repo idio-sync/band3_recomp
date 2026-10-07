@@ -69,6 +69,7 @@ add_executable(band3_tests
     rhythmverse_test.cpp
     song_inventory_test.cpp
     song_id_test.cpp
+    modifiers_test.cpp
     online_test.cpp
     liveless_rooms_protocol_test.cpp
     liveless_rooms_client_test.cpp
