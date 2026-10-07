@@ -49,6 +49,7 @@ TEST_CASE("generated rows go where their category says") {
     CHECK(PlaceFor("Band3/Controllers/MIDI drums")->tab == Tab::kControllers);
     CHECK(PlaceFor("Band3/Controllers/MIDI drums")->section == kMoreSettings);
     CHECK(PlaceFor("Band3/Online")->tab == Tab::kOnline);
+    CHECK(PlaceFor("Band3/Lights")->tab == Tab::kLights);
     CHECK(PlaceFor("Band3/Audio")->tab == Tab::kAudio);
 
     // the renderer groups join the table's sections, for the same renderers

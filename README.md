@@ -41,6 +41,7 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 
 **Integrations** (RB3Enhanced-compatible)
 - Network events over UDP: Stage Kit lighting, song, band and venue info
+- Stage Kits lit directly: Santroller and Xbox 360 Stage Kits plugged in by USB, and the RB3E Dashboard's Pico W wireless kits found and tested from the Lights tab
 - A web page for browsing the song library from a phone and picking the next song, plus the RB3E web API
 - Searching [RhythmVerse](https://rhythmverse.co) for custom songs from that page, and downloading them into the game without a restart
 - Script functions, modifiers and unlock options, so Deluxe's RB3E features work
@@ -102,7 +103,7 @@ CI runs and profiling.
 | [Settings, folders and songs](docs/settings.md) | the launcher, the pause menu and in-game settings, config files, where band3 keeps things, DLC and custom songs, loose-file mods, Steam Deck |
 | [Settings reference](docs/settings-reference.md) | every setting: its default, the values it takes and what it does, generated from the build |
 | [Instruments and microphones](docs/instruments.md) | Instrument Lab, PlayStation/Wii dongles, MIDI drums and keyboards, USB mics, pro instruments, controller lag |
-| [Integrations](docs/integrations.md) | network events, Discord, the web server and its API, GoCentral, Liveless online play, RB3Enhanced and Deluxe compatibility |
+| [Integrations](docs/integrations.md) | network events, Stage Kit lights, Discord, the web server and its API, GoCentral, Liveless online play, RB3Enhanced and Deluxe compatibility |
 | [Test harness](docs/test-harness.md) | `band3ctl`: driving the game from scripts, and the game tests |
 | [Native renderer](docs/native-renderer.md) | the native renderer, render checks, capture replay and parity measurement |
 

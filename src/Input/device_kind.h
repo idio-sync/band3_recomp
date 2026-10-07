@@ -14,6 +14,7 @@ enum class DeviceKind {
     kMidiDrums,      // a MIDI drum kit
     kMidiKeys,       // a MIDI keyboard, played as a keytar
     kSdlCopy,        // SDL's copy of an instrument the HID driver reads; no player
+    kStageKit,       // a Stage Kit, which band3 lights (src/Lights/); no player
 };
 
 }

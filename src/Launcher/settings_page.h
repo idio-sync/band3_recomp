@@ -111,6 +111,9 @@ private:
     // the Graphics tab's Latency section's button: frame_cap and
     // native_present_pacing for the least lag (LowestLatencyCap)
     void DrawLowestLatency();
+    // the Lights tab, after its settings: the Stage Kits found and the test
+    // controls, as the RB3E Dashboard has them (src/Lights/lights.h)
+    void DrawLights();
     void DrawControl(const Setting& setting);
 
     // the widgets, one per Widget kind
@@ -187,6 +190,11 @@ private:
     // combo-with-text rows showing their text field (device rows by
     // DeviceCombo's key)
     std::set<std::string, std::less<>> custom_rows_;
+
+    // the Lights tab's test controls: the device they're for (its row's key;
+    // every device when empty), and the colour the LED buttons light
+    std::optional<std::string> lights_target_;
+    uint8_t lights_colour_ = 0x80;
 
     // the devices on this PC, listed again every couple of seconds while
     // their tab shows (RefreshDeviceLists), and when each list is due

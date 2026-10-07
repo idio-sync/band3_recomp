@@ -35,6 +35,8 @@ TEST_CASE("devices are labelled by kind, and pads and instruments by the subtype
     CHECK(DeviceKindLabel(DeviceKind::kMidiDrums, "Pad", input::kSubtypeDrums) == "MIDI drum kit");
     CHECK(DeviceKindLabel(DeviceKind::kMidiKeys, "Pad", input::kSubtypeKeytar) == "MIDI keyboard");
     CHECK(DeviceKindLabel(DeviceKind::kSdlCopy, "Pad", std::nullopt).find("unused") != std::string::npos);
+    CHECK(DeviceKindLabel(DeviceKind::kStageKit, "Pad", std::nullopt) ==
+          "Stage Kit (lit from the Lights tab, not a player)");
 }
 
 TEST_CASE("the SDK's stand-in is told from the keyboard by name") {
@@ -104,6 +106,7 @@ TEST_CASE("the keyboard and SDL's copies of dongle instruments don't navigate") 
     CHECK(DrivesNavigation(DeviceKind::kMidiKeys));
     CHECK_FALSE(DrivesNavigation(DeviceKind::kSynthetic));
     CHECK_FALSE(DrivesNavigation(DeviceKind::kSdlCopy));
+    CHECK_FALSE(DrivesNavigation(DeviceKind::kStageKit));
 }
 
 TEST_CASE("a gamepad navigates with everything it has") {

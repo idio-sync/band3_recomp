@@ -16,6 +16,39 @@ default; if receivers see nothing (common with VPN or virtual adapters), use you
 broadcast address (e.g. 192.168.1.255) or one device's IP. `events_port` is 21070.
 `events_target` and `events_port` need a restart.
 
+## Stage Kit lights
+
+band3 lights Stage Kits itself, as YARG does, so a kit needs no RB3E Dashboard or
+bridge in between. The game's lighting goes to every kit band3 can reach; the
+**Lights** tab (in the launcher and the in-game settings) lists them and tests them.
+
+- **Plugged in by USB** (`stagekit_usb`, on by default): Santroller Stage Kits, which a
+  PC sees in HID mode (VID 1209, PID 2882; band3 sends them the HID report the RB3E
+  Dashboard's Pico firmware does), and Xbox 360 Stage Kits (XInput subtype 9; the
+  rumble the game sends). band3 looks for them every 2 seconds, so they can come and
+  go, and turns them off when a song ends and when band3 closes. A Stage Kit isn't a
+  player: it doesn't take a controller's place or play as a guitar. An XInput kit does
+  take one of Windows' four XInput slots, shared with Xbox 360 instruments, so with four
+  of those plugged in there's none left for it; a Santroller kit in HID mode takes no
+  slot (it shows as HID unless its config sets XInput on Windows).
+- **Wireless, Pico W** (`pico_discovery`, on by default): the
+  [RB3E Dashboard's](https://github.com/idio-sync/rb3e-stagekit-networked) Pico W
+  firmware. band3 finds the Picos as the dashboard does (discovery on UDP 21071 every 5
+  seconds) and lists each with its signal and whether a kit is plugged into it; a
+  quiet one shows offline after 10 seconds and leaves the list after 30. A Pico answers
+  whichever program found it last, so turn this off while the dashboard itself runs;
+  and if the dashboard on this PC holds port 21071, the tab says so. Picos follow the
+  game through the network events above, so `events_enabled` must be on; the tab
+  offers to turn it on when it finds Picos with it off.
+
+The tab's test controls are the dashboard's, for one device or every device: **Test
+lights** (each colour in turn, then off), fog on and off, strobe slow, fast and off,
+all off, one colour's LEDs one at a time or in a pattern (all, none, odds, evens, left,
+right), and a chase. A song's next lighting command takes over from a test.
+
+To see what band3 sends a Pico without one, `python tools/fake_pico.py` stands in for
+a Pico on this PC and prints the commands it gets.
+
 ## Home Assistant
 
 band3 can tell [Home Assistant](https://www.home-assistant.io) what the game is doing,

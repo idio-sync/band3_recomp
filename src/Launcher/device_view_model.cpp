@@ -66,6 +66,7 @@ std::string DeviceKindLabel(DeviceKind kind, std::string_view name,
     case DeviceKind::kMidiDrums: return "MIDI drum kit";
     case DeviceKind::kMidiKeys: return "MIDI keyboard";
     case DeviceKind::kSdlCopy: return "Dongle instrument as SDL sees it (unused)";
+    case DeviceKind::kStageKit: return "Stage Kit (lit from the Lights tab, not a player)";
     }
     return "Controller";
 }
@@ -116,7 +117,8 @@ float TriggerAmount(uint8_t trigger) {
 }
 
 bool DrivesNavigation(DeviceKind kind) {
-    return kind != DeviceKind::kSynthetic && kind != DeviceKind::kSdlCopy;
+    return kind != DeviceKind::kSynthetic && kind != DeviceKind::kSdlCopy &&
+           kind != DeviceKind::kStageKit;
 }
 
 NavPad NavFromReading(const input::Caps360& caps, const input::Gamepad360& state) {
