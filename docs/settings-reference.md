@@ -229,6 +229,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
 | `disable_even_odd_rendering` | `false` | `true`, `false` | Process every render command each frame instead of alternating even/odd frames |
+| `force_self_shadow` | `false` | `true`, `false` | Draw the band's self-shadows in every camera shot, also the ones that turn them off. Characters far from the camera and the crowd still draw without them. Some of those shots may show shadow artifacts the game avoided there. Applies from the next shot |
 | `fullbright` | `false` | `true`, `false` | Force materials to not use an environ, making most things fullbright. Applies to materials loaded afterwards |
 
 ### Logging

@@ -100,6 +100,7 @@ REXCVAR_DECLARE(bool, native_camera_shake);
 // Band3/Advanced/Graphics
 REXCVAR_DECLARE(bool, fullbright);
 REXCVAR_DECLARE(bool, disable_even_odd_rendering);
+REXCVAR_DECLARE(bool, force_self_shadow);
 
 // Band3/Advanced/Native renderer
 REXCVAR_DECLARE(std::string, native_view_backend);

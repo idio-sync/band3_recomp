@@ -47,6 +47,43 @@ extern "C" REX_FUNC(RndMat__Load)
     }
 }
 
+// force_self_shadow. Character::DrawShowing draws a character's self-shadow
+// map only with its mSelfShadow set, and BandCamShot::StartAnim sets that from
+// each target's self_shadow flag, which some shots turn off (EndAnim turns it
+// back on). The flag is set on the shot's targets while StartAnim reads them
+// and cleared again after, so the shot's own data stays as loaded; the crowd,
+// which turns its characters' off itself, is left alone.
+extern "C" void __imp__BandCamShot__StartAnim(PPCContext& ctx, uint8_t* base);
+extern "C" REX_FUNC(BandCamShot__StartAnim)
+{
+    if (!REXCVAR_GET(force_self_shadow)) {
+        __imp__BandCamShot__StartAnim(ctx, base);
+        return;
+    }
+    // ObjList<Target> mTargets at 0x19C, a std::list with its head node in the
+    // shot: a node's next at 0 and its Target at 8, the Target's flag bits at
+    // 0x60 with self_shadow 0x20 (rb3-xenon's BandCamShot.h; StartAnim reads them)
+    constexpr uint32_t kTargets = 0x19C;
+    constexpr uint32_t kNodeFlags = 8 + 0x60;
+    constexpr uint8_t kSelfShadow = 0x20;
+    const uint32_t head = ctx.r3.u32 + kTargets;
+    uint32_t forced[64];
+    size_t count = 0;
+    for (uint32_t node = REX_LOAD_U32(head); node != 0 && node != head && count < std::size(forced);
+         node = REX_LOAD_U32(node)) {
+        const uint8_t flags = REX_LOAD_U8(node + kNodeFlags);
+        if (!(flags & kSelfShadow)) {
+            REX_STORE_U8(node + kNodeFlags, flags | kSelfShadow);
+            forced[count++] = node;
+        }
+    }
+    if (count) REXLOG_DEBUG("force_self_shadow: {} target(s) of shot {:08X}", count, head - kTargets);
+    __imp__BandCamShot__StartAnim(ctx, base);
+    for (size_t i = 0; i < count; i++) {
+        REX_STORE_U8(forced[i] + kNodeFlags, REX_LOAD_U8(forced[i] + kNodeFlags) & ~kSelfShadow);
+    }
+}
+
 extern "C" void __imp__ProcCounter__ProcCommands(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(ProcCounter__ProcCommands)
 {
