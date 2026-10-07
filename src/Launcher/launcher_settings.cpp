@@ -334,6 +334,13 @@ constexpr Setting kSettings[] = {
      .label = "Port", .widget = kIntStepper, .range = kGamePorts,
      .shown_when = kWithLiveless, .windows_only = true},
 
+    // the devices found and the test controls follow this section
+    // (SettingsPage::DrawLights)
+    {.cvar = "stagekit_usb", .tab = kLights, .section = "Stage Kit lights",
+     .label = "Stage Kits plugged in by USB", .widget = kCheckbox},
+    {.cvar = "pico_discovery", .tab = kLights, .section = "Stage Kit lights",
+     .label = "Find wireless Stage Kits (Pico W)", .widget = kCheckbox},
+
     {.cvar = "steam_deck_defaults", .tab = kSteamDeck, .section = "Steam Deck",
      .label = "Use the Steam Deck settings", .widget = kCheckbox},
     {.cvar = "show_launcher", .tab = kFooter, .section = "Footer",

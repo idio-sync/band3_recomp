@@ -101,6 +101,10 @@ REXCVAR_DECLARE(bool, ha_stagekit);
 REXCVAR_DECLARE(std::string, ha_webhook_url);
 REXCVAR_DECLARE(bool, rb3e_mode);
 
+// Band3/Lights
+REXCVAR_DECLARE(bool, stagekit_usb);
+REXCVAR_DECLARE(bool, pico_discovery);
+
 // Band3/Advanced/Memory
 REXCVAR_DECLARE(int32_t, main_heap_size);
 REXCVAR_DECLARE(int32_t, char_heap_size);
@@ -145,6 +149,7 @@ REXCVAR_DECLARE(bool, dred);
 REXCVAR_DECLARE(int32_t, test_port);
 REXCVAR_DECLARE(int32_t, test_random_seed);
 REXCVAR_DECLARE(bool, autoplay);
+REXCVAR_DECLARE(bool, stagekit_fake);
 REXCVAR_DECLARE(bool, midi_keys_test_device);
 REXCVAR_DECLARE(bool, virtual_instrument);
 REXCVAR_DECLARE(std::string, virtual_instrument_type);

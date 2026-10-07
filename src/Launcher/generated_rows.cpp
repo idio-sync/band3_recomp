@@ -20,6 +20,7 @@ constexpr TabCategory kTabCategories[] = {
     {"Audio", Tab::kAudio},
     {"Controllers", Tab::kControllers},
     {"Online", Tab::kOnline},
+    {"Lights", Tab::kLights},
 };
 
 }

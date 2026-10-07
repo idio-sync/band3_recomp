@@ -236,6 +236,13 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `liveless_rooms` | `false` | `true`, `false` | Join friends by a room code (1-8 letters and digits) through a Liveless Rooms server (RB3Enhanced's), instead of typing an address. Needs liveless *Applies at the next start.* |
 | `liveless_rooms_server` | `liveless-testing.ipg.pw` | text | The Liveless Rooms server's host name, as the server knows itself (host[:port], port 19532 by default). Logging in registers your username there *Applies at the next start.* |
 
+## Lights
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `stagekit_usb`<br>Stage Kits plugged in by USB | `true` | `true`, `false` | Light the Stage Kits plugged into this PC as the game lights them: Santroller Stage Kits (which a PC sees in HID mode) and Xbox 360 Stage Kits (XInput, each taking one of Windows' four XInput slots). They don't take a player's place |
+| `pico_discovery`<br>Find wireless Stage Kits (Pico W) | `true` | `true`, `false` | Find the RB3E Dashboard's wireless Stage Kits (Pico W) on the network, to list and test them in the Lights tab. A Pico answers whichever program found it last, so turn this off while the RB3E Dashboard runs. They follow the game through the RB3Enhanced events |
+
 ## Advanced
 
 ### Game code
@@ -308,6 +315,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `autoplay` | `false` | `true`, `false` | The game plays every part itself, from the next song start: for repeatable profiling runs and for checking a song without playing it |
 | `liveless_gateway` | *(empty)* | text | Where liveless_port_mapping sends PCP and NAT-PMP (host[:port], port 5351 by default) instead of the router, for testing against a stand-in. Empty asks the default gateway; under the test harness, empty skips PCP and NAT-PMP *Applies at the next start.* |
 | `liveless_upnp_url` | *(empty)* | text | The UPnP router description liveless_port_mapping uses (http://host:port/desc.xml) instead of looking for one on the network, for testing against a stand-in. Under the test harness, empty skips UPnP *Applies at the next start.* |
+| `stagekit_fake` | `false` | `true`, `false` | With stagekit_usb on: add a pretend USB Stage Kit that keeps the commands it's sent, for the harness's lights command |
 | `test_port` | `0` | `0` to `65535` | Take test harness commands on this local TCP port (0 = off), for tools/band3ctl.py. Connects the virtual instrument as player 1 *Applies at the next start.* |
 | `test_random_seed` | `0` | `0` to `2147483647` | Seed the game's random numbers with this instead of the clock (0 = off), so a fresh profile gets the same band on every launch, for render checks *Applies at the next start.* |
 | `usb_mic_test_tone` | `0` | `0` to `2000` | Sing a steady tone at this pitch in Hz into the first mic slot instead of using microphones, to check that the game hears it. 0 = off *Applies at the next start.* |

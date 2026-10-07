@@ -15,6 +15,7 @@
 #include "src/Audio/usb_mic.h"
 #include "src/Input/input_system.h"
 #include "src/Input/midi_keys.h"
+#include "src/Lights/lights.h"
 #include "src/paths.h"
 #include "src/Render/renderer_mode.h"
 #include "gamepad_nav.h"
@@ -203,6 +204,7 @@ void SettingsPage::DrawSection(Tab tab, std::string_view section) {
         ImGui::EndTable();
     }
     if (tab == Tab::kGraphics && section == "Latency") DrawLowestLatency();
+    if (tab == Tab::kLights && section == "Stage Kit lights") DrawLights();
     ImGui::Dummy(ImVec2(0, Px(14)));
 }
 
@@ -274,6 +276,114 @@ void SettingsPage::DrawLowestLatency() {
     ImGui::TextColored(kMuted, "%s. If the debug overlay's Game rate falls short of the cap, "
                                "lower it.", what.c_str());
     ImGui::PopTextWrapPos();
+}
+
+void SettingsPage::DrawLights() {
+    using namespace band3::lights;
+    const std::vector<DeviceRow> devices = Devices();
+
+    if (const std::string problem = PicoProblem(); !problem.empty()) {
+        RowNote(kWarn, problem.c_str());
+    }
+    if (PicosNeedEvents()) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(kWarn, "Wireless kits follow the game through the RB3Enhanced events, "
+                                  "which are off.");
+        ImGui::SameLine();
+        if (ImGui::Button("Turn them on")) Apply("events_enabled", "true");
+    }
+
+    ImGui::Dummy(ImVec2(0, Px(8)));
+    SectionHeading("Devices");
+    // a device that's gone takes its selection with it
+    if (lights_target_ && std::none_of(devices.begin(), devices.end(), [&](const DeviceRow& d) {
+            return d.key == *lights_target_;
+        })) {
+        lights_target_.reset();
+    }
+    if (ImGui::RadioButton("All devices", !lights_target_)) lights_target_.reset();
+    for (const DeviceRow& device : devices) {
+        ImGui::PushID(device.key.c_str());
+        const std::string label = device.kind + "   " + device.name;
+        if (ImGui::RadioButton(label.c_str(), lights_target_ == device.key)) {
+            lights_target_ = device.key;
+        }
+        ImGui::SameLine(0, Px(16));
+        FontScope font(kSmallSize);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(device.online ? kMuted : kWarn, "%s", device.detail.c_str());
+        ImGui::PopID();
+    }
+    if (devices.empty()) {
+        RowNote(kMuted, "No Stage Kits found yet. Plug one into this PC, or switch on a Pico W "
+                        "Stage Kit on this network.");
+    }
+
+    ImGui::Dummy(ImVec2(0, Px(14)));
+    SectionHeading("Test lights");
+    const auto send = [&](uint8_t left, uint8_t right) { SendTest({left, right}, lights_target_); };
+    if (ImGui::Button("Test lights")) PlayScene(ColourCheck(), lights_target_);
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    {
+        FontScope font(kSmallSize);
+        ImGui::TextColored(kMuted, "Each colour in turn, then everything off.");
+    }
+
+    const float label_width = Px(90);
+    const auto label = [&](const char* text) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(text);
+        ImGui::SameLine(label_width);
+    };
+    label("Fog");
+    if (ImGui::Button("On##fog")) send(0, kFogOn);
+    ImGui::SameLine();
+    if (ImGui::Button("Off##fog")) send(0, kFogOff);
+
+    label("Strobe");
+    if (ImGui::Button("Slow")) send(0, kStrobeSlow);
+    ImGui::SameLine();
+    if (ImGui::Button("Fast")) send(0, 0x05);
+    ImGui::SameLine();
+    if (ImGui::Button("Off##strobe")) send(0, kStrobeOff);
+    ImGui::SameLine(0, Px(24));
+    if (ImGui::Button("All off")) send(kAllOffCommand.left, kAllOffCommand.right);
+
+    label("Colour");
+    constexpr std::pair<const char*, uint8_t> kColours[] = {
+        {"Red", kRed}, {"Green", kGreen}, {"Blue", kBlue}, {"Yellow", kYellow}};
+    for (size_t i = 0; i < std::size(kColours); i++) {
+        if (i) ImGui::SameLine();
+        if (ImGui::RadioButton(kColours[i].first, lights_colour_ == kColours[i].second)) {
+            lights_colour_ = kColours[i].second;
+        }
+    }
+
+    label("LEDs");
+    for (int led = 0; led < 8; led++) {
+        if (led) ImGui::SameLine();
+        const std::string text = std::to_string(led + 1) + "##led";
+        if (ImGui::Button(text.c_str(), ImVec2(Px(32), 0))) {
+            send(static_cast<uint8_t>(1 << led), lights_colour_);
+        }
+    }
+
+    label("Pattern");
+    constexpr std::pair<const char*, uint8_t> kPatterns[] = {
+        {"All", kPatternAll},     {"None", kPatternNone}, {"Odds", kPatternOdds},
+        {"Evens", kPatternEvens}, {"Left", kPatternLeft}, {"Right", kPatternRight}};
+    for (size_t i = 0; i < std::size(kPatterns); i++) {
+        if (i) ImGui::SameLine();
+        if (ImGui::Button(kPatterns[i].first)) send(kPatterns[i].second, lights_colour_);
+    }
+    ImGui::SameLine(0, Px(24));
+    if (ImGui::Button("Chase")) PlayScene(Chase(), lights_target_);
+
+    if (const std::string last = LastSent(); !last.empty()) {
+        const std::string text = "Sent: " + last;
+        RowNote(kMuted, text.c_str());
+    }
 }
 
 void SettingsPage::DrawRowNotes(const Setting& setting) {

@@ -47,6 +47,7 @@
 #include "Launcher/mic_meter.h"
 #include "Net/discord.h"
 #include "Net/home_assistant.h"
+#include "Lights/lights.h"
 #include "Net/liveless_rooms_panel.h"
 #include "Net/online_hooks.h"
 #include "Net/http_server.h"
@@ -304,6 +305,8 @@ class Band3App : public rex::ReXApp {
     // the input system the game will take over (OnPreSetup), built now so the
     // launcher lists and tests the devices the game will read
     band3::input::PrepareInputSystem(window());
+    // for the Lights tab: the kits it lists and tests (it also starts with the game)
+    band3::lights::Start();
     launcher_ = std::make_unique<band3::launcher::LauncherDialog>(
         imgui_drawer(),
         band3::launcher::LauncherHost{
@@ -398,7 +401,8 @@ class Band3App : public rex::ReXApp {
   // while the launcher's settings are being edited and aren't saved, closing
   // the window asks first; once Play is pressed it closes as usual
   // Closing the window ends the process without OnShutdown, so an accepted
-  // close also deletes the port mapping and closes the Rooms connection.
+  // close also deletes the port mapping and closes the Rooms connection, and
+  // turns the Stage Kits off.
   // The harness's quit closes without asking and stops online play itself
   // (src/Test/test_server.cpp).
   bool OnWindowCloseRequested() override {
@@ -408,6 +412,7 @@ class Band3App : public rex::ReXApp {
       return false;
     }
     band3::online::Stop();
+    band3::lights::Stop();
     return true;
   }
 
@@ -476,6 +481,7 @@ class Band3App : public rex::ReXApp {
     band3::content::StartLiveContent(runtime()->file_system());
     band3::discord::Start();
     band3::ha::Start();
+    band3::lights::Start();
     band3::audio::StartUsbMics();
     band3::render::StartDumpIfRequested();
     // the native renderer's drawer; here rather than in OnCreateDialogs,
@@ -518,6 +524,8 @@ class Band3App : public rex::ReXApp {
     band3::discord::Stop();
     // says "offline" and disconnects; it reads only GameState, which outlives it
     band3::ha::Stop();
+    // the Stage Kits go dark
+    band3::lights::Stop();
     band3::audio::StopUsbMics();
   }
 

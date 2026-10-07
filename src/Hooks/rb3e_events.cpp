@@ -7,6 +7,7 @@
 #include <string>
 #include "src/Hooks/aspect.h"
 #include "src/Hooks/song_pause.h"
+#include "src/Lights/lights.h"
 #include "src/Net/discord.h"
 #include "src/Net/events.h"
 #include "src/Net/home_assistant.h"
@@ -73,12 +74,13 @@ PPCContext CallContext(const PPCContext& ctx, uint32_t reserve) {
     return call;
 }
 
-// to the RB3E events and to Home Assistant's Stage Kit entities (each checks
-// its own setting, cheaply)
+// to the RB3E events, to Home Assistant's Stage Kit entities and to the Stage
+// Kits plugged into this PC (each checks its own setting, cheaply)
 void SendStagekit(uint8_t left, uint8_t right) {
     const uint8_t data[2] = {left, right};
     band3::events::Send(band3::events::kStagekit, data, sizeof(data));
     band3::ha::NoteStageKit(left, right);
+    band3::lights::NoteGame(left, right);
 }
 
 void SendState(uint8_t in_game) {

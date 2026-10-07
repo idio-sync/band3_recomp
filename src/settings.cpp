@@ -441,6 +441,18 @@ REXCVAR_DEFINE_BOOL(rb3e_mode, true, "Band3/Online",
     "mode, song lookups, and clearing the song cache and restarting after an update")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+// Band3/Lights
+
+REXCVAR_DEFINE_BOOL(stagekit_usb, true, "Band3/Lights",
+    "Light the Stage Kits plugged into this PC as the game lights them: Santroller Stage Kits "
+    "(which a PC sees in HID mode) and Xbox 360 Stage Kits (XInput, each taking one of "
+    "Windows' four XInput slots). They don't take a player's place");
+
+REXCVAR_DEFINE_BOOL(pico_discovery, true, "Band3/Lights",
+    "Find the RB3E Dashboard's wireless Stage Kits (Pico W) on the network, to list and test "
+    "them in the Lights tab. A Pico answers whichever program found it last, so turn this off "
+    "while the RB3E Dashboard runs. They follow the game through the RB3Enhanced events");
+
 // Band3/Advanced: the in-game settings' Advanced tab, by subcategory
 
 // Band3/Advanced/Memory
@@ -660,6 +672,10 @@ REXCVAR_DEFINE_INT32(test_random_seed, 0, "Band3/Advanced/Test harness",
 REXCVAR_DEFINE_BOOL(autoplay, false, "Band3/Advanced/Test harness",
     "The game plays every part itself, from the next song start: for repeatable profiling "
     "runs and for checking a song without playing it");
+
+REXCVAR_DEFINE_BOOL(stagekit_fake, false, "Band3/Advanced/Test harness",
+    "With stagekit_usb on: add a pretend USB Stage Kit that keeps the commands it's sent, for "
+    "the harness's lights command");
 
 REXCVAR_DEFINE_BOOL(midi_keys_test_device, false, "Band3/Advanced/Test harness",
     "With test_port set and midi_keys on: report a MIDI keyboard named harness, with no port "

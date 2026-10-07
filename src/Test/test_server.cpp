@@ -57,6 +57,7 @@
 #include "src/Input/ui_round_trip.h"
 #include "src/Input/virtual_instrument.h"
 #include "src/Input/xinput_state.h"
+#include "src/Lights/lights.h"
 #include "src/Net/home_assistant.h"
 #include "src/Net/liveless_rooms.h"
 #include "src/Net/online_hooks.h"
@@ -794,11 +795,13 @@ public:
 
     // as the window's close button: RequestClose skips the close request the
     // button makes (band3_app.h's OnWindowCloseRequested), so online play
-    // lets go of the router's port mapping and the Rooms server here first
+    // lets go of the router's port mapping and the Rooms server here first,
+    // and the Stage Kits go dark
     void Quit() override {
         rex::ui::Window* window = window_;
         app_context_->CallInUIThreadDeferred([window] {
             online::Stop();
+            lights::Stop();
             window->RequestClose();
         });
     }
