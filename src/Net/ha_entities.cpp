@@ -77,6 +77,11 @@ std::string AttributesTopic(const std::string& id, std::string_view entity) {
     return StateTopic(id, entity) + "/attributes";
 }
 
+std::string ConfigTopic(const Options& options, const std::string& id, const Entity& entity) {
+    return options.discovery_prefix + "/" + entity.component + "/band3_" + id + "/" + entity.key +
+           "/config";
+}
+
 mqtt::Message Config(const Options& options, const std::string& id, const Entity& entity) {
     const bool binary = std::string_view(entity.component) == "binary_sensor";
     JsonObject config;
@@ -101,9 +106,7 @@ mqtt::Message Config(const Options& options, const std::string& id, const Entity
     if (!options.sw_version.empty()) device.Text("sw_version", options.sw_version);
     config.Raw("device", device.Close());
 
-    return {options.discovery_prefix + "/" + entity.component + "/band3_" + id + "/" + entity.key +
-                "/config",
-            config.Close(), true};
+    return {ConfigTopic(options, id, entity), config.Close(), true};
 }
 
 std::string OnOff(bool on) { return on ? "ON" : "OFF"; }
@@ -205,6 +208,7 @@ std::vector<mqtt::Message> Publisher::Changes(const GameView& view, const StageK
                                    .Close();
     }
     const bool song_started = view.in_game && !was_in_game_;
+    const bool song_ended = !view.in_game && was_in_game_;
     was_in_game_ = view.in_game;
 
     std::vector<Entry> entries;
@@ -246,24 +250,38 @@ std::vector<mqtt::Message> Publisher::Changes(const GameView& view, const StageK
         add("stagekit_fog", OnOff(stagekit.fog), Rate::kStageKit);
     }
 
+    // Every state is retained, so HA has them all again when it restarts while
+    // band3 runs; the retained "offline" makes them unavailable once band3 is
+    // gone. An empty one (no song yet) deletes the topic's retained message
+    // instead, so HA shows that state as unknown after a restart: as good.
     std::vector<mqtt::Message> out;
     if (fresh) {
         // a new connection: HA may have restarted or never heard of us, so everything
         out = Discovery(options_);
+        if (!options_.stagekit) {
+            // an empty retained config removes the entity, so the Stage Kit's
+            // don't linger in HA, unavailable, after it was turned off
+            for (const Entity& entity : kStageKitEntities) {
+                out.push_back({ConfigTopic(options_, id, entity), "", true});
+            }
+        }
         out.push_back({StatusTopic(options_), "online", true});
         sent_.clear();
         stagekit_sent_.clear();
         for (Entry& entry : entries) {
             if (entry.rate == Rate::kStageKit) stagekit_sent_[entry.topic] = now;
             sent_[entry.topic] = entry.payload;
-            out.push_back({std::move(entry.topic), std::move(entry.payload), false});
+            out.push_back({std::move(entry.topic), std::move(entry.payload), true});
         }
         progress_sent_ = now;
         return out;
     }
 
-    const bool progress_due = view.in_game && (song_started || !progress_sent_ ||
-                                               now - *progress_sent_ >= kProgressInterval);
+    // a song's last values go even within the second, so HA isn't left with
+    // where it was up to a second before the end
+    const bool progress_due =
+        song_ended || (view.in_game && (song_started || !progress_sent_ ||
+                                        now - *progress_sent_ >= kProgressInterval));
     bool progress_went = false;
     for (Entry& entry : entries) {
         auto sent = sent_.find(entry.topic);
@@ -278,7 +296,7 @@ std::vector<mqtt::Message> Publisher::Changes(const GameView& view, const StageK
             stagekit_sent_[entry.topic] = now;
         }
         sent_[entry.topic] = entry.payload;
-        out.push_back({std::move(entry.topic), std::move(entry.payload), false});
+        out.push_back({std::move(entry.topic), std::move(entry.payload), true});
     }
     if (progress_went) progress_sent_ = now;
     return out;

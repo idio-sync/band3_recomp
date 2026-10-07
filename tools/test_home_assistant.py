@@ -16,7 +16,8 @@ and checks, in order:
     read from that will topic, so the PC's name doesn't matter
   - every discovery config (the nine game entities and the six Stage Kit ones) is
     retained under homeassistant/<component>/band3_<id>/<entity>/config with its
-    unique_id, state and availability topics and device; status is online (retained)
+    unique_id, state and availability topics and device; status is online (retained);
+    the states are retained too; the client id is band3_<id>_<band3's process id>
   - through tests/game/boot.b3t and the menus (as tests/game/render_song.b3t goes),
     20th Century Boy on autoplay: playing ON, song non-empty, progress rising, a
     score above 0, and the webhook's {"type":"song",...} then {"type":"state",
@@ -263,8 +264,10 @@ def play(args, broker, checks, log_path):
     checks.check("the will is offline, retained",
                  connect.will_payload == b"offline" and connect.will_retain,
                  f"{connect.will_payload!r}, retain {connect.will_retain}")
-    checks.check("it connects with a client id and a clean session",
-                 bool(connect.client_id) and connect.clean_session)
+    checks.check("it connects with a client id of its own (band3_<id>_<pid>) and a clean session",
+                 connect.client_id.startswith(f"band3_{id_}_")
+                 and connect.client_id[len(f"band3_{id_}_"):].isdigit() and connect.clean_session,
+                 f"client {connect.client_id!r}")
     checks.check("it connects without a user name (none was set)", connect.username is None)
 
     status = f"band3/{id_}/status"
@@ -278,6 +281,11 @@ def play(args, broker, checks, log_path):
                      broker.wait_for(lambda: broker.latest(topic(entity)) is not None, 5))
     checks.check("playing is OFF in the menus", broker.latest(topic("playing")) == "OFF",
                  broker.latest(topic("playing")))
+    # retained, so Home Assistant has the states again after it restarts
+    for entity in ("playing", "score", "progress", "stagekit_fog"):
+        checks.check(f"{topic(entity)} is retained",
+                     broker.retained(topic(entity)) == broker.latest(topic(entity)),
+                     f"retained {broker.retained(topic(entity))!r}")
 
     conn = band3ctl.connect(args.port, wait_s=10)
     try:

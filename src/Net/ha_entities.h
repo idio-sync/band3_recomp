@@ -69,9 +69,11 @@ public:
 
     explicit Publisher(Options options);
 
-    // fresh: discovery + "online" + every state, as after a (re)connect; otherwise only
-    // changed payloads, progress (and its attributes) at most once a second, each Stage Kit
-    // topic at most once per 50 ms, a held-back value sent once its interval has passed
+    // fresh: discovery (with the Stage Kit's configs emptied, so removed, when it's off) +
+    // "online" + every state, as after a (re)connect; otherwise only changed payloads,
+    // progress (and its attributes) at most once a second but for a song's last values,
+    // each Stage Kit topic at most once per 50 ms, a held-back value sent once its interval
+    // has passed. Every message is retained.
     std::vector<mqtt::Message> Changes(const GameView& view, const StageKit& stagekit,
                                        Clock::time_point now, bool fresh);
 

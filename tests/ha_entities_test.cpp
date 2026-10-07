@@ -141,15 +141,14 @@ TEST_CASE("ha: discovery has every entity, retained, and the Stage Kit's only wh
     CHECK(StatusTopic(options) == "band3/den/status");
 }
 
-TEST_CASE("ha: a fresh connection gets discovery, online, then every state") {
+TEST_CASE("ha: a fresh connection gets discovery, online, then every state, all retained") {
     Publisher publisher(TestOptions());
     const std::vector<Message> out = publisher.Changes(Menus(), {}, At(0), true);
-    REQUIRE(out.size() == 9 + 1 + 11);
-    for (size_t i = 0; i < 9; i++) CHECK(out[i].retain);
-    CHECK(out[9].topic == "band3/living_room_pc/status");
-    CHECK(out[9].payload == "online");
-    CHECK(out[9].retain);
-    for (size_t i = 10; i < out.size(); i++) CHECK_FALSE(out[i].retain);
+    // the 9 configs, the 6 Stage Kit configs emptied, online, 11 states
+    REQUIRE(out.size() == 9 + 6 + 1 + 11);
+    for (const Message& message : out) CHECK(message.retain);
+    CHECK(out[15].topic == "band3/living_room_pc/status");
+    CHECK(out[15].payload == "online");
     CHECK(State(out, "song") == "");
     CHECK(State(out, "song/attributes") == R"({"shortname":"","artist":"","length_ms":0})");
     CHECK(State(out, "playing") == "OFF");
@@ -159,9 +158,42 @@ TEST_CASE("ha: a fresh connection gets discovery, online, then every state") {
     CHECK(State(out, "progress") == "0");
     CHECK(State(out, "progress/attributes") == R"({"position_ms":0,"length_ms":0})");
 
-    // and with the Stage Kit on, its states too
+    // and with the Stage Kit on, its configs and states too, none emptied
     Publisher stagekit(TestOptions(true));
-    CHECK(stagekit.Changes(Menus(), {}, At(0), true).size() == 15 + 1 + 11 + 10);
+    const std::vector<Message> with = stagekit.Changes(Menus(), {}, At(0), true);
+    CHECK(with.size() == 15 + 1 + 11 + 10);
+    for (const Message& message : with) {
+        const bool emptied = message.payload.empty() && message.topic.ends_with("/config");
+        CHECK_FALSE(emptied);
+    }
+}
+
+TEST_CASE("ha: with the Stage Kit off, a fresh connection removes its entities from HA") {
+    Options options = TestOptions(false);
+    options.discovery_prefix = "ha";
+    Publisher publisher(options);
+    const std::vector<Message> out = publisher.Changes(Menus(), {}, At(0), true);
+    const char* removed[] = {
+        "ha/sensor/band3_living_room_pc/stagekit_red/config",
+        "ha/sensor/band3_living_room_pc/stagekit_yellow/config",
+        "ha/sensor/band3_living_room_pc/stagekit_green/config",
+        "ha/sensor/band3_living_room_pc/stagekit_blue/config",
+        "ha/sensor/band3_living_room_pc/stagekit_strobe/config",
+        "ha/binary_sensor/band3_living_room_pc/stagekit_fog/config",
+    };
+    for (const char* topic : removed) {
+        CAPTURE(topic);
+        const Message* message = FindMessage(out, topic);
+        REQUIRE(message);
+        // an empty retained message deletes the retained config
+        CHECK(message->payload.empty());
+        CHECK(message->retain);
+    }
+    // nothing of the Stage Kit's states
+    CHECK_FALSE(State(out, "stagekit_red"));
+    // and again on every fresh connection, but not in between
+    CHECK(FindMessage(publisher.Changes(Menus(), {}, At(100), true), removed[0]));
+    CHECK(publisher.Changes(Menus(), {}, At(200), false).empty());
 }
 
 TEST_CASE("ha: an unchanged view publishes nothing; fresh sends everything again") {
@@ -169,7 +201,7 @@ TEST_CASE("ha: an unchanged view publishes nothing; fresh sends everything again
     publisher.Changes(Menus(), {}, At(0), true);
     CHECK(publisher.Changes(Menus(), {}, At(50), false).empty());
     CHECK(publisher.Changes(Menus(), {}, At(5000), false).empty());
-    CHECK(publisher.Changes(Menus(), {}, At(5050), true).size() == 21);
+    CHECK(publisher.Changes(Menus(), {}, At(5050), true).size() == 27);
     CHECK(publisher.Changes(Menus(), {}, At(5100), false).empty());
 }
 
@@ -179,6 +211,8 @@ TEST_CASE("ha: the states through a song") {
 
     // a song starts: everything about it, and progress at once
     std::vector<Message> out = publisher.Changes(Playing(-1), {}, At(100), false);
+    // retained, so HA has them again after it restarts
+    for (const Message& message : out) CHECK(message.retain);
     CHECK(State(out, "song") == "Free Bird");
     CHECK(State(out, "song/attributes") ==
           R"({"shortname":"freebird","artist":"Lynyrd Skynyrd","length_ms":200000})");
@@ -260,6 +294,29 @@ TEST_CASE("ha: progress goes out at most once a second, and only in a song") {
     // the next song shows 0 at once, though the last value went out just now
     out = publisher.Changes(Playing(-1), {}, At(13100), false);
     CHECK(State(out, "progress") == "0");
+}
+
+TEST_CASE("ha: a song's last progress goes out when it ends, even within the second") {
+    Publisher publisher(TestOptions());
+    publisher.Changes(Menus(), {}, At(0), true);
+    std::vector<Message> out = publisher.Changes(Playing(2000), {}, At(10000), false);
+    CHECK(State(out, "progress") == "1");
+    // held back: within the second
+    out = publisher.Changes(Playing(196000), {}, At(10500), false);
+    CHECK_FALSE(State(out, "progress"));
+
+    // the song ends 100 ms later: the values it ended on go at once
+    GameView after = Playing(196000);
+    after.in_game = false;
+    after.screen = "main_hub_screen";
+    out = publisher.Changes(after, {}, At(10600), false);
+    CHECK(State(out, "playing") == "OFF");
+    CHECK(State(out, "progress") == "98");
+    CHECK(State(out, "progress/attributes") == R"({"position_ms":196000,"length_ms":200000})");
+
+    // once only: out of the song nothing more
+    out = publisher.Changes(after, {}, At(10700), false);
+    CHECK(out.empty());
 }
 
 TEST_CASE("ha: Stage Kit commands") {
