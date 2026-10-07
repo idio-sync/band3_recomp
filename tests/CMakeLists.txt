@@ -68,6 +68,7 @@ add_executable(band3_tests
     liveless_rooms_client_test.cpp
     mqtt_protocol_test.cpp
     mqtt_client_test.cpp
+    ha_entities_test.cpp
     port_mapping_protocol_test.cpp
     native_socket_test.cpp
     frame_pacing_test.cpp
@@ -117,6 +118,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Launcher/settings_reference.cpp
     ${BAND3_ROOT}/src/Launcher/mic_level.cpp
     ${BAND3_ROOT}/src/Net/album_art.cpp
+    ${BAND3_ROOT}/src/Net/ha_entities.cpp
     ${BAND3_ROOT}/src/Net/liveless_rooms_client.cpp
     ${BAND3_ROOT}/src/Net/liveless_rooms_protocol.cpp
     ${BAND3_ROOT}/src/Net/mqtt_client.cpp
