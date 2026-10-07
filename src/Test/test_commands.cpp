@@ -198,14 +198,70 @@ std::string ApplyInputs(const Controller& c, InstrumentInputs& in, std::string_v
     return {};
 }
 
+// A command's `until <condition> [every=<time>] [timeout=<time>]`
+struct Until {
+    Condition condition;
+    // the condition as written, for the timeout's error
+    std::string text;
+    std::chrono::milliseconds every = kPressRetry;
+    std::chrono::milliseconds timeout = kWaitTimeout;
+};
+
+// the words from `until` on as an Until, or what's wrong with them (with `usage`)
+std::variant<Until, std::string> ParseUntil(std::vector<std::string_view>::const_iterator until,
+                                            std::vector<std::string_view>::const_iterator end,
+                                            std::string_view usage) {
+    if (until + 1 == end) return std::string(usage);
+    auto parsed = ParseCondition(*(until + 1));
+    if (auto* error = std::get_if<std::string>(&parsed)) return *error;
+    Until out{.condition = std::get<Condition>(parsed), .text = std::string(*(until + 1))};
+    for (auto it = until + 2; it != end; ++it) {
+        const bool is_every = it->starts_with("every="), is_timeout = it->starts_with("timeout=");
+        auto value = is_every     ? ParseDuration(it->substr(6))
+                     : is_timeout ? ParseDuration(it->substr(8))
+                                  : std::nullopt;
+        if (!value || *value <= std::chrono::milliseconds(0))
+            return "bad " + std::string(*it) + " (" + std::string(usage) + ")";
+        (is_every ? out.every : out.timeout) = *value;
+    }
+    return out;
+}
+
+// Does `act` until the condition holds, waiting up to `timeout` for it, and
+// does it again each time `every` goes by with the screen still the one it
+// acted on: RB3 drops a press made while a screen is still coming in, and how
+// long that takes isn't a number of frames at every refresh rate. Once the
+// screen has changed at all (a loading screen on the way, say) the press took,
+// and it's never made again, so a retry can't land on the next screen. `act`
+// returns an error, or empty; `one` and `many` name it in the timeout's error.
+std::string RepeatUntil(TestTarget& target, const Until& until, std::string_view one,
+                        std::string_view many, const std::function<std::string()>& act) {
+    const auto start = target.Now();
+    const GameStateSnapshot start_state = target.State();
+    for (int acts = 1;; acts++) {
+        if (std::string error = act(); !error.empty()) return Error(target, error);
+        const auto acted_at = target.Now();
+        GameStateSnapshot state = target.State();
+        while (!ConditionHolds(until.condition, state, start_state)) {
+            if (target.Cancelled()) return Error(target, "the test server is shutting down");
+            if (target.Now() - start >= until.timeout) {
+                return Error(target, "timed out after " + std::to_string(until.timeout.count()) +
+                                         " ms and " + std::to_string(acts) + " " +
+                                         std::string(acts == 1 ? one : many) + " waiting for " +
+                                         until.text);
+            }
+            if (state.screen == start_state.screen && target.Now() - acted_at >= until.every) break;
+            target.Sleep(kWaitPoll);
+            state = target.State();
+        }
+        if (ConditionHolds(until.condition, state, start_state)) return OkWithState(target, state);
+    }
+}
+
 // `press <inputs> [ms] [until <condition> [every=<time>] [timeout=<time>]]`.
 // With `until`, it waits up to `timeout` (30 s by default) for the condition,
 // and presses again each time `every` (2 s) goes by with the screen still the
-// one it pressed on: RB3 drops a press made while a screen is still coming
-// in, and how long that takes isn't a number of frames at every refresh rate.
-// Once the screen has changed at all (a loading screen on the way, say) the
-// press took, and it's never made again, so a retry can't land on the next
-// screen.
+// one it pressed on (RepeatUntil).
 std::string Press(TestTarget& target, const Controller& c,
                   const std::vector<std::string_view>& args) {
     const auto until = std::find(args.begin(), args.end(), "until");
@@ -223,22 +279,11 @@ std::string Press(TestTarget& target, const Controller& c,
     if (std::string error = ApplyInputs(c, check, args[1], kDefaultVelocity); !error.empty())
         return Error(target, error);
 
-    std::optional<Condition> condition;
-    std::chrono::milliseconds every = kPressRetry, timeout = kWaitTimeout;
+    std::optional<Until> repeat;
     if (until != args.end()) {
-        if (until + 1 == args.end()) return Error(target, usage);
-        auto parsed = ParseCondition(*(until + 1));
+        auto parsed = ParseUntil(until, args.end(), usage);
         if (auto* error = std::get_if<std::string>(&parsed)) return Error(target, *error);
-        condition = std::get<Condition>(parsed);
-        for (auto it = until + 2; it != args.end(); ++it) {
-            const bool is_every = it->starts_with("every="), is_timeout = it->starts_with("timeout=");
-            auto value = is_every     ? ParseDuration(it->substr(6))
-                         : is_timeout ? ParseDuration(it->substr(8))
-                                      : std::nullopt;
-            if (!value || *value <= std::chrono::milliseconds(0))
-                return Error(target, "bad " + std::string(*it) + " (" + usage + ")");
-            (is_every ? every : timeout) = *value;
-        }
+        repeat = std::get<Until>(std::move(parsed));
     }
 
     const input::InstrumentKind kind = c.kind;
@@ -249,32 +294,13 @@ std::string Press(TestTarget& target, const Controller& c,
                 SetInput(kind, in, name, kDefaultVelocity);
         }, length);
         target.Sleep(length + kReleaseGap);
+        return std::string();
     };
-    if (!condition) {
+    if (!repeat) {
         press();
         return Ok();
     }
-
-    const auto start = target.Now();
-    const GameStateSnapshot start_state = target.State();
-    for (int presses = 1;; presses++) {
-        press();
-        const auto pressed_at = target.Now();
-        GameStateSnapshot state = target.State();
-        while (!ConditionHolds(*condition, state, start_state)) {
-            if (target.Cancelled()) return Error(target, "the test server is shutting down");
-            if (target.Now() - start >= timeout) {
-                return Error(target, "timed out after " + std::to_string(timeout.count()) +
-                                         " ms and " + std::to_string(presses) +
-                                         (presses == 1 ? " press" : " presses") +
-                                         " waiting for " + std::string(*(until + 1)));
-            }
-            if (state.screen == start_state.screen && target.Now() - pressed_at >= every) break;
-            target.Sleep(kWaitPoll);
-            state = target.State();
-        }
-        if (ConditionHolds(*condition, state, start_state)) return OkWithState(target, state);
-    }
+    return RepeatUntil(target, *repeat, "press", "presses", press);
 }
 
 std::string Hit(TestTarget& target, const Controller& c,
@@ -980,6 +1006,36 @@ std::string FoldersReply(TestTarget& target, const std::vector<std::string_view>
     return Ok(out);
 }
 
+// `midi <hex bytes> [until <condition> [every=<time>] [timeout=<time>]]`: hands
+// the MIDI keyboard driver messages as its port would, e.g. `midi 90 3c 64`.
+// Several messages go in one command, each starting with its status byte, so
+// `midi 90 3c 64 80 3c 00` taps a key (held 30 ms, midi_keys.h) and a chord is
+// one command. With `until`, sends them all again each time `every` goes by
+// with the screen unchanged, as `press` does.
+std::string Midi(TestTarget& target, const std::vector<std::string_view>& args) {
+    const auto until = std::find(args.begin(), args.end(), "until");
+    const char* usage =
+        "usage: midi <hex bytes> [until <condition> [every=<n>s] [timeout=<n>s]], e.g. midi 90 3c 64";
+    if (until == args.begin() + 1) return Error(target, usage);
+    auto parsed = ParseMidiMessages({args.begin() + 1, until});
+    if (auto* error = std::get_if<std::string>(&parsed)) return Error(target, *error);
+    const std::vector<std::vector<uint8_t>> messages = std::get<0>(std::move(parsed));
+
+    auto send = [&] {
+        for (const auto& message : messages) {
+            if (std::string error = target.SendMidi(message); !error.empty()) return error;
+        }
+        return std::string();
+    };
+    if (until == args.end()) {
+        if (std::string error = send(); !error.empty()) return Error(target, error);
+        return Ok();
+    }
+    auto repeat = ParseUntil(until, args.end(), usage);
+    if (auto* error = std::get_if<std::string>(&repeat)) return Error(target, *error);
+    return RepeatUntil(target, std::get<Until>(repeat), "send", "sends", send);
+}
+
 // bind <name>: presses a key bind's key, e.g. `bind instrument_lab` for F6;
 // the bind_ prefix is optional
 std::string Bind(TestTarget& target, const std::vector<std::string_view>& args) {
@@ -1301,6 +1357,8 @@ std::variant<Condition, std::string> ParseCondition(std::string_view text) {
         c.kind = Condition::Kind::kMenus;
     } else if (text == "joined") {
         c.kind = Condition::Kind::kJoined;
+    } else if (text == "paused") {
+        c.kind = Condition::Kind::kPaused;
     } else if (text.starts_with("screen=")) {
         c.kind = Condition::Kind::kScreen;
         c.text = text.substr(7);
@@ -1346,7 +1404,7 @@ std::variant<Condition, std::string> ParseCondition(std::string_view text) {
     } else {
         return "no condition " + std::string(text) +
                " (screen=, screen~, in_game, menus, song=, frames=, score>=, mic=, rooms=, "
-               "port_mapping=, joined)";
+               "port_mapping=, joined, paused)";
     }
     if ((c.kind == Condition::Kind::kScreen || c.kind == Condition::Kind::kScreenContains ||
          c.kind == Condition::Kind::kSong) &&
@@ -1354,6 +1412,30 @@ std::variant<Condition, std::string> ParseCondition(std::string_view text) {
         return std::string(text) + " needs a name";
     }
     return c;
+}
+
+std::variant<std::vector<std::vector<uint8_t>>, std::string> ParseMidiMessages(
+    std::span<const std::string_view> words) {
+    if (words.empty()) return "midi needs bytes, e.g. midi 90 3c 64";
+    std::vector<std::vector<uint8_t>> messages;
+    for (const std::string_view word : words) {
+        uint8_t byte = 0;
+        const auto [end, ec] = std::from_chars(word.data(), word.data() + word.size(), byte, 16);
+        if (word.empty() || word.size() > 2 || ec != std::errc() || end != word.data() + word.size()) {
+            return "bad byte " + std::string(word) + ": midi takes hex bytes, e.g. midi 90 3c 64";
+        }
+        // a status byte starts a message, and its data bytes (below 80) follow
+        if (byte >= 0x80) {
+            messages.emplace_back();
+        } else if (messages.empty()) {
+            return "midi's first byte is a status byte (80 to ff), not " + std::string(word);
+        }
+        if (messages.back().size() == 3) {
+            return "a MIDI message is 1 to 3 bytes; start the next with its status byte";
+        }
+        messages.back().push_back(byte);
+    }
+    return messages;
 }
 
 bool ConditionHolds(const Condition& condition, const GameStateSnapshot& state,
@@ -1377,6 +1459,7 @@ bool ConditionHolds(const Condition& condition, const GameStateSnapshot& state,
     case Condition::Kind::kRooms: return state.rooms_state == condition.text;
     case Condition::Kind::kPortMapping: return state.port_mapping_state == condition.text;
     case Condition::Kind::kJoined: return state.joined;
+    case Condition::Kind::kPaused: return state.paused;
     }
     return false;
 }
@@ -1446,6 +1529,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "bind") return Bind(target, args);
     if (verb == "type") return Type(target, args);
     if (verb == "mouse") return Mouse(target, args);
+    if (verb == "midi") return Midi(target, args);
     if (verb == "liveless_invite") return LivelessInvite(target, args);
     if (verb == "rooms_status") return RoomsStatus(target, args);
     if (verb == "rooms_join") return RoomsJoin(target, args);

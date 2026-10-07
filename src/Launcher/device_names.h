@@ -19,10 +19,27 @@ namespace band3::launcher {
 // is shown as "<saved> (not connected)".
 std::optional<size_t> FindSavedDevice(std::span<const std::string> names, std::string_view saved);
 
-// The MIDI port the MIDI drums driver opens for midi_drums_device, as it picks
-// it (midi_drums_driver.cpp): an empty setting takes the first port that isn't
-// Linux's "Midi Through" loopback. Pass RtMidi's full port names.
-std::optional<size_t> FindMidiPort(std::span<const std::string> ports, std::string_view saved);
+// The MIDI port a band3 MIDI driver opens for its device setting
+// (midi_drums_device, midi_keys_device), by the rule it picks with
+// (input::PickPort): an empty setting takes the first port that isn't Linux's
+// "Midi Through" loopback and isn't in `taken`, the ports band3's other MIDI
+// devices hold. Pass RtMidi's full port names.
+std::optional<size_t> FindMidiPort(std::span<const std::string> ports, std::string_view saved,
+                                   const std::vector<std::string>& taken = {});
+
+// one band3 MIDI driver's settings: midi_drums and midi_drums_device, or
+// midi_keys and midi_keys_device
+struct MidiDriverSetting {
+    bool on = false;
+    std::string_view saved;
+};
+
+// The ports band3's MIDI drivers open, by FindMidiPort, in the order they
+// start (input_system.cpp: the drum kit's, then the keyboard's): each that's on
+// passes over the ports those started before it hold. One entry per driver,
+// nullopt for one that's off or finds no port.
+std::vector<std::optional<size_t>> PickMidiPorts(std::span<const std::string> ports,
+                                                 std::span<const MidiDriverSetting> drivers);
 
 // RtMidi's Windows (WinMM) backend names input port `index` "<device> <index>"
 // (MidiInWinMM::getPortName), and the index moves as devices come and go, so

@@ -170,6 +170,13 @@ bool IsRb2Drums(const Caps360& caps);
 Caps360 KeysCaps();
 Gamepad360 EncodeKeys(const KeysInputs& in);
 
+// What a keytar is pressing, read back from what it reports (EncodeKeys in
+// reverse), for the launcher's test view: the held keys from the triggers and
+// sThumbLX's bits, their velocities paired with them from the lowest key up,
+// overdrive and the menu buttons. The report carries five velocities, so a
+// sixth key held and up reads at 127, as does a held key reported at 0.
+KeysInputs DecodeKeys(const Gamepad360& g);
+
 // Mustang (buttons, 17 frets) or Squier (strings, 22 frets)
 Caps360 ProGuitarCaps(ProGuitarModel model);
 Gamepad360 EncodeProGuitar(const ProGuitarInputs& in);

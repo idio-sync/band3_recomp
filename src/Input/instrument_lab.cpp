@@ -9,6 +9,7 @@
 #include "hid_instruments.h"
 #include "joypad_lag_status.h"
 #include "midi_drums_driver.h"
+#include "midi_keys_driver.h"
 #include "pro_instrument_status.h"
 #include "virtual_instrument.h"
 #include "src/Audio/mic_mapping_status.h"
@@ -313,6 +314,70 @@ void DrawMidiDrums() {
                        "44=Kick,40=Snare. It takes a restart.");
 }
 
+void DrawMidiKeys() {
+    if (!REXCVAR_GET(midi_keys)) {
+        ImGui::TextWrapped("MIDI keyboards are read when the midi_keys setting is on (Escape > "
+                           "Settings, the Controllers tab's MIDI keyboard). It takes a restart.");
+        return;
+    }
+    const MidiKeysStatus status = GetMidiKeysStatus();
+    if (!status.running) {
+        ImGui::TextWrapped("midi_keys is on but MIDI input isn't running: restart if it was "
+                           "just turned on, otherwise the log says why it didn't start.");
+        return;
+    }
+
+    if (!status.port.empty()) {
+        ImGui::Text("Playing %s", status.port.c_str());
+    } else {
+        const std::string& wanted = REXCVAR_GET(midi_keys_device);
+        ImGui::Text("Waiting for %s", wanted.empty() ? "a MIDI input" : wanted.c_str());
+    }
+    ImGui::TextDisabled("MIDI inputs");
+    if (status.ports.empty()) ImGui::TextUnformatted("(none found)");
+    for (const auto& port : status.ports) ImGui::BulletText("%s", port.c_str());
+
+    ImGui::Separator();
+    ImGui::Text("Lowest C: note %u (%s)", status.base_note,
+                midi_keys::NoteName(status.base_note).c_str());
+    ImGui::Text("Now: %s", status.mode == midi_keys::Mode::kPlaying
+                               ? "in a song, every key plays"
+                               : "menus, the lowest octave is buttons");
+    ImGui::TextDisabled("Last messages, newest first");
+    if (status.recent.empty()) {
+        ImGui::TextUnformatted("(nothing yet; play a key)");
+    } else if (ImGui::BeginTable("events", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("Message");
+        ImGui::TableSetupColumn("Note");
+        ImGui::TableSetupColumn("Does", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+        for (auto it = status.recent.rbegin(); it != status.recent.rend(); ++it) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            // the pause chord, which no message fires, has no bytes
+            if (it->message[0] == 0) {
+                ImGui::TextDisabled("(held)");
+            } else {
+                ImGui::Text("%02x %02x %02x", it->message[0], it->message[1], it->message[2]);
+            }
+            ImGui::TableNextColumn();
+            if (const auto note = midi_keys::NoteOf(it->message)) {
+                ImGui::Text("%d (%s)", *note, midi_keys::NoteName(*note).c_str());
+            }
+            ImGui::TableNextColumn();
+            if (it->what == "outside the 25 keys" || it->what == "unused in menus") {
+                ImGui::TextDisabled("%s", it->what.c_str());
+            } else {
+                ImGui::TextUnformatted(it->what.c_str());
+            }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextWrapped("To set the lowest C, press your keyboard's lowest C, read its note here "
+                       "and set midi_keys_base_note to it (Escape > Settings, the Controllers "
+                       "tab's Lowest C). It takes at once.");
+}
+
 // the JoypadTypes whose pro data RB3 reads (UsbMidiGuitar::Poll and
 // UsbMidiKeyboard::Poll, for the Xbox types)
 bool GameReadsProData(uint32_t game_type) {
@@ -600,6 +665,10 @@ void InstrumentLabDialog::OnDraw(ImGuiIO&) {
         }
         if (ImGui::BeginTabItem("MIDI drums")) {
             DrawMidiDrums();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("MIDI keyboard")) {
+            DrawMidiKeys();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Pro instruments")) {

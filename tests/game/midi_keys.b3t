@@ -1,0 +1,179 @@
+# Plays Rock Band 3 from a MIDI keyboard, through the harness's `midi` command
+# (docs/test-harness.md, MIDI keyboards): it joins as player 2, works the menus
+# from its lowest octave, plays Antibodies on Easy Pro Keys, and pauses with
+# the chord. Player 1's virtual guitar only picks its part.
+#   python tools/band3ctl.py launch --fresh -- --midi_keys=true --midi_keys_test_device=true
+#   python tools/band3ctl.py run tests/game/boot.b3t
+#   python tools/band3ctl.py run tests/game/midi_keys.b3t
+# Starts where boot.b3t leaves Rock Band 3 Deluxe, on the welcome hint.
+#
+# The keyboard's notes, in hex, at midi_keys_base_note 48: the keytar's 25 keys
+# are 30-48. In menus its lowest octave is buttons: 30 Left, 32 Down, 34 Up,
+# 35 Right, 36 Back, 37 A, 39 B, 3b Start. A tap is the note-on and the
+# note-off in one command (`midi 90 37 64 80 37 00`): the keyboard holds a
+# press 30 ms however soon it's let go, and a menu button 100 ms (30 ms taps
+# were dropped now and then: the minimized game draws ~30 frames a second).
+
+# to the main menu on the virtual guitar, as render_song.b3t does
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+
+# The keyboard joins as player 2. The harness's keyboard connects with the
+# first message it's handed (CC 7, the volume, presses nothing), and the
+# virtual guitar keeps player 1 meanwhile: RB3 reads a slot's type when the
+# slot connects, and player 1's never empties (the SDK's stand-in device holds
+# it once the guitar goes), so a keyboard swapped in there would still read as
+# the guitar. Player 2's slot connects with the keyboard, as a keytar.
+midi b0 07 64
+sleep 2s
+# Start (B in menus) joins it; skip_profile_prompt answers the profile prompt
+midi 90 3b 64 80 3b 00
+sleep 3s
+screenshot midi-keys-joined
+
+# Play Now, Quickplay, Choose Songs: A each, from the keyboard
+midi 90 37 64 80 37 00
+sleep 1s
+midi 90 37 64 80 37 00
+sleep 1s
+midi 90 37 64 80 37 00 until screen=song_select_screen timeout=30s
+sleep 1s
+# from Random Song down to Antibodies, the headings counting
+midi 90 32 64 80 32 00
+sleep 300ms
+midi 90 32 64 80 32 00
+sleep 300ms
+midi 90 32 64 80 32 00
+sleep 300ms
+midi 90 32 64 80 32 00
+sleep 300ms
+midi 90 32 64 80 32 00
+sleep 500ms
+screenshot midi-keys-song-list
+midi 90 37 64 80 37 00 until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+screenshot midi-keys-parts
+
+# Player 1, the virtual guitar, which nobody plays: Guitar, Easy (the list
+# opens on Expert)
+press green
+sleep 500ms
+press up
+sleep 300ms
+press up
+sleep 300ms
+press up
+sleep 300ms
+press green
+sleep 1s
+
+# Player 2, the keyboard: Keys and Pro Keys head its part list, which may open
+# scrolled down, and it doesn't wrap: up to the top, then down to Pro Keys
+midi 90 34 64 80 34 00
+sleep 300ms
+midi 90 34 64 80 34 00
+sleep 300ms
+midi 90 34 64 80 34 00
+sleep 300ms
+midi 90 34 64 80 34 00
+sleep 300ms
+midi 90 34 64 80 34 00
+sleep 300ms
+midi 90 34 64 80 34 00
+sleep 300ms
+midi 90 32 64 80 32 00
+sleep 300ms
+screenshot midi-keys-part-pro-keys
+midi 90 37 64 80 37 00
+sleep 1s
+# Easy: up three from Expert
+midi 90 34 64 80 34 00
+sleep 300ms
+midi 90 34 64 80 34 00
+sleep 300ms
+midi 90 34 64 80 34 00
+sleep 300ms
+screenshot midi-keys-difficulty
+midi 90 37 64 80 37 00
+wait in_game timeout=60s
+# Let the song's own screen come up first (in_game starts on the intro's
+# tv3_*_screen): until it does the keyboard is in its menus, where the lowest
+# octave would press Start and the rest, and a `midi until` stops repeating
+# once the screen it started on changes.
+wait screen=game_screen timeout=30s
+sleep 1s
+screenshot midi-keys-song
+
+# Every key at once, a tap each 150 ms, until a note scores: RB3 counts the
+# note among the wrong keys.
+midi 90 30 64 90 31 64 90 32 64 90 33 64 90 34 64 90 35 64 90 36 64 90 37 64 90 38 64 90 39 64 90 3a 64 90 3b 64 90 3c 64 90 3d 64 90 3e 64 90 3f 64 90 40 64 90 41 64 90 42 64 90 43 64 90 44 64 90 45 64 90 46 64 90 47 64 90 48 64 80 30 00 80 31 00 80 32 00 80 33 00 80 34 00 80 35 00 80 36 00 80 37 00 80 38 00 80 39 00 80 3a 00 80 3b 00 80 3c 00 80 3d 00 80 3e 00 80 3f 00 80 40 00 80 41 00 80 42 00 80 43 00 80 44 00 80 45 00 80 46 00 80 47 00 80 48 00 until score>=1 every=150ms timeout=60s
+expect score>=1
+screenshot midi-keys-scored
+
+# The pause chord: the lowest and highest C held for a second press Start.
+midi 90 30 64 90 48 64
+sleep 1100ms
+wait paused timeout=5s
+midi 80 30 00 80 48 00
+sleep 1500ms
+screenshot midi-keys-paused
+# The pause menu takes the menu keys (the chord's keys, let go, are no
+# buttons): down and back up, then A on Resume.
+midi 90 32 64 80 32 00
+sleep 500ms
+midi 90 34 64 80 34 00
+sleep 500ms
+midi 90 37 64 80 37 00
+sleep 2s
+# UNSURE: no condition says the song plays again; `state`'s paused is false
+# here, and the screenshot shows the song
+screenshot midi-keys-resumed
+
+# 5-lane Keys: pause with the chord again, back to the song list from the
+# pause menu (down four, A, then Yes), and Antibodies again
+midi 90 30 64 90 48 64
+sleep 1100ms
+wait paused timeout=5s
+midi 80 30 00 80 48 00
+sleep 800ms
+midi 90 32 64 80 32 00
+sleep 300ms
+midi 90 32 64 80 32 00
+sleep 300ms
+midi 90 32 64 80 32 00
+sleep 300ms
+midi 90 32 64 80 32 00
+sleep 500ms
+midi 90 37 64 80 37 00
+sleep 1500ms
+midi 90 37 64 80 37 00 until screen=song_select_screen timeout=60s
+sleep 1500ms
+midi 90 37 64 80 37 00 until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+# player 1 keeps Guitar on Easy, where its lists now open
+press green
+sleep 800ms
+press green
+sleep 800ms
+# player 2's list opens on Pro Keys; Keys is the one above, at the top
+midi 90 34 64 80 34 00
+sleep 300ms
+midi 90 34 64 80 34 00
+sleep 300ms
+midi 90 34 64 80 34 00
+sleep 300ms
+screenshot midi-keys-part-keys
+midi 90 37 64 80 37 00
+sleep 1s
+# its difficulty opens on Easy, the one last played
+midi 90 37 64 80 37 00
+wait in_game timeout=60s
+wait screen=game_screen timeout=30s
+sleep 1s
+midi 90 30 64 90 31 64 90 32 64 90 33 64 90 34 64 90 35 64 90 36 64 90 37 64 90 38 64 90 39 64 90 3a 64 90 3b 64 90 3c 64 90 3d 64 90 3e 64 90 3f 64 90 40 64 90 41 64 90 42 64 90 43 64 90 44 64 90 45 64 90 46 64 90 47 64 90 48 64 80 30 00 80 31 00 80 32 00 80 33 00 80 34 00 80 35 00 80 36 00 80 37 00 80 38 00 80 39 00 80 3a 00 80 3b 00 80 3c 00 80 3d 00 80 3e 00 80 3f 00 80 40 00 80 41 00 80 42 00 80 43 00 80 44 00 80 45 00 80 46 00 80 47 00 80 48 00 until score>=1 every=150ms timeout=60s
+expect score>=1
+screenshot midi-keys-5-lane

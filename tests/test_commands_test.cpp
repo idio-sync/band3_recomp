@@ -6,6 +6,7 @@
 #include <chrono>
 #include <optional>
 #include <functional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -176,6 +177,14 @@ public:
         return {};
     }
     std::optional<band3::test::MouseView> MouseRows() override { return mouse_view; }
+    // midi_keys is on; each message the keyboard driver was handed
+    bool midi_keys = true;
+    std::vector<std::vector<uint8_t>> midi;
+    std::string SendMidi(std::span<const uint8_t> message) override {
+        if (!midi_keys) return "no MIDI keyboard driver runs";
+        midi.emplace_back(message.begin(), message.end());
+        return {};
+    }
     std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) override {
         if (host == "offline") return "liveless is off";
         invites.push_back({host, port, force_flag});
@@ -1662,4 +1671,85 @@ TEST_CASE("present_stats reports the window's paints, the native frames and the 
         CAPTURE(bad);
         CHECK_FALSE(Ok(RunCommand(bad, game)));
     }
+}
+
+TEST_CASE("midi hands the keyboard driver each message, split at its status bytes") {
+    FakeGame game;
+    CHECK(Ok(RunCommand("midi 90 3c 64", game)));
+    REQUIRE(game.midi.size() == 1);
+    CHECK(game.midi[0] == std::vector<uint8_t>{0x90, 0x3C, 0x64});
+    // a tap: note-on and note-off in one command; upper case; a 2-byte message
+    game.midi.clear();
+    CHECK(Ok(RunCommand("midi 90 3C 64 80 3c 00 c0 05 FE", game)));
+    REQUIRE(game.midi.size() == 4);
+    CHECK(game.midi[1] == std::vector<uint8_t>{0x80, 0x3C, 0x00});
+    CHECK(game.midi[2] == std::vector<uint8_t>{0xC0, 0x05});
+    CHECK(game.midi[3] == std::vector<uint8_t>{0xFE});
+    CHECK(game.slept == 0ms);
+}
+
+TEST_CASE("midi: bad bytes and no driver are errors that send nothing") {
+    FakeGame game;
+    CHECK(Has(RunCommand("midi", game), "usage: midi"));
+    CHECK(Has(RunCommand("midi 3c 64", game), "status byte"));
+    CHECK(Has(RunCommand("midi 90 3c 64 12", game), "1 to 3 bytes"));
+    CHECK(Has(RunCommand("midi 90 3g 64", game), "bad byte 3g"));
+    CHECK(Has(RunCommand("midi 90 13c", game), "bad byte 13c"));
+    CHECK(Has(RunCommand("midi 0x90", game), "bad byte 0x90"));
+    CHECK(Has(RunCommand("p2 midi 90 3c 64", game), "isn't for one player"));
+    CHECK(game.midi.empty());
+    game.midi_keys = false;
+    const std::string reply = RunCommand("midi 90 3c 64", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(Has(reply, "no MIDI keyboard driver runs"));
+}
+
+TEST_CASE("midi until sends again every `every` until the condition holds") {
+    FakeGame game;
+    game.state.screen = "game_screen";
+    game.on_sleep = [](FakeGame& g) {
+        if (g.slept >= 1s) g.state.score = 25;
+    };
+    const std::string reply =
+        RunCommand("midi 90 30 64 80 30 00 until score>=1 every=200ms timeout=10s", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"score\":25"));
+    // two messages a send, about five sends before the second's score
+    CHECK(game.midi.size() >= 8);
+    CHECK(game.midi.size() % 2 == 0);
+
+    FakeGame stuck;
+    stuck.state.screen = "game_screen";
+    const std::string timed_out =
+        RunCommand("midi 90 30 64 until score>=1 every=500ms timeout=2s", stuck);
+    CHECK_FALSE(Ok(timed_out));
+    CHECK(Has(timed_out, "timed out after 2000 ms and"));
+    CHECK(Has(timed_out, "sends waiting for score>=1"));
+    CHECK(Has(RunCommand("midi 90 30 64 until", stuck), "usage: midi"));
+    CHECK(Has(RunCommand("midi 90 30 64 until nothing", stuck), "no condition nothing"));
+}
+
+TEST_CASE("state says whether the song is paused, and wait paused waits for it") {
+    FakeGame game;
+    CHECK(Has(RunCommand("state", game), "\"paused\":false"));
+    CHECK_FALSE(Ok(RunCommand("expect paused timeout=1s", game)));
+    game.on_sleep = [](FakeGame& g) {
+        if (g.slept >= 1100ms) g.state.paused = true;
+    };
+    const std::string reply = RunCommand("wait paused timeout=5s", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"paused\":true"));
+    CHECK(game.slept >= 1100ms);
+    CHECK(Has(RunCommand("wait paused=yes", game), "no condition paused=yes"));
+}
+
+TEST_CASE("ParseMidiMessages splits a byte stream into messages") {
+    const std::vector<std::string_view> words = {"b0", "01", "7f", "e0", "00", "40"};
+    const auto parsed = ParseMidiMessages(words);
+    REQUIRE(std::holds_alternative<std::vector<std::vector<uint8_t>>>(parsed));
+    const auto& messages = std::get<0>(parsed);
+    REQUIRE(messages.size() == 2);
+    CHECK(messages[0] == std::vector<uint8_t>{0xB0, 0x01, 0x7F});
+    CHECK(messages[1] == std::vector<uint8_t>{0xE0, 0x00, 0x40});
+    CHECK(std::holds_alternative<std::string>(ParseMidiMessages({})));
 }

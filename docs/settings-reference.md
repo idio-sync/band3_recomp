@@ -130,9 +130,18 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
 | `midi_drums`<br>Play a MIDI drum kit | `false` | `true`, `false` | Play a MIDI drum kit as a Rock Band pro drum kit, without a MIDI Pro Adapter *Applies at the next start.* |
-| `midi_drums_device`<br>MIDI port | *(empty)* | text | MIDI input port to play, or part of its name. Empty uses the first one *Applies at the next start.* |
+| `midi_drums_device`<br>MIDI port | *(empty)* | text | MIDI input port to play, or part of its name. Empty takes the first one no other band3 MIDI device has *Applies at the next start.* |
 | `midi_drums_min_velocity`<br>Minimum velocity | `10` | `1` to `127` | Quieter hits than this (1-127) are ignored *Applies at the next start.* |
 | `midi_drums_combos`<br>Menu buttons from the kit | `true` | `true`, `false` | Menu buttons from the kit: hi-hat pedal three times, then snare for Start, rim for Select, or kick to hold the kick (RB3's song category menu) *Applies at the next start.* |
+
+### MIDI keyboard
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `midi_keys`<br>Play a MIDI keyboard | `false` | `true`, `false` | Play a MIDI keyboard as a Rock Band keytar, for Keys and Pro Keys *Applies at the next start.* |
+| `midi_keys_device`<br>MIDI port | *(empty)* | text | MIDI input port to play, or part of its name. Empty takes the first one no other band3 MIDI device has *Applies at the next start.* |
+| `midi_keys_base_note`<br>Lowest C | `48` | `0` to `103` | The MIDI note of the keytar's lowest C: 48 (C3) on most 25-key keyboards. The 25 keys from it play the keytar's |
+| `midi_keys_test_device`<br>Harness keyboard | `false` | `true`, `false` | With test_port set and midi_keys on: report a MIDI keyboard named harness, with no port open, from the first message the harness's midi command hands it *Applies at the next start.* |
 
 ### Input lag
 

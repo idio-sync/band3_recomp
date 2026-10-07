@@ -40,7 +40,7 @@ std::string PlayerLabel(int player);
 std::optional<std::string> PlaysAsLabel(int controller_type);
 
 // how the test view draws a device, by the subtype it reports
-enum class TestView { kGuitar, kDrums, kPad };
+enum class TestView { kGuitar, kDrums, kKeys, kPad };
 TestView ViewFor(const input::Caps360& caps);
 
 // How brightly a pad or cymbal shows `seconds` after a hit at `velocity`

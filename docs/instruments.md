@@ -18,8 +18,8 @@ Press **F6** to open the Instrument Lab. It connects a virtual Xbox 360 instrume
 (guitar, drums, keys, or a Mustang or Squier pro guitar) as its own player (player 2
 by default) and plays it with the mouse, showing the exact data it sends. It is a tool
 for checking how the game reads each instrument without the hardware. Its other tabs
-(Connected instruments, MIDI drums, Microphones, Pro instruments, Lag) are described
-below.
+(Connected instruments, MIDI drums, MIDI keyboard, Microphones, Pro instruments, Lag) are
+described below.
 
 <img src="images/instrument-lab.png" alt="The Instrument Lab's virtual guitar: green, yellow and orange held, whammy at 0.6, and the XInput bytes it sends" width="600">
 
@@ -62,6 +62,57 @@ The kit has no menu buttons, so as in RPCS3: hi-hat pedal three times then snare
 then the rim is Select, and then kick holds the kick for the song category menu (snare or
 floor tom lets go). Turn these off with `midi_drums_combos`.
 
+## MIDI keyboards
+
+Turn on `midi_keys` (the Controllers tab's MIDI keyboard, then restart) to play a USB MIDI
+keyboard as Rock Band 3's keytar, for Keys and Pro Keys, with no other controller: the
+menus, pausing and overdrive come from the keyboard too. It joins as its own player. It
+uses the first MIDI input no other band3 MIDI device has, so a drum kit and a keyboard
+plugged in together take one each, unless `midi_keys_device` names one (or part of one's
+name); the Controllers tab's **MIDI port** says which it will open. A keyboard plugged in
+after the game starts is picked up.
+
+The keytar has 25 keys, C to C, and they are the 25 from `midi_keys_base_note` (the
+Controllers tab's **Lowest C**), the MIDI note of the keytar's lowest C. It's 48 (C3) by
+default, the lowest C of most 25-key keyboards; middle C is 60 (C4). On a bigger keyboard,
+or one transposed, press the C you want lowest and read its note off the Instrument Lab's
+**MIDI keyboard** tab, then set Lowest C to it; it takes at once. Notes outside the 25 keys
+play nothing.
+
+In a song (practice included) every key plays, as hard as it's struck, on Keys and Pro Keys
+alike. Outside a song, and while one is paused, the lowest octave is the menu buttons; the
+13 keys above it still play keys, which the menus ignore:
+
+| Key | C | C# | D | D# | E | F | F# | G | G# | A | A# | B |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Button | Left | Y | Down | X | Up | Right | Back | A | - | B | - | Start |
+
+The white keys are the d-pad, A, B and Start, and the black keys the rarer Y, X and Back;
+G# and A# do nothing. To join a song, press Start: the octave's B, or the sustain pedal.
+
+A key keeps the meaning it had when it went down until it's let go: a key held as the song
+pauses stays a key, and one held as the song starts stays a button, so holding the pause
+chord doesn't leave Left held in the pause menu.
+
+- **Pause:** in a song, hold the lowest and highest C together for a second. That presses
+  Start once; let go of one of them before it can pause again. Both still play while held;
+  no chart asks for the two at once, so at worst they cost an overhit.
+- **Overdrive:** the mod wheel at least half way up, or the pitch bend more than half way
+  from centre either way, whichever the keyboard has.
+- **Sustain pedal:** Start, held while the pedal is, in a song or not.
+
+The Instrument Lab's **MIDI keyboard** tab shows the port it plays, the base note, whether
+keys are playing or menu buttons right now, and what each of the last messages did. For a
+first keyboard, check:
+
+1. The tab says it's playing your keyboard's port, and each key you press shows its note.
+2. Lowest C is right: the lowest C shows `Left` in the menus (`key 0` in a song), and the
+   highest `key 24`.
+3. The lowest octave gets you through the menus to a song.
+4. A song scores on Keys and on Pro Keys.
+5. Both Cs held for a second pause it, and the menu keys move in the pause menu.
+6. The mod wheel or the pitch bend deploys overdrive.
+
 ## Microphones (experimental)
 
 Turn on `usb_mics` (the Audio tab, on the launcher or in the in-game settings, then restart) to sing through microphones on
@@ -78,12 +129,14 @@ tone, which the vocal track's pitch arrow holds. The Instrument Lab's **Micropho
 shows what records each slot, whether the game has connected it and how much audio it
 has taken; the log reports the same steps (`USB mics: ...`).
 
-## Pro Keys and Pro Guitar (untested)
+## Pro Keys and Pro Guitar
 
 RB3 reads a keytar's keys and a pro guitar's frets and strings through an Xbox 360 system
 call that ReXGlue doesn't implement, so band3 hands the game that data itself, for any
-keytar or pro guitar the input system reports: the Instrument Lab's, or a real one on
-Windows with `input_backend = xinput`. This hasn't been run against the game yet; the
+keytar or pro guitar the input system reports: the Instrument Lab's, a MIDI keyboard, or a
+real one on Windows with `input_backend = xinput`. Both score in game (2026-10-07: a
+virtual keytar on Easy Pro Keys, and a virtual Squier on Easy Pro Guitar, where the
+right fret scored and a wrong one on the same string didn't). The
 Instrument Lab's keys and pro guitars are the way to check it, and its **Pro instruments**
 tab shows, per player, the instrument type the game sees and the bytes band3 gave it. Keep
 the SDK's stick deadzones (`left_stick_deadzone_percentage`,

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <numbers>
+#include <optional>
 #include <string>
 #include <vector>
 #include "src/Audio/usb_mic.h"
@@ -41,6 +42,30 @@ TEST_CASE("the MIDI port picked is the one the driver opens") {
     CHECK(FindMidiPort(linux_ports, "through") == 0u);
     CHECK_FALSE(FindMidiPort(linux_ports, "Alesis").has_value());
     CHECK_FALSE(FindMidiPort({}, "").has_value());
+    // another band3 MIDI device's port is skipped, unless it's named
+    const std::vector<std::string> taken = {linux_ports[1]};
+    CHECK_FALSE(FindMidiPort(linux_ports, "", taken).has_value());
+    CHECK(FindMidiPort(linux_ports, "td-17", taken) == 1u);
+}
+
+TEST_CASE("a MIDI drum kit and keyboard with no port named take a port each") {
+    const std::vector<std::string> ports = {"TD-17 0", "Keystation 49 1"};
+    using Picks = std::vector<std::optional<size_t>>;
+    // the kit's driver starts first, so it takes the first port
+    const MidiDriverSetting both[] = {{true, ""}, {true, ""}};
+    CHECK(PickMidiPorts(ports, both) == Picks{0u, 1u});
+    // a named port is the kit's, and the keyboard takes the first other one
+    const MidiDriverSetting named_kit[] = {{true, "keystation"}, {true, ""}};
+    CHECK(PickMidiPorts(ports, named_kit) == Picks{1u, 0u});
+    // a keyboard naming the kit's port opens it all the same
+    const MidiDriverSetting named_keys[] = {{true, ""}, {true, "td-17"}};
+    CHECK(PickMidiPorts(ports, named_keys) == Picks{0u, 0u});
+    // a driver that's off takes nothing
+    const MidiDriverSetting keys_only[] = {{false, ""}, {true, ""}};
+    CHECK(PickMidiPorts(ports, keys_only) == Picks{std::nullopt, 0u});
+    // with one port, the keyboard finds none free
+    const std::vector<std::string> one = {"TD-17 0"};
+    CHECK(PickMidiPorts(one, both) == Picks{0u, std::nullopt});
 }
 
 TEST_CASE("WinMM's port index comes off MIDI port names") {

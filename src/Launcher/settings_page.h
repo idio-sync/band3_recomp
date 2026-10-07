@@ -118,7 +118,8 @@ private:
     void DrawCombo(const Setting& s);
     void DrawComboText(const Setting& s);
     void DrawIntStepper(const Setting& s);
-    void DrawIntSlider(const Setting& s);
+    // with `note`, the value shown with the MIDI note's name (kMidiNote)
+    void DrawIntSlider(const Setting& s, bool note);
     void DrawFloatSlider(const Setting& s, bool percent);
     void DrawFloatInput(const Setting& s);
     void DrawText(const Setting& s, bool password = false);

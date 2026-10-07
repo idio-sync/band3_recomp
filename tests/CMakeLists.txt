@@ -33,6 +33,8 @@ add_executable(band3_tests
     ps4_instruments_test.cpp
     hid_capture_test.cpp
     midi_drums_test.cpp
+    midi_keys_test.cpp
+    midi_port_test.cpp
     restart_debounce_test.cpp
     menu_shortcut_test.cpp
     mouse_menus_test.cpp
@@ -102,6 +104,8 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/keyboard_search.cpp
     ${BAND3_ROOT}/src/Input/menu_shortcut.cpp
     ${BAND3_ROOT}/src/Input/midi_drums.cpp
+    ${BAND3_ROOT}/src/Input/midi_keys.cpp
+    ${BAND3_ROOT}/src/Input/midi_port_select.cpp
     ${BAND3_ROOT}/src/Input/player_slots.cpp
     ${BAND3_ROOT}/src/Input/mouse_hover.cpp
     ${BAND3_ROOT}/src/Input/mouse_menus.cpp

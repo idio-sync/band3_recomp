@@ -67,9 +67,10 @@ the user's screen**: ask first on a machine someone is using, and `window offscr
 | `hold <inputs>`, `release <inputs>\|all` | |
 | `hit <pad\|cymbal\|keyN\|string> [velocity] [fret]` | drums, keys `key0`-`key24`, pro guitar strings `low_e a_str d_str g_str b_str high_e` |
 | `axis whammy\|tilt <0..1>` | |
+| `midi <hex bytes> [until <condition> [every=2s] [timeout=30s]]` | hands the [MIDI keyboard](#midi-keyboards) driver messages as its port would: `midi 90 3c 64` is a note-on. Each message starts with its status byte, so one command can hold several: `midi 90 30 64 80 30 00` taps the lowest C (a press is held at least 30 ms, a menu button 100 ms). With `until`, sends them all again every `every` while the screen hasn't changed, as `press` does. Fails unless `midi_keys` is on |
 | `state` | the screen, whether a song is `paused`, song, venue, band, frame count, each player's instrument, the band's `score` (0 when a song starts), `ha_state` (the [Home Assistant](integrations.md#connection-state) connection, left out while it's `off`) and, while `usb_mics` records, the `mics` slots: what records each, whether the game connected it and the bytes `fed` to it |
 | `pad [player]` | the buttons, triggers and sticks the game reads from a player (1-4) |
-| `wait <condition> [timeout=30s]`, `expect <condition> [timeout=5s]` | `screen=`, `screen~` (contains), `in_game`, `menus`, `song=<shortname>`, `frames=<n>`, `score>=<n>`, `mic=<slot>` (connected and fed audio since the wait began), `rooms=<off\|connecting\|connected\|logged_in\|disconnected\|failed>` (the Liveless Rooms connection), `port_mapping=<off\|searching\|mapped\|failed>` (Liveless' port mapping), `joined` (an online band formed with this game in it; `state` then shows `"joined":true`) |
+| `wait <condition> [timeout=30s]`, `expect <condition> [timeout=5s]` | `screen=`, `screen~` (contains), `in_game`, `menus`, `song=<shortname>`, `frames=<n>`, `score>=<n>`, `mic=<slot>` (connected and fed audio since the wait began), `rooms=<off\|connecting\|connected\|logged_in\|disconnected\|failed>` (the Liveless Rooms connection), `port_mapping=<off\|searching\|mapped\|failed>` (Liveless' port mapping), `joined` (an online band formed with this game in it; `state` then shows `"joined":true`), `paused` (the song is paused, by its pause menu or the game) |
 | `sleep <n>s\|<n>ms` | waits that long, up to 600 s. `frames=` counts the main thread's frames, which stand still during the boot logos and pass twice as fast at `refresh_rate` 120, so a pause for a menu to settle is a `sleep` |
 | `screenshot [emulated\|native] [name]` | the picture the window shows: the emulated GPU's at the game's size, or the native renderer's next frame at the size it draws at (minimized too). `emulated` or `native` takes that one whatever the window shows; `native` with the native renderer off draws the next frame once at 1280x720. The reply has `renderer`, `width` and `height`. `emulated` is an error with no emulated GPU (`renderer` native) and while it skips the game's draws (`both` under `skip_draws` or `swap_only`; `capture` takes one it drew whole) |
 | `capture [name] [composed]` | a screenshot (`<name>.png`), the native view's capture of the same frame (`<name>.cap`) and the native view's GPU drawing of it (`<name>.gpu.png`), under `screenshots/`. With `composed` it fails unless the capture is a post frame composed with the world frame before it; the files are written either way. Its reply, and how `renderer` native changes it, are under [Render checks](native-renderer.md#render-checks) |
@@ -191,6 +192,23 @@ checks the fake itself, offline.
 
 `tests/game/usb_mic.b3t` sings a song's vocals through the USB mics' test tone (launch
 with `-- --usb_mics=true --usb_mic_test_tone=220`) and waits for the score to go up.
+
+## MIDI keyboards
+
+With `midi_keys` on, `midi` plays the MIDI keyboard driver as if a keyboard sent it. With
+`midi_keys_test_device` on too (a setting only the harness reads, kept out of the launcher
+and the in-game settings), the driver reports a keyboard on the port `harness` from the
+first message `midi` hands it, with no MIDI port open, so the test runs on any PC. It
+connects as player 2, beside player 1's virtual instrument, and joins with its Start:
+RB3 reads a player's type only when the player's slot connects, and player 1's never
+empties (once the virtual instrument goes, the SDK's stand-in device holds it), so a
+keyboard swapped in there would go on reading as the old instrument.
+`tests/game/midi_keys.b3t` works the menus from the keyboard, plays Pro Keys, pauses with
+the chord and plays 5-lane Keys that way; its header has the launch line. With
+`midi_keys_base_note` at 48, the
+menu keys are C 48 (`30`) Left, D 50 (`32`) Down, E 52 (`34`) Up, F 53 (`35`) Right, F#
+54 (`36`) Back, G 55 (`37`) A, A 57 (`39`) B and B 59 (`3b`) Start, and the keytar's 25
+keys are 48-72 (`30`-`48`).
 
 ## The main menu's Quit
 

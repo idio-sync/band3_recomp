@@ -18,6 +18,7 @@
 #include "input_lock.h"
 #include "keyboard_search_driver.h"
 #include "midi_drums_driver.h"
+#include "midi_keys_driver.h"
 #include "mouse_menus_driver.h"
 #include "player_slots.h"
 #include "restart_debounce.h"
@@ -44,6 +45,7 @@ DeviceKind KindOf(const DeviceInfo& device) {
     if (IsSdlCopyOfHidInstrument(device)) return DeviceKind::kSdlCopy;
     if (IsHidInstrument(device)) return DeviceKind::kHidInstrument;
     if (IsMidiDrums(device)) return DeviceKind::kMidiDrums;
+    if (IsMidiKeys(device)) return DeviceKind::kMidiKeys;
     if (device.synthetic) return DeviceKind::kSynthetic;
     return DeviceKind::kPad;
 }
@@ -165,11 +167,11 @@ private:
     bool hidden_ = false;
 };
 
-// One of band3's own drivers (the HID instruments', the MIDI drums'), which the
-// launcher starts and stops as their settings change. The input system can't
-// take a driver out, so this one stays and the driver inside it comes and
-// goes. Those drivers keep process-wide state, so the old one is gone before a
-// new one starts.
+// One of band3's own drivers (the HID instruments', the MIDI drums', the MIDI
+// keyboard's), which the launcher starts and stops as their settings change.
+// The input system can't take a driver out, so this one stays and the driver
+// inside it comes and goes. Those drivers keep process-wide state, so the old
+// one is gone before a new one starts.
 class DriverSlot final : public rex::input::InputDriver {
 public:
     DriverSlot() : InputDriver(nullptr, 0) {}
@@ -255,6 +257,18 @@ struct MidiLive {
     bool operator==(const MidiLive&) const = default;
 };
 
+// what the MIDI keyboard driver reads from the settings only when it starts,
+// so a change restarts it. It reads midi_keys_base_note as it plays.
+struct MidiKeysConfig {
+    bool enabled = false;
+    std::string device;
+
+    static MidiKeysConfig Current() {
+        return {REXCVAR_GET(midi_keys), REXCVAR_GET(midi_keys_device)};
+    }
+    bool operator==(const MidiKeysConfig&) const = default;
+};
+
 // how long the MIDI settings stay the same before the driver restarts for them
 constexpr std::chrono::milliseconds kMidiSettle{300};
 
@@ -275,19 +289,23 @@ struct Built {
     PlayerAssignment* assignment = nullptr;
     DriverSlot* hid = nullptr;
     DriverSlot* midi = nullptr;
+    DriverSlot* keys = nullptr;
     bool hid_on = false;
     MidiConfig midi_config;
     MidiLive midi_live;
-    // the MIDI settings restart the driver once they settle: a dropdown
-    // clicked through, or a port typed and changed again, opens the kit once.
-    // hid_instruments is a checkbox, which changes once a click, so the HID
-    // driver restarts at once.
+    MidiKeysConfig keys_config;
+    // the MIDI settings restart their driver once they settle: a dropdown
+    // clicked through, or a port typed and changed again, opens the kit (or
+    // the keyboard) once. hid_instruments is a checkbox, which changes once a
+    // click, so the HID driver restarts at once.
     RestartDebounce<MidiConfig> midi_settle{kMidiSettle};
+    RestartDebounce<MidiKeysConfig> keys_settle{kMidiSettle};
 
     // starts and stops the HID and MIDI drivers to match the settings, and
     // assigns the players again after any restart: a device the SDK still
     // lists may read differently now (PlayerAssignment::Reassign)
-    void Follow(bool hid_wanted, const MidiConfig& midi_wanted) {
+    void Follow(bool hid_wanted, const MidiConfig& midi_wanted,
+                const MidiKeysConfig& keys_wanted) {
         bool restarted = false;
         if (hid_wanted != hid_on) {
             hid->Restart(hid_wanted ? &CreateHidInstrumentDriver : nullptr);
@@ -299,6 +317,11 @@ struct Built {
             midi_config = midi_wanted;
             // a new driver reads them as it starts
             midi_live = MidiLive::Current();
+            restarted = true;
+        }
+        if (!(keys_wanted == keys_config)) {
+            keys->Restart(keys_wanted.enabled ? &CreateMidiKeysDriver : nullptr);
+            keys_config = keys_wanted;
             restarted = true;
         }
         if (restarted && assignment) assignment->Reassign();
@@ -325,11 +348,14 @@ Built Build() {
     built.system->AddDriver(CreateKeyboardSearchDriver());
     auto hid = std::make_unique<DriverSlot>();
     auto midi = std::make_unique<DriverSlot>();
+    auto keys = std::make_unique<DriverSlot>();
     built.hid = hid.get();
     built.midi = midi.get();
+    built.keys = keys.get();
     built.system->AddDriver(std::move(hid));
     built.system->AddDriver(std::move(midi));
-    built.Follow(REXCVAR_GET(hid_instruments), MidiConfig::Current());
+    built.system->AddDriver(std::move(keys));
+    built.Follow(REXCVAR_GET(hid_instruments), MidiConfig::Current(), MidiKeysConfig::Current());
     built.midi_live = MidiLive::Current();
 
     auto assignment = std::make_unique<PlayerAssignment>();
@@ -351,14 +377,18 @@ void ApplySettings(bool settle) {
     if (!g_prepared || g_ready) return;
     Built& built = *g_prepared;
     const bool hid = REXCVAR_GET(hid_instruments);
+    const auto now = std::chrono::steady_clock::now();
     const MidiConfig wanted = MidiConfig::Current();
-    const bool midi_due = settle ? built.midi_settle.Due(wanted, built.midi_config,
-                                                         std::chrono::steady_clock::now())
+    const bool midi_due = settle ? built.midi_settle.Due(wanted, built.midi_config, now)
                                  : !(wanted == built.midi_config);
+    const MidiKeysConfig keys_wanted = MidiKeysConfig::Current();
+    const bool keys_due = settle ? built.keys_settle.Due(keys_wanted, built.keys_config, now)
+                                 : !(keys_wanted == built.keys_config);
     built.FollowLive(MidiLive::Current());
-    if (hid == built.hid_on && !midi_due) return;
+    if (hid == built.hid_on && !midi_due && !keys_due) return;
     std::lock_guard<std::recursive_mutex> lock(InputLock());
-    built.Follow(hid, midi_due ? wanted : built.midi_config);
+    built.Follow(hid, midi_due ? wanted : built.midi_config,
+                 keys_due ? keys_wanted : built.keys_config);
 }
 
 }

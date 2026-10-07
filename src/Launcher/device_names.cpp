@@ -3,6 +3,7 @@
 #include <cctype>
 #include <string>
 #include "src/Audio/usb_mic.h"
+#include "src/Input/midi_port_select.h"
 
 namespace band3::launcher {
 
@@ -25,15 +26,24 @@ std::optional<size_t> FindSavedDevice(std::span<const std::string> names, std::s
     return std::nullopt;
 }
 
-std::optional<size_t> FindMidiPort(std::span<const std::string> ports, std::string_view saved) {
+std::optional<size_t> FindMidiPort(std::span<const std::string> ports, std::string_view saved,
+                                   const std::vector<std::string>& taken) {
     // untrimmed, as the driver takes it
-    for (size_t i = 0; i < ports.size(); i++) {
-        if (saved.empty() ? !audio::usb_mic::NameMatches(ports[i], "through")
-                          : audio::usb_mic::NameMatches(ports[i], saved)) {
-            return i;
-        }
+    return input::PickPort(std::vector<std::string>(ports.begin(), ports.end()),
+                           std::string(saved), taken);
+}
+
+std::vector<std::optional<size_t>> PickMidiPorts(std::span<const std::string> ports,
+                                                 std::span<const MidiDriverSetting> drivers) {
+    std::vector<std::optional<size_t>> picks;
+    std::vector<std::string> taken;
+    for (const MidiDriverSetting& driver : drivers) {
+        std::optional<size_t> pick;
+        if (driver.on) pick = FindMidiPort(ports, driver.saved, taken);
+        if (pick) taken.push_back(ports[*pick]);
+        picks.push_back(pick);
     }
-    return std::nullopt;
+    return picks;
 }
 
 std::string StripMidiPortIndex(std::string_view port, unsigned index) {

@@ -321,6 +321,42 @@ Gamepad360 EncodeKeys(const KeysInputs& in) {
     return g;
 }
 
+KeysInputs DecodeKeys(const Gamepad360& g) {
+    KeysInputs in;
+    in.nav = DecodeNav(g.buttons);
+    const auto lx = static_cast<uint16_t>(g.thumb_lx);
+    const auto ly = static_cast<uint16_t>(g.thumb_ly);
+    const auto rx = static_cast<uint16_t>(g.thumb_rx);
+    const auto ry = static_cast<uint16_t>(g.thumb_ry);
+
+    // the five velocity slots, in the order EncodeKeys fills them
+    const uint8_t velocities[5] = {
+        static_cast<uint8_t>((lx >> 8) & 0x7F), static_cast<uint8_t>(ly & 0x7F),
+        static_cast<uint8_t>((ly >> 8) & 0x7F), static_cast<uint8_t>(rx & 0x7F),
+        static_cast<uint8_t>((rx >> 8) & 0x7F),
+    };
+    int slot = 0;
+    for (int k = 0; k < kKeyCount; k++) {
+        bool held;
+        if (k < 8) {
+            held = (g.left_trigger & (0x80 >> k)) != 0;
+        } else if (k < 16) {
+            held = (g.right_trigger & (0x80 >> (k - 8))) != 0;
+        } else if (k < 24) {
+            held = (lx & (0x80 >> (k - 16))) != 0;
+        } else {
+            held = (lx & 0x8000) != 0;
+        }
+        if (!held) continue;
+        const uint8_t velocity = slot < 5 ? velocities[slot] : 0;
+        slot++;
+        in.keys[k] = velocity > 0 ? velocity : 127;
+    }
+
+    in.overdrive = (ry & 0x0080) != 0;
+    return in;
+}
+
 // Pro Guitar
 
 Caps360 ProGuitarCaps(ProGuitarModel model) {

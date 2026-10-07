@@ -52,6 +52,7 @@
 #include "src/Input/input_lock.h"
 #include "src/Input/input_system.h"
 #include "src/Input/keyboard_search_driver.h"
+#include "src/Input/midi_keys_driver.h"
 #include "src/Input/mouse_menus_driver.h"
 #include "src/Input/virtual_instrument.h"
 #include "src/Input/xinput_state.h"
@@ -766,6 +767,14 @@ public:
                                          row.pickable, row.highlighted});
         }
         return view;
+    }
+
+    std::string SendMidi(std::span<const uint8_t> message) override {
+        if (!input::InjectMidiKeysMessage(message)) {
+            return "no MIDI keyboard driver runs: launch with --midi_keys=true (and "
+                   "--midi_keys_test_device=true for a keyboard with no port)";
+        }
+        return {};
     }
 
     std::string LivelessInvite(const std::string& host, uint16_t port, bool force_flag) override {

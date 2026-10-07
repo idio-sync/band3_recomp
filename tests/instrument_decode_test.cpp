@@ -1,6 +1,7 @@
 // Checks the launcher test view's decoders (src/Input/instruments.cpp):
 // encoding an instrument's inputs and decoding them gives the inputs back, for
-// every guitar and drum input, and RB1 kits read without flags or velocity.
+// every guitar, drum and keytar input, and RB1 kits read without flags or
+// velocity.
 
 #include <doctest/doctest.h>
 #include <cstdint>
@@ -240,4 +241,100 @@ TEST_CASE("an RB1 kit reads pads without velocity or cymbals") {
     want.kick1 = true;
     CheckDrums(want, out);
     CHECK(out.nav.dpad_up);
+}
+
+namespace {
+
+// encode, decode, and the decoded inputs encode the same again
+KeysInputs RoundTrip(const KeysInputs& in) {
+    const Gamepad360 g = EncodeKeys(in);
+    const KeysInputs out = DecodeKeys(g);
+    const Gamepad360 again = EncodeKeys(out);
+    CHECK(again.buttons == g.buttons);
+    CHECK(again.left_trigger == g.left_trigger);
+    CHECK(again.right_trigger == g.right_trigger);
+    CHECK(again.thumb_lx == g.thumb_lx);
+    CHECK(again.thumb_ly == g.thumb_ly);
+    CHECK(again.thumb_rx == g.thumb_rx);
+    CHECK(again.thumb_ry == g.thumb_ry);
+    return out;
+}
+
+}
+
+TEST_CASE("each keytar key decodes back at every velocity") {
+    for (int key = 0; key < kKeyCount; key++) {
+        for (int velocity = 1; velocity <= 127; velocity++) {
+            CAPTURE(key);
+            CAPTURE(velocity);
+            KeysInputs in;
+            in.keys[key] = static_cast<uint8_t>(velocity);
+            CHECK(RoundTrip(in).keys == in.keys);
+        }
+    }
+}
+
+TEST_CASE("five keytar keys decode back with their own velocities, lowest first") {
+    KeysInputs in;
+    in.keys[0] = 10;
+    in.keys[7] = 20;
+    in.keys[8] = 30;
+    in.keys[16] = 40;
+    in.keys[24] = 50;
+    CHECK(RoundTrip(in).keys == in.keys);
+
+    in = {};
+    in.keys[3] = 127;
+    in.keys[12] = 1;
+    in.keys[23] = 64;
+    CHECK(RoundTrip(in).keys == in.keys);
+}
+
+TEST_CASE("keytar keys past the fifth decode as held at 127") {
+    KeysInputs in;
+    for (int key = 0; key < 8; key++) in.keys[key] = static_cast<uint8_t>(10 + key);
+    in.keys[24] = 90;
+    const KeysInputs out = RoundTrip(in);
+    for (int key = 0; key < 5; key++) {
+        CAPTURE(key);
+        CHECK(out.keys[key] == in.keys[key]);
+    }
+    for (int key : {5, 6, 7, 24}) {
+        CAPTURE(key);
+        CHECK(out.keys[key] == 127);
+    }
+    for (int key = 8; key < 24; key++) {
+        CAPTURE(key);
+        CHECK(out.keys[key] == 0);
+    }
+}
+
+TEST_CASE("keytar overdrive and the menu buttons decode back") {
+    KeysInputs in;
+    in.overdrive = true;
+    KeysInputs out = RoundTrip(in);
+    CHECK(out.overdrive);
+    CHECK(out.keys == std::array<uint8_t, kKeyCount>{});
+
+    in = {};
+    in.nav.a = true;
+    in.nav.start = true;
+    in.nav.back = true;
+    in.nav.dpad_down = true;
+    in.keys[12] = 80;
+    out = RoundTrip(in);
+    CHECK(SameNav(out.nav, in.nav));
+    CHECK_FALSE(out.overdrive);
+    CHECK(out.keys == in.keys);
+
+    // nothing held: the pedal bits alone are no key and no overdrive
+    out = DecodeKeys(EncodeKeys({}));
+    CHECK(out.keys == std::array<uint8_t, kKeyCount>{});
+    CHECK_FALSE(out.overdrive);
+}
+
+TEST_CASE("a keytar key reported without a velocity reads at 127") {
+    Gamepad360 g;
+    g.left_trigger = 0x80;
+    CHECK(DecodeKeys(g).keys[0] == 127);
 }

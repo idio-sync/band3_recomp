@@ -64,6 +64,7 @@ std::string DeviceKindLabel(DeviceKind kind, std::string_view name,
     case DeviceKind::kHidInstrument:
         return Capitalized(instrument ? instrument : "instrument") + " (USB dongle)";
     case DeviceKind::kMidiDrums: return "MIDI drum kit";
+    case DeviceKind::kMidiKeys: return "MIDI keyboard";
     case DeviceKind::kSdlCopy: return "Dongle instrument as SDL sees it (unused)";
     }
     return "Controller";
@@ -90,6 +91,7 @@ TestView ViewFor(const input::Caps360& caps) {
     case input::kSubtypeGuitarBass:
         return TestView::kGuitar;
     case input::kSubtypeDrums: return TestView::kDrums;
+    case input::kSubtypeKeytar: return TestView::kKeys;
     default: return TestView::kPad;
     }
 }

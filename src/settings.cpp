@@ -266,7 +266,8 @@ REXCVAR_DEFINE_BOOL(midi_drums, false, "Band3/Controllers/MIDI drums",
     .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_STRING(midi_drums_device, "", "Band3/Controllers/MIDI drums",
-    "MIDI input port to play, or part of its name. Empty uses the first one")
+    "MIDI input port to play, or part of its name. Empty takes the first one no other band3 "
+    "MIDI device has")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_STRING(midi_drums_notes, "", "Band3/Controllers/MIDI drums",
@@ -290,6 +291,22 @@ REXCVAR_DEFINE_BOOL(midi_drums_combos, true, "Band3/Controllers/MIDI drums",
     "Menu buttons from the kit: hi-hat pedal three times, then snare for Start, rim for "
     "Select, or kick to hold the kick (RB3's song category menu)")
     .lifecycle(Lifecycle::kRequiresRestart);
+
+// Band3/Controllers/MIDI keyboard
+
+REXCVAR_DEFINE_BOOL(midi_keys, false, "Band3/Controllers/MIDI keyboard",
+    "Play a MIDI keyboard as a Rock Band keytar, for Keys and Pro Keys")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(midi_keys_device, "", "Band3/Controllers/MIDI keyboard",
+    "MIDI input port to play, or part of its name. Empty takes the first one no other band3 "
+    "MIDI device has")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_INT32(midi_keys_base_note, 48, "Band3/Controllers/MIDI keyboard",
+    "The MIDI note of the keytar's lowest C: 48 (C3) on most 25-key keyboards. The 25 keys "
+    "from it play the keytar's")
+    .range(0, 103);
 
 // Band3/Online
 
@@ -643,6 +660,11 @@ REXCVAR_DEFINE_INT32(test_random_seed, 0, "Band3/Advanced/Test harness",
 REXCVAR_DEFINE_BOOL(autoplay, false, "Band3/Advanced/Test harness",
     "The game plays every part itself, from the next song start: for repeatable profiling "
     "runs and for checking a song without playing it");
+
+REXCVAR_DEFINE_BOOL(midi_keys_test_device, false, "Band3/Advanced/Test harness",
+    "With test_port set and midi_keys on: report a MIDI keyboard named harness, with no port "
+    "open, from the first message the harness's midi command hands it")
+    .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(virtual_instrument, false, "Band3/Advanced/Test harness",
     "Connect a virtual Xbox 360 instrument, played from the Instrument Lab (F6)");

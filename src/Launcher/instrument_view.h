@@ -11,11 +11,12 @@
 // The Controllers tab's device list and test view: every device the input
 // system has, with the player each feeds, and the selected one drawn live
 // (guitar frets, strum, whammy and tilt; drum pads and cymbals flashing with
-// how hard they're hit; a controller's buttons and sticks), read as the game
-// would read it (input::ReadInputState). Picking a device's row tests it: it
-// plays the test view only, and stops moving around the launcher, until Back
-// is pressed on it or Stop clicked (TestMode). Before the game only: Poll and
-// Draw are called while the launcher's settings are edited, never after Play.
+// how hard they're hit; a keytar's held keys; a controller's buttons and
+// sticks), read as the game would read it (input::ReadInputState). Picking a
+// device's row tests it: it plays the test view only, and stops moving around
+// the launcher, until Back is pressed on it or Stop clicked (TestMode). Before
+// the game only: Poll and Draw are called while the launcher's settings are
+// edited, never after Play.
 
 namespace band3::launcher {
 
@@ -64,8 +65,10 @@ private:
     void DrawTestView(const Device& device);
     void DrawGuitar(const input::GuitarInputs& in);
     void DrawDrums(const input::DrumInputs& in, bool velocity);
+    void DrawKeys(const input::KeysInputs& in);
     void DrawPad(const input::Gamepad360& g);
     void DrawMidiHits();
+    void DrawMidiKeyEvents();
 
     // how brightly a pad shows: its last hit's velocity, fading (FlashLevel)
     float Flash(Hit& hit, uint8_t velocity_now);

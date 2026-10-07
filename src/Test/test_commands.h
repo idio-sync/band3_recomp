@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -367,6 +368,9 @@ public:
     // to, as the window would, without the window having focus; returns an
     // error, or empty
     virtual std::string PressBind(std::string_view bind) = 0;
+    // hands the MIDI keyboard driver one message (1-3 bytes) as its port
+    // would (InjectMidiKeysMessage); returns an error, or empty
+    virtual std::string SendMidi(std::span<const uint8_t> message) = 0;
     // types on the window's keyboard as SDL would deliver it with the window
     // focused, without it having focus: each token is text (letters, digits
     // and - . , ' / `) or one key as {name}, with a name from TypeKeyNames;
@@ -417,7 +421,7 @@ public:
 struct Condition {
     enum class Kind {
         kScreen, kScreenContains, kInGame, kMenus, kSong, kFrames, kScore, kMic, kRooms,
-        kPortMapping, kJoined
+        kPortMapping, kJoined, kPaused
     };
     Kind kind = Kind::kInGame;
     std::string text;
@@ -431,6 +435,11 @@ std::variant<Condition, std::string> ParseCondition(std::string_view text);
 // start: the state when the wait began
 bool ConditionHolds(const Condition& condition, const GameStateSnapshot& state,
                     const GameStateSnapshot& start);
+
+// `midi`'s hex bytes as MIDI messages, each a status byte (80-ff) and up to
+// two data bytes, or what's wrong with them
+std::variant<std::vector<std::vector<uint8_t>>, std::string> ParseMidiMessages(
+    std::span<const std::string_view> words);
 
 // runs one command; the reply is one line of JSON, without the newline
 std::string RunCommand(std::string_view line, TestTarget& target);

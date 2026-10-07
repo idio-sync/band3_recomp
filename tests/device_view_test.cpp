@@ -33,6 +33,7 @@ TEST_CASE("devices are labelled by kind, and pads and instruments by the subtype
           "Guitar (USB dongle)");
     CHECK(DeviceKindLabel(DeviceKind::kHidInstrument, "Pad", std::nullopt) == "Instrument (USB dongle)");
     CHECK(DeviceKindLabel(DeviceKind::kMidiDrums, "Pad", input::kSubtypeDrums) == "MIDI drum kit");
+    CHECK(DeviceKindLabel(DeviceKind::kMidiKeys, "Pad", input::kSubtypeKeytar) == "MIDI keyboard");
     CHECK(DeviceKindLabel(DeviceKind::kSdlCopy, "Pad", std::nullopt).find("unused") != std::string::npos);
 }
 
@@ -68,7 +69,7 @@ TEST_CASE("the test view follows the subtype a device reports") {
     CHECK(ViewFor(input::DrumCaps()) == TestView::kDrums);
     CHECK(ViewFor(input::DrumCaps(false)) == TestView::kDrums);
     CHECK(ViewFor(input::Caps360{}) == TestView::kPad);
-    CHECK(ViewFor(input::KeysCaps()) == TestView::kPad);
+    CHECK(ViewFor(input::KeysCaps()) == TestView::kKeys);
     CHECK(ViewFor(input::ProGuitarCaps(input::ProGuitarModel::kSquier)) == TestView::kPad);
 }
 
@@ -100,6 +101,7 @@ TEST_CASE("the keyboard and SDL's copies of dongle instruments don't navigate") 
     CHECK(DrivesNavigation(DeviceKind::kVirtual));
     CHECK(DrivesNavigation(DeviceKind::kHidInstrument));
     CHECK(DrivesNavigation(DeviceKind::kMidiDrums));
+    CHECK(DrivesNavigation(DeviceKind::kMidiKeys));
     CHECK_FALSE(DrivesNavigation(DeviceKind::kSynthetic));
     CHECK_FALSE(DrivesNavigation(DeviceKind::kSdlCopy));
 }

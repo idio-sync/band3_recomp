@@ -986,8 +986,9 @@ TEST_CASE("the launcher's table is consistent") {
             s.widget == Widget::kMonitor || s.widget == Widget::kResolution) {
             CHECK_FALSE(s.choices.empty());
         }
-        if (s.widget == Widget::kIntSlider || s.widget == Widget::kIntStepper ||
-            s.widget == Widget::kFloatSlider || s.widget == Widget::kPercentSlider) {
+        if (s.widget == Widget::kIntSlider || s.widget == Widget::kMidiNote ||
+            s.widget == Widget::kIntStepper || s.widget == Widget::kFloatSlider ||
+            s.widget == Widget::kPercentSlider) {
             REQUIRE(s.range);
             CHECK(s.range->min < s.range->max);
         }

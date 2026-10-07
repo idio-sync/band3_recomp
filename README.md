@@ -33,8 +33,9 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Xbox 360 instruments and gamepads, through SDL or XInput
 - PS3, Wii, PS4 and PS5 Rock Band guitars and drums through their USB dongles (experimental)
 - Electronic drum kits over MIDI, played as pro drums without a MIDI Pro Adapter
+- MIDI keyboards, played as the keytar for Keys and Pro Keys, menus, pausing and overdrive included
 - USB microphones, including harmonies (experimental)
-- Pro Keys and Pro Guitar data (untested)
+- Pro Keys and Pro Guitar data
 - Per-type controller lag
 - The **Instrument Lab** (F6): a virtual instrument and a view of what the game reads from each one
 
@@ -100,7 +101,7 @@ CI runs and profiling.
 | [Building](docs/building.md) | requirements, Windows and Linux builds, unit tests, compile check, profiling |
 | [Settings, folders and songs](docs/settings.md) | the launcher, the pause menu and in-game settings, config files, where band3 keeps things, DLC and custom songs, loose-file mods, Steam Deck |
 | [Settings reference](docs/settings-reference.md) | every setting: its default, the values it takes and what it does, generated from the build |
-| [Instruments and microphones](docs/instruments.md) | Instrument Lab, PlayStation/Wii dongles, MIDI drums, USB mics, pro instruments, controller lag |
+| [Instruments and microphones](docs/instruments.md) | Instrument Lab, PlayStation/Wii dongles, MIDI drums and keyboards, USB mics, pro instruments, controller lag |
 | [Integrations](docs/integrations.md) | network events, Discord, the web server and its API, GoCentral, Liveless online play, RB3Enhanced and Deluxe compatibility |
 | [Test harness](docs/test-harness.md) | `band3ctl`: driving the game from scripts, and the game tests |
 | [Native renderer](docs/native-renderer.md) | the native renderer, render checks, capture replay and parity measurement |

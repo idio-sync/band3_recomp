@@ -48,6 +48,8 @@ enum class Widget {
     // a number with - and + buttons; choices, if any, name special values
     kIntStepper,
     kIntSlider,
+    // a MIDI note number on a slider, shown with its name: 48 (C3)
+    kMidiNote,
     kFloatSlider,
     // a number typed in, within the range if there is one (generated rows)
     kFloatInput,

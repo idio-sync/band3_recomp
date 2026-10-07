@@ -14,6 +14,7 @@
 #include <utility>
 #include "src/Audio/usb_mic.h"
 #include "src/Input/input_system.h"
+#include "src/Input/midi_keys.h"
 #include "src/paths.h"
 #include "src/Render/renderer_mode.h"
 #include "gamepad_nav.h"
@@ -90,7 +91,9 @@ void SDLCALL OnFolderPicked(void* userdata, const char* const* files, int) {
 // what an empty text setting means, shown greyed in its field
 const char* HintFor(std::string_view cvar) {
     if (cvar == "username") return "The profile's own name";
-    if (cvar == "midi_drums_device") return "A port's name, or part of one";
+    if (cvar == "midi_drums_device" || cvar == "midi_keys_device") {
+        return "A port's name, or part of one";
+    }
     if (cvar == "usb_mic_devices") return "A microphone's name, or part of one";
     if (cvar == "resolution") return "Width x height, e.g. 1600x900";
     if (cvar == "native_max_height") return "Lines tall, e.g. 900";
@@ -296,7 +299,8 @@ void SettingsPage::DrawControl(const Setting& setting) {
     case Widget::kCombo: DrawCombo(setting); break;
     case Widget::kComboText: DrawComboText(setting); break;
     case Widget::kIntStepper: DrawIntStepper(setting); break;
-    case Widget::kIntSlider: DrawIntSlider(setting); break;
+    case Widget::kIntSlider: DrawIntSlider(setting, false); break;
+    case Widget::kMidiNote: DrawIntSlider(setting, true); break;
     case Widget::kFloatSlider: DrawFloatSlider(setting, false); break;
     case Widget::kFloatInput: DrawFloatInput(setting); break;
     case Widget::kPercentSlider: DrawFloatSlider(setting, true); break;
@@ -403,11 +407,15 @@ void SettingsPage::DrawIntStepper(const Setting& s) {
     }
 }
 
-void SettingsPage::DrawIntSlider(const Setting& s) {
+void SettingsPage::DrawIntSlider(const Setting& s, bool note) {
     int v = static_cast<int>(AsInt(model_.Value(s.cvar)).value_or(0));
     const Range range = s.range.value_or(Range{0, 100, 1});
+    // the name is the value's before this frame's drag, so it catches up a
+    // frame after the number; a note's name has no '%' in it
+    const std::string format = note ? "%d (" + input::midi_keys::NoteName(v) + ")" : "%d";
     ImGui::SetNextItemWidth(ControlWidth());
-    if (ImGui::SliderInt("##value", &v, static_cast<int>(range.min), static_cast<int>(range.max))) {
+    if (ImGui::SliderInt("##value", &v, static_cast<int>(range.min), static_cast<int>(range.max),
+                         format.c_str())) {
         Apply(s.cvar, std::to_string(v));
     }
 }
@@ -652,7 +660,8 @@ void SettingsPage::RefreshDeviceLists(Tab tab) {
         }
         mics_listed_ = true;
     }
-    if (due(tab == Tab::kControllers && shown("midi_drums_device"), next_midi_)) {
+    if (due(tab == Tab::kControllers && (shown("midi_drums_device") || shown("midi_keys_device")),
+            next_midi_)) {
         midi_ports_ = MidiInputPorts();
         midi_listed_ = true;
     }
@@ -872,9 +881,20 @@ void SettingsPage::DrawMidiPort(const Setting& s) {
         ports.push_back(port.port);
         devices.push_back({port.name, port.name});
     }
-    // the driver opens the first port when the setting is empty: say which
+    // the driver opens the first port when the setting is empty: say which.
+    // The kit's driver starts first, so the keyboard's passes over the port
+    // the kit takes, while it's on.
+    const bool keys = s.cvar == "midi_keys_device";
+    const std::string drums_saved = model_.Value("midi_drums_device");
+    const MidiDriverSetting drivers[] = {
+        {keys ? AsBool(model_.Value("midi_drums")) : true,
+         keys ? std::string_view(drums_saved) : std::string_view()},
+        {true, ""},
+    };
     std::string none = "First MIDI port";
-    if (const auto first = FindMidiPort(ports, "")) none += " (" + devices[*first].label + ")";
+    if (const auto first = PickMidiPorts(ports, drivers)[keys ? 1 : 0]) {
+        none += " (" + devices[*first].label + ")";
+    }
     const std::optional<size_t> selected =
         value.empty() ? std::nullopt : FindMidiPort(ports, value);
     // a dropdown's width, and the row's when it has a text field too
@@ -886,8 +906,11 @@ void SettingsPage::DrawMidiPort(const Setting& s) {
     if (midi_listed_ && midi_ports_.empty()) {
         FontScope font(kSmallSize);
         ImGui::PushTextWrapPos(0);
-        ImGui::TextColored(kWarn, "No MIDI ports found. Connect the kit: band3 opens it when it "
-                                  "appears.");
+        ImGui::TextColored(kWarn, s.cvar == "midi_keys_device"
+                                      ? "No MIDI ports found. Connect the keyboard: band3 opens "
+                                        "it when it appears."
+                                      : "No MIDI ports found. Connect the kit: band3 opens it "
+                                        "when it appears.");
         ImGui::PopTextWrapPos();
     }
 }

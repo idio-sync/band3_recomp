@@ -19,8 +19,8 @@ namespace band3::input {
 
 // The SDK's input system (SDL or XInput, plus keyboard/mouse) with band3's
 // drivers added: the Instrument Lab's virtual instrument and, with the
-// hid_instruments and midi_drums settings on, instrument dongles and MIDI drum
-// kits. Player slots make room for the
+// hid_instruments, midi_drums and midi_keys settings on, instrument dongles,
+// MIDI drum kits and MIDI keyboards. Player slots make room for the
 // virtual instrument. For RuntimeConfig::input_factory: hands over the one
 // PrepareInputSystem built for the launcher, or builds one.
 std::unique_ptr<rex::system::IInputSystem> CreateInputSystem(bool tool_mode);
@@ -47,9 +47,9 @@ bool GameInputBlocked();
 // driver leaves its SDL event watch and window listener behind when destroyed,
 // so destroying one that has seen the window would crash at the next gamepad
 // or window event, and one kept aside would queue every gamepad event for the
-// rest of the run. hid_instruments and midi_drums* restart band3's own drivers
-// inside it; an input_backend change applies only when band3 starts again,
-// which the launcher's Play does for it (InputBackendChanged).
+// rest of the run. hid_instruments, midi_drums* and midi_keys* restart band3's
+// own drivers inside it; an input_backend change applies only when band3
+// starts again, which the launcher's Play does for it (InputBackendChanged).
 
 // Builds the input system for the settings as they are and shows it the
 // window, so the SDL driver opens the gamepads (it starts SDL's gamepad
@@ -59,11 +59,13 @@ bool GameInputBlocked();
 void PrepareInputSystem(rex::ui::Window* window);
 
 // Follows the input settings the launcher may have changed (hid_instruments,
-// midi_drums*): starts or stops the HID and MIDI drivers. The MIDI driver
-// restarts only for its port, notes or midi_drums itself, once they have
-// stayed the same for a moment (so clicking through ports opens the kit once);
-// it follows its other settings (the Minimum velocity slider) as it runs.
-// Cheap when nothing changed, so call it every frame.
+// midi_drums*, midi_keys*): starts or stops the HID and MIDI drivers. The MIDI
+// drums driver restarts only for its port, notes or midi_drums itself, once
+// they have stayed the same for a moment (so clicking through ports opens the
+// kit once); it follows its other settings (the Minimum velocity slider) as it
+// runs. The MIDI keyboard's restarts the same way for its port or midi_keys,
+// and reads its base note as it plays. Cheap when nothing changed, so call it
+// every frame.
 void ApplyInputSettings();
 
 // input_backend names another backend than the launcher's input system uses

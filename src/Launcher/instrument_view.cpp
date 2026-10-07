@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <string>
 #include "src/Input/midi_drums_driver.h"
+#include "src/Input/midi_keys_driver.h"
 #include "src/settings.h"
 #include "launcher_style.h"
 
@@ -294,9 +295,11 @@ void DevicePanel::DrawTestView(const Device& device) {
             case TestView::kDrums:
                 DrawDrums(input::DecodeDrums(state, caps), input::IsRb2Drums(caps));
                 break;
+            case TestView::kKeys: DrawKeys(input::DecodeKeys(state)); break;
             case TestView::kPad: DrawPad(state); break;
             }
             if (d.kind == DeviceKind::kMidiDrums) DrawMidiHits();
+            if (d.kind == DeviceKind::kMidiKeys) DrawMidiKeyEvents();
         }
         ImGui::PopTextWrapPos();
     }
@@ -430,6 +433,78 @@ void DevicePanel::DrawDrums(const input::DrumInputs& in, bool velocity) {
     ImGui::Dummy(ImVec2(right - o.x, std::max(height, column_end - o.y)));
 }
 
+void DevicePanel::DrawKeys(const input::KeysInputs& in) {
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+    // C to C over two octaves: 15 white keys, and the black ones over their gaps
+    constexpr int kWhiteKeys = 15;
+    const float white = std::clamp((right - o.x) / kWhiteKeys, Px(22), Px(40));
+    const float height = Px(96);
+    const float black = white * 0.64f, black_height = height * 0.6f;
+    // each note of an octave's white key, or for a black key the white key
+    // it follows
+    constexpr int kWhiteOf[12] = {0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6};
+    constexpr bool kSharp[12] = {false, true,  false, true,  false, false,
+                                 true,  false, true,  false, true,  false};
+    char number[8];
+
+    // the white keys, then the black ones over them; a held key lit as
+    // brightly as it was played, as a hit flashes
+    for (const bool sharps : {false, true}) {
+        for (int k = 0; k < input::kKeyCount; k++) {
+            const int note = k % 12;
+            if (kSharp[note] != sharps) continue;
+            const float x = o.x + static_cast<float>(k / 12 * 7 + kWhiteOf[note]) * white;
+            const uint8_t velocity = in.keys[k];
+            const float level = FlashLevel(velocity, 0.0f);
+            ImVec2 min, max;
+            ImU32 fill;
+            if (sharps) {
+                min = ImVec2(x + white - black / 2, o.y);
+                max = ImVec2(min.x + black, o.y + black_height);
+                fill = ImGui::GetColorU32(kBackground);
+            } else {
+                min = ImVec2(x + Px(1), o.y);
+                max = ImVec2(x + white - Px(1), o.y + height);
+                fill = ImGui::GetColorU32(Mix(kFrame, kText, 0.8f));
+            }
+            if (velocity > 0) fill = Lit(kAccent, level);
+            draw->AddRectFilled(min, max, fill, Px(4), ImDrawFlags_RoundCornersBottom);
+            if (velocity > 0) {
+                std::snprintf(number, sizeof(number), "%u", velocity);
+                CenteredText(draw, ImVec2((min.x + max.x) / 2, max.y - Px(12)), TextOn(level),
+                             number);
+            }
+        }
+    }
+
+    // overdrive and the menu buttons, wrapped to the view's width
+    const struct {
+        const char* name;
+        bool held;
+    } buttons[] = {
+        {"Overdrive", in.overdrive}, {"Start", in.nav.start},   {"Back", in.nav.back},
+        {"A", in.nav.a},             {"B", in.nav.b},           {"X", in.nav.x},
+        {"Y", in.nav.y},             {"Up", in.nav.dpad_up},    {"Down", in.nav.dpad_down},
+        {"Left", in.nav.dpad_left},  {"Right", in.nav.dpad_right},
+    };
+    float px = o.x;
+    float py = o.y + height + Px(10);
+    for (const auto& button : buttons) {
+        const float width = ImGui::CalcTextSize(button.name).x + Px(18);
+        if (px > o.x && px + width > right) {
+            px = o.x;
+            py += Px(30);
+        }
+        px += Pill(draw, ImVec2(px, py), button.name, button.held) + Px(8);
+    }
+    ImGui::Dummy(ImVec2(right - o.x, py + Px(24) - o.y));
+    ImGui::TextColored(kMuted, "A held key lights as brightly as it's played; the number is its "
+                               "velocity (1 to 127). A keytar reports five velocities, so a sixth "
+                               "key held shows at 127.");
+}
+
 void DevicePanel::DrawPad(const input::Gamepad360& g) {
     ImDrawList* draw = ImGui::GetWindowDrawList();
     const ImVec2 o = ImGui::GetCursorScreenPos();
@@ -525,6 +600,49 @@ void DevicePanel::DrawMidiHits() {
             ImGui::Text("%s, completing the %s combo", midi::PartName(it->part), it->combo);
         } else {
             ImGui::TextUnformatted(midi::PartName(it->part));
+        }
+    }
+    ImGui::EndTable();
+}
+
+void DevicePanel::DrawMidiKeyEvents() {
+    namespace keys = input::midi_keys;
+    const input::MidiKeysStatus status = input::GetMidiKeysStatus();
+    ImGui::Dummy(ImVec2(0, Px(4)));
+    ImGui::TextColored(kMuted, "Lowest C: note %u (%s). %s", status.base_note,
+                       keys::NoteName(status.base_note).c_str(),
+                       status.mode == keys::Mode::kPlaying
+                           ? "In a song: every key plays."
+                           : "In menus: the lowest octave is buttons.");
+    ImGui::TextColored(kMuted, "Last messages, newest first");
+    if (status.recent.empty()) {
+        ImGui::TextColored(kMuted, "Nothing yet: play a key.");
+        return;
+    }
+    if (!ImGui::BeginTable("##midi_keys", 3, ImGuiTableFlags_SizingFixedFit)) return;
+    ImGui::TableSetupColumn("Message");
+    ImGui::TableSetupColumn("Note");
+    ImGui::TableSetupColumn("Does", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableHeadersRow();
+    int shown = 0;
+    for (auto it = status.recent.rbegin(); it != status.recent.rend() && shown < 6; ++it, ++shown) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        // the pause chord, which no message fires, has no bytes
+        if (it->message[0] == 0) {
+            ImGui::TextColored(kMuted, "(held)");
+        } else {
+            ImGui::Text("%02X %02X %02X", it->message[0], it->message[1], it->message[2]);
+        }
+        ImGui::TableNextColumn();
+        if (const auto note = keys::NoteOf(it->message)) {
+            ImGui::Text("%d (%s)", *note, keys::NoteName(*note).c_str());
+        }
+        ImGui::TableNextColumn();
+        if (it->what == "outside the 25 keys" || it->what == "unused in menus") {
+            ImGui::TextColored(kMuted, "%s", it->what.c_str());
+        } else {
+            ImGui::TextUnformatted(it->what.c_str());
         }
     }
     ImGui::EndTable();

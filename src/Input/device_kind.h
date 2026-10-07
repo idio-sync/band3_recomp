@@ -12,6 +12,7 @@ enum class DeviceKind {
     kVirtual,        // a virtual instrument (debug)
     kHidInstrument,  // a PS3/Wii/PS4/PS5 instrument read by its dongle
     kMidiDrums,      // a MIDI drum kit
+    kMidiKeys,       // a MIDI keyboard, played as a keytar
     kSdlCopy,        // SDL's copy of an instrument the HID driver reads; no player
 };
 

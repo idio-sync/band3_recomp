@@ -11,6 +11,7 @@
 #include "generated/band3_init.h"
 #include "src/Input/instruments.h"
 #include "src/Input/song_pause.h"
+#include "src/Input/song_state.h"
 #include "src/Render/native_view.h"
 #include "src/Test/game_state.h"
 
@@ -18,7 +19,7 @@
 // pause and unpause goes through: the song's pause menu (the overshell's) and
 // the game's own (set_paused) alike. Which screen is up comes from BandUI, as
 // rb3e_events.cpp reads it. Offsets are TU5's (rb3-xenon game/Game.h for the
-// members).
+// members). Both go to src/Input/song_state.h too, for the MIDI keyboard.
 
 extern "C" void __imp__Game__UpdatePausedState(PPCContext& ctx, uint8_t* base);
 
@@ -87,11 +88,14 @@ void Forget() {
 void ResetPaused() {
     g_paused.store(false, std::memory_order_relaxed);
     test::GameState::Get().SetPaused(false);
+    input::SetSongPaused(false);
 }
 
 void AddPress(uint32_t user, rex::input::X_INPUT_STATE* state, uint8_t* base) {
     if (user >= input::SongPause::kPlayers) return;
     const bool gameplay = render::InSong() && GameplayScreen(base);
+    // for the MIDI keyboard, whose lowest octave is buttons outside a song
+    input::SetSongOnScreen(gameplay);
     Shared& shared = State();
     std::lock_guard<std::mutex> lock(shared.mutex);
     const bool press = shared.pause.Update(user, state != nullptr, gameplay,
@@ -114,6 +118,7 @@ extern "C" REX_FUNC(Game__UpdatePausedState) {
     __imp__Game__UpdatePausedState(ctx, base);
     if (!game) return;
     const bool paused = *rex::memory::GuestPtr<uint8_t*>(base, game + band3::song_pause::kGame_IsPaused) != 0;
+    band3::input::SetSongPaused(paused);
     if (band3::song_pause::g_paused.exchange(paused, std::memory_order_relaxed) != paused) {
         REXLOG_INFO("Song: {}", paused ? "paused" : "resumed");
         // for the test harness and Home Assistant

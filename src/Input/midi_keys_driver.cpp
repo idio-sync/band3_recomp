@@ -1,14 +1,15 @@
-#include "midi_drums_driver.h"
+#include "midi_keys_driver.h"
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <deque>
 #include <mutex>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 #include <rex/logging.h>
 #include "midi_port.h"
+#include "song_state.h"
 #include "src/settings.h"
 #include "xinput_state.h"
 
@@ -21,48 +22,43 @@ using rex::input::DeviceInfo;
 
 namespace {
 
-// clear of the SDK drivers' ids and band3's others ("B3VI", "B3HI", "B3MK")
-constexpr uint64_t kDeviceIdBase = 0x42334D4900000000ull;  // "B3MI"
-constexpr std::string_view kGuidPrefix = "band3-midi:";
+// clear of the SDK drivers' ids and band3's others ("B3VI", "B3HI", "B3MI")
+constexpr uint64_t kDeviceIdBase = 0x42334D4B00000000ull;  // "B3MK"
+constexpr std::string_view kGuidPrefix = "band3-midikeys:";
 // counts across drivers, since the launcher restarts the driver inside one
 // input system, which never takes an id back
 std::atomic<uint64_t> g_generation{0};
-// how many notes the Lab shows
-constexpr size_t kRecentHits = 12;
+// how many events the Lab shows
+constexpr size_t kRecentEvents = 12;
+// the port name the test harness's keyboard reports
+constexpr std::string_view kHarnessPort = "harness";
 
-// The settings the kit reads as it plays, as they are now: the ones a running
-// driver follows without a restart (UpdateMidiDrumsSettings). UI thread, or
-// Setup's.
-midi_drums::Settings LiveSettings() {
-    midi_drums::Settings settings;
-    settings.pulse = std::chrono::milliseconds(REXCVAR_GET(midi_drums_pulse_ms));
-    settings.min_velocity = static_cast<uint8_t>(REXCVAR_GET(midi_drums_min_velocity));
-    settings.combos = REXCVAR_GET(midi_drums_combos);
-    return settings;
+// midi_keys_base_note as it is now. Read as the keyboard plays rather than
+// handed over by the launcher, so a change takes in the launcher and in the
+// game alike, without a restart.
+uint8_t BaseNote() {
+    return static_cast<uint8_t>(std::clamp(REXCVAR_GET(midi_keys_base_note), 0, 127 - 24));
 }
 
-class MidiDrumsDriver final : public rex::input::InputDriver {
+class MidiKeysDriver final : public rex::input::InputDriver {
 public:
-    MidiDrumsDriver()
-        : InputDriver(nullptr, 0),
-          kit_(midi_drums::DefaultNoteMap(), {}),
-          midi_("MIDI drums", "band3 drums") {}
-    ~MidiDrumsDriver() override { Stop(); }
+    MidiKeysDriver()
+        : InputDriver(nullptr, 0), keyboard_({}), midi_("MIDI keyboard", "band3 keys") {}
+    ~MidiKeysDriver() override { Stop(); }
 
     X_STATUS Setup() override {
-        midi_drums::NoteMap notes = midi_drums::DefaultNoteMap();
-        for (const auto& bad : midi_drums::ApplyOverrides(notes, REXCVAR_GET(midi_drums_notes))) {
-            REXLOG_WARN("MIDI drums: ignoring the note override \"{}\" (expected note=Part, "
-                        "e.g. 44=Kick)", bad);
-        }
         {
-            const midi_drums::Settings settings = LiveSettings();
             std::lock_guard<std::mutex> lock(mutex_);
-            kit_ = midi_drums::Kit(notes, settings);
-            min_velocity_ = settings.min_velocity;
+            base_note_ = BaseNote();
+            keyboard_ = midi_keys::Keyboard({.base_note = base_note_});
+            // only ever under the harness, which is what it's for
+            test_device_ = REXCVAR_GET(midi_keys_test_device) && REXCVAR_GET(test_port) != 0;
+        }
+        if (test_device_) {
+            REXLOG_INFO("MIDI keyboard: the harness's keyboard connects with its first message");
         }
         if (!midi_.Start(
-                REXCVAR_GET(midi_drums_device),
+                REXCVAR_GET(midi_keys_device),
                 [this](std::span<const uint8_t> message) { OnMessage(message); },
                 [this](const std::string& port) { OnPort(port); })) {
             return X_STATUS_UNSUCCESSFUL;
@@ -80,7 +76,7 @@ public:
         if (id_ == DeviceId::kInvalid) return;
         DeviceInfo info;
         info.id = id_;
-        info.name = "MIDI drums: " + port_;
+        info.name = "MIDI keyboard: " + port_;
         info.guid = std::string(kGuidPrefix) + port_;
         info.synthetic = false;
         out.push_back(std::move(info));
@@ -89,7 +85,9 @@ public:
     X_RESULT GetDeviceState(DeviceId id, rex::input::X_INPUT_STATE* out_state) override {
         std::lock_guard<std::mutex> lock(mutex_);
         if (id == DeviceId::kInvalid || id != id_) return X_ERROR_DEVICE_NOT_CONNECTED;
-        const Gamepad360 g = EncodeDrums(kit_.State(midi_drums::Clock::now()));
+        FollowBaseNote();
+        const Gamepad360 g = EncodeKeys(keyboard_.State(midi_keys::Clock::now()));
+        if (auto event = keyboard_.TakeTimedEvent()) Remember(std::move(*event));
         if (std::memcmp(&g, &last_, sizeof(g)) != 0) {
             last_ = g;
             packet_number_++;
@@ -105,7 +103,7 @@ public:
                                    rex::input::X_INPUT_CAPABILITIES* out_caps) override {
         std::lock_guard<std::mutex> lock(mutex_);
         if (id == DeviceId::kInvalid || id != id_) return X_ERROR_DEVICE_NOT_CONNECTED;
-        if (out_caps) StoreCaps(DrumCaps(true), *out_caps);
+        if (out_caps) StoreCaps(KeysCaps(), *out_caps);
         return X_ERROR_SUCCESS;
     }
 
@@ -121,31 +119,33 @@ public:
                                                      : X_ERROR_DEVICE_NOT_CONNECTED;
     }
 
-    // the one running driver, for GetMidiDrumsStatus
+    // the one running driver, for GetMidiKeysStatus and InjectMidiKeysMessage
     static std::mutex& driver_mutex() {
         static std::mutex mutex;
         return mutex;
     }
-    static MidiDrumsDriver*& driver() {
-        static MidiDrumsDriver* running = nullptr;
+    static MidiKeysDriver*& driver() {
+        static MidiKeysDriver* running = nullptr;
         return running;
     }
 
-    // the settings the kit reads as it plays, changed while it runs
-    void Update(const midi_drums::Settings& settings) {
+    // the harness's message, as from the port; the harness's keyboard
+    // connects with the first one while no port is open
+    void Inject(std::span<const uint8_t> message) {
         std::lock_guard<std::mutex> lock(mutex_);
-        kit_.SetSettings(settings);
-        min_velocity_ = settings.min_velocity;
+        if (test_device_ && id_ == DeviceId::kInvalid) Connect(std::string(kHarnessPort));
+        Receive(message);
     }
 
-    MidiDrumsStatus Status() {
-        MidiDrumsStatus status;
+    MidiKeysStatus Status() {
+        MidiKeysStatus status;
         status.running = true;
         status.ports = midi_.ports();
+        status.mode = CurrentKeysMode();
         std::lock_guard<std::mutex> lock(mutex_);
         status.port = id_ != DeviceId::kInvalid ? port_ : std::string();
         status.recent.assign(recent_.begin(), recent_.end());
-        status.min_velocity = min_velocity_;
+        status.base_note = base_note_;
         return status;
     }
 
@@ -153,10 +153,35 @@ private:
     // RtMidi's thread, for every message from the open port
     void OnMessage(std::span<const uint8_t> message) {
         std::lock_guard<std::mutex> lock(mutex_);
-        const auto hit = kit_.Receive(message, midi_drums::Clock::now());
-        if (!hit) return;
-        recent_.push_back(*hit);
-        if (recent_.size() > kRecentHits) recent_.pop_front();
+        Receive(message);
+    }
+
+    // under mutex_
+    void Receive(std::span<const uint8_t> message) {
+        FollowBaseNote();
+        auto event = keyboard_.Receive(message, midi_keys::Clock::now(), CurrentKeysMode());
+        if (event) Remember(std::move(*event));
+    }
+
+    // under mutex_: a new base note, from the next message or read on
+    void FollowBaseNote() {
+        const uint8_t base_note = BaseNote();
+        if (base_note == base_note_) return;
+        base_note_ = base_note;
+        keyboard_.SetSettings({.base_note = base_note});
+    }
+
+    // under mutex_
+    void Remember(midi_keys::Event event) {
+        recent_.push_back(std::move(event));
+        if (recent_.size() > kRecentEvents) recent_.pop_front();
+    }
+
+    // under mutex_: reports the keyboard on `port`, with a new id, which reads
+    // as a new controller
+    void Connect(const std::string& port) {
+        port_ = port;
+        id_ = static_cast<DeviceId>(kDeviceIdBase + ++g_generation);
     }
 
     // the port's watcher thread, when the port opens (its name) or closes (empty)
@@ -166,9 +191,7 @@ private:
             id_ = DeviceId::kInvalid;
             return;
         }
-        port_ = port;
-        // a new id reads as a new controller
-        id_ = static_cast<DeviceId>(kDeviceIdBase + ++g_generation);
+        Connect(port);
     }
 
     void Stop() {
@@ -180,13 +203,15 @@ private:
     }
 
     // shared by RtMidi's thread, the port's watcher thread, guest threads, the
-    // Lab and the launcher (Update)
+    // Lab, the launcher and the harness (Inject)
     std::mutex mutex_;
-    midi_drums::Kit kit_;
-    uint8_t min_velocity_ = 0;
+    midi_keys::Keyboard keyboard_;
+    uint8_t base_note_ = 48;
+    // midi_keys_test_device, under the harness
+    bool test_device_ = false;
     DeviceId id_ = DeviceId::kInvalid;
     std::string port_;
-    std::deque<midi_drums::Hit> recent_;
+    std::deque<midi_keys::Event> recent_;
     Gamepad360 last_{};
     uint32_t packet_number_ = 0;
 
@@ -196,22 +221,24 @@ private:
 
 }
 
-std::unique_ptr<rex::input::InputDriver> CreateMidiDrumsDriver() {
-    return std::make_unique<MidiDrumsDriver>();
+std::unique_ptr<rex::input::InputDriver> CreateMidiKeysDriver() {
+    return std::make_unique<MidiKeysDriver>();
 }
 
-bool IsMidiDrums(const DeviceInfo& device) { return device.guid.starts_with(kGuidPrefix); }
+bool IsMidiKeys(const DeviceInfo& device) { return device.guid.starts_with(kGuidPrefix); }
 
-void UpdateMidiDrumsSettings() {
-    const midi_drums::Settings settings = LiveSettings();
-    std::lock_guard<std::mutex> lock(MidiDrumsDriver::driver_mutex());
-    if (auto* driver = MidiDrumsDriver::driver()) driver->Update(settings);
+MidiKeysStatus GetMidiKeysStatus() {
+    std::lock_guard<std::mutex> lock(MidiKeysDriver::driver_mutex());
+    auto* driver = MidiKeysDriver::driver();
+    return driver ? driver->Status() : MidiKeysStatus{};
 }
 
-MidiDrumsStatus GetMidiDrumsStatus() {
-    std::lock_guard<std::mutex> lock(MidiDrumsDriver::driver_mutex());
-    auto* driver = MidiDrumsDriver::driver();
-    return driver ? driver->Status() : MidiDrumsStatus{};
+bool InjectMidiKeysMessage(std::span<const uint8_t> message) {
+    std::lock_guard<std::mutex> lock(MidiKeysDriver::driver_mutex());
+    auto* driver = MidiKeysDriver::driver();
+    if (!driver) return false;
+    driver->Inject(message);
+    return true;
 }
 
 }

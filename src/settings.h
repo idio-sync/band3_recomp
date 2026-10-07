@@ -67,6 +67,11 @@ REXCVAR_DECLARE(int32_t, midi_drums_pulse_ms);
 REXCVAR_DECLARE(int32_t, midi_drums_min_velocity);
 REXCVAR_DECLARE(bool, midi_drums_combos);
 
+// Band3/Controllers/MIDI keyboard
+REXCVAR_DECLARE(bool, midi_keys);
+REXCVAR_DECLARE(std::string, midi_keys_device);
+REXCVAR_DECLARE(int32_t, midi_keys_base_note);
+
 // Band3/Online
 REXCVAR_DECLARE(bool, gocentral);
 REXCVAR_DECLARE(std::string, gocentral_address);
@@ -140,6 +145,7 @@ REXCVAR_DECLARE(bool, dred);
 REXCVAR_DECLARE(int32_t, test_port);
 REXCVAR_DECLARE(int32_t, test_random_seed);
 REXCVAR_DECLARE(bool, autoplay);
+REXCVAR_DECLARE(bool, midi_keys_test_device);
 REXCVAR_DECLARE(bool, virtual_instrument);
 REXCVAR_DECLARE(std::string, virtual_instrument_type);
 REXCVAR_DECLARE(int32_t, virtual_instrument_player);

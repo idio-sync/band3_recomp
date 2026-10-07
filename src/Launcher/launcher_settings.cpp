@@ -118,6 +118,7 @@ constexpr Choice kGuitarTypes[] = {
 constexpr Choice kInputBackends[] = {{"sdl", "SDL"}, {"xinput", "XInput"}};
 
 constexpr Condition kWithMidiDrums{"midi_drums", "true"};
+constexpr Condition kWithMidiKeys{"midi_keys", "true"};
 constexpr Condition kWithUsbMics{"usb_mics", "true"};
 constexpr Condition kWithHttp{"http_enabled", "true"};
 constexpr Condition kWithEvents{"events_enabled", "true"};
@@ -263,6 +264,17 @@ constexpr Setting kSettings[] = {
      .shown_when = kWithMidiDrums},
     {.cvar = "midi_drums_combos", .tab = kControllers, .section = "MIDI drums",
      .label = "Menu buttons from the kit", .widget = kCheckbox, .shown_when = kWithMidiDrums},
+    {.cvar = "midi_keys", .tab = kControllers, .section = "MIDI keyboard",
+     .label = "Play a MIDI keyboard", .widget = kCheckbox},
+    {.cvar = "midi_keys_device", .tab = kControllers, .section = "MIDI keyboard",
+     .label = "MIDI port", .widget = kMidiPort, .shown_when = kWithMidiKeys},
+    {.cvar = "midi_keys_base_note", .tab = kControllers, .section = "MIDI keyboard",
+     .label = "Lowest C", .widget = kMidiNote, .range = Range{0, 103, 1},
+     .shown_when = kWithMidiKeys},
+    // the test harness's (`midi`), which nobody playing wants: not drawn, and
+    // here so it isn't generated into the Advanced tab
+    {.cvar = "midi_keys_test_device", .tab = kControllers, .section = "MIDI keyboard",
+     .label = "Harness keyboard", .widget = kNone},
     {.cvar = "joypad_lag", .tab = kControllers, .section = "Input lag",
      .label = "Input lag per controller type", .widget = kJoypadLag, .unit = "ms"},
     {.cvar = "left_stick_deadzone_percentage", .tab = kControllers, .section = "Sticks",
