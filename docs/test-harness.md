@@ -87,6 +87,8 @@ the user's screen**: ask first on a machine someone is using, and `window offscr
 | `rooms_status [<field>=<value>\|<field>!=<value>\|<field>~<text>]...` | the Liveless Rooms client's status, in `rooms`: `state`, `server`, `code`, `public_ip` (as the server saw it), `advertised_ip` (what the game last told joining players), `error`, `last_join_user` and `last_join_ip`, `game_socket` (the game is online; joins need it), `retry_in` (seconds until it reconnects by itself; 0 when it won't) and `attempt` (from 1). With checks it fails unless each field is, isn't (`!=`) or contains (`~`) the value: `rooms_status state=logged_in code=HOST0001`, `rooms_status state=disconnected retry_in!=0` |
 | `rooms_join <code>` | asks the Rooms server for the game with that code, as the panel's Join does, and replies without waiting for the answer: the game then gets an invite, or `rooms_status`'s `error` says why not. Needs `rooms=logged_in` and the game online |
 | `rooms_connect` | connects to the Rooms server again now, without waiting for the client's own retry |
+| `lights` | the [Stage Kits](integrations.md#stage-kit-lights) found, in `lights`: `devices` (each with its `key`, `kind`, `name`, `detail` and `online`, as the Lights tab lists them), `fake`, the `[left, right]` commands the pretend kit (launch with `-- --stagekit_fake=true`) has been sent since the last `lights`, and `problem`, why Picos can't be found, if they can't |
+| `lights_test <left> <right> [<device>]` | a Stage Kit command (each byte decimal or `0x` hex) for the device a `lights` key names (`usb:fake`, `pico:127.0.0.1`), or every device, as the Lights tab's test controls send it |
 | `port_mapping_status [<field>=<value>\|<field>!=<value>\|<field>~<text>]...` | Liveless' [port mapping](integrations.md#port-mapping), in `port_mapping`: `state`, `method` (`pcp`, `natpmp`, `upnp`), `external_ip`, `port`, `lease_s` (0 for a permanent UPnP mapping) and `error`. Checks as `rooms_status`'s: `port_mapping_status state=mapped method=pcp` |
 | `quit` | |
 
@@ -192,6 +194,14 @@ autoplay, pauses and leaves it, then kills band3: the discovery configs, the son
 playing, paused, progress and score topics, the webhook's payloads and the will's
 `offline` on the status topic are all checked. `python tools/test_ha_fake_broker.py`
 checks the fake itself, offline.
+
+`python tools/test_stagekit_lights.py` checks the [Stage Kit lights](integrations.md#stage-kit-lights)
+with the pretend USB kit (`stagekit_fake`) and `tools/fake_pico.py`, a stand-in Pico W
+on 127.0.0.1 that sends its telemetry unasked: both listed, test commands reaching the
+device named and no other, 20th Century Boy's lighting reaching both (the Pico's through
+the RB3Enhanced events), the lights off after the song, and the Pico sent all-off when
+band3 quits. Under the harness band3 broadcasts no Pico discovery, so the network's
+Picos are left alone.
 
 `tests/game/usb_mic.b3t` sings a song's vocals through the USB mics' test tone (launch
 with `-- --usb_mics=true --usb_mic_test_tone=220`) and waits for the score to go up.
