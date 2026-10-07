@@ -127,6 +127,8 @@ struct Usb {
     std::mutex mutex;
     std::condition_variable cv;
     std::deque<Queued> queue;
+    // between Start and Stop: the thread takes what's queued
+    bool accepting = false;
     bool stop = false;
     std::vector<KitInfo> kits;
     std::deque<Command> fake_sent;
@@ -304,7 +306,7 @@ private:
 void QueueUsb(Queued queued) {
     {
         std::lock_guard<std::mutex> lock(g_usb.mutex);
-        if (!g_usb.thread.joinable() || g_usb.stop) return;
+        if (!g_usb.accepting) return;
         g_usb.queue.push_back(std::move(queued));
     }
     g_usb.cv.notify_one();
@@ -321,6 +323,7 @@ struct Picos {
     std::mutex mutex;
     std::condition_variable cv;
     std::deque<PicoCommand> queue;
+    bool accepting = false;  // as Usb's
     bool stop = false;
     std::vector<PicoFleet::Pico> list;
     std::string problem;
@@ -526,7 +529,7 @@ private:
 void QueuePico(Command command, Target target) {
     {
         std::lock_guard<std::mutex> lock(g_picos.mutex);
-        if (!g_picos.thread.joinable() || g_picos.stop) return;
+        if (!g_picos.accepting) return;
         g_picos.queue.push_back({command, std::move(target)});
     }
     g_picos.cv.notify_one();
@@ -564,6 +567,16 @@ void Start() {
     std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
     if (g_started) return;
     g_started = true;
+    {
+        std::lock_guard<std::mutex> usb(g_usb.mutex);
+        g_usb.accepting = true;
+        g_usb.stop = false;
+    }
+    {
+        std::lock_guard<std::mutex> picos(g_picos.mutex);
+        g_picos.accepting = true;
+        g_picos.stop = false;
+    }
     g_usb.thread = std::thread([] { UsbKits().Run(); });
     g_picos.thread = std::thread([] { PicoLink().Run(); });
 }
@@ -574,11 +587,13 @@ void Stop() {
     StopScene();
     {
         std::lock_guard<std::mutex> usb(g_usb.mutex);
+        g_usb.accepting = false;
         g_usb.stop = true;
     }
     g_usb.cv.notify_one();
     {
         std::lock_guard<std::mutex> picos(g_picos.mutex);
+        g_picos.accepting = false;
         g_picos.stop = true;
     }
     g_picos.cv.notify_one();
