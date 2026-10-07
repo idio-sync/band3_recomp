@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 #include "src/Input/mouse_hover.h"
+#include "src/Launcher/launcher_settings.h"
 #include "src/Net/liveless_rooms_client.h"
 #include "src/Net/online.h"
 #include "test_inputs.h"
@@ -941,15 +942,19 @@ std::string Set(TestTarget& target, std::string_view line,
     return Ok();
 }
 
-// cvar <name>: a setting's value and what set it, e.g. `cvar lang`
+// cvar <name>: a setting's value and what set it, e.g. `cvar lang`. A password
+// (the launcher's masked rows, ha_mqtt_password) says only whether it's set:
+// the harness's port is open to anything on the PC.
 std::string Cvar(TestTarget& target, const std::vector<std::string_view>& args) {
     if (args.size() != 2) return Error(target, "usage: cvar <setting>");
     const auto setting = target.GetSetting(args[1]);
     if (!setting) return Error(target, "no setting " + std::string(args[1]));
+    const launcher::Setting* row = launcher::FindSetting(launcher::SettingTable(), args[1]);
+    const bool secret = row && row->widget == launcher::Widget::kPassword;
     std::string out = "\"cvar\":{\"name\":";
     AppendJsonString(out, args[1]);
     out += ",\"value\":";
-    AppendJsonString(out, setting->value);
+    AppendJsonString(out, secret && !setting->value.empty() ? "(hidden)" : setting->value);
     out += ",\"source\":";
     AppendJsonString(out, setting->source);
     out += '}';

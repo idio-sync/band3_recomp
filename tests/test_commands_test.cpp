@@ -51,6 +51,7 @@ public:
     std::vector<std::string> binds_pressed;
     std::vector<std::vector<std::string>> typed;
     GameFolders folders;
+    std::string password = "hunter2";
     struct InviteRecord {
         std::string host;
         uint16_t port;
@@ -147,6 +148,7 @@ public:
     std::optional<SettingValue> GetSetting(std::string_view name) override {
         if (name == "lang") return SettingValue{"fre", "config"};
         if (name == "username") return SettingValue{"Some \"Name\"", "default"};
+        if (name == "ha_mqtt_password") return SettingValue{password, "config"};
         return std::nullopt;
     }
     GameFolders Folders() override { return folders; }
@@ -1062,6 +1064,17 @@ TEST_CASE("cvar reports a setting's value and what set it") {
     CHECK_FALSE(Ok(RunCommand("cvar", game)));
     CHECK_FALSE(Ok(RunCommand("cvar lang username", game)));
     CHECK_FALSE(Ok(RunCommand("p2 cvar lang", game)));
+}
+
+TEST_CASE("cvar doesn't hand out a password, only whether it's set") {
+    FakeGame game;
+    const std::string reply = RunCommand("cvar ha_mqtt_password", game);
+    CHECK(reply ==
+          "{\"ok\":true,\"cvar\":{\"name\":\"ha_mqtt_password\",\"value\":\"(hidden)\","
+          "\"source\":\"config\"}}");
+    CHECK_FALSE(Has(reply, "hunter2"));
+    game.password.clear();
+    CHECK(Has(RunCommand("cvar ha_mqtt_password", game), "\"value\":\"\""));
 }
 
 TEST_CASE("folders reports the folders the game runs with") {
