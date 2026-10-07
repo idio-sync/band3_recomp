@@ -16,11 +16,18 @@ void GameState::SetScreen(std::string screen) {
 void GameState::SetInGame(bool in_game) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.in_game = in_game;
+    // a new song, or none, isn't paused
+    state_.paused = false;
     // a new song starts its score over, at a position not read yet
     if (in_game) {
         state_.score = 0;
         state_.song_ms = -1;
     }
+}
+
+void GameState::SetPaused(bool paused) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.paused = paused;
 }
 
 void GameState::SetSong(std::string name, std::string artist, std::string shortname,

@@ -5,9 +5,10 @@
 #include <string>
 #include <string_view>
 
-// band3 asking other sites for things over HTTPS (for RhythmVerse, through
-// src/Net/song_downloads.h): Windows' WinHTTP, so nothing more to ship, or
-// libcurl elsewhere. Built without libcurl, every request fails, saying so.
+// band3 asking other sites for things over HTTP and HTTPS (for RhythmVerse,
+// through src/Net/song_downloads.h, and Home Assistant's webhook): Windows'
+// WinHTTP, so nothing more to ship, or libcurl elsewhere. Built without
+// libcurl, every request fails, saying so.
 
 namespace band3::web {
 
@@ -20,6 +21,11 @@ struct Reply {
 // a POST of a form (application/x-www-form-urlencoded); replies past max_bytes
 // are cut off, as an error
 Reply PostForm(std::string_view url, std::string_view form, size_t max_bytes = 16 * 1024 * 1024);
+
+// a POST of JSON (application/json); `timeout_ms` covers resolving, connecting,
+// sending and receiving (each, with WinHTTP; all of it, with libcurl). Replies
+// past 1 MiB are cut off, as an error.
+Reply PostJson(std::string_view url, std::string_view json, int timeout_ms);
 
 // What a download has read: the first bytes of the reply (`peek` of them, or
 // all of a shorter file) for `check` to say what's wrong with them ("" for

@@ -12,6 +12,7 @@
 #include "src/Input/instruments.h"
 #include "src/Input/song_pause.h"
 #include "src/Render/native_view.h"
+#include "src/Test/game_state.h"
 
 // Whether the song is paused comes from Game::UpdatePausedState, which every
 // pause and unpause goes through: the song's pause menu (the overshell's) and
@@ -83,7 +84,10 @@ void Forget() {
     State().pause.Forget();
 }
 
-void ResetPaused() { g_paused.store(false, std::memory_order_relaxed); }
+void ResetPaused() {
+    g_paused.store(false, std::memory_order_relaxed);
+    test::GameState::Get().SetPaused(false);
+}
 
 void AddPress(uint32_t user, rex::input::X_INPUT_STATE* state, uint8_t* base) {
     if (user >= input::SongPause::kPlayers) return;
@@ -112,5 +116,7 @@ extern "C" REX_FUNC(Game__UpdatePausedState) {
     const bool paused = *rex::memory::GuestPtr<uint8_t*>(base, game + band3::song_pause::kGame_IsPaused) != 0;
     if (band3::song_pause::g_paused.exchange(paused, std::memory_order_relaxed) != paused) {
         REXLOG_INFO("Song: {}", paused ? "paused" : "resumed");
+        // for the test harness and Home Assistant
+        band3::test::GameState::Get().SetPaused(paused);
     }
 }

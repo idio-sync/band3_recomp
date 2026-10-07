@@ -30,6 +30,8 @@ struct MicSlot {
 struct GameStateSnapshot {
     std::string screen;
     bool in_game = false;
+    // the song is paused (Game::UpdatePausedState); false outside a song
+    bool paused = false;
     // the last song entered, kept after it ends
     std::string song_name;
     std::string song_artist;
@@ -67,7 +69,9 @@ public:
     static GameState& Get();
 
     void SetScreen(std::string screen);
+    // entering or leaving a song also clears paused
     void SetInGame(bool in_game);
+    void SetPaused(bool paused);
     void SetSong(std::string name, std::string artist, std::string shortname,
                  int32_t length_ms = 0);
     void SetSongTime(int32_t ms);

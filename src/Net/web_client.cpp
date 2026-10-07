@@ -11,6 +11,7 @@
 #include <winhttp.h>
 #elif defined(BAND3_HAVE_CURL)
 #include <curl/curl.h>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -103,6 +104,13 @@ constexpr wchar_t kAgent[] = L"band3 (Rock Band 3 recompilation)";
 // resolving and connecting, then each send and each wait for data (ms)
 constexpr int kConnectTimeout = 15000;
 constexpr int kDataTimeout = 30000;
+// what PostJson reads of a reply
+constexpr size_t kJsonReplyBytes = 1024 * 1024;
+
+struct Timeouts {
+    int connect_ms = kConnectTimeout;  // resolving, and connecting
+    int data_ms = kDataTimeout;        // each send and each wait for data
+};
 
 class Handle {
 public:
@@ -162,7 +170,8 @@ struct Exchange {
 
 // sends the request and reads the reply's head; "" or why it couldn't
 std::string Send(Exchange& x, std::string_view url, const wchar_t* verb,
-                 std::wstring_view headers, std::string_view body, bool decompress) {
+                 std::wstring_view headers, std::string_view body, bool decompress,
+                 Timeouts timeouts = {}) {
     const std::wstring wide_url = Wide(url);
     URL_COMPONENTS parts{};
     parts.dwStructSize = sizeof(parts);
@@ -182,8 +191,8 @@ std::string Send(Exchange& x, std::string_view url, const wchar_t* verb,
                                        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
     }
     if (!x.session) return Failure("WinHttpOpen");
-    WinHttpSetTimeouts(x.session.get(), kConnectTimeout, kConnectTimeout, kDataTimeout,
-                       kDataTimeout);
+    WinHttpSetTimeouts(x.session.get(), timeouts.connect_ms, timeouts.connect_ms,
+                       timeouts.data_ms, timeouts.data_ms);
     x.connection = Handle(WinHttpConnect(x.session.get(), host.c_str(), parts.nPort, 0));
     if (!x.connection) return Failure("WinHttpConnect");
     const DWORD flags = parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
@@ -233,15 +242,12 @@ int64_t Read(Exchange& x, std::vector<char>& buf) {
     return read;
 }
 
-}
-
-Reply PostForm(std::string_view url, std::string_view form, size_t max_bytes) {
+// a POST of body with these headers, its reply read whole
+Reply Post(std::string_view url, std::wstring_view headers, std::string_view body,
+           size_t max_bytes, Timeouts timeouts) {
     Reply reply;
     Exchange x;
-    reply.error = Send(x, url, L"POST",
-                       L"Content-Type: application/x-www-form-urlencoded\r\n"
-                       L"Accept: application/json\r\n",
-                       form, true);
+    reply.error = Send(x, url, L"POST", headers, body, true, timeouts);
     if (!reply.error.empty()) return reply;
     reply.status = x.status;
     std::vector<char> buf(64 * 1024);
@@ -259,6 +265,20 @@ Reply PostForm(std::string_view url, std::string_view form, size_t max_bytes) {
         }
     }
     return reply;
+}
+
+}
+
+Reply PostForm(std::string_view url, std::string_view form, size_t max_bytes) {
+    return Post(url,
+                L"Content-Type: application/x-www-form-urlencoded\r\n"
+                L"Accept: application/json\r\n",
+                form, max_bytes, {});
+}
+
+Reply PostJson(std::string_view url, std::string_view json, int timeout_ms) {
+    return Post(url, L"Content-Type: application/json\r\n", json, kJsonReplyBytes,
+                {.connect_ms = timeout_ms, .data_ms = timeout_ms});
 }
 
 std::string Download(std::string_view url, const std::filesystem::path& path,
@@ -287,6 +307,8 @@ constexpr char kAgent[] = "band3 (Rock Band 3 recompilation)";
 // resolving and connecting (ms), and how long a reply may stall (s)
 constexpr long kConnectTimeout = 15000;
 constexpr long kDataTimeout = 30;
+// what PostJson reads of a reply
+constexpr size_t kJsonReplyBytes = 1024 * 1024;
 
 using Easy = std::unique_ptr<CURL, decltype(&curl_easy_cleanup)>;
 using Headers = std::unique_ptr<curl_slist, decltype(&curl_slist_free_all)>;
@@ -392,9 +414,10 @@ size_t SavePiece(char* data, size_t size, size_t count, void* user) {
     return f.saver->Take(std::string_view(data, n)) ? n : 0;
 }
 
-}  // namespace
-
-Reply PostForm(std::string_view url, std::string_view form, size_t max_bytes) {
+// a POST of body with these headers, its reply read whole; timeout_ms, if not
+// 0, limits the whole of it
+Reply Post(std::string_view url, std::initializer_list<const char*> header_lines,
+           std::string_view body, size_t max_bytes, long timeout_ms) {
     Reply reply;
     Easy curl = Open(url);
     if (!curl) {
@@ -402,12 +425,16 @@ Reply PostForm(std::string_view url, std::string_view form, size_t max_bytes) {
         return reply;
     }
     CURL* c = curl.get();
-    curl_slist* list = curl_slist_append(nullptr, "Content-Type: application/x-www-form-urlencoded");
-    list = curl_slist_append(list, "Accept: application/json");
+    curl_slist* list = nullptr;
+    for (const char* line : header_lines) list = curl_slist_append(list, line);
     const Headers headers(list, &curl_slist_free_all);
     curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers.get());
-    curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(form.size()));
-    curl_easy_setopt(c, CURLOPT_POSTFIELDS, form.data());  // not copied: form outlives the request
+    if (timeout_ms > 0) {
+        curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT_MS, timeout_ms);
+        curl_easy_setopt(c, CURLOPT_TIMEOUT_MS, timeout_ms);
+    }
+    curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(body.size()));
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.data());  // not copied: body outlives the request
     // every encoding this libcurl can undo
     curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
     Collect collect{{}, max_bytes};
@@ -424,6 +451,18 @@ Reply PostForm(std::string_view url, std::string_view form, size_t max_bytes) {
         reply.body = std::move(collect.body);
     }
     return reply;
+}
+
+}  // namespace
+
+Reply PostForm(std::string_view url, std::string_view form, size_t max_bytes) {
+    return Post(url,
+                {"Content-Type: application/x-www-form-urlencoded", "Accept: application/json"},
+                form, max_bytes, 0);
+}
+
+Reply PostJson(std::string_view url, std::string_view json, int timeout_ms) {
+    return Post(url, {"Content-Type: application/json"}, json, kJsonReplyBytes, timeout_ms);
 }
 
 std::string Download(std::string_view url, const std::filesystem::path& path,
@@ -446,6 +485,10 @@ std::string Download(std::string_view url, const std::filesystem::path& path,
 #else
 
 Reply PostForm(std::string_view, std::string_view, size_t) {
+    return Reply{0, {}, "band3 was built without libcurl, so it can't reach other sites"};
+}
+
+Reply PostJson(std::string_view, std::string_view, int) {
     return Reply{0, {}, "band3 was built without libcurl, so it can't reach other sites"};
 }
 

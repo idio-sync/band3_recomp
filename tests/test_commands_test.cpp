@@ -1562,6 +1562,24 @@ TEST_CASE("the game state follows the song's position, unknown until it's read")
     CHECK(state.Snapshot().song_ms == -1);
 }
 
+TEST_CASE("the game state follows a pause, cleared by entering or leaving a song") {
+    GameState state;
+    CHECK_FALSE(state.Snapshot().paused);
+    state.SetInGame(true);
+    state.SetPaused(true);
+    CHECK(state.Snapshot().paused);
+    state.SetPaused(false);
+    CHECK_FALSE(state.Snapshot().paused);
+    // quitting from the pause menu leaves the song paused
+    state.SetPaused(true);
+    state.SetInGame(false);
+    CHECK_FALSE(state.Snapshot().paused);
+    // a song restarted from the pause menu starts playing
+    state.SetPaused(true);
+    state.SetInGame(true);
+    CHECK_FALSE(state.Snapshot().paused);
+}
+
 TEST_CASE("the game state keeps that an online band formed, through songs") {
     GameState state;
     CHECK_FALSE(state.Snapshot().joined);
