@@ -16,6 +16,147 @@ default; if receivers see nothing (common with VPN or virtual adapters), use you
 broadcast address (e.g. 192.168.1.255) or one device's IP. `events_port` is 21070.
 `events_target` and `events_port` need a restart.
 
+## Home Assistant
+
+band3 can tell [Home Assistant](https://www.home-assistant.io) what the game is doing,
+as the RB3E Dashboard (`rb3e-stagekit-networked`) does, without running the dashboard.
+It does it two ways, and you can use either or both:
+
+- **MQTT**: band3 connects to Home Assistant's MQTT broker and shows up as a device,
+  "band3 (*your PC's name*)", with entities for the song, artist, venue, score, screen,
+  band and more, which Home Assistant finds by itself (MQTT discovery).
+- **Webhook**: band3 POSTs the dashboard's webhook payloads when a song starts, ends or
+  changes, so an automation written for the dashboard works unchanged.
+
+Home Assistant only watches: nothing it sends changes the game. The settings are in the
+Online tab's Home Assistant section and in `[homeassistant]` in `band3.toml`; all of them
+need a restart.
+
+### Setting up MQTT
+
+1. In Home Assistant, install the **Mosquitto broker** add-on (Settings → Add-ons → Add-on
+   store) and start it, then add the **MQTT** integration (Settings → Devices & services),
+   which usually finds the broker by itself.
+2. Make a Home Assistant user for band3 (Settings → People → Users). The Mosquitto add-on
+   accepts Home Assistant's users.
+3. In band3's Online tab, set **MQTT broker** (`ha_mqtt_host`) to Home Assistant's
+   address (e.g. `homeassistant.local` or `192.168.1.10`), then **User name**
+   (`ha_mqtt_username`) and **Password** (`ha_mqtt_password`) to that user's. **Port**
+   (`ha_mqtt_port`, 1883) and **Discovery prefix** (`ha_discovery_prefix`,
+   `homeassistant`) only change if you changed them in Home Assistant.
+4. Restart band3. The device appears under the MQTT integration.
+
+The password is stored as plain text in `band3.toml`. The launcher and the in-game
+settings mask it, but the SDK's own menu (the in-game settings' **All settings...**)
+shows it. band3 never writes it to the log or to `/status`.
+
+### Entities
+
+Each entity's state is on `band3/<id>/<entity>`, where `<id>` is the PC's name in lower
+case with everything but letters and digits made `_` (so two PCs can share one broker).
+Home Assistant names them after the device, e.g. `sensor.band3_desktop_abc_song` on a
+PC named DESKTOP-ABC.
+
+| Entity | Kind | State |
+|---|---|---|
+| Song | sensor | the song's title; attributes `shortname`, `artist` and `length_ms` |
+| Artist | sensor | the song's artist |
+| Venue | sensor | the venue's name as the game has it |
+| Score | sensor | the band's score |
+| Playing | binary sensor (running) | on during a song, until you leave its results |
+| Paused | binary sensor | on while the song is paused |
+| Screen | sensor | the game's name for the screen that's up, e.g. `main_hub_screen` |
+| Song progress | sensor | how far into the song, 0-100 %, at most once a second; attributes `position_ms` and `length_ms` |
+| Band | sensor | each player's part and difficulty, e.g. `Guitar (Expert) · Drums (Hard)` |
+
+The song, artist and score keep the last song's after it ends.
+
+With **Stage Kit lights** (`ha_stagekit`) on, band3 also tells Home Assistant what the
+game sends to a Stage Kit, as it sends it:
+
+| Entity | Kind | State |
+|---|---|---|
+| Stage Kit red, yellow, green, blue | sensor | how many of the colour's 8 LEDs are lit; attribute `mask`, which ones (0-255) |
+| Stage Kit strobe | sensor | `off`, or its speed, `1` to `4` |
+| Stage Kit fog | binary sensor | on while the fog machine is |
+
+These change many times a second during a song (band3 sends each at most every 50 ms), so
+keep them out of Home Assistant's recorder, in `configuration.yaml`:
+
+```yaml
+recorder:
+  exclude:
+    entity_globs:
+      - sensor.band3_*_stage_kit_*
+      - binary_sensor.band3_*_stage_kit_*
+```
+
+The entities are unavailable while band3 isn't running: band3 says "offline" on
+`band3/<id>/status` when it closes, and the broker says it for band3 if it crashes or its
+window is closed (it's the connection's last will).
+
+### Connection state
+
+The web server's `/status` has the connection's state in `ha_state` (and the
+[test harness](test-harness.md)'s `state` too, unless it's `off`):
+
+| `ha_state` | |
+|---|---|
+| `off` | no MQTT broker set |
+| `connecting` | connecting to the broker |
+| `connected` | connected; the entities are up to date |
+| `retrying in N s` | the broker couldn't be reached or the connection dropped; band3 tries again at once, then 5, 10, 20 and 40 s apart, then every 60 s |
+| `refused: <reason>` | the broker turned band3 away for a reason only a settings change mends (`bad user name or password`, `not authorized`); band3 doesn't try again until it restarts |
+
+The log's `ha:` lines say when band3 connects, why it couldn't (once per distinct error,
+not on every retry), and what went wrong with the webhook.
+
+### Webhook
+
+Set **Webhook URL** (`ha_webhook_url`) to a Home Assistant webhook,
+`http://<home assistant>:8123/api/webhook/<webhook id>`, and restart band3. It POSTs
+these as JSON, as the RB3E Dashboard does:
+
+| When | Payload |
+|---|---|
+| a song starts | `{"type":"state","status":"playing"}` |
+| a song ends (you leave its results) | `{"type":"state","status":"menu"}` |
+| the song changes | `{"type":"song","name":"<title>"}`, sent before `playing` when a song starts |
+
+The dashboard's `HomeAssistant/rb3e_lighting.yaml` automation works unchanged with webhook
+id `rb3_event`. A shorter one that dims a light for each song:
+
+```yaml
+alias: "Rock Band 3 lights"
+trigger:
+  - platform: webhook
+    webhook_id: "rb3_event"
+    local_only: true
+    allowed_methods:
+      - POST
+action:
+  - choose:
+      - conditions: "{{ trigger.json.type == 'state' and trigger.json.status == 'playing' }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: light.living_room  # your light
+            data:
+              brightness_pct: 30
+      - conditions: "{{ trigger.json.type == 'state' and trigger.json.status == 'menu' }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: light.living_room
+            data:
+              brightness_pct: 100
+mode: queued
+```
+
+Each POST has 2 s and isn't retried: a late "playing" is worse than none. A failure (no
+answer, or a status other than 2xx) is logged once per distinct error
+(`ha: webhook: HTTP 404`). The webhook doesn't need MQTT; with both set, both run.
+
 ## Discord Rich Presence
 
 Turn on `discord_enabled` (then restart) to show the current song as Discord Rich
@@ -55,7 +196,7 @@ band3 adds its own, which RB3E doesn't have:
 | Endpoint | |
 |---|---|
 | `/song_details` | every listed song's `genre` (as the Music Library names it), `year`, `length_ms`, `vocal_parts` and `tiers`, the difficulty of each part it has (`band`, `guitar`, `bass`, `drum`, `vocals`, `keys`, `real_guitar`, `real_bass`, `real_keys`) from 0 (Warmup) to 6 (Impossible), as JSON by shortname |
-| `/status` | what the game is doing, as JSON: `screen`, `in_library` (the Music Library is open, so `/jump` can select) and `playing`, during a song its `shortname`, `title`, `artist`, `score`, `position_ms` (null until the song starts) and `length_ms`, else null |
+| `/status` | what the game is doing, as JSON: `screen`, `in_library` (the Music Library is open, so `/jump` can select), `ha_state` (the [Home Assistant](#connection-state) connection) and `playing`, during a song its `shortname`, `title`, `artist`, `score`, `position_ms` (null until the song starts) and `length_ms`, else null |
 | `/album_art?shortname=<name>` | the song's album art as a JPEG, read as the game reads it for the Music Library (from the ARK, or a loose file that replaces it); 404 when the song has none, or no song has that shortname |
 | `/rv/search?text=<text>&page=<n>` | a page of 25 of [RhythmVerse](https://rhythmverse.co)'s Rock Band 3 (Xbox) songs matching the text, or its newest without, as JSON (`total`, `page`, `page_size`, `songs`). Each song has its `file_id`, details, `tiers` (as `/song_details`), `song_id`, `download` (band3 can download it), `downloaded` (its file is in the content folders), `in_library` (null while the game is busy) and `update` (`available`, `pending` or empty). Optional: `sort=` `newest`, `updated`, `downloads`, `title`, `artist` or `length`; `downloadable=1`; `has=` parts (`keys`, `real_guitar`...); `harmonies=1`; `genre=metal,rock`; `decade=1990,2000`; `cap=<part>:<tier>` for a part's difficulty at most |
 | `POST /rv/download` | downloads `{"file_id": "<id>"}` from a search into the songs folder, or with `"update": true` the newer version of one band3 downloaded: 404 for a song no search has found, 409 for one RhythmVerse doesn't host, or has nothing newer of |

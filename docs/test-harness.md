@@ -67,7 +67,7 @@ the user's screen**: ask first on a machine someone is using, and `window offscr
 | `hold <inputs>`, `release <inputs>\|all` | |
 | `hit <pad\|cymbal\|keyN\|string> [velocity] [fret]` | drums, keys `key0`-`key24`, pro guitar strings `low_e a_str d_str g_str b_str high_e` |
 | `axis whammy\|tilt <0..1>` | |
-| `state` | the screen, song, venue, band, frame count, each player's instrument, the band's `score` (0 when a song starts) and, while `usb_mics` records, the `mics` slots: what records each, whether the game connected it and the bytes `fed` to it |
+| `state` | the screen, whether a song is `paused`, song, venue, band, frame count, each player's instrument, the band's `score` (0 when a song starts), `ha_state` (the [Home Assistant](integrations.md#connection-state) connection, left out while it's `off`) and, while `usb_mics` records, the `mics` slots: what records each, whether the game connected it and the bytes `fed` to it |
 | `pad [player]` | the buttons, triggers and sticks the game reads from a player (1-4) |
 | `wait <condition> [timeout=30s]`, `expect <condition> [timeout=5s]` | `screen=`, `screen~` (contains), `in_game`, `menus`, `song=<shortname>`, `frames=<n>`, `score>=<n>`, `mic=<slot>` (connected and fed audio since the wait began), `rooms=<off\|connecting\|connected\|logged_in\|disconnected\|failed>` (the Liveless Rooms connection), `port_mapping=<off\|searching\|mapped\|failed>` (Liveless' port mapping), `joined` (an online band formed with this game in it; `state` then shows `"joined":true`) |
 | `sleep <n>s\|<n>ms` | waits that long, up to 600 s. `frames=` counts the main thread's frames, which stand still during the boot logos and pass twice as fast at `refresh_rate` 120, so a pause for a menu to settle is a `sleep` |

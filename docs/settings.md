@@ -55,8 +55,9 @@ band3 on the new backend (the row says so). Under the [test harness](test-harnes
 band3 doesn't restart itself, so the game keeps the old backend until the next start. A
 changed MIDI port reopens the kit a moment after you stop changing it.
 
-The Online tab turns on the web song browser, Discord, RB3Enhanced's events, and online
-play: [GoCentral and Liveless](integrations.md#gocentral-rock-central) (Windows only).
+The Online tab turns on the web song browser, Discord, RB3Enhanced's events,
+[Home Assistant](integrations.md#home-assistant), and online play:
+[GoCentral and Liveless](integrations.md#gocentral-rock-central) (Windows only).
 Their settings are read as the game starts, so Play applies them without a restart.
 
 It opens:
