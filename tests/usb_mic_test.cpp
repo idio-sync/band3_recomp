@@ -17,6 +17,9 @@ namespace {
 
 const Clock::time_point t0{};
 
+// 16-bit samples
+constexpr size_t kTenMsBytes = kSampleRate / 100 * 2;
+
 int16_t SampleAt(const std::vector<uint8_t>& pcm, size_t i) {
     return static_cast<int16_t>(static_cast<uint16_t>(pcm[i * 2] << 8 | pcm[i * 2 + 1]));
 }
@@ -47,16 +50,23 @@ TEST_CASE("device names match case-insensitively on part of the name") {
     CHECK_FALSE(NameMatches("anything", ""));
 }
 
-TEST_CASE("the test tone is 16 kHz big-endian PCM at its pitch") {
+TEST_CASE("mics run at the rate the game's pitch detector assumes") {
+    // GameMic::SetInputFile builds its PitchDetector at the mic's
+    // GetSampleRate; MicXbox's (vtable +124) is 0x827297B0, which returns 48000
+    // (folded with MicNull's). Fed 16 kHz, every note read a fifth sharp.
+    CHECK(kSampleRate == 48000);
+}
+
+TEST_CASE("the test tone is big-endian PCM at its pitch") {
     ToneSource tone(440.0, t0, 8000);
     std::vector<uint8_t> pcm(kSampleRate * 2);
 
     SUBCASE("produces exactly the samples that have elapsed") {
         std::array<uint8_t, kMaxChunk> buf{};
         CHECK(tone.Read(buf, t0) == 0);
-        CHECK(tone.Read(buf, t0 + 10ms) == 160 * 2);
+        CHECK(tone.Read(buf, t0 + 10ms) == kTenMsBytes);
         CHECK(tone.Read(buf, t0 + 10ms) == 0);
-        CHECK(tone.Read(buf, t0 + 20ms) == 160 * 2);
+        CHECK(tone.Read(buf, t0 + 20ms) == kTenMsBytes);
     }
 
     SUBCASE("big-endian, starting at zero and rising") {
@@ -92,7 +102,7 @@ TEST_CASE("a small buffer takes what fits and the rest follows") {
     std::array<uint8_t, 100> small{};
     CHECK(tone.Read(small, t0 + 10ms) == 100);
     std::array<uint8_t, kMaxChunk> big{};
-    CHECK(tone.Read(big, t0 + 10ms) == 160 * 2 - 100);
+    CHECK(tone.Read(big, t0 + 10ms) == kTenMsBytes - 100);
 }
 
 TEST_CASE("after a stall the tone skips ahead instead of building a backlog") {
@@ -100,7 +110,7 @@ TEST_CASE("after a stall the tone skips ahead instead of building a backlog") {
     std::vector<uint8_t> buf(kSampleRate * 2 * 2);
     // two seconds without reading
     CHECK(tone.Read(buf, t0 + 2s) == kMaxBacklogBytes);
-    CHECK(tone.Read(buf, t0 + 2s + 10ms) == 160 * 2);
+    CHECK(tone.Read(buf, t0 + 2s + 10ms) == kTenMsBytes);
 }
 
 TEST_CASE("a slot connects once something feeds it") {

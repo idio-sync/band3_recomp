@@ -8,7 +8,7 @@
 #include "usb_mic.h"
 
 // Records the microphones the game's mic slots sing through (see usb_mic.h),
-// with SDL, as 16 kHz mono 16-bit big-endian PCM. Turned on by the usb_mics
+// with SDL, as 48 kHz mono 16-bit big-endian PCM. Turned on by the usb_mics
 // setting; usb_mic_devices picks the microphones, one per slot, and
 // usb_mic_test_tone replaces them with a steady tone in the first slot.
 // Microphones are picked up when plugged in and let go when unplugged.

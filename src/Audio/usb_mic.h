@@ -13,7 +13,7 @@
 // which reads the XMic library; XMic needs the MicDeviceRequest kernel import,
 // which ReXGlue doesn't implement. band3 replaces that thread
 // (Hooks/usb_mic.cpp) with a loop that connects the slot and hands the game
-// 16 kHz mono 16-bit big-endian PCM through ExternalMicClientMgr::AddAudio,
+// 48 kHz mono 16-bit big-endian PCM through ExternalMicClientMgr::AddAudio,
 // as ExternalMic::dataReady does. usb_mic_capture.h records it with SDL.
 //
 // Time is passed in rather than read, so this is testable.
@@ -22,8 +22,10 @@ namespace band3::audio::usb_mic {
 
 using Clock = std::chrono::steady_clock;
 
-// MicXbox::GetSampleRate
-constexpr int kSampleRate = 16000;
+// MicXbox::GetSampleRate (vtable +124, 0x827297B0, folded with MicNull's),
+// the rate GameMic gives its PitchDetector. rb3-xenon's MicXbox has 16000, which
+// the retail image doesn't: fed 16 kHz, every note read a fifth sharp.
+constexpr int kSampleRate = 48000;
 // ExternalMic::Init makes four
 constexpr int kSlots = 4;
 // ExternalMic::dataReady's buffer, the most it hands AddAudio at once
