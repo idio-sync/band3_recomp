@@ -29,8 +29,10 @@ It does it two ways, and you can use either or both:
   changes, so an automation written for the dashboard works unchanged.
 
 Home Assistant only watches: nothing it sends changes the game. The settings are in the
-Online tab's Home Assistant section and in `[homeassistant]` in `band3.toml`; all of them
-need a restart.
+Online tab's Home Assistant section, and in `band3.toml` as the `ha_*` keys below
+(`ha_mqtt_host = "192.168.1.10"`, at the top level like every other setting there); the
+older `band3_config.ini` has them in `[homeassistant]`, without the `ha_` (`mqtt_host`,
+`mqtt_port`, ...). All of them need a restart.
 
 ### Setting up MQTT
 
@@ -69,7 +71,8 @@ PC named DESKTOP-ABC.
 | Song progress | sensor | how far into the song, 0-100 %, at most once a second; attributes `position_ms` and `length_ms` |
 | Band | sensor | each player's part and difficulty, e.g. `Guitar (Expert) · Drums (Hard)` |
 
-The song, artist and score keep the last song's after it ends.
+The song, artist and score keep the last song's after it ends, and progress the point
+the song ended at.
 
 With **Stage Kit lights** (`ha_stagekit`) on, band3 also tells Home Assistant what the
 game sends to a Stage Kit, as it sends it:
@@ -91,9 +94,14 @@ recorder:
       - binary_sensor.band3_*_stage_kit_*
 ```
 
+Turning Stage Kit lights off removes these entities from Home Assistant the next time
+band3 connects.
+
 The entities are unavailable while band3 isn't running: band3 says "offline" on
 `band3/<id>/status` when it closes, and the broker says it for band3 if it crashes or its
-window is closed (it's the connection's last will).
+window is closed (it's the connection's last will). The states are retained on the
+broker, so when Home Assistant restarts while band3 runs it has them again at once (an
+empty one, such as the song before any was played, shows as unknown).
 
 ### Connection state
 
@@ -105,11 +113,11 @@ The web server's `/status` has the connection's state in `ha_state` (and the
 | `off` | no MQTT broker set |
 | `connecting` | connecting to the broker |
 | `connected` | connected; the entities are up to date |
-| `retrying in N s` | the broker couldn't be reached or the connection dropped; band3 tries again at once, then 5, 10, 20 and 40 s apart, then every 60 s |
+| `retrying in N s` | the broker couldn't be reached or the connection dropped; band3 tries again at once, then 5, 10, 20 and 40 s apart, then every 60 s. Only a connection that lasted a minute starts these over, so a broker that keeps taking band3 and dropping it (another client with its id, an ACL) is retried ever more slowly too |
 | `refused: <reason>` | the broker turned band3 away for a reason only a settings change mends (`bad user name or password`, `not authorized`); band3 doesn't try again until it restarts |
 
-The log's `ha:` lines say when band3 connects, why it couldn't (once per distinct error,
-not on every retry), and what went wrong with the webhook.
+The log's `ha:` lines say when band3 connects, why it couldn't or the connection dropped
+(once per distinct error, not on every retry), and what went wrong with the webhook.
 
 ### Webhook
 
