@@ -26,6 +26,10 @@ void StartLiveContent(rex::filesystem::VirtualFileSystem* vfs);
 // none (the first with a warning)
 std::vector<Package> LivePackages();
 
+// the copies of band3's packages it left out (ScanFolders' dropped, and those
+// added since); none until the scan is done
+std::vector<DroppedPackage> DroppedPackages();
+
 // the package named file_name (its content ID), if it is one of band3's and the
 // scan is done
 const Package* FindLivePackage(std::string_view file_name);

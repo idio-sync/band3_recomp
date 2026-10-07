@@ -218,6 +218,43 @@ TEST_CASE("another chart of the same artist and title is similar, and a pack cou
     CHECK(set_aside[1]["next_launch"].Bool() == true);
 }
 
+TEST_CASE("copies of one package that band3 left out are the same file") {
+    const std::vector<PackageSongs> packages = {
+        SongsIn("songs\\Pack_rb3con", {Dta("one", 1, "One"), Dta("two", 2, "Two")}),
+        SongsIn("songs\\Single_rb3con", {Dta("three", 3, "Three")})};
+    const std::vector<LeftOutCopy> left_out = {{"backup\\Pack_rb3con", 1000, "songs\\Pack_rb3con"},
+                                               {"old/Pack_rb3con", 999, "songs\\Pack_rb3con"},
+                                               {"x", 5, "not one of them"}};
+    const auto groups = FindDuplicates(packages, {}, left_out);
+    REQUIRE(groups.size() == 1);
+    CHECK(groups[0].kind == DuplicateKind::kSameFile);
+    CHECK(groups[0].key == "Pack_rb3con");
+    REQUIRE(groups[0].copies.size() == 3);
+    const auto& kept = groups[0].copies[0];
+    CHECK(kept.in_use);
+    CHECK(kept.package == 0);
+    CHECK(kept.file == "songs\\Pack_rb3con");
+    CHECK(kept.songs_in_file == 2);
+    CHECK(kept.song.shortname == "one");  // the package's first song
+    const auto& copy = groups[0].copies[1];
+    CHECK(!copy.in_use);
+    CHECK(copy.package == -1);
+    CHECK(copy.file == "backup\\Pack_rb3con");
+    CHECK(copy.songs_in_file == 2);
+    CHECK(!copy.differs);
+    CHECK(groups[0].copies[2].differs);  // another size: not quite the same
+
+    const auto json = band3::json::Parse(FormatDuplicates(groups, packages, {}));
+    REQUIRE(json);
+    const auto& group = (*json)["groups"].Items()[0];
+    CHECK(group["kind"].Text() == "same_file");
+    CHECK(group["copies"].Items()[1]["file"].Text() == "backup\\Pack_rb3con");
+    CHECK(group["copies"].Items()[1]["size"].Number() == 1000);
+    CHECK(group["copies"].Items()[1]["songs_in_file"].Number() == 2);
+    CHECK(group["copies"].Items()[2]["differs"].Bool() == true);
+    CHECK(group["copies"].Items()[0]["differs"].Bool(true) == false);
+}
+
 TEST_CASE("a song only once, or a clash said already, isn't listed again") {
     const std::vector<PackageSongs> packages = {
         SongsIn("a", {Dta("one", 1, "Same", "Band")}), SongsIn("b", {Dta("one", 2, "Same", "Band")}),

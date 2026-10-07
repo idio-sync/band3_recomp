@@ -409,10 +409,13 @@ def fake_set_aside(report, set_aside, request, put_back):
             return 409, "it isn't one band3 has set aside"
         del set_aside[file]
         return 200, 'Put back'
+    # songs on their own, or copies band3 left out (the one it loads has their songs)
     standalone = [(g, c) for g in report['groups'] for c in g['copies']
-                  if c['file'] and c['songs_in_file'] == 1 and g['kind'] != 'similar']
+                  if c['file'] and g['kind'] != 'similar' and
+                  (c['songs_in_file'] == 1 or (g['kind'] == 'same_file' and not c['in_use']))]
     if request.get('left_out') is True:
-        files = [c['file'] for g, c in standalone if g['kind'] == 'song_id' and not c['in_use']]
+        files = [c['file'] for g, c in standalone if not c['in_use'] and
+                 (not c['differs'] if g['kind'] == 'same_file' else g['kind'] == 'song_id')]
         set_aside.update({f: True for f in files})
         return 200, f'{len(files)} set aside at the next launch'
     if not any(c['file'] == file for _, c in standalone):
@@ -428,12 +431,20 @@ def fake_duplicates(started, now, set_aside=None):
     total = 240
     read = min(total, int((now - started) * 120))
 
-    def copy(shortname, song_id, title, artist, file, songs=1, in_use=True):
+    def copy(shortname, song_id, title, artist, file, songs=1, in_use=True, differs=False):
         return {'shortname': shortname, 'song_id': song_id, 'title': title, 'artist': artist,
                 'file': file, 'songs_in_file': songs if file else 0,
-                'size': 8 * 1048576 * songs if file else 0, 'in_use': in_use}
+                'size': 8 * 1048576 * songs + (4096 if differs else 0) if file else 0,
+                'in_use': in_use, 'differs': differs}
 
     groups = [
+        {'kind': 'same_file', 'key': 'Deftones Pack_rb3con', 'copies': [
+            copy('cuthands2', 2131221999, 'Cut Hands', 'Deftones', 'songs\\Deftones Pack_rb3con',
+                 songs=5),
+            copy('cuthands2', 2131221999, 'Cut Hands', 'Deftones',
+                 'songs\\backup\\Deftones Pack_rb3con', songs=5, in_use=False),
+            copy('cuthands2', 2131221999, 'Cut Hands', 'Deftones',
+                 'songs\\old\\Deftones Pack_rb3con', songs=5, in_use=False, differs=True)]},
         {'kind': 'song_id', 'key': '2133017793', 'copies': [
             copy('GTAVITheme', 2133017793, 'Welcome To Vice City', 'Rockstar Games',
                  'songs\\GTAVITheme_rb3con'),

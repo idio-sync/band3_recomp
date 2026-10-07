@@ -206,8 +206,8 @@ band3 adds its own, which RB3E doesn't have:
 | Endpoint | |
 |---|---|
 | `/song_details` | every listed song's `genre` (as the Music Library names it), `year`, `length_ms`, `vocal_parts` and `tiers`, the difficulty of each part it has (`band`, `guitar`, `bass`, `drum`, `vocals`, `keys`, `real_guitar`, `real_bass`, `real_keys`) from 0 (Warmup) to 6 (Impossible), as JSON by shortname |
-| `/library/duplicates` | the [duplicate songs](#duplicate-songs) as JSON: `reading` (the packages are being read; ask again), `read` and `total` packages, `unreadable` (packages whose songs.dta couldn't be read), `game` (the game's own songs were compared; false while it's busy, and just after it starts, until it has loaded them) and `groups`, each a `kind` (`song_id`, `shortname` or `similar`), its `key` and its `copies`: `shortname`, `song_id`, `title`, `artist`, `file` (the package; empty for the game's own songs), `songs_in_file`, `size` and `in_use`; and `set_aside`, each a `file` and `next_launch` (not done yet) |
-| `POST /library/set_aside` | sets a package aside at the next launch: `{"file": "<path>"}`, one of the report's with one song, or `{"left_out": true}` for every such copy the game leaves out; 409 for anything else |
+| `/library/duplicates` | the [duplicate songs](#duplicate-songs) as JSON: `reading` (the packages are being read; ask again), `read` and `total` packages, `unreadable` (packages whose songs.dta couldn't be read), `game` (the game's own songs were compared; false while it's busy, and just after it starts, until it has loaded them) and `groups`, each a `kind` (`same_file`, `song_id`, `shortname` or `similar`), its `key` and its `copies`: `shortname`, `song_id`, `title`, `artist`, `file` (the package; empty for the game's own songs), `songs_in_file`, `size`, `in_use` and `differs` (a copy band3 left out that isn't the size of the one it loads); and `set_aside`, each a `file` and `next_launch` (not done yet) |
+| `POST /library/set_aside` | sets a package aside at the next launch: `{"file": "<path>"}`, one of the report's with one song or a copy band3 left out, or `{"left_out": true}` for every such copy left out (but those of another size); 409 for anything else |
 | `POST /library/put_back` | `{"file": "<path>"}`, one of the report's `set_aside`: cancels it if it's waiting for the next launch, or renames it back |
 | `/status` | what the game is doing, as JSON: `screen`, `in_library` (the Music Library is open, so `/jump` can select), `ha_state` (the [Home Assistant](#connection-state) connection) and `playing`, during a song its `shortname`, `title`, `artist`, `score`, `position_ms` (null until the song starts) and `length_ms`, else null |
 | `/album_art?shortname=<name>` | the song's album art as a JPEG, read as the game reads it for the Music Library (from the ARK, or a loose file that replaces it); 404 when the song has none, or no song has that shortname |
@@ -236,8 +236,12 @@ The same song often ends up in more than one package: a single and a pack, two v
 of a chart, a download and a copy made by hand. The Library tab's **Duplicates** reads
 the `songs.dta` of every package band3 has (in the background, the first time, then only
 new and changed packages; band3 keeps what it read in `band3_package_songs.json` in the
-user data root) and lists three kinds:
+user data root) and lists four kinds:
 
+- **Same file**: copies of one package, in two folders or under two names. Its content ID
+  hashes its header and, through it, its contents, so band3 loads only the first it finds
+  and the rest only take up space. A copy that isn't the size of the one loaded says
+  **Another size**: look before setting it aside.
 - **Same song ID**: the game takes the first of these it loads, in band3's order (the
   content folders' order, then by file name), and leaves the rest out without a word.
   The one it has is **In use**, the rest **Left out**.
@@ -251,8 +255,9 @@ user data root) and lists three kinds:
 `.setaside`, which it passes over (the game may have the file open until then, so it
 waits, leaving `<name>.setaside-next` beside it to say so). Only a package that's a song
 on its own can be set aside, never a pack, whose other songs would go with it, and never
-the game's own songs. **Set aside the left-out copies** does it for every copy the game
-leaves out already, so nothing changes in the game; setting aside the copy that's **In
+the game's own songs; a copy under **Same file** that band3 leaves out can, pack or not,
+as the one it loads has all its songs. **Set aside the left-out copies** does it for every
+copy left out already (but those of another size), so nothing changes in the game; setting aside the copy that's **In
 use** lets the next one take its place. Nothing is deleted: what's set aside is listed at
 the end, with **Cancel** for what's waiting for the next launch and **Put back**, which
 renames a file back for the next launch. A song band3 downloaded from RhythmVerse shows

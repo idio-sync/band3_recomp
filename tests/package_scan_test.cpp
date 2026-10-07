@@ -98,10 +98,21 @@ TEST_CASE("the first folder listed wins a content ID found in two") {
     Write(root / "first" / "song", MakeHeader("CON ", 1, kRb3TitleId, 0x10, u"First"));
     Write(root / "second" / "song", MakeHeader("CON ", 1, kRb3TitleId, 0x10, u"Second"));
     Write(root / "second" / "other", MakeHeader("CON ", 1, kRb3TitleId, 0x40, u"Other"));
-    auto found = ScanFolders({root / "first", root / "second"}, kRb3TitleIds, nullptr);
+    std::vector<DroppedPackage> dropped;
+    auto found = ScanFolders({root / "first", root / "second"}, kRb3TitleIds, nullptr, &dropped);
     REQUIRE(found.size() == 2);
     CHECK(found[0].header.display_name == u"First");
     CHECK(found[1].header.display_name == u"Other");
+    // the copy left out, and the file listed in its place
+    REQUIRE(dropped.size() == 1);
+    CHECK(dropped[0].path == root / "second" / "song");
+    CHECK(dropped[0].kept == root / "first" / "song");
+
+    // folders that overlap meet the same file twice: it's no copy
+    dropped.clear();
+    found = ScanFolders({root, root / "first"}, kRb3TitleIds, nullptr, &dropped);
+    REQUIRE(dropped.size() == 1);
+    CHECK(dropped[0].path == root / "second" / "song");
     fs::remove_all(root);
 }
 

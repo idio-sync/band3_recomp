@@ -35,7 +35,8 @@ constexpr size_t kMaxDta = size_t{16} << 20;
 struct State {
     std::mutex mutex;
     std::vector<PackageSongs> packages;  // the last read in full
-    std::vector<fs::path> listed;        // the packages it was of (or is, while reading)
+    std::vector<fs::path> listed;        // the packages it was of (or is, while reading), and copies
+    std::vector<LeftOutCopy> left_out;   // copies of the packages band3 left out
     std::vector<SetAsideFile> set_aside;
     bool reading = false;
     size_t read = 0;
@@ -91,7 +92,7 @@ void WriteCache(const std::vector<PackageSongs>& packages) {
     if (ec) REXLOG_WARN("Package songs: couldn't write {}: {}", rex::path_to_utf8(path), ec.message());
 }
 
-void ReadAll(std::vector<fs::path> paths) {
+void ReadAll(std::vector<fs::path> paths, std::vector<DroppedPackage> dropped) {
     std::unordered_map<std::string, PackageSongs> cache;
     if (std::ifstream file(CachePath(), std::ios::binary); file) {
         std::ostringstream text;
@@ -130,9 +131,17 @@ void ReadAll(std::vector<fs::path> paths) {
     // what's gone from the folders goes from the cache too
     if (opened || packages.size() != cache.size()) WriteCache(packages);
     REXLOG_INFO("Package songs: {} packages, {} of them read now", packages.size(), opened);
+    std::vector<LeftOutCopy> left_out;
+    for (const DroppedPackage& copy : dropped) {
+        std::error_code ec;
+        const auto size = fs::file_size(copy.path, ec);
+        if (ec) continue;  // gone since the scan
+        left_out.push_back({rex::path_to_utf8(copy.path), static_cast<int64_t>(size), rex::path_to_utf8(copy.kept)});
+    }
     std::vector<SetAsideFile> set_aside = FindSetAside(ContentFolders(REXCVAR_GET(content_folders)));
     std::lock_guard lock(state.mutex);
     state.packages = std::move(packages);
+    state.left_out = std::move(left_out);
     state.set_aside = std::move(set_aside);
     state.reading = false;
 }
@@ -143,18 +152,23 @@ PackageSongsSnapshot CurrentPackageSongs() {
     // outside the lock: it waits for the content scan at first
     std::vector<fs::path> paths;
     for (const Package& package : LivePackages()) paths.push_back(package.path);
+    std::vector<DroppedPackage> dropped = DroppedPackages();
+    // read again when either changes
+    std::vector<fs::path> listed = paths;
+    for (const DroppedPackage& copy : dropped) listed.push_back(copy.path);
     auto& state = TheState();
     std::lock_guard lock(state.mutex);
-    if (!state.reading && paths != state.listed) {
-        state.listed = paths;
+    if (!state.reading && listed != state.listed) {
+        state.listed = std::move(listed);
         state.reading = true;
         state.read = 0;
         state.total = paths.size();
-        std::thread(ReadAll, std::move(paths)).detach();
+        std::thread(ReadAll, std::move(paths), std::move(dropped)).detach();
     }
     PackageSongsSnapshot snapshot;
     snapshot.packages = state.packages;
     snapshot.status = {state.reading, state.read, state.total, false};
+    snapshot.left_out = state.left_out;
     snapshot.set_aside = state.set_aside;
     return snapshot;
 }
@@ -162,13 +176,13 @@ PackageSongsSnapshot CurrentPackageSongs() {
 namespace {
 
 // the state's mutex held
-std::string RequestLocked(State& state, const PackageSongs& package) {
-    const fs::path file = rex::to_path(package.path);
+std::string RequestLocked(State& state, const std::string& path) {
+    const fs::path file = rex::to_path(path);
     const bool asked = std::ranges::any_of(state.set_aside, [&](const SetAsideFile& s) { return s.file == file; });
     if (asked) return {};
     if (std::string problem = RequestSetAside(file); !problem.empty()) return problem;
     state.set_aside.push_back({file, true});
-    REXLOG_INFO("Package songs: {} is set aside at the next launch", package.path);
+    REXLOG_INFO("Package songs: {} is set aside at the next launch", path);
     return {};
 }
 
@@ -184,7 +198,11 @@ std::string SetAsidePackage(std::string_view file) {
             return "it holds more than one song (or none band3 could read): move it out of the "
                    "song folders yourself if you mean to";
         }
-        return RequestLocked(state, package);
+        return RequestLocked(state, package.path);
+    }
+    // a copy band3 left out loses nothing, a pack or not: the one it listed has it all
+    for (const LeftOutCopy& copy : state.left_out) {
+        if (copy.path == file) return RequestLocked(state, copy.path);
     }
     return "it isn't one of the packages band3 has read";
 }
@@ -194,12 +212,15 @@ std::string SetAsideLeftOut(size_t& count) {
     auto& state = TheState();
     std::lock_guard lock(state.mutex);
     if (state.reading) return "band3 is still reading the packages: try again in a moment";
-    for (const DuplicateGroup& group : FindDuplicates(state.packages, {})) {
-        if (group.kind != DuplicateKind::kSongId) continue;
+    for (const DuplicateGroup& group : FindDuplicates(state.packages, {}, state.left_out)) {
         for (const SongCopy& copy : group.copies) {
-            const PackageSongs& package = state.packages[copy.package];
-            if (copy.in_use || package.songs.size() != 1) continue;
-            if (std::string problem = RequestLocked(state, package); !problem.empty()) return problem;
+            if (copy.in_use) continue;
+            // copies of a package the same size as it, and songs on their own
+            // the game leaves out
+            const bool same_file = group.kind == DuplicateKind::kSameFile && !copy.differs;
+            const bool song = group.kind == DuplicateKind::kSongId && copy.songs_in_file == 1;
+            if (!same_file && !song) continue;
+            if (std::string problem = RequestLocked(state, copy.file); !problem.empty()) return problem;
             count++;
         }
     }

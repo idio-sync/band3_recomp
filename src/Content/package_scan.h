@@ -83,7 +83,17 @@ std::optional<Package> ReadPackage(const std::filesystem::path& path,
 // per content ID (the first found, in the folders' order); the folders are scanned
 // at once, a thread each. `problems` gets one line per folder or subfolder
 // that couldn't be read, naming it; the rest of the folder is still read
+// Another file of a package already found (the same content ID, which hashes
+// the header and, through it, the package's data): a copy, left out. Folders
+// that overlap meet the same file twice, which isn't one.
+struct DroppedPackage {
+    std::filesystem::path path;
+    std::filesystem::path kept;  // the file found first, which is listed
+};
+
+// (dropped gets the copies left out)
 std::vector<Package> ScanFolders(const std::vector<std::filesystem::path>& folders,
-                                 std::span<const uint32_t> title_ids, std::vector<std::string>* problems);
+                                 std::span<const uint32_t> title_ids, std::vector<std::string>* problems,
+                                 std::vector<DroppedPackage>* dropped = nullptr);
 
 }

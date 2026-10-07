@@ -578,6 +578,7 @@ function partsGrid(tiers) {
 // background the first time
 let dupes = null, dupesTimer = null, dupesWaits = 0;
 const DUPE_KINDS = {
+  same_file: ["Same file", "Copies of one package: band3 loads only the first, and the rest only take up space."],
   song_id: ["Same song ID", "The game takes the first of these it loads and leaves the rest out."],
   shortname: ["Same shortname", "The game has all of these, but what finds a song by its shortname (Select, here) finds only one."],
   similar: ["Same artist and title", "Other charts of the same song, maybe: the game has them all."],
@@ -613,11 +614,13 @@ function showDupes() {
   for (const note of notes) body.append(el("div", "facts", note));
   // file -> true when it's set aside at the next launch, false when it's done
   const aside = new Map((dupes.set_aside || []).map(s => [s.file, s.next_launch]));
-  const leftOut = dupes.groups.filter(g => g.kind === "song_id")
-    .flatMap(g => g.copies).filter(c => !c.in_use && c.songs_in_file === 1 && !aside.has(c.file)).length;
+  // as band3 takes them: songs on their own the game leaves out, and copies of a
+  // package the size of the one it loads
+  const leftOut = dupes.groups.flatMap(g => g.copies.filter(c => !c.in_use && !aside.has(c.file) &&
+    (g.kind === "same_file" ? !c.differs : g.kind === "song_id" && c.songs_in_file === 1))).length;
   if (leftOut) {
     const bulk = el("button", "plain bulk", "Set aside the left-out copies (" + leftOut + ")");
-    bulk.title = "Each is a song on its own the game leaves out already: when band3 next starts, it renames them to end in .setaside and passes them over";
+    bulk.title = "Each is left out already: when band3 next starts, it renames them to end in .setaside and passes them over";
     bulk.onclick = () => setAside({left_out: true});
     body.append(bulk);
   }
@@ -626,25 +629,38 @@ function showDupes() {
     // the key as it is: shortnames are told apart by case
     const heading = el("h3", "", g.kind === "similar" ? label : label + ": ");
     if (g.kind !== "similar") heading.append(el("span", "key", g.key));
-    body.append(heading, el("div", "facts", why));
+    let note = why;
+    if (g.kind === "same_file") {
+      const spare = g.copies.filter(c => !c.in_use).reduce((sum, c) => sum + c.size, 0);
+      note += " The copies take " + megabytes(spare) + ".";
+    }
+    body.append(heading, el("div", "facts", note));
     for (const c of g.copies) {
       const row = el("div", "dupe");
+      const pack = c.songs_in_file > 1;
+      // a copy of a package is told apart by its folder, a song by its file
       const where = c.file
-        ? c.file.split(/[\\/]/).pop() + (c.songs_in_file > 1 ? " (a pack of " + c.songs_in_file + ")" : "") + " · " + megabytes(c.size)
+        ? (g.kind === "same_file" ? c.file : c.file.split(/[\\/]/).pop()) +
+          (pack && g.kind !== "same_file" ? " (a pack of " + c.songs_in_file + ")" : "") + " · " + megabytes(c.size)
         : "The game's own songs";
-      const sub = el("div", "sub", c.shortname + " · " + where);
+      const sub = el("div", "sub", g.kind === "same_file" ? where : c.shortname + " · " + where);
       if (c.file) sub.title = c.file;
-      row.append(el("div", "title", c.title + " – " + c.artist), sub);
+      const title = g.kind === "same_file" && pack ? c.songs_in_file + " songs: " + c.title + " and more" : c.title + " – " + c.artist;
+      row.append(el("div", "title", title), sub);
       if (aside.has(c.file)) row.append(el("span", "tag", "Set aside at next launch"));
-      else if (g.kind === "song_id") row.append(el("span", c.in_use ? "tag have" : "tag", c.in_use ? "In use" : "Left out"));
-      // a song on its own, never a pack's: its other songs would go with it
-      if (g.kind !== "similar" && c.file && c.songs_in_file === 1) {
+      else if (g.kind === "same_file" && c.differs) row.append(el("span", "tag", "Another size"));
+      else if (g.kind === "song_id" || g.kind === "same_file") row.append(el("span", c.in_use ? "tag have" : "tag", c.in_use ? "In use" : "Left out"));
+      // a song on its own, never a pack's (its other songs would go with it),
+      // but for a copy band3 leaves out: the one it loads has them all
+      const leftOutCopy = g.kind === "same_file" && !c.in_use;
+      if (g.kind !== "similar" && c.file && (c.songs_in_file === 1 || leftOutCopy)) {
         if (aside.has(c.file)) {
           row.append(putBackButton(c.file, true));
         } else {
           const b = el("button", "plain", "Set aside");
-          b.title = g.kind === "song_id" && c.in_use
+          b.title = (g.kind === "song_id" || g.kind === "same_file") && c.in_use
             ? "When band3 next starts, it renames this one to end in .setaside and passes it over: the next copy takes its place"
+            : c.differs ? "Its size isn't the one band3 loads: look before setting it aside. When band3 next starts, it renames this one to end in .setaside and passes it over"
             : "When band3 next starts, it renames this one to end in .setaside and passes it over";
           b.onclick = () => setAside({file: c.file});
           row.append(b);

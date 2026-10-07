@@ -17,6 +17,7 @@ namespace band3::content {
 struct PackageSongsSnapshot {
     std::vector<PackageSongs> packages;  // as last read in full; empty before
     InventoryStatus status;              // its game field is left false
+    std::vector<LeftOutCopy> left_out;   // copies of the packages band3 left out
     // packages set aside, or to be at the next launch (package_scan.h), in
     // the content folders as last read, and since by the calls below
     std::vector<SetAsideFile> set_aside;
@@ -25,11 +26,13 @@ struct PackageSongsSnapshot {
 // what's been read, starting a read when there's none and the packages changed
 PackageSongsSnapshot CurrentPackageSongs();
 
-// Sets a package aside at the next launch (RequestSetAside): only one of those
-// read, with one song, so a pack's other songs never go with it. "" or why not.
+// Sets a package aside at the next launch (RequestSetAside): one of those read
+// with one song, so a pack's other songs never go with it, or a copy band3 left
+// out, which the package listed has all of. "" or why not.
 std::string SetAsidePackage(std::string_view file);
 // sets aside every package that's one song the game leaves out, its song_id
-// being another's it loads first; how many, or why not
+// being another's it loads first, and every copy band3 left out that's the
+// size of the package listed; how many, or why not
 std::string SetAsideLeftOut(size_t& count);
 // puts back one of the set_aside files: "" or why not
 std::string PutBackPackage(std::string_view file);

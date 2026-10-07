@@ -41,14 +41,28 @@ struct GameSong {
 
 struct SongCopy {
     DtaSong song;
-    int32_t package = -1;  // its package's index; -1 for a song in the game's own data
-    bool in_use = true;    // the game has this copy
+    // its package's index; -1 for a song in the game's own data, or a copy band3 left out
+    int32_t package = -1;
+    bool in_use = true;  // the game has this copy
+    std::string file;    // its package (UTF-8); "" for the game's own
+    int64_t size = 0;
+    size_t songs_in_file = 0;
+    bool differs = false;  // a copy band3 left out whose size isn't the listed one's
 };
 
 enum class DuplicateKind {
+    kSameFile,   // copies of one package (its content ID): band3 lists only the first
     kSongId,     // the same song_id: the game has only the first it loads
     kShortname,  // the same shortname, other song_ids: the game has them all
     kSimilar,    // the same artist and title, by letters and digits: other charts, maybe
+};
+
+// a copy of one of the packages that band3 left out (package_scan.h's
+// DroppedPackage), with its size
+struct LeftOutCopy {
+    std::string path;  // UTF-8
+    int64_t size = 0;
+    std::string kept;  // the package listed in its place
 };
 
 struct DuplicateGroup {
@@ -57,12 +71,15 @@ struct DuplicateGroup {
     std::vector<SongCopy> copies;
 };
 
-// the duplicates among packages (in the order the game takes them in) and the
-// game's songs that aren't in any of them (on the disc, or in its own data);
-// with no game songs, those on the disc go unseen. Song_id groups first, then
-// shortnames, then the similar, each by the first copy's title.
+// the duplicates among packages (in the order the game takes them in), the
+// copies of them band3 left out, and the game's songs that aren't in any of
+// them (on the disc, or in its own data); with no game songs, those on the
+// disc go unseen. Same files first, then song_ids, shortnames and the
+// similar, each by the first copy's title. A same file group's song is its
+// package's first.
 std::vector<DuplicateGroup> FindDuplicates(const std::vector<PackageSongs>& packages,
-                                           const std::vector<GameSong>& game);
+                                           const std::vector<GameSong>& game,
+                                           const std::vector<LeftOutCopy>& left_out = {});
 
 struct InventoryStatus {
     bool reading = false;  // the packages are being read
@@ -72,11 +89,11 @@ struct InventoryStatus {
 };
 
 // /library/duplicates: {"reading":, "read":, "total":, "unreadable": packages
-// whose songs couldn't be read, "game":, "groups": [{"kind": "song_id",
-// "shortname" or "similar", "key":, "copies": [{"shortname":, "song_id":,
-// "title":, "artist":, "file": the package's path ("" for the game's own),
-// "songs_in_file":, "size":, "in_use":}]}], "set_aside": [{"file": its own
-// path, "next_launch": not done yet}]}
+// whose songs couldn't be read, "game":, "groups": [{"kind": "same_file",
+// "song_id", "shortname" or "similar", "key":, "copies": [{"shortname":,
+// "song_id":, "title":, "artist":, "file": the package's path ("" for the
+// game's own), "songs_in_file":, "size":, "in_use":, "differs":}]}],
+// "set_aside": [{"file": its own path, "next_launch": not done yet}]}
 std::string FormatDuplicates(const std::vector<DuplicateGroup>& groups,
                              const std::vector<PackageSongs>& packages,
                              const InventoryStatus& status,

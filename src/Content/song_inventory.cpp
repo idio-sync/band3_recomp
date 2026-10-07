@@ -46,6 +46,7 @@ std::string Lower(std::string_view text) {
 
 std::string_view KindName(DuplicateKind kind) {
     switch (kind) {
+        case DuplicateKind::kSameFile: return "same_file";
         case DuplicateKind::kSongId: return "song_id";
         case DuplicateKind::kShortname: return "shortname";
         case DuplicateKind::kSimilar: return "similar";
@@ -101,13 +102,38 @@ std::string FormatInventoryCache(const std::vector<PackageSongs>& packages) {
 }
 
 std::vector<DuplicateGroup> FindDuplicates(const std::vector<PackageSongs>& packages,
-                                           const std::vector<GameSong>& game) {
+                                           const std::vector<GameSong>& game,
+                                           const std::vector<LeftOutCopy>& left_out) {
+    const auto in_package = [&](const DtaSong& song, size_t p) {
+        const PackageSongs& package = packages[p];
+        return SongCopy{song, static_cast<int32_t>(p), true, package.path, package.size, package.songs.size(), false};
+    };
     std::vector<SongCopy> all;
     for (size_t p = 0; p < packages.size(); p++) {
-        for (const DtaSong& song : packages[p].songs) all.push_back({song, static_cast<int32_t>(p), true});
+        for (const DtaSong& song : packages[p].songs) all.push_back(in_package(song, p));
     }
 
     std::vector<DuplicateGroup> groups;
+    // copies of one package band3 left out, with the one it listed
+    std::map<std::string, size_t> by_path;
+    for (size_t p = 0; p < packages.size(); p++) by_path.emplace(packages[p].path, p);
+    std::map<size_t, std::vector<const LeftOutCopy*>> copies_of;
+    for (const LeftOutCopy& copy : left_out) {
+        if (const auto it = by_path.find(copy.kept); it != by_path.end()) copies_of[it->second].push_back(&copy);
+    }
+    for (const auto& [p, copies] : copies_of) {
+        const PackageSongs& kept = packages[p];
+        const DtaSong first = kept.songs.empty() ? DtaSong{} : kept.songs.front();
+        const size_t slash = kept.path.find_last_of("/\\");
+        DuplicateGroup group{DuplicateKind::kSameFile,
+                             slash == std::string::npos ? kept.path : kept.path.substr(slash + 1), {}};
+        group.copies.push_back(in_package(first, p));
+        for (const LeftOutCopy* copy : copies) {
+            group.copies.push_back({first, -1, false, copy->path, copy->size, kept.songs.size(),
+                                    copy->size != kept.size});
+        }
+        groups.push_back(std::move(group));
+    }
     // the same song_id: the first loaded is the game's
     std::map<int32_t, std::vector<size_t>> by_id;
     for (size_t i = 0; i < all.size(); i++) {
@@ -132,7 +158,7 @@ std::vector<DuplicateGroup> FindDuplicates(const std::vector<PackageSongs>& pack
     // the game's own songs: those whose song_id no package has
     for (const GameSong& song : game) {
         if (song.song_id && by_id.contains(song.song_id)) continue;
-        loaded.push_back({DtaSong{song.shortname, song.song_id, song.title, song.artist}, -1, true});
+        loaded.push_back({DtaSong{song.shortname, song.song_id, song.title, song.artist}, -1, true, {}, 0, 0, false});
     }
 
     // among what the game has: the same shortname, then the same artist and title
@@ -182,17 +208,16 @@ std::string FormatDuplicates(const std::vector<DuplicateGroup>& groups,
                ",\"copies\":[";
         for (size_t c = 0; c < group.copies.size(); c++) {
             const SongCopy& copy = group.copies[c];
-            const bool own = copy.package >= 0 && static_cast<size_t>(copy.package) < packages.size();
-            const PackageSongs* package = own ? &packages[copy.package] : nullptr;
             if (c) out += ',';
             out += "{\"shortname\":" + JsonString(copy.song.shortname) +
                    ",\"song_id\":" + std::to_string(copy.song.song_id) +
                    ",\"title\":" + JsonString(copy.song.title) +
                    ",\"artist\":" + JsonString(copy.song.artist) +
-                   ",\"file\":" + JsonString(package ? package->path : "") +
-                   ",\"songs_in_file\":" + std::to_string(package ? package->songs.size() : 0) +
-                   ",\"size\":" + std::to_string(package ? package->size : 0) +
-                   ",\"in_use\":" + (copy.in_use ? "true" : "false") + "}";
+                   ",\"file\":" + JsonString(copy.file) +
+                   ",\"songs_in_file\":" + std::to_string(copy.songs_in_file) +
+                   ",\"size\":" + std::to_string(copy.size) +
+                   ",\"in_use\":" + (copy.in_use ? "true" : "false") +
+                   ",\"differs\":" + (copy.differs ? "true" : "false") + "}";
         }
         out += "]}";
     }

@@ -39,6 +39,8 @@ struct Scan {
     std::unordered_map<std::string, const Package*> by_id;
     // the packages' files, so a file already listed isn't read again
     std::set<std::filesystem::path> paths;
+    // copies of listed packages, left out
+    std::vector<DroppedPackage> dropped;
 };
 
 Scan& TheScan() {
@@ -83,11 +85,12 @@ std::string Upper(std::string_view s) {
     return out;
 }
 
-void Finish(std::vector<Package> packages) {
+void Finish(std::vector<Package> packages, std::vector<DroppedPackage> dropped) {
     auto& scan = TheScan();
     bool late;
     {
         std::lock_guard lock(scan.mutex);
+        scan.dropped = std::move(dropped);
         scan.packages.assign(std::make_move_iterator(packages.begin()),
                              std::make_move_iterator(packages.end()));
         for (const auto& package : scan.packages) {
@@ -125,14 +128,16 @@ void RunScan(std::string setting) {
     }
 
     std::vector<std::string> problems;
-    auto packages = ScanFolders(folders, kRb3TitleIds, &problems);
+    std::vector<DroppedPackage> dropped;
+    auto packages = ScanFolders(folders, kRb3TitleIds, &problems, &dropped);
     for (const auto& problem : problems) REXLOG_WARN("content: {}", problem);
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - start)
                         .count();
     REXLOG_INFO("content: {} packages from {} in {} ms", packages.size(),
                 names.empty() ? "no folders" : names, ms);
-    Finish(std::move(packages));
+    if (!dropped.empty()) REXLOG_INFO("content: {} copies of packages left out", dropped.size());
+    Finish(std::move(packages), std::move(dropped));
 }
 
 // band3's mount of root_name, if any; g_mutex held
@@ -183,6 +188,12 @@ std::vector<Package> LivePackages() {
     return {};
 }
 
+std::vector<DroppedPackage> DroppedPackages() {
+    auto& scan = TheScan();
+    std::lock_guard lock(scan.mutex);
+    return scan.dropped;
+}
+
 const Package* FindLivePackage(std::string_view file_name) {
     auto& scan = TheScan();
     std::lock_guard lock(scan.mutex);
@@ -214,7 +225,10 @@ size_t AddLivePackages(const std::vector<std::filesystem::path>& files) {
             scan.paths.insert(package.path);
             // another file of a package already listed (a copy, or a newer
             // version): the game reads the one it has until the next launch
-            if (scan.by_id.contains(package.header.content_id)) continue;
+            if (const auto it = scan.by_id.find(package.header.content_id); it != scan.by_id.end()) {
+                scan.dropped.push_back({package.path, it->second->path});
+                continue;
+            }
             REXLOG_INFO("content: found {} ({})", rex::path_to_utf8(package.path),
                         package.header.content_id);
             scan.packages.push_back(std::move(package));

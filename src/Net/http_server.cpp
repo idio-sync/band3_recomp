@@ -251,7 +251,7 @@ std::string LibraryDuplicates(bool cors) {
             snapshot.status.game = true;
         }
     }
-    const auto groups = content::FindDuplicates(snapshot.packages, game);
+    const auto groups = content::FindDuplicates(snapshot.packages, game, snapshot.left_out);
     return Response(200, "application/json",
                     content::FormatDuplicates(groups, snapshot.packages, snapshot.status,
                                               snapshot.set_aside),

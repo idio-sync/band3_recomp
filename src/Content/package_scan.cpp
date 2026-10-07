@@ -1,6 +1,7 @@
 #include "package_scan.h"
 #include <algorithm>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <set>
 #include <system_error>
@@ -256,7 +257,8 @@ std::optional<Package> ReadPackage(const fs::path& path, std::span<const uint32_
 }
 
 std::vector<Package> ScanFolders(const std::vector<fs::path>& folders,
-                                 std::span<const uint32_t> title_ids, std::vector<std::string>* problems) {
+                                 std::span<const uint32_t> title_ids, std::vector<std::string>* problems,
+                                 std::vector<DroppedPackage>* dropped) {
     // one thread a folder, so a slow network folder doesn't hold up a local one
     std::vector<FolderScan> scans(folders.size());
     {
@@ -268,10 +270,17 @@ std::vector<Package> ScanFolders(const std::vector<fs::path>& folders,
     }
     // combined in the folders' order, so the first found of a content ID is still the first listed
     std::vector<Package> found;
-    std::set<std::string> seen;
+    std::map<std::string, fs::path> kept;  // content ID -> the file listed
     for (auto& scan : scans) {
         for (auto& package : scan.packages) {
-            if (seen.insert(package.header.content_id).second) found.push_back(std::move(package));
+            const auto [first, added] = kept.emplace(package.header.content_id, package.path);
+            if (added) {
+                found.push_back(std::move(package));
+                continue;
+            }
+            std::error_code ec;
+            const bool same = package.path == first->second || fs::equivalent(package.path, first->second, ec);
+            if (dropped && !same) dropped->push_back({package.path, first->second});
         }
         if (problems) problems->insert(problems->end(), scan.problems.begin(), scan.problems.end());
     }
