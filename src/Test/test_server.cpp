@@ -54,6 +54,7 @@
 #include "src/Input/keyboard_search_driver.h"
 #include "src/Input/midi_keys_driver.h"
 #include "src/Input/mouse_menus_driver.h"
+#include "src/Input/ui_round_trip.h"
 #include "src/Input/virtual_instrument.h"
 #include "src/Input/xinput_state.h"
 #include "src/Net/home_assistant.h"
@@ -524,6 +525,8 @@ public:
         out.skipped = paints.log.skipped;
         out.latency_ms = std::move(paints.log.latency_ms);
         out.publish_latency_ms = std::move(paints.log.publish_latency_ms);
+        const input::UiRoundTripStats trips = input::GetUiRoundTripStats(reset);
+        out.ui_round_trip = {trips.runs, trips.p50, trips.p95, trips.max};
         // the intervals are the stretch's last few thousand only (the ones
         // GamePresentTimes keeps); its frames are all of them, counted
         const auto presents = render::GamePresentTimes(paints.since);
@@ -1202,6 +1205,8 @@ public:
             return;
         }
         target_ = std::make_unique<GameTarget>(runtime, app_context, window, stopping_);
+        // present_stats' ui_round_trip, while the harness can ask for it
+        input::StartUiRoundTripProbe(app_context);
         stopping_ = false;
         thread_ = std::thread([this] { Run(); });
         REXLOG_INFO("Test server: listening on 127.0.0.1:{}", g_port);
@@ -1209,6 +1214,7 @@ public:
 
     void Stop() {
         if (!thread_.joinable()) return;
+        input::StopUiRoundTripProbe();
         stopping_ = true;
         thread_.join();
         CloseSocket(listener_);

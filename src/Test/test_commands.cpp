@@ -637,9 +637,17 @@ std::string PresentJson(const PresentStats& s) {
     AppendJsonString(out, s.cap.mode);
     char cap[192];
     std::snprintf(cap, sizeof(cap),
-                  ",\"hz\":%.2f,\"late\":%llu,\"resets\":%llu,\"wait_ms\":%.3f,\"spin_ms\":%.3f}}}",
+                  ",\"hz\":%.2f,\"late\":%llu,\"resets\":%llu,\"wait_ms\":%.3f,\"spin_ms\":%.3f}}",
                   s.cap.hz, static_cast<unsigned long long>(s.cap.late),
                   static_cast<unsigned long long>(s.cap.resets), s.cap.wait_ms, s.cap.spin_ms);
+    out += cap;
+    const PresentStats::UiRoundTrip& trip = s.ui_round_trip;
+    std::snprintf(cap, sizeof(cap),
+                  ",\"ui_round_trip\":{\"runs\":%llu,\"runs_per_s\":%.1f,\"p50\":%.2f,"
+                  "\"p95\":%.2f,\"max\":%.2f}}",
+                  static_cast<unsigned long long>(trip.runs),
+                  seconds > 0 ? double(trip.runs) / seconds : 0.0, trip.p50_ms, trip.p95_ms,
+                  trip.max_ms);
     out += cap;
     return out;
 }

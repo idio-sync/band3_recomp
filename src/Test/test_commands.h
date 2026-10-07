@@ -279,6 +279,13 @@ struct PresentStats {
         uint64_t late = 0, resets = 0;
         double wait_ms = 0, spin_ms = 0;
     } cap;
+    // the UI thread's round trips from the game's joypad thread in the same
+    // time (src/Input/ui_round_trip.h): how many, and their p50, p95 and
+    // longest, in ms; what an SDL pad's state waits for
+    struct UiRoundTrip {
+        uint64_t runs = 0;
+        double p50_ms = 0, p95_ms = 0, max_ms = 0;
+    } ui_round_trip;
 };
 
 // a setting's value as the game has it, and what set it

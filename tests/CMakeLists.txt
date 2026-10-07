@@ -45,6 +45,7 @@ add_executable(band3_tests
     game_status_test.cpp
     player_slots_test.cpp
     test_commands_test.cpp
+    ui_round_trip_test.cpp
     test_inputs_test.cpp
     capture_file_test.cpp
     shade_model_test.cpp

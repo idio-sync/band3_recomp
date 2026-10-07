@@ -1644,6 +1644,7 @@ TEST_CASE("present_stats reports the window's paints, the native frames and the 
     game.present.game_ms.assign(20, 16.7);
     game.present.cap = {.mode = "display", .hz = 119.88, .late = 4, .resets = 1,
                         .wait_ms = 2.5, .spin_ms = 0.4};
+    game.present.ui_round_trip = {.runs = 5000, .p50_ms = 0.25, .p95_ms = 1.5, .max_ms = 16.9};
     std::string reply = RunCommand("present_stats", game);
     CHECK(Ok(reply));
     CHECK(Has(reply, "\"renderer\":\"native\",\"path\":\"zero-copy\""));
@@ -1657,7 +1658,10 @@ TEST_CASE("present_stats reports the window's paints, the native frames and the 
                      "\"p50\":10.00,\"p95\":12.00,\"max\":12.00}},\"game\""));
     CHECK(Has(reply, "\"game\":{\"frames\":1196,\"fps\":59.8"));
     CHECK(Has(reply, "\"hitches\":0,\"cap\":{\"mode\":\"display\",\"hz\":119.88,\"late\":4,"
-                     "\"resets\":1,\"wait_ms\":2.500,\"spin_ms\":0.400}}}"));
+                     "\"resets\":1,\"wait_ms\":2.500,\"spin_ms\":0.400}}"));
+    // the UI thread's round trips, per second of the stretch
+    CHECK(Has(reply, "\"spin_ms\":0.400}},\"ui_round_trip\":{\"runs\":5000,\"runs_per_s\":250.0,"
+                     "\"p50\":0.25,\"p95\":1.50,\"max\":16.90}}"));
     CHECK(game.present_resets == 0);
 
     // reset replies with the stretch it ends, then starts over

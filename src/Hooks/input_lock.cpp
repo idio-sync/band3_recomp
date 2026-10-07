@@ -1,6 +1,9 @@
 #include <rex/hook.h>
 #include <rex/input/input.h>
 #include <rex/types.h>
+#include <rex/ui/windowed_app_context.h>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -10,18 +13,65 @@
 #include "src/Input/input_system.h"
 #include "src/Input/menu_shortcut.h"
 #include "src/Input/mouse_menus_driver.h"
+#include "src/Input/ui_round_trip.h"
 
 // Serializes the game's calls into the SDK's input system (see input_lock.h).
 // These are the only guest functions that call XamInputGetState,
 // XamInputGetCapabilities or XamInputSetState: the XInput library's wrappers.
 // Each player's state and type, as the game reads them, also go to the menu
-// shortcut (menu_shortcut.h).
+// shortcut (menu_shortcut.h), and each read times the UI thread under the
+// test harness (ui_round_trip.h).
 
 namespace band3::input {
 
 std::recursive_mutex& InputLock() {
     static std::recursive_mutex lock;
     return lock;
+}
+
+// The UI thread's round trips (ui_round_trip.h): one request on its way at a
+// time, as the SDL driver's pump is, so it waits where the pump would
+namespace {
+std::atomic<rex::ui::WindowedAppContext*> g_probe_context{nullptr};
+std::atomic<bool> g_probe_in_flight{false};
+std::mutex g_probe_mutex;
+UiRoundTripHistogram g_probe_trips;
+}
+
+void StartUiRoundTripProbe(rex::ui::WindowedAppContext* app_context) {
+    g_probe_context.store(app_context);
+}
+
+void StopUiRoundTripProbe() { g_probe_context.store(nullptr); }
+
+void ProbeUiRoundTrip() {
+    rex::ui::WindowedAppContext* context = g_probe_context.load(std::memory_order_acquire);
+    if (!context || g_probe_in_flight.load(std::memory_order_relaxed) ||
+        g_probe_in_flight.exchange(true, std::memory_order_acquire))
+        return;
+    const auto sent = std::chrono::steady_clock::now();
+    const bool queued = context->CallInUIThread([sent] {
+        const double ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sent)
+                .count();
+        {
+            std::lock_guard<std::mutex> lock(g_probe_mutex);
+            g_probe_trips.Add(ms);
+        }
+        g_probe_in_flight.store(false, std::memory_order_release);
+    });
+    if (!queued) g_probe_in_flight.store(false, std::memory_order_release);
+}
+
+UiRoundTripStats GetUiRoundTripStats(bool reset) {
+    std::lock_guard<std::mutex> lock(g_probe_mutex);
+    UiRoundTripStats out;
+    out.runs = g_probe_trips.Count();
+    out.p50 = g_probe_trips.Percentile(0.5);
+    out.p95 = g_probe_trips.Percentile(0.95);
+    out.max = g_probe_trips.Max();
+    if (reset) g_probe_trips.Reset();
+    return out;
 }
 
 }
@@ -56,6 +106,7 @@ extern "C" REX_FUNC(rex_sub_8283FB80) {
     std::optional<uint16_t> buttons;
     if (read) buttons = read->gamepad.buttons;
     band3::input::GameChordPads().OnState(user, buttons, band3::input::ChordPads::Clock::now());
+    band3::input::ProbeUiRoundTrip();
 }
 
 // XInputGetCapabilities(user, flags, caps): XamInputGetCapabilities. The game

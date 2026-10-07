@@ -126,10 +126,13 @@ launcher's buttons (it has to be `offscreen` to see them); `status` prints where
 | `published`, `publish_latency_ms` | the frames the native renderer handed the window, and the time from Present to handing it over, painted or not, so it measures off every monitor too |
 | `game` | the game's `frames` and `fps` over the whole stretch, and its intervals (`ms`) and `hitches` over the last 8192 frames (about 136 s at 60 Hz) |
 | `cap` | the frame cap's `mode` (`off`, `display`, `auto` or `fixed`) and `hz`, and in the same time the frames that ended `late` for their beat, the `resets` (a frame more than a beat late, which starts the beat again), and the mean a frame waited for its beat (`wait_ms`) and spun at the end of that wait (`spin_ms`) |
+| `ui_round_trip` | how long the UI thread took to run something the game's joypad thread asked of it, after each time the game read a player (one request on its way at a time): `runs`, `runs_per_s`, and `p50`, `p95` and `max` in ms (a percentile to the quarter millisecond; over 64 ms it reads as `max`). The SDK's SDL input driver pumps SDL's events on the UI thread the same way, so an SDL pad's state is this old on top of its own polling; the other drivers (`input_backend` xinput, the HID instruments, the virtual instrument, MIDI) don't wait for it. Only under the test harness, which starts it |
 
 A minimized window doesn't paint: `window offscreen` first. Off every monitor a window has no
 real vertical blank, so its numbers compare renderers rather than measure what a monitor
-would show.
+would show. The same goes for `ui_round_trip`, which follows the window's paints: over
+Remote Desktop the UI thread got round about 32 times a second with either renderer, the
+round trips about 29 ms (p50), so measure it on the machine's own display.
 
 ## Players and online tests
 
