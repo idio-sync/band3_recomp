@@ -66,6 +66,8 @@ add_executable(band3_tests
     online_test.cpp
     liveless_rooms_protocol_test.cpp
     liveless_rooms_client_test.cpp
+    mqtt_protocol_test.cpp
+    mqtt_client_test.cpp
     port_mapping_protocol_test.cpp
     native_socket_test.cpp
     frame_pacing_test.cpp
@@ -117,6 +119,8 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Net/album_art.cpp
     ${BAND3_ROOT}/src/Net/liveless_rooms_client.cpp
     ${BAND3_ROOT}/src/Net/liveless_rooms_protocol.cpp
+    ${BAND3_ROOT}/src/Net/mqtt_client.cpp
+    ${BAND3_ROOT}/src/Net/mqtt_protocol.cpp
     ${BAND3_ROOT}/src/Net/native_socket.cpp
     ${BAND3_ROOT}/src/Net/online.cpp
     ${BAND3_ROOT}/src/Net/port_mapping_protocol.cpp
