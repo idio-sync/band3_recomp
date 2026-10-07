@@ -269,6 +269,24 @@ class RhythmVerseTest(unittest.TestCase):
             ('tier[]', '1'), ('tier[]', '2'), ('tier[]', '3')])
 
 
+class FakeDuplicatesTest(unittest.TestCase):
+    """The made-up /library/duplicates, as band3's tests/song_inventory_test.cpp
+    checks the real one's fields."""
+
+    def test_reads_a_while_then_has_one_group_of_each_kind(self):
+        reading = web_preview.fake_duplicates(0, 1)
+        self.assertTrue(reading['reading'])
+        self.assertLess(reading['read'], reading['total'])
+        self.assertEqual(reading['groups'], [])
+        done = web_preview.fake_duplicates(0, 60)
+        self.assertFalse(done['reading'])
+        self.assertTrue(done['game'])
+        self.assertEqual([g['kind'] for g in done['groups']], ['song_id', 'shortname', 'similar'])
+        for key in ('shortname', 'song_id', 'title', 'artist', 'file', 'songs_in_file', 'size', 'in_use'):
+            self.assertIn(key, done['groups'][0]['copies'][0])
+        self.assertEqual([c['in_use'] for c in done['groups'][0]['copies']], [True, False])
+
+
 class FakeUpdatesTest(unittest.TestCase):
     """The made-up /rv/updates and /rv/check, as the page reads them."""
 

@@ -185,6 +185,8 @@ Library, which has to be open. **Filters** narrows it to songs with keys, pro pa
 harmonies, under a difficulty for each part, or in some genres or decades (kept on that
 device); tapping a song shows its details, and **Random** picks one of those showing. A
 banner says what the game is doing: during a song, which, how far in, and the score.
+**Duplicates** lists the songs that are in more than one package, or clash with the game's
+own (see [Duplicate songs](#duplicate-songs)).
 Windows asks once whether to let band3 through the firewall; allow it on private networks
 for other devices to reach it.
 
@@ -204,6 +206,7 @@ band3 adds its own, which RB3E doesn't have:
 | Endpoint | |
 |---|---|
 | `/song_details` | every listed song's `genre` (as the Music Library names it), `year`, `length_ms`, `vocal_parts` and `tiers`, the difficulty of each part it has (`band`, `guitar`, `bass`, `drum`, `vocals`, `keys`, `real_guitar`, `real_bass`, `real_keys`) from 0 (Warmup) to 6 (Impossible), as JSON by shortname |
+| `/library/duplicates` | the [duplicate songs](#duplicate-songs) as JSON: `reading` (the packages are being read; ask again), `read` and `total` packages, `unreadable` (packages whose songs.dta couldn't be read), `game` (the game's own songs were compared; false while it's busy, and just after it starts, until it has loaded them) and `groups`, each a `kind` (`song_id`, `shortname` or `similar`), its `key` and its `copies`: `shortname`, `song_id`, `title`, `artist`, `file` (the package; empty for the game's own songs), `songs_in_file`, `size` and `in_use` |
 | `/status` | what the game is doing, as JSON: `screen`, `in_library` (the Music Library is open, so `/jump` can select), `ha_state` (the [Home Assistant](#connection-state) connection) and `playing`, during a song its `shortname`, `title`, `artist`, `score`, `position_ms` (null until the song starts) and `length_ms`, else null |
 | `/album_art?shortname=<name>` | the song's album art as a JPEG, read as the game reads it for the Music Library (from the ARK, or a loose file that replaces it); 404 when the song has none, or no song has that shortname |
 | `/rv/search?text=<text>&page=<n>` | a page of 25 of [RhythmVerse](https://rhythmverse.co)'s Rock Band 3 (Xbox) songs matching the text, or its newest without, as JSON (`total`, `page`, `page_size`, `songs`). Each song has its `file_id`, details, `tiers` (as `/song_details`), `song_id`, `download` (band3 can download it), `downloaded` (its file is in the content folders), `in_library` (null while the game is busy) and `update` (`available`, `pending` or empty). Optional: `sort=` `newest`, `updated`, `downloads`, `title`, `artist` or `length`; `downloadable=1`; `has=` parts (`keys`, `real_guitar`...); `harmonies=1`; `genre=metal,rock`; `decade=1990,2000`; `cap=<part>:<tier>` for a part's difficulty at most |
@@ -224,6 +227,26 @@ refresh, without a rebuild; **Select** can't work there, and `/status` says what
 `--status` (`menu`, `library` or `playing`) tells it to. Its RhythmVerse tab searches
 RhythmVerse, but its downloads are made up and save nothing, and its updates are two
 made-up songs.
+
+### Duplicate songs
+
+The same song often ends up in more than one package: a single and a pack, two versions
+of a chart, a download and a copy made by hand. The Library tab's **Duplicates** reads
+the `songs.dta` of every package band3 has (in the background, the first time, then only
+new and changed packages; band3 keeps what it read in `band3_package_songs.json` in the
+user data root) and lists three kinds:
+
+- **Same song ID**: the game takes the first of these it loads, in band3's order (the
+  content folders' order, then by file name), and leaves the rest out without a word.
+  The one it has is **In use**, the rest **Left out**.
+- **Same shortname**, with different song IDs: the game has them all, but what finds a
+  song by its shortname, as **Select** does, finds only one. A custom song that takes a
+  disc song's shortname shows here too.
+- **Same artist and title**, by letters and digits: other charts of the same song, maybe,
+  which the game has all of.
+
+Nothing is changed: to leave a copy out, move it out of the content folders, or rename it
+to end in `.replaced`, which band3 passes over.
 
 ### RhythmVerse
 

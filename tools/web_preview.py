@@ -8,7 +8,8 @@ the title update's archive (patch_xbox.hdr), then the main one. Select can't
 work without the game; it answers 409. /status makes up what the game is doing
 (--status), to work on the page's banner. The RhythmVerse tab searches
 RhythmVerse itself, but its downloads are made up: nothing is saved. So are its
-updates: two made-up songs, whatever Check for updates finds.
+updates: two made-up songs, whatever Check for updates finds; and the Library
+tab's Duplicates, made up after a couple of seconds' "reading".
 
 Usage:
   python tools/web_preview.py                 open http://127.0.0.1:21080/
@@ -399,6 +400,37 @@ class FakeUpdates:
                 'downloads': 12, 'updates': updates}
 
 
+def fake_duplicates(started, now):
+    """band3's /library/duplicates, made up: the packages take a few seconds to
+    read, then show one group of each kind."""
+    total = 240
+    read = min(total, int((now - started) * 120))
+
+    def copy(shortname, song_id, title, artist, file, songs=1, in_use=True):
+        return {'shortname': shortname, 'song_id': song_id, 'title': title, 'artist': artist,
+                'file': file, 'songs_in_file': songs if file else 0,
+                'size': 8 * 1048576 * songs if file else 0, 'in_use': in_use}
+
+    groups = [
+        {'kind': 'song_id', 'key': '2133017793', 'copies': [
+            copy('GTAVITheme', 2133017793, 'Welcome To Vice City', 'Rockstar Games',
+                 'songs\\GTAVITheme_rb3con'),
+            copy('GTAVIThemeV2', 2133017793, 'Welcome To Vice City', 'Rockstar Games',
+                 'songs\\packs\\Rockstar Pack_rb3con', songs=12, in_use=False)]},
+        {'kind': 'shortname', 'key': 'crazytrain', 'copies': [
+            copy('crazytrain', 2133017799, 'Crazy Train (Live)', 'Ozzy Osbourne',
+                 'songs\\CrazyTrainLive_rb3con'),
+            copy('crazytrain', 1012, 'Crazy Train', 'Ozzy Osbourne', '')]},
+        {'kind': 'similar', 'key': 'Deftones - cut hands', 'copies': [
+            copy('cut_hands', 2131221630, 'cut hands', 'Deftones', 'songs\\cut_hands_rb3con'),
+            copy('cuthands2', 2131221999, 'Cut Hands', 'Deftones', 'songs\\Deftones Pack_rb3con',
+                 songs=5)]},
+    ]
+    reading = read < total
+    return {'reading': reading, 'read': read, 'total': total, 'unreadable': 1, 'game': not reading,
+            'groups': [] if reading else groups}
+
+
 def _from565(c):
     return [(c >> 11) * 255 // 31, ((c >> 5) & 63) * 255 // 63, (c & 31) * 255 // 31, 255]
 
@@ -604,6 +636,9 @@ def handler(preview):
                 self.reply(status, 'application/json' if status == 200 else text, body.encode())
             elif path == '/rv/downloads':
                 self.reply(200, 'application/json', json.dumps(preview.downloads.report()).encode())
+            elif path == '/library/duplicates':
+                report = fake_duplicates(preview.started, time.monotonic())
+                self.reply(200, 'application/json', json.dumps(report).encode())
             elif path == '/rv/updates':
                 self.reply(200, 'application/json', json.dumps(preview.updates.report()).encode())
             else:

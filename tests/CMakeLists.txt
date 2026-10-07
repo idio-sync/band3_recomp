@@ -65,6 +65,7 @@ add_executable(band3_tests
     package_scan_test.cpp
     json_test.cpp
     rhythmverse_test.cpp
+    song_inventory_test.cpp
     song_id_test.cpp
     online_test.cpp
     liveless_rooms_protocol_test.cpp
@@ -95,6 +96,8 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp
+    ${BAND3_ROOT}/src/Content/song_dta.cpp
+    ${BAND3_ROOT}/src/Content/song_inventory.cpp
     ${BAND3_ROOT}/src/Game/song_id.cpp
     ${BAND3_ROOT}/src/Input/hid_capture.cpp
     ${BAND3_ROOT}/src/Input/hid_instrument_types.cpp

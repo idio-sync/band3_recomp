@@ -41,6 +41,7 @@
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include "src/config.h"
+#include "src/Content/package_songs.h"
 #include "src/game_writes.h"
 #include "src/settings.h"
 #include "src/Test/game_state.h"
@@ -202,6 +203,57 @@ std::optional<std::string> SongDetailsJson() {
 
 std::string Busy(bool cors) {
     return Response(503, kText, "The game is busy, try again", cors);
+}
+
+// The game's songs with their IDs, for /library/duplicates, read a chunk a
+// frame as /song_details' are, and kept while the list of IDs is the same
+std::mutex g_game_songs_mutex;
+std::vector<int32_t> g_game_song_ids;
+std::vector<content::GameSong> g_game_songs;
+
+// nullopt when the game is busy
+std::optional<std::vector<content::GameSong>> GameSongs() {
+    std::lock_guard lock(g_game_songs_mutex);
+    std::vector<int32_t> ids;
+    if (!RunOnGameThread([&ids](PPCContext& ctx, uint8_t* base) { ids = game::RankedIds(ctx, base); })) {
+        return std::nullopt;
+    }
+    if (!g_game_song_ids.empty() && ids == g_game_song_ids) return g_game_songs;
+    std::vector<content::GameSong> songs;
+    for (size_t at = 0; at < ids.size(); at += kDetailsChunk) {
+        const std::vector<int32_t> chunk(ids.begin() + at,
+                                         ids.begin() + std::min(at + kDetailsChunk, ids.size()));
+        if (!RunOnGameThread([&songs, &chunk](PPCContext& ctx, uint8_t* base) {
+                for (const int32_t id : chunk) {
+                    if (auto song = game::Song(ctx, base, id)) {
+                        songs.push_back({song->shortname, id, song->title, song->artist});
+                    }
+                }
+            })) {
+            return std::nullopt;
+        }
+    }
+    g_game_songs = std::move(songs);
+    g_game_song_ids = std::move(ids);
+    return g_game_songs;
+}
+
+// /library/duplicates: the packages' songs, read in the background the first
+// time (the page asks again until they're read), and the game's own
+std::string LibraryDuplicates(bool cors) {
+    content::PackageSongsSnapshot snapshot = content::CurrentPackageSongs();
+    std::vector<content::GameSong> game;
+    // not while they're read: the page is asking every second then. None at
+    // all is the song manager not done loading, just after the game starts.
+    if (!snapshot.status.reading) {
+        if (auto songs = GameSongs(); songs && !songs->empty()) {
+            game = std::move(*songs);
+            snapshot.status.game = true;
+        }
+    }
+    const auto groups = content::FindDuplicates(snapshot.packages, game);
+    return Response(200, "application/json",
+                    content::FormatDuplicates(groups, snapshot.packages, snapshot.status), cors);
 }
 
 // Album art sent so far, as JPEGs by shortname, so a page scrolled back and
@@ -439,6 +491,8 @@ std::string Handle(const Request& request) {
             }
             return Busy(cors);
         }
+        case Endpoint::kDuplicates:
+            return LibraryDuplicates(cors);
         case Endpoint::kAlbumArt: {
             bool busy = false;
             if (auto jpeg = AlbumArt(route.argument, busy)) {

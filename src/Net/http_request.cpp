@@ -179,6 +179,8 @@ Route MatchRoute(std::string_view target) {
         route.endpoint = Endpoint::kStatus;
     } else if (path == "/song_details") {
         route.endpoint = Endpoint::kSongDetails;
+    } else if (path == "/library/duplicates") {
+        route.endpoint = Endpoint::kDuplicates;
     } else if (path.starts_with("/song_")) {
         const char* begin = path.data() + 6;
         const char* end = path.data() + path.size();

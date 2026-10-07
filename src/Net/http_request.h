@@ -45,6 +45,7 @@ enum class Endpoint {
     kAlbumArt,   // /album_art?shortname=  a song's album art (band3's, not RB3E's)
     kStatus,     // /status            what the game is doing (band3's)
     kSongDetails,  // /song_details    every song's genre, year, parts... (band3's)
+    kDuplicates,   // /library/duplicates  songs that are in more than one package (band3's)
     // RhythmVerse (band3's; src/Net/rhythmverse.h)
     kRvSearch,     // /rv/search?text=&page=  a page of RhythmVerse's songs
     kRvDownload,   // POST /rv/download {"file_id": ...}  download one to the songs folder

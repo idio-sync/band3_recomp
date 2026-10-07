@@ -96,6 +96,14 @@ button.dl { min-width: 104px; }
 .updates-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0; font-size: 14px; color: var(--muted); }
 .updates-bar span { flex: 1; min-width: 12em; }
 .updates-bar button { padding: 7px 12px; }
+/* a song in more than one package: each copy, and whether the game has it */
+.dupe {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px;
+  padding: 6px 0; border-top: 1px solid var(--line);
+}
+.dupe .title, .dupe .sub { grid-column: 1; }
+.dupe .tag { display: inline; grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+.sheet h3 .key { text-transform: none; letter-spacing: 0; }
 
 /* what the game is doing, from band3's /status */
 #banner {
@@ -226,6 +234,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
       </select>
       <button id="filter" class="plain" hidden>Filters</button>
       <button id="random" class="plain">Random</button>
+      <button id="dupes" class="plain" hidden>Duplicates</button>
     </span>
     <span id="rv-tools" hidden>
       <select id="rv-sort" aria-label="Sort RhythmVerse by">
@@ -561,6 +570,78 @@ function partsGrid(tiers) {
   }
   return parts;
 }
+
+// ---- duplicates: songs in more than one package, and clashes with the
+// game's own (band3's /library/duplicates), read from the packages in the
+// background the first time
+let dupes = null, dupesTimer = null, dupesWaits = 0;
+const DUPE_KINDS = {
+  song_id: ["Same song ID", "The game takes the first of these it loads and leaves the rest out."],
+  shortname: ["Same shortname", "The game has all of these, but what finds a song by its shortname (Select, here) finds only one."],
+  similar: ["Same artist and title", "Other charts of the same song, maybe: the game has them all."],
+};
+
+async function loadDupes() {
+  clearTimeout(dupesTimer);
+  try {
+    const r = await fetch("/library/duplicates");
+    if (!r.ok) return;
+    dupes = await r.json();
+  } catch (e) {
+    return;
+  }
+  const n = dupes.groups.filter(g => g.kind !== "similar").length;
+  $("dupes").hidden = false;
+  $("dupes").textContent = dupes.reading ? "Duplicates…" : n ? "Duplicates (" + n + ")" : "Duplicates";
+  if ($("sheet").open && $("sheet").dataset.view === "dupes") showDupes();
+  // the packages being read, or the game not done loading its songs (just
+  // after it starts), for a minute or so at most
+  if (dupes.reading) dupesTimer = setTimeout(loadDupes, 1000);
+  else if (!dupes.game && ++dupesWaits <= 20) dupesTimer = setTimeout(loadDupes, 3000);
+}
+
+function showDupes() {
+  const body = $("sheet-body");
+  body.replaceChildren(el("h2", "", "Duplicates"));
+  const notes = [];
+  if (dupes.reading) notes.push(`Reading the song packages: ${dupes.read.toLocaleString()} of ${dupes.total.toLocaleString()}…`);
+  else if (!dupes.groups.length) notes.push("No song is in more than one package.");
+  if (dupes.unreadable) notes.push((dupes.unreadable === 1 ? "1 package's" : dupes.unreadable + " packages'") + " songs couldn't be read.");
+  if (!dupes.reading && !dupes.game) notes.push("The game hasn't said what songs it has yet (it's busy, or still loading them), so its own songs aren't compared yet.");
+  for (const note of notes) body.append(el("div", "facts", note));
+  for (const g of dupes.groups) {
+    const [label, why] = DUPE_KINDS[g.kind];
+    // the key as it is: shortnames are told apart by case
+    const heading = el("h3", "", g.kind === "similar" ? label : label + ": ");
+    if (g.kind !== "similar") heading.append(el("span", "key", g.key));
+    body.append(heading, el("div", "facts", why));
+    for (const c of g.copies) {
+      const row = el("div", "dupe");
+      const where = c.file
+        ? c.file.split(/[\\/]/).pop() + (c.songs_in_file > 1 ? " (a pack of " + c.songs_in_file + ")" : "") + " · " + megabytes(c.size)
+        : "The game's own songs";
+      const sub = el("div", "sub", c.shortname + " · " + where);
+      if (c.file) sub.title = c.file;
+      row.append(el("div", "title", c.title + " – " + c.artist), sub);
+      if (g.kind === "song_id") row.append(el("span", c.in_use ? "tag have" : "tag", c.in_use ? "In use" : "Left out"));
+      body.append(row);
+    }
+  }
+  const actions = el("div", "actions");
+  const close = el("button", "plain", "Close");
+  close.onclick = () => $("sheet").close();
+  actions.append(close);
+  body.append(actions);
+}
+
+$("dupes").onclick = () => {
+  dupesWaits = 0;
+  $("sheet").dataset.view = "dupes";
+  showDupes();
+  if (!$("sheet").open) $("sheet").showModal();
+  loadDupes();
+};
+$("sheet").addEventListener("close", () => { $("sheet").dataset.view = ""; });
 
 function pickRandom() {
   if (!matches.length) { toast("No songs to pick from"); return; }
@@ -1202,6 +1283,7 @@ async function load() {
       loadDetails(true);
       pollStatus();
       initRhythmVerse();
+      loadDupes();
     }
   } catch (e) {
     $("message").textContent = "Couldn't load the songs: " + e.message + " ";
