@@ -556,6 +556,14 @@ REXCVAR_DEFINE_BOOL(native_gpu_timestamps, false, "Band3/Advanced/Native rendere
     "harness's numbers. Direct3D 12 only. On costs a few dozen timestamps a frame, 0.1 to "
     "0.2 ms of the frame's wait for the GPU, so it's off unless measuring");
 
+REXCVAR_DEFINE_BOOL(native_bc_textures, true, "Band3/Advanced/Native renderer",
+    "Keep RB3's compressed textures (DXT1, DXT3, DXT5, DXN) compressed on the GPU, as BC1, BC2, "
+    "BC3 and BC5, where it has those formats: the native renderer decodes a song's or a shot's "
+    "new textures in a fraction of the time, and they take a quarter to an eighth of the video "
+    "memory, upload and bandwidth. The picture differs only by the GPU's decoder rounding a "
+    "colour by a step or two. Off decodes them to RGBA as before, to compare; applies to "
+    "textures seen after the change");
+
 REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Advanced/Native renderer",
     "Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, "
     "for the native view (experimental), even while it's off: some are drawn once, in the "

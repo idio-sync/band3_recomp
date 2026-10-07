@@ -1,7 +1,9 @@
 #include "src/Render/gpu_view.h"
 
+#include "src/Render/deferred_decode.h"
 #include "src/Render/frame_compose.h"
 #include "src/Render/gamma_ramp.h"
+#include "src/Render/guest_formats.h"
 #include "src/Render/post_model.h"
 #include "src/Render/sample_model.h"
 #include "src/Render/shade_model.h"
@@ -129,7 +131,9 @@ struct PixelUniforms {
     // each one's own width and height: the five before the normal map, then
     // the shadow map's, the normal map's and the detail map's
     uint32_t tex_size[8][4];
-    uint32_t flags[4];  // x: kPremultiply
+    // x: kPremultiply; y: the maps, by tex_layer's order, that are DXN kept
+    // as BC5 (mesh.hlsl's DxnTexel)
+    uint32_t flags[4];
     // the samplers they're read with (sample_model.h's PackSampler), in
     // tex_layer's order
     uint32_t tex_sampler[8][4];
@@ -278,9 +282,20 @@ std::string FormatNames(SDL_GPUShaderFormat f) {
 uint32_t Align(uint32_t v, uint32_t a) { return (v + a - 1) / a * a; }
 
 // how many of a texture's levels the GPU gets: level 0 and the mips after it
-// that are the size they should be
-uint32_t LevelsOf(const Texture& t) {
+// that are the size they should be; of its blocks (Texture::blocks), with
+// `blocks`
+uint32_t LevelsOf(const Texture& t, bool blocks = false) {
     uint32_t n = 1;
+    if (blocks) {
+        for (const auto& level : t.blocks->mips) {
+            if (level.size() != guest_format::LevelBlockBytes(t.blocks->format,
+                                                              std::max(t.width >> n, 1u),
+                                                              std::max(t.height >> n, 1u)))
+                break;
+            n++;
+        }
+        return n;
+    }
     for (const auto& level : t.mips) {
         const size_t texels =
             size_t(std::max(t.width >> n, 1u)) * std::max(t.height >> n, 1u);
@@ -289,6 +304,31 @@ uint32_t LevelsOf(const Texture& t) {
     }
     return n;
 }
+
+// Block-compressed textures kept as blocks (RasterOptions::bc_textures): the
+// GPU's format for each Xenos one (BlockPixels::format), INVALID for the rest.
+// Its Load gives a texel as guest_formats.h's DecodeBlock does, but BC5's
+// (x, y, 0, 1) for DecodeBlock's (x, y, y, y): mesh.hlsl's DxnTexel puts y
+// back in z and w (PixelUniforms::flags[1]).
+SDL_GPUTextureFormat BcFormat(uint32_t xenos_format) {
+    switch (xenos_format) {
+        case 18: return SDL_GPU_TEXTUREFORMAT_BC1_RGBA_UNORM;
+        case 19: return SDL_GPU_TEXTUREFORMAT_BC2_RGBA_UNORM;
+        case 20: return SDL_GPU_TEXTUREFORMAT_BC3_RGBA_UNORM;
+        case 49: return SDL_GPU_TEXTUREFORMAT_BC5_RG_UNORM;
+        default: return SDL_GPU_TEXTUREFORMAT_INVALID;
+    }
+}
+bool IsBc(SDL_GPUTextureFormat f) {
+    return f == SDL_GPU_TEXTUREFORMAT_BC1_RGBA_UNORM || f == SDL_GPU_TEXTUREFORMAT_BC2_RGBA_UNORM ||
+           f == SDL_GPU_TEXTUREFORMAT_BC3_RGBA_UNORM || f == SDL_GPU_TEXTUREFORMAT_BC5_RG_UNORM;
+}
+// the bytes of one of a format's 4x4 blocks (BC), or of a texel (RGBA8)
+uint32_t BlockBytes(SDL_GPUTextureFormat f) {
+    return f == SDL_GPU_TEXTUREFORMAT_BC1_RGBA_UNORM ? 8 : IsBc(f) ? 16 : 4;
+}
+// the bits a texel of a texture array takes: what its megabytes count
+uint32_t TexelBits(SDL_GPUTextureFormat f) { return IsBc(f) ? BlockBytes(f) * 8 / 16 : 32; }
 
 // index counts are kept even, so every copy of indices is whole 4-byte words
 uint32_t IndexSlots(const Geometry& g) { return Align(uint32_t(g.indices.size()), 2); }
@@ -334,6 +374,16 @@ struct GpuRenderer::Impl {
     // whether the device draws into and samples R32_FLOAT, the shadow maps'
     // format; without, the characters are drawn without their self-shadows
     bool shadow_maps = false;
+    // whether the device samples BC1, BC2, BC3 and BC5 texture arrays (all
+    // four, checked at Create), so RasterOptions::bc_textures can keep
+    // textures as blocks; and this frame's choice (Render), which UseTexture
+    // places new textures by
+    bool bc_formats = false;
+    bool bc_now = false;
+    // Direct3D 12 copies a BC texture's regions by its "physical" size, whole
+    // blocks, even a level under 4 texels on a side; Vulkan's (and Metal's)
+    // end at the level's edge (BcExtent)
+    bool bc_whole_blocks = false;
     // post.hlsl's: the full-screen triangle; the resolve, the scene into the
     // picture as it is; and post-processing's downsample, blur, glare pass
     // and composite
@@ -602,9 +652,12 @@ struct GpuRenderer::Impl {
     };
     std::unordered_map<const Geometry*, Mesh> meshes;
 
-    // the textures of a size class, a layer each
+    // the textures of a size class and format, a layer each: RGBA8, or a BC
+    // format for those kept as blocks (BcFormat)
     struct TexArray {
         SDL_GPUTexture* texture = nullptr;
+        uint32_t w = 0, h = 0;  // its class's size
+        SDL_GPUTextureFormat format = kColorFormat;
         uint32_t layers = 0;
         uint32_t levels = 1;  // its class's whole chain
         std::vector<uint32_t> free;
@@ -697,6 +750,7 @@ struct GpuRenderer::Impl {
         SDL_GPUTexture* from;
         SDL_GPUTexture* to;
         uint32_t w, h;
+        bool bc;  // a BC array's, copied in whole blocks (BcExtent)
         std::vector<std::pair<uint32_t, uint32_t>> layers;  // layer, levels
     };
     std::vector<ArrayCopy> array_copies;  // arrays that grew, old into new
@@ -822,9 +876,17 @@ struct GpuRenderer::Impl {
     void UseTexture(const std::shared_ptr<const Texture>& t);
     // the layer `t` has, or null (none, or it couldn't have one)
     const Tex* TextureFor(const Texture* t);
-    // a layer of its size class's array for `tx`, growing the array if full
-    // and none of its textures can go for room
-    bool PlaceTexture(Tex& tx);
+    // a layer of its size class's array in `format` (RGBA8, or a BC format
+    // for one kept as blocks) for `tx`, growing the array if full and none
+    // of its textures can go for room
+    bool PlaceTexture(Tex& tx, SDL_GPUTextureFormat format);
+    // the texels a copy into a BC array's level spans along a side, for a
+    // level of a texture `texels` long into its class's level `level_size`
+    // long: whole blocks, which on Vulkan end at the level's edge
+    uint32_t BcExtent(uint32_t texels, uint32_t level_size) const {
+        const uint32_t whole = guest_format::AlignUp(texels, 4);
+        return bc_whole_blocks ? whole : std::min(whole, level_size);
+    }
     void LetTextureGo(Tex& tx);
     // the texture arrays' MB, their mips counted as a third more
     // (GpuStats::texture_array_mb)
@@ -1174,6 +1236,17 @@ bool GpuRenderer::Impl::Create() {
     if (!shadow_maps)
         REXLOG_WARN("native view gpu: the device can't draw into an R32_FLOAT texture; the "
                     "characters are drawn without their self-shadows");
+    // the block-compressed formats RB3's textures are kept as (BcFormat):
+    // every one, or the textures are all RGBA8, as before
+    bc_formats = true;
+    for (uint32_t xenos : {18u, 19u, 20u, 49u})
+        bc_formats = bc_formats && SDL_GPUTextureSupportsFormat(device, BcFormat(xenos),
+                                                                SDL_GPU_TEXTURETYPE_2D_ARRAY,
+                                                                SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    bc_whole_blocks = std::strcmp(SDL_GetGPUDeviceDriver(device), "direct3d12") == 0;
+    if (!bc_formats)
+        REXLOG_WARN("native view gpu: the device can't sample BC1, BC2, BC3 or BC5 texture "
+                    "arrays; compressed textures are sent as RGBA (native_bc_textures)");
     // the overlay's multisampled targets (Direct3D 12 and Vulkan both must
     // have 4 samples; 2 every desktop GPU has)
     for (int k = 0; k < 2; k++) {
@@ -1314,6 +1387,9 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     vertex_shader = pixel_shader = spot_shader = soft_shader = shadow_shader = nullptr;
     fullscreen_shader = nullptr;
     shadow_maps = false;
+    bc_formats = bc_now = bc_whole_blocks = false;
+    // (the CPU draws from now on: textures decoded as RGBA)
+    SetKeepBlocks(false);
     resolve_shader = overlay_start_shader = nullptr;
     ms_supported[0] = ms_supported[1] = false;
     ms_fallback_logged = 0;
@@ -1745,11 +1821,16 @@ bool GpuRenderer::Impl::PlaceInArena() {
     return true;
 }
 
-bool GpuRenderer::Impl::PlaceTexture(Tex& tx) {
+bool GpuRenderer::Impl::PlaceTexture(Tex& tx, SDL_GPUTextureFormat format) {
     const Texture& t = *tx.keep;
     uint32_t w, h;
     SizeClass(t.width, t.height, w, h);
-    TexArray& a = tex_arrays[uint64_t(w) << 32 | h];
+    TexArray& a = tex_arrays[uint64_t(w) << 40 | uint64_t(h) << 16 | uint32_t(format)];
+    a.w = w;
+    a.h = h;
+    a.format = format;
+    // a layer's bytes, its level 0's
+    const uint64_t layer_bytes = uint64_t(w) * h * TexelBits(format) / 8;
     if (a.free.empty() && a.texture) {
         // Full: before it grows, its textures no frame has drawn for
         // kEvictAfter frames, kept by the clock alone (gpu_view.h's
@@ -1774,12 +1855,13 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx) {
     if (a.free.empty()) {
         const auto start = std::chrono::steady_clock::now();
         const uint32_t layers =
-            a.layers ? a.layers * 2 : std::clamp<uint32_t>(kTextureArrayBytes / (w * h * 4), 1, 64);
+            a.layers ? a.layers * 2
+                     : uint32_t(std::clamp<uint64_t>(kTextureArrayBytes / layer_bytes, 1, 64));
         SDL_GPUTexture* grown = nullptr;
         if (layers <= kMaxTextureLayers) {
             SDL_GPUTextureCreateInfo ti{};
             ti.type = SDL_GPU_TEXTURETYPE_2D_ARRAY;
-            ti.format = kColorFormat;
+            ti.format = format;
             ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
             ti.width = w;
             ti.height = h;
@@ -1791,15 +1873,16 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx) {
         if (!grown) {
             if (!texture_failure_logged) {
                 texture_failure_logged = true;
-                REXLOG_WARN("native view gpu: no {}x{} texture array of {} ({}); draws untextured",
-                            w, h, layers, SDL_GetError());
+                REXLOG_WARN("native view gpu: no {}x{} texture array of {} in format {} ({}); "
+                            "draws untextured",
+                            w, h, layers, int(format), SDL_GetError());
             }
             return false;
         }
         if (a.texture) {
             // what the old one holds goes over in this frame's copy pass,
             // before anything is sent to the new one (ArrayCopy)
-            ArrayCopy c{a.texture, grown, w, h, {}};
+            ArrayCopy c{a.texture, grown, w, h, IsBc(format), {}};
             for (const auto& [key, held] : textures)
                 if (held.array == &a && held.first < serial)
                     c.layers.emplace_back(held.layer, held.levels);
@@ -1812,14 +1895,14 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx) {
         if (walk_stats) {
             walk_stats->arrays_grown++;
             walk_stats->arrays_mb +=
-                double(w) * h * 4 * layers * (a.levels > 1 ? 4.0 / 3 : 1) / 1048576;
+                double(layer_bytes) * layers * (a.levels > 1 ? 4.0 / 3 : 1) / 1048576;
             walk_stats->arrays_ms += std::chrono::duration<double, std::milli>(
                                          std::chrono::steady_clock::now() - start)
                                          .count();
         }
     }
     tx.array = &a;
-    tx.levels = std::min(LevelsOf(t), a.levels);
+    tx.levels = std::min(LevelsOf(t, IsBc(format)), a.levels);
     tx.layer = a.free.back();
     a.free.pop_back();
     return true;
@@ -1833,15 +1916,33 @@ void GpuRenderer::Impl::LetTextureGo(Tex& tx) {
 }
 
 void GpuRenderer::Impl::UseTexture(const std::shared_ptr<const Texture>& t) {
-    if (!t || !t->width || !t->height || t->rgba.size() != size_t(t->width) * t->height) return;
-    Tex& tx = textures[t.get()];
-    if (!tx.keep) {
+    if (!t || !t->width || !t->height) return;
+    auto it = textures.find(t.get());
+    if (it == textures.end()) {
+        // New: as blocks if it was kept so and this frame keeps them
+        // (RasterOptions::bc_textures), else its RGBA, decoded from its
+        // blocks if it has those (EnsureRgba). The way it's placed stays
+        // until it's let go. (Decoded with its capture, which this waits
+        // for if another thread is at it: blocks is written there.)
+        if (t->deferred) DecodeDeferred(*t);
+        SDL_GPUTextureFormat format = kColorFormat;
+        if (bc_now && t->blocks &&
+            t->blocks->level0.size() ==
+                guest_format::LevelBlockBytes(t->blocks->format, t->width, t->height)) {
+            format = BcFormat(t->blocks->format);
+        } else {
+            EnsureRgba(*t);
+            if (t->rgba.size() != size_t(t->width) * t->height) return;
+        }
+        Tex& tx = textures[t.get()];
         tx.keep = t;
         tx.first = serial;
         tx.first_world = frame_world;
         if (walk_stats) walk_stats->textures_first++;
-        if (PlaceTexture(tx)) new_textures.push_back(&tx);
+        if (PlaceTexture(tx, format)) new_textures.push_back(&tx);
+        it = textures.find(t.get());
     }
+    Tex& tx = it->second;
     tx.used = serial;
     tx.used_at = frame_now;
     tx.drawn_in_song = frame_in_song;
@@ -1850,8 +1951,8 @@ void GpuRenderer::Impl::UseTexture(const std::shared_ptr<const Texture>& t) {
 
 double GpuRenderer::Impl::TextureArrayMb() const {
     double mb = 0;
-    for (const auto& [size, a] : tex_arrays) {
-        const double layer = double(size >> 32) * double(size & 0xffffffffu) * 4;
+    for (const auto& [key, a] : tex_arrays) {
+        const double layer = double(a.w) * a.h * TexelBits(a.format) / 8;
         mb += layer * a.layers * (a.levels > 1 ? 4.0 / 3 : 1) / 1048576;
     }
     return mb;
@@ -2635,6 +2736,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     if (!o.width || !o.height || !EnsureTargets(o.width, o.height)) return false;
     if (slot >= 0 && !EnsureOutput(slot, o.width, o.height)) return false;
     keep_frames = ResidencyKeepFrames(o.world_period);
+    // textures this frame places for the first time kept as blocks, where
+    // they were decoded so (UseTexture)
+    bc_now = bc_formats && o.bc_textures;
     // where the last pass, the gamma ramp's, puts the finished frame
     SDL_GPUTexture* const output = slot >= 0 ? outputs[slot].texture : graded;
     // the post buffer (RasterOptions::post_buffer): a post frame's picture
@@ -2992,13 +3096,45 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     const uint32_t bone_bytes = uint32_t(frame_bones.size() * sizeof(Mat4));
     const uint32_t textures_at = Align(bones_at + bone_bytes, kTextureOffsetAlign);
     uint32_t upload_bytes = textures_at;
-    // each level of a texture where a copy may start
-    auto level_bytes = [](const Texture& t, uint32_t l) {
+    // How a new texture's level l goes up: its rows of texels (RGBA8), or of
+    // blocks for one kept as blocks, `pitch` apart in the upload, `bytes` in
+    // all (where the next level may start); into its layer's level's corner
+    // `w` x `h`, which for blocks is whole blocks (BcExtent: SDL takes the
+    // rows as pixels_per_row texels and rows_per_layer, each a multiple of 4)
+    struct LevelUpload {
+        const uint8_t* src;
+        uint32_t row_bytes, rows, pitch, bytes;
+        uint32_t w, h, pixels_per_row, rows_per_layer;
+    };
+    auto level_upload = [&](const Tex& tx, uint32_t l) {
+        const Texture& t = *tx.keep;
         const uint32_t w = std::max(t.width >> l, 1u), h = std::max(t.height >> l, 1u);
-        return Align(Align(w * 4, kRowPitchAlign) * h, kTextureOffsetAlign);
+        LevelUpload u;
+        if (IsBc(tx.array->format)) {
+            const uint32_t bpb = BlockBytes(tx.array->format);
+            u.src = (l ? t.blocks->mips[l - 1] : t.blocks->level0).data();
+            u.row_bytes = (w + 3) / 4 * bpb;
+            u.rows = (h + 3) / 4;
+            u.pitch = Align(u.row_bytes, kRowPitchAlign);
+            u.w = BcExtent(w, std::max(tx.array->w >> l, 1u));
+            u.h = BcExtent(h, std::max(tx.array->h >> l, 1u));
+            u.pixels_per_row = u.pitch / bpb * 4;
+            u.rows_per_layer = u.rows * 4;
+        } else {
+            u.src = reinterpret_cast<const uint8_t*>((l ? t.mips[l - 1] : t.rgba).data());
+            u.row_bytes = w * 4;
+            u.rows = h;
+            u.pitch = Align(w * 4, kRowPitchAlign);
+            u.w = w;
+            u.h = h;
+            u.pixels_per_row = u.pitch / 4;
+            u.rows_per_layer = h;
+        }
+        u.bytes = Align(u.pitch * u.rows, kTextureOffsetAlign);
+        return u;
     };
     for (const Tex* tx : new_textures)
-        for (uint32_t l = 0; l < tx->levels; l++) upload_bytes += level_bytes(*tx->keep, l);
+        for (uint32_t l = 0; l < tx->levels; l++) upload_bytes += level_upload(*tx, l).bytes;
     // what of it comes from the CPU (GpuStats::mesh_bytes and the rest)
     st.pool_meshes += uint32_t(to_pool.size());
     st.mesh_bytes += uint64_t(pool_vert_count) * sizeof(Vertex) + uint64_t(pool_index_count) * 2;
@@ -3087,14 +3223,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         if (bone_bytes) std::memcpy(base + bones_at, frame_bones.data(), bone_bytes);
         uint32_t tex_at = textures_at;
         for (const Tex* tx : new_textures) {
-            const Texture& t = *tx->keep;
             for (uint32_t l = 0; l < tx->levels; l++) {
-                const uint32_t w = std::max(t.width >> l, 1u), h = std::max(t.height >> l, 1u);
-                const uint32_t pitch = Align(w * 4, kRowPitchAlign);
-                const uint32_t* px = l ? t.mips[l - 1].data() : t.rgba.data();
-                for (uint32_t y = 0; y < h; y++)
-                    std::memcpy(base + tex_at + size_t(y) * pitch, px + size_t(y) * w, w * 4);
-                tex_at += level_bytes(t, l);
+                const LevelUpload u = level_upload(*tx, l);
+                for (uint32_t y = 0; y < u.rows; y++)
+                    std::memcpy(base + tex_at + size_t(y) * u.pitch,
+                                u.src + size_t(y) * u.row_bytes, u.row_bytes);
+                tex_at += u.bytes;
             }
         }
         SDL_UnmapGPUTransferBuffer(device, upload);
@@ -3131,8 +3265,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 for (uint32_t m = 0; m < levels; m++) {
                     SDL_GPUTextureLocation src{c.from, m, l, 0, 0, 0};
                     SDL_GPUTextureLocation dst{c.to, m, l, 0, 0, 0};
-                    SDL_CopyGPUTextureToTexture(copy, &src, &dst, std::max(c.w >> m, 1u),
-                                                std::max(c.h >> m, 1u), 1, false);
+                    const uint32_t w = std::max(c.w >> m, 1u), h = std::max(c.h >> m, 1u);
+                    SDL_CopyGPUTextureToTexture(copy, &src, &dst, c.bc ? BcExtent(w, w) : w,
+                                                c.bc ? BcExtent(h, h) : h, 1, false);
                 }
             }
             SDL_ReleaseGPUTexture(device, c.from);
@@ -3194,20 +3329,18 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         send(bones_at, bones, 0, bone_bytes, true);
         uint32_t tex_at = textures_at;
         for (const Tex* tx : new_textures) {
-            const Texture& t = *tx->keep;
             for (uint32_t l = 0; l < tx->levels; l++) {
-                const uint32_t w = std::max(t.width >> l, 1u), h = std::max(t.height >> l, 1u);
-                const uint32_t pitch = Align(w * 4, kRowPitchAlign);
-                SDL_GPUTextureTransferInfo src{upload, tex_at, pitch / 4, h};
+                const LevelUpload u = level_upload(*tx, l);
+                SDL_GPUTextureTransferInfo src{upload, tex_at, u.pixels_per_row, u.rows_per_layer};
                 SDL_GPUTextureRegion dst{};
                 dst.texture = tx->array->texture;
                 dst.mip_level = l;
                 dst.layer = tx->layer;
-                dst.w = w;
-                dst.h = h;
+                dst.w = u.w;
+                dst.h = u.h;
                 dst.d = 1;
                 SDL_UploadToGPUTexture(copy, &src, &dst, false);
-                tex_at += level_bytes(t, l);
+                tex_at += u.bytes;
             }
         }
         SDL_EndGPUCopyPass(copy);
@@ -3737,10 +3870,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SDL_GPUTexture* texture = nullptr;
             uint32_t layer = 0, w = 0, h = 0;
             uint32_t levels = 1;
+            bool dxn = false;  // a DXN texture kept as BC5 (BcFormat)
         };
         auto layer_of = [&](const Texture* t) {
             const Tex* tx = TextureFor(t);
-            return tx ? Sampled{tx->array->texture, tx->layer, t->width, t->height, tx->levels}
+            return tx ? Sampled{tx->array->texture, tx->layer, t->width, t->height, tx->levels,
+                                tx->array->format == SDL_GPU_TEXTUREFORMAT_BC5_RG_UNORM}
                       : Sampled{};
         };
         shade::ShadeParams& sp = shades[d];
@@ -3923,6 +4058,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             }
         }
         pu.flags[0] = blend == kBlendSrcAlpha || blend == kBlendSrcAlphaAdd ? kPremultiply : 0;
+        // the DXN textures kept as BC5, by tex_layer's order: their y in z and
+        // w too, as DecodeBlock has them (a head's normal map is a texture
+        // pass's diffuse texture, its alpha read; mesh.hlsl's DxnTexel)
+        for (int s : {kSlotDiffuse, kSlotSpecular, kSlotGlow, kSlotProjected, kSlotGobo,
+                      kSlotNormal, kSlotDetail})
+            if (tex[s].dxn) pu.flags[1] |= 1u << (s >= kSlotNormal ? s - 2 : s);
         SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
 
         if (o.gpu_labels) {
@@ -4607,8 +4748,12 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
                     "the CPU");
         impl_->ready = false;
         impl_->Release(false);
+        SetKeepBlocks(false);
         return false;
     }
+    // the captures decoded after it keep block-compressed textures as blocks
+    // as this frame placed them (deferred_decode.h)
+    SetKeepBlocks(impl_->bc_now);
     stats.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                    .count();
     const Impl::Counts& now = impl_->counts;

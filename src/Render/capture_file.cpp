@@ -385,9 +385,10 @@ std::shared_ptr<FrameCapture> LoadOld(Reader& r, bool v1) {
 
 bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     // what capture left to decode later, decoded (LatestCapture and
-    // CaptureHeldFrame's have been): a texture's rgba or a mesh's faces
-    // still empty would be saved as none
-    DecodeDeferred(fc);
+    // CaptureHeldFrame's have been), and the textures kept as blocks for the
+    // GPU decoded to RGBA (a file keeps RGBA alone): a texture's rgba or a
+    // mesh's faces still empty would be saved as none
+    EnsureRgba(fc);
     std::unordered_map<const Geometry*, uint32_t> geoms;
     std::unordered_map<const Texture*, uint32_t> texs;
     std::vector<const Geometry*> geom_list;

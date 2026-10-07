@@ -275,6 +275,7 @@ public:
         options.normal_maps = REXCVAR_GET(native_view_normal_maps);
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
+        options.bc_textures = REXCVAR_GET(native_bc_textures);
         // as the native renderer's frames keep what they draw, so this one
         // doesn't let it go (gpu_view.h's residency)
         options.clock_keep = render::InSong();
@@ -373,6 +374,7 @@ public:
         options.normal_maps = REXCVAR_GET(native_view_normal_maps);
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
+        options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.clock_keep = render::InSong();  // as NativePicture's
         std::vector<uint32_t> rgba;
         render::GpuStats stats;
@@ -968,7 +970,10 @@ private:
                     {"bones", p.bones},
                     {"deferred_decodes", p.deferred_decodes},
                     {"deferred_decode_us", p.deferred_decode_us},
-                    {"deferred_decode_bytes", p.deferred_decode_bytes}};
+                    {"deferred_decode_bytes", p.deferred_decode_bytes},
+                    {"deferred_bc_blocks", p.deferred_bc_blocks},
+                    {"deferred_bc_swizzled", p.deferred_bc_swizzled},
+                    {"deferred_bc_rgba", p.deferred_bc_rgba}};
         for (int i = 0; i < P::kNumSteps; i++)
             if (p.step_calls[i])
                 c.counts.emplace_back(std::string(P::kStepNames[i]) + "_n", p.step_calls[i]);

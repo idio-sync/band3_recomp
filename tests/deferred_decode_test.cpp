@@ -168,6 +168,229 @@ TEST_CASE("a texture decodes from its copied bytes as from guest memory: base, m
     }
 }
 
+namespace {
+
+// the block-compressed formats kept as blocks for the GPU (native_bc_textures)
+constexpr uint32_t kBcFormats[] = {18, 19, 20, 49};
+
+// SetKeepBlocks(true) for a test's span: the setting is the process's
+struct KeepBlocks {
+    KeepBlocks() { SetKeepBlocks(true); }
+    ~KeepBlocks() { SetKeepBlocks(false); }
+};
+
+// the texture's copies as CopyForLater keeps them, cut at BaseLevelBytes and
+// MipChainBytes (none for the mips without `mips`)
+std::shared_ptr<Texture> Deferred(const uint32_t f[6], const std::vector<uint8_t>& base,
+                                  const std::vector<uint8_t>* mips) {
+    auto t = std::make_shared<Texture>();
+    const FetchLayout l = ReadFetchLayout(f);
+    t->width = l.width;
+    t->height = l.height;
+    t->format = l.format;
+    auto d = std::make_shared<DeferredPixels>();
+    d->bytes.assign(base.begin(), base.begin() + BaseLevelBytes(f));
+    if (mips) d->mips.assign(mips->begin(), mips->begin() + MipChainBytes(f));
+    std::copy(f, f + 6, d->fetch);
+    t->deferred = d;
+    return t;
+}
+
+}  // namespace
+
+TEST_CASE("a block-compressed level's blocks are each block's bytes as DecodeLevelBlocks reads them") {
+    // tiled and linear, every endianness, a packed tail's level (offset in
+    // its image) and odd sizes: block (bx, by) where the decoder finds it,
+    // swapped, at row by, column bx
+    for (uint32_t format : kBcFormats) {
+        FormatInfo info{};
+        REQUIRE(GetFormatInfo(format, info));
+        for (bool tiled : {true, false}) {
+            for (uint32_t endian : {0u, 1u, 2u, 3u}) {
+                for (const Size s : {Size{1, 1}, Size{13, 9}, Size{37, 21}, Size{256, 64},
+                                     Size{100, 200}}) {
+                    uint32_t f[6];
+                    Fetch(f, format, s.w, s.h, AlignUp(s.w, 32), tiled, true, 15);
+                    f[1] |= endian << 6;
+                    const FetchLayout l = ReadFetchLayout(f);
+                    std::vector<uint8_t> mem(MipChainBytes(f) + BaseLevelBytes(f) + 4096);
+                    Fill(mem, s.w + s.h * 3 + endian);
+                    for (uint32_t level = 0; level <= l.mip_max; level++) {
+                        const uint32_t w = std::max(s.w >> level, 1u);
+                        const uint32_t h = std::max(s.h >> level, 1u);
+                        const LevelPlace p = PlaceLevel(l, info, level);
+                        std::vector<uint8_t> out(LevelBlockBytes(format, w, h));
+                        UntileLevelBlocks(mem.data(), l, info, p, w, h, out.data());
+                        const uint32_t blocks_x = (w + 3) / 4, blocks_y = (h + 3) / 4;
+                        REQUIRE(out.size() == size_t(blocks_x) * blocks_y * info.bpb);
+                        bool same = true;
+                        for (uint32_t by = 0; by < blocks_y; by++) {
+                            for (uint32_t bx = 0; bx < blocks_x; bx++) {
+                                const uint32_t x = p.x_blocks + bx, y = p.y_blocks + by;
+                                const uint32_t at =
+                                    p.offset +
+                                    (tiled ? uint32_t(TiledOffset2D(int32_t(x), int32_t(y),
+                                                                    p.pitch_blocks, info.bpb_log2))
+                                           : y * p.row_bytes + x * info.bpb);
+                                uint8_t block[16];
+                                std::memcpy(block, mem.data() + at, info.bpb);
+                                SwapEndian(block, info.bpb, endian);
+                                same = same && std::memcmp(block,
+                                                           out.data() + (size_t(by) * blocks_x + bx) *
+                                                                            info.bpb,
+                                                           info.bpb) == 0;
+                            }
+                        }
+                        CHECK_MESSAGE(same, "format ", format, " tiled ", tiled, " endian ", endian,
+                                      " ", s.w, "x", s.h, " level ", level);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("a block-compressed texture's blocks decode to DecodeTextureLevels' texels") {
+    // every BC format, tiled and linear, packed mips and not, endianness,
+    // odd sizes and pitches past the width, 16 or less on a side (the base
+    // in a tail of its own): the blocks (DecodeTextureBlocks), decoded on the
+    // CPU (DecodeRgbaFromBlocks), are the texels DecodeTextureLevels decodes
+    // in one go
+    for (uint32_t format : kBcFormats) {
+        for (bool tiled : {true, false}) {
+            for (bool packed : {true, false}) {
+                for (uint32_t endian : {1u, 2u}) {
+                    for (const Size s : {Size{1, 1}, Size{3, 5}, Size{8, 8}, Size{13, 9},
+                                         Size{16, 16}, Size{37, 21}, Size{64, 64}, Size{128, 32},
+                                         Size{32, 128}, Size{200, 33}, Size{512, 256},
+                                         Size{2048, 16}}) {
+                        for (uint32_t extra : {0u, 64u}) {
+                            uint32_t f[6];
+                            Fetch(f, format, s.w, s.h, AlignUp(s.w, 32) + extra, tiled, packed, 15);
+                            f[1] |= endian << 6;
+                            std::vector<uint8_t> base(BaseLevelBytes(f) + 4096),
+                                mips(MipChainBytes(f) + 4096);
+                            Fill(base, s.w * 7 + s.h + format + endian);
+                            Fill(mips, s.w * 13 + s.h + format + extra);
+                            Texture whole;
+                            REQUIRE(DecodeTextureLevels(base.data(), mips.data(), f, whole));
+                            Texture blocks;
+                            REQUIRE(DecodeTextureBlocks(base.data(), mips.data(), f, blocks));
+                            REQUIRE(blocks.blocks);
+                            CHECK(blocks.rgba.empty());
+                            CHECK(blocks.width == whole.width);
+                            CHECK(blocks.height == whole.height);
+                            CHECK(blocks.format == format);
+                            CHECK(blocks.blocks->format == format);
+                            CHECK(blocks.blocks->level0.size() ==
+                                  LevelBlockBytes(format, s.w, s.h));
+                            REQUIRE(blocks.blocks->mips.size() == whole.mips.size());
+                            std::vector<uint32_t> rgba;
+                            std::vector<std::vector<uint32_t>> levels;
+                            DecodeRgbaFromBlocks(*blocks.blocks, s.w, s.h, rgba, levels);
+                            CHECK_MESSAGE(rgba == whole.rgba, "format ", format, " tiled ", tiled,
+                                          " packed ", packed, " endian ", endian, " ", s.w, "x",
+                                          s.h, " pitch +", extra);
+                            CHECK_MESSAGE(levels == whole.mips, "format ", format, " tiled ", tiled,
+                                          " packed ", packed, " endian ", endian, " ", s.w, "x",
+                                          s.h, " pitch +", extra);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("kept as blocks, a texture's rgba decodes from them the first time it's asked for") {
+    KeepBlocks keep;
+    for (uint32_t format : kBcFormats) {
+        for (bool tiled : {true, false}) {
+            for (const Size s : {Size{37, 21}, Size{64, 64}, Size{200, 33}}) {
+                uint32_t f[6];
+                Fetch(f, format, s.w, s.h, AlignUp(s.w, 32), tiled, true, 15);
+                f[1] |= 1u << 6;
+                std::vector<uint8_t> base(BaseLevelBytes(f) + 65536), mips(MipChainBytes(f) + 65536);
+                Fill(base, s.w + format);
+                Fill(mips, s.h + format);
+                Texture whole;
+                REQUIRE(DecodeTextureLevels(base.data(), mips.data(), f, whole));
+
+                // the worker's decode: blocks alone, from the copies cut at
+                // BaseLevelBytes and MipChainBytes, which it lets go of
+                auto t = Deferred(f, base, &mips);
+                const uint64_t kept = g_deferred_decode.bc_blocks.load();
+                const uint64_t rgba_decodes = g_deferred_decode.bc_rgba.load();
+                DecodeDeferred(*t);
+                CHECK(g_deferred_decode.bc_blocks.load() == kept + 1);
+                REQUIRE(t->blocks);
+                CHECK(t->rgba.empty());
+                CHECK(t->mips.empty());
+                CHECK(t->deferred->bytes.empty());
+                CHECK(t->deferred->mips.empty());
+                // asked for: the same texels as decoding guest memory, once
+                EnsureRgba(*t);
+                CHECK_MESSAGE(t->rgba == whole.rgba, "format ", format, " tiled ", tiled, " ",
+                              s.w, "x", s.h);
+                CHECK_MESSAGE(t->mips == whole.mips, "format ", format, " tiled ", tiled, " ",
+                              s.w, "x", s.h);
+                EnsureRgba(*t);
+                CHECK(g_deferred_decode.bc_rgba.load() == rgba_decodes + 1);
+                CHECK(t->rgba == whole.rgba);
+
+                // and without mips
+                Texture base_only;
+                REQUIRE(DecodeTextureLevels(base.data(), nullptr, f, base_only));
+                auto b = Deferred(f, base, nullptr);
+                EnsureRgba(*b);
+                REQUIRE(b->blocks);
+                CHECK(b->blocks->mips.empty());
+                CHECK(b->rgba == base_only.rgba);
+                CHECK(b->mips.empty());
+            }
+        }
+    }
+}
+
+TEST_CASE("what isn't kept as blocks decodes to RGBA as before") {
+    std::vector<uint8_t> base(65536), mips(65536);
+    Fill(base, 11);
+    Fill(mips, 12);
+    auto decoded_as_before = [&](const uint32_t f[6]) {
+        Texture whole;
+        REQUIRE(DecodeTextureLevels(base.data(), mips.data(), f, whole));
+        auto t = Deferred(f, base, &mips);
+        DecodeDeferred(*t);
+        CHECK(!t->blocks);
+        CHECK(t->rgba == whole.rgba);
+        CHECK(t->mips == whole.mips);
+        EnsureRgba(*t);  // nothing more to do
+        CHECK(t->rgba == whole.rgba);
+    };
+    uint32_t f[6];
+    // with the setting off, a DXT5 texture
+    Fetch(f, 20, 64, 64, 64, true, true, 6);
+    decoded_as_before(f);
+    Texture no_blocks;
+    CHECK(DecodeTextureBlocks(base.data(), mips.data(), f, no_blocks));  // (it could be)
+    no_blocks = Texture{};
+    {
+        KeepBlocks keep;
+        // a format that isn't block-compressed
+        Fetch(f, 6, 64, 64, 64, true, true, 6);
+        decoded_as_before(f);
+        CHECK(!DecodeTextureBlocks(base.data(), mips.data(), f, no_blocks));
+        // a DXT1 texture its fetch swizzles (xyz1): counted
+        Fetch(f, 18, 64, 64, 64, true, true, 6);
+        f[3] = (0 | 1 << 3 | 2 << 6 | 5u << 9) << 1;
+        const uint64_t swizzled = g_deferred_decode.bc_swizzled.load();
+        decoded_as_before(f);
+        CHECK(g_deferred_decode.bc_swizzled.load() == swizzled + 1);
+        CHECK(!DecodeTextureBlocks(base.data(), mips.data(), f, no_blocks));
+        CHECK(!no_blocks.blocks);
+    }
+}
+
 TEST_CASE("a texture without mips decodes from its base level's copy alone") {
     uint32_t f[6];
     Fetch(f, 20, 100, 60, 128, true, true, 0);
@@ -315,4 +538,28 @@ TEST_CASE("a frame's deferred textures and geometry are all decoded before it's 
     // again: nothing more
     DecodeDeferred(fc);
     CHECK(g_deferred_decode.decodes.load() == decodes + 5);
+}
+
+TEST_CASE("a frame's textures kept as blocks all have their rgba for a capture file") {
+    KeepBlocks keep;
+    uint32_t f[6];
+    Fetch(f, 18, 16, 16, 32, false, false, 0);
+    std::vector<uint8_t> base(BaseLevelBytes(f));
+    Fill(base, 7);
+    FrameCapture fc;
+    DrawItem item{};
+    auto draw_tex = Deferred(f, base, nullptr);
+    item.tex = draw_tex;
+    fc.draws.push_back(item);
+    ShadeState shade{};
+    auto map = Deferred(f, base, nullptr);
+    shade.maps[kMapNormal] = map;
+    fc.shades.push_back(shade);
+    DecodeDeferred(fc);
+    CHECK(draw_tex->blocks);
+    CHECK(draw_tex->rgba.empty());
+    CHECK(map->rgba.empty());
+    EnsureRgba(fc);
+    CHECK(draw_tex->rgba.size() == 256);
+    CHECK(map->rgba.size() == 256);
 }

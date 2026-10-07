@@ -166,6 +166,29 @@ settings), each described there (`src/settings.cpp`):
   measuring. At 1600x900 in arena_04 the GPU is busy about 0.7 ms on a world frame
   (mostly `pass_other`) and 1.5 ms on a post frame (`pass_other` and `world` half a
   millisecond each), with 0.5 to 0.8 ms idle around the mips.
+- `native_bc_textures` (on): keeps RB3's block-compressed textures (DXT1, DXT2/3, DXT4/5 and
+  DXN, most of what it loads) compressed on the GPU, as BC1, BC2, BC3 and BC5, in texture
+  arrays of their own. The worker's decode of a texture seen first (`decode` in the slow-frame
+  line) then only untiles and byte-swaps its blocks (`src/Render/guest_formats.h`'s
+  `UntileLevelBlocks`), and the GPU gets a quarter (DXT1: an eighth) of the RGBA bytes. At
+  20th Century Boy's start the worker's first-sight frames went from 37, 47, 67 and 53 ms of
+  decoding to 10, 14, 19 and 23 (what's left is the meshes and the movie planes, k_8), the
+  textures they send from 21, 22, 85 and 42 MB to 4, 5, 17 and 8, and in its 60 s slice the
+  texture arrays from 381 to 181 MB and the process's video memory from 783 to 531 MB. A
+  texture's RGBA is decoded from its blocks only when something asks for it (the CPU
+  rasterizer, a capture file: `deferred_decode.h`'s `EnsureRgba`), by the same decoder, to the
+  same texels. The GPU's BC decoders round the 5- and 6-bit colours and the colours between
+  them a step or two differently from that decoder (as the emulated GPU's do, which draws them
+  as BC where it can), so the GPU's picture moves from the CPU's by a mean of 0.1 to 0.3 (`parity.py`'s
+  `gpu-cpu`, 0.04 to 0.07 with it off). BC5 has no z and w, which RB3's fetch fills with y
+  (a head's normal map is drawn into another texture as a diffuse texture, its alpha read):
+  `mesh.hlsl`'s `DxnTexel` puts them back. The device's support for the four formats is
+  checked once (logged if missing: then every texture is RGBA, as with it off), and a
+  texture whose fetch swizzles its components stays RGBA. Read as each texture is placed: off
+  (to compare) places new textures as RGBA, decoding the blocks of any decoded while it was
+  on. `native_view stats`' `capture` counts `deferred_bc_blocks` (textures kept as blocks),
+  `deferred_bc_swizzled` (kept RGBA for their swizzle) and `deferred_bc_rgba` (kept as blocks,
+  then decoded to RGBA).
 
 `native_view stats`' `by_kind` splits the live view's frames by what they drew under
 even/odd rendering (`frame_compose.h`'s `FrameKind`): `world` (the game drew the world; the

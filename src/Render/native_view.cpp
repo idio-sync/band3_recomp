@@ -800,6 +800,8 @@ class Renderer {
                 o.gpu_labels = REXCVAR_GET(dred);
                 // where each frame's GPU time goes (GpuStats::gpu_ms)
                 o.gpu_timestamps = REXCVAR_GET(native_gpu_timestamps);
+                // block-compressed textures kept as blocks on the GPU
+                o.bc_textures = REXCVAR_GET(native_bc_textures);
                 gpu = gpu_;
                 dump = dump_path_;
                 zero_copy = present_ && present_zero_copy_ && gpu && dump.empty();

@@ -575,6 +575,133 @@ inline bool DecodeTextureLevels(const uint8_t* base, const uint8_t* mips, const 
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// block-compressed textures kept as blocks (scene_capture.h's BlockPixels)
+
+// the Xenos formats the GPU samples as blocks of its own: DXT1, DXT2_3, DXT4_5
+// and DXN, which BC1, BC2, BC3 and BC5 decode bit for bit as DecodeBlock does
+// (DXT2 and DXT4 differ from DXT3 and DXT5 only in what the colour means,
+// premultiplied, which neither the GPU nor DecodeBlock undoes)
+inline bool IsBlockCompressed(uint32_t format) {
+    return format == 18 || format == 19 || format == 20 || format == 49;
+}
+
+// a fetch's swizzle that leaves x, y, z and w where they are: the GPU's blocks
+// give texels as DecodeBlock does only with it
+inline constexpr uint32_t kIdentitySwizzle = 0 | 1 << 3 | 2 << 6 | 3 << 9;
+
+// The blocks of level `level`'s w x h texels placed at p, as DecodeLevelBlocks
+// reads them, into out: ceil(w/4) x ceil(h/4) blocks in rows, endian-swapped,
+// as the GPU's BC formats take them. A tiled level's blocks are each where
+// TiledOffset2D puts them (8- and 16-byte blocks aren't side by side there, as
+// k_8's texels are: a row's pairs interleave with the next row's), a linear
+// level's rows whole.
+inline void UntileLevelBlocks(const uint8_t* src, const FetchLayout& l, const FormatInfo& info,
+                              const LevelPlace& p, uint32_t w, uint32_t h, uint8_t* out) {
+    const uint32_t blocks_x = (w + info.block - 1) / info.block;
+    const uint32_t blocks_y = (h + info.block - 1) / info.block;
+    const size_t row_bytes = size_t(blocks_x) * info.bpb;
+    for (uint32_t by = 0; by < blocks_y; by++) {
+        const uint32_t y = p.y_blocks + by;
+        uint8_t* row = out + by * row_bytes;
+        if (!l.tiled) {
+            std::memcpy(row, src + p.offset + y * p.row_bytes + p.x_blocks * info.bpb, row_bytes);
+            continue;
+        }
+        for (uint32_t bx = 0; bx < blocks_x; bx++) {
+            const uint32_t offset =
+                p.offset + uint32_t(TiledOffset2D(int32_t(p.x_blocks + bx), int32_t(y),
+                                                  p.pitch_blocks, info.bpb_log2));
+            std::memcpy(row + bx * info.bpb, src + offset, info.bpb);
+        }
+    }
+    SwapEndian(out, uint32_t(row_bytes * blocks_y), l.endian);
+}
+
+// the bytes of a w x h level's blocks (UntileLevelBlocks')
+inline size_t LevelBlockBytes(uint32_t format, uint32_t w, uint32_t h) {
+    FormatInfo info;
+    if (!GetFormatInfo(format, info)) return 0;
+    return size_t((w + info.block - 1) / info.block) * ((h + info.block - 1) / info.block) *
+           info.bpb;
+}
+
+// DecodeTextureLevels' texture as blocks (out.blocks; rgba and mips left
+// empty), from the same bytes: false, out untouched, for one DecodeTextureLevels
+// wouldn't decode, one not block-compressed, or one whose fetch swizzles it
+inline bool DecodeTextureBlocks(const uint8_t* base, const uint8_t* mips, const uint32_t f[6],
+                                Texture& out, uint32_t max_size = 4096) {
+    const FetchLayout l = ReadFetchLayout(f);
+    FormatInfo info;
+    if (l.dimension != 1 || !IsBlockCompressed(l.format) || l.swizzle != kIdentitySwizzle ||
+        !GetFormatInfo(l.format, info) || !base || l.width > max_size || l.height > max_size)
+        return false;
+    auto b = std::make_shared<BlockPixels>();
+    b->format = l.format;
+    b->level0.resize(LevelBlockBytes(l.format, l.width, l.height));
+    UntileLevelBlocks(base, l, info, PlaceLevel(l, info, 0), l.width, l.height, b->level0.data());
+    if (mips) {
+        for (uint32_t level = 1; level <= l.mip_max; level++) {
+            const uint32_t w = std::max(l.width >> level, 1u), h = std::max(l.height >> level, 1u);
+            std::vector<uint8_t> blocks(LevelBlockBytes(l.format, w, h));
+            UntileLevelBlocks(mips, l, info, PlaceLevel(l, info, level), w, h, blocks.data());
+            b->mips.push_back(std::move(blocks));
+        }
+    }
+    out.format = l.format;
+    out.width = l.width;
+    out.height = l.height;
+    out.rgba.clear();
+    out.mips.clear();
+    out.blocks = std::move(b);
+    return true;
+}
+
+// a w x h level's texels from its blocks (UntileLevelBlocks') into out (w * h
+// RGBA8, R in the low byte): DecodeLevelBlocks' texels for the same level
+// under the identity swizzle
+inline void DecodeLevelFromBlocks(uint32_t format, const uint8_t* blocks, uint32_t w, uint32_t h,
+                                  uint32_t* out) {
+    FormatInfo info;
+    if (!GetFormatInfo(format, info)) return;
+    const uint32_t n = info.block;
+    const uint32_t blocks_x = (w + n - 1) / n, blocks_y = (h + n - 1) / n;
+    Rgba texels[16];
+    for (uint32_t by = 0; by < blocks_y; by++) {
+        for (uint32_t bx = 0; bx < blocks_x; bx++) {
+            DecodeBlock(format, blocks + (size_t(by) * blocks_x + bx) * info.bpb, texels);
+            for (uint32_t ty = 0; ty < n; ty++) {
+                const uint32_t py = by * n + ty;
+                if (py >= h) break;
+                for (uint32_t tx = 0; tx < n; tx++) {
+                    const uint32_t px = bx * n + tx;
+                    if (px >= w) break;
+                    const Rgba& s = texels[ty * n + tx];
+                    out[size_t(py) * w + px] = uint32_t(s.c[0]) | uint32_t(s.c[1]) << 8 |
+                                               uint32_t(s.c[2]) << 16 | uint32_t(s.c[3]) << 24;
+                }
+            }
+        }
+    }
+}
+
+// a width x height texture's rgba and mips from its blocks, as
+// DecodeTextureLevels would have decoded them
+inline void DecodeRgbaFromBlocks(const BlockPixels& b, uint32_t width, uint32_t height,
+                                 std::vector<uint32_t>& rgba,
+                                 std::vector<std::vector<uint32_t>>& mips) {
+    rgba.assign(size_t(width) * height, 0);
+    DecodeLevelFromBlocks(b.format, b.level0.data(), width, height, rgba.data());
+    mips.clear();
+    for (size_t k = 0; k < b.mips.size(); k++) {
+        const uint32_t level = uint32_t(k + 1);
+        const uint32_t w = std::max(width >> level, 1u), h = std::max(height >> level, 1u);
+        std::vector<uint32_t> px(size_t(w) * h, 0);
+        DecodeLevelFromBlocks(b.format, b.mips[k].data(), w, h, px.data());
+        mips.push_back(std::move(px));
+    }
+}
+
 // The sampler a texture fetch constant describes (scene_capture.h's
 // TexSampler): its clamp modes, filters, anisotropy, mip range and LOD bias
 // (5 fractional bits) and border colour. Filters 2 and 3 (base map, "use the

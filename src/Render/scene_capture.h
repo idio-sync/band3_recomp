@@ -179,6 +179,19 @@ struct DeferredPixels {
     uint32_t fetch[6] = {};
 };
 
+// A block-compressed texture's blocks, as the GPU takes them (Texture::blocks):
+// DXT1, DXT2_3, DXT4_5 or DXN (`format`, the Xenos TextureFormat 18, 19, 20 or
+// 49; BC1, BC2, BC3 and BC5 on the GPU) untiled and endian-swapped, each level
+// ceil(w/4) x ceil(h/4) blocks of 8 or 16 bytes in rows (guest_formats.h's
+// UntileLevelBlocks). rgba_once guards the texture's rgba and mips, decoded
+// from them the first time something asks (deferred_decode.h's EnsureRgba).
+struct BlockPixels {
+    uint32_t format = 0;
+    std::vector<uint8_t> level0;
+    std::vector<std::vector<uint8_t>> mips;  // levels 1, 2..., as Texture::mips
+    std::once_flag rgba_once;
+};
+
 struct Texture {
     uint32_t width = 0;
     uint32_t height = 0;
@@ -208,6 +221,14 @@ struct Texture {
     // film grain's noise map), one in a format not decoded, and in captures
     // loaded from a file.
     std::shared_ptr<DeferredPixels> deferred;
+    // A deferred texture in a block-compressed format, decoded with
+    // native_bc_textures on: its blocks, which the GPU samples as they are,
+    // and empty rgba and mips until something asks for them (deferred_decode.h's
+    // EnsureRgba: the CPU's rasterizer, a capture file, the GPU with the
+    // setting off). Set by the decode (DecodeDeferred), so read only after it,
+    // as rgba is. Null for every other texture. Shared, as deferred is, by the
+    // copies capture files make.
+    std::shared_ptr<BlockPixels> blocks;
 };
 
 // The float constant registers a ShadeState keeps, the same numbers from the
@@ -856,6 +877,13 @@ struct CaptureProfile {
     uint64_t deferred_decodes = 0;
     uint64_t deferred_decode_us = 0;
     uint64_t deferred_decode_bytes = 0;
+    // of those, the block-compressed textures kept as blocks for the GPU
+    // (native_bc_textures; their bytes the blocks'), those decoded to RGBA
+    // all the same for a swizzle the GPU's formats can't give, and the ones
+    // kept as blocks whose RGBA something asked for after (EnsureRgba)
+    uint64_t deferred_bc_blocks = 0;
+    uint64_t deferred_bc_swizzled = 0;
+    uint64_t deferred_bc_rgba = 0;
     // the caches' sizes now: render targets known, geometry, loaded textures
     // and maps
     uint64_t rts = 0, geoms = 0, texs = 0, map_texs = 0;

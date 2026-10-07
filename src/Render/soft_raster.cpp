@@ -1,5 +1,6 @@
 #include "src/Render/soft_raster.h"
 
+#include "src/Render/deferred_decode.h"
 #include "src/Render/frame_compose.h"
 #include "src/Render/post_model.h"
 #include "src/Render/sample_model.h"
@@ -124,6 +125,8 @@ using MipChain = std::vector<std::vector<uint32_t>>;
 const MipChain* MipsOf(const MipChain& m) { return m.empty() ? nullptr : &m; }
 
 TexView View(const Texture* t) {
+    // (one kept as blocks for the GPU: its rgba, decoded the first time)
+    if (t && t->blocks) EnsureRgba(*t);
     if (!t || t->rgba.empty()) return {};
     return {t->width, t->height, t->rgba.data(), MipsOf(t->mips)};
 }

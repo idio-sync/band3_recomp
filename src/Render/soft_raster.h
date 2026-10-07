@@ -231,6 +231,13 @@ struct RasterOptions {
     // between the frame's parts, into GpuStats::gpu_ms once the GPU has
     // finished it (gpu_timing_model.h). The CPU ignores it.
     bool gpu_timestamps = false;
+    // On the GPU (native_bc_textures), block-compressed textures (DXT1,
+    // DXT2_3, DXT4_5, DXN) are kept as blocks, sent and sampled as BC1, BC2,
+    // BC3 and BC5 where the device has those formats, and the capture's
+    // decode keeps them so (deferred_decode.h's SetKeepBlocks); off, as RGBA.
+    // Read as each texture is placed, so one keeps the way it was placed. The
+    // CPU ignores it (it decodes any kept as blocks: EnsureRgba).
+    bool bc_textures = false;
     // On the GPU, the most frames apart the world is drawn now (the live
     // view's: frame_pacing.h's WorldPeriod), which geometry and textures
     // drawn in one frame are kept for (gpu_view.h's ResidencyKeepFrames), so

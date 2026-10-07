@@ -29,7 +29,9 @@
 // materials' textures, mip chains and all, filtered by the game's samplers in
 // the shader (sample_model.h; its LOD from ddx_fine/ddy_fine, which the CPU
 // works out the same way), not by hardware samplers, which couldn't wrap a
-// texture in the corner of a bigger array layer (gpu_view.cpp's SizeClass);
+// texture in the corner of a bigger array layer (gpu_view.cpp's SizeClass),
+// the block-compressed ones kept as BC1, BC2, BC3 and BC5 in arrays of their
+// own (RasterOptions::bc_textures), the rest as RGBA8;
 // and the world's draws into a scene target whose colour, alpha and depth
 // RB3's post-processing (post_model.h), full-screen passes (shaders/
 // post.hlsl), reads into the picture before the overlay's draws. The spotlights' cones

@@ -1013,8 +1013,9 @@ std::shared_ptr<const Texture> CaptureTexture(const Guest& g, State& s, Sink& si
     if (pixels) {
         // (decoded here, as GuestPixels decodes a render target's; one found
         // deferred in the cache, from another fetch of the same texture, is
-        // decoded now, the worker waiting for it if it's there too)
-        if (pixels->deferred) DecodeDeferred(*pixels);
+        // decoded now, to RGBA if it was kept as blocks, the worker waiting
+        // for it if it's there too)
+        EnsureRgba(*pixels);
         tex->width = pixels->width;
         tex->height = pixels->height;
         tex->format = pixels->format;
@@ -2858,6 +2859,9 @@ CaptureProfile GetCaptureProfile() {
     p.deferred_decodes = g_deferred_decode.decodes.load(std::memory_order_relaxed);
     p.deferred_decode_us = g_deferred_decode.ns.load(std::memory_order_relaxed) / 1000;
     p.deferred_decode_bytes = g_deferred_decode.bytes.load(std::memory_order_relaxed);
+    p.deferred_bc_blocks = g_deferred_decode.bc_blocks.load(std::memory_order_relaxed);
+    p.deferred_bc_swizzled = g_deferred_decode.bc_swizzled.load(std::memory_order_relaxed);
+    p.deferred_bc_rgba = g_deferred_decode.bc_rgba.load(std::memory_order_relaxed);
     return p;
 }
 
@@ -2883,6 +2887,9 @@ CaptureProfile CaptureProfileSince(const CaptureProfile& now, const CaptureProfi
     p.deferred_decodes -= before.deferred_decodes;
     p.deferred_decode_us -= before.deferred_decode_us;
     p.deferred_decode_bytes -= before.deferred_decode_bytes;
+    p.deferred_bc_blocks -= before.deferred_bc_blocks;
+    p.deferred_bc_swizzled -= before.deferred_bc_swizzled;
+    p.deferred_bc_rgba -= before.deferred_bc_rgba;
     return p;
 }
 
