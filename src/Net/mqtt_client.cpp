@@ -19,6 +19,8 @@
 #endif
 
 #include <algorithm>
+#include <future>
+#include <system_error>
 #include <utility>
 #include "native_socket.h"
 
@@ -220,6 +222,7 @@ void Client::Start(ClientConfig config, Produce produce) {
     }
     // the thread isn't running yet, and starting it publishes this to it
     last_failure_.clear();
+    connected_logged_ = false;
     thread_ = std::thread([this, config = std::move(config), produce = std::move(produce)] {
         Run(config, produce);
     });
@@ -262,11 +265,13 @@ void Client::Log(const ClientConfig& config, const std::string& line) const {
 void Client::LogFailure(const ClientConfig& config, const std::string& error) {
     if (error == last_failure_) return;
     last_failure_ = error;
+    // the next connection is news again
+    connected_logged_ = false;
     Log(config, error);
 }
 
 // Stop waits for this: every wait in it is cut into kWake slices that check
-// stop_, except the name lookup, which is the system's
+// stop_ (the name lookup's too, on a thread of its own)
 void Client::Run(const ClientConfig& config, const Produce& produce) {
 #ifdef _WIN32
     // Winsock counts startups, so this one is harmless beside the SDK's
@@ -286,15 +291,22 @@ void Client::Run(const ClientConfig& config, const Produce& produce) {
     while (!stop_) {
         Session session(config.connect);
         SetStatus(ClientStatus::State::kConnecting);
-        Attempt(session, config, produce);
+        const bool lasted = Attempt(session, config, produce);
         if (stop_ || !session.Over()) return;
+        if (lasted) {
+            // the broker was fine until now: the waits start over, and its
+            // failure is news even if it's the one logged last time
+            backoff = 0;
+            last_failure_.clear();
+        }
+        // A connection that was accepted and dropped soon after does neither:
+        // a broker that keeps doing it (another client taking over band3's
+        // id, an ACL) is retried ever more slowly, and logged once.
         LogFailure(config, session.error());
         if (!session.Retry()) {
             SetStatus(ClientStatus::State::kRefused, session.error());
             return;
         }
-        // the broker was fine until now: the waits start over
-        if (session.WasConnected()) backoff = 0;
         std::chrono::milliseconds delay{0};
         if (!config.retry_delays.empty()) {
             delay = config.retry_delays[std::min(backoff, config.retry_delays.size() - 1)];
@@ -317,20 +329,50 @@ bool Client::Backoff(std::chrono::milliseconds delay, const std::string& error) 
     return false;
 }
 
-void Client::Attempt(Session& session, const ClientConfig& config, const Produce& produce) {
+std::vector<uint32_t> Client::Resolve(const ClientConfig& config) {
+    // A lookup can keep the system busy for many seconds, and Stop mustn't
+    // wait on it. So it runs on a thread that holds nothing of the client's
+    // (the host and the resolver are copies, the promise its own), left to
+    // finish alone if the client stops first.
+    std::promise<std::vector<uint32_t>> promise;
+    std::future<std::vector<uint32_t>> future = promise.get_future();
+    try {
+        std::thread([promise = std::move(promise), host = config.host,
+                     resolve = config.resolve]() mutable {
+            std::vector<uint32_t> found;
+            try {
+                found = resolve ? resolve(host) : net::ResolveIPv4(host);
+            } catch (...) {
+                // as if nothing was found
+            }
+            promise.set_value(std::move(found));
+        }).detach();
+    } catch (const std::system_error&) {
+        // no thread to be had: as if nothing was found, and retried
+        return {};
+    }
+    // unlike std::async's, this future doesn't wait for the thread when it goes
+    while (!stop_) {
+        if (future.wait_for(kWake) == std::future_status::ready) return future.get();
+    }
+    return {};
+}
+
+bool Client::Attempt(Session& session, const ClientConfig& config, const Produce& produce) {
     const std::string where = config.host + ":" + std::to_string(config.port);
     // once, not on every retry of a broker that's down
     if (last_failure_.empty()) Log(config, "connecting to " + where);
-    const std::vector<uint32_t> found = net::ResolveIPv4(config.host);
+    const std::vector<uint32_t> found = Resolve(config);
+    if (stop_) return false;
     if (found.empty()) {
         session.Failed("no IPv4 address for " + config.host);
-        return;
+        return false;
     }
     const socket_t s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == kNoSocket || !SetNonBlocking(s)) {
         if (s != kNoSocket) CloseSocket(s);
         session.Failed("couldn't make a socket for " + where);
-        return;
+        return false;
     }
     sockaddr_in address{};
     address.sin_family = AF_INET;
@@ -378,12 +420,13 @@ void Client::Attempt(Session& session, const ClientConfig& config, const Produce
     if (!connected) {
         CloseSocket(s);
         if (!stop_) session.Failed(failure);
-        return;
+        return false;
     }
 
     if (!SendAll(s, session.Connected(Session::Clock::now()))) session.Closed();
     // the first produce after CONNACK resends everything
     bool fresh = true;
+    std::optional<Session::Clock::time_point> connected_at;
     uint8_t buffer[1024];
     while (!stop_ && !session.Over()) {
         const Ready ready = Wait(s, false, kWake);
@@ -404,9 +447,13 @@ void Client::Attempt(Session& session, const ClientConfig& config, const Produce
         }
         if (session.state() != Session::State::kConnected) continue;
         if (fresh) {
-            Log(config, "connected to " + where);
-            // so the next failure is logged, even one like the last
-            last_failure_.clear();
+            connected_at = now;
+            // the first time, and after a failure was logged; not on every
+            // flap of a broker that keeps dropping band3
+            if (!connected_logged_) {
+                Log(config, "connected to " + where);
+                connected_logged_ = true;
+            }
             SetStatus(ClientStatus::State::kConnected);
         }
         if (produce) {
@@ -430,6 +477,7 @@ void Client::Attempt(Session& session, const ClientConfig& config, const Produce
         if (open) SendAll(s, EncodeDisconnect());
     }
     CloseSocket(s);
+    return connected_at && Session::Clock::now() - *connected_at >= config.stable_after;
 }
 
 }  // namespace band3::mqtt

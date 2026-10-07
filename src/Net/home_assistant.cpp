@@ -107,6 +107,15 @@ std::string PcName() {
 #endif
 }
 
+// this process's id, for an MQTT client id no other band3 on the PC shares
+unsigned long ProcessId() {
+#ifdef _WIN32
+    return GetCurrentProcessId();
+#else
+    return static_cast<unsigned long>(getpid());
+#endif
+}
+
 // what the hooks have kept, as HA is told it
 GameView CurrentView() {
     const test::GameStateSnapshot game = test::GameState::Get().Snapshot();
@@ -258,7 +267,11 @@ void Start() {
         mqtt::ClientConfig config;
         config.host = s.ha_mqtt_host;
         config.port = static_cast<uint16_t>(std::clamp(s.ha_mqtt_port, 1, 65535));
-        config.connect.client_id = "band3_" + g_options.pc_id;
+        // A broker drops the older of two clients with one id, so two band3s
+        // on one PC (a test copy beside the real one) would take each other's
+        // connection over again and again; the process id keeps them apart.
+        // Both still publish under band3/<id>, which is the PC's.
+        config.connect.client_id = "band3_" + g_options.pc_id + "_" + std::to_string(ProcessId());
         config.connect.username = s.ha_mqtt_username;
         config.connect.password = s.ha_mqtt_password;
         config.connect.will = mqtt::Will{StatusTopic(g_options), "offline", true};

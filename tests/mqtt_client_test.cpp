@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -479,6 +480,59 @@ TEST_CASE("mqtt client: reconnects after a drop, resends fresh, and logs each fa
     CHECK(Published(packets[5]).topic == "band3/pc/song");
     CHECK(packets[6].type == kDisconnect);
 
+    // the drop after connecting came long before stable_after, so it's the
+    // same failure as before and isn't news, nor is connecting again
+    const std::string where = "127.0.0.1:" + std::to_string(port);
+    const std::vector<std::string> lines = log.Get();
+    REQUIRE(lines.size() == 3);
+    CHECK(lines[0] == "connecting to " + where);
+    CHECK(lines[1] == "the broker closed the connection");
+    CHECK(lines[2] == "connected to " + where);
+}
+
+TEST_CASE("mqtt client: a connection that lasted starts the waits over and logs its drop") {
+    uint16_t port = 0;
+    const Handle listener = Listen(port);
+    Heard heard;
+    std::atomic<int> connections{0};
+    std::thread broker([&] {
+        // hears CONNECT and hangs up, twice, then accepts and hangs up after
+        // the fresh PUBLISH, then accepts until the client closes
+        for (int i = 0; i < 4; i++) {
+            const Handle s = accept(listener, nullptr, nullptr);
+            if (s == kNone) return;
+            connections++;
+            if (i < 2) {
+                Serve(s, heard, {}, 1);
+            } else if (i == 2) {
+                Serve(s, heard, kAccepted, 2);
+            } else {
+                Serve(s, heard, kAccepted);
+            }
+        }
+    });
+    Lines log;
+    ClientConfig config = LoopbackConfig(port);
+    config.log = log.Sink();
+    // were the waits not started over, the last connection would come 10 s late
+    config.retry_delays = {0ms, 20ms, 10s};
+    config.stable_after = 50ms;
+    std::atomic<int> fresh_calls{0};
+    Client client;
+    client.Start(config, [&](bool fresh) {
+        if (!fresh) return std::vector<Message>{};
+        fresh_calls++;
+        // the third connection holds on to its PUBLISH a while, so it's
+        // connected for longer than stable_after before the broker hangs up
+        if (fresh_calls == 1) std::this_thread::sleep_for(100ms);
+        return std::vector<Message>{{"band3/pc/song", "Song", true}};
+    });
+    CHECK(WaitUntil([&] { return fresh_calls == 2 && client.GetStatus().state == ClientStatus::State::kConnected; }));
+    client.Stop();
+    broker.join();
+    Close(listener);
+    CHECK(connections == 4);
+
     const std::string where = "127.0.0.1:" + std::to_string(port);
     const std::vector<std::string> lines = log.Get();
     REQUIRE(lines.size() == 5);
@@ -487,6 +541,70 @@ TEST_CASE("mqtt client: reconnects after a drop, resends fresh, and logs each fa
     CHECK(lines[2] == "connected to " + where);
     CHECK(lines[3] == "the broker closed the connection");
     CHECK(lines[4] == "connected to " + where);
+}
+
+TEST_CASE("mqtt client: a broker that accepts and drops at once is backed off from, and logged once") {
+    uint16_t port = 0;
+    const Handle listener = Listen(port);
+    Heard heard;
+    std::atomic<bool> done{false};
+    std::atomic<int> connections{0};
+    std::thread broker([&] {
+        // every connection: CONNACK, then hang up (as when another client
+        // takes the id over)
+        while (!done) {
+            if (!Incoming(listener, 20ms)) continue;
+            const Handle s = accept(listener, nullptr, nullptr);
+            if (s == kNone) return;
+            connections++;
+            Serve(s, heard, kAccepted, 1);
+        }
+    });
+    Lines log;
+    ClientConfig config = LoopbackConfig(port);
+    config.log = log.Sink();
+    config.retry_delays = {0ms, 200ms, 400ms, 800ms, 1600ms};
+    Client client;
+    // nothing published, so the broker's close is a plain one, never a reset
+    client.Start(config, nullptr);
+    std::this_thread::sleep_for(1s);
+    client.Stop();
+    done = true;
+    broker.join();
+    Close(listener);
+
+    // at 0, at once, then 200 and 400 ms later; the next would be at 1.4 s
+    CHECK(connections >= 2);
+    CHECK(connections <= 4);
+    // the first drop is news and so is the connection after it; the same drop
+    // again isn't, nor is connecting again after it
+    const std::string where = "127.0.0.1:" + std::to_string(port);
+    const std::vector<std::string> lines = log.Get();
+    REQUIRE(lines.size() == 4);
+    CHECK(lines[0] == "connecting to " + where);
+    CHECK(lines[1] == "connected to " + where);
+    CHECK(lines[2] == "the broker closed the connection");
+    CHECK(lines[3] == "connected to " + where);
+}
+
+TEST_CASE("mqtt client: Stop doesn't wait for a slow name lookup") {
+    // shared with the lookup's thread, which outlives the client
+    auto lookups = std::make_shared<std::atomic<int>>(0);
+    ClientConfig config = LoopbackConfig(1883);
+    config.host = "broker.invalid";
+    config.resolve = [lookups](const std::string&) {
+        (*lookups)++;
+        std::this_thread::sleep_for(2s);
+        return std::vector<uint32_t>{};
+    };
+    Client client;
+    client.Start(config, nullptr);
+    CHECK(WaitUntil([&] { return *lookups == 1; }));
+    CHECK(client.GetStatus().state == ClientStatus::State::kConnecting);
+    const auto stopping = Clock::now();
+    client.Stop();
+    CHECK(Clock::now() - stopping < 500ms);
+    CHECK(client.GetStatus().state == ClientStatus::State::kOff);
 }
 
 TEST_CASE("mqtt client: nothing listening is retried, and Stop ends the wait at once") {

@@ -87,13 +87,21 @@ struct ClientConfig {
     uint16_t port = 1883;
     ConnectOptions connect;
     // waits before each reconnect, one after another, the last repeating; a
-    // connection that reached kConnected starts them over
+    // connection that stayed connected for `stable_after` starts them over
     std::vector<std::chrono::milliseconds> retry_delays{
         std::chrono::milliseconds(0), std::chrono::seconds(5), std::chrono::seconds(10),
         std::chrono::seconds(20), std::chrono::seconds(40), std::chrono::seconds(60)};
+    // How long a connection must last to count as the broker being fine. One
+    // that accepts and then drops band3 at once (another client taking over
+    // its id, an ACL) goes on stepping through the waits, not reconnecting at
+    // once forever.
+    std::chrono::milliseconds stable_after = std::chrono::seconds(60);
     // lines without a prefix; a failure is logged only when its text differs
-    // from the last one logged
+    // from the last one logged, unless a lasting connection came between
     std::function<void(const std::string&)> log;
+    // how the host is looked up, on a thread of its own; net::ResolveIPv4
+    // when empty (tests slow it down)
+    std::function<std::vector<uint32_t>(const std::string& host)> resolve;
 };
 
 // A Session on a thread of its own, over TCP, like rooms::Client. While
@@ -120,8 +128,11 @@ public:
 
 private:
     void Run(const ClientConfig& config, const Produce& produce);
-    // one connection, from looking the broker up until it's over or stopped
-    void Attempt(Session& session, const ClientConfig& config, const Produce& produce);
+    // one connection, from looking the broker up until it's over or stopped;
+    // true if it stayed connected for config.stable_after
+    bool Attempt(Session& session, const ClientConfig& config, const Produce& produce);
+    // the broker's addresses, waited for in kWake slices; empty if stopped first
+    std::vector<uint32_t> Resolve(const ClientConfig& config);
     // waits out `delay` with the status saying so; false if stopped
     bool Backoff(std::chrono::milliseconds delay, const std::string& error);
     void SetStatus(ClientStatus::State state, std::string error = {}, int retry_in_s = 0);
@@ -137,8 +148,11 @@ private:
     ClientStatus status_;
     // what Stop publishes before it disconnects
     std::vector<Message> last_;
-    // the thread's: the failure logged last, empty after a connection
+    // the thread's: the failure logged last, empty after a lasting connection
     std::string last_failure_;
+    // the thread's: "connected to" was logged since the last failure was, so
+    // a broker that keeps dropping band3 doesn't log it on every flap
+    bool connected_logged_ = false;
 };
 
 }  // namespace band3::mqtt
