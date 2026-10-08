@@ -261,6 +261,30 @@ TEST_CASE("each phrase is a line, and phrases without syllables are left out") {
     CHECK(parts[0].lines[1].syllables.at(0).text == "two");
 }
 
+TEST_CASE("notes that abut keep their lengths, whichever of the on and off comes first") {
+    // the second phrase and the second syllable are added first, so at tick
+    // 480 each note's on comes before the off of the note it follows
+    const auto midi = ReadMidi(Smf(480, {Track()
+                                             .Name("PART VOCALS")
+                                             .Note(480, 480, 105)
+                                             .Note(0, 480, 105)
+                                             .Note(240, 240, 60).Lyric(240, "two")
+                                             .Note(0, 240, 60).Lyric(0, "one")
+                                             .Note(480, 240, 62).Lyric(480, "three")
+                                             .Chunk()}));
+    REQUIRE(midi);
+    const auto parts = FromMidi(*midi);
+    REQUIRE(parts.size() == 1);
+    REQUIRE(parts[0].lines.size() == 2);
+    const auto& first = parts[0].lines[0].syllables;
+    REQUIRE(first.size() == 2);
+    CHECK(first[0].end_ms == 250);
+    CHECK(first[1].start_ms == 250);
+    CHECK(first[1].end_ms == 500);
+    CHECK(parts[0].lines[1].syllables.at(0).text == "three");
+    CHECK(parts[0].lines[1].end_ms == 1000);
+}
+
 TEST_CASE("text events stand in for lyrics where a track has none, minus its [markers]") {
     const auto midi = ReadMidi(Smf(480, {Track()
                                              .Name("PART VOCALS")

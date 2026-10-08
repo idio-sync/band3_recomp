@@ -188,11 +188,21 @@ struct Span {
 // the notes `pick` takes, as start..end, by start
 template <typename Pick>
 std::vector<Span> NoteSpans(const MidiTrack& track, Pick pick) {
-    std::vector<Span> spans;
-    std::map<uint8_t, uint32_t> open;
+    std::vector<const MidiEvent*> notes;
     for (const MidiEvent& e : track.events) {
         if (e.kind != MidiEvent::Kind::kNoteOn && e.kind != MidiEvent::Kind::kNoteOff) continue;
-        if (!pick(e.note)) continue;
+        if (pick(e.note)) notes.push_back(&e);
+    }
+    // a tick's offs before its ons: a note that starts where the last one
+    // ended may be written on first, and would otherwise end at once
+    std::stable_sort(notes.begin(), notes.end(), [](const MidiEvent* a, const MidiEvent* b) {
+        if (a->tick != b->tick) return a->tick < b->tick;
+        return a->kind == MidiEvent::Kind::kNoteOff && b->kind == MidiEvent::Kind::kNoteOn;
+    });
+    std::vector<Span> spans;
+    std::map<uint8_t, uint32_t> open;
+    for (const MidiEvent* note : notes) {
+        const MidiEvent& e = *note;
         const auto it = open.find(e.note);
         if (it != open.end()) {
             // a note on again before its off ends the first there
