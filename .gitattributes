@@ -1,0 +1,2 @@
+# shell scripts run under bash (Git Bash, MSYS2, Linux), which CRLF line endings break
+*.sh text eol=lf
