@@ -1,4 +1,5 @@
 #include "milo.h"
+#include <algorithm>
 #include <charconv>
 #include <cstdint>
 #include <cstdlib>
@@ -40,14 +41,20 @@ uint32_t Le32(std::string_view s, size_t at) {
            static_cast<uint32_t>(static_cast<uint8_t>(s[at + 3])) << 24;
 }
 
-std::optional<std::string> Inflate(std::string_view raw) {
-    int size = 0;
-    char* out = stbi_zlib_decode_noheader_malloc(raw.data(), static_cast<int>(raw.size()), &size);
-    if (!out) return std::nullopt;
-    std::string result(out, static_cast<size_t>(size));
-    STBI_FREE(out);
-    return result;
+// a block's raw deflate, nullopt past `limit` bytes inflated
+std::optional<std::string> Inflate(std::string_view raw, size_t limit) {
+    std::string out(limit, '\0');
+    const int size = stbi_zlib_decode_noheader_buffer(out.data(), static_cast<int>(limit), raw.data(),
+                                                      static_cast<int>(raw.size()));
+    if (size < 0) return std::nullopt;
+    out.resize(static_cast<size_t>(size));
+    return out;
 }
+
+// what a milo may inflate to: a block at most the header's largest (16 MB at
+// most), all of them 64 MB
+constexpr size_t kMaxBlock = 16 * 1024 * 1024;
+constexpr size_t kMaxTotal = 64 * 1024 * 1024;
 
 // a milo's objects start with its version, big-endian (RB3's are 0x1c)
 bool StartsMilo(std::string_view block) {
@@ -67,7 +74,8 @@ std::optional<std::string> Decompress(std::string_view file) {
     if (magic != kCompressedSized && magic != kCompressed) return std::nullopt;
     const uint32_t offset = Le32(file, 4);
     const uint32_t blocks = Le32(file, 8);
-    if (offset > file.size() || blocks > (offset - 16) / 4) return std::nullopt;
+    const size_t largest = std::min<size_t>(Le32(file, 12), kMaxBlock);
+    if (offset < 16 || offset > file.size() || blocks > (offset - 16) / 4) return std::nullopt;
     std::string out;
     size_t at = offset;
     // a CABEDEAF block taken as stored: those after it are too
@@ -84,17 +92,17 @@ std::optional<std::string> Decompress(std::string_view file) {
         }
         std::optional<std::string> inflated;
         if (magic == kCompressedSized) {
-            if (block.size() >= 4) inflated = Inflate(block.substr(4));
+            if (block.size() >= 4) inflated = Inflate(block.substr(4), largest);
         } else if (stored_unflagged) {
             inflated = std::string(block);
         } else {
-            inflated = Inflate(block);
+            inflated = Inflate(block, largest);
             if (!inflated && i == 0 && StartsMilo(block)) {
                 inflated = std::string(block);
                 stored_unflagged = true;
             }
         }
-        if (!inflated) return std::nullopt;
+        if (!inflated || out.size() + inflated->size() > kMaxTotal) return std::nullopt;
         out += *inflated;
     }
     return out;

@@ -44,13 +44,12 @@ std::string Deflate(const std::string& data) {
 
 constexpr uint32_t kStored = 0x01000000;
 
-// a milo: the header (magic, data offset 0x810, block count, largest block,
-// block sizes), padding to the offset, then the blocks
-std::string Milo(uint32_t magic, const std::vector<std::pair<uint32_t, std::string>>& blocks) {
-    size_t largest = 0;
-    for (const auto& [flags, b] : blocks) largest = std::max(largest, b.size());
+// a milo: the header (magic, data offset 0x810, block count, the largest
+// block once inflated, block sizes), padding to the offset, then the blocks
+std::string Milo(uint32_t magic, const std::vector<std::pair<uint32_t, std::string>>& blocks,
+                 uint32_t largest = 0x10000) {
     std::string out = Le32(magic) + Le32(0x810) + Le32(static_cast<uint32_t>(blocks.size())) +
-                      Le32(static_cast<uint32_t>(largest));
+                      Le32(largest);
     for (const auto& [flags, b] : blocks) out += Le32(static_cast<uint32_t>(b.size()) | flags);
     out.resize(0x810, '\0');
     for (const auto& [flags, b] : blocks) out += b;
@@ -119,12 +118,28 @@ TEST_CASE("CABEDEAF blocks inflate as they are, or are taken as stored when they
     CHECK(!Decompress(Milo(0xCABEDEAF, {{0, std::string(64, '\xFF')}})));
 }
 
+TEST_CASE("a block that inflates past the largest block the header gives is refused") {
+    // 64 KB of one byte deflates to almost nothing; the header says blocks are
+    // at most 1 KB once inflated
+    const std::string big(64 * 1024, 'x');
+    std::string milo = Milo(0xCDBEDEAF, {{0, Le32(static_cast<uint32_t>(big.size())) + Deflate(big)}});
+    milo.replace(12, 4, Le32(1024));
+    CHECK(!Decompress(milo));
+    // as the game writes them, the largest block given is the largest inflated
+    std::string fits = Milo(0xCABEDEAF, {{0, Deflate(big)}});
+    fits.replace(12, 4, Le32(static_cast<uint32_t>(big.size())));
+    CHECK(Decompress(fits) == big);
+}
+
 TEST_CASE("what isn't a milo, or runs past its end, is refused") {
     CHECK(!Decompress(""));
     CHECK(!Decompress(Le32(0xCDBEDEAF) + Le32(0x810)));
     CHECK(!Decompress(Milo(0x12345678, {{kStored, kPayload}})));
     const std::string whole = Milo(0xCDBEDEAF, {{kStored, kPayload}});
     CHECK(!Decompress(whole.substr(0, whole.size() - 1)));
+    // a data offset inside the header itself
+    std::string inside = Le32(0xCDBEDEAF) + Le32(8) + Le32(1) + Le32(16);
+    CHECK(!Decompress(inside));
     // a block count far past what the header can hold
     std::string huge = Le32(0xCDBEDEAF) + Le32(0x810) + Le32(1000000) + Le32(16);
     huge.resize(0x810, '\0');
