@@ -97,6 +97,20 @@ const std::vector<Info> kInfos = {
 const std::string kPayload = std::string("\x00\x00\x00\x1c", 4) + "UILabelDir and the rest " +
                              std::string(3000, 'x') + "end";
 
+// a 4x4 DXT5 bitmap as a milo embeds it (big-endian header), every pixel
+// colour `rgb565`, opaque; `encoding` 24 (DXT5), or another to make one band3
+// can't decode
+std::string Bitmap(uint16_t rgb565, uint32_t encoding = 24) {
+    std::string block = {'\xFF', '\0', '\0', '\0', '\0', '\0', '\0', '\0',
+                         static_cast<char>(rgb565 & 0xFF), static_cast<char>(rgb565 >> 8),
+                         '\0', '\0', '\0', '\0', '\0', '\0'};
+    // the 360's byte-swapped 16-bit words
+    for (size_t i = 0; i < block.size(); i += 2) std::swap(block[i], block[i + 1]);
+    return std::string("\x01\x08", 2) + Be32(encoding) + std::string(1, '\0') + Be16(4) + Be16(4) +
+           Be16(4) + std::string(19, '\0') + block;
+}
+constexpr uint16_t kRed = 0xF800, kGreen = 0x07E0;
+
 }
 
 TEST_CASE("CDBEDEAF blocks inflate after their 4-byte size, and stored ones are copied") {
@@ -211,4 +225,41 @@ TEST_CASE("a font's JSON gives its cells, texture, glyphs and kerning") {
     CHECK(FormatFontJson(font) ==
           "{\"cell\":[30,20],\"texture\":[256,128],\"base_kerning\":0.125,\"monospace\":false,"
           "\"glyphs\":{\"65\":[0,0.5,0.75,1]},\"kerning\":[[65,66,-0.25]]}");
+}
+
+TEST_CASE("a texture is found by its name, in the bitmap after it") {
+    // two Tex objects' data: each its file's name (a length, or a path), then its bitmap
+    const std::string raw = std::string("\x00\x00\x00\x1c", 4) + Name("a.png") + std::string(1, '\0') + "fields" +
+                            Bitmap(kRed) + Name("ui/x/b.bmp") + Bitmap(kGreen);
+    const auto a = FindNamedBitmap(raw, "a.png");
+    REQUIRE(a);
+    CHECK(a->rgba[0] == 255);  // red
+    CHECK(a->rgba[1] == 0);
+    const auto b = FindNamedBitmap(raw, "b.bmp");
+    REQUIRE(b);
+    CHECK(b->rgba[0] == 0);
+    CHECK(b->rgba[1] == 255);  // green
+    CHECK(!FindNamedBitmap(raw, "c.png"));
+}
+
+TEST_CASE("a name counts only whole, and only before its own bitmap") {
+    // "xa.png" isn't a.png; a name with no bitmap before the next texture's
+    // name has none of its own
+    CHECK(!FindNamedBitmap(Name("xa.png") + Bitmap(kRed), "a.png"));
+    CHECK(!FindNamedBitmap(Name("a.png.tex") + Bitmap(kRed), "a.png"));
+    const std::string raw = Name("a.png") + std::string(1, '\0') + "no bitmap" + Name("b.png") + Bitmap(kGreen);
+    CHECK(!FindNamedBitmap(raw, "a.png"));
+    CHECK(FindNamedBitmap(raw, "b.png"));
+    // a later mention of the name finds the bitmap after it
+    CHECK(FindNamedBitmap(Name("a.png") + Name("b.png") + Name("a.png") + Bitmap(kRed), "a.png"));
+}
+
+TEST_CASE("an undecodable bitmap after the name isn't taken") {
+    // encoding 32 (a BC5 normal map) isn't one band3 decodes, nor the next texture's
+    const std::string raw = Name("n.png") + Bitmap(kRed, 32) + Name("m.png") + Bitmap(kGreen);
+    CHECK(!FindNamedBitmap(raw, "n.png"));
+    // too far after its name: past the reach, it's some other object's
+    CHECK(!FindNamedBitmap(Name("far.png") + std::string(5000, 'x') + Bitmap(kRed), "far.png"));
+    CHECK(!FindNamedBitmap("", "a.png"));
+    CHECK(!FindNamedBitmap(Name("a.png"), ""));
 }

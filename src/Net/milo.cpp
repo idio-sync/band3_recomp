@@ -1,5 +1,6 @@
 #include "milo.h"
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cstdint>
 #include <cstdlib>
@@ -222,6 +223,38 @@ std::string Number(float f) {
     return ec == std::errc() ? std::string(buf, end) : std::string("0");
 }
 
+// the bitmap whose header starts at `at`, decoded; nullopt when none does
+std::optional<http::Image> BitmapAt(std::string_view raw, size_t at) {
+    if (at + 32 > raw.size() || raw[at] != '\x01') return std::nullopt;
+    const uint8_t bpp = static_cast<uint8_t>(raw[at + 1]);
+    Reader r{raw, at + 2};
+    const uint32_t encoding = r.U32();
+    if ((bpp != 4 && bpp != 8) || (encoding != 8 && encoding != 24)) return std::nullopt;
+    const uint16_t width = Be16At(raw, at + 7), height = Be16At(raw, at + 9);
+    if (width < 4 || height < 4 || width > kMaxTexture || height > kMaxTexture) return std::nullopt;
+    if (raw.substr(at + 13, 19).find_first_not_of('\0') != std::string_view::npos) return std::nullopt;
+    // album_art's little-endian header, then the same blocks
+    std::string file(32, '\0');
+    file[0] = 1;
+    file[1] = static_cast<char>(bpp);
+    file[2] = static_cast<char>(encoding);
+    file[6] = raw[at + 6];
+    file[7] = static_cast<char>(width & 0xFF);
+    file[8] = static_cast<char>(width >> 8);
+    file[9] = static_cast<char>(height & 0xFF);
+    file[10] = static_cast<char>(height >> 8);
+    file[11] = raw[at + 12];
+    file[12] = raw[at + 11];
+    file += raw.substr(at + 32);
+    return http::DecodeXboxBitmap(file);
+}
+
+// a character a texture's file name can go on with
+bool NameChar(char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-' || c == '.' ||
+           c == '(' || c == ')';
+}
+
 }
 
 std::optional<Font> FindFont(std::string_view raw) {
@@ -244,28 +277,29 @@ std::optional<Font> FindFont(std::string_view raw) {
 
 std::optional<http::Image> FindBitmap(std::string_view raw) {
     for (size_t at = 0; at + 32 <= raw.size(); at++) {
-        if (raw[at] != '\x01') continue;
-        const uint8_t bpp = static_cast<uint8_t>(raw[at + 1]);
-        Reader r{raw, at + 2};
-        const uint32_t encoding = r.U32();
-        if ((bpp != 4 && bpp != 8) || (encoding != 8 && encoding != 24)) continue;
-        const uint16_t width = Be16At(raw, at + 7), height = Be16At(raw, at + 9);
-        if (width < 4 || height < 4 || width > kMaxTexture || height > kMaxTexture) continue;
-        if (raw.substr(at + 13, 19).find_first_not_of('\0') != std::string_view::npos) continue;
-        // album_art's little-endian header, then the same blocks
-        std::string file(32, '\0');
-        file[0] = 1;
-        file[1] = static_cast<char>(bpp);
-        file[2] = static_cast<char>(encoding);
-        file[6] = raw[at + 6];
-        file[7] = static_cast<char>(width & 0xFF);
-        file[8] = static_cast<char>(width >> 8);
-        file[9] = static_cast<char>(height & 0xFF);
-        file[10] = static_cast<char>(height >> 8);
-        file[11] = raw[at + 12];
-        file[12] = raw[at + 11];
-        file += raw.substr(at + 32);
-        if (auto image = http::DecodeXboxBitmap(file)) return image;
+        if (auto image = BitmapAt(raw, at)) return image;
+    }
+    return std::nullopt;
+}
+
+std::optional<http::Image> FindNamedBitmap(std::string_view raw, std::string_view name) {
+    if (name.empty()) return std::nullopt;
+    for (size_t at = raw.find(name); at != std::string_view::npos; at = raw.find(name, at + 1)) {
+        const size_t end = at + name.size();
+        const bool after_slash = at > 0 && raw[at - 1] == '/';
+        const bool after_length =
+            at >= 4 && Reader{raw, at - 4}.U32() == static_cast<uint32_t>(name.size());
+        if (!(after_slash || after_length) || (end < raw.size() && NameChar(raw[end]))) continue;
+        // up to the next texture's name, and no further than the reach
+        size_t limit = std::min(raw.size(), end + kNamedBitmapReach);
+        for (const std::string_view ext : {std::string_view(".png"), std::string_view(".bmp")}) {
+            const size_t next = raw.find(ext, end);
+            if (next != std::string_view::npos) limit = std::min(limit, next);
+        }
+        for (size_t b = end; b < limit; b++) {
+            if (raw[b] != '\x01') continue;
+            if (auto image = BitmapAt(raw, b)) return image;
+        }
     }
     return std::nullopt;
 }

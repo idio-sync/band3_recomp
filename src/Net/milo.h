@@ -65,6 +65,17 @@ std::optional<Font> FindFont(std::string_view raw);
 // width, u16 height, u16 bytes per line, 19 zero bytes, then the blocks.
 std::optional<http::Image> FindBitmap(std::string_view raw);
 
+// The bitmap of the texture a decompressed UI milo names `name` (its file's
+// name, such as "lyrics_bg_blue.png"): a Tex object's data records the file
+// its bitmap came from, then holds that bitmap, so it's the first DXT1 or
+// DXT5 bitmap (as FindBitmap reads one) within kNamedBitmapReach bytes after
+// the name, before any other texture's name (.png, .bmp). The name counts only
+// whole: after a '/' or its length (u32), and not run on into more of a name.
+// nullopt when no such bitmap decodes: a format band3 doesn't decode (a BC5
+// normal map) is never another texture's pixels.
+std::optional<http::Image> FindNamedBitmap(std::string_view raw, std::string_view name);
+inline constexpr size_t kNamedBitmapReach = 4096;
+
 // /game_asset/font's JSON: {"cell":[w,h],"texture":[w,h],"base_kerning":k,
 // "monospace":b,"glyphs":{"<code>":[u,v,width,advance],...},"kerning":[[left,right,k],...]}
 std::string FormatFontJson(const Font& font);

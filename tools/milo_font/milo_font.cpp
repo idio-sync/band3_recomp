@@ -3,6 +3,8 @@
 // Built with the unit tests (tests/CMakeLists.txt).
 //   band3_milo_font <font.milo_xbox>              the JSON
 //   band3_milo_font <font.milo_xbox> <out.png>    the JSON, and its texture as a PNG
+//   band3_milo_font --texture <name> <ui.milo_xbox> <out.png>   a named texture as a PNG,
+//                                                  as /game_asset/milo_texture serves it
 
 #include <cstdio>
 #include <fstream>
@@ -12,8 +14,28 @@
 #include "src/Net/milo.h"
 
 int main(int argc, char** argv) {
+    if (argc == 5 && std::string(argv[1]) == "--texture") {
+        std::ifstream in(argv[3], std::ios::binary);
+        if (!in) {
+            std::fprintf(stderr, "can't open %s\n", argv[3]);
+            return 1;
+        }
+        const std::string file((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const auto raw = band3::milo::Decompress(file);
+        const auto image = raw ? band3::milo::FindNamedBitmap(*raw, argv[2]) : std::nullopt;
+        if (!image) {
+            std::fprintf(stderr, "%s has no %s band3 decodes\n", argv[3], argv[2]);
+            return 1;
+        }
+        std::ofstream out(argv[4], std::ios::binary);
+        const std::string png = band3::http::EncodePng(*image);
+        out.write(png.data(), static_cast<std::streamsize>(png.size()));
+        return 0;
+    }
     if (argc < 2) {
-        std::fprintf(stderr, "usage: band3_milo_font <font.milo_xbox> [out.png]\n");
+        std::fprintf(stderr,
+                     "usage: band3_milo_font <font.milo_xbox> [out.png]\n"
+                     "       band3_milo_font --texture <name> <ui.milo_xbox> <out.png>\n");
         return 2;
     }
     std::ifstream in(argv[1], std::ios::binary);
