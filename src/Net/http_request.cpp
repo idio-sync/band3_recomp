@@ -176,6 +176,10 @@ Route MatchRoute(std::string_view target) {
         route.endpoint = Endpoint::kKaraokeModel;
     } else if (bare == "/live/events") {
         route.endpoint = Endpoint::kLiveEvents;
+    } else if (bare == "/game_asset/milo_texture") {
+        route.endpoint = Endpoint::kGameMiloTexture;
+        route.argument = QueryParam(target, "milo").value_or("");
+        route.name = QueryParam(target, "name").value_or("");
     } else if (path == "/") {
         route.endpoint = Endpoint::kIndex;
     } else if (path == "/list_songs") {
@@ -237,6 +241,22 @@ bool AllowedFontName(std::string_view name) {
     if (name.empty() || name.size() > 64) return false;
     return std::ranges::all_of(name, [](char c) {
         return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '(' ||
+               c == ')' || c == '-';
+    });
+}
+
+bool AllowedMiloPath(std::string_view path) {
+    if (path.empty() || path.size() > 255) return false;
+    if (!path.starts_with("ui/") || !path.ends_with(".milo_xbox")) return false;
+    return path.find("..") == std::string_view::npos && path.find('\\') == std::string_view::npos;
+}
+
+bool AllowedTextureName(std::string_view name) {
+    // ".png" alone isn't a name
+    if (name.size() < 5 || name.size() > 64) return false;
+    if (!name.ends_with(".png") && !name.ends_with(".bmp")) return false;
+    return std::ranges::all_of(name, [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '(' ||
                c == ')' || c == '-';
     });
 }

@@ -241,3 +241,41 @@ TEST_CASE("replies aren't cached unless they say for how long") {
     CHECK(art.find("Cache-Control: max-age=3600\r\n") != std::string::npos);
     CHECK(art.find("no-store") == std::string::npos);
 }
+
+TEST_CASE("a milo's texture is asked for by the milo's path and the texture's name") {
+    const Route r = MatchRoute(
+        "/game_asset/milo_texture?milo=ui%2Ftrack%2Fgen%2Ftrack_shared.milo_xbox&name=lyrics_bg_blue.png");
+    CHECK(r.endpoint == Endpoint::kGameMiloTexture);
+    CHECK(r.argument == "ui/track/gen/track_shared.milo_xbox");
+    CHECK(r.name == "lyrics_bg_blue.png");
+    // either order, and a missing one is empty
+    const Route swapped = MatchRoute("/game_asset/milo_texture?name=a.bmp&milo=ui%2Fa.milo_xbox");
+    CHECK(swapped.argument == "ui/a.milo_xbox");
+    CHECK(swapped.name == "a.bmp");
+    const Route bare = MatchRoute("/game_asset/milo_texture");
+    CHECK(bare.endpoint == Endpoint::kGameMiloTexture);
+    CHECK(bare.argument.empty());
+    CHECK(bare.name.empty());
+}
+
+TEST_CASE("only UI milos and plain texture names are served") {
+    CHECK(AllowedMiloPath("ui/track/gen/track_shared.milo_xbox"));
+    CHECK(AllowedMiloPath("ui/overshell/gen/overshell_player_common.milo_xbox"));
+    CHECK(!AllowedMiloPath("dx/a.milo_xbox"));
+    CHECK(!AllowedMiloPath("songs/x/gen/x.milo_xbox"));
+    CHECK(!AllowedMiloPath("ui/../songs/x.milo_xbox"));
+    CHECK(!AllowedMiloPath("ui\a.milo_xbox"));
+    CHECK(!AllowedMiloPath("ui/a.png_xbox"));
+    CHECK(!AllowedMiloPath(""));
+    CHECK(!AllowedMiloPath("ui/" + std::string(250, 'a') + ".milo_xbox"));
+
+    CHECK(AllowedTextureName("lyrics_bg_blue.png"));
+    CHECK(AllowedTextureName("rb3_icons.bmp"));
+    CHECK(AllowedTextureName("top_help_lowered02.bmp"));
+    CHECK(!AllowedTextureName("Lyrics.png"));
+    CHECK(!AllowedTextureName("a/b.png"));
+    CHECK(!AllowedTextureName("a.tex"));
+    CHECK(!AllowedTextureName(".png"));
+    CHECK(!AllowedTextureName(""));
+    CHECK(!AllowedTextureName(std::string(61, 'a') + ".png"));
+}

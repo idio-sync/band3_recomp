@@ -63,14 +63,17 @@ enum class Endpoint {
     kGameTexture,   // /game_asset/texture?path=  a standalone texture as a PNG
     kGameFont,      // /game_asset/font?name=     a font's metrics as JSON
     kGameFontPng,   // /game_asset/font.png?name=  its texture as a PNG
+    kGameMiloTexture,  // /game_asset/milo_texture?milo=&name=  a texture inside a UI milo as a PNG
 };
 
 struct Route {
     Endpoint endpoint = Endpoint::kNotFound;
     int32_t song_id = 0;   // kSong
     // kJump's, kAlbumArt's and kLyrics' shortname, kExecute's script, the
-    // game assets' path or name, decoded
+    // game assets' path or name (kGameMiloTexture's milo), decoded
     std::string argument;
+    // kGameMiloTexture's texture name (its milo's path is the argument), decoded
+    std::string name;
 };
 
 // RB3E matches the decoded target, so /jump?shortname=a%26b jumps to "a&b"
@@ -82,6 +85,12 @@ bool AllowedTexturePath(std::string_view path);
 // /game_asset/font's names, a file in ui/resource/fonts/gen/: lowercase
 // letters, digits, _ ( ) and -, at most 64 characters
 bool AllowedFontName(std::string_view name);
+// /game_asset/milo_texture's milos: a .milo_xbox under ui/, nothing that
+// climbs out (..), no backslashes, at most 255 characters
+bool AllowedMiloPath(std::string_view path);
+// its textures, by their file's name: lowercase letters, digits, _ . ( ) and
+// -, ending .png or .bmp, at most 64 characters
+bool AllowedTextureName(std::string_view name);
 
 // one song, as /song_<id> and /list_songs report it
 struct SongInfo {

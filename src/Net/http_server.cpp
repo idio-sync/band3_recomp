@@ -460,6 +460,50 @@ std::optional<Asset> GameAsset(const Route& route) {
     return route.endpoint == Endpoint::kGameFont ? json : png;
 }
 
+// /game_asset/milo_texture's milos run to megabytes (track_shared is 3.8 MB,
+// 11 MB decompressed), and a page asks for several textures of one, so the
+// last one decompressed is kept for those after it
+constexpr size_t kMaxMiloFile = 8 * 1024 * 1024;
+std::mutex g_milo_mutex;
+std::string g_milo_path;
+std::shared_ptr<const std::string> g_milo_raw;
+
+// nullopt while the game is busy
+std::optional<Asset> MiloTextureAsset(const Route& route) {
+    const std::string& milo = route.argument;
+    if (!AllowedMiloPath(milo) || !AllowedTextureName(route.name)) return Asset{};
+    const std::string key = "m:" + milo + "|" + route.name;
+    if (auto asset = CachedAsset(key)) return asset;
+    std::shared_ptr<const std::string> raw;
+    {
+        std::lock_guard lock(g_milo_mutex);
+        if (g_milo_path == milo) raw = g_milo_raw;
+    }
+    if (!raw) {
+        std::optional<std::string> file;
+        if (!RunOnGameThread([&file, &milo](PPCContext& ctx, uint8_t* base) {
+                file = game::GameFile(ctx, base, milo, kMaxMiloFile);
+            })) {
+            return std::nullopt;
+        }
+        auto decompressed = file ? milo::Decompress(*file) : std::nullopt;
+        if (decompressed) {
+            raw = std::make_shared<const std::string>(std::move(*decompressed));
+            std::lock_guard lock(g_milo_mutex);
+            g_milo_path = milo;
+            g_milo_raw = raw;
+        }
+    }
+    Asset asset;
+    if (const auto image = raw ? milo::FindNamedBitmap(*raw, route.name) : std::nullopt) {
+        asset = {200, "image/png", EncodePng(*image)};
+    } else {
+        REXLOG_DEBUG("Web server: {} has no {} band3 decodes", milo, route.name);
+    }
+    CacheAsset(key, asset);
+    return asset;
+}
+
 // the song IDs of every song in the game; nullopt while the game is busy
 std::optional<std::set<int32_t>> GameSongIds() {
     std::vector<int32_t> ids;
@@ -698,6 +742,12 @@ std::string Handle(const Request& request) {
         case Endpoint::kGameFont:
         case Endpoint::kGameFontPng: {
             const auto asset = GameAsset(route);
+            if (!asset) return Busy(cors);
+            return Response(asset->status, asset->type, asset->body, cors,
+                            asset->status == 200 ? kAssetMaxAge : 0);
+        }
+        case Endpoint::kGameMiloTexture: {
+            const auto asset = MiloTextureAsset(route);
             if (!asset) return Busy(cors);
             return Response(asset->status, asset->type, asset->body, cors,
                             asset->status == 200 ? kAssetMaxAge : 0);
