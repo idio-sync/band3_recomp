@@ -2,7 +2,10 @@
 """Checks band3's live pages against a game in a song with vocals: /live/events
 and /lyrics?shortname=. Start band3 with the web server and get into a song
 (tests/game/karaoke.b3t says how), then run this. It prints the line the page
-shows at the end, to hold against a screenshot of the game.
+shows at the end, to hold against a screenshot of the game. It also checks
+what the page's RB3 look needs: the clock's score, the state's band, each
+line's overdrive flag, and every texture the page asks for (the header's normal
+map is Rock Band 3 Deluxe's, so a 404 for it is reported, not failed).
 
 Usage:
   python tools/karaoke_check.py [--port 21070] [--seconds 10] [--vocals lead]
@@ -11,10 +14,33 @@ Exits 1 at the first check that fails, saying which.
 
 import argparse
 import json
+import os
+import re
 import sys
 import time
 import urllib.parse
 import urllib.request
+
+PAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    'src', 'Net', 'karaoke_page.h')
+
+
+def page_textures():
+    """(key, URL path) of each texture in the page's model (KaraokeModel's
+    TEXTURES), read out of karaoke_page.h as the page has them."""
+    source = open(PAGE, encoding='utf-8').read()
+    names = dict(re.findall(r"var (k\w+) = '([^']+)';", source))
+    out = []
+    for key, body in re.findall(r"^\s+(\w+): \{ (milo: [^}]*|path: [^}]*) \}", source, re.M):
+        milo = re.match(r"milo: (\w+|'[^']+'), name: '([^']+)'", body)
+        if milo:
+            where = names.get(milo.group(1), milo.group(1).strip("'"))
+            out.append((key, '/game_asset/milo_texture?milo=' + urllib.parse.quote(where, safe='') +
+                        '&name=' + urllib.parse.quote(milo.group(2), safe='')))
+        else:
+            path = re.match(r"path: '([^']+)'", body).group(1)
+            out.append((key, '/game_asset/texture?path=' + urllib.parse.quote(path, safe='')))
+    return out
 
 
 def read_events(url, seconds):
@@ -75,6 +101,28 @@ def main():
         check(all(l['start_ms'] <= s['start_ms'] and s['end_ms'] <= l['end_ms'] + 1000
                   for l in part['lines'] for s in l['syllables']),
               f"{part['part']}'s syllables sit in their lines")
+
+    check(all(isinstance(l.get('overdrive'), bool) for p in lyrics['parts'] for l in p['lines']),
+          'every line says whether it is an overdrive line')
+    print(f"overdrive lines: {[(p['part'], sum(l['overdrive'] for l in p['lines'])) for p in lyrics['parts']]}")
+    check(all(isinstance(c[2].get('score'), int) and c[2]['score'] >= 0 for c in clocks),
+          f"every clock carries the band's score ({clocks[-1][2].get('score')})")
+    band = state.get('band')
+    check(isinstance(band, list) and len(band) == 4, 'the state has the band, four slots')
+    check(any(m and m.get('part') == 'vocals' for m in band), f'the band has a singer ({band})')
+
+    textures = page_textures()
+    check(len(textures) >= 16, f'the page asks for {len(textures)} textures')
+    for key, path in textures:
+        try:
+            with urllib.request.urlopen(server + path, timeout=30) as reply:
+                status, kind = reply.status, reply.headers.get('Content-Type', '')
+        except urllib.error.HTTPError as e:
+            status, kind = e.code, ''
+        if key == 'header_normal' and status == 404:
+            print(f'note: {key} is 404 (no Rock Band 3 Deluxe): the header is plain')
+            continue
+        check(status == 200 and kind == 'image/png', f'texture {key}: {status} {kind}')
 
     now = ms[-1]
     lead = lyrics['parts'][0]

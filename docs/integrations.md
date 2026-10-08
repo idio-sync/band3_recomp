@@ -276,14 +276,20 @@ made-up songs.
 
 `/karaoke` is a sing-along page for a screen facing the room: the song's lyrics, the line
 being sung and the next, each syllable filling as it's sung, with the harmony parts
-stacked when the band's vocalist sings harmonies. Between songs it shows the song's album
-art, title and artist. Its corner button sets the timing (for a TV's delay) and the text
-size, kept in that browser. A page over plain http can't keep a device awake, so turn its
+stacked when the band's vocalist sings harmonies, and overdrive phrases on the game's gold
+lane. Above them is the song's header, with the band's score; below them, the band's player
+tabs. Between songs it shows the song's album art, genre, year and parts. Its corner button
+sets the timing (for a TV's delay) and the text size, kept in that browser. A page over
+plain http can't keep a device awake, so turn its
 sleep off. The library page's header links to it.
 
 Its lyrics and the song's title are set in the game's own Pentatonic (the cut the game
 draws largest, so it stays sharp on a TV), read from your game files as the page asks for
-them; where that font can't be read, the page uses its own.
+them; where that font can't be read, the page uses its own. It dresses itself in the game's
+own menus the same way (the song header, the vocal track's lanes, the overdrive lane, the
+player tabs, the pause box) from `/game_asset`, and keeps its plain look wherever a texture
+doesn't load. The header's glass needs Rock Band 3 Deluxe's copy of its normal map; without
+it, the header is plain navy.
 
 It's built on endpoints other pages can use. The game assets are served from your own game
 files as they're asked for, and only on your network; band3 ships none of them.
