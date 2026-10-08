@@ -26,7 +26,7 @@
 // Addresses and struct offsets are RB3E's Xbox 360 TU5 ones (include/ports_xbox360.h,
 // include/rb3/*.h), which match this project's function map.
 
-extern "C" void __imp__StageKit__SetState(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__JoypadStageKitSetRaw(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__Game____ct(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__Game____dt(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__PresenceMgr__UpdatePresence(PPCContext& ctx, uint8_t* base);
@@ -218,11 +218,13 @@ band3::events::BandInfo ReadBandInfo(const PPCContext& ctx, uint8_t* base) {
 
 }
 
-// StageKit::SetState(left, right): left = LED pattern, right = colour/strobe/fog command
-extern "C" REX_FUNC(StageKit__SetState)
+// JoypadStageKitSetRaw(left, right), RB3E's StageKit::SetState: left = LED pattern, right =
+// colour/strobe/fog command. StageKitPoll sends at most one command a frame, to the first
+// stagekit_xbox pad if there is one, and calls this either way.
+extern "C" REX_FUNC(JoypadStageKitSetRaw)
 {
     SendStagekit(static_cast<uint8_t>(ctx.r3.u32), static_cast<uint8_t>(ctx.r4.u32));
-    __imp__StageKit__SetState(ctx, base);
+    __imp__JoypadStageKitSetRaw(ctx, base);
 }
 
 extern "C" REX_FUNC(Game____ct)

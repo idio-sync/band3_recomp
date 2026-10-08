@@ -21,7 +21,7 @@ void Stop();
 bool Configured();
 // the MQTT connection's state, as mqtt::StatusText says it; "off" without a host
 std::string StateName();
-// StageKit::SetState(left, right), from the game thread: applied to the
+// JoypadStageKitSetRaw(left, right), from the game thread: applied to the
 // lights HA is shown when ha_stagekit is on. Lock-free, never waits.
 void NoteStageKit(uint8_t left, uint8_t right);
 

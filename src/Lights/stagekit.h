@@ -5,7 +5,7 @@
 #include <span>
 #include <string_view>
 
-// The Rock Band Stage Kit's commands, as StageKit::SetState(left, right) sends
+// The Rock Band Stage Kit's commands, as JoypadStageKitSetRaw(left, right) sends
 // them: `right` says what to set and `left` is the colour's mask of eight LEDs.
 // What a kit shows follows from the commands it was sent (StageKit), so a kit
 // can be brought to any state with a few commands (KitSync). The same two
