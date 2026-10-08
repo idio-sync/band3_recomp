@@ -180,6 +180,7 @@ namespace {
 
 constexpr uint8_t kPitchLow = 36, kPitchHigh = 84;
 constexpr uint8_t kPhrase = 105, kPhrase2 = 106;
+constexpr uint8_t kOverdrive = 116;
 
 struct Span {
     uint32_t start = 0, end = 0;
@@ -240,7 +241,7 @@ const MidiTrack* Find(const MidiFile& midi, std::string_view name) {
 int32_t Round(double ms) { return static_cast<int32_t>(std::lround(ms)); }
 
 Part ReadPart(std::string name, const MidiTrack& notes_track, const std::vector<Span>& phrases,
-              const TempoMap& tempo) {
+              const std::vector<Span>& overdrive, const TempoMap& tempo) {
     // lyric events, or text events where the track has none (older songs),
     // minus text events' [markers]
     const bool has_lyrics =
@@ -287,6 +288,9 @@ Part ReadPart(std::string name, const MidiTrack& notes_track, const std::vector<
         if (line.syllables.empty()) continue;
         line.start_ms = Round(tempo.Ms(phrase.start));
         line.end_ms = Round(tempo.Ms(phrase.end));
+        line.overdrive = std::ranges::any_of(overdrive, [&phrase](const Span& od) {
+            return od.start < phrase.end && phrase.start < od.end;
+        });
         line.syllables.back().join = false;
         part.lines.push_back(std::move(line));
     }
@@ -334,20 +338,27 @@ CleanText Clean(std::string_view raw) {
 std::vector<Part> FromMidi(const MidiFile& midi) {
     const TempoMap tempo(midi);
     std::vector<Part> parts;
-    auto add = [&](const char* name, const MidiTrack* notes, const std::vector<Span>& phrases) {
+    auto overdrive_of = [](const MidiTrack* track) {
+        return track ? NoteSpans(*track, [](uint8_t n) { return n == kOverdrive; }) : std::vector<Span>{};
+    };
+    auto add = [&](const char* name, const MidiTrack* notes, const std::vector<Span>& phrases,
+                   const std::vector<Span>& overdrive) {
         if (!notes) return;
-        Part part = ReadPart(name, *notes, phrases, tempo);
+        Part part = ReadPart(name, *notes, phrases, overdrive, tempo);
         if (!part.lines.empty()) parts.push_back(std::move(part));
     };
-    if (const MidiTrack* lead = Find(midi, "PART VOCALS")) add("lead", lead, Phrases(*lead));
+    if (const MidiTrack* lead = Find(midi, "PART VOCALS")) {
+        add("lead", lead, Phrases(*lead), overdrive_of(lead));
+    }
     const MidiTrack* harm1 = Find(midi, "HARM1");
     const MidiTrack* harm2 = Find(midi, "HARM2");
     const std::vector<Span> harm1_phrases = harm1 ? Phrases(*harm1) : std::vector<Span>{};
     std::vector<Span> harm2_phrases = harm2 ? Phrases(*harm2) : std::vector<Span>{};
     if (harm2_phrases.empty()) harm2_phrases = harm1_phrases;
-    add("harm1", harm1, harm1_phrases);
-    add("harm2", harm2, harm2_phrases);
-    add("harm3", Find(midi, "HARM3"), harm2_phrases);
+    const std::vector<Span> harm_overdrive = overdrive_of(harm1);
+    add("harm1", harm1, harm1_phrases, harm_overdrive);
+    add("harm2", harm2, harm2_phrases, harm_overdrive);
+    add("harm3", Find(midi, "HARM3"), harm2_phrases, harm_overdrive);
     return parts;
 }
 
@@ -361,7 +372,8 @@ std::string FormatJson(std::string_view shortname, const std::vector<Part>& part
             const Line& line = parts[p].lines[l];
             if (l) out += ',';
             out += "{\"start_ms\":" + std::to_string(line.start_ms) +
-                   ",\"end_ms\":" + std::to_string(line.end_ms) + ",\"syllables\":[";
+                   ",\"end_ms\":" + std::to_string(line.end_ms) +
+                   ",\"overdrive\":" + flag(line.overdrive) + ",\"syllables\":[";
             for (size_t s = 0; s < line.syllables.size(); s++) {
                 const Syllable& syl = line.syllables[s];
                 if (s) out += ',';

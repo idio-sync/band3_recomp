@@ -335,11 +335,71 @@ TEST_CASE("a song without vocal tracks has no parts") {
 
 TEST_CASE("the lyrics' JSON lists parts, lines and syllables") {
     Part part{"lead", {Line{500, 2000, {Syllable{500, 750, "Hel", true, false},
-                                        Syllable{750, 1000, "\"lo\"", false, true}}}}};
+                                        Syllable{750, 1000, "\"lo\"", false, true}},
+                                   true}}};
     CHECK(FormatJson("song&co", {part}) ==
           "{\"shortname\":\"song&co\",\"parts\":[{\"part\":\"lead\",\"lines\":[{\"start_ms\":500,"
-          "\"end_ms\":2000,\"syllables\":[{\"start_ms\":500,\"end_ms\":750,\"text\":\"Hel\","
+          "\"end_ms\":2000,\"overdrive\":true,\"syllables\":[{\"start_ms\":500,\"end_ms\":750,\"text\":\"Hel\","
           "\"join\":true,\"spoken\":false},{\"start_ms\":750,\"end_ms\":1000,"
           "\"text\":\"\\\"lo\\\"\",\"join\":false,\"spoken\":true}]}]}]}");
     CHECK(FormatJson("x", {}) == "{\"shortname\":\"x\",\"parts\":[]}");
+}
+
+TEST_CASE("a line an overdrive phrase overlaps is an overdrive line") {
+    const auto midi = ReadMidi(Smf(480, {Track()
+                                             .Name("PART VOCALS")
+                                             .Note(0, 480, 105)
+                                             .Note(0, 240, 60).Lyric(0, "one")
+                                             .Note(960, 480, 105)
+                                             .Note(960, 240, 60).Lyric(960, "two")
+                                             .Note(1920, 480, 105)
+                                             .Note(1920, 240, 60).Lyric(1920, "three")
+                                             // over the second line and into the third
+                                             .Note(1000, 1000, 116)
+                                             .Chunk()}));
+    REQUIRE(midi);
+    const auto parts = FromMidi(*midi);
+    REQUIRE(parts.size() == 1);
+    REQUIRE(parts[0].lines.size() == 3);
+    CHECK(!parts[0].lines[0].overdrive);
+    CHECK(parts[0].lines[1].overdrive);
+    CHECK(parts[0].lines[2].overdrive);
+}
+
+TEST_CASE("harmony parts take HARM1's overdrive, and only HARM1's") {
+    const auto midi = ReadMidi(Smf(480, {Track()
+                                             .Name("HARM1")
+                                             .Note(0, 480, 105)
+                                             .Note(0, 240, 60).Lyric(0, "high")
+                                             .Note(960, 480, 105)
+                                             .Note(960, 240, 60).Lyric(960, "again")
+                                             .Note(0, 480, 116)
+                                             .Chunk(),
+                                         Track()
+                                             .Name("HARM2")
+                                             .Note(0, 480, 105)
+                                             .Note(0, 240, 55).Lyric(0, "mid")
+                                             .Note(960, 480, 105)
+                                             .Note(960, 240, 55).Lyric(960, "more")
+                                             // ignored: Rock Band 3 reads HARM1's
+                                             .Note(960, 480, 116)
+                                             .Chunk()}));
+    REQUIRE(midi);
+    const auto parts = FromMidi(*midi);
+    REQUIRE(parts.size() == 2);
+    for (const Part& p : parts) {
+        REQUIRE(p.lines.size() == 2);
+        CHECK(p.lines[0].overdrive);
+        CHECK(!p.lines[1].overdrive);
+    }
+    // no overdrive notes anywhere: no overdrive lines, and the lines still come
+    const auto plain = ReadMidi(Smf(480, {Track()
+                                              .Name("PART VOCALS")
+                                              .Note(0, 480, 105)
+                                              .Note(0, 240, 60).Lyric(0, "la")
+                                              .Chunk()}));
+    REQUIRE(plain);
+    const auto lead = FromMidi(*plain);
+    REQUIRE(lead.size() == 1);
+    CHECK(!lead[0].lines.at(0).overdrive);
 }

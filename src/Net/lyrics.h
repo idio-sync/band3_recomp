@@ -68,6 +68,8 @@ struct Line {
     int32_t start_ms = 0;
     int32_t end_ms = 0;
     std::vector<Syllable> syllables;
+    // an overdrive phrase (note 116) overlaps it: the game's gold lane
+    bool overdrive = false;
 };
 
 struct Part {
@@ -94,12 +96,14 @@ CleanText Clean(std::string_view raw);
 // syllable is a pitched note (36 to 84) with a lyric at its start; lines are
 // phrase markers (notes 105 and 106, overlapping ones merged). HARM2's
 // markers are HARM3's too, and HARM1's stand in where HARM2 has none.
-// Syllables outside every phrase aren't shown.
+// Syllables outside every phrase aren't shown. A line is an overdrive line
+// where a note 116 (an overdrive phrase) overlaps it: PART VOCALS' for the
+// lead, HARM1's for every harmony part, as Rock Band 3 authors them.
 std::vector<Part> FromMidi(const MidiFile& midi);
 
 // what /lyrics?shortname= replies:
 // {"shortname":..., "parts":[{"part":..., "lines":[{"start_ms":..., "end_ms":...,
-//   "syllables":[{"start_ms":..., "end_ms":..., "text":..., "join":..., "spoken":...}]}]}]}
+//   "overdrive":..., "syllables":[{"start_ms":..., "end_ms":..., "text":..., "join":..., "spoken":...}]}]}]}
 std::string FormatJson(std::string_view shortname, const std::vector<Part>& parts);
 
 }
