@@ -67,6 +67,14 @@ constexpr Choice kRenderers[] = {
 
 constexpr Choice kNativeMsaa[] = {{"1", "Off"}, {"2", "2x (the game's)"}, {"4", "4x"}};
 
+// native_view_shadow_scale's: the characters' self-shadow maps, times the game's 512x512
+constexpr Choice kShadowScales[] = {
+    {"1", "512 x 512 (the game's)"},
+    {"2", "1024 x 1024"},
+    {"3", "1536 x 1536"},
+    {"4", "2048 x 2048"},
+};
+
 // native_max_height's: the most lines drawn, a taller window's picture scaled up
 constexpr Choice kNativeHeights[] = {
     {"0", "None (the window's size)"},
@@ -209,6 +217,8 @@ constexpr Setting kSettings[] = {
      .widget = kCombo, .choices = kAspect},
     {.cvar = "native_fill_window", .tab = kGraphics, .section = "Display",
      .label = "Fill the window", .widget = kCheckbox, .renderers = kWithNative},
+    {.cvar = "debug_overlay", .tab = kGraphics, .section = "Display",
+     .label = "Show the FPS counter", .widget = kCheckbox},
     {.cvar = "renderer", .tab = kGraphics, .section = "Renderer", .label = "Renderer",
      .widget = kCombo, .choices = kRenderers},
     // retired (settings.cpp's MigrateRendererSettings clears it): not drawn,
@@ -223,6 +233,9 @@ constexpr Setting kSettings[] = {
      .renderers = kWithNative},
     {.cvar = "native_max_height", .tab = kGraphics, .section = "Native renderer",
      .label = "Resolution limit", .widget = kComboText, .choices = kNativeHeights,
+     .renderers = kWithNative},
+    {.cvar = "native_view_shadow_scale", .tab = kGraphics, .section = "Native renderer",
+     .label = "Shadow resolution", .widget = kCombo, .choices = kShadowScales,
      .renderers = kWithNative},
     {.cvar = "resolution_scale", .tab = kGraphics, .section = "Emulated GPU",
      .label = "Render scale", .widget = kIntStepper, .range = Range{1, 8, 1}, .unit = "x",
@@ -247,6 +260,8 @@ constexpr Setting kSettings[] = {
      .label = "Disable the hair shader", .widget = kCheckbox},
     {.cvar = "disable_approximate_lights", .tab = kGraphics, .section = "Game",
      .label = "Disable approximate lighting", .widget = kCheckbox},
+    {.cvar = "force_self_shadow", .tab = kGraphics, .section = "Game",
+     .label = "Self-shadows in every shot", .widget = kCheckbox},
     // ignored with renderer native (Hooks/graphics.cpp)
     {.cvar = "compress_character_textures", .tab = kGraphics, .section = "Game",
      .label = "Compress character textures", .widget = kCheckbox,
