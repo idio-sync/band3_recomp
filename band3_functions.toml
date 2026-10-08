@@ -5688,7 +5688,7 @@ strcpy_s                = 0x8282B0B8
 0x8230A74C = { name = "rex_sub_8230A74C", size = 0x28 }
 0x8230A778 = { name = "OvershellDir__Copy", size = 0x8 }
 0x8230A780 = { name = "OvershellDir__Save_8230A780", size = 0x58 }
-0x8230A7E0 = { name = "StringStrummedMsg_ct", size = 0xEC }
+0x8230A7E0 = { name = "Message__ct_8230A7E0", size = 0xEC }
 0x8230A8CC = { name = "rex_sub_8230A8CC", size = 0x28 }
 0x8230A8F4 = { name = "rex_sub_8230A8F4", size = 0x28 }
 0x8230A920 = { name = "OvershellDir__ConcealAllLists", size = 0x74 }
@@ -17819,7 +17819,7 @@ strcpy_s                = 0x8282B0B8
 0x82478A28 = { name = "RndMovie__Handle_82478A28", size = 0x10C }
 0x82478B34 = { name = "rex_sub_82478B34", size = 0x28 }
 0x82478B5C = { name = "rex_sub_82478B5C", size = 0x28 }
-0x82478B90 = { name = "TexMovie__SyncProperty", size = 0x328 }
+0x82478B90 = { name = "RndMovie__SyncProperty_82478B90", size = 0x328 }
 0x82478EB8 = { name = "rex_sub_82478EB8", size = 0x20 }
 0x82478ED8 = { name = "rex_sub_82478ED8", size = 0x28 }
 0x82478F00 = { name = "rex_sub_82478F00", size = 0x28 }
@@ -29174,7 +29174,7 @@ strcpy_s                = 0x8282B0B8
 0x825C5590 = { name = "AppLabel__SetUserName_825C5590", size = 0x54 }
 0x825C55E8 = { name = "AppLabel__SetIntroName", size = 0x54 }
 0x825C5640 = { name = "AppLabel__SetProfileName", size = 0x60 }
-0x825C56A0 = { name = "BandLabel__SetSongNameFromNode", size = 0x60 }
+0x825C56A0 = { name = "AppLabel__SetSongName_825C56A0", size = 0x60 }
 0x825C5700 = { name = "AppLabel__SetAlbumName", size = 0x60 }
 0x825C5760 = { name = "AppLabel__SetStarRating", size = 0x5C }
 0x825C57C8 = { name = "BandLabel__SetFromSongSelectNode", size = 0xEC }
@@ -29312,7 +29312,7 @@ strcpy_s                = 0x8282B0B8
 0x825C8AC8 = { name = "AppLabel__SetViewSetting", size = 0x8C }
 0x825C8B54 = { name = "rex_sub_825C8B54", size = 0x20 }
 0x825C8B78 = { name = "AppLabel__SetSongName", size = 0x54 }
-0x825C8BD0 = { name = "BandLabel__SetAlbumName", size = 0x150 }
+0x825C8BD0 = { name = "AppLabel__SetArtistName_825C8BD0", size = 0x150 }
 0x825C8D20 = { name = "AppLabel__SetArtistName_825C8D20", size = 0x70 }
 0x825C8D98 = { name = "BandLabel__Handle", size = 0x1210 }
 0x825C9FA8 = { name = "rex_sub_825C9FA8", size = 0x20 }
@@ -32600,7 +32600,7 @@ strcpy_s                = 0x8282B0B8
 0x82621D80 = { name = "rex_sub_82621D80", size = 0x20 }
 0x82621DA0 = { name = "MainHubPanel__OnMsg_82621DA0", size = 0x94 }
 0x82621E38 = { name = "MainHubPanel__OnMsg_82621E38", size = 0x60 }
-0x82621EA0 = { name = "JsonProtocol__ParseTickerInfoResponse", size = 0x44C }
+0x82621EA0 = { name = "MainHubPanel__OnMsg_82621EA0", size = 0x44C }
 0x826222EC = { name = "rex_sub_826222EC", size = 0x28 }
 0x82622314 = { name = "rex_sub_82622314", size = 0x28 }
 0x8262233C = { name = "rex_sub_8262233C", size = 0x28 }
@@ -37763,7 +37763,7 @@ strcpy_s                = 0x8282B0B8
 0x826A9798 = { name = "rex_sub_826A9798", size = 0x4 }
 0x826A97A0 = { name = "SyncGameStartPanel__OnMsg_826A97A0", size = 0x3C }
 0x826A97E0 = { name = "SyncGameStartPanel__OnMsg_826A97E0", size = 0xA0 }
-0x826A9880 = { name = "OnUsingCD", size = 0x14 }
+0x826A9880 = { name = "SyncGameStartPanel__OnMsg_826A9880", size = 0x14 }
 0x826A9898 = { name = "SyncGameStartPanel__OnMsg_826A9898", size = 0x50 }
 0x826A98F0 = { name = "SyncGameStartPanel__Handle_826A98F0", size = 0x400 }
 0x826A9CF0 = { name = "rex_sub_826A9CF0", size = 0x20 }
@@ -42804,7 +42804,7 @@ strcpy_s                = 0x8282B0B8
 0x82747374 = { name = "rex_sub_82747374", size = 0x20 }
 0x82747394 = { name = "rex_sub_82747394", size = 0x28 }
 0x827473BC = { name = "rex_sub_827473BC", size = 0x28 }
-0x827473F0 = { name = "TexMovie__Handle", size = 0x244 }
+0x827473F0 = { name = "TexMovie__SyncProperty", size = 0x244 }
 0x82747634 = { name = "rex_sub_82747634", size = 0x20 }
 0x82747654 = { name = "rex_sub_82747654", size = 0x20 }
 0x82747674 = { name = "rex_sub_82747674", size = 0x28 }
@@ -43057,7 +43057,7 @@ strcpy_s                = 0x8282B0B8
 0x8274DC20 = { name = "rex_sub_8274DC20", size = 0x40 }
 0x8274DC60 = { name = "rex_sub_8274DC60", size = 0x28 }
 0x8274DC88 = { name = "rex_sub_8274DC88", size = 0x28 }
-0x8274DCB8 = { name = "UnknownCacheStreamThing", size = 0x78 }
+0x8274DCB8 = { name = "op_shr_8274DCB8", size = 0x78 }
 0x8274DD30 = { name = "rex_sub_8274DD30", size = 0x28 }
 0x8274DD58 = { name = "ObjectDir__SetCurViewport", size = 0xC }
 0x8274DD68 = { name = "ObjectDir__SetSubDir", size = 0x84 }
@@ -47256,7 +47256,7 @@ strcpy_s                = 0x8282B0B8
 0x827CD3E4 = { name = "rex_sub_827CD3E4", size = 0x28 }
 0x827CD40C = { name = "rex_sub_827CD40C", size = 0x28 }
 0x827CD434 = { name = "rex_sub_827CD434", size = 0x28 }
-0x827CD460 = { name = "Locale_ct", size = 0x64 }
+0x827CD460 = { name = "DataPoint__ct_827CD460", size = 0x64 }
 0x827CD4D0 = { name = "DataPoint__ct", size = 0xAC }
 0x827CD57C = { name = "rex_sub_827CD57C", size = 0x2C }
 0x827CD5B0 = { name = "NetCacheMgrInit", size = 0x50 }
