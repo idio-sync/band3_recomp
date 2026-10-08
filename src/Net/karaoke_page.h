@@ -146,9 +146,68 @@ var KaraokeModel = (function () {
     });
   }
 
+  // RB3's own textures the page dresses itself in (/game_asset), by what each
+  // is for: from inside the game's UI milos (milo_texture) or standalone
+  // (texture). The header's normal map is Deluxe's copy of it: the game's own
+  // is BC5, which band3 doesn't decode, so without Deluxe the header is plain.
+  var kTrack = 'ui/track/gen/track_shared.milo_xbox';
+  var kPlayer = 'ui/overshell/gen/overshell_player_common.milo_xbox';
+  var TEXTURES = {
+    lane_blue: { milo: kTrack, name: 'lyrics_bg_blue.png' },
+    lane_brown: { milo: kTrack, name: 'lyrics_bg_brown.png' },
+    icons: { milo: kTrack, name: 'rb3_icons.bmp' },
+    od_lane: { milo: kTrack, name: 'vox_now_bar_od_nomip.png' },
+    od_star: { milo: kTrack, name: 'star_power.png' },
+    scoreboard: { milo: kTrack, name: 'scoreboard_frame.bmp' },
+    highlight: { milo: 'ui/song_select/gen/song_select.milo_xbox', name: 'song_highlight_bg.bmp' },
+    line_fade: { milo: 'ui/overshell/gen/overshell.milo_xbox', name: 'line_fade.png' },
+    tab_top: { milo: kPlayer, name: 'top_bg.bmp' },
+    tab_low: { milo: kPlayer, name: 'top_help_lowered02.bmp' },
+    pause: { milo: kPlayer, name: 'pause_container.bmp' },
+    sunburst: { milo: kPlayer, name: 'sunburst.png' },
+    wall: { milo: kPlayer, name: 'bg_char02.bmp' },
+    blank_art: { path: 'ui/image/gen/blank_album_art_keep.png_xbox' },
+    idle_art: { path: 'ui/image/gen/song_select_header_keep.png_xbox' },
+    header_normal: { path: 'dx/custom_textures/overshell/original/gen/header_song_bg_normal.png_xbox' }
+  };
+  function textureUrl(t) {
+    return t.milo ? '/game_asset/milo_texture?milo=' + encodeURIComponent(t.milo) + '&name=' + encodeURIComponent(t.name)
+                  : '/game_asset/texture?path=' + encodeURIComponent(t.path);
+  }
+  // the Music Library's badge for a song's source (/list_songs' origin=)
+  function originUrl(origin) {
+    if (!origin || !/^[a-z0-9_]+$/i.test(origin)) return null;
+    return textureUrl({ path: 'ui/resource/game_origins_128/gen/' + origin + '.png_xbox' });
+  }
+  // rb3_icons: [column, row] in its 4 x 4 grid of 64 px cells
+  var ICONS = { guitar: [0, 0], bass: [1, 0], drum: [2, 0], keys: [3, 0], real_guitar: [0, 1],
+                real_bass: [1, 1], real_drum: [2, 1], real_keys: [3, 1], vocals: [0, 2], harmonies: [2, 2] };
+  function iconCell(name) { return (ICONS[name] || ICONS.vocals).slice(); }
+  // a band member's player tab (/live/events' band): their part over their difficulty
+  var PART_LABELS = { drum: 'DRUMS', guitar: 'GUITAR', bass: 'BASS', vocals: 'VOCALS', keys: 'KEYS',
+                      real_guitar: 'PRO GUITAR', real_bass: 'PRO BASS', real_keys: 'PRO KEYS' };
+  var DIFFICULTIES = ['EASY', 'MEDIUM', 'HARD', 'EXPERT'];
+  function tab(member, vocals) {
+    if (!member) return null;
+    var harmonies = member.part === 'vocals' && vocals === 'harmonies';
+    return { top: harmonies ? 'HARMONIES' : (PART_LABELS[member.part] || member.part.toUpperCase()),
+             low: DIFFICULTIES[member.difficulty] || '',
+             icon: harmonies ? 'harmonies' : member.part };
+  }
+  function scoreText(score) {
+    var n = Math.max(0, Math.floor(Number(score) || 0));
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+  // a part's difficulty tier (/song_details, 0 to 6) as the Music Library's five pips
+  function pips(tier) { return Math.max(0, Math.min(5, Math.floor(Number(tier) || 0))); }
+  // the textures are asked for again as the lyrics are
+  var textureRetryMs = lyricsRetryMs;
+
   return { Clock: Clock, partsToShow: partsToShow, linesAt: linesAt, fill: fill,
            countdown: countdown, screen: screen, lyricsRetryMs: lyricsRetryMs, words: words,
-           layoutText: layoutText, glyphFill: glyphFill, kGapMs: kGapMs };
+           layoutText: layoutText, glyphFill: glyphFill, kGapMs: kGapMs,
+           TEXTURES: TEXTURES, textureUrl: textureUrl, originUrl: originUrl, iconCell: iconCell,
+           tab: tab, scoreText: scoreText, pips: pips, textureRetryMs: textureRetryMs };
 })();
 if (typeof module !== 'undefined') module.exports = KaraokeModel;
 )js";

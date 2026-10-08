@@ -154,3 +154,71 @@ test('words put spaces between words, not inside them', () => {
   const two = line(0, 1, [syl(0, 1, 'one'), syl(0, 1, 'two')]);
   assert.deepStrictEqual(M.words(two).map(w => w.text), ['one ', 'two']);
 });
+
+test('every texture is asked for where band3 serves it, within its allowlists', () => {
+  const keys = ['lane_blue', 'lane_brown', 'icons', 'od_lane', 'od_star', 'scoreboard', 'highlight',
+                'line_fade', 'tab_top', 'tab_low', 'pause', 'sunburst', 'wall', 'blank_art', 'idle_art',
+                'header_normal'];
+  assert.deepStrictEqual(Object.keys(M.TEXTURES).sort(), keys.slice().sort());
+  for (const key of keys) {
+    const url = M.textureUrl(M.TEXTURES[key]);
+    assert.match(url, /^\/game_asset\/(milo_texture\?milo=ui%2F[A-Za-z0-9_%.]+\.milo_xbox&name=[a-z0-9_.()-]+\.(png|bmp)|texture\?path=(ui|dx)%2F[^&]+\.(png|bmp)_xbox)$/, key);
+  }
+  assert.strictEqual(M.textureUrl({ milo: 'ui/a/b.milo_xbox', name: 'c.png' }),
+                     '/game_asset/milo_texture?milo=ui%2Fa%2Fb.milo_xbox&name=c.png');
+  assert.strictEqual(M.textureUrl({ path: 'ui/image/gen/x.png_xbox' }),
+                     '/game_asset/texture?path=ui%2Fimage%2Fgen%2Fx.png_xbox');
+});
+
+test("a song's source badge is its origin's texture, if it has one", () => {
+  assert.strictEqual(M.originUrl('rb3'), '/game_asset/texture?path=ui%2Fresource%2Fgame_origins_128%2Fgen%2Frb3.png_xbox');
+  assert.strictEqual(M.originUrl(''), null);
+  assert.strictEqual(M.originUrl(undefined), null);
+  assert.strictEqual(M.originUrl('../x'), null);
+});
+
+test("instrument icons are rb3_icons' cells, vocals for anything else", () => {
+  assert.deepStrictEqual(M.iconCell('guitar'), [0, 0]);
+  assert.deepStrictEqual(M.iconCell('drum'), [2, 0]);
+  assert.deepStrictEqual(M.iconCell('real_keys'), [3, 1]);
+  assert.deepStrictEqual(M.iconCell('vocals'), [0, 2]);
+  assert.deepStrictEqual(M.iconCell('harmonies'), [2, 2]);
+  assert.deepStrictEqual(M.iconCell('kazoo'), [0, 2]);
+});
+
+test("a player's tab says their part over their difficulty, and the singer's says harmonies", () => {
+  assert.deepStrictEqual(M.tab({ part: 'guitar', difficulty: 3 }, 'lead'),
+                         { top: 'GUITAR', low: 'EXPERT', icon: 'guitar' });
+  assert.deepStrictEqual(M.tab({ part: 'real_bass', difficulty: 0 }, 'lead'),
+                         { top: 'PRO BASS', low: 'EASY', icon: 'real_bass' });
+  assert.deepStrictEqual(M.tab({ part: 'vocals', difficulty: 2 }, 'harmonies'),
+                         { top: 'HARMONIES', low: 'HARD', icon: 'harmonies' });
+  assert.deepStrictEqual(M.tab({ part: 'vocals', difficulty: 1 }, 'lead'),
+                         { top: 'VOCALS', low: 'MEDIUM', icon: 'vocals' });
+  assert.strictEqual(M.tab(null, 'lead'), null);
+  assert.strictEqual(M.tab({ part: 'drum', difficulty: 9 }, 'none').low, '');
+});
+
+test('the score reads with commas, never below zero', () => {
+  assert.strictEqual(M.scoreText(0), '0');
+  assert.strictEqual(M.scoreText(999), '999');
+  assert.strictEqual(M.scoreText(82725), '82,725');
+  assert.strictEqual(M.scoreText(1234567), '1,234,567');
+  assert.strictEqual(M.scoreText(-5), '0');
+  assert.strictEqual(M.scoreText(undefined), '0');
+});
+
+test('a tier fills up to five pips', () => {
+  assert.strictEqual(M.pips(0), 0);
+  assert.strictEqual(M.pips(3), 3);
+  assert.strictEqual(M.pips(6), 5);
+  assert.strictEqual(M.pips(undefined), 0);
+});
+
+test('a texture the game was busy for is asked for again; one that is not there is not', () => {
+  assert.strictEqual(M.textureRetryMs(200, 0), null);
+  assert.strictEqual(M.textureRetryMs(404, 0), null);
+  assert.strictEqual(M.textureRetryMs(503, 0), 1000);
+  assert.strictEqual(M.textureRetryMs(0, 2), 4000);
+  assert.strictEqual(M.textureRetryMs(503, 20), 10000);
+});
