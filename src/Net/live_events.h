@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -14,10 +15,20 @@
 //
 //   event: state  {"screen":..., "in_game":..., "paused":..., "song": {"shortname":...,
 //                  "title":..., "artist":..., "length_ms":...} or null,
-//                  "vocals": "none" | "lead" | "harmonies"}   when any of it changes
-//   event: clock  {"song_ms": ...}   every tick of a song not paused, and with each state
+//                  "vocals": "none" | "lead" | "harmonies",
+//                  "band": [{"part":..., "difficulty":...} or null, x4]}   when any of it changes
+//   event: clock  {"song_ms": ..., "score": ...}   every tick of a song not paused, and with each state
 
 namespace band3::http::live {
+
+// one of the band's members, by /song_details' name for their part (drum,
+// guitar, bass, vocals, keys, real_keys, real_guitar, real_bass) and the
+// game's difficulty (0 easy to 3 expert)
+struct Member {
+    std::string part;
+    int32_t difficulty = 0;
+    bool operator==(const Member&) const = default;
+};
 
 struct LiveState {
     std::string screen;
@@ -29,6 +40,8 @@ struct LiveState {
     std::string artist;
     int32_t length_ms = 0;
     std::string vocals = "none";
+    // by slot; empty where no one is, or a part band3 doesn't know
+    std::array<std::optional<Member>, 4> band{};
     bool operator==(const LiveState&) const = default;
 };
 
@@ -38,7 +51,7 @@ LiveState FromSnapshot(const test::GameStateSnapshot& game);
 // browser waits before reconnecting
 std::string StreamHead(bool cors);
 std::string StateEvent(const LiveState& state);
-std::string ClockEvent(int32_t song_ms);
+std::string ClockEvent(int32_t song_ms, int64_t score);
 // a comment, which only keeps the connection alive
 inline constexpr std::string_view kKeepAlive = ": keep-alive\n\n";
 // the last event of a stream another took the place of (StreamSlots): its
@@ -73,7 +86,7 @@ public:
     using Clock = std::chrono::steady_clock;
     static constexpr auto kKeepAliveEvery = std::chrono::seconds(10);
 
-    std::string Tick(const LiveState& state, int32_t song_ms, Clock::time_point now);
+    std::string Tick(const LiveState& state, int32_t song_ms, int64_t score, Clock::time_point now);
 
 private:
     std::optional<LiveState> sent_;

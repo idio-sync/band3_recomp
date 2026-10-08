@@ -7,6 +7,9 @@ namespace band3::http::live {
 namespace {
 // RB3's TrackType for vocals (discord.cpp's kTracks lists them in order)
 constexpr uint8_t kTrackVocals = 3;
+// RB3's TrackType, by /song_details' part names (discord.cpp's kTracks lists them in order)
+constexpr const char* kParts[] = {"drum",      "guitar",      "bass",        "vocals",    "keys",
+                                  "real_keys", "real_guitar", "real_guitar", "real_bass", "real_bass"};
 }
 
 LiveState FromSnapshot(const test::GameStateSnapshot& game) {
@@ -22,6 +25,12 @@ LiveState FromSnapshot(const test::GameStateSnapshot& game) {
         return m.exists && m.track_type == kTrackVocals;
     });
     state.vocals = !vocalist ? "none" : game.harmonies ? "harmonies" : "lead";
+    for (size_t i = 0; i < state.band.size(); i++) {
+        const test::BandMember& m = game.band[i];
+        if (m.exists && m.track_type < std::size(kParts)) {
+            state.band[i] = Member{kParts[m.track_type], m.difficulty};
+        }
+    }
     return state;
 }
 
@@ -45,12 +54,20 @@ std::string StateEvent(const LiveState& state) {
                ",\"title\":" + JsonString(state.title) + ",\"artist\":" + JsonString(state.artist) +
                ",\"length_ms\":" + std::to_string(state.length_ms) + "}";
     }
-    out += ",\"vocals\":" + JsonString(state.vocals) + "}\n\n";
+    out += ",\"vocals\":" + JsonString(state.vocals) + ",\"band\":[";
+    for (size_t i = 0; i < state.band.size(); i++) {
+        if (i) out += ',';
+        const auto& m = state.band[i];
+        out += m ? "{\"part\":" + JsonString(m->part) + ",\"difficulty\":" + std::to_string(m->difficulty) + "}"
+                 : std::string("null");
+    }
+    out += "]}\n\n";
     return out;
 }
 
-std::string ClockEvent(int32_t song_ms) {
-    return "event: clock\ndata: {\"song_ms\":" + std::to_string(song_ms) + "}\n\n";
+std::string ClockEvent(int32_t song_ms, int64_t score) {
+    return "event: clock\ndata: {\"song_ms\":" + std::to_string(song_ms) +
+           ",\"score\":" + std::to_string(score) + "}\n\n";
 }
 
 std::string EvictedEvent() { return "event: evicted\ndata: {}\n\n"; }
@@ -71,14 +88,15 @@ void StreamSlots::Close(uint64_t id) {
     if (it != open_.end()) open_.erase(it);
 }
 
-std::string Ticker::Tick(const LiveState& state, int32_t song_ms, Clock::time_point now) {
+std::string Ticker::Tick(const LiveState& state, int32_t song_ms, int64_t score,
+                         Clock::time_point now) {
     std::string out;
     const bool changed = !sent_ || *sent_ != state;
     if (changed) {
         out += StateEvent(state);
         sent_ = state;
     }
-    if (state.in_game && song_ms >= 0 && (changed || !state.paused)) out += ClockEvent(song_ms);
+    if (state.in_game && song_ms >= 0 && (changed || !state.paused)) out += ClockEvent(song_ms, score);
     if (out.empty() && last_sent_ && now - *last_sent_ >= kKeepAliveEvery) {
         out = std::string(kKeepAlive);
     }

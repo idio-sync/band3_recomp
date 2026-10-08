@@ -986,7 +986,7 @@ private:
             }
             const test::GameStateSnapshot game = test::GameState::Get().Snapshot();
             const std::string out =
-                ticker.Tick(live::FromSnapshot(game), game.song_ms, live::Ticker::Clock::now());
+                ticker.Tick(live::FromSnapshot(game), game.song_ms, game.score, live::Ticker::Clock::now());
             if (!out.empty()) open = SendAll(client, out);
             if (open) std::this_thread::sleep_for(kStreamTick);
         }
