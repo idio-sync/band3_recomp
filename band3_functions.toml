@@ -55903,10 +55903,10 @@ strcpy_s                = 0x8282B0B8
 0x82A69E40 = { name = "XSessionModify", size = 0xBC }
 0x82A69F00 = { name = "XSessionDelete", size = 0xB0 }
 0x82A69FB0 = { name = "XSessionJoinLocal", size = 0xAC }
-0x82A6A060 = { name = "rex_sub_82A6A060", size = 0xAC }
+0x82A6A060 = { name = "XSessionJoinRemote", size = 0xAC }
 0x82A6A110 = { name = "XSessionLeaveLocal", size = 0xA8 }
-0x82A6A1B8 = { name = "rex_sub_82A6A1B8", size = 0xA8 }
-0x82A6A260 = { name = "rex_sub_82A6A260", size = 0xDC }
+0x82A6A1B8 = { name = "XSessionLeaveRemote", size = 0xA8 }
+0x82A6A260 = { name = "XSessionArbitrationRegister", size = 0xDC }
 0x82A6A340 = { name = "XSessionStart", size = 0x9C }
 0x82A6A3E0 = { name = "XSessionEnd", size = 0xB0 }
 0x82A6A490 = { name = "XSessionSearchEx", size = 0xE8 }
