@@ -10,10 +10,12 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <iterator>
 #include <optional>
 #include <string>
 #include "src/Video/frame_queue.h"
 #include "src/Video/picture_convert.h"
+#include "src/Video/sync_cache.h"
 #include "src/Video/video_files.h"
 #include "src/Video/video_venue.h"
 
@@ -258,4 +260,63 @@ TEST_CASE("a forced venue, the black background, no video or videos off keep the
         CAPTURE(i);
         CHECK_FALSE(PickVideoVenue(v));
     }
+}
+
+TEST_CASE("video_start_time is set in an .ini, the rest kept") {
+    // replaced where it is
+    CHECK(WithStartTime("[song]\nname = x\nvideo_start_time = 1500\ndelay = 0\n", -3.2054) ==
+          "[song]\nname = x\nvideo_start_time = -3205\ndelay = 0\n");
+    // added under [song]
+    CHECK(WithStartTime("[song]\r\nname = x\r\n", 1.25) ==
+          "[song]\r\nvideo_start_time = 1250\r\nname = x\r\n");
+    // [song] made when missing, or for an empty file
+    CHECK(WithStartTime("", 0.5) == "[song]\nvideo_start_time = 500\n");
+    CHECK(WithStartTime("; notes\n", 2.0) == "[song]\nvideo_start_time = 2000\n; notes\n");
+    CHECK(FindStartTime("[song]\nvideo_start_time = 0\n") == 0.0);
+    CHECK_FALSE(FindStartTime("[song]\nname = x\n"));
+}
+
+TEST_CASE("an envelope saved beside the videos loads back, for its video's stamp only") {
+    const fs::path root = fs::temp_directory_path() / "band3_sync_cache_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path video = root / "song1.webm";
+    std::ofstream(video) << "x";
+    const uint64_t stamp = FileStamp(video);
+    CHECK(stamp != 0);
+    CHECK(FileStamp(root / "missing.webm") == 0);
+    const std::vector<float> frames = {0.0f, 1.5f, -2.0f, 3.25f};
+    REQUIRE(SaveEnvelope(VideoEnvelopePath(video), frames, stamp));
+    CHECK(VideoEnvelopePath(video) == root / ".sync" / "song1.video.env");
+    auto back = LoadEnvelope(VideoEnvelopePath(video), stamp);
+    REQUIRE(back);
+    CHECK(*back == frames);
+    CHECK(LoadEnvelope(VideoEnvelopePath(video), 0));
+    CHECK_FALSE(LoadEnvelope(VideoEnvelopePath(video), stamp + 1));
+    CHECK_FALSE(LoadEnvelope(SongEnvelopePath(video), 0));
+    // the .ini written beside the video
+    REQUIRE(WriteStartTime(video, -1.5));
+    std::ifstream ini(root / "song1.ini");
+    std::string text((std::istreambuf_iterator<char>(ini)), std::istreambuf_iterator<char>());
+    CHECK(text == "[song]\nvideo_start_time = -1500\n");
+    ini.close();
+    fs::remove_all(root);
+}
+
+TEST_CASE("an alignment's result is saved as text and read back") {
+    SyncResult r;
+    r.found = true;
+    r.offset = -3.2524;
+    r.score = 0.81;
+    r.margin = 1.52;
+    r.onset_score = 0.13;
+    r.confident = true;
+    const std::optional<SyncResult> back = ParseResult(ResultText(r));
+    REQUIRE(back);
+    CHECK(back->offset == doctest::Approx(-3.252));
+    CHECK(back->score == doctest::Approx(0.81));
+    CHECK(back->margin == doctest::Approx(1.52));
+    CHECK(back->onset_score == doctest::Approx(0.13));
+    CHECK(back->confident);
+    CHECK_FALSE(ParseResult("offset = 1.0\n"));
 }

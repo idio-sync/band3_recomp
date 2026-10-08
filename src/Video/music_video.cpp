@@ -7,6 +7,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <format>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -73,6 +74,34 @@ public:
             out = std::move(planes);
         }
         return true;
+    }
+
+    std::optional<VideoFile> Current(uint64_t& song) {
+        std::lock_guard lock(mutex_);
+        song = song_;
+        return file_;
+    }
+
+    // moves the playing video's start time by `delta`, saved to its .ini;
+    // false when none plays
+    bool Nudge(double delta, double& now) {
+        std::lock_guard lock(mutex_);
+        if (!file_ || !Showing()) return false;
+        file_->start_time += delta;
+        file_->start_time_set = true;
+        now = file_->start_time;
+        WriteStartTime(file_->path, now);
+        wake_.notify_one();
+        return true;
+    }
+
+    void SetStartTime(uint64_t song, double seconds) {
+        std::lock_guard lock(mutex_);
+        if (song != song_ || !file_) return;
+        file_->start_time = seconds;
+        file_->start_time_set = true;
+        // the decoder seeks to the new place from the next frame
+        wake_.notify_one();
     }
 
     bool Showing() const {
@@ -258,6 +287,38 @@ Player& ThePlayer() {
 bool MusicVideosOn() { return REXCVAR_GET(music_videos); }
 
 bool MusicVideoShowing() { return ThePlayer().Showing(); }
+
+std::optional<VideoFile> CurrentMusicVideo(uint64_t& song) { return ThePlayer().Current(song); }
+
+namespace {
+std::mutex g_nudge_mutex;
+std::string g_nudge_message;
+std::chrono::steady_clock::time_point g_nudge_at;
+}
+
+void NudgeMusicVideo(double delta) {
+    double now = 0.0;
+    std::string message;
+    // nothing without a video playing: [ may be typed in the song list's search
+    if (!ThePlayer().Nudge(delta, now)) return;
+    message = std::format("Video offset {:+.3f} s (saved)", now);
+    REXLOG_INFO("Music video: {}", message);
+    std::lock_guard lock(g_nudge_mutex);
+    g_nudge_message = std::move(message);
+    g_nudge_at = std::chrono::steady_clock::now();
+}
+
+std::string RecentNudgeMessage() {
+    std::lock_guard lock(g_nudge_mutex);
+    if (g_nudge_message.empty() ||
+        std::chrono::steady_clock::now() - g_nudge_at > std::chrono::seconds(2))
+        return {};
+    return g_nudge_message;
+}
+
+void SetMusicVideoStartTime(uint64_t song, double seconds) {
+    ThePlayer().SetStartTime(song, seconds);
+}
 
 namespace {
 std::atomic<bool> g_black_venue{false};

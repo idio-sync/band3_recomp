@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "src/Video/picture_convert.h"
 
@@ -31,5 +32,11 @@ void EndVideoThread();
 
 // the decoder for `path`, or null with what went wrong in `error`
 std::unique_ptr<VideoDecoder> OpenVideo(const std::filesystem::path& path, std::string& error);
+
+// The video's soundtrack, its first `seconds` mixed to mono, as a rhythm
+// envelope (sync_align.h), for auto-sync; empty, with why in `error`, without
+// one or without FFmpeg (Media Foundation's reader isn't used for sound)
+std::vector<float> SoundtrackEnvelope(const std::filesystem::path& path, double seconds,
+                                      std::string& error);
 
 }

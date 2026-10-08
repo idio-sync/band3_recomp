@@ -205,7 +205,19 @@ void SettingsPage::DrawSection(Tab tab, std::string_view section) {
     }
     if (tab == Tab::kGraphics && section == "Latency") DrawLowestLatency();
     if (tab == Tab::kLights && section == "Stage Kit lights") DrawLights();
+    if (tab == Tab::kVideos && section == "Music videos") DrawVideos();
     ImGui::Dummy(ImVec2(0, Px(14)));
+}
+
+void SettingsPage::DrawVideos() {
+    // the folders as set on the page, saved or not, as music_video.cpp's
+    // VideoFolders reads them
+    std::vector<std::string> entries = paths::SplitList(model_.Value("music_videos_folder"));
+    if (entries.empty()) entries.push_back("videos");
+    std::vector<std::filesystem::path> folders;
+    for (const auto& entry : entries) folders.push_back(paths::Resolve(entry, model_.Env().anchor));
+    ImGui::Dummy(ImVec2(0, Px(10)));
+    videos_.Draw(folders);
 }
 
 void SettingsPage::DrawRow(const Setting& setting) {

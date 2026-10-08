@@ -3,7 +3,8 @@
 ## The launcher
 
 The launcher is band3's setup screen. It opens in the game window before the game starts,
-with tabs for the game and its folders, graphics, audio, controllers and online features,
+with tabs for the game and its folders, graphics, audio, controllers, online features,
+Stage Kit lights and music videos,
 and works with the mouse, the keyboard or a controller. Point at a setting (or move to it)
 to see what it does. Changes
 apply as you make them; **Save** keeps them for next time, **Play** saves and starts the
@@ -293,13 +294,13 @@ the folder `music_videos_folder` names), named after the song's shortname:
 stops the video at once; turning it on starts videos from the next song.
 
 A song with a video is put in one of the seven video venues, picked at random, so its video
-shows: always, or 25, 50 or 75% of the time with `music_video_venue_chance` (the Game tab's
+shows: always, or 25, 50 or 75% of the time with `music_video_venue_chance` (the Videos tab's
 Video venue for songs with a video); Off leaves the venue to the game. The log says which
 (`20thcenturyboy has a music video: a video venue (100% of the time)`). A forced venue wins,
 as does the Black Background modifier; `forced_venue = video` (the Game tab's Forced venue,
 Video venue) puts every song in a video venue, with a video or not.
 
-With `music_video_hide_band` on (the default; the Game tab's Hide the band during music videos) the band
+With `music_video_hide_band` on (the default; the Videos tab's Hide the band during music videos) the band
 isn't drawn while a video plays, so only the video shows behind the highways. The band
 still plays along unseen: the cameras and the venue's lights (and
 [Stage Kits](integrations.md#stage-kit-lights)) go on as before. With `music_video_as_is` on
@@ -309,7 +310,32 @@ glow and trails are left off while the video plays, so it looks as it does in a 
 The video starts with the song. `<shortname>.ini` beside it with Clone Hero's
 `video_start_time = <milliseconds>` (as in a chart's `song.ini`) starts it that far in at the
 song's start; a negative one starts it that far into the song. The screen is black before the
-video starts, and its last frame stays after it ends. `music_video_fit` keeps a video whose
+video starts, and its last frame stays after it ends.
+
+### Syncing a video
+
+A music video rarely starts where the game's song does, so with `music_video_auto_sync` on
+(the default; the Videos tab's Sync music videos automatically) band3 finds the offset itself
+the first time a song plays with its video in the folder, in any venue. It listens to the song's first 45 seconds as the
+game plays them, matches their rhythm against the video's soundtrack, and when the match is
+clear writes `video_start_time` to the video's `.ini` and moves the playing video at once. The
+log says what it found (`Music video auto-sync: nooneknows.webm: -3.252 s (score 0.81, margin
+1.52), saved to nooneknows.ini`). A song whose structure repeats can match in more than one
+place; then nothing is written, and the log gives the best guess. An offset already in the
+`.ini` is never replaced: auto-sync only logs what it measured. What it keeps for this (the
+song's rhythm, the video's, and the last result) is in a `.sync` folder beside the videos,
+which can be deleted at any time.
+
+While a video plays, `[` shows it 50 ms earlier and `]` 50 ms later (`bind_music_video_earlier`
+and `bind_music_video_later`); each press is saved to the `.ini` and shown at the top of the
+screen. Earlier is for a singer whose lips move after the sound.
+
+The **Videos** tab, in the launcher and the in-game settings, lists the videos in the videos
+folder with each one's offset in milliseconds, which can be typed in, and how it got it:
+synced automatically, set by hand, not sure (with the best guess and **Use it** to take it),
+or not played yet. **Align** matches a video with its song again, once the song has been
+played with it: after replacing the video with another cut, say. **Open the videos folder**
+opens it. `music_video_fit` keeps a video whose
 shape isn't 16:9 whole with black bars (`fit`), fills the screen and cuts its edges off
 (`fill`), or stretches it. Its sound isn't played.
 

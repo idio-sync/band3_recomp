@@ -9,6 +9,7 @@
 #ifdef BAND3_HAVE_FFMPEG
 
 #include "src/Video/ffmpeg_api.h"
+#include "src/Video/sync_align.h"
 #include "src/Video/video_decoders.h"
 
 #ifdef _WIN32
@@ -21,7 +22,10 @@
 #endif
 
 #include <algorithm>
+#include <bit>
+#include <cstring>
 #include <mutex>
+#include <optional>
 #include <string_view>
 #include <thread>
 
@@ -262,6 +266,127 @@ std::unique_ptr<VideoDecoder> OpenFfmpegVideo(const std::filesystem::path& path,
     auto decoder = std::make_unique<FfmpegDecoder>();
     if (!decoder->Open(path, error)) return nullptr;
     return decoder;
+}
+
+namespace {
+
+// one channel's sample `i` of a decoded audio frame, -1..1
+float Sample(const AVFrame* f, int channel, int i, int channels) {
+    const auto format = AVSampleFormat(f->format);
+    const bool planar = format == AV_SAMPLE_FMT_FLTP || format == AV_SAMPLE_FMT_S16P ||
+                        format == AV_SAMPLE_FMT_S32P || format == AV_SAMPLE_FMT_DBLP ||
+                        format == AV_SAMPLE_FMT_U8P;
+    const uint8_t* data = f->extended_data[planar ? channel : 0];
+    const int at = planar ? i : i * channels + channel;
+    switch (format) {
+        case AV_SAMPLE_FMT_FLT:
+        case AV_SAMPLE_FMT_FLTP: return reinterpret_cast<const float*>(data)[at];
+        case AV_SAMPLE_FMT_S16:
+        case AV_SAMPLE_FMT_S16P: return reinterpret_cast<const int16_t*>(data)[at] / 32768.0f;
+        case AV_SAMPLE_FMT_S32:
+        case AV_SAMPLE_FMT_S32P:
+            return float(reinterpret_cast<const int32_t*>(data)[at] / 2147483648.0);
+        case AV_SAMPLE_FMT_DBL:
+        case AV_SAMPLE_FMT_DBLP: return float(reinterpret_cast<const double*>(data)[at]);
+        case AV_SAMPLE_FMT_U8:
+        case AV_SAMPLE_FMT_U8P: return (data[at] - 128) / 128.0f;
+        default: return 0.0f;
+    }
+}
+
+}
+
+std::vector<float> FfmpegSoundtrackEnvelope(const std::filesystem::path& path, double seconds,
+                                            std::string& error) {
+    if (!LoadFfmpeg(error)) return {};
+    const std::u8string u8 = path.u8string();
+    const std::string name(u8.begin(), u8.end());
+    AVFormatContext* format = nullptr;
+    int ret = g_av->avformat_open_input(&format, name.c_str(), nullptr, nullptr);
+    if (ret < 0) {
+        error = AvError("opening it", ret);
+        return {};
+    }
+    struct Closer {
+        AVFormatContext** format;
+        AVCodecContext* codec = nullptr;
+        AVPacket* packet = nullptr;
+        AVFrame* frame = nullptr;
+        ~Closer() {
+            g_av->av_frame_free(&frame);
+            g_av->av_packet_free(&packet);
+            g_av->avcodec_free_context(&codec);
+            g_av->avformat_close_input(format);
+        }
+    } close{&format};
+    if ((ret = g_av->avformat_find_stream_info(format, nullptr)) < 0) {
+        error = AvError("reading its streams", ret);
+        return {};
+    }
+    const AVCodec* codec = nullptr;
+    const int stream = g_av->av_find_best_stream(format, AVMEDIA_TYPE_AUDIO, -1, -1, &codec, 0);
+    if (stream < 0 || !codec) {
+        error = stream == AVERROR_DECODER_NOT_FOUND ? "no decoder for its sound" : "no sound in it";
+        return {};
+    }
+    for (unsigned i = 0; i < format->nb_streams; i++)
+        if (int(i) != stream) format->streams[i]->discard = AVDISCARD_ALL;
+    close.codec = g_av->avcodec_alloc_context3(codec);
+    if (!close.codec ||
+        g_av->avcodec_parameters_to_context(close.codec, format->streams[stream]->codecpar) < 0 ||
+        (ret = g_av->avcodec_open2(close.codec, codec, nullptr)) < 0) {
+        error = "opening its sound's decoder failed";
+        return {};
+    }
+    close.packet = g_av->av_packet_alloc();
+    close.frame = g_av->av_frame_alloc();
+    if (!close.packet || !close.frame) {
+        error = "out of memory";
+        return {};
+    }
+    std::optional<EnvelopeBuilder> envelope;
+    int rate = 0;
+    int64_t samples = 0, wanted = 0;
+    std::vector<float> mono;
+    bool draining = false;
+    for (;;) {
+        ret = g_av->avcodec_receive_frame(close.codec, close.frame);
+        if (ret == 0) {
+            const AVFrame* f = close.frame;
+            if (!envelope) {
+                rate = f->sample_rate;
+                if (rate <= 0) break;
+                envelope.emplace(rate);
+                wanted = int64_t(seconds * rate);
+            }
+            const int channels = std::max(1, f->ch_layout.nb_channels);
+            mono.assign(size_t(f->nb_samples), 0.0f);
+            for (int i = 0; i < f->nb_samples; i++) {
+                float sum = 0.0f;
+                for (int c = 0; c < channels; c++) sum += Sample(f, c, i, channels);
+                mono[size_t(i)] = sum / float(channels);
+            }
+            envelope->Add(mono);
+            samples += f->nb_samples;
+            g_av->av_frame_unref(close.frame);
+            if (samples >= wanted) break;
+            continue;
+        }
+        if (ret != AVERROR(EAGAIN) || draining) break;
+        ret = g_av->av_read_frame(format, close.packet);
+        if (ret < 0) {
+            draining = true;
+            g_av->avcodec_send_packet(close.codec, nullptr);
+            continue;
+        }
+        if (close.packet->stream_index == stream) g_av->avcodec_send_packet(close.codec, close.packet);
+        g_av->av_packet_unref(close.packet);
+    }
+    if (!envelope || envelope->Frames().empty()) {
+        error = "its sound couldn't be decoded";
+        return {};
+    }
+    return envelope->Frames();
 }
 
 }

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # build_ffmpeg: the trimmed FFmpeg band3's music videos decode with on Windows
-# (cmake/ffmpeg.cmake): its avcodec, avformat, avutil and swscale DLLs, with
+# (cmake/ffmpeg.cmake): its avcodec, avformat, avutil, swresample (Opus needs it)
+# and swscale DLLs, with
 # only the decoders and demuxers band3 uses (H.264, HEVC, VP8, VP9, AV1
-# through dav1d, MPEG-1/2/4 and VC-1/WMV; WebM/MKV, MP4/MOV, AVI, ASF/WMV and
-# MPEG streams), LGPL, into deps/ffmpeg-<version>-band3-win64.zip with their
+# through dav1d, MPEG-1/2/4 and VC-1/WMV pictures; Opus, AAC, Vorbis, MP3 and
+# FLAC sound, for auto-sync; WebM/MKV, MP4/MOV, AVI, ASF/WMV and MPEG
+# streams), LGPL, into deps/ffmpeg-<version>-band3-win64.zip with their
 # headers and licenses.
 #
 # Run from Git Bash on Windows, with MSYS2 installed (MSYS2=, C:/msys64 by
@@ -81,11 +83,11 @@ cd "\$WORK/src/ffmpeg-$FFMPEG_VERSION"
 ./configure --prefix="\$PREFIX" --target-os=mingw32 --arch=x86_64 \
     --enable-shared --disable-static --disable-debug --disable-doc --disable-programs \
     --disable-everything --disable-network --disable-autodetect --enable-w32threads \
-    --disable-avdevice --disable-avfilter --disable-swresample \
-    --enable-avcodec --enable-avformat --enable-swscale \
+    --disable-avdevice --disable-avfilter \
+    --enable-avcodec --enable-avformat --enable-swscale --enable-swresample \
     --enable-libdav1d --pkg-config="\$WORK/pkg-config" \
-    --enable-decoder=h264,hevc,vp8,vp9,libdav1d,mpeg4,msmpeg4v3,mpeg1video,mpeg2video,vc1,wmv3 \
-    --enable-parser=h264,hevc,vp8,vp9,av1,mpeg4video,mpegvideo,vc1 \
+    --enable-decoder=h264,hevc,vp8,vp9,libdav1d,mpeg4,msmpeg4v3,mpeg1video,mpeg2video,vc1,wmv3,opus,aac,vorbis,mp3float,flac \
+    --enable-parser=h264,hevc,vp8,vp9,av1,mpeg4video,mpegvideo,vc1,opus,aac,vorbis,mpegaudio,flac \
     --enable-demuxer=matroska,mov,avi,asf,mpegts,mpegps,m4v,h264,hevc,ivf \
     --enable-protocol=file \
     --extra-ldflags="-static-libgcc -static"
@@ -99,7 +101,7 @@ cd "$WORK/src/ffmpeg-$FFMPEG_VERSION"
 OUT="$WORK/ffmpeg-$FFMPEG_VERSION-band3-win64"
 rm -rf "$OUT"
 mkdir -p "$OUT/bin"
-for lib in avutil avcodec avformat swscale; do
+for lib in avutil swresample avcodec avformat swscale; do
     cp "$PREFIX"/bin/$lib-*.dll "$OUT/bin/"
 done
 strip --strip-unneeded "$OUT"/bin/*.dll
@@ -111,7 +113,8 @@ cat > "$OUT/LICENSE.txt" <<EOF
 FFmpeg $FFMPEG_VERSION (https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz), LGPL 2.1 or
 later (COPYING.LGPLv2.1), with dav1d $DAV1D_VERSION
 (https://code.videolan.org/videolan/dav1d/-/archive/$DAV1D_VERSION/dav1d-$DAV1D_VERSION.tar.gz,
-BSD 2-clause, COPYING.dav1d) built into avcodec: the avcodec, avformat, avutil and swscale DLLs
+BSD 2-clause, COPYING.dav1d) built into avcodec: the avcodec, avformat, avutil, swresample and
+swscale DLLs
 beside band3, built unmodified by band3's tools/build_ffmpeg.sh, which has the configure line.
 EOF
 mkdir -p "$REPO/deps"

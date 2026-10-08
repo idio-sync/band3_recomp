@@ -29,6 +29,7 @@ constexpr std::pair<Tab, const char*> kTabs[] = {
     {Tab::kControllers, "Controllers"},
     {Tab::kOnline, "Online"},
     {Tab::kLights, "Lights"},
+    {Tab::kVideos, "Videos"},
     {Tab::kAdvanced, "Advanced"},
 };
 

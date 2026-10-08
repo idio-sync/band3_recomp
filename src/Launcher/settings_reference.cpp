@@ -33,6 +33,7 @@ constexpr std::pair<Tab, std::string_view> kTabNames[] = {
     {Tab::kControllers, "Controllers"},
     {Tab::kOnline, "Online"},
     {Tab::kLights, "Lights"},
+    {Tab::kVideos, "Videos"},
     {Tab::kAdvanced, "Advanced"},
     {Tab::kSteamDeck, "Steam Deck"},
     {Tab::kFooter, "Launcher"},

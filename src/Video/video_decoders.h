@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "src/Video/video_decoder.h"
 
@@ -24,6 +25,8 @@ std::unique_ptr<VideoDecoder> OpenMfVideo(const std::filesystem::path& path,
 bool FfmpegAvailable(std::string& error);
 std::unique_ptr<VideoDecoder> OpenFfmpegVideo(const std::filesystem::path& path,
                                               std::string& error);
+std::vector<float> FfmpegSoundtrackEnvelope(const std::filesystem::path& path, double seconds,
+                                            std::string& error);
 #endif
 
 }

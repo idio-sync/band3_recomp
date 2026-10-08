@@ -2,9 +2,12 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 
 #include "src/Video/movie_planes.h"
+#include "src/Video/video_files.h"
 
 // Music videos: a song's own video, found by video_files.h, played in the
 // video venues in place of their background movies, in time with the song.
@@ -34,6 +37,18 @@ bool HasMusicVideo(std::string_view shortname);
 // draws it)
 void SetBlackVenue(bool black);
 bool BlackVenue();
+
+// For auto-sync (auto_sync.h): the song now playing's video, if it has one,
+// and `song`, a number each song changes; and a new start time for that
+// song's video, applied from the next frame if it's still on.
+std::optional<VideoFile> CurrentMusicVideo(uint64_t& song);
+void SetMusicVideoStartTime(uint64_t song, double seconds);
+
+// [ and ] while a video plays (band3_app.h's binds): its start time moved by
+// `delta` seconds and saved to its .ini; RecentNudgeMessage says so on
+// screen for a couple of seconds after (empty after that)
+void NudgeMusicVideo(double delta);
+std::string RecentNudgeMessage();
 
 // whether a music video is on screen: MusicVideoFrame gave a venue movie a
 // frame of one in the last half second (so a video venue is drawing it), for

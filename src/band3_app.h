@@ -35,6 +35,7 @@
 #include "Hooks/frame_pacing.h"
 #include "Input/input_system.h"
 #include "Input/instrument_lab.h"
+#include "Video/music_video.h"
 #include "Input/menu_shortcut_dialog.h"
 #include "Input/virtual_instrument.h"
 #include "Launcher/game_data_check.h"
@@ -61,6 +62,28 @@
 
 // always attached, and draws nothing while debug_overlay is off, so the
 // setting can be flipped in the in-game settings
+// What [ and ] did to the playing music video's offset (music_video.h's
+// NudgeMusicVideo), for a couple of seconds, at the top of the window
+class MusicVideoNudgeDialog : public rex::ui::ImGuiDialog {
+ public:
+  explicit MusicVideoNudgeDialog(rex::ui::ImGuiDrawer* imgui_drawer)
+      : rex::ui::ImGuiDialog(imgui_drawer) {}
+
+ protected:
+  void OnDraw(ImGuiIO& io) override {
+    const std::string message = band3::video::RecentNudgeMessage();
+    if (message.empty()) return;
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 40.0f), ImGuiCond_Always,
+                            ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.65f);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                   ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing |
+                                   ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings;
+    if (ImGui::Begin("##music_video_nudge", nullptr, flags)) ImGui::TextUnformatted(message.c_str());
+    ImGui::End();
+  }
+};
+
 class DebugOverlayDialog : public rex::ui::ImGuiDialog {
  public:
   explicit DebugOverlayDialog(rex::ui::ImGuiDrawer* imgui_drawer)
@@ -112,6 +135,7 @@ class Band3App : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
   std::unique_ptr<DebugOverlayDialog> debug_overlay_;
+  std::unique_ptr<MusicVideoNudgeDialog> music_video_nudge_;
   std::unique_ptr<band3::input::InstrumentLabDialog> instrument_lab_;
   std::unique_ptr<band3::input::MenuShortcutDialog> menu_shortcut_;
   // the Liveless Rooms panel, see src/Net/liveless_rooms_panel.h
@@ -511,6 +535,8 @@ class Band3App : public rex::ReXApp {
     rex::ui::UnregisterBind("bind_liveless_rooms");
     rex::ui::UnregisterBind("bind_native_view");
     rex::ui::UnregisterBind("bind_renderer");
+    rex::ui::UnregisterBind("bind_music_video_earlier");
+    rex::ui::UnregisterBind("bind_music_video_later");
     // before the input system goes: it holds the game's input while open
     all_settings_.reset();
     ingame_settings_.reset();
@@ -533,6 +559,15 @@ class Band3App : public rex::ReXApp {
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
     if (drawer) {
       debug_overlay_ = std::make_unique<DebugOverlayDialog>(drawer);
+      // [ and ]: the playing music video earlier (when the singer's lips come
+      // after the sound) or later, 50 ms a press, saved to its .ini
+      music_video_nudge_ = std::make_unique<MusicVideoNudgeDialog>(drawer);
+      rex::ui::RegisterBind("bind_music_video_earlier", "LBracket",
+                            "Show the playing music video 50 ms earlier",
+                            [] { band3::video::NudgeMusicVideo(0.05); });
+      rex::ui::RegisterBind("bind_music_video_later", "RBracket",
+                            "Show the playing music video 50 ms later",
+                            [] { band3::video::NudgeMusicVideo(-0.05); });
       instrument_lab_ = std::make_unique<band3::input::InstrumentLabDialog>(drawer);
       // F6 and F9 do nothing while the launcher is up: both need the game
       rex::ui::RegisterBind("bind_instrument_lab", "F6", "Toggle the Instrument Lab", [this] {
@@ -569,6 +604,7 @@ class Band3App : public rex::ReXApp {
       all_settings_.reset();
       ingame_settings_.reset();
       debug_overlay_.reset();
+      music_video_nudge_.reset();
       instrument_lab_.reset();
       menu_shortcut_.reset();
       rooms_panel_.reset();

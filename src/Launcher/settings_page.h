@@ -15,6 +15,7 @@
 #include "game_data_check.h"
 #include "launcher_settings.h"
 #include "mic_meter.h"
+#include "videos_tab.h"
 
 namespace band3::launcher {
 
@@ -115,6 +116,9 @@ private:
     // the Lights tab, after its settings: the Stage Kits found and the test
     // controls, as the RB3E Dashboard has them (src/Lights/lights.h)
     void DrawLights();
+    // the Videos tab, after its settings: each video in music_videos_folder,
+    // its offset and how well it's synced (videos_tab.h)
+    void DrawVideos();
     void DrawControl(const Setting& setting);
 
     // the widgets, one per Widget kind
@@ -196,6 +200,8 @@ private:
     // every device when empty), and the colour the LED buttons light
     std::optional<std::string> lights_target_;
     uint8_t lights_colour_ = 0x80;
+
+    VideosTab videos_;
 
     // the devices on this PC, listed again every couple of seconds while
     // their tab shows (RefreshDeviceLists), and when each list is due

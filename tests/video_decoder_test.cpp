@@ -9,7 +9,10 @@
 #include <doctest/doctest.h>
 #include <memory>
 #include <string>
+#include "src/Video/sync_align.h"
 #include "src/Video/video_decoders.h"
+#include <cstdlib>
+#include <vector>
 
 using namespace band3::video;
 
@@ -137,3 +140,29 @@ TEST_CASE("OpenVideo opens a clip with whatever this build decodes with") {
     video.reset();
     EndVideoThread();
 }
+
+#ifdef BAND3_HAVE_FFMPEG
+TEST_CASE("a soundtrack decoded from two codecs aligns to the delay between them") {
+    // the same irregular tones, as Opus in WebM, and as AAC in M4A with 2.5 s
+    // of silence before them (tests/data, made with ffmpeg's aevalsrc)
+    std::string error;
+    const std::vector<float> opus = SoundtrackEnvelope(Clip("sync_clicks.webm"), 60.0, error);
+    REQUIRE_MESSAGE(!opus.empty(), error);
+    const std::vector<float> aac = SoundtrackEnvelope(Clip("sync_clicks_late.m4a"), 60.0, error);
+    REQUIRE_MESSAGE(!aac.empty(), error);
+    // about kEnvelopeRate frames a second of each
+    CHECK(std::abs(int(opus.size()) - 15 * kEnvelopeRate) < kEnvelopeRate / 2);
+    CHECK(std::abs(int(aac.size()) - int(17.5 * kEnvelopeRate)) < kEnvelopeRate / 2);
+    // the Opus one's first 12 s, as a song captured from its start
+    const std::vector<float> song(opus.begin(), opus.begin() + 12 * kEnvelopeRate);
+    const SyncResult r = AlignEnvelopes(song, aac, -5.0, 10.0, 8.0);
+    REQUIRE(r.found);
+    CAPTURE(r.score);
+    CAPTURE(r.margin);
+    CAPTURE(r.onset_score);
+    // the video's time at the song's start: its 2.5 s of silence
+    CHECK(std::abs(r.offset - 2.5) < 0.02);
+    CHECK(r.confident);
+    CHECK(SoundtrackEnvelope(Clip("music_video_red_blue.mp4"), 10.0, error).empty());
+}
+#endif

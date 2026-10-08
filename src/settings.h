@@ -22,6 +22,7 @@ REXCVAR_DECLARE(bool, music_videos);
 REXCVAR_DECLARE(int32_t, music_video_venue_chance);
 REXCVAR_DECLARE(bool, music_video_hide_band);
 REXCVAR_DECLARE(bool, music_video_as_is);
+REXCVAR_DECLARE(bool, music_video_auto_sync);
 REXCVAR_DECLARE(std::string, music_videos_folder);
 REXCVAR_DECLARE(std::string, music_video_fit);
 REXCVAR_DECLARE(std::string, username);

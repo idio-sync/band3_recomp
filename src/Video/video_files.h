@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -17,7 +18,16 @@ struct VideoFile {
     std::filesystem::path path;
     // seconds into the video at the song's start
     double start_time = 0.0;
+    // whether the .ini sets it (auto-sync leaves a set one alone)
+    bool start_time_set = false;
 };
+
+// the .ini beside a video: <shortname>.ini
+inline std::filesystem::path IniFor(const std::filesystem::path& video) {
+    std::filesystem::path ini = video;
+    ini.replace_extension(".ini");
+    return ini;
+}
 
 // the extensions looked for, in order
 inline constexpr std::string_view kVideoExtensions[] = {".mp4", ".m4v", ".mov", ".mkv",
@@ -31,5 +41,14 @@ std::optional<VideoFile> FindVideo(const std::vector<std::filesystem::path>& fol
 // video_start_time in an .ini's text, in seconds; 0 without it. A
 // `[section]` line and `;` or `#` comments are skipped, as are other keys.
 double ParseStartTime(std::string_view ini);
+std::optional<double> FindStartTime(std::string_view ini);
+
+// The .ini's text with video_start_time set to `seconds` (whole
+// milliseconds): its line replaced where there is one, else added under
+// [song] (made if missing); the rest kept as it was, line endings too.
+std::string WithStartTime(std::string_view ini, double seconds);
+
+// WithStartTime written over the video's .ini; false if it can't be
+bool WriteStartTime(const std::filesystem::path& video, double seconds);
 
 }

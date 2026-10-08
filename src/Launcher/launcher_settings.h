@@ -32,6 +32,7 @@ enum class Tab {
     kControllers,
     kOnline,
     kLights,
+    kVideos,
     // in game only: Band3/Advanced's settings, generated from the registry
     kAdvanced,
     // the Steam Deck banner's toggle, shown only on a Deck

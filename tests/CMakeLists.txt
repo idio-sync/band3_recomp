@@ -57,6 +57,7 @@ add_executable(band3_tests
     deferred_decode_test.cpp
     movie_planes_test.cpp
     music_video_test.cpp
+    sync_align_test.cpp
     video_decoder_test.cpp
     frame_compose_test.cpp
     post_params_test.cpp
@@ -146,6 +147,8 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Lights/pico_fleet.cpp
     ${BAND3_ROOT}/src/Lights/stagekit.cpp
     ${BAND3_ROOT}/src/Video/picture_convert.cpp
+    ${BAND3_ROOT}/src/Video/sync_align.cpp
+    ${BAND3_ROOT}/src/Video/sync_cache.cpp
     ${BAND3_ROOT}/src/Video/video_files.cpp
     ${BAND3_ROOT}/src/Net/album_art.cpp
     ${BAND3_ROOT}/src/Net/ha_entities.cpp

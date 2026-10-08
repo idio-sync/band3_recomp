@@ -32,6 +32,18 @@ void EndVideoThread() {
     t_ffmpeg = t_mf = false;
 }
 
+std::vector<float> SoundtrackEnvelope(const std::filesystem::path& path, double seconds,
+                                      std::string& error) {
+#ifdef BAND3_HAVE_FFMPEG
+    return FfmpegSoundtrackEnvelope(path, seconds, error);
+#else
+    (void)path;
+    (void)seconds;
+    error = "band3 was built without FFmpeg";
+    return {};
+#endif
+}
+
 std::unique_ptr<VideoDecoder> OpenVideo(const std::filesystem::path& path, std::string& error) {
     std::string ffmpeg_error;
 #ifdef BAND3_HAVE_FFMPEG

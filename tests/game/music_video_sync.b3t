@@ -1,0 +1,66 @@
+# Plays No One Knows in a video venue with its music video, for auto-sync and
+# the [ and ] nudge. Starts where boot.b3t leaves Rock Band 3 Deluxe (on a
+# fresh profile). The video is the song's own (a YouTube rip, its soundtrack
+# included), with no .ini, in a folder of its own:
+#   python tools/band3ctl.py launch --fresh -- --music_videos_folder=<that folder, absolute>
+#   python tools/band3ctl.py run tests/game/boot.b3t
+#   python tools/band3ctl.py run tests/game/music_video_sync.b3t
+# 45 s into the song the log says "Music video auto-sync: nooneknows.webm:
+# -3.252 s (score 0.81, margin 1.52), saved to nooneknows.ini" (for that rip),
+# and the .ini has video_start_time = -3252. Then the two nudges below log
+# "Video offset -3.202 s (saved)" and "-3.252 s" as they move it and back.
+# With the .ini there already, nothing is captured again.
+
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+set autoplay true
+set forced_venue video_02
+# Play Now, Quickplay, Choose Songs
+press green
+sleep 1s
+press green
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+# a letter heading at a time, to the N's, then No One Knows
+press orange
+press orange
+press orange
+press orange
+press orange
+press orange
+press orange
+press orange
+press orange
+press orange
+press orange
+press orange
+press orange
+press orange
+press orange
+sleep 500ms
+press down
+press down
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+# Guitar, Expert
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+expect song=nooneknows
+sleep 20s
+screenshot native music-video-sync-early
+# past the 45 s of the song auto-sync takes (from the song's start, after
+# the venue's intro), and the few seconds it aligns for
+sleep 55s
+screenshot native music-video-sync-synced
+# [ then ]: 50 ms earlier, and back
+bind music_video_earlier
+sleep 500ms
+bind music_video_later

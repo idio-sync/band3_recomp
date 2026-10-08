@@ -49,31 +49,37 @@ REXCVAR_DEFINE_STRING(forced_venue, "false", "Band3/Game",
     "A venue (arena_04), a class (arena, big_club, small_club, festival, video), "
     "none for a black background, or a comma separated list to pick from at random");
 
-REXCVAR_DEFINE_BOOL(music_videos, true, "Band3/Game",
+REXCVAR_DEFINE_BOOL(music_videos, true, "Band3/Videos",
     "Play a song's music video in the video venues, in place of their background clips, "
     "when music_videos_folder has one for it: <shortname>.mp4 (or .mkv, .mov, .webm...), "
     "and optionally <shortname>.ini with Clone Hero's video_start_time. "
     "forced_venue video picks the video venues. Turned on, it applies from the next song");
 
-REXCVAR_DEFINE_INT32(music_video_venue_chance, 100, "Band3/Game",
+REXCVAR_DEFINE_INT32(music_video_venue_chance, 100, "Band3/Videos",
     "How often a song with a music video is put in a video venue, so its video shows, in "
     "percent: 0 never (the game's venue), 25, 50, 75 or 100 always. A forced venue and the "
     "black background modifier still win. Applies from the next venue the game picks")
     .range(0, 100);
 
-REXCVAR_DEFINE_BOOL(music_video_hide_band, true, "Band3/Game",
+REXCVAR_DEFINE_BOOL(music_video_hide_band, true, "Band3/Videos",
     "Leave the band out of the picture while a song's music video plays, so only the "
     "video shows behind the highways. The venue's lights (and Stage Kit) go on as before");
 
-REXCVAR_DEFINE_BOOL(music_video_as_is, true, "Band3/Game",
+REXCVAR_DEFINE_BOOL(music_video_as_is, true, "Band3/Videos",
     "Show a song's music video as it is: the video venue's colour filter, film grain, glow "
     "and trails are left off while it plays (and on the black background's black)");
 
-REXCVAR_DEFINE_STRING(music_videos_folder, "videos", "Band3/Game",
+REXCVAR_DEFINE_BOOL(music_video_auto_sync, true, "Band3/Videos",
+    "Find each music video's offset from its sound: the first time its song plays, about "
+    "45 s in, the song's audio is matched against the video's and a sure match is saved "
+    "as video_start_time in the video's .ini, and used at once. An .ini that sets one is "
+    "left alone");
+
+REXCVAR_DEFINE_STRING(music_videos_folder, "videos", "Band3/Videos",
     "The folder music videos are looked for in (empty: videos). A relative folder is "
     "relative to band3_config.ini's folder (or band3's own folder if there is no ini)");
 
-REXCVAR_DEFINE_STRING(music_video_fit, "fit", "Band3/Game",
+REXCVAR_DEFINE_STRING(music_video_fit, "fit", "Band3/Videos",
     "How a music video whose shape isn't the screen's is shown: fit (all of it, with black "
     "bars), fill (the whole screen, its edges cut off) or stretch");
 
