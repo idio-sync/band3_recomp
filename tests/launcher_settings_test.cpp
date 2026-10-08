@@ -889,6 +889,18 @@ TEST_CASE("the Latency section says what its rows do and to calibrate again") {
     CHECK(note->find("calibration") != std::string::npos);
 }
 
+TEST_CASE("Lowest latency turns pacing off only where its cap is still paced") {
+    // 240 on these: two frames a refresh or more, not paced anyway
+    CHECK_FALSE(LowestLatencyPacingOff(60));
+    CHECK_FALSE(LowestLatencyPacingOff(120));
+    CHECK_FALSE(LowestLatencyPacingOff(75));
+    // the cap at the refresh: paced unless turned off
+    CHECK(LowestLatencyPacingOff(144));
+    CHECK(LowestLatencyPacingOff(165));
+    CHECK(LowestLatencyPacingOff(240));
+    CHECK(LowestLatencyPacingOff(0));
+}
+
 TEST_CASE("the Lowest latency cap is the most whole refreshes' worth up to 240") {
     CHECK(LowestLatencyCap(60) == "240");
     CHECK(LowestLatencyCap(59.94) == "240");

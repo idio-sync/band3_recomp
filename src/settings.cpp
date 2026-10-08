@@ -537,7 +537,10 @@ REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Advanced/Native renderer
     "With the native picture shown, publish each frame to the window a steady delay after "
     "the game presented it (about the slowest recent frame's), so frames that draw quickly "
     "(with even/odd rendering, every other one) don't reach a paint together with the one "
-    "before; off publishes each as soon as it's drawn, to compare");
+    "before; off publishes each as soon as it's drawn, to compare. Only while the game runs "
+    "under 1.5 times the display's refresh rate and frame_cap isn't auto: faster, each "
+    "refresh shows the newest frame anyway, and auto's variable refresh display shows each "
+    "as it comes, so the delay would only add lag");
 
 REXCVAR_DEFINE_BOOL(native_present_request_paint, true, "Band3/Advanced/Native renderer",
     "With renderer native (no emulated GPU), ask the window to paint each time the native "

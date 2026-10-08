@@ -3,6 +3,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include "src/Hooks/frame_pacing.h"
 #include "src/Input/joypad_lag_status.h"
 #include "src/Net/online.h"
 #include "src/Render/renderer_mode.h"
@@ -204,7 +205,8 @@ constexpr Setting kSettings[] = {
     {.cvar = "native_present_pacing", .tab = kGraphics, .section = "Latency",
      .label = "Smooth frame pacing", .widget = kCheckbox, .renderers = kWithNative,
      .note = "Off shows each frame as soon as it's drawn: about 3 to 4 ms less lag, with "
-             "now and then an uneven step in motion"},
+             "now and then an uneven step in motion. Only with a frame rate cap under 1.5 "
+             "times your display's refresh rate, not auto: there frames aren't held anyway"},
     {.cvar = "monitor", .tab = kGraphics, .section = "Display", .label = "Monitor",
      .widget = kMonitor, .choices = kMonitors},
     {.cvar = "fullscreen", .tab = kGraphics, .section = "Display", .label = "Window mode",
@@ -465,6 +467,11 @@ std::string LowestLatencyCap(double display_hz) {
     const int hz = static_cast<int>(std::lround(display_hz));
     if (hz <= 0 || hz >= kMax) return std::to_string(kMax);
     return std::to_string(hz * (kMax / hz));
+}
+
+bool LowestLatencyPacingOff(double display_hz) {
+    const std::string cap = LowestLatencyCap(display_hz);
+    return pacing::PacePublishing(pacing::FrameCapMode::kFixed, std::stod(cap), display_hz);
 }
 
 bool AsBool(std::string_view value) {

@@ -203,3 +203,29 @@ TEST_CASE("without the display's rate, display and auto are off") {
     // and off is off with one
     CHECK(ResolveFrameCap({FrameCapMode::kOff}, 120, 1).period_ns == 0);
 }
+
+using band3::pacing::PacePublishing;
+
+TEST_CASE("frames are paced only below 1.5 times the display's refresh") {
+    // the cap at the refresh: the hold keeps a fast frame from one paint with
+    // the frame before
+    CHECK(PacePublishing(FrameCapMode::kDisplay, 120, 120));
+    CHECK(PacePublishing(FrameCapMode::kFixed, 144, 144));
+    CHECK(PacePublishing(FrameCapMode::kFixed, 60, 120));
+    CHECK(PacePublishing(FrameCapMode::kFixed, 170, 120));
+    // two frames or more a refresh: each paint shows the newest anyway
+    CHECK_FALSE(PacePublishing(FrameCapMode::kFixed, 180, 120));
+    CHECK_FALSE(PacePublishing(FrameCapMode::kFixed, 240, 120));
+    CHECK_FALSE(PacePublishing(FrameCapMode::kFixed, 240, 60));
+    // the cap off: the game at its refresh_rate
+    CHECK(PacePublishing(FrameCapMode::kOff, 60, 60));
+    CHECK_FALSE(PacePublishing(FrameCapMode::kOff, 120, 60));
+}
+
+TEST_CASE("auto never paces, and a rate not known keeps pacing") {
+    // a variable refresh display shows each frame as it comes
+    CHECK_FALSE(PacePublishing(FrameCapMode::kAuto, 114, 120));
+    CHECK_FALSE(PacePublishing(FrameCapMode::kAuto, 0, 0));
+    CHECK(PacePublishing(FrameCapMode::kFixed, 240, 0));
+    CHECK(PacePublishing(FrameCapMode::kOff, 0, 120));
+}

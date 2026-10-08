@@ -261,17 +261,20 @@ void SettingsPage::DrawLowestLatency() {
     const double hz =
         DisplayRefreshRate(host_.native_window ? host_.native_window() : nullptr);
     const std::string cap = LowestLatencyCap(hz);
+    const bool pacing_off = LowestLatencyPacingOff(hz);
     if (ImGui::Button("Lowest latency")) {
         Apply("frame_cap", cap);
-        Apply("native_present_pacing", "false");
+        if (pacing_off) Apply("native_present_pacing", "false");
     }
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
     FontScope font(kSmallSize);
-    const std::string what =
-        hz > 0 ? "Frame rate cap " + cap + " (a whole number of frames for each of your display's " +
-                     std::to_string(std::lround(hz)) + " Hz) and smooth frame pacing off"
-               : "Frame rate cap " + cap + " and smooth frame pacing off";
+    std::string what = "Frame rate cap " + cap;
+    if (hz > 0) {
+        what += " (a whole number of frames for each of your display's " +
+                std::to_string(std::lround(hz)) + " Hz)";
+    }
+    if (pacing_off) what += " and smooth frame pacing off";
     ImGui::PushTextWrapPos(0);
     ImGui::TextColored(kMuted, "%s. If the debug overlay's Game rate falls short of the cap, "
                                "lower it.", what.c_str());

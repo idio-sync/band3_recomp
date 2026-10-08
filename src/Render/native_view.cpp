@@ -752,6 +752,8 @@ class Renderer {
         // reset per presenting stretch (pacer_generation)
         PublishPacer pacer;
         uint64_t pacer_generation = 0;
+        // PacePublishing's last answer, for the log; -1 none yet
+        int pace_logged = -1;
         // native_world_ahead's choice, measured per stretch and restore
         AheadChooser ahead_choice;
         uint64_t ahead_generation = 0, ahead_resumes = 0;
@@ -846,6 +848,26 @@ class Renderer {
                 // not in menus: textures kept from them into a song kept the
                 // texture arrays from ever emptying
                 o.clock_keep = InSong();
+            }
+            // only where holding frames keeps two from one paint
+            // (frame_pacing.h's PacePublishing); logged as that changes
+            if (pace) {
+                const pacing::FrameCapMode mode = pacing::GetFrameCapStats().mode;
+                const double game_hz = pacing::GameHz(), display_hz = pacing::DisplayHz();
+                pace = pacing::PacePublishing(mode, game_hz, display_hz);
+                if (int(pace) != pace_logged) {
+                    pace_logged = int(pace);
+                    if (pace) {
+                        REXLOG_INFO("native present: pacing frames (game {:.2f} Hz, display "
+                                    "{:.2f} Hz)", game_hz, display_hz);
+                    } else {
+                        REXLOG_INFO("native present: not pacing frames, which would only add "
+                                    "lag (frame cap {} {:.2f} Hz, display {:.2f} Hz)",
+                                    pacing::FrameCapModeName(mode), game_hz, display_hz);
+                    }
+                    // what it measured before the stretch without it is stale
+                    pacer.Reset();
+                }
             }
             // a capture published after this is new (pacing wait, below)
             const uint64_t seen = CaptureEpoch();

@@ -115,10 +115,13 @@ sets how finely hits are timed: to within 16.7 ms at 60 fps, 8.3 ms at 120 and 4
 - **Smooth frame pacing** (`native_present_pacing`, native renderer, on by default) hands
   each frame to the window a steady delay after the game made it, so motion steps evenly.
   Off hands it over as soon as it's drawn: about 3 to 4 ms sooner at 120 fps, with now and
-  then an uneven step.
-- **Lowest latency** sets both: smooth frame pacing off, and the cap at the most whole
-  refreshes' worth of frames up to 240 (240 on a 60 or 120 Hz display, 144 on a 144 Hz
-  one), so the picture still steps evenly. If the game can't hold that rate, lower the cap.
+  then an uneven step. It holds frames only with the cap under 1.5 times the display's
+  refresh rate and not `auto`: faster, each refresh shows the newest frame anyway, and a
+  variable refresh display shows each frame as it comes, so holding one only adds lag.
+- **Lowest latency** sets the cap at the most whole refreshes' worth of frames up to 240
+  (240 on a 60 or 120 Hz display, 144 on a 144 Hz one), so the picture still steps evenly,
+  and where that cap is the display's own rate (over 160 Hz) smooth frame pacing off too. If
+  the game can't hold that rate, lower the cap.
 
 The debug overlay (`debug_overlay`) shows the game's frame rate (**Game**), the window's
 (**Window**, which the display's refresh rate holds back: a 60 Hz TV shows 60 whatever the

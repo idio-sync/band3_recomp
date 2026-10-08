@@ -55,10 +55,14 @@ Its GPU pipelines are made as the native renderer starts (about 100 ms, once a s
 no frame waits for one; the log names any made later (`pipeline made after warm-up`). Each
 frame is drawn as soon as the game presents it and handed to the window a steady delay
 later, about the slowest recent frame's drawing time and never more than a frame, so the
-window gets one new frame a refresh (`native_present_pacing`). If the GPU hasn't finished a
-frame in 2 s, the window keeps its last frame until it does (`native renderer: the GPU
-hasn't finished a frame ...`). After F8 back to native, the window shows only frames the game
-presented since. With RB3's even/odd rendering (on, as the game ships), a frame that draws
+window gets one new frame a refresh (`native_present_pacing`). That's only while the game
+runs under 1.5 times the display's refresh rate and `frame_cap` isn't `auto`: faster, each
+paint shows the newest of two or more frames anyway, and a variable refresh display shows
+each frame as it comes, so the delay would only add lag; there each frame is handed over as
+soon as it's drawn (the log says which: `native present: pacing frames` or `not pacing
+frames`). If the GPU hasn't finished a frame in 2 s, the window keeps its last frame until
+it does (`native renderer: the GPU hasn't finished a frame ...`). After F8 back to native,
+the window shows only frames the game presented since. With RB3's even/odd rendering (on, as the game ships), a frame that draws
 the world without post-processing it shows the last post-processed picture under its own
 track and HUD, as the game's does. The test harness's `present_stats` measures the window's
 pacing under either renderer.

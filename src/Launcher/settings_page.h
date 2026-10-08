@@ -108,8 +108,9 @@ private:
     void DrawSection(Tab tab, std::string_view section);
     void DrawRow(const Setting& setting);
     void DrawRowNotes(const Setting& setting);
-    // the Graphics tab's Latency section's button: frame_cap and
-    // native_present_pacing for the least lag (LowestLatencyCap)
+    // the Graphics tab's Latency section's button: frame_cap and, where it
+    // still paces, native_present_pacing for the least lag (LowestLatencyCap,
+    // LowestLatencyPacingOff)
     void DrawLowestLatency();
     // the Lights tab, after its settings: the Stage Kits found and the test
     // controls, as the RB3E Dashboard has them (src/Lights/lights.h)

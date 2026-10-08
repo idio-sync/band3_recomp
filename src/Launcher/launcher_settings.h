@@ -146,6 +146,12 @@ std::vector<std::string_view> SectionsOf(std::span<const Setting> table, Tab tab
 // frames up to 240, so the window's picture still steps evenly; 240 for a
 // display that can't be told
 std::string LowestLatencyCap(double display_hz);
+// Whether that button turns native_present_pacing off too: only where the
+// pacing still holds frames at its cap (frame_pacing.h's PacePublishing), a
+// display over 160 Hz (the cap at its refresh) or one that can't be told;
+// below, a cap of two refreshes' worth or more turns it off by itself, and
+// the setting stays as the player had it for a lower cap later
+bool LowestLatencyPacingOff(double display_hz);
 
 // Values
 
