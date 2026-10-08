@@ -228,31 +228,121 @@ inline constexpr std::string_view kKaraokePage = R"html(<!DOCTYPE html>
   --bg: #05060a; --band: rgba(12, 14, 26, 0.82); --edge: rgba(130, 150, 255, 0.22);
   --unsung: #f2f2f6; --next: rgba(242, 242, 246, 0.42); --muted: #8c8ca6;
   --lead: #57c1ff; --harm1: #57c1ff; --harm2: #ff9d3b; --harm3: #c8813f;
+  --navy: #020534;
   --scale: 1;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
+/* The page dresses itself in RB3's own menus: each texture (KaraokeModel's
+   TEXTURES) is used under the class t-<key> on <html>, which the script adds
+   once it has loaded, its URL in --t-<key>; until then, or without it, the
+   rules before each keep the page's own look. */
 body {
-  background: radial-gradient(ellipse at 50% 30%, #1a1d3a 0%, var(--bg) 70%);
+  /* the menus' darkened scene: near black, darker at the edges; the overshell's
+     own dark wall once it has loaded */
+  background: radial-gradient(ellipse at 50% 55%, #0d1220 0%, #05070c 60%, #000 100%);
   color: var(--unsung); overflow: hidden;
   font-family: "Karaoke", "Arial Narrow", "Roboto Condensed", system-ui, sans-serif;
   font-weight: 700;
 }
-#stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
-#lyrics {
-  width: 100%; padding: 4vh 4vw; background: var(--band);
-  border-top: 2px solid var(--edge); border-bottom: 2px solid var(--edge);
-  box-shadow: 0 0 60px rgba(0, 0, 0, 0.6);
+.t-wall body { background: radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, 0) 30%, rgba(0, 0, 0, 0.85) 100%),
+                           var(--t-wall) 0 0 / 100vw 100vh; }
+/* the difficulty screen's song header: navy glass to a hard edge, the art in its
+   thin grey frame hanging below it, the title over the artist */
+#topband {
+  position: fixed; top: 0; left: 0; right: 0; height: 14.6vh; z-index: 5; isolation: isolate;
+  display: flex; align-items: center; gap: 1.6vw; padding: 0 4vw 0.6vh calc(4vw + 22.2vh + 1.6vw);
+  background: var(--navy);
 }
-.part { --sung: var(--lead); padding: 1vh 0; }
+#topband:has(#thumb[hidden]) { padding-left: 4vw; }
+/* the header's lighter top edge, where the game's spot lights catch it */
+#topband::after {
+  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: linear-gradient(180deg, rgba(30, 70, 200, 0.45) 0%, rgba(20, 50, 170, 0.12) 18%, transparent 30%);
+}
+/* and below it, header_song_shadow's soft shadow */
+#topshadow {
+  position: fixed; left: 0; right: 0; top: 14.6vh; height: 1.4vh; z-index: 4; pointer-events: none;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0));
+}
+#hdrclip { position: absolute; inset: 0; overflow: hidden; z-index: -1; pointer-events: none; }
+/* What the glass refracts (#refract): the song's art blown up and blurred, standing
+   in for the venue the game's header shows through. Only with the header's normal
+   map; drifting as the game's camera does, unless motion is to be kept down. */
+#hdrscene {
+  display: none; position: absolute; inset: -4vh -6vw; background: #000 center 35% / 170% auto no-repeat;
+  filter: blur(0.9vh) brightness(1.5) contrast(1.6) url(#refract); mix-blend-mode: screen;
+  animation: pan 60s ease-in-out infinite alternate;
+}
+.t-header_normal #hdrscene { display: block; }
+#hdrscene.idle {
+  background-image: radial-gradient(ellipse 14% 60% at 30% 50%, #888, transparent),
+                    radial-gradient(ellipse 8% 80% at 78% 40%, #777, transparent),
+                    radial-gradient(ellipse 24% 40% at 55% 70%, #444, transparent);
+  background-size: 100% 100%;
+}
+@keyframes pan { from { background-position: 30% 35%; } to { background-position: 70% 40%; } }
+@media (prefers-reduced-motion: reduce) { #hdrscene { animation: none; } }
+#thumb {
+  position: absolute; left: 4vw; top: 3.5vh; height: 22.2vh; aspect-ratio: 1; z-index: 3;
+  background: #000 center / cover; border: 0.55vh solid #77777d; outline: 1px solid #1a1a1a;
+  box-shadow: 0 0.8vh 2vh rgba(0, 0, 0, 0.85);
+}
+#titles { display: flex; flex-direction: column; justify-content: center; gap: 0.9vh; min-width: 0; overflow: hidden; }
+#band-title { font-size: 5.8vh; line-height: 1; white-space: nowrap; color: #c4c4cc; }
+#band-artist { font-size: 3.3vh; line-height: 1; white-space: nowrap; color: #c9cbd6; }
+/* the song's source, as the Music Library badges it */
+#badge { height: 6.4vh; width: 6.4vh; flex: none; background: center / contain no-repeat; }
+/* the band's score, in the HUD's frame */
+#score { margin-left: auto; flex: none; }
+#scorebox {
+  min-width: 21vw; height: 5.6vh; display: flex; align-items: center; justify-content: flex-end;
+  padding: 0 1.6vw; font-size: 3.6vh; border: 2px solid #8a8a94; border-radius: 0.8vh; background: rgba(0, 0, 0, 0.5);
+}
+.t-scoreboard #scorebox { border: 0; border-radius: 0; background: var(--t-scoreboard) 0 0 / 100% 100%; }
+#stage { position: fixed; inset: 14.6vh 0 9.2vh; display: flex; align-items: center; justify-content: center; }
+#lyrics { width: 100%; }
+/* A lyric lane: the vocal track's, its metal edge a hairline along the top and,
+   mirrored, the bottom. lyrics_bg_blue's top 4 rows are that edge (about 3 px in
+   the game), so it's drawn 9-slice: only the body stretches. */
+.part {
+  --sung: var(--lead); position: relative; padding: 2.2vh 4vw 1.6vh; margin: 0.6vh 0;
+  background: var(--band); border-top: 0.45vh solid #9a9aa4; border-bottom: 0.45vh solid #9a9aa4;
+}
 .part[data-part="harm1"] { --sung: var(--harm1); }
 .part[data-part="harm2"] { --sung: var(--harm2); }
 .part[data-part="harm3"] { --sung: var(--harm3); }
+.t-lane_blue .part {
+  background: none; border-bottom: 0; border-top-color: transparent;
+  border-image: var(--t-lane_blue) 4 0 0 0 fill / 0.45vh 0 0 0 stretch;
+}
+.t-lane_blue .part::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 0.45vh; pointer-events: none;
+  background: var(--t-lane_blue) 0 0 / 100% 3.6vh no-repeat; transform: scaleY(-1);
+}
+.t-lane_brown .part[data-part="harm2"]:not(.od), .t-lane_brown .part[data-part="harm3"]:not(.od) {
+  border-image-source: var(--t-lane_brown);
+}
+.t-lane_brown .part[data-part="harm2"]::after, .t-lane_brown .part[data-part="harm3"]::after {
+  background-image: var(--t-lane_brown);
+}
+/* an overdrive phrase: the game's gold lane, its star at the edge */
+.part.od {
+  background: linear-gradient(180deg, #6b4a08, #c99a1a 45%, #6b4a08); border-image: none;
+  box-shadow: 0 0 3vh rgba(255, 200, 60, 0.35);
+}
+.t-lane_blue .part.od { border-top-color: #c9c9cf; }
+.t-od_lane .part.od { background: var(--t-od_lane) 0 0 / auto 100% repeat-x; }
+.t-od_star .part.od::before {
+  content: ''; position: absolute; left: 1.4vw; top: 50%; transform: translateY(-50%);
+  width: 7vh; height: 7vh; background: var(--t-od_star) 0 0 / 100% 100%;
+  filter: drop-shadow(0 0 1vh rgba(255, 210, 80, 0.9));
+}
 .line {
   text-align: center; line-height: 1.15; white-space: pre-wrap; overflow-wrap: anywhere;
   text-wrap: balance; filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.7));
 }
-.line.current { font-size: calc(var(--scale) * min(7.5vw, 13vh)); min-height: 1.15em; }
+.line.current { font-size: calc(var(--scale) * min(7.5vw, 11vh)); min-height: 1.15em; }
 .line.next { font-size: calc(var(--scale) * min(4.5vw, 7vh)); color: var(--next); min-height: 1.15em; }
 #parts[data-count="2"] .line.current { font-size: calc(var(--scale) * min(6vw, 9vh)); }
 #parts[data-count="3"] .line.current { font-size: calc(var(--scale) * min(5vw, 7vh)); }
@@ -273,59 +363,131 @@ body {
 .sylg.spoken { display: inline-block; transform: skewX(-10deg); }
 #countdown { height: 0.8vh; margin: 2vh auto 0; width: 40%; background: rgba(255, 255, 255, 0.12); }
 #countdown div { height: 100%; background: var(--lead); transform-origin: left; }
-#card { text-align: center; padding: 4vw; }
-#card img { width: min(40vh, 60vw); aspect-ratio: 1; object-fit: cover; border-radius: 6px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6); }
-#card-label { color: var(--lead); letter-spacing: 0.2em; text-transform: uppercase;
-              font-size: min(3vw, 4vh); margin-top: 3vh; }
-#card-title { font-size: min(7vw, 10vh); line-height: 1.1; }
-#card-artist { color: var(--muted); font-size: min(4vw, 6vh); }
+/* between songs: the Music Library's art panel over a faint sunburst, then the yellow bar */
+#card { position: relative; text-align: center; }
+.t-sunburst #card::before {
+  content: ''; position: absolute; left: 50%; top: 40%; width: 90vh; height: 90vh;
+  transform: translate(-50%, -50%); background: var(--t-sunburst) 0 0 / 100% 100%;
+  opacity: 0.07; pointer-events: none; z-index: -1;
+}
+#frame { width: fit-content; margin: 0 auto; border: 0.5vh solid #c8c8cc; outline: 1px solid #111;
+         box-shadow: 0 1.2vh 3vh rgba(0, 0, 0, 0.9); }
+#card img { width: min(32vh, 50vw); aspect-ratio: 1; object-fit: cover; display: block; }
+/* the frame keeps its size while the art loads */
+#card img[hidden] { display: block !important; visibility: hidden; }
+#info { width: calc(min(32vh, 50vw) + 1vh); margin: 0 auto; padding: 1.2vh 1.2vw; background: rgba(8, 10, 16, 0.9);
+        font-size: 2.4vh; text-align: left; }
+#info .row { display: flex; justify-content: space-between; align-items: center; margin: 0.3vh 0; }
+#info .parts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.8vh 0; justify-items: center; margin-top: 0.8vh; }
+#info .ipart { display: flex; flex-direction: column; align-items: center; gap: 0.4vh; }
+#info .ipart .icon { width: 3.4vh; height: 3.4vh; }
+.pips { display: inline-flex; gap: 0.35vw; align-items: center; }
+.pip { width: 0.8vh; height: 0.8vh; border-radius: 50%; border: 0.18vh solid #ddd; }
+.pip.on { background: #eee; }
+#card-label { width: fit-content; min-width: 28vw; margin: 2.2vh auto 0; padding: 0.4vh 6vw;
+              font-size: min(3.2vw, 4.2vh); color: #111; background: #d8d020; }
+.t-highlight #card-label { background: var(--t-highlight) 0 0 / 100% 100%; }
+/* RB3's instrument icons: one texture, 64 px cells, 4 x 4; not there until it loads */
+.icon { display: none; flex: none; }
+.t-icons .icon { display: inline-block; background: var(--t-icons) 0 0 / 400% 400% no-repeat; }
+/* the player strip: the game's player tabs, a fading line above */
+#players {
+  position: fixed; left: 0; right: 0; bottom: 0.8vh; height: 8.4vh; display: flex; align-items: flex-end;
+  gap: 1.5vw; padding: 0 0 0 3.5vw; background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.85));
+}
+.t-line_fade #players::before {
+  content: ''; position: absolute; left: 0; right: 0; top: -1.2vh; height: 2px;
+  background: var(--t-line_fade) 0 0 / 100% 100%;
+}
+.ptab { position: relative; width: 22vw; height: 7.8vh; display: flex; flex-direction: column; padding-left: 4.2vh; }
+/* the glyphs mustn't grow a tab past its height */
+.ptab .top, .ptab .low { display: flex; align-items: center; justify-content: center; min-height: 0;
+                         line-height: 1; }
+/* top_bg's silver starts below its curved top */
+.ptab .top { padding-top: 0.7vh; }
+.ptab .top { flex: 1.1; font-size: 2.7vh; background: linear-gradient(#d8d8dc, #9c9ca4); border-radius: 1vh 1vh 0 0; }
+.ptab .low { flex: 1; font-size: 2.6vh; background: linear-gradient(#c8c41c, #8c8a10); }
+.t-tab_top .ptab .top { background: var(--t-tab_top) 0 0 / 100% 100%; border-radius: 0; }
+.t-tab_low .ptab .low { background: var(--t-tab_low) 0 0 / 100% 100%; }
+.ptab .ticon { position: absolute; left: -2.6vh; top: 0.6vh; width: 6.6vh; height: 6.6vh; border-radius: 50%;
+               background-color: #111; box-shadow: 0 0 0 0.35vh #bbb, 0 0.5vh 1.2vh rgba(0, 0, 0, 0.8); }
+.slot { width: 22vw; height: 6vh; display: flex; align-items: center; justify-content: center;
+        font-size: 2.5vh; opacity: 0.45; }
+.italic { display: inline-block; transform: skewX(-12deg); }
 #paused, #conn {
-  position: fixed; left: 50%; transform: translateX(-50%); padding: 0.4em 1em; border-radius: 999px;
+  position: fixed; left: 50%; transform: translateX(-50%); padding: 0.4em 1em; border-radius: 999px; z-index: 8;
   background: rgba(0, 0, 0, 0.7); color: var(--unsung); font-size: min(3vw, 4vh);
 }
-#paused { top: 6vh; }
-#conn { bottom: 4vh; font-family: system-ui, sans-serif; font-weight: 400; font-size: 16px; }
+#paused { top: 18vh; }
+#conn { bottom: 11vh; font-family: system-ui, sans-serif; font-weight: 400; font-size: 16px; }
 #gear {
-  position: fixed; right: 12px; bottom: 12px; width: 44px; height: 44px; border-radius: 50%;
-  border: 0; background: rgba(255, 255, 255, 0.08); color: var(--muted); font-size: 22px; cursor: pointer;
+  position: fixed; right: 1.5vw; bottom: calc(8.4vh + 1.6vh); width: 44px; height: 44px; border-radius: 50%; z-index: 6;
+  border: 0; background: rgba(255, 255, 255, 0.06); color: var(--muted); font-size: 22px; cursor: pointer;
 }
+/* the settings: the pause menu's box, its items centred, the yellow bar on the one pointed at */
 #panel {
-  position: fixed; right: 12px; bottom: 64px; width: min(340px, calc(100vw - 24px)); padding: 16px;
-  border-radius: 10px; background: #15172a; color: var(--unsung);
-  font: 15px/1.4 system-ui, sans-serif;
+  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(560px, 80vw); z-index: 7;
+  padding: 40px 44px; color: #f0f0f4; text-align: center; font: 15px/1.4 system-ui, sans-serif;
+  background: rgba(6, 12, 34, 0.96); box-shadow: 0 10px 50px rgba(0, 0, 0, 0.9);
 }
-#panel .row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
-#panel .row > span:first-child { flex: 1 0 100%; color: var(--muted); }
-#panel button { padding: 8px 12px; border-radius: 6px; border: 1px solid #33365a;
-                background: #1f2240; color: inherit; font: inherit; cursor: pointer; }
+.t-pause #panel { background: var(--t-pause) 0 0 / 100% 100%, rgba(6, 12, 34, 0.94); }
+#panel .row { display: flex; gap: 8px; align-items: center; justify-content: center; margin-bottom: 10px; flex-wrap: wrap; }
+#panel .row > span:first-child { flex: 1 0 100%; color: #aab; font-size: 16px; }
+#panel b { font-size: 18px; }
+/* a button's glyphs take their colour from --ink, so the bar's dark text can replace them */
+#panel button {
+  --ink: #f0f0f4; border: 0; background: transparent; color: var(--ink); padding: 6px 18px; cursor: pointer;
+  font: 700 20px/1.2 "Karaoke", system-ui, sans-serif;
+}
+#panel button:hover, #panel button:focus-visible { --ink: #111; background: #d8d020; outline: none; }
+.t-highlight #panel button:hover, .t-highlight #panel button:focus-visible {
+  background: var(--t-highlight) 0 0 / 100% 100%;
+}
 #panel .note { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
 [hidden] { display: none !important; }
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- the song header's glass, as the game's header_song_bg_refract.mat: what's behind
+       it bent through the header's normal map, smeared sideways, tinted blue -->
+  <filter id="refract" x="0" y="0" width="1" height="1" color-interpolation-filters="sRGB">
+    <feImage id="refract-map" preserveAspectRatio="none" result="n"/>
+    <feDisplacementMap in="SourceGraphic" in2="n" scale="90" xChannelSelector="R" yChannelSelector="G"/>
+    <feGaussianBlur stdDeviation="22 1.2"/>
+    <feColorMatrix type="matrix" values="0.006 0.012 0.002 0 0  0.024 0.048 0.008 0 0  0.17 0.34 0.06 0 0  0 0 0 1 0"/>
+  </filter>
+</svg>
+<div id="topband">
+  <div id="hdrclip"><div id="hdrscene" class="idle"></div></div>
+  <div id="thumb" hidden></div>
+  <div id="titles"><div id="band-title"></div><div id="band-artist"></div></div>
+  <div id="badge" hidden></div>
+  <div id="score" hidden><div id="scorebox"></div></div>
+</div>
+<div id="topshadow"></div>
 <div id="stage">
   <div id="lyrics" hidden>
     <div id="parts"></div>
     <div id="countdown" hidden><div></div></div>
   </div>
   <div id="card">
-    <img id="art" alt="" hidden>
-    <div id="card-label"></div>
-    <div id="card-title">band3 karaoke</div>
-    <div id="card-artist">Waiting for a song</div>
+    <div id="frame"><img id="art" alt="" hidden></div>
+    <div id="info" hidden></div>
+    <div id="card-label" hidden></div>
   </div>
 </div>
+<div id="players"></div>
 <div id="paused" hidden>Paused</div>
 <div id="conn" hidden></div>
 <button id="gear" aria-label="Settings" aria-expanded="false">&#9881;</button>
 <div id="panel" hidden>
-  <div class="row"><span>Timing: if the words come early, press Later</span>
-    <button data-act="earlier">Earlier</button><b id="offset">0 ms</b>
-    <button data-act="later">Later</button><button data-act="reset">Reset</button></div>
-  <div class="row"><span>Text size</span>
-    <button data-act="smaller">A&minus;</button><button data-act="bigger">A+</button></div>
-  <div class="row"><button data-act="full">Full screen</button></div>
+  <div class="row"><span data-label="TIMING: IF THE WORDS COME EARLY, PRESS LATER"></span>
+    <button data-act="earlier" data-label="EARLIER"></button><b id="offset">0 ms</b>
+    <button data-act="later" data-label="LATER"></button><button data-act="reset" data-label="RESET"></button></div>
+  <div class="row"><span data-label="TEXT SIZE"></span>
+    <button data-act="smaller" data-label="A-"></button><button data-act="bigger" data-label="A+"></button></div>
+  <div class="row"><button data-act="full" data-label="FULL SCREEN"></button></div>
   <p class="note">Turn off sleep on this device: a page served over plain http can't keep
   the screen awake.</p>
 </div>
@@ -342,10 +504,12 @@ body {
   function save() { try { localStorage.setItem('band3.karaoke', JSON.stringify(settings)); } catch (e) {} }
   function apply() {
     document.documentElement.style.setProperty('--scale', settings.scale);
-    $('offset').textContent = (settings.offset > 0 ? '+' : '') + settings.offset + ' ms';
+    put($('offset'), (settings.offset > 0 ? '+' : '') + settings.offset + ' ms', '#f0f0f4');
   }
 
   var state = null, lyrics = null, lyricsFor = null, clock = new M.Clock(), clockKnown = false;
+  // the band's score, from the clock; 0 as a song starts
+  var score = 0;
 
   // the song's lyrics, asked for again while the game is busy (503) or the
   // reply doesn't come, until they do or the song changes
@@ -367,6 +531,7 @@ body {
 
   function onState(s) {
     if (s.song && s.song.shortname !== lyricsFor) loadLyrics(s.song.shortname);
+    if (s.in_game && !(state && state.in_game)) score = 0;
     if (!s.in_game || !state || !state.in_game) { clock.reset(); clockKnown = false; }
     state = s;
   }
@@ -374,6 +539,7 @@ body {
   function onClock(c) {
     clock.update(c.song_ms, performance.now(), !!(state && state.paused));
     clockKnown = true;
+    if (typeof c.score === 'number') score = c.score;
   }
 
   function connect() {
@@ -400,6 +566,35 @@ body {
         $('conn').hidden = false;
       }
     };
+  }
+
+  // something the page asks for once, and again while the game is busy (503)
+  // or the reply doesn't come, as the lyrics are; `take` gets the reply's text
+  function loadOnce(url, take, attempt) {
+    attempt = attempt || 0;
+    function again(status) {
+      var wait = M.lyricsRetryMs(status, attempt);
+      if (wait !== null) setTimeout(function () { loadOnce(url, take, attempt + 1); }, wait);
+    }
+    fetch(url).then(function (r) {
+      if (!r.ok) { again(r.status); return; }
+      return r.text().then(function (t) { take(t); chromeKey = ''; cardKey = ''; });
+    }).catch(function () { again(0); });
+  }
+  // each song's genre, year, length and tiers (/song_details), for the card;
+  // and its source (/list_songs' origin=), for its badge
+  var details = null, origins = {};
+  function loadSongs() {
+    loadOnce('/song_details', function (t) { try { details = JSON.parse(t); } catch (e) {} });
+    loadOnce('/list_songs', function (t) {
+      var name = null;
+      t.split(/\r?\n/).forEach(function (l) {
+        var m = /^\[(.*)\]$/.exec(l);
+        if (m) name = m[1];
+        m = /^origin=(.*)$/.exec(l);
+        if (m && name) origins[name] = m[1];
+      });
+    });
   }
 
   // RB3's own fonts (/game_asset/font), each {font, url} once its metrics
@@ -430,10 +625,37 @@ body {
       });
     }).catch(function () { again(0); });
   }
+
+  // RB3's own textures (M.TEXTURES), each put to use once it has loaded: its
+  // URL in --t-<key> and the class t-<key> on <html>, which the styles that
+  // dress the page in it hang off. Until then, or if it never does (a 404, a
+  // format band3 doesn't decode), that part of the page keeps its own look.
+  // Asked for again while the game is busy, as the lyrics are.
+  var root = document.documentElement;
+  function loadTexture(key, attempt) {
+    attempt = attempt || 0;
+    function again(status) {
+      var wait = M.textureRetryMs(status, attempt);
+      if (wait !== null) setTimeout(function () { loadTexture(key, attempt + 1); }, wait);
+    }
+    fetch(M.textureUrl(M.TEXTURES[key])).then(function (r) {
+      if (!r.ok) { again(r.status); return; }
+      return r.blob().then(function (b) {
+        var url = URL.createObjectURL(b);
+        root.style.setProperty('--t-' + key, 'url("' + url + '")');
+        if (key === 'header_normal') $('refract-map').setAttribute('href', url);
+        root.classList.add('t-' + key);
+      });
+    }).catch(function () { again(0); });
+  }
+
   // lay the text out again: a font arrived, or the size changed
   function redraw() {
     partEls.forEach(function (s) { s.line = undefined; });
     cardKey = '';
+    chromeKey = '';
+    scoreShown = null;
+    drawPanel();
   }
   function pxOf(el) { return parseFloat(getComputedStyle(el).fontSize) || 16; }
 
@@ -480,6 +702,26 @@ body {
     });
   }
 
+  // text in the lyrics' font once it has loaded, else the page's own, coloured `color`
+  function put(el, text, color) {
+    el.textContent = '';
+    if (fonts[kLyricsFont]) {
+      el.style.color = '';
+      textGlyphs(el, kLyricsFont, text, pxOf(el), color);
+    } else {
+      el.textContent = text;
+      el.style.color = color;
+    }
+  }
+
+  // one of rb3_icons' instruments (M.iconCell)
+  function icon(name, cls) {
+    var i = document.createElement('span'), c = M.iconCell(name);
+    i.className = 'icon' + (cls ? ' ' + cls : '');
+    i.style.backgroundPosition = (c[0] * 100 / 3) + '% ' + (c[1] * 100 / 3) + '%';
+    return i;
+  }
+
   // a line's syllables in the lyrics' font, each word unbroken; the
   // syllables, with their glyphs for the fill
   function lineGlyphs(el, line, px) {
@@ -522,7 +764,7 @@ body {
       var nxt = document.createElement('div'); nxt.className = 'line next';
       el.appendChild(cur); el.appendChild(nxt);
       box.appendChild(el);
-      return { cur: cur, next: nxt, line: undefined, spans: [] };
+      return { el: el, cur: cur, next: nxt, line: undefined, spans: [] };
     });
   }
 
@@ -572,7 +814,10 @@ body {
     setParts(parts);
     parts.forEach(function (p, i) {
       var slot = partEls[i];
-      showLine(slot, M.linesAt(p, ms));
+      var at = M.linesAt(p, ms);
+      showLine(slot, at);
+      // an overdrive line's lane is the game's gold one
+      slot.el.classList.toggle('od', !!(at.current && at.current.overdrive));
       slot.spans.forEach(function (s) {
         var f = Math.round(M.fill(s.syllable, ms) * 100) / 100;
         if (f !== s.fill) { s.fill = f; fillSyllable(s, f); }
@@ -583,29 +828,149 @@ body {
     if (left !== null) $('countdown').firstChild.style.transform = 'scaleX(' + left + ')';
   }
 
-  var cardKey = '';
+  function add(parent, tag, cls) {
+    var el = document.createElement(tag);
+    if (cls) el.className = cls;
+    parent.appendChild(el);
+    return el;
+  }
+  // a tier's five pips, as the Music Library shows them
+  function addPips(parent, tier) {
+    var dots = add(parent, 'span', 'pips');
+    for (var k = 0; k < 5; k++) add(dots, 'span', 'pip' + (k < M.pips(tier) ? ' on' : ''));
+  }
+  // the card's panel under the art: genre and year, vocals' length and tier,
+  // then each part the song has, with its icon and tier
+  var kCardParts = ['guitar', 'bass', 'drum', 'keys', 'vocals', 'real_guitar', 'real_bass', 'real_keys'];
+  function drawInfo(info, song, d) {
+    var r1 = add(info, 'div', 'row');
+    put(add(r1, 'span'), (d && d.genre ? d.genre : song.artist).toUpperCase(), '#e8e8ee');
+    put(add(r1, 'span'), d && d.year ? String(d.year) : '', '#e8e8ee');
+    var r2 = add(info, 'div', 'row');
+    var len = d && d.length_ms ? Math.floor(d.length_ms / 60000) + ':' +
+      ('0' + Math.floor(d.length_ms / 1000) % 60).slice(-2) : '';
+    put(add(r2, 'span'), 'VOCALS' + (len ? '  ' + len : ''), '#e8e8ee');
+    var tiers = d && d.tiers ? d.tiers : {};
+    addPips(r2, tiers.vocals);
+    var grid = add(info, 'div', 'parts');
+    kCardParts.forEach(function (part) {
+      if (!(part in tiers)) return;
+      var cell = add(grid, 'div', 'ipart');
+      cell.appendChild(icon(part === 'vocals' && d.vocal_parts > 1 ? 'harmonies' : part));
+      addPips(cell, tiers[part]);
+    });
+  }
+
+  var cardKey = '', artFor = null;
   function drawCard(mode) {
     var song = state && state.song;
-    var key = mode + '|' + (song ? song.shortname : '');
+    var d = song && details ? details[song.shortname] : null;
+    var key = mode + '|' + (song ? song.shortname : '') + '|' + !!d;
     if (key === cardKey) return;
     cardKey = key;
-    var labels = { up_next: 'Up next', now_playing: 'Now playing', just_played: 'Just played', idle: '' };
-    $('card-label').textContent = labels[mode];
-    var title = song ? song.title : 'band3 karaoke';
-    var artist = song ? song.artist : 'Waiting for a song';
-    $('card-title').textContent = '';
-    $('card-artist').textContent = '';
-    if (fonts[kTitleFont]) textGlyphs($('card-title'), kTitleFont, title, pxOf($('card-title')), 'var(--unsung)');
-    else $('card-title').textContent = title;
-    if (fonts[kLyricsFont]) textGlyphs($('card-artist'), kLyricsFont, artist, pxOf($('card-artist')), 'var(--muted)');
-    else $('card-artist').textContent = artist;
+    var labels = { up_next: 'UP NEXT', now_playing: 'NOW PLAYING', just_played: 'JUST PLAYED', idle: '' };
+    var label = $('card-label');
+    label.hidden = !labels[mode];
+    put(label, labels[mode] || '', '#111');
+    var info = $('info');
+    info.textContent = '';
+    info.hidden = !song;
+    if (song) drawInfo(info, song, d);
+    // the song's art, the game's blank art where it has none; the Rock Band art
+    // with no song. Only asked for again when it's another's.
+    var want = song ? song.shortname : '';
+    if (want === artFor) return;
+    artFor = want;
     var art = $('art');
     art.hidden = true;
-    if (song) {
-      art.onload = function () { art.hidden = false; };
+    art.onload = function () { art.hidden = false; };
+    if (!song) {
       art.onerror = function () { art.hidden = true; };
+      art.src = M.textureUrl(M.TEXTURES.idle_art);
+    } else {
+      art.onerror = function () {
+        art.onerror = function () { art.hidden = true; };
+        art.src = M.textureUrl(M.TEXTURES.blank_art);
+      };
       art.src = '/album_art?shortname=' + encodeURIComponent(song.shortname);
     }
+  }
+
+  // the song's source badge, once its texture has loaded
+  var badgeFor = null;
+  function drawBadge(url) {
+    if (url === badgeFor) return;
+    badgeFor = url;
+    var badge = $('badge');
+    badge.hidden = true;
+    if (!url) return;
+    var img = new Image();
+    img.onload = function () {
+      if (badgeFor !== url) return;
+      badge.style.backgroundImage = 'url("' + url + '")';
+      badge.hidden = false;
+    };
+    img.src = url;
+  }
+
+  // the player strip: a tab for each of the band's members, by slot, as the
+  // game's overshell shows them; CONNECT CONTROLLER where no one is
+  function drawPlayers(band, vocals) {
+    var box = $('players');
+    box.textContent = '';
+    for (var i = 0; i < 4; i++) {
+      var t = M.tab(band[i] || null, vocals);
+      if (t) {
+        var tab = add(box, 'div', 'ptab');
+        put(add(tab, 'div', 'top'), t.top, '#2a2a2a');
+        put(add(tab, 'div', 'low'), t.low, '#1b1b1b');
+        tab.appendChild(icon(t.icon, 'ticon'));
+      } else {
+        put(add(box, 'div', 'slot italic'), 'CONNECT CONTROLLER', '#9a9aa6');
+      }
+    }
+  }
+
+  // the header and the player strip, as the song, the band or the fonts change
+  var chromeKey = '';
+  function drawChrome(mode) {
+    var song = state && state.song;
+    var vocals = state && state.vocals;
+    var band = (state && state.band) || [null, null, null, null];
+    var origin = song ? origins[song.shortname] || '' : '';
+    var key = mode + '|' + (song ? song.shortname : '') + '|' + !!fonts[kLyricsFont] + '|' + vocals + '|' +
+      JSON.stringify(band) + '|' + origin;
+    if (key === chromeKey) return;
+    chromeKey = key;
+    put($('band-title'), song ? song.title.toUpperCase() : 'KARAOKE', '#c4c4cc');
+    put($('band-artist'), song ? song.artist.toUpperCase() : '', '#c9cbd6');
+    var art = song ? 'url("/album_art?shortname=' + encodeURIComponent(song.shortname) + '")' : '';
+    // the art hangs below the header while the lyrics show; the card has its own
+    $('thumb').style.backgroundImage = art;
+    $('thumb').hidden = !song || mode !== 'lyrics';
+    $('hdrscene').style.backgroundImage = art;
+    $('hdrscene').className = song ? '' : 'idle';
+    drawBadge(M.originUrl(origin));
+    drawPlayers(band, vocals);
+  }
+
+  var scoreShown = null;
+  function drawScore() {
+    var show = !!(state && state.song);
+    $('score').hidden = !show;
+    var text = M.scoreText(score);
+    if (show && text !== scoreShown) {
+      scoreShown = text;
+      put($('scorebox'), text, '#f2f2f6');
+    }
+  }
+
+  // the settings box's words, in the game's font once it has loaded
+  function drawPanel() {
+    Array.prototype.forEach.call(document.querySelectorAll('#panel [data-label]'), function (el) {
+      put(el, el.dataset.label, el.tagName === 'BUTTON' ? 'var(--ink)' : '#aab');
+    });
+    apply();
   }
 
   function frame() {
@@ -620,6 +985,8 @@ body {
     $('card').hidden = mode === 'lyrics';
     $('paused').hidden = !(state && state.in_game && state.paused);
     if (mode === 'lyrics') drawLyrics(parts, ms); else drawCard(mode);
+    drawChrome(mode);
+    drawScore();
   }
 
   $('gear').onclick = function () {
@@ -628,7 +995,9 @@ body {
     $('gear').setAttribute('aria-expanded', String(open));
   };
   $('panel').onclick = function (e) {
-    var act = e.target.dataset && e.target.dataset.act;
+    // a click lands on a glyph inside the button
+    var button = e.target.closest && e.target.closest('[data-act]');
+    var act = button && button.dataset.act;
     if (act === 'earlier') settings.offset -= 50;
     else if (act === 'later') settings.offset += 50;
     else if (act === 'reset') settings.offset = 0;
@@ -640,14 +1009,15 @@ body {
       return;
     } else return;
     save();
-    apply();
     redraw();
   };
   window.addEventListener('resize', redraw);
 
-  apply();
+  drawPanel();
   loadFont(kLyricsFont);
   loadFont(kTitleFont);
+  Object.keys(M.TEXTURES).forEach(function (k) { loadTexture(k); });
+  loadSongs();
   connect();
   requestAnimationFrame(frame);
 })();
