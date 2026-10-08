@@ -228,7 +228,7 @@ private:
     // counts changes to mics_, so a meter that couldn't record tries again
     // once the microphones change
     unsigned mic_list_generation_ = 0;
-    std::array<SlotMeter, 4> meters_;
+    std::array<SlotMeter, 3> meters_;
     // the mic slots were drawn this frame; their meters close, and SDL's
     // audio is let go, when they aren't
     bool meters_drawn_ = false;

@@ -64,7 +64,7 @@ enum class Widget {
     kPath,
     // folders separated by '|' (paths::SplitList), shown resolved
     kFolderList,
-    // up to four names, comma separated, one per mic slot (ParseDeviceList):
+    // up to three names, comma separated, one per mic slot (ParseDeviceList):
     // a dropdown of the PC's microphones per slot, with a level meter
     kMicSlots,
     // a MIDI input port from the list, or a typed name (midi_drums_device)
