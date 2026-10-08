@@ -92,6 +92,52 @@ var KaraokeModel = (function () {
     return Math.min(1000 * Math.pow(2, attempt), 10000);
   }
 
+  // Text set in one of RB3's fonts (/game_asset/font): each character a box
+  // cut from the font's texture, `px` the line's height in CSS pixels. A
+  // glyph's box is its width in cells, a cell's height tall; its advance (to
+  // the next) adds the base kerning and the pair's kerning, all in cells.
+  // Characters the font lacks are `missing`, for the page to draw in its own
+  // font (their advance a guess, for the fill).
+  function layoutText(font, text, px) {
+    var scale = px / font.cell[1];
+    var cellW = font.cell[0] * scale;
+    if (!font.kernMap) {
+      font.kernMap = {};
+      font.kerning.forEach(function (k) { font.kernMap[k[0] + ',' + k[1]] = k[2]; });
+    }
+    var items = [], x = 0, prev = null;
+    Array.from(text).forEach(function (ch) {
+      var code = ch.codePointAt(0), g = font.glyphs[code];
+      var item;
+      if (!g) {
+        item = { ch: ch, missing: true, w: 0, h: px, advance: px * 0.6 };
+      } else {
+        item = { ch: ch, missing: false, w: g[2] * cellW, h: px,
+                 advance: (g[3] + font.base_kerning) * cellW,
+                 maskX: 0 - g[0] * font.texture[0] * scale, maskY: 0 - g[1] * font.texture[1] * scale,
+                 maskW: font.texture[0] * scale, maskH: font.texture[1] * scale };
+        var kern = prev !== null ? font.kernMap[prev + ',' + code] : undefined;
+        if (kern !== undefined && items.length) {
+          items[items.length - 1].advance += kern * cellW;
+          x += kern * cellW;
+        }
+      }
+      item.x = x;
+      x += item.advance;
+      items.push(item);
+      prev = g ? code : null;
+    });
+    return { items: items, width: x };
+  }
+
+  // how much of a glyph at x (w wide) a syllable `syllableW` wide has filled
+  // when it's `syllableFill` sung
+  function glyphFill(syllableFill, x, w, syllableW) {
+    var filled = syllableFill * syllableW;
+    if (w <= 0) return filled > x ? 1 : 0;
+    return Math.max(0, Math.min(1, (filled - x) / w));
+  }
+
   // a line's syllables, each with the space after it unless it joins the next
   function words(line) {
     var last = line.syllables.length - 1;
@@ -102,7 +148,7 @@ var KaraokeModel = (function () {
 
   return { Clock: Clock, partsToShow: partsToShow, linesAt: linesAt, fill: fill,
            countdown: countdown, screen: screen, lyricsRetryMs: lyricsRetryMs, words: words,
-           kGapMs: kGapMs };
+           layoutText: layoutText, glyphFill: glyphFill, kGapMs: kGapMs };
 })();
 if (typeof module !== 'undefined') module.exports = KaraokeModel;
 )js";
@@ -159,6 +205,13 @@ body {
 }
 /* room for italics' overhang, which background-clip would cut off */
 .syl.spoken { font-style: italic; padding-right: 0.08em; margin-right: -0.08em; }
+/* a glyph of one of RB3's fonts: a box cut out of its texture by a mask, the
+   box's background its colour (layoutText); words don't break, lines break
+   between them */
+.g { display: inline-block; vertical-align: bottom; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
+.g-miss { -webkit-background-clip: text; background-clip: text; color: transparent; }
+.word { white-space: nowrap; }
+.sylg.spoken { display: inline-block; transform: skewX(-10deg); }
 #countdown { height: 0.8vh; margin: 2vh auto 0; width: 40%; background: rgba(255, 255, 255, 0.12); }
 #countdown div { height: 100%; background: var(--lead); transform-origin: left; }
 #card { text-align: center; padding: 4vw; }
@@ -290,6 +343,97 @@ body {
     };
   }
 
+  // RB3's own fonts (/game_asset/font), each {font, url} once its metrics
+  // and texture have loaded; until then, or if they never do, the page's own
+  // font draws the text. Pentatonic, the face the game sets lyrics in, from
+  // its display cut: its glyphs are drawn at 73 px, against the regular
+  // cut's 42 and the bold's 27, so they stay sharp at a TV's sizes.
+  var kLyricsFont = 'pentatonic_display', kTitleFont = 'pentatonic_display';
+  var fonts = {};
+  function loadFont(name) {
+    var url = '/game_asset/font.png?name=' + encodeURIComponent(name);
+    fetch('/game_asset/font?name=' + encodeURIComponent(name)).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (font) {
+      if (!font) return;
+      var img = new Image();
+      img.onload = function () { fonts[name] = { font: font, url: url }; redraw(); };
+      img.src = url;
+    }).catch(function () {});
+  }
+  // lay the text out again: a font arrived, or the size changed
+  function redraw() {
+    partEls.forEach(function (s) { s.line = undefined; });
+    cardKey = '';
+  }
+  function pxOf(el) { return parseFloat(getComputedStyle(el).fontSize) || 16; }
+
+  // `text` in font `name` into `parent` as glyph boxes `px` tall, coloured
+  // `color` (or by the fill, later); the glyphs and the text's width
+  function glyphs(parent, name, text, px, color) {
+    var f = fonts[name];
+    var layout = M.layoutText(f.font, text, px);
+    var out = layout.items.map(function (it) {
+      var s = document.createElement('span');
+      if (it.missing) {
+        s.className = 'g-miss';
+        s.textContent = it.ch;
+      } else {
+        s.className = 'g';
+        s.style.width = it.w + 'px';
+        s.style.height = it.h + 'px';
+        s.style.marginRight = (it.advance - it.w) + 'px';
+        var mask = 'url("' + f.url + '") ' + it.maskX + 'px ' + it.maskY + 'px / ' +
+          it.maskW + 'px ' + it.maskH + 'px no-repeat';
+        s.style.webkitMask = mask;
+        s.style.mask = mask;
+      }
+      if (color) s.style.background = color;
+      parent.appendChild(s);
+      return { el: s, item: it, fill: -1 };
+    });
+    return { glyphs: out, width: layout.width };
+  }
+
+  // plain text in font `name`, its words unbroken
+  function textGlyphs(parent, name, text, px, color) {
+    text.split(' ').forEach(function (word, i, all) {
+      var w = document.createElement('span');
+      w.className = 'word';
+      parent.appendChild(w);
+      glyphs(w, name, word, px, color);
+      if (i < all.length - 1) {
+        glyphs(parent, name, ' ', px, color);
+        parent.appendChild(document.createElement('wbr'));
+      }
+    });
+  }
+
+  // a line's syllables in the lyrics' font, each word unbroken; the
+  // syllables, with their glyphs for the fill
+  function lineGlyphs(el, line, px) {
+    var sylls = [], word = null;
+    M.words(line).forEach(function (w) {
+      if (!word) {
+        word = document.createElement('span');
+        word.className = 'word';
+        el.appendChild(word);
+      }
+      var spaced = w.text.slice(-1) === ' ';
+      var s = document.createElement('span');
+      s.className = 'sylg' + (w.syllable.spoken ? ' spoken' : '');
+      word.appendChild(s);
+      var g = glyphs(s, kLyricsFont, spaced ? w.text.slice(0, -1) : w.text, px, null);
+      sylls.push({ el: s, syllable: w.syllable, glyphs: g.glyphs, width: g.width, fill: -1 });
+      if (spaced) {
+        glyphs(el, kLyricsFont, ' ', px, null);
+        el.appendChild(document.createElement('wbr'));
+        word = null;
+      }
+    });
+    return sylls;
+  }
+
   // the lyrics on screen: each part's element, and the line each shows
   var partEls = [], shownKey = '';
   function setParts(parts) {
@@ -315,14 +459,42 @@ body {
     if (slot.line === at.current) return;
     slot.line = at.current;
     slot.cur.textContent = '';
-    slot.spans = at.current ? M.words(at.current).map(function (w) {
-      var s = document.createElement('span');
-      s.className = 'syl' + (w.syllable.spoken ? ' spoken' : '');
-      s.textContent = w.text;
-      slot.cur.appendChild(s);
-      return { el: s, syllable: w.syllable, fill: -1 };
-    }) : [];
-    slot.next.textContent = at.next ? M.words(at.next).map(function (w) { return w.text; }).join('') : '';
+    slot.next.textContent = '';
+    var rb3 = !!fonts[kLyricsFont];
+    if (!at.current) {
+      slot.spans = [];
+    } else if (rb3) {
+      slot.spans = lineGlyphs(slot.cur, at.current, pxOf(slot.cur));
+    } else {
+      slot.spans = M.words(at.current).map(function (w) {
+        var s = document.createElement('span');
+        s.className = 'syl' + (w.syllable.spoken ? ' spoken' : '');
+        s.textContent = w.text;
+        slot.cur.appendChild(s);
+        return { el: s, syllable: w.syllable, fill: -1 };
+      });
+    }
+    if (at.next) {
+      var text = M.words(at.next).map(function (w) { return w.text; }).join('');
+      if (rb3) textGlyphs(slot.next, kLyricsFont, text, pxOf(slot.next), 'var(--next)');
+      else slot.next.textContent = text;
+    }
+  }
+
+  // a syllable's fill: on its glyphs, each by the part the fill has passed
+  // over, or on its text's gradient
+  function fillSyllable(s, f) {
+    if (!s.glyphs) {
+      s.el.style.setProperty('--fill', f);
+      return;
+    }
+    s.glyphs.forEach(function (g) {
+      var p = Math.round(M.glyphFill(f, g.item.x, g.item.w, s.width) * 100);
+      if (p === g.fill) return;
+      g.fill = p;
+      g.el.style.background =
+        'linear-gradient(90deg, var(--sung) ' + p + '%, var(--unsung) ' + p + '%)';
+    });
   }
 
   function drawLyrics(parts, ms) {
@@ -332,7 +504,7 @@ body {
       showLine(slot, M.linesAt(p, ms));
       slot.spans.forEach(function (s) {
         var f = Math.round(M.fill(s.syllable, ms) * 100) / 100;
-        if (f !== s.fill) { s.fill = f; s.el.style.setProperty('--fill', f); }
+        if (f !== s.fill) { s.fill = f; fillSyllable(s, f); }
       });
     });
     var left = M.countdown(parts[0], ms);
@@ -348,8 +520,14 @@ body {
     cardKey = key;
     var labels = { up_next: 'Up next', now_playing: 'Now playing', just_played: 'Just played', idle: '' };
     $('card-label').textContent = labels[mode];
-    $('card-title').textContent = song ? song.title : 'band3 karaoke';
-    $('card-artist').textContent = song ? song.artist : 'Waiting for a song';
+    var title = song ? song.title : 'band3 karaoke';
+    var artist = song ? song.artist : 'Waiting for a song';
+    $('card-title').textContent = '';
+    $('card-artist').textContent = '';
+    if (fonts[kTitleFont]) textGlyphs($('card-title'), kTitleFont, title, pxOf($('card-title')), 'var(--unsung)');
+    else $('card-title').textContent = title;
+    if (fonts[kLyricsFont]) textGlyphs($('card-artist'), kLyricsFont, artist, pxOf($('card-artist')), 'var(--muted)');
+    else $('card-artist').textContent = artist;
     var art = $('art');
     art.hidden = true;
     if (song) {
@@ -392,9 +570,13 @@ body {
     } else return;
     save();
     apply();
+    redraw();
   };
+  window.addEventListener('resize', redraw);
 
   apply();
+  loadFont(kLyricsFont);
+  loadFont(kTitleFont);
   connect();
   requestAnimationFrame(frame);
 })();

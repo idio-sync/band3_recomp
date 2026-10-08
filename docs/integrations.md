@@ -274,9 +274,9 @@ art, title and artist. Its corner button sets the timing (for a TV's delay) and 
 size, kept in that browser. A page over plain http can't keep a device awake, so turn its
 sleep off. The library page's header links to it.
 
-Its lyrics are set in the game's own Pentatonic, and the song's title in Pentatonic Bold,
-read from your game files as the page asks for them; where that font can't be read, the
-page uses its own.
+Its lyrics and the song's title are set in the game's own Pentatonic (the cut the game
+draws largest, so it stays sharp on a TV), read from your game files as the page asks for
+them; where that font can't be read, the page uses its own.
 
 It's built on endpoints other pages can use. The game assets are served from your own game
 files as they're asked for, and only on your network; band3 ships none of them.

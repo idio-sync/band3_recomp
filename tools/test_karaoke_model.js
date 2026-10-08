@@ -108,6 +108,47 @@ test('a lyrics fetch that failed is tried again, sooner at first, but not a song
   assert.strictEqual(M.lyricsRetryMs(0, 9), 10000);   // at most 10 s apart
 });
 
+// a font as /game_asset/font gives it: cells 40 x 20 px on a 200 x 100 texture
+const font = {
+  cell: [40, 20], texture: [200, 100], base_kerning: 0.05, monospace: false,
+  glyphs: { 65: [0, 0, 0.5, 0.6], 66: [0.25, 0.5, 0.25, 0.35], 32: [0.5, 0, 0, 0.3] },
+  kerning: [[65, 66, -0.1]],
+};
+
+test('text lays out from the font: glyph boxes, their place in the texture, advances and kerning', () => {
+  // 40 px tall lines: twice the cell
+  const layout = M.layoutText(font, 'AB', 40);
+  const [a, b] = layout.items;
+  assert.strictEqual(a.missing, false);
+  assert.strictEqual(a.w, 40);              // 0.5 cells x 40 px x 2
+  assert.strictEqual(a.h, 40);
+  assert.strictEqual(a.maskX, 0);
+  assert.strictEqual(b.maskX, -100);        // u 0.25 x 200 px x 2
+  assert.strictEqual(b.maskY, -100);        // v 0.5 x 100 px x 2
+  assert.deepStrictEqual([a.maskW, a.maskH], [400, 200]);
+  // A's advance: (0.6 + 0.05 base) cells, less the A-B kerning of 0.1 cells
+  assert.ok(Math.abs(a.advance - (0.6 + 0.05 - 0.1) * 80) < 1e-9);
+  assert.strictEqual(a.x, 0);
+  assert.ok(Math.abs(b.x - a.advance) < 1e-9);
+  assert.ok(Math.abs(layout.width - (a.advance + b.advance)) < 1e-9);
+});
+
+test('a space advances without a box, and characters the font lacks are marked', () => {
+  const [space, z] = M.layoutText(font, ' 中', 20).items;
+  assert.strictEqual(space.w, 0);
+  assert.ok(space.advance > 0);
+  assert.strictEqual(z.missing, true);
+  assert.strictEqual(z.ch, '中');
+});
+
+test('a glyph fills as the syllable passes over it', () => {
+  assert.strictEqual(M.glyphFill(0, 10, 10, 40), 0);
+  assert.strictEqual(M.glyphFill(0.375, 10, 10, 40), 0.5);   // 15 of the 40 px sung
+  assert.strictEqual(M.glyphFill(1, 10, 10, 40), 1);
+  assert.strictEqual(M.glyphFill(0.5, 30, 0, 40), 0);        // a box with no width
+  assert.strictEqual(M.glyphFill(0.9, 30, 0, 40), 1);
+});
+
 test('words put spaces between words, not inside them', () => {
   assert.deepStrictEqual(M.words(part.lines[0]).map(w => w.text), ['Hel', 'lo']);
   const two = line(0, 1, [syl(0, 1, 'one'), syl(0, 1, 'two')]);
