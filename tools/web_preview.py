@@ -13,7 +13,10 @@ tab's Duplicates, made up after a couple of seconds' "reading". /karaoke
 (src/Net/karaoke_page.h) follows a made-up show on /live/events, over and
 over: 4 s loading, the song with a 3 s pause, 6 s of results. Its lyrics are
 made up, or a song's own with --karaoke-song (through band3_lyrics, built with
-the unit tests); --vocals harmonies stacks the harmony parts.
+the unit tests); --vocals harmonies stacks the harmony parts. The made-up band
+is a singer and a guitarist, its score a steady climb. /game_asset's textures,
+fonts and milo textures come from the game data (the last two through
+band3_milo_font, built with the unit tests too).
 
 Usage:
   python tools/web_preview.py                 open http://127.0.0.1:21080/
@@ -56,6 +59,18 @@ def allowed_texture_path(path):
 def allowed_font_name(name):
     """/game_asset/font's names, as src/Net/http_request.cpp's AllowedFontName."""
     return 0 < len(name) <= 64 and all(c in 'abcdefghijklmnopqrstuvwxyz0123456789_()-' for c in name)
+
+
+def allowed_milo_path(path):
+    """/game_asset/milo_texture's milos, as src/Net/http_request.cpp's AllowedMiloPath."""
+    return (0 < len(path) <= 255 and path.startswith('ui/') and path.endswith('.milo_xbox')
+            and '..' not in path and '\\' not in path)
+
+
+def allowed_texture_name(name):
+    """Its texture names, as AllowedTextureName."""
+    return (5 <= len(name) <= 64 and name.endswith(('.png', '.bmp'))
+            and all(c in 'abcdefghijklmnopqrstuvwxyz0123456789_.()-' for c in name))
 GAME_DATA = os.path.join(REPO, 'assets')
 
 # Rock Band 3 Deluxe's changes to songs.dtb's entries (genres, years...), which
@@ -104,7 +119,7 @@ def karaoke_model(header):
     return header.split('kKaraokeModel = R"js(', 1)[1].split(')js"', 1)[0]
 
 
-def _sample_line(start, words):
+def _sample_line(start, words, overdrive=False):
     """One line of the sample: syllables 400 ms apart, a word's syllables
     split on '-' and joined."""
     syllables, t = [], start
@@ -114,19 +129,20 @@ def _sample_line(start, words):
             syllables.append({'start_ms': t, 'end_ms': t + 350, 'text': piece,
                               'join': i < len(pieces) - 1, 'spoken': False})
             t += 400
-    return {'start_ms': start, 'end_ms': t, 'syllables': syllables}
+    return {'start_ms': start, 'end_ms': t, 'overdrive': overdrive, 'syllables': syllables}
 
 
 # made-up lyrics for /karaoke without a song's MIDI file: lead and two
 # harmonies (4 s before the first line and 10.4 to 14 s count down; 8 to 11 s,
 # fake_live's pause, is in the second line; the third has characters RB3's fonts
-# lack, which the page draws in its own)
+# lack, which the page draws in its own; the second is an overdrive line)
 _SAMPLE = [(4000, 'This is band-three sing-ing a-long'), (7600, 'Ev-ery-bo-dy in the room'),
            (14000, 'Don’t stop – sing it 中-文'), (17400, 'Sing it loud and sing it true')]
 SAMPLE_LYRICS = {'shortname': 'sample', 'parts': [
-    {'part': 'lead', 'lines': [_sample_line(s, w) for s, w in _SAMPLE]},
-    {'part': 'harm1', 'lines': [_sample_line(s, w) for s, w in _SAMPLE]},
-    {'part': 'harm2', 'lines': [_sample_line(s + 200, 'Ooh ooh ah') for s, _ in _SAMPLE]},
+    {'part': 'lead', 'lines': [_sample_line(s, w, i == 1) for i, (s, w) in enumerate(_SAMPLE)]},
+    {'part': 'harm1', 'lines': [_sample_line(s, w, i == 1) for i, (s, w) in enumerate(_SAMPLE)]},
+    {'part': 'harm2', 'lines': [_sample_line(s + 200, 'Ooh ooh ah', i == 1)
+                                for i, (s, _) in enumerate(_SAMPLE)]},
 ]}
 SAMPLE_LENGTH_MS = 22000
 
@@ -141,6 +157,8 @@ def fake_live(seconds, length_ms, vocals, shortname='sample', title='Sample Song
     song = {'shortname': shortname, 'title': title, 'artist': artist, 'length_ms': length_ms}
     state = {'screen': 'game_screen', 'in_game': True, 'paused': False, 'song': song,
              'vocals': vocals}
+    singer = {'part': 'vocals', 'difficulty': 3} if vocals != 'none' else None
+    state['band'] = [singer, {'part': 'guitar', 'difficulty': 3}, None, None]
     if t < 4:
         return state, None
     played = t - 4
@@ -151,6 +169,12 @@ def fake_live(seconds, length_ms, vocals, shortname='sample', title='Sample Song
     if played * 1000 >= length_ms:
         return dict(state, screen='coop_end_screen', in_game=False), None
     return state, round(played * 1000)
+
+
+def fake_score(song_ms):
+    """The band's score `song_ms` into web_preview's made-up show: a steady 3.7
+    points a millisecond, in the 25s a song's notes give."""
+    return int(max(0, song_ms) * 3.7) // 25 * 25
 
 
 def xbox_bitmap_path(path):
@@ -729,8 +753,9 @@ class Preview:
         return done.stdout if done.returncode == 0 else None
 
     def game_asset(self, kind, arg):
-        """/game_asset's (content type, body) for a texture ('texture', its path) or a
-        font ('font' its JSON, 'font.png' its texture, by name); None for a 404."""
+        """/game_asset's (content type, body) for a texture ('texture', its path), a
+        font ('font' its JSON, 'font.png' its texture, by name) or a milo's texture
+        ('milo_texture', (its milo's path, its name)); None for a 404."""
         key = (kind, arg)
         with self.lock:
             if key in self.assets:
@@ -755,6 +780,19 @@ class Preview:
                             self.assets[('font', arg)] = ('application/json', done.stdout)
                             self.assets[('font.png', arg)] = ('image/png', image)
                         return self.assets[key]
+        elif kind == 'milo_texture' and allowed_milo_path(arg[0]) and allowed_texture_name(arg[1]) \
+                and os.path.isfile(MILO_FONT_TOOL):
+            data = self.game.read(arg[0])
+            if data:
+                with tempfile.TemporaryDirectory() as folder:
+                    milo, out = os.path.join(folder, 'ui.milo_xbox'), os.path.join(folder, 'tex.png')
+                    with open(milo, 'wb') as f:
+                        f.write(data)
+                    done = subprocess.run([MILO_FONT_TOOL, '--texture', arg[1], milo, out],
+                                          capture_output=True)
+                    if done.returncode == 0:
+                        with open(out, 'rb') as f:
+                            found = ('image/png', f.read())
         with self.lock:
             self.assets[key] = found
         return found
@@ -830,6 +868,13 @@ def handler(preview):
                     self.reply(404, text, b'No lyrics for that shortname')
             elif path == '/live/events':
                 self.live_events()
+            elif urllib.parse.urlsplit(self.path).path == '/game_asset/milo_texture':
+                query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query))
+                asset = preview.game_asset('milo_texture', (query.get('milo', ''), query.get('name', '')))
+                if asset:
+                    self.reply(200, asset[0], asset[1], max_age=86400)
+                else:
+                    self.reply(404, text, b'No such game asset')
             elif path.startswith(('/game_asset/texture?path=', '/game_asset/font?name=',
                                   '/game_asset/font.png?name=')):
                 kind, _, arg = path[len('/game_asset/'):].partition('?')
@@ -855,7 +900,8 @@ def handler(preview):
                     if state != last:
                         out += f'event: state\ndata: {json.dumps(state)}\n\n'
                     if clock is not None and (state != last or not state['paused']):
-                        out += f'event: clock\ndata: {json.dumps({"song_ms": clock})}\n\n'
+                        payload = {'song_ms': clock, 'score': fake_score(clock)}
+                        out += f'event: clock\ndata: {json.dumps(payload)}\n\n'
                     last = state
                     if out:
                         self.wfile.write(out.encode())

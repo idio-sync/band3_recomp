@@ -384,6 +384,23 @@ class KaraokeTest(unittest.TestCase):
                 self.assertFalse(line['syllables'][-1]['join'])
 
 
+    def test_fake_live_has_a_band_with_the_singer(self):
+        state, _ = web_preview.fake_live(6, 20000, 'lead')
+        self.assertEqual(len(state['band']), 4)
+        self.assertEqual(state['band'][0], {'part': 'vocals', 'difficulty': 3})
+        self.assertEqual(state['band'][1], {'part': 'guitar', 'difficulty': 3})
+        self.assertIsNone(state['band'][2])
+        self.assertIsNone(web_preview.fake_live(6, 20000, 'none')[0]['band'][0])
+
+    def test_the_fake_score_rises_with_the_song(self):
+        self.assertEqual(web_preview.fake_score(0), 0)
+        self.assertLess(web_preview.fake_score(10000), web_preview.fake_score(20000))
+        self.assertEqual(web_preview.fake_score(10000) % 25, 0)
+
+    def test_the_sample_marks_its_second_line_overdrive(self):
+        lead = web_preview.SAMPLE_LYRICS['parts'][0]['lines']
+        self.assertEqual([line['overdrive'] for line in lead], [False, True, False, False])
+
 class GameAssetTest(unittest.TestCase):
     # the same rules as src/Net/http_request.cpp's, so the preview serves what band3 would
     def test_textures_only_under_ui_and_dx(self):
@@ -399,6 +416,16 @@ class GameAssetTest(unittest.TestCase):
         self.assertTrue(web_preview.allowed_font_name('rockband-outline(bld37)'))
         for bad in ('../x', 'a/b', 'A', '', 'a' * 65):
             self.assertFalse(web_preview.allowed_font_name(bad), bad)
+
+    def test_milo_textures_only_from_ui_milos_by_plain_names(self):
+        self.assertTrue(web_preview.allowed_milo_path('ui/track/gen/track_shared.milo_xbox'))
+        self.assertFalse(web_preview.allowed_milo_path('dx/a.milo_xbox'))
+        self.assertFalse(web_preview.allowed_milo_path('ui/../a.milo_xbox'))
+        self.assertFalse(web_preview.allowed_milo_path('ui/a.png_xbox'))
+        self.assertTrue(web_preview.allowed_texture_name('lyrics_bg_blue.png'))
+        self.assertFalse(web_preview.allowed_texture_name('A.png'))
+        self.assertFalse(web_preview.allowed_texture_name('.png'))
+        self.assertFalse(web_preview.allowed_texture_name('a/b.bmp'))
 
 
 if __name__ == '__main__':
