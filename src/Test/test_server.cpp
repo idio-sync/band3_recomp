@@ -279,6 +279,7 @@ public:
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
+        options.r8_textures = REXCVAR_GET(native_r8_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);
         options.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
         // as the native renderer's frames keep what they draw, so this one
@@ -380,6 +381,7 @@ public:
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
+        options.r8_textures = REXCVAR_GET(native_r8_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);
         options.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
         options.clock_keep = render::InSong();  // as NativePicture's
@@ -999,7 +1001,9 @@ private:
                     {"deferred_decode_bytes", p.deferred_decode_bytes},
                     {"deferred_bc_blocks", p.deferred_bc_blocks},
                     {"deferred_bc_swizzled", p.deferred_bc_swizzled},
-                    {"deferred_bc_rgba", p.deferred_bc_rgba}};
+                    {"deferred_bc_rgba", p.deferred_bc_rgba},
+                    {"deferred_r8", p.deferred_r8},
+                    {"deferred_r8_rgba", p.deferred_r8_rgba}};
         for (int i = 0; i < P::kNumSteps; i++)
             if (p.step_calls[i])
                 c.counts.emplace_back(std::string(P::kStepNames[i]) + "_n", p.step_calls[i]);

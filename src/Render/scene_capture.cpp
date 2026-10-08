@@ -2685,6 +2685,8 @@ CaptureProfile GetCaptureProfile() {
     p.deferred_bc_blocks = g_deferred_decode.bc_blocks.load(std::memory_order_relaxed);
     p.deferred_bc_swizzled = g_deferred_decode.bc_swizzled.load(std::memory_order_relaxed);
     p.deferred_bc_rgba = g_deferred_decode.bc_rgba.load(std::memory_order_relaxed);
+    p.deferred_r8 = g_deferred_decode.r8.load(std::memory_order_relaxed);
+    p.deferred_r8_rgba = g_deferred_decode.r8_rgba.load(std::memory_order_relaxed);
     return p;
 }
 
@@ -2713,6 +2715,8 @@ CaptureProfile CaptureProfileSince(const CaptureProfile& now, const CaptureProfi
     p.deferred_bc_blocks -= before.deferred_bc_blocks;
     p.deferred_bc_swizzled -= before.deferred_bc_swizzled;
     p.deferred_bc_rgba -= before.deferred_bc_rgba;
+    p.deferred_r8 -= before.deferred_r8;
+    p.deferred_r8_rgba -= before.deferred_r8_rgba;
     return p;
 }
 

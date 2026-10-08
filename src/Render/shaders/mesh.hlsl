@@ -85,7 +85,8 @@ VK_BINDING(0, 3) cbuffer PixelUniforms : register(b0, space3) {
     // xy, smaller than the layer: the first five in that order, then shadow,
     // normal, detail
     uint4 tex_size[8];
-    // x: kPremultiply; y: bit per map (tex_layer's order) for DXN kept as BC5
+    // x: kPremultiply; y: bit per map (tex_layer's order) for DXN kept as BC5;
+    // z, w: R8 maps' expand codes, a byte each, maps 0-3 in z, 4-6 in w
     uint4 pixel_flags;
     // PackSampler's, in tex_layer's order
     uint4 tex_samp[8];
@@ -244,10 +245,24 @@ float4 ReadTexture(Texture2DArray<float4> t, uint layer, uint2 size, uint4 s, fl
     return SampleTexture(t, layer, size, s, uv, dx, dy);
 }
 
-// Map k (tex_layer's order) as the CPU decodes it: DXN kept as BC5 loads as
-// (x, y, 0, 1), but DecodeBlock repeats y into z and w as a fetch would. A
-// head's normal map drawn as a texture pass's diffuse has its alpha read.
-float4 DxnTexel(float4 c, uint k) { return ((pixel_flags.y >> k) & 1u) != 0u ? c.xyyy : c; }
+// Filtered map k (tex_layer's order) as the CPU decodes it. Rearranging
+// components commutes with filtering, as each is filtered alone and border
+// taps are uniform. DXN kept as BC5 loads as (x, y, 0, 1), but DecodeBlock
+// repeats y into z and w as a fetch would; a head's normal map drawn as a
+// texture pass's diffuse has its alpha read. k_8 kept as R8 loads as
+// (byte, 0, 0, 1); DecodeLevel8 swizzles it: the code (R8ExpandCode) has two
+// bits a component, x's lowest: 1 byte, 2 zero, 3 one; 0 for other textures.
+float4 MapTexel(float4 c, uint k) {
+    if (((pixel_flags.y >> k) & 1u) != 0u) return c.xyyy;
+    const uint code = ((k < 4u ? pixel_flags.z : pixel_flags.w) >> (8u * (k & 3u))) & 255u;
+    if (code == 0u) return c;
+    float4 o;
+    [unroll] for (int i = 0; i < 4; i++) {
+        const uint v = (code >> (2 * i)) & 3u;
+        o[i] = v == 1u ? c.x : v == 2u ? c.y : c.w;
+    }
+    return o;
+}
 
 // bilinear, transparent black border; soft_raster.cpp's SampleBorder()
 float4 ProjTexel(Texture2DArray<float4> t, float2 uv, uint layer, uint2 size) {
@@ -300,33 +315,33 @@ float4 MeshColor(PixelIn i) {
     float4 spec_map = float4(1, 1, 1, 1);
     float4 glow = float4(0, 0, 0, 0);
     if ((f & kShadeTextured) != 0u)
-        texel = DxnTexel(
+        texel = MapTexel(
             ReadTexture(tex, tex_layer[0].x, tex_size[0].xy, tex_samp[0], i.uv, dx, dy), 0);
     if ((f & kShadeSpecMap) != 0u)
-        spec_map = DxnTexel(ReadTexture(spec_tex, tex_layer[0].y, tex_size[1].xy, tex_samp[1],
+        spec_map = MapTexel(ReadTexture(spec_tex, tex_layer[0].y, tex_size[1].xy, tex_samp[1],
                                         i.uv, dx, dy),
                             1);
     if ((f & kShadeGlow) != 0u)
-        glow = DxnTexel(
+        glow = MapTexel(
             ReadTexture(glow_tex, tex_layer[0].z, tex_size[2].xy, tex_samp[2], i.uv, dx, dy), 2);
     float4 normal = float4(0.5, 0.5, 0, 1);
     float4 detail = float4(0.5, 0.5, 0, 1);
     // s1: the normal map, or REFRACT_WORLD's refract normal map
     if ((f & (kShadeNormalMap | kShadeRefractMap)) != 0u)
-        normal = DxnTexel(ReadTexture(normal_tex, tex_layer[1].y, tex_size[6].xy, tex_samp[5],
+        normal = MapTexel(ReadTexture(normal_tex, tex_layer[1].y, tex_size[6].xy, tex_samp[5],
                                       i.uv, dx, dy),
                           5);
     if ((f & kShadeNormalMap) != 0u && (f & kShadeDetailMap) != 0u)
-        detail = DxnTexel(ReadTexture(detail_tex, tex_layer[1].z, tex_size[7].xy, tex_samp[6],
+        detail = MapTexel(ReadTexture(detail_tex, tex_layer[1].z, tex_size[7].xy, tex_samp[6],
                                       detail_uv, detail_dx, detail_dy),
                           6);
     float4 proj = float4(0, 0, 0, 0);
     float4 gobo = float4(0, 0, 0, 0);
     if ((f & (kShadeProjMultiply | kShadeProjGobo)) != 0u) {
         const float2 puv = ProjUv(ps_shade, i.wpos);
-        proj = DxnTexel(ProjTexel(proj_tex, puv, tex_layer[0].w, tex_size[3].xy), 3);
+        proj = MapTexel(ProjTexel(proj_tex, puv, tex_layer[0].w, tex_size[3].xy), 3);
         if ((f & kShadeProjGobo) != 0u)
-            gobo = DxnTexel(ProjTexel(gobo_tex, puv, tex_layer[1].x, tex_size[4].xy), 4);
+            gobo = MapTexel(ProjTexel(gobo_tex, puv, tex_layer[1].x, tex_size[4].xy), 4);
     }
     float4 behind = float4(1, 1, 1, 1);
     if ((f & kShadeRefract) != 0u)
@@ -382,7 +397,7 @@ float4 PSSpotCone(PixelIn i) : SV_Target0 {
         const uint2 tsize = tex_size[0].xy;
         const float k = saturate(SpotGoboCoord(spot, i.wpos));
         const uint2 t = min(uint2(uint(k * float(tsize.x)), 0), tsize - 1);
-        xsec = tex.Load(int4(t, tex_layer[0].x, 0)).x;
+        xsec = MapTexel(tex.Load(int4(t, tex_layer[0].x, 0)), 0).x;
     }
     const float density = density_tex.SampleLevel(density_sampler, float3(uv, 0.0), 0).y;
     if (AlphaCut(ps_shade, 0.0)) discard;

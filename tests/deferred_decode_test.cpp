@@ -13,6 +13,7 @@
 #include <vector>
 #include "src/Render/deferred_decode.h"
 #include "src/Render/guest_formats.h"
+#include "src/Render/sample_model.h"
 
 using namespace band3::render;
 using namespace band3::render::guest_format;
@@ -390,6 +391,263 @@ TEST_CASE("what isn't kept as blocks decodes to RGBA as before") {
         CHECK(!DecodeTextureBlocks(base.data(), mips.data(), f, no_blocks));
         CHECK(!no_blocks.blocks);
     }
+}
+
+namespace {
+
+// SetKeepR8(true) for a test's span, as KeepBlocks
+struct KeepR8 {
+    KeepR8() { SetKeepR8(true); }
+    ~KeepR8() { SetKeepR8(false); }
+};
+
+// mesh.hlsl's MapTexel for a map kept as R8: what it makes of `c`, the texel
+// R8 loads as or that filtered, by `code` (its arithmetic, to hold the CPU's
+// to): 1 takes x, 2 y, 3 w
+void ShaderMapTexel(const float c[4], uint32_t code, float out[4]) {
+    for (int i = 0; i < 4; i++) {
+        const uint32_t v = (code >> (2 * i)) & 3;
+        out[i] = code == 0 ? c[i] : v == 1 ? c[0] : v == 2 ? c[1] : c[3];
+    }
+}
+
+// the same in bytes, of R8's texel (byte, 0, 0, 255): R in the low byte
+uint32_t ShaderR8Texel(uint8_t byte, uint32_t code) {
+    const float c[4] = {float(byte), 0, 0, 255};
+    float out[4];
+    ShaderMapTexel(c, code, out);
+    uint32_t texel = 0;
+    for (int i = 0; i < 4; i++) texel |= uint32_t(out[i]) << (8 * i);
+    return texel;
+}
+
+// a k_8 fetch with swizzle `swizzle` (Fetch's otherwise)
+void Fetch8(uint32_t f[6], uint32_t swizzle, uint32_t w, uint32_t h, uint32_t pitch, bool tiled,
+            bool packed, uint32_t mip_max) {
+    Fetch(f, 2, w, h, pitch, tiled, packed, mip_max);
+    f[3] = (f[3] & ~(0xFFFu << 1)) | swizzle << 1;
+}
+
+}  // namespace
+
+TEST_CASE("a k_8 texture's bytes, expanded as the GPU's shader does, are DecodeLevel8's texels") {
+    // every one of the 4096 swizzles a fetch can have (those RB3's movie
+    // planes have among them): kept as bytes (DecodeTextureBlocks) and
+    // expanded texel by texel as mesh.hlsl's MapTexel does by R8ExpandCode,
+    // and decoded to RGBA on the CPU (DecodeRgbaFromBlocks), they're the
+    // texels DecodeTextureLevels decodes, base and mips
+    for (uint32_t swizzle = 0; swizzle < 4096; swizzle++) {
+        const uint32_t code = R8ExpandCode(swizzle);
+        REQUIRE(code != 0);
+        uint32_t f[6];
+        Fetch8(f, swizzle, 37, 21, 64, (swizzle & 1) != 0, true, 15);
+        std::vector<uint8_t> base(BaseLevelBytes(f) + 4096), mips(MipChainBytes(f) + 4096);
+        Fill(base, swizzle);
+        Fill(mips, swizzle + 1);
+        Texture whole;
+        REQUIRE(DecodeTextureLevels(base.data(), mips.data(), f, whole));
+        Texture kept;
+        REQUIRE(DecodeTextureBlocks(base.data(), mips.data(), f, kept));
+        REQUIRE(kept.blocks);
+        REQUIRE(kept.blocks->format == 2);
+        REQUIRE(kept.blocks->swizzle == swizzle);
+        REQUIRE(kept.blocks->mips.size() == whole.mips.size());
+        bool same = kept.blocks->level0.size() == whole.rgba.size();
+        for (size_t i = 0; same && i < whole.rgba.size(); i++)
+            same = ShaderR8Texel(kept.blocks->level0[i], code) == whole.rgba[i];
+        for (size_t k = 0; same && k < whole.mips.size(); k++) {
+            same = kept.blocks->mips[k].size() == whole.mips[k].size();
+            for (size_t i = 0; same && i < whole.mips[k].size(); i++)
+                same = ShaderR8Texel(kept.blocks->mips[k][i], code) == whole.mips[k][i];
+        }
+        CHECK_MESSAGE(same, "swizzle ", swizzle);
+        std::vector<uint32_t> rgba;
+        std::vector<std::vector<uint32_t>> levels;
+        DecodeRgbaFromBlocks(*kept.blocks, 37, 21, rgba, levels);
+        CHECK_MESSAGE(rgba == whole.rgba, "swizzle ", swizzle);
+        CHECK_MESSAGE(levels == whole.mips, "swizzle ", swizzle);
+    }
+}
+
+TEST_CASE("a k_8 texture's bytes are DecodeLevel8's, whatever its layout") {
+    // the movie planes' swizzle (xxx1, the only one RB3's k_8 textures were
+    // seen with) and xxxx and 000x, tiled and linear, packed mips and not,
+    // every endianness (k_8 has none to swap), odd sizes and pitches past
+    // the width, 16 or less on a side, and 1280x720: the GPU's texels
+    // (ShaderR8Texel) and the CPU's (DecodeRgbaFromBlocks) are
+    // DecodeTextureLevels' texels
+    for (uint32_t swizzle : {0x000u, 0xA00u, 0x124u}) {
+        const uint32_t code = R8ExpandCode(swizzle);
+        for (bool tiled : {true, false}) {
+            for (bool packed : {true, false}) {
+                for (uint32_t endian : {0u, 1u, 2u, 3u}) {
+                    for (const Size s : {Size{1, 1}, Size{3, 5}, Size{8, 8}, Size{13, 9},
+                                         Size{16, 16}, Size{37, 21}, Size{128, 32}, Size{32, 128},
+                                         Size{200, 33}, Size{640, 360}, Size{1280, 720}}) {
+                        for (uint32_t extra : {0u, 64u}) {
+                            uint32_t f[6];
+                            Fetch8(f, swizzle, s.w, s.h, AlignUp(s.w, 32) + extra, tiled, packed,
+                                   15);
+                            f[1] |= endian << 6;
+                            std::vector<uint8_t> base(BaseLevelBytes(f) + 4096),
+                                mips(MipChainBytes(f) + 4096);
+                            Fill(base, s.w * 7 + s.h + endian);
+                            Fill(mips, s.w * 13 + s.h + extra);
+                            Texture whole;
+                            REQUIRE(DecodeTextureLevels(base.data(), mips.data(), f, whole));
+                            Texture kept;
+                            REQUIRE(DecodeTextureBlocks(base.data(), mips.data(), f, kept));
+                            REQUIRE(kept.blocks);
+                            CHECK(kept.rgba.empty());
+                            CHECK(kept.width == s.w);
+                            CHECK(kept.height == s.h);
+                            CHECK(kept.blocks->level0.size() == LevelBlockBytes(2, s.w, s.h));
+                            REQUIRE(kept.blocks->mips.size() == whole.mips.size());
+                            bool same = true;
+                            for (size_t i = 0; same && i < whole.rgba.size(); i++)
+                                same = ShaderR8Texel(kept.blocks->level0[i], code) == whole.rgba[i];
+                            for (size_t k = 0; same && k < whole.mips.size(); k++)
+                                for (size_t i = 0; same && i < whole.mips[k].size(); i++)
+                                    same = ShaderR8Texel(kept.blocks->mips[k][i], code) ==
+                                           whole.mips[k][i];
+                            std::vector<uint32_t> rgba;
+                            std::vector<std::vector<uint32_t>> levels;
+                            DecodeRgbaFromBlocks(*kept.blocks, s.w, s.h, rgba, levels);
+                            const bool all = same && rgba == whole.rgba && levels == whole.mips;
+                            CHECK_MESSAGE(all,
+                                          "swizzle ", swizzle, " tiled ", tiled, " packed ",
+                                          packed, " endian ", endian, " ", s.w, "x", s.h,
+                                          " pitch +", extra);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("R8's texels filtered, then rearranged as the GPU's shader does, are the decoded texels filtered") {
+    // The GPU samples R8's (byte, 0, 0, 1) with the game's sampler
+    // (sample_model.hlsli) and rearranges what that gives by R8ExpandCode
+    // (mesh.hlsl's MapTexel); the CPU samples DecodeLevel8's texels with the
+    // same code (SampleTextureCpu). Bit for bit the same: point and bilinear,
+    // across levels and within one, anisotropy, every clamp mode, black and
+    // white borders, magnified and minified, for every swizzle.
+    const uint32_t w = 37, h = 21;
+    std::vector<uint8_t> bytes(size_t(w) * h);
+    Fill(bytes, 77);
+    std::vector<std::vector<uint8_t>> mip_bytes;
+    for (uint32_t l = 1; l < FullMipChain(w, h); l++) {
+        mip_bytes.emplace_back(size_t(std::max(w >> l, 1u)) * std::max(h >> l, 1u));
+        Fill(mip_bytes.back(), 77 + l);
+    }
+    // R8 as it loads: (byte, 0, 0, 255)
+    auto loaded = [](const std::vector<uint8_t>& b) {
+        std::vector<uint32_t> px(b.size());
+        for (size_t i = 0; i < b.size(); i++) px[i] = b[i] | 0xFFu << 24;
+        return px;
+    };
+    std::vector<uint32_t> raw = loaded(bytes);
+    std::vector<std::vector<uint32_t>> raw_mips;
+    for (const auto& m : mip_bytes) raw_mips.push_back(loaded(m));
+    const TexLevels raw_view{w, h, raw.data(), &raw_mips};
+    uint32_t r = 1;
+    auto next = [&] {
+        r = r * 1664525u + 1013904223u;
+        return r >> 8;
+    };
+    auto unit = [&] { return float(next() & 0xFFFF) / 65536.0f; };
+    uint64_t samples = 0, mismatched = 0;
+    for (uint32_t swizzle = 0; swizzle < 4096; swizzle++) {
+        uint32_t mul, konst;
+        Swizzle8(swizzle, mul, konst);
+        auto decoded = [&](const std::vector<uint8_t>& b) {
+            std::vector<uint32_t> px(b.size());
+            for (size_t i = 0; i < b.size(); i++) px[i] = b[i] * mul | konst;
+            return px;
+        };
+        const std::vector<uint32_t> dec = decoded(bytes);
+        std::vector<std::vector<uint32_t>> dec_mips;
+        for (const auto& m : mip_bytes) dec_mips.push_back(decoded(m));
+        const TexLevels dec_view{w, h, dec.data(), &dec_mips};
+        const uint32_t code = R8ExpandCode(swizzle);
+        // the movie planes' (xxx1) many times, the rest a few
+        const int n = swizzle == 0xA00 ? 4000 : 24;
+        for (int k = 0; k < n; k++) {
+            TexSampler s;
+            s.filtered = 1;
+            s.clamp_x = uint8_t(next() & 7);
+            s.clamp_y = uint8_t(next() & 7);
+            s.mag_linear = uint8_t(next() & 1);
+            s.min_linear = uint8_t(next() & 1);
+            s.mip = uint8_t(next() % 3);
+            s.mip_min = uint8_t(next() % 2);
+            s.mip_max = uint8_t(next() % 7);
+            s.aniso = uint8_t(1u << (next() % 5));
+            s.lod_bias = (unit() - 0.5f) * 2.0f;
+            s.border_white = uint8_t(next() & 1);
+            uint32_t packed[4];
+            PackSampler(s, raw_view.Levels(), packed);
+            const float scale = unit() * unit() * 0.6f;
+            const float uv[2] = {(unit() - 0.5f) * 6.0f, (unit() - 0.5f) * 6.0f};
+            const float dx[2] = {(unit() - 0.5f) * scale, (unit() - 0.5f) * scale};
+            const float dy[2] = {(unit() - 0.5f) * scale, (unit() - 0.5f) * scale};
+            float from_raw[4], gpu[4], cpu[4];
+            SampleTextureCpu(raw_view, packed, uv, dx, dy, from_raw);
+            ShaderMapTexel(from_raw, code, gpu);
+            SampleTextureCpu(dec_view, packed, uv, dx, dy, cpu);
+            samples++;
+            if (std::memcmp(gpu, cpu, sizeof(gpu)) != 0) mismatched++;
+        }
+    }
+    CHECK(samples > 100000);
+    CHECK(mismatched == 0);
+}
+
+TEST_CASE("kept as R8, a k_8 texture's rgba decodes from its bytes the first time it's asked for") {
+    uint32_t f[6];
+    Fetch8(f, 0xA00, 200, 33, 224, true, true, 15);
+    std::vector<uint8_t> base(BaseLevelBytes(f) + 65536), mips(MipChainBytes(f) + 65536);
+    Fill(base, 21);
+    Fill(mips, 22);
+    Texture whole;
+    REQUIRE(DecodeTextureLevels(base.data(), mips.data(), f, whole));
+    {
+        // block-compressed textures kept as blocks alone: a k_8 one decodes
+        // to RGBA as before
+        KeepBlocks keep;
+        auto t = Deferred(f, base, &mips);
+        DecodeDeferred(*t);
+        CHECK(!t->blocks);
+        CHECK(t->rgba == whole.rgba);
+        CHECK(t->mips == whole.mips);
+    }
+    KeepR8 keep;
+    auto t = Deferred(f, base, &mips);
+    const uint64_t kept = g_deferred_decode.r8.load();
+    const uint64_t blocks = g_deferred_decode.bc_blocks.load();
+    const uint64_t rgba_decodes = g_deferred_decode.r8_rgba.load();
+    const uint64_t bc_rgba_decodes = g_deferred_decode.bc_rgba.load();
+    DecodeDeferred(*t);
+    CHECK(g_deferred_decode.r8.load() == kept + 1);
+    CHECK(g_deferred_decode.bc_blocks.load() == blocks);
+    REQUIRE(t->blocks);
+    CHECK(t->blocks->format == 2);
+    CHECK(t->blocks->level0.size() == size_t(200) * 33);
+    CHECK(t->rgba.empty());
+    CHECK(t->deferred->bytes.empty());
+    EnsureRgba(*t);
+    CHECK(t->rgba == whole.rgba);
+    CHECK(t->mips == whole.mips);
+    EnsureRgba(*t);
+    CHECK(g_deferred_decode.r8_rgba.load() == rgba_decodes + 1);
+    CHECK(g_deferred_decode.bc_rgba.load() == bc_rgba_decodes);
+    // block-compressed ones aren't kept as blocks by it
+    Fetch(f, 20, 64, 64, 64, true, true, 6);
+    auto dxt = Deferred(f, base, &mips);
+    DecodeDeferred(*dxt);
+    CHECK(!dxt->blocks);
+    CHECK(!dxt->rgba.empty());
 }
 
 TEST_CASE("a texture without mips decodes from its base level's copy alone") {

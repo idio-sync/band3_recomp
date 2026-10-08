@@ -475,18 +475,25 @@ inline void DecodeLevelBlocks(const uint8_t* src, const FetchLayout& l, const Fo
     }
 }
 
-// DecodeLevel fast path for k_8 (Bink movie planes: 10-12 ms a 720p frame by
-// the general loop, 0.3-0.9 ms here). The swizzled texel is byte * mul |
-// konst. Tiled, x..x+7 are contiguous when x % 8 == 0 (TiledOffset2D keeps
-// x's low three bits), so runs of eight share one address.
-inline void DecodeLevel8(const uint8_t* src, const FetchLayout& l, const LevelPlace& p,
-                         uint32_t w, uint32_t h, uint32_t* out) {
-    uint32_t mul = 0, konst = 0;
+// A k_8 block (byte, 0, 0, 255) under `swizzle` is the texel byte * mul |
+// konst (selectors 3 and 5-7 give 255)
+inline void Swizzle8(uint32_t swizzle, uint32_t& mul, uint32_t& konst) {
+    mul = konst = 0;
     for (int c = 0; c < 4; c++) {
-        const uint32_t sel = (l.swizzle >> (3 * c)) & 7;
+        const uint32_t sel = (swizzle >> (3 * c)) & 7;
         if (sel == 0) mul |= 1u << (8 * c);
         else if (sel == 3 || sel > 4) konst |= 0xFFu << (8 * c);
     }
+}
+
+// DecodeLevel fast path for k_8 (Bink movie planes: 10-12 ms a 720p frame by
+// the general loop, 0.3-0.9 ms here). Tiled, x..x+7 are contiguous when
+// x % 8 == 0 (TiledOffset2D keeps x's low three bits), so runs of eight share
+// one address.
+inline void DecodeLevel8(const uint8_t* src, const FetchLayout& l, const LevelPlace& p,
+                         uint32_t w, uint32_t h, uint32_t* out) {
+    uint32_t mul, konst;
+    Swizzle8(l.swizzle, mul, konst);
     for (uint32_t py = 0; py < h; py++) {
         const uint32_t y = p.y_blocks + py;
         uint32_t* row = out + size_t(py) * w;
@@ -543,7 +550,8 @@ inline bool DecodeTextureLevels(const uint8_t* base, const uint8_t* mips, const 
 }
 
 // ---------------------------------------------------------------------------
-// block-compressed textures kept as blocks (scene_capture.h's BlockPixels)
+// block-compressed textures kept as blocks, and k_8 ones as their bytes
+// (scene_capture.h's BlockPixels)
 
 // DXT1, DXT2_3, DXT4_5 and DXN: BC1/2/3/5 decode them bit for bit as
 // DecodeBlock does (DXT2/4's premultiplication is undone by neither)
@@ -579,6 +587,43 @@ inline void UntileLevelBlocks(const uint8_t* src, const FetchLayout& l, const Fo
     SwapEndian(out, uint32_t(row_bytes * blocks_y), l.endian);
 }
 
+// a k_8 level's bytes untiled into w x h rows for the GPU's R8, unswizzled
+inline void UntileLevel8(const uint8_t* src, const FetchLayout& l, const LevelPlace& p, uint32_t w,
+                         uint32_t h, uint8_t* out) {
+    for (uint32_t py = 0; py < h; py++) {
+        const uint32_t y = p.y_blocks + py;
+        uint8_t* row = out + size_t(py) * w;
+        if (!l.tiled) {
+            std::memcpy(row, src + p.offset + size_t(y) * p.row_bytes + p.x_blocks, w);
+            continue;
+        }
+        for (uint32_t px = 0; px < w;) {
+            const uint32_t x = p.x_blocks + px;
+            const uint8_t* s = src + p.offset +
+                               uint32_t(TiledOffset2D(int32_t(x), int32_t(y), p.pitch_blocks, 0));
+            if ((x & 7) == 0 && px + 8 <= w) {
+                std::memcpy(row + px, s, 8);
+                px += 8;
+            } else {
+                row[px++] = s[0];
+            }
+        }
+    }
+}
+
+// mesh.hlsl's MapTexel code turning R8's (byte, 0, 0, 1) into DecodeLevel8's
+// texel: two bits a component, x's lowest: 1 byte, 2 zero, 3 one. Never 0,
+// which MapTexel takes as not R8.
+inline constexpr uint32_t R8ExpandCode(uint32_t swizzle) {
+    uint32_t code = 0;
+    for (int c = 0; c < 4; c++) {
+        const uint32_t sel = (swizzle >> (3 * c)) & 7;
+        code |= (sel == 0 ? 1u : sel == 3 || sel > 4 ? 3u : 2u) << (2 * c);
+    }
+    return code;
+}
+
+// also k_8's untiled bytes
 inline size_t LevelBlockBytes(uint32_t format, uint32_t w, uint32_t h) {
     FormatInfo info;
     if (!GetFormatInfo(format, info)) return 0;
@@ -586,24 +631,36 @@ inline size_t LevelBlockBytes(uint32_t format, uint32_t w, uint32_t h) {
            info.bpb;
 }
 
-// DecodeTextureLevels' texture as blocks (out.blocks; rgba and mips empty).
-// False, out untouched, if undecodable, not block-compressed, or swizzled
+// DecodeTextureLevels' texture as blocks, or k_8 bytes with the fetch's
+// swizzle (out.blocks; rgba and mips empty). False, out untouched, if
+// undecodable, neither, or block-compressed and swizzled
 inline bool DecodeTextureBlocks(const uint8_t* base, const uint8_t* mips, const uint32_t f[6],
                                 Texture& out, uint32_t max_size = 4096) {
     const FetchLayout l = ReadFetchLayout(f);
     FormatInfo info;
-    if (l.dimension != 1 || !IsBlockCompressed(l.format) || l.swizzle != kIdentitySwizzle ||
+    const bool k8 = l.format == 2;
+    if (l.dimension != 1 ||
+        !(k8 || (IsBlockCompressed(l.format) && l.swizzle == kIdentitySwizzle)) ||
         !GetFormatInfo(l.format, info) || !base || l.width > max_size || l.height > max_size)
         return false;
     auto b = std::make_shared<BlockPixels>();
     b->format = l.format;
+    b->swizzle = l.swizzle;
+    const auto untile = [&](const uint8_t* src, uint32_t level, uint32_t w, uint32_t h,
+                            uint8_t* to) {
+        const LevelPlace p = PlaceLevel(l, info, level);
+        if (k8)
+            UntileLevel8(src, l, p, w, h, to);
+        else
+            UntileLevelBlocks(src, l, info, p, w, h, to);
+    };
     b->level0.resize(LevelBlockBytes(l.format, l.width, l.height));
-    UntileLevelBlocks(base, l, info, PlaceLevel(l, info, 0), l.width, l.height, b->level0.data());
+    untile(base, 0, l.width, l.height, b->level0.data());
     if (mips) {
         for (uint32_t level = 1; level <= l.mip_max; level++) {
             const uint32_t w = std::max(l.width >> level, 1u), h = std::max(l.height >> level, 1u);
             std::vector<uint8_t> blocks(LevelBlockBytes(l.format, w, h));
-            UntileLevelBlocks(mips, l, info, PlaceLevel(l, info, level), w, h, blocks.data());
+            untile(mips, level, w, h, blocks.data());
             b->mips.push_back(std::move(blocks));
         }
     }
@@ -642,18 +699,27 @@ inline void DecodeLevelFromBlocks(uint32_t format, const uint8_t* blocks, uint32
     }
 }
 
-// as DecodeTextureLevels would have decoded them
+// as DecodeTextureLevels would have decoded them (k_8 swizzled by Swizzle8)
 inline void DecodeRgbaFromBlocks(const BlockPixels& b, uint32_t width, uint32_t height,
                                  std::vector<uint32_t>& rgba,
                                  std::vector<std::vector<uint32_t>>& mips) {
+    uint32_t mul, konst;
+    Swizzle8(b.swizzle, mul, konst);
+    const auto decode = [&](const uint8_t* src, uint32_t w, uint32_t h, uint32_t* out) {
+        if (b.format != 2) {
+            DecodeLevelFromBlocks(b.format, src, w, h, out);
+            return;
+        }
+        for (size_t i = 0, n = size_t(w) * h; i < n; i++) out[i] = src[i] * mul | konst;
+    };
     rgba.assign(size_t(width) * height, 0);
-    DecodeLevelFromBlocks(b.format, b.level0.data(), width, height, rgba.data());
+    decode(b.level0.data(), width, height, rgba.data());
     mips.clear();
     for (size_t k = 0; k < b.mips.size(); k++) {
         const uint32_t level = uint32_t(k + 1);
         const uint32_t w = std::max(width >> level, 1u), h = std::max(height >> level, 1u);
         std::vector<uint32_t> px(size_t(w) * h, 0);
-        DecodeLevelFromBlocks(b.format, b.mips[k].data(), w, h, px.data());
+        decode(b.mips[k].data(), w, h, px.data());
         mips.push_back(std::move(px));
     }
 }

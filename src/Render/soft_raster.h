@@ -168,6 +168,10 @@ struct RasterOptions {
     // sampled as BC1/2/3/5 where supported (SetKeepBlocks); off, RGBA. Read
     // when each texture is placed. The CPU decodes blocks (EnsureRgba).
     bool bc_textures = false;
+    // GPU (native_r8_textures): k_8 textures (movie planes) kept as bytes and
+    // sampled as R8 where supported, swizzled in the shader (mesh.hlsl's
+    // MapTexel; SetKeepR8); off, RGBA. Read when each texture is placed.
+    bool r8_textures = false;
     // GPU: frames between world draws (WorldPeriod), how long meshes and
     // textures are kept (ResidencyKeepFrames) so the world's aren't resent.
     // 0 lets them go once a frame doesn't draw them.

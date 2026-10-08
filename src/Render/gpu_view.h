@@ -28,10 +28,10 @@
 // game's samplers in the shader (sample_model.h; LOD from ddx_fine/ddy_fine,
 // as the CPU computes it), not hardware samplers, which can't wrap a texture
 // in the corner of a bigger array layer (gpu_view.cpp's SizeClass); BC1/2/3/5
-// stay compressed in arrays of their own (RasterOptions::bc_textures), the
-// rest are RGBA8. The world draws into a scene target (colour, alpha, depth)
-// that RB3's post-processing (post_model.h, shaders/post.hlsl) reads into the
-// picture before the overlay. Spotlight cones (spot_model.h) use mesh.hlsl's
+// stay compressed in arrays of their own (RasterOptions::bc_textures), k_8
+// (movie planes) as R8 (r8_textures), the rest RGBA8. The world draws into a
+// scene target (colour, alpha, depth) that RB3's post-processing
+// (post_model.h, shaders/post.hlsl) reads into the picture before the overlay. Spotlight cones (spot_model.h) use mesh.hlsl's
 // PSSpotCone, reading scene depth; soft particles (IsSoftParticle) use
 // PSSoftParticle, faded by it; their blurs blur a copy with post.hlsl's blur.
 // Shadow map passes write clip z/w into an R32_FLOAT target by PSShadowDepth

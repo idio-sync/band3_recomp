@@ -164,10 +164,14 @@ struct DeferredPixels {
 // A block-compressed texture's blocks as the GPU takes them (Texture::blocks):
 // Xenos DXT1, DXT2_3, DXT4_5 or DXN (`format` 18, 19, 20, 49; BC1/2/3/5),
 // untiled and endian-swapped, ceil(w/4) x ceil(h/4) blocks of 8 or 16 bytes
-// per level (guest_formats.h's UntileLevelBlocks). rgba_once guards the
-// texture's rgba and mips, decoded on demand (deferred_decode.h's EnsureRgba).
+// per level (guest_formats.h's UntileLevelBlocks). Or a k_8 texture's untiled
+// bytes (`format` 2; R8 on the GPU; UntileLevel8) with the fetch's `swizzle`
+// (DecodeLevel8, mesh.hlsl's MapTexel); identity for block-compressed.
+// rgba_once guards the texture's rgba and mips, decoded on demand
+// (deferred_decode.h's EnsureRgba).
 struct BlockPixels {
     uint32_t format = 0;
+    uint32_t swizzle = 0;
     std::vector<uint8_t> level0;
     std::vector<std::vector<uint8_t>> mips;  // levels 1, 2..., as Texture::mips
     std::once_flag rgba_once;
@@ -196,10 +200,10 @@ struct Texture {
     // start. Null for textures the game thread decodes itself (render target
     // guest pixels, the noise map), undecoded formats and loaded captures.
     std::shared_ptr<DeferredPixels> deferred;
-    // A deferred block-compressed texture with native_bc_textures on: the GPU
-    // samples the blocks directly, and rgba and mips stay empty until
-    // EnsureRgba. Set by DecodeDeferred, so read only after it, as rgba. Null
-    // otherwise; shared by capture files' copies.
+    // A deferred block-compressed texture with native_bc_textures on, or k_8
+    // with native_r8_textures: the GPU samples these directly, and rgba and
+    // mips stay empty until EnsureRgba. Set by DecodeDeferred, so read only
+    // after it, as rgba. Null otherwise; shared by capture files' copies.
     std::shared_ptr<BlockPixels> blocks;
 };
 
@@ -768,6 +772,10 @@ struct CaptureProfile {
     uint64_t deferred_bc_blocks = 0;
     uint64_t deferred_bc_swizzled = 0;
     uint64_t deferred_bc_rgba = 0;
+    // k_8 textures kept as bytes for R8 (native_r8_textures), and those later
+    // asked for RGBA
+    uint64_t deferred_r8 = 0;
+    uint64_t deferred_r8_rgba = 0;
     // cache sizes now: render targets, geometry, loaded textures, maps
     uint64_t rts = 0, geoms = 0, texs = 0, map_texs = 0;
 };

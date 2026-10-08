@@ -221,13 +221,39 @@ settings), each described there (`src/settings.cpp`):
   as BC where it can), so the GPU's picture moves from the CPU's by a mean of 0.1 to 0.3 (`parity.py`'s
   `gpu-cpu`, 0.04 to 0.07 with it off). BC5 has no z and w, which RB3's fetch fills with y
   (a head's normal map is drawn into another texture as a diffuse texture, its alpha read):
-  `mesh.hlsl`'s `DxnTexel` puts them back. The device's support for the four formats is
+  `mesh.hlsl`'s `MapTexel` puts them back. The device's support for the four formats is
   checked once (logged if missing: then every texture is RGBA, as with it off), and a
   texture whose fetch swizzles its components stays RGBA. Read as each texture is placed: off
   (to compare) places new textures as RGBA, decoding the blocks of any decoded while it was
   on. `native_view stats`' `capture` counts `deferred_bc_blocks` (textures kept as blocks),
   `deferred_bc_swizzled` (kept RGBA for their swizzle) and `deferred_bc_rgba` (kept as blocks,
   then decoded to RGBA).
+- `native_r8_textures` (on): keeps RB3's one-channel textures (k_8) a byte a texel on the GPU,
+  as R8, in texture arrays of their own, rather than RGBA8. They're the planes of its movies
+  (Bink's Y and two chroma planes, 1280x720 and 640x360 for the intro and the music-video
+  venues, 512x512 and 256x256 behind the music library and other menus; linear, no mips), and
+  each of a movie's frames is new textures, decoded, sent and placed again
+  (`deferred_decode.h`). Their fetch's swizzle puts the byte, 0 or 1 in each of RGBA
+  (`guest_formats.h`'s `DecodeLevel8`; every plane seen has xxx1, 0xA00); R8 loads as (byte,
+  0, 0, 1), so the pixel shader rearranges what the game's sampler filtered from it by the
+  swizzle (`mesh.hlsl`'s `MapTexel`, as for DXN, coded by `R8ExpandCode` in
+  `PixelUniforms`' `pixel_flags.z` and `.w`): each component filtered on its own, and a
+  border one colour, that's the decoded texels filtered, bit for bit (the unit tests check
+  every swizzle through the CPU's copy of the sampler), and every swizzle has such a code, so
+  no k_8 texture stays RGBA. The same frames drawn with their planes kept as R8 and as RGBA
+  copies are byte-identical (the music library, the part choice, a music-video venue, its
+  controller dialog and the results after it). In 20th Century Boy in a music-video venue the texture
+  arrays went from 1205 to 357 MB and the process's video memory from 1585 to 732-754 MB; a
+  world frame's decode on the worker from 1.04 to 0.16 ms, its upload from 0.27 to 0.07 ms and
+  0.44 to 0.13 ms of the GPU's time, and the textures sent from 2.6 to 0.7 MB a frame (the
+  music library's 0.75 to 0.19, its arrays 232 to 137 MB). Growing the arrays for the intro
+  movie took frames 12.8 and 23.2 ms (512 MB and 1 GB of RGBA) and for a venue's movie 7.9 and
+  8.4 ms (341 MB); none of it now reaches the slow-frame log. The device's support for R8
+  arrays is checked once (logged if missing: RGBA, as with it off). Read as each texture is
+  placed, as `native_bc_textures` is; the CPU rasterizer and capture files decode RGBA from
+  the bytes when they need it (`EnsureRgba`). `native_view stats`' `capture` counts
+  `deferred_r8` (k_8 textures kept as bytes) and `deferred_r8_rgba` (those then decoded to
+  RGBA).
 - `native_deferred_decode_threads` (2): how many helper threads decode a frame's first-sight
   textures and meshes with the worker (`deferred_decode.h`'s `GatherPending`, `DecodeHelpers`):
   where those not yet decoded come to 4 MB or more of the game thread's copies (a song's first

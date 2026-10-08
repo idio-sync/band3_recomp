@@ -753,6 +753,8 @@ class Renderer {
                 o.inline_mips = REXCVAR_GET(native_view_inline_mips);
                 o.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
                 o.bc_textures = REXCVAR_GET(native_bc_textures);
+                // and k_8's (movie planes) as R8
+                o.r8_textures = REXCVAR_GET(native_r8_textures);
                 gpu = gpu_;
                 dump = dump_path_;
                 zero_copy = present_ && present_zero_copy_ && gpu && dump.empty();
