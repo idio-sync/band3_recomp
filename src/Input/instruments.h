@@ -16,8 +16,8 @@
 
 namespace band3::input {
 
-// XInput subtypes. RB3 only accepts the instrument ones; anything else
-// (a gamepad included) reads as no controller.
+// XInput subtypes. RB3 sets up the instrument ones; anything else, or a pad
+// whose capabilities it can't read, it takes for a gamepad (kJoypadAnalog).
 inline constexpr uint8_t kSubtypeGamepad = 1;
 inline constexpr uint8_t kSubtypeGuitar = 6;
 inline constexpr uint8_t kSubtypeGuitarAlternate = 7;
