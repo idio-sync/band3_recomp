@@ -54,6 +54,11 @@ void GameState::SetBand(const std::array<BandMember, 4>& band) {
     state_.band = band;
 }
 
+void GameState::SetHarmonies(bool harmonies) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.harmonies = harmonies;
+}
+
 void GameState::SetScore(int64_t score) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.score = score;

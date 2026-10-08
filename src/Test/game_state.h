@@ -42,6 +42,9 @@ struct GameStateSnapshot {
     int32_t song_ms = -1;
     std::string venue;
     std::array<BandMember, 4> band{};
+    // the band's vocalist sings harmonies (MetaPerformer::IsNowUsingVocalHarmony
+    // as the song starts); false with no vocalist
+    bool harmonies = false;
     // frames the game has drawn since it started
     uint64_t frame = 0;
     // the band's score on the song's scoreboard; 0 when a song starts, and
@@ -80,6 +83,7 @@ public:
     void SetSongTime(int32_t ms);
     void SetVenue(std::string venue);
     void SetBand(const std::array<BandMember, 4>& band);
+    void SetHarmonies(bool harmonies);
     void SetScore(int64_t score);
     void SetJoined();
     void CountFrame();
