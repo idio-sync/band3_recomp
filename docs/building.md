@@ -15,9 +15,10 @@
   libavutil-dev libswscale-dev` (ALSA for MIDI drum kits, libcurl for
   [RhythmVerse](integrations.md#rhythmverse), FFmpeg for
   [music videos](settings.md#music-videos); band3 builds without them, less those).
-  On Windows the build downloads FFmpeg's DLLs for music videos (an LGPL build from
-  BtbN/FFmpeg-Builds, pinned in `cmake/ffmpeg.cmake`); `-DBAND3_FFMPEG_ROOT=<folder>`
-  points it at one already downloaded, and `-DBAND3_FFMPEG=OFF` leaves FFmpeg out.
+  On Windows, FFmpeg for music videos comes with the source: a trimmed LGPL build with
+  only the decoders band3 uses, in `deps/` (rebuilt from pinned FFmpeg and dav1d sources
+  by `tools/build_ffmpeg.sh`, in MSYS2's MinGW64 shell); `-DBAND3_FFMPEG_ROOT=<folder>`
+  points the build at another, and `-DBAND3_FFMPEG=OFF` leaves FFmpeg out.
   band3 uses `std::format` and `std::byteswap`, so Linux needs GCC 13's libstdc++ or
   later, which clang builds against too (Ubuntu 24.04 has it).
 

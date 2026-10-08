@@ -3,11 +3,12 @@
 # headers are built against: band3 loads the libraries at run time
 # (src/Video/ffmpeg_api.h), so it starts without them.
 #
-# Windows: a pinned LGPL shared build from BtbN/FFmpeg-Builds (a month's last
-# build, which they keep), downloaded at configure time into the build folder,
-# or the one -DBAND3_FFMPEG_ROOT=<folder> names (its include/ and bin/). Its
-# DLLs are copied beside the target; without them the decoder falls back to
-# Media Foundation.
+# Windows: band3's own trimmed LGPL build, deps/ffmpeg-<version>-band3-win64.zip
+# (tools/build_ffmpeg.sh: only the decoders and demuxers band3 uses, about a
+# tenth the size of a full build), unpacked into the build folder, or the one
+# -DBAND3_FFMPEG_ROOT=<folder> names (its include/ and bin/). Its DLLs are
+# copied beside the target; without them the decoder falls back to Media
+# Foundation.
 # Elsewhere: the system's headers, through pkg-config (libavformat-dev,
 # libavcodec-dev, libavutil-dev and libswscale-dev on Debian and Ubuntu), and
 # at run time the libraries of the same major versions (libavformat.so.61
@@ -19,43 +20,39 @@
 
 option(BAND3_FFMPEG "Decode music videos with FFmpeg" ON)
 set(BAND3_FFMPEG_ROOT "" CACHE PATH
-    "A Windows FFmpeg shared build (include/, bin/) to use instead of downloading one")
+    "A Windows FFmpeg shared build (include/, bin/) to use instead of deps/' zip")
 
-set(BAND3_FFMPEG_TAG "autobuild-2026-09-30-13-08")
-set(BAND3_FFMPEG_NAME "ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1")
-set(BAND3_FFMPEG_SHA256 "3e47bda1607740550141e37c0e49d1e5182b34699f15adfd137ee266d346811a")
-# the FFmpeg commit it's built from, for the license file's source line
-set(BAND3_FFMPEG_COMMIT "29e619e767")
+# tools/build_ffmpeg.sh's zip, beside this file's folder
+set(BAND3_FFMPEG_ZIP "${CMAKE_CURRENT_LIST_DIR}/../deps/ffmpeg-8.1.3-band3-win64.zip")
 
-# the build's folder: BAND3_FFMPEG_ROOT, or the download (fetched once per
-# build folder); empty, with a warning, if it can't be had
+# the build's folder: BAND3_FFMPEG_ROOT, or the zip unpacked (once per build
+# folder, again when the zip changes); empty, with a warning, without one
 function(band3_ffmpeg_windows_root out)
     if(BAND3_FFMPEG_ROOT)
         set(${out} "${BAND3_FFMPEG_ROOT}" PARENT_SCOPE)
         return()
     endif()
-    set(dir "${CMAKE_BINARY_DIR}/ffmpeg")
-    set(root "${dir}/${BAND3_FFMPEG_NAME}")
-    if(NOT EXISTS "${root}/include/libavcodec/avcodec.h")
-        set(zip "${dir}/${BAND3_FFMPEG_NAME}.zip")
-        set(url "https://github.com/BtbN/FFmpeg-Builds/releases/download/${BAND3_FFMPEG_TAG}/${BAND3_FFMPEG_NAME}.zip")
-        message(STATUS "Downloading FFmpeg for music videos: ${url}")
-        file(DOWNLOAD "${url}" "${zip}" EXPECTED_HASH SHA256=${BAND3_FFMPEG_SHA256}
-             STATUS status)
-        list(GET status 0 code)
-        if(NOT code EQUAL 0)
-            list(GET status 1 reason)
-            message(WARNING "FFmpeg couldn't be downloaded (${reason}), so music videos decode "
-                            "through Media Foundation only. Set BAND3_FFMPEG_ROOT to a "
-                            "downloaded ${BAND3_FFMPEG_NAME} to use it anyway.")
-            file(REMOVE "${zip}")
-            set(${out} "" PARENT_SCOPE)
-            return()
-        endif()
-        file(ARCHIVE_EXTRACT INPUT "${zip}" DESTINATION "${dir}")
-        file(REMOVE "${zip}")
+    if(NOT EXISTS "${BAND3_FFMPEG_ZIP}")
+        message(WARNING "No ${BAND3_FFMPEG_ZIP}, so music videos decode through Media "
+                        "Foundation only (tools/build_ffmpeg.sh makes it)")
+        set(${out} "" PARENT_SCOPE)
+        return()
     endif()
-    set(${out} "${root}" PARENT_SCOPE)
+    get_filename_component(name "${BAND3_FFMPEG_ZIP}" NAME_WLE)
+    set(dir "${CMAKE_BINARY_DIR}/ffmpeg")
+    file(SHA256 "${BAND3_FFMPEG_ZIP}" hash)
+    if(NOT EXISTS "${dir}/${name}.sha256" OR NOT EXISTS "${dir}/${name}/include")
+        set(old "")
+    else()
+        file(READ "${dir}/${name}.sha256" old)
+    endif()
+    if(NOT old STREQUAL hash)
+        file(REMOVE_RECURSE "${dir}/${name}")
+        file(ARCHIVE_EXTRACT INPUT "${BAND3_FFMPEG_ZIP}" DESTINATION "${dir}")
+        file(WRITE "${dir}/${name}.sha256" "${hash}")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BAND3_FFMPEG_ZIP}")
+    set(${out} "${dir}/${name}" PARENT_SCOPE)
 endfunction()
 
 function(band3_setup_ffmpeg target)
@@ -83,7 +80,7 @@ function(band3_setup_ffmpeg target)
         if(NOT linked)
             return()
         endif()
-        # the DLLs beside the target (swresample too, which avcodec needs)
+        # the DLLs beside the target
         file(GLOB dlls "${root}/bin/avformat-*.dll" "${root}/bin/avcodec-*.dll"
                        "${root}/bin/avutil-*.dll" "${root}/bin/swscale-*.dll"
                        "${root}/bin/swresample-*.dll")
@@ -91,17 +88,19 @@ function(band3_setup_ffmpeg target)
             add_custom_command(TARGET ${target} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" $<TARGET_FILE_DIR:${target}>)
         endforeach()
-        # its license beside the DLLs, for tools/package.py's licenses/ffmpeg.txt
-        if(EXISTS "${root}/LICENSE.txt")
-            file(READ "${root}/LICENSE.txt" license)
-            file(WRITE "${CMAKE_BINARY_DIR}/ffmpeg-license.txt"
-                 "FFmpeg (${BAND3_FFMPEG_NAME}), LGPL 2.1 or later: the avcodec, avformat, "
-                 "avutil, swresample and swscale DLLs beside band3, unmodified, from "
-                 "https://github.com/BtbN/FFmpeg-Builds/releases/tag/${BAND3_FFMPEG_TAG}. "
-                 "Their source: https://github.com/FFmpeg/FFmpeg/commit/${BAND3_FFMPEG_COMMIT}
+        # the licenses beside them, as one file, for tools/package.py's
+        # licenses/ffmpeg.txt
+        set(license "")
+        foreach(part LICENSE.txt COPYING.LGPLv2.1 COPYING.dav1d)
+            if(EXISTS "${root}/${part}")
+                file(READ "${root}/${part}" text)
+                string(APPEND license "${text}
 
-"
-                 "${license}")
+")
+            endif()
+        endforeach()
+        if(license)
+            file(WRITE "${CMAKE_BINARY_DIR}/ffmpeg-license.txt" "${license}")
             add_custom_command(TARGET ${target} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                         "${CMAKE_BINARY_DIR}/ffmpeg-license.txt" $<TARGET_FILE_DIR:${target}>)
