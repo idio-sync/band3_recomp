@@ -75,6 +75,10 @@ target_link_libraries(band3_compile_check PRIVATE rex::runtime)
 if(NOT WIN32 AND TARGET rex::renderdoc)
     target_link_libraries(band3_compile_check PRIVATE rex::renderdoc)
 endif()
+# FFmpeg's headers, as the band3 target has them (cmake/ffmpeg.cmake), for
+# src/Video/video_decoder_ffmpeg.cpp; without them it compiles to nothing
+include("${BAND3_ROOT}/cmake/ffmpeg.cmake")
+band3_setup_ffmpeg(band3_compile_check)
 # as the band3 target defines it, for src/sdk_export.cpp
 target_compile_definitions(band3_compile_check PRIVATE
     BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")

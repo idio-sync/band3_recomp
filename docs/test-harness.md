@@ -234,6 +234,12 @@ and the card's circle stays round. `tests/game/music_video_pattern.b3t` needs no
 `music_video_test_pattern` on, the venue's background is a pattern whose border, moving bar
 and colour quadrants show the movie's planes are band3's, in both renderers.
 
+`tests/game/music_video_hide_band.b3t` plays the song with `music_video_hide_band` on and the
+pretend Stage Kit: only the video behind the highway, and `lights` still listing the venue's
+commands. `tests/game/black_background_lights.b3t` turns on Deluxe's Black Background
+modifier from the pause menu with `black_background_lights` on and plays the song again:
+black behind the highway, and the kit still lit. Their headers have the launch lines.
+
 ## The main menu's Quit
 
 `tests/game/quit_button.b3t` opens the main menu's Quit, backs out with Keep Rockin',

@@ -69,10 +69,14 @@ if(WIN32)
     target_link_options(band3 PRIVATE "LINKER:/DEBUG" "LINKER:/OPT:REF" "LINKER:/OPT:ICF")
 endif()
 
-# Media Foundation, which decodes music videos (src/Video/video_decoder_mf.cpp)
+# Media Foundation, which decodes music videos without FFmpeg (src/Video/video_decoder_mf.cpp)
 if(WIN32)
     target_link_libraries(band3 PRIVATE mfplat mfreadwrite mfuuid)
 endif()
+
+# FFmpeg, which decodes music videos (src/Video/video_decoder_ffmpeg.cpp)
+include(cmake/ffmpeg.cmake)
+band3_setup_ffmpeg(band3)
 
 # MIDI input for MIDI drum kits (src/Input/midi_drums_driver.cpp)
 include(cmake/rtmidi.cmake)

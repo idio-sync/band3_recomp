@@ -1,12 +1,13 @@
-// Media Foundation's source reader: decodes whatever Windows has codecs for
-// (H.264 and HEVC in .mp4/.mov/.mkv out of the box; VP9 and AV1 with their
-// Store extensions) and converts to RGB32 itself, so each video's own colour
-// matrix (BT.709 for HD) is honoured before picture_convert.h turns it into
-// the movie planes' BT.601.
+// Media Foundation's source reader, the decoder when FFmpeg's isn't there:
+// decodes whatever Windows has codecs for (H.264 out of the box; HEVC, VP9 and
+// AV1 with their Store extensions) and converts to RGB32 itself, so each
+// video's own colour matrix (BT.709 for HD) is honoured before
+// picture_convert.h turns it into the movie planes' BT.601.
 
 #ifdef _WIN32
 
 #include "src/Video/video_decoder.h"
+#include "src/Video/video_decoders.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -150,7 +151,7 @@ private:
 
 }
 
-bool StartVideoThread() {
+bool StartMfThread() {
     if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) return false;
     if (FAILED(MFStartup(MF_VERSION, MFSTARTUP_LITE))) {
         CoUninitialize();
@@ -159,12 +160,13 @@ bool StartVideoThread() {
     return true;
 }
 
-void EndVideoThread() {
+void EndMfThread() {
     MFShutdown();
     CoUninitialize();
 }
 
-std::unique_ptr<VideoDecoder> OpenVideo(const std::filesystem::path& path, std::string& error) {
+std::unique_ptr<VideoDecoder> OpenMfVideo(const std::filesystem::path& path,
+                                          std::string& error) {
     ComPtr<IMFAttributes> attributes;
     HRESULT hr = MFCreateAttributes(&attributes, 1);
     if (FAILED(hr)) {

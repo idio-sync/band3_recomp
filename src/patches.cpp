@@ -277,22 +277,31 @@ static void SetVenueAndReport(PPCContext& ctx, uint8_t* base) {
 extern "C" REX_FUNC(MetaPerformer__SetVenue)
 {
     std::string forced = band3::settings::ForcedVenue();
+    // drawn as it is, unless the black background below makes it a black one
+    band3::video::SetBlackVenue(false);
 
     if (forced.empty() || forced == "false") {
         // RB3E's black background modifier: venue "none", the track over black;
         // a forced venue still wins, as on RB3E
         const bool black = band3::modifiers::Active(ctx, base, "mod_black_background");
-        if (black) {
-            if (const uint32_t none = band3::modifiers::Intern(ctx, base, "none")) {
-                REXLOG_INFO("Black background modifier: no venue");
-                ctx.r4.u64 = none;
+        if (black && REXCVAR_GET(black_background_lights)) {
+            // not "none", which has no lights: a video venue drawn black with
+            // no band (src/Hooks/music_video.cpp), whose lights go on
+            REXLOG_INFO("Black background modifier: a video venue drawn black, for its lights");
+            band3::video::SetBlackVenue(true);
+        } else {
+            if (black) {
+                if (const uint32_t none = band3::modifiers::Intern(ctx, base, "none")) {
+                    REXLOG_INFO("Black background modifier: no venue");
+                    ctx.r4.u64 = none;
+                }
             }
-        }
-        // a song with a music video: a video venue, picked as forced_venue
-        // video picks one
-        if (!VideoVenueForSong(ctx, base, black)) {
-            SetVenueAndReport(ctx, base);
-            return;
+            // a song with a music video: a video venue, picked as forced_venue
+            // video picks one
+            if (!VideoVenueForSong(ctx, base, black)) {
+                SetVenueAndReport(ctx, base);
+                return;
+            }
         }
         forced = "video";
     }

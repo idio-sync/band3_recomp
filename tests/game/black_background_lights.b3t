@@ -1,0 +1,152 @@
+# Rock Band 3 Deluxe's Black Background modifier with black_background_lights
+# on: the song plays in a video venue drawn black with no band, instead of in
+# no venue, and the venue's lights still reach the Stage Kit. Starts where
+# boot.b3t leaves Deluxe (on a fresh profile), with the pretend Stage Kit:
+#   python tools/band3ctl.py launch --fresh -- --stagekit_fake=true --black_background_lights=true
+#   python tools/band3ctl.py run tests/game/boot.b3t
+#   python tools/band3ctl.py run tests/game/black_background_lights.b3t
+#   python tools/band3ctl.py lights
+# The modifier is turned on from a song's pause menu (Options, Modifiers, 32nd
+# in Deluxe's list), and applies from the next venue, so the song is played
+# again. black-background shows only the highway over black; the log says
+# "Black background modifier: a video venue drawn black, for its lights", and
+# the last `lights` lists the commands the kit was sent in the last 10 s.
+
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+set autoplay true
+set forced_venue false
+# Play Now, Quickplay, Choose Songs, 20th Century Boy, Guitar, Expert
+press green
+sleep 1s
+press green
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+press down
+press down
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+# presses in a song's first seconds are dropped
+sleep 8s
+press start
+sleep 1500ms
+# Options, the fourth
+press down
+sleep 400ms
+press down
+sleep 400ms
+press down
+sleep 400ms
+press green
+sleep 1500ms
+# Modifiers, the sixth
+press down
+sleep 400ms
+press down
+sleep 400ms
+press down
+sleep 400ms
+press down
+sleep 400ms
+press down
+sleep 400ms
+press green
+sleep 1500ms
+# Black Background, the 32nd: 31 down
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 350ms
+press down
+sleep 500ms
+screenshot native black-background-modifier
+press green
+sleep 1500ms
+# back to the pause menu, then Back to Music Library and yes
+press red
+sleep 1s
+press red
+sleep 1s
+press down
+sleep 400ms
+press green
+sleep 800ms
+press green until screen=song_select_screen timeout=30s
+sleep 1500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+sleep 22s
+screenshot native black-background
+lights
+sleep 10s
+screenshot native black-background-later

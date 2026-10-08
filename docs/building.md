@@ -11,8 +11,13 @@
   Band 3 Deluxe's patched XEX.
 - cmake, ninja and clang. On Windows, also Visual Studio with "Desktop development with
   C++"; on Linux, `sudo apt install build-essential git cmake ninja-build clang
-  libasound2-dev libcurl4-openssl-dev` (ALSA for MIDI drum kits, libcurl for
-  [RhythmVerse](integrations.md#rhythmverse); band3 builds without them, less those).
+  libasound2-dev libcurl4-openssl-dev pkg-config libavformat-dev libavcodec-dev
+  libavutil-dev libswscale-dev` (ALSA for MIDI drum kits, libcurl for
+  [RhythmVerse](integrations.md#rhythmverse), FFmpeg for
+  [music videos](settings.md#music-videos); band3 builds without them, less those).
+  On Windows the build downloads FFmpeg's DLLs for music videos (an LGPL build from
+  BtbN/FFmpeg-Builds, pinned in `cmake/ffmpeg.cmake`); `-DBAND3_FFMPEG_ROOT=<folder>`
+  points it at one already downloaded, and `-DBAND3_FFMPEG=OFF` leaves FFmpeg out.
   band3 uses `std::format` and `std::byteswap`, so Linux needs GCC 13's libstdc++ or
   later, which clang builds against too (Ubuntu 24.04 has it).
 

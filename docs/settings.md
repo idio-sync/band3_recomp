@@ -281,6 +281,8 @@ RB3Enhanced's.
 
 ## Music videos
 
+<img src="images/music-video.jpg" alt="No One Knows played with Queens of the Stone Age's music video behind the highway, the band hidden: the video's own band in place of the venue" width="640">
+
 With `music_videos` on (the default), a song's own music video plays in the video venues in
 place of their background clips: behind the band and under the venue's colour filters, in
 time with the song, standing still while it's paused and following it when it restarts or
@@ -297,6 +299,11 @@ Video venue for songs with a video); Off leaves the venue to the game. The log s
 as does the Black Background modifier; `forced_venue = video` (the Game tab's Forced venue,
 Video venue) puts every song in a video venue, with a video or not.
 
+With `music_video_hide_band` on (the default; the Game tab's Hide the band during music videos) the band
+isn't drawn while a video plays, so only the video shows behind the highways. The band
+still plays along unseen: the cameras and the venue's lights (and
+[Stage Kits](integrations.md#stage-kit-lights)) go on as before.
+
 The video starts with the song. `<shortname>.ini` beside it with Clone Hero's
 `video_start_time = <milliseconds>` (as in a chart's `song.ini`) starts it that far in at the
 song's start; a negative one starts it that far into the song. The screen is black before the
@@ -304,12 +311,16 @@ video starts, and its last frame stays after it ends. `music_video_fit` keeps a 
 shape isn't 16:9 whole with black bars (`fit`), fills the screen and cuts its edges off
 (`fill`), or stretches it. Its sound isn't played.
 
-Videos are decoded by Windows (Media Foundation), on Windows only for now: `.mp4`, `.m4v`,
-`.mov`, `.mkv`, `.webm`, `.avi` or `.wmv`, in a codec Windows has. H.264 works everywhere
-but Windows N editions (which need the Media Feature Pack); HEVC, VP9 and AV1 need their
-Microsoft Store extensions. A video Windows can't decode is logged (`Music video ...`) and
-the venue keeps its own clips. Decoding takes a share of a CPU core of its own, about a
-fifth of one for a 1080p video, besides the decoder's.
+Videos are decoded by FFmpeg: `.mp4`, `.m4v`, `.mov`, `.mkv`, `.webm`, `.avi` or `.wmv`, in
+H.264, HEVC, VP9, AV1 or most other codecs, so what YouTube serves (VP9 or AV1 in WebM, H.264
+in MP4) plays as it's downloaded. On Windows FFmpeg's DLLs come with band3 (beside
+band3.exe); without them, Windows decodes the videos itself (Media Foundation: H.264, and
+HEVC, VP9 and AV1 only with their Microsoft Store extensions). On Linux band3 uses the
+system's FFmpeg libraries (the `ffmpeg` package, or libavformat, libavcodec, libavutil and
+libswscale), of the version it was built with. A video that can't be decoded is logged
+(`Music video ...`) and the venue keeps its own clips. Turning a 1080p video into the venue's
+picture takes about a fifth of a CPU core, besides decoding it (an eighth of one for 1080p
+VP9).
 
 ## Loose files (mods)
 

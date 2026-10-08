@@ -28,6 +28,10 @@ using Clock = std::chrono::steady_clock;
 constexpr int kSampleRate = 48000;
 // ExternalMic::Init makes four
 constexpr int kSlots = 4;
+// but vocals have at most three singers, so only the first three are recorded
+// into (usb_mic_devices) and offered in the settings
+constexpr int kSingers = 3;
+static_assert(kSingers <= kSlots);
 // ExternalMic::dataReady's buffer, the most it hands AddAudio at once
 constexpr size_t kMaxChunk = 2048;
 // the most audio kept waiting for the game; older audio is dropped so the

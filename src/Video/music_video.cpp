@@ -3,6 +3,8 @@
 #include <rex/logging.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <filesystem>
 #include <mutex>
@@ -55,6 +57,7 @@ public:
         std::lock_guard lock(mutex_);
         // turned off, it stops at once; turned on, it starts with the next song
         if (!file_ || !REXCVAR_GET(music_videos)) return false;
+        last_frame_ = std::chrono::steady_clock::now().time_since_epoch().count();
         target_ = song_time + file_->start_time;
         sizes_ = sizes;
         fit_ = ParseFit(REXCVAR_GET(music_video_fit));
@@ -70,6 +73,14 @@ public:
             out = std::move(planes);
         }
         return true;
+    }
+
+    bool Showing() const {
+        const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto half_second = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                     std::chrono::milliseconds(500))
+                                     .count();
+        return now - last_frame_.load() < half_second;
     }
 
 private:
@@ -119,7 +130,9 @@ private:
     // the decoder's thread: opens each song's video, then reads it ahead of
     // the song's time, seeking when that jumps
     void Run() {
-        const bool can_decode = StartVideoThread();
+        std::string decode_error;
+        const bool can_decode = StartVideoThread(decode_error);
+        if (!can_decode) REXLOG_WARN("Music videos can't be decoded: {}", decode_error);
         std::unique_ptr<VideoDecoder> decoder;
         RgbFrame frame;
         uint64_t song = 0;
@@ -142,7 +155,7 @@ private:
                     lock.lock();
                     continue;
                 }
-                std::string error = "this platform can't decode video";
+                std::string error = decode_error;
                 std::unique_ptr<VideoDecoder> opened =
                     can_decode ? OpenVideo(*path, error) : nullptr;
                 if (!opened) REXLOG_WARN("Music video {}: {}", path->string(), error);
@@ -207,6 +220,8 @@ private:
 
     std::mutex mutex_;
     std::condition_variable wake_;
+    // when Frame last gave a frame (steady_clock ticks), for Showing
+    std::atomic<std::chrono::steady_clock::rep> last_frame_{0};
     bool started_ = false;
 
     // the game's side: the song, its video, where the song is
@@ -241,6 +256,15 @@ Player& ThePlayer() {
 }
 
 bool MusicVideosOn() { return REXCVAR_GET(music_videos); }
+
+bool MusicVideoShowing() { return ThePlayer().Showing(); }
+
+namespace {
+std::atomic<bool> g_black_venue{false};
+}
+
+void SetBlackVenue(bool black) { g_black_venue = black; }
+bool BlackVenue() { return g_black_venue; }
 
 bool HasMusicVideo(std::string_view shortname) {
     return FindVideo(VideoFolders(), shortname).has_value();

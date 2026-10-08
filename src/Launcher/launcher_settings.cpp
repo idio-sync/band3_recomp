@@ -193,6 +193,8 @@ constexpr Setting kSettings[] = {
     {.cvar = "music_video_venue_chance", .tab = kGame, .section = "Game",
      .label = "Video venue for songs with a video", .widget = kCombo,
      .choices = kVideoVenueChances},
+    {.cvar = "music_video_hide_band", .tab = kGame, .section = "Game",
+     .label = "Hide the band during music videos", .widget = kCheckbox},
     {.cvar = "music_videos_folder", .tab = kGame, .section = "Game",
      .label = "Music videos folder", .widget = kPath},
     {.cvar = "music_video_fit", .tab = kGame, .section = "Game", .label = "Music video shape",
@@ -381,6 +383,8 @@ constexpr Setting kSettings[] = {
      .label = "Stage Kits plugged in by USB", .widget = kCheckbox},
     {.cvar = "pico_discovery", .tab = kLights, .section = "Stage Kit lights",
      .label = "Find wireless Stage Kits (Pico W)", .widget = kCheckbox},
+    {.cvar = "black_background_lights", .tab = kLights, .section = "Stage Kit lights",
+     .label = "Keep the lights on a black background", .widget = kCheckbox},
 
     {.cvar = "steam_deck_defaults", .tab = kSteamDeck, .section = "Steam Deck",
      .label = "Use the Steam Deck settings", .widget = kCheckbox},

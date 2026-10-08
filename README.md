@@ -27,8 +27,8 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Type on the song list to search it, with a Rock Band 3 Deluxe that has keyboard search
 - Runs at the display's refresh rate (`frame_cap`)
 - Forced venue, song speed and highway speed
-- Music videos: a song's own video plays as the video venues' background, in time with the
-  song (Windows)
+- Music videos: a song's own video (YouTube's VP9 and AV1 WebM, MP4 and more, through
+  FFmpeg) plays as the video venues' background, in time with the song
 - Steam Deck defaults: fullscreen, letterboxed, vsync
 
 **Instruments**

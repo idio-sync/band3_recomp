@@ -31,6 +31,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # FFmpeg, for video_decoder_test.cpp's clips (Windows downloads its own)
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libavformat-dev libavcodec-dev libavutil-dev libswscale-dev
       - name: Configure
         run: cmake -S tests -B out/tests -DCMAKE_BUILD_TYPE=Release
       - name: Build
@@ -83,7 +89,7 @@ jobs:
         # ALSA is RtMidi's backend for MIDI drum kits; libcurl is web_client's
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang libstdc++-14-dev libxcb1-dev libx11-dev libwayland-dev libasound2-dev libcurl4-openssl-dev
+          sudo apt-get install -y ninja-build clang libstdc++-14-dev libxcb1-dev libx11-dev libwayland-dev libasound2-dev libcurl4-openssl-dev pkg-config libavformat-dev libavcodec-dev libavutil-dev libswscale-dev
 
       - name: Install Ninja
         if: runner.os == 'Windows'
