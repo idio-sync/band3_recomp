@@ -59,17 +59,29 @@ enum class Endpoint {
     kKaraokeModel,  // /karaoke/model.js  its timing and layout logic
     kLyrics,        // /lyrics?shortname=  a song's lyrics as JSON (lyrics.h)
     kLiveEvents,    // /live/events     server-sent events: the game's state and song clock
+    // RB3's own art, from the player's game files (milo.h)
+    kGameTexture,   // /game_asset/texture?path=  a standalone texture as a PNG
+    kGameFont,      // /game_asset/font?name=     a font's metrics as JSON
+    kGameFontPng,   // /game_asset/font.png?name=  its texture as a PNG
 };
 
 struct Route {
     Endpoint endpoint = Endpoint::kNotFound;
     int32_t song_id = 0;   // kSong
-    // kJump's, kAlbumArt's and kLyrics' shortname, kExecute's script, decoded
+    // kJump's, kAlbumArt's and kLyrics' shortname, kExecute's script, the
+    // game assets' path or name, decoded
     std::string argument;
 };
 
 // RB3E matches the decoded target, so /jump?shortname=a%26b jumps to "a&b"
 Route MatchRoute(std::string_view target);
+
+// /game_asset/texture's paths: a .png_xbox or .bmp_xbox under ui/ or dx/,
+// nothing that climbs out (..), no backslashes, at most 255 characters
+bool AllowedTexturePath(std::string_view path);
+// /game_asset/font's names, a file in ui/resource/fonts/gen/: lowercase
+// letters, digits, _ ( ) and -, at most 64 characters
+bool AllowedFontName(std::string_view name);
 
 // one song, as /song_<id> and /list_songs report it
 struct SongInfo {

@@ -1,5 +1,6 @@
 #include "http_request.h"
 
+#include <algorithm>
 #include <charconv>
 
 namespace band3::http {
@@ -212,8 +213,32 @@ Route MatchRoute(std::string_view target) {
     } else if (path.starts_with("/lyrics?shortname=")) {
         route.endpoint = Endpoint::kLyrics;
         route.argument = path.substr(18);
+    } else if (path.starts_with("/game_asset/texture?path=")) {
+        route.endpoint = Endpoint::kGameTexture;
+        route.argument = path.substr(25);
+    } else if (path.starts_with("/game_asset/font?name=")) {
+        route.endpoint = Endpoint::kGameFont;
+        route.argument = path.substr(22);
+    } else if (path.starts_with("/game_asset/font.png?name=")) {
+        route.endpoint = Endpoint::kGameFontPng;
+        route.argument = path.substr(26);
     }
     return route;
+}
+
+bool AllowedTexturePath(std::string_view path) {
+    if (path.empty() || path.size() > 255) return false;
+    if (!path.starts_with("ui/") && !path.starts_with("dx/")) return false;
+    if (!path.ends_with(".png_xbox") && !path.ends_with(".bmp_xbox")) return false;
+    return path.find("..") == std::string_view::npos && path.find('\\') == std::string_view::npos;
+}
+
+bool AllowedFontName(std::string_view name) {
+    if (name.empty() || name.size() > 64) return false;
+    return std::ranges::all_of(name, [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '(' ||
+               c == ')' || c == '-';
+    });
 }
 
 std::string FormatSong(const SongInfo& song, bool section) {

@@ -73,6 +73,44 @@ TEST_CASE("targets pick the live pages' endpoints") {
     CHECK(MatchRoute("/lyrics").endpoint == Endpoint::kNotFound);
 }
 
+TEST_CASE("targets pick the game assets' endpoints") {
+    const Route texture = MatchRoute("/game_asset/texture?path=ui%2Fimage%2Fgen%2Fx_keep.png_xbox");
+    CHECK(texture.endpoint == Endpoint::kGameTexture);
+    CHECK(texture.argument == "ui/image/gen/x_keep.png_xbox");
+    const Route font = MatchRoute("/game_asset/font?name=pentatonic");
+    CHECK(font.endpoint == Endpoint::kGameFont);
+    CHECK(font.argument == "pentatonic");
+    const Route png = MatchRoute("/game_asset/font.png?name=pentatonic_bold");
+    CHECK(png.endpoint == Endpoint::kGameFontPng);
+    CHECK(png.argument == "pentatonic_bold");
+    CHECK(MatchRoute("/game_asset/texture").endpoint == Endpoint::kNotFound);
+    CHECK(MatchRoute("/game_asset/font").endpoint == Endpoint::kNotFound);
+}
+
+TEST_CASE("only standalone textures under ui/ and dx/ are served") {
+    CHECK(AllowedTexturePath("ui/image/gen/a.png_xbox"));
+    CHECK(AllowedTexturePath("dx/custom_textures/x/gen/rock band 3.png_xbox"));
+    CHECK(AllowedTexturePath("ui/a.bmp_xbox"));
+    CHECK(!AllowedTexturePath("songs/x/gen/x.png_xbox"));
+    CHECK(!AllowedTexturePath("ui/../songs/a.png_xbox"));
+    CHECK(!AllowedTexturePath("ui\\a.png_xbox"));
+    CHECK(!AllowedTexturePath("/ui/a.png_xbox"));
+    CHECK(!AllowedTexturePath("ui/a.milo_xbox"));
+    CHECK(!AllowedTexturePath("ui/a.png"));
+    CHECK(!AllowedTexturePath(""));
+    CHECK(!AllowedTexturePath("ui/" + std::string(300, 'a') + ".png_xbox"));
+}
+
+TEST_CASE("only plain font names are served") {
+    CHECK(AllowedFontName("pentatonic"));
+    CHECK(AllowedFontName("rockband-outline(bld37)"));
+    CHECK(!AllowedFontName("../x"));
+    CHECK(!AllowedFontName("a/b"));
+    CHECK(!AllowedFontName("A"));
+    CHECK(!AllowedFontName(""));
+    CHECK(!AllowedFontName(std::string(65, 'a')));
+}
+
 TEST_CASE("a request's Content-Type and Content-Length are read, whatever their case") {
     const auto post = ParseRequest(
         "POST /rv/download HTTP/1.1\r\nHost: x\r\ncontent-TYPE:  application/json \r\n"
