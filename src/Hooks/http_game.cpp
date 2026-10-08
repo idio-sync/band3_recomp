@@ -39,6 +39,7 @@ constexpr size_t kMaxShortname = 255;
 // RB3's album art is 43 KB (256x256 DXT1 and its mipmaps); this leaves room
 // for a custom song's 1024x1024 DXT5
 constexpr size_t kMaxAlbumArt = 2 * 1024 * 1024;
+constexpr size_t kMaxMidi = 4 * 1024 * 1024;
 
 uint32_t Load32(uint8_t* base, uint32_t addr) {
     return *rex::memory::GuestPtr<rex::be<uint32_t>*>(base, addr);
@@ -134,6 +135,16 @@ std::optional<std::string> AlbumArtFile(PPCContext& ctx, uint8_t* base,
     const std::string file = XboxBitmapPath(path);
     REXLOG_DEBUG("Web server: album art for {} is {}", shortname, file);
     return files::ReadAll(ctx, base, file, kMaxAlbumArt);
+}
+
+std::optional<std::string> MidiFile(PPCContext& ctx, uint8_t* base, const std::string& shortname) {
+    if (shortname.empty() || shortname.size() > kMaxShortname) return std::nullopt;
+    const uint32_t symbol = band3::Symbol(ctx, base, shortname.c_str()).value(base);
+    if (!symbol) return std::nullopt;
+    const std::string path = songs::MidiPath(ctx, base, symbol);
+    if (path.empty()) return std::nullopt;
+    REXLOG_DEBUG("Web server: the MIDI file for {} is {}", shortname, path);
+    return files::ReadAll(ctx, base, path, kMaxMidi);
 }
 
 void ExecuteScript(PPCContext& ctx, uint8_t* base, const std::string& script) {

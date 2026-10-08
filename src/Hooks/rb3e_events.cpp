@@ -37,6 +37,7 @@ REX_EXTERN(BandSongMgr__GetSongIDFromShortname);
 REX_EXTERN(BandSongMgr__GetShortNameFromSongID);
 REX_EXTERN(BandSongMgr__Data);
 REX_EXTERN(BandUserMgr__GetUserFromSlot);
+REX_EXTERN(MetaPerformer__IsNowUsingVocalHarmony);
 
 namespace {
 
@@ -216,6 +217,18 @@ band3::events::BandInfo ReadBandInfo(const PPCContext& ctx, uint8_t* base) {
     return info;
 }
 
+// whether the band's vocalist sings harmonies, as MetaPerformer has it once
+// the parts are chosen
+bool ReadHarmonies(const PPCContext& ctx, uint8_t* base) {
+    const uint32_t meta_performer = Load32(base, kTheMetaPerformerPtr);
+    if (!meta_performer) return false;
+    // MetaPerformer::IsNowUsingVocalHarmony(MetaPerformer*) -> bool
+    PPCContext call = CallContext(ctx, 0x100);
+    call.r3.u64 = meta_performer;
+    MetaPerformer__IsNowUsingVocalHarmony(call, base);
+    return (call.r3.u32 & 0xFF) != 0;
+}
+
 }
 
 // JoypadStageKitSetRaw(left, right), RB3E's StageKit::SetState: left = LED pattern, right =
@@ -242,6 +255,7 @@ extern "C" REX_FUNC(Game____ct)
         if (record) {
             RecordSong(song);
             RecordBand(band);
+            band3::test::GameState::Get().SetHarmonies(ReadHarmonies(ctx, base));
             band3::test::GameState::Get().SetInGame(true);
         }
 

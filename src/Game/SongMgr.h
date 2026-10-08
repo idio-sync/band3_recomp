@@ -55,4 +55,8 @@ std::optional<Details> GetDetails(PPCContext& ctx, uint8_t* base, int32_t id);
 // has none or no song has this shortname
 std::string AlbumArtPath(PPCContext& ctx, uint8_t* base, uint32_t symbol);
 
+// the song's MIDI file, as BandSongMgr::MidiFile gives it to the song
+// parser; empty when no song has this shortname
+std::string MidiPath(PPCContext& ctx, uint8_t* base, uint32_t symbol);
+
 }

@@ -20,6 +20,7 @@ REX_EXTERN(SongMgr__GetAlbumArtPath);
 REX_EXTERN(BandSongMetadata__Rank);
 REX_EXTERN(SongMgr__RankTier);
 REX_EXTERN(BandSongMgr__GetNumVocalParts);
+REX_EXTERN(BandSongMgr__MidiFile);
 REX_EXTERN(Locale__Localize);
 
 namespace band3::songs {
@@ -227,6 +228,17 @@ std::string AlbumArtPath(PPCContext& ctx, uint8_t* base, uint32_t symbol) {
     call.r3.u64 = song_mgr;
     call.r4.u64 = symbol;
     SongMgr__GetAlbumArtPath(call, base);
+    const char* path = GuestStr(base, call.r3.u32);
+    return path ? std::string(path) : std::string();
+}
+
+std::string MidiPath(PPCContext& ctx, uint8_t* base, uint32_t symbol) {
+    if (!IdFromShortname(ctx, base, symbol)) return {};
+    // BandSongMgr::MidiFile(BandSongMgr*, Symbol) -> const char*
+    PPCContext call = CallContext(ctx, 0x400);
+    call.r3.u64 = kTheSongMgr;
+    call.r4.u64 = symbol;
+    BandSongMgr__MidiFile(call, base);
     const char* path = GuestStr(base, call.r3.u32);
     return path ? std::string(path) : std::string();
 }

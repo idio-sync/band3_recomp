@@ -37,6 +37,10 @@ JumpResult JumpToSong(PPCContext& ctx, uint8_t* base, const std::string& shortna
 std::optional<std::string> AlbumArtFile(PPCContext& ctx, uint8_t* base,
                                         const std::string& shortname);
 
+// the song's MIDI file as the game reads it, for /lyrics (lyrics.h);
+// nullopt when no song has this shortname or the game can't read it
+std::optional<std::string> MidiFile(PPCContext& ctx, uint8_t* base, const std::string& shortname);
+
 // runs DTA through RockCentralGateway::ExecuteConfig, as RB3E's /execute does
 void ExecuteScript(PPCContext& ctx, uint8_t* base, const std::string& script);
 
