@@ -162,3 +162,160 @@ TEST_CASE("of two tempos at one tick the later one counts") {
     REQUIRE(midi);
     CHECK(TempoMap(*midi).Ms(480) == doctest::Approx(250));
 }
+
+TEST_CASE("a lyric's markers are read off it") {
+    CHECK(Clean("Hel-").text == "Hel");
+    CHECK(Clean("Hel-").join);
+    CHECK(!Clean("lo").join);
+    CHECK(Clean("world#").text == "world");
+    CHECK(Clean("world#").spoken);
+    CHECK(Clean("talk^").spoken);
+    CHECK(Clean("mon-#").join);
+    CHECK(Clean("mon-#").spoken);
+    CHECK(Clean("$hid").hidden);
+    CHECK(Clean("hid$").hidden);
+    CHECK(Clean("+").slide);
+    CHECK(Clean("+-").slide);
+    CHECK(Clean("+").text.empty());
+    CHECK(Clean("re=").text == "re-");
+    CHECK(Clean("re=").join);
+    CHECK(Clean("word%").text == "word");
+    CHECK(Clean("  spaced ").text == "spaced");
+    // § in UTF-8 and in Latin-1
+    CHECK(Clean("a\xC2\xA7" "b").text == "a\xE2\x80\xBF" "b");
+    CHECK(Clean("a\xA7" "b").text == "a\xE2\x80\xBF" "b");
+    // Latin-1 é becomes UTF-8
+    CHECK(Clean("caf\xE9").text == "caf\xC3\xA9");
+}
+
+TEST_CASE("a phrase's notes and lyrics make a line of syllables in milliseconds") {
+    // 120 bpm, 480 ticks a quarter: 480 ticks are 500 ms
+    const auto midi = ReadMidi(Smf(480, {Track().Name("tempo").Chunk(),
+                                         Track()
+                                             .Name("PART VOCALS")
+                                             .Note(480, 1440, 105)
+                                             .Note(480, 240, 60).Lyric(480, "Hel-")
+                                             .Note(720, 240, 62).Lyric(720, "lo")
+                                             .Note(960, 480, 64).Lyric(960, "world")
+                                             .Chunk()}));
+    REQUIRE(midi);
+    const auto parts = FromMidi(*midi);
+    REQUIRE(parts.size() == 1);
+    CHECK(parts[0].part == "lead");
+    REQUIRE(parts[0].lines.size() == 1);
+    const Line& line = parts[0].lines[0];
+    CHECK(line.start_ms == 500);
+    CHECK(line.end_ms == 2000);
+    REQUIRE(line.syllables.size() == 3);
+    CHECK(line.syllables[0].text == "Hel");
+    CHECK(line.syllables[0].join);
+    CHECK(line.syllables[0].start_ms == 500);
+    CHECK(line.syllables[0].end_ms == 750);
+    CHECK(line.syllables[1].text == "lo");
+    CHECK(!line.syllables[1].join);
+    CHECK(line.syllables[2].start_ms == 1000);
+    CHECK(line.syllables[2].end_ms == 1500);
+}
+
+TEST_CASE("a slide carries a syllable on, and hidden or stray syllables don't show") {
+    const auto midi = ReadMidi(Smf(480, {Track()
+                                             .Name("PART VOCALS")
+                                             .Note(0, 1920, 105)
+                                             .Note(0, 240, 60).Lyric(0, "Oh")
+                                             .Note(240, 240, 64).Lyric(240, "+")
+                                             .Note(480, 240, 60).Lyric(480, "$gone")
+                                             .Note(720, 240, 60).Lyric(720, "+")
+                                             .Note(960, 240, 60).Lyric(960, "yeah-")
+                                             // after the phrase: not shown
+                                             .Note(2400, 240, 60).Lyric(2400, "stray")
+                                             .Chunk()}));
+    REQUIRE(midi);
+    const auto parts = FromMidi(*midi);
+    REQUIRE(parts.size() == 1);
+    REQUIRE(parts[0].lines.size() == 1);
+    const auto& syllables = parts[0].lines[0].syllables;
+    REQUIRE(syllables.size() == 2);
+    CHECK(syllables[0].text == "Oh");
+    CHECK(syllables[0].end_ms == 500);  // to the slide's end
+    CHECK(syllables[1].text == "yeah");
+    // a line's last syllable joins nothing
+    CHECK(!syllables[1].join);
+}
+
+TEST_CASE("each phrase is a line, and phrases without syllables are left out") {
+    const auto midi = ReadMidi(Smf(480, {Track()
+                                             .Name("PART VOCALS")
+                                             .Note(0, 480, 105)
+                                             .Note(0, 240, 60).Lyric(0, "one")
+                                             .Note(960, 480, 105)  // nothing sung
+                                             .Note(1920, 480, 105)
+                                             .Note(1920, 240, 60).Lyric(1920, "two")
+                                             // 106 over the same span merges with it
+                                             .Note(1920, 480, 106)
+                                             .Chunk()}));
+    REQUIRE(midi);
+    const auto parts = FromMidi(*midi);
+    REQUIRE(parts.size() == 1);
+    REQUIRE(parts[0].lines.size() == 2);
+    CHECK(parts[0].lines[0].syllables.at(0).text == "one");
+    CHECK(parts[0].lines[1].syllables.at(0).text == "two");
+}
+
+TEST_CASE("text events stand in for lyrics where a track has none, minus its [markers]") {
+    const auto midi = ReadMidi(Smf(480, {Track()
+                                             .Name("PART VOCALS")
+                                             .Text(0, "[idle]")
+                                             .Note(0, 960, 105)
+                                             .Note(0, 240, 60).Text(0, "old")
+                                             .Note(240, 240, 60).Text(240, "style")
+                                             .Chunk()}));
+    REQUIRE(midi);
+    const auto parts = FromMidi(*midi);
+    REQUIRE(parts.size() == 1);
+    const auto& syllables = parts[0].lines.at(0).syllables;
+    REQUIRE(syllables.size() == 2);
+    CHECK(syllables[0].text == "old");
+}
+
+TEST_CASE("harmony parts take their phrase markers as Rock Band 3 does") {
+    // HARM1 has its markers; HARM2 has none, so HARM1's stand in, and HARM3
+    // follows HARM2
+    const auto midi = ReadMidi(Smf(480, {Track()
+                                             .Name("HARM1")
+                                             .Note(0, 960, 105)
+                                             .Note(0, 240, 60).Lyric(0, "high")
+                                             .Chunk(),
+                                         Track()
+                                             .Name("HARM2")
+                                             .Note(0, 240, 55).Lyric(0, "mid")
+                                             .Chunk(),
+                                         Track()
+                                             .Name("HARM3")
+                                             .Note(240, 240, 50).Lyric(240, "low")
+                                             .Chunk()}));
+    REQUIRE(midi);
+    const auto parts = FromMidi(*midi);
+    REQUIRE(parts.size() == 3);
+    CHECK(parts[0].part == "harm1");
+    CHECK(parts[1].part == "harm2");
+    CHECK(parts[1].lines.at(0).syllables.at(0).text == "mid");
+    CHECK(parts[2].part == "harm3");
+    CHECK(parts[2].lines.at(0).syllables.at(0).text == "low");
+}
+
+TEST_CASE("a song without vocal tracks has no parts") {
+    const auto midi = ReadMidi(Smf(480, {Track().Name("PART GUITAR").Note(0, 240, 96).Chunk()}));
+    REQUIRE(midi);
+    CHECK(FromMidi(*midi).empty());
+}
+
+TEST_CASE("the lyrics' JSON lists parts, lines and syllables") {
+    Part part{"lead", {Line{500, 2000, {Syllable{500, 750, "Hel", true, false},
+                                        Syllable{750, 1000, "\"lo\"", false, true}}}}};
+    CHECK(FormatJson("song&co", {part}) ==
+          "{\"shortname\":\"song&co\",\"parts\":[{\"part\":\"lead\",\"lines\":[{\"start_ms\":500,"
+          "\"end_ms\":2000,\"syllables\":[{\"start_ms\":500,\"end_ms\":750,\"text\":\"Hel\","
+          "\"join\":true,\"spoken\":false},{\"start_ms\":750,\"end_ms\":1000,"
+          "\"text\":\"\\\"lo\\\"\",\"join\":false,\"spoken\":true}]}]}]}");
+    CHECK(FormatJson("x", {}) == "{\"shortname\":\"x\",\"parts\":[]}");
+}

@@ -54,4 +54,52 @@ private:
     std::vector<Segment> segments_;  // by tick, the first at 0
 };
 
+// One sung syllable, in the song's milliseconds
+struct Syllable {
+    int32_t start_ms = 0;
+    int32_t end_ms = 0;
+    std::string text;     // UTF-8, the authoring markers gone
+    bool join = false;    // runs into the next syllable with no space
+    bool spoken = false;  // spoken or talky (# or ^): no pitch
+};
+
+// one phrase: what the page shows as a line
+struct Line {
+    int32_t start_ms = 0;
+    int32_t end_ms = 0;
+    std::vector<Syllable> syllables;
+};
+
+struct Part {
+    std::string part;  // "lead" (PART VOCALS), "harm1", "harm2", "harm3"
+    std::vector<Line> lines;
+};
+
+// A lyric's text with Rock Band's markers read off it: a trailing - joins the
+// next syllable, = joins it showing a hyphen, # and ^ mark it spoken, $
+// hides it (a harmony's copy of another part's word), % is a range marker, +
+// alone carries the last syllable onto another note (a slide), and §
+// joins two syllables sung on one note (shown as a tie, ‿). Latin-1 text
+// becomes UTF-8.
+struct CleanText {
+    std::string text;
+    bool join = false;
+    bool spoken = false;
+    bool hidden = false;
+    bool slide = false;
+};
+CleanText Clean(std::string_view raw);
+
+// The song's vocal parts that have lines: lead, then harm1 to harm3. A
+// syllable is a pitched note (36 to 84) with a lyric at its start; lines are
+// phrase markers (notes 105 and 106, overlapping ones merged). HARM2's
+// markers are HARM3's too, and HARM1's stand in where HARM2 has none.
+// Syllables outside every phrase aren't shown.
+std::vector<Part> FromMidi(const MidiFile& midi);
+
+// what /lyrics?shortname= replies:
+// {"shortname":..., "parts":[{"part":..., "lines":[{"start_ms":..., "end_ms":...,
+//   "syllables":[{"start_ms":..., "end_ms":..., "text":..., "join":..., "spoken":...}]}]}]}
+std::string FormatJson(std::string_view shortname, const std::vector<Part>& parts);
+
 }
