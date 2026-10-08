@@ -260,6 +260,9 @@ struct PresentStats {
     // that no paint showed
     uint64_t native_paints = 0;
     uint64_t shown = 0, repeats = 0, skipped = 0;
+    // per native paint, the game's time it moved on: its frame's Present less
+    // the paint before's (0 for a repeat; present_model.h's PaintLog)
+    std::vector<double> step_ms;
     // from the game's Present of each frame shown to the first paint showing it
     std::vector<double> latency_ms;
     // from the game's Present of each new frame the native renderer drew to

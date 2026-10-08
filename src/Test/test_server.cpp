@@ -534,6 +534,7 @@ public:
         out.shown = paints.log.shown;
         out.repeats = paints.log.repeats;
         out.skipped = paints.log.skipped;
+        out.step_ms = std::move(paints.log.step_ms);
         out.latency_ms = std::move(paints.log.latency_ms);
         out.publish_latency_ms = std::move(paints.log.publish_latency_ms);
         const input::UiRoundTripStats trips = input::GetUiRoundTripStats(reset);

@@ -347,6 +347,11 @@ struct PaintLog {
     uint64_t shown = 0, repeats = 0, skipped = 0;
     // game's Present to the first paint showing the frame
     std::vector<double> latency_ms;
+    // per paint after the first of a run, how far the game's Presents moved on
+    // since the paint before: the frame shown's Present less the previous
+    // paint's. Steady at the game's interval when every refresh shows the next
+    // frame; 0 for a repeat, twice that past a skip (judder)
+    std::vector<double> step_ms;
     // game's Present to Published, shown or not: the renderer's own latency,
     // visible even when the window doesn't paint (off every monitor)
     std::vector<double> publish_latency_ms;
@@ -368,11 +373,19 @@ class PaintRecorder {
             log_.interval_ms.push_back(double(now_ns - last_ns_) / 1e6);
         last_ns_ = now_ns;
         // each run of native paints from one source counts on its own
-        if (!native || source != source_) last_serial_ = 0;
+        if (!native || source != source_) {
+            last_serial_ = 0;
+            last_presented_ns_ = 0;
+        }
         source_ = source;
         if (!native) return;
         log_.native_paints++;
         if (!serial) return;
+        // a frame numbered over (serial back) or Presented earlier isn't a step
+        if (last_serial_ && serial >= last_serial_ && last_presented_ns_ && presented_ns &&
+            presented_ns >= last_presented_ns_ && log_.step_ms.size() < kMaxSamples)
+            log_.step_ms.push_back(double(presented_ns - last_presented_ns_) / 1e6);
+        last_presented_ns_ = presented_ns;
         if (serial == last_serial_) {
             log_.repeats++;
             return;
@@ -405,6 +418,7 @@ class PaintRecorder {
     int64_t last_ns_ = 0;
     int source_ = 0;
     uint64_t last_serial_ = 0;
+    int64_t last_presented_ns_ = 0;  // the frame last_serial_'s, 0 unknown
 };
 
 // For present_stats: a ring of when the newest `kept` DxRnd::Presents ended
