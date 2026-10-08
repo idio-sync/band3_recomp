@@ -349,5 +349,40 @@ class FakeUpdatesTest(unittest.TestCase):
         self.assertEqual(self.downloads.queue('x.1', update=True)[0], 409)
 
 
+class KaraokeTest(unittest.TestCase):
+    def test_the_page_and_its_model_come_out_of_the_header(self):
+        with open(web_preview.KARAOKE_PAGE, encoding='utf-8') as f:
+            header = f.read()
+        self.assertIn('<title>band3 karaoke</title>', web_preview.karaoke_page(header))
+        self.assertIn('var KaraokeModel', web_preview.karaoke_model(header))
+        self.assertNotIn('FONT_BASE64', header)
+
+    def test_fake_live_goes_from_up_next_to_singing_to_paused_to_just_played(self):
+        state, clock = web_preview.fake_live(1, 20000, 'lead')
+        self.assertTrue(state['in_game'])
+        self.assertIsNone(clock)                      # loading: up next
+        state, clock = web_preview.fake_live(6, 20000, 'lead')
+        self.assertEqual(clock, 2000)                 # 4 s of loading, then the song
+        self.assertFalse(state['paused'])
+        state, clock = web_preview.fake_live(13, 20000, 'lead')
+        self.assertTrue(state['paused'])              # paused 8 to 11 s into the song
+        self.assertEqual(clock, 8000)
+        state, clock = web_preview.fake_live(16, 20000, 'lead')
+        self.assertEqual(clock, 9000)                 # the pause doesn't count
+        state, clock = web_preview.fake_live(30, 20000, 'harmonies')
+        self.assertFalse(state['in_game'])            # just played
+        self.assertEqual(state['vocals'], 'harmonies')
+        self.assertEqual(state['song']['shortname'], 'sample')
+        self.assertEqual(web_preview.fake_live(40, 20000, 'lead')[0]['in_game'], True)  # again
+
+    def test_the_sample_lyrics_have_lead_and_harmonies(self):
+        parts = {p['part']: p for p in web_preview.SAMPLE_LYRICS['parts']}
+        self.assertEqual(set(parts), {'lead', 'harm1', 'harm2'})
+        for part in parts.values():
+            for line in part['lines']:
+                self.assertLessEqual(line['start_ms'], line['syllables'][0]['start_ms'])
+                self.assertFalse(line['syllables'][-1]['join'])
+
+
 if __name__ == '__main__':
     unittest.main()

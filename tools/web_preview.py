@@ -9,7 +9,11 @@ work without the game; it answers 409. /status makes up what the game is doing
 (--status), to work on the page's banner. The RhythmVerse tab searches
 RhythmVerse itself, but its downloads are made up: nothing is saved. So are its
 updates: two made-up songs, whatever Check for updates finds; and the Library
-tab's Duplicates, made up after a couple of seconds' "reading".
+tab's Duplicates, made up after a couple of seconds' "reading". /karaoke
+(src/Net/karaoke_page.h) follows a made-up show on /live/events, over and
+over: 4 s loading, the song with a 3 s pause, 6 s of results. Its lyrics are
+made up, or a song's own with --karaoke-song (through band3_lyrics, built with
+the unit tests); --vocals harmonies stacks the harmony parts.
 
 Usage:
   python tools/web_preview.py                 open http://127.0.0.1:21080/
@@ -23,7 +27,9 @@ import http.server
 import json
 import os
 import struct
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -34,6 +40,9 @@ import read_game_config
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAGE = os.path.join(REPO, 'src', 'Net', 'http_page.h')
+KARAOKE_PAGE = os.path.join(REPO, 'src', 'Net', 'karaoke_page.h')
+# tools/lyrics_dump, built with the unit tests (out\tests.cmd)
+LYRICS_TOOL = os.path.join(REPO, 'out', 'tests', 'Release', 'band3_lyrics.exe')
 GAME_DATA = os.path.join(REPO, 'assets')
 
 # Rock Band 3 Deluxe's changes to songs.dtb's entries (genres, years...), which
@@ -70,6 +79,64 @@ def tier(part, rank):
 def index_page(header):
     """kIndexPage's raw string out of http_page.h's text."""
     return header.split('R"html(', 1)[1].split(')html"', 1)[0]
+
+
+def karaoke_page(header):
+    """kKaraokePage's raw string out of karaoke_page.h's text."""
+    return header.split('kKaraokePage = R"html(', 1)[1].split(')html"', 1)[0]
+
+
+def karaoke_model(header):
+    """kKaraokeModel's raw string out of karaoke_page.h's text."""
+    return header.split('kKaraokeModel = R"js(', 1)[1].split(')js"', 1)[0]
+
+
+def _sample_line(start, words):
+    """One line of the sample: syllables 400 ms apart, a word's syllables
+    split on '-' and joined."""
+    syllables, t = [], start
+    for word in words.split():
+        pieces = word.split('-')
+        for i, piece in enumerate(pieces):
+            syllables.append({'start_ms': t, 'end_ms': t + 350, 'text': piece,
+                              'join': i < len(pieces) - 1, 'spoken': False})
+            t += 400
+    return {'start_ms': start, 'end_ms': t, 'syllables': syllables}
+
+
+# made-up lyrics for /karaoke without a song's MIDI file: lead and two
+# harmonies (4 s before the first line and 10.4 to 14 s count down; 8 to 11 s,
+# fake_live's pause, is in the second line)
+_SAMPLE = [(4000, 'This is band-three sing-ing a-long'), (7600, 'Ev-ery-bo-dy in the room'),
+           (14000, 'Wait for it the sec-ond verse'), (17400, 'Sing it loud and sing it true')]
+SAMPLE_LYRICS = {'shortname': 'sample', 'parts': [
+    {'part': 'lead', 'lines': [_sample_line(s, w) for s, w in _SAMPLE]},
+    {'part': 'harm1', 'lines': [_sample_line(s, w) for s, w in _SAMPLE]},
+    {'part': 'harm2', 'lines': [_sample_line(s + 200, 'Ooh ooh ah') for s, _ in _SAMPLE]},
+]}
+SAMPLE_LENGTH_MS = 22000
+
+
+def fake_live(seconds, length_ms, vocals, shortname='sample', title='Sample Song',
+              artist='band3'):
+    """What /live/events would say `seconds` into web_preview's made-up show,
+    as (state, song_ms or None): 4 s loading the song, the song with a 3 s pause
+    8 s in, then 6 s on the results, over again."""
+    cycle = 4 + 3 + length_ms / 1000 + 6
+    t = seconds % cycle
+    song = {'shortname': shortname, 'title': title, 'artist': artist, 'length_ms': length_ms}
+    state = {'screen': 'game_screen', 'in_game': True, 'paused': False, 'song': song,
+             'vocals': vocals}
+    if t < 4:
+        return state, None
+    played = t - 4
+    if 8 <= played < 11:
+        return dict(state, paused=True), 8000
+    if played >= 11:
+        played -= 3
+    if played * 1000 >= length_ms:
+        return dict(state, screen='coop_end_screen', in_game=False), None
+    return state, round(played * 1000)
 
 
 def xbox_bitmap_path(path):
@@ -581,9 +648,11 @@ def genre_names(game):
 
 
 class Preview:
-    def __init__(self, game, status='library'):
+    def __init__(self, game, status='library', karaoke_song=None, vocals='lead'):
         self.game = game
         self.status = status
+        self.karaoke_song = karaoke_song
+        self.vocals = vocals
         self.started = time.monotonic()
         def dtb(path):
             data = game.read(path)
@@ -629,6 +698,28 @@ class Preview:
                 image = decode_xbox_bitmap(data) if data else None
                 self.art[shortname] = png(*image) if image else None
             return self.art[shortname]
+
+    def lyrics(self, shortname):
+        """/lyrics' JSON for a song: the sample's, or band3_lyrics' from its MIDI file."""
+        if shortname == 'sample':
+            return json.dumps(SAMPLE_LYRICS).encode()
+        data = self.game.read(f'songs/{shortname}/{shortname}.mid')
+        if data is None or not os.path.isfile(LYRICS_TOOL):
+            return None
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, f'{shortname}.mid')
+            with open(path, 'wb') as f:
+                f.write(data)
+            done = subprocess.run([LYRICS_TOOL, path], capture_output=True)
+        return done.stdout if done.returncode == 0 else None
+
+    def live_show(self, seconds):
+        """fake_live for the --karaoke-song, or the sample."""
+        song = self.by_shortname.get(self.karaoke_song)
+        if not song:
+            return fake_live(seconds, SAMPLE_LENGTH_MS, self.vocals)
+        return fake_live(seconds, 60000, self.vocals, song['shortname'], song['title'],
+                         song['artist'])
 
 
 def handler(preview):
@@ -678,8 +769,46 @@ def handler(preview):
                 self.reply(200, 'application/json', json.dumps(report).encode())
             elif path == '/rv/updates':
                 self.reply(200, 'application/json', json.dumps(preview.updates.report()).encode())
+            elif path == '/karaoke' or path.startswith('/karaoke?'):
+                with open(KARAOKE_PAGE, encoding='utf-8') as f:
+                    self.reply(200, 'text/html; charset=utf-8', karaoke_page(f.read()).encode())
+            elif path == '/karaoke/model.js':
+                with open(KARAOKE_PAGE, encoding='utf-8') as f:
+                    self.reply(200, 'text/javascript; charset=utf-8',
+                               karaoke_model(f.read()).encode())
+            elif path.startswith('/lyrics?shortname='):
+                body = preview.lyrics(path[len('/lyrics?shortname='):])
+                if body:
+                    self.reply(200, 'application/json', body)
+                else:
+                    self.reply(404, text, b'No lyrics for that shortname')
+            elif path == '/live/events':
+                self.live_events()
             else:
                 self.reply(404, text, b'Not Found')
+
+        def live_events(self):
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            last = None
+            try:
+                self.wfile.write(b'retry: 2000\n\n')
+                while True:
+                    state, clock = preview.live_show(time.monotonic() - preview.started)
+                    out = ''
+                    if state != last:
+                        out += f'event: state\ndata: {json.dumps(state)}\n\n'
+                    if clock is not None and (state != last or not state['paused']):
+                        out += f'event: clock\ndata: {json.dumps({"song_ms": clock})}\n\n'
+                    last = state
+                    if out:
+                        self.wfile.write(out.encode())
+                        self.wfile.flush()
+                    time.sleep(0.25)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                return
 
         def do_POST(self):
             text = 'text/plain; charset=utf-8'
@@ -724,9 +853,14 @@ def main():
                     help='the game data root, holding gen/main_xbox.hdr (default: assets)')
     ap.add_argument('--status', choices=('menu', 'library', 'playing'), default='library',
                     help="what /status says the game is doing (default: the Music Library's open)")
+    ap.add_argument('--karaoke-song', help="a song's shortname for /karaoke's made-up show, its "
+                    "lyrics from its MIDI file through band3_lyrics (built with the unit "
+                    "tests); without it, made-up lyrics")
+    ap.add_argument('--vocals', choices=('none', 'lead', 'harmonies'), default='lead',
+                    help="what /karaoke's made-up band sings")
     args = ap.parse_args()
 
-    preview = Preview(GameData(args.game_data), args.status)
+    preview = Preview(GameData(args.game_data), args.status, args.karaoke_song, args.vocals)
     server = http.server.ThreadingHTTPServer((args.address, args.port), handler(preview))
     print(f'{len(preview.songs)} songs; open http://127.0.0.1:{args.port}/ (Ctrl+C stops it)',
           flush=True)

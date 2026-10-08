@@ -196,6 +196,15 @@ if(WIN32)
     target_link_libraries(band3_tests PRIVATE ws2_32)
 endif()
 
+# tools/lyrics_dump: a MIDI file's lyrics as /lyrics serves them, for checking
+# songs and for tools/web_preview.py
+add_executable(band3_lyrics
+    ${BAND3_ROOT}/tools/lyrics_dump/lyrics_dump.cpp
+    ${BAND3_ROOT}/src/Net/lyrics.cpp
+    ${BAND3_ROOT}/src/Net/http_request.cpp
+)
+target_include_directories(band3_lyrics PRIVATE ${BAND3_ROOT})
+
 if(MSVC)
     target_compile_options(band3_tests PRIVATE /W4)
 else()
