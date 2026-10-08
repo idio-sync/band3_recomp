@@ -133,7 +133,8 @@ struct PixelUniforms {
     // the shadow map's, the normal map's and the detail map's
     uint32_t tex_size[8][4];
     // x: kPremultiply; y: the maps, by tex_layer's order, that are DXN kept
-    // as BC5 (mesh.hlsl's DxnTexel)
+    // as BC5; z and w: how the maps kept as R8 expand, a byte each by
+    // tex_layer's order, 0 for the rest (mesh.hlsl's MapTexel)
     uint32_t flags[4];
     // the samplers they're read with (sample_model.h's PackSampler), in
     // tex_layer's order
@@ -309,7 +310,7 @@ uint32_t LevelsOf(const Texture& t, bool blocks = false) {
 // Block-compressed textures kept as blocks (RasterOptions::bc_textures): the
 // GPU's format for each Xenos one (BlockPixels::format), INVALID for the rest.
 // Its Load gives a texel as guest_formats.h's DecodeBlock does, but BC5's
-// (x, y, 0, 1) for DecodeBlock's (x, y, y, y): mesh.hlsl's DxnTexel puts y
+// (x, y, 0, 1) for DecodeBlock's (x, y, y, y): mesh.hlsl's MapTexel puts y
 // back in z and w (PixelUniforms::flags[1]).
 SDL_GPUTextureFormat BcFormat(uint32_t xenos_format) {
     switch (xenos_format) {
@@ -324,12 +325,27 @@ bool IsBc(SDL_GPUTextureFormat f) {
     return f == SDL_GPU_TEXTUREFORMAT_BC1_RGBA_UNORM || f == SDL_GPU_TEXTUREFORMAT_BC2_RGBA_UNORM ||
            f == SDL_GPU_TEXTUREFORMAT_BC3_RGBA_UNORM || f == SDL_GPU_TEXTUREFORMAT_BC5_RG_UNORM;
 }
-// the bytes of one of a format's 4x4 blocks (BC), or of a texel (RGBA8)
-uint32_t BlockBytes(SDL_GPUTextureFormat f) {
-    return f == SDL_GPU_TEXTUREFORMAT_BC1_RGBA_UNORM ? 8 : IsBc(f) ? 16 : 4;
+// The GPU's format for a texture kept as blocks or bytes (Texture::blocks):
+// BcFormat's, or for k_8's bytes (RasterOptions::r8_textures) R8, which loads
+// as (byte, 0, 0, 1) where DecodeLevel8 swizzles the byte by the fetch's
+// swizzle: mesh.hlsl's MapTexel makes the same texel from it
+// (PixelUniforms::flags[2] and [3])
+SDL_GPUTextureFormat KeptFormat(uint32_t xenos_format) {
+    return xenos_format == 2 ? SDL_GPU_TEXTUREFORMAT_R8_UNORM : BcFormat(xenos_format);
 }
+// the bytes of one of a format's 4x4 blocks (BC), or of a texel (R8, RGBA8)
+uint32_t BlockBytes(SDL_GPUTextureFormat f) {
+    return f == SDL_GPU_TEXTUREFORMAT_BC1_RGBA_UNORM ? 8
+           : IsBc(f)                                ? 16
+           : f == SDL_GPU_TEXTUREFORMAT_R8_UNORM    ? 1
+                                                    : 4;
+}
+// the texels along a side of one of its blocks
+uint32_t BlockSide(SDL_GPUTextureFormat f) { return IsBc(f) ? 4 : 1; }
 // the bits a texel of a texture array takes: what its megabytes count
-uint32_t TexelBits(SDL_GPUTextureFormat f) { return IsBc(f) ? BlockBytes(f) * 8 / 16 : 32; }
+uint32_t TexelBits(SDL_GPUTextureFormat f) {
+    return BlockBytes(f) * 8 / (BlockSide(f) * BlockSide(f));
+}
 
 // index counts are kept even, so every copy of indices is whole 4-byte words
 uint32_t IndexSlots(const Geometry& g) { return Align(uint32_t(g.indices.size()), 2); }
@@ -381,6 +397,9 @@ struct GpuRenderer::Impl {
     // places new textures by
     bool bc_formats = false;
     bool bc_now = false;
+    // likewise R8 texture arrays, for k_8's bytes (RasterOptions::r8_textures)
+    bool r8_format = false;
+    bool r8_now = false;
     // Direct3D 12 copies a BC texture's regions by its "physical" size, whole
     // blocks, even a level under 4 texels on a side; Vulkan's (and Metal's)
     // end at the level's edge (BcExtent)
@@ -1296,6 +1315,13 @@ bool GpuRenderer::Impl::Create() {
     if (!bc_formats)
         REXLOG_WARN("native view gpu: the device can't sample BC1, BC2, BC3 or BC5 texture "
                     "arrays; compressed textures are sent as RGBA (native_bc_textures)");
+    // and k_8's (KeptFormat), or they're RGBA8
+    r8_format = SDL_GPUTextureSupportsFormat(device, SDL_GPU_TEXTUREFORMAT_R8_UNORM,
+                                             SDL_GPU_TEXTURETYPE_2D_ARRAY,
+                                             SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    if (!r8_format)
+        REXLOG_WARN("native view gpu: the device can't sample R8 texture arrays; one-channel "
+                    "textures (movie planes) are sent as RGBA (native_r8_textures)");
     // the overlay's multisampled targets (Direct3D 12 and Vulkan both must
     // have 4 samples; 2 every desktop GPU has)
     for (int k = 0; k < 2; k++) {
@@ -1461,8 +1487,10 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     fullscreen_shader = nullptr;
     shadow_maps = false;
     bc_formats = bc_now = bc_whole_blocks = false;
+    r8_format = r8_now = false;
     // (the CPU draws from now on: textures decoded as RGBA)
     SetKeepBlocks(false);
+    SetKeepR8(false);
     resolve_shader = overlay_start_shader = nullptr;
     ms_supported[0] = ms_supported[1] = false;
     ms_fallback_logged = 0;
@@ -1979,7 +2007,7 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx, SDL_GPUTextureFormat format) {
         }
     }
     tx.array = &a;
-    tx.levels = std::min(LevelsOf(t, IsBc(format)), a.levels);
+    tx.levels = std::min(LevelsOf(t, format != kColorFormat), a.levels);
     tx.layer = a.free.back();
     a.free.pop_back();
     return true;
@@ -1996,17 +2024,21 @@ void GpuRenderer::Impl::UseTexture(const std::shared_ptr<const Texture>& t) {
     if (!t || !t->width || !t->height) return;
     auto it = textures.find(t.get());
     if (it == textures.end()) {
-        // New: as blocks if it was kept so and this frame keeps them
-        // (RasterOptions::bc_textures), else its RGBA, decoded from its
-        // blocks if it has those (EnsureRgba). The way it's placed stays
-        // until it's let go. (Decoded with its capture, which this waits
-        // for if another thread is at it: blocks is written there.)
+        // New: as blocks (or k_8's bytes) if it was kept so and this frame
+        // keeps them (RasterOptions::bc_textures, r8_textures), else its
+        // RGBA, decoded from its blocks if it has those (EnsureRgba). The way
+        // it's placed stays until it's let go. (Decoded with its capture,
+        // which this waits for if another thread is at it: blocks is
+        // written there.)
         if (t->deferred) DecodeDeferred(*t);
         SDL_GPUTextureFormat format = kColorFormat;
-        if (bc_now && t->blocks &&
+        const SDL_GPUTextureFormat kept =
+            t->blocks ? KeptFormat(t->blocks->format) : SDL_GPU_TEXTUREFORMAT_INVALID;
+        if (kept != SDL_GPU_TEXTUREFORMAT_INVALID &&
+            (kept == SDL_GPU_TEXTUREFORMAT_R8_UNORM ? r8_now : bc_now) &&
             t->blocks->level0.size() ==
                 guest_format::LevelBlockBytes(t->blocks->format, t->width, t->height)) {
-            format = BcFormat(t->blocks->format);
+            format = kept;
         } else {
             EnsureRgba(*t);
             if (t->rgba.size() != size_t(t->width) * t->height) return;
@@ -2813,9 +2845,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     if (!o.width || !o.height || !EnsureTargets(o.width, o.height)) return false;
     if (slot >= 0 && !EnsureOutput(slot, o.width, o.height)) return false;
     keep_frames = ResidencyKeepFrames(o.world_period);
-    // textures this frame places for the first time kept as blocks, where
-    // they were decoded so (UseTexture)
+    // textures this frame places for the first time kept as blocks (or
+    // k_8's bytes), where they were decoded so (UseTexture)
     bc_now = bc_formats && o.bc_textures;
+    r8_now = r8_format && o.r8_textures;
     // where the last pass, the gamma ramp's, puts the finished frame
     SDL_GPUTexture* const output = slot >= 0 ? outputs[slot].texture : graded;
     // the post buffer (RasterOptions::post_buffer): a post frame's picture
@@ -3173,11 +3206,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     const uint32_t bone_bytes = uint32_t(frame_bones.size() * sizeof(Mat4));
     const uint32_t textures_at = Align(bones_at + bone_bytes, kTextureOffsetAlign);
     uint32_t upload_bytes = textures_at;
-    // How a new texture's level l goes up: its rows of texels (RGBA8), or of
-    // blocks for one kept as blocks, `pitch` apart in the upload, `bytes` in
-    // all (where the next level may start); into its layer's level's corner
-    // `w` x `h`, which for blocks is whole blocks (BcExtent: SDL takes the
-    // rows as pixels_per_row texels and rows_per_layer, each a multiple of 4)
+    // How a new texture's level l goes up: its rows of texels (RGBA8, or R8
+    // for k_8's bytes), or of blocks for one kept as blocks, `pitch` apart in
+    // the upload, `bytes` in all (where the next level may start); into its
+    // layer's level's corner `w` x `h`, which for blocks is whole blocks
+    // (BcExtent: SDL takes the rows as pixels_per_row texels and
+    // rows_per_layer, each a multiple of 4)
     struct LevelUpload {
         const uint8_t* src;
         uint32_t row_bytes, rows, pitch, bytes;
@@ -3197,6 +3231,16 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             u.h = BcExtent(h, std::max(tx.array->h >> l, 1u));
             u.pixels_per_row = u.pitch / bpb * 4;
             u.rows_per_layer = u.rows * 4;
+        } else if (tx.array->format == SDL_GPU_TEXTUREFORMAT_R8_UNORM) {
+            // k_8's bytes, a texel each
+            u.src = (l ? t.blocks->mips[l - 1] : t.blocks->level0).data();
+            u.row_bytes = w;
+            u.rows = h;
+            u.pitch = Align(w, kRowPitchAlign);
+            u.w = w;
+            u.h = h;
+            u.pixels_per_row = u.pitch;
+            u.rows_per_layer = h;
         } else {
             u.src = reinterpret_cast<const uint8_t*>((l ? t.mips[l - 1] : t.rgba).data());
             u.row_bytes = w * 4;
@@ -3997,12 +4041,22 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             uint32_t layer = 0, w = 0, h = 0;
             uint32_t levels = 1;
             bool dxn = false;  // a DXN texture kept as BC5 (BcFormat)
+            // a k_8 texture kept as R8: how its texels expand (KeptFormat)
+            uint32_t r8 = 0;
         };
         auto layer_of = [&](const Texture* t) {
             const Tex* tx = TextureFor(t);
-            return tx ? Sampled{tx->array->texture, tx->layer, t->width, t->height, tx->levels,
-                                tx->array->format == SDL_GPU_TEXTUREFORMAT_BC5_RG_UNORM}
-                      : Sampled{};
+            if (!tx) return Sampled{};
+            const SDL_GPUTextureFormat f = tx->array->format;
+            return Sampled{tx->array->texture,
+                           tx->layer,
+                           t->width,
+                           t->height,
+                           tx->levels,
+                           f == SDL_GPU_TEXTUREFORMAT_BC5_RG_UNORM,
+                           f == SDL_GPU_TEXTUREFORMAT_R8_UNORM
+                               ? guest_format::R8ExpandCode(tx->keep->blocks->swizzle)
+                               : 0u};
         };
         shade::ShadeParams& sp = shades[d];
         const ShadeState* state = shade::ShadeOf(frame, it);
@@ -4186,10 +4240,19 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         pu.flags[0] = blend == kBlendSrcAlpha || blend == kBlendSrcAlphaAdd ? kPremultiply : 0;
         // the DXN textures kept as BC5, by tex_layer's order: their y in z and
         // w too, as DecodeBlock has them (a head's normal map is a texture
-        // pass's diffuse texture, its alpha read; mesh.hlsl's DxnTexel)
+        // pass's diffuse texture, its alpha read; mesh.hlsl's MapTexel)
         for (int s : {kSlotDiffuse, kSlotSpecular, kSlotGlow, kSlotProjected, kSlotGobo,
                       kSlotNormal, kSlotDetail})
             if (tex[s].dxn) pu.flags[1] |= 1u << (s >= kSlotNormal ? s - 2 : s);
+        // the k_8 textures kept as R8, by tex_layer's order: how each texel
+        // expands to the one DecodeLevel8 makes by its swizzle, a byte each
+        // (guest_formats.h's R8ExpandCode; mesh.hlsl's MapTexel), maps 0-3 in
+        // z and 4-6 in w
+        for (int s : {kSlotDiffuse, kSlotSpecular, kSlotGlow, kSlotProjected, kSlotGobo,
+                      kSlotNormal, kSlotDetail}) {
+            const uint32_t k = s >= kSlotNormal ? s - 2 : s;
+            pu.flags[2 + k / 4] |= tex[s].r8 << (8 * (k % 4));
+        }
         SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
 
         if (o.gpu_labels) {
@@ -4886,11 +4949,13 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
         impl_->ready = false;
         impl_->Release(false);
         SetKeepBlocks(false);
+        SetKeepR8(false);
         return false;
     }
-    // the captures decoded after it keep block-compressed textures as blocks
-    // as this frame placed them (deferred_decode.h)
+    // the captures decoded after it keep block-compressed textures as blocks,
+    // and k_8 ones as bytes, as this frame placed them (deferred_decode.h)
     SetKeepBlocks(impl_->bc_now);
+    SetKeepR8(impl_->r8_now);
     stats.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                    .count();
     const Impl::Counts& now = impl_->counts;

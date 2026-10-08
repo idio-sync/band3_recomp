@@ -816,6 +816,8 @@ class Renderer {
                 o.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
                 // block-compressed textures kept as blocks on the GPU
                 o.bc_textures = REXCVAR_GET(native_bc_textures);
+                // and k_8's (movie planes) as R8
+                o.r8_textures = REXCVAR_GET(native_r8_textures);
                 gpu = gpu_;
                 dump = dump_path_;
                 zero_copy = present_ && present_zero_copy_ && gpu && dump.empty();

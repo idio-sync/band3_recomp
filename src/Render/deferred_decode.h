@@ -42,6 +42,11 @@
 // send and keep. Its rgba and mips are decoded from the blocks the first time
 // something asks for them (EnsureRgba), by the same decoder, to the same
 // texels. With it off, as before: rgba and mips at once.
+//
+// So too, with native_r8_textures on (SetKeepR8), a k_8 texture (a movie's
+// plane, decoded again each of the movie's frames): its bytes, untiled, for
+// the GPU's R8, whose shader turns each into the texel the swizzle makes
+// (mesh.hlsl's MapTexel), a quarter of the bytes to decode, send and keep.
 
 namespace band3::render {
 
@@ -53,6 +58,8 @@ struct DeferredDecodeCounts {
     // block-compressed textures kept as blocks, decoded to RGBA all the same
     // for their swizzle, and kept as blocks then decoded to RGBA (EnsureRgba)
     std::atomic<uint64_t> bc_blocks{0}, bc_swizzled{0}, bc_rgba{0};
+    // k_8 textures kept as their bytes, and those then decoded to RGBA
+    std::atomic<uint64_t> r8{0}, r8_rgba{0};
 };
 inline DeferredDecodeCounts g_deferred_decode;
 
@@ -61,6 +68,9 @@ inline DeferredDecodeCounts g_deferred_decode;
 // off until it has drawn a frame, and for the CPU's rasterizer
 inline std::atomic<bool> g_keep_blocks{false};
 inline void SetKeepBlocks(bool keep) { g_keep_blocks.store(keep, std::memory_order_relaxed); }
+// and k_8 textures as their bytes (native_r8_textures, and R8 on the GPU)
+inline std::atomic<bool> g_keep_r8{false};
+inline void SetKeepR8(bool keep) { g_keep_r8.store(keep, std::memory_order_relaxed); }
 
 namespace deferred_detail {
 inline void Count(std::chrono::steady_clock::time_point start, uint64_t bytes) {
@@ -76,8 +86,8 @@ inline void Count(std::chrono::steady_clock::time_point start, uint64_t bytes) {
 
 // a deferred texture's rgba and mips from the bytes copied (DecodeTexture's
 // decode, guest_formats.h's DecodeTextureLevels, from the same bytes), or its
-// blocks (g_keep_blocks: DecodeTextureBlocks, the GPU's to sample); the
-// copies let go of after
+// blocks (g_keep_blocks: DecodeTextureBlocks, the GPU's to sample), or a k_8
+// one's bytes (g_keep_r8, likewise); the copies let go of after
 inline void DecodeDeferred(const Texture& t) {
     DeferredPixels& d = *t.deferred;
     std::call_once(d.once, [&] {
@@ -89,11 +99,14 @@ inline void DecodeDeferred(const Texture& t) {
         const guest_format::FetchLayout l = guest_format::ReadFetchLayout(d.fetch);
         const bool bc = g_keep_blocks.load(std::memory_order_relaxed) &&
                         guest_format::IsBlockCompressed(l.format);
-        if (bc && guest_format::DecodeTextureBlocks(d.bytes.data(), mips, d.fetch, decoded)) {
+        const bool r8 = g_keep_r8.load(std::memory_order_relaxed) && l.format == 2;
+        if ((bc || r8) &&
+            guest_format::DecodeTextureBlocks(d.bytes.data(), mips, d.fetch, decoded)) {
             out.blocks = std::move(decoded.blocks);
             bytes = out.blocks->level0.size();
             for (const auto& level : out.blocks->mips) bytes += level.size();
-            g_deferred_decode.bc_blocks.fetch_add(1, std::memory_order_relaxed);
+            (r8 ? g_deferred_decode.r8 : g_deferred_decode.bc_blocks)
+                .fetch_add(1, std::memory_order_relaxed);
         } else if (guest_format::DecodeTextureLevels(d.bytes.data(), mips, d.fetch, decoded)) {
             out.rgba = std::move(decoded.rgba);
             out.mips = std::move(decoded.mips);
@@ -110,10 +123,11 @@ inline void DecodeDeferred(const Texture& t) {
 }
 
 // A texture's rgba and mips, decoded if they're not yet: a deferred one's
-// (DecodeDeferred), and a block-compressed one kept as blocks, from them
-// (guest_formats.h's DecodeRgbaFromBlocks: DecodeTextureLevels' texels). What
-// reads a texture's rgba calls it first, but for the game's thread on one
-// it hasn't captured deferred; any thread, once each, the others waiting.
+// (DecodeDeferred), and a block-compressed one kept as blocks, or a k_8 one
+// kept as its bytes, from them (guest_formats.h's DecodeRgbaFromBlocks:
+// DecodeTextureLevels' texels). What reads a texture's rgba calls it first,
+// but for the game's thread on one it hasn't captured deferred; any thread,
+// once each, the others waiting.
 inline void EnsureRgba(const Texture& t) {
     if (t.deferred) DecodeDeferred(t);
     if (!t.blocks) return;
@@ -121,7 +135,8 @@ inline void EnsureRgba(const Texture& t) {
     std::call_once(b.rgba_once, [&] {
         auto& out = const_cast<Texture&>(t);
         guest_format::DecodeRgbaFromBlocks(b, t.width, t.height, out.rgba, out.mips);
-        g_deferred_decode.bc_rgba.fetch_add(1, std::memory_order_relaxed);
+        (b.format == 2 ? g_deferred_decode.r8_rgba : g_deferred_decode.bc_rgba)
+            .fetch_add(1, std::memory_order_relaxed);
     });
 }
 

@@ -595,6 +595,13 @@ REXCVAR_DEFINE_BOOL(native_bc_textures, true, "Band3/Advanced/Native renderer",
     "colour by a step or two. Off decodes them to RGBA as before, to compare; applies to "
     "textures seen after the change");
 
+REXCVAR_DEFINE_BOOL(native_r8_textures, true, "Band3/Advanced/Native renderer",
+    "Keep RB3's one-channel textures (k_8: the planes of its movies, the intro, the menus' "
+    "backgrounds and the music-video venues' screens, new each frame of a movie) a byte a "
+    "texel on the GPU, as R8, where it has that format, rather than four: a quarter of the "
+    "video memory, upload and decoding. The picture is the same. Off sends them as RGBA as "
+    "before, to compare; applies to textures seen after the change");
+
 REXCVAR_DEFINE_INT32(native_deferred_decode_threads, 2, "Band3/Advanced/Native renderer",
     "How many threads help the native renderer decode the textures and meshes a song's first "
     "frames and a camera cut show for the first time (over 4 MB of them), so it holds the "

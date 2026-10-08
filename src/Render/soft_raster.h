@@ -249,6 +249,14 @@ struct RasterOptions {
     // Read as each texture is placed, so one keeps the way it was placed. The
     // CPU ignores it (it decodes any kept as blocks: EnsureRgba).
     bool bc_textures = false;
+    // On the GPU (native_r8_textures), k_8 textures (movie planes) are kept
+    // as their bytes, sent and sampled as R8 where the device has it, the
+    // shader rearranging what it samples by the fetch's swizzle into the
+    // CPU's decoded texels filtered (mesh.hlsl's MapTexel), and the
+    // capture's decode keeps them so
+    // (deferred_decode.h's SetKeepR8); off, as RGBA. Placed as bc_textures
+    // is; the CPU ignores it.
+    bool r8_textures = false;
     // On the GPU, the most frames apart the world is drawn now (the live
     // view's: frame_pacing.h's WorldPeriod), which geometry and textures
     // drawn in one frame are kept for (gpu_view.h's ResidencyKeepFrames), so

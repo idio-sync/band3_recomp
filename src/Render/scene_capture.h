@@ -188,10 +188,15 @@ struct DeferredPixels {
 // DXT1, DXT2_3, DXT4_5 or DXN (`format`, the Xenos TextureFormat 18, 19, 20 or
 // 49; BC1, BC2, BC3 and BC5 on the GPU) untiled and endian-swapped, each level
 // ceil(w/4) x ceil(h/4) blocks of 8 or 16 bytes in rows (guest_formats.h's
-// UntileLevelBlocks). rgba_once guards the texture's rgba and mips, decoded
+// UntileLevelBlocks). Or a k_8 texture's bytes (`format` 2; R8 on the GPU),
+// a texel each, untiled, in rows of w (UntileLevel8), with the fetch's
+// `swizzle`, which turns a byte into the texel the CPU's decoder gives
+// (DecodeLevel8; the GPU, mesh.hlsl's MapTexel); a block-compressed texture's
+// is the identity. rgba_once guards the texture's rgba and mips, decoded
 // from them the first time something asks (deferred_decode.h's EnsureRgba).
 struct BlockPixels {
     uint32_t format = 0;
+    uint32_t swizzle = 0;
     std::vector<uint8_t> level0;
     std::vector<std::vector<uint8_t>> mips;  // levels 1, 2..., as Texture::mips
     std::once_flag rgba_once;
@@ -230,9 +235,10 @@ struct Texture {
     // native_bc_textures on: its blocks, which the GPU samples as they are,
     // and empty rgba and mips until something asks for them (deferred_decode.h's
     // EnsureRgba: the CPU's rasterizer, a capture file, the GPU with the
-    // setting off). Set by the decode (DecodeDeferred), so read only after it,
-    // as rgba is. Null for every other texture. Shared, as deferred is, by the
-    // copies capture files make.
+    // setting off); one in k_8 (a movie's plane) with native_r8_textures on,
+    // its bytes, likewise. Set by the decode (DecodeDeferred), so read only
+    // after it, as rgba is. Null for every other texture. Shared, as deferred
+    // is, by the copies capture files make.
     std::shared_ptr<BlockPixels> blocks;
 };
 
@@ -889,6 +895,11 @@ struct CaptureProfile {
     uint64_t deferred_bc_blocks = 0;
     uint64_t deferred_bc_swizzled = 0;
     uint64_t deferred_bc_rgba = 0;
+    // and the k_8 textures (movie planes) kept as their bytes for the GPU's R8
+    // (native_r8_textures; their bytes those), and the ones of those whose
+    // RGBA something asked for after
+    uint64_t deferred_r8 = 0;
+    uint64_t deferred_r8_rgba = 0;
     // the caches' sizes now: render targets known, geometry, loaded textures
     // and maps
     uint64_t rts = 0, geoms = 0, texs = 0, map_texs = 0;
