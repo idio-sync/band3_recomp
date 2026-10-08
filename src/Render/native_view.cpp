@@ -146,6 +146,9 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.first_draw_max_ms = std::max(sum.first_draw_max_ms, g.first_draw_max_ms);
     sum.pre_first_draw_ms += g.pre_first_draw_ms;
     sum.submit_max_ms = std::max(sum.submit_max_ms, g.submit_max_ms);
+    sum.draw_slow += g.draw_slow;
+    sum.draw_slow_ms += g.draw_slow_ms;
+    sum.pre_draw_slow_ms += g.pre_draw_slow_ms;
     sum.uniform_slow += g.uniform_slow;
     sum.uniform_slow_ms += g.uniform_slow_ms;
     sum.pre_uniform_slow += g.pre_uniform_slow;
@@ -250,11 +253,12 @@ std::string DescribePre(const GpuStats& gs) {
     std::snprintf(buf, sizeof(buf),
                   "; pre: plan %.1f (walk %.1f: %u targets made in %.1f ms, %u texture arrays "
                   "grown in %.1f ms, %.1f MB), upload %.1f, record %.1f (%.1f of it acquiring, "
-                  "%.1f first draws, %.1f in %u slow uniform pushes and binds), submit %.1f (%u "
-                  "command buffers), waiting for the GPU %.1f, evict %.1f ms",
+                  "%.1f first draws, %.1f later slow draws, %.1f in %u slow uniform pushes "
+                  "and binds), submit %.1f (%u command buffers), waiting for the GPU %.1f, "
+                  "evict %.1f ms",
                   gs.pre_plan_ms, gs.pre_walk_ms, gs.pre_targets_made, gs.pre_targets_ms,
                   gs.pre_arrays_grown, gs.pre_arrays_ms, gs.pre_arrays_mb, gs.pre_upload_ms,
-                  gs.pre_record_ms, gs.pre_acquire_ms, gs.pre_first_draw_ms,
+                  gs.pre_record_ms, gs.pre_acquire_ms, gs.pre_first_draw_ms, gs.pre_draw_slow_ms,
                   gs.pre_uniform_slow_ms, gs.pre_uniform_slow, gs.pre_submit_ms, gs.pre_submits,
                   gs.pre_wait_ms, gs.pre_evict_ms);
     return buf;
@@ -369,10 +373,9 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         "native renderer: slow frame %llu (game frame %llu, %s, proc_cmds %u%s): %.1f ms, "
         "%.1f of it waiting for the GPU; decode %.1f, pre %.1f (%u passes), plan %.1f, upload "
         "%.1f, record %.1f (%.1f of it acquiring %u command buffers, the slowest %.1f; %.1f in "
-        "their first draws, the slowest %.1f; %.1f in %u slow uniform pushes and binds), submit "
-        "%.1f (%u command buffers, the slowest %.1f), evict %.1f ms; %u draws (%u of the "
-        "world%s), %u "
-        "texture passes; "
+        "their first draws, the slowest %.1f; %.1f in %u later slow draws; %.1f in %u slow "
+        "uniform pushes and binds), submit %.1f (%u command buffers, the slowest %.1f), evict "
+        "%.1f ms; %u draws (%u of the world%s), %u texture passes; "
         "sent %u meshes into the pool and %u into the arena (%.2f MB), %u textures (%.2f MB), "
         "%u KB of bones; moved %u meshes to the arena%s; made %u pipelines, %u buffers, %u "
         "textures; let go of %u meshes, %u textures, %u targets' pictures after, and released "
@@ -385,7 +388,8 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         FrameKindName(kind), fc.proc_cmds, world, gs.ms, gs.wait_ms, gs.decode_ms, gs.pre_ms,
         gs.pre_passes,
         gs.plan_ms, gs.upload_ms, gs.record_ms, gs.acquire_ms, gs.acquires, gs.acquire_max_ms,
-        gs.first_draw_ms, gs.first_draw_max_ms, gs.uniform_slow_ms, gs.uniform_slow,
+        gs.first_draw_ms, gs.first_draw_max_ms, gs.draw_slow_ms, gs.draw_slow, gs.uniform_slow_ms,
+        gs.uniform_slow,
         gs.submit_ms, gs.submits, gs.submit_max_ms, gs.evict_ms, gs.draws,
         gs.world_draws, gs.shows_kept ? ", the kept post buffer shown" : "", gs.passes,
         gs.pool_meshes, gs.arena_sent, gs.mesh_bytes / 1048576.0, gs.textures_sent,
@@ -900,6 +904,8 @@ class Renderer {
                 continue;
             }
             if (!work) {
+                // once, between frames (GpuRenderer::WarmPools)
+                if (gpu) GpuRenderer::Get().WarmPools();
                 epoch = WaitForCapture(epoch, kIdleWait);
                 continue;
             }

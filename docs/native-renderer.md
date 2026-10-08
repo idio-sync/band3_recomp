@@ -160,12 +160,22 @@ settings), each described there (`src/settings.cpp`):
   `record` says how much of it went on what SDL_gpu makes the first time a frame needs more
   than any before: getting command buffers (one for each part the frame is submitted in; a
   command list and allocator made when its pool has none), their first draws (where it takes
-  their descriptor heaps) and pipeline binds and uniform pushes over 0.05 ms (a 32 KB uniform
-  buffer made; a draw pushes about 1 KB), each with the slowest; `submit` its slowest
-  submission. A frame that drew its world first (`pre`: a refracting venue without a kept
-  world to read) has those passes' own parts after the line's counts ("pre: plan ... (walk
-  ...: the render targets and texture arrays made), upload, record, submit, waiting for the
-  GPU, evict").
+  their descriptor heaps), later draws over 0.05 ms (another pair once 2048 samplers are
+  written, 16 a draw that rebinds) and pipeline binds and uniform pushes over 0.05 ms (a 32
+  KB uniform buffer made; a draw pushes 2 KB), each with the slowest; `submit` its slowest
+  submission. So that frames don't make those, the worker grows SDL_gpu's pools once, the
+  first time it waits for a capture (`gpu_view.h`'s `WarmPools`, logged "SDL's pools
+  warmed"): 16 command buffers and their fences, 128 uniform buffers (8 MB) and 24
+  descriptor heap pairs (about 2 MB each), in 103 to 116 ms, about 30 MB more video memory
+  than a song grew them to by itself. At 20th Century Boy's start (four runs each) the world
+  passes before its first frame went from 37.6 to 38.9 ms to 25.7 to 27.3 (their recording
+  from 16 to 4.5: 24 uniform buffers), its first 1402-draw frame from 56 to 65 to 37 to 60
+  (14 ms of command buffers and 8 to 11 of uniform buffers gone; what's left varies with
+  single submissions of 6 to 31 ms, SDL_gpu's own), and the four first-sight frames from 168
+  to 180 ms in all to 135 to 159. A frame that drew its world first (`pre`: a refracting
+  venue without a kept world to read) has those passes' own parts after the line's counts
+  ("pre: plan ... (walk ...: the render targets and texture arrays made), upload, record,
+  submit, waiting for the GPU, evict").
 - `native_gpu_timestamps` (off): times each frame's parts on the GPU with timestamps written
   between them (`src/Render/gpu_timing_model.h`): its upload, the world, the texture passes
   (`pass_shadow`, `pass_spot` for the spotlights' targets, `pass_other` for the rest: outfits,

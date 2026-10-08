@@ -810,6 +810,21 @@ struct GpuRenderer::Impl {
     // DeviceSamples(overlay_samples)) and the usual upload buffer, so no
     // frame stalls on them
     void Prewarm(uint32_t overlay_samples);
+    // SDL_gpu's Direct3D 12 pools, grown only when a frame finds them empty,
+    // and never shrunk: command buffers (a command list and allocator, ~7 ms
+    // each on the R9700 in its VM), their fences (made at submit, ~6.5 ms),
+    // 32 KB uniform buffers (~0.45 ms; a draw pushes 2 KB) and descriptor
+    // heap pairs (taken at a command buffer's first draw, ~1.7 ms). The
+    // first frame needing more than any before made them as it recorded: a
+    // song's first world 11 ms, its first 1402-draw frame 28 ms and the post
+    // frames after it 7 to 20 ms each. Fills them to kWarmCommandBuffers,
+    // kWarmUniformBuffers and kWarmHeapPairs once, with work that draws
+    // nothing a frame sees. Once per device (GpuRenderer::WarmPools); logged.
+    void WarmPools();
+    static constexpr uint32_t kWarmCommandBuffers = 16;
+    static constexpr uint32_t kWarmUniformBuffers = 128;
+    static constexpr uint32_t kWarmHeapPairs = 24;
+    std::atomic<bool> pools_warm{false};
     bool EnsureTargets(uint32_t w, uint32_t h);
     bool EnsureScratch(Scratch& s, uint32_t w, uint32_t h);
     // grows `b` to hold `bytes`, losing its contents
@@ -1365,6 +1380,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     pipelines.clear();
     warm = false;
     warmed_up = false;
+    pools_warm = false;
     device = nullptr;
     vertex_shader = pixel_shader = spot_shader = soft_shader = shadow_shader = nullptr;
     fullscreen_shader = nullptr;
@@ -1688,6 +1704,98 @@ void GpuRenderer::Impl::Prewarm(uint32_t overlay_samples) {
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                           start).count());
     warmed_up = true;
+}
+
+void GpuRenderer::Impl::WarmPools() {
+    if (pools_warm || !device || !gamma_pipeline) return;
+    pools_warm = true;
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::now();
+    auto ms = [](Clock::time_point from, Clock::time_point to) {
+        return std::chrono::duration<double, std::milli>(to - from).count();
+    };
+    // what the draws draw into, let go after
+    SDL_GPUTextureCreateInfo ti{};
+    ti.type = SDL_GPU_TEXTURETYPE_2D;
+    ti.format = kColorFormat;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+    ti.width = ti.height = 4;
+    ti.layer_count_or_depth = 1;
+    ti.num_levels = 1;
+    SDL_GPUTexture* target = SDL_CreateGPUTexture(device, &ti);
+    if (!target) {
+        REXLOG_WARN("native view gpu: SDL's pools not warmed ({})", SDL_GetError());
+        return;
+    }
+    // All held at once, so each pool has to grow to hold them
+    SDL_GPUCommandBuffer* cmds[kWarmCommandBuffers] = {};
+    uint32_t got = 0;
+    while (got < kWarmCommandBuffers && (cmds[got] = SDL_AcquireGPUCommandBuffer(device))) got++;
+    const auto acquired = Clock::now();
+    // A push that doesn't fit its uniform buffer takes another: 16 KB blocks
+    // take one each. Never read (the vertex stage of what's drawn below has
+    // no uniforms).
+    static const uint8_t block[16384] = {};
+    if (got) {
+        for (uint32_t u = 0; u < kWarmUniformBuffers; u++)
+            SDL_PushGPUVertexUniformData(cmds[u % got], 0, block, sizeof(block));
+    }
+    const auto pushed = Clock::now();
+    // Draws in each, taking its descriptor heaps: the gamma pass's, through
+    // BeginPass as every pass (kSamplerBatch). A draw after a rebind writes
+    // kSamplerBatch samplers, so the sampler heap (2048) is full after 128
+    // and the next takes a new pair, as in a frame's big command buffers
+    // (about 20 pairs for 1400 draws): the first `extra` buffers draw 128
+    // more for each pair over one, rebinding slot 1 (which the gamma pass
+    // doesn't read) between white and black
+    const uint32_t extra = got ? kWarmHeapPairs - std::min(kWarmHeapPairs, got) : 0;
+    uint32_t lut[256] = {};
+    for (uint32_t i = 0; i < got; i++) {
+        SDL_GPUColorTargetInfo ct{};
+        ct.texture = target;
+        ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
+        ct.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPURenderPass* rp = BeginPass(cmds[i], &ct, 1, nullptr);
+        if (!rp) continue;
+        SDL_BindGPUGraphicsPipeline(rp, gamma_pipeline);
+        const SDL_GPUTextureSamplerBinding tb{no_depth, sampler};
+        SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
+        SDL_PushGPUFragmentUniformData(cmds[i], 0, lut, sizeof(lut));
+        const uint32_t pairs = 1 + extra / got + (i < extra % got ? 1 : 0);
+        const uint32_t draws = 1 + (pairs - 1) * (2048 / kSamplerBatch);
+        for (uint32_t d = 0; d < draws; d++) {
+            if (d) {
+                const SDL_GPUTextureSamplerBinding pad{d & 1 ? black : white, sampler};
+                SDL_BindGPUFragmentSamplers(rp, 1, &pad, 1);
+            }
+            SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+        }
+        SDL_EndGPURenderPass(rp);
+    }
+    const auto drawn = Clock::now();
+    // submitted together, so each takes a fence of its own; the last one's,
+    // on SDL's one queue, covers all, and its wait returns them to the pools
+    bool ok = got > 0;
+    for (uint32_t i = 0; i + 1 < got; i++) ok &= SDL_SubmitGPUCommandBuffer(cmds[i]);
+    SDL_GPUFence* fence = got ? SDL_SubmitGPUCommandBufferAndAcquireFence(cmds[got - 1]) : nullptr;
+    const auto submitted = Clock::now();
+    ok = ok && fence && SDL_WaitForGPUFences(device, true, &fence, 1);
+    if (fence) SDL_ReleaseGPUFence(device, fence);
+    SDL_ReleaseGPUTexture(device, target);
+    const auto end = Clock::now();
+    if (!ok) {
+        REXLOG_WARN("native view gpu: warming SDL's pools failed ({}); frames grow them as before",
+                    SDL_GetError());
+        return;
+    }
+    REXLOG_INFO("native view gpu: SDL's pools warmed with {} command buffers and fences, {} "
+                "uniform buffers ({} MB) and {} descriptor heap pairs (about 2 MB each), in "
+                "{:.1f} ms: acquiring {:.1f}, pushing {:.1f}, drawing {:.1f}, submitting {:.1f}, "
+                "waiting {:.1f}",
+                got, kWarmUniformBuffers, kWarmUniformBuffers * 64 / 1024, got + extra,
+                ms(start, end),
+                ms(start, acquired), ms(acquired, pushed), ms(pushed, drawn), ms(drawn, submitted),
+                ms(submitted, end));
 }
 
 bool GpuRenderer::Impl::Reserve(Buffer& b, SDL_GPUBufferUsageFlags usage, uint32_t bytes) {
@@ -2759,6 +2867,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 st.pre_first_draw_ms += ps.first_draw_ms;
                 st.pre_uniform_slow += ps.uniform_slow;
                 st.pre_uniform_slow_ms += ps.uniform_slow_ms;
+                st.pre_draw_slow_ms += ps.draw_slow_ms;
                 st.pre_submit_ms += ps.submit_ms;
                 st.pre_submits += ps.submits;
                 st.pre_wait_ms += ps.wait_ms;
@@ -3220,22 +3329,26 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         st.submit_ms += ms;
         st.submit_max_ms = std::max(st.submit_max_ms, ms);
     };
+    // and a later draw over 0.05 ms (draw_slow): its sampler heap full (2048,
+    // kSamplerBatch a draw that rebinds), SDL takes another pair
     auto timed_first = [&](auto&& draw_call) {
-        if (!first_draw) {
-            draw_call();
-            return;
-        }
-        first_draw = false;
         const auto t = Clock::now();
         draw_call();
         const double ms = ms_since(t);
-        st.first_draw_ms += ms;
-        st.first_draw_max_ms = std::max(st.first_draw_max_ms, ms);
+        if (first_draw) {
+            first_draw = false;
+            st.first_draw_ms += ms;
+            st.first_draw_max_ms = std::max(st.first_draw_max_ms, ms);
+        } else if (ms > 0.05) {
+            st.draw_slow++;
+            st.draw_slow_ms += ms;
+        }
     };
     // SDL keeps uniforms in 32 KB buffers, pooled: a pipeline bind takes one
     // per stage if the command buffer has none, and a push past one's end
-    // another, made if the pool has none free. A draw pushes about 1 KB, so
-    // the first frame with many more draws than any before makes dozens.
+    // another, made if the pool has none free. A draw pushes 2 KB (1 a
+    // stage), so the first frame with many more draws than any before makes
+    // dozens (WarmPools makes them first).
     // Such calls (over 0.05 ms) are counted (GpuStats::uniform_slow)
     auto timed_uniform = [&](auto&& call) {
         const auto t = Clock::now();
@@ -4692,6 +4805,13 @@ void GpuRenderer::Prewarm(uint32_t overlay_samples) {
     if (impl_->warm) return;
     std::lock_guard lock(impl_->mutex);
     if (impl_->device && !impl_->warm) impl_->Prewarm(overlay_samples);
+}
+
+void GpuRenderer::WarmPools() {
+    // checked without waiting out a frame
+    if (impl_->pools_warm || !impl_->warm) return;
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->device && impl_->warmed_up) impl_->WarmPools();
 }
 
 void GpuRenderer::SetPresentDevice(void* d3d12_device, uint64_t timestamp_frequency) {

@@ -99,6 +99,10 @@ struct GpuStats {
     uint32_t acquires = 0;
     double acquire_ms = 0, acquire_max_ms = 0;
     double first_draw_ms = 0, first_draw_max_ms = 0;
+    // later draws over 0.05 ms (SDL taking another descriptor heap pair, its
+    // sampler heap full), and their time
+    uint32_t draw_slow = 0;
+    double draw_slow_ms = 0;
     // record_ms's pipeline binds and uniform pushes that took over 0.05 ms
     // (SDL making a 32 KB uniform buffer: its pool had none free), and their
     // time; draws' and post-processing's
@@ -113,7 +117,7 @@ struct GpuStats {
     // Evict
     double pre_plan_ms = 0, pre_walk_ms = 0, pre_targets_ms = 0, pre_arrays_ms = 0;
     double pre_upload_ms = 0, pre_record_ms = 0, pre_acquire_ms = 0, pre_first_draw_ms = 0;
-    double pre_uniform_slow_ms = 0, pre_submit_ms = 0;
+    double pre_uniform_slow_ms = 0, pre_draw_slow_ms = 0, pre_submit_ms = 0;
     uint32_t pre_uniform_slow = 0;
     double pre_wait_ms = 0, pre_evict_ms = 0;
     uint32_t pre_targets_made = 0, pre_arrays_grown = 0, pre_submits = 0;
@@ -327,6 +331,14 @@ class GpuRenderer {
     // on, so the first frames don't wait. Later pipelines are logged
     // ("pipeline made after warm-up").
     void Prewarm(uint32_t overlay_samples);
+    // Once Prewarm has run: grows SDL_gpu's Direct3D 12 pools (command
+    // buffers and their fences, uniform buffers, descriptor heap pairs) to
+    // what a song's biggest frames take, which they otherwise make as they
+    // record, 7 ms for a command buffer, ~0.5 for a uniform buffer, ~2 for a
+    // heap pair (gpu_view.cpp's Impl::WarmPools). About 130 ms, once per
+    // device: the worker calls it the first time it waits for a capture, so
+    // neither the UI thread nor a frame waits for it. Cheap after.
+    void WarmPools();
     // Draws `frame` at options.width x options.height into rgba (R in the low
     // byte, alpha 0xff) via its own output texture and readback. Any thread,
     // one frame at a time. False without a device or if the GPU failed
