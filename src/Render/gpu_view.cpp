@@ -2746,6 +2746,23 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 if (!Render(frame, po, -1, nullptr, ps, k)) return false;
                 // the first uploads the world's data, which this frame reuses
                 st.pre_passes++;
+                st.pre_plan_ms += ps.plan_ms;
+                st.pre_walk_ms += ps.plan_walk_ms;
+                st.pre_targets_made += ps.targets_made;
+                st.pre_targets_ms += ps.targets_ms;
+                st.pre_arrays_grown += ps.arrays_grown;
+                st.pre_arrays_ms += ps.arrays_ms;
+                st.pre_arrays_mb += ps.arrays_mb;
+                st.pre_upload_ms += ps.upload_ms;
+                st.pre_record_ms += ps.record_ms;
+                st.pre_acquire_ms += ps.acquire_ms;
+                st.pre_first_draw_ms += ps.first_draw_ms;
+                st.pre_uniform_slow += ps.uniform_slow;
+                st.pre_uniform_slow_ms += ps.uniform_slow_ms;
+                st.pre_submit_ms += ps.submit_ms;
+                st.pre_submits += ps.submits;
+                st.pre_wait_ms += ps.wait_ms;
+                st.pre_evict_ms += ps.evict_ms;
                 st.pool_meshes += ps.pool_meshes;
                 st.arena_moved += ps.arena_moved;
                 st.arena_sent += ps.arena_sent;
@@ -3183,7 +3200,53 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     st.upload_ms = ms_since(upload_start);
     const auto record_start = Clock::now();
 
-    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device);
+    // SDL_AcquireGPUCommandBuffer, timed (GpuStats::acquire_ms): with its
+    // pool empty SDL's Direct3D 12 makes a command list and allocator. Its
+    // descriptor heaps (65536 views, 2048 samplers) it takes at the buffer's
+    // first draw, making a pair if none is free: timed there (first_draw_ms)
+    bool first_draw = true;
+    auto acquire = [&]() {
+        const auto t = Clock::now();
+        SDL_GPUCommandBuffer* c = SDL_AcquireGPUCommandBuffer(device);
+        const double ms = ms_since(t);
+        st.acquires++;
+        st.acquire_ms += ms;
+        st.acquire_max_ms = std::max(st.acquire_max_ms, ms);
+        first_draw = true;
+        return c;
+    };
+    // a submission's time (GpuStats::submit_ms, submit_max_ms)
+    auto add_submit = [&](double ms) {
+        st.submit_ms += ms;
+        st.submit_max_ms = std::max(st.submit_max_ms, ms);
+    };
+    auto timed_first = [&](auto&& draw_call) {
+        if (!first_draw) {
+            draw_call();
+            return;
+        }
+        first_draw = false;
+        const auto t = Clock::now();
+        draw_call();
+        const double ms = ms_since(t);
+        st.first_draw_ms += ms;
+        st.first_draw_max_ms = std::max(st.first_draw_max_ms, ms);
+    };
+    // SDL keeps uniforms in 32 KB buffers, pooled: a pipeline bind takes one
+    // per stage if the command buffer has none, and a push past one's end
+    // another, made if the pool has none free. A draw pushes about 1 KB, so
+    // the first frame with many more draws than any before makes dozens.
+    // Such calls (over 0.05 ms) are counted (GpuStats::uniform_slow)
+    auto timed_uniform = [&](auto&& call) {
+        const auto t = Clock::now();
+        call();
+        const double ms = ms_since(t);
+        if (ms > 0.05) {
+            st.uniform_slow++;
+            st.uniform_slow_ms += ms;
+        }
+    };
+    SDL_GPUCommandBuffer* cmd = acquire();
     if (!cmd) {
         REXLOG_WARN("native view gpu: no command buffer ({})", SDL_GetError());
         return false;
@@ -3320,7 +3383,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     auto submit_part = [&](SDL_GPUCommandBuffer* c) {
         const auto t = Clock::now();
         const bool ok = SDL_SubmitGPUCommandBuffer(c);
-        st.submit_ms += ms_since(t);
+        add_submit(ms_since(t));
         if (ok) st.submits++;
         return ok;
     };
@@ -3333,8 +3396,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // nothing bound, so the caches reset. False on failure (caller logs).
     auto next_part = [&]() -> bool {
         MarkTime(cmd, gpu_timing::kIdle);
-        SDL_GPUCommandBuffer* next =
-            submit_part(cmd) ? SDL_AcquireGPUCommandBuffer(device) : nullptr;
+        SDL_GPUCommandBuffer* next = submit_part(cmd) ? acquire() : nullptr;
         if (!next) return false;
         cmd = next;
         bound = nullptr;
@@ -3407,7 +3469,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             p.mode = {0, world ? 1u : 0u, 0, 0};
             p.target = {float(width), float(height), 1.0f / float(width), 1.0f / float(height)};
             SDL_PushGPUFragmentUniformData(cmd, 0, &p, sizeof(p));
-            SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+            timed_first([&] { SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0); });
             SDL_EndGPURenderPass(rp);
             overlay_start = false;
             depth_cleared = !world;
@@ -3456,13 +3518,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             c.store_op = SDL_GPU_STOREOP_STORE;
         }
         SDL_GPURenderPass* rp = BeginPass(cmd, ct, second ? 2 : 1, nullptr);
-        SDL_BindGPUGraphicsPipeline(rp, pipeline);
+        timed_uniform([&] { SDL_BindGPUGraphicsPipeline(rp, pipeline); });
         SDL_GPUTextureSamplerBinding tb[12];
         uint32_t n = 0;
         for (SDL_GPUTexture* t : sources) tb[n++] = {t, linear_sampler};
         SDL_BindGPUFragmentSamplers(rp, 0, tb, n);
-        SDL_PushGPUFragmentUniformData(cmd, 0, &params, sizeof(params));
-        SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+        timed_uniform([&] { SDL_PushGPUFragmentUniformData(cmd, 0, &params, sizeof(params)); });
+        timed_first([&] { SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0); });
         SDL_EndGPURenderPass(rp);
     };
     SDL_GPUTexture* const scene_depth = depth_sampled ? depth : no_depth;
@@ -3537,8 +3599,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                                   "bones",
                                   index, v.mesh, v.geom->indices.size(), v.geom->verts.size(),
                                   v.bones));
-            SDL_DrawGPUIndexedPrimitives(rp, uint32_t(v.geom->indices.size() / 3 * 3), 1,
-                                         m.first_index, int32_t(m.first_vertex), 0);
+            timed_first([&] {
+                SDL_DrawGPUIndexedPrimitives(rp, uint32_t(v.geom->indices.size() / 3 * 3), 1,
+                                             m.first_index, int32_t(m.first_vertex), 0);
+            });
         }
         SDL_EndGPURenderPass(rp);
     };
@@ -3767,7 +3831,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             return;
         }
         if (pipeline != bound) {
-            SDL_BindGPUGraphicsPipeline(pass, pipeline);
+            timed_uniform([&] { SDL_BindGPUGraphicsPipeline(pass, pipeline); });
             bound = pipeline;
         }
         SDL_GPUBuffer* verts = m.in_arena ? arena_verts.buffer : pool_v.buffer;
@@ -3792,14 +3856,16 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             ClipOffset(it, bound_viewport[2], bound_viewport[3], vu.clip_offset);
             SetDepthMap(depth_map, vu.depth_map);
             vu.shade = shades[d];
-            SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
+            timed_uniform([&] { SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu)); });
             if (o.gpu_labels)
                 label(fmt::format("draw {} shadow depth: mesh {:#x} into {:#x}, {} indices, {} "
                                   "vertices, {} bones",
                                   d, it.mesh, it.target, it.geom->indices.size(),
                                   it.geom->verts.size(), it.bones.size()));
-            SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
-                                         m.first_index, int32_t(m.first_vertex), 0);
+            timed_first([&] {
+                SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
+                                             m.first_index, int32_t(m.first_vertex), 0);
+            });
             st.draws++;
             return;
         }
@@ -3966,7 +4032,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             vu.overlay_edge[1] = o.overlay_edge[1];
         }
         vu.shade = sp;
-        SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
+        timed_uniform([&] { SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu)); });
         PixelUniforms pu{};
         pu.shade = sp;
         for (int s = 0; s < kSlotBehind; s++) {
@@ -4020,7 +4086,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             const uint32_t k = s >= kSlotNormal ? s - 2 : s;
             pu.flags[2 + k / 4] |= tex[s].r8 << (8 * (k % 4));
         }
-        SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
+        timed_uniform([&] { SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu)); });
 
         if (o.gpu_labels) {
             // size and sampler anisotropy, in tex_layer's order
@@ -4038,8 +4104,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                               it.rect_shader, textures, pu.tex_layer[0], pu.tex_layer[1],
                               pu.tex_layer[2], pu.tex_layer[3], pu.tex_layer[4]));
         }
-        SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
-                                     m.first_index, int32_t(m.first_vertex), 0);
+        timed_first([&] {
+            SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
+                                         m.first_index, int32_t(m.first_vertex), 0);
+        });
         st.draws++;
     };
 
@@ -4294,7 +4362,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             REXLOG_WARN("native view gpu: the world ahead didn't submit ({})", SDL_GetError());
             return false;
         }
-        st.submit_ms += ms_since(submit_start);
+        add_submit(ms_since(submit_start));
         st.submits++;
         const auto evict_start = Clock::now();
         Evict();
@@ -4329,7 +4397,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         const SDL_GPUTextureSamplerBinding tb{picture, sampler};
         SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
         SDL_PushGPUFragmentUniformData(cmd, 0, packed, sizeof(packed));
-        SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+        timed_first([&] { SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0); });
         SDL_EndGPURenderPass(rp);
     }
 
@@ -4379,7 +4447,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             REXLOG_WARN("native view gpu: the frame didn't submit ({})", SDL_GetError());
             return false;
         }
-        st.submit_ms += ms_since(submit_start);
+        add_submit(ms_since(submit_start));
         st.submits++;
         const auto evict_start = Clock::now();
         Evict();
@@ -4392,7 +4460,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         REXLOG_WARN("native view gpu: the frame didn't submit ({})", SDL_GetError());
         return false;
     }
-    st.submit_ms += ms_since(submit_start);
+    add_submit(ms_since(submit_start));
     st.submits++;
     stall_watch::SetWorker(stall_watch::Worker::kGpuWait);
     const bool done = SDL_WaitForGPUFences(device, true, &fence, 1);

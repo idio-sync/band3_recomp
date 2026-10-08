@@ -92,6 +92,32 @@ struct GpuStats {
     double pre_ms = 0, plan_ms = 0, upload_ms = 0, record_ms = 0, submit_ms = 0, evict_ms = 0;
     uint32_t pre_passes = 0;
     uint32_t submits = 0;
+    // record_ms's SDL_AcquireGPUCommandBuffer calls (the frame's first and
+    // one after each submission but the last), their time and the slowest;
+    // and each command buffer's first draw, where SDL takes its descriptor
+    // heaps (making them if none are free), their time and the slowest
+    uint32_t acquires = 0;
+    double acquire_ms = 0, acquire_max_ms = 0;
+    double first_draw_ms = 0, first_draw_max_ms = 0;
+    // record_ms's pipeline binds and uniform pushes that took over 0.05 ms
+    // (SDL making a 32 KB uniform buffer: its pool had none free), and their
+    // time; draws' and post-processing's
+    uint32_t uniform_slow = 0;
+    double uniform_slow_ms = 0;
+    // the slowest of submit_ms's submissions
+    double submit_max_ms = 0;
+    // pre_ms's parts, over its world passes (each a Render of its own, whose
+    // first meets the world's new content): plan, and of it the walk and the
+    // render targets and texture arrays made in it; upload, record (and its
+    // acquires, first draws and slow uniforms), submit, waiting for the GPU,
+    // Evict
+    double pre_plan_ms = 0, pre_walk_ms = 0, pre_targets_ms = 0, pre_arrays_ms = 0;
+    double pre_upload_ms = 0, pre_record_ms = 0, pre_acquire_ms = 0, pre_first_draw_ms = 0;
+    double pre_uniform_slow_ms = 0, pre_submit_ms = 0;
+    uint32_t pre_uniform_slow = 0;
+    double pre_wait_ms = 0, pre_evict_ms = 0;
+    uint32_t pre_targets_made = 0, pre_arrays_grown = 0, pre_submits = 0;
+    double pre_arrays_mb = 0;
     // plan_ms's parts (world passes' are in pre_ms): targets, outputs and
     // kept buffers made ready (setup); the walk placing meshes and textures
     // and making targets and arrays (walk); new meshes placed in the arena

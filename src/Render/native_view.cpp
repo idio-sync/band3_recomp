@@ -139,6 +139,31 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.evict_ms += g.evict_ms;
     sum.pre_passes += g.pre_passes;
     sum.submits += g.submits;
+    sum.acquires += g.acquires;
+    sum.acquire_ms += g.acquire_ms;
+    sum.acquire_max_ms = std::max(sum.acquire_max_ms, g.acquire_max_ms);
+    sum.first_draw_ms += g.first_draw_ms;
+    sum.first_draw_max_ms = std::max(sum.first_draw_max_ms, g.first_draw_max_ms);
+    sum.pre_first_draw_ms += g.pre_first_draw_ms;
+    sum.submit_max_ms = std::max(sum.submit_max_ms, g.submit_max_ms);
+    sum.uniform_slow += g.uniform_slow;
+    sum.uniform_slow_ms += g.uniform_slow_ms;
+    sum.pre_uniform_slow += g.pre_uniform_slow;
+    sum.pre_uniform_slow_ms += g.pre_uniform_slow_ms;
+    sum.pre_plan_ms += g.pre_plan_ms;
+    sum.pre_walk_ms += g.pre_walk_ms;
+    sum.pre_targets_ms += g.pre_targets_ms;
+    sum.pre_arrays_ms += g.pre_arrays_ms;
+    sum.pre_upload_ms += g.pre_upload_ms;
+    sum.pre_record_ms += g.pre_record_ms;
+    sum.pre_acquire_ms += g.pre_acquire_ms;
+    sum.pre_submit_ms += g.pre_submit_ms;
+    sum.pre_wait_ms += g.pre_wait_ms;
+    sum.pre_evict_ms += g.pre_evict_ms;
+    sum.pre_targets_made += g.pre_targets_made;
+    sum.pre_arrays_grown += g.pre_arrays_grown;
+    sum.pre_submits += g.pre_submits;
+    sum.pre_arrays_mb += g.pre_arrays_mb;
     sum.plan_setup_ms += g.plan_setup_ms;
     sum.plan_walk_ms += g.plan_walk_ms;
     sum.plan_arena_ms += g.plan_arena_ms;
@@ -215,6 +240,24 @@ void AddCost(FrameCapture::Cost& sum, const FrameCapture::Cost& c) {
     sum.tex_copy_bytes += c.tex_copy_bytes;
     sum.tex_decode_bytes += c.tex_decode_bytes;
     sum.game_ns += c.game_ns;
+}
+
+// native_slow_frame_ms's world passes before the frame (pre_ms), for
+// DescribeSlow; "" without any
+std::string DescribePre(const GpuStats& gs) {
+    if (!gs.pre_passes) return "";
+    char buf[512];
+    std::snprintf(buf, sizeof(buf),
+                  "; pre: plan %.1f (walk %.1f: %u targets made in %.1f ms, %u texture arrays "
+                  "grown in %.1f ms, %.1f MB), upload %.1f, record %.1f (%.1f of it acquiring, "
+                  "%.1f first draws, %.1f in %u slow uniform pushes and binds), submit %.1f (%u "
+                  "command buffers), waiting for the GPU %.1f, evict %.1f ms",
+                  gs.pre_plan_ms, gs.pre_walk_ms, gs.pre_targets_made, gs.pre_targets_ms,
+                  gs.pre_arrays_grown, gs.pre_arrays_ms, gs.pre_arrays_mb, gs.pre_upload_ms,
+                  gs.pre_record_ms, gs.pre_acquire_ms, gs.pre_first_draw_ms,
+                  gs.pre_uniform_slow_ms, gs.pre_uniform_slow, gs.pre_submit_ms, gs.pre_submits,
+                  gs.pre_wait_ms, gs.pre_evict_ms);
+    return buf;
 }
 
 // native_slow_frame_ms's plan parts and camera, for DescribeSlow
@@ -325,7 +368,10 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         buf, sizeof(buf),
         "native renderer: slow frame %llu (game frame %llu, %s, proc_cmds %u%s): %.1f ms, "
         "%.1f of it waiting for the GPU; decode %.1f, pre %.1f (%u passes), plan %.1f, upload "
-        "%.1f, record %.1f, submit %.1f (%u command buffers), evict %.1f ms; %u draws (%u of the world%s), %u "
+        "%.1f, record %.1f (%.1f of it acquiring %u command buffers, the slowest %.1f; %.1f in "
+        "their first draws, the slowest %.1f; %.1f in %u slow uniform pushes and binds), submit "
+        "%.1f (%u command buffers, the slowest %.1f), evict %.1f ms; %u draws (%u of the "
+        "world%s), %u "
         "texture passes; "
         "sent %u meshes into the pool and %u into the arena (%.2f MB), %u textures (%.2f MB), "
         "%u KB of bones; moved %u meshes to the arena%s; made %u pipelines, %u buffers, %u "
@@ -338,7 +384,9 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         static_cast<unsigned long long>(fc.frame), static_cast<unsigned long long>(fc.game_frame),
         FrameKindName(kind), fc.proc_cmds, world, gs.ms, gs.wait_ms, gs.decode_ms, gs.pre_ms,
         gs.pre_passes,
-        gs.plan_ms, gs.upload_ms, gs.record_ms, gs.submit_ms, gs.submits, gs.evict_ms, gs.draws,
+        gs.plan_ms, gs.upload_ms, gs.record_ms, gs.acquire_ms, gs.acquires, gs.acquire_max_ms,
+        gs.first_draw_ms, gs.first_draw_max_ms, gs.uniform_slow_ms, gs.uniform_slow,
+        gs.submit_ms, gs.submits, gs.submit_max_ms, gs.evict_ms, gs.draws,
         gs.world_draws, gs.shows_kept ? ", the kept post buffer shown" : "", gs.passes,
         gs.pool_meshes, gs.arena_sent, gs.mesh_bytes / 1048576.0, gs.textures_sent,
         gs.texture_bytes / 1048576.0, uint32_t(gs.bone_bytes >> 10), gs.arena_moved,
@@ -351,7 +399,7 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         static_cast<unsigned long long>(fc.cost.tex_copy_bytes >> 10),
         static_cast<unsigned long long>(fc.cost.tex_decode_bytes >> 10), fc.cost.game_ns / 1e6,
         static_cast<unsigned long long>(skipped));
-    return buf + DescribePlan(gs, cam) + DescribeGpuTimes(gs);
+    return buf + DescribePre(gs) + DescribePlan(gs, cam) + DescribeGpuTimes(gs);
 }
 
 // ---------------------------------------------------------------------------

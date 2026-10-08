@@ -151,6 +151,15 @@ settings), each described there (`src/settings.cpp`):
   `src/Render/deferred_decode.h`; with helper threads, `native_deferred_decode_threads` below),
   as the same decoder would have from the same bytes:
   decoding them where they were drawn cost the game's thread 30 to 70 ms on those frames.
+  `record` says how much of it went on what SDL_gpu makes the first time a frame needs more
+  than any before: getting command buffers (one for each part the frame is submitted in; a
+  command list and allocator made when its pool has none), their first draws (where it takes
+  their descriptor heaps) and pipeline binds and uniform pushes over 0.05 ms (a 32 KB uniform
+  buffer made; a draw pushes about 1 KB), each with the slowest; `submit` its slowest
+  submission. A frame that drew its world first (`pre`: a refracting venue without a kept
+  world to read) has those passes' own parts after the line's counts ("pre: plan ... (walk
+  ...: the render targets and texture arrays made), upload, record, submit, waiting for the
+  GPU, evict").
 - `native_gpu_timestamps` (off): times each frame's parts on the GPU with timestamps written
   between them (`src/Render/gpu_timing_model.h`): its upload, the world, the texture passes
   (`pass_shadow`, `pass_spot` for the spotlights' targets, `pass_other` for the rest: outfits,
