@@ -169,6 +169,12 @@ Route MatchRoute(std::string_view target) {
         route.endpoint = Endpoint::kRvUpdates;
     } else if (target == "/rv/check") {
         route.endpoint = Endpoint::kRvCheck;
+    } else if (bare == "/karaoke") {
+        route.endpoint = Endpoint::kKaraoke;
+    } else if (bare == "/karaoke/model.js") {
+        route.endpoint = Endpoint::kKaraokeModel;
+    } else if (bare == "/live/events") {
+        route.endpoint = Endpoint::kLiveEvents;
     } else if (path == "/") {
         route.endpoint = Endpoint::kIndex;
     } else if (path == "/list_songs") {
@@ -203,6 +209,9 @@ Route MatchRoute(std::string_view target) {
     } else if (path.starts_with("/album_art?shortname=")) {
         route.endpoint = Endpoint::kAlbumArt;
         route.argument = path.substr(21);
+    } else if (path.starts_with("/lyrics?shortname=")) {
+        route.endpoint = Endpoint::kLyrics;
+        route.argument = path.substr(18);
     }
     return route;
 }

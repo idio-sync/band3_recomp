@@ -54,12 +54,17 @@ enum class Endpoint {
     kRvDownloads,  // /rv/downloads    the downloads, and how far along they are
     kRvUpdates,    // /rv/updates      newer versions of what band3 downloaded
     kRvCheck,      // POST /rv/check   check RhythmVerse for them now
+    // the pages for other devices (band3's)
+    kKaraoke,       // /karaoke         the sing-along page
+    kKaraokeModel,  // /karaoke/model.js  its timing and layout logic
+    kLyrics,        // /lyrics?shortname=  a song's lyrics as JSON (lyrics.h)
+    kLiveEvents,    // /live/events     server-sent events: the game's state and song clock
 };
 
 struct Route {
     Endpoint endpoint = Endpoint::kNotFound;
     int32_t song_id = 0;   // kSong
-    // kJump's and kAlbumArt's shortname, kExecute's script, decoded
+    // kJump's, kAlbumArt's and kLyrics' shortname, kExecute's script, decoded
     std::string argument;
 };
 

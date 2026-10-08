@@ -60,6 +60,19 @@ TEST_CASE("targets pick RB3E's endpoints") {
     CHECK(MatchRoute("/song_details").endpoint == Endpoint::kSongDetails);
 }
 
+TEST_CASE("targets pick the live pages' endpoints") {
+    CHECK(MatchRoute("/karaoke").endpoint == Endpoint::kKaraoke);
+    CHECK(MatchRoute("/karaoke?tv=1").endpoint == Endpoint::kKaraoke);
+    CHECK(MatchRoute("/karaoke/model.js").endpoint == Endpoint::kKaraokeModel);
+    CHECK(MatchRoute("/live/events").endpoint == Endpoint::kLiveEvents);
+    CHECK(MatchRoute("/live").endpoint == Endpoint::kNotFound);
+
+    const Route lyrics = MatchRoute("/lyrics?shortname=a%26b%20c");
+    CHECK(lyrics.endpoint == Endpoint::kLyrics);
+    CHECK(lyrics.argument == "a&b c");
+    CHECK(MatchRoute("/lyrics").endpoint == Endpoint::kNotFound);
+}
+
 TEST_CASE("a request's Content-Type and Content-Length are read, whatever their case") {
     const auto post = ParseRequest(
         "POST /rv/download HTTP/1.1\r\nHost: x\r\ncontent-TYPE:  application/json \r\n"
