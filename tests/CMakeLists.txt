@@ -218,6 +218,15 @@ add_executable(band3_lyrics
 )
 target_include_directories(band3_lyrics PRIVATE ${BAND3_ROOT})
 
+# tools/milo_font: a font milo's metrics and texture as /game_asset/font serves
+# them, for checking fonts and for tools/web_preview.py
+add_executable(band3_milo_font
+    ${BAND3_ROOT}/tools/milo_font/milo_font.cpp
+    ${BAND3_ROOT}/src/Net/milo.cpp
+    ${BAND3_ROOT}/src/Net/album_art.cpp
+)
+target_include_directories(band3_milo_font PRIVATE ${BAND3_ROOT})
+
 if(MSVC)
     target_compile_options(band3_tests PRIVATE /W4)
 else()

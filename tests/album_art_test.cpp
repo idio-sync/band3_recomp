@@ -155,3 +155,19 @@ TEST_CASE("a JPEG of the image has its size in the frame header") {
     CHECK((at(5) << 8 | at(6)) == 8);
     CHECK((at(7) << 8 | at(8)) == 16);
 }
+
+TEST_CASE("a PNG of the image keeps its size and its alpha") {
+    Image image;
+    image.width = 2;
+    image.height = 3;
+    image.rgba.assign(2 * 3 * 4, 128);
+    const std::string png = EncodePng(image);
+    REQUIRE(png.size() > 33);
+    CHECK(png.substr(1, 3) == "PNG");
+    CHECK(png.substr(12, 4) == "IHDR");
+    const auto at = [&](size_t i) { return static_cast<uint8_t>(png[i]); };
+    CHECK((at(16) << 24 | at(17) << 16 | at(18) << 8 | at(19)) == 2);
+    CHECK((at(20) << 24 | at(21) << 16 | at(22) << 8 | at(23)) == 3);
+    CHECK(at(24) == 8);  // bits per channel
+    CHECK(at(25) == 6);  // RGBA
+}

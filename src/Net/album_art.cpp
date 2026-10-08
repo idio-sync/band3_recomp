@@ -107,7 +107,7 @@ void DecodeAlpha(const uint8_t* alpha, std::array<Rgba, 16>& pixels) {
     }
 }
 
-void AppendJpeg(void* context, void* data, int size) {
+void AppendBytes(void* context, void* data, int size) {
     static_cast<std::string*>(context)->append(static_cast<const char*>(data),
                                                static_cast<size_t>(size));
 }
@@ -166,9 +166,16 @@ std::optional<Image> DecodeXboxBitmap(std::string_view file) {
 
 std::string EncodeJpeg(const Image& image) {
     std::string jpeg;
-    stbi_write_jpg_to_func(AppendJpeg, &jpeg, image.width, image.height, 4, image.rgba.data(),
+    stbi_write_jpg_to_func(AppendBytes, &jpeg, image.width, image.height, 4, image.rgba.data(),
                            kJpegQuality);
     return jpeg;
+}
+
+std::string EncodePng(const Image& image) {
+    std::string png;
+    stbi_write_png_to_func(AppendBytes, &png, image.width, image.height, 4, image.rgba.data(),
+                           image.width * 4);
+    return png;
 }
 
 }

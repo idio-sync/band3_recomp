@@ -29,4 +29,7 @@ std::optional<Image> DecodeXboxBitmap(std::string_view file);
 
 std::string EncodeJpeg(const Image& image);
 
+// a PNG of it, alpha kept, for the game assets (milo.h)
+std::string EncodePng(const Image& image);
+
 }
