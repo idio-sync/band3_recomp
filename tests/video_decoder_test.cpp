@@ -1,18 +1,21 @@
-// Checks the music video decoder (src/Video/video_decoder_mf.cpp) on
-// tests/data/music_video_red_blue.mp4: a 64x36 H.264 clip (padded to 64x48 in
-// the stream), a second of red then a second of blue at 30 fps, key frames
-// every half second. Windows only; skipped where Media Foundation can't
-// decode H.264 (a Windows without its media features).
-
-#ifdef _WIN32
+// Checks the music video decoders (src/Video/video_decoders.h) on
+// tests/data's clips, each a 64x36 picture (padded to 64x48 in the stream), a
+// second of red then a second of blue at 30 fps, key frames every half
+// second: H.264 in MP4, VP9 in WebM, AV1 in MKV. FFmpeg's decoder reads all
+// three, where band3_tests is built with it (cmake/ffmpeg.cmake); Media
+// Foundation's (Windows) the H.264 one, skipped where Windows has no H.264
+// decoder (an N edition, a server without its media features).
 
 #include <doctest/doctest.h>
+#include <memory>
 #include <string>
-#include "src/Video/video_decoder.h"
+#include "src/Video/video_decoders.h"
 
 using namespace band3::video;
 
 namespace {
+
+std::string Clip(const char* name) { return std::string(BAND3_ROOT_DIR) + "/tests/data/" + name; }
 
 // the middle pixel's R G B
 void Middle(const RgbFrame& f, int rgb[3]) {
@@ -34,25 +37,10 @@ bool Blue(const RgbFrame& f) {
     return c[2] > 200 && c[0] < 60 && c[1] < 60;
 }
 
-}
-
-TEST_CASE("Media Foundation reads a video's pictures and times, and seeks") {
-    if (!StartVideoThread()) {
-        MESSAGE("skipped: no Media Foundation");
-        return;
-    }
-    std::string error;
-    auto video = OpenVideo(std::string(BAND3_ROOT_DIR) + "/tests/data/music_video_red_blue.mp4",
-                           error);
-    if (!video && error.find("decoder") != std::string::npos) {
-        MESSAGE("skipped: " << error);
-        EndVideoThread();
-        return;
-    }
-    REQUIRE_MESSAGE(video, error);
-
+// what every decoder must do with a red-blue clip
+void CheckClip(VideoDecoder& video) {
     RgbFrame f;
-    REQUIRE(video->Read(f));
+    REQUIRE(video.Read(f));
     // the picture, not the stream's padding
     CHECK(f.width == 64);
     CHECK(f.height == 36);
@@ -63,7 +51,7 @@ TEST_CASE("Media Foundation reads a video's pictures and times, and seeks") {
     int frames = 1;
     double last = f.time;
     bool ordered = true;
-    while (video->Read(f)) {
+    while (video.Read(f)) {
         ordered = ordered && f.time > last;
         last = f.time;
         frames++;
@@ -74,18 +62,78 @@ TEST_CASE("Media Foundation reads a video's pictures and times, and seeks") {
     CHECK(Blue(f));
 
     // from the key frame at or before: 1.5 s is one
-    REQUIRE(video->Seek(1.6));
-    REQUIRE(video->Read(f));
+    REQUIRE(video.Seek(1.6));
+    REQUIRE(video.Read(f));
     CHECK(f.time <= 1.6);
     CHECK(f.time >= 1.0);
     CHECK(Blue(f));
-    REQUIRE(video->Seek(0.2));
-    REQUIRE(video->Read(f));
+    REQUIRE(video.Seek(0.2));
+    REQUIRE(video.Read(f));
     CHECK(f.time <= 0.2);
     CHECK(Red(f));
+}
 
+}
+
+#ifdef BAND3_HAVE_FFMPEG
+TEST_CASE("FFmpeg reads H.264, VP9 and AV1 clips' pictures and times, and seeks") {
+    std::string error;
+    REQUIRE_MESSAGE(FfmpegAvailable(error), error);
+    for (const char* name : {"music_video_red_blue.mp4", "music_video_red_blue.webm",
+                             "music_video_red_blue_av1.mkv"}) {
+        CAPTURE(name);
+        auto video = OpenFfmpegVideo(Clip(name), error);
+        REQUIRE_MESSAGE(video, error);
+        CheckClip(*video);
+    }
+}
+
+TEST_CASE("FFmpeg says why a file isn't a video") {
+    std::string error;
+    REQUIRE(FfmpegAvailable(error));
+    CHECK_FALSE(OpenFfmpegVideo(Clip("missing.webm"), error));
+    CHECK_FALSE(error.empty());
+}
+#endif
+
+#ifdef _WIN32
+TEST_CASE("Media Foundation reads an H.264 clip's pictures and times, and seeks") {
+    if (!StartMfThread()) {
+        MESSAGE("skipped: no Media Foundation");
+        return;
+    }
+    std::string error;
+    auto video = OpenMfVideo(Clip("music_video_red_blue.mp4"), error);
+    if (!video && error.find("decoder") != std::string::npos) {
+        MESSAGE("skipped: " << error);
+        EndMfThread();
+        return;
+    }
+    REQUIRE_MESSAGE(video, error);
+    CheckClip(*video);
+    video.reset();
+    EndMfThread();
+}
+#endif
+
+TEST_CASE("OpenVideo opens a clip with whatever this build decodes with") {
+    std::string error;
+    if (!StartVideoThread(error)) {
+        MESSAGE("skipped: " << error);
+        return;
+    }
+    auto video = OpenVideo(Clip("music_video_red_blue.mp4"), error);
+#if !defined(BAND3_HAVE_FFMPEG)
+    // Media Foundation alone, which may have no H.264 decoder
+    if (!video && error.find("decoder") != std::string::npos) {
+        MESSAGE("skipped: " << error);
+        EndVideoThread();
+        return;
+    }
+#endif
+    REQUIRE_MESSAGE(video, error);
+    RgbFrame f;
+    CHECK(video->Read(f));
     video.reset();
     EndVideoThread();
 }
-
-#endif

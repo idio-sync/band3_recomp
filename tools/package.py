@@ -11,8 +11,9 @@ out/package/band3-<commit>-<build folder>.zip, everything under a band3 folder:
   settings-reference.md: every setting, its default and what it does, as
     docs/settings-reference.md has it (tools/settings_reference.py)
   LICENSE.md, and licenses/ for the libraries built into band3: each
-    src/ThirdParty folder's LICENSE.txt (RtMidi's notice, from its header), and the
-    SDK's licenses folder (SDL3)
+    src/ThirdParty folder's LICENSE.txt (RtMidi's notice, from its header), the
+    SDK's licenses folder (SDL3), and FFmpeg's (its DLLs, on Windows), which the
+    build writes beside them (cmake/ffmpeg.cmake)
   README.txt: what to install, where the game files go, and where the source is
 
 No game files: the player brings their own. band3.map goes beside the zip
@@ -89,7 +90,7 @@ def rtmidi_license():
     return "\n".join(line.strip() for line in text[start:end].splitlines()).strip() + "\n"
 
 
-def third_party_licenses():
+def third_party_licenses(build_dir):
     """{name in licenses/: its text} for every library built into band3: one
     file per library, or a folder for an SDK library with several."""
     def read(path):
@@ -97,6 +98,9 @@ def third_party_licenses():
             return f.read()
 
     out = {}
+    ffmpeg = os.path.join(build_dir, "ffmpeg-license.txt")
+    if os.path.isfile(ffmpeg):
+        out["ffmpeg.txt"] = read(ffmpeg)
     third_party = os.path.join(REPO, "src", "ThirdParty")
     for lib in sorted(os.listdir(third_party)):
         path = os.path.join(third_party, lib, "LICENSE.txt")
@@ -128,6 +132,11 @@ def readme(commit, full_commit, windows, dirty):
         lines += [
             "- Install the Microsoft Visual C++ Redistributable (x64), a recent one:",
             f"  {VC_REDIST_URL}",
+        ]
+    else:
+        lines += [
+            "- For music videos, install your distribution's FFmpeg libraries (the",
+            "  ffmpeg package); the log says which one band3 looks for if it's missing.",
         ]
     lines += [
         "- Bring your own Rock Band 3 (Xbox 360): the Title Update 5 default.xex, or",
@@ -193,7 +202,7 @@ def main(argv):
                 z.writestr(info, src.read())
         z.write(settings_reference.REFERENCE, "band3/settings-reference.md")
         z.write(os.path.join(REPO, "LICENSE.md"), "band3/LICENSE.md")
-        for license_name, text in third_party_licenses().items():
+        for license_name, text in third_party_licenses(build_dir).items():
             z.writestr(f"band3/licenses/{license_name}", text)
         z.writestr("band3/README.txt", readme(commit, full_commit, windows, dirty))
         packed = z.namelist()

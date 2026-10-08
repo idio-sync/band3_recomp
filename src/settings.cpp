@@ -61,7 +61,7 @@ REXCVAR_DEFINE_INT32(music_video_venue_chance, 100, "Band3/Game",
     "black background modifier still win. Applies from the next venue the game picks")
     .range(0, 100);
 
-REXCVAR_DEFINE_BOOL(music_video_hide_band, false, "Band3/Game",
+REXCVAR_DEFINE_BOOL(music_video_hide_band, true, "Band3/Game",
     "Leave the band out of the picture while a song's music video plays, so only the "
     "video shows behind the highways. The venue's lights (and Stage Kit) go on as before");
 

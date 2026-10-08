@@ -130,7 +130,9 @@ private:
     // the decoder's thread: opens each song's video, then reads it ahead of
     // the song's time, seeking when that jumps
     void Run() {
-        const bool can_decode = StartVideoThread();
+        std::string decode_error;
+        const bool can_decode = StartVideoThread(decode_error);
+        if (!can_decode) REXLOG_WARN("Music videos can't be decoded: {}", decode_error);
         std::unique_ptr<VideoDecoder> decoder;
         RgbFrame frame;
         uint64_t song = 0;
@@ -153,7 +155,7 @@ private:
                     lock.lock();
                     continue;
                 }
-                std::string error = "this platform can't decode video";
+                std::string error = decode_error;
                 std::unique_ptr<VideoDecoder> opened =
                     can_decode ? OpenVideo(*path, error) : nullptr;
                 if (!opened) REXLOG_WARN("Music video {}: {}", path->string(), error);

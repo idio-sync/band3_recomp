@@ -7,8 +7,10 @@
 #include "src/Video/picture_convert.h"
 
 // Reads a video file's pictures, for the music video player's thread (and
-// only that one: Windows' Media Foundation, the one decoder so far, is set
-// up per thread). The sound is left alone.
+// only that one: Windows' Media Foundation is set up per thread). FFmpeg
+// first (video_decoder_ffmpeg.cpp), where band3 is built with it and, on
+// Windows, its DLLs are beside it; Media Foundation (video_decoder_mf.cpp) on
+// Windows otherwise. The sound is left alone.
 
 namespace band3::video {
 
@@ -22,8 +24,9 @@ public:
 };
 
 // Sets up and takes down decoding on the calling thread, around any
-// OpenVideo there. False if this platform can't decode video.
-bool StartVideoThread();
+// OpenVideo there. False, with why in `error`, if nothing here can decode
+// video.
+bool StartVideoThread(std::string& error);
 void EndVideoThread();
 
 // the decoder for `path`, or null with what went wrong in `error`

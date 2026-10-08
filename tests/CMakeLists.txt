@@ -201,7 +201,12 @@ target_link_libraries(band3_tests PRIVATE Threads::Threads)
 if(WIN32)
     target_link_libraries(band3_tests PRIVATE ws2_32)
 endif()
-# video_decoder_test.cpp decodes a clip through Media Foundation
+# video_decoder_test.cpp decodes clips through FFmpeg (with it) and Media Foundation
+target_sources(band3_tests PRIVATE
+    ${BAND3_ROOT}/src/Video/video_decoder.cpp
+    ${BAND3_ROOT}/src/Video/video_decoder_ffmpeg.cpp)
+include(${BAND3_ROOT}/cmake/ffmpeg.cmake)
+band3_setup_ffmpeg(band3_tests)
 if(WIN32)
     target_sources(band3_tests PRIVATE ${BAND3_ROOT}/src/Video/video_decoder_mf.cpp)
     target_link_libraries(band3_tests PRIVATE mfplat mfreadwrite mfuuid)
