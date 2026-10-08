@@ -82,6 +82,25 @@ TEST_CASE("a pause sends the state and the clock once, then keep-alives") {
     CHECK(ticker.Tick(state, 1100, t0 + 500ms + 10s).empty());
 }
 
+TEST_CASE("a fifth stream takes the place of the one open longest") {
+    StreamSlots slots(4);
+    const uint64_t a = slots.Open(), b = slots.Open(), c = slots.Open(), d = slots.Open();
+    CHECK(!slots.Evicted(a));
+    CHECK(!slots.Evicted(d));
+    const uint64_t e = slots.Open();
+    CHECK(slots.Evicted(a));
+    CHECK(!slots.Evicted(b));
+    CHECK(!slots.Evicted(e));
+    // the one it replaced closing changes nothing; another closing makes room
+    slots.Close(a);
+    slots.Close(c);
+    const uint64_t f = slots.Open();
+    CHECK(!slots.Evicted(b));
+    CHECK(!slots.Evicted(d));
+    CHECK(!slots.Evicted(f));
+    CHECK(EvictedEvent() == "event: evicted\ndata: {}\n\n");
+}
+
 TEST_CASE("no clock goes out while the song's clock isn't known, or outside a song") {
     Ticker ticker;
     const auto t0 = Ticker::Clock::time_point{} + 1h;

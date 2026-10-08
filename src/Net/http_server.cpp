@@ -82,9 +82,9 @@ constexpr std::chrono::seconds kGameTimeout{5};
 // connections served at once; more wait in the listen queue. Browsers open
 // connections they may never use, so one idle client can't hold up the rest.
 constexpr int kMaxClients = 8;
-// /live/events' streams open at once, apart from kMaxClients; a fifth gets
-// 503 and its page tries again
-constexpr int kMaxStreams = 4;
+// /live/events' streams open at once, apart from kMaxClients; a fifth takes
+// the place of the one open longest (live::StreamSlots)
+constexpr size_t kMaxStreams = 4;
 // how often a stream looks at the game's state and sends what changed
 constexpr std::chrono::milliseconds kStreamTick{250};
 // a request line and headers longer than this aren't from a browser
@@ -827,28 +827,31 @@ private:
     }
 
     // /live/events: this connection's thread writes the stream until the
-    // client goes (a send fails, or times out after kClientTimeout) or the
-    // server stops. It gives up its request slot for one of kMaxStreams.
+    // client goes (a send fails), a newer stream takes its place (stream_slots_)
+    // or the server stops. It gives up its request slot while it streams.
     void ServeStream(socket_t client) {
         const bool cors = REXCVAR_GET(http_allow_cors);
-        bool full;
+        uint64_t id;
         {
             std::lock_guard lock(clients_mutex_);
-            full = streams_ >= kMaxStreams;
-            if (!full) {
-                streams_++;
-                clients_--;
-            }
+            id = stream_slots_.Open();
+            streams_++;
+            clients_--;
             clients_cv_.notify_all();
         }
-        if (full) {
-            SendAll(client, Response(503, kText, "Too many live pages are open", cors));
-            return;
-        }
         REXLOG_DEBUG("Web server: a live page connected");
+        auto evicted = [this, id] {
+            std::lock_guard lock(clients_mutex_);
+            return stream_slots_.Evicted(id);
+        };
         live::Ticker ticker;
         bool open = SendAll(client, live::StreamHead(cors));
         while (open && !stopping_) {
+            if (evicted()) {
+                SendAll(client, live::EvictedEvent());
+                REXLOG_DEBUG("Web server: a newer live page took this one's place");
+                break;
+            }
             const test::GameStateSnapshot game = test::GameState::Get().Snapshot();
             const std::string out =
                 ticker.Tick(live::FromSnapshot(game), game.song_ms, live::Ticker::Clock::now());
@@ -858,6 +861,7 @@ private:
         REXLOG_DEBUG("Web server: a live page left");
         // back among the clients, which the connection's thread counts out
         std::lock_guard lock(clients_mutex_);
+        stream_slots_.Close(id);
         streams_--;
         clients_++;
     }
@@ -870,6 +874,7 @@ private:
     std::condition_variable clients_cv_;
     int clients_ = 0;
     int streams_ = 0;  // of the connections, those streaming /live/events
+    live::StreamSlots stream_slots_{kMaxStreams};
 };
 
 }

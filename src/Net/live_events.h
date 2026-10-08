@@ -1,6 +1,7 @@
 #pragma once
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -40,6 +41,28 @@ std::string StateEvent(const LiveState& state);
 std::string ClockEvent(int32_t song_ms);
 // a comment, which only keeps the connection alive
 inline constexpr std::string_view kKeepAlive = ": keep-alive\n\n";
+// the last event of a stream another took the place of (StreamSlots): its
+// page stops reconnecting by itself
+std::string EvictedEvent();
+
+// Which streams go on: at most `max`, and a new one takes the place of the
+// one open longest, since a device asleep can hold its connection open for
+// hours while the newcomer is the page being watched. Not thread-safe: the
+// server keeps it under its lock.
+class StreamSlots {
+public:
+    explicit StreamSlots(size_t max) : max_(max) {}
+    // a new stream's id
+    uint64_t Open();
+    // whether another stream took this one's place
+    bool Evicted(uint64_t id) const;
+    void Close(uint64_t id);
+
+private:
+    size_t max_;
+    uint64_t next_ = 1;
+    std::deque<uint64_t> open_;  // oldest first; the evicted aren't here
+};
 
 // What one stream sends at each tick (the server's loop, every 250 ms): the
 // state the first time and whenever it changes; the clock with every state,

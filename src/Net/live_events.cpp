@@ -53,6 +53,24 @@ std::string ClockEvent(int32_t song_ms) {
     return "event: clock\ndata: {\"song_ms\":" + std::to_string(song_ms) + "}\n\n";
 }
 
+std::string EvictedEvent() { return "event: evicted\ndata: {}\n\n"; }
+
+uint64_t StreamSlots::Open() {
+    const uint64_t id = next_++;
+    open_.push_back(id);
+    if (open_.size() > max_) open_.pop_front();
+    return id;
+}
+
+bool StreamSlots::Evicted(uint64_t id) const {
+    return std::find(open_.begin(), open_.end(), id) == open_.end();
+}
+
+void StreamSlots::Close(uint64_t id) {
+    const auto it = std::find(open_.begin(), open_.end(), id);
+    if (it != open_.end()) open_.erase(it);
+}
+
 std::string Ticker::Tick(const LiveState& state, int32_t song_ms, Clock::time_point now) {
     std::string out;
     const bool changed = !sent_ || *sent_ != state;

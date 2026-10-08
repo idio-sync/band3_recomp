@@ -279,7 +279,7 @@ It's built on two endpoints other pages can use:
 | Endpoint | |
 |---|---|
 | `/lyrics?shortname=` | the song's lyrics from its MIDI file: `{"shortname", "parts": [{"part": "lead" \| "harm1" \| "harm2" \| "harm3", "lines": [{"start_ms", "end_ms", "syllables": [{"start_ms", "end_ms", "text", "join", "spoken"}]}]}]}`; 404 for a song without vocals, 503 while the game is busy |
-| `/live/events` | server-sent events: `state` (`screen`, `in_game`, `paused`, `song` {`shortname`, `title`, `artist`, `length_ms`} or null, `vocals` `none` \| `lead` \| `harmonies`) whenever it changes, and `clock` (`song_ms`, the game's song clock) four times a second during a song. Four streams at once; a fifth gets 503 |
+| `/live/events` | server-sent events: `state` (`screen`, `in_game`, `paused`, `song` {`shortname`, `title`, `artist`, `length_ms`} or null, `vocals` `none` \| `lead` \| `harmonies`) whenever it changes, and `clock` (`song_ms`, the game's song clock) four times a second during a song. Four streams at once: a fifth takes the place of the one open longest (a device asleep can keep its connection open), which gets `evicted` and stops; its page offers a tap to follow the game again |
 
 `tools/web_preview.py` serves `/karaoke` without the game, over a made-up show
 (`--karaoke-song <shortname>` for a song's own lyrics, `--vocals harmonies`).

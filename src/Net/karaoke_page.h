@@ -268,14 +268,22 @@ body {
     var es = new EventSource('/live/events');
     es.addEventListener('state', function (e) { $('conn').hidden = true; onState(JSON.parse(e.data)); });
     es.addEventListener('clock', function (e) { onClock(JSON.parse(e.data)); });
+    // a newer page took this one's place (four follow the game at most):
+    // reconnecting by itself would only take another's
+    es.addEventListener('evicted', function () {
+      es.close();
+      $('conn').textContent = 'Another screen took this one’s place. Tap to follow the game again.';
+      $('conn').hidden = false;
+      $('conn').onclick = function () { $('conn').onclick = null; $('conn').hidden = true; connect(); };
+    });
     es.onerror = function () {
       if (es.readyState === EventSource.CLOSED) {
-        // not a stream: too many live pages open, or a band3 from before them
+        // not a stream: a band3 from before live pages
         es.close();
-        $('conn').textContent = "Can't follow the game: close another live page, or update band3";
+        $('conn').textContent = "Can't follow the game: this band3 has no live pages; update it";
         $('conn').hidden = false;
         setTimeout(connect, 5000);
-      } else {
+      } else if (!$('conn').onclick) {
         $('conn').textContent = 'Reconnecting…';
         $('conn').hidden = false;
       }
