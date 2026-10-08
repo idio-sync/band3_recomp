@@ -54,6 +54,7 @@
 
 #include "src/Hooks/frame_pacing.h"
 #include "src/Launcher/launcher_platform.h"
+#include "src/Render/query_answers.h"
 #include "src/Render/sync_gpu/sync_monitor.h"
 #include "src/settings.h"
 
@@ -216,7 +217,7 @@ struct Band3GraphicsSystem::Impl {
 
     static SyncCpConfig MakeConfig() {
         SyncCpConfig config;
-        config.fake_sample_count = REXCVAR_GET(native_query_sample_count);
+        config.fake_sample_count = SyncCpSampleCount(REXCVAR_GET(native_query_sample_count));
         return config;
     }
 
@@ -397,8 +398,8 @@ Band3GraphicsSystem::Band3GraphicsSystem() : impl_(std::make_unique<Impl>()) {
     g_active.store(this, std::memory_order_release);
     rex::cvar::RegisterChangeCallback("native_query_sample_count",
                                       [this](std::string_view, std::string_view) {
-                                          impl_->cp.SetFakeSampleCount(
-                                              REXCVAR_GET(native_query_sample_count));
+                                          impl_->cp.SetFakeSampleCount(SyncCpSampleCount(
+                                              REXCVAR_GET(native_query_sample_count)));
                                       });
     rex::cvar::RegisterChangeCallback("native_query_log", [this](std::string_view,
                                                                  std::string_view) {
@@ -501,9 +502,13 @@ X_STATUS Band3GraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* fu
         Shutdown();
         return X_STATUS_UNSUCCESSFUL;
     }
-    REXLOG_INFO("sync gpu: command processor and vblank threads started (queries answered "
-                "with {} samples)",
-                REXCVAR_GET(native_query_sample_count));
+    if (QueryAnswersOn())
+        REXLOG_INFO("sync gpu: command processor and vblank threads started (queries answered "
+                    "with the pixels their draws cover)");
+    else
+        REXLOG_INFO("sync gpu: command processor and vblank threads started (queries answered "
+                    "with {} samples)",
+                    REXCVAR_GET(native_query_sample_count));
     return X_STATUS_SUCCESS;
 }
 

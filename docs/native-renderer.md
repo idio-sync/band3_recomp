@@ -88,8 +88,13 @@ both ways in each.
 Every kind of screen the render checks below go through matches the game's picture, as
 they measure it. Where the native renderer still differs, or hasn't been checked:
 
-- The lens flares are drawn without occlusion, as the emulated GPU draws them, so the
-  picture matches the emulated one, not a 360's.
+- The lens flares aren't occluded. Their visibility tests (occlusion queries) report the
+  pixels each test covers on screen, with either GPU (`src/Render/query_answers.h`), so a
+  flare in the open draws at a 360's strength (the GPUs' old constant 1000 left a 128x128
+  one at 6%), but one behind a character or the set still draws, where a 360 dims or hides
+  it. The native renderer draws a frame after the game has moved on, and may skip one, so
+  its depth can't answer by the next frame as a 360's GPU does. `native_query_sample_count`
+  0 or more brings the constant back; `native_query_log` logs the answers.
 - The world is drawn single-sampled at the window's size, as RB3 draws it at 720p, so above
   720p its edges shimmer a little where the emulated GPU's stretched 720p picture blurs them.
 - With `emulated_gpu_while_native` `full` and no frame cap, its frames stall now and then
@@ -136,8 +141,9 @@ settings), each described there (`src/settings.cpp`):
   `native_view stats`' `by_kind` has `ahead` (the world frames' milliseconds drawing it),
   `ahead_gated` (world frames it chose not to), `ahead_used` (post frames that used it) and
   `ahead_fallback_passes` (world texture passes a post frame drew itself all the same).
-- `native_query_sample_count`, `native_query_log`, `native_sync_short_wait_us`,
-  `native_vblank_free_running`: the sync-only GPU's query answers and pacing.
+- `native_query_sample_count`, `native_query_log`: the occlusion queries' answers (with
+  either GPU). `native_sync_short_wait_us`, `native_vblank_free_running`: the sync-only
+  GPU's pacing.
 - `native_view_target_scale`: the haze and smoke passes in proportion to the picture (on by
   default; every other texture pass is drawn at the game's size). `native_view_shadow_scale`:
   sharper self-shadows.
@@ -349,10 +355,10 @@ the SDK's Direct3D 12 device, which the native renderer draws on, zero-copy; on 
 presents through the SDK's Vulkan presenter, each frame uploaded (written, not yet run). The
 game still sends its GPU commands and waits on what the GPU does with them, so band3's
 sync-only GPU (`src/Render/sync_gpu/`) reads them and does only what the game waits on: the
-fences, the swap's interrupt, the vertical blanks, the occlusion queries' results
-(`native_query_sample_count`), the read pointer and the display gamma ramp. It draws
-nothing; the native renderer is the only picture, on the SDK's presenter with its overlays
-(F3, band3's menus and the rest).
+fences, the swap's interrupt, the vertical blanks, the occlusion queries' results (which
+band3 then replaces with its own counts, `native_query_sample_count`), the read pointer and
+the display gamma ramp. It draws nothing; the native renderer is the only picture, on the
+SDK's presenter with its overlays (F3, band3's menus and the rest).
 
 - `emulated_gpu_while_native` doesn't apply, and F8 only logs that it needs `both`.
 - `compress_character_textures` is ignored (logged once). Compressing reads the outfits

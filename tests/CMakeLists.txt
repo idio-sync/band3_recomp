@@ -58,6 +58,7 @@ add_executable(band3_tests
     post_params_test.cpp
     post_model_test.cpp
     spot_model_test.cpp
+    query_coverage_test.cpp
     present_model_test.cpp
     aspect_model_test.cpp
     http_request_test.cpp

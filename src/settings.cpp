@@ -549,11 +549,14 @@ REXCVAR_DEFINE_BOOL(native_world_ahead, false, "Band3/Advanced/Native renderer",
     "doesn't wait for, as the setup that once hung AMD GPUs did (not seen with this one); for "
     "trying at 120 Hz");
 
-REXCVAR_DEFINE_INT32(native_query_sample_count, 1000, "Band3/Advanced/Native renderer",
-    "With renderer native (no emulated GPU), the samples every occlusion query reports as "
-    "drawn (the lens flares' visibility tests), as the emulated GPU's "
-    "query_occlusion_fake_sample_count does (1000, its default, what RB3 has always got "
-    "here); -1 leaves the queries unanswered")
+// read by src/Render/query_answers.cpp and the sync-only GPU
+REXCVAR_DEFINE_INT32(native_query_sample_count, -1, "Band3/Advanced/Native renderer",
+    "What the occlusion queries (the lens flares' visibility tests) report as drawn. -1, the "
+    "default: the pixels each test covers on screen, as a 360 reports with nothing in front "
+    "of the flare, so flares draw at their full strength, with either GPU (nothing hides "
+    "them: what's in front isn't tested). 0 or more: every query reports that many with "
+    "renderer native, and the emulated GPU its own query_occlusion_fake_sample_count (1000, "
+    "what RB3 got before, which left a large flare at a few percent of its strength)")
     .range(-1, 1000000);
 
 REXCVAR_DEFINE_BOOL(native_query_log, false, "Band3/Advanced/Native renderer",
