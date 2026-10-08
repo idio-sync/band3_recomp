@@ -630,8 +630,21 @@ struct GpuRenderer::Impl {
         uint32_t levels = 1;  // its class's whole chain
         std::vector<uint32_t> free;
         uint64_t empty_since = 0;  // when its last texture went, if none are left
+        // made ahead (Premake) and not yet used: kept empty until then
+        // (kArrayKeepSeconds), then as any empty one
+        std::chrono::steady_clock::time_point ahead_until{};
     };
     std::unordered_map<uint64_t, TexArray> tex_arrays;
+    static uint64_t ArrayKey(uint32_t w, uint32_t h, SDL_GPUTextureFormat format) {
+        return uint64_t(w) << 40 | uint64_t(h) << 16 | uint32_t(format);
+    }
+    // a size class's first array's layers: about kTextureArrayBytes of level 0
+    static uint32_t FirstArrayLayers(uint32_t w, uint32_t h, SDL_GPUTextureFormat format) {
+        const uint64_t layer_bytes = uint64_t(w) * h * TexelBits(format) / 8;
+        return uint32_t(std::clamp<uint64_t>(kTextureArrayBytes / layer_bytes, 1, 64));
+    }
+    SDL_GPUTexture* NewArrayTexture(uint32_t w, uint32_t h, SDL_GPUTextureFormat format,
+                                    uint32_t layers);
     struct Tex {
         std::shared_ptr<const Texture> keep;
         TexArray* array = nullptr;  // null if it couldn't have a layer
@@ -684,7 +697,8 @@ struct GpuRenderer::Impl {
     // targets announced and not yet made ahead (target_premake.h), and what
     // Idle made since the last frame (GpuStats::targets_premade)
     AnnounceQueue premake_pending;
-    uint32_t premade_since = 0;
+    TextureAnnounceQueue premake_textures;
+    uint32_t premade_since = 0, arrays_premade_since = 0;
     double premade_ms_since = 0;
     // DxTexes with a target made since the device started, for
     // GpuStats::targets_returning
@@ -876,9 +890,9 @@ struct GpuRenderer::Impl {
     bool MakeRt(Rt& rt, uint32_t w, uint32_t h, uint32_t levels, bool shadow, bool share);
     SDL_GPUTexture* TakeSharedDepth(uint32_t w, uint32_t h);
     void DropSharedDepth(uint32_t w, uint32_t h);
-    // between frames (GpuRenderer::Idle): announced targets made ahead,
-    // within PremakeBudget
-    void Premake(const RasterOptions& o);
+    // between frames (GpuRenderer::Idle): announced targets and texture
+    // arrays made ahead, within PremakeBudget; whether any are left
+    bool Premake(const RasterOptions& o);
     // marks `rt` drawn or sampled by this frame, for Evict
     void UseRt(Rt& rt) {
         rt.used = serial;
@@ -1405,7 +1419,8 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     // (the targets let go of theirs)
     shared_depths.clear();
     premake_pending.Clear();
-    premade_since = 0;
+    premake_textures.Clear();
+    premade_since = arrays_premade_since = 0;
     premade_ms_since = 0;
     arena_vert_count = arena_index_count = 0;
     pipelines.clear();
@@ -1938,7 +1953,7 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx, SDL_GPUTextureFormat format) {
     const Texture& t = *tx.keep;
     uint32_t w, h;
     SizeClass(t.width, t.height, w, h);
-    TexArray& a = tex_arrays[uint64_t(w) << 40 | uint64_t(h) << 16 | uint32_t(format)];
+    TexArray& a = tex_arrays[ArrayKey(w, h, format)];
     a.w = w;
     a.h = h;
     a.format = format;
@@ -1963,22 +1978,9 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx, SDL_GPUTextureFormat format) {
     }
     if (a.free.empty()) {
         const auto start = std::chrono::steady_clock::now();
-        const uint32_t layers =
-            a.layers ? a.layers * 2
-                     : uint32_t(std::clamp<uint64_t>(kTextureArrayBytes / layer_bytes, 1, 64));
-        SDL_GPUTexture* grown = nullptr;
-        if (layers <= kMaxTextureLayers) {
-            SDL_GPUTextureCreateInfo ti{};
-            ti.type = SDL_GPU_TEXTURETYPE_2D_ARRAY;
-            ti.format = format;
-            ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
-            ti.width = w;
-            ti.height = h;
-            ti.layer_count_or_depth = layers;
-            ti.num_levels = FullMipChain(w, h);
-            grown = SDL_CreateGPUTexture(device, &ti);
-            counts.textures++;
-        }
+        const uint32_t layers = a.layers ? a.layers * 2 : FirstArrayLayers(w, h, format);
+        SDL_GPUTexture* grown =
+            layers <= kMaxTextureLayers ? NewArrayTexture(w, h, format, layers) : nullptr;
         if (!grown) {
             if (!texture_failure_logged) {
                 texture_failure_logged = true;
@@ -2009,11 +2011,29 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx, SDL_GPUTextureFormat format) {
                                          .count();
         }
     }
+    if (a.ahead_until != std::chrono::steady_clock::time_point{}) {
+        a.ahead_until = {};
+        if (walk_stats) walk_stats->arrays_premade_used++;
+    }
     tx.array = &a;
     tx.levels = std::min(LevelsOf(t, format != kColorFormat), a.levels);
     tx.layer = a.free.back();
     a.free.pop_back();
     return true;
+}
+
+SDL_GPUTexture* GpuRenderer::Impl::NewArrayTexture(uint32_t w, uint32_t h,
+                                                   SDL_GPUTextureFormat format, uint32_t layers) {
+    SDL_GPUTextureCreateInfo ti{};
+    ti.type = SDL_GPU_TEXTURETYPE_2D_ARRAY;
+    ti.format = format;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    ti.width = w;
+    ti.height = h;
+    ti.layer_count_or_depth = layers;
+    ti.num_levels = FullMipChain(w, h);
+    counts.textures++;
+    return SDL_CreateGPUTexture(device, &ti);
 }
 
 void GpuRenderer::Impl::LetTextureGo(Tex& tx) {
@@ -2191,13 +2211,12 @@ void GpuRenderer::Impl::ReleaseRt(Rt& rt) {
     rt.drawn = false;
 }
 
-void GpuRenderer::Impl::Premake(const RasterOptions& o) {
+bool GpuRenderer::Impl::Premake(const RasterOptions& o) {
     TakeAnnouncedTargets(premake_pending);
-    if (!o.premake_targets) {
-        premake_pending.Clear();
-        return;
-    }
-    if (premake_pending.Empty()) return;
+    TakeAnnouncedTextures(premake_textures);
+    if (!o.premake_targets) premake_pending.Clear();
+    if (!o.premake_arrays) premake_textures.Clear();
+    if (premake_pending.Empty() && premake_textures.Empty()) return false;
     const auto start = std::chrono::steady_clock::now();
     auto elapsed = [&] {
         return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
@@ -2205,11 +2224,46 @@ void GpuRenderer::Impl::Premake(const RasterOptions& o) {
     };
     uint32_t unused = 0;
     for (const auto& [obj, rt] : rts) unused += rt.premade ? 1 : 0;
+    auto room = [&] { return unused < PremakeBudget::kMaxUnused && rts.size() < kMaxRts; };
+    uint32_t made = 0, arrays = 0;
+    // Arrays first: a song's textures are announced 0.1 to 0.2 s before its
+    // first frame, its targets seconds before. A class's first array as
+    // PlaceTexture makes it, in the format UseTexture would keep the texture
+    // in (as blocks or bytes where this frame's options keep them)
+    while (!premake_textures.Empty() && PremakeMore(made, elapsed(), 0)) {
+        const AnnouncedTexture t = premake_textures.Front();
+        premake_textures.PopFront();
+        SDL_GPUTextureFormat format = kColorFormat;
+        const SDL_GPUTextureFormat kept = KeptFormat(t.xenos_format);
+        if (kept != SDL_GPU_TEXTUREFORMAT_INVALID &&
+            (kept == SDL_GPU_TEXTUREFORMAT_R8_UNORM ? r8_format && o.r8_textures
+                                                    : bc_formats && o.bc_textures))
+            format = kept;
+        uint32_t w, h;
+        SizeClass(t.width, t.height, w, h);
+        const uint64_t key = ArrayKey(w, h, format);
+        if (tex_arrays.count(key)) continue;
+        const uint32_t layers = FirstArrayLayers(w, h, format);
+        SDL_GPUTexture* texture = NewArrayTexture(w, h, format, layers);
+        if (!texture) break;
+        TexArray& a = tex_arrays[key];
+        a.texture = texture;
+        a.w = w;
+        a.h = h;
+        a.format = format;
+        a.layers = layers;
+        a.levels = FullMipChain(w, h);
+        for (uint32_t l = layers; l-- > 0;) a.free.push_back(l);
+        a.empty_since = serial;
+        a.ahead_until = std::chrono::steady_clock::now() +
+                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                            std::chrono::duration<double>(kArrayKeepSeconds));
+        made++;
+        arrays++;
+    }
     // sized as TargetFor would without the frame (target_premake.h)
     static const FrameCapture kNoFrame;
-    uint32_t made = 0;
-    while (!premake_pending.Empty() && PremakeMore(made, elapsed(), unused) &&
-           rts.size() < kMaxRts) {
+    while (!premake_pending.Empty() && PremakeMore(made, elapsed(), unused) && room()) {
         const AnnouncedTarget a = premake_pending.Front();
         premake_pending.PopFront();
         // never one a pass has: remaking it would forget what it drew
@@ -2237,8 +2291,11 @@ void GpuRenderer::Impl::Premake(const RasterOptions& o) {
         made++;
         unused++;
     }
-    premade_since += made;
+    premade_since += made - arrays;
+    arrays_premade_since += arrays;
     premade_ms_since += elapsed();
+    // more to do now (not targets held back by the cap)
+    return !premake_textures.Empty() || (!premake_pending.Empty() && room());
 }
 
 // the frame's targets, at the picture's size; with no device, only forgets them
@@ -2984,6 +3041,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 st.pre_targets_made += ps.targets_made;
                 st.pre_targets_ms += ps.targets_ms;
                 st.premade_used += ps.premade_used;
+                st.arrays_premade_used += ps.arrays_premade_used;
                 st.pre_arrays_grown += ps.arrays_grown;
                 st.pre_arrays_ms += ps.arrays_ms;
                 st.pre_arrays_mb += ps.arrays_mb;
@@ -4794,10 +4852,12 @@ void GpuRenderer::Impl::Evict() {
         rts.erase(f);
         counts.rts_released++;
     }
-    // empty arrays go after kEvictAfter frames
+    // empty arrays go after kEvictAfter frames (one made ahead, unused, after
+    // kArrayKeepSeconds)
     for (auto it = tex_arrays.begin(); it != tex_arrays.end();) {
         const TexArray& a = it->second;
-        if (a.free.size() < a.layers || a.empty_since + kEvictAfter >= serial) {
+        if (a.free.size() < a.layers || a.empty_since + kEvictAfter >= serial ||
+            frame_now < a.ahead_until) {
             ++it;
             continue;
         }
@@ -4933,13 +4993,13 @@ void GpuRenderer::Prewarm(uint32_t overlay_samples) {
     if (impl_->device && !impl_->warm) impl_->Prewarm(overlay_samples);
 }
 
-void GpuRenderer::Idle(const RasterOptions& options) {
+bool GpuRenderer::Idle(const RasterOptions& options) {
     // only after Draw or Prewarm has set up the device
-    if (!impl_->warm) return;
+    if (!impl_->warm) return false;
     std::lock_guard lock(impl_->mutex);
-    if (!impl_->device || !impl_->warmed_up) return;
+    if (!impl_->device || !impl_->warmed_up) return false;
     impl_->WarmPools();
-    impl_->Premake(options);
+    return impl_->Premake(options);
 }
 
 void GpuRenderer::SetPresentDevice(void* d3d12_device, uint64_t timestamp_frequency) {
@@ -5036,6 +5096,7 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
     // made ahead since the last frame (Idle)
     stats.targets_premade = std::exchange(impl_->premade_since, 0);
     stats.premake_ms = std::exchange(impl_->premade_ms_since, 0.0);
+    stats.arrays_premade = std::exchange(impl_->arrays_premade_since, 0);
     stats.texture_array_mb = impl_->TextureArrayMb();
     stats.arena_mb = double(impl_->arena_verts.size + impl_->arena_indices.size) / 1048576;
     return true;

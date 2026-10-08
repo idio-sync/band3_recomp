@@ -3,7 +3,7 @@
 // announcement per DxTex in order and forgets a destroyed one; the worker
 // makes a few between frames and stops at its cap; only targets without
 // depth share one, never a shadow map; levels follow FinishDrawTarget's
-// chain.
+// chain; loaded textures' kinds are announced once each, for their arrays.
 
 #include <doctest/doctest.h>
 #include <cstdint>
@@ -107,4 +107,31 @@ TEST_CASE("a target's levels follow FinishDrawTarget's chain, one for a shadow m
     CHECK(TargetLevels(20, 256, 512, false) == 10);  // 512 down to 1
     CHECK(TargetLevels(20, 1, 1, false) == 1);
     CHECK(TargetLevels(4, 512, 512, true) == 1);
+}
+
+TEST_CASE("loaded textures are announced once per size and format, oldest first") {
+    TextureAnnounceQueue shared, worker;
+    shared.Announce({256, 256, 18});
+    shared.Announce({128, 128, 20});
+    shared.Announce({256, 256, 18});  // another texture of the same kind
+    shared.Announce({256, 256, 20});
+    CHECK(shared.Size() == 3);
+    worker.Announce({128, 128, 20});
+    shared.TakeInto(worker);
+    CHECK(shared.Empty());
+    REQUIRE(worker.Size() == 3);
+    CHECK(worker.Front() == AnnouncedTexture{128, 128, 20});
+    worker.PopFront();
+    CHECK(worker.Front() == AnnouncedTexture{256, 256, 18});
+    for (uint32_t i = 1; i <= TextureAnnounceQueue::kMax + 2; i++) worker.Announce({i, i, 6});
+    CHECK(worker.Size() == TextureAnnounceQueue::kMax);
+}
+
+TEST_CASE("loaded textures announce their arrays, rendered ones their targets") {
+    CHECK(AnnouncesTexture(0, 256, 256));
+    CHECK(AnnouncesTexture(1, 8, 8));
+    CHECK_FALSE(AnnouncesTexture(2, 256, 256));
+    CHECK_FALSE(AnnouncesTexture(kTexTypeShadowMap, 512, 512));
+    CHECK_FALSE(AnnouncesTexture(0, 0, 256));
+    CHECK_FALSE(AnnouncesTexture(0, 256, 9000));
 }

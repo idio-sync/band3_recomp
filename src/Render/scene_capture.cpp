@@ -2041,23 +2041,30 @@ void ForgetTexture(uint32_t tex) {
     s.rts.erase(tex);
 }
 
-// rendered textures given surfaces, for the worker to make their targets
-// ahead (target_premake.h); its own lock, as SyncBitmap can run on the
-// splash thread
+// textures given surfaces, for the worker to make their render targets and
+// texture arrays ahead (target_premake.h); its own lock, as SyncBitmap can
+// run on the splash thread
 std::mutex g_announce_mutex;
 AnnounceQueue g_announced;
+TextureAnnounceQueue g_announced_textures;
 
-// after DxTex::SyncBitmap
-void AnnounceIfTarget(const Guest& g, uint32_t tex) {
+// after DxTex::SyncBitmap: a rendered texture's target, a loaded one's
+// array
+void AnnounceTexture(const Guest& g, uint32_t tex) {
     AnnouncedTarget t;
     t.tex_obj = tex;
     t.width = g.U32(tex + kTex_Width);
     t.height = g.U32(tex + kTex_Height);
     t.tex_type = g.U32(tex + kTex_Type);
     t.num_mips = g.U32(tex + kTex_NumMips);
-    if (!AnnouncesTarget(t.tex_type, t.width, t.height)) return;
-    std::lock_guard lock(g_announce_mutex);
-    g_announced.Announce(t);
+    if (AnnouncesTarget(t.tex_type, t.width, t.height)) {
+        std::lock_guard lock(g_announce_mutex);
+        g_announced.Announce(t);
+    } else if (AnnouncesTexture(t.tex_type, t.width, t.height)) {
+        const AnnouncedTexture a{t.width, t.height, g.U32(tex + kDxTex_Format) & 0x3f};
+        std::lock_guard lock(g_announce_mutex);
+        g_announced_textures.Announce(a);
+    }
 }
 
 // RndTex::~RndTex
@@ -2582,6 +2589,11 @@ void TakeAnnouncedTargets(AnnounceQueue& into) {
     g_announced.TakeInto(into);
 }
 
+void TakeAnnouncedTextures(TextureAnnounceQueue& into) {
+    std::lock_guard lock(g_announce_mutex);
+    g_announced_textures.TakeInto(into);
+}
+
 void AcquireCapture() {
     std::lock_guard lock(g_users_mutex);
     if (g_users++ == 0) g_enabled.store(true);
@@ -3032,8 +3044,7 @@ extern "C" REX_FUNC(RndTex__dt) {
     __imp__RndTex__dt(ctx, base);
 }
 
-// and, once it has its surfaces, a rendered one is announced
-// (target_premake.h)
+// and, once it has its surfaces, it's announced (target_premake.h)
 extern "C" REX_FUNC(DxTex__SyncBitmap) {
     const uint32_t tex = ctx.r3.u32;
     if (Active()) {
@@ -3042,7 +3053,7 @@ extern "C" REX_FUNC(DxTex__SyncBitmap) {
         ForgetTexture(tex);
     }
     __imp__DxTex__SyncBitmap(ctx, base);
-    if (Active()) AnnounceIfTarget(Guest{base}, tex);
+    if (Active()) AnnounceTexture(Guest{base}, tex);
 }
 
 // the frame's ProcCommands at DxRnd::DoPostProcess, for LatchGpuSkip at

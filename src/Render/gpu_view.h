@@ -142,6 +142,10 @@ struct GpuStats {
     // and not yet used, and the shared depth textures, after the frame
     uint32_t premade_used = 0, targets_premade = 0, premade_unused = 0, shared_depths = 0;
     double premake_ms = 0;
+    // native_view_premake_arrays: texture arrays made ahead between the
+    // last frame and this one (their ms in premake_ms), and those the walk
+    // placed a first texture in
+    uint32_t arrays_premade = 0, arrays_premade_used = 0;
     uint32_t textures_first = 0, meshes_first = 0;
     uint32_t arrays_grown = 0;
     double arrays_ms = 0, arrays_mb = 0;
@@ -344,10 +348,11 @@ class GpuRenderer {
     // for a command buffer, ~0.5 for a uniform buffer, ~2 for a heap pair
     // (gpu_view.cpp's Impl::WarmPools; about 130 ms), so neither the UI
     // thread nor a frame waits for them. Then, with
-    // RasterOptions::premake_targets, it makes a few announced render
-    // targets ahead (target_premake.h; sized by `options`). Cheap with
-    // nothing to do.
-    void Idle(const RasterOptions& options);
+    // RasterOptions::premake_targets and premake_arrays, it makes a few
+    // announced render targets and texture arrays ahead (target_premake.h;
+    // sized by `options`). Cheap with nothing to do. Whether announcements
+    // are left that it could make now, to call again soon.
+    bool Idle(const RasterOptions& options);
     // Draws `frame` at options.width x options.height into rgba (R in the low
     // byte, alpha 0xff) via its own output texture and readback. Any thread,
     // one frame at a time. False without a device or if the GPU failed

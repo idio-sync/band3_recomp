@@ -180,6 +180,8 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.premade_used += g.premade_used;
     sum.targets_premade += g.targets_premade;
     sum.premake_ms += g.premake_ms;
+    sum.arrays_premade += g.arrays_premade;
+    sum.arrays_premade_used += g.arrays_premade_used;
     sum.premade_unused += g.premade_unused;
     sum.shared_depths += g.shared_depths;
     sum.textures_first += g.textures_first;
@@ -299,11 +301,13 @@ std::string DescribePlan(const GpuStats& gs, const CameraCuts::Step& cam) {
                   gs.arrays_ms, gs.arrays_mb, gs.plan_arena_ms, arena, gs.plan_reserve_ms,
                   grew.c_str(), gs.post_plan_ms);
     std::string s = buf;
-    if (gs.targets_premade || gs.premade_unused) {
+    if (gs.targets_premade || gs.premade_unused || gs.arrays_premade || gs.arrays_premade_used) {
         std::snprintf(buf, sizeof(buf),
-                      "; targets made ahead: %u since the frame before, in %.1f ms; %u unused, "
-                      "%u shared depths",
-                      gs.targets_premade, gs.premake_ms, gs.premade_unused, gs.shared_depths);
+                      "; made ahead: %u targets and %u texture arrays since the frame before, "
+                      "in %.1f ms; %u arrays made ahead given their first texture; %u "
+                      "targets unused, %u shared depths",
+                      gs.targets_premade, gs.arrays_premade, gs.premake_ms,
+                      gs.arrays_premade_used, gs.premade_unused, gs.shared_depths);
         s += buf;
     }
     if (!cam.world_frame) {
@@ -696,6 +700,7 @@ class Renderer {
     static constexpr std::chrono::milliseconds kPaintsStopped{250};
     // idle poll; captures, settings and users leaving wake it sooner
     static constexpr std::chrono::milliseconds kIdleWait{100};
+    static constexpr std::chrono::milliseconds kPremakeWait{2};
     // captures a presenting stretch waits through for a whole picture to
     // start with
     static constexpr uint32_t kStartWait = 8;
@@ -816,6 +821,7 @@ class Renderer {
                 o.gpu_timestamps = REXCVAR_GET(native_gpu_timestamps);
                 o.inline_mips = REXCVAR_GET(native_view_inline_mips);
                 o.premake_targets = REXCVAR_GET(native_view_premake_targets);
+                o.premake_arrays = REXCVAR_GET(native_view_premake_arrays);
                 o.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
                 o.bc_textures = REXCVAR_GET(native_bc_textures);
                 // and k_8's (movie planes) as R8
@@ -917,10 +923,11 @@ class Renderer {
                 continue;
             }
             if (!work) {
-                // between frames: SDL's pools once, render targets ahead
-                // (GpuRenderer::Idle)
-                if (gpu) GpuRenderer::Get().Idle(o);
-                epoch = WaitForCapture(epoch, kIdleWait);
+                // between frames: SDL's pools once, render targets and
+                // texture arrays ahead (GpuRenderer::Idle), soon again while
+                // some are left (a song's textures come 0.1 s before it)
+                const bool more = gpu && GpuRenderer::Get().Idle(o);
+                epoch = WaitForCapture(epoch, more ? kPremakeWait : kIdleWait);
                 continue;
             }
             // an output no paint may still be sampling

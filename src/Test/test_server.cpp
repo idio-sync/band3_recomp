@@ -282,6 +282,7 @@ public:
         options.r8_textures = REXCVAR_GET(native_r8_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);
         options.premake_targets = REXCVAR_GET(native_view_premake_targets);
+        options.premake_arrays = REXCVAR_GET(native_view_premake_arrays);
         options.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
         // as the native renderer's frames keep what they draw, so this one
         // doesn't let it go (gpu_view.h's residency)
@@ -385,6 +386,7 @@ public:
         options.r8_textures = REXCVAR_GET(native_r8_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);
         options.premake_targets = REXCVAR_GET(native_view_premake_targets);
+        options.premake_arrays = REXCVAR_GET(native_view_premake_arrays);
         options.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
         options.clock_keep = render::InSong();  // as NativePicture's
         std::vector<uint32_t> rgba;
@@ -1104,6 +1106,8 @@ private:
                       {"targets_returning", double(g.targets_returning)},
                       {"premade_used", double(g.premade_used)},
                       {"targets_premade", double(g.targets_premade)},
+                      {"arrays_premade", double(g.arrays_premade)},
+                      {"arrays_premade_used", double(g.arrays_premade_used)},
                       {"premade_unused", double(g.premade_unused)},
                       {"shared_depths", double(g.shared_depths)},
                       {"textures_first", double(g.textures_first)},

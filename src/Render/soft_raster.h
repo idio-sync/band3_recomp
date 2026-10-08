@@ -165,6 +165,9 @@ struct RasterOptions {
     // loads them made ahead between frames, and targets without depth
     // sharing one per size (target_premake.h)
     bool premake_targets = true;
+    // GPU (native_view_premake_arrays): texture arrays for the size classes
+    // and formats of textures RB3 loads made ahead between frames
+    bool premake_arrays = true;
     // GPU (native_view_submit_points): extra submits besides each texture
     // pass with mips: 0 none, 1 at the resolve (SubmitAtResolve)
     uint32_t submit_points = 0;

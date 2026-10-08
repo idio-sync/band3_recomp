@@ -15,7 +15,7 @@
 // 26 ms of a 47 ms frame). RB3 gives each rendered texture (RndTex::Type bit
 // 2) its surfaces in DxTex::SyncBitmap as it loads, seconds before the first
 // pass draws into it: scene_capture.cpp's hook announces it there
-// (AnnounceTarget), and the worker makes it between frames, a few at a time
+// (AnnounceTexture), and the worker makes it between frames, a few at a time
 // (GpuRenderer::Idle), where the frame that first draws into it finds it.
 //
 // A target made ahead is undrawn, so it draws and samples as one not yet
@@ -30,6 +30,19 @@
 // texture (SharesDepth): half the textures made for them. A target that
 // loads depth never gets a shared one; a target whose type changes is made
 // again.
+
+// Texture arrays made ahead (native_view_premake_arrays). A size class and
+// format's first array (gpu_view.cpp's PlaceTexture; 4 MB of level 0, ~0.6
+// ms) is made when the first texture of that class is drawn: a song's first
+// frame made 19 (11.5 ms), its camera cuts a few more. SyncBitmap sees every
+// texture as it loads, 0.1 to 0.2 s before the frame that first draws it (a
+// song's 240 in the last 0.2 s of its loading screen), with its size and
+// D3DFORMAT, whose low six bits are its Xenos format: the worker makes the
+// class's first array if it has none, as PlaceTexture would. At 20th Century
+// Boy's start that predicted 20 of the first frame's 21 arrays, and 2 it
+// didn't use. A format guessed wrong (a texture kept RGBA for its fetch's
+// swizzle) only makes an array nothing uses; one made ahead is kept unused
+// for kArrayKeepSeconds, then goes as an empty array does.
 
 namespace band3::render {
 
@@ -70,6 +83,45 @@ class AnnounceQueue {
     std::vector<AnnouncedTarget> items_;
 };
 
+// a loaded texture as SyncBitmap left it (tex+0x4c, +0x50; D3DFORMAT's low
+// six bits, +0x74)
+struct AnnouncedTexture {
+    uint32_t width = 0, height = 0, xenos_format = 0;
+    bool operator==(const AnnouncedTexture&) const = default;
+};
+
+// Loaded textures' sizes and formats not yet looked at, oldest first, each
+// once (a song loads hundreds of a few dozen kinds), at most kMax (the
+// oldest go). Not thread-safe, as AnnounceQueue.
+class TextureAnnounceQueue {
+ public:
+    static constexpr size_t kMax = 256;
+    void Announce(const AnnouncedTexture& t) {
+        if (std::find(items_.begin(), items_.end(), t) != items_.end()) return;
+        if (items_.size() >= kMax) items_.erase(items_.begin());
+        items_.push_back(t);
+    }
+    void TakeInto(TextureAnnounceQueue& out) {
+        for (const AnnouncedTexture& t : items_) out.Announce(t);
+        items_.clear();
+    }
+    bool Empty() const { return items_.empty(); }
+    size_t Size() const { return items_.size(); }
+    const AnnouncedTexture& Front() const { return items_.front(); }
+    void PopFront() { items_.erase(items_.begin()); }
+    void Clear() { items_.clear(); }
+
+ private:
+    std::vector<AnnouncedTexture> items_;
+};
+
+// seconds an array made ahead is kept unused
+inline constexpr double kArrayKeepSeconds = 10;
+
+// Moves the textures announced since the last call into `into`. Any thread;
+// scene_capture.cpp's.
+void TakeAnnouncedTextures(TextureAnnounceQueue& into);
+
 // Moves the targets announced since the last call into `into` (the worker's
 // own queue). Any thread; scene_capture.cpp's.
 void TakeAnnouncedTargets(AnnounceQueue& into);
@@ -78,6 +130,10 @@ void TakeAnnouncedTargets(AnnounceQueue& into);
 // size RB3 could draw into
 inline bool AnnouncesTarget(uint32_t tex_type, uint32_t width, uint32_t height) {
     return IsPassTargetType(tex_type) && width && height && width <= 8192 && height <= 8192;
+}
+// and a loaded one's array
+inline bool AnnouncesTexture(uint32_t tex_type, uint32_t width, uint32_t height) {
+    return !IsPassTargetType(tex_type) && width && height && width <= 8192 && height <= 8192;
 }
 
 // How many targets the worker makes ahead between two frames

@@ -322,6 +322,25 @@ settings), each described there (`src/settings.cpp`):
   frame's 8 targets (8 ms) to 2 or 3 (0.8 to 1.2 ms, the soft-particle surfaces), and in
   its 60 s slice the process's video memory from 552 to 557 MB to 533 to 536 (the shared
   depths; targets 35 MB at most); a song announces about 70.
+- `native_view_premake_arrays` (on): makes the texture arrays the textures RB3 loads will go
+  in as it loads them. Textures share an array per size class and format
+  (`gpu_view.cpp`'s `PlaceTexture`), the first one 4 MB, made when the first texture of its
+  class is drawn: a song's first frame made 19 (11.5 to 12.3 ms of its world passes before
+  it), a cut a few more. `DxTex::SyncBitmap` sees each texture as it loads, with its size and
+  format, 0.1 to 0.2 s before the frame that first draws it (a song's 240 in the last 0.2 s
+  of its loading screen); the hook announces each kind once and the worker makes the class's
+  first array if it has none, as `PlaceTexture` would, in the format the texture will be
+  kept in (`native_bc_textures`, `native_r8_textures`), sharing `native_view_premake_targets`'
+  budget between frames and coming back after 2 ms rather than 100 while some are left. That
+  predicted 20 of the song's first frame's 21 arrays and 2 it didn't use, and 15 to 30 of
+  each render check frame's, missing one at most (a texture its fetch keeps RGBA). One made
+  ahead and unused goes after 10 s, then as an empty array does. The arrays are made and
+  given out the same either way, so the picture is: the 11 frames above drawn the same moment
+  from no arrays, with them made ahead and without, had no pixel different. At 20th Century
+  Boy's start (four runs) the song's first frame went from 35 to 39 ms to 23 to 27 (its world
+  passes from 24 to 25 to 13 to 15), and its four first-sight frames from 115 to 127 ms in
+  all to 92 to 106 (168 to 180 before the pools were warmed and targets made ahead); the
+  process's video memory in its 60 s slice stayed 536 to 539 MB.
 
 `native_view stats`' `by_kind` splits the live view's frames by what they drew under
 even/odd rendering (`frame_compose.h`'s `FrameKind`): `world` (the game drew the world; the
