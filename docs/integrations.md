@@ -165,7 +165,9 @@ these as JSON, as the RB3E Dashboard does:
 | the song changes | `{"type":"song","name":"<title>"}`, sent before `playing` when a song starts |
 
 The dashboard's `HomeAssistant/rb3e_lighting.yaml` automation works unchanged with webhook
-id `rb3_event`. A shorter one that dims a light for each song:
+id `rb3_event`; a copy is in [home-assistant/rb3e_lighting.yaml](home-assistant/rb3e_lighting.yaml)
+(it also puts the song's title in an `input_text` helper). A shorter one that dims a light
+for each song:
 
 ```yaml
 alias: "Rock Band 3 lights"
