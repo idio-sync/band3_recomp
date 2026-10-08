@@ -164,7 +164,7 @@ settings), each described there (`src/settings.cpp`):
   written, 16 a draw that rebinds) and pipeline binds and uniform pushes over 0.05 ms (a 32
   KB uniform buffer made; a draw pushes 2 KB), each with the slowest; `submit` its slowest
   submission. So that frames don't make those, the worker grows SDL_gpu's pools once, the
-  first time it waits for a capture (`gpu_view.h`'s `WarmPools`, logged "SDL's pools
+  first time it waits for a capture (`gpu_view.h`'s `Idle`, logged "SDL's pools
   warmed"): 16 command buffers and their fences, 128 uniform buffers (8 MB) and 24
   descriptor heap pairs (about 2 MB each), in 103 to 116 ms, about 30 MB more video memory
   than a song grew them to by itself. At 20th Century Boy's start (four runs each) the world
@@ -297,6 +297,31 @@ settings), each described there (`src/settings.cpp`):
   command processor's and the audio's busy. What's left of those frames is the planning's
   render targets made (25 in 23 to 24 ms on the third), the world passes before the frame (35
   to 37 ms on the first) and recording (17 to 35 ms on the fourth).
+- `native_view_premake_targets` (on): makes the textures RB3 draws into (outfits, faces, the
+  crowd, the spotlights' targets, shadow maps) as it loads them, rather than in the frame
+  that first draws into them, where each cost about a millisecond (a colour and a depth
+  texture, each a committed resource): a song's first camera cut to the band made 25 in one
+  frame, 23 to 26 ms of it. RB3 gives a rendered texture its surfaces in `DxTex::SyncBitmap`,
+  seconds before its first pass (the song's 25 four seconds before that cut); the capture's
+  hook announces it there and the worker makes it while it waits for a capture, up to four
+  at a time and 4 ms (`src/Render/target_premake.h`), at most 64 made ahead and not yet used
+  (unused ones go after 30 s as any target). One made ahead is undrawn, so it draws and
+  samples as one not yet made, and only targets a pass doesn't have are made, so the picture
+  is the same: 11 frames (render_song_evenodd's on a refracting venue and
+  render_screens_menus') drawn the same moment with targets made ahead and shared depths and
+  without had no pixel different. A soft-particle surface is made at the game's size and its
+  first pass remakes it, as before. Targets without depth (RndTex's kRenderedNoZ: most of
+  them, outfits and the spotlights' included) clear their depth at every pass and keep none,
+  so those of a size share one depth texture; one that loads depth never gets it, and one
+  whose type changes is made again. The slow-frame line says how many the frame found made
+  ahead ("N made ahead" in its walk) and how many were made since the frame before, unused
+  and shared depths; `by_kind` has `targets_premade`, `premade_used`, `premade_unused`,
+  `shared_depths` and `premake` (their milliseconds, between frames, not in `ms`). At 20th
+  Century Boy's start (four runs) the cut to the band went from 45 to 49 ms to 22 to 23 (24 of
+  its 25 targets made ahead; the 25th, announced 10 ms before, 0.4 ms), the first 1402-draw
+  frame's 8 targets (8 ms) to 2 or 3 (0.8 to 1.2 ms, the soft-particle surfaces), and in
+  its 60 s slice the process's video memory from 552 to 557 MB to 533 to 536 (the shared
+  depths; targets 35 MB at most); a song announces about 70.
 
 `native_view stats`' `by_kind` splits the live view's frames by what they drew under
 even/odd rendering (`frame_compose.h`'s `FrameKind`): `world` (the game drew the world; the

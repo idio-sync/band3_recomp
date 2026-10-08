@@ -281,6 +281,7 @@ public:
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);
+        options.premake_targets = REXCVAR_GET(native_view_premake_targets);
         options.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
         // as the native renderer's frames keep what they draw, so this one
         // doesn't let it go (gpu_view.h's residency)
@@ -383,6 +384,7 @@ public:
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);
+        options.premake_targets = REXCVAR_GET(native_view_premake_targets);
         options.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
         options.clock_keep = render::InSong();  // as NativePicture's
         std::vector<uint32_t> rgba;
@@ -1041,6 +1043,7 @@ private:
                         {"plan_setup", g.plan_setup_ms},
                         {"plan_walk", g.plan_walk_ms},
                         {"plan_targets", g.targets_ms},
+                        {"premake", g.premake_ms},
                         {"plan_arrays", g.arrays_ms},
                         {"plan_arena", g.plan_arena_ms},
                         {"plan_reserve", g.plan_reserve_ms},
@@ -1099,6 +1102,10 @@ private:
                       {"targets_new", double(g.targets_new)},
                       {"targets_resized", double(g.targets_resized)},
                       {"targets_returning", double(g.targets_returning)},
+                      {"premade_used", double(g.premade_used)},
+                      {"targets_premade", double(g.targets_premade)},
+                      {"premade_unused", double(g.premade_unused)},
+                      {"shared_depths", double(g.shared_depths)},
                       {"textures_first", double(g.textures_first)},
                       {"meshes_first", double(g.meshes_first)},
                       {"arrays_grown", double(g.arrays_grown)},

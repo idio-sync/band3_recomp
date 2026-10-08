@@ -619,6 +619,13 @@ REXCVAR_DEFINE_BOOL(native_view_inline_mips, true, "Band3/Advanced/Native render
     "buffers a frame and a little less of the GPU waiting for the CPU. Direct3D 12 only. Off "
     "has SDL make them, as before, to compare");
 
+REXCVAR_DEFINE_BOOL(native_view_premake_targets, true, "Band3/Advanced/Native renderer",
+    "Make the textures RB3 draws into (outfits, faces, the crowd) as it loads them, a few "
+    "between frames, rather than in the frame that first draws them: a song's first camera "
+    "cut to the band made 25 of them in one frame (about 25 ms). Those without depth share "
+    "one depth texture per size. The picture is the same; off makes them as before, to "
+    "compare");
+
 REXCVAR_DEFINE_INT32(native_view_submit_points, 1, "Band3/Advanced/Native renderer",
     "Where the native renderer hands a frame to the GPU in parts, so the GPU draws the first "
     "while the worker records the rest: 0 = only after each texture pass with mips (the "

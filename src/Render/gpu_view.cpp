@@ -8,6 +8,7 @@
 #include "src/Render/sample_model.h"
 #include "src/Render/shade_model.h"
 #include "src/Render/spot_model.h"
+#include "src/Render/target_premake.h"
 #include "src/Render/shaders/gamma_shaders.gen.h"
 #include "src/Render/shaders/mesh_shaders.gen.h"
 #include "src/Render/shaders/mips_shaders.gen.h"
@@ -660,6 +661,10 @@ struct GpuRenderer::Impl {
         // (soft_raster.h's PassTargetSize)
         uint32_t game_w = 0, game_h = 0;
         bool shadow = false;    // a shadow map's
+        // its depth is its size's shared one (target_premake.h's SharesDepth)
+        bool depth_shared = false;
+        // made ahead (Idle) and not yet found by a pass's TargetFor
+        bool premade = false;
         bool drawn = false;     // by a pass, this frame or before
         uint64_t drawn_in = 0;  // the frame a pass last drew it
         uint32_t version = 0;   // the version that pass made
@@ -669,6 +674,18 @@ struct GpuRenderer::Impl {
     };
     std::unordered_map<uint32_t, Rt> rts;
     bool rt_failure_logged = false;
+    // the depth textures targets without depth share, by size (w << 32 | h),
+    // and how many targets hold each; let go with the last
+    struct SharedDepth {
+        SDL_GPUTexture* texture = nullptr;
+        uint32_t refs = 0;
+    };
+    std::unordered_map<uint64_t, SharedDepth> shared_depths;
+    // targets announced and not yet made ahead (target_premake.h), and what
+    // Idle made since the last frame (GpuStats::targets_premade)
+    AnnounceQueue premake_pending;
+    uint32_t premade_since = 0;
+    double premade_ms_since = 0;
     // DxTexes with a target made since the device started, for
     // GpuStats::targets_returning
     std::unordered_set<uint32_t> rts_seen;
@@ -819,7 +836,7 @@ struct GpuRenderer::Impl {
     // song's first world 11 ms, its first 1402-draw frame 28 ms and the post
     // frames after it 7 to 20 ms each. Fills them to kWarmCommandBuffers,
     // kWarmUniformBuffers and kWarmHeapPairs once, with work that draws
-    // nothing a frame sees. Once per device (GpuRenderer::WarmPools); logged.
+    // nothing a frame sees. Once per device (GpuRenderer::Idle); logged.
     void WarmPools();
     static constexpr uint32_t kWarmCommandBuffers = 16;
     static constexpr uint32_t kWarmUniformBuffers = 128;
@@ -850,9 +867,18 @@ struct GpuRenderer::Impl {
     void LetTextureGo(Tex& tx);
     // mips counted as a third more (GpuStats::texture_array_mb)
     double TextureArrayMb() const;
-    // the target for texture pass `p`, remade if not w x h (PassTargetSize);
-    // null on failure
-    Rt* TargetFor(const Pass& p, uint32_t w, uint32_t h);
+    // the target for texture pass `p`, remade if not w x h (PassTargetSize)
+    // or holding a shared depth `p` mustn't have; a new one without depth
+    // takes its size's shared depth if `share` (RasterOptions::premake_targets).
+    // Null on failure.
+    Rt* TargetFor(const Pass& p, uint32_t w, uint32_t h, bool share);
+    // makes `rt`'s textures (it has none); false on failure (logged once)
+    bool MakeRt(Rt& rt, uint32_t w, uint32_t h, uint32_t levels, bool shadow, bool share);
+    SDL_GPUTexture* TakeSharedDepth(uint32_t w, uint32_t h);
+    void DropSharedDepth(uint32_t w, uint32_t h);
+    // between frames (GpuRenderer::Idle): announced targets made ahead,
+    // within PremakeBudget
+    void Premake(const RasterOptions& o);
     // marks `rt` drawn or sampled by this frame, for Evict
     void UseRt(Rt& rt) {
         rt.used = serial;
@@ -1376,6 +1402,11 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     rts.clear();
     rts_seen.clear();
     rts_forgotten.clear();
+    // (the targets let go of theirs)
+    shared_depths.clear();
+    premake_pending.Clear();
+    premade_since = 0;
+    premade_ms_since = 0;
     arena_vert_count = arena_index_count = 0;
     pipelines.clear();
     warm = false;
@@ -2043,56 +2074,29 @@ const GpuRenderer::Impl::Tex* GpuRenderer::Impl::TextureFor(const Texture* t) {
     return it != textures.end() && it->second.array ? &it->second : nullptr;
 }
 
-GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, uint32_t h) {
+GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, uint32_t h,
+                                                    bool share) {
     Rt& rt = rts[p.tex_obj];
     UseRt(rt);
     rt.game_w = p.width;
     rt.game_h = p.height;
-    // FinishDrawTarget's downsamples, down to 1x1 at most
-    uint32_t levels = 1;
-    if (p.num_mips > 1) {
-        uint32_t chain = 1;
-        for (uint32_t s = std::max(w, h); s > 1; s >>= 1) chain++;
-        levels = std::min(p.num_mips, chain);
-    }
     // read by Load: no mips
     const bool shadow = p.tex_type == kTexTypeShadowMap;
-    if (shadow) levels = 1;
-    if (rt.color && rt.w == w && rt.h == h && rt.levels == levels && rt.shadow == shadow)
+    const uint32_t levels = TargetLevels(p.num_mips, w, h, shadow);
+    const bool may_share = SharesDepth(p.tex_type, shadow);
+    if (rt.color && rt.w == w && rt.h == h && rt.levels == levels && rt.shadow == shadow &&
+        (may_share || !rt.depth_shared)) {
+        if (rt.premade && walk_stats) walk_stats->premade_used++;
+        rt.premade = false;
         return &rt;
+    }
     const auto start = std::chrono::steady_clock::now();
     const bool resized = rt.color != nullptr;
     ReleaseRt(rt);
-    SDL_GPUTextureCreateInfo ti{};
-    ti.type = shadow ? SDL_GPU_TEXTURETYPE_2D : SDL_GPU_TEXTURETYPE_2D_ARRAY;
-    ti.format = shadow ? kShadowFormat : kColorFormat;
-    ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
-    ti.width = w;
-    ti.height = h;
-    ti.layer_count_or_depth = 1;
-    ti.num_levels = levels;
-    rt.color = SDL_CreateGPUTexture(device, &ti);
-    counts.textures++;
-    ti.type = SDL_GPU_TEXTURETYPE_2D;
-    ti.format = kDepthFormat;
-    ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
-    ti.num_levels = 1;
-    rt.depth = SDL_CreateGPUTexture(device, &ti);
-    if (!rt.color || !rt.depth) {
-        if (!rt_failure_logged) {
-            rt_failure_logged = true;
-            REXLOG_WARN("native view gpu: no {}x{} render target ({}); what samples it draws "
-                        "transparent black",
-                        w, h, SDL_GetError());
-        }
-        ReleaseRt(rt);
+    if (!MakeRt(rt, w, h, levels, shadow, share && may_share)) {
         rts.erase(p.tex_obj);
         return nullptr;
     }
-    rt.w = w;
-    rt.h = h;
-    rt.levels = levels;
-    rt.shadow = shadow;
     const bool returning = !rts_seen.insert(p.tex_obj).second && !resized;
     if (walk_stats) {
         walk_stats->targets_made++;
@@ -2105,15 +2109,136 @@ GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, u
     return &rt;
 }
 
+bool GpuRenderer::Impl::MakeRt(Rt& rt, uint32_t w, uint32_t h, uint32_t levels, bool shadow,
+                               bool share) {
+    SDL_GPUTextureCreateInfo ti{};
+    ti.type = shadow ? SDL_GPU_TEXTURETYPE_2D : SDL_GPU_TEXTURETYPE_2D_ARRAY;
+    ti.format = shadow ? kShadowFormat : kColorFormat;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+    ti.width = w;
+    ti.height = h;
+    ti.layer_count_or_depth = 1;
+    ti.num_levels = levels;
+    rt.color = SDL_CreateGPUTexture(device, &ti);
+    counts.textures++;
+    if (share) {
+        rt.depth = TakeSharedDepth(w, h);
+        rt.depth_shared = rt.depth != nullptr;
+    } else {
+        ti.type = SDL_GPU_TEXTURETYPE_2D;
+        ti.format = kDepthFormat;
+        ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+        ti.num_levels = 1;
+        rt.depth = SDL_CreateGPUTexture(device, &ti);
+    }
+    // (set first: the failure's ReleaseRt gives a shared depth back by size)
+    rt.w = w;
+    rt.h = h;
+    if (!rt.color || !rt.depth) {
+        if (!rt_failure_logged) {
+            rt_failure_logged = true;
+            REXLOG_WARN("native view gpu: no {}x{} render target ({}); what samples it draws "
+                        "transparent black",
+                        w, h, SDL_GetError());
+        }
+        ReleaseRt(rt);
+        return false;
+    }
+    rt.levels = levels;
+    rt.shadow = shadow;
+    return true;
+}
+
+SDL_GPUTexture* GpuRenderer::Impl::TakeSharedDepth(uint32_t w, uint32_t h) {
+    SharedDepth& d = shared_depths[uint64_t(w) << 32 | h];
+    if (!d.texture) {
+        SDL_GPUTextureCreateInfo ti{};
+        ti.type = SDL_GPU_TEXTURETYPE_2D;
+        ti.format = kDepthFormat;
+        ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+        ti.width = w;
+        ti.height = h;
+        ti.layer_count_or_depth = 1;
+        ti.num_levels = 1;
+        d.texture = SDL_CreateGPUTexture(device, &ti);
+        if (!d.texture) {
+            shared_depths.erase(uint64_t(w) << 32 | h);
+            return nullptr;
+        }
+    }
+    d.refs++;
+    return d.texture;
+}
+
+void GpuRenderer::Impl::DropSharedDepth(uint32_t w, uint32_t h) {
+    const auto f = shared_depths.find(uint64_t(w) << 32 | h);
+    if (f == shared_depths.end() || --f->second.refs) return;
+    SDL_ReleaseGPUTexture(device, f->second.texture);
+    shared_depths.erase(f);
+}
+
 void GpuRenderer::Impl::ReleaseRt(Rt& rt) {
     // SDL lets them go once the frames using them are done
     if (rt.color) SDL_ReleaseGPUTexture(device, rt.color);
-    if (rt.depth) SDL_ReleaseGPUTexture(device, rt.depth);
+    if (rt.depth && rt.depth_shared) DropSharedDepth(rt.w, rt.h);
+    else if (rt.depth) SDL_ReleaseGPUTexture(device, rt.depth);
     rt.color = rt.depth = nullptr;
     rt.w = rt.h = 0;
     rt.levels = 1;
     rt.shadow = false;
+    rt.depth_shared = false;
+    rt.premade = false;
     rt.drawn = false;
+}
+
+void GpuRenderer::Impl::Premake(const RasterOptions& o) {
+    TakeAnnouncedTargets(premake_pending);
+    if (!o.premake_targets) {
+        premake_pending.Clear();
+        return;
+    }
+    if (premake_pending.Empty()) return;
+    const auto start = std::chrono::steady_clock::now();
+    auto elapsed = [&] {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+            .count();
+    };
+    uint32_t unused = 0;
+    for (const auto& [obj, rt] : rts) unused += rt.premade ? 1 : 0;
+    // sized as TargetFor would without the frame (target_premake.h)
+    static const FrameCapture kNoFrame;
+    uint32_t made = 0;
+    while (!premake_pending.Empty() && PremakeMore(made, elapsed(), unused) &&
+           rts.size() < kMaxRts) {
+        const AnnouncedTarget a = premake_pending.Front();
+        premake_pending.PopFront();
+        // never one a pass has: remaking it would forget what it drew
+        if (const auto f = rts.find(a.tex_obj); f != rts.end() && f->second.color) continue;
+        Pass p;
+        p.tex_obj = a.tex_obj;
+        p.width = a.width;
+        p.height = a.height;
+        p.tex_type = a.tex_type;
+        p.num_mips = a.num_mips;
+        uint32_t w, h;
+        PassTargetSize(kNoFrame, p, o, w, h);
+        const bool shadow = p.tex_type == kTexTypeShadowMap;
+        Rt& rt = rts[a.tex_obj];
+        if (!MakeRt(rt, w, h, TargetLevels(p.num_mips, w, h, shadow), shadow,
+                    SharesDepth(p.tex_type, shadow))) {
+            rts.erase(a.tex_obj);
+            break;
+        }
+        rt.premade = true;
+        rt.game_w = a.width;
+        rt.game_h = a.height;
+        UseRt(rt);
+        rt.used_at = std::chrono::steady_clock::now();
+        made++;
+        unused++;
+    }
+    premade_since += made;
+    premade_ms_since += elapsed();
 }
 
 // the frame's targets, at the picture's size; with no device, only forgets them
@@ -2858,6 +2983,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 st.pre_walk_ms += ps.plan_walk_ms;
                 st.pre_targets_made += ps.targets_made;
                 st.pre_targets_ms += ps.targets_ms;
+                st.premade_used += ps.premade_used;
                 st.pre_arrays_grown += ps.arrays_grown;
                 st.pre_arrays_ms += ps.arrays_ms;
                 st.pre_arrays_mb += ps.arrays_mb;
@@ -2970,7 +3096,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         if (run.pass) {
             uint32_t tw, th;
             PassTargetSize(frame, *run.pass, o, tw, th);
-            target = TargetFor(*run.pass, tw, th);
+            target = TargetFor(*run.pass, tw, th, o.premake_targets);
             if (!target) continue;
             const bool fresh = !target->drawn || target->drawn_in != serial;
             const uint32_t clear = PassClearFlags(frame, *run.pass);
@@ -4807,11 +4933,13 @@ void GpuRenderer::Prewarm(uint32_t overlay_samples) {
     if (impl_->device && !impl_->warm) impl_->Prewarm(overlay_samples);
 }
 
-void GpuRenderer::WarmPools() {
-    // checked without waiting out a frame
-    if (impl_->pools_warm || !impl_->warm) return;
+void GpuRenderer::Idle(const RasterOptions& options) {
+    // only after Draw or Prewarm has set up the device
+    if (!impl_->warm) return;
     std::lock_guard lock(impl_->mutex);
-    if (impl_->device && impl_->warmed_up) impl_->WarmPools();
+    if (!impl_->device || !impl_->warmed_up) return;
+    impl_->WarmPools();
+    impl_->Premake(options);
 }
 
 void GpuRenderer::SetPresentDevice(void* d3d12_device, uint64_t timestamp_frequency) {
@@ -4895,10 +5023,19 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
     stats.meshes_by_time = impl_->meshes_by_time;
     stats.textures_by_time = impl_->textures_by_time;
     for (const auto& [obj, rt] : impl_->rts) {
-        // colour (RGBA8, or a shadow map's R32_FLOAT) and D32 depth
+        // colour (RGBA8, or a shadow map's R32_FLOAT) and D32 depth, a
+        // shared one counted once (below)
         const double pixels = double(rt.w) * rt.h;
-        stats.rts_mb += pixels * 4 * ((rt.levels > 1 ? 4.0 / 3 : 1) + 1) / 1048576;
+        stats.rts_mb +=
+            pixels * 4 * ((rt.levels > 1 ? 4.0 / 3 : 1) + (rt.depth_shared ? 0 : 1)) / 1048576;
+        if (rt.premade) stats.premade_unused++;
     }
+    for (const auto& [size, d] : impl_->shared_depths)
+        stats.rts_mb += double(size >> 32) * double(size & 0xffffffffu) * 4 / 1048576;
+    stats.shared_depths = uint32_t(impl_->shared_depths.size());
+    // made ahead since the last frame (Idle)
+    stats.targets_premade = std::exchange(impl_->premade_since, 0);
+    stats.premake_ms = std::exchange(impl_->premade_ms_since, 0.0);
     stats.texture_array_mb = impl_->TextureArrayMb();
     stats.arena_mb = double(impl_->arena_verts.size + impl_->arena_indices.size) / 1048576;
     return true;

@@ -136,6 +136,12 @@ struct GpuStats {
     // time (copy listing included) and megabytes (mips a third more)
     uint32_t targets_made = 0, targets_new = 0, targets_resized = 0, targets_returning = 0;
     double targets_ms = 0;
+    // native_view_premake_targets (target_premake.h): targets the walk found
+    // made ahead (not in targets_made); made ahead between the last frame
+    // and this one (GpuRenderer::Idle), and their ms (not in ms); made ahead
+    // and not yet used, and the shared depth textures, after the frame
+    uint32_t premade_used = 0, targets_premade = 0, premade_unused = 0, shared_depths = 0;
+    double premake_ms = 0;
     uint32_t textures_first = 0, meshes_first = 0;
     uint32_t arrays_grown = 0;
     double arrays_ms = 0, arrays_mb = 0;
@@ -331,14 +337,17 @@ class GpuRenderer {
     // on, so the first frames don't wait. Later pipelines are logged
     // ("pipeline made after warm-up").
     void Prewarm(uint32_t overlay_samples);
-    // Once Prewarm has run: grows SDL_gpu's Direct3D 12 pools (command
-    // buffers and their fences, uniform buffers, descriptor heap pairs) to
-    // what a song's biggest frames take, which they otherwise make as they
-    // record, 7 ms for a command buffer, ~0.5 for a uniform buffer, ~2 for a
-    // heap pair (gpu_view.cpp's Impl::WarmPools). About 130 ms, once per
-    // device: the worker calls it the first time it waits for a capture, so
-    // neither the UI thread nor a frame waits for it. Cheap after.
-    void WarmPools();
+    // The worker, waiting for a capture, once Prewarm has run. The first
+    // time it grows SDL_gpu's Direct3D 12 pools (command buffers and their
+    // fences, uniform buffers, descriptor heap pairs) to what a song's
+    // biggest frames take, which they otherwise make as they record: 7 ms
+    // for a command buffer, ~0.5 for a uniform buffer, ~2 for a heap pair
+    // (gpu_view.cpp's Impl::WarmPools; about 130 ms), so neither the UI
+    // thread nor a frame waits for them. Then, with
+    // RasterOptions::premake_targets, it makes a few announced render
+    // targets ahead (target_premake.h; sized by `options`). Cheap with
+    // nothing to do.
+    void Idle(const RasterOptions& options);
     // Draws `frame` at options.width x options.height into rgba (R in the low
     // byte, alpha 0xff) via its own output texture and readback. Any thread,
     // one frame at a time. False without a device or if the GPU failed

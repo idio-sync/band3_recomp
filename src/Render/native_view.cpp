@@ -177,6 +177,11 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.targets_resized += g.targets_resized;
     sum.targets_returning += g.targets_returning;
     sum.targets_ms += g.targets_ms;
+    sum.premade_used += g.premade_used;
+    sum.targets_premade += g.targets_premade;
+    sum.premake_ms += g.premake_ms;
+    sum.premade_unused += g.premade_unused;
+    sum.shared_depths += g.shared_depths;
     sum.textures_first += g.textures_first;
     sum.meshes_first += g.meshes_first;
     sum.arrays_grown += g.arrays_grown;
@@ -284,16 +289,23 @@ std::string DescribePlan(const GpuStats& gs, const CameraCuts::Step& cam) {
                       gs.arena_new_mb, gs.arena_copied, gs.meshes_pressured);
     char buf[720];
     std::snprintf(buf, sizeof(buf),
-                  "; plan: setup %.1f, walk %.1f (%u targets made in %.1f ms, %u returning, "
-                  "%u resized; %u textures and %u meshes drawn for the first time; %u texture "
-                  "arrays grown in %.1f ms, %.1f MB), arena %.1f%s, reserve %.1f (%s) ms; "
-                  "record's post plan %.1f ms",
+                  "; plan: setup %.1f, walk %.1f (%u targets made in %.1f ms, %u made ahead, "
+                  "%u returning, %u resized; %u textures and %u meshes drawn for the first "
+                  "time; %u texture arrays grown in %.1f ms, %.1f MB), arena %.1f%s, reserve "
+                  "%.1f (%s) ms; record's post plan %.1f ms",
                   gs.plan_setup_ms, gs.plan_walk_ms, gs.targets_made, gs.targets_ms,
-                  gs.targets_returning, gs.targets_resized, gs.textures_first, gs.meshes_first,
-                  gs.arrays_grown,
+                  gs.premade_used, gs.targets_returning, gs.targets_resized, gs.textures_first,
+                  gs.meshes_first, gs.arrays_grown,
                   gs.arrays_ms, gs.arrays_mb, gs.plan_arena_ms, arena, gs.plan_reserve_ms,
                   grew.c_str(), gs.post_plan_ms);
     std::string s = buf;
+    if (gs.targets_premade || gs.premade_unused) {
+        std::snprintf(buf, sizeof(buf),
+                      "; targets made ahead: %u since the frame before, in %.1f ms; %u unused, "
+                      "%u shared depths",
+                      gs.targets_premade, gs.premake_ms, gs.premade_unused, gs.shared_depths);
+        s += buf;
+    }
     if (!cam.world_frame) {
         s += "; camera: none in its world";
     } else if (!cam.new_world) {
@@ -803,6 +815,7 @@ class Renderer {
                 o.gpu_labels = REXCVAR_GET(dred);
                 o.gpu_timestamps = REXCVAR_GET(native_gpu_timestamps);
                 o.inline_mips = REXCVAR_GET(native_view_inline_mips);
+                o.premake_targets = REXCVAR_GET(native_view_premake_targets);
                 o.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
                 o.bc_textures = REXCVAR_GET(native_bc_textures);
                 // and k_8's (movie planes) as R8
@@ -904,8 +917,9 @@ class Renderer {
                 continue;
             }
             if (!work) {
-                // once, between frames (GpuRenderer::WarmPools)
-                if (gpu) GpuRenderer::Get().WarmPools();
+                // between frames: SDL's pools once, render targets ahead
+                // (GpuRenderer::Idle)
+                if (gpu) GpuRenderer::Get().Idle(o);
                 epoch = WaitForCapture(epoch, kIdleWait);
                 continue;
             }
