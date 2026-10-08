@@ -58,6 +58,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `resolution`<br>Resolution | *(empty)* | text; *(empty)* Default, `720p` 1280 x 720, `1080p` 1920 x 1080, `1440p` 2560 x 1440, `4k` 3840 x 2160 | Common resolution preset for both guest video mode and window (for example: 720p, 1080p, 1440p, 4k, 1280x720) |
 | `present_letterbox`<br>Aspect | `true` | `true`, `false` | Enable letterboxing for non-native aspect ratios |
 | `native_fill_window`<br>Fill the window | `true` | `true`, `false` | Native renderer (renderer native or both): draw the game at the window's shape rather than 16:9 with black bars. A wider window (21:9) shows more to the sides, a taller one (16:10) more above and below, with the HUD and tracks at their size in the middle 16:9. The emulated GPU's picture stays 16:9 |
+| `debug_overlay`<br>Show the FPS counter | `true` | `true`, `false` | Show band3's FPS counter: the game's frame rate (what frame_cap paces, and hit timing follows) and the window's, which the display's refresh rate holds back |
 
 ### Renderer
 
@@ -73,6 +74,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `native_view_msaa`<br>Anti-aliasing (MSAA) | `2` | `1` Off, `2` 2x (the game's), `4` 4x | Native renderer (renderer native or both) and the native view (experimental): the samples a pixel they draw the HUD, the track and the menus over the world with, averaged at their edges: 2 = the game's (RB3 multisamples them, not the world), 4 smoother, 1 none |
 | `native_anisotropic`<br>Anisotropic filtering | `-1` | `-1` No override, `0` Off, `1` 1x, `2` 2x, `3` 4x, `4` 8x, `5` 16x | Native renderer (renderer native or both): the anisotropic filtering it samples textures with, as the emulated GPU's anisotropic_override counts it: 0 off, 1 = 1x, 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x. -1 (the default) follows anisotropic_override where the emulated GPU runs (both), so the two pictures match, and keeps the game's own otherwise |
 | `native_max_height`<br>Resolution limit | `0` | `0` to `4320`; `0` None (the window's size), `720` 720p, `1080` 1080p, `1440` 1440p, `2160` 4K | Native renderer (renderer native or both): the most lines it draws: a window taller than this has its picture drawn this tall and scaled up to fill it, for 4K on a GPU that can't draw it at full size. 0 = the window's size |
+| `native_view_shadow_scale`<br>Shadow resolution | `1` | `1` 512 x 512 (the game's), `2` 1024 x 1024, `3` 1536 x 1536, `4` 2048 x 2048 | Draw the characters' self-shadow maps this many times the game's 512x512 in the native renderer and the native view (experimental): sharper shadow edges. 1 = the game's |
 
 ### Emulated GPU
 
@@ -92,13 +94,8 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `background_fps`<br>Background frame rate | `0` | `0` to `240` (fps); `0` The venue's own | The venue's frame rate under even/odd rendering: 0 = the venue's own (30 in most), whatever the game's refresh rate, or that many fps (at most the refresh rate). RB3 counts it as if the game ran at 60, so at a video_mode_refresh_rate of 120 a venue's 30 drew at 60 |
 | `disable_hair_shader`<br>Disable the hair shader | `false` | `true`, `false` | Don't use the hair shader variation on materials. Applies to materials loaded afterwards |
 | `disable_approximate_lights`<br>Disable approximate lighting | `true` | `true`, `false` | Disable approximate lighting; works around a graphical bug in current ReXGlue |
+| `force_self_shadow`<br>Self-shadows in every shot | `false` | `true`, `false` | Draw the band's self-shadows in every camera shot, also the ones that turn them off. Characters far from the camera and the crowd still draw without them. Some of those shots may show shadow artifacts the game avoided there. Applies from the next shot |
 | `compress_character_textures`<br>Compress character textures | `false` | `true`, `false` | Compress character textures. Needs the emulated GPU (renderer emulated or both): it's ignored with renderer native, where nothing composes the outfits to read back and they'd show black. Needs readback resolve, or the textures appear bugged. Applies to characters loaded afterwards |
-
-### More settings
-
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `debug_overlay` | `true` | `true`, `false` | Show band3's FPS counter: the game's frame rate (what frame_cap paces, and hit timing follows) and the window's, which the display's refresh rate holds back |
 
 ## Audio
 
@@ -257,7 +254,6 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
 | `disable_even_odd_rendering` | `false` | `true`, `false` | Process every render command each frame instead of alternating even/odd frames |
-| `force_self_shadow` | `false` | `true`, `false` | Draw the band's self-shadows in every camera shot, also the ones that turn them off. Characters far from the camera and the crowd still draw without them. Some of those shots may show shadow artifacts the game avoided there. Applies from the next shot |
 | `fullbright` | `false` | `true`, `false` | Force materials to not use an environ, making most things fullbright. Applies to materials loaded afterwards |
 
 ### Logging
@@ -300,7 +296,6 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `native_view_premake_targets` | `true` | `true`, `false` | Make the textures RB3 draws into (outfits, faces, the crowd) as it loads them, a few between frames, rather than in the frame that first draws them: a song's first camera cut to the band made 25 of them in one frame (about 25 ms). Those without depth share one depth texture per size. The picture is the same; off makes them as before, to compare |
 | `native_view_record_targets` | `false` | `true`, `false` | Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, for the native view (experimental), even while it's off: some are drawn once, in the main menu, and a later capture needs them. Costs a little game-thread time while characters load; turn it on at launch (--native_view_record_targets=true) |
 | `native_view_rt_fallback` | `guest` | `guest`, `none` | What the native view's capture keeps of a texture RB3 draws at runtime (outfits, the crowd, blurs): guest also decodes what guest memory holds, right only with --readback_resolve=full; none keeps only which texture and version it is, for the texture passes the capture records |
-| `native_view_shadow_scale` | `1` | `1` to `4` | Draw the characters' self-shadow maps this many times the game's 512x512 in the native renderer and the native view (experimental): sharper shadow edges. 1 = the game's |
 | `native_view_submit_points` | `1` | `0` to `1` | Where the native renderer hands a frame to the GPU in parts, so the GPU draws the first while the worker records the rest: 0 = only after each texture pass with mips (the crowd's, in a song); 1 = also once the world is recorded, so the GPU draws it while the worker records post-processing and the HUD (in a song its post frames waited about 0.3 ms less for the GPU; the picture is the same) |
 | `native_view_target_scale` | `true` | `true`, `false` | Draw the native renderer's passes that are pictures of the screen (the spotlights' haze, the soft particles' smoke) in proportion to its picture: 1.5 times the game's size at 1080p, 3 times at 4K. Off keeps the game's sizes, made for 1280x720, to compare |
 | `native_view_texture_filtering` | `true` | `true`, `false` | Sample textures in the native view (experimental) as the game's samplers do: filtered, between mip levels by distance, and clamped or wrapped as each says, live and in the test harness's captures; off reads every texture's nearest texel at full size, to compare |
