@@ -43,6 +43,19 @@ PAGE = os.path.join(REPO, 'src', 'Net', 'http_page.h')
 KARAOKE_PAGE = os.path.join(REPO, 'src', 'Net', 'karaoke_page.h')
 # tools/lyrics_dump, built with the unit tests (out\tests.cmd)
 LYRICS_TOOL = os.path.join(REPO, 'out', 'tests', 'Release', 'band3_lyrics.exe')
+# tools/milo_font, likewise
+MILO_FONT_TOOL = os.path.join(REPO, 'out', 'tests', 'Release', 'band3_milo_font.exe')
+
+
+def allowed_texture_path(path):
+    """/game_asset/texture's paths, as src/Net/http_request.cpp's AllowedTexturePath."""
+    return (0 < len(path) <= 255 and path.startswith(('ui/', 'dx/')) and
+            path.endswith(('.png_xbox', '.bmp_xbox')) and '..' not in path and '\\' not in path)
+
+
+def allowed_font_name(name):
+    """/game_asset/font's names, as src/Net/http_request.cpp's AllowedFontName."""
+    return 0 < len(name) <= 64 and all(c in 'abcdefghijklmnopqrstuvwxyz0123456789_()-' for c in name)
 GAME_DATA = os.path.join(REPO, 'assets')
 
 # Rock Band 3 Deluxe's changes to songs.dtb's entries (genres, years...), which
@@ -653,6 +666,7 @@ class Preview:
         self.status = status
         self.karaoke_song = karaoke_song
         self.vocals = vocals
+        self.assets = {}  # game_asset's replies
         self.started = time.monotonic()
         def dtb(path):
             data = game.read(path)
@@ -712,6 +726,37 @@ class Preview:
                 f.write(data)
             done = subprocess.run([LYRICS_TOOL, path], capture_output=True)
         return done.stdout if done.returncode == 0 else None
+
+    def game_asset(self, kind, arg):
+        """/game_asset's (content type, body) for a texture ('texture', its path) or a
+        font ('font' its JSON, 'font.png' its texture, by name); None for a 404."""
+        key = (kind, arg)
+        with self.lock:
+            if key in self.assets:
+                return self.assets[key]
+        found = None
+        if kind == 'texture' and allowed_texture_path(arg):
+            data = self.game.read(arg)
+            image = decode_xbox_bitmap(data) if data else None
+            found = ('image/png', png(*image)) if image else None
+        elif kind in ('font', 'font.png') and allowed_font_name(arg) and os.path.isfile(MILO_FONT_TOOL):
+            data = self.game.read(f'ui/resource/fonts/gen/{arg}.milo_xbox')
+            if data:
+                with tempfile.TemporaryDirectory() as folder:
+                    milo, atlas = os.path.join(folder, 'font.milo_xbox'), os.path.join(folder, 'font.png')
+                    with open(milo, 'wb') as f:
+                        f.write(data)
+                    done = subprocess.run([MILO_FONT_TOOL, milo, atlas], capture_output=True)
+                    if done.returncode == 0:
+                        with open(atlas, 'rb') as f:
+                            image = f.read()
+                        with self.lock:
+                            self.assets[('font', arg)] = ('application/json', done.stdout)
+                            self.assets[('font.png', arg)] = ('image/png', image)
+                        return self.assets[key]
+        with self.lock:
+            self.assets[key] = found
+        return found
 
     def live_show(self, seconds):
         """fake_live for the --karaoke-song, or the sample."""
@@ -784,6 +829,14 @@ def handler(preview):
                     self.reply(404, text, b'No lyrics for that shortname')
             elif path == '/live/events':
                 self.live_events()
+            elif path.startswith(('/game_asset/texture?path=', '/game_asset/font?name=',
+                                  '/game_asset/font.png?name=')):
+                kind, _, arg = path[len('/game_asset/'):].partition('?')
+                asset = preview.game_asset(kind, arg.partition('=')[2])
+                if asset:
+                    self.reply(200, asset[0], asset[1], max_age=86400)
+                else:
+                    self.reply(404, text, b'No such game asset')
             else:
                 self.reply(404, text, b'Not Found')
 

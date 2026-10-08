@@ -41,6 +41,11 @@ std::optional<std::string> AlbumArtFile(PPCContext& ctx, uint8_t* base,
 // nullopt when no song has this shortname or the game can't read it
 std::optional<std::string> MidiFile(PPCContext& ctx, uint8_t* base, const std::string& shortname);
 
+// a file as the game reads it (ARK, loose overrides, packages), for
+// /game_asset; nullopt when the game can't open it or it's over max_size
+std::optional<std::string> GameFile(PPCContext& ctx, uint8_t* base, const std::string& path,
+                                    size_t max_size);
+
 // runs DTA through RockCentralGateway::ExecuteConfig, as RB3E's /execute does
 void ExecuteScript(PPCContext& ctx, uint8_t* base, const std::string& script);
 

@@ -384,5 +384,22 @@ class KaraokeTest(unittest.TestCase):
                 self.assertFalse(line['syllables'][-1]['join'])
 
 
+class GameAssetTest(unittest.TestCase):
+    # the same rules as src/Net/http_request.cpp's, so the preview serves what band3 would
+    def test_textures_only_under_ui_and_dx(self):
+        self.assertTrue(web_preview.allowed_texture_path('ui/image/gen/a.png_xbox'))
+        self.assertTrue(web_preview.allowed_texture_path('dx/custom_textures/x/gen/rock band 3.png_xbox'))
+        self.assertTrue(web_preview.allowed_texture_path('ui/a.bmp_xbox'))
+        for bad in ('songs/x/gen/x.png_xbox', 'ui/../songs/a.png_xbox', 'ui\\a.png_xbox',
+                    '/ui/a.png_xbox', 'ui/a.milo_xbox', 'ui/a.png', '', 'ui/' + 'a' * 300 + '.png_xbox'):
+            self.assertFalse(web_preview.allowed_texture_path(bad), bad)
+
+    def test_plain_font_names_only(self):
+        self.assertTrue(web_preview.allowed_font_name('pentatonic'))
+        self.assertTrue(web_preview.allowed_font_name('rockband-outline(bld37)'))
+        for bad in ('../x', 'a/b', 'A', '', 'a' * 65):
+            self.assertFalse(web_preview.allowed_font_name(bad), bad)
+
+
 if __name__ == '__main__':
     unittest.main()

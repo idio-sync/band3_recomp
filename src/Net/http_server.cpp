@@ -55,6 +55,7 @@
 #include "live_events.h"
 #include "local_address.h"
 #include "lyrics.h"
+#include "milo.h"
 #include "rhythmverse.h"
 #include "song_downloads.h"
 #include "web_client.h"
@@ -386,6 +387,79 @@ std::optional<std::string> LyricsJson(const std::string& shortname, bool& busy) 
     return json.empty() ? std::nullopt : std::optional(json);
 }
 
+// /game_asset's replies (a PNG, a font's JSON, or a 404) by key: "t:" and a
+// texture's path, "f:" or "p:" and a font's name (its JSON, its PNG), newest
+// last, for kMaxAssets. Decoding happens here; the game thread only reads.
+constexpr size_t kMaxAssets = 48;
+constexpr size_t kMaxAssetFile = 4 * 1024 * 1024;
+constexpr int kAssetMaxAge = 86400;
+
+struct Asset {
+    int status = 404;
+    std::string type{kText};
+    std::string body = "No such game asset";
+};
+std::mutex g_assets_mutex;
+std::deque<std::pair<std::string, Asset>> g_assets;
+
+std::optional<Asset> CachedAsset(const std::string& key) {
+    std::lock_guard lock(g_assets_mutex);
+    for (const auto& [k, asset] : g_assets) {
+        if (k == key) return asset;
+    }
+    return std::nullopt;
+}
+
+void CacheAsset(const std::string& key, const Asset& asset) {
+    std::lock_guard lock(g_assets_mutex);
+    g_assets.emplace_back(key, asset);
+    if (g_assets.size() > kMaxAssets) g_assets.pop_front();
+}
+
+// nullopt while the game is busy
+std::optional<Asset> GameAsset(const Route& route) {
+    const std::string& arg = route.argument;
+    const bool texture = route.endpoint == Endpoint::kGameTexture;
+    if (texture ? !AllowedTexturePath(arg) : !AllowedFontName(arg)) return Asset{};
+    const std::string key = (texture                                  ? "t:"
+                             : route.endpoint == Endpoint::kGameFont ? "f:"
+                                                                     : "p:") +
+                            arg;
+    if (auto asset = CachedAsset(key)) return asset;
+    const std::string path = texture ? arg : "ui/resource/fonts/gen/" + arg + ".milo_xbox";
+    std::optional<std::string> file;
+    if (!RunOnGameThread([&file, &path](PPCContext& ctx, uint8_t* base) {
+            file = game::GameFile(ctx, base, path, kMaxAssetFile);
+        })) {
+        return std::nullopt;
+    }
+    if (texture) {
+        Asset asset;
+        if (const auto image = file ? DecodeXboxBitmap(*file) : std::nullopt) {
+            asset = {200, "image/png", EncodePng(*image)};
+        } else if (file) {
+            REXLOG_DEBUG("Web server: {} isn't a DXT1 or DXT5 texture", path);
+        }
+        CacheAsset(key, asset);
+        return asset;
+    }
+    // a font's JSON and PNG come from one read, so both are kept
+    Asset json, png;
+    if (const auto raw = file ? milo::Decompress(*file) : std::nullopt) {
+        const auto font = milo::FindFont(*raw);
+        const auto image = milo::FindBitmap(*raw);
+        if (font && image) {
+            json = {200, "application/json", milo::FormatFontJson(*font)};
+            png = {200, "image/png", EncodePng(*image)};
+        } else {
+            REXLOG_DEBUG("Web server: {} has no font band3 reads", path);
+        }
+    }
+    CacheAsset("f:" + arg, json);
+    CacheAsset("p:" + arg, png);
+    return route.endpoint == Endpoint::kGameFont ? json : png;
+}
+
 // the song IDs of every song in the game; nullopt while the game is busy
 std::optional<std::set<int32_t>> GameSongIds() {
     std::vector<int32_t> ids;
@@ -620,6 +694,14 @@ std::string Handle(const Request& request) {
         }
         case Endpoint::kLiveEvents:
             break;  // Serve streams it before Handle; a POST lands here as a 405 first
+        case Endpoint::kGameTexture:
+        case Endpoint::kGameFont:
+        case Endpoint::kGameFontPng: {
+            const auto asset = GameAsset(route);
+            if (!asset) return Busy(cors);
+            return Response(asset->status, asset->type, asset->body, cors,
+                            asset->status == 200 ? kAssetMaxAge : 0);
+        }
         case Endpoint::kNotFound:
             break;
     }

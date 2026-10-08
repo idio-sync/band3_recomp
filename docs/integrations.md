@@ -274,10 +274,18 @@ art, title and artist. Its corner button sets the timing (for a TV's delay) and 
 size, kept in that browser. A page over plain http can't keep a device awake, so turn its
 sleep off. The library page's header links to it.
 
-It's built on two endpoints other pages can use:
+Its lyrics are set in the game's own Pentatonic, and the song's title in Pentatonic Bold,
+read from your game files as the page asks for them; where that font can't be read, the
+page uses its own.
+
+It's built on endpoints other pages can use. The game assets are served from your own game
+files as they're asked for, and only on your network; band3 ships none of them.
 
 | Endpoint | |
 |---|---|
+| `/game_asset/texture?path=` | a texture the game keeps as a file of its own (a `.png_xbox` or `.bmp_xbox` under `ui/` or `dx/`, such as `ui/image/gen/dx_blank_album_art_keep.png_xbox`) as a PNG; 404 for any other path or a format band3 doesn't decode |
+| `/game_asset/font?name=` | a font in `ui/resource/fonts/gen/` (`pentatonic`, `pentatonic_bold`, `gangly`...): `{"cell": [w, h], "texture": [w, h], "base_kerning", "monospace", "glyphs": {"<character code>": [u, v, width, advance]}, "kerning": [[left, right, kerning]]}`; a glyph is at (u × texture width, v × texture height), width × cell width across and the cell's height down; widths, advances and kerning are in cell widths |
+| `/game_asset/font.png?name=` | that font's texture: white, the glyphs in its alpha |
 | `/lyrics?shortname=` | the song's lyrics from its MIDI file: `{"shortname", "parts": [{"part": "lead" \| "harm1" \| "harm2" \| "harm3", "lines": [{"start_ms", "end_ms", "syllables": [{"start_ms", "end_ms", "text", "join", "spoken"}]}]}]}`; 404 for a song without vocals, 503 while the game is busy |
 | `/live/events` | server-sent events: `state` (`screen`, `in_game`, `paused`, `song` {`shortname`, `title`, `artist`, `length_ms`} or null, `vocals` `none` \| `lead` \| `harmonies`) whenever it changes, and `clock` (`song_ms`, the game's song clock) four times a second during a song. Four streams at once: a fifth takes the place of the one open longest (a device asleep can keep its connection open), which gets `evicted` and stops; its page offers a tap to follow the game again |
 

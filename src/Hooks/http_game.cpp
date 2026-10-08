@@ -147,6 +147,11 @@ std::optional<std::string> MidiFile(PPCContext& ctx, uint8_t* base, const std::s
     return files::ReadAll(ctx, base, path, kMaxMidi);
 }
 
+std::optional<std::string> GameFile(PPCContext& ctx, uint8_t* base, const std::string& path,
+                                    size_t max_size) {
+    return files::ReadAll(ctx, base, path, max_size);
+}
+
 void ExecuteScript(PPCContext& ctx, uint8_t* base, const std::string& script) {
     RunScript(ctx, base, script);
 }
