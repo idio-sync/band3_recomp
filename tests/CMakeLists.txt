@@ -67,6 +67,7 @@ add_executable(band3_tests
     aspect_model_test.cpp
     http_request_test.cpp
     album_art_test.cpp
+    milo_test.cpp
     lyrics_test.cpp
     live_events_test.cpp
     paths_test.cpp
@@ -157,6 +158,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Net/port_mapping_protocol.cpp
     ${BAND3_ROOT}/src/Net/http_request.cpp
     ${BAND3_ROOT}/src/Net/json.cpp
+    ${BAND3_ROOT}/src/Net/milo.cpp
     ${BAND3_ROOT}/src/Net/lyrics.cpp
     ${BAND3_ROOT}/src/Net/live_events.cpp
     ${BAND3_ROOT}/src/Net/rhythmverse.cpp
