@@ -24,6 +24,10 @@ struct PlaneSizes {
 // shortname for SetMusicVideoSong
 bool MusicVideosOn();
 
+// whether music_videos_folder has a video for the song (looked for now, on
+// the calling thread: a few file checks), for picking a video venue
+bool HasMusicVideo(std::string_view shortname);
+
 // The song played, as its Game is made (or GamePanel::Enter enters one a
 // setlist plays on in the same Game), empty as it ends: its video is looked
 // for, and opened on the player's thread.

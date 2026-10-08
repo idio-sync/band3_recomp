@@ -15,6 +15,8 @@
 #include "src/Game/Symbol.h"
 #include "src/Test/game_state.h"
 #include "src/Test/test_server.h"
+#include "src/Video/music_video.h"
+#include "src/Video/video_venue.h"
 #include <random>
 #include <cstdio>
 
@@ -224,6 +226,44 @@ extern "C" REX_FUNC(SongMgr__IsDemo)
 
 //Set venue from the forced_venue setting, read each time so it can be changed mid-game
 extern "C" void __imp__MetaPerformer__SetVenue(PPCContext& ctx, uint8_t* base);
+REX_EXTERN(MetaPerformer__Song);
+
+static std::mt19937& VenueRng() {
+    static std::mt19937 rng{ std::random_device{}() };
+    return rng;
+}
+
+// The song the venue is for: MetaPerformer::Song(Symbol* out, MetaPerformer*),
+// the setlist's next (SelectRandomVenue reads the setlist too); empty if none
+static std::string UpcomingSong(const PPCContext& ctx, uint8_t* base) {
+    PPCContext call{};
+    call.r1.u64 = ctx.r1.u32 - 0x100;
+    call.r13 = ctx.r13;
+    const uint32_t out = call.r1.u32 + 0x80;
+    call.r3.u64 = out;
+    call.r4.u64 = ctx.r3.u32;  // SetVenue's MetaPerformer
+    MetaPerformer__Song(call, base);
+    const uint32_t name = REX_LOAD_U32(out);
+    return name ? std::string(reinterpret_cast<const char*>(base + name)) : std::string();
+}
+
+// music_video_venue_chance: whether this venue becomes a video venue, for the
+// song's music video (src/Video/video_venue.h)
+static bool VideoVenueForSong(const PPCContext& ctx, uint8_t* base, bool black_background) {
+    band3::video::VideoVenueInputs in;
+    in.black_background = black_background;
+    in.music_videos = band3::video::MusicVideosOn();
+    in.chance = REXCVAR_GET(music_video_venue_chance);
+    if (!in.music_videos || in.chance <= 0 || black_background) return false;
+    const std::string song = UpcomingSong(ctx, base);
+    in.has_video = !song.empty() && band3::video::HasMusicVideo(song);
+    if (!in.has_video) return false;
+    in.roll = std::uniform_real_distribution<double>(0.0, 1.0)(VenueRng());
+    const bool pick = band3::video::PickVideoVenue(in);
+    REXLOG_INFO("{} has a music video: {} ({}% of the time)", song,
+                pick ? "a video venue" : "the game's venue this time", in.chance);
+    return pick;
+}
 // reports the venue actually being set (r4 = venue Symbol) as an RB3E event
 // and to GameState, for the test harness and Home Assistant
 static void SetVenueAndReport(PPCContext& ctx, uint8_t* base) {
@@ -236,19 +276,25 @@ static void SetVenueAndReport(PPCContext& ctx, uint8_t* base) {
 }
 extern "C" REX_FUNC(MetaPerformer__SetVenue)
 {
-    const std::string forced = band3::settings::ForcedVenue();
+    std::string forced = band3::settings::ForcedVenue();
 
     if (forced.empty() || forced == "false") {
         // RB3E's black background modifier: venue "none", the track over black;
         // a forced venue still wins, as on RB3E
-        if (band3::modifiers::Active(ctx, base, "mod_black_background")) {
+        const bool black = band3::modifiers::Active(ctx, base, "mod_black_background");
+        if (black) {
             if (const uint32_t none = band3::modifiers::Intern(ctx, base, "none")) {
                 REXLOG_INFO("Black background modifier: no venue");
                 ctx.r4.u64 = none;
             }
         }
-        SetVenueAndReport(ctx, base);
-        return;
+        // a song with a music video: a video venue, picked as forced_venue
+        // video picks one
+        if (!VideoVenueForSong(ctx, base, black)) {
+            SetVenueAndReport(ctx, base);
+            return;
+        }
+        forced = "video";
     }
 
     static const char* small_club[] = { "01","02","03","04","05","06","10","11","13","14","15" };
@@ -257,9 +303,9 @@ extern "C" REX_FUNC(MetaPerformer__SetVenue)
     static const char* festival[]   = { "01","02" };
     static const char* video[]      = { "01","02","03","04","05","06","07" };
 
-    static std::mt19937 rng{ std::random_device{}() };
+    std::mt19937& rng = VenueRng();
 
-    auto pick = [](const char* const* list, size_t n) -> const char* {
+    auto pick = [&rng](const char* const* list, size_t n) -> const char* {
         std::uniform_int_distribution<size_t> dist(0, n - 1);
         return list[dist(rng)];
     };

@@ -242,6 +242,10 @@ Player& ThePlayer() {
 
 bool MusicVideosOn() { return REXCVAR_GET(music_videos); }
 
+bool HasMusicVideo(std::string_view shortname) {
+    return FindVideo(VideoFolders(), shortname).has_value();
+}
+
 void SetMusicVideoSong(std::string_view shortname) { ThePlayer().SetSong(shortname); }
 
 bool MusicVideoFrame(double song_time, const PlaneSizes& sizes,

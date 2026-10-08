@@ -26,6 +26,15 @@ constexpr Choice kLanguages[] = {
 // disable_metamusic, the other way round
 constexpr Choice kMenuMusic[] = {{"false", "On"}, {"true", "Off"}};
 
+// music_video_venue_chance's
+constexpr Choice kVideoVenueChances[] = {
+    {"0", "Off (the game's venue)"},
+    {"25", "25% of the time"},
+    {"50", "50% of the time"},
+    {"75", "75% of the time"},
+    {"100", "Always"},
+};
+
 constexpr Choice kVideoFits[] = {
     {"fit", "Fit, with black bars"},
     {"fill", "Fill, edges cut off"},
@@ -181,6 +190,9 @@ constexpr Setting kSettings[] = {
      .widget = kComboText, .choices = kVenues},
     {.cvar = "music_videos", .tab = kGame, .section = "Game",
      .label = "Music videos in the video venues", .widget = kCheckbox},
+    {.cvar = "music_video_venue_chance", .tab = kGame, .section = "Game",
+     .label = "Video venue for songs with a video", .widget = kCombo,
+     .choices = kVideoVenueChances},
     {.cvar = "music_videos_folder", .tab = kGame, .section = "Game",
      .label = "Music videos folder", .widget = kPath},
     {.cvar = "music_video_fit", .tab = kGame, .section = "Game", .label = "Music video shape",

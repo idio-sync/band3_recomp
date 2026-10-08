@@ -1,0 +1,70 @@
+# Plays 20th Century Boy twice with no forced venue and a music video for it:
+# with music_video_venue_chance at 100 (the default) the game's venue becomes
+# a video venue, so the video shows; at 0 the game's own venue stays (a
+# fresh profile has no video venues of its own). Starts where boot.b3t leaves
+# Rock Band 3 Deluxe (on a fresh profile); the video is music_video.b3t's,
+# in a folder given at launch:
+#   python tools/band3ctl.py launch --fresh -- --music_videos_folder=<that folder, absolute>
+#   python tools/band3ctl.py run tests/game/boot.b3t
+#   python tools/band3ctl.py run tests/game/music_video_venue.b3t
+# The log says "20thcenturyboy has a music video: a video venue (100% of the
+# time)", then "Music video for 20thcenturyboy"; the second song's venue isn't
+# a video_ one, and the log has no venue line for its chance (0 is off).
+
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+set autoplay true
+set forced_venue false
+set music_video_venue_chance 100
+# Play Now, Quickplay, Choose Songs
+press green
+sleep 1s
+press green
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+# past the 123 heading to 20th Century Boy
+press down
+press down
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+# Guitar, Expert
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+expect song=20thcenturyboy
+# past the video venue's intro
+sleep 20s
+screenshot native music-video-venue
+
+# Back to Music Library, the fifth of six, and yes to losing the progress
+press start
+wait paused timeout=10s
+sleep 1s
+press down
+press down
+press down
+press down
+sleep 333ms
+press green
+sleep 500ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+
+# the same song with the chance off: the game's venue
+set music_video_venue_chance 0
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+expect song=20thcenturyboy
+sleep 15s
+screenshot native music-video-venue-off

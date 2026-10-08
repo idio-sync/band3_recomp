@@ -287,9 +287,15 @@ time with the song, standing still while it's paused and following it when it re
 practice moves to another section. Put the video in the `videos` folder beside the ini (or
 the folder `music_videos_folder` names), named after the song's shortname:
 `20thcenturyboy.mp4` for 20th Century Boy. A song's shortname is in the log as it starts
-(`No music video for 20thcenturyboy in music_videos_folder`). `forced_venue = video` (the
-Game tab's Forced venue, Video venue) puts every song in a video venue. Turning `music_videos` off
+(`No music video for 20thcenturyboy in music_videos_folder`). Turning `music_videos` off
 stops the video at once; turning it on starts videos from the next song.
+
+A song with a video is put in one of the seven video venues, picked at random, so its video
+shows: always, or 25, 50 or 75% of the time with `music_video_venue_chance` (the Game tab's
+Video venue for songs with a video); Off leaves the venue to the game. The log says which
+(`20thcenturyboy has a music video: a video venue (100% of the time)`). A forced venue wins,
+as does the Black Background modifier; `forced_venue = video` (the Game tab's Forced venue,
+Video venue) puts every song in a video venue, with a video or not.
 
 The video starts with the song. `<shortname>.ini` beside it with Clone Hero's
 `video_start_time = <milliseconds>` (as in a chart's `song.ini`) starts it that far in at the

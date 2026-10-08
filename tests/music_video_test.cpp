@@ -1,7 +1,8 @@
 // Checks the music video player's pure parts: a picture made into a movie
 // frame's planes (src/Video/picture_convert.h), the frame queue's rules for
-// what to show and when to read or seek (frame_queue.h), and where a song's
-// video is found (video_files.h).
+// what to show and when to read or seek (frame_queue.h), where a song's
+// video is found (video_files.h), and when a venue becomes a video venue
+// for it (video_venue.h).
 
 #include <doctest/doctest.h>
 #include <cmath>
@@ -14,6 +15,7 @@
 #include "src/Video/frame_queue.h"
 #include "src/Video/picture_convert.h"
 #include "src/Video/video_files.h"
+#include "src/Video/video_venue.h"
 
 using namespace band3::video;
 namespace fs = std::filesystem;
@@ -221,4 +223,39 @@ TEST_CASE("a song's video is found by its shortname, first folder first") {
     CHECK_FALSE(FindVideo(folders, ""));
     CHECK_FALSE(FindVideo(folders, "../b/song1"));
     fs::remove_all(root);
+}
+
+TEST_CASE("a song with a video gets a video venue as often as the chance says") {
+    VideoVenueInputs in;
+    in.music_videos = true;
+    in.has_video = true;
+    in.chance = 100;
+    in.roll = 0.999;
+    CHECK(PickVideoVenue(in));
+    // 25% of the time: rolls under a quarter
+    in.chance = 25;
+    in.roll = 0.24;
+    CHECK(PickVideoVenue(in));
+    in.roll = 0.25;
+    CHECK_FALSE(PickVideoVenue(in));
+    // off
+    in.chance = 0;
+    in.roll = 0.0;
+    CHECK_FALSE(PickVideoVenue(in));
+}
+
+TEST_CASE("a forced venue, the black background, no video or videos off keep the venue") {
+    VideoVenueInputs in;
+    in.music_videos = true;
+    in.has_video = true;
+    in.chance = 100;
+    for (int i = 0; i < 4; i++) {
+        VideoVenueInputs v = in;
+        if (i == 0) v.forced_venue = true;
+        if (i == 1) v.black_background = true;
+        if (i == 2) v.has_video = false;
+        if (i == 3) v.music_videos = false;
+        CAPTURE(i);
+        CHECK_FALSE(PickVideoVenue(v));
+    }
 }

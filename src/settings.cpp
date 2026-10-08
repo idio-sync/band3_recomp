@@ -55,6 +55,12 @@ REXCVAR_DEFINE_BOOL(music_videos, true, "Band3/Game",
     "and optionally <shortname>.ini with Clone Hero's video_start_time. "
     "forced_venue video picks the video venues. Turned on, it applies from the next song");
 
+REXCVAR_DEFINE_INT32(music_video_venue_chance, 100, "Band3/Game",
+    "How often a song with a music video is put in a video venue, so its video shows, in "
+    "percent: 0 never (the game's venue), 25, 50, 75 or 100 always. A forced venue and the "
+    "black background modifier still win. Applies from the next venue the game picks")
+    .range(0, 100);
+
 REXCVAR_DEFINE_STRING(music_videos_folder, "videos", "Band3/Game",
     "The folder music videos are looked for in (empty: videos). A relative folder is "
     "relative to band3_config.ini's folder (or band3's own folder if there is no ini)");
