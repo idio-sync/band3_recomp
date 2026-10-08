@@ -98,6 +98,16 @@ test('the screen follows the game: idle, up next, lyrics, now playing, just play
   assert.strictEqual(M.screen({ in_game: false, song }, true, 1, false), 'just_played');
 });
 
+test('a lyrics fetch that failed is tried again, sooner at first, but not a song without any', () => {
+  assert.strictEqual(M.lyricsRetryMs(200, 0), null);
+  assert.strictEqual(M.lyricsRetryMs(404, 0), null);
+  assert.strictEqual(M.lyricsRetryMs(503, 0), 1000);  // the game busy
+  assert.strictEqual(M.lyricsRetryMs(0, 0), 1000);    // no reply at all, or no JSON
+  assert.strictEqual(M.lyricsRetryMs(500, 1), 2000);
+  assert.strictEqual(M.lyricsRetryMs(0, 2), 4000);
+  assert.strictEqual(M.lyricsRetryMs(0, 9), 10000);   // at most 10 s apart
+});
+
 test('words put spaces between words, not inside them', () => {
   assert.deepStrictEqual(M.words(part.lines[0]).map(w => w.text), ['Hel', 'lo']);
   const two = line(0, 1, [syl(0, 1, 'one'), syl(0, 1, 'two')]);

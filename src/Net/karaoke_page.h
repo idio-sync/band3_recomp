@@ -84,6 +84,14 @@ var KaraokeModel = (function () {
     return partsCount && !done ? 'lyrics' : 'now_playing';
   }
 
+  // how long to wait before asking for a song's lyrics again after a reply
+  // with this status (0: none, or not JSON) on try `attempt` (0 first); null
+  // when there's no point: they came, or the song has none
+  function lyricsRetryMs(status, attempt) {
+    if (status === 200 || status === 404) return null;
+    return Math.min(1000 * Math.pow(2, attempt), 10000);
+  }
+
   // a line's syllables, each with the space after it unless it joins the next
   function words(line) {
     var last = line.syllables.length - 1;
@@ -93,7 +101,8 @@ var KaraokeModel = (function () {
   }
 
   return { Clock: Clock, partsToShow: partsToShow, linesAt: linesAt, fill: fill,
-           countdown: countdown, screen: screen, words: words, kGapMs: kGapMs };
+           countdown: countdown, screen: screen, lyricsRetryMs: lyricsRetryMs, words: words,
+           kGapMs: kGapMs };
 })();
 if (typeof module !== 'undefined') module.exports = KaraokeModel;
 )js";
@@ -226,17 +235,22 @@ body {
 
   var state = null, lyrics = null, lyricsFor = null, clock = new M.Clock(), clockKnown = false;
 
-  function loadLyrics(shortname) {
+  // the song's lyrics, asked for again while the game is busy (503) or the
+  // reply doesn't come, until they do or the song changes
+  function loadLyrics(shortname, attempt) {
+    attempt = attempt || 0;
     lyricsFor = shortname;
     lyrics = null;
-    fetch('/lyrics?shortname=' + encodeURIComponent(shortname)).then(function (r) {
-      if (r.status === 503) {
-        // the game is busy (a loading screen): try again shortly
-        setTimeout(function () { if (lyricsFor === shortname) loadLyrics(shortname); }, 2000);
-        return null;
+    function again(status) {
+      var wait = M.lyricsRetryMs(status, attempt);
+      if (wait !== null) {
+        setTimeout(function () { if (lyricsFor === shortname) loadLyrics(shortname, attempt + 1); }, wait);
       }
-      return r.ok ? r.json() : null;
-    }).then(function (j) { if (j && lyricsFor === shortname) lyrics = j; }).catch(function () {});
+    }
+    fetch('/lyrics?shortname=' + encodeURIComponent(shortname)).then(function (r) {
+      if (!r.ok) { again(r.status); return; }
+      return r.json().then(function (j) { if (lyricsFor === shortname) lyrics = j; });
+    }).catch(function () { again(0); });
   }
 
   function onState(s) {
