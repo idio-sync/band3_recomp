@@ -28,6 +28,18 @@ bool MusicVideosOn();
 // the calling thread: a few file checks), for picking a video venue
 bool HasMusicVideo(std::string_view shortname);
 
+// black_background_lights: the venue picked for the Black Background modifier
+// is a video venue to be drawn black, its band hidden (patches.cpp's
+// MetaPerformer::SetVenue sets it at each venue pick, src/Hooks/music_video.cpp
+// draws it)
+void SetBlackVenue(bool black);
+bool BlackVenue();
+
+// whether a music video is on screen: MusicVideoFrame gave a venue movie a
+// frame of one in the last half second (so a video venue is drawing it), for
+// music_video_hide_band
+bool MusicVideoShowing();
+
 // The song played, as its Game is made (or GamePanel::Enter enters one a
 // setlist plays on in the same Game), empty as it ends: its video is looked
 // for, and opened on the player's thread.

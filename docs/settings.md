@@ -297,6 +297,11 @@ Video venue for songs with a video); Off leaves the venue to the game. The log s
 as does the Black Background modifier; `forced_venue = video` (the Game tab's Forced venue,
 Video venue) puts every song in a video venue, with a video or not.
 
+With `music_video_hide_band` (the Game tab's Hide the band during music videos) the band
+isn't drawn while a video plays, so only the video shows behind the highways. The band
+still plays along unseen: the cameras and the venue's lights (and
+[Stage Kits](integrations.md#stage-kit-lights)) go on as before.
+
 The video starts with the song. `<shortname>.ini` beside it with Clone Hero's
 `video_start_time = <milliseconds>` (as in a chart's `song.ini`) starts it that far in at the
 song's start; a negative one starts it that far into the song. The screen is black before the

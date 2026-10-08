@@ -49,6 +49,13 @@ right), and a chase. A song's next lighting command takes over from a test.
 To see what band3 sends a Pico without one, `python tools/fake_pico.py` stands in for
 a Pico on this PC and prints the commands it gets.
 
+The kits' lighting comes from the venue's light presets, so with no venue (the Black
+Background modifier, or `forced_venue = none`) they stay dark. With **Keep the lights on a
+black background** (`black_background_lights`, the Lights tab) the modifier puts the song
+in a video venue drawn black, with the band hidden, instead of in no venue: the screen is
+as black, and the kits light as in any venue. The venue still loads and draws, so it
+costs what a venue costs. A forced venue still wins over the modifier, as before.
+
 ## Home Assistant
 
 band3 can tell [Home Assistant](https://www.home-assistant.io) what the game is doing,

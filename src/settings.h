@@ -20,6 +20,7 @@ REXCVAR_DECLARE(bool, disable_metamusic);
 REXCVAR_DECLARE(std::string, forced_venue);
 REXCVAR_DECLARE(bool, music_videos);
 REXCVAR_DECLARE(int32_t, music_video_venue_chance);
+REXCVAR_DECLARE(bool, music_video_hide_band);
 REXCVAR_DECLARE(std::string, music_videos_folder);
 REXCVAR_DECLARE(std::string, music_video_fit);
 REXCVAR_DECLARE(std::string, username);
@@ -108,6 +109,7 @@ REXCVAR_DECLARE(bool, rb3e_mode);
 // Band3/Lights
 REXCVAR_DECLARE(bool, stagekit_usb);
 REXCVAR_DECLARE(bool, pico_discovery);
+REXCVAR_DECLARE(bool, black_background_lights);
 
 // Band3/Advanced/Memory
 REXCVAR_DECLARE(int32_t, main_heap_size);

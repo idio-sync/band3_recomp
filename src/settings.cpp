@@ -61,6 +61,10 @@ REXCVAR_DEFINE_INT32(music_video_venue_chance, 100, "Band3/Game",
     "black background modifier still win. Applies from the next venue the game picks")
     .range(0, 100);
 
+REXCVAR_DEFINE_BOOL(music_video_hide_band, false, "Band3/Game",
+    "Leave the band out of the picture while a song's music video plays, so only the "
+    "video shows behind the highways. The venue's lights (and Stage Kit) go on as before");
+
 REXCVAR_DEFINE_STRING(music_videos_folder, "videos", "Band3/Game",
     "The folder music videos are looked for in (empty: videos). A relative folder is "
     "relative to band3_config.ini's folder (or band3's own folder if there is no ini)");
@@ -468,6 +472,11 @@ REXCVAR_DEFINE_BOOL(stagekit_usb, true, "Band3/Lights",
     "Light the Stage Kits plugged into this PC as the game lights them: Santroller Stage Kits "
     "(which a PC sees in HID mode) and Xbox 360 Stage Kits (XInput, each taking one of "
     "Windows' four XInput slots). They don't take a player's place");
+
+REXCVAR_DEFINE_BOOL(black_background_lights, false, "Band3/Lights",
+    "With RB3Enhanced's Black Background modifier, play in a video venue drawn black with "
+    "the band hidden instead of in no venue, so the venue's lights still reach the Stage "
+    "Kits. The venue still loads and draws, which costs what a venue costs");
 
 REXCVAR_DEFINE_BOOL(pico_discovery, true, "Band3/Lights",
     "Find the RB3E Dashboard's wireless Stage Kits (Pico W) on the network, to list and test "

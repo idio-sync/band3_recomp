@@ -1,0 +1,48 @@
+# Plays 20th Century Boy in a video venue with its music video and
+# music_video_hide_band on: the video shows behind the highway with no band in
+# front of it, and the venue's lights still reach the Stage Kit. Starts where
+# boot.b3t leaves Rock Band 3 Deluxe (on a fresh profile); the video is
+# music_video.b3t's, in a folder given at launch, with the pretend Stage Kit:
+#   python tools/band3ctl.py launch --fresh -- --music_videos_folder=<that folder, absolute> --stagekit_fake=true
+#   python tools/band3ctl.py run tests/game/boot.b3t
+#   python tools/band3ctl.py run tests/game/music_video_hide_band.b3t
+#   python tools/band3ctl.py lights
+# The last `lights` lists the commands the pretend kit was sent in the song's
+# last 10 s: some, if the video venue drives the Stage Kit.
+
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+set autoplay true
+set forced_venue false
+set music_video_venue_chance 100
+set music_video_hide_band true
+# Play Now, Quickplay, Choose Songs
+press green
+sleep 1s
+press green
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+# past the 123 heading to 20th Century Boy
+press down
+press down
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+# Guitar, Expert
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+expect song=20thcenturyboy
+# past the video venue's intro
+sleep 20s
+screenshot native music-video-hide-band
+# what the Stage Kit is sent from here on
+lights
+sleep 10s
+screenshot native music-video-hide-band-later

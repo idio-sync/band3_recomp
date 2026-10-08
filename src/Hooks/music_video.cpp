@@ -1,5 +1,8 @@
 // Music videos: replaces the frame a venue's Bink movie is about to draw with
-// the song's music video (src/Video/music_video.h), or with a test pattern.
+// the song's music video (src/Video/music_video.h), or with a test pattern,
+// and with music_video_hide_band, leaves the band undrawn while it shows. The
+// Black Background modifier with black_background_lights is a video venue
+// drawn the same way: black, no band, its lights on.
 // Movie::Impl::Draw (rb3-xenon movie/Movie.cpp) gives its material the
 // current frame's three plane textures and draws them; the planes are
 // written here first, so both renderers draw ours without knowing. The video
@@ -10,6 +13,7 @@
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
 #include <rex/types.h>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cstdint>
@@ -112,9 +116,36 @@ bool DrawnPlanes(uint8_t* base, uint32_t impl, gf::FetchLayout l[3]) {
     return true;
 }
 
+// steady_clock ticks of the last black frame written, so the band stays
+// hidden only while a black venue is drawing (not in the menus after it)
+std::atomic<std::chrono::steady_clock::rep> g_black_drawn{0};
+
+bool BlackShowing() {
+    const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto half_second =
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::milliseconds(500))
+            .count();
+    return now - g_black_drawn.load() < half_second;
+}
+
+std::shared_ptr<const PlaneSet> BlackPlanes(const band3::video::PlaneSizes& sizes) {
+    static std::shared_ptr<PlaneSet> black;
+    static band3::video::PlaneSizes made;
+    if (!black || made != sizes) {
+        black = std::make_shared<PlaneSet>();
+        black->y.Resize(sizes.w, sizes.h, band3::video::kBlackY);
+        black->cr.Resize(sizes.cw, sizes.ch, band3::video::kNeutralC);
+        black->cb.Resize(sizes.cw, sizes.ch, band3::video::kNeutralC);
+        made = sizes;
+    }
+    return black;
+}
+
 void ReplaceFrame(uint8_t* base, uint32_t impl) {
     const bool pattern = REXCVAR_GET(music_video_test_pattern);
-    if (!pattern && !band3::video::MusicVideosOn()) return;
+    const bool black = band3::video::BlackVenue();
+    if (!pattern && !black && !band3::video::MusicVideosOn()) return;
     if (!VenueMovie(base, impl)) return;
     gf::FetchLayout l[3];
     if (!DrawnPlanes(base, impl, l)) return;
@@ -127,6 +158,9 @@ void ReplaceFrame(uint8_t* base, uint32_t impl) {
         auto made = std::make_shared<PlaneSet>();
         band3::video::TestPattern(*made, sizes.w, sizes.h, sizes.cw, sizes.ch, t);
         planes = std::move(made);
+    } else if (black) {
+        planes = BlackPlanes(sizes);
+        g_black_drawn = std::chrono::steady_clock::now().time_since_epoch().count();
     } else if (!band3::video::MusicVideoFrame(SongTime(base), sizes, planes)) {
         return;
     }
@@ -145,4 +179,16 @@ extern "C" void __imp__Movie__Impl__Draw(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(Movie__Impl__Draw) {
     ReplaceFrame(base, ctx.r3.u32);
     __imp__Movie__Impl__Draw(ctx, base);
+}
+
+// music_video_hide_band: a band member draws through
+// BandCharacter::DrawLodOrShadow (rb3-xenon bandobj/BandCharacter.cpp), its
+// outfit and its instrument, and its shadows; skipped while a music video
+// shows, or a black venue. It still animates, and the cameras and lights go
+// on as they were.
+extern "C" void __imp__BandCharacter__DrawLodOrShadow(PPCContext& ctx, uint8_t* base);
+extern "C" REX_FUNC(BandCharacter__DrawLodOrShadow) {
+    if (REXCVAR_GET(music_video_hide_band) && band3::video::MusicVideoShowing()) return;
+    if (BlackShowing()) return;
+    __imp__BandCharacter__DrawLodOrShadow(ctx, base);
 }
