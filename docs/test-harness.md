@@ -264,6 +264,14 @@ sets the native renderer's picture of each against the emulated GPU's, for the
 overdrive flames the native renderer once streaked across the venue. Its docstring has
 the launch line and how to load a track theme into the test profile.
 
+## Live pages
+
+`tests/game/karaoke.b3t` plays 20th Century Boy on vocals (the USB mic's test tone singing)
+with the web server on, and `tools/karaoke_check.py` then checks `/live/events` and
+`/lyrics` against it: the state, the song clock's pace, the lyrics' shape, and the line
+the karaoke page shows, printed to hold against a screenshot. The script's header has
+the launch line.
+
 ## GPU hangs
 
 `launch` starts band3 with `--dred=true` (Direct3D 12's Device Removed Extended Data;

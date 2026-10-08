@@ -1,0 +1,40 @@
+# Plays 20th Century Boy on vocals with the USB mic's test tone, for the live
+# pages to follow (tools/karaoke_check.py). Starts where boot.b3t leaves the
+# game, with the web server on:
+#   python tools/band3ctl.py launch --fresh -- --http_enabled=true --usb_mics=true --usb_mic_test_tone=220
+#   python tools/band3ctl.py run tests/game/boot.b3t
+#   python tools/band3ctl.py run tests/game/karaoke.b3t
+#   python tools/karaoke_check.py
+expect mic=1
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+# Play Now, Quickplay, Choose Songs
+press green
+sleep 1s
+press green
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+# past the 123 heading to 20th Century Boy
+press down
+press down
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+# Guitar, Bass, Keys, then Solo (vocals)
+press down
+sleep 333ms
+press down
+sleep 333ms
+press down
+sleep 500ms
+screenshot karaoke-part
+press green
+sleep 1s
+press green
+wait in_game timeout=60s
+expect song=20thcenturyboy
