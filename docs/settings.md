@@ -302,7 +302,9 @@ Video venue) puts every song in a video venue, with a video or not.
 With `music_video_hide_band` on (the default; the Game tab's Hide the band during music videos) the band
 isn't drawn while a video plays, so only the video shows behind the highways. The band
 still plays along unseen: the cameras and the venue's lights (and
-[Stage Kits](integrations.md#stage-kit-lights)) go on as before.
+[Stage Kits](integrations.md#stage-kit-lights)) go on as before. With `music_video_as_is` on
+(the default; Show music videos as they are) the video venue's colour filter, film grain,
+glow and trails are left off while the video plays, so it looks as it does in a player.
 
 The video starts with the song. `<shortname>.ini` beside it with Clone Hero's
 `video_start_time = <milliseconds>` (as in a chart's `song.ini`) starts it that far in at the

@@ -2,7 +2,9 @@
 // the song's music video (src/Video/music_video.h), or with a test pattern,
 // and with music_video_hide_band, leaves the band undrawn while it shows. The
 // Black Background modifier with black_background_lights is a video venue
-// drawn the same way: black, no band, its lights on.
+// drawn the same way: black, no band, its lights on. With music_video_as_is,
+// the venue's post-processing is left off meanwhile, so the video shows as it
+// is.
 // Movie::Impl::Draw (rb3-xenon movie/Movie.cpp) gives its material the
 // current frame's three plane textures and draws them; the planes are
 // written here first, so both renderers draw ours without knowing. The video
@@ -20,6 +22,7 @@
 #include <cstring>
 #include <memory>
 #include "generated/band3_init.h"
+#include "src/Hooks/music_video.h"
 #include "src/Render/guest_formats.h"
 #include "src/Video/movie_planes.h"
 #include "src/Video/music_video.h"
@@ -191,4 +194,32 @@ extern "C" REX_FUNC(BandCharacter__DrawLodOrShadow) {
     if (REXCVAR_GET(music_video_hide_band) && band3::video::MusicVideoShowing()) return;
     if (BlackShowing()) return;
     __imp__BandCharacter__DrawLodOrShadow(ctx, base);
+}
+
+namespace {
+
+// TheRnd (scene_capture.cpp's kDrawModeHolder) and its mDisablePostProc,
+// which Rnd::DoPostProcess skips every post-processor for (the game's own
+// toggle_all_postprocs) and the native renderer reads (ReadPostParams): the
+// video venues' colour filter, film grain, glow and trails
+constexpr uint32_t kTheRnd = 0x82C76B68;
+constexpr uint32_t kRnd_DisablePostProc = 0x105;
+
+// whether band3 turned it on, so it's turned off only then
+bool g_post_off = false;
+
+}
+
+namespace band3::music_video {
+
+void RunFrame(uint8_t* base) {
+    const bool want = REXCVAR_GET(music_video_as_is) &&
+                      (band3::video::MusicVideoShowing() || BlackShowing());
+    if (want == g_post_off) return;
+    const uint32_t rnd = REX_LOAD_U32(kTheRnd);
+    if (!rnd) return;
+    REX_STORE_U8(rnd + kRnd_DisablePostProc, want ? 1 : 0);
+    g_post_off = want;
+}
+
 }

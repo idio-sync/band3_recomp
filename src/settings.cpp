@@ -65,6 +65,10 @@ REXCVAR_DEFINE_BOOL(music_video_hide_band, true, "Band3/Game",
     "Leave the band out of the picture while a song's music video plays, so only the "
     "video shows behind the highways. The venue's lights (and Stage Kit) go on as before");
 
+REXCVAR_DEFINE_BOOL(music_video_as_is, true, "Band3/Game",
+    "Show a song's music video as it is: the video venue's colour filter, film grain, glow "
+    "and trails are left off while it plays (and on the black background's black)");
+
 REXCVAR_DEFINE_STRING(music_videos_folder, "videos", "Band3/Game",
     "The folder music videos are looked for in (empty: videos). A relative folder is "
     "relative to band3_config.ini's folder (or band3's own folder if there is no ini)");

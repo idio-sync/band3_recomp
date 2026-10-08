@@ -195,6 +195,8 @@ constexpr Setting kSettings[] = {
      .choices = kVideoVenueChances},
     {.cvar = "music_video_hide_band", .tab = kGame, .section = "Game",
      .label = "Hide the band during music videos", .widget = kCheckbox},
+    {.cvar = "music_video_as_is", .tab = kGame, .section = "Game",
+     .label = "Show music videos as they are", .widget = kCheckbox},
     {.cvar = "music_videos_folder", .tab = kGame, .section = "Game",
      .label = "Music videos folder", .widget = kPath},
     {.cvar = "music_video_fit", .tab = kGame, .section = "Game", .label = "Music video shape",

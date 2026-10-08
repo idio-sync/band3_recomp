@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "generated/band3_init.h"
 #include "src/Hooks/keyboard_search.h"
+#include "src/Hooks/music_video.h"
 #include "src/Hooks/mouse_hover.h"
 #include "src/Net/home_assistant.h"
 #include "src/Net/http_server.h"
@@ -61,5 +62,6 @@ extern "C" REX_FUNC(App__DrawRegular)
     band3::http::RunGameJobs(ctx, base);
     band3::keyboard_search::RunFrame(ctx, base);
     band3::mouse_hover::RunFrame(ctx, base);
+    band3::music_video::RunFrame(base);
     __imp__App__DrawRegular(ctx, base);
 }
