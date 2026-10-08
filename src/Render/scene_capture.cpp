@@ -38,6 +38,7 @@
 #include "src/Render/renderer_switch.h"
 #include "src/Render/sync_gpu/native_only.h"
 #include "src/Render/sync_gpu/sync_graphics_system.h"
+#include "src/Render/target_premake.h"
 #include "src/settings.h"
 #include "src/stall_watch.h"
 
@@ -2040,6 +2041,38 @@ void ForgetTexture(uint32_t tex) {
     s.rts.erase(tex);
 }
 
+// textures given surfaces, for the worker to make their render targets and
+// texture arrays ahead (target_premake.h); its own lock, as SyncBitmap can
+// run on the splash thread
+std::mutex g_announce_mutex;
+AnnounceQueue g_announced;
+TextureAnnounceQueue g_announced_textures;
+
+// after DxTex::SyncBitmap: a rendered texture's target, a loaded one's
+// array
+void AnnounceTexture(const Guest& g, uint32_t tex) {
+    AnnouncedTarget t;
+    t.tex_obj = tex;
+    t.width = g.U32(tex + kTex_Width);
+    t.height = g.U32(tex + kTex_Height);
+    t.tex_type = g.U32(tex + kTex_Type);
+    t.num_mips = g.U32(tex + kTex_NumMips);
+    if (AnnouncesTarget(t.tex_type, t.width, t.height)) {
+        std::lock_guard lock(g_announce_mutex);
+        g_announced.Announce(t);
+    } else if (AnnouncesTexture(t.tex_type, t.width, t.height)) {
+        const AnnouncedTexture a{t.width, t.height, g.U32(tex + kDxTex_Format) & 0x3f};
+        std::lock_guard lock(g_announce_mutex);
+        g_announced_textures.Announce(a);
+    }
+}
+
+// RndTex::~RndTex
+void ForgetAnnounced(uint32_t tex) {
+    std::lock_guard lock(g_announce_mutex);
+    g_announced.Forget(tex);
+}
+
 // Prepends the last recorded passes of render targets the frame samples but
 // didn't draw, transitively, and counts rt_sampled, rt_missing, rt_filtered.
 void CarryPasses(State& s, FrameCapture& fc) {
@@ -2551,6 +2584,16 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
 
 }  // namespace
 
+void TakeAnnouncedTargets(AnnounceQueue& into) {
+    std::lock_guard lock(g_announce_mutex);
+    g_announced.TakeInto(into);
+}
+
+void TakeAnnouncedTextures(TextureAnnounceQueue& into) {
+    std::lock_guard lock(g_announce_mutex);
+    g_announced_textures.TakeInto(into);
+}
+
 void AcquireCapture() {
     std::lock_guard lock(g_users_mutex);
     if (g_users++ == 0) g_enabled.store(true);
@@ -2991,20 +3034,26 @@ extern "C" REX_FUNC(DxCam__Select) {
 // its passes. Can run on the main thread while the splash thread draws.
 extern "C" REX_FUNC(RndTex__dt) {
     if (Active()) {
-        std::lock_guard lock(g_state_mutex);
-        HookTimer timer(CaptureProfile::kHookPass);
-        ForgetTexture(ctx.r3.u32);
+        {
+            std::lock_guard lock(g_state_mutex);
+            HookTimer timer(CaptureProfile::kHookPass);
+            ForgetTexture(ctx.r3.u32);
+        }
+        ForgetAnnounced(ctx.r3.u32);
     }
     __imp__RndTex__dt(ctx, base);
 }
 
+// and, once it has its surfaces, it's announced (target_premake.h)
 extern "C" REX_FUNC(DxTex__SyncBitmap) {
+    const uint32_t tex = ctx.r3.u32;
     if (Active()) {
         std::lock_guard lock(g_state_mutex);
         HookTimer timer(CaptureProfile::kHookPass);
-        ForgetTexture(ctx.r3.u32);
+        ForgetTexture(tex);
     }
     __imp__DxTex__SyncBitmap(ctx, base);
+    if (Active()) AnnounceTexture(Guest{base}, tex);
 }
 
 // the frame's ProcCommands at DxRnd::DoPostProcess, for LatchGpuSkip at

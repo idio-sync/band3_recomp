@@ -20,7 +20,7 @@ void Start();
 // turns every kit's lights off, and stops; at exit
 void Stop();
 
-// StageKit::SetState(left, right), from the game thread
+// JoypadStageKitSetRaw(left, right), from the game thread
 void NoteGame(uint8_t left, uint8_t right);
 
 // the Lights tab's

@@ -26,7 +26,8 @@
 // Live's sessions, secure connections and QoS probes all report success, and
 // the game's packets go as plain UDP: each player's game talks straight to the
 // others' on liveless_port. RB3 hooks these through its own wrappers of the
-// XNet and XSession calls, at the addresses RB3Enhanced patches.
+// XNet and XSession calls, at the addresses RB3Enhanced patches, and the rest
+// of the XSession calls too, which RB3Enhanced leaves to fail on Live.
 
 extern "C" void __imp__XNetGetTitleXnAddr(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__band_NetDll_XNetXnAddrToInAddr(PPCContext& ctx, uint8_t* base);
@@ -34,8 +35,16 @@ extern "C" void __imp__XNetQosLookup(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__XNetQosRelease(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__XSessionCreate(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__XSessionModify(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__XSessionDelete(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__XSessionJoinLocal(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__XSessionJoinRemote(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__XSessionLeaveLocal(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__XSessionLeaveRemote(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__XSessionArbitrationRegister(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__XSessionStart(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__XSessionEnd(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__XSessionSearchEx(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__XSessionWriteStats(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__band_NetDll_XNetConnect(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__band_NetDll_XNetRegisterKey(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__band_NetDll_XNetUnregisterKey(PPCContext& ctx, uint8_t* base);
@@ -88,7 +97,7 @@ void StoreNetworkOrder(uint8_t* base, uint32_t address, uint32_t value) {
 // a join, step by step, in the log (log_net_calls)
 bool LogJoins() { return REXCVAR_GET(log_net_calls); }
 
-// an async XSession call that RB3Enhanced has succeed at once: its
+// an async XSession call that succeeds at once, as RB3Enhanced's do: its
 // XOVERLAPPED, the last argument, completes
 void SessionCallSucceeds(PPCContext& ctx, uint8_t* base, uint32_t overlapped, const char* name) {
     REXLOG_INFO("liveless: {}", name);
@@ -103,9 +112,16 @@ void SessionCallSucceeds(PPCContext& ctx, uint8_t* base, uint32_t overlapped, co
 }  // namespace
 
 // XSessionCreate(flags, user, public slots, private slots, u64* nonce,
-// XSESSION_INFO*, XOVERLAPPED*, HANDLE* session): the game hosts without Live
+// XSESSION_INFO*, XOVERLAPPED*, HANDLE* session): the game hosts without Live.
+// The session is INVALID_HANDLE_VALUE, as Live's XSessionCreate first sets it
+// and RB3Enhanced leaves it, so XboxSession skips what it does only with a
+// session (leaving, starting, ending, stats, deleting it, whose CloseHandle a
+// made-up handle could aim at another object). Joins and arbitration go on it
+// anyway: every call below answers, whatever the handle.
 extern "C" REX_FUNC(XSessionCreate) {
     if (!Liveless()) return __imp__XSessionCreate(ctx, base);
+    constexpr uint32_t kInvalidHandle = 0xFFFFFFFF;
+    if (const uint32_t session = ctx.r10.u32) REX_STORE_U32(session, kInvalidHandle);
     SessionCallSucceeds(ctx, base, ctx.r9.u32, "XSessionCreate");
 }
 
@@ -115,11 +131,81 @@ extern "C" REX_FUNC(XSessionModify) {
     SessionCallSucceeds(ctx, base, ctx.r7.u32, "XSessionModify");
 }
 
-// 0x82A69FB0, which RB3Enhanced calls XSessionJoinRemote: (session, count,
-// players, BOOL* private slots, XOVERLAPPED*)
+// XSessionDelete(session, XOVERLAPPED*)
+extern "C" REX_FUNC(XSessionDelete) {
+    if (!Liveless()) return __imp__XSessionDelete(ctx, base);
+    SessionCallSucceeds(ctx, base, ctx.r4.u32, "XSessionDelete");
+}
+
+// XSessionJoinLocal(session, count, user indexes, BOOL* private slots,
+// XOVERLAPPED*): this game's players. RB3Enhanced calls this address
+// XSessionJoinRemote, but AddLocalPlayerJob makes this call; the remote join
+// is the next one.
 extern "C" REX_FUNC(XSessionJoinLocal) {
     if (!Liveless()) return __imp__XSessionJoinLocal(ctx, base);
-    SessionCallSucceeds(ctx, base, ctx.r7.u32, "XSessionJoin");
+    SessionCallSucceeds(ctx, base, ctx.r7.u32, "XSessionJoinLocal");
+}
+
+// XSessionJoinRemote(session, count, XUID*, BOOL* private slots,
+// XOVERLAPPED*): AddRemotePlayerJob's, for each player of another game in the
+// band
+extern "C" REX_FUNC(XSessionJoinRemote) {
+    if (!Liveless()) return __imp__XSessionJoinRemote(ctx, base);
+    SessionCallSucceeds(ctx, base, ctx.r7.u32, "XSessionJoinRemote");
+}
+
+// XSessionLeaveLocal(session, count, user indexes, XOVERLAPPED*)
+extern "C" REX_FUNC(XSessionLeaveLocal) {
+    if (!Liveless()) return __imp__XSessionLeaveLocal(ctx, base);
+    SessionCallSucceeds(ctx, base, ctx.r6.u32, "XSessionLeaveLocal");
+}
+
+// XSessionLeaveRemote(session, count, XUID*, XOVERLAPPED*)
+extern "C" REX_FUNC(XSessionLeaveRemote) {
+    if (!Liveless()) return __imp__XSessionLeaveRemote(ctx, base);
+    SessionCallSucceeds(ctx, base, ctx.r6.u32, "XSessionLeaveRemote");
+}
+
+// XSessionArbitrationRegister(session, flags, u64 nonce, DWORD* buffer size,
+// XSESSION_REGISTRATION_RESULTS*, XOVERLAPPED*): a ranked game's, before it
+// starts. RegisterArbitrationJob first asks for the size it needs, then
+// registers into a buffer that big. The game only frees the results, so
+// they're a count of no machines.
+extern "C" REX_FUNC(XSessionArbitrationRegister) {
+    if (!Liveless()) return __imp__XSessionArbitrationRegister(ctx, base);
+    // XSESSION_REGISTRATION_RESULTS: count, XSESSION_REGISTRANT*
+    constexpr uint32_t kNeeded = 8;
+    const uint32_t size = ctx.r6.u32, results = ctx.r7.u32;
+    if (!size) {
+        ctx.r3.u64 = 87;  // ERROR_INVALID_PARAMETER
+        return;
+    }
+    if (!results || REX_LOAD_U32(size) < kNeeded) {
+        REX_STORE_U32(size, kNeeded);
+        ctx.r3.u64 = kErrorInsufficientBuffer;
+        return;
+    }
+    std::memset(base + results, 0, kNeeded);
+    SessionCallSucceeds(ctx, base, ctx.r8.u32, "XSessionArbitrationRegister");
+}
+
+// XSessionStart(session, flags, XOVERLAPPED*)
+extern "C" REX_FUNC(XSessionStart) {
+    if (!Liveless()) return __imp__XSessionStart(ctx, base);
+    SessionCallSucceeds(ctx, base, ctx.r5.u32, "XSessionStart");
+}
+
+// XSessionEnd(session, XOVERLAPPED*)
+extern "C" REX_FUNC(XSessionEnd) {
+    if (!Liveless()) return __imp__XSessionEnd(ctx, base);
+    SessionCallSucceeds(ctx, base, ctx.r4.u32, "XSessionEnd");
+}
+
+// XSessionWriteStats(session, u64 XUID, view count, XSESSION_VIEW_PROPERTIES*,
+// XOVERLAPPED*): a player's TrueSkill after a game, which has nowhere to go
+extern "C" REX_FUNC(XSessionWriteStats) {
+    if (!Liveless()) return __imp__XSessionWriteStats(ctx, base);
+    SessionCallSucceeds(ctx, base, ctx.r7.u32, "XSessionWriteStats");
 }
 
 // XSessionSearchEx(procedure, user, max results, users, property count,

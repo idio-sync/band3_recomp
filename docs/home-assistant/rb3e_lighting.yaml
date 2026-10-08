@@ -1,0 +1,56 @@
+# band3 example: a Home Assistant automation driven by band3's webhook (ha_webhook_url).
+# From the RB3E Dashboard (github.com/idio-sync/rb3e-stagekit-networked,
+# HomeAssistant/rb3e_lighting.yaml); band3 sends the same payloads, so it works unchanged.
+# Set band3's Webhook URL to http://<home assistant>:8123/api/webhook/rb3_event,
+# then replace the light and input_text entities below with yours.
+# See docs/integrations.md, Webhook.
+
+alias: "Rock Band 3 Lighting Control"
+description: "Dims lights when RB3Enhanced sends the in-game signal."
+trigger:
+  - platform: webhook
+    webhook_id: "rb3_event"
+    local_only: true # Set to false if script is not on local network
+    allowed_methods:
+      - POST
+    
+condition: []
+
+action:
+  - choose:
+      # Case 1: Game Started (Playing)
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.json.type == 'state' and trigger.json.status == 'playing' }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: light.living_room_zigbee_lights  # REPLACE THIS with your light entity
+            data:
+              brightness_pct: 30
+              transition: 2
+
+      # Case 2: Game Ended (Menu)
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.json.type == 'state' and trigger.json.status == 'menu' }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: light.living_room_zigbee_lights  # REPLACE THIS with your light entity
+            data:
+              brightness_pct: 100
+              transition: 2
+
+      # Optional Case 3: Update a text helper with the Song Name
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.json.type == 'song' }}"
+        sequence:
+          - service: input_text.set_value
+            target:
+              entity_id: input_text.current_rock_band_song
+            data:
+              value: "{{ trigger.json.name }}"
+    
+mode: queued

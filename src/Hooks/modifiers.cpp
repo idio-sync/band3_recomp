@@ -136,7 +136,7 @@ extern "C" REX_FUNC(Locale__Localize)
     ctx.r3.u64 = copy;
 }
 
-// GameGemList::WillBeNoStrum(GameGemList*, MultiGemInfo*): force HOPOs makes
+// GameGemList::WillBeNoStrum(GameGemList*, const GameGem&): force HOPOs makes
 // every gem one
 extern "C" REX_FUNC(GameGemList__WillBeNoStrum)
 {

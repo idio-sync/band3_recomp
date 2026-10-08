@@ -7,14 +7,17 @@
 #include <chrono>
 #include <cstdint>
 #include <format>
+#include <optional>
 #include <string>
 
 #include "generated/band3_init.h"
+#include "src/Render/query_answers.h"
 #include "src/settings.h"
 
 // native_query_log: logs what occlusion queries return to the game, to check
-// the sync-only GPU's EVENT_WRITE_ZPD answers against the emulated GPU's. The
-// packet side is SyncCommandProcessor::SetQueryLog.
+// the sync-only GPU's EVENT_WRITE_ZPD answers against the emulated GPU's, and
+// band3's own (query_answers.h, applied here first). The packet side is
+// SyncCommandProcessor::SetQueryLog.
 //
 // D3DQuery_GetData (0x82859348): r3 the query, r4 the data buffer, r5 its
 // size in bytes; r6 is unused. Type at +4 (D3D9: 8 event, 9 occlusion,
@@ -72,9 +75,15 @@ bool Logged() {
 }  // namespace
 
 extern "C" REX_FUNC(D3DQuery_GetData) {
+    const uint32_t query = ctx.r3.u32;
+    const uint32_t data = ctx.r4.u32;
+    const uint32_t size = ctx.r5.u32;
+    __imp__D3DQuery_GetData(ctx, base);
+    // band3's count over the GPU's (query_answers.h)
+    const std::optional<uint32_t> gpu =
+        band3::render::ApplyQueryAnswer(base, query, data, size, ctx.r3.u32);
     if (!REXCVAR_GET(native_query_log)) {
         if (g_was_on.load(std::memory_order_relaxed)) g_was_on.store(false, std::memory_order_relaxed);
-        __imp__D3DQuery_GetData(ctx, base);
         return;
     }
     // turned on again: restart the first-reads window
@@ -82,10 +91,6 @@ extern "C" REX_FUNC(D3DQuery_GetData) {
         g_reads.store(0, std::memory_order_relaxed);
         g_left_out.store(0, std::memory_order_relaxed);
     }
-    const uint32_t query = ctx.r3.u32;
-    const uint32_t data = ctx.r4.u32;
-    const uint32_t size = ctx.r5.u32;
-    __imp__D3DQuery_GetData(ctx, base);
     if (!Logged()) return;
     const uint32_t hr = ctx.r3.u32;
     const uint64_t n = g_reads.load(std::memory_order_relaxed);
@@ -99,6 +104,7 @@ extern "C" REX_FUNC(D3DQuery_GetData) {
         "({}), data{}",
         n, query, query ? Load32(base, query + 4) : 0, size, hr, Result(hr),
         words.empty() ? " none" : words);
+    if (gpu) line += std::format(" (band3's count; the GPU's {})", *gpu);
     if (const uint64_t left_out = g_left_out.exchange(0, std::memory_order_relaxed))
         line += std::format(" ({} reads not logged since the last)", left_out);
     REXLOG_INFO("{}", line);

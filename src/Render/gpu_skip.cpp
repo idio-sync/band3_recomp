@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "generated/band3_init.h"
+#include "src/Render/query_answers.h"
 #include "src/Render/renderer_switch.h"
 #include "src/Render/sync_gpu/native_only.h"
 
@@ -225,16 +226,21 @@ extern "C" REX_FUNC(rex_sub_82863BB8) {
 
 // D3DDevice_DrawIndexedVertices: DxMesh::DrawFaces' draws
 extern "C" REX_FUNC(rex_sub_828644C0) {
+    band3::render::NoteQueryOtherDraw();
     if (band3::render::Emit(GpuSkipStats::kIndexed)) __imp__rex_sub_828644C0(ctx, base);
 }
 
 // the instanced draw: DxMultiMesh::DrawBatchedNewGfx's
 extern "C" REX_FUNC(rex_sub_828640D0) {
+    band3::render::NoteQueryOtherDraw();
     if (band3::render::Emit(GpuSkipStats::kInstanced)) __imp__rex_sub_828640D0(ctx, base);
 }
 
-// D3DDevice_DrawVerticesUP
+// D3DDevice_DrawVerticesUP: r4 the primitive type, r5 the vertex count, r6
+// the vertices, r7 their stride. Counted for an open occlusion query whether
+// or not it's emitted (query_answers.h).
 extern "C" REX_FUNC(rex_sub_82863B70) {
+    band3::render::NoteQueryDrawUp(base, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32);
     if (band3::render::Emit(GpuSkipStats::kUp)) __imp__rex_sub_82863B70(ctx, base);
 }
 
@@ -256,7 +262,8 @@ extern "C" REX_FUNC(rex_sub_82855F18) {
 }
 
 // DxRnd::DoPointTests: lens flare occlusion queries, read back via
-// BlockOnFence; quads drawn except at swap_only
+// BlockOnFence; quads drawn except at swap_only (band3 counts them either
+// way: query_answers.h)
 extern "C" REX_FUNC(DxRnd__DoPointTests) {
     band3::render::t_point_tests = true;
     __imp__DxRnd__DoPointTests(ctx, base);

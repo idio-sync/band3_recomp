@@ -29,6 +29,7 @@ add_executable(band3_tests
     instruments_test.cpp
     gpu_residency_test.cpp
     gpu_submit_test.cpp
+    target_premake_test.cpp
     camera_cut_test.cpp
     ps3_instruments_test.cpp
     ps4_instruments_test.cpp
@@ -61,6 +62,7 @@ add_executable(band3_tests
     post_params_test.cpp
     post_model_test.cpp
     spot_model_test.cpp
+    query_coverage_test.cpp
     present_model_test.cpp
     aspect_model_test.cpp
     http_request_test.cpp

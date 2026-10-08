@@ -8,6 +8,7 @@
 #include "src/Render/sample_model.h"
 #include "src/Render/shade_model.h"
 #include "src/Render/spot_model.h"
+#include "src/Render/target_premake.h"
 #include "src/Render/shaders/gamma_shaders.gen.h"
 #include "src/Render/shaders/mesh_shaders.gen.h"
 #include "src/Render/shaders/mips_shaders.gen.h"
@@ -629,8 +630,21 @@ struct GpuRenderer::Impl {
         uint32_t levels = 1;  // its class's whole chain
         std::vector<uint32_t> free;
         uint64_t empty_since = 0;  // when its last texture went, if none are left
+        // made ahead (Premake) and not yet used: kept empty until then
+        // (kArrayKeepSeconds), then as any empty one
+        std::chrono::steady_clock::time_point ahead_until{};
     };
     std::unordered_map<uint64_t, TexArray> tex_arrays;
+    static uint64_t ArrayKey(uint32_t w, uint32_t h, SDL_GPUTextureFormat format) {
+        return uint64_t(w) << 40 | uint64_t(h) << 16 | uint32_t(format);
+    }
+    // a size class's first array's layers: about kTextureArrayBytes of level 0
+    static uint32_t FirstArrayLayers(uint32_t w, uint32_t h, SDL_GPUTextureFormat format) {
+        const uint64_t layer_bytes = uint64_t(w) * h * TexelBits(format) / 8;
+        return uint32_t(std::clamp<uint64_t>(kTextureArrayBytes / layer_bytes, 1, 64));
+    }
+    SDL_GPUTexture* NewArrayTexture(uint32_t w, uint32_t h, SDL_GPUTextureFormat format,
+                                    uint32_t layers);
     struct Tex {
         std::shared_ptr<const Texture> keep;
         TexArray* array = nullptr;  // null if it couldn't have a layer
@@ -660,6 +674,10 @@ struct GpuRenderer::Impl {
         // (soft_raster.h's PassTargetSize)
         uint32_t game_w = 0, game_h = 0;
         bool shadow = false;    // a shadow map's
+        // its depth is its size's shared one (target_premake.h's SharesDepth)
+        bool depth_shared = false;
+        // made ahead (Idle) and not yet found by a pass's TargetFor
+        bool premade = false;
         bool drawn = false;     // by a pass, this frame or before
         uint64_t drawn_in = 0;  // the frame a pass last drew it
         uint32_t version = 0;   // the version that pass made
@@ -669,6 +687,19 @@ struct GpuRenderer::Impl {
     };
     std::unordered_map<uint32_t, Rt> rts;
     bool rt_failure_logged = false;
+    // the depth textures targets without depth share, by size (w << 32 | h),
+    // and how many targets hold each; let go with the last
+    struct SharedDepth {
+        SDL_GPUTexture* texture = nullptr;
+        uint32_t refs = 0;
+    };
+    std::unordered_map<uint64_t, SharedDepth> shared_depths;
+    // targets announced and not yet made ahead (target_premake.h), and what
+    // Idle made since the last frame (GpuStats::targets_premade)
+    AnnounceQueue premake_pending;
+    TextureAnnounceQueue premake_textures;
+    uint32_t premade_since = 0, arrays_premade_since = 0;
+    double premade_ms_since = 0;
     // DxTexes with a target made since the device started, for
     // GpuStats::targets_returning
     std::unordered_set<uint32_t> rts_seen;
@@ -810,6 +841,21 @@ struct GpuRenderer::Impl {
     // DeviceSamples(overlay_samples)) and the usual upload buffer, so no
     // frame stalls on them
     void Prewarm(uint32_t overlay_samples);
+    // SDL_gpu's Direct3D 12 pools, grown only when a frame finds them empty,
+    // and never shrunk: command buffers (a command list and allocator, ~7 ms
+    // each on the R9700 in its VM), their fences (made at submit, ~6.5 ms),
+    // 32 KB uniform buffers (~0.45 ms; a draw pushes 2 KB) and descriptor
+    // heap pairs (taken at a command buffer's first draw, ~1.7 ms). The
+    // first frame needing more than any before made them as it recorded: a
+    // song's first world 11 ms, its first 1402-draw frame 28 ms and the post
+    // frames after it 7 to 20 ms each. Fills them to kWarmCommandBuffers,
+    // kWarmUniformBuffers and kWarmHeapPairs once, with work that draws
+    // nothing a frame sees. Once per device (GpuRenderer::Idle); logged.
+    void WarmPools();
+    static constexpr uint32_t kWarmCommandBuffers = 16;
+    static constexpr uint32_t kWarmUniformBuffers = 128;
+    static constexpr uint32_t kWarmHeapPairs = 24;
+    std::atomic<bool> pools_warm{false};
     bool EnsureTargets(uint32_t w, uint32_t h);
     bool EnsureScratch(Scratch& s, uint32_t w, uint32_t h);
     // grows `b` to hold `bytes`, losing its contents
@@ -835,9 +881,18 @@ struct GpuRenderer::Impl {
     void LetTextureGo(Tex& tx);
     // mips counted as a third more (GpuStats::texture_array_mb)
     double TextureArrayMb() const;
-    // the target for texture pass `p`, remade if not w x h (PassTargetSize);
-    // null on failure
-    Rt* TargetFor(const Pass& p, uint32_t w, uint32_t h);
+    // the target for texture pass `p`, remade if not w x h (PassTargetSize)
+    // or holding a shared depth `p` mustn't have; a new one without depth
+    // takes its size's shared depth if `share` (RasterOptions::premake_targets).
+    // Null on failure.
+    Rt* TargetFor(const Pass& p, uint32_t w, uint32_t h, bool share);
+    // makes `rt`'s textures (it has none); false on failure (logged once)
+    bool MakeRt(Rt& rt, uint32_t w, uint32_t h, uint32_t levels, bool shadow, bool share);
+    SDL_GPUTexture* TakeSharedDepth(uint32_t w, uint32_t h);
+    void DropSharedDepth(uint32_t w, uint32_t h);
+    // between frames (GpuRenderer::Idle): announced targets and texture
+    // arrays made ahead, within PremakeBudget; whether any are left
+    bool Premake(const RasterOptions& o);
     // marks `rt` drawn or sampled by this frame, for Evict
     void UseRt(Rt& rt) {
         rt.used = serial;
@@ -1361,10 +1416,17 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     rts.clear();
     rts_seen.clear();
     rts_forgotten.clear();
+    // (the targets let go of theirs)
+    shared_depths.clear();
+    premake_pending.Clear();
+    premake_textures.Clear();
+    premade_since = arrays_premade_since = 0;
+    premade_ms_since = 0;
     arena_vert_count = arena_index_count = 0;
     pipelines.clear();
     warm = false;
     warmed_up = false;
+    pools_warm = false;
     device = nullptr;
     vertex_shader = pixel_shader = spot_shader = soft_shader = shadow_shader = nullptr;
     fullscreen_shader = nullptr;
@@ -1690,6 +1752,98 @@ void GpuRenderer::Impl::Prewarm(uint32_t overlay_samples) {
     warmed_up = true;
 }
 
+void GpuRenderer::Impl::WarmPools() {
+    if (pools_warm || !device || !gamma_pipeline) return;
+    pools_warm = true;
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::now();
+    auto ms = [](Clock::time_point from, Clock::time_point to) {
+        return std::chrono::duration<double, std::milli>(to - from).count();
+    };
+    // what the draws draw into, let go after
+    SDL_GPUTextureCreateInfo ti{};
+    ti.type = SDL_GPU_TEXTURETYPE_2D;
+    ti.format = kColorFormat;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+    ti.width = ti.height = 4;
+    ti.layer_count_or_depth = 1;
+    ti.num_levels = 1;
+    SDL_GPUTexture* target = SDL_CreateGPUTexture(device, &ti);
+    if (!target) {
+        REXLOG_WARN("native view gpu: SDL's pools not warmed ({})", SDL_GetError());
+        return;
+    }
+    // All held at once, so each pool has to grow to hold them
+    SDL_GPUCommandBuffer* cmds[kWarmCommandBuffers] = {};
+    uint32_t got = 0;
+    while (got < kWarmCommandBuffers && (cmds[got] = SDL_AcquireGPUCommandBuffer(device))) got++;
+    const auto acquired = Clock::now();
+    // A push that doesn't fit its uniform buffer takes another: 16 KB blocks
+    // take one each. Never read (the vertex stage of what's drawn below has
+    // no uniforms).
+    static const uint8_t block[16384] = {};
+    if (got) {
+        for (uint32_t u = 0; u < kWarmUniformBuffers; u++)
+            SDL_PushGPUVertexUniformData(cmds[u % got], 0, block, sizeof(block));
+    }
+    const auto pushed = Clock::now();
+    // Draws in each, taking its descriptor heaps: the gamma pass's, through
+    // BeginPass as every pass (kSamplerBatch). A draw after a rebind writes
+    // kSamplerBatch samplers, so the sampler heap (2048) is full after 128
+    // and the next takes a new pair, as in a frame's big command buffers
+    // (about 20 pairs for 1400 draws): the first `extra` buffers draw 128
+    // more for each pair over one, rebinding slot 1 (which the gamma pass
+    // doesn't read) between white and black
+    const uint32_t extra = got ? kWarmHeapPairs - std::min(kWarmHeapPairs, got) : 0;
+    uint32_t lut[256] = {};
+    for (uint32_t i = 0; i < got; i++) {
+        SDL_GPUColorTargetInfo ct{};
+        ct.texture = target;
+        ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
+        ct.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPURenderPass* rp = BeginPass(cmds[i], &ct, 1, nullptr);
+        if (!rp) continue;
+        SDL_BindGPUGraphicsPipeline(rp, gamma_pipeline);
+        const SDL_GPUTextureSamplerBinding tb{no_depth, sampler};
+        SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
+        SDL_PushGPUFragmentUniformData(cmds[i], 0, lut, sizeof(lut));
+        const uint32_t pairs = 1 + extra / got + (i < extra % got ? 1 : 0);
+        const uint32_t draws = 1 + (pairs - 1) * (2048 / kSamplerBatch);
+        for (uint32_t d = 0; d < draws; d++) {
+            if (d) {
+                const SDL_GPUTextureSamplerBinding pad{d & 1 ? black : white, sampler};
+                SDL_BindGPUFragmentSamplers(rp, 1, &pad, 1);
+            }
+            SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+        }
+        SDL_EndGPURenderPass(rp);
+    }
+    const auto drawn = Clock::now();
+    // submitted together, so each takes a fence of its own; the last one's,
+    // on SDL's one queue, covers all, and its wait returns them to the pools
+    bool ok = got > 0;
+    for (uint32_t i = 0; i + 1 < got; i++) ok &= SDL_SubmitGPUCommandBuffer(cmds[i]);
+    SDL_GPUFence* fence = got ? SDL_SubmitGPUCommandBufferAndAcquireFence(cmds[got - 1]) : nullptr;
+    const auto submitted = Clock::now();
+    ok = ok && fence && SDL_WaitForGPUFences(device, true, &fence, 1);
+    if (fence) SDL_ReleaseGPUFence(device, fence);
+    SDL_ReleaseGPUTexture(device, target);
+    const auto end = Clock::now();
+    if (!ok) {
+        REXLOG_WARN("native view gpu: warming SDL's pools failed ({}); frames grow them as before",
+                    SDL_GetError());
+        return;
+    }
+    REXLOG_INFO("native view gpu: SDL's pools warmed with {} command buffers and fences, {} "
+                "uniform buffers ({} MB) and {} descriptor heap pairs (about 2 MB each), in "
+                "{:.1f} ms: acquiring {:.1f}, pushing {:.1f}, drawing {:.1f}, submitting {:.1f}, "
+                "waiting {:.1f}",
+                got, kWarmUniformBuffers, kWarmUniformBuffers * 64 / 1024, got + extra,
+                ms(start, end),
+                ms(start, acquired), ms(acquired, pushed), ms(pushed, drawn), ms(drawn, submitted),
+                ms(submitted, end));
+}
+
 bool GpuRenderer::Impl::Reserve(Buffer& b, SDL_GPUBufferUsageFlags usage, uint32_t bytes) {
     if (b.buffer && b.size >= bytes) return true;
     ReleaseBuffer(b);
@@ -1799,7 +1953,7 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx, SDL_GPUTextureFormat format) {
     const Texture& t = *tx.keep;
     uint32_t w, h;
     SizeClass(t.width, t.height, w, h);
-    TexArray& a = tex_arrays[uint64_t(w) << 40 | uint64_t(h) << 16 | uint32_t(format)];
+    TexArray& a = tex_arrays[ArrayKey(w, h, format)];
     a.w = w;
     a.h = h;
     a.format = format;
@@ -1824,22 +1978,9 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx, SDL_GPUTextureFormat format) {
     }
     if (a.free.empty()) {
         const auto start = std::chrono::steady_clock::now();
-        const uint32_t layers =
-            a.layers ? a.layers * 2
-                     : uint32_t(std::clamp<uint64_t>(kTextureArrayBytes / layer_bytes, 1, 64));
-        SDL_GPUTexture* grown = nullptr;
-        if (layers <= kMaxTextureLayers) {
-            SDL_GPUTextureCreateInfo ti{};
-            ti.type = SDL_GPU_TEXTURETYPE_2D_ARRAY;
-            ti.format = format;
-            ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
-            ti.width = w;
-            ti.height = h;
-            ti.layer_count_or_depth = layers;
-            ti.num_levels = FullMipChain(w, h);
-            grown = SDL_CreateGPUTexture(device, &ti);
-            counts.textures++;
-        }
+        const uint32_t layers = a.layers ? a.layers * 2 : FirstArrayLayers(w, h, format);
+        SDL_GPUTexture* grown =
+            layers <= kMaxTextureLayers ? NewArrayTexture(w, h, format, layers) : nullptr;
         if (!grown) {
             if (!texture_failure_logged) {
                 texture_failure_logged = true;
@@ -1870,11 +2011,29 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx, SDL_GPUTextureFormat format) {
                                          .count();
         }
     }
+    if (a.ahead_until != std::chrono::steady_clock::time_point{}) {
+        a.ahead_until = {};
+        if (walk_stats) walk_stats->arrays_premade_used++;
+    }
     tx.array = &a;
     tx.levels = std::min(LevelsOf(t, format != kColorFormat), a.levels);
     tx.layer = a.free.back();
     a.free.pop_back();
     return true;
+}
+
+SDL_GPUTexture* GpuRenderer::Impl::NewArrayTexture(uint32_t w, uint32_t h,
+                                                   SDL_GPUTextureFormat format, uint32_t layers) {
+    SDL_GPUTextureCreateInfo ti{};
+    ti.type = SDL_GPU_TEXTURETYPE_2D_ARRAY;
+    ti.format = format;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    ti.width = w;
+    ti.height = h;
+    ti.layer_count_or_depth = layers;
+    ti.num_levels = FullMipChain(w, h);
+    counts.textures++;
+    return SDL_CreateGPUTexture(device, &ti);
 }
 
 void GpuRenderer::Impl::LetTextureGo(Tex& tx) {
@@ -1935,56 +2094,29 @@ const GpuRenderer::Impl::Tex* GpuRenderer::Impl::TextureFor(const Texture* t) {
     return it != textures.end() && it->second.array ? &it->second : nullptr;
 }
 
-GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, uint32_t h) {
+GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, uint32_t h,
+                                                    bool share) {
     Rt& rt = rts[p.tex_obj];
     UseRt(rt);
     rt.game_w = p.width;
     rt.game_h = p.height;
-    // FinishDrawTarget's downsamples, down to 1x1 at most
-    uint32_t levels = 1;
-    if (p.num_mips > 1) {
-        uint32_t chain = 1;
-        for (uint32_t s = std::max(w, h); s > 1; s >>= 1) chain++;
-        levels = std::min(p.num_mips, chain);
-    }
     // read by Load: no mips
     const bool shadow = p.tex_type == kTexTypeShadowMap;
-    if (shadow) levels = 1;
-    if (rt.color && rt.w == w && rt.h == h && rt.levels == levels && rt.shadow == shadow)
+    const uint32_t levels = TargetLevels(p.num_mips, w, h, shadow);
+    const bool may_share = SharesDepth(p.tex_type, shadow);
+    if (rt.color && rt.w == w && rt.h == h && rt.levels == levels && rt.shadow == shadow &&
+        (may_share || !rt.depth_shared)) {
+        if (rt.premade && walk_stats) walk_stats->premade_used++;
+        rt.premade = false;
         return &rt;
+    }
     const auto start = std::chrono::steady_clock::now();
     const bool resized = rt.color != nullptr;
     ReleaseRt(rt);
-    SDL_GPUTextureCreateInfo ti{};
-    ti.type = shadow ? SDL_GPU_TEXTURETYPE_2D : SDL_GPU_TEXTURETYPE_2D_ARRAY;
-    ti.format = shadow ? kShadowFormat : kColorFormat;
-    ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
-    ti.width = w;
-    ti.height = h;
-    ti.layer_count_or_depth = 1;
-    ti.num_levels = levels;
-    rt.color = SDL_CreateGPUTexture(device, &ti);
-    counts.textures++;
-    ti.type = SDL_GPU_TEXTURETYPE_2D;
-    ti.format = kDepthFormat;
-    ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
-    ti.num_levels = 1;
-    rt.depth = SDL_CreateGPUTexture(device, &ti);
-    if (!rt.color || !rt.depth) {
-        if (!rt_failure_logged) {
-            rt_failure_logged = true;
-            REXLOG_WARN("native view gpu: no {}x{} render target ({}); what samples it draws "
-                        "transparent black",
-                        w, h, SDL_GetError());
-        }
-        ReleaseRt(rt);
+    if (!MakeRt(rt, w, h, levels, shadow, share && may_share)) {
         rts.erase(p.tex_obj);
         return nullptr;
     }
-    rt.w = w;
-    rt.h = h;
-    rt.levels = levels;
-    rt.shadow = shadow;
     const bool returning = !rts_seen.insert(p.tex_obj).second && !resized;
     if (walk_stats) {
         walk_stats->targets_made++;
@@ -1997,15 +2129,173 @@ GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, u
     return &rt;
 }
 
+bool GpuRenderer::Impl::MakeRt(Rt& rt, uint32_t w, uint32_t h, uint32_t levels, bool shadow,
+                               bool share) {
+    SDL_GPUTextureCreateInfo ti{};
+    ti.type = shadow ? SDL_GPU_TEXTURETYPE_2D : SDL_GPU_TEXTURETYPE_2D_ARRAY;
+    ti.format = shadow ? kShadowFormat : kColorFormat;
+    ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+    ti.width = w;
+    ti.height = h;
+    ti.layer_count_or_depth = 1;
+    ti.num_levels = levels;
+    rt.color = SDL_CreateGPUTexture(device, &ti);
+    counts.textures++;
+    if (share) {
+        rt.depth = TakeSharedDepth(w, h);
+        rt.depth_shared = rt.depth != nullptr;
+    } else {
+        ti.type = SDL_GPU_TEXTURETYPE_2D;
+        ti.format = kDepthFormat;
+        ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+        ti.num_levels = 1;
+        rt.depth = SDL_CreateGPUTexture(device, &ti);
+    }
+    // (set first: the failure's ReleaseRt gives a shared depth back by size)
+    rt.w = w;
+    rt.h = h;
+    if (!rt.color || !rt.depth) {
+        if (!rt_failure_logged) {
+            rt_failure_logged = true;
+            REXLOG_WARN("native view gpu: no {}x{} render target ({}); what samples it draws "
+                        "transparent black",
+                        w, h, SDL_GetError());
+        }
+        ReleaseRt(rt);
+        return false;
+    }
+    rt.levels = levels;
+    rt.shadow = shadow;
+    return true;
+}
+
+SDL_GPUTexture* GpuRenderer::Impl::TakeSharedDepth(uint32_t w, uint32_t h) {
+    SharedDepth& d = shared_depths[uint64_t(w) << 32 | h];
+    if (!d.texture) {
+        SDL_GPUTextureCreateInfo ti{};
+        ti.type = SDL_GPU_TEXTURETYPE_2D;
+        ti.format = kDepthFormat;
+        ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+        ti.width = w;
+        ti.height = h;
+        ti.layer_count_or_depth = 1;
+        ti.num_levels = 1;
+        d.texture = SDL_CreateGPUTexture(device, &ti);
+        if (!d.texture) {
+            shared_depths.erase(uint64_t(w) << 32 | h);
+            return nullptr;
+        }
+    }
+    d.refs++;
+    return d.texture;
+}
+
+void GpuRenderer::Impl::DropSharedDepth(uint32_t w, uint32_t h) {
+    const auto f = shared_depths.find(uint64_t(w) << 32 | h);
+    if (f == shared_depths.end() || --f->second.refs) return;
+    SDL_ReleaseGPUTexture(device, f->second.texture);
+    shared_depths.erase(f);
+}
+
 void GpuRenderer::Impl::ReleaseRt(Rt& rt) {
     // SDL lets them go once the frames using them are done
     if (rt.color) SDL_ReleaseGPUTexture(device, rt.color);
-    if (rt.depth) SDL_ReleaseGPUTexture(device, rt.depth);
+    if (rt.depth && rt.depth_shared) DropSharedDepth(rt.w, rt.h);
+    else if (rt.depth) SDL_ReleaseGPUTexture(device, rt.depth);
     rt.color = rt.depth = nullptr;
     rt.w = rt.h = 0;
     rt.levels = 1;
     rt.shadow = false;
+    rt.depth_shared = false;
+    rt.premade = false;
     rt.drawn = false;
+}
+
+bool GpuRenderer::Impl::Premake(const RasterOptions& o) {
+    TakeAnnouncedTargets(premake_pending);
+    TakeAnnouncedTextures(premake_textures);
+    if (!o.premake_targets) premake_pending.Clear();
+    if (!o.premake_arrays) premake_textures.Clear();
+    if (premake_pending.Empty() && premake_textures.Empty()) return false;
+    const auto start = std::chrono::steady_clock::now();
+    auto elapsed = [&] {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+            .count();
+    };
+    uint32_t unused = 0;
+    for (const auto& [obj, rt] : rts) unused += rt.premade ? 1 : 0;
+    auto room = [&] { return unused < PremakeBudget::kMaxUnused && rts.size() < kMaxRts; };
+    uint32_t made = 0, arrays = 0;
+    // Arrays first: a song's textures are announced 0.1 to 0.2 s before its
+    // first frame, its targets seconds before. A class's first array as
+    // PlaceTexture makes it, in the format UseTexture would keep the texture
+    // in (as blocks or bytes where this frame's options keep them)
+    while (!premake_textures.Empty() && PremakeMore(made, elapsed(), 0)) {
+        const AnnouncedTexture t = premake_textures.Front();
+        premake_textures.PopFront();
+        SDL_GPUTextureFormat format = kColorFormat;
+        const SDL_GPUTextureFormat kept = KeptFormat(t.xenos_format);
+        if (kept != SDL_GPU_TEXTUREFORMAT_INVALID &&
+            (kept == SDL_GPU_TEXTUREFORMAT_R8_UNORM ? r8_format && o.r8_textures
+                                                    : bc_formats && o.bc_textures))
+            format = kept;
+        uint32_t w, h;
+        SizeClass(t.width, t.height, w, h);
+        const uint64_t key = ArrayKey(w, h, format);
+        if (tex_arrays.count(key)) continue;
+        const uint32_t layers = FirstArrayLayers(w, h, format);
+        SDL_GPUTexture* texture = NewArrayTexture(w, h, format, layers);
+        if (!texture) break;
+        TexArray& a = tex_arrays[key];
+        a.texture = texture;
+        a.w = w;
+        a.h = h;
+        a.format = format;
+        a.layers = layers;
+        a.levels = FullMipChain(w, h);
+        for (uint32_t l = layers; l-- > 0;) a.free.push_back(l);
+        a.empty_since = serial;
+        a.ahead_until = std::chrono::steady_clock::now() +
+                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                            std::chrono::duration<double>(kArrayKeepSeconds));
+        made++;
+        arrays++;
+    }
+    // sized as TargetFor would without the frame (target_premake.h)
+    static const FrameCapture kNoFrame;
+    while (!premake_pending.Empty() && PremakeMore(made, elapsed(), unused) && room()) {
+        const AnnouncedTarget a = premake_pending.Front();
+        premake_pending.PopFront();
+        // never one a pass has: remaking it would forget what it drew
+        if (const auto f = rts.find(a.tex_obj); f != rts.end() && f->second.color) continue;
+        Pass p;
+        p.tex_obj = a.tex_obj;
+        p.width = a.width;
+        p.height = a.height;
+        p.tex_type = a.tex_type;
+        p.num_mips = a.num_mips;
+        uint32_t w, h;
+        PassTargetSize(kNoFrame, p, o, w, h);
+        const bool shadow = p.tex_type == kTexTypeShadowMap;
+        Rt& rt = rts[a.tex_obj];
+        if (!MakeRt(rt, w, h, TargetLevels(p.num_mips, w, h, shadow), shadow,
+                    SharesDepth(p.tex_type, shadow))) {
+            rts.erase(a.tex_obj);
+            break;
+        }
+        rt.premade = true;
+        rt.game_w = a.width;
+        rt.game_h = a.height;
+        UseRt(rt);
+        rt.used_at = std::chrono::steady_clock::now();
+        made++;
+        unused++;
+    }
+    premade_since += made - arrays;
+    arrays_premade_since += arrays;
+    premade_ms_since += elapsed();
+    // more to do now (not targets held back by the cap)
+    return !premake_textures.Empty() || (!premake_pending.Empty() && room());
 }
 
 // the frame's targets, at the picture's size; with no device, only forgets them
@@ -2746,6 +3036,26 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 if (!Render(frame, po, -1, nullptr, ps, k)) return false;
                 // the first uploads the world's data, which this frame reuses
                 st.pre_passes++;
+                st.pre_plan_ms += ps.plan_ms;
+                st.pre_walk_ms += ps.plan_walk_ms;
+                st.pre_targets_made += ps.targets_made;
+                st.pre_targets_ms += ps.targets_ms;
+                st.premade_used += ps.premade_used;
+                st.arrays_premade_used += ps.arrays_premade_used;
+                st.pre_arrays_grown += ps.arrays_grown;
+                st.pre_arrays_ms += ps.arrays_ms;
+                st.pre_arrays_mb += ps.arrays_mb;
+                st.pre_upload_ms += ps.upload_ms;
+                st.pre_record_ms += ps.record_ms;
+                st.pre_acquire_ms += ps.acquire_ms;
+                st.pre_first_draw_ms += ps.first_draw_ms;
+                st.pre_uniform_slow += ps.uniform_slow;
+                st.pre_uniform_slow_ms += ps.uniform_slow_ms;
+                st.pre_draw_slow_ms += ps.draw_slow_ms;
+                st.pre_submit_ms += ps.submit_ms;
+                st.pre_submits += ps.submits;
+                st.pre_wait_ms += ps.wait_ms;
+                st.pre_evict_ms += ps.evict_ms;
                 st.pool_meshes += ps.pool_meshes;
                 st.arena_moved += ps.arena_moved;
                 st.arena_sent += ps.arena_sent;
@@ -2844,7 +3154,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         if (run.pass) {
             uint32_t tw, th;
             PassTargetSize(frame, *run.pass, o, tw, th);
-            target = TargetFor(*run.pass, tw, th);
+            target = TargetFor(*run.pass, tw, th, o.premake_targets);
             if (!target) continue;
             const bool fresh = !target->drawn || target->drawn_in != serial;
             const uint32_t clear = PassClearFlags(frame, *run.pass);
@@ -3183,7 +3493,57 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     st.upload_ms = ms_since(upload_start);
     const auto record_start = Clock::now();
 
-    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device);
+    // SDL_AcquireGPUCommandBuffer, timed (GpuStats::acquire_ms): with its
+    // pool empty SDL's Direct3D 12 makes a command list and allocator. Its
+    // descriptor heaps (65536 views, 2048 samplers) it takes at the buffer's
+    // first draw, making a pair if none is free: timed there (first_draw_ms)
+    bool first_draw = true;
+    auto acquire = [&]() {
+        const auto t = Clock::now();
+        SDL_GPUCommandBuffer* c = SDL_AcquireGPUCommandBuffer(device);
+        const double ms = ms_since(t);
+        st.acquires++;
+        st.acquire_ms += ms;
+        st.acquire_max_ms = std::max(st.acquire_max_ms, ms);
+        first_draw = true;
+        return c;
+    };
+    // a submission's time (GpuStats::submit_ms, submit_max_ms)
+    auto add_submit = [&](double ms) {
+        st.submit_ms += ms;
+        st.submit_max_ms = std::max(st.submit_max_ms, ms);
+    };
+    // and a later draw over 0.05 ms (draw_slow): its sampler heap full (2048,
+    // kSamplerBatch a draw that rebinds), SDL takes another pair
+    auto timed_first = [&](auto&& draw_call) {
+        const auto t = Clock::now();
+        draw_call();
+        const double ms = ms_since(t);
+        if (first_draw) {
+            first_draw = false;
+            st.first_draw_ms += ms;
+            st.first_draw_max_ms = std::max(st.first_draw_max_ms, ms);
+        } else if (ms > 0.05) {
+            st.draw_slow++;
+            st.draw_slow_ms += ms;
+        }
+    };
+    // SDL keeps uniforms in 32 KB buffers, pooled: a pipeline bind takes one
+    // per stage if the command buffer has none, and a push past one's end
+    // another, made if the pool has none free. A draw pushes 2 KB (1 a
+    // stage), so the first frame with many more draws than any before makes
+    // dozens (WarmPools makes them first).
+    // Such calls (over 0.05 ms) are counted (GpuStats::uniform_slow)
+    auto timed_uniform = [&](auto&& call) {
+        const auto t = Clock::now();
+        call();
+        const double ms = ms_since(t);
+        if (ms > 0.05) {
+            st.uniform_slow++;
+            st.uniform_slow_ms += ms;
+        }
+    };
+    SDL_GPUCommandBuffer* cmd = acquire();
     if (!cmd) {
         REXLOG_WARN("native view gpu: no command buffer ({})", SDL_GetError());
         return false;
@@ -3320,7 +3680,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     auto submit_part = [&](SDL_GPUCommandBuffer* c) {
         const auto t = Clock::now();
         const bool ok = SDL_SubmitGPUCommandBuffer(c);
-        st.submit_ms += ms_since(t);
+        add_submit(ms_since(t));
         if (ok) st.submits++;
         return ok;
     };
@@ -3333,8 +3693,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // nothing bound, so the caches reset. False on failure (caller logs).
     auto next_part = [&]() -> bool {
         MarkTime(cmd, gpu_timing::kIdle);
-        SDL_GPUCommandBuffer* next =
-            submit_part(cmd) ? SDL_AcquireGPUCommandBuffer(device) : nullptr;
+        SDL_GPUCommandBuffer* next = submit_part(cmd) ? acquire() : nullptr;
         if (!next) return false;
         cmd = next;
         bound = nullptr;
@@ -3407,7 +3766,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             p.mode = {0, world ? 1u : 0u, 0, 0};
             p.target = {float(width), float(height), 1.0f / float(width), 1.0f / float(height)};
             SDL_PushGPUFragmentUniformData(cmd, 0, &p, sizeof(p));
-            SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+            timed_first([&] { SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0); });
             SDL_EndGPURenderPass(rp);
             overlay_start = false;
             depth_cleared = !world;
@@ -3456,13 +3815,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             c.store_op = SDL_GPU_STOREOP_STORE;
         }
         SDL_GPURenderPass* rp = BeginPass(cmd, ct, second ? 2 : 1, nullptr);
-        SDL_BindGPUGraphicsPipeline(rp, pipeline);
+        timed_uniform([&] { SDL_BindGPUGraphicsPipeline(rp, pipeline); });
         SDL_GPUTextureSamplerBinding tb[12];
         uint32_t n = 0;
         for (SDL_GPUTexture* t : sources) tb[n++] = {t, linear_sampler};
         SDL_BindGPUFragmentSamplers(rp, 0, tb, n);
-        SDL_PushGPUFragmentUniformData(cmd, 0, &params, sizeof(params));
-        SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+        timed_uniform([&] { SDL_PushGPUFragmentUniformData(cmd, 0, &params, sizeof(params)); });
+        timed_first([&] { SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0); });
         SDL_EndGPURenderPass(rp);
     };
     SDL_GPUTexture* const scene_depth = depth_sampled ? depth : no_depth;
@@ -3537,8 +3896,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                                   "bones",
                                   index, v.mesh, v.geom->indices.size(), v.geom->verts.size(),
                                   v.bones));
-            SDL_DrawGPUIndexedPrimitives(rp, uint32_t(v.geom->indices.size() / 3 * 3), 1,
-                                         m.first_index, int32_t(m.first_vertex), 0);
+            timed_first([&] {
+                SDL_DrawGPUIndexedPrimitives(rp, uint32_t(v.geom->indices.size() / 3 * 3), 1,
+                                             m.first_index, int32_t(m.first_vertex), 0);
+            });
         }
         SDL_EndGPURenderPass(rp);
     };
@@ -3767,7 +4128,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             return;
         }
         if (pipeline != bound) {
-            SDL_BindGPUGraphicsPipeline(pass, pipeline);
+            timed_uniform([&] { SDL_BindGPUGraphicsPipeline(pass, pipeline); });
             bound = pipeline;
         }
         SDL_GPUBuffer* verts = m.in_arena ? arena_verts.buffer : pool_v.buffer;
@@ -3792,14 +4153,16 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             ClipOffset(it, bound_viewport[2], bound_viewport[3], vu.clip_offset);
             SetDepthMap(depth_map, vu.depth_map);
             vu.shade = shades[d];
-            SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
+            timed_uniform([&] { SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu)); });
             if (o.gpu_labels)
                 label(fmt::format("draw {} shadow depth: mesh {:#x} into {:#x}, {} indices, {} "
                                   "vertices, {} bones",
                                   d, it.mesh, it.target, it.geom->indices.size(),
                                   it.geom->verts.size(), it.bones.size()));
-            SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
-                                         m.first_index, int32_t(m.first_vertex), 0);
+            timed_first([&] {
+                SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
+                                             m.first_index, int32_t(m.first_vertex), 0);
+            });
             st.draws++;
             return;
         }
@@ -3966,7 +4329,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             vu.overlay_edge[1] = o.overlay_edge[1];
         }
         vu.shade = sp;
-        SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
+        timed_uniform([&] { SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu)); });
         PixelUniforms pu{};
         pu.shade = sp;
         for (int s = 0; s < kSlotBehind; s++) {
@@ -4020,7 +4383,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             const uint32_t k = s >= kSlotNormal ? s - 2 : s;
             pu.flags[2 + k / 4] |= tex[s].r8 << (8 * (k % 4));
         }
-        SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
+        timed_uniform([&] { SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu)); });
 
         if (o.gpu_labels) {
             // size and sampler anisotropy, in tex_layer's order
@@ -4038,8 +4401,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                               it.rect_shader, textures, pu.tex_layer[0], pu.tex_layer[1],
                               pu.tex_layer[2], pu.tex_layer[3], pu.tex_layer[4]));
         }
-        SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
-                                     m.first_index, int32_t(m.first_vertex), 0);
+        timed_first([&] {
+            SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
+                                         m.first_index, int32_t(m.first_vertex), 0);
+        });
         st.draws++;
     };
 
@@ -4294,7 +4659,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             REXLOG_WARN("native view gpu: the world ahead didn't submit ({})", SDL_GetError());
             return false;
         }
-        st.submit_ms += ms_since(submit_start);
+        add_submit(ms_since(submit_start));
         st.submits++;
         const auto evict_start = Clock::now();
         Evict();
@@ -4329,7 +4694,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         const SDL_GPUTextureSamplerBinding tb{picture, sampler};
         SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
         SDL_PushGPUFragmentUniformData(cmd, 0, packed, sizeof(packed));
-        SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+        timed_first([&] { SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0); });
         SDL_EndGPURenderPass(rp);
     }
 
@@ -4379,7 +4744,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             REXLOG_WARN("native view gpu: the frame didn't submit ({})", SDL_GetError());
             return false;
         }
-        st.submit_ms += ms_since(submit_start);
+        add_submit(ms_since(submit_start));
         st.submits++;
         const auto evict_start = Clock::now();
         Evict();
@@ -4392,7 +4757,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         REXLOG_WARN("native view gpu: the frame didn't submit ({})", SDL_GetError());
         return false;
     }
-    st.submit_ms += ms_since(submit_start);
+    add_submit(ms_since(submit_start));
     st.submits++;
     stall_watch::SetWorker(stall_watch::Worker::kGpuWait);
     const bool done = SDL_WaitForGPUFences(device, true, &fence, 1);
@@ -4487,10 +4852,12 @@ void GpuRenderer::Impl::Evict() {
         rts.erase(f);
         counts.rts_released++;
     }
-    // empty arrays go after kEvictAfter frames
+    // empty arrays go after kEvictAfter frames (one made ahead, unused, after
+    // kArrayKeepSeconds)
     for (auto it = tex_arrays.begin(); it != tex_arrays.end();) {
         const TexArray& a = it->second;
-        if (a.free.size() < a.layers || a.empty_since + kEvictAfter >= serial) {
+        if (a.free.size() < a.layers || a.empty_since + kEvictAfter >= serial ||
+            frame_now < a.ahead_until) {
             ++it;
             continue;
         }
@@ -4626,6 +4993,15 @@ void GpuRenderer::Prewarm(uint32_t overlay_samples) {
     if (impl_->device && !impl_->warm) impl_->Prewarm(overlay_samples);
 }
 
+bool GpuRenderer::Idle(const RasterOptions& options) {
+    // only after Draw or Prewarm has set up the device
+    if (!impl_->warm) return false;
+    std::lock_guard lock(impl_->mutex);
+    if (!impl_->device || !impl_->warmed_up) return false;
+    impl_->WarmPools();
+    return impl_->Premake(options);
+}
+
 void GpuRenderer::SetPresentDevice(void* d3d12_device, uint64_t timestamp_frequency) {
     std::lock_guard lock(impl_->mutex);
     impl_->present_device = d3d12_device;
@@ -4707,10 +5083,20 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
     stats.meshes_by_time = impl_->meshes_by_time;
     stats.textures_by_time = impl_->textures_by_time;
     for (const auto& [obj, rt] : impl_->rts) {
-        // colour (RGBA8, or a shadow map's R32_FLOAT) and D32 depth
+        // colour (RGBA8, or a shadow map's R32_FLOAT) and D32 depth, a
+        // shared one counted once (below)
         const double pixels = double(rt.w) * rt.h;
-        stats.rts_mb += pixels * 4 * ((rt.levels > 1 ? 4.0 / 3 : 1) + 1) / 1048576;
+        stats.rts_mb +=
+            pixels * 4 * ((rt.levels > 1 ? 4.0 / 3 : 1) + (rt.depth_shared ? 0 : 1)) / 1048576;
+        if (rt.premade) stats.premade_unused++;
     }
+    for (const auto& [size, d] : impl_->shared_depths)
+        stats.rts_mb += double(size >> 32) * double(size & 0xffffffffu) * 4 / 1048576;
+    stats.shared_depths = uint32_t(impl_->shared_depths.size());
+    // made ahead since the last frame (Idle)
+    stats.targets_premade = std::exchange(impl_->premade_since, 0);
+    stats.premake_ms = std::exchange(impl_->premade_ms_since, 0.0);
+    stats.arrays_premade = std::exchange(impl_->arrays_premade_since, 0);
     stats.texture_array_mb = impl_->TextureArrayMb();
     stats.arena_mb = double(impl_->arena_verts.size + impl_->arena_indices.size) / 1048576;
     return true;
