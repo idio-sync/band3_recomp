@@ -25,6 +25,12 @@ constexpr Choice kLanguages[] = {
 // disable_metamusic, the other way round
 constexpr Choice kMenuMusic[] = {{"false", "On"}, {"true", "Off"}};
 
+constexpr Choice kVideoFits[] = {
+    {"fit", "Fit, with black bars"},
+    {"fill", "Fill, edges cut off"},
+    {"stretch", "Stretch"},
+};
+
 constexpr Choice kVenues[] = {
     {"false", "Don't force"},
     {"arena", "Arena"},
@@ -164,6 +170,12 @@ constexpr Setting kSettings[] = {
      .widget = kCombo, .choices = kMenuMusic},
     {.cvar = "forced_venue", .tab = kGame, .section = "Game", .label = "Forced venue",
      .widget = kComboText, .choices = kVenues},
+    {.cvar = "music_videos", .tab = kGame, .section = "Game",
+     .label = "Music videos in the video venues", .widget = kCheckbox},
+    {.cvar = "music_videos_folder", .tab = kGame, .section = "Game",
+     .label = "Music videos folder", .widget = kPath},
+    {.cvar = "music_video_fit", .tab = kGame, .section = "Game", .label = "Music video shape",
+     .widget = kCombo, .choices = kVideoFits},
     {.cvar = "song_speed", .tab = kGame, .section = "Game", .label = "Song speed",
      .widget = kFloatSlider, .range = kSpeeds, .unit = "x"},
     {.cvar = "track_speed", .tab = kGame, .section = "Game", .label = "Track speed",

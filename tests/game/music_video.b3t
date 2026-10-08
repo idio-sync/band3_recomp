@@ -1,0 +1,65 @@
+# Plays 20th Century Boy in a music-video venue with a music video for it, so
+# the venue's background is the video, in time with the song. Starts where
+# boot.b3t leaves Rock Band 3 Deluxe (on a fresh profile). The video is
+# ffmpeg's test card, whose counter shows the second it's at, with an .ini
+# starting it 2 s in, in a folder of its own:
+#   ffmpeg -f lavfi -i testsrc=s=1280x720:r=30:d=240 -c:v libx264 -pix_fmt yuv420p out/music_video/videos/20thcenturyboy.mp4
+#   printf 'video_start_time = 2000\n' > out/music_video/videos/20thcenturyboy.ini
+#   python tools/band3ctl.py launch --fresh -- --music_videos_folder=<that folder, absolute>
+#   python tools/band3ctl.py run tests/game/boot.b3t
+#   python tools/band3ctl.py run tests/game/music_video.b3t
+# The counter reads the song's time (the track's 0:16 / 3:57) plus 2, and the
+# card's circle stays round: video_02's planes are 640x720, which the game
+# stretches over the screen. The log says "Music video for 20thcenturyboy".
+
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+set autoplay true
+set forced_venue video_02
+# Play Now, Quickplay, Choose Songs
+press green
+sleep 1s
+press green
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+# past the 123 heading to 20th Century Boy
+press down
+press down
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+# Guitar, Expert
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+expect song=20thcenturyboy
+# past the venue's intro, a film leader counting down over the whole screen
+sleep 20s
+screenshot native music-video
+capture music-video-cap
+# paused, the video stands still with the song
+press start
+wait paused timeout=10s
+sleep 1s
+screenshot native music-video-paused-a
+sleep 3s
+screenshot native music-video-paused-b
+# Restart, the pause menu's second: the song and the video go back to the
+# start, the video seeking back with it
+press down
+sleep 300ms
+press green
+# yes, restart it
+sleep 1s
+press green
+sleep 2s
+screenshot native music-video-restarting
+# past the intro again
+sleep 15s
+screenshot native music-video-restarted

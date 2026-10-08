@@ -15,9 +15,11 @@
 #include "src/Render/native_view.h"
 #include "src/Test/game_state.h"
 #include "src/Test/test_server.h"
+#include "src/Video/music_video.h"
 
 // Reports game state to the RB3Enhanced network events, Discord presence, the
-// native renderer (whether a song is on: native_view.h's InSong), and
+// native renderer (whether a song is on: native_view.h's InSong), the music
+// video player (the song's shortname: src/Video/music_video.h), and
 // the test harness, the web server's /status and Home Assistant
 // (band3::test::GameState, and the Stage Kit's lights for home_assistant.h),
 // from the same hook points and with the same data as RB3E (source/rb3enhanced.c,
@@ -233,9 +235,11 @@ extern "C" REX_FUNC(Game____ct)
     bool events = band3::events::Enabled();
     bool discord = band3::discord::Enabled();
     bool record = Recording();
-    if (events || discord || record) {
+    bool video = band3::video::MusicVideosOn();
+    if (events || discord || record || video) {
         SongInfo song = ReadSongInfo(ctx, base);
         band3::events::BandInfo band = ReadBandInfo(ctx, base);
+        if (video) band3::video::SetMusicVideoSong(song.shortname);
 
         if (record) {
             RecordSong(song);
@@ -252,6 +256,9 @@ extern "C" REX_FUNC(Game____ct)
         band3::discord::SetPlaying(song.title, song.artist, band);
         g_reported_song = song.id;
     }
+    // with music videos off, none for this song, even if they're turned on
+    // during it
+    if (!video) band3::video::SetMusicVideoSong("");
     __imp__Game____ct(ctx, base);
 }
 
@@ -259,6 +266,7 @@ extern "C" REX_FUNC(Game____dt)
 {
     SendState(0);
     band3::test::GameState::Get().SetInGame(false);
+    band3::video::SetMusicVideoSong("");
     band3::render::SetInSong(false);
     band3::song_pause::ResetPaused();
     // the game can leave LEDs on after the score screen; turn everything off
@@ -277,10 +285,13 @@ extern "C" REX_FUNC(PresenceMgr__SetSongID)
     const bool events = band3::events::Enabled();
     const bool discord = band3::discord::Enabled();
     const bool record = Recording();
+    const bool video = band3::video::MusicVideosOn();
+    if (!video && id > 0 && id != g_reported_song) band3::video::SetMusicVideoSong("");
     // song IDs below 1 are "any", "random" and "invalid"
-    if ((events || discord || record) && id > 0 && id != g_reported_song) {
+    if ((events || discord || record || video) && id > 0 && id != g_reported_song) {
         SongInfo song = ReadSongInfoById(ctx, base, id);
         if (!song.shortname.empty()) {
+            if (video) band3::video::SetMusicVideoSong(song.shortname);
             if (events) SendSong(song);
             if (record) RecordSong(song);
             band3::discord::SetPlaying(song.title, song.artist, ReadBandInfo(ctx, base));

@@ -54,6 +54,9 @@ add_executable(band3_tests
     soft_raster_test.cpp
     sample_model_test.cpp
     deferred_decode_test.cpp
+    movie_planes_test.cpp
+    music_video_test.cpp
+    video_decoder_test.cpp
     frame_compose_test.cpp
     post_params_test.cpp
     post_model_test.cpp
@@ -137,6 +140,8 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Lights/lights_view.cpp
     ${BAND3_ROOT}/src/Lights/pico_fleet.cpp
     ${BAND3_ROOT}/src/Lights/stagekit.cpp
+    ${BAND3_ROOT}/src/Video/picture_convert.cpp
+    ${BAND3_ROOT}/src/Video/video_files.cpp
     ${BAND3_ROOT}/src/Net/album_art.cpp
     ${BAND3_ROOT}/src/Net/ha_entities.cpp
     ${BAND3_ROOT}/src/Net/liveless_rooms_client.cpp
@@ -189,6 +194,11 @@ target_link_libraries(band3_tests PRIVATE Threads::Threads)
 # src/Net/native_socket.cpp and liveless_rooms_client.cpp send and receive over Winsock
 if(WIN32)
     target_link_libraries(band3_tests PRIVATE ws2_32)
+endif()
+# video_decoder_test.cpp decodes a clip through Media Foundation
+if(WIN32)
+    target_sources(band3_tests PRIVATE ${BAND3_ROOT}/src/Video/video_decoder_mf.cpp)
+    target_link_libraries(band3_tests PRIVATE mfplat mfreadwrite mfuuid)
 endif()
 
 if(MSVC)

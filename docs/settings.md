@@ -276,6 +276,32 @@ A custom song whose `song_id` is text instead of a number gets the number RB3Enh
 gives it (the text's CRC-32 mod 9999999, plus 2130000000), so IDs agree with
 RB3Enhanced's.
 
+## Music videos
+
+With `music_videos` on (the default), a song's own music video plays in the video venues in
+place of their background clips: behind the band and under the venue's colour filters, in
+time with the song, standing still while it's paused and following it when it restarts or
+practice moves to another section. Put the video in the `videos` folder beside the ini (or
+the folder `music_videos_folder` names), named after the song's shortname:
+`20thcenturyboy.mp4` for 20th Century Boy. A song's shortname is in the log as it starts
+(`No music video for 20thcenturyboy in music_videos_folder`). `forced_venue = video` (the
+Game tab's Forced venue, Video venue) puts every song in a video venue. Turning `music_videos` off
+stops the video at once; turning it on starts videos from the next song.
+
+The video starts with the song. `<shortname>.ini` beside it with Clone Hero's
+`video_start_time = <milliseconds>` (as in a chart's `song.ini`) starts it that far in at the
+song's start; a negative one starts it that far into the song. The screen is black before the
+video starts, and its last frame stays after it ends. `music_video_fit` keeps a video whose
+shape isn't 16:9 whole with black bars (`fit`), fills the screen and cuts its edges off
+(`fill`), or stretches it. Its sound isn't played.
+
+Videos are decoded by Windows (Media Foundation), on Windows only for now: `.mp4`, `.m4v`,
+`.mov`, `.mkv`, `.webm`, `.avi` or `.wmv`, in a codec Windows has. H.264 works everywhere
+but Windows N editions (which need the Media Feature Pack); HEVC, VP9 and AV1 need their
+Microsoft Store extensions. A video Windows can't decode is logged (`Music video ...`) and
+the venue keeps its own clips. Decoding takes a share of a CPU core of its own, about a
+fifth of one for a 1080p video, besides the decoder's.
+
 ## Loose files (mods)
 
 As with RB3Enhanced, a file on disk replaces the same file in the ARK, so mods such as

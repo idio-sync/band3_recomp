@@ -223,6 +223,16 @@ menu keys are C 48 (`30`) Left, D 50 (`32`) Down, E 52 (`34`) Up, F 53 (`35`) Ri
 54 (`36`) Back, G 55 (`37`) A, A 57 (`39`) B and B 59 (`3b`) Start, and the keytar's 25
 keys are 48-72 (`30`-`48`).
 
+## Music videos
+
+`tests/game/music_video.b3t` plays 20th Century Boy in a video venue with a music video for
+it ([Music videos](settings.md#music-videos)): ffmpeg's test card, whose counter shows the
+second it's at, started 2 s in by its `.ini`. Its header has the lines that make the video
+and the launch line; the screenshots' counter reads the song's time plus 2, paused or not,
+and the card's circle stays round. `tests/game/music_video_pattern.b3t` needs no video: with
+`music_video_test_pattern` on, the venue's background is a pattern whose border, moving bar
+and colour quadrants show the movie's planes are band3's, in both renderers.
+
 ## The main menu's Quit
 
 `tests/game/quit_button.b3t` opens the main menu's Quit, backs out with Keep Rockin',
