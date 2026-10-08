@@ -67,10 +67,10 @@ public:
         sdl_audio_ = true;
 
         auto names = ParseDeviceList(REXCVAR_GET(usb_mic_devices));
-        if (names.size() > static_cast<size_t>(kSlots)) {
-            REXLOG_WARN("USB mics: the game has {} mic slots; ignoring microphones after the {}th",
-                        kSlots, kSlots);
-            names.resize(kSlots);
+        if (names.size() > static_cast<size_t>(kSingers)) {
+            REXLOG_WARN("USB mics: the game has {} singers; ignoring microphones after the {}rd",
+                        kSingers, kSingers);
+            names.resize(kSingers);
         }
         if (names.empty()) {
             slots_[0].use_default = true;

@@ -925,10 +925,10 @@ void SettingsPage::DrawMicMeter(int slot, const std::optional<std::string>& devi
 }
 
 void SettingsPage::DrawMicSlots(const Setting& s) {
-    static_assert(std::tuple_size_v<decltype(meters_)> == audio::usb_mic::kSlots);
+    static_assert(std::tuple_size_v<decltype(meters_)> == audio::usb_mic::kSingers);
     meters_drawn_ = true;
     std::vector<std::string> slots = audio::usb_mic::ParseDeviceList(model_.Value(s.cvar));
-    slots.resize(audio::usb_mic::kSlots);
+    slots.resize(audio::usb_mic::kSingers);
     // with every slot empty, slot 1 records the system's default microphone;
     // once another is named, an empty slot is just unused (usb_mic_capture.cpp)
     const bool all_empty = std::ranges::all_of(slots, [](const auto& v) { return v.empty(); });
@@ -937,8 +937,8 @@ void SettingsPage::DrawMicSlots(const Setting& s) {
     for (const auto& name : mics_) devices.push_back({name, MicSlotValue(name)});
 
     const ImGuiStyle& style = ImGui::GetStyle();
-    const float label = ImGui::CalcTextSize("Mic 4").x + style.ItemSpacing.x * 2;
-    for (int i = 0; i < audio::usb_mic::kSlots; i++) {
+    const float label = ImGui::CalcTextSize("Mic 3").x + style.ItemSpacing.x * 2;
+    for (int i = 0; i < audio::usb_mic::kSingers; i++) {
         ImGui::PushID(i);
         std::string& slot = slots[static_cast<size_t>(i)];
         const float start = ImGui::GetCursorPosX();

@@ -232,7 +232,7 @@ REXCVAR_DEFINE_BOOL(usb_mics, false, "Band3/Audio",
 
 REXCVAR_DEFINE_STRING(usb_mic_devices, "", "Band3/Audio",
     "Microphones to sing through, or part of their names, comma separated, one per mic "
-    "slot (up to 4). Empty uses the system's default recording device")
+    "slot (up to 3). Empty uses the system's default recording device")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 // Band3/Controllers
