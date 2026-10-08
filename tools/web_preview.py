@@ -119,9 +119,10 @@ def _sample_line(start, words):
 
 # made-up lyrics for /karaoke without a song's MIDI file: lead and two
 # harmonies (4 s before the first line and 10.4 to 14 s count down; 8 to 11 s,
-# fake_live's pause, is in the second line)
+# fake_live's pause, is in the second line; the third has characters RB3's fonts
+# lack, which the page draws in its own)
 _SAMPLE = [(4000, 'This is band-three sing-ing a-long'), (7600, 'Ev-ery-bo-dy in the room'),
-           (14000, 'Wait for it the sec-ond verse'), (17400, 'Sing it loud and sing it true')]
+           (14000, 'Don’t stop – sing it 中-文'), (17400, 'Sing it loud and sing it true')]
 SAMPLE_LYRICS = {'shortname': 'sample', 'parts': [
     {'part': 'lead', 'lines': [_sample_line(s, w) for s, w in _SAMPLE]},
     {'part': 'harm1', 'lines': [_sample_line(s, w) for s, w in _SAMPLE]},

@@ -349,17 +349,27 @@ body {
   // its display cut: its glyphs are drawn at 73 px, against the regular
   // cut's 42 and the bold's 27, so they stay sharp at a TV's sizes.
   var kLyricsFont = 'pentatonic_display', kTitleFont = 'pentatonic_display';
-  var fonts = {};
-  function loadFont(name) {
+  var fonts = {}, fontsAsked = {};
+  // asked for once each, and again while the game is busy (503) or the reply
+  // doesn't come, as the lyrics are
+  function loadFont(name, attempt) {
+    attempt = attempt || 0;
+    if (!attempt && fontsAsked[name]) return;
+    fontsAsked[name] = true;
     var url = '/game_asset/font.png?name=' + encodeURIComponent(name);
+    function again(status) {
+      var wait = M.lyricsRetryMs(status, attempt);
+      if (wait !== null) setTimeout(function () { loadFont(name, attempt + 1); }, wait);
+    }
     fetch('/game_asset/font?name=' + encodeURIComponent(name)).then(function (r) {
-      return r.ok ? r.json() : null;
-    }).then(function (font) {
-      if (!font) return;
-      var img = new Image();
-      img.onload = function () { fonts[name] = { font: font, url: url }; redraw(); };
-      img.src = url;
-    }).catch(function () {});
+      if (!r.ok) { again(r.status); return; }
+      return r.json().then(function (font) {
+        var img = new Image();
+        img.onload = function () { fonts[name] = { font: font, url: url }; redraw(); };
+        img.onerror = function () { again(0); };
+        img.src = url;
+      });
+    }).catch(function () { again(0); });
   }
   // lay the text out again: a font arrived, or the size changed
   function redraw() {
@@ -388,7 +398,9 @@ body {
         s.style.webkitMask = mask;
         s.style.mask = mask;
       }
-      if (color) s.style.background = color;
+      // the longhands: the shorthand would reset .g-miss's background-clip
+      // to the box, drawing a character the font lacks as a block
+      if (color) s.style.backgroundColor = color;
       parent.appendChild(s);
       return { el: s, item: it, fill: -1 };
     });
@@ -492,7 +504,7 @@ body {
       var p = Math.round(M.glyphFill(f, g.item.x, g.item.w, s.width) * 100);
       if (p === g.fill) return;
       g.fill = p;
-      g.el.style.background =
+      g.el.style.backgroundImage =
         'linear-gradient(90deg, var(--sung) ' + p + '%, var(--unsung) ' + p + '%)';
     });
   }
