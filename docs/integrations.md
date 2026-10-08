@@ -265,6 +265,25 @@ refresh, without a rebuild; **Select** can't work there, and `/status` says what
 RhythmVerse, but its downloads are made up and save nothing, and its updates are two
 made-up songs.
 
+### Karaoke and live pages
+
+`/karaoke` is a sing-along page for a screen facing the room: the song's lyrics, the line
+being sung and the next, each syllable filling as it's sung, with the harmony parts
+stacked when the band's vocalist sings harmonies. Between songs it shows the song's album
+art, title and artist. Its corner button sets the timing (for a TV's delay) and the text
+size, kept in that browser. A page over plain http can't keep a device awake, so turn its
+sleep off. The library page's header links to it.
+
+It's built on two endpoints other pages can use:
+
+| Endpoint | |
+|---|---|
+| `/lyrics?shortname=` | the song's lyrics from its MIDI file: `{"shortname", "parts": [{"part": "lead" \| "harm1" \| "harm2" \| "harm3", "lines": [{"start_ms", "end_ms", "syllables": [{"start_ms", "end_ms", "text", "join", "spoken"}]}]}]}`; 404 for a song without vocals, 503 while the game is busy |
+| `/live/events` | server-sent events: `state` (`screen`, `in_game`, `paused`, `song` {`shortname`, `title`, `artist`, `length_ms`} or null, `vocals` `none` \| `lead` \| `harmonies`) whenever it changes, and `clock` (`song_ms`, the game's song clock) four times a second during a song. Four streams at once; a fifth gets 503 |
+
+`tools/web_preview.py` serves `/karaoke` without the game, over a made-up show
+(`--karaoke-song <shortname>` for a song's own lyrics, `--vocals harmonies`).
+
 ### Duplicate songs
 
 The same song often ends up in more than one package: a single and a pack, two versions

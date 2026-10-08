@@ -46,6 +46,8 @@ header {
 .bar { max-width: 760px; margin: 0 auto; display: flex; gap: 8px; align-items: center; }
 .bar + .bar { margin-top: 8px; }
 h1 { font-size: 18px; margin: 0 8px 0 0; white-space: nowrap; }
+#karaoke-link { color: var(--muted); text-decoration: none; font-size: 14px; white-space: nowrap; }
+#karaoke-link:hover { color: var(--accent); }
 /* a dark tile in both themes: the icon's "3" is white */
 .logo {
   flex: none; width: 40px; height: 40px; padding: 4px; border-radius: 8px;
@@ -220,6 +222,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
   <div class="bar">
     <img class="logo" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABLElEQVR42sVX7Q6CMAzsNeW/PpvhJcVngwcgsf4RFNxYt3W4hIQAY9ePu7aQ+0ihNfdX8lzdMAWfS2KfOp2P2Aum9gsx608B0D2mQ0+2BgAClgBoCAi3jvt8u2TlgDpa/7FYN4moOSyA8SBrAuILGPYA1MLbnVZUe4wLrbYIVYx+m1BwSezfh2sp9488AK8MTHho9QIX/lgtDJj7azJU3ODwIJA4ANAZKwpCyK+yFVESMoxEum6GQ+JZ2fGmIeDddCBHNdmXfD5K2KT1iumD0FP/YfiacxKqUke8tUqsdT8navnPlVI2YzeNEADUioqFhvt7iXyAxI8WEKgVInFKpmKGcKGguA0nXKFqLsMJ14xVzSejbphqPZFszTizyCAj3qa+ELHxvFRscpXyBalCeV1YdpzwAAAAAElFTkSuQmCC">
     <h1>band3</h1>
+    <a id="karaoke-link" href="/karaoke" target="_blank" rel="noopener">Karaoke</a>
     <input id="search" type="search" placeholder="Search songs, artists, albums" autocomplete="off">
   </div>
   <div class="bar">

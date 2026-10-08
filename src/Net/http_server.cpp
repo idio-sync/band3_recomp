@@ -51,7 +51,10 @@
 #include "http_page.h"
 #include "http_request.h"
 #include "json.h"
+#include "karaoke_page.h"
+#include "live_events.h"
 #include "local_address.h"
+#include "lyrics.h"
 #include "rhythmverse.h"
 #include "song_downloads.h"
 #include "web_client.h"
@@ -79,6 +82,11 @@ constexpr std::chrono::seconds kGameTimeout{5};
 // connections served at once; more wait in the listen queue. Browsers open
 // connections they may never use, so one idle client can't hold up the rest.
 constexpr int kMaxClients = 8;
+// /live/events' streams open at once, apart from kMaxClients; a fifth gets
+// 503 and its page tries again
+constexpr int kMaxStreams = 4;
+// how often a stream looks at the game's state and sends what changed
+constexpr std::chrono::milliseconds kStreamTick{250};
 // a request line and headers longer than this aren't from a browser
 constexpr size_t kMaxHead = 16 * 1024;
 // the page's POSTs are a line of JSON
@@ -341,6 +349,43 @@ std::optional<std::string> AlbumArt(const std::string& shortname, bool& busy) {
     return jpeg;
 }
 
+// /lyrics' replies by shortname, newest last, for kMaxLyrics songs. An empty
+// reply is a song without lyrics band3 can show (404); parsing happens here,
+// on the request's thread, so the game thread only reads the file.
+constexpr size_t kMaxLyrics = 8;
+std::mutex g_lyrics_mutex;
+std::deque<std::pair<std::string, std::string>> g_lyrics;
+
+// nullopt when the song has none, or the game is busy (busy says which)
+std::optional<std::string> LyricsJson(const std::string& shortname, bool& busy) {
+    {
+        std::lock_guard lock(g_lyrics_mutex);
+        for (const auto& [name, json] : g_lyrics) {
+            if (name == shortname) return json.empty() ? std::nullopt : std::optional(json);
+        }
+    }
+    std::optional<std::string> file;
+    if (!RunOnGameThread([&file, &shortname](PPCContext& ctx, uint8_t* base) {
+            file = game::MidiFile(ctx, base, shortname);
+        })) {
+        busy = true;
+        return std::nullopt;
+    }
+    std::string json;
+    if (file) {
+        if (const auto midi = lyrics::ReadMidi(*file)) {
+            const auto parts = lyrics::FromMidi(*midi);
+            if (!parts.empty()) json = lyrics::FormatJson(shortname, parts);
+        } else {
+            REXLOG_WARN("Web server: {}'s MIDI file isn't one band3 can read", shortname);
+        }
+    }
+    std::lock_guard lock(g_lyrics_mutex);
+    g_lyrics.emplace_back(shortname, json);
+    if (g_lyrics.size() > kMaxLyrics) g_lyrics.pop_front();
+    return json.empty() ? std::nullopt : std::optional(json);
+}
+
 // the song IDs of every song in the game; nullopt while the game is busy
 std::optional<std::set<int32_t>> GameSongIds() {
     std::vector<int32_t> ids;
@@ -561,6 +606,20 @@ std::string Handle(const Request& request) {
             }
             rhythmverse::CheckForUpdates(false);
             return Response(200, kText, "Checking", cors);
+        case Endpoint::kKaraoke:
+            return Response(200, "text/html; charset=utf-8", kKaraokePage, cors);
+        case Endpoint::kKaraokeModel:
+            return Response(200, "text/javascript; charset=utf-8", kKaraokeModel, cors);
+        case Endpoint::kLyrics: {
+            bool busy = false;
+            if (auto json = LyricsJson(route.argument, busy)) {
+                return Response(200, "application/json", *json, cors);
+            }
+            if (busy) return Busy(cors);
+            return Response(404, kText, "No lyrics for that shortname", cors);
+        }
+        case Endpoint::kLiveEvents:
+            break;  // Serve streams it before Handle; a POST lands here as a 405 first
         case Endpoint::kNotFound:
             break;
     }
@@ -675,8 +734,9 @@ public:
         {
             std::unique_lock lock(clients_mutex_);
             if (!clients_cv_.wait_for(lock, kClientTimeout + kGameTimeout,
-                                      [this] { return clients_ == 0; })) {
-                REXLOG_WARN("Web server: {} request(s) still running at shutdown", clients_);
+                                      [this] { return clients_ == 0 && streams_ == 0; })) {
+                REXLOG_WARN("Web server: {} request(s) still running at shutdown",
+                            clients_ + streams_);
             }
         }
         CloseSocket(listener_);
@@ -758,7 +818,48 @@ private:
         }
         request->body.resize(request->content_length);
         REXLOG_DEBUG("Web server: {} {}", request->method, request->target);
+        if (request->method == "GET" &&
+            MatchRoute(request->target).endpoint == Endpoint::kLiveEvents) {
+            ServeStream(client);
+            return;
+        }
         SendAll(client, Handle(*request));
+    }
+
+    // /live/events: this connection's thread writes the stream until the
+    // client goes (a send fails, or times out after kClientTimeout) or the
+    // server stops. It gives up its request slot for one of kMaxStreams.
+    void ServeStream(socket_t client) {
+        const bool cors = REXCVAR_GET(http_allow_cors);
+        bool full;
+        {
+            std::lock_guard lock(clients_mutex_);
+            full = streams_ >= kMaxStreams;
+            if (!full) {
+                streams_++;
+                clients_--;
+            }
+            clients_cv_.notify_all();
+        }
+        if (full) {
+            SendAll(client, Response(503, kText, "Too many live pages are open", cors));
+            return;
+        }
+        REXLOG_DEBUG("Web server: a live page connected");
+        live::Ticker ticker;
+        bool open = SendAll(client, live::StreamHead(cors));
+        while (open && !stopping_) {
+            const test::GameStateSnapshot game = test::GameState::Get().Snapshot();
+            const std::string out =
+                ticker.Tick(live::FromSnapshot(game), game.song_ms, live::Ticker::Clock::now());
+            if (!out.empty()) open = SendAll(client, out);
+            if (open) std::this_thread::sleep_for(kStreamTick);
+        }
+        REXLOG_DEBUG("Web server: a live page left");
+        // back among the clients, which the connection's thread counts out
+        std::lock_guard lock(clients_mutex_);
+        streams_--;
+        clients_++;
     }
 
     socket_t listener_ = kNoSocket;
@@ -768,6 +869,7 @@ private:
     std::mutex clients_mutex_;
     std::condition_variable clients_cv_;
     int clients_ = 0;
+    int streams_ = 0;  // of the connections, those streaming /live/events
 };
 
 }
