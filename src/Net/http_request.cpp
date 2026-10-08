@@ -330,7 +330,8 @@ std::string FormatSongDetails(const std::vector<SongDetails>& songs) {
         out += JsonString(s.shortname) + ":{\"genre\":" + JsonString(s.genre) +
                ",\"year\":" + std::to_string(s.year) +
                ",\"length_ms\":" + std::to_string(s.length_ms) +
-               ",\"vocal_parts\":" + std::to_string(s.vocal_parts) + ",\"tiers\":{";
+               ",\"vocal_parts\":" + std::to_string(s.vocal_parts) +
+               ",\"origin\":" + JsonString(s.origin) + ",\"tiers\":{";
         for (size_t i = 0; i < s.tiers.size(); i++) {
             if (i) out += ',';
             out += JsonString(s.tiers[i].first) + ":" + std::to_string(s.tiers[i].second);

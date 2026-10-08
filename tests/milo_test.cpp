@@ -3,10 +3,14 @@
 // game data is in the repository.
 
 #include <doctest/doctest.h>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 #include "src/Net/milo.h"
 
@@ -262,4 +266,45 @@ TEST_CASE("an undecodable bitmap after the name isn't taken") {
     CHECK(!FindNamedBitmap(Name("far.png") + std::string(5000, 'x') + Bitmap(kRed), "far.png"));
     CHECK(!FindNamedBitmap("", "a.png"));
     CHECK(!FindNamedBitmap(Name("a.png"), ""));
+}
+
+TEST_CASE("textures asked for at once read their milo once") {
+    MiloCache cache(2);
+    std::atomic<int> loads = 0;
+    auto load = [&loads] {
+        loads++;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        return MiloCache::Load{false, std::make_shared<const std::string>("raw")};
+    };
+    std::vector<std::shared_ptr<const std::string>> got(5);
+    std::vector<std::thread> threads;
+    for (size_t i = 0; i < got.size(); i++) {
+        threads.emplace_back([&cache, &got, &load, i] { got[i] = cache.Get("ui/a.milo_xbox", load).raw; });
+    }
+    for (std::thread& t : threads) t.join();
+    CHECK(loads == 1);
+    for (const auto& raw : got) CHECK((raw && *raw == "raw"));
+}
+
+TEST_CASE("the milo cache keeps the last few used, and not a busy or failed load") {
+    MiloCache cache(2);
+    int loads = 0;
+    auto ok = [&loads] { loads++; return MiloCache::Load{false, std::make_shared<const std::string>("x")}; };
+    auto busy = [&loads] { loads++; return MiloCache::Load{true, nullptr}; };
+    auto missing = [&loads] { loads++; return MiloCache::Load{false, nullptr}; };
+    CHECK(cache.Get("a", busy).busy);
+    CHECK(!cache.Get("a", missing).raw);
+    CHECK(cache.Get("a", ok).raw);
+    CHECK(loads == 3);
+    CHECK(cache.Get("a", ok).raw);
+    CHECK(loads == 3);  // kept
+    cache.Get("b", ok);
+    cache.Get("c", ok);  // a, the least recently used, goes
+    CHECK(loads == 5);
+    cache.Get("b", ok);
+    CHECK(loads == 5);
+    cache.Get("a", ok);
+    CHECK(loads == 6);
+    cache.Get("b", ok);  // c went for a, b stayed
+    CHECK(loads == 6);
 }

@@ -117,11 +117,13 @@ class SongsTest(unittest.TestCase):
         # a rank of 0 is a part the song doesn't have
         self.assertEqual(rehab['tiers'],
                          {'band': 3, 'guitar': 0, 'bass': 1, 'drum': 4, 'vocals': 3})
+        # and its source, for the karaoke page's badge
+        self.assertEqual(rehab['origin'], 'rb3')
 
     def test_details_of_a_song_with_little_in_its_entry(self):
         noart = self.songs()[1]['details']
         self.assertEqual(noart, {'genre': '', 'year': 0, 'length_ms': 0, 'vocal_parts': 0,
-                                 'tiers': {}})
+                                 'origin': '', 'tiers': {}})
 
     def test_updates_replace_the_fields_they_name(self):
         # Rock Band 3 Deluxe's dx/song_updates/gen/songs_updates.dtb

@@ -146,10 +146,11 @@ struct SongDetails {
     // song has, by the game's name for it: band, guitar, bass, drum, vocals,
     // keys, real_guitar, real_bass, real_keys
     std::vector<std::pair<std::string, int32_t>> tiers;
+    std::string origin;  // the game it came from (rb3, ugc_plus...), as /list_songs gives it
 };
 
 // {"<shortname>": {"genre":..., "year":..., "length_ms":..., "vocal_parts":...,
-// "tiers": {"<part>": tier, ...}}, ...}
+// "origin":..., "tiers": {"<part>": tier, ...}}, ...}
 std::string FormatSongDetails(const std::vector<SongDetails>& songs);
 
 // not cached unless max_age (seconds) says for how long

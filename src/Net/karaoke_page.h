@@ -174,7 +174,7 @@ var KaraokeModel = (function () {
     return t.milo ? '/game_asset/milo_texture?milo=' + encodeURIComponent(t.milo) + '&name=' + encodeURIComponent(t.name)
                   : '/game_asset/texture?path=' + encodeURIComponent(t.path);
   }
-  // the Music Library's badge for a song's source (/list_songs' origin=)
+  // the Music Library's badge for a song's source (/song_details' origin)
   function originUrl(origin) {
     if (!origin || !/^[a-z0-9_]+$/i.test(origin)) return null;
     return textureUrl({ path: 'ui/resource/game_origins_128/gen/' + origin + '.png_xbox' });
@@ -581,20 +581,11 @@ body {
       return r.text().then(function (t) { take(t); chromeKey = ''; cardKey = ''; });
     }).catch(function () { again(0); });
   }
-  // each song's genre, year, length and tiers (/song_details), for the card;
-  // and its source (/list_songs' origin=), for its badge
-  var details = null, origins = {};
+  // each song's genre, year, length and tiers (/song_details), for the card,
+  // and its source, for its badge; the server reads them a few songs a frame
+  var details = null;
   function loadSongs() {
     loadOnce('/song_details', function (t) { try { details = JSON.parse(t); } catch (e) {} });
-    loadOnce('/list_songs', function (t) {
-      var name = null;
-      t.split(/\r?\n/).forEach(function (l) {
-        var m = /^\[(.*)\]$/.exec(l);
-        if (m) name = m[1];
-        m = /^origin=(.*)$/.exec(l);
-        if (m && name) origins[name] = m[1];
-      });
-    });
   }
 
   // RB3's own fonts (/game_asset/font), each {font, url} once its metrics
@@ -937,7 +928,8 @@ body {
     var song = state && state.song;
     var vocals = state && state.vocals;
     var band = (state && state.band) || [null, null, null, null];
-    var origin = song ? origins[song.shortname] || '' : '';
+    var d = song && details ? details[song.shortname] : null;
+    var origin = d && d.origin ? d.origin : '';
     var key = mode + '|' + (song ? song.shortname : '') + '|' + !!fonts[kLyricsFont] + '|' + vocals + '|' +
       JSON.stringify(band) + '|' + origin;
     if (key === chromeKey) return;

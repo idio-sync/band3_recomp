@@ -175,6 +175,7 @@ std::optional<Details> GetDetails(PPCContext& ctx, uint8_t* base, int32_t id) {
     details.genre = name ? name : ReadSymbol(base, metadata + kSongMetadata_Genre);
     details.year = 1900 + base[metadata + kSongMetadata_YearByte];
     details.length_ms = static_cast<int32_t>(Load32(base, metadata + kSongMetadata_LengthMs));
+    details.origin = ReadSymbol(base, metadata + kSongMetadata_Origin);
 
     // BandSongMgr::GetNumVocalParts(BandSongMgr*, Symbol shortname)
     call = CallContext(ctx, 0x100);

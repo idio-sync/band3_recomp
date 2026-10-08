@@ -85,7 +85,7 @@ std::vector<SongDetails> Details(PPCContext& ctx, uint8_t* base,
         auto d = songs::GetDetails(ctx, base, id);
         if (!d) continue;
         out.push_back({d->shortname, d->genre, d->year, d->length_ms, d->vocal_parts,
-                       std::move(d->tiers)});
+                       std::move(d->tiers), d->origin});
     }
     return out;
 }

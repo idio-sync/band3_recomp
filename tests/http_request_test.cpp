@@ -159,13 +159,13 @@ TEST_CASE("targets pick the RhythmVerse endpoints") {
 
 TEST_CASE("song details are JSON keyed by shortname, with the parts each song has") {
     SongDetails rehab{"rehab", "R&B/Soul/Funk", 2006, 214000, 1,
-                      {{"band", 3}, {"guitar", 2}, {"vocals", 4}}};
+                      {{"band", 3}, {"guitar", 2}, {"vocals", 4}}, "rb3"};
     SongDetails mot{"mot", "Mot\xF6rhead \"Metal\"", 0, 0, 0, {}};
     CHECK(FormatSongDetails({rehab, mot}) ==
           R"({"rehab":{"genre":"R&B/Soul/Funk","year":2006,"length_ms":214000,"vocal_parts":1,)"
-          R"("tiers":{"band":3,"guitar":2,"vocals":4}},)"
+          R"("origin":"rb3","tiers":{"band":3,"guitar":2,"vocals":4}},)"
           "\"mot\":{\"genre\":\"Mot\xC3\xB6rhead \\\"Metal\\\"\",\"year\":0,\"length_ms\":0,"
-          R"("vocal_parts":0,"tiers":{}}})");
+          R"("vocal_parts":0,"origin":"","tiers":{}}})");
     CHECK(FormatSongDetails({}) == "{}");
 }
 

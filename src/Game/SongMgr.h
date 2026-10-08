@@ -42,6 +42,7 @@ struct Details {
     int32_t year = 0;
     int32_t length_ms = 0;
     int32_t vocal_parts = 0;
+    std::string origin;  // the game it came from: rb3, rb2, ugc_plus...
     // the difficulty tier (0 Warmup to 6 Impossible) of each part the song has,
     // by the game's name for the part
     std::vector<std::pair<std::string, int32_t>> tiers;

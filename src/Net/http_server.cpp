@@ -461,12 +461,11 @@ std::optional<Asset> GameAsset(const Route& route) {
 }
 
 // /game_asset/milo_texture's milos run to megabytes (track_shared is 3.8 MB,
-// 11 MB decompressed), and a page asks for several textures of one, so the
-// last one decompressed is kept for those after it
+// 11 MB decompressed), and a page asks for several textures of each at once:
+// the four /karaoke reads (about 20 MB decompressed) are kept, and each is
+// read once however many ask for it together (milo.h's MiloCache)
 constexpr size_t kMaxMiloFile = 8 * 1024 * 1024;
-std::mutex g_milo_mutex;
-std::string g_milo_path;
-std::shared_ptr<const std::string> g_milo_raw;
+milo::MiloCache g_milos{4};
 
 // nullopt while the game is busy
 std::optional<Asset> MiloTextureAsset(const Route& route) {
@@ -474,26 +473,24 @@ std::optional<Asset> MiloTextureAsset(const Route& route) {
     if (!AllowedMiloPath(milo) || !AllowedTextureName(route.name)) return Asset{};
     const std::string key = "m:" + milo + "|" + route.name;
     if (auto asset = CachedAsset(key)) return asset;
-    std::shared_ptr<const std::string> raw;
-    {
-        std::lock_guard lock(g_milo_mutex);
-        if (g_milo_path == milo) raw = g_milo_raw;
-    }
-    if (!raw) {
+    const milo::MiloCache::Load loaded = g_milos.Get(milo, [&milo] {
+        milo::MiloCache::Load out;
         std::optional<std::string> file;
         if (!RunOnGameThread([&file, &milo](PPCContext& ctx, uint8_t* base) {
                 file = game::GameFile(ctx, base, milo, kMaxMiloFile);
             })) {
-            return std::nullopt;
+            out.busy = true;
+            return out;
         }
-        auto decompressed = file ? milo::Decompress(*file) : std::nullopt;
-        if (decompressed) {
-            raw = std::make_shared<const std::string>(std::move(*decompressed));
-            std::lock_guard lock(g_milo_mutex);
-            g_milo_path = milo;
-            g_milo_raw = raw;
+        if (auto raw = file ? milo::Decompress(*file) : std::nullopt) {
+            out.raw = std::make_shared<const std::string>(std::move(*raw));
         }
-    }
+        return out;
+    });
+    if (loaded.busy) return std::nullopt;
+    // another texture of it may have waited on the same load
+    if (auto asset = CachedAsset(key)) return asset;
+    const std::shared_ptr<const std::string>& raw = loaded.raw;
     Asset asset;
     if (const auto image = raw ? milo::FindNamedBitmap(*raw, route.name) : std::nullopt) {
         asset = {200, "image/png", EncodePng(*image)};

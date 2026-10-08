@@ -1,8 +1,13 @@
 #pragma once
 #include <cstdint>
+#include <deque>
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 #include "src/Net/album_art.h"
 
@@ -75,6 +80,25 @@ std::optional<http::Image> FindBitmap(std::string_view raw);
 // normal map) is never another texture's pixels.
 std::optional<http::Image> FindNamedBitmap(std::string_view raw, std::string_view name);
 inline constexpr size_t kNamedBitmapReach = 4096;
+
+// Decompressed milos, by path, for /game_asset/milo_texture: a page asks for
+// several textures of each milo at once, and each read is megabytes on the
+// game thread, so one load runs at a time and those waiting take what it
+// loaded. Keeps the `keep` used last; a busy or failed load isn't kept.
+class MiloCache {
+public:
+    struct Load {
+        bool busy = false;                       // the game was busy: ask again
+        std::shared_ptr<const std::string> raw;  // null when it isn't there or won't decompress
+    };
+    explicit MiloCache(size_t keep) : keep_(keep) {}
+    Load Get(const std::string& path, const std::function<Load()>& load);
+
+private:
+    size_t keep_;
+    std::mutex mutex_;  // held through a load, so a milo is only loaded once
+    std::deque<std::pair<std::string, std::shared_ptr<const std::string>>> kept_;  // used last at the back
+};
 
 // /game_asset/font's JSON: {"cell":[w,h],"texture":[w,h],"base_kerning":k,
 // "monospace":b,"glyphs":{"<code>":[u,v,width,advance],...},"kerning":[[left,right,k],...]}

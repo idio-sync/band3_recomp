@@ -236,6 +236,7 @@ def songs_from_dtb(tree, has_dir, has_file, genres=None, updates=None):
             'year': number(fields.get('year_released', [0])[0]),
             'length_ms': number(fields.get('song_length', [0])[0]),
             'vocal_parts': number(song.get('vocal_parts', 0)),
+            'origin': text('game_origin'),
             # a rank of 0 is a part the song doesn't have
             'tiers': {p: tier(p, ranks[p]) for p in PARTS if number(ranks.get(p, 0)) > 0},
         }

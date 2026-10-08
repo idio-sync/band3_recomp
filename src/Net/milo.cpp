@@ -304,6 +304,23 @@ std::optional<http::Image> FindNamedBitmap(std::string_view raw, std::string_vie
     return std::nullopt;
 }
 
+MiloCache::Load MiloCache::Get(const std::string& path, const std::function<Load()>& load) {
+    std::lock_guard lock(mutex_);
+    for (auto it = kept_.begin(); it != kept_.end(); ++it) {
+        if (it->first != path) continue;
+        auto hit = std::move(*it);
+        kept_.erase(it);
+        kept_.push_back(hit);
+        return {false, hit.second};
+    }
+    Load loaded = load();
+    if (loaded.raw) {
+        kept_.emplace_back(path, loaded.raw);
+        if (kept_.size() > keep_) kept_.pop_front();
+    }
+    return loaded;
+}
+
 std::string FormatFontJson(const Font& font) {
     std::string out = "{\"cell\":[" + Number(font.cell_w) + "," + Number(font.cell_h) +
                       "],\"texture\":[" + std::to_string(font.texture_w) + "," +
