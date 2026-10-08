@@ -55,10 +55,14 @@ Its GPU pipelines are made as the native renderer starts (about 100 ms, once a s
 no frame waits for one; the log names any made later (`pipeline made after warm-up`). Each
 frame is drawn as soon as the game presents it and handed to the window a steady delay
 later, about the slowest recent frame's drawing time and never more than a frame, so the
-window gets one new frame a refresh (`native_present_pacing`). If the GPU hasn't finished a
-frame in 2 s, the window keeps its last frame until it does (`native renderer: the GPU
-hasn't finished a frame ...`). After F8 back to native, the window shows only frames the game
-presented since. With RB3's even/odd rendering (on, as the game ships), a frame that draws
+window gets one new frame a refresh (`native_present_pacing`). That's only while the game
+runs under 1.5 times the display's refresh rate and `frame_cap` isn't `auto`: faster, each
+paint shows the newest of two or more frames anyway, and a variable refresh display shows
+each frame as it comes, so the delay would only add lag; there each frame is handed over as
+soon as it's drawn (the log says which: `native present: pacing frames` or `not pacing
+frames`). If the GPU hasn't finished a frame in 2 s, the window keeps its last frame until
+it does (`native renderer: the GPU hasn't finished a frame ...`). After F8 back to native,
+the window shows only frames the game presented since. With RB3's even/odd rendering (on, as the game ships), a frame that draws
 the world without post-processing it shows the last post-processed picture under its own
 track and HUD, as the game's does. The test harness's `present_stats` measures the window's
 pacing under either renderer.
@@ -160,12 +164,22 @@ settings), each described there (`src/settings.cpp`):
   `record` says how much of it went on what SDL_gpu makes the first time a frame needs more
   than any before: getting command buffers (one for each part the frame is submitted in; a
   command list and allocator made when its pool has none), their first draws (where it takes
-  their descriptor heaps) and pipeline binds and uniform pushes over 0.05 ms (a 32 KB uniform
-  buffer made; a draw pushes about 1 KB), each with the slowest; `submit` its slowest
-  submission. A frame that drew its world first (`pre`: a refracting venue without a kept
-  world to read) has those passes' own parts after the line's counts ("pre: plan ... (walk
-  ...: the render targets and texture arrays made), upload, record, submit, waiting for the
-  GPU, evict").
+  their descriptor heaps), later draws over 0.05 ms (another pair once 2048 samplers are
+  written, 16 a draw that rebinds) and pipeline binds and uniform pushes over 0.05 ms (a 32
+  KB uniform buffer made; a draw pushes 2 KB), each with the slowest; `submit` its slowest
+  submission. So that frames don't make those, the worker grows SDL_gpu's pools once, the
+  first time it waits for a capture (`gpu_view.h`'s `Idle`, logged "SDL's pools
+  warmed"): 16 command buffers and their fences, 128 uniform buffers (8 MB) and 24
+  descriptor heap pairs (about 2 MB each), in 103 to 116 ms, about 30 MB more video memory
+  than a song grew them to by itself. At 20th Century Boy's start (four runs each) the world
+  passes before its first frame went from 37.6 to 38.9 ms to 25.7 to 27.3 (their recording
+  from 16 to 4.5: 24 uniform buffers), its first 1402-draw frame from 56 to 65 to 37 to 60
+  (14 ms of command buffers and 8 to 11 of uniform buffers gone; what's left varies with
+  single submissions of 6 to 31 ms, SDL_gpu's own), and the four first-sight frames from 168
+  to 180 ms in all to 135 to 159. A frame that drew its world first (`pre`: a refracting
+  venue without a kept world to read) has those passes' own parts after the line's counts
+  ("pre: plan ... (walk ...: the render targets and texture arrays made), upload, record,
+  submit, waiting for the GPU, evict").
 - `native_gpu_timestamps` (off): times each frame's parts on the GPU with timestamps written
   between them (`src/Render/gpu_timing_model.h`): its upload, the world, the texture passes
   (`pass_shadow`, `pass_spot` for the spotlights' targets, `pass_other` for the rest: outfits,
@@ -287,6 +301,50 @@ settings), each described there (`src/settings.cpp`):
   command processor's and the audio's busy. What's left of those frames is the planning's
   render targets made (25 in 23 to 24 ms on the third), the world passes before the frame (35
   to 37 ms on the first) and recording (17 to 35 ms on the fourth).
+- `native_view_premake_targets` (on): makes the textures RB3 draws into (outfits, faces, the
+  crowd, the spotlights' targets, shadow maps) as it loads them, rather than in the frame
+  that first draws into them, where each cost about a millisecond (a colour and a depth
+  texture, each a committed resource): a song's first camera cut to the band made 25 in one
+  frame, 23 to 26 ms of it. RB3 gives a rendered texture its surfaces in `DxTex::SyncBitmap`,
+  seconds before its first pass (the song's 25 four seconds before that cut); the capture's
+  hook announces it there and the worker makes it while it waits for a capture, up to four
+  at a time and 4 ms (`src/Render/target_premake.h`), at most 64 made ahead and not yet used
+  (unused ones go after 30 s as any target). One made ahead is undrawn, so it draws and
+  samples as one not yet made, and only targets a pass doesn't have are made, so the picture
+  is the same: 11 frames (render_song_evenodd's on a refracting venue and
+  render_screens_menus') drawn the same moment with targets made ahead and shared depths and
+  without had no pixel different. A soft-particle surface is made at the game's size and its
+  first pass remakes it, as before. Targets without depth (RndTex's kRenderedNoZ: most of
+  them, outfits and the spotlights' included) clear their depth at every pass and keep none,
+  so those of a size share one depth texture; one that loads depth never gets it, and one
+  whose type changes is made again. The slow-frame line says how many the frame found made
+  ahead ("N made ahead" in its walk) and how many were made since the frame before, unused
+  and shared depths; `by_kind` has `targets_premade`, `premade_used`, `premade_unused`,
+  `shared_depths` and `premake` (their milliseconds, between frames, not in `ms`). At 20th
+  Century Boy's start (four runs) the cut to the band went from 45 to 49 ms to 22 to 23 (24 of
+  its 25 targets made ahead; the 25th, announced 10 ms before, 0.4 ms), the first 1402-draw
+  frame's 8 targets (8 ms) to 2 or 3 (0.8 to 1.2 ms, the soft-particle surfaces), and in
+  its 60 s slice the process's video memory from 552 to 557 MB to 533 to 536 (the shared
+  depths; targets 35 MB at most); a song announces about 70.
+- `native_view_premake_arrays` (on): makes the texture arrays the textures RB3 loads will go
+  in as it loads them. Textures share an array per size class and format
+  (`gpu_view.cpp`'s `PlaceTexture`), the first one 4 MB, made when the first texture of its
+  class is drawn: a song's first frame made 19 (11.5 to 12.3 ms of its world passes before
+  it), a cut a few more. `DxTex::SyncBitmap` sees each texture as it loads, with its size and
+  format, 0.1 to 0.2 s before the frame that first draws it (a song's 240 in the last 0.2 s
+  of its loading screen); the hook announces each kind once and the worker makes the class's
+  first array if it has none, as `PlaceTexture` would, in the format the texture will be
+  kept in (`native_bc_textures`, `native_r8_textures`), sharing `native_view_premake_targets`'
+  budget between frames and coming back after 2 ms rather than 100 while some are left. That
+  predicted 20 of the song's first frame's 21 arrays and 2 it didn't use, and 15 to 30 of
+  each render check frame's, missing one at most (a texture its fetch keeps RGBA). One made
+  ahead and unused goes after 10 s, then as an empty array does. The arrays are made and
+  given out the same either way, so the picture is: the 11 frames above drawn the same moment
+  from no arrays, with them made ahead and without, had no pixel different. At 20th Century
+  Boy's start (four runs) the song's first frame went from 35 to 39 ms to 23 to 27 (its world
+  passes from 24 to 25 to 13 to 15), and its four first-sight frames from 115 to 127 ms in
+  all to 92 to 106 (168 to 180 before the pools were warmed and targets made ahead); the
+  process's video memory in its 60 s slice stayed 536 to 539 MB.
 
 `native_view stats`' `by_kind` splits the live view's frames by what they drew under
 even/odd rendering (`frame_compose.h`'s `FrameKind`): `world` (the game drew the world; the

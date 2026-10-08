@@ -27,6 +27,8 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Type on the song list to search it, with a Rock Band 3 Deluxe that has keyboard search
 - Runs at the display's refresh rate (`frame_cap`)
 - Forced venue, song speed and highway speed
+- Music videos: a song's own video plays as the video venues' background, in time with the
+  song (Windows)
 - Steam Deck defaults: fullscreen, letterboxed, vsync
 
 **Instruments**
@@ -101,7 +103,7 @@ CI runs and profiling.
 | Page | Covers |
 |---|---|
 | [Building](docs/building.md) | requirements, Windows and Linux builds, unit tests, compile check, profiling |
-| [Settings, folders and songs](docs/settings.md) | the launcher, the pause menu and in-game settings, config files, where band3 keeps things, DLC and custom songs, loose-file mods, Steam Deck |
+| [Settings, folders and songs](docs/settings.md) | the launcher, the pause menu and in-game settings, config files, where band3 keeps things, DLC and custom songs, music videos, loose-file mods, Steam Deck |
 | [Settings reference](docs/settings-reference.md) | every setting: its default, the values it takes and what it does, generated from the build |
 | [Instruments and microphones](docs/instruments.md) | Instrument Lab, PlayStation/Wii dongles, Xbox One instruments, MIDI drums and keyboards, USB mics, pro instruments, controller lag |
 | [Integrations](docs/integrations.md) | network events, Stage Kit lights, Discord, the web server and its API, GoCentral, Liveless online play, RB3Enhanced and Deluxe compatibility |

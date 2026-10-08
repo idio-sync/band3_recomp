@@ -49,6 +49,20 @@ REXCVAR_DEFINE_STRING(forced_venue, "false", "Band3/Game",
     "A venue (arena_04), a class (arena, big_club, small_club, festival, video), "
     "none for a black background, or a comma separated list to pick from at random");
 
+REXCVAR_DEFINE_BOOL(music_videos, true, "Band3/Game",
+    "Play a song's music video in the video venues, in place of their background clips, "
+    "when music_videos_folder has one for it: <shortname>.mp4 (or .mkv, .mov, .webm...), "
+    "and optionally <shortname>.ini with Clone Hero's video_start_time. "
+    "forced_venue video picks the video venues. Turned on, it applies from the next song");
+
+REXCVAR_DEFINE_STRING(music_videos_folder, "videos", "Band3/Game",
+    "The folder music videos are looked for in (empty: videos). A relative folder is "
+    "relative to band3_config.ini's folder (or band3's own folder if there is no ini)");
+
+REXCVAR_DEFINE_STRING(music_video_fit, "fit", "Band3/Game",
+    "How a music video whose shape isn't the screen's is shown: fit (all of it, with black "
+    "bars), fill (the whole screen, its edges cut off) or stretch");
+
 REXCVAR_DEFINE_STRING(username, "", "Band3/Game",
     "Override the username (up to 15 characters): the profile's gamertag wherever the game "
     "asks for it, online included. Empty keeps the profile's");
@@ -523,7 +537,10 @@ REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Advanced/Native renderer
     "With the native picture shown, publish each frame to the window a steady delay after "
     "the game presented it (about the slowest recent frame's), so frames that draw quickly "
     "(with even/odd rendering, every other one) don't reach a paint together with the one "
-    "before; off publishes each as soon as it's drawn, to compare");
+    "before; off publishes each as soon as it's drawn, to compare. Only while the game runs "
+    "under 1.5 times the display's refresh rate and frame_cap isn't auto: faster, each "
+    "refresh shows the newest frame anyway, and auto's variable refresh display shows each "
+    "as it comes, so the delay would only add lag");
 
 REXCVAR_DEFINE_BOOL(native_present_request_paint, true, "Band3/Advanced/Native renderer",
     "With renderer native (no emulated GPU), ask the window to paint each time the native "
@@ -619,6 +636,18 @@ REXCVAR_DEFINE_BOOL(native_view_inline_mips, true, "Band3/Advanced/Native render
     "buffers a frame and a little less of the GPU waiting for the CPU. Direct3D 12 only. Off "
     "has SDL make them, as before, to compare");
 
+REXCVAR_DEFINE_BOOL(native_view_premake_targets, true, "Band3/Advanced/Native renderer",
+    "Make the textures RB3 draws into (outfits, faces, the crowd) as it loads them, a few "
+    "between frames, rather than in the frame that first draws them: a song's first camera "
+    "cut to the band made 25 of them in one frame (about 25 ms). Those without depth share "
+    "one depth texture per size. The picture is the same; off makes them as before, to "
+    "compare");
+
+REXCVAR_DEFINE_BOOL(native_view_premake_arrays, true, "Band3/Advanced/Native renderer",
+    "Make the GPU texture arrays the textures RB3 loads will go in as it loads them, a few "
+    "between frames, rather than in the frame that first draws them: a song's first frame "
+    "made 19 (about 12 ms). The picture is the same; off makes them as before, to compare");
+
 REXCVAR_DEFINE_INT32(native_view_submit_points, 1, "Band3/Advanced/Native renderer",
     "Where the native renderer hands a frame to the GPU in parts, so the GPU draws the first "
     "while the worker records the rest: 0 = only after each texture pass with mips (the "
@@ -710,6 +739,10 @@ REXCVAR_DEFINE_BOOL(autoplay, false, "Band3/Advanced/Test harness",
 REXCVAR_DEFINE_BOOL(stagekit_fake, false, "Band3/Advanced/Test harness",
     "With stagekit_usb on: add a pretend USB Stage Kit that keeps the commands it's sent, for "
     "the harness's lights command");
+
+REXCVAR_DEFINE_BOOL(music_video_test_pattern, false, "Band3/Advanced/Test harness",
+    "Draw a test pattern in place of the video venues' movie frames (their "
+    "backgrounds): a white border, a grey ramp, a moving bar and four colour quadrants");
 
 REXCVAR_DEFINE_BOOL(midi_keys_test_device, false, "Band3/Advanced/Test harness",
     "With test_port set and midi_keys on: report a MIDI keyboard named harness, with no port "

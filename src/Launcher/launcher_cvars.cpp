@@ -9,6 +9,7 @@
 #include "config_file.h"
 #include "settings_reference.h"
 #include "src/config.h"
+#include "src/paths.h"
 #include "src/Hooks/frame_pacing.h"
 #include "src/Render/renderer_switch.h"
 #include "src/Render/sync_gpu/native_only.h"
@@ -212,6 +213,9 @@ Environment ReadEnvironment(std::span<const Setting> table, const PathDefaults& 
     // the folder settings fall back to the folders the game would start with
     if (auto* f = facts_of("game_data_root")) f->path_default = paths.game_data_root;
     if (auto* f = facts_of("user_data_root")) f->path_default = paths.user_data_root;
+    // empty, the music videos' is "videos" beside the ini (music_video.cpp)
+    if (auto* f = facts_of("music_videos_folder"))
+        f->path_default = paths::Resolve("videos", anchor);
     // the launcher's save sets show_launcher at runtime, so in game only the
     // file says whether the box was ticked
     if (auto* f = facts_of("show_launcher"); f && env.in_game && f->lock == Lock::kNone) {

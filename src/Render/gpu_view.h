@@ -99,6 +99,10 @@ struct GpuStats {
     uint32_t acquires = 0;
     double acquire_ms = 0, acquire_max_ms = 0;
     double first_draw_ms = 0, first_draw_max_ms = 0;
+    // later draws over 0.05 ms (SDL taking another descriptor heap pair, its
+    // sampler heap full), and their time
+    uint32_t draw_slow = 0;
+    double draw_slow_ms = 0;
     // record_ms's pipeline binds and uniform pushes that took over 0.05 ms
     // (SDL making a 32 KB uniform buffer: its pool had none free), and their
     // time; draws' and post-processing's
@@ -113,7 +117,7 @@ struct GpuStats {
     // Evict
     double pre_plan_ms = 0, pre_walk_ms = 0, pre_targets_ms = 0, pre_arrays_ms = 0;
     double pre_upload_ms = 0, pre_record_ms = 0, pre_acquire_ms = 0, pre_first_draw_ms = 0;
-    double pre_uniform_slow_ms = 0, pre_submit_ms = 0;
+    double pre_uniform_slow_ms = 0, pre_draw_slow_ms = 0, pre_submit_ms = 0;
     uint32_t pre_uniform_slow = 0;
     double pre_wait_ms = 0, pre_evict_ms = 0;
     uint32_t pre_targets_made = 0, pre_arrays_grown = 0, pre_submits = 0;
@@ -132,6 +136,16 @@ struct GpuStats {
     // time (copy listing included) and megabytes (mips a third more)
     uint32_t targets_made = 0, targets_new = 0, targets_resized = 0, targets_returning = 0;
     double targets_ms = 0;
+    // native_view_premake_targets (target_premake.h): targets the walk found
+    // made ahead (not in targets_made); made ahead between the last frame
+    // and this one (GpuRenderer::Idle), and their ms (not in ms); made ahead
+    // and not yet used, and the shared depth textures, after the frame
+    uint32_t premade_used = 0, targets_premade = 0, premade_unused = 0, shared_depths = 0;
+    double premake_ms = 0;
+    // native_view_premake_arrays: texture arrays made ahead between the
+    // last frame and this one (their ms in premake_ms), and those the walk
+    // placed a first texture in
+    uint32_t arrays_premade = 0, arrays_premade_used = 0;
     uint32_t textures_first = 0, meshes_first = 0;
     uint32_t arrays_grown = 0;
     double arrays_ms = 0, arrays_mb = 0;
@@ -327,6 +341,18 @@ class GpuRenderer {
     // on, so the first frames don't wait. Later pipelines are logged
     // ("pipeline made after warm-up").
     void Prewarm(uint32_t overlay_samples);
+    // The worker, waiting for a capture, once Prewarm has run. The first
+    // time it grows SDL_gpu's Direct3D 12 pools (command buffers and their
+    // fences, uniform buffers, descriptor heap pairs) to what a song's
+    // biggest frames take, which they otherwise make as they record: 7 ms
+    // for a command buffer, ~0.5 for a uniform buffer, ~2 for a heap pair
+    // (gpu_view.cpp's Impl::WarmPools; about 130 ms), so neither the UI
+    // thread nor a frame waits for them. Then, with
+    // RasterOptions::premake_targets and premake_arrays, it makes a few
+    // announced render targets and texture arrays ahead (target_premake.h;
+    // sized by `options`). Cheap with nothing to do. Whether announcements
+    // are left that it could make now, to call again soon.
+    bool Idle(const RasterOptions& options);
     // Draws `frame` at options.width x options.height into rgba (R in the low
     // byte, alpha 0xff) via its own output texture and readback. Any thread,
     // one frame at a time. False without a device or if the GPU failed

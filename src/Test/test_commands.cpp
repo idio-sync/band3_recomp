@@ -607,6 +607,21 @@ uint64_t Hitches(std::vector<double> ms) {
     return uint64_t(std::count_if(ms.begin(), ms.end(), [&](double m) { return m > 1.5 * median; }));
 }
 
+// the steps (PresentStats::step_ms) where motion stood still or jumped: 0 (a
+// frame shown again) or 1.5 times the paints' median interval or more, which
+// with a paint each refresh is a frame missed
+uint64_t JudderSteps(const std::vector<double>& steps, std::vector<double> paint_ms) {
+    double refresh = 0;
+    if (!paint_ms.empty()) {
+        std::sort(paint_ms.begin(), paint_ms.end());
+        const size_t i = static_cast<size_t>(std::ceil(0.5 * double(paint_ms.size())));
+        refresh = paint_ms[std::clamp<size_t>(i, 1, paint_ms.size()) - 1];
+    }
+    return uint64_t(std::count_if(steps.begin(), steps.end(), [&](double m) {
+        return m <= 0 || (refresh > 0 && m >= 1.5 * refresh);
+    }));
+}
+
 std::string PresentJson(const PresentStats& s) {
     std::string out = "\"stats\":{\"renderer\":";
     AppendJsonString(out, s.renderer);
@@ -624,6 +639,8 @@ std::string PresentJson(const PresentStats& s) {
     out += ",\"shown\":" + std::to_string(s.shown);
     out += ",\"repeats\":" + std::to_string(s.repeats);
     out += ",\"skipped\":" + std::to_string(s.skipped);
+    out += ",\"step_ms\":" + Distribution(s.step_ms);
+    out += ",\"judder\":" + std::to_string(JudderSteps(s.step_ms, s.paint_ms));
     out += ",\"latency_ms\":" + Distribution(s.latency_ms);
     out += ",\"published\":" + std::to_string(s.publish_latency_ms.size());
     out += ",\"publish_latency_ms\":" + Distribution(s.publish_latency_ms) + "}";

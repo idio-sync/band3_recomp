@@ -160,6 +160,19 @@ inline double AutoCapHz(double refresh_hz) {
     return refresh_hz - std::max(4.0, 0.05 * refresh_hz);
 }
 
+// Whether the native renderer holds each frame back to publish it on a steady
+// delay (native_present_pacing, present_model.h's PublishPacer), for the game
+// at `game_hz` on a display at `display_hz`. The hold keeps a fast frame from
+// reaching a paint with the slow one before it, which only happens with about
+// one frame a refresh: at 1.5 times the refresh or more, each paint shows the
+// newest of two or more frames whatever the hold, which only makes it later.
+// frame_cap auto declares a variable refresh display, which shows each frame
+// as it comes: there the hold only adds lag. A rate not known (0) keeps it.
+inline bool PacePublishing(FrameCapMode mode, double game_hz, double display_hz) {
+    if (mode == FrameCapMode::kAuto) return false;
+    return game_hz <= 0 || display_hz <= 0 || game_hz < 1.5 * display_hz;
+}
+
 // `setting` for a display refreshing at refresh_num / refresh_den Hz
 // (120000/1001 for 119.88), or one whose rate can't be told (either 0):
 // display and auto are then off, and a number of Hz still holds
@@ -210,6 +223,11 @@ void PaceFrame();
 // The rate the game runs at: the cap's while it's on, else refresh_rate
 // (video_mode_refresh_rate, 0 for the console's 60)
 double GameHz();
+
+// The refresh rate of the display the window was last seen on (read again
+// every couple of seconds while the cap runs, whether it's on or not); 0
+// before the cap started or while it can't be told
+double DisplayHz();
 
 // what the cap has done since it started, for the test harness's
 // present_stats; totals, which it subtracts

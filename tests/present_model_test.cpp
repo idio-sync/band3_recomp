@@ -425,6 +425,46 @@ TEST_CASE("a native frame shown again is a repeat, one never shown a skip") {
     CHECK(log.latency_ms[2] == doctest::Approx(10.0));
 }
 
+TEST_CASE("each paint's step is how far the game's Presents moved on since the paint before") {
+    PaintRecorder r;
+    // the game at 120 on a 120 Hz display: 8 ms steps, then a repeat (0) and
+    // the frame after it skipped (16)
+    r.Paint(100 * kMs, true, 0, 1, 90 * kMs);  // the first: no step
+    r.Paint(108 * kMs, true, 0, 2, 98 * kMs);
+    r.Paint(116 * kMs, true, 0, 2, 98 * kMs);   // again
+    r.Paint(124 * kMs, true, 0, 4, 114 * kMs);  // 3 never shown
+    r.Paint(132 * kMs, true, 0, 5, 122 * kMs);
+    r.Paint(140 * kMs, true);  // nothing to show: not a step
+    r.Paint(148 * kMs, true, 0, 6, 130 * kMs);
+    const PaintLog& log = r.Log();
+    REQUIRE(log.step_ms.size() == 5);
+    CHECK(log.step_ms[0] == doctest::Approx(8.0));
+    CHECK(log.step_ms[1] == doctest::Approx(0.0));
+    CHECK(log.step_ms[2] == doctest::Approx(16.0));
+    CHECK(log.step_ms[3] == doctest::Approx(8.0));
+    CHECK(log.step_ms[4] == doctest::Approx(8.0));
+}
+
+TEST_CASE("steps start over with another source, and go on across a reset") {
+    PaintRecorder r;
+    r.Paint(100 * kMs, true, 0, 3, 90 * kMs);
+    r.Paint(108 * kMs, false);
+    r.Paint(116 * kMs, true, 0, 10, 106 * kMs);  // after an emulated paint: no step
+    r.Paint(124 * kMs, true, 1, 2, 114 * kMs);   // another source: no step
+    // its Present unknown: no step, nor for the paint after
+    r.Paint(132 * kMs, true, 1, 3, 0);
+    r.Paint(140 * kMs, true, 1, 4, 130 * kMs);
+    CHECK(r.Log().step_ms.empty());
+    r.Reset();
+    r.Paint(148 * kMs, true, 1, 5, 138 * kMs);
+    REQUIRE(r.Log().step_ms.size() == 1);
+    CHECK(r.Log().step_ms[0] == doctest::Approx(8.0));
+    // numbered over, or Presented before the paint before's: not a step
+    r.Paint(156 * kMs, true, 1, 1, 146 * kMs);
+    r.Paint(164 * kMs, true, 1, 2, 120 * kMs);
+    CHECK(r.Log().step_ms.size() == 1);
+}
+
 TEST_CASE("the recent latency follows the frames shown, and outlasts a reset") {
     PaintRecorder r;
     CHECK(r.RecentLatencyMs() == 0);

@@ -115,10 +115,13 @@ sets how finely hits are timed: to within 16.7 ms at 60 fps, 8.3 ms at 120 and 4
 - **Smooth frame pacing** (`native_present_pacing`, native renderer, on by default) hands
   each frame to the window a steady delay after the game made it, so motion steps evenly.
   Off hands it over as soon as it's drawn: about 3 to 4 ms sooner at 120 fps, with now and
-  then an uneven step.
-- **Lowest latency** sets both: smooth frame pacing off, and the cap at the most whole
-  refreshes' worth of frames up to 240 (240 on a 60 or 120 Hz display, 144 on a 144 Hz
-  one), so the picture still steps evenly. If the game can't hold that rate, lower the cap.
+  then an uneven step. It holds frames only with the cap under 1.5 times the display's
+  refresh rate and not `auto`: faster, each refresh shows the newest frame anyway, and a
+  variable refresh display shows each frame as it comes, so holding one only adds lag.
+- **Lowest latency** sets the cap at the most whole refreshes' worth of frames up to 240
+  (240 on a 60 or 120 Hz display, 144 on a 144 Hz one), so the picture still steps evenly,
+  and where that cap is the display's own rate (over 160 Hz) smooth frame pacing off too. If
+  the game can't hold that rate, lower the cap.
 
 The debug overlay (`debug_overlay`) shows the game's frame rate (**Game**), the window's
 (**Window**, which the display's refresh rate holds back: a 60 Hz TV shows 60 whatever the
@@ -275,6 +278,32 @@ isn't listed that session.
 A custom song whose `song_id` is text instead of a number gets the number RB3Enhanced
 gives it (the text's CRC-32 mod 9999999, plus 2130000000), so IDs agree with
 RB3Enhanced's.
+
+## Music videos
+
+With `music_videos` on (the default), a song's own music video plays in the video venues in
+place of their background clips: behind the band and under the venue's colour filters, in
+time with the song, standing still while it's paused and following it when it restarts or
+practice moves to another section. Put the video in the `videos` folder beside the ini (or
+the folder `music_videos_folder` names), named after the song's shortname:
+`20thcenturyboy.mp4` for 20th Century Boy. A song's shortname is in the log as it starts
+(`No music video for 20thcenturyboy in music_videos_folder`). `forced_venue = video` (the
+Game tab's Forced venue, Video venue) puts every song in a video venue. Turning `music_videos` off
+stops the video at once; turning it on starts videos from the next song.
+
+The video starts with the song. `<shortname>.ini` beside it with Clone Hero's
+`video_start_time = <milliseconds>` (as in a chart's `song.ini`) starts it that far in at the
+song's start; a negative one starts it that far into the song. The screen is black before the
+video starts, and its last frame stays after it ends. `music_video_fit` keeps a video whose
+shape isn't 16:9 whole with black bars (`fit`), fills the screen and cuts its edges off
+(`fill`), or stretches it. Its sound isn't played.
+
+Videos are decoded by Windows (Media Foundation), on Windows only for now: `.mp4`, `.m4v`,
+`.mov`, `.mkv`, `.webm`, `.avi` or `.wmv`, in a codec Windows has. H.264 works everywhere
+but Windows N editions (which need the Media Feature Pack); HEVC, VP9 and AV1 need their
+Microsoft Store extensions. A video Windows can't decode is logged (`Music video ...`) and
+the venue keeps its own clips. Decoding takes a share of a CPU core of its own, about a
+fifth of one for a 1080p video, besides the decoder's.
 
 ## Loose files (mods)
 

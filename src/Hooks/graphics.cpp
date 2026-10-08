@@ -195,6 +195,8 @@ constexpr auto kDisplayPoll = std::chrono::seconds(2);
 std::atomic<int64_t> g_period_ns{0};
 std::atomic<double> g_cap_hz{0};
 std::atomic<FrameCapMode> g_cap_mode{FrameCapMode::kOff};
+// the display's rate as last read (DisplayHz), 0 unknown
+std::atomic<double> g_display_hz{0};
 
 // the game thread's totals, for GetFrameCapStats
 std::atomic<uint64_t> g_frames{0};
@@ -270,10 +272,12 @@ void LogCap(const FrameCap& cap, const FrameCapSetting& setting, RefreshRate dis
                     FrameCapModeName(setting.mode));
 }
 
-// publishes what the setting comes to on the display now, logging it when
-// that changes; whether the cap is on. g_cap.mutex held.
+// publishes the display's rate and what the setting comes to on it now,
+// logging the cap when that changes; whether the cap is on. g_cap.mutex held.
 bool Publish() {
     const FrameCap cap = ResolveFrameCap(g_cap.setting, g_cap.display.num, g_cap.display.den);
+    g_display_hz.store(g_cap.display.den ? double(g_cap.display.num) / g_cap.display.den : 0,
+                       std::memory_order_relaxed);
     if (!g_cap.published || cap.mode != g_cap.cap.mode || cap.period_ns != g_cap.cap.period_ns) {
         LogCap(cap, g_cap.setting, g_cap.display);
         g_cap.cap = cap;
@@ -403,6 +407,8 @@ double GameHz() {
     const double cap = g_cap_hz.load(std::memory_order_relaxed);
     return cap > 0 ? cap : REXCVAR_GET(video_mode_refresh_rate);
 }
+
+double DisplayHz() { return g_display_hz.load(std::memory_order_relaxed); }
 
 FrameCapStats GetFrameCapStats() {
     FrameCapStats out;

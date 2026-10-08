@@ -33,6 +33,9 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `skip_profile_prompt`<br>Join without a profile as a guest | `true` | `true`, `false` | Players who join without a profile join as guests, without the game asking them to choose one (No Profile, Sign In, Swap to User). Off, it asks, as on a console |
 | `disable_metamusic`<br>Menu music | `false` | `true`, `false` | Disable the background menu music *Applies at the next start.* |
 | `forced_venue`<br>Forced venue | `false` | text; `false` Don't force, `arena` Arena, `big_club` Big club, `small_club` Small club, `festival` Festival, `video` Video venue, `none` None (black background) | Venue to force, applied from the next venue load. false = don't force. A venue (arena_04), a class (arena, big_club, small_club, festival, video), none for a black background, or a comma separated list to pick from at random |
+| `music_videos`<br>Music videos in the video venues | `true` | `true`, `false` | Play a song's music video in the video venues, in place of their background clips, when music_videos_folder has one for it: &lt;shortname&gt;.mp4 (or .mkv, .mov, .webm...), and optionally &lt;shortname&gt;.ini with Clone Hero's video_start_time. forced_venue video picks the video venues. Turned on, it applies from the next song |
+| `music_videos_folder`<br>Music videos folder | `videos` | text | The folder music videos are looked for in (empty: videos). A relative folder is relative to band3_config.ini's folder (or band3's own folder if there is no ini) |
+| `music_video_fit`<br>Music video shape | `fit` | `fit` Fit, with black bars, `fill` Fill, edges cut off, `stretch` Stretch | How a music video whose shape isn't the screen's is shown: fit (all of it, with black bars), fill (the whole screen, its edges cut off) or stretch |
 | `song_speed`<br>Song speed | `1` | `0.1` to `10` (x) | Plays songs faster or slower: 1.5 is half again as fast, 0.75 three quarters. Applies from the next song. A speed other than 1 that practice mode or Rock Band 3 Deluxe's song speed sets is left as it is |
 | `track_speed`<br>Track speed | `1` | `0.1` to `10` (x) | Scrolls the note highway faster or slower: 2 is twice as fast, with the notes twice as far apart. Applies from the next song |
 | `unlock_clothing`<br>Unlock all clothing | `false` | `true`, `false` | Unlock every piece of clothing, tattoo and face paint for your characters, and the video venues, without earning them (RB3Enhanced's UnlockClothing) |
@@ -46,7 +49,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
 | `frame_cap`<br>Frame rate cap | `display` | text; `display` The display's refresh rate, `auto` Auto (VRR: G-Sync, FreeSync), `off` Off (the console's vblank), `60` 60 fps, `120` 120 fps, `144` 144 fps, `180` 180 fps, `240` 240 fps | What paces the game's frames. display: the display's refresh rate exactly (119.88 Hz, not 120), for fixed-refresh displays (the default). auto: a little under it (5% less, at least 4 fps), for VRR displays (G-Sync, FreeSync), keeping each frame inside their range; on a fixed-refresh display a cap under the refresh rate shows a frame twice every 1/(refresh - cap) seconds. A number of Hz (24 to 240), e.g. 117. off: the emulated console's vertical blank, paced by vsync and video_mode_refresh_rate (60 unless set). With the cap on, vsync is turned off and an unset video_mode_refresh_rate follows the cap. Without a display whose rate can be told, display and auto are off |
-| `native_present_pacing`<br>Smooth frame pacing | `true` | `true`, `false` | With the native picture shown, publish each frame to the window a steady delay after the game presented it (about the slowest recent frame's), so frames that draw quickly (with even/odd rendering, every other one) don't reach a paint together with the one before; off publishes each as soon as it's drawn, to compare |
+| `native_present_pacing`<br>Smooth frame pacing | `true` | `true`, `false` | With the native picture shown, publish each frame to the window a steady delay after the game presented it (about the slowest recent frame's), so frames that draw quickly (with even/odd rendering, every other one) don't reach a paint together with the one before; off publishes each as soon as it's drawn, to compare. Only while the game runs under 1.5 times the display's refresh rate and frame_cap isn't auto: faster, each refresh shows the newest frame anyway, and auto's variable refresh display shows each as it comes, so the delay would only add lag |
 
 ### Display
 
@@ -58,6 +61,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `resolution`<br>Resolution | *(empty)* | text; *(empty)* Default, `720p` 1280 x 720, `1080p` 1920 x 1080, `1440p` 2560 x 1440, `4k` 3840 x 2160 | Common resolution preset for both guest video mode and window (for example: 720p, 1080p, 1440p, 4k, 1280x720) |
 | `present_letterbox`<br>Aspect | `true` | `true`, `false` | Enable letterboxing for non-native aspect ratios |
 | `native_fill_window`<br>Fill the window | `true` | `true`, `false` | Native renderer (renderer native or both): draw the game at the window's shape rather than 16:9 with black bars. A wider window (21:9) shows more to the sides, a taller one (16:10) more above and below, with the HUD and tracks at their size in the middle 16:9. The emulated GPU's picture stays 16:9 |
+| `debug_overlay`<br>Show the FPS counter | `true` | `true`, `false` | Show band3's FPS counter: the game's frame rate (what frame_cap paces, and hit timing follows) and the window's, which the display's refresh rate holds back |
 
 ### Renderer
 
@@ -73,6 +77,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `native_view_msaa`<br>Anti-aliasing (MSAA) | `2` | `1` Off, `2` 2x (the game's), `4` 4x | Native renderer (renderer native or both) and the native view (experimental): the samples a pixel they draw the HUD, the track and the menus over the world with, averaged at their edges: 2 = the game's (RB3 multisamples them, not the world), 4 smoother, 1 none |
 | `native_anisotropic`<br>Anisotropic filtering | `-1` | `-1` No override, `0` Off, `1` 1x, `2` 2x, `3` 4x, `4` 8x, `5` 16x | Native renderer (renderer native or both): the anisotropic filtering it samples textures with, as the emulated GPU's anisotropic_override counts it: 0 off, 1 = 1x, 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x. -1 (the default) follows anisotropic_override where the emulated GPU runs (both), so the two pictures match, and keeps the game's own otherwise |
 | `native_max_height`<br>Resolution limit | `0` | `0` to `4320`; `0` None (the window's size), `720` 720p, `1080` 1080p, `1440` 1440p, `2160` 4K | Native renderer (renderer native or both): the most lines it draws: a window taller than this has its picture drawn this tall and scaled up to fill it, for 4K on a GPU that can't draw it at full size. 0 = the window's size |
+| `native_view_shadow_scale`<br>Shadow resolution | `1` | `1` 512 x 512 (the game's), `2` 1024 x 1024, `3` 1536 x 1536, `4` 2048 x 2048 | Draw the characters' self-shadow maps this many times the game's 512x512 in the native renderer and the native view (experimental): sharper shadow edges. 1 = the game's |
 
 ### Emulated GPU
 
@@ -92,13 +97,8 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `background_fps`<br>Background frame rate | `0` | `0` to `240` (fps); `0` The venue's own | The venue's frame rate under even/odd rendering: 0 = the venue's own (30 in most), whatever the game's refresh rate, or that many fps (at most the refresh rate). RB3 counts it as if the game ran at 60, so at a video_mode_refresh_rate of 120 a venue's 30 drew at 60 |
 | `disable_hair_shader`<br>Disable the hair shader | `false` | `true`, `false` | Don't use the hair shader variation on materials. Applies to materials loaded afterwards |
 | `disable_approximate_lights`<br>Disable approximate lighting | `true` | `true`, `false` | Disable approximate lighting; works around a graphical bug in current ReXGlue |
+| `force_self_shadow`<br>Self-shadows in every shot | `false` | `true`, `false` | Draw the band's self-shadows in every camera shot, also the ones that turn them off. Characters far from the camera and the crowd still draw without them. Some of those shots may show shadow artifacts the game avoided there. Applies from the next shot |
 | `compress_character_textures`<br>Compress character textures | `false` | `true`, `false` | Compress character textures. Needs the emulated GPU (renderer emulated or both): it's ignored with renderer native, where nothing composes the outfits to read back and they'd show black. Needs readback resolve, or the textures appear bugged. Applies to characters loaded afterwards |
-
-### More settings
-
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `debug_overlay` | `true` | `true`, `false` | Show band3's FPS counter: the game's frame rate (what frame_cap paces, and hit timing follows) and the window's, which the display's refresh rate holds back |
 
 ## Audio
 
@@ -257,7 +257,6 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
 | `disable_even_odd_rendering` | `false` | `true`, `false` | Process every render command each frame instead of alternating even/odd frames |
-| `force_self_shadow` | `false` | `true`, `false` | Draw the band's self-shadows in every camera shot, also the ones that turn them off. Characters far from the camera and the crowd still draw without them. Some of those shots may show shadow artifacts the game avoided there. Applies from the next shot |
 | `fullbright` | `false` | `true`, `false` | Force materials to not use an environ, making most things fullbright. Applies to materials loaded afterwards |
 
 ### Logging
@@ -296,9 +295,10 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `native_view_capture_profile` | `false` | `true`, `false` | Time each step of the native view's capture on the game's thread (geometry, textures, shade states, bones...) for the test harness's native_view stats, at a clock read per step; its hooks' totals are timed either way |
 | `native_view_inline_mips` | `true` | `true`, `false` | Make the mips of the textures RB3 draws into (the crowd's, in a song, several times a frame) in the native renderer's own command buffers, exactly as SDL's mipmap generation makes them, rather than in one more command buffer each: half the command buffers a frame and a little less of the GPU waiting for the CPU. Direct3D 12 only. Off has SDL make them, as before, to compare |
 | `native_view_normal_maps` | `true` | `true`, `false` | Shade RB3's normal maps and detail maps in the native view (experimental), live and in the test harness's captures; off shades those materials with the vertex normal, to compare |
+| `native_view_premake_arrays` | `true` | `true`, `false` | Make the GPU texture arrays the textures RB3 loads will go in as it loads them, a few between frames, rather than in the frame that first draws them: a song's first frame made 19 (about 12 ms). The picture is the same; off makes them as before, to compare |
+| `native_view_premake_targets` | `true` | `true`, `false` | Make the textures RB3 draws into (outfits, faces, the crowd) as it loads them, a few between frames, rather than in the frame that first draws them: a song's first camera cut to the band made 25 of them in one frame (about 25 ms). Those without depth share one depth texture per size. The picture is the same; off makes them as before, to compare |
 | `native_view_record_targets` | `false` | `true`, `false` | Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, for the native view (experimental), even while it's off: some are drawn once, in the main menu, and a later capture needs them. Costs a little game-thread time while characters load; turn it on at launch (--native_view_record_targets=true) |
 | `native_view_rt_fallback` | `guest` | `guest`, `none` | What the native view's capture keeps of a texture RB3 draws at runtime (outfits, the crowd, blurs): guest also decodes what guest memory holds, right only with --readback_resolve=full; none keeps only which texture and version it is, for the texture passes the capture records |
-| `native_view_shadow_scale` | `1` | `1` to `4` | Draw the characters' self-shadow maps this many times the game's 512x512 in the native renderer and the native view (experimental): sharper shadow edges. 1 = the game's |
 | `native_view_submit_points` | `1` | `0` to `1` | Where the native renderer hands a frame to the GPU in parts, so the GPU draws the first while the worker records the rest: 0 = only after each texture pass with mips (the crowd's, in a song); 1 = also once the world is recorded, so the GPU draws it while the worker records post-processing and the HUD (in a song its post frames waited about 0.3 ms less for the GPU; the picture is the same) |
 | `native_view_target_scale` | `true` | `true`, `false` | Draw the native renderer's passes that are pictures of the screen (the spotlights' haze, the soft particles' smoke) in proportion to its picture: 1.5 times the game's size at 1080p, 3 times at 4K. Off keeps the game's sizes, made for 1280x720, to compare |
 | `native_view_texture_filtering` | `true` | `true`, `false` | Sample textures in the native view (experimental) as the game's samplers do: filtered, between mip levels by distance, and clamped or wrapped as each says, live and in the test harness's captures; off reads every texture's nearest texel at full size, to compare |
@@ -319,6 +319,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `autoplay` | `false` | `true`, `false` | The game plays every part itself, from the next song start: for repeatable profiling runs and for checking a song without playing it |
 | `liveless_gateway` | *(empty)* | text | Where liveless_port_mapping sends PCP and NAT-PMP (host[:port], port 5351 by default) instead of the router, for testing against a stand-in. Empty asks the default gateway; under the test harness, empty skips PCP and NAT-PMP *Applies at the next start.* |
 | `liveless_upnp_url` | *(empty)* | text | The UPnP router description liveless_port_mapping uses (http://host:port/desc.xml) instead of looking for one on the network, for testing against a stand-in. Under the test harness, empty skips UPnP *Applies at the next start.* |
+| `music_video_test_pattern` | `false` | `true`, `false` | Draw a test pattern in place of the video venues' movie frames (their backgrounds): a white border, a grey ramp, a moving bar and four colour quadrants |
 | `stagekit_fake` | `false` | `true`, `false` | With stagekit_usb on: add a pretend USB Stage Kit that keeps the commands it's sent, for the harness's lights command |
 | `test_port` | `0` | `0` to `65535` | Take test harness commands on this local TCP port (0 = off), for tools/band3ctl.py. Connects the virtual instrument as player 1 *Applies at the next start.* |
 | `test_random_seed` | `0` | `0` to `2147483647` | Seed the game's random numbers with this instead of the clock (0 = off), so a fresh profile gets the same band on every launch, for render checks *Applies at the next start.* |

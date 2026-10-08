@@ -1,0 +1,49 @@
+# Plays a song in a music-video venue with music_video_test_pattern on, so
+# the venue's background movie shows band3's test pattern (src/Video/
+# movie_planes.h's TestPattern: a white border, a grey ramp, a moving bar,
+# red, green, blue and neutral quadrants) in place of its Bink frames.
+# Starts where boot.b3t leaves Rock Band 3 Deluxe (on a fresh profile). Launch
+# with both renderers, so each one's picture is taken:
+#   python tools/band3ctl.py launch --fresh -- --renderer=both
+#   python tools/band3ctl.py run tests/game/boot.b3t
+#   python tools/band3ctl.py run tests/game/music_video_pattern.b3t
+# Each draws the pattern full screen behind the band, under the venue's
+# colour filter; the log says the planes' sizes ("Music video test pattern").
+
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+set autoplay true
+set forced_venue video_02
+set music_video_test_pattern true
+# Play Now, Quickplay, Choose Songs
+press green
+sleep 1s
+press green
+sleep 1s
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+# past the 123 heading to 20th Century Boy
+press down
+press down
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+# Guitar, Expert
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+# past the venue's intro, a film leader counting down over the whole screen
+sleep 25s
+screenshot native music-video-pattern
+capture music-video-pattern-cap
+sleep 2s
+screenshot native music-video-pattern-later
+# the emulated GPU draws the game's frames too, for its own picture
+set emulated_gpu_while_native full
+sleep 2s
+screenshot emulated music-video-pattern-emulated

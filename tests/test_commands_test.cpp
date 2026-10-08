@@ -1687,6 +1687,8 @@ TEST_CASE("present_stats reports the window's paints, the native frames and the 
     game.present.shown = 1190;
     game.present.repeats = 10;
     game.present.skipped = 3;
+    // a repeat (0) and two steps of 1.5 paint intervals or more: judder
+    game.present.step_ms = {16.0, 16.0, 0.0, 32.0, 16.0, 24.0};
     game.present.latency_ms = {20.0, 30.0};
     game.present.publish_latency_ms = {8.0, 12.0, 10.0};
     game.present.game_frames = 1196;
@@ -1701,6 +1703,8 @@ TEST_CASE("present_stats reports the window's paints, the native frames and the 
     CHECK(Has(reply, "\"paint_ms\":{\"mean\":18.40,\"p50\":16.00,\"p95\":40.00,\"max\":40.00}"));
     CHECK(Has(reply, "\"hitches\":2,\"native\""));
     CHECK(Has(reply, "\"native\":{\"paints\":1200,\"shown\":1190,\"repeats\":10,\"skipped\":3"));
+    CHECK(Has(reply, "\"skipped\":3,\"step_ms\":{\"mean\":17.33,\"p50\":16.00,\"p95\":32.00,"
+                     "\"max\":32.00},\"judder\":3,\"latency_ms\""));
     CHECK(Has(reply, "\"latency_ms\":{\"mean\":25.00,\"p50\":20.00,\"p95\":30.00"));
     // the frames handed to the window and how long after the game's Present
     CHECK(Has(reply, "\"max\":30.00},\"published\":3,\"publish_latency_ms\":{\"mean\":10.00,"

@@ -146,6 +146,9 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.first_draw_max_ms = std::max(sum.first_draw_max_ms, g.first_draw_max_ms);
     sum.pre_first_draw_ms += g.pre_first_draw_ms;
     sum.submit_max_ms = std::max(sum.submit_max_ms, g.submit_max_ms);
+    sum.draw_slow += g.draw_slow;
+    sum.draw_slow_ms += g.draw_slow_ms;
+    sum.pre_draw_slow_ms += g.pre_draw_slow_ms;
     sum.uniform_slow += g.uniform_slow;
     sum.uniform_slow_ms += g.uniform_slow_ms;
     sum.pre_uniform_slow += g.pre_uniform_slow;
@@ -174,6 +177,13 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.targets_resized += g.targets_resized;
     sum.targets_returning += g.targets_returning;
     sum.targets_ms += g.targets_ms;
+    sum.premade_used += g.premade_used;
+    sum.targets_premade += g.targets_premade;
+    sum.premake_ms += g.premake_ms;
+    sum.arrays_premade += g.arrays_premade;
+    sum.arrays_premade_used += g.arrays_premade_used;
+    sum.premade_unused += g.premade_unused;
+    sum.shared_depths += g.shared_depths;
     sum.textures_first += g.textures_first;
     sum.meshes_first += g.meshes_first;
     sum.arrays_grown += g.arrays_grown;
@@ -250,11 +260,12 @@ std::string DescribePre(const GpuStats& gs) {
     std::snprintf(buf, sizeof(buf),
                   "; pre: plan %.1f (walk %.1f: %u targets made in %.1f ms, %u texture arrays "
                   "grown in %.1f ms, %.1f MB), upload %.1f, record %.1f (%.1f of it acquiring, "
-                  "%.1f first draws, %.1f in %u slow uniform pushes and binds), submit %.1f (%u "
-                  "command buffers), waiting for the GPU %.1f, evict %.1f ms",
+                  "%.1f first draws, %.1f later slow draws, %.1f in %u slow uniform pushes "
+                  "and binds), submit %.1f (%u command buffers), waiting for the GPU %.1f, "
+                  "evict %.1f ms",
                   gs.pre_plan_ms, gs.pre_walk_ms, gs.pre_targets_made, gs.pre_targets_ms,
                   gs.pre_arrays_grown, gs.pre_arrays_ms, gs.pre_arrays_mb, gs.pre_upload_ms,
-                  gs.pre_record_ms, gs.pre_acquire_ms, gs.pre_first_draw_ms,
+                  gs.pre_record_ms, gs.pre_acquire_ms, gs.pre_first_draw_ms, gs.pre_draw_slow_ms,
                   gs.pre_uniform_slow_ms, gs.pre_uniform_slow, gs.pre_submit_ms, gs.pre_submits,
                   gs.pre_wait_ms, gs.pre_evict_ms);
     return buf;
@@ -280,16 +291,25 @@ std::string DescribePlan(const GpuStats& gs, const CameraCuts::Step& cam) {
                       gs.arena_new_mb, gs.arena_copied, gs.meshes_pressured);
     char buf[720];
     std::snprintf(buf, sizeof(buf),
-                  "; plan: setup %.1f, walk %.1f (%u targets made in %.1f ms, %u returning, "
-                  "%u resized; %u textures and %u meshes drawn for the first time; %u texture "
-                  "arrays grown in %.1f ms, %.1f MB), arena %.1f%s, reserve %.1f (%s) ms; "
-                  "record's post plan %.1f ms",
+                  "; plan: setup %.1f, walk %.1f (%u targets made in %.1f ms, %u made ahead, "
+                  "%u returning, %u resized; %u textures and %u meshes drawn for the first "
+                  "time; %u texture arrays grown in %.1f ms, %.1f MB), arena %.1f%s, reserve "
+                  "%.1f (%s) ms; record's post plan %.1f ms",
                   gs.plan_setup_ms, gs.plan_walk_ms, gs.targets_made, gs.targets_ms,
-                  gs.targets_returning, gs.targets_resized, gs.textures_first, gs.meshes_first,
-                  gs.arrays_grown,
+                  gs.premade_used, gs.targets_returning, gs.targets_resized, gs.textures_first,
+                  gs.meshes_first, gs.arrays_grown,
                   gs.arrays_ms, gs.arrays_mb, gs.plan_arena_ms, arena, gs.plan_reserve_ms,
                   grew.c_str(), gs.post_plan_ms);
     std::string s = buf;
+    if (gs.targets_premade || gs.premade_unused || gs.arrays_premade || gs.arrays_premade_used) {
+        std::snprintf(buf, sizeof(buf),
+                      "; made ahead: %u targets and %u texture arrays since the frame before, "
+                      "in %.1f ms; %u arrays made ahead given their first texture; %u "
+                      "targets unused, %u shared depths",
+                      gs.targets_premade, gs.arrays_premade, gs.premake_ms,
+                      gs.arrays_premade_used, gs.premade_unused, gs.shared_depths);
+        s += buf;
+    }
     if (!cam.world_frame) {
         s += "; camera: none in its world";
     } else if (!cam.new_world) {
@@ -369,10 +389,9 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         "native renderer: slow frame %llu (game frame %llu, %s, proc_cmds %u%s): %.1f ms, "
         "%.1f of it waiting for the GPU; decode %.1f, pre %.1f (%u passes), plan %.1f, upload "
         "%.1f, record %.1f (%.1f of it acquiring %u command buffers, the slowest %.1f; %.1f in "
-        "their first draws, the slowest %.1f; %.1f in %u slow uniform pushes and binds), submit "
-        "%.1f (%u command buffers, the slowest %.1f), evict %.1f ms; %u draws (%u of the "
-        "world%s), %u "
-        "texture passes; "
+        "their first draws, the slowest %.1f; %.1f in %u later slow draws; %.1f in %u slow "
+        "uniform pushes and binds), submit %.1f (%u command buffers, the slowest %.1f), evict "
+        "%.1f ms; %u draws (%u of the world%s), %u texture passes; "
         "sent %u meshes into the pool and %u into the arena (%.2f MB), %u textures (%.2f MB), "
         "%u KB of bones; moved %u meshes to the arena%s; made %u pipelines, %u buffers, %u "
         "textures; let go of %u meshes, %u textures, %u targets' pictures after, and released "
@@ -385,7 +404,8 @@ std::string DescribeSlow(const FrameCapture& fc, const GpuStats& gs, uint64_t sk
         FrameKindName(kind), fc.proc_cmds, world, gs.ms, gs.wait_ms, gs.decode_ms, gs.pre_ms,
         gs.pre_passes,
         gs.plan_ms, gs.upload_ms, gs.record_ms, gs.acquire_ms, gs.acquires, gs.acquire_max_ms,
-        gs.first_draw_ms, gs.first_draw_max_ms, gs.uniform_slow_ms, gs.uniform_slow,
+        gs.first_draw_ms, gs.first_draw_max_ms, gs.draw_slow_ms, gs.draw_slow, gs.uniform_slow_ms,
+        gs.uniform_slow,
         gs.submit_ms, gs.submits, gs.submit_max_ms, gs.evict_ms, gs.draws,
         gs.world_draws, gs.shows_kept ? ", the kept post buffer shown" : "", gs.passes,
         gs.pool_meshes, gs.arena_sent, gs.mesh_bytes / 1048576.0, gs.textures_sent,
@@ -680,6 +700,7 @@ class Renderer {
     static constexpr std::chrono::milliseconds kPaintsStopped{250};
     // idle poll; captures, settings and users leaving wake it sooner
     static constexpr std::chrono::milliseconds kIdleWait{100};
+    static constexpr std::chrono::milliseconds kPremakeWait{2};
     // captures a presenting stretch waits through for a whole picture to
     // start with
     static constexpr uint32_t kStartWait = 8;
@@ -731,6 +752,8 @@ class Renderer {
         // reset per presenting stretch (pacer_generation)
         PublishPacer pacer;
         uint64_t pacer_generation = 0;
+        // PacePublishing's last answer, for the log; -1 none yet
+        int pace_logged = -1;
         // native_world_ahead's choice, measured per stretch and restore
         AheadChooser ahead_choice;
         uint64_t ahead_generation = 0, ahead_resumes = 0;
@@ -799,6 +822,8 @@ class Renderer {
                 o.gpu_labels = REXCVAR_GET(dred);
                 o.gpu_timestamps = REXCVAR_GET(native_gpu_timestamps);
                 o.inline_mips = REXCVAR_GET(native_view_inline_mips);
+                o.premake_targets = REXCVAR_GET(native_view_premake_targets);
+                o.premake_arrays = REXCVAR_GET(native_view_premake_arrays);
                 o.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
                 o.bc_textures = REXCVAR_GET(native_bc_textures);
                 // and k_8's (movie planes) as R8
@@ -823,6 +848,26 @@ class Renderer {
                 // not in menus: textures kept from them into a song kept the
                 // texture arrays from ever emptying
                 o.clock_keep = InSong();
+            }
+            // only where holding frames keeps two from one paint
+            // (frame_pacing.h's PacePublishing); logged as that changes
+            if (pace) {
+                const pacing::FrameCapMode mode = pacing::GetFrameCapStats().mode;
+                const double game_hz = pacing::GameHz(), display_hz = pacing::DisplayHz();
+                pace = pacing::PacePublishing(mode, game_hz, display_hz);
+                if (int(pace) != pace_logged) {
+                    pace_logged = int(pace);
+                    if (pace) {
+                        REXLOG_INFO("native present: pacing frames (game {:.2f} Hz, display "
+                                    "{:.2f} Hz)", game_hz, display_hz);
+                    } else {
+                        REXLOG_INFO("native present: not pacing frames, which would only add "
+                                    "lag (frame cap {} {:.2f} Hz, display {:.2f} Hz)",
+                                    pacing::FrameCapModeName(mode), game_hz, display_hz);
+                    }
+                    // what it measured before the stretch without it is stale
+                    pacer.Reset();
+                }
             }
             // a capture published after this is new (pacing wait, below)
             const uint64_t seen = CaptureEpoch();
@@ -900,7 +945,11 @@ class Renderer {
                 continue;
             }
             if (!work) {
-                epoch = WaitForCapture(epoch, kIdleWait);
+                // between frames: SDL's pools once, render targets and
+                // texture arrays ahead (GpuRenderer::Idle), soon again while
+                // some are left (a song's textures come 0.1 s before it)
+                const bool more = gpu && GpuRenderer::Get().Idle(o);
+                epoch = WaitForCapture(epoch, more ? kPremakeWait : kIdleWait);
                 continue;
             }
             // an output no paint may still be sampling

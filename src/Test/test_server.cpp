@@ -281,6 +281,8 @@ public:
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);
+        options.premake_targets = REXCVAR_GET(native_view_premake_targets);
+        options.premake_arrays = REXCVAR_GET(native_view_premake_arrays);
         options.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
         // as the native renderer's frames keep what they draw, so this one
         // doesn't let it go (gpu_view.h's residency)
@@ -383,6 +385,8 @@ public:
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);
+        options.premake_targets = REXCVAR_GET(native_view_premake_targets);
+        options.premake_arrays = REXCVAR_GET(native_view_premake_arrays);
         options.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
         options.clock_keep = render::InSong();  // as NativePicture's
         std::vector<uint32_t> rgba;
@@ -530,6 +534,7 @@ public:
         out.shown = paints.log.shown;
         out.repeats = paints.log.repeats;
         out.skipped = paints.log.skipped;
+        out.step_ms = std::move(paints.log.step_ms);
         out.latency_ms = std::move(paints.log.latency_ms);
         out.publish_latency_ms = std::move(paints.log.publish_latency_ms);
         const input::UiRoundTripStats trips = input::GetUiRoundTripStats(reset);
@@ -1033,6 +1038,7 @@ private:
                         {"pre_record", g.pre_record_ms},
                         {"pre_acquire", g.pre_acquire_ms},
                         {"pre_first_draw", g.pre_first_draw_ms},
+                        {"pre_draw_slow", g.pre_draw_slow_ms},
                         {"pre_uniform_slow", g.pre_uniform_slow_ms},
                         {"pre_submit", g.pre_submit_ms},
                         {"pre_wait", g.pre_wait_ms},
@@ -1040,6 +1046,7 @@ private:
                         {"plan_setup", g.plan_setup_ms},
                         {"plan_walk", g.plan_walk_ms},
                         {"plan_targets", g.targets_ms},
+                        {"premake", g.premake_ms},
                         {"plan_arrays", g.arrays_ms},
                         {"plan_arena", g.plan_arena_ms},
                         {"plan_reserve", g.plan_reserve_ms},
@@ -1047,6 +1054,7 @@ private:
                         {"record", g.record_ms},
                         {"acquire", g.acquire_ms},
                         {"first_draw", g.first_draw_ms},
+                        {"draw_slow", g.draw_slow_ms},
                         {"uniform_slow", g.uniform_slow_ms},
                         {"post_plan", g.post_plan_ms},
                         {"submit", g.submit_ms},
@@ -1080,6 +1088,7 @@ private:
                       {"submits", double(g.submits)},
                       {"acquires", double(g.acquires)},
                       {"uniform_slow", double(g.uniform_slow)},
+                      {"draw_slow", double(g.draw_slow)},
                       {"pool_meshes", double(g.pool_meshes)},
                       {"arena_moved", double(g.arena_moved)},
                       {"arena_sent", double(g.arena_sent)},
@@ -1096,6 +1105,12 @@ private:
                       {"targets_new", double(g.targets_new)},
                       {"targets_resized", double(g.targets_resized)},
                       {"targets_returning", double(g.targets_returning)},
+                      {"premade_used", double(g.premade_used)},
+                      {"targets_premade", double(g.targets_premade)},
+                      {"arrays_premade", double(g.arrays_premade)},
+                      {"arrays_premade_used", double(g.arrays_premade_used)},
+                      {"premade_unused", double(g.premade_unused)},
+                      {"shared_depths", double(g.shared_depths)},
                       {"textures_first", double(g.textures_first)},
                       {"meshes_first", double(g.meshes_first)},
                       {"arrays_grown", double(g.arrays_grown)},
