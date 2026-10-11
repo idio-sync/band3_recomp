@@ -109,11 +109,13 @@ add_executable(band3_tests
     pico_fleet_test.cpp
     kit_sender_test.cpp
     lights_view_test.cpp
+    heap_report_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp
     ${BAND3_ROOT}/src/Content/song_dta.cpp
     ${BAND3_ROOT}/src/Content/song_inventory.cpp
+    ${BAND3_ROOT}/src/Game/heap_report.cpp
     ${BAND3_ROOT}/src/Game/song_id.cpp
     ${BAND3_ROOT}/src/Input/gip_instruments.cpp
     ${BAND3_ROOT}/src/Input/hid_capture.cpp

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string>
 #include "src/Hooks/aspect.h"
+#include "src/Hooks/heap_report.h"
 #include "src/Hooks/song_pause.h"
 #include "src/Lights/lights.h"
 #include "src/Net/discord.h"
@@ -275,6 +276,8 @@ extern "C" REX_FUNC(Game____ct)
     // with music videos off, none for this song, even if they're turned on
     // during it
     if (!video) band3::video::SetMusicVideoSong("");
+    // before its venue loads
+    band3::heap_report::LogHeaps(ctx, base, "a song starting");
     __imp__Game____ct(ctx, base);
 }
 
@@ -289,6 +292,8 @@ extern "C" REX_FUNC(Game____dt)
     SendStagekit(0x00, 0xFF);
     band3::discord::SetMenus();
     g_reported_song = 0;
+    // its venue still loaded
+    band3::heap_report::LogHeaps(ctx, base, "a song ending");
     __imp__Game____dt(ctx, base);
 }
 
