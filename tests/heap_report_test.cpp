@@ -25,11 +25,11 @@ TEST_CASE("sizes in bytes, KB or MB") {
 
 TEST_CASE("each heap's free space, largest block and blocks") {
     const std::vector<HeapStats> heaps = {
-        {"main", 105000000, 2006388, 293916, 358},
+        {"main", 113000000, 2006388, 293916, 358},
         {"char", 32000000, 5242880, 4194304, 3},
     };
     CHECK(Describe(heaps) ==
-          "main 1.9 of 100.1 MB free (the largest block 287 KB, 358 blocks); "
+          "main 1.9 of 107.8 MB free (the largest block 287 KB, 358 blocks); "
           "char 5.0 of 30.5 MB free (the largest block 4.0 MB, 3 blocks)");
 }
 
@@ -42,9 +42,10 @@ TEST_CASE("a heap with a single block, or none") {
 }
 
 TEST_CASE("an allocation failure in the main heap, as in the crash it explains") {
-    // MemHeap::Alloc's figures from crash-20261008-210152-11400.dmp
-    CHECK(AllocFailure("main", 0xAB8A8, 342, 15, 293916, 2006388, 105000000) ==
-          "Out of memory: the game's main heap (100.1 MB) has no room for 686 KB: "
+    // MemHeap::Alloc's figures from crash-20261008-210152-11400.dmp, in Rock
+    // Band 3 Deluxe's main heap
+    CHECK(AllocFailure("main", 0xAB8A8, 342, 15, 293916, 2006388, 113000000) ==
+          "Out of memory: the game's main heap (107.8 MB) has no room for 686 KB: "
           "1.9 MB free in 358 blocks, the largest 287 KB. The game crashes next; "
           "a bigger main_heap_size (Advanced, Memory) gives it more room");
 }

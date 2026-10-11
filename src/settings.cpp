@@ -14,8 +14,9 @@ using rex::cvar::Lifecycle;
 
 // the game crashes on start if its heaps add up to more than this
 static constexpr int64_t kMaxHeapTotal = 0x40000000;
-// mem.dta's sizes, which a heap size of 0 keeps
-static constexpr int64_t kDefaultMainHeap = 105000000;
+// mem.dta's sizes, which a heap size of 0 keeps: Rock Band 3 Deluxe's main
+// heap, the bigger (the game as it shipped has 105000000)
+static constexpr int64_t kDefaultMainHeap = 113000000;
 static constexpr int64_t kDefaultCharHeap = 32000000;
 
 static bool ParseHeapSize(std::string_view v, int64_t& out) {
@@ -499,8 +500,8 @@ REXCVAR_DEFINE_BOOL(pico_discovery, true, "Band3/Lights",
 // Band3/Advanced/Memory
 
 REXCVAR_DEFINE_INT32(main_heap_size, 0, "Band3/Advanced/Memory",
-    "Main heap size in bytes, 0 = mem.dta's 105000000. Main and char together must stay "
-    "under 0x40000000")
+    "Main heap size in bytes, 0 = mem.dta's: 105000000, or 113000000 with Rock Band 3 "
+    "Deluxe. Main and char together must stay under 0x40000000")
     .range(0, kMaxHeapTotal)
     .validator([](std::string_view v) {
         int64_t size;

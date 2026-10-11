@@ -283,7 +283,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
 | `char_heap_size` | `0` | `0` to `1073741824` | Character heap size in bytes, 0 = mem.dta's 32000000. Main and char together must stay under 0x40000000 *Applies at the next start.* |
-| `main_heap_size` | `0` | `0` to `1073741824` | Main heap size in bytes, 0 = mem.dta's 105000000. Main and char together must stay under 0x40000000 *Applies at the next start.* |
+| `main_heap_size` | `0` | `0` to `1073741824` | Main heap size in bytes, 0 = mem.dta's: 105000000, or 113000000 with Rock Band 3 Deluxe. Main and char together must stay under 0x40000000 *Applies at the next start.* |
 
 ### Native renderer
 
