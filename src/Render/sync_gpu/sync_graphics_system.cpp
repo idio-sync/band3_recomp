@@ -443,7 +443,22 @@ X_STATUS Band3GraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext*) {
     REXLOG_INFO("sync gpu: presenting with the SDK's Direct3D 12 provider and presenter");
     return X_STATUS_SUCCESS;
 #elif BAND3_SYNC_PRESENT_VULKAN
-    // untested
+    // FIFO, as Direct3D 12's presenter syncs to the vertical blank. The SDK
+    // allows immediate and mailbox by default, and with them the presenter
+    // painted as fast as it could (577 paints a second on a Steam Deck, all
+    // but 60 repeats), tearing and taking GPU time from the native renderer.
+    // Not when the vertical blank free-runs to measure uncapped, nor over
+    // what a player set
+    if (!REXCVAR_GET(native_vblank_free_running)) {
+        for (const char* cvar :
+             {"vulkan_allow_present_mode_immediate", "vulkan_allow_present_mode_mailbox"}) {
+            if (rex::cvar::GetFlagSource(cvar) == rex::cvar::Source::kDefault &&
+                !rex::cvar::SetFlagByName(cvar, "false")) {
+                REXLOG_WARN("sync gpu: couldn't set {} false, so the presenter may not wait "
+                            "for the vertical blank", cvar);
+            }
+        }
+    }
     std::unique_ptr<rex::ui::vulkan::VulkanProvider> provider =
         rex::ui::vulkan::VulkanProvider::Create(/*with_gpu_emulation=*/false,
                                                 /*with_presentation=*/true);
