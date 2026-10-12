@@ -11,8 +11,8 @@ picture:
 
 | `renderer` | Launcher | |
 |---|---|---|
-| `native` | Native | band3's own renderer alone, at the window's size, under the SDK's overlays. There's no emulated GPU: band3's sync-only GPU answers what the game waits on ([below](#renderer-native-no-emulated-gpu)). The default on Windows |
-| `emulated` | Emulated | the emulated Xbox 360 GPU (the SDK's xenos plugin) alone. The default elsewhere: the native renderer builds on Linux, but hasn't been run there yet |
+| `native` | Native | band3's own renderer alone, at the window's size, under the SDK's overlays. There's no emulated GPU: band3's sync-only GPU answers what the game waits on ([below](#renderer-native-no-emulated-gpu)). The default on Windows, and on a Steam Deck (its [presets](settings.md#steam-deck)) |
+| `emulated` | Emulated | the emulated Xbox 360 GPU (the SDK's xenos plugin) alone. The default elsewhere: on Linux the native renderer has run on a Steam Deck (Vulkan, RADV), not yet on other drivers |
 | `both` | Native + emulated (debug) | the two side by side, the native picture shown; **F8** (`bind_renderer`) switches to the emulated GPU's picture and back. For comparing them (the checks below); it costs the GPU both |
 
 Whether the emulated GPU runs is decided as band3 starts, so a change to or from `native`
@@ -109,8 +109,8 @@ they measure it. Where the native renderer still differs, or hasn't been checked
   shows, after F8 back to emulated, what the emulated GPU last drew in it.
 - At 120 Hz (`video_mode_refresh_rate`) it shows about two in three of the game's frames in
   a song, where at 60 Hz it shows nearly all.
-- It has only run on Windows, on Direct3D 12. The Vulkan path for Linux is written but
-  untested, so Linux defaults to `emulated` and the launcher offers Native on Windows only.
+- On Linux it has run on a Steam Deck (Vulkan on RADV), where it's the default; other
+  Linux drivers are untested, so elsewhere on Linux the default stays `emulated`.
 
 | Setting | |
 |---|---|
@@ -419,7 +419,11 @@ identified.
 
 With `renderer` native band3 doesn't load the emulated GPU at all. On Windows it presents on
 the SDK's Direct3D 12 device, which the native renderer draws on, zero-copy; on Linux it
-presents through the SDK's Vulkan presenter, each frame uploaded (written, not yet run). The
+presents through the SDK's Vulkan presenter, each frame read back and uploaded: SDL_gpu and
+the SDK each make their own Vulkan device, so the presenter can't sample the native
+renderer's frames in place. With `native_upload_pipeline` (on) the next frame is recorded
+while the GPU draws and reads back the one before, and the presenter waits for the vertical
+blank (FIFO), as Direct3D 12's does. The
 game still sends its GPU commands and waits on what the GPU does with them, so band3's
 sync-only GPU (`src/Render/sync_gpu/`) reads them and does only what the game waits on: the
 fences, the swap's interrupt, the vertical blanks, the occlusion queries' results (which

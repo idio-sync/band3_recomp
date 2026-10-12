@@ -86,7 +86,7 @@ enum class Widget {
 struct Choice {
     std::string_view value;
     std::string_view label;
-    // offered on Windows only (renderer's native, until it has run on Linux)
+    // offered on Windows only
     bool windows_only = false;
 };
 

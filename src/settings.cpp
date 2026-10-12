@@ -142,7 +142,8 @@ REXCVAR_DEFINE_BOOL(show_launcher, true, "Band3/Game",
 // which of the groups apply.
 REXCVAR_DEFINE_STRING(renderer, band3::settings::kDefaultRenderer, "Band3/Graphics",
     "What draws the picture. native: band3's own renderer alone, no emulated Xbox 360 GPU "
-    "(the default on Windows). emulated: the emulated GPU alone (the default elsewhere). "
+    "(the default on Windows, and on a Steam Deck through its presets). emulated: the "
+    "emulated GPU alone (the default elsewhere). "
     "both, Native + emulated (debug): the two, F8 switching between their pictures. "
     "Native to or from the others applies at the next start. Band3/Graphics/Native applies "
     "to native and both; Band3/Graphics/Emulated and the emulated GPU's own (under GPU, "

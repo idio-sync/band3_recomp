@@ -928,7 +928,7 @@ TEST_CASE("the emulated GPU's own settings, chosen in a run without it, wait for
     CHECK_FALSE(tab.model->SectionNote(Tab::kGraphics, "Native renderer"));
 }
 
-TEST_CASE("renderer offers native on Windows only") {
+TEST_CASE("renderer offers native, emulated and both on Windows and Linux") {
     const Setting* row = FindSetting(SettingTable(), "renderer");
     REQUIRE(row);
     REQUIRE(row->choices.size() == 3);
@@ -939,7 +939,7 @@ TEST_CASE("renderer offers native on Windows only") {
     SettingsModel elsewhere(SettingTable(), f.env, f.store);
     for (const Choice& c : row->choices) {
         INFO(c.value);
-        CHECK(elsewhere.Offered(c) == (c.value != "native"));
+        CHECK(elsewhere.Offered(c));
     }
 }
 

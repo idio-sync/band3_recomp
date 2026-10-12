@@ -64,7 +64,7 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Configurable save, cache and song folders, including a portable install
 
 **Graphics**
-- A native renderer, the default on Windows: band3 draws each frame itself with the game's
+- A native renderer, the default on Windows and on a Steam Deck: band3 draws each frame itself with the game's
   own shaders and no emulated Xbox 360 GPU, checked pixel by pixel against the emulated GPU
   - Faster: uncapped in a song, 442 fps against 234 on the emulated GPU; at 60 Hz the GPU
     is 13% busy against 28%
@@ -72,9 +72,10 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
   - Fills ultrawide and 16:10 windows: the game draws at the window's shape, more of the
     venue to the sides or above and below, with the HUD and highways at their size in the
     middle and no black bars ([Filling the window](docs/native-renderer.md#filling-the-window))
-  - `renderer` picks `native`, `emulated` (the Linux default) or `both` (F8 switches
-    pictures); F9 opens its debug view
-  - Tested only on Windows (Direct3D 12) so far; the Vulkan path for Linux is untested
+  - `renderer` picks `native`, `emulated` (the default on Linux other than a Steam Deck) or
+    `both` (F8 switches pictures); F9 opens its debug view
+  - Played on Windows (Direct3D 12) and a Steam Deck (Vulkan, RADV); other Linux drivers are
+    untested
   - [Native renderer](docs/native-renderer.md) has the settings and what still differs
 
 **Development**

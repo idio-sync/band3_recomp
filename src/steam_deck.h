@@ -42,6 +42,11 @@ inline constexpr DeckDefault kPresets[] = {
     {"rnd_sync", "1"},
     // Steam's performance overlay does this job on a Deck
     {"debug_overlay", "false"},
+    // band3's own renderer rather than the emulated GPU, as on Windows: on a
+    // Deck at 720p the emulated GPU ran a song at 48 fps with the GPU 86%
+    // busy, the native renderer at 60. Linux's default is still emulated
+    // (renderer_default.h), as other Linux drivers haven't run it yet
+    {"renderer", "native"},
 };
 
 // the value steam_deck_defaults gives `cvar` on a Deck, if it's one of the

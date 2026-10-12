@@ -67,10 +67,9 @@ constexpr Choice kResolutions[] = {
 
 constexpr Choice kAspect[] = {{"true", "Letterbox"}, {"false", "Stretch"}};
 
-// renderer_mode.h's RendererLabel. Native is offered on Windows only until
-// its Vulkan path (sync_graphics_system.h) has run on Linux
+// renderer_mode.h's RendererLabel
 constexpr Choice kRenderers[] = {
-    {"native", "Native", true},
+    {"native", "Native"},
     {"emulated", "Emulated"},
     {"both", "Native + emulated (debug)"},
 };

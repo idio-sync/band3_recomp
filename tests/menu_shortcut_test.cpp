@@ -173,7 +173,8 @@ TEST_CASE("the Steam Deck presets win over band3_config.ini, even at the cvar's 
     const int applied = ApplyPresets(
         access, [&](const DeckDefault& d) { refused_names.emplace_back(d.cvar); });
 
-    CHECK(applied == 3);
+    // fullscreen, present_letterbox, frame_cap and renderer
+    CHECK(applied == 4);
     CHECK(refused_names == std::vector<std::string>{"debug_overlay"});
     // set although it had the value, so it counts as set
     CHECK(cvars["fullscreen"].value == "true");
@@ -198,5 +199,6 @@ TEST_CASE("the launcher reads the same presets ApplyDefaults sets") {
     CHECK(Preset("fullscreen") == "true");
     CHECK(Preset("frame_cap") == "60");
     CHECK(Preset("rnd_sync") == "1");
+    CHECK(Preset("renderer") == "native");
     CHECK_FALSE(Preset("lang"));
 }

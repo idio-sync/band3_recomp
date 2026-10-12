@@ -18,8 +18,8 @@ connected)" and stays chosen until you pick another, and **Other...** takes a ty
 or part of one.
 
 The Graphics tab's **Renderer** picks what draws the game's picture: **Native**, band3's own
-[native renderer](native-renderer.md) alone (the default on Windows, and offered there
-only), **Emulated**, the emulated Xbox 360 GPU alone (the default on Linux), or **Native +
+[native renderer](native-renderer.md) alone (the default on Windows and on a Steam Deck),
+**Emulated**, the emulated Xbox 360 GPU alone (the default on other Linux machines), or **Native +
 emulated (debug)**, both, F8 switching between their pictures in game. A change to or from
 Native applies when band3 starts, so Play restarts band3 for it. The tab shows only the
 sections the chosen renderer uses ([which settings apply](native-renderer.md#which-settings-apply)).
@@ -382,7 +382,8 @@ ARK, marked `(ARK)`, with the path its replacement needs.
 
 On a Steam Deck, band3 starts fullscreen and letterboxed (the game is 16:9, the screen
 16:10), at the console's 60 Hz (`frame_cap` 60) with vsync on and the FPS counter off, since Steam's performance overlay does
-that job. These only fill in settings that `band3.toml` and the command line leave unset,
+that job, and on the [native renderer](native-renderer.md) (`renderer` native), which holds
+60 fps in a song where the emulated GPU managed 48. These only fill in settings that `band3.toml` and the command line leave unset,
 but they win over `band3_config.ini`, whose window settings are for a desktop. Turn
 `steam_deck_defaults` off (the Steam Deck banner on the launcher or in the in-game settings, then restart) to go
 back to the ini's.
