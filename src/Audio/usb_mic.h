@@ -72,6 +72,15 @@ constexpr float kMaxMonitorGain = 4.0f;
 constexpr std::chrono::milliseconds kMaxMonitorQueued{30};
 constexpr size_t kMaxMonitorQueuedBytes = kSampleRate * 2 * kMaxMonitorQueued.count() / 1000;
 
+// What the game's mixer does to its mic effects' dry output on the way to the
+// speakers (after the SDK folds 5.1 to stereo), so band3's copy of the effects
+// (Audio/mic_fx.h) plays as loud: measured 2026-10-12 with a steady tone and
+// mic slot 1 at the default mic volume, the game's output (pitch correction
+// and reverb off) against band3's copy of the chain for the same input. The
+// game plays the mic a little to the left.
+constexpr float kMonitorGainLeft = 0.225f;
+constexpr float kMonitorGainRight = 0.145f;
+
 // what to play a mic at: the volume the game would play it back at
 // (MicXbox's volume and mute), while it plays it back at all
 float MonitorGain(bool playing, bool muted, float volume);

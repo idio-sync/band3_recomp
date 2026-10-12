@@ -163,11 +163,14 @@ has taken; the log reports the same steps (`USB mics: ...`).
 The game plays what you sing back about 80 ms late (it keeps its playback about 19 ms behind
 the microphone, behind its mixer and Windows' buffers). Turn on `usb_mic_monitor` (**Hear
 yourself sooner**, under Microphones) and band3 plays the microphones to the speakers itself,
-in roughly 30 ms, at the game's mic volume and only while the game would play them back, and
-keeps the game from playing them as well. The song, calibration and scoring don't change;
-the game's mic effects aren't heard. If the speakers won't open for it, the game plays the
-mic back as usual. It plays nothing under `audio_mute`. (Windows' "Listen to this device"
-does much the same; turn the game's mic volume down if you use that instead.)
+in roughly 30 ms, at the game's mic volume and only while the game would play them back.
+It plays them through its own copy of the game's mic EQ and compressor (src/Audio/mic_fx.h,
+with `sfx/mic_fx.milo`'s settings), and the game plays only what follows them, its reverb and
+the echo it adds while you deploy overdrive, which come late anyway. The song, calibration
+and scoring don't change. Not copied: the gentle pitch correction the game gives a single
+singer in Solo vocals. If the speakers won't open for any mic, the game plays the mics back
+as usual. It plays nothing under `audio_mute`. (Windows' "Listen to this device" does much
+the same, without the effects; turn the game's mic volume down if you use that instead.)
 
 ## Pro Keys and Pro Guitar
 

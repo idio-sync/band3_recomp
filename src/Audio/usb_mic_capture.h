@@ -34,6 +34,7 @@ size_t ReadUsbMic(int slot, std::span<uint8_t> out);
 // the speakers itself (silently under audio_mute). Off while the setting is, or if
 // the speakers wouldn't open; the game then plays the mic back as usual.
 bool UsbMicMonitored(int slot);
+bool AnyUsbMicMonitored();
 // what band3 hands the game for `slot`, to play as well
 void MonitorUsbMic(int slot, std::span<const uint8_t> pcm);
 // the volume to play `slot` at (usb_mic::MonitorGain), each game frame

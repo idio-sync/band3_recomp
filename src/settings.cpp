@@ -247,9 +247,10 @@ REXCVAR_DEFINE_STRING(usb_mic_devices, "", "Band3/Audio",
     .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(usb_mic_monitor, false, "Band3/Audio",
-    "band3 plays the microphones to the speakers itself, at the game's mic volume, instead of "
-    "the game playing them back: you hear yourself in roughly 30 ms instead of 80. The game's "
-    "mic effects aren't heard");
+    "band3 plays the microphones to the speakers itself, with the game's mic EQ and compressor "
+    "at its mic volume, and the game adds only its reverb and overdrive echo: you hear yourself "
+    "in roughly 30 ms instead of 80. The game's gentle pitch correction (Solo vocals) isn't "
+    "heard");
 
 // Band3/Controllers
 

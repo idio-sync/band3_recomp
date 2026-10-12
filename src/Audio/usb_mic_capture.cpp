@@ -15,6 +15,7 @@
 #include <SDL3/SDL_stdinc.h>
 #include <rex/audio/flags.h>
 #include <rex/logging.h>
+#include "mic_fx.h"
 #include "src/settings.h"
 #include "usb_mic.h"
 
@@ -29,6 +30,8 @@ constexpr std::chrono::milliseconds kScanInterval{2000};
 
 // what the game takes: MicXbox::GetSampleRate, mono, the console's byte order
 constexpr SDL_AudioSpec kGameSpec{SDL_AUDIO_S16BE, 1, kSampleRate};
+// what band3 plays a mic to the speakers as, after the game's mic effects
+constexpr SDL_AudioSpec kMonitorSpec{SDL_AUDIO_F32, 2, kSampleRate};
 
 struct Device {
     SDL_AudioDeviceID id;
@@ -46,10 +49,11 @@ struct MicSlot {
     std::string name;
     // logged that it isn't there or won't open, so each scan doesn't repeat it
     bool reported_missing = false;
-    // usb_mic_monitor: the slot played to the speakers, and at what volume
+    // usb_mic_monitor: the slot played to the speakers, the game's volume for
+    // it (0 while the game doesn't play it back), and its mic effects
     SDL_AudioStream* monitor = nullptr;
     float monitor_gain = 0.0f;
-    bool reported_monitor_failed = false;
+    mic_fx::Chain monitor_fx;
 };
 
 class Capture {
@@ -181,16 +185,33 @@ public:
         return slots_[slot].monitor != nullptr;
     }
 
+    bool AnyMonitored() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return std::ranges::any_of(slots_, [](const MicSlot& s) { return s.monitor != nullptr; });
+    }
+
     void Monitor(int slot, std::span<const uint8_t> pcm) {
         if (slot < 0 || slot >= kSlots || pcm.empty()) return;
         std::lock_guard<std::mutex> lock(mutex_);
         MicSlot& s = slots_[slot];
         // nothing to hear while the game doesn't play the mic back
         if (!s.monitor || s.monitor_gain <= 0.0f) return;
-        if (MonitorFallenBehind(static_cast<size_t>(SDL_GetAudioStreamQueued(s.monitor)))) {
-            SDL_ClearAudioStream(s.monitor);
+        // stereo floats queued, in mono 16-bit bytes as MonitorFallenBehind counts
+        const auto queued = static_cast<size_t>(SDL_GetAudioStreamQueued(s.monitor)) / 4;
+        if (MonitorFallenBehind(queued)) SDL_ClearAudioStream(s.monitor);
+        std::array<float, kMaxChunk / 2> samples;
+        const size_t count = std::min(pcm.size() / 2, samples.size());
+        for (size_t i = 0; i < count; i++) {
+            const auto bits = static_cast<uint16_t>(pcm[i * 2] << 8 | pcm[i * 2 + 1]);
+            samples[i] = static_cast<int16_t>(bits) / 32768.0f;
         }
-        SDL_PutAudioStreamData(s.monitor, pcm.data(), static_cast<int>(pcm.size()));
+        s.monitor_fx.Process(std::span(samples.data(), count), s.monitor_gain);
+        std::array<float, kMaxChunk> stereo;
+        for (size_t i = 0; i < count; i++) {
+            stereo[i * 2] = samples[i] * kMonitorGainLeft;
+            stereo[i * 2 + 1] = samples[i] * kMonitorGainRight;
+        }
+        SDL_PutAudioStreamData(s.monitor, stereo.data(), static_cast<int>(count * 2 * sizeof(float)));
     }
 
     void SetMonitorGain(int slot, float gain) {
@@ -198,10 +219,13 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         MicSlot& s = slots_[slot];
         if (!s.monitor || gain == s.monitor_gain) return;
-        // audio_mute silences band3's playback as it does the game's
-        SDL_SetAudioStreamGain(s.monitor, REXCVAR_GET(audio_mute) ? 0.0f : gain);
-        // what's left from before the game stopped playing the mic back
-        if (gain <= 0.0f) SDL_ClearAudioStream(s.monitor);
+        if (gain <= 0.0f) {
+            // what's left from before the game stopped playing the mic back
+            SDL_ClearAudioStream(s.monitor);
+        } else if (s.monitor_gain <= 0.0f) {
+            // the game starts playing it back, its effects fresh
+            s.monitor_fx.Reset();
+        }
         s.monitor_gain = gain;
     }
 
@@ -232,36 +256,41 @@ private:
         slot.monitor_gain = 0.0f;
     }
 
-    // opens a slot's monitoring while something feeds it and usb_mic_monitor is
-    // on, and closes it otherwise
+    // Opens monitoring for every slot something feeds while usb_mic_monitor is
+    // on, and closes it otherwise. All or none: the game's mics share one
+    // effects chain, whose dry signal band3 turns off while it plays them
+    // (Hooks/usb_mic.cpp), so a slot it couldn't play would go unheard.
     void UpdateMonitors() {
-        const bool wanted = REXCVAR_GET(usb_mic_monitor);
+        bool wanted = REXCVAR_GET(usb_mic_monitor) && !monitor_failed_;
+        if (!REXCVAR_GET(usb_mic_monitor)) monitor_failed_ = false;
+        for (int i = 0; i < kSlots && wanted; i++) {
+            MicSlot& slot = slots_[i];
+            const bool fed = tone_ ? i == 0 : slot.stream != nullptr;
+            if (!fed || slot.monitor) continue;
+            slot.monitor = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
+                                                     &kMonitorSpec, nullptr, nullptr);
+            if (!slot.monitor) {
+                REXLOG_WARN("USB mics: can't play mic slot {} to the speakers ({}); the game "
+                            "plays the mics back",
+                            i + 1, SDL_GetError());
+                monitor_failed_ = true;
+                wanted = false;
+                break;
+            }
+            // audio_mute silences band3's playback as it does the game's
+            SDL_SetAudioStreamGain(slot.monitor, REXCVAR_GET(audio_mute) ? 0.0f : 1.0f);
+            slot.monitor_gain = 0.0f;
+            slot.monitor_fx.Reset();
+            SDL_ResumeAudioStreamDevice(slot.monitor);
+            REXLOG_INFO("USB mics: band3 plays mic slot {} to the speakers", i + 1);
+        }
         for (int i = 0; i < kSlots; i++) {
             MicSlot& slot = slots_[i];
             const bool fed = tone_ ? i == 0 : slot.stream != nullptr;
-            if (!wanted || !fed) {
-                if (slot.monitor) {
-                    CloseMonitor(slot);
-                    REXLOG_INFO("USB mics: the game plays mic slot {} back again", i + 1);
-                }
-                slot.reported_monitor_failed = false;
-                continue;
+            if (slot.monitor && (!wanted || !fed)) {
+                CloseMonitor(slot);
+                REXLOG_INFO("USB mics: the game plays mic slot {} back again", i + 1);
             }
-            if (slot.monitor || slot.reported_monitor_failed) continue;
-            slot.monitor = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &kGameSpec,
-                                                     nullptr, nullptr);
-            if (!slot.monitor) {
-                REXLOG_WARN("USB mics: can't play mic slot {} to the speakers ({}); the game "
-                            "plays it back",
-                            i + 1, SDL_GetError());
-                slot.reported_monitor_failed = true;
-                continue;
-            }
-            // silent until the game plays the mic back (SetMonitorGain)
-            SDL_SetAudioStreamGain(slot.monitor, 0.0f);
-            slot.monitor_gain = 0.0f;
-            SDL_ResumeAudioStreamDevice(slot.monitor);
-            REXLOG_INFO("USB mics: band3 plays mic slot {} to the speakers", i + 1);
         }
     }
 
@@ -376,6 +405,9 @@ private:
     std::optional<ToneSource> tone_;
     int tone_hz_ = 0;
     std::vector<std::string> device_names_;
+    // a slot's monitoring wouldn't open, so none is until usb_mic_monitor is
+    // turned off and on
+    bool monitor_failed_ = false;
     // device stays empty here; Status fills it in
     std::array<UsbMicSlotStatus, kSlots> game_side_{};
 };
@@ -430,6 +462,8 @@ void NoteUsbMicGain(int slot, float ratio) {
 UsbMicStatus GetUsbMicStatus() { return GetCapture().Status(); }
 
 bool UsbMicMonitored(int slot) { return GetCapture().Monitored(slot); }
+
+bool AnyUsbMicMonitored() { return GetCapture().AnyMonitored(); }
 
 void MonitorUsbMic(int slot, std::span<const uint8_t> pcm) { GetCapture().Monitor(slot, pcm); }
 
