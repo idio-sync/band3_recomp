@@ -294,6 +294,8 @@ constexpr Setting kSettings[] = {
      .label = "Use PC microphones", .widget = kCheckbox},
     {.cvar = "usb_mic_devices", .tab = kAudio, .section = "Microphones", .label = "Mics",
      .widget = kMicSlots, .shown_when = kWithUsbMics},
+    {.cvar = "usb_mic_monitor", .tab = kAudio, .section = "Microphones",
+     .label = "Hear yourself sooner", .widget = kCheckbox, .shown_when = kWithUsbMics},
     {.cvar = "audio_maxqframes", .tab = kAudio, .section = "Output", .label = "Audio buffer",
      .widget = kIntStepper, .range = Range{4, 64, 1}, .unit = "frames"},
 

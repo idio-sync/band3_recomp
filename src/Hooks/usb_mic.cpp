@@ -2,6 +2,8 @@
 #include <rex/logging.h>
 #include <rex/types.h>
 #include <array>
+#include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -19,8 +21,13 @@
 // ExternalMic::dataReady does, at the gain the game asks for, as
 // ExternalMic::processGain does. Structures and calls are from rb3-xenon's
 // src/system/synth_xbox/ExternalMic.cpp and Mic.cpp.
+//
+// With usb_mic_monitor, band3 also plays each slot to the speakers itself
+// (Audio/usb_mic_capture.h), and MicXbox::Poll is kept from playing it back.
 
 extern "C" void __imp__ExternalMicThreadEntry(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__MicXbox__AddData(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__MicXbox__Poll(PPCContext& ctx, uint8_t* base);
 REX_EXTERN(ExternalMicClientMgr__GetMasterForIndex);
 REX_EXTERN(ExternalMicClientProxy__OnMicConnected);
 REX_EXTERN(ExternalMicClientMgr__AddAudio);
@@ -51,6 +58,27 @@ constexpr uint32_t kCallFrames = 0x2000;
 
 // the game reads its mics once a frame; this keeps them topped up between
 constexpr auto kPollInterval = 5ms;
+// sooner while band3 plays the slot to the speakers, where it's heard
+constexpr auto kMonitorPollInterval = 1ms;
+
+// MicXbox (rb3-xenon's synth_xbox/Mic.h, checked against MicXbox::Poll at
+// 0x82B5EA28): the voice it plays the mic back through, its volume (a ratio)
+// and mute
+constexpr uint32_t kMicXbox_PlaybackVoice = 0x18;
+constexpr uint32_t kMicXbox_Volume = 0x9064;
+constexpr uint32_t kMicXbox_Mute = 0x9068;
+
+// the MicXbox each slot's audio goes to, learnt as Feed hands it over
+std::array<std::atomic<uint32_t>, kSlots> g_slot_mic{};
+// the slot this thread is feeding, while it calls AddAudio
+thread_local int t_feeding_slot = -1;
+
+int SlotForMic(uint32_t mic) {
+    for (int i = 0; i < kSlots; i++) {
+        if (g_slot_mic[i].load(std::memory_order_relaxed) == mic) return i;
+    }
+    return -1;
+}
 
 PPCContext CallContext(const PPCContext& ctx) {
     PPCContext call{};
@@ -103,12 +131,15 @@ void Feed(PPCContext& ctx, uint8_t* base, uint32_t dev, int slot, float ratio) {
         const size_t length = ReadUsbMic(slot, pcm);
         if (length == 0) return;
         ApplyGain(std::span(pcm).first(length), ratio);
+        MonitorUsbMic(slot, std::span(pcm).first(length));
         std::memcpy(REX_RAW_ADDR(buffer), pcm.data(), length);
         PPCContext call = CallContext(ctx);
         call.r3.u64 = dev;
         call.r4.u64 = buffer;
         call.r5.u64 = length;
+        t_feeding_slot = slot;
         ExternalMicClientMgr__AddAudio(call, base);
+        t_feeding_slot = -1;
         NoteUsbMicFed(slot, length);
         if (length < pcm.size()) return;
     }
@@ -181,7 +212,7 @@ extern "C" REX_FUNC(ExternalMicThreadEntry)
         case Action::kWait:
             break;
         }
-        std::this_thread::sleep_for(kPollInterval);
+        std::this_thread::sleep_for(UsbMicMonitored(slot) ? kMonitorPollInterval : kPollInterval);
     }
 
     if (state.connected()) {
@@ -190,4 +221,36 @@ extern "C" REX_FUNC(ExternalMicThreadEntry)
         NoteUsbMicDisconnect(slot);
     }
     ctx.r3.u64 = 0;
+}
+
+// MicXbox::AddData(this, data, length), which ExternalMicClientMgr::AddAudio
+// calls for the slot's MicXbox: notes which MicXbox that is
+extern "C" REX_FUNC(MicXbox__AddData)
+{
+    if (t_feeding_slot >= 0) {
+        g_slot_mic[t_feeding_slot].store(ctx.r3.u32, std::memory_order_relaxed);
+    }
+    __imp__MicXbox__AddData(ctx, base);
+}
+
+// MicXbox::Poll(this), once a game frame, which sets the playback voice's
+// volume from the mic's volume and mute. While band3 plays the slot itself, the
+// mic is muted for the call, so the game's playback stays silent, and band3
+// plays at the volume the game would have.
+extern "C" REX_FUNC(MicXbox__Poll)
+{
+    const uint32_t mic = ctx.r3.u32;
+    const int slot = SlotForMic(mic);
+    if (slot < 0 || !UsbMicMonitored(slot)) {
+        __imp__MicXbox__Poll(ctx, base);
+        return;
+    }
+    const uint8_t muted = REX_LOAD_U8(mic + kMicXbox_Mute);
+    const float volume = std::bit_cast<float>(REX_LOAD_U32(mic + kMicXbox_Volume));
+    const bool playing = REX_LOAD_U32(mic + kMicXbox_PlaybackVoice) != 0;
+    // the game sets and reads the mute on this thread too
+    REX_STORE_U8(mic + kMicXbox_Mute, 1);
+    __imp__MicXbox__Poll(ctx, base);
+    REX_STORE_U8(mic + kMicXbox_Mute, muted);
+    SetUsbMicMonitorGain(slot, MonitorGain(playing, muted != 0, volume));
 }

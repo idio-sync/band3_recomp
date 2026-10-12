@@ -13,6 +13,7 @@
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_stdinc.h>
+#include <rex/audio/flags.h>
 #include <rex/logging.h>
 #include "src/settings.h"
 #include "usb_mic.h"
@@ -45,6 +46,10 @@ struct MicSlot {
     std::string name;
     // logged that it isn't there or won't open, so each scan doesn't repeat it
     bool reported_missing = false;
+    // usb_mic_monitor: the slot played to the speakers, and at what volume
+    SDL_AudioStream* monitor = nullptr;
+    float monitor_gain = 0.0f;
+    bool reported_monitor_failed = false;
 };
 
 class Capture {
@@ -57,14 +62,23 @@ public:
             tone_hz_ = tone;
             running_ = true;
             REXLOG_INFO("USB mics: singing a {} Hz test tone into mic slot 1", tone);
-            return true;
         }
 
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+            if (tone > 0) {
+                // the tone needs no recording; only monitoring goes
+                REXLOG_WARN("USB mics: can't play mics to the speakers ({})", SDL_GetError());
+                return true;
+            }
             REXLOG_WARN("USB mics: audio recording isn't available ({})", SDL_GetError());
             return false;
         }
         sdl_audio_ = true;
+        if (tone > 0) {
+            // the watcher only opens and closes monitoring
+            watcher_ = std::thread([this] { WatchLoop(); });
+            return true;
+        }
 
         auto names = ParseDeviceList(REXCVAR_GET(usb_mic_devices));
         if (names.size() > static_cast<size_t>(kSingers)) {
@@ -97,7 +111,10 @@ public:
             std::lock_guard<std::mutex> lock(mutex_);
             running_ = false;
             tone_.reset();
-            for (auto& slot : slots_) Close(slot);
+            for (auto& slot : slots_) {
+                Close(slot);
+                CloseMonitor(slot);
+            }
         }
         if (sdl_audio_) SDL_QuitSubSystem(SDL_INIT_AUDIO);
         sdl_audio_ = false;
@@ -137,6 +154,8 @@ public:
             } else if (slots_[i].stream) {
                 status.slots[i].device = slots_[i].name;
             }
+            status.slots[i].monitored = slots_[i].monitor != nullptr;
+            status.slots[i].monitor_gain = slots_[i].monitor_gain;
         }
         return status;
     }
@@ -154,6 +173,36 @@ public:
         DropBacklog(stream);
         const int got = SDL_GetAudioStreamData(stream, out.data(), static_cast<int>(out.size()));
         return got > 0 ? static_cast<size_t>(got) : 0;
+    }
+
+    bool Monitored(int slot) {
+        if (slot < 0 || slot >= kSlots) return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        return slots_[slot].monitor != nullptr;
+    }
+
+    void Monitor(int slot, std::span<const uint8_t> pcm) {
+        if (slot < 0 || slot >= kSlots || pcm.empty()) return;
+        std::lock_guard<std::mutex> lock(mutex_);
+        MicSlot& s = slots_[slot];
+        // nothing to hear while the game doesn't play the mic back
+        if (!s.monitor || s.monitor_gain <= 0.0f) return;
+        if (MonitorFallenBehind(static_cast<size_t>(SDL_GetAudioStreamQueued(s.monitor)))) {
+            SDL_ClearAudioStream(s.monitor);
+        }
+        SDL_PutAudioStreamData(s.monitor, pcm.data(), static_cast<int>(pcm.size()));
+    }
+
+    void SetMonitorGain(int slot, float gain) {
+        if (slot < 0 || slot >= kSlots) return;
+        std::lock_guard<std::mutex> lock(mutex_);
+        MicSlot& s = slots_[slot];
+        if (!s.monitor || gain == s.monitor_gain) return;
+        // audio_mute silences band3's playback as it does the game's
+        SDL_SetAudioStreamGain(s.monitor, REXCVAR_GET(audio_mute) ? 0.0f : gain);
+        // what's left from before the game stopped playing the mic back
+        if (gain <= 0.0f) SDL_ClearAudioStream(s.monitor);
+        s.monitor_gain = gain;
     }
 
 private:
@@ -175,6 +224,45 @@ private:
         if (slot.stream) SDL_DestroyAudioStream(slot.stream);
         slot.stream = nullptr;
         slot.device = 0;
+    }
+
+    static void CloseMonitor(MicSlot& slot) {
+        if (slot.monitor) SDL_DestroyAudioStream(slot.monitor);
+        slot.monitor = nullptr;
+        slot.monitor_gain = 0.0f;
+    }
+
+    // opens a slot's monitoring while something feeds it and usb_mic_monitor is
+    // on, and closes it otherwise
+    void UpdateMonitors() {
+        const bool wanted = REXCVAR_GET(usb_mic_monitor);
+        for (int i = 0; i < kSlots; i++) {
+            MicSlot& slot = slots_[i];
+            const bool fed = tone_ ? i == 0 : slot.stream != nullptr;
+            if (!wanted || !fed) {
+                if (slot.monitor) {
+                    CloseMonitor(slot);
+                    REXLOG_INFO("USB mics: the game plays mic slot {} back again", i + 1);
+                }
+                slot.reported_monitor_failed = false;
+                continue;
+            }
+            if (slot.monitor || slot.reported_monitor_failed) continue;
+            slot.monitor = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &kGameSpec,
+                                                     nullptr, nullptr);
+            if (!slot.monitor) {
+                REXLOG_WARN("USB mics: can't play mic slot {} to the speakers ({}); the game "
+                            "plays it back",
+                            i + 1, SDL_GetError());
+                slot.reported_monitor_failed = true;
+                continue;
+            }
+            // silent until the game plays the mic back (SetMonitorGain)
+            SDL_SetAudioStreamGain(slot.monitor, 0.0f);
+            slot.monitor_gain = 0.0f;
+            SDL_ResumeAudioStreamDevice(slot.monitor);
+            REXLOG_INFO("USB mics: band3 plays mic slot {} to the speakers", i + 1);
+        }
     }
 
     void WatchLoop() {
@@ -206,6 +294,12 @@ private:
         std::lock_guard<std::mutex> lock(mutex_);
         device_names_.clear();
         for (const auto& d : devices) device_names_.push_back(d.name);
+        ScanMics(devices);
+        UpdateMonitors();
+    }
+
+    void ScanMics(const std::vector<Device>& devices) {
+        if (tone_) return;
         for (int i = 0; i < kSlots; i++) {
             MicSlot& slot = slots_[i];
             if (slot.stream) {
@@ -334,5 +428,11 @@ void NoteUsbMicGain(int slot, float ratio) {
 }
 
 UsbMicStatus GetUsbMicStatus() { return GetCapture().Status(); }
+
+bool UsbMicMonitored(int slot) { return GetCapture().Monitored(slot); }
+
+void MonitorUsbMic(int slot, std::span<const uint8_t> pcm) { GetCapture().Monitor(slot, pcm); }
+
+void SetUsbMicMonitorGain(int slot, float gain) { GetCapture().SetMonitorGain(slot, gain); }
 
 }

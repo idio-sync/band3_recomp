@@ -107,6 +107,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 |---|---|---|---|
 | `usb_mics`<br>Use PC microphones | `false` | `true`, `false` | Experimental: sing through microphones on this PC, as Xbox 360 USB microphones *Applies at the next start.* |
 | `usb_mic_devices`<br>Mics | *(empty)* | text | Microphones to sing through, or part of their names, comma separated, one per mic slot (up to 3). Empty uses the system's default recording device *Applies at the next start.* |
+| `usb_mic_monitor`<br>Hear yourself sooner | `false` | `true`, `false` | band3 plays the microphones to the speakers itself, at the game's mic volume, instead of the game playing them back: you hear yourself in roughly 30 ms instead of 80. The game's mic effects aren't heard |
 
 ### Output
 

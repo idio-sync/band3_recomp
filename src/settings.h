@@ -57,6 +57,7 @@ REXCVAR_DECLARE(bool, native_fill_window);
 // Band3/Audio
 REXCVAR_DECLARE(bool, usb_mics);
 REXCVAR_DECLARE(std::string, usb_mic_devices);
+REXCVAR_DECLARE(bool, usb_mic_monitor);
 
 // Band3/Controllers
 REXCVAR_DECLARE(int32_t, controller_type);

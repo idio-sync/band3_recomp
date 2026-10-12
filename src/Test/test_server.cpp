@@ -184,7 +184,8 @@ public:
         GameStateSnapshot state = GameState::Get().Snapshot();
         if (audio::UsbMicsRunning()) {
             for (const audio::UsbMicSlotStatus& slot : audio::GetUsbMicStatus().slots) {
-                state.mics.push_back({slot.device, slot.connected, slot.bytes_fed});
+                state.mics.push_back({slot.device, slot.connected, slot.bytes_fed, slot.monitored,
+                                      slot.monitor_gain});
             }
         }
         state.rooms_state = rooms::StateName(rooms::GetStatus().state);

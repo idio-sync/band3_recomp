@@ -25,6 +25,9 @@ struct MicSlot {
     bool connected = false;
     // audio handed to the game
     uint64_t bytes_fed = 0;
+    // band3 plays it to the speakers itself (usb_mic_monitor), at this volume
+    bool monitored = false;
+    float monitor_gain = 0.0f;
 };
 
 struct GameStateSnapshot {

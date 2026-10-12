@@ -125,7 +125,13 @@ std::string StateJson(const GameStateSnapshot& s, TestTarget& target) {
             AppendJsonString(out, mic.device);
             out += ",\"connected\":";
             out += mic.connected ? "true" : "false";
-            out += ",\"fed\":" + std::to_string(mic.bytes_fed) + "}";
+            out += ",\"fed\":" + std::to_string(mic.bytes_fed);
+            if (mic.monitored) {
+                char gain[32];
+                std::snprintf(gain, sizeof gain, ",\"monitor\":%.2f", mic.monitor_gain);
+                out += gain;
+            }
+            out += '}';
         }
         out += ']';
     }

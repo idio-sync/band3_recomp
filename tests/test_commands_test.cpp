@@ -325,6 +325,17 @@ TEST_CASE("state reports the score and the USB mic slots") {
                      "{\"device\":\"\",\"connected\":false,\"fed\":0},"));
 }
 
+TEST_CASE("state gives the volume band3 plays a monitored mic at") {
+    FakeGame game;
+    game.state.mics = {{"Yeti", true, 9000, true, 0.5f}, {"Blue", true, 0, true, 0.0f}, {}, {}};
+    const std::string reply = RunCommand("state", game);
+    CHECK(Has(reply, "{\"device\":\"Yeti\",\"connected\":true,\"fed\":9000,\"monitor\":0.50}"));
+    // monitored but not playing back (menus)
+    CHECK(Has(reply, "{\"device\":\"Blue\",\"connected\":true,\"fed\":0,\"monitor\":0.00}"));
+    // unmonitored slots say nothing
+    CHECK(Has(reply, "{\"device\":\"\",\"connected\":false,\"fed\":0}"));
+}
+
 TEST_CASE("press pulses every joined input for the time asked, then waits for the release") {
     FakeGame game;
     CHECK(Ok(RunCommand("press green+red+strum_down 200", game)));

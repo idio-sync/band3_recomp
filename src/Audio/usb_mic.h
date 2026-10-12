@@ -59,6 +59,26 @@ float GainRatio(float gain);
 // scales big-endian samples by `ratio`, clipping at full scale
 void ApplyGain(std::span<uint8_t> pcm, float ratio);
 
+// Monitoring (usb_mic_monitor): band3 plays each mic to the speakers itself,
+// soon after it's recorded, and keeps the game from playing it back. The game
+// holds its playback of a mic 1800 bytes (19 ms) behind the newest audio
+// (MicXbox::Poll), behind the mixer's queue and its playback buffer; this skips
+// all three.
+//
+// Voice::SetVolume's highest volume
+constexpr float kMaxMonitorGain = 4.0f;
+// the most audio left waiting to be played; more and the speakers' clock has
+// fallen behind the microphone's, so the backlog is dropped
+constexpr std::chrono::milliseconds kMaxMonitorQueued{30};
+constexpr size_t kMaxMonitorQueuedBytes = kSampleRate * 2 * kMaxMonitorQueued.count() / 1000;
+
+// what to play a mic at: the volume the game would play it back at
+// (MicXbox's volume and mute), while it plays it back at all
+float MonitorGain(bool playing, bool muted, float volume);
+
+// whether `queued` bytes waiting to be played means starting over
+bool MonitorFallenBehind(size_t queued);
+
 // usb_mic_devices: names, or parts of names, comma separated, in slot order.
 // Blank entries are kept, so ",Yeti" leaves slot 1 empty.
 std::vector<std::string> ParseDeviceList(std::string_view list);

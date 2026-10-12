@@ -37,6 +37,13 @@ void ApplyGain(std::span<uint8_t> pcm, float ratio) {
     }
 }
 
+float MonitorGain(bool playing, bool muted, float volume) {
+    if (!playing || muted) return 0.0f;
+    return std::clamp(volume, 0.0f, kMaxMonitorGain);
+}
+
+bool MonitorFallenBehind(size_t queued) { return queued > kMaxMonitorQueuedBytes; }
+
 std::vector<std::string> ParseDeviceList(std::string_view list) {
     std::vector<std::string> names;
     if (Trim(list).empty()) return names;

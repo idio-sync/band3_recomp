@@ -160,6 +160,15 @@ tone, which the vocal track's pitch arrow holds. The Instrument Lab's **Micropho
 shows what records each slot, whether the game has connected it and how much audio it
 has taken; the log reports the same steps (`USB mics: ...`).
 
+The game plays what you sing back about 80 ms late (it keeps its playback about 19 ms behind
+the microphone, behind its mixer and Windows' buffers). Turn on `usb_mic_monitor` (**Hear
+yourself sooner**, under Microphones) and band3 plays the microphones to the speakers itself,
+in roughly 30 ms, at the game's mic volume and only while the game would play them back, and
+keeps the game from playing them as well. The song, calibration and scoring don't change;
+the game's mic effects aren't heard. If the speakers won't open for it, the game plays the
+mic back as usual. It plays nothing under `audio_mute`. (Windows' "Listen to this device"
+does much the same; turn the game's mic volume down if you use that instead.)
+
 ## Pro Keys and Pro Guitar
 
 RB3 reads a keytar's keys and a pro guitar's frets and strings through an Xbox 360 system

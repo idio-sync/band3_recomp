@@ -188,3 +188,21 @@ TEST_CASE("gain scales big-endian samples and clips at full scale") {
         CHECK(SampleAt(buf, 2) == 200);
     }
 }
+
+TEST_CASE("monitoring plays a mic at the game's playback volume while the game plays it back") {
+    CHECK(MonitorGain(true, false, 0.8f) == doctest::Approx(0.8f));
+    // nothing while the game isn't playing the mic back (menus), or mutes it
+    CHECK(MonitorGain(false, false, 0.8f) == 0.0f);
+    CHECK(MonitorGain(true, true, 0.8f) == 0.0f);
+    // Voice::SetVolume's range
+    CHECK(MonitorGain(true, false, 9.0f) == doctest::Approx(kMaxMonitorGain));
+    CHECK(MonitorGain(true, false, -1.0f) == 0.0f);
+}
+
+TEST_CASE("monitoring starts over rather than fall behind the singer") {
+    CHECK_FALSE(MonitorFallenBehind(0));
+    CHECK_FALSE(MonitorFallenBehind(kMaxMonitorQueuedBytes));
+    CHECK(MonitorFallenBehind(kMaxMonitorQueuedBytes + 2));
+    // a few ms of queue is normal between the microphone's and speakers' clocks
+    CHECK_FALSE(MonitorFallenBehind(kTenMsBytes));
+}
