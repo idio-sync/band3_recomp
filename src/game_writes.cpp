@@ -331,7 +331,22 @@ public:
         return true;
     }
 
-    fs::Entry* ResolvePath(std::string_view path) override { return root_->ResolvePath(path); }
+    // without its "." folders: RB3 makes its file root "." a path as "game:.\",
+    // as when Rock Band 3 Deluxe's file_list looks for its saved themes
+    fs::Entry* ResolvePath(std::string_view path) override {
+        std::string resolved;
+        size_t start = 0;
+        while (start <= path.size()) {
+            const size_t end = std::min(path.find_first_of("\\/", start), path.size());
+            const std::string_view part = path.substr(start, end - start);
+            if (!part.empty() && part != ".") {
+                if (!resolved.empty()) resolved += '\\';
+                resolved += part;
+            }
+            start = end + 1;
+        }
+        return root_->ResolvePath(resolved);
+    }
 
     void Dump(rex::string::StringBuffer* string_buffer) override {
         auto global_lock = global_critical_region_.Acquire();
