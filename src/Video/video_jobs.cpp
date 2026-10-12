@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <condition_variable>
 #include <deque>
 #include <fstream>
@@ -19,6 +20,7 @@
 #include "src/Video/sync_cache.h"
 #include "src/Video/video_decoder.h"
 #include "src/Video/video_files.h"
+#include "src/config.h"
 #include "src/settings.h"
 
 namespace band3::video {
@@ -54,9 +56,10 @@ Jobs& TheJobs() {
     return *jobs;
 }
 
+// before the runtime's built too (the launcher)
 fs::path StatusPath() {
-    auto* runtime = rex::Runtime::instance();
-    return runtime ? runtime->user_data_root() / kStatusFile : fs::path();
+    const fs::path root = UserDataRoot();
+    return root.empty() ? fs::path() : root / kStatusFile;
 }
 
 // the mutex held
@@ -88,10 +91,37 @@ void Save(const std::string& text) {
     if (ec) REXLOG_WARN("Music videos: couldn't write {}: {}", rex::path_to_utf8(path), ec.message());
 }
 
+// whether the yt-dlp at a path takes --js-runtimes, asked once per path
+std::mutex g_js_mutex;
+std::optional<std::pair<std::string, bool>> g_js_support;
+
+// yt-dlp as the settings have it, with the player's options, and told to use
+// whichever JavaScript runtime there is where it can be (ytdlp.h). Not on a
+// thread that mustn't wait: the first call per path asks yt-dlp.
 YtDlp MakeYtDlp() {
     const std::string path = REXCVAR_GET(music_video_ytdlp_path);
-    return YtDlp(path.empty() ? fs::path() : rex::to_path(path),
-                 SplitArgs(REXCVAR_GET(music_video_ytdlp_args)));
+    const fs::path exe = path.empty() ? fs::path() : rex::to_path(path);
+    std::vector<std::string> extra = SplitArgs(REXCVAR_GET(music_video_ytdlp_args));
+    std::optional<bool> supported;
+    {
+        std::lock_guard lock(g_js_mutex);
+        if (g_js_support && g_js_support->first == path) supported = g_js_support->second;
+    }
+    if (!supported) {
+        supported = YtDlp(exe, {}).Supports("--js-runtimes");
+        std::lock_guard lock(g_js_mutex);
+        g_js_support = {path, *supported};
+    }
+    if (*supported) {
+        std::vector<std::string> js = JsRuntimeArgs();
+        extra.insert(extra.begin(), js.begin(), js.end());
+    }
+    return YtDlp(exe, std::move(extra));
+}
+
+bool JsRuntimeFound() {
+    const char* path = std::getenv("PATH");
+    return path && JsRuntimeOnPath(path);
 }
 
 // the song's sound: one taken as it played beside its video, else its package's
@@ -324,10 +354,12 @@ YtDlpState YtDlpNow(bool again) {
         std::thread([&j] {
             std::string error;
             const std::optional<std::string> version = MakeYtDlp().Version(error);
+            const bool js = JsRuntimeFound();
             std::lock_guard lock(j.mutex);
             j.ytdlp.checking = false;
             j.ytdlp.version = version.value_or("");
             j.ytdlp.problem = version ? "" : error;
+            j.ytdlp.js_runtime = js;
         }).detach();
     }
     return j.ytdlp;

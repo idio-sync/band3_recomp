@@ -48,13 +48,25 @@ std::vector<std::string> InfoArgs(std::string_view url);
 // out_stem.<ext>
 std::vector<std::string> AudioArgs(std::string_view url, const std::filesystem::path& out_stem);
 // its best picture up to the format's height (60 fps first if asked, H.264
-// first as the lightest to decode), saved as out_stem.<ext>
+// first as the lightest to decode), saved as out_stem.<ext>; with
+// `whole_file`, its best single file of picture and sound together, for when
+// the picture alone is refused (YouTube's 403 now and then)
 std::vector<std::string> VideoArgs(std::string_view url, const std::filesystem::path& out_stem,
-                                   const VideoFormat& format);
+                                   const VideoFormat& format, bool whole_file = false);
 
 // the player's extra flags (music_video_ytdlp_args), split at spaces, "quoted"
 // parts kept whole
 std::vector<std::string> SplitArgs(std::string_view text);
+
+// YouTube needs yt-dlp to run its player's JavaScript, which it does with a
+// JavaScript runtime it finds (Deno, Node.js, Bun or QuickJS); without one,
+// some videos' sound and pictures are refused (HTTP 403). yt-dlp uses only
+// Deno unless told otherwise: these tell it to use any of them (for a yt-dlp
+// with --js-runtimes).
+std::vector<std::string> JsRuntimeArgs();
+// whether one of those runtimes is on PATH (`path`, separated as the system
+// does)
+bool JsRuntimeOnPath(std::string_view path);
 
 // what a download prints, as the arguments above ask for it
 struct Progress {
@@ -66,6 +78,9 @@ std::optional<Progress> ParseProgress(std::string_view line);
 std::optional<std::string> ParseSavedFile(std::string_view line);
 // "ERROR: [youtube] abc: Video unavailable" as "Video unavailable"
 std::optional<std::string> ParseError(std::string_view line);
+// an error as the Videos tab shows it: its first sentence, and what to do
+// about one that asks to sign in
+std::string Briefly(std::string_view error);
 
 // Runs yt-dlp. Each call waits for it (on a thread that may), and stops it
 // when `cancel` is set; on failure, why in `error`, yt-dlp's own words where
@@ -76,6 +91,8 @@ public:
     YtDlp(std::filesystem::path exe, std::vector<std::string> extra_args);
 
     std::optional<std::string> Version(std::string& error) const;
+    // whether its --help lists `option` (one newer than some yt-dlp's)
+    bool Supports(std::string_view option) const;
     std::vector<YtCandidate> Search(std::string_view query, int count, std::string& error,
                                     const std::atomic<bool>* cancel = nullptr) const;
     std::optional<YtCandidate> Info(std::string_view url, std::string& error,

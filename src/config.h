@@ -57,6 +57,11 @@ void AddSettingArgs();
 const std::filesystem::path& GameDataRoot();
 void SetGameDataRoot(std::filesystem::path root);
 
+// the user data root: the runtime's once it's built; before then (the
+// launcher), the one it's to be built with, as last worked out
+std::filesystem::path UserDataRoot();
+void SetUserDataRoot(std::filesystem::path root);
+
 const std::vector<std::string>& GetArgs();
 
 }

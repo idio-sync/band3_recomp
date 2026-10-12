@@ -176,6 +176,13 @@ TEST_CASE("a link chosen by hand is taken, pinned, in place of the song's old vi
     CHECK(FindIniValue(Read(f.Ini()), "video_source") == url);
 }
 
+TEST_CASE("a picture refused on its own is fetched as one file with its sound") {
+    Fixture f;
+    const FetchResult r = FetchSongVideo(kSong, "https://www.youtube.com/watch?v=clicks_late_flaky", f.setup);
+    REQUIRE_MESSAGE(r.end == FetchEnd::kDone, r.message);
+    CHECK(fs::exists(f.folder / "masterofpuppets.mp4"));
+}
+
 TEST_CASE("a file of the player's is copied in, pinned; without sound it's set by hand") {
     Fixture f;
     const FetchResult r = UseVideoFile(kSong, Clip("music_video_red_blue.mp4"), f.setup);

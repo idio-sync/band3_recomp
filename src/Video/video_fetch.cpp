@@ -73,7 +73,16 @@ std::optional<Sound> FetchSound(const FetchSetup& s, const SongInfo& song, std::
 std::optional<fs::path> FetchPicture(const FetchSetup& s, const SongInfo& song,
                                      std::string_view url, std::string& error) {
     const fs::path stem = WorkFolder(s) / (song.shortname + ".picture");
-    return Download(s, FetchStage::kFetchingVideo, VideoArgs(url, stem, s.format), error);
+    std::optional<fs::path> picture =
+        Download(s, FetchStage::kFetchingVideo, VideoArgs(url, stem, s.format), error);
+    // the picture alone refused (YouTube's 403, now and then): the whole
+    // file, picture and sound, is often there
+    if (!picture && !Stopped(s)) {
+        std::string again;
+        picture = Download(s, FetchStage::kFetchingVideo, VideoArgs(url, stem, s.format, true), again);
+        if (!picture) error += "; as one file: " + again;
+    }
+    return picture;
 }
 
 std::string Ms(double seconds) { return std::to_string(std::llround(seconds * 1000.0)); }

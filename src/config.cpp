@@ -4,6 +4,8 @@
 #include "ThirdParty/inih/INIReader.h"
 #include <rex/filesystem.h>
 #include <rex/logging.h>
+#include <rex/runtime.h>
+#include <mutex>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -260,6 +262,22 @@ void AddSettingArgs() {
 
 const std::filesystem::path& GameDataRoot() { return g_game_data_root; }
 void SetGameDataRoot(std::filesystem::path root) { g_game_data_root = std::move(root); }
+
+namespace {
+std::mutex g_user_data_mutex;
+std::filesystem::path g_user_data_root;
+}
+
+std::filesystem::path UserDataRoot() {
+    if (auto* runtime = rex::Runtime::instance()) return runtime->user_data_root();
+    std::lock_guard lock(g_user_data_mutex);
+    return g_user_data_root;
+}
+
+void SetUserDataRoot(std::filesystem::path root) {
+    std::lock_guard lock(g_user_data_mutex);
+    g_user_data_root = std::move(root);
+}
 
 const std::vector<std::string>& GetArgs() {
     if (!g_args_initialized) {

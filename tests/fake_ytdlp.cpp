@@ -7,9 +7,10 @@
 //   --dump-json <url>          one video's description; "unavailable" in it fails
 //   -o <stem>.%(ext)s <url>    a download, copied from tests/data by the link:
 //                              "clicks_late" or "offic" sync_clicks_late.m4a, else
-//                              sync_clicks.webm; a picture (-f bv*/b) the
+//                              sync_clicks.webm; a picture (-f bv*/b or b) the
 //                              red-blue clip (with FAKE_YTDLP_STILL set, a still
-//                              one); "slow" takes 10 s, "fail" fails
+//                              one); "slow" takes 10 s, "fail" fails,
+//                              "agegate" asks to sign in, "flaky" refuses -f bv*/b
 
 #include <chrono>
 #include <cstdlib>
@@ -50,6 +51,11 @@ int Run(const std::vector<std::string>& args) {
             std::cout << "2026.09.30\n";
             return 0;
         }
+        if (a == "--help") {
+            std::cout << "Usage: yt-dlp [OPTIONS] URL [URL...]\n"
+                      << "    --js-runtimes RUNTIME[:PATH]    Additional JavaScript runtime to enable\n";
+            return 0;
+        }
         if (a == "-U") {
             std::cout << "Latest version: stable@2026.09.30 from yt-dlp/yt-dlp\n"
                       << "yt-dlp is up to date (stable@2026.09.30 from yt-dlp/yt-dlp)\n";
@@ -70,6 +76,16 @@ int Run(const std::vector<std::string>& args) {
         std::cerr << "ERROR: [youtube] abc123: Video unavailable\n";
         return 1;
     }
+    if (Has(url, "agegate")) {
+        std::cerr << "ERROR: [youtube] abc123: Sign in to confirm your age. This video may be "
+                     "inappropriate for some users. Use --cookies-from-browser or --cookies\n";
+        return 1;
+    }
+    // the picture alone refused, as YouTube now and then does
+    if (Has(url, "flaky") && format == "bv*/b") {
+        std::cerr << "ERROR: unable to download video data: HTTP Error 403: Forbidden\n";
+        return 1;
+    }
     if (dump) {
         std::cout << R"({"id": "pasted1", "title": "A pasted video", "webpage_url": ")" << url
                   << R"(", "channel": "Someone", "duration": 15.0})" << "\n";
@@ -78,7 +94,7 @@ int Run(const std::vector<std::string>& args) {
     if (out.empty() || url.empty()) return 2;
     // FAKE_YTDLP_STILL set: every picture's a still one
     const bool still = std::getenv("FAKE_YTDLP_STILL") != nullptr;
-    const fs::path from = format == "bv*/b"
+    const fs::path from = format == "bv*/b" || format == "b"
                               ? Data(still ? "still_picture.mp4" : "music_video_red_blue.mp4")
                           : Has(url, "clicks_late") || Has(url, "offic") ? Data("sync_clicks_late.m4a")
                                                                          : Data("sync_clicks.webm");

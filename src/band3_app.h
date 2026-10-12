@@ -283,6 +283,7 @@ class Band3App : public rex::ReXApp {
   rex::PathConfig FinalPaths() const {
     rex::PathConfig paths = RulePaths();
     band3::SetGameDataRoot(paths.game_data_root);
+    band3::SetUserDataRoot(paths.user_data_root);
     LogFolders(paths.game_data_root, paths.user_data_root, paths.cache_root);
     return paths;
   }

@@ -307,6 +307,12 @@ void VideosTab::DrawYtDlp() {
         if (ImGui::Button("Update yt-dlp")) video::UpdateYtDlp();
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Runs yt-dlp -U: YouTube changes often, and an old yt-dlp stops finding videos");
+        if (!yt.js_runtime) {
+            Wrapped(kWarn, "yt-dlp needs a JavaScript runtime to fetch from YouTube, and none was found: "
+                           "without one, YouTube refuses some videos (HTTP 403). Install Deno, or "
+                           "Node.js, and start band3 again.");
+            if (ImGui::Button("Get Deno")) OpenUrl("https://docs.deno.com/runtime/getting_started/installation/");
+        }
     } else {
         Wrapped(kWarn, "yt-dlp can't be run (" + yt.problem +
                            "). band3 finds and downloads videos with it, but doesn't come with it: "
@@ -426,11 +432,14 @@ void VideosTab::DrawSongs() {
             ImGui::TableNextRow(0, row);
             ImGui::TableSetColumnIndex(0);
             const std::string label = s.artist.empty() ? s.title : s.title + "  -  " + s.artist;
+            // centred in the row, as the other columns' text is
+            ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.0f, 0.5f));
             if (ImGui::Selectable(label.c_str(), selected_ == s.shortname,
                                   ImGuiSelectableFlags_SpanAllColumns, ImVec2(0, row))) {
                 selected_ = s.shortname;
                 confirm_delete_ = false;
             }
+            ImGui::PopStyleVar();
             ImGui::TableSetColumnIndex(1);
             ImGui::AlignTextToFramePadding();
             const video::VideoJobsProgress p = video::VideoJobsNow();
@@ -622,7 +631,11 @@ void VideosTab::DrawDetails(const std::vector<fs::path>& folders) {
                 ImGui::TableSetColumnIndex(2);
                 ImGui::AlignTextToFramePadding();
                 std::string why = !t.problem.empty() ? t.problem : t.candidate.note;
-                if (t.match && t.match->confident) why = std::format("its sound matches at {:+.3f} s", t.match->offset);
+                if (t.match && t.match->confident) {
+                    why = std::format("its sound matches at {:+.3f} s", t.match->offset);
+                    // and yet it wasn't taken
+                    if (!t.problem.empty()) why += ", but " + t.problem;
+                }
                 ImGui::PushTextWrapPos(0);
                 ImGui::TextColored(t.match && t.match->confident ? kGood : kMuted, "%s",
                                    why.empty() ? c.channel.c_str() : why.c_str());

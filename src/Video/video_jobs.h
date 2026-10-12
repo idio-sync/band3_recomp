@@ -69,6 +69,8 @@ struct YtDlpState {
     std::string problem;
     bool updating = false;
     std::string update_output;  // what -U said last
+    // a JavaScript runtime yt-dlp can use for YouTube is on PATH (ytdlp.h)
+    bool js_runtime = true;
 };
 YtDlpState YtDlpNow(bool again = false);
 // yt-dlp -U on a thread; YtDlpNow says how it went

@@ -4,6 +4,7 @@
 #include <doctest/doctest.h>
 #include <atomic>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -161,6 +162,43 @@ TEST_CASE("yt-dlp's progress, saved file and error lines") {
     CHECK(ParseSavedFile("band3-file C:\\v\\a b.webm") == "C:\\v\\a b.webm");
     CHECK(ParseError("ERROR: Sign in to confirm your age") == "Sign in to confirm your age");
     CHECK_FALSE(ParseError("WARNING: x"));
+}
+
+TEST_CASE("yt-dlp's errors are cut to their first sentence, with what to do for sign-ins") {
+    CHECK(Briefly("Video unavailable") == "Video unavailable");
+    CHECK(Briefly("unable to download video data: HTTP Error 403: Forbidden") ==
+          "unable to download video data: HTTP Error 403: Forbidden");
+    const std::string age = Briefly(
+        "Sign in to confirm your age. This video may be inappropriate. Use --cookies-from-browser");
+    CHECK(age.starts_with("Sign in to confirm your age (yt-dlp needs your browser's cookies"));
+    std::string error;
+    YtDlp yt(kFake, {});
+    CHECK_FALSE(yt.Info("https://x/agegate", error));
+    CHECK(error.starts_with("Sign in to confirm your age ("));
+}
+
+TEST_CASE("yt-dlp is told to use any JavaScript runtime, where it takes the option") {
+    YtDlp yt(kFake, {});
+    CHECK(yt.Supports("--js-runtimes"));
+    CHECK_FALSE(yt.Supports("--no-such-option"));
+    const auto args = JsRuntimeArgs();
+    CHECK(args.size() == 8);
+    CHECK(Has(args, "node"));
+    CHECK(Has(args, "deno"));
+    // a runtime on PATH: the fake stands in for one, named node
+    const fs::path dir = fs::temp_directory_path() / "band3_js_runtime";
+    fs::create_directories(dir);
+#ifdef _WIN32
+    std::ofstream(dir / "node.exe") << "x";
+    const std::string sep = ";";
+#else
+    std::ofstream(dir / "node") << "x";
+    const std::string sep = ":";
+#endif
+    CHECK(JsRuntimeOnPath("C:\\nowhere" + sep + dir.string()));
+    CHECK_FALSE(JsRuntimeOnPath("C:\\nowhere" + sep));
+    CHECK_FALSE(JsRuntimeOnPath(""));
+    fs::remove_all(dir);
 }
 
 TEST_CASE("Windows command lines quote what needs it") {

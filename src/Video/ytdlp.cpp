@@ -100,13 +100,13 @@ std::vector<std::string> AudioArgs(std::string_view url, const std::filesystem::
 }
 
 std::vector<std::string> VideoArgs(std::string_view url, const std::filesystem::path& out_stem,
-                                   const VideoFormat& format) {
+                                   const VideoFormat& format, bool whole_file) {
     // the picture alone where there's one apart, any whole file otherwise;
     // the tallest up to max_height, then the highest frame rate (or nearest
     // 30), then H.264 before the newer codecs
     const std::string sort = "res:" + std::to_string(format.max_height) +
                              (format.prefer_60fps ? ",fps" : ",fps:30") + ",+vcodec";
-    std::vector<std::string> args = {"-f", "bv*/b", "-S", sort};
+    std::vector<std::string> args = {"-f", whole_file ? "b" : "bv*/b", "-S", sort};
     for (std::string& a : DownloadArgs(url, out_stem)) args.push_back(std::move(a));
     return args;
 }
@@ -130,6 +130,38 @@ std::vector<std::string> SplitArgs(std::string_view text) {
     }
     if (in_word) out.push_back(std::move(cur));
     return out;
+}
+
+std::vector<std::string> JsRuntimeArgs() {
+    std::vector<std::string> out;
+    for (const char* runtime : {"deno", "node", "bun", "quickjs"}) {
+        out.push_back("--js-runtimes");
+        out.push_back(runtime);
+    }
+    return out;
+}
+
+bool JsRuntimeOnPath(std::string_view path) {
+#ifdef _WIN32
+    constexpr char kSeparator = ';';
+    constexpr std::string_view kExe = ".exe";
+#else
+    constexpr char kSeparator = ':';
+    constexpr std::string_view kExe = "";
+#endif
+    while (!path.empty()) {
+        const size_t end = path.find(kSeparator);
+        const std::string_view dir = path.substr(0, end);
+        path.remove_prefix(end == std::string_view::npos ? path.size() : end + 1);
+        if (dir.empty()) continue;
+        const std::filesystem::path folder(std::u8string(dir.begin(), dir.end()));
+        for (std::string_view name : {"deno", "node", "bun", "qjs"}) {
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(folder / (std::string(name) + std::string(kExe)), ec))
+                return true;
+        }
+    }
+    return false;
 }
 
 std::optional<Progress> ParseProgress(std::string_view line) {
@@ -165,6 +197,16 @@ std::optional<std::string> ParseError(std::string_view line) {
     return std::string(line);
 }
 
+std::string Briefly(std::string_view error) {
+    // yt-dlp goes on with advice and links after its first sentence
+    const size_t stop = error.find(". ");
+    std::string out(error.substr(0, stop));
+    if (out.starts_with("Sign in to confirm"))
+        out += " (yt-dlp needs your browser's cookies: add --cookies-from-browser and your "
+               "browser's name, firefox say, to More yt-dlp options)";
+    return out;
+}
+
 YtDlp::YtDlp(std::filesystem::path exe, std::vector<std::string> extra_args)
     : exe_(exe.empty() ? std::filesystem::path("yt-dlp") : std::move(exe)),
       extra_(std::move(extra_args)) {
@@ -197,7 +239,7 @@ bool YtDlp::Run(std::vector<std::string> args, bool with_extra,
         return false;
     }
     if (r.exit_code != 0) {
-        error = !last_error.empty() ? last_error
+        error = !last_error.empty() ? Briefly(last_error)
                 : !last_line.empty() ? last_line
                                      : "yt-dlp ended with code " + std::to_string(r.exit_code);
         return false;
@@ -218,6 +260,17 @@ std::optional<std::string> YtDlp::Version(std::string& error) const {
         return std::nullopt;
     }
     return version;
+}
+
+bool YtDlp::Supports(std::string_view option) const {
+    bool found = false;
+    std::string error;
+    Run({"--help"}, false,
+        [&](std::string_view line) {
+            if (line.find(option) != std::string_view::npos) found = true;
+        },
+        error, nullptr);
+    return found;
 }
 
 std::vector<YtCandidate> YtDlp::Search(std::string_view query, int count, std::string& error,

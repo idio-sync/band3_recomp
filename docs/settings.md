@@ -372,7 +372,10 @@ band3 can find and download songs' music videos with [yt-dlp](https://github.com
 which it doesn't come with: download yt-dlp (`yt-dlp.exe` on Windows) and set
 `music_video_ytdlp_path` (the Videos tab's **yt-dlp program**) to it, or put it on PATH. The
 tab says which yt-dlp it found; **Update yt-dlp** runs `yt-dlp -U`, which is worth doing now
-and then, as YouTube changes often and an old yt-dlp stops finding videos.
+and then, as YouTube changes often and an old yt-dlp stops finding videos. For YouTube,
+yt-dlp also needs a JavaScript runtime: [Deno](https://deno.com) or Node.js (Bun and QuickJS
+work too) installed and on PATH. band3 tells yt-dlp to use whichever there is, and the tab
+warns when there's none; without one, YouTube refuses some videos (HTTP Error 403).
 
 For a song, **Search for its video** searches YouTube for "<artist> <title> official music
 video" and goes down the likeliest results: one whose title has the song's title and artist,

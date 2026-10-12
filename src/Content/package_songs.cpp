@@ -17,6 +17,7 @@
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/system/xtypes.h>
+#include "src/config.h"
 #include "src/settings.h"
 #include "live_content.h"
 #include "package_scan.h"
@@ -48,9 +49,10 @@ State& TheState() {
     return *state;
 }
 
+// before the runtime's built too (the launcher)
 fs::path CachePath() {
-    auto* runtime = rex::Runtime::instance();
-    return runtime ? runtime->user_data_root() / kCacheFile : fs::path();
+    const fs::path root = UserDataRoot();
+    return root.empty() ? fs::path() : root / kCacheFile;
 }
 
 // the package's songs/songs.dta, opened as the game opens packages; nullopt
