@@ -383,6 +383,10 @@ public:
     // any setting, the SDK's too; nothing when there's none by that name
     virtual std::optional<SettingValue> GetSetting(std::string_view name) = 0;
     virtual GameFolders Folders() = 0;
+    // finding these songs' music videos, as the Videos tab's batch does
+    // (src/Video/video_jobs.h): queued by shortname into the first videos
+    // folder; `queued` says how many; returns an error, or empty
+    virtual std::string QueueMusicVideos(const std::vector<std::string>& shortnames, size_t& queued) = 0;
     // presses the key a key bind (bind_settings, bind_instrument_lab...) is set
     // to, as the window would, without the window having focus; returns an
     // error, or empty

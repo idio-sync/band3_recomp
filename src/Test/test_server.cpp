@@ -20,6 +20,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -46,7 +47,11 @@
 #include <rex/ui/windowed_app_context.h>
 #include <rex/input/input_system.h>
 #include "src/Audio/usb_mic_capture.h"
+#include "src/Content/game_song_list.h"
 #include "src/Content/live_content.h"
+#include "src/Content/package_songs.h"
+#include "src/Video/music_video.h"
+#include "src/Video/video_jobs.h"
 #include "src/Hooks/frame_pacing.h"
 #include "src/Hooks/mouse_hover.h"
 #include "src/Input/input_lock.h"
@@ -600,6 +605,36 @@ public:
             out.content.push_back(rex::path_to_utf8(folder));
         }
         return out;
+    }
+
+    std::string QueueMusicVideos(const std::vector<std::string>& shortnames, size_t& queued) override {
+        queued = 0;
+        const std::vector<std::filesystem::path> folders = video::MusicVideoFolders();
+        if (folders.empty()) return "no music_videos_folder";
+        const auto lower = [](std::string s) {
+            for (char& c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+        // the packages' songs, then the game's own, as the Videos tab lists them
+        std::vector<video::SongInfo> songs;
+        for (const content::PackageSongs& p : content::PackageSongsNow(std::chrono::seconds(20)))
+            for (const content::DtaSong& s : p.songs)
+                songs.push_back({s.shortname, s.title, s.artist, s.song_length});
+        for (const content::ListedSong& s : content::LastGameSongs())
+            songs.push_back({s.shortname, s.title, s.artist, s.length_ms});
+        std::vector<video::VideoJob> jobs;
+        for (const std::string& name : shortnames) {
+            const auto it = std::find_if(songs.begin(), songs.end(), [&](const video::SongInfo& s) {
+                return lower(s.shortname) == lower(name);
+            });
+            if (it == songs.end()) return "no song " + name;
+            video::VideoJob job;
+            job.song = *it;
+            job.folder = folders.front();
+            jobs.push_back(std::move(job));
+        }
+        queued = video::QueueVideoJobs(std::move(jobs));
+        return {};
     }
 
     // as band3_app's PressBind does for the menu shortcut: the bind's key goes

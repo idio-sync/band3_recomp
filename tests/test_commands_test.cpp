@@ -153,6 +153,10 @@ public:
         return std::nullopt;
     }
     GameFolders Folders() override { return folders; }
+    std::string QueueMusicVideos(const std::vector<std::string>& shortnames, size_t& queued) override {
+        queued = shortnames.size();
+        return {};
+    }
     std::string PressBind(std::string_view bind) override {
         if (bind == "bind_nothing") return "no key bind bind_nothing";
         binds_pressed.emplace_back(bind);

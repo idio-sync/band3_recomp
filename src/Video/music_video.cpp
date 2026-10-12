@@ -374,6 +374,8 @@ Player& ThePlayer() {
 
 bool MusicVideosOn() { return REXCVAR_GET(music_videos); }
 
+std::vector<std::filesystem::path> MusicVideoFolders() { return VideoFolders(); }
+
 bool MusicVideoShowing() { return ThePlayer().Showing(); }
 
 double MusicVideoFrameRate() {

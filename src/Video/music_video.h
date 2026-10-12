@@ -47,6 +47,9 @@ void SetMusicVideoStartTime(uint64_t song, double seconds);
 // part's offset, and the parts after it), the same way
 void SetMusicVideoSegments(uint64_t song, double start_time, std::vector<VideoSegment> later);
 
+// music_videos_folder's folders, resolved, the first first
+std::vector<std::filesystem::path> MusicVideoFolders();
+
 // [ and ] while a video plays (band3_app.h's binds): the offset of the part
 // playing (its start time, or one of its segments') moved by
 // `delta` seconds and saved to its .ini; RecentNudgeMessage says so on
