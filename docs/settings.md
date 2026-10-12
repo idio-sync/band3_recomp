@@ -344,7 +344,7 @@ and `bind_music_video_later`); each press is saved to the `.ini` and shown at th
 screen. Earlier is for a singer whose lips move after the sound.
 
 The **Videos** tab, in the launcher and the in-game settings, lists the songs in band3's
-packages (as the game last read them) with each one's video, if it has one, and its offset in
+packages and the game's own (as the game last read them) with each one's video, if it has one, and its offset in
 milliseconds, which can be typed in, and how it got it: synced, set by hand, not sure (with
 the best guess and **Use the guess** to take it), or not synced yet. Picking a song shows its
 controls under the list. **Align** matches a video with its song, from the song's package (an
@@ -410,8 +410,11 @@ you to choose. `music_video_ytdlp_args` adds yt-dlp options, such as
 search came to is kept in `band3_music_videos.json` in the user data folder.
 
 A song whose audio band3 can't read (an encrypted one) still gets a likely video, which syncs
-the first time the song plays. The disc's own songs aren't listed, as they're in no package:
-their videos are added by hand, as `<shortname>.<ext>`.
+the first time the song plays. The game's own songs (the disc's, exports) are listed too, with
+the game they came from, once the game has run and listed them (band3 keeps their list in
+`band3_game_songs.json` in the user data folder); their audio is in the game's archives, which
+band3 doesn't read, so their videos are chosen by title, channel and length alone and sync the
+first time the song plays.
 
 ## Loose files (mods)
 

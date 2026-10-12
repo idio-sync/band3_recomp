@@ -31,6 +31,7 @@
 #include "steam_deck.h"
 #include "Audio/usb_mic_capture.h"
 #include "Content/content_hooks.h"
+#include "Content/game_song_list.h"
 #include "Content/live_content.h"
 #include "Game/SongCache.h"
 #include "Hooks/frame_pacing.h"
@@ -508,6 +509,7 @@ class Band3App : public rex::ReXApp {
     }
     band3::online::Start();
     band3::content::StartLiveContent(runtime()->file_system());
+    band3::content::StartGameSongSnapshot();
     band3::discord::Start();
     band3::ha::Start();
     band3::lights::Start();

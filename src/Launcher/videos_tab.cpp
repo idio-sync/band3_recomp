@@ -18,6 +18,7 @@
 #include <thread>
 
 #include "launcher_style.h"
+#include "src/Content/game_song_list.h"
 #include "src/Content/package_songs.h"
 #include "src/Video/auto_sync.h"
 #include "src/Video/music_video.h"
@@ -170,6 +171,20 @@ void VideosTab::RefreshSongs() {
             song.lower = Lower(song.title + " " + song.artist + " " + song.shortname);
             songs.push_back(std::move(song));
         }
+    }
+    // the game's own songs in none of the packages (the disc's, exports), as
+    // it last listed them
+    for (const content::ListedSong& s : content::LastGameSongs()) {
+        if (!seen.insert(Lower(s.shortname)).second) continue;
+        Song song;
+        song.shortname = s.shortname;
+        song.title = s.title.empty() ? s.shortname : s.title;
+        song.artist = s.artist;
+        song.length_ms = s.length_ms;
+        song.origin = content::OriginName(s.origin);
+        song.in_package = false;
+        song.lower = Lower(song.title + " " + song.artist + " " + song.shortname + " " + song.origin);
+        songs.push_back(std::move(song));
     }
     std::sort(songs.begin(), songs.end(), [](const Song& a, const Song& b) {
         return Lower(a.title) < Lower(b.title);
@@ -409,8 +424,8 @@ void VideosTab::DrawSongs() {
     for (int i = 0; i < int(songs_.size()); i++)
         if (Shown(songs_[i])) shown.push_back(i);
     if (songs_.empty()) {
-        Muted("No songs yet: band3 lists the songs in its packages once the game has read them (start "
-              "the game once).");
+        Muted("No songs yet: band3 lists the game's songs once the game has read them (start the "
+              "game once).");
         return;
     }
     const float row = ImGui::GetFrameHeight();
@@ -431,7 +446,8 @@ void VideosTab::DrawSongs() {
             ImGui::PushID(s.shortname.c_str());
             ImGui::TableNextRow(0, row);
             ImGui::TableSetColumnIndex(0);
-            const std::string label = s.artist.empty() ? s.title : s.title + "  -  " + s.artist;
+            std::string label = s.artist.empty() ? s.title : s.title + "  -  " + s.artist;
+            if (!s.in_package && !s.origin.empty()) label += "   (" + s.origin + ")";
             // centred in the row, as the other columns' text is
             ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.0f, 0.5f));
             if (ImGui::Selectable(label.c_str(), selected_ == s.shortname,
@@ -519,9 +535,16 @@ void VideosTab::DrawDetails(const std::vector<fs::path>& folders) {
     ImGui::PushID("details");
     ImGui::TextUnformatted(std::format("{} - {}", s->title, s->artist).c_str());
     ImGui::SameLine();
-    Muted(std::format("({}{})", s->shortname,
-                      s->length_ms ? ", " + Minutes(s->length_ms / 1000.0) : std::string())
+    Muted(std::format("({}{}{})", s->shortname,
+                      s->length_ms ? ", " + Minutes(s->length_ms / 1000.0) : std::string(),
+                      s->in_package ? std::string() : ", " + (s->origin.empty() ? "the game's" : s->origin))
               .c_str());
+    if (!s->in_package) {
+        ImGui::PushTextWrapPos(0);
+        Muted("This song is in the game's own data, whose audio band3 can't read: a video found for it "
+              "is chosen by its title, channel and length alone, and syncs the first time the song plays.");
+        ImGui::PopTextWrapPos();
+    }
     const bool queued = video::SongVideoQueued(s->shortname);
     const auto queue = [&](video::VideoJob job) {
         job.song = info;

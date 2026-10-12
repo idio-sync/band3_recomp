@@ -3,6 +3,7 @@
 
 #include <doctest/doctest.h>
 #include <string>
+#include "src/Content/game_song_list.h"
 #include "src/Content/song_dta.h"
 #include "src/Content/song_inventory.h"
 #include "src/Game/song_id.h"
@@ -169,6 +170,26 @@ TEST_CASE("the cache reads back as written, times and all") {
     // a cache from before the songs had their audio paths is read again
     CHECK(ParseInventoryCache(R"({"version": 1, "packages": [{"path": "x"}]})").empty());
     CHECK(ParseInventoryCache(R"({"version": 3, "packages": [{"path": "x"}]})").empty());
+}
+
+TEST_CASE("the game's own song list is kept and read back, origins named") {
+    std::vector<ListedSong> songs = {
+        {"nooneknows", 1001, "No One Knows", "Queens of the Stone Age", "rb1", 254000},
+        {"cafe", 2002, "Caf\xC3\xA9 \"x\"", "A", "ugc_plus", 0},
+    };
+    const auto back = ParseGameSongList(FormatGameSongList(songs));
+    REQUIRE(back.size() == 2);
+    CHECK(back[0].shortname == "nooneknows");
+    CHECK(back[0].song_id == 1001);
+    CHECK(back[0].origin == "rb1");
+    CHECK(back[0].length_ms == 254000);
+    CHECK(back[1].title == "Caf\xC3\xA9 \"x\"");
+    CHECK(ParseGameSongList("").empty());
+    CHECK(ParseGameSongList(R"({"version": 2, "songs": [{"shortname": "x"}]})").empty());
+    CHECK(OriginName("rb1") == "Rock Band");
+    CHECK(OriginName("ugc_plus") == "Rock Band Network");
+    CHECK(OriginName("fnfestival") == "Fortnite Festival");
+    CHECK(OriginName("my_pack") == "my_pack");
 }
 
 TEST_CASE("songs with the same song_id: the game has the first loaded") {

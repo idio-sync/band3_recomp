@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 
 struct PPCContext;
 
@@ -19,5 +20,10 @@ void StopServer();
 // Runs the game work requests are waiting on. App::DrawRegular calls it once
 // a frame, on the game thread.
 void RunGameJobs(PPCContext& ctx, uint8_t* base);
+
+// Runs `job` on the game thread at its next frame (RunGameJobs, which runs
+// whether the server's on or not) and waits for it; false if the game didn't
+// get to it within a few seconds, or band3 is closing. Not from the game thread.
+bool RunOnGameThreadAndWait(std::function<void(PPCContext&, uint8_t*)> job);
 
 }

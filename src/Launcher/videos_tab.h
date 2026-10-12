@@ -45,6 +45,10 @@ private:
         std::string title;
         std::string artist;
         int length_ms = 0;
+        // for a song in none of band3's packages (the disc's, an export):
+        // the game it came from, as the game last listed it
+        std::string origin;
+        bool in_package = true;
         std::string lower;  // title, artist and shortname, lower case, to search
         int video = -1;     // into videos_
     };

@@ -1017,6 +1017,10 @@ void StopServer() {
 
 bool Enabled() { return band3::settings::Startup().http_enabled; }
 
+bool RunOnGameThreadAndWait(std::function<void(PPCContext&, uint8_t*)> job) {
+    return RunOnGameThread(std::move(job));
+}
+
 void RunGameJobs(PPCContext& ctx, uint8_t* base) {
     if (!g_has_jobs.load(std::memory_order_acquire)) return;
     std::deque<std::shared_ptr<PendingJob>> jobs;

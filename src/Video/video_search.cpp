@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <set>
 
 namespace band3::video {
@@ -208,6 +209,8 @@ ScoredCandidate Score(const SongInfo& song, const YtCandidate& video) {
         if (d >= -10 && d <= 90) s.score += 0.1;
         else if (d < -10) s.score -= std::min(0.3, (-d - 10) / 60 * 0.3);
         else s.score -= std::min(0.2, (d - 90) / 300 * 0.2);
+        // a radio edit, most often: a single offset can't follow its cuts
+        if (d < -30) s.note = std::format("{:.0f} s shorter than the song: likely another edit", -d);
     }
     if (video.views > 0) s.score += std::min(0.05, std::log10(double(video.views)) / 8 * 0.05);
 

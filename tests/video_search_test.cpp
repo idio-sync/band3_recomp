@@ -103,6 +103,8 @@ TEST_CASE("a video much shorter than the song scores less; a longer one is usual
     const auto edit = Score(kPuppets, Video("c", "Metallica - Master of Puppets", "Metallica", 300));
     CHECK(longer.score > right.score - 0.01);
     CHECK(edit.score < right.score - 0.1);
+    CHECK(edit.note == "219 s shorter than the song: likely another edit");
+    CHECK(right.note.empty());
     // not known: no matter
     const auto unknown = Score({"x", "Master of Puppets", "Metallica", 0},
                                Video("d", "Metallica - Master of Puppets", "Metallica", 520));

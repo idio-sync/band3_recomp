@@ -121,6 +121,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Audio/mic_fx.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp
+    ${BAND3_ROOT}/src/Content/game_song_list.cpp
     ${BAND3_ROOT}/src/Content/song_dta.cpp
     ${BAND3_ROOT}/src/Content/song_inventory.cpp
     ${BAND3_ROOT}/src/Game/heap_report.cpp
