@@ -107,10 +107,13 @@ def third_party_licenses(build_dir):
         if os.path.isfile(path):
             out[f"{lib}.txt"] = read(path)
     out["rtmidi.txt"] = rtmidi_license()
-    sdk = os.path.join(REPO, ".rexglue-sdk", "licenses")
-    if not os.path.isdir(sdk):
-        print(f"warning: no {sdk}, so the zip lacks the SDK's libraries' licenses",
-              file=sys.stderr)
+    # licenses/ in the Windows SDK's zip, share/licenses/ in the Linux one's
+    candidates = [os.path.join(REPO, ".rexglue-sdk", "licenses"),
+                  os.path.join(REPO, ".rexglue-sdk", "share", "licenses")]
+    sdk = next((c for c in candidates if os.path.isdir(c)), None)
+    if not sdk:
+        print(f"warning: no {' or '.join(candidates)}, so the zip lacks the SDK's "
+              "libraries' licenses", file=sys.stderr)
         return out
     for lib in sorted(os.listdir(sdk)):
         folder = os.path.join(sdk, lib)
