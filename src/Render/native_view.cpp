@@ -677,6 +677,21 @@ class Renderer {
         return s;
     }
 
+    // The newest picture drawn for the window since presenting last started,
+    // if newer than `frame`, handed to `use` (pixels, width, height) under the
+    // lock rather than copied out: the drawer makes its texture from it
+    template <typename Use>
+    bool UseForWindow(uint64_t& frame, std::chrono::steady_clock::time_point& presented,
+                      Use&& use) {
+        std::lock_guard lock(mutex_);
+        if (image_serial_ == frame || image_.empty() || !image_w_ || !image_h_) return false;
+        if (!present_ || image_generation_ != slots_.Generation()) return false;
+        frame = image_serial_;
+        presented = image_presented_;
+        use(image_.data(), image_w_, image_h_);
+        return true;
+    }
+
     // copies the newest picture if newer than `frame`; `for_present`: only
     // one drawn for the window since presenting last started
     bool Take(uint64_t& frame, std::vector<uint32_t>& rgba, uint32_t& w, uint32_t& h,
@@ -1171,12 +1186,16 @@ class Renderer {
         }
         f.slot = -1;
         f.drew_gpu = f.drew_gpu && read;
-        PublishDrawn(f, read ? &rgba : nullptr);
+        // ReadOutputBack fills rgba whole each time, so its pixels can be
+        // swapped in rather than copied
+        PublishDrawn(f, read ? &rgba : nullptr, read);
     }
 
     // Hands `d` to the window (if still its stretch), live stats, and RGBA
     // users. A slot's frame must be done.
-    void PublishDrawn(const Drawn& d, const std::vector<uint32_t>* rgba) {
+    // `take_rgba`: rgba's pixels are swapped into the picture kept for RGBA
+    // users rather than copied (8 MB at 1080p), leaving rgba the old one's
+    void PublishDrawn(const Drawn& d, std::vector<uint32_t>* rgba, bool take_rgba = false) {
         // the description costs a string per draw; only F9's window reads it
         const bool describe = dialog_open_.load(std::memory_order_relaxed);
         const std::string stats =
@@ -1274,7 +1293,8 @@ class Renderer {
         }
         live_drew_gpu_ = d.drew_gpu;
         if (rgba) {
-            image_ = *rgba;
+            if (take_rgba) image_.swap(*rgba);
+            else image_ = *rgba;
             image_w_ = d.width;
             image_h_ = d.height;
             image_presented_ = d.presented;
@@ -2087,17 +2107,17 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             NotePaint(now, true);
             return;
         }
-        uint32_t w = 0, h = 0;
-        std::string stats;
-        if (Renderer::Get().Take(upload_frame_, upload_, w, h, stats, &upload_presented_, true) &&
-            w && h) {
-            upload_shown_ = true;
-            current_ ^= 1;
-            // immediate textures can't be updated, only created
-            textures_[current_] =
-                drawer->CreateTexture(w, h, rex::ui::ImmediateTextureFilter::kLinear, false,
-                                      reinterpret_cast<const uint8_t*>(upload_.data()));
-        }
+        // made straight from the renderer's picture, which CreateTexture
+        // copies into its upload buffer, rather than copied out first
+        Renderer::Get().UseForWindow(
+            upload_frame_, upload_presented_, [&](const uint32_t* rgba, uint32_t w, uint32_t h) {
+                upload_shown_ = true;
+                current_ ^= 1;
+                // immediate textures can't be updated, only created
+                textures_[current_] =
+                    drawer->CreateTexture(w, h, rex::ui::ImmediateTextureFilter::kLinear, false,
+                                          reinterpret_cast<const uint8_t*>(rgba));
+            });
         rex::ui::ImmediateTexture* texture = upload_shown_ ? textures_[current_].get() : nullptr;
         if (!texture) {
             NotePaint(now, true);
@@ -2157,7 +2177,6 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
     // a picture taken since native last started
     bool upload_shown_ = false;
     std::chrono::steady_clock::time_point upload_presented_{};
-    std::vector<uint32_t> upload_;
     int picture_listener_ = 0;
     // renderer native: the window to request paints from (window is read and
     // cleared on the UI thread) and whether a request is pending
