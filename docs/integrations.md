@@ -412,7 +412,8 @@ has each of the game's network calls and each step of its Rock Central login.
 Rock Band 3 plays online over Xbox Live, which band3 doesn't have. RB3Enhanced's
 Liveless plays without it, straight from one player's game to another's, and band3
 does the same, so band3 players can play together (and, the game's packets being
-the same, with RB3Enhanced players, though that's untested). In the in-game settings'
+the same, with RB3Enhanced players, though that's untested), on Windows or Linux: two
+games on a Steam Deck have played a song together through Liveless Rooms. In the in-game settings'
 Online tab, turn on `liveless`, set `username` (the Game tab's Profile name) to your name (others
 see it), then restart; or set them on the [launcher](settings.md#the-launcher)'s Online
 and Game tabs and press Play.
