@@ -118,6 +118,130 @@ TEST_CASE("an unrelated soundtrack isn't taken for a match") {
     CHECK_FALSE(r.confident);
 }
 
+namespace {
+
+// a piece of a made-up video soundtrack: `seconds` of the song from `from`,
+// or (from < 0) of something else
+struct Piece {
+    double from;
+    double seconds;
+};
+
+// the pieces one after another, as a music video's soundtrack, at video_rate,
+// quieter, noisier and low-passed as MakeVideo's
+std::vector<float> Splice(const std::vector<float>& song, int song_rate, int video_rate,
+                          const std::vector<Piece>& pieces, uint32_t seed = 42) {
+    std::vector<float> out;
+    for (const Piece& p : pieces) {
+        std::vector<float> part;
+        if (p.from < 0) {
+            // a skit, an intro: other sounds altogether
+            part = MakeSong(p.seconds + 1.0, video_rate, seed++);
+            part.resize(size_t(p.seconds * video_rate));
+            for (float& v : part) v *= 0.4f;
+        } else {
+            part = MakeVideo(song, song_rate, video_rate, p.from, 0.0, p.seconds);
+        }
+        out.insert(out.end(), part.begin(), part.end());
+    }
+    return out;
+}
+
+// the segment holding song time t
+const VideoSegment& At(const SegmentMap& m, double t) {
+    size_t i = 0;
+    while (i + 1 < m.segments.size() && m.segments[i + 1].song_start <= t) i++;
+    return m.segments[i];
+}
+
+}
+
+TEST_CASE("a video cut as the song is gives one segment") {
+    const std::vector<float> song = MakeSong(180.0, 44100, 21);
+    // an intro of 6 s, then the whole song
+    const std::vector<float> video = Splice(song, 44100, 48000, {{-1, 6.0}, {0.0, 180.0}});
+    const SegmentMap m = AlignSegments(Envelope(song, 44100), Envelope(video, 48000));
+    REQUIRE(m.found);
+    REQUIRE(m.segments.size() == 1);
+    REQUIRE(m.segments[0].offset);
+    CHECK(std::abs(*m.segments[0].offset - 6.0) < 0.01);
+    CHECK(m.coverage > 0.95);
+    CHECK(m.confident);
+}
+
+TEST_CASE("a skit in the middle of a video makes a second segment") {
+    const std::vector<float> song = MakeSong(200.0, 44100, 22);
+    // the song's first 70 s, a 20 s skit, then the rest of the song
+    const std::vector<float> video =
+        Splice(song, 44100, 48000, {{-1, 4.0}, {0.0, 70.0}, {-1, 20.0}, {70.0, 130.0}});
+    const SegmentMap m = AlignSegments(Envelope(song, 44100), Envelope(video, 48000));
+    REQUIRE(m.found);
+    REQUIRE(m.segments.size() == 2);
+    CHECK(std::abs(*m.segments[0].offset - 4.0) < 0.01);
+    CHECK(std::abs(*m.segments[1].offset - 24.0) < 0.01);
+    // where the cut is, to the frame or so
+    CHECK(std::abs(m.segments[1].song_start - 70.0) < 0.05);
+    CHECK(m.confident);
+}
+
+TEST_CASE("a part of the song the video cuts out is played from the video's next part") {
+    const std::vector<float> song = MakeSong(200.0, 44100, 23);
+    // a radio edit: 60..100 s of the song left out
+    const std::vector<float> video = Splice(song, 44100, 48000, {{0.0, 60.0}, {100.0, 100.0}});
+    const SegmentMap m = AlignSegments(Envelope(song, 44100), Envelope(video, 48000));
+    REQUIRE(m.found);
+    CHECK(std::abs(*At(m, 30.0).offset - 0.0) < 0.01);
+    // after the cut, the video runs 40 s behind the song
+    CHECK(std::abs(*At(m, 150.0).offset - -40.0) < 0.01);
+    CHECK(m.confident);
+}
+
+TEST_CASE("a chorus that repeats doesn't pull the map to its other times") {
+    // a song whose 20 s chorus at 40 s comes again at 100 s and 160 s
+    std::vector<float> song = MakeSong(200.0, 44100, 24);
+    for (double again : {100.0, 160.0})
+        std::copy(song.begin() + 40 * 44100, song.begin() + 60 * 44100, song.begin() + size_t(again * 44100));
+    const std::vector<float> video = Splice(song, 44100, 48000, {{-1, 3.0}, {0.0, 200.0}});
+    const SegmentMap m = AlignSegments(Envelope(song, 44100), Envelope(video, 48000));
+    REQUIRE(m.found);
+    CHECK(m.segments.size() == 1);
+    CHECK(std::abs(*m.segments[0].offset - 3.0) < 0.01);
+}
+
+TEST_CASE("a stretch matched poorly between two at one offset is played through, not a gap") {
+    const std::vector<float> song = MakeSong(200.0, 44100, 27);
+    // 80..110 s of the video sound nothing like the song there (a quiet part
+    // mixed otherwise), though the video runs on in time
+    const std::vector<float> video =
+        Splice(song, 44100, 48000, {{-1, 5.0}, {0.0, 80.0}, {-1, 30.0}, {110.0, 90.0}});
+    const SegmentMap m = AlignSegments(Envelope(song, 44100), Envelope(video, 48000));
+    REQUIRE(m.found);
+    REQUIRE(m.segments.size() == 1);
+    CHECK(std::abs(*m.segments[0].offset - 5.0) < 0.01);
+    CHECK(m.coverage > 0.95);
+    CHECK(m.confident);
+}
+
+TEST_CASE("a video that ends before the song leaves a gap after it") {
+    const std::vector<float> song = MakeSong(180.0, 44100, 25);
+    const std::vector<float> video = Splice(song, 44100, 48000, {{0.0, 120.0}});
+    const SegmentMap m = AlignSegments(Envelope(song, 44100), Envelope(video, 48000));
+    REQUIRE(m.found);
+    REQUIRE(m.segments.size() == 2);
+    CHECK(std::abs(*m.segments[0].offset) < 0.01);
+    CHECK_FALSE(m.segments[1].offset);
+    CHECK(std::abs(m.segments[1].song_start - 120.0) < 1.0);
+    CHECK(m.coverage > 0.6);
+    CHECK(m.coverage < 0.75);
+}
+
+TEST_CASE("an unrelated soundtrack maps nothing surely") {
+    const std::vector<float> song = MakeSong(120.0, 44100, 26);
+    const std::vector<float> other = MakeSong(150.0, 48000, 999);
+    const SegmentMap m = AlignSegments(Envelope(song, 44100), Envelope(other, 48000));
+    CHECK_FALSE(m.confident);
+}
+
 TEST_CASE("silence finds nothing to be sure of") {
     const std::vector<float> quiet(44100 * 30, 0.0f);
     const SyncResult r =

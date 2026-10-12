@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -77,5 +78,40 @@ SyncResult AlignEnvelopes(std::span<const float> song, std::span<const float> vi
 inline constexpr double kMinScore = 0.4;
 inline constexpr double kMinMargin = 1.3;
 inline constexpr double kMinOnsetScore = 0.08;
+
+// A stretch of the song, from song_start to the next one's (or the song's
+// end), and the video's time over it: song time + offset. No offset is a gap:
+// the video hasn't this part of the song.
+struct VideoSegment {
+    double song_start = 0.0;
+    std::optional<double> offset;
+    double score = 0.0;  // its match, 0..1 (0 for a gap)
+};
+
+// Where in a video each part of the song is, for a video whose cut isn't the
+// song's: a skit between verses, a radio edit, an extended intro, an ending
+// that comes early. The first segment starts at 0.
+struct SegmentMap {
+    bool found = false;
+    std::vector<VideoSegment> segments;
+    double coverage = 0.0;  // the share of the song's time the video has
+    double score = 0.0;     // the matched parts' mean score
+    bool confident = false;
+};
+
+// The song's envelope against the video's, a part at a time: each 10 s
+// window of the song is matched along the video, the likeliest places kept,
+// and a path through them chosen that changes offset only where the match
+// holds the new one for a while (so a chorus heard again elsewhere in the
+// video doesn't pull the song there); each change is then placed to the
+// frame. Offsets searched from min_offset to max_offset seconds.
+SegmentMap AlignSegments(std::span<const float> song, std::span<const float> video,
+                         double min_offset = -120.0, double max_offset = 600.0);
+
+// how confident a map must be to be written without asking: most of the song
+// matched, and well, by at most this many changes of offset
+inline constexpr double kMinCoverage = 0.5;
+inline constexpr double kMinSegmentScore = 0.4;
+inline constexpr int kMaxJumps = 4;
 
 }
