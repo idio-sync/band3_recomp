@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <format>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -15,6 +16,7 @@
 #include "src/Launcher/launcher_platform.h"
 #include "src/Render/sync_gpu/native_only.h"
 #include "src/Render/sync_gpu/sync_graphics_system.h"
+#include "src/Video/music_video.h"
 #include "src/settings.h"
 
 extern "C" void __imp__BoxMapLighting__ApplyQueuedLights(PPCContext& ctx, uint8_t* base);
@@ -103,9 +105,9 @@ constexpr uint32_t kProcCounter_Fps = 16;      // the rate it was set for
 
 // ProcCommands calls this every frame with the venue's emulate_fps; the game
 // counts the period as if it ran at 60 (frame_pacing.h). At another rate (the
-// frame cap's, or refresh_rate's without it), or with background_fps set, the
-// period is counted from the game's real rate instead, stored as
-// SetEmulateFPS would.
+// frame cap's, or refresh_rate's without it), or with background_fps set (or
+// a music video faster than the venue playing), the period is counted from
+// the game's real rate instead, stored as SetEmulateFPS would.
 extern "C" void __imp__ProcCounter__SetEmulateFPS(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(ProcCounter__SetEmulateFPS)
 {
@@ -114,7 +116,11 @@ extern "C" REX_FUNC(ProcCounter__SetEmulateFPS)
     const uint32_t counter = ctx.r3.u32;
     const int32_t fps = ctx.r4.s32;
     const double game_hz = band3::pacing::GameHz();
-    const int32_t background_fps = REXCVAR_GET(background_fps);
+    // a music video faster than the venue (music_video_full_rate) is drawn at
+    // its own rate
+    const double video_fps = band3::video::MusicVideoFrameRate();
+    const int32_t background_fps =
+        band3::pacing::BackgroundFpsForVideo(fps, REXCVAR_GET(background_fps), video_fps);
 
     const bool at_60 = !(game_hz > 0) || game_hz == 60;
     if (fps <= 0 || (at_60 && background_fps == 0)) {
@@ -138,9 +144,12 @@ extern "C" REX_FUNC(ProcCounter__SetEmulateFPS)
                 REX_STORE_U32(counter + kProcCounter_Count, 0);
             if (half_frames != s_half_frames)
                 REXLOG_INFO("Background: the world every {} frames, {:.1f} fps at {:.5g} Hz "
-                            "(venue {} fps, background_fps {})",
+                            "(venue {} fps, background_fps {}{})",
                             half_frames / 2.0, 2 * game_hz / half_frames, game_hz, fps,
-                            background_fps);
+                            background_fps,
+                            background_fps != REXCVAR_GET(background_fps)
+                                ? std::format(", for a {:.5g} fps music video", video_fps)
+                                : std::string());
             s_counter = counter;
             s_half_frames = half_frames;
         }

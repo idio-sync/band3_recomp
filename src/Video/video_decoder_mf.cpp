@@ -68,6 +68,9 @@ public:
         UINT32 num = 1, den = 1;
         MFGetAttributeRatio(type.Get(), MF_MT_PIXEL_ASPECT_RATIO, &num, &den);
         pixel_aspect_ = num && den ? float(num) / float(den) : 1.0f;
+        num = den = 0;
+        MFGetAttributeRatio(type.Get(), MF_MT_FRAME_RATE, &num, &den);
+        frame_rate_ = num && den ? double(num) / double(den) : 0.0;
         if (!crop_w_ || !crop_h_) {
             error = std::format("no picture size ({}x{})", w, h);
             return false;
@@ -104,6 +107,8 @@ public:
         const HRESULT hr = reader_->SetCurrentPosition(GUID_NULL, position);
         return SUCCEEDED(hr);
     }
+
+    double FrameRate() const override { return frame_rate_; }
 
 private:
     bool Copy(IMFSample* sample, RgbFrame& out) {
@@ -147,6 +152,7 @@ private:
     LONG stride_ = 0;
     uint32_t crop_x_ = 0, crop_y_ = 0, crop_w_ = 0, crop_h_ = 0;
     float pixel_aspect_ = 1.0f;
+    double frame_rate_ = 0.0;
 };
 
 }

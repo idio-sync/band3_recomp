@@ -1,6 +1,7 @@
 // Checks src/Hooks/frame_pacing.h: the world's period under even/odd
 // rendering matches RB3's own at 60 Hz, keeps the venue's rate at higher
-// refresh rates, and follows background_fps when it's set; and the frame cap
+// refresh rates, and follows background_fps when it's set (or a faster music
+// video's rate); and the frame cap
 // keeps its beat, starts it again after a hitch, and reads frame_cap.
 
 #include <doctest/doctest.h>
@@ -43,6 +44,27 @@ TEST_CASE("a venue's rate is kept to SetEmulateFPS's 1..60") {
 
 TEST_CASE("an unset refresh rate is the console's 60") {
     CHECK(WorldHalfFrames(0, 30, 0) == 4);
+}
+
+TEST_CASE("a music video faster than the background has it drawn at the video's rate") {
+    using band3::pacing::BackgroundFpsForVideo;
+    // 60 fps (and 59.94) in a 30 fps venue: every frame at 60 Hz
+    CHECK(BackgroundFpsForVideo(30, 0, 60) == 60);
+    CHECK(BackgroundFpsForVideo(30, 0, 59.94) == 60);
+    CHECK(WorldHalfFrames(60, 30, BackgroundFpsForVideo(30, 0, 59.94)) == 2);
+    // at 120 Hz, every other frame
+    CHECK(WorldHalfFrames(120, 30, BackgroundFpsForVideo(30, 0, 60)) == 4);
+    // no faster than background_fps already draws it
+    CHECK(BackgroundFpsForVideo(30, 90, 60) == 90);
+    CHECK(BackgroundFpsForVideo(30, 20, 60) == 60);
+    // a 30, 29.97 or 24 fps video leaves the venue's rate alone
+    CHECK(BackgroundFpsForVideo(30, 0, 30) == 0);
+    CHECK(BackgroundFpsForVideo(30, 0, 29.97) == 0);
+    CHECK(BackgroundFpsForVideo(30, 0, 23.976) == 0);
+    CHECK(BackgroundFpsForVideo(30, 45, 24) == 45);
+    // none playing, or a venue drawing every frame already
+    CHECK(BackgroundFpsForVideo(30, 0, 0) == 0);
+    CHECK(BackgroundFpsForVideo(0, 0, 60) == 0);
 }
 
 TEST_CASE("the longest period counts ProcCounter's odd half-frame") {

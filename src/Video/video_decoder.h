@@ -22,6 +22,8 @@ public:
     virtual bool Read(RgbFrame& out) = 0;
     // reads go on from the key frame at or before `seconds`
     virtual bool Seek(double seconds) = 0;
+    // its frames a second, as the file gives it (0: not known)
+    virtual double FrameRate() const = 0;
 };
 
 // Sets up and takes down decoding on the calling thread, around any

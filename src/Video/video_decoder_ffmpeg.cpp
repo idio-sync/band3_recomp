@@ -131,6 +131,10 @@ public:
         }
         time_base_ = av_q2d(stream->time_base);
         start_ = stream->start_time != AV_NOPTS_VALUE ? stream->start_time : 0;
+        // the average over the file; the base rate for one that doesn't say
+        const AVRational rate =
+            stream->avg_frame_rate.num > 0 ? stream->avg_frame_rate : stream->r_frame_rate;
+        frame_rate_ = rate.num > 0 && rate.den > 0 ? av_q2d(rate) : 0.0;
         packet_ = g_av->av_packet_alloc();
         frame_ = g_av->av_frame_alloc();
         if (!packet_ || !frame_) {
@@ -171,6 +175,8 @@ public:
         return true;
     }
 
+    double FrameRate() const override { return frame_rate_; }
+
 private:
     bool Convert(RgbFrame& out) {
         const int w = frame_->width, h = frame_->height;
@@ -209,6 +215,7 @@ private:
     SwsContext* sws_ = nullptr;
     int stream_ = -1;
     double time_base_ = 0.0;
+    double frame_rate_ = 0.0;
     int64_t start_ = 0;
     // the file's read to its end; the decoder's last frames are coming out
     bool draining_ = false;

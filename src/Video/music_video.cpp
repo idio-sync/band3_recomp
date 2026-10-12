@@ -54,7 +54,8 @@ public:
         Begin(shortname, REXCVAR_GET(music_videos));
     }
 
-    bool Frame(double song_time, const PlaneSizes& sizes, std::shared_ptr<const PlaneSet>& out) {
+    bool Frame(double song_time, double world_fps, const PlaneSizes& sizes,
+               std::shared_ptr<const PlaneSet>& out) {
         std::lock_guard lock(mutex_);
         // turned off, it stops at once; turned on, it starts with the next song
         if (!file_ || !REXCVAR_GET(music_videos)) return false;
@@ -62,7 +63,9 @@ public:
         target_ = song_time + file_->start_time;
         sizes_ = sizes;
         fit_ = ParseFit(REXCVAR_GET(music_video_fit));
+        min_gap_ = MinFrameGap(world_fps);
         std::shared_ptr<const PlaneSet> planes = queue_.Show(target_);
+        Count(planes);
         // it may want to read on, or seek
         wake_.notify_one();
         if (!planes) {
@@ -112,9 +115,56 @@ public:
         return now - last_frame_.load() < half_second;
     }
 
+    double FrameRate() const { return frame_rate_.load(); }
+
 private:
+    // what the song's video showed, said as it ends
+    struct Stats {
+        uint64_t draws = 0;   // venue movie draws given a frame of it
+        uint64_t shown = 0;   // different frames among them
+        uint64_t behind = 0;  // draws whose frame was over two frames old
+        uint64_t read = 0, made = 0;  // frames decoded, and made into planes
+        // the video's time moving on from one frame shown to the next, not
+        // jumping (a restart, a seek), in frames and seconds
+        uint64_t steps = 0;
+        double played = 0.0;
+        double last = 0.0;  // the last frame shown's time
+    };
+
+    // a draw given `planes`, the queue's first frame
+    void Count(const std::shared_ptr<const PlaneSet>& planes) {
+        if (!planes) return;
+        const double t = queue_.FirstTime().value_or(target_);
+        if (!stats_.draws++) {
+            stats_.shown = 1;
+        } else if (t != stats_.last) {
+            stats_.shown++;
+            if (t > stats_.last && t - stats_.last < 1.0) {
+                stats_.steps++;
+                stats_.played += t - stats_.last;
+            }
+        }
+        stats_.last = t;
+        const double fps = frame_rate_.load();
+        if (fps > 0 && !ended_ && target_ - t > 2.0 / fps) stats_.behind++;
+    }
+
+    void LogStats() {
+        const Stats& s = stats_;
+        if (!s.draws) return;
+        REXLOG_INFO("Music video for {}: {} frames shown in {} draws over {:.1f} s of it ({:.1f} "
+                    "fps; the video's {:.3g}), {} draws over two frames behind; {} of {} frames "
+                    "read made ready",
+                    shortname_, s.shown, s.draws, s.played,
+                    s.played > 0 ? double(s.steps) / s.played : 0.0, frame_rate_.load(),
+                    s.behind, s.made, s.read);
+    }
+
     // a new song (or none): its video looked for
     void Begin(std::string_view shortname, bool on) {
+        LogStats();
+        stats_ = {};
+        frame_rate_ = 0.0;
         shortname_ = shortname;
         file_ = on && !shortname.empty() ? FindVideo(VideoFolders(), shortname) : std::nullopt;
         if (on && !shortname.empty()) {
@@ -189,7 +239,14 @@ private:
                     can_decode ? OpenVideo(*path, error) : nullptr;
                 if (!opened) REXLOG_WARN("Music video {}: {}", path->string(), error);
                 lock.lock();
-                if (song == song_) decoder = std::move(opened);
+                if (song == song_) {
+                    decoder = std::move(opened);
+                    if (decoder) {
+                        frame_rate_ = decoder->FrameRate();
+                        REXLOG_INFO("Music video for {}: {:.5g} fps", shortname_,
+                                    frame_rate_.load());
+                    }
+                }
                 continue;
             }
             DecodeStep step = DecodeStep::kWait;
@@ -232,10 +289,12 @@ private:
                 continue;
             }
             read_ = std::max(read_.value_or(frame.time), frame.time);
+            stats_.read++;
             // read from the key frame up to where it sought
             if (seek_to_ && frame.time >= *seek_to_ - kEarly) seek_to_.reset();
-            if (!ShouldMake(frame.time, target_, made_)) continue;
+            if (!ShouldMake(frame.time, target_, made_, min_gap_)) continue;
             made_ = frame.time;
+            stats_.made++;
             const PlaneSizes sizes = sizes_;
             const Fit fit = fit_;
             lock.unlock();
@@ -251,6 +310,8 @@ private:
     std::condition_variable wake_;
     // when Frame last gave a frame (steady_clock ticks), for Showing
     std::atomic<std::chrono::steady_clock::rep> last_frame_{0};
+    // the song's video's frame rate once it's opened, 0 till then
+    std::atomic<double> frame_rate_{0.0};
     bool started_ = false;
 
     // the game's side: the song, its video, where the song is
@@ -260,6 +321,8 @@ private:
     double target_ = 0.0;
     PlaneSizes sizes_;
     Fit fit_ = Fit::kFit;
+    double min_gap_ = kMinFrameGap;  // ShouldMake's, for how fast the world draws
+    Stats stats_;
     std::shared_ptr<const PlaneSet> black_;
     PlaneSizes black_sizes_;
     std::shared_ptr<const PlaneSet> resized_, resized_from_;
@@ -287,6 +350,11 @@ Player& ThePlayer() {
 bool MusicVideosOn() { return REXCVAR_GET(music_videos); }
 
 bool MusicVideoShowing() { return ThePlayer().Showing(); }
+
+double MusicVideoFrameRate() {
+    if (!REXCVAR_GET(music_video_full_rate) || !ThePlayer().Showing()) return 0.0;
+    return ThePlayer().FrameRate();
+}
 
 std::optional<VideoFile> CurrentMusicVideo(uint64_t& song) { return ThePlayer().Current(song); }
 
@@ -333,9 +401,9 @@ bool HasMusicVideo(std::string_view shortname) {
 
 void SetMusicVideoSong(std::string_view shortname) { ThePlayer().SetSong(shortname); }
 
-bool MusicVideoFrame(double song_time, const PlaneSizes& sizes,
+bool MusicVideoFrame(double song_time, double world_fps, const PlaneSizes& sizes,
                      std::shared_ptr<const PlaneSet>& out) {
-    return ThePlayer().Frame(song_time, sizes, out);
+    return ThePlayer().Frame(song_time, world_fps, sizes, out);
 }
 
 }

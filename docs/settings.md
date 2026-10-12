@@ -307,6 +307,16 @@ still plays along unseen: the cameras and the venue's lights (and
 (the default; Show music videos as they are) the video venue's colour filter, film grain,
 glow and trails are left off while the video plays, so it looks as it does in a player.
 
+The video venues draw their background at 24 or 30 fps. With `music_video_full_rate` on (the
+default; Play 60 fps music videos at 60 fps) a video faster than that, such as a 60 fps one,
+plays at its own rate: while it plays the venue is drawn that fast, as `background_fps`
+would draw it, up to the game's own rate. The log says so (`Background: the world every 1
+frames, 60.0 fps at 60 Hz (venue 30 fps, background_fps 60, for a 60 fps music video)`). It
+takes about twice the venue's drawing and the video's decoding; off, the video shows at the
+venue's rate. As a song with a video ends, the log says how it played (`Music video for
+masterofpuppets: 2764 frames shown in 3043 draws over 46.1 s of it (60.0 fps; the video's
+60), 0 draws over two frames behind`): draws behind mean the decoder didn't keep up.
+
 The video starts with the song. `<shortname>.ini` beside it with Clone Hero's
 `video_start_time = <milliseconds>` (as in a chart's `song.ini`) starts it that far in at the
 song's start; a negative one starts it that far into the song. The screen is black before the

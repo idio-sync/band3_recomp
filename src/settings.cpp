@@ -60,6 +60,12 @@ REXCVAR_DEFINE_BOOL(music_video_as_is, true, "Band3/Videos",
     "Show a song's music video as it is: the video venue's colour filter, film grain, glow "
     "and trails are left off while it plays (and on the black background's black)");
 
+REXCVAR_DEFINE_BOOL(music_video_full_rate, true, "Band3/Videos",
+    "Play a music video faster than the venue's 30 fps (a 60 fps one) at its own frame rate: "
+    "the video venue is drawn that fast while it plays (as background_fps would, up to the "
+    "game's rate), which takes about twice the drawing and decoding. Off, it shows at the "
+    "venue's rate");
+
 REXCVAR_DEFINE_BOOL(music_video_auto_sync, true, "Band3/Videos",
     "Find each music video's offset from its sound: the first time its song plays, about "
     "45 s in, the song's audio is matched against the video's and a sure match is saved "

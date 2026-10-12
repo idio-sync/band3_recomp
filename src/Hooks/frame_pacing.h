@@ -34,6 +34,18 @@ inline int32_t WorldHalfFrames(double game_hz, int32_t venue_fps, int32_t backgr
     return static_cast<int32_t>(std::clamp(half_frames, 2.0, 2 * game_hz));
 }
 
+// background_fps while a song's music video plays at `video_fps` (0 for none,
+// or music_video_full_rate off): the video's rate when that's faster than the
+// background would be drawn otherwise (`background_fps`, or with that 0 the
+// venue's `venue_fps`), so each of its frames is drawn; else background_fps
+inline int32_t BackgroundFpsForVideo(int32_t venue_fps, int32_t background_fps,
+                                     double video_fps) {
+    if (!(video_fps > 0) || venue_fps <= 0) return background_fps;
+    const int32_t would_be = background_fps > 0 ? background_fps : venue_fps;
+    const int32_t video = static_cast<int32_t>(std::lround(std::min(video_fps, 240.0)));
+    return video > would_be ? video : background_fps;
+}
+
 // The most frames apart the world is drawn now (ProcCounter's period, the
 // longer of its two when it alternates), 0 or 1 when it's drawn every frame.
 // Set by the game thread every frame (ProcCounter::SetEmulateFPS), for what

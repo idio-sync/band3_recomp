@@ -4,7 +4,9 @@
 // Black Background modifier with black_background_lights is a video venue
 // drawn the same way: black, no band, its lights on. With music_video_as_is,
 // the venue's post-processing is left off meanwhile, so the video shows as it
-// is.
+// is. With music_video_full_rate, a video faster than the venue's 30 fps has
+// the venue drawn at its rate (graphics.cpp's SetEmulateFPS hook), and as
+// many of its frames are made ready as the world is drawn (WorldFps).
 // Movie::Impl::Draw (rb3-xenon movie/Movie.cpp) gives its material the
 // current frame's three plane textures and draws them; the planes are
 // written here first, so both renderers draw ours without knowing. The video
@@ -15,6 +17,7 @@
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
 #include <rex/types.h>
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <chrono>
@@ -22,6 +25,7 @@
 #include <cstring>
 #include <memory>
 #include "generated/band3_init.h"
+#include "src/Hooks/frame_pacing.h"
 #include "src/Hooks/music_video.h"
 #include "src/Render/guest_formats.h"
 #include "src/Video/movie_planes.h"
@@ -91,6 +95,14 @@ double SongTime(uint8_t* base) {
     const uint32_t timeline = REX_LOAD_U32(kTheTaskMgr + kTaskMgr_Timeline);
     if (!timeline) return -1000.0;
     return std::bit_cast<float>(REX_LOAD_U32(timeline + kTimeline_Seconds));
+}
+
+// how many times a second the world, and with it the venue's movie, is drawn
+// (frame_pacing.h): the game's rate over the frames between world frames
+double WorldFps() {
+    double hz = band3::pacing::GameHz();
+    if (!(hz > 0)) hz = 60;
+    return hz / std::max<uint32_t>(1, band3::pacing::WorldPeriod());
 }
 
 // the layouts of the planes the movie draws this frame, or false
@@ -164,7 +176,7 @@ void ReplaceFrame(uint8_t* base, uint32_t impl) {
     } else if (black) {
         planes = BlackPlanes(sizes);
         g_black_drawn = std::chrono::steady_clock::now().time_since_epoch().count();
-    } else if (!band3::video::MusicVideoFrame(SongTime(base), sizes, planes)) {
+    } else if (!band3::video::MusicVideoFrame(SongTime(base), WorldFps(), sizes, planes)) {
         return;
     }
     uint8_t* memory[3];

@@ -34,8 +34,16 @@ inline constexpr double kBehind = 0.25;
 // game's frames don't line up exactly)
 inline constexpr double kEarly = 0.02;
 // frames closer together than this are read but not made into planes: the
-// video venues draw their world at 24 or 30 fps
+// video venues draw their world at 24 or 30 fps, unless background_fps or a
+// fast video (music_video_full_rate) has it drawn faster; then MinFrameGap
 inline constexpr double kMinFrameGap = 1.0 / 35.0;
+
+// the gap for a world drawn `world_fps` times a second (0: not known), a
+// little under its frame time so a video at that rate keeps every frame
+inline double MinFrameGap(double world_fps) {
+    if (!(world_fps > 0)) return kMinFrameGap;
+    return std::min(kMinFrameGap, 1.0 / (world_fps * 1.15));
+}
 // while catching up, one frame this far apart is made anyway, so something
 // moves if the decoder can't keep up
 inline constexpr double kCatchUpGap = 0.25;
@@ -89,11 +97,13 @@ inline DecodeStep NextStep(double target, std::optional<double> read,
 }
 
 // Whether a frame read at `time` is made into planes and queued, `made` the
-// time of the last one that was since opening or seeking (none yet).
-inline bool ShouldMake(double time, double target, std::optional<double> made) {
+// time of the last one that was since opening or seeking (none yet), frames
+// closer than `min_gap` to it skipped.
+inline bool ShouldMake(double time, double target, std::optional<double> made,
+                       double min_gap = kMinFrameGap) {
     if (!made) return true;
     const double gap = time - *made;
-    if (gap < kMinFrameGap) return false;
+    if (gap < min_gap) return false;
     // still catching up to the song: only now and then
     if (time < target - kEarly && gap < kCatchUpGap) return false;
     return true;

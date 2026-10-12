@@ -197,6 +197,8 @@ constexpr Setting kSettings[] = {
      .label = "Hide the band during music videos", .widget = kCheckbox},
     {.cvar = "music_video_as_is", .tab = kVideos, .section = "Music videos",
      .label = "Show music videos as they are", .widget = kCheckbox},
+    {.cvar = "music_video_full_rate", .tab = kVideos, .section = "Music videos",
+     .label = "Play 60 fps music videos at 60 fps", .widget = kCheckbox},
     {.cvar = "music_video_auto_sync", .tab = kVideos, .section = "Music videos",
      .label = "Sync music videos automatically", .widget = kCheckbox},
     {.cvar = "music_videos_folder", .tab = kVideos, .section = "Music videos",

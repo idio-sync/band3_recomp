@@ -55,17 +55,24 @@ std::string RecentNudgeMessage();
 // music_video_hide_band
 bool MusicVideoShowing();
 
+// with music_video_full_rate on, the frame rate of the music video on screen
+// (MusicVideoShowing), for drawing the background as fast (graphics.cpp's
+// ProcCounter::SetEmulateFPS hook); 0 otherwise, or while it isn't known yet
+double MusicVideoFrameRate();
+
 // The song played, as its Game is made (or GamePanel::Enter enters one a
 // setlist plays on in the same Game), empty as it ends: its video is looked
 // for, and opened on the player's thread.
 void SetMusicVideoSong(std::string_view shortname);
 
 // For the game's thread, as a venue movie draws: the frame to show at
-// `song_time` (the song's clock, seconds), at `sizes`. False when there's
-// nothing to show instead of the movie: no song, music videos off, or no
-// video for the song. While its video isn't decoded that far yet, or the
-// song's time is outside it, the frame is black.
-bool MusicVideoFrame(double song_time, const PlaneSizes& sizes,
+// `song_time` (the song's clock, seconds), at `sizes`, with the world drawn
+// `world_fps` times a second (0: not known), which is as many of the video's
+// frames as are made ready. False when there's nothing to show instead of the
+// movie: no song, music videos off, or no video for the song. While its video
+// isn't decoded that far yet, or the song's time is outside it, the frame is
+// black.
+bool MusicVideoFrame(double song_time, double world_fps, const PlaneSizes& sizes,
                      std::shared_ptr<const PlaneSet>& out);
 
 }

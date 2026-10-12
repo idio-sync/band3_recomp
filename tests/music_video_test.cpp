@@ -192,6 +192,18 @@ TEST_CASE("frames are made into planes at the venue's rate, and now and then whi
     CHECK(ShouldMake(3.3, 5.0, 3.0));
 }
 
+TEST_CASE("a world drawn every frame at 60 keeps a 60 fps video's every frame") {
+    CHECK(MinFrameGap(0) == kMinFrameGap);
+    CHECK(MinFrameGap(24) == kMinFrameGap);
+    CHECK(MinFrameGap(30) == kMinFrameGap);
+    CHECK(ShouldMake(5.0167, 5.0, 5.0, MinFrameGap(60)));
+    // 59.94 fps
+    CHECK(ShouldMake(5.01668, 5.0, 5.0, MinFrameGap(60)));
+    // a 120 fps video at 60: every other frame
+    CHECK_FALSE(ShouldMake(5.0083, 5.0, 5.0, MinFrameGap(60)));
+    CHECK(ShouldMake(5.0083, 5.0, 5.0, MinFrameGap(120)));
+}
+
 TEST_CASE("video_start_time comes from the .ini, in seconds") {
     CHECK(ParseStartTime("") == 0.0);
     CHECK(ParseStartTime("[song]\r\nname = x\r\nvideo_start_time = 1500\r\n") ==
