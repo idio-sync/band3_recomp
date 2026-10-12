@@ -208,6 +208,22 @@ TEST_CASE("a chorus that repeats doesn't pull the map to its other times") {
     CHECK(std::abs(*m.segments[0].offset - 3.0) < 0.01);
 }
 
+TEST_CASE("an opening riff heard again later doesn't take the song's start there") {
+    // the song's first 18 s come back at 120 s (Take on Me's synth line,
+    // Sabotage's riff), and the video's opening is mixed otherwise (quieter,
+    // noisier), so there its own place matches worse than the repeat
+    std::vector<float> song = MakeSong(200.0, 44100, 29);
+    std::copy(song.begin(), song.begin() + 18 * 44100, song.begin() + 120 * 44100);
+    std::vector<float> video = Splice(song, 44100, 48000, {{-1, 3.0}, {0.0, 200.0}});
+    Rng rng{5};
+    for (size_t i = 3 * 48000; i < 21 * 48000; i++) video[i] = video[i] * 0.5f + 0.06f * (rng.Next() * 2 - 1);
+    const SegmentMap m = AlignSegments(Envelope(song, 44100), Envelope(video, 48000));
+    REQUIRE(m.found);
+    CHECK(m.segments.size() == 1);
+    CHECK(std::abs(*m.segments[0].offset - 3.0) < 0.01);
+    CHECK(m.confident);
+}
+
 TEST_CASE("a stretch matched poorly between two at one offset is played through, not a gap") {
     const std::vector<float> song = MakeSong(200.0, 44100, 27);
     // 80..110 s of the video sound nothing like the song there (a quiet part

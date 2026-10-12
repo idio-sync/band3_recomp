@@ -183,9 +183,13 @@ SyncResult AlignEnvelopes(std::span<const float> song_env, std::span<const float
 
 namespace {
 
-// AlignSegments' windows over the song's shape (10 frames a second): 10 s
+// AlignSegments' windows over the song's shape (20 frames a second): 10 s
 // long, 2.5 s apart
-constexpr int kShapePerSecond = 10;
+constexpr int kShapePerSecond = 20;
+// how much each window's shape is smoothed (envelope frames): little, so its
+// onsets have to line up, not just its loudness; a repetitive song's 10 s
+// windows otherwise match strongly almost anywhere (Buddy Holly's did)
+constexpr int kWindowSmoothing = kEnvelopeRate * 15 / 100;
 constexpr long kWindow = 10 * kShapePerSecond;
 constexpr long kHop = 5 * kShapePerSecond / 2;
 // a window has to overlap the video this much to be matched there
@@ -193,13 +197,22 @@ constexpr long kMinWindowOverlap = kWindow * 6 / 10;
 // each window's best places kept, at least this far apart (frames)
 constexpr int kPeaks = 4;
 constexpr long kPeakSpacing = kShapePerSecond;
+// the offsets a path may take: those whose windows' votes (each window's
+// best few places, weighed by their match) add up to this, the best so many
+constexpr size_t kVotesPerWindow = 3;
+constexpr double kMinVotes = 1.5;
+constexpr size_t kMaxOffsets = 24;
 // a window matches a place no better than this: as good as no match
 constexpr double kNoMatch = 0.35;
-// the path's costs: changing offset, and going in or out of a gap; an offset
-// within kSameLag frames of the last is the same
+// the path's cost of changing offset; an offset within kSameLag frames of the
+// last is the same
 constexpr double kJumpCost = 2.0;
-constexpr double kGapCost = 1.0;
-constexpr long kSameLag = 1;
+// and a change's cost per second it moves the offset: a video's own cuts
+// (an intro skit, a radio edit) move it seconds to tens of seconds, while a
+// riff or chorus heard again elsewhere is often minutes away (in real videos,
+// 70 to 125 s), so a big move needs a long stretch that holds it
+constexpr double kJumpCostPerSecond = 0.05;
+constexpr long kSameLag = 2;
 // a segment shorter than this (seconds) goes into a neighbour
 constexpr double kMinSegmentSeconds = 8.0;
 // how far round its shape's place a segment's offset is looked for to the
@@ -235,7 +248,8 @@ double WindowCorr(const std::vector<float>& s, const std::vector<float>& v, long
 struct Run {
     long first = 0, last = 0;  // windows
     std::optional<long> lag;   // shape frames
-    double score = 0.0;        // the windows' mean
+    double score = 0.0;        // the mean of the windows that match (not weak)
+    int matched = 0;           // how many do
 };
 
 }
@@ -247,8 +261,8 @@ SegmentMap AlignSegments(std::span<const float> song_env, std::span<const float>
     constexpr int kStep = kEnvelopeRate / kShapePerSecond;
     const std::vector<float> song = Normalize(song_env);
     const std::vector<float> video = Normalize(video_env);
-    const std::vector<float> song_s = Normalize(Decimate(Smooth(song, kEnvelopeRate / 2), kStep));
-    const std::vector<float> video_s = Normalize(Decimate(Smooth(video, kEnvelopeRate / 2), kStep));
+    const std::vector<float> song_s = Normalize(Decimate(Smooth(song, kWindowSmoothing), kStep));
+    const std::vector<float> video_s = Normalize(Decimate(Smooth(video, kWindowSmoothing), kStep));
     const long length = long(song_s.size());
     const long lag0 = long(std::floor(min_offset * kShapePerSecond));
     const long lag1 = long(std::ceil(max_offset * kShapePerSecond));
@@ -279,37 +293,64 @@ SegmentMap AlignSegments(std::span<const float> song_env, std::span<const float>
             peaks[w].push_back(i + lag0);
         }
     }
+    // a window's match at a place, give or take the frames that count as it
     const auto score_at = [&](size_t w, long lag) {
         double best = 0;
-        for (long l = lag - 1; l <= lag + 1; l++)
+        for (long l = lag - kSameLag; l <= lag + kSameLag; l++)
             if (l >= lag0 && l <= lag1) best = std::max(best, double(corr[w][size_t(l - lag0)]));
         return best;
     };
 
-    // 2. a path through them: each window's own places and its neighbours'
-    // (so the place the song's been at can go on where a repeat outscores it)
-    std::vector<std::vector<long>> states(windows);
+    // 2. The offsets a video's parts can be at: those several windows' best
+    // places agree on (a video has a few, one per part), each weighed by how
+    // well its windows match there. Every window may be at any of them, so
+    // the path can hold one through a stretch where it matches only weakly.
+    struct Vote {
+        long lag;        // the best matched of its windows' places
+        double best;     // that one's match
+        double weight;   // all of them together
+    };
+    std::vector<Vote> votes;
     for (size_t w = 0; w < windows; w++) {
-        for (size_t n = w == 0 ? 0 : w - 1; n <= std::min(windows - 1, w + 1); n++)
-            for (long lag : peaks[n])
-                if (std::none_of(states[w].begin(), states[w].end(),
-                                 [&](long s) { return std::abs(s - lag) <= kSameLag; }))
-                    states[w].push_back(lag);
+        for (size_t i = 0; i < std::min<size_t>(peaks[w].size(), kVotesPerWindow); i++) {
+            const long lag = peaks[w][i];
+            const double weight = double(corr[w][size_t(lag - lag0)]);
+            auto it = std::find_if(votes.begin(), votes.end(),
+                                   [&](const Vote& v) { return std::abs(v.lag - lag) <= kSameLag; });
+            if (it == votes.end()) {
+                votes.push_back({lag, weight, weight});
+                continue;
+            }
+            it->weight += weight;
+            if (weight > it->best) {
+                it->best = weight;
+                it->lag = lag;
+            }
+        }
     }
-    // costs per state, the last one being no match
+    std::sort(votes.begin(), votes.end(), [](const Vote& a, const Vote& b) { return a.weight > b.weight; });
+    std::vector<long> offsets;
+    for (const Vote& v : votes)
+        if (v.weight >= kMinVotes && offsets.size() < kMaxOffsets) offsets.push_back(v.lag);
+    if (offsets.empty()) return map;  // nothing matches anywhere
+    const std::optional<long> dominant = offsets.front();
+    const std::vector<std::vector<long>> states(windows, offsets);
+    // Each window's cost at each place: its match there, no worse than no
+    // match at all (a weak stretch, a quiet part, is played through at the
+    // place the path holds, so the path never leaves a place through one,
+    // where a change would cost nothing). Gaps come only after: the weak
+    // stretches before the first match and after the last.
     std::vector<std::vector<double>> cost(windows);
     std::vector<std::vector<int>> from(windows);
-    const auto emit = [&](size_t w, int k) {
-        return k < int(states[w].size()) ? -score_at(w, states[w][size_t(k)]) : -kNoMatch;
-    };
+    const auto emit = [&](size_t w, int k) { return -std::max(score_at(w, states[w][size_t(k)]), kNoMatch); };
     const auto move = [&](size_t pw, int pk, size_t w, int k) {
-        const bool pgap = pk >= int(states[pw].size()), gap = k >= int(states[w].size());
-        if (pgap && gap) return 0.0;
-        if (pgap || gap) return kGapCost;
-        return std::abs(states[pw][size_t(pk)] - states[w][size_t(k)]) <= kSameLag ? 0.0 : kJumpCost;
+        const long move_frames = std::abs(states[pw][size_t(pk)] - states[w][size_t(k)]);
+        return move_frames <= kSameLag
+                   ? 0.0
+                   : kJumpCost + kJumpCostPerSecond * double(move_frames) / kShapePerSecond;
     };
     for (size_t w = 0; w < windows; w++) {
-        const int count = int(states[w].size()) + 1;
+        const int count = int(states[w].size());
         cost[w].assign(size_t(count), 0.0);
         from[w].assign(size_t(count), -1);
         for (int k = 0; k < count; k++) {
@@ -332,20 +373,36 @@ SegmentMap AlignSegments(std::span<const float> song_env, std::span<const float>
     path.back() = int(std::min_element(cost.back().begin(), cost.back().end()) - cost.back().begin());
     for (size_t w = windows - 1; w > 0; w--) path[w - 1] = from[w][size_t(path[w])];
 
-    // 3. runs of windows at one place
+    // 3. runs of windows at one place, the weak ones before the first match
+    // and after the last as gaps
+    std::vector<std::optional<long>> placed(windows);
+    for (size_t w = 0; w < windows; w++) placed[w] = states[w][size_t(path[w])];
+    const auto weak = [&](size_t w) { return score_at(w, *placed[w]) < kNoMatch; };
+    for (size_t w = 0; w < windows && weak(w); w++) placed[w].reset();
+    for (size_t w = windows; w-- > 0 && placed[w] && weak(w);) placed[w].reset();
     std::vector<Run> runs;
     for (size_t w = 0; w < windows; w++) {
-        const bool gap = path[w] >= int(states[w].size());
-        const std::optional<long> lag = gap ? std::nullopt : std::optional<long>(states[w][size_t(path[w])]);
-        const double score = gap ? 0.0 : score_at(w, *lag);
-        if (!runs.empty() && runs.back().lag.has_value() == lag.has_value() &&
-            (!lag || std::abs(*runs.back().lag - *lag) <= kSameLag)) {
-            Run& r = runs.back();
-            r.score = (r.score * double(r.last - r.first + 1) + score) / double(r.last - r.first + 2);
-            r.last = long(w);
-        } else {
-            runs.push_back({long(w), long(w), lag, score});
+        const std::optional<long> lag = placed[w];
+        const double score = lag ? score_at(w, *lag) : 0.0;
+        if (runs.empty() || runs.back().lag.has_value() != lag.has_value() ||
+            (lag && std::abs(*runs.back().lag - *lag) > kSameLag))
+            runs.push_back({long(w), long(w), lag, 0.0, 0});
+        Run& r = runs.back();
+        r.last = long(w);
+        // a weak window's played through, not counted as a match
+        if (score >= kNoMatch) {
+            r.score = (r.score * r.matched + score) / (r.matched + 1);
+            r.matched++;
         }
+    }
+    {
+        int in_parts = 0, matched_windows = 0;
+        for (const Run& r : runs) {
+            if (!r.lag) continue;
+            in_parts += int(r.last - r.first + 1);
+            matched_windows += r.matched;
+        }
+        map.support = in_parts ? double(matched_windows) / in_parts : 0.0;
     }
     // where each run starts, in shape frames: halfway between the last
     // window's centre before it and its first's
@@ -474,6 +531,30 @@ SegmentMap AlignSegments(std::span<const float> song_env, std::span<const float>
         segments[i].song_start = double(best_s) / kEnvelopeRate;
     }
 
+    // placing the changes can leave a part too short to be sure of: it goes
+    // into the part before (the first, into the one after)
+    for (bool merged = true; merged && segments.size() > 1;) {
+        merged = false;
+        for (size_t i = 0; i < segments.size(); i++) {
+            const double end = i + 1 < segments.size() ? segments[i + 1].song_start : total_seconds;
+            if (end - segments[i].song_start >= kMinSegmentSeconds) continue;
+            if (i == 0) segments[1].song_start = 0.0;
+            segments.erase(segments.begin() + long(i));
+            merged = true;
+            break;
+        }
+        for (size_t i = 1; i < segments.size(); i++) {
+            const VideoSegment& a = segments[i - 1];
+            const VideoSegment& b = segments[i];
+            if (a.offset.has_value() == b.offset.has_value() &&
+                (!a.offset || std::abs(*a.offset - *b.offset) <= kSameOffset)) {
+                segments.erase(segments.begin() + long(i));
+                merged = true;
+                break;
+            }
+        }
+    }
+
     // 5. what it comes to
     const double total = double(song.size()) / kEnvelopeRate;
     double matched = 0, scored = 0;
@@ -489,7 +570,7 @@ SegmentMap AlignSegments(std::span<const float> song_env, std::span<const float>
     map.coverage = total > 0 ? matched / total : 0.0;
     map.score = matched > 0 ? scored / matched : 0.0;
     map.confident = map.found && map.coverage >= kMinCoverage && map.score >= kMinSegmentScore &&
-                    int(map.segments.size()) - 1 <= kMaxJumps;
+                    map.support >= kMinSupport && int(map.segments.size()) - 1 <= kMaxJumps;
     return map;
 }
 
@@ -511,7 +592,19 @@ Match MatchSong(std::span<const float> song, std::span<const float> video, doubl
     while (first < m.map->segments.size() && !m.map->segments[first].offset) first++;
     r.parts = int(m.map->segments.size() - first);
     if (first < m.map->segments.size()) r.offset = *m.map->segments[first].offset;
-    r.margin = r.confident ? 99.0 : 0.0;
+    // One part throughout that too few windows match surely (a mix far from
+    // the song's): sure all the same if the whole song's single offset, found
+    // on its own, is sure and the same.
+    const size_t matched_parts = size_t(std::count_if(m.map->segments.begin(), m.map->segments.end(),
+                                                      [](const VideoSegment& s) { return s.offset.has_value(); }));
+    if (!r.confident && m.map->found && matched_parts == 1 && m.map->coverage >= kMinCoverage) {
+        const SyncResult whole = AlignEnvelopes(song, video, -120.0, 600.0);
+        if (whole.confident && std::abs(whole.offset - r.offset) <= kSameOffset) {
+            r.confident = m.map->confident = true;
+            r.margin = whole.margin;
+        }
+    }
+    if (r.margin == 0.0) r.margin = r.confident ? 99.0 : 0.0;
     return m;
 }
 

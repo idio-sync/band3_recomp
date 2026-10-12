@@ -99,7 +99,11 @@ struct SegmentMap {
     bool found = false;
     std::vector<VideoSegment> segments;
     double coverage = 0.0;  // the share of the song's time the video has
-    double score = 0.0;     // the matched parts' mean score
+    double score = 0.0;     // the mean score of the windows that match
+    // the share of the windows in the video's parts that match (the rest
+    // weak: a quiet part, or another mix), so a chance match or two in an
+    // unrelated soundtrack doesn't pass for a map
+    double support = 0.0;
     bool confident = false;
 };
 
@@ -116,6 +120,7 @@ SegmentMap AlignSegments(std::span<const float> song, std::span<const float> vid
 // matched, and well, by at most this many changes of offset
 inline constexpr double kMinCoverage = 0.5;
 inline constexpr double kMinSegmentScore = 0.4;
+inline constexpr double kMinSupport = 0.5;
 inline constexpr int kMaxJumps = 4;
 
 // The match auto-sync and finding videos make: over a song's whole sound

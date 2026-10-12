@@ -62,8 +62,10 @@ SongAudioResult PackageSongEnvelope(std::string_view shortname, std::vector<floa
         error = "its audio couldn't be read";
         return SongAudioResult::kFailed;
     }
-    const std::optional<MoggHeader> header = ParseMoggHeader(head);
-    if (header && header->version != kMoggUnencrypted) return SongAudioResult::kEncrypted;
+    // its version alone: the whole header (its Ogg's offset) points past these 8 bytes
+    const uint32_t version = uint32_t(head[0]) | uint32_t(head[1]) << 8 | uint32_t(head[2]) << 16 |
+                             uint32_t(head[3]) << 24;
+    if (version != kMoggUnencrypted) return SongAudioResult::kEncrypted;
     std::vector<uint8_t> mogg(entry->size());
     if (!ReadAll(entry, 0, mogg)) {
         error = "its audio couldn't be read";
