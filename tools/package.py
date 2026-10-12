@@ -38,6 +38,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 
 import settings_reference
@@ -124,6 +125,16 @@ def third_party_licenses(build_dir):
     return out
 
 
+def write_text(z, name, text):
+    """`text` into the zip as `name`, readable by everyone once unzipped
+    (writestr with a bare name gives 0600: on Linux only the one who unzipped
+    it could read README.txt)."""
+    info = zipfile.ZipInfo(name, date_time=time.localtime()[:6])
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = 0o644 << 16
+    z.writestr(info, text)
+
+
 def readme(commit, full_commit, windows, dirty):
     lines = [
         f"band3 {commit}{' (with uncommitted changes)' if dirty else ''}: "
@@ -206,8 +217,8 @@ def main(argv):
         z.write(settings_reference.REFERENCE, "band3/settings-reference.md")
         z.write(os.path.join(REPO, "LICENSE.md"), "band3/LICENSE.md")
         for license_name, text in third_party_licenses(build_dir).items():
-            z.writestr(f"band3/licenses/{license_name}", text)
-        z.writestr("band3/README.txt", readme(commit, full_commit, windows, dirty))
+            write_text(z, f"band3/licenses/{license_name}", text)
+        write_text(z, "band3/README.txt", readme(commit, full_commit, windows, dirty))
         packed = z.namelist()
 
     print(zip_path)
