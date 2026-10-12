@@ -32,4 +32,16 @@ std::string Describe(std::span<const HeapStats> heaps);
 std::string AllocFailure(std::string_view heap, uint64_t wanted, int64_t left, int64_t right,
                          uint64_t largest, uint64_t free, uint64_t size);
 
+// The most a heap can be. AddHeap takes each heap's memory from the SDK's guest
+// heap, which hands out power-of-two blocks of at most 128 MiB: this fits one
+// with its header (a 226000000-byte main heap fails at boot). Mem.dta's main
+// heap (105000000, or 113000000 with Rock Band 3 Deluxe) gets a 128 MiB block
+// already and leaves the rest of it unused.
+inline constexpr int64_t kMaxHeapSize = 134000000;
+
+// The size AddHeap gives heap `name`, mem.dta asking for `mem_dta`: `setting`
+// (main_heap_size, char_heap_size) when it's set, and the main heap as big as a
+// heap can be when it isn't; no more than kMaxHeapSize, unless mem.dta asks for it.
+int64_t HeapSize(std::string_view name, int64_t setting, int64_t mem_dta);
+
 }

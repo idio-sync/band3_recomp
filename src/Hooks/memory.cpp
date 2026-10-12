@@ -3,6 +3,7 @@
 #include <cstring>
 #include "generated/band3_init.h"
 #include "src/settings.h"
+#include "src/Game/heap_report.h"
 #include "src/Game/DataNode.h"
 #include "src/Game/DataArray.h"
 
@@ -20,14 +21,23 @@ extern "C" REX_FUNC(AddHeap)
         auto* first = reinterpret_cast<const band3::DataNode*>(REX_RAW_ADDR(nodes_addr));
         if (first->type == band3::kDataSymbol) {
             const char* name = reinterpret_cast<const char*>(REX_RAW_ADDR(first->value));
-            const int32_t main_heap = band3::settings::Startup().main_heap_size;
-            const int32_t char_heap = band3::settings::Startup().char_heap_size;
-            if (main_heap > 0 && strcmp(name, "main") == 0) {
-                REXLOG_INFO("Overriding main heap size: {:#x} -> {:#x}", ctx.r4.u32, main_heap);
-                ctx.r4.u32 = static_cast<uint32_t>(main_heap);
-            } else if (char_heap > 0 && strcmp(name, "char") == 0) {
-                REXLOG_INFO("Overriding char heap size: {:#x} -> {:#x}", ctx.r4.u32, char_heap);
-                ctx.r4.u32 = static_cast<uint32_t>(char_heap);
+            // the main heap as big as a heap can be unless main_heap_size is set
+            // (src/Game/heap_report.h)
+            const int32_t setting = strcmp(name, "main") == 0
+                                        ? band3::settings::Startup().main_heap_size
+                                    : strcmp(name, "char") == 0
+                                        ? band3::settings::Startup().char_heap_size
+                                        : 0;
+            const auto size = static_cast<uint32_t>(
+                band3::heap_report::HeapSize(name, setting, ctx.r4.u32));
+            if (setting > band3::heap_report::kMaxHeapSize) {
+                REXLOG_WARN("{}_heap_size {} is more than a heap can be; {} instead", name,
+                            setting, band3::heap_report::kMaxHeapSize);
+            }
+            if (size != ctx.r4.u32) {
+                REXLOG_INFO("Overriding {} heap size: {:#x} -> {:#x} ({} bytes{})", name,
+                            ctx.r4.u32, size, size, setting > 0 ? "" : ", band3's default");
+                ctx.r4.u32 = size;
             }
         }
     }

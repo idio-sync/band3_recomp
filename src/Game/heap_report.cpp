@@ -1,4 +1,5 @@
 #include "heap_report.h"
+#include <algorithm>
 #include <cmath>
 #include <format>
 
@@ -51,13 +52,21 @@ std::string Describe(std::span<const HeapStats> heaps) {
     return out;
 }
 
+int64_t HeapSize(std::string_view name, int64_t setting, int64_t mem_dta) {
+    if (setting > 0) return std::min(setting, kMaxHeapSize);
+    if (name == "main") return std::max(mem_dta, kMaxHeapSize);
+    return mem_dta;
+}
+
 std::string AllocFailure(std::string_view heap, uint64_t wanted, int64_t left, int64_t right,
                          uint64_t largest, uint64_t free, uint64_t size) {
     std::string out = std::format("Out of memory: the game's {} heap", heap);
     if (size) out += std::format(" ({})", Bytes(size));
     out += std::format(" has no room for {}: {} free in {}, the largest {}. The game crashes next",
                        Bytes(wanted), Bytes(free), Blocks(left + 1 + right), Bytes(largest));
-    if (const char* setting = Setting(heap)) {
+    if (size >= uint64_t(kMaxHeapSize)) {
+        out += "; the heap is as big as a heap can be already";
+    } else if (const char* setting = Setting(heap)) {
         out += std::format("; a bigger {} (Advanced, Memory) gives it more room", setting);
     }
     return out;

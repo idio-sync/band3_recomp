@@ -60,3 +60,38 @@ TEST_CASE("the char heap's own setting, and none for other heaps") {
           "Out of memory: the game's fast heap has no room for 4 KB: "
           "2 KB free in 2 blocks, the largest 1 KB. The game crashes next");
 }
+
+using band3::heap_report::HeapSize;
+using band3::heap_report::kMaxHeapSize;
+
+TEST_CASE("no setting to raise when the heap is as big as a heap can be") {
+    CHECK(AllocFailure("main", 4096, 0, 0, 1024, 1024, kMaxHeapSize) ==
+          "Out of memory: the game's main heap (127.8 MB) has no room for 4 KB: "
+          "1 KB free in 1 block, the largest 1 KB. The game crashes next; the heap is "
+          "as big as a heap can be already");
+}
+
+TEST_CASE("the main heap is as big as a heap can be unless it's set") {
+    // Rock Band 3 Deluxe's mem.dta, then the game's as it shipped
+    CHECK(HeapSize("main", 0, 113000000) == kMaxHeapSize);
+    CHECK(HeapSize("main", 0, 105000000) == kMaxHeapSize);
+    // a mem.dta asking for more than that keeps its own
+    CHECK(HeapSize("main", 0, 134100000) == 134100000);
+    CHECK(HeapSize("main", 120000000, 113000000) == 120000000);
+    CHECK(HeapSize("main", 60000000, 113000000) == 60000000);
+}
+
+TEST_CASE("the char heap keeps mem.dta's size unless it's set") {
+    CHECK(HeapSize("char", 0, 32000000) == 32000000);
+    CHECK(HeapSize("char", 40000000, 32000000) == 40000000);
+}
+
+TEST_CASE("a size set over what a heap can be is brought down to it") {
+    // a 226000000-byte main heap fails at boot (SDK's o1heap: 256 MiB block)
+    CHECK(HeapSize("main", 226000000, 113000000) == kMaxHeapSize);
+    CHECK(HeapSize("char", 300000000, 32000000) == kMaxHeapSize);
+}
+
+TEST_CASE("other heaps are mem.dta's") {
+    CHECK(HeapSize("fast", 0, 1000000) == 1000000);
+}

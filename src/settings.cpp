@@ -1,5 +1,6 @@
 #include "settings.h"
 #include "renderer_default.h"
+#include "Game/heap_report.h"
 #include "Hooks/frame_pacing.h"
 #include "Render/renderer_mode.h"
 #include <rex/logging.h>
@@ -12,22 +13,11 @@
 
 using rex::cvar::Lifecycle;
 
-// the game crashes on start if its heaps add up to more than this
-static constexpr int64_t kMaxHeapTotal = 0x40000000;
-// mem.dta's sizes, which a heap size of 0 keeps: Rock Band 3 Deluxe's main
-// heap, the bigger (the game as it shipped has 105000000)
-static constexpr int64_t kDefaultMainHeap = 113000000;
-static constexpr int64_t kDefaultCharHeap = 32000000;
-
-static bool ParseHeapSize(std::string_view v, int64_t& out) {
+// a heap size up to what a heap can be (heap_report.h's kMaxHeapSize): more
+// fails at boot
+static bool ValidHeapSize(std::string_view v) {
     double d;
-    if (!rex::cvar::ParseDouble(v, d) || d < 0 || d > kMaxHeapTotal) return false;
-    out = static_cast<int64_t>(d);
-    return true;
-}
-
-static int64_t EffectiveHeap(int64_t size, int64_t default_size) {
-    return size > 0 ? size : default_size;
+    return rex::cvar::ParseDouble(v, d) && d >= 0 && d <= band3::heap_report::kMaxHeapSize;
 }
 
 // Band3/Game
@@ -500,27 +490,16 @@ REXCVAR_DEFINE_BOOL(pico_discovery, true, "Band3/Lights",
 // Band3/Advanced/Memory
 
 REXCVAR_DEFINE_INT32(main_heap_size, 0, "Band3/Advanced/Memory",
-    "Main heap size in bytes, 0 = mem.dta's: 105000000, or 113000000 with Rock Band 3 "
-    "Deluxe. Main and char together must stay under 0x40000000")
-    .range(0, kMaxHeapTotal)
-    .validator([](std::string_view v) {
-        int64_t size;
-        return ParseHeapSize(v, size) &&
-               EffectiveHeap(size, kDefaultMainHeap) +
-                   EffectiveHeap(REXCVAR_GET(char_heap_size), kDefaultCharHeap) <= kMaxHeapTotal;
-    })
+    "Main heap size in bytes, 0 = 134000000, the most a heap can be (mem.dta's is "
+    "105000000, or 113000000 with Rock Band 3 Deluxe)")
+    .range(0, band3::heap_report::kMaxHeapSize)
+    .validator(ValidHeapSize)
     .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_INT32(char_heap_size, 0, "Band3/Advanced/Memory",
-    "Character heap size in bytes, 0 = mem.dta's 32000000. Main and char together must "
-    "stay under 0x40000000")
-    .range(0, kMaxHeapTotal)
-    .validator([](std::string_view v) {
-        int64_t size;
-        return ParseHeapSize(v, size) &&
-               EffectiveHeap(REXCVAR_GET(main_heap_size), kDefaultMainHeap) +
-                   EffectiveHeap(size, kDefaultCharHeap) <= kMaxHeapTotal;
-    })
+    "Character heap size in bytes, 0 = mem.dta's 32000000. At most 134000000")
+    .range(0, band3::heap_report::kMaxHeapSize)
+    .validator(ValidHeapSize)
     .lifecycle(Lifecycle::kRequiresRestart);
 
 // Band3/Advanced/Game code

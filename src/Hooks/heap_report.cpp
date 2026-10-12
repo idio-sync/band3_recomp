@@ -45,7 +45,7 @@ PPCContext CallContext(const PPCContext& ctx, uint32_t reserve) {
     return call;
 }
 
-uint64_t HeapSize(uint8_t* base, int32_t heap) {
+uint64_t GuestHeapSize(uint8_t* base, int32_t heap) {
     return uint64_t(Load32(base, kHeaps + heap * kHeapStride + kHeap_SizeWords)) * 4;
 }
 
@@ -74,7 +74,7 @@ void LogHeaps(PPCContext& ctx, uint8_t* base, const char* when) {
         const auto after = static_cast<int32_t>(Load32(base, out + 4));
         heaps.push_back({
             .name = GuestStr(base, Load32(base, kHeaps + i * kHeapStride + kHeap_Name)),
-            .size = HeapSize(base, i),
+            .size = GuestHeapSize(base, i),
             .free = Load32(base, out + 8),
             .largest = Load32(base, out + 12),
             .blocks = int64_t(index) + 1 + after,
@@ -95,7 +95,7 @@ extern "C" REX_FUNC(MakeString_char_Ptr_int_int_int_int_int)
         uint64_t size = 0;
         for (int32_t i = 0; i < NumHeaps(base); i++) {
             if (Load32(base, kHeaps + i * kHeapStride + kHeap_Name) == ctx.r4.u32) {
-                size = HeapSize(base, i);
+                size = GuestHeapSize(base, i);
                 break;
             }
         }
