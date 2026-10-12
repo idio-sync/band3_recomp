@@ -389,6 +389,13 @@ void StopFrameCap() {
     if (poller.joinable()) poller.join();
 }
 
+namespace {
+// PhaseLock's corrections not yet moved into the beat
+std::atomic<int64_t> g_nudge_ns{0};
+}
+
+void NudgeBeat(int64_t ns) { g_nudge_ns.fetch_add(ns, std::memory_order_relaxed); }
+
 void PaceFrame() {
     // Present runs on RB3's splash thread at boot and its main thread after,
     // never both at once, so they share the beat; the lock is never contended
@@ -400,7 +407,17 @@ void PaceFrame() {
     {
         std::lock_guard lock(mutex);
         schedule.SetPeriod(period);
-        if (period <= 0) return;
+        if (period <= 0) {
+            g_nudge_ns.store(0, std::memory_order_relaxed);
+            return;
+        }
+        // a little of what PhaseLock asked for each frame
+        int64_t pending = g_nudge_ns.load(std::memory_order_relaxed);
+        if (pending) {
+            const int64_t take = std::clamp(pending, -kNudgePerFrameNs, kNudgePerFrameNs);
+            g_nudge_ns.fetch_sub(take, std::memory_order_relaxed);
+            schedule.Nudge(take);
+        }
         go = schedule.Next(now);
         g_late.store(schedule.Late(), std::memory_order_relaxed);
         g_resets.store(schedule.Resets(), std::memory_order_relaxed);

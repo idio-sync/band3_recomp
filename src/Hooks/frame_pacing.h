@@ -109,6 +109,12 @@ public:
         return now_ns;
     }
 
+    // Moves the beat by `ns` (earlier if negative), for PhaseLock; nothing
+    // before the beat has started
+    void Nudge(int64_t ns) {
+        if (started_ && period_ > 0) deadline_ += ns;
+    }
+
     // frames that ended after their beat by less than a period, and the
     // times a later one started the beat again
     uint64_t Late() const { return late_; }
@@ -157,6 +163,75 @@ inline const char* FrameCapModeName(FrameCapMode mode) {
     }
     return "off";
 }
+
+// Phase lock (native_phase_lock). The cap runs at the display's rate, but on
+// its own clock, so where its beat falls against the vertical blanks is
+// chance, and drifts with the display's true rate. With the native renderer
+// each frame reaches the window (published) some time after the game's
+// Present, and the next paint shows it: when that's only a few ms after it's
+// published, a frame a little slower than the rest misses its paint, which
+// shows the frame before again, and the next paint finds two new frames and
+// shows the newer (a repeat and a skip). This steers the beat so frames are
+// published about half a refresh before the paint that shows them: the
+// slack, a paint's time less its frame's publishing, is measured over
+// kWindow frames, and the beat moved by kGain of its median's distance from
+// half the period (Correction), at most a quarter period at a time.
+// Times in steady-clock nanoseconds. Not thread-safe.
+class PhaseLock {
+public:
+    static constexpr int kWindow = 30;
+    static constexpr int kRecent = 8;  // frames published and not yet shown
+    static constexpr double kGain = 0.5;
+
+    // frame `presented_ns` (its Present) reached the window at `now_ns`
+    void Published(int64_t presented_ns, int64_t now_ns) {
+        recent_[next_++ % kRecent] = {presented_ns, now_ns};
+    }
+
+    // A paint at `paint_ns` on a display refreshing every `period_ns` showed
+    // frame `serial`, Presented at `presented_ns`. The beat's correction once
+    // a window's measured (negative: earlier), else 0.
+    int64_t Shown(uint64_t serial, int64_t presented_ns, int64_t paint_ns, int64_t period_ns) {
+        if (!serial || serial == last_serial_ || period_ns <= 0) return 0;
+        last_serial_ = serial;
+        int64_t published = -1;
+        for (const Entry& e : recent_)
+            if (e.presented_ns == presented_ns) published = e.published_ns;
+        if (published < 0) return 0;
+        const int64_t slack = paint_ns - published;
+        // a paint can't show a frame before it's published; a long gap is a
+        // stall, not the phase
+        if (slack < 0 || slack > 3 * period_ns) return 0;
+        slack_[count_++] = slack;
+        if (count_ < kWindow) return 0;
+        count_ = 0;
+        return Correction(Median(), period_ns);
+    }
+
+    // the beat's move for a median slack of `slack_ns`
+    static int64_t Correction(int64_t slack_ns, int64_t period_ns) {
+        const double c = kGain * double(slack_ns - period_ns / 2);
+        const double most = double(period_ns) / 4;
+        return int64_t(std::clamp(c, -most, most));
+    }
+
+    void Reset() { *this = PhaseLock{}; }
+
+private:
+    struct Entry {
+        int64_t presented_ns = -1, published_ns = -1;
+    };
+    int64_t Median() {
+        std::nth_element(slack_, slack_ + kWindow / 2, slack_ + kWindow);
+        return slack_[kWindow / 2];
+    }
+
+    Entry recent_[kRecent];
+    uint64_t next_ = 0;
+    uint64_t last_serial_ = 0;
+    int64_t slack_[kWindow] = {};
+    int count_ = 0;
+};
 
 // the cap as it runs: off (period 0), or a rate and its period
 struct FrameCap {
@@ -231,6 +306,11 @@ std::optional<bool> VsyncBeforeCap();
 // Called by the game thread at the end of each Present (scene_capture.cpp):
 // waits for the frame's beat while the cap is on
 void PaceFrame();
+
+// PhaseLock's correction, moved into the beat a little each frame by
+// PaceFrame (kNudgePerFrameNs at most) so no frame's interval jumps
+inline constexpr int64_t kNudgePerFrameNs = 250'000;
+void NudgeBeat(int64_t ns);
 
 // The rate the game runs at: the cap's while it's on, else refresh_rate
 // (video_mode_refresh_rate, 0 for the console's 60)

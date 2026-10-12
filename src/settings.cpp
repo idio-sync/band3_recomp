@@ -553,6 +553,13 @@ REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Advanced/Native renderer
     "refresh shows the newest frame anyway, and auto's variable refresh display shows each "
     "as it comes, so the delay would only add lag");
 
+REXCVAR_DEFINE_BOOL(native_phase_lock, true, "Band3/Advanced/Native renderer",
+    "With the native picture shown and the frame cap at a fixed rate (display or a number "
+    "matching the display's), move the cap's beat so each frame reaches the window about "
+    "half a refresh before the paint that shows it, rather than wherever the cap's clock "
+    "happens to fall against the display's: a frame a little slower than the rest then "
+    "still makes its paint instead of being shown a refresh late and the next skipped");
+
 REXCVAR_DEFINE_BOOL(native_present_request_paint, true, "Band3/Advanced/Native renderer",
     "With renderer native (no emulated GPU), ask the window to paint each time the native "
     "renderer has a new frame for it, as the emulated GPU's swaps did; off leaves the window "

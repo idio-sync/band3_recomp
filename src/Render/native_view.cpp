@@ -1575,18 +1575,41 @@ PaintRecorder g_paints;
 std::chrono::steady_clock::time_point g_paints_since = std::chrono::steady_clock::now();
 std::string g_present_path;
 
+// native_phase_lock's, under g_paints_mutex
+pacing::PhaseLock g_phase;
+
+// The display's period while native_phase_lock can steer the cap: the cap at
+// a fixed rate within 0.5% of the display's; else 0
+int64_t PhaseLockPeriodNs() {
+    if (!REXCVAR_GET(native_phase_lock)) return 0;
+    const pacing::FrameCapStats cap = pacing::GetFrameCapStats();
+    if (cap.mode != pacing::FrameCapMode::kDisplay && cap.mode != pacing::FrameCapMode::kFixed)
+        return 0;
+    const double display = pacing::DisplayHz();
+    if (!(display > 0) || std::abs(cap.hz - display) > 0.005 * display) return 0;
+    return int64_t(1e9 / display);
+}
+
 // with `native`: showing frame `serial` (0 none) of `source`'s numbering
 void NotePaint(std::chrono::steady_clock::time_point now, bool native, int source = 0,
                uint64_t serial = 0, std::chrono::steady_clock::time_point presented = {}) {
-    std::lock_guard lock(g_paints_mutex);
-    g_paints.Paint(Nanoseconds(now), native, source, serial,
-                   presented.time_since_epoch().count() ? Nanoseconds(presented) : 0);
+    const int64_t presented_ns = presented.time_since_epoch().count() ? Nanoseconds(presented) : 0;
+    const int64_t period = native && serial && presented_ns ? PhaseLockPeriodNs() : 0;
+    int64_t nudge = 0;
+    {
+        std::lock_guard lock(g_paints_mutex);
+        g_paints.Paint(Nanoseconds(now), native, source, serial, presented_ns);
+        if (period) nudge = g_phase.Shown(serial, presented_ns, Nanoseconds(now), period);
+    }
+    if (nudge) pacing::NudgeBeat(nudge);
 }
 
 void NotePublished(std::chrono::steady_clock::time_point presented) {
     const int64_t now = Nanoseconds(std::chrono::steady_clock::now());
+    const int64_t presented_ns = presented.time_since_epoch().count() ? Nanoseconds(presented) : 0;
     std::lock_guard lock(g_paints_mutex);
-    g_paints.Published(now, presented.time_since_epoch().count() ? Nanoseconds(presented) : 0);
+    g_paints.Published(now, presented_ns);
+    if (presented_ns) g_phase.Published(presented_ns, now);
 }
 
 // PaintRecorder sources; zero-copy is D3D12 only

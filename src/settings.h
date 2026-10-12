@@ -131,6 +131,7 @@ REXCVAR_DECLARE(bool, force_self_shadow);
 REXCVAR_DECLARE(std::string, native_view_backend);
 REXCVAR_DECLARE(bool, native_present_zero_copy);
 REXCVAR_DECLARE(bool, native_present_pacing);
+REXCVAR_DECLARE(bool, native_phase_lock);
 REXCVAR_DECLARE(bool, native_present_request_paint);
 REXCVAR_DECLARE(bool, native_present_pipeline);
 REXCVAR_DECLARE(bool, native_upload_pipeline);

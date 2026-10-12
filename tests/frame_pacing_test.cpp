@@ -166,6 +166,88 @@ TEST_CASE("a new period or turning the cap off starts the beat again") {
     CHECK(s.Resets() == 0);
 }
 
+TEST_CASE("a nudge moves the beat, once it has started") {
+    FrameCapSchedule s;
+    s.SetPeriod(kPeriod);
+    s.Nudge(1'000'000);  // nothing to move yet
+    CHECK(s.Next(kStart) == kStart);
+    s.Nudge(-2'000'000);
+    CHECK(s.Next(kStart + 1'000'000) == kStart + kPeriod - 2'000'000);
+    s.Nudge(500'000);
+    CHECK(s.Next(kStart + kPeriod) == kStart + 2 * kPeriod - 1'500'000);
+}
+
+using band3::pacing::PhaseLock;
+
+TEST_CASE("the phase lock moves the beat toward half a period of slack") {
+    constexpr int64_t p = 16'666'667;
+    // published right before its paint: the beat moves earlier
+    CHECK(PhaseLock::Correction(2'000'000, p) < 0);
+    CHECK(PhaseLock::Correction(p / 2, p) == 0);
+    // published long before: later, for less lag
+    CHECK(PhaseLock::Correction(14'000'000, p) > 0);
+    // at most a quarter period at a time
+    CHECK(PhaseLock::Correction(0, p) >= -p / 4);
+    CHECK(PhaseLock::Correction(100'000'000, p) <= p / 4);
+}
+
+TEST_CASE("the phase lock counts each frame's first paint once a window is full") {
+    constexpr int64_t p = 16'666'667;
+    PhaseLock lock;
+    int64_t t = 1'000'000'000;
+    int64_t correction = 0;
+    for (uint64_t serial = 1; serial <= PhaseLock::kWindow; serial++) {
+        lock.Published(t, t + 15'000'000);
+        // published 2 ms before the paint
+        correction = lock.Shown(serial, t, t + 17'000'000, p);
+        if (serial < PhaseLock::kWindow) CHECK(correction == 0);
+        // a repeat of the same frame doesn't count
+        CHECK(lock.Shown(serial, t, t + 17'000'000 + p, p) == 0);
+        t += p;
+    }
+    CHECK(correction == PhaseLock::Correction(2'000'000, p));
+    // a frame it never saw published, a slack below 0 or a stall's don't count
+    CHECK(lock.Shown(100, 5, 10, p) == 0);
+    lock.Published(t, t + 20'000'000);
+    CHECK(lock.Shown(101, t, t + 19'000'000, p) == 0);
+    lock.Published(t + 1, t + 1);
+    CHECK(lock.Shown(102, t + 1, t + 1 + 4 * p, p) == 0);
+}
+
+TEST_CASE("locked, frames are published about half a refresh before their paint") {
+    // a display whose vblanks fall at an odd phase, a frame cap at its rate,
+    // and frames published 15 ms after their Present give or take 2 ms: the
+    // slack starts at about 1 ms, where the slower frames miss their paint
+    constexpr int64_t p = 16'666'667;
+    const int64_t phase = 3'300'000;
+    FrameCapSchedule cap;
+    cap.SetPeriod(p);
+    PhaseLock lock;
+    int64_t pending = 0, now = 0, last_slack = 0, last_paint = 0;
+    int misses = 0;
+    for (uint64_t frame = 1; frame <= 1200; frame++) {
+        const int64_t take = std::clamp(pending, -band3::pacing::kNudgePerFrameNs,
+                                        band3::pacing::kNudgePerFrameNs);
+        pending -= take;
+        cap.Nudge(take);
+        const int64_t present = cap.Next(now);
+        const int64_t jitter = int64_t((frame * 7919) % 5) * 1'000'000 - 2'000'000;
+        const int64_t published = present + 15'000'000 + jitter;
+        const int64_t paint = phase + ((published - phase + p - 1) / p) * p;
+        lock.Published(present, published);
+        pending += lock.Shown(frame, present, paint, p);
+        last_slack = paint - published;
+        // the frame's paint isn't the one after the frame before's
+        if (frame > 1000 && last_paint && paint != last_paint + p) misses++;
+        last_paint = paint;
+        now = present + 2'000'000;
+    }
+    // jitter of 2 ms either way, settled around half the period
+    CHECK(last_slack > p / 2 - 4'000'000);
+    CHECK(last_slack < p / 2 + 4'000'000);
+    CHECK(misses == 0);
+}
+
 TEST_CASE("frame_cap's values") {
     CHECK(ParseFrameCap("display")->mode == FrameCapMode::kDisplay);
     CHECK(ParseFrameCap("auto")->mode == FrameCapMode::kAuto);
