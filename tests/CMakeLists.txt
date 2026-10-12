@@ -31,6 +31,7 @@ add_executable(band3_tests
     gpu_submit_test.cpp
     target_premake_test.cpp
     camera_cut_test.cpp
+    guest_memory_file_test.cpp
     ps3_instruments_test.cpp
     ps4_instruments_test.cpp
     gip_instruments_test.cpp

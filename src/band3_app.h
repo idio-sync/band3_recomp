@@ -23,6 +23,7 @@
 #include "config.h"
 #include "crash_trace.h"
 #include "game_writes.h"
+#include "guest_memory_file.h"
 #include "paths.h"
 #include "relaunch.h"
 #include "settings.h"
@@ -484,6 +485,9 @@ class Band3App : public rex::ReXApp {
   // before the game starts, so its mic threads find the microphones running
   // and its first file opens find game:\ writable
   void OnPostSetup() override {
+    // the guest memory's /dev/shm file unlinked now it's mapped, as band3
+    // never ends through the SDK's Memory destructor that would remove it
+    band3::guest_memory_file::Release();
     // after the runtime's own exception handlers, which handle MMIO and GPU writes
     band3::crash_trace::WatchGuestFaults();
     band3::crash_trace::RunCrashTest();
