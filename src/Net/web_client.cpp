@@ -276,6 +276,45 @@ Reply PostForm(std::string_view url, std::string_view form, size_t max_bytes) {
                 form, max_bytes, {});
 }
 
+Reply Get(std::string_view url, size_t max_bytes) {
+    Reply reply;
+    Exchange x;
+    reply.error = Send(x, url, L"GET", {}, {}, true);
+    if (!reply.error.empty()) return reply;
+    reply.status = x.status;
+    reply.url = std::string(url);
+    DWORD size = 0;
+    WinHttpQueryOption(x.request.get(), WINHTTP_OPTION_URL, nullptr, &size);
+    if (size > 0) {
+        std::wstring wide(size / sizeof(wchar_t), L'\0');
+        if (WinHttpQueryOption(x.request.get(), WINHTTP_OPTION_URL, wide.data(), &size)) {
+            wide.resize(size / sizeof(wchar_t));
+            while (!wide.empty() && wide.back() == L'\0') wide.pop_back();
+            const int n = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()),
+                                              nullptr, 0, nullptr, nullptr);
+            reply.url.assign(static_cast<size_t>(n), '\0');
+            WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), reply.url.data(), n,
+                                nullptr, nullptr);
+        }
+    }
+    std::vector<char> buf(64 * 1024);
+    while (true) {
+        const int64_t n = Read(x, buf);
+        if (n < 0) {
+            reply.error = Failure("reading the reply");
+            return reply;
+        }
+        if (n == 0) break;
+        reply.body.append(buf.data(), static_cast<size_t>(n));
+        if (reply.body.size() >= max_bytes) {
+            reply.cut = true;
+            reply.body.resize(max_bytes);
+            break;
+        }
+    }
+    return reply;
+}
+
 Reply PostJson(std::string_view url, std::string_view json, int timeout_ms) {
     return Post(url, L"Content-Type: application/json\r\n", json, kJsonReplyBytes,
                 {.connect_ms = timeout_ms, .data_ms = timeout_ms});
@@ -465,6 +504,34 @@ Reply PostJson(std::string_view url, std::string_view json, int timeout_ms) {
     return Post(url, {"Content-Type: application/json"}, json, kJsonReplyBytes, timeout_ms);
 }
 
+Reply Get(std::string_view url, size_t max_bytes) {
+    Reply reply;
+    Easy curl = Open(url);
+    if (!curl) {
+        reply.error = "couldn't start a request";
+        return reply;
+    }
+    CURL* c = curl.get();
+    curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
+    Collect collect{{}, max_bytes};
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, &CollectPiece);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &collect);
+    const CURLcode code = curl_easy_perform(c);
+    reply.status = Status(c);
+    const char* where = nullptr;
+    curl_easy_getinfo(c, CURLINFO_EFFECTIVE_URL, &where);
+    reply.url = where ? where : std::string(url);
+    if (collect.too_big) {
+        // stopped on purpose: what came is the reply's start
+        reply.cut = true;
+    } else if (code != CURLE_OK) {
+        reply.error = Failure(code, "the request");
+        return reply;
+    }
+    reply.body = std::move(collect.body);
+    return reply;
+}
+
 std::string Download(std::string_view url, const std::filesystem::path& path,
                      const DownloadHooks& hooks, int64_t max_bytes) {
     Easy curl = Open(url);
@@ -489,6 +556,10 @@ Reply PostForm(std::string_view, std::string_view, size_t) {
 }
 
 Reply PostJson(std::string_view, std::string_view, int) {
+    return Reply{0, {}, "band3 was built without libcurl, so it can't reach other sites"};
+}
+
+Reply Get(std::string_view, size_t) {
     return Reply{0, {}, "band3 was built without libcurl, so it can't reach other sites"};
 }
 

@@ -9,8 +9,9 @@
 #include <vector>
 
 // RhythmVerse (rhythmverse.co), the custom song site, as the web page's
-// RhythmVerse tab uses it: its search, and the songs it hosts itself, which
-// download as the CON packages band3 reads from its content folders. The parts
+// RhythmVerse tab uses it: its search, and the songs it hosts itself or that
+// are on a site band3 can download from (file_hosts.h), which download as the
+// CON packages band3 reads from its content folders. The parts
 // here need neither a network nor the game; song_downloads.h does the rest.
 // RhythmVerse's API isn't documented: this is what its own pages send and get.
 
@@ -79,11 +80,14 @@ struct Song {
     // RhythmVerse's hashes of the upload's files, which change with them; empty
     // when it gives none
     std::string hash;
-    // set only for files RhythmVerse hosts itself, unpacked: the ones band3
-    // can download. The rest are on another site (`host`), zipped, or the
-    // official DLC's store page.
+    // set only for the files band3 can download: the ones RhythmVerse hosts
+    // itself, unzipped, and the ones on a site file_hosts.h can download from
+    // (MediaFire, Google Drive...), where it's that site's link. The rest are
+    // on another site (`host`), zipped, or the official DLC's store page.
     std::string download_url;
-    std::string host;  // the other site's name, e.g. www.mediafire.com
+    // the other site's name, e.g. www.mediafire.com, whether band3 can
+    // download from it or not
+    std::string host;
     // when RhythmVerse last changed the upload (its update_date), as RvTime
     // reads it; 0 when it doesn't say
     int64_t updated = 0;
@@ -133,7 +137,7 @@ struct Download {
 // rhythmverse.json, to tell when RhythmVerse has a newer version of it
 struct DownloadRecord {
     std::string file_name;     // the file it's in, in the download folder
-    std::string hash;          // Song::hash, as downloaded
+    std::string hash;          // VersionOf the song, as downloaded
     std::string pending_hash;  // an update's, waiting for the next launch (file_name + .pending)
     // when band3 downloaded it, in seconds since 1970; 0 for a record from
     // before band3 kept it, until the file's time stands in for it
@@ -160,9 +164,15 @@ DownloadRecords ParseRecords(std::string_view json);
 CheckState ParseCheckState(std::string_view json);
 std::string FormatRecords(const DownloadRecords& records, const CheckState& check = {});
 
+// Which version of an upload a song is: RhythmVerse's hashes of its files, or
+// where it has none (most uploads on other sites) when it last changed the
+// upload, "updated:<Song::updated>"; "" when it says neither. The date also
+// moves when only the upload's page is edited, which then shows as an update.
+std::string VersionOf(const Song& song);
+
 // what's become of an upload band3 downloaded
 enum class UpdateState {
-    kNone,       // not downloaded by band3, the same as RhythmVerse's, or no hash to tell
+    kNone,       // not downloaded by band3, the same as RhythmVerse's, or no version to tell
     kAvailable,  // RhythmVerse has another version, which band3 can download
     kPending,    // the latest is downloaded, for the next launch
 };

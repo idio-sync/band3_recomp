@@ -359,13 +359,18 @@ takes it in without a restart, as it took in songs bought from the Xbox store (t
 console's `XN_LIVE_CONTENT_INSTALLED`, then "Loading New Downloaded Content..."): at once
 with the Music Library open, once a song that's playing is over, or on the way into the
 Music Library. Songs copied into the content folders by hand join the same way once a
-search has seen them. Only songs RhythmVerse hosts itself download this way; for those on
-other sites, zipped ones and the official DLC, **Open** goes to the song's RhythmVerse
-page. A download that isn't a Rock Band package is thrown away.
+search has seen them. Songs RhythmVerse hosts itself download this way, and so do songs
+whose RhythmVerse page links to a file on MediaFire, Google Drive or Dropbox, a song on
+dingorb (HaramDingo's site), or a bit.ly or tinyurl link to one of those: band3 reads the
+link's page for the file itself, as a browser would (**Download** says which site it's
+from). For the rest (mega.nz, a Drive folder, zipped uploads and the official DLC),
+**Open** goes to the song's RhythmVerse page. A download that isn't a Rock Band package
+is thrown away.
 
 band3 keeps what it downloaded in `rhythmverse.json` in the download folder, with
 RhythmVerse's hashes of each upload, and when they change the song shows **Update
-available**. **Update** downloads the new version beside the old one as `<name>.pending`;
+available**. Most uploads on other sites have no hashes, so for those it goes by when
+RhythmVerse last changed the upload, which an author editing only its page moves too. **Update** downloads the new version beside the old one as `<name>.pending`;
 the game has the old one open, so band3 puts the new one in its place when it next
 starts, keeping the old one beside it as `<name>.replaced` (nothing is deleted; clear
 them out when you like). Songs you got some other way aren't checked for updates.

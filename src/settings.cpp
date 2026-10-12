@@ -436,8 +436,10 @@ REXCVAR_DEFINE_BOOL(http_allow_scripts, false, "Band3/Online",
 
 REXCVAR_DEFINE_BOOL(http_rhythmverse, true, "Band3/Online",
     "Let the web page search RhythmVerse (rhythmverse.co) for custom songs and download the "
-    "ones it hosts into a rhythmverse folder in the first of content_folders. Downloaded "
-    "songs join the game without a restart, as songs bought from the Xbox store did");
+    "ones it hosts, or that are on MediaFire, Google Drive, Dropbox or dingorb, into a "
+    "rhythmverse folder in the first of content_folders. Downloaded songs join the game "
+    "without a restart, as songs bought from the Xbox store did, and band3 checks "
+    "RhythmVerse for newer versions of them when it starts");
 
 // Home Assistant (src/Net/home_assistant.h): a host or a webhook URL turns it on
 REXCVAR_DEFINE_STRING(ha_mqtt_host, "", "Band3/Online",

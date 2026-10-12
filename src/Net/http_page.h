@@ -805,7 +805,7 @@ async function pollStatus() {
 document.addEventListener("visibilitychange", () => { if (!document.hidden) pollStatus(); });
 
 // ---- RhythmVerse (band3's /rv/...): search its custom songs, and download
-// the ones it hosts into the songs folder, for the game's next launch
+// the ones band3 can (RhythmVerse's own, MediaFire, Drive...) into the songs folder
 const rv = {
   text: null,        // what the list is a search for; null before the first
   page: 0, total: 0,
@@ -1015,6 +1015,7 @@ function rvAction(s) {
   }
   const b = el("button", "dl", "Download");
   b.onclick = e => { e.stopPropagation(); download(s); };
+  if (s.host) b.title = "From " + s.host;
   if (!d) return b;
   if (d.state === "failed") {
     b.textContent = "Retry";
@@ -1201,7 +1202,7 @@ async function rvSearch(more) {
       return;
     }
     $("rv-message").textContent = rv.rows.size ? "" : rvFilters.downloadable
-      ? "Nothing RhythmVerse hosts matches. Turn off Downloadable only for songs on other sites."
+      ? "Nothing band3 can download matches. Turn off Downloadable only for songs on other sites."
       : "Nothing on RhythmVerse matches.";
     showCount();
   } catch (e) {

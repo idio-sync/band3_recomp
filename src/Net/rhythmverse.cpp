@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include "src/Game/song_id.h"
+#include "file_hosts.h"
 #include "http_request.h"
 #include "json.h"
 
@@ -96,6 +97,10 @@ std::optional<Song> ParseSong(const json::Value& entry) {
     const bool zipped = zip.Bool(false) || zip.Number(0) != 0;
     if (hosted && !zipped) {
         song.download_url = Absolute(url);
+    } else if (!hosted && file_hosts::CanDownload(url)) {
+        // on a site band3 can download from too (file_hosts.h)
+        song.download_url = url;
+        song.host = host;
     } else {
         song.host = hosted ? "rhythmverse.co" : host;
     }
@@ -246,9 +251,11 @@ Song ReadStoredSong(const json::Value& v, const std::string& file_id) {
     s.file_name = v["file_name"].Text();
     s.song_id = Whole32(v["song_id"]);
     s.hash = v["hash"].Text();
-    // only ever one of RhythmVerse's, whatever the file says
+    // only ever RhythmVerse's or a site band3 downloads from, whatever the file says
     s.download_url = v["download_url"].Text();
-    if (!s.download_url.starts_with(std::string(kSite) + "/")) s.download_url.clear();
+    if (!s.download_url.starts_with(std::string(kSite) + "/") && !file_hosts::CanDownload(s.download_url)) {
+        s.download_url.clear();
+    }
     s.host = v["host"].Text();
     s.updated = Whole(v["updated"]);
     return s;
@@ -455,15 +462,22 @@ std::string FormatRecords(const DownloadRecords& records, const CheckState& chec
     return out + "\n}\n";
 }
 
+std::string VersionOf(const Song& song) {
+    if (!song.hash.empty()) return song.hash;
+    if (song.updated) return "updated:" + std::to_string(song.updated);
+    return {};
+}
+
 UpdateState UpdateOf(const Song& song, const DownloadRecords& records) {
     const auto it = records.find(song.file_id);
-    if (it == records.end() || song.hash.empty() || song.download_url.empty()) return UpdateState::kNone;
+    const std::string version = VersionOf(song);
+    if (it == records.end() || version.empty() || song.download_url.empty()) return UpdateState::kNone;
     const DownloadRecord& record = it->second;
     if (!record.pending_hash.empty()) {
-        return record.pending_hash == song.hash ? UpdateState::kPending : UpdateState::kAvailable;
+        return record.pending_hash == version ? UpdateState::kPending : UpdateState::kAvailable;
     }
-    // a record from before band3 kept hashes says nothing
-    if (record.hash.empty() || record.hash == song.hash) return UpdateState::kNone;
+    // a record from before band3 kept versions says nothing
+    if (record.hash.empty() || record.hash == version) return UpdateState::kNone;
     return UpdateState::kAvailable;
 }
 
@@ -479,7 +493,9 @@ bool NoteLatest(DownloadRecords& records, const std::vector<Song>& songs) {
         const auto it = records.find(song.file_id);
         if (it == records.end()) continue;
         std::optional<Song>& latest = it->second.latest;
-        if (latest && latest->hash == song.hash && latest->download_url == song.download_url) continue;
+        if (latest && VersionOf(*latest) == VersionOf(song) && latest->download_url == song.download_url) {
+            continue;
+        }
         latest = song;
         changed = true;
     }

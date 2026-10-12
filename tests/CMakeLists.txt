@@ -76,6 +76,7 @@ add_executable(band3_tests
     package_scan_test.cpp
     json_test.cpp
     rhythmverse_test.cpp
+    file_hosts_test.cpp
     song_inventory_test.cpp
     song_id_test.cpp
     modifiers_test.cpp
@@ -167,6 +168,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Net/lyrics.cpp
     ${BAND3_ROOT}/src/Net/live_events.cpp
     ${BAND3_ROOT}/src/Net/rhythmverse.cpp
+    ${BAND3_ROOT}/src/Net/file_hosts.cpp
     ${BAND3_ROOT}/src/Net/sha1.cpp
     ${BAND3_ROOT}/src/paths.cpp
     ${BAND3_ROOT}/src/Render/capture_file.cpp

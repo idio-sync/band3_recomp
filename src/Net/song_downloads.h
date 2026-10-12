@@ -11,8 +11,9 @@
 // They go into a "rhythmverse" folder in the first of content_folders, and the
 // game takes each in once it's in the main hub or the Music Library
 // (src/Content/live_content.h). Only songs a search has found can be
-// downloaded, and only what RhythmVerse hosts itself; a file that isn't an
-// RB3 package is thrown away.
+// downloaded, and only what RhythmVerse hosts itself or what's on a site
+// file_hosts.h can download from; a file that isn't an RB3 package is thrown
+// away.
 
 namespace band3::rhythmverse {
 
@@ -26,7 +27,7 @@ enum class QueueResult {
     kQueued,     // or already queued, or downloading
     kHave,       // already in the content folders (IsDownloaded)
     kUnknown,    // no search has found it
-    kNotHosted,  // RhythmVerse doesn't host it (another site, a zip, the official DLC)
+    kNotHosted,  // nowhere band3 downloads from (mega.nz, a zip, the official DLC...)
     kNoFolder,   // content_folders names no folder
     kNoUpdate,   // asked to update one RhythmVerse has nothing newer of (UpdateOf)
 };

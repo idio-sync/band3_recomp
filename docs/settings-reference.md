@@ -180,7 +180,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 |---|---|---|---|
 | `http_enabled`<br>Web song browser | `false` | `true`, `false` | Serve RB3Enhanced's web page and API to this PC and the local network: browse the song library from a phone and select songs in the Music Library *Applies at the next start.* |
 | `http_port`<br>Port | `21070` | `1` to `65535` | TCP port the web server listens on (RB3Enhanced's is 21070) *Applies at the next start.* |
-| `http_rhythmverse`<br>RhythmVerse downloads | `true` | `true`, `false` | Let the web page search RhythmVerse (rhythmverse.co) for custom songs and download the ones it hosts into a rhythmverse folder in the first of content_folders. Downloaded songs join the game without a restart, as songs bought from the Xbox store did |
+| `http_rhythmverse`<br>RhythmVerse downloads | `true` | `true`, `false` | Let the web page search RhythmVerse (rhythmverse.co) for custom songs and download the ones it hosts, or that are on MediaFire, Google Drive, Dropbox or dingorb, into a rhythmverse folder in the first of content_folders. Downloaded songs join the game without a restart, as songs bought from the Xbox store did, and band3 checks RhythmVerse for newer versions of them when it starts |
 
 ### Discord
 

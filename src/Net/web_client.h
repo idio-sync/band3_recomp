@@ -5,8 +5,9 @@
 #include <string>
 #include <string_view>
 
-// band3 asking other sites for things over HTTP and HTTPS (for RhythmVerse,
-// through src/Net/song_downloads.h, and Home Assistant's webhook): Windows'
+// band3 asking other sites for things over HTTP and HTTPS (for RhythmVerse
+// and the sites its songs are on, through src/Net/song_downloads.h, and Home
+// Assistant's webhook): Windows'
 // WinHTTP, so nothing more to ship, or libcurl elsewhere. Built without
 // libcurl, every request fails, saying so.
 
@@ -16,7 +17,13 @@ struct Reply {
     int status = 0;     // 0 when there was no reply
     std::string body;
     std::string error;  // why there was no reply
+    std::string url;    // Get's: where the reply came from, after redirects
+    bool cut = false;   // Get's: body is the reply's first max_bytes, the rest unread
 };
+
+// a GET, redirects followed, its reply read as far as max_bytes: a longer one
+// is cut off there (cut), not an error, for a look at a file's first bytes
+Reply Get(std::string_view url, size_t max_bytes);
 
 // a POST of a form (application/x-www-form-urlencoded); replies past max_bytes
 // are cut off, as an error

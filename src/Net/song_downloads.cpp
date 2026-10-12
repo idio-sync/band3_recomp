@@ -18,6 +18,7 @@
 #include "src/config.h"
 #include "src/paths.h"
 #include "src/settings.h"
+#include "file_hosts.h"
 #include "web_client.h"
 
 namespace band3::rhythmverse {
@@ -216,6 +217,8 @@ void RemovePartials(const fs::path& folder) {
 // "" and the file it's in (name, in folder), or why not
 std::string DownloadOne(const Song& song, const fs::path& folder, const fs::path& name,
                         fs::path& path) {
+    std::string url;
+    if (std::string error = file_hosts::Resolve(song.download_url, url); !error.empty()) return error;
     std::error_code ec;
     fs::create_directories(folder, ec);
     if (ec) return "couldn't make the folder " + rex::path_to_utf8(folder) + ": " + ec.message();
@@ -235,7 +238,7 @@ std::string DownloadOne(const Song& song, const fs::path& folder, const fs::path
         }
         return !state.stopping.load();
     };
-    std::string error = web::Download(song.download_url, partial, hooks, kMaxBytes);
+    std::string error = web::Download(url, partial, hooks, kMaxBytes);
     if (!error.empty()) return error;
     fs::rename(partial, path, ec);
     if (ec) {
@@ -295,12 +298,12 @@ void Work() {
                 // what was downloaded, to tell when there's a newer version
                 if (update) {
                     DownloadRecord& record = state.records[song.file_id];
-                    record.pending_hash = song.hash;
+                    record.pending_hash = VersionOf(song);
                     record.latest = song;
                 } else {
                     state.records[song.file_id] = {
                         .file_name = rex::path_to_utf8(path.filename()),
-                        .hash = song.hash,
+                        .hash = VersionOf(song),
                         .pending_hash = {},
                         .downloaded = NowSeconds(),
                         .latest = song,

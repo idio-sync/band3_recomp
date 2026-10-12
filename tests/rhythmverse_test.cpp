@@ -101,16 +101,49 @@ TEST_CASE("difficulties become the game's tiers, and parts without one are left 
     CHECK(result->songs[1].tiers == Tiers{{"guitar", 6}});
 }
 
-TEST_CASE("only songs RhythmVerse hosts unzipped can be downloaded") {
+TEST_CASE("songs RhythmVerse hosts unzipped can be downloaded, and not archives or the store") {
     const auto result = ParseSearch(kReply);
     REQUIRE(result);
-    CHECK(result->songs[1].download_url.empty());
+    CHECK(result->songs[1].download_url.empty());  // a .rar, on MediaFire
     CHECK(result->songs[1].host == "www.mediafire.com");
     CHECK(result->songs[1].author == "someone");  // no author record: the uploader's name
     CHECK(result->songs[2].download_url.empty());
     CHECK(result->songs[2].host == "marketplace.xbox.com");
     CHECK(result->songs[3].download_url.empty());
     CHECK(result->songs[3].host == "rhythmverse.co");
+}
+
+TEST_CASE("songs on a site band3 downloads from can be downloaded, by that site's link") {
+    const auto result = ParseSearch(R"json({"status":"success","data":{"songs":[
+        {"data":{},"file":{"file_id":"b1","zippata":0,
+          "external_url":"http://www.mediafire.com/file/kxs79tbidgj86fb/SoaDADD"}},
+        {"data":{},"file":{"file_id":"b2","external_url":"https://drive.google.com/file/d/1FJcm93b/view?usp=sharing"}},
+        {"data":{},"file":{"file_id":"b3","external_url":"https://drive.google.com/drive/folders/10Q7YFNi?usp=drive_link"}},
+        {"data":{},"file":{"file_id":"b4","external_url":"https://mega.nz/#!eCxBVTbR!dHWJ"}},
+        {"data":{},"file":{"file_id":"b5","external_url":"https://www.dingorb.com/?id=684d86be35cba8585569891a"}}]}})json");
+    REQUIRE(result);
+    REQUIRE(result->songs.size() == 5);
+    CHECK(result->songs[0].download_url == "http://www.mediafire.com/file/kxs79tbidgj86fb/SoaDADD");
+    CHECK(result->songs[0].host == "www.mediafire.com");  // to say where it's from
+    CHECK(result->songs[1].download_url == "https://drive.google.com/file/d/1FJcm93b/view?usp=sharing");
+    CHECK(result->songs[2].download_url.empty());  // a Drive folder
+    CHECK(result->songs[2].host == "drive.google.com");
+    CHECK(result->songs[3].download_url.empty());  // mega.nz's files are encrypted
+    CHECK(result->songs[4].download_url == "https://www.dingorb.com/?id=684d86be35cba8585569891a");
+}
+
+TEST_CASE("a stored song keeps only a download link band3 would follow") {
+    Song song;
+    song.file_id = "c1";
+    song.download_url = "https://www.mediafire.com/file/abc/x";
+    DownloadRecords records;
+    records["c1"] = DownloadRecord{"x_c1", "v", "", 1, song};
+    records["c2"] = DownloadRecord{"y_c2", "v", "", 1, song};
+    records["c2"].latest->file_id = "c2";
+    records["c2"].latest->download_url = "https://evil.example/payload";
+    const auto back = ParseRecords(FormatRecords(records));
+    CHECK(back.at("c1").latest->download_url == "https://www.mediafire.com/file/abc/x");
+    CHECK(back.at("c2").latest->download_url.empty());
 }
 
 TEST_CASE("a zipped upload is one whatever type its flag comes as") {
@@ -390,6 +423,34 @@ TEST_CASE("an update is available when RhythmVerse's hashes change from what ban
     song.hash = "new";
     song.download_url.clear();
     CHECK(UpdateOf(song, records) == UpdateState::kNone);  // nothing band3 can download
+}
+
+TEST_CASE("without hashes, an update goes by when RhythmVerse last changed the upload") {
+    Song song;
+    song.file_id = "f1";
+    song.download_url = "https://www.mediafire.com/file/abc/x";
+    song.updated = 1700000000;
+    CHECK(VersionOf(song) == "updated:1700000000");
+    song.hash = "a/b/c";
+    CHECK(VersionOf(song) == "a/b/c");  // the hashes, where there are some
+    song.hash.clear();
+
+    DownloadRecords records;
+    records["f1"] = Rec("x_f1", VersionOf(song), "");
+    CHECK(UpdateOf(song, records) == UpdateState::kNone);
+    song.updated = 1700086400;
+    CHECK(UpdateOf(song, records) == UpdateState::kAvailable);
+    records["f1"].pending_hash = VersionOf(song);
+    CHECK(UpdateOf(song, records) == UpdateState::kPending);
+
+    // a song seen again with only a later date is noted as the latest
+    records["f1"] = Rec("x_f1", "updated:1700000000", "");
+    song.updated = 1700000000;
+    CHECK(NoteLatest(records, {song}));
+    song.updated = 1700090000;
+    CHECK(NoteLatest(records, {song}));
+    CHECK(RecordUpdate("f1", records) == UpdateState::kAvailable);
+    CHECK_FALSE(NoteLatest(records, {song}));
 }
 
 TEST_CASE("a song band3 downloaded is downloaded under the name its record gives") {
