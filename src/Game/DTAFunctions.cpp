@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "generated/band3_init.h"
+#include "src/app_quit.h"
 #include "src/build_tag.h"
 #include "src/Net/events.h"
 #include "src/Game/SongCache.h"
@@ -57,10 +58,10 @@ extern "C" REX_FUNC(DataArray__Execute) {
 }
 
 static void ExitHandler(PPCContext& ctx, uint8_t* base) {
-    REXLOG_INFO("Game requested exit, terminating title properly");
-	
-	// the proper way to terminate the title accoridng to Rexglue SDK
-    rex::system::kernel_state()->TerminateTitle();
+    REXLOG_INFO("Game requested exit, closing band3 as its window's close button does");
+    // as the window's close button (app_quit.h); the title alone before the
+    // window exists
+    if (!band3::app::Quit()) rex::system::kernel_state()->TerminateTitle();
 }
 
 // evaluates argument `index` of a DTA call and returns it as a string if it is a

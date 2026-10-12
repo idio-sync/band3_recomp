@@ -22,6 +22,7 @@
 #include "build_tag.h"
 #include "config.h"
 #include "crash_trace.h"
+#include "app_quit.h"
 #include "game_writes.h"
 #include "guest_memory_file.h"
 #include "paths.h"
@@ -520,6 +521,15 @@ class Band3App : public rex::ReXApp {
     }
     band3::test::StartServer(runtime(), &app_context(), window());
     band3::http::StartServer();
+    // the game's own Quit (its exit DTA function) closes band3 as the
+    // window's close button does, as the harness's quit does
+    band3::app::SetQuit([this] {
+      app_context().CallInUIThreadDeferred([this] {
+        band3::online::Stop();
+        band3::lights::Stop();
+        if (window()) window()->RequestClose();
+      });
+    });
   }
 
   void OnShutdown() override {
