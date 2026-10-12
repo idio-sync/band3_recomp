@@ -245,7 +245,9 @@ std::optional<http::Image> BitmapAt(std::string_view raw, size_t at) {
     file[10] = static_cast<char>(height >> 8);
     file[11] = raw[at + 12];
     file[12] = raw[at + 11];
-    file += raw.substr(at + 32);
+    // its top mip's blocks only, not the rest of the milo after it
+    const size_t blocks = static_cast<size_t>((width + 3) / 4) * ((height + 3) / 4);
+    file += raw.substr(at + 32, blocks * (encoding == 8 ? 8 : 16));
     return http::DecodeXboxBitmap(file);
 }
 
@@ -291,10 +293,11 @@ std::optional<http::Image> FindNamedBitmap(std::string_view raw, std::string_vie
             at >= 4 && Reader{raw, at - 4}.U32() == static_cast<uint32_t>(name.size());
         if (!(after_slash || after_length) || (end < raw.size() && NameChar(raw[end]))) continue;
         // up to the next texture's name, and no further than the reach
-        size_t limit = std::min(raw.size(), end + kNamedBitmapReach);
+        const std::string_view reach = raw.substr(end, kNamedBitmapReach);
+        size_t limit = end + reach.size();
         for (const std::string_view ext : {std::string_view(".png"), std::string_view(".bmp")}) {
-            const size_t next = raw.find(ext, end);
-            if (next != std::string_view::npos) limit = std::min(limit, next);
+            const size_t next = reach.find(ext);
+            if (next != std::string_view::npos) limit = std::min(limit, end + next);
         }
         for (size_t b = end; b < limit; b++) {
             if (raw[b] != '\x01') continue;
