@@ -19,9 +19,9 @@
 
 namespace band3::video {
 
-// how much of a video's soundtrack is read for the match: the song's start
-// can be this far into it (a long intro), plus the song's part
-inline constexpr double kVideoSoundtrackSeconds = 240.0;
+// how much of a video's soundtrack is read for the match: all of it, for
+// a segment map (sync_align.h's AlignSegments), up to this
+inline constexpr double kVideoSoundtrackSeconds = 1200.0;
 
 inline std::filesystem::path SyncFolder(const std::filesystem::path& video) {
     return video.parent_path() / ".sync";

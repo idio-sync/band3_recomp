@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <format>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -31,15 +32,29 @@ int64_t g_samples = 0;
 int g_rate = 0;
 bool g_done = false;  // taken (or not wanted) this song
 
+// a match saved for the song now playing: its video moves at once
+void Apply(uint64_t song, const Match& m) {
+    double start = m.result.offset;
+    std::vector<VideoSegment> later;
+    if (m.map && m.result.confident) SplitMap(*m.map, start, later);
+    SetMusicVideoSegments(song, start, std::move(later));
+}
+
+std::string Parts(const SyncResult& r) {
+    return r.parts > 1 ? std::format(" in {} parts", r.parts) : std::string();
+}
+
 void Align(uint64_t song, VideoFile video, std::vector<float> song_env) {
-    SaveEnvelope(SongEnvelopePath(video.path), song_env, 0);
+    // the 45 s taken as it played, unless the whole song's kept from its package
+    const auto kept = LoadEnvelope(SongEnvelopePath(video.path), 0);
+    if (!kept || kept->size() < song_env.size()) SaveEnvelope(SongEnvelopePath(video.path), song_env, 0);
     std::string error;
-    const std::optional<SyncResult> result = AlignVideo(video.path, song_env, false, error);
-    if (!result) {
+    const std::optional<Match> match = AlignVideo(video.path, song_env, false, error);
+    if (!match) {
         REXLOG_WARN("Music video auto-sync: {}: {}", video.path.string(), error);
         return;
     }
-    const SyncResult& r = *result;
+    const SyncResult& r = match->result;
     const std::string name = video.path.filename().string();
     if (!r.confident) {
         REXLOG_INFO("Music video auto-sync: {}: best guess {:+.3f} s, not sure enough to save "
@@ -53,14 +68,14 @@ void Align(uint64_t song, VideoFile video, std::vector<float> song_env) {
                     name, r.offset, r.score, r.margin, video.start_time);
         return;
     }
-    if (!WriteStartTime(video.path, r.offset)) {
+    if (!WriteMatch(video.path, *match)) {
         REXLOG_WARN("Music video auto-sync: {}: {:+.3f} s, but {} couldn't be written", name,
                     r.offset, IniFor(video.path).string());
         return;
     }
-    REXLOG_INFO("Music video auto-sync: {}: {:+.3f} s (score {:.2f}, margin {:.2f}), saved to {}",
-                name, r.offset, r.score, r.margin, IniFor(video.path).filename().string());
-    SetMusicVideoStartTime(song, r.offset);
+    REXLOG_INFO("Music video auto-sync: {}: {:+.3f} s{} (score {:.2f}, margin {:.2f}), saved to {}",
+                name, r.offset, Parts(r), r.score, r.margin, IniFor(video.path).filename().string());
+    Apply(song, *match);
 }
 
 }
@@ -93,9 +108,8 @@ bool SongFromPackage(const std::filesystem::path& video, std::vector<float>& son
 
 }
 
-std::optional<SyncResult> AlignVideo(const std::filesystem::path& video,
-                                     std::span<const float> song_env, bool save_offset,
-                                     std::string& error) {
+std::optional<Match> AlignVideo(const std::filesystem::path& video, std::span<const float> song_env,
+                                bool save_offset, std::string& error) {
     std::vector<float> song;
     if (song_env.empty()) {
         if (std::optional<std::vector<float>> cached = LoadEnvelope(SongEnvelopePath(video), 0))
@@ -113,17 +127,19 @@ std::optional<SyncResult> AlignVideo(const std::filesystem::path& video,
         if (video_env.empty()) return std::nullopt;
         SaveEnvelope(VideoEnvelopePath(video), video_env, stamp);
     }
-    const SyncResult r = AlignEnvelopes(song_env, video_env);
-    if (!r.found) {
+    // the whole song's sound (its package's): a segment map; 45 s taken as
+    // it played: one offset
+    Match m = MatchSong(song_env, video_env);
+    if (!m.result.found) {
         error = "its sound and the song's don't overlap";
         return std::nullopt;
     }
-    SaveResult(ResultPath(video), r);
-    if (save_offset && r.confident && !WriteStartTime(video, r.offset)) {
+    SaveResult(ResultPath(video), m.result);
+    if (save_offset && m.result.confident && !WriteMatch(video, m)) {
         error = "its .ini couldn't be written";
         return std::nullopt;
     }
-    return r;
+    return m;
 }
 
 namespace {
@@ -147,28 +163,29 @@ namespace {
 void AlignAhead(uint64_t song, VideoFile video) {
     const std::string name = rex::path_to_utf8(video.path.filename());
     std::string error;
-    const std::optional<SyncResult> result = AlignVideo(video.path, {}, false, error);
-    if (!result) {
+    const std::optional<Match> match = AlignVideo(video.path, {}, false, error);
+    if (!match) {
         REXLOG_INFO("Music video auto-sync: {}: {}; syncing as it plays", name, error);
         return;
     }
-    const SyncResult& r = *result;
+    const SyncResult& r = match->result;
     if (!r.confident) {
         REXLOG_INFO("Music video auto-sync: {}: best guess {:+.3f} s from its song's package, not "
                     "sure enough (score {:.2f}, margin {:.2f}); syncing as it plays",
                     name, r.offset, r.score, r.margin);
         return;
     }
-    if (!WriteStartTime(video.path, r.offset)) {
+    if (!WriteMatch(video.path, *match)) {
         REXLOG_WARN("Music video auto-sync: {}: {:+.3f} s, but {} couldn't be written", name,
                     r.offset, rex::path_to_utf8(IniFor(video.path)));
         return;
     }
-    REXLOG_INFO("Music video auto-sync: {}: {:+.3f} s (score {:.2f}, margin {:.2f}) before it "
+    REXLOG_INFO("Music video auto-sync: {}: {:+.3f} s{} (score {:.2f}, covering {:.0f}%) before it "
                 "plays, saved to {}",
-                name, r.offset, r.score, r.margin, rex::path_to_utf8(IniFor(video.path).filename()));
+                name, r.offset, Parts(r), r.score, r.coverage * 100,
+                rex::path_to_utf8(IniFor(video.path).filename()));
     // the capture then has nothing to do: the start time's set, the song's sound kept
-    SetMusicVideoStartTime(song, r.offset);
+    Apply(song, *match);
 }
 
 }

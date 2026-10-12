@@ -85,15 +85,13 @@ std::optional<fs::path> FetchPicture(const FetchSetup& s, const SongInfo& song,
     return picture;
 }
 
-std::string Ms(double seconds) { return std::to_string(std::llround(seconds * 1000.0)); }
 
 // The fetched picture as the song's video, in the videos folder with its
 // .ini and sync caches; any other video of the song (another extension)
 // goes, so it's this one that's found.
 bool Install(const FetchSetup& s, const SongInfo& song, const fs::path& picture, Sound& sound,
-             const std::vector<float>* song_env, const std::optional<SyncResult>& match,
-             std::optional<double> offset, const std::string& source, bool pinned,
-             fs::path& out, std::string& error) {
+             const std::vector<float>* song_env, const std::optional<Match>& match,
+             const std::string& source, bool pinned, fs::path& out, std::string& error) {
     Stage(s, FetchStage::kSaving);
     const std::string ext = Lower(picture.extension().string());
     if (std::none_of(std::begin(kVideoExtensions), std::end(kVideoExtensions),
@@ -117,7 +115,7 @@ bool Install(const FetchSetup& s, const SongInfo& song, const fs::path& picture,
     if (!sound.envelope.empty()) SaveEnvelope(VideoEnvelopePath(video), sound.envelope, FileStamp(video));
     else Remove(VideoEnvelopePath(video));
     if (song_env) SaveEnvelope(SongEnvelopePath(video), *song_env, 0);
-    if (match) SaveResult(ResultPath(video), *match);
+    if (match) SaveResult(ResultPath(video), match->result);
     else Remove(ResultPath(video));
     if (!sound.file.empty()) {
         if (s.keep_audio) {
@@ -130,9 +128,13 @@ bool Install(const FetchSetup& s, const SongInfo& song, const fs::path& picture,
     const auto value = [](bool set, std::string v) {
         return set ? std::optional<std::string>(std::move(v)) : std::nullopt;
     };
-    if (!WriteIniValues(video, {{"video_start_time", value(offset.has_value(), offset ? Ms(*offset) : "")},
-                                {"video_source", value(!source.empty(), source)},
-                                {"video_pinned", value(pinned, "1")}})) {
+    // its offset (a sure map's parts; else one offset), or none to sync as
+    // the song first plays
+    const bool offset = match && match->result.found;
+    if (!WriteIniValues(video, {{"video_source", value(!source.empty(), source)},
+                                {"video_pinned", value(pinned, "1")}}) ||
+        (offset ? !WriteMatch(video, *match)
+                : !WriteIniValues(video, {{"video_start_time", std::nullopt}, {"video_segments", std::nullopt}}))) {
         error = "its .ini couldn't be written";
         return false;
     }
@@ -147,6 +149,12 @@ void Tidy(const FetchSetup& s) {
 
 std::string Guess(const SyncResult& r) { return std::format("best guess {:+.3f} s", r.offset); }
 
+// "at +1.234 s", or "in 3 parts, the first at +1.234 s"
+std::string SyncedAt(const SyncResult& r) {
+    return r.parts > 1 ? std::format("in {} parts, the first at {:+.3f} s", r.parts, r.offset)
+                       : std::format("at {:+.3f} s", r.offset);
+}
+
 // a link or a file of the player's: taken whatever its sound says
 FetchResult TakeChosen(const SongInfo& song, const FetchSetup& s, const fs::path& picture,
                        Sound sound, const std::string& source) {
@@ -155,16 +163,16 @@ FetchResult TakeChosen(const SongInfo& song, const FetchSetup& s, const fs::path
     std::vector<float> song_env;
     std::string why;
     const bool have_song = s.song_envelope && s.song_envelope(song, song_env, why);
-    std::optional<SyncResult> match;
+    std::optional<Match> match;
     if (have_song && !sound.envelope.empty()) {
         Stage(s, FetchStage::kMatching);
-        match = AlignEnvelopes(song_env, sound.envelope, -60.0, 180.0, s.min_overlap);
+        match = MatchSong(song_env, sound.envelope, s.min_overlap);
     }
     const std::optional<double> offset =
-        match && match->found ? std::optional<double>(match->offset) : std::nullopt;
+        match && match->result.found ? std::optional<double>(match->result.offset) : std::nullopt;
     std::string error;
-    if (!Install(s, song, picture, sound, have_song ? &song_env : nullptr, match, offset, source, true,
-                 r.video, error)) {
+    if (!Install(s, song, picture, sound, have_song ? &song_env : nullptr, match, source, true, r.video,
+                 error)) {
         Remove(picture);
         Remove(sound.file);
         r.end = FetchEnd::kFailed;
@@ -178,13 +186,13 @@ FetchResult TakeChosen(const SongInfo& song, const FetchSetup& s, const fs::path
     } else if (!have_song) {
         r.end = FetchEnd::kUnsynced;
         r.message = "saved; it syncs the first time its song plays (" + why + ")";
-    } else if (match->confident) {
+    } else if (match->result.confident) {
         r.end = FetchEnd::kDone;
-        r.message = std::format("saved, synced at {:+.3f} s", match->offset);
+        r.message = "saved, synced " + SyncedAt(match->result);
     } else {
         r.end = FetchEnd::kGuessed;
-        r.message = match->found ? "saved, synced by guess (" + Guess(*match) + "): check it"
-                                 : "saved; its sound doesn't match the song's, so set its offset by hand";
+        r.message = match->result.found ? "saved, synced by guess (" + Guess(match->result) + "): check it"
+                                        : "saved; its sound doesn't match the song's, so set its offset by hand";
     }
     return r;
 }
@@ -250,6 +258,7 @@ FetchResult FindSongVideo(const SongInfo& song, const FetchSetup& s) {
         }
         tries++;
         error.clear();
+        std::optional<Match> matched;
         std::optional<Sound> sound = FetchSound(s, song, c.video.url, c.video.id, error);
         if (Stopped(s)) break;
         if (!sound) {
@@ -258,7 +267,8 @@ FetchResult FindSongVideo(const SongInfo& song, const FetchSetup& s) {
         }
         if (have_song) {
             Stage(s, FetchStage::kMatching);
-            t.match = AlignEnvelopes(song_env, sound->envelope, -60.0, 180.0, s.min_overlap);
+            matched = MatchSong(song_env, sound->envelope, s.min_overlap);
+            t.match = matched->result;
             if (!t.match->found || !t.match->confident) {
                 t.problem = t.match->found ? "its sound doesn't surely match the song's (" + Guess(*t.match) + ")"
                                            : "its sound doesn't match the song's";
@@ -292,8 +302,8 @@ FetchResult FindSongVideo(const SongInfo& song, const FetchSetup& s) {
         }
         const std::optional<double> offset =
             have_song ? std::optional<double>(t.match->offset) : std::nullopt;
-        if (!Install(s, song, *picture, *sound, have_song ? &song_env : nullptr, t.match, offset,
-                     c.video.url, false, r.video, error)) {
+        if (!Install(s, song, *picture, *sound, have_song ? &song_env : nullptr, matched, c.video.url,
+                     false, r.video, error)) {
             t.problem = error;
             Remove(*picture);
             Remove(sound->file);
@@ -302,7 +312,7 @@ FetchResult FindSongVideo(const SongInfo& song, const FetchSetup& s) {
         r.offset = offset;
         r.source = c.video.url;
         r.end = have_song ? FetchEnd::kDone : FetchEnd::kUnsynced;
-        r.message = have_song ? std::format("\"{}\", synced at {:+.3f} s", c.video.title, *offset)
+        r.message = have_song ? "\"" + c.video.title + "\", synced " + SyncedAt(*t.match)
                               : "\"" + c.video.title + "\"; it syncs the first time its song plays (" +
                                     why + ")";
         Tidy(s);

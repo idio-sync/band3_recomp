@@ -64,6 +64,10 @@ struct SyncResult {
     double onset_score = 0.0;
     // whether it's good enough to write without asking
     bool confident = false;
+    // for a segment map's summary (MatchSong): its parts, gaps counted, and
+    // the share of the song it covers; 1 and 0 for one offset
+    int parts = 1;
+    double coverage = 0.0;
 };
 
 // The video envelope's offset against the song's: song frame t matches video
@@ -113,5 +117,17 @@ SegmentMap AlignSegments(std::span<const float> song, std::span<const float> vid
 inline constexpr double kMinCoverage = 0.5;
 inline constexpr double kMinSegmentScore = 0.4;
 inline constexpr int kMaxJumps = 4;
+
+// The match auto-sync and finding videos make: over a song's whole sound
+// (from its package), a segment map, summed up as a SyncResult (its first
+// part's offset, its score, sure or not); over a shorter stretch (the 45 s
+// a song's sound is taken as it plays), one offset (AlignEnvelopes, with
+// min_overlap).
+struct Match {
+    SyncResult result;
+    std::optional<SegmentMap> map;
+};
+inline constexpr double kMinMapSeconds = 60.0;
+Match MatchSong(std::span<const float> song, std::span<const float> video, double min_overlap = 15.0);
 
 }

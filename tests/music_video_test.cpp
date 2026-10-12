@@ -318,6 +318,77 @@ TEST_CASE("a video's .ini says where it came from and whether it was chosen by h
     fs::remove_all(root);
 }
 
+TEST_CASE("video_segments holds the parts after the first, an offset or a gap each") {
+    const auto later = ParseSegments("61500:4100, 143000:gap,  200000:-2250");
+    REQUIRE(later.size() == 3);
+    CHECK(later[0].song_start == 61.5);
+    CHECK(later[0].offset == 4.1);
+    CHECK_FALSE(later[1].offset);
+    CHECK(later[2].offset == -2.25);
+    CHECK(FormatSegments(later) == "61500:4100, 143000:gap, 200000:-2250");
+    // what isn't one is left out; out of order, sorted
+    CHECK(ParseSegments("x, 5000:1, :3, 1000:2").size() == 2);
+    CHECK(ParseSegments("5000:1, 1000:2")[0].song_start == 1.0);
+    CHECK(ParseSegments("").empty());
+}
+
+TEST_CASE("a song's time maps to its video's through the segments") {
+    VideoFile f;
+    f.start_time = -1.0;
+    // no segments: one offset throughout
+    CHECK(VideoTimeAt(f, 10.0) == 9.0);
+    CHECK(SegmentAt(f, 10.0) == 0);
+    f.segments = ParseSegments("60000:4000, 120000:gap, 150000:-30000");
+    CHECK(VideoTimeAt(f, 59.9) == doctest::Approx(58.9));
+    CHECK(VideoTimeAt(f, 60.0) == 64.0);
+    CHECK(SegmentAt(f, 61.0) == 1);
+    CHECK_FALSE(VideoTimeAt(f, 130.0));
+    CHECK(VideoTimeAt(f, 160.0) == 130.0);
+    CHECK(SegmentAt(f, 160.0) == 3);
+}
+
+TEST_CASE("a map is written as video_start_time and video_segments, read back alike") {
+    const fs::path root = fs::temp_directory_path() / "band3_segments_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path video = root / "song1.webm";
+    std::ofstream(video) << "x";
+    SegmentMap m;
+    m.found = true;
+    // a gap first (the video starts later than the song), then two parts and an end
+    m.segments = {{0.0, std::nullopt, 0}, {12.0, 3.5, 0.8}, {70.0, 24.0, 0.7}, {200.0, std::nullopt, 0}};
+    CHECK(WriteSegmentMap(video, m));
+    auto found = FindVideo({root}, "song1");
+    REQUIRE(found);
+    // the leading gap is the video's not having begun: the first part's offset covers it
+    CHECK(found->start_time == 3.5);
+    REQUIRE(found->segments.size() == 2);
+    CHECK(found->segments[0].song_start == 70.0);
+    CHECK(found->segments[0].offset == 24.0);
+    CHECK_FALSE(found->segments[1].offset);
+    // one part alone: no video_segments
+    m.segments = {{0.0, -2.0, 0.9}};
+    CHECK(WriteSegmentMap(video, m));
+    found = FindVideo({root}, "song1");
+    CHECK(found->start_time == -2.0);
+    CHECK(found->segments.empty());
+    CHECK_FALSE(FindIniValue(ReadIni(video), "video_segments"));
+    // a match: a sure map's parts, else one offset, which takes old parts out
+    Match match;
+    match.map = SegmentMap{true, {{0.0, 1.0, 0.8}, {50.0, 9.0, 0.8}}, 1.0, 0.8, true};
+    match.result.found = match.result.confident = true;
+    match.result.offset = 1.0;
+    CHECK(WriteMatch(video, match));
+    CHECK(FindIniValue(ReadIni(video), "video_segments") == "50000:9000");
+    match.result.confident = false;
+    match.result.offset = 1.5;
+    CHECK(WriteMatch(video, match));
+    found = FindVideo({root}, "song1");
+    CHECK(found->start_time == 1.5);
+    CHECK(found->segments.empty());
+    fs::remove_all(root);
+}
+
 TEST_CASE("an envelope saved beside the videos loads back, for its video's stamp only") {
     const fs::path root = fs::temp_directory_path() / "band3_sync_cache_test";
     fs::remove_all(root);

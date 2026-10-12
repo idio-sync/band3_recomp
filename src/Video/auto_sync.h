@@ -28,13 +28,13 @@ inline constexpr double kCaptureSeconds = 45.0;
 // sample 0) at `rate` Hz; then each block, mixed to mono, in order.
 // Aligns `video` with its song's sound (`song_env` if given, else its
 // .song.env, else read from its package and kept there), the video's
-// soundtrack read or taken from its cache, and saves the result
-// (sync_cache.h's ResultPath). With `save_offset`, a confident one is also
-// written to the .ini. None, with why in `error`, without the song's sound or
-// the video's soundtrack.
-std::optional<SyncResult> AlignVideo(const std::filesystem::path& video,
-                                     std::span<const float> song_env, bool save_offset,
-                                     std::string& error);
+// soundtrack read or taken from its cache (sync_align.h's MatchSong: a
+// segment map over the whole song, one offset over a capture's 45 s), and
+// saves the result (sync_cache.h's ResultPath). With `save_offset`, a
+// confident one is also written to the .ini (WriteMatch). None, with why in
+// `error`, without the song's sound or the video's soundtrack.
+std::optional<Match> AlignVideo(const std::filesystem::path& video, std::span<const float> song_env,
+                                bool save_offset, std::string& error);
 
 // The song's video has just been picked (SetMusicVideoSong): without a start
 // time, it's aligned on a thread of its own from its song's package, before

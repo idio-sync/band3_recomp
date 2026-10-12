@@ -39,6 +39,8 @@ private:
         bool pinned = false;
         std::string source;
         int ms = 0;  // the offset field's value
+        // video_segments: its parts after the first (sync_align.h)
+        std::vector<video::VideoSegment> segments;
     };
     struct Song {
         std::string shortname;

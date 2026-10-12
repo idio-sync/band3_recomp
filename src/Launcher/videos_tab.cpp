@@ -84,13 +84,16 @@ std::string ReadText(const fs::path& p) {
     return text.str();
 }
 
-// a new offset for `video`, saved by the caller: the playing video moves too,
-// if it's this one (in game, behind the settings)
-void ApplyIfPlaying(const fs::path& video, double seconds) {
+// `video`'s offsets as just saved: the playing video moves too, if it's this
+// one (in game, behind the settings)
+void ApplyIfPlaying(const fs::path& video) {
     uint64_t song = 0;
     const std::optional<video::VideoFile> playing = video::CurrentMusicVideo(song);
     std::error_code ec;
-    if (playing && fs::equivalent(playing->path, video, ec)) video::SetMusicVideoStartTime(song, seconds);
+    if (!playing || !fs::equivalent(playing->path, video, ec)) return;
+    const std::string ini = video::ReadIni(video);
+    video::SetMusicVideoSegments(song, video::FindStartTime(ini).value_or(0.0),
+                                 video::ParseSegments(video::FindIniValue(ini, "video_segments").value_or("")));
 }
 
 void Muted(const char* text) {
@@ -212,6 +215,7 @@ void VideosTab::RefreshVideos(const std::vector<fs::path>& folders) {
             if (!stems.insert(Lower(v.stem)).second) continue;
             const std::string ini = ReadText(video::IniFor(v.path));
             v.offset = video::FindStartTime(ini);
+            v.segments = video::ParseSegments(video::FindIniValue(ini, "video_segments").value_or(""));
             v.pinned = video::FindIniValue(ini, "video_pinned").value_or("") == "1";
             v.source = video::FindIniValue(ini, "video_source").value_or("");
             v.result = video::LoadResult(video::ResultPath(v.path));
@@ -240,7 +244,8 @@ void VideosTab::StartAlign(const Video& v) {
     job_message_.clear();
     std::thread([job = job_] {
         std::string error;
-        std::optional<video::SyncResult> r = video::AlignVideo(job->video, {}, true, error);
+        const std::optional<video::Match> m = video::AlignVideo(job->video, {}, true, error);
+        const std::optional<video::SyncResult> r = m ? std::optional<video::SyncResult>(m->result) : std::nullopt;
         std::lock_guard lock(job->mutex);
         job->result = r;
         job->error = error;
@@ -256,8 +261,11 @@ void VideosTab::TakeAlign() {
     if (!job_->result) {
         job_message_ = name + ": " + job_->error;
     } else if (job_->result->confident) {
-        job_message_ = std::format("{}: {:+.3f} s, saved", name, job_->result->offset);
-        ApplyIfPlaying(job_->video, job_->result->offset);
+        job_message_ = job_->result->parts > 1
+                           ? std::format("{}: {} parts, the first at {:+.3f} s, saved", name,
+                                         job_->result->parts, job_->result->offset)
+                           : std::format("{}: {:+.3f} s, saved", name, job_->result->offset);
+        ApplyIfPlaying(job_->video);
     } else {
         job_message_ = std::format("{}: not sure (best guess {:+.3f} s), not saved", name,
                                    job_->result->offset);
@@ -465,8 +473,11 @@ void VideosTab::DrawSongs() {
                 Muted("Waiting to be found");
             } else if (s.video >= 0) {
                 const Video& v = videos_[size_t(s.video)];
+                const std::string parts =
+                    v.segments.empty() ? "" : std::format(", {} parts", v.segments.size() + 1);
                 if (v.result && v.result->confident && v.offset && std::abs(*v.offset - v.result->offset) < 0.0015)
-                    ImGui::TextColored(kGood, v.pinned ? "Synced (chosen)" : "Synced");
+                    ImGui::TextColored(kGood, "%s", (std::string(v.pinned ? "Synced (chosen" : "Synced (auto") +
+                                                     parts + ")").c_str());
                 else if (v.result && !v.result->confident && !v.offset)
                     ImGui::TextColored(kWarn, "Not sure: see below");
                 else if (v.offset)
@@ -493,13 +504,13 @@ void VideosTab::DrawSongs() {
 
 void VideosTab::DrawVideoControls(Video& v) {
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Offset (ms)");
+    ImGui::TextUnformatted(v.segments.empty() ? "Offset (ms)" : "Part 1 (ms)");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(Px(170));
     ImGui::InputInt("##ms", &v.ms, 50, 500);
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         video::WriteStartTime(v.path, v.ms / 1000.0);
-        ApplyIfPlaying(v.path, v.ms / 1000.0);
+        ApplyIfPlaying(v.path);
         v.offset = v.ms / 1000.0;
     }
     ImGui::SameLine();
@@ -513,8 +524,11 @@ void VideosTab::DrawVideoControls(Video& v) {
     if (v.result && !v.result->confident) {
         ImGui::SameLine();
         if (ImGui::Button("Use the guess")) {
-            video::WriteStartTime(v.path, v.result->offset);
-            ApplyIfPlaying(v.path, v.result->offset);
+            // one offset throughout
+            video::WriteIniValues(v.path, {{"video_start_time", std::to_string(std::lround(v.result->offset * 1000.0))},
+                                           {"video_segments", std::nullopt}});
+            v.segments.clear();
+            ApplyIfPlaying(v.path);
             v.offset = v.result->offset;
             v.ms = int(std::lround(v.result->offset * 1000.0));
         }
@@ -522,6 +536,44 @@ void VideosTab::DrawVideoControls(Video& v) {
             ImGui::SetTooltip("%s", std::format("Auto-sync's best guess, {:+.3f} s, which it wasn't sure of",
                                                 v.result->offset)
                                         .c_str());
+    }
+    // a video cut otherwise than its song: each later part's offset, or its gap
+    for (size_t k = 0; k < v.segments.size(); k++) {
+        video::VideoSegment& seg = v.segments[k];
+        ImGui::PushID(int(k));
+        ImGui::AlignTextToFramePadding();
+        const int at = int(std::lround(seg.song_start));
+        ImGui::TextUnformatted(std::format("Part {} from {}:{:02}", k + 2, at / 60, at % 60).c_str());
+        ImGui::SameLine(Px(190));
+        bool changed = false;
+        if (seg.offset) {
+            int ms = int(std::lround(*seg.offset * 1000.0));
+            ImGui::SetNextItemWidth(Px(170));
+            ImGui::InputInt("##part", &ms, 50, 500);
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                seg.offset = ms / 1000.0;
+                changed = true;
+            }
+        } else {
+            ImGui::SetNextItemWidth(Px(170));
+            Muted("No video (black)");
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Merge into the part before")) {
+            v.segments.erase(v.segments.begin() + long(k));
+            changed = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Play this part at the offset of the part before it: for a change of "
+                              "offset that wasn't one");
+        ImGui::PopID();
+        if (changed) {
+            video::WriteIniValues(v.path, {{"video_segments", v.segments.empty()
+                                                                  ? std::nullopt
+                                                                  : std::optional<std::string>(video::FormatSegments(v.segments))}});
+            ApplyIfPlaying(v.path);
+            break;
+        }
     }
 }
 

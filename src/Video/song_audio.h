@@ -35,12 +35,12 @@ enum class SongAudioResult {
     kFailed,     // it couldn't be read or decoded: why in `error`
 };
 
-// How much of a song's audio is read from its package: more than auto-sync
-// can take as it plays (kCaptureSeconds), as reading it costs little (well
-// under a second) and a song that repeats itself matches surely only over a
-// longer stretch (Master of Puppets: not sure at 45 s, sure at 180, at the same
-// offset). Within the video soundtrack auto-sync reads (240 s).
-inline constexpr double kPackageSongSeconds = 180.0;
+// How much of a song's audio is read from its package: all of it (up to
+// this), for a segment map over the whole song (sync_align.h's
+// AlignSegments), which reading costs about a second for a long song. A
+// single offset from more than auto-sync's capture (kCaptureSeconds) is surer
+// too: Master of Puppets is unsure at 45 s, sure at 180, at the same offset.
+inline constexpr double kPackageSongSeconds = 1200.0;
 
 // The song's envelope from its package (song_audio_package.cpp): the
 // packages band3 has read (package_songs.h's PackageSongsNow, waiting up to

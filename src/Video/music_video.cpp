@@ -61,7 +61,15 @@ public:
         // turned off, it stops at once; turned on, it starts with the next song
         if (!file_ || !REXCVAR_GET(music_videos)) return false;
         last_frame_ = std::chrono::steady_clock::now().time_since_epoch().count();
-        target_ = song_time + file_->start_time;
+        song_time_ = song_time;
+        // in a gap (a part of the song the video hasn't): black, and the
+        // decoder waits where it is; a jump to another part is a seek
+        const std::optional<double> at = VideoTimeAt(*file_, song_time);
+        if (!at) {
+            out = Black(sizes);
+            return true;
+        }
+        target_ = *at;
         sizes_ = sizes;
         fit_ = ParseFit(REXCVAR_GET(music_video_fit));
         min_gap_ = MinFrameGap(world_fps);
@@ -86,24 +94,39 @@ public:
         return file_;
     }
 
-    // moves the playing video's start time by `delta`, saved to its .ini;
-    // false when none plays
-    bool Nudge(double delta, double& now) {
+    // moves the offset of the part of the video playing (its only one, or
+    // one of its segments) by `delta`, saved to its .ini: the parts' offsets
+    // are found apart, so their errors are too. `part` 0 is the first; false
+    // when none plays, or in a gap
+    bool Nudge(double delta, double& now, size_t& part, size_t& parts) {
         std::lock_guard lock(mutex_);
         if (!file_ || !Showing()) return false;
-        file_->start_time += delta;
-        file_->start_time_set = true;
-        now = file_->start_time;
-        WriteStartTime(file_->path, now);
+        part = SegmentAt(*file_, song_time_);
+        parts = file_->segments.size() + 1;
+        if (part == 0) {
+            file_->start_time += delta;
+            file_->start_time_set = true;
+            now = file_->start_time;
+            WriteStartTime(file_->path, now);
+        } else {
+            std::optional<double>& offset = file_->segments[part - 1].offset;
+            if (!offset) return false;
+            *offset += delta;
+            now = *offset;
+            WriteIniValues(file_->path, {{"video_segments", FormatSegments(file_->segments)}});
+        }
         wake_.notify_one();
         return true;
     }
 
-    void SetStartTime(uint64_t song, double seconds) {
+    // a new offset, or map, for the song's video (auto-sync's); one offset
+    // takes the place of any segments
+    void SetStartTime(uint64_t song, double seconds, std::vector<VideoSegment> later = {}) {
         std::lock_guard lock(mutex_);
         if (song != song_ || !file_) return;
         file_->start_time = seconds;
         file_->start_time_set = true;
+        file_->segments = std::move(later);
         // the decoder seeks to the new place from the next frame
         wake_.notify_one();
     }
@@ -320,6 +343,7 @@ private:
     std::optional<VideoFile> file_;
     uint64_t song_ = 0;  // counts songs looked up, so the thread sees a new one
     double target_ = 0.0;
+    double song_time_ = 0.0;  // Frame's last
     PlaneSizes sizes_;
     Fit fit_ = Fit::kFit;
     double min_gap_ = kMinFrameGap;  // ShouldMake's, for how fast the world draws
@@ -367,10 +391,12 @@ std::chrono::steady_clock::time_point g_nudge_at;
 
 void NudgeMusicVideo(double delta) {
     double now = 0.0;
+    size_t part = 0, parts = 1;
     std::string message;
     // nothing without a video playing: [ may be typed in the song list's search
-    if (!ThePlayer().Nudge(delta, now)) return;
-    message = std::format("Video offset {:+.3f} s (saved)", now);
+    if (!ThePlayer().Nudge(delta, now, part, parts)) return;
+    message = parts > 1 ? std::format("Video offset {:+.3f} s, part {} of {} (saved)", now, part + 1, parts)
+                        : std::format("Video offset {:+.3f} s (saved)", now);
     REXLOG_INFO("Music video: {}", message);
     std::lock_guard lock(g_nudge_mutex);
     g_nudge_message = std::move(message);
@@ -387,6 +413,10 @@ std::string RecentNudgeMessage() {
 
 void SetMusicVideoStartTime(uint64_t song, double seconds) {
     ThePlayer().SetStartTime(song, seconds);
+}
+
+void SetMusicVideoSegments(uint64_t song, double start_time, std::vector<VideoSegment> later) {
+    ThePlayer().SetStartTime(song, start_time, std::move(later));
 }
 
 namespace {

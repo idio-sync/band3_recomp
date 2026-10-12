@@ -7,6 +7,8 @@
 #include <utility>
 #include <vector>
 
+#include "src/Video/sync_align.h"
+
 // Where a song's music video is: <shortname>.<ext> in one of the
 // music_videos_folder setting's folders, and beside it, optionally,
 // <shortname>.ini with Clone Hero's song.ini key video_start_time, the
@@ -25,7 +27,22 @@ struct VideoFile {
     bool start_time_set = false;
     std::string source;  // video_source; "" for none
     bool pinned = false;  // video_pinned = 1
+    // video_segments: for a video cut otherwise than its song (sync_align.h's
+    // AlignSegments), the parts after the first, whose offset is start_time;
+    // none for one offset throughout
+    std::vector<VideoSegment> segments;
 };
+
+// "61500:4100, 143000:gap": each part's start in the song and its offset (or
+// a gap), in milliseconds; sorted, what isn't one left out
+std::vector<VideoSegment> ParseSegments(std::string_view value);
+std::string FormatSegments(const std::vector<VideoSegment>& later);
+
+// which part the song's time is in: 0 the first (start_time's), k the
+// segments' k-1th
+size_t SegmentAt(const VideoFile& file, double song_time);
+// the video's time at the song's, or none in a gap
+std::optional<double> VideoTimeAt(const VideoFile& file, double song_time);
 
 // a key and its value for an .ini; no value takes the key out
 using IniValue = std::pair<std::string, std::optional<std::string>>;
@@ -63,5 +80,17 @@ std::string WithStartTime(std::string_view ini, double seconds);
 // written over the video's .ini; false if it can't be
 bool WriteIniValues(const std::filesystem::path& video, const std::vector<IniValue>& values);
 bool WriteStartTime(const std::filesystem::path& video, double seconds);
+// A map as video_start_time (its first matched part's offset, which also
+// covers a gap before it: the video hasn't begun there) and video_segments
+// (the rest; taken out for a map of one part)
+bool WriteSegmentMap(const std::filesystem::path& video, const SegmentMap& map);
+// the map as those two: its first matched part's offset and the parts after;
+// false with none matched
+bool SplitMap(const SegmentMap& map, double& start, std::vector<VideoSegment>& later);
+// a match (sync_align.h's MatchSong) as the .ini's: a sure map's parts, else
+// its first offset alone, which takes any video_segments out
+bool WriteMatch(const std::filesystem::path& video, const Match& match);
+// the video's .ini's text; "" without one
+std::string ReadIni(const std::filesystem::path& video);
 
 }

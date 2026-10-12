@@ -326,10 +326,18 @@ video starts, and its last frame stays after it ends.
 
 A music video rarely starts where the game's song does, so with `music_video_auto_sync` on
 (the default; the Videos tab's Sync music videos automatically) band3 finds the offset itself
-when a song with its video in the folder is picked, in any venue. It reads the first three
-minutes of the song's audio from its package, matches their rhythm against the video's soundtrack,
-and when the match is clear writes `video_start_time` to the video's `.ini`, before the song
-starts. Most custom songs' audio can be read this way; an encrypted one (most official songs,
+when a song with its video in the folder is picked, in any venue. It reads the song's audio
+from its package, matches its rhythm against the video's soundtrack a part at a time, and when
+the match is clear writes `video_start_time` to the video's `.ini`, before the song starts.
+
+A video cut otherwise than its song (a skit between verses, a radio edit, an extended intro,
+an ending that comes early) gets a map of its parts: `video_start_time` is the first part's
+offset, and `video_segments` the rest, each where it starts in the song and its offset in
+milliseconds, or `gap` for a part the video hasn't, which shows black
+(`video_segments = 61500:4100, 143000:gap`). At each change the video jumps to the next part.
+A stretch the soundtracks match poorly (a quiet part mixed otherwise) is played through, not
+cut. Only the whole song's audio from its package makes a map; one taken as the song plays
+(below) gives a single offset. Most custom songs' audio can be read this way; an encrypted one (most official songs,
 and the disc's) can't, and for those band3 listens to the song's first 45 seconds as the game
 plays them the first time, then moves the playing video. The log says what it found
 (`Music video auto-sync: nooneknows.webm: -3.252 s (score 0.81, margin 1.52), saved to
@@ -341,7 +349,10 @@ which can be deleted at any time.
 
 While a video plays, `[` shows it 50 ms earlier and `]` 50 ms later (`bind_music_video_earlier`
 and `bind_music_video_later`); each press is saved to the `.ini` and shown at the top of the
-screen. Earlier is for a singer whose lips move after the sound.
+screen. Earlier is for a singer whose lips move after the sound. In a video with parts, it moves
+only the part playing ("part 2 of 3"), as each part's offset is found on its own; the Videos tab
+lists the parts, each with its offset to type in and **Merge into the part before** for a change
+that wasn't one.
 
 The **Videos** tab, in the launcher and the in-game settings, lists the songs in band3's
 packages and the game's own (as the game last read them) with each one's video, if it has one, and its offset in

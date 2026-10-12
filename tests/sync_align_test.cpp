@@ -235,6 +235,24 @@ TEST_CASE("a video that ends before the song leaves a gap after it") {
     CHECK(m.coverage < 0.75);
 }
 
+TEST_CASE("a whole song is matched as a map, a capture's stretch as one offset") {
+    const std::vector<float> song = MakeSong(200.0, 44100, 28);
+    const std::vector<float> video =
+        Splice(song, 44100, 48000, {{-1, 4.0}, {0.0, 70.0}, {-1, 20.0}, {70.0, 130.0}});
+    const std::vector<float> song_env = Envelope(song, 44100), video_env = Envelope(video, 48000);
+    const Match whole = MatchSong(song_env, video_env);
+    REQUIRE(whole.map);
+    CHECK(whole.result.confident);
+    CHECK(whole.result.parts == 2);
+    CHECK(std::abs(whole.result.offset - 4.0) < 0.01);
+    CHECK(whole.result.coverage > 0.95);
+    // 45 s, as taken while the song plays
+    const Match capture = MatchSong(std::span(song_env).subspan(0, 45 * kEnvelopeRate), video_env);
+    CHECK_FALSE(capture.map);
+    CHECK(capture.result.parts == 1);
+    CHECK(std::abs(capture.result.offset - 4.0) < 0.01);
+}
+
 TEST_CASE("an unrelated soundtrack maps nothing surely") {
     const std::vector<float> song = MakeSong(120.0, 44100, 26);
     const std::vector<float> other = MakeSong(150.0, 48000, 999);

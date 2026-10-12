@@ -12,7 +12,8 @@
 namespace band3::video {
 
 namespace {
-constexpr char kMagic[8] = {'B', '3', 'E', 'N', 'V', '1', 0, 0};
+// 2: whole soundtracks, for segment maps (1's were the first 180 or 240 s)
+constexpr char kMagic[8] = {'B', '3', 'E', 'N', 'V', '2', 0, 0};
 }
 
 uint64_t FileStamp(const std::filesystem::path& path) {
@@ -42,8 +43,9 @@ bool SaveEnvelope(const std::filesystem::path& path, std::span<const float> fram
 
 std::string ResultText(const SyncResult& r) {
     return std::format("offset = {:.3f}\nscore = {:.3f}\nmargin = {:.3f}\nonset = {:.3f}\n"
-                       "confident = {}\n",
-                       r.offset, r.score, r.margin, r.onset_score, r.confident ? 1 : 0);
+                       "confident = {}\nparts = {}\ncoverage = {:.3f}\n",
+                       r.offset, r.score, r.margin, r.onset_score, r.confident ? 1 : 0, r.parts,
+                       r.coverage);
 }
 
 std::optional<SyncResult> ParseResult(std::string_view text) {
@@ -64,6 +66,9 @@ std::optional<SyncResult> ParseResult(std::string_view text) {
         else if (key == "margin") r.margin = v, fields++;
         else if (key == "onset") r.onset_score = v, fields++;
         else if (key == "confident") r.confident = v != 0, fields++;
+        // not in a result from before segment maps
+        else if (key == "parts") r.parts = v >= 1 ? int(v) : 1;
+        else if (key == "coverage") r.coverage = v;
     }
     if (fields < 5) return std::nullopt;
     r.found = true;

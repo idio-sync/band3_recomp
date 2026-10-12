@@ -493,4 +493,26 @@ SegmentMap AlignSegments(std::span<const float> song_env, std::span<const float>
     return map;
 }
 
+Match MatchSong(std::span<const float> song, std::span<const float> video, double min_overlap) {
+    Match m;
+    if (song.size() < size_t(kMinMapSeconds * kEnvelopeRate)) {
+        m.result = AlignEnvelopes(song, video, -60.0, 180.0, min_overlap);
+        return m;
+    }
+    m.map = AlignSegments(song, video);
+    SyncResult& r = m.result;
+    r.found = m.map->found;
+    r.score = r.onset_score = m.map->score;
+    r.coverage = m.map->coverage;
+    r.confident = m.map->confident;
+    // the parts after a gap before the first: that gap is the video's not
+    // having begun
+    size_t first = 0;
+    while (first < m.map->segments.size() && !m.map->segments[first].offset) first++;
+    r.parts = int(m.map->segments.size() - first);
+    if (first < m.map->segments.size()) r.offset = *m.map->segments[first].offset;
+    r.margin = r.confident ? 99.0 : 0.0;
+    return m;
+}
+
 }

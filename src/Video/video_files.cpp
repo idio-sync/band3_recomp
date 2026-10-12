@@ -1,5 +1,6 @@
 #include "src/Video/video_files.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <fstream>
@@ -112,6 +113,93 @@ bool WriteStartTime(const std::filesystem::path& video, double seconds) {
                           {{"video_start_time", std::to_string(std::llround(seconds * 1000.0))}});
 }
 
+std::vector<VideoSegment> ParseSegments(std::string_view value) {
+    std::vector<VideoSegment> out;
+    while (!value.empty()) {
+        const size_t comma = value.find(',');
+        const std::string_view part = Trim(value.substr(0, comma));
+        value.remove_prefix(comma == std::string_view::npos ? value.size() : comma + 1);
+        const size_t colon = part.find(':');
+        if (colon == std::string_view::npos) continue;
+        const std::string_view start = Trim(part.substr(0, colon)), offset = Trim(part.substr(colon + 1));
+        double ms = 0;
+        if (start.empty() || std::from_chars(start.data(), start.data() + start.size(), ms).ec != std::errc() ||
+            ms < 0)
+            continue;
+        VideoSegment seg;
+        seg.song_start = ms / 1000.0;
+        if (offset != "gap") {
+            double off = 0;
+            if (offset.empty() ||
+                std::from_chars(offset.data(), offset.data() + offset.size(), off).ec != std::errc())
+                continue;
+            seg.offset = off / 1000.0;
+        }
+        out.push_back(seg);
+    }
+    std::stable_sort(out.begin(), out.end(),
+                     [](const VideoSegment& a, const VideoSegment& b) { return a.song_start < b.song_start; });
+    return out;
+}
+
+std::string FormatSegments(const std::vector<VideoSegment>& later) {
+    std::string out;
+    for (const VideoSegment& s : later) {
+        if (!out.empty()) out += ", ";
+        out += std::to_string(std::llround(s.song_start * 1000.0)) + ":" +
+               (s.offset ? std::to_string(std::llround(*s.offset * 1000.0)) : "gap");
+    }
+    return out;
+}
+
+size_t SegmentAt(const VideoFile& file, double song_time) {
+    size_t k = 0;
+    while (k < file.segments.size() && file.segments[k].song_start <= song_time) k++;
+    return k;
+}
+
+std::optional<double> VideoTimeAt(const VideoFile& file, double song_time) {
+    const size_t k = SegmentAt(file, song_time);
+    const std::optional<double> offset = k == 0 ? std::optional<double>(file.start_time)
+                                                : file.segments[k - 1].offset;
+    if (!offset) return std::nullopt;
+    return song_time + *offset;
+}
+
+std::string ReadIni(const std::filesystem::path& video) {
+    std::ifstream in(IniFor(video), std::ios::binary);
+    if (!in) return {};
+    std::stringstream s;
+    s << in.rdbuf();
+    return s.str();
+}
+
+bool SplitMap(const SegmentMap& map, double& start, std::vector<VideoSegment>& later) {
+    // a gap before the first part: the video hasn't begun, as before any
+    // video_start_time's start
+    size_t first = 0;
+    while (first < map.segments.size() && !map.segments[first].offset) first++;
+    if (first == map.segments.size()) return false;
+    start = *map.segments[first].offset;
+    later.assign(map.segments.begin() + long(first) + 1, map.segments.end());
+    return true;
+}
+
+bool WriteSegmentMap(const std::filesystem::path& video, const SegmentMap& map) {
+    double start = 0;
+    std::vector<VideoSegment> later;
+    if (!SplitMap(map, start, later)) return false;
+    return WriteIniValues(
+        video, {{"video_start_time", std::to_string(std::llround(start * 1000.0))},
+                {"video_segments", later.empty() ? std::nullopt : std::optional<std::string>(FormatSegments(later))}});
+}
+
+bool WriteMatch(const std::filesystem::path& video, const Match& match) {
+    if (match.map && match.result.confident) return WriteSegmentMap(video, *match.map);
+    return WriteIniValues(video, {{"video_start_time", std::to_string(std::llround(match.result.offset * 1000.0))},
+                                  {"video_segments", std::nullopt}});
+}
+
 std::optional<VideoFile> FindVideo(const std::vector<std::filesystem::path>& folders,
                                    std::string_view shortname) {
     if (!PlainName(shortname)) return std::nullopt;
@@ -131,6 +219,7 @@ std::optional<VideoFile> FindVideo(const std::vector<std::filesystem::path>& fol
                 file.start_time_set = start.has_value();
                 file.source = FindIniValue(text, "video_source").value_or("");
                 file.pinned = FindIniValue(text, "video_pinned").value_or("") == "1";
+                file.segments = ParseSegments(FindIniValue(text, "video_segments").value_or(""));
             }
             return file;
         }
