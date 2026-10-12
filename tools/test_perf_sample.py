@@ -19,6 +19,33 @@ class InstanceTest(unittest.TestCase):
             "pid_1234_luid_0x00000000_0x0000D1B5_phys_0", 1234))
 
 
+class FdinfoTest(unittest.TestCase):
+    # a Steam Deck's amdgpu (Linux 6.18), trimmed
+    DECK = ("pos:\t0\nflags:\t02100002\nmnt_id:\t1415\nino:\t1390\n"
+            "drm-driver:\tamdgpu\ndrm-client-id:\t450\ndrm-pdev:\t0000:04:00.0\n"
+            "drm-total-gtt:\t26660 KiB\ndrm-resident-gtt:\t30756 KiB\n"
+            "drm-total-vram:\t203004 KiB\ndrm-resident-vram:\t198908 KiB\n"
+            "drm-memory-vram:\t198908 KiB\ndrm-memory-gtt: \t30756 KiB\n"
+            "drm-engine-gfx:\t7501127015 ns\ndrm-engine-compute:\t146333991 ns\n")
+
+    def test_a_client(self):
+        self.assertEqual(perf_sample.parse_fdinfo(self.DECK), (450, 7501127015, 198908, 30756))
+
+    def test_an_older_kernel_has_only_drm_memory(self):
+        old = "drm-client-id:\t7\ndrm-memory-vram:\t1024 KiB\ndrm-engine-gfx:\t5 ns\n"
+        self.assertEqual(perf_sample.parse_fdinfo(old), (7, 5, 1024, 0))
+
+    def test_not_a_drm_client(self):
+        self.assertIsNone(perf_sample.parse_fdinfo("pos:\t0\nflags:\t02\nmnt_id:\t26\n"))
+
+
+class StatTest(unittest.TestCase):
+    def test_utime_and_stime(self):
+        # a comm with a space and a parenthesis of its own
+        stat = "4242 (band3 (x)) S 1 4242 4242 0 -1 4194304 100 0 0 0 1500 250 0 0 20 0 30 0"
+        self.assertEqual(perf_sample.parse_stat_ticks(stat), 1750)
+
+
 class GuardTest(unittest.TestCase):
     def test_trips_after_the_time_over_straight(self):
         g = perf_sample.Guard(95, 5)

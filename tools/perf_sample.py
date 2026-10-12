@@ -31,7 +31,16 @@ for --guard-seconds (5) straight, it prints ABORT, quits the game through the
 harness on --port if given (band3ctl's `quit`), writes the summary and exits 2.
 Without --port it only reports.
 
-Windows only; standard library only (ctypes).
+On Linux the same from /proc: the process's and its threads' times from
+stat, their names from comm, and the GPU from each DRM client's fdinfo (the
+kernel's drm-usage-stats): gpu3d_pct is the gfx engine's busy time
+(drm-engine-gfx), summed over the process's clients (band3 has one Vulkan
+device per renderer), vram_mb its resident VRAM, and gtt_mb its resident GTT,
+system memory the GPU maps, which an APU like the Steam Deck's uses beside its
+small VRAM carve-out. Run it where it can see the game's /proc: on the host,
+or a distrobox (which shares the host's processes), not a Flatpak sandbox.
+
+Standard library only (ctypes on Windows).
 """
 
 import argparse
@@ -40,7 +49,9 @@ import json
 import os
 import sys
 import time
-from ctypes import wintypes
+
+if os.name == "nt":
+    from ctypes import wintypes
 
 PDH_FMT_DOUBLE = 0x00000200
 PDH_FMT_LARGE = 0x00000400
@@ -55,22 +66,23 @@ GPU_3D = r"\GPU Engine(*)\Utilization Percentage"
 GPU_MEMORY = r"\GPU Process Memory(*)\Dedicated Usage"
 
 
-class FmtValue(ctypes.Structure):
-    class Value(ctypes.Union):
-        _fields_ = [("long", ctypes.c_long), ("double", ctypes.c_double),
-                    ("large", ctypes.c_longlong)]
-    _fields_ = [("status", wintypes.DWORD), ("value", Value)]
+if os.name == "nt":
+    class FmtValue(ctypes.Structure):
+        class Value(ctypes.Union):
+            _fields_ = [("long", ctypes.c_long), ("double", ctypes.c_double),
+                        ("large", ctypes.c_longlong)]
+        _fields_ = [("status", wintypes.DWORD), ("value", Value)]
 
 
-class FmtItem(ctypes.Structure):
-    _fields_ = [("name", wintypes.LPWSTR), ("value", FmtValue)]
+    class FmtItem(ctypes.Structure):
+        _fields_ = [("name", wintypes.LPWSTR), ("value", FmtValue)]
 
 
-class ThreadEntry(ctypes.Structure):
-    _fields_ = [("size", wintypes.DWORD), ("usage", wintypes.DWORD),
-                ("thread_id", wintypes.DWORD), ("owner_pid", wintypes.DWORD),
-                ("base_priority", ctypes.c_long), ("delta_priority", ctypes.c_long),
-                ("flags", wintypes.DWORD)]
+    class ThreadEntry(ctypes.Structure):
+        _fields_ = [("size", wintypes.DWORD), ("usage", wintypes.DWORD),
+                    ("thread_id", wintypes.DWORD), ("owner_pid", wintypes.DWORD),
+                    ("base_priority", ctypes.c_long), ("delta_priority", ctypes.c_long),
+                    ("flags", wintypes.DWORD)]
 
 
 def instance_matches(name, pid, engine=None):
@@ -110,7 +122,7 @@ def summarize(samples, threads_start, threads_end, names=None, log_lines=None, e
     thread's CPU ms over the run, most first. A thread is marked ended if it
     is in `ended`, or with no `ended` given, if threads_end lacks it."""
     out = {"samples": len(samples)}
-    for key in ("cpu_pct", "cpu_cores", "gpu3d_pct", "vram_mb"):
+    for key in ("cpu_pct", "cpu_cores", "gpu3d_pct", "vram_mb", "gtt_mb"):
         values = [s[key] for s in samples if s.get(key) is not None]
         out[key] = ({"mean": round(sum(values) / len(values), 3), "peak": round(max(values), 3)}
                     if values else None)
@@ -299,6 +311,121 @@ class Sampler:
         self.k32.CloseHandle(self.process)
 
 
+def parse_fdinfo(text):
+    """A DRM client's fdinfo (drm-usage-stats) as (client id, gfx ns, VRAM KiB,
+    GTT KiB), or None for a file that isn't a DRM client's. An amount the
+    driver doesn't report is 0."""
+    fields = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if sep:
+            fields[key.strip()] = value.split()
+    if "drm-client-id" not in fields:
+        return None
+
+    def number(key):
+        value = fields.get(key)
+        return int(value[0]) if value and value[0].isdigit() else 0
+
+    # drm-resident-* is newer; drm-memory-* is what older kernels report
+    vram = number("drm-resident-vram") or number("drm-memory-vram")
+    gtt = number("drm-resident-gtt") or number("drm-memory-gtt")
+    return number("drm-client-id"), number("drm-engine-gfx"), vram, gtt
+
+
+def parse_stat_ticks(text):
+    """utime + stime, in clock ticks, from /proc/<pid>[/task/<tid>]/stat.
+    The fields count from after comm's closing parenthesis, since comm may
+    hold spaces and parentheses of its own."""
+    rest = text[text.rindex(")") + 2:].split()
+    # rest[0] is the state, field 3; utime and stime are fields 14 and 15
+    return int(rest[11]) + int(rest[12])
+
+
+class LinuxSampler:
+    """The process's counters, from /proc."""
+
+    def __init__(self, pid):
+        self.pid = pid
+        self.proc = f"/proc/{pid}"
+        if not os.path.isdir(self.proc):
+            raise OSError(f"no process {pid} (from a Flatpak sandbox, run this on the host)")
+        self.tick_ms = 1000 / os.sysconf("SC_CLK_TCK")
+        self.cpus = os.cpu_count() or 1
+        self.gpu_warned = False
+        self.last = (time.perf_counter(), self.process_ms(), self.gpu())
+
+    def _read(self, path):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+    def process_ms(self):
+        return parse_stat_ticks(self._read(f"{self.proc}/stat")) * self.tick_ms
+
+    def gpu(self):
+        """(gfx ns, VRAM KiB, GTT KiB) over the process's DRM clients, each
+        once: a client's file may be open more than once. None if the fds
+        can't be read."""
+        clients = {}
+        try:
+            fds = os.listdir(f"{self.proc}/fdinfo")
+        except OSError as e:
+            if not self.gpu_warned:
+                print(f"perf_sample: no GPU numbers, can't list fdinfo: {e}", file=sys.stderr)
+                self.gpu_warned = True
+            return None
+        for fd in fds:
+            try:
+                client = parse_fdinfo(self._read(f"{self.proc}/fdinfo/{fd}"))
+            except OSError:
+                continue  # closed meanwhile
+            if client:
+                clients[client[0]] = client[1:]
+        return tuple(sum(c[i] for c in clients.values()) for i in range(3))
+
+    def alive(self):
+        try:
+            # a zombie has exited
+            return self._read(f"{self.proc}/stat").rsplit(")", 1)[1].split()[0] != "Z"
+        except OSError:
+            return False
+
+    def sample(self):
+        now, ms, gpu = time.perf_counter(), self.process_ms(), self.gpu()
+        wall = (now - self.last[0]) * 1000
+        cores = (ms - self.last[1]) / wall if wall > 0 else 0
+        s = {"cpu_cores": round(cores, 3), "cpu_pct": round(100 * cores / self.cpus, 2)}
+        if gpu is None or self.last[2] is None:
+            s["gpu3d_pct"] = s["vram_mb"] = s["gtt_mb"] = None
+        else:
+            # a client that closed takes its time with it: never below 0
+            busy_ms = max(0, gpu[0] - self.last[2][0]) / 1e6
+            s["gpu3d_pct"] = round(100 * busy_ms / wall, 2) if wall > 0 else 0
+            s["vram_mb"] = round(gpu[1] / 1024, 1)
+            s["gtt_mb"] = round(gpu[2] / 1024, 1)
+        self.last = (now, ms, gpu)
+        return s
+
+    def threads(self):
+        """thread id -> (CPU ms, name) for the process's threads now."""
+        out = {}
+        try:
+            tids = os.listdir(f"{self.proc}/task")
+        except OSError:
+            return out
+        for tid in tids:
+            try:
+                ticks = parse_stat_ticks(self._read(f"{self.proc}/task/{tid}/stat"))
+                name = self._read(f"{self.proc}/task/{tid}/comm").strip() or None
+            except (OSError, ValueError, IndexError):
+                continue  # ended meanwhile
+            out[int(tid)] = (ticks * self.tick_ms, name)
+        return out
+
+    def close(self):
+        pass
+
+
 def quit_game(port):
     """band3ctl's `quit` on the harness's port; whether it answered."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -328,10 +455,12 @@ def main():
     ap.add_argument("--guard-seconds", type=float, default=5.0)
     ap.add_argument("--port", type=int, help="with --guard, quit the game on this harness port")
     a = ap.parse_args()
-    if os.name != "nt":
-        sys.exit("perf_sample: Windows only")
-
-    sampler = Sampler(a.pid)
+    if os.name == "nt":
+        sampler = Sampler(a.pid)
+    elif sys.platform.startswith("linux"):
+        sampler = LinuxSampler(a.pid)
+    else:
+        sys.exit("perf_sample: Windows and Linux only")
     out = open(a.out, "w", encoding="utf-8") if a.out else sys.stdout
     guard = Guard(a.guard_pct, a.guard_seconds) if a.guard else None
     samples, aborted, ended = [], None, False
@@ -376,7 +505,7 @@ def main():
     out.write(json.dumps({"summary": summary}) + "\n")
     if out is not sys.stdout:
         out.close()
-        brief = {k: summary[k] for k in ("samples", "cpu_pct", "gpu3d_pct", "vram_mb")}
+        brief = {k: summary[k] for k in ("samples", "cpu_pct", "gpu3d_pct", "vram_mb", "gtt_mb")}
         print(json.dumps(brief))
         for t in summary["threads"][:8]:
             print(f"  t{t['tid']}: {t['cpu_ms']} ms  {t.get('name') or ''}  {t.get('log', '')}")
