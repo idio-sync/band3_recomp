@@ -18,11 +18,25 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
 PAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                     'src', 'Net', 'karaoke_page.h')
+
+
+def fetch_status(url, attempts=6, opener=urllib.request.urlopen, sleep=time.sleep):
+    """(status, content type) of a GET, asked again while the game is busy
+    (503), as the page does: 1, 2, 4, 8, then 10 s apart."""
+    for attempt in range(attempts):
+        try:
+            with opener(url, timeout=30) as reply:
+                return reply.status, reply.headers.get('Content-Type', '')
+        except urllib.error.HTTPError as e:
+            if e.code != 503 or attempt == attempts - 1:
+                return e.code, ''
+        sleep(min(2 ** attempt, 10))
 
 
 def page_textures():
@@ -114,11 +128,7 @@ def main():
     textures = page_textures()
     check(len(textures) >= 16, f'the page asks for {len(textures)} textures')
     for key, path in textures:
-        try:
-            with urllib.request.urlopen(server + path, timeout=30) as reply:
-                status, kind = reply.status, reply.headers.get('Content-Type', '')
-        except urllib.error.HTTPError as e:
-            status, kind = e.code, ''
+        status, kind = fetch_status(server + path)
         if key == 'header_normal' and status == 404:
             print(f'note: {key} is 404 (no Rock Band 3 Deluxe): the header is plain')
             continue
