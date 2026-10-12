@@ -9,18 +9,17 @@
   CMake presets look for it, so that `.rexglue-sdk/include/rex/version.h` exists.
 - A copy of Rock Band 3 (Xbox 360) with the Title Update 5 (TU5) `default.xex`, or Rock
   Band 3 Deluxe's patched XEX.
-- cmake, ninja and clang. On Windows, also Visual Studio with "Desktop development with
-  C++"; on Linux, `sudo apt install build-essential git cmake ninja-build clang
-  libasound2-dev libcurl4-openssl-dev pkg-config libavformat-dev libavcodec-dev
-  libavutil-dev libswscale-dev` (ALSA for MIDI drum kits, libcurl for
-  [RhythmVerse](integrations.md#rhythmverse), FFmpeg for
-  [music videos](settings.md#music-videos); band3 builds without them, less those).
-  On Windows, FFmpeg for music videos comes with the source: a trimmed LGPL build with
-  only the decoders band3 uses, in `deps/` (rebuilt from pinned FFmpeg and dav1d sources
-  by `tools/build_ffmpeg.sh`, in MSYS2's MinGW64 shell); `-DBAND3_FFMPEG_ROOT=<folder>`
-  points the build at another, and `-DBAND3_FFMPEG=OFF` leaves FFmpeg out.
-  band3 uses `std::format` and `std::byteswap`, so Linux needs GCC 13's libstdc++ or
-  later, which clang builds against too (Ubuntu 24.04 has it).
+- cmake, ninja and clang, plus:
+  - **Windows:** Visual Studio with "Desktop development with C++". FFmpeg for [music
+    videos](settings.md#music-videos) comes with the source in `deps/`, a trimmed LGPL build
+    (rebuilt by `tools/build_ffmpeg.sh` in MSYS2's MinGW64 shell). `-DBAND3_FFMPEG_ROOT=<folder>`
+    uses another; `-DBAND3_FFMPEG=OFF` leaves it out.
+  - **Linux:** `sudo apt install build-essential git cmake ninja-build clang libasound2-dev
+    libcurl4-openssl-dev pkg-config libavformat-dev libavcodec-dev libavutil-dev
+    libswscale-dev`. ALSA is for MIDI drum kits, libcurl for
+    [RhythmVerse](integrations.md#rhythmverse) and FFmpeg for music videos; band3 builds
+    without them, minus those features. It needs GCC 13's libstdc++ or later (Ubuntu 24.04
+    has it), for `std::format` and `std::byteswap`.
 
 ## Game files
 
@@ -91,28 +90,28 @@ and `tools/package.py` stops on a Windows build whose reference differs.
 
 ## Crash reports
 
-When band3 crashes (`abort()`, `std::terminate`, an exception or fatal signal nothing
-handles), it writes the stack to the log and to `logs/crash-<start>-<pid>.txt` beside the
-executable, under a header naming the build and the binary (band3.exe's link time stamp,
-or the Linux executable's build id). The next start tells the player where it is, and
-after a GPU hang with the native renderer suggests `renderer = emulated`. On Windows a
-minidump goes beside the report (`crash-<start>-<pid>.dmp`, the newest five kept), with
-every thread's stack, for WinDbg with the build's `band3.pdb`.
+When band3 crashes (`abort()`, `std::terminate`, or an unhandled exception or fatal signal),
+it writes the stack to the log and to `logs/crash-<start>-<pid>.txt` beside the executable.
 
-Frames are module+offset. `tools/symbolize.py` names band3's: from the `band3.map` whose
-time stamp matches the report on Windows, with `addr2line` from the executable whose build
-id matches on Linux, and guest addresses from `band3_functions.toml`:
+- The report's header names the build and binary (link time stamp, or Linux build id).
+- The next start tells the player where it is, and after a native renderer GPU hang suggests
+  `renderer = emulated`.
+- On Windows a minidump goes beside it (`crash-<start>-<pid>.dmp`, newest five kept), for
+  WinDbg with the build's `band3.pdb`.
+
+Frames are module+offset. `tools/symbolize.py` names band3's (from the matching `band3.map` on
+Windows, `addr2line` on Linux) and guest addresses (from `band3_functions.toml`):
 
 ```
 python tools/symbolize.py out/build/win-amd64-release/logs/crash-20261006-142122-29936.txt
 python3 tools/symbolize.py --elf band3 logs/crash-20261006-142122-29936.txt
 ```
 
-Frames in the SDK's libraries stay unnamed: the SDK ships no symbols for them.
-`BAND3_CRASH_TEST=abort`, `terminate`, `access-violation` or `stack-overflow` in the
-environment crashes band3 that way once the runtime is set up, to check all of it.
-`BAND3_FULL_DUMP=1` makes a Windows crash's minidump hold all of band3's memory, the
-guest's included (gigabytes), for finding what overwrote it.
+- Frames in the SDK's libraries stay unnamed: the SDK ships no symbols.
+- `BAND3_CRASH_TEST=abort`, `terminate`, `access-violation` or `stack-overflow` in the
+  environment crashes band3 that way, to check the reporting.
+- `BAND3_FULL_DUMP=1` makes a Windows minidump hold all of band3's memory, the guest's
+  included (gigabytes), for finding what overwrote it.
 
 ## Checks
 
@@ -155,11 +154,11 @@ old SDK and fails as soon as band3 uses something only the new one has.
 ## Profiling
 
 Profiling is compiled into every build except Release. Build the `relwithdebinfo` preset
-(e.g. `cmake --preset win-amd64-relwithdebinfo`, then
-`cmake --build --preset win-amd64-relwithdebinfo`) and connect the
-[Tracy](https://github.com/wolfpld/tracy) 0.13.1 profiler to the running game. Next to the
-SDK's own zones, band3 marks RB3's engine systems (`RB3 Game::Poll`,
-`RB3 WorldCrowd::DrawShowing`, `RB3 DxRnd::DoPostProcess` and so on), so a capture shows
-where each frame goes. For captures that can be compared, turn on `autoplay`
-(the in-game settings' Advanced tab, Test harness) and play the same song in the same venue each time, with
-`autosave` off (the Game tab) to keep those runs out of your profile.
+(`cmake --preset win-amd64-relwithdebinfo`, then `cmake --build --preset
+win-amd64-relwithdebinfo`) and connect the [Tracy](https://github.com/wolfpld/tracy) 0.13.1
+profiler to the running game. band3 adds zones for RB3's engine systems (`RB3 Game::Poll`,
+`RB3 WorldCrowd::DrawShowing`, ...) next to the SDK's.
+
+For comparable captures, turn on `autoplay` (Advanced → Test harness), play the same song in
+the same venue each time, and turn `autosave` off (the Game tab) to keep the runs out of your
+profile.
