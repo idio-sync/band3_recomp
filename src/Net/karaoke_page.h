@@ -316,7 +316,9 @@ body {
 #score { margin-left: auto; flex: none; }
 #scorebox {
   min-width: 21vw; height: 5.6vh; display: flex; align-items: center; justify-content: flex-end;
-  padding: 0 1.6vw; font-size: 3.6vh; border: 2px solid #8a8a94; border-radius: 0.8vh; background: rgba(0, 0, 0, 0.5);
+  /* the digits centred in the frame's window: a line as tall as its glyphs, the
+     digits sitting a touch low in their cells */
+  padding: 0 1.6vw 0.3vh; font-size: 3vh; line-height: 1; border: 2px solid #8a8a94; border-radius: 0.8vh; background: rgba(0, 0, 0, 0.5);
 }
 .t-scoreboard #scorebox { border: 0; border-radius: 0; background: var(--t-scoreboard) 0 0 / 100% 100%; }
 #stage { position: fixed; inset: 14.6vh 0 9.2vh; display: flex; align-items: center; justify-content: center; }
