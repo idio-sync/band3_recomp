@@ -34,6 +34,18 @@ endif()
 
 rexglue_setup_target(band3 GPU_PLUGINS xenos)
 
+# The SDK compiles Linux x86-64 targets with -mcmodel=large, for executables
+# past 2 GB; band3's code and data are about 75 MB. The large model calls
+# every function through a 64-bit absolute address in a register and reaches
+# every global the same way, which the recompiled game code, a call every few
+# instructions, pays for throughout; the small model calls directly.
+if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    target_compile_options(band3 PRIVATE -mcmodel=small)
+    if(TARGET band3_recomp)
+        target_compile_options(band3_recomp PRIVATE -mcmodel=small)
+    endif()
+endif()
+
 # the SDK's runtime library by file name (rexruntime[d|rd].dll,
 # librexruntime[d|rd].so), for src/sdk_export.cpp
 target_compile_definitions(band3 PRIVATE BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")
