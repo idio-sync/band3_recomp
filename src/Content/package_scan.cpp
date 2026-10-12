@@ -112,6 +112,9 @@ FolderScan ScanFolder(const fs::path& folder, std::span<const uint32_t> title_id
             std::erase_if(out.packages, [&](const Package& p) { return p.path == target; });
         }
     }
+    // in path order, so which copy of a content ID comes first doesn't depend on
+    // the order the file system lists (NTFS's is by name, ext4's by hash)
+    std::ranges::sort(out.packages, {}, &Package::path);
     return out;
 }
 
