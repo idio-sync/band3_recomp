@@ -309,9 +309,12 @@ body {
 }
 #titles { display: flex; flex-direction: column; justify-content: center; gap: 0.9vh; min-width: 0; overflow: hidden; }
 #band-title { font-size: 5.8vh; line-height: 1; white-space: nowrap; color: #c4c4cc; }
-#band-artist { font-size: 3.3vh; line-height: 1; white-space: nowrap; color: #c9cbd6; }
-/* the song's source, as the Music Library badges it */
-#badge { height: 6.4vh; width: 6.4vh; flex: none; background: center / contain no-repeat; }
+/* the artist, and after it the song's source as the Music Library badges it: the
+   badge's logo fills 79% of its square and Pentatonic's capitals 63% of the font's
+   size, so at 3.6vh and 4.5vh the two stand as tall as each other */
+#artistrow { display: flex; align-items: center; gap: 0.9vw; min-width: 0; }
+#band-artist { font-size: 4.5vh; line-height: 1; white-space: nowrap; color: #c9cbd6; min-width: 0; overflow: hidden; }
+#badge { height: 3.6vh; width: 3.6vh; flex: none; background: center / contain no-repeat; }
 /* the band's score, in the HUD's frame */
 #score { margin-left: auto; flex: none; }
 #scorebox {
@@ -486,8 +489,8 @@ body {
 <div id="topband">
   <div id="hdrclip"><div id="hdrscene" class="idle"></div></div>
   <div id="thumb" hidden></div>
-  <div id="titles"><div id="band-title"></div><div id="band-artist"></div></div>
-  <div id="badge" hidden></div>
+  <div id="titles"><div id="band-title"></div>
+    <div id="artistrow"><div id="band-artist"></div><div id="badge" hidden></div></div></div>
   <div id="score" hidden><div id="scorebox"></div></div>
 </div>
 <div id="topshadow"></div>
