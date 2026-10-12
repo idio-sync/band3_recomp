@@ -60,6 +60,7 @@ add_executable(band3_tests
     movie_planes_test.cpp
     music_video_test.cpp
     mogg_test.cpp
+    ytdlp_test.cpp
     sync_align_test.cpp
     video_decoder_test.cpp
     frame_compose_test.cpp
@@ -153,7 +154,9 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Lights/lights_view.cpp
     ${BAND3_ROOT}/src/Lights/pico_fleet.cpp
     ${BAND3_ROOT}/src/Lights/stagekit.cpp
+    ${BAND3_ROOT}/src/Video/child_process.cpp
     ${BAND3_ROOT}/src/Video/mogg.cpp
+    ${BAND3_ROOT}/src/Video/ytdlp.cpp
     ${BAND3_ROOT}/src/Video/picture_convert.cpp
     ${BAND3_ROOT}/src/Video/song_audio.cpp
     ${BAND3_ROOT}/src/Video/sync_align.cpp
@@ -263,6 +266,13 @@ if(MSVC)
 else()
     target_compile_options(band3_write_config PRIVATE -Wall -Wextra)
 endif()
+
+# a stand-in for yt-dlp that answers from tests/data, for ytdlp_test.cpp and
+# video_fetch_test.cpp
+add_executable(band3_fake_ytdlp fake_ytdlp.cpp)
+target_compile_definitions(band3_fake_ytdlp PRIVATE BAND3_ROOT_DIR="${BAND3_ROOT}")
+add_dependencies(band3_tests band3_fake_ytdlp)
+target_compile_definitions(band3_tests PRIVATE BAND3_FAKE_YTDLP="$<TARGET_FILE:band3_fake_ytdlp>")
 
 enable_testing()
 add_test(NAME band3_tests COMMAND band3_tests)

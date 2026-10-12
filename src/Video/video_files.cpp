@@ -33,27 +33,32 @@ bool PlainName(std::string_view name) {
 
 double ParseStartTime(std::string_view ini) { return FindStartTime(ini).value_or(0.0); }
 
-std::optional<double> FindStartTime(std::string_view ini) {
+std::optional<std::string> FindIniValue(std::string_view ini, std::string_view key) {
     while (!ini.empty()) {
         const size_t end = ini.find('\n');
         std::string_view line = Trim(ini.substr(0, end));
         ini.remove_prefix(end == std::string_view::npos ? ini.size() : end + 1);
         const size_t eq = line.find('=');
-        if (eq == std::string_view::npos || Trim(line.substr(0, eq)) != "video_start_time")
-            continue;
-        const std::string_view value = Trim(line.substr(eq + 1));
-        double ms = 0;
-        const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), ms);
-        if (ec == std::errc()) return ms / 1000.0;
+        if (eq == std::string_view::npos || Trim(line.substr(0, eq)) != key) continue;
+        return std::string(Trim(line.substr(eq + 1)));
     }
     return std::nullopt;
 }
 
-std::string WithStartTime(std::string_view ini, double seconds) {
+std::optional<double> FindStartTime(std::string_view ini) {
+    const std::optional<std::string> value = FindIniValue(ini, "video_start_time");
+    if (!value) return std::nullopt;
+    double ms = 0;
+    const auto [ptr, ec] = std::from_chars(value->data(), value->data() + value->size(), ms);
+    if (ec != std::errc()) return std::nullopt;
+    return ms / 1000.0;
+}
+
+std::string WithIniValues(std::string_view ini, const std::vector<IniValue>& values) {
     const std::string nl = ini.find("\r\n") != std::string_view::npos ? "\r\n" : "\n";
-    const std::string line = "video_start_time = " + std::to_string(std::llround(seconds * 1000.0));
+    const auto line = [&](const IniValue& v) { return v.first + " = " + *v.second + nl; };
+    std::vector<bool> done(values.size(), false);
     std::string out;
-    bool done = false;
     size_t song_end = std::string::npos;  // where [song]'s header line ends in out
     std::string_view rest = ini;
     while (!rest.empty()) {
@@ -63,21 +68,32 @@ std::string WithStartTime(std::string_view ini, double seconds) {
         if (!raw.empty() && raw.back() == '\r') raw.remove_suffix(1);
         const std::string_view t = Trim(raw);
         const size_t eq = t.find('=');
-        if (!done && eq != std::string_view::npos && Trim(t.substr(0, eq)) == "video_start_time") {
-            out += line + nl;
-            done = true;
+        const std::string_view key = eq == std::string_view::npos ? "" : Trim(t.substr(0, eq));
+        size_t i = 0;
+        while (i < values.size() && (key.empty() || values[i].first != key)) i++;
+        if (i < values.size()) {
+            // the first line with the key gets the value; any later one goes
+            if (values[i].second && !done[i]) out += line(values[i]);
+            done[i] = true;
             continue;
         }
         out += std::string(raw) + nl;
         if (t == "[song]" || t == "[Song]") song_end = out.size();
     }
-    if (done) return out;
-    if (song_end == std::string::npos) return "[song]" + nl + line + nl + out;
-    out.insert(song_end, line + nl);
+    std::string added;
+    for (size_t i = 0; i < values.size(); i++)
+        if (!done[i] && values[i].second) added += line(values[i]);
+    if (added.empty()) return out;
+    if (song_end == std::string::npos) return "[song]" + nl + added + out;
+    out.insert(song_end, added);
     return out;
 }
 
-bool WriteStartTime(const std::filesystem::path& video, double seconds) {
+std::string WithStartTime(std::string_view ini, double seconds) {
+    return WithIniValues(ini, {{"video_start_time", std::to_string(std::llround(seconds * 1000.0))}});
+}
+
+bool WriteIniValues(const std::filesystem::path& video, const std::vector<IniValue>& values) {
     const std::filesystem::path ini = IniFor(video);
     std::string text;
     if (std::ifstream in(ini, std::ios::binary); in) {
@@ -87,8 +103,13 @@ bool WriteStartTime(const std::filesystem::path& video, double seconds) {
     }
     std::ofstream out(ini, std::ios::binary | std::ios::trunc);
     if (!out) return false;
-    out << WithStartTime(text, seconds);
+    out << WithIniValues(text, values);
     return bool(out);
+}
+
+bool WriteStartTime(const std::filesystem::path& video, double seconds) {
+    return WriteIniValues(video,
+                          {{"video_start_time", std::to_string(std::llround(seconds * 1000.0))}});
 }
 
 std::optional<VideoFile> FindVideo(const std::vector<std::filesystem::path>& folders,
@@ -102,11 +123,14 @@ std::optional<VideoFile> FindVideo(const std::vector<std::filesystem::path>& fol
             VideoFile file{path, 0.0, false};
             std::ifstream ini(folder / (name + ".ini"), std::ios::binary);
             if (ini) {
-                std::stringstream text;
-                text << ini.rdbuf();
-                const std::optional<double> start = FindStartTime(text.str());
+                std::stringstream s;
+                s << ini.rdbuf();
+                const std::string text = s.str();
+                const std::optional<double> start = FindStartTime(text);
                 file.start_time = start.value_or(0.0);
                 file.start_time_set = start.has_value();
+                file.source = FindIniValue(text, "video_source").value_or("");
+                file.pinned = FindIniValue(text, "video_pinned").value_or("") == "1";
             }
             return file;
         }

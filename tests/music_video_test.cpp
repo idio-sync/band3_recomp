@@ -288,6 +288,36 @@ TEST_CASE("video_start_time is set in an .ini, the rest kept") {
     CHECK_FALSE(FindStartTime("[song]\nname = x\n"));
 }
 
+TEST_CASE("any key is read from and set in an .ini, the rest kept") {
+    const std::string ini = "[song]\r\nvideo_start_time = 1500\r\nvideo_source = https://a/b?c=d\r\n";
+    CHECK(FindIniValue(ini, "video_source") == "https://a/b?c=d");
+    CHECK(FindIniValue(ini, "video_start_time") == "1500");
+    CHECK_FALSE(FindIniValue(ini, "video_pinned"));
+    // replaced where it is, else added under [song]; several at once
+    CHECK(WithIniValues(ini, {{"video_source", "https://x"}, {"video_pinned", "1"}}) ==
+          "[song]\r\nvideo_pinned = 1\r\nvideo_start_time = 1500\r\nvideo_source = https://x\r\n");
+    // removed with no value
+    CHECK(WithIniValues(ini, {{"video_source", std::nullopt}}) ==
+          "[song]\r\nvideo_start_time = 1500\r\n");
+    CHECK(WithIniValues("", {{"video_pinned", "1"}}) == "[song]\nvideo_pinned = 1\n");
+}
+
+TEST_CASE("a video's .ini says where it came from and whether it was chosen by hand") {
+    const fs::path root = fs::temp_directory_path() / "band3_video_ini_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path video = root / "song1.webm";
+    std::ofstream(video) << "x";
+    CHECK(WriteIniValues(video, {{"video_source", "https://youtu.be/abc"}, {"video_pinned", "1"}}));
+    CHECK(WriteStartTime(video, -1.5));
+    const auto found = FindVideo({root}, "song1");
+    REQUIRE(found);
+    CHECK(found->start_time == -1.5);
+    CHECK(found->source == "https://youtu.be/abc");
+    CHECK(found->pinned);
+    fs::remove_all(root);
+}
+
 TEST_CASE("an envelope saved beside the videos loads back, for its video's stamp only") {
     const fs::path root = fs::temp_directory_path() / "band3_sync_cache_test";
     fs::remove_all(root);
