@@ -17,7 +17,7 @@ band3_functions.toml's [functions]:
 A report's header ("=== band3 <build> | band3.exe 6ac5002d | ...") gives
 band3.exe's link time stamp, which the map that resolves it gives too
 ("Timestamp is 6ac5002d"): the map is picked by it from --map, the maps next to
-the report (tools/package.py ships band3-<build>.map beside each zip) and
+the report (tools/package.py ships slopband3-<build>.map beside each zip) and
 out/build/*/band3.map. Text before any header (a log, or a report from before
 the header) uses --map or the newest out/build map, with a warning. Frames in
 the SDK's DLLs (rexruntime.dll, rexgpu-xenos.dll) stay as they are: the SDK

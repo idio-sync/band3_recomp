@@ -5,7 +5,7 @@
   python tools/package.py --allow-dirty       a build with uncommitted changes
 
 Build first: this packages what the build folder holds. It writes
-out/package/band3-<commit>-<build folder>.zip, everything under a band3 folder:
+out/package/slopband3-<commit>-<build folder>.zip, everything under a band3 folder:
 
   band3.exe (band3 on Linux) and the libraries beside it (rexruntime, rexgpu-xenos)
   settings-reference.md: every setting, its default and what it does, as
@@ -17,9 +17,9 @@ out/package/band3-<commit>-<build folder>.zip, everything under a band3 folder:
   README.txt: what to install, where the game files go, and where the source is
 
 No game files: the player brings their own. band3.map goes beside the zip
-(band3-<commit>-<build folder>.map), not in it: it resolves the frames a crash
+(slopband3-<commit>-<build folder>.map), not in it: it resolves the frames a crash
 trace from that build logs, so keep it for as long as the build is out there.
-band3.pdb goes beside it the same way (band3-<commit>-<build folder>.pdb): its
+band3.pdb goes beside it the same way (slopband3-<commit>-<build folder>.pdb): its
 public symbols name the frames in that build's minidumps, in WinDbg.
 
 The commit in the name is HEAD's, and README.txt links its source, as GPLv2
@@ -202,7 +202,7 @@ def main(argv):
                      "python tools/settings_reference.py and commit it, or pass --allow-dirty")
     commit = git("rev-parse", "--short", "HEAD")
     full_commit = git("rev-parse", "HEAD")
-    name = f"band3-{commit}{'-dirty' if dirty else ''}-{os.path.basename(os.path.normpath(build_dir))}"
+    name = f"slopband3-{commit}{'-dirty' if dirty else ''}-{os.path.basename(os.path.normpath(build_dir))}"
 
     os.makedirs(OUT, exist_ok=True)
     zip_path = os.path.join(OUT, name + ".zip")

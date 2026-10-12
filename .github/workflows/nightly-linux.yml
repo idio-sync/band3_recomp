@@ -1,0 +1,110 @@
+# Builds the Linux zip of a commit and puts it on the rolling nightly release,
+# beside the Windows zip the package-main skill builds locally. The skill starts
+# it (tools/publish_nightly.py --dispatch-linux <commit>); Actions > Linux
+# nightly > Run workflow does too. Codegen needs a default.xex: Rock Band 3
+# Deluxe's, which its repository publishes and band3's function tables are for,
+# pinned and checked. It's never uploaded, nor is generated/.
+#
+# A full build is about two hours on a standard runner, nearly all of it the
+# generated code. sccache keeps the objects in the Actions cache, so it's only
+# that long when the xex, band3_functions.toml, band3_rb3dx.toml or the SDK
+# change.
+name: Linux nightly
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Commit to build (empty for the branch's head)
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-linux
+  cancel-in-progress: true
+
+env:
+  REXGLUE_SDK_TAG: nightly-20260925-5cf287f4
+  REXGLUE_SDK_VERSION: 0.10.0.15-dev.g5cf287f
+  # Deluxe's default.xex as of 12ff022 ("Fix an exploitable security issue in the executables")
+  XEX_URL: https://raw.githubusercontent.com/hmxmilohax/rock-band-3-deluxe/12ff02206ef64aceee0a6b35cf4a7f93c6ab0755/platform/xbox/default.xex
+  XEX_SHA256: 6639ce25745505b598480499ca53b421fdec5604d813f5ee2c8152ecdad2a5ea
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  linux:
+    name: Build and publish (linux-amd64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit || github.sha }}
+          # package.py names the zip by HEAD and links its source
+          fetch-depth: 0
+
+      # the same cache as ci.yml's compile check
+      - name: Cache ReXGlue SDK
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: .ci-sdk
+          key: rexglue-sdk-${{ env.REXGLUE_SDK_VERSION }}-linux-amd64
+
+      - name: Download ReXGlue SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o sdk.zip "https://github.com/rexglue/rexglue-sdk/releases/download/${REXGLUE_SDK_TAG}/rexglue-sdk-${REXGLUE_SDK_VERSION}-linux-amd64.zip"
+          mkdir -p .ci-sdk
+          unzip -q sdk.zip -d .ci-sdk
+          rm sdk.zip
+
+      # where the presets and package.py (for the SDK's licenses) look for it
+      - name: Link SDK
+        run: |
+          config=$(find .ci-sdk -path '*/lib/cmake/rexglue/rexglueConfig.cmake' | head -n 1)
+          test -n "$config" || { echo "rexglueConfig.cmake not found in the SDK zip"; exit 1; }
+          ln -s "$(cd "$(dirname "$config")/../../.." && pwd)" .rexglue-sdk
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang libstdc++-14-dev libxcb1-dev libx11-dev libwayland-dev libasound2-dev libcurl4-openssl-dev pkg-config libavformat-dev libavcodec-dev libavutil-dev libswscale-dev
+
+      - name: Fetch default.xex
+        run: |
+          mkdir -p assets
+          curl -fsSL -o assets/default.xex "$XEX_URL"
+          echo "$XEX_SHA256  assets/default.xex" | sha256sum -c
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Codegen
+        run: .rexglue-sdk/bin/rexglue codegen band3_manifest.toml
+
+      - name: Configure
+        run: >
+          cmake --preset=linux-amd64-release
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build
+        run: ninja -C out/build/linux-amd64-release
+
+      - name: Cache stats
+        if: always()
+        run: sccache --show-stats
+
+      # codegen rewrites the manifest's line endings, which package.py would call
+      # uncommitted changes
+      - name: Package
+        run: |
+          git checkout -- band3_manifest.toml
+          git status --porcelain --untracked-files=no
+          python3 tools/package.py --build-dir out/build/linux-amd64-release
+
+      - name: Publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/publish_nightly.py out/package/slopband3-*-linux-amd64-release.zip

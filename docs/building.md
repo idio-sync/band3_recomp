@@ -74,12 +74,18 @@ python tools/package.py
 python tools/package.py --build-dir out/build/linux-amd64-release
 ```
 
-It writes `out/package/band3-<commit>-<build folder>.zip`: band3 and the libraries beside
+It writes `out/package/slopband3-<commit>-<build folder>.zip`: band3 and the libraries beside
 it, `settings-reference.md`, the licenses (band3's and those of the libraries built into it)
 and a `README.txt` with what to install, where the game files go and a link to the
 commit's source. No game files. `band3.map` and `band3.pdb` go beside the zip, not in
 it: keep them to read crash reports from that build. With uncommitted changes to tracked
 files it stops unless `--allow-dirty`.
+
+`python tools/publish_nightly.py <zip> --dispatch-linux <commit>` puts a zip on the
+repository's rolling `nightly` release, replacing that platform's older one, and starts
+the Linux nightly workflow (`.github/workflows/nightly-linux.yml`). That workflow builds
+a pushed commit's Linux zip on GitHub, with Rock Band 3 Deluxe's published `default.xex`,
+and publishes it the same way.
 
 `docs/settings-reference.md` is generated: band3 writes it from its settings registry
 (`band3 --settings_reference=<file>` quits without starting the game). After changing a
