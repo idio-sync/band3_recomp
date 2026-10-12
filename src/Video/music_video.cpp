@@ -431,6 +431,8 @@ bool HasMusicVideo(std::string_view shortname) {
 }
 
 void SetMusicVideoSong(std::string_view shortname) {
+    // the last song's sound, taken as it played, matched whole
+    EndSongCapture();
     ThePlayer().SetSong(shortname);
     SyncBeforePlaying();
 }

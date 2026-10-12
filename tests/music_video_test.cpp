@@ -389,6 +389,15 @@ TEST_CASE("a map is written as video_start_time and video_segments, read back al
     fs::remove_all(root);
 }
 
+TEST_CASE("a saved envelope's length is known from its file alone") {
+    const fs::path path = fs::temp_directory_path() / "band3_env_frames_test.env";
+    std::vector<float> frames(1234, 0.5f);
+    REQUIRE(SaveEnvelope(path, frames, 7));
+    CHECK(EnvelopeFrames(path) == 1234);
+    fs::remove(path);
+    CHECK(EnvelopeFrames(path) == 0);
+}
+
 TEST_CASE("an envelope saved beside the videos loads back, for its video's stamp only") {
     const fs::path root = fs::temp_directory_path() / "band3_sync_cache_test";
     fs::remove_all(root);

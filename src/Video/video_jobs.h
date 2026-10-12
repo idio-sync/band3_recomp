@@ -30,9 +30,10 @@ struct VideoJob {
 };
 
 // Adds jobs at the queue's end. A search (kFind) for a song whose video was
-// chosen by hand (video_pinned), or one already waiting, is left out; a
-// link or a file for a song replaces a job waiting for it. How many were
-// added.
+// chosen by hand (video_pinned), or one already waiting, is left out; a link
+// or a file for a song replaces a job waiting for it. How many were added. A
+// job that fails because the network's down or the disk's full (ytdlp.h's
+// TroubleOf) pauses the queue, and is put back first for when it goes on.
 size_t QueueVideoJobs(std::vector<VideoJob> jobs);
 void PauseVideoJobs(bool paused);
 // stops the job running and drops those waiting
@@ -41,6 +42,7 @@ void StopVideoJobs();
 struct VideoJobsProgress {
     bool running = false;    // a job's under way
     bool paused = false;
+    std::string paused_why;  // paused by itself: the network's down or the disk's full
     bool waiting_for_song = false;  // a song's being played
     size_t waiting = 0;      // jobs not started
     size_t done = 0;         // of this batch (since the queue was last empty)

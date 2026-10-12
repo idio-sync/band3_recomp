@@ -82,6 +82,12 @@ std::optional<std::string> ParseError(std::string_view line);
 // about one that asks to sign in
 std::string Briefly(std::string_view error);
 
+// what a failure says of the machine rather than the video: the network's
+// down, or the disk's full; a batch then stops rather than fail every song
+// after
+enum class Trouble { kNone, kNetwork, kDisk };
+Trouble TroubleOf(std::string_view error);
+
 // Runs yt-dlp. Each call waits for it (on a thread that may), and stops it
 // when `cancel` is set; on failure, why in `error`, yt-dlp's own words where
 // it gave some.

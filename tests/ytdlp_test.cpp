@@ -201,6 +201,20 @@ TEST_CASE("yt-dlp is told to use any JavaScript runtime, where it takes the opti
     fs::remove_all(dir);
 }
 
+TEST_CASE("a failure that's the machine's, not the video's, is told apart") {
+    CHECK(TroubleOf("Video unavailable") == Trouble::kNone);
+    CHECK(TroubleOf("unable to download video data: HTTP Error 403: Forbidden") == Trouble::kNone);
+    CHECK(TroubleOf("Unable to download webpage: <urlopen error [Errno 11001] getaddrinfo failed> "
+                    "(caused by URLError(gaierror(11001, 'getaddrinfo failed')))") == Trouble::kNetwork);
+    CHECK(TroubleOf("the search failed: Unable to download API page: The read operation timed out") ==
+          Trouble::kNetwork);
+    CHECK(TroubleOf("Unable to download webpage: <urlopen error [WinError 10061] No connection could be "
+                    "made because the target machine actively refused it>") == Trouble::kNetwork);
+    CHECK(TroubleOf("[Errno 28] No space left on device") == Trouble::kDisk);
+    CHECK(TroubleOf("it couldn't be put in the videos folder (There is not enough space on the disk.)") ==
+          Trouble::kDisk);
+}
+
 TEST_CASE("Windows command lines quote what needs it") {
     CHECK(QuoteWindowsArgument("abc") == "abc");
     CHECK(QuoteWindowsArgument("") == "\"\"");

@@ -215,6 +215,14 @@ void VideosTab::RefreshVideos(const std::vector<fs::path>& folders) {
             if (!stems.insert(Lower(v.stem)).second) continue;
             const std::string ini = ReadText(video::IniFor(v.path));
             v.offset = video::FindStartTime(ini);
+            // the file clock's time as the system's, through both clocks' now
+            const auto written = fs::last_write_time(v.path, ec);
+            v.written = std::chrono::duration_cast<std::chrono::seconds>(
+                            (std::chrono::system_clock::now() +
+                             std::chrono::duration_cast<std::chrono::system_clock::duration>(
+                                 written - fs::file_time_type::clock::now()))
+                                .time_since_epoch())
+                            .count();
             v.segments = video::ParseSegments(video::FindIniValue(ini, "video_segments").value_or(""));
             v.pinned = video::FindIniValue(ini, "video_pinned").value_or("") == "1";
             v.source = video::FindIniValue(ini, "video_source").value_or("");
@@ -293,7 +301,9 @@ void VideosTab::TakeFilePick(const std::vector<fs::path>& folders) {
         job.song = {s.shortname, s.title, s.artist, s.length_ms};
         job.folder = folders.front();
         job.file = rex::to_path(*file);
-        video::QueueVideoJobs({std::move(job)});
+        // a song with a video asks first, as DrawDetails does
+        if (s.video >= 0) confirm_replace_ = std::move(job);
+        else video::QueueVideoJobs({std::move(job)});
     }
 }
 
@@ -356,12 +366,17 @@ void VideosTab::DrawBatch(const std::vector<fs::path>& folders) {
     if (busy) {
         std::string what = std::format("{} of {} songs", p.done, p.total);
         if (p.waiting_for_song) what += ": waiting for the song being played to end";
+        else if (p.paused && !p.paused_why.empty()) what += ": paused, as " + p.paused_why;
         else if (p.paused) what += ": paused";
         else if (p.running)
             what += std::format(": {}, {}{}", p.song, video::FetchStageText(p.stage),
                                 p.share > 0 ? std::format(" {:.0f}%", p.share * 100) : "");
         ImGui::ProgressBar(p.total ? float(p.done) / float(p.total) : 0.0f, ImVec2(-1, 0), "");
+        // yt-dlp's reasons run long
+        if (what.size() > 220) what = what.substr(0, 217) + "...";
+        ImGui::PushTextWrapPos(0);
         ImGui::TextUnformatted(what.c_str());
+        ImGui::PopTextWrapPos();
         if (ImGui::Button(p.paused ? "Go on" : "Pause")) video::PauseVideoJobs(!p.paused);
         ImGui::SameLine();
         if (ImGui::Button("Stop")) video::StopVideoJobs();
@@ -462,6 +477,7 @@ void VideosTab::DrawSongs() {
                                   ImGuiSelectableFlags_SpanAllColumns, ImVec2(0, row))) {
                 selected_ = s.shortname;
                 confirm_delete_ = false;
+                confirm_replace_.reset();
             }
             ImGui::PopStyleVar();
             ImGui::TableSetColumnIndex(1);
@@ -537,7 +553,10 @@ void VideosTab::DrawVideoControls(Video& v) {
                                                 v.result->offset)
                                         .c_str());
     }
-    // a video cut otherwise than its song: each later part's offset, or its gap
+}
+
+// a video cut otherwise than its song: each later part's offset, or its gap
+void VideosTab::DrawParts(Video& v) {
     for (size_t k = 0; k < v.segments.size(); k++) {
         video::VideoSegment& seg = v.segments[k];
         ImGui::PushID(int(k));
@@ -598,10 +617,12 @@ void VideosTab::DrawDetails(const std::vector<fs::path>& folders) {
         ImGui::PopTextWrapPos();
     }
     const bool queued = video::SongVideoQueued(s->shortname);
+    // a song with a video asks first: the old one stays till the new one's in
     const auto queue = [&](video::VideoJob job) {
         job.song = info;
         job.folder = folders.front();
-        video::QueueVideoJobs({std::move(job)});
+        if (s->video >= 0) confirm_replace_ = std::move(job);
+        else video::QueueVideoJobs({std::move(job)});
     };
 
     if (s->video >= 0) {
@@ -631,6 +652,22 @@ void VideosTab::DrawDetails(const std::vector<fs::path>& folders) {
             ImGui::SameLine();
             if (ImGui::Button("Keep it")) confirm_delete_ = false;
         }
+        DrawParts(v);
+    }
+
+    if (confirm_replace_ && confirm_replace_->song.shortname == s->shortname && s->video >= 0) {
+        const std::string what = confirm_replace_->kind == video::VideoJob::Kind::kFind   ? "the best a search finds"
+                                 : confirm_replace_->kind == video::VideoJob::Kind::kLink ? "the linked video"
+                                                                                          : "the file";
+        ImGui::Dummy(ImVec2(0, Px(4)));
+        Wrapped(kWarn, "Replace " + rex::path_to_utf8(videos_[size_t(s->video)].path.filename()) + " with " +
+                           what + "? The old one stays until the new one's in.");
+        if (ImGui::Button("Replace it")) {
+            video::QueueVideoJobs({std::move(*confirm_replace_)});
+            confirm_replace_.reset();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Keep the old one")) confirm_replace_.reset();
     }
 
     // finding one: a search, a link, or a file
@@ -673,8 +710,10 @@ void VideosTab::DrawDetails(const std::vector<fs::path>& folders) {
                               : status->end == FetchEnd::kReview || status->end == FetchEnd::kGuessed
                                   ? kWarn
                                   : kMuted;
-        Wrapped(colour, std::string(video::FetchEndText(status->end)) +
-                            (status->message.empty() ? "" : ": " + status->message));
+        // what a search came to, unless the video's been put there since
+        if (s->video < 0 || videos_[size_t(s->video)].written <= status->when + 5)
+            Wrapped(colour, std::string(video::FetchEndText(status->end)) +
+                                (status->message.empty() ? "" : ": " + status->message));
         if (!status->candidates.empty() &&
             ImGui::BeginTable("results", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("Result", ImGuiTableColumnFlags_WidthStretch, 2.4f);
@@ -749,6 +788,7 @@ void VideosTab::DrawLoose() {
         ImGui::TextUnformatted(v.stem.c_str());
         ImGui::SameLine(Px(260));
         DrawVideoControls(v);
+        DrawParts(v);
         ImGui::PopID();
     }
 }

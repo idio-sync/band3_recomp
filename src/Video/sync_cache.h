@@ -46,6 +46,9 @@ bool SaveEnvelope(const std::filesystem::path& path, std::span<const float> fram
 // the frames, if the file's there, whole, and saved with `stamp` (0: any)
 std::optional<std::vector<float>> LoadEnvelope(const std::filesystem::path& path,
                                                uint64_t stamp);
+// how many frames a saved envelope has, from its file's size alone (cheap
+// enough for the audio thread); 0 without one
+size_t EnvelopeFrames(const std::filesystem::path& path);
 
 // an alignment's result as text (key = value lines) and back
 std::string ResultText(const SyncResult& r);

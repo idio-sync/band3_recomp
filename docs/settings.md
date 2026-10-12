@@ -336,8 +336,9 @@ offset, and `video_segments` the rest, each where it starts in the song and its 
 milliseconds, or `gap` for a part the video hasn't, which shows black
 (`video_segments = 61500:4100, 143000:gap`). At each change the video jumps to the next part.
 A stretch the soundtracks match poorly (a quiet part mixed otherwise) is played through, not
-cut. Only the whole song's audio from its package makes a map; one taken as the song plays
-(below) gives a single offset. Most custom songs' audio can be read this way; an encrypted one (most official songs,
+cut. A song whose audio band3 can't read (below) gets its map the first time it's played
+through: its first 45 seconds give an offset at once, and at its end the whole of it a map,
+which takes the place of that offset (never of one you set by hand). Most custom songs' audio can be read this way; an encrypted one (most official songs,
 and the disc's) can't, and for those band3 listens to the song's first 45 seconds as the game
 plays them the first time, then moves the playing video. The log says what it found
 (`Music video auto-sync: nooneknows.webm: -3.252 s (score 0.81, margin 1.52), saved to

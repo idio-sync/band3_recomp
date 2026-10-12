@@ -1,5 +1,6 @@
 #include "src/Video/ytdlp.h"
 
+#include <cctype>
 #include <charconv>
 #include <cstdlib>
 
@@ -205,6 +206,23 @@ std::string Briefly(std::string_view error) {
         out += " (yt-dlp needs your browser's cookies: add --cookies-from-browser and your "
                "browser's name, firefox say, to More yt-dlp options)";
     return out;
+}
+
+Trouble TroubleOf(std::string_view error) {
+    std::string lower(error);
+    for (char& c : lower) c = char(std::tolower(static_cast<unsigned char>(c)));
+    const auto has = [&](std::string_view part) { return lower.find(part) != std::string::npos; };
+    for (std::string_view disk : {"no space left", "not enough space", "[errno 28]", "disk full", "disk is full"})
+        if (has(disk)) return Trouble::kDisk;
+    for (std::string_view net :
+         {"getaddrinfo failed", "failed to resolve", "name or service not known",
+          "temporary failure in name resolution", "network is unreachable", "no route to host",
+          "timed out", "connection reset", "connection aborted", "remote end closed connection",
+          "[errno 11001]", "[errno 10060]", "[errno 10065]", "nodename nor servname",
+          "actively refused", "[winerror 10051]", "[winerror 10060]", "[winerror 10065]",
+          "unable to connect to proxy"})
+        if (has(net)) return Trouble::kNetwork;
+    return Trouble::kNone;
 }
 
 YtDlp::YtDlp(std::filesystem::path exe, std::vector<std::string> extra_args)

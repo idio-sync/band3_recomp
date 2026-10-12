@@ -41,6 +41,14 @@ bool SaveEnvelope(const std::filesystem::path& path, std::span<const float> fram
     return bool(out);
 }
 
+size_t EnvelopeFrames(const std::filesystem::path& path) {
+    // the magic, the rate, the stamp and the count before the frames
+    constexpr uintmax_t kHeader = sizeof(kMagic) + 4 + 8 + 4;
+    std::error_code ec;
+    const uintmax_t size = std::filesystem::file_size(path, ec);
+    return ec || size < kHeader ? 0 : size_t((size - kHeader) / 4);
+}
+
 std::string ResultText(const SyncResult& r) {
     return std::format("offset = {:.3f}\nscore = {:.3f}\nmargin = {:.3f}\nonset = {:.3f}\n"
                        "confident = {}\nparts = {}\ncoverage = {:.3f}\n",

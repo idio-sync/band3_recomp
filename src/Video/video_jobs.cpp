@@ -38,6 +38,7 @@ struct Jobs {
     std::deque<VideoJob> waiting;
     bool started = false;
     bool paused = false;
+    std::string paused_why;  // paused by a failure that's the machine's
     bool running = false;
     bool waiting_for_song = false;
     std::atomic<bool> cancel{false};
@@ -205,6 +206,20 @@ void Run() {
         }
         REXLOG_INFO("Music videos: {}: {}{}{}", job.song.shortname, FetchEndText(r.end),
                     r.message.empty() ? "" : ": ", r.message);
+        // the network's down or the disk's full: every song after would fail
+        // too, so the queue stops, this song first again for when it goes on
+        if (const Trouble trouble = r.end == FetchEnd::kFailed ? TroubleOf(r.message) : Trouble::kNone;
+            trouble != Trouble::kNone) {
+            std::lock_guard lock(j.mutex);
+            j.running = false;
+            j.song.clear();
+            j.paused = true;
+            j.paused_why = (trouble == Trouble::kDisk ? "the disk is full: " : "the network is down: ") +
+                           r.message;
+            j.waiting.push_front(std::move(job));
+            REXLOG_WARN("Music videos: paused, {}", j.paused_why);
+            continue;
+        }
         std::string text;
         {
             std::lock_guard lock(j.mutex);
@@ -272,6 +287,7 @@ void PauseVideoJobs(bool paused) {
     {
         std::lock_guard lock(j.mutex);
         j.paused = paused;
+        j.paused_why.clear();
     }
     j.cv.notify_all();
 }
@@ -290,6 +306,7 @@ VideoJobsProgress VideoJobsNow() {
     VideoJobsProgress p;
     p.running = j.running;
     p.paused = j.paused;
+    p.paused_why = j.paused_why;
     p.waiting_for_song = j.waiting_for_song && !j.waiting.empty();
     p.waiting = j.waiting.size();
     p.done = j.done;

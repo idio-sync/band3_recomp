@@ -20,6 +20,11 @@
 namespace band3::video {
 
 inline constexpr double kCaptureSeconds = 45.0;
+// A song whose sound has to be taken as it plays (an encrypted one, the
+// disc's) is taken whole, up to this: its first kCaptureSeconds give one
+// offset at once, and at its end (EndSongCapture) the whole of it a segment
+// map, which takes the place of the offset auto-sync wrote.
+inline constexpr double kMaxCaptureSeconds = 1200.0;
 
 // For the song stream hook, on the game's audio thread. Wanted: whether the
 // song now playing wants its audio (it has a music video, auto-sync's on,
@@ -40,6 +45,11 @@ std::optional<Match> AlignVideo(const std::filesystem::path& video, std::span<co
 // time, it's aligned on a thread of its own from its song's package, before
 // the song plays; unsure or without it, the capture goes on as before.
 void SyncBeforePlaying();
+
+// The song's ended or is leaving (SetMusicVideoSong, before the next is
+// picked): the sound taken of it, if there's enough (kMinMapSeconds), is
+// matched whole on a thread of its own.
+void EndSongCapture();
 
 bool SongAudioWanted();
 uint64_t SongGeneration();

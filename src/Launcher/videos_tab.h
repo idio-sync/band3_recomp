@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -8,6 +9,7 @@
 #include <vector>
 
 #include "src/Video/sync_align.h"
+#include "src/Video/video_jobs.h"
 
 namespace band3::launcher {
 
@@ -39,6 +41,7 @@ private:
         bool pinned = false;
         std::string source;
         int ms = 0;  // the offset field's value
+        int64_t written = 0;  // when its file was, in seconds since 1970
         // video_segments: its parts after the first (sync_align.h)
         std::vector<video::VideoSegment> segments;
     };
@@ -62,6 +65,7 @@ private:
     void DrawSongs();
     void DrawDetails(const std::vector<std::filesystem::path>& folders);
     void DrawVideoControls(Video& v);
+    void DrawParts(Video& v);
     void DrawLoose();
     void StartAlign(const Video& v);
     void TakeAlign();
@@ -85,6 +89,8 @@ private:
     std::string link_;
     std::string ytdlp_setting_;  // music_video_ytdlp_path as last checked
     bool confirm_delete_ = false;
+    // a job that would replace the selected song's video, waiting for a yes
+    std::optional<video::VideoJob> confirm_replace_;
     size_t jobs_done_ = 0;  // VideoJobsProgress' done, as last seen
 };
 

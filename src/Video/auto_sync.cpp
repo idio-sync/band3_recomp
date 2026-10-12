@@ -4,6 +4,7 @@
 #include <rex/logging.h>
 
 #include <atomic>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <mutex>
@@ -31,6 +32,10 @@ std::optional<EnvelopeBuilder> g_envelope;
 int64_t g_samples = 0;
 int g_rate = 0;
 bool g_done = false;  // taken (or not wanted) this song
+// its first kCaptureSeconds matched already (one offset, at once)
+bool g_first_done = false;
+// the song's video as its capture began, for matching it all at its end
+std::optional<VideoFile> g_video;
 
 // a match saved for the song now playing: its video moves at once
 void Apply(uint64_t song, const Match& m) {
@@ -76,6 +81,47 @@ void Align(uint64_t song, VideoFile video, std::vector<float> song_env) {
     REXLOG_INFO("Music video auto-sync: {}: {:+.3f} s{} (score {:.2f}, margin {:.2f}), saved to {}",
                 name, r.offset, Parts(r), r.score, r.margin, IniFor(video.path).filename().string());
     Apply(song, *match);
+}
+
+// The whole song's sound as it played, at its end: matched as a segment map,
+// which takes the place of an offset auto-sync wrote (not of one set by hand)
+void AlignWhole(VideoFile video, std::vector<float> song_env) {
+    const std::string name = rex::path_to_utf8(video.path.filename());
+    // what's there now, before this match's result is saved over the last
+    const std::string ini = ReadIni(video.path);
+    const std::optional<double> set = FindStartTime(ini);
+    const std::optional<SyncResult> last = LoadResult(ResultPath(video.path));
+    const bool by_hand = set && !(last && std::abs(*set - last->offset) < 0.0015);
+    if (EnvelopeFrames(SongEnvelopePath(video.path)) < song_env.size())
+        SaveEnvelope(SongEnvelopePath(video.path), song_env, 0);
+    std::string error;
+    const std::optional<Match> match = AlignVideo(video.path, song_env, false, error);
+    if (!match) {
+        REXLOG_WARN("Music video auto-sync: {}: {}", name, error);
+        return;
+    }
+    const SyncResult& r = match->result;
+    if (!r.confident) {
+        REXLOG_INFO("Music video auto-sync: {}: over the whole song, best guess {:+.3f} s{}, not sure "
+                    "enough to save (score {:.2f}, covering {:.0f}%)",
+                    name, r.offset, Parts(r), r.score, r.coverage * 100);
+        return;
+    }
+    if (by_hand) {
+        REXLOG_INFO("Music video auto-sync: {}: over the whole song, {:+.3f} s{}; its .ini's offset "
+                    "was set by hand, kept",
+                    name, r.offset, Parts(r));
+        return;
+    }
+    if (!WriteMatch(video.path, *match)) {
+        REXLOG_WARN("Music video auto-sync: {}: {} couldn't be written", name,
+                    rex::path_to_utf8(IniFor(video.path)));
+        return;
+    }
+    REXLOG_INFO("Music video auto-sync: {}: over the whole song as it played, {:+.3f} s{} (score "
+                "{:.2f}, covering {:.0f}%), saved to {}",
+                name, r.offset, Parts(r), r.score, r.coverage * 100,
+                rex::path_to_utf8(IniFor(video.path).filename()));
 }
 
 }
@@ -151,6 +197,8 @@ void Reset(uint64_t song) {
     g_samples = 0;
     g_rate = 0;
     g_done = false;
+    g_first_done = false;
+    g_video.reset();
 }
 
 }
@@ -206,11 +254,12 @@ bool SongAudioWanted() {
     std::lock_guard lock(g_mutex);
     if (song != g_song) {
         Reset(song);
-        // nothing to take: no video, or one set by hand whose song's sound
-        // is kept already
-        std::error_code ec;
+        // nothing to take: no video, or one synced whose song's whole sound
+        // is kept already (from its package, or a play before)
         g_done = !video || (video->start_time_set &&
-                            std::filesystem::exists(SongEnvelopePath(video->path), ec));
+                            EnvelopeFrames(SongEnvelopePath(video->path)) >=
+                                size_t(kMinMapSeconds * kEnvelopeRate));
+        g_video = video;
     }
     return !g_done;
 }
@@ -229,22 +278,49 @@ void SongAudioBegin(uint64_t generation, int rate) {
 }
 
 void SongAudio(uint64_t generation, std::span<const float> mono) {
-    std::vector<float> envelope;
+    std::vector<float> first, whole;
+    std::optional<VideoFile> whole_video;
     {
         std::lock_guard lock(g_mutex);
         if (generation != g_song || g_done || !g_envelope) return;
         g_envelope->Add(mono);
         g_samples += int64_t(mono.size());
-        if (g_samples < int64_t(kCaptureSeconds * g_rate)) return;
-        envelope = g_envelope->Frames();
-        g_envelope.reset();
-        g_done = true;
+        // its first stretch: one offset now, so the video's right from early on
+        if (!g_first_done && g_samples >= int64_t(kCaptureSeconds * g_rate)) {
+            g_first_done = true;
+            first = g_envelope->Frames();
+        }
+        // as long as a song gets: the whole song's matched now
+        if (g_samples >= int64_t(kMaxCaptureSeconds * g_rate)) {
+            whole = g_envelope->Frames();
+            whole_video = g_video;
+            g_envelope.reset();
+            g_done = true;
+        }
     }
+    // decoding the soundtrack takes a second or two: not on the audio thread
+    if (whole_video) std::thread(AlignWhole, std::move(*whole_video), std::move(whole)).detach();
+    if (first.empty()) return;
     uint64_t song = 0;
     std::optional<VideoFile> video = CurrentMusicVideo(song);
     if (!video || song != generation) return;
-    // decoding the soundtrack takes a second or two: not on the audio thread
-    std::thread(Align, song, std::move(*video), std::move(envelope)).detach();
+    std::thread(Align, song, std::move(*video), std::move(first)).detach();
+}
+
+void EndSongCapture() {
+    std::vector<float> whole;
+    std::optional<VideoFile> video;
+    {
+        std::lock_guard lock(g_mutex);
+        if (g_done || !g_envelope || g_rate <= 0 ||
+            g_samples < int64_t(kMinMapSeconds * g_rate) || !g_video)
+            return;
+        whole = g_envelope->Frames();
+        video = std::move(g_video);
+        g_envelope.reset();
+        g_done = true;
+    }
+    std::thread(AlignWhole, std::move(*video), std::move(whole)).detach();
 }
 
 }
