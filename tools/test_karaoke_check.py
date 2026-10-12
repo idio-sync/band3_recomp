@@ -52,6 +52,17 @@ class FetchTest(unittest.TestCase):
         self.assertEqual(karaoke_check.fetch_status('u', opener=urlopen, sleep=waits.append), (404, ''))
         self.assertEqual((len(calls), waits), (1, []))
 
+    def test_a_request_that_fails_is_made_again(self):
+        urlopen, calls = opener(urllib.error.URLError('refused'), TimeoutError(), 200)
+        waits = []
+        self.assertEqual(karaoke_check.fetch_status('u', opener=urlopen, sleep=waits.append),
+                         (200, 'image/png'))
+        self.assertEqual(waits, [1, 2])
+        # and one that never comes is a status 0, not an exception
+        urlopen, calls = opener(*[urllib.error.URLError('refused')] * 2)
+        self.assertEqual(karaoke_check.fetch_status('u', attempts=2, opener=urlopen, sleep=waits.append),
+                         (0, ''))
+
     def test_it_gives_up_after_its_tries(self):
         urlopen, calls = opener(*[503] * 6)
         waits = []

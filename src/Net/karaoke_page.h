@@ -1040,7 +1040,8 @@ body {
   drawPanel();
   loadFont(kLyricsFont);
   loadFont(kTitleFont);
-  Object.keys(M.TEXTURES).forEach(function (k) { loadTexture(k); });
+  // all but the art, which loadArt fetches as it's wanted
+  Object.keys(M.TEXTURES).forEach(function (k) { if (!/_art$/.test(k)) loadTexture(k); });
   loadSongs();
   connect();
   requestAnimationFrame(frame);

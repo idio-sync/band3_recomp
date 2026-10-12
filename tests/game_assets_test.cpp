@@ -61,7 +61,7 @@ struct Reads {
     int count = 0;
     bool busy = false;
     std::optional<std::string> file = MiloFile();
-    ReadGameFile Reader() {
+    GameFileReader Reader() {
         return [this](const std::string&) {
             count++;
             return GameRead{busy, busy ? std::nullopt : file};
@@ -127,9 +127,11 @@ TEST_CASE("a milo that isn't there, or isn't one, is a 404") {
     Reads reads;
     reads.file = std::nullopt;
     CHECK(MiloTexture(Ask(kMilo, "a.png"), assets, milos, reads.Reader())->status == 404);
+    CHECK(reads.count == 1);
     Reads junk;
     junk.file = std::string(64, 'x');
     CHECK(MiloTexture(Ask("ui/other.milo_xbox", "a.png"), assets, milos, junk.Reader())->status == 404);
+    CHECK(junk.count == 1);
 }
 
 TEST_CASE("the asset cache keeps the newest replies") {

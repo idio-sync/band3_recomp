@@ -19,7 +19,7 @@ void AssetCache::Put(const std::string& key, const Asset& asset) {
 }
 
 std::optional<Asset> MiloTexture(const Route& route, AssetCache& assets, milo::MiloCache& milos,
-                                 const ReadGameFile& read) {
+                                 const GameFileReader& read) {
     const std::string& path = route.argument;
     if (!AllowedMiloPath(path) || !AllowedTextureName(route.name)) return Asset{};
     const std::string key = "m:" + path + "|" + route.name;

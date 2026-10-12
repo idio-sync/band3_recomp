@@ -42,7 +42,7 @@ struct GameRead {
     bool busy = false;
     std::optional<std::string> file;
 };
-using ReadGameFile = std::function<GameRead(const std::string& path)>;
+using GameFileReader = std::function<GameRead(const std::string& path)>;
 
 // /game_asset/milo_texture's reply (http_request.h's kGameMiloTexture): the
 // texture as a PNG, or a 404 for a milo or name the allowlists refuse, a milo
@@ -50,6 +50,6 @@ using ReadGameFile = std::function<GameRead(const std::string& path)>;
 // a format band3 doesn't decode). nullopt while the game is busy, kept for
 // nothing. The milos read are kept in `milos`, and the replies in `assets`.
 std::optional<Asset> MiloTexture(const Route& route, AssetCache& assets, milo::MiloCache& milos,
-                                 const ReadGameFile& read);
+                                 const GameFileReader& read);
 
 }

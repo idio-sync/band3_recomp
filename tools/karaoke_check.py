@@ -28,15 +28,22 @@ PAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 
 def fetch_status(url, attempts=6, opener=urllib.request.urlopen, sleep=time.sleep):
     """(status, content type) of a GET, asked again while the game is busy
-    (503), as the page does: 1, 2, 4, 8, then 10 s apart."""
+    (503) or the request fails, as the page does: 1, 2, 4, 8, then 10 s
+    apart. A request that never got a reply is status 0."""
+    status = 0
     for attempt in range(attempts):
         try:
             with opener(url, timeout=30) as reply:
                 return reply.status, reply.headers.get('Content-Type', '')
         except urllib.error.HTTPError as e:
-            if e.code != 503 or attempt == attempts - 1:
-                return e.code, ''
-        sleep(min(2 ** attempt, 10))
+            status = e.code
+            if status != 503:
+                return status, ''
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            status = 0
+        if attempt < attempts - 1:
+            sleep(min(2 ** attempt, 10))
+    return status, ''
 
 
 def page_textures():

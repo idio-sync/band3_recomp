@@ -448,17 +448,14 @@ milo::MiloCache g_milos{4};
 
 // nullopt while the game is busy
 std::optional<Asset> MiloTextureAsset(const Route& route) {
-    const auto asset = MiloTexture(route, g_assets, g_milos, [](const std::string& path) {
+    return MiloTexture(route, g_assets, g_milos, [](const std::string& path) {
         GameRead read;
         read.busy = !RunOnGameThread([&read, &path](PPCContext& ctx, uint8_t* base) {
             read.file = game::GameFile(ctx, base, path, kMaxMiloFile);
         });
+        if (!read.busy && !read.file) REXLOG_DEBUG("Web server: there's no {} to read", path);
         return read;
     });
-    if (asset && asset->status != 200) {
-        REXLOG_DEBUG("Web server: no {} band3 decodes in {}", route.name, route.argument);
-    }
-    return asset;
 }
 
 // the song IDs of every song in the game; nullopt while the game is busy
