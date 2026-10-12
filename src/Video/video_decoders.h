@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -27,6 +29,8 @@ std::unique_ptr<VideoDecoder> OpenFfmpegVideo(const std::filesystem::path& path,
                                               std::string& error);
 std::vector<float> FfmpegSoundtrackEnvelope(const std::filesystem::path& path, double seconds,
                                             std::string& error);
+std::vector<float> FfmpegOggVorbisEnvelope(std::span<const uint8_t> ogg, double seconds,
+                                           std::string& error);
 #endif
 
 }

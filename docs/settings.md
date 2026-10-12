@@ -326,11 +326,14 @@ video starts, and its last frame stays after it ends.
 
 A music video rarely starts where the game's song does, so with `music_video_auto_sync` on
 (the default; the Videos tab's Sync music videos automatically) band3 finds the offset itself
-the first time a song plays with its video in the folder, in any venue. It listens to the song's first 45 seconds as the
-game plays them, matches their rhythm against the video's soundtrack, and when the match is
-clear writes `video_start_time` to the video's `.ini` and moves the playing video at once. The
-log says what it found (`Music video auto-sync: nooneknows.webm: -3.252 s (score 0.81, margin
-1.52), saved to nooneknows.ini`). A song whose structure repeats can match in more than one
+when a song with its video in the folder is picked, in any venue. It reads the first three
+minutes of the song's audio from its package, matches their rhythm against the video's soundtrack,
+and when the match is clear writes `video_start_time` to the video's `.ini`, before the song
+starts. Most custom songs' audio can be read this way; an encrypted one (most official songs,
+and the disc's) can't, and for those band3 listens to the song's first 45 seconds as the game
+plays them the first time, then moves the playing video. The log says what it found
+(`Music video auto-sync: nooneknows.webm: -3.252 s (score 0.81, margin 1.52), saved to
+nooneknows.ini`). A song whose structure repeats can match in more than one
 place; then nothing is written, and the log gives the best guess. An offset already in the
 `.ini` is never replaced: auto-sync only logs what it measured. What it keeps for this (the
 song's rhythm, the video's, and the last result) is in a `.sync` folder beside the videos,
@@ -343,8 +346,9 @@ screen. Earlier is for a singer whose lips move after the sound.
 The **Videos** tab, in the launcher and the in-game settings, lists the videos in the videos
 folder with each one's offset in milliseconds, which can be typed in, and how it got it:
 synced automatically, set by hand, not sure (with the best guess and **Use it** to take it),
-or not played yet. **Align** matches a video with its song again, once the song has been
-played with it: after replacing the video with another cut, say. **Open the videos folder**
+or not aligned yet. **Align** matches a video with its song, from the song's package (an
+encrypted song needs to have been played with the video once): after replacing the video
+with another cut, say, or before ever playing it. **Open the videos folder**
 opens it. `music_video_fit` keeps a video whose
 shape isn't 16:9 whole with black bars (`fit`), fills the screen and cuts its edges off
 (`fill`), or stretches it. Its sound isn't played.

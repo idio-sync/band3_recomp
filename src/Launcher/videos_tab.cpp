@@ -144,19 +144,19 @@ void VideosTab::DrawEntry(Entry& e) {
         ImGui::TextColored(kWarn, "%s", text.c_str());
     } else if (e.offset) {
         ImGui::TextUnformatted("Set by hand");
-    } else if (!e.captured) {
-        Muted("Play its song once to sync it");
     } else {
         Muted("Not aligned yet");
     }
 
     ImGui::TableSetColumnIndex(3);
-    ImGui::BeginDisabled(!e.captured || (job_ && !job_->done));
+    ImGui::BeginDisabled(job_ && !job_->done);
     if (ImGui::Button("Align")) StartAlign(e);
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip(e.captured ? "Match the video's sound with its song's again"
-                                     : "Play its song once first: its sound is taken then");
+                                     : "Match the video's sound with its song's, read from the "
+                                       "song's package (an encrypted one needs the song played "
+                                       "once)");
     if (e.result && !e.result->confident && !aligning) {
         ImGui::SameLine();
         if (ImGui::Button("Use it")) {
@@ -195,8 +195,9 @@ void VideosTab::Draw(const std::vector<std::filesystem::path>& folders) {
     ImGui::PushTextWrapPos(0);
     Muted("Each video is named after its song's shortname (nooneknows.webm), which the log gives "
           "as the song starts. The offset is the video's time at the song's start, in "
-          "milliseconds (Clone Hero's video_start_time); auto-sync finds it the first time the "
-          "song plays, and [ and ] move it 50 ms while the video plays.");
+          "milliseconds (Clone Hero's video_start_time); auto-sync finds it from the song's "
+          "package when the song is picked (or, for an encrypted song, as it first plays), and "
+          "[ and ] move it 50 ms while the video plays.");
     ImGui::PopTextWrapPos();
     ImGui::Dummy(ImVec2(0, Px(4)));
 

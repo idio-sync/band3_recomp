@@ -26,6 +26,10 @@ void StartLiveContent(rex::filesystem::VirtualFileSystem* vfs);
 // none (the first with a warning)
 std::vector<Package> LivePackages();
 
+// whether the scan has finished, so LivePackages won't wait (false before
+// the game starts, in the launcher)
+bool LiveContentScanned();
+
 // the copies of band3's packages it left out (ScanFolders' dropped, and those
 // added since); none until the scan is done
 std::vector<DroppedPackage> DroppedPackages();

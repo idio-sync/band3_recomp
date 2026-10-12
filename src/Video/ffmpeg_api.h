@@ -23,6 +23,8 @@ namespace band3::video {
     X(avutil, av_frame_alloc)                                           \
     X(avutil, av_frame_free)                                            \
     X(avutil, av_frame_unref)                                           \
+    X(avutil, av_mallocz)                                               \
+    X(avcodec, avcodec_find_decoder)                                    \
     X(avcodec, av_packet_alloc)                                         \
     X(avcodec, av_packet_free)                                          \
     X(avcodec, av_packet_unref)                                         \

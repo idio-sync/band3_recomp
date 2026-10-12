@@ -5,9 +5,10 @@
 #include <vector>
 
 // A package's songs/songs.dta, the text the game reads its songs from, as far
-// as telling songs apart needs: each top-level entry's shortname, song_id,
-// name and artist. DTA is lists in (), [] or {} of numbers, symbols ('quoted'
-// or bare) and "strings", with ; and /* */ comments and # directives.
+// as telling songs apart and finding their audio and videos needs: each
+// top-level entry's shortname, song_id, name, artist, album, year, length and
+// audio path. DTA is lists in (), [] or {} of numbers, symbols ('quoted' or
+// bare) and "strings", with ; and /* */ comments and # directives.
 
 namespace band3::content {
 
@@ -18,6 +19,12 @@ struct DtaSong {
     int32_t song_id = 0;
     std::string title;   // its name, as UTF-8
     std::string artist;  // as UTF-8
+    // (song (name ...)): its audio's path in the package without the .mogg
+    // ("songs/x/x"); "" for none
+    std::string song_path;
+    int32_t song_length = 0;  // milliseconds; 0 for none
+    std::string album_name;   // as UTF-8
+    int32_t year_released = 0;
 };
 
 // the songs in a songs.dta, in its order; text that isn't DTA, and entries

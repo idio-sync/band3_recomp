@@ -9,6 +9,7 @@
 #ifdef BAND3_HAVE_FFMPEG
 
 #include "src/Video/ffmpeg_api.h"
+#include "src/Video/mogg.h"
 #include "src/Video/sync_align.h"
 #include "src/Video/video_decoders.h"
 
@@ -301,6 +302,105 @@ float Sample(const AVFrame* f, int channel, int i, int channels) {
     }
 }
 
+// a decoded audio frame, its channels mixed to mono, added to the envelope
+void AddToEnvelope(const AVFrame* f, EnvelopeBuilder& envelope, std::vector<float>& mono) {
+    const int channels = std::max(1, f->ch_layout.nb_channels);
+    mono.assign(size_t(f->nb_samples), 0.0f);
+    for (int i = 0; i < f->nb_samples; i++) {
+        float sum = 0.0f;
+        for (int c = 0; c < channels; c++) sum += Sample(f, c, i, channels);
+        mono[size_t(i)] = sum / float(channels);
+    }
+    envelope.Add(mono);
+}
+
+}
+
+std::vector<float> FfmpegOggVorbisEnvelope(std::span<const uint8_t> ogg, double seconds,
+                                           std::string& error) {
+    if (!LoadFfmpeg(error)) return {};
+    OggPackets packets(ogg);
+    std::vector<uint8_t> headers[3];
+    for (auto& header : headers) {
+        if (!packets.Next(header)) {
+            error = "its Ogg stream has no Vorbis headers";
+            return {};
+        }
+    }
+    const AVCodec* codec = g_av->avcodec_find_decoder(AV_CODEC_ID_VORBIS);
+    if (!codec) {
+        error = "no Vorbis decoder";
+        return {};
+    }
+    struct Closer {
+        AVCodecContext* codec = nullptr;
+        AVPacket* packet = nullptr;
+        AVFrame* frame = nullptr;
+        ~Closer() {
+            g_av->av_frame_free(&frame);
+            g_av->av_packet_free(&packet);
+            g_av->avcodec_free_context(&codec);
+        }
+    } close;
+    close.codec = g_av->avcodec_alloc_context3(codec);
+    close.packet = g_av->av_packet_alloc();
+    close.frame = g_av->av_frame_alloc();
+    if (!close.codec || !close.packet || !close.frame) {
+        error = "out of memory";
+        return {};
+    }
+    // the decoder frees it with its context
+    const std::vector<uint8_t> extradata = XiphExtradata(headers[0], headers[1], headers[2]);
+    close.codec->extradata =
+        static_cast<uint8_t*>(g_av->av_mallocz(extradata.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+    if (!close.codec->extradata) {
+        error = "out of memory";
+        return {};
+    }
+    std::memcpy(close.codec->extradata, extradata.data(), extradata.size());
+    close.codec->extradata_size = int(extradata.size());
+    if (const int ret = g_av->avcodec_open2(close.codec, codec, nullptr); ret < 0) {
+        error = AvError("opening its Vorbis decoder", ret);
+        return {};
+    }
+    std::optional<EnvelopeBuilder> envelope;
+    std::vector<float> mono;
+    std::vector<uint8_t> packet;
+    int64_t samples = 0, wanted = 0;
+    bool draining = false;
+    for (;;) {
+        const int ret = g_av->avcodec_receive_frame(close.codec, close.frame);
+        if (ret == 0) {
+            if (!envelope) {
+                if (close.frame->sample_rate <= 0) break;
+                envelope.emplace(close.frame->sample_rate);
+                wanted = int64_t(seconds * close.frame->sample_rate);
+            }
+            AddToEnvelope(close.frame, *envelope, mono);
+            samples += close.frame->nb_samples;
+            g_av->av_frame_unref(close.frame);
+            if (samples >= wanted) break;
+            continue;
+        }
+        if (ret != AVERROR(EAGAIN) || draining) break;
+        if (!packets.Next(packet)) {
+            draining = true;
+            g_av->avcodec_send_packet(close.codec, nullptr);
+            continue;
+        }
+        // decoders may read a little past a packet's end
+        const size_t size = packet.size();
+        packet.resize(size + AV_INPUT_BUFFER_PADDING_SIZE, 0);
+        close.packet->data = packet.data();
+        close.packet->size = int(size);
+        // a bad packet is passed over, as players do
+        g_av->avcodec_send_packet(close.codec, close.packet);
+    }
+    if (!envelope || envelope->Frames().empty()) {
+        error = "its Vorbis sound couldn't be decoded";
+        return {};
+    }
+    return envelope->Frames();
 }
 
 std::vector<float> FfmpegSoundtrackEnvelope(const std::filesystem::path& path, double seconds,
@@ -366,14 +466,7 @@ std::vector<float> FfmpegSoundtrackEnvelope(const std::filesystem::path& path, d
                 envelope.emplace(rate);
                 wanted = int64_t(seconds * rate);
             }
-            const int channels = std::max(1, f->ch_layout.nb_channels);
-            mono.assign(size_t(f->nb_samples), 0.0f);
-            for (int i = 0; i < f->nb_samples; i++) {
-                float sum = 0.0f;
-                for (int c = 0; c < channels; c++) sum += Sample(f, c, i, channels);
-                mono[size_t(i)] = sum / float(channels);
-            }
-            envelope->Add(mono);
+            AddToEnvelope(f, *envelope, mono);
             samples += f->nb_samples;
             g_av->av_frame_unref(close.frame);
             if (samples >= wanted) break;

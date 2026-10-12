@@ -1,5 +1,6 @@
 #include "src/Video/auto_sync.h"
 
+#include <rex/filesystem.h>
 #include <rex/logging.h>
 
 #include <atomic>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include "src/Video/music_video.h"
+#include "src/Video/song_audio.h"
 #include "src/Video/sync_align.h"
 #include "src/Video/sync_cache.h"
 #include "src/Video/video_decoder.h"
@@ -67,17 +69,43 @@ void Align(uint64_t song, VideoFile video, std::vector<float> song_env) {
 
 }
 
+namespace {
+
+// the song's sound from its package, kept as a captured one is; false, with
+// why in `error`, without it
+bool SongFromPackage(const std::filesystem::path& video, std::vector<float>& song,
+                     std::string& error) {
+    std::string why;
+    switch (PackageSongEnvelope(rex::path_to_utf8(video.stem()), song, why)) {
+        case SongAudioResult::kOk:
+            SaveEnvelope(SongEnvelopePath(video), song, 0);
+            return true;
+        case SongAudioResult::kNotFound:
+            error = "its song isn't in band3's packages (or the game hasn't read them yet): play "
+                    "it once with the video to sync it";
+            return false;
+        case SongAudioResult::kEncrypted:
+            error = "its song's audio is encrypted: play it once with the video to sync it";
+            return false;
+        case SongAudioResult::kFailed:
+            error = "its song's audio couldn't be read (" + why +
+                    "): play it once with the video to sync it";
+            return false;
+    }
+    return false;
+}
+
+}
+
 std::optional<SyncResult> AlignVideo(const std::filesystem::path& video,
                                      std::span<const float> song_env, bool save_offset,
                                      std::string& error) {
     std::vector<float> song;
     if (song_env.empty()) {
-        std::optional<std::vector<float>> cached = LoadEnvelope(SongEnvelopePath(video), 0);
-        if (!cached) {
-            error = "its song hasn't been played with it yet";
+        if (std::optional<std::vector<float>> cached = LoadEnvelope(SongEnvelopePath(video), 0))
+            song = std::move(*cached);
+        else if (!SongFromPackage(video, song, error))
             return std::nullopt;
-        }
-        song = std::move(*cached);
         song_env = song;
     }
     const uint64_t stamp = FileStamp(video);
@@ -113,6 +141,49 @@ void Reset(uint64_t song) {
     g_done = false;
 }
 
+}
+
+namespace {
+
+// SyncBeforePlaying's thread: the song's sound from its package (or kept from
+// before), matched now; unsure or without it, the capture goes on as the
+// song plays
+void AlignAhead(uint64_t song, VideoFile video) {
+    const std::string name = rex::path_to_utf8(video.path.filename());
+    std::string error;
+    const std::optional<SyncResult> result = AlignVideo(video.path, {}, false, error);
+    if (!result) {
+        REXLOG_INFO("Music video auto-sync: {}: {}; syncing as it plays", name, error);
+        return;
+    }
+    const SyncResult& r = *result;
+    if (!r.confident) {
+        REXLOG_INFO("Music video auto-sync: {}: best guess {:+.3f} s from its song's package, not "
+                    "sure enough (score {:.2f}, margin {:.2f}); syncing as it plays",
+                    name, r.offset, r.score, r.margin);
+        return;
+    }
+    if (!WriteStartTime(video.path, r.offset)) {
+        REXLOG_WARN("Music video auto-sync: {}: {:+.3f} s, but {} couldn't be written", name,
+                    r.offset, rex::path_to_utf8(IniFor(video.path)));
+        return;
+    }
+    REXLOG_INFO("Music video auto-sync: {}: {:+.3f} s (score {:.2f}, margin {:.2f}) before it "
+                "plays, saved to {}",
+                name, r.offset, r.score, r.margin, rex::path_to_utf8(IniFor(video.path).filename()));
+    // the capture then has nothing to do: the start time's set, the song's sound kept
+    SetMusicVideoStartTime(song, r.offset);
+}
+
+}
+
+void SyncBeforePlaying() {
+    if (!REXCVAR_GET(music_video_auto_sync) || !MusicVideosOn()) return;
+    uint64_t song = 0;
+    std::optional<VideoFile> video = CurrentMusicVideo(song);
+    if (!video || video->start_time_set) return;
+    // reading and decoding the song's audio takes a second or two
+    std::thread(AlignAhead, song, std::move(*video)).detach();
 }
 
 bool SongAudioWanted() {

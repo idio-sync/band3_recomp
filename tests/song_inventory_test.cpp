@@ -57,6 +57,26 @@ TEST_CASE("a songs.dta gives each song's shortname, song ID, name and artist") {
     CHECK(songs[0].artist == "Rockstar Games");
 }
 
+TEST_CASE("a songs.dta gives each song's audio path, length, album and year") {
+    auto songs = ParseSongsDta(kMagma);
+    REQUIRE(songs.size() == 1);
+    CHECK(songs[0].song_path == "songs/gtavitheme/gtavitheme");
+    CHECK(songs[0].song_length == 0);  // Magma's cut down: none
+    songs = ParseSongsDta(
+        "(a (name \"One\") (song (name \"songs/a/a\") (tracks ()))\n"
+        "   (song_length 245123) (album_name \"Caf\xE9\") (year_released 1986))");
+    REQUIRE(songs.size() == 1);
+    CHECK(songs[0].song_path == "songs/a/a");
+    CHECK(songs[0].song_length == 245123);
+    CHECK(songs[0].album_name == "Caf\xC3\xA9");
+    CHECK(songs[0].year_released == 1986);
+    // what isn't a number is none
+    songs = ParseSongsDta("(a (song (name \"s\")) (song_length x) (year_released -4))");
+    REQUIRE(songs.size() == 1);
+    CHECK(songs[0].song_length == 0);
+    CHECK(songs[0].year_released == 0);
+}
+
 TEST_CASE("a pack's songs.dta gives every song, in its order") {
     const auto songs = ParseSongsDta(R"dta(
 ; a pack, the official DLC's way: bare symbols, [] and {} as well as ()
@@ -127,6 +147,10 @@ TEST_CASE("the cache reads back as written, times and all") {
         SongsIn("C:\\songs\\a \"quoted\"", {Dta("one", 1, "One"), Dta("two", 2, "Caf\xC3\xA9")}),
         SongsIn("C:\\songs\\b", {})};
     packages[0].modified = 133423456789012345;  // more than a double keeps exactly
+    packages[0].songs[1].song_path = "songs/two/two";
+    packages[0].songs[1].song_length = 245123;
+    packages[0].songs[1].album_name = "Album";
+    packages[0].songs[1].year_released = 1986;
     packages[1].unreadable = true;
     const auto back = ParseInventoryCache(FormatInventoryCache(packages));
     REQUIRE(back.size() == 2);
@@ -136,9 +160,15 @@ TEST_CASE("the cache reads back as written, times and all") {
     REQUIRE(back[0].songs.size() == 2);
     CHECK(back[0].songs[1].title == "Caf\xC3\xA9");
     CHECK(back[0].songs[1].song_id == 2);
+    CHECK(back[0].songs[1].song_path == "songs/two/two");
+    CHECK(back[0].songs[1].song_length == 245123);
+    CHECK(back[0].songs[1].album_name == "Album");
+    CHECK(back[0].songs[1].year_released == 1986);
     CHECK(back[1].unreadable);
     CHECK(ParseInventoryCache("").empty());
-    CHECK(ParseInventoryCache(R"({"version": 2, "packages": [{"path": "x"}]})").empty());
+    // a cache from before the songs had their audio paths is read again
+    CHECK(ParseInventoryCache(R"({"version": 1, "packages": [{"path": "x"}]})").empty());
+    CHECK(ParseInventoryCache(R"({"version": 3, "packages": [{"path": "x"}]})").empty());
 }
 
 TEST_CASE("songs with the same song_id: the game has the first loaded") {

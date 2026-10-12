@@ -14,6 +14,10 @@ namespace {
 
 using http::JsonString;
 
+// 2: songs have their audio paths, lengths, albums and years (a cache of 1 is
+// read again)
+constexpr int64_t kCacheVersion = 2;
+
 int64_t Whole(const json::Value& value) {
     const double d = value.Number(0);
     return std::isfinite(d) ? static_cast<int64_t>(d) : 0;
@@ -59,7 +63,7 @@ std::string_view KindName(DuplicateKind kind) {
 std::vector<PackageSongs> ParseInventoryCache(std::string_view text) {
     std::vector<PackageSongs> packages;
     const auto json = json::Parse(text);
-    if (!json || Whole((*json)["version"]) != 1) return packages;
+    if (!json || Whole((*json)["version"]) != kCacheVersion) return packages;
     for (const json::Value& entry : (*json)["packages"].Items()) {
         PackageSongs package;
         package.path = entry["path"].Text();
@@ -74,6 +78,10 @@ std::vector<PackageSongs> ParseInventoryCache(std::string_view text) {
             song.song_id = static_cast<int32_t>(std::clamp<int64_t>(Whole(s["song_id"]), INT32_MIN, INT32_MAX));
             song.title = s["title"].Text();
             song.artist = s["artist"].Text();
+            song.song_path = s["song_path"].Text();
+            song.song_length = static_cast<int32_t>(std::clamp<int64_t>(Whole(s["song_length"]), 0, INT32_MAX));
+            song.album_name = s["album_name"].Text();
+            song.year_released = static_cast<int32_t>(std::clamp<int64_t>(Whole(s["year_released"]), 0, INT32_MAX));
             package.songs.push_back(std::move(song));
         }
         packages.push_back(std::move(package));
@@ -82,7 +90,7 @@ std::vector<PackageSongs> ParseInventoryCache(std::string_view text) {
 }
 
 std::string FormatInventoryCache(const std::vector<PackageSongs>& packages) {
-    std::string out = "{\"version\": 1, \"packages\": [";
+    std::string out = "{\"version\": " + std::to_string(kCacheVersion) + ", \"packages\": [";
     for (size_t i = 0; i < packages.size(); i++) {
         const PackageSongs& p = packages[i];
         out += i ? ",\n  " : "\n  ";
@@ -94,7 +102,11 @@ std::string FormatInventoryCache(const std::vector<PackageSongs>& packages) {
             if (k) out += ", ";
             out += "{\"shortname\": " + JsonString(s.shortname) +
                    ", \"song_id\": " + std::to_string(s.song_id) +
-                   ", \"title\": " + JsonString(s.title) + ", \"artist\": " + JsonString(s.artist) + "}";
+                   ", \"title\": " + JsonString(s.title) + ", \"artist\": " + JsonString(s.artist) +
+                   ", \"song_path\": " + JsonString(s.song_path) +
+                   ", \"song_length\": " + std::to_string(s.song_length) +
+                   ", \"album_name\": " + JsonString(s.album_name) +
+                   ", \"year_released\": " + std::to_string(s.year_released) + "}";
         }
         out += "]}";
     }

@@ -188,6 +188,12 @@ std::vector<Package> LivePackages() {
     return {};
 }
 
+bool LiveContentScanned() {
+    auto& scan = TheScan();
+    std::lock_guard lock(scan.mutex);
+    return scan.done;
+}
+
 std::vector<DroppedPackage> DroppedPackages() {
     auto& scan = TheScan();
     std::lock_guard lock(scan.mutex);

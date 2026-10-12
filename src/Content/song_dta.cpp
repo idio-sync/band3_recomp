@@ -128,6 +128,28 @@ int32_t SongIdOf(const Node& value) {
     return CorrectedSongId(text);
 }
 
+// a whole number above 0, else 0
+int32_t PositiveOf(const Node& value) {
+    if (value.kind != Node::Kind::kAtom) return 0;
+    int32_t n = 0;
+    const std::string& text = value.text;
+    const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), n);
+    return ec == std::errc() && end == text.data() + text.size() && n > 0 ? n : 0;
+}
+
+// (song (name "songs/x/x") (tracks ...) ...)'s name
+std::string SongPathOf(const Node& song) {
+    for (size_t i = 1; i < song.items.size(); i++) {
+        const Node& field = song.items[i];
+        if (field.kind == Node::Kind::kList && field.items.size() >= 2 &&
+            field.items[0].kind == Node::Kind::kAtom && field.items[0].text == "name" &&
+            field.items[1].kind != Node::Kind::kList) {
+            return field.items[1].text;
+        }
+    }
+    return {};
+}
+
 }
 
 std::vector<DtaSong> ParseSongsDta(std::string_view text) {
@@ -145,7 +167,7 @@ std::vector<DtaSong> ParseSongsDta(std::string_view text) {
         DtaSong song;
         song.shortname = entry.items[0].text;
         bool is_song = false, utf8 = false;
-        std::string title, artist;
+        std::string title, artist, album;
         for (const Node& field : entry.items) {
             if (field.kind != Node::Kind::kList || field.items.size() < 2 ||
                 field.items[0].kind != Node::Kind::kAtom) {
@@ -155,6 +177,7 @@ std::vector<DtaSong> ParseSongsDta(std::string_view text) {
             const Node& value = field.items[1];
             if (key == "song") {
                 is_song = true;
+                song.song_path = SongPathOf(field);
             } else if (key == "song_id") {
                 song.song_id = SongIdOf(value);
             } else if (value.kind == Node::Kind::kList) {
@@ -163,6 +186,12 @@ std::vector<DtaSong> ParseSongsDta(std::string_view text) {
                 title = value.text;
             } else if (key == "artist") {
                 artist = value.text;
+            } else if (key == "album_name") {
+                album = value.text;
+            } else if (key == "song_length") {
+                song.song_length = PositiveOf(value);
+            } else if (key == "year_released") {
+                song.year_released = PositiveOf(value);
             } else if (key == "encoding") {
                 utf8 = value.text == "utf8";
             }
@@ -170,6 +199,7 @@ std::vector<DtaSong> ParseSongsDta(std::string_view text) {
         if (!is_song) continue;
         song.title = ToUtf8(title, utf8);
         song.artist = ToUtf8(artist, utf8);
+        song.album_name = ToUtf8(album, utf8);
         songs.push_back(std::move(song));
     }
     return songs;

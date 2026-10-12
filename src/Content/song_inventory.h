@@ -25,9 +25,10 @@ struct PackageSongs {
 };
 
 // The cache of what was read, so a package is read again only when its size
-// or time changes: {"version": 1, "packages": [{"path":, "size":, "modified":,
-// "unreadable":, "songs": [{"shortname":, "song_id":, "title":, "artist":}]}]}.
-// What it can't read is left out.
+// or time changes: {"version": 2, "packages": [{"path":, "size":, "modified":,
+// "unreadable":, "songs": [{"shortname":, "song_id":, "title":, "artist":,
+// "song_path":, "song_length":, "album_name":, "year_released":}]}]}. What it
+// can't read is left out, as is a cache of another version.
 std::vector<PackageSongs> ParseInventoryCache(std::string_view json);
 std::string FormatInventoryCache(const std::vector<PackageSongs>& packages);
 

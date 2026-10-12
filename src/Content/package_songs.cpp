@@ -173,6 +173,23 @@ PackageSongsSnapshot CurrentPackageSongs() {
     return snapshot;
 }
 
+std::vector<PackageSongs> PackageSongsNow(std::chrono::milliseconds wait) {
+    if (LiveContentScanned()) {
+        const auto deadline = std::chrono::steady_clock::now() + wait;
+        for (;;) {
+            PackageSongsSnapshot snapshot = CurrentPackageSongs();
+            if (!snapshot.packages.empty()) return std::move(snapshot.packages);
+            if (!snapshot.status.reading || std::chrono::steady_clock::now() >= deadline) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+    std::ifstream file(CachePath(), std::ios::binary);
+    if (!file) return {};
+    std::ostringstream text;
+    text << file.rdbuf();
+    return ParseInventoryCache(text.str());
+}
+
 namespace {
 
 // the state's mutex held

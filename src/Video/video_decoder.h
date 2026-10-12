@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -40,5 +42,11 @@ std::unique_ptr<VideoDecoder> OpenVideo(const std::filesystem::path& path, std::
 // one or without FFmpeg (Media Foundation's reader isn't used for sound)
 std::vector<float> SoundtrackEnvelope(const std::filesystem::path& path, double seconds,
                                       std::string& error);
+
+// An Ogg Vorbis stream (a song's unencrypted mogg past its header, mogg.h),
+// its first `seconds` mixed to mono as a rhythm envelope; empty, with why in
+// `error`, if it can't be decoded or there's no FFmpeg
+std::vector<float> OggVorbisEnvelope(std::span<const uint8_t> ogg, double seconds,
+                                     std::string& error);
 
 }

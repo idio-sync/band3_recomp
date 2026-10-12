@@ -44,6 +44,18 @@ std::vector<float> SoundtrackEnvelope(const std::filesystem::path& path, double 
 #endif
 }
 
+std::vector<float> OggVorbisEnvelope(std::span<const uint8_t> ogg, double seconds,
+                                     std::string& error) {
+#ifdef BAND3_HAVE_FFMPEG
+    return FfmpegOggVorbisEnvelope(ogg, seconds, error);
+#else
+    (void)ogg;
+    (void)seconds;
+    error = "band3 was built without FFmpeg";
+    return {};
+#endif
+}
+
 std::unique_ptr<VideoDecoder> OpenVideo(const std::filesystem::path& path, std::string& error) {
     std::string ffmpeg_error;
 #ifdef BAND3_HAVE_FFMPEG

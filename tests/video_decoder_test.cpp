@@ -9,9 +9,12 @@
 #include <doctest/doctest.h>
 #include <memory>
 #include <string>
+#include "src/Video/mogg.h"
 #include "src/Video/sync_align.h"
 #include "src/Video/video_decoders.h"
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <vector>
 
 using namespace band3::video;
@@ -164,5 +167,40 @@ TEST_CASE("a soundtrack decoded from two codecs aligns to the delay between them
     CHECK(std::abs(r.offset - 2.5) < 0.02);
     CHECK(r.confident);
     CHECK(SoundtrackEnvelope(Clip("music_video_red_blue.mp4"), 10.0, error).empty());
+}
+
+TEST_CASE("a song's mogg is decoded whole and aligns to its video") {
+    // sync_clicks.webm's tones at 44.1 kHz in two of four channels (the
+    // others silent, as a song's unplayed stems), as Vorbis in a mogg with
+    // Magma's header (version 0x0A, a two-entry seek map)
+    std::ifstream in(Clip("sync_clicks.mogg"), std::ios::binary);
+    REQUIRE(in);
+    const std::vector<uint8_t> mogg((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const auto header = ParseMoggHeader(mogg);
+    REQUIRE(header);
+    CHECK(header->version == kMoggUnencrypted);
+    std::string error;
+    const std::span<const uint8_t> ogg = std::span(mogg).subspan(header->ogg_offset);
+    // all of it when asked for more
+    std::vector<float> song = OggVorbisEnvelope(ogg, 60.0, error);
+    REQUIRE_MESSAGE(!song.empty(), error);
+    CHECK(std::abs(int(song.size()) - 15 * kEnvelopeRate) < kEnvelopeRate / 2);
+    // its first 12 s, as a song captured from its start (the tones repeat
+    // closely enough that more lets a shorter overlap a beat away score as well)
+    song = OggVorbisEnvelope(ogg, 12.0, error);
+    REQUIRE_MESSAGE(!song.empty(), error);
+    CHECK(std::abs(int(song.size()) - 12 * kEnvelopeRate) < kEnvelopeRate / 10);
+    // against the tones with 2.5 s of silence before them, as AAC
+    const std::vector<float> video = SoundtrackEnvelope(Clip("sync_clicks_late.m4a"), 60.0, error);
+    REQUIRE_MESSAGE(!video.empty(), error);
+    const SyncResult r = AlignEnvelopes(song, video, -5.0, 10.0, 8.0);
+    REQUIRE(r.found);
+    CAPTURE(r.score);
+    CAPTURE(r.margin);
+    // the video's time at the song's start: its 2.5 s of silence
+    CHECK(std::abs(r.offset - 2.5) < 0.02);
+    CHECK(r.confident);
+    // not Ogg Vorbis
+    CHECK(OggVorbisEnvelope(std::span(mogg).subspan(0, 100), 60.0, error).empty());
 }
 #endif

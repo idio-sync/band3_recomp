@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -25,6 +26,13 @@ struct PackageSongsSnapshot {
 
 // what's been read, starting a read when there's none and the packages changed
 PackageSongsSnapshot CurrentPackageSongs();
+
+// The packages' songs: once the game's content scan is done,
+// CurrentPackageSongs' last full read, waiting up to `wait` for one under way
+// (the first, started by this if need be); before the scan's done (in the
+// launcher), or with the read not done in time, the cache of what the last
+// run read.
+std::vector<PackageSongs> PackageSongsNow(std::chrono::milliseconds wait);
 
 // Sets a package aside at the next launch (RequestSetAside): one of those read
 // with one song, so a pack's other songs never go with it, or a copy band3 left

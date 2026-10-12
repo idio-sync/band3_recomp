@@ -14,6 +14,7 @@
 #include <thread>
 #include <vector>
 
+#include "src/Video/auto_sync.h"
 #include "src/Video/frame_queue.h"
 #include "src/Video/picture_convert.h"
 #include "src/Video/video_decoder.h"
@@ -399,7 +400,10 @@ bool HasMusicVideo(std::string_view shortname) {
     return FindVideo(VideoFolders(), shortname).has_value();
 }
 
-void SetMusicVideoSong(std::string_view shortname) { ThePlayer().SetSong(shortname); }
+void SetMusicVideoSong(std::string_view shortname) {
+    ThePlayer().SetSong(shortname);
+    SyncBeforePlaying();
+}
 
 bool MusicVideoFrame(double song_time, double world_fps, const PlaneSizes& sizes,
                      std::shared_ptr<const PlaneSet>& out) {
