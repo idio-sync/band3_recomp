@@ -528,6 +528,11 @@ struct GpuRenderer::Impl {
         uint64_t generation = 0;
         void* resource = nullptr;  // its ID3D12Resource, if it can be sampled in place
         SDL_GPUFence* fence = nullptr;
+        // RasterOptions::output_readback: the last frame's pixels, read back
+        // in its own submission, ready once `fence` has signalled
+        SDL_GPUTransferBuffer* readback = nullptr;
+        uint32_t readback_size = 0;
+        bool read_back = false;
     };
     Output outputs[kOutputs];
     uint64_t output_generations = 0;
@@ -2889,7 +2894,12 @@ bool GpuRenderer::Impl::EnsureOutput(int slot, uint32_t w, uint32_t h) {
     // once it's done)
     if (out.texture) SDL_ReleaseGPUTexture(device, out.texture);
     ReleaseFence(out);
+    // kept: only its size can change, and Render grows it
+    SDL_GPUTransferBuffer* const readback = out.readback;
+    const uint32_t readback_size = out.readback_size;
     out = Output{};
+    out.readback = readback;
+    out.readback_size = readback_size;
     const SDL_GPUTextureCreateInfo ti = OutputInfo(w, h);
     out.texture = SDL_CreateGPUTexture(device, &ti);
     counts.textures++;
@@ -2919,6 +2929,7 @@ void GpuRenderer::Impl::ReleaseOutputs() {
         for (Output& out : outputs) {
             ReleaseFence(out);
             if (out.texture) SDL_ReleaseGPUTexture(device, out.texture);
+            if (out.readback) SDL_ReleaseGPUTransferBuffer(device, out.readback);
         }
         if (output_readback) SDL_ReleaseGPUTransferBuffer(device, output_readback);
     }
@@ -4711,6 +4722,35 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         SDL_GPUTextureTransferInfo dst{readback, 0, width, height};
         SDL_DownloadFromGPUTexture(copy, &src, &dst);
         SDL_EndGPUCopyPass(copy);
+    } else if (slot >= 0 && o.output_readback) {
+        // the slot's own buffer, so the next frame can be recorded and sent
+        // while this one is drawn and read back (ReadOutputBack)
+        Output& out = outputs[slot];
+        out.read_back = false;
+        const uint32_t bytes = width * height * 4;
+        if (!out.readback || out.readback_size < bytes) {
+            if (out.readback) SDL_ReleaseGPUTransferBuffer(device, out.readback);
+            SDL_GPUTransferBufferCreateInfo tbi{};
+            tbi.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
+            tbi.size = bytes;
+            out.readback = SDL_CreateGPUTransferBuffer(device, &tbi);
+            out.readback_size = out.readback ? bytes : 0;
+        }
+        if (out.readback) {
+            MarkTime(cmd, gpu_timing::kReadback);
+            SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+            SDL_GPUTextureRegion src{};
+            src.texture = output;
+            src.w = width;
+            src.h = height;
+            src.d = 1;
+            SDL_GPUTextureTransferInfo dst{out.readback, 0, width, height};
+            SDL_DownloadFromGPUTexture(copy, &src, &dst);
+            SDL_EndGPUCopyPass(copy);
+            out.read_back = true;
+        } else {
+            REXLOG_WARN("native view gpu: no buffer to read an output back ({})", SDL_GetError());
+        }
     }
     // the last timestamp: a pre pass ends the aside's ladder; a frame
     // resolves its own with the aside's, read once it finishes (below, or
@@ -4927,6 +4967,29 @@ bool GpuRenderer::OutputDone(int slot, GpuStats* times) {
     if (!SDL_QueryGPUFence(impl_->device, o.fence)) return false;
     impl_->ReleaseFence(o);
     if (times) impl_->ReadTimes(slot, *times);
+    return true;
+}
+
+bool GpuRenderer::ReadOutputBack(int slot, std::vector<uint32_t>& rgba, uint32_t& width,
+                                 uint32_t& height) {
+    if (slot < 0 || slot >= kOutputs) return false;
+    std::lock_guard lock(impl_->mutex);
+    Impl::Output& o = impl_->outputs[slot];
+    // still drawing (OutputDone first), or not read back
+    if (!impl_->device || o.fence || !o.read_back || !o.readback) return false;
+    const auto* px =
+        static_cast<const uint32_t*>(SDL_MapGPUTransferBuffer(impl_->device, o.readback, false));
+    if (!px) {
+        REXLOG_WARN("native view gpu: couldn't read an output back ({})", SDL_GetError());
+        return false;
+    }
+    // alpha is the resolve's 0xff throughout
+    rgba.resize(size_t(o.w) * o.h);
+    std::memcpy(rgba.data(), px, rgba.size() * sizeof(uint32_t));
+    SDL_UnmapGPUTransferBuffer(impl_->device, o.readback);
+    o.read_back = false;
+    width = o.w;
+    height = o.h;
     return true;
 }
 

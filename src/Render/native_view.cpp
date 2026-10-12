@@ -721,8 +721,11 @@ class Renderer {
         bool presenting = false;
         bool new_frame = false;  // not a redraw
         bool pace = false;       // published by PublishPacer
-        int slot = -1;           // zero-copy output
+        int slot = -1;           // zero-copy output, or the upload pipeline's
         bool drew_output = false, drew_gpu = false, want_rgba = false;
+        // native_upload_pipeline: drawn into `slot` and read back in the same
+        // submission; read (PublishFlight) and published as RGBA once done
+        bool upload = false;
         GpuOutput out;
         GpuStats gs;
         RasterStats rs;
@@ -784,6 +787,9 @@ class Renderer {
             RasterOptions o;
             std::string dump;
             bool changed, gpu, zero_copy, want_rgba, presenting, pace, pipeline;
+            // native_upload_pipeline on the upload path: frames go through
+            // slots and flights as zero-copy's do, read back as they finish
+            bool upload_pipe;
             // minimized and no screenshot wanted
             bool paused;
             // presenting stretch (PresentSlots) and restores so far
@@ -831,8 +837,11 @@ class Renderer {
                 gpu = gpu_;
                 dump = dump_path_;
                 zero_copy = present_ && present_zero_copy_ && gpu && dump.empty();
-                // RGBA for F9's window, a screenshot, the upload path and the CPU
-                want_rgba = !zero_copy || dialog_open_ || image_wanted_;
+                upload_pipe = present_ && !present_zero_copy_ && gpu && dump.empty() &&
+                              REXCVAR_GET(native_upload_pipeline);
+                // RGBA for F9's window, a screenshot, the upload path and the
+                // CPU; the upload pipeline reads every frame back itself
+                want_rgba = (!zero_copy && !upload_pipe) || dialog_open_ || image_wanted_;
                 changed = options_changed_;
                 options_changed_ = false;
                 presenting = present_;
@@ -841,9 +850,10 @@ class Renderer {
                 resumes = resumes_;
                 pace = presenting && REXCVAR_GET(native_present_pacing);
                 pipeline = REXCVAR_GET(native_present_pipeline);
-                o.gpu_no_wait = pipeline;
-                // not with the pipeline, which waits differently
-                o.world_ahead = REXCVAR_GET(native_world_ahead) && !pipeline;
+                o.gpu_no_wait = pipeline || upload_pipe;
+                o.output_readback = upload_pipe;
+                // not with either pipeline, which wait differently
+                o.world_ahead = REXCVAR_GET(native_world_ahead) && !o.gpu_no_wait;
                 o.world_period = pacing::WorldPeriod();
                 // not in menus: textures kept from them into a song kept the
                 // texture arrays from ever emptying
@@ -913,11 +923,11 @@ class Renderer {
                         WaitForCapture(seen, std::chrono::nanoseconds(flight->due_ns - now));
                         continue;
                     }
-                    PublishDrawn(*flight, nullptr);
+                    PublishFlight(*flight, rgba);
                     flight.reset();
                 } else {
                     // a flight left as the pipeline turned off is waited for
-                    if (work && zero_copy && pipeline && !gpu_held_) {
+                    if (work && ((zero_copy && pipeline) || upload_pipe) && !gpu_held_) {
                         std::lock_guard lock(mutex_);
                         slot = slots_.Acquire();
                     }
@@ -953,7 +963,7 @@ class Renderer {
                 continue;
             }
             // an output no paint may still be sampling
-            if (zero_copy && slot < 0) {
+            if ((zero_copy || upload_pipe) && slot < 0) {
                 slot = AcquireSlot();
                 if (slot < 0) {
                     std::lock_guard lock(mutex_);
@@ -1004,6 +1014,7 @@ class Renderer {
             d.pace = pace;
             d.slot = slot;
             d.want_rgba = want_rgba;
+            d.upload = upload_pipe;
             d.width = o.width;
             d.height = o.height;
             d.camera = cuts_.Next(*cap);
@@ -1020,10 +1031,10 @@ class Renderer {
                         live_.in_flight_max =
                             std::max(live_.in_flight_max, uint32_t(slots_.InFlight()));
                 }
-                if (d.drew_output && !pipeline) WaitFlight(d, nullptr);
+                if (d.drew_output && !pipeline && !d.upload) WaitFlight(d, nullptr);
                 // an output that failed the zero-copy checks is read back (the
                 // drawer then uploads); reading back waits for the GPU
-                if (d.drew_output && (d.want_rgba || !d.out.d3d12_resource)) {
+                if (d.drew_output && !d.upload && (d.want_rgba || !d.out.d3d12_resource)) {
                     uint32_t w = 0, h = 0;
                     d.drew_gpu = GpuRenderer::Get().DownloadOutput(slot, rgba, w, h);
                     d.want_rgba = true;
@@ -1060,13 +1071,14 @@ class Renderer {
                     continue;
                 }
                 flight->due_ns = due_of(*flight, flight->done_ns);
-                PublishDrawn(*flight, nullptr);
+                PublishFlight(*flight, rgba);
                 flight.reset();
             }
             if (!d.done) {
                 // in flight until the GPU finishes it, or stopping before a
-                // read-back frame finished
-                if (!d.want_rgba) {
+                // read-back frame finished; the upload pipeline's are read
+                // back as they finish, RGBA wanted or not
+                if (!d.want_rgba || d.upload) {
                     flight = std::move(d);
                 } else {
                     std::lock_guard lock(mutex_);
@@ -1090,7 +1102,8 @@ class Renderer {
             const int64_t due = due_of(d, now);
             const int64_t after = Nanoseconds(std::chrono::steady_clock::now());
             if (due > after) WaitForCapture(seen, std::chrono::nanoseconds(due - after));
-            PublishDrawn(d, d.want_rgba ? &rgba : nullptr);
+            if (d.upload) PublishFlight(d, rgba);
+            else PublishDrawn(d, d.want_rgba ? &rgba : nullptr);
         }
     }
 
@@ -1140,6 +1153,25 @@ class Renderer {
                             std::chrono::steady_clock::now() - from)
                             .count();
         return f.done;
+    }
+
+    // A finished flight to the window: a zero-copy slot as it is; the upload
+    // pipeline's read back into `rgba` and published as the upload path's,
+    // its slot freed at once, as no paint samples it.
+    void PublishFlight(Drawn& f, std::vector<uint32_t>& rgba) {
+        if (!f.upload) {
+            PublishDrawn(f, nullptr);
+            return;
+        }
+        uint32_t w = 0, h = 0;
+        const bool read = f.drew_output && GpuRenderer::Get().ReadOutputBack(f.slot, rgba, w, h);
+        {
+            std::lock_guard lock(mutex_);
+            slots_.Abandon(f.slot);
+        }
+        f.slot = -1;
+        f.drew_gpu = f.drew_gpu && read;
+        PublishDrawn(f, read ? &rgba : nullptr);
     }
 
     // Hands `d` to the window (if still its stretch), live stats, and RGBA

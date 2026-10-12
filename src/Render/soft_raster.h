@@ -150,6 +150,10 @@ struct RasterOptions {
     // worker waited at once broke the SDK's command lists (debug layer) and
     // hung AMD GPUs; waiting inside didn't.
     bool gpu_no_wait = false;
+    // GPU, RenderFrameToOutput: read the output back in the frame's own
+    // submission, into its slot's buffer (GpuRenderer::ReadOutputBack), for
+    // the upload path's native_upload_pipeline
+    bool output_readback = false;
     // GPU (native_world_ahead): a composed post frame whose world
     // RenderWorldAhead drew just before post-processes that scene instead of
     // redrawing it

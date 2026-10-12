@@ -381,6 +381,11 @@ class GpuRenderer {
     // itself. False as RenderFrame.
     bool RenderWorldAhead(const FrameCapture& world, const RasterOptions& options,
                           GpuStats& stats);
+    // RasterOptions::output_readback: `slot`'s last frame, read back in its
+    // own submission, once OutputDone says it's finished; false before, or
+    // if it wasn't read back (each frame's read once)
+    bool ReadOutputBack(int slot, std::vector<uint32_t>& rgba, uint32_t& width,
+                        uint32_t& height);
     // false if no picture or no device
     bool DownloadOutput(int slot, std::vector<uint32_t>& rgba, uint32_t& width,
                         uint32_t& height);

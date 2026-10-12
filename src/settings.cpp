@@ -566,6 +566,12 @@ REXCVAR_DEFINE_BOOL(native_present_pipeline, false, "Band3/Advanced/Native rende
     "memory steadily (about 10 MB a second at 120 Hz: the SDL_gpu allocations it makes "
     "aren't released on this path)");
 
+REXCVAR_DEFINE_BOOL(native_upload_pipeline, true, "Band3/Advanced/Native renderer",
+    "With the native picture shown, on the upload path (Vulkan, where the window can't sample "
+    "the native renderer's frames in place), record the next frame while the GPU draws and "
+    "reads back the one before, so a frame costs the longer of its CPU and GPU time rather "
+    "than both; off waits for each frame and its read-back right after sending it");
+
 REXCVAR_DEFINE_BOOL(native_world_ahead, false, "Band3/Advanced/Native renderer",
     "Experimental: with RB3's even/odd rendering, draw each world frame's venue on the GPU "
     "right after that frame, without waiting for it, so the post frame after it only "
