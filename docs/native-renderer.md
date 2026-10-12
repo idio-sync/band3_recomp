@@ -1,8 +1,9 @@
 # Native renderer and render checks
 
-band3's own renderer for the game's frames, which draws the game's picture by default on
-Windows with no emulated Xbox 360 GPU at all, and the tools that check its picture against
-the game's.
+band3's own renderer draws the game's picture, by default on Windows with no emulated Xbox
+360 GPU at all. This page covers its settings, what still differs from the game's picture,
+and the tools that check it. [Native renderer internals](dev/native-renderer-internals.md)
+has how it works and the measurements behind its defaults.
 
 ## Choosing the renderer
 
@@ -15,13 +16,12 @@ picture:
 | `emulated` | Emulated | the emulated Xbox 360 GPU (the SDK's xenos plugin) alone. The default elsewhere: on Linux the native renderer has run on a Steam Deck (Vulkan, RADV), not yet on other drivers |
 | `both` | Native + emulated (debug) | the two side by side, the native picture shown; **F8** (`bind_renderer`) switches to the emulated GPU's picture and back. For comparing them (the checks below); it costs the GPU both |
 
-Whether the emulated GPU runs is decided as band3 starts, so a change to or from `native`
-applies at the next start (the launcher's Play restarts band3 for it, and the in-game settings' row
-says **Applies at the next start**); between `emulated`
-and `both` it applies at once. F8 only switches the picture under `both`, logs why not
-under the others, and doesn't change the setting. A build that can present with neither
-Direct3D 12 nor Vulkan runs `native` as `emulated`. The log says which renderer each run
-has (`renderer native: ...`, `renderer emulated: ...`, `renderer both (debug): ...`).
+- A change to or from `native` applies at the next start (the launcher's Play restarts band3
+  for it); between `emulated` and `both` it applies at once.
+- F8 only switches the picture under `both`; under the others it logs why not.
+- A build that can present with neither Direct3D 12 nor Vulkan runs `native` as `emulated`.
+- The log names each run's renderer (`renderer native: ...`, `renderer emulated: ...`,
+  `renderer both (debug): ...`).
 
 ### Which settings apply
 
@@ -34,83 +34,54 @@ has (`renderer native: ...`, `renderer emulated: ...`, `renderer both (debug): .
 | Game (Band3 → Graphics): `rnd_sync`, `background_fps`, `disable_hair_shader`, `disable_approximate_lights` | yes | yes | yes |
 | `compress_character_textures` | no: ignored ([below](#renderer-native-no-emulated-gpu)) | yes | yes |
 
-The launcher and the in-game settings (Escape > Settings) show only the rows for the chosen renderer. The
-emulated GPU's own settings belong to its plugin, which a `native` run doesn't load, so
-choosing `emulated` or `both` there shows a note in their place until band3 restarts (the
-launcher's Play does it). The SDK's own menu (the in-game settings' **All settings...**) lists every setting
-by category, each description saying which renderers it applies to; the plugin's appear
-only in a run with the emulated GPU.
+The launcher and the in-game settings show only the rows for the chosen renderer. The emulated
+GPU's own settings belong to its plugin, which a `native` run doesn't load, so after switching
+to `emulated` or `both` they appear once band3 restarts.
 
 ## Presenting
 
-With `native_fill_window` on (the default), the game draws at the window's shape
-([below](#filling-the-window)); off, the picture keeps the game's 16:9 with black bars, or
-stretches with `present_letterbox` off. On Windows frames reach the window without leaving
-the GPU; elsewhere, with `native_view_backend` cpu, or with `native_present_zero_copy` off,
-each is read back and uploaded (the log says which: `native present: zero-copy` or
-`native present: uploading each frame (<why>)`). On Microsoft's software rasterizer (WARP)
-it draws on the CPU, since sharing the emulated GPU's Direct3D 12 device there crashes.
+- **Zero-copy.** On Windows frames reach the window without leaving the GPU. Elsewhere, or with
+  `native_view_backend` cpu, each frame is read back and uploaded. The log says which
+  (`native present: zero-copy` or `uploading each frame`).
+- **Pacing** (`native_present_pacing`). Each frame is handed to the window a steady delay after
+  it's drawn, never more than a frame, so motion steps evenly. It's skipped when the game runs
+  at 1.5 times the display's refresh rate or more, with `frame_cap` `auto`, or on a variable
+  refresh display, where it would only add lag.
+- **Stalls.** If the GPU hasn't finished a frame in 2 s, the window keeps its last frame until
+  it does.
+- **Measuring.** The test harness's `present_stats` measures the window's pacing under either
+  renderer.
 
-Its GPU pipelines are made as the native renderer starts (about 100 ms, once a session), so
-no frame waits for one; the log names any made later (`pipeline made after warm-up`). Each
-frame is drawn as soon as the game presents it and handed to the window a steady delay
-later, about the slowest recent frame's drawing time and never more than a frame, so the
-window gets one new frame a refresh (`native_present_pacing`). That's only while the game
-runs under 1.5 times the display's refresh rate and `frame_cap` isn't `auto`: faster, each
-paint shows the newest of two or more frames anyway, and a variable refresh display shows
-each frame as it comes, so the delay would only add lag; there each frame is handed over as
-soon as it's drawn (the log says which: `native present: pacing frames` or `not pacing
-frames`). If the GPU hasn't finished a frame in 2 s, the window keeps its last frame until
-it does (`native renderer: the GPU hasn't finished a frame ...`). After F8 back to native,
-the window shows only frames the game presented since. With RB3's even/odd rendering (on, as the game ships), a frame that draws
-the world without post-processing it shows the last post-processed picture under its own
-track and HUD, as the game's does. The test harness's `present_stats` measures the window's
-pacing under either renderer.
+Under `both`, `emulated_gpu_while_native` sets what the emulated GPU still does while the
+native picture shows:
 
-While the native picture shows, the passes RB3 draws into textures (outfits and the like)
-are recorded all the time, as `native_view_record_targets` does: about 170 ms of game-thread
-time from boot to a song. Once the native picture has shown they stay recorded for the
-session. RB3 composes a band's outfits once, in the main menu, so switching to the native
-picture after that (`emulated` to `both` in game) shows them wrong until RB3 composes them
-again.
+| Mode | |
+|---|---|
+| `skip_draws` (default) | skips the draws nobody sees; after F8 back to emulated its picture is the game's within a few frames |
+| `full` | draws everything; without a frame cap its frames stall now and then |
+| `swap_only` | test and performance mode: only what the game waits on. After F8 back, outfits and portraits RB3 drew once may be black until it draws them again |
 
-Under `both`, while the native picture shows, the emulated GPU skips the draws nobody sees
-(`emulated_gpu_while_native` `skip_draws`, the default). It still clears, resolves and
-swaps, and draws the texture passes RB3 draws once or now and then and the lens flares'
-occlusion tests, so after F8 back to emulated its picture is the game's within a few frames;
-the native renderer keeps the window until then (`native present: off, ... (after <ms>)`).
-The title screen's clouds take 5 to 20 frames to come back. `capture` has the emulated GPU
-draw 30 whole frames before it holds one, so its screenshot is whole. `full` draws
-everything. `swap_only`, a test and performance mode, leaves the emulated GPU only what the
-game waits on (fences, occlusion query results, vertical blanks and swaps), so after F8 back
-outfits, portraits and other pictures RB3 drew once may be black until it draws them again
-(`native_view stats`' `passes_dropped`, `capture`'s `emulated_passes_dropped`); with
-`compress_character_textures` on, outfits composed under `swap_only` may be black in both
-pictures. `tests/game/soak_native.b3t` soaks `both`: three songs, menu round trips and F8
-both ways in each.
+RB3 composes a band's outfits once, in the main menu, so switching to the native picture after
+that (`emulated` to `both` in game) shows them wrong until RB3 composes them again.
+`tests/game/soak_native.b3t` soaks `both`: three songs, menu round trips and F8 both ways.
 
-Every kind of screen the render checks below go through matches the game's picture, as
-they measure it. Where the native renderer still differs, or hasn't been checked:
+### What still differs
 
-- The lens flares aren't occluded. Their visibility tests (occlusion queries) report the
-  pixels each test covers on screen, with either GPU (`src/Render/query_answers.h`), so a
-  flare in the open draws at a 360's strength (the GPUs' old constant 1000 left a 128x128
-  one at 6%), but one behind a character or the set still draws, where a 360 dims or hides
-  it. The native renderer draws a frame after the game has moved on, and may skip one, so
-  its depth can't answer by the next frame as a 360's GPU does. `native_query_sample_count`
-  0 or more brings the constant back; `native_query_log` logs the answers.
-- The world is drawn single-sampled at the window's size, as RB3 draws it at 720p, so above
-  720p its edges shimmer a little where the emulated GPU's stretched 720p picture blurs them.
-- With `emulated_gpu_while_native` `full` and no frame cap, its frames stall now and then
-  (both GPUs' work on one 3D engine); `skip_draws` doesn't.
-- Not checked: the store and other online screens, RB3's error screens drawn over
-  everything (`ModalDraw`), and screens no script reaches.
-- A texture pass RB3 draws every frame but stops drawing while the native renderer is on
-  shows, after F8 back to emulated, what the emulated GPU last drew in it.
-- At 120 Hz (`video_mode_refresh_rate`) it shows about two in three of the game's frames in
-  a song, where at 60 Hz it shows nearly all.
-- On Linux it has run on a Steam Deck (Vulkan on RADV), where it's the default; other
-  Linux drivers are untested, so elsewhere on Linux the default stays `emulated`.
+Every kind of screen the render checks go through matches the game's picture. The exceptions:
+
+- **Lens flares aren't occluded:** one behind a character or the set still draws, where a 360
+  dims or hides it ([why](dev/native-renderer-internals.md#lens-flares-and-occlusion-queries)).
+- **Edges above 720p:** the world is drawn single-sampled at the window's size, as RB3 draws it
+  at 720p, so its edges shimmer a little where the emulated GPU's stretched picture blurs them.
+- **120 Hz:** at `video_mode_refresh_rate` 120 it shows about two in three of the game's frames
+  in a song, where at 60 Hz it shows nearly all.
+- **F8 back to emulated:** a texture pass RB3 stops drawing while the native renderer is on
+  shows what the emulated GPU last drew in it.
+- **Not checked:** the store and other online screens, RB3's error screens drawn over
+  everything (`ModalDraw`), screens no script reaches, and Linux drivers other than the Steam
+  Deck's.
+
+### Settings
 
 | Setting | |
 |---|---|
@@ -121,252 +92,13 @@ they measure it. Where the native renderer still differs, or hasn't been checked
 | `native_anisotropic` (Band3 → Graphics → Native) | anisotropic filtering, counted as `anisotropic_override` counts it: 0 off, 1 to 5 for 1x to 16x. -1 (the default) follows `anisotropic_override` where the emulated GPU runs, so the two pictures match, and keeps the game's own samplers under `native` |
 | `native_view_msaa` (Band3 → Graphics → Native) | the samples a pixel of the overlay (the track, the HUD, menus drawn after the world), the only part RB3 multisamples: 2 (the default) as RB3 does, 4 smoother, 1 none |
 
-The rest are on the in-game settings' Advanced tab (`emulated_gpu` under Band3 → Advanced → Retired in All
-settings), each described there (`src/settings.cpp`):
+The rest are on the in-game settings' Advanced tab, described in the
+[settings reference](settings-reference.md#native-renderer-1). Most are there to compare or
+measure; leave them at their defaults. Two to know about:
 
-- `emulated_gpu`: retired, still read at startup into `renderer` (`off` is `native`; `on`
-  is `both`, or `emulated` if `renderer` said so), then cleared at the next save.
-- `native_present_zero_copy`, `native_present_pacing`, `native_present_request_paint`:
-  turn off the presenting above, to compare.
-- `native_present_pipeline`: records the next frame while the GPU draws the one before.
-  Keep it off: it hangs AMD GPUs and grows video memory.
-- `native_world_ahead` (experimental, off): with even/odd rendering, draws each world frame's
-  venue right after that frame without waiting for it, so the post frame after it only
-  post-processes it and draws its overlay; the world's GPU time moves into the world frame's
-  half of the pair. On a 60 Hz laptop in a paused song post frames went from 14 to 8 ms and
-  latency fell 4 ms, the picture the same, but the frames shown barely changed there (the
-  missing ones were pacing's, not the renderer's); it's meant for 120 Hz, where a post frame
-  over 8.3 ms costs the next. Where post frames drawn this way still run about a frame's
-  time it backfires (one too slow skips the next world frame, so the world drawn ahead is
-  wasted and the post frame after draws the whole world, too slow again), so it measures the
-  frames skipped with it and without in 2 s windows, keeps the one that skips fewer, and
-  tries the other every eighth window (`present_model.h`'s `AheadChooser`): in that case
-  it then stays within noise of off, where drawing ahead regardless skipped 18% more frames.
-  `native_view stats`' `by_kind` has `ahead` (the world frames' milliseconds drawing it),
-  `ahead_gated` (world frames it chose not to), `ahead_used` (post frames that used it) and
-  `ahead_fallback_passes` (world texture passes a post frame drew itself all the same).
-- `native_query_sample_count`, `native_query_log`: the occlusion queries' answers (with
-  either GPU). `native_sync_short_wait_us`, `native_vblank_free_running`: the sync-only
-  GPU's pacing.
-- `native_view_target_scale`: the haze and smoke passes in proportion to the picture (on by
-  default; every other texture pass is drawn at the game's size). `native_view_shadow_scale`:
-  sharper self-shadows.
+- `native_present_pipeline`: keep it off. It hangs AMD GPUs and grows video memory.
 - `native_slow_frame_ms`, `game_stall_log_ms`: log native frames slower than 12 ms and game
-  frames slower than 100 ms, with where the time went: for a native frame its planning's
-  parts too (the render targets and texture arrays it made, the textures and meshes drawn for
-  the first time), its capture's cost to the game's thread and the camera
-  (`src/Render/camera_cut.h`: whether the frame is at a cut). At first sight of a song's or a
-  shot's textures and meshes the game's thread only copies their bytes (a few MB, 2 to 10 ms
-  of a frame's capture), and the worker decodes them before the frame (`decode` in the line,
-  `src/Render/deferred_decode.h`; with helper threads, `native_deferred_decode_threads` below),
-  as the same decoder would have from the same bytes:
-  decoding them where they were drawn cost the game's thread 30 to 70 ms on those frames.
-  `record` says how much of it went on what SDL_gpu makes the first time a frame needs more
-  than any before: getting command buffers (one for each part the frame is submitted in; a
-  command list and allocator made when its pool has none), their first draws (where it takes
-  their descriptor heaps), later draws over 0.05 ms (another pair once 2048 samplers are
-  written, 16 a draw that rebinds) and pipeline binds and uniform pushes over 0.05 ms (a 32
-  KB uniform buffer made; a draw pushes 2 KB), each with the slowest; `submit` its slowest
-  submission. So that frames don't make those, the worker grows SDL_gpu's pools once, the
-  first time it waits for a capture (`gpu_view.h`'s `Idle`, logged "SDL's pools
-  warmed"): 16 command buffers and their fences, 128 uniform buffers (8 MB) and 24
-  descriptor heap pairs (about 2 MB each), in 103 to 116 ms, about 30 MB more video memory
-  than a song grew them to by itself. At 20th Century Boy's start (four runs each) the world
-  passes before its first frame went from 37.6 to 38.9 ms to 25.7 to 27.3 (their recording
-  from 16 to 4.5: 24 uniform buffers), its first 1402-draw frame from 56 to 65 to 37 to 60
-  (14 ms of command buffers and 8 to 11 of uniform buffers gone; what's left varies with
-  single submissions of 6 to 31 ms, SDL_gpu's own), and the four first-sight frames from 168
-  to 180 ms in all to 135 to 159. A frame that drew its world first (`pre`: a refracting
-  venue without a kept world to read) has those passes' own parts after the line's counts
-  ("pre: plan ... (walk ...: the render targets and texture arrays made), upload, record,
-  submit, waiting for the GPU, evict").
-- `native_gpu_timestamps` (off): times each frame's parts on the GPU with timestamps written
-  between them (`src/Render/gpu_timing_model.h`): its upload, the world, the texture passes
-  (`pass_shadow`, `pass_spot` for the spotlights' targets, `pass_other` for the rest: outfits,
-  the crowd...), the blurs in them, their mips, post-processing (`velocity`, `dof`, `bloom`,
-  `composite`), the overlay and its multisampled resolves, the gamma pass, and a world drawn
-  ahead or before the frame. `idle` is the GPU waiting for the CPU to send the next command
-  buffer (a frame goes to the GPU in parts, submitted after each texture pass with mips and,
-  with `native_view_submit_points`, at the resolve) and
-  isn't in the frame's total, its busy time. The slow-frame log ends with the split ("GPU 1.5 ms busy: world 0.5, ...").
-  Direct3D 12 only: the timestamps go into SDL_gpu's own command list, reached through SDL
-  3.4.14's private layout and checked first; where the checks fail, or on Vulkan, there are
-  no times (one log line) and nothing else changes. About 60 timestamps a frame in a song,
-  which cost about 0.1 to 0.2 ms of the worker's frame, in its wait for the GPU (at the edge
-  of run-to-run noise; the frames shown and skipped don't change), so it's off unless
-  measuring. At 1600x900 in arena_04 the GPU is busy about 0.7 ms on a world frame
-  (mostly `pass_other`) and 1.5 ms on a post frame (`pass_other` and `world` half a
-  millisecond each), with 0.5 to 0.8 ms idle around the mips (before `native_view_inline_mips`).
-- `native_view_inline_mips` (on): makes the mips of the textures RB3 draws into (in a song the
-  crowd's 256x512 target, four levels, several times a frame) at the end of the command buffer
-  the frame submits there, by `src/Render/shaders/mips.hlsl`, a pass a level drawn as SDL_gpu's
-  `SDL_GenerateMipmapsForGPUTexture` draws it on Direct3D 12 (the same triangle, sampler and
-  calls). SDL's own mips take a sampler each, which would put the command buffer's sampler heap
-  off the step `gpu_view.cpp`'s `kSamplerBatch` keeps it on (the AMD hangs), so off they go in
-  a command buffer of their own between the frame's work so far and the rest: two command
-  buffers each time where on takes one. The levels come out byte for byte as SDL's (random
-  texels at even and odd sizes, and the crowd's target in render_song's captures); a level
-  whose side halves to 0 is drawn by neither. Direct3D 12 only (elsewhere SDL's, as before).
-  The frame is still submitted there, mips or not: the GPU draws the frame's first parts while
-  the worker records the rest, and recording the frame whole and submitting it once (tried)
-  had post frames wait 2.2 ms for the GPU rather than 1.2. In 20th Century Boy's 60 s slice at
-  60 Hz, on against off: the GPU's `idle` 0.2 rather than 0.5 ms a world frame and 0.4 to 0.5
-  rather than 0.7 to 0.8 a post frame; the worker's wait for the GPU on world frames 1.03 to
-  1.09 ms p50 and 2.2 to 2.3 p95 rather than 1.2 and 2.6, its whole world frame 0.2 ms
-  shorter and its post frame 0.2 to 0.3; post frames' wait the same.
-- `native_view_submit_points` (1): where else a frame goes to the GPU in parts. With 0 only at
-  the texture passes with mips (above); with 1 also at the resolve, once the world and its
-  texture passes are recorded (after the last world draw's pass ends, before the resolve's
-  copies), so the GPU draws them while the worker records post-processing, the overlay and the
-  gamma pass, rather than waiting for all of it. Not for a world pass before the frame or the
-  world drawn ahead (they end there and are submitted anyway), nor with nothing drawn since the
-  last submission (a world frame whose last texture pass made mips). A submission costs the
-  worker about 0.03 ms and the GPU a short wait for the next command buffer; the new command
-  buffer starts with nothing bound and its own descriptor heaps, which `BeginPass` starts on
-  `kSamplerBatch`'s step as at every pass. The picture is the same to the byte: 11 captures
-  (render_song_evenodd's and render_screens_menus') drawn with 0 and with 1 had no pixel
-  different. native_view stats' `by_kind` counts the command buffers (`per_frame`'s
-  `submits`) and their submissions' time (`parts_ms_per_frame`'s `submit`).
-  In 20th Century Boy's 60 s slice at 60 Hz (1280x720, arena_04), 1 against 0, three runs
-  each: post frames' wait for the GPU 0.82 to 0.90 ms p50 rather than 1.10 to 1.22 (0.29 less
-  on average) and 2.81 p95 rather than 3.06, their whole frame 3.27 ms p50 rather than 3.44;
-  world frames' wait 0.96 rather than 1.04 ms p50; the GPU's busy time the same (1.71 against
-  1.72 ms a post frame, p95 3.06 against 3.10) and its `idle` on post frames 0.35 rather than
-  0.44 ms; 7.2 command buffers a post frame rather than 6.3, their submissions 0.25 ms in all
-  rather than 0.23. The soak (`soak_native_only.b3t`) passed with 1 and with 0.
-- `native_bc_textures` (on): keeps RB3's block-compressed textures (DXT1, DXT2/3, DXT4/5 and
-  DXN, most of what it loads) compressed on the GPU, as BC1, BC2, BC3 and BC5, in texture
-  arrays of their own. The worker's decode of a texture seen first (`decode` in the slow-frame
-  line) then only untiles and byte-swaps its blocks (`src/Render/guest_formats.h`'s
-  `UntileLevelBlocks`), and the GPU gets a quarter (DXT1: an eighth) of the RGBA bytes. At
-  20th Century Boy's start the worker's first-sight frames went from 37, 47, 67 and 53 ms of
-  decoding to 10, 14, 19 and 23 (what's left is the meshes and the movie planes, k_8), the
-  textures they send from 21, 22, 85 and 42 MB to 4, 5, 17 and 8, and in its 60 s slice the
-  texture arrays from 381 to 181 MB and the process's video memory from 783 to 531 MB. A
-  texture's RGBA is decoded from its blocks only when something asks for it (the CPU
-  rasterizer, a capture file: `deferred_decode.h`'s `EnsureRgba`), by the same decoder, to the
-  same texels. The GPU's BC decoders round the 5- and 6-bit colours and the colours between
-  them a step or two differently from that decoder (as the emulated GPU's do, which draws them
-  as BC where it can), so the GPU's picture moves from the CPU's by a mean of 0.1 to 0.3 (`parity.py`'s
-  `gpu-cpu`, 0.04 to 0.07 with it off). BC5 has no z and w, which RB3's fetch fills with y
-  (a head's normal map is drawn into another texture as a diffuse texture, its alpha read):
-  `mesh.hlsl`'s `MapTexel` puts them back. The device's support for the four formats is
-  checked once (logged if missing: then every texture is RGBA, as with it off), and a
-  texture whose fetch swizzles its components stays RGBA. Read as each texture is placed: off
-  (to compare) places new textures as RGBA, decoding the blocks of any decoded while it was
-  on. `native_view stats`' `capture` counts `deferred_bc_blocks` (textures kept as blocks),
-  `deferred_bc_swizzled` (kept RGBA for their swizzle) and `deferred_bc_rgba` (kept as blocks,
-  then decoded to RGBA).
-- `native_r8_textures` (on): keeps RB3's one-channel textures (k_8) a byte a texel on the GPU,
-  as R8, in texture arrays of their own, rather than RGBA8. They're the planes of its movies
-  (Bink's Y and two chroma planes, 1280x720 and 640x360 for the intro and the music-video
-  venues, 512x512 and 256x256 behind the music library and other menus; linear, no mips), and
-  each of a movie's frames is new textures, decoded, sent and placed again
-  (`deferred_decode.h`). Their fetch's swizzle puts the byte, 0 or 1 in each of RGBA
-  (`guest_formats.h`'s `DecodeLevel8`; every plane seen has xxx1, 0xA00); R8 loads as (byte,
-  0, 0, 1), so the pixel shader rearranges what the game's sampler filtered from it by the
-  swizzle (`mesh.hlsl`'s `MapTexel`, as for DXN, coded by `R8ExpandCode` in
-  `PixelUniforms`' `pixel_flags.z` and `.w`): each component filtered on its own, and a
-  border one colour, that's the decoded texels filtered, bit for bit (the unit tests check
-  every swizzle through the CPU's copy of the sampler), and every swizzle has such a code, so
-  no k_8 texture stays RGBA. The same frames drawn with their planes kept as R8 and as RGBA
-  copies are byte-identical (the music library, the part choice, a music-video venue, its
-  controller dialog and the results after it). In 20th Century Boy in a music-video venue the texture
-  arrays went from 1205 to 357 MB and the process's video memory from 1585 to 732-754 MB; a
-  world frame's decode on the worker from 1.04 to 0.16 ms, its upload from 0.27 to 0.07 ms and
-  0.44 to 0.13 ms of the GPU's time, and the textures sent from 2.6 to 0.7 MB a frame (the
-  music library's 0.75 to 0.19, its arrays 232 to 137 MB). Growing the arrays for the intro
-  movie took frames 12.8 and 23.2 ms (512 MB and 1 GB of RGBA) and for a venue's movie 7.9 and
-  8.4 ms (341 MB); none of it now reaches the slow-frame log. The device's support for R8
-  arrays is checked once (logged if missing: RGBA, as with it off). Read as each texture is
-  placed, as `native_bc_textures` is; the CPU rasterizer and capture files decode RGBA from
-  the bytes when they need it (`EnsureRgba`). `native_view stats`' `capture` counts
-  `deferred_r8` (k_8 textures kept as bytes) and `deferred_r8_rgba` (those then decoded to
-  RGBA).
-- `native_deferred_decode_threads` (2): how many helper threads decode a frame's first-sight
-  textures and meshes with the worker (`deferred_decode.h`'s `GatherPending`, `DecodeHelpers`):
-  where those not yet decoded come to 4 MB or more of the game thread's copies (a song's first
-  frames and its camera cuts have 5 to 15 MB; a movie's planes, decoded again each of its
-  frames, 1.4 MB), each thread takes the biggest left until none are, the worker included,
-  and the frame waits for all of them. Each is still decoded once, by the same decoder (its
-  `call_once`), so the picture is the same; `deferred_decode_us` sums the threads' time. The
-  helpers start when first wanted and sleep on a condition variable between such frames (none
-  of their CPU in a 60 s slice of a song); perf_sample names them `band3 decode <n>`. 0 decodes
-  on the worker alone, as before. At 20th Century Boy's start (`songstart.b3t`), its four
-  first-sight frames' decode with 0, 2 and 3: 9.8, 14.1 to 14.7, 16.1 to 18.3 and 21.8 to 22.1
-  ms; 3.8, 5.0 to 5.6, 5.8 to 7.2 and 7.8 to 8.6; 2.9 to 3.0, 3.8 to 4.0, 5.2 to 5.9 and 6.1 to
-  6.3; the four frames' worker time in all 182 to 196 ms with 0, 150 to 165 with 2 and 156 to
-  158 with 3 (two runs each). 2 is the default: 3 decodes a millisecond or two less but leaves
-  the frames no shorter, and the Steam Deck's eight threads have the game's, the worker's, the
-  command processor's and the audio's busy. What's left of those frames is the planning's
-  render targets made (25 in 23 to 24 ms on the third), the world passes before the frame (35
-  to 37 ms on the first) and recording (17 to 35 ms on the fourth).
-- `native_view_premake_targets` (on): makes the textures RB3 draws into (outfits, faces, the
-  crowd, the spotlights' targets, shadow maps) as it loads them, rather than in the frame
-  that first draws into them, where each cost about a millisecond (a colour and a depth
-  texture, each a committed resource): a song's first camera cut to the band made 25 in one
-  frame, 23 to 26 ms of it. RB3 gives a rendered texture its surfaces in `DxTex::SyncBitmap`,
-  seconds before its first pass (the song's 25 four seconds before that cut); the capture's
-  hook announces it there and the worker makes it while it waits for a capture, up to four
-  at a time and 4 ms (`src/Render/target_premake.h`), at most 64 made ahead and not yet used
-  (unused ones go after 30 s as any target). One made ahead is undrawn, so it draws and
-  samples as one not yet made, and only targets a pass doesn't have are made, so the picture
-  is the same: 11 frames (render_song_evenodd's on a refracting venue and
-  render_screens_menus') drawn the same moment with targets made ahead and shared depths and
-  without had no pixel different. A soft-particle surface is made at the game's size and its
-  first pass remakes it, as before. Targets without depth (RndTex's kRenderedNoZ: most of
-  them, outfits and the spotlights' included) clear their depth at every pass and keep none,
-  so those of a size share one depth texture; one that loads depth never gets it, and one
-  whose type changes is made again. The slow-frame line says how many the frame found made
-  ahead ("N made ahead" in its walk) and how many were made since the frame before, unused
-  and shared depths; `by_kind` has `targets_premade`, `premade_used`, `premade_unused`,
-  `shared_depths` and `premake` (their milliseconds, between frames, not in `ms`). At 20th
-  Century Boy's start (four runs) the cut to the band went from 45 to 49 ms to 22 to 23 (24 of
-  its 25 targets made ahead; the 25th, announced 10 ms before, 0.4 ms), the first 1402-draw
-  frame's 8 targets (8 ms) to 2 or 3 (0.8 to 1.2 ms, the soft-particle surfaces), and in
-  its 60 s slice the process's video memory from 552 to 557 MB to 533 to 536 (the shared
-  depths; targets 35 MB at most); a song announces about 70.
-- `native_view_premake_arrays` (on): makes the texture arrays the textures RB3 loads will go
-  in as it loads them. Textures share an array per size class and format
-  (`gpu_view.cpp`'s `PlaceTexture`), the first one 4 MB, made when the first texture of its
-  class is drawn: a song's first frame made 19 (11.5 to 12.3 ms of its world passes before
-  it), a cut a few more. `DxTex::SyncBitmap` sees each texture as it loads, with its size and
-  format, 0.1 to 0.2 s before the frame that first draws it (a song's 240 in the last 0.2 s
-  of its loading screen); the hook announces each kind once and the worker makes the class's
-  first array if it has none, as `PlaceTexture` would, in the format the texture will be
-  kept in (`native_bc_textures`, `native_r8_textures`), sharing `native_view_premake_targets`'
-  budget between frames and coming back after 2 ms rather than 100 while some are left. That
-  predicted 20 of the song's first frame's 21 arrays and 2 it didn't use, and 15 to 30 of
-  each render check frame's, missing one at most (a texture its fetch keeps RGBA). One made
-  ahead and unused goes after 10 s, then as an empty array does. The arrays are made and
-  given out the same either way, so the picture is: the 11 frames above drawn the same moment
-  from no arrays, with them made ahead and without, had no pixel different. At 20th Century
-  Boy's start (four runs) the song's first frame went from 35 to 39 ms to 23 to 27 (its world
-  passes from 24 to 25 to 13 to 15), and its four first-sight frames from 115 to 127 ms in
-  all to 92 to 106 (168 to 180 before the pools were warmed and targets made ahead); the
-  process's video memory in its 60 s slice stayed 536 to 539 MB.
-
-`native_view stats`' `by_kind` splits the live view's frames by what they drew under
-even/odd rendering (`frame_compose.h`'s `FrameKind`): `world` (the game drew the world; the
-native renderer shows the kept post buffer and draws the world's texture passes and the
-overlay), `post` (the world frame's world composed in, drawn and post-processed), `between`
-(neither, at a background rate below half the game's) and `full` (everything, or a frame
-that doesn't say). Each kind has `rendered`, `skipped_busy` (captures skipped while one of
-its frames was drawn), `ms` and `wait_ms`, and per frame drawn the worker's parts
-(`parts_ms_per_frame`), what it drew, sent, made and let go of and what the GPU kept after
-(`per_frame`), what capturing it cost the game's thread (`capture`), and the most the GPU
-kept after one (`peak`); with `native_gpu_timestamps`, the frames timed (`gpu_timed`), the
-GPU's milliseconds by part per frame timed (`gpu_ms`) and each frame's busy total
-(`gpu_total_ms`). Since only post frames draw the world, the native renderer keeps
-the geometry and textures a frame drew for a world period and a little more (`gpu_view.h`'s
-residency) before letting them go. RB3 stops drawing a character while it's out of the shot,
-so a camera cut back to it would make its render targets and send its textures and meshes
-again (12 to 25 ms at 120 Hz). Render targets keep their textures until they've gone 30 s
-unused, and in a song (from its loading screen until its results are left) so do the meshes
-and textures drawn in more than one world; outside a song, what the menus draw goes as
-before, so their texture arrays empty while a song loads (arrays never shrink). `by_kind`
-also counts the frames whose planning took over 8 ms (`plan_spikes`, `plan_spikes_at_cut`),
-and `camera` the cuts seen.
+  frames slower than 100 ms, with where the time went.
 
 ## Filling the window
 
@@ -377,105 +109,50 @@ tab), the native renderer has it draw at the window's shape instead, with no bla
 - A taller one (16:10, 4:3) shows more above and below, at 16:9's width.
 - The HUD, the highways and the menus keep their size and shape in the middle 16:9; with
   more players the highways stay there too.
+- Menu art drawn a little past 16:9's edges (the player bar, header banners, the results
+  banner) is stretched out to the window's edge. The song list is the exception: it looks as
+  it does at 16:9, with the background at the sides.
 
-It changes what the game's cameras see, not the picture after: RB3 builds each camera's
-projection from its vertical field of view and `Rnd::YRatio` (height over width, 9/16), so
-band3 gives `YRatio` the window's height over width, and for a window taller than 16:9 widens
-each perspective camera's vertical field of view while the projection is built
-(`src/Hooks/aspect.cpp`, the numbers in `src/Hooks/aspect_model.h`). The game culls with the
-same frustum, so nothing is missing at the new edges. A camera built for another shape is
-rebuilt the next time it draws, so resizing the window, the setting and F8 apply at once (the
-log says `fill window: the game's cameras at <w>x<h>`, or `at 16:9`).
+It changes what the game's cameras see, so nothing is missing at the new edges, and resizing
+the window applies at once. Only the native renderer's picture fills the window: the emulated
+GPU's stays 16:9, letterboxed or stretched by `present_letterbox`. The test harness's 1280x720
+windows keep the render checks at 16:9.
 
-Only the native renderer's picture fills the window. The emulated GPU draws the game's
-1280x720, so while its picture shows (`renderer` emulated, or F8 under `both`) the game's
-cameras stay 16:9, letterboxed or stretched by `present_letterbox` as before. The test
-harness's windows are 1280x720, so the render checks see the game's own 16:9.
-
-Much of RB3's menu art was drawn a little past 16:9's edges, for TVs that cut the picture's
-edges off: the player bar along the bottom, the screens' header banners, the bars behind
-submenu titles, the song list's rows, the results banner. In a wider or taller window that
-art would stop short of the window's edge, so the native renderer moves the vertices of the
-overlay's draws (menus and HUD, drawn after the world) that lie past the game's 16:9 out to
-the window's edge: the part past 16:9 stretches, what's inside it stays as it is
-(`RasterOptions::overlay_edge`, `mesh.hlsl`'s `StretchEdges`). It leaves the world's draws,
-a camera's with a screen rect of its own (the tracks with more players) and the game's
-full-screen quads alone, and in a song it works across only: the HUD under the track (the
-player's name) runs past 16:9's bottom by design, and a taller window shows it whole.
-
-The song list (`song_select_screen`, Play a Show's too) is the exception: its rows run off a
-16:9 screen's left edge, and stretched out to a wider window's edge the selected row's tab
-would become a long slab. There the draws lying between the "viewing all ... songs" bar and
-the hint bar are cut where a 16:9 screen cuts them instead (`RasterOptions::overlay_cut`,
-`aspect_model.h`'s `kSongListCut`), so the list looks as it does at 16:9 and the side shows
-the background; the bars above and below it, and the player bar, still span the window.
-
-All 32 venues were checked at 32:9 (`forced_venue`, intros and play): each fills the
-window, with nothing missing at its edges. Not right yet: one orthographic camera draws to
-the screen (the rest are perspective); it isn't widened, and what it draws hasn't been
-identified.
+All 32 venues were checked at 32:9. Not right yet: one orthographic camera draws to the
+screen; it isn't widened, and what it draws hasn't been identified.
 
 ## Renderer native: no emulated GPU
 
-With `renderer` native band3 doesn't load the emulated GPU at all. On Windows it presents on
-the SDK's Direct3D 12 device, which the native renderer draws on, zero-copy; on Linux it
-presents through the SDK's Vulkan presenter, each frame read back and uploaded: SDL_gpu and
-the SDK each make their own Vulkan device, so the presenter can't sample the native
-renderer's frames in place. With `native_upload_pipeline` (on) the next frame is recorded
-while the GPU draws and reads back the one before, and the presenter waits for the vertical
-blank (FIFO), as Direct3D 12's does. The
-game still sends its GPU commands and waits on what the GPU does with them, so band3's
-sync-only GPU (`src/Render/sync_gpu/`) reads them and does only what the game waits on: the
-fences, the swap's interrupt, the vertical blanks, the occlusion queries' results (which
-band3 then replaces with its own counts, `native_query_sample_count`), the read pointer and
-the display gamma ramp. It draws nothing; the native renderer is the only picture, on the
-SDK's presenter with its overlays (F3, band3's menus and the rest).
+With `renderer` native band3 doesn't load the emulated GPU at all. The native renderer is the
+only picture, on the SDK's presenter with its overlays (F3, band3's menus and the rest).
+band3's sync-only GPU (`src/Render/sync_gpu/`) answers what the game waits on, such as fences
+and vertical blanks, and draws nothing.
 
 - `emulated_gpu_while_native` doesn't apply, and F8 only logs that it needs `both`.
-- `compress_character_textures` is ignored (logged once). Compressing reads the outfits
-  back from guest memory, where with no emulated GPU nothing draws them: a created
-  character's outfit and skin came out black.
-- In the test harness, `screenshot` is the native renderer's picture and `screenshot
-  emulated` an error; `capture` holds a frame at once, with `<name>.png` at the window's
-  size, `<name>.gpu.png` at 1280x720, and `emulated` `none`. `native_view stats` has
-  `emulated_gpu.present` false and the sync-only GPU's numbers (`sync`).
-- The log's `sync gpu:` lines show the ring the game set up, a summary every 10 s (packets
-  by opcode, waits, interrupts, swaps, vblanks, fences, anything unknown) and a warning when
-  the game has waited on the GPU for 2 s. The summary sorts the waits that stalled by their
-  packet's wait interval: `yield` (under 0x100: polls again at once, unless
-  `native_sync_short_wait_us` is set), `sleep` (0x100 to 0xFFF: sleeps the interval / 0x100
-  ms between polls) and `long_sleep` (0x1000 and up).
-- A GPU hang ends band3 (with the crash trace): there's no emulated GPU's device recovery to
-  fall back on.
-- While the window is minimized the native renderer draws nothing (a harness `screenshot`
-  still gets a frame). Restored, it shows the last frame drawn until the next whole one, a
-  frame or two later. The log says when it pauses and resumes; `native_view stats` has
-  `paused`, `paused_ms` and `paused_captures`. Under `both` it draws on while minimized.
-- With the frame cap on (the default) the vertical blank runs every millisecond and the cap
-  paces the game; with it off, the vertical blank paces the game at
-  `video_mode_refresh_rate`, unless `native_vblank_free_running` is on.
-- `python tools/perf_sample.py --pid <pid> --seconds 20` samples a run's CPU, GPU use and
-  video memory from outside once a second, which sees either GPU's work, and each thread's
-  CPU; its docstring has the options.
+- `compress_character_textures` is ignored: with nothing drawing the outfits in guest memory, a
+  created character's outfit and skin came out black.
+- A GPU hang ends band3, with the crash trace: there's no device recovery to fall back on.
+- While the window is minimized nothing is drawn; restored, the next whole frame shows a frame
+  or two later. Under `both` it draws on while minimized.
+- With the frame cap on (the default) the cap paces the game; off, the vertical blank paces it
+  at `video_mode_refresh_rate`, unless `native_vblank_free_running` is on.
+- In the test harness, `screenshot` is the native renderer's picture and `screenshot emulated`
+  an error; `capture` holds a frame at once (`<name>.png` at the window's size,
+  `<name>.gpu.png` at 1280x720, `emulated` `none`). `native_view stats` has
+  `emulated_gpu.present` false, the sync-only GPU's numbers (`sync`) and the minimized pauses
+  (`paused`, `paused_ms`, `paused_captures`).
+- The log's `sync gpu:` lines show the game's GPU traffic, with a warning when the game has
+  waited on the GPU for 2 s.
+- `python tools/perf_sample.py --pid <pid> --seconds 20` samples a run's CPU, GPU use and video
+  memory once a second, per thread; its docstring has the options.
 
 ## Render checks
 
-The native view (F9, experimental) draws the game's frames itself, from a capture of
-what RB3 drew: on the GPU, or on a reference CPU rasterizer. It draws RB3's shading
-(point, box and projected lights, characters' self-shadows, normal and detail maps),
-its textures as the game's samplers read them, the passes RB3 draws into textures (outfit
-composites, the crowd's impostors, shadow maps, NgLight's projected shadow, heads' normal
-maps, blurs), its post-processing (motion blur, depth of field, bloom or glare, the
-spotlights' beams and haze, soft particles such as stage smoke, the colour matrix) and,
-last, the display's gamma ramp. Render checks set its picture against the game's.
-
-Its settings are on the in-game settings' Advanced tab (Native renderer), each described there: `native_view_backend` (`gpu`,
-the default, or `cpu`, the reference rasterizer, which the GPU falls back to when it can't
-start); `native_view_record_targets`, which records the passes RB3 draws into textures even
-while the native view is off (render checks need it from launch, as RB3 composes a band's
-outfits once, in the main menu; always on once `renderer` has been native in the session);
-and `native_view_rt_fallback`, `native_view_normal_maps`, `native_view_texture_filtering`
-and `native_view_capture_profile`.
+The native view (F9, experimental) draws the game's frames from a capture of what RB3 drew,
+on the GPU or on a reference CPU rasterizer: its shading, textures, texture passes (outfits,
+the crowd, shadow maps), post-processing and the display's gamma ramp. Render checks set its
+picture against the game's. Its settings are on the in-game settings' Advanced tab (Native
+renderer), described in the [settings reference](settings-reference.md#native-renderer-1).
 
 Launch render checks with:
 
@@ -485,48 +162,27 @@ python tools/band3ctl.py run tests/game/boot.b3t
 python tools/band3ctl.py run tests/game/render_song.b3t
 ```
 
-`--renderer=emulated` has the emulated GPU draw the window, as its picture is the reference.
-The checks hold under `both` too (`capture` has the emulated GPU draw whole frames first),
-but guest memory's copies of the texture passes are stale there (no `--rt-guest`). Under
-`native` there's no emulated picture to check against: see
-[below](#render-checks-without-the-emulated-gpu).
+| Flag | Why |
+|---|---|
+| `--renderer=emulated` | the emulated GPU's picture is the reference. `both` works too, but guest memory's copies of the texture passes are stale there (no `--rt-guest`); for `native`, see [below](#render-checks-without-the-emulated-gpu) |
+| `--native_view_record_targets=true` | RB3 composes a band's outfits once, in the main menu, so they must be recorded from launch |
+| `--test_random_seed=21` | the same band and shot categories on every launch and machine (0, the default, is off). Poses and camera angles still vary a little. With 21, Futurama's Fry plays guitar in the render songs' 25 s capture |
+| `--async_shader_compilation=false` | the emulated GPU skips draws whose pipeline isn't compiled yet, which can leave black outfits for the session |
+| `--readback_resolve=full` (optional) | guest memory holds right copies of the texture passes, for replay's `--rt-guest` and `--dump-tex`. Leave it off for `render_song_evenodd.b3t` |
 
-`--readback_resolve=full` isn't needed, but with it guest memory holds right copies of what
-RB3 draws into textures, to compare against (replay's `--rt-guest` and `--dump-tex`).
+The scripts:
 
-`--async_shader_compilation=false` matters because the emulated GPU skips a draw whose
-pipeline isn't compiled yet, and RB3 composes each band member's outfits only once: the
-game's own picture can keep black outfits for the session, differently on each run.
+| Script | Captures |
+|---|---|
+| `render_song.b3t` | four points through a song, even/odd rendering off (every frame draws everything) |
+| `render_song_evenodd.b3t` | the same with even/odd rendering on, as the game ships; `capture <name> composed` fails unless the capture is a post frame with the world frame's world in front of its overlay |
+| `render_song_live.b3t` | the live view's cost with `native_view on` (native renderer off) |
+| `render_screens_boot.b3t`, `_menus`, `_song` | run in that order from a fresh launch (instead of `boot.b3t`): `screen-<kind>` on each kind of screen RB3 shows, from the boot logos to the results |
+| `render_screens_more.b3t` | after `boot.b3t`: the rest that work offline (character creator, goals, Play a Show, calibration, drum trainers and lessons) |
+| `render_multiplayer.b3t` | a song with guitar and drums (`screen-mp2-<kind>`) |
+| `render_multiplayer4.b3t` | four parts, the mics' test tone singing through Rock Band 3 Deluxe's All Instruments Mode (`screen-mp4-<kind>`; its header has the launch) |
 
-`--test_random_seed=<n>` (0, the default, is off) seeds RB3's random numbers, so the same
-seed gives the same band and shot categories on every launch and machine. Poses and camera
-angles still vary a little, as animations and particles draw random numbers as the frame
-timing gives. With seed 21, Futurama's Fry (a cel-shaded Deluxe character) plays guitar in
-the render songs' 25 s capture.
-
-`tests/game/render_song.b3t` plays a song with even/odd rendering off (every frame draws
-everything) and captures four points through it. `render_song_evenodd.b3t` does the same
-with it on, as the game ships: each capture is a post frame with the world frame's world in
-front of its overlay, and `capture <name> composed` fails if it isn't; launch it without
-`--readback_resolve=full`. `render_song_live.b3t` measures the live view's cost with
-`native_view on` (with the native renderer off).
-
-`render_screens_boot.b3t`, `render_screens_menus.b3t` and `render_screens_song.b3t`, run
-in that order from a fresh launch (instead of `boot.b3t`), capture `screen-<kind>` on each
-kind of screen RB3 shows: the boot logos, the intro movie, the title, the first-run
-prompts, the band, closet and main menus, practice, the music library, a song's loading
-vignette, the song, its pause menu, a music-video venue, a controller's disconnect
-dialog and the results. `render_screens_more.b3t` (after `boot.b3t`) captures the rest
-that work offline: the character creator and its face maker, the career's goals, Play a
-Show and its setlists, the calibration screens, and on drums the trainers and a drum
-lesson. `render_multiplayer.b3t` plays a song with two players (guitar and drums,
-`screen-mp2-<kind>`), and `render_multiplayer4.b3t` with four parts (guitar, drums, keys,
-and the USB mics' test tone singing through Rock Band 3 Deluxe's All Instruments Mode,
-`screen-mp4-<kind>`; its header has the launch).
-
-Besides the frame's draws and texture passes, a capture keeps the characters' shadow-map
-passes, NgLight's shadow casters, texture passes cleared but drawn into by nothing, and the
-display's gamma ramp. `capture`'s reply:
+`capture`'s reply:
 
 | Field | |
 |---|---|
@@ -550,12 +206,12 @@ With `native_view_texture_filtering` on, `<name>.gpu.nearest.png` is the same ca
 with it off. `<name>.gpu.alpha.png` and `<name>.gpu.depth.png` are the GPU's scene target
 before the overlay: its alpha (the bloom weight RB3's shaders write) and its depth, as grey.
 
-`out/native_view_replay.exe <name>.cap out.png [options]` draws a capture on the CPU
-(`tools/native_view_replay/replay.cpp`; its header has the build command and every option,
-for dumping textures and targets, finding the draw behind a pixel, or leaving out
-post-processing, shadows, lighting and the like). It prints `post:`, `check:` and `gamma:`
-lines (what post-processing was set to do, whether RB3's composite constants agree, the
-ramp), and `--compare` and `--diff` a `metrics:` line. The main options:
+### Replay and grading
+
+`out/native_view_replay.exe <name>.cap out.png [options]` draws a capture on the CPU. Its
+header (`tools/native_view_replay/replay.cpp`) has the build command and every option. It
+prints `post:`, `check:` and `gamma:` lines, and with `--compare` or `--diff` a `metrics:` line.
+F9's window has the same switches for the live view.
 
 | Replay option | |
 |---|---|
@@ -564,26 +220,22 @@ ramp), and `--compare` and `--diff` a `metrics:` line. The main options:
 | `--scale <f>` | draws as the native renderer draws a window f times 720 lines tall: `--scale 1.5 --diff <name>.gpu.presented.png` for a 1080-line window |
 | `--list` | the passes and every draw: mesh, material, where it lands, what its shader was given |
 
-F9's window has switches like replay's for the live view.
+- `tools/parity.py` grades captures against the game. Copy `<name>.cap`, `<name>.png` and
+  `<name>.gpu.png` from `screenshots/` into `out/parity` and run it. Each capture gets `cpu`,
+  `gpu` and `gpu-cpu` rows, graded Tier A (parity) or Tier B (acceptable); `--baseline <file>`
+  exits 1 when a mean got worse.
+- `tools/pairs.py` measures F8 pairs: the native picture and, after F8, the emulated one. With
+  the game launched `--renderer=both`, `window offscreen` at `window size 1280x720`, on a still
+  moment, run `python tools/pairs.py out/pairs --take title --port <port>`. A pair passes at a
+  mean of 3 or less with no 4x4 cell over 20.
 
-`tools/parity.py` grades a set of captures against the game: copy `<name>.cap`, `<name>.png`
-and `<name>.gpu.png` from `screenshots/` into `out/parity` and run it. Each capture gets a
-`cpu` row (the CPU's drawing against the game), a `gpu` row (the GPU's) and a `gpu-cpu` row
-(the two against each other), graded Tier A (parity) or Tier B (acceptable);
-`--baseline <file>` exits 1 when a mean got worse. Its docstring has the tiers and options.
-
-`tools/pairs.py` measures F8 pairs: the native renderer's picture and, after F8, the
-emulated GPU's, as a player switching sees them. With the game launched `--renderer=both`,
-its window `window offscreen` at `window size 1280x720`, on a still moment (a menu, a
-paused song), `python tools/pairs.py out/pairs --take title --port <port>` takes a pair
-and measures it; a pair passes at a mean of 3 or less with no 4x4 cell over 20. Its
-docstring has the rest.
+Each tool's docstring has its tiers, thresholds and options.
 
 ### Render checks without the emulated GPU
 
-With `renderer` native there's no emulated picture in the run, so the render scripts run
-twice on the same launch line but for the renderer: R, the reference, on the emulated GPU,
-and N without it (the four-part script's launches add `--usb_mics=true
+With `renderer` native there's no emulated picture to check against, so each render script
+runs twice with the same launch line apart from the renderer: R, the reference, on the
+emulated GPU, and N without it (the four-part script adds `--usb_mics=true
 --usb_mic_test_tone=220`):
 
 ```
@@ -594,23 +246,21 @@ python tools/band3ctl.py launch --fresh -- --renderer=native --native_view_recor
 python tools/band3ctl.py run tests/game/render_screens_boot.b3t | tee out/n7/ab/menus/N/run.log
 ```
 
-then each run's `screenshots/` copied into its directory (`out/n7/ab/<set>/R` and
-`.../N`); the run.log keeps each capture's reply. In R, `<name>.png` is the emulated GPU's
-picture and `<name>.gpu.png` the native renderer's drawing of the capture. In N,
-`<name>.png` is the native renderer's own picture at the window's size and
-`<name>.gpu.png` its drawing of the capture at 1280x720: the one to set against R's
-`<name>.png`. After each capture the scripts take `screenshot <name>-again` a command
-later, which in R shows what moved by itself in that moment. The two runs are two moments
-of the same game (the seed fixes the band and the shots, not every frame), so they're
-checked four ways (each tool's docstring has its checks and thresholds):
+Copy each run's `screenshots/` into its directory (`out/n7/ab/<set>/R` and `.../N`).
 
-- `tools/capdiff.py N R`: each capture holds what R's does (the texture passes, the draws,
-  within 10% on a screen that moved by itself, the render targets, the post-processing and
-  gamma ramp, the capture replies); exits 1 on a difference that matters.
-- `tools/parity.py --set N`: N against itself, `gpu-cpu` at 0.5 or less and `cpu` (the
-  replay of N's capture against N's own picture) at a mean of 1 or less.
-- `tools/pairs.py --cross N R`: N's `<name>.gpu.png` against R's `<name>.png`, leaving out
-  what moved by itself between R's `<name>.png` and `<name>-again.png`; a still screen
-  passes at Tier A, a moving one at Tier B or better within 1 of what R's own drawing
-  reaches. Exits 1 if any doesn't.
+- In R, `<name>.png` is the emulated GPU's picture and `<name>.gpu.png` the native renderer's
+  drawing of the capture.
+- In N, `<name>.png` is the native renderer's own picture at the window's size and
+  `<name>.gpu.png` its drawing at 1280x720: the one to set against R's `<name>.png`.
+- `<name>-again.png`, taken a command after each capture, shows in R what moved by itself.
+
+The two runs are two moments of the same game, so they're checked four ways:
+
+- `tools/capdiff.py N R`: each capture holds what R's does (passes, draws, render targets,
+  post-processing, replies); exits 1 on a difference that matters.
+- `tools/parity.py --set N`: N against itself, `gpu-cpu` at 0.5 or less and `cpu` at a mean
+  of 1 or less.
+- `tools/pairs.py --cross N R`: N's `<name>.gpu.png` against R's `<name>.png`, leaving out what
+  moved by itself; still screens pass at Tier A, moving ones at Tier B or better. Exits 1 if
+  any doesn't.
 - `tools/parity.py --set R`: R as every render check.

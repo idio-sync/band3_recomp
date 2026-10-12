@@ -1028,7 +1028,8 @@ TEST_CASE("the launcher's table is consistent") {
         const Setting* s = FindSetting(table, online);
         REQUIRE(s);
         CHECK(s->tab == Tab::kOnline);
-        CHECK(s->windows_only);
+        // Linux too, since Liveless played there (a Steam Deck)
+        CHECK_FALSE(s->windows_only);
     }
     CHECK(FindSetting(table, "gocentral_address")->shown_when.cvar == "gocentral");
     for (const char* needs_liveless : {"liveless_connect", "liveless_external_ip", "liveless_port"}) {

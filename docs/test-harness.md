@@ -22,42 +22,30 @@ python tools/band3ctl.py window onscreen      # on the primary monitor, unfocuse
 python tools/band3ctl.py window shot out.png  # what the window presents, overlays and all
 ```
 
-`launch` starts the game minimized without taking focus (`--show` to watch it) and muted
-(`--sound` to hear it), with its own saves in `out/test_user_data`, so tests never touch
-your profile. A `.b3t` script is these commands one per line, with `#` comments; `run`
-stops at the first one that fails, saves a screenshot of the moment and exits 1. Commands
-joined with `;` share one connection, which `hold` needs: band3 lets go of everything held
-when a client disconnects.
+A `.b3t` script is these commands one per line, with `#` comments. `run` stops at the first
+one that fails, saves a screenshot of the moment and exits 1. Commands joined with `;` share
+one connection, which `hold` needs: band3 lets go of everything held when a client
+disconnects.
 
-`test_port` also keeps the launcher away unless `--launcher` asks for it: `launch --
---launcher` shows it, and `launch` waits for the window, since nothing answers on the port
-until the launcher's Play starts the game; the window commands below drive it. `launch
---no-harness -- --launcher` shows it without `test_port` at all.
+**`launch`** starts the game minimized without taking focus and muted, with its own saves in
+`out/test_user_data`, so tests never touch your profile.
 
-`launch --config <file>` starts band3 with that file as the `band3.toml` beside the exe,
-and puts back what was there (moved aside to `band3.toml.band3ctl`) once the harness
-answers. It refuses `--no-harness` and `--launcher`, since the launcher would then save
-into the player's own file; put the file beside the exe by hand for that. The command
-line's `--user_data_root` wins over the file's. `python tools/test_config_file.py` uses it
-to check that a `band3.toml` from the launcher's writer reaches the game, each value
-winning over a `band3_config.ini` that sets it otherwise. It needs the unit tests built
-(for `band3_write_config`), and runs band3 from a temporary folder.
+| Option | |
+|---|---|
+| `--show`, `--sound` | watch it, hear it |
+| `-- --launcher` | shows the launcher, which `test_port` otherwise skips; `launch` waits for the window, and the `window` commands drive it. `--no-harness -- --launcher` shows it without `test_port` at all |
+| `--config <file>` | uses that file as the `band3.toml` beside the exe, putting back what was there (moved to `band3.toml.band3ctl`) once the harness answers. Refuses `--no-harness` and `--launcher`, which would save into the player's own file. The command line's `--user_data_root` wins over the file's |
+| `-- --renderer=emulated` or `both` | the game starts on its default renderer (on Windows the [native renderer](native-renderer.md) alone, where `screenshot emulated` is an error). Under `both`, `bind renderer` (F8) switches the picture and `screenshot`'s reply says which it took. `set renderer` switches between `emulated` and `both` at once; to or from `native` it applies at the next launch |
 
-The game starts on its default renderer: on Windows the [native renderer](native-renderer.md)
-alone, so `screenshot` and `capture` take its picture and `screenshot emulated` is an error.
-Add `-- --renderer=emulated` to `launch` for the emulated GPU alone, as the render scripts
-do, or `-- --renderer=both` for the two side by side, where `bind renderer` (F8) switches
-the picture and `screenshot`'s reply says which it took. `set renderer` switches between
-`emulated` and `both` at once; to or from `native` it applies at the next launch
-([choosing the renderer](native-renderer.md#choosing-the-renderer)).
+`python tools/test_config_file.py` uses `--config` to check that a `band3.toml` from the
+launcher's writer reaches the game and wins over `band3_config.ini`. It needs the unit tests
+built (for `band3_write_config`).
 
-`window` works on the game's window itself rather than through the harness, and never
-activates it. A window launched minimized never paints, so `window offscreen` restores it to
-the right of every monitor, where it paints unseen. `window onscreen` restores or moves it
-to the top left of the primary monitor, unfocused, for pacing that a monitor's vertical
-blank drives (`present_stats` can't measure that off every monitor). **It puts the game on
-the user's screen**: ask first on a machine someone is using, and `window offscreen` or
-`window minimize` it once done.
+**`window`** works on the game's window itself, not through the harness, and never activates
+it. A minimized window never paints, so `window offscreen` restores it off to the right of
+every monitor, where it paints unseen. `window onscreen` moves it to the primary monitor, for
+pacing a real vertical blank drives. **That puts the game on the user's screen**: ask first on
+a machine someone is using, and `window offscreen` or `window minimize` it once done.
 
 | Command | |
 |---|---|
@@ -93,12 +81,14 @@ the user's screen**: ask first on a machine someone is using, and `window offscr
 | `port_mapping_status [<field>=<value>\|<field>!=<value>\|<field>~<text>]...` | Liveless' [port mapping](integrations.md#port-mapping), in `port_mapping`: `state`, `method` (`pcp`, `natpmp`, `upnp`), `external_ip`, `port`, `lease_s` (0 for a permanent UPnP mapping) and `error`. Checks as `rooms_status`'s: `port_mapping_status state=mapped method=pcp` |
 | `quit` | |
 
-`window` subcommands: `shot <png>` saves the client area as the window presents it, the
-SDK's overlays included (`screenshot` is the game's picture alone); `size <W>x<H>` sets the
-client area in physical pixels, kept no bigger than the monitors (`clamped` in the reply);
-`minimize` minimizes it again, to restore onto the primary monitor; `click <X>,<Y>` clicks
-there (client pixels) with posted messages, without focus or the real cursor, for the
-launcher's buttons (it has to be `offscreen` to see them); `status` prints where it is.
+| `window` subcommand | |
+|---|---|
+| `offscreen`, `onscreen` | as above |
+| `shot <png>` | the client area as the window presents it, the SDK's overlays included (`screenshot` is the game's picture alone) |
+| `size <W>x<H>` | the client area in physical pixels, kept no bigger than the monitors (`clamped` in the reply) |
+| `minimize` | minimizes it again |
+| `click <X>,<Y>` | clicks there (client pixels) with posted messages, without focus or the real cursor, for the launcher's buttons (`offscreen` first) |
+| `status` | where it is |
 
 ### native_view stats
 
@@ -111,11 +101,11 @@ launcher's buttons (it has to be `offscreen` to see them); `status` prints where
 | `paused`, `paused_ms`, `paused_captures` | with `renderer` native, the pause while the window is minimized |
 | `game_frames`, `game_fps` | the game's own, since the last `on` or `off` |
 | `rt_recording` | whether `native_view_record_targets` is on, and the texture passes the game drew while capture was off: how many were recorded, their draws, and the game thread's `ms` recording them |
-| `capture` | what capturing cost the game's thread per game frame: `ms_per_frame` by hook (`mesh`, `multimesh`, `particles`, `rect`, `pass`, `present`, `other`), `us_per_draw`, counts `per_frame`, the caches' `sizes`, and with `native_view_capture_profile` on `steps_ms_per_frame`. Of the counts, `geom_copy_bytes` and `tex_copy_bytes` are the meshes' buffers and the textures' levels the game's thread copied out of guest memory where it saw them first or changed, to be decoded off it (`src/Render/deferred_decode.h`), `tex_decode_bytes` the RGBA it decoded itself (a render target's guest pixels, the noise map), and `deferred_decodes`, `deferred_decode_us` and `deferred_decode_bytes` (decoded Vertex, index and RGBA bytes) what the copies cost whoever took a capture with them first, the native renderer's worker or a `capture`: not the game's thread; of those, `deferred_bc_blocks` the block-compressed textures kept as blocks for the GPU (`native_bc_textures`; their bytes the blocks'), `deferred_bc_swizzled` those decoded to RGBA for a swizzle, and `deferred_bc_rgba` those kept as blocks whose RGBA something asked for after; `deferred_r8` the k_8 textures (movie planes) kept as their bytes for the GPU's R8 (`native_r8_textures`) and `deferred_r8_rgba` those whose RGBA something asked for after. `by_kind`'s `capture` has the game thread's three by kind of frame |
+| `capture` | what capturing cost the game's thread per game frame: `ms_per_frame` by hook, `us_per_draw`, counts `per_frame` (bytes copied and decoded, textures kept compressed or as R8) and the caches' `sizes`; with `native_view_capture_profile` on, `steps_ms_per_frame`. [Every field](dev/native-renderer-internals.md#native_view-stats-fields-in-full) |
 | `emulated_gpu` | `mode` (`emulated_gpu_while_native`'s while the native picture shows, `full` otherwise), `skip_mode`, `skipping`, `fresh` (its picture is the game's), `frames` and `frames_skipped`; the calls `emitted_per_frame`, `skipped_per_frame` and `kept_per_frame` by emitter (`begin_indexed`, `indexed`, `instanced`, `up`, `clear`, `resolve`); `passes_dropped` under `swap_only`; `cp_ms_per_frame`, its command processor thread's CPU (-1 off Windows). With `renderer` native, `present` false and `sync` |
 | `sync` | the sync-only GPU per game frame: `packets_per_frame`, `opcodes_per_frame` (the eight most sent), `draws_skipped_per_frame`, `waits_per_frame`, `stalled_waits`, `wait_ms_per_frame`, `wait_max_ms`, `stalled_by_interval` and `wait_intervals` (as the log's [summary](native-renderer.md#renderer-native-no-emulated-gpu)), `interrupts`, `swaps`, `vblanks`, `fences_per_frame`, `zpd_writes`, its threads' CPU (`sync_ms_per_frame`, `vblank_ms_per_frame`), and `unknown_opcodes`, `unknown_registers`, `bad_packets`, `bad_addresses` (0 expected) |
 | `camera` | the frames drawn at a camera cut (`cuts`), where RB3's motion blur's shot frame count started over (`vel_resets`), and the cuts such a reset followed (`cuts_confirmed`) |
-| `by_kind` | the same frames by what they drew under even/odd rendering ([native renderer](native-renderer.md)); `{}` while it's off. Each kind's `parts_ms_per_frame` has `decode` (the worker decoding what capture left it to, at first sight of a song's or a shot's content; in `ms` too) and planning's parts too (`plan_setup`, `plan_walk`, `plan_targets`, `premake` (render targets and texture arrays made ahead between frames, `native_view_premake_targets` and `native_view_premake_arrays`: not in the total), `plan_arrays`, `plan_arena`, `plan_reserve`, and record's `post_plan`, `acquire` (getting its command buffers from SDL_gpu), `first_draw` (their first draws, where SDL takes their descriptor heaps), `draw_slow` (later draws over 0.05 ms: another heap pair) and `uniform_slow` (pipeline binds and uniform pushes over 0.05 ms: SDL making a uniform buffer)), which don't add up to the total, the world passes' before the frame (in `pre`: `pre_plan`, `pre_walk`, `pre_targets`, `pre_arrays`, `pre_upload`, `pre_record`, `pre_acquire`, `pre_first_draw`, `pre_draw_slow`, `pre_uniform_slow`, `pre_submit`, `pre_wait`), and `submit`, every submission of the frame's command buffers (those before its end are in `record` too); `per_frame` has the command buffers submitted (`submits`: one, and one more at each texture pass with mips and, with `native_view_submit_points`, at the resolve), `acquires`, `uniform_slow` and `draw_slow` (those slow calls), the world passes' `pre_submits`, `pre_targets_made` and `pre_arrays_grown`, the render targets made (`targets_made`, `targets_returning`), found made ahead (`premade_used`), made ahead between frames (`targets_premade`), made ahead and not yet used (`premade_unused`) and the depth textures targets without depth share (`shared_depths`), texture arrays made ahead between frames (`arrays_premade`, `native_view_premake_arrays`) and those given their first texture (`arrays_premade_used`), forgotten (`evicted_rts`) and released (`rts_released`), the textures and meshes drawn for the first time, the arrays grown, an arena rebuild's meshes copied on the GPU (`arena_copied`), what was let go early for room (`textures_pressured`, `meshes_pressured`) and kept by the 30 s alone (`meshes_by_time`, `textures_by_time`, in a song), and `rts_mb`; `plan_max_ms` the most each part took; `plan_spikes` the frames whose planning took over 8 ms, every one, and `plan_spikes_at_cut` those at a camera cut or up to 2 game frames after; with `native_gpu_timestamps` (Direct3D 12) also `gpu_timed` (the frames with GPU timings), `gpu_ms` (the GPU's milliseconds by part, per frame timed; `idle` is the GPU waiting for the CPU between command buffers), `gpu_total_ms` (each frame's busy total, all but `idle`) and `gpu_marks_dropped`/`gpu_bad_spans` (0 when all went well) |
+| `by_kind` | the same frames by what they drew under even/odd rendering (`world`, `post`, `between`, `full`); `{}` while it's off. Each kind has the worker's time by part (`parts_ms_per_frame`), what it drew, made and let go of (`per_frame`), the slowest parts (`plan_max_ms`), planning spikes, and with `native_gpu_timestamps` the GPU's time by part (`gpu_ms`). [Every field](dev/native-renderer-internals.md#native_view-stats-fields-in-full) |
 
 `run` prints replies with `stats`. `tests/game/render_song_live.b3t` measures a song with it.
 
@@ -147,83 +137,45 @@ render checks `render_multiplayer.b3t` and `render_multiplayer4.b3t` two- and fo
 ones. Players 2-4 aren't signed in, so they join as guests (`skip_profile_prompt`, on by
 default).
 
-`tests/game/liveless.b3t` takes two band3s on this PC online with Liveless, one hosting
-and one joining it (its header has the two launches: each needs its own `--port`, and the
-second its own `--user-data` and `liveless_port`). `tests/game/liveless_online.b3t` only
-takes one online, from the overshell: run it on both, then `liveless_invite
-127.0.0.1:9103` on the second joins the first's band. The host then goes Play Now →
-Quickplay → Choose Songs, and waits until the joiner picks the same.
+Online tests never touch real services. Every launch with `liveless_rooms` on passes
+`--liveless_rooms_server=127.0.0.1`, and under the harness band3 asks only
+`liveless_gateway`/`liveless_upnp_url` for [port mapping](integrations.md#port-mapping) (without
+them it maps nothing) and broadcasts no Pico discovery. Each script's or tool's header has
+its launch lines.
 
-`tests/game/liveless_rooms.b3t` logs a game in to a Liveless Rooms server and takes it
-online, checking its code, that it stays logged in through the server's pings, the
-address it tells joining players and a join by a code no game has. It runs against
-`tools/liveless_rooms_mock.py`, a stand-in server on this PC (its header has the command
-lines): every test launch with `liveless_rooms` on passes
-`--liveless_rooms_server=127.0.0.1`, never the public server. The mock's `--codes
-HOST0001,JOIN0001` hands out those codes in connection order, so with two games online
-`rooms_join HOST0001` on the second joins the first's band. `python
-tools/test_liveless_rooms_mock.py` checks the mock itself.
+| Test | Checks |
+|---|---|
+| `tests/game/liveless.b3t` | two band3s on this PC, one hosting [Liveless](integrations.md#liveless-online-play) and one joining. Each needs its own `--port`; the second its own `--user-data` and `liveless_port` |
+| `tests/game/liveless_online.b3t` | takes one game online from the overshell. Run it on both, then `liveless_invite 127.0.0.1:9103` on the second joins the first's band |
+| `tests/game/liveless_rooms.b3t` | a Rooms login against `tools/liveless_rooms_mock.py`: the code, staying logged in, the advertised address, a join by an unknown code. The mock's `--codes HOST0001,JOIN0001` hands out codes in connection order |
+| `tests/game/liveless_rooms_reconnect.b3t` | reconnecting after the mock drops the game (`--drop-after-login 3 --drop-count 1`): `disconnected`, `retry_in` counting down, then `attempt` 2 |
+| `liveless_rooms_host.b3t`, `liveless_rooms_join.b3t` | a join by code through a song on autoplay, the band's score matching on both. `python tools/liveless_rooms_play.py` runs it all, mock included |
+| `tests/game/liveless_port_mapping.b3t` | mapping through `tools/port_mapping_mock.py` (PCP, `--mode natpmp`, or UPnP only with `--mode silent`) and the advertised address. `python tools/port_mapping_check.py` runs every case, checking each quit deletes the mapping |
+| `python tools/test_home_assistant.py` | the [Home Assistant](integrations.md#home-assistant) link against `tools/ha_fake_broker.py`: discovery, the song, paused, progress and score topics, the webhook's payloads and the `offline` will |
+| `python tools/test_stagekit_lights.py` | the [Stage Kit lights](integrations.md#stage-kit-lights) with the pretend USB kit (`stagekit_fake`) and `tools/fake_pico.py`: listing, test commands, a song's lighting reaching both, all-off after the song and at quit |
+| `tests/game/usb_mic.b3t` | singing through the mics' test tone (`-- --usb_mics=true --usb_mic_test_tone=220`) raises the score |
 
-`tests/game/liveless_rooms_reconnect.b3t` checks that a game reconnects by itself when
-the server drops it (the mock's `--drop-after-login 3 --drop-count 1`): the state goes
-`disconnected` with `retry_in` counting down, and the game logs in again with the next
-code (`attempt` 2).
-
-`tests/game/liveless_rooms_host.b3t` and `liveless_rooms_join.b3t` take that join through
-a song: the joiner joins by code, each waits for the other, and both play 20th Century Boy
-on autoplay to the results, where `state`'s score is the band's on both (the host's
-header has the launches and the order). `python
-tools/liveless_rooms_play.py` runs all of it, mock included, and fails unless the two band
-scores match.
-
-Under the harness band3 never asks the real router for Liveless'
-[port mapping](integrations.md#port-mapping): PCP and NAT-PMP only go to
-`liveless_gateway` and UPnP only to `liveless_upnp_url`, and without either it maps
-nothing (`error` "skipped under the test harness"). Both point at
-`tools/port_mapping_mock.py`, a stand-in router on 127.0.0.1 that answers PCP, NAT-PMP
-(`--mode natpmp`) or only UPnP (`--mode silent`). `tests/game/liveless_port_mapping.b3t`
-maps the port through it and checks the address the game advertises, and `python
-tools/port_mapping_check.py` runs every way (each protocol, permanent UPnP mappings, an
-old band3 mapping (`--upnp-error 718`) or another PC's, the harness guard,
-`liveless_external_ip` winning), checking each quit deletes the mapping. `python
-tools/test_port_mapping_mock.py` checks the mock itself.
-
-`python tools/test_home_assistant.py` checks the [Home Assistant](integrations.md) link
-against `tools/ha_fake_broker.py`, a fake MQTT broker and webhook receiver on 127.0.0.1
-(`python tools/ha_fake_broker.py --mqtt-port 1883 --webhook-port 8124` runs it alone,
-printing what arrives). It launches band3 pointed at it, plays 20th Century Boy on
-autoplay, pauses and leaves it, then kills band3: the discovery configs, the song,
-playing, paused, progress and score topics, the webhook's payloads and the will's
-`offline` on the status topic are all checked. `python tools/test_ha_fake_broker.py`
-checks the fake itself, offline.
-
-`python tools/test_stagekit_lights.py` checks the [Stage Kit lights](integrations.md#stage-kit-lights)
-with the pretend USB kit (`stagekit_fake`) and `tools/fake_pico.py`, a stand-in Pico W
-on 127.0.0.1 that sends its telemetry unasked: both listed, test commands reaching the
-device named and no other, 20th Century Boy's lighting reaching both (the Pico's through
-the RB3Enhanced events), the lights off after the song, and the Pico sent all-off when
-band3 quits. Under the harness band3 broadcasts no Pico discovery, so the network's
-Picos are left alone.
-
-`tests/game/usb_mic.b3t` sings a song's vocals through the USB mics' test tone (launch
-with `-- --usb_mics=true --usb_mic_test_tone=220`) and waits for the score to go up.
+The mocks have their own checks: `tools/test_liveless_rooms_mock.py`,
+`tools/test_port_mapping_mock.py` and `tools/test_ha_fake_broker.py`.
 
 ## MIDI keyboards
 
 With `midi_keys` on, `midi` plays the MIDI keyboard driver as if a keyboard sent it. With
-`midi_keys_test_device` on too (a setting only the harness reads, kept out of the launcher
-and the in-game settings), the driver reports a keyboard on the port `harness` from the
-first message `midi` hands it, with no MIDI port open, so the test runs on any PC. It
-connects as player 2, beside player 1's virtual instrument, and joins with its Start:
-RB3 reads a player's type only when the player's slot connects, and player 1's never
-empties (once the virtual instrument goes, the SDK's stand-in device holds it), so a
-keyboard swapped in there would go on reading as the old instrument.
-`tests/game/midi_keys.b3t` works the menus from the keyboard, plays Pro Keys, pauses with
-the chord and plays 5-lane Keys that way; its header has the launch line. With
-`midi_keys_base_note` at 48, the
-menu keys are C 48 (`30`) Left, D 50 (`32`) Down, E 52 (`34`) Up, F 53 (`35`) Right, F#
-54 (`36`) Back, G 55 (`37`) A, A 57 (`39`) B and B 59 (`3b`) Start, and the keytar's 25
-keys are 48-72 (`30`-`48`).
+`midi_keys_test_device` on too (read only by the harness), the driver reports a keyboard on
+the port `harness` with no MIDI port open, so the test runs on any PC.
+
+- The keyboard connects as player 2 and joins with its Start. It can't take player 1: RB3
+  reads a player's type only when the slot connects, and player 1's never empties.
+- `tests/game/midi_keys.b3t` works the menus, plays Pro Keys, pauses with the chord and plays
+  5-lane Keys; its header has the launch line.
+
+With `midi_keys_base_note` at 48, the keytar's 25 keys are 48-72 (`30`-`48`), and the menu
+keys:
+
+| Note | C 48 | D 50 | E 52 | F 53 | F# 54 | G 55 | A 57 | B 59 |
+|---|---|---|---|---|---|---|---|---|
+| Hex | `30` | `32` | `34` | `35` | `36` | `37` | `39` | `3b` |
+| Button | Left | Down | Up | Right | Back | A | B | Start |
 
 ## Music videos
 
@@ -251,26 +203,29 @@ screen=main_hub_screen timeout=60s`, then `press red` in case Start opened the p
 menu (it does nothing on the main menu). Beside another band3, give it its own `--port`
 and a copy of `out/test_user_data` as its `--user-data`.
 
-On Rock Band 3 Deluxe the button is Deluxe's own Exit Game (its scripts make it when they
-see `MHX_PC`, which band3 defines); band3 makes its own Quit
-(`src/Hooks/quit_button.cpp`) only on the game as it shipped. Testing that one needs band3
-built from TU5's `default.xex` with TU5's `gen`, main and patch ARKs both
-([Building](building.md#game-files)). A folder with only the disc's main ARK won't do: a
-build from Deluxe's `default.xex` crashes there as it starts, in `Splash::PrepareNext`. On
-Deluxe, a build that leaves the `-define MHX_PC` out of `AddSettingArgs` (`src/config.cpp`)
-shows band3's Quit instead, on the same main menu and hint screens the game shipped with,
-since Deluxe keeps those.
+On Rock Band 3 Deluxe the button is Deluxe's own Exit Game (made when its scripts see
+`MHX_PC`, which band3 defines). band3's own Quit (`src/Hooks/quit_button.cpp`) appears only on
+the game as it shipped. To test it, either:
+
+- build from TU5's `default.xex` with TU5's `gen`, main and patch ARKs
+  ([Building](building.md#game-files)); the disc's main ARK alone crashes in
+  `Splash::PrepareNext`; or
+- on Deluxe, build without the `-define MHX_PC` in `AddSettingArgs` (`src/config.cpp`).
 
 ## Inputs and timing
 
-Every instrument has `a b x y start back up down left right`; guitars add `green red
-yellow blue orange strum_up strum_down solo`, drums `red_pad yellow_pad blue_pad
-green_pad yellow_cym blue_cym green_cym kick kick2`, keys `overdrive`. Presses during a
-screen transition are dropped, so wait for the screen you act on (and give a dialog a
-moment to appear, with `sleep`), and press with `until` where the press changes the
-screen. Submenus inside one screen (Play Now, Quickplay) don't change the screen name. A
-song counts as `in_game` until you leave its results, and `state` keeps the last song's
-details after that. Switching `instrument` reconnects it, so press Start to join again.
+| Instrument | Inputs |
+|---|---|
+| all | `a b x y start back up down left right` |
+| guitar | `green red yellow blue orange strum_up strum_down solo` |
+| drums | `red_pad yellow_pad blue_pad green_pad yellow_cym blue_cym green_cym kick kick2` |
+| keys | `overdrive` |
+
+- Presses during a screen transition are dropped: wait for the screen you act on, `sleep` for
+  a dialog to appear, and press with `until` where the press changes the screen.
+- Submenus inside one screen (Play Now, Quickplay) don't change the screen name.
+- A song counts as `in_game` until you leave its results; `state` keeps its details after.
+- Switching `instrument` reconnects it, so press Start to join again.
 
 ## Overdrive
 

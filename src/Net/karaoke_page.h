@@ -203,11 +203,30 @@ var KaraokeModel = (function () {
   // the textures are asked for again as the lyrics are
   var textureRetryMs = lyricsRetryMs;
 
+  // GET `url`, made again while the game is busy (503) or the request fails,
+  // as textureRetryMs says: the Response once it's ok, or null when it never
+  // will be (a 404...) or `wanted()` says it no longer is. `fetchFn` and
+  // `wait(ms)` (a promise) are the browser's fetch and timer.
+  function fetchRetrying(url, fetchFn, wait, wanted) {
+    function again(status, n) {
+      var ms = textureRetryMs(status, n);
+      if (ms === null) return null;
+      return wait(ms).then(function () { return attempt(n + 1); });
+    }
+    function attempt(n) {
+      if (wanted && !wanted()) return Promise.resolve(null);
+      return fetchFn(url).then(function (r) { return r.ok ? r : again(r.status, n); },
+                               function () { return again(0, n); });
+    }
+    return attempt(0);
+  }
+
   return { Clock: Clock, partsToShow: partsToShow, linesAt: linesAt, fill: fill,
            countdown: countdown, screen: screen, lyricsRetryMs: lyricsRetryMs, words: words,
            layoutText: layoutText, glyphFill: glyphFill, kGapMs: kGapMs,
            TEXTURES: TEXTURES, textureUrl: textureUrl, originUrl: originUrl, iconCell: iconCell,
-           tab: tab, scoreText: scoreText, pips: pips, textureRetryMs: textureRetryMs };
+           tab: tab, scoreText: scoreText, pips: pips, textureRetryMs: textureRetryMs,
+           fetchRetrying: fetchRetrying };
 })();
 if (typeof module !== 'undefined') module.exports = KaraokeModel;
 )js";
@@ -290,14 +309,19 @@ body {
 }
 #titles { display: flex; flex-direction: column; justify-content: center; gap: 0.9vh; min-width: 0; overflow: hidden; }
 #band-title { font-size: 5.8vh; line-height: 1; white-space: nowrap; color: #c4c4cc; }
-#band-artist { font-size: 3.3vh; line-height: 1; white-space: nowrap; color: #c9cbd6; }
-/* the song's source, as the Music Library badges it */
-#badge { height: 6.4vh; width: 6.4vh; flex: none; background: center / contain no-repeat; }
+/* the artist, and after it the song's source as the Music Library badges it: the
+   badge's logo fills 79% of its square and Pentatonic's capitals 63% of the font's
+   size, so at 3.6vh and 4.5vh the two stand as tall as each other */
+#artistrow { display: flex; align-items: center; gap: 0.9vw; min-width: 0; }
+#band-artist { font-size: 4.5vh; line-height: 1; white-space: nowrap; color: #c9cbd6; min-width: 0; overflow: hidden; }
+#badge { height: 3.6vh; width: 3.6vh; flex: none; background: center / contain no-repeat; }
 /* the band's score, in the HUD's frame */
 #score { margin-left: auto; flex: none; }
 #scorebox {
   min-width: 21vw; height: 5.6vh; display: flex; align-items: center; justify-content: flex-end;
-  padding: 0 1.6vw; font-size: 3.6vh; border: 2px solid #8a8a94; border-radius: 0.8vh; background: rgba(0, 0, 0, 0.5);
+  /* the digits centred in the frame's window: a line as tall as its glyphs, the
+     digits sitting a touch low in their cells */
+  padding: 0 1.6vw 0.3vh; font-size: 3vh; line-height: 1; border: 2px solid #8a8a94; border-radius: 0.8vh; background: rgba(0, 0, 0, 0.5);
 }
 .t-scoreboard #scorebox { border: 0; border-radius: 0; background: var(--t-scoreboard) 0 0 / 100% 100%; }
 #stage { position: fixed; inset: 14.6vh 0 9.2vh; display: flex; align-items: center; justify-content: center; }
@@ -320,10 +344,14 @@ body {
   content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 0.45vh; pointer-events: none;
   background: var(--t-lane_blue) 0 0 / 100% 3.6vh no-repeat; transform: scaleY(-1);
 }
-.t-lane_brown .part[data-part="harm2"]:not(.od), .t-lane_brown .part[data-part="harm3"]:not(.od) {
+/* the harmonies' brown lanes take the blue one's slices, so only with it; an
+   overdrive lane keeps the blue edge, as harm1's does */
+.t-lane_blue.t-lane_brown .part[data-part="harm2"]:not(.od),
+.t-lane_blue.t-lane_brown .part[data-part="harm3"]:not(.od) {
   border-image-source: var(--t-lane_brown);
 }
-.t-lane_brown .part[data-part="harm2"]::after, .t-lane_brown .part[data-part="harm3"]::after {
+.t-lane_blue.t-lane_brown .part[data-part="harm2"]:not(.od)::after,
+.t-lane_blue.t-lane_brown .part[data-part="harm3"]:not(.od)::after {
   background-image: var(--t-lane_brown);
 }
 /* an overdrive phrase: the game's gold lane, its star at the edge */
@@ -461,8 +489,8 @@ body {
 <div id="topband">
   <div id="hdrclip"><div id="hdrscene" class="idle"></div></div>
   <div id="thumb" hidden></div>
-  <div id="titles"><div id="band-title"></div><div id="band-artist"></div></div>
-  <div id="badge" hidden></div>
+  <div id="titles"><div id="band-title"></div>
+    <div id="artistrow"><div id="band-artist"></div><div id="badge" hidden></div></div></div>
   <div id="score" hidden><div id="scorebox"></div></div>
 </div>
 <div id="topshadow"></div>
@@ -623,21 +651,45 @@ body {
   // format band3 doesn't decode), that part of the page keeps its own look.
   // Asked for again while the game is busy, as the lyrics are.
   var root = document.documentElement;
-  function loadTexture(key, attempt) {
-    attempt = attempt || 0;
-    function again(status) {
-      var wait = M.textureRetryMs(status, attempt);
-      if (wait !== null) setTimeout(function () { loadTexture(key, attempt + 1); }, wait);
+  function wait(ms) { return new Promise(function (done) { setTimeout(done, ms); }); }
+  // an image from the server as a blob: URL once it has come (M.fetchRetrying),
+  // to `take`; nothing if it never does or `wanted()` stops being true
+  function loadImage(url, take, wanted) {
+    M.fetchRetrying(url, fetch, wait, wanted).then(function (r) {
+      return r && (!wanted || wanted()) ? r.blob() : null;
+    }).then(function (b) {
+      if (b && (!wanted || wanted())) take(URL.createObjectURL(b));
+    }).catch(function () {});
+  }
+  function loadTexture(key) {
+    loadImage(M.textureUrl(M.TEXTURES[key]), function (url) {
+      root.style.setProperty('--t-' + key, 'url("' + url + '")');
+      if (key === 'header_normal') $('refract-map').setAttribute('href', url);
+      root.classList.add('t-' + key);
+    });
+  }
+
+  // The song's art, for the header, the glass behind it and the card: its
+  // /album_art, else the game's blank art for a song with none; the Rock Band
+  // art with no song. One at a time: the last song's is let go.
+  var art = { for: null, url: null };
+  function loadArt(song) {
+    var want = song ? song.shortname : '';
+    if (art.for === want) return;
+    if (art.url) URL.revokeObjectURL(art.url);
+    var mine = art = { for: want, url: null };
+    function wanted() { return art === mine; }
+    function take(url) { mine.url = url; chromeKey = ''; cardKey = ''; }
+    if (!song) {
+      loadImage(M.textureUrl(M.TEXTURES.idle_art), take, wanted);
+      return;
     }
-    fetch(M.textureUrl(M.TEXTURES[key])).then(function (r) {
-      if (!r.ok) { again(r.status); return; }
-      return r.blob().then(function (b) {
-        var url = URL.createObjectURL(b);
-        root.style.setProperty('--t-' + key, 'url("' + url + '")');
-        if (key === 'header_normal') $('refract-map').setAttribute('href', url);
-        root.classList.add('t-' + key);
-      });
-    }).catch(function () { again(0); });
+    M.fetchRetrying('/album_art?shortname=' + encodeURIComponent(song.shortname), fetch, wait, wanted)
+      .then(function (r) {
+        if (!wanted()) return;
+        if (!r) { loadImage(M.textureUrl(M.TEXTURES.blank_art), take, wanted); return; }
+        return r.blob().then(function (b) { if (wanted()) take(URL.createObjectURL(b)); });
+      }).catch(function () {});
   }
 
   // lay the text out again: a font arrived, or the size changed
@@ -852,7 +904,7 @@ body {
     });
   }
 
-  var cardKey = '', artFor = null;
+  var cardKey = '';
   function drawCard(mode) {
     var song = state && state.song;
     var d = song && details ? details[song.shortname] : null;
@@ -867,41 +919,25 @@ body {
     info.textContent = '';
     info.hidden = !song;
     if (song) drawInfo(info, song, d);
-    // the song's art, the game's blank art where it has none; the Rock Band art
-    // with no song. Only asked for again when it's another's.
-    var want = song ? song.shortname : '';
-    if (want === artFor) return;
-    artFor = want;
-    var art = $('art');
-    art.hidden = true;
-    art.onload = function () { art.hidden = false; };
-    if (!song) {
-      art.onerror = function () { art.hidden = true; };
-      art.src = M.textureUrl(M.TEXTURES.idle_art);
-    } else {
-      art.onerror = function () {
-        art.onerror = function () { art.hidden = true; };
-        art.src = M.textureUrl(M.TEXTURES.blank_art);
-      };
-      art.src = '/album_art?shortname=' + encodeURIComponent(song.shortname);
-    }
+    loadArt(song);
+    var img = $('art');
+    img.hidden = !art.url;
+    if (art.url && img.src !== art.url) img.src = art.url;
   }
 
-  // the song's source badge, once its texture has loaded
-  var badgeFor = null;
+  // the song's source badge, once its texture has come
+  var badge = { for: null, url: null };
   function drawBadge(url) {
-    if (url === badgeFor) return;
-    badgeFor = url;
-    var badge = $('badge');
-    badge.hidden = true;
+    if (url === badge.for) return;
+    if (badge.url) URL.revokeObjectURL(badge.url);
+    var mine = badge = { for: url, url: null };
+    $('badge').hidden = true;
     if (!url) return;
-    var img = new Image();
-    img.onload = function () {
-      if (badgeFor !== url) return;
-      badge.style.backgroundImage = 'url("' + url + '")';
-      badge.hidden = false;
-    };
-    img.src = url;
+    loadImage(url, function (blob) {
+      mine.url = blob;
+      $('badge').style.backgroundImage = 'url("' + blob + '")';
+      $('badge').hidden = false;
+    }, function () { return badge === mine; });
   }
 
   // the player strip: a tab for each of the band's members, by slot, as the
@@ -930,17 +966,18 @@ body {
     var band = (state && state.band) || [null, null, null, null];
     var d = song && details ? details[song.shortname] : null;
     var origin = d && d.origin ? d.origin : '';
+    loadArt(song);
     var key = mode + '|' + (song ? song.shortname : '') + '|' + !!fonts[kLyricsFont] + '|' + vocals + '|' +
-      JSON.stringify(band) + '|' + origin;
+      JSON.stringify(band) + '|' + origin + '|' + art.url;
     if (key === chromeKey) return;
     chromeKey = key;
     put($('band-title'), song ? song.title.toUpperCase() : 'KARAOKE', '#c4c4cc');
     put($('band-artist'), song ? song.artist.toUpperCase() : '', '#c9cbd6');
-    var art = song ? 'url("/album_art?shortname=' + encodeURIComponent(song.shortname) + '")' : '';
+    var url = song && art.url ? 'url("' + art.url + '")' : '';
     // the art hangs below the header while the lyrics show; the card has its own
-    $('thumb').style.backgroundImage = art;
-    $('thumb').hidden = !song || mode !== 'lyrics';
-    $('hdrscene').style.backgroundImage = art;
+    $('thumb').style.backgroundImage = url;
+    $('thumb').hidden = !url || mode !== 'lyrics';
+    $('hdrscene').style.backgroundImage = url;
     $('hdrscene').className = song ? '' : 'idle';
     drawBadge(M.originUrl(origin));
     drawPlayers(band, vocals);
@@ -1008,7 +1045,8 @@ body {
   drawPanel();
   loadFont(kLyricsFont);
   loadFont(kTitleFont);
-  Object.keys(M.TEXTURES).forEach(function (k) { loadTexture(k); });
+  // all but the art, which loadArt fetches as it's wanted
+  Object.keys(M.TEXTURES).forEach(function (k) { if (!/_art$/.test(k)) loadTexture(k); });
   loadSongs();
   connect();
   requestAnimationFrame(frame);

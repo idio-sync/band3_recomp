@@ -22,39 +22,32 @@ band3 lights Stage Kits itself, as YARG does, so a kit needs no RB3E Dashboard o
 bridge in between. The game's lighting goes to every kit band3 can reach; the
 **Lights** tab (in the launcher and the in-game settings) lists them and tests them.
 
-- **Plugged in by USB** (`stagekit_usb`, on by default): Santroller Stage Kits, which a
-  PC sees in HID mode (VID 1209, PID 2882; band3 sends them the HID report the RB3E
-  Dashboard's Pico firmware does), and Xbox 360 Stage Kits (XInput subtype 9; the
-  rumble the game sends). band3 looks for them every 2 seconds, so they can come and
-  go, and turns them off when a song ends and when band3 closes. A Stage Kit isn't a
-  player: it doesn't take a controller's place or play as a guitar. An XInput kit does
-  take one of Windows' four XInput slots, shared with Xbox 360 instruments, so with four
-  of those plugged in there's none left for it; a Santroller kit in HID mode takes no
-  slot (it shows as HID unless its config sets XInput on Windows).
+- **Plugged in by USB** (`stagekit_usb`, on by default): Santroller Stage Kits in HID mode
+  (VID 1209, PID 2882) and Xbox 360 Stage Kits (XInput subtype 9).
+  - band3 looks for them every 2 seconds, and turns them off when a song ends and when it
+    closes.
+  - A kit isn't a player and doesn't take a controller's place. An XInput kit does take one
+    of Windows' four XInput slots, shared with Xbox 360 instruments; a Santroller kit in HID
+    mode takes none.
 - **Wireless, Pico W** (`pico_discovery`, on by default): the
-  [RB3E Dashboard's](https://github.com/idio-sync/rb3e-stagekit-networked) Pico W
-  firmware. band3 finds the Picos as the dashboard does (discovery on UDP 21071 every 5
-  seconds) and lists each with its signal and whether a kit is plugged into it; a
-  quiet one shows offline after 10 seconds and leaves the list after 30. A Pico answers
-  whichever program found it last, so turn this off while the dashboard itself runs;
-  and if the dashboard on this PC holds port 21071, the tab says so. Picos follow the
-  game through the network events above, so `events_enabled` must be on; the tab
-  offers to turn it on when it finds Picos with it off.
+  [RB3E Dashboard's](https://github.com/idio-sync/rb3e-stagekit-networked) Pico W firmware,
+  found as the dashboard finds it (UDP 21071).
+  - Picos follow the game through the network events above, so `events_enabled` must be on;
+    the tab offers to turn it on.
+  - A Pico answers whichever program found it last, so turn this off while the dashboard
+    itself runs.
+  - The tab lists each Pico's signal and whether a kit is plugged in; a quiet one shows
+    offline after 10 seconds and leaves the list after 30.
 
-The tab's test controls are the dashboard's, for one device or every device: **Test
-lights** (each colour in turn, then off), fog on and off, strobe slow, fast and off,
-all off, one colour's LEDs one at a time or in a pattern (all, none, odds, evens, left,
-right), and a chase. A song's next lighting command takes over from a test.
+The tab's test controls are the dashboard's (colours, fog, strobe, LED patterns, a chase),
+for one device or all. A song's next lighting command takes over from a test.
+`python tools/fake_pico.py` stands in for a Pico on this PC and prints what band3 sends it.
 
-To see what band3 sends a Pico without one, `python tools/fake_pico.py` stands in for
-a Pico on this PC and prints the commands it gets.
-
-The kits' lighting comes from the venue's light presets, so with no venue (the Black
-Background modifier, or `forced_venue = none`) they stay dark. With **Keep the lights on a
-black background** (`black_background_lights`, the Lights tab) the modifier puts the song
-in a video venue drawn black, with the band hidden, instead of in no venue: the screen is
-as black, and the kits light as in any venue. The venue still loads and draws, so it
-costs what a venue costs. A forced venue still wins over the modifier, as before.
+**Black background:** the kits' lighting comes from the venue, so with no venue (the Black
+Background modifier, or `forced_venue = none`) they stay dark. **Keep the lights on a black
+background** (`black_background_lights`, the Lights tab) instead puts the song in a video
+venue drawn black, with the band hidden, so the kits light as usual. It costs what a venue
+costs. A forced venue still wins.
 
 ## Home Assistant
 
@@ -69,10 +62,8 @@ It does it two ways, and you can use either or both:
   changes, so an automation written for the dashboard works unchanged.
 
 Home Assistant only watches: nothing it sends changes the game. The settings are in the
-Online tab's Home Assistant section, and in `band3.toml` as the `ha_*` keys below
-(`ha_mqtt_host = "192.168.1.10"`, at the top level like every other setting there); the
-older `band3_config.ini` has them in `[homeassistant]`, without the `ha_` (`mqtt_host`,
-`mqtt_port`, ...). All of them need a restart.
+Online tab's Home Assistant section, or `band3.toml`'s `ha_*` keys (`[homeassistant]` without
+the `ha_` in the older `band3_config.ini`). All of them need a restart.
 
 ### Setting up MQTT
 
@@ -137,11 +128,9 @@ recorder:
 Turning Stage Kit lights off removes these entities from Home Assistant the next time
 band3 connects.
 
-The entities are unavailable while band3 isn't running: band3 says "offline" on
-`band3/<id>/status` when it closes, and the broker says it for band3 if it crashes or its
-window is closed (it's the connection's last will). The states are retained on the
-broker, so when Home Assistant restarts while band3 runs it has them again at once (an
-empty one, such as the song before any was played, shows as unknown).
+The entities are unavailable while band3 isn't running, even after a crash (the connection's
+last will). Their states are retained on the broker, so a Home Assistant restart gets them
+back at once.
 
 ### Connection state
 
@@ -221,16 +210,16 @@ PC). The log says where to open it
 
 <img src="images/web-song-browser.png" alt="The web song browser" width="520">
 
-The page lists the song library with each song's album art and the difficulty of its
-parts, searchable and sortable, and **Select** highlights a song in the game's Music
-Library, which has to be open. **Filters** narrows it to songs with keys, pro parts or
-harmonies, under a difficulty for each part, or in some genres or decades (kept on that
-device); tapping a song shows its details, and **Random** picks one of those showing. A
-banner says what the game is doing: during a song, which, how far in, and the score.
-**Duplicates** lists the songs that are in more than one package, or clash with the game's
-own (see [Duplicate songs](#duplicate-songs)).
-Windows asks once whether to let band3 through the firewall; allow it on private networks
-for other devices to reach it.
+The page lists the song library with album art and part difficulties, searchable and
+sortable. Windows asks once whether to let band3 through the firewall; allow it on private
+networks for other devices to reach it.
+
+- **Select** highlights a song in the game's Music Library, which has to be open.
+- **Filters** narrows it by parts (keys, pro, harmonies), difficulty, genre or decade.
+  **Random** picks one of the songs showing.
+- A banner says what the game is doing: during a song, which, how far in, and the score.
+- **Duplicates** lists songs in more than one package ([Duplicate songs](#duplicate-songs)),
+  and **RhythmVerse** searches custom songs to download ([RhythmVerse](#rhythmverse)).
 
 It answers RB3Enhanced's API, so RB3E's page and tools written for it work too:
 
@@ -259,40 +248,32 @@ band3 adds its own, which RB3E doesn't have:
 | `/rv/updates` | newer versions on RhythmVerse of the songs band3 downloaded, as JSON: `checking` (a check is running), `checked` (when the last one finished, in seconds since 1970; 0 for never), `error` (why the last one failed), `downloads` (how many songs band3 has downloaded) and `updates`, songs as `/rv/search` gives them, with `update` `available`, or `pending` once downloaded |
 | `POST /rv/check` | checks RhythmVerse for those updates now (send `{}` as JSON); `/rv/updates` says when it's done |
 
-`http_allow_cors` adds `Access-Control-Allow-Origin: *`, for pages served from somewhere
-else. Requests wait for the game's next frame, and get a 503 if it doesn't come within 5 s.
-Files at `game:\` are found as the game finds them: in the `game` folder of the user data
-root (see [Folders](settings.md#folders)) first, then in the game data root.
+- `http_allow_cors` adds `Access-Control-Allow-Origin: *`, for pages served from elsewhere.
+- Requests wait for the game's next frame, and get a 503 if it doesn't come within 5 s.
+- Files at `game:\` are found as the game finds them: the user data root's `game` folder
+  ([Folders](settings.md#folders)) first, then the game data root.
 
-To work on the page without the game, `python tools/web_preview.py` serves it at
-http://127.0.0.1:21080/ with the songs, their details and album art read from the game
-data. The page comes from `src/Net/http_page.h` on every load, so an edit shows on a
-refresh, without a rebuild; **Select** can't work there, and `/status` says what
-`--status` (`menu`, `library` or `playing`) tells it to. Its RhythmVerse tab searches
-RhythmVerse, but its downloads are made up and save nothing, and its updates are two
-made-up songs.
+**Working on the page:** `python tools/web_preview.py` serves it without the game at
+http://127.0.0.1:21080/, with songs read from the game data. It reloads `src/Net/http_page.h`
+on every request, so edits show on a refresh. **Select** can't work there, `--status` (`menu`,
+`library` or `playing`) sets what `/status` says, and RhythmVerse downloads and updates are
+made up.
 
 ### Karaoke and live pages
 
-`/karaoke` is a sing-along page for a screen facing the room: the song's lyrics, the line
-being sung and the next, each syllable filling as it's sung, with the harmony parts
-stacked when the band's vocalist sings harmonies, and overdrive phrases on the game's gold
-lane. Above them is the song's header, with the band's score; below them, the band's player
-tabs. Between songs it shows the song's album art, genre, year and parts. Its corner button
-sets the timing (for a TV's delay) and the text size, kept in that browser. A page over
-plain http can't keep a device awake, so turn its
-sleep off. The library page's header links to it.
+`/karaoke` is a sing-along page for a screen facing the room, linked from the library page's
+header. It shows the line being sung and the next, each syllable filling as it's sung, with
+harmonies stacked and overdrive phrases on the gold lane, under a header with the band's
+score. Between songs it shows the song's album art, genre, year and parts.
 
-Its lyrics and the song's title are set in the game's own Pentatonic (the cut the game
-draws largest, so it stays sharp on a TV), read from your game files as the page asks for
-them; where that font can't be read, the page uses its own. It dresses itself in the game's
-own menus the same way (the song header, the vocal track's lanes, the overdrive lane, the
-player tabs, the pause box) from `/game_asset`, and keeps its plain look wherever a texture
-doesn't load. The header's glass needs Rock Band 3 Deluxe's copy of its normal map; without
-it, the header is plain navy.
+- Its corner button sets the timing (for a TV's delay) and the text size, kept in that
+  browser.
+- A page over plain http can't keep a device awake, so turn the device's sleep off.
+- It's drawn in the game's own font and menu art, read from your game files; band3 ships none
+  of it. Where an asset can't be read it falls back to a plain look. The header's glass needs
+  Rock Band 3 Deluxe's copy of its normal map.
 
-It's built on endpoints other pages can use. The game assets are served from your own game
-files as they're asked for, and only on your network; band3 ships none of them.
+Other pages can use the same endpoints, served only on your network:
 
 | Endpoint | |
 |---|---|
@@ -301,7 +282,7 @@ files as they're asked for, and only on your network; band3 ships none of them.
 | `/game_asset/font.png?name=` | that font's texture: white, the glyphs in its alpha |
 | `/game_asset/milo_texture?milo=&name=` | a texture inside one of the game's UI milos (`milo` a `.milo_xbox` under `ui/`, such as `ui/track/gen/track_shared.milo_xbox`; `name` the file its Tex records, such as `lyrics_bg_blue.png`) as a PNG; 404 for any other milo or name, a texture that isn't there, or a format band3 doesn't decode (the menus' BC5 normal maps); 503 while the game is busy |
 | `/lyrics?shortname=` | the song's lyrics from its MIDI file: `{"shortname", "parts": [{"part": "lead" \| "harm1" \| "harm2" \| "harm3", "lines": [{"start_ms", "end_ms", "overdrive", "syllables": [{"start_ms", "end_ms", "text", "join", "spoken"}]}]}]}` (`overdrive`: an overdrive phrase covers the line, PART VOCALS' for the lead, HARM1's for the harmonies); 404 for a song without vocals, 503 while the game is busy |
-| `/live/events` | server-sent events: `state` (`screen`, `in_game`, `paused`, `song` {`shortname`, `title`, `artist`, `length_ms`} or null, `vocals` `none` \| `lead` \| `harmonies`, `band`: four slots, each null or {`part` (as `/song_details` names parts), `difficulty` 0 easy to 3 expert}) whenever it changes, and `clock` (`song_ms`, the game's song clock; `score`, the band's) four times a second during a song. Four streams at once: a fifth takes the place of the one open longest (a device asleep can keep its connection open), which gets `evicted` and stops; its page offers a tap to follow the game again |
+| `/live/events` | server-sent events: `state` (`screen`, `in_game`, `paused`, `song` {`shortname`, `title`, `artist`, `length_ms`} or null, `vocals` `none` \| `lead` \| `harmonies`, `band`: four slots, each null or {`part` (as `/song_details` names parts), `difficulty` as the game gives it, 0 easy to 3 expert}) whenever it changes, and `clock` (`song_ms`, the game's song clock; `score`, the band's) four times a second during a song. Four streams at once: a fifth takes the place of the one open longest (a device asleep can keep its connection open), which gets `evicted` and stops; its page offers a tap to follow the game again |
 
 `tools/web_preview.py` serves `/karaoke` without the game, over a made-up show
 (`--karaoke-song <shortname>` for a song's own lyrics, `--vocals harmonies`).
@@ -327,67 +308,56 @@ user data root) and lists four kinds:
 - **Same artist and title**, by letters and digits: other charts of the same song, maybe,
   which the game has all of.
 
-**Set aside** takes a copy out: when band3 next starts, it renames the file to end in
-`.setaside`, which it passes over (the game may have the file open until then, so it
-waits, leaving `<name>.setaside-next` beside it to say so). Only a package that's a song
-on its own can be set aside, never a pack, whose other songs would go with it, and never
-the game's own songs; a copy under **Same file** that band3 leaves out can, pack or not,
-as the one it loads has all its songs. **Set aside the left-out copies** does it for every
-copy left out already (but those of another size), so nothing changes in the game; setting aside the copy that's **In
-use** lets the next one take its place. Nothing is deleted: what's set aside is listed at
-the end, with **Cancel** for what's waiting for the next launch and **Put back**, which
-renames a file back for the next launch. A song band3 downloaded from RhythmVerse shows
-**Download** again once it's set aside.
+**Set aside** takes a copy out. Nothing is deleted:
+
+- At band3's next start the file is renamed to end in `.setaside`, which band3 passes over.
+  Until then a `<name>.setaside-next` beside it marks it.
+- Only a single-song package can be set aside, never a pack or the game's own songs. The
+  exception is a **Same file** copy band3 already leaves out, pack or not.
+- **Set aside the left-out copies** does it for every copy already left out (not those of
+  another size), so nothing changes in the game. Setting aside the **In use** copy lets the
+  next one take its place.
+- What's set aside is listed at the end, with **Cancel** (before the next launch) and **Put
+  back**. A RhythmVerse song shows **Download** again once set aside.
 
 ### RhythmVerse
 
 The page's **RhythmVerse** tab searches [RhythmVerse](https://rhythmverse.co)'s custom
-songs for Rock Band 3 on Xbox, with their art, details and difficulties, sorted as you
-choose (newest, most downloaded, title...) and with **Filters** for the parts a song has,
-a part's difficulty at most, genre and decade, and **Downloadable only** (on at first),
-which leaves out what band3 can't download; they're kept on that device. It says which
-songs you have, however you got them. **In library**: the game has a song with its
-song ID (RhythmVerse's for the upload is the `song_id` in its `songs.dta`), whatever
-its file is called; **Select** then selects it in the Music Library, as on the Library
-tab. **Downloaded**: its file is in the content folders, under the name RhythmVerse gives
-it and at its size; **Not in game yet** until the game has taken it in. **Similar in
-library**: a song by its artist and title is in the game, another chart of it maybe.
+songs for Rock Band 3 on Xbox, with sorting and **Filters** (parts, difficulty, genre, decade,
+and **Downloadable only**, on at first). Each song says whether you have it, however you got
+it:
 
-**Download** saves a song's package into a `rhythmverse` folder in the first of the
-content folders (`songs\rhythmverse` unless you've changed `content_folders`), and the game
-takes it in without a restart, as it took in songs bought from the Xbox store (the
-console's `XN_LIVE_CONTENT_INSTALLED`, then "Loading New Downloaded Content..."): at once
-with the Music Library open, once a song that's playing is over, or on the way into the
-Music Library. Songs copied into the content folders by hand join the same way once a
-search has seen them. Songs RhythmVerse hosts itself download this way, and so do songs
-whose RhythmVerse page links to a file on MediaFire, Google Drive or Dropbox, a song on
-dingorb (HaramDingo's site), or a bit.ly or tinyurl link to one of those: band3 reads the
-link's page for the file itself, as a browser would (**Download** says which site it's
-from). For the rest (mega.nz, a Drive folder, zipped uploads and the official DLC),
-**Open** goes to the song's RhythmVerse page. A download that isn't a Rock Band package
-is thrown away.
+| Status | Means |
+|---|---|
+| **In library** | the game has a song with its song ID; **Select** selects it in the Music Library |
+| **Downloaded** | its file is in the content folders, under RhythmVerse's name and size |
+| **Not in game yet** | downloaded, but the game hasn't taken it in yet |
+| **Similar in library** | a song with its artist and title is in the game, maybe another chart |
 
-band3 keeps what it downloaded in `rhythmverse.json` in the download folder, with
-RhythmVerse's hashes of each upload, and when they change the song shows **Update
-available**. Most uploads on other sites have no hashes, so for those it goes by when
-RhythmVerse last changed the upload, which an author editing only its page moves too. **Update** downloads the new version beside the old one as `<name>.pending`;
-the game has the old one open, so band3 puts the new one in its place when it next
-starts, keeping the old one beside it as `<name>.replaced` (nothing is deleted; clear
-them out when you like). Songs you got some other way aren't checked for updates.
+**Download** saves the package into `rhythmverse` in the first content folder
+(`songs\rhythmverse` by default). The game takes it in without a restart, as it took in Xbox
+store purchases: at once with the Music Library open, otherwise after the current song or on
+the way into the Music Library. Songs copied in by hand join the same way once a search has
+seen them.
 
-band3 checks for those updates by itself, half a minute after it starts, unless it
-checked in the last 12 hours, and **Check for updates** at the top of the tab checks now.
-Rather than look up each song, it reads RhythmVerse's list of uploads by when they last
-changed, newest first, back to its last check (or the oldest download, if that's later),
-less a day for RhythmVerse's time zone: a request or two, however many songs you have,
-with a pause between them. Songs with a newer version are listed above RhythmVerse's songs,
-and counted on the tab, with **Update** on each and **Update all**. A search that shows a
-song you downloaded notes its version as well. Without anything band3 downloaded, nothing
-is checked.
+- **Downloads directly:** songs RhythmVerse hosts, and links to a file on MediaFire, Google
+  Drive, Dropbox or dingorb (also through bit.ly or tinyurl).
+- **Opens the RhythmVerse page instead:** mega.nz, Drive folders, zipped uploads and official
+  DLC.
+- A download that isn't a Rock Band package is thrown away.
 
-Turn `http_rhythmverse` off (`[http] rhythmverse = false`) to leave the tab out.
-RhythmVerse's API isn't documented, so a change on its side can break the tab until band3
-follows.
+**Updates:** band3 checks the songs it downloaded half a minute after it starts (at most every
+12 hours), or when you press **Check for updates**. Songs with a newer version are listed at
+the top with **Update** and **Update all**.
+
+- An update downloads beside the old file as `<name>.pending` and replaces it at band3's next
+  start, keeping the old one as `<name>.replaced`. Nothing is deleted.
+- Songs from other sites mostly have no hashes, so editing only a song's RhythmVerse page can
+  show an update too.
+- Songs you got some other way aren't checked.
+
+Turn `http_rhythmverse` off (`[http] rhythmverse = false`) to leave the tab out. RhythmVerse's
+API isn't documented, so a change on its side can break the tab until band3 follows.
 
 ## GoCentral (Rock Central)
 
@@ -409,95 +379,75 @@ has each of the game's network calls and each step of its Rock Central login.
 
 ## Liveless (online play)
 
-Rock Band 3 plays online over Xbox Live, which band3 doesn't have. RB3Enhanced's
-Liveless plays without it, straight from one player's game to another's, and band3
-does the same, so band3 players can play together (and, the game's packets being
-the same, with RB3Enhanced players, though that's untested). In the in-game settings'
-Online tab, turn on `liveless`, set `username` (the Game tab's Profile name) to your name (others
-see it), then restart; or set them on the [launcher](settings.md#the-launcher)'s Online
-and Game tabs and press Play.
+Rock Band 3 plays online over Xbox Live, which band3 doesn't have. Like RB3Enhanced's
+Liveless, band3 plays straight from one player's game to another's, so band3 players can play
+together (and probably with RB3Enhanced players, untested), on Windows or Linux: two games on a
+Steam Deck have played a song together through Liveless Rooms. Only play on one PC and on a
+local network has been tested so far.
 
-One player hosts and the others join. Everyone presses Start for the overshell,
-picks **Play on Xbox Live**, backs out of it, then picks Play Now → Quickplay →
-**Find Xbox Live Players**:
+**Setup:** turn on `liveless` (Online tab), set `username` (the Game tab's Profile name) to
+the name others will see, then restart, or press Play on the [launcher](settings.md#the-launcher).
 
-- The host leaves `liveless_connect` at `127.0.0.1`: their search finds their own
-  game, so they wait there for players.
-- Each joining player sets `liveless_connect` to the host's address (the local
-  network one on the same network, the public one over the internet). Their search
-  joins the host's band.
+**Playing:**
 
-Over the internet, as with RB3Enhanced, each player needs their `liveless_port` (UDP
-9103 unless changed) forwarded to their PC, and the games tell each other where to
-reach them. band3 asks the router for both the forward and the public address itself
-(see [Port mapping](#port-mapping)); forward the port by hand and set
-`liveless_external_ip` to your public IP only when that doesn't work. Only play on one
-PC and on a local network has been tested so far.
+1. The host leaves `liveless_connect` at `127.0.0.1`. Each joining player sets it to the
+   host's address: the local one on the same network, the public one over the internet.
+   To join by code instead, see [Liveless Rooms](#liveless-rooms-joining-by-code).
+2. Everyone presses Start for the overshell, picks **Play on Xbox Live**, backs out, then
+   picks Play Now → Quickplay → **Find Xbox Live Players**. The host has to search too, or
+   joining players are turned away.
+3. Once the others show in the host's band, the host picks **Play With Current Lineup**.
 
-Once the others show in the host's band, the host picks **Play With Current
-Lineup** and everyone makes the setlist and plays together. There is no lobby or
-list of games: searching finds one game, the one at `liveless_connect`. The host has to
-search too: a host that only went online from the overshell turns joining players away.
-To join by code instead of address, see [Liveless Rooms](#liveless-rooms-joining-by-code).
-
-`liveless_port` moves the game to another UDP port, so two band3s on one PC can
-play each other: [`tests/game/liveless.b3t`](../tests/game/liveless.b3t) does that.
+There's no lobby: a search finds only the game at `liveless_connect`. Over the internet each
+player needs `liveless_port` (UDP 9103) forwarded to their PC, which band3 asks the router
+for ([Port mapping](#port-mapping)). `liveless_port` can also move the game to another port,
+so two band3s on one PC can play each other, as [`tests/game/liveless.b3t`](../tests/game/liveless.b3t)
+does.
 
 ### Port mapping
 
-With `liveless` on, band3 asks the router to forward `liveless_port` to this PC, as
-RB3Enhanced does, so players over the internet reach your game without a forward made
-by hand: by PCP first, then NAT-PMP if the router doesn't speak PCP, then UPnP. The
-router also says its public address, which band3 tells players joining you unless
-`liveless_external_ip` is set or the Rooms server saw another (the order is
-`liveless_external_ip`, the Rooms server's, the router's, then this PC's on the local
-network). A router that gives a private address (10.x, 172.16-31.x, 192.168.x,
-100.64-127.x: it's behind another router) still forwards the port, but band3 doesn't
-tell players that address. The mapping lasts an hour, renewed every half hour, and
-band3 deletes it when it closes. Turn `liveless_port_mapping` off (the in-game settings' Online tab, More settings; then
-restart) to leave the router alone.
+With `liveless` on, band3 asks the router to forward `liveless_port` to this PC (PCP, then
+NAT-PMP, then UPnP), as RB3Enhanced does, and tells joining players the public address the
+router reports. The mapping lasts an hour, is renewed every half hour, and is deleted when
+band3 closes. Turn `liveless_port_mapping` off (Online → More settings, then restart) to leave
+the router alone.
 
-band3 asks when it starts, and a mapping that failed isn't asked for again during the
-session: if the router or the network comes up after band3 starts, restart band3. A
-crash or a killed band3 can leave the mapping behind: a leased one lapses within the
-hour, but a router that only keeps permanent mappings holds it until band3's next clean
-exit. On its next start band3 deletes that old mapping if the router won't replace it
-(UPnP's ConflictInMappingEntry); a mapping of the port to another PC, or by another
-program, it leaves alone, and says whose it is.
+The log's `port mapping:` lines and the Rooms panel (F10) show how it went, e.g. `UDP 9103:
+mapped by PCP, public 203.0.113.5` or `not mapped:` and why.
 
-The log's `port mapping:` lines say how it went, and the Rooms panel (F10) shows it
-under your code: `UDP 9103: mapped by PCP, public 203.0.113.5`, `mapping...`, or
-`not mapped:` and why. When it isn't mapped, forward the port by hand and set
-`liveless_external_ip`, as RB3Enhanced players do. A router can only forward to one PC,
-so two PCs behind one router can't both use 9103.
+**If it doesn't work:**
 
-The router's forward doesn't open Windows Firewall: if you declined its prompt when
-band3 first went online, allow band3.exe for UDP in Windows Security → Firewall &
-network protection → Allow an app through firewall.
+- band3 asks only as it starts. If the router or network came up later, restart band3.
+- Not mapped: forward the port by hand and set `liveless_external_ip` to your public IP.
+- A router can forward a port to only one PC, so two PCs behind one router can't both use 9103.
+- A router behind another router (a private address such as 192.168.x or 100.64-127.x) still
+  forwards, but band3 doesn't hand out that address.
+- The forward doesn't open Windows Firewall: if you declined its prompt, allow band3.exe for
+  UDP in Windows Security → Firewall & network protection → Allow an app through firewall.
+- After a crash, a mapping can linger until it lapses or band3's next start clears it. band3
+  leaves alone a mapping of the port to another PC or program, and logs whose it is.
+
+The public address band3 hands out comes from, in order: `liveless_external_ip`, the Rooms
+server, the router, then this PC's local address.
 
 ### Liveless Rooms (joining by code)
 
-RB3Enhanced's Liveless Rooms joins players by a room code instead of an
-address: each game logs in to a Rooms server, which gives it a code, and when another
-player asks for that code the server tells their game where the host's is. In the in-game
-settings' Online tab, turn on `liveless` and `liveless_rooms` (More settings), set `username` (the Game tab)
-to your name, then restart. band3 then logs in to `liveless_rooms_server`,
-RB3Enhanced's (`liveless-testing.ipg.pw`) unless you run your own. Logging in
-registers your `username` there, and as with GoCentral the server knows you by that
-name alone, so band3 won't log in while it's blank or "User". Codes accept 1-8 letters
-and digits, in either case; the public server currently gives five-character codes.
+RB3Enhanced's Liveless Rooms joins players by a room code instead of an address: each game
+logs in to a Rooms server and gets a code, and the server tells joining players where the
+host's game is.
 
-Your code shows in the Rooms panel: press **F10** (`bind_liveless_rooms`), or, once
-online, pick **Xbox Live Options** → **Invite Friends** in the overshell, which opens
-the panel instead of Xbox Live's friends list while Rooms is on. The panel also
-shows the server, the connection's state and the last thing that went wrong; with
-Rooms off, it says how to turn it on. Give your code to the players who'll join you.
+**Setup:** turn on `liveless` and `liveless_rooms` (Online → More settings), set `username`
+(the Game tab), then restart. band3 logs in to `liveless_rooms_server`, RB3Enhanced's
+(`liveless-testing.ipg.pw`) unless you run your own. As with GoCentral, the server knows you by
+your name alone, so band3 won't log in while it's blank or "User".
 
-When the connection to the server goes, or no server answers, band3 connects again
-by itself: 5 s later, then 10, 30 and 60 s apart until it's back (the panel's state
-says "reconnecting in N s"), starting over at 5 s once it logs in again. **Connect**
-connects now instead. It doesn't try again when the server itself said no (turned the
-connection away, or refused the login): that takes a change on your side.
+**The Rooms panel** shows your code, the server, the connection's state and the last error.
+Open it with **F10** (`bind_liveless_rooms`), or once online with **Xbox Live Options** →
+**Invite Friends** in the overshell. Give your code to the players who'll join you. Codes are 1-8
+letters and digits in either case; the public server gives five.
+
+If the connection drops, band3 reconnects by itself (5 s, then 10, 30 and 60 s apart); **Connect**
+tries now. It doesn't retry when the server refused the login: that needs a fix on your side.
 
 To join someone:
 
@@ -510,18 +460,13 @@ To join someone:
    you both pick the same mode: Play Now → Quickplay → **Choose Songs**. The host waits
    ("Waiting for Xbox LIVE Players...") until the player who joined picks it too.
 
-With a controller: while the panel is open and in front, the d-pad moves around it,
-A presses, X deletes a character and B closes it (B first stops typing in the field,
-if A started it). The game reads no buttons until the panel closes or you click the
-game, so a guitar's strum doesn't also move the overshell.
-
-Joins by code always go to UDP port 9103, as RB3Enhanced's do, so a host keeps
-`liveless_port` at 9103 (the panel warns when it isn't), forwarded to their PC by band3
-([Port mapping](#port-mapping)) or by hand. `liveless_external_ip` isn't needed: band3
-tells the game its public address as the Rooms server saw it. A player joins the host's
-public address, or its local network one when both have the same public address. The
-server also has the host's game send the joining player a packet first, which may get the
-join through some routers without the forward; don't count on it.
+- **With a controller:** the d-pad moves around the panel, A presses, X deletes a character
+  and B closes it. The game reads no buttons while the panel is in front.
+- **Ports:** joins by code always go to UDP 9103, as RB3Enhanced's do, so the host keeps
+  `liveless_port` at 9103 (the panel warns otherwise), forwarded by band3
+  ([Port mapping](#port-mapping)) or by hand. `liveless_external_ip` isn't needed: the server
+  supplies the public address. Players behind the same public address join over the local
+  network.
 
 What the panel's errors mean (✓: band3 connects again by itself, as above):
 
@@ -542,8 +487,7 @@ What the panel's errors mean (✓: band3 connects again by itself, as above):
 | `the server gave no address for <user>` | the server found the host but gave no address to reach them at |
 
 The log's `rooms:` lines follow the connection: logging in, with the code and public
-address, and what each join did. band3 tells the server which build it is
-(`band3 <build>`, the build its log's `band3 build` line names), as RB3Enhanced does.
+address, and what each join did.
 
 ## RB3Enhanced compatibility
 
@@ -553,13 +497,19 @@ band3 gives the game's scripts RB3Enhanced's functions, so mods written for RB3E
 Band 3 Deluxe among them) can call them: `rb3e_get_song_name`, `rb3e_get_artist`,
 `rb3e_get_album`, `rb3e_get_genre` and `rb3e_get_origin` (each takes a song ID),
 `rb3e_get_song_count`, `rb3e_set_venue` (for this session; `forced_venue` keeps its
-value), `rb3e_local_ip`, `rb3e_api_version` (0, the RB3E API band3 follows),
+value), `rb3e_local_ip`, `rb3e_api_version` (1, the RB3E API band3 follows),
 `rb3e_build_tag` (`band3 <build>`), `rb3e_commit`, `rb3e_is_emulator` (1), `rb3e_send_event_string`,
 `rb3e_change_music_speed`, `rb3e_change_track_speed` and their `rb3e_get_` pairs (the
 `song_speed` and `track_speed` settings, for this session) and
-`print_debug`, which logs its argument. `rb3e_relaunch_game` starts band3 again with
-the same command line (a minimized test run stays minimized; the new one waits for this
-one to close) and closes this one. `rb3e_delete_songcache` deletes the song cache the
+`print_debug`, which logs its argument. API 1's queries read the song being played:
+`rb3e_get_track_count`, `rb3e_get_track_type` (takes a track index) and
+`rb3e_has_track_type` (a track type), and, for a track type and difficulty,
+`rb3e_get_game_gem_count`, then for a gem of that list `rb3e_get_game_gem_time_ms`,
+`rb3e_get_game_gem_time_tick` (a 5th argument of 1 gives when the gem's sustain ends)
+and `rb3e_get_game_gem_slots`. 22-fret pro guitar and bass find the 17-fret track, as
+on RB3E. Outside a song they give -1, and `rb3e_has_track_type` 0.
+`rb3e_relaunch_game` starts band3 again with the same command line (a minimized test run
+stays minimized; the new one waits for this one to close) and closes this one. `rb3e_delete_songcache` deletes the song cache the
 game mounted (`songcache`, or Deluxe's `rbdxcache`, in the user data root) the next
 time band3 starts, since the game has it open. With `http_allow_scripts` on, the web
 server's `/execute` runs them, e.g. `{print_debug {rb3e_get_song_name 1009}}`.
@@ -572,6 +522,11 @@ defines `RB3E` and `RB3E_HAS_VERSION`: Deluxe then shows its RB3E version line, 
 party mode (which shows this PC's address for the web page above) and looks songs up
 through these functions, and its "Clear and reboot game" after a Deluxe update clears the
 song cache and restarts band3.
+
+Deluxe checks `rb3e_api_version` first and, if it isn't the version it expects, says at
+every start that RB3Enhanced needs updating and leaves those features off. band3
+answers 1, as RB3E's nightlies have since 2026-10-11; Deluxe builds from before then
+expect 0, so on those the prompt means Deluxe needs updating, not band3.
 
 ### Modifiers and options
 

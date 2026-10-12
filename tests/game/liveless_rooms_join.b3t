@@ -13,6 +13,9 @@ set autoplay true
 rooms_join HOST0001
 wait joined timeout=30s
 rooms_status last_join_user=host error=
+# the join's own screen (join_invite_screen) goes first: a press during it
+# is lost, and on a Steam Deck running both games it lasted past the sleep
+wait screen=main_hub_screen timeout=30s
 sleep 3s
 # Play Now, Quickplay, Choose Songs
 press green

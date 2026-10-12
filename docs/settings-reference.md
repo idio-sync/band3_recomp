@@ -211,17 +211,17 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `gocentral`<br>Leaderboards, battles and setlists (GoCentral) | `false` | `true`, `false` | Connect to GoCentral, the fan-run Rock Central server RB3Enhanced uses, for leaderboards, battles and setlist sharing. Needs username set: it's your account there, with no password, so pick one nobody else uses *Applies at the next start.* *Windows only.* |
-| `gocentral_address`<br>Server | `gocentral-xbox.rbenhanced.rocks` | text | The GoCentral server to connect to: RB3Enhanced's Xbox 360 one, or your own *Applies at the next start.* *Windows only.* |
+| `gocentral`<br>Leaderboards, battles and setlists (GoCentral) | `false` | `true`, `false` | Connect to GoCentral, the fan-run Rock Central server RB3Enhanced uses, for leaderboards, battles and setlist sharing. Needs username set: it's your account there, with no password, so pick one nobody else uses *Applies at the next start.* |
+| `gocentral_address`<br>Server | `gocentral-xbox.rbenhanced.rocks` | text | The GoCentral server to connect to: RB3Enhanced's Xbox 360 one, or your own *Applies at the next start.* |
 
 ### Online play (Liveless)
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `liveless`<br>Play online without Xbox Live | `false` | `true`, `false` | Play online with other band3 and RB3Enhanced players without Xbox Live, as RB3Enhanced's Liveless does: searching for an online game joins liveless_connect's *Applies at the next start.* *Windows only.* |
-| `liveless_connect`<br>Game to join | `127.0.0.1` | text | The game to join when searching online: its player's address, and :port if it isn't 9103. 127.0.0.1 to host *Applies at the next start.* *Windows only.* |
-| `liveless_external_ip`<br>Your address for players joining | *(empty)* | text | This PC's address as players joining you reach it: your public IP for players over the internet. Empty uses this PC's address on the local network *Applies at the next start.* *Windows only.* |
-| `liveless_port`<br>Port | `9103` | `1024` to `65000` | The UDP port this game plays online on, which players joining you need open. RB3Enhanced's is 9103; another (9203, say) lets a second band3 on this PC join the first *Applies at the next start.* *Windows only.* |
+| `liveless`<br>Play online without Xbox Live | `false` | `true`, `false` | Play online with other band3 and RB3Enhanced players without Xbox Live, as RB3Enhanced's Liveless does: searching for an online game joins liveless_connect's *Applies at the next start.* |
+| `liveless_connect`<br>Game to join | `127.0.0.1` | text | The game to join when searching online: its player's address, and :port if it isn't 9103. 127.0.0.1 to host *Applies at the next start.* |
+| `liveless_external_ip`<br>Your address for players joining | *(empty)* | text | This PC's address as players joining you reach it: your public IP for players over the internet. Empty uses this PC's address on the local network *Applies at the next start.* |
+| `liveless_port`<br>Port | `9103` | `1024` to `65000` | The UDP port this game plays online on, which players joining you need open. RB3Enhanced's is 9103; another (9203, say) lets a second band3 on this PC join the first *Applies at the next start.* |
 
 ### More settings
 

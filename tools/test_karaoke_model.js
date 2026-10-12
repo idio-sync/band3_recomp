@@ -222,3 +222,56 @@ test('a texture the game was busy for is asked for again; one that is not there 
   assert.strictEqual(M.textureRetryMs(0, 2), 4000);
   assert.strictEqual(M.textureRetryMs(503, 20), 10000);
 });
+
+// fetchRetrying's stand-ins: a fetch giving each outcome in turn (a status, or
+// 'error' for a request that fails), and a timer that only records its waits
+function fakeFetch(outcomes) {
+  const calls = [];
+  const f = (url) => {
+    calls.push(url);
+    const out = outcomes[calls.length - 1];
+    return out === 'error' ? Promise.reject(new Error('down'))
+                           : Promise.resolve({ ok: out === 200, status: out });
+  };
+  return { f, calls };
+}
+function fakeWait() {
+  const waits = [];
+  return { wait: (ms) => { waits.push(ms); return Promise.resolve(); }, waits };
+}
+
+test('a fetch the game was busy for is made again, sooner at first, until it comes', async () => {
+  const { f, calls } = fakeFetch([503, 503, 200]);
+  const { wait, waits } = fakeWait();
+  const r = await M.fetchRetrying('/a', f, wait);
+  assert.strictEqual(r.status, 200);
+  assert.deepStrictEqual(calls, ['/a', '/a', '/a']);
+  assert.deepStrictEqual(waits, [1000, 2000]);
+});
+
+test("a fetch for something that isn't there gives null, and isn't made again", async () => {
+  const { f, calls } = fakeFetch([404]);
+  const { wait, waits } = fakeWait();
+  assert.strictEqual(await M.fetchRetrying('/a', f, wait), null);
+  assert.deepStrictEqual([calls.length, waits], [1, []]);
+});
+
+test('a fetch that failed is made again', async () => {
+  const { f } = fakeFetch(['error', 200]);
+  const { wait, waits } = fakeWait();
+  assert.strictEqual((await M.fetchRetrying('/a', f, wait)).status, 200);
+  assert.deepStrictEqual(waits, [1000]);
+});
+
+test('a fetch no longer wanted stops being made', async () => {
+  // wanted for the first try only: the song changed while it waited to try again
+  const { f, calls } = fakeFetch([503, 200]);
+  const { wait } = fakeWait();
+  let asked = 0;
+  assert.strictEqual(await M.fetchRetrying('/a', f, wait, () => asked++ === 0), null);
+  assert.strictEqual(calls.length, 1);
+  // and one not wanted at all isn't made
+  const none = fakeFetch([200]);
+  assert.strictEqual(await M.fetchRetrying('/a', none.f, wait, () => false), null);
+  assert.strictEqual(none.calls.length, 0);
+});

@@ -47,6 +47,7 @@
 #include "src/Test/game_state.h"
 #include "home_assistant.h"
 #include "album_art.h"
+#include "game_assets.h"
 #include "http_game.h"
 #include "http_page.h"
 #include "http_request.h"
@@ -387,34 +388,12 @@ std::optional<std::string> LyricsJson(const std::string& shortname, bool& busy) 
     return json.empty() ? std::nullopt : std::optional(json);
 }
 
-// /game_asset's replies (a PNG, a font's JSON, or a 404) by key: "t:" and a
-// texture's path, "f:" or "p:" and a font's name (its JSON, its PNG), newest
-// last, for kMaxAssets. Decoding happens here; the game thread only reads.
+// /game_asset's replies (game_assets.h's AssetCache), the newest kMaxAssets.
+// Decoding happens here; the game thread only reads.
 constexpr size_t kMaxAssets = 48;
 constexpr size_t kMaxAssetFile = 4 * 1024 * 1024;
 constexpr int kAssetMaxAge = 86400;
-
-struct Asset {
-    int status = 404;
-    std::string type{kText};
-    std::string body = "No such game asset";
-};
-std::mutex g_assets_mutex;
-std::deque<std::pair<std::string, Asset>> g_assets;
-
-std::optional<Asset> CachedAsset(const std::string& key) {
-    std::lock_guard lock(g_assets_mutex);
-    for (const auto& [k, asset] : g_assets) {
-        if (k == key) return asset;
-    }
-    return std::nullopt;
-}
-
-void CacheAsset(const std::string& key, const Asset& asset) {
-    std::lock_guard lock(g_assets_mutex);
-    g_assets.emplace_back(key, asset);
-    if (g_assets.size() > kMaxAssets) g_assets.pop_front();
-}
+AssetCache g_assets{kMaxAssets};
 
 // nullopt while the game is busy
 std::optional<Asset> GameAsset(const Route& route) {
@@ -425,7 +404,7 @@ std::optional<Asset> GameAsset(const Route& route) {
                              : route.endpoint == Endpoint::kGameFont ? "f:"
                                                                      : "p:") +
                             arg;
-    if (auto asset = CachedAsset(key)) return asset;
+    if (auto asset = g_assets.Get(key)) return asset;
     const std::string path = texture ? arg : "ui/resource/fonts/gen/" + arg + ".milo_xbox";
     std::optional<std::string> file;
     if (!RunOnGameThread([&file, &path](PPCContext& ctx, uint8_t* base) {
@@ -440,7 +419,7 @@ std::optional<Asset> GameAsset(const Route& route) {
         } else if (file) {
             REXLOG_DEBUG("Web server: {} isn't a DXT1 or DXT5 texture", path);
         }
-        CacheAsset(key, asset);
+        g_assets.Put(key, asset);
         return asset;
     }
     // a font's JSON and PNG come from one read, so both are kept
@@ -455,8 +434,8 @@ std::optional<Asset> GameAsset(const Route& route) {
             REXLOG_DEBUG("Web server: {} has no font band3 reads", path);
         }
     }
-    CacheAsset("f:" + arg, json);
-    CacheAsset("p:" + arg, png);
+    g_assets.Put("f:" + arg, json);
+    g_assets.Put("p:" + arg, png);
     return route.endpoint == Endpoint::kGameFont ? json : png;
 }
 
@@ -469,36 +448,14 @@ milo::MiloCache g_milos{4};
 
 // nullopt while the game is busy
 std::optional<Asset> MiloTextureAsset(const Route& route) {
-    const std::string& milo = route.argument;
-    if (!AllowedMiloPath(milo) || !AllowedTextureName(route.name)) return Asset{};
-    const std::string key = "m:" + milo + "|" + route.name;
-    if (auto asset = CachedAsset(key)) return asset;
-    const milo::MiloCache::Load loaded = g_milos.Get(milo, [&milo] {
-        milo::MiloCache::Load out;
-        std::optional<std::string> file;
-        if (!RunOnGameThread([&file, &milo](PPCContext& ctx, uint8_t* base) {
-                file = game::GameFile(ctx, base, milo, kMaxMiloFile);
-            })) {
-            out.busy = true;
-            return out;
-        }
-        if (auto raw = file ? milo::Decompress(*file) : std::nullopt) {
-            out.raw = std::make_shared<const std::string>(std::move(*raw));
-        }
-        return out;
+    return MiloTexture(route, g_assets, g_milos, [](const std::string& path) {
+        GameRead read;
+        read.busy = !RunOnGameThread([&read, &path](PPCContext& ctx, uint8_t* base) {
+            read.file = game::GameFile(ctx, base, path, kMaxMiloFile);
+        });
+        if (!read.busy && !read.file) REXLOG_DEBUG("Web server: there's no {} to read", path);
+        return read;
     });
-    if (loaded.busy) return std::nullopt;
-    // another texture of it may have waited on the same load
-    if (auto asset = CachedAsset(key)) return asset;
-    const std::shared_ptr<const std::string>& raw = loaded.raw;
-    Asset asset;
-    if (const auto image = raw ? milo::FindNamedBitmap(*raw, route.name) : std::nullopt) {
-        asset = {200, "image/png", EncodePng(*image)};
-    } else {
-        REXLOG_DEBUG("Web server: {} has no {} band3 decodes", milo, route.name);
-    }
-    CacheAsset(key, asset);
-    return asset;
 }
 
 // the song IDs of every song in the game; nullopt while the game is busy
