@@ -424,6 +424,8 @@ struct GpuRenderer::Impl {
     SDL_GPUGraphicsPipeline* mip_pipeline = nullptr;
     SDL_GPUSampler* mip_sampler = nullptr;
     bool inline_mips_ok = false;
+    // SDL's own mips need a command buffer of their own (Direct3D 12: below)
+    bool sdl_mips_own_buffer = true;
     // by blend mode, DepthRules::Key, AlphaMode, CullWinding, PixelKind and
     // sample count, all made before the first frame; and the overlay start's,
     // by sample count (OverlayStartPipeline)
@@ -1288,6 +1290,7 @@ bool GpuRenderer::Impl::Create() {
     // Inline mips on Direct3D 12 only, whose GenerateMipmaps they copy
     // (Vulkan's differs, untested); otherwise SDL's in a command buffer of
     // their own. The sampler is SDL's blit one: every level reachable.
+    sdl_mips_own_buffer = std::strcmp(SDL_GetGPUDeviceDriver(device), "direct3d12") == 0;
     if (std::strcmp(SDL_GetGPUDeviceDriver(device), "direct3d12") == 0) {
         mip_vertex_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_VERTEX, kMipVertexDxbc,
                                        sizeof(kMipVertexDxbc), kMipVertexSpirv,
@@ -4633,10 +4636,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 DrawMips(cmd, rt.color, rt.w, rt.h, rt.levels);
                 next = next_part();
             } else {
-                // SDL's blits bind one sampler each, which would put the heap
-                // off kSamplerBatch's step (BeginPass), so they get a command
-                // buffer of their own, with fresh heaps
-                if (next_part()) {
+                // SDL's blits bind one sampler each, which on Direct3D 12
+                // would put the heap off kSamplerBatch's step (BeginPass), so
+                // they get a command buffer of their own there, with fresh
+                // heaps. Vulkan's are vkCmdBlitImage, no heaps, so they go in
+                // the frame's: a submit fewer each (13 a post frame in a song
+                // on a Steam Deck)
+                if (!sdl_mips_own_buffer || next_part()) {
                     MarkTime(cmd, gpu_timing::kMips);
                     SDL_GenerateMipmapsForGPUTexture(cmd, rt.color);
                     next = next_part();
