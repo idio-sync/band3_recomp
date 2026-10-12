@@ -497,13 +497,19 @@ band3 gives the game's scripts RB3Enhanced's functions, so mods written for RB3E
 Band 3 Deluxe among them) can call them: `rb3e_get_song_name`, `rb3e_get_artist`,
 `rb3e_get_album`, `rb3e_get_genre` and `rb3e_get_origin` (each takes a song ID),
 `rb3e_get_song_count`, `rb3e_set_venue` (for this session; `forced_venue` keeps its
-value), `rb3e_local_ip`, `rb3e_api_version` (0, the RB3E API band3 follows),
+value), `rb3e_local_ip`, `rb3e_api_version` (1, the RB3E API band3 follows),
 `rb3e_build_tag` (`band3 <build>`), `rb3e_commit`, `rb3e_is_emulator` (1), `rb3e_send_event_string`,
 `rb3e_change_music_speed`, `rb3e_change_track_speed` and their `rb3e_get_` pairs (the
 `song_speed` and `track_speed` settings, for this session) and
-`print_debug`, which logs its argument. `rb3e_relaunch_game` starts band3 again with
-the same command line (a minimized test run stays minimized; the new one waits for this
-one to close) and closes this one. `rb3e_delete_songcache` deletes the song cache the
+`print_debug`, which logs its argument. API 1's queries read the song being played:
+`rb3e_get_track_count`, `rb3e_get_track_type` (takes a track index) and
+`rb3e_has_track_type` (a track type), and, for a track type and difficulty,
+`rb3e_get_game_gem_count`, then for a gem of that list `rb3e_get_game_gem_time_ms`,
+`rb3e_get_game_gem_time_tick` (a 5th argument of 1 gives when the gem's sustain ends)
+and `rb3e_get_game_gem_slots`. 22-fret pro guitar and bass find the 17-fret track, as
+on RB3E. Outside a song they give -1, and `rb3e_has_track_type` 0.
+`rb3e_relaunch_game` starts band3 again with the same command line (a minimized test run
+stays minimized; the new one waits for this one to close) and closes this one. `rb3e_delete_songcache` deletes the song cache the
 game mounted (`songcache`, or Deluxe's `rbdxcache`, in the user data root) the next
 time band3 starts, since the game has it open. With `http_allow_scripts` on, the web
 server's `/execute` runs them, e.g. `{print_debug {rb3e_get_song_name 1009}}`.
@@ -516,6 +522,11 @@ defines `RB3E` and `RB3E_HAS_VERSION`: Deluxe then shows its RB3E version line, 
 party mode (which shows this PC's address for the web page above) and looks songs up
 through these functions, and its "Clear and reboot game" after a Deluxe update clears the
 song cache and restarts band3.
+
+Deluxe checks `rb3e_api_version` first and, if it isn't the version it expects, says at
+every start that RB3Enhanced needs updating and leaves those features off. band3
+answers 1, as RB3E's nightlies have since 2026-10-11; Deluxe builds from before then
+expect 0, so on those the prompt means Deluxe needs updating, not band3.
 
 ### Modifiers and options
 
