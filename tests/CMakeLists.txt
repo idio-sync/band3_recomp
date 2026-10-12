@@ -60,6 +60,7 @@ add_executable(band3_tests
     movie_planes_test.cpp
     music_video_test.cpp
     mogg_test.cpp
+    video_search_test.cpp
     ytdlp_test.cpp
     sync_align_test.cpp
     video_decoder_test.cpp
@@ -156,6 +157,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Lights/stagekit.cpp
     ${BAND3_ROOT}/src/Video/child_process.cpp
     ${BAND3_ROOT}/src/Video/mogg.cpp
+    ${BAND3_ROOT}/src/Video/video_search.cpp
     ${BAND3_ROOT}/src/Video/ytdlp.cpp
     ${BAND3_ROOT}/src/Video/picture_convert.cpp
     ${BAND3_ROOT}/src/Video/song_audio.cpp
