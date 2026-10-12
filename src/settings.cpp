@@ -561,6 +561,12 @@ REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Advanced/Native renderer
     "refresh shows the newest frame anyway, and auto's variable refresh display shows each "
     "as it comes, so the delay would only add lag");
 
+REXCVAR_DEFINE_BOOL(native_present_trace, false, "Band3/Advanced/Native renderer",
+    "With the native picture shown, log each frame the native renderer hands the window (its "
+    "Present, submission, finish and publishing times, in steady-clock ns, and its record and "
+    "GPU wait ms) and each paint (its time, and the frame it shows), to tell why a frame was "
+    "shown twice or skipped. About 120 lines a second");
+
 REXCVAR_DEFINE_BOOL(native_phase_lock, true, "Band3/Advanced/Native renderer",
     "With the native picture shown and the frame cap at a fixed rate (display or a number "
     "matching the display's), move the cap's beat so each frame reaches the window about "

@@ -1292,7 +1292,18 @@ class Renderer {
         if (describe) stats_ = stats;
         lock.unlock();
         // redraws aren't timed
-        if (to_window && d.new_frame) NotePublished(d.presented);
+        if (to_window && d.new_frame) {
+            if (REXCVAR_GET(native_present_trace)) {
+                static constexpr const char* kKinds[] = {"world", "post", "between", "full"};
+                REXLOG_INFO("present trace: frame {} {} presented {} submitted {} done {} "
+                            "published {} record {:.2f} wait {:.2f}",
+                            d.cap->frame, kKinds[int(KindOf(*d.cap))], Nanoseconds(d.presented),
+                            d.submitted_ns, d.done_ns,
+                            Nanoseconds(std::chrono::steady_clock::now()), d.gs.record_ms,
+                            d.gs.wait_ms);
+            }
+            NotePublished(d.presented);
+        }
         if (published) (*published)();
     }
 
@@ -1601,6 +1612,9 @@ void NotePaint(std::chrono::steady_clock::time_point now, bool native, int sourc
         g_paints.Paint(Nanoseconds(now), native, source, serial, presented_ns);
         if (period) nudge = g_phase.Shown(serial, presented_ns, Nanoseconds(now), period);
     }
+    if (native && REXCVAR_GET(native_present_trace))
+        REXLOG_INFO("present trace: paint at {} shows {} presented {}", Nanoseconds(now), serial,
+                    presented_ns);
     if (nudge) pacing::NudgeBeat(nudge);
 }
 
