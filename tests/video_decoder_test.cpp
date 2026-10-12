@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include "src/Video/mogg.h"
+#include "src/Video/still_check.h"
 #include "src/Video/sync_align.h"
 #include "src/Video/video_decoders.h"
 #include <cstdlib>
@@ -141,6 +142,37 @@ TEST_CASE("OpenVideo opens a clip with whatever this build decodes with") {
     RgbFrame f;
     CHECK(video->Read(f));
     video.reset();
+    EndVideoThread();
+}
+
+TEST_CASE("pictures that hardly change are a still video; ones that do aren't") {
+    RgbFrame f;
+    f.width = 64;
+    f.height = 36;
+    f.pixels.assign(64 * 36, 0xFF336699u);
+    const Thumb a = MakeThumb(f);
+    REQUIRE(a.size() == size_t(kThumbWidth) * kThumbHeight);
+    // a little noise, as compression leaves
+    Thumb b = a;
+    for (size_t i = 0; i < b.size(); i += 3) b[i] = uint8_t(b[i] + 2);
+    CHECK(LooksStill({a, b, a, b}));
+    f.pixels.assign(64 * 36, 0xFFDD2211u);
+    const Thumb red = MakeThumb(f);
+    CHECK_FALSE(LooksStill({a, red, a, red}));
+    CHECK_FALSE(LooksStill({a}));
+}
+
+TEST_CASE("a clip of one picture reads as still, a changing one doesn't") {
+    std::string error;
+    if (!StartVideoThread(error)) {
+        MESSAGE("skipped: " << error);
+        return;
+    }
+    // a second of red then a second of blue
+    CHECK(IsStillVideo(Clip("music_video_red_blue.mp4"), 2.0, error, 8) == false);
+    // four seconds of one picture (tests/data, made with ffmpeg's color source)
+    CHECK(IsStillVideo(Clip("still_picture.mp4"), 4.0, error, 8) == true);
+    CHECK_FALSE(IsStillVideo(Clip("sync_clicks.webm"), 10.0, error));
     EndVideoThread();
 }
 

@@ -23,10 +23,6 @@ namespace band3::video {
 
 namespace {
 
-// the video soundtrack read for the match: the song's start can be this far
-// into it (a long intro), plus the captured part
-constexpr double kSoundtrackSeconds = 240.0;
-
 std::mutex g_mutex;
 // the song (CurrentMusicVideo's count) the capture is for, and what it has
 uint64_t g_song = ~0ull;
@@ -113,7 +109,7 @@ std::optional<SyncResult> AlignVideo(const std::filesystem::path& video,
     if (auto cached = LoadEnvelope(VideoEnvelopePath(video), stamp)) {
         video_env = std::move(*cached);
     } else {
-        video_env = SoundtrackEnvelope(video, kSoundtrackSeconds, error);
+        video_env = SoundtrackEnvelope(video, kVideoSoundtrackSeconds, error);
         if (video_env.empty()) return std::nullopt;
         SaveEnvelope(VideoEnvelopePath(video), video_env, stamp);
     }

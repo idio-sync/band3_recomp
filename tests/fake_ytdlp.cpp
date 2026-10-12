@@ -6,11 +6,13 @@
 //   ytsearchN:<query>          tests/data/ytdlp_search.jsonl's lines
 //   --dump-json <url>          one video's description; "unavailable" in it fails
 //   -o <stem>.%(ext)s <url>    a download, copied from tests/data by the link:
-//                              "clicks_late" sync_clicks_late.m4a, "clicks"
-//                              sync_clicks.webm, a picture (-f bv*/b) the
-//                              red-blue clip; "slow" takes 10 s, "fail" fails
+//                              "clicks_late" or "offic" sync_clicks_late.m4a, else
+//                              sync_clicks.webm; a picture (-f bv*/b) the
+//                              red-blue clip (with FAKE_YTDLP_STILL set, a still
+//                              one); "slow" takes 10 s, "fail" fails
 
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -74,9 +76,12 @@ int Run(const std::vector<std::string>& args) {
         return 0;
     }
     if (out.empty() || url.empty()) return 2;
-    const fs::path from = format == "bv*/b"           ? Data("music_video_red_blue.mp4")
-                          : Has(url, "clicks_late")   ? Data("sync_clicks_late.m4a")
-                                                      : Data("sync_clicks.webm");
+    // FAKE_YTDLP_STILL set: every picture's a still one
+    const bool still = std::getenv("FAKE_YTDLP_STILL") != nullptr;
+    const fs::path from = format == "bv*/b"
+                              ? Data(still ? "still_picture.mp4" : "music_video_red_blue.mp4")
+                          : Has(url, "clicks_late") || Has(url, "offic") ? Data("sync_clicks_late.m4a")
+                                                                         : Data("sync_clicks.webm");
     const size_t at = out.find("%(ext)s");
     if (at == std::string::npos) return 2;
     std::string to = out;
