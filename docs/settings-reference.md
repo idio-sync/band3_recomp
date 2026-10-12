@@ -244,6 +244,8 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 
 ## Videos
 
+### Music videos
+
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
 | `music_videos`<br>Music videos in the video venues | `true` | `true`, `false` | Play a song's music video in the video venues, in place of their background clips, when music_videos_folder has one for it: &lt;shortname&gt;.mp4 (or .mkv, .mov, .webm...), and optionally &lt;shortname&gt;.ini with Clone Hero's video_start_time. forced_venue video picks the video venues. Turned on, it applies from the next song |
@@ -254,6 +256,17 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `music_video_auto_sync`<br>Sync music videos automatically | `true` | `true`, `false` | Find each music video's offset from its sound: when its song is picked, the song's audio (read from its package, or for an encrypted song taken as it first plays, about 45 s in) is matched against the video's and a sure match is saved as video_start_time in the video's .ini, and used at once. An .ini that sets one is left alone |
 | `music_videos_folder`<br>Music videos folder | `videos` | text | The folder music videos are looked for in (empty: videos). A relative folder is relative to band3_config.ini's folder (or band3's own folder if there is no ini) |
 | `music_video_fit`<br>Music video shape | `fit` | `fit` Fit, with black bars, `fill` Fill, edges cut off, `stretch` Stretch | How a music video whose shape isn't the screen's is shown: fit (all of it, with black bars), fill (the whole screen, its edges cut off) or stretch |
+
+### Finding videos
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `music_video_ytdlp_path`<br>yt-dlp program | *(empty)* | text | yt-dlp, which finds and downloads songs' music videos from the Videos tab: its program file (yt-dlp.exe). Empty looks for yt-dlp on PATH. band3 doesn't come with it: get it from github.com/yt-dlp/yt-dlp |
+| `music_video_ytdlp_args`<br>More yt-dlp options | *(empty)* | text | More yt-dlp options for finding and downloading music videos, as typed on its command line, e.g. --cookies-from-browser firefox for videos YouTube asks to sign in for |
+| `music_video_max_height`<br>Picture size | `1080` | `480` 480p, `720` 720p, `1080` 1080p, `1440` 1440p, `2160` 2160p (4K) | The tallest picture a downloaded music video has, in lines: 480, 720, 1080, 1440 or 2160. Taller ones take more space and decoding |
+| `music_video_prefer_60fps`<br>60 fps where there is | `true` | `true`, `false` | Download a music video's 60 fps picture where it has one (music_video_full_rate plays it at 60); off, its 30 fps one |
+| `music_video_auto_accept`<br>Take sure matches without asking | `true` | `true`, `false` | When finding music videos, take one without asking when it's surely the song's: its title, channel and length look right and its sound matches the song's. Off, every song's results wait in the Videos tab for you to choose |
+| `music_video_keep_audio`<br>Keep downloaded videos' sound | `false` | `true`, `false` | Keep a downloaded music video's sound (in the videos folder's .sync folder), so it can be aligned again with its song; band3 plays the video under the game's own sound, so it's otherwise deleted once the video is synced |
 
 ## Advanced
 

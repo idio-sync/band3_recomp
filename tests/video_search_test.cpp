@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include "src/Video/video_job_state.h"
 #include "src/Video/video_search.h"
 
 using namespace band3::video;
@@ -106,6 +107,47 @@ TEST_CASE("a video much shorter than the song scores less; a longer one is usual
     const auto unknown = Score({"x", "Master of Puppets", "Metallica", 0},
                                Video("d", "Metallica - Master of Puppets", "Metallica", 520));
     CHECK(unknown.score > 0.5);
+}
+
+TEST_CASE("what each song's search came to is saved and read back") {
+    SongVideoStatuses statuses;
+    SongVideoStatus& s = statuses["masterofpuppets"];
+    s.end = FetchEnd::kReview;
+    s.message = "nothing sure \"enough\"";
+    s.when = 1791800000;
+    TriedCandidate t;
+    t.candidate = Score(kPuppets, Video("offic", "Metallica: Master of Puppets", "Metallica", 517.5));
+    t.problem = "its sound doesn't surely match";
+    SyncResult r;
+    r.found = true;
+    r.offset = -3.252;
+    r.score = 0.81;
+    r.margin = 1.2;
+    t.match = r;
+    s.candidates.push_back(t);
+    TriedCandidate lyric;
+    lyric.candidate = Score(kPuppets, Video("lyr", "Master of Puppets (Lyrics)", "X", 515));
+    s.candidates.push_back(lyric);
+    statuses["other"].end = FetchEnd::kNoVideo;
+
+    const SongVideoStatuses back = ParseVideoStatuses(FormatVideoStatuses(statuses));
+    REQUIRE(back.size() == 2);
+    const SongVideoStatus& b = back.at("masterofpuppets");
+    CHECK(b.end == FetchEnd::kReview);
+    CHECK(b.message == s.message);
+    CHECK(b.when == 1791800000);
+    REQUIRE(b.candidates.size() == 2);
+    CHECK(b.candidates[0].candidate.video.url == "https://www.youtube.com/watch?v=offic");
+    CHECK(b.candidates[0].candidate.video.duration == 517.5);
+    CHECK(b.candidates[0].candidate.score == doctest::Approx(t.candidate.score));
+    REQUIRE(b.candidates[0].match);
+    CHECK(b.candidates[0].match->offset == doctest::Approx(-3.252));
+    CHECK_FALSE(b.candidates[0].match->confident);
+    CHECK(b.candidates[1].candidate.penalized);
+    CHECK_FALSE(b.candidates[1].match);
+    CHECK(back.at("other").end == FetchEnd::kNoVideo);
+    CHECK(ParseVideoStatuses("").empty());
+    CHECK(ParseVideoStatuses(R"({"version": 2, "songs": {"x": {"end": "done"}}})").empty());
 }
 
 TEST_CASE("an artist's own channel or VEVO counts for it") {

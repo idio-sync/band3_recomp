@@ -343,12 +343,14 @@ While a video plays, `[` shows it 50 ms earlier and `]` 50 ms later (`bind_music
 and `bind_music_video_later`); each press is saved to the `.ini` and shown at the top of the
 screen. Earlier is for a singer whose lips move after the sound.
 
-The **Videos** tab, in the launcher and the in-game settings, lists the videos in the videos
-folder with each one's offset in milliseconds, which can be typed in, and how it got it:
-synced automatically, set by hand, not sure (with the best guess and **Use it** to take it),
-or not aligned yet. **Align** matches a video with its song, from the song's package (an
+The **Videos** tab, in the launcher and the in-game settings, lists the songs in band3's
+packages (as the game last read them) with each one's video, if it has one, and its offset in
+milliseconds, which can be typed in, and how it got it: synced, set by hand, not sure (with
+the best guess and **Use the guess** to take it), or not synced yet. Picking a song shows its
+controls under the list. **Align** matches a video with its song, from the song's package (an
 encrypted song needs to have been played with the video once): after replacing the video
-with another cut, say, or before ever playing it. **Open the videos folder**
+with another cut, say, or before ever playing it. Videos named after no song in the packages
+(the disc's songs, or misnamed ones) are listed after the songs. **Open the videos folder**
 opens it. `music_video_fit` keeps a video whose
 shape isn't 16:9 whole with black bars (`fit`), fills the screen and cuts its edges off
 (`fill`), or stretches it. Its sound isn't played.
@@ -363,6 +365,50 @@ libswscale), of the version it was built with. A video that can't be decoded is 
 (`Music video ...`) and the venue keeps its own clips. Turning a 1080p video into the venue's
 picture takes about a fifth of a CPU core, besides decoding it (an eighth of one for 1080p
 VP9).
+
+### Finding videos
+
+band3 can find and download songs' music videos with [yt-dlp](https://github.com/yt-dlp/yt-dlp),
+which it doesn't come with: download yt-dlp (`yt-dlp.exe` on Windows) and set
+`music_video_ytdlp_path` (the Videos tab's **yt-dlp program**) to it, or put it on PATH. The
+tab says which yt-dlp it found; **Update yt-dlp** runs `yt-dlp -U`, which is worth doing now
+and then, as YouTube changes often and an old yt-dlp stops finding videos.
+
+For a song, **Search for its video** searches YouTube for "<artist> <title> official music
+video" and goes down the likeliest results: one whose title has the song's title and artist,
+on the artist's own channel (or VEVO), with "official video" in its title and about the
+song's length. A result that says it's another kind of upload (a lyric video, a live one, a
+cover, a visualizer, an "audio" upload) isn't taken without asking, nor is an auto-generated
+art track. For the rest, only the sound is fetched first (a few MB) and matched against the
+song's; the first that surely matches has its picture fetched, at up to
+`music_video_max_height` lines (1080 by default; 60 fps where there is, with
+`music_video_prefer_60fps`), checked for a picture that moves (an "audio" upload's still
+picture matches the song perfectly), saved as `<shortname>.<ext>` with its offset, and synced.
+yt-dlp's FFmpeg isn't needed: band3 never merges the sound and the picture, as it plays the
+video under the game's own sound (`music_video_keep_audio` keeps the sound, for aligning
+again).
+
+When nothing's sure, the results stay listed under the song for you to choose from (**Use**,
+or **Open** to watch it first), or paste a link to any video yt-dlp can fetch (YouTube,
+Vimeo, a direct `.mp4` link...) and **Get it**, or **Choose a file...** on your PC (copied
+in, not moved). A video you chose is taken whatever its sound says, synced as well as it can
+be ("Synced by guess" means check it), and marked `video_pinned = 1` in its `.ini`, with
+`video_source` the link it came from: searches for many songs never replace it. Choosing
+another video for a song replaces its old one once the new one is in.
+
+**Find videos for** does the same for many songs at once: the songs without a video (leaving
+out those a search found nothing for, or left for review), those to review, those that
+failed, or the songs shown (with the search box and filters). It says how much it will take
+before it starts (about 90 MB a song at 1080p), runs a song at a time in the background, can
+be paused or stopped, and waits while a song is being played, so it never takes the game's
+time. With `music_video_auto_accept` off, it only proposes: every song's results wait for
+you to choose. `music_video_ytdlp_args` adds yt-dlp options, such as
+`--cookies-from-browser firefox` for videos YouTube asks to sign in for. What each song's
+search came to is kept in `band3_music_videos.json` in the user data folder.
+
+A song whose audio band3 can't read (an encrypted one) still gets a likely video, which syncs
+the first time the song plays. The disc's own songs aren't listed, as they're in no package:
+their videos are added by hand, as `<shortname>.<ext>`.
 
 ## Loose files (mods)
 

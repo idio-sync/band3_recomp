@@ -35,6 +35,11 @@ constexpr Choice kVideoVenueChances[] = {
     {"100", "Always"},
 };
 
+// music_video_max_height's
+constexpr Choice kVideoHeights[] = {
+    {"480", "480p"}, {"720", "720p"}, {"1080", "1080p"}, {"1440", "1440p"}, {"2160", "2160p (4K)"},
+};
+
 constexpr Choice kVideoFits[] = {
     {"fit", "Fit, with black bars"},
     {"fill", "Fill, edges cut off"},
@@ -204,6 +209,18 @@ constexpr Setting kSettings[] = {
      .label = "Music videos folder", .widget = kPath},
     {.cvar = "music_video_fit", .tab = kVideos, .section = "Music videos", .label = "Music video shape",
      .widget = kCombo, .choices = kVideoFits},
+    {.cvar = "music_video_ytdlp_path", .tab = kVideos, .section = "Finding videos",
+     .label = "yt-dlp program", .widget = kText},
+    {.cvar = "music_video_ytdlp_args", .tab = kVideos, .section = "Finding videos",
+     .label = "More yt-dlp options", .widget = kText},
+    {.cvar = "music_video_max_height", .tab = kVideos, .section = "Finding videos",
+     .label = "Picture size", .widget = kCombo, .choices = kVideoHeights},
+    {.cvar = "music_video_prefer_60fps", .tab = kVideos, .section = "Finding videos",
+     .label = "60 fps where there is", .widget = kCheckbox},
+    {.cvar = "music_video_auto_accept", .tab = kVideos, .section = "Finding videos",
+     .label = "Take sure matches without asking", .widget = kCheckbox},
+    {.cvar = "music_video_keep_audio", .tab = kVideos, .section = "Finding videos",
+     .label = "Keep downloaded videos' sound", .widget = kCheckbox},
     {.cvar = "song_speed", .tab = kGame, .section = "Game", .label = "Song speed",
      .widget = kFloatSlider, .range = kSpeeds, .unit = "x"},
     {.cvar = "track_speed", .tab = kGame, .section = "Game", .label = "Track speed",

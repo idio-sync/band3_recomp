@@ -160,6 +160,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Video/mogg.cpp
     ${BAND3_ROOT}/src/Video/still_check.cpp
     ${BAND3_ROOT}/src/Video/video_fetch.cpp
+    ${BAND3_ROOT}/src/Video/video_job_state.cpp
     ${BAND3_ROOT}/src/Video/video_search.cpp
     ${BAND3_ROOT}/src/Video/ytdlp.cpp
     ${BAND3_ROOT}/src/Video/picture_convert.cpp

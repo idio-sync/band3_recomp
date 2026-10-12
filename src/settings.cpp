@@ -76,6 +76,34 @@ REXCVAR_DEFINE_STRING(music_videos_folder, "videos", "Band3/Videos",
     "The folder music videos are looked for in (empty: videos). A relative folder is "
     "relative to band3_config.ini's folder (or band3's own folder if there is no ini)");
 
+REXCVAR_DEFINE_STRING(music_video_ytdlp_path, "", "Band3/Videos",
+    "yt-dlp, which finds and downloads songs' music videos from the Videos tab: its program "
+    "file (yt-dlp.exe). Empty looks for yt-dlp on PATH. band3 doesn't come with it: get it "
+    "from github.com/yt-dlp/yt-dlp");
+
+REXCVAR_DEFINE_STRING(music_video_ytdlp_args, "", "Band3/Videos",
+    "More yt-dlp options for finding and downloading music videos, as typed on its command "
+    "line, e.g. --cookies-from-browser firefox for videos YouTube asks to sign in for");
+
+REXCVAR_DEFINE_INT32(music_video_max_height, 1080, "Band3/Videos",
+    "The tallest picture a downloaded music video has, in lines: 480, 720, 1080, 1440 or "
+    "2160. Taller ones take more space and decoding")
+    .range(144, 4320);
+
+REXCVAR_DEFINE_BOOL(music_video_prefer_60fps, true, "Band3/Videos",
+    "Download a music video's 60 fps picture where it has one (music_video_full_rate plays "
+    "it at 60); off, its 30 fps one");
+
+REXCVAR_DEFINE_BOOL(music_video_auto_accept, true, "Band3/Videos",
+    "When finding music videos, take one without asking when it's surely the song's: its "
+    "title, channel and length look right and its sound matches the song's. Off, every "
+    "song's results wait in the Videos tab for you to choose");
+
+REXCVAR_DEFINE_BOOL(music_video_keep_audio, false, "Band3/Videos",
+    "Keep a downloaded music video's sound (in the videos folder's .sync folder), so it can "
+    "be aligned again with its song; band3 plays the video under the game's own sound, so "
+    "it's otherwise deleted once the video is synced");
+
 REXCVAR_DEFINE_STRING(music_video_fit, "fit", "Band3/Videos",
     "How a music video whose shape isn't the screen's is shown: fit (all of it, with black "
     "bars), fill (the whole screen, its edges cut off) or stretch");

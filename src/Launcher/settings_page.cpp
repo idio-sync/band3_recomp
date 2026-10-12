@@ -205,7 +205,7 @@ void SettingsPage::DrawSection(Tab tab, std::string_view section) {
     }
     if (tab == Tab::kGraphics && section == "Latency") DrawLowestLatency();
     if (tab == Tab::kLights && section == "Stage Kit lights") DrawLights();
-    if (tab == Tab::kVideos && section == "Music videos") DrawVideos();
+    if (tab == Tab::kVideos && section == "Finding videos") DrawVideos();
     ImGui::Dummy(ImVec2(0, Px(14)));
 }
 
