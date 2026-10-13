@@ -97,7 +97,11 @@ class TextureAnnounceQueue {
  public:
     static constexpr size_t kMax = 256;
     void Announce(const AnnouncedTexture& t) {
-        if (std::find(items_.begin(), items_.end(), t) != items_.end()) return;
+        // a predicate, not std::find: MSVC 14.51's STL sends a defaulted-==
+        // struct to its vectorized find, which has no 12-byte case
+        if (std::any_of(items_.begin(), items_.end(),
+                        [&](const AnnouncedTexture& i) { return i == t; }))
+            return;
         if (items_.size() >= kMax) items_.erase(items_.begin());
         items_.push_back(t);
     }
