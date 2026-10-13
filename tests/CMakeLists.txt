@@ -45,6 +45,7 @@ add_executable(band3_tests
     mouse_hover_test.cpp
     keyboard_search_test.cpp
     song_pause_test.cpp
+    song_state_test.cpp
     usb_mic_test.cpp
     mic_fx_test.cpp
     game_status_test.cpp
@@ -147,6 +148,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/ps3_instruments.cpp
     ${BAND3_ROOT}/src/Input/ps4_instruments.cpp
     ${BAND3_ROOT}/src/Input/song_pause.cpp
+    ${BAND3_ROOT}/src/Input/song_state.cpp
     ${BAND3_ROOT}/src/Launcher/config_file.cpp
     ${BAND3_ROOT}/src/Launcher/device_names.cpp
     ${BAND3_ROOT}/src/Launcher/device_view_model.cpp

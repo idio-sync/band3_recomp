@@ -14,7 +14,7 @@
 #include <optional>
 #include "src/Input/input_system.h"
 #include "src/Input/mouse_menus.h"
-#include "src/Render/native_view.h"
+#include "src/Input/song_state.h"
 #include "src/settings.h"
 
 namespace band3::input {
@@ -74,9 +74,11 @@ std::optional<MouseMenus::Button> ButtonFor(MouseEvent::Button button) {
     }
 }
 
-// no song, and no band3 dialog holding the controller
+// no song being played, where A and B are frets, and no band3 dialog holding
+// the controller: a song's pause menu, its loading screen and results take
+// the mouse
 bool GameTakesPresses() {
-    return REXCVAR_GET(mouse_menus) && !render::InSong() && !GameInputBlocked();
+    return REXCVAR_GET(mouse_menus) && !SongBeingPlayed() && !GameInputBlocked();
 }
 
 class MouseMenusDriver final : public rex::input::InputDriver,

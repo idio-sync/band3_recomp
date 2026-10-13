@@ -211,8 +211,8 @@ Controllers tab's More settings) turns it off.
 
 Limits:
 
-- It stops during a song, from its loading screen until its results are left, where A and B
-  would be frets.
+- It stops while a song is played, where A and B would be frets. Its loading screen, pause
+  menu and results take it.
 - Pointing highlights only what a controller could move to: the focused menu's buttons and
   lists. Music library headers can't be pointed at.
 - A list's rows highlight only where the list doesn't scroll; the wheel scrolls to the others.

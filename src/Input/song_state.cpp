@@ -14,10 +14,12 @@ void SetSongOnScreen(bool on_screen) { g_on_screen.store(on_screen, std::memory_
 
 void SetSongPaused(bool paused) { g_paused.store(paused, std::memory_order_relaxed); }
 
+bool SongBeingPlayed() {
+    return g_on_screen.load(std::memory_order_relaxed) && !g_paused.load(std::memory_order_relaxed);
+}
+
 midi_keys::Mode CurrentKeysMode() {
-    return g_on_screen.load(std::memory_order_relaxed) && !g_paused.load(std::memory_order_relaxed)
-               ? midi_keys::Mode::kPlaying
-               : midi_keys::Mode::kMenus;
+    return SongBeingPlayed() ? midi_keys::Mode::kPlaying : midi_keys::Mode::kMenus;
 }
 
 }

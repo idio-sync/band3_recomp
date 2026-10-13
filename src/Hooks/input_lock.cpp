@@ -88,7 +88,8 @@ UiRoundTripStats GetUiRoundTripStats(bool reset) {
 // joypad loop (RunXinputJoypadLoop) reads every player through it each pass.
 // The mouse's menu presses join the lowest connected player's here
 // (mouse_menus_driver.h), and the pause menu's Start the player it's for
-// (song_pause.h).
+// (song_pause.h). song_pause goes first: it says whether a song is on the
+// screen, which the mouse's presses stop for.
 extern "C" void __imp__rex_sub_8283FB80(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(rex_sub_8283FB80) {
     const uint32_t user = ctx.r3.u32;
@@ -101,8 +102,8 @@ extern "C" REX_FUNC(rex_sub_8283FB80) {
     if (ctx.r3.u32 == 0 && state) {
         read = reinterpret_cast<rex::input::X_INPUT_STATE*>(base + state);
     }
-    band3::input::AddMouseMenuPresses(user, read);
     band3::song_pause::AddPress(user, read, base);
+    band3::input::AddMouseMenuPresses(user, read);
     std::optional<uint16_t> buttons;
     if (read) buttons = read->gamepad.buttons;
     band3::input::GameChordPads().OnState(user, buttons, band3::input::ChordPads::Clock::now());

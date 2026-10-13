@@ -12,6 +12,7 @@
 #include "generated/band3_init.h"
 #include "src/Input/input_system.h"
 #include "src/Input/mouse_menus_driver.h"
+#include "src/Input/song_state.h"
 #include "src/Render/native_view.h"
 #include "src/Render/present_model.h"
 #include "src/Render/renderer_switch.h"
@@ -419,7 +420,7 @@ bool OvershellTakesInput(PPCContext& ctx, uint8_t* base) {
 }
 
 bool HoverAllowed(PPCContext& ctx, uint8_t* base) {
-    return REXCVAR_GET(mouse_menus) && !render::InSong() && !input::GameInputBlocked() &&
+    return REXCVAR_GET(mouse_menus) && !input::SongBeingPlayed() && !input::GameInputBlocked() &&
            !OvershellTakesInput(ctx, base);
 }
 

@@ -3,8 +3,9 @@
 
 // Whether a song is being played, for the input drivers that play differently
 // in a song: a MIDI keyboard's lowest octave is the menu buttons outside one
-// (midi_keys.h). src/Hooks/song_pause.cpp works both out from the game and
-// sets them here, so Input needn't include Hooks. Any thread.
+// (midi_keys.h), and the mouse presses menu buttons only outside one
+// (mouse_menus_driver.h). src/Hooks/song_pause.cpp works both out from the
+// game and sets them here, so Input needn't include Hooks. Any thread.
 
 namespace band3::input {
 
@@ -13,8 +14,11 @@ void SetSongOnScreen(bool on_screen);
 // the song is paused, by its pause menu or the game's own
 void SetSongPaused(bool paused);
 
-// playing while a song is on a gameplay screen and not paused; menus
-// otherwise, and before the game has said either
+// a song on a gameplay screen and not paused, where the buttons are frets;
+// false before the game has said either
+bool SongBeingPlayed();
+
+// playing while a song is being played; menus otherwise
 midi_keys::Mode CurrentKeysMode();
 
 }
