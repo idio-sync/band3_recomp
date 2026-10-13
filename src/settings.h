@@ -160,6 +160,7 @@ REXCVAR_DECLARE(bool, native_view_inline_mips);
 REXCVAR_DECLARE(bool, native_view_premake_targets);
 REXCVAR_DECLARE(bool, native_view_premake_arrays);
 REXCVAR_DECLARE(int32_t, native_view_submit_points);
+REXCVAR_DECLARE(bool, native_view_mip_submits);
 REXCVAR_DECLARE(bool, native_view_record_targets);
 REXCVAR_DECLARE(bool, native_view_normal_maps);
 REXCVAR_DECLARE(bool, native_view_texture_filtering);

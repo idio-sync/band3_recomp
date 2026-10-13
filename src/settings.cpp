@@ -747,6 +747,14 @@ REXCVAR_DEFINE_INT32(native_view_submit_points, 1, "Band3/Advanced/Native render
     "0.3 ms less for the GPU; the picture is the same)")
     .range(0, 1);
 
+REXCVAR_DEFINE_BOOL(native_view_mip_submits, true, "Band3/Advanced/Native renderer",
+    "Hand the GPU a frame's work after each texture pass with mips (the crowd's, several "
+    "times a frame in a song), so it draws them while the worker records the rest. Off "
+    "keeps them in the frame's command buffer: post frames wait about 0.35 ms more for "
+    "the GPU, but with AMD's Direct3D 12 driver a frame's 9 or 10 command buffers had it "
+    "remap command memory now and then (6.5 ms a time in a VM), which off avoids. With "
+    "native_view_inline_mips only; the picture is the same");
+
 REXCVAR_DEFINE_BOOL(native_view_record_targets, false, "Band3/Advanced/Native renderer",
     "Record the passes RB3 draws into textures (outfits, the crowd, blurs) all the time, "
     "for the native view (experimental), even while it's off: some are drawn once, in the "

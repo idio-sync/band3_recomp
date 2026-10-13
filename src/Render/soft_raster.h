@@ -175,6 +175,11 @@ struct RasterOptions {
     // GPU (native_view_submit_points): extra submits besides each texture
     // pass with mips: 0 none, 1 at the resolve (SubmitAtResolve)
     uint32_t submit_points = 0;
+    // GPU (native_view_mip_submits): with inline_mips, submit after each
+    // texture pass's mips and go on in a new command buffer; off, they stay
+    // in the frame's (SDL's own mips always get a command buffer of their
+    // own on Direct3D 12)
+    bool mip_submits = true;
     // GPU (native_bc_textures): DXT1/DXT2_3/DXT4_5/DXN kept as blocks and
     // sampled as BC1/2/3/5 where supported (SetKeepBlocks); off, RGBA. Read
     // when each texture is placed. The CPU decodes blocks (EnsureRgba).

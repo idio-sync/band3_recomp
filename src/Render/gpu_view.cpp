@@ -4863,7 +4863,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 // sampler heap stays on kSamplerBatch's step
                 MarkTime(cmd, gpu_timing::kMips);
                 DrawMips(cmd, rt.color, rt.w, rt.h, rt.levels);
-                next = next_part();
+                // or on in the frame's (native_view_mip_submits): with AMD's
+                // Direct3D 12 driver 9 or 10 command buffers a frame swing
+                // between big and small recordings, and a list reset after
+                // that sometimes maps new command memory (6.5 ms in a VM)
+                next = !o.mip_submits || next_part();
             } else {
                 // SDL's blits bind one sampler each, which on Direct3D 12
                 // would put the heap off kSamplerBatch's step (BeginPass), so

@@ -847,6 +847,7 @@ class Renderer {
                 o.premake_targets = REXCVAR_GET(native_view_premake_targets);
                 o.premake_arrays = REXCVAR_GET(native_view_premake_arrays);
                 o.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
+                o.mip_submits = REXCVAR_GET(native_view_mip_submits);
                 o.bc_textures = REXCVAR_GET(native_bc_textures);
                 // and k_8's (movie planes) as R8
                 o.r8_textures = REXCVAR_GET(native_r8_textures);
