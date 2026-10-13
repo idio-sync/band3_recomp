@@ -34,6 +34,12 @@
 #define NOMINMAX
 #endif
 #include <d3d12.h>
+#elif defined(__linux__)
+// GPU timings on SDL_gpu's Vulkan device (CheckTimingOnce): its handles, and
+// the functions looked up from the loader SDL already loaded
+#include <dlfcn.h>
+#define VK_NO_PROTOTYPES
+#include <vulkan/vulkan_core.h>
 #endif
 #include <rex/logging.h>
 
@@ -566,6 +572,19 @@ struct GpuRenderer::Impl {
 #ifdef _WIN32
     ID3D12QueryHeap* query_heap = nullptr;
     ID3D12Resource* query_readback = nullptr;
+#elif defined(__linux__)
+    // SDL_gpu's Vulkan device and a timestamp pool on it, a region per frame
+    // and, at kAsideRegion and after it, two banks for the aside by turns:
+    // its frame's times are read before its next-but-one frame records
+    // (native_view.cpp keeps one frame in flight), so a bank is never reset
+    // under times not yet read. Read straight from the pool, no readback.
+    VkDevice vk_device = VK_NULL_HANDLE;
+    VkQueryPool vk_query_pool = VK_NULL_HANDLE;
+    PFN_vkCmdWriteTimestamp vk_write_timestamp = nullptr;
+    PFN_vkCmdResetQueryPool vk_reset_query_pool = nullptr;
+    PFN_vkGetQueryPoolResults vk_get_query_results = nullptr;
+    PFN_vkDestroyQueryPool vk_destroy_query_pool = nullptr;
+    int vk_aside_bank = 0;
 #endif
     // the recording frame's ladder and the aside's; its region (-1 untimed),
     // and whether it marks the aside
@@ -577,6 +596,7 @@ struct GpuRenderer::Impl {
         std::vector<uint8_t> labels, aside;
         uint32_t dropped = 0;
         bool pending = false;
+        int aside_bank = 0;  // Vulkan's: where the aside's times are
     };
     Timed timed[kFrameRegions];
 
@@ -2503,10 +2523,12 @@ struct SdlD3D12Texture {
     // the SRV's staging descriptor and the reference count follow
 };
 
+#endif
+
 // SDL 3.4.14's private command buffer (SDL_sysgpu.h's
-// CommandBufferCommonHeader and passes, SDL_gpu_d3d12.c's D3D12CommandBuffer;
-// no #ifdefs). Read only, for TimingList's command list; untrusted until the
-// checks pass.
+// CommandBufferCommonHeader and passes, SDL_gpu_d3d12.c's D3D12CommandBuffer
+// and SDL_gpu_vulkan.c's VulkanCommandBuffer; no #ifdefs). Read only, for the
+// timings' command list or buffer; untrusted until the checks pass.
 struct SdlPass {
     SDL_GPUCommandBuffer* command_buffer;
     bool in_progress;
@@ -2546,6 +2568,7 @@ struct SdlCommandBufferCommonHeader {
     bool submitted;
     bool ignore_render_pass_texture_validation;
 };
+#ifdef _WIN32
 struct SdlD3D12CommandBuffer {
     SdlCommandBufferCommonHeader common;
     void* renderer;  // D3D12Renderer*, whose layout has #ifdefs: never walked
@@ -2561,6 +2584,22 @@ IUnknown* Identity(IUnknown* object) {
     unknown->Release();  // the object holds it still
     return unknown;
 }
+#elif defined(__linux__)
+struct SdlVulkanCommandBuffer {
+    SdlCommandBufferCommonHeader common;
+    void* renderer;  // VulkanRenderer*: only its first members, below, are read
+    VkCommandBuffer command_buffer;
+    // the command pool and the rest follow
+};
+// SDL_gpu_vulkan.c's VulkanRenderer as far as its logical device: standard
+// Vulkan types only, so no #ifdefs move it
+struct SdlVulkanRendererHead {
+    VkInstance instance;
+    VkPhysicalDevice physical_device;
+    VkPhysicalDeviceProperties2 properties;
+    VkPhysicalDeviceDriverProperties driver_properties;
+    VkDevice logical_device;
+};
 #endif
 
 }  // namespace
@@ -2669,6 +2708,16 @@ void* GpuRenderer::Impl::TimingList(SDL_GPUCommandBuffer* cmd) {
         return nullptr;
     if (!c->renderer || !c->command_allocator || !c->graphics_command_list) return nullptr;
     return c->graphics_command_list;
+#elif defined(__linux__)
+    // the same checks on Vulkan's: the header's pointers, then its renderer
+    // and VkCommandBuffer set
+    if (!cmd) return nullptr;
+    const auto* c = reinterpret_cast<const SdlVulkanCommandBuffer*>(cmd);
+    if (c->common.device != device || c->common.render_pass.command_buffer != cmd ||
+        c->common.compute_pass.command_buffer != cmd || c->common.copy_pass.command_buffer != cmd)
+        return nullptr;
+    if (!c->renderer || !c->command_buffer) return nullptr;
+    return c->command_buffer;
 #else
     (void)cmd;
     return nullptr;
@@ -2762,8 +2811,86 @@ bool GpuRenderer::Impl::CheckTimingOnce(SDL_GPUCommandBuffer* cmd) {
     };
     timing_ok = check();
     if (!timing_ok) ReleaseTiming();
+#elif defined(__linux__)
+    auto check = [&]() -> bool {
+        if (std::strcmp(SDL_GetGPUDeviceDriver(device), "vulkan") != 0) {
+            why = std::string("SDL_gpu's device is ") + SDL_GetGPUDeviceDriver(device);
+            return false;
+        }
+        // a newer SDL that moved anything fails here before any call
+        if (!TimingList(cmd)) {
+            why = fmt::format("SDL {}.{}.{}'s command buffer doesn't have the layout of 3.4.14's",
+                              SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
+            return false;
+        }
+        const auto* c = reinterpret_cast<const SdlVulkanCommandBuffer*>(cmd);
+        const auto* r = static_cast<const SdlVulkanRendererHead*>(c->renderer);
+        // the renderer's properties as SDL asked for them, its device the one
+        // SDL names
+        const char* name = SDL_GetStringProperty(SDL_GetGPUDeviceProperties(device),
+                                                 SDL_PROP_GPU_DEVICE_NAME_STRING, "");
+        if (r->properties.sType != VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 ||
+            (r->driver_properties.sType != VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES &&
+             r->driver_properties.sType != 0) ||
+            !r->instance || !r->physical_device || !r->logical_device ||
+            std::strncmp(r->properties.properties.deviceName, name,
+                         VK_MAX_PHYSICAL_DEVICE_NAME_SIZE) != 0) {
+            why = fmt::format("SDL {}.{}.{}'s Vulkan renderer doesn't start as 3.4.14's",
+                              SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
+            return false;
+        }
+        const VkPhysicalDeviceLimits& limits = r->properties.properties.limits;
+        if (!limits.timestampComputeAndGraphics || !(limits.timestampPeriod > 0)) {
+            why = "the GPU has no timestamps on its graphics queue";
+            return false;
+        }
+        // the loader SDL loaded, not another
+        void* loader = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_NOLOAD);
+        auto get_instance_proc = loader ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+                                              dlsym(loader, "vkGetInstanceProcAddr"))
+                                        : nullptr;
+        if (loader) dlclose(loader);
+        auto get_device_proc = get_instance_proc
+                                   ? reinterpret_cast<PFN_vkGetDeviceProcAddr>(
+                                         get_instance_proc(r->instance, "vkGetDeviceProcAddr"))
+                                   : nullptr;
+        if (!get_device_proc) {
+            why = "no vkGetDeviceProcAddr from the loaded libvulkan.so.1";
+            return false;
+        }
+        const VkDevice dev = r->logical_device;
+        auto create_pool =
+            reinterpret_cast<PFN_vkCreateQueryPool>(get_device_proc(dev, "vkCreateQueryPool"));
+        vk_write_timestamp =
+            reinterpret_cast<PFN_vkCmdWriteTimestamp>(get_device_proc(dev, "vkCmdWriteTimestamp"));
+        vk_reset_query_pool = reinterpret_cast<PFN_vkCmdResetQueryPool>(
+            get_device_proc(dev, "vkCmdResetQueryPool"));
+        vk_get_query_results = reinterpret_cast<PFN_vkGetQueryPoolResults>(
+            get_device_proc(dev, "vkGetQueryPoolResults"));
+        vk_destroy_query_pool = reinterpret_cast<PFN_vkDestroyQueryPool>(
+            get_device_proc(dev, "vkDestroyQueryPool"));
+        if (!create_pool || !vk_write_timestamp || !vk_reset_query_pool ||
+            !vk_get_query_results || !vk_destroy_query_pool) {
+            why = "the Vulkan device lacks the query functions";
+            return false;
+        }
+        VkQueryPoolCreateInfo qi{};
+        qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        qi.queryCount = (kAsideRegion + 2) * kTimingSlots;
+        if (create_pool(dev, &qi, nullptr, &vk_query_pool) != VK_SUCCESS) {
+            vk_query_pool = VK_NULL_HANDLE;
+            why = "no timestamp query pool";
+            return false;
+        }
+        vk_device = dev;
+        timestamp_frequency = uint64_t(std::llround(1e9 / double(limits.timestampPeriod)));
+        return true;
+    };
+    timing_ok = check();
+    if (!timing_ok) ReleaseTiming();
 #else
-    why = "they're Direct3D 12 only";
+    why = "they're Direct3D 12 and Vulkan only";
 #endif
     if (timing_ok)
         REXLOG_INFO("native view gpu: GPU timings on ({} timestamp ticks a second)",
@@ -2784,6 +2911,17 @@ void GpuRenderer::Impl::StartTiming(SDL_GPUCommandBuffer* cmd, const RasterOptio
     }
     timing_aside = aside;
     timing_region = aside ? kAsideRegion : slot >= 0 ? slot : kOutputs;
+#if defined(__linux__)
+    // Vulkan's queries are reset before they're written, here at the start
+    // of a command buffer, outside any pass: a frame's region each time, an
+    // aside bank as its first part starts
+    if (aside) timing_region = kAsideRegion + vk_aside_bank;
+    if (!aside || aside_ladder.Count() == 0) {
+        if (auto cb = static_cast<VkCommandBuffer>(TimingList(cmd)))
+            vk_reset_query_pool(cb, vk_query_pool, uint32_t(timing_region) * kTimingSlots,
+                                kTimingSlots);
+    }
+#endif
     if (!aside) {
         ladder.Reset();
         timed[timing_region].pending = false;
@@ -2810,6 +2948,21 @@ void GpuRenderer::Impl::MarkTime(SDL_GPUCommandBuffer* cmd, uint8_t part) {
     if (at < 0) return;
     list->EndQuery(query_heap, D3D12_QUERY_TYPE_TIMESTAMP,
                    uint32_t(timing_region) * kTimingSlots + uint32_t(at));
+#elif defined(__linux__)
+    if (timing_region < 0) return;
+    auto cb = static_cast<VkCommandBuffer>(TimingList(cmd));
+    if (!cb) {
+        if (timing_aside) aside_ladder.Reset();
+        timing_region = -1;
+        return;
+    }
+    gpu_timing::Ladder& l = timing_aside ? aside_ladder : ladder;
+    if (timing_aside && part != gpu_timing::kNone && l.Open()) return;
+    const int at = l.Mark(part);
+    if (at < 0) return;
+    // when everything recorded before it has finished, as Direct3D 12's
+    vk_write_timestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, vk_query_pool,
+                       uint32_t(timing_region) * kTimingSlots + uint32_t(at));
 #else
     (void)cmd;
     (void)part;
@@ -2837,6 +2990,25 @@ void GpuRenderer::Impl::ResolveTimes(SDL_GPUCommandBuffer* cmd) {
                                query_readback, at + kTimingSlots * sizeof(uint64_t));
         t.aside = aside_ladder.Labels();
         t.dropped += aside_ladder.Dropped();
+    }
+    aside_ladder.Reset();
+    t.pending = true;
+    timing_region = -1;
+#elif defined(__linux__)
+    // nothing to copy: ReadTimes reads the pool once the frame has finished
+    if (timing_region < 0 || timing_aside) return;
+    MarkTime(cmd, gpu_timing::kNone);
+    if (timing_region < 0) return;
+    Timed& t = timed[timing_region];
+    t.labels = ladder.Labels();
+    t.dropped = ladder.Dropped();
+    t.aside.clear();
+    if (aside_ladder.Count() && !aside_ladder.Open()) {
+        t.aside = aside_ladder.Labels();
+        t.dropped += aside_ladder.Dropped();
+        t.aside_bank = vk_aside_bank;
+        // the next frame's aside in the other bank
+        vk_aside_bank ^= 1;
     }
     aside_ladder.Reset();
     t.pending = true;
@@ -2869,6 +3041,32 @@ void GpuRenderer::Impl::ReadTimes(int region, GpuStats& st) {
     st.gpu_total_ms = times.total_ms;
     st.gpu_marks_dropped = t.dropped;
     st.gpu_bad_spans = times.bad;
+#elif defined(__linux__)
+    if (region < 0 || region >= kFrameRegions || !vk_query_pool) return;
+    Timed& t = timed[region];
+    if (!t.pending) return;
+    t.pending = false;
+    uint64_t ticks[2 * kTimingSlots] = {};
+    // the frame has finished (its fence, or Render's wait): no waiting here
+    auto read = [&](int at_region, size_t count, uint64_t* out) {
+        if (!count) return true;
+        return vk_get_query_results(vk_device, vk_query_pool,
+                                    uint32_t(at_region) * kTimingSlots, uint32_t(count),
+                                    count * sizeof(uint64_t), out, sizeof(uint64_t),
+                                    VK_QUERY_RESULT_64_BIT) == VK_SUCCESS;
+    };
+    if (!read(region, t.labels.size(), ticks) ||
+        !read(kAsideRegion + t.aside_bank, t.aside.size(), ticks + kTimingSlots))
+        return;
+    gpu_timing::Times times;
+    gpu_timing::Accumulate(t.labels.data(), ticks, t.labels.size(), timestamp_frequency, times);
+    gpu_timing::Accumulate(t.aside.data(), ticks + kTimingSlots, t.aside.size(),
+                           timestamp_frequency, times);
+    st.gpu_timed = true;
+    std::copy(std::begin(times.ms), std::end(times.ms), st.gpu_ms);
+    st.gpu_total_ms = times.total_ms;
+    st.gpu_marks_dropped = t.dropped;
+    st.gpu_bad_spans = times.bad;
 #else
     (void)region;
     (void)st;
@@ -2881,6 +3079,12 @@ void GpuRenderer::Impl::ReleaseTiming() {
     if (query_readback) query_readback->Release();
     query_heap = nullptr;
     query_readback = nullptr;
+#elif defined(__linux__)
+    if (vk_query_pool && vk_device && vk_destroy_query_pool)
+        vk_destroy_query_pool(vk_device, vk_query_pool, nullptr);
+    vk_query_pool = VK_NULL_HANDLE;
+    vk_device = VK_NULL_HANDLE;
+    vk_aside_bank = 0;
 #endif
     timing_ok = false;
     timing_region = -1;

@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-// GPU time per frame by part (native_gpu_timestamps; Direct3D 12 only), for
+// GPU time per frame by part (native_gpu_timestamps; Direct3D 12 and Vulkan), for
 // native_view stats' by_kind and the slow-frame log. gpu_view.cpp writes one
 // timestamp at each part boundary (a ladder, not pairs): each span belongs
 // to the part its start began. One queue runs the frame's command buffers in

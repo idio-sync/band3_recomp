@@ -678,7 +678,7 @@ REXCVAR_DEFINE_INT32(native_slow_frame_ms, 12, "Band3/Advanced/Native renderer",
 REXCVAR_DEFINE_BOOL(native_gpu_timestamps, false, "Band3/Advanced/Native renderer",
     "Time each native renderer frame's parts on the GPU (the world, its texture passes, "
     "post-processing, the overlay...) with GPU timestamps, for the slow-frame log and the test "
-    "harness's numbers. Direct3D 12 only. On costs a few dozen timestamps a frame, 0.1 to "
+    "harness's numbers. Direct3D 12 and Vulkan. On costs a few dozen timestamps a frame, 0.1 to "
     "0.2 ms of the frame's wait for the GPU, so it's off unless measuring");
 
 REXCVAR_DEFINE_BOOL(native_bc_textures, true, "Band3/Advanced/Native renderer",
