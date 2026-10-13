@@ -4,7 +4,6 @@
 #include "src/Video/song_audio.h"
 
 #include <rex/filesystem.h>
-#include <rex/filesystem/devices/stfs_container_device.h>
 #include <rex/filesystem/entry.h>
 #include <rex/filesystem/file.h>
 #include <rex/system/xtypes.h>
@@ -12,6 +11,7 @@
 #include <span>
 
 #include "src/Content/package_songs.h"
+#include "src/Content/stfs_device.h"
 #include "src/Video/mogg.h"
 #include "src/Video/video_decoder.h"
 
@@ -41,13 +41,13 @@ SongAudioResult PackageSongEnvelope(std::string_view shortname, std::vector<floa
     const std::optional<SongMogg> where =
         FindSongMogg(content::PackageSongsNow(std::chrono::seconds(20)), shortname);
     if (!where) return SongAudioResult::kNotFound;
-    rex::filesystem::StfsContainerDevice device("\\Device\\Band3SongAudio\\",
-                                                rex::to_path(where->package));
-    if (!device.Initialize()) {
+    const auto device =
+        content::OpenPackageDevice("\\Device\\Band3SongAudio\\", rex::to_path(where->package));
+    if (!device) {
         error = "its package couldn't be opened";
         return SongAudioResult::kFailed;
     }
-    rex::filesystem::Entry* entry = device.ResolvePath(where->mogg);
+    rex::filesystem::Entry* entry = device->ResolvePath(where->mogg);
     if (!entry) {
         error = "its package has no " + where->mogg;
         return SongAudioResult::kFailed;

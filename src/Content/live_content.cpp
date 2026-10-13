@@ -13,7 +13,6 @@
 #include <unordered_map>
 #include <fmt/format.h>
 #include <rex/filesystem.h>
-#include <rex/filesystem/devices/stfs_container_device.h>
 #include <rex/filesystem/vfs.h>
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
@@ -21,6 +20,7 @@
 #include "src/config.h"
 #include "src/paths.h"
 #include "src/settings.h"
+#include "stfs_device.h"
 
 namespace band3::content {
 
@@ -258,8 +258,8 @@ bool MountLivePackage(const Package& package, std::string_view root_name) {
     // the trailing separator keeps \Device\Band3Content\1\ from matching ...\10\ (the VFS
     // takes the first device whose mount path is a prefix)
     const std::string mount = fmt::format("\\Device\\Band3Content\\{}\\", ++g_next_mount);
-    auto device = std::make_unique<rex::filesystem::StfsContainerDevice>(mount, package.path);
-    if (!device->Initialize()) {
+    auto device = OpenPackageDevice(mount, package.path);
+    if (!device) {
         REXLOG_WARN("content: can't read {}", rex::path_to_utf8(package.path));
         return false;
     }

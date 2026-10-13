@@ -81,6 +81,7 @@ add_executable(band3_tests
     paths_test.cpp
     loose_name_test.cpp
     package_scan_test.cpp
+    stfs_reader_test.cpp
     json_test.cpp
     rhythmverse_test.cpp
     file_hosts_test.cpp
@@ -122,6 +123,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Audio/mic_fx.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp
+    ${BAND3_ROOT}/src/Content/stfs_reader.cpp
     ${BAND3_ROOT}/src/Content/game_song_list.cpp
     ${BAND3_ROOT}/src/Content/song_dta.cpp
     ${BAND3_ROOT}/src/Content/song_inventory.cpp

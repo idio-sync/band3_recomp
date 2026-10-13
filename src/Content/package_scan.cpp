@@ -1,5 +1,6 @@
 #include "package_scan.h"
 #include <algorithm>
+#include <atomic>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -29,6 +30,26 @@ struct FolderScan {
     std::vector<std::string> problems;
 };
 
+// the packages among files, their headers read a few at once: on a network
+// share each read is mostly waiting for the answer
+std::vector<Package> ReadPackages(const std::vector<fs::path>& files, std::span<const uint32_t> title_ids) {
+    constexpr size_t kReaders = 16;
+    std::vector<std::optional<Package>> read(files.size());
+    std::atomic<size_t> next{0};
+    auto work = [&] {
+        for (size_t i; (i = next++) < files.size();) read[i] = ReadPackage(files[i], title_ids);
+    };
+    std::vector<std::thread> threads;
+    for (size_t t = 1; t < std::min(kReaders, files.size()); t++) threads.emplace_back(work);
+    work();
+    for (auto& thread : threads) thread.join();
+    std::vector<Package> packages;
+    for (auto& package : read) {
+        if (package) packages.push_back(std::move(*package));
+    }
+    return packages;
+}
+
 // one folder and its subfolders, listed a folder at a time: recursive_directory_iterator
 // ends at its first error, which would lose the rest of the folder
 FolderScan ScanFolder(const fs::path& folder, std::span<const uint32_t> title_ids) {
@@ -41,6 +62,7 @@ FolderScan ScanFolder(const fs::path& folder, std::span<const uint32_t> title_id
     std::vector<fs::directory_iterator> listing;  // the folders being listed, innermost last
     std::vector<fs::path> pending;  // updates to put in place
     std::vector<fs::path> set_aside;  // requests to set packages aside
+    std::vector<fs::path> files;  // the rest, whose headers are read after the walk
     auto enter = [&](const fs::path& dir) {
         std::error_code error;
         fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, error);
@@ -79,8 +101,9 @@ FolderScan ScanFolder(const fs::path& folder, std::span<const uint32_t> title_id
             set_aside.push_back(entry.path());
             continue;
         }
-        if (auto package = ReadPackage(entry.path(), title_ids)) out.packages.push_back(std::move(*package));
+        files.push_back(entry.path());
     }
+    out.packages = ReadPackages(files, title_ids);
     // after the walk, which may have read the old file already; one at a time,
     // since folders that overlap ("songs" and "songs/rhythmverse") meet the same
     // update on two threads

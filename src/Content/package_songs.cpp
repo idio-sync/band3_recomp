@@ -11,7 +11,6 @@
 #include <thread>
 #include <unordered_map>
 #include <rex/filesystem.h>
-#include <rex/filesystem/devices/stfs_container_device.h>
 #include <rex/filesystem/entry.h>
 #include <rex/filesystem/file.h>
 #include <rex/logging.h>
@@ -21,6 +20,7 @@
 #include "src/settings.h"
 #include "live_content.h"
 #include "package_scan.h"
+#include "stfs_device.h"
 
 namespace band3::content {
 
@@ -58,9 +58,9 @@ fs::path CachePath() {
 // the package's songs/songs.dta, opened as the game opens packages; nullopt
 // when there's none, or it can't be read
 std::optional<std::string> ReadSongsDta(const fs::path& path) {
-    rex::filesystem::StfsContainerDevice device("\\Device\\Band3PackageSongs\\", path);
-    if (!device.Initialize()) return std::nullopt;
-    rex::filesystem::Entry* entry = device.ResolvePath("songs\\songs.dta");
+    const auto device = OpenPackageDevice("\\Device\\Band3PackageSongs\\", path);
+    if (!device) return std::nullopt;
+    rex::filesystem::Entry* entry = device->ResolvePath("songs\\songs.dta");
     if (!entry || entry->size() > kMaxDta) return std::nullopt;
     rex::filesystem::File* file = nullptr;
     if (!XSUCCEEDED(entry->Open(rex::filesystem::FileAccess::kGenericRead, &file)) || !file) {
