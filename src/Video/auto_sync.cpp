@@ -138,11 +138,12 @@ bool SongFromPackage(const std::filesystem::path& video, std::vector<float>& son
             SaveEnvelope(SongEnvelopePath(video), song, 0);
             return true;
         case SongAudioResult::kNotFound:
-            error = "its song isn't in band3's packages (or the game hasn't read them yet): play "
-                    "it once with the video to sync it";
+            error = "its song isn't in band3's packages (or the game hasn't read them yet) or the "
+                    "game's archive: play it once with the video to sync it";
             return false;
         case SongAudioResult::kEncrypted:
-            error = "its song's audio is encrypted: play it once with the video to sync it";
+            error = "its song's audio is encrypted in a way band3 can't read: play it once with "
+                    "the video to sync it";
             return false;
         case SongAudioResult::kFailed:
             error = "its song's audio couldn't be read (" + why +

@@ -137,8 +137,8 @@ bool SongEnvelope(const fs::path& folder, const SongInfo& song, std::vector<floa
     std::string error;
     switch (PackageSongEnvelope(song.shortname, env, error)) {
         case SongAudioResult::kOk: return true;
-        case SongAudioResult::kEncrypted: why = "its song's audio is encrypted"; break;
-        case SongAudioResult::kNotFound: why = "its song isn't in band3's packages"; break;
+        case SongAudioResult::kEncrypted: why = "its song's audio is encrypted in a way band3 can't read"; break;
+        case SongAudioResult::kNotFound: why = "its song isn't in band3's packages or the game's archive"; break;
         case SongAudioResult::kFailed: why = "its song's audio couldn't be read: " + error; break;
     }
     return false;

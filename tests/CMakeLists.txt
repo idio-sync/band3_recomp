@@ -6,7 +6,7 @@
 #   ctest --test-dir out/tests --output-on-failure
 
 cmake_minimum_required(VERSION 3.25)
-project(band3_tests LANGUAGES CXX)
+project(band3_tests LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -61,6 +61,8 @@ add_executable(band3_tests
     movie_planes_test.cpp
     music_video_test.cpp
     mogg_test.cpp
+    mogg_crypt_test.cpp
+    ark_archive_test.cpp
     video_fetch_test.cpp
     video_search_test.cpp
     ytdlp_test.cpp
@@ -124,6 +126,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Audio/mic_fx.cpp
+    ${BAND3_ROOT}/src/Content/ark_archive.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp
     ${BAND3_ROOT}/src/Content/stfs_reader.cpp
     ${BAND3_ROOT}/src/Content/game_song_list.cpp
@@ -165,6 +168,8 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Lights/stagekit.cpp
     ${BAND3_ROOT}/src/Video/child_process.cpp
     ${BAND3_ROOT}/src/Video/mogg.cpp
+    ${BAND3_ROOT}/src/Video/mogg_crypt.cpp
+    ${BAND3_ROOT}/src/ThirdParty/tinyaes/aes.c
     ${BAND3_ROOT}/src/Video/still_check.cpp
     ${BAND3_ROOT}/src/Video/video_fetch.cpp
     ${BAND3_ROOT}/src/Video/video_job_state.cpp

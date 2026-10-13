@@ -10,7 +10,7 @@
 
 // Auto-sync: when a song with a music video is picked, its audio's first
 // kCaptureSeconds are matched against the video's soundtrack (sync_align.h):
-// read from its package where it can be (song_audio.h), else taken as the
+// read from its package or the game's archive where it can be (song_audio.h), else taken as the
 // song plays (the game's own audio, as it decodes it: src/Hooks/
 // song_audio.cpp). A sure match is saved as video_start_time in the video's
 // .ini and applied at once. An .ini that already sets one is left alone. Both
@@ -20,8 +20,8 @@
 namespace band3::video {
 
 inline constexpr double kCaptureSeconds = 45.0;
-// A song whose sound has to be taken as it plays (an encrypted one, the
-// disc's) is taken whole, up to this: its first kCaptureSeconds give one
+// A song whose sound has to be taken as it plays (one band3 can't find or
+// decrypt) is taken whole, up to this: its first kCaptureSeconds give one
 // offset at once, and at its end (EndSongCapture) the whole of it a segment
 // map, which takes the place of the offset auto-sync wrote.
 inline constexpr double kMaxCaptureSeconds = 1200.0;

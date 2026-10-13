@@ -68,9 +68,10 @@ REXCVAR_DEFINE_BOOL(music_video_full_rate, true, "Band3/Videos",
 
 REXCVAR_DEFINE_BOOL(music_video_auto_sync, true, "Band3/Videos",
     "Find each music video's offset from its sound: when its song is picked, the song's "
-    "audio (read from its package, or for an encrypted song taken as it first plays, about "
-    "45 s in) is matched against the video's and a sure match is saved as video_start_time "
-    "in the video's .ini, and used at once. An .ini that sets one is left alone");
+    "audio (read from its package or the game's archive, decrypted if need be, or for a "
+    "song band3 can't read taken as it first plays, about 45 s in) is matched against the "
+    "video's and a sure match is saved as video_start_time in the video's .ini, and used at "
+    "once. An .ini that sets one is left alone");
 
 REXCVAR_DEFINE_STRING(music_videos_folder, "videos", "Band3/Videos",
     "The folder music videos are looked for in (empty: videos). A relative folder is "

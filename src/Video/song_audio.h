@@ -7,10 +7,11 @@
 
 #include "src/Content/song_inventory.h"
 
-// A song's rhythm envelope (sync_align.h) from its audio in its package, so
-// its music video can be synced without the song being played first. Only
-// songs in band3's packages, and only unencrypted moggs (mogg.h): for the
-// rest, auto-sync still takes the song's sound as it plays.
+// A song's rhythm envelope (sync_align.h) from its audio in its package, or
+// for the game's own songs its archive, so its music video can be synced
+// without the song being played first. Encrypted moggs are decrypted
+// (mogg_crypt.h); for a song found in neither, or encrypted in a way band3
+// can't decrypt, auto-sync still takes the song's sound as it plays.
 
 namespace band3::video {
 
@@ -30,8 +31,8 @@ std::optional<SongMogg> FindSongMogg(const std::vector<content::PackageSongs>& p
 // What came of looking for a song's audio
 enum class SongAudioResult {
     kOk,
-    kNotFound,   // in no package band3 knows of (the disc's, or a new one)
-    kEncrypted,  // its mogg is encrypted
+    kNotFound,   // in no package band3 knows of (a new one), nor the game's archive
+    kEncrypted,  // its mogg is encrypted in a way band3 can't decrypt
     kFailed,     // it couldn't be read or decoded: why in `error`
 };
 
@@ -44,7 +45,8 @@ inline constexpr double kPackageSongSeconds = 1200.0;
 
 // The song's envelope from its package (song_audio_package.cpp): the
 // packages band3 has read (package_songs.h's PackageSongsNow, waiting up to
-// 20 s for a first read; before the game boots, those of its last run), the
+// 20 s for a first read; before the game boots, those of its last run), then
+// the game's archive under game_data_root (the title update's first), the
 // first kPackageSongSeconds of the song's mogg. Not on a thread that mustn't
 // wait.
 SongAudioResult PackageSongEnvelope(std::string_view shortname, std::vector<float>& envelope,

@@ -9,7 +9,7 @@
 // A song's audio as Rock Band keeps it, a .mogg: a header (its version, the
 // Ogg stream's offset, a seek map) and an Ogg Vorbis stream of all its
 // tracks' channels. Version 0x0A is the Ogg as it is, which most customs are;
-// later versions are encrypted, and band3 doesn't read them. Kept apart from
+// later versions are encrypted (mogg_crypt.h decrypts them). Kept apart from
 // FFmpeg (which decodes the Vorbis, video_decoder_ffmpeg.cpp) for unit tests.
 
 namespace band3::video {
