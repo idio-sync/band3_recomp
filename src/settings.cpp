@@ -604,11 +604,11 @@ REXCVAR_DEFINE_BOOL(native_phase_lock, true, "Band3/Advanced/Native renderer",
     "cap's clock happens to fall against the display's: a frame a little slower than the rest then "
     "still makes its paint instead of being shown a refresh late and the next skipped");
 
-REXCVAR_DEFINE_INT32(native_phase_lock_slack, 40, "Band3/Advanced/Native renderer",
-    "With native_phase_lock, how long before the paint that shows it each frame should reach "
-    "the window, in percent of a refresh: less is less lag, until frames a little slower than "
-    "the rest miss their paint (at 120 Hz, 40 showed as few repeated frames as 50 at 0.8 ms "
-    "less lag; 30 repeated four times as many)")
+REXCVAR_DEFINE_INT32(native_phase_lock_slack, 50, "Band3/Advanced/Native renderer",
+    "With native_phase_lock, how long before the paint that shows it the median frame should "
+    "reach the window, in percent of a refresh: less is less lag, until frames a little slower "
+    "than the rest miss their paint (at 120 Hz, 50 repeated 60% fewer frames than 40 for 0.8 ms "
+    "more lag, as post-processed frames run about 1.3 ms behind the median)")
     .range(10, 90);
 
 REXCVAR_DEFINE_BOOL(native_present_request_paint, true, "Band3/Advanced/Native renderer",
