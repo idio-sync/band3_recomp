@@ -102,6 +102,17 @@ inline bool PreBufferFor(const FrameCapture& fc, uint64_t kept) {
     return kept && kept <= world && world - kept <= kPostBufferFrames;
 }
 
+// An empty FrameCapture, as made fresh, whose vectors keep the capacity of
+// one let go of before: the frame being captured and composed frames come
+// from here, so their ~1 MB of draws and shades isn't allocated anew (fresh
+// pages, faulted in on the game's thread) and freed (on whichever thread let
+// go last) every frame. A frame's last owner, on any thread, empties it and
+// puts it back, up to kPooledFrames waiting; past that it's deleted.
+inline constexpr size_t kPooledFrames = 8;
+std::shared_ptr<FrameCapture> PooledFrameCapture();
+// how many are waiting now (tests)
+size_t PooledFrameCount();
+
 // `frame` (which drew no world) with `world`'s world before its overlay:
 // world's draws before its post_boundary and their passes, then frame's
 // texture passes before its boundary (minus those world has), then frame's

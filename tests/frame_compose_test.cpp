@@ -378,3 +378,48 @@ TEST_CASE("a composed frame is cleared as its world frame was, with both frames'
     CHECK(CameraOf(*fc, 0x30) == &fc->cameras[2]);
     CHECK(CameraOf(*fc, 0x40) == nullptr);
 }
+
+TEST_CASE("a frame let go of comes back from the pool empty, its storage kept") {
+    // held meanwhile: what earlier tests left waiting
+    std::vector<std::shared_ptr<FrameCapture>> held;
+    while (PooledFrameCount()) held.push_back(PooledFrameCapture());
+
+    auto fc = PooledFrameCapture();
+    for (uint32_t i = 0; i < 100; i++) fc->draws.push_back(Draw(i));
+    fc->shades.resize(10);
+    fc->passes.resize(3);
+    fc->cameras.resize(2);
+    fc->rt_filtered_keys = {1, 2};
+    fc->frame = 7;
+    fc->composed = 1;
+    fc->post_boundary = 4;
+    fc->noise_map = Target(kGone, 1);
+    fc->cost.draws = 100;
+    const DrawItem* storage = fc->draws.data();
+    const size_t before = PooledFrameCount();
+    fc.reset();
+    CHECK(PooledFrameCount() == before + 1);
+
+    auto again = PooledFrameCapture();
+    CHECK(PooledFrameCount() == before);
+    CHECK(again->draws.empty());
+    CHECK(again->draws.capacity() >= 100);
+    CHECK(again->draws.data() == storage);
+    CHECK(again->shades.empty());
+    CHECK(again->passes.empty());
+    CHECK(again->cameras.empty());
+    CHECK(again->rt_filtered_keys.empty());
+    CHECK(again->frame == 0);
+    CHECK(again->composed == 0);
+    CHECK(again->post_boundary == FrameCapture::kNoPost);
+    CHECK(again->noise_map == nullptr);
+    CHECK(again->cost.draws == 0);
+    CHECK(again->whole == 1);
+}
+
+TEST_CASE("the pool keeps at most kPooledFrames waiting") {
+    std::vector<std::shared_ptr<FrameCapture>> held;
+    for (size_t i = 0; i < kPooledFrames + 4; i++) held.push_back(PooledFrameCapture());
+    held.clear();
+    CHECK(PooledFrameCount() == kPooledFrames);
+}

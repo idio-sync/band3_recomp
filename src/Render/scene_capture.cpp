@@ -2467,22 +2467,6 @@ void LogGammaIfChanged(const GammaRamp& g) {
                 curve);
 }
 
-// moves `from`'s emptied vectors into `to`, keeping their memory: fresh
-// allocations of a frame's MB or two cost the game's thread page faults and
-// regrowth copies
-void Recycle(FrameCapture& from, FrameCapture& to) {
-    from.draws.clear();
-    from.shades.clear();
-    from.passes.clear();
-    from.cameras.clear();
-    from.rt_filtered_keys.clear();
-    to.draws.swap(from.draws);
-    to.shades.swap(from.shades);
-    to.passes.swap(from.passes);
-    to.cameras.swap(from.cameras);
-    to.rt_filtered_keys.swap(from.rt_filtered_keys);
-}
-
 // The frame's end, under g_state_mutex: the captured frame (for
 // HoldIfRequested after unlocking), or null while capture is off
 std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
@@ -2507,7 +2491,7 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
         FrameCapture& b = *s.building;
         if (!b.draws.empty() || !b.passes.empty() || b.post_boundary != FrameCapture::kNoPost ||
             b.passes_unbalanced) {
-            s.building = std::make_shared<FrameCapture>();
+            s.building = PooledFrameCapture();
             s.profile.allocs++;
         }
         s.shades.clear();
@@ -2559,14 +2543,12 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
         g_capture_epoch++;
     }
     g_latest_cv.notify_all();
-    auto next = std::make_shared<FrameCapture>();
+    // the old one goes back to the pool first if no one else holds it
+    old.reset();
+    auto next = PooledFrameCapture();
     s.profile.allocs++;
-    // if no one else holds it, reuse its vectors (made non-const, so the
-    // const_cast is safe)
-    if (old && old.use_count() == 1) Recycle(const_cast<FrameCapture&>(*old), *next);
     next->draws.reserve(done->draws.size() + done->draws.size() / 8);
     next->shades.reserve(done->shades.size() + done->shades.size() / 8);
-    old.reset();
     Lap(s, CaptureProfile::kStepPublish);
     s.building = std::move(next);
     s.shades.clear();

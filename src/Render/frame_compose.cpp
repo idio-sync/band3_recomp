@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <mutex>
 #include <set>
 #include <utility>
 #include <vector>
@@ -56,7 +57,70 @@ void AddCounts(FrameCapture& to, const FrameCapture& from) {
         to.*f += from.*f;
 }
 
+// never destroyed: frames held by other statics come back at exit
+struct Pool {
+    std::mutex mutex;
+    std::vector<std::unique_ptr<FrameCapture>> frames;
+};
+Pool& ThePool() {
+    static Pool* pool = new Pool;
+    return *pool;
+}
+
+// empties `fc` as a fresh one, its vectors' capacity kept, and pools it
+void ReturnFrame(FrameCapture* fc) {
+    std::unique_ptr<FrameCapture> owned(fc);
+    std::vector<DrawItem> draws;
+    std::vector<ShadeState> shades;
+    std::vector<Pass> passes;
+    std::vector<VelocityObject> velocity_objects;
+    std::vector<uint64_t> rt_filtered_keys;
+    std::vector<CameraView> cameras;
+    draws.swap(fc->draws);
+    shades.swap(fc->shades);
+    passes.swap(fc->passes);
+    velocity_objects.swap(fc->velocity_objects);
+    rt_filtered_keys.swap(fc->rt_filtered_keys);
+    cameras.swap(fc->cameras);
+    draws.clear();
+    shades.clear();
+    passes.clear();
+    velocity_objects.clear();
+    rt_filtered_keys.clear();
+    cameras.clear();
+    *fc = FrameCapture{};
+    fc->draws.swap(draws);
+    fc->shades.swap(shades);
+    fc->passes.swap(passes);
+    fc->velocity_objects.swap(velocity_objects);
+    fc->rt_filtered_keys.swap(rt_filtered_keys);
+    fc->cameras.swap(cameras);
+    Pool& pool = ThePool();
+    std::lock_guard lock(pool.mutex);
+    if (pool.frames.size() < kPooledFrames) pool.frames.push_back(std::move(owned));
+}
+
 }  // namespace
+
+std::shared_ptr<FrameCapture> PooledFrameCapture() {
+    std::unique_ptr<FrameCapture> fc;
+    {
+        Pool& pool = ThePool();
+        std::lock_guard lock(pool.mutex);
+        if (!pool.frames.empty()) {
+            fc = std::move(pool.frames.back());
+            pool.frames.pop_back();
+        }
+    }
+    if (!fc) fc = std::make_unique<FrameCapture>();
+    return std::shared_ptr<FrameCapture>(fc.release(), ReturnFrame);
+}
+
+size_t PooledFrameCount() {
+    Pool& pool = ThePool();
+    std::lock_guard lock(pool.mutex);
+    return pool.frames.size();
+}
 
 void CountRenderTargets(const FrameCapture& fc, const std::vector<uint64_t>& left_out,
                         uint32_t& sampled, uint32_t& missing, std::vector<uint64_t>& filtered) {
@@ -86,7 +150,7 @@ void CountRenderTargets(const FrameCapture& fc, const std::vector<uint64_t>& lef
 }
 
 std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const FrameCapture& frame) {
-    auto out = std::make_shared<FrameCapture>();
+    auto out = PooledFrameCapture();
     FrameCapture& fc = *out;
     fc.frame = frame.frame;
     fc.game_frame = frame.game_frame;
