@@ -268,3 +268,10 @@ the settings and options.
 `tests/game/pacing_song.b3t` plays 20th Century Boy and measures the native renderer's
 pacing over 20 s of it (`native_view stats` and `present_stats`). Its header has the
 launch line; `window offscreen` first, since a minimized window doesn't paint.
+
+`python tools/perf_driver.py 120 <run> --flag --frame_cap=display` does the same in one
+command with every guard against a GPU hang: it waits for other band3s and builds, launches
+on a fresh profile, plays `tests/game/perf_slice.b3t` and measures `--seconds` (30) with
+`tools/perf_sample.py` too, writing `out/perf/<run>/result.json`; `WINDOW=onscreen` puts the
+window on the monitor, which pacing numbers need. `python tools/perf_driver.py table <run>...`
+sets runs' `present_stats` side by side. Its docstring has the rest.

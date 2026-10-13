@@ -1,0 +1,34 @@
+# Plays 20th Century Boy on autoplay in arena_04 (Guitar, Expert) up to 5 s past its
+# loading, for tools/perf_driver.py, which measures from there; tests/game/pacing_song.b3t's
+# start. Starts where boot.b3t leaves Rock Band 3 Deluxe (on a fresh profile).
+
+# the welcome hint, whose first choice customizes the band; back out of that
+# to the main menu
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1s
+press red until screen=main_hub_screen timeout=30s
+sleep 1s
+set autoplay true
+set forced_venue arena_04
+# Play Now, Quickplay, Choose Songs
+press green
+sleep 1500ms
+press green
+sleep 1500ms
+press green until screen=song_select_screen timeout=30s
+sleep 1s
+# past the 123 heading to 20th Century Boy
+press down
+press down
+sleep 500ms
+press green until screen=part_difficulty_screen timeout=30s
+sleep 1500ms
+# Guitar, Expert
+press green
+sleep 500ms
+press green
+wait in_game timeout=60s
+# past the song's loading
+sleep 5s
