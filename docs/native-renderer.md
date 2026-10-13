@@ -55,6 +55,11 @@ to `emulated` or `both` they appear once band3 restarts.
   steer, such as 100 on a 120 Hz display, or with `native_phase_lock` off.
 - **Stalls.** If the GPU hasn't finished a frame in 2 s, the window keeps its last frame until
   it does.
+- **Sound effects** (`audio_xapo_nonblocking`). Not the renderer's, but it sets the slowest game
+  frames: RB3 asks every sound effect's voice each frame whether it's still playing, and for
+  one that's starting or fading out, XAudio2's code has the game wait for the audio thread's
+  next pass (up to 5 ms on a console, about 10 ms here, where audio frames are asked for two at
+  a time). band3 answers with the newest result the audio thread set, without the wait.
 - **Measuring.** The test harness's `present_stats` measures the window's pacing under either
   renderer.
 

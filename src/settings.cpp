@@ -555,6 +555,13 @@ REXCVAR_DEFINE_BOOL(native_camera_shake, true, "Band3/Advanced/Game code",
     "Use the frame-rate independent camera shake replacement")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(audio_xapo_nonblocking, true, "Band3/Advanced/Game code",
+    "Answer the game's checks of whether each sound effect is still playing (dozens a frame, "
+    "through its voice's effect parameters) with the newest result the audio thread set, "
+    "instead of waiting for the audio thread's next pass to reach a sound that's starting or "
+    "fading out: up to about 10 ms here, more than a frame at 120 Hz. Off waits, as the game "
+    "does on a console (up to 5 ms there)");
+
 // Band3/Advanced/Graphics
 
 REXCVAR_DEFINE_BOOL(fullbright, false, "Band3/Advanced/Graphics",

@@ -7,6 +7,9 @@
 // music video begins (menus' and the music library's previews are other
 // streams; a preview starts mid-song). The reader decodes a couple of seconds
 // ahead of what plays, which positions by sample don't mind.
+//
+// And the game's reads of its audio effects' parameters, answered without
+// waiting for the audio thread (audio_xapo_nonblocking, xapo_params.h).
 
 #include <rex/hook.h>
 #include <rex/system/xmemory.h>
@@ -18,7 +21,9 @@
 #include <vector>
 
 #include "generated/band3_init.h"
+#include "src/Hooks/xapo_params.h"
 #include "src/Video/auto_sync.h"
+#include "src/settings.h"
 
 namespace {
 
@@ -86,4 +91,27 @@ extern "C" REX_FUNC(StandardStream__ConsumeData) {
     for (float& x : g_mono) x /= float(channels);
     band3::video::SongAudio(song, g_mono);
     g_next = before + taken;
+}
+
+// IXAPOParameters::GetParameters(this, void* parameters, UINT32 byte_size),
+// CXAPOParametersBase's (xapo_params.h): the game's reads of an effect's
+// parameters through IXAudio2Voice::GetEffectParameters, Voice::IsPlaying's
+// for every sound effect it polls
+extern "C" void __imp__CXAPOParametersBase__GetParameters(PPCContext& ctx, uint8_t* base);
+extern "C" REX_FUNC(CXAPOParametersBase__GetParameters) {
+    namespace xapo = band3::xapo;
+    if (REXCVAR_GET(audio_xapo_nonblocking)) {
+        const uint32_t self = ctx.r3.u32;
+        const xapo::State state{REX_LOAD_U32(self + xapo::kCurrentParameters),
+                                REX_LOAD_U32(self + xapo::kNewerResultsReady),
+                                REX_LOAD_U32(self + xapo::kProducer)};
+        if (xapo::WouldWait(state)) {
+            const uint32_t latest =
+                xapo::LatestBlock(REX_LOAD_U32(self + xapo::kParameterBlocks),
+                                  REX_LOAD_U32(self + xapo::kParameterBlockByteSize));
+            if (xapo::CopySettled(REX_RAW_ADDR(ctx.r4.u32), REX_RAW_ADDR(latest), ctx.r5.u32))
+                return;
+        }
+    }
+    __imp__CXAPOParametersBase__GetParameters(ctx, base);
 }

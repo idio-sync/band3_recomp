@@ -274,6 +274,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
+| `audio_xapo_nonblocking` | `true` | `true`, `false` | Answer the game's checks of whether each sound effect is still playing (dozens a frame, through its voice's effect parameters) with the newest result the audio thread set, instead of waiting for the audio thread's next pass to reach a sound that's starting or fading out: up to about 10 ms here, more than a frame at 120 Hz. Off waits, as the game does on a console (up to 5 ms there) |
 | `native_camera_shake` | `true` | `true`, `false` | Use the frame-rate independent camera shake replacement *Applies at the next start.* |
 | `native_math` | `true` | `true`, `false` | Use native C++ replacements for the game's math functions (sin, cos, pow, vector/matrix ops) |
 
