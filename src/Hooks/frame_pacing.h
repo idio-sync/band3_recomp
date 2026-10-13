@@ -272,14 +272,19 @@ inline bool PhaseLockSteers(bool lock, FrameCapMode mode, double cap_hz, double 
 // newest of two or more frames whatever the hold, which only makes it later.
 // frame_cap auto declares a variable refresh display, which shows each frame
 // as it comes: there the hold only adds lag. So does `phase_locked`
-// (PhaseLockSteers): the lock already has each frame published a set time
-// before its paint, and a frame that misses it came late from the game, which
-// holding the ones around it can't make earlier (at 120 Hz the hold cost
-// 1.7 ms of latency and repeated as many frames). A rate not known (0) keeps
-// it.
+// (PhaseLockSteers) on a display of kLockedHoldlessHz or more: the lock already
+// has each frame published a set time before its paint, and a frame that
+// misses it came late from the game, which holding the ones around it can't
+// make earlier (at 120 Hz the hold cost 1.7 ms of latency and repeated as many
+// frames). Below that the lock keeps the hold: at 60 Hz on an integrated GPU,
+// whose frames vary by most of a refresh, the window showed 97% of frames
+// distinct with it and 83% without. A rate not known (0) keeps it.
+inline constexpr double kLockedHoldlessHz = 100;
+
 inline bool PacePublishing(FrameCapMode mode, double game_hz, double display_hz,
                            bool phase_locked = false) {
-    if (mode == FrameCapMode::kAuto || phase_locked) return false;
+    if (mode == FrameCapMode::kAuto) return false;
+    if (phase_locked && display_hz >= kLockedHoldlessHz) return false;
     return game_hz <= 0 || display_hz <= 0 || game_hz < 1.5 * display_hz;
 }
 

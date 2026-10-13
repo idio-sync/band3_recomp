@@ -381,8 +381,12 @@ TEST_CASE("the phase lock steers a fixed cap at the display's rate") {
     CHECK_FALSE(PhaseLockSteers(true, FrameCapMode::kFixed, 120, 0));
 }
 
-TEST_CASE("frames aren't paced while the phase lock steers") {
+TEST_CASE("frames aren't paced while the phase lock steers at 100 Hz or more") {
     CHECK_FALSE(PacePublishing(FrameCapMode::kDisplay, 120, 120, true));
+    CHECK_FALSE(PacePublishing(FrameCapMode::kDisplay, 100, 100, true));
+    // below that the lock keeps the hold
+    CHECK(PacePublishing(FrameCapMode::kDisplay, 60, 60, true));
+    CHECK(PacePublishing(FrameCapMode::kFixed, 90, 90, true));
     // where it doesn't (100 on 120 Hz, or the lock off), they are
     CHECK(PacePublishing(FrameCapMode::kFixed, 100, 120,
                          PhaseLockSteers(true, FrameCapMode::kFixed, 100, 120)));

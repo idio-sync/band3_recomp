@@ -49,10 +49,12 @@ to `emulated` or `both` they appear once band3 restarts.
   clock happens to fall against the display's.
 - **Pacing** (`native_present_pacing`). Each frame is handed to the window a steady delay after
   it's drawn, never more than a frame, so motion steps evenly. It's skipped while the phase lock
-  steers (frames already arrive ahead of their refresh, and holding them only adds lag), when the
-  game runs at 1.5 times the display's refresh rate or more, with `frame_cap` `auto`, or on a
-  variable refresh display, where it would only add lag. So it applies to a cap the lock can't
-  steer, such as 100 on a 120 Hz display, or with `native_phase_lock` off.
+  steers on a display of 100 Hz or more (frames already arrive ahead of their refresh, and
+  holding them only adds lag), when the game runs at 1.5 times the display's refresh rate or
+  more, with `frame_cap` `auto`, or on a variable refresh display, where it would only add lag.
+  So it applies at 60 Hz, to a cap the lock can't steer, such as 100 on a 120 Hz display, and
+  with `native_phase_lock` off. At 60 Hz on an integrated GPU (Radeon 680M, 1920x1200) the lock
+  without it showed 83% of frames distinct, against 97% with it, for 7 ms less latency.
 - **Stalls.** If the GPU hasn't finished a frame in 2 s, the window keeps its last frame until
   it does.
 - **Sound effects** (`audio_xapo_nonblocking`). Not the renderer's, but it sets the slowest game

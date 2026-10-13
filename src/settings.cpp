@@ -595,9 +595,11 @@ REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Advanced/Native renderer
     "(with even/odd rendering, every other one) don't reach a paint together with the one "
     "before; off publishes each as soon as it's drawn, to compare. Only while the game runs "
     "under 1.5 times the display's refresh rate, frame_cap isn't auto and native_phase_lock "
-    "isn't steering the cap: faster, each refresh shows the newest frame anyway, auto's "
-    "variable refresh display shows each as it comes, and the phase lock already has each "
-    "frame reach the window before its paint, so the delay would only add lag");
+    "isn't steering the cap on a display of 100 Hz or more: faster, each refresh shows the "
+    "newest frame anyway, auto's variable refresh display shows each as it comes, and there "
+    "the phase lock already has each frame reach the window before its paint, so the delay "
+    "would only add lag. Below 100 Hz the lock keeps it, as frames vary more against the "
+    "refresh");
 
 REXCVAR_DEFINE_BOOL(native_present_trace, false, "Band3/Advanced/Native renderer",
     "With the native picture shown, log each frame the native renderer hands the window (its "
