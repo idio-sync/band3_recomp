@@ -172,10 +172,11 @@ inline const char* FrameCapModeName(FrameCapMode mode) {
 // published, a frame a little slower than the rest misses its paint, which
 // shows the frame before again, and the next paint finds two new frames and
 // shows the newer (a repeat and a skip). This steers the beat so frames are
-// published about half a refresh before the paint that shows them: the
-// slack, a paint's time less its frame's publishing, is measured over
-// kWindow frames, and the beat moved by kGain of its median's distance from
-// half the period (Correction), at most a quarter period at a time.
+// published a set time before the paint that shows them (a share of the
+// refresh, native_phase_lock_slack): the slack, a paint's time less its
+// frame's publishing, is measured over kWindow frames, and the beat moved by
+// kGain of its median's distance from that target (Correction; half the
+// period if none is given), at most a quarter period at a time.
 // Times in steady-clock nanoseconds. Not thread-safe.
 class PhaseLock {
 public:
@@ -190,8 +191,10 @@ public:
 
     // A paint at `paint_ns` on a display refreshing every `period_ns` showed
     // frame `serial`, Presented at `presented_ns`. The beat's correction once
-    // a window's measured (negative: earlier), else 0.
-    int64_t Shown(uint64_t serial, int64_t presented_ns, int64_t paint_ns, int64_t period_ns) {
+    // a window's measured (negative: earlier), else 0. `target_ns`: the slack
+    // to steer to, half the period if 0.
+    int64_t Shown(uint64_t serial, int64_t presented_ns, int64_t paint_ns, int64_t period_ns,
+                  int64_t target_ns = 0) {
         if (!serial || serial == last_serial_ || period_ns <= 0) return 0;
         last_serial_ = serial;
         int64_t published = -1;
@@ -205,12 +208,14 @@ public:
         slack_[count_++] = slack;
         if (count_ < kWindow) return 0;
         count_ = 0;
-        return Correction(Median(), period_ns);
+        return Correction(Median(), period_ns, target_ns);
     }
 
-    // the beat's move for a median slack of `slack_ns`
-    static int64_t Correction(int64_t slack_ns, int64_t period_ns) {
-        const double c = kGain * double(slack_ns - period_ns / 2);
+    // the beat's move for a median slack of `slack_ns`, toward `target_ns`
+    // (half the period if 0)
+    static int64_t Correction(int64_t slack_ns, int64_t period_ns, int64_t target_ns = 0) {
+        const int64_t target = target_ns > 0 ? target_ns : period_ns / 2;
+        const double c = kGain * double(slack_ns - target);
         const double most = double(period_ns) / 4;
         return int64_t(std::clamp(c, -most, most));
     }

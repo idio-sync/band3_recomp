@@ -1630,7 +1630,9 @@ void NotePaint(std::chrono::steady_clock::time_point now, bool native, int sourc
     {
         std::lock_guard lock(g_paints_mutex);
         g_paints.Paint(Nanoseconds(now), native, source, serial, presented_ns);
-        if (period) nudge = g_phase.Shown(serial, presented_ns, Nanoseconds(now), period);
+        if (period)
+            nudge = g_phase.Shown(serial, presented_ns, Nanoseconds(now), period,
+                                  period * REXCVAR_GET(native_phase_lock_slack) / 100);
     }
     if (native && REXCVAR_GET(native_present_trace))
         REXLOG_INFO("present trace: paint at {} shows {} presented {}", Nanoseconds(now), serial,

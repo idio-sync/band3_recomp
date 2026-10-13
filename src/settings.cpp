@@ -598,10 +598,17 @@ REXCVAR_DEFINE_BOOL(native_present_trace, false, "Band3/Advanced/Native renderer
 
 REXCVAR_DEFINE_BOOL(native_phase_lock, true, "Band3/Advanced/Native renderer",
     "With the native picture shown and the frame cap at a fixed rate (display or a number "
-    "matching the display's), move the cap's beat so each frame reaches the window about "
-    "half a refresh before the paint that shows it, rather than wherever the cap's clock "
-    "happens to fall against the display's: a frame a little slower than the rest then "
+    "matching the display's), move the cap's beat so each frame reaches the window a set "
+    "time (native_phase_lock_slack) before the paint that shows it, rather than wherever the "
+    "cap's clock happens to fall against the display's: a frame a little slower than the rest then "
     "still makes its paint instead of being shown a refresh late and the next skipped");
+
+REXCVAR_DEFINE_INT32(native_phase_lock_slack, 40, "Band3/Advanced/Native renderer",
+    "With native_phase_lock, how long before the paint that shows it each frame should reach "
+    "the window, in percent of a refresh: less is less lag, until frames a little slower than "
+    "the rest miss their paint (at 120 Hz, 40 showed as few repeated frames as 50 at 0.8 ms "
+    "less lag; 30 repeated four times as many)")
+    .range(10, 90);
 
 REXCVAR_DEFINE_BOOL(native_present_request_paint, true, "Band3/Advanced/Native renderer",
     "With renderer native (no emulated GPU), ask the window to paint each time the native "

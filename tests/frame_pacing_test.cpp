@@ -191,6 +191,17 @@ TEST_CASE("the phase lock moves the beat toward half a period of slack") {
     CHECK(PhaseLock::Correction(100'000'000, p) <= p / 4);
 }
 
+TEST_CASE("the phase lock steers to a slack it's given") {
+    constexpr int64_t p = 8'333'333;
+    constexpr int64_t target = p * 30 / 100;
+    CHECK(PhaseLock::Correction(target, p, target) == 0);
+    // half a period is more than this target asks for: later, for less lag
+    CHECK(PhaseLock::Correction(p / 2, p, target) > 0);
+    CHECK(PhaseLock::Correction(1'000'000, p, target) < 0);
+    // 0 is half the period, as before
+    CHECK(PhaseLock::Correction(p / 2, p, 0) == 0);
+}
+
 TEST_CASE("the phase lock counts each frame's first paint once a window is full") {
     constexpr int64_t p = 16'666'667;
     PhaseLock lock;
