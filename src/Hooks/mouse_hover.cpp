@@ -52,6 +52,7 @@ REX_EXTERN(UIListState__MaxFirstShowing);
 REX_EXTERN(OvershellPanel__AreAllLocalSlotsAllowingInputToShell);
 REX_EXTERN(UIList__CalcBoundingBox);
 REX_EXTERN(UIList__SetSelectedSimulateScroll_827F9008);
+REX_EXTERN(ContentMgr__RefreshInProgress);
 
 namespace band3::mouse_hover {
 
@@ -66,6 +67,7 @@ using input::mouse_hover::Vec2;
 using input::mouse_hover::Vec3;
 
 constexpr uint32_t kTheBandUI = 0x82DFD2B0;            // BandUI (UIManager) object
+constexpr uint32_t kTheContentMgr = 0x82C71A14;        // ContentMgr* TheContentMgr
 constexpr uint32_t kUIManager_CurrentScreen = 0x2C;    // UIScreen*
 constexpr uint32_t kBandUI_Overshell = 0xA0;           // OvershellPanel*
 constexpr uint32_t kUIScreen_Name = 0x18;              // Symbol (char*)
@@ -419,9 +421,20 @@ bool OvershellTakesInput(PPCContext& ctx, uint8_t* base) {
            !(CallInt(ctx, base, OvershellPanel__AreAllLocalSlotsAllowingInputToShell, overshell) & 0xFF);
 }
 
+// New content being taken in (ContentMgr::RefreshInProgress), as when songs
+// are added while the game runs: the music library rebuilds its lists over
+// the next frames and holds off its screen until done (MusicLibrary::
+// PushHighlightToScreen, SongSelectPanel::OnMsg). A list measured or scrolled
+// meanwhile draws or reads rows that are going (a freed slot element, a null
+// in SongMgr::Handle), so the hover waits too.
+bool ContentRefreshing(PPCContext& ctx, uint8_t* base) {
+    const uint32_t content_mgr = Load32(base, kTheContentMgr);
+    return content_mgr && (CallInt(ctx, base, ContentMgr__RefreshInProgress, content_mgr) & 0xFF);
+}
+
 bool HoverAllowed(PPCContext& ctx, uint8_t* base) {
     return REXCVAR_GET(mouse_menus) && !input::SongBeingPlayed() && !input::GameInputBlocked() &&
-           !OvershellTakesInput(ctx, base);
+           !OvershellTakesInput(ctx, base) && !ContentRefreshing(ctx, base);
 }
 
 // selects the list's row under the pointer; whether the pointer is on the list
@@ -493,14 +506,17 @@ void AnswerReport(PPCContext& ctx, uint8_t* base) {
     report.moves = g_seen;
     report.focus = Describe(base, FocusComponent(ctx, base));
     for (const Drawn& d : g_last) report.drawn.push_back(Describe(base, d.list_state - kUIList_ListState));
-    uint32_t panel_dir = 0;
-    for (const auto& target : FocusTargets(ctx, base, report.picture, FocusComponent(ctx, base), panel_dir)) {
-        report.targets.push_back({Describe(base, target.component), target.box});
-    }
-    if (auto view = ListView(ctx, base, report.picture, FocusComponent(ctx, base))) {
-        report.list = true;
-        report.bounds = view->bounds;
-        report.rows = std::move(view->report_rows);
+    // no targets or list while content is taken in, which the hover waits out
+    if (!ContentRefreshing(ctx, base)) {
+        uint32_t panel_dir = 0;
+        for (const auto& target : FocusTargets(ctx, base, report.picture, FocusComponent(ctx, base), panel_dir)) {
+            report.targets.push_back({Describe(base, target.component), target.box});
+        }
+        if (auto view = ListView(ctx, base, report.picture, FocusComponent(ctx, base))) {
+            report.list = true;
+            report.bounds = view->bounds;
+            report.rows = std::move(view->report_rows);
+        }
     }
     {
         std::lock_guard<std::mutex> lock(g_report_mutex);

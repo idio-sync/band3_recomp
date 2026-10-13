@@ -522,7 +522,9 @@ void ReportException(const CrashRequest& r) {
             rec->NumberParameters > 0 ? rec->ExceptionInformation[0] : 0,
             rec->NumberParameters > 1 ? rec->ExceptionInformation[1] : 0) +
         " on thread " + std::to_string(r.thread_id) + " at " +
-        band3::crash_report::FormatUtc(UtcNow()) + " UTC" + CallChain(*r.info->ContextRecord, 32) +
+        // deep enough for a script's nested handlers (DataArray::Execute and
+        // Object::Handle a few frames per level) to reach what started them
+        band3::crash_report::FormatUtc(UtcNow()) + " UTC" + CallChain(*r.info->ContextRecord, 96) +
         "\n";
     AppendDred(text);
     REXLOG_CRITICAL("{}", text);
