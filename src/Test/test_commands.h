@@ -275,8 +275,8 @@ struct PresentStats {
     std::vector<double> game_ms;
     // the frame cap now (frame_cap): "off", "display", "auto" or "fixed", and
     // its rate; in the same time, the frames that ended after their beat by
-    // less than a frame and the times one later than that started the beat
-    // again, and the mean a frame waited for its beat and, of that, spun
+    // less than a frame and the times one later than that dropped beats, and
+    // the mean a frame waited for its beat and, of that, spun
     struct Cap {
         std::string mode = "off";
         double hz = 0;

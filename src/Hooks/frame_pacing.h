@@ -73,8 +73,12 @@ inline uint32_t MaxPeriod(int32_t period, int32_t odd_half) {
 // that ends early waits for its beat and one that ends a little late (by less
 // than a period) goes on at once and leaves the next a shorter wait, keeping
 // the beat. One later than that (a hitch, a render check holding the game,
-// F8's drain) starts the beat again from itself rather than letting the
-// frames after it run back to back to catch up.
+// F8's drain) goes on at once too, and the beats it missed are dropped rather
+// than run back to back to catch up: the next frame waits for the first beat
+// after it, keeping the beat's phase. Starting a beat of its own from the late
+// frame instead put it anywhere against the display's refresh, which
+// native_phase_lock had to find again (about half a second of frames missing
+// their paint).
 class FrameCapSchedule {
 public:
     // 0 turns the cap off; another period starts the beat again
@@ -104,8 +108,9 @@ public:
             deadline_ = due + period_;
             return now_ns;
         }
+        // the first beat after now; on one exactly, the one after it
         resets_++;
-        deadline_ = now_ns + period_;
+        deadline_ = due + ((now_ns - due) / period_ + 1) * period_;
         return now_ns;
     }
 
@@ -116,7 +121,7 @@ public:
     }
 
     // frames that ended after their beat by less than a period, and the
-    // times a later one started the beat again
+    // times a later one dropped beats
     uint64_t Late() const { return late_; }
     uint64_t Resets() const { return resets_; }
 

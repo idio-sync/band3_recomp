@@ -126,21 +126,50 @@ TEST_CASE("a frame late by less than a period goes on at once and keeps the beat
     CHECK(s.Resets() == 0);
 }
 
-TEST_CASE("a frame a period or more late starts the beat again from itself") {
+TEST_CASE("a frame a period or more late goes on at once and keeps the beat's phase") {
     FrameCapSchedule s = Started();
-    // a hitch: the beat at kStart + kPeriod missed by a whole period
-    const int64_t hitch = kStart + 2 * kPeriod;
+    // a hitch: the beat at kStart + kPeriod missed by more than a whole period
+    const int64_t hitch = kStart + 2 * kPeriod + 3'000'000;
     CHECK(s.Next(hitch) == hitch);
     CHECK(s.Resets() == 1);
     CHECK(s.Late() == 0);
-    // no burst to catch up: the next frame waits a period from the hitch
-    CHECK(s.Next(hitch + 1'000'000) == hitch + kPeriod);
-    CHECK(s.Next(hitch + kPeriod + 1'000'000) == hitch + 2 * kPeriod);
-    // a render check holding the game for seconds counts the same
-    const int64_t held = hitch + 5'000'000'000;
+    // the next frame waits for the first beat after the hitch, on the old
+    // grid, not a period from the hitch
+    CHECK(s.Next(hitch + 1'000'000) == kStart + 3 * kPeriod);
+    // no burst to catch up: the beats after follow a period apart
+    CHECK(s.Next(kStart + 3 * kPeriod + 1'000'000) == kStart + 4 * kPeriod);
+    CHECK(s.Next(kStart + 4 * kPeriod + 500'000) == kStart + 5 * kPeriod);
+    CHECK(s.Late() == 0);
+    // a render check holding the game for seconds counts the same, and the
+    // phase is still the first frame's
+    const int64_t held = kStart + 5 * kPeriod + 5'000'000'000;
     CHECK(s.Next(held) == held);
     CHECK(s.Resets() == 2);
-    CHECK(s.Next(held + 10) == held + kPeriod);
+    const int64_t beat = kStart + ((held - kStart) / kPeriod + 1) * kPeriod;
+    CHECK(beat > held);
+    CHECK(beat - held <= kPeriod);
+    CHECK(s.Next(held + 10) == beat);
+    CHECK(s.Next(beat + 2'000'000) == beat + kPeriod);
+}
+
+TEST_CASE("a frame late by exactly whole periods waits a whole period for the next beat") {
+    FrameCapSchedule s = Started();
+    // ends right on a beat it didn't wait for: that beat is the frame's own,
+    // so the next frame's is the one after
+    const int64_t on_beat = kStart + 3 * kPeriod;
+    CHECK(s.Next(on_beat) == on_beat);
+    CHECK(s.Resets() == 1);
+    CHECK(s.Next(on_beat + 1'000'000) == on_beat + kPeriod);
+}
+
+TEST_CASE("the phase kept across a hitch includes the nudges before it") {
+    FrameCapSchedule s = Started();
+    s.Nudge(-1'000'000);
+    CHECK(s.Next(kStart + 1'000'000) == kStart + kPeriod - 1'000'000);
+    const int64_t hitch = kStart + 4 * kPeriod;
+    CHECK(s.Next(hitch) == hitch);
+    CHECK(s.Resets() == 1);
+    CHECK(s.Next(hitch + 1'000'000) == kStart + 5 * kPeriod - 1'000'000);
 }
 
 TEST_CASE("a new period or turning the cap off starts the beat again") {
