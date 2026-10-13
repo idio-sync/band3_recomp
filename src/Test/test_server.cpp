@@ -395,6 +395,10 @@ public:
         options.premake_arrays = REXCVAR_GET(native_view_premake_arrays);
         options.submit_points = uint32_t(REXCVAR_GET(native_view_submit_points));
         options.clock_keep = render::InSong();  // as NativePicture's
+        // keeps the game's earlier frames' textures as the native renderer's
+        // own frames do, so the CPU's drawing of the capture, which draws
+        // them all, checks what was kept
+        options.keep_carried = REXCVAR_GET(native_keep_carried_passes);
         std::vector<uint32_t> rgba;
         render::GpuStats stats;
         if (!render::GpuRenderer::Get().RenderFrame(frame, options, rgba, stats)) {
@@ -1117,6 +1121,7 @@ private:
                       {"ahead_used", double(g.ahead_used)},
                       {"ahead_fallback_passes", double(g.ahead_fallback_passes)},
                       {"passes", double(g.passes)},
+                      {"passes_kept", double(g.passes_kept)},
                       {"pre_passes", double(g.pre_passes)},
                       {"pre_submits", double(g.pre_submits)},
                       {"pre_targets_made", double(g.pre_targets_made)},

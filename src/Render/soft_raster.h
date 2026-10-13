@@ -183,6 +183,11 @@ struct RasterOptions {
     // sampled as R8 where supported, swizzled in the shader (mesh.hlsl's
     // MapTexel; SetKeepR8); off, RGBA. Read when each texture is placed.
     bool r8_textures = false;
+    // GPU (native_keep_carried_passes): a carried texture pass (one the game
+    // drew in an earlier frame, FrameCapture::passes_carried) isn't drawn
+    // again while its target holds the version it makes, drawn with the
+    // same options
+    bool keep_carried = false;
     // GPU: frames between world draws (WorldPeriod), how long meshes and
     // textures are kept (ResidencyKeepFrames) so the world's aren't resent.
     // 0 lets them go once a frame doesn't draw them.

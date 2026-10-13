@@ -74,6 +74,9 @@ struct GpuStats {
     uint32_t skipped = 0;   // draws it couldn't do (no geometry, or no pipeline)
     uint32_t uploads = 0;   // meshes and textures sent to the GPU this frame
     uint32_t passes = 0;    // texture passes drawn
+    // carried texture passes left undrawn, their targets holding their
+    // version already (RasterOptions::keep_carried)
+    uint32_t passes_kept = 0;
     uint32_t rt_missing = 0;  // draws that sampled a render target nothing had drawn
     // RenderFrame: the whole frame (uploads, drawing, readback), and of that,
     // submit to picture. RenderFrameToOutput: up to submission only, wait 0

@@ -45,6 +45,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstddef>
 #include <cstring>
@@ -708,6 +709,8 @@ struct GpuRenderer::Impl {
         bool drawn = false;     // by a pass, this frame or before
         uint64_t drawn_in = 0;  // the frame a pass last drew it
         uint32_t version = 0;   // the version that pass made
+        // the options it was drawn with (Render's draw_key), for keep_carried
+        uint64_t drawn_key = 0;
         // the frame that last drew or sampled it, and when (frame_now)
         uint64_t used = 0;
         std::chrono::steady_clock::time_point used_at;
@@ -3351,6 +3354,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             to_pool.push_back(&m);
         }
     };
+    // what a texture pass's pixels depend on besides its content and size,
+    // for keep_carried: a target drawn with other options is drawn again
+    const uint64_t draw_key = (uint64_t(o.filtering) << 0) | (uint64_t(o.normal_maps) << 1) |
+                              (uint64_t(o.rt_guest_pixels) << 2) | (uint64_t(o.bc_textures) << 3) |
+                              (uint64_t(o.r8_textures) << 4) | (uint64_t(o.texture_passes) << 5) |
+                              (uint64_t(o.msaa & 0xff) << 8) | (uint64_t(int(o.view) & 0xff) << 16) |
+                              (uint64_t(std::bit_cast<uint32_t>(o.shadow_scale)) << 32);
     for (size_t r = 0; r < runs.size(); r++) {
         const PassRun& run = runs[r];
         // a texture pass's target, cleared where its camera (or NgLight)
@@ -3374,6 +3384,20 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             PassTargetSize(frame, *run.pass, o, tw, th);
             target = TargetFor(*run.pass, tw, th, o.premake_targets);
             if (!target) continue;
+            // RasterOptions::keep_carried: a pass the game drew in an earlier
+            // frame, whose version the target holds (versions count each draw
+            // into a target, so the same version is the same content), drawn
+            // with these options, counts as drawn this frame without drawing
+            // it; a target remade at another size isn't drawn
+            const bool carried =
+                size_t(run.pass - frame.passes.data()) < size_t(frame.passes_carried);
+            if (o.keep_carried && carried && target->drawn &&
+                target->version == run.pass->version && target->drawn_key == draw_key) {
+                target->drawn_in = serial;
+                UseRt(*target);
+                st.passes_kept++;
+                continue;
+            }
             const bool fresh = !target->drawn || target->drawn_in != serial;
             const uint32_t clear = PassClearFlags(frame, *run.pass);
             run_clear[r] = kRunDrawn;
@@ -3514,6 +3538,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             target->drawn = true;
             target->drawn_in = serial;
             target->version = run.pass->version;
+            target->drawn_key = draw_key;
         }
     }
     // the composite's noise map

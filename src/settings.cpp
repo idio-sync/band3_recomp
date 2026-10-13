@@ -696,6 +696,14 @@ REXCVAR_DEFINE_BOOL(native_r8_textures, true, "Band3/Advanced/Native renderer",
     "video memory, upload and decoding. The picture is the same. Off sends them as RGBA as "
     "before, to compare; applies to textures seen after the change");
 
+REXCVAR_DEFINE_BOOL(native_keep_carried_passes, true, "Band3/Advanced/Native renderer",
+    "Keep what the native renderer drew for a texture the game drew in an earlier frame and "
+    "hasn't drawn since (the characters' outfits, skin and hair, carried into each frame's "
+    "capture), rather than drawing it again every frame: it's drawn again when the game "
+    "draws it again, or a setting that changes how it's drawn does. The picture is the "
+    "same; at 1080p on a Steam Deck the texture passes took about 4 ms of the GPU a frame. "
+    "Off draws them every frame, as before, to compare");
+
 REXCVAR_DEFINE_INT32(native_deferred_decode_threads, 2, "Band3/Advanced/Native renderer",
     "How many threads help the native renderer decode the textures and meshes a song's first "
     "frames and a camera cut show for the first time (over 4 MB of them), so it holds the "

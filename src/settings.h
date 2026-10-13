@@ -140,6 +140,7 @@ REXCVAR_DECLARE(bool, native_present_zero_copy);
 REXCVAR_DECLARE(bool, native_present_pacing);
 REXCVAR_DECLARE(bool, native_phase_lock);
 REXCVAR_DECLARE(int32_t, native_phase_lock_slack);
+REXCVAR_DECLARE(bool, native_keep_carried_passes);
 REXCVAR_DECLARE(bool, native_present_trace);
 REXCVAR_DECLARE(bool, native_present_request_paint);
 REXCVAR_DECLARE(bool, native_present_pipeline);

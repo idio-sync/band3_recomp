@@ -127,6 +127,7 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.skipped += g.skipped;
     sum.uploads += g.uploads;
     sum.passes += g.passes;
+    sum.passes_kept += g.passes_kept;
     sum.rt_missing += g.rt_missing;
     sum.ms += g.ms;
     sum.wait_ms += g.wait_ms;
@@ -849,6 +850,7 @@ class Renderer {
                 o.bc_textures = REXCVAR_GET(native_bc_textures);
                 // and k_8's (movie planes) as R8
                 o.r8_textures = REXCVAR_GET(native_r8_textures);
+                o.keep_carried = REXCVAR_GET(native_keep_carried_passes);
                 gpu = gpu_;
                 dump = dump_path_;
                 zero_copy = present_ && present_zero_copy_ && gpu && dump.empty();
