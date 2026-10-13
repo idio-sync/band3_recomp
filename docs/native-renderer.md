@@ -43,10 +43,16 @@ to `emulated` or `both` they appear once band3 restarts.
 - **Zero-copy.** On Windows frames reach the window without leaving the GPU. Elsewhere, or with
   `native_view_backend` cpu, each frame is read back and uploaded. The log says which
   (`native present: zero-copy` or `uploading each frame`).
+- **Phase lock** (`native_phase_lock`). With `frame_cap` at the display's rate (`display`, or a
+  number matching it), the cap's beat is moved so each frame reaches the window a set time
+  (`native_phase_lock_slack`) before the refresh that shows it, rather than wherever the cap's
+  clock happens to fall against the display's.
 - **Pacing** (`native_present_pacing`). Each frame is handed to the window a steady delay after
-  it's drawn, never more than a frame, so motion steps evenly. It's skipped when the game runs
-  at 1.5 times the display's refresh rate or more, with `frame_cap` `auto`, or on a variable
-  refresh display, where it would only add lag.
+  it's drawn, never more than a frame, so motion steps evenly. It's skipped while the phase lock
+  steers (frames already arrive ahead of their refresh, and holding them only adds lag), when the
+  game runs at 1.5 times the display's refresh rate or more, with `frame_cap` `auto`, or on a
+  variable refresh display, where it would only add lag. So it applies to a cap the lock can't
+  steer, such as 100 on a 120 Hz display, or with `native_phase_lock` off.
 - **Stalls.** If the GPU hasn't finished a frame in 2 s, the window keeps its last frame until
   it does.
 - **Measuring.** The test harness's `present_stats` measures the window's pacing under either

@@ -876,12 +876,15 @@ class Renderer {
                 // texture arrays from ever emptying
                 o.clock_keep = InSong();
             }
-            // only where holding frames keeps two from one paint
-            // (frame_pacing.h's PacePublishing); logged as that changes
+            // only where holding frames keeps two from one paint and the
+            // phase lock doesn't steer (frame_pacing.h's PacePublishing);
+            // logged as that changes
             if (pace) {
-                const pacing::FrameCapMode mode = pacing::GetFrameCapStats().mode;
+                const pacing::FrameCapStats cap = pacing::GetFrameCapStats();
                 const double game_hz = pacing::GameHz(), display_hz = pacing::DisplayHz();
-                pace = pacing::PacePublishing(mode, game_hz, display_hz);
+                const bool locked = pacing::PhaseLockSteers(REXCVAR_GET(native_phase_lock),
+                                                            cap.mode, cap.hz, display_hz);
+                pace = pacing::PacePublishing(cap.mode, game_hz, display_hz, locked);
                 if (int(pace) != pace_logged) {
                     pace_logged = int(pace);
                     if (pace) {
@@ -889,8 +892,9 @@ class Renderer {
                                     "{:.2f} Hz)", game_hz, display_hz);
                     } else {
                         REXLOG_INFO("native present: not pacing frames, which would only add "
-                                    "lag (frame cap {} {:.2f} Hz, display {:.2f} Hz)",
-                                    pacing::FrameCapModeName(mode), game_hz, display_hz);
+                                    "lag (frame cap {} {:.2f} Hz, display {:.2f} Hz{})",
+                                    pacing::FrameCapModeName(cap.mode), game_hz, display_hz,
+                                    locked ? ", phase locked" : "");
                     }
                     // what it measured before the stretch without it is stale
                     pacer.Reset();
@@ -1614,12 +1618,10 @@ pacing::PhaseLock g_phase;
 // The display's period while native_phase_lock can steer the cap: the cap at
 // a fixed rate within 0.5% of the display's; else 0
 int64_t PhaseLockPeriodNs() {
-    if (!REXCVAR_GET(native_phase_lock)) return 0;
     const pacing::FrameCapStats cap = pacing::GetFrameCapStats();
-    if (cap.mode != pacing::FrameCapMode::kDisplay && cap.mode != pacing::FrameCapMode::kFixed)
-        return 0;
     const double display = pacing::DisplayHz();
-    if (!(display > 0) || std::abs(cap.hz - display) > 0.005 * display) return 0;
+    if (!pacing::PhaseLockSteers(REXCVAR_GET(native_phase_lock), cap.mode, cap.hz, display))
+        return 0;
     return int64_t(1e9 / display);
 }
 

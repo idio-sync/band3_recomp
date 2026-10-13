@@ -33,7 +33,8 @@ class Window;
 // back to emulated the native renderer keeps drawing until the emulated GPU
 // has drawn whole frames again.
 // The worker waits for a capture (WaitForCapture), draws the newest and
-// publishes it a steady delay after the game presented it (PublishPacer).
+// publishes it a steady delay after the game presented it (PublishPacer;
+// at once while native_phase_lock steers the frame cap).
 // With native_present_pipeline, on the zero-copy path it records the next
 // capture while the GPU draws the one before (at most one in flight besides
 // the one recorded). A frame the GPU hasn't finished in 2 s holds it.

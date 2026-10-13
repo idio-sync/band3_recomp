@@ -337,6 +337,30 @@ TEST_CASE("frames are paced only below 1.5 times the display's refresh") {
     CHECK_FALSE(PacePublishing(FrameCapMode::kOff, 120, 60));
 }
 
+using band3::pacing::PhaseLockSteers;
+
+TEST_CASE("the phase lock steers a fixed cap at the display's rate") {
+    CHECK(PhaseLockSteers(true, FrameCapMode::kDisplay, 120, 120));
+    CHECK(PhaseLockSteers(true, FrameCapMode::kFixed, 120, 119.88));
+    CHECK(PhaseLockSteers(true, FrameCapMode::kFixed, 144, 144.5));
+    // off, another rate, auto, no cap or a display not known
+    CHECK_FALSE(PhaseLockSteers(false, FrameCapMode::kDisplay, 120, 120));
+    CHECK_FALSE(PhaseLockSteers(true, FrameCapMode::kFixed, 100, 120));
+    CHECK_FALSE(PhaseLockSteers(true, FrameCapMode::kFixed, 240, 120));
+    CHECK_FALSE(PhaseLockSteers(true, FrameCapMode::kAuto, 114, 120));
+    CHECK_FALSE(PhaseLockSteers(true, FrameCapMode::kOff, 120, 120));
+    CHECK_FALSE(PhaseLockSteers(true, FrameCapMode::kFixed, 120, 0));
+}
+
+TEST_CASE("frames aren't paced while the phase lock steers") {
+    CHECK_FALSE(PacePublishing(FrameCapMode::kDisplay, 120, 120, true));
+    // where it doesn't (100 on 120 Hz, or the lock off), they are
+    CHECK(PacePublishing(FrameCapMode::kFixed, 100, 120,
+                         PhaseLockSteers(true, FrameCapMode::kFixed, 100, 120)));
+    CHECK(PacePublishing(FrameCapMode::kDisplay, 120, 120,
+                         PhaseLockSteers(false, FrameCapMode::kDisplay, 120, 120)));
+}
+
 TEST_CASE("auto never paces, and a rate not known keeps pacing") {
     // a variable refresh display shows each frame as it comes
     CHECK_FALSE(PacePublishing(FrameCapMode::kAuto, 114, 120));
