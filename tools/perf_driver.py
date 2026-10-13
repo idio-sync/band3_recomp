@@ -3,7 +3,8 @@
   python tools/perf_driver.py <60|120> <run> [--exe <band3.exe>] [--seconds N] [--flag <arg>]...
   python tools/perf_driver.py table <run>...
 
-Launches band3 (renderer native) on a fresh test profile, boots it (tests/game/boot.b3t), plays
+Launches band3 (renderer native) on a fresh test profile and default settings (the exe's
+band3.toml stands aside for the start, but for its folder settings), boots it (tests/game/boot.b3t), plays
 20th Century Boy on autoplay to 5 s past its loading (tests/game/perf_slice.b3t), then measures
 --seconds (30) of it: tools/perf_sample.py from outside, and the harness's `native_view stats`
 and `present_stats`. The rate sets --video_mode_refresh_rate and --frame_cap (a
@@ -175,13 +176,31 @@ class Run:
             result["native_view"], result["present"], result["state"] = replies
         return code == 0 and perf.returncode == 0
 
+    def defaults_config(self):
+        """A band3.toml for the run: the folder settings of the one beside the exe (where the
+        game's data is), nothing else, so every other setting is its default rather than
+        whatever the launcher last saved there (Lowest latency turns pacing off, say)."""
+        keep = []
+        try:
+            for line in open(os.path.join(self.build, "band3.toml"), encoding="utf-8"):
+                if re.match(r"\s*(game_data_root|user_data_root|cache_root)\s*=", line):
+                    keep.append(line.rstrip("\n"))
+        except OSError:
+            pass
+        path = os.path.join(self.out, "band3.toml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# perf_driver: the exe's band3.toml's folders only, everything else default\n")
+            f.write("".join(l + "\n" for l in keep))
+        return path
+
     def main(self):
         if not self.preconditions():
             return 4
         started = time.time()
         before = set(glob.glob(os.path.join(self.build, "logs", "band3_*.log")))
         code, text = self.ctl(["launch", "--exe", self.exe, "--user-data", self.ud, "--fresh",
-                               "--timeout", "180", "--"] + self.flags)
+                               "--config", self.defaults_config(), "--timeout", "180", "--"]
+                              + self.flags)
         if code:
             return 1
         pid = json.loads(text.strip().splitlines()[-1])["pid"]
