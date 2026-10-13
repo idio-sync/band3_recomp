@@ -87,6 +87,12 @@ constexpr uint32_t kRowPitchAlign = 256;
 constexpr uint32_t kTextureOffsetAlign = 512;
 // the arena's least size; it's made twice as big as it needs
 constexpr uint32_t kMinArenaBytes = 4u << 20;
+// In a song, the arena's least vertex bytes, grown to as soon as it starts
+// loading (clock_keep comes with Game's construction, seconds before the
+// song's first frame): the menus leave it ~20 MB and a song's meshes overflow
+// that a few frames into play, where the rebuild cost a frame 22 to 56 ms
+// (8 of 9 runs of 20th Century Boy on a Radeon 680M)
+constexpr uint32_t kSongArenaBytes = 48u << 20;
 // holds a song's usual frame: growing it later costs a frame several ms
 constexpr uint32_t kInitialUploadBytes = 32u << 20;
 
@@ -1904,13 +1910,15 @@ bool GpuRenderer::Impl::PlaceInArena() {
         verts += uint32_t(m->keep->verts.size());
         indices += IndexSlots(*m->keep);
     }
-    if (verts == 0) return true;
-    if ((arena_vert_count + verts) * sizeof(Vertex) > arena_verts.size ||
+    const bool grow = frame_in_song && arena_verts.size < kSongArenaBytes;
+    if (verts == 0 && !grow) return true;
+    if (grow || (arena_vert_count + verts) * sizeof(Vertex) > arena_verts.size ||
         (arena_index_count + indices) * 2 > arena_indices.size) {
-        // Full: start over with the meshes still kept plus this frame's new
-        // ones, within kMaxArenaBytes (ArenaRebuildKeep). Kept meshes are
-        // copied from the old buffers on the GPU (Mesh::arena_vertex); the
-        // rest come back through the pool if drawn again.
+        // Full, or a song's under kSongArenaBytes: start over with the meshes
+        // still kept plus this frame's new ones, within kMaxArenaBytes
+        // (ArenaRebuildKeep). Kept meshes are copied from the old buffers on
+        // the GPU (Mesh::arena_vertex); the rest come back through the pool if
+        // drawn again.
         counts.arena_rebuilds++;
         auto bytes_of = [](const Geometry& g) {
             return uint64_t(g.verts.size()) * sizeof(Vertex) + uint64_t(IndexSlots(g)) * 2;
@@ -1963,10 +1971,11 @@ bool GpuRenderer::Impl::PlaceInArena() {
         auto twice = [](uint64_t bytes, uint32_t least) {
             return uint32_t(std::clamp<uint64_t>(bytes + bytes / 3, least, 1u << 30));
         };
+        const uint32_t least = frame_in_song ? kSongArenaBytes : kMinArenaBytes;
         if (!Reserve(arena_verts, SDL_GPU_BUFFERUSAGE_VERTEX,
-                     twice(uint64_t(verts) * sizeof(Vertex), kMinArenaBytes)) ||
+                     twice(uint64_t(verts) * sizeof(Vertex), least)) ||
             !Reserve(arena_indices, SDL_GPU_BUFFERUSAGE_INDEX,
-                     twice(uint64_t(indices) * 2, kMinArenaBytes / 4))) {
+                     twice(uint64_t(indices) * 2, least / 4))) {
             return false;
         }
     }
