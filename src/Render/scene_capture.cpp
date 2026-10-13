@@ -309,7 +309,29 @@ struct Guest {
         return f;
     }
     const uint8_t* Raw(uint32_t a) const { return REX_RAW_ADDR(a); }
+    // `bytes` at `a` as one host block, or null if they straddle the
+    // physical view's 0x1000 shift (then read them a word at a time)
+    const uint8_t* Block(uint32_t a, uint32_t bytes) const {
+        return REX_PHYS_HOST_OFFSET(a) == REX_PHYS_HOST_OFFSET(a + bytes - 1) ? Raw(a) : nullptr;
+    }
 };
+
+// the highest register CaptureShade reads
+constexpr uint32_t kMaxShadeReg = [] {
+    uint32_t m = 0;
+    for (uint16_t r : kShadeRegs) m = r > m ? r : m;
+    return m;
+}();
+
+// `n` big-endian words from a host block (Guest::Block) as U32 reads them,
+// a register's four at once rather than four volatile loads
+inline void SwapWords(const uint8_t* from, uint32_t* to, int n) {
+    for (int i = 0; i < n; i++) {
+        uint32_t w;
+        std::memcpy(&w, from + i * 4, 4);
+        to[i] = __builtin_bswap32(w);
+    }
+}
 
 // D3D resource and fetch-constant addresses are physical or (mostly) the
 // CPU's 0xA0000000+ view. Read the latter through the CPU view: 0xE0000000+
@@ -1173,20 +1195,25 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
     // DrawRect); don't read near guest address 0
     if (s.cam)
         for (int i = 0; i < 3; i++) in.eye[i] = g.F32(s.cam + kTrans_WorldXfm + 0x30 + i * 4);
+    // the spotlight drawer's registers stay zero but for cones and blurs (c89
+    // for soft particles)
+    const bool spot = in.shader_type == kDepthVolumeShader || blur;
+    const bool soft = in.shader_type == kParticleShader && in.Option(shader_opt::kSoftParticles);
+    // the device's fetch constants through its pixel shader constants, as
+    // one block (word by word in the unlikely case it straddles the shift)
+    constexpr uint32_t kBlockEnd = kDev_PixelShaderF + (kMaxShadeReg + 1) * 16;
+    const uint8_t* const block = g.Block(dev + kDev_TextureFetch, kBlockEnd - kDev_TextureFetch);
+    auto read_reg = [&](uint32_t at, float out[4]) {
+        if (block) {
+            SwapWords(block + (at - kDev_TextureFetch), reinterpret_cast<uint32_t*>(out), 4);
+        } else {
+            for (int c = 0; c < 4; c++) out[c] = g.F32(dev + at + c * 4);
+        }
+    };
     for (int r = 0; r < kNumShadeRegs; r++) {
-        for (int c = 0; c < 4; c++) {
-            in.vs[r][c] = g.F32(dev + kDev_VertexShaderF + kShadeRegs[r] * 16 + c * 4);
-            in.ps[r][c] = g.F32(dev + kDev_PixelShaderF + kShadeRegs[r] * 16 + c * 4);
-        }
-    }
-    if (in.shader_type != kDepthVolumeShader && !blur) {
-        const bool soft =
-            in.shader_type == kParticleShader && in.Option(shader_opt::kSoftParticles);
-        for (int r = kFirstSpotShadeReg; r < kNumShadeRegs; r++) {
-            if (soft && kShadeRegs[r] == 89) continue;
-            std::memset(in.vs[r], 0, sizeof(in.vs[r]));
-            std::memset(in.ps[r], 0, sizeof(in.ps[r]));
-        }
+        if (r >= kFirstSpotShadeReg && !spot && !(soft && kShadeRegs[r] == 89)) continue;
+        read_reg(kDev_VertexShaderF + kShadeRegs[r] * 16, in.vs[r]);
+        read_reg(kDev_PixelShaderF + kShadeRegs[r] * 16, in.ps[r]);
     }
     in.mat = default_mat ? kDefaultMaterial : mat;
     if (mat) {
@@ -1199,7 +1226,12 @@ int32_t CaptureShade(const Guest& g, State& s, Sink& sink, uint32_t mat, bool bl
         in.mat_diffuse_base = TexBase(g, g.U32(mat + kMat_DiffuseTex));
     }
     auto fetch = [&](uint32_t sampler, uint32_t out[6]) {
-        for (int i = 0; i < 6; i++) out[i] = g.U32(dev + kDev_TextureFetch + sampler * 24 + i * 4);
+        if (block) {
+            SwapWords(block + sampler * 24, out, 6);
+        } else {
+            for (int i = 0; i < 6; i++)
+                out[i] = g.U32(dev + kDev_TextureFetch + sampler * 24 + i * 4);
+        }
     };
     // the movie shader samples Y s0, cR s2, cB s3 whatever the option word
     const bool movie = in.shader_type == kMovieShader;
