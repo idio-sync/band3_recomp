@@ -273,5 +273,6 @@ launch line; `window offscreen` first, since a minimized window doesn't paint.
 command with every guard against a GPU hang: it waits for other band3s and builds, launches
 on a fresh profile, plays `tests/game/perf_slice.b3t` and measures `--seconds` (30) with
 `tools/perf_sample.py` too, writing `out/perf/<run>/result.json`; `WINDOW=onscreen` puts the
-window on the monitor, which pacing numbers need. `python tools/perf_driver.py table <run>...`
+window on the monitor, which pacing numbers need; `REMOTE=cpu` runs over Remote Desktop for
+CPU-side timings only (marked REMOTE). `python tools/perf_driver.py table <run>...`
 sets runs' `present_stats` side by side. Its docstring has the rest.

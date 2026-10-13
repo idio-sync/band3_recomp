@@ -11,7 +11,9 @@ and `present_stats`. The rate sets --video_mode_refresh_rate and --frame_cap (a
 `--flag --frame_cap=...` replaces the cap); --flag adds any band3 argument. Environment:
 WINDOW=onscreen puts the window on the primary monitor, unfocused (offscreen by default: off
 every monitor there's no real vertical blank, so pacing numbers need onscreen on the machine's
-own display); RENDERER_FLAG replaces --renderer=native.
+own display); RENDERER_FLAG replaces --renderer=native; REMOTE=cpu runs without the console
+session for CPU-side timings only (capture steps, slow-frame lines, record times): the run is
+marked remote and its pacing numbers (latency, repeats, judder) mean nothing.
 
 Guards, as a GPU hang can take this machine down: it launches only with the GPU reported OK, the
 console session active (Remote Desktop has no real vertical blank) and no other band3 or build
@@ -59,7 +61,8 @@ def table(names):
         n, g, u = s.get("native", {}), s.get("game", {}), s.get("ui_round_trip", {})
         lat, pub, st = n.get("latency_ms", {}), n.get("publish_latency_ms", {}), n.get("step_ms", {})
         cap = g.get("cap", {})
-        flags = (" CONTENDED" if r.get("contended") else "") + (" HANG" if r.get("hang_signs") else "")
+        flags = (" CONTENDED" if r.get("contended") else "") + (" HANG" if r.get("hang_signs") else "") \
+            + (" REMOTE" if r.get("remote") else "")
         print(f"{name:16s} {lat.get('p50', 0):6.2f}/{lat.get('p95', 0):6.2f} "
               f"{pub.get('p50', 0):8.2f} {n.get('shown')}/{n.get('repeats')}/{n.get('skipped'):<5} "
               f"{st.get('p95', 0):9.2f} {n.get('judder')!s:>7} {u.get('p50', 0):7.2f} "
@@ -74,6 +77,7 @@ def ps(command):
 class Run:
     def __init__(self, rate, name, exe, seconds, extra):
         self.name, self.exe, self.seconds = name, exe, seconds
+        self.remote = os.environ.get("REMOTE") == "cpu"
         self.build = os.path.dirname(exe)
         self.out = os.path.join(RUNS, name)
         os.makedirs(self.out, exist_ok=True)
@@ -116,7 +120,9 @@ class Run:
             self.log(f"the GPU isn't OK ({gpu}): not launching")
             return False
         users = subprocess.run(["query", "user"], capture_output=True, text=True).stdout
-        if not re.search(r"\bconsole\s+\d+\s+Active", users, re.I):
+        if self.remote:
+            self.log("REMOTE=cpu: not checking the console session; pacing numbers mean nothing")
+        elif not re.search(r"\bconsole\s+\d+\s+Active", users, re.I):
             self.log("the console session isn't active (Remote Desktop?): not launching")
             return False
         for i in range(31):
@@ -206,7 +212,8 @@ class Run:
         pid = json.loads(text.strip().splitlines()[-1])["pid"]
         new = sorted(set(glob.glob(os.path.join(self.build, "logs", "band3_*.log"))) - before)
         logname = new[-1] if new else None
-        result = {"run": self.name, "flags": self.flags, "pid": pid, "log": logname, "exe": self.exe}
+        result = {"run": self.name, "flags": self.flags, "pid": pid, "log": logname, "exe": self.exe,
+                  "remote": self.remote}
         stop, found, contended = threading.Event(), [], []
         threading.Thread(target=self.watch, args=(logname, stop, found), daemon=True).start()
         threading.Thread(target=self.watch_builds, args=(stop, contended), daemon=True).start()
