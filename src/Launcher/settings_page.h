@@ -116,8 +116,9 @@ private:
     // the Lights tab, after its settings: the Stage Kits found and the test
     // controls, as the RB3E Dashboard has them (src/Lights/lights.h)
     void DrawLights();
-    // the Videos tab, after its settings: each video in music_videos_folder,
-    // its offset and how well it's synced (videos_tab.h)
+    // the Videos tab, the whole of it, its settings in a popup: each song and
+    // its video in music_videos_folder, its offset and how well it's synced
+    // (videos_tab.h)
     void DrawVideos();
     void DrawControl(const Setting& setting);
 

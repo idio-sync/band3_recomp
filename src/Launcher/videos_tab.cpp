@@ -61,6 +61,8 @@ int MegabytesAt(int height) {
 }
 
 constexpr const char* kFilters[] = {"All", "No video", "With a video", "To review", "Failed"};
+// the filter after kFilters': the videos named after no song, listed instead
+constexpr int kUnmatched = int(std::size(kFilters));
 constexpr const char* kScopes[] = {"songs without a video", "songs to review", "songs that failed",
                                    "the songs shown, without a video"};
 
@@ -310,6 +312,7 @@ void VideosTab::TakeFilePick(const std::vector<fs::path>& folders) {
 bool VideosTab::Shown(const Song& s) const {
     if (!search_.empty() && s.lower.find(Lower(search_)) == std::string::npos) return false;
     if (filter_ == 0) return true;
+    if (filter_ == kUnmatched) return false;
     if (filter_ == 1) return s.video < 0;
     if (filter_ == 2) return s.video >= 0;
     const auto end = video::SongVideoEndOf(s.shortname);
@@ -321,6 +324,20 @@ VideosTab::Song* VideosTab::Selected() {
     for (Song& s : songs_)
         if (s.shortname == selected_) return &s;
     return nullptr;
+}
+
+VideosTab::Video* VideosTab::SelectedLoose() {
+    if (selected_video_.empty()) return nullptr;
+    for (int i : loose_)
+        if (videos_[size_t(i)].path == selected_video_) return &videos_[size_t(i)];
+    return nullptr;
+}
+
+void VideosTab::Select(const std::string& song, const fs::path& video) {
+    selected_ = song;
+    selected_video_ = video;
+    confirm_delete_ = false;
+    confirm_replace_.reset();
 }
 
 void VideosTab::DrawYtDlp() {
@@ -335,35 +352,45 @@ void VideosTab::DrawYtDlp() {
     } else if (yt.updating) {
         Muted("Updating yt-dlp...");
     } else if (!yt.version.empty()) {
-        ImGui::TextColored(kGood, "yt-dlp %s", yt.version.c_str());
+        ImGui::TextColored(yt.js_runtime ? kGood : kWarn, "yt-dlp %s", yt.version.c_str());
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(yt.js_runtime ? "band3 finds and downloads videos with yt-dlp"
+                                            : "No JavaScript runtime found: see below");
         ImGui::SameLine();
-        if (ImGui::Button("Update yt-dlp")) video::UpdateYtDlp();
+        if (ImGui::SmallButton("Update")) video::UpdateYtDlp();
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Runs yt-dlp -U: YouTube changes often, and an old yt-dlp stops finding videos");
-        if (!yt.js_runtime) {
+    } else {
+        ImGui::TextColored(kBad, "yt-dlp not found");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", yt.problem.c_str());
+    }
+}
+
+// what the top bar can't hold: yt-dlp's problems, the batch's progress, what
+// it came to
+void VideosTab::DrawStatus() {
+    const video::YtDlpState yt = video::YtDlpNow(false);
+    if (!yt.checking && !yt.updating) {
+        if (yt.version.empty()) {
+            Wrapped(kWarn, "yt-dlp can't be run (" + yt.problem +
+                               "). band3 finds and downloads videos with it, but doesn't come with it: "
+                               "set its program file in Settings (yt-dlp program), or put it on PATH.");
+            if (ImGui::Button("Get yt-dlp")) OpenUrl("https://github.com/yt-dlp/yt-dlp#installation");
+            ImGui::SameLine();
+            if (ImGui::Button("Look again")) video::YtDlpNow(true);
+        } else if (!yt.js_runtime) {
             Wrapped(kWarn, "yt-dlp needs a JavaScript runtime to fetch from YouTube, and none was found: "
                            "without one, YouTube refuses some videos (HTTP 403). Install Deno, or "
                            "Node.js, and start band3 again.");
             if (ImGui::Button("Get Deno")) OpenUrl("https://docs.deno.com/runtime/getting_started/installation/");
         }
-    } else {
-        Wrapped(kWarn, "yt-dlp can't be run (" + yt.problem +
-                           "). band3 finds and downloads videos with it, but doesn't come with it: "
-                           "set its program file below (yt-dlp program), or put it on PATH.");
-        if (ImGui::Button("Get yt-dlp")) OpenUrl("https://github.com/yt-dlp/yt-dlp#installation");
-        ImGui::SameLine();
-        if (ImGui::Button("Look again")) video::YtDlpNow(true);
     }
     if (!yt.update_output.empty() && !yt.updating) {
         const size_t last = yt.update_output.rfind('\n');
         Muted(yt.update_output.substr(last == std::string::npos ? 0 : last + 1).c_str());
     }
-}
-
-void VideosTab::DrawBatch(const std::vector<fs::path>& folders) {
     const video::VideoJobsProgress p = video::VideoJobsNow();
-    const bool busy = p.running || p.waiting > 0;
-    if (busy) {
+    if (p.running || p.waiting > 0) {
         std::string what = std::format("{} of {} songs", p.done, p.total);
         if (p.waiting_for_song) what += ": waiting for the song being played to end";
         else if (p.paused && !p.paused_why.empty()) what += ": paused, as " + p.paused_why;
@@ -371,12 +398,23 @@ void VideosTab::DrawBatch(const std::vector<fs::path>& folders) {
         else if (p.running)
             what += std::format(": {}, {}{}", p.song, video::FetchStageText(p.stage),
                                 p.share > 0 ? std::format(" {:.0f}%", p.share * 100) : "");
-        ImGui::ProgressBar(p.total ? float(p.done) / float(p.total) : 0.0f, ImVec2(-1, 0), "");
         // yt-dlp's reasons run long
         if (what.size() > 220) what = what.substr(0, 217) + "...";
-        ImGui::PushTextWrapPos(0);
-        ImGui::TextUnformatted(what.c_str());
-        ImGui::PopTextWrapPos();
+        Wrapped(ImGui::GetStyleColorVec4(ImGuiCol_Text), what);
+    }
+    if (p.total > 0 && (p.synced || p.guessed || p.review || p.none || p.failed)) {
+        Muted(std::format("{} found, {} to check, {} to review, {} with none found, {} failed", p.synced,
+                          p.guessed, p.review, p.none, p.failed)
+                  .c_str());
+    }
+}
+
+void VideosTab::DrawBatch(const std::vector<fs::path>& folders) {
+    const video::VideoJobsProgress p = video::VideoJobsNow();
+    if (p.running || p.waiting > 0) {
+        ImGui::ProgressBar(p.total ? float(p.done) / float(p.total) : 0.0f, ImVec2(Px(200), 0),
+                           std::format("{} of {}", p.done, p.total).c_str());
+        ImGui::SameLine();
         if (ImGui::Button(p.paused ? "Go on" : "Pause")) video::PauseVideoJobs(!p.paused);
         ImGui::SameLine();
         if (ImGui::Button("Stop")) video::StopVideoJobs();
@@ -384,15 +422,10 @@ void VideosTab::DrawBatch(const std::vector<fs::path>& folders) {
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Find videos for");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(Px(330));
+        ImGui::SetNextItemWidth(Px(290));
         ImGui::Combo("##scope", &scope_, kScopes, int(std::size(kScopes)));
         ImGui::SameLine();
         if (ImGui::Button("Find them...")) ImGui::OpenPopup("Find videos");
-    }
-    if (p.total > 0 && (p.synced || p.guessed || p.review || p.none || p.failed)) {
-        Muted(std::format("{} found, {} to check, {} to review, {} with none found, {} failed", p.synced,
-                          p.guessed, p.review, p.none, p.failed)
-                  .c_str());
     }
 
     if (ImGui::BeginPopupModal("Find videos", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -434,33 +467,102 @@ void VideosTab::DrawBatch(const std::vector<fs::path>& folders) {
     }
 }
 
-void VideosTab::DrawFilters() {
-    InputString("##search", "Search songs", search_, Px(300));
-    for (int i = 0; i < int(std::size(kFilters)); i++) {
-        ImGui::SameLine();
-        if (ImGui::RadioButton(kFilters[i], filter_ == i)) filter_ = i;
+// yt-dlp and the batch on the left; the folder, the settings and the help on the right
+void VideosTab::DrawTopBar(const std::vector<fs::path>& folders, const Page& page) {
+    DrawYtDlp();
+    ImGui::SameLine(0, Px(28));
+    DrawBatch(folders);
+
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float right = ButtonWidth("Videos folder") + ButtonWidth("Settings...") + ButtonWidth("?") +
+                        style.ItemSpacing.x * 2;
+    ImGui::SameLine();
+    const float avail = ImGui::GetContentRegionAvail().x;
+    if (avail >= right) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - right);
+    else ImGui::NewLine();
+    ImGui::BeginDisabled(folders.empty());
+    if (ImGui::Button("Videos folder")) OpenFolder(folders.front());
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Open the folder music videos are kept in (music_videos_folder)");
+    ImGui::SameLine();
+    if (ImGui::Button("Settings...")) ImGui::OpenPopup("Video settings");
+    ImGui::SameLine();
+    ImGui::Button("?");
+    if (ImGui::IsItemHovered() && ImGui::BeginTooltip()) {
+        ImGui::PushTextWrapPos(Px(560));
+        ImGui::TextUnformatted(
+            "Each video is named after its song's shortname, with its offset (Clone Hero's "
+            "video_start_time, the video's time at the song's start) in an .ini beside it. Auto-sync "
+            "finds the offset from the song's sound; [ and ] move it 50 ms while the video plays.\n\n"
+            "Videos are found with yt-dlp: a search's likeliest results have their sound matched with "
+            "the song's, and a sure one is taken; or choose one, paste a link, or pick a file.\n\n"
+            "Pick a song on the left (the arrow keys move through the list) to see its video.");
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
     }
+    DrawSettingsPopup(page);
 }
 
-void VideosTab::DrawSongs() {
+// the tab's settings, over the list, with the description the footer would give
+void VideosTab::DrawSettingsPopup(const Page& page) {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(std::min(viewport->WorkSize.x * 0.85f, Px(1100)), viewport->WorkSize.y * 0.85f),
+                             ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Video settings", nullptr, ImGuiWindowFlags_NoSavedSettings)) return;
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float footer = page.description_height + ImGui::GetFrameHeight() + style.ItemSpacing.y * 3;
+    if (ImGui::BeginChild("##video_settings", ImVec2(0, -footer), ImGuiChildFlags_NavFlattened))
+        page.settings();
+    ImGui::EndChild();
+    ImGui::Separator();
+    page.description();
+    if (ImGui::Button("Close") || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
+void VideosTab::DrawFilters() {
+    const float combo = Px(200);
+    InputString("##search", "Search songs", search_,
+                std::max(ImGui::GetContentRegionAvail().x - combo - ImGui::GetStyle().ItemSpacing.x, Px(120)));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(combo);
+    const std::string unmatched = std::format("Unmatched videos ({})", loose_.size());
+    const char* names[std::size(kFilters) + 1];
+    std::copy(std::begin(kFilters), std::end(kFilters), names);
+    names[std::size(kFilters)] = unmatched.c_str();
+    ImGui::Combo("##filter", &filter_, names, int(std::size(names)));
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Unmatched videos are named after no song band3 knows: misnamed, most likely");
+}
+
+void VideosTab::DrawList() {
+    DrawFilters();
+    if (filter_ == kUnmatched) {
+        DrawLooseList();
+        return;
+    }
     std::vector<int> shown;
     for (int i = 0; i < int(songs_.size()); i++)
         if (Shown(songs_[i])) shown.push_back(i);
     if (songs_.empty()) {
+        ImGui::PushTextWrapPos(0);
         Muted("No songs yet: band3 lists the game's songs once the game has read them (start the "
               "game once).");
+        ImGui::PopTextWrapPos();
         return;
     }
     const float row = ImGui::GetFrameHeight();
-    const float height = std::min(float(std::max<size_t>(shown.size(), 3)) * row, row * 14) + row + Px(4);
     if (!ImGui::BeginTable("songs", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
-                           ImVec2(0, height)))
+                           ImVec2(0, ImGui::GetContentRegionAvail().y)))
         return;
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn("Song", ImGuiTableColumnFlags_WidthStretch, 2.0f);
-    ImGui::TableSetupColumn("Video", ImGuiTableColumnFlags_WidthStretch, 1.6f);
-    ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthFixed, Px(90));
+    ImGui::TableSetupColumn("Video", ImGuiTableColumnFlags_WidthStretch, 1.3f);
+    ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthFixed, Px(80));
     ImGui::TableHeadersRow();
+    const video::VideoJobsProgress p = video::VideoJobsNow();
     ImGuiListClipper clipper;
     clipper.Begin(int(shown.size()), row);
     while (clipper.Step()) {
@@ -471,18 +573,19 @@ void VideosTab::DrawSongs() {
             ImGui::TableSetColumnIndex(0);
             std::string label = s.artist.empty() ? s.title : s.title + "  -  " + s.artist;
             if (!s.in_package && !s.origin.empty()) label += "   (" + s.origin + ")";
-            // centred in the row, as the other columns' text is
+            // centred in the row, as the other columns' text is; the arrow
+            // keys pick the song they move to
             ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.0f, 0.5f));
             if (ImGui::Selectable(label.c_str(), selected_ == s.shortname,
-                                  ImGuiSelectableFlags_SpanAllColumns, ImVec2(0, row))) {
-                selected_ = s.shortname;
-                confirm_delete_ = false;
-                confirm_replace_.reset();
-            }
+                                  ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_SelectOnNav,
+                                  ImVec2(0, row)) &&
+                selected_ != s.shortname)
+                Select(s.shortname, {});
             ImGui::PopStyleVar();
+            if (ImGui::IsItemHovered() && ImGui::CalcTextSize(label.c_str()).x > ImGui::GetItemRectSize().x)
+                ImGui::SetTooltip("%s", label.c_str());
             ImGui::TableSetColumnIndex(1);
             ImGui::AlignTextToFramePadding();
-            const video::VideoJobsProgress p = video::VideoJobsNow();
             if (p.running && p.song == s.shortname) {
                 ImGui::TextColored(kAccent, "%s...", std::string(video::FetchStageText(p.stage)).c_str());
             } else if (video::SongVideoQueued(s.shortname)) {
@@ -495,7 +598,7 @@ void VideosTab::DrawSongs() {
                     ImGui::TextColored(kGood, "%s", (std::string(v.pinned ? "Synced (chosen" : "Synced (auto") +
                                                      parts + ")").c_str());
                 else if (v.result && !v.result->confident && !v.offset)
-                    ImGui::TextColored(kWarn, "Not sure: see below");
+                    ImGui::TextColored(kWarn, "Not sure");
                 else if (v.offset)
                     ImGui::TextUnformatted(v.pinned ? "Set by hand (chosen)" : "Set by hand");
                 else
@@ -503,7 +606,7 @@ void VideosTab::DrawSongs() {
             } else if (const auto end = video::SongVideoEndOf(s.shortname)) {
                 if (*end == FetchEnd::kReview) ImGui::TextColored(kWarn, "To review");
                 else if (*end == FetchEnd::kFailed) ImGui::TextColored(kBad, "Failed");
-                else if (*end == FetchEnd::kNoVideo) Muted("No music video found");
+                else if (*end == FetchEnd::kNoVideo) Muted("None found");
                 else Muted("No video");
             } else {
                 Muted("No video");
@@ -514,6 +617,43 @@ void VideosTab::DrawSongs() {
                 ImGui::TextUnformatted(std::format("{:+} ms", videos_[size_t(s.video)].ms).c_str());
             ImGui::PopID();
         }
+    }
+    ImGui::EndTable();
+}
+
+// the videos named after no song, to pick as songs are
+void VideosTab::DrawLooseList() {
+    if (loose_.empty()) {
+        ImGui::PushTextWrapPos(0);
+        Muted("Every video in the folder is named after a song band3 knows.");
+        ImGui::PopTextWrapPos();
+        return;
+    }
+    const float row = ImGui::GetFrameHeight();
+    if (!ImGui::BeginTable("loose", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                           ImVec2(0, ImGui::GetContentRegionAvail().y)))
+        return;
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn("Video", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthFixed, Px(80));
+    ImGui::TableHeadersRow();
+    for (int i : loose_) {
+        const Video& v = videos_[size_t(i)];
+        const std::string name = rex::path_to_utf8(v.path.filename());
+        ImGui::PushID(name.c_str());
+        ImGui::TableNextRow(0, row);
+        ImGui::TableSetColumnIndex(0);
+        ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.0f, 0.5f));
+        if (ImGui::Selectable(name.c_str(), selected_video_ == v.path,
+                              ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_SelectOnNav,
+                              ImVec2(0, row)) &&
+            selected_video_ != v.path)
+            Select({}, v.path);
+        ImGui::PopStyleVar();
+        ImGui::TableSetColumnIndex(1);
+        ImGui::AlignTextToFramePadding();
+        if (v.offset) ImGui::TextUnformatted(std::format("{:+} ms", v.ms).c_str());
+        ImGui::PopID();
     }
     ImGui::EndTable();
 }
@@ -535,8 +675,8 @@ void VideosTab::DrawVideoControls(Video& v) {
     if (ImGui::Button(aligning ? "Aligning..." : "Align")) StartAlign(v);
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Match the video's sound with its song's, read from the song's package (an "
-                          "encrypted one needs the song played once)");
+        ImGui::SetTooltip("Match the video's sound with its song's, read from the song's package, or "
+                          "the game's archive for its own songs");
     if (v.result && !v.result->confident) {
         ImGui::SameLine();
         if (ImGui::Button("Use the guess")) {
@@ -553,6 +693,8 @@ void VideosTab::DrawVideoControls(Video& v) {
                                                 v.result->offset)
                                         .c_str());
     }
+    // what its last Align came to
+    if (job_ && job_->video == v.path && !job_message_.empty()) Wrapped(kMuted, job_message_);
 }
 
 // a video cut otherwise than its song: each later part's offset, or its gap
@@ -596,26 +738,53 @@ void VideosTab::DrawParts(Video& v) {
     }
 }
 
+// Delete, with a second press to be sure: the video, its .ini and what
+// auto-sync kept of both
+void VideosTab::DrawDelete(Video& v, const std::string& song) {
+    if (!confirm_delete_) {
+        if (ImGui::Button("Delete it")) confirm_delete_ = true;
+        return;
+    }
+    Wrapped(kWarn, "Delete " + rex::path_to_utf8(v.path.filename()) + " and its offset?");
+    if (ImGui::Button("Delete")) {
+        std::error_code ec;
+        for (const fs::path& p : {v.path, video::IniFor(v.path), video::SongEnvelopePath(v.path),
+                                  video::VideoEnvelopePath(v.path), video::ResultPath(v.path)})
+            fs::remove(p, ec);
+        if (!song.empty()) video::ForgetSongVideoStatus(song);
+        confirm_delete_ = false;
+        videos_read_ = {};
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Keep it")) confirm_delete_ = false;
+}
+
 void VideosTab::DrawDetails(const std::vector<fs::path>& folders) {
+    if (Video* loose = SelectedLoose()) {
+        DrawLooseDetails(*loose);
+        return;
+    }
     Song* s = Selected();
     if (!s) {
-        Muted("Pick a song above to find its video, choose one, or set its offset.");
+        ImGui::PushTextWrapPos(0);
+        Muted("Pick a song on the left to find its video, choose one, or set its offset.");
+        ImGui::PopTextWrapPos();
         return;
     }
     const video::SongInfo info{s->shortname, s->title, s->artist, s->length_ms};
     ImGui::PushID("details");
-    ImGui::TextUnformatted(std::format("{} - {}", s->title, s->artist).c_str());
-    ImGui::SameLine();
-    Muted(std::format("({}{}{})", s->shortname,
+    {
+        FontScope font(kHeadingSize);
+        Wrapped(ImGui::GetStyleColorVec4(ImGuiCol_Text), s->title);
+    }
+    if (!s->artist.empty()) ImGui::TextUnformatted(s->artist.c_str());
+    Muted(std::format("{}{}{}", s->shortname,
                       s->length_ms ? ", " + Minutes(s->length_ms / 1000.0) : std::string(),
                       s->in_package ? std::string() : ", " + (s->origin.empty() ? "the game's" : s->origin))
               .c_str());
-    if (!s->in_package) {
-        ImGui::PushTextWrapPos(0);
-        Muted("This song is in the game's own data, whose audio band3 can't read: a video found for it "
-              "is chosen by its title, channel and length alone, and syncs the first time the song plays.");
-        ImGui::PopTextWrapPos();
-    }
+    if (!s->in_package)
+        Wrapped(kMuted, "One of the game's own songs: its audio is read from the game's archive where it's "
+                        "there (the disc's songs); otherwise its video syncs the first time the song plays.");
     const bool queued = video::SongVideoQueued(s->shortname);
     // a song with a video asks first: the old one stays till the new one's in
     const auto queue = [&](video::VideoJob job) {
@@ -625,34 +794,21 @@ void VideosTab::DrawDetails(const std::vector<fs::path>& folders) {
         else video::QueueVideoJobs({std::move(job)});
     };
 
+    ImGui::Dummy(ImVec2(0, Px(4)));
+    ImGui::SeparatorText("Video");
     if (s->video >= 0) {
         Video& v = videos_[size_t(s->video)];
-        Muted(std::format("{}{}", rex::path_to_utf8(v.path.filename()),
-                          v.pinned ? ", chosen by hand: searches for many songs leave it alone" : "")
-                  .c_str());
+        Wrapped(kMuted, rex::path_to_utf8(v.path.filename()) +
+                            (v.pinned ? ", chosen by hand: searches for many songs leave it alone" : ""));
         DrawVideoControls(v);
-        if (!v.source.empty()) {
-            ImGui::SameLine();
-            if (ImGui::Button("Open its page")) OpenUrl(v.source);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Delete it")) confirm_delete_ = true;
-        if (confirm_delete_) {
-            ImGui::TextColored(kWarn, "Delete %s and its offset?", rex::path_to_utf8(v.path.filename()).c_str());
-            ImGui::SameLine();
-            if (ImGui::Button("Delete")) {
-                std::error_code ec;
-                for (const fs::path& p : {v.path, video::IniFor(v.path), video::SongEnvelopePath(v.path),
-                                          video::VideoEnvelopePath(v.path), video::ResultPath(v.path)})
-                    fs::remove(p, ec);
-                video::ForgetSongVideoStatus(s->shortname);
-                confirm_delete_ = false;
-                videos_read_ = {};
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Keep it")) confirm_delete_ = false;
-        }
         DrawParts(v);
+        if (!v.source.empty()) {
+            if (ImGui::Button("Open its page")) OpenUrl(v.source);
+            ImGui::SameLine();
+        }
+        DrawDelete(v, s->shortname);
+    } else {
+        Muted("None yet.");
     }
 
     if (confirm_replace_ && confirm_replace_->song.shortname == s->shortname && s->video >= 0) {
@@ -672,13 +828,29 @@ void VideosTab::DrawDetails(const std::vector<fs::path>& folders) {
 
     // finding one: a search, a link, or a file
     ImGui::Dummy(ImVec2(0, Px(4)));
+    ImGui::SeparatorText(s->video >= 0 ? "Find another" : "Find one");
     ImGui::BeginDisabled(queued || folders.empty());
     if (ImGui::Button(s->video >= 0 ? "Search for another" : "Search for its video")) {
         video::VideoJob job;
         queue(std::move(job));
     }
     ImGui::SameLine();
-    const bool enter = InputString("##link", "or paste a link to a video", link_, Px(380));
+    if (ImGui::Button("Choose a file...") && !pick_) {
+        pick_ = std::make_shared<FilePick>();
+        pick_->song = s->shortname;
+        static constexpr SDL_DialogFileFilter kVideoFiles[] = {
+            {"Videos", "mp4;m4v;mov;mkv;webm;avi;wmv"}};
+        auto* holder = new std::shared_ptr<FilePick>(pick_);
+        SDL_ShowOpenFileDialog(OnFilePicked, holder, nullptr, kVideoFiles, 1, nullptr, false);
+    }
+    if (queued) {
+        ImGui::SameLine();
+        Muted("(under way)");
+    }
+    const float get = ButtonWidth("Get it");
+    const bool enter = InputString("##link", "or paste a link to a video", link_,
+                                   std::max(ImGui::GetContentRegionAvail().x - get - ImGui::GetStyle().ItemSpacing.x,
+                                            Px(160)));
     ImGui::SameLine();
     ImGui::BeginDisabled(link_.empty());
     if (ImGui::Button("Get it") || (enter && !link_.empty())) {
@@ -689,20 +861,7 @@ void VideosTab::DrawDetails(const std::vector<fs::path>& folders) {
         link_.clear();
     }
     ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (ImGui::Button("Choose a file...") && !pick_) {
-        pick_ = std::make_shared<FilePick>();
-        pick_->song = s->shortname;
-        static constexpr SDL_DialogFileFilter kVideoFiles[] = {
-            {"Videos", "mp4;m4v;mov;mkv;webm;avi;wmv"}};
-        auto* holder = new std::shared_ptr<FilePick>(pick_);
-        SDL_ShowOpenFileDialog(OnFilePicked, holder, nullptr, kVideoFiles, 1, nullptr, false);
-    }
     ImGui::EndDisabled();
-    if (queued) {
-        ImGui::SameLine();
-        Muted("(under way)");
-    }
 
     // what its last search came to, and its results to choose from
     if (const auto status = video::SongVideoStatusOf(s->shortname)) {
@@ -728,7 +887,9 @@ void VideosTab::DrawDetails(const std::vector<fs::path>& folders) {
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 ImGui::AlignTextToFramePadding();
+                ImGui::PushTextWrapPos(0);
                 ImGui::TextUnformatted(c.title.c_str());
+                ImGui::PopTextWrapPos();
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("%s", std::format("{}  ({} views)  score {:.2f}", c.channel,
                                                         c.views >= 0 ? std::to_string(c.views) : "?",
@@ -773,27 +934,24 @@ void VideosTab::DrawDetails(const std::vector<fs::path>& folders) {
     ImGui::PopID();
 }
 
-void VideosTab::DrawLoose() {
-    if (loose_.empty()) return;
-    ImGui::Dummy(ImVec2(0, Px(8)));
-    SectionHeading("Videos named after no song in band3's packages");
-    ImGui::PushTextWrapPos(0);
-    Muted("A video is named after its song's shortname, which the log gives as the song starts; these "
-          "may be the disc's songs, or misnamed.");
-    ImGui::PopTextWrapPos();
-    for (int i : loose_) {
-        Video& v = videos_[size_t(i)];
-        ImGui::PushID(rex::path_to_utf8(v.path).c_str());
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(v.stem.c_str());
-        ImGui::SameLine(Px(260));
-        DrawVideoControls(v);
-        DrawParts(v);
-        ImGui::PopID();
+void VideosTab::DrawLooseDetails(Video& v) {
+    ImGui::PushID("loose");
+    {
+        FontScope font(kHeadingSize);
+        Wrapped(ImGui::GetStyleColorVec4(ImGuiCol_Text), rex::path_to_utf8(v.path.filename()));
     }
+    Wrapped(kMuted, "No song band3 knows has the shortname " + v.stem +
+                        ". A video is named after its song's shortname, which the log gives as the song "
+                        "starts: rename this one to play it with its song.");
+    ImGui::Dummy(ImVec2(0, Px(4)));
+    ImGui::SeparatorText("Video");
+    DrawVideoControls(v);
+    DrawParts(v);
+    DrawDelete(v, {});
+    ImGui::PopID();
 }
 
-void VideosTab::Draw(const std::vector<fs::path>& folders) {
+void VideosTab::Draw(const std::vector<fs::path>& folders, const Page& page) {
     TakeAlign();
     TakeFilePick(folders);
     const auto now = std::chrono::steady_clock::now();
@@ -807,30 +965,33 @@ void VideosTab::Draw(const std::vector<fs::path>& folders) {
         videos_read_ = {};
     }
 
-    SectionHeading("Songs and their videos");
-    ImGui::PushTextWrapPos(0);
-    Muted("Each video is named after its song's shortname, with its offset (Clone Hero's "
-          "video_start_time, the video's time at the song's start) in an .ini beside it. Auto-sync "
-          "finds the offset from the song's sound; [ and ] move it 50 ms while the video plays. "
-          "Videos are found with yt-dlp: a search's likeliest results have their sound matched with "
-          "the song's, and a sure one is taken; or choose one, paste a link, or pick a file.");
-    ImGui::PopTextWrapPos();
-    ImGui::Dummy(ImVec2(0, Px(4)));
-    DrawYtDlp();
-    ImGui::Dummy(ImVec2(0, Px(4)));
-    DrawBatch(folders);
-    ImGui::Dummy(ImVec2(0, Px(6)));
-    DrawFilters();
-    DrawSongs();
-    ImGui::Dummy(ImVec2(0, Px(6)));
-    DrawDetails(folders);
-    if (!job_message_.empty()) {
-        ImGui::Dummy(ImVec2(0, Px(4)));
-        Muted(job_message_.c_str());
+    DrawTopBar(folders, page);
+    DrawStatus();
+    ImGui::Dummy(ImVec2(0, Px(2)));
+
+    // the list and the song picked, side by side where there's room, each
+    // scrolling on its own, filling what's left of the tab
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float height = std::max(avail.y - style.ItemSpacing.y, Px(260));
+    const ImGuiChildFlags flags = ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened;
+    const ImGuiWindowFlags details_flags = ImGuiWindowFlags_None;
+    if (avail.x >= Px(900)) {
+        const float list_width = std::floor(avail.x * 0.46f);
+        if (ImGui::BeginChild("##list", ImVec2(list_width, height), flags)) DrawList();
+        ImGui::EndChild();
+        ImGui::SameLine();
+        if (ImGui::BeginChild("##details", ImVec2(0, height), flags, details_flags)) DrawDetails(folders);
+        ImGui::EndChild();
+    } else {
+        const float list_height = std::floor(height * 0.45f);
+        if (ImGui::BeginChild("##list", ImVec2(0, list_height), flags)) DrawList();
+        ImGui::EndChild();
+        if (ImGui::BeginChild("##details", ImVec2(0, std::max(height - list_height - style.ItemSpacing.y, Px(120))),
+                              flags, details_flags))
+            DrawDetails(folders);
+        ImGui::EndChild();
     }
-    DrawLoose();
-    ImGui::Dummy(ImVec2(0, Px(6)));
-    if (!folders.empty() && ImGui::Button("Open the videos folder")) OpenFolder(folders.front());
 }
 
 }

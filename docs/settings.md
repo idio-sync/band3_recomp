@@ -249,11 +249,13 @@ A video's start is set by `video_start_time = <milliseconds>` in `<shortname>.in
 a negative one starts it that far into the song.
 
 - **Automatically** (`music_video_auto_sync`, on): when a song with its video is picked, band3
-  reads the song's audio from its package and matches its rhythm against the video's
-  soundtrack, a part at a time, before the song starts. Most custom songs can be read this
-  way. An encrypted song (most official songs, and the disc's) can't: its first 45 seconds as
-  the game plays them give an offset at once, and the whole song, as it ends, a map (below),
-  which takes the place of that offset but never of one set by hand. When a match isn't clear
+  reads the song's audio from its package (or, for the disc's songs, the game's archive under
+  `game_data_root`) and matches its rhythm against the video's soundtrack, a part at a time,
+  before the song starts. Encrypted audio (official DLC, Rock Band Network songs, the disc's)
+  is decrypted for this, so nothing has to be played first. A song band3 can't find or
+  decrypt is synced as it plays: its first 45 seconds give an offset at once, and the whole
+  song, as it ends, a map (below), which takes the place of that offset but never of one set
+  by hand. When a match isn't clear
   nothing is written and the log gives the best guess (`Music video auto-sync: ...`). An
   offset already in the `.ini` is never replaced. Its working files are in a `.sync` folder
   beside the videos, safe to delete.
@@ -268,23 +270,26 @@ a negative one starts it that far into the song.
   (`bind_music_video_earlier`, `bind_music_video_later`); each press is saved to the `.ini`.
   Earlier is for a singer whose lips move after the sound. In a video with parts it moves only
   the part playing ("part 2 of 3").
-- **On the Videos tab** (launcher and in game): the songs in band3's packages and the game's
-  own, each with its video, its offset (editable) and where it came from: synced, set by hand,
-  not sure (with **Use the guess**), or not synced yet. Picking a song shows its controls:
-  **Align** matches its video with its song (from its package, or an encrypted one's sound
-  once played), its parts with their offsets and **Merge into the part before**, and finding
-  it a video (below). Videos named after no song (misnamed ones) are listed after the songs.
-  **Open the videos folder** opens it.
+- **On the Videos tab** (launcher and in game): on the left the songs in band3's packages and
+  the game's own, each with its video's state (synced, set by hand, not sure, not synced yet)
+  and offset, with a search box and a filter; on the right the song picked (click it, or move
+  through the list with the arrow keys or a controller). There, **Video** has its offset
+  (editable), **Align** (matching its video with its song again), **Use the guess** when
+  auto-sync wasn't sure, its parts with their offsets and **Merge into the part before**, and
+  **Delete it**; **Find another** finds it a video (below). The filter's last choice,
+  **Unmatched videos**, lists videos named after no song (misnamed ones). Along the top:
+  yt-dlp's state, finding videos for many songs, **Videos folder**, **Settings...** (the
+  settings in this section) and **?**.
 
 ### Finding videos
 
 band3 finds and downloads songs' videos with [yt-dlp](https://github.com/yt-dlp/yt-dlp), which
-it doesn't come with: set `music_video_ytdlp_path` (the Videos tab's **yt-dlp program**) to
-`yt-dlp.exe`, or put it on PATH. For YouTube, yt-dlp also needs a JavaScript runtime on PATH:
-[Deno](https://deno.com) or Node.js (Bun and QuickJS work too). band3 tells yt-dlp to use
-whichever there is, and the tab warns when there's none; without one, YouTube refuses some
-videos (HTTP Error 403). **Update yt-dlp** runs `yt-dlp -U`, worth doing now and then, as an
-old yt-dlp stops finding videos.
+it doesn't come with: set `music_video_ytdlp_path` (**yt-dlp program**, in the Videos tab's
+**Settings...**) to `yt-dlp.exe`, or put it on PATH. For YouTube, yt-dlp also needs a
+JavaScript runtime on PATH: [Deno](https://deno.com) or Node.js (Bun and QuickJS work too).
+band3 tells yt-dlp to use whichever there is, and the tab warns when there's none; without
+one, YouTube refuses some videos (HTTP Error 403). **Update** beside yt-dlp's version runs
+`yt-dlp -U`, worth doing now and then, as an old yt-dlp stops finding videos.
 
 - **Search for its video:** searches YouTube for "<artist> <title> official music video" and
   goes down the likeliest results: the song's title and artist in its title, the artist's own
@@ -310,10 +315,11 @@ old yt-dlp stops finding videos.
   disk's full. With `music_video_auto_accept` off it only proposes. `music_video_ytdlp_args`
   adds yt-dlp options, such as `--cookies-from-browser firefox` for videos YouTube asks to
   sign in for. Each song's outcome is kept in `band3_music_videos.json` in the user data folder.
-- **Songs whose audio band3 can't read** (encrypted ones, the disc's) still get a likely
-  video, chosen by its title, channel and length alone, which syncs the first time the song
-  plays. The game's own songs are listed with the game they came from once the game has run
-  and listed them (`band3_game_songs.json`).
+- **Songs whose audio band3 can't read** (in neither a package nor the game's archive, or
+  encrypted in a way band3 doesn't know) still get a likely video, chosen by its title, channel
+  and length alone, which syncs the first time the song plays. The game's own songs are listed
+  with the game they came from once the game has run and listed them
+  (`band3_game_songs.json`).
 
 ## Loose files (mods)
 

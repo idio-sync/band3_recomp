@@ -168,6 +168,11 @@ void SettingsPage::DrawDeckBanner() {
 }
 
 void SettingsPage::DrawSections(Tab tab) {
+    // the Videos tab is its list, its settings in a popup over it
+    if (tab == Tab::kVideos) {
+        DrawVideos();
+        return;
+    }
     for (const std::string_view section : SectionsOf(model_.Table(), tab)) {
         DrawSection(tab, section);
     }
@@ -205,7 +210,6 @@ void SettingsPage::DrawSection(Tab tab, std::string_view section) {
     }
     if (tab == Tab::kGraphics && section == "Latency") DrawLowestLatency();
     if (tab == Tab::kLights && section == "Stage Kit lights") DrawLights();
-    if (tab == Tab::kVideos && section == "Finding videos") DrawVideos();
     ImGui::Dummy(ImVec2(0, Px(14)));
 }
 
@@ -216,8 +220,16 @@ void SettingsPage::DrawVideos() {
     if (entries.empty()) entries.push_back("videos");
     std::vector<std::filesystem::path> folders;
     for (const auto& entry : entries) folders.push_back(paths::Resolve(entry, model_.Env().anchor));
-    ImGui::Dummy(ImVec2(0, Px(10)));
-    videos_.Draw(folders);
+    VideosTab::Page page;
+    page.settings = [this] {
+        for (const std::string_view section : SectionsOf(model_.Table(), Tab::kVideos))
+            DrawSection(Tab::kVideos, section);
+    };
+    page.description = [this] {
+        DrawDescription([] { ImGui::TextColored(kMuted, "Point at a setting to see what it does."); });
+    };
+    page.description_height = DescriptionHeight();
+    videos_.Draw(folders, page);
 }
 
 void SettingsPage::DrawRow(const Setting& setting) {
