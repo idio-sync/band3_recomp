@@ -107,9 +107,17 @@ Every kind of screen the render checks go through matches the game's picture. Th
 
 The rest are on the in-game settings' Advanced tab, described in the
 [settings reference](settings-reference.md#native-renderer-1). Most are there to compare or
-measure; leave them at their defaults. Two to know about:
+measure; leave them at their defaults. Three to know about:
 
 - `native_present_pipeline`: keep it off. It hangs AMD GPUs and grows video memory.
+- `native_world_ahead`: turn it on for a low-powered system, such as a laptop's integrated GPU
+  at 60 Hz. It draws each world frame's venue right after that frame, so the frame after it
+  only post-processes it and draws the track and HUD. On a Radeon 680M at 1920x1200, 60 Hz, a
+  song's post frames went from 11.1 to 6.2 ms (median), latency from 22.5 to 17.5 ms, and
+  repeated frames fell by a sixth, the picture the same. Leave it off on a fast desktop GPU:
+  on a Radeon AI PRO R9700 at 120 Hz it made things worse. To turn it on, set it on the
+  in-game settings' Advanced tab (Native renderer), or add `native_world_ahead = true` to
+  `band3.toml`.
 - `native_slow_frame_ms`, `game_stall_log_ms`: log native frames slower than 12 ms and game
   frames slower than 100 ms, with where the time went.
 

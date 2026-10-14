@@ -78,8 +78,11 @@ What each does, how it was measured and why it defaults as it does. The
   post-processes it and draws its overlay; the world's GPU time moves into the world frame's
   half of the pair. On a 60 Hz laptop in a paused song post frames went from 14 to 8 ms and
   latency fell 4 ms, the picture the same, but the frames shown barely changed there (the
-  missing ones were pacing's, not the renderer's); it's meant for 120 Hz, where a post frame
-  over 8.3 ms costs the next. Where post frames drawn this way still run about a frame's
+  missing ones were pacing's, not the renderer's). In a playing song on that laptop (3 runs
+  each, 2026-10-14) it was used on 85-89% of post frames: post frames' worker time 11.1 to
+  6.2 ms at the median and 19.9 to 13.8 ms at p95, latency 22.5 to 17.5 ms, repeats 70 to 58
+  a minute; on the R9700 at 120 Hz it hurt, so it stays off by default and the user docs
+  suggest it for low-powered systems. Where post frames drawn this way still run about a frame's
   time it backfires (one too slow skips the next world frame, so the world drawn ahead is
   wasted and the post frame after draws the whole world, too slow again), so it measures the
   frames skipped with it and without in 2 s windows, keeps the one that skips fewer, and
