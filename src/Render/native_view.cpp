@@ -836,6 +836,7 @@ class Renderer {
                 ScaleForPicture(o);
                 o.normal_maps = REXCVAR_GET(native_view_normal_maps);
                 o.filtering = REXCVAR_GET(native_view_texture_filtering);
+                o.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
                 o.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
                 // drawn frame after frame, so these have the frames before
                 o.trails = true;

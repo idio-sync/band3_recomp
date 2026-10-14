@@ -161,6 +161,9 @@ struct RasterOptions {
     // GPU (native_gpu_timestamps), D3D12 only: per-part timestamps into
     // GpuStats::gpu_ms (gpu_timing_model.h)
     bool gpu_timestamps = false;
+    // GPU (native_view_hardware_sampling), with filtering: the device's
+    // samplers filter the textures they can (gpu_view.cpp's HardwareSampler)
+    bool hardware_sampling = false;
     // GPU (native_gpu_draw_profile), with gpu_timestamps: a timestamp before
     // each back-buffer world draw, into GpuStats::draw_times
     bool gpu_draw_profile = false;

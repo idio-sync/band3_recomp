@@ -1,6 +1,6 @@
 """build_shaders: compiles the native view's shaders into a C header.
 
-  python tools/shaders/build_shaders.py [present.hlsl ...]
+  python tools/shaders/build_shaders.py [--spirv-only] [present.hlsl ...]
 
 Compiles src/Render/shaders/mesh.hlsl (and the shade*.hlsli and spot*.hlsli it
 includes), post.hlsl (and the post*.hlsli it includes), velocity.hlsl,
@@ -12,7 +12,10 @@ src/Render/shaders/mesh_shaders.gen.h, post_shaders.gen.h and the others'
 present.hlsl, the native renderer's picture drawn on the SDK presenter's own
 Direct3D 12 command list, is DXBC alone, into present_shaders.gen.h.
 Run it after changing a shader and check in the headers; name shader files to
-compile those alone and leave the other headers as they are.
+compile those alone and leave the other headers as they are. --spirv-only, where
+there's no fxc (Linux), compiles the SPIR-V alone and keeps each header's DXBC
+as it is: only for a change Direct3D 12 can do without (the DXBC still works
+with the C++ as changed), and the headers still need a full run on Windows.
 
 Finds fxc in the Windows 10 SDK and dxc, spirv-val and spirv-cross in the Vulkan
 SDK (VULKAN_SDK, or C:/VulkanSDK/<newest>); FXC, DXC, SPIRV_VAL and SPIRV_CROSS
@@ -171,9 +174,24 @@ def c_array(name, data):
     return "\n".join(lines)
 
 
+def kept_dxbc(header_path, stem):
+    # the DXBC array `stem`Dxbc already in the header, for --spirv-only
+    import re
+    with open(header_path) as f:
+        text = f.read()
+    m = re.search(r"inline constexpr unsigned char " + stem + r"Dxbc\[\d+\] = \{(.*?)\};",
+                  text, re.S)
+    if not m:
+        sys.exit(f"build_shaders: {os.path.basename(header_path)} has no {stem}Dxbc to keep")
+    return bytes(int(b, 16) for b in re.findall(r"0x([0-9a-f]{2})", m.group(1)))
+
+
 def main():
     exe = ".exe" if os.name == "nt" else ""
-    fxc = find_tool("FXC", ["fxc"], [
+    args = sys.argv[1:]
+    spirv_only = "--spirv-only" in args
+    args = [a for a in args if a != "--spirv-only"]
+    fxc = None if spirv_only else find_tool("FXC", ["fxc"], [
         "C:/Program Files (x86)/Windows Kits/10/bin/10.*/x64/fxc.exe"])
     sdk = vulkan_sdk_bins()
     dxc = find_tool("DXC", ["dxc"], [os.path.join(b, "dxc" + exe) for b in sdk])
@@ -182,12 +200,14 @@ def main():
     spirv_cross = find_tool("SPIRV_CROSS", ["spirv-cross"],
                             [os.path.join(b, "spirv-cross" + exe) for b in sdk])
 
-    only = set(sys.argv[1:])
+    only = set(args)
     unknown = only - {source_name for source_name, _, _ in SHADERS}
     if unknown:
         sys.exit(f"build_shaders: no shader file {', '.join(sorted(unknown))}")
     for source_name, header_name, stages in SHADERS:
         if only and source_name not in only:
+            continue
+        if spirv_only and all(stage[3] is None for stage in stages):
             continue
         source = os.path.join(SHADER_DIR, source_name)
         header_path = os.path.join(SHADER_DIR, header_name)
@@ -195,8 +215,12 @@ def main():
         with tempfile.TemporaryDirectory() as tmp:
             for stem, entry, fxc_profile, dxc_profile, expected in stages:
                 dxbc = os.path.join(tmp, entry + ".dxbc")
-                run([fxc, "/nologo", "/O3", "/Qstrip_debug", "/Qstrip_reflect",
-                     "/T", fxc_profile, "/E", entry, "/Fo", dxbc, source])
+                if spirv_only:
+                    with open(dxbc, "wb") as f:
+                        f.write(kept_dxbc(header_path, stem))
+                else:
+                    run([fxc, "/nologo", "/O3", "/Qstrip_debug", "/Qstrip_reflect",
+                         "/T", fxc_profile, "/E", entry, "/Fo", dxbc, source])
                 with open(dxbc, "rb") as f:
                     arrays.append(c_array(stem + "Dxbc", f.read()))
                 if dxc_profile is None:

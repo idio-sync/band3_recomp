@@ -209,6 +209,10 @@ SDL_GPUSampleCount SampleCount(uint32_t samples) {
            : samples == 2 ? SDL_GPU_SAMPLECOUNT_2
                           : SDL_GPU_SAMPLECOUNT_1;
 }
+// native_view_hardware_sampling's bit in a packed sampler's word x: the device's
+// sampler bound with the texture filters it (mesh.hlsl's kSampleHardware)
+constexpr uint32_t kSampleHardware = 1u << 12;
+
 int SampleBits(uint32_t samples) { return samples == 4 ? 2 : samples == 2 ? 1 : 0; }
 
 // native_gpu_draw_profile's tag for a draw
@@ -471,6 +475,8 @@ struct GpuRenderer::Impl {
     std::string draw_log_frame;
     std::vector<std::vector<std::string>> draw_log;
     SDL_GPUSampler* sampler = nullptr;
+    // native_view_hardware_sampling's samplers, by HardwareSampler's key
+    std::unordered_map<uint64_t, SDL_GPUSampler*> hw_samplers;
     // linear and clamping, as RB3 samples its post-processing levels
     SDL_GPUSampler* linear_sampler = nullptr;
     SDL_GPUTexture* white = nullptr;     // bound for untextured draws, which don't read it
@@ -994,6 +1000,10 @@ struct GpuRenderer::Impl {
     // once the GPU has finished `region`'s frame: its unread times into `st`
     // (GpuStats::gpu_ms)
     void ReadTimes(int region, GpuStats& st);
+    // native_view_hardware_sampling: the device sampler doing what the game's
+    // sampler packed as PackSampler packs it does, made the first time; null
+    // where none can (mirror once, a border; anisotropy unfiltered)
+    SDL_GPUSampler* HardwareSampler(const uint32_t packed[4]);
     // native_gpu_draw_profile: `t`'s draws' times from its ladder's `ticks`
     void DrawTimes(const Timed& t, const uint64_t* ticks, GpuStats& st);
     void ReleaseTiming();
@@ -1517,6 +1527,9 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     mip_sampler = nullptr;
     inline_mips_ok = false;
     sampler = linear_sampler = nullptr;
+    for (auto& [key, hw] : hw_samplers)
+        if (hw) SDL_ReleaseGPUSampler(device, hw);
+    hw_samplers.clear();
     white = black = no_depth = nullptr;
     ReleaseTargets();  // released above: forgets them
     ReleaseHistory();
@@ -3123,6 +3136,51 @@ void GpuRenderer::Impl::ReadTimes(int region, GpuStats& st) {
 #endif
 }
 
+SDL_GPUSampler* GpuRenderer::Impl::HardwareSampler(const uint32_t packed[4]) {
+    const uint32_t x = packed[0];
+    const uint32_t aniso = std::min<uint32_t>(packed[3], 16);
+    const uint64_t key = uint64_t(x & 0x3ff) | uint64_t(packed[2] & 0xfff) << 10 |
+                         uint64_t(aniso) << 22 | uint64_t(packed[1]) << 32;
+    if (auto it = hw_samplers.find(key); it != hw_samplers.end()) return it->second;
+    // sample_model.hlsli's address modes: 0 wrap, 1 mirror, 2 and 4 the edge;
+    // 3 and 5 mirror once, 6 and 7 the border, which SDL_gpu's samplers lack
+    auto address = [](uint32_t mode, SDL_GPUSamplerAddressMode& out) {
+        if (mode == 0) out = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+        else if (mode == 1) out = SDL_GPU_SAMPLERADDRESSMODE_MIRRORED_REPEAT;
+        else if (mode == 2 || mode == 4) out = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        else return false;
+        return true;
+    };
+    SDL_GPUSamplerCreateInfo si{};
+    const bool mag = (x >> 6) & 1, min = (x >> 7) & 1;
+    SDL_GPUSampler* made = nullptr;
+    // anisotropy with a nearest filter is the device's to choose
+    if (address(x & 7, si.address_mode_u) && address((x >> 3) & 7, si.address_mode_v) &&
+        (aniso <= 1 || (mag && min))) {
+        si.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        si.mag_filter = mag ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
+        si.min_filter = min ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
+        // PlanSample's: 0 the nearest level, 2 the lowest alone, else between
+        const uint32_t mip = (x >> 8) & 3;
+        si.mipmap_mode = mip == 0 || mip == 2 ? SDL_GPU_SAMPLERMIPMAPMODE_NEAREST
+                                              : SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
+        const uint32_t last = (packed[2] >> 8) & 15;
+        const uint32_t hi = std::min((packed[2] >> 4) & 15, last);
+        const uint32_t lo = std::min(packed[2] & 15, hi);
+        si.min_lod = float(lo);
+        si.max_lod = float(mip == 2 ? lo : hi);
+        float bias;
+        std::memcpy(&bias, &packed[1], 4);
+        si.mip_lod_bias = std::clamp(bias, -15.0f, 15.0f);
+        si.enable_anisotropy = aniso > 1;
+        si.max_anisotropy = float(std::max<uint32_t>(aniso, 1));
+        made = SDL_CreateGPUSampler(device, &si);
+        if (!made) REXLOG_WARN("native view gpu: no hardware sampler ({})", SDL_GetError());
+    }
+    hw_samplers[key] = made;
+    return made;
+}
+
 void GpuRenderer::Impl::DrawTimes(const Timed& t, const uint64_t* ticks, GpuStats& st) {
     st.draw_times.clear();
     if (t.tags.empty() || t.keys.size() != t.labels.size()) return;
@@ -3954,6 +4012,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     SDL_GPUGraphicsPipeline* bound = nullptr;
     SDL_GPUBuffer* bound_verts = nullptr;
     SDL_GPUTexture* bound_tex[kNumSpotSlots] = {};
+    SDL_GPUSampler* bound_samp[kNumSlots] = {};
     float bound_viewport[4] = {};
     // the scissor is the song list's cut (InOverlayCut)
     bool scissor_cut = false;
@@ -3966,6 +4025,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         bound = nullptr;
         bound_verts = nullptr;
         std::fill(std::begin(bound_tex), std::end(bound_tex), nullptr);
+        std::fill(std::begin(bound_samp), std::end(bound_samp), nullptr);
         std::fill(std::begin(bound_viewport), std::end(bound_viewport), 0.0f);
     };
     auto end_pass = [&] {
@@ -4000,6 +4060,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         bound = nullptr;
         bound_verts = nullptr;
         std::fill(std::begin(bound_tex), std::end(bound_tex), nullptr);
+        std::fill(std::begin(bound_samp), std::end(bound_samp), nullptr);
         std::fill(std::begin(bound_viewport), std::end(bound_viewport), 0.0f);
         if (o.gpu_labels) indexed_draws.emplace_back();
         draws_at_submit = st.draws;
@@ -4483,6 +4544,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             bool dxn = false;  // a DXN texture kept as BC5 (BcFormat)
             // a k_8 texture kept as R8: how its texels expand (KeptFormat)
             uint32_t r8 = 0;
+            // fills its array's layer, so the device's sampler can address it
+            bool exact = false;
         };
         auto layer_of = [&](const Texture* t) {
             const Tex* tx = TextureFor(t);
@@ -4496,7 +4559,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                            f == SDL_GPU_TEXTUREFORMAT_BC5_RG_UNORM,
                            f == SDL_GPU_TEXTUREFORMAT_R8_UNORM
                                ? guest_format::R8ExpandCode(tx->keep->blocks->swizzle)
-                               : 0u};
+                               : 0u,
+                           t->width == tx->array->w && t->height == tx->array->h};
         };
         shade::ShadeParams& sp = shades[d];
         const ShadeState* state = shade::ShadeOf(frame, it);
@@ -4563,16 +4627,49 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             else
                 sp.flags.x &= ~(shade::kShadeRefract | shade::kShadeRefractMap);
         }
+        // the game's samplers if kept and filtering is on, else nearest (as
+        // soft_raster.cpp's DrawOne); with hardware_sampling, the device's
+        // sampler for each it can do, bound with its texture
+        SDL_GPUSampler* slot_sampler[kNumSlots];
+        std::fill(std::begin(slot_sampler), std::end(slot_sampler), sampler);
+        // by slot, into PixelUniforms::tex_sampler (tex_layer's order) below
+        uint32_t packed_sampler[kNumSlots][4] = {};
+        {
+            const TexSampler none;
+            auto sampler_of = [&](int slot) -> const TexSampler& {
+                if (!o.filtering || !state) return none;
+                switch (slot) {
+                    case kSlotDiffuse: return state->diffuse_sampler;
+                    case kSlotSpecular: return state->samplers[kMapSpecular];
+                    case kSlotGlow: return state->samplers[kMapGlow];
+                    case kSlotNormal: return state->samplers[kMapNormal];
+                    case kSlotDetail: return state->samplers[kMapDetailNormal];
+                    default: return none;  // the projected light filters its own way
+                }
+            };
+            for (int s : {kSlotDiffuse, kSlotSpecular, kSlotGlow, kSlotNormal, kSlotDetail}) {
+                if (!tex[s].texture) continue;
+                uint32_t* packed = packed_sampler[s];
+                PackSampler(sampler_of(s), tex[s].levels, packed);
+                if (o.hardware_sampling && tex[s].exact && (packed[0] & kSampleFiltered)) {
+                    if (SDL_GPUSampler* hw = HardwareSampler(packed)) {
+                        packed[0] |= kSampleHardware;
+                        slot_sampler[s] = hw;
+                    }
+                }
+            }
+        }
         for (int s = 0; s < kNumSlots; s++) {
             // behind's and the shadow map's bindings are plain 2D, as is
             // no_depth
             SDL_GPUTexture* sampled = tex[s].texture                            ? tex[s].texture
                                       : s == kSlotBehind || s == kSlotShadow ? no_depth
                                                                              : white;
-            if (sampled == bound_tex[s]) continue;
-            const SDL_GPUTextureSamplerBinding ts{sampled, sampler};
+            if (sampled == bound_tex[s] && slot_sampler[s] == bound_samp[s]) continue;
+            const SDL_GPUTextureSamplerBinding ts{sampled, slot_sampler[s]};
             SDL_BindGPUFragmentSamplers(pass, uint32_t(s), &ts, 1);
             bound_tex[s] = sampled;
+            bound_samp[s] = slot_sampler[s];
         }
         // a cone reads the scene's depth at its screen pixel and the last
         // density map (black if none), with uniforms in a second buffer
@@ -4653,27 +4750,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             pu.tex_size[s - 1][0] = tex[s].w;
             pu.tex_size[s - 1][1] = tex[s].h;
         }
-        // the game's samplers if kept and filtering is on, else nearest (as
-        // soft_raster.cpp's DrawOne)
-        {
-            const TexSampler none;
-            auto sampler_of = [&](int slot) -> const TexSampler& {
-                if (!o.filtering || !state) return none;
-                switch (slot) {
-                    case kSlotDiffuse: return state->diffuse_sampler;
-                    case kSlotSpecular: return state->samplers[kMapSpecular];
-                    case kSlotGlow: return state->samplers[kMapGlow];
-                    case kSlotNormal: return state->samplers[kMapNormal];
-                    case kSlotDetail: return state->samplers[kMapDetailNormal];
-                    default: return none;  // the projected light filters its own way
-                }
-            };
-            for (int s : {kSlotDiffuse, kSlotSpecular, kSlotGlow, kSlotNormal, kSlotDetail}) {
-                if (!tex[s].texture) continue;
-                PackSampler(sampler_of(s), tex[s].levels,
-                            pu.tex_sampler[s >= kSlotNormal ? s - 2 : s]);
-            }
-        }
+        for (int s : {kSlotDiffuse, kSlotSpecular, kSlotGlow, kSlotNormal, kSlotDetail})
+            if (tex[s].texture)
+                std::memcpy(pu.tex_sampler[s >= kSlotNormal ? s - 2 : s], packed_sampler[s],
+                            sizeof(packed_sampler[s]));
         pu.flags[0] = blend == kBlendSrcAlpha || blend == kBlendSrcAlphaAdd ? kPremultiply : 0;
         // DXN kept as BC5, in tex_layer's order: y copied to z and w as
         // DecodeBlock has it (mesh.hlsl's MapTexel; a head's normal map pass

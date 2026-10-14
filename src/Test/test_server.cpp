@@ -283,6 +283,7 @@ public:
         options.height = height = 720;
         options.normal_maps = REXCVAR_GET(native_view_normal_maps);
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
+        options.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
@@ -387,6 +388,7 @@ public:
         }
         options.normal_maps = REXCVAR_GET(native_view_normal_maps);
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
+        options.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);

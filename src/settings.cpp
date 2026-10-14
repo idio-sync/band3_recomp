@@ -780,6 +780,14 @@ REXCVAR_DEFINE_BOOL(native_view_texture_filtering, true, "Band3/Advanced/Native 
     "test harness's captures; off reads every texture's nearest texel at full size, to "
     "compare");
 
+REXCVAR_DEFINE_BOOL(native_view_hardware_sampling, false, "Band3/Advanced/Native renderer",
+    "Let the GPU's own texture samplers filter the textures that fill their texture array "
+    "layer, in place of the shader filtering them as the game's samplers do: the same filters, "
+    "mip levels, wrapping and anisotropy, rounded as the GPU rounds them, for much less GPU "
+    "time. Textures the device's samplers can't do (padded into a larger layer, mirrored once, "
+    "a border) keep the shader's. Vulkan for now; Direct3D 12 once its shaders are rebuilt "
+    "(experimental)");
+
 REXCVAR_DEFINE_STRING(native_view_rt_fallback, "guest", "Band3/Advanced/Native renderer",
     "What the native view's capture keeps of a texture RB3 draws at runtime (outfits, the "
     "crowd, blurs): guest also decodes what guest memory holds, right only with "

@@ -238,10 +238,16 @@ float4 Texel(Texture2DArray<float4> t, float2 uv, uint layer, uint2 size) {
 #define SAMPLE_LOOP [loop]
 #include "sample_model.hlsli"
 
+// native_view_hardware_sampling (word x, gpu_view.cpp's kSampleHardware): the
+// device's sampler bound with the texture does the game's, the texture filling
+// its layer; the shader's own filtering otherwise
+static const uint kSampleHardware = 1u << 12;
+
 // by the game's sampler s, else nearest at level 0 (soft_raster.cpp's Read)
-float4 ReadTexture(Texture2DArray<float4> t, uint layer, uint2 size, uint4 s, float2 uv,
-                   float2 dx, float2 dy) {
+float4 ReadTexture(Texture2DArray<float4> t, SamplerState hw, uint layer, uint2 size, uint4 s,
+                   float2 uv, float2 dx, float2 dy) {
     if ((s.x & kSampleFiltered) == 0u) return Texel(t, uv, layer, size);
+    if ((s.x & kSampleHardware) != 0u) return t.SampleGrad(hw, float3(uv, float(layer)), dx, dy);
     return SampleTexture(t, layer, size, s, uv, dx, dy);
 }
 
@@ -315,25 +321,27 @@ float4 MeshColor(PixelIn i) {
     float4 spec_map = float4(1, 1, 1, 1);
     float4 glow = float4(0, 0, 0, 0);
     if ((f & kShadeTextured) != 0u)
-        texel = MapTexel(
-            ReadTexture(tex, tex_layer[0].x, tex_size[0].xy, tex_samp[0], i.uv, dx, dy), 0);
+        texel = MapTexel(ReadTexture(tex, tex_sampler, tex_layer[0].x, tex_size[0].xy, tex_samp[0],
+                                     i.uv, dx, dy),
+                         0);
     if ((f & kShadeSpecMap) != 0u)
-        spec_map = MapTexel(ReadTexture(spec_tex, tex_layer[0].y, tex_size[1].xy, tex_samp[1],
-                                        i.uv, dx, dy),
+        spec_map = MapTexel(ReadTexture(spec_tex, spec_sampler, tex_layer[0].y, tex_size[1].xy,
+                                        tex_samp[1], i.uv, dx, dy),
                             1);
     if ((f & kShadeGlow) != 0u)
-        glow = MapTexel(
-            ReadTexture(glow_tex, tex_layer[0].z, tex_size[2].xy, tex_samp[2], i.uv, dx, dy), 2);
+        glow = MapTexel(ReadTexture(glow_tex, glow_sampler, tex_layer[0].z, tex_size[2].xy,
+                                    tex_samp[2], i.uv, dx, dy),
+                        2);
     float4 normal = float4(0.5, 0.5, 0, 1);
     float4 detail = float4(0.5, 0.5, 0, 1);
     // s1: the normal map, or REFRACT_WORLD's refract normal map
     if ((f & (kShadeNormalMap | kShadeRefractMap)) != 0u)
-        normal = MapTexel(ReadTexture(normal_tex, tex_layer[1].y, tex_size[6].xy, tex_samp[5],
-                                      i.uv, dx, dy),
+        normal = MapTexel(ReadTexture(normal_tex, normal_sampler, tex_layer[1].y, tex_size[6].xy,
+                                      tex_samp[5], i.uv, dx, dy),
                           5);
     if ((f & kShadeNormalMap) != 0u && (f & kShadeDetailMap) != 0u)
-        detail = MapTexel(ReadTexture(detail_tex, tex_layer[1].z, tex_size[7].xy, tex_samp[6],
-                                      detail_uv, detail_dx, detail_dy),
+        detail = MapTexel(ReadTexture(detail_tex, detail_sampler, tex_layer[1].z, tex_size[7].xy,
+                                      tex_samp[6], detail_uv, detail_dx, detail_dy),
                           6);
     float4 proj = float4(0, 0, 0, 0);
     float4 gobo = float4(0, 0, 0, 0);

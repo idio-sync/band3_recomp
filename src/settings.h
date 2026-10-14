@@ -165,6 +165,7 @@ REXCVAR_DECLARE(bool, native_view_mip_submits);
 REXCVAR_DECLARE(bool, native_view_record_targets);
 REXCVAR_DECLARE(bool, native_view_normal_maps);
 REXCVAR_DECLARE(bool, native_view_texture_filtering);
+REXCVAR_DECLARE(bool, native_view_hardware_sampling);
 REXCVAR_DECLARE(std::string, native_view_rt_fallback);
 REXCVAR_DECLARE(bool, native_view_target_scale);
 REXCVAR_DECLARE(int32_t, native_view_shadow_scale);
