@@ -2602,11 +2602,43 @@ std::string GuestObjectName(uint32_t obj) {
     auto* memory = rex::system::kernel_memory();
     if (!memory || obj < 0x10000u || obj >= 0xF0000000u) return {};
     const Guest g{static_cast<uint8_t*>(memory->virtual_membase())};
-    if (std::string name = VirtualBaseName(g, obj); !name.empty()) return name;
-    std::string name = ReadName(g, g.U32(obj + kObj_Name));
-    if (!std::all_of(name.begin(), name.end(), [](char c) { return c >= 0x20 && c < 0x7f; }))
-        return {};
-    return name;
+    // The object can be long gone (native_gpu_draw_profile names its draws up
+    // to 10 s on), its words garbage: read only pages that are there
+    auto readable = [&](uint32_t at, uint32_t bytes) {
+        if (at < 0x10000u || at >= 0xF0000000u || bytes > 0xF0000000u - at) return false;
+        for (uint32_t page = at & ~0xFFFu; page < at + bytes; page += 0x1000) {
+            rex::memory::BaseHeap* heap = memory->LookupHeap(page);
+            uint32_t protect = 0;
+            if (!heap || !heap->QueryProtect(page, &protect) ||
+                !(protect & rex::memory::kMemoryProtectRead))
+                return false;
+        }
+        return true;
+    };
+    auto printable = [](const std::string& name) {
+        return !name.empty() &&
+               std::all_of(name.begin(), name.end(), [](char c) { return c >= 0x20 && c < 0x7f; });
+    };
+    // the name at a char* in the object, if both are there
+    auto name_at = [&](uint32_t field) -> std::string {
+        if (!readable(field, 4)) return {};
+        const uint32_t chars = g.U32(field);
+        if (!readable(chars, kMaxName)) return {};
+        std::string name = ReadName(g, chars);
+        return printable(name) ? name : std::string{};
+    };
+    // VirtualBaseName's walk, each word checked first
+    if (readable(obj + 4, 4)) {
+        const uint32_t table = g.U32(obj + 4);
+        if (table >= 0x82000000u && table < 0x84000000u && readable(table + 4, 12))
+            for (int k = 1; k <= 3; k++) {
+                const int32_t off = int32_t(g.U32(table + 4 * k));
+                if (off <= 0 || off > 0x1000) continue;
+                if (std::string name = name_at(obj + 4 + uint32_t(off) + kObj_Name); !name.empty())
+                    return name;
+            }
+    }
+    return name_at(obj + kObj_Name);
 }
 
 void TakeAnnouncedTargets(AnnounceQueue& into) {
