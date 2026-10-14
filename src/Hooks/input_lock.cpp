@@ -14,6 +14,7 @@
 #include "src/Input/menu_shortcut.h"
 #include "src/Input/mouse_menus_driver.h"
 #include "src/Input/ui_round_trip.h"
+#include "src/Input/xinput_state.h"
 
 // Serializes the game's calls into the SDK's input system (see input_lock.h).
 // These are the only guest functions that call XamInputGetState,
@@ -114,7 +115,8 @@ extern "C" REX_FUNC(rex_sub_8283FB80) {
 // reads a player's type through it when the player connects, and keeps it
 // (JoypadGetCachedXInputCaps). A guitar's type is the one guitar_type says
 // (input_system.h), which decides whether RB3 reads its left trigger as the
-// effect switch.
+// effect switch. A 360 drum kit SDL reads gets its own flags and stick
+// capabilities from Windows, which decide whether RB3 reads its cymbals.
 extern "C" void __imp__sub_8283FB78(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(sub_8283FB78) {
     const uint32_t user = ctx.r3.u32;
@@ -126,6 +128,11 @@ extern "C" REX_FUNC(sub_8283FB78) {
     if (ctx.r3.u32 == 0 && caps) {
         auto* read = reinterpret_cast<rex::input::X_INPUT_CAPABILITIES*>(base + caps);
         read->sub_type = band3::input::GameGuitarSubtype(user, read->sub_type);
+        if (const auto drums =
+                band3::input::GameDrumCaps(user, band3::input::LoadCaps(*read))) {
+            read->flags = drums->flags;
+            band3::input::StoreGamepad(drums->gamepad, read->gamepad);
+        }
         band3::input::GameChordPads().OnCapabilities(user, read->sub_type);
     }
 }

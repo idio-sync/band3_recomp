@@ -100,6 +100,12 @@ std::vector<InputDevice> PlayerDevices();
 // was when the game started (guitar_type.h). Anything else is left alone.
 uint8_t GameGuitarSubtype(uint32_t user, uint8_t reported);
 
+// The capabilities the game is to read for `user`'s device, which the input
+// system reported as `reported`, where they change: an Xbox 360 drum kit SDL
+// reads gets the flags and stick capabilities Windows reports for it, so RB3
+// tells RB2-or-later kits from RB1 ones (xinput_caps.h). Nothing otherwise.
+std::optional<Caps360> GameDrumCaps(uint32_t user, const Caps360& reported);
+
 // One device's capabilities, or its state, as the game would read them on its
 // player; nullopt once it's gone, or once the game has the input system. Read
 // on a player the device doesn't feed, so the read can't change which of a

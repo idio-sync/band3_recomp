@@ -56,6 +56,8 @@ struct Gamepad360 {
     int16_t thumb_ly = 0;
     int16_t thumb_rx = 0;
     int16_t thumb_ry = 0;
+
+    bool operator==(const Gamepad360&) const = default;
 };
 
 // the XINPUT_CAPABILITIES fields RB3 looks at
@@ -63,6 +65,8 @@ struct Caps360 {
     uint8_t sub_type = kSubtypeGamepad;
     uint16_t flags = 0;
     Gamepad360 gamepad;
+
+    bool operator==(const Caps360&) const = default;
 };
 
 // buttons every instrument has

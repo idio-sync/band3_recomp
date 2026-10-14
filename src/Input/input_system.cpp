@@ -25,6 +25,7 @@
 #include "restart_debounce.h"
 #include "src/settings.h"
 #include "virtual_instrument.h"
+#include "xinput_caps.h"
 #include "xinput_state.h"
 
 namespace band3::input {
@@ -535,6 +536,25 @@ uint8_t GameGuitarSubtype(uint32_t user, uint8_t reported) {
     return played;
 }
 
+std::optional<Caps360> GameDrumCaps(uint32_t user, const Caps360& reported) {
+    std::string guid;
+    {
+        std::lock_guard<std::mutex> lock(g_devices_mutex);
+        for (const InputDevice& device : g_devices) {
+            if (device.player != static_cast<int>(user) + 1 || device.kind != DeviceKind::kPad) {
+                continue;
+            }
+            const auto ids = XInputIdsFromGuid(device.guid);
+            if (ids && ids->subtype == kSubtypeDrums) {
+                guid = device.guid;
+                break;
+            }
+        }
+    }
+    if (guid.empty()) return std::nullopt;
+    return WindowsDrumCaps(guid, reported);
+}
+
 namespace {
 
 // Reads one device through `read(system, user)` on a player it doesn't feed,
@@ -560,7 +580,17 @@ std::optional<Caps360> ReadInputCaps(uint64_t id) {
         return system.GetCapabilities(user, 0, &caps);
     });
     if (!ok) return std::nullopt;
-    return LoadCaps(caps);
+    const Caps360 reported = LoadCaps(caps);
+    // as the game will read it (GameDrumCaps), so the test view decodes a drum
+    // kit's cymbals as RB3 will
+    std::string guid;
+    {
+        std::lock_guard<std::mutex> lock(g_devices_mutex);
+        for (const InputDevice& device : g_devices) {
+            if (device.id == id && device.kind == DeviceKind::kPad) guid = device.guid;
+        }
+    }
+    return WindowsDrumCaps(guid, reported).value_or(reported);
 }
 
 std::optional<Gamepad360> ReadInputState(uint64_t id) {
