@@ -35,6 +35,7 @@ enum Part : uint8_t {
     kReadback,       // the picture copied for reading back (RenderFrame's)
     kPreWorld,       // a world pass before the frame (soft_raster.h's kPreBufferPasses)
     kWorldAhead,     // the world drawn ahead (native_world_ahead), timed with the frame after it
+    kOverlayStart,   // the multisampled overlay's start: the picture into its every sample
     kParts
 };
 // a mark that starts no part: the end of a ladder, or a gap that isn't one
@@ -44,7 +45,7 @@ inline const char* PartName(uint8_t p) {
     static constexpr const char* kNames[kParts] = {
         "upload", "world", "pass_shadow", "pass_spot", "pass_other", "pass_blur",
         "mips", "idle", "copies", "velocity", "dof", "bloom", "composite",
-        "overlay", "overlay_resolve", "gamma", "readback", "pre_world", "world_ahead"};
+        "overlay", "overlay_resolve", "gamma", "readback", "pre_world", "world_ahead", "overlay_start"};
     return p < kParts ? kNames[p] : "none";
 }
 

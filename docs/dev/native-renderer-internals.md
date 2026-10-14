@@ -127,7 +127,8 @@ What each does, how it was measured and why it defaults as it does. The
   between them (`src/Render/gpu_timing_model.h`): its upload, the world, the texture passes
   (`pass_shadow`, `pass_spot` for the spotlights' targets, `pass_other` for the rest: outfits,
   the crowd...), the blurs in them, their mips, post-processing (`velocity`, `dof`, `bloom`,
-  `composite`), the overlay and its multisampled resolves, the gamma pass, and a world drawn
+  `composite`), the overlay, its multisampled start (`overlay_start`: the picture copied into
+  every sample) and resolves, the gamma pass, and a world drawn
   ahead or before the frame. `idle` is the GPU waiting for the CPU to send the next command
   buffer (a frame goes to the GPU in parts, submitted after each texture pass with mips and,
   with `native_view_submit_points`, at the resolve) and

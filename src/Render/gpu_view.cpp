@@ -848,8 +848,9 @@ struct GpuRenderer::Impl {
                                       CullWinding cull, PixelKind pixel = PixelKind::kMesh,
                                       uint32_t samples = 1);
     // PSOverlayStart's, into the overlay's targets at `samples`: depth
-    // written, not tested
-    SDL_GPUGraphicsPipeline* OverlayStartPipeline(uint32_t samples);
+    // written, not tested; without `depth`, depth left alone (the pass clears
+    // it)
+    SDL_GPUGraphicsPipeline* OverlayStartPipeline(uint32_t samples, bool depth = true);
     // the overlay's samples for `want` (OverlaySamples): `want` if the device
     // can, else the other of 2 and 4, else 1 (logged once)
     uint32_t DeviceSamples(uint32_t want);
@@ -1652,8 +1653,8 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     return p;
 }
 
-SDL_GPUGraphicsPipeline* GpuRenderer::Impl::OverlayStartPipeline(uint32_t samples) {
-    const int key = 1 << 16 | SampleBits(samples);
+SDL_GPUGraphicsPipeline* GpuRenderer::Impl::OverlayStartPipeline(uint32_t samples, bool depth) {
+    const int key = 1 << 16 | (depth ? 0 : 1 << 17) | SampleBits(samples);
     if (auto it = pipelines.find(key); it != pipelines.end()) return it->second;
     const auto start = std::chrono::steady_clock::now();
     SDL_GPUColorTargetDescription target{};
@@ -1665,8 +1666,8 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::OverlayStartPipeline(uint32_t sample
     pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
     pi.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
     // its depth everywhere, whatever is there
-    pi.depth_stencil_state.enable_depth_test = true;
-    pi.depth_stencil_state.enable_depth_write = true;
+    pi.depth_stencil_state.enable_depth_test = depth;
+    pi.depth_stencil_state.enable_depth_write = depth;
     pi.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_ALWAYS;
     pi.multisample_state.sample_count = SampleCount(samples);
     pi.target_info.color_target_descriptions = &target;
@@ -1768,6 +1769,7 @@ void GpuRenderer::Impl::Prewarm(uint32_t overlay_samples) {
     for (uint32_t samples : {DeviceSamples(2), DeviceSamples(overlay_samples)}) {
         if (samples <= 1) continue;
         OverlayStartPipeline(samples);
+        OverlayStartPipeline(samples, false);
         for (CullWinding cull :
              {CullWinding::kNone, CullWinding::kClockwise, CullWinding::kCounterClockwise})
             for (int blend = kBlendDest; blend <= kBlendPreMultAlpha; blend++)
@@ -3980,7 +3982,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     uint32_t overlay_samples = DeviceSamples(OverlaySamples(o));
     if (overlay_samples > 1 &&
         ((!layout.cameras && !depth_sampled) || !EnsureOverlayTargets(overlay_samples) ||
-         !OverlayStartPipeline(overlay_samples)))
+         !OverlayStartPipeline(overlay_samples) || !OverlayStartPipeline(overlay_samples, false)))
         overlay_samples = 1;
     bool overlay_start = false;  // the overlay's targets are yet to be started
     // the scene's alpha 0
@@ -3991,35 +3993,41 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     auto begin_back = [&](bool clear_depth) {
         // marked here, not at each texture pass's end, so back-to-back
         // passes take one timestamp each
-        MarkTime(cmd, resolved ? gpu_timing::kOverlay : gpu_timing::kWorld);
         const bool ms = resolved && overlay_samples > 1;
+        MarkTime(cmd, !resolved               ? gpu_timing::kWorld
+                      : ms && overlay_start ? gpu_timing::kOverlayStart
+                                            : gpu_timing::kOverlay);
         bool depth_cleared = false;
         if (ms && overlay_start) {
             // as RB3's DoPostProcess (BeginTiling, CopyPostProcess): the
             // picture into every sample, depth 0, or the world's for a
-            // capture from before cameras were kept (if no camera clears it)
+            // capture from before cameras were kept (if no camera clears it).
+            // Depth 0 is the pass's clear, not the shader's: depth a shader
+            // writes can't stay compressed on AMD, slowing the overlay's tests
+            const bool world = !layout.cameras && !clear_depth;
             SDL_GPUColorTargetInfo start_ct{};
             start_ct.texture = color_ms;
             start_ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
             start_ct.store_op = SDL_GPU_STOREOP_STORE;
             SDL_GPUDepthStencilTargetInfo start_dt{};
             start_dt.texture = depth_ms;
-            start_dt.load_op = SDL_GPU_LOADOP_DONT_CARE;
+            start_dt.clear_depth = 0.0f;
+            start_dt.load_op = world ? SDL_GPU_LOADOP_DONT_CARE : SDL_GPU_LOADOP_CLEAR;
             start_dt.store_op = SDL_GPU_STOREOP_STORE;
             start_dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
             start_dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
             SDL_GPURenderPass* rp = BeginPass(cmd, &start_ct, 1, &start_dt);
-            SDL_BindGPUGraphicsPipeline(rp, OverlayStartPipeline(overlay_samples));
+            SDL_BindGPUGraphicsPipeline(rp, OverlayStartPipeline(overlay_samples, world));
             const SDL_GPUTextureSamplerBinding tb[2] = {{picture, sampler},
                                                         {world_depth, sampler}};
             SDL_BindGPUFragmentSamplers(rp, 0, tb, 2);
             post::PostPass p{};
-            const bool world = !layout.cameras && !clear_depth;
             p.mode = {0, world ? 1u : 0u, 0, 0};
             p.target = {float(width), float(height), 1.0f / float(width), 1.0f / float(height)};
             SDL_PushGPUFragmentUniformData(cmd, 0, &p, sizeof(p));
             timed_first([&] { SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0); });
             SDL_EndGPURenderPass(rp);
+            MarkTime(cmd, gpu_timing::kOverlay);
             overlay_start = false;
             depth_cleared = !world;
             clear_depth = false;
