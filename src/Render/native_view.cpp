@@ -187,6 +187,11 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.premade_unused += g.premade_unused;
     sum.shared_depths += g.shared_depths;
     sum.textures_first += g.textures_first;
+    sum.samples_hw += g.samples_hw;
+    sum.samples_npot += g.samples_npot;
+    sum.samples_small += g.samples_small;
+    sum.samples_aspect += g.samples_aspect;
+    sum.samples_mode += g.samples_mode;
     sum.meshes_first += g.meshes_first;
     sum.arrays_grown += g.arrays_grown;
     sum.arrays_ms += g.arrays_ms;

@@ -151,6 +151,13 @@ struct GpuStats {
     // placed a first texture in
     uint32_t arrays_premade = 0, arrays_premade_used = 0;
     uint32_t textures_first = 0, meshes_first = 0;
+    // filtered texture reads, a texture a draw: ones the device's sampler can
+    // do (and does, with native_view_hardware_sampling), else padded into a
+    // larger layer (not a
+    // power of two, under kMinClassSize, or past SizeClass's 2:1), or filling
+    // its layer with a sampler the device's can't do
+    uint32_t samples_hw = 0, samples_npot = 0, samples_small = 0, samples_aspect = 0,
+             samples_mode = 0;
     uint32_t arrays_grown = 0;
     double arrays_ms = 0, arrays_mb = 0;
     // the rebuilt arena's new buffers' megabytes

@@ -4544,7 +4544,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             bool dxn = false;  // a DXN texture kept as BC5 (BcFormat)
             // a k_8 texture kept as R8: how its texels expand (KeptFormat)
             uint32_t r8 = 0;
-            // fills its array's layer, so the device's sampler can address it
+            // fills its array's layer (or is a render target), so the device's
+            // sampler can address it
             bool exact = false;
         };
         auto layer_of = [&](const Texture* t) {
@@ -4569,7 +4570,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             case kSourceTexture: tex[kSlotDiffuse] = layer_of(it.tex.get()); break;
             case kSourceRt: {
                 const Rt& rt = rts[it.tex->tex_obj];
-                tex[kSlotDiffuse] = {rt.color, 0, rt.w, rt.h, rt.levels};
+                // a render target is a texture of its own, its whole size
+                tex[kSlotDiffuse] = {rt.color, 0, rt.w, rt.h, rt.levels, false, 0u, true};
                 break;
             }
             case kSourceBlack: tex[kSlotDiffuse] = {black, 0, 1, 1}; break;
@@ -4589,7 +4591,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 const int m = k ? kMapDetailNormal : kMapNormal;
                 if (normal_source[k][d] != kSourceRt) return layer_of(state->maps[m].get());
                 const Rt& rt = rts[MapTargetOf(state, m)->tex_obj];
-                return Sampled{rt.color, 0, rt.w, rt.h, rt.levels};
+                return Sampled{rt.color, 0, rt.w, rt.h, rt.levels, false, 0u, true};
             };
             tex[kSlotNormal] = map_of(0);
             if (sp.flags.x & shade::kShadeDetailMap) tex[kSlotDetail] = map_of(1);
@@ -4651,12 +4653,18 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 if (!tex[s].texture) continue;
                 uint32_t* packed = packed_sampler[s];
                 PackSampler(sampler_of(s), tex[s].levels, packed);
-                if (o.hardware_sampling && tex[s].exact && (packed[0] & kSampleFiltered)) {
-                    if (SDL_GPUSampler* hw = HardwareSampler(packed)) {
-                        packed[0] |= kSampleHardware;
-                        slot_sampler[s] = hw;
-                    }
+                if (!(packed[0] & kSampleFiltered)) continue;
+                SDL_GPUSampler* hw = tex[s].exact ? HardwareSampler(packed) : nullptr;
+                if (o.hardware_sampling && hw) {
+                    packed[0] |= kSampleHardware;
+                    slot_sampler[s] = hw;
                 }
+                const uint32_t w = tex[s].w, h = tex[s].h;
+                if (hw) st.samples_hw++;
+                else if (tex[s].exact) st.samples_mode++;
+                else if ((w & (w - 1)) || (h & (h - 1))) st.samples_npot++;
+                else if (w < kMinClassSize || h < kMinClassSize) st.samples_small++;
+                else st.samples_aspect++;
             }
         }
         for (int s = 0; s < kNumSlots; s++) {
