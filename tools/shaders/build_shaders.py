@@ -36,16 +36,48 @@ SHADER_DIR = os.path.join(REPO, "src", "Render", "shaders")
 # point, fxc profile, dxc profile, what spirv-cross --reflect must report).
 # SDL_gpu's sets are 0 vertex resources, 1 vertex uniforms, 2 pixel resources,
 # 3 pixel uniforms.
+# PSMain's variants, each PSMain compiled with flags.x's `mask` bits fixed to
+# `bits` (shade_params.hlsli's kShade*) and, with `hw`, the shader's own
+# filtering left out (every filtered map kSampleHardware's). gpu_view.cpp draws
+# with the first that fits a draw (kMeshVariantDefs), else the general PSMain.
+MESH_VARIANTS = [
+    # lit per vertex (the crowd's impostors among them): no normal maps, no
+    # projected light, shadow, refraction, movie, box map, fades
+    (0x37dd8019, 0x00080009, True),
+    # unlit, likewise
+    (0x37d58019, 0x00000001, True),
+    # lit per pixel, without those or the skin and hair families, rim light and
+    # billboards, the character's self-shadow as it is. (Shadow fixed off too
+    # made 40 VGPRs rather than 48, but fxc then reorders the light colour's
+    # products: 1-2 levels off in a few pixels a frame.)
+    (0x38ddf819, 0x00000009, True),
+    # lit per pixel with the families, rim light and shadow as they are
+    (0x38dd8019, 0x00000009, True),
+]
+MESH_PIXEL_BINDINGS = {("ubos", "PixelUniforms", 3, 0), ("textures", "tex", 2, 0),
+                       ("textures", "spec_tex", 2, 1), ("textures", "glow_tex", 2, 2),
+                       ("textures", "proj_tex", 2, 3), ("textures", "gobo_tex", 2, 4),
+                       ("textures", "behind_tex", 2, 5), ("textures", "shadow_tex", 2, 6),
+                       ("textures", "normal_tex", 2, 7), ("textures", "detail_tex", 2, 8)}
+
+
+def mesh_variant_stages():
+    stages = []
+    for n, (mask, bits, hw) in enumerate(MESH_VARIANTS):
+        defines = [f"SHADE_FIXED_MASK={mask}", f"SHADE_FIXED_BITS={bits}"]
+        if hw:
+            defines.append("SHADE_HW_FILTER=1")
+        # a variant may leave maps out: its bindings are some of PSMain's
+        stages.append((f"kMeshPixelVariant{n}", "PSMain", "ps_5_1", "ps_6_0",
+                       MESH_PIXEL_BINDINGS, defines))
+    return stages
+
+
 SHADERS = [
     ("mesh.hlsl", "mesh_shaders.gen.h", [
         ("kMeshVertex", "VSMain", "vs_5_1", "vs_6_0",
          {("ubos", "VertexUniforms", 1, 0), ("ssbos", "bones", 0, 0)}),
-        ("kMeshPixel", "PSMain", "ps_5_1", "ps_6_0",
-         {("ubos", "PixelUniforms", 3, 0), ("textures", "tex", 2, 0),
-          ("textures", "spec_tex", 2, 1), ("textures", "glow_tex", 2, 2),
-          ("textures", "proj_tex", 2, 3), ("textures", "gobo_tex", 2, 4),
-          ("textures", "behind_tex", 2, 5), ("textures", "shadow_tex", 2, 6),
-          ("textures", "normal_tex", 2, 7), ("textures", "detail_tex", 2, 8)}),
+        ("kMeshPixel", "PSMain", "ps_5_1", "ps_6_0", MESH_PIXEL_BINDINGS),
         ("kSpotPixel", "PSSpotCone", "ps_5_1", "ps_6_0",
          {("ubos", "PixelUniforms", 3, 0), ("ubos", "SpotUniforms", 3, 1),
           ("textures", "tex", 2, 0), ("textures", "scene_depth_tex", 2, 9),
@@ -59,7 +91,7 @@ SHADERS = [
           ("textures", "detail_tex", 2, 8), ("textures", "scene_depth_tex", 2, 9)}),
         # a shadow map's depth: no resources
         ("kShadowDepthPixel", "PSShadowDepth", "ps_5_1", "ps_6_0", set()),
-    ]),
+    ] + mesh_variant_stages()),
     ("post.hlsl", "post_shaders.gen.h", [
         ("kFullscreenVertex", "VSFullscreen", "vs_5_1", "vs_6_0", set()),
         ("kResolvePixel", "PSResolve", "ps_5_1", "ps_6_0",
@@ -153,7 +185,7 @@ def run(command):
     return result.stdout
 
 
-def check_reflection(entry, expected, reflect_json):
+def check_reflection(entry, expected, reflect_json, subset=False):
     data = json.loads(reflect_json)
     found = set()
     for kind in ("ubos", "ssbos", "textures", "separate_images", "separate_samplers"):
@@ -161,7 +193,7 @@ def check_reflection(entry, expected, reflect_json):
             # dxc names a cbuffer's block type.<name>
             name = item["name"].removeprefix("type.")
             found.add((kind, name, item.get("set"), item.get("binding")))
-    if found != expected:
+    if found != expected and not (subset and found <= expected):
         sys.exit(f"build_shaders: {entry}'s SPIR-V bindings are {sorted(found)}, "
                  f"SDL_gpu wants {sorted(expected)}")
 
@@ -213,14 +245,16 @@ def main():
         header_path = os.path.join(SHADER_DIR, header_name)
         arrays = []
         with tempfile.TemporaryDirectory() as tmp:
-            for stem, entry, fxc_profile, dxc_profile, expected in stages:
+            for stem, entry, fxc_profile, dxc_profile, expected, *rest in stages:
+                defines = rest[0] if rest else []
                 dxbc = os.path.join(tmp, entry + ".dxbc")
                 if spirv_only:
                     with open(dxbc, "wb") as f:
                         f.write(kept_dxbc(header_path, stem))
                 else:
                     run([fxc, "/nologo", "/O3", "/Qstrip_debug", "/Qstrip_reflect",
-                         "/T", fxc_profile, "/E", entry, "/Fo", dxbc, source])
+                         "/T", fxc_profile, "/E", entry, "/Fo", dxbc]
+                        + [a for d in defines for a in ("/D", d)] + [source])
                 with open(dxbc, "rb") as f:
                     arrays.append(c_array(stem + "Dxbc", f.read()))
                 if dxc_profile is None:
@@ -230,21 +264,37 @@ def main():
                 # Vulkan 1.0 (SPIR-V 1.0): SDL_gpu creates its Vulkan instance
                 # at API 1.0, which allows no newer SPIR-V
                 run([dxc, "-spirv", "-fspv-target-env=vulkan1.0", "-O3",
-                     "-T", dxc_profile, "-E", entry, "-Fo", spirv, source])
+                     "-T", dxc_profile, "-E", entry, "-Fo", spirv]
+                    + ["-D" + d for d in defines] + [source])
                 run([spirv_val, "--target-env", "vulkan1.0", spirv])
-                check_reflection(entry, expected, run([spirv_cross, spirv, "--reflect"]))
+                check_reflection(stem, expected, run([spirv_cross, spirv, "--reflect"]),
+                                 subset=bool(defines))
                 with open(spirv, "rb") as f:
                     arrays.append(c_array(stem + "Spirv", f.read()))
-                print(f"{entry}: {os.path.getsize(dxbc)} bytes DXBC, "
+                print(f"{stem}: {os.path.getsize(dxbc)} bytes DXBC, "
                       f"{os.path.getsize(spirv)} bytes SPIR-V")
 
-        entries = " and ".join(stage[1] for stage in stages)
+        entries = " and ".join(dict.fromkeys(stage[1] for stage in stages))
         if all(stage[3] is None for stage in stages):
             what = ["// DXBC (shader model 5.1) for the SDK presenter's Direct3D 12 command list.",
                     f"// Entry points {entries}."]
         else:
             what = ["// DXBC (shader model 5.1) for SDL_gpu's Direct3D 12 backend, SPIR-V for its",
                     f"// Vulkan backend. Entry points {entries}."]
+        if source_name == "mesh.hlsl":
+            # gpu_view.cpp's kMeshVariantDefs: mask, bits, hw, in MESH_VARIANTS' order
+            rows = [f"    {{{mask}u, {bits}u, {'true' if hw else 'false'}, "
+                    f"kMeshPixelVariant{i}Dxbc, sizeof(kMeshPixelVariant{i}Dxbc), "
+                    f"kMeshPixelVariant{i}Spirv, sizeof(kMeshPixelVariant{i}Spirv)}},"
+                    for i, (mask, bits, hw) in enumerate(MESH_VARIANTS)]
+            arrays.append("\n".join(
+                ["// PSMain's variants (build_shaders.py's MESH_VARIANTS): kMeshPixelVariant<n>",
+                 "struct MeshVariantDef {", "    unsigned mask, bits;", "    bool hw;",
+                 "    const unsigned char* dxbc;", "    unsigned long long dxbc_size;",
+                 "    const unsigned char* spirv;", "    unsigned long long spirv_size;", "};",
+                 f"inline constexpr int kNumMeshVariants = {len(MESH_VARIANTS)};",
+                 f"inline constexpr MeshVariantDef kMeshVariantDefs[{max(1, len(rows))}] = {{"]
+                + (rows or ["    {0u, 0u, false, nullptr, 0, nullptr, 0},"]) + ["};"]))
         header = "\n".join([
             f"// Generated by tools/shaders/build_shaders.py from {source_name}; don't edit.",
             *what,

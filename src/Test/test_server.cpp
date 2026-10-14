@@ -284,6 +284,7 @@ public:
         options.normal_maps = REXCVAR_GET(native_view_normal_maps);
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
+        options.shader_variants = REXCVAR_GET(native_view_shader_variants);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
@@ -389,6 +390,7 @@ public:
         options.normal_maps = REXCVAR_GET(native_view_normal_maps);
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
+        options.shader_variants = REXCVAR_GET(native_view_shader_variants);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
@@ -1159,6 +1161,7 @@ private:
                       {"shared_depths", double(g.shared_depths)},
                       {"textures_first", double(g.textures_first)},
                       {"samples_hw", double(g.samples_hw)},
+                      {"variant_draws", double(g.variant_draws)},
                       {"samples_npot", double(g.samples_npot)},
                       {"samples_small", double(g.samples_small)},
                       {"samples_aspect", double(g.samples_aspect)},

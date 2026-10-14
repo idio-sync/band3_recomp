@@ -243,12 +243,37 @@ float4 Texel(Texture2DArray<float4> t, float2 uv, uint layer, uint2 size) {
 // its layer; the shader's own filtering otherwise
 static const uint kSampleHardware = 1u << 12;
 
+// PSMain's variants (gpu_view.cpp's kMeshVariants), compiled with defines:
+// flags.x's SHADE_FIXED_MASK bits are SHADE_FIXED_BITS', and with
+// SHADE_HW_FILTER every filtered map is kSampleHardware's, so the shader's own
+// filtering goes. Without them, the general PSMain.
+#ifndef SHADE_FIXED_MASK
+#define SHADE_FIXED_MASK 0
+#endif
+#ifndef SHADE_FIXED_BITS
+#define SHADE_FIXED_BITS 0
+#endif
+
+ShadeParams PixelShade() {
+#if SHADE_FIXED_MASK
+    ShadeParams sp = ps_shade;
+    sp.flags.x = (sp.flags.x & ~uint(SHADE_FIXED_MASK)) | uint(SHADE_FIXED_BITS);
+    return sp;
+#else
+    return ps_shade;
+#endif
+}
+
 // by the game's sampler s, else nearest at level 0 (soft_raster.cpp's Read)
 float4 ReadTexture(Texture2DArray<float4> t, SamplerState hw, uint layer, uint2 size, uint4 s,
                    float2 uv, float2 dx, float2 dy) {
     if ((s.x & kSampleFiltered) == 0u) return Texel(t, uv, layer, size);
+#ifdef SHADE_HW_FILTER
+    return t.SampleGrad(hw, float3(uv, float(layer)), dx, dy);
+#else
     if ((s.x & kSampleHardware) != 0u) return t.SampleGrad(hw, float3(uv, float(layer)), dx, dy);
     return SampleTexture(t, layer, size, s, uv, dx, dy);
+#endif
 }
 
 // Filtered map k (tex_layer's order) as the CPU decodes it. Rearranging
@@ -310,11 +335,12 @@ float4 BehindTexel(float2 uv) {
 
 // before FinishMesh
 float4 MeshColor(PixelIn i) {
-    const uint f = ps_shade.flags.x;
+    const ShadeParams sp = PixelShade();
+    const uint f = sp.flags.x;
     // before anything branches; RasterTri works out the same ones
     const float2 dx = ddx_fine(i.uv);
     const float2 dy = ddy_fine(i.uv);
-    const float2 detail_uv = DetailUv(ps_shade, i.uv);
+    const float2 detail_uv = DetailUv(sp, i.uv);
     const float2 detail_dx = ddx_fine(detail_uv);
     const float2 detail_dy = ddy_fine(detail_uv);
     float4 texel = float4(1, 1, 1, 1);
@@ -346,33 +372,33 @@ float4 MeshColor(PixelIn i) {
     float4 proj = float4(0, 0, 0, 0);
     float4 gobo = float4(0, 0, 0, 0);
     if ((f & (kShadeProjMultiply | kShadeProjGobo)) != 0u) {
-        const float2 puv = ProjUv(ps_shade, i.wpos);
+        const float2 puv = ProjUv(sp, i.wpos);
         proj = MapTexel(ProjTexel(proj_tex, puv, tex_layer[0].w, tex_size[3].xy), 3);
         if ((f & kShadeProjGobo) != 0u)
             gobo = MapTexel(ProjTexel(gobo_tex, puv, tex_layer[1].x, tex_size[4].xy), 4);
     }
     float4 behind = float4(1, 1, 1, 1);
     if ((f & kShadeRefract) != 0u)
-        behind = BehindTexel(RefractUv(ps_shade, i.clip, i.depth, normal));
+        behind = BehindTexel(RefractUv(sp, i.clip, i.depth, normal));
     Lighting vertex;
     vertex.diffuse = i.light_diffuse;
     vertex.added = i.light_added;
     // as soft_raster.cpp's ShadowLitCpu
     float lit = 1.0;
     if ((f & kShadeShadow) != 0u) {
-        const ShadowTapSet t = ShadowTaps(ShadowCoord(ps_shade, i.wpos), float2(tex_size[5].xy));
+        const ShadowTapSet t = ShadowTaps(ShadowCoord(sp, i.wpos), float2(tex_size[5].xy));
         const float4 stored = float4(shadow_tex.Load(int3(int(t.x.x), int(t.y.x), 0)),
                                      shadow_tex.Load(int3(int(t.x.y), int(t.y.y), 0)),
                                      shadow_tex.Load(int3(int(t.x.z), int(t.y.z), 0)),
                                      shadow_tex.Load(int3(int(t.x.w), int(t.y.w), 0)));
         lit = ShadowLit(t, stored);
     }
-    return ShadePixel(ps_shade, i.wpos, i.nrm, i.tan, i.bitan, i.color, texel, spec_map, glow,
+    return ShadePixel(sp, i.wpos, i.nrm, i.tan, i.bitan, i.color, texel, spec_map, glow,
                       normal, detail, behind, i.depth, i.ao_sh, proj, gobo, lit, vertex);
 }
 
 float4 FinishMesh(float4 c) {
-    if (AlphaCut(ps_shade, c.a)) discard;
+    if (AlphaCut(PixelShade(), c.a)) discard;
     // clamp first, as a UNORM target would before blending (soft_raster.cpp's
     // Blend())
     if ((pixel_flags.x & kPremultiply) != 0u) c.rgb = saturate(c.rgb) * saturate(c.a);

@@ -219,6 +219,17 @@ constexpr uint32_t kSampleHardware = 1u << 12;
 
 int SampleBits(uint32_t samples) { return samples == 4 ? 2 : samples == 2 ? 1 : 0; }
 
+// native_view_shader_variants: the first of PSMain's variants whose fixed
+// flags.x bits are `flags`', and which keeps the shader's own filtering if
+// `shader_filters` (a map not kSampleHardware's); -1 for PSMain itself
+int MeshVariantFor(uint32_t flags, bool shader_filters) {
+    for (int v = 0; v < shaders::kNumMeshVariants; v++) {
+        const shaders::MeshVariantDef& def = shaders::kMeshVariantDefs[v];
+        if ((flags & def.mask) == def.bits && !(shader_filters && def.hw)) return v;
+    }
+    return -1;
+}
+
 // native_gpu_draw_profile's tag for a draw
 DrawTag TagOf(const FrameCapture& f, const DrawItem& it) {
     DrawTag t;
@@ -407,6 +418,8 @@ struct GpuRenderer::Impl {
     SDL_GPUDevice* device = nullptr;
     SDL_GPUShader* vertex_shader = nullptr;
     SDL_GPUShader* pixel_shader = nullptr;
+    // PSMain's variants, shaders::kMeshVariantDefs' order (MeshVariantFor)
+    SDL_GPUShader* pixel_variants[std::size(shaders::kMeshVariantDefs)] = {};
     // mesh.hlsl's PSSpotCone, PSSoftParticle and PSShadowDepth
     SDL_GPUShader* spot_shader = nullptr;
     SDL_GPUShader* soft_shader = nullptr;
@@ -878,9 +891,10 @@ struct GpuRenderer::Impl {
                               uint32_t samplers, uint32_t storage_buffers, uint32_t uniforms);
     // `pixel`: PSMain's, or PSSpotCone's or PSSoftParticle's in its place;
     // `samples` the target's (the overlay's multisampled one, or 1)
+    // `variant`: PSMain's variant (MeshVariantFor), -1 PSMain itself
     SDL_GPUGraphicsPipeline* Pipeline(int blend, const DepthRules& rules, AlphaMode alpha,
                                       CullWinding cull, PixelKind pixel = PixelKind::kMesh,
-                                      uint32_t samples = 1);
+                                      uint32_t samples = 1, int variant = -1);
     // PSOverlayStart's, into the overlay's targets at `samples`: depth
     // written, not tested; without `depth`, depth left alone (the pass clears
     // it)
@@ -1286,6 +1300,13 @@ bool GpuRenderer::Impl::Create() {
     gamma_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kGammaPixelDxbc,
                               sizeof(kGammaPixelDxbc), kGammaPixelSpirv, sizeof(kGammaPixelSpirv),
                               "PSGamma", 1, 0, 1);
+    for (int v = 0; v < kNumMeshVariants; v++) {
+        const MeshVariantDef& def = kMeshVariantDefs[v];
+        pixel_variants[v] = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, def.dxbc,
+                                       size_t(def.dxbc_size), def.spirv, size_t(def.spirv_size),
+                                       "PSMain", kNumSlots, 0, 1);
+        if (!pixel_variants[v]) return false;
+    }
     if (!vertex_shader || !pixel_shader || !spot_shader || !soft_shader || !shadow_shader ||
         !fullscreen_shader || !resolve_shader || !overlay_start_shader || !downsample_shader ||
         !blur_shader ||
@@ -1464,6 +1485,10 @@ void GpuRenderer::Impl::Release(bool stop_video) {
               velocity_object_pipelines[0], velocity_object_pipelines[1],
               velocity_object_pipelines[2], mip_pipeline})
             if (p) SDL_ReleaseGPUGraphicsPipeline(device, p);
+        for (SDL_GPUShader*& sh : pixel_variants) {
+            if (sh) SDL_ReleaseGPUShader(device, sh);
+            sh = nullptr;
+        }
         for (SDL_GPUShader* sh : {vertex_shader, pixel_shader, spot_shader, soft_shader,
                                   shadow_shader, fullscreen_shader, resolve_shader,
                                   overlay_start_shader,
@@ -1550,9 +1575,10 @@ void GpuRenderer::Impl::Release(bool stop_video) {
 
 SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules& rules,
                                                      AlphaMode alpha, CullWinding cull,
-                                                     PixelKind pixel, uint32_t samples) {
-    const int key = SampleBits(samples) << 12 | int(pixel) << 10 | int(cull) << 8 |
-                    int(alpha) << 6 | blend << 3 | rules.Key();
+                                                     PixelKind pixel, uint32_t samples,
+                                                     int variant) {
+    const int key = (variant + 1) << 14 | SampleBits(samples) << 12 | int(pixel) << 10 |
+                    int(cull) << 8 | int(alpha) << 6 | blend << 3 | rules.Key();
     if (auto it = pipelines.find(key); it != pipelines.end()) return it->second;
     const auto start = std::chrono::steady_clock::now();
 
@@ -1648,6 +1674,7 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     pi.fragment_shader = pixel == PixelKind::kSpot   ? spot_shader
                          : pixel == PixelKind::kSoft ? soft_shader
                          : shadow                    ? shadow_shader
+                         : variant >= 0              ? pixel_variants[variant]
                                                      : pixel_shader;
     pi.vertex_input_state.vertex_buffer_descriptions = &buffer;
     pi.vertex_input_state.num_vertex_buffers = 1;
@@ -1802,6 +1829,14 @@ void GpuRenderer::Impl::Prewarm(uint32_t overlay_samples) {
     for (int blend = kBlendDest; blend <= kBlendPreMultAlpha; blend++)
         Pipeline(blend, {false, false, false}, AlphaMode::kTexture, CullWinding::kNone,
                  PixelKind::kSoft);
+    // PSMain's variants, single-sampled (MeshVariantFor)
+    for (int v = 0; v < shaders::kNumMeshVariants; v++)
+        for (CullWinding cull :
+             {CullWinding::kNone, CullWinding::kClockwise, CullWinding::kCounterClockwise})
+            for (int alpha = 0; alpha < kNumAlphaModes; alpha++)
+                for (int blend = kBlendDest; blend <= kBlendPreMultAlpha; blend++)
+                    for (const DepthRules& r : kRules)
+                        Pipeline(blend, r, AlphaMode(alpha), cull, PixelKind::kMesh, 1, v);
     // shadow maps (PrepShadow sets D3DCULL_CCW)
     if (shadow_maps)
         for (CullWinding cull :
@@ -4503,7 +4538,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             st.skipped++;
             return;
         }
-        if (pipeline != bound) {
+        // a mesh draw's pipeline is bound once its variant is known, below
+        if (shadow_depth && pipeline != bound) {
             timed_uniform([&] { SDL_BindGPUGraphicsPipeline(pass, pipeline); });
             bound = pipeline;
         }
@@ -4674,6 +4710,27 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 else if (w < kMinClassSize || h < kMinClassSize) st.samples_small++;
                 else st.samples_aspect++;
             }
+        }
+        // native_view_shader_variants: PSMain's variant for the flags as
+        // they stand now, and its maps' samplers
+        if (o.shader_variants && kind == PixelKind::kMesh && pass_samples == 1) {
+            bool shader_filters = false;
+            for (int s : {kSlotDiffuse, kSlotSpecular, kSlotGlow, kSlotNormal, kSlotDetail})
+                if (tex[s].texture && (packed_sampler[s][0] & kSampleFiltered) &&
+                    !(packed_sampler[s][0] & kSampleHardware))
+                    shader_filters = true;
+            const int v = MeshVariantFor(sp.flags.x, shader_filters);
+            if (v >= 0) {
+                if (SDL_GPUGraphicsPipeline* p =
+                        Pipeline(blend, RulesFor(it, o, no_z), alpha, cull, kind, 1, v)) {
+                    pipeline = p;
+                    st.variant_draws++;
+                }
+            }
+        }
+        if (pipeline != bound) {
+            timed_uniform([&] { SDL_BindGPUGraphicsPipeline(pass, pipeline); });
+            bound = pipeline;
         }
         for (int s = 0; s < kNumSlots; s++) {
             // behind's and the shadow map's bindings are plain 2D, as is

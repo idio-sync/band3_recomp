@@ -791,6 +791,11 @@ REXCVAR_DEFINE_BOOL(native_view_hardware_sampling, true, "Band3/Advanced/Native 
     "time. Textures the device's samplers can't do (padded into a larger layer, mirrored once, "
     "a border) keep the shader's. Off filters every texture in the shader, as before");
 
+REXCVAR_DEFINE_BOOL(native_view_shader_variants, false, "Band3/Advanced/Native renderer",
+    "Draw the common venue materials with smaller versions of the mesh shader, each with the "
+    "features those materials don't use left out: the same picture for less GPU time. Off "
+    "draws every material with the one shader that does them all");
+
 REXCVAR_DEFINE_STRING(native_view_rt_fallback, "guest", "Band3/Advanced/Native renderer",
     "What the native view's capture keeps of a texture RB3 draws at runtime (outfits, the "
     "crowd, blurs): guest also decodes what guest memory holds, right only with "

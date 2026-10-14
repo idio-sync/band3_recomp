@@ -158,6 +158,8 @@ struct GpuStats {
     // its layer with a sampler the device's can't do
     uint32_t samples_hw = 0, samples_npot = 0, samples_small = 0, samples_aspect = 0,
              samples_mode = 0;
+    // draws made with one of PSMain's variants (native_view_shader_variants)
+    uint32_t variant_draws = 0;
     uint32_t arrays_grown = 0;
     double arrays_ms = 0, arrays_mb = 0;
     // the rebuilt arena's new buffers' megabytes

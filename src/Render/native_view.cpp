@@ -188,6 +188,7 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.shared_depths += g.shared_depths;
     sum.textures_first += g.textures_first;
     sum.samples_hw += g.samples_hw;
+    sum.variant_draws += g.variant_draws;
     sum.samples_npot += g.samples_npot;
     sum.samples_small += g.samples_small;
     sum.samples_aspect += g.samples_aspect;
@@ -848,6 +849,7 @@ class Renderer {
                 o.normal_maps = REXCVAR_GET(native_view_normal_maps);
                 o.filtering = REXCVAR_GET(native_view_texture_filtering);
                 o.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
+                o.shader_variants = REXCVAR_GET(native_view_shader_variants);
                 o.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
                 // drawn frame after frame, so these have the frames before
                 o.trails = true;
