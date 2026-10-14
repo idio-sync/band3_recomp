@@ -93,6 +93,10 @@ constexpr uint32_t kMinArenaBytes = 4u << 20;
 // that a few frames into play, where the rebuild cost a frame 22 to 56 ms
 // (8 of 9 runs of 20th Century Boy on a Radeon 680M)
 constexpr uint32_t kSongArenaBytes = 48u << 20;
+// In a song, each pool's least vertex bytes (an eighth of it for indices),
+// reserved while it loads: a song's first frame sends ~16 MB of meshes seen
+// for the first time, and growing the pools then cost it 6 to 10 ms
+constexpr uint32_t kSongPoolBytes = 20u << 20;
 // holds a song's usual frame: growing it later costs a frame several ms
 constexpr uint32_t kInitialUploadBytes = 32u << 20;
 
@@ -3782,10 +3786,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         return true;
     };
-    if (pool_vert_count &&
-        (!reserve(pool_v, SDL_GPU_BUFFERUSAGE_VERTEX, pool_vert_count * sizeof(Vertex),
+    const uint32_t pool_least = frame_in_song ? kSongPoolBytes : 0;
+    if ((pool_vert_count || pool_least) &&
+        (!reserve(pool_v, SDL_GPU_BUFFERUSAGE_VERTEX,
+                  std::max<uint32_t>(pool_vert_count * sizeof(Vertex), pool_least),
                   st.pool_verts_kb) ||
-         !reserve(pool_i, SDL_GPU_BUFFERUSAGE_INDEX, pool_index_count * 2, st.pool_indices_kb))) {
+         !reserve(pool_i, SDL_GPU_BUFFERUSAGE_INDEX,
+                  std::max<uint32_t>(pool_index_count * 2, pool_least / 8),
+                  st.pool_indices_kb))) {
         return false;
     }
     if (bone_bytes &&
