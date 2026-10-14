@@ -922,6 +922,9 @@ std::string NativeViewJson(const NativeViewStats& s) {
     out += ",\"ms\":" + Distribution(s.frame_ms);
     out += ",\"wait_ms\":" + Distribution(s.wait_ms);
     out += ",\"in_flight_max\":" + std::to_string(s.in_flight_max);
+    out += ",\"slot_waits\":" + std::to_string(s.slot_waits);
+    out += ",\"paint_lag_max\":" + std::to_string(s.paint_lag_max);
+    out += ",\"paints_lag3\":" + std::to_string(s.paints_lag3);
     std::snprintf(buf, sizeof(buf), ",\"paused\":%s,\"paused_ms\":%.1f,\"paused_captures\":%llu",
                   s.paused ? "true" : "false", s.paused_ms,
                   static_cast<unsigned long long>(s.paused_captures));

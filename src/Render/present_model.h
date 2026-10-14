@@ -42,7 +42,11 @@ inline ImageRect LetterboxRect(uint32_t target_w, uint32_t target_h, bool letter
 // slot as newest; each paint samples the newest on the SDK's queue, noting
 // its submission index, and reports the newest completed submission. The
 // worker draws only into a slot that isn't newest and that no unfinished
-// paint sampled. With three, one is always free while paints finish. Not
+// paint sampled. With kCount slots one is free while the paints' GPU work
+// runs up to kCount - 1 paints behind. The SDK presenter's three swap chain
+// buffers let it run three behind: usually it's one, but in fullscreen at
+// 120 Hz it sometimes stayed three, and with three slots the worker then got
+// one every 1.5 paints and drew 80 frames a second until the song ended. Not
 // thread-safe: native_view.cpp holds its mutex around every call.
 //
 // A submitted slot stays taken until Finished and isn't published before:
@@ -56,7 +60,7 @@ inline ImageRect LetterboxRect(uint32_t target_w, uint32_t target_h, bool letter
 // when presenting stopped.
 class PresentSlots {
  public:
-    static constexpr int kCount = 3;
+    static constexpr int kCount = 4;
 
     // steady-clock nanoseconds
     void Start(int64_t now_ns) {

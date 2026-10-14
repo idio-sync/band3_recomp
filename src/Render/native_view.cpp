@@ -622,6 +622,12 @@ class Renderer {
         {
             std::lock_guard lock(mutex_);
             slots_.Completed(completed);
+            if (live_measuring_ && submission > completed) {
+                const uint64_t lag = submission - completed;
+                live_.paint_lag_max =
+                    std::max(live_.paint_lag_max, uint32_t(std::min<uint64_t>(lag, 1000)));
+                if (lag >= 3) live_.paints_lag3++;
+            }
             last_paint_ = std::chrono::steady_clock::now();
             paints_++;
             slot = slots_.Newest();
@@ -1374,6 +1380,7 @@ class Renderer {
             std::lock_guard lock(mutex_);
             const int slot = slots_.Acquire();
             if (slot >= 0 || stop_ || !present_) return slot;
+            if (live_measuring_) live_.slot_waits++;
             paints = paints_;
             if (settle_ && std::chrono::steady_clock::now() - last_paint_ >= kPaintsStopped &&
                 slots_.LastUsed() > slots_.CompletedIndex()) {

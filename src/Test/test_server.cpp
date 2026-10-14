@@ -496,6 +496,9 @@ public:
             out.frame_ms = std::move(live.ms);
             out.wait_ms = std::move(live.wait_ms);
             out.in_flight_max = live.in_flight_max;
+            out.slot_waits = live.slot_waits;
+            out.paint_lag_max = live.paint_lag_max;
+            out.paints_lag3 = live.paints_lag3;
             out.paused = live.paused;
             out.paused_ms = live.paused_ms;
             out.paused_captures = live.paused_captures;

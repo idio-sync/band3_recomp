@@ -378,7 +378,7 @@ class GpuRenderer {
     // and returns once submitted. The presenter, on the SDK's queue, mustn't
     // sample it until OutputDone: nothing else orders it after SDL's queue
     // (present_model.h's PresentSlots). False as RenderFrame.
-    static constexpr int kOutputs = 3;
+    static constexpr int kOutputs = 4;
     bool RenderFrameToOutput(const FrameCapture& frame, const RasterOptions& options, int slot,
                              GpuOutput& out, GpuStats& stats);
     // Whether the GPU has finished `slot`'s last frame; never waits (SDL_gpu's

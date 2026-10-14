@@ -91,8 +91,15 @@ TEST_CASE("a slot a paint sampled is free again only once the GPU finished that 
     CHECK(c != a);
     CHECK(c != b);
     s.Publish(c);
-    // a (paint 10 unfinished) and c (the newest) are taken, and b was
-    // sampled by paint 11: nothing is free
+    s.Shown(c, 12);
+    // the rest, each newest for a paint after
+    for (int i = 3; i < PresentSlots::kCount; i++) {
+        const int d = s.Acquire();
+        REQUIRE(d >= 0);
+        s.Publish(d);
+        s.Shown(d, uint64_t(10 + i));
+    }
+    // every slot is the newest or sampled by an unfinished paint: none free
     CHECK(s.Acquire() == -1);
     // completed indices only go forward
     s.Completed(9);
@@ -106,6 +113,23 @@ TEST_CASE("a slot a paint sampled is free again only once the GPU finished that 
     // both free now: the first one found
     const int next = s.Acquire();
     CHECK((next == a || next == b));
+}
+
+TEST_CASE("paints whose GPU work runs three behind still leave the worker a slot") {
+    // the SDK presenter's three swap chain buffers let its paints finish up
+    // to three paints late; with three slots the worker then found one free
+    // only every other paint or so (80 frames a second at 120 Hz)
+    PresentSlots s;
+    uint64_t paint = 0;
+    for (int frame = 0; frame < 100; frame++) {
+        const int slot = s.Acquire();
+        REQUIRE(slot >= 0);
+        s.Publish(slot);
+        paint++;
+        s.Shown(s.Newest(), paint);
+        if (paint > 3) s.Completed(paint - 3);
+    }
+    CHECK(s.LastUsed() == paint);
 }
 
 TEST_CASE("paints that keep up always leave the worker a slot") {
@@ -130,12 +154,12 @@ TEST_CASE("after the presenter stops, slots the GPU may still read stay taken") 
     s.Shown(a, 5);
     s.Forget();
     CHECK(s.Newest() == -1);
-    // a waits for paint 5; the other two are free
-    const int b = s.Acquire();
-    const int c = s.Acquire();
-    CHECK(b != a);
-    CHECK(c != a);
-    CHECK(c >= 0);
+    // a waits for paint 5; the others are free
+    for (int i = 1; i < PresentSlots::kCount; i++) {
+        const int other = s.Acquire();
+        CHECK(other >= 0);
+        CHECK(other != a);
+    }
     CHECK(s.Acquire() == -1);
     s.Completed(5);
     CHECK(s.Acquire() == a);
@@ -157,12 +181,16 @@ TEST_CASE("a slot submitted to the GPU is never handed out or published before i
     CHECK_FALSE(s.Publish(a));
     CHECK(s.Newest() == -1);
     CHECK(s.Serial() == 0);
-    const int c = s.Acquire();
-    REQUIRE(c >= 0);
-    CHECK(c != a);
-    CHECK(c != b);
+    // the rest are free, then none
+    std::vector<int> rest;
+    for (int i = 2; i < PresentSlots::kCount; i++) {
+        rest.push_back(s.Acquire());
+        REQUIRE(rest.back() >= 0);
+        CHECK(rest.back() != a);
+        CHECK(rest.back() != b);
+    }
     CHECK(s.Acquire() == -1);
-    s.Abandon(c);
+    for (int r : rest) s.Abandon(r);
     // finished: published as any other
     s.Finished(a);
     CHECK(s.InFlight() == 1);

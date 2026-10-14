@@ -116,6 +116,11 @@ struct NativeViewStats {
     std::vector<double> wait_ms;
     // the most of the worker's frames the GPU had at once (LiveViewStats)
     uint32_t in_flight_max = 0;
+    // no output free for the worker, and the presenter's GPU behind the
+    // paints (LiveViewStats)
+    uint64_t slot_waits = 0;
+    uint32_t paint_lag_max = 0;
+    uint64_t paints_lag3 = 0;
     // with renderer native, the worker's pause while the window is
     // minimized (LiveViewStats): on now, its milliseconds and the captures
     // left undrawn in that time

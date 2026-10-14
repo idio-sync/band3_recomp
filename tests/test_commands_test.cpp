@@ -845,6 +845,9 @@ TEST_CASE("native_view stats reports what the live view drew and how long it too
     for (int ms = 20; ms >= 1; ms--) game.view.frame_ms.push_back(ms);
     game.view.wait_ms.assign(20, 1.5);
     game.view.in_flight_max = 2;
+    game.view.slot_waits = 7;
+    game.view.paint_lag_max = 3;
+    game.view.paints_lag3 = 5;
     game.view.rt_on = true;
     game.view.rt_passes = 1200;
     game.view.rt_recorded = 3;
@@ -859,7 +862,8 @@ TEST_CASE("native_view stats reports what the live view drew and how long it too
                      "\"in_flight_max\":2"));
     CHECK(Has(reply, "\"rt_recording\":{\"on\":true,\"passes\":1200,\"recorded\":3,\"draws\":11,\"ms\":0.25}"));
     // not minimized
-    CHECK(Has(reply, "\"in_flight_max\":2,\"paused\":false,\"paused_ms\":0.0,\"paused_captures\":0,"));
+    CHECK(Has(reply, "\"in_flight_max\":2,\"slot_waits\":7,\"paint_lag_max\":3,\"paints_lag3\":5,"
+                     "\"paused\":false,\"paused_ms\":0.0,\"paused_captures\":0,"));
 }
 
 TEST_CASE("native_view stats reports the native renderer's pause while minimized") {

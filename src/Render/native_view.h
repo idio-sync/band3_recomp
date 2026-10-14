@@ -98,6 +98,13 @@ struct LiveViewStats {
     // most worker frames submitted and unfinished at once: 1, or 2 with
     // native_present_pipeline
     uint32_t in_flight_max = 0;
+    // zero-copy and upload paths: times the worker found no output free (a
+    // paint still sampling every one but the newest), and how far the
+    // presenter's GPU ran behind the paints: the most paint submissions not
+    // yet finished as a paint began, and paints that began with 3 or more
+    uint64_t slot_waits = 0;
+    uint32_t paint_lag_max = 0;
+    uint64_t paints_lag3 = 0;
     // renderer native: minimized now (worker draws nothing), total ms
     // minimized, and the captures left undrawn meanwhile (neither rendered
     // nor skipped_busy)
