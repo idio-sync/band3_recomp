@@ -281,6 +281,17 @@ inline bool PhaseLockSteers(bool lock, FrameCapMode mode, double cap_hz, double 
 // distinct with it and 83% without. A rate not known (0) keeps it.
 inline constexpr double kLockedHoldlessHz = 100;
 
+// The phase lock's slack in percent of a refresh for native_phase_lock_slack
+// `setting` (0: by the display's rate) on a display at `display_hz`. At 120 Hz
+// 50% (4.2 ms) left post-processed frames, which reach the window about 1.9 ms
+// after the median, missing their paint about once a second; 65% (5.4 ms)
+// repeated 83% fewer frames for 1.2 ms more lag. Below kLockedHoldlessHz, where
+// the hold still paces frames and 50% is already 8.3 ms at 60 Hz, it stays 50.
+inline int PhaseLockSlackPercent(int setting, double display_hz) {
+    if (setting > 0) return std::clamp(setting, 10, 90);
+    return display_hz >= kLockedHoldlessHz ? 65 : 50;
+}
+
 inline bool PacePublishing(FrameCapMode mode, double game_hz, double display_hz,
                            bool phase_locked = false) {
     if (mode == FrameCapMode::kAuto) return false;

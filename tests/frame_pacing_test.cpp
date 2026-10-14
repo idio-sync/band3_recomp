@@ -220,6 +220,18 @@ TEST_CASE("the phase lock moves the beat toward half a period of slack") {
     CHECK(PhaseLock::Correction(100'000'000, p) <= p / 4);
 }
 
+TEST_CASE("the phase lock's slack follows the display's rate unless it's set") {
+    using band3::pacing::PhaseLockSlackPercent;
+    CHECK(PhaseLockSlackPercent(0, 120) == 65);
+    CHECK(PhaseLockSlackPercent(0, 144) == 65);
+    CHECK(PhaseLockSlackPercent(0, 100) == 65);
+    CHECK(PhaseLockSlackPercent(0, 60) == 50);
+    CHECK(PhaseLockSlackPercent(0, 90) == 50);
+    CHECK(PhaseLockSlackPercent(40, 120) == 40);
+    CHECK(PhaseLockSlackPercent(70, 60) == 70);
+    CHECK(PhaseLockSlackPercent(5, 120) == 10);
+}
+
 TEST_CASE("the phase lock steers to a slack it's given") {
     constexpr int64_t p = 8'333'333;
     constexpr int64_t target = p * 30 / 100;

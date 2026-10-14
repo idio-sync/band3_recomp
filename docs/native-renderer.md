@@ -45,8 +45,8 @@ to `emulated` or `both` they appear once band3 restarts.
   (`native present: zero-copy` or `uploading each frame`).
 - **Phase lock** (`native_phase_lock`). With `frame_cap` at the display's rate (`display`, or a
   number matching it), the cap's beat is moved so each frame reaches the window a set time
-  (`native_phase_lock_slack`) before the refresh that shows it, rather than wherever the cap's
-  clock happens to fall against the display's.
+  (`native_phase_lock_slack`: 65% of a refresh at 100 Hz or more, 50% below) before the refresh
+  that shows it, rather than wherever the cap's clock happens to fall against the display's.
 - **Pacing** (`native_present_pacing`). Each frame is handed to the window a steady delay after
   it's drawn, never more than a frame, so motion steps evenly. It's skipped while the phase lock
   steers on a display of 100 Hz or more (frames already arrive ahead of their refresh, and
