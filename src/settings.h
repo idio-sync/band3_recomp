@@ -153,6 +153,7 @@ REXCVAR_DECLARE(int32_t, native_sync_short_wait_us);
 REXCVAR_DECLARE(bool, native_vblank_free_running);
 REXCVAR_DECLARE(int32_t, native_slow_frame_ms);
 REXCVAR_DECLARE(bool, native_gpu_timestamps);
+REXCVAR_DECLARE(bool, native_gpu_draw_profile);
 REXCVAR_DECLARE(bool, native_bc_textures);
 REXCVAR_DECLARE(bool, native_r8_textures);
 REXCVAR_DECLARE(int32_t, native_deferred_decode_threads);

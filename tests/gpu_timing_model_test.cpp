@@ -1,10 +1,12 @@
 // Checks src/Render/gpu_timing_model.h: the native renderer's GPU timestamps
-// as a ladder of parts, and their ticks into milliseconds by part.
+// as a ladder of parts, and their ticks into milliseconds by part; and
+// draw_profile.h's sums of them by mesh and material.
 
 #include <doctest/doctest.h>
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "src/Render/draw_profile.h"
 #include "src/Render/gpu_timing_model.h"
 
 using namespace band3::render::gpu_timing;
@@ -167,4 +169,59 @@ TEST_CASE("every part has a name of its own") {
             CHECK(std::string(PartName(uint8_t(a))) != PartName(uint8_t(b)));
     }
     CHECK(std::string(PartName(kNone)) == "none");
+}
+
+TEST_CASE("keyed marks time each draw on its own") {
+    Ladder l(8);
+    CHECK(l.Mark(kUpload) == 0);
+    // the same part again, each its own span with its draw's key
+    CHECK(l.MarkKeyed(kWorld, 0) == 1);
+    CHECK(l.MarkKeyed(kWorld, 2) == 2);
+    CHECK(l.MarkKeyed(kWorld, 0) == 3);
+    CHECK(l.Mark(kComposite) == 4);
+    CHECK(l.Mark(kNone) == 5);
+    const std::vector<uint64_t> ticks = {1, 2, 5, 6, 10, 11};
+    // the parts as before: the world 2 to 10
+    const Times t = Timed(l, ticks, 1000);
+    CHECK(t.ms[kWorld] == doctest::Approx(8));
+    std::vector<double> by_key;
+    AccumulateKeyed(l.Labels().data(), l.Keys().data(), ticks.data(), ticks.size(), 1000, by_key);
+    REQUIRE(by_key.size() == 3);
+    CHECK(by_key[0] == doctest::Approx(3 + 4));
+    CHECK(by_key[1] == 0);
+    CHECK(by_key[2] == doctest::Approx(1));
+    // full: the end's slot stays free
+    Ladder small(3);
+    CHECK(small.MarkKeyed(kWorld, 0) == 0);
+    CHECK(small.MarkKeyed(kWorld, 1) == 1);
+    CHECK(small.MarkKeyed(kWorld, 2) == -1);
+    CHECK(small.Dropped() == 1);
+    CHECK(small.Mark(kNone) == 2);
+}
+
+TEST_CASE("the draw profile sums by mesh and material") {
+    using band3::render::DrawProfile;
+    using band3::render::DrawTime;
+    DrawProfile p;
+    DrawTime a{}, b{}, c{};
+    a.tag.mesh = 1, a.tag.mat = 10, a.tag.tris = 100, a.ms = 2;
+    b.tag.mesh = 1, b.tag.mat = 11, b.ms = 1;
+    c.tag.mesh = 2, c.tag.mat = 10, c.ms = 0.5;
+    p.AddFrame({a, b, c});
+    a.ms = 3;
+    p.AddFrame({a, c});
+    CHECK(p.Frames() == 2);
+    CHECK(p.Groups() == 3);
+    CHECK(p.TotalMs() == doctest::Approx(7));
+    const auto top = p.Top(2);
+    REQUIRE(top.size() == 2);
+    CHECK(top[0].tag.mesh == 1);
+    CHECK(top[0].tag.mat == 10);
+    CHECK(top[0].tag.tris == 100);
+    CHECK(top[0].ms == doctest::Approx(5));
+    CHECK(top[0].draws == 2);
+    CHECK(top[1].ms == doctest::Approx(1));
+    p.Reset();
+    CHECK(p.Frames() == 0);
+    CHECK(p.Top(5).empty());
 }

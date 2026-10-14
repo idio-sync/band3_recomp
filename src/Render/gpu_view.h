@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "src/Render/draw_profile.h"
 #include "src/Render/gpu_timing_model.h"
 #include "src/Render/scene_capture.h"
 #include "src/Render/soft_raster.h"
@@ -202,6 +203,9 @@ struct GpuStats {
     double gpu_ms[gpu_timing::kParts] = {};
     double gpu_total_ms = 0;
     uint32_t gpu_marks_dropped = 0, gpu_bad_spans = 0;
+    // native_gpu_draw_profile, with the timings: each back-buffer world draw's
+    // GPU time (draw_profile.h)
+    std::vector<DrawTime> draw_times;
 };
 
 // Whether a frame submits at its resolve and continues in a new command

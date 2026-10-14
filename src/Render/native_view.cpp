@@ -44,6 +44,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <utility>
 
 // See native_view.h.
@@ -843,6 +844,7 @@ class Renderer {
                 o.pre_buffer = true;
                 o.gpu_labels = REXCVAR_GET(dred);
                 o.gpu_timestamps = REXCVAR_GET(native_gpu_timestamps);
+                o.gpu_draw_profile = o.gpu_timestamps && REXCVAR_GET(native_gpu_draw_profile);
                 o.inline_mips = REXCVAR_GET(native_view_inline_mips);
                 o.premake_targets = REXCVAR_GET(native_view_premake_targets);
                 o.premake_arrays = REXCVAR_GET(native_view_premake_arrays);
@@ -1245,6 +1247,7 @@ class Renderer {
                 slots_.Abandon(d.slot);
             }
         }
+        if (d.drew_gpu && !d.gs.draw_times.empty()) ProfileDraws(d.gs.draw_times);
         // captures from before the stats restarted, or redraws, don't count
         if (live_measuring_ && d.cap->frame > live_last_) {
             const uint64_t skipped = d.cap->frame - live_last_ - 1;
@@ -1430,6 +1433,51 @@ class Renderer {
     // counted
     bool live_measuring_ = false;
     LiveViewStats live_;
+    // native_gpu_draw_profile's sums since it last logged them
+    static constexpr int64_t kDrawProfileNs = 10000000000;
+    DrawProfile draw_profile_;
+    int64_t draw_profile_since_ = 0;
+
+    // native_gpu_draw_profile: adds a frame's world draws, and every
+    // kDrawProfileNs logs the meshes and materials that took the most
+    void ProfileDraws(const std::vector<DrawTime>& draws) {
+        const int64_t now = Nanoseconds(std::chrono::steady_clock::now());
+        if (!draw_profile_since_) draw_profile_since_ = now;
+        draw_profile_.AddFrame(draws);
+        if (now - draw_profile_since_ < kDrawProfileNs) return;
+        const double frames = double(draw_profile_.Frames());
+        REXLOG_INFO("native renderer: draw profile over {:.1f} s, {} frames with world draws: "
+                    "{:.2f} ms of GPU a frame in {} meshes and materials; the most, a frame:",
+                    double(now - draw_profile_since_) / 1e9, draw_profile_.Frames(),
+                    draw_profile_.TotalMs() / frames, draw_profile_.Groups());
+        // by kind: shader type, blend, skinned
+        std::map<std::tuple<int32_t, int, bool>, DrawProfile::Row> kinds;
+        for (const DrawProfile::Row& r : draw_profile_.Top(SIZE_MAX)) {
+            DrawProfile::Row& k = kinds[{r.tag.shader_type, r.tag.blend, r.tag.skinned}];
+            k.ms += r.ms;
+            k.draws += r.draws;
+            k.tag.tris += uint32_t(std::min<uint64_t>(uint64_t(r.tag.tris) * r.draws, UINT32_MAX));
+        }
+        std::vector<std::pair<std::tuple<int32_t, int, bool>, DrawProfile::Row>> by_kind(
+            kinds.begin(), kinds.end());
+        std::sort(by_kind.begin(), by_kind.end(),
+                  [](const auto& a, const auto& b) { return a.second.ms > b.second.ms; });
+        for (const auto& [kind, k] : by_kind)
+            REXLOG_INFO("  by kind: {:6.3f} ms {:6.1f} draws {:8.0f} tris, shader {} blend {}{}",
+                        k.ms / frames, double(k.draws) / frames, double(k.tag.tris) / frames,
+                        std::get<0>(kind), std::get<1>(kind), std::get<2>(kind) ? " skinned" : "");
+        for (const DrawProfile::Row& r : draw_profile_.Top(40)) {
+            const DrawTag& t = r.tag;
+            REXLOG_INFO("  {:6.3f} ms {:5.1f} draws {:6} tris, mesh '{}' material '{}', shader "
+                        "{} options {:#x} blend {} z {}{}{}",
+                        r.ms / frames, double(r.draws) / frames, t.tris,
+                        GuestObjectName(t.mesh), GuestObjectName(t.mat), t.shader_type,
+                        t.options, t.blend, t.z_mode, t.skinned ? " skinned" : "",
+                        t.draw_mode ? " draw mode " + std::to_string(t.draw_mode) : "");
+        }
+        draw_profile_.Reset();
+        draw_profile_since_ = now;
+    }
     uint64_t live_base_ = 0, live_last_ = 0;
     // -1 none yet
     int live_last_kind_ = -1;

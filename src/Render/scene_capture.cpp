@@ -2598,6 +2598,17 @@ std::shared_ptr<const FrameCapture> FinishFrame(uint8_t* base) {
 
 }  // namespace
 
+std::string GuestObjectName(uint32_t obj) {
+    auto* memory = rex::system::kernel_memory();
+    if (!memory || obj < 0x10000u || obj >= 0xF0000000u) return {};
+    const Guest g{static_cast<uint8_t*>(memory->virtual_membase())};
+    if (std::string name = VirtualBaseName(g, obj); !name.empty()) return name;
+    std::string name = ReadName(g, g.U32(obj + kObj_Name));
+    if (!std::all_of(name.begin(), name.end(), [](char c) { return c >= 0x20 && c < 0x7f; }))
+        return {};
+    return name;
+}
+
 void TakeAnnouncedTargets(AnnounceQueue& into) {
     std::lock_guard lock(g_announce_mutex);
     g_announced.TakeInto(into);

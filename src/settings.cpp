@@ -692,6 +692,12 @@ REXCVAR_DEFINE_BOOL(native_gpu_timestamps, false, "Band3/Advanced/Native rendere
     "harness's numbers. Direct3D 12 and Vulkan. On costs a few dozen timestamps a frame, 0.1 to "
     "0.2 ms of the frame's wait for the GPU, so it's off unless measuring");
 
+REXCVAR_DEFINE_BOOL(native_gpu_draw_profile, false, "Band3/Advanced/Native renderer",
+    "With native_gpu_timestamps, also time each world draw on the GPU (a timestamp before every "
+    "one) and log every 10 seconds the meshes and materials that took the most, for finding what "
+    "makes the world slow. Its timestamps cost GPU time of their own, so it's off unless "
+    "profiling");
+
 REXCVAR_DEFINE_BOOL(native_bc_textures, true, "Band3/Advanced/Native renderer",
     "Keep RB3's compressed textures (DXT1, DXT3, DXT5, DXN) compressed on the GPU, as BC1, BC2, "
     "BC3 and BC5, where it has those formats: the native renderer decodes a song's or a shot's "

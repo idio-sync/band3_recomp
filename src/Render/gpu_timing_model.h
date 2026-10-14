@@ -40,6 +40,8 @@ enum Part : uint8_t {
 };
 // a mark that starts no part: the end of a ladder, or a gap that isn't one
 inline constexpr uint8_t kNone = 0xff;
+// a mark's key when it times no single draw (Ladder::MarkKeyed)
+inline constexpr uint32_t kNoKey = 0xffffffffu;
 
 inline const char* PartName(uint8_t p) {
     static constexpr const char* kNames[kParts] = {
@@ -67,20 +69,35 @@ class Ladder {
             return -1;
         }
         labels_.push_back(part);
+        keys_.push_back(kNoKey);
+        return int(labels_.size() - 1);
+    }
+    // As Mark, but always a new span, `key`'s (native_gpu_draw_profile: one
+    // per draw, the key its tag); -1 if full
+    int MarkKeyed(uint8_t part, uint32_t key) {
+        if (labels_.size() + 1 >= capacity_) {
+            dropped_++;
+            return -1;
+        }
+        labels_.push_back(part);
+        keys_.push_back(key);
         return int(labels_.size() - 1);
     }
     void Reset() {
         labels_.clear();
+        keys_.clear();
         dropped_ = 0;
     }
     uint32_t Count() const { return uint32_t(labels_.size()); }
     bool Open() const { return !labels_.empty() && labels_.back() != kNone; }
     uint32_t Dropped() const { return dropped_; }
     const std::vector<uint8_t>& Labels() const { return labels_; }
+    const std::vector<uint32_t>& Keys() const { return keys_; }
 
  private:
     uint32_t capacity_;
     std::vector<uint8_t> labels_;
+    std::vector<uint32_t> keys_;
     uint32_t dropped_ = 0;
 };
 
@@ -112,6 +129,21 @@ inline void Accumulate(const uint8_t* labels, const uint64_t* ticks, size_t coun
         }
         t.ms[labels[i]] += ms;
         if (labels[i] != kIdle) t.total_ms += ms;
+    }
+}
+
+// Adds each keyed span's ms to out[key] (grown to fit); spans Accumulate
+// would leave out are left out here too.
+inline void AccumulateKeyed(const uint8_t* labels, const uint32_t* keys, const uint64_t* ticks,
+                            size_t count, uint64_t frequency, std::vector<double>& out) {
+    if (!frequency) return;
+    for (size_t i = 0; i + 1 < count; i++) {
+        if (keys[i] == kNoKey || labels[i] >= kParts) continue;
+        if (!ticks[i] || !ticks[i + 1] || ticks[i + 1] < ticks[i]) continue;
+        const double ms = double(ticks[i + 1] - ticks[i]) * 1000.0 / double(frequency);
+        if (ms > kMaxSpanMs) continue;
+        if (keys[i] >= out.size()) out.resize(size_t(keys[i]) + 1);
+        out[keys[i]] += ms;
     }
 }
 

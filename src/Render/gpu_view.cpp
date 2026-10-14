@@ -211,6 +211,24 @@ SDL_GPUSampleCount SampleCount(uint32_t samples) {
 }
 int SampleBits(uint32_t samples) { return samples == 4 ? 2 : samples == 2 ? 1 : 0; }
 
+// native_gpu_draw_profile's tag for a draw
+DrawTag TagOf(const FrameCapture& f, const DrawItem& it) {
+    DrawTag t;
+    t.mesh = it.mesh;
+    if (it.shade >= 0 && size_t(it.shade) < f.shades.size()) {
+        const ShadeInputs& s = f.shades[it.shade];
+        t.mat = s.mat;
+        t.shader_type = s.shader_type;
+        t.options = s.options;
+    }
+    t.blend = it.blend;
+    t.z_mode = it.z_mode;
+    t.tris = it.geom ? uint32_t(it.geom->indices.size() / 3) : 0;
+    t.skinned = !it.bones.empty();
+    t.draw_mode = it.draw_mode;
+    return t;
+}
+
 // the triangles a draw's pipeline culls, by their winding on the screen
 // (DrawItem::cull): what soft_raster.cpp's RasterTri drops
 enum class CullWinding { kNone, kClockwise, kCounterClockwise, kAll };
@@ -571,7 +589,8 @@ struct GpuRenderer::Impl {
     // until the next frame resolves it. The readback has two regions per frame
     // (its own, the aside's), never overwritten before read: outputs wait for
     // their fence (native_view.cpp's PresentSlots), RenderFrame reads at once.
-    static constexpr uint32_t kTimingSlots = 256;
+    // room for native_gpu_draw_profile's timestamp a world draw
+    static constexpr uint32_t kTimingSlots = 1024;
     static constexpr int kFrameRegions = kOutputs + 1;
     static constexpr int kAsideRegion = kOutputs + 1;
     uint64_t timestamp_frequency = 0;
@@ -604,7 +623,12 @@ struct GpuRenderer::Impl {
         uint32_t dropped = 0;
         bool pending = false;
         int aside_bank = 0;  // Vulkan's: where the aside's times are
+        // native_gpu_draw_profile: the ladder's keys, and the draws they tag
+        std::vector<uint32_t> keys;
+        std::vector<DrawTag> tags;
     };
+    // the recording frame's timed draws (native_gpu_draw_profile)
+    std::vector<DrawTag> draw_tags;
     Timed timed[kFrameRegions];
 
     // Everything a frame sends goes through this one transfer buffer and one
@@ -960,15 +984,18 @@ struct GpuRenderer::Impl {
     // region's (`slot`'s or RenderFrame's), from kUpload.
     void StartTiming(SDL_GPUCommandBuffer* cmd, const RasterOptions& o, int slot, int pre_pass,
                      bool ahead_pass);
-    // GPU time from here goes to `part` (gpu_timing::Ladder::Mark); the
-    // aside's ladder marks only its start and end (kNone)
-    void MarkTime(SDL_GPUCommandBuffer* cmd, uint8_t part);
+    // GPU time from here goes to `part` (gpu_timing::Ladder::Mark), or with a
+    // `key` to that draw, a span of its own (MarkKeyed); the aside's ladder
+    // marks only its start and end (kNone)
+    void MarkTime(SDL_GPUCommandBuffer* cmd, uint8_t part, uint32_t key = gpu_timing::kNoKey);
     // in a frame's last command buffer before submit: ends its ladder and
     // the aside's, resolving both into the frame's readback region
     void ResolveTimes(SDL_GPUCommandBuffer* cmd);
     // once the GPU has finished `region`'s frame: its unread times into `st`
     // (GpuStats::gpu_ms)
     void ReadTimes(int region, GpuStats& st);
+    // native_gpu_draw_profile: `t`'s draws' times from its ladder's `ticks`
+    void DrawTimes(const Timed& t, const uint64_t* ticks, GpuStats& st);
     void ReleaseTiming();
     // Draws `frame` into output `slot`, or with -1 into `graded`, read back
     // into rgba. `pre_pass` (from 1): that world pass before a refracting
@@ -2938,6 +2965,7 @@ void GpuRenderer::Impl::StartTiming(SDL_GPUCommandBuffer* cmd, const RasterOptio
 #endif
     if (!aside) {
         ladder.Reset();
+        draw_tags.clear();
         timed[timing_region].pending = false;
     }
     MarkTime(cmd, ahead_pass ? gpu_timing::kWorldAhead
@@ -2945,7 +2973,7 @@ void GpuRenderer::Impl::StartTiming(SDL_GPUCommandBuffer* cmd, const RasterOptio
                              : gpu_timing::kUpload);
 }
 
-void GpuRenderer::Impl::MarkTime(SDL_GPUCommandBuffer* cmd, uint8_t part) {
+void GpuRenderer::Impl::MarkTime(SDL_GPUCommandBuffer* cmd, uint8_t part, uint32_t key) {
 #ifdef _WIN32
     if (timing_region < 0) return;
     auto* list = static_cast<ID3D12GraphicsCommandList*>(TimingList(cmd));
@@ -2958,7 +2986,7 @@ void GpuRenderer::Impl::MarkTime(SDL_GPUCommandBuffer* cmd, uint8_t part) {
     gpu_timing::Ladder& l = timing_aside ? aside_ladder : ladder;
     // the aside's are one part each, from start to end
     if (timing_aside && part != gpu_timing::kNone && l.Open()) return;
-    const int at = l.Mark(part);
+    const int at = key == gpu_timing::kNoKey ? l.Mark(part) : l.MarkKeyed(part, key);
     if (at < 0) return;
     list->EndQuery(query_heap, D3D12_QUERY_TYPE_TIMESTAMP,
                    uint32_t(timing_region) * kTimingSlots + uint32_t(at));
@@ -2972,7 +3000,7 @@ void GpuRenderer::Impl::MarkTime(SDL_GPUCommandBuffer* cmd, uint8_t part) {
     }
     gpu_timing::Ladder& l = timing_aside ? aside_ladder : ladder;
     if (timing_aside && part != gpu_timing::kNone && l.Open()) return;
-    const int at = l.Mark(part);
+    const int at = key == gpu_timing::kNoKey ? l.Mark(part) : l.MarkKeyed(part, key);
     if (at < 0) return;
     // when everything recorded before it has finished, as Direct3D 12's
     vk_write_timestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, vk_query_pool,
@@ -2995,6 +3023,9 @@ void GpuRenderer::Impl::ResolveTimes(SDL_GPUCommandBuffer* cmd) {
                            ladder.Count(), query_readback, at);
     Timed& t = timed[r];
     t.labels = ladder.Labels();
+    t.keys = ladder.Keys();
+    t.tags.swap(draw_tags);
+    draw_tags.clear();
     t.dropped = ladder.Dropped();
     t.aside.clear();
     // the aside's, if ended (one left open was cut short: not counted)
@@ -3015,6 +3046,9 @@ void GpuRenderer::Impl::ResolveTimes(SDL_GPUCommandBuffer* cmd) {
     if (timing_region < 0) return;
     Timed& t = timed[timing_region];
     t.labels = ladder.Labels();
+    t.keys = ladder.Keys();
+    t.tags.swap(draw_tags);
+    draw_tags.clear();
     t.dropped = ladder.Dropped();
     t.aside.clear();
     if (aside_ladder.Count() && !aside_ladder.Open()) {
@@ -3055,6 +3089,7 @@ void GpuRenderer::Impl::ReadTimes(int region, GpuStats& st) {
     st.gpu_total_ms = times.total_ms;
     st.gpu_marks_dropped = t.dropped;
     st.gpu_bad_spans = times.bad;
+    DrawTimes(t, ticks, st);
 #elif defined(__linux__)
     if (region < 0 || region >= kFrameRegions || !vk_query_pool) return;
     Timed& t = timed[region];
@@ -3081,10 +3116,22 @@ void GpuRenderer::Impl::ReadTimes(int region, GpuStats& st) {
     st.gpu_total_ms = times.total_ms;
     st.gpu_marks_dropped = t.dropped;
     st.gpu_bad_spans = times.bad;
+    DrawTimes(t, ticks, st);
 #else
     (void)region;
     (void)st;
 #endif
+}
+
+void GpuRenderer::Impl::DrawTimes(const Timed& t, const uint64_t* ticks, GpuStats& st) {
+    st.draw_times.clear();
+    if (t.tags.empty() || t.keys.size() != t.labels.size()) return;
+    std::vector<double> by_key;
+    gpu_timing::AccumulateKeyed(t.labels.data(), t.keys.data(), ticks, t.labels.size(),
+                                timestamp_frequency, by_key);
+    st.draw_times.reserve(t.tags.size());
+    for (size_t i = 0; i < t.tags.size(); i++)
+        st.draw_times.push_back({t.tags[i], i < by_key.size() ? by_key[i] : 0.0});
 }
 
 void GpuRenderer::Impl::ReleaseTiming() {
@@ -4727,6 +4774,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     const SDL_Rect r{x0, 0, x1 - x0, int(height)};
                     SDL_SetGPUScissor(pass, &r);
                     scissor_cut = cut;
+                }
+                if (!resolved && o.gpu_draw_profile && timing_region >= 0 && !timing_aside) {
+                    MarkTime(cmd, gpu_timing::kWorld, uint32_t(draw_tags.size()));
+                    draw_tags.push_back(TagOf(frame, it));
                 }
                 draw(d, alpha, false, false, depth_map, overlay_whole && !cut);
                 depth_fresh = false;

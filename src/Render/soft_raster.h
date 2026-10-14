@@ -161,6 +161,9 @@ struct RasterOptions {
     // GPU (native_gpu_timestamps), D3D12 only: per-part timestamps into
     // GpuStats::gpu_ms (gpu_timing_model.h)
     bool gpu_timestamps = false;
+    // GPU (native_gpu_draw_profile), with gpu_timestamps: a timestamp before
+    // each back-buffer world draw, into GpuStats::draw_times
+    bool gpu_draw_profile = false;
     // GPU (native_view_inline_mips), D3D12 only: texture pass mips drawn at
     // the end of the frame's command buffer (mips.hlsl); off, SDL's
     // GenerateMipmaps in a command buffer of their own

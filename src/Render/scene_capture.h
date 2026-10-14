@@ -820,6 +820,11 @@ uint64_t WaitForCapture(uint64_t epoch, std::chrono::nanoseconds timeout);
 // wakes WaitForCapture as a capture would (the worker has another reason to draw)
 void WakeCaptureWaiters();
 
+// For logs: a guest Hmx::Object's name (a RndMesh's, whose Object is a virtual
+// base, or a material's), "" if it has none readable. Reads guest memory as it
+// is now: an object freed since its capture reads as garbage or "".
+std::string GuestObjectName(uint32_t obj);
+
 // End times of the newest few thousand DxRnd::Presents from `since` on,
 // oldest first, and the total since startup (present_model.h's PresentTimes)
 std::vector<std::chrono::steady_clock::time_point> GamePresentTimes(

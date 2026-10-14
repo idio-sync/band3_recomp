@@ -123,6 +123,12 @@ What each does, how it was measured and why it defaults as it does. The
   venue without a kept world to read) has those passes' own parts after the line's counts
   ("pre: plan ... (walk ...: the render targets and texture arrays made), upload, record,
   submit, waiting for the GPU, evict").
+- `native_gpu_draw_profile` (off): with `native_gpu_timestamps`, a timestamp before each
+  back-buffer world draw too (`gpu_timing_model.h`'s `MarkKeyed`), summed by mesh and material
+  (`draw_profile.h`) and logged every 10 s: the groups by shader type and blend, then the 40 that
+  took the most, named from guest memory. A draw's span runs to the next timestamp, so with the
+  GPU overlapping draws it's roughly the time the draw added; the timestamps themselves cost
+  about 2 ms of a 1080p post frame on the Steam Deck.
 - `native_gpu_timestamps` (off): times each frame's parts on the GPU with timestamps written
   between them (`src/Render/gpu_timing_model.h`): its upload, the world, the texture passes
   (`pass_shadow`, `pass_spot` for the spotlights' targets, `pass_other` for the rest: outfits,
