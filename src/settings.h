@@ -114,6 +114,7 @@ REXCVAR_DECLARE(std::string, http_address);
 REXCVAR_DECLARE(bool, http_allow_cors);
 REXCVAR_DECLARE(bool, http_allow_scripts);
 REXCVAR_DECLARE(bool, http_rhythmverse);
+REXCVAR_DECLARE(bool, http_qr_code);
 REXCVAR_DECLARE(std::string, ha_mqtt_host);
 REXCVAR_DECLARE(int32_t, ha_mqtt_port);
 REXCVAR_DECLARE(std::string, ha_mqtt_username);

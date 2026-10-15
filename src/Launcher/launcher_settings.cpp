@@ -363,6 +363,8 @@ constexpr Setting kSettings[] = {
      .widget = kIntStepper, .range = kPorts, .shown_when = kWithHttp},
     {.cvar = "http_rhythmverse", .tab = kOnline, .section = "Web song browser",
      .label = "RhythmVerse downloads", .widget = kCheckbox, .shown_when = kWithHttp},
+    {.cvar = "http_qr_code", .tab = kOnline, .section = "Web song browser",
+     .label = "QR code in the Music Library", .widget = kCheckbox, .shown_when = kWithHttp},
     {.cvar = "discord_enabled", .tab = kOnline, .section = "Discord",
      .label = "Discord presence", .widget = kCheckbox},
     {.cvar = "lastfm_enabled", .tab = kOnline, .section = "Scrobbling",

@@ -232,7 +232,11 @@ that it can't scrobble to Last.fm; ListenBrainz works either way.
 Turn on `http_enabled` (then restart) and band3 serves a web page on port 21070
 (`http_port`) to this PC and the local network (`http_address` 127.0.0.1 keeps it to this
 PC). The log says where to open it
-(`Web server: listening on 0.0.0.0:21070, open http://192.168.1.20:21070/`).
+(`Web server: listening on 0.0.0.0:21070, open http://192.168.1.20:21070/`), and the
+Music Library shows it at the top, between its title and the profile's name: a QR code
+a phone can scan, with the address beside it in the menu's font. `http_qr_code`
+(`[http] qr_code`) turns that off; it isn't shown while the server listens on 127.0.0.1,
+which a phone can't reach.
 
 <img src="images/web-song-browser.png" alt="The web song browser" width="520">
 

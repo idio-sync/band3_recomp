@@ -497,6 +497,10 @@ REXCVAR_DEFINE_BOOL(http_rhythmverse, true, "Band3/Online",
     "without a restart, as songs bought from the Xbox store did, and band3 checks "
     "RhythmVerse for newer versions of them when it starts");
 
+REXCVAR_DEFINE_BOOL(http_qr_code, true, "Band3/Online",
+    "Show a QR code for the web page, and its address, at the top of the Music Library, so a "
+    "phone can open it by scanning the screen");
+
 // Home Assistant (src/Net/home_assistant.h): a host or a webhook URL turns it on
 REXCVAR_DEFINE_STRING(ha_mqtt_host, "", "Band3/Online",
     "Home Assistant's MQTT broker (host name or address), which band3 tells the song, score, "

@@ -1,6 +1,8 @@
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <optional>
+#include <string>
 
 struct PPCContext;
 
@@ -15,6 +17,14 @@ namespace band3::http {
 void StartServer();
 // http_enabled was set at startup, so the hooks keep what /status reports
 bool Enabled();
+
+// The address (http_address) and port the server listens on while it does;
+// nullopt before it starts, when it couldn't, and once it stops. Any thread.
+struct Listening {
+    std::string address;
+    int port = 0;
+};
+std::optional<Listening> ListeningOn();
 void StopServer();
 
 // Runs the game work requests are waiting on. App::DrawRegular calls it once

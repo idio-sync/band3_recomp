@@ -70,6 +70,7 @@ constexpr IniSetting kIniSettings[] = {
     {"http", "allow_cors", "http_allow_cors"},
     {"http", "allow_scripts", "http_allow_scripts"},
     {"http", "rhythmverse", "http_rhythmverse"},
+    {"http", "qr_code", "http_qr_code"},
     {"homeassistant", "mqtt_host", "ha_mqtt_host"},
     {"homeassistant", "mqtt_port", "ha_mqtt_port"},
     {"homeassistant", "mqtt_username", "ha_mqtt_username"},

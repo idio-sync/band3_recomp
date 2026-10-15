@@ -771,6 +771,10 @@ void SetTimeouts(socket_t s) {
 #endif
 }
 
+// where the server listens while it does (ListeningOn)
+std::mutex g_listening_mutex;
+std::optional<Listening> g_listening;
+
 class Server {
 public:
     static Server& Get() {
@@ -820,6 +824,10 @@ public:
         }
         stopping_ = false;
         thread_ = std::thread([this] { Run(); });
+        {
+            std::lock_guard lock(g_listening_mutex);
+            g_listening = Listening{startup.http_address, port};
+        }
         // on every address, the one other devices reach it at
         std::string shown = startup.http_address;
         if (addr.sin_addr.s_addr == htonl(INADDR_ANY)) {
@@ -835,6 +843,10 @@ public:
     void Stop() {
         if (!thread_.joinable()) return;
         stopping_ = true;
+        {
+            std::lock_guard lock(g_listening_mutex);
+            g_listening.reset();
+        }
         {
             std::lock_guard lock(g_jobs_mutex);
             g_stopping = true;
@@ -1003,6 +1015,11 @@ void StopServer() {
 }
 
 bool Enabled() { return band3::settings::Startup().http_enabled; }
+
+std::optional<Listening> ListeningOn() {
+    std::lock_guard lock(g_listening_mutex);
+    return g_listening;
+}
 
 bool RunOnGameThreadAndWait(std::function<void(PPCContext&, uint8_t*)> job) {
     return RunOnGameThread(std::move(job));

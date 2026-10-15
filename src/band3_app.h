@@ -57,6 +57,7 @@
 #include "Net/liveless_rooms_panel.h"
 #include "Net/online_hooks.h"
 #include "Net/http_server.h"
+#include "Net/song_pick_qr.h"
 #include "Render/gpu_view.h"
 #include "Render/native_view.h"
 #include "Render/renderer_switch.h"
@@ -141,6 +142,8 @@ class Band3App : public rex::ReXApp {
   using rex::ReXApp::ReXApp;
   std::unique_ptr<DebugOverlayDialog> debug_overlay_;
   std::unique_ptr<MusicVideoNudgeDialog> music_video_nudge_;
+  // the web page's QR code on the song list, see src/Net/song_pick_qr.h
+  std::unique_ptr<band3::song_pick_qr::SongPickQrDialog> song_pick_qr_;
   std::unique_ptr<band3::input::InstrumentLabDialog> instrument_lab_;
   std::unique_ptr<band3::input::MenuShortcutDialog> menu_shortcut_;
   // the Liveless Rooms panel, see src/Net/liveless_rooms_panel.h
@@ -355,6 +358,7 @@ class Band3App : public rex::ReXApp {
             .quit = [this] { QuitFromLauncher(); },
         });
     if (debug_overlay_) debug_overlay_->set_hidden(true);
+    if (song_pick_qr_) song_pick_qr_->set_hidden(true);
     return std::nullopt;
   }
 
@@ -402,6 +406,7 @@ class Band3App : public rex::ReXApp {
     app_context().CallInUIThreadDeferred([this, paths = std::move(paths)] {
       launcher_.reset();
       if (debug_overlay_) debug_overlay_->set_hidden(false);
+      if (song_pick_qr_) song_pick_qr_->set_hidden(false);
       StartFrameCap();
       band3::settings::SnapshotStartupValues();
       auto resume = std::move(resume_);
@@ -568,6 +573,8 @@ class Band3App : public rex::ReXApp {
     band3::render::StopNativeView();
     // the F9 window's worker would draw on the CPU once the GPU is gone
     native_view_.reset();
+    // its caption's textures, before the GPU device goes
+    song_pick_qr_.reset();
     band3::render::GpuRenderer::Get().Shutdown();
     band3::discord::Stop();
     band3::scrobble::Stop();
@@ -585,6 +592,8 @@ class Band3App : public rex::ReXApp {
       // [ and ]: the playing music video earlier (when the singer's lips come
       // after the sound) or later, 50 ms a press, saved to its .ini
       music_video_nudge_ = std::make_unique<MusicVideoNudgeDialog>(drawer);
+      song_pick_qr_ = std::make_unique<band3::song_pick_qr::SongPickQrDialog>(
+          drawer, [this] { return immediate_drawer(); });
       rex::ui::RegisterBind("bind_music_video_earlier", "LBracket",
                             "Show the playing music video 50 ms earlier",
                             [] { band3::video::NudgeMusicVideo(0.05); });
@@ -628,6 +637,7 @@ class Band3App : public rex::ReXApp {
       ingame_settings_.reset();
       debug_overlay_.reset();
       music_video_nudge_.reset();
+      song_pick_qr_.reset();
       instrument_lab_.reset();
       menu_shortcut_.reset();
       rooms_panel_.reset();

@@ -78,6 +78,7 @@ add_executable(band3_tests
     http_request_test.cpp
     album_art_test.cpp
     milo_test.cpp
+    song_pick_qr_test.cpp
     game_assets_test.cpp
     lyrics_test.cpp
     live_events_test.cpp
@@ -197,6 +198,8 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Net/json.cpp
     ${BAND3_ROOT}/src/History/score_history.cpp
     ${BAND3_ROOT}/src/Net/milo.cpp
+    ${BAND3_ROOT}/src/Net/song_pick_qr_model.cpp
+    ${BAND3_ROOT}/src/ThirdParty/qrcodegen/qrcodegen.cpp
     ${BAND3_ROOT}/src/Net/game_assets.cpp
     ${BAND3_ROOT}/src/Net/lyrics.cpp
     ${BAND3_ROOT}/src/Net/live_events.cpp
