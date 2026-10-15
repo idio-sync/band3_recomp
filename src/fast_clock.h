@@ -23,7 +23,10 @@
 // 20 ms or more after its first call. Until then, and where there is no
 // counter to read, NowNs is steady_clock itself, so early frames are timed
 // right. Both are on steady_clock's timeline, so a time taken before the
-// switch can be subtracted from one taken after it.
+// switch can be subtracted from one taken after it. Only differences are
+// sound, though: the scale is measured over 20 ms, good to a few parts in a
+// million, so NowNs drifts from steady_clock by tens of milliseconds an hour,
+// and a time from one is never to be compared with a time from the other.
 
 namespace band3::fast_clock {
 
@@ -88,29 +91,48 @@ inline std::atomic<bool> g_calibrated{false};
 // NowNs's first 20 ms are steady_clock's
 inline constexpr uint64_t kCalibrateAfterNs = 20'000'000;
 
-// The counter before steady_clock, so a scale made from the two is a little
+// The counter and steady_clock at the same moment: the narrowest of a few
+// sandwiches of a steady_clock read between two counter reads. A thread
+// preempted inside one would pair the two clocks milliseconds apart, and a
+// scale made from that is out by the same share of its 20 ms for the whole
+// session; the narrowest sandwich wasn't preempted. The counter reading is
+// the one before steady_clock's, so a scale made from the pair is a little
 // ahead of steady_clock, not behind: a thread that switches to it doesn't go
 // back in time.
+inline constexpr int kSandwiches = 8;
 inline Reading ReadBoth() {
-    const uint64_t ticks = ReadCounter();
-    return {ticks, SteadyNs()};
+    Reading best;
+    uint64_t narrowest = 0;
+    for (int i = 0; i < kSandwiches; i++) {
+        const uint64_t before = ReadCounter();
+        const uint64_t ns = SteadyNs();
+        const uint64_t after = ReadCounter();
+        if (i == 0 || after - before < narrowest) {
+            narrowest = after - before;
+            best = {before, ns};
+        }
+    }
+    return best;
 }
 
 // steady_clock's time, measuring the scale once 20 ms have passed since the
 // first call (by whichever thread gets there first)
 inline uint64_t NowNsUncalibrated() {
     static const Reading first = ReadBoth();
-    const Reading now = ReadBoth();
+    const uint64_t ns = SteadyNs();
     static std::atomic<bool> measuring{false};
-    if (now.ns - first.ns >= kCalibrateAfterNs && !measuring.exchange(true)) {
-        const Scale scale = ScaleBetween(first, now);
+    // (the load first: with a counter that doesn't tick, this runs on every
+    // call, and the exchange is the dear part)
+    if (ns - first.ns >= kCalibrateAfterNs && !measuring.load(std::memory_order_relaxed) &&
+        !measuring.exchange(true)) {
+        const Scale scale = ScaleBetween(first, ReadBoth());
         // a counter that doesn't tick leaves the clock on steady_clock
         if (scale.ns_per_tick > 0) {
             g_scale = scale;
             g_calibrated.store(true, std::memory_order_release);
         }
     }
-    return now.ns;
+    return ns;
 }
 
 }  // namespace detail

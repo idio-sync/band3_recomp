@@ -283,6 +283,23 @@ inline bool KeepTexture(uint64_t first, uint64_t used, uint64_t serial, uint64_t
                         uint64_t evict_after, double idle_seconds, double keep_seconds) {
     return KeepMesh(used, used != first, serial, keep, evict_after, idle_seconds, keep_seconds);
 }
+// What a full texture array (PlaceTexture) does with a texture it holds before
+// it grows: keeps it, lets it go because Evict would have by now (kExpired), or
+// lets it go early for room (kPressure). Evict goes through the textures only
+// every kEvictScanEvery frames, so one past its keep can still hold a layer,
+// and the array would grow for want of it, copying the stale layers as well;
+// kExpired is KeepTexture's answer at the last frame (`serial` is the one being
+// planned, from 1), as if Evict had run then. kPressure is one Evict would
+// have kept but WithinKeep with the frames alone doesn't: the clock holds it,
+// or it is a frame past `evict_after`.
+enum class ArrayRoom { kKeep, kExpired, kPressure };
+inline ArrayRoom KeepTextureForRoom(uint64_t first, uint64_t used, uint64_t serial,
+                                    uint64_t keep, uint64_t evict_after, double idle_seconds,
+                                    double keep_seconds) {
+    if (!KeepTexture(first, used, serial - 1, keep, evict_after, idle_seconds, keep_seconds))
+        return ArrayRoom::kExpired;
+    return WithinKeep(used, serial, evict_after, 0, 0) ? ArrayRoom::kKeep : ArrayRoom::kPressure;
+}
 // KeepMesh's keep_seconds: only in a song (RasterOptions::clock_keep), for
 // things last drawn in it (so menu textures aren't kept into it) by frames
 // of more than one world (FrameCapture::world_frame; what the capture makes

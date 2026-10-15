@@ -75,7 +75,13 @@ constexpr uint64_t kEvictAfter = 120;
 // worker 0.2 ms a frame. What it lets go is measured in frames (kEvictAfter;
 // ResidencyKeepFrames, 5 to 8 at 60 to 144 Hz) and seconds (kKeepSeconds), so
 // letting it go up to this many frames late changes nothing visible: it
-// stays resident a few frames longer. Render targets don't wait (Evict).
+// stays resident a few frames longer. One drawn again after its keep but
+// before the scan counts as drawn in more than one frame (a texture's last
+// use is past its first, a mesh goes to the arena), so it is kept kEvictAfter
+// frames or by the clock where it would have been let go and made again: a
+// little more stays resident, the picture is the same. A full texture array
+// lets go what Evict would have before it grows (PlaceTexture), and render
+// targets don't wait (Evict).
 constexpr uint64_t kEvictScanEvery = 8;
 // seconds unused before a forgotten target's textures go, and what ClockKeep
 // keeps in a song; past kMaxRts, targets go LRU first (gpu_view.h's residency)
@@ -820,6 +826,9 @@ struct GpuRenderer::Impl {
     // Evict's meshes and textures kept by the clock alone
     // (GpuStats::meshes_by_time, textures_by_time)
     uint32_t meshes_by_time = 0, textures_by_time = 0;
+    // the serial from which Evict next goes through the meshes, textures and
+    // arrays (kEvictScanEvery after it last did)
+    uint64_t next_evict_scan = 0;
     // Evict's forgotten targets (used, DxTex) for kMaxRts; kept to avoid
     // allocating
     std::vector<std::pair<uint64_t, uint32_t>> rts_forgotten;
@@ -2108,20 +2117,29 @@ bool GpuRenderer::Impl::PlaceTexture(Tex& tx, SDL_GPUTextureFormat format) {
     // level 0's
     const uint64_t layer_bytes = uint64_t(w) * h * TexelBits(format) / 8;
     if (a.free.empty() && a.texture) {
-        // Full: before growing, textures kept by the clock alone (unused for
-        // kEvictAfter frames) make room. Their layers are safe to reuse: no
-        // frame in flight samples them, and uploads come after this frame's
-        // ArrayCopy. One drawn later this frame is placed and sent again.
+        // Full: before growing, make room of the textures Evict would have
+        // let go by now (it goes through them only every kEvictScanEvery
+        // frames, so they can still hold layers) and of those kept by the
+        // clock alone (unused for kEvictAfter frames). Their layers are safe
+        // to reuse, as after Evict: no frame in flight samples a clock's, and
+        // uploads come after this frame's ArrayCopy. One drawn later this
+        // frame is placed and sent again.
         for (auto it = textures.begin(); it != textures.end();) {
             Tex& held = it->second;
-            if (&held == &tx || held.array != &a ||
-                WithinKeep(held.used, serial, kEvictAfter, 0, 0)) {
+            if (&held == &tx || held.array != &a) {
+                ++it;
+                continue;
+            }
+            const ArrayRoom room =
+                KeepTextureForRoom(held.first, held.used, serial, keep_frames, kEvictAfter,
+                                   IdleSeconds(held.used_at), KeepSecondsOf(held));
+            if (room == ArrayRoom::kKeep) {
                 ++it;
                 continue;
             }
             LetTextureGo(held);
             it = textures.erase(it);
-            counts.textures_pressured++;
+            (room == ArrayRoom::kExpired ? counts.evicted_textures : counts.textures_pressured)++;
         }
     }
     if (a.free.empty()) {
@@ -5381,9 +5399,11 @@ void GpuRenderer::Impl::Evict() {
         rts.erase(f);
         counts.rts_released++;
     }
-    // Meshes, textures and arrays once in kEvictScanEvery frames, so what
-    // meshes_by_time and textures_by_time say can be that many frames old.
-    if (serial % kEvictScanEvery != 0) return;
+    // Meshes, textures and arrays once in kEvictScanEvery frames, counted
+    // from the last time (a frame that failed before it only delays it), so
+    // what meshes_by_time and textures_by_time say is at most that old.
+    if (serial < next_evict_scan) return;
+    next_evict_scan = serial + kEvictScanEvery;
     // gpu_view.h's residency: pool geometry stays keep_frames; arena
     // geometry kEvictAfter frames, or kKeepSeconds per ClockKeep. Arena
     // space comes back on a rebuild.

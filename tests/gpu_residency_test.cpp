@@ -400,3 +400,96 @@ TEST_CASE("an arena rebuild keeps what's within its keep, up to the cap") {
     // past both: by none (Evict would let it go too)
     CHECK_FALSE(KeptByRebuild(ArenaKeep::kKeep, 100, 5000, kEvict, 40, kKeepSeconds));
 }
+
+TEST_CASE("a full texture array lets go what Evict would have by now, and what the clock keeps") {
+    constexpr double kKeepSeconds = 30;
+    const uint64_t keep = ResidencyKeepFrames(4);
+    // a texture drawn once, at frame 10 (a movie's): Evict after frame s lets
+    // it go once s is past 10 + keep, so the frame after that plans without
+    // it, whether or not Evict has gone through the textures since
+    for (uint64_t serial = 11; serial <= 11 + keep; serial++)
+        CHECK(KeepTextureForRoom(10, 10, serial, keep, kEvict, 0, kKeepSeconds) ==
+              ArrayRoom::kKeep);
+    CHECK(KeepTextureForRoom(10, 10, 12 + keep, keep, kEvict, 0, kKeepSeconds) ==
+          ArrayRoom::kExpired);
+    // the clock never kept it
+    CHECK(KeepTextureForRoom(10, 10, 12 + keep, keep, kEvict, 5, kKeepSeconds) ==
+          ArrayRoom::kExpired);
+
+    // one drawn in two frames, 10 and 14, is kept kEvictAfter frames
+    CHECK(KeepTextureForRoom(10, 14, 14 + kEvict, keep, kEvict, 0, 0) == ArrayRoom::kKeep);
+    // Evict keeps it a frame longer than a full array does (by the frames
+    // alone): let go for room
+    CHECK(KeepTextureForRoom(10, 14, 15 + kEvict, keep, kEvict, 0, 0) == ArrayRoom::kPressure);
+    CHECK(KeepTextureForRoom(10, 14, 16 + kEvict, keep, kEvict, 0, 0) == ArrayRoom::kExpired);
+    // in a song the clock keeps it longer, until it has been idle past the
+    // seconds: let go for room, and then as Evict would
+    CHECK(KeepTextureForRoom(10, 14, 16 + kEvict, keep, kEvict, 5, kKeepSeconds) ==
+          ArrayRoom::kPressure);
+    CHECK(KeepTextureForRoom(10, 14, 16 + kEvict, keep, kEvict, 31, kKeepSeconds) ==
+          ArrayRoom::kExpired);
+
+    // whatever the frame has drawn stays
+    CHECK(KeepTextureForRoom(10, 500, 500, keep, kEvict, 0, kKeepSeconds) == ArrayRoom::kKeep);
+    CHECK(KeepTextureForRoom(500, 500, 500, keep, kEvict, 0, kKeepSeconds) == ArrayRoom::kKeep);
+}
+
+TEST_CASE("a full array lets go for room what it did before wherever Evict would have kept it") {
+    constexpr double kKeepSeconds = 30;
+    const uint64_t keep = ResidencyKeepFrames(4);
+    bool as_before = true, evicted_go = true;
+    for (uint64_t used = 5; used < 300; used += 7)
+        for (uint64_t first : {used, used - 1})
+            for (uint64_t serial = used; serial < used + 2 * kEvict; serial++)
+                for (double idle : {0.0, 5.0, 31.0}) {
+                    const bool kept = KeepTexture(first, used, serial - 1, keep, kEvict, idle,
+                                                  kKeepSeconds);
+                    const ArrayRoom room =
+                        KeepTextureForRoom(first, used, serial, keep, kEvict, idle, kKeepSeconds);
+                    if (kept) {
+                        // what a full array let go: past the frames alone
+                        as_before &= (room != ArrayRoom::kKeep) ==
+                                     !WithinKeep(used, serial, kEvict, 0, 0);
+                    } else {
+                        evicted_go &= room == ArrayRoom::kExpired;
+                    }
+                }
+    CHECK(as_before);
+    CHECK(evicted_go);
+}
+
+TEST_CASE("a scan every eighth frame doesn't make an array of one-draw textures grow") {
+    const uint64_t keep = ResidencyKeepFrames(4);
+    struct Tex {
+        uint64_t first, used;
+    };
+    // The layers a texture drawn once a frame (a movie's) needs when Evict
+    // goes through the textures after every `scan_every`th frame; with
+    // `room`, a full array first lets go what Evict would have (PlaceTexture)
+    auto layers = [&](uint64_t scan_every, bool room) {
+        std::vector<Tex> held;
+        size_t capacity = 0;
+        for (uint64_t serial = 1; serial < 1000; serial++) {
+            if (room && held.size() == capacity) {
+                std::erase_if(held, [&](const Tex& t) {
+                    return KeepTextureForRoom(t.first, t.used, serial, keep, kEvict, 0, 0) !=
+                           ArrayRoom::kKeep;
+                });
+            }
+            if (held.size() == capacity) capacity++;
+            held.push_back({serial, serial});
+            if (serial % scan_every == 0) {
+                std::erase_if(held, [&](const Tex& t) {
+                    return !KeepTexture(t.first, t.used, serial, keep, kEvict, 0, 0);
+                });
+            }
+        }
+        return capacity;
+    };
+    // Evict after each frame: the keep's frames, and the one being placed
+    CHECK(layers(1, false) == keep + 2);
+    // a scan alone leaves the stale ones holding layers, and the array grows
+    CHECK(layers(8, false) >= keep + 2 + 7);
+    // with the room-making it needs no more than before
+    CHECK(layers(8, true) == layers(1, false));
+}

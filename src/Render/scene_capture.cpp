@@ -593,7 +593,8 @@ void Lap(State& s, CaptureProfile::Step step) {
 // Times a hook into CaptureProfile::hook_ns, the unnamed remainder into
 // kStepRest. Construct after taking g_state_mutex, so it's destroyed first.
 // Its two clock reads are fast_clock's: a frame's ~420 hook calls were 840
-// steady_clock reads, about 0.03 ms of the game thread's frame.
+// steady_clock reads, about 0.01 to 0.03 ms of the game thread's frame (11 ns
+// a read saved in a tight loop, more in cold caches).
 class HookTimer {
  public:
     explicit HookTimer(CaptureProfile::Hook hook) : hook_(hook), start_(fast_clock::NowNs()) {
