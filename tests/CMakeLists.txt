@@ -100,6 +100,7 @@ add_executable(band3_tests
     port_mapping_protocol_test.cpp
     native_socket_test.cpp
     frame_pacing_test.cpp
+    fast_clock_test.cpp
     xapo_params_test.cpp
     audio_idle_test.cpp
     launcher_start_test.cpp

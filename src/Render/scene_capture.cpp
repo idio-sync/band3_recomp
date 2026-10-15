@@ -39,6 +39,7 @@
 #include "src/Render/sync_gpu/native_only.h"
 #include "src/Render/sync_gpu/sync_graphics_system.h"
 #include "src/Render/target_premake.h"
+#include "src/fast_clock.h"
 #include "src/settings.h"
 #include "src/stall_watch.h"
 
@@ -558,9 +559,9 @@ struct State {
     // per-frame DiagLog counts
     uint32_t logged_no_mat = 0;
     uint32_t logged_elsewhere = 0;
-    // the running step's start (Lap)
+    // the running step's start (Lap), fast_clock's nanoseconds
     CaptureProfile profile;
-    std::chrono::steady_clock::time_point profile_mark;
+    uint64_t profile_mark = 0;
     // the profile at the last frame's end and the game's frame time, for
     // FrameCapture::cost
     CaptureProfile cost_mark;
@@ -583,27 +584,28 @@ uint64_t Nanos(std::chrono::steady_clock::duration d) {
 // `step`'s. Under g_state_mutex.
 void Lap(State& s, CaptureProfile::Step step) {
     if (!g_profile_steps.load(std::memory_order_relaxed)) return;
-    const auto now = std::chrono::steady_clock::now();
-    s.profile.step_ns[step] += Nanos(now - s.profile_mark);
+    const uint64_t now = fast_clock::NowNs();
+    s.profile.step_ns[step] += fast_clock::ElapsedNs(s.profile_mark, now);
     s.profile.step_calls[step]++;
     s.profile_mark = now;
 }
 
 // Times a hook into CaptureProfile::hook_ns, the unnamed remainder into
 // kStepRest. Construct after taking g_state_mutex, so it's destroyed first.
+// Its two clock reads are fast_clock's: a frame's ~420 hook calls were 840
+// steady_clock reads, about 0.03 ms of the game thread's frame.
 class HookTimer {
  public:
-    explicit HookTimer(CaptureProfile::Hook hook)
-        : hook_(hook), start_(std::chrono::steady_clock::now()) {
+    explicit HookTimer(CaptureProfile::Hook hook) : hook_(hook), start_(fast_clock::NowNs()) {
         S().profile_mark = start_;
     }
     ~HookTimer() {
         State& s = S();
-        const auto end = std::chrono::steady_clock::now();
-        s.profile.hook_ns[hook_] += Nanos(end - start_);
+        const uint64_t end = fast_clock::NowNs();
+        s.profile.hook_ns[hook_] += fast_clock::ElapsedNs(start_, end);
         s.profile.hook_calls[hook_]++;
         if (!g_profile_steps.load(std::memory_order_relaxed)) return;
-        s.profile.step_ns[CaptureProfile::kStepRest] += Nanos(end - s.profile_mark);
+        s.profile.step_ns[CaptureProfile::kStepRest] += fast_clock::ElapsedNs(s.profile_mark, end);
         s.profile.step_calls[CaptureProfile::kStepRest]++;
     }
     HookTimer(const HookTimer&) = delete;
@@ -611,7 +613,7 @@ class HookTimer {
 
  private:
     CaptureProfile::Hook hook_;
-    std::chrono::steady_clock::time_point start_;
+    uint64_t start_;
 };
 
 // State's, taken by each hook past its early-out. Never held across a call
