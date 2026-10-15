@@ -114,6 +114,16 @@ void DrawBackground(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin) {
     Gradient(dl, ImVec2(max.x - edge, min.y), max, clear, dark);
 }
 
+void DrawGameDim(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin) {
+    const ImVec2 size(max.x - min.x, max.y - min.y);
+    VGradient(dl, min, max, IM_COL32(4, 8, 34, 222), IM_COL32(2, 4, 20, 238));
+    if (skin.Has(SkinPart::kGrain)) {
+        const float tile = Px(384);
+        dl->AddImage(skin.Texture(SkinPart::kGrain), min, max, ImVec2(0, 0),
+                     ImVec2(size.x / tile, size.y / tile), IM_COL32(110, 130, 230, 26));
+    }
+}
+
 void DrawTitle(ImDrawList* dl, ImVec2 pos, std::string_view text, float size) {
     PaintText(dl, pos, kCaps(size), color::kTitle, text);
 }
@@ -374,6 +384,66 @@ int DrawHelpBar(ImDrawList* dl, ImVec2 min, ImVec2 max, std::span<const HelpItem
         if (ImGui::IsMouseHoveringRect(bmin, bmax)) hovered = kHelpPlay;
     }
     return hovered;
+}
+
+int DrawBox(ImDrawList* dl, ImVec2 min, ImVec2 max, const Box& box, const Skin& skin) {
+    dl->AddRectFilled(min, max, IM_COL32(0, 0, 0, 150));
+    const TextStyle title = kCaps(text::kBoxTitle);
+    const TextStyle body = kPlain(text::kBody);
+    const TextStyle option = kCaps(28);
+    const float w = Px(560), inner = w - Px(70);
+    std::vector<std::string> title_lines = WrapText(title, box.title, inner);
+    std::vector<std::string> body_lines;
+    for (const std::string& line : box.lines) {
+        for (std::string& wrapped : WrapText(body, line, inner)) body_lines.push_back(std::move(wrapped));
+    }
+    const float title_h = Px(text::kBoxTitle + 2) * float(title_lines.size());
+    const float body_h = Px(text::kBodyLine) * float(body_lines.size());
+    const float h = Px(34) + title_h + (body_lines.empty() ? 0 : Px(10) + body_h) + Px(20) +
+                    Px(42) * float(box.options.size()) + Px(24);
+    const ImVec2 bmin(std::round((min.x + max.x - w) * 0.5f),
+                      std::round(std::max(min.y + Px(30), (min.y + max.y - h) * 0.5f)));
+    const ImVec2 bmax(bmin.x + w, bmin.y + h);
+    DrawPanel(dl, bmin, bmax, skin);
+
+    const float cx = (bmin.x + bmax.x) * 0.5f;
+    float y = bmin.y + Px(34);
+    for (const std::string& line : title_lines) {
+        PaintText(dl, ImVec2(cx - TextWidth(title, line) * 0.5f, y), title, color::kText, line);
+        y += Px(text::kBoxTitle + 2);
+    }
+    if (!body_lines.empty()) {
+        y += Px(10);
+        for (const std::string& line : body_lines) {
+            PaintText(dl, ImVec2(cx - TextWidth(body, line) * 0.5f, y), body, IM_COL32(217, 220, 229, 255),
+                      line);
+            y += Px(text::kBodyLine);
+        }
+    }
+    y += Px(20);
+    int hovered = -1;
+    for (size_t i = 0; i < box.options.size(); i++) {
+        const ImVec2 omin(bmin.x + Px(30), y), omax(bmax.x - Px(30), y + Px(40));
+        const bool selected = int(i) == box.selected;
+        if (selected) DrawHighlight(dl, omin, omax, skin, Px(3));
+        const std::string& label = box.options[i];
+        PaintText(dl, ImVec2(cx - std::min(TextWidth(option, label), inner) * 0.5f, y + Px(6)), option,
+                  selected ? color::kOnYellow : color::kText, label, inner);
+        if (ImGui::IsMouseHoveringRect(omin, omax)) hovered = int(i);
+        y += Px(42);
+    }
+    return hovered;
+}
+
+float DrawCount(ImDrawList* dl, float right, float center_y, int count) {
+    const std::string text = std::to_string(count);
+    const TextStyle style = kCaps(text::kKey);
+    const float h = Px(20), w = std::max(h, TextWidth(style, text) + Px(10));
+    const ImVec2 min(right - w, center_y - h * 0.5f), max(right, center_y + h * 0.5f);
+    dl->AddRectFilled(min, max, color::kChanged, h * 0.5f);
+    PaintText(dl, ImVec2(min.x + (w - TextWidth(style, text)) * 0.5f, center_y - Px(text::kKey) * 0.5f),
+              style, IM_COL32(30, 16, 2, 255), text);
+    return w;
 }
 
 }

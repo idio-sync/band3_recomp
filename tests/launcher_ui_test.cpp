@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include "src/Launcher/ui/box.h"
 #include "src/Launcher/ui/font_plan.h"
 #include "src/Launcher/ui/navigation.h"
 #include "src/Launcher/ui/skin_images.h"
@@ -288,4 +289,26 @@ TEST_CASE("the skin reads from the game data in assets" * doctest::skip()) {
                           SkinPart::kLineFade, SkinPart::kGrain, SkinPart::kIcons}) {
         CHECK_MESSAGE(images[static_cast<size_t>(part)].has_value(), "part ", int(part));
     }
+}
+
+TEST_CASE("a box moves over its choices, A picks one, B picks its cancel") {
+    int picked = -2;
+    Box box{.title = "Couldn't save", .options = {"Try again", "Keep", "Cancel"}, .cancel = 2,
+            .chosen = [&](int i) { picked = i; }};
+    CHECK(StepBox(box, Action::kDown) == std::nullopt);
+    CHECK(box.selected == 1);
+    CHECK(StepBox(box, Action::kDown) == std::nullopt);
+    CHECK(StepBox(box, Action::kDown) == std::nullopt);
+    // wraps
+    CHECK(box.selected == 0);
+    CHECK(StepBox(box, Action::kUp) == std::nullopt);
+    CHECK(box.selected == 2);
+    CHECK(StepBox(box, Action::kSelect) == 2);
+    CHECK(StepBox(box, Action::kBack) == 2);
+    // left, right and the rest do nothing
+    CHECK(StepBox(box, Action::kRight) == std::nullopt);
+    // a box without a cancel isn't given up with B
+    Box must{.title = "Pick", .options = {"A", "B"}};
+    CHECK(StepBox(must, Action::kBack) == std::nullopt);
+    (void)picked;
 }

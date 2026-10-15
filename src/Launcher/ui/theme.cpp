@@ -153,6 +153,21 @@ std::vector<std::string> WrapText(const TextStyle& style, std::string_view text,
             line = candidate;
         }
         at = end + 1;
+        // a word wider than a line (a path) breaks inside it, after a
+        // separator where there's one, so nothing runs past the edge
+        while (TextWidth(style, line) > width && line.size() > 1) {
+            size_t fit = 0;
+            for (size_t i = 1; i <= line.size(); i++) {
+                if (i < line.size() && (static_cast<unsigned char>(line[i]) & 0xC0) == 0x80) continue;
+                if (TextWidth(style, std::string_view(line).substr(0, i)) > width) break;
+                fit = i;
+            }
+            if (fit == 0) break;
+            const size_t sep = line.find_last_of("\\/_-,.", fit - 1);
+            const size_t cut = sep != std::string::npos && sep + 1 > fit / 3 ? sep + 1 : fit;
+            lines.push_back(line.substr(0, cut));
+            line.erase(0, cut);
+        }
     }
     if (!line.empty()) lines.push_back(line);
     return lines;

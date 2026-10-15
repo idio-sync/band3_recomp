@@ -12,6 +12,7 @@
 #include "src/Input/input_system.h"
 #include "src/Input/xinput_state.h"
 #include "src/Render/native_view.h"
+#include "src/paths.h"
 #include "config_file.h"
 #include "launcher_style.h"
 
@@ -19,32 +20,7 @@ namespace band3::launcher {
 
 namespace {
 
-constexpr const char* kClosePrompt = "Close without saving?";
 constexpr const char* kQuitPrompt = "Quit band3?";
-
-constexpr std::pair<Tab, const char*> kTabs[] = {
-    {Tab::kGame, "Game"},
-    {Tab::kGraphics, "Graphics"},
-    {Tab::kAudio, "Audio"},
-    {Tab::kControllers, "Controllers"},
-    {Tab::kOnline, "Online"},
-    {Tab::kLights, "Lights"},
-    {Tab::kVideos, "Videos"},
-    {Tab::kAdvanced, "Advanced"},
-};
-
-// what a tab says above its settings, if anything
-const char* TabIntro(Tab tab) {
-    switch (tab) {
-    case Tab::kControllers:
-        return "To see a controller or an instrument working, open the Instrument Lab (F6): it "
-               "shows what the game reads from each player, live.";
-    case Tab::kAdvanced:
-        return "band3's technical settings, for testing and tracking down problems, by the "
-               "names the command line uses. Point at one to see what it does.";
-    default: return nullptr;
-    }
-}
 
 }
 
@@ -77,8 +53,8 @@ void InGameSettingsDialog::TogglePause() {
         break;
     case View::kPause:
     case View::kSettings:
-        // the frame decides, so the Escape that closes a dropdown, a field or
-        // a prompt doesn't also go back
+    case View::kVideos:
+        // the frame decides, so the Escape that closes a prompt doesn't also go back
         back_requested_ = true;
         break;
     }
@@ -99,34 +75,17 @@ void InGameSettingsDialog::OpenPause() {
 }
 
 void InGameSettingsDialog::Resume() {
+    if (screen_) screen_->CloseMeters();
     band3::song_pause::Resume();
     SetView(View::kClosed);
     REXLOG_INFO("Pause menu: closed");
 }
 
 void InGameSettingsDialog::OpenSettings() {
+    // back where they were left, as the session goes on
     EnsureModel();
-    save_message_.clear();
-    save_failed_ = false;
     SetView(View::kSettings);
     REXLOG_INFO("Settings: opened");
-}
-
-void InGameSettingsDialog::RequestCloseSettings() {
-    if (model_ && model_->HasUnsavedChanges()) {
-        open_close_prompt_ = true;
-        return;
-    }
-    CloseSettings();
-}
-
-void InGameSettingsDialog::CloseSettings() {
-    open_close_prompt_ = false;
-    // lets go of SDL's audio, which the mic slots' list keeps started
-    if (page_) page_->CloseMeters();
-    REXLOG_INFO("Settings: closed{}",
-                model_ && model_->HasUnsavedChanges() ? " with unsaved changes" : "");
-    SetView(View::kPause);
 }
 
 bool InGameSettingsDialog::BackPressed() {
@@ -148,10 +107,36 @@ void InGameSettingsDialog::EnsureModel() {
                                    host_.anchor ? host_.anchor() : std::filesystem::path(),
                                    Where::kInGame, config_path_),
                    store_);
-    page_.emplace(*model_, Where::kInGame,
-                  PageHost{.game_data_root = host_.game_data_root,
-                           .native_window = host_.native_window});
-    config_problem_ = ConfigFileProblem(config_path_);
+    skin_ = std::make_unique<ui::Skin>(host_.immediate_drawer);
+    screen_ = std::make_unique<ui::SettingsScreen>(
+        *model_, *skin_,
+        ui::SettingsScreenHost{
+            .where = Where::kInGame,
+            .config_path = [this] { return config_path_; },
+            .game_data_root = host_.game_data_root,
+            .native_window = host_.native_window,
+            .save = [this] { return Save(); },
+            .left = [this] { SetView(View::kPause); },
+            .play = [this] { Resume(); },
+            .videos_list = [this] { SetView(View::kVideos); },
+            .sdk_settings =
+                [this] {
+                    if (!host_.open_all_settings) return;
+                    // one settings window at a time; Escape goes back from the
+                    // SDK's to the pause menu
+                    screen_->CloseMeters();
+                    SetView(View::kAllSettings);
+                    host_.open_all_settings();
+                },
+        });
+    if (const auto problem = ConfigFileProblem(config_path_)) {
+        screen_->ShowBox(ui::Box{.title = "band3.toml couldn't be read",
+                                 .lines = {*problem,
+                                           "Saving replaces it, and the old file is kept as "
+                                           "band3.toml.bak."},
+                                 .options = {"OK"},
+                                 .cancel = 0});
+    }
     REXLOG_INFO("Settings: {} rows, {} of them from the registry", table_.size(),
                 generated_->Rows().size());
 }
@@ -194,7 +179,7 @@ InGameSettingsDialog::PadReading InGameSettingsDialog::ReadPads() {
     const auto now = std::chrono::steady_clock::now();
     if (now >= next_caps_) {
         next_caps_ = now + std::chrono::seconds(2);
-        // the keyboard navigates ImGui itself, so a player only it plays
+        // the keyboard navigates by itself, so a player only it plays
         // doesn't (it reads as a controller too)
         std::array<bool, 4> navigates{};
         for (const input::InputDevice& device : input::PlayerDevices()) {
@@ -223,21 +208,9 @@ InGameSettingsDialog::PadReading InGameSettingsDialog::ReadPads() {
 }
 
 void InGameSettingsDialog::HandleNav(const NavEdges& edges) {
-    if (view_ == View::kSettings && (edges.tab_previous || edges.tab_next)) {
-        const int count = static_cast<int>(std::size(kTabs));
-        int i = 0;
-        while (i < count && kTabs[i].first != current_tab_) i++;
-        i = (i + (edges.tab_next ? 1 : count - 1)) % count;
-        pending_tab_ = kTabs[i].first;
-    }
-    // Start goes back a step, to the game from the pause menu; not while a
-    // prompt or a dropdown is open
+    // Start goes back to the game from the pause menu; not while a prompt is open
     if (!edges.start || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) return;
-    if (view_ == View::kPause) {
-        Resume();
-    } else if (view_ == View::kSettings) {
-        RequestCloseSettings();
-    }
+    if (view_ == View::kPause) Resume();
 }
 
 void InGameSettingsDialog::OnDraw(ImGuiIO& io) {
@@ -261,7 +234,9 @@ void InGameSettingsDialog::OnDraw(ImGuiIO& io) {
     {
         FontScope font(kBodySize);
         const PadReading pads = ReadPads();
-        const NavEdges edges = nav_ ? nav_->Feed(pads.nav) : NavEdges{};
+        // the pause menu is ImGui's; the Settings screen reads the pads itself
+        const NavEdges edges =
+            nav_ && view_ != View::kSettings ? nav_->Feed(pads.nav) : NavEdges{};
         // the menu shortcut's chords, which the game can't see while it's blocked
         const input::MenuShortcutAction chord =
             shortcut_.Update(pads.chord_buttons, input::MenuShortcut::Clock::now());
@@ -274,10 +249,16 @@ void InGameSettingsDialog::OnDraw(ImGuiIO& io) {
             HandleNav(edges);
             DrawPauseWindow(io);
         } else if (view_ == View::kSettings) {
-            HandleNav(edges);
-            page_->BeginFrame();
-            DrawWindow(io);
-            page_->EndFrame();
+            skin_->Load(host_.game_data_root ? host_.game_data_root() : std::filesystem::path());
+            skin_->Poll();
+            // the bind, when it isn't Escape (which the screen reads itself), goes back
+            if (std::exchange(back_requested_, false) && !ImGui::IsKeyPressed(ImGuiKey_Escape, false) &&
+                ImGui::GetFrameCount() > view_frame_ + 1) {
+                screen_->Back();
+            }
+            screen_->Draw(io, pads.nav, true);
+        } else if (view_ == View::kVideos) {
+            DrawVideos(io);
         }
         if (all_settings) DrawAllSettingsNote(io);
     }
@@ -366,228 +347,37 @@ void InGameSettingsDialog::DrawQuitPrompt(bool back) {
     ImGui::PopStyleVar();
 }
 
-void InGameSettingsDialog::DrawWindow(ImGuiIO& io) {
-    // nearly the whole window at 720p (a Steam Deck's 1280x800 included),
-    // scaled up with it, as the launcher is
+void InGameSettingsDialog::DrawVideos(ImGuiIO& io) {
     const float margin = Px(20);
-    const ImVec2 size(std::min(io.DisplaySize.x - margin * 2, Px(1180)),
-                      std::max(io.DisplaySize.y - margin * 2, Px(300)));
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(margin, margin));
+    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x - margin * 2, io.DisplaySize.y - margin * 2));
     ImGui::SetNextWindowBgAlpha(0.97f);
     if (appearing_) {
         ImGui::SetNextWindowFocus();
         appearing_ = false;
     }
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, Px(8));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_NoSavedSettings;
-    const bool shown = ImGui::Begin("band3 settings##ingame", nullptr, flags);
-    ImGui::PopStyleVar(2);
-    if (shown) {
-        DrawHeader();
-        if (config_problem_) {
-            Banner("##config_problem", kProblemBanner, [&] {
-                ImGui::PushTextWrapPos(0);
-                ImGui::TextColored(kWarn, "band3.toml couldn't be read:");
-                ImGui::SameLine();
-                ImGui::TextUnformatted(config_problem_->c_str());
-                ImGui::TextUnformatted(
-                    "Saving replaces it, and the old file is kept as band3.toml.bak.");
-                ImGui::PopTextWrapPos();
-            });
-            ImGui::Spacing();
+    if (ImGui::Begin("Music videos##ingame", nullptr, flags)) {
+        if (ImGui::Button("< Settings") || BackPressed()) SetView(View::kSettings);
+        ImGui::SameLine();
+        {
+            FontScope font(kHeadingSize);
+            ImGui::TextUnformatted("Music videos");
         }
-
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(Px(16), Px(7)));
-        if (ImGui::BeginTabBar("##tabs", ImGuiTabBarFlags_NoTooltip)) {
-            for (const auto& [tab, name] : kTabs) {
-                const ImGuiTabItemFlags select =
-                    pending_tab_ == tab ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-                if (ImGui::BeginTabItem(name, nullptr, select)) {
-                    current_tab_ = tab;
-                    ImGui::EndTabItem();
-                }
-            }
-            pending_tab_.reset();
-            ImGui::EndTabBar();
-        }
-        ImGui::PopStyleVar();
-        page_->RefreshDeviceLists(current_tab_);
-        page_->DrawDeckBanner();
-        ImGui::Dummy(ImVec2(0, Px(2)));
-
-        // the footer keeps its place at the bottom; the settings scroll above it
-        const ImGuiStyle& style = ImGui::GetStyle();
-        const float footer_height = Px(8) + SettingsPage::DescriptionHeight() +
-                                    ImGui::GetFrameHeight() + style.ItemSpacing.y * 4;
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        const float settings_height =
-            std::max(ImGui::GetContentRegionAvail().y - footer_height, Px(80));
-        if (ImGui::BeginChild("##settings", ImVec2(0, settings_height),
-                              ImGuiChildFlags_NavFlattened)) {
-            // each tab from its top
-            if (scrolled_tab_ != current_tab_) {
-                ImGui::SetScrollY(0);
-                scrolled_tab_ = current_tab_;
-            }
-            ImGui::Dummy(ImVec2(0, Px(4)));
-            if (const char* intro = TabIntro(current_tab_)) {
-                FontScope font(kSmallSize);
-                ImGui::PushTextWrapPos(0);
-                ImGui::TextColored(kMuted, "%s", intro);
-                ImGui::PopTextWrapPos();
-                ImGui::Dummy(ImVec2(0, Px(6)));
-            }
-            page_->DrawSections(current_tab_);
-        }
-        ImGui::EndChild();
-        ImGui::PopStyleVar();
-        DrawFooter();
-        DrawPrompts();
-
-        // B on a controller, or Escape, goes back to the pause menu, unless it
-        // was closing a dropdown or leaving a text field (as in the frame
-        // before)
-        const bool busy = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) ||
-                          ImGui::IsAnyItemActive();
-        if (BackPressed() && !busy && !busy_last_frame_ && view_ == View::kSettings &&
-            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
-            RequestCloseSettings();
-        }
-        busy_last_frame_ = busy;
+        ImGui::Separator();
+        std::vector<std::string> entries = paths::SplitList(model_->Value("music_videos_folder"));
+        if (entries.empty()) entries.push_back("videos");
+        std::vector<std::filesystem::path> folders;
+        for (const auto& entry : entries) folders.push_back(paths::Resolve(entry, model_->Env().anchor));
+        VideosTab::Page page;
+        page.settings = [] {
+            ImGui::TextColored(kMuted, "The videos' settings are in Settings, Music Videos.");
+        };
+        page.description = [] {};
+        videos_.Draw(folders, page);
     }
     ImGui::End();
-}
-
-void InGameSettingsDialog::DrawHeader() {
-    {
-        FontScope font(kHeadingSize);
-        ImGui::TextUnformatted("band3 settings");
-    }
-    // where Save writes, on the right, if there's room
-    const float title_end = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x;
-    FontScope font(kSmallSize);
-    const std::string where = "Saves to " + rex::path_to_utf8(config_path_);
-    const float width = ImGui::CalcTextSize(where.c_str()).x;
-    const float right = ImGui::GetWindowContentRegionMax().x;
-    if (right - width > title_end + Px(40)) {
-        ImGui::SameLine(right - width);
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + Px(kHeadingSize - kSmallSize) * 0.8f);
-        ImGui::TextColored(kMuted, "%s", where.c_str());
-    }
-}
-
-void InGameSettingsDialog::DrawFooter() {
-    const ImGuiStyle& style = ImGui::GetStyle();
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    if (!ImGui::BeginChild("##footer", ImVec2(0, 0), ImGuiChildFlags_NavFlattened,
-                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-        ImGui::EndChild();
-        ImGui::PopStyleVar();
-        return;
-    }
-    const ImVec2 top = ImGui::GetCursorScreenPos();
-    ImGui::GetWindowDrawList()->AddLine(top, ImVec2(top.x + ImGui::GetContentRegionAvail().x, top.y),
-                                        ImGui::GetColorU32(kLine), std::max(1.0f, Px(1)));
-    ImGui::Dummy(ImVec2(0, Px(8)));
-
-    const char* kAllSettings = "All settings...";
-    page_->DrawDescription([&] {
-        ImGui::TextColored(kMuted, "Point at a setting to see what it does. Changes apply as you "
-                                   "make them, some at the next start (the row says so); Save "
-                                   "keeps them for next time.");
-        const bool controller =
-            std::ranges::any_of(caps_, [](const auto& caps) { return caps.has_value(); });
-        if (controller) {
-            ImGui::TextColored(kMuted, "With a controller: LB and RB switch tabs, B or Start "
-                                       "goes back to the pause menu.");
-        }
-    });
-
-    // the bottom row: the startup box, what saving did, and the buttons
-    page_->DrawStartupBox();
-    const float buttons = ButtonWidth(kAllSettings) + ButtonWidth("Save") + ButtonWidth("Back") +
-                          style.ItemSpacing.x * 2;
-    const float right = ImGui::GetWindowContentRegionMax().x;
-    ImGui::SameLine();
-    const float status_start = ImGui::GetCursorPosX() + Px(12);
-    const float status_end = right - buttons - Px(12);
-    std::string status = save_message_;
-    ImVec4 status_color = save_failed_ ? kBad : kGood;
-    if (!save_failed_ && model_->HasUnsavedChanges()) {
-        status = "Unsaved changes";
-        status_color = kMuted;
-    }
-    if (!status.empty() && status_end > status_start) {
-        ImGui::SetCursorPosX(status_start);
-        ImGui::AlignTextToFramePadding();
-        const ImVec2 at = ImGui::GetCursorScreenPos();
-        ImGui::PushClipRect(at, ImVec2(at.x + (status_end - status_start),
-                                       at.y + ImGui::GetFrameHeight()),
-                            true);
-        ImGui::TextColored(status_color, "%s", status.c_str());
-        ImGui::PopClipRect();
-        if (ImGui::IsItemHovered() &&
-            ImGui::CalcTextSize(status.c_str()).x > status_end - status_start) {
-            ImGui::SetTooltip("%s", status.c_str());
-        }
-        ImGui::SameLine();
-    }
-
-    ImGui::SetCursorPosX(right - buttons);
-    if (ImGui::Button(kAllSettings) && host_.open_all_settings) {
-        // one settings window at a time; Escape goes back from the SDK's to
-        // the pause menu
-        if (page_) page_->CloseMeters();
-        SetView(View::kAllSettings);
-        host_.open_all_settings();
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("The SDK's own settings menu: every setting by category, the SDK's\n"
-                          "and the key binds too. Its \"Save to config\" rewrites band3.toml\n"
-                          "with every setting that isn't its default, unlike Save here.");
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Save")) Save();
-    ImGui::SameLine();
-    if (ImGui::Button("Back")) RequestCloseSettings();
-
-    ImGui::EndChild();
-    ImGui::PopStyleVar();
-}
-
-void InGameSettingsDialog::DrawPrompts() {
-    if (open_close_prompt_) {
-        ImGui::OpenPopup(kClosePrompt);
-        open_close_prompt_ = false;
-    }
-    const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(22), Px(18)));
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal(kClosePrompt, nullptr,
-                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
-        ImGui::TextUnformatted("Your changes haven't been saved.");
-        ImGui::TextColored(kMuted, "Closing keeps them until band3 closes.");
-        ImGui::Spacing();
-        if (ImGui::Button("Save and close")) {
-            ImGui::CloseCurrentPopup();
-            Save();
-            if (!save_failed_) CloseSettings();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Close without saving")) {
-            ImGui::CloseCurrentPopup();
-            CloseSettings();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
-        ImGui::SetItemDefaultFocus();
-        ImGui::EndPopup();
-    }
-    ImGui::PopStyleVar();
 }
 
 void InGameSettingsDialog::DrawAllSettingsNote(ImGuiIO& io) {
@@ -628,28 +418,15 @@ void InGameSettingsDialog::DrawAllSettingsNote(ImGuiIO& io) {
     ImGui::End();
 }
 
-void InGameSettingsDialog::Save() {
-    const std::string name = rex::path_to_utf8(config_path_.filename());
+SaveResult InGameSettingsDialog::Save() {
     const SaveResult result = model_->Save(config_path_);
-    save_failed_ = !result.ok;
     if (!result.ok) {
-        save_message_ = "Couldn't save " + name + ": " + result.error;
-        REXLOG_ERROR("Settings: couldn't save {}: {}", rex::path_to_utf8(config_path_),
-                     result.error);
-        return;
+        REXLOG_ERROR("Settings: couldn't save {}: {}", rex::path_to_utf8(config_path_), result.error);
+        return result;
     }
-    const std::string backup = rex::path_to_utf8(BackupPath(config_path_).filename());
-    if (result.had_comments) {
-        save_message_ = "Saved; your old file with its comments is in " + backup + ".";
-    } else if (result.backed_up) {
-        save_message_ =
-            "Saved. The old " + name + " couldn't be read and is kept as " + backup + ".";
-    } else {
-        save_message_ = "Saved to " + name + ".";
-    }
-    config_problem_.reset();
     REXLOG_INFO("Settings: saved {}{}", rex::path_to_utf8(config_path_),
                 result.backed_up ? " (the old file is kept as .bak)" : "");
+    return result;
 }
 
 }

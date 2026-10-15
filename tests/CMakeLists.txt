@@ -110,6 +110,9 @@ add_executable(band3_tests
     launcher_start_test.cpp
     launcher_ui_test.cpp
     launcher_settings_test.cpp
+    settings_categories_test.cpp
+    settings_rows_test.cpp
+    onscreen_keyboard_test.cpp
     generated_rows_test.cpp
     settings_reference_test.cpp
     config_file_test.cpp
@@ -172,6 +175,9 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Launcher/launcher_start.cpp
     ${BAND3_ROOT}/src/Launcher/ui/font_plan.cpp
     ${BAND3_ROOT}/src/Launcher/ui/navigation.cpp
+    ${BAND3_ROOT}/src/Launcher/ui/settings_rows.cpp
+    ${BAND3_ROOT}/src/Launcher/ui/onscreen_keyboard.cpp
+    ${BAND3_ROOT}/src/Launcher/ui/box.cpp
     ${BAND3_ROOT}/src/Launcher/ui/skin_images.cpp
     ${BAND3_ROOT}/src/Launcher/settings_reference.cpp
     ${BAND3_ROOT}/src/Launcher/mic_level.cpp

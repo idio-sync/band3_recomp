@@ -10,10 +10,11 @@
 #include <vector>
 #include "config_file.h"
 
-// The launcher's settings: the curated table of what each tab shows, and the
-// override model that decides what Save writes to band3.toml. The in-game
-// settings (F4, ingame_settings_dialog.h) show the same table with the same
-// model, plus rows generated from the registry (generated_rows.h).
+// The launcher's settings: the curated table of what each category shows, and
+// the override model that decides what Save writes to band3.toml. The
+// launcher and the in-game settings (ingame_settings_dialog.h) show the same
+// table with the same model, plus rows generated from the registry
+// (generated_rows.h).
 //
 // The launcher writes only overrides: a setting goes into band3.toml when its
 // value differs from its effective default (what it would be with no key
@@ -25,21 +26,26 @@
 
 namespace band3::launcher {
 
-enum class Tab {
+// The Settings screen's categories, in its order (Categories)
+enum class Category {
     kGame,
+    kGameplay,
+    kDisplay,
     kGraphics,
     kAudio,
     kControllers,
-    kOnline,
-    kLights,
+    kMidi,
     kVideos,
-    // in game only: Band3/Advanced's settings, generated from the registry
+    kLights,
+    kOnline,
+    kOtherApps,
+    // Band3/Advanced's settings, generated from the registry
     kAdvanced,
-    // the Steam Deck banner's toggle, shown only on a Deck
-    kSteamDeck,
-    // the footer's "Show this screen at startup"
-    kFooter,
 };
+
+std::span<const Category> Categories();
+// as the screen names it: "Music Videos", "Other Apps"
+std::string_view CategoryName(Category category);
 
 enum class Widget {
     kCheckbox,
@@ -116,8 +122,10 @@ enum Renderers : uint8_t {
 
 struct Setting {
     std::string_view cvar;
-    Tab tab;
+    Category category;
     std::string_view section;
+    // short, in sentence case; no other row of the category has it (Label
+    // tells a renderer's twin apart)
     std::string_view label;
     Widget widget;
     std::span<const Choice> choices = {};
@@ -131,18 +139,29 @@ struct Setting {
     std::string_view companion = {};
     // input_backend's xinput, GoCentral and Liveless are Windows only
     bool windows_only = false;
-    // a line of small text under the row's control: what the choice does to
-    // the game, where the row's label can't say it
+    // shown only on a Steam Deck (steam_deck_defaults)
+    bool deck_only = false;
+    // a folder the game takes as it starts: changed on the launcher only, so
+    // read-only in game (SettingsModel::ReadOnly)
+    bool launcher_only = false;
+    // read once as band3 starts, from the command line (a generated row of a
+    // kInitOnly setting, as --settings_reference): shown, never changed
+    bool command_line_only = false;
+    // a warning about the choice, for the detail panel: what it costs the
+    // game, where the row's label can't say it
     std::string_view note = {};
+    // what the setting does, in plain words, for the detail panel; the
+    // generated rows have the registry's description instead
+    std::string_view about = {};
 };
 
-// every setting the launcher shows, in display order: tab, then section, then row
+// every setting the launcher shows, in display order: category, then section, then row
 std::span<const Setting> SettingTable();
 const Setting* FindSetting(std::span<const Setting> table, std::string_view cvar);
-// a tab's sections, in order
-std::vector<std::string_view> SectionsOf(std::span<const Setting> table, Tab tab);
+// a category's sections, in order
+std::vector<std::string_view> SectionsOf(std::span<const Setting> table, Category category);
 
-// The Graphics tab's Lowest latency button's frame_cap for a display of
+// The Display category's Lowest delay row's frame_cap for a display of
 // `display_hz` (0 when it can't be told): the most whole refreshes' worth of
 // frames up to 240, so the window's picture still steps evenly; 240 for a
 // display that can't be told
@@ -201,16 +220,16 @@ enum class Where { kLauncher, kInGame };
 
 // What a settings page has, by where it shows.
 struct PageFeatures {
-    // the Controllers tab's device list and tester: it reads every device
-    // itself, which in game would be reading the game's input system from
-    // under it (the Instrument Lab, F6, tests devices in game)
+    // the controller tester: it reads every device itself, which in game
+    // would be reading the game's input system from under it (the Instrument
+    // Lab, F6, tests devices in game)
     bool device_tester = true;
     // a level meter beside each mic slot: it records from the microphone,
     // which in game the game is capturing from
     bool mic_meters = true;
-    // the Advanced tab, and the generated rows of band3's settings the table
-    // doesn't have (generated_rows.h)
-    bool generated_rows = false;
+    // the Advanced category, and the generated rows of band3's settings the
+    // table doesn't have (generated_rows.h)
+    bool generated_rows = true;
     // a row says when a change waits for the next start (WaitsForNextStart);
     // on the launcher everything applies at Play, or Play restarts band3
     bool next_start_notes = false;
@@ -321,15 +340,21 @@ public:
     // the cvar exists and the platform has it; an unavailable setting isn't
     // shown and its key is left alone
     bool Available(const Setting& setting) const;
-    // Available, drawn (not kNone), on a Deck for the Deck banner, its
-    // shown_when holds, and renderer is one it's for
+    // Available, drawn (not kNone), on a Deck for a deck_only row, its
+    // shown_when holds (and the row that controls it is visible itself), and
+    // renderer is one it's for
     bool Visible(const Setting& setting) const;
+    // the row's label; with renderer both, a row for one renderer whose label
+    // a row of the other's shares says whose it is: "Anti-aliasing (native)"
+    std::string Label(const Setting& setting) const;
+    // how many of the category's visible rows differ from their defaults
+    int ChangedIn(Category category) const;
     // the choice is offered on this platform
     bool Offered(const Choice& choice) const;
-    // what a section says under its heading, if anything: the emulated GPU's
-    // section, chosen while this run has none, that its settings show after
-    // the restart Play makes
-    std::optional<std::string> SectionNote(Tab tab, std::string_view section) const;
+    // what a section says under its band, if anything: the emulated GPU's
+    // settings, chosen while this run has none, that they show after the
+    // restart Play makes
+    std::optional<std::string> SectionNote(Category category, std::string_view section) const;
 
     std::string Value(std::string_view cvar) const;
     // sets the cvar now, so HotReload settings apply at once; false if it's
@@ -342,7 +367,7 @@ public:
     // folder for kPath)
     std::string EffectiveDefault(std::string_view cvar) const;
     // differs from the effective default, or its companion does: the row
-    // shows a reset button, and Save writes it
+    // shows its changed dot, Reset can take it back, and Save writes it
     bool IsChanged(std::string_view cvar) const;
     // back to the effective default (empty for a folder), companion too, so
     // Save removes the key; false if locked
@@ -351,8 +376,9 @@ public:
     Lock LockOf(std::string_view cvar) const;
     bool IsLocked(std::string_view cvar) const { return LockOf(cvar) != Lock::kNone; }
 
-    // in game, a kInitOnly setting: shown, but it can't be changed, and Save
-    // leaves its key alone
+    // in game, a kInitOnly setting or a launcher_only folder, and anywhere a
+    // command_line_only row: shown, but it can't be changed, and Save leaves
+    // its key alone
     bool ReadOnly(std::string_view cvar) const;
     // in game, a change to it applies only from the next start: the registry
     // says kRequiresRestart (or kInitOnly), or the game reads it once as it

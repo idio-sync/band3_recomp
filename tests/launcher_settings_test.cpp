@@ -58,35 +58,35 @@ std::string Generic(const fs::path& p) {
 constexpr Choice kOnOff[] = {{"false", "Off"}, {"true", "On"}};
 
 constexpr Setting kTable[] = {
-    {.cvar = "fullscreen", .tab = Tab::kGraphics, .section = "Display", .label = "Window mode",
+    {.cvar = "fullscreen", .category = Category::kGraphics, .section = "Display", .label = "Window mode",
      .widget = Widget::kWindowMode, .companion = "fullscreen_exclusive"},
-    {.cvar = "fullscreen_exclusive", .tab = Tab::kGraphics, .section = "Display",
+    {.cvar = "fullscreen_exclusive", .category = Category::kGraphics, .section = "Display",
      .label = "Exclusive", .widget = Widget::kNone},
-    {.cvar = "present_letterbox", .tab = Tab::kGraphics, .section = "Display", .label = "Aspect",
+    {.cvar = "present_letterbox", .category = Category::kGraphics, .section = "Display", .label = "Aspect",
      .widget = Widget::kCombo, .choices = kOnOff},
-    {.cvar = "rnd_sync", .tab = Tab::kGraphics, .section = "Rendering", .label = "Sync",
+    {.cvar = "rnd_sync", .category = Category::kGraphics, .section = "Rendering", .label = "Sync",
      .widget = Widget::kIntStepper},
-    {.cvar = "song_speed", .tab = Tab::kGame, .section = "Game", .label = "Song speed",
+    {.cvar = "song_speed", .category = Category::kGame, .section = "Game", .label = "Song speed",
      .widget = Widget::kFloatSlider},
-    {.cvar = "audio_maxqframes", .tab = Tab::kAudio, .section = "Output", .label = "Buffer",
+    {.cvar = "audio_maxqframes", .category = Category::kAudio, .section = "Output", .label = "Buffer",
      .widget = Widget::kIntStepper},
-    {.cvar = "input_backend", .tab = Tab::kControllers, .section = "Input", .label = "Backend",
+    {.cvar = "input_backend", .category = Category::kControllers, .section = "Input", .label = "Backend",
      .widget = Widget::kCombo, .windows_only = true},
-    {.cvar = "midi_drums", .tab = Tab::kControllers, .section = "MIDI", .label = "MIDI drums",
+    {.cvar = "midi_drums", .category = Category::kControllers, .section = "MIDI", .label = "MIDI drums",
      .widget = Widget::kCheckbox},
-    {.cvar = "midi_drums_device", .tab = Tab::kControllers, .section = "MIDI", .label = "Port",
+    {.cvar = "midi_drums_device", .category = Category::kControllers, .section = "MIDI", .label = "Port",
      .widget = Widget::kText, .shown_when = {"midi_drums", "true"}},
-    {.cvar = "lang", .tab = Tab::kGame, .section = "Profile", .label = "Language",
+    {.cvar = "lang", .category = Category::kGame, .section = "Profile", .label = "Language",
      .widget = Widget::kCombo},
-    {.cvar = "game_data_root", .tab = Tab::kGame, .section = "Folders", .label = "Game data",
+    {.cvar = "game_data_root", .category = Category::kGame, .section = "Folders", .label = "Game data",
      .widget = Widget::kPath},
-    {.cvar = "content_folders", .tab = Tab::kGame, .section = "Folders", .label = "Songs",
+    {.cvar = "content_folders", .category = Category::kGame, .section = "Folders", .label = "Songs",
      .widget = Widget::kFolderList},
-    {.cvar = "missing_cvar", .tab = Tab::kGame, .section = "Game", .label = "Not in this build",
+    {.cvar = "missing_cvar", .category = Category::kGame, .section = "Game", .label = "Not in this build",
      .widget = Widget::kCheckbox},
-    {.cvar = "steam_deck_defaults", .tab = Tab::kSteamDeck, .section = "Steam Deck",
-     .label = "Deck", .widget = Widget::kCheckbox},
-    {.cvar = "show_launcher", .tab = Tab::kFooter, .section = "Footer",
+    {.cvar = "steam_deck_defaults", .category = Category::kDisplay, .section = "Screen",
+     .label = "Deck", .widget = Widget::kCheckbox, .deck_only = true},
+    {.cvar = "show_launcher", .category = Category::kGame, .section = "Startup",
      .label = "Show this screen at startup", .widget = Widget::kCheckbox},
 };
 
@@ -573,7 +573,7 @@ TEST_CASE("Deck warning for a render scale above 1") {
     Fixture f;
     f.env.cvars["resolution_scale"] = Facts(ValueType::kInt, "1");
     f.store.values["resolution_scale"] = "2";
-    const Setting table[] = {{.cvar = "resolution_scale", .tab = Tab::kGraphics,
+    const Setting table[] = {{.cvar = "resolution_scale", .category = Category::kGraphics,
                               .section = "Rendering", .label = "Render scale",
                               .widget = Widget::kIntStepper}};
     SettingsModel desktop(table, f.env, f.store);
@@ -592,9 +592,9 @@ TEST_CASE("GoCentral warns until the profile name is one of your own") {
     f.store.values["gocentral"] = "false";
     f.store.values["username"] = "User";
     const Setting table[] = {
-        {.cvar = "username", .tab = Tab::kGame, .section = "Profile", .label = "Profile name",
+        {.cvar = "username", .category = Category::kGame, .section = "Profile", .label = "Profile name",
          .widget = Widget::kText},
-        {.cvar = "gocentral", .tab = Tab::kOnline, .section = "GoCentral", .label = "GoCentral",
+        {.cvar = "gocentral", .category = Category::kOnline, .section = "GoCentral", .label = "GoCentral",
          .widget = Widget::kCheckbox},
     };
     SettingsModel m(table, f.env, f.store);
@@ -618,11 +618,11 @@ TEST_CASE("Liveless warns when the game to join isn't an address") {
     f.store.values["liveless_connect"] = "";
     f.store.values["liveless_port"] = "9103";
     const Setting table[] = {
-        {.cvar = "liveless", .tab = Tab::kOnline, .section = "Online play", .label = "Liveless",
+        {.cvar = "liveless", .category = Category::kOnline, .section = "Online play", .label = "Liveless",
          .widget = Widget::kCheckbox},
-        {.cvar = "liveless_connect", .tab = Tab::kOnline, .section = "Online play",
+        {.cvar = "liveless_connect", .category = Category::kOnline, .section = "Online play",
          .label = "Game to join", .widget = Widget::kText, .shown_when = {"liveless", "true"}},
-        {.cvar = "liveless_port", .tab = Tab::kOnline, .section = "Online play",
+        {.cvar = "liveless_port", .category = Category::kOnline, .section = "Online play",
          .label = "Port", .widget = Widget::kIntStepper, .shown_when = {"liveless", "true"}},
     };
     SettingsModel m(table, f.env, f.store);
@@ -647,9 +647,9 @@ TEST_CASE("a row shown while a setting isn't empty follows any value of it") {
     f.store.values["ha_mqtt_host"] = "";
     f.store.values["ha_mqtt_port"] = "1883";
     const Setting table[] = {
-        {.cvar = "ha_mqtt_host", .tab = Tab::kOnline, .section = "Home Assistant",
+        {.cvar = "ha_mqtt_host", .category = Category::kOnline, .section = "Home Assistant",
          .label = "MQTT broker", .widget = Widget::kText},
-        {.cvar = "ha_mqtt_port", .tab = Tab::kOnline, .section = "Home Assistant",
+        {.cvar = "ha_mqtt_port", .category = Category::kOnline, .section = "Home Assistant",
          .label = "Port", .widget = Widget::kIntStepper,
          .shown_when = {.cvar = "ha_mqtt_host", .not_empty = true}},
     };
@@ -669,9 +669,9 @@ TEST_CASE("a password row's refusal doesn't repeat what was typed") {
     f.env.cvars["ha_mqtt_username"] = Facts(ValueType::kString, "");
     f.env.cvars["ha_mqtt_password"] = Facts(ValueType::kString, "");
     const Setting table[] = {
-        {.cvar = "ha_mqtt_username", .tab = Tab::kOnline, .section = "Home Assistant",
+        {.cvar = "ha_mqtt_username", .category = Category::kOnline, .section = "Home Assistant",
          .label = "User name", .widget = Widget::kText},
-        {.cvar = "ha_mqtt_password", .tab = Tab::kOnline, .section = "Home Assistant",
+        {.cvar = "ha_mqtt_password", .category = Category::kOnline, .section = "Home Assistant",
          .label = "Password", .widget = Widget::kPassword},
     };
     SettingsModel m(table, f.env, f.store);
@@ -811,15 +811,16 @@ TEST_CASE("the renderer's default is native on Windows, and an untouched one isn
 
 namespace {
 
-// the real Graphics tab, every cvar there registered (`plugin`: the emulated
-// GPU's own too, as in a run with it), renderer set to `renderer`
+// the real Display and Graphics categories (the old Graphics tab), every cvar
+// there registered (`plugin`: the emulated GPU's own too, as in a run with it),
+// renderer set to `renderer`
 struct GraphicsTab {
     Fixture f;
     std::optional<SettingsModel> model;
 
     GraphicsTab(const char* renderer, bool plugin = true) {
         for (const Setting& s : SettingTable()) {
-            if (s.tab != Tab::kGraphics) continue;
+            if (s.category != Category::kGraphics && s.category != Category::kDisplay) continue;
             f.env.cvars[std::string(s.cvar)] = Facts(ValueType::kString, "");
         }
         f.env.cvars["renderer"].registry_default = band3::settings::kDefaultRenderer;
@@ -840,7 +841,9 @@ struct GraphicsTab {
     std::set<std::string> Shown() const {
         std::set<std::string> shown;
         for (const Setting& s : SettingTable()) {
-            if (s.tab == Tab::kGraphics && model->Visible(s)) shown.insert(std::string(s.cvar));
+            const bool graphics =
+                s.category == Category::kGraphics || s.category == Category::kDisplay;
+            if (graphics && model->Visible(s)) shown.insert(std::string(s.cvar));
         }
         return shown;
     }
@@ -865,26 +868,27 @@ std::set<std::string> Union(std::initializer_list<std::set<std::string>> sets) {
 
 }  // namespace
 
-TEST_CASE("the Graphics tab shows each group only for the renderers it applies to") {
+TEST_CASE("Display and Graphics show each group only for the renderers it applies to") {
     CHECK(GraphicsTab("native").Shown() == Union({kEveryRenderer, kNativeRows}));
     CHECK(GraphicsTab("emulated").Shown() == Union({kEveryRenderer, kEmulatedRows}));
     // both: everything, and what the emulated GPU does while the native picture shows
     CHECK(GraphicsTab("both").Shown() ==
           Union({kEveryRenderer, kNativeRows, kEmulatedRows, {"emulated_gpu_while_native"}}));
     // the groups have their own sections
-    const auto sections = SectionsOf(SettingTable(), Tab::kGraphics);
-    CHECK(sections == std::vector<std::string_view>{"Latency", "Display", "Renderer",
-                                                    "Native renderer", "Emulated GPU", "Game"});
+    CHECK(SectionsOf(SettingTable(), Category::kDisplay) ==
+          std::vector<std::string_view>{"Screen", "Smoothness"});
+    CHECK(SectionsOf(SettingTable(), Category::kGraphics) ==
+          std::vector<std::string_view>{"Renderer", "Quality", "Effects", "Timing"});
 }
 
-TEST_CASE("the Latency section says what its rows do and to calibrate again") {
+TEST_CASE("the Smoothness section says what its rows cost and to calibrate again") {
     for (const char* cvar : {"frame_cap", "native_present_pacing"}) {
         const Setting* row = FindSetting(SettingTable(), cvar);
         REQUIRE(row);
-        CHECK(row->section == "Latency");
+        CHECK(row->section == "Smoothness");
         CHECK_FALSE(row->note.empty());
     }
-    const auto note = GraphicsTab("native").model->SectionNote(Tab::kGraphics, "Latency");
+    const auto note = GraphicsTab("native").model->SectionNote(Category::kDisplay, "Smoothness");
     REQUIRE(note);
     CHECK(note->find("calibration") != std::string::npos);
 }
@@ -919,13 +923,13 @@ TEST_CASE("the emulated GPU's own settings, chosen in a run without it, wait for
     // renderer native at startup: the plugin's settings don't exist
     GraphicsTab tab("emulated", false);
     CHECK(tab.Shown() == Union({kEveryRenderer, {"compress_character_textures"}}));
-    const auto note = tab.model->SectionNote(Tab::kGraphics, "Emulated GPU");
+    const auto note = tab.model->SectionNote(Category::kGraphics, "Quality");
     REQUIRE(note);
     CHECK(note->find("Play restarts band3") != std::string::npos);
     // nothing to say for native, nor where the emulated GPU runs
-    CHECK_FALSE(GraphicsTab("native", false).model->SectionNote(Tab::kGraphics, "Emulated GPU"));
-    CHECK_FALSE(GraphicsTab("emulated").model->SectionNote(Tab::kGraphics, "Emulated GPU"));
-    CHECK_FALSE(tab.model->SectionNote(Tab::kGraphics, "Native renderer"));
+    CHECK_FALSE(GraphicsTab("native", false).model->SectionNote(Category::kGraphics, "Quality"));
+    CHECK_FALSE(GraphicsTab("emulated").model->SectionNote(Category::kGraphics, "Quality"));
+    CHECK_FALSE(tab.model->SectionNote(Category::kGraphics, "Effects"));
 }
 
 TEST_CASE("renderer offers native, emulated and both on Windows and Linux") {
@@ -1016,7 +1020,7 @@ TEST_CASE("the launcher's table is consistent") {
                               "virtual_instrument", "main_heap_size", "char_heap_size"}) {
         CHECK_FALSE(FindSetting(table, debug));
     }
-    for (const auto& s : table) CHECK(s.tab != Tab::kAdvanced);
+    for (const auto& s : table) CHECK(s.category != Category::kAdvanced);
     for (const char* wanted : {"game_data_root", "user_data_root", "content_folders",
                                "show_launcher", "steam_deck_defaults", "joypad_lag"}) {
         CHECK(FindSetting(table, wanted));
@@ -1027,7 +1031,7 @@ TEST_CASE("the launcher's table is consistent") {
         INFO(online);
         const Setting* s = FindSetting(table, online);
         REQUIRE(s);
-        CHECK(s->tab == Tab::kOnline);
+        CHECK(s->category == Category::kOnline);
         // Linux too, since Liveless played there (a Steam Deck)
         CHECK_FALSE(s->windows_only);
     }
@@ -1042,7 +1046,7 @@ TEST_CASE("the launcher's table is consistent") {
         INFO(needs_broker);
         const Setting* s = FindSetting(table, needs_broker);
         REQUIRE(s);
-        CHECK(s->tab == Tab::kOnline);
+        CHECK(s->category == Category::kOtherApps);
         CHECK(s->shown_when.cvar == "ha_mqtt_host");
         CHECK(s->shown_when.not_empty);
     }
@@ -1054,7 +1058,7 @@ TEST_CASE("the launcher's table is consistent") {
     REQUIRE(port->range);
     CHECK(port->range->min == 1024);
     CHECK(port->range->max == 65000);
-    const auto sections = SectionsOf(table, Tab::kGame);
+    const auto sections = SectionsOf(table, Category::kGame);
     REQUIRE_FALSE(sections.empty());
     CHECK(sections.front() == "Folders");
 }
@@ -1065,7 +1069,7 @@ TEST_CASE("in game, the page leaves out what reads the devices or the microphone
     const PageFeatures launcher = FeaturesFor(Where::kLauncher);
     CHECK(launcher.device_tester);
     CHECK(launcher.mic_meters);
-    CHECK_FALSE(launcher.generated_rows);
+    CHECK(launcher.generated_rows);
     CHECK_FALSE(launcher.next_start_notes);
 
     const PageFeatures in_game = FeaturesFor(Where::kInGame);
@@ -1151,7 +1155,7 @@ TEST_CASE("in game, renderer waits for the next start only for the other GPU") {
     InGame f;
     f.env.cvars["renderer"] = Facts(ValueType::kString, "native");
     f.env.cvars["renderer"].allowed = {"native", "emulated", "both"};
-    const Setting row{.cvar = "renderer", .tab = Tab::kGraphics, .section = "Renderer",
+    const Setting row{.cvar = "renderer", .category = Category::kGraphics, .section = "Renderer",
                       .label = "Renderer", .widget = Widget::kCombo};
     const Setting table[] = {row};
 
@@ -1212,14 +1216,14 @@ TEST_CASE("in game, a start-only setting is shown read-only and Save leaves its 
     CHECK_FALSE(launcher.ReadOnly("midi_drums_device"));
 }
 
-TEST_CASE("in game, the folders say they apply at the next start") {
+TEST_CASE("in game, the folders say they're changed from the launcher") {
     InGame f;
     SettingsModel in_game(kTable, f.env, f.store);
-    CHECK(in_game.SectionNote(Tab::kGame, "Folders"));
-    CHECK_FALSE(in_game.SectionNote(Tab::kGame, "Game"));
+    CHECK(in_game.SectionNote(Category::kGame, "Folders"));
+    CHECK_FALSE(in_game.SectionNote(Category::kGame, "Game"));
     f.env.in_game = false;
     SettingsModel launcher(kTable, f.env, f.store);
-    CHECK_FALSE(launcher.SectionNote(Tab::kGame, "Folders"));
+    CHECK_FALSE(launcher.SectionNote(Category::kGame, "Folders"));
 }
 
 TEST_CASE("in game, Save writes generated rows as the launcher would: overrides only") {

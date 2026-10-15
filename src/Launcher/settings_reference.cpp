@@ -26,19 +26,6 @@ std::string ReferenceText(std::string_view text) {
 
 namespace {
 
-constexpr std::pair<Tab, std::string_view> kTabNames[] = {
-    {Tab::kGame, "Game"},
-    {Tab::kGraphics, "Graphics"},
-    {Tab::kAudio, "Audio"},
-    {Tab::kControllers, "Controllers"},
-    {Tab::kOnline, "Online"},
-    {Tab::kLights, "Lights"},
-    {Tab::kVideos, "Videos"},
-    {Tab::kAdvanced, "Advanced"},
-    {Tab::kSteamDeck, "Steam Deck"},
-    {Tab::kFooter, "Launcher"},
-};
-
 constexpr std::string_view kTableHead =
     "| Setting | Default | Takes | What it does |\n|---|---|---|---|\n";
 
@@ -160,8 +147,8 @@ std::string SettingsReference(const ReferenceInputs& in) {
         "     src/settings.cpp (or the SDK), its label and section in\n"
         "     src/Launcher/launcher_settings.cpp. -->\n"
         "\n"
-        "Every setting the launcher and the in-game settings (Escape > Settings) show, tab by "
-        "tab, as this "
+        "Every setting the launcher and the in-game settings (Escape > Settings) show, "
+        "category by category, as this "
         "build of band3 registers them. Each can be saved in `band3.toml` as `name = value` "
         "or passed on the command line as `--name=value`; [Settings, folders and "
         "songs](settings.md#config-files) says which wins when several places set one. The "
@@ -169,21 +156,23 @@ std::string SettingsReference(const ReferenceInputs& in) {
     out += in.platform;
     out += " build's.\n";
 
-    for (const auto& [tab, tab_name] : kTabNames) {
-        const std::vector<std::string_view> sections = SectionsOf(in.page, tab);
-        std::string tab_text;
+    for (const Category category : Categories()) {
+        const std::vector<std::string_view> sections = SectionsOf(in.page, category);
+        std::string category_text;
         for (const std::string_view section : sections) {
             std::string rows;
             for (const Setting& row : in.page) {
-                if (row.tab != tab || row.section != section) continue;
+                if (row.category != category || row.section != section) continue;
                 if (const RegistryCvar* c = Find(in.cvars, row.cvar)) rows += Line(&row, *c);
             }
             if (rows.empty()) continue;
-            // a tab with one section needs no heading for it
-            if (sections.size() > 1) tab_text += "\n### " + ReferenceText(section) + "\n";
-            tab_text += "\n" + std::string(kTableHead) + rows;
+            // a category with one section needs no heading for it
+            if (sections.size() > 1) category_text += "\n### " + ReferenceText(section) + "\n";
+            category_text += "\n" + std::string(kTableHead) + rows;
         }
-        if (!tab_text.empty()) out += "\n## " + std::string(tab_name) + "\n" + tab_text;
+        if (!category_text.empty()) {
+            out += "\n## " + std::string(CategoryName(category)) + "\n" + category_text;
+        }
     }
 
     // the ini's settings F4 doesn't show, once each
@@ -198,7 +187,7 @@ std::string SettingsReference(const ReferenceInputs& in) {
     if (!sdk_rows.empty()) {
         out += "\n## More of the SDK's settings\n\n"
                "The SDK's settings band3_config.ini sets that the launcher's and the in-game "
-               "settings' tabs don't show. The in-game settings' **All settings...** lists "
+               "settings' categories don't show. The in-game settings' **All settings...** lists "
                "these with the rest of the SDK's.\n\n";
         out += kTableHead;
         out += sdk_rows;

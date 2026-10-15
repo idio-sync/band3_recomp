@@ -30,20 +30,20 @@ constexpr Choice kTypes[] = {{"-1", "Don't override"}, {"7", "Guitar"}};
 constexpr Choice kCaps[] = {{"display", "The display's"}, {"60", "60 fps"}};
 
 constexpr Setting kPage[] = {
-    {.cvar = "fast_start", .tab = Tab::kGame, .section = "Game", .label = "Skip the splash screens",
+    {.cvar = "fast_start", .category = Category::kGame, .section = "Game", .label = "Skip the splash screens",
      .widget = Widget::kCheckbox},
-    {.cvar = "lang", .tab = Tab::kGame, .section = "Profile", .label = "Language",
+    {.cvar = "lang", .category = Category::kGame, .section = "Profile", .label = "Language",
      .widget = Widget::kCombo},
-    {.cvar = "controller_type", .tab = Tab::kControllers, .section = "Instruments",
+    {.cvar = "controller_type", .category = Category::kControllers, .section = "Instruments",
      .label = "Gamepads play as", .widget = Widget::kCombo, .choices = kTypes},
-    {.cvar = "frame_cap", .tab = Tab::kGraphics, .section = "Display", .label = "Frame rate cap",
+    {.cvar = "frame_cap", .category = Category::kGraphics, .section = "Display", .label = "Frame rate cap",
      .widget = Widget::kComboText, .choices = kCaps},
-    {.cvar = "song_speed", .tab = Tab::kGame, .section = "Game", .label = "Song speed",
+    {.cvar = "song_speed", .category = Category::kGame, .section = "Game", .label = "Song speed",
      .widget = Widget::kFloatSlider, .unit = "x"},
     // registered in another build only
-    {.cvar = "missing", .tab = Tab::kGame, .section = "Game", .label = "Missing",
+    {.cvar = "missing", .category = Category::kGame, .section = "Game", .label = "Missing",
      .widget = Widget::kCheckbox},
-    {.cvar = "test_port", .tab = Tab::kAdvanced, .section = "Test harness", .label = "test_port",
+    {.cvar = "test_port", .category = Category::kAdvanced, .section = "Test harness", .label = "test_port",
      .widget = Widget::kIntStepper},
 };
 
@@ -148,7 +148,7 @@ TEST_CASE("the ini's settings the page doesn't show get a section, and its keys 
 }
 
 TEST_CASE("a cell keeps its text whole: |, <...> and * are escaped") {
-    const Setting page[] = {{.cvar = "http_address", .tab = Tab::kOnline, .section = "Web",
+    const Setting page[] = {{.cvar = "http_address", .category = Category::kOnline, .section = "Web",
                              .label = "Address", .widget = Widget::kText}};
     std::vector<RegistryCvar> cvars = {
         Cvar("http_address", ValueType::kString, "a|b", "Open http://<this PC>/ on *.local\nthen")};

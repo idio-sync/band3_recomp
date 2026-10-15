@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 #include <imgui.h>
+#include "box.h"
 #include "skin.h"
 #include "theme.h"
 
@@ -64,6 +65,9 @@ struct RowLook {
 // the screen's background: navy, lighter towards the menu, the ornament's
 // grain and the header's streaks when the skin has them, darker at the edges
 void DrawBackground(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin);
+// the background over the running game (the in-game settings): the game
+// shows through, darkened and tinted navy, with the grain over it
+void DrawGameDim(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin);
 // a screen's big faded title, its top-left at `pos`
 void DrawTitle(ImDrawList* dl, ImVec2 pos, std::string_view text, float size = text::kTitle);
 // the grey strip under a title
@@ -96,5 +100,11 @@ void DrawIcon(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin, int colu
 // kHelpPlay), -1 for none.
 int DrawHelpBar(ImDrawList* dl, ImVec2 min, ImVec2 max, std::span<const HelpItem> items, bool keyboard,
                 bool play, const Skin& skin);
+// a box (box.h) centred over `min`-`max`, the screen under it darkened;
+// returns the choice the mouse is over, -1 for none
+int DrawBox(ImDrawList* dl, ImVec2 min, ImVec2 max, const Box& box, const Skin& skin);
+// a count in an orange pill (a category's settings changed), its right edge
+// at `right`; returns its width
+float DrawCount(ImDrawList* dl, float right, float center_y, int count);
 
 }

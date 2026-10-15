@@ -5,7 +5,7 @@
      src/settings.cpp (or the SDK), its label and section in
      src/Launcher/launcher_settings.cpp. -->
 
-Every setting the launcher and the in-game settings (Escape > Settings) show, tab by tab, as this build of band3 registers them. Each can be saved in `band3.toml` as `name = value` or passed on the command line as `--name=value`; [Settings, folders and songs](settings.md#config-files) says which wins when several places set one. The defaults are the Windows build's.
+Every setting the launcher and the in-game settings (Escape > Settings) show, category by category, as this build of band3 registers them. Each can be saved in `band3.toml` as `name = value` or passed on the command line as `--name=value`; [Settings, folders and songs](settings.md#config-files) says which wins when several places set one. The defaults are the Windows build's.
 
 ## Game
 
@@ -21,92 +21,110 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `lang`<br>Language | *(empty)* | *(empty)* Game's default, `eng` English, `esl` Spanish, `fre` French, `ita` Italian, `deu` German | Force a language: eng, esl (Spanish), fre, ita or deu. Empty uses the default *Applies at the next start.* |
 | `username`<br>Profile name | *(empty)* | text | Override the username (up to 15 characters): the profile's gamertag wherever the game asks for it, online included. Empty keeps the profile's |
+| `lang`<br>Language | *(empty)* | *(empty)* Default, `eng` English, `esl` Spanish, `fre` French, `ita` Italian, `deu` German | Force a language: eng, esl (Spanish), fre, ita or deu. Empty uses the default *Applies at the next start.* |
+| `skip_profile_prompt`<br>Guests without a profile | `true` | `true`, `false` | Players who join without a profile join as guests, without the game asking them to choose one (No Profile, Sign In, Swap to User). Off, it asks, as on a console |
+| `score_history`<br>Score history | `true` | `true`, `false` | Keep every finished song's results (score, stars, notes hit, streak, overdrive) in score_history.jsonl in the user data folder, for the web page's History tab and its played and stars filters. Songs played on autoplay aren't kept |
 
-### Game
+### Startup
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
+| `show_launcher`<br>Show this screen at startup | `true` | `true`, `false` | Show the launcher, band3's setup screen, before the game starts. Off, band3 starts the game straight away; hold Shift as it starts, or start it with --launcher, to see the launcher anyway *Applies at the next start.* |
 | `fast_start`<br>Skip the splash screens | `false` | `true`, `false` | Skip the splash screens once the game has finished initializing *Applies at the next start.* |
 | `autosave`<br>Autosave | `true` | `true`, `false` | Let the game autosave profiles, after songs and setlist edits. Off, they're only saved from the options menu, e.g. to test with autoplay without touching your profile |
-| `score_history`<br>Score history | `true` | `true`, `false` | Keep every finished song's results (score, stars, notes hit, streak, overdrive) in score_history.jsonl in the user data folder, for the web page's History tab and its played and stars filters. Songs played on autoplay aren't kept |
-| `skip_profile_prompt`<br>Join without a profile as a guest | `true` | `true`, `false` | Players who join without a profile join as guests, without the game asking them to choose one (No Profile, Sign In, Swap to User). Off, it asks, as on a console |
 | `disable_metamusic`<br>Menu music | `false` | `true`, `false` | Disable the background menu music *Applies at the next start.* |
-| `forced_venue`<br>Forced venue | `false` | text; `false` Don't force, `arena` Arena, `big_club` Big club, `small_club` Small club, `festival` Festival, `video` Video venue, `none` None (black background) | Venue to force, applied from the next venue load. false = don't force. A venue (arena_04), a class (arena, big_club, small_club, festival, video), none for a black background, or a comma separated list to pick from at random |
-| `song_speed`<br>Song speed | `1` | `0.1` to `10` (x) | Plays songs faster or slower: 1.5 is half again as fast, 0.75 three quarters. Applies from the next song. A speed other than 1 that practice mode or Rock Band 3 Deluxe's song speed sets is left as it is |
-| `track_speed`<br>Track speed | `1` | `0.1` to `10` (x) | Scrolls the note highway faster or slower: 2 is twice as fast, with the notes twice as far apart. Applies from the next song |
-| `unlock_clothing`<br>Unlock all clothing | `false` | `true`, `false` | Unlock every piece of clothing, tattoo and face paint for your characters, and the video venues, without earning them (RB3Enhanced's UnlockClothing) |
-| `gold_on_all_difficulties`<br>Gold stars on every difficulty | `false` | `true`, `false` | Let gold stars be earned on every difficulty, not only expert (RB3Enhanced's AllowGoldOnAllDifficulties). Applies from the next song |
-| `game_origin_icons`<br>Song source icons (Deluxe) | `true` | `true`, `false` | Show an icon in the song list for the game or pack each song came from (RB3Enhanced's GameOriginIcons). Needs Rock Band 3 Deluxe's icons and a song list with a game_origin_icon slot. Applies the next time the song list opens |
 
-## Graphics
+## Gameplay
 
-### Latency
+### Speed
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `frame_cap`<br>Frame rate cap | `display` | text; `display` The display's refresh rate, `auto` Auto (VRR: G-Sync, FreeSync), `off` Off (the console's vblank), `60` 60 fps, `120` 120 fps, `144` 144 fps, `180` 180 fps, `240` 240 fps | What paces the game's frames. display: the display's refresh rate exactly (119.88 Hz, not 120), for fixed-refresh displays (the default). auto: a little under it (5% less, at least 4 fps), for VRR displays (G-Sync, FreeSync), keeping each frame inside their range; on a fixed-refresh display a cap under the refresh rate shows a frame twice every 1/(refresh - cap) seconds. A number of Hz (24 to 240), e.g. 117. off: the emulated console's vertical blank, paced by vsync and video_mode_refresh_rate (60 unless set). With the cap on, vsync is turned off and an unset video_mode_refresh_rate follows the cap. Without a display whose rate can be told, display and auto are off |
-| `native_present_pacing`<br>Smooth frame pacing | `true` | `true`, `false` | With the native picture shown, publish each frame to the window a steady delay after the game presented it (about the slowest recent frame's), so frames that draw quickly (with even/odd rendering, every other one) don't reach a paint together with the one before; off publishes each as soon as it's drawn, to compare. Only while the game runs under 1.5 times the display's refresh rate, frame_cap isn't auto and native_phase_lock isn't steering the cap on a display of 100 Hz or more: faster, each refresh shows the newest frame anyway, auto's variable refresh display shows each as it comes, and there the phase lock already has each frame reach the window before its paint, so the delay would only add lag. Below 100 Hz the lock keeps it, as frames vary more against the refresh |
+| `song_speed`<br>Song speed | `1` | `0.1` to `10` (x) | Plays songs faster or slower: 1.5 is half again as fast, 0.75 three quarters. Applies from the next song. A speed other than 1 that practice mode or Rock Band 3 Deluxe's song speed sets is left as it is |
+| `track_speed`<br>Note speed | `1` | `0.1` to `10` (x) | Scrolls the note highway faster or slower: 2 is twice as fast, with the notes twice as far apart. Applies from the next song |
 
-### Display
+### Unlocks
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `unlock_clothing`<br>Unlock all clothing | `false` | `true`, `false` | Unlock every piece of clothing, tattoo and face paint for your characters, and the video venues, without earning them (RB3Enhanced's UnlockClothing) |
+| `gold_on_all_difficulties`<br>Gold stars on every difficulty | `false` | `true`, `false` | Let gold stars be earned on every difficulty, not only expert (RB3Enhanced's AllowGoldOnAllDifficulties). Applies from the next song |
+
+### Song list
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `game_origin_icons`<br>Song source icons | `true` | `true`, `false` | Show an icon in the song list for the game or pack each song came from (RB3Enhanced's GameOriginIcons). Needs Rock Band 3 Deluxe's icons and a song list with a game_origin_icon slot. Applies the next time the song list opens |
+
+### Venue
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `forced_venue`<br>Venue | `false` | text; `false` Game's pick, `arena` Arena, `big_club` Big club, `small_club` Small club, `festival` Festival, `video` Video venue, `none` None (black) | Venue to force, applied from the next venue load. false = don't force. A venue (arena_04), a class (arena, big_club, small_club, festival, video), none for a black background, or a comma separated list to pick from at random |
+
+## Display
+
+### Screen
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
 | `monitor`<br>Monitor | `0` | `0` to `16`; `0` Default, `1` Primary, `2` Monitor 2, `3` Monitor 3, `4` Monitor 4 | Monitor index to display on (0 = default, 1 = primary, 2 = second monitor, etc.) |
 | `fullscreen`<br>Window mode | `false` | `true`, `false` | Start the window in fullscreen mode |
 | `fullscreen_exclusive`<br>Exclusive fullscreen | `false` | `true`, `false` | Switch the display mode in fullscreen instead of going borderless at the desktop mode |
-| `resolution`<br>Resolution | *(empty)* | text; *(empty)* Default, `720p` 1280 x 720, `1080p` 1920 x 1080, `1440p` 2560 x 1440, `4k` 3840 x 2160 | Common resolution preset for both guest video mode and window (for example: 720p, 1080p, 1440p, 4k, 1280x720) |
-| `present_letterbox`<br>Aspect | `true` | `true`, `false` | Enable letterboxing for non-native aspect ratios |
+| `resolution`<br>Window size | *(empty)* | text; *(empty)* Default, `720p` 1280 x 720, `1080p` 1920 x 1080, `1440p` 2560 x 1440, `4k` 3840 x 2160 | Common resolution preset for both guest video mode and window (for example: 720p, 1080p, 1440p, 4k, 1280x720) |
+| `present_letterbox`<br>Picture shape | `true` | `true`, `false` | Enable letterboxing for non-native aspect ratios |
 | `native_fill_window`<br>Fill the window | `true` | `true`, `false` | Native renderer (renderer native or both): draw the game at the window's shape rather than 16:9 with black bars. A wider window (21:9) shows more to the sides, a taller one (16:10) more above and below, with the HUD and tracks at their size in the middle 16:9. The emulated GPU's picture stays 16:9 |
-| `debug_overlay`<br>Show the FPS counter | `true` | `true`, `false` | Show band3's FPS counter: the game's frame rate (what frame_cap paces, and hit timing follows) and the window's, which the display's refresh rate holds back |
+| `steam_deck_defaults`<br>Steam Deck settings | `true` | `true`, `false` | On a Steam Deck, start fullscreen and letterboxed at the console's 60 Hz with vsync on and the FPS counter off, unless band3.toml or the command line set those *Applies at the next start.* |
+
+### Smoothness
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `frame_cap`<br>Frame rate cap | `display` | text; `display` Match the display, `auto` Just under the display, `off` Off (the console's 60), `60` 60 fps, `120` 120 fps, `144` 144 fps, `180` 180 fps, `240` 240 fps | What paces the game's frames. display: the display's refresh rate exactly (119.88 Hz, not 120), for fixed-refresh displays (the default). auto: a little under it (5% less, at least 4 fps), for VRR displays (G-Sync, FreeSync), keeping each frame inside their range; on a fixed-refresh display a cap under the refresh rate shows a frame twice every 1/(refresh - cap) seconds. A number of Hz (24 to 240), e.g. 117. off: the emulated console's vertical blank, paced by vsync and video_mode_refresh_rate (60 unless set). With the cap on, vsync is turned off and an unset video_mode_refresh_rate follows the cap. Without a display whose rate can be told, display and auto are off |
+| `native_present_pacing`<br>Smooth frame pacing | `true` | `true`, `false` | With the native picture shown, publish each frame to the window a steady delay after the game presented it (about the slowest recent frame's), so frames that draw quickly (with even/odd rendering, every other one) don't reach a paint together with the one before; off publishes each as soon as it's drawn, to compare. Only while the game runs under 1.5 times the display's refresh rate, frame_cap isn't auto and native_phase_lock isn't steering the cap on a display of 100 Hz or more: faster, each refresh shows the newest frame anyway, auto's variable refresh display shows each as it comes, and there the phase lock already has each frame reach the window before its paint, so the delay would only add lag. Below 100 Hz the lock keeps it, as frames vary more against the refresh |
+| `debug_overlay`<br>FPS counter | `true` | `true`, `false` | Show band3's FPS counter: the game's frame rate (what frame_cap paces, and hit timing follows) and the window's, which the display's refresh rate holds back |
+
+## Graphics
 
 ### Renderer
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `renderer`<br>Renderer | `native` | `native` Native, `emulated` Emulated, `both` Native + emulated (debug) | What draws the picture. native: band3's own renderer alone, no emulated Xbox 360 GPU (the default on Windows, and on a Steam Deck through its presets). emulated: the emulated GPU alone (the default elsewhere). both, Native + emulated (debug): the two, F8 switching between their pictures. Native to or from the others applies at the next start. Band3/Graphics/Native applies to native and both; Band3/Graphics/Emulated and the emulated GPU's own (under GPU, there only in a run with it) to emulated and both |
+| `renderer`<br>Renderer | `native` | `native` Native, `emulated` Emulated, `both` Both (debug) | What draws the picture. native: band3's own renderer alone, no emulated Xbox 360 GPU (the default on Windows, and on a Steam Deck through its presets). emulated: the emulated GPU alone (the default elsewhere). both, Native + emulated (debug): the two, F8 switching between their pictures. Native to or from the others applies at the next start. Band3/Graphics/Native applies to native and both; Band3/Graphics/Emulated and the emulated GPU's own (under GPU, there only in a run with it) to emulated and both |
+| `emulated_gpu_while_native`<br>Emulated GPU's work | `skip_draws` | `full` Everything, `skip_draws` Only what's needed, `swap_only` What the game waits on (test) | Renderer both only: what the emulated GPU still does while the native picture shows: skip_draws leaves out the game's draws nobody sees (the native renderer draws them), keeping what RB3 draws once (outfits) so F8 back shows the game's picture; full draws everything, as with the emulated picture shown. swap_only also skips clears, resolves, the flares' occlusion-test quads and the passes RB3 draws once, leaving only what the game waits on: a test and performance mode, after which F8 back to emulated may show black outfits, portraits and other stale pictures until RB3 draws them again |
 | `emulated_gpu`<br>Emulated GPU | *(empty)* | *(empty)*, `on`, `off` | Retired: set renderer instead. Read at startup for one more release: off is renderer native, on with renderer native is renderer both, on with renderer emulated stays emulated (a renderer set on the command line, or already both, wins). Then cleared *Applies at the next start.* |
 
-### Native renderer
+### Quality
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `native_view_msaa`<br>Anti-aliasing (MSAA) | `2` | `1` Off, `2` 2x (the game's), `4` 4x | Native renderer (renderer native or both) and the native view (experimental): the samples a pixel they draw the HUD, the track and the menus over the world with, averaged at their edges: 2 = the game's (RB3 multisamples them, not the world), 4 smoother, 1 none |
-| `native_anisotropic`<br>Anisotropic filtering | `-1` | `-1` No override, `0` Off, `1` 1x, `2` 2x, `3` 4x, `4` 8x, `5` 16x | Native renderer (renderer native or both): the anisotropic filtering it samples textures with, as the emulated GPU's anisotropic_override counts it: 0 off, 1 = 1x, 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x. -1 (the default) follows anisotropic_override where the emulated GPU runs (both), so the two pictures match, and keeps the game's own otherwise |
-| `native_max_height`<br>Resolution limit | `0` | `0` to `4320`; `0` None (the window's size), `720` 720p, `1080` 1080p, `1440` 1440p, `2160` 4K | Native renderer (renderer native or both): the most lines it draws: a window taller than this has its picture drawn this tall and scaled up to fill it, for 4K on a GPU that can't draw it at full size. 0 = the window's size |
-| `native_view_shadow_scale`<br>Shadow resolution | `1` | `1` 512 x 512 (the game's), `2` 1024 x 1024, `3` 1536 x 1536, `4` 2048 x 2048 | Draw the characters' self-shadow maps this many times the game's 512x512 in the native renderer and the native view (experimental): sharper shadow edges. 1 = the game's |
-
-### Emulated GPU
-
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `resolution_scale`<br>Render scale | `1` | `1` to `8` (x) | Draw resolution scale for both X and Y axes (same as setting draw_resolution_scale_x and draw_resolution_scale_y) *Applies at the next start.* |
+| `native_view_msaa`<br>Anti-aliasing | `2` | `1` Off, `2` Game's (2x), `4` 4x | Native renderer (renderer native or both) and the native view (experimental): the samples a pixel they draw the HUD, the track and the menus over the world with, averaged at their edges: 2 = the game's (RB3 multisamples them, not the world), 4 smoother, 1 none |
 | `swap_post_effect`<br>Anti-aliasing | `none` | `none` Off, `fxaa` FXAA, `fxaa_extreme` FXAA (extreme) | Swap post effect: none, fxaa, fxaa_extreme *Applies at the next start.* |
-| `anisotropic_override`<br>Anisotropic filtering | `3` | `-1` No override, `0` Off, `1` 1x, `2` 2x, `3` 4x, `4` 8x, `5` 16x | Forces anisotropic filtering for eligible textures. Higher values keep textures sharper at oblique angles, but increase texture sampling cost.  -1 = No override   0 = Disable anisotropic filtering   1 = Force 1x anisotropic filtering   2 = Force 2x anisotropic filtering   3 = Force 4x anisotropic filtering   4 = Force 8x anisotropic filtering   5 = Force 16x anisotropic filtering |
-| `vsync`<br>VSync | `true` | `true`, `false` | Enable vertical sync |
-| `emulated_gpu_while_native`<br>Emulated GPU work while native | `skip_draws` | `full` Everything, `skip_draws` Skip what the native picture draws, `swap_only` Only what the game waits on (test) | Renderer both only: what the emulated GPU still does while the native picture shows: skip_draws leaves out the game's draws nobody sees (the native renderer draws them), keeping what RB3 draws once (outfits) so F8 back shows the game's picture; full draws everything, as with the emulated picture shown. swap_only also skips clears, resolves, the flares' occlusion-test quads and the passes RB3 draws once, leaving only what the game waits on: a test and performance mode, after which F8 back to emulated may show black outfits, portraits and other stale pictures until RB3 draws them again |
+| `native_anisotropic`<br>Texture filtering | `-1` | `-1` Default, `0` Off, `1` 1x, `2` 2x, `3` 4x, `4` 8x, `5` 16x | Native renderer (renderer native or both): the anisotropic filtering it samples textures with, as the emulated GPU's anisotropic_override counts it: 0 off, 1 = 1x, 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x. -1 (the default) follows anisotropic_override where the emulated GPU runs (both), so the two pictures match, and keeps the game's own otherwise |
+| `anisotropic_override`<br>Texture filtering | `3` | `-1` Default, `0` Off, `1` 1x, `2` 2x, `3` 4x, `4` 8x, `5` 16x | Forces anisotropic filtering for eligible textures. Higher values keep textures sharper at oblique angles, but increase texture sampling cost.  -1 = No override   0 = Disable anisotropic filtering   1 = Force 1x anisotropic filtering   2 = Force 2x anisotropic filtering   3 = Force 4x anisotropic filtering   4 = Force 8x anisotropic filtering   5 = Force 16x anisotropic filtering |
+| `native_max_height`<br>Render size cap | `0` | `0` to `4320`; `0` Window's size, `720` 720p, `1080` 1080p, `1440` 1440p, `2160` 4K | Native renderer (renderer native or both): the most lines it draws: a window taller than this has its picture drawn this tall and scaled up to fill it, for 4K on a GPU that can't draw it at full size. 0 = the window's size |
+| `native_view_shadow_scale`<br>Shadows | `1` | `1` Game's (512), `2` High (1024), `3` Higher (1536), `4` Highest (2048) | Draw the characters' self-shadow maps this many times the game's 512x512 in the native renderer and the native view (experimental): sharper shadow edges. 1 = the game's |
+| `resolution_scale`<br>Render scale | `1` | `1` to `8` (x) | Draw resolution scale for both X and Y axes (same as setting draw_resolution_scale_x and draw_resolution_scale_y) *Applies at the next start.* |
 
-### Game
+### Effects
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `rnd_sync`<br>Game frame sync | `1` | `-1` Game's choice, `0` Off, `1` On | Vertical sync: -1 = don't override, 0 = off, 1 = on *Applies at the next start.* |
-| `background_fps`<br>Background frame rate | `0` | `0` to `240` (fps); `0` The venue's own | The venue's frame rate under even/odd rendering: 0 = the venue's own (30 in most), whatever the game's refresh rate, or that many fps (at most the refresh rate). RB3 counts it as if the game ran at 60, so at a video_mode_refresh_rate of 120 a venue's 30 drew at 60 |
-| `disable_hair_shader`<br>Disable the hair shader | `false` | `true`, `false` | Don't use the hair shader variation on materials. Applies to materials loaded afterwards |
-| `disable_approximate_lights`<br>Disable approximate lighting | `true` | `true`, `false` | Disable approximate lighting; works around a graphical bug in current ReXGlue |
+| `disable_hair_shader`<br>Hair shader | `false` | `true`, `false` | Don't use the hair shader variation on materials. Applies to materials loaded afterwards |
+| `disable_approximate_lights`<br>Approximate lighting | `true` | `true`, `false` | Disable approximate lighting; works around a graphical bug in current ReXGlue |
 | `force_self_shadow`<br>Self-shadows in every shot | `false` | `true`, `false` | Draw the band's self-shadows in every camera shot, also the ones that turn them off. Characters far from the camera and the crowd still draw without them. Some of those shots may show shadow artifacts the game avoided there. Applies from the next shot |
 | `compress_character_textures`<br>Compress character textures | `false` | `true`, `false` | Compress character textures. Needs the emulated GPU (renderer emulated or both): it's ignored with renderer native, where nothing composes the outfits to read back and they'd show black. Needs readback resolve, or the textures appear bugged. Applies to characters loaded afterwards |
 
-## Audio
-
-### Microphones
+### Timing
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `usb_mics`<br>Use PC microphones | `false` | `true`, `false` | Experimental: sing through microphones on this PC, as Xbox 360 USB microphones *Applies at the next start.* |
-| `usb_mic_devices`<br>Mics | *(empty)* | text | Microphones to sing through, or part of their names, comma separated, one per mic slot (up to 3). Empty uses the system's default recording device *Applies at the next start.* |
-| `usb_mic_monitor`<br>Hear yourself sooner | `false` | `true`, `false` | band3 plays the microphones to the speakers itself, with the game's mic EQ and compressor at its mic volume, and the game adds only its reverb and overdrive echo: you hear yourself in roughly 30 ms instead of 80. The game's gentle pitch correction (Solo vocals) isn't heard |
+| `rnd_sync`<br>Game frame sync | `1` | `-1` Game's pick, `0` Off, `1` On | Vertical sync: -1 = don't override, 0 = off, 1 = on *Applies at the next start.* |
+| `background_fps`<br>Venue frame rate | `0` | `0` to `240` (fps); `0` Venue's own | The venue's frame rate under even/odd rendering: 0 = the venue's own (30 in most), whatever the game's refresh rate, or that many fps (at most the refresh rate). RB3 counts it as if the game ran at 60, so at a video_mode_refresh_rate of 120 a venue's 30 drew at 60 |
+| `vsync`<br>VSync | `true` | `true`, `false` | Enable vertical sync |
+
+## Audio
 
 ### Output
 
@@ -114,39 +132,32 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 |---|---|---|---|
 | `audio_maxqframes`<br>Audio buffer | `4` | a whole number (frames) | Max buffered audio frames (range 4-64). Lower reduces latency but may cause stuttering. |
 
+### Microphones
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `usb_mics`<br>PC microphones | `false` | `true`, `false` | Experimental: sing through microphones on this PC, as Xbox 360 USB microphones *Applies at the next start.* |
+| `usb_mic_devices`<br>Microphones | *(empty)* | text | Microphones to sing through, or part of their names, comma separated, one per mic slot (up to 3). Empty uses the system's default recording device *Applies at the next start.* |
+| `usb_mic_monitor`<br>Hear yourself sooner | `false` | `true`, `false` | band3 plays the microphones to the speakers itself, with the game's mic EQ and compressor at its mic volume, and the game adds only its reverb and overdrive echo: you hear yourself in roughly 30 ms instead of 80. The game's gentle pitch correction (Solo vocals) isn't heard |
+
 ## Controllers
 
 ### Instruments
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `controller_type`<br>Gamepads play as | `7` | `-1` Don't override, `1` Vocals, `7` Guitar, `8` Drums | Instrument gamepads and the keyboard play as: -1 = don't override, 1 = vocals, 7 = guitar, 8 = drums. Instruments that report their own type (Xbox 360 instruments with input_backend = xinput, the virtual instrument) keep it *Applies at the next start.* |
-| `guitar_type`<br>Guitars play as | `auto` | `auto` What each guitar reports, `rock_band` Rock Band guitars, `guitar_hero` Guitar Hero guitars | What RB3 takes guitars for: auto = what each reports itself, rock_band = Rock Band guitars, whose pickup switch picks the overdrive effect, guitar_hero = Guitar Hero guitars, which have no effect switch. A Guitar Hero guitar played as a Rock Band one changes the effect when it's turned face up. auto can't tell on Linux, or for a guitar that isn't an Xbox 360 one; choose guitar_hero for a Guitar Hero guitar there *Applies at the next start.* |
-| `hid_instruments`<br>PlayStation, Wii and Xbox One instruments | `false` | `true`, `false` | Experimental: play PS3, Wii, PS4 and PS5 Rock Band guitars and drum kits (and the MIDI Pro Adapter in drum mode) through their USB dongles, and on Windows Xbox One ones through GameInput 3, as Xbox 360 instruments *Applies at the next start.* |
+| `controller_type`<br>Gamepads play as | `7` | `-1` Game's pick, `1` Vocals, `7` Guitar, `8` Drums | Instrument gamepads and the keyboard play as: -1 = don't override, 1 = vocals, 7 = guitar, 8 = drums. Instruments that report their own type (Xbox 360 instruments with input_backend = xinput, the virtual instrument) keep it *Applies at the next start.* |
+| `guitar_type`<br>Guitars play as | `auto` | `auto` Auto, `rock_band` Rock Band guitars, `guitar_hero` Guitar Hero guitars | What RB3 takes guitars for: auto = what each reports itself, rock_band = Rock Band guitars, whose pickup switch picks the overdrive effect, guitar_hero = Guitar Hero guitars, which have no effect switch. A Guitar Hero guitar played as a Rock Band one changes the effect when it's turned face up. auto can't tell on Linux, or for a guitar that isn't an Xbox 360 one; choose guitar_hero for a Guitar Hero guitar there *Applies at the next start.* |
+| `hid_instruments`<br>Other consoles' instruments | `false` | `true`, `false` | Experimental: play PS3, Wii, PS4 and PS5 Rock Band guitars and drum kits (and the MIDI Pro Adapter in drum mode) through their USB dongles, and on Windows Xbox One ones through GameInput 3, as Xbox 360 instruments *Applies at the next start.* |
+| `input_backend`<br>Controller reading | `sdl` | `sdl` SDL, `xinput` XInput | Input backend: sdl, xinput *Applies at the next start.* *Windows only.* |
 
-### MIDI drums
-
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `midi_drums`<br>Play a MIDI drum kit | `false` | `true`, `false` | Play a MIDI drum kit as a Rock Band pro drum kit, without a MIDI Pro Adapter *Applies at the next start.* |
-| `midi_drums_device`<br>MIDI port | *(empty)* | text | MIDI input port to play, or part of its name. Empty takes the first one no other band3 MIDI device has *Applies at the next start.* |
-| `midi_drums_min_velocity`<br>Minimum velocity | `10` | `1` to `127` | Quieter hits than this (1-127) are ignored *Applies at the next start.* |
-| `midi_drums_combos`<br>Menu buttons from the kit | `true` | `true`, `false` | Menu buttons from the kit: hi-hat pedal three times, then snare for Start, rim for Select, or kick to hold the kick (RB3's song category menu) *Applies at the next start.* |
-
-### MIDI keyboard
+### Menus
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `midi_keys`<br>Play a MIDI keyboard | `false` | `true`, `false` | Play a MIDI keyboard as a Rock Band keytar, for Keys and Pro Keys *Applies at the next start.* |
-| `midi_keys_device`<br>MIDI port | *(empty)* | text | MIDI input port to play, or part of its name. Empty takes the first one no other band3 MIDI device has *Applies at the next start.* |
-| `midi_keys_base_note`<br>Lowest C | `48` | `0` to `103` | The MIDI note of the keytar's lowest C: 48 (C3) on most 25-key keyboards. The 25 keys from it play the keytar's |
-| `midi_keys_test_device`<br>Harness keyboard | `false` | `true`, `false` | With test_port set and midi_keys on: report a MIDI keyboard named harness, with no port open, from the first message the harness's midi command hands it *Applies at the next start.* |
-
-### Input lag
-
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `joypad_lag`<br>Input lag per controller type | *(empty)* | text | Change the extra lag the game builds in per controller type, as type=ms, comma separated (e.g. 5=20,8=30). type=ms/video/audio also sets the calibration tests' lag; a blank part keeps the game's. The Instrument Lab's Lag tab shows each player's type *Applies at the next start.* |
+| `mouse_menus`<br>Mouse in menus | `true` | `true`, `false` | Use the mouse in the game's menus: pointing at a button or a list's row highlights it, left click selects (A), right click goes back (B), and the wheel moves up and down. Off during songs, where A and B are frets |
+| `keyboard_search`<br>Type to search | `true` | `true`, `false` | Type on the song list to search it, as RB3Enhanced does on the Xbox 360. Needs a Rock Band 3 Deluxe with keyboard search. There the keys that type stop pressing their controller buttons, and while the search is typed in, the arrows, Enter and Backspace edit it. Off during songs |
+| `menu_shortcut`<br>Stick-click shortcut | `true` | `true`, `false` | Open menus from a controller: hold both stick clicks for a second for this settings menu, or both stick clicks and the left bumper for the Instrument Lab |
 
 ### Sticks
 
@@ -155,118 +166,48 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `left_stick_deadzone_percentage`<br>Left stick deadzone | `0` | `0` to `1` | Deadzone applied to the left stick, as a fraction of its range |
 | `right_stick_deadzone_percentage`<br>Right stick deadzone | `0` | `0` to `1` | Deadzone applied to the right stick, as a fraction of its range |
 
-### Input backend
+### Delay
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `input_backend`<br>Input backend | `sdl` | `sdl` SDL, `xinput` XInput | Input backend: sdl, xinput *Applies at the next start.* *Windows only.* |
+| `joypad_lag`<br>Delay per controller type | *(empty)* | text | Change the extra lag the game builds in per controller type, as type=ms, comma separated (e.g. 5=20,8=30). type=ms/video/audio also sets the calibration tests' lag; a blank part keeps the game's. The Instrument Lab's Lag tab shows each player's type *Applies at the next start.* |
 
-### More settings
+## MIDI
 
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `keyboard_search` | `true` | `true`, `false` | Type on the song list to search it, as RB3Enhanced does on the Xbox 360. Needs a Rock Band 3 Deluxe with keyboard search. There the keys that type stop pressing their controller buttons, and while the search is typed in, the arrows, Enter and Backspace edit it. Off during songs |
-| `menu_shortcut` | `true` | `true`, `false` | Open menus from a controller: hold both stick clicks for a second for this settings menu, or both stick clicks and the left bumper for the Instrument Lab |
-| `midi_drums_notes` | *(empty)* | text | Note overrides as note=Part, comma separated (e.g. 44=Kick,40=Snare), in RPCS3's format. Parts: Kick, HihatPedal, Snare, SnareRim, HiTom, LowTom, FloorTom, Hihat, Ride, Crash, None *Applies at the next start.* |
-| `midi_drums_pulse_ms` | `30` | `20` to `100` | How long each hit is held, in milliseconds. Two cymbals hit together are played one pulse apart, so it must outlast a game frame *Applies at the next start.* |
-| `mouse_menus` | `true` | `true`, `false` | Use the mouse in the game's menus: pointing at a button or a list's row highlights it, left click selects (A), right click goes back (B), and the wheel moves up and down. Off during songs, where A and B are frets |
-
-## Online
-
-### Web song browser
+### Drums
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `http_enabled`<br>Web song browser | `false` | `true`, `false` | Serve RB3Enhanced's web page and API to this PC and the local network: browse the song library from a phone and select songs in the Music Library *Applies at the next start.* |
-| `http_port`<br>Port | `21070` | `1` to `65535` | TCP port the web server listens on (RB3Enhanced's is 21070) *Applies at the next start.* |
-| `http_rhythmverse`<br>RhythmVerse downloads | `true` | `true`, `false` | Let the web page search RhythmVerse (rhythmverse.co) for custom songs and download the ones it hosts, or that are on MediaFire, Google Drive, Dropbox or dingorb, into a rhythmverse folder in the first of content_folders. Downloaded songs join the game without a restart, as songs bought from the Xbox store did, and band3 checks RhythmVerse for newer versions of them when it starts |
-| `http_qr_code`<br>QR code in the Music Library | `true` | `true`, `false` | Show a QR code for the web page, and its address, at the top of the Music Library, so a phone can open it by scanning the screen |
+| `midi_drums`<br>MIDI drum kit | `false` | `true`, `false` | Play a MIDI drum kit as a Rock Band pro drum kit, without a MIDI Pro Adapter *Applies at the next start.* |
+| `midi_drums_device`<br>Drum kit port | *(empty)* | text | MIDI input port to play, or part of its name. Empty takes the first one no other band3 MIDI device has *Applies at the next start.* |
+| `midi_drums_min_velocity`<br>Minimum velocity | `10` | `1` to `127` | Quieter hits than this (1-127) are ignored *Applies at the next start.* |
+| `midi_drums_combos`<br>Menu buttons from the kit | `true` | `true`, `false` | Menu buttons from the kit: hi-hat pedal three times, then snare for Start, rim for Select, or kick to hold the kick (RB3's song category menu) *Applies at the next start.* |
+| `midi_drums_notes`<br>Note overrides | *(empty)* | text | Note overrides as note=Part, comma separated (e.g. 44=Kick,40=Snare), in RPCS3's format. Parts: Kick, HihatPedal, Snare, SnareRim, HiTom, LowTom, FloorTom, Hihat, Ride, Crash, None *Applies at the next start.* |
+| `midi_drums_pulse_ms`<br>Hit length | `30` | `20` to `100` (ms) | How long each hit is held, in milliseconds. Two cymbals hit together are played one pulse apart, so it must outlast a game frame *Applies at the next start.* |
 
-### Discord
-
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `discord_enabled`<br>Discord presence | `false` | `true`, `false` | Show the current song as Discord Rich Presence (needs the Discord desktop app) *Applies at the next start.* |
-
-### Scrobbling
+### Keyboard
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `lastfm_enabled`<br>Scrobble to Last.fm | `false` | `true`, `false` | Scrobble the songs played to Last.fm. The first time, band3 opens Last.fm in the browser to ask for your permission, then remembers it (lastfm_session) *Applies at the next start.* |
-| `lastfm_session`<br>Last.fm session (clear to sign in again) | *(empty)* | text | The Last.fm session band3 was given when you allowed it to scrobble. Clear it to sign in again, as another Last.fm user. band3 never writes it to its log *Applies at the next start.* |
-| `listenbrainz_enabled`<br>Submit listens to ListenBrainz | `false` | `true`, `false` | Submit the songs played to ListenBrainz, with the user token from listenbrainz.org/settings *Applies at the next start.* |
-| `listenbrainz_token`<br>ListenBrainz user token | *(empty)* | text | Your ListenBrainz user token (listenbrainz.org/settings). band3 never writes it to its log *Applies at the next start.* |
+| `midi_keys`<br>MIDI keyboard | `false` | `true`, `false` | Play a MIDI keyboard as a Rock Band keytar, for Keys and Pro Keys *Applies at the next start.* |
+| `midi_keys_device`<br>Keyboard port | *(empty)* | text | MIDI input port to play, or part of its name. Empty takes the first one no other band3 MIDI device has *Applies at the next start.* |
+| `midi_keys_base_note`<br>Lowest C | `48` | `0` to `103` | The MIDI note of the keytar's lowest C: 48 (C3) on most 25-key keyboards. The 25 keys from it play the keytar's |
+| `midi_keys_test_device`<br>Harness keyboard | `false` | `true`, `false` | With test_port set and midi_keys on: report a MIDI keyboard named harness, with no port open, from the first message the harness's midi command hands it *Applies at the next start.* |
 
-### RB3Enhanced
+## Music Videos
 
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `rb3e_mode`<br>RB3E mode | `true` | `true`, `false` | Tell the game's scripts RB3Enhanced is running (they see RB3E and RB3E_HAS_VERSION defined), so Rock Band 3 Deluxe turns on its RB3E features: its version line, party mode, song lookups, and clearing the song cache and restarting after an update *Applies at the next start.* |
-| `events_enabled`<br>Send RB3E events | `false` | `true`, `false` | Send RB3Enhanced-compatible events over UDP: Stage Kit lighting, song, band, venue and screen info, and RB3 Deluxe's rb3e_send_event_string data |
-| `events_target`<br>Send to | `255.255.255.255` | text | Where events are sent. 255.255.255.255 broadcasts to the local network; if receivers see nothing, use your subnet's broadcast address or one device's IP *Applies at the next start.* |
-| `events_port`<br>Port | `21070` | `1` to `65535` | UDP port events are sent to *Applies at the next start.* |
-
-### Home Assistant
+### Playback
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `ha_mqtt_host`<br>MQTT broker | *(empty)* | text | Home Assistant's MQTT broker (host name or address), which band3 tells the song, score, screen and more as Home Assistant entities. Empty leaves MQTT off *Applies at the next start.* |
-| `ha_mqtt_port`<br>Port | `1883` | `1` to `65535` | TCP port of Home Assistant's MQTT broker (1883 unless it was changed) *Applies at the next start.* |
-| `ha_mqtt_username`<br>User name | *(empty)* | text | User name for the MQTT broker. Empty connects without one *Applies at the next start.* |
-| `ha_mqtt_password`<br>Password | *(empty)* | text | Password for the MQTT broker, sent only with a user name. band3 never writes it to its log *Applies at the next start.* |
-| `ha_discovery_prefix`<br>Discovery prefix | `homeassistant` | text | Home Assistant's MQTT discovery prefix (homeassistant unless it was changed) *Applies at the next start.* |
-| `ha_stagekit`<br>Stage Kit lights | `false` | `true`, `false` | Also tell Home Assistant the Stage Kit's lights, strobe and fog. They change many times a second, so leave them out of Home Assistant's recorder *Applies at the next start.* |
-| `ha_webhook_url`<br>Webhook URL | *(empty)* | text | A Home Assistant webhook URL told when a song starts, ends and changes, as the RB3E Dashboard tells it, so its rb3e_lighting automation works unchanged. Empty leaves it off *Applies at the next start.* |
-
-### GoCentral
-
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `gocentral`<br>Leaderboards, battles and setlists (GoCentral) | `false` | `true`, `false` | Connect to GoCentral, the fan-run Rock Central server RB3Enhanced uses, for leaderboards, battles and setlist sharing. Needs username set: it's your account there, with no password, so pick one nobody else uses *Applies at the next start.* |
-| `gocentral_address`<br>Server | `gocentral-xbox.rbenhanced.rocks` | text | The GoCentral server to connect to: RB3Enhanced's Xbox 360 one, or your own *Applies at the next start.* |
-
-### Online play (Liveless)
-
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `liveless`<br>Play online without Xbox Live | `false` | `true`, `false` | Play online with other band3 and RB3Enhanced players without Xbox Live, as RB3Enhanced's Liveless does: searching for an online game joins liveless_connect's *Applies at the next start.* |
-| `liveless_connect`<br>Game to join | `127.0.0.1` | text | The game to join when searching online: its player's address, and :port if it isn't 9103. 127.0.0.1 to host *Applies at the next start.* |
-| `liveless_external_ip`<br>Your address for players joining | *(empty)* | text | This PC's address as players joining you reach it: your public IP for players over the internet. Empty uses this PC's address on the local network *Applies at the next start.* |
-| `liveless_port`<br>Port | `9103` | `1024` to `65000` | The UDP port this game plays online on, which players joining you need open. RB3Enhanced's is 9103; another (9203, say) lets a second band3 on this PC join the first *Applies at the next start.* |
-
-### More settings
-
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `http_address` | `0.0.0.0` | text | Address the web server listens on: 0.0.0.0 for the local network, 127.0.0.1 for this PC only *Applies at the next start.* |
-| `http_allow_cors` | `false` | `true`, `false` | Let web pages from other sites use the web server's API (Access-Control-Allow-Origin) |
-| `http_allow_scripts` | `false` | `true`, `false` | Let the web server's /execute run DTA scripts sent to it. Anyone on the local network could then run any script in the game |
-| `liveless_port_mapping` | `true` | `true`, `false` | Ask the router to forward liveless_port to this PC (PCP, NAT-PMP or UPnP), as RB3Enhanced does, so players over the internet reach you without a port forward made by hand. Deleted again when band3 closes *Applies at the next start.* |
-| `liveless_rooms` | `false` | `true`, `false` | Join friends by a room code (1-8 letters and digits) through a Liveless Rooms server (RB3Enhanced's), instead of typing an address. Needs liveless *Applies at the next start.* |
-| `liveless_rooms_server` | `liveless-testing.ipg.pw` | text | The Liveless Rooms server's host name, as the server knows itself (host[:port], port 19532 by default). Logging in registers your username there *Applies at the next start.* |
-
-## Lights
-
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `stagekit_usb`<br>Stage Kits plugged in by USB | `true` | `true`, `false` | Light the Stage Kits plugged into this PC as the game lights them: Santroller Stage Kits (which a PC sees in HID mode) and Xbox 360 Stage Kits (XInput, each taking one of Windows' four XInput slots). They don't take a player's place |
-| `pico_discovery`<br>Find wireless Stage Kits (Pico W) | `true` | `true`, `false` | Find the RB3E Dashboard's wireless Stage Kits (Pico W) on the network, to list and test them in the Lights tab. A Pico answers whichever program found it last, so turn this off while the RB3E Dashboard runs. They follow the game through the RB3Enhanced events. Under the test harness nothing is broadcast, so the network's Picos are left alone |
-| `black_background_lights`<br>Keep the lights on a black background | `false` | `true`, `false` | With RB3Enhanced's Black Background modifier, play in a video venue drawn black with the band hidden instead of in no venue, so the venue's lights still reach the Stage Kits. The venue still loads and draws, which costs what a venue costs |
-
-## Videos
-
-### Music videos
-
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `music_videos`<br>Music videos in the video venues | `true` | `true`, `false` | Play a song's music video in the video venues, in place of their background clips, when music_videos_folder has one for it: &lt;shortname&gt;.mp4 (or .mkv, .mov, .webm...), and optionally &lt;shortname&gt;.ini with Clone Hero's video_start_time. forced_venue video picks the video venues. Turned on, it applies from the next song |
-| `music_video_venue_chance`<br>Video venue for songs with a video | `100` | `0` Off (the game's venue), `25` 25% of the time, `50` 50% of the time, `75` 75% of the time, `100` Always | How often a song with a music video is put in a video venue, so its video shows, in percent: 0 never (the game's venue), 25, 50, 75 or 100 always. A forced venue and the black background modifier still win. Applies from the next venue the game picks |
-| `music_video_hide_band`<br>Hide the band during music videos | `true` | `true`, `false` | Leave the band out of the picture while a song's music video plays, so only the video shows behind the highways. The venue's lights (and Stage Kit) go on as before |
-| `music_video_as_is`<br>Show music videos as they are | `true` | `true`, `false` | Show a song's music video as it is: the video venue's colour filter, film grain, glow and trails are left off while it plays (and on the black background's black) |
-| `music_video_full_rate`<br>Play 60 fps music videos at 60 fps | `true` | `true`, `false` | Play a music video faster than the venue's 30 fps (a 60 fps one) at its own frame rate: the video venue is drawn that fast while it plays (as background_fps would, up to the game's rate), which takes about twice the drawing and decoding. Off, it shows at the venue's rate |
-| `music_video_auto_sync`<br>Sync music videos automatically | `true` | `true`, `false` | Find each music video's offset from its sound: when its song is picked, the song's audio (read from its package or the game's archive, decrypted if need be, or for a song band3 can't read taken as it first plays, about 45 s in) is matched against the video's and a sure match is saved as video_start_time in the video's .ini, and used at once. An .ini that sets one is left alone |
-| `music_videos_folder`<br>Music videos folder | `videos` | text | The folder music videos are looked for in (empty: videos). A relative folder is relative to band3_config.ini's folder (or band3's own folder if there is no ini) |
-| `music_video_fit`<br>Music video shape | `fit` | `fit` Fit, with black bars, `fill` Fill, edges cut off, `stretch` Stretch | How a music video whose shape isn't the screen's is shown: fit (all of it, with black bars), fill (the whole screen, its edges cut off) or stretch |
+| `music_videos`<br>Music videos | `true` | `true`, `false` | Play a song's music video in the video venues, in place of their background clips, when music_videos_folder has one for it: &lt;shortname&gt;.mp4 (or .mkv, .mov, .webm...), and optionally &lt;shortname&gt;.ini with Clone Hero's video_start_time. forced_venue video picks the video venues. Turned on, it applies from the next song |
+| `music_video_venue_chance`<br>Video venue | `100` | `0` Never, `25` A quarter of the time, `50` Half the time, `75` Most of the time, `100` Always | How often a song with a music video is put in a video venue, so its video shows, in percent: 0 never (the game's venue), 25, 50, 75 or 100 always. A forced venue and the black background modifier still win. Applies from the next venue the game picks |
+| `music_video_hide_band`<br>Hide the band | `true` | `true`, `false` | Leave the band out of the picture while a song's music video plays, so only the video shows behind the highways. The venue's lights (and Stage Kit) go on as before |
+| `music_video_as_is`<br>Without the venue's filters | `true` | `true`, `false` | Show a song's music video as it is: the video venue's colour filter, film grain, glow and trails are left off while it plays (and on the black background's black) |
+| `music_video_full_rate`<br>Smooth 60 fps videos | `true` | `true`, `false` | Play a music video faster than the venue's 30 fps (a 60 fps one) at its own frame rate: the video venue is drawn that fast while it plays (as background_fps would, up to the game's rate), which takes about twice the drawing and decoding. Off, it shows at the venue's rate |
+| `music_video_auto_sync`<br>Sync videos by themselves | `true` | `true`, `false` | Find each music video's offset from its sound: when its song is picked, the song's audio (read from its package or the game's archive, decrypted if need be, or for a song band3 can't read taken as it first plays, about 45 s in) is matched against the video's and a sure match is saved as video_start_time in the video's .ini, and used at once. An .ini that sets one is left alone |
+| `music_videos_folder`<br>Videos folder | `videos` | text | The folder music videos are looked for in (empty: videos). A relative folder is relative to band3_config.ini's folder (or band3's own folder if there is no ini) |
+| `music_video_fit`<br>Fit | `fit` | `fit` Fit, with bars, `fill` Fill, edges cut off, `stretch` Stretch | How a music video whose shape isn't the screen's is shown: fit (all of it, with black bars), fill (the whole screen, its edges cut off) or stretch |
 
 ### Finding videos
 
@@ -274,10 +215,89 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 |---|---|---|---|
 | `music_video_ytdlp_path`<br>yt-dlp program | *(empty)* | text | yt-dlp, which finds and downloads songs' music videos from the Videos tab: its program file (yt-dlp.exe). Empty looks for yt-dlp on PATH. band3 doesn't come with it: get it from github.com/yt-dlp/yt-dlp |
 | `music_video_ytdlp_args`<br>More yt-dlp options | *(empty)* | text | More yt-dlp options for finding and downloading music videos, as typed on its command line, e.g. --cookies-from-browser firefox for videos YouTube asks to sign in for |
-| `music_video_max_height`<br>Picture size | `1080` | `480` 480p, `720` 720p, `1080` 1080p, `1440` 1440p, `2160` 2160p (4K) | The tallest picture a downloaded music video has, in lines: 480, 720, 1080, 1440 or 2160. Taller ones take more space and decoding |
+| `music_video_max_height`<br>Picture size | `1080` | `480` 480p, `720` 720p, `1080` 1080p, `1440` 1440p, `2160` 4K | The tallest picture a downloaded music video has, in lines: 480, 720, 1080, 1440 or 2160. Taller ones take more space and decoding |
 | `music_video_prefer_60fps`<br>60 fps where there is | `true` | `true`, `false` | Download a music video's 60 fps picture where it has one (music_video_full_rate plays it at 60); off, its 30 fps one |
-| `music_video_auto_accept`<br>Take sure matches without asking | `true` | `true`, `false` | When finding music videos, take one without asking when it's surely the song's: its title, channel and length look right and its sound matches the song's. Off, every song's results wait in the Videos tab for you to choose |
-| `music_video_keep_audio`<br>Keep downloaded videos' sound | `false` | `true`, `false` | Keep a downloaded music video's sound (in the videos folder's .sync folder), so it can be aligned again with its song; band3 plays the video under the game's own sound, so it's otherwise deleted once the video is synced |
+| `music_video_auto_accept`<br>Take sure matches | `true` | `true`, `false` | When finding music videos, take one without asking when it's surely the song's: its title, channel and length look right and its sound matches the song's. Off, every song's results wait in the Videos tab for you to choose |
+| `music_video_keep_audio`<br>Keep the videos' sound | `false` | `true`, `false` | Keep a downloaded music video's sound (in the videos folder's .sync folder), so it can be aligned again with its song; band3 plays the video under the game's own sound, so it's otherwise deleted once the video is synced |
+
+## Lights
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `stagekit_usb`<br>USB Stage Kits | `true` | `true`, `false` | Light the Stage Kits plugged into this PC as the game lights them: Santroller Stage Kits (which a PC sees in HID mode) and Xbox 360 Stage Kits (XInput, each taking one of Windows' four XInput slots). They don't take a player's place |
+| `pico_discovery`<br>Wireless Stage Kits | `true` | `true`, `false` | Find the RB3E Dashboard's wireless Stage Kits (Pico W) on the network, to list and test them in the Lights tab. A Pico answers whichever program found it last, so turn this off while the RB3E Dashboard runs. They follow the game through the RB3Enhanced events. Under the test harness nothing is broadcast, so the network's Picos are left alone |
+| `black_background_lights`<br>Black background | `false` | `true`, `false` | With RB3Enhanced's Black Background modifier, play in a video venue drawn black with the band hidden instead of in no venue, so the venue's lights still reach the Stage Kits. The venue still loads and draws, which costs what a venue costs |
+
+## Online
+
+### Online play
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `liveless`<br>Play online | `false` | `true`, `false` | Play online with other band3 and RB3Enhanced players without Xbox Live, as RB3Enhanced's Liveless does: searching for an online game joins liveless_connect's *Applies at the next start.* |
+| `liveless_connect`<br>Game to join | `127.0.0.1` | text | The game to join when searching online: its player's address, and :port if it isn't 9103. 127.0.0.1 to host *Applies at the next start.* |
+| `liveless_external_ip`<br>Your address | *(empty)* | text | This PC's address as players joining you reach it: your public IP for players over the internet. Empty uses this PC's address on the local network *Applies at the next start.* |
+| `liveless_port`<br>Online play port | `9103` | `1024` to `65000` | The UDP port this game plays online on, which players joining you need open. RB3Enhanced's is 9103; another (9203, say) lets a second band3 on this PC join the first *Applies at the next start.* |
+| `liveless_port_mapping`<br>Open the port on the router | `true` | `true`, `false` | Ask the router to forward liveless_port to this PC (PCP, NAT-PMP or UPnP), as RB3Enhanced does, so players over the internet reach you without a port forward made by hand. Deleted again when band3 closes *Applies at the next start.* |
+| `liveless_rooms`<br>Rooms | `false` | `true`, `false` | Join friends by a room code (1-8 letters and digits) through a Liveless Rooms server (RB3Enhanced's), instead of typing an address. Needs liveless *Applies at the next start.* |
+| `liveless_rooms_server`<br>Rooms server | `liveless-testing.ipg.pw` | text | The Liveless Rooms server's host name, as the server knows itself (host[:port], port 19532 by default). Logging in registers your username there *Applies at the next start.* |
+
+### GoCentral
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `gocentral`<br>Leaderboards and battles | `false` | `true`, `false` | Connect to GoCentral, the fan-run Rock Central server RB3Enhanced uses, for leaderboards, battles and setlist sharing. Needs username set: it's your account there, with no password, so pick one nobody else uses *Applies at the next start.* |
+| `gocentral_address`<br>Server | `gocentral-xbox.rbenhanced.rocks` | text | The GoCentral server to connect to: RB3Enhanced's Xbox 360 one, or your own *Applies at the next start.* |
+
+## Other Apps
+
+### Web song browser
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `http_enabled`<br>Web song browser | `false` | `true`, `false` | Serve RB3Enhanced's web page and API to this PC and the local network: browse the song library from a phone and select songs in the Music Library *Applies at the next start.* |
+| `http_port`<br>Web page port | `21070` | `1` to `65535` | TCP port the web server listens on (RB3Enhanced's is 21070) *Applies at the next start.* |
+| `http_rhythmverse`<br>RhythmVerse downloads | `true` | `true`, `false` | Let the web page search RhythmVerse (rhythmverse.co) for custom songs and download the ones it hosts, or that are on MediaFire, Google Drive, Dropbox or dingorb, into a rhythmverse folder in the first of content_folders. Downloaded songs join the game without a restart, as songs bought from the Xbox store did, and band3 checks RhythmVerse for newer versions of them when it starts |
+| `http_qr_code`<br>QR code in the Music Library | `true` | `true`, `false` | Show a QR code for the web page, and its address, at the top of the Music Library, so a phone can open it by scanning the screen |
+| `http_address`<br>Who can reach it | `0.0.0.0` | text; `0.0.0.0` Your network, `127.0.0.1` This PC only | Address the web server listens on: 0.0.0.0 for the local network, 127.0.0.1 for this PC only *Applies at the next start.* |
+| `http_allow_cors`<br>Other sites (CORS) | `false` | `true`, `false` | Let web pages from other sites use the web server's API (Access-Control-Allow-Origin) |
+| `http_allow_scripts`<br>Scripts from the page | `false` | `true`, `false` | Let the web server's /execute run DTA scripts sent to it. Anyone on the local network could then run any script in the game |
+
+### Scrobbling
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `lastfm_enabled`<br>Last.fm | `false` | `true`, `false` | Scrobble the songs played to Last.fm. The first time, band3 opens Last.fm in the browser to ask for your permission, then remembers it (lastfm_session) *Applies at the next start.* |
+| `lastfm_session`<br>Last.fm sign-in | *(empty)* | text | The Last.fm session band3 was given when you allowed it to scrobble. Clear it to sign in again, as another Last.fm user. band3 never writes it to its log *Applies at the next start.* |
+| `listenbrainz_enabled`<br>ListenBrainz | `false` | `true`, `false` | Submit the songs played to ListenBrainz, with the user token from listenbrainz.org/settings *Applies at the next start.* |
+| `listenbrainz_token`<br>ListenBrainz token | *(empty)* | text | Your ListenBrainz user token (listenbrainz.org/settings). band3 never writes it to its log *Applies at the next start.* |
+
+### RB3Enhanced
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `rb3e_mode`<br>RB3E mode | `true` | `true`, `false` | Tell the game's scripts RB3Enhanced is running (they see RB3E and RB3E_HAS_VERSION defined), so Rock Band 3 Deluxe turns on its RB3E features: its version line, party mode, song lookups, and clearing the song cache and restarting after an update *Applies at the next start.* |
+| `events_enabled`<br>Send events | `false` | `true`, `false` | Send RB3Enhanced-compatible events over UDP: Stage Kit lighting, song, band, venue and screen info, and RB3 Deluxe's rb3e_send_event_string data |
+| `events_target`<br>Send to | `255.255.255.255` | text | Where events are sent. 255.255.255.255 broadcasts to the local network; if receivers see nothing, use your subnet's broadcast address or one device's IP *Applies at the next start.* |
+| `events_port`<br>Events port | `21070` | `1` to `65535` | UDP port events are sent to *Applies at the next start.* |
+
+### Home Assistant
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `ha_mqtt_host`<br>MQTT broker | *(empty)* | text | Home Assistant's MQTT broker (host name or address), which band3 tells the song, score, screen and more as Home Assistant entities. Empty leaves MQTT off *Applies at the next start.* |
+| `ha_mqtt_port`<br>MQTT port | `1883` | `1` to `65535` | TCP port of Home Assistant's MQTT broker (1883 unless it was changed) *Applies at the next start.* |
+| `ha_mqtt_username`<br>MQTT user name | *(empty)* | text | User name for the MQTT broker. Empty connects without one *Applies at the next start.* |
+| `ha_mqtt_password`<br>MQTT password | *(empty)* | text | Password for the MQTT broker, sent only with a user name. band3 never writes it to its log *Applies at the next start.* |
+| `ha_discovery_prefix`<br>Discovery prefix | `homeassistant` | text | Home Assistant's MQTT discovery prefix (homeassistant unless it was changed) *Applies at the next start.* |
+| `ha_stagekit`<br>Stage Kit lights | `false` | `true`, `false` | Also tell Home Assistant the Stage Kit's lights, strobe and fog. They change many times a second, so leave them out of Home Assistant's recorder *Applies at the next start.* |
+| `ha_webhook_url`<br>Webhook URL | *(empty)* | text | A Home Assistant webhook URL told when a song starts, ends and changes, as the RB3E Dashboard tells it, so its rb3e_lighting automation works unchanged. Empty leaves it off *Applies at the next start.* |
+
+### Discord
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `discord_enabled`<br>Discord status | `false` | `true`, `false` | Show the current song as Discord Rich Presence (needs the Discord desktop app) *Applies at the next start.* |
 
 ## Advanced
 
@@ -386,21 +406,9 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `virtual_instrument_player` | `2` | `1` to `4` | Player slot the virtual instrument connects as, 1-4. Other controllers keep their order around it |
 | `virtual_instrument_type` | `guitar` | `guitar`, `drums`, `keys`, `pro_guitar_mustang`, `pro_guitar_squier` | Which instrument the virtual instrument is: guitar, drums, keys, pro_guitar_mustang or pro_guitar_squier. Changing it unplugs the instrument for a moment |
 
-## Steam Deck
-
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `steam_deck_defaults`<br>Use the Steam Deck settings | `true` | `true`, `false` | On a Steam Deck, start fullscreen and letterboxed at the console's 60 Hz with vsync on and the FPS counter off, unless band3.toml or the command line set those *Applies at the next start.* |
-
-## Launcher
-
-| Setting | Default | Takes | What it does |
-|---|---|---|---|
-| `show_launcher`<br>Show this screen at startup | `true` | `true`, `false` | Show the launcher, band3's setup screen, before the game starts. Off, band3 starts the game straight away; hold Shift as it starts, or start it with --launcher, to see the launcher anyway *Applies at the next start.* |
-
 ## More of the SDK's settings
 
-The SDK's settings band3_config.ini sets that the launcher's and the in-game settings' tabs don't show. The in-game settings' **All settings...** lists these with the rest of the SDK's.
+The SDK's settings band3_config.ini sets that the launcher's and the in-game settings' categories don't show. The in-game settings' **All settings...** lists these with the rest of the SDK's.
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|

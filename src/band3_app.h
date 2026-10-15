@@ -673,6 +673,7 @@ class Band3App : public rex::ReXApp {
                   app_context().CallInUIThreadDeferred([this] { PressBind("bind_instrument_lab"); });
                 },
             .quit = [this] { QuitFromPauseMenu(); },
+            .immediate_drawer = [this] { return immediate_drawer(); },
         });
     // UnregisterBind leaves the bind's cvar registered, so it goes too
     rex::ui::UnregisterBind("bind_settings");

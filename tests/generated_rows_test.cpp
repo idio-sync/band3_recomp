@@ -1,4 +1,4 @@
-// Checks the in-game settings' rows made from the cvar registry
+// Checks the settings' rows made from the cvar registry
 // (src/Launcher/generated_rows.h): where each goes, in what order, and with
 // which widget.
 
@@ -20,16 +20,16 @@ RegistryCvar Cvar(std::string name, std::string category, ValueType type = Value
 }
 
 constexpr Setting kTable[] = {
-    {.cvar = "lang", .tab = Tab::kGame, .section = "Profile", .label = "Language",
+    {.cvar = "lang", .category = Category::kGame, .section = "Profile", .label = "Language",
      .widget = Widget::kCombo},
-    {.cvar = "native_view_msaa", .tab = Tab::kGraphics, .section = "Native renderer",
+    {.cvar = "native_view_msaa", .category = Category::kGraphics, .section = "Quality",
      .label = "Anti-aliasing", .widget = Widget::kCombo},
 };
 
-std::vector<std::string> Names(std::span<const Setting> rows, Tab tab) {
+std::vector<std::string> Names(std::span<const Setting> rows, Category category) {
     std::vector<std::string> names;
     for (const Setting& s : rows) {
-        if (s.tab == tab) names.emplace_back(s.cvar);
+        if (s.category == category) names.emplace_back(s.cvar);
     }
     return names;
 }
@@ -41,25 +41,25 @@ const Setting* Row(std::span<const Setting> rows, std::string_view cvar) {
 }
 
 TEST_CASE("generated rows go where their category says") {
-    CHECK(PlaceFor("Band3/Advanced/Native renderer")->tab == Tab::kAdvanced);
+    CHECK(PlaceFor("Band3/Advanced/Native renderer")->category == Category::kAdvanced);
     CHECK(PlaceFor("Band3/Advanced/Native renderer")->section == "Native renderer");
     CHECK(PlaceFor("Band3/Advanced")->section == "Other");
-    CHECK(PlaceFor("Band3/Game")->tab == Tab::kGame);
+    CHECK(PlaceFor("Band3/Game")->category == Category::kGame);
     CHECK(PlaceFor("Band3/Game")->section == kMoreSettings);
-    CHECK(PlaceFor("Band3/Controllers/MIDI drums")->tab == Tab::kControllers);
+    CHECK(PlaceFor("Band3/Controllers/MIDI drums")->category == Category::kMidi);
     CHECK(PlaceFor("Band3/Controllers/MIDI drums")->section == kMoreSettings);
-    CHECK(PlaceFor("Band3/Online")->tab == Tab::kOnline);
-    CHECK(PlaceFor("Band3/Lights")->tab == Tab::kLights);
-    CHECK(PlaceFor("Band3/Videos")->tab == Tab::kVideos);
-    CHECK(PlaceFor("Band3/Audio")->tab == Tab::kAudio);
+    CHECK(PlaceFor("Band3/Online")->category == Category::kOnline);
+    CHECK(PlaceFor("Band3/Lights")->category == Category::kLights);
+    CHECK(PlaceFor("Band3/Videos")->category == Category::kVideos);
+    CHECK(PlaceFor("Band3/Audio")->category == Category::kAudio);
 
-    // the renderer groups join the table's sections, for the same renderers
+    // the renderer groups show for the same renderers as the table's rows of theirs
     const auto native = PlaceFor("Band3/Graphics/Native");
-    CHECK(native->tab == Tab::kGraphics);
-    CHECK(native->section == "Native renderer");
+    CHECK(native->category == Category::kGraphics);
+    CHECK(native->section == kMoreSettings);
     CHECK(native->renderers == (kForNative | kForBoth));
     const auto emulated = PlaceFor("Band3/Graphics/Emulated");
-    CHECK(emulated->section == "Emulated GPU");
+    CHECK(emulated->section == kMoreSettings);
     CHECK(emulated->renderers == (kForEmulated | kForBoth));
     CHECK(PlaceFor("Band3/Graphics")->renderers == kForAnyRenderer);
 
@@ -68,12 +68,13 @@ TEST_CASE("generated rows go where their category says") {
     CHECK_FALSE(PlaceFor("Keybinds"));
     CHECK_FALSE(PlaceFor("Band3"));
     CHECK_FALSE(PlaceFor("Band3x/Game"));
-    // a band3 category no tab is for still shows, under Advanced
-    CHECK(PlaceFor("Band3/Experiments")->tab == Tab::kAdvanced);
+    // a band3 category none is for still shows, under Advanced; the retired ones nowhere
+    CHECK(PlaceFor("Band3/Experiments")->category == Category::kAdvanced);
     CHECK(PlaceFor("Band3/Experiments")->section == "Experiments");
+    CHECK_FALSE(PlaceFor("Band3/Advanced/Retired"));
 }
 
-TEST_CASE("the Advanced tab lists Band3/Advanced's settings by group, then by name") {
+TEST_CASE("the Advanced category lists Band3/Advanced's settings by group, then by name") {
     const std::vector<RegistryCvar> registry = {
         Cvar("test_port", "Band3/Advanced/Test harness", ValueType::kInt),
         Cvar("native_view_backend", "Band3/Advanced/Native renderer", ValueType::kString),
@@ -88,13 +89,13 @@ TEST_CASE("the Advanced tab lists Band3/Advanced's settings by group, then by na
     };
     const GeneratedRows generated(registry, kTable);
     const auto rows = generated.Rows();
-    CHECK(Names(rows, Tab::kAdvanced) ==
+    CHECK(Names(rows, Category::kAdvanced) ==
           std::vector<std::string>{"native_math", "dred", "char_heap_size", "main_heap_size",
                                    "native_view_backend", "autoplay", "test_port"});
-    CHECK(SectionsOf(rows, Tab::kAdvanced) ==
+    CHECK(SectionsOf(rows, Category::kAdvanced) ==
           std::vector<std::string_view>{"Game code", "Logging", "Memory", "Native renderer",
                                         "Test harness"});
-    // labelled by name, the footer giving the description
+    // labelled by name, the detail panel giving the description
     CHECK(Row(rows, "dred")->label == "dred");
     CHECK_FALSE(Row(rows, "vsync"));
 }
@@ -125,18 +126,18 @@ TEST_CASE("the table's own settings aren't generated again; the rest go to More 
     const auto rows = generated.Rows();
     CHECK_FALSE(Row(rows, "lang"));
     CHECK_FALSE(Row(rows, "native_view_msaa"));
-    CHECK(Names(rows, Tab::kControllers) ==
-          std::vector<std::string>{"menu_shortcut", "midi_drums_notes"});
+    CHECK(Names(rows, Category::kControllers) == std::vector<std::string>{"menu_shortcut"});
+    CHECK(Names(rows, Category::kMidi) == std::vector<std::string>{"midi_drums_notes"});
     CHECK(Row(rows, "menu_shortcut")->section == kMoreSettings);
-    CHECK(Row(rows, "liveless_rooms")->tab == Tab::kOnline);
+    CHECK(Row(rows, "liveless_rooms")->category == Category::kOnline);
     CHECK(Row(rows, "debug_overlay")->section == kMoreSettings);
-    CHECK(Row(rows, "native_new_limit")->section == "Native renderer");
+    CHECK(Row(rows, "native_new_limit")->section == kMoreSettings);
     CHECK(Row(rows, "native_new_limit")->renderers == (kForNative | kForBoth));
 
     // joined after the table, they extend its sections and add their own at the end
     const auto joined = JoinTables(kTable, rows);
-    CHECK(SectionsOf(joined, Tab::kGraphics) ==
-          std::vector<std::string_view>{"Native renderer", kMoreSettings});
+    CHECK(SectionsOf(joined, Category::kGraphics) ==
+          std::vector<std::string_view>{"Quality", kMoreSettings});
     CHECK(joined.front().cvar == "lang");
 }
 
@@ -148,7 +149,7 @@ TEST_CASE("each type gets its widget") {
     RegistryCvar open = Cvar("native_slow_frame_ms", "Band3/Advanced/Native renderer",
                              ValueType::kInt);
     open.min = 0;
-    RegistryCvar choices = Cvar("emulated_gpu", "Band3/Advanced/Retired", ValueType::kString);
+    RegistryCvar choices = Cvar("emulated_gpu", "Band3/Advanced/Old", ValueType::kString);
     choices.allowed = {"", "on", "off"};
     RegistryCvar speed = Cvar("speed", "Band3/Advanced/Game code", ValueType::kFloat);
     speed.min = 0.1;
@@ -184,4 +185,30 @@ TEST_CASE("each type gets its widget") {
     CHECK(Row(rows, "liveless_gateway")->widget == Widget::kText);
     CHECK(Row(rows, "speed")->widget == Widget::kFloatInput);
     CHECK(Row(rows, "speed")->range->max == 10);
+}
+
+TEST_CASE("a setting read only as band3 starts can't be changed on the launcher either") {
+    RegistryCvar reference = Cvar("settings_reference", "Band3/Advanced/Startup", ValueType::kString);
+    reference.lifecycle = Lifecycle::kInitOnly;
+    const std::vector<RegistryCvar> registry = {reference, Cvar("dred", "Band3/Advanced/Logging")};
+    const GeneratedRows generated(registry, kTable);
+    CHECK(Row(generated.Rows(), "settings_reference")->command_line_only);
+    CHECK_FALSE(Row(generated.Rows(), "dred")->command_line_only);
+
+    class Store : public CvarStore {
+    public:
+        std::string Get(std::string_view) const override { return ""; }
+        bool Set(std::string_view, std::string_view) override { return true; }
+    } store;
+    Environment env;
+    for (const char* name : {"settings_reference", "dred"}) {
+        CvarFacts f;
+        f.exists = true;
+        env.cvars[name] = f;
+    }
+    env.cvars["settings_reference"].lifecycle = Lifecycle::kInitOnly;
+    SettingsModel launcher(generated.Rows(), env, store);
+    CHECK(launcher.ReadOnly("settings_reference"));
+    CHECK_FALSE(launcher.Set("settings_reference", "out.md"));
+    CHECK_FALSE(launcher.ReadOnly("dred"));
 }

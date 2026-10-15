@@ -10,10 +10,12 @@
 #include <rex/ui/imgui_dialog.h>
 #include "game_data_check.h"
 #include "gamepad_nav.h"
+#include "generated_rows.h"
 #include "instrument_view.h"
 #include "launcher_cvars.h"
 #include "launcher_settings.h"
-#include "settings_page.h"
+#include "videos_tab.h"
+#include "ui/settings_screen.h"
 #include "ui/skin.h"
 #include "ui/widget_gallery.h"
 
@@ -45,12 +47,12 @@ struct LauncherHost {
     std::function<rex::ui::ImmediateDrawer*()> immediate_drawer;
 };
 
-// The launcher: band3's setup screen, one full-window ImGui page shown before
-// the game starts (Band3App::OnFinalizePaths), driven with the mouse, the
-// keyboard or a controller (gamepad_nav.h). Tabs of settings (settings_page.h's rows
-// of launcher_settings.h's table) over a footer with
-// the hovered setting's description and Save, Close and Play. Every edit is
-// applied to its cvar at once; Save writes the overrides to band3.toml.
+// The launcher: band3's setup screen, shown before the game starts
+// (Band3App::OnFinalizePaths): the Settings screen (ui/settings_screen.h) with
+// every category, driven with the mouse, the keyboard or a controller. Every
+// edit is applied to its cvar at once; leaving or Play saves the overrides to
+// band3.toml. The controller tester and the music videos' list show as they
+// were until they're screens of their own.
 //
 // Band3App owns it and removes it itself: ImGuiDialog::Close() deletes the
 // dialog it's called on.
@@ -69,8 +71,8 @@ public:
     // the settings are still being edited: Play hasn't been pressed
     bool IsEditing() const { return stage_ == Stage::kEditing; }
 
-    // the Close button's path, and the window's close button's: asks "Quit
-    // without saving?" while there are unsaved changes, otherwise quits
+    // the window's close button: asks first while there are unsaved changes,
+    // otherwise quits
     void RequestQuit();
 
 protected:
@@ -83,60 +85,56 @@ private:
         kStarting,
         kStarted,
     };
+    // what the editing stage shows
+    enum class View {
+        kSettings,
+        // the controller tester and the videos' list, as they were
+        kTestControllers,
+        kVideos,
+    };
 
     // sleeps until the display's next refresh is due
     void Pace();
 
-    void DrawPage(ImGuiIO& io);
-    void DrawHeader();
-    void DrawBanners();
-    void DrawFooter();
-    void DrawPrompts();
+    // the views from before the redesign, in a window of their own with Back
+    void DrawOldView(ImGuiIO& io);
     void DrawStarting(ImGuiIO& io);
-    // a controller's Start plays, and its bumpers switch tabs
-    void HandleNav(const NavEdges& edges);
 
-    // Play: asks first when the game data check fails, then Start()
+    // Play, saved (or kept unsaved): asks first when the game data check
+    // fails, then Begin()
     void Play();
-    // saves, then starts the game; when saving fails, asks whether to play
-    // anyway with the settings as they are
-    void Start();
     // moves on to the Starting frame
     void Begin();
-    // writes band3.toml (show_launcher from the footer's box too) and reports
-    // how it went in the footer
-    bool Save();
+    // writes band3.toml and logs how it went
+    SaveResult Save();
 
     LauncherHost host_;
     RexCvarStore store_;
+    // band3's settings the table doesn't have, from the registry
+    std::unique_ptr<GeneratedRows> generated_;
+    // the table, then the generated rows
+    std::vector<Setting> table_;
     SettingsModel model_;
-    // the tabs' rows, the Deck banner, the description and the startup box
-    SettingsPage page_;
     Stage stage_ = Stage::kEditing;
+    View view_ = View::kSettings;
     int starting_frames_ = 0;
     // Play restarts band3 for a new input backend (RestartsForInput)
     bool restart_ = false;
     // ImGui's ConfigFlags before the launcher turned keyboard navigation on
     int saved_config_flags_ = 0;
-
-    Tab current_tab_ = Tab::kGame;
-    // the tab a controller's bumper switched to, selected at the next frame
-    std::optional<Tab> pending_tab_;
-    // the Controllers tab's device list and test view; its readings also
-    // drive the gamepad navigation
-    DevicePanel device_panel_;
-    std::optional<GamepadNav> nav_;
-    // band3.toml couldn't be read when the launcher opened
-    std::optional<std::string> config_problem_;
-    // the last save's outcome, for the footer
-    std::string save_message_;
+    // the last save failed
     bool save_failed_ = false;
-    // why the last save failed, for the "Play anyway?" prompt
-    std::string save_error_;
 
-    // the redesign's RB3 textures, and its page of every widget, shown in
-    // place of the settings with Ctrl+Shift+G or BAND3_LAUNCHER_GALLERY=1
+    // the controller tester; its readings also drive the navigation
+    DevicePanel device_panel_;
+    // ImGui's gamepad navigation, for the old views
+    std::optional<GamepadNav> nav_;
+    VideosTab videos_;
+
+    // the RB3 textures, the Settings screen, and the page of every widget
+    // (Ctrl+Shift+G or BAND3_LAUNCHER_GALLERY=1)
     std::unique_ptr<ui::Skin> skin_;
+    std::unique_ptr<ui::SettingsScreen> screen_;
     std::unique_ptr<ui::WidgetGallery> gallery_;
     bool show_gallery_ = false;
 
@@ -144,11 +142,6 @@ private:
     std::chrono::steady_clock::time_point last_frame_{};
     std::chrono::steady_clock::time_point next_refresh_query_{};
     double refresh_hz_ = 60.0;
-
-    // popups to open on the next frame (OpenPopup has to run inside the window)
-    bool open_quit_prompt_ = false;
-    bool open_play_prompt_ = false;
-    bool open_save_failed_prompt_ = false;
 };
 
 }

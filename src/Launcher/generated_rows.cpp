@@ -9,19 +9,20 @@ namespace {
 constexpr std::string_view kBand3 = "Band3/";
 constexpr std::string_view kAdvancedPrefix = "Advanced/";
 
-// the section a top-level band3 category's rows go in, by tab
-struct TabCategory {
-    std::string_view category;
-    Tab tab;
+// where a registry category's rows go: the first that starts it
+struct RegistryPlace {
+    std::string_view prefix;
+    Category category;
 };
-constexpr TabCategory kTabCategories[] = {
-    {"Game", Tab::kGame},
-    {"Graphics", Tab::kGraphics},
-    {"Audio", Tab::kAudio},
-    {"Controllers", Tab::kControllers},
-    {"Online", Tab::kOnline},
-    {"Lights", Tab::kLights},
-    {"Videos", Tab::kVideos},
+constexpr RegistryPlace kRegistryPlaces[] = {
+    {"Controllers/MIDI", Category::kMidi},
+    {"Game", Category::kGame},
+    {"Graphics", Category::kGraphics},
+    {"Audio", Category::kAudio},
+    {"Controllers", Category::kControllers},
+    {"Online", Category::kOnline},
+    {"Lights", Category::kLights},
+    {"Videos", Category::kVideos},
 };
 
 }
@@ -29,25 +30,27 @@ constexpr TabCategory kTabCategories[] = {
 std::optional<RowPlace> PlaceFor(std::string_view category) {
     if (!category.starts_with(kBand3)) return std::nullopt;
     const std::string_view rest = category.substr(kBand3.size());
-    if (rest.empty()) return std::nullopt;
-    if (rest == "Advanced") return RowPlace{Tab::kAdvanced, "Other"};
+    if (rest.empty() || rest == "Advanced/Retired") return std::nullopt;
+    if (rest == "Advanced") return RowPlace{Category::kAdvanced, "Other"};
     if (rest.starts_with(kAdvancedPrefix)) {
-        return RowPlace{Tab::kAdvanced, std::string(rest.substr(kAdvancedPrefix.size()))};
+        return RowPlace{Category::kAdvanced, std::string(rest.substr(kAdvancedPrefix.size()))};
     }
-    // the native renderer's and the emulated GPU's, as the table's rows there
+    // the native renderer's and the emulated GPU's, for the renderers the
+    // table's rows of theirs are
     if (rest == "Graphics/Native") {
-        return RowPlace{Tab::kGraphics, "Native renderer", kForNative | kForBoth};
+        return RowPlace{Category::kGraphics, std::string(kMoreSettings), kForNative | kForBoth};
     }
     if (rest == "Graphics/Emulated") {
-        return RowPlace{Tab::kGraphics, "Emulated GPU", kForEmulated | kForBoth};
+        return RowPlace{Category::kGraphics, std::string(kMoreSettings), kForEmulated | kForBoth};
     }
-    const std::string_view top = rest.substr(0, rest.find('/'));
-    for (const TabCategory& tc : kTabCategories) {
-        if (top == tc.category) return RowPlace{tc.tab, std::string(kMoreSettings)};
+    for (const RegistryPlace& place : kRegistryPlaces) {
+        if (rest.starts_with(place.prefix)) {
+            return RowPlace{place.category, std::string(kMoreSettings)};
+        }
     }
-    // a category of band3's no tab is for: Advanced, so nothing of band3's is
+    // a category of band3's none is for: Advanced, so nothing of band3's is
     // left to the SDK's settings alone
-    return RowPlace{Tab::kAdvanced, std::string(rest)};
+    return RowPlace{Category::kAdvanced, std::string(rest)};
 }
 
 std::string_view GeneratedRows::Keep(std::string text) {
@@ -66,19 +69,20 @@ GeneratedRows::GeneratedRows(std::span<const RegistryCvar> registry,
         if (auto place = PlaceFor(cvar.category)) placed.push_back({&cvar, std::move(*place)});
     }
     std::ranges::sort(placed, [](const Placed& a, const Placed& b) {
-        return std::tie(a.place.tab, a.place.section, a.cvar->name) <
-               std::tie(b.place.tab, b.place.section, b.cvar->name);
+        return std::tie(a.place.category, a.place.section, a.cvar->name) <
+               std::tie(b.place.category, b.place.section, b.cvar->name);
     });
 
     for (const Placed& p : placed) {
         const RegistryCvar& c = *p.cvar;
         Setting row{.cvar = Keep(c.name),
-                    .tab = p.place.tab,
+                    .category = p.place.category,
                     .section = Keep(p.place.section),
                     .label = {},
                     .widget = Widget::kText,
                     .renderers = p.place.renderers};
         row.label = row.cvar;
+        row.command_line_only = c.lifecycle == Lifecycle::kInitOnly;
         const bool bounded = c.min && c.max && *c.min < *c.max;
         switch (c.type) {
         case ValueType::kBool: row.widget = Widget::kCheckbox; break;
