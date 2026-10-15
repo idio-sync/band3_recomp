@@ -17,10 +17,11 @@ namespace band3::launcher {
 bool HoldsGame(const std::filesystem::path& folder);
 
 struct SearchLimits {
-    // how many folder levels below a root are looked in
-    int depth = 4;
+    // how many folder levels below a root are looked in: enough for
+    // C:\Users\name\Documents\Games\Rock Band 3
+    int depth = 6;
     // how long the whole search may take
-    std::chrono::milliseconds time{5000};
+    std::chrono::milliseconds time{8000};
     // how many folders it may open
     size_t max_folders = 40000;
 };

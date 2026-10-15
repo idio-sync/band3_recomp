@@ -77,6 +77,7 @@ std::vector<FindGameScreen::Item> FindGameScreen::Items() const {
         for (const auto& [path, game] : listing_) {
             out.push_back({Item::kFolder, rex::path_to_utf8(path.filename()), path, game});
         }
+        if (listing_.empty()) out.push_back({Item::kNote, "No folders in here"});
         return out;
     }
     std::vector<fs::path> found;
@@ -88,6 +89,7 @@ std::vector<FindGameScreen::Item> FindGameScreen::Items() const {
     }
     out.push_back({Item::kBand, done ? "Found on this PC" : "Searching this PC..."});
     for (const fs::path& path : found) out.push_back({Item::kFound, Shown(path), path, true});
+    if (done && found.empty()) out.push_back({Item::kNote, "None found nearby: open a drive below, or Y searches again"});
     out.push_back({Item::kBand, "Browse"});
     for (const fs::path& root : roots_) out.push_back({Item::kDrive, Shown(root), root});
     out.push_back({Item::kChoose, "Choose a folder in a window..."});
@@ -118,7 +120,8 @@ void FindGameScreen::Activate(const Item& item) {
         break;
     }
     case Item::kChoose: picker_.Start("game_data_root", folder_ ? rex::path_to_utf8(*folder_) : std::string()); break;
-    case Item::kBand: break;
+    case Item::kBand:
+    case Item::kNote: break;
     }
 }
 
@@ -126,7 +129,7 @@ void FindGameScreen::Handle(Action action) {
     std::vector<Item> items = Items();
     std::vector<const Item*> pickable;
     for (const Item& i : items) {
-        if (i.kind != Item::kBand) pickable.push_back(&i);
+        if (i.kind != Item::kBand && i.kind != Item::kNote) pickable.push_back(&i);
     }
     const int count = int(pickable.size());
     switch (action) {
@@ -173,7 +176,7 @@ void FindGameScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
     const std::vector<Item> items = Items();
     std::vector<int> pickable;
     for (int i = 0; i < int(items.size()); i++) {
-        if (items[size_t(i)].kind != Item::kBand) pickable.push_back(i);
+        if (items[size_t(i)].kind != Item::kBand && items[size_t(i)].kind != Item::kNote) pickable.push_back(i);
     }
     selected_ = std::clamp(selected_, 0, std::max(0, int(pickable.size()) - 1));
     const Item* current = pickable.empty() ? nullptr : &items[size_t(pickable[size_t(selected_)])];
@@ -188,6 +191,7 @@ void FindGameScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
     } else {
         std::lock_guard lock(search_->mutex);
         strip = !search_->done ? std::string("Searching this PC...")
+                               : search_->found.empty() ? std::string("Searched this PC: no copy found")
                                : "Searched this PC: " + std::to_string(search_->found.size()) +
                                      (search_->found.size() == 1 ? " copy found" : " copies found");
     }
@@ -223,6 +227,10 @@ void FindGameScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         const float top = kTop + ys[i] - scroll_;
         if (item.kind == Item::kBand) {
             DrawBand(dl, page.At(kLeft, top), page.At(kRight, top + kBandHeight), item.label, BandKind::kSection, skin_);
+            continue;
+        }
+        if (item.kind == Item::kNote) {
+            PaintText(dl, page.At(kLeft + 20, top + 9), kPlain(text::kBody), color::kMuted, item.label);
             continue;
         }
         const int index = pick++;

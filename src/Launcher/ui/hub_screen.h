@@ -56,6 +56,8 @@ private:
     void Handle(Action action);
     void Pick(int index);
     void DrawCard(ImDrawList* dl, const Page& page, bool found);
+    // the card's text, from `y` down; leaves `y` under it
+    void DrawCardFacts(ImDrawList* dl, const Page& page, bool found, float x, float width, float& y);
 
     Skin& skin_;
     HubHost host_;

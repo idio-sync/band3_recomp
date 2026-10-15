@@ -116,7 +116,7 @@ void DrawBackground(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin) {
 
 void DrawGameDim(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin) {
     const ImVec2 size(max.x - min.x, max.y - min.y);
-    VGradient(dl, min, max, IM_COL32(4, 8, 34, 222), IM_COL32(2, 4, 20, 238));
+    VGradient(dl, min, max, IM_COL32(4, 8, 34, 234), IM_COL32(2, 4, 20, 246));
     if (skin.Has(SkinPart::kGrain)) {
         const float tile = Px(384);
         dl->AddImage(skin.Texture(SkinPart::kGrain), min, max, ImVec2(0, 0),

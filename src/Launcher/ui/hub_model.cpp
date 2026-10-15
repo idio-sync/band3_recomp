@@ -77,4 +77,35 @@ std::optional<IconCell> IconFor(uint8_t sub_type) {
     }
 }
 
+std::string ShortPath(std::string_view path, float max, const std::function<float(std::string_view)>& width) {
+    if (width(path) <= max) return std::string(path);
+    const std::string ellipsis = "\xE2\x80\xA6";
+    const char sep = path.find('\\') != std::string_view::npos ? '\\' : '/';
+    // the drive or root, then the folders
+    const size_t first = path.find(sep);
+    const std::string head(path.substr(0, first == std::string_view::npos ? 0 : first + 1));
+    std::vector<std::string_view> parts;
+    for (size_t at = head.size(); at < path.size();) {
+        size_t end = path.find(sep, at);
+        if (end == std::string_view::npos) end = path.size();
+        if (end > at) parts.push_back(path.substr(at, end - at));
+        at = end + 1;
+    }
+    // as many last folders as fit
+    for (size_t keep = parts.size() > 1 ? parts.size() - 1 : 0; keep >= 1; keep--) {
+        std::string candidate = head + ellipsis;
+        for (size_t i = parts.size() - keep; i < parts.size(); i++) candidate += sep + std::string(parts[i]);
+        if (width(candidate) <= max) return candidate;
+    }
+    // the last folder's end alone
+    const std::string_view last = parts.empty() ? path : parts.back();
+    for (size_t cut = 0; cut < last.size(); cut++) {
+        // not inside a UTF-8 sequence
+        if ((static_cast<unsigned char>(last[cut]) & 0xC0) == 0x80) continue;
+        std::string candidate = ellipsis + std::string(last.substr(cut));
+        if (width(candidate) <= max) return candidate;
+    }
+    return ellipsis;
+}
+
 }

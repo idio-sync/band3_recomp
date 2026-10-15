@@ -122,7 +122,8 @@ std::vector<VideosScreen::Item> VideosScreen::Items() const {
         return out;
     }
     std::string letter;
-    size_t band = 0;
+    // the letter band being counted: none before the first song
+    size_t band = SIZE_MAX;
     int band_songs = 0, band_videos = 0;
     const auto close_band = [&] {
         if (band < out.size()) {
@@ -304,7 +305,7 @@ void VideosScreen::Jump(int direction) {
     const std::vector<Item> items = Items();
     std::vector<int> pickable;
     for (int i = 0; i < int(items.size()); i++) {
-        if (items[size_t(i)].kind != Item::kLetter) pickable.push_back(i);
+        if (Pickable(items[size_t(i)].kind)) pickable.push_back(i);
     }
     if (pickable.empty()) return;
     const int at = pickable[size_t(std::clamp(selected_, 0, int(pickable.size()) - 1))];
@@ -343,6 +344,13 @@ void VideosScreen::Activate(const Item& item) {
         const video::VideoJobsProgress p = video::VideoJobsNow();
         if (p.running || p.waiting > 0) {
             video::PauseVideoJobs(!p.paused);
+            return;
+        }
+        if (library_.Songs().empty()) {
+            ShowBox(Box{.title = "No songs yet",
+                        .lines = {"band3 lists your songs once the game has read them: play once, then come back."},
+                        .options = {"OK"},
+                        .cancel = 0});
             return;
         }
         if (NeedsYtDlp()) return;
@@ -440,7 +448,7 @@ void VideosScreen::Handle(Action action) {
     const std::vector<Item> items = Items();
     std::vector<const Item*> pickable;
     for (const Item& i : items) {
-        if (i.kind != Item::kLetter) pickable.push_back(&i);
+        if (Pickable(i.kind)) pickable.push_back(&i);
     }
     const int count = int(pickable.size());
     const Item* item = selected_ < count ? pickable[size_t(selected_)] : nullptr;
@@ -462,7 +470,7 @@ void VideosScreen::Handle(Action action) {
         break;
     case Action::kReset:
         // yt-dlp updated: YouTube changes often, and an old one stops finding videos
-        if (item && item->kind == Item::kFindAll) video::UpdateYtDlp();
+        if (item && item->kind == Item::kFindAll && !NeedsYtDlp()) video::UpdateYtDlp();
         if (item && item->kind == Item::kSong) {
             const auto& s = library_.Songs()[size_t(item->index)];
             if (s.video >= 0) library_.Sync(library_.Videos()[size_t(s.video)]);
@@ -507,7 +515,7 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
     const std::vector<Item> items = Items();
     std::vector<int> pickable;
     for (int i = 0; i < int(items.size()); i++) {
-        if (items[size_t(i)].kind != Item::kLetter) pickable.push_back(i);
+        if (Pickable(items[size_t(i)].kind)) pickable.push_back(i);
     }
     selected_ = std::clamp(selected_, 0, std::max(0, int(pickable.size()) - 1));
     const Item* current = pickable.empty() ? nullptr : &items[size_t(pickable[size_t(selected_)])];
@@ -577,10 +585,10 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
     int pick = -1;
     for (size_t i = 0; i < items.size(); i++) {
         const Item& item = items[i];
-        if (item.kind != Item::kLetter) pick++;
+        if (Pickable(item.kind)) pick++;
         const float top = kTop + ys[i] - scroll_;
         if (top > kBottom || top + kBandHeight + 8 < kTop) continue;
-        const bool selected = item.kind != Item::kLetter && pick == selected_ && free;
+        const bool selected = Pickable(item.kind) && pick == selected_ && free;
         if (item.kind == Item::kLetter) {
             DrawBand(dl, page.At(kLeft, top), page.At(kRight, top + kBandHeight), item.label, BandKind::kSection, skin_,
                      false, item.right);
@@ -631,7 +639,8 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
                       selected ? IM_COL32(61, 58, 7, 255) : IM_COL32(198, 201, 212, 255), s.artist,
                       room - tw - Px(12));
         }
-        if (free && ImGui::IsMouseHoveringRect(min, max) && ImGui::IsMouseHoveringRect(amin, amax)) {
+        if (free && Pickable(item.kind) && ImGui::IsMouseHoveringRect(min, max) &&
+            ImGui::IsMouseHoveringRect(amin, amax)) {
             if (input_.MouseMoved()) selected_ = pick;
             if (input_.Clicked()) {
                 selected_ = pick;
@@ -644,7 +653,7 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
         dl->AddRectFilled(page.At(893, kTop), page.At(897, kBottom), IM_COL32(255, 255, 255, 20));
         const float h = std::max(area * area / y, 30.0f);
         const float t = kTop + (area - h) * (scroll_ / (y - area));
-        dl->AddRectFilled(page.At(893, t), page.At(897, t + h), IM_COL32(196, 58, 47, 255), Px(2));
+        dl->AddRectFilled(page.At(893, t), page.At(897, t + h), IM_COL32(255, 255, 255, 120), Px(2));
     }
 
     DrawPanel(dl, page, current);
@@ -659,7 +668,9 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
         help = {{HelpButton::kA, "Options"}, {HelpButton::kB, "Back"}, {HelpButton::kX, "Find this video"},
                 {HelpButton::kY, "Sync again"}};
     } else if (current && current->kind == Item::kFindAll) {
-        help = {{HelpButton::kA, "Select"}, {HelpButton::kB, "Back"}, {HelpButton::kY, "Update yt-dlp"}};
+        const video::YtDlpState yt = video::YtDlpNow(false);
+        help = {{HelpButton::kA, "Select"}, {HelpButton::kB, "Back"},
+                {HelpButton::kY, !yt.checking && yt.version.empty() ? "Get yt-dlp" : "Update yt-dlp"}};
     } else {
         help = {{HelpButton::kA, "Select"}, {HelpButton::kB, "Back"}, {HelpButton::kBumpers, "Letter"}};
     }
@@ -757,6 +768,11 @@ void VideosScreen::DrawPanel(ImDrawList* dl, const Page& page, const Item* item)
             kv("To review", std::to_string(p.review), color::kWarn);
             kv("None found", std::to_string(p.none), color::kText);
             kv("Failed", std::to_string(p.failed), color::kBad);
+        } else if (library_.Songs().empty()) {
+            para("band3 lists your songs once the game has read them: play once, then come back to find their "
+                 "videos.",
+                 body);
+            y += 10;
         } else {
             const size_t count = library_.BatchSongs().size();
             para(std::format("band3 looks up a music video for each of the {} songs without one, downloads it, and "

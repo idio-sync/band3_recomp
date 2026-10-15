@@ -51,6 +51,8 @@ private:
         // a letter band's counts
         std::string right;
     };
+    // what the cursor stops on: not the letter bands or a line of text
+    static bool Pickable(Item::Kind kind) { return kind != Item::kLetter && kind != Item::kEmpty; }
     std::vector<Item> Items() const;
     void Handle(Action action);
     void Activate(const Item& item);

@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -37,6 +38,11 @@ struct Played {
 // the song the score history's last whole line is of; `tail` is the end of
 // score_history.jsonl, its first line possibly cut
 std::optional<Played> LastPlayed(std::string_view tail);
+
+// a path as wide as `max` allows by `width` (the card's, and the Settings
+// rows'): its drive (or root) and as many of its last folders as fit, an
+// ellipsis between; the end of the last folder alone when even that's too wide
+std::string ShortPath(std::string_view path, float max, const std::function<float(std::string_view)>& width);
 
 // a cell of rb3_icons' 4x4 sheet: bass, guitar, drums, keys; the pro ones;
 // the microphones

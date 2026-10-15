@@ -86,3 +86,18 @@ TEST_CASE("each controller shows as its instrument's icon") {
     CHECK_FALSE(IconFor(1));
     CHECK(kVocalsIcon == IconCell{0, 2});
 }
+
+TEST_CASE("a path too long for its line keeps its drive and its last folders") {
+    // one unit per character
+    const auto width = [](std::string_view s) { return float(s.size()); };
+    const std::string ellipsis = "\xE2\x80\xA6";
+    // what fits stays whole
+    CHECK(ShortPath(R"(C:\Games\RB3)", 40, width) == R"(C:\Games\RB3)");
+    // the middle goes, whole folders at a time
+    CHECK(ShortPath(R"(C:\Users\someone\Git\band3\assets)", 22, width) ==
+          "C:\\" + ellipsis + R"(\band3\assets)");
+    // the last folder alone, cut, when even it doesn't fit
+    CHECK(ShortPath(R"(C:\Users\a_very_long_folder_name)", 10, width).size() <= 10 + ellipsis.size());
+    // forward slashes too
+    CHECK(ShortPath("/home/deck/games/rb3", 14, width) == "/" + ellipsis + "/games/rb3");
+}

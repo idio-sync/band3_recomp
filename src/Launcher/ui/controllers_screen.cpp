@@ -69,8 +69,9 @@ void ControllersScreen::Activate(int index) {
 
 void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
     entries_ = devices_.Entries();
-    // SDL's copies of dongle instruments are their dongles' rows
-    std::erase_if(entries_, [](const DevicePanel::Entry& e) { return e.copy; });
+    // SDL's copies of dongle instruments are their dongles' rows, and the
+    // SDK's stand-in is no controller at all
+    std::erase_if(entries_, [](const DevicePanel::Entry& e) { return e.copy || IsStandIn(e.kind, e.name); });
     const int count = int(entries_.size()) + kSettingsRows;
     selected_ = std::clamp(selected_, 0, count - 1);
     for (const Action a : input_.Read(pads)) Handle(a);
@@ -80,19 +81,15 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
     const Page page = PageFor(io);
     ImDrawList* dl = BeginScreen("band3##controllers", io, skin_);
     DrawTitle(dl, page.At(70, 14), "Test Controllers");
-    DrawStrip(dl, page.At(0, 96), page.At(890, 132), skin_);
+    DrawStrip(dl, page.At(0, 96), page.At(kRowsRight, 132), skin_);
     std::string strip = std::to_string(entries_.size()) + (entries_.size() == 1 ? " device found" : " devices found");
     const DevicePanel::Entry* tested = nullptr;
     for (const auto& e : entries_) {
         if (testing == e.id) tested = &e;
     }
     if (tested) strip = "Testing: " + tested->name;
-    PaintText(dl, page.At(40, 100), kCaps(text::kStrip), IM_COL32(232, 232, 236, 255), strip, Px(560));
-    if (tested) {
-        const char* note = "Its buttons don't move the menu";
-        const float w = TextWidth(kCaps(text::kHelp), note);
-        PaintText(dl, ImVec2(page.At(880, 0).x - w, page.At(0, 103).y), kCaps(text::kHelp), color::kInfo, note);
-    }
+    PaintText(dl, page.At(40, 100), kCaps(text::kStrip), IM_COL32(232, 232, 236, 255), strip,
+              Px(kRowsRight - 50));
 
     // the devices, then their settings
     float y = kTop;
@@ -125,7 +122,7 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         const float value_room = TextWidth(kCaps(text::kValue), look.value) / page.scale + 40;
         PaintText(dl, page.At(x, y + 3), kPlain(text::kRow), text_color, e.name,
                   Px(kRowsRight - kRowsLeft - 58 - value_room));
-        PaintText(dl, page.At(x, y + 26), kCaps(15), selected ? color::kOnYellow : color::kMuted, e.kind_label,
+        PaintText(dl, page.At(x, y + 26), kCaps(16), selected ? color::kOnYellow : color::kMuted, e.kind_label,
                   Px(kRowsRight - kRowsLeft - 58 - value_room));
         if (!testing && ImGui::IsMouseHoveringRect(min, max)) {
             if (input_.MouseMoved()) selected_ = i;
@@ -158,9 +155,9 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
     }
 
     // the panel: the selected device, live
-    DrawPanel(dl, page.At(kPanelLeft, 30), page.At(kPanelRight, 650), skin_);
+    DrawPanel(dl, page.At(kPanelLeft, 96), page.At(kPanelRight, 650), skin_);
     const float px = kPanelLeft + 26, pw = kPanelRight - kPanelLeft - 52;
-    float py = 56;
+    float py = 120;
     if (selected_ >= int(entries_.size())) {
         const bool midi = selected_ > int(entries_.size());
         PaintText(dl, page.At(px, py), kCaps(text::kPanelHeading), color::kText, midi ? "MIDI" : "Controllers");
@@ -196,7 +193,8 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
                                                       "Back on it, or B on another controller, to stop.")
                            : e.testable ? "A tests it on its own: its frets, strum and whammy light up here, and its "
                                           "buttons stop moving the menu until you press Back on it."
-                                        : "Shown as it plays; it moves the menu by itself.";
+                                        : "It moves the menus itself, so it isn't tested on its own: what it "
+                                          "presses lights up here as you use it.";
         for (const std::string& line : WrapText(kPlain(text::kBody), what, Px(pw))) {
             PaintText(dl, page.At(px, py), kPlain(text::kBody), IM_COL32(217, 220, 229, 255), line);
             py += text::kBodyLine;
@@ -220,7 +218,10 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
     if (testing) {
         help = {{HelpButton::kB, input_.Keyboard() ? "Stop test" : "Back on it, or B, stops the test"}};
     } else {
-        help = {{HelpButton::kA, selected_ < int(entries_.size()) ? "Test" : "Open"}, {HelpButton::kB, "Back to menu"}};
+        const bool device = selected_ < int(entries_.size());
+        if (!device) help.push_back({HelpButton::kA, "Open"});
+        else if (entries_[size_t(selected_)].testable) help.push_back({HelpButton::kA, "Test"});
+        help.push_back({HelpButton::kB, "Back to menu"});
     }
     const int hovered = DrawHelpBar(dl, ImVec2(0, page.At(0, 664).y), io.DisplaySize, help, input_.Keyboard(),
                                     !testing, skin_);

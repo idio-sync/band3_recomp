@@ -281,9 +281,9 @@ void LauncherDialog::Play() {
     const std::filesystem::path root = host_.game_data_root ? host_.game_data_root() : std::filesystem::path();
     ShowHub();
     hub_->ShowBox(ui::Box{
-        .title = "Rock Band 3 isn't in the game data folder",
-        .lines = {std::string(DescribeProblem(check.problem)) + ": " +
-                  (root.empty() ? std::string("no folder set") : rex::path_to_utf8(root)) + "."},
+        .title = "Rock Band 3 not found",
+        .lines = {"Game data folder: " + (root.empty() ? std::string("none set") : rex::path_to_utf8(root)),
+                  std::string(DescribeProblem(check.problem))},
         .options = {"Find Rock Band 3", "Play anyway", "Cancel"},
         .cancel = 2,
         .chosen = [this](int choice) {

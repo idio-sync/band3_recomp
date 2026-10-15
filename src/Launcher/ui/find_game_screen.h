@@ -40,7 +40,8 @@ public:
 
 private:
     struct Item {
-        enum Kind { kBand, kFound, kDrive, kUp, kFolder, kChoose } kind;
+        // kNote: a line of text, not picked
+        enum Kind { kBand, kFound, kDrive, kUp, kFolder, kChoose, kNote } kind;
         std::string label;
         std::filesystem::path path;
         bool game = false;

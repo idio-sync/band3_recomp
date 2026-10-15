@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include "hub_model.h"
 #include "keyboard_actions.h"
 #include "keyboard_panel.h"
 #include "src/Audio/usb_mic.h"
@@ -1011,7 +1012,14 @@ void SettingsScreen::DrawRows(ImDrawList* dl, ImGuiIO& io) {
         // on and off read as a toggle, however the setting stores them
         const bool toggle = r.kind != RowKind::kControl && (value == "On" || value == "Off");
         look.on = toggle && value == "On";
-        look.value_caps = toggle || r.kind == RowKind::kControl;
+        // caps for on and off and for what a row does (Open, Play); a value
+        // as it is (a file's name, a colour)
+        const bool action = r.kind == RowKind::kControl &&
+                            (r.control == Control::kLowestDelay || r.control == Control::kTestControllers ||
+                             r.control == Control::kVideosList || r.control == Control::kSdkSettings ||
+                             r.control == Control::kLightsCheck || r.control == Control::kChase ||
+                             r.control == Control::kLightsOff);
+        look.value_caps = toggle || action;
         const bool steps = r.kind == RowKind::kControl
                                ? (r.control == Control::kLightsDevice || r.control == Control::kFog ||
                                   r.control == Control::kStrobe || r.control == Control::kLightsColour ||
@@ -1022,6 +1030,13 @@ void SettingsScreen::DrawRows(ImDrawList* dl, ImGuiIO& io) {
                                                  r.setting->widget == Widget::kFloatInput)));
         look.arrows = selected && steps && !locked && !typing_here;
         const ImVec2 min = At(kRowsLeft, py), max = At(kRowsRight, py + kRowHeight);
+        // a path too long for the row keeps its drive and its last folders
+        std::string short_path;
+        if (!look.value_caps && !typing_here && value.find_first_of("\\/") != std::string::npos) {
+            const TextStyle vs = kPlain(text::kValue);
+            short_path = ShortPath(value, (max.x - min.x) * 0.48f, [&](std::string_view s) { return TextWidth(vs, s); });
+            look.value = short_path;
+        }
         DrawRow(dl, min, max, look, skin_);
         if (typing_here && std::fmod(now_, 1.0) < 0.6) {
             // the caret after the text being typed
@@ -1063,7 +1078,7 @@ void SettingsScreen::DrawRows(ImDrawList* dl, ImGuiIO& io) {
         dl->AddRectFilled(tmin, tmax, IM_COL32(255, 255, 255, 20));
         const float h = std::max(area * area / content, 30.0f);
         const float t = kRowsTop + (area - h) * (scroll_ / (content - area));
-        dl->AddRectFilled(At(893, t), At(897, t + h), IM_COL32(196, 58, 47, 255), Px(2));
+        dl->AddRectFilled(At(893, t), At(897, t + h), IM_COL32(255, 255, 255, 120), Px(2));
     }
 }
 
@@ -1425,7 +1440,7 @@ void SettingsScreen::DrawDrop(ImDrawList* dl) {
         const float th = std::max(track * float(shown) / float(count), 20.0f);
         const float ty = top + 26 + (track - th) * float(drop.scroll) / float(count - shown);
         dl->AddRectFilled(At(kDropLeft + kDropWidth - 16, ty), At(kDropLeft + kDropWidth - 13, ty + th),
-                          IM_COL32(196, 58, 47, 255), Px(2));
+                          IM_COL32(255, 255, 255, 120), Px(2));
     }
     // a click outside closes it
     if (free && Clicked() && !ImGui::IsMouseHoveringRect(min, max)) {

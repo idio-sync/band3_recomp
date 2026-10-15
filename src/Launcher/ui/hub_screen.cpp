@@ -70,8 +70,6 @@ void ReadFacts(const std::shared_ptr<HubScreen::Facts>& facts, std::filesystem::
     facts->done = true;
 }
 
-constexpr ImU32 kCardText = IM_COL32(242, 242, 242, 255);
-constexpr ImU32 kCardMuted = IM_COL32(163, 170, 187, 255);
 
 }
 
@@ -154,7 +152,7 @@ void HubScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         const bool selected = i == selected_ && !box_;
         if (selected) DrawHighlight(dl, min, max, skin_, Px(4));
         ImU32 col = selected ? color::kOnYellow : color::kText;
-        if (!e.enabled && !selected) col = IM_COL32(242, 242, 242, 97);
+        if (!e.enabled && !selected) col = IM_COL32(242, 242, 242, 130);
         PaintText(dl, page.At(76, y + 1), item_style, col, name);
         if (!box_ && ImGui::IsMouseHoveringRect(min, max)) {
             if (input_.MouseMoved()) selected_ = i;
@@ -180,10 +178,10 @@ void HubScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
 
     DrawCard(dl, page, found);
 
-    const HelpItem help[] = {{HelpButton::kA, "Select"}, {HelpButton::kB, "Go to Quit"}};
+    const HelpItem help[] = {{HelpButton::kA, "Select"}, {HelpButton::kB, box_ ? "Cancel" : "Go to Quit"}};
     const ImVec2 bar_min(0, page.At(0, 664).y);
     const int hovered = DrawHelpBar(dl, bar_min, io.DisplaySize, help, input_.Keyboard(), false, skin_);
-    if (found) {
+    if (found && !box_) {
         const char* hint = input_.Keyboard() ? "F5 plays from any screen" : "Start plays from any screen";
         const TextStyle style = kCaps(19);
         const float w = TextWidth(style, hint);
@@ -196,6 +194,8 @@ void HubScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         if (option >= 0 && input_.Clicked() && ImGui::GetFrameCount() != box_frame_) {
             box_->selected = option;
             Handle(Action::kSelect);
+        } else if (option < 0 && hovered >= 0 && input_.Clicked() && ImGui::GetFrameCount() != box_frame_) {
+            Handle(hovered == 0 ? Action::kSelect : Action::kBack);
         }
     } else if (hovered >= 0 && input_.Clicked()) {
         Handle(hovered == 0 ? Action::kSelect : Action::kBack);
@@ -204,9 +204,18 @@ void HubScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
 }
 
 void HubScreen::DrawCard(ImDrawList* dl, const Page& page, bool found) {
-    DrawPanel(dl, page.At(800, 150), page.At(1220, 570), skin_);
+    // the panel's as tall as what's in it: drawn under it once that's known
+    dl->ChannelsSplit(2);
+    dl->ChannelsSetCurrent(1);
     const float x = 826, width = 368;
     float y = 176;
+    DrawCardFacts(dl, page, found, x, width, y);
+    dl->ChannelsSetCurrent(0);
+    DrawPanel(dl, page.At(800, 150), page.At(1220, std::max(y + 24, 330.0f)), skin_);
+    dl->ChannelsMerge();
+}
+
+void HubScreen::DrawCardFacts(ImDrawList* dl, const Page& page, bool found, float x, float width, float& y) {
     const TextStyle heading = kCaps(text::kBoxTitle);
     const TextStyle key = kCaps(21);
     const auto at = [&](float px, float py) { return page.At(px, py); };
@@ -218,8 +227,11 @@ void HubScreen::DrawCard(ImDrawList* dl, const Page& page, bool found) {
         dl->AddLine(at(x, y + height), at(x + width, y + height), IM_COL32(255, 255, 255, 18));
         y += height;
     };
-    const std::string root = rex::path_to_utf8(facts_root_.empty() ? std::filesystem::path("(not set)")
-                                                                     : facts_root_);
+    const std::string full_root = rex::path_to_utf8(facts_root_.empty() ? std::filesystem::path("(not set)")
+                                                                          : facts_root_);
+    const auto fit_root = [&](const TextStyle& style) {
+        return ShortPath(full_root, Px(width), [&](std::string_view s) { return TextWidth(style, s); });
+    };
     if (!found) {
         PaintText(dl, at(x, y), heading, color::kText, "Rock Band 3 not found", Px(width));
         y += 36;
@@ -234,16 +246,14 @@ void HubScreen::DrawCard(ImDrawList* dl, const Page& page, bool found) {
             y += text::kBodyLine;
         }
         y += 12;
-        PaintText(dl, at(x, y + 7), key, color::kText, "Folder now");
+        PaintText(dl, at(x, y + 7), key, color::kText, "Looked in");
         const char* none = "No game here";
         const float vw = TextWidth(key, none);
         PaintText(dl, ImVec2(at(x + width, 0).x - vw, at(0, y + 7).y), key, color::kBad, none);
         dl->AddCircleFilled(ImVec2(at(x + width, 0).x - vw - Px(12), at(0, y + 18).y), Px(5), color::kBad);
         y += 40;
-        for (const std::string& l : WrapText(kPlain(18), root, Px(width))) {
-            PaintText(dl, at(x, y), kPlain(18), kCardMuted, l);
-            y += 22;
-        }
+        PaintText(dl, at(x, y), kPlain(18), color::kMuted, fit_root(kPlain(18)));
+        y += 22;
         return;
     }
 
@@ -259,7 +269,7 @@ void HubScreen::DrawCard(ImDrawList* dl, const Page& page, bool found) {
         PaintText(dl, ImVec2(at(x + width, 0).x - vw, at(0, y + 7).y), key, color::kText, found_text);
         dl->AddCircleFilled(ImVec2(at(x + width, 0).x - vw - Px(12), at(0, y + 18).y), Px(5), color::kGood);
         y += 34;
-        PaintText(dl, at(x, y), kPlain(18), kCardMuted, root, Px(width));
+        PaintText(dl, at(x, y), kPlain(18), color::kMuted, fit_root(kPlain(18)));
         y += 26;
         dl->AddLine(at(x, y), at(x + width, y), IM_COL32(255, 255, 255, 18));
     }
@@ -276,7 +286,7 @@ void HubScreen::DrawCard(ImDrawList* dl, const Page& page, bool found) {
         last = facts_->last;
     }
     if (done) {
-        line("Deluxe", deluxe ? *deluxe : "Not installed", deluxe ? color::kText : kCardMuted);
+        line("Deluxe", deluxe ? *deluxe : "Not installed", deluxe ? color::kText : color::kMuted);
         // the songs the game listed when it last ran: none before its first
         if (songs > 0) line("Songs", Thousands(songs), color::kText);
     }
@@ -298,14 +308,14 @@ void HubScreen::DrawCard(ImDrawList* dl, const Page& page, bool found) {
     if (icons.empty()) {
         const char* none = "None yet";
         const float vw = TextWidth(key, none);
-        PaintText(dl, ImVec2(at(x + width, 0).x - vw, at(0, y + 12).y), key, kCardMuted, none);
+        PaintText(dl, ImVec2(at(x + width, 0).x - vw, at(0, y + 12).y), key, color::kMuted, none);
     }
     for (auto it = icons.rbegin(); it != icons.rend() && ix > x + 170; ++it) {
         if (it->column < 0) {
             // a gamepad: no icon of its own in RB3's sheet
             const ImVec2 c = at(ix + 15, y + 22);
             dl->AddCircle(c, Px(13), color::kSoft, 0, Px(2));
-            PaintText(dl, ImVec2(c.x - TextWidth(kCaps(12), "Pad") * 0.5f, c.y - Px(6)), kCaps(12), color::kSoft,
+            PaintText(dl, ImVec2(c.x - TextWidth(kCaps(16), "Pad") * 0.5f, c.y - Px(8)), kCaps(16), color::kSoft,
                       "Pad");
         } else {
             DrawIcon(dl, at(ix, y + 7), at(ix + 30, y + 37), skin_, it->column, it->row);
@@ -317,7 +327,7 @@ void HubScreen::DrawCard(ImDrawList* dl, const Page& page, bool found) {
 
     if (last) {
         y += 12;
-        PaintText(dl, at(x, y), kCaps(19), kCardMuted, "Last played");
+        PaintText(dl, at(x, y), kCaps(19), color::kMuted, "Last played");
         y += 26;
         const float tw = PaintText(dl, at(x, y), kPlain(22), color::kText, last->title, Px(width * 0.7f));
         PaintText(dl, ImVec2(at(x, 0).x + tw + Px(10), at(0, y + 1).y), kPlain(20), IM_COL32(191, 195, 207, 255),
