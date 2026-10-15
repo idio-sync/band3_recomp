@@ -537,6 +537,12 @@ struct State {
     OpenPass open;
     // by DxTex
     std::unordered_map<uint32_t, RtState> rts;
+    // the last version made at each DxTex address, kept when its RtState
+    // goes: a texture made where a freed one was (a character's outfit, on
+    // choosing another) carries on from it, as a version restarting at 1
+    // would name the old one's content (the GPU's keep_carried kept the
+    // last character's outfit)
+    std::unordered_map<uint32_t, uint32_t> versions_at;
     // capture was on at the last frame's end, so this frame's is whole
     bool captured_last = false;
     // the last whole frame that drew the world (frame_compose.h)
@@ -2096,7 +2102,7 @@ void EndPass(uint32_t tex) {
     SetPassWantsDraws(false);
     if (s.open.tex != tex) DropOpenPass(s);
     RtState& rt = s.rts[tex];
-    rt.version++;
+    rt.version = ++s.versions_at[tex];
     rt.repeats = RecentlyMade(rt, s.game_frame) ? rt.repeats + 1 : 0;
     rt.made_frame = s.game_frame;
     rt.before = std::move(rt.last);
