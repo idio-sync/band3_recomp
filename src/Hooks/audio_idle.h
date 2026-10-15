@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <span>
 
 // audio_idle_bypass (src/Hooks/audio_idle.cpp): the game's audio effects
 // skipped while all they do is process silence.
@@ -88,12 +89,52 @@ constexpr bool Skip(bool enabled, bool mic_connected, bool input_silent, bool st
     return enabled && !mic_connected && input_silent && steady && s.Settled();
 }
 
+// An effect whose Process changes words besides its samples (CompressionEffect:
+// its gate floor, DC block and gain envelope) is steady only while those words
+// are what its last processed block left. Anything else that changed them, a
+// Reset when its send's bypass turns on or a new instance at the same address,
+// has it processed until it settles again.
+inline bool StateAsLeft(std::span<const uint32_t> now, std::span<const uint32_t> left) {
+    return std::equal(now.begin(), now.end(), left.begin(), left.end());
+}
+
 // LEAPFX::CAudioReverb::Process's steady state: enabled, no new parameters
 // waiting for it, past the pass that fades it in after enabling, and past its
 // first pass. The guest compares each word with 0.
 constexpr bool ReverbSteady(bool is_enabled, uint32_t new_parameters, uint32_t was_enabled,
-                            uint32_t initialized) {
-    return is_enabled && new_parameters == 0 && was_enabled != 0 && initialized != 0;
+                            uint32_t processed) {
+    return is_enabled && new_parameters == 0 && was_enabled != 0 && processed != 0;
+}
+
+// Whether CAudioReverb::Process runs its kernel: while it's enabled, and on the
+// pass after it's disabled, which fades it out. Disabled after that, it flags a
+// SILENT input's output SILENT or copies a VALID one through, and its state
+// holds still.
+constexpr bool ReverbKernelRuns(bool is_enabled, uint32_t was_enabled, uint32_t processed) {
+    return is_enabled || (was_enabled != 0 && processed != 0);
+}
+
+// The reverb's channel counts (LockForProcess stores its formats' 16-bit ones)
+// are ones its kernels take: mono, stereo and 5.1, each way.
+constexpr uint32_t kMaxReverbChannels = 6;
+constexpr bool ReverbChannelsOk(uint32_t in, uint32_t out) {
+    return in >= 1 && in <= kMaxReverbChannels && out >= 1 && out <= kMaxReverbChannels;
+}
+
+// The game's microphone list, ExternalMic's static std::vector<ExternalMic*>,
+// from its begin and end words: ExternalMic::Init makes four.
+constexpr uint32_t kMaxExternalMics = 4;
+enum class MicList {
+    kEmpty,       // not made yet (before Synth360::Init), or none
+    kEntries,     // up to four pointers
+    kUnreadable,  // not a list: every effect runs
+};
+constexpr MicList MicListShape(uint32_t begin, uint32_t end) {
+    if (begin == end) return MicList::kEmpty;
+    if (!begin || end < begin || (end - begin) % 4 || end - begin > 4 * kMaxExternalMics) {
+        return MicList::kUnreadable;
+    }
+    return MicList::kEntries;
 }
 
 }

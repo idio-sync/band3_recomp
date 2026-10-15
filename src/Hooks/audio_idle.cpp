@@ -1,7 +1,9 @@
 // audio_idle_bypass: the game's audio effects skipped while all they do is
 // process silence (the rule and its constants are in audio_idle.h). Five guest
-// DSP functions are hooked, each inside the parameter hand-over its effect does
-// around processing (xapo_params.h), so only the DSP is skipped:
+// functions are hooked. Four are DSP inside the parameter hand-over their
+// effects do around processing (xapo_params.h), so only the DSP is skipped; the
+// reverb's is its XAPO's whole Process, which is never skipped while new
+// parameters wait for it (its own hand-over):
 // - DSP::Synapse::ProcessInPlace, the mic chain's pitch correction;
 // - LEAPFX::CAudioReverb::Process, XAudio2's reverb on the game's reverb submix;
 // - EQEffect::Process, CompressionEffect::Process and DelayEffect::Process: the
@@ -15,11 +17,13 @@
 #include <rex/logging.h>
 #include <rex/types.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <span>
 #include <unordered_map>
 
 #include "generated/band3_init.h"
@@ -37,7 +41,6 @@ using Clock = std::chrono::steady_clock;
 // USB mics)
 constexpr uint32_t kExternalMics = 0x82E1218C;
 constexpr uint32_t kExternalMic_Connected = 0x9;
-constexpr uint32_t kMaxExternalMics = 4;  // ExternalMic::Init makes four
 
 // XAPO_PROCESS_BUFFER_PARAMETERS
 constexpr uint32_t kBuffer_Samples = 0x0;
@@ -52,8 +55,6 @@ constexpr uint32_t kReverb_InputChannels = 212;  // from LockForProcess
 constexpr uint32_t kReverb_OutputChannels = 216;
 constexpr uint32_t kReverb_WasEnabled = 228;  // IsEnabled at its last Process
 constexpr uint32_t kReverb_Processed = 232;   // set by its first Process
-// its kernels: mono, stereo and 5.1
-constexpr uint32_t kMaxReverbChannels = 6;
 // the float Process fills a SILENT input with: 1.0e-18, not 0, which keeps the
 // reverb's state out of the subnormals
 constexpr uint32_t kReverbSilentFill = 0x821A6B5C;
@@ -75,7 +76,8 @@ constexpr std::array<const char*, size_t(Kind::kCount)> kKindNames = {
 
 enum class Mics { kUnknown, kNone, kConnected, kUnreadable };
 
-struct MicList {
+// what the microphone gate read
+struct MicGate {
     Mics mics;
     uint32_t begin;
     uint32_t end;
@@ -86,6 +88,9 @@ struct Entry {
     Settle settle;
     bool skipping = false;  // its last call was skipped
     Clock::time_point last_seen;
+    // its own state words as its last processed block left them (the
+    // compressor's: kCompression_State)
+    std::array<uint32_t, kCompression_State.size()> left{};
 };
 
 // calls since the last report, of one kind
@@ -109,13 +114,16 @@ Clock::time_point g_next_report{};
 
 // Whether the game counts a microphone as connected, read the way
 // ExternalMic::NumConnectedMics (a leaf) counts them rather than by calling it.
-MicList ReadMics(uint8_t* base) {
+MicGate ReadMics(uint8_t* base) {
     const uint32_t begin = REX_LOAD_U32(kExternalMics);
     const uint32_t end = REX_LOAD_U32(kExternalMics + 4);
-    // not made yet (before Synth360::Init), or none
-    if (begin == end) return {Mics::kNone, begin, end};
-    if (!begin || end < begin || (end - begin) % 4 || end - begin > 4 * kMaxExternalMics) {
+    switch (MicListShape(begin, end)) {
+    case MicList::kEmpty:
+        return {Mics::kNone, begin, end};
+    case MicList::kUnreadable:
         return {Mics::kUnreadable, begin, end};
+    case MicList::kEntries:
+        break;
     }
     for (uint32_t p = begin; p < end; p += 4) {
         const uint32_t mic = REX_LOAD_U32(p);
@@ -125,14 +133,14 @@ MicList ReadMics(uint8_t* base) {
 }
 
 // the setting and the microphone gate, at the first call and when they change
-void LogChanges(bool enabled, const MicList& list) {
+void LogChanges(bool enabled, const MicGate& gate) {
     if (int(enabled) != g_enabled_logged) {
         g_enabled_logged = enabled;
         REXLOG_INFO("Audio idle bypass: {}", enabled ? "on" : "off");
     }
-    if (list.mics == g_mics_logged) return;
-    g_mics_logged = list.mics;
-    switch (list.mics) {
+    if (gate.mics == g_mics_logged) return;
+    g_mics_logged = gate.mics;
+    switch (gate.mics) {
     case Mics::kNone:
         REXLOG_INFO("Audio idle bypass: no microphone is connected");
         break;
@@ -144,7 +152,7 @@ void LogChanges(bool enabled, const MicList& list) {
             g_unreadable_logged = true;
             REXLOG_WARN("Audio idle bypass: the game's microphone list runs {:08X} to {:08X}, "
                         "not a list of up to {}; every audio effect runs",
-                        list.begin, list.end, kMaxExternalMics);
+                        gate.begin, gate.end, kMaxExternalMics);
         }
         break;
     case Mics::kUnknown:
@@ -184,21 +192,24 @@ void Report(Clock::time_point now) {
 }
 
 // Whether one call of a hooked effect instance skips its block, with the logs
-// and counts that go with it. Returns the instance's entry when the original
-// is to run, null when the block is skipped.
+// and counts that go with it. `state` are the instance's own state words as
+// they are now (the compressor's), which have to be what its last processed
+// block left. Returns the instance's entry when the original is to run, null
+// when the block is skipped.
 Entry* Decide(uint8_t* base, Kind kind, uint32_t self, uint32_t channels, bool silent,
-              bool steady, bool flagged_silent = false) {
+              bool steady, bool flagged_silent = false, std::span<const uint32_t> state = {}) {
     const bool enabled = REXCVAR_GET(audio_idle_bypass);
-    const MicList list = ReadMics(base);
+    const MicGate gate = ReadMics(base);
     const auto now = Clock::now();
     std::lock_guard lock(g_mutex);
-    LogChanges(enabled, list);
+    LogChanges(enabled, gate);
     const char* name = kKindNames[size_t(kind)];
     auto [it, added] = g_entries.try_emplace((uint64_t(kind) << 32) | self);
     Entry& e = it->second;
     if (added) REXLOG_INFO("Audio idle bypass: {} {:08X}: {} channels", name, self, channels);
     e.last_seen = now;
-    e.skipping = Skip(enabled, list.mics != Mics::kNone, silent, steady, e.settle);
+    const bool as_left = StateAsLeft(state, std::span<const uint32_t>(e.left).first(state.size()));
+    e.skipping = Skip(enabled, gate.mics != Mics::kNone, silent, steady && as_left, e.settle);
 
     Counts& c = g_counts[size_t(kind)];
     c.calls++;
@@ -221,10 +232,12 @@ Entry* Decide(uint8_t* base, Kind kind, uint32_t self, uint32_t channels, bool s
 }
 
 // after the original ran: whether this block counts toward skipping the next
-// (its input was silent and what the effect left was quiet)
-void Observe(Entry* e, bool quiet, uint32_t frames) {
+// (its input was silent and what the effect left was quiet), and the state
+// words it left
+void Observe(Entry* e, bool quiet, uint32_t frames, std::span<const uint32_t> left = {}) {
     std::lock_guard lock(g_mutex);
     e->settle.Observe(quiet, frames);
+    std::copy(left.begin(), left.end(), e->left.begin());
 }
 
 using GuestFunction = void (*)(PPCContext&, uint8_t*);
@@ -237,6 +250,7 @@ using GuestFunction = void (*)(PPCContext&, uint8_t*);
 template <size_t N = 0>
 void ProcessInPlace(PPCContext& ctx, uint8_t* base, Kind kind, GuestFunction original,
                     const std::array<uint32_t, N>& state = {}) {
+    static_assert(N <= kCompression_State.size(), "Entry::left holds its state words");
     const uint32_t self = ctx.r3.u32;
     const uint32_t samples = ctx.r4.u32;
     const int32_t frames = ctx.r5.s32;
@@ -244,19 +258,20 @@ void ProcessInPlace(PPCContext& ctx, uint8_t* base, Kind kind, GuestFunction ori
     // it processes nothing unless both are positive
     const size_t count = frames > 0 && channels > 0 ? size_t(frames) * size_t(channels) : 0;
     const bool silent = AllZero(REX_RAW_ADDR(samples), count);
-    Entry* e = Decide(base, kind, self, uint32_t(channels), silent, true);
+    const auto load_state = [&] {
+        std::array<uint32_t, N> words{};
+        for (size_t i = 0; i < N; i++) words[i] = REX_LOAD_U32(self + state[i]);
+        return words;
+    };
+    const auto before = load_state();
+    Entry* e = Decide(base, kind, self, uint32_t(channels), silent, true, false, before);
     // skipped: the buffer already holds the zeros
     if (!e) return;
 
-    std::array<uint32_t, N> before{};
-    for (size_t i = 0; i < N; i++) before[i] = REX_LOAD_U32(self + state[i]);
     original(ctx, base);
-    bool state_quiet = true;
-    for (size_t i = 0; i < N; i++) {
-        state_quiet = state_quiet && REX_LOAD_U32(self + state[i]) == before[i];
-    }
-    Observe(e, silent && AllQuiet(REX_RAW_ADDR(samples), count) && state_quiet,
-            frames > 0 ? uint32_t(frames) : 0);
+    const auto after = load_state();
+    Observe(e, silent && AllQuiet(REX_RAW_ADDR(samples), count) && after == before,
+            frames > 0 ? uint32_t(frames) : 0, after);
 }
 
 }
@@ -296,8 +311,7 @@ extern "C" REX_FUNC(rex_sub_82BC7518) {
     // LockForProcess stores the formats' 16-bit channel counts in these words
     const uint32_t in_channels = REX_LOAD_U32(self + kReverb_InputChannels);
     const uint32_t out_channels = REX_LOAD_U32(self + kReverb_OutputChannels);
-    if (in_channels < 1 || in_channels > kMaxReverbChannels || out_channels < 1 ||
-        out_channels > kMaxReverbChannels) {
+    if (!ReverbChannelsOk(in_channels, out_channels)) {
         // not a layout its kernels take: leave it alone
         {
             std::lock_guard lock(g_mutex);
@@ -317,9 +331,11 @@ extern "C" REX_FUNC(rex_sub_82BC7518) {
     const bool flagged_silent = REX_LOAD_U32(in + kBuffer_Flags) == kBufferSilent;
     const bool silent =
         flagged_silent || AllZero(REX_RAW_ADDR(in_samples), size_t(frames) * in_channels);
+    const uint32_t was_enabled = REX_LOAD_U32(self + kReverb_WasEnabled);
+    const uint32_t processed = REX_LOAD_U32(self + kReverb_Processed);
     const bool steady = ReverbSteady(is_enabled, REX_LOAD_U32(self + kReverb_NewParameters),
-                                     REX_LOAD_U32(self + kReverb_WasEnabled),
-                                     REX_LOAD_U32(self + kReverb_Processed));
+                                     was_enabled, processed);
+    const bool kernel_runs = ReverbKernelRuns(is_enabled, was_enabled, processed);
     Entry* e = Decide(base, Kind::kReverb, self, out_channels, silent, steady, flagged_silent);
     if (!e) {
         if (flagged_silent) {
@@ -335,8 +351,11 @@ extern "C" REX_FUNC(rex_sub_82BC7518) {
         return;
     }
     __imp__rex_sub_82BC7518(ctx, base);
-    // disabled and fading passes count too: a fade shows any state that wasn't
-    // quiet
+    // Only a pass that ran the kernel counts: disabled, its state holds still
+    // and its output is its input copied through, or isn't written (flagged
+    // SILENT). Fading passes count too: a fade shows any state that wasn't
+    // quiet.
+    if (!kernel_runs) return;
     const uint32_t out_frames = REX_LOAD_U32(out + kBuffer_ValidFrameCount);
     const bool quiet =
         out_samples && AllQuiet(REX_RAW_ADDR(out_samples), size_t(out_frames) * out_channels);
@@ -352,8 +371,11 @@ extern "C" REX_FUNC(EQEffect__Process) {
 
 // The mic chain's compressor and the master limiter. Its gain keeps moving
 // after its input goes silent without showing in a silent output, so it's
-// skipped only once silent blocks leave its state where it was: then the
-// blocks it skips are what processing them would have done.
+// skipped only once silent blocks leave its state where it was, and only while
+// its state is what its last processed block left: then the blocks it skips are
+// what processing them would have done. A Reset (its send's bypass turning on)
+// or a new instance at its address puts its gain back to 1.0; it's processed
+// until it settles again.
 extern "C" void __imp__CompressionEffect__Process(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(CompressionEffect__Process) {
     ProcessInPlace(ctx, base, Kind::kCompressor, __imp__CompressionEffect__Process,

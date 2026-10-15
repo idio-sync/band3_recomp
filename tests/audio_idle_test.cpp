@@ -4,10 +4,12 @@
 // block is skipped only when every condition holds.
 
 #include <doctest/doctest.h>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
+#include <span>
 #include <vector>
 #include "src/Hooks/audio_idle.h"
 
@@ -53,6 +55,37 @@ struct Hooked {
         }
         processed++;
         settle.Observe(silent && output_quiet, kBlock);
+    }
+};
+
+// CompressionEffect's state words on silent input, as a model: its gain
+// envelope halves each block until it reaches its fixed point, 0, as the gated
+// mic compressor's decays and sticks; Reset puts it back to 1.0.
+struct ModelCompressor {
+    static constexpr uint32_t kHalve = 0x00800000;  // one off a normal float's exponent
+    std::array<uint32_t, 3> words = {0, 0, kOne};    // gate floor, DC block, envelope
+
+    void ProcessSilence() { words[2] = words[2] >= kHalve ? words[2] - kHalve : 0; }
+    void Reset() { words[2] = kOne; }
+};
+
+// ... and its hook: steady only in the state its last processed block left
+struct HookedCompressor {
+    ModelCompressor compressor;
+    Settle settle;
+    std::array<uint32_t, 3> left{};
+    int skipped = 0;
+
+    // a silent block, the bypass on, no microphone
+    void Call() {
+        const auto now = compressor.words;
+        if (Skip(true, false, true, StateAsLeft(now, left), settle)) {
+            skipped++;
+            return;
+        }
+        compressor.ProcessSilence();
+        left = compressor.words;
+        settle.Observe(left == now, kBlock);
     }
 };
 
@@ -216,4 +249,79 @@ TEST_CASE("the reverb is steady enabled, with no new parameters, past its fade-i
     CHECK_FALSE(ReverbSteady(true, 0, 1, 0));        // never processed
     // the guest compares the words with 0
     CHECK(ReverbSteady(true, 0, 0x100, 0xFFFFFFFF));
+}
+
+TEST_CASE("the reverb's kernel runs while it's enabled, and on the pass that fades it out") {
+    CHECK(ReverbKernelRuns(true, 1, 1));
+    CHECK(ReverbKernelRuns(true, 0, 1));          // fading in
+    CHECK(ReverbKernelRuns(true, 0, 0));          // its first pass
+    CHECK(ReverbKernelRuns(false, 1, 1));         // fading out
+    CHECK_FALSE(ReverbKernelRuns(false, 0, 1));   // disabled: copied through, or flagged SILENT
+    CHECK_FALSE(ReverbKernelRuns(false, 1, 0));   // never processed
+    CHECK_FALSE(ReverbKernelRuns(false, 0, 0));
+    // the guest compares the words with 0
+    CHECK(ReverbKernelRuns(false, 0x100, 0xFFFFFFFF));
+}
+
+TEST_CASE("the reverb's channel counts are ones its kernels take") {
+    CHECK(ReverbChannelsOk(2, 2));
+    CHECK(ReverbChannelsOk(1, 6));
+    CHECK(ReverbChannelsOk(6, 1));
+    CHECK_FALSE(ReverbChannelsOk(0, 2));
+    CHECK_FALSE(ReverbChannelsOk(2, 0));
+    CHECK_FALSE(ReverbChannelsOk(7, 2));
+    CHECK_FALSE(ReverbChannelsOk(2, 7));
+    // more than the 16-bit counts LockForProcess stores
+    CHECK_FALSE(ReverbChannelsOk(0x00010002, 2));
+    CHECK_FALSE(ReverbChannelsOk(2, 0xFFFFFFFF));
+}
+
+TEST_CASE("the game's microphone list reads as empty, as up to four entries, or as unreadable") {
+    // not made yet (before Synth360::Init), or none
+    CHECK(MicListShape(0, 0) == MicList::kEmpty);
+    CHECK(MicListShape(0x40001000, 0x40001000) == MicList::kEmpty);
+    CHECK(MicListShape(0x40001000, 0x40001004) == MicList::kEntries);
+    CHECK(MicListShape(0x40001000, 0x40001010) == MicList::kEntries);
+    CHECK(MicListShape(0x40001000, 0x40001014) == MicList::kUnreadable);  // five
+    CHECK(MicListShape(0, 0x10) == MicList::kUnreadable);                  // no storage
+    CHECK(MicListShape(0x40001010, 0x40001000) == MicList::kUnreadable);  // backwards
+    CHECK(MicListShape(0x40001000, 0x40001006) == MicList::kUnreadable);  // not whole pointers
+}
+
+TEST_CASE("a compressor is steady only in the state its last processed block left") {
+    const std::array<uint32_t, 3> left = {0x2E000000, 0x3F800000, 0x00000000};
+    CHECK(StateAsLeft(left, left));
+    for (size_t i = 0; i < left.size(); i++) {
+        auto changed = left;
+        changed[i] ^= 1;
+        CHECK_FALSE(StateAsLeft(changed, left));
+    }
+    // bitwise: -0 isn't the +0 it left
+    auto minus_zero = left;
+    minus_zero[2] = kMinusZero;
+    CHECK_FALSE(StateAsLeft(minus_zero, left));
+    // effects with no such words
+    CHECK(StateAsLeft(std::span<const uint32_t>{}, std::span<const uint32_t>{}));
+}
+
+TEST_CASE("a compressor reset, or made anew at its address, is processed until it settles again") {
+    HookedCompressor h;
+    // 127 blocks bring its envelope from 1.0 to 0, then 938 leave it there
+    for (int i = 0; i < 127 + 938; i++) h.Call();
+    CHECK(h.skipped == 0);
+    CHECK(h.settle.Settled());
+    h.Call();
+    CHECK(h.skipped == 1);
+
+    // its send's bypass turned on (StandardEffect::DoProcess calls Reset) and
+    // off again: its envelope is 1.0 again, so it isn't skipped from where it
+    // was settled, and processing moves its state, which starts the count over
+    h.compressor.Reset();
+    h.Call();
+    CHECK(h.skipped == 1);
+    CHECK(h.settle.quiet_frames == 0);
+    for (int i = 0; i < 126 + 938; i++) h.Call();
+    CHECK(h.skipped == 1);
+    h.Call();
+    CHECK(h.skipped == 2);
 }
