@@ -15,10 +15,13 @@
     (rebuilt by `tools/build_ffmpeg.sh` in MSYS2's MinGW64 shell). `-DBAND3_FFMPEG_ROOT=<folder>`
     uses another; `-DBAND3_FFMPEG=OFF` leaves it out.
   - **Linux:** `sudo apt install build-essential git cmake ninja-build clang libasound2-dev
-    libcurl4-openssl-dev pkg-config libavformat-dev libavcodec-dev libavutil-dev
-    libswscale-dev`. ALSA is for MIDI drum kits, libcurl for
-    [RhythmVerse](integrations.md#rhythmverse) and FFmpeg for music videos; band3 builds
-    without them, minus those features. It needs GCC 13's libstdc++ or later (Ubuntu 24.04
+    libcurl4-openssl-dev`. ALSA is for MIDI drum kits and libcurl for
+    [RhythmVerse](integrations.md#rhythmverse); band3 builds without them, minus those
+    features. FFmpeg for music videos comes with the source in `deps/`, as on Windows
+    (rebuilt by `tools/build_ffmpeg_linux.sh`), since distributions ship different FFmpeg
+    versions and band3 runs only with the one it was built with; without the zip, it builds
+    against the system's (`pkg-config libavformat-dev libavcodec-dev libavutil-dev
+    libswscale-dev`). It needs GCC 13's libstdc++ or later (Ubuntu 24.04
     has it), for `std::format` and `std::byteswap`.
 
 ## Game files

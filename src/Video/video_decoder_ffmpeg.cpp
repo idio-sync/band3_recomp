@@ -52,6 +52,15 @@ void* OpenLibrary(const std::string& name) {
     return LoadLibraryExA(name.c_str(), nullptr,
                           LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
 #else
+    // band3's own beside it (cmake/ffmpeg.cmake: their dependencies from
+    // there too, by their runpath), else the system's
+    std::error_code ec;
+    const std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (!ec) {
+        const std::filesystem::path own = exe.parent_path() / name;
+        if (std::filesystem::exists(own, ec))
+            if (void* library = dlopen(own.c_str(), RTLD_NOW | RTLD_LOCAL)) return library;
+    }
     return dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL);
 #endif
 }
