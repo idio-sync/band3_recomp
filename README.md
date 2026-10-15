@@ -4,7 +4,7 @@ A static recompilation of Rock Band 3 (Xbox 360, Title Update 5, or Rock Band 3 
 into a native PC game, built on the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk).
 Playable, still a work in progress.
 
-![A full band playing 20th Century Boy under band3: guitar, drums and bass highways below the vocal track](docs/images/gameplay.jpg)
+![A full band playing 20th Century Boy at 1080p on the native renderer: guitar, drums and keys highways below the vocal harmonies, the drummer behind them](docs/images/gameplay.jpg)
 
 This is a fork of [ihatecompvir/band3_recomp](https://github.com/ihatecompvir/band3_recomp).
 Everything it adds was written with the help of AI, which did the vast majority of the
@@ -31,6 +31,8 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
   FFmpeg) plays as the video venues' background, in time with the song
 - Steam Deck defaults: fullscreen, letterboxed, vsync
 
+<img src="docs/images/music-video.jpg" alt="No One Knows played with Queens of the Stone Age's music video behind the highway, in place of the venue" width="400"> <img src="docs/images/music-video-band.jpg" alt="Herald of Darkness by Old Gods of Asgard: guitar, drums and keys highways and the vocals over the song's music video" width="400">
+
 **Instruments**
 - Xbox 360 instruments and gamepads, through SDL or XInput
 - PS3, Wii, PS4 and PS5 Rock Band guitars and drums through their USB dongles, and Xbox One
@@ -47,13 +49,16 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Stage Kits lit directly: Santroller and Xbox 360 Stage Kits plugged in by USB, and the RB3E Dashboard's Pico W wireless kits found and tested from the Lights tab
 - A web page for browsing the song library from a phone and picking the next song, plus the RB3E web API
 - Searching [RhythmVerse](https://rhythmverse.co) for custom songs from that page, and downloading them into the game without a restart
+- A karaoke page for a screen facing the room: the lyrics as they're sung, in the game's own font and art
 - Script functions, modifiers and unlock options, so Deluxe's RB3E features work
 - Song source icons in the song list, from Deluxe's icons
 - Rock Central's online features (leaderboards, Battles) through [GoCentral](https://github.com/ihatecompvir/GoCentral), using RB3Enhanced's server
 - Online play without Xbox Live (Liveless): by address, or by room code with Liveless Rooms (F10)
 - Discord Rich Presence
 
-<img src="docs/images/web-song-browser.png" alt="band3's web song browser: the library with album art and part difficulties, and the song now playing" width="520">
+<img src="docs/images/web-song-browser.png" alt="band3's web song browser: the library with album art and part difficulties, and the song now playing" width="400"> <img src="docs/images/web-rhythmverse.png" alt="The web page's RhythmVerse tab: custom songs with their part difficulties and Download buttons" width="400">
+
+<img src="docs/images/karaoke.jpg" alt="The karaoke page during 20th Century Boy: the line being sung and the next, under the song's album art and the band's score, with each player's part along the bottom" width="640">
 
 **Settings**
 - A launcher: a setup screen for folders, graphics, audio, controllers and online features, shown on the first run (Shift at startup brings it back on Windows)
@@ -77,6 +82,8 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
   - Played on Windows (Direct3D 12) and a Steam Deck (Vulkan, RADV); other Linux drivers are
     untested
   - [Native renderer](docs/native-renderer.md) has the settings and what still differs
+
+![20th Century Boy in a 21:9 window: the crowd and the lit stage fill the sides, the highway and HUD at their usual size in the middle](docs/images/ultrawide.jpg)
 
 **Development**
 - A scriptable test harness, render checks against the game's own picture, unit tests and CI

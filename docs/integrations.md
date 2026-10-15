@@ -266,6 +266,8 @@ header. It shows the line being sung and the next, each syllable filling as it's
 harmonies stacked and overdrive phrases on the gold lane, under a header with the band's
 score. Between songs it shows the song's album art, genre, year and parts.
 
+<img src="images/karaoke.jpg" alt="The karaoke page during 20th Century Boy" width="640">
+
 - Its corner button sets the timing (for a TV's delay) and the text size, kept in that
   browser.
 - A page over plain http can't keep a device awake, so turn the device's sleep off.
