@@ -30,6 +30,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 |---|---|---|---|
 | `fast_start`<br>Skip the splash screens | `false` | `true`, `false` | Skip the splash screens once the game has finished initializing *Applies at the next start.* |
 | `autosave`<br>Autosave | `true` | `true`, `false` | Let the game autosave profiles, after songs and setlist edits. Off, they're only saved from the options menu, e.g. to test with autoplay without touching your profile |
+| `score_history`<br>Score history | `true` | `true`, `false` | Keep every finished song's results (score, stars, notes hit, streak, overdrive) in score_history.jsonl in the user data folder, for the web page's History tab and its played and stars filters. Songs played on autoplay aren't kept |
 | `skip_profile_prompt`<br>Join without a profile as a guest | `true` | `true`, `false` | Players who join without a profile join as guests, without the game asking them to choose one (No Profile, Sign In, Swap to User). Off, it asks, as on a console |
 | `disable_metamusic`<br>Menu music | `false` | `true`, `false` | Disable the background menu music *Applies at the next start.* |
 | `forced_venue`<br>Forced venue | `false` | text; `false` Don't force, `arena` Arena, `big_club` Big club, `small_club` Small club, `festival` Festival, `video` Video venue, `none` None (black background) | Venue to force, applied from the next venue load. false = don't force. A venue (arena_04), a class (arena, big_club, small_club, festival, video), none for a black background, or a comma separated list to pick from at random |
@@ -179,12 +180,22 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `http_enabled`<br>Web song browser | `false` | `true`, `false` | Serve RB3Enhanced's web page and API to this PC and the local network: browse the song library from a phone and select songs in the Music Library *Applies at the next start.* |
 | `http_port`<br>Port | `21070` | `1` to `65535` | TCP port the web server listens on (RB3Enhanced's is 21070) *Applies at the next start.* |
 | `http_rhythmverse`<br>RhythmVerse downloads | `true` | `true`, `false` | Let the web page search RhythmVerse (rhythmverse.co) for custom songs and download the ones it hosts, or that are on MediaFire, Google Drive, Dropbox or dingorb, into a rhythmverse folder in the first of content_folders. Downloaded songs join the game without a restart, as songs bought from the Xbox store did, and band3 checks RhythmVerse for newer versions of them when it starts |
+| `http_qr_code`<br>QR code in the Music Library | `true` | `true`, `false` | Show a QR code for the web page, and its address, at the top of the Music Library, so a phone can open it by scanning the screen |
 
 ### Discord
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
 | `discord_enabled`<br>Discord presence | `false` | `true`, `false` | Show the current song as Discord Rich Presence (needs the Discord desktop app) *Applies at the next start.* |
+
+### Scrobbling
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `lastfm_enabled`<br>Scrobble to Last.fm | `false` | `true`, `false` | Scrobble the songs played to Last.fm. The first time, band3 opens Last.fm in the browser to ask for your permission, then remembers it (lastfm_session) *Applies at the next start.* |
+| `lastfm_session`<br>Last.fm session (clear to sign in again) | *(empty)* | text | The Last.fm session band3 was given when you allowed it to scrobble. Clear it to sign in again, as another Last.fm user. band3 never writes it to its log *Applies at the next start.* |
+| `listenbrainz_enabled`<br>Submit listens to ListenBrainz | `false` | `true`, `false` | Submit the songs played to ListenBrainz, with the user token from listenbrainz.org/settings *Applies at the next start.* |
+| `listenbrainz_token`<br>ListenBrainz user token | *(empty)* | text | Your ListenBrainz user token (listenbrainz.org/settings). band3 never writes it to its log *Applies at the next start.* |
 
 ### RB3Enhanced
 
@@ -343,6 +354,13 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `native_world_ahead` | `false` | `true`, `false` | Experimental: with RB3's even/odd rendering, draw each world frame's venue on the GPU right after that frame, without waiting for it, so the post frame after it only post-processes it and draws the track and HUD. The world's GPU time moves into the world frame's half of the pair: on a 60 Hz laptop post frames went from 14 to 8 ms and the picture's latency fell 3 to 6 ms, the picture the same. Where post frames drawn this way still run about a frame's time it skips more frames than without, so it measures both every few seconds and keeps the one that skips fewer. On draws it ahead on any GPU; off leaves it to native_world_ahead_auto, which does on an integrated GPU or a Steam Deck (a laptop's Radeon 680M at 60 Hz: 5 ms less latency, a sixth fewer repeated frames) and not on other GPUs, as on a fast desktop GPU at 120 Hz it made things worse. It sends GPU work it doesn't wait for, as the setup that once hung AMD GPUs did (not seen with this one). Not with native_present_pipeline on, or on Linux native_upload_pipeline (on by default), which wait differently |
 | `native_world_ahead_auto` | `true` | `true`, `false` | Draw the world ahead (native_world_ahead) by itself on an integrated GPU (one that shares the system's memory, as a laptop's does) and on a Steam Deck: on a Radeon 680M at 1920x1200, 60 Hz, a song's post frames went from 11.1 to 6.2 ms, latency from 22.5 to 17.5 ms and repeated frames fell by a sixth, the picture the same. Not on other GPUs: a fast desktop one at 120 Hz did worse with it. native_world_ahead on draws it ahead on any GPU either way; with this off, only that does. On Linux neither does while native_upload_pipeline is on, its default. The log says which applied, with the GPU's name |
 
+### Scrobbling
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `lastfm_api_url` | `https://ws.audioscrobbler.com/2.0/` | text | Last.fm's API address, which scrobbling calls (lastfm_enabled) *Applies at the next start.* |
+| `listenbrainz_api_url` | `https://api.listenbrainz.org` | text | ListenBrainz's API address, which scrobbling calls (listenbrainz_enabled) *Applies at the next start.* |
+
 ### Startup
 
 | Setting | Default | Takes | What it does |
@@ -362,6 +380,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `stagekit_fake` | `false` | `true`, `false` | With stagekit_usb on: add a pretend USB Stage Kit that keeps the commands it's sent, for the harness's lights command |
 | `test_port` | `0` | `0` to `65535` | Take test harness commands on this local TCP port (0 = off), for tools/band3ctl.py. Connects the virtual instrument as player 1 *Applies at the next start.* |
 | `test_random_seed` | `0` | `0` to `2147483647` | Seed the game's random numbers with this instead of the clock (0 = off), so a fresh profile gets the same band on every launch, for render checks *Applies at the next start.* |
+| `test_score_history` | *(empty)* | text | With test_port set: keep score history in this file, autoplay runs included, in place of score_history.jsonl, which a harness session never writes to (empty = keep none) *Applies at the next start.* |
 | `usb_mic_test_tone` | `0` | `0` to `2000` | Sing a steady tone at this pitch in Hz into the first mic slot instead of using microphones, to check that the game hears it. 0 = off *Applies at the next start.* |
 | `virtual_instrument` | `false` | `true`, `false` | Connect a virtual Xbox 360 instrument, played from the Instrument Lab (F6) |
 | `virtual_instrument_player` | `2` | `1` to `4` | Player slot the virtual instrument connects as, 1-4. Other controllers keep their order around it |
@@ -423,12 +442,16 @@ band3 still reads a `band3_config.ini` from the folder it starts in, or the one 
 | `[events]` | `target` | `events_target` |
 | `[events]` | `port` | `events_port` |
 | `[discord]` | `enabled` | `discord_enabled` |
+| `[scrobble]` | `lastfm` | `lastfm_enabled` |
+| `[scrobble]` | `listenbrainz` | `listenbrainz_enabled` |
+| `[scrobble]` | `listenbrainz_token` | `listenbrainz_token` |
 | `[http]` | `enabled` | `http_enabled` |
 | `[http]` | `port` | `http_port` |
 | `[http]` | `address` | `http_address` |
 | `[http]` | `allow_cors` | `http_allow_cors` |
 | `[http]` | `allow_scripts` | `http_allow_scripts` |
 | `[http]` | `rhythmverse` | `http_rhythmverse` |
+| `[http]` | `qr_code` | `http_qr_code` |
 | `[homeassistant]` | `mqtt_host` | `ha_mqtt_host` |
 | `[homeassistant]` | `mqtt_port` | `ha_mqtt_port` |
 | `[homeassistant]` | `mqtt_username` | `ha_mqtt_username` |

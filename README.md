@@ -48,6 +48,7 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 - Network events over UDP: Stage Kit lighting, song, band and venue info
 - Stage Kits lit directly: Santroller and Xbox 360 Stage Kits plugged in by USB, and the RB3E Dashboard's Pico W wireless kits found and tested from the Lights tab
 - A web page for browsing the song library from a phone and picking the next song, plus the RB3E web API
+- Score history: every finished song's results, with played and stars filters and a History tab on that page
 - Searching [RhythmVerse](https://rhythmverse.co) for custom songs from that page, and downloading them into the game without a restart
 - A karaoke page for a screen facing the room: the lyrics as they're sung, in the game's own font and art
 - Script functions, modifiers and unlock options, so Deluxe's RB3E features work
@@ -181,6 +182,7 @@ band3 stands on the work of these projects:
   [miniupnpc](https://github.com/miniupnp/miniupnp) (UPnP port mapping),
   [stb_image_write](https://github.com/nothings/stb) (album art),
   [libvorbis](https://xiph.org/vorbis/) (the songs' inverse MDCT, as the game's copy computes it),
+  [QR Code generator](https://github.com/nayuki/QR-Code-generator) (the web page's QR code),
   [doctest](https://github.com/doctest/doctest) (unit tests),
   [Tracy](https://github.com/wolfpld/tracy) (profiling), and SDL3 through the ReXGlue SDK.
 

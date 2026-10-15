@@ -13,12 +13,14 @@
 #include "src/Net/events.h"
 #include "src/Net/home_assistant.h"
 #include "src/Net/http_server.h"
+#include "src/Net/scrobble.h"
 #include "src/Render/native_view.h"
 #include "src/Test/game_state.h"
 #include "src/Test/test_server.h"
 #include "src/Video/music_video.h"
 
-// Reports game state to the RB3Enhanced network events, Discord presence, the
+// Reports game state to the RB3Enhanced network events, Discord presence,
+// scrobbling (src/Net/scrobble.h), the
 // native renderer (whether a song is on: native_view.h's InSong), the music
 // video player (the song's shortname: src/Video/music_video.h), and
 // the test harness, the web server's /status and Home Assistant
@@ -250,9 +252,10 @@ extern "C" REX_FUNC(Game____ct)
     band3::song_pause::ResetPaused();
     bool events = band3::events::Enabled();
     bool discord = band3::discord::Enabled();
+    bool scrobble = band3::scrobble::Enabled();
     bool record = Recording();
     bool video = band3::video::MusicVideosOn();
-    if (events || discord || record || video) {
+    if (events || discord || scrobble || record || video) {
         SongInfo song = ReadSongInfo(ctx, base);
         band3::events::BandInfo band = ReadBandInfo(ctx, base);
         if (video) band3::video::SetMusicVideoSong(song.shortname);
@@ -271,6 +274,7 @@ extern "C" REX_FUNC(Game____ct)
             SendState(1);
         }
         band3::discord::SetPlaying(song.title, song.artist, band);
+        band3::scrobble::SongStarted(song.title, song.artist, song.length_ms);
         g_reported_song = song.id;
     }
     // with music videos off, none for this song, even if they're turned on
@@ -291,6 +295,7 @@ extern "C" REX_FUNC(Game____dt)
     // the game can leave LEDs on after the score screen; turn everything off
     SendStagekit(0x00, 0xFF);
     band3::discord::SetMenus();
+    band3::scrobble::SongEnded();
     g_reported_song = 0;
     // its venue still loaded
     band3::heap_report::LogHeaps(ctx, base, "a song ending");
@@ -305,17 +310,19 @@ extern "C" REX_FUNC(PresenceMgr__SetSongID)
     const int32_t id = ctx.r4.s32;
     const bool events = band3::events::Enabled();
     const bool discord = band3::discord::Enabled();
+    const bool scrobble = band3::scrobble::Enabled();
     const bool record = Recording();
     const bool video = band3::video::MusicVideosOn();
     if (!video && id > 0 && id != g_reported_song) band3::video::SetMusicVideoSong("");
     // song IDs below 1 are "any", "random" and "invalid"
-    if ((events || discord || record || video) && id > 0 && id != g_reported_song) {
+    if ((events || discord || scrobble || record || video) && id > 0 && id != g_reported_song) {
         SongInfo song = ReadSongInfoById(ctx, base, id);
         if (!song.shortname.empty()) {
             if (video) band3::video::SetMusicVideoSong(song.shortname);
             if (events) SendSong(song);
             if (record) RecordSong(song);
             band3::discord::SetPlaying(song.title, song.artist, ReadBandInfo(ctx, base));
+            band3::scrobble::SongStarted(song.title, song.artist, song.length_ms);
             g_reported_song = id;
         }
     }

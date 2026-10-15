@@ -174,6 +174,12 @@ Route MatchRoute(std::string_view target) {
         route.endpoint = Endpoint::kKaraoke;
     } else if (bare == "/karaoke/model.js") {
         route.endpoint = Endpoint::kKaraokeModel;
+    } else if (bare == "/history/summary") {
+        route.endpoint = Endpoint::kHistorySummary;
+    } else if (bare == "/history/runs") {
+        route.endpoint = Endpoint::kHistoryRuns;
+    } else if (bare == "/history/recent") {
+        route.endpoint = Endpoint::kHistoryRecent;
     } else if (bare == "/live/events") {
         route.endpoint = Endpoint::kLiveEvents;
     } else if (bare == "/game_asset/milo_texture") {

@@ -12,7 +12,7 @@ out/package/slopband3-<commit>-<build folder>.zip, everything under a band3 fold
     docs/settings-reference.md has it (tools/settings_reference.py)
   LICENSE.md, and licenses/ for the libraries built into band3: each
     src/ThirdParty folder's LICENSE.txt (RtMidi's notice, from its header), the
-    SDK's licenses folder (SDL3), and FFmpeg's (its DLLs, on Windows), which the
+    SDK's licenses folder (SDL3), and FFmpeg's (its libraries, from deps/), which the
     build writes beside them (cmake/ffmpeg.cmake)
   README.txt: what to install, where the game files go, and where the source is
 
@@ -135,7 +135,7 @@ def write_text(z, name, text):
     z.writestr(info, text)
 
 
-def readme(commit, full_commit, windows, dirty):
+def readme(commit, full_commit, windows, dirty, own_ffmpeg):
     lines = [
         f"band3 {commit}{' (with uncommitted changes)' if dirty else ''}: "
         "Rock Band 3, recompiled for PC.",
@@ -147,7 +147,7 @@ def readme(commit, full_commit, windows, dirty):
             "- Install the Microsoft Visual C++ Redistributable (x64), a recent one:",
             f"  {VC_REDIST_URL}",
         ]
-    else:
+    elif not own_ffmpeg:
         lines += [
             "- For music videos, install your distribution's FFmpeg libraries (the",
             "  ffmpeg package); the log says which one band3 looks for if it's missing.",
@@ -218,7 +218,8 @@ def main(argv):
         z.write(os.path.join(REPO, "LICENSE.md"), "band3/LICENSE.md")
         for license_name, text in third_party_licenses(build_dir).items():
             write_text(z, f"band3/licenses/{license_name}", text)
-        write_text(z, "band3/README.txt", readme(commit, full_commit, windows, dirty))
+        write_text(z, "band3/README.txt", readme(commit, full_commit, windows, dirty,
+                                                 any(f.startswith("libavcodec.so.") for f in files)))
         packed = z.namelist()
 
     print(zip_path)

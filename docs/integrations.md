@@ -201,12 +201,42 @@ answer, or a status other than 2xx) is logged once per distinct error
 Turn on `discord_enabled` (then restart) to show the current song as Discord Rich
 Presence. It talks to the Discord desktop app directly; no companion app is needed.
 
+## Scrobbling (Last.fm, ListenBrainz)
+
+band3 can tell [Last.fm](https://www.last.fm) and [ListenBrainz](https://listenbrainz.org)
+the songs you play, in the Online tab's Scrobbling section (then restart). When a song
+starts it shows as "now playing". When it ends, it's scrobbled if you played it for
+half its length or 4 minutes, whichever comes first (songs of 30 seconds or less never
+count). That's the time from the song's start to its end, so a song you quit early
+doesn't count.
+
+- **Last.fm**: turn on `lastfm_enabled`. On the next start, band3 opens Last.fm in your
+  browser to ask whether band3 may scrobble to your account. Allow it within 10 minutes,
+  and band3 saves the session it's given to band3.toml as `lastfm_session`, so you're
+  asked only once. Clear `lastfm_session` to sign in again, as another Last.fm user.
+- **ListenBrainz**: turn on `listenbrainz_enabled` and paste your user token from
+  [listenbrainz.org/settings](https://listenbrainz.org/settings/) into
+  `listenbrainz_token`.
+
+If a service can't be reached, the listens are kept and sent again a minute later, then
+at longer intervals. They're kept only while band3 runs, so listens still waiting when
+you quit are lost. The log says what was sent (`Scrobbling: scrobbled 1 song to
+Last.fm`) and why anything wasn't. It never shows your token or session.
+
+Last.fm scrobbling needs band3's Last.fm API key, which builds get at configure time
+(`-DBAND3_LASTFM_API_KEY=... -DBAND3_LASTFM_API_SECRET=...`). A build without it logs
+that it can't scrobble to Last.fm; ListenBrainz works either way.
+
 ## Web server
 
 Turn on `http_enabled` (then restart) and band3 serves a web page on port 21070
 (`http_port`) to this PC and the local network (`http_address` 127.0.0.1 keeps it to this
 PC). The log says where to open it
-(`Web server: listening on 0.0.0.0:21070, open http://192.168.1.20:21070/`).
+(`Web server: listening on 0.0.0.0:21070, open http://192.168.1.20:21070/`), and the
+Music Library shows it at the top, between its title and the profile's name: a QR code
+a phone can scan, with the address beside it in the menu's font. `http_qr_code`
+(`[http] qr_code`) turns that off; it isn't shown while the server listens on 127.0.0.1,
+which a phone can't reach.
 
 <img src="images/web-song-browser.png" alt="The web song browser" width="520">
 
@@ -220,6 +250,8 @@ networks for other devices to reach it.
 - A banner says what the game is doing: during a song, which, how far in, and the score.
 - **Duplicates** lists songs in more than one package ([Duplicate songs](#duplicate-songs)),
   and **RhythmVerse** searches custom songs to download ([RhythmVerse](#rhythmverse)).
+- **History** lists the songs you've finished, and the library sorts and filters by them
+  ([Score history](#score-history)).
 
 It answers RB3Enhanced's API, so RB3E's page and tools written for it work too:
 
@@ -247,6 +279,9 @@ band3 adds its own, which RB3E doesn't have:
 | `/rv/downloads` | this session's downloads as JSON: the `folder` they go to, and each one's `state` (`queued`, `downloading`, `done`, `failed`), `received`, `total`, `error`, `song_id`, `update` and `in_library` |
 | `/rv/updates` | newer versions on RhythmVerse of the songs band3 downloaded, as JSON: `checking` (a check is running), `checked` (when the last one finished, in seconds since 1970; 0 for never), `error` (why the last one failed), `downloads` (how many songs band3 has downloaded) and `updates`, songs as `/rv/search` gives them, with `update` `available`, or `pending` once downloaded |
 | `POST /rv/check` | checks RhythmVerse for those updates now (send `{}` as JSON); `/rv/updates` says when it's done |
+| `/history/summary` | [score history](#score-history)'s played songs as JSON: `songs` by shortname, each with `plays`, `last` (seconds since 1970) and `parts` by `<part>:<difficulty>` (`real_drum:3`), each with `plays`, `last`, `best_score`, `best_stars` (6 is gold) and `best_pct`, the bests from runs that count (0 when none does). `{"enabled": false}` with `score_history` off, as for all three |
+| `/history/runs?shortname=<name>` | that song's runs, newest first, as JSON (`runs`): each with `t`, `shortname`, `song_id`, `title`, `artist`, `part`, `diff` (0 easy to 3 expert), `score`, `stars`, `pct`, `streak`, `od_deploys`, `solo_pct` and `unison` (when the part has them), `band_size`, `speed` (percent), `modifiers`, `autoplay` (harness runs only) and `counts` (toward bests). Optional: `part=`, `diff=` |
+| `/history/recent?limit=<n>` | the last runs across all songs, newest first, as `/history/runs` gives them (50 by default, 500 at most) |
 
 - `http_allow_cors` adds `Access-Control-Allow-Origin: *`, for pages served from elsewhere.
 - Requests wait for the game's next frame, and get a 503 if it doesn't come within 5 s.
@@ -257,7 +292,26 @@ band3 adds its own, which RB3E doesn't have:
 http://127.0.0.1:21080/, with songs read from the game data. It reloads `src/Net/http_page.h`
 on every request, so edits show on a refresh. **Select** can't work there, `--status` (`menu`,
 `library` or `playing`) sets what `/status` says, and RhythmVerse downloads and updates are
-made up.
+made up, as is the score history.
+
+### Score history
+
+With `score_history` on (the default), band3 keeps each player's results whenever a song is
+finished: score, stars, notes hit, longest streak, overdrive deploys, solo and unison
+results, the part and difficulty, the song's speed and the modifiers on. They're kept in
+`score_history.jsonl` in the user data folder, one run a line, for every player, guests
+included. A song quit or failed isn't kept, nor one played on autoplay.
+
+- The web page's **History** tab lists the latest runs; a song's details show its best per
+  part, its score over time and every run.
+- The library sorts by **Last played**, **Most played** and **Least played**, and **Filters**
+  gains **Never played**, **Played**, **Not gold-starred**, **Not played in 30 days** and a
+  best-stars cap, judged on a part and difficulty you pick, or any.
+- Bests count only runs at full speed without modifiers (No Fail, and RB3Enhanced's Force
+  HOPOs, Mirror Mode, the shuffles and Double Bass Pedal); slowed or modified runs still count
+  as plays.
+- The test harness never writes to it: a harness session keeps its runs, autoplay ones
+  included, in `test_score_history`'s file if one is set (`tools/score_history_check.py`).
 
 ### Karaoke and live pages
 

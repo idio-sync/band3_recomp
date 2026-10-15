@@ -64,6 +64,10 @@ enum class Endpoint {
     kGameFont,      // /game_asset/font?name=     a font's metrics as JSON
     kGameFontPng,   // /game_asset/font.png?name=  its texture as a PNG
     kGameMiloTexture,  // /game_asset/milo_texture?milo=&name=  a texture inside a UI milo as a PNG
+    // score history (band3's; src/History/score_history.h)
+    kHistorySummary,  // /history/summary  each played song's plays and bests
+    kHistoryRuns,     // /history/runs?shortname=&part=&diff=  a song's runs
+    kHistoryRecent,   // /history/recent?limit=  the last runs across all songs
 };
 
 struct Route {

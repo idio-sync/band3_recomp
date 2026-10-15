@@ -67,6 +67,16 @@ std::vector<std::string> JsRuntimeArgs();
 // whether one of those runtimes is on PATH (`path`, separated as the system
 // does)
 bool JsRuntimeOnPath(std::string_view path);
+// a runtime's program, as --js-runtimes names it ("deno", "quickjs")
+struct JsRuntime {
+    std::string name;
+    std::filesystem::path exe;
+};
+// the first of those runtimes in these folders, each looked in for them all
+// before the next
+std::optional<JsRuntime> FindJsRuntime(const std::vector<std::filesystem::path>& folders);
+// yt-dlp told to use that one, where it is (for one not on PATH)
+std::vector<std::string> JsRuntimeArgs(const JsRuntime& runtime);
 
 // what a download prints, as the arguments above ask for it
 struct Progress {

@@ -96,9 +96,34 @@ void Save(const std::string& text) {
 std::mutex g_js_mutex;
 std::optional<std::pair<std::string, bool>> g_js_support;
 
+bool PathHasJsRuntime() {
+    const char* path = std::getenv("PATH");
+    return path && JsRuntimeOnPath(path);
+}
+
+// where a JavaScript runtime that isn't on PATH is likely to be: by yt-dlp,
+// by band3, where Deno's and Bun's installers put them, and ~/.local/bin. A
+// game started from Steam on Linux gets a PATH with none of those.
+std::optional<JsRuntime> JsRuntimeOffPath(const fs::path& ytdlp) {
+    std::vector<fs::path> folders = {ytdlp.parent_path(), rex::filesystem::GetExecutableFolder()};
+#ifdef _WIN32
+    const char* home = std::getenv("USERPROFILE");
+#else
+    const char* home = std::getenv("HOME");
+#endif
+    if (home && *home) {
+        const fs::path h = rex::to_path(std::string(home));
+        folders.push_back(h / ".deno" / "bin");
+        folders.push_back(h / ".bun" / "bin");
+        folders.push_back(h / ".local" / "bin");
+    }
+    return FindJsRuntime(folders);
+}
+
 // yt-dlp as the settings have it, with the player's options, and told to use
-// whichever JavaScript runtime there is where it can be (ytdlp.h). Not on a
-// thread that mustn't wait: the first call per path asks yt-dlp.
+// whichever JavaScript runtime there is where it can be (ytdlp.h): any on
+// PATH, else the one found off it. Not on a thread that mustn't wait: the
+// first call per path asks yt-dlp.
 YtDlp MakeYtDlp() {
     const std::string path = REXCVAR_GET(music_video_ytdlp_path);
     const fs::path exe = path.empty() ? fs::path() : rex::to_path(path);
@@ -114,15 +139,20 @@ YtDlp MakeYtDlp() {
         g_js_support = {path, *supported};
     }
     if (*supported) {
-        std::vector<std::string> js = JsRuntimeArgs();
+        std::vector<std::string> js;
+        if (PathHasJsRuntime()) js = JsRuntimeArgs();
+        else if (const auto runtime = JsRuntimeOffPath(exe)) js = JsRuntimeArgs(*runtime);
         extra.insert(extra.begin(), js.begin(), js.end());
     }
     return YtDlp(exe, std::move(extra));
 }
 
+// a runtime band3 finds, or one the player's options name
 bool JsRuntimeFound() {
-    const char* path = std::getenv("PATH");
-    return path && JsRuntimeOnPath(path);
+    const std::string path = REXCVAR_GET(music_video_ytdlp_path);
+    if (PathHasJsRuntime() || JsRuntimeOffPath(path.empty() ? fs::path() : rex::to_path(path))) return true;
+    const std::vector<std::string> extra = SplitArgs(REXCVAR_GET(music_video_ytdlp_args));
+    return std::find(extra.begin(), extra.end(), "--js-runtimes") != extra.end();
 }
 
 // the song's sound: one taken as it played beside its video, else its package's

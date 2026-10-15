@@ -73,6 +73,16 @@ TEST_CASE("targets pick the live pages' endpoints") {
     CHECK(MatchRoute("/lyrics").endpoint == Endpoint::kNotFound);
 }
 
+TEST_CASE("targets pick the score history endpoints, their parameters left in the query") {
+    CHECK(MatchRoute("/history/summary").endpoint == Endpoint::kHistorySummary);
+    CHECK(MatchRoute("/history/runs?shortname=a%26b&part=real_drum&diff=3").endpoint ==
+          Endpoint::kHistoryRuns);
+    CHECK(QueryParam("/history/runs?shortname=a%26b&part=real_drum&diff=3", "shortname") ==
+          "a&b");
+    CHECK(MatchRoute("/history/recent?limit=20").endpoint == Endpoint::kHistoryRecent);
+    CHECK(MatchRoute("/history").endpoint == Endpoint::kNotFound);
+}
+
 TEST_CASE("targets pick the game assets' endpoints") {
     const Route texture = MatchRoute("/game_asset/texture?path=ui%2Fimage%2Fgen%2Fx_keep.png_xbox");
     CHECK(texture.endpoint == Endpoint::kGameTexture);

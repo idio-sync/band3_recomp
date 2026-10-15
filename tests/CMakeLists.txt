@@ -78,6 +78,7 @@ add_executable(band3_tests
     http_request_test.cpp
     album_art_test.cpp
     milo_test.cpp
+    song_pick_qr_test.cpp
     game_assets_test.cpp
     lyrics_test.cpp
     live_events_test.cpp
@@ -86,6 +87,7 @@ add_executable(band3_tests
     package_scan_test.cpp
     stfs_reader_test.cpp
     json_test.cpp
+    score_history_test.cpp
     rhythmverse_test.cpp
     file_hosts_test.cpp
     song_inventory_test.cpp
@@ -97,6 +99,7 @@ add_executable(band3_tests
     mqtt_protocol_test.cpp
     mqtt_client_test.cpp
     ha_entities_test.cpp
+    scrobble_test.cpp
     port_mapping_protocol_test.cpp
     native_socket_test.cpp
     frame_pacing_test.cpp
@@ -197,13 +200,18 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Net/port_mapping_protocol.cpp
     ${BAND3_ROOT}/src/Net/http_request.cpp
     ${BAND3_ROOT}/src/Net/json.cpp
+    ${BAND3_ROOT}/src/History/score_history.cpp
     ${BAND3_ROOT}/src/Net/milo.cpp
+    ${BAND3_ROOT}/src/Net/song_pick_qr_model.cpp
+    ${BAND3_ROOT}/src/ThirdParty/qrcodegen/qrcodegen.cpp
     ${BAND3_ROOT}/src/Net/game_assets.cpp
     ${BAND3_ROOT}/src/Net/lyrics.cpp
     ${BAND3_ROOT}/src/Net/live_events.cpp
     ${BAND3_ROOT}/src/Net/rhythmverse.cpp
     ${BAND3_ROOT}/src/Net/file_hosts.cpp
     ${BAND3_ROOT}/src/Net/sha1.cpp
+    ${BAND3_ROOT}/src/Net/md5.cpp
+    ${BAND3_ROOT}/src/Net/scrobble_protocol.cpp
     ${BAND3_ROOT}/src/paths.cpp
     ${BAND3_ROOT}/src/Render/capture_file.cpp
     ${BAND3_ROOT}/src/Render/frame_compose.cpp

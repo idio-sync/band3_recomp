@@ -27,6 +27,14 @@ ProcessResult RunProcess(const std::filesystem::path& program, const std::vector
                          const std::function<void(std::string_view)>& on_line,
                          const std::atomic<bool>* cancel = nullptr);
 
+// LD_PRELOAD's value without Steam's overlay (gameoverlayrenderer.so), which
+// Steam preloads into a game it starts and so into each program the game
+// runs: in its 32-bit and 64-bit builds, so the dynamic loader prints an
+// error for the one that doesn't fit into a program's output (yt-dlp's
+// version became "ERROR: ld.so: ..."). Entries are separated by colons or
+// spaces, as ld.so takes them; for tests on every system.
+std::string WithoutSteamOverlay(std::string_view ld_preload);
+
 // One argument as a Windows command line quotes it (CommandLineToArgvW's
 // rules), so any text arrives as it was; for tests on every system.
 std::string QuoteWindowsArgument(std::string_view arg);

@@ -22,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -42,6 +43,7 @@
 #include <rex/runtime.h>
 #include "src/config.h"
 #include "src/Content/package_songs.h"
+#include "src/History/score_history.h"
 #include "src/game_writes.h"
 #include "src/settings.h"
 #include "src/Test/game_state.h"
@@ -544,6 +546,30 @@ std::string RhythmVerseUpdates(bool cors) {
                     rhythmverse::FormatUpdates(local, rhythmverse::CheckStatus()), cors);
 }
 
+// the /history endpoints: {"enabled":false} with score_history off (a harness
+// session keeps it in test_score_history's file, whatever the setting)
+std::string History(const Request& request, Endpoint endpoint, bool cors) {
+    const history::Store* store = history::Get();
+    const bool on = store && (REXCVAR_GET(score_history) || REXCVAR_GET(test_port) != 0);
+    if (!on) return Response(200, "application/json", history::DisabledJson(), cors);
+    std::string json;
+    if (endpoint == Endpoint::kHistorySummary) {
+        json = store->Summary();
+    } else if (endpoint == Endpoint::kHistoryRecent) {
+        const int limit = std::atoi(QueryParam(request.target, "limit").value_or("50").c_str());
+        json = store->Recent(static_cast<size_t>(std::clamp(limit, 1, 500)));
+    } else {
+        const auto shortname = QueryParam(request.target, "shortname");
+        if (!shortname || shortname->empty()) {
+            return Response(400, kText, "Give the song's shortname", cors);
+        }
+        const auto diff = QueryParam(request.target, "diff");
+        json = store->Runs(*shortname, QueryParam(request.target, "part").value_or(""),
+                           diff && !diff->empty() ? std::atoi(diff->c_str()) : -1);
+    }
+    return Response(200, "application/json", json, cors);
+}
+
 std::string Handle(const Request& request) {
     const bool cors = REXCVAR_GET(http_allow_cors);
     const Route route = MatchRoute(request.target);
@@ -706,6 +732,10 @@ std::string Handle(const Request& request) {
             return Response(asset->status, asset->type, asset->body, cors,
                             asset->status == 200 ? kAssetMaxAge : 0);
         }
+        case Endpoint::kHistorySummary:
+        case Endpoint::kHistoryRuns:
+        case Endpoint::kHistoryRecent:
+            return History(request, route.endpoint, cors);
         case Endpoint::kNotFound:
             break;
     }
@@ -740,6 +770,10 @@ void SetTimeouts(socket_t s) {
     setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 #endif
 }
+
+// where the server listens while it does (ListeningOn)
+std::mutex g_listening_mutex;
+std::optional<Listening> g_listening;
 
 class Server {
 public:
@@ -790,6 +824,10 @@ public:
         }
         stopping_ = false;
         thread_ = std::thread([this] { Run(); });
+        {
+            std::lock_guard lock(g_listening_mutex);
+            g_listening = Listening{startup.http_address, port};
+        }
         // on every address, the one other devices reach it at
         std::string shown = startup.http_address;
         if (addr.sin_addr.s_addr == htonl(INADDR_ANY)) {
@@ -805,6 +843,10 @@ public:
     void Stop() {
         if (!thread_.joinable()) return;
         stopping_ = true;
+        {
+            std::lock_guard lock(g_listening_mutex);
+            g_listening.reset();
+        }
         {
             std::lock_guard lock(g_jobs_mutex);
             g_stopping = true;
@@ -973,6 +1015,11 @@ void StopServer() {
 }
 
 bool Enabled() { return band3::settings::Startup().http_enabled; }
+
+std::optional<Listening> ListeningOn() {
+    std::lock_guard lock(g_listening_mutex);
+    return g_listening;
+}
 
 bool RunOnGameThreadAndWait(std::function<void(PPCContext&, uint8_t*)> job) {
     return RunOnGameThread(std::move(job));

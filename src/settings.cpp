@@ -122,6 +122,11 @@ REXCVAR_DEFINE_BOOL(autosave, true, "Band3/Game",
     "Let the game autosave profiles, after songs and setlist edits. Off, they're only saved "
     "from the options menu, e.g. to test with autoplay without touching your profile");
 
+REXCVAR_DEFINE_BOOL(score_history, true, "Band3/Game",
+    "Keep every finished song's results (score, stars, notes hit, streak, overdrive) in "
+    "score_history.jsonl in the user data folder, for the web page's History tab and its "
+    "played and stars filters. Songs played on autoplay aren't kept");
+
 REXCVAR_DEFINE_BOOL(skip_profile_prompt, true, "Band3/Game",
     "Players who join without a profile join as guests, without the game asking them to "
     "choose one (No Profile, Sign In, Swap to User). Off, it asks, as on a console");
@@ -443,6 +448,26 @@ REXCVAR_DEFINE_BOOL(discord_enabled, false, "Band3/Online",
     "Show the current song as Discord Rich Presence (needs the Discord desktop app)")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+// scrobbling (src/Net/scrobble.h)
+REXCVAR_DEFINE_BOOL(lastfm_enabled, false, "Band3/Online",
+    "Scrobble the songs played to Last.fm. The first time, band3 opens Last.fm in the browser "
+    "to ask for your permission, then remembers it (lastfm_session)")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(lastfm_session, "", "Band3/Online",
+    "The Last.fm session band3 was given when you allowed it to scrobble. Clear it to sign in "
+    "again, as another Last.fm user. band3 never writes it to its log")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(listenbrainz_enabled, false, "Band3/Online",
+    "Submit the songs played to ListenBrainz, with the user token from "
+    "listenbrainz.org/settings")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(listenbrainz_token, "", "Band3/Online",
+    "Your ListenBrainz user token (listenbrainz.org/settings). band3 never writes it to its log")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 REXCVAR_DEFINE_BOOL(http_enabled, false, "Band3/Online",
     "Serve RB3Enhanced's web page and API to this PC and the local network: browse the "
     "song library from a phone and select songs in the Music Library")
@@ -471,6 +496,10 @@ REXCVAR_DEFINE_BOOL(http_rhythmverse, true, "Band3/Online",
     "rhythmverse folder in the first of content_folders. Downloaded songs join the game "
     "without a restart, as songs bought from the Xbox store did, and band3 checks "
     "RhythmVerse for newer versions of them when it starts");
+
+REXCVAR_DEFINE_BOOL(http_qr_code, true, "Band3/Online",
+    "Show a QR code for the web page, and its address, at the top of the Music Library, so a "
+    "phone can open it by scanning the screen");
 
 // Home Assistant (src/Net/home_assistant.h): a host or a webhook URL turns it on
 REXCVAR_DEFINE_STRING(ha_mqtt_host, "", "Band3/Online",
@@ -544,6 +573,18 @@ REXCVAR_DEFINE_INT32(char_heap_size, 0, "Band3/Advanced/Memory",
     "Character heap size in bytes, 0 = mem.dta's 32000000. At most 134000000")
     .range(0, band3::heap_report::kMaxHeapSize)
     .validator(ValidHeapSize)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+// Band3/Advanced/Scrobbling: where scrobbles go, for a test server
+
+REXCVAR_DEFINE_STRING(lastfm_api_url, "https://ws.audioscrobbler.com/2.0/",
+    "Band3/Advanced/Scrobbling",
+    "Last.fm's API address, which scrobbling calls (lastfm_enabled)")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(listenbrainz_api_url, "https://api.listenbrainz.org",
+    "Band3/Advanced/Scrobbling",
+    "ListenBrainz's API address, which scrobbling calls (listenbrainz_enabled)")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 // Band3/Advanced/Game code
@@ -889,6 +930,11 @@ REXCVAR_DEFINE_INT32(test_random_seed, 0, "Band3/Advanced/Test harness",
     .range(0, 2147483647)
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_STRING(test_score_history, "", "Band3/Advanced/Test harness",
+    "With test_port set: keep score history in this file, autoplay runs included, in place "
+    "of score_history.jsonl, which a harness session never writes to (empty = keep none)")
+    .lifecycle(Lifecycle::kRequiresRestart);
+
 REXCVAR_DEFINE_BOOL(autoplay, false, "Band3/Advanced/Test harness",
     "The game plays every part itself, from the next song start: for repeatable profiling "
     "runs and for checking a song without playing it");
@@ -1021,6 +1067,12 @@ void SnapshotStartupSettings() {
         .events_target = REXCVAR_GET(events_target),
         .events_port = REXCVAR_GET(events_port),
         .discord_enabled = REXCVAR_GET(discord_enabled),
+        .lastfm_enabled = REXCVAR_GET(lastfm_enabled),
+        .lastfm_session = REXCVAR_GET(lastfm_session),
+        .listenbrainz_enabled = REXCVAR_GET(listenbrainz_enabled),
+        .listenbrainz_token = REXCVAR_GET(listenbrainz_token),
+        .lastfm_api_url = REXCVAR_GET(lastfm_api_url),
+        .listenbrainz_api_url = REXCVAR_GET(listenbrainz_api_url),
         .http_enabled = REXCVAR_GET(http_enabled),
         .http_port = REXCVAR_GET(http_port),
         .http_address = REXCVAR_GET(http_address),
@@ -1065,7 +1117,9 @@ bool ReadAtStartupOnly(std::string_view name) {
     static constexpr std::string_view kNames[] = {
         // SnapshotStartupSettings' (most are kRequiresRestart too)
         "controller_type", "guitar_type", "rnd_sync", "disable_metamusic", "main_heap_size", "char_heap_size",
-        "events_target", "events_port", "discord_enabled", "http_enabled", "http_port",
+        "events_target", "events_port", "discord_enabled", "lastfm_enabled", "lastfm_session",
+        "listenbrainz_enabled", "listenbrainz_token", "lastfm_api_url", "listenbrainz_api_url",
+        "http_enabled", "http_port",
         "http_address", "ha_mqtt_host", "ha_mqtt_port", "ha_mqtt_username", "ha_mqtt_password",
         "ha_discovery_prefix", "ha_stagekit", "ha_webhook_url", "rb3e_mode", "gocentral", "gocentral_address", "liveless",
         "liveless_connect", "liveless_external_ip", "liveless_port", "liveless_port_mapping",
