@@ -101,6 +101,7 @@ add_executable(band3_tests
     native_socket_test.cpp
     frame_pacing_test.cpp
     xapo_params_test.cpp
+    audio_idle_test.cpp
     launcher_start_test.cpp
     launcher_settings_test.cpp
     generated_rows_test.cpp

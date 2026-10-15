@@ -563,6 +563,15 @@ REXCVAR_DEFINE_BOOL(audio_xapo_nonblocking, true, "Band3/Advanced/Game code",
     "fading out: up to about 10 ms here, more than a frame at 120 Hz. Off waits, as the game "
     "does on a console (up to 5 ms there)");
 
+REXCVAR_DEFINE_BOOL(audio_idle_bypass, true, "Band3/Advanced/Game code",
+    "Skip the game's audio effects while all they do is process silence: the microphones' "
+    "pitch correction, EQ, compressor and echo while no microphone is connected, and the "
+    "reverb and the other effects once nothing reaches them and what they still play has "
+    "stayed below -144 dB for 5 seconds. An effect runs again on the first sound that reaches "
+    "it, and none is skipped while a microphone is connected. On a Ryzen 6850U laptop it saves "
+    "about 1.5-1.8 ms of the audio thread's CPU a frame in a song (of 2.6-2.8) and 2 ms paused "
+    "(of 2.4). Off runs every effect all the time, as the game does on a console");
+
 // Band3/Advanced/Graphics
 
 REXCVAR_DEFINE_BOOL(fullbright, false, "Band3/Advanced/Graphics",

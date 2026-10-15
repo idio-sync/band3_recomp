@@ -129,6 +129,7 @@ REXCVAR_DECLARE(int32_t, char_heap_size);
 REXCVAR_DECLARE(bool, native_math);
 REXCVAR_DECLARE(bool, native_camera_shake);
 REXCVAR_DECLARE(bool, audio_xapo_nonblocking);
+REXCVAR_DECLARE(bool, audio_idle_bypass);
 
 // Band3/Advanced/Graphics
 REXCVAR_DECLARE(bool, fullbright);
