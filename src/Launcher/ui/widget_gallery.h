@@ -13,7 +13,7 @@
 // swaps between the game's textures and the plain look drawn without them; K
 // swaps the help bar's controller and keyboard hints. The launcher shows it
 // in place of its page with Ctrl+Shift+G, or from the start with the
-// environment variable BAND3_LAUNCHER_GALLERY=1.
+// environment variable BAND3_LAUNCHER_GALLERY=1 (=plain for the plain look).
 
 namespace band3::launcher::ui {
 
@@ -23,6 +23,8 @@ public:
 
     // the page, covering the window; `pads` this frame's controllers
     void Draw(ImGuiIO& io, std::span<const NavPad> pads);
+    // the plain look, drawn without the game's textures (as F swaps it)
+    void SetPlain(bool plain) { plain_ = plain; }
 
 private:
     void Handle(Action action);

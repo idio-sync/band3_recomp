@@ -48,8 +48,10 @@ LauncherDialog::LauncherDialog(rex::ui::ImGuiDrawer* imgui_drawer, LauncherHost 
     nav_.emplace(io);
     skin_ = std::make_unique<ui::Skin>(host_.immediate_drawer);
     gallery_ = std::make_unique<ui::WidgetGallery>(*skin_);
+    // 1 for the gallery, plain for it in the look drawn without the game's textures
     if (const char* gallery = std::getenv("BAND3_LAUNCHER_GALLERY")) {
-        show_gallery_ = std::string_view(gallery) == "1";
+        show_gallery_ = std::string_view(gallery) == "1" || std::string_view(gallery) == "plain";
+        gallery_->SetPlain(std::string_view(gallery) == "plain");
     }
     config_problem_ = ConfigFileProblem(host_.config_path);
     if (config_problem_) {
