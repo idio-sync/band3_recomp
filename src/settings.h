@@ -130,6 +130,8 @@ REXCVAR_DECLARE(bool, native_math);
 REXCVAR_DECLARE(bool, native_camera_shake);
 REXCVAR_DECLARE(bool, audio_xapo_nonblocking);
 REXCVAR_DECLARE(bool, audio_idle_bypass);
+REXCVAR_DECLARE(bool, native_vorbis);
+REXCVAR_DECLARE(bool, native_vorbis_check);
 
 // Band3/Advanced/Graphics
 REXCVAR_DECLARE(bool, fullbright);

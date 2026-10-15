@@ -573,6 +573,18 @@ REXCVAR_DEFINE_BOOL(audio_idle_bypass, true, "Band3/Advanced/Game code",
     "it saves about 1.5-1.8 ms of the audio thread's CPU a frame in a song (of 2.6-2.8) and 2 "
     "ms paused (of 2.4). Off runs every effect all the time, as the game does on a console");
 
+REXCVAR_DEFINE_BOOL(native_vorbis, true, "Band3/Advanced/Game code",
+    "Run the inverse MDCT of the game's Vorbis decoder, which turns each block of a song's "
+    "audio into samples and is about a third of the decoding, as native code: it computes "
+    "exactly what the game's own does, every sample the same. On a Ryzen 6850U laptop it "
+    "saves about 0.35 ms of the decode thread's CPU a frame in a song (of 1.3). Off runs "
+    "the game's own");
+
+REXCVAR_DEFINE_BOOL(native_vorbis_check, false, "Band3/Advanced/Game code",
+    "Run both the game's inverse MDCT and native_vorbis's on every block of the songs' audio, "
+    "play the game's, and log every 5 seconds how many samples came out different and by how "
+    "much (none should). For checking native_vorbis; it costs more CPU than either");
+
 // Band3/Advanced/Graphics
 
 REXCVAR_DEFINE_BOOL(fullbright, false, "Band3/Advanced/Graphics",
