@@ -20,7 +20,7 @@
 // them, big-endian.
 //
 // Adapted from libvorbis's lib/mdct.c (Copyright (c) 2002-2020 Xiph.org
-// Foundation, BSD-3-Clause: src/ThirdParty/libvorbis/COPYING).
+// Foundation, BSD-3-Clause: src/ThirdParty/libvorbis/LICENSE.txt).
 
 namespace band3::audio {
 

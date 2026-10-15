@@ -1,3 +1,6 @@
+// Adapted from libvorbis's lib/mdct.c (Copyright (c) 2002-2020 Xiph.org
+// Foundation, BSD-3-Clause: src/ThirdParty/libvorbis/LICENSE.txt).
+
 #include "src/Audio/vorbis_mdct.h"
 
 #include <bit>
@@ -5,9 +8,17 @@
 #include <cstring>
 
 // Every product the guest rounds to float on its own has to stay rounded here:
-// nothing in this file may fuse a multiply into the add after it.
+// nothing in this file may fuse a multiply into the add after it. band3 builds
+// with clang; CI builds the unit tests with GCC and MSVC too, which have their
+// own ways of saying so, and any other compiler stops here rather than risk it.
 #if defined(__clang__)
 #pragma clang fp contract(off)
+#elif defined(__GNUC__)
+#pragma GCC optimize("fp-contract=off")
+#elif defined(_MSC_VER)
+#pragma fp_contract(off)
+#else
+#error "vorbis_mdct.cpp needs floating-point contraction off: add this compiler's pragma"
 #endif
 
 namespace band3::audio {

@@ -94,7 +94,21 @@ uint64_t Fnv1a(const std::vector<float>& values) {
 
 TEST_CASE("native_vorbis's inverse MDCT computes what the game's recompiled one does, bit for bit") {
     // FNV-1a of the n outputs of the recompiled mdct_backward (the generated
-    // code run on a stand-in guest memory) for the tables and coefficients below
+    // code run on a stand-in guest memory) for the tables and coefficients
+    // below. To make them again: compile the generated DEFINE_REX_FUNC bodies of
+    // mdct_butterfly_16, _32, _first and _generic, mdct_butterflies,
+    // mdct_bitreverse and mdct_backward against a stand-in SDK (a PPCContext of
+    // plain registers, a no-op fpscr, REX_LOAD/STORE_U32/U64 byte-swapping at
+    // base + address, the save/restore millicode as a host-side stack of r14-r31
+    // and f14-f31) with 4 GB reserved as guest memory. Store big-endian
+    // kVorbisPi3_8, kVorbisPi2_8, kVorbisPi1_8 and 0.5f at 0x821651F0,
+    // 0x821651F4, 0x821CEA40 and 0x82075090; the lookup as the game lays it out,
+    // words {n, log2n, trig, trig2, bitrev} at 0x1000, with the three tables at
+    // 0x10000, 0x30000 and 0x50000; the n/2 coefficients at 0x100000. Call
+    // mdct_backward with r1 = 0x01F00000, r3 = 0x1000, r4 = r5 = 0x100000 and
+    // hash the n floats it leaves at 0x100000. Each size's Lcg is seeded
+    // 0x9E3779B9 ^ log2n and draws trig's n + n/4 values, then each
+    // coefficient's pick and value, as below.
     const uint64_t kRecompiled[] = {
         0x2BA666B6CF3E3051ull,  // n = 64: no first or generic butterfly stage
         0xBD62A7FD4120E9D5ull,  // 128: the first stage

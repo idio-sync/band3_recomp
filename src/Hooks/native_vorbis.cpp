@@ -29,6 +29,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "generated/band3_init.h"
 #include "src/Audio/vorbis_mdct.h"
@@ -109,6 +110,11 @@ void LogSettings(bool enabled, bool check) {
         REXLOG_INFO("Native Vorbis check: on: the game's and the native inverse MDCT both run "
                     "on every block, the game's is used, and every 5 s the log says how far "
                     "apart they came out");
+        // counting from now: not on top of what it counted before it was
+        // last turned off
+        std::lock_guard lock(g_mutex);
+        g_check = {};
+        g_next_report = {};
     }
 }
 
@@ -226,13 +232,17 @@ extern "C" REX_FUNC(mdct_backward) {
     // in place, or apart: the native one reads all its coefficients first
     const bool apart = in == out || uint64_t(in) + 2ull * uint32_t(t.n) <= out ||
                        uint64_t(out) + 4ull * uint32_t(t.n) <= in;
-    if (!band3::audio::VorbisMdctTablesValid(t) || !apart || !ConstantsMatch(base)) {
-        if (!band3::audio::VorbisMdctTablesValid(t) || !apart) LogUnusable(t, in, out);
+    const bool usable = band3::audio::VorbisMdctTablesValid(t) && apart;
+    if (!usable) LogUnusable(t, in, out);
+    if (!usable || !ConstantsMatch(base)) {
         __imp__mdct_backward(ctx, base);
         return;
     }
 
-    thread_local std::array<float, kMaxSamples> samples;
+    // where the native one works: allocated by a thread's first call (the
+    // decode thread's), not reserved in every thread of the process
+    thread_local std::vector<float> samples;
+    if (samples.empty()) samples.resize(kMaxSamples);
     LoadFloats(REX_RAW_ADDR(in), samples.data(), t.n / 2);
     // the recompiled code runs its scalar float math with denormals kept
     ctx.fpscr.disableFlushMode();
