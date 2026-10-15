@@ -117,7 +117,9 @@ measure; leave them at their defaults. Three to know about:
   repeated frames fell by a sixth, the picture the same. Leave it off on a fast desktop GPU:
   on a Radeon AI PRO R9700 at 120 Hz it made things worse. To turn it on, set it on the
   in-game settings' Advanced tab (Native renderer), or add `native_world_ahead = true` to
-  `band3.toml`.
+  `band3.toml`. On Linux it does nothing unless `native_upload_pipeline` is off too, which
+  the window's frames otherwise go through: on the Steam Deck at 1080p the two together cut
+  latency from 25 to 21 ms, but repeated frames went from 23 to 32 per 28 s.
 - `native_slow_frame_ms`, `game_stall_log_ms`: log native frames slower than 12 ms and game
   frames slower than 100 ms, with where the time went.
 

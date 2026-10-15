@@ -298,7 +298,7 @@ What each does, how it was measured and why it defaults as it does. The
   passes from 24 to 25 to 13 to 15), and its four first-sight frames from 115 to 127 ms in
   all to 92 to 106 (168 to 180 before the pools were warmed and targets made ahead); the
   process's video memory in its 60 s slice stayed 536 to 539 MB.
-- `native_view_shader_variants` (on on Windows, off elsewhere): draws the common venue
+- `native_view_shader_variants` (on): draws the common venue
   materials with variants of `mesh.hlsl`'s `PSMain` compiled with some of its `kShade*` flags
   fixed and its own texture filtering left out (`build_shaders.py`'s `MESH_VARIANTS`,
   `gpu_view.cpp`'s `MeshVariantFor`): lit per vertex, unlit, lit per pixel without and with
@@ -313,8 +313,10 @@ What each does, how it was measured and why it defaults as it does. The
   a level or two off in a few pixels a frame, so the shadow stays a run-time branch. In
   20th Century Boy at 60 Hz (three runs each) the venue pass went from 5.0 to 4.0 ms and,
   with `native_world_ahead`, post frames' GPU p95 from 19.8 to 14.9 ms and repeated frames
-  from 83 to 52 a minute. The Vulkan variants (SPIR-V) haven't been checked against
-  `PSMain` yet, hence off there.
+  from 83 to 52 a minute. On the Steam Deck (Vulkan, RADV), paused songs in the same four
+  venues captured off, on, off, on had no venue pixel different among those that held still;
+  at 1080p repeated frames went from 54 to 23 per 28 s and post frames' GPU wait p50 from
+  10.9 to 9.2 ms.
 
 ## native_view stats: by_kind and residency
 
