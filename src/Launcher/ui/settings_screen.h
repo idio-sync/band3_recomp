@@ -54,6 +54,8 @@ struct SettingsScreenHost {
     // without one the row isn't shown
     std::function<void()> test_controllers;
     std::function<void()> videos_list;
+    // the Game data folder row opens Find Rock Band 3 (the launcher's)
+    std::function<void()> find_game;
     std::function<void()> sdk_settings;
     // in game: restarts band3 now, for changes that wait for the next start
     std::function<void()> restart;
@@ -72,6 +74,11 @@ public:
 
     // starts on `category`'s rows
     void Open(Category category);
+    // shown again where it was left: the press that opened it isn't one
+    void Show() {
+        pads_ = PadActions{};
+        shown_frame_ = ImGui::GetFrameCount();
+    }
     // leaving as B would on the categories: saves, then `left`
     void RequestLeave();
     // B or Escape, from elsewhere (the pause menu's bind when it isn't Escape)
@@ -211,6 +218,8 @@ private:
     // the frame a box, a list or the keyboard opened in: its own click doesn't
     // reach it
     int opened_frame_ = -1;
+    // the frame it was shown in (Show): that frame's keys opened it
+    int shown_frame_ = -1;
     // a left click this frame, but not the one that opened what's on top
     bool Clicked() const {
         return ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::GetFrameCount() != opened_frame_;

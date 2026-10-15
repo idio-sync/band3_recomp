@@ -113,6 +113,8 @@ add_executable(band3_tests
     settings_categories_test.cpp
     settings_rows_test.cpp
     onscreen_keyboard_test.cpp
+    hub_model_test.cpp
+    game_search_test.cpp
     generated_rows_test.cpp
     settings_reference_test.cpp
     config_file_test.cpp
@@ -170,6 +172,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Launcher/device_names.cpp
     ${BAND3_ROOT}/src/Launcher/device_view_model.cpp
     ${BAND3_ROOT}/src/Launcher/game_data_check.cpp
+    ${BAND3_ROOT}/src/Launcher/game_search.cpp
     ${BAND3_ROOT}/src/Launcher/generated_rows.cpp
     ${BAND3_ROOT}/src/Launcher/launcher_settings.cpp
     ${BAND3_ROOT}/src/Launcher/launcher_start.cpp
@@ -178,6 +181,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Launcher/ui/settings_rows.cpp
     ${BAND3_ROOT}/src/Launcher/ui/onscreen_keyboard.cpp
     ${BAND3_ROOT}/src/Launcher/ui/box.cpp
+    ${BAND3_ROOT}/src/Launcher/ui/hub_model.cpp
     ${BAND3_ROOT}/src/Launcher/ui/skin_images.cpp
     ${BAND3_ROOT}/src/Launcher/settings_reference.cpp
     ${BAND3_ROOT}/src/Launcher/mic_level.cpp

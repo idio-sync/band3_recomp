@@ -18,24 +18,36 @@
 
 namespace band3::launcher {
 
-namespace {
-
-constexpr const char* kQuitPrompt = "Quit band3?";
-
-}
-
 InGameSettingsDialog::InGameSettingsDialog(rex::ui::ImGuiDrawer* imgui_drawer, InGameHost host)
-    : rex::ui::ImGuiDialog(imgui_drawer), host_(std::move(host)) {}
-
-// Not the blocker: the input system may be gone by then (the Rooms panel's
-// rule). ImGui's flags go back as they were.
-InGameSettingsDialog::~InGameSettingsDialog() {
-    if (!input_held_) return;
-    nav_.reset();
-    ImGuiIO& io = GetIO();
-    io.ConfigFlags = (io.ConfigFlags & ~ImGuiConfigFlags_NavEnableKeyboard) |
-                     (saved_config_flags_ & ImGuiConfigFlags_NavEnableKeyboard);
+    : rex::ui::ImGuiDialog(imgui_drawer), host_(std::move(host)) {
+    skin_ = std::make_unique<ui::Skin>(host_.immediate_drawer);
+    pause_ = std::make_unique<ui::PauseScreen>(
+        *skin_, ui::PauseHost{
+                    .resume = [this] { Resume(); },
+                    .settings = [this] { OpenSettings(); },
+                    .instrument_lab =
+                        [this] {
+                            // the lab shows what the game reads, which it reads
+                            // nothing of while the menu has the controllers: the
+                            // menu closes, and a song stays paused for its own
+                            // pause menu to resume
+                            band3::song_pause::Forget();
+                            SetView(View::kClosed);
+                            REXLOG_INFO("Pause menu: closed for the Instrument Lab");
+                            if (host_.open_instrument_lab) host_.open_instrument_lab();
+                        },
+                    .quit =
+                        [this] {
+                            REXLOG_INFO("Pause menu: quitting");
+                            if (host_.quit) host_.quit();
+                        },
+                    .in_song = [] { return render::InSong(); },
+                    .unsaved_settings = [this] { return model_ && model_->HasUnsavedChanges(); },
+                });
 }
+
+// Not the blocker: the input system may be gone by then (the Rooms panel's rule).
+InGameSettingsDialog::~InGameSettingsDialog() = default;
 
 void InGameSettingsDialog::TogglePause() {
     if (host_.all_settings_open && host_.all_settings_open()) {
@@ -71,6 +83,7 @@ void InGameSettingsDialog::SetView(View view) {
 void InGameSettingsDialog::OpenPause() {
     band3::song_pause::Pause();
     SetView(View::kPause);
+    pause_->Show();
     REXLOG_INFO("Pause menu: opened");
 }
 
@@ -84,16 +97,9 @@ void InGameSettingsDialog::Resume() {
 void InGameSettingsDialog::OpenSettings() {
     // back where they were left, as the session goes on
     EnsureModel();
+    screen_->Show();
     SetView(View::kSettings);
     REXLOG_INFO("Settings: opened");
-}
-
-bool InGameSettingsDialog::BackPressed() {
-    const bool requested = std::exchange(back_requested_, false);
-    // the frame the view changed in, and the next, which has its Escape
-    if (ImGui::GetFrameCount() <= view_frame_ + 1) return false;
-    return requested || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
-           ImGui::IsKeyPressed(ImGuiKey_Escape, false);
 }
 
 void InGameSettingsDialog::EnsureModel() {
@@ -107,7 +113,6 @@ void InGameSettingsDialog::EnsureModel() {
                                    host_.anchor ? host_.anchor() : std::filesystem::path(),
                                    Where::kInGame, config_path_),
                    store_);
-    skin_ = std::make_unique<ui::Skin>(host_.immediate_drawer);
     screen_ = std::make_unique<ui::SettingsScreen>(
         *model_, *skin_,
         ui::SettingsScreenHost{
@@ -116,9 +121,17 @@ void InGameSettingsDialog::EnsureModel() {
             .game_data_root = host_.game_data_root,
             .native_window = host_.native_window,
             .save = [this] { return Save(); },
-            .left = [this] { SetView(View::kPause); },
+            .left =
+                [this] {
+                    SetView(View::kPause);
+                    pause_->Show();
+                },
             .play = [this] { Resume(); },
-            .videos_list = [this] { SetView(View::kVideos); },
+            .videos_list =
+                [this] {
+                    videos_->Show();
+                    SetView(View::kVideos);
+                },
             .sdk_settings =
                 [this] {
                     if (!host_.open_all_settings) return;
@@ -129,6 +142,30 @@ void InGameSettingsDialog::EnsureModel() {
                     host_.open_all_settings();
                 },
         });
+    videos_ = std::make_unique<ui::VideosScreen>(
+        *skin_, ui::VideosHost{
+                    .folders =
+                        [this] {
+                            std::vector<std::string> entries = paths::SplitList(model_->Value("music_videos_folder"));
+                            if (entries.empty()) entries.push_back("videos");
+                            std::vector<std::filesystem::path> folders;
+                            for (const auto& entry : entries) {
+                                folders.push_back(paths::Resolve(entry, model_->Env().anchor));
+                            }
+                            return folders;
+                        },
+                    .settings =
+                        [this] {
+                            screen_->Open(Category::kVideos);
+                            screen_->Show();
+                            SetView(View::kSettings);
+                        },
+                    .back =
+                        [this] {
+                            screen_->Show();
+                            SetView(View::kSettings);
+                        },
+                });
     if (const auto problem = ConfigFileProblem(config_path_)) {
         screen_->ShowBox(ui::Box{.title = "band3.toml couldn't be read",
                                  .lines = {*problem,
@@ -151,17 +188,11 @@ void InGameSettingsDialog::HoldInput(ImGuiIO& io, bool hold) {
             input::AddGameInputBlocker(*system);
             blocker_taken_ = true;
         }
-        saved_config_flags_ = io.ConfigFlags;
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-        nav_.emplace(io);
         caps_ = {};
         next_caps_ = {};
         input_held_ = true;
         return;
     }
-    nav_.reset();
-    io.ConfigFlags = (io.ConfigFlags & ~ImGuiConfigFlags_NavEnableKeyboard) |
-                     (saved_config_flags_ & ImGuiConfigFlags_NavEnableKeyboard);
     if (blocker_taken_ && system) input::RemoveGameInputBlocker(*system);
     blocker_taken_ = false;
     input_held_ = false;
@@ -207,12 +238,6 @@ InGameSettingsDialog::PadReading InGameSettingsDialog::ReadPads() {
     return out;
 }
 
-void InGameSettingsDialog::HandleNav(const NavEdges& edges) {
-    // Start goes back to the game from the pause menu; not while a prompt is open
-    if (!edges.start || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) return;
-    if (view_ == View::kPause) Resume();
-}
-
 void InGameSettingsDialog::OnDraw(ImGuiIO& io) {
     const bool all_settings = host_.all_settings_open && host_.all_settings_open();
     // the SDK's menu opens a moment after it's asked for; once it has, its
@@ -234,9 +259,6 @@ void InGameSettingsDialog::OnDraw(ImGuiIO& io) {
     {
         FontScope font(kBodySize);
         const PadReading pads = ReadPads();
-        // the pause menu is ImGui's; the Settings screen reads the pads itself
-        const NavEdges edges =
-            nav_ && view_ != View::kSettings ? nav_->Feed(pads.nav) : NavEdges{};
         // the menu shortcut's chords, which the game can't see while it's blocked
         const input::MenuShortcutAction chord =
             shortcut_.Update(pads.chord_buttons, input::MenuShortcut::Clock::now());
@@ -245,12 +267,16 @@ void InGameSettingsDialog::OnDraw(ImGuiIO& io) {
         } else if (chord == input::MenuShortcutAction::kInstrumentLab && host_.open_instrument_lab) {
             host_.open_instrument_lab();
         }
+        skin_->Load(host_.game_data_root ? host_.game_data_root() : std::filesystem::path());
+        skin_->Poll();
         if (view_ == View::kPause) {
-            HandleNav(edges);
-            DrawPauseWindow(io);
+            // the bind, when it isn't Escape (which the menu reads itself), goes back
+            if (std::exchange(back_requested_, false) && !ImGui::IsKeyPressed(ImGuiKey_Escape, false) &&
+                ImGui::GetFrameCount() > view_frame_ + 1) {
+                pause_->Back();
+            }
+            if (view_ == View::kPause) pause_->Draw(io, pads.nav);
         } else if (view_ == View::kSettings) {
-            skin_->Load(host_.game_data_root ? host_.game_data_root() : std::filesystem::path());
-            skin_->Poll();
             // the bind, when it isn't Escape (which the screen reads itself), goes back
             if (std::exchange(back_requested_, false) && !ImGui::IsKeyPressed(ImGuiKey_Escape, false) &&
                 ImGui::GetFrameCount() > view_frame_ + 1) {
@@ -258,126 +284,11 @@ void InGameSettingsDialog::OnDraw(ImGuiIO& io) {
             }
             screen_->Draw(io, pads.nav, true);
         } else if (view_ == View::kVideos) {
-            DrawVideos(io);
+            videos_->Draw(io, pads.nav, true);
         }
         if (all_settings) DrawAllSettingsNote(io);
     }
     style = sdk_style;
-}
-
-void InGameSettingsDialog::DrawPauseWindow(ImGuiIO& io) {
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowBgAlpha(0.97f);
-    if (appearing_) {
-        ImGui::SetNextWindowFocus();
-        appearing_ = false;
-    }
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, Px(8));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(28), Px(22)));
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                   ImGuiWindowFlags_NoSavedSettings |
-                                   ImGuiWindowFlags_AlwaysAutoResize;
-    const bool shown = ImGui::Begin("Paused##band3_pause", nullptr, flags);
-    ImGui::PopStyleVar(3);
-    if (shown) {
-        const bool back = BackPressed();
-        {
-            FontScope font(kHeadingSize);
-            ImGui::TextUnformatted("Paused");
-        }
-        ImGui::Dummy(ImVec2(0, Px(6)));
-        const ImVec2 size(Px(320), ImGui::GetFrameHeight() + Px(10));
-        if (ImGui::Button("Resume", size)) Resume();
-        ImGui::SetItemDefaultFocus();
-        if (ImGui::Button("Settings", size)) OpenSettings();
-        if (ImGui::Button("Instrument Lab", size)) {
-            // the lab shows what the game reads, which it reads nothing of
-            // while the menu has the controllers: the menu closes, and a song
-            // stays paused for its own pause menu to resume
-            band3::song_pause::Forget();
-            SetView(View::kClosed);
-            REXLOG_INFO("Pause menu: closed for the Instrument Lab");
-            if (host_.open_instrument_lab) host_.open_instrument_lab();
-        }
-        if (ImGui::Button("Quit game", size)) open_quit_prompt_ = true;
-        ImGui::Dummy(ImVec2(0, Px(4)));
-        {
-            FontScope font(kSmallSize);
-            ImGui::TextColored(kMuted, "Escape, B or Start goes back to the game.");
-        }
-
-        const bool busy = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
-        DrawQuitPrompt(back);
-        if (back && !busy && view_ == View::kPause &&
-            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
-            Resume();
-        }
-    }
-    ImGui::End();
-}
-
-void InGameSettingsDialog::DrawQuitPrompt(bool back) {
-    if (open_quit_prompt_) {
-        ImGui::OpenPopup(kQuitPrompt);
-        open_quit_prompt_ = false;
-    }
-    const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(22), Px(18)));
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal(kQuitPrompt, nullptr,
-                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
-        ImGui::TextUnformatted("Rock Band 3 closes.");
-        if (render::InSong()) ImGui::TextColored(kMuted, "The song you're playing isn't kept.");
-        if (model_ && model_->HasUnsavedChanges()) {
-            ImGui::TextColored(kWarn, "Your settings changes aren't saved.");
-        }
-        ImGui::Spacing();
-        if (ImGui::Button("Quit")) {
-            ImGui::CloseCurrentPopup();
-            REXLOG_INFO("Pause menu: quitting");
-            if (host_.quit) host_.quit();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel") || back) ImGui::CloseCurrentPopup();
-        ImGui::SetItemDefaultFocus();
-        ImGui::EndPopup();
-    }
-    ImGui::PopStyleVar();
-}
-
-void InGameSettingsDialog::DrawVideos(ImGuiIO& io) {
-    const float margin = Px(20);
-    ImGui::SetNextWindowPos(ImVec2(margin, margin));
-    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x - margin * 2, io.DisplaySize.y - margin * 2));
-    ImGui::SetNextWindowBgAlpha(0.97f);
-    if (appearing_) {
-        ImGui::SetNextWindowFocus();
-        appearing_ = false;
-    }
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                   ImGuiWindowFlags_NoSavedSettings;
-    if (ImGui::Begin("Music videos##ingame", nullptr, flags)) {
-        if (ImGui::Button("< Settings") || BackPressed()) SetView(View::kSettings);
-        ImGui::SameLine();
-        {
-            FontScope font(kHeadingSize);
-            ImGui::TextUnformatted("Music videos");
-        }
-        ImGui::Separator();
-        std::vector<std::string> entries = paths::SplitList(model_->Value("music_videos_folder"));
-        if (entries.empty()) entries.push_back("videos");
-        std::vector<std::filesystem::path> folders;
-        for (const auto& entry : entries) folders.push_back(paths::Resolve(entry, model_->Env().anchor));
-        VideosTab::Page page;
-        page.settings = [] {
-            ImGui::TextColored(kMuted, "The videos' settings are in Settings, Music Videos.");
-        };
-        page.description = [] {};
-        videos_.Draw(folders, page);
-    }
-    ImGui::End();
 }
 
 void InGameSettingsDialog::DrawAllSettingsNote(ImGuiIO& io) {

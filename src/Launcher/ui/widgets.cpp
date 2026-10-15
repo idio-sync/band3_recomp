@@ -238,6 +238,7 @@ void DrawRow(ImDrawList* dl, ImVec2 min, ImVec2 max, const RowLook& row, const S
     ImU32 value_col = color::kSoft;
     if (row.error) value_col = color::kBad;
     else if (row.on) value_col = color::kOn;
+    else if (row.value_color) value_col = row.value_color;
     if (on_yellow) value_col = color::kOnYellow;
     value_col = WithAlpha(value_col, row.selected && row.locked ? 0.8f : fade);
     const float arrow = Px(10);

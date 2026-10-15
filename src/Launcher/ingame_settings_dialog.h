@@ -17,8 +17,9 @@
 #include "generated_rows.h"
 #include "launcher_cvars.h"
 #include "launcher_settings.h"
-#include "videos_tab.h"
+#include "ui/pause_screen.h"
 #include "ui/settings_screen.h"
+#include "ui/videos_screen.h"
 #include "ui/skin.h"
 
 namespace band3::launcher {
@@ -95,7 +96,7 @@ private:
         kClosed,
         kPause,
         kSettings,
-        // the music videos' list, as it was, until it's a screen of its own
+        // the Music Videos screen, over the game
         kVideos,
         // the SDK's settings menu, which band3 opened: only the note over it
         kAllSettings,
@@ -107,24 +108,16 @@ private:
     // closes the pause menu, resuming the song it paused
     void Resume();
     void OpenSettings();
-    // B, Escape or the bind went back, not with the press that opened the
-    // view (consumes the bind's)
-    bool BackPressed();
     // builds the model the first time the settings open
     void EnsureModel();
     SaveResult Save();
 
-    void DrawPauseWindow(ImGuiIO& io);
-    // `back`: B or Escape this frame, which cancels it
-    void DrawQuitPrompt(bool back);
-    void DrawVideos(ImGuiIO& io);
     // the note over the SDK's settings menu while it's open
     void DrawAllSettingsNote(ImGuiIO& io);
 
     // The input the game doesn't get while a menu is open: takes the UI
-    // blocker, and turns ImGui's keyboard and gamepad navigation on (for the
-    // pause menu), fed from the controllers read for the UI. Let go of when
-    // it closes.
+    // blocker, so the menus read the keyboard and the controllers alone. Let
+    // go of when it closes.
     void HoldInput(ImGuiIO& io, bool hold);
     // every player's controller as navigation, and the shortcut's buttons
     // (controllers only: an instrument's solo frets are stick clicks)
@@ -133,7 +126,6 @@ private:
         uint16_t chord_buttons = 0;
     };
     PadReading ReadPads();
-    void HandleNav(const NavEdges& edges);
 
     InGameHost host_;
     // the host's config_path, from when the settings first opened
@@ -148,7 +140,6 @@ private:
     bool back_requested_ = false;
     // kAllSettings: the SDK's menu has opened since it was asked for
     bool all_settings_seen_ = false;
-    bool open_quit_prompt_ = false;
 
     RexCvarStore store_;
     std::unique_ptr<GeneratedRows> generated_;
@@ -156,14 +147,13 @@ private:
     std::vector<Setting> table_;
     std::optional<SettingsModel> model_;
     std::unique_ptr<ui::Skin> skin_;
+    std::unique_ptr<ui::PauseScreen> pause_;
     std::unique_ptr<ui::SettingsScreen> screen_;
-    VideosTab videos_;
+    std::unique_ptr<ui::VideosScreen> videos_;
 
     // HoldInput's state
     bool input_held_ = false;
     bool blocker_taken_ = false;
-    int saved_config_flags_ = 0;
-    std::optional<GamepadNav> nav_;
     input::MenuShortcut shortcut_;
     // each player's controller type (XINPUT SubType), read every couple of
     // seconds: reading it makes the SDK look for devices again

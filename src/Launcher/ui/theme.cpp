@@ -137,6 +137,11 @@ float PaintText(ImDrawList* dl, ImVec2 pos, const TextStyle& style, ImU32 color,
     return w;
 }
 
+void PushThemeFont(const TextStyle& style) {
+    const float px = FontPx(style);
+    ImGui::PushFont(FontFor(style, px, false), px);
+}
+
 std::vector<std::string> WrapText(const TextStyle& style, std::string_view text, float width) {
     std::vector<std::string> lines;
     std::string line;

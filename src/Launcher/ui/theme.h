@@ -95,6 +95,9 @@ float TextWidth(const TextStyle& style, std::string_view text);
 // it's wider than `max_width` (0 for no limit); returns its width
 float PaintText(ImDrawList* dl, ImVec2 pos, const TextStyle& style, ImU32 color,
                std::string_view text, float max_width = 0);
+// makes ImGui's own text the style's (for drawing laid out with ImGui, as the
+// controller tester's is); ImGui::PopFont() after
+void PushThemeFont(const TextStyle& style);
 // `text` broken into lines no wider than `width`, at spaces
 std::vector<std::string> WrapText(const TextStyle& style, std::string_view text, float width);
 

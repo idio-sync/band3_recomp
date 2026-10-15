@@ -60,6 +60,8 @@ struct RowLook {
     bool on = false;
     // the value in caps (ON and OFF, buttons)
     bool value_caps = false;
+    // the value's colour off the selection bar, when not the usual (a status)
+    ImU32 value_color = 0;
 };
 
 // the screen's background: navy, lighter towards the menu, the ornament's

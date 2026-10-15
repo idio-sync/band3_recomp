@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <string>
 #include <vector>
 #include "device_view_model.h"
 #include "src/Input/input_system.h"
@@ -36,8 +37,41 @@ public:
     // from the device under test)
     const std::vector<NavPad>& NavPads() const { return nav_pads_; }
 
-    // the device list and the selected device's test view, where the cursor is
-    void Draw();
+    // a device as the lists show it
+    struct Entry {
+        uint64_t id = 0;
+        std::string name;
+        // "Xbox 360 guitar", "MIDI drum kit"... (DeviceKindLabel)
+        std::string kind_label;
+        input::DeviceKind kind = input::DeviceKind::kPad;
+        // 1-4, 0 for none
+        int player = 0;
+        // the XInput subtype it reports, once read
+        std::optional<uint8_t> sub_type;
+        // it can be tested on its own: it navigates (not the keyboard, not
+        // SDL's copy of a dongle instrument)
+        bool testable = false;
+        // SDL's copy of a dongle instrument: listed, but there's nothing to test
+        bool copy = false;
+    };
+    std::vector<Entry> Entries() const;
+    bool Listed() const { return listed_; }
+
+    // the device the live view shows
+    std::optional<uint64_t> Selected() const { return selected_; }
+    void Select(uint64_t id) {
+        selected_ = id;
+        picked_ = true;
+    }
+    // tests a device on its own: it plays the live view only, until Back is
+    // pressed on it or EndTest
+    void BeginTest(uint64_t id) { test_.Begin(id); }
+    void EndTest() { test_.End(); }
+    std::optional<uint64_t> Testing() const { return test_.Testing(); }
+
+    // the selected device's live view, laid out with ImGui where the cursor
+    // is: what it is, then its frets, pads, keys or buttons as it's played
+    void DrawLive();
 
 private:
     using Clock = std::chrono::steady_clock;
@@ -61,8 +95,6 @@ private:
     // the device the test view shows, picked by the player or, until they
     // pick one, the first that plays
     void ChooseDevice();
-    void DrawList();
-    void DrawTestView(const Device& device);
     void DrawGuitar(const input::GuitarInputs& in);
     void DrawDrums(const input::DrumInputs& in, bool velocity);
     void DrawKeys(const input::KeysInputs& in);

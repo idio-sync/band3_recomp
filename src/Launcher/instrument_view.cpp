@@ -148,166 +148,79 @@ void DevicePanel::ChooseDevice() {
     }
 }
 
-void DevicePanel::Draw() {
-    SectionHeading("Devices");
-    DrawList();
+std::vector<DevicePanel::Entry> DevicePanel::Entries() const {
+    std::vector<Entry> out;
     for (const Device& device : devices_) {
-        if (selected_ == device.info.id) DrawTestView(device);
-    }
-    ImGui::Dummy(ImVec2(0, Px(14)));
-}
-
-void DevicePanel::DrawList() {
-    if (listed_ && devices_.empty()) {
-        ImGui::TextColored(kMuted, "No controllers found. Connect one, and it shows up here.");
-        return;
-    }
-    const float row = ImGui::GetFrameHeight();
-    ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0, 0.5f));
-    if (ImGui::BeginTable("##devices", 3, ImGuiTableFlags_None)) {
-        const float width = ImGui::GetContentRegionAvail().x;
-        ImGui::TableSetupColumn("device", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("kind", ImGuiTableColumnFlags_WidthFixed,
-                                std::clamp(width * 0.34f, Px(200), Px(400)));
-        ImGui::TableSetupColumn("player", ImGuiTableColumnFlags_WidthFixed, Px(130));
-        for (const Device& device : devices_) {
-            const input::InputDevice& d = device.info;
-            ImGui::PushID(static_cast<int>(d.id ^ (d.id >> 32)));
-            ImGui::TableNextRow(ImGuiTableRowFlags_None, row);
-            ImGui::TableSetColumnIndex(0);
-            const auto sub_type = sub_types_.find(d.id);
-            const std::string kind = DeviceKindLabel(
-                d.kind, d.name,
-                sub_type == sub_types_.end() ? std::nullopt
-                                             : std::optional<uint8_t>(sub_type->second));
-            const std::string name = d.name.empty() ? "(unnamed)" : d.name;
-            // SDL's copy of a dongle instrument is listed so it doesn't look
-            // missing, but there's nothing to test: its dongle's row is it
-            const bool copy = d.kind == DeviceKind::kSdlCopy;
-            ImGui::BeginDisabled(copy);
-            if (ImGui::Selectable(name.c_str(), selected_ == d.id,
-                                  ImGuiSelectableFlags_SpanAllColumns, ImVec2(0, row))) {
-                selected_ = d.id;
-                picked_ = true;
-                // the keyboard navigates by itself, so it's only shown
-                if (DrivesNavigation(d.kind)) {
-                    test_.Begin(d.id);
-                } else {
-                    test_.End();
-                }
-            }
-            ImGui::EndDisabled();
-            if (copy && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                ImGui::SetTooltip("SDL's copy of an instrument band3 reads through its USB dongle.\n"
-                                  "The game doesn't play this copy.");
-            }
-            ImGui::TableSetColumnIndex(1);
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextColored(kMuted, "%s", kind.c_str());
-            ImGui::TableSetColumnIndex(2);
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextColored(d.player > 0 ? kText : kMuted, "%s", PlayerLabel(d.player).c_str());
-            ImGui::PopID();
-        }
-        ImGui::EndTable();
-    }
-    ImGui::PopStyleVar();
-}
-
-void DevicePanel::DrawTestView(const Device& device) {
-    const input::InputDevice& d = device.info;
-    ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, kPopup);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(18), Px(14)));
-    // (flattened: its Test button is on the page's navigation)
-    if (ImGui::BeginChild("##test_view", ImVec2(0, 0),
-                          ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding |
-                              ImGuiChildFlags_NavFlattened,
-                          ImGuiWindowFlags_NoScrollbar)) {
+        const input::InputDevice& d = device.info;
+        Entry e;
+        e.id = d.id;
+        e.name = d.name.empty() ? "(unnamed)" : d.name;
+        const auto sub_type = sub_types_.find(d.id);
+        if (sub_type != sub_types_.end()) e.sub_type = sub_type->second;
+        e.kind_label = DeviceKindLabel(d.kind, d.name, e.sub_type);
+        e.kind = d.kind;
+        e.player = d.player;
         // the keyboard navigates by itself, so it's only shown, not tested
-        const bool testable = DrivesNavigation(d.kind);
-        const bool testing = test_.Testing() == d.id;
-        if (testable) ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(d.name.empty() ? "(unnamed)" : d.name.c_str());
-        if (testable) {
-            // Test and Stop are one button, so the focus stays on it
-            const float width =
-                std::max(ImGui::CalcTextSize("Test").x, ImGui::CalcTextSize("Stop").x) +
-                ImGui::GetStyle().FramePadding.x * 2;
-            ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - width);
-            if (ImGui::Button(testing ? "Stop###test" : "Test###test", ImVec2(width, 0))) {
-                if (testing) {
-                    test_.End();
-                } else {
-                    test_.Begin(d.id);
-                }
-            }
-        }
-        FontScope font(kSmallSize);
-        ImGui::PushTextWrapPos(0);
-        if (testing) {
-            ImGui::TextColored(kAccent, "Testing: press Back on it (or click Stop) to stop. Until "
-                                        "then it plays this view only, not the launcher.");
-        } else if (testable) {
-            ImGui::TextColored(kMuted, "It also moves around the launcher. Click its row, or press "
-                                       "A on it, to test it on its own.");
-        }
-        if (!device.caps || !device.state) {
-            ImGui::TextColored(kMuted, "Can't read it right now.");
-        } else {
-            const input::Caps360& caps = *device.caps;
-            const input::Gamepad360& state = *device.state;
-            const TestView view = ViewFor(caps);
-            const bool gamepad = caps.sub_type == input::kSubtypeGamepad;
-            if (IsStandIn(d.kind, d.name)) {
-                ImGui::TextColored(kMuted, "The SDK's stand-in for a controller: it never presses "
-                                           "anything.");
-            } else if (gamepad &&
-                       (d.kind == DeviceKind::kPad || d.kind == DeviceKind::kSynthetic)) {
-                // the game plays it as controller_type (settings.cpp)
-                const auto plays_as = PlaysAsLabel(REXCVAR_GET(controller_type));
-                const char* what = d.kind == DeviceKind::kSynthetic ? "The keyboard" : "It";
-                if (plays_as) {
-                    ImGui::TextColored(kMuted, "%s plays as %s (Gamepads play as).", what,
-                                       plays_as->c_str());
-                } else {
-                    ImGui::TextColored(kMuted, "%s doesn't play: Gamepads play as is \"Don't "
-                                               "override\".", what);
-                }
-                if (d.kind == DeviceKind::kPad) {
-                    ImGui::TextColored(kMuted, "With the SDL input backend an Xbox 360 guitar or "
-                                               "drum kit shows here as a controller too, and "
-                                               "plays as that.");
-                }
-            } else if (view == TestView::kPad && !gamepad) {
-                ImGui::TextColored(kMuted, "Shown as the buttons and sticks it reports.");
-            }
-            ImGui::Dummy(ImVec2(0, Px(4)));
-            if (hits_for_ != d.id) {
-                // the flashes are another device's: start again
-                hits_for_ = d.id;
-                pad_hits_ = {};
-                cymbal_hits_ = {};
-                kick_hits_ = {};
-            }
-            switch (view) {
-            case TestView::kGuitar: DrawGuitar(input::DecodeGuitar(state)); break;
-            case TestView::kDrums:
-                DrawDrums(input::DecodeDrums(state, caps), input::IsRb2Drums(caps));
-                break;
-            case TestView::kKeys: DrawKeys(input::DecodeKeys(state)); break;
-            case TestView::kPad: DrawPad(state); break;
-            }
-            if (d.kind == DeviceKind::kMidiDrums) DrawMidiHits();
-            if (d.kind == DeviceKind::kMidiKeys) DrawMidiKeyEvents();
-        }
-        ImGui::PopTextWrapPos();
+        e.testable = DrivesNavigation(d.kind);
+        e.copy = d.kind == DeviceKind::kSdlCopy;
+        out.push_back(std::move(e));
     }
-    ImGui::EndChild();
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
+    return out;
 }
 
+void DevicePanel::DrawLive() {
+    const Device* device = nullptr;
+    for (const Device& d : devices_) {
+        if (selected_ == d.info.id) device = &d;
+    }
+    if (!device) return;
+    const input::InputDevice& d = device->info;
+    ImGui::PushTextWrapPos(0);
+    if (d.kind == DeviceKind::kSdlCopy) {
+        ImGui::TextColored(kMuted, "SDL's copy of an instrument band3 reads through its USB dongle. "
+                                   "The game doesn't play this copy: its dongle's row is it.");
+    } else if (!device->caps || !device->state) {
+        ImGui::TextColored(kMuted, "Can't read it right now.");
+    } else {
+        const input::Caps360& caps = *device->caps;
+        const input::Gamepad360& state = *device->state;
+        const TestView view = ViewFor(caps);
+        const bool gamepad = caps.sub_type == input::kSubtypeGamepad;
+        if (IsStandIn(d.kind, d.name)) {
+            ImGui::TextColored(kMuted, "The SDK's stand-in for a controller: it never presses "
+                                       "anything.");
+        } else if (gamepad && (d.kind == DeviceKind::kPad || d.kind == DeviceKind::kSynthetic)) {
+            // the game plays it as controller_type (settings.cpp)
+            const auto plays_as = PlaysAsLabel(REXCVAR_GET(controller_type));
+            const char* what = d.kind == DeviceKind::kSynthetic ? "The keyboard" : "It";
+            if (plays_as) {
+                ImGui::TextColored(kMuted, "%s plays as %s (Gamepads play as, in Controllers).", what,
+                                   plays_as->c_str());
+            } else {
+                ImGui::TextColored(kMuted, "%s doesn't play: Gamepads play as is Game's pick.", what);
+            }
+        } else if (view == TestView::kPad && !gamepad) {
+            ImGui::TextColored(kMuted, "Shown as the buttons and sticks it reports.");
+        }
+        ImGui::Dummy(ImVec2(0, Px(6)));
+        if (hits_for_ != d.id) {
+            // the flashes are another device's: start again
+            hits_for_ = d.id;
+            pad_hits_ = {};
+            cymbal_hits_ = {};
+            kick_hits_ = {};
+        }
+        switch (view) {
+        case TestView::kGuitar: DrawGuitar(input::DecodeGuitar(state)); break;
+        case TestView::kDrums: DrawDrums(input::DecodeDrums(state, caps), input::IsRb2Drums(caps)); break;
+        case TestView::kKeys: DrawKeys(input::DecodeKeys(state)); break;
+        case TestView::kPad: DrawPad(state); break;
+        }
+        if (d.kind == DeviceKind::kMidiDrums) DrawMidiHits();
+        if (d.kind == DeviceKind::kMidiKeys) DrawMidiKeyEvents();
+    }
+    ImGui::PopTextWrapPos();
+}
 float DevicePanel::Flash(Hit& hit, uint8_t velocity_now) {
     const Clock::time_point now = Clock::now();
     if (velocity_now > 0) hit = {velocity_now, now};

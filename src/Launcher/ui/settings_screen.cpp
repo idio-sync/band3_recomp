@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include "keyboard_actions.h"
+#include "keyboard_panel.h"
 #include "src/Audio/usb_mic.h"
 #include "src/Input/input_system.h"
 #include "src/Launcher/device_names.h"
@@ -52,26 +53,6 @@ NavPad Combined(std::span<const NavPad> pads) {
         out.buttons |= p.buttons;
         if (std::abs(p.left_x) > std::abs(out.left_x)) out.left_x = p.left_x;
         if (std::abs(p.left_y) > std::abs(out.left_y)) out.left_y = p.left_y;
-    }
-    return out;
-}
-
-std::string Utf8(unsigned int c) {
-    std::string out;
-    if (c < 0x80) {
-        out += char(c);
-    } else if (c < 0x800) {
-        out += char(0xC0 | (c >> 6));
-        out += char(0x80 | (c & 0x3F));
-    } else if (c < 0x10000) {
-        out += char(0xE0 | (c >> 12));
-        out += char(0x80 | ((c >> 6) & 0x3F));
-        out += char(0x80 | (c & 0x3F));
-    } else {
-        out += char(0xF0 | (c >> 18));
-        out += char(0x80 | ((c >> 12) & 0x3F));
-        out += char(0x80 | ((c >> 6) & 0x3F));
-        out += char(0x80 | (c & 0x3F));
     }
     return out;
 }
@@ -383,26 +364,14 @@ void SettingsScreen::HandleTyping(OnScreenKeyboard::Result result) {
 }
 
 void SettingsScreen::TypeFromKeyboard(ImGuiIO& io) {
-    // the SDK starts the system's text input for the frame that asks for it
-    ImGui::GetCurrentContext()->PlatformImeData.WantTextInput = true;
-    for (const ImWchar c : io.InputQueueCharacters) {
-        if (c >= 0x20 && c != 0x7F) {
-            keyboard_.Type(Utf8(c));
-            keyboard_hints_ = true;
-        }
-    }
-    if (!io.InputQueueCharacters.empty()) HandleTyping(OnScreenKeyboard::Result::kNone);
-    if (ImGui::IsKeyPressed(ImGuiKey_Backspace, true)) {
-        keyboard_.Backspace();
+    bool edited = false;
+    const OnScreenKeyboard::Result result = TypeIntoKeyboard(keyboard_, io, edited);
+    if (edited) {
+        keyboard_hints_ = true;
         HandleTyping(OnScreenKeyboard::Result::kNone);
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
-        HandleTyping(OnScreenKeyboard::Result::kDone);
-    } else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-        HandleTyping(OnScreenKeyboard::Result::kCancelled);
-    }
+    if (result != OnScreenKeyboard::Result::kNone) HandleTyping(result);
 }
-
 // What the rows do
 
 void SettingsScreen::Activate(const Row& row) {
@@ -419,6 +388,10 @@ void SettingsScreen::Activate(const Row& row) {
         return;
     }
     const Setting& s = *row.setting;
+    if (s.cvar == "game_data_root" && host_.find_game) {
+        host_.find_game();
+        return;
+    }
     if (row.kind == RowKind::kSetting && s.widget == Widget::kPath) {
         std::string from = model_.Value(s.cvar);
         from = from.empty() ? model_.EffectiveDefault(s.cvar)
@@ -784,7 +757,9 @@ void SettingsScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_g
     const std::vector<Action> from_pads = pads_.Step(Combined(pads), now_);
     if (!from_pads.empty()) keyboard_hints_ = false;
     std::vector<Action> from_keys;
-    if (typing_) {
+    if (ImGui::GetFrameCount() <= shown_frame_ + 1) {
+        // the keys that opened it
+    } else if (typing_) {
         TypeFromKeyboard(io);
         // the arrows still move over the keys
         for (const Action a : KeyboardActions()) {
@@ -1391,79 +1366,19 @@ void SettingsScreen::DrawRowDetail(ImDrawList* dl, const Row& row, float x, floa
 }
 
 void SettingsScreen::DrawKeyboard(ImDrawList* dl, float x, float& y, float width) {
-    const ImGuiIO& io = ImGui::GetIO();
     const std::string heading = typing_->search ? "Search settings" : typing_->row.label;
-    for (const std::string& line : WrapText(kCaps(text::kPanelHeading), heading, Px(width))) {
-        PaintText(dl, At(x, y), kCaps(text::kPanelHeading), color::kText, line);
-        y += text::kPanelHeading + 4;
-    }
-    DrawRule(dl, At(x, y + 6), At(x + width, y + 10), skin_);
-    y += 22;
-
-    // the entry
-    const ImVec2 emin = At(x, y), emax = At(x + width, y + 40);
-    dl->AddRectFilled(emin, emax, IM_COL32(0, 0, 0, 140));
-    dl->AddLine(emin, ImVec2(emax.x, emin.y), IM_COL32(255, 255, 255, 178), Px(2));
-    dl->AddLine(ImVec2(emin.x, emax.y), emax, IM_COL32(255, 255, 255, 178), Px(2));
-    std::string shown = keyboard_.Text();
-    if (typing_->secret) {
-        shown.clear();
-        for (const char c : keyboard_.Text()) {
-            if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) shown += "\xE2\x80\xA2";
-        }
-    }
-    // the end of a long entry, where the typing is
-    const TextStyle entry = kPlain(22);
-    const float room = Px(width - 24);
-    while (TextWidth(entry, shown) > room && !shown.empty()) {
-        size_t cut = 1;
-        while (cut < shown.size() && (static_cast<unsigned char>(shown[cut]) & 0xC0) == 0x80) cut++;
-        shown.erase(0, cut);
-    }
-    const float tw = PaintText(dl, At(x + 10, y + 9), entry, color::kText, shown);
-    if (std::fmod(now_, 1.0) < 0.6) {
-        const ImVec2 c = At(x + 12, y + 9);
-        dl->AddRectFilled(ImVec2(c.x + tw, c.y), ImVec2(c.x + tw + Px(2), c.y + Px(22)), color::kYellow);
-    }
-    y += 52;
-
-    // the keys
-    const float gap = 2;
-    const float key = (width - gap * (OnScreenKeyboard::kColumns - 1)) / OnScreenKeyboard::kColumns;
-    const bool free = !box_;
-    for (int i = 0; i < keyboard_.KeyCount(); i++) {
-        const OnScreenKeyboard::KeyInfo k = keyboard_.Key(i);
-        const float kx = x + float(k.column) * (key + gap);
-        const float ky = y + float(k.row) * (key + gap);
-        const ImVec2 min = At(kx, ky), max = At(kx + key * float(k.span) + gap * float(k.span - 1), ky + key);
-        const bool selected = i == keyboard_.Selected();
-        if (selected) {
-            DrawHighlight(dl, min, max, skin_, Px(3));
-        } else {
-            dl->AddRectFilled(min, max, IM_COL32(255, 255, 255, 16), Px(3));
-            dl->AddRect(min, max, IM_COL32(255, 255, 255, 30), Px(3), 0, std::max(1.0f, Px(1)));
-        }
-        std::string label = k.label;
-        // the case key says what it switches to
-        if (k.span > 1 && label == "abc/ABC") label = keyboard_.Upper() ? "abc" : "ABC";
-        const TextStyle style = k.span > 1 ? kCaps(text::kChip + 2) : (keyboard_.Upper() ? kCaps(22) : kPlain(22));
-        const float lw = TextWidth(style, label);
-        const float lh = k.span > 1 ? text::kChip + 2 : 22;
-        PaintText(dl, ImVec2((min.x + max.x - lw) * 0.5f, (min.y + max.y) * 0.5f - Px(lh) * 0.5f), style,
-                  selected ? color::kOnYellow : color::kText, label);
-        if (free && ImGui::IsMouseHoveringRect(min, max)) {
-            if (MouseMoved(io)) keyboard_.Select(i);
-            if (Clicked()) HandleTyping(keyboard_.Press(i));
-            if (!typing_) return;
-        }
-    }
-    y += 8 * (key + gap) + 10;
-    Paragraph(dl,
-              typing_->search ? "Results update as you type. Done goes to them."
-                              : "A keyboard plugged in types too.",
-              x, y, width, color::kMuted);
+    const OnScreenKeyboard::Result result = DrawKeyboardPanel(
+        dl, Page{origin_, scale_}, keyboard_,
+        KeyboardPanel{.heading = heading,
+                      .hint = typing_->search ? "Results update as you type. Done goes to them."
+                                              : "A keyboard plugged in types too.",
+                      .secret = typing_->secret,
+                      .x = x,
+                      .y = y,
+                      .width = width},
+        skin_, !box_ && Clicked());
+    if (result != OnScreenKeyboard::Result::kNone || (typing_->search && Clicked())) HandleTyping(result);
 }
-
 void SettingsScreen::DrawDrop(ImDrawList* dl) {
     const ImGuiIO& io = ImGui::GetIO();
     DropList& drop = *drop_;
