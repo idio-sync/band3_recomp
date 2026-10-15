@@ -35,6 +35,7 @@ REXCVAR_DECLARE(bool, music_video_keep_audio);
 REXCVAR_DECLARE(std::string, username);
 REXCVAR_DECLARE(bool, steam_deck_defaults);
 REXCVAR_DECLARE(bool, autosave);
+REXCVAR_DECLARE(bool, score_history);
 REXCVAR_DECLARE(bool, skip_profile_prompt);
 REXCVAR_DECLARE(double, song_speed);
 REXCVAR_DECLARE(double, track_speed);
@@ -187,6 +188,7 @@ REXCVAR_DECLARE(bool, dred);
 // Band3/Advanced/Test harness
 REXCVAR_DECLARE(int32_t, test_port);
 REXCVAR_DECLARE(int32_t, test_random_seed);
+REXCVAR_DECLARE(std::string, test_score_history);
 REXCVAR_DECLARE(bool, autoplay);
 REXCVAR_DECLARE(bool, stagekit_fake);
 REXCVAR_DECLARE(bool, music_video_test_pattern);

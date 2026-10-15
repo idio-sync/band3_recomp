@@ -122,6 +122,11 @@ REXCVAR_DEFINE_BOOL(autosave, true, "Band3/Game",
     "Let the game autosave profiles, after songs and setlist edits. Off, they're only saved "
     "from the options menu, e.g. to test with autoplay without touching your profile");
 
+REXCVAR_DEFINE_BOOL(score_history, true, "Band3/Game",
+    "Keep every finished song's results (score, stars, notes hit, streak, overdrive) in "
+    "score_history.jsonl in the user data folder, for the web page's History tab and its "
+    "played and stars filters. Songs played on autoplay aren't kept");
+
 REXCVAR_DEFINE_BOOL(skip_profile_prompt, true, "Band3/Game",
     "Players who join without a profile join as guests, without the game asking them to "
     "choose one (No Profile, Sign In, Swap to User). Off, it asks, as on a console");
@@ -897,6 +902,11 @@ REXCVAR_DEFINE_INT32(test_random_seed, 0, "Band3/Advanced/Test harness",
     "Seed the game's random numbers with this instead of the clock (0 = off), so a fresh "
     "profile gets the same band on every launch, for render checks")
     .range(0, 2147483647)
+    .lifecycle(Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(test_score_history, "", "Band3/Advanced/Test harness",
+    "With test_port set: keep score history in this file, autoplay runs included, in place "
+    "of score_history.jsonl, which a harness session never writes to (empty = keep none)")
     .lifecycle(Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(autoplay, false, "Band3/Advanced/Test harness",

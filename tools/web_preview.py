@@ -9,7 +9,8 @@ work without the game; it answers 409. /status makes up what the game is doing
 (--status), to work on the page's banner. The RhythmVerse tab searches
 RhythmVerse itself, but its downloads are made up: nothing is saved. So are its
 updates: two made-up songs, whatever Check for updates finds; and the Library
-tab's Duplicates, made up after a couple of seconds' "reading". /karaoke
+tab's Duplicates, made up after a couple of seconds' "reading"; and its score
+history (/history/...), a few runs of the first dozen songs. /karaoke
 (src/Net/karaoke_page.h) follows a made-up show on /live/events, over and
 over: 4 s loading, the song with a 3 s pause, 6 s of results. Its lyrics are
 made up, or a song's own with --karaoke-song (through band3_lyrics, built with
@@ -701,6 +702,7 @@ class Preview:
         self.songs = songs_from_dtb(dtb('songs/gen/songs.dtb'), game.has_dir, game.has_file,
                                     genre_names(game), dtb(SONG_UPDATES))
         self.by_shortname = {s['shortname']: s for s in self.songs}
+        self.wall_started = time.time()
         self.list_songs = format_songs(self.songs).encode()
         self.details = format_details(self.songs).encode()
         self.art = {}
@@ -807,6 +809,53 @@ class Preview:
                          song['artist'])
 
 
+def fake_history(songs, now):
+    """Score history (src/History/score_history.h) for the first dozen songs,
+    the same on every run: a few runs each over the last couple of months,
+    some slowed or with No Fail (which don't count toward bests)."""
+    import random
+    rng = random.Random(3)
+    parts = [('guitar', 3), ('real_drum', 3), ('vocals', 2), ('bass', 3), ('real_keys', 1)]
+    runs = []
+    for i, song in enumerate(songs[:12]):
+        part, diff = parts[i % len(parts)]
+        best = rng.randint(80000, 200000)
+        for n in range(rng.randint(1, 6)):
+            speed = 80 if rng.random() < 0.15 else 100
+            mods = ['no_fail'] if rng.random() < 0.15 else []
+            pct = min(100, 70 + n * 5 + rng.randint(0, 8))
+            run = {'v': 1, 't': int(now - rng.randint(0, 60) * 86400 - rng.randint(0, 86000)),
+                   'shortname': song['shortname'], 'song_id': i + 1, 'title': song['title'],
+                   'artist': song['artist'], 'part': part, 'diff': diff,
+                   'score': int(best * (0.7 + 0.06 * n)), 'stars': min(6, 3 + n),
+                   'pct': pct, 'streak': rng.randint(50, 600), 'od_deploys': rng.randint(0, 5),
+                   'band_size': 1, 'speed': speed, 'modifiers': mods}
+            if part in ('guitar', 'real_keys'):
+                run['solo_pct'] = rng.randint(60, 100)
+            run['counts'] = speed == 100 and not mods
+            runs.append(run)
+    runs.sort(key=lambda r: r['t'])
+    return runs
+
+
+def history_summary(runs):
+    """/history/summary for fake_history's runs, as score_history.cpp sums them."""
+    songs = {}
+    for r in runs:
+        song = songs.setdefault(r['shortname'], {'plays': 0, 'last': 0, 'parts': {}})
+        song['plays'] += 1
+        song['last'] = max(song['last'], r['t'])
+        part = song['parts'].setdefault(f"{r['part']}:{r['diff']}", {
+            'plays': 0, 'last': 0, 'best_score': 0, 'best_stars': 0, 'best_pct': 0})
+        part['plays'] += 1
+        part['last'] = max(part['last'], r['t'])
+        if r['counts']:
+            part['best_score'] = max(part['best_score'], r['score'])
+            part['best_stars'] = max(part['best_stars'], r['stars'])
+            part['best_pct'] = max(part['best_pct'], r['pct'])
+    return {'enabled': True, 'songs': songs}
+
+
 def handler(preview):
     class Handler(http.server.BaseHTTPRequestHandler):
         # the page shows album art only when the server says it's band3
@@ -852,6 +901,21 @@ def handler(preview):
             elif path == '/library/duplicates':
                 report = fake_duplicates(preview.started, time.monotonic(), preview.set_aside)
                 self.reply(200, 'application/json', json.dumps(report).encode())
+            elif urllib.parse.urlsplit(self.path).path.startswith('/history/'):
+                split = urllib.parse.urlsplit(self.path)
+                query = dict(urllib.parse.parse_qsl(split.query))
+                runs = fake_history(preview.songs, preview.wall_started)
+                if split.path == '/history/summary':
+                    body = history_summary(runs)
+                elif split.path == '/history/recent':
+                    body = {'enabled': True,
+                            'runs': runs[::-1][:int(query.get('limit', 50))]}
+                else:
+                    body = {'enabled': True, 'runs': [
+                        r for r in runs[::-1] if r['shortname'] == query.get('shortname')
+                        and (not query.get('part') or r['part'] == query['part'])
+                        and (not query.get('diff') or r['diff'] == int(query['diff']))]}
+                self.reply(200, 'application/json', json.dumps(body).encode())
             elif path == '/rv/updates':
                 self.reply(200, 'application/json', json.dumps(preview.updates.report()).encode())
             elif path == '/karaoke' or path.startswith('/karaoke?'):

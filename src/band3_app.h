@@ -35,6 +35,7 @@
 #include "Content/game_song_list.h"
 #include "Content/live_content.h"
 #include "Game/SongCache.h"
+#include "History/score_history.h"
 #include "Hooks/frame_pacing.h"
 #include "Input/input_system.h"
 #include "Input/instrument_lab.h"
@@ -525,6 +526,8 @@ class Band3App : public rex::ReXApp {
                                         [this] { return immediate_drawer(); });
     }
     band3::test::StartServer(runtime(), &app_context(), window());
+    // before the web server, which serves it
+    band3::history::OpenForGame();
     band3::http::StartServer();
     // the game's own Quit (its exit DTA function) closes band3 as the
     // window's close button does, as the harness's quit does

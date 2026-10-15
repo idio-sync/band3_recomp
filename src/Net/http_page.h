@@ -133,6 +133,8 @@ li {
   margin-bottom: 6px; cursor: pointer;
 }
 li > .art { grid-row: span 2; }
+#hist-list li { grid-template-columns: 48px minmax(0, 1fr); }
+body.plain #hist-list li { grid-template-columns: minmax(0, 1fr); }
 li > .meters { grid-column: 2 / 4; margin-top: 4px; }
 li > button, li > a.button { grid-column: 4; grid-row: 1 / span 2; }
 /* against RB3E: no album art, so no column for it */
@@ -197,6 +199,25 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
 .parts .tier { color: var(--muted); }
 
 #more, #rv-more { display: block; margin: 12px auto; }
+
+/* score history, from band3's /history: a played song's line in the list,
+   its runs in its sheet, and the History tab's recent runs */
+.played { font-size: 12px; color: var(--muted); }
+#hist-message { color: var(--muted); font-size: 14px; padding: 8px 0; }
+#hist-message:empty { display: none; }
+#f-hist[hidden] { display: none; }
+#f-hist .caps { margin-bottom: 8px; }
+.spark { display: block; width: 100%; height: 48px; margin: 4px 0 8px; }
+.spark polyline { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.run {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px;
+  padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px;
+}
+.run .score { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.run .sub { grid-column: 1 / 3; white-space: normal; }
+#hist-list .run { border-top: 0; padding: 2px 0 0; }
+/* a run that doesn't count toward bests: modified or slowed down */
+.run.dim, li.dim { opacity: .55; }
 #more[hidden], #rv-more[hidden] { display: none; }
 #toast {
   position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 2;
@@ -228,7 +249,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
   <div class="bar">
     <div class="tabs" id="tabs" hidden>
       <button data-mode="library" aria-pressed="true">Library</button>
-      <button data-mode="rv" aria-pressed="false">RhythmVerse</button>
+      <button data-mode="rv" aria-pressed="false" hidden>RhythmVerse</button>
+      <button data-mode="history" aria-pressed="false" hidden>History</button>
     </div>
     <span id="lib-tools">
       <select id="sort" aria-label="Sort by">
@@ -263,6 +285,10 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
     <ul id="list"></ul>
     <button id="more" class="plain" hidden>Show more</button>
   </section>
+  <section id="hist" hidden>
+    <div id="hist-message"></div>
+    <ul id="hist-list"></ul>
+  </section>
   <section id="rv" hidden>
     <div id="rv-updates" hidden>
       <div class="updates-bar">
@@ -288,6 +314,11 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
   <div class="chips" id="f-genres"></div>
   <h3>Decade</h3>
   <div class="chips" id="f-decades"></div>
+  <div id="f-hist" hidden>
+    <h3>History</h3>
+    <div class="caps" id="f-hist-on"></div>
+    <div class="chips" id="f-hist-chips"></div>
+  </div>
   <div class="actions">
     <button class="plain" id="f-clear">Clear</button>
     <button id="f-done">Done</button>
@@ -357,21 +388,28 @@ function minutes(ms) {
 }
 
 // ---- filters, kept on this device
-const filters = {has: [], caps: {}, genres: [], decades: []};
+const FILTER_DEFAULTS = {has: [], caps: {}, genres: [], decades: [],
+                         hist: [], hist_part: "", hist_diff: "", hist_stars: null};
+const filters = structuredClone(FILTER_DEFAULTS);
 try { Object.assign(filters, JSON.parse(localStorage.getItem("band3.filters")) || {}); } catch (e) {}
 function saveFilters() {
   try { localStorage.setItem("band3.filters", JSON.stringify(filters)); } catch (e) {}
 }
-function filterCount() {
+function detailFilterCount() {
   return filters.has.length + Object.keys(filters.caps).length +
          (filters.genres.length ? 1 : 0) + (filters.decades.length ? 1 : 0);
 }
+function histFilterCount() {
+  return histSummary ? filters.hist.length + (filters.hist_stars === null ? 0 : 1) : 0;
+}
+function filterCount() { return detailFilterCount() + histFilterCount(); }
 function decade(year) { return year ? Math.floor(year / 10) * 10 : 0; }
 
 function passes(s) {
+  if (!passesHistory(s)) return false;
   if (!details) return true;
   const d = details[s.shortname];
-  if (!d) return filterCount() === 0;
+  if (!d) return detailFilterCount() === 0;
   for (const h of filters.has) {
     if (h === "harmonies" ? d.vocal_parts < 2 : !(h in d.tiers)) return false;
   }
@@ -421,6 +459,7 @@ function buildFilters() {
   const decades = [...new Set(all.map(d => decade(d.year)).filter(Boolean))].sort();
   $("f-decades").replaceChildren(...decades.map(y =>
     chip(y + "s", filters.decades.includes(y), () => toggleIn(filters.decades, y))));
+  buildHistFilters();
 }
 
 function changed() {
@@ -433,7 +472,7 @@ function changed() {
 $("filter").onclick = () => { buildFilters(); $("filters").showModal(); };
 $("f-done").onclick = () => $("filters").close();
 $("f-clear").onclick = () => {
-  Object.assign(filters, {has: [], caps: {}, genres: [], decades: []});
+  Object.assign(filters, structuredClone(FILTER_DEFAULTS));
   buildFilters();
   changed();
 };
@@ -445,6 +484,7 @@ function key(s, field) {
 
 function sortSongs() {
   const field = $("sort").value;
+  if (field.startsWith("hist_")) { sortByHistory(field); return; }
   const order = [field, "artist", "title"];
   matches.sort((a, b) => {
     for (const f of order) {
@@ -510,6 +550,8 @@ function row(s) {
   const info = el("div", "info");
   info.append(el("div", "title", s.title || s.shortname),
               el("div", "sub", [s.artist, s.album].filter(Boolean).join(" · ")));
+  const played = playedLine(s);
+  if (played) info.append(played);
   li.append(info, s.origin ? el("span", "tag", s.origin) : el("span"), pickButton(s));
   const d = details && details[s.shortname];
   if (d) li.append(meters(d));
@@ -549,6 +591,7 @@ function openSong(s, random) {
     body.append(el("div", "facts", facts.filter(Boolean).join(" · ")));
     body.append(el("h3", "", "Difficulty"), partsGrid(d.tiers));
   }
+  if (histSummary) body.append(songHistory(s));
   const actions = el("div", "actions");
   const close = el("button", "plain", "Close");
   close.onclick = () => $("sheet").close();
@@ -796,7 +839,10 @@ async function pollStatus() {
     const r = await fetch("/status");
     // RB3E has no /status: no banner, and no more asking
     if (r.status === 404) { showStatus(null); return; }
-    showStatus(r.ok ? await r.json() : null);
+    const st = r.ok ? await r.json() : null;
+    const wasPlaying = bannerSong;
+    showStatus(st);
+    if (wasPlaying && !(st && st.playing) && histSummary) loadHistory();
   } catch (e) {
     showStatus(null);
   }
@@ -815,7 +861,7 @@ const rv = {
   updates: null,     // /rv/updates' last answer
   updateRows: new Map(),  // as rows, for the updates' list
 };
-const searchText = {library: "", rv: ""};
+const searchText = {library: "", rv: "", history: ""};
 
 // ---- RhythmVerse's sort and filters, kept on this device; RhythmVerse
 // applies them, but for Downloadable only, which band3 does
@@ -1306,14 +1352,17 @@ function setMode(next) {
   for (const b of $("tabs").children) b.setAttribute("aria-pressed", b.dataset.mode === mode);
   $("lib").hidden = mode !== "library";
   $("rv").hidden = mode !== "rv";
+  $("hist").hidden = mode !== "history";
   $("lib-tools").hidden = mode !== "library";
   $("rv-tools").hidden = mode !== "rv";
   $("search").value = searchText[mode];
   $("search").placeholder = mode === "rv" ? "Search RhythmVerse's custom songs"
-                                          : "Search songs, artists, albums";
+                          : mode === "history" ? "Search played songs"
+                                               : "Search songs, artists, albums";
   if (mode === "rv" && rv.text === null) rvSearch(false);
   if (mode === "rv") loadUpdates();
-  showCount();
+  if (mode === "history") showRecent();
+  else showCount();
 }
 for (const b of $("tabs").children) b.onclick = () => { if (b.dataset.mode !== mode) setMode(b.dataset.mode); };
 
@@ -1326,12 +1375,245 @@ async function initRhythmVerse() {
     return;
   }
   $("tabs").hidden = false;
+  document.querySelector('#tabs [data-mode="rv"]').hidden = false;
   rvFiltersChanged();  // the saved filters' count on the button
   pollDownloads();
   let saved = null;
   try { saved = localStorage.getItem("band3.mode"); } catch (e) {}
   if (saved === "rv") setMode("rv");
   else loadUpdates();  // for the count of them on the tab
+}
+
+// ---- score history (band3's /history/...): each played song's plays and
+// bests, for the list's sorts, filters and played line, a song's runs in its
+// sheet, and the History tab's recent runs. null until (and unless) band3
+// keeps history.
+let histSummary = null;
+const RUN_PARTS = {drum: "Drums", bass: "Bass", guitar: "Guitar", vocals: "Vocals",
+                   harmony: "Harmonies", keys: "Keys", real_drum: "Pro Drums",
+                   real_guitar: "Pro Guitar", real_bass: "Pro Bass", real_keys: "Pro Keys"};
+const DIFFS = ["Easy", "Medium", "Hard", "Expert"];
+const HIST_CHIPS = [["never", "Never played"], ["played", "Played"],
+                    ["not_gold", "Not gold-starred"], ["stale", "Not played in 30 days"]];
+const DAY = 86400;
+
+function stars(n) { return n >= 6 ? "Gold ★" : "★" + n; }
+function partName(part, diff) { return (RUN_PARTS[part] || part) + " " + (DIFFS[diff] || ""); }
+function ago(t) {
+  const days = Math.floor((Date.now() / 1000 - t) / DAY);
+  if (days < 1) return "today";
+  if (days < 2) return "yesterday";
+  if (days < 60) return days + " days ago";
+  return new Date(t * 1000).toLocaleDateString();
+}
+
+// a song's plays and bests on the part and difficulty the filters name (any
+// of either, by default), or null for a song never played on them
+function histFor(shortname) {
+  const h = histSummary && histSummary.songs[shortname];
+  if (!h) return null;
+  let out = null;
+  for (const [key, p] of Object.entries(h.parts)) {
+    const [part, diff] = key.split(":");
+    if (filters.hist_part && part !== filters.hist_part) continue;
+    if (filters.hist_diff !== "" && diff !== String(filters.hist_diff)) continue;
+    if (!out) out = {plays: 0, last: 0, best_score: 0, best_stars: 0, best_pct: 0};
+    out.plays += p.plays;
+    out.last = Math.max(out.last, p.last);
+    out.best_score = Math.max(out.best_score, p.best_score);
+    out.best_stars = Math.max(out.best_stars, p.best_stars);
+    out.best_pct = Math.max(out.best_pct, p.best_pct);
+  }
+  return out;
+}
+
+function passesHistory(s) {
+  if (!histFilterCount()) return true;
+  const h = histFor(s.shortname);
+  for (const c of filters.hist) {
+    if (c === "never" && h) return false;
+    if (c === "played" && !h) return false;
+    if (c === "not_gold" && h && h.best_stars >= 6) return false;
+    if (c === "stale" && h && h.last > Date.now() / 1000 - 30 * DAY) return false;
+  }
+  if (filters.hist_stars !== null && h && h.best_stars > filters.hist_stars) return false;
+  return true;
+}
+
+function buildHistFilters() {
+  $("f-hist").hidden = !histSummary;
+  if (!histSummary) return;
+  const part = el("select"), diff = el("select"), best = el("select");
+  part.setAttribute("aria-label", "On the part");
+  diff.setAttribute("aria-label", "At the difficulty");
+  best.setAttribute("aria-label", "Best stars at most");
+  part.append(new Option("Any part", ""));
+  for (const [key, label] of Object.entries(RUN_PARTS)) part.append(new Option(label, key));
+  diff.append(new Option("Any difficulty", ""));
+  DIFFS.forEach((label, i) => diff.append(new Option(label, i)));
+  best.append(new Option("Any", ""));
+  for (let i = 0; i <= 5; i++) best.append(new Option(i + (i === 1 ? " star" : " stars"), i));
+  part.value = filters.hist_part;
+  diff.value = filters.hist_diff;
+  best.value = filters.hist_stars === null ? "" : filters.hist_stars;
+  part.onchange = () => { filters.hist_part = part.value; changed(); };
+  diff.onchange = () => { filters.hist_diff = diff.value === "" ? "" : Number(diff.value); changed(); };
+  best.onchange = () => { filters.hist_stars = best.value === "" ? null : Number(best.value); changed(); };
+  $("f-hist-on").replaceChildren(el("span", "", "On"), part, el("span", "", "At"), diff,
+                                 el("span", "", "Best stars at most"), best);
+  $("f-hist-chips").replaceChildren(...HIST_CHIPS.map(([key, label]) =>
+    chip(label, filters.hist.includes(key), () => toggleIn(filters.hist, key))));
+}
+
+// Last played, Most played, Least played; artist and title after
+function sortByHistory(field) {
+  const value = s => {
+    const h = histFor(s.shortname);
+    if (field === "hist_last") return h ? h.last : 0;
+    return h ? h.plays : 0;
+  };
+  const sign = field === "hist_least" ? 1 : -1;
+  matches.sort((a, b) => sign * (value(a) - value(b)) ||
+    key(a, "artist").localeCompare(key(b, "artist")) || key(a, "title").localeCompare(key(b, "title")));
+}
+
+function playedLine(s) {
+  const h = histFor(s.shortname);
+  if (!h) return null;
+  const bits = ["Played " + h.plays + "×"];
+  if (h.best_score) bits.push(stars(h.best_stars), h.best_pct + "%");
+  return el("div", "played", bits.join(" · "));
+}
+
+// a line of scores, oldest first
+function sparkline(scores) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("class", "spark");
+  svg.setAttribute("viewBox", "0 0 100 40");
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Score over time");
+  const lo = Math.min(...scores), hi = Math.max(...scores);
+  const line = document.createElementNS(ns, "polyline");
+  line.setAttribute("points", scores.map((v, i) =>
+    (scores.length > 1 ? 100 * i / (scores.length - 1) : 50) + "," +
+    (hi > lo ? 36 - 32 * (v - lo) / (hi - lo) : 20)).join(" "));
+  svg.append(line);
+  return svg;
+}
+
+// one run: when (or which part), the score, and the rest below
+function runLine(r, withPart) {
+  const row = el("div", r.counts ? "run" : "run dim");
+  const tags = [];
+  if (r.speed !== 100) tags.push(r.speed + "% speed");
+  tags.push(...r.modifiers.map(m => m.replace(/_/g, " ")));
+  if (r.autoplay) tags.push("autoplay");
+  row.append(el("div", "", ago(r.t) + " · " + partName(r.part, r.diff)),
+             el("div", "score", r.score.toLocaleString()));
+  const facts = [stars(r.stars), r.pct + "%", "streak " + r.streak];
+  if (r.solo_pct !== undefined) facts.push("solo " + r.solo_pct + "%");
+  if (r.od_deploys) facts.push(r.od_deploys + " overdrive");
+  if (r.band_size > 1) facts.push("band of " + r.band_size);
+  row.append(el("div", "sub", facts.concat(tags).join(" · ")));
+  return row;
+}
+
+// the part + difficulty a song was played on most
+function topPart(h) {
+  return Object.entries(h.parts).sort((a, b) => b[1].plays - a[1].plays)[0][0];
+}
+
+// a song's sheet: its best per part, its score over time, its runs
+function songHistory(s) {
+  const box = el("div");
+  const h = histSummary.songs[s.shortname];
+  box.append(el("h3", "", "History"));
+  if (!h) { box.append(el("div", "facts", "Not played yet.")); return box; }
+  const best = el("div", "parts");
+  for (const [k, p] of Object.entries(h.parts).sort((a, b) => b[1].plays - a[1].plays)) {
+    const [part, diff] = k.split(":");
+    best.append(el("span", "", partName(part, Number(diff))),
+                el("span", "", p.best_score ? p.best_score.toLocaleString() + " · " + stars(p.best_stars) : "–"),
+                el("span", "tier", "Played " + p.plays + "× · " + ago(p.last)));
+  }
+  const runs = el("div", "facts", "Loading runs…");
+  box.append(best, runs);
+  fetch("/history/runs?shortname=" + encodeURIComponent(s.shortname))
+    .then(r => r.json())
+    .then(j => {
+      const list = j.runs || [];
+      // the score line: the most played part's runs that count
+      const top = topPart(h);
+      const scores = list.filter(r => r.counts && r.part + ":" + r.diff === top)
+                         .map(r => r.score).reverse();
+      const out = [];
+      if (scores.length > 1) {
+        const [part, diff] = top.split(":");
+        out.push(el("div", "facts", partName(part, Number(diff)) + ", score over time"), sparkline(scores));
+      }
+      out.push(...list.map(r => runLine(r)));
+      runs.replaceWith(...out);
+    })
+    .catch(() => { runs.textContent = "Couldn't load the runs."; });
+  return box;
+}
+
+// the History tab: the last runs across all songs, searchable; a tap opens
+// the song
+async function showRecent() {
+  $("hist-message").textContent = "Loading…";
+  try {
+    const r = await fetch("/history/recent?limit=200");
+    const j = await r.json();
+    const words = $("search").value.toLowerCase().split(/\s+/).filter(Boolean);
+    const runs = (j.runs || []).filter(x =>
+      words.every(w => (x.title + " " + x.artist).toLowerCase().includes(w)));
+    const bySong = new Map(songs.map(x => [x.shortname, x]));
+    $("hist-list").replaceChildren(...runs.map(x => {
+      const s = bySong.get(x.shortname) || {shortname: x.shortname, title: x.title, artist: x.artist};
+      const li = el("li");
+      if (hasArt) li.append(art(s));
+      const info = el("div", "info");
+      info.append(el("div", "title", x.title + " – " + x.artist), runLine(x));
+      li.append(info);
+      li.onclick = () => openSong(s, false);
+      return li;
+    }));
+    $("hist-message").textContent = !(j.runs && j.runs.length)
+      ? "No songs played yet: finished songs show up here."
+      : runs.length ? "" : "No runs match.";
+    $("count").textContent = j.runs && j.runs.length ? runs.length + " recent runs" : "";
+  } catch (e) {
+    $("hist-message").textContent = "Couldn't load the history.";
+  }
+}
+
+async function loadHistory() {
+  try {
+    const r = await fetch("/history/summary");
+    if (!r.ok) return;
+    const j = await r.json();
+    if (!j.enabled) return;
+    const first = !histSummary;
+    histSummary = j;
+    if (first) {
+      $("tabs").hidden = false;
+      document.querySelector('#tabs [data-mode="history"]').hidden = false;
+      for (const [value, label] of [["hist_last", "Last played"], ["hist_most", "Most played"],
+                                    ["hist_least", "Least played"]]) {
+        $("sort").append(new Option(label, value));
+      }
+      let saved = null;
+      try { saved = localStorage.getItem("band3.sort"); } catch (e) {}
+      if (saved && saved.startsWith("hist_")) $("sort").value = saved;
+      try { saved = localStorage.getItem("band3.mode"); } catch (e) { saved = null; }
+      if (saved === "history") setMode("history");
+    }
+    changed();
+    if (mode === "history") showRecent();
+  } catch (e) {}
 }
 
 // ---- loading
@@ -1365,6 +1647,7 @@ async function load() {
       pollStatus();
       initRhythmVerse();
       loadDupes();
+      loadHistory();
     }
   } catch (e) {
     $("message").textContent = "Couldn't load the songs: " + e.message + " ";
@@ -1379,6 +1662,7 @@ $("search").addEventListener("input", () => {
   clearTimeout(searchTimer);
   // RhythmVerse is asked once typing stops for a moment, not at every key
   if (mode === "rv") searchTimer = setTimeout(() => rvSearch(false), 700);
+  else if (mode === "history") searchTimer = setTimeout(showRecent, 150);
   else searchTimer = setTimeout(filter, 150);
 });
 $("search").addEventListener("keydown", e => {
@@ -1387,7 +1671,14 @@ $("search").addEventListener("keydown", e => {
   rvSearch(false);
 });
 $("rv-more").addEventListener("click", () => rvSearch(true));
-$("sort").addEventListener("change", filter);
+try {
+  const saved = localStorage.getItem("band3.sort");
+  if (saved && [...$("sort").options].some(o => o.value === saved)) $("sort").value = saved;
+} catch (e) {}
+$("sort").addEventListener("change", () => {
+  try { localStorage.setItem("band3.sort", $("sort").value); } catch (e) {}
+  filter();
+});
 $("more").addEventListener("click", showMore);
 load();
 </script>

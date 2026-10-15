@@ -86,6 +86,7 @@ add_executable(band3_tests
     package_scan_test.cpp
     stfs_reader_test.cpp
     json_test.cpp
+    score_history_test.cpp
     rhythmverse_test.cpp
     file_hosts_test.cpp
     song_inventory_test.cpp
@@ -194,6 +195,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Net/port_mapping_protocol.cpp
     ${BAND3_ROOT}/src/Net/http_request.cpp
     ${BAND3_ROOT}/src/Net/json.cpp
+    ${BAND3_ROOT}/src/History/score_history.cpp
     ${BAND3_ROOT}/src/Net/milo.cpp
     ${BAND3_ROOT}/src/Net/game_assets.cpp
     ${BAND3_ROOT}/src/Net/lyrics.cpp

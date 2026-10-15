@@ -188,6 +188,8 @@ constexpr Setting kSettings[] = {
      .widget = kCheckbox},
     {.cvar = "autosave", .tab = kGame, .section = "Game", .label = "Autosave",
      .widget = kCheckbox},
+    {.cvar = "score_history", .tab = kGame, .section = "Game", .label = "Score history",
+     .widget = kCheckbox},
     {.cvar = "skip_profile_prompt", .tab = kGame, .section = "Game",
      .label = "Join without a profile as a guest", .widget = kCheckbox},
     {.cvar = "disable_metamusic", .tab = kGame, .section = "Game", .label = "Menu music",

@@ -30,6 +30,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 |---|---|---|---|
 | `fast_start`<br>Skip the splash screens | `false` | `true`, `false` | Skip the splash screens once the game has finished initializing *Applies at the next start.* |
 | `autosave`<br>Autosave | `true` | `true`, `false` | Let the game autosave profiles, after songs and setlist edits. Off, they're only saved from the options menu, e.g. to test with autoplay without touching your profile |
+| `score_history`<br>Score history | `true` | `true`, `false` | Keep every finished song's results (score, stars, notes hit, streak, overdrive) in score_history.jsonl in the user data folder, for the web page's History tab and its played and stars filters. Songs played on autoplay aren't kept |
 | `skip_profile_prompt`<br>Join without a profile as a guest | `true` | `true`, `false` | Players who join without a profile join as guests, without the game asking them to choose one (No Profile, Sign In, Swap to User). Off, it asks, as on a console |
 | `disable_metamusic`<br>Menu music | `false` | `true`, `false` | Disable the background menu music *Applies at the next start.* |
 | `forced_venue`<br>Forced venue | `false` | text; `false` Don't force, `arena` Arena, `big_club` Big club, `small_club` Small club, `festival` Festival, `video` Video venue, `none` None (black background) | Venue to force, applied from the next venue load. false = don't force. A venue (arena_04), a class (arena, big_club, small_club, festival, video), none for a black background, or a comma separated list to pick from at random |
@@ -375,6 +376,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `stagekit_fake` | `false` | `true`, `false` | With stagekit_usb on: add a pretend USB Stage Kit that keeps the commands it's sent, for the harness's lights command |
 | `test_port` | `0` | `0` to `65535` | Take test harness commands on this local TCP port (0 = off), for tools/band3ctl.py. Connects the virtual instrument as player 1 *Applies at the next start.* |
 | `test_random_seed` | `0` | `0` to `2147483647` | Seed the game's random numbers with this instead of the clock (0 = off), so a fresh profile gets the same band on every launch, for render checks *Applies at the next start.* |
+| `test_score_history` | *(empty)* | text | With test_port set: keep score history in this file, autoplay runs included, in place of score_history.jsonl, which a harness session never writes to (empty = keep none) *Applies at the next start.* |
 | `usb_mic_test_tone` | `0` | `0` to `2000` | Sing a steady tone at this pitch in Hz into the first mic slot instead of using microphones, to check that the game hears it. 0 = off *Applies at the next start.* |
 | `virtual_instrument` | `false` | `true`, `false` | Connect a virtual Xbox 360 instrument, played from the Instrument Lab (F6) |
 | `virtual_instrument_player` | `2` | `1` to `4` | Player slot the virtual instrument connects as, 1-4. Other controllers keep their order around it |

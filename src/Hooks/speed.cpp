@@ -1,6 +1,8 @@
 #include <rex/hook.h>
 #include <rex/logging.h>
 #include <rex/types.h>
+#include <atomic>
+#include "speed.h"
 #include "src/settings.h"
 
 // The song_speed and track_speed multipliers, applied where RB3Enhanced applies
@@ -11,12 +13,22 @@
 extern "C" void __imp__Game__SetMusicSpeed(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__TrackDir__SetScrollSpeed(PPCContext& ctx, uint8_t* base);
 
+namespace {
+// the speed the song plays at, as last set
+std::atomic<double> g_music_speed{1.0};
+}
+
+double band3::speed::MusicSpeed() {
+    return g_music_speed.load();
+}
+
 // Game::SetMusicSpeed(Game*, float speed): 1 for a normal song. Practice mode
 // and Deluxe's song speed modifier ask for other speeds, which are left alone.
 extern "C" REX_FUNC(Game__SetMusicSpeed)
 {
     if (ctx.f1.f64 == 1.0) ctx.f1.f64 = band3::settings::SongSpeed();
     REXLOG_DEBUG("Music speed: {:.2f}", ctx.f1.f64);
+    g_music_speed.store(ctx.f1.f64);
     __imp__Game__SetMusicSpeed(ctx, base);
 }
 

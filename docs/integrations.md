@@ -246,6 +246,8 @@ networks for other devices to reach it.
 - A banner says what the game is doing: during a song, which, how far in, and the score.
 - **Duplicates** lists songs in more than one package ([Duplicate songs](#duplicate-songs)),
   and **RhythmVerse** searches custom songs to download ([RhythmVerse](#rhythmverse)).
+- **History** lists the songs you've finished, and the library sorts and filters by them
+  ([Score history](#score-history)).
 
 It answers RB3Enhanced's API, so RB3E's page and tools written for it work too:
 
@@ -273,6 +275,9 @@ band3 adds its own, which RB3E doesn't have:
 | `/rv/downloads` | this session's downloads as JSON: the `folder` they go to, and each one's `state` (`queued`, `downloading`, `done`, `failed`), `received`, `total`, `error`, `song_id`, `update` and `in_library` |
 | `/rv/updates` | newer versions on RhythmVerse of the songs band3 downloaded, as JSON: `checking` (a check is running), `checked` (when the last one finished, in seconds since 1970; 0 for never), `error` (why the last one failed), `downloads` (how many songs band3 has downloaded) and `updates`, songs as `/rv/search` gives them, with `update` `available`, or `pending` once downloaded |
 | `POST /rv/check` | checks RhythmVerse for those updates now (send `{}` as JSON); `/rv/updates` says when it's done |
+| `/history/summary` | [score history](#score-history)'s played songs as JSON: `songs` by shortname, each with `plays`, `last` (seconds since 1970) and `parts` by `<part>:<difficulty>` (`real_drum:3`), each with `plays`, `last`, `best_score`, `best_stars` (6 is gold) and `best_pct`, the bests from runs that count (0 when none does). `{"enabled": false}` with `score_history` off, as for all three |
+| `/history/runs?shortname=<name>` | that song's runs, newest first, as JSON (`runs`): each with `t`, `shortname`, `song_id`, `title`, `artist`, `part`, `diff` (0 easy to 3 expert), `score`, `stars`, `pct`, `streak`, `od_deploys`, `solo_pct` and `unison` (when the part has them), `band_size`, `speed` (percent), `modifiers`, `autoplay` (harness runs only) and `counts` (toward bests). Optional: `part=`, `diff=` |
+| `/history/recent?limit=<n>` | the last runs across all songs, newest first, as `/history/runs` gives them (50 by default, 500 at most) |
 
 - `http_allow_cors` adds `Access-Control-Allow-Origin: *`, for pages served from elsewhere.
 - Requests wait for the game's next frame, and get a 503 if it doesn't come within 5 s.
@@ -283,7 +288,26 @@ band3 adds its own, which RB3E doesn't have:
 http://127.0.0.1:21080/, with songs read from the game data. It reloads `src/Net/http_page.h`
 on every request, so edits show on a refresh. **Select** can't work there, `--status` (`menu`,
 `library` or `playing`) sets what `/status` says, and RhythmVerse downloads and updates are
-made up.
+made up, as is the score history.
+
+### Score history
+
+With `score_history` on (the default), band3 keeps each player's results whenever a song is
+finished: score, stars, notes hit, longest streak, overdrive deploys, solo and unison
+results, the part and difficulty, the song's speed and the modifiers on. They're kept in
+`score_history.jsonl` in the user data folder, one run a line, for every player, guests
+included. A song quit or failed isn't kept, nor one played on autoplay.
+
+- The web page's **History** tab lists the latest runs; a song's details show its best per
+  part, its score over time and every run.
+- The library sorts by **Last played**, **Most played** and **Least played**, and **Filters**
+  gains **Never played**, **Played**, **Not gold-starred**, **Not played in 30 days** and a
+  best-stars cap, judged on a part and difficulty you pick, or any.
+- Bests count only runs at full speed without modifiers (No Fail, and RB3Enhanced's Force
+  HOPOs, Mirror Mode, the shuffles and Double Bass Pedal); slowed or modified runs still count
+  as plays.
+- The test harness never writes to it: a harness session keeps its runs, autoplay ones
+  included, in `test_score_history`'s file if one is set (`tools/score_history_check.py`).
 
 ### Karaoke and live pages
 

@@ -22,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -42,6 +43,7 @@
 #include <rex/runtime.h>
 #include "src/config.h"
 #include "src/Content/package_songs.h"
+#include "src/History/score_history.h"
 #include "src/game_writes.h"
 #include "src/settings.h"
 #include "src/Test/game_state.h"
@@ -544,6 +546,30 @@ std::string RhythmVerseUpdates(bool cors) {
                     rhythmverse::FormatUpdates(local, rhythmverse::CheckStatus()), cors);
 }
 
+// the /history endpoints: {"enabled":false} with score_history off (a harness
+// session keeps it in test_score_history's file, whatever the setting)
+std::string History(const Request& request, Endpoint endpoint, bool cors) {
+    const history::Store* store = history::Get();
+    const bool on = store && (REXCVAR_GET(score_history) || REXCVAR_GET(test_port) != 0);
+    if (!on) return Response(200, "application/json", history::DisabledJson(), cors);
+    std::string json;
+    if (endpoint == Endpoint::kHistorySummary) {
+        json = store->Summary();
+    } else if (endpoint == Endpoint::kHistoryRecent) {
+        const int limit = std::atoi(QueryParam(request.target, "limit").value_or("50").c_str());
+        json = store->Recent(static_cast<size_t>(std::clamp(limit, 1, 500)));
+    } else {
+        const auto shortname = QueryParam(request.target, "shortname");
+        if (!shortname || shortname->empty()) {
+            return Response(400, kText, "Give the song's shortname", cors);
+        }
+        const auto diff = QueryParam(request.target, "diff");
+        json = store->Runs(*shortname, QueryParam(request.target, "part").value_or(""),
+                           diff && !diff->empty() ? std::atoi(diff->c_str()) : -1);
+    }
+    return Response(200, "application/json", json, cors);
+}
+
 std::string Handle(const Request& request) {
     const bool cors = REXCVAR_GET(http_allow_cors);
     const Route route = MatchRoute(request.target);
@@ -706,6 +732,10 @@ std::string Handle(const Request& request) {
             return Response(asset->status, asset->type, asset->body, cors,
                             asset->status == 200 ? kAssetMaxAge : 0);
         }
+        case Endpoint::kHistorySummary:
+        case Endpoint::kHistoryRuns:
+        case Endpoint::kHistoryRecent:
+            return History(request, route.endpoint, cors);
         case Endpoint::kNotFound:
             break;
     }
