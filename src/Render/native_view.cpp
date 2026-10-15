@@ -18,6 +18,7 @@
 #include "src/crash_trace.h"
 #include "src/settings.h"
 #include "src/stall_watch.h"
+#include "src/steam_deck.h"
 
 #include <imgui.h>
 #include <rex/cvar.h>
@@ -114,6 +115,26 @@ std::string DescribeGpu(const GpuStats& gs, bool output) {
     std::snprintf(buf, sizeof(buf), format, gs.draws, gs.passes, gs.skipped, gs.uploads, gs.ms,
                   gs.wait_ms, gs.rt_missing);
     return buf;
+}
+
+// native_world_ahead's decision (WorldAheadWanted) for the log: what applied,
+// why, and the GPU. `waits`: the pipeline keeping it off, as it waits
+// differently; null if none.
+std::string DescribeWorldAhead(bool setting_on, bool auto_on, const GpuKind& gpu,
+                               bool steam_deck, const char* waits) {
+    const bool integrated = gpu.integrated.value_or(false);
+    std::string about_gpu = !gpu.integrated ? "GPU type unknown"
+                            : integrated    ? "integrated GPU"
+                                            : "discrete GPU";
+    if (!gpu.name.empty()) about_gpu += ": " + gpu.name;
+    if (!WorldAheadWanted(setting_on, auto_on, integrated, steam_deck)) {
+        return auto_on ? "off (" + about_gpu + "; native_world_ahead_auto on)"
+                       : "off (native_world_ahead_auto off; " + about_gpu + ")";
+    }
+    if (waits) return std::string("off (") + waits + " on; " + about_gpu + ")";
+    if (setting_on) return "on (native_world_ahead; " + about_gpu + ")";
+    return integrated ? "on by itself (" + about_gpu + ")"
+                      : "on by itself (Steam Deck; " + about_gpu + ")";
 }
 
 int64_t Nanoseconds(std::chrono::steady_clock::time_point t) {
@@ -789,6 +810,13 @@ class Renderer {
         // native_world_ahead's choice, measured per stretch and restore
         AheadChooser ahead_choice;
         uint64_t ahead_generation = 0, ahead_resumes = 0;
+        // what native_world_ahead_auto goes by (WorldAheadWanted): the GPU,
+        // known once it draws (GpuRenderer::Kind), and whether this is a
+        // Steam Deck
+        std::optional<GpuKind> gpu_kind;
+        const bool steam_deck = band3::steam_deck::IsSteamDeck();
+        // whether the world was drawn ahead, as last logged; -1 none yet
+        int ahead_logged = -1;
         // the last frame's stretch and restores (SetPaused); for a starting
         // stretch, captures seen while waiting for its first
         uint64_t drawn_generation = 0, start_generation = 0, start_seen = 0;
@@ -886,12 +914,28 @@ class Renderer {
                 pipeline = REXCVAR_GET(native_present_pipeline);
                 o.gpu_no_wait = pipeline || upload_pipe;
                 o.output_readback = upload_pipe;
-                // not with either pipeline, which wait differently
-                o.world_ahead = REXCVAR_GET(native_world_ahead) && !o.gpu_no_wait;
                 o.world_period = pacing::WorldPeriod();
                 // not in menus: textures kept from them into a song kept the
                 // texture arrays from ever emptying
                 o.clock_keep = InSong();
+            }
+            // native_world_ahead, or by itself on an integrated GPU or a Steam
+            // Deck (native_world_ahead_auto); not with either pipeline, which
+            // wait differently. Logged once the GPU draws, and as it changes.
+            if (gpu && !gpu_kind) gpu_kind = GpuRenderer::Get().Kind();
+            const bool ahead_setting = REXCVAR_GET(native_world_ahead);
+            const bool ahead_auto = REXCVAR_GET(native_world_ahead_auto);
+            o.world_ahead = WorldAheadWanted(ahead_setting, ahead_auto,
+                                             gpu_kind && gpu_kind->integrated.value_or(false),
+                                             steam_deck) &&
+                            !o.gpu_no_wait;
+            if (gpu_kind && int(o.world_ahead) != ahead_logged) {
+                ahead_logged = int(o.world_ahead);
+                REXLOG_INFO("native_world_ahead: {}",
+                            DescribeWorldAhead(ahead_setting, ahead_auto, *gpu_kind, steam_deck,
+                                               pipeline      ? "native_present_pipeline"
+                                               : upload_pipe ? "native_upload_pipeline"
+                                                             : nullptr));
             }
             // only where holding frames keeps two from one paint and the
             // phase lock doesn't steer (frame_pacing.h's PacePublishing);
@@ -1911,6 +1955,31 @@ class D3D12Present {
     };
     View views_[GpuRenderer::kOutputs];
 };
+
+// The SDK's device's GPU, for native_world_ahead_auto (GpuRenderer::Kind):
+// integrated if Direct3D 12 says its memory is the system's (UMA), named as
+// DXGI names its adapter (as crash_trace.cpp's AdapterName does)
+GpuKind SdkGpuKind(const rex::ui::d3d12::D3D12Provider& d3d12) {
+    GpuKind kind;
+    ID3D12Device* device = d3d12.GetDevice();
+    if (!device) return kind;
+    D3D12_FEATURE_DATA_ARCHITECTURE architecture{};  // node 0
+    if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE, &architecture,
+                                              sizeof(architecture))))
+        kind.integrated = architecture.UMA != FALSE;
+    ComPtr<IDXGIFactory4> factory;
+    ComPtr<IDXGIAdapter1> adapter;
+    DXGI_ADAPTER_DESC1 desc{};
+    char name[512];
+    if (d3d12.GetDXGIFactory() &&
+        SUCCEEDED(d3d12.GetDXGIFactory()->QueryInterface(IID_PPV_ARGS(&factory))) &&
+        SUCCEEDED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) &&
+        SUCCEEDED(adapter->GetDesc1(&desc)) &&
+        WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof(name), nullptr,
+                            nullptr) > 0)
+        kind.name = name;
+    return kind;
+}
 #endif
 
 // UI thread: re-Follow once the emulated picture is fresh, if the drawer
@@ -1946,7 +2015,7 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             UINT64 frequency = 0;
             ID3D12CommandQueue* queue = d3d12.GetDirectQueue();
             if (!queue || FAILED(queue->GetTimestampFrequency(&frequency))) frequency = 0;
-            GpuRenderer::Get().SetPresentDevice(d3d12.GetDevice(), frequency);
+            GpuRenderer::Get().SetPresentDevice(d3d12.GetDevice(), frequency, SdkGpuKind(d3d12));
             // DRED on device removal, either renderer; the only place band3
             // has the SDK's device from the start
             crash_trace::WatchD3D12Device(d3d12.GetDevice(), d3d12.GetDirectQueue());

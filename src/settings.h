@@ -147,6 +147,7 @@ REXCVAR_DECLARE(bool, native_present_request_paint);
 REXCVAR_DECLARE(bool, native_present_pipeline);
 REXCVAR_DECLARE(bool, native_upload_pipeline);
 REXCVAR_DECLARE(bool, native_world_ahead);
+REXCVAR_DECLARE(bool, native_world_ahead_auto);
 REXCVAR_DECLARE(int32_t, native_query_sample_count);
 REXCVAR_DECLARE(bool, native_query_log);
 REXCVAR_DECLARE(int32_t, native_sync_short_wait_us);

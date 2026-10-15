@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -344,6 +345,15 @@ struct GpuOutput {
     uint64_t generation = 0;
 };
 
+// The GPU the native renderer draws on, for native_world_ahead_auto
+// (present_model.h's WorldAheadWanted)
+struct GpuKind {
+    // it shares the system's memory (an integrated GPU); nullopt where that
+    // couldn't be told
+    std::optional<bool> integrated;
+    std::string name;
+};
+
 class GpuRenderer {
  public:
     static GpuRenderer& Get();
@@ -414,7 +424,15 @@ class GpuRenderer {
     // outputs must live on. UI thread, before CheckZeroCopy.
     // `timestamp_frequency`: its direct queue's ticks a second (0: no GPU
     // timings), shared by SDL_gpu's direct queue on the same device.
-    void SetPresentDevice(void* d3d12_device, uint64_t timestamp_frequency = 0);
+    // `kind`: what that GPU is (Kind).
+    void SetPresentDevice(void* d3d12_device, uint64_t timestamp_frequency = 0,
+                          GpuKind kind = {});
+    // The GPU it draws on: on Direct3D 12 the SDK's device's, from
+    // SetPresentDevice (zero-copy needs SDL_gpu's device to be that one); on
+    // Vulkan SDL's device's type, which Init reads from SDL 3.4.14's renderer
+    // under the GPU timings' layout checks. Not known before either. Any
+    // thread; waits out a frame being drawn.
+    GpuKind Kind();
     // No device this session (the SDK's GPU mustn't be shared), and why. UI
     // thread, before Init; after it, the device is let go and the native view
     // draws on the CPU from the next frame.

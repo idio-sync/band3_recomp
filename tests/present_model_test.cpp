@@ -945,6 +945,35 @@ TEST_CASE("which emitters write their packets at each level") {
     }
 }
 
+TEST_CASE("native_world_ahead on draws the world ahead on any GPU") {
+    for (bool automatic : {false, true}) {
+        for (bool integrated : {false, true}) {
+            for (bool deck : {false, true}) {
+                CAPTURE(automatic);
+                CAPTURE(integrated);
+                CAPTURE(deck);
+                CHECK(WorldAheadWanted(true, automatic, integrated, deck));
+            }
+        }
+    }
+}
+
+TEST_CASE("native_world_ahead_auto draws it ahead on an integrated GPU or a Steam Deck only") {
+    CHECK(WorldAheadWanted(false, true, true, false));
+    // a Deck whose GPU couldn't be told (SDL's Vulkan renderer unchecked)
+    CHECK(WorldAheadWanted(false, true, false, true));
+    CHECK(WorldAheadWanted(false, true, true, true));
+    // a discrete GPU, or one not known to be integrated
+    CHECK_FALSE(WorldAheadWanted(false, true, false, false));
+}
+
+TEST_CASE("with native_world_ahead_auto off only native_world_ahead draws it ahead") {
+    CHECK_FALSE(WorldAheadWanted(false, false, true, false));
+    CHECK_FALSE(WorldAheadWanted(false, false, false, true));
+    CHECK_FALSE(WorldAheadWanted(false, false, true, true));
+    CHECK_FALSE(WorldAheadWanted(false, false, false, false));
+}
+
 namespace {
 // one of AheadChooser's windows: a capture drawn a frame apart, `skipped`
 // skipped before every `every`-th, until the window ends; the time after it

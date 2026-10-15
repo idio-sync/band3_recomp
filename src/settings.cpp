@@ -649,11 +649,23 @@ REXCVAR_DEFINE_BOOL(native_world_ahead, false, "Band3/Advanced/Native renderer",
     "frame's half of the pair: on a 60 Hz laptop post frames went from 14 to 8 ms and the "
     "picture's latency fell 3 to 6 ms, the picture the same. Where post frames drawn this way "
     "still run about a frame's time it skips more frames than without, so it measures both "
-    "every few seconds and keeps the one that skips fewer. Worth turning on for a low-powered "
-    "system, such as a laptop's integrated GPU at 60 Hz (a Radeon 680M: 5 ms less latency, a "
-    "sixth fewer repeated frames); off by default, as on a fast desktop GPU at 120 Hz it made "
-    "things worse, and it sends GPU work it doesn't wait for, as the setup that once hung AMD "
-    "GPUs did (not seen with this one)");
+    "every few seconds and keeps the one that skips fewer. On draws it ahead on any GPU; off "
+    "leaves it to native_world_ahead_auto, which does on an integrated GPU or a Steam Deck (a "
+    "laptop's Radeon 680M at 60 Hz: 5 ms less latency, a sixth fewer repeated frames) and not "
+    "on other GPUs, as on a fast desktop GPU at 120 Hz it made things worse. It sends GPU work "
+    "it doesn't wait for, as the setup that once hung AMD GPUs did (not seen with this one). "
+    "Not with native_present_pipeline on, or on Linux native_upload_pipeline (on by default), "
+    "which wait differently");
+
+REXCVAR_DEFINE_BOOL(native_world_ahead_auto, true, "Band3/Advanced/Native renderer",
+    "Draw the world ahead (native_world_ahead) by itself on an integrated GPU (one that shares "
+    "the system's memory, as a laptop's does) and on a Steam Deck: on a Radeon 680M at "
+    "1920x1200, 60 Hz, a song's post frames went from 11.1 to 6.2 ms, latency from 22.5 to "
+    "17.5 ms and repeated frames fell by a sixth, the picture the same. Not on other GPUs: a "
+    "fast desktop one at 120 Hz did worse with it. native_world_ahead on draws it ahead on any "
+    "GPU either way; with this off, only that does. On Linux neither does while "
+    "native_upload_pipeline is on, its default. The log says which applied, with the GPU's "
+    "name");
 
 // read by src/Render/query_answers.cpp and the sync-only GPU
 REXCVAR_DEFINE_INT32(native_query_sample_count, -1, "Band3/Advanced/Native renderer",

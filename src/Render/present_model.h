@@ -217,6 +217,17 @@ class PublishPacer {
     int64_t interval_ns_ = 16666667;  // 60 Hz until measured
 };
 
+// Whether the world is drawn ahead (native_world_ahead; AheadChooser then
+// gates it as it goes): anywhere with the setting on, and with
+// native_world_ahead_auto on an integrated GPU (one that shares the system's
+// memory) or a Steam Deck, where it helps (a laptop's Radeon 680M at 60 Hz:
+// latency 22.5 to 17.5 ms, a sixth fewer repeated frames). A fast desktop GPU
+// at 120 Hz did worse with it, so a discrete GPU, or one not known to be
+// integrated, draws it ahead only when asked.
+inline bool WorldAheadWanted(bool setting_on, bool auto_on, bool integrated_gpu, bool steam_deck) {
+    return setting_on || (auto_on && (integrated_gpu || steam_deck));
+}
+
 // Whether native_world_ahead draws the world ahead now. It helps while the
 // GPU keeps up and while it's far behind, but in between it feeds itself: a
 // slow post frame skips the next world capture, wasting the world drawn

@@ -73,7 +73,8 @@ What each does, how it was measured and why it defaults as it does. The
   turn off the presenting above, to compare.
 - `native_present_pipeline`: records the next frame while the GPU draws the one before.
   Keep it off: it hangs AMD GPUs and grows video memory.
-- `native_world_ahead` (experimental, off): with even/odd rendering, draws each world frame's
+- `native_world_ahead` (experimental; off, but on by itself on an integrated GPU or a Steam
+  Deck with `native_world_ahead_auto`): with even/odd rendering, draws each world frame's
   venue right after that frame without waiting for it, so the post frame after it only
   post-processes it and draws its overlay; the world's GPU time moves into the world frame's
   half of the pair. On a 60 Hz laptop in a paused song post frames went from 14 to 8 ms and
@@ -81,8 +82,9 @@ What each does, how it was measured and why it defaults as it does. The
   missing ones were pacing's, not the renderer's). In a playing song on that laptop (3 runs
   each, 2026-10-14) it was used on 85-89% of post frames: post frames' worker time 11.1 to
   6.2 ms at the median and 19.9 to 13.8 ms at p95, latency 22.5 to 17.5 ms, repeats 70 to 58
-  a minute; on the R9700 at 120 Hz it hurt, so it stays off by default and the user docs
-  suggest it for low-powered systems. Where post frames drawn this way still run about a frame's
+  a minute; on the R9700 at 120 Hz it hurt, so it's off by default and
+  `native_world_ahead_auto` (on) turns it on by itself where the GPU is integrated and on a
+  Steam Deck (below). Where post frames drawn this way still run about a frame's
   time it backfires (one too slow skips the next world frame, so the world drawn ahead is
   wasted and the post frame after draws the whole world, too slow again), so it measures the
   frames skipped with it and without in 2 s windows, keeps the one that skips fewer, and
@@ -91,6 +93,15 @@ What each does, how it was measured and why it defaults as it does. The
   `native_view stats`' `by_kind` has `ahead` (the world frames' milliseconds drawing it),
   `ahead_gated` (world frames it chose not to), `ahead_used` (post frames that used it) and
   `ahead_fallback_passes` (world texture passes a post frame drew itself all the same).
+  `present_model.h`'s `WorldAheadWanted` has the rule; either pipeline still keeps it off.
+  Integrated, on Direct3D 12: the SDK's device has a unified memory architecture
+  (`D3D12_FEATURE_ARCHITECTURE`'s `UMA`; `native_view.cpp`'s `SdkGpuKind`, which names it as
+  DXGI names its adapter). On Vulkan: SDL's device's `deviceType` is
+  `VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU`, read once as the device is made, from SDL
+  3.4.14's renderer behind a command buffer then cancelled, under the GPU timings' layout
+  checks (`gpu_view.cpp`'s `ReadVulkanKind`); where those fail, only `steam_deck.h`'s
+  `IsSteamDeck` is left. The worker logs what applied once the GPU draws and as it changes
+  (`native_world_ahead: on by itself (integrated GPU: AMD Radeon(TM) Graphics)`).
 - `native_query_sample_count`, `native_query_log`: the occlusion queries' answers (with
   either GPU). `native_sync_short_wait_us`, `native_vblank_free_running`: the sync-only
   GPU's pacing.

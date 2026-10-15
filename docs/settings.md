@@ -335,6 +335,37 @@ extensions). Files packaged for RB3Enhanced go in as they are, `(..)` folders in
 - Each replaced file is logged as `NewFile: <path>`. If a mod doesn't show up, set `log_level =
   debug` to also list every file read from the ARK, marked `(ARK)`.
 
+## Laptops and other low-powered systems
+
+An integrated GPU shares the system's memory, and its power, with the CPU. band3 does what it
+can there by itself, the picture the same:
+
+- The [native renderer](native-renderer.md#settings) draws each world frame's venue ahead
+  (`native_world_ahead`) by itself on an integrated GPU and on a Steam Deck
+  (`native_world_ahead_auto`; on Linux only with `native_upload_pipeline` off). On a laptop's
+  Radeon 680M at 1920x1200, 60 Hz, latency fell from 22.5 to 17.5 ms and repeated frames by a
+  sixth.
+- It draws the common venue materials with smaller versions of its shader
+  (`native_view_shader_variants`, on by default): on that laptop repeated frames went from 83
+  to 52 a minute, on a Steam Deck at 1080p from 54 to 23 per 28 s.
+
+The rest is the system's. On that laptop, with Windows' processor performance boost mode set to
+Disabled, the processor package drew 11-12 W instead of sitting at its 22-24 W limit, repeated
+frames fell from 24-48 to 6-15 a minute and the GPU's slowest frames from 27-51 ms to 13-18 ms:
+the CPU's boost had been taking the GPU's share of the power budget. To try it, from an
+elevated (administrator) prompt:
+
+```
+powercfg /setacvalueindex SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE 0
+powercfg /setactive SCHEME_CURRENT
+```
+
+That's the setting for when it's plugged in, and it holds the CPU at its base clock for every
+program (2.7 GHz on that laptop, rather than up to 4.5). `PERFBOOSTMODE 2` (Aggressive), set
+the same way, puts it back. On a Steam Deck the equivalents are yours to set too: SteamOS's
+manual GPU clock (the Quick Access menu's Performance page) and the Decky PowerTools plugin's
+CPU boost toggle; band3 can't set either itself.
+
 ## Steam Deck
 
 On a Steam Deck, band3 defaults to:

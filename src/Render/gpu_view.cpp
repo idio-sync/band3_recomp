@@ -404,6 +404,12 @@ void SizeClass(uint32_t w, uint32_t h, uint32_t& cw, uint32_t& ch) {
     ch = std::max(ch, cw / 2);
 }
 
+#if defined(__linux__)
+// SDL 3.4.14's Vulkan renderer as far as its logical device (below, with its
+// command buffer)
+struct SdlVulkanRendererHead;
+#endif
+
 }  // namespace
 
 struct GpuRenderer::Impl {
@@ -605,6 +611,8 @@ struct GpuRenderer::Impl {
     // RefuseDevice's reason; keeps Init from making the device (under
     // zero_copy_mutex)
     std::string refused;
+    // the GPU it draws on (GpuRenderer::Kind), under `mutex`
+    GpuKind kind;
 
     // GPU timings (RasterOptions::gpu_timestamps; gpu_timing_model.h). Heap
     // regions of kTimingSlots: each output's, RenderFrame's (kOutputs), and
@@ -999,6 +1007,15 @@ struct GpuRenderer::Impl {
     // SDL's ID3D12GraphicsCommandList behind `cmd` if SDL 3.4.14's command
     // buffer layout checks out (no calls made through it), else null
     void* TimingList(SDL_GPUCommandBuffer* cmd);
+#if defined(__linux__)
+    // SDL's Vulkan renderer behind `cmd` if SDL 3.4.14's layout checks out:
+    // the command buffer's (TimingList), then the renderer's properties as
+    // SDL asked for them, its device the one SDL names; else null, and why
+    const SdlVulkanRendererHead* VulkanRenderer(SDL_GPUCommandBuffer* cmd, std::string& why);
+    // Create's: whether the device is an integrated GPU (Kind), read from
+    // its renderer behind a command buffer acquired for it and cancelled
+    void ReadVulkanKind();
+#endif
     // whether GPU timings can be taken in `cmd`: the first time, full checks
     // (the list's and allocator's interfaces, type, device) and making the
     // query heap and readback; after, those results and `cmd`'s pointers
@@ -1240,6 +1257,9 @@ bool GpuRenderer::Impl::Create() {
         REXLOG_WARN("native view gpu: the device takes no shader format band3 has");
         return false;
     }
+#if defined(__linux__)
+    ReadVulkanKind();
+#endif
     using namespace shaders;
     vertex_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_VERTEX, kMeshVertexDxbc,
                                sizeof(kMeshVertexDxbc), kMeshVertexSpirv,
@@ -2817,6 +2837,57 @@ void* GpuRenderer::Impl::TimingList(SDL_GPUCommandBuffer* cmd) {
 #endif
 }
 
+#if defined(__linux__)
+const SdlVulkanRendererHead* GpuRenderer::Impl::VulkanRenderer(SDL_GPUCommandBuffer* cmd,
+                                                               std::string& why) {
+    if (std::strcmp(SDL_GetGPUDeviceDriver(device), "vulkan") != 0) {
+        why = std::string("SDL_gpu's device is ") + SDL_GetGPUDeviceDriver(device);
+        return nullptr;
+    }
+    // a newer SDL that moved anything fails here before any call
+    if (!TimingList(cmd)) {
+        why = fmt::format("SDL {}.{}.{}'s command buffer doesn't have the layout of 3.4.14's",
+                          SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
+        return nullptr;
+    }
+    const auto* c = reinterpret_cast<const SdlVulkanCommandBuffer*>(cmd);
+    const auto* r = static_cast<const SdlVulkanRendererHead*>(c->renderer);
+    // the renderer's properties as SDL asked for them, its device the one
+    // SDL names
+    const char* name = SDL_GetStringProperty(SDL_GetGPUDeviceProperties(device),
+                                             SDL_PROP_GPU_DEVICE_NAME_STRING, "");
+    if (r->properties.sType != VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 ||
+        (r->driver_properties.sType != VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES &&
+         r->driver_properties.sType != 0) ||
+        !r->instance || !r->physical_device || !r->logical_device ||
+        std::strncmp(r->properties.properties.deviceName, name,
+                     VK_MAX_PHYSICAL_DEVICE_NAME_SIZE) != 0) {
+        why = fmt::format("SDL {}.{}.{}'s Vulkan renderer doesn't start as 3.4.14's",
+                          SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
+        return nullptr;
+    }
+    return r;
+}
+
+void GpuRenderer::Impl::ReadVulkanKind() {
+    kind.name = SDL_GetStringProperty(SDL_GetGPUDeviceProperties(device),
+                                      SDL_PROP_GPU_DEVICE_NAME_STRING, "");
+    std::string why;
+    if (SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device)) {
+        if (const SdlVulkanRendererHead* r = VulkanRenderer(cmd, why))
+            kind.integrated =
+                r->properties.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+        SDL_CancelGPUCommandBuffer(cmd);
+    } else {
+        why = std::string("no command buffer to read it from (") + SDL_GetError() + ")";
+    }
+    // a Steam Deck still counts as one (present_model.h's WorldAheadWanted)
+    if (!kind.integrated)
+        REXLOG_INFO("native view gpu: whether {} is an integrated GPU isn't known: {}",
+                    kind.name, why);
+}
+#endif
+
 bool GpuRenderer::Impl::CheckTimingOnce(SDL_GPUCommandBuffer* cmd) {
     if (timing_checked) return timing_ok && TimingList(cmd);
     timing_checked = true;
@@ -2906,32 +2977,8 @@ bool GpuRenderer::Impl::CheckTimingOnce(SDL_GPUCommandBuffer* cmd) {
     if (!timing_ok) ReleaseTiming();
 #elif defined(__linux__)
     auto check = [&]() -> bool {
-        if (std::strcmp(SDL_GetGPUDeviceDriver(device), "vulkan") != 0) {
-            why = std::string("SDL_gpu's device is ") + SDL_GetGPUDeviceDriver(device);
-            return false;
-        }
-        // a newer SDL that moved anything fails here before any call
-        if (!TimingList(cmd)) {
-            why = fmt::format("SDL {}.{}.{}'s command buffer doesn't have the layout of 3.4.14's",
-                              SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
-            return false;
-        }
-        const auto* c = reinterpret_cast<const SdlVulkanCommandBuffer*>(cmd);
-        const auto* r = static_cast<const SdlVulkanRendererHead*>(c->renderer);
-        // the renderer's properties as SDL asked for them, its device the one
-        // SDL names
-        const char* name = SDL_GetStringProperty(SDL_GetGPUDeviceProperties(device),
-                                                 SDL_PROP_GPU_DEVICE_NAME_STRING, "");
-        if (r->properties.sType != VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 ||
-            (r->driver_properties.sType != VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES &&
-             r->driver_properties.sType != 0) ||
-            !r->instance || !r->physical_device || !r->logical_device ||
-            std::strncmp(r->properties.properties.deviceName, name,
-                         VK_MAX_PHYSICAL_DEVICE_NAME_SIZE) != 0) {
-            why = fmt::format("SDL {}.{}.{}'s Vulkan renderer doesn't start as 3.4.14's",
-                              SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
-            return false;
-        }
+        const SdlVulkanRendererHead* r = VulkanRenderer(cmd, why);
+        if (!r) return false;
         const VkPhysicalDeviceLimits& limits = r->properties.properties.limits;
         if (!limits.timestampComputeAndGraphics || !(limits.timestampPeriod > 0)) {
             why = "the GPU has no timestamps on its graphics queue";
@@ -5525,10 +5572,17 @@ bool GpuRenderer::Idle(const RasterOptions& options) {
     return impl_->Premake(options);
 }
 
-void GpuRenderer::SetPresentDevice(void* d3d12_device, uint64_t timestamp_frequency) {
+void GpuRenderer::SetPresentDevice(void* d3d12_device, uint64_t timestamp_frequency,
+                                   GpuKind kind) {
     std::lock_guard lock(impl_->mutex);
     impl_->present_device = d3d12_device;
     impl_->timestamp_frequency = timestamp_frequency;
+    impl_->kind = std::move(kind);
+}
+
+GpuKind GpuRenderer::Kind() {
+    std::lock_guard lock(impl_->mutex);
+    return impl_->kind;
 }
 
 void GpuRenderer::RefuseDevice(std::string why) {
