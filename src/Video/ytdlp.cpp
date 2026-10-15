@@ -142,27 +142,44 @@ std::vector<std::string> JsRuntimeArgs() {
     return out;
 }
 
+std::vector<std::string> JsRuntimeArgs(const JsRuntime& runtime) {
+    return {"--js-runtimes", runtime.name + ":" + Path(runtime.exe)};
+}
+
+std::optional<JsRuntime> FindJsRuntime(const std::vector<std::filesystem::path>& folders) {
+#ifdef _WIN32
+    constexpr std::string_view kExe = ".exe";
+#else
+    constexpr std::string_view kExe = "";
+#endif
+    // the program's name, and yt-dlp's for it
+    constexpr std::pair<std::string_view, std::string_view> kRuntimes[] = {
+        {"deno", "deno"}, {"node", "node"}, {"bun", "bun"}, {"qjs", "quickjs"}};
+    for (const auto& folder : folders) {
+        if (folder.empty()) continue;
+        for (const auto& [file, name] : kRuntimes) {
+            const std::filesystem::path exe = folder / (std::string(file) + std::string(kExe));
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(exe, ec)) return JsRuntime{std::string(name), exe};
+        }
+    }
+    return std::nullopt;
+}
+
 bool JsRuntimeOnPath(std::string_view path) {
 #ifdef _WIN32
     constexpr char kSeparator = ';';
-    constexpr std::string_view kExe = ".exe";
 #else
     constexpr char kSeparator = ':';
-    constexpr std::string_view kExe = "";
 #endif
+    std::vector<std::filesystem::path> folders;
     while (!path.empty()) {
         const size_t end = path.find(kSeparator);
         const std::string_view dir = path.substr(0, end);
         path.remove_prefix(end == std::string_view::npos ? path.size() : end + 1);
-        if (dir.empty()) continue;
-        const std::filesystem::path folder(std::u8string(dir.begin(), dir.end()));
-        for (std::string_view name : {"deno", "node", "bun", "qjs"}) {
-            std::error_code ec;
-            if (std::filesystem::is_regular_file(folder / (std::string(name) + std::string(kExe)), ec))
-                return true;
-        }
+        if (!dir.empty()) folders.emplace_back(std::u8string(dir.begin(), dir.end()));
     }
-    return false;
+    return FindJsRuntime(folders).has_value();
 }
 
 std::optional<Progress> ParseProgress(std::string_view line) {

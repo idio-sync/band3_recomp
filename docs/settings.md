@@ -286,9 +286,11 @@ a negative one starts it that far into the song.
 band3 finds and downloads songs' videos with [yt-dlp](https://github.com/yt-dlp/yt-dlp), which
 it doesn't come with: set `music_video_ytdlp_path` (**yt-dlp program**, in the Videos tab's
 **Settings...**) to `yt-dlp.exe`, or put it on PATH. For YouTube, yt-dlp also needs a
-JavaScript runtime on PATH: [Deno](https://deno.com) or Node.js (Bun and QuickJS work too).
-band3 tells yt-dlp to use whichever there is, and the tab warns when there's none; without
-one, YouTube refuses some videos (HTTP Error 403). **Update** beside yt-dlp's version runs
+JavaScript runtime: [Deno](https://deno.com) or Node.js (Bun and QuickJS work too), on PATH
+or, for a game started from Steam on Linux, whose PATH has none of these, beside yt-dlp,
+beside band3, in `~/.deno/bin` or `~/.bun/bin` (where their installers put them) or in
+`~/.local/bin`. band3 tells yt-dlp to use whichever there is, and the tab warns when there's
+none; without one, YouTube refuses some videos (HTTP Error 403). **Update** beside yt-dlp's version runs
 `yt-dlp -U`, worth doing now and then, as an old yt-dlp stops finding videos.
 
 - **Search for its video:** searches YouTube for "<artist> <title> official music video" and

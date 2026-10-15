@@ -201,6 +201,36 @@ TEST_CASE("yt-dlp is told to use any JavaScript runtime, where it takes the opti
     fs::remove_all(dir);
 }
 
+TEST_CASE("a JavaScript runtime off PATH is found in the folders given, and named to yt-dlp by its path") {
+    const fs::path first = fs::temp_directory_path() / "band3_js_first";
+    const fs::path second = fs::temp_directory_path() / "band3_js_second";
+    fs::create_directories(first);
+    fs::create_directories(second);
+#ifdef _WIN32
+    const std::string exe = ".exe";
+#else
+    const std::string exe = "";
+#endif
+    CHECK_FALSE(FindJsRuntime({first, second}));
+    CHECK_FALSE(FindJsRuntime({}));
+    std::ofstream(second / ("deno" + exe)) << "x";
+    std::ofstream(first / ("qjs" + exe)) << "x";
+    // the first folder with any wins, though the next has Deno
+    const auto found = FindJsRuntime({fs::path(), first, second});
+    REQUIRE(found);
+    CHECK(found->name == "quickjs");
+    CHECK(found->exe == first / ("qjs" + exe));
+    const auto args = JsRuntimeArgs(*found);
+    REQUIRE(args.size() == 2);
+    CHECK(args[0] == "--js-runtimes");
+    CHECK(args[1] == "quickjs:" + (first / ("qjs" + exe)).string());
+    // within a folder, Deno before the rest
+    std::ofstream(first / ("deno" + exe)) << "x";
+    CHECK(FindJsRuntime({first})->name == "deno");
+    fs::remove_all(first);
+    fs::remove_all(second);
+}
+
 TEST_CASE("a failure that's the machine's, not the video's, is told apart") {
     CHECK(TroubleOf("Video unavailable") == Trouble::kNone);
     CHECK(TroubleOf("unable to download video data: HTTP Error 403: Forbidden") == Trouble::kNone);
