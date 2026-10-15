@@ -58,28 +58,35 @@ struct Hooked {
     }
 };
 
-// CompressionEffect's state words on silent input, as a model: its gain
-// envelope halves each block until it reaches its fixed point, 0, as the gated
-// mic compressor's decays and sticks; Reset puts it back to 1.0.
+// The words CompressionEffect's Process reads, on silent input, as a model: a
+// parameter (its ratio) and its state. Its gain envelope halves each block
+// until it reaches its fixed point, 0, as the gated mic compressor's decays and
+// sticks; Reset puts it back to 1.0.
 struct ModelCompressor {
     static constexpr uint32_t kHalve = 0x00800000;  // one off a normal float's exponent
-    std::array<uint32_t, 3> words = {0, 0, kOne};    // gate floor, DC block, envelope
+    static constexpr size_t kEnvelope = 3;
+    // ratio 80, gate floor, DC block, envelope
+    std::array<uint32_t, 4> words = {0x42A00000, 0, 0, kOne};
 
-    void ProcessSilence() { words[2] = words[2] >= kHalve ? words[2] - kHalve : 0; }
-    void Reset() { words[2] = kOne; }
+    void ProcessSilence() {
+        words[kEnvelope] = words[kEnvelope] >= kHalve ? words[kEnvelope] - kHalve : 0;
+    }
+    void Reset() { words[kEnvelope] = kOne; }
 };
 
-// ... and its hook: steady only in the state its last processed block left
+// ... and its hook: its count goes on only while those words are what its last
+// processed block left
 struct HookedCompressor {
     ModelCompressor compressor;
     Settle settle;
-    std::array<uint32_t, 3> left{};
+    std::array<uint32_t, 4> left{};
     int skipped = 0;
 
     // a silent block, the bypass on, no microphone
     void Call() {
         const auto now = compressor.words;
-        if (Skip(true, false, true, StateAsLeft(now, left), settle)) {
+        settle.Recheck(now, left);
+        if (Skip(true, false, true, true, settle)) {
             skipped++;
             return;
         }
@@ -288,7 +295,7 @@ TEST_CASE("the game's microphone list reads as empty, as up to four entries, or 
     CHECK(MicListShape(0x40001000, 0x40001006) == MicList::kUnreadable);  // not whole pointers
 }
 
-TEST_CASE("a compressor is steady only in the state its last processed block left") {
+TEST_CASE("a compressor's words are as its last processed block left them only bitwise") {
     const std::array<uint32_t, 3> left = {0x2E000000, 0x3F800000, 0x00000000};
     CHECK(StateAsLeft(left, left));
     for (size_t i = 0; i < left.size(); i++) {
@@ -314,14 +321,36 @@ TEST_CASE("a compressor reset, or made anew at its address, is processed until i
     CHECK(h.skipped == 1);
 
     // its send's bypass turned on (StandardEffect::DoProcess calls Reset) and
-    // off again: its envelope is 1.0 again, so it isn't skipped from where it
-    // was settled, and processing moves its state, which starts the count over
+    // off again: its envelope is 1.0 again, not what its last processed block
+    // left, so its count starts over and processing moves its state from there
     h.compressor.Reset();
     h.Call();
     CHECK(h.skipped == 1);
     CHECK(h.settle.quiet_frames == 0);
     for (int i = 0; i < 126 + 938; i++) h.Call();
     CHECK(h.skipped == 1);
+    h.Call();
+    CHECK(h.skipped == 2);
+}
+
+TEST_CASE("a compressor given new parameters while it's skipped is processed and settles again") {
+    HookedCompressor h;
+    for (int i = 0; i < 127 + 938; i++) h.Call();
+    h.Call();
+    CHECK(h.skipped == 1);
+
+    // the game sets a new ratio: its state is where it settled, but under other
+    // parameters, so its count starts over from the block it processes
+    h.compressor.words[0] = 0x40800000;  // 4
+    h.Call();
+    CHECK(h.skipped == 1);
+    CHECK(h.settle.quiet_frames == kBlock);
+    for (int i = 0; i < 936; i++) h.Call();
+    CHECK(h.skipped == 1);
+    // the 938th block it processes settles it again
+    h.Call();
+    CHECK(h.skipped == 1);
+    CHECK(h.settle.Settled());
     h.Call();
     CHECK(h.skipped == 2);
 }

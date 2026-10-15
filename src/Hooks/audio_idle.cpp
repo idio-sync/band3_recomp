@@ -59,9 +59,21 @@ constexpr uint32_t kReverb_Processed = 232;   // set by its first Process
 // reverb's state out of the subnormals
 constexpr uint32_t kReverbSilentFill = 0x821A6B5C;
 
-// CompressionEffect: what Process changes besides the samples
-constexpr std::array<uint32_t, 3> kCompression_State = {
-    44,  // mGateMin, the gate's floor
+// CompressionEffect: every word its Process reads besides the samples (named
+// as in Audio/mic_fx.cpp's copy of it). It writes only the last three, its
+// state; the rest are its parameters, which SetParameters writes from the
+// game's thread.
+constexpr std::array<uint32_t, 12> kCompression_Words = {
+    0,   // threshold
+    8,   // make-up gain
+    12,  // ratio
+    16,  // output gain
+    20,  // attack coefficient
+    24,  // release coefficient
+    32,  // the gate's attack coefficient
+    36,  // the gate's release coefficient
+    48,  // the gate's ceiling
+    44,  // mGateMin, the gate's floor (SetParameters sets it too)
     52,  // mDCBlock (mono only)
     56,  // mEnvelope, the gain it applies
 };
@@ -88,9 +100,9 @@ struct Entry {
     Settle settle;
     bool skipping = false;  // its last call was skipped
     Clock::time_point last_seen;
-    // its own state words as its last processed block left them (the
-    // compressor's: kCompression_State)
-    std::array<uint32_t, kCompression_State.size()> left{};
+    // the words of its own its Process reads as its last processed block left
+    // them (the compressor's: kCompression_Words)
+    std::array<uint32_t, kCompression_Words.size()> left{};
 };
 
 // calls since the last report, of one kind
@@ -192,12 +204,12 @@ void Report(Clock::time_point now) {
 }
 
 // Whether one call of a hooked effect instance skips its block, with the logs
-// and counts that go with it. `state` are the instance's own state words as
-// they are now (the compressor's), which have to be what its last processed
-// block left. Returns the instance's entry when the original is to run, null
-// when the block is skipped.
+// and counts that go with it. `words` are the words of its own its Process
+// reads, as they are now (the compressor's): if anything but its processing
+// changed them, its count starts over. Returns the instance's entry when the
+// original is to run, null when the block is skipped.
 Entry* Decide(uint8_t* base, Kind kind, uint32_t self, uint32_t channels, bool silent,
-              bool steady, bool flagged_silent = false, std::span<const uint32_t> state = {}) {
+              bool steady, bool flagged_silent = false, std::span<const uint32_t> words = {}) {
     const bool enabled = REXCVAR_GET(audio_idle_bypass);
     const MicGate gate = ReadMics(base);
     const auto now = Clock::now();
@@ -208,8 +220,8 @@ Entry* Decide(uint8_t* base, Kind kind, uint32_t self, uint32_t channels, bool s
     Entry& e = it->second;
     if (added) REXLOG_INFO("Audio idle bypass: {} {:08X}: {} channels", name, self, channels);
     e.last_seen = now;
-    const bool as_left = StateAsLeft(state, std::span<const uint32_t>(e.left).first(state.size()));
-    e.skipping = Skip(enabled, gate.mics != Mics::kNone, silent, steady && as_left, e.settle);
+    e.settle.Recheck(words, std::span<const uint32_t>(e.left).first(words.size()));
+    e.skipping = Skip(enabled, gate.mics != Mics::kNone, silent, steady, e.settle);
 
     Counts& c = g_counts[size_t(kind)];
     c.calls++;
@@ -232,8 +244,8 @@ Entry* Decide(uint8_t* base, Kind kind, uint32_t self, uint32_t channels, bool s
 }
 
 // after the original ran: whether this block counts toward skipping the next
-// (its input was silent and what the effect left was quiet), and the state
-// words it left
+// (its input was silent and what the effect left was quiet), and the words of
+// its own it left
 void Observe(Entry* e, bool quiet, uint32_t frames, std::span<const uint32_t> left = {}) {
     std::lock_guard lock(g_mutex);
     e->settle.Observe(quiet, frames);
@@ -244,13 +256,13 @@ using GuestFunction = void (*)(PPCContext&, uint8_t*);
 
 // T::Process(T* effect, float* samples, int frames, int channels): an ATG
 // effect's DSP, in place on interleaved samples, called by
-// StandardEffect<T>::DoProcess. `state` are the words it changes besides the
-// samples, where a silent block can change them without showing in the
-// output.
+// StandardEffect<T>::DoProcess. `own` are the offsets of the words of its own
+// it reads besides the samples, where it has parameters, and state that a
+// silent block can change without showing in the output.
 template <size_t N = 0>
 void ProcessInPlace(PPCContext& ctx, uint8_t* base, Kind kind, GuestFunction original,
-                    const std::array<uint32_t, N>& state = {}) {
-    static_assert(N <= kCompression_State.size(), "Entry::left holds its state words");
+                    const std::array<uint32_t, N>& own = {}) {
+    static_assert(N <= kCompression_Words.size(), "Entry::left holds its words");
     const uint32_t self = ctx.r3.u32;
     const uint32_t samples = ctx.r4.u32;
     const int32_t frames = ctx.r5.s32;
@@ -258,18 +270,18 @@ void ProcessInPlace(PPCContext& ctx, uint8_t* base, Kind kind, GuestFunction ori
     // it processes nothing unless both are positive
     const size_t count = frames > 0 && channels > 0 ? size_t(frames) * size_t(channels) : 0;
     const bool silent = AllZero(REX_RAW_ADDR(samples), count);
-    const auto load_state = [&] {
+    const auto load_own = [&] {
         std::array<uint32_t, N> words{};
-        for (size_t i = 0; i < N; i++) words[i] = REX_LOAD_U32(self + state[i]);
+        for (size_t i = 0; i < N; i++) words[i] = REX_LOAD_U32(self + own[i]);
         return words;
     };
-    const auto before = load_state();
+    const auto before = load_own();
     Entry* e = Decide(base, kind, self, uint32_t(channels), silent, true, false, before);
     // skipped: the buffer already holds the zeros
     if (!e) return;
 
     original(ctx, base);
-    const auto after = load_state();
+    const auto after = load_own();
     Observe(e, silent && AllQuiet(REX_RAW_ADDR(samples), count) && after == before,
             frames > 0 ? uint32_t(frames) : 0, after);
 }
@@ -371,15 +383,16 @@ extern "C" REX_FUNC(EQEffect__Process) {
 
 // The mic chain's compressor and the master limiter. Its gain keeps moving
 // after its input goes silent without showing in a silent output, so it's
-// skipped only once silent blocks leave its state where it was, and only while
-// its state is what its last processed block left: then the blocks it skips are
-// what processing them would have done. A Reset (its send's bypass turning on)
-// or a new instance at its address puts its gain back to 1.0; it's processed
-// until it settles again.
+// skipped only once silent blocks leave its state where it was, and its count
+// goes on only while its parameters and state are what its last processed
+// block left: then the blocks it skips are what processing them would have
+// done. New parameters from the game, a Reset (its send's bypass turning on,
+// which puts its gain back to 1.0) or a new instance at its address start the
+// count over: it's processed until it settles again.
 extern "C" void __imp__CompressionEffect__Process(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(CompressionEffect__Process) {
     ProcessInPlace(ctx, base, Kind::kCompressor, __imp__CompressionEffect__Process,
-                   kCompression_State);
+                   kCompression_Words);
 }
 
 // The mic chain's overdrive echo. On silent input it writes what it outputs

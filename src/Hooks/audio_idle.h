@@ -68,6 +68,17 @@ inline bool AllQuiet(const uint8_t* p, size_t count) {
     return true;
 }
 
+// An effect whose Process reads words of its own besides its samples
+// (CompressionEffect: its parameters, and its gate floor, DC block and gain
+// envelope, the state it changes) settles only in those words as its last
+// processed block left them, bit for bit. Anything else that changed them, new
+// parameters from the game, a Reset when its send's bypass turns on or a new
+// instance at the same address, starts its count over (Settle::Recheck): it's
+// processed until it settles again.
+inline bool StateAsLeft(std::span<const uint32_t> now, std::span<const uint32_t> left) {
+    return std::equal(now.begin(), now.end(), left.begin(), left.end());
+}
+
 // How long one effect instance has been processing silent input and staying
 // quiet, in frames. A processed block that isn't both starts it over; skipped
 // blocks leave it as it is.
@@ -81,21 +92,18 @@ struct Settle {
                                                            kSettleFrames))
                              : 0;
     }
+
+    // before deciding a block: the count goes on only while the effect's own
+    // words are what its last processed block left (StateAsLeft)
+    void Recheck(std::span<const uint32_t> now, std::span<const uint32_t> left) {
+        if (!StateAsLeft(now, left)) quiet_frames = 0;
+    }
 };
 
 // whether a hooked effect skips this block
 constexpr bool Skip(bool enabled, bool mic_connected, bool input_silent, bool steady,
                     const Settle& s) {
     return enabled && !mic_connected && input_silent && steady && s.Settled();
-}
-
-// An effect whose Process changes words besides its samples (CompressionEffect:
-// its gate floor, DC block and gain envelope) is steady only while those words
-// are what its last processed block left. Anything else that changed them, a
-// Reset when its send's bypass turns on or a new instance at the same address,
-// has it processed until it settles again.
-inline bool StateAsLeft(std::span<const uint32_t> now, std::span<const uint32_t> left) {
-    return std::equal(now.begin(), now.end(), left.begin(), left.end());
 }
 
 // LEAPFX::CAudioReverb::Process's steady state: enabled, no new parameters
