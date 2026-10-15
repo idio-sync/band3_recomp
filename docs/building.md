@@ -68,6 +68,14 @@ line, and the version a Liveless Rooms server sees). A build from source without
 `.git` is `unknown` unless the configure passes `-DBAND3_BUILD_TAG=<tag>`, as the Nix
 flake does with its revision.
 
+## Last.fm API key
+
+Last.fm scrobbling ([Integrations](integrations.md#scrobbling-lastfm-listenbrainz))
+signs its calls with an API account's key and shared secret. They aren't in the
+repository: pass them to the configure as `-DBAND3_LASTFM_API_KEY=<key>
+-DBAND3_LASTFM_API_SECRET=<secret>`. Without them, Last.fm scrobbling logs that it isn't
+available. ListenBrainz needs nothing.
+
 ## Packaging
 
 To give a build to someone else, build it, then:

@@ -97,6 +97,7 @@ add_executable(band3_tests
     mqtt_protocol_test.cpp
     mqtt_client_test.cpp
     ha_entities_test.cpp
+    scrobble_test.cpp
     port_mapping_protocol_test.cpp
     native_socket_test.cpp
     frame_pacing_test.cpp
@@ -200,6 +201,8 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Net/rhythmverse.cpp
     ${BAND3_ROOT}/src/Net/file_hosts.cpp
     ${BAND3_ROOT}/src/Net/sha1.cpp
+    ${BAND3_ROOT}/src/Net/md5.cpp
+    ${BAND3_ROOT}/src/Net/scrobble_protocol.cpp
     ${BAND3_ROOT}/src/paths.cpp
     ${BAND3_ROOT}/src/Render/capture_file.cpp
     ${BAND3_ROOT}/src/Render/frame_compose.cpp

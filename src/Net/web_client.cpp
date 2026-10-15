@@ -315,8 +315,15 @@ Reply Get(std::string_view url, size_t max_bytes) {
     return reply;
 }
 
-Reply PostJson(std::string_view url, std::string_view json, int timeout_ms) {
-    return Post(url, L"Content-Type: application/json\r\n", json, kJsonReplyBytes,
+Reply PostJson(std::string_view url, std::string_view json, int timeout_ms,
+               std::string_view authorization) {
+    std::wstring headers = L"Content-Type: application/json\r\n";
+    if (!authorization.empty()) {
+        headers += L"Authorization: ";
+        for (char c : authorization) headers += static_cast<wchar_t>(static_cast<unsigned char>(c));
+        headers += L"\r\n";
+    }
+    return Post(url, headers, json, kJsonReplyBytes,
                 {.connect_ms = timeout_ms, .data_ms = timeout_ms});
 }
 
@@ -455,7 +462,7 @@ size_t SavePiece(char* data, size_t size, size_t count, void* user) {
 
 // a POST of body with these headers, its reply read whole; timeout_ms, if not
 // 0, limits the whole of it
-Reply Post(std::string_view url, std::initializer_list<const char*> header_lines,
+Reply Post(std::string_view url, std::initializer_list<std::string_view> header_lines,
            std::string_view body, size_t max_bytes, long timeout_ms) {
     Reply reply;
     Easy curl = Open(url);
@@ -465,7 +472,9 @@ Reply Post(std::string_view url, std::initializer_list<const char*> header_lines
     }
     CURL* c = curl.get();
     curl_slist* list = nullptr;
-    for (const char* line : header_lines) list = curl_slist_append(list, line);
+    for (std::string_view line : header_lines) {
+        if (!line.empty()) list = curl_slist_append(list, std::string(line).c_str());
+    }
     const Headers headers(list, &curl_slist_free_all);
     curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers.get());
     if (timeout_ms > 0) {
@@ -500,8 +509,12 @@ Reply PostForm(std::string_view url, std::string_view form, size_t max_bytes) {
                 form, max_bytes, 0);
 }
 
-Reply PostJson(std::string_view url, std::string_view json, int timeout_ms) {
-    return Post(url, {"Content-Type: application/json"}, json, kJsonReplyBytes, timeout_ms);
+Reply PostJson(std::string_view url, std::string_view json, int timeout_ms,
+               std::string_view authorization) {
+    const std::string auth_line =
+        authorization.empty() ? std::string() : "Authorization: " + std::string(authorization);
+    return Post(url, {"Content-Type: application/json", auth_line}, json, kJsonReplyBytes,
+                timeout_ms);
 }
 
 Reply Get(std::string_view url, size_t max_bytes) {
@@ -555,7 +568,7 @@ Reply PostForm(std::string_view, std::string_view, size_t) {
     return Reply{0, {}, "band3 was built without libcurl, so it can't reach other sites"};
 }
 
-Reply PostJson(std::string_view, std::string_view, int) {
+Reply PostJson(std::string_view, std::string_view, int, std::string_view) {
     return Reply{0, {}, "band3 was built without libcurl, so it can't reach other sites"};
 }
 

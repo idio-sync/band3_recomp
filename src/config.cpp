@@ -61,6 +61,9 @@ constexpr IniSetting kIniSettings[] = {
     {"events", "target", "events_target"},
     {"events", "port", "events_port"},
     {"discord", "enabled", "discord_enabled"},
+    {"scrobble", "lastfm", "lastfm_enabled"},
+    {"scrobble", "listenbrainz", "listenbrainz_enabled"},
+    {"scrobble", "listenbrainz_token", "listenbrainz_token"},
     {"http", "enabled", "http_enabled"},
     {"http", "port", "http_port"},
     {"http", "address", "http_address"},
@@ -213,8 +216,10 @@ void ApplyLegacyIni() {
             continue;
         }
         if (!rex::cvar::SetFlagByName(s.cvar, *value)) {
-            // the MQTT password stays out of the log, whatever it is
-            if (std::string_view(s.cvar) == "ha_mqtt_password") {
+            // the MQTT password and the ListenBrainz token stay out of the log,
+            // whatever they are
+            if (std::string_view(s.cvar) == "ha_mqtt_password" ||
+                std::string_view(s.cvar) == "listenbrainz_token") {
                 REXLOG_WARN("{}: [{}] {} is not valid", path, s.section, s.key);
             } else {
                 REXLOG_WARN("{}: [{}] {} = {} is not valid, keeping {}", path, s.section, s.key,

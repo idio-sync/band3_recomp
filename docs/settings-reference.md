@@ -186,6 +186,15 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 |---|---|---|---|
 | `discord_enabled`<br>Discord presence | `false` | `true`, `false` | Show the current song as Discord Rich Presence (needs the Discord desktop app) *Applies at the next start.* |
 
+### Scrobbling
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `lastfm_enabled`<br>Scrobble to Last.fm | `false` | `true`, `false` | Scrobble the songs played to Last.fm. The first time, band3 opens Last.fm in the browser to ask for your permission, then remembers it (lastfm_session) *Applies at the next start.* |
+| `lastfm_session`<br>Last.fm session (clear to sign in again) | *(empty)* | text | The Last.fm session band3 was given when you allowed it to scrobble. Clear it to sign in again, as another Last.fm user. band3 never writes it to its log *Applies at the next start.* |
+| `listenbrainz_enabled`<br>Submit listens to ListenBrainz | `false` | `true`, `false` | Submit the songs played to ListenBrainz, with the user token from listenbrainz.org/settings *Applies at the next start.* |
+| `listenbrainz_token`<br>ListenBrainz user token | *(empty)* | text | Your ListenBrainz user token (listenbrainz.org/settings). band3 never writes it to its log *Applies at the next start.* |
+
 ### RB3Enhanced
 
 | Setting | Default | Takes | What it does |
@@ -340,6 +349,13 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ta
 | `native_world_ahead` | `false` | `true`, `false` | Experimental: with RB3's even/odd rendering, draw each world frame's venue on the GPU right after that frame, without waiting for it, so the post frame after it only post-processes it and draws the track and HUD. The world's GPU time moves into the world frame's half of the pair: on a 60 Hz laptop post frames went from 14 to 8 ms and the picture's latency fell 3 to 6 ms, the picture the same. Where post frames drawn this way still run about a frame's time it skips more frames than without, so it measures both every few seconds and keeps the one that skips fewer. On draws it ahead on any GPU; off leaves it to native_world_ahead_auto, which does on an integrated GPU or a Steam Deck (a laptop's Radeon 680M at 60 Hz: 5 ms less latency, a sixth fewer repeated frames) and not on other GPUs, as on a fast desktop GPU at 120 Hz it made things worse. It sends GPU work it doesn't wait for, as the setup that once hung AMD GPUs did (not seen with this one). Not with native_present_pipeline on, or on Linux native_upload_pipeline (on by default), which wait differently |
 | `native_world_ahead_auto` | `true` | `true`, `false` | Draw the world ahead (native_world_ahead) by itself on an integrated GPU (one that shares the system's memory, as a laptop's does) and on a Steam Deck: on a Radeon 680M at 1920x1200, 60 Hz, a song's post frames went from 11.1 to 6.2 ms, latency from 22.5 to 17.5 ms and repeated frames fell by a sixth, the picture the same. Not on other GPUs: a fast desktop one at 120 Hz did worse with it. native_world_ahead on draws it ahead on any GPU either way; with this off, only that does. On Linux neither does while native_upload_pipeline is on, its default. The log says which applied, with the GPU's name |
 
+### Scrobbling
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `lastfm_api_url` | `https://ws.audioscrobbler.com/2.0/` | text | Last.fm's API address, which scrobbling calls (lastfm_enabled) *Applies at the next start.* |
+| `listenbrainz_api_url` | `https://api.listenbrainz.org` | text | ListenBrainz's API address, which scrobbling calls (listenbrainz_enabled) *Applies at the next start.* |
+
 ### Startup
 
 | Setting | Default | Takes | What it does |
@@ -420,6 +436,9 @@ band3 still reads a `band3_config.ini` from the folder it starts in, or the one 
 | `[events]` | `target` | `events_target` |
 | `[events]` | `port` | `events_port` |
 | `[discord]` | `enabled` | `discord_enabled` |
+| `[scrobble]` | `lastfm` | `lastfm_enabled` |
+| `[scrobble]` | `listenbrainz` | `listenbrainz_enabled` |
+| `[scrobble]` | `listenbrainz_token` | `listenbrainz_token` |
 | `[http]` | `enabled` | `http_enabled` |
 | `[http]` | `port` | `http_port` |
 | `[http]` | `address` | `http_address` |

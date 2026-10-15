@@ -201,6 +201,32 @@ answer, or a status other than 2xx) is logged once per distinct error
 Turn on `discord_enabled` (then restart) to show the current song as Discord Rich
 Presence. It talks to the Discord desktop app directly; no companion app is needed.
 
+## Scrobbling (Last.fm, ListenBrainz)
+
+band3 can tell [Last.fm](https://www.last.fm) and [ListenBrainz](https://listenbrainz.org)
+the songs you play, in the Online tab's Scrobbling section (then restart). When a song
+starts it shows as "now playing". When it ends, it's scrobbled if you played it for
+half its length or 4 minutes, whichever comes first (songs of 30 seconds or less never
+count). That's the time from the song's start to its end, so a song you quit early
+doesn't count.
+
+- **Last.fm**: turn on `lastfm_enabled`. On the next start, band3 opens Last.fm in your
+  browser to ask whether band3 may scrobble to your account. Allow it within 10 minutes,
+  and band3 saves the session it's given to band3.toml as `lastfm_session`, so you're
+  asked only once. Clear `lastfm_session` to sign in again, as another Last.fm user.
+- **ListenBrainz**: turn on `listenbrainz_enabled` and paste your user token from
+  [listenbrainz.org/settings](https://listenbrainz.org/settings/) into
+  `listenbrainz_token`.
+
+If a service can't be reached, the listens are kept and sent again a minute later, then
+at longer intervals. They're kept only while band3 runs, so listens still waiting when
+you quit are lost. The log says what was sent (`Scrobbling: scrobbled 1 song to
+Last.fm`) and why anything wasn't. It never shows your token or session.
+
+Last.fm scrobbling needs band3's Last.fm API key, which builds get at configure time
+(`-DBAND3_LASTFM_API_KEY=... -DBAND3_LASTFM_API_SECRET=...`). A build without it logs
+that it can't scrobble to Last.fm; ListenBrainz works either way.
+
 ## Web server
 
 Turn on `http_enabled` (then restart) and band3 serves a web page on port 21070

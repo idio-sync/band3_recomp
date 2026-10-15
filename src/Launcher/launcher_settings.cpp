@@ -149,6 +149,8 @@ constexpr Condition kWithMidiDrums{"midi_drums", "true"};
 constexpr Condition kWithMidiKeys{"midi_keys", "true"};
 constexpr Condition kWithUsbMics{"usb_mics", "true"};
 constexpr Condition kWithHttp{"http_enabled", "true"};
+constexpr Condition kWithLastfm{"lastfm_enabled", "true"};
+constexpr Condition kWithListenBrainz{"listenbrainz_enabled", "true"};
 constexpr Condition kWithEvents{"events_enabled", "true"};
 constexpr Condition kWithGoCentral{"gocentral", "true"};
 constexpr Condition kWithLiveless{"liveless", "true"};
@@ -361,6 +363,15 @@ constexpr Setting kSettings[] = {
      .label = "RhythmVerse downloads", .widget = kCheckbox, .shown_when = kWithHttp},
     {.cvar = "discord_enabled", .tab = kOnline, .section = "Discord",
      .label = "Discord presence", .widget = kCheckbox},
+    {.cvar = "lastfm_enabled", .tab = kOnline, .section = "Scrobbling",
+     .label = "Scrobble to Last.fm", .widget = kCheckbox},
+    {.cvar = "lastfm_session", .tab = kOnline, .section = "Scrobbling",
+     .label = "Last.fm session (clear to sign in again)", .widget = kPassword,
+     .shown_when = kWithLastfm},
+    {.cvar = "listenbrainz_enabled", .tab = kOnline, .section = "Scrobbling",
+     .label = "Submit listens to ListenBrainz", .widget = kCheckbox},
+    {.cvar = "listenbrainz_token", .tab = kOnline, .section = "Scrobbling",
+     .label = "ListenBrainz user token", .widget = kPassword, .shown_when = kWithListenBrainz},
     {.cvar = "rb3e_mode", .tab = kOnline, .section = "RB3Enhanced", .label = "RB3E mode",
      .widget = kCheckbox},
     {.cvar = "events_enabled", .tab = kOnline, .section = "RB3Enhanced",

@@ -51,6 +51,7 @@
 #include "Launcher/mic_meter.h"
 #include "Net/discord.h"
 #include "Net/home_assistant.h"
+#include "Net/scrobble.h"
 #include "Lights/lights.h"
 #include "Net/liveless_rooms_panel.h"
 #include "Net/online_hooks.h"
@@ -512,6 +513,7 @@ class Band3App : public rex::ReXApp {
     band3::content::StartLiveContent(runtime()->file_system());
     band3::content::StartGameSongSnapshot();
     band3::discord::Start();
+    band3::scrobble::Start(path_defaults_.config_path);
     band3::ha::Start();
     band3::lights::Start();
     band3::audio::StartUsbMics();
@@ -565,6 +567,7 @@ class Band3App : public rex::ReXApp {
     native_view_.reset();
     band3::render::GpuRenderer::Get().Shutdown();
     band3::discord::Stop();
+    band3::scrobble::Stop();
     // says "offline" and disconnects; it reads only GameState, which outlives it
     band3::ha::Stop();
     // the Stage Kits go dark

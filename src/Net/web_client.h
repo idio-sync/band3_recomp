@@ -31,8 +31,10 @@ Reply PostForm(std::string_view url, std::string_view form, size_t max_bytes = 1
 
 // a POST of JSON (application/json); `timeout_ms` covers resolving, connecting,
 // sending and receiving (each, with WinHTTP; all of it, with libcurl). Replies
-// past 1 MiB are cut off, as an error.
-Reply PostJson(std::string_view url, std::string_view json, int timeout_ms);
+// past 1 MiB are cut off, as an error. A non-empty `authorization` is sent as
+// the Authorization header's value (ListenBrainz's "Token ...").
+Reply PostJson(std::string_view url, std::string_view json, int timeout_ms,
+               std::string_view authorization = {});
 
 // What a download has read: the first bytes of the reply (`peek` of them, or
 // all of a shorter file) for `check` to say what's wrong with them ("" for

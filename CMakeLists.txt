@@ -50,6 +50,14 @@ endif()
 # librexruntime[d|rd].so), for src/sdk_export.cpp
 target_compile_definitions(band3 PRIVATE BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")
 target_link_libraries(band3 PRIVATE ${CMAKE_DL_LIBS})
+
+# band3's Last.fm API account (last.fm/api/account/create), for scrobbling
+# (src/Net/scrobble.cpp); kept out of the repository and given at configure
+# time. Left empty, Last.fm scrobbling says it isn't configured.
+set(BAND3_LASTFM_API_KEY "" CACHE STRING "band3's Last.fm API key")
+set(BAND3_LASTFM_API_SECRET "" CACHE STRING "band3's Last.fm API shared secret")
+set_source_files_properties(src/Net/scrobble.cpp PROPERTIES COMPILE_DEFINITIONS
+    "BAND3_LASTFM_API_KEY=\"${BAND3_LASTFM_API_KEY}\";BAND3_LASTFM_API_SECRET=\"${BAND3_LASTFM_API_SECRET}\"")
 # the SDK stages its runtime beside band3 on Windows and macOS only; Linux
 # looks for it there too ($ORIGIN)
 if(UNIX AND NOT APPLE)
