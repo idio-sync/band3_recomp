@@ -15,7 +15,7 @@
 // song_audio.cpp). A sure match is saved as video_start_time in the video's
 // .ini and applied at once. An .ini that already sets one is left alone. Both
 // soundtracks' envelopes are kept beside the videos (sync_cache.h), for the
-// Videos tab to align again without the song.
+// Music Videos screen to sync again without the song.
 
 namespace band3::video {
 

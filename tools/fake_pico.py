@@ -9,7 +9,7 @@ sending it there; it takes RB3E's Stage Kit events on UDP 21070. This one sends
 its telemetry unasked, once a second, as a Pico that already knows band3 does
 (band3 under the test harness broadcasts no discovery), and keeps every RB3E Stage
 Kit event that reaches 127.0.0.1:21070 (--listen) as (left, right): the game's,
-through band3's RB3Enhanced events, and the Lights tab's test commands.
+through band3's RB3Enhanced events, and the Try the lights rows' test commands.
 tools/test_stagekit_lights.py uses it.
 
 Standard library only.

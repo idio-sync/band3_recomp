@@ -388,7 +388,7 @@ public:
     // any setting, the SDK's too; nothing when there's none by that name
     virtual std::optional<SettingValue> GetSetting(std::string_view name) = 0;
     virtual GameFolders Folders() = 0;
-    // finding these songs' music videos, as the Videos tab's batch does
+    // finding these songs' music videos, as the Music Videos screen's batch does
     // (src/Video/video_jobs.h): queued by shortname into the first videos
     // folder; `queued` says how many; returns an error, or empty
     virtual std::string QueueMusicVideos(const std::vector<std::string>& shortnames, size_t& queued) = 0;

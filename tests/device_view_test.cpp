@@ -36,7 +36,7 @@ TEST_CASE("devices are labelled by kind, and pads and instruments by the subtype
     CHECK(DeviceKindLabel(DeviceKind::kMidiKeys, "Pad", input::kSubtypeKeytar) == "MIDI keyboard");
     CHECK(DeviceKindLabel(DeviceKind::kSdlCopy, "Pad", std::nullopt).find("unused") != std::string::npos);
     CHECK(DeviceKindLabel(DeviceKind::kStageKit, "Pad", std::nullopt) ==
-          "Stage Kit (lit from the Lights tab, not a player)");
+          "Stage Kit (lit from Settings > Lights, not a player)");
 }
 
 TEST_CASE("the SDK's stand-in is told from the keyboard by name") {
@@ -265,7 +265,7 @@ TEST_CASE("testing another device ends the first one's test") {
     CHECK(test.Testing() == 2u);
 }
 
-TEST_CASE("the test ends when its device goes or the Controllers tab stops showing") {
+TEST_CASE("the test ends when its device goes or the Test Controllers screen stops showing") {
     TestMode test;
     const std::vector<uint64_t> both = {1, 2};
     const std::vector<uint64_t> other = {2};

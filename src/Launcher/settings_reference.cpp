@@ -187,8 +187,8 @@ std::string SettingsReference(const ReferenceInputs& in) {
     if (!sdk_rows.empty()) {
         out += "\n## More of the SDK's settings\n\n"
                "The SDK's settings band3_config.ini sets that the launcher's and the in-game "
-               "settings' categories don't show. The in-game settings' **All settings...** lists "
-               "these with the rest of the SDK's.\n\n";
+               "settings' categories don't show. The in-game settings' **Every SDK setting** "
+               "(Advanced) lists these with the rest of the SDK's.\n\n";
         out += kTableHead;
         out += sdk_rows;
     }

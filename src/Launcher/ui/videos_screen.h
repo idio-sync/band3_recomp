@@ -38,6 +38,8 @@ public:
 
     void Show();
     void Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_game);
+    // B or Escape, from elsewhere (the pause menu's bind when it isn't Escape)
+    void Back() { Handle(Action::kBack); }
 
 private:
     enum class Filter { kAll, kWithout, kWith, kToReview, kFailed, kUnmatched };

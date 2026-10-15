@@ -3,8 +3,8 @@
 band3 implements much of [RB3Enhanced](https://github.com/RBEnhanced/RB3Enhanced)'s
 behaviour natively, so tools and mods written for RB3E (including
 [Rock Band 3 Deluxe](https://github.com/hmxmilohax/rock-band-3-deluxe)) work with it.
-All of these are on the Online tab, on the launcher or in the in-game settings (in their All settings, Band3 →
-Online), unless noted.
+Their settings are in Settings > Online and Settings > Other Apps, on the launcher or in game
+(and in the SDK's own menu, **Every SDK setting**, under Band3 → Online), unless noted.
 
 ## Network events (Stage Kit, song and venue info)
 
@@ -19,8 +19,9 @@ broadcast address (e.g. 192.168.1.255) or one device's IP. `events_port` is 2107
 ## Stage Kit lights
 
 band3 lights Stage Kits itself, as YARG does, so a kit needs no RB3E Dashboard or
-bridge in between. The game's lighting goes to every kit band3 can reach; the
-**Lights** tab (in the launcher and the in-game settings) lists them and tests them.
+bridge in between. The game's lighting goes to every kit band3 can reach; Settings >
+**Lights** (on the launcher and in game) lists them, and its **Try the lights** rows test
+them.
 
 - **Plugged in by USB** (`stagekit_usb`, on by default): Santroller Stage Kits in HID mode
   (VID 1209, PID 2882) and Xbox 360 Stage Kits (XInput subtype 9).
@@ -33,19 +34,20 @@ bridge in between. The game's lighting goes to every kit band3 can reach; the
   [RB3E Dashboard's](https://github.com/idio-sync/rb3e-stagekit-networked) Pico W firmware,
   found as the dashboard finds it (UDP 21071).
   - Picos follow the game through the network events above, so `events_enabled` must be on;
-    the tab offers to turn it on.
+    Settings > Lights says so while it's off (**Send events**, in Other Apps).
   - A Pico answers whichever program found it last, so turn this off while the dashboard
     itself runs.
-  - The tab lists each Pico's signal and whether a kit is plugged in; a quiet one shows
-    offline after 10 seconds and leaves the list after 30.
+  - Settings > Lights lists each Pico's signal and whether a kit is plugged in; a quiet one
+    shows offline after 10 seconds and leaves the list after 30.
 
-The tab's test controls are the dashboard's (colours, fog, strobe, LED patterns, a chase),
-for one device or all. A song's next lighting command takes over from a test.
+The **Try the lights** rows are the dashboard's test controls (colours, fog, strobe, LED
+patterns, a chase), for one kit or all (**Kit to test**). A song's next lighting command
+takes over from a test.
 `python tools/fake_pico.py` stands in for a Pico on this PC and prints what band3 sends it.
 
 **Black background:** the kits' lighting comes from the venue, so with no venue (the Black
-Background modifier, or `forced_venue = none`) they stay dark. **Keep the lights on a black
-background** (`black_background_lights`, the Lights tab) instead puts the song in a video
+Background modifier, or `forced_venue = none`) they stay dark. **Black background**
+(`black_background_lights`, Settings > Lights) instead puts the song in a video
 venue drawn black, with the band hidden, so the kits light as usual. It costs what a venue
 costs. A forced venue still wins.
 
@@ -61,8 +63,8 @@ It does it two ways, and you can use either or both:
 - **Webhook**: band3 POSTs the dashboard's webhook payloads when a song starts, ends or
   changes, so an automation written for the dashboard works unchanged.
 
-Home Assistant only watches: nothing it sends changes the game. The settings are in the
-Online tab's Home Assistant section, or `band3.toml`'s `ha_*` keys (`[homeassistant]` without
+Home Assistant only watches: nothing it sends changes the game. The settings are in
+Settings > Other Apps > Home Assistant, or `band3.toml`'s `ha_*` keys (`[homeassistant]` without
 the `ha_` in the older `band3_config.ini`). All of them need a restart.
 
 ### Setting up MQTT
@@ -72,16 +74,16 @@ the `ha_` in the older `band3_config.ini`). All of them need a restart.
    which usually finds the broker by itself.
 2. Make a Home Assistant user for band3 (Settings → People → Users). The Mosquitto add-on
    accepts Home Assistant's users.
-3. In band3's Online tab, set **MQTT broker** (`ha_mqtt_host`) to Home Assistant's
-   address (e.g. `homeassistant.local` or `192.168.1.10`), then **User name**
-   (`ha_mqtt_username`) and **Password** (`ha_mqtt_password`) to that user's. **Port**
-   (`ha_mqtt_port`, 1883) and **Discovery prefix** (`ha_discovery_prefix`,
+3. In band3's Settings > Other Apps, set **MQTT broker** (`ha_mqtt_host`) to Home Assistant's
+   address (e.g. `homeassistant.local` or `192.168.1.10`), then **MQTT user name**
+   (`ha_mqtt_username`) and **MQTT password** (`ha_mqtt_password`) to that user's. **MQTT
+   port** (`ha_mqtt_port`, 1883) and **Discovery prefix** (`ha_discovery_prefix`,
    `homeassistant`) only change if you changed them in Home Assistant.
 4. Restart band3. The device appears under the MQTT integration.
 
 The password is stored as plain text in `band3.toml`. The launcher and the in-game
-settings mask it, but the SDK's own menu (the in-game settings' **All settings...**)
-shows it. band3 never writes it to the log or to `/status`.
+settings mask it, but the SDK's own menu (the in-game settings' **Every SDK setting**,
+in Advanced) shows it. band3 never writes it to the log or to `/status`.
 
 ### Entities
 
@@ -204,7 +206,7 @@ Presence. It talks to the Discord desktop app directly; no companion app is need
 ## Scrobbling (Last.fm, ListenBrainz)
 
 band3 can tell [Last.fm](https://www.last.fm) and [ListenBrainz](https://listenbrainz.org)
-the songs you play, in the Online tab's Scrobbling section (then restart). When a song
+the songs you play, in Settings > Other Apps > Scrobbling (then restart). When a song
 starts it shows as "now playing". When it ends, it's scrobbled if you played it for
 half its length or 4 minutes, whichever comes first (songs of 30 seconds or less never
 count). That's the time from the song's start to its end, so a song you quit early
@@ -420,9 +422,9 @@ API isn't documented, so a change on its side can break the tab until band3 foll
 Rock Band 3's online features (leaderboards, Battles, setlists shared with friends,
 Rock Central's goals) talked to Harmonix's Rock Central, which closed.
 [GoCentral](https://github.com/ihatecompvir/GoCentral) is a fan-run replacement that
-RB3Enhanced players use. On the Online tab, set `username` (the Game tab's Profile name)
-to a name of your own, turn on `gocentral`, then restart; or do it on the
-[launcher](settings.md#the-launcher)'s Game and Online tabs and press Play. band3 then logs into
+RB3Enhanced players use. Set `username` (**Profile name**, Settings > Game) to a name of your
+own, turn on `gocentral` (**Leaderboards and battles**, Settings > Online), then restart; or
+do it in the [launcher](settings.md#the-launcher)'s Settings and press Play. band3 then logs into
 `gocentral_address`, RB3Enhanced's Xbox 360 server (`gocentral-xbox.rbenhanced.rocks`)
 unless you run your own, as RB3Enhanced does on a console with Xbox Live blocked.
 
@@ -430,7 +432,7 @@ GoCentral knows Xbox players by their name alone, with no password: anyone using
 your name logs in as you. band3 won't connect while `username` is blank or "User",
 every profile's name until you change it.
 
-To see how a connection goes, turn on `log_net_calls` (the in-game settings' Advanced tab, Logging): the log then
+To see how a connection goes, turn on `log_net_calls` (Settings > Advanced > Logging): the log then
 has each of the game's network calls and each step of its Rock Central login.
 
 ## Liveless (online play)
@@ -441,8 +443,9 @@ together (and probably with RB3Enhanced players, untested), on Windows or Linux:
 Steam Deck have played a song together through Liveless Rooms. Only play on one PC and on a
 local network has been tested so far.
 
-**Setup:** turn on `liveless` (Online tab), set `username` (the Game tab's Profile name) to
-the name others will see, then restart, or press Play on the [launcher](settings.md#the-launcher).
+**Setup:** turn on `liveless` (**Play online**, Settings > Online), set `username` (**Profile
+name**, Settings > Game) to the name others will see, then restart, or press Play on the
+[launcher](settings.md#the-launcher).
 
 **Playing:**
 
@@ -465,8 +468,8 @@ does.
 With `liveless` on, band3 asks the router to forward `liveless_port` to this PC (PCP, then
 NAT-PMP, then UPnP), as RB3Enhanced does, and tells joining players the public address the
 router reports. The mapping lasts an hour, is renewed every half hour, and is deleted when
-band3 closes. Turn `liveless_port_mapping` off (Online → More settings, then restart) to leave
-the router alone.
+band3 closes. Turn `liveless_port_mapping` off (**Open the port on the router**, Settings >
+Online, then restart) to leave the router alone.
 
 The log's `port mapping:` lines and the Rooms panel (F10) show how it went, e.g. `UDP 9103:
 mapped by PCP, public 203.0.113.5` or `not mapped:` and why.
@@ -492,9 +495,9 @@ RB3Enhanced's Liveless Rooms joins players by a room code instead of an address:
 logs in to a Rooms server and gets a code, and the server tells joining players where the
 host's game is.
 
-**Setup:** turn on `liveless` and `liveless_rooms` (Online → More settings), set `username`
-(the Game tab), then restart. band3 logs in to `liveless_rooms_server`, RB3Enhanced's
-(`liveless-testing.ipg.pw`) unless you run your own. As with GoCentral, the server knows you by
+**Setup:** turn on `liveless` and `liveless_rooms` (**Play online** and **Rooms**, Settings >
+Online), set `username` (Settings > Game), then restart. band3 logs in to
+`liveless_rooms_server`, RB3Enhanced's (`liveless-testing.ipg.pw`) unless you run your own. As with GoCentral, the server knows you by
 your name alone, so band3 won't log in while it's blank or "User".
 
 **The Rooms panel** shows your code, the server, the connection's state and the last error.
@@ -596,7 +599,7 @@ As with RB3E, keys on guitar is always unlocked: the overshell's part list offer
 a guitar without the career unlock. (RB3E's other always-on patches are already in: the
 8000-song limit, and the song blacklist, whose check TU5 itself no longer makes.)
 
-Two of RB3E's options are settings too (the Game tab, both off by default):
+Two of RB3E's options are settings too (Settings > Gameplay > Unlocks, both off by default):
 `unlock_clothing` unlocks every piece of clothing, tattoo and face paint and the video
 venues without earning them, and `gold_on_all_difficulties` lets gold stars be earned
 below expert, from the next song.
@@ -606,7 +609,8 @@ below expert, from the next song.
 As RB3E does (its `GameOriginIcons`), band3 shows an icon at the left of each song in
 the song list for the game or pack the song came from: Rock Band 3, Rock Band 2, The
 Beatles, a track pack, customs and so on, from the song's `game_origin`. It's on unless
-`game_origin_icons` (the Game tab) is off, and needs two things band3 doesn't ship:
+`game_origin_icons` (**Song source icons**, Settings > Gameplay) is off, and needs two things
+band3 doesn't ship:
 
 - the icons, `ui/resource/game_origins/<origin>.png`, which Rock Band 3 Deluxe has (over
   a hundred of them). A song whose origin has no icon shows none.

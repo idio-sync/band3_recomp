@@ -176,6 +176,6 @@ win-amd64-relwithdebinfo`) and connect the [Tracy](https://github.com/wolfpld/tr
 profiler to the running game. band3 adds zones for RB3's engine systems (`RB3 Game::Poll`,
 `RB3 WorldCrowd::DrawShowing`, ...) next to the SDK's.
 
-For comparable captures, turn on `autoplay` (Advanced → Test harness), play the same song in
-the same venue each time, and turn `autosave` off (the Game tab) to keep the runs out of your
-profile.
+For comparable captures, turn on `autoplay` (Settings > Advanced > Test harness), play the same
+song in the same venue each time, and turn `autosave` off (Settings > Game) to keep the runs out
+of your profile.

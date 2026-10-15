@@ -13,7 +13,6 @@
 #include "src/Input/instruments.h"
 #include "src/Input/menu_shortcut.h"
 #include "device_view_model.h"
-#include "gamepad_nav.h"
 #include "generated_rows.h"
 #include "launcher_cvars.h"
 #include "launcher_settings.h"

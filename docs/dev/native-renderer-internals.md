@@ -65,7 +65,7 @@ its depth can't answer by the next frame as a 360's GPU does. `native_query_samp
 ## Advanced settings
 
 What each does, how it was measured and why it defaults as it does. The
-[settings reference](../settings-reference.md#native-renderer-1) has the short version.
+[settings reference](../settings-reference.md#native-renderer) has the short version.
 
 - `emulated_gpu`: retired, still read at startup into `renderer` (`off` is `native`; `on`
   is `both`, or `emulated` if `renderer` said so), then cleared at the next save.

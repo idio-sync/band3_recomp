@@ -30,4 +30,8 @@ OnScreenKeyboard::Result DrawKeyboardPanel(ImDrawList* dl, const Page& page, OnS
 // system for typed text while it's called.
 OnScreenKeyboard::Result TypeIntoKeyboard(OnScreenKeyboard& keyboard, ImGuiIO& io, bool& edited);
 
+// On a Steam Deck, opens Steam's own keyboard as the on-screen one opens:
+// what it types arrives as a plugged-in keyboard's would. Nothing elsewhere.
+void ShowSteamKeyboard();
+
 }

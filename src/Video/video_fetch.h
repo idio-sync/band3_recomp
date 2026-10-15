@@ -82,7 +82,7 @@ FetchResult FetchSongVideo(const SongInfo& song, std::string_view url, const Fet
 FetchResult UseVideoFile(const SongInfo& song, const std::filesystem::path& file,
                          const FetchSetup& setup);
 
-// a FetchEnd's words, for the log and the Videos tab
+// a FetchEnd's words, for the log and the Music Videos screen
 std::string_view FetchEndText(FetchEnd end);
 
 }

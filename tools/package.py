@@ -155,9 +155,9 @@ def readme(commit, full_commit, windows, dirty, own_ffmpeg):
     lines += [
         "- Bring your own Rock Band 3 (Xbox 360): the Title Update 5 default.xex, or",
         "  Rock Band 3 Deluxe's, and the gen folder with the main and patch ARK files.",
-        "  Put them in a folder named assets beside band3, or pick their folder in",
-        "  the launcher's Game tab, which opens on the first start. No game files are",
-        "  included.",
+        "  Put them in a folder named assets beside band3, or pick their folder with",
+        "  Find Rock Band 3 in the launcher, which opens on the first start. No game",
+        "  files are included.",
         "",
         "Settings: the launcher, which "
         + ("holding Shift as band3 starts brings back" if windows

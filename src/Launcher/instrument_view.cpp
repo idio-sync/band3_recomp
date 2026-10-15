@@ -108,7 +108,7 @@ void DevicePanel::Poll(bool showing) {
     nav_pads_.clear();
     for (Device& device : devices_) {
         const bool nav = DrivesNavigation(device.info.kind);
-        // the selected one is drawn only while the tab shows
+        // the selected one is drawn only while the screen shows
         const bool shown = showing && selected_ == device.info.id;
         device.state.reset();
         if (!nav && !shown) continue;

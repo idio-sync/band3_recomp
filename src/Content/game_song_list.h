@@ -27,7 +27,7 @@ std::string FormatGameSongList(const std::vector<ListedSong>& songs);
 // what can't be read is left out; another version's file gives none
 std::vector<ListedSong> ParseGameSongList(std::string_view json);
 
-// an origin as the Videos tab names it: "Rock Band 3", "Rock Band 2"...; the
+// an origin as the Music Videos screen names it: "Rock Band 3", "Rock Band 2"...; the
 // origin itself for one it doesn't know
 std::string OriginName(std::string_view origin);
 

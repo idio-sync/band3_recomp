@@ -260,7 +260,7 @@ struct CvarFacts {
     // and leaves its key alone
     bool exists = false;
     ValueType type = ValueType::kString;
-    // the registry's, for the footer
+    // the registry's, for the detail panel
     std::string description;
     std::optional<double> min;
     std::optional<double> max;
@@ -410,19 +410,19 @@ public:
     // its row is a password (kPassword): its value isn't shown or logged
     bool Secret(std::string_view cvar) const;
 
-    // The footer's "Show this screen at startup", saved as show_launcher.
-    // show_launcher is on by default, so a first run shows the launcher, but
-    // the box starts ticked only when band3.toml has show_launcher = true: the
-    // player ticked it before. Unticked otherwise, so Play then leaves band3
-    // going straight into the game. It's kept apart from the cvar until a save,
-    // and every save writes it, true or false: true is the default, and
-    // leaving its key out would untick the box at the next start. Shown as the
-    // cvar is when show_launcher is locked.
+    // The "Show this screen at startup" row (Game > Startup), saved as
+    // show_launcher. show_launcher is on by default, so a first run shows the
+    // launcher, but the row starts on only when band3.toml has show_launcher =
+    // true: the player turned it on before. Off otherwise, so Play then leaves
+    // band3 going straight into the game. It's kept apart from the cvar until a
+    // save, and every save writes it, true or false: true is the default, and
+    // leaving its key out would turn the row off at the next start. Shown as
+    // the cvar is when show_launcher is locked.
     bool ShowAtStartup() const { return show_at_startup_; }
     // false if show_launcher is locked or not in this build
     bool SetShowAtStartup(bool on);
 
-    // something differs from what was last saved (or loaded), the startup box too
+    // something differs from what was last saved (or loaded), the startup row too
     bool HasUnsavedChanges() const;
 
     // what Save does to band3.toml, in table order: a changed setting's typed
@@ -431,7 +431,7 @@ public:
     // outside the table, are left as they are.
     std::vector<ConfigEdit> Edits() const;
     // writes Edits() into the file (config_file.h); on success show_launcher
-    // takes the startup box's value and the values count as saved
+    // takes the startup row's value and the values count as saved
     SaveResult Save(const std::filesystem::path& file);
     void MarkSaved();
 
@@ -450,7 +450,7 @@ private:
     std::set<std::string, std::less<>> edited_;
     // the values when last saved or loaded
     std::map<std::string, std::string, std::less<>> saved_;
-    // the footer's startup box, and its value when last saved or loaded
+    // the "Show this screen at startup" row, and its value when last saved or loaded
     bool show_at_startup_ = false;
     bool saved_show_at_startup_ = false;
 };

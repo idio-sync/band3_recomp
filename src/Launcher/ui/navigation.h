@@ -65,7 +65,7 @@ private:
 // A controller's buttons and left stick (NavPad, XInput's layout) as actions:
 // the face buttons, bumpers and Start as they're pressed, the D-pad and the
 // stick as RepeatGate repeats them. Buttons already held at the first step
-// count only once let go and pressed again, as GamepadNav's do.
+// count only once let go and pressed again.
 class PadActions {
 public:
     std::vector<Action> Step(const NavPad& pad, double now);

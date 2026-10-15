@@ -43,7 +43,7 @@ struct ScoredCandidate {
     double score = 0.0;      // about 0..1
     bool penalized = false;  // a word says it's another kind of upload
     bool rejected = false;   // an art track: never taken without asking
-    std::string note;        // why, for the Videos tab; "" for neither
+    std::string note;        // why, for the Music Videos screen; "" for neither
 };
 
 ScoredCandidate Score(const SongInfo& song, const YtCandidate& video);

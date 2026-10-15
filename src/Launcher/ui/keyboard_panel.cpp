@@ -2,7 +2,9 @@
 #include <imgui_internal.h>
 #include <cmath>
 #include <string>
+#include <SDL3/SDL_misc.h>
 #include "src/Launcher/launcher_style.h"
+#include "src/steam_deck.h"
 #include "widgets.h"
 
 namespace band3::launcher::ui {
@@ -129,6 +131,10 @@ OnScreenKeyboard::Result TypeIntoKeyboard(OnScreenKeyboard& keyboard, ImGuiIO& i
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) return OnScreenKeyboard::Result::kCancelled;
     return OnScreenKeyboard::Result::kNone;
+}
+
+void ShowSteamKeyboard() {
+    if (steam_deck::IsSteamDeck()) SDL_OpenURL("steam://open/keyboard");
 }
 
 }

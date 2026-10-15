@@ -6,7 +6,7 @@
 #include "kit_sender.h"
 #include "pico_fleet.h"
 
-// What the Lights tab shows of the Stage Kits found, and how it names the
+// What Settings > Lights shows of the Stage Kits found, and how it names the
 // one a test command is for. Pure: lights.cpp hands it the lists.
 namespace band3::lights {
 

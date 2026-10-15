@@ -7,14 +7,14 @@ has how it works and the measurements behind its defaults.
 
 ## Choosing the renderer
 
-`renderer` (the Graphics tab, on the launcher or in the in-game settings) picks what draws the game's
+`renderer` (Settings > Graphics, on the launcher or in game) picks what draws the game's
 picture:
 
-| `renderer` | Launcher | |
+| `renderer` | In Settings | |
 |---|---|---|
 | `native` | Native | band3's own renderer alone, at the window's size, under the SDK's overlays. There's no emulated GPU: band3's sync-only GPU answers what the game waits on ([below](#renderer-native-no-emulated-gpu)). The default on Windows, and on a Steam Deck (its [presets](settings.md#steam-deck)) |
 | `emulated` | Emulated | the emulated Xbox 360 GPU (the SDK's xenos plugin) alone. The default elsewhere: on Linux the native renderer has run on a Steam Deck (Vulkan, RADV), not yet on other drivers |
-| `both` | Native + emulated (debug) | the two side by side, the native picture shown; **F8** (`bind_renderer`) switches to the emulated GPU's picture and back. For comparing them (the checks below); it costs the GPU both |
+| `both` | Both (debug) | the two side by side, the native picture shown; **F8** (`bind_renderer`) switches to the emulated GPU's picture and back. For comparing them (the checks below); it costs the GPU both |
 
 - A change to or from `native` applies at the next start (the launcher's Play restarts band3
   for it); between `emulated` and `both` it applies at once.
@@ -25,11 +25,11 @@ picture:
 
 ### Which settings apply
 
-| Group (the Graphics tab, on the launcher and in the in-game settings) | `native` | `emulated` | `both` |
+| Group (Settings > Display and Graphics, on the launcher and in game) | `native` | `emulated` | `both` |
 |---|---|---|---|
 | Display: monitor, window mode, resolution, aspect (`present_letterbox`), frame rate cap (`frame_cap`) | yes | yes | yes |
 | Native renderer (Band3 → Graphics → Native): `native_fill_window`, `native_view_msaa`, `native_anisotropic`, `native_max_height` | yes | no | yes |
-| Emulated GPU, the plugin's own (All settings: GPU): `resolution_scale`, `swap_post_effect` (FXAA), `anisotropic_override`, `vsync` (shown with the frame cap off, which turns it off otherwise) | no | yes | yes (the emulated picture) |
+| Emulated GPU, the plugin's own (Every SDK setting: GPU): `resolution_scale`, `swap_post_effect` (FXAA), `anisotropic_override`, `vsync` (shown with the frame cap off, which turns it off otherwise) | no | yes | yes (the emulated picture) |
 | Emulated GPU, band3's (Band3 → Graphics → Emulated): `emulated_gpu_while_native` | no | no | yes |
 | Game (Band3 → Graphics): `rnd_sync`, `background_fps`, `disable_hair_shader`, `disable_approximate_lights` | yes | yes | yes |
 | `compress_character_textures` | no: ignored ([below](#renderer-native-no-emulated-gpu)) | yes | yes |
@@ -105,8 +105,8 @@ Every kind of screen the render checks go through matches the game's picture. Th
 | `native_anisotropic` (Band3 → Graphics → Native) | anisotropic filtering, counted as `anisotropic_override` counts it: 0 off, 1 to 5 for 1x to 16x. -1 (the default) follows `anisotropic_override` where the emulated GPU runs, so the two pictures match, and keeps the game's own samplers under `native` |
 | `native_view_msaa` (Band3 → Graphics → Native) | the samples a pixel of the overlay (the track, the HUD, menus drawn after the world), the only part RB3 multisamples: 2 (the default) as RB3 does, 4 smoother, 1 none |
 
-The rest are on the in-game settings' Advanced tab, described in the
-[settings reference](settings-reference.md#native-renderer-1). Most are there to compare or
+The rest are in Settings > Advanced > Native renderer, described in the
+[settings reference](settings-reference.md#native-renderer). Most are there to compare or
 measure; leave them at their defaults. Three to know about:
 
 - `native_present_pipeline`: keep it off. It hangs AMD GPUs and grows video memory.
@@ -117,7 +117,7 @@ measure; leave them at their defaults. Three to know about:
   On a Radeon 680M at 1920x1200, 60 Hz, a song's post frames went from 11.1 to 6.2 ms
   (median), latency from 22.5 to 17.5 ms, and repeated frames fell by a sixth, the picture
   the same. Other GPUs leave it off: on a Radeon AI PRO R9700 at 120 Hz it made things worse.
-  `native_world_ahead = true` in `band3.toml` (or on the in-game settings' Advanced tab,
+  `native_world_ahead = true` in `band3.toml` (or in Settings > Advanced >
   Native renderer) turns it on for any GPU; `native_world_ahead_auto = false` leaves it to
   that alone. The log says which applied, for example
   `native_world_ahead: on by itself (integrated GPU: AMD Radeon(TM) Graphics)`. On Linux it
@@ -129,8 +129,8 @@ measure; leave them at their defaults. Three to know about:
 
 ## Filling the window
 
-RB3 draws 16:9. With `native_fill_window` on (the default, Fill the window on the Graphics
-tab), the native renderer has it draw at the window's shape instead, with no black bars:
+RB3 draws 16:9. With `native_fill_window` on (the default, Fill the window in Settings >
+Display), the native renderer has it draw at the window's shape instead, with no black bars:
 
 - A wider window (21:9, 32:9) shows more of the venue to the sides.
 - A taller one (16:10, 4:3) shows more above and below, at 16:9's width.
@@ -178,8 +178,8 @@ and vertical blanks, and draws nothing.
 The native view (F9, experimental) draws the game's frames from a capture of what RB3 drew,
 on the GPU or on a reference CPU rasterizer: its shading, textures, texture passes (outfits,
 the crowd, shadow maps), post-processing and the display's gamma ramp. Render checks set its
-picture against the game's. Its settings are on the in-game settings' Advanced tab (Native
-renderer), described in the [settings reference](settings-reference.md#native-renderer-1).
+picture against the game's. Its settings are in Settings > Advanced > Native
+renderer, described in the [settings reference](settings-reference.md#native-renderer).
 
 Launch render checks with:
 

@@ -9,25 +9,25 @@
 #include "device_view_model.h"
 #include "src/Input/input_system.h"
 
-// The Controllers tab's device list and test view: every device the input
-// system has, with the player each feeds, and the selected one drawn live
+// The Test Controllers screen's device list and test view: every device the
+// input system has, with the player each feeds, and the selected one drawn live
 // (guitar frets, strum, whammy and tilt; drum pads and cymbals flashing with
 // how hard they're hit; a keytar's held keys; a controller's buttons and
 // sticks), read as the game would read it (input::ReadInputState). Picking a
 // device's row tests it: it plays the test view only, and stops moving around
-// the launcher, until Back is pressed on it or Stop clicked (TestMode). Before
-// the game only: Poll and Draw are called while the launcher's settings are
-// edited, never after Play.
+// the launcher, until Back is pressed on it, or B or Esc (TestMode). Before
+// the game only: Poll and Draw are called while the launcher shows, never
+// after Play.
 
 namespace band3::launcher {
 
 class DevicePanel {
 public:
     // Looks for devices again every quarter second (hotplugs), and reads every
-    // device gamepad navigation uses, and the selected one while the tab
+    // device gamepad navigation uses, and the selected one while the screen
     // shows: their state each frame, their capabilities once a list (each read
     // makes the SDK look for devices again). Once a frame; `showing` is
-    // whether the Controllers tab shows (a test ends when not).
+    // whether the Test Controllers screen shows (a test ends when not).
     void Poll(bool showing);
 
     // ends the test, at Play

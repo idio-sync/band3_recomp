@@ -9,7 +9,6 @@
 #include <vector>
 #include <rex/ui/imgui_dialog.h>
 #include "game_data_check.h"
-#include "gamepad_nav.h"
 #include "generated_rows.h"
 #include "instrument_view.h"
 #include "launcher_cvars.h"

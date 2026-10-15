@@ -194,8 +194,8 @@ inline std::string Notice(const LastCrash& c) {
     if (c.kind == Kind::kGpuHang && c.renderer != "emulated") {
         text += "\n\nThe graphics card stopped responding";
         if (!c.renderer.empty()) text += " with renderer = " + c.renderer;
-        text += ". If it keeps happening, setting renderer = emulated (the launcher's Graphics "
-                "tab, or band3.toml) avoids band3's native renderer.";
+        text += ". If it keeps happening, setting renderer = emulated (the launcher's Settings > "
+                "Graphics, or band3.toml) avoids band3's native renderer.";
     }
     return text;
 }

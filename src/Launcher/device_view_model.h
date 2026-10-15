@@ -7,8 +7,8 @@
 #include "src/Input/device_kind.h"
 #include "src/Input/instruments.h"
 
-// The pure parts of the launcher's Controllers device list, test view
-// (instrument_view.h) and gamepad navigation (gamepad_nav.h): what a device is
+// The pure parts of the launcher's Test Controllers device list, test view
+// (instrument_view.h) and gamepad navigation (ui/navigation.h): what a device is
 // called, which view draws it, how a hit fades, what a device's state does
 // to the launcher's navigation, and which devices navigate while one is
 // tested. Kept apart from the ImGui and input
@@ -77,7 +77,7 @@ bool DrivesNavigation(input::DeviceKind kind);
 // instrument gives only its menu buttons (A, B, X, Y, Start, Back, the d-pad),
 // as RB3's menus read it: its whammy, tilt and pickup are sticks and a
 // trigger, and a guitar's orange fret and a kit's kick pedal are LB, which
-// would switch tabs. An RB2-or-later kit's cymbal hit sets d-pad up or down
+// would switch categories. An RB2-or-later kit's cymbal hit sets d-pad up or down
 // as its color's marker, which isn't navigation either.
 NavPad NavFromReading(const input::Caps360& caps, const input::Gamepad360& state);
 
@@ -96,10 +96,10 @@ NavEdges PressedEdges(uint16_t before, uint16_t now);
 // The test view's test mode. Navigation reads every device, so a fret held
 // to see it light would press the focused setting; while a device is tested
 // it plays the test view only. Its buttons, sticks and triggers aren't
-// navigation (Start doesn't play, and its bumpers don't switch tabs), and a
+// navigation (Start doesn't play, and its bumpers don't switch categories), and a
 // Back pressed on it ends the test. Other devices, the mouse and the keyboard
 // navigate as before. The test also ends when its device goes, when the
-// Controllers tab stops showing, and at Play. The buttons the device holds as
+// Test Controllers screen stops showing, and at Play. The buttons the device holds as
 // its test ends count for navigation only once let go and pressed again, so
 // the fret held as Back is pressed doesn't then press the focused row.
 class TestMode {
@@ -110,7 +110,7 @@ public:
     std::optional<uint64_t> Testing() const { return testing_; }
 
     // ends the test unless its device is still `connected` and the
-    // Controllers tab `showing`; once a frame
+    // Test Controllers screen `showing`; once a frame
     void Follow(std::span<const uint64_t> connected, bool showing);
 
     // one device's navigation this frame, as NavFromReading read it: nothing

@@ -66,7 +66,7 @@ std::string DeviceKindLabel(DeviceKind kind, std::string_view name,
     case DeviceKind::kMidiDrums: return "MIDI drum kit";
     case DeviceKind::kMidiKeys: return "MIDI keyboard";
     case DeviceKind::kSdlCopy: return "Dongle instrument as SDL sees it (unused)";
-    case DeviceKind::kStageKit: return "Stage Kit (lit from the Lights tab, not a player)";
+    case DeviceKind::kStageKit: return "Stage Kit (lit from Settings > Lights, not a player)";
     }
     return "Controller";
 }

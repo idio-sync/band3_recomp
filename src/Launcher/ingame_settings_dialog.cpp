@@ -284,7 +284,11 @@ void InGameSettingsDialog::OnDraw(ImGuiIO& io) {
             }
             screen_->Draw(io, pads.nav, true);
         } else if (view_ == View::kVideos) {
-            videos_->Draw(io, pads.nav, true);
+            if (std::exchange(back_requested_, false) && !ImGui::IsKeyPressed(ImGuiKey_Escape, false) &&
+                ImGui::GetFrameCount() > view_frame_ + 1) {
+                videos_->Back();
+            }
+            if (view_ == View::kVideos) videos_->Draw(io, pads.nav, true);
         }
         if (all_settings) DrawAllSettingsNote(io);
     }

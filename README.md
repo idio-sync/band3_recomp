@@ -46,7 +46,7 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 
 **Integrations** (RB3Enhanced-compatible)
 - Network events over UDP: Stage Kit lighting, song, band and venue info
-- Stage Kits lit directly: Santroller and Xbox 360 Stage Kits plugged in by USB, and the RB3E Dashboard's Pico W wireless kits found and tested from the Lights tab
+- Stage Kits lit directly: Santroller and Xbox 360 Stage Kits plugged in by USB, and the RB3E Dashboard's Pico W wireless kits found and tested from Settings > Lights
 - A web page for browsing the song library from a phone and picking the next song, plus the RB3E web API
 - Score history: every finished song's results, with played and stars filters and a History tab on that page
 - Searching [RhythmVerse](https://rhythmverse.co) for custom songs from that page, and downloading them into the game without a restart
@@ -62,11 +62,11 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 <img src="docs/images/karaoke.jpg" alt="The karaoke page during 20th Century Boy: the line being sung and the next, under the song's album art and the band's score, with each player's part along the bottom" width="640">
 
 **Settings**
-- A launcher: a setup screen for folders, graphics, audio, controllers and online features, shown on the first run (Shift at startup brings it back on Windows)
+- A launcher laid out like Rock Band 3's menus, shown on the first run (Shift at startup brings it back on Windows): Play, Settings in twelve categories, Music Videos, Test Controllers, and Find Rock Band 3 to look for the game's folder
 - A pause menu (Escape, or both stick clicks) that pauses a song, with Resume, Settings, the
-  Instrument Lab and Quit game
-- In-game settings (the pause menu's Settings): the launcher's tabs over the running game, plus
-  band3's technical settings, saved to `band3.toml`; All settings... opens the SDK's own menu
+  Instrument Lab and Quit Game
+- In-game settings (the pause menu's Settings): the launcher's Settings over the running game,
+  saved to `band3.toml`; Every SDK setting opens the SDK's own menu
 - Configurable save, cache and song folders, including a portable install
 
 **Graphics**

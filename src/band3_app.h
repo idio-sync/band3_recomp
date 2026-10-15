@@ -338,7 +338,7 @@ class Band3App : public rex::ReXApp {
     // the input system the game will take over (OnPreSetup), built now so the
     // launcher lists and tests the devices the game will read
     band3::input::PrepareInputSystem(window());
-    // for the Lights tab: the kits it lists and tests (it also starts with the game)
+    // for Settings > Lights: the kits it lists and tests (it also starts with the game)
     band3::lights::Start();
     launcher_ = std::make_unique<band3::launcher::LauncherDialog>(
         imgui_drawer(),

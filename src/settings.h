@@ -5,13 +5,15 @@
 #include <string_view>
 #include <rex/cvar.h>
 
-// band3's settings, as rex cvars: the launcher and the in-game settings (F4)
-// edit them and save the changed ones to band3.toml, and so does the SDK's
-// settings menu ("All settings..."), whose "Save to config" writes every one
-// that isn't its default. They can also be set with --name=value on the
-// command line or in band3.toml; band3_config.ini fills in whatever those
-// leave unset. Their categories (Band3/Game, ..., Band3/Advanced/...) follow
-// the in-game settings' tabs.
+// band3's settings, as rex cvars: the launcher and the in-game settings
+// (Escape > Settings) edit them and save the changed ones to band3.toml, and so
+// does the SDK's settings menu ("Every SDK setting"), whose "Save to config"
+// writes every one that isn't its default. They can also be set with
+// --name=value on the command line or in band3.toml; band3_config.ini fills in
+// whatever those leave unset. Their categories (Band3/Game, ...,
+// Band3/Advanced/...) are the SDK menu's; the Settings screen's come from the
+// launcher's table (launcher_settings.cpp), but for the Advanced category's
+// sections, which are Band3/Advanced's.
 
 // Band3/Game
 REXCVAR_DECLARE(bool, fast_start);

@@ -8,8 +8,8 @@ their own type.
 A Rock Band guitar's pickup switch picks the overdrive effect. A Guitar Hero guitar has no
 such switch: its tilt sensor sends on the same input, so if the game takes it for a Rock
 Band guitar, turning it face up changes the effect mid-song. As on the Xbox 360, band3
-plays each guitar as the kind it reports itself (`guitar_type`, the Controllers tab's
-**Guitars play as**). It can't tell on Linux, or for a guitar that isn't an Xbox 360 one;
+plays each guitar as the kind it reports itself (`guitar_type`, **Guitars play as** in
+Settings > Controllers). It can't tell on Linux, or for a guitar that isn't an Xbox 360 one;
 choose Guitar Hero guitars there, or Rock Band guitars to keep a guitar's effect switch.
 
 ## Instrument Lab
@@ -25,7 +25,7 @@ described below.
 
 ## PlayStation and Wii instruments (experimental)
 
-Turn on `hid_instruments` (the Controllers tab, on the launcher or in the in-game settings, then restart) to play Rock Band guitars and
+Turn on `hid_instruments` (**Other consoles' instruments** in Settings > Controllers, on the launcher or in game, then restart) to play Rock Band guitars and
 drum kits through their USB dongles:
 
 - PS3 and Wii guitars and drum kits, and a PS3 or Wii MIDI Pro Adapter in drum mode
@@ -75,7 +75,7 @@ GameInput driver.
 
 ## MIDI drum kits
 
-Turn on `midi_drums` (the Controllers tab's MIDI drums, then restart) to play an electronic drum kit
+Turn on `midi_drums` (**MIDI drum kit** in Settings > MIDI, then restart) to play an electronic drum kit
 over MIDI as a Rock Band pro drum kit, without a MIDI Pro Adapter. It uses the first MIDI
 input unless `midi_drums_device` names one (or part of one's name), and picks up a kit
 plugged in after the game starts.
@@ -92,12 +92,12 @@ floor tom lets go). Turn these off with `midi_drums_combos`.
 
 ## MIDI keyboards
 
-Turn on `midi_keys` (the Controllers tab's MIDI keyboard, then restart) to play a USB MIDI
+Turn on `midi_keys` (**MIDI keyboard** in Settings > MIDI, then restart) to play a USB MIDI
 keyboard as Rock Band 3's keytar, for Keys and Pro Keys, with no other controller: the
 menus, pausing and overdrive come from the keyboard too. It joins as its own player.
 
 - **Port:** the first MIDI input no other band3 MIDI device has, so a kit and a keyboard take
-  one each, unless `midi_keys_device` names one. The Controllers tab's **MIDI port** says which
+  one each, unless `midi_keys_device` names one. Settings > MIDI's **Keyboard port** says which
   it will open. A keyboard plugged in later is picked up.
 - **Range:** the keytar's 25 keys start at `midi_keys_base_note` (**Lowest C**), 48 (C3) by
   default, the lowest C of most 25-key keyboards. On a bigger or transposed keyboard, press
@@ -140,7 +140,7 @@ first keyboard, check:
 
 ## Microphones (experimental)
 
-Turn on `usb_mics` (the Audio tab, on the launcher or in the in-game settings, then restart) to sing through microphones on
+Turn on `usb_mics` (**PC microphones** in Settings > Audio, on the launcher or in game, then restart) to sing through microphones on
 this PC as Xbox 360 USB microphones. The first mic slot uses the system's default
 recording device unless `usb_mic_devices` names microphones (or parts of their names),
 comma separated, one per slot, for harmonies. Microphones plugged in after the game starts
@@ -186,7 +186,7 @@ hardware's own delay (45 ms for an Xbox guitar, 36 ms for Xbox drums). band3's P
 Wii and MIDI instruments reach the game as Xbox ones, so they get those numbers too. The
 Instrument Lab's **Lag** tab shows, per player, the type the game sees and the lag it uses.
 
-`joypad_lag` (the Controllers tab's Input lag, then restart) changes it per type, comma
+`joypad_lag` (**Delay per controller type** in Settings > Controllers, then restart) changes it per type, comma
 separated. It's per type, so a real Xbox instrument of the same type changes too:
 
 | Value | Means |
@@ -206,8 +206,8 @@ Instrument Lab don't go through SDL and aren't affected. The [test harness](test
 
 In the game's menus, pointing at a button or a list's row highlights it, a left click presses
 A (select), a right click B (back), and the wheel presses the d-pad up or down. The presses
-join player 1's controller, so the mouse works with nothing plugged in. `mouse_menus` (the
-Controllers tab's More settings) turns it off.
+join player 1's controller, so the mouse works with nothing plugged in. `mouse_menus` (**Mouse in
+menus**, Settings > Controllers > Menus) turns it off.
 
 Limits:
 
@@ -226,7 +226,8 @@ Limits:
 
 On the song list, start typing and Rock Band 3 Deluxe's search opens with what you typed, as
 RB3Enhanced does on the Xbox 360 and RPCS3. It needs a Deluxe with keyboard search (one with
-`dx_keyboard.dta`). `keyboard_search` (the Controllers tab's More settings) turns it off.
+`dx_keyboard.dta`). `keyboard_search` (**Type to search**, Settings > Controllers > Menus) turns it
+off.
 
 - On the song list, letters, digits, space and punctuation type instead of pressing their
   bound buttons. The arrows, Enter, Backspace and the function keys keep their binds;

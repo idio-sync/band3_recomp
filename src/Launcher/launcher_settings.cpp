@@ -13,7 +13,7 @@ namespace band3::launcher {
 
 namespace {
 
-// the footer's startup box (ShowAtStartup)
+// the "Show this screen at startup" row (ShowAtStartup)
 constexpr std::string_view kShowLauncher = "show_launcher";
 
 // Choices
@@ -1222,7 +1222,7 @@ std::optional<std::string> SettingsModel::Warning(std::string_view cvar) const {
     }
     // what online::Start refuses, said before Play
     if (cvar == "gocentral" && AsBool(Value(cvar)) && !online::IsOwnAccountName(Value("username"))) {
-        return "Set the profile name (Game tab) to a name of your own first: it's your "
+        return "Set the profile name (Settings > Game) to a name of your own first: it's your "
                "GoCentral account, and band3 won't connect as \"User\" or a blank one";
     }
     if (cvar == "liveless_connect" && AsBool(Value("liveless"))) {

@@ -213,11 +213,11 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ca
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `music_video_ytdlp_path`<br>yt-dlp program | *(empty)* | text | yt-dlp, which finds and downloads songs' music videos from the Videos tab: its program file (yt-dlp.exe). Empty looks for yt-dlp on PATH. band3 doesn't come with it: get it from github.com/yt-dlp/yt-dlp |
+| `music_video_ytdlp_path`<br>yt-dlp program | *(empty)* | text | yt-dlp, which finds and downloads songs' music videos from the Music Videos screen: its program file (yt-dlp.exe). Empty looks for yt-dlp on PATH. band3 doesn't come with it: get it from github.com/yt-dlp/yt-dlp |
 | `music_video_ytdlp_args`<br>More yt-dlp options | *(empty)* | text | More yt-dlp options for finding and downloading music videos, as typed on its command line, e.g. --cookies-from-browser firefox for videos YouTube asks to sign in for |
 | `music_video_max_height`<br>Picture size | `1080` | `480` 480p, `720` 720p, `1080` 1080p, `1440` 1440p, `2160` 4K | The tallest picture a downloaded music video has, in lines: 480, 720, 1080, 1440 or 2160. Taller ones take more space and decoding |
 | `music_video_prefer_60fps`<br>60 fps where there is | `true` | `true`, `false` | Download a music video's 60 fps picture where it has one (music_video_full_rate plays it at 60); off, its 30 fps one |
-| `music_video_auto_accept`<br>Take sure matches | `true` | `true`, `false` | When finding music videos, take one without asking when it's surely the song's: its title, channel and length look right and its sound matches the song's. Off, every song's results wait in the Videos tab for you to choose |
+| `music_video_auto_accept`<br>Take sure matches | `true` | `true`, `false` | When finding music videos, take one without asking when it's surely the song's: its title, channel and length look right and its sound matches the song's. Off, every song's results wait on the Music Videos screen for you to choose |
 | `music_video_keep_audio`<br>Keep the videos' sound | `false` | `true`, `false` | Keep a downloaded music video's sound (in the videos folder's .sync folder), so it can be aligned again with its song; band3 plays the video under the game's own sound, so it's otherwise deleted once the video is synced |
 
 ## Lights
@@ -225,7 +225,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ca
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
 | `stagekit_usb`<br>USB Stage Kits | `true` | `true`, `false` | Light the Stage Kits plugged into this PC as the game lights them: Santroller Stage Kits (which a PC sees in HID mode) and Xbox 360 Stage Kits (XInput, each taking one of Windows' four XInput slots). They don't take a player's place |
-| `pico_discovery`<br>Wireless Stage Kits | `true` | `true`, `false` | Find the RB3E Dashboard's wireless Stage Kits (Pico W) on the network, to list and test them in the Lights tab. A Pico answers whichever program found it last, so turn this off while the RB3E Dashboard runs. They follow the game through the RB3Enhanced events. Under the test harness nothing is broadcast, so the network's Picos are left alone |
+| `pico_discovery`<br>Wireless Stage Kits | `true` | `true`, `false` | Find the RB3E Dashboard's wireless Stage Kits (Pico W) on the network, to list and test them in Settings &gt; Lights. A Pico answers whichever program found it last, so turn this off while the RB3E Dashboard runs. They follow the game through the RB3Enhanced events. Under the test harness nothing is broadcast, so the network's Picos are left alone |
 | `black_background_lights`<br>Black background | `false` | `true`, `false` | With RB3Enhanced's Black Background modifier, play in a video venue drawn black with the band hidden instead of in no venue, so the venue's lights still reach the Stage Kits. The venue still loads and draws, which costs what a venue costs |
 
 ## Online
@@ -408,7 +408,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ca
 
 ## More of the SDK's settings
 
-The SDK's settings band3_config.ini sets that the launcher's and the in-game settings' categories don't show. The in-game settings' **All settings...** lists these with the rest of the SDK's.
+The SDK's settings band3_config.ini sets that the launcher's and the in-game settings' categories don't show. The in-game settings' **Every SDK setting** (Advanced) lists these with the rest of the SDK's.
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|

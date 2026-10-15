@@ -88,7 +88,7 @@ std::optional<Progress> ParseProgress(std::string_view line);
 std::optional<std::string> ParseSavedFile(std::string_view line);
 // "ERROR: [youtube] abc: Video unavailable" as "Video unavailable"
 std::optional<std::string> ParseError(std::string_view line);
-// an error as the Videos tab shows it: its first sentence, and what to do
+// an error as the Music Videos screen shows it: its first sentence, and what to do
 // about one that asks to sign in
 std::string Briefly(std::string_view error);
 

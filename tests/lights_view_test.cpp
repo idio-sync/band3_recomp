@@ -1,4 +1,4 @@
-// Checks what the Lights tab shows of the Stage Kits found
+// Checks what Settings > Lights shows of the Stage Kits found
 // (src/Lights/lights_view.cpp).
 
 #include <doctest/doctest.h>

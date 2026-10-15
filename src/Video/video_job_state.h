@@ -9,7 +9,7 @@
 #include "src/Video/video_fetch.h"
 
 // What finding each song's music video last came to (video_jobs.h), kept in
-// the user data root as band3_music_videos.json so the Videos tab's review
+// the user data root as band3_music_videos.json so the Music Videos screen's review
 // list outlasts a restart: {"version": 1, "songs": {"<shortname>": {"end":,
 // "message":, "when": seconds since 1970, "candidates": [{"id":, "url":,
 // "title":, "channel":, "duration":, "views":, "score":, "penalized":,

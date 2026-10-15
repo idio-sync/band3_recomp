@@ -1022,7 +1022,7 @@ std::string Cvar(TestTarget& target, const std::vector<std::string_view>& args) 
 }
 
 // video_find <shortname>...: these songs' music videos found and fetched, a
-// song at a time on the Videos tab's queue (src/Video/video_jobs.h), as its
+// song at a time on the Music Videos screen's queue (src/Video/video_jobs.h), as its
 // batch does; the reply says how many were queued (a song whose video was
 // chosen by hand, or already queued, isn't). The log says how each went.
 std::string VideoFind(TestTarget& target, const std::vector<std::string_view>& args) {

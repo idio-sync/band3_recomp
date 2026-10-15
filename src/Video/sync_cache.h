@@ -14,7 +14,7 @@
 // .sync: <shortname>.song.env, the song's, captured as it played (the game's
 // own audio, which only playing it gives), and <shortname>.video.env, the
 // video soundtrack's, stamped with the video's size and time so a changed
-// video is read again. They let a video be aligned again (the Videos tab)
+// video is read again. They let a video be aligned again (the Music Videos screen)
 // without playing the song.
 
 namespace band3::video {
@@ -32,7 +32,7 @@ inline std::filesystem::path SongEnvelopePath(const std::filesystem::path& video
 inline std::filesystem::path VideoEnvelopePath(const std::filesystem::path& video) {
     return SyncFolder(video) / (video.stem().string() + ".video.env");
 }
-// the last alignment's result, for the Videos tab: <shortname>.result
+// the last alignment's result, for the Music Videos screen: <shortname>.result
 inline std::filesystem::path ResultPath(const std::filesystem::path& video) {
     return SyncFolder(video) / (video.stem().string() + ".result");
 }

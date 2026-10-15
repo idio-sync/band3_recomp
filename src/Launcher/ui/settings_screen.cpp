@@ -615,6 +615,7 @@ void SettingsScreen::OpenTyping(const Row& row) {
         text = model_.Value(s.cvar);
     }
     keyboard_.Open(text, s.cvar == "username" ? 15 : 0);
+    ShowSteamKeyboard();
     typing_ = typing;
     opened_frame_ = ImGui::GetFrameCount();
 }
@@ -623,6 +624,7 @@ void SettingsScreen::OpenSearch() {
     drop_.reset();
     if (!search_) search_ = "";
     keyboard_.Open(*search_);
+    ShowSteamKeyboard();
     typing_ = Typing{.search = true};
     opened_frame_ = ImGui::GetFrameCount();
     focus_ = Focus::kRows;

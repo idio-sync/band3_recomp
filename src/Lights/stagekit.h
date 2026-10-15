@@ -90,7 +90,7 @@ struct Rumble {
 // the rumble an Xbox 360 Stage Kit reads the command from, as the game sends it
 Rumble XInputRumble(Command command);
 
-// The launcher's test controls, as the RB3E Dashboard has them: LED masks...
+// The Try the lights rows' test controls, as the RB3E Dashboard has them: LED masks...
 inline constexpr uint8_t kPatternAll = 0xFF;
 inline constexpr uint8_t kPatternNone = 0x00;
 inline constexpr uint8_t kPatternOdds = 0x55;

@@ -78,7 +78,7 @@ REXCVAR_DEFINE_STRING(music_videos_folder, "videos", "Band3/Videos",
     "relative to band3_config.ini's folder (or band3's own folder if there is no ini)");
 
 REXCVAR_DEFINE_STRING(music_video_ytdlp_path, "", "Band3/Videos",
-    "yt-dlp, which finds and downloads songs' music videos from the Videos tab: its program "
+    "yt-dlp, which finds and downloads songs' music videos from the Music Videos screen: its program "
     "file (yt-dlp.exe). Empty looks for yt-dlp on PATH. band3 doesn't come with it: get it "
     "from github.com/yt-dlp/yt-dlp");
 
@@ -98,7 +98,7 @@ REXCVAR_DEFINE_BOOL(music_video_prefer_60fps, true, "Band3/Videos",
 REXCVAR_DEFINE_BOOL(music_video_auto_accept, true, "Band3/Videos",
     "When finding music videos, take one without asking when it's surely the song's: its "
     "title, channel and length look right and its sound matches the song's. Off, every "
-    "song's results wait in the Videos tab for you to choose");
+    "song's results wait on the Music Videos screen for you to choose");
 
 REXCVAR_DEFINE_BOOL(music_video_keep_audio, false, "Band3/Videos",
     "Keep a downloaded music video's sound (in the videos folder's .sync folder), so it can "
@@ -554,11 +554,11 @@ REXCVAR_DEFINE_BOOL(black_background_lights, false, "Band3/Lights",
 
 REXCVAR_DEFINE_BOOL(pico_discovery, true, "Band3/Lights",
     "Find the RB3E Dashboard's wireless Stage Kits (Pico W) on the network, to list and test "
-    "them in the Lights tab. A Pico answers whichever program found it last, so turn this off "
+    "them in Settings > Lights. A Pico answers whichever program found it last, so turn this off "
     "while the RB3E Dashboard runs. They follow the game through the RB3Enhanced events. Under "
     "the test harness nothing is broadcast, so the network's Picos are left alone");
 
-// Band3/Advanced: the in-game settings' Advanced tab, by subcategory
+// Band3/Advanced: the Settings screen's Advanced category, by subcategory
 
 // Band3/Advanced/Memory
 

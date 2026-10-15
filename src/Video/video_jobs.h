@@ -11,7 +11,7 @@
 #include "src/Video/video_job_state.h"
 
 // The queue of songs whose music videos are being found or fetched, for the
-// Videos tab (launcher and in game): one at a time on a thread of its own
+// Music Videos screen (launcher and in game): one at a time on a thread of its own
 // (video_fetch.h), with the settings as each starts (music_video_ytdlp_path,
 // _ytdlp_args, _max_height, _prefer_60fps, _auto_accept, _keep_audio). A
 // batch and a single song go through it alike. While a song is being
@@ -78,7 +78,7 @@ YtDlpState YtDlpNow(bool again = false);
 // yt-dlp -U on a thread; YtDlpNow says how it went
 void UpdateYtDlp();
 
-// what a search, a download or a match is doing, for the tab
+// what a search, a download or a match is doing, for the screen
 std::string_view FetchStageText(FetchStage stage);
 
 }

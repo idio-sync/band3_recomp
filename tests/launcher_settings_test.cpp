@@ -1025,7 +1025,7 @@ TEST_CASE("the launcher's table is consistent") {
                                "show_launcher", "steam_deck_defaults", "joypad_lag"}) {
         CHECK(FindSetting(table, wanted));
     }
-    // the online settings, on the Online tab; what they need shows only with them on
+    // the online settings, in the Online category; what they need shows only with them on
     for (const char* online : {"gocentral", "gocentral_address", "liveless", "liveless_connect",
                                "liveless_external_ip", "liveless_port"}) {
         INFO(online);

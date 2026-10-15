@@ -9,10 +9,10 @@
 // The settings reference (docs/settings-reference.md), made from the registry
 // so it can't fall behind it:
 //
-// - every setting the in-game settings (F4) show, tab by tab and section by
-//   section in their order, with its name, default, the values it takes and
-//   its description;
-// - the SDK's settings band3_config.ini sets that F4 leaves to All settings...;
+// - every setting the in-game settings (F4) show, category by category and
+//   section by section in their order, with its name, default, the values it
+//   takes and its description;
+// - the SDK's settings band3_config.ini sets that F4 leaves to Every SDK setting;
 // - band3_config.ini's keys and the settings they set.
 //
 // Pure: band3 --settings_reference=<file> fills it in from rex::cvar

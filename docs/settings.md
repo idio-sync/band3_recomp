@@ -2,84 +2,123 @@
 
 ## The launcher
 
-The launcher is band3's setup screen. It opens in the game window before the game starts,
-with tabs for the game and its folders, graphics, audio, controllers, online features, Stage
-Kit lights and music videos. It works with the mouse, the keyboard or a controller, and
-pointing at a setting shows what it does.
+The launcher is band3's setup screen, laid out like Rock Band 3's own menus. It opens in the
+game window before the game starts, on a menu of **Play**, **Settings**, **Music Videos**,
+**Test Controllers** and **Quit**. A card beside it says whether Rock Band 3 was found and
+where, which Rock Band 3 Deluxe it has, how many songs there are, the controllers connected
+and the last song played. While the game data folder doesn't hold the game, [Find Rock Band
+3](#find-rock-band-3) comes first and Play is greyed out; Play then asks first.
 
-- Changes apply as you make them. **Save** keeps them for next time, **Play** saves and starts
-  the game, and **Close** quits, asking first if something isn't saved.
-- A changed setting's **Reset** button puts it back to its default.
+**Controls:** the d-pad, left stick or arrow keys move, A (Enter) picks, B (Esc) goes back,
+and Start (F5) plays from any screen. A guitar's frets and a kit's pads act as the face
+buttons (green is A, red is B), and strumming moves up and down. The mouse works too: a click
+picks, a right click goes back. The bar along the bottom says what each button does, and its
+items can be clicked.
+
+### Settings
+
+**Settings** has twelve categories: Game, Gameplay, Display, Graphics, Audio, Controllers,
+MIDI, Music Videos, Lights, Online, Other Apps and Advanced. LB and RB (Shift+Tab and Tab)
+switch category, and the panel on the right says what the setting picked does.
+
+- Changes apply as you make them, and leaving Settings saves them ([What it
+  saves](#what-it-saves)).
+- Each category counts its settings that differ from their defaults, and a changed setting
+  has an orange dot. Y (R) puts it back to its default.
+- X (/) searches every category for a setting, by its name or what it does.
+- Text (a name, an address) is typed on an on-screen keyboard in the panel; a keyboard
+  plugged in types too.
 - Devices (mics, MIDI ports, monitors) are picked from lists of what's connected. A saved
-  device that isn't plugged in shows as "(not connected)" and stays chosen; **Other...** takes
-  a typed name or part of one.
+  device that isn't plugged in shows as "(not connected)" and stays chosen; **Type one...**
+  takes a typed name or part of one.
 - A setting given on the command line or by a `REX_*` environment variable is shown locked,
   since a saved value wouldn't win over it.
-- Some settings are only in the [in-game settings](#pause-menu-and-in-game-settings): the
-  Advanced tab and each tab's **More settings**.
 
-**Controller navigation:** the d-pad or left stick moves, A picks, B backs out, LB and RB
-switch tabs, and Start plays. A guitar's frets and a kit's pads act as the face buttons
-(green is A, red is B), and strumming moves up and down.
+Some of the categories:
 
-### Tabs
-
-- **Graphics** starts with the settings that trade lag ([Playing with the least
-  lag](#playing-with-the-least-lag)), then **Renderer**: Native (the default on Windows and on a
-  Steam Deck), Emulated (the default on other Linux machines) or Native + emulated (debug). A
-  change to or from Native restarts band3 at Play. The tab shows only the sections the chosen
-  renderer uses ([which settings apply](native-renderer.md#which-settings-apply)).
+- **Game** has the folders (**Game data folder** opens Find Rock Band 3), the profile, and
+  **Startup**, with **Show this screen at startup** ([When it opens](#when-it-opens)).
+- **Display** has the window's settings, and **Smoothness** the ones that trade lag ([Playing
+  with the least lag](#playing-with-the-least-lag)).
   - **Fill the window** (on by default) draws the game at the window's shape with the native
     renderer, with no black bars ([details](native-renderer.md#filling-the-window)).
-  - **Resolution limit** caps the lines the native renderer draws, for a GPU that can't keep up
+  - **Picture shape** (keep 16:9 or stretch) applies to the game's 16:9 picture: the emulated
+    GPU's, or the native renderer's with Fill the window off.
+  - On a Steam Deck, **Steam Deck settings** turns `steam_deck_defaults` on and off: on, the
+    [Deck's settings](#steam-deck) are the defaults and what you change wins over them.
+- **Graphics** starts with **Renderer**: Native (the default on Windows and on a Steam Deck),
+  Emulated (the default on other Linux machines) or Both (debug). A change to or from Native
+  restarts band3 at Play. The category shows only the rows the chosen renderer uses ([which
+  settings apply](native-renderer.md#which-settings-apply)).
+  - **Render size cap** caps the lines the native renderer draws, for a GPU that can't keep up
     at the window's size.
-  - **Aspect** (letterbox or stretch) applies to the game's 16:9 picture: the emulated GPU's,
-    or the native renderer's with Fill the window off.
   - **VSync** shows only with the frame rate cap off, since the cap turns it off.
 - **Audio** lists the PC's microphones for each mic slot, with a level meter beside each.
-- **Controllers** lists every controller and instrument band3 sees and which player each one
-  is. Pick one to test it live: frets, strum, whammy and tilt; pads and cymbals flashing as
-  hard as they're hit; buttons and sticks, and what "Gamepads play as" makes it. While tested
-  it doesn't drive the launcher; press Back, click Stop or leave the tab to end the test. It
-  reads devices through band3's own drivers, so what it shows is what the game will read.
-  Settings apply at once, except **Input backend** (SDL or XInput), which restarts band3 at
-  Play (not under the [test harness](test-harness.md)).
-- **Online** turns on the web song browser, Discord, RB3Enhanced's events, [Home
-  Assistant](integrations.md#home-assistant), [GoCentral and
-  Liveless](integrations.md#gocentral-rock-central). They're read as the game starts, so Play
-  applies them without a restart.
+- **Controllers** has what gamepads and guitars play as, the menus (the mouse, typing to
+  search, the stick-click shortcut), the sticks and the delay per controller type; **MIDI** has
+  MIDI drum kits and keyboards. Settings apply at once, except **Controller reading**
+  (`input_backend`, SDL or XInput), which restarts band3 at Play (not under the [test
+  harness](test-harness.md)). **Test controllers** opens the [Test
+  Controllers](#test-controllers) screen.
+- **Music Videos** has the [music videos](#music-videos)' settings; **Videos and syncing**
+  opens the Music Videos screen.
+- **Lights** has the [Stage Kits](integrations.md#stage-kit-lights)' settings, and **Try the
+  lights** tests them.
+- **Online** and **Other Apps** turn on online play, GoCentral, the web song browser,
+  scrobbling, RB3Enhanced's events, Home Assistant and Discord ([Integrations](integrations.md)).
+  They're read as the game starts, so Play applies them without a restart.
+- **Advanced** lists band3's technical settings by group (Game code, Graphics, Logging,
+  Memory (the heap sizes), Native renderer, Scrobbling, Startup and Test harness), named as in
+  `band3.toml`. The ones only the command line sets are shown, but can't be changed there.
+
+### Test Controllers
+
+**Test Controllers** lists every controller and instrument band3 sees, with Rock Band 3's
+instrument icons and which player each one is, and draws the one picked live: frets, strum,
+whammy and tilt; pads and cymbals flashing as hard as they're hit; a keytar's keys; buttons and
+sticks, and what "Gamepads play as" makes it. A tests one on its own: its buttons only light the
+drawing and don't move the menu, until Back is pressed on it (or B on another controller, or
+Esc). It reads devices through band3's own drivers, so what it shows is what the game will read.
+
+### Find Rock Band 3
+
+**Find Rock Band 3** searches this PC's drives for the game's folder (one holding
+`gen/main_xbox.hdr`) and lists the copies it finds, then the drives, to browse folder by folder
+with a controller. A uses the folder picked, B goes up a level, and Y searches again; **Choose a
+folder in a window...** opens the system's folder window instead.
 
 ### When it opens
 
 - the first time band3 starts, including after updating to a version that has it;
-- when the game data folder doesn't look like Rock Band 3's (the Game tab says what's wrong);
+- when the game data folder doesn't look like Rock Band 3's (the menu's card says where it
+  looked);
 - when Shift is held as band3 starts (Windows only), or with `--launcher`;
-- otherwise only if **Show this screen at startup** was ticked at the last Save or Play. It
-  starts unticked, so after the first Play band3 goes straight into the game.
+- otherwise only if **Show this screen at startup** (Settings > Game) was on when the settings
+  were last saved. It starts off, so after the first Play band3 goes straight into the game.
 
 It never opens when RB3E's `rb3e_relaunch_game` restarts the game, nor for a [test
 harness](test-harness.md) run unless started with `--launcher`. To get it back, hold Shift,
-start with `--launcher`, or tick **Show the launcher at startup** in the in-game settings. On a
-Steam Deck in Game Mode, add `--launcher` to band3's launch options in Steam for one start.
+start with `--launcher`, or turn on **Show this screen at startup** in the in-game settings. On
+a Steam Deck in Game Mode, add `--launcher` to band3's launch options in Steam for one start.
 
 ### What it saves
 
-The launcher saves to `band3.toml` beside the executable: only the settings that differ from
-their default, plus **Show this screen at startup**, keeping the file's other lines. Folders
-inside the install are saved as relative paths, so the install still moves as one folder.
+Leaving Settings, or Play, saves to `band3.toml` beside the executable: only the settings that
+differ from their default, plus **Show this screen at startup**, keeping the file's other lines.
+Folders inside the install are saved as relative paths, so the install still moves as one
+folder.
 
 - It doesn't keep comments: saving over a `band3.toml` with comments, or one it couldn't read,
   keeps the old file as `band3.toml.bak`.
-- If `band3.toml` can't be written, Play offers to play with the settings as they are, for that
-  session only.
-- On a Steam Deck a banner shows the `steam_deck_defaults` switch: on, the [Deck's
-  settings](#steam-deck) are the defaults and what you change wins over them.
+- If `band3.toml` can't be written, a box says why and offers to try again or to keep the
+  settings as they are for that session only.
+- **Quit** asks first if something isn't saved.
 
 ## Playing with the least lag
 
 Rock Band 3 judges each hit on the game's frames, so the game's frame rate, not the display's,
 sets how finely hits are timed: within 16.7 ms at 60 fps, 8.3 ms at 120 and 4.2 ms at 240.
-The Graphics tab's **Latency** section has the settings that trade lag:
+Settings > Display > **Smoothness** has the settings that trade lag:
 
 - **Frame rate cap** (`frame_cap`) paces the game, up to 240, and can run it faster than the
   display: each refresh then shows the newest frame, so a higher cap also means a fresher
@@ -88,11 +127,11 @@ The Graphics tab's **Latency** section has the settings that trade lag:
   frame to the window a steady delay after it's made, so motion steps evenly. Off is about 3 to
   4 ms sooner at 120 fps, with the occasional uneven step. It only holds frames with the cap
   under 1.5 times the display's refresh rate and not `auto`.
-- **Lowest latency** sets the cap to the most whole refreshes' worth of frames up to 240 (240
+- **Lowest delay** sets the cap to the most whole refreshes' worth of frames up to 240 (240
   on a 60 or 120 Hz display, 144 on a 144 Hz one), and over 160 Hz turns smooth frame pacing
-  off too. If the game can't hold that rate, lower the cap.
+  off too; Y (R) then undoes it. If the game can't hold that rate, lower the cap.
 
-The FPS counter (`debug_overlay`) shows the game's frame rate (**Game**), the window's
+The **FPS counter** (`debug_overlay`) shows the game's frame rate (**Game**), the window's
 (**Window**, held back by the display's refresh rate), and with the native renderer **Frame to
 window**, how long a frame waits before it's shown. On a 60 Hz display that wait was 12.6 ms at
 a 120 cap with smooth frame pacing, 9.0 ms without, and 7 to 8 ms at 240.
@@ -102,14 +141,15 @@ After changing any of these, run the game's calibration again (in its Options).
 ## Pause menu and in-game settings
 
 Press **Escape**, or hold both stick clicks on a controller for a second, to open band3's pause
-menu: **Resume**, **Settings**, **Instrument Lab** and **Quit game**.
+menu, a box over the game like Rock Band 3's: **Resume**, **Settings**, **Instrument Lab** and
+**Quit Game**.
 
 - During a song it pauses the song too, with the song's own pause menu underneath; **Resume**
   (or Escape, B or Start) resumes it. In the first couple of seconds of a song, before the game
   takes a pause, the menu opens over the song as it plays.
 - In the game's menus nothing is paused, but the game reads no input while the menu is open.
 - **Instrument Lab** opens the [Instrument Lab](instruments.md#instrument-lab), leaving a song
-  paused. **Quit game** asks, then closes band3.
+  paused. **Quit Game** asks, then closes band3.
 
 | Shortcut | Opens |
 |---|---|
@@ -119,29 +159,29 @@ menu: **Resume**, **Settings**, **Instrument Lab** and **Quit game**.
 
 The same chords close them. They work with either input backend once the game is running, from
 a controller connected as a player; instruments don't count, since their solo frets and pads
-send stick clicks too. `menu_shortcut` (Controllers → More settings) turns them off.
+send stick clicks too. `menu_shortcut` (**Stick-click shortcut**, Settings > Controllers >
+Menus) turns them off.
 
-### Settings
+### Settings in game
 
-**Settings** opens band3's settings over the game, with the launcher's tabs and rows plus an
-**Advanced** tab. While they're open the game gets no input: arrows or the d-pad move, Enter or
-A picks, LB and RB switch tabs, and B, Start or Escape go back.
+**Settings** opens the launcher's [Settings](#settings) screen over the dimmed game, with the
+same categories and controls. While it's open the game gets no input; B or Escape goes back to
+the pause menu, and Start straight back to the game.
 
 - Changes apply as you make them, or from the next time the game loads what they affect. A row
-  that needs a restart says **Applies at the next start** once changed: the folders, most of
-  the Online tab, the instrument drivers, the input backend, the microphones, the emulated
-  GPU's anti-aliasing, and the renderer to or from Native.
-- **Save** writes `band3.toml` as the launcher does. **Back** asks first if something isn't
-  saved; unsaved changes last until band3 closes.
-- Not here, since the game is using the devices: the controller tester (use the Instrument Lab,
-  F6) and the mic level meters.
-- **Advanced** lists band3's technical settings by group: Game code, Graphics, Logging, Memory
-  (the heap sizes), Native renderer, Startup (read-only) and Test harness. Each tab also ends
-  with **More settings**: settings the launcher doesn't show, such as `liveless_rooms` and the
-  FPS counter.
-- **All settings...** opens the SDK's own menu, with every setting by category (band3's under
-  **Band3**) and the key binds. Its **Save to config** writes `band3.toml` differently from
-  band3's Save ([below](#config-files)).
+  that needs a restart says **Applies when band3 restarts**: most of Online and Other Apps,
+  the instrument drivers, the input backend, the microphones, the emulated GPU's
+  anti-aliasing, and the renderer to or from Native. Leaving Settings with such changes opens a
+  box listing them.
+- The folders the game took as it started are locked: **Change this from the launcher**.
+- Leaving Settings saves `band3.toml` as the launcher does. If it can't, a box offers to try
+  again or to keep the changes until band3 closes.
+- Not here, since the game is using the devices: Test Controllers (use the Instrument Lab, F6)
+  and the mic level meters. **Videos and syncing** (Music Videos) opens the Music Videos screen
+  over the game.
+- **Every SDK setting** (Advanced) opens the SDK's own menu, with every setting by category
+  (band3's under **Band3**) and the key binds. Its **Save to config** writes `band3.toml`
+  differently from band3's settings ([below](#config-files)).
 
 ## Config files
 
@@ -150,9 +190,10 @@ settings write it. Any setting can also be passed on the command line (`--forced
 or by a `REX_*` environment variable. The [settings reference](settings-reference.md) lists
 every one, with its default and what it does, generated from the build.
 
-Prefer band3's Save to the SDK menu's **Save to config**. That one rewrites the whole file with
-every setting that differs from the SDK's default, whatever set it, freezing in values from
-`band3_config.ini`, the Steam Deck and the command line, and drops anything else in the file.
+Prefer band3's own saving (leaving Settings, or Play) to the SDK menu's **Save to config**.
+That one rewrites the whole file with every setting that differs from the SDK's default,
+whatever set it, freezing in values from `band3_config.ini`, the Steam Deck and the command
+line, and drops anything else in the file.
 
 `band3_config.ini` is the settings file from before `band3.toml`. band3 still reads it (in its
 working directory, then beside the executable), but releases no longer include it and it has
@@ -169,10 +210,10 @@ place, the first of these wins:
 
 Settings worth knowing about:
 
-- `frame_cap`, `background_fps` ([Graphics](settings-reference.md#graphics)) and
-  `video_mode_refresh_rate` ([the SDK's](settings-reference.md#more-of-the-sdks-settings)):
-  pace the game and its venues.
-- `forced_venue`, `song_speed`, `track_speed` ([Game](settings-reference.md#game)).
+- `frame_cap` ([Display](settings-reference.md#display)), `background_fps`
+  ([Graphics](settings-reference.md#graphics)) and `video_mode_refresh_rate` ([the
+  SDK's](settings-reference.md#more-of-the-sdks-settings)): pace the game and its venues.
+- `forced_venue`, `song_speed`, `track_speed` ([Gameplay](settings-reference.md#gameplay)).
 - `controller_type`, `input_backend` ([Controllers](settings-reference.md#controllers)).
 - RB3Enhanced's `unlock_clothing` and `gold_on_all_difficulties`
   ([Integrations](integrations.md#rb3enhanced-compatibility)), and `game_origin_icons` ([Song
@@ -186,7 +227,7 @@ Settings worth knowing about:
 | `user_data_root` | `Documents\band3` | saves, profiles and the `game` folder |
 | `cache_root` | `cache` in the user data folder | the shader cache |
 
-Set them on the launcher's Game tab, in `band3.toml` or in `band3_config.ini`. A relative path
+Set them on the launcher (Settings > Game), in `band3.toml` or in `band3_config.ini`. A relative path
 is relative to the ini's folder, or the executable's without one, so `user_data_root =
 user_data` makes a portable install.
 
@@ -197,7 +238,7 @@ deleting that folder resets them. Test runs have their own user data.
 ## DLC and custom songs
 
 band3 reads DLC and custom songs (Xbox 360 `CON`, `LIVE` and `PIRS` packages, Rock Band and
-Rock Band 2 DLC included) straight from the folders `content_folders` names (the Game tab;
+Rock Band 2 DLC included) straight from the folders `content_folders` names (Settings > Game;
 `songs` beside the ini by default). Nothing is installed or unpacked, and band3 never writes
 there.
 
@@ -220,7 +261,7 @@ sections. Put the video in the `videos` folder beside the ini (or `music_videos_
 after the song's shortname: `20thcenturyboy.mp4` for 20th Century Boy. The log names the
 shortname as a song starts (`No music video for 20thcenturyboy in music_videos_folder`).
 
-| Setting (Videos tab) | Default | |
+| Setting (Settings > Music Videos) | Default | |
 |---|---|---|
 | `music_video_venue_chance` | `100` | how often, in percent, a song with a video goes to one of the seven video venues: 100 (always), 75, 50, 25, or 0 to leave the venue to the game. A forced venue and the Black Background modifier win. `forced_venue = video` puts every song in a video venue |
 | `music_video_hide_band` | on | the band isn't drawn while a video plays; cameras, lights and [Stage Kits](integrations.md#stage-kit-lights) go on as before |
@@ -270,28 +311,30 @@ a negative one starts it that far into the song.
   (`bind_music_video_earlier`, `bind_music_video_later`); each press is saved to the `.ini`.
   Earlier is for a singer whose lips move after the sound. In a video with parts it moves only
   the part playing ("part 2 of 3").
-- **On the Videos tab** (launcher and in game): on the left the songs in band3's packages and
-  the game's own, each with its video's state (synced, set by hand, not sure, not synced yet)
-  and offset, with a search box and a filter; on the right the song picked (click it, or move
-  through the list with the arrow keys or a controller). There, **Video** has its offset
-  (editable), **Align** (matching its video with its song again), **Use the guess** when
-  auto-sync wasn't sure, its parts with their offsets and **Merge into the part before**, and
-  **Delete it**; **Find another** finds it a video (below). The filter's last choice,
-  **Unmatched videos**, lists videos named after no song (misnamed ones). Along the top:
-  yt-dlp's state, finding videos for many songs, **Videos folder**, **Settings...** (the
-  settings in this section) and **?**.
+- **On the Music Videos screen** (the launcher's menu, or **Videos and syncing** in Settings >
+  Music Videos, in game too): the songs in band3's packages and the game's own under letter
+  bands, each with its video's state (synced, set by hand, not sure, not synced, no video), and
+  on the right the song picked with its offset. LB and RB jump by letter, and **Show** filters
+  the list; its last choice, **Files named for no song**, lists videos named after no song
+  (misnamed ones). On a song, left and right move its offset 10 ms, Y syncs it again (matching
+  its video with its song again) and X finds its video (below). A opens its options: **Play
+  it**, **Sync it again**, **Use the guess** when auto-sync wasn't sure, **Use one offset
+  throughout** for a video with parts, **Search for another**, **Choose a result**, **Paste a
+  link**, **Choose a file** and **Delete it**. Along the top: **Find videos for every song**,
+  **Video settings** (Settings > Music Videos) and **Open the videos folder**.
 
 ### Finding videos
 
 band3 finds and downloads songs' videos with [yt-dlp](https://github.com/yt-dlp/yt-dlp), which
-it doesn't come with: set `music_video_ytdlp_path` (**yt-dlp program**, in the Videos tab's
-**Settings...**) to `yt-dlp.exe`, or put it on PATH. For YouTube, yt-dlp also needs a
+it doesn't come with: set `music_video_ytdlp_path` (**yt-dlp program**, in Settings > Music
+Videos > Finding videos) to `yt-dlp.exe`, or put it on PATH. For YouTube, yt-dlp also needs a
 JavaScript runtime: [Deno](https://deno.com) or Node.js (Bun and QuickJS work too), on PATH
 or, for a game started from Steam on Linux, whose PATH has none of these, beside yt-dlp,
 beside band3, in `~/.deno/bin` or `~/.bun/bin` (where their installers put them) or in
-`~/.local/bin`. band3 tells yt-dlp to use whichever there is, and the tab warns when there's
-none; without one, YouTube refuses some videos (HTTP Error 403). **Update** beside yt-dlp's version runs
-`yt-dlp -U`, worth doing now and then, as an old yt-dlp stops finding videos.
+`~/.local/bin`. band3 tells yt-dlp to use whichever there is, and the Music Videos screen warns
+when there's none; without one, YouTube refuses some videos (HTTP Error 403). Y on **Find
+videos for every song** (**Update yt-dlp**) runs `yt-dlp -U`, worth doing now and then, as an
+old yt-dlp stops finding videos.
 
 - **Search for its video:** searches YouTube for "<artist> <title> official music video" and
   goes down the likeliest results: the song's title and artist in its title, the artist's own
@@ -303,17 +346,16 @@ none; without one, YouTube refuses some videos (HTTP Error 403). **Update** besi
   checked for one that moves (an "audio" upload's still picture matches the song perfectly),
   saved as `<shortname>.<ext>` and synced. yt-dlp's FFmpeg isn't needed: the sound and the
   picture are never merged (`music_video_keep_audio` keeps the sound, for aligning again).
-- **Choosing:** when nothing's sure, the results stay listed under the song (**Use**, or
-  **Open** to watch first). Or paste a link to any video yt-dlp fetches and **Get it**, or
-  **Choose a file...** (copied in, not moved). A video you choose is taken whatever its sound
+- **Choosing:** when nothing's sure, the results wait for you: **Choose a result**, in the
+  song's options, lists the likeliest. Or **Paste a link** to any video yt-dlp fetches, or
+  **Choose a file** (copied in, not moved). A video you choose is taken whatever its sound
   says ("Synced by guess" means check it) and marked `video_pinned = 1`, with `video_source`
   its link: searches for many songs never replace it. Replacing a song's video asks first, and
   the old one stays until the new one's in.
-- **Many at once:** **Find videos for** the songs without a video (leaving out those a search
-  found nothing for, or left for review), those to review, those that failed, or the songs
-  shown (with the search box and filters). It says how much it will download first (about
-  90 MB a song at 1080p), runs a song at a time in the background, can be paused or stopped,
-  waits while a song is being played, and pauses by itself when the network's down or the
+- **Many at once:** **Find videos for every song** finds them for the songs without a video,
+  leaving out those a search found nothing for, or left for review. It says how much it will
+  download first (about 90 MB a song at 1080p), runs a song at a time in the background (A on
+  it pauses or goes on, left stops it), waits while a song is being played, and pauses by itself when the network's down or the
   disk's full. With `music_video_auto_accept` off it only proposes. `music_video_ytdlp_args`
   adds yt-dlp options, such as `--cookies-from-browser firefox` for videos YouTube asks to
   sign in for. Each song's outcome is kept in `band3_music_videos.json` in the user data folder.
@@ -383,7 +425,7 @@ On a Steam Deck, band3 defaults to:
   GPU managed 48.
 
 These fill in only what `band3.toml` and the command line leave unset, but win over
-`band3_config.ini`. Turn `steam_deck_defaults` off (the Steam Deck banner, then restart) to go
+`band3_config.ini`. Turn `steam_deck_defaults` off (**Steam Deck settings** in Settings > Display, then restart) to go
 back to the ini's. band3 recognises a Deck from Steam's `SteamDeck=1`, or on Linux from its
 hardware ids. Keep `resolution_scale` at 1: the screen can't show more than 720p, and scaling
 costs a lot of GPU time.

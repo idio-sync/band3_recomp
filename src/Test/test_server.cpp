@@ -626,7 +626,7 @@ public:
             for (char& c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
             return s;
         };
-        // the packages' songs, then the game's own, as the Videos tab lists them
+        // the packages' songs, then the game's own, as the Music Videos screen lists them
         std::vector<video::SongInfo> songs;
         for (const content::PackageSongs& p : content::PackageSongsNow(std::chrono::seconds(20)))
             for (const content::DtaSong& s : p.songs)

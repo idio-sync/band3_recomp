@@ -234,6 +234,7 @@ void VideosScreen::Options(int song) {
     add("Paste a link", [this, song] {
         typing_link_ = song;
         keyboard_.Open("");
+        ShowSteamKeyboard();
     });
     add("Choose a file", [this, song] { library_.PickFile(library_.Songs()[size_t(song)]); });
     if (s.video >= 0) {

@@ -211,8 +211,8 @@ void DrawHex(const std::vector<uint8_t>& bytes) {
 void DrawConnectedInstruments() {
     if (!REXCVAR_GET(hid_instruments)) {
         ImGui::TextWrapped("PlayStation, Wii and Xbox One Rock Band instruments are read when "
-                           "the hid_instruments setting is on (Escape > Settings, the "
-                           "Controllers tab). It takes a restart.");
+                           "the hid_instruments setting is on (Escape > Settings > "
+                           "Controllers, Other consoles' instruments). It takes a restart.");
         return;
     }
     if (!HidInstrumentsActive()) {
@@ -262,7 +262,7 @@ void DrawConnectedInstruments() {
 void DrawMidiDrums() {
     if (!REXCVAR_GET(midi_drums)) {
         ImGui::TextWrapped("MIDI drum kits are read when the midi_drums setting is on (Escape > "
-                           "Settings, the Controllers tab's MIDI drums). It takes a restart.");
+                           "Settings > MIDI, MIDI drum kit). It takes a restart.");
         return;
     }
     const MidiDrumsStatus status = GetMidiDrumsStatus();
@@ -318,7 +318,7 @@ void DrawMidiDrums() {
 void DrawMidiKeys() {
     if (!REXCVAR_GET(midi_keys)) {
         ImGui::TextWrapped("MIDI keyboards are read when the midi_keys setting is on (Escape > "
-                           "Settings, the Controllers tab's MIDI keyboard). It takes a restart.");
+                           "Settings > MIDI, MIDI keyboard). It takes a restart.");
         return;
     }
     const MidiKeysStatus status = GetMidiKeysStatus();
@@ -375,8 +375,8 @@ void DrawMidiKeys() {
         ImGui::EndTable();
     }
     ImGui::TextWrapped("To set the lowest C, press your keyboard's lowest C, read its note here "
-                       "and set midi_keys_base_note to it (Escape > Settings, the Controllers "
-                       "tab's Lowest C). It takes at once.");
+                       "and set midi_keys_base_note to it (Escape > Settings > MIDI, "
+                       "Lowest C). It takes at once.");
 }
 
 // the JoypadTypes whose pro data RB3 reads (UsbMidiGuitar::Poll and
@@ -450,7 +450,7 @@ void DrawProInstruments() {
 void DrawUsbMics() {
     if (!REXCVAR_GET(usb_mics)) {
         ImGui::TextWrapped("Microphones are used when the usb_mics setting is on (Escape > "
-                           "Settings, the Audio tab). It takes a restart.");
+                           "Settings > Audio, PC microphones). It takes a restart.");
         return;
     }
     const audio::UsbMicStatus status = audio::GetUsbMicStatus();
@@ -585,7 +585,7 @@ void DrawLag() {
     ImGui::TextWrapped("The extra lag, in ms, RB3 builds in for each player's controller type, "
                        "on top of calibration. band3's instruments reach the game as Xbox ones, "
                        "so they get the Xbox hardware's numbers unless joypad_lag (Escape > "
-                       "Settings, the Controllers tab's Input lag) changes them, by the type number shown "
+                       "Settings > Controllers, Delay per controller type) changes them, by the type number shown "
                        "here. The game sets these at startup.");
 
     const auto pads = ProPadStatuses();
