@@ -53,6 +53,26 @@ private:
     bool after_cr_ = false;
 };
 
+#ifndef _WIN32
+// this process's environment for a program it runs, with LD_PRELOAD
+// without Steam's overlay (WithoutSteamOverlay), and gone if that leaves
+// nothing; made before fork, as a child of a process with threads mustn't
+// allocate
+std::vector<std::string> ChildEnvironment() {
+    std::vector<std::string> out;
+    for (char** e = environ; *e; e++) {
+        const std::string_view entry(*e);
+        if (entry.starts_with("LD_PRELOAD=")) {
+            const std::string rest = WithoutSteamOverlay(entry.substr(11));
+            if (!rest.empty()) out.push_back("LD_PRELOAD=" + rest);
+        } else {
+            out.emplace_back(entry);
+        }
+    }
+    return out;
+}
+#endif
+
 #ifdef _WIN32
 std::wstring Widen(std::string_view utf8) {
     if (utf8.empty()) return {};
@@ -63,6 +83,21 @@ std::wstring Widen(std::string_view utf8) {
 }
 #endif
 
+}
+
+std::string WithoutSteamOverlay(std::string_view ld_preload) {
+    std::string out;
+    while (!ld_preload.empty()) {
+        const size_t end = ld_preload.find_first_of(": ");
+        const std::string_view entry = ld_preload.substr(0, end);
+        ld_preload.remove_prefix(end == std::string_view::npos ? ld_preload.size() : end + 1);
+        if (entry.empty() || entry.ends_with("/gameoverlayrenderer.so") ||
+            entry == "gameoverlayrenderer.so")
+            continue;
+        if (!out.empty()) out += ':';
+        out += entry;
+    }
+    return out;
 }
 
 std::string QuoteWindowsArgument(std::string_view arg) {
@@ -181,6 +216,10 @@ ProcessResult RunProcess(const std::filesystem::path& program, const std::vector
     std::vector<char*> argv;
     for (std::string& a : argv_text) argv.push_back(a.data());
     argv.push_back(nullptr);
+    std::vector<std::string> env_text = ChildEnvironment();
+    std::vector<char*> env;
+    for (std::string& e : env_text) env.push_back(e.data());
+    env.push_back(nullptr);
     const pid_t child = fork();
     if (child < 0) {
         result.error = std::string("couldn't start it: ") + std::strerror(errno);
@@ -194,7 +233,7 @@ ProcessResult RunProcess(const std::filesystem::path& program, const std::vector
         close(pipe_fds[0]);
         close(exec_error[0]);
         // a name without a slash is looked for on PATH
-        execvp(argv[0], argv.data());
+        execvpe(argv[0], argv.data(), env.data());
         const int e = errno;
         (void)!write(exec_error[1], &e, sizeof(e));
         _exit(127);

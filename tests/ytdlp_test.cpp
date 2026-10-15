@@ -253,3 +253,13 @@ TEST_CASE("Windows command lines quote what needs it") {
     CHECK(QuoteWindowsArgument("a b\\") == "\"a b\\\\\"");
     CHECK(QuoteWindowsArgument("C:\\x\\y") == "C:\\x\\y");
 }
+
+TEST_CASE("Steam's overlay is left out of LD_PRELOAD for the programs band3 runs") {
+    const std::string steam = "/home/deck/.local/share/Steam/ubuntu12_32/gameoverlayrenderer.so:"
+                              "/home/deck/.local/share/Steam/ubuntu12_64/gameoverlayrenderer.so";
+    CHECK(WithoutSteamOverlay(steam) == "");
+    CHECK(WithoutSteamOverlay("/usr/lib/libmine.so:" + steam) == "/usr/lib/libmine.so");
+    CHECK(WithoutSteamOverlay("gameoverlayrenderer.so /a/libx.so::/b/liby.so") == "/a/libx.so:/b/liby.so");
+    CHECK(WithoutSteamOverlay("/a/notgameoverlayrenderer.so") == "/a/notgameoverlayrenderer.so");
+    CHECK(WithoutSteamOverlay("") == "");
+}
