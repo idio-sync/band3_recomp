@@ -111,16 +111,17 @@ measure; leave them at their defaults. Three to know about:
 
 - `native_present_pipeline`: keep it off. It hangs AMD GPUs and grows video memory.
 - `native_world_ahead`: on by itself on an integrated GPU (one that shares the system's
-  memory, as a laptop's does) and on a Steam Deck (`native_world_ahead_auto`, on by default).
-  It draws each world frame's venue right after that frame, so the frame after it only
-  post-processes it and draws the track and HUD. On a Radeon 680M at 1920x1200, 60 Hz, a
-  song's post frames went from 11.1 to 6.2 ms (median), latency from 22.5 to 17.5 ms, and
-  repeated frames fell by a sixth, the picture the same. Other GPUs leave it off: on a Radeon
-  AI PRO R9700 at 120 Hz it made things worse. `native_world_ahead = true` in `band3.toml`
-  (or on the in-game settings' Advanced tab, Native renderer) turns it on for any GPU;
-  `native_world_ahead_auto = false` leaves it to that alone. The log says which applied, for
-  example `native_world_ahead: on by itself (integrated GPU: AMD Radeon(TM) Graphics)`. On
-  Linux it does nothing unless `native_upload_pipeline` is off too, which the window's frames
+  memory, as a laptop's does) and on a Steam Deck (`native_world_ahead_auto`, on by default;
+  on Linux only with `native_upload_pipeline` off). It draws each world frame's venue right
+  after that frame, so the frame after it only post-processes it and draws the track and HUD.
+  On a Radeon 680M at 1920x1200, 60 Hz, a song's post frames went from 11.1 to 6.2 ms
+  (median), latency from 22.5 to 17.5 ms, and repeated frames fell by a sixth, the picture
+  the same. Other GPUs leave it off: on a Radeon AI PRO R9700 at 120 Hz it made things worse.
+  `native_world_ahead = true` in `band3.toml` (or on the in-game settings' Advanced tab,
+  Native renderer) turns it on for any GPU; `native_world_ahead_auto = false` leaves it to
+  that alone. The log says which applied, for example
+  `native_world_ahead: on by itself (integrated GPU: AMD Radeon(TM) Graphics)`. On Linux it
+  does nothing unless `native_upload_pipeline` is off too, which the window's frames
   otherwise go through: on the Steam Deck at 1080p the two together cut latency from 25 to
   21 ms, but repeated frames went from 23 to 32 per 28 s.
 - `native_slow_frame_ms`, `game_stall_log_ms`: log native frames slower than 12 ms and game

@@ -348,6 +348,11 @@ can there by itself, the picture the same:
 - It draws the common venue materials with smaller versions of its shader
   (`native_view_shader_variants`, on by default): on that laptop repeated frames went from 83
   to 52 a minute, on a Steam Deck at 1080p from 54 to 23 per 28 s.
+- band3 also saves the CPU some work. The game's audio effects are skipped while all they do
+  is process silence (`audio_idle_bypass`, on by default): about 1.5 to 1.8 ms of CPU a frame
+  on that laptop. The songs' Vorbis inverse MDCT runs natively, bit for bit the game's result
+  (`native_vorbis`, on by default): about 0.35 ms a frame. The
+  [settings reference](settings-reference.md#game-code) has the details.
 
 The rest is the system's. On that laptop, with Windows' processor performance boost mode set to
 Disabled, the processor package drew 11-12 W instead of sitting at its 22-24 W limit, repeated

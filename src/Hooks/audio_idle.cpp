@@ -100,7 +100,7 @@ struct Entry {
     Settle settle;
     bool skipping = false;  // its last call was skipped
     Clock::time_point last_seen;
-    // the words of its own its Process reads as its last processed block left
+    // the words of its own that Process reads as its last processed block left
     // them (the compressor's: kCompression_Words)
     std::array<uint32_t, kCompression_Words.size()> left{};
 };
@@ -204,7 +204,7 @@ void Report(Clock::time_point now) {
 }
 
 // Whether one call of a hooked effect instance skips its block, with the logs
-// and counts that go with it. `words` are the words of its own its Process
+// and counts that go with it. `words` are the words of its own that Process
 // reads, as they are now (the compressor's): if anything but its processing
 // changed them, its count starts over. Returns the instance's entry when the
 // original is to run, null when the block is skipped.

@@ -358,9 +358,9 @@ but before the pass counts as drawn in more than one frame (a texture whose last
 its first, a mesh that moves to the arena) and is kept for 120 frames or by the clock, where
 it would have been let go and made again: `resident_meshes` rose by about 70 in a song, and
 the picture is the same. A full texture array lets go what Evict would have before it grows,
-so the arrays are no bigger. `evicted_meshes` and `evicted_textures` come in steps,
-`meshes_by_time` and `textures_by_time` can be 8 frames old, and render targets are checked
-every frame.
+so what waits for the pass doesn't make an array grow. `evicted_meshes` and `evicted_textures`
+come in steps, `meshes_by_time` and `textures_by_time` can be 8 frames old, and render targets
+are checked every frame.
 
 ## Filling the window
 
