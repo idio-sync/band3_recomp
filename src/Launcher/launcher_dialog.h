@@ -14,6 +14,8 @@
 #include "launcher_cvars.h"
 #include "launcher_settings.h"
 #include "settings_page.h"
+#include "ui/skin.h"
+#include "ui/widget_gallery.h"
 
 namespace band3::launcher {
 
@@ -39,6 +41,8 @@ struct LauncherHost {
     std::function<void(bool restart)> start_game;
     // quits band3 without starting the game; runs inside the draw too
     std::function<void()> quit;
+    // the drawer the RB3 textures are made with (ui/skin.h); null until there is one
+    std::function<rex::ui::ImmediateDrawer*()> immediate_drawer;
 };
 
 // The launcher: band3's setup screen, one full-window ImGui page shown before
@@ -129,6 +133,12 @@ private:
     bool save_failed_ = false;
     // why the last save failed, for the "Play anyway?" prompt
     std::string save_error_;
+
+    // the redesign's RB3 textures, and its page of every widget, shown in
+    // place of the settings with Ctrl+Shift+G or BAND3_LAUNCHER_GALLERY=1
+    std::unique_ptr<ui::Skin> skin_;
+    std::unique_ptr<ui::WidgetGallery> gallery_;
+    bool show_gallery_ = false;
 
     // frame pacing
     std::chrono::steady_clock::time_point last_frame_{};

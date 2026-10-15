@@ -356,6 +356,7 @@ class Band3App : public rex::ReXApp {
                 [this]() -> void* { return window() ? window()->GetNativeWindowHandle() : nullptr; },
             .start_game = [this](bool restart) { StartFromLauncher(restart); },
             .quit = [this] { QuitFromLauncher(); },
+            .immediate_drawer = [this] { return immediate_drawer(); },
         });
     if (debug_overlay_) debug_overlay_->set_hidden(true);
     if (song_pick_qr_) song_pick_qr_->set_hidden(true);

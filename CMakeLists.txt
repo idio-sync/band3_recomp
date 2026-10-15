@@ -114,6 +114,13 @@ band3_setup_web_client(band3)
 include(cmake/miniupnpc.cmake)
 band3_setup_miniupnpc(band3 ${CMAKE_CURRENT_SOURCE_DIR}/src/ThirdParty/miniupnpc)
 
+# the launcher's type, Montserrat (src/Launcher/ui/theme.cpp), compiled in
+include(cmake/embed.cmake)
+band3_embed_file(band3 ${CMAKE_CURRENT_SOURCE_DIR}/src/ThirdParty/montserrat/Montserrat-SemiBold.ttf
+                 kMontserratSemiBold)
+band3_embed_file(band3 ${CMAKE_CURRENT_SOURCE_DIR}/src/ThirdParty/montserrat/Montserrat-ExtraBold.ttf
+                 kMontserratExtraBold)
+
 # the build tag src/build_tag.cpp gives the log and the Liveless Rooms server
 include(cmake/build_tag.cmake)
 band3_setup_build_tag(band3 ${CMAKE_CURRENT_SOURCE_DIR})

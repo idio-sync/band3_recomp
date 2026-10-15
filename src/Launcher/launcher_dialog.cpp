@@ -3,6 +3,7 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <algorithm>
+#include <cstdlib>
 #include <string>
 #include <thread>
 #include <utility>
@@ -45,6 +46,11 @@ LauncherDialog::LauncherDialog(rex::ui::ImGuiDrawer* imgui_drawer, LauncherHost 
     saved_config_flags_ = io.ConfigFlags;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     nav_.emplace(io);
+    skin_ = std::make_unique<ui::Skin>(host_.immediate_drawer);
+    gallery_ = std::make_unique<ui::WidgetGallery>(*skin_);
+    if (const char* gallery = std::getenv("BAND3_LAUNCHER_GALLERY")) {
+        show_gallery_ = std::string_view(gallery) == "1";
+    }
     config_problem_ = ConfigFileProblem(host_.config_path);
     if (config_problem_) {
         REXLOG_WARN("Launcher: {} couldn't be read: {}", rex::path_to_utf8(host_.config_path),
@@ -103,7 +109,16 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
     ApplyStyle(style, Scale());
     {
         FontScope font(kBodySize);
-        if (stage_ == Stage::kEditing) {
+        if (stage_ == Stage::kEditing && ImGui::IsKeyPressed(ImGuiKey_G, false) && io.KeyCtrl &&
+            io.KeyShift) {
+            show_gallery_ = !show_gallery_;
+        }
+        if (stage_ == Stage::kEditing && show_gallery_) {
+            skin_->Load(host_.game_data_root ? host_.game_data_root() : std::filesystem::path());
+            skin_->Poll();
+            device_panel_.Poll(false);
+            gallery_->Draw(io, device_panel_.NavPads());
+        } else if (stage_ == Stage::kEditing) {
             page_.BeginFrame();
             // the instrument settings restart band3's drivers as they change
             input::ApplyInputSettings();

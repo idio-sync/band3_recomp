@@ -1,4 +1,5 @@
 #include "launcher_style.h"
+#include "ui/theme.h"
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <algorithm>
@@ -175,7 +176,10 @@ FontScope::FontScope(float size) {
     ImGui::PushFont(FontFor(px), px);
 }
 
-void AddLauncherFonts(ImFontAtlas* atlas) {
+namespace {
+
+// today's launcher's own: a system font at a few sizes
+void AddUiFonts(ImFontAtlas* atlas) {
     // Latin, Latin-1 and Latin Extended-A, and punctuation (dashes, quotes, ...)
     static const ImWchar kRanges[] = {0x0020, 0x00FF, 0x0100, 0x017F, 0x2010, 0x205E, 0};
     const std::filesystem::path file = FindUiFont();
@@ -212,6 +216,14 @@ void AddLauncherFonts(ImFontAtlas* atlas) {
     }
     REXLOG_INFO("Launcher: font {}",
                 data.empty() ? std::string("the SDK's own") : rex::path_to_utf8(file));
+}
+
+}
+
+void AddLauncherFonts(ImFontAtlas* atlas) {
+    AddUiFonts(atlas);
+    // the redesigned launcher's (src/Launcher/ui)
+    ui::AddThemeFonts(atlas);
 }
 
 }

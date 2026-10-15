@@ -108,6 +108,7 @@ add_executable(band3_tests
     audio_idle_test.cpp
     vorbis_mdct_test.cpp
     launcher_start_test.cpp
+    launcher_ui_test.cpp
     launcher_settings_test.cpp
     generated_rows_test.cpp
     settings_reference_test.cpp
@@ -169,6 +170,9 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Launcher/generated_rows.cpp
     ${BAND3_ROOT}/src/Launcher/launcher_settings.cpp
     ${BAND3_ROOT}/src/Launcher/launcher_start.cpp
+    ${BAND3_ROOT}/src/Launcher/ui/font_plan.cpp
+    ${BAND3_ROOT}/src/Launcher/ui/navigation.cpp
+    ${BAND3_ROOT}/src/Launcher/ui/skin_images.cpp
     ${BAND3_ROOT}/src/Launcher/settings_reference.cpp
     ${BAND3_ROOT}/src/Launcher/mic_level.cpp
     ${BAND3_ROOT}/src/Lights/kit_sender.cpp
