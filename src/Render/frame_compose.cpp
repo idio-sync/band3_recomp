@@ -71,7 +71,7 @@ Pool& ThePool() {
 void ReturnFrame(FrameCapture* fc) {
     std::unique_ptr<FrameCapture> owned(fc);
     std::vector<DrawItem> draws;
-    std::vector<ShadeState> shades;
+    ShadeList shades;
     std::vector<Pass> passes;
     std::vector<VelocityObject> velocity_objects;
     std::vector<uint64_t> rt_filtered_keys;
@@ -173,8 +173,8 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
         if (!CameraOf(fc, c.cam)) fc.cameras.push_back(c);
 
     fc.shades.reserve(world.shades.size() + frame.shades.size());
-    fc.shades.insert(fc.shades.end(), world.shades.begin(), world.shades.end());
-    fc.shades.insert(fc.shades.end(), frame.shades.begin(), frame.shades.end());
+    fc.shades.Append(world.shades);
+    fc.shades.Append(frame.shades);
     const int32_t frame_shades = int32_t(world.shades.size());
     fc.draws.reserve(world.draws.size() + frame.draws.size());
 

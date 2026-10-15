@@ -1140,37 +1140,99 @@ const Texture* RtMap(const std::shared_ptr<const Texture>& t) {
     return t && t->tex_obj ? t.get() : nullptr;
 }
 
-// `shade`'s index in fc.shades, added if no equal one exists: equal inputs
-// and equal render-target maps (equal inputs can read different versions,
-// e.g. each character's shadow map). fill_maps fills a new one's other maps.
-// `draw`: called from CaptureShade (timed), not AppendPass
-template <typename FillMaps>
-int32_t InternShade(FrameCapture& fc, ShadeIndex& index, ShadeState&& shade, FillMaps fill_maps,
-                    bool draw = false) {
+// The hash of a shade's inputs (~2.5 KB a draw): eight lanes of XXH3's
+// accumulate step (each word plus the product of its key-mixed halves, into
+// the neighbouring lane), which vectorizes, then mixed: shorter chains than
+// HashBytes's four multiply lanes. Equal hashes are compared in full, so it
+// only has to spread them.
+uint64_t HashShade(const ShadeInputs& in) {
+    static constexpr uint64_t kKey[8] = {
+        0xBE4BA423396CFEB8ull, 0x1CAD21F72C81017Cull, 0xDB979083E96DD4DEull,
+        0x1F67B3B7A4A44072ull, 0x78E5C0CC4EE679CBull, 0x2172FFCC7DD05A82ull,
+        0x8E2443F7744608B8ull, 0x4C263A81E69035E0ull};
+    const auto* b = reinterpret_cast<const uint8_t*>(&in);
+    constexpr size_t n = sizeof(in);
+    uint64_t acc[8] = {0xC2B2AE3Dull, 0x9E3779B185EBCA87ull, 0xC2B2AE3D27D4EB4Full,
+                       0x165667B19E3779F9ull, 0x85EBCA77C2B2AE63ull, 0x85EBCA77ull,
+                       0x27D4EB2F165667C5ull, 0x9E3779B1ull};
+    size_t i = 0;
+    for (; i + 64 <= n; i += 64) {
+        for (int l = 0; l < 8; l++) {
+            uint64_t w;
+            std::memcpy(&w, b + i + l * 8, 8);
+            const uint64_t k = w ^ kKey[l];
+            acc[l ^ 1] += w;
+            acc[l] += (k & 0xFFFFFFFFull) * (k >> 32);
+        }
+    }
+    uint64_t h = n * 0x9E3779B97F4A7C15ull;
+    for (; i + 8 <= n; i += 8) {
+        uint64_t w;
+        std::memcpy(&w, b + i, 8);
+        h = (h ^ w) * 0xC2B2AE3D27D4EB4Full;
+        h ^= h >> 31;
+    }
+    for (; i < n; i++) h = (h ^ b[i]) * 1099511628211ull;
+    for (uint64_t a : acc) {
+        h = (h ^ a) * 0x9E3779B97F4A7C15ull;
+        h ^= h >> 32;
+    }
+    return h;
+}
+
+// the index in fc.shades of one equal to `shade` (hash `hash`), or -1: equal
+// inputs and equal render-target maps (equal inputs can read different
+// versions, e.g. each character's shadow map)
+int32_t FindShade(const FrameCapture& fc, const ShadeIndex& index, uint64_t hash,
+                  const ShadeState& shade) {
     const ShadeInputs& in = shade;
-    const uint64_t hash = HashBytes(&in, sizeof(in));
     auto [first, last] = index.equal_range(hash);
     for (auto it = first; it != last; ++it) {
         const ShadeState& other = fc.shades[it->second];
-        if (std::memcmp(static_cast<const ShadeInputs*>(&other), &in, sizeof(in)) != 0) continue;
+        if (&other != &shade &&
+            std::memcmp(static_cast<const ShadeInputs*>(&other), &in, sizeof(in)) != 0)
+            continue;
         bool same_rts = true;
         for (int m = 0; m < kNumShadeMaps; m++)
             same_rts &= RtMap(other.maps[m]) == RtMap(shade.maps[m]);
-        if (same_rts) {
-            if (draw) Lap(S(), CaptureProfile::kStepShadeIntern);
-            return it->second;
-        }
+        if (same_rts) return it->second;
+    }
+    return -1;
+}
+
+// `shade`'s index in fc.shades, added if no equal one exists (FindShade).
+// fill_maps fills a new one's other maps. `draw`: called from CaptureShade
+// (timed), not AppendPass
+template <typename FillMaps>
+int32_t InternShade(FrameCapture& fc, ShadeIndex& index, ShadeState&& shade, FillMaps fill_maps,
+                    bool draw = false) {
+    const uint64_t hash = HashShade(shade);
+    if (const int32_t found = FindShade(fc, index, hash, shade); found >= 0) {
+        if (draw) Lap(S(), CaptureProfile::kStepShadeIntern);
+        return found;
     }
     if (draw) Lap(S(), CaptureProfile::kStepShadeIntern);
     fill_maps(shade);
     const int32_t i = int32_t(fc.shades.size());
-    fc.shades.push_back(std::move(shade));
+    fc.shades.push_back(std::make_shared<ShadeState>(std::move(shade)), hash);
     index.emplace(hash, i);
     if (draw) {
         S().profile.new_shades++;
         Lap(S(), CaptureProfile::kStepShadeStore);
     }
     return i;
+}
+
+// InternShade for `from`'s shade i (a recorded pass's), shared rather than
+// copied, its hash kept from when it was interned there
+int32_t InternShared(FrameCapture& fc, ShadeIndex& index, const ShadeList& from, size_t i) {
+    const ShadeState& shade = from[i];
+    const uint64_t hash = from.Hash(i) ? from.Hash(i) : HashShade(shade);
+    if (const int32_t found = FindShade(fc, index, hash, shade); found >= 0) return found;
+    const int32_t at = int32_t(fc.shades.size());
+    fc.shades.push_back(from.Shared(i), hash);
+    index.emplace(hash, at);
+    return at;
 }
 
 // The just-made draw's shader inputs from the device's constant shadow,
@@ -1977,10 +2039,8 @@ void RecordCamera(const Guest& g, State& s, uint32_t cam) {
 
 void AppendPass(State& s, FrameCapture& fc, const PassRecord& rec) {
     std::vector<int32_t> remap(rec.content.shades.size());
-    for (size_t i = 0; i < remap.size(); i++) {
-        ShadeState copy = rec.content.shades[i];
-        remap[i] = InternShade(fc, s.shades, std::move(copy), [](ShadeState&) {});
-    }
+    for (size_t i = 0; i < remap.size(); i++)
+        remap[i] = InternShared(fc, s.shades, rec.content.shades, i);
     Pass p = rec.pass;
     p.first_draw = uint32_t(fc.draws.size());
     p.draw_count = uint32_t(rec.content.draws.size());

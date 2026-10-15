@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -340,6 +341,88 @@ struct ShadeState : ShadeInputs {
     TexSampler samplers[kNumShadeMaps];
 };
 
+// FrameCapture::shades: a vector of shades held by pointer, so a frame
+// composed from another (frame_compose.h) and a texture pass appended to each
+// frame share the ~2.7 KB states rather than copying them. Change a shade
+// only while its frame is built or read from a file; a published frame's are
+// shared. Each keeps its inputs' hash if it was interned (0 if not known).
+class ShadeList {
+ public:
+    using Ptr = std::shared_ptr<ShadeState>;
+
+    template <typename Base, typename Ref>
+    struct Iter {
+        Base it;
+        Ref operator*() const { return **it; }
+        auto operator->() const { return &**it; }
+        Iter& operator++() {
+            ++it;
+            return *this;
+        }
+        bool operator==(const Iter& o) const { return it == o.it; }
+        bool operator!=(const Iter& o) const { return it != o.it; }
+    };
+    using iterator = Iter<std::vector<Ptr>::iterator, ShadeState&>;
+    using const_iterator = Iter<std::vector<Ptr>::const_iterator, const ShadeState&>;
+
+    ShadeList() = default;
+    ShadeList(std::initializer_list<ShadeState> shades) { *this = shades; }
+    ShadeList& operator=(std::initializer_list<ShadeState> shades) {
+        clear();
+        for (const ShadeState& s : shades) push_back(s);
+        return *this;
+    }
+
+    size_t size() const { return items_.size(); }
+    bool empty() const { return items_.empty(); }
+    size_t capacity() const { return items_.capacity(); }
+    void reserve(size_t n) {
+        items_.reserve(n);
+        hashes_.reserve(n);
+    }
+    void clear() {
+        items_.clear();
+        hashes_.clear();
+    }
+    // new shades past the end are zeroed, as a vector's
+    void resize(size_t n) {
+        items_.reserve(n);
+        while (items_.size() > n) items_.pop_back();
+        while (items_.size() < n) items_.push_back(std::make_shared<ShadeState>());
+        hashes_.resize(n, 0);
+    }
+    void swap(ShadeList& o) {
+        items_.swap(o.items_);
+        hashes_.swap(o.hashes_);
+    }
+
+    const ShadeState& operator[](size_t i) const { return *items_[i]; }
+    ShadeState& operator[](size_t i) { return *items_[i]; }
+    const Ptr& Shared(size_t i) const { return items_[i]; }
+    uint64_t Hash(size_t i) const { return hashes_[i]; }
+
+    void push_back(const ShadeState& s) { push_back(std::make_shared<ShadeState>(s)); }
+    void push_back(ShadeState&& s) { push_back(std::make_shared<ShadeState>(std::move(s))); }
+    void push_back(Ptr p, uint64_t hash = 0) {
+        items_.push_back(std::move(p));
+        hashes_.push_back(hash);
+    }
+    // `o`'s shades after these, shared
+    void Append(const ShadeList& o) {
+        items_.insert(items_.end(), o.items_.begin(), o.items_.end());
+        hashes_.insert(hashes_.end(), o.hashes_.begin(), o.hashes_.end());
+    }
+
+    iterator begin() { return {items_.begin()}; }
+    iterator end() { return {items_.end()}; }
+    const_iterator begin() const { return {items_.begin()}; }
+    const_iterator end() const { return {items_.end()}; }
+
+ private:
+    std::vector<Ptr> items_;
+    std::vector<uint64_t> hashes_;
+};
+
 // one draw: a material pass of a DxMesh::DrawShowing (one for its material,
 // one per RndMat::NextPass), one DxMultiMesh instance in one pass, a particle
 // system's quads, or a DxRnd::DrawRect quad. Old captures have one draw per
@@ -561,7 +644,7 @@ struct FrameCapture {
     uint64_t frame = 0;
     uint64_t game_frame = 0;  // Present calls before this frame's
     std::vector<DrawItem> draws;
-    std::vector<ShadeState> shades;  // the draws' distinct ones
+    ShadeList shades;  // the draws' distinct ones
     // in draw order, carried ones first; none in old captures (all back buffer)
     std::vector<Pass> passes;
     // DxRnd::DoPostProcess: the first draw after post-processing started
