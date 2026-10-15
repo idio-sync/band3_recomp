@@ -351,7 +351,11 @@ unused, and in a song (from its loading screen until its results are left) so do
 and textures drawn in more than one world; outside a song, what the menus draw goes as
 before, so their texture arrays empty while a song loads (arrays never shrink). `by_kind`
 also counts the frames whose planning took over 8 ms (`plan_spikes`, `plan_spikes_at_cut`),
-and `camera` the cuts seen.
+and `camera` the cuts seen. The meshes, textures and texture arrays are let go in one pass
+every 8 frames (`kEvictScanEvery` in `gpu_view.cpp`; the walk was 0.2 ms of the worker's CPU
+a frame), so what is past its keep stays up to 8 frames longer, `evicted_meshes` and
+`evicted_textures` come in steps and `meshes_by_time` and `textures_by_time` can be that
+old; render targets are checked every frame.
 
 ## Filling the window
 

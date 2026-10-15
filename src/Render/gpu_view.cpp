@@ -70,6 +70,13 @@ constexpr SDL_GPUTextureFormat kShadowFormat = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
 // frames unused (and kKeepSeconds) before a mesh or texture is let go; a
 // render target's picture is forgotten at the frames alone
 constexpr uint64_t kEvictAfter = 120;
+// Evict goes through every mesh, texture and texture array once in this many
+// frames, not after each: a song's ~1500 meshes and ~230 textures cost the
+// worker 0.2 ms a frame. What it lets go is measured in frames (kEvictAfter;
+// ResidencyKeepFrames, 5 to 8 at 60 to 144 Hz) and seconds (kKeepSeconds), so
+// letting it go up to this many frames late changes nothing visible: it
+// stays resident a few frames longer. Render targets don't wait (Evict).
+constexpr uint64_t kEvictScanEvery = 8;
 // seconds unused before a forgotten target's textures go, and what ClockKeep
 // keeps in a song; past kMaxRts, targets go LRU first (gpu_view.h's residency)
 constexpr double kKeepSeconds = 30;
@@ -5337,37 +5344,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
 }
 
 void GpuRenderer::Impl::Evict() {
-    // gpu_view.h's residency: pool geometry stays keep_frames; arena
-    // geometry kEvictAfter frames, or kKeepSeconds per ClockKeep. Arena
-    // space comes back on a rebuild.
-    meshes_by_time = textures_by_time = 0;
-    for (auto it = meshes.begin(); it != meshes.end();) {
-        const Mesh& m = it->second;
-        if (KeepMesh(m.used, m.in_arena, serial, keep_frames, kEvictAfter, IdleSeconds(m.used_at),
-                     KeepSecondsOf(m))) {
-            if (m.used + kEvictAfter < serial) meshes_by_time++;
-            ++it;
-            continue;
-        }
-        it = meshes.erase(it);
-        counts.evicted_meshes++;
-    }
-    // likewise textures (one kept by the clock goes sooner if its array is
-    // full: PlaceTexture)
-    for (auto it = textures.begin(); it != textures.end();) {
-        const Tex& t = it->second;
-        if (KeepTexture(t.first, t.used, serial, keep_frames, kEvictAfter,
-                        IdleSeconds(t.used_at), KeepSecondsOf(t))) {
-            if (t.used + kEvictAfter < serial) textures_by_time++;
-            ++it;
-            continue;
-        }
-        LetTextureGo(it->second);
-        it = textures.erase(it);
-        counts.evicted_textures++;
-    }
-    // a render target unused for kEvictAfter frames is forgotten (marked
-    // undrawn, counted once) and its textures released kKeepSeconds after
+    // Render targets after every frame, not with the scan below: one unused
+    // for kEvictAfter frames is forgotten (marked undrawn, counted once) at
+    // that frame, and from then on what samples it gets what a released
+    // target would give, not its old picture. Done late, that would depend on
+    // where the scan fell. Its textures are released kKeepSeconds after. A
+    // hundred or so of them, not thousands.
     rts_forgotten.clear();
     for (auto it = rts.begin(); it != rts.end();) {
         Rt& rt = it->second;
@@ -5398,6 +5380,38 @@ void GpuRenderer::Impl::Evict() {
         ReleaseRt(f->second);
         rts.erase(f);
         counts.rts_released++;
+    }
+    // Meshes, textures and arrays once in kEvictScanEvery frames, so what
+    // meshes_by_time and textures_by_time say can be that many frames old.
+    if (serial % kEvictScanEvery != 0) return;
+    // gpu_view.h's residency: pool geometry stays keep_frames; arena
+    // geometry kEvictAfter frames, or kKeepSeconds per ClockKeep. Arena
+    // space comes back on a rebuild.
+    meshes_by_time = textures_by_time = 0;
+    for (auto it = meshes.begin(); it != meshes.end();) {
+        const Mesh& m = it->second;
+        if (KeepMesh(m.used, m.in_arena, serial, keep_frames, kEvictAfter, IdleSeconds(m.used_at),
+                     KeepSecondsOf(m))) {
+            if (m.used + kEvictAfter < serial) meshes_by_time++;
+            ++it;
+            continue;
+        }
+        it = meshes.erase(it);
+        counts.evicted_meshes++;
+    }
+    // likewise textures (one kept by the clock goes sooner if its array is
+    // full: PlaceTexture)
+    for (auto it = textures.begin(); it != textures.end();) {
+        const Tex& t = it->second;
+        if (KeepTexture(t.first, t.used, serial, keep_frames, kEvictAfter,
+                        IdleSeconds(t.used_at), KeepSecondsOf(t))) {
+            if (t.used + kEvictAfter < serial) textures_by_time++;
+            ++it;
+            continue;
+        }
+        LetTextureGo(it->second);
+        it = textures.erase(it);
+        counts.evicted_textures++;
     }
     // empty arrays go after kEvictAfter frames (one made ahead, unused, after
     // kArrayKeepSeconds)
