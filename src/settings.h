@@ -143,6 +143,8 @@ REXCVAR_DECLARE(bool, audio_xapo_nonblocking);
 REXCVAR_DECLARE(bool, audio_idle_bypass);
 REXCVAR_DECLARE(bool, native_vorbis);
 REXCVAR_DECLARE(bool, native_vorbis_check);
+REXCVAR_DECLARE(bool, fast_heap_search);
+REXCVAR_DECLARE(bool, fast_heap_search_check);
 REXCVAR_DECLARE(bool, preload_song_start_resources);
 
 // Band3/Advanced/Graphics
