@@ -168,6 +168,47 @@ static_assert(sizeof(PixelUniforms) == sizeof(shade::ShadeParams) + 304);
 // mesh.hlsl's pixel_flags.x
 enum : uint32_t { kPremultiply = 1 };
 
+// RasterOptions::gpu_labels: an indexed draw as DescribeIndexedDraw tells it,
+// kept as numbers so the frame only copies them; the text is made for a hang
+// report alone (Text). Formatting it per draw cost the worker ~10% on a Deck.
+struct DrawLabel {
+    enum Kind : uint8_t { kMesh, kSpotCone, kSoftParticle, kShadowDepth, kVelocity };
+    Kind kind = kMesh;
+    uint32_t index = 0;  // the draw's, or the velocity object's
+    uint32_t mesh = 0, target = 0;
+    uint32_t indices = 0, vertices = 0, bones = 0;
+    int32_t blend = 0, alpha = 0, shade = -1, rect = -1;
+    uint32_t samples = 1;
+    // PixelUniforms' width, height and sampler anisotropy, in tex_layer's
+    // order; then its first five layers
+    uint32_t tex[8][3] = {};
+    uint32_t layers[5] = {};
+
+    std::string Text() const {
+        switch (kind) {
+        case kVelocity:
+            return fmt::format("velocity object {}: mesh {:#x}, {} indices, {} vertices, {} bones",
+                               index, mesh, indices, vertices, bones);
+        case kShadowDepth:
+            return fmt::format("draw {} shadow depth: mesh {:#x} into {:#x}, {} indices, {} "
+                               "vertices, {} bones",
+                               index, mesh, target, indices, vertices, bones);
+        default: break;
+        }
+        std::string textures;
+        for (int t = 0; t < 8; t++)
+            if (tex[t][0]) textures += fmt::format(" {}:{}x{}/{}", t, tex[t][0], tex[t][1], tex[t][2]);
+        return fmt::format("draw {} {}: mesh {:#x} into {:#x}, {} indices, {} vertices, {} "
+                           "bones, blend {}, alpha {}, {} samples, shade {}, rect {}, "
+                           "textures{}, layers {} {} {} {} {}",
+                           index,
+                           kind == kSpotCone ? "spot cone" : kind == kSoftParticle ? "soft particle"
+                                                                                    : "mesh",
+                           mesh, target, indices, vertices, bones, blend, alpha, samples, shade,
+                           rect, textures, layers[0], layers[1], layers[2], layers[3], layers[4]);
+    }
+};
+
 // mesh.hlsl's SpotUniforms, a spotlight's cone's second buffer
 struct SpotUniforms {
     spot::SpotParams spot;
@@ -509,7 +550,7 @@ struct GpuRenderer::Impl {
     // draws in order, a list per command buffer (DescribeIndexedDraw)
     std::mutex draw_log_mutex;
     std::string draw_log_frame;
-    std::vector<std::vector<std::string>> draw_log;
+    std::vector<std::vector<DrawLabel>> draw_log;
     SDL_GPUSampler* sampler = nullptr;
     // native_view_hardware_sampling's samplers, by HardwareSampler's key
     std::unordered_map<uint64_t, SDL_GPUSampler*> hw_samplers;
@@ -4025,9 +4066,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     StartTiming(cmd, o, slot, pre_pass, ahead_pass);
     // RasterOptions::gpu_labels: each indexed draw in record order, a list
     // per command buffer, handed to draw_log on submit; callers check
-    // gpu_labels first so the text is only made when it's on
-    std::vector<std::vector<std::string>> indexed_draws(1);
-    auto label = [&](std::string text) { indexed_draws.back().push_back(std::move(text)); };
+    // gpu_labels first so they're only kept when it's on
+    std::vector<std::vector<DrawLabel>> indexed_draws(1);
+    auto label = [&](const DrawLabel& l) { indexed_draws.back().push_back(l); };
     const std::string frame_label =
         o.gpu_labels ? fmt::format("band3 frame {} (game frame {}, proc_cmds {}, composed {}) "
                                    "at {}x{}",
@@ -4374,11 +4415,16 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             u.depth = {width, height, 0, 0};
             SDL_PushGPUVertexUniformData(cmd, 0, &u, sizeof(u));
             SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof(u));
-            if (o.gpu_labels)
-                label(fmt::format("velocity object {}: mesh {:#x}, {} indices, {} vertices, {} "
-                                  "bones",
-                                  index, v.mesh, v.geom->indices.size(), v.geom->verts.size(),
-                                  v.bones));
+            if (o.gpu_labels) {
+                DrawLabel l;
+                l.kind = DrawLabel::kVelocity;
+                l.index = uint32_t(index);
+                l.mesh = v.mesh;
+                l.indices = uint32_t(v.geom->indices.size());
+                l.vertices = uint32_t(v.geom->verts.size());
+                l.bones = v.bones;
+                label(l);
+            }
             timed_first([&] {
                 SDL_DrawGPUIndexedPrimitives(rp, uint32_t(v.geom->indices.size() / 3 * 3), 1,
                                              m.first_index, int32_t(m.first_vertex), 0);
@@ -4638,11 +4684,17 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SetDepthMap(depth_map, vu.depth_map);
             vu.shade = shades[d];
             timed_uniform([&] { SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu)); });
-            if (o.gpu_labels)
-                label(fmt::format("draw {} shadow depth: mesh {:#x} into {:#x}, {} indices, {} "
-                                  "vertices, {} bones",
-                                  d, it.mesh, it.target, it.geom->indices.size(),
-                                  it.geom->verts.size(), it.bones.size()));
+            if (o.gpu_labels) {
+                DrawLabel l;
+                l.kind = DrawLabel::kShadowDepth;
+                l.index = uint32_t(d);
+                l.mesh = it.mesh;
+                l.target = it.target;
+                l.indices = uint32_t(it.geom->indices.size());
+                l.vertices = uint32_t(it.geom->verts.size());
+                l.bones = uint32_t(it.bones.size());
+                label(l);
+            }
             timed_first([&] {
                 SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
                                              m.first_index, int32_t(m.first_vertex), 0);
@@ -4918,20 +4970,26 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         timed_uniform([&] { SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu)); });
 
         if (o.gpu_labels) {
-            // size and sampler anisotropy, in tex_layer's order
-            std::string textures;
-            for (int t = 0; t < 8; t++)
-                if (pu.tex_size[t][0])
-                    textures += fmt::format(" {}:{}x{}/{}", t, pu.tex_size[t][0],
-                                            pu.tex_size[t][1], pu.tex_sampler[t][3]);
-            label(fmt::format("draw {} {}: mesh {:#x} into {:#x}, {} indices, {} vertices, {} "
-                              "bones, blend {}, alpha {}, {} samples, shade {}, rect {}, "
-                              "textures{}, layers {} {} {} {} {}",
-                              d, cone ? "spot cone" : soft ? "soft particle" : "mesh", it.mesh,
-                              it.target, it.geom->indices.size(), it.geom->verts.size(),
-                              it.bones.size(), blend, int(alpha), pass_samples, it.shade,
-                              it.rect_shader, textures, pu.tex_layer[0], pu.tex_layer[1],
-                              pu.tex_layer[2], pu.tex_layer[3], pu.tex_layer[4]));
+            DrawLabel l;
+            l.kind = cone ? DrawLabel::kSpotCone : soft ? DrawLabel::kSoftParticle : DrawLabel::kMesh;
+            l.index = uint32_t(d);
+            l.mesh = it.mesh;
+            l.target = it.target;
+            l.indices = uint32_t(it.geom->indices.size());
+            l.vertices = uint32_t(it.geom->verts.size());
+            l.bones = uint32_t(it.bones.size());
+            l.blend = blend;
+            l.alpha = int(alpha);
+            l.samples = pass_samples;
+            l.shade = it.shade;
+            l.rect = it.rect_shader;
+            for (int t = 0; t < 8; t++) {
+                l.tex[t][0] = pu.tex_size[t][0];
+                l.tex[t][1] = pu.tex_size[t][1];
+                l.tex[t][2] = pu.tex_sampler[t][3];
+            }
+            std::memcpy(l.layers, pu.tex_layer, sizeof(l.layers));
+            label(l);
         }
         timed_first([&] {
             SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
@@ -5581,7 +5639,7 @@ std::string GpuRenderer::DescribeIndexedDraw(uint32_t before, uint32_t total) {
         return fmt::format("the native renderer's {}, command buffer {} of {}\n  its indexed "
                            "draw {} of {}: {}",
                            impl_->draw_log_frame, i + 1, log.size(), before, total,
-                           log[i][before]);
+                           log[i][before].Text());
     }
     std::string sizes;
     for (const auto& list : log) sizes += (sizes.empty() ? "" : ", ") + std::to_string(list.size());
