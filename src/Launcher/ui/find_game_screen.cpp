@@ -45,6 +45,8 @@ void FindGameScreen::Show() {
     scroll_ = 0;
     problem_.clear();
     roots_ = SearchRoots();
+    root_names_.clear();
+    for (const fs::path& root : roots_) root_names_.push_back(DescribeRoot(root));
     StartSearch();
 }
 
@@ -93,10 +95,11 @@ std::vector<FindGameScreen::Item> FindGameScreen::Items() const {
     }
     out.push_back({Item::kBand, done ? "Found on this PC" : "Searching this PC..."});
     for (const fs::path& path : found) out.push_back({Item::kFound, Shown(path), path, true});
-    if (done && found.empty()) out.push_back({Item::kNote, std::format("None within {} folders of a drive's top: open one below, or choose a folder in a window",
-                                                   SearchLimits{}.depth)});
+    if (done && found.empty()) out.push_back({Item::kNote, "Not found by itself: open the drive you copied it to, or choose a folder in a window"});
     out.push_back({Item::kBand, "Browse"});
-    for (const fs::path& root : roots_) out.push_back({Item::kDrive, Shown(root), root});
+    for (size_t i = 0; i < roots_.size(); i++) {
+        out.push_back({Item::kDrive, i < root_names_.size() ? root_names_[i] : Shown(roots_[i]), roots_[i]});
+    }
     out.push_back({Item::kChoose, "Choose a folder in a window..."});
     return out;
 }

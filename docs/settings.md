@@ -60,7 +60,7 @@ Some of the categories:
   (`input_backend`, SDL or XInput), which restarts band3 at Play (not under the [test
   harness](test-harness.md)). **Test controllers** opens the [Test
   Controllers](#test-controllers) screen.
-- **Music Videos** has the [music videos](#music-videos)' settings; **Videos and syncing**
+- **Music Videos** has the [music videos](#music-videos)' settings; **Music Videos screen**
   opens the Music Videos screen.
 - **Lights** has the [Stage Kits](integrations.md#stage-kit-lights)' settings, and **Try the
   lights** tests them.
@@ -177,7 +177,7 @@ the pause menu, and Start straight back to the game.
 - Leaving Settings saves `band3.toml` as the launcher does. If it can't, a box offers to try
   again or to keep the changes until band3 closes.
 - Not here, since the game is using the devices: Test Controllers (use the Instrument Lab, F6)
-  and the mic level meters. **Videos and syncing** (Music Videos) opens the Music Videos screen
+  and the mic level meters. **Music Videos screen** (Music Videos) opens the Music Videos screen
   over the game.
 - **Every SDK setting** (Advanced) opens the SDK's own menu, with every setting by category
   (band3's under **Band3**) and the key binds. Its **Save to config** writes `band3.toml`
@@ -311,7 +311,7 @@ a negative one starts it that far into the song.
   (`bind_music_video_earlier`, `bind_music_video_later`); each press is saved to the `.ini`.
   Earlier is for a singer whose lips move after the sound. In a video with parts it moves only
   the part playing ("part 2 of 3").
-- **On the Music Videos screen** (the launcher's menu, or **Videos and syncing** in Settings >
+- **On the Music Videos screen** (the launcher's menu, or **Music Videos screen** in Settings >
   Music Videos, in game too): the songs in band3's packages and the game's own under letter
   bands, each with its video's state (synced, set by hand, not sure, not synced, no video), and
   on the right the song picked with its offset. LB and RB jump by letter, and **Show** filters

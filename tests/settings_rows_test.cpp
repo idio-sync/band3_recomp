@@ -4,6 +4,7 @@
 // its list has; what left and right change it to; and search.
 
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
@@ -296,4 +297,12 @@ TEST_CASE("long lists open beside their row; short ones step") {
     CHECK(OpensList(s.Of("frame_cap")));
     CHECK_FALSE(OpensList(s.Of("native_view_msaa")));
     CHECK_FALSE(OpensList(s.Of("autosave")));
+}
+
+TEST_CASE("the lights' tries carry their note") {
+    Screen s;
+    const auto sections = s.Rows(Category::kLights);
+    const auto it = std::ranges::find(sections, std::string("Try the lights"), &Section::name);
+    REQUIRE(it != sections.end());
+    CHECK(it->note);
 }

@@ -1,9 +1,12 @@
 #pragma once
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstddef>
 #include <filesystem>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 // Find Rock Band 3's search: the folders on this PC that hold the game (its
@@ -41,5 +44,11 @@ std::vector<std::filesystem::path> ListFolders(const std::filesystem::path& fold
 // where a search starts: the drives on Windows; elsewhere the home folder and
 // the mounted drives
 std::vector<std::filesystem::path> SearchRoots();
+
+// a drive as Find Rock Band 3 lists it: "D:\  Games · 1.8 TB", its name and
+// size where they're known (0 bytes: not known)
+std::string DriveText(std::string_view root, std::string_view label, uint64_t bytes);
+// a search root's DriveText, read off the drive (its name only on Windows)
+std::string DescribeRoot(const std::filesystem::path& root);
 
 }

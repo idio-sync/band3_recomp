@@ -207,7 +207,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ca
 | `music_video_full_rate`<br>Smooth 60 fps videos | `true` | `true`, `false` | Play a music video faster than the venue's 30 fps (a 60 fps one) at its own frame rate: the video venue is drawn that fast while it plays (as background_fps would, up to the game's rate), which takes about twice the drawing and decoding. Off, it shows at the venue's rate |
 | `music_video_auto_sync`<br>Sync videos by themselves | `true` | `true`, `false` | Find each music video's offset from its sound: when its song is picked, the song's audio (read from its package or the game's archive, decrypted if need be, or for a song band3 can't read taken as it first plays, about 45 s in) is matched against the video's and a sure match is saved as video_start_time in the video's .ini, and used at once. An .ini that sets one is left alone |
 | `music_videos_folder`<br>Videos folder | `videos` | text | The folder music videos are looked for in (empty: videos). A relative folder is relative to band3_config.ini's folder (or band3's own folder if there is no ini) |
-| `music_video_fit`<br>Fit | `fit` | `fit` Fit, with bars, `fill` Fill, edges cut off, `stretch` Stretch | How a music video whose shape isn't the screen's is shown: fit (all of it, with black bars), fill (the whole screen, its edges cut off) or stretch |
+| `music_video_fit`<br>Video shape | `fit` | `fit` Letterbox, `fill` Crop to fill, `stretch` Stretch | How a music video whose shape isn't the screen's is shown: fit (all of it, with black bars), fill (the whole screen, its edges cut off) or stretch |
 
 ### Finding videos
 

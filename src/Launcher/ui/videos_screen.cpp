@@ -110,14 +110,18 @@ std::vector<VideosScreen::Item> VideosScreen::Items() const {
     const video::VideoJobsProgress p = video::VideoJobsNow();
     if (p.running || p.waiting > 0) {
         out.push_back({Item::kFindAll, std::format("Finding videos: {} of {}", p.done, p.total), -1,
-                       p.paused ? "Paused" : ""});
+                       p.paused ? "Go on" : "Pause"});
     } else {
         // what it waits on, before it can run
         const video::YtDlpState yt = video::YtDlpNow(false);
         const char* waits = library_.Songs().empty()           ? "Start the game once first"
                             : !yt.checking && yt.version.empty() ? "Needs yt-dlp"
                                                                  : "";
-        out.push_back({Item::kFindAll, "Find videos for every song", -1, waits, *waits != 0});
+        out.push_back({Item::kFindAll, "Find videos for every song", -1, *waits ? waits : "Start", *waits != 0});
+    }
+    // while there's no yt-dlp, a row to get it, not only Y on Find
+    if (const video::YtDlpState yt = video::YtDlpNow(false); !yt.checking && yt.version.empty()) {
+        out.push_back({Item::kGetYtDlp, "Get yt-dlp"});
     }
     out.push_back({Item::kSettings, "Video settings"});
     out.push_back({Item::kFolder, "Open the videos folder"});
@@ -393,6 +397,7 @@ void VideosScreen::Activate(const Item& item) {
                     }});
         return;
     }
+    case Item::kGetYtDlp: NeedsYtDlp(); return;
     case Item::kSettings:
         if (host_.settings) host_.settings();
         return;
@@ -571,9 +576,6 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
             y += kGap;
             ys.push_back(y);
             y += kBandHeight;
-        } else if (kind == Item::kFindAll || kind == Item::kSettings || kind == Item::kFolder) {
-            ys.push_back(y);
-            y += kBandHeight + 2;
         } else {
             ys.push_back(y);
             y += kRowPitch;
@@ -607,9 +609,23 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
             continue;
         }
         ImVec2 min = page.At(kLeft, top), max = page.At(kRight, top + kRowHeight);
-        if (item.kind == Item::kFindAll || item.kind == Item::kSettings || item.kind == Item::kFolder) {
-            max = page.At(kRight, top + kBandHeight);
-            DrawBand(dl, min, max, item.label, BandKind::kAction, skin_, selected, item.right, item.blocked);
+        if (item.kind == Item::kFindAll || item.kind == Item::kGetYtDlp || item.kind == Item::kSettings ||
+            item.kind == Item::kFolder) {
+            // what the screen does: rows with a button, as in Settings
+            RowLook look;
+            look.label = item.label;
+            look.selected = selected;
+            look.value_caps = true;
+            if (item.blocked) {
+                // Find videos, waiting: why, and dimmed
+                look.value = item.right;
+                look.value_color = color::kWarn;
+                look.locked = true;
+            } else {
+                look.value = item.kind == Item::kFindAll ? std::string_view(item.right) : std::string_view("Open");
+                look.action = true;
+            }
+            DrawRow(dl, min, max, look, skin_);
         } else if (item.kind == Item::kFilter) {
             RowLook look;
             look.label = "Show";
@@ -686,7 +702,9 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
         help = {{HelpButton::kA, "Select"}, {HelpButton::kB, back},
                 {HelpButton::kY, !yt.checking && yt.version.empty() ? "Get yt-dlp" : "Update yt-dlp"}};
     } else {
-        help = {{HelpButton::kA, "Select"}, {HelpButton::kB, back}, {HelpButton::kBumpers, "Letter"}};
+        help = {{HelpButton::kA, "Select"}, {HelpButton::kB, back}};
+        // jumping by letter, once there are songs to jump through
+        if (!library_.Songs().empty()) help.push_back({HelpButton::kBumpers, "Letter"});
     }
     const bool play = bool(host_.play) && !typing_link_ && !box_;
     const int hovered = DrawHelpBar(dl, ImVec2(0, page.At(0, 664).y), io.DisplaySize, help, input_.Keyboard(), play,
@@ -704,7 +722,8 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
         } else {
             switch (help[size_t(hovered)].button) {
             case HelpButton::kA: Handle(Action::kSelect); break;
-            case HelpButton::kB: Handle(Action::kBack); break;
+            case HelpButton::kB:
+    case HelpButton::kBack: Handle(Action::kBack); break;
             case HelpButton::kX: Handle(Action::kSecondary); break;
             case HelpButton::kY: Handle(Action::kReset); break;
             case HelpButton::kBumpers: Handle(Action::kNextCategory); break;
@@ -814,8 +833,8 @@ void VideosScreen::DrawPanel(ImDrawList* dl, const Page& page, const Item* item)
                            : "band3 lists your songs once the game has read them.");
             step(2, "Get yt-dlp", !yt.version.empty(),
                  !yt.version.empty() ? "Found: " + yt.version
-                                     : "The program that downloads the videos. Get yt-dlp, in the help bar, shows "
-                                       "how to install it.");
+                                     : "The program that downloads the videos. The Get yt-dlp row shows how to "
+                                       "install it.");
         } else {
             const size_t count = library_.BatchSongs().size();
             para(std::format("band3 looks up a music video for each of the {} songs without one, downloads it, and "
@@ -841,6 +860,13 @@ void VideosScreen::DrawPanel(ImDrawList* dl, const Page& page, const Item* item)
         }
         break;
     }
+    case Item::kGetYtDlp:
+        heading("Get yt-dlp");
+        rule();
+        para("yt-dlp is the program band3 finds and downloads music videos with. Select it for where to get it; "
+             "then set its program in Video settings, or put it on PATH.",
+             body);
+        break;
     case Item::kSettings:
         heading("Video settings");
         rule();

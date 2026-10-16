@@ -1120,42 +1120,34 @@ void SettingsScreen::DrawCategoryDetail(ImDrawList* dl, float x, float& y, float
     y += 20;
     Paragraph(dl, CategoryAbout(category_), x, y, width, color::kBody);
     y += 10;
-    // each section, and what's in it: its rows' names, a line or two (just
-    // the names where there are many, as in Advanced)
-    const size_t preview_lines = sections_.size() > 5 ? 0 : 2;
+    // each section: its name, how many settings it holds and how many of
+    // them are changed (the changed ones are listed below)
     for (const Section& s : sections_) {
         int changed_here = 0;
-        std::string names;
+        size_t settings = 0;
         for (const Row& r : s.rows) {
-            if (r.kind != RowKind::kControl && RowChanged(model_, r)) changed_here++;
-            names += (names.empty() ? "" : ", ") + r.label;
+            if (r.kind == RowKind::kControl) continue;
+            settings++;
+            if (RowChanged(model_, r)) changed_here++;
         }
-        float name_room = width;
-        if (changed_here > 0) {
-            const std::string count = std::to_string(changed_here) + " changed";
-            const float cw = TextWidth(kCaps(text::kChip), count);
-            PaintText(dl, ImVec2(At(x + width, 0).x - cw, At(0, y + 7).y), kCaps(text::kChip), color::kChanged, count);
-            name_room -= cw / scale_ + 12;
+        // the rows that hold a setting, not the ones that do something
+        const std::string count =
+            settings == 0 ? std::string() : std::to_string(settings) + (settings == 1 ? " setting" : " settings");
+        const std::string changed_text = changed_here > 0 ? std::to_string(changed_here) + " changed" : "";
+        const TextStyle count_style = kPlain(20);
+        float right = TextWidth(count_style, count);
+        if (!changed_text.empty()) right += TextWidth(kCaps(text::kChip), changed_text) + Px(10);
+        PaintText(dl, At(x, y + 5), kCaps(text::kBody), color::kText, s.name, Px(width) - right - Px(12));
+        float rx = At(x + width, 0).x - TextWidth(count_style, count);
+        PaintText(dl, ImVec2(rx, At(0, y + 5).y), count_style, color::kMuted, count);
+        if (!changed_text.empty()) {
+            rx -= TextWidth(kCaps(text::kChip), changed_text) + Px(10);
+            PaintText(dl, ImVec2(rx, At(0, y + 7).y), kCaps(text::kChip), color::kChanged, changed_text);
         }
-        PaintText(dl, At(x, y + 5), kCaps(text::kBody), color::kText, s.name, Px(name_room));
         y += 30;
-        const TextStyle names_style = kPlain(20);
-        const std::vector<std::string> lines = WrapText(names_style, names, Px(width));
-        for (size_t i = 0; i < lines.size() && i < preview_lines; i++) {
-            std::string line = lines[i];
-            if (i + 1 == preview_lines && lines.size() > preview_lines) {
-                // more after it
-                if (!line.empty() && line.back() == ',') line.pop_back();
-                line += "\xE2\x80\xA6";
-            }
-            PaintText(dl, At(x, y), names_style, color::kMuted, line, Px(width));
-            y += 24;
-        }
-        y += 6;
         dl->AddLine(At(x, y), At(x + width, y), color::kHairline);
-        y += 4;
-    }
-    y += 14;
+        y += 2;
+    }    y += 14;
     std::vector<const Row*> changed;
     for (const Section& s : sections_) {
         for (const Row& r : s.rows) {
@@ -1528,7 +1520,8 @@ void SettingsScreen::DrawHelp(ImDrawList* dl, ImGuiIO& io) {
     }
     switch (items[size_t(hovered)].button) {
     case HelpButton::kA: Handle(Action::kSelect); break;
-    case HelpButton::kB: Handle(Action::kBack); break;
+    case HelpButton::kB:
+    case HelpButton::kBack: Handle(Action::kBack); break;
     case HelpButton::kX: Handle(Action::kSecondary); break;
     case HelpButton::kY: Handle(Action::kReset); break;
     case HelpButton::kBumpers: Handle(Action::kNextCategory); break;

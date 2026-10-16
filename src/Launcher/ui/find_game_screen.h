@@ -64,6 +64,8 @@ private:
     // its folders, and which hold the game, as listed when it was opened
     std::vector<std::pair<std::filesystem::path, bool>> listing_;
     std::vector<std::filesystem::path> roots_;
+    // each root as listed: its name and size (DescribeRoot)
+    std::vector<std::string> root_names_;
     // among the items that can be picked (not the bands)
     int selected_ = 0;
     float scroll_ = 0;

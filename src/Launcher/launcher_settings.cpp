@@ -41,8 +41,8 @@ constexpr Choice kVideoHeights[] = {
 };
 
 constexpr Choice kVideoFits[] = {
-    {"fit", "Fit, with bars"},
-    {"fill", "Fill, edges cut off"},
+    {"fit", "Letterbox"},
+    {"fill", "Crop to fill"},
     {"stretch", "Stretch"},
 };
 
@@ -488,7 +488,7 @@ constexpr Setting kSettings[] = {
               "keeps a sure match."},
     {.cvar = "music_videos_folder", .category = kVideos, .section = "Playback",
      .label = "Videos folder", .widget = kPath, .about = "Where the music videos are kept."},
-    {.cvar = "music_video_fit", .category = kVideos, .section = "Playback", .label = "Fit",
+    {.cvar = "music_video_fit", .category = kVideos, .section = "Playback", .label = "Video shape",
      .widget = kCombo, .choices = kVideoFits,
      .about = "How a video whose shape isn't the screen's fills it."},
     {.cvar = "music_video_ytdlp_path", .category = kVideos, .section = "Finding videos",
@@ -1042,6 +1042,10 @@ std::optional<std::string> SettingsModel::SectionNote(Category category,
                    : "The emulated GPU's own settings (render scale, anti-aliasing, texture "
                      "filtering, VSync) show here once band3 runs with it: Play restarts band3 "
                      "for the new renderer.";
+    }
+    // the tries act on the kits at once, and none of them is a setting
+    if (category == Category::kLights && section == "Try the lights") {
+        return "These play on the kits now, to check them; they aren't saved.";
     }
     // the game has its folders: the game data, the user data and the songs
     if (env_.in_game && category == Category::kGame && section == "Folders") {

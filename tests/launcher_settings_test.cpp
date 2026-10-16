@@ -1226,6 +1226,16 @@ TEST_CASE("in game, the folders say they're changed from the launcher") {
     CHECK_FALSE(launcher.SectionNote(Category::kGame, "Folders"));
 }
 
+TEST_CASE("the lights' tries say they play now and aren't saved") {
+    InGame f;
+    f.env.in_game = false;
+    SettingsModel launcher(kTable, f.env, f.store);
+    const auto note = launcher.SectionNote(Category::kLights, "Try the lights");
+    REQUIRE(note);
+    CHECK(note->find("aren't saved") != std::string::npos);
+    CHECK_FALSE(launcher.SectionNote(Category::kLights, "Stage Kits"));
+}
+
 TEST_CASE("in game, Save writes generated rows as the launcher would: overrides only") {
     InGame f;
     std::vector<RegistryCvar> registry(2);

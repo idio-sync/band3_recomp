@@ -1,6 +1,7 @@
 #include "game_search.h"
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <string>
@@ -103,6 +104,45 @@ std::vector<fs::path> SearchRoots() {
     }
 #endif
     return roots;
+}
+
+std::string DriveText(std::string_view root, std::string_view label, uint64_t bytes) {
+    std::string text(root);
+    if (!label.empty()) text += "  " + std::string(label);
+    if (bytes == 0) return text;
+    char size[32];
+    const double tb = double(bytes) / 1e12, gb = double(bytes) / 1e9, mb = double(bytes) / 1e6;
+    if (tb >= 10) std::snprintf(size, sizeof(size), "%.0f TB", tb);
+    else if (tb >= 1) std::snprintf(size, sizeof(size), "%.1f TB", tb);
+    else if (gb >= 1) std::snprintf(size, sizeof(size), "%.0f GB", gb);
+    else std::snprintf(size, sizeof(size), "%.0f MB", mb);
+    return text + (label.empty() ? "  " : " \xC2\xB7 ") + size;
+}
+
+std::string DescribeRoot(const fs::path& root) {
+    std::string label;
+    uint64_t bytes = 0;
+#ifdef _WIN32
+    // an empty card reader answers at once, without asking for a disk
+    DWORD old_mode = 0;
+    SetThreadErrorMode(SEM_FAILCRITICALERRORS, &old_mode);
+    wchar_t name[MAX_PATH + 1] = {};
+    if (GetVolumeInformationW(root.c_str(), name, MAX_PATH + 1, nullptr, nullptr, nullptr, nullptr, 0)) {
+        const int n = WideCharToMultiByte(CP_UTF8, 0, name, -1, nullptr, 0, nullptr, nullptr);
+        if (n > 1) {
+            label.resize(size_t(n - 1));
+            WideCharToMultiByte(CP_UTF8, 0, name, -1, label.data(), n, nullptr, nullptr);
+        }
+        ULARGE_INTEGER total{};
+        if (GetDiskFreeSpaceExW(root.c_str(), nullptr, &total, nullptr)) bytes = total.QuadPart;
+    }
+    SetThreadErrorMode(old_mode, nullptr);
+#else
+    std::error_code ec;
+    const fs::space_info space = fs::space(root, ec);
+    if (!ec) bytes = space.capacity;
+#endif
+    return DriveText(root.string(), label, bytes);
 }
 
 }

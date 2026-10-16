@@ -335,19 +335,20 @@ std::vector<Section> CategoryRows(const SettingsModel& model, Category category,
         }
         if (category == Category::kVideos && name == "Playback") {
             section.rows.insert(section.rows.begin(),
-                                ControlRow(Control::kVideosList, "Videos and syncing"));
+                                ControlRow(Control::kVideosList, "Music Videos screen"));
         }
         if (!section.rows.empty() || section.note) out.push_back(std::move(section));
     }
 
     if (category == Category::kLights) {
         out.push_back(Section{.name = "Try the lights",
+                              .note = model.SectionNote(category, "Try the lights"),
                               .rows = {ControlRow(Control::kLightsDevice, "Kit to test"),
                                        ControlRow(Control::kLightsCheck, "Colour check"),
                                        ControlRow(Control::kFog, "Fog"),
                                        ControlRow(Control::kStrobe, "Strobe"),
                                        ControlRow(Control::kLightsColour, "LED colour"),
-                                       ControlRow(Control::kLeds, "LED"),
+                                       ControlRow(Control::kLeds, "Which LED"),
                                        ControlRow(Control::kPattern, "Pattern"),
                                        ControlRow(Control::kChase, "Chase"),
                                        ControlRow(Control::kLightsOff, "All off")}});

@@ -12,7 +12,7 @@
 // feeds, and the selected one drawn live in the panel as it's played. A
 // tests one on its own: while it's tested its buttons only light the
 // drawing and don't move the menu (a guitar's red fret is B), the others
-// dim, and Back on it (or B and Esc from anything else) stops the test.
+// dim, and its own Back button (or B and Esc from anything else) stops the test.
 
 namespace band3::launcher::ui {
 

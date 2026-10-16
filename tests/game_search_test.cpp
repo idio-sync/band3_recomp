@@ -98,3 +98,15 @@ TEST_CASE("a folder's folders are listed by name, files left out") {
     CHECK(folders[1].filename() == "b");
     CHECK(folders[2].filename() == "c");
 }
+
+TEST_CASE("a drive reads with its name and size") {
+    const std::string dot = " \xC2\xB7 ";
+    CHECK(DriveText("D:\\", "Games", 1'800'000'000'000) == "D:\\  Games" + dot + "1.8 TB");
+    CHECK(DriveText("C:\\", "", 500'107'862'016) == "C:\\  500 GB");
+    CHECK(DriveText("E:\\", "Stick", 31'000'000) == "E:\\  Stick" + dot + "31 MB");
+    // big drives in whole terabytes
+    CHECK(DriveText("S:\\", "Steam", 220'000'000'000'000) == "S:\\  Steam" + dot + "220 TB");
+    // nothing known: the root alone
+    CHECK(DriveText("F:\\", "", 0) == "F:\\");
+    CHECK(DriveText("G:\\", "Card", 0) == "G:\\  Card");
+}

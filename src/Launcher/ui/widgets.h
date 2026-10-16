@@ -33,7 +33,8 @@ enum class ChipKind { kWarn, kGood, kInfo, kBad, kChanged };
 
 // what a help bar item's button is, drawn as its fret colour's dash or, for
 // keyboard players, the key that does it
-enum class HelpButton { kA, kB, kX, kY, kBumpers, kStart };
+// kBack: the controller's own Back (View) button, beside Start; not B
+enum class HelpButton { kA, kB, kX, kY, kBumpers, kStart, kBack };
 struct HelpItem {
     HelpButton button;
     std::string label;

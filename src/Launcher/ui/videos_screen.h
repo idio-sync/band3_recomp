@@ -46,11 +46,11 @@ public:
 private:
     enum class Filter { kAll, kWithout, kWith, kToReview, kFailed, kUnmatched };
     struct Item {
-        enum Kind { kFindAll, kSettings, kFolder, kFilter, kLetter, kSong, kUnmatched, kEmpty } kind;
+        enum Kind { kFindAll, kGetYtDlp, kSettings, kFolder, kFilter, kLetter, kSong, kUnmatched, kEmpty } kind;
         std::string label;
         // into the library's songs or videos
         int index = -1;
-        // a letter band's counts
+        // a letter band's counts; Find videos' value (Start, Pause, why it waits)
         std::string right;
         // Find videos, while it can't run yet: dimmed, and the cursor starts past it
         bool blocked = false;

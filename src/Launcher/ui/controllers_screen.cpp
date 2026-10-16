@@ -188,12 +188,14 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         DrawRule(dl, page.At(px, py), page.At(px + pw, py + 4), skin_);
         py += 14;
         const char* what = testing == e.id
-                               ? (input_.Keyboard() ? "While it's tested its buttons only light the drawing. Press "
-                                                      "Back on it, or Esc, to stop."
-                                                    : "While it's tested its buttons only light the drawing. Press "
-                                                      "Back on it, or B on another controller, to stop.")
+                               ? (input_.Keyboard() ? "While it's tested its buttons only light the drawing. Esc "
+                                                      "stops the test, as does its own Back button, beside Start."
+                                                    : "While it's tested its buttons only light the drawing. Its own "
+                                                      "Back button, beside Start, stops the test, as does B on "
+                                                      "another controller. (On a guitar, B is the red fret.)")
                            : e.testable ? "Select it to test it on its own: its frets, strum and whammy light up here, and its "
-                                          "buttons stop moving the menu until you press Back on it."
+                                          "buttons stop moving the menu until you press its own Back button, beside "
+                                          "Start."
                                         : "It moves the menus itself, so it isn't tested on its own: what it "
                                           "presses lights up here as you use it.";
         for (const std::string& line : WrapText(kPlain(text::kBody), what, Px(pw))) {
@@ -217,7 +219,12 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
 
     std::vector<HelpItem> help;
     if (testing) {
-        help = {{HelpButton::kB, input_.Keyboard() ? "Stop test" : "Back on it, or B, stops the test"}};
+        if (input_.Keyboard()) {
+            help = {{HelpButton::kB, "Stop test"}};
+        } else {
+            // its own Back button, not B (on a guitar, the red fret)
+            help = {{HelpButton::kBack, "On it: stop test"}, {HelpButton::kB, "On another: stop test"}};
+        }
     } else {
         const bool device = selected_ < int(entries_.size());
         if (!device) help.push_back({HelpButton::kA, "Open"});

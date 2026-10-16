@@ -57,7 +57,8 @@ ImU32 DashColor(HelpButton button) {
     case HelpButton::kX: return color::kFretBlue;
     case HelpButton::kY: return color::kFretYellow;
     case HelpButton::kBumpers:
-    case HelpButton::kStart: break;
+    case HelpButton::kStart:
+    case HelpButton::kBack: break;
     }
     return color::kFretOrange;
 }
@@ -70,6 +71,7 @@ const char* PadName(HelpButton button) {
     case HelpButton::kX: return "X";
     case HelpButton::kY: return "Y";
     case HelpButton::kBumpers: return "LB/RB";
+    case HelpButton::kBack: return "Back";
     case HelpButton::kStart: break;
     }
     return "Start";
@@ -111,6 +113,7 @@ const char* KeyName(HelpButton button) {
     case HelpButton::kX: return "/";
     case HelpButton::kY: return "R";
     case HelpButton::kBumpers: return "Tab";
+    case HelpButton::kBack: return "Esc";
     case HelpButton::kStart: break;
     }
     return "F5";
