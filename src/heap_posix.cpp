@@ -14,7 +14,11 @@
 // of its region, all of which is taken, so the search moves below the region
 // rather than through it, a stride or a page at a time. Every candidate it
 // passes over overlaps a taken page, so the first free one it reaches is the
-// SDK's, the highest. It then
+// SDK's, the highest. Each heap also keeps a mark, every page above which is
+// taken: allocating only takes pages, Release (also overridden) raises the
+// mark over a region before the SDK frees it, and Reset, Restore and Dispose
+// forget it. A search starts below the mark, lowered past taken regions to
+// the highest free page, so it walks only what's been allocated since. It then
 // calls the SDK's own AllocRange with the range narrowed to that place, which
 // allocates as it always does (host commit, page entries, counts); if that
 // ever fails, with the caller's range. Bottom-up searches go to the SDK's as
@@ -36,10 +40,12 @@
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <unordered_map>
 
 #include "src/settings.h"
 
@@ -61,6 +67,41 @@ constexpr uint64_t kStateMask = 0x3000000000000000ull;
 constexpr uint64_t kRegionBaseMask = 0xFFFFF;
 
 std::atomic<uint64_t> g_checked{0}, g_mismatched{0};
+
+template <typename Fn>
+Fn Sdk(const char* name) {
+    return reinterpret_cast<Fn>(dlsym(RTLD_NEXT, name));
+}
+
+// Each heap's mark: every page above it is taken (-1: none free). Searches
+// start below it rather than at the top, and lower it to the highest free
+// page they find. Allocating only takes pages, so it holds; Release raises it
+// over the region it frees before the SDK frees it, and Reset, Restore and
+// Dispose forget it (the top again). A leaf lock: taken inside the heap's.
+std::mutex g_marks_mutex;
+std::unordered_map<const BaseHeap*, int64_t> g_marks;
+
+int64_t GetMark(const BaseHeap* heap, int64_t top) {
+    std::lock_guard lock(g_marks_mutex);
+    const auto it = g_marks.find(heap);
+    return it == g_marks.end() || it->second > top ? top : it->second;
+}
+// lowered to `mark` unless raised since it was `was`
+void LowerMark(const BaseHeap* heap, int64_t was, int64_t mark, int64_t top) {
+    std::lock_guard lock(g_marks_mutex);
+    const auto it = g_marks.find(heap);
+    const int64_t now = it == g_marks.end() ? top : it->second;
+    if (now == was) g_marks[heap] = mark;
+}
+void RaiseMark(const BaseHeap* heap, int64_t page) {
+    std::lock_guard lock(g_marks_mutex);
+    const auto it = g_marks.find(heap);
+    if (it != g_marks.end() && it->second < page) it->second = page;
+}
+void ForgetMark(const BaseHeap* heap) {
+    std::lock_guard lock(g_marks_mutex);
+    g_marks.erase(heap);
+}
 
 }  // namespace
 
@@ -117,8 +158,18 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint32_t 
     // with a taken page above its base moves below that page, the lowest such
     // (every candidate in between holds it); but each move goes below the
     // taken page's whole region rather than a stride or the page.
+    // the highest free page: the mark, lowered past taken regions
+    const int64_t was = GetMark(this, entries - 1);
+    int64_t mark = was;
+    while (mark >= 0 && (entry(uint32_t(mark)) & kStateMask)) {
+        int64_t region = int64_t(entry(uint32_t(mark)) & kRegionBaseMask);
+        if (region > mark) region = mark;
+        mark = region - 1;
+    }
+    LowerMark(this, was, mark, entries - 1);
+
     int64_t found = -1;
-    int64_t base = align_down(int64_t(high_page) - pages + 1);
+    int64_t base = align_down(std::min<int64_t>(high_page, mark) - pages + 1);
     while (base >= low_page) {
         int64_t taken = -1;
         for (int64_t p = base; p < base + pages; p++) {
@@ -173,6 +224,47 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint32_t 
     }
     return sdk(this, low_address, high_address, size, alignment, allocation_type, protect,
                top_down, out_address);
+}
+
+bool BaseHeap::Release(uint32_t base_address, uint32_t* out_region_size) {
+    using Fn = bool (*)(BaseHeap*, uint32_t, uint32_t*);
+    static const Fn sdk = Sdk<Fn>("_ZN3rex6memory8BaseHeap7ReleaseEjPj");
+    // over the region it frees, as the SDK finds it, before it's free
+    const uint32_t entries = uint32_t(page_table_.size() * sizeof(PageEntry) / kEntryBytes);
+    const uint32_t page = (base_address - heap_base_) >> page_size_shift_;
+    if (base_address >= heap_base_ && page < entries) {
+        uint64_t e;
+        std::memcpy(&e, reinterpret_cast<const uint8_t*>(page_table_.data()) +
+                            size_t(page) * kEntryBytes, 8);
+        const int64_t first = int64_t(e & kRegionBaseMask);
+        const int64_t count = int64_t((e >> 32) & 0xFFFFF);
+        const int64_t last = count ? first + count - 1 : int64_t(entries) - 1;
+        RaiseMark(this, std::max<int64_t>(std::min<int64_t>(last, entries - 1), page));
+    } else {
+        ForgetMark(this);
+    }
+    return sdk(this, base_address, out_region_size);
+}
+
+void BaseHeap::Reset() {
+    using Fn = void (*)(BaseHeap*);
+    static const Fn sdk = Sdk<Fn>("_ZN3rex6memory8BaseHeap5ResetEv");
+    ForgetMark(this);
+    sdk(this);
+}
+
+bool BaseHeap::Restore(stream::ByteStream* stream) {
+    using Fn = bool (*)(BaseHeap*, stream::ByteStream*);
+    static const Fn sdk = Sdk<Fn>("_ZN3rex6memory8BaseHeap7RestoreEPNS_6stream10ByteStreamE");
+    ForgetMark(this);
+    return sdk(this, stream);
+}
+
+void BaseHeap::Dispose() {
+    using Fn = void (*)(BaseHeap*);
+    static const Fn sdk = Sdk<Fn>("_ZN3rex6memory8BaseHeap7DisposeEv");
+    ForgetMark(this);
+    sdk(this);
 }
 
 }  // namespace rex::memory
