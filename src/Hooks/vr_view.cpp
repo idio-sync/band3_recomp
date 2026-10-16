@@ -4,6 +4,9 @@
 //   CamShot::DoHide hides the shot's hide lists (and shows its show list)
 //     as the shot starts; skipped, nothing is hidden. UnHide then does
 //     nothing too: it only undoes a DoHide that set the shot's +410 flag.
+//   WorldDir::SetCrowds shows the crowds the shot lists and hides the rest
+//     (a venue's audience is several WorldCrowds, and a shot usually lists
+//     one, or none); after it, every crowd shows.
 //   RndDrawable::Draw draws an object only when its bounding sphere is
 //     inside the current camera's frustum; skipped, every showing object
 //     draws.
@@ -13,6 +16,7 @@
 #include <rex/logging.h>
 
 extern "C" void __imp__CamShot__DoHide(PPCContext& ctx, uint8_t* base);
+extern "C" void __imp__WorldDir__SetCrowds(PPCContext& ctx, uint8_t* base);
 extern "C" void __imp__RndDrawable__Draw(PPCContext& ctx, uint8_t* base);
 
 namespace {
@@ -25,6 +29,8 @@ constexpr uint32_t kCamShot_HideList2 = 156;
 constexpr uint32_t kCamShot_HideVecBegin = 168;
 constexpr uint32_t kCamShot_HideVecEnd = 172;
 constexpr uint32_t kCamShot_DrawOverrideCount = 184;
+// WorldDir: its crowds, a linked list (node +0 the crowd, +4 the next)
+constexpr uint32_t kWorldDir_Crowds = 692;
 // RndDrawable: its showing flag, and the vtable slot of DrawShowing
 constexpr uint32_t kRndDrawable_Showing = 8;
 constexpr uint32_t kRndDrawable_DrawShowing = 20;
@@ -50,6 +56,18 @@ extern "C" REX_FUNC(CamShot__DoHide) {
     REXLOG_INFO("vr_show_all: shot {:08X} would hide {} and show {}; {} draw overrides", shot,
                 hidden, ListLength(base, REX_LOAD_U32(shot + kCamShot_ShowList)),
                 REX_LOAD_U32(shot + kCamShot_DrawOverrideCount));
+}
+
+extern "C" REX_FUNC(WorldDir__SetCrowds) {
+    const uint32_t world = ctx.r3.u32;
+    // the shot's crowds still get its billboard rotation
+    __imp__WorldDir__SetCrowds(ctx, base);
+    if (!REXCVAR_GET(vr_show_all)) return;
+    uint32_t shown = 0;
+    for (uint32_t node = REX_LOAD_U32(world + kWorldDir_Crowds); node && shown < 1000;
+         node = REX_LOAD_U32(node + 4), shown++)
+        REX_STORE_U8(REX_LOAD_U32(node) + kRndDrawable_Showing, 1);
+    REXLOG_INFO("vr_show_all: {} crowds shown", shown);
 }
 
 extern "C" REX_FUNC(RndDrawable__Draw) {
