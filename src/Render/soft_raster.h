@@ -141,7 +141,7 @@ struct RasterOptions {
     // within these clip y (bottom, top; 16:9 frame) are cut at 16:9 instead
     // of stretched (InOverlayCut). 0 0 none.
     float overlay_cut[2] = {0.0f, 0.0f};
-    // GPU, dred setting: describe each indexed draw (DescribeIndexedDraw) so
+    // GPU, dred setting (Windows): describe each indexed draw (DescribeIndexedDraw) so
     // a hang report (crash_trace.cpp) names it. Not command-list labels:
     // SDL's need WinPixEventRuntime.dll, which band3 doesn't ship.
     bool gpu_labels = false;
