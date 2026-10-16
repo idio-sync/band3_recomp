@@ -2,6 +2,7 @@
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -97,7 +98,15 @@ private:
         kVideos,
     };
     void ShowHub();
-    void ShowSettings(std::optional<Category> category = std::nullopt);
+    // shows a screen (Settings at `category`)
+    void Show(View view, std::optional<Category> category = std::nullopt);
+    // opens a screen from the one showing; Back on it comes back here.
+    // Opening the screen this one was opened from goes back to it.
+    void Open(View to, std::optional<Category> category = std::nullopt);
+    // Back on `from`: the screen it was opened from, the menu at first
+    void Back(View from);
+    // where Back on `from` goes: "Back to menu", "Back to Settings"
+    std::string BackLabel(View from) const;
     void Pick(ui::HubItem item);
     // Quit, asking first when changes are kept unsaved
     void Quit();
@@ -124,6 +133,8 @@ private:
     SettingsModel model_;
     Stage stage_ = Stage::kEditing;
     View view_ = View::kHub;
+    // the screen each was opened from
+    std::map<View, View> opened_from_;
     int starting_frames_ = 0;
     // Play restarts band3 for a new input backend (RestartsForInput)
     bool restart_ = false;

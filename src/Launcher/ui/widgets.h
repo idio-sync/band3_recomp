@@ -26,7 +26,7 @@ enum class ItemLook {
 
 enum class BandKind {
     kSection,  // a teal heading over a section's rows
-    kAction,   // a red band that does something when picked (RB3's SETLISTS / BATTLES)
+    kAction,   // a graphite band that does something when picked (RB3's SETLISTS / BATTLES)
 };
 
 enum class ChipKind { kWarn, kGood, kInfo, kBad, kChanged };

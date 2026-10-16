@@ -251,9 +251,14 @@ std::string SettingValue(const SettingsModel& model, const Setting& s, const Dev
     case Widget::kFloatInput: return Number(AsFloat(value).value_or(0)) + unit;
     case Widget::kPercentSlider:
         return std::to_string(std::lround(AsFloat(value).value_or(0) * 100)) + "%";
-    case Widget::kText: return value.empty() ? "None" : value;
+    case Widget::kText: return value.empty() ? "Not set" : value;
     case Widget::kPassword: return value.empty() ? "Not set" : "Set";
-    case Widget::kPath: return value.empty() ? "Default" : value;
+    case Widget::kPath: {
+        if (!value.empty()) return value;
+        // the folder the default is, where it's known
+        const std::string folder = model.EffectiveDefault(s.cvar);
+        return folder.empty() ? "Default" : folder;
+    }
     case Widget::kFolderList: {
         const auto folders = paths::SplitList(value);
         if (folders.empty()) return "None";

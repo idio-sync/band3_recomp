@@ -28,6 +28,8 @@ struct VideosHost {
     std::function<std::vector<std::filesystem::path>()> folders;
     std::function<void()> settings;
     std::function<void()> back;
+    // B's name in the help bar ("Back" without one)
+    std::function<std::string()> back_label;
     // Start: the launcher plays; none in game
     std::function<void()> play;
 };

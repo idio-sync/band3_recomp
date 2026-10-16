@@ -68,6 +68,16 @@ TEST_CASE("the search stops at its depth and its folder count") {
     CHECK(FindGameFolders(roots, SearchLimits{.depth = 5, .max_folders = 10}).empty());
 }
 
+TEST_CASE("the search counts the folders it has looked in, as it goes") {
+    Tree t;
+    t.Game("one/two/game");
+    const fs::path roots[] = {t.root};
+    std::atomic<size_t> looked_in{0};
+    CHECK(FindGameFolders(roots, SearchLimits{}, nullptr, &looked_in).size() == 1);
+    // the root, one, two and the game's folder
+    CHECK(looked_in.load() == 4);
+}
+
 TEST_CASE("the search leaves the system's folders alone") {
     Tree t;
     t.Game("Windows/Rock Band 3");

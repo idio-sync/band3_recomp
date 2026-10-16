@@ -101,3 +101,10 @@ TEST_CASE("a path too long for its line keeps its drive and its last folders") {
     // forward slashes too
     CHECK(ShortPath("/home/deck/games/rb3", 14, width) == "/" + ellipsis + "/games/rb3");
 }
+TEST_CASE("counts read with thousands separators") {
+    CHECK(Thousands(0) == "0");
+    CHECK(Thousands(999) == "999");
+    CHECK(Thousands(1612) == "1,612");
+    CHECK(Thousands(40000) == "40,000");
+    CHECK(Thousands(1234567) == "1,234,567");
+}

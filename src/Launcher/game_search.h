@@ -28,10 +28,12 @@ struct SearchLimits {
 
 // the folders under `roots` (the roots too) that hold the game, nearest
 // first; the system's folders and hidden ones are passed over. `stop`, when
-// set, ends the search early.
+// set, ends the search early; `looked_in`, when given, counts the folders
+// looked in as it goes.
 std::vector<std::filesystem::path> FindGameFolders(std::span<const std::filesystem::path> roots,
                                                    const SearchLimits& limits,
-                                                   const std::atomic<bool>* stop = nullptr);
+                                                   const std::atomic<bool>* stop = nullptr,
+                                                   std::atomic<size_t>* looked_in = nullptr);
 
 // a folder's folders, by name ignoring case; hidden and system ones left out
 std::vector<std::filesystem::path> ListFolders(const std::filesystem::path& folder);

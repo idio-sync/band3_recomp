@@ -141,7 +141,7 @@ void WidgetGallery::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
     char strip[96];
     std::snprintf(strip, sizeof(strip), "%s: %zu of %zu textures", plain_ ? "Plain look" : "RB3 look",
                   parts, kSkinPartCount);
-    PaintText(dl, at(40, 100), kCaps(text::kStrip), IM_COL32(232, 232, 236, 255), strip);
+    PaintText(dl, at(40, 100), kCaps(text::kStrip), color::kStripText, strip);
     if (!last_action_.empty()) {
         const float w = TextWidth(kCaps(text::kHelp), last_action_);
         PaintText(dl, ImVec2(at(880, 101).x - w, at(880, 101).y), kCaps(text::kHelp), color::kGood,
@@ -203,7 +203,7 @@ void WidgetGallery::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         "Smooths jagged edges. Each step asks more of the graphics card. Text wraps at the panel's "
         "width, in Montserrat SemiBold at 20 px a line.";
     for (const std::string& line : WrapText(kPlain(text::kBody), body, 296 * s)) {
-        PaintText(dl, at(932, py), kPlain(text::kBody), IM_COL32(217, 220, 229, 255), line);
+        PaintText(dl, at(932, py), kPlain(text::kBody), color::kBody, line);
         py += text::kBodyLine;
     }
     py += 10;

@@ -189,11 +189,12 @@ void DrawBand(ImDrawList* dl, ImVec2 min, ImVec2 max, std::string_view text, Ban
                     Px(2));
         col = color::kOnYellow;
     } else if (kind == BandKind::kAction) {
-        Gradient(dl, min, ImVec2(min.x + w * 0.7f, max.y), IM_COL32(150, 40, 30, 158),
-                 IM_COL32(150, 40, 30, 90));
-        Gradient(dl, ImVec2(min.x + w * 0.7f, min.y), max, IM_COL32(150, 40, 30, 90),
-                 IM_COL32(150, 40, 30, 30));
-        dl->AddLine(min, ImVec2(max.x, min.y), IM_COL32(230, 120, 100, 90), std::max(1.0f, Px(1)));
+        // graphite, not RB3's red: red is Back's and the errors' colour here
+        Gradient(dl, min, ImVec2(min.x + w * 0.7f, max.y), IM_COL32(64, 70, 92, 210),
+                 IM_COL32(64, 70, 92, 120));
+        Gradient(dl, ImVec2(min.x + w * 0.7f, min.y), max, IM_COL32(64, 70, 92, 120),
+                 IM_COL32(64, 70, 92, 50));
+        dl->AddLine(min, ImVec2(max.x, min.y), IM_COL32(170, 178, 204, 110), std::max(1.0f, Px(1)));
     } else {
         Gradient(dl, min, ImVec2(min.x + w * 0.7f, max.y), color::kTeal, IM_COL32(70, 150, 165, 90));
         Gradient(dl, ImVec2(min.x + w * 0.7f, min.y), max, IM_COL32(70, 150, 165, 90),
@@ -416,7 +417,7 @@ int DrawBox(ImDrawList* dl, ImVec2 min, ImVec2 max, const Box& box, const Skin& 
     if (!body_lines.empty()) {
         y += Px(10);
         for (const std::string& line : body_lines) {
-            PaintText(dl, ImVec2(cx - TextWidth(body, line) * 0.5f, y), body, IM_COL32(217, 220, 229, 255),
+            PaintText(dl, ImVec2(cx - TextWidth(body, line) * 0.5f, y), body, color::kBody,
                       line);
             y += Px(text::kBodyLine);
         }

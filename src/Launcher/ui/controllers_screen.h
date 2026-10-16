@@ -20,6 +20,8 @@ struct ControllersHost {
     // the rows that open Settings at Controllers and at MIDI
     std::function<void(Category)> settings;
     std::function<void()> back;
+    // B's name in the help bar ("Back to menu" without one)
+    std::function<std::string()> back_label;
     std::function<void()> play;
 };
 

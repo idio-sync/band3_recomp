@@ -23,6 +23,12 @@ inline constexpr ImU32 kNavyGlow = IM_COL32(32, 52, 150, 110);
 inline constexpr ImU32 kText = IM_COL32(242, 242, 242, 255);
 inline constexpr ImU32 kSoft = IM_COL32(201, 204, 214, 255);
 inline constexpr ImU32 kMuted = IM_COL32(163, 170, 187, 255);
+// a panel's paragraphs
+inline constexpr ImU32 kBody = IM_COL32(217, 220, 229, 255);
+// the text on a screen's title strip
+inline constexpr ImU32 kStripText = IM_COL32(232, 232, 236, 255);
+// the faint line between a panel's lines
+inline constexpr ImU32 kHairline = IM_COL32(255, 255, 255, 18);
 // the big titles, faded grey
 inline constexpr ImU32 kTitle = IM_COL32(205, 208, 220, 107);
 // text on the yellow selection bar
@@ -30,7 +36,6 @@ inline constexpr ImU32 kOnYellow = IM_COL32(23, 23, 10, 255);
 inline constexpr ImU32 kYellow = IM_COL32(230, 220, 31, 255);
 inline constexpr ImU32 kTeal = IM_COL32(70, 150, 165, 128);
 inline constexpr ImU32 kTealEdge = IM_COL32(120, 200, 215, 90);
-inline constexpr ImU32 kActionRed = IM_COL32(150, 40, 30, 158);
 inline constexpr ImU32 kRowShade = IM_COL32(0, 0, 0, 107);
 inline constexpr ImU32 kPanelFill = IM_COL32(4, 8, 22, 214);
 inline constexpr ImU32 kFrameBlue = IM_COL32(90, 150, 220, 255);

@@ -63,7 +63,8 @@ LauncherDialog::LauncherDialog(rex::ui::ImGuiDrawer* imgui_drawer, LauncherHost 
             .game_data_root = host_.game_data_root,
             .native_window = host_.native_window,
             .save = [this] { return Save(); },
-            .left = [this] { ShowHub(); },
+            .left = [this] { Back(View::kSettings); },
+            .back_label = [this] { return BackLabel(View::kSettings); },
             .play = [this] { Play(); },
             .test_controllers = [this] { Pick(ui::HubItem::kTestControllers); },
             .videos_list = [this] { Pick(ui::HubItem::kMusicVideos); },
@@ -78,13 +79,15 @@ LauncherDialog::LauncherDialog(rex::ui::ImGuiDrawer* imgui_drawer, LauncherHost 
                             REXLOG_INFO("Launcher: the game data folder is now {}", rex::path_to_utf8(folder));
                             ShowHub();
                         },
-                    .back = [this] { ShowHub(); },
+                    .back = [this] { Back(View::kFindGame); },
+                    .back_label = [this] { return BackLabel(View::kFindGame); },
                 });
     controllers_ = std::make_unique<ui::ControllersScreen>(
         *skin_, device_panel_,
         ui::ControllersHost{
-            .settings = [this](Category category) { ShowSettings(category); },
-            .back = [this] { ShowHub(); },
+            .settings = [this](Category category) { Open(View::kSettings, category); },
+            .back = [this] { Back(View::kTestControllers); },
+            .back_label = [this] { return BackLabel(View::kTestControllers); },
             .play = [this] { Play(); },
         });
     videos_ = std::make_unique<ui::VideosScreen>(
@@ -99,8 +102,9 @@ LauncherDialog::LauncherDialog(rex::ui::ImGuiDrawer* imgui_drawer, LauncherHost 
                             }
                             return folders;
                         },
-                    .settings = [this] { ShowSettings(Category::kVideos); },
-                    .back = [this] { ShowHub(); },
+                    .settings = [this] { Open(View::kSettings, Category::kVideos); },
+                    .back = [this] { Back(View::kVideos); },
+                    .back_label = [this] { return BackLabel(View::kVideos); },
                     .play = [this] { Play(); },
                 });
     gallery_ = std::make_unique<ui::WidgetGallery>(*skin_);
@@ -125,36 +129,56 @@ LauncherDialog::~LauncherDialog() { screen_->CloseMeters(); }
 
 bool LauncherDialog::HasUnsavedChanges() const { return model_.HasUnsavedChanges(); }
 
-void LauncherDialog::ShowHub() {
-    screen_->CloseMeters();
-    device_panel_.EndTest();
-    view_ = View::kHub;
-    hub_->Show();
+void LauncherDialog::ShowHub() { Show(View::kHub); }
+
+void LauncherDialog::Show(View view, std::optional<Category> category) {
+    if (view != View::kTestControllers) device_panel_.EndTest();
+    if (view != View::kSettings) screen_->CloseMeters();
+    switch (view) {
+    case View::kHub: hub_->Show(); break;
+    case View::kSettings:
+        if (category) screen_->Open(*category);
+        screen_->Show();
+        break;
+    case View::kFindGame: find_->Show(); break;
+    case View::kTestControllers: controllers_->Show(); break;
+    case View::kVideos: videos_->Show(); break;
+    }
+    view_ = view;
 }
 
-void LauncherDialog::ShowSettings(std::optional<Category> category) {
-    device_panel_.EndTest();
-    if (category) screen_->Open(*category);
-    screen_->Show();
-    view_ = View::kSettings;
+void LauncherDialog::Open(View to, std::optional<Category> category) {
+    const View from = view_;
+    const auto it = opened_from_.find(from);
+    const bool going_back = it != opened_from_.end() && it->second == to;
+    if (to != from && !going_back) opened_from_[to] = from;
+    Show(to, category);
+}
+
+void LauncherDialog::Back(View from) {
+    const auto it = opened_from_.find(from);
+    Show(it == opened_from_.end() ? View::kHub : it->second);
+}
+
+std::string LauncherDialog::BackLabel(View from) const {
+    const auto it = opened_from_.find(from);
+    switch (it == opened_from_.end() ? View::kHub : it->second) {
+    case View::kSettings: return "Back to Settings";
+    case View::kVideos: return "Back to Music Videos";
+    case View::kTestControllers: return "Back to Test Controllers";
+    case View::kFindGame: return "Back to Find Rock Band 3";
+    case View::kHub: break;
+    }
+    return "Back to menu";
 }
 
 void LauncherDialog::Pick(ui::HubItem item) {
     switch (item) {
-    case ui::HubItem::kFindGame:
-        find_->Show();
-        view_ = View::kFindGame;
-        break;
+    case ui::HubItem::kFindGame: Open(View::kFindGame); break;
     case ui::HubItem::kPlay: Play(); break;
-    case ui::HubItem::kSettings: ShowSettings(); break;
-    case ui::HubItem::kMusicVideos:
-        videos_->Show();
-        view_ = View::kVideos;
-        break;
-    case ui::HubItem::kTestControllers:
-        controllers_->Show();
-        view_ = View::kTestControllers;
-        break;
+    case ui::HubItem::kSettings: Open(View::kSettings); break;
+    case ui::HubItem::kMusicVideos: Open(View::kVideos); break;
+    case ui::HubItem::kTestControllers: Open(View::kTestControllers); break;
     case ui::HubItem::kQuit: Quit(); break;
     }
 }

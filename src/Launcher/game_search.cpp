@@ -57,7 +57,7 @@ std::vector<fs::path> ListFolders(const fs::path& folder) {
 }
 
 std::vector<fs::path> FindGameFolders(std::span<const fs::path> roots, const SearchLimits& limits,
-                                      const std::atomic<bool>* stop) {
+                                      const std::atomic<bool>* stop, std::atomic<size_t>* looked_in) {
     const auto deadline = std::chrono::steady_clock::now() + limits.time;
     std::vector<fs::path> found;
     struct Pending {
@@ -71,6 +71,7 @@ std::vector<fs::path> FindGameFolders(std::span<const fs::path> roots, const Sea
         if ((stop && stop->load()) || std::chrono::steady_clock::now() > deadline) break;
         const Pending next = std::move(queue.front());
         queue.pop_front();
+        if (looked_in) ++*looked_in;
         if (HoldsGame(next.folder)) {
             found.push_back(next.folder);
             // the game's own folders hold no other copy

@@ -88,7 +88,7 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         if (testing == e.id) tested = &e;
     }
     if (tested) strip = "Testing: " + tested->name;
-    PaintText(dl, page.At(40, 100), kCaps(text::kStrip), IM_COL32(232, 232, 236, 255), strip,
+    PaintText(dl, page.At(40, 100), kCaps(text::kStrip), color::kStripText, strip,
               Px(kRowsRight - 50));
 
     // the devices, then their settings
@@ -170,7 +170,7 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
                            : "Opens Settings at Controllers: what gamepads and guitars play as, the "
                              "sticks, and the delay per controller type.",
                       Px(pw))) {
-            PaintText(dl, page.At(px, py), kPlain(text::kBody), IM_COL32(217, 220, 229, 255), line);
+            PaintText(dl, page.At(px, py), kPlain(text::kBody), color::kBody, line);
             py += text::kBodyLine;
         }
     } else if (!entries_.empty()) {
@@ -191,12 +191,12 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
                                                       "Back on it, or Esc, to stop."
                                                     : "While it's tested its buttons only light the drawing. Press "
                                                       "Back on it, or B on another controller, to stop.")
-                           : e.testable ? "A tests it on its own: its frets, strum and whammy light up here, and its "
+                           : e.testable ? "Select it to test it on its own: its frets, strum and whammy light up here, and its "
                                           "buttons stop moving the menu until you press Back on it."
                                         : "It moves the menus itself, so it isn't tested on its own: what it "
                                           "presses lights up here as you use it.";
         for (const std::string& line : WrapText(kPlain(text::kBody), what, Px(pw))) {
-            PaintText(dl, page.At(px, py), kPlain(text::kBody), IM_COL32(217, 220, 229, 255), line);
+            PaintText(dl, page.At(px, py), kPlain(text::kBody), color::kBody, line);
             py += text::kBodyLine;
         }
         py += 12;
@@ -221,7 +221,7 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         const bool device = selected_ < int(entries_.size());
         if (!device) help.push_back({HelpButton::kA, "Open"});
         else if (entries_[size_t(selected_)].testable) help.push_back({HelpButton::kA, "Test"});
-        help.push_back({HelpButton::kB, "Back to menu"});
+        help.push_back({HelpButton::kB, host_.back_label ? host_.back_label() : std::string("Back to menu")});
     }
     const int hovered = DrawHelpBar(dl, ImVec2(0, page.At(0, 664).y), io.DisplaySize, help, input_.Keyboard(),
                                     !testing, skin_);

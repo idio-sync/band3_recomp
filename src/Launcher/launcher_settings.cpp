@@ -746,6 +746,24 @@ std::string_view CategoryName(Category category) {
     return "";
 }
 
+std::string_view CategoryAbout(Category category) {
+    switch (category) {
+    case Category::kGame: return "Where the game, your songs and your saves are, your profile, and how band3 starts.";
+    case Category::kGameplay: return "Song speed, what's unlocked, the song list and the venue.";
+    case Category::kDisplay: return "The window or full screen, which monitor, and how smoothly frames reach it.";
+    case Category::kGraphics: return "How the game is drawn: the renderer, its quality and its effects.";
+    case Category::kAudio: return "Where the sound goes, and the microphones singers use.";
+    case Category::kControllers: return "What gamepads and guitars play as, the menus, the sticks and each one's delay.";
+    case Category::kMidi: return "A MIDI drum kit or keyboard: its port, its pads and its notes.";
+    case Category::kVideos: return "Music videos behind the band: how they play, and how band3 finds them.";
+    case Category::kLights: return "Stage Kits, plugged in or over the network, and a way to try them.";
+    case Category::kOnline: return "Playing online with other bands, and the GoCentral server.";
+    case Category::kOtherApps: return "The web song browser, scrobbling, RB3Enhanced, Home Assistant and Discord.";
+    case Category::kAdvanced: return "Every other setting by its own name, for troubleshooting.";
+    }
+    return "";
+}
+
 std::span<const Setting> SettingTable() { return kSettings; }
 
 const Setting* FindSetting(std::span<const Setting> table, std::string_view cvar) {

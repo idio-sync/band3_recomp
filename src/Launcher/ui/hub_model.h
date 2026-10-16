@@ -44,6 +44,9 @@ std::optional<Played> LastPlayed(std::string_view tail);
 // ellipsis between; the end of the last folder alone when even that's too wide
 std::string ShortPath(std::string_view path, float max, const std::function<float(std::string_view)>& width);
 
+// a count with thousands separators: 1,612
+std::string Thousands(size_t n);
+
 // a cell of rb3_icons' 4x4 sheet: bass, guitar, drums, keys; the pro ones;
 // the microphones
 struct IconCell {

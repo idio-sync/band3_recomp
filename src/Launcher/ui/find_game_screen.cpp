@@ -1,4 +1,5 @@
 #include "find_game_screen.h"
+#include "hub_model.h"
 #include <algorithm>
 #include <mutex>
 #include <thread>
@@ -14,6 +15,8 @@ namespace fs = std::filesystem;
 
 struct FindGameScreen::Search {
     std::atomic<bool> stop{false};
+    // how many folders it has looked in so far
+    std::atomic<size_t> looked_in{0};
     std::mutex mutex;
     bool done = false;
     std::vector<fs::path> found;
@@ -48,7 +51,7 @@ void FindGameScreen::StartSearch() {
     if (search_) search_->stop = true;
     search_ = std::make_shared<Search>();
     std::thread([search = search_, roots = roots_] {
-        std::vector<fs::path> found = FindGameFolders(roots, SearchLimits{}, &search->stop);
+        std::vector<fs::path> found = FindGameFolders(roots, SearchLimits{}, &search->stop, &search->looked_in);
         std::lock_guard lock(search->mutex);
         search->found = std::move(found);
         search->done = true;
@@ -89,7 +92,7 @@ std::vector<FindGameScreen::Item> FindGameScreen::Items() const {
     }
     out.push_back({Item::kBand, done ? "Found on this PC" : "Searching this PC..."});
     for (const fs::path& path : found) out.push_back({Item::kFound, Shown(path), path, true});
-    if (done && found.empty()) out.push_back({Item::kNote, "None found nearby: open a drive below, or Y searches again"});
+    if (done && found.empty()) out.push_back({Item::kNote, "No copy found: open a drive below, or search again"});
     out.push_back({Item::kBand, "Browse"});
     for (const fs::path& root : roots_) out.push_back({Item::kDrive, Shown(root), root});
     out.push_back({Item::kChoose, "Choose a folder in a window..."});
@@ -190,12 +193,12 @@ void FindGameScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         strip = "Looking in " + Shown(*folder_);
     } else {
         std::lock_guard lock(search_->mutex);
-        strip = !search_->done ? std::string("Searching this PC...")
+        strip = !search_->done ? "Searching this PC... " + Thousands(search_->looked_in.load()) + " folders"
                                : search_->found.empty() ? std::string("Searched this PC: no copy found")
                                : "Searched this PC: " + std::to_string(search_->found.size()) +
                                      (search_->found.size() == 1 ? " copy found" : " copies found");
     }
-    PaintText(dl, page.At(40, 100), kCaps(text::kStrip), IM_COL32(232, 232, 236, 255), strip, Px(840));
+    PaintText(dl, page.At(40, 100), kCaps(text::kStrip), color::kStripText, strip, Px(840));
 
     // the layout, then the rows in sight
     std::vector<float> ys;
@@ -271,12 +274,12 @@ void FindGameScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         DrawRule(dl, page.At(px, py + 6), page.At(px + pw, py + 10), skin_);
         py += 22;
     };
-    const ImU32 body = IM_COL32(217, 220, 229, 255);
+    const ImU32 body = color::kBody;
     if (current && current->game) {
         heading("Rock Band 3 found");
         para(Shown(current->path), color::kMuted);
         py += 10;
-        para("A uses this folder. band3 remembers it and checks it again each time it starts.", body);
+        para("Select it to use this folder. band3 remembers it and checks it again each time it starts.", body);
     } else if (current && current->kind == Item::kUp) {
         heading("Up a level");
         para("Back to the folder this one is in.", body);
@@ -285,9 +288,11 @@ void FindGameScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         para("Opens the system's folder window, to pick the game's folder with the mouse and keyboard.", body);
     } else if (current) {
         heading(current->label);
-        para("No Rock Band 3 in this folder itself. The game's folder has a folder named gen inside, holding "
-             "main_xbox.hdr. Open folders with A until one says Game found.",
-             body);
+        para("Open folders until one says Game found.", body);
+        py += 8;
+        para("No Rock Band 3 in this one itself. The game's folder has a folder named gen in it, holding "
+             "main_xbox.hdr.",
+             color::kMuted);
     } else {
         heading("Find Rock Band 3");
         para("band3 plays your own copy of Rock Band 3, copied from your Xbox 360 disc to this PC.", body);
@@ -299,7 +304,8 @@ void FindGameScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
 
     const bool use = current && current->game;
     const HelpItem help[] = {{HelpButton::kA, use ? "Use this folder" : "Open"},
-                             {HelpButton::kB, folder_ ? "Up a level" : "Back"},
+                             {HelpButton::kB, folder_ ? std::string("Up a level")
+                                                      : host_.back_label ? host_.back_label() : std::string("Back")},
                              {HelpButton::kY, "Search again"}};
     const int hovered = DrawHelpBar(dl, ImVec2(0, page.At(0, 664).y), io.DisplaySize, help, input_.Keyboard(), false,
                                     skin_);

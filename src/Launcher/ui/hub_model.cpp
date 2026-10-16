@@ -77,6 +77,12 @@ std::optional<IconCell> IconFor(uint8_t sub_type) {
     }
 }
 
+std::string Thousands(size_t n) {
+    std::string digits = std::to_string(n);
+    for (int i = int(digits.size()) - 3; i > 0; i -= 3) digits.insert(size_t(i), ",");
+    return digits;
+}
+
 std::string ShortPath(std::string_view path, float max, const std::function<float(std::string_view)>& width) {
     if (width(path) <= max) return std::string(path);
     const std::string ellipsis = "\xE2\x80\xA6";

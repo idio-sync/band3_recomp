@@ -179,8 +179,12 @@ TEST_CASE("each kind of row shows its value as the screen words it") {
     s.store.values["fullscreen"] = "true";
     CHECK(s.Value("fullscreen") == "Borderless");
     // empty text, folders at their default, a password
-    CHECK(s.Value("username") == "None");
+    CHECK(s.Value("username") == "Not set");
     CHECK(s.Value("user_data_root") == "Default");
+    // a folder left at its default shows the folder that is
+    s.env.cvars["user_data_root"].path_default = std::filesystem::path("C:/band3/user");
+    s.Build();
+    CHECK(s.Value("user_data_root") == "C:/band3/user");
     s.store.values["ha_mqtt_password"] = "hunter2";
     CHECK(s.Value("ha_mqtt_password") == "Set");
     // a typed value the list doesn't have is shown as it is

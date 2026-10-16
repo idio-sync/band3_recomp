@@ -24,6 +24,8 @@ struct FindGameHost {
     // a folder holding the game was picked
     std::function<void(const std::filesystem::path&)> use;
     std::function<void()> back;
+    // B's name in the help bar ("Back" without one)
+    std::function<std::string()> back_label;
 };
 
 class FindGameScreen {

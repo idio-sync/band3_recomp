@@ -39,8 +39,8 @@ constexpr std::string_view kTypeOne = "\x01" "type";
 constexpr std::string_view kAddFolder = "\x01" "add";
 constexpr std::string_view kRemoveFolder = "\x01" "remove:";
 
-constexpr ImU32 kBodyText = IM_COL32(217, 220, 229, 255);
-constexpr ImU32 kStripText = IM_COL32(232, 232, 236, 255);
+constexpr ImU32 kBodyText = color::kBody;
+constexpr ImU32 kStripText = color::kStripText;
 
 double Now() {
     using namespace std::chrono;
@@ -1115,10 +1115,42 @@ void SettingsScreen::DrawCategoryDetail(ImDrawList* dl, float x, float& y, float
     }
     DrawRule(dl, At(x, y + 6), At(x + width, y + 10), skin_);
     y += 20;
+    Paragraph(dl, CategoryAbout(category_), x, y, width, color::kBody);
+    y += 10;
+    // each section, and what's in it: its rows' names, a line or two (just
+    // the names where there are many, as in Advanced)
+    const size_t preview_lines = sections_.size() > 5 ? 0 : 2;
     for (const Section& s : sections_) {
-        PaintText(dl, At(x, y + 5), kCaps(text::kBody), color::kMuted, s.name, Px(width));
-        dl->AddLine(At(x, y + 30), At(x + width, y + 30), IM_COL32(255, 255, 255, 18));
+        int changed_here = 0;
+        std::string names;
+        for (const Row& r : s.rows) {
+            if (r.kind != RowKind::kControl && RowChanged(model_, r)) changed_here++;
+            names += (names.empty() ? "" : ", ") + r.label;
+        }
+        float name_room = width;
+        if (changed_here > 0) {
+            const std::string count = std::to_string(changed_here) + " changed";
+            const float cw = TextWidth(kCaps(text::kChip), count);
+            PaintText(dl, ImVec2(At(x + width, 0).x - cw, At(0, y + 7).y), kCaps(text::kChip), color::kChanged, count);
+            name_room -= cw / scale_ + 12;
+        }
+        PaintText(dl, At(x, y + 5), kCaps(text::kBody), color::kText, s.name, Px(name_room));
         y += 30;
+        const TextStyle names_style = kPlain(18);
+        const std::vector<std::string> lines = WrapText(names_style, names, Px(width));
+        for (size_t i = 0; i < lines.size() && i < preview_lines; i++) {
+            std::string line = lines[i];
+            if (i + 1 == preview_lines && lines.size() > preview_lines) {
+                // more after it
+                if (!line.empty() && line.back() == ',') line.pop_back();
+                line += "\xE2\x80\xA6";
+            }
+            PaintText(dl, At(x, y), names_style, color::kMuted, line, Px(width));
+            y += 22;
+        }
+        y += 6;
+        dl->AddLine(At(x, y), At(x + width, y), color::kHairline);
+        y += 4;
     }
     y += 14;
     std::vector<const Row*> changed;
@@ -1141,7 +1173,7 @@ void SettingsScreen::DrawCategoryDetail(ImDrawList* dl, float x, float& y, float
         const float vw = std::min(TextWidth(style, value), Px(width * 0.45f));
         PaintText(dl, ImVec2(At(x + width, 0).x - vw, At(0, y + 5).y), style, color::kText, value, Px(width * 0.45f));
         PaintText(dl, At(x, y + 5), style, color::kMuted, r->label, Px(width) - vw - Px(12));
-        dl->AddLine(At(x, y + 30), At(x + width, y + 30), IM_COL32(255, 255, 255, 18));
+        dl->AddLine(At(x, y + 30), At(x + width, y + 30), color::kHairline);
         y += 30;
     }
 }
@@ -1167,7 +1199,7 @@ void SettingsScreen::DrawRowDetail(ImDrawList* dl, const Row& row, float x, floa
         break;
     case RowKind::kMicSlot:
         about = "The microphone singer " + std::to_string(row.index + 1) +
-                " uses. A lists the microphones on this PC.";
+                " uses. Select it to list the microphones on this PC.";
         break;
     case RowKind::kLagType:
         about = "Extra delay the game allows " + row.label +
@@ -1179,7 +1211,7 @@ void SettingsScreen::DrawRowDetail(ImDrawList* dl, const Row& row, float x, floa
         case Control::kSettingsFile:
             about = "Every setting here is saved to " +
                     (host_.config_path ? rex::path_to_utf8(host_.config_path()) : std::string("band3.toml")) +
-                    ". A opens its folder.";
+                    ". Select it to open its folder.";
             break;
         case Control::kLowestDelay: {
             const double hz = DisplayRefreshRate(host_.native_window ? host_.native_window() : nullptr);
@@ -1305,7 +1337,7 @@ void SettingsScreen::DrawRowDetail(ImDrawList* dl, const Row& row, float x, floa
         }
         if (generated) {
             y += 10;
-            PaintText(dl, At(x, y), kPlain(17), IM_COL32(138, 144, 161, 255), cvar + " in band3.toml", Px(width));
+            PaintText(dl, At(x, y), kPlain(18), color::kMuted, cvar + " in band3.toml", Px(width));
             y += 22;
         }
     } else if (row.kind == RowKind::kControl) {
@@ -1341,9 +1373,9 @@ void SettingsScreen::DrawRowDetail(ImDrawList* dl, const Row& row, float x, floa
             for (const lights::DeviceRow& d : devices) {
                 if (y > kBodyBottom - 40) break;
                 PaintText(dl, At(x, y), kPlain(19), color::kText, d.kind + "  " + d.name, Px(width));
-                y += 22;
-                PaintText(dl, At(x, y), kPlain(16), d.online ? color::kMuted : color::kWarn, d.detail, Px(width));
-                y += 24;
+                y += 23;
+                PaintText(dl, At(x, y), kPlain(18), d.online ? color::kMuted : color::kWarn, d.detail, Px(width));
+                y += 26;
             }
             if (const std::string last = lights::LastSent(); !last.empty()) {
                 y += 6;
@@ -1461,7 +1493,9 @@ void SettingsScreen::DrawHelp(ImDrawList* dl, ImGuiIO& io) {
         items = {{HelpButton::kA, "Pick"}, {HelpButton::kB, "Cancel"}};
     } else if (focus_ == Focus::kCategories && !search_) {
         items = {{HelpButton::kA, "Open"},
-                 {HelpButton::kB, host_.where == Where::kInGame ? "Back to pause" : "Back to menu"},
+                 {HelpButton::kB, host_.where == Where::kInGame ? std::string("Back to pause")
+                                  : host_.back_label                ? host_.back_label()
+                                                                    : std::string("Back to menu")},
                  {HelpButton::kX, "Search"}};
     } else {
         const bool undo = row && row->kind == RowKind::kControl && row->control == Control::kLowestDelay &&

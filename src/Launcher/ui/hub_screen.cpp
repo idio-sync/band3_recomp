@@ -37,12 +37,6 @@ std::string HistoryTail(const std::filesystem::path& file) {
     return tail;
 }
 
-// 1,612
-std::string Thousands(int n) {
-    std::string digits = std::to_string(n);
-    for (int i = int(digits.size()) - 3; i > 0; i -= 3) digits.insert(size_t(i), ",");
-    return digits;
-}
 
 // the card's facts, read off the disk
 void ReadFacts(const std::shared_ptr<HubScreen::Facts>& facts, std::filesystem::path root,
@@ -138,7 +132,7 @@ void HubScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
     ImDrawList* dl = BeginScreen("band3##hub", io, skin_);
     DrawTitle(dl, page.At(70, 18), "band3", text::kHubTitle);
     DrawStrip(dl, page.At(0, 132), page.At(770, 166), skin_);
-    PaintText(dl, page.At(96, 138), kCaps(text::kStrip), IM_COL32(232, 232, 236, 255), "Rock Band 3 for PC");
+    PaintText(dl, page.At(96, 138), kCaps(text::kStrip), color::kStripText, "Rock Band 3 for PC");
 
     // the menu
     const TextStyle item_style = kCaps(text::kHubMenu);
@@ -224,7 +218,7 @@ void HubScreen::DrawCardFacts(ImDrawList* dl, const Page& page, bool found, floa
         PaintText(dl, at(x, y + (height - 21) * 0.5f), key, color::kText, name);
         const float vw = TextWidth(key, value);
         PaintText(dl, ImVec2(at(x + width, 0).x - vw, at(0, y + (height - 21) * 0.5f).y), key, value_color, value);
-        dl->AddLine(at(x, y + height), at(x + width, y + height), IM_COL32(255, 255, 255, 18));
+        dl->AddLine(at(x, y + height), at(x + width, y + height), color::kHairline);
         y += height;
     };
     const std::string full_root = rex::path_to_utf8(facts_root_.empty() ? std::filesystem::path("(not set)")
@@ -242,7 +236,7 @@ void HubScreen::DrawCardFacts(ImDrawList* dl, const Page& page, bool found, floa
                       "band3 plays your own copy of Rock Band 3, copied from your Xbox 360 disc to this "
                       "PC. Find Rock Band 3 looks for it, then lets you browse.",
                       Px(width))) {
-            PaintText(dl, at(x, y), kPlain(text::kBody), IM_COL32(217, 220, 229, 255), l);
+            PaintText(dl, at(x, y), kPlain(text::kBody), color::kBody, l);
             y += text::kBodyLine;
         }
         y += 12;
@@ -271,7 +265,7 @@ void HubScreen::DrawCardFacts(ImDrawList* dl, const Page& page, bool found, floa
         y += 34;
         PaintText(dl, at(x, y), kPlain(18), color::kMuted, fit_root(kPlain(18)));
         y += 26;
-        dl->AddLine(at(x, y), at(x + width, y), IM_COL32(255, 255, 255, 18));
+        dl->AddLine(at(x, y), at(x + width, y), color::kHairline);
     }
 
     std::optional<std::string> deluxe;
@@ -288,11 +282,10 @@ void HubScreen::DrawCardFacts(ImDrawList* dl, const Page& page, bool found, floa
     if (done) {
         line("Deluxe", deluxe ? *deluxe : "Not installed", deluxe ? color::kText : color::kMuted);
         // the songs the game listed when it last ran: none before its first
-        if (songs > 0) line("Songs", Thousands(songs), color::kText);
+        if (songs > 0) line("Songs", Thousands(size_t(songs)), color::kText);
     }
 
-    // the controllers plugged in, as RB3's icons
-    PaintText(dl, at(x, y + 12), key, color::kText, "Controllers");
+    // the controllers plugged in: how many, and RB3's icons for them
     std::vector<IconCell> icons;
     if (host_.controllers) {
         for (const HubController& c : host_.controllers()) {
@@ -304,6 +297,10 @@ void HubScreen::DrawCardFacts(ImDrawList* dl, const Page& page, bool found, floa
             }
         }
     }
+    PaintText(dl, at(x, y + 12), key, color::kText,
+              icons.empty()      ? std::string("Controllers")
+              : icons.size() == 1 ? std::string("1 controller")
+                                  : std::to_string(icons.size()) + " controllers");
     float ix = x + width - 30;
     if (icons.empty()) {
         const char* none = "None yet";
@@ -312,18 +309,21 @@ void HubScreen::DrawCardFacts(ImDrawList* dl, const Page& page, bool found, floa
     }
     for (auto it = icons.rbegin(); it != icons.rend() && ix > x + 170; ++it) {
         if (it->column < 0) {
-            // a gamepad: no icon of its own in RB3's sheet
-            const ImVec2 c = at(ix + 15, y + 22);
-            dl->AddCircle(c, Px(13), color::kSoft, 0, Px(2));
-            PaintText(dl, ImVec2(c.x - TextWidth(kCaps(16), "Pad") * 0.5f, c.y - Px(8)), kCaps(16), color::kSoft,
-                      "Pad");
+            // a gamepad: no icon of its own in RB3's sheet, so a PAD pill
+            const float pw = TextWidth(kCaps(16), "Pad") / page.scale + 16;
+            const ImVec2 pmin = at(ix + 30 - pw, y + 9), pmax = at(ix + 30, y + 35);
+            dl->AddRect(pmin, pmax, color::kSoft, Px(13), 0, Px(2));
+            PaintText(dl, ImVec2((pmin.x + pmax.x - TextWidth(kCaps(16), "Pad")) * 0.5f, at(0, y + 13).y), kCaps(16),
+                      color::kSoft, "Pad");
+            ix -= pw + 6;
+            continue;
         } else {
             DrawIcon(dl, at(ix, y + 7), at(ix + 30, y + 37), skin_, it->column, it->row);
         }
         ix -= 36;
     }
     y += 44;
-    dl->AddLine(at(x, y), at(x + width, y), IM_COL32(255, 255, 255, 18));
+    dl->AddLine(at(x, y), at(x + width, y), color::kHairline);
 
     if (last) {
         y += 12;

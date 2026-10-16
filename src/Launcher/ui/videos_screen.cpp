@@ -1,4 +1,5 @@
 #include "videos_screen.h"
+#include "hub_model.h"
 #include <SDL3/SDL_misc.h>
 #include <rex/filesystem.h>
 #include <algorithm>
@@ -73,11 +74,6 @@ ImU32 StateColor(State state) {
     }
 }
 
-std::string Thousands(size_t n) {
-    std::string digits = std::to_string(n);
-    for (int i = int(digits.size()) - 3; i > 0; i -= 3) digits.insert(size_t(i), ",");
-    return digits;
-}
 
 void OpenFile(const fs::path& file) {
     SDL_OpenURL(("file:///" + rex::path_to_utf8(file.generic_wstring())).c_str());
@@ -103,9 +99,14 @@ std::vector<VideosScreen::Item> VideosScreen::Items() const {
     const video::VideoJobsProgress p = video::VideoJobsNow();
     if (p.running || p.waiting > 0) {
         out.push_back({Item::kFindAll, std::format("Finding videos: {} of {}", p.done, p.total), -1,
-                       p.paused ? "A goes on" : "A pauses"});
+                       p.paused ? "Paused" : ""});
     } else {
-        out.push_back({Item::kFindAll, "Find videos for every song"});
+        // what it waits on, before it can run
+        const video::YtDlpState yt = video::YtDlpNow(false);
+        const char* waits = library_.Songs().empty()           ? "Play once first"
+                            : !yt.checking && yt.version.empty() ? "Needs yt-dlp"
+                                                                 : "";
+        out.push_back({Item::kFindAll, "Find videos for every song", -1, waits});
     }
     out.push_back({Item::kSettings, "Video settings"});
     out.push_back({Item::kFolder, "Open the videos folder"});
@@ -526,7 +527,7 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
     DrawTitle(dl, page.At(70, 14), "Music Videos");
     ui::DrawStrip(dl, page.At(0, 96), page.At(890, 132), skin_);
     const size_t songs = library_.Songs().size();
-    PaintText(dl, page.At(40, 100), kCaps(text::kStrip), IM_COL32(232, 232, 236, 255),
+    PaintText(dl, page.At(40, 100), kCaps(text::kStrip), color::kStripText,
               std::format("{} songs - {} with videos", Thousands(songs), Thousands(size_t(library_.WithVideos()))));
     {
         std::string right;
@@ -659,20 +660,21 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
     DrawPanel(dl, page, current);
 
     std::vector<HelpItem> help;
+    const std::string back = host_.back_label ? host_.back_label() : std::string("Back");
     if (typing_link_) {
         help = {{HelpButton::kA, "Type"}, {HelpButton::kB, "Cancel"}, {HelpButton::kX, "Delete"},
                 {HelpButton::kY, "Space"}};
     } else if (box_) {
         help = {{HelpButton::kA, "Select"}, {HelpButton::kB, "Back"}};
     } else if (current && current->kind == Item::kSong) {
-        help = {{HelpButton::kA, "Options"}, {HelpButton::kB, "Back"}, {HelpButton::kX, "Find this video"},
+        help = {{HelpButton::kA, "Options"}, {HelpButton::kB, back}, {HelpButton::kX, "Find this video"},
                 {HelpButton::kY, "Sync again"}};
     } else if (current && current->kind == Item::kFindAll) {
         const video::YtDlpState yt = video::YtDlpNow(false);
-        help = {{HelpButton::kA, "Select"}, {HelpButton::kB, "Back"},
+        help = {{HelpButton::kA, "Select"}, {HelpButton::kB, back},
                 {HelpButton::kY, !yt.checking && yt.version.empty() ? "Get yt-dlp" : "Update yt-dlp"}};
     } else {
-        help = {{HelpButton::kA, "Select"}, {HelpButton::kB, "Back"}, {HelpButton::kBumpers, "Letter"}};
+        help = {{HelpButton::kA, "Select"}, {HelpButton::kB, back}, {HelpButton::kBumpers, "Letter"}};
     }
     const bool play = bool(host_.play) && !typing_link_ && !box_;
     const int hovered = DrawHelpBar(dl, ImVec2(0, page.At(0, 664).y), io.DisplaySize, help, input_.Keyboard(), play,
@@ -721,7 +723,7 @@ void VideosScreen::DrawPanel(ImDrawList* dl, const Page& page, const Item* item)
         }
         return;
     }
-    const ImU32 body = IM_COL32(217, 220, 229, 255);
+    const ImU32 body = color::kBody;
     const auto heading = [&](std::string_view text, bool caps = true) {
         const TextStyle style = caps ? kCaps(text::kPanelHeading) : kPlain(text::kPanelHeading);
         const auto lines = WrapText(style, text, Px(width));
@@ -745,7 +747,7 @@ void VideosScreen::DrawPanel(ImDrawList* dl, const Page& page, const Item* item)
         const float vw = std::min(TextWidth(kPlain(19), value), Px(width * 0.62f));
         PaintText(dl, ImVec2(page.At(x + width, 0).x - vw, page.At(0, y + 5).y), kPlain(19), value_color, value,
                   Px(width * 0.62f));
-        dl->AddLine(page.At(x, y + 30), page.At(x + width, y + 30), IM_COL32(255, 255, 255, 18));
+        dl->AddLine(page.At(x, y + 30), page.At(x + width, y + 30), color::kHairline);
         y += 30;
     };
     if (!item) return;
@@ -755,7 +757,7 @@ void VideosScreen::DrawPanel(ImDrawList* dl, const Page& page, const Item* item)
         rule();
         const video::VideoJobsProgress p = video::VideoJobsNow();
         if (p.running || p.waiting > 0) {
-            para(std::format("{} of {} songs done. A pauses or goes on; left stops it.", p.done, p.total), body);
+            para(std::format("{} of {} songs done. Select it to pause or go on; Left stops it.", p.done, p.total), body);
             y += 8;
             if (p.total > 0) {
                 dl->AddRectFilled(page.At(x, y), page.At(x + width, y + 6), IM_COL32(255, 255, 255, 31), Px(3));

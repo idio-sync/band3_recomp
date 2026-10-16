@@ -46,6 +46,8 @@ enum class Category {
 std::span<const Category> Categories();
 // as the screen names it: "Music Videos", "Other Apps"
 std::string_view CategoryName(Category category);
+// what a category is for, in a sentence, for its panel
+std::string_view CategoryAbout(Category category);
 
 enum class Widget {
     kCheckbox,

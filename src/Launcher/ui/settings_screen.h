@@ -47,6 +47,8 @@ struct SettingsScreenHost {
     std::function<SaveResult()> save;
     // after leaving, saved or kept unsaved: the launcher's menu, the pause menu
     std::function<void()> left;
+    // B's name in the help bar: where leaving goes ("Back to menu" without one)
+    std::function<std::string()> back_label;
     // Start, F5 or PLAY, once saved (or kept): the launcher plays, in game it's
     // back to the game
     std::function<void()> play;

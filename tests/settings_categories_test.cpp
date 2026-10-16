@@ -66,6 +66,16 @@ TEST_CASE("there are twelve categories, in the redesign's order") {
                          "Music Videos", "Lights", "Online", "Other Apps", "Advanced"});
 }
 
+TEST_CASE("each category says in a line what it's for") {
+    for (const Category c : Categories()) {
+        const std::string_view about = CategoryAbout(c);
+        CHECK_MESSAGE(!about.empty(), CategoryName(c));
+        // one line in the panel, roughly: a sentence, not a paragraph
+        CHECK_MESSAGE(about.size() < 110, CategoryName(c));
+        CHECK_MESSAGE(about.back() == '.', CategoryName(c));
+    }
+}
+
 TEST_CASE("each category's sections are the redesign's, in order") {
     CHECK(Sections(Category::kGame) == Names{"Folders", "Profile", "Startup"});
     CHECK(Sections(Category::kGameplay) == Names{"Speed", "Unlocks", "Song list", "Venue"});
