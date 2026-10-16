@@ -87,6 +87,17 @@ void VideosScreen::Show() {
     input_.Show();
     box_.reset();
     typing_link_.reset();
+    // the cursor starts on the first row that can do something now
+    selected_ = 0;
+    int pick = 0;
+    for (const Item& item : Items()) {
+        if (!Pickable(item.kind)) continue;
+        if (!item.blocked) {
+            selected_ = pick;
+            break;
+        }
+        pick++;
+    }
 }
 
 void VideosScreen::ShowBox(Box box) {
@@ -106,7 +117,7 @@ std::vector<VideosScreen::Item> VideosScreen::Items() const {
         const char* waits = library_.Songs().empty()           ? "Start the game once first"
                             : !yt.checking && yt.version.empty() ? "Needs yt-dlp"
                                                                  : "";
-        out.push_back({Item::kFindAll, "Find videos for every song", -1, waits});
+        out.push_back({Item::kFindAll, "Find videos for every song", -1, waits, *waits != 0});
     }
     out.push_back({Item::kSettings, "Video settings"});
     out.push_back({Item::kFolder, "Open the videos folder"});
@@ -598,7 +609,7 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
         ImVec2 min = page.At(kLeft, top), max = page.At(kRight, top + kRowHeight);
         if (item.kind == Item::kFindAll || item.kind == Item::kSettings || item.kind == Item::kFolder) {
             max = page.At(kRight, top + kBandHeight);
-            DrawBand(dl, min, max, item.label, BandKind::kAction, skin_, selected, item.right);
+            DrawBand(dl, min, max, item.label, BandKind::kAction, skin_, selected, item.right, item.blocked);
         } else if (item.kind == Item::kFilter) {
             RowLook look;
             look.label = "Show";
@@ -613,6 +624,7 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
             look.label = item.label;
             look.value = "Open";
             look.value_caps = true;
+            look.action = true;
             look.selected = selected;
             DrawRow(dl, min, max, look, skin_);
         } else {
@@ -772,11 +784,38 @@ void VideosScreen::DrawPanel(ImDrawList* dl, const Page& page, const Item* item)
             kv("To review", std::to_string(p.review), color::kWarn);
             kv("None found", std::to_string(p.none), color::kText);
             kv("Failed", std::to_string(p.failed), color::kBad);
-        } else if (library_.Songs().empty()) {
-            para("band3 lists your songs once the game has read them: start the game once, then come back to find their "
-                 "videos.",
-                 body);
+        } else if (item->blocked) {
+            // what it needs first, as steps
+            const video::YtDlpState yt = video::YtDlpNow(false);
+            const size_t songs = library_.Songs().size();
+            const auto step = [&](int number, std::string_view title, bool done, std::string_view detail) {
+                const ImVec2 c = page.At(x + 13, y + 13);
+                if (done) {
+                    dl->AddCircleFilled(c, Px(13), color::kGood);
+                } else {
+                    dl->AddCircle(c, Px(12), color::kSoft, 0, Px(2));
+                }
+                const std::string n = std::to_string(number);
+                PaintText(dl, ImVec2(c.x - TextWidth(kCaps(20), n) * 0.5f, c.y - Px(10)), kCaps(20),
+                          done ? color::kOnYellow : color::kText, n);
+                PaintText(dl, page.At(x + 38, y + 3), kCaps(20), done ? color::kMuted : color::kText, title,
+                          Px(width - 38));
+                y += 30;
+                for (const std::string& line : WrapText(kPlain(text::kBody), detail, Px(width - 38))) {
+                    PaintText(dl, page.At(x + 38, y), kPlain(text::kBody), done ? color::kMuted : body, line);
+                    y += text::kBodyLine;
+                }
+                y += 12;
+            };
+            para("Two things first:", body);
             y += 10;
+            step(1, "Start the game once", songs > 0,
+                 songs > 0 ? Thousands(songs) + " songs listed."
+                           : "band3 lists your songs once the game has read them.");
+            step(2, "Get yt-dlp", !yt.version.empty(),
+                 !yt.version.empty() ? "Found: " + yt.version
+                                     : "The program that downloads the videos. Get yt-dlp, in the help bar, shows "
+                                       "how to install it.");
         } else {
             const size_t count = library_.BatchSongs().size();
             para(std::format("band3 looks up a music video for each of the {} songs without one, downloads it, and "
@@ -789,8 +828,11 @@ void VideosScreen::DrawPanel(ImDrawList* dl, const Page& page, const Item* item)
                color::kText);
         }
         const video::YtDlpState yt = video::YtDlpNow(false);
-        kv("yt-dlp", yt.checking ? "Looking..." : yt.updating ? "Updating..." : yt.version.empty() ? "Not found" : yt.version,
-           yt.version.empty() && !yt.checking ? color::kBad : color::kText);
+        // the steps above already say whether it's there
+        if (!item->blocked) {
+            kv("yt-dlp", yt.checking ? "Looking..." : yt.updating ? "Updating..." : yt.version.empty() ? "Not found" : yt.version,
+               yt.version.empty() && !yt.checking ? color::kBad : color::kText);
+        }
         if (!yt.checking && !yt.version.empty() && !yt.js_runtime) {
             y += 8;
             para("yt-dlp needs a JavaScript runtime to fetch from YouTube: install Deno or Node.js, then start "

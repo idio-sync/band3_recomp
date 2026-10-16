@@ -60,6 +60,9 @@ struct RowLook {
     bool on = false;
     // the value in caps (ON and OFF, buttons)
     bool value_caps = false;
+    // the row does something when picked (Open, Play, Apply), rather than
+    // holding a value: its value is drawn as a button, framed, with a >
+    bool action = false;
     // the value's colour off the selection bar, when not the usual (a status)
     ImU32 value_color = 0;
 };
@@ -83,7 +86,7 @@ ImVec2 DrawMenuItem(ImDrawList* dl, ImVec2 pos, std::string_view text, float siz
                     const Skin& skin, float width = 0);
 // a section's heading or an action band, with optional caps at its right
 void DrawBand(ImDrawList* dl, ImVec2 min, ImVec2 max, std::string_view text, BandKind kind,
-              const Skin& skin, bool selected = false, std::string_view right = {});
+              const Skin& skin, bool selected = false, std::string_view right = {}, bool dim = false);
 void DrawRow(ImDrawList* dl, ImVec2 min, ImVec2 max, const RowLook& row, const Skin& skin);
 // a framed panel (the detail panel, a box): the pause container's frame over
 // a dark wallpaper

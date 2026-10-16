@@ -1010,7 +1010,7 @@ void SettingsScreen::DrawRows(ImDrawList* dl, ImGuiIO& io) {
         look.changed = r.kind == RowKind::kControl ? false : RowChanged(model_, r);
         look.error = r.setting && r.kind != RowKind::kControl && problems_.contains(r.setting->cvar);
         // on and off read as a toggle, however the setting stores them
-        const bool toggle = r.kind != RowKind::kControl && (value == "On" || value == "Off");
+        const bool toggle = value == "On" || value == "Off";
         look.on = toggle && value == "On";
         // caps for on and off and for what a row does (Open, Play); a value
         // as it is (a file's name, a colour)
@@ -1020,6 +1020,7 @@ void SettingsScreen::DrawRows(ImDrawList* dl, ImGuiIO& io) {
                              r.control == Control::kLightsCheck || r.control == Control::kChase ||
                              r.control == Control::kLightsOff);
         look.value_caps = toggle || action;
+        look.action = action;
         const bool steps = r.kind == RowKind::kControl
                                ? (r.control == Control::kLightsDevice || r.control == Control::kFog ||
                                   r.control == Control::kStrobe || r.control == Control::kLightsColour ||

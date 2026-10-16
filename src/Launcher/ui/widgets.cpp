@@ -221,10 +221,15 @@ ImVec2 DrawMenuItem(ImDrawList* dl, ImVec2 pos, std::string_view text, float siz
 }
 
 void DrawBand(ImDrawList* dl, ImVec2 min, ImVec2 max, std::string_view text, BandKind kind,
-              const Skin& skin, bool selected, std::string_view right) {
+              const Skin& skin, bool selected, std::string_view right, bool dim) {
     const float w = max.x - min.x;
     ImU32 col = IM_COL32(238, 246, 248, 255);
-    if (selected) {
+    if (selected && dim) {
+        // a band that can't do anything yet: a grey bar, as a locked row's
+        Gradient(dl, min, max, IM_COL32(150, 150, 160, 140), IM_COL32(110, 110, 120, 102));
+        dl->AddLine(min, ImVec2(max.x, min.y), IM_COL32(255, 255, 255, 115), Px(2));
+        col = WithAlpha(color::kText, 0.8f);
+    } else if (selected) {
         DrawHighlight(dl, min, max, skin);
         dl->AddLine(min, ImVec2(max.x, min.y), IM_COL32(255, 255, 255, 190), Px(2));
         dl->AddLine(ImVec2(min.x, max.y - Px(1)), ImVec2(max.x, max.y - Px(1)), IM_COL32(255, 255, 255, 190),
@@ -237,6 +242,7 @@ void DrawBand(ImDrawList* dl, ImVec2 min, ImVec2 max, std::string_view text, Ban
         Gradient(dl, ImVec2(min.x + w * 0.7f, min.y), max, IM_COL32(64, 70, 92, 120),
                  IM_COL32(64, 70, 92, 50));
         dl->AddLine(min, ImVec2(max.x, min.y), IM_COL32(170, 178, 204, 110), std::max(1.0f, Px(1)));
+        if (dim) col = WithAlpha(col, 0.45f);
     } else {
         Gradient(dl, min, ImVec2(min.x + w * 0.7f, max.y), color::kTeal, IM_COL32(70, 150, 165, 90));
         Gradient(dl, ImVec2(min.x + w * 0.7f, min.y), max, IM_COL32(70, 150, 165, 90),
@@ -249,7 +255,7 @@ void DrawBand(ImDrawList* dl, ImVec2 min, ImVec2 max, std::string_view text, Ban
         const TextStyle right_style = kCaps(text::kChip + 2);
         right_w = TextWidth(right_style, right);
         PaintText(dl, ImVec2(max.x - Px(14) - right_w, min.y + ((max.y - min.y) - Px(text::kChip + 2)) * 0.5f),
-                 right_style, selected ? color::kOnYellow : IM_COL32(230, 240, 245, 190), right);
+                 right_style, dim ? color::kWarn : selected ? color::kOnYellow : IM_COL32(230, 240, 245, 190), right);
     }
     PaintText(dl, ImVec2(min.x + Px(14), text_y), kCaps(text::kBand), col, text,
              w - Px(28) - (right_w > 0 ? right_w + Px(16) : 0));
@@ -285,11 +291,22 @@ void DrawRow(ImDrawList* dl, ImVec2 min, ImVec2 max, const RowLook& row, const S
     if (on_yellow) value_col = color::kOnYellow;
     value_col = WithAlpha(value_col, row.selected && row.locked ? 0.8f : fade);
     const float arrow = Px(10);
-    const float right = max.x - (row.arrows ? Px(22) + arrow + Px(8) : Px(22));
+    // an action's button: its word, then a >, in a frame
+    const float chevron = Px(6), pad = Px(10);
+    const float right = max.x - (row.arrows   ? Px(22) + arrow + Px(8)
+                                 : row.action ? Px(16) + pad + chevron + Px(7)
+                                              : Px(22));
     const float max_value = (max.x - min.x) * 0.48f;
     const float value_w = std::min(TextWidth(value_style, row.value), max_value);
     const float value_x = right - value_w;
     const float value_y = min.y + (h - Px(text::kValue)) * 0.5f;
+    if (row.action) {
+        const ImVec2 bmin(value_x - pad, min.y + Px(7)), bmax(max.x - Px(16), max.y - Px(7));
+        const ImU32 frame = WithAlpha(on_yellow ? color::kOnYellow : color::kSoft, on_yellow ? 0.55f : 0.45f * fade);
+        dl->AddRect(bmin, bmax, frame, Px(4), 0, std::max(1.0f, Px(1.5f)));
+        const float cx = right + Px(7), cy = min.y + h * 0.5f;
+        dl->AddTriangleFilled(ImVec2(cx, cy - chevron), ImVec2(cx + chevron, cy), ImVec2(cx, cy + chevron), value_col);
+    }
     PaintText(dl, ImVec2(value_x, value_y), value_style, value_col, row.value, max_value);
     if (row.arrows) {
         const float cy = min.y + h * 0.5f, half = Px(8);

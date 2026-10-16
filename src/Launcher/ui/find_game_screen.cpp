@@ -244,7 +244,8 @@ void FindGameScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         look.label = item.label;
         look.selected = index == selected_;
         look.value_caps = true;
-        look.value = item.game ? "Game found" : item.kind == Item::kUp || item.kind == Item::kChoose ? "" : "Open";
+        look.value = item.game ? "Game found" : item.kind == Item::kUp ? "" : "Open";
+        look.action = !item.game && item.kind != Item::kUp;
         look.on = item.game;
         const ImVec2 min = page.At(kLeft, top), max = page.At(kRight, top + kRowHeight);
         DrawRow(dl, min, max, look, skin_);

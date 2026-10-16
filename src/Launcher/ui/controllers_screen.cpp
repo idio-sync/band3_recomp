@@ -144,6 +144,7 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         look.label = settings[k];
         look.value = "Open";
         look.value_caps = true;
+        look.action = true;
         look.selected = index == selected_;
         look.dim = bool(testing);
         DrawRow(dl, min, max, look, skin_);

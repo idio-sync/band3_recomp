@@ -52,6 +52,8 @@ private:
         int index = -1;
         // a letter band's counts
         std::string right;
+        // Find videos, while it can't run yet: dimmed, and the cursor starts past it
+        bool blocked = false;
     };
     // what the cursor stops on: not the letter bands or a line of text
     static bool Pickable(Item::Kind kind) { return kind != Item::kLetter && kind != Item::kEmpty; }
