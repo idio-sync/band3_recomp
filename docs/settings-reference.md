@@ -320,6 +320,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ca
 | `native_math` | `true` | `true`, `false` | Use native C++ replacements for the game's math functions (sin, cos, pow, vector/matrix ops) |
 | `native_vorbis` | `true` | `true`, `false` | Run two parts of the game's Vorbis decoder as native code: the inverse MDCT, which turns each block of a song's audio into samples and is about a third of the decoding, and the codebook decoding, which reads the packed values each block is made from and is about a quarter. Both compute exactly what the game's own do, every sample the same. On a Ryzen 6850U laptop the inverse MDCT saves about 0.35 ms of the decode thread's CPU a frame in a song (of 1.3) and the codebook decoding about 0.25 ms more (1.0 to 0.75). Off runs the game's own |
 | `native_vorbis_check` | `false` | `true`, `false` | Run both the game's and native_vorbis's inverse MDCT and codebook decoding on every block of the songs' audio, play the game's, and log every 5 seconds how many samples and decoded values came out different and by how much (none should). For checking native_vorbis; it costs more CPU than either |
+| `preload_song_start_resources` | `true` | `true`, `false` | Keep ui/resource/fonts/instruments_icons_rings.milo loaded for the whole session, as the game keeps its other fonts from boot. Otherwise the game reads it again as each song starts, in that song's slowest frame (2.3 ms of the game's thread on a Steam Deck), which could then miss its paint. Costs one small font's memory |
 
 ### Graphics
 
