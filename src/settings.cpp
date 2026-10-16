@@ -256,6 +256,15 @@ REXCVAR_DEFINE_INT32(native_view_msaa, 2, "Band3/Graphics/Native",
     .range(1, 4)
     .validator([](std::string_view v) { return v == "1" || v == "2" || v == "4"; });
 
+// read by src/Render/native_view.cpp and src/Test/test_server.cpp's captures (post_model.h's
+// PostOnlyFor)
+REXCVAR_DEFINE_BOOL(native_post_effects, true, "Band3/Graphics/Native",
+    "Native renderer (renderer native or both): the camera's post-processing effects, bloom "
+    "(and glare), depth of field and motion blur. Off leaves them out for a slower GPU; the "
+    "venue's colours, the spotlights' haze, soft particles and film grain stay. On a Radeon "
+    "680M at 1920x1200 in arena_04 that's 1.5 ms less GPU work a post frame (busy 11.8 to "
+    "10.7 ms). Applies from the next frame");
+
 // Band3/Graphics/Emulated: the emulated GPU, with renderer emulated or both. The emulated GPU's
 // own settings (vsync, resolution_scale, ...) are the plugin's, in its categories.
 

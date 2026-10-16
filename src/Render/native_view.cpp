@@ -953,6 +953,11 @@ class Renderer {
                 o.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
                 o.shader_variants = REXCVAR_GET(native_view_shader_variants);
                 o.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
+                // off: no bloom, DOF or motion blur (the velocity pass and
+                // its object meshes too)
+                const bool post_effects = REXCVAR_GET(native_post_effects);
+                o.post_only = post::PostOnlyFor(post_effects);
+                o.velocity = post_effects;
                 // drawn frame after frame, so these have the frames before
                 o.trails = true;
                 o.post_history = &post_history_;

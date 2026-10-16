@@ -73,6 +73,7 @@
 #include "src/Render/gpu_view.h"
 #include "src/Render/native_view.h"
 #include "src/Render/png_writer.h"
+#include "src/Render/post_model.h"
 #include "src/Render/scene_capture.h"
 #include "src/Render/sync_gpu/native_only.h"
 #include "src/Render/sync_gpu/sync_graphics_system.h"
@@ -286,6 +287,8 @@ public:
         options.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
         options.shader_variants = REXCVAR_GET(native_view_shader_variants);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
+        options.post_only = render::post::PostOnlyFor(REXCVAR_GET(native_post_effects));
+        options.velocity = REXCVAR_GET(native_post_effects);
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);
@@ -392,6 +395,8 @@ public:
         options.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
         options.shader_variants = REXCVAR_GET(native_view_shader_variants);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
+        options.post_only = render::post::PostOnlyFor(REXCVAR_GET(native_post_effects));
+        options.velocity = REXCVAR_GET(native_post_effects);
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);

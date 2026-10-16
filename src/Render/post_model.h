@@ -39,6 +39,20 @@ using shade::uint4;
 
 static_assert(sizeof(PostPass) == 40 * 16, "PostPass is float4s and uint4s only, as HLSL packs it");
 
+inline constexpr uint32_t kPostEveryEffect = kPostDof | kPostBloom | kPostGlare | kPostXfm |
+                                             kPostSpot | kPostSoft | kPostNoise |
+                                             kPostNoiseMidtone | kPostTrails | kPostVelocity;
+static_assert(kPostEveryEffect == (kPostVelocity << 1) - 1, "a kPost bit is missing");
+// The camera's effects, which native_post_effects off leaves out: bloom (glare
+// too), depth of field and the motion blur. The rest is the venue's own
+// picture (its colour matrix, the spotlights' haze, the soft particles, film
+// grain, trails), which the composite draws either way.
+inline constexpr uint32_t kPostCameraEffects = kPostDof | kPostBloom | kPostGlare | kPostVelocity;
+// PlanPost's `only` with the camera's effects on (0, every effect) or off
+inline constexpr uint32_t PostOnlyFor(bool camera_effects) {
+    return camera_effects ? 0u : kPostEveryEffect & ~kPostCameraEffects;
+}
+
 // The 360's back buffer, which the game's blur taps are in texels of. The
 // native view's levels are its own size over 4, 16 and 64 and take those
 // offsets as uv, so a blur covers as much of the picture at any size.
