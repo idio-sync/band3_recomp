@@ -884,7 +884,14 @@ class Renderer {
                 o.post_history = &post_history_;
                 o.post_buffer = true;
                 o.pre_buffer = true;
+#ifdef _WIN32
                 o.gpu_labels = REXCVAR_GET(dred);
+#else
+                // only DRED's hang reports read them (crash_trace.cpp,
+                // Direct3D 12): elsewhere the per-draw text just costs the
+                // worker (~10% of it at 1080p on a Steam Deck)
+                o.gpu_labels = false;
+#endif
                 o.gpu_timestamps = REXCVAR_GET(native_gpu_timestamps);
                 o.gpu_draw_profile = o.gpu_timestamps && REXCVAR_GET(native_gpu_draw_profile);
                 o.inline_mips = REXCVAR_GET(native_view_inline_mips);
