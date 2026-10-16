@@ -138,6 +138,7 @@ REXCVAR_DECLARE(int32_t, char_heap_size);
 // Band3/Advanced/Game code
 REXCVAR_DECLARE(bool, native_math);
 REXCVAR_DECLARE(bool, native_camera_shake);
+REXCVAR_DECLARE(bool, vr_show_all);
 REXCVAR_DECLARE(bool, audio_xapo_nonblocking);
 REXCVAR_DECLARE(bool, audio_idle_bypass);
 REXCVAR_DECLARE(bool, native_vorbis);

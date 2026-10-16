@@ -597,6 +597,11 @@ REXCVAR_DEFINE_BOOL(native_camera_shake, true, "Band3/Advanced/Game code",
     "Use the frame-rate independent camera shake replacement")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(vr_show_all, false, "Band3/Advanced/Game code",
+    "Experimental, for VR: draw the whole world in every camera shot, ignoring what each "
+    "shot hides and what lies outside the game's camera")
+    .debug_only();
+
 REXCVAR_DEFINE_BOOL(audio_xapo_nonblocking, true, "Band3/Advanced/Game code",
     "Answer the game's checks of whether each sound effect is still playing (dozens a frame, "
     "through its voice's effect parameters) with the newest result the audio thread set, "
