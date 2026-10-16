@@ -15,6 +15,8 @@
 #include "src/Render/present_model.h"
 #include "src/Render/renderer_switch.h"
 #include "src/Render/sync_gpu/native_only.h"
+#include "src/Render/vr_pose.h"
+#include "src/Render/xr_present.h"
 #include "src/crash_trace.h"
 #include "src/settings.h"
 #include "src/stall_watch.h"
@@ -964,6 +966,17 @@ class Renderer {
             // native_world_ahead, or by itself on an integrated GPU or a Steam
             // Deck (native_world_ahead_auto); not with either pipeline, which
             // wait differently. Logged once the GPU draws, and as it changes.
+            // VR (xr_present.h): once the session runs, the runtime paces the
+            // worker (xrWaitFrame) and each of its frames draws both eyes;
+            // only on the zero-copy path, whose outputs it samples in place
+            if (gpu && zero_copy && xr::Session::Get().Update(REXCVAR_GET(vr))) {
+                if (flight) {
+                    if (WaitFlight(*flight, nullptr)) PublishFlight(*flight, rgba);
+                    flight.reset();
+                }
+                VrFrame(o, generation, presenting, decode_pending_ms);
+                continue;
+            }
             if (gpu && !gpu_kind) gpu_kind = GpuRenderer::Get().Kind();
             const bool ahead_setting = REXCVAR_GET(native_world_ahead);
             const bool ahead_auto = REXCVAR_GET(native_world_ahead_auto);
@@ -1229,6 +1242,26 @@ class Renderer {
             if (d.upload) PublishFlight(d, rgba);
             else PublishDrawn(d, d.want_rgba ? &rgba : nullptr);
         }
+    }
+
+    // One of the runtime's frames (the `vr` setting, xr_present.h): its
+    // views, then both eyes into the headset
+    void VrFrame(const RasterOptions& o, uint64_t generation, bool presenting,
+                 double& decode_pending_ms) {
+        (void)o;
+        (void)generation;
+        (void)presenting;
+        (void)decode_pending_ms;
+        xr::Session& xs = xr::Session::Get();
+        xr::FrameViews f;
+        stall_watch::SetWorker(stall_watch::Worker::kWaiting);
+        if (!xs.WaitFrame(f)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            return;
+        }
+        // no pictures yet: each eye cleared to a colour of its own
+        void* const eyes[2] = {nullptr, nullptr};
+        xs.Present(f, eyes, 0);
     }
 
     // One fence check; when finished, marks the slot finished and un-holds
@@ -2061,6 +2094,8 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             // DRED on device removal, either renderer; the only place band3
             // has the SDK's device from the start
             crash_trace::WatchD3D12Device(d3d12.GetDevice(), d3d12.GetDirectQueue());
+            // the `vr` setting's OpenXR session binds to them (xr_present.h)
+            xr::SetDevice(d3d12.GetDevice(), d3d12.GetDirectQueue());
             // RasterOptions::gpu_labels
             crash_trace::SetIndexedDrawNamer([](uint32_t before, uint32_t total) {
                 return GpuRenderer::Get().DescribeIndexedDraw(before, total);

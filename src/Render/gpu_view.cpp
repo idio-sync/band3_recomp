@@ -612,7 +612,7 @@ struct GpuRenderer::Impl {
         uint32_t readback_size = 0;
         bool read_back = false;
     };
-    Output outputs[kOutputs];
+    Output outputs[kSlots];
     uint64_t output_generations = 0;
     // DownloadOutput's, grown to the biggest output read back
     SDL_GPUTransferBuffer* output_readback = nullptr;
@@ -631,15 +631,15 @@ struct GpuRenderer::Impl {
     GpuKind kind;
 
     // GPU timings (RasterOptions::gpu_timestamps; gpu_timing_model.h). Heap
-    // regions of kTimingSlots: each output's, RenderFrame's (kOutputs), and
+    // regions of kTimingSlots: each output's, RenderFrame's (kSlots), and
     // the aside's (kAsideRegion) for fenceless pre passes and world-ahead work
     // until the next frame resolves it. The readback has two regions per frame
     // (its own, the aside's), never overwritten before read: outputs wait for
     // their fence (native_view.cpp's PresentSlots), RenderFrame reads at once.
     // room for native_gpu_draw_profile's timestamp a world draw
     static constexpr uint32_t kTimingSlots = 1024;
-    static constexpr int kFrameRegions = kOutputs + 1;
-    static constexpr int kAsideRegion = kOutputs + 1;
+    static constexpr int kFrameRegions = kSlots + 1;
+    static constexpr int kAsideRegion = kSlots + 1;
     uint64_t timestamp_frequency = 0;
     bool timing_checked = false, timing_ok = false;
 #ifdef _WIN32
@@ -3092,7 +3092,7 @@ void GpuRenderer::Impl::StartTiming(SDL_GPUCommandBuffer* cmd, const RasterOptio
         return;
     }
     timing_aside = aside;
-    timing_region = aside ? kAsideRegion : slot >= 0 ? slot : kOutputs;
+    timing_region = aside ? kAsideRegion : slot >= 0 ? slot : kSlots;
 #if defined(__linux__)
     // Vulkan's queries are reset before they're written, here at the start
     // of a command buffer, outside any pass: a frame's region each time, an
@@ -3730,7 +3730,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             const DrawItem& it = frame.draws[d];
             if (!DrawnIn(run, frame, it, o)) continue;
             if (!run.pass && shows_kept && d < frame.post_boundary) continue;
-            if (!run.pass && (d < ahead_end || (ahead_pass && d >= frame.post_boundary))) continue;
+            if (!run.pass && (d < ahead_end || (ahead_pass && d >= frame.post_boundary)))
+                continue;
+            if (!run.pass && SkipsOverlay(o, frame, d)) continue;
             if (!run.pass && d < frame.post_boundary) st.world_draws++;
             const ShadeState* state = shade::ShadeOf(frame, it);
             // depth volume blurs read a copy of it, not the quad's texture;
@@ -5083,7 +5085,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 // shares (no depth clear between them)
                 if (!instance_count[d]) continue;
                 if (!resolved && d >= frame.post_boundary && !resolve()) return false;
-                if (resolved && (o.view != RasterView::kFinal || pre_pass || ahead_pass)) break;
+                // VR's eyes leave out the overlay (SkipsOverlay)
+                if (resolved && (o.view != RasterView::kFinal || pre_pass || ahead_pass ||
+                                 o.skip_overlay))
+                    break;
                 bool clear_depth = false;
                 // DrawRect quads have no camera
                 if (it.rect_shader < 0) {
@@ -5494,7 +5499,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     st.wait_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                            submitted).count();
     // a pre pass's timings are read with its frame's
-    if (!pre_pass) ReadTimes(slot >= 0 ? slot : kOutputs, st);
+    if (!pre_pass) ReadTimes(slot >= 0 ? slot : kSlots, st);
     const auto evict_start = Clock::now();
     Evict();
     st.evict_ms = ms_since(evict_start);
@@ -5629,7 +5634,7 @@ bool GpuRenderer::RenderFrame(const FrameCapture& frame, const RasterOptions& op
 
 bool GpuRenderer::RenderFrameToOutput(const FrameCapture& frame, const RasterOptions& options,
                                       int slot, GpuOutput& out, GpuStats& stats) {
-    if (slot < 0 || slot >= kOutputs) return false;
+    if (slot < 0 || slot >= kSlots) return false;
     std::lock_guard lock(impl_->mutex);
     if (!Draw(frame, options, slot, nullptr, stats)) return false;
     const Impl::Output& o = impl_->outputs[slot];
@@ -5641,7 +5646,7 @@ bool GpuRenderer::RenderFrameToOutput(const FrameCapture& frame, const RasterOpt
 }
 
 bool GpuRenderer::OutputDone(int slot, GpuStats* times) {
-    if (slot < 0 || slot >= kOutputs) return true;
+    if (slot < 0 || slot >= kSlots) return true;
     std::lock_guard lock(impl_->mutex);
     Impl::Output& o = impl_->outputs[slot];
     if (!impl_->device || !o.fence) return true;
@@ -5653,7 +5658,7 @@ bool GpuRenderer::OutputDone(int slot, GpuStats* times) {
 
 bool GpuRenderer::ReadOutputBack(int slot, std::vector<uint32_t>& rgba, uint32_t& width,
                                  uint32_t& height) {
-    if (slot < 0 || slot >= kOutputs) return false;
+    if (slot < 0 || slot >= kSlots) return false;
     std::lock_guard lock(impl_->mutex);
     Impl::Output& o = impl_->outputs[slot];
     // still drawing (OutputDone first), or not read back
@@ -5699,7 +5704,7 @@ bool GpuRenderer::RenderWorldAhead(const FrameCapture& world, const RasterOption
 
 bool GpuRenderer::DownloadOutput(int slot, std::vector<uint32_t>& rgba, uint32_t& width,
                                  uint32_t& height) {
-    if (slot < 0 || slot >= kOutputs) return false;
+    if (slot < 0 || slot >= kSlots) return false;
     std::lock_guard lock(impl_->mutex);
     const Impl::Output& o = impl_->outputs[slot];
     if (!impl_->device || !o.texture) return false;

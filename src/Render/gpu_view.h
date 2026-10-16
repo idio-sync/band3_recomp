@@ -623,6 +623,11 @@ class GpuRenderer {
     // sample it until OutputDone: nothing else orders it after SDL's queue
     // (present_model.h's PresentSlots). False as RenderFrame.
     static constexpr int kOutputs = 4;
+    // and two more for VR's eyes (xr_present.h), drawn the same way but
+    // never the window's: slots kOutputs and kOutputs + 1 (EyeSlot)
+    static constexpr int kEyeOutputs = 2;
+    static constexpr int kSlots = kOutputs + kEyeOutputs;
+    static constexpr int EyeSlot(int eye) { return kOutputs + eye; }
     bool RenderFrameToOutput(const FrameCapture& frame, const RasterOptions& options, int slot,
                              GpuOutput& out, GpuStats& stats);
     // Whether the GPU has finished `slot`'s last frame; never waits (SDL_gpu's

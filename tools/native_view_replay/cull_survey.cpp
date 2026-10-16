@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "src/Render/capture_file.h"
-#include "tools/native_view_replay/free_cam.h"
+#include "src/Render/free_cam.h"
 
 using namespace band3::render;
 using namespace band3::render::freecam;

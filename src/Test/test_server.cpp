@@ -77,6 +77,8 @@
 #include "src/Render/sync_gpu/native_only.h"
 #include "src/Render/sync_gpu/sync_graphics_system.h"
 #include "src/Render/sync_gpu/sync_monitor.h"
+#include "src/Render/vr_pose.h"
+#include "src/Render/xr_present.h"
 #include "src/settings.h"
 #include "game_state.h"
 #include "test_commands.h"
@@ -559,6 +561,7 @@ public:
             if (auto* sync = render::sync_gpu::Active())
                 out.emulated_gpu.sync = SyncGpu(sync->Stats(), measure_sync_);
         }
+        out.xr_json = render::xr::Session::Get().MeasuredJson();
         return out;
     }
 
@@ -993,6 +996,7 @@ private:
         const double cp_ms = CpThreadMs();
         // renderer native: the sync-only GPU's numbers too
         auto* sync = render::sync_gpu::Active();
+        render::xr::Session::Get().StartMeasuring();
         std::lock_guard lock(measure_mutex_);
         measure_start_ = Clock::now();
         measure_frame_ = frame;

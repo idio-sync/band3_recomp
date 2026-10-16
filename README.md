@@ -184,6 +184,8 @@ band3 stands on the work of these projects:
   [libvorbis](https://xiph.org/vorbis/) and [libogg](https://xiph.org/ogg/) (the songs' inverse
   MDCT and codebook decoding, as the game's copies compute them),
   [QR Code generator](https://github.com/nayuki/QR-Code-generator) (the web page's QR code),
+  the [OpenXR](https://github.com/KhronosGroup/OpenXR-SDK) headers (VR, experimental; the
+  loader is the runtime's own, loaded at run time),
   [doctest](https://github.com/doctest/doctest) (unit tests),
   [Tracy](https://github.com/wolfpld/tracy) (profiling), and SDL3 through the ReXGlue SDK.
 

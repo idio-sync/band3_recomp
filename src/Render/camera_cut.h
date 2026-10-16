@@ -33,6 +33,7 @@ struct WorldCamera {
     uint64_t world_frame = 0;  // WorldFrameOf
     Mat4 view_proj{};
     float depth = 0;
+    uint32_t cam = 0;  // its RndCam
 };
 
 inline WorldCamera WorldCameraOf(const FrameCapture& fc) {
@@ -65,6 +66,7 @@ inline WorldCamera WorldCameraOf(const FrameCapture& fc) {
         if (!world_draw(d) || it.cam != cam) continue;
         if (!c.valid) {
             c.valid = true;
+            c.cam = cam;
             c.view_proj = it.view_proj;
         }
         const Mat4& at = it.bones.empty() ? it.world : it.bones[0];

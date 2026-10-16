@@ -890,6 +890,32 @@ REXCVAR_DEFINE_BOOL(native_view_hoist_passes, true, "Band3/Advanced/Native rende
     "world draws in one go: the same picture for less CPU time. Off draws them where the "
     "game does, to compare");
 
+REXCVAR_DEFINE_BOOL(vr, false, "Band3/Advanced/Native renderer",
+    "Experimental: show the native renderer's picture in a VR headset through OpenXR "
+    "(Windows), each eye drawn from where it is in the venue, without the track and the HUD. "
+    "Needs the native renderer and an OpenXR runtime, such as SteamVR, which starting it "
+    "opens; the window shows the left eye")
+    .lifecycle(Lifecycle::kRequiresRestart)
+    .debug_only();
+
+REXCVAR_DEFINE_STRING(vr_anchor, "0,-1250,520,0", "Band3/Advanced/Native renderer",
+    "With vr: where the headset's starting point is in the venue, as x,y,z in inches (x right, "
+    "y towards the stage, z up) and a turn in degrees, counterclockwise seen from above (0 "
+    "faces the stage); the default is above and behind the crowd in front of the stage. "
+    "Empty follows the game's camera, facing where it looks")
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_world_scale, 1.0, "Band3/Advanced/Native renderer",
+    "With vr: how much smaller the venue looks than life size, so a head's movement goes "
+    "this many times as far in it. 1 = life size")
+    .range(0.1, 100.0)
+    .debug_only();
+
+REXCVAR_DEFINE_BOOL(vr_fake_pose, false, "Band3/Advanced/Native renderer",
+    "With vr: turn the head slowly from side to side instead of where the headset says it "
+    "is, to test without one (SteamVR's null driver doesn't move)")
+    .debug_only();
+
 REXCVAR_DEFINE_DOUBLE(native_view_render_scale, 1.0, "Band3/Advanced/Native renderer",
     "For measuring: the native renderer draws its picture at this times the window's size "
     "(after native_max_height), its screen-sized passes with it, and the window shows it "

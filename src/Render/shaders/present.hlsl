@@ -34,3 +34,13 @@ float4 PSPresent(PresentIn i) : SV_Target0 {
     if (frame_size.z != 0.0) return float4(frame_tex.Load(int3(int2(p), 0)).rgb, 1.0);
     return float4(frame_tex.SampleLevel(frame_sampler, p / rect.zw, 0.0).rgb, 1.0);
 }
+
+// VR's eyes into a typed sRGB swapchain image (xr_present.cpp), which encodes
+// what it's given: the picture's bytes are display values already, so they
+// go in decoded, for the target to give them back
+float SrgbToLinear(float c) { return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); }
+
+float4 PSPresentLinear(PresentIn i) : SV_Target0 {
+    const float3 c = PSPresent(i).rgb;
+    return float4(SrgbToLinear(c.r), SrgbToLinear(c.g), SrgbToLinear(c.b), 1.0);
+}

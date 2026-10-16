@@ -177,7 +177,7 @@
 #include "src/Render/post_params.h"
 #include "src/Render/shade_model.h"
 #include "src/Render/soft_raster.h"
-#include "tools/native_view_replay/free_cam.h"
+#include "src/Render/free_cam.h"
 
 using namespace band3::render;
 

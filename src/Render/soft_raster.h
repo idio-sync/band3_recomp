@@ -175,6 +175,9 @@ struct RasterOptions {
     // layer per version, and passes move ahead of the world where that
     // changes nothing (gpu_view.h's PlanHoist)
     bool hoist_passes = false;
+    // GPU, VR's eyes (vr_pose.h): the back buffer's draws from post_boundary
+    // on (the track, the HUD) left out (SkipsOverlay)
+    bool skip_overlay = false;
     // GPU (native_gpu_draw_profile), with gpu_timestamps: a timestamp before
     // each back-buffer world draw, into GpuStats::draw_times
     bool gpu_draw_profile = false;
@@ -218,6 +221,11 @@ struct RasterOptions {
     // not only kEvictAfter frames (ClockKeep)
     bool clock_keep = false;
 };
+
+// RasterOptions::skip_overlay: whether back-buffer draw `d` is left out
+inline bool SkipsOverlay(const RasterOptions& o, const FrameCapture& f, size_t d) {
+    return o.skip_overlay && d >= f.post_boundary;
+}
 
 inline bool DrawnByOptions(const FrameCapture& f, const DrawItem& d, const RasterOptions& o) {
     if (o.default_material) return true;

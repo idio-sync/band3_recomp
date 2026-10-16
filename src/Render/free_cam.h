@@ -1,6 +1,7 @@
 #pragma once
 
-// Experimental: the free-camera experiment's maths. A captured camera's
+// A camera's pose and projection apart: the replay's free camera
+// (tools/native_view_replay) and VR's eyes (vr_pose.h). A captured camera's
 // view_proj (row vectors, v' = v * VP) is its view (the inverse of its world
 // transform) times its projection. Milo's camera looks down its local +y with
 // +z up, so the projection sends camera-space x to clip x, z to clip y and y
