@@ -11,9 +11,11 @@ and `present_stats`. The rate sets --video_mode_refresh_rate and --frame_cap (a
 `--flag --frame_cap=...` replaces the cap); --flag adds any band3 argument. Environment:
 WINDOW=onscreen puts the window on the primary monitor, unfocused (offscreen by default: off
 every monitor there's no real vertical blank, so pacing numbers need onscreen on the machine's
-own display); RENDERER_FLAG replaces --renderer=native; REMOTE=cpu runs without the console
-session for CPU-side timings only (capture steps, slow-frame lines, record times): the run is
-marked remote and its pacing numbers (latency, repeats, judder) mean nothing.
+own display); GPU_OK names the adapter the guard wants OK, as Get-PnpDevice prints it (the
+R9700 by default; "OK AMD Radeon(TM) Graphics" on the laptop); RENDERER_FLAG replaces
+--renderer=native; REMOTE=cpu runs without the console session for CPU-side timings only
+(capture steps, slow-frame lines, record times): the run is marked remote and its pacing
+numbers (latency, repeats, judder) mean nothing.
 
 Guards, as a GPU hang can take this machine down: it launches only with the GPU reported OK, the
 console session active (Remote Desktop has no real vertical blank) and no other band3 or build
@@ -45,7 +47,7 @@ PORT = "21097"
 HANG = ("DEVICE_HUNG", "device removed", "DEVICE_REMOVED", "DXGI_ERROR", "TDR", "didn't finish",
         "watchdog", "holding the last frame")
 BUILD_PROCS = "ninja,cmake,clang-cl,clang,clang++,cl,link,lld-link,msbuild"
-GPU_OK = "OK AMD Radeon AI PRO R9700"
+GPU_OK = os.environ.get("GPU_OK", "OK AMD Radeon AI PRO R9700")
 
 
 def table(names):

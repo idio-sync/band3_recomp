@@ -61,6 +61,7 @@ REXCVAR_DECLARE(bool, debug_overlay);
 REXCVAR_DECLARE(int32_t, native_max_height);
 REXCVAR_DECLARE(int32_t, native_anisotropic);
 REXCVAR_DECLARE(int32_t, native_view_msaa);
+REXCVAR_DECLARE(bool, native_post_effects);
 REXCVAR_DECLARE(bool, native_fill_window);
 
 // Band3/Audio
@@ -143,6 +144,7 @@ REXCVAR_DECLARE(bool, audio_xapo_nonblocking);
 REXCVAR_DECLARE(bool, audio_idle_bypass);
 REXCVAR_DECLARE(bool, native_vorbis);
 REXCVAR_DECLARE(bool, native_vorbis_check);
+REXCVAR_DECLARE(bool, preload_song_start_resources);
 
 // Band3/Advanced/Graphics
 REXCVAR_DECLARE(bool, fullbright);

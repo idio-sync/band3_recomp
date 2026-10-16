@@ -256,6 +256,15 @@ REXCVAR_DEFINE_INT32(native_view_msaa, 2, "Band3/Graphics/Native",
     .range(1, 4)
     .validator([](std::string_view v) { return v == "1" || v == "2" || v == "4"; });
 
+// read by src/Render/native_view.cpp and src/Test/test_server.cpp's captures (post_model.h's
+// PostOnlyFor)
+REXCVAR_DEFINE_BOOL(native_post_effects, true, "Band3/Graphics/Native",
+    "Native renderer (renderer native or both): the camera's post-processing effects, bloom "
+    "(and glare), depth of field and motion blur. Off leaves them out for a slower GPU; the "
+    "venue's colours, the spotlights' haze, soft particles and film grain stay. On a Radeon "
+    "680M at 1920x1200 in arena_04 that's 1.5 ms less GPU work a post frame (busy 11.8 to "
+    "10.7 ms). Applies from the next frame");
+
 // Band3/Graphics/Emulated: the emulated GPU, with renderer emulated or both. The emulated GPU's
 // own settings (vsync, resolution_scale, ...) are the plugin's, in its categories.
 
@@ -627,6 +636,12 @@ REXCVAR_DEFINE_BOOL(native_vorbis, true, "Band3/Advanced/Game code",
     "6850U laptop the inverse MDCT saves about 0.35 ms of the decode thread's CPU a frame in "
     "a song (of 1.3) and the codebook decoding about 0.25 ms more (1.0 to 0.75). Off runs "
     "the game's own");
+
+REXCVAR_DEFINE_BOOL(preload_song_start_resources, true, "Band3/Advanced/Game code",
+    "Keep ui/resource/fonts/instruments_icons_rings.milo loaded for the whole session, as the "
+    "game keeps its other fonts from boot. Otherwise the game reads it again as each song "
+    "starts, in that song's slowest frame (2.3 ms of the game's thread on a Steam Deck), "
+    "which could then miss its paint. Costs one small font's memory");
 
 REXCVAR_DEFINE_BOOL(native_vorbis_check, false, "Band3/Advanced/Game code",
     "Run both the game's and native_vorbis's inverse MDCT and codebook decoding on every block "

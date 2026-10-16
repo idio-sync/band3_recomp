@@ -28,7 +28,7 @@ picture:
 | Group (Settings > Display and Graphics, on the launcher and in game) | `native` | `emulated` | `both` |
 |---|---|---|---|
 | Display: monitor, window mode, resolution, aspect (`present_letterbox`), frame rate cap (`frame_cap`) | yes | yes | yes |
-| Native renderer (Band3 → Graphics → Native): `native_fill_window`, `native_view_msaa`, `native_anisotropic`, `native_max_height` | yes | no | yes |
+| Native renderer (Band3 → Graphics → Native): `native_fill_window`, `native_view_msaa`, `native_anisotropic`, `native_max_height`, `native_post_effects` | yes | no | yes |
 | Emulated GPU, the plugin's own (Every SDK setting: GPU): `resolution_scale`, `swap_post_effect` (FXAA), `anisotropic_override`, `vsync` (shown with the frame cap off, which turns it off otherwise) | no | yes | yes (the emulated picture) |
 | Emulated GPU, band3's (Band3 → Graphics → Emulated): `emulated_gpu_while_native` | no | no | yes |
 | Game (Band3 → Graphics): `rnd_sync`, `background_fps`, `disable_hair_shader`, `disable_approximate_lights` | yes | yes | yes |
@@ -104,6 +104,7 @@ Every kind of screen the render checks go through matches the game's picture. Th
 | `native_max_height` (Band3 → Graphics → Native) | the most lines the native renderer draws: a taller window's picture is drawn this tall and scaled up, for 4K on a GPU that can't keep up. 0 (the default) draws at the window's size |
 | `native_anisotropic` (Band3 → Graphics → Native) | anisotropic filtering, counted as `anisotropic_override` counts it: 0 off, 1 to 5 for 1x to 16x. -1 (the default) follows `anisotropic_override` where the emulated GPU runs, so the two pictures match, and keeps the game's own samplers under `native` |
 | `native_view_msaa` (Band3 → Graphics → Native) | the samples a pixel of the overlay (the track, the HUD, menus drawn after the world), the only part RB3 multisamples: 2 (the default) as RB3 does, 4 smoother, 1 none |
+| `native_post_effects` (Band3 → Graphics → Native; the launcher's Graphics → Performance) | the camera's post-processing effects: bloom (and glare), depth of field and camera motion blur. On by default; off leaves them out for a slower GPU, from the next frame. The composite still runs for the rest of RB3's picture (the venue's colour matrix, the spotlights' haze, soft particles, film grain, trails), and with none of those on a frame is resolved as it was drawn |
 
 The rest are in Settings > Advanced > Native renderer, described in the
 [settings reference](settings-reference.md#native-renderer). Most are there to compare or

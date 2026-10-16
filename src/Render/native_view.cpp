@@ -34,6 +34,13 @@
 #include "src/Render/shaders/present_shaders.gen.h"
 #endif
 
+#ifdef __linux__
+#include <fcntl.h>
+#include <sched.h>
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -145,6 +152,38 @@ int64_t Nanoseconds(std::chrono::steady_clock::time_point t) {
 
 // for present_stats' publish latency; defined with the paints below
 void NotePublished(std::chrono::steady_clock::time_point presented);
+
+// The calling thread's scheduling so far, for native_present_trace: CPU time
+// and time waiting to run (Linux's schedstat), context switches it gave up
+// and ones it was made to, and the CPU it's on. Zeros elsewhere.
+struct ThreadSched {
+    int64_t cpu_ns = 0, wait_ns = 0;
+    int64_t voluntary = 0, involuntary = 0;
+    int cpu = -1;
+};
+ThreadSched ReadThreadSched() {
+    ThreadSched t;
+#ifdef __linux__
+    thread_local int fd = open("/proc/thread-self/schedstat", O_RDONLY | O_CLOEXEC);
+    char buf[96];
+    const ssize_t n = fd >= 0 ? pread(fd, buf, sizeof(buf) - 1, 0) : -1;
+    if (n > 0) {
+        buf[n] = 0;
+        long long cpu = 0, wait = 0;
+        if (std::sscanf(buf, "%lld %lld", &cpu, &wait) == 2) {
+            t.cpu_ns = cpu;
+            t.wait_ns = wait;
+        }
+    }
+    rusage ru{};
+    if (getrusage(RUSAGE_THREAD, &ru) == 0) {
+        t.voluntary = ru.ru_nvcsw;
+        t.involuntary = ru.ru_nivcsw;
+    }
+    t.cpu = sched_getcpu();
+#endif
+    return t;
+}
 // the display's period while native_phase_lock steers the cap, else 0;
 // defined with the paints below
 int64_t PhaseLockPeriodNs();
@@ -165,6 +204,10 @@ struct PresentTraceEntry {
     // game's frame time, and what capture copied
     float capture_ms = 0, game_ms = 0;
     uint32_t draws = 0, new_shades = 0, copied_kb = 0;
+    // frames: the worker from taking the capture to submitting it (ReadThreadSched)
+    float run_ms = 0, runnable_ms = 0;
+    uint32_t switches = 0, preempted = 0;
+    int cpu_from = -1, cpu_to = -1;
 };
 void AddPresentTrace(const PresentTraceEntry& e);
 
@@ -840,6 +883,8 @@ class Renderer {
         bool done = true;
         // steady-clock ns; due_ns is -1 until done
         int64_t taken_ns = 0, submitted_ns = 0, done_ns = 0, due_ns = -1;
+        // native_present_trace: the worker's scheduling, taken to submitted
+        ThreadSched sched_taken, sched_submitted;
     };
 
     void Run() {
@@ -945,6 +990,11 @@ class Renderer {
                 o.instancing = REXCVAR_GET(native_view_instancing);
                 o.hoist_passes = REXCVAR_GET(native_view_hoist_passes);
                 o.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
+                // off: no bloom, DOF or motion blur (the velocity pass and
+                // its object meshes too)
+                const bool post_effects = REXCVAR_GET(native_post_effects);
+                o.post_only = post::PostOnlyFor(post_effects);
+                o.velocity = post_effects;
                 // drawn frame after frame, so these have the frames before
                 o.trails = true;
                 o.post_history = &post_history_;
@@ -1173,6 +1223,8 @@ class Renderer {
             stall_watch::SetWorker(stall_watch::Worker::kRecording);
             Drawn d;
             d.taken_ns = Nanoseconds(std::chrono::steady_clock::now());
+            const bool trace = REXCVAR_GET(native_present_trace);
+            if (trace) d.sched_taken = ReadThreadSched();
             d.cap = cap;
             d.presented = presented;
             d.generation = generation;
@@ -1190,6 +1242,7 @@ class Renderer {
                 d.drew_output = GpuRenderer::Get().RenderFrameToOutput(*cap, o, slot, d.out, d.gs);
                 d.drew_gpu = d.drew_output;
                 d.submitted_ns = Nanoseconds(std::chrono::steady_clock::now());
+                if (trace) d.sched_submitted = ReadThreadSched();
                 if (d.drew_output) {
                     std::lock_guard lock(mutex_);
                     slots_.Submitted(slot);
@@ -1637,6 +1690,14 @@ class Renderer {
                 e.new_shades = d.cap->cost.new_shades;
                 e.copied_kb = uint32_t(
                     (d.cap->cost.geom_copy_bytes + d.cap->cost.tex_copy_bytes) >> 10);
+                const ThreadSched& a = d.sched_taken;
+                const ThreadSched& b = d.sched_submitted;
+                e.run_ms = float((b.cpu_ns - a.cpu_ns) / 1e6);
+                e.runnable_ms = float((b.wait_ns - a.wait_ns) / 1e6);
+                e.switches = uint32_t(b.voluntary - a.voluntary);
+                e.preempted = uint32_t(b.involuntary - a.involuntary);
+                e.cpu_from = a.cpu;
+                e.cpu_to = b.cpu;
                 AddPresentTrace(e);
             }
             NotePublished(d.presented);
@@ -2029,10 +2090,12 @@ void LogPresentTrace(const std::vector<PresentTraceEntry>& trace) {
         else
             REXLOG_INFO("present trace: frame {} {} presented {} submitted {} done {} "
                         "published {} record {:.2f} wait {:.2f} taken {} capture {:.2f} game "
-                        "{:.2f} draws {} new_shades {} copied_kb {}",
+                        "{:.2f} draws {} new_shades {} copied_kb {} run {:.2f} runnable {:.2f} "
+                        "switches {} preempted {} cpus {}-{}",
                         e.frame, kKinds[e.kind & 3], e.presented, e.submitted, e.done, e.at,
                         e.record_ms, e.wait_ms, e.taken, e.capture_ms, e.game_ms, e.draws,
-                        e.new_shades, e.copied_kb);
+                        e.new_shades, e.copied_kb, e.run_ms, e.runnable_ms, e.switches,
+                        e.preempted, e.cpu_from, e.cpu_to);
     }
 }
 

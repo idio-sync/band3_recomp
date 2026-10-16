@@ -291,6 +291,8 @@ public:
         options.instancing = REXCVAR_GET(native_view_instancing);
         options.hoist_passes = REXCVAR_GET(native_view_hoist_passes);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
+        options.post_only = render::post::PostOnlyFor(REXCVAR_GET(native_post_effects));
+        options.velocity = REXCVAR_GET(native_post_effects);
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);
@@ -399,6 +401,8 @@ public:
         options.instancing = REXCVAR_GET(native_view_instancing);
         options.hoist_passes = REXCVAR_GET(native_view_hoist_passes);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
+        options.post_only = render::post::PostOnlyFor(REXCVAR_GET(native_post_effects));
+        options.velocity = REXCVAR_GET(native_post_effects);
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
         options.inline_mips = REXCVAR_GET(native_view_inline_mips);

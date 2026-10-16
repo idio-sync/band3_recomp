@@ -370,6 +370,11 @@ constexpr Setting kSettings[] = {
      .widget = kCheckbox, .shown_when = kWithoutFrameCap, .renderers = kWithEmulatedGpu,
      .about = "The emulated GPU waits for the display's refresh. Only with the frame rate cap "
               "off."},
+    {.cvar = "native_post_effects", .category = kGraphics, .section = "Performance",
+     .label = "Bloom, depth of field, motion blur", .widget = kCheckbox,
+     .renderers = kWithNative,
+     .about = "The camera's glow, focus blur and motion blur. Off is quicker on a slower "
+              "graphics card; the venue's colours, spotlights and smoke stay."},
     // on Linux the upload path (native_upload_pipeline, on by default) never
     // draws the world ahead, so the two rows would do nothing there
     {.cvar = "native_world_ahead_auto", .category = kGraphics, .section = "Performance",

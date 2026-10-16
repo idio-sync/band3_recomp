@@ -1215,6 +1215,48 @@ TEST_CASE("PlanPost turns the motion blur on where the game's had it and the cap
     CHECK_FALSE(PlanPost(f, 0, plan));
 }
 
+TEST_CASE("the camera's effects off leave bloom, DOF and the motion blur out, and the rest in") {
+    // native_post_effects: on, every effect; off, the composite without them
+    CHECK(PostOnlyFor(true) == 0u);
+    FrameCapture f = MovingCamera(5, 0);
+    f.post.cam_near = kNear;
+    f.post.cam_far = kFar;
+    f.post.cam_zrange[0] = 0.1f;
+    f.post.cam_zrange[1] = 1;
+    f.post_consts.flags[kPostFlagDof] = 1;
+    f.post_consts.flags[kPostFlagBloom] = 1;
+    f.post_consts.flags[kPostFlagColorXfm] = 1;
+    f.post_consts.flags[kPostFlagBlendPrevious] = 1;
+    PostPlan plan{};
+    REQUIRE(PlanPost(f, PostOnlyFor(true), plan));
+    CHECK(plan.composite.flags.x ==
+          (kPostDof | kPostBloom | kPostXfm | kPostTrails | kPostVelocity));
+    REQUIRE(PlanPost(f, PostOnlyFor(false), plan));
+    CHECK(plan.composite.flags.x == (kPostXfm | kPostTrails));
+    // glare is bloom's too
+    f.post_consts.flags[kPostFlagBloom] = 0;
+    f.post_consts.flags[kPostFlagGlare] = 1;
+    REQUIRE(PlanPost(f, PostOnlyFor(false), plan));
+    CHECK(plan.composite.flags.x == (kPostXfm | kPostTrails));
+    // a world frame working its post out from its parameters, the same
+    f.proc_cmds = 1;
+    f.post.bloom_intensity = 2;
+    f.post.dof = 0x2000;
+    f.post.dof_enabled = 1;
+    f.post.color_mod = 0.5f;
+    REQUIRE(PlanPost(f, PostOnlyFor(true), plan));
+    CHECK((plan.composite.flags.x & (kPostDof | kPostBloom | kPostVelocity)) ==
+          (kPostDof | kPostBloom | kPostVelocity));
+    REQUIRE(PlanPost(f, PostOnlyFor(false), plan));
+    CHECK((plan.composite.flags.x & kPostCameraEffects) == 0u);
+    CHECK((plan.composite.flags.x & kPostXfm) != 0u);
+    // with nothing else on, no post at all: the scene resolved as it is
+    f.proc_cmds = 7;
+    f.post_consts.flags[kPostFlagColorXfm] = 0;
+    f.post_consts.flags[kPostFlagBlendPrevious] = 0;
+    CHECK_FALSE(PlanPost(f, PostOnlyFor(false), plan));
+}
+
 TEST_CASE("the motion blur leaves a still camera's picture be and smears a moving one's along it") {
     // a white column on black, everything at depth 100
     const uint32_t w = 128, h = 72;
