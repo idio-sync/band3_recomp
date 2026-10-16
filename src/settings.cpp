@@ -637,6 +637,18 @@ REXCVAR_DEFINE_BOOL(native_vorbis, true, "Band3/Advanced/Game code",
     "a song (of 1.3) and the codebook decoding about 0.25 ms more (1.0 to 0.75). Off runs "
     "the game's own");
 
+REXCVAR_DEFINE_BOOL(fast_heap_search, true, "Band3/Advanced/Game code",
+    "Linux: find where the game's memory allocations go in the guest heap by skipping each "
+    "allocated region whole, rather than one page at a time as the SDK does, then let the SDK "
+    "allocate there: the same place, found faster. The game's physical allocations search 512 "
+    "MB of 4 KB pages mostly full near the top; on a Steam Deck that was about 40 ms of the "
+    "game thread in 28 s of a song, in bursts (0.4 ms of the frame a song starts in)");
+
+REXCVAR_DEFINE_BOOL(fast_heap_search_check, false, "Band3/Advanced/Game code",
+    "Linux, with fast_heap_search: run the SDK's own search for each allocation instead, and "
+    "log any place it chose that fast_heap_search wouldn't have (none should). For checking "
+    "fast_heap_search");
+
 REXCVAR_DEFINE_BOOL(preload_song_start_resources, true, "Band3/Advanced/Game code",
     "Keep ui/resource/fonts/instruments_icons_rings.milo loaded for the whole session, as the "
     "game keeps its other fonts from boot. Otherwise the game reads it again as each song "
