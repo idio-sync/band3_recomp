@@ -231,7 +231,9 @@ The scripts:
 
 With `native_view_texture_filtering` on, `<name>.gpu.nearest.png` is the same capture drawn
 with it off, and with `native_view_instancing` on, `<name>.gpu.uninstanced.png` is it drawn
-a draw at a time, which should be the same picture. `<name>.gpu.alpha.png` and `<name>.gpu.depth.png` are the GPU's scene target
+a draw at a time, and with `native_view_hoist_passes` on, `<name>.gpu.unhoisted.png` is it
+with its texture passes where the game draws them; both should be the same picture.
+`<name>.gpu.alpha.png` and `<name>.gpu.depth.png` are the GPU's scene target
 before the overlay: its alpha (the bloom weight RB3's shaders write) and its depth, as grey.
 
 ### Replay and grading

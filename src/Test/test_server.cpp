@@ -286,6 +286,7 @@ public:
         options.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
         options.shader_variants = REXCVAR_GET(native_view_shader_variants);
         options.instancing = REXCVAR_GET(native_view_instancing);
+        options.hoist_passes = REXCVAR_GET(native_view_hoist_passes);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
@@ -393,6 +394,7 @@ public:
         options.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
         options.shader_variants = REXCVAR_GET(native_view_shader_variants);
         options.instancing = REXCVAR_GET(native_view_instancing);
+        options.hoist_passes = REXCVAR_GET(native_view_hoist_passes);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
@@ -475,6 +477,18 @@ public:
             if (render::GpuRenderer::Get().RenderFrame(frame, options, rgba, uninstanced_stats))
                 render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
                                   (file + ".gpu.uninstanced.png"))
+                                     .string(),
+                                 rgba, options.width, options.height);
+            options.instancing = true;
+        }
+        // and with native_view_hoist_passes on, the passes where the game
+        // draws them, <name>.gpu.unhoisted.png: the same picture expected
+        if (options.hoist_passes) {
+            options.hoist_passes = false;
+            render::GpuStats unhoisted_stats;
+            if (render::GpuRenderer::Get().RenderFrame(frame, options, rgba, unhoisted_stats))
+                render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
+                                  (file + ".gpu.unhoisted.png"))
                                      .string(),
                                  rgba, options.width, options.height);
         }
@@ -1146,6 +1160,9 @@ private:
                       {"ahead_fallback_passes", double(g.ahead_fallback_passes)},
                       {"passes", double(g.passes)},
                       {"passes_kept", double(g.passes_kept)},
+                      {"passes_hoisted", double(g.passes_hoisted)},
+                      {"rt_layers", double(g.rt_layers)},
+                      {"rt_layers_mb", g.rt_layers_mb},
                       {"pre_passes", double(g.pre_passes)},
                       {"pre_submits", double(g.pre_submits)},
                       {"pre_targets_made", double(g.pre_targets_made)},

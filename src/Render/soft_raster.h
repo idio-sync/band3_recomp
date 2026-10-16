@@ -171,6 +171,10 @@ struct RasterOptions {
     // (a multimesh's instances) drawn as one instanced draw (gpu_view.h's
     // InstanceRuns)
     bool instancing = false;
+    // GPU (native_view_hoist_passes): a target several passes draw gets a
+    // layer per version, and passes move ahead of the world where that
+    // changes nothing (gpu_view.h's PlanHoist)
+    bool hoist_passes = false;
     // GPU (native_gpu_draw_profile), with gpu_timestamps: a timestamp before
     // each back-buffer world draw, into GpuStats::draw_times
     bool gpu_draw_profile = false;

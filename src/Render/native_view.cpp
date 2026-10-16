@@ -152,6 +152,9 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.uploads += g.uploads;
     sum.passes += g.passes;
     sum.passes_kept += g.passes_kept;
+    sum.passes_hoisted += g.passes_hoisted;
+    sum.rt_layers += g.rt_layers;
+    sum.rt_layers_mb += g.rt_layers_mb;
     sum.rt_missing += g.rt_missing;
     sum.ms += g.ms;
     sum.wait_ms += g.wait_ms;
@@ -909,6 +912,7 @@ class Renderer {
                 o.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
                 o.shader_variants = REXCVAR_GET(native_view_shader_variants);
                 o.instancing = REXCVAR_GET(native_view_instancing);
+                o.hoist_passes = REXCVAR_GET(native_view_hoist_passes);
                 o.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
                 // drawn frame after frame, so these have the frames before
                 o.trails = true;

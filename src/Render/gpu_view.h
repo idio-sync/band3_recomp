@@ -7,6 +7,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -83,6 +85,11 @@ struct GpuStats {
     // carried texture passes left undrawn, their targets holding their
     // version already (RasterOptions::keep_carried)
     uint32_t passes_kept = 0;
+    // RasterOptions::hoist_passes (PlanHoist): passes moved ahead of the
+    // world, and the layers this frame's renamed targets draw; after the
+    // frame, MB of targets' layers past their first (mips a third more)
+    uint32_t passes_hoisted = 0, rt_layers = 0;
+    double rt_layers_mb = 0;
     uint32_t rt_missing = 0;  // draws that sampled a render target nothing had drawn
     // RenderFrame: the whole frame (uploads, drawing, readback), and of that,
     // submit to picture. RenderFrameToOutput: up to submission only, wait 0
@@ -280,6 +287,149 @@ struct InstanceRuns {
         return kNoHead;
     }
 };
+
+// Pass hoisting and target layers (RasterOptions::hoist_passes,
+// native_view_hoist_passes). RB3's crowd (WorldCrowd::DrawShowing) draws each
+// character type's picture into one target, draws that type's cards, and
+// reuses the target for the next type: with vr_show_all ~84 versions a frame,
+// each splitting the world's pass and (native_view_mip_submits) a submission.
+// A target several of a frame's passes draw (a renamed one) gets a layer per
+// version, and the cards sample their version's layer; its passes, and other
+// passes nothing in between depends on, move ahead of the world's first
+// back-buffer run, keeping their order, so the world draws in one pass.
+//
+// A texture pass may move (HoistablePass) if it isn't carried in from an
+// earlier frame, starts before post_boundary, clears its colour and its depth
+// (or has none), and isn't a shadow map, spotlight or soft-particle pass.
+inline bool HoistablePass(bool carried, bool before_post, uint32_t clear_flags, bool no_z,
+                          bool special) {
+    return !carried && before_post && !special && (clear_flags & 0x0fu) != 0 &&
+           (no_z || (clear_flags & 0x30u) != 0);
+}
+
+// a render target a run's draws sample: as a diffuse map (by version, so a
+// layer), or another way (normal, projected, shadow map: as it stands)
+struct HoistSample {
+    uint32_t target = 0, version = 0;
+    bool diffuse = false;
+    bool world = false;  // by a draw before post_boundary
+};
+// a PassRun as PlanHoist sees it
+struct HoistRun {
+    bool pass = false;     // a texture pass, else back-buffer draws
+    bool movable = false;  // HoistablePass
+    bool world = false;    // back buffer, starting before post_boundary
+    uint32_t target = 0, version = 0;  // the pass's
+    std::vector<HoistSample> samples;  // its own target's left out
+};
+struct HoistPlan {
+    static constexpr uint32_t kNone = ~0u;
+    std::vector<uint32_t> order;   // the runs (input indices) in drawing order
+    std::vector<uint32_t> layer;   // per input run: the layer its pass draws into
+    std::vector<uint8_t> hoisted;  // per input run
+    uint32_t passes_hoisted = 0;
+    uint32_t last_hoisted = kNone;  // input index
+    // renamed targets: the layers each needs, and (target, version)'s layer
+    std::unordered_map<uint32_t, uint32_t> layers;
+    std::unordered_map<uint64_t, uint32_t> layer_of;
+    static uint64_t Key(uint32_t target, uint32_t version) {
+        return uint64_t(target) << 32 | version;
+    }
+    // the layer a diffuse sample of (target, version) reads
+    uint32_t LayerOf(uint32_t target, uint32_t version) const {
+        const auto f = layer_of.find(Key(target, version));
+        return f == layer_of.end() ? 0 : f->second;
+    }
+};
+
+// `rename`: give targets layers. A target is renamed when 2 to `max_layers`
+// movable passes draw it, each a version of its own, and every draw sampling
+// it does so as a diffuse map, before post_boundary, of a version a run before
+// it made. Its last version goes in layer 0, the others in 1, 2..., so what
+// reads it after this frame (or another way) finds the newest in layer 0, as
+// with one layer. `hoist`: passes from the world's first back-buffer run on
+// move ahead of it, in order, if movable and the move changes nothing they or
+// others read: what they sample isn't made by a pass left in place since,
+// nor (unless renamed) is their target drawn or sampled by a run left in place
+// since. Runs before the world's first (Plan's stand-ins among them) stay.
+inline HoistPlan PlanHoist(const std::vector<HoistRun>& runs, bool rename, bool hoist,
+                           uint32_t max_layers) {
+    HoistPlan plan;
+    const uint32_t n = uint32_t(runs.size());
+    plan.layer.assign(n, 0);
+    plan.hoisted.assign(n, 0);
+    std::unordered_map<uint64_t, uint32_t> maker;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> passes_of;
+    std::unordered_set<uint32_t> bad;
+    for (uint32_t i = 0; i < n; i++) {
+        const HoistRun& r = runs[i];
+        if (!r.pass || !r.target) continue;
+        passes_of[r.target].push_back(i);
+        if (!maker.emplace(HoistPlan::Key(r.target, r.version), i).second) bad.insert(r.target);
+        if (!r.movable) bad.insert(r.target);
+    }
+    if (rename) {
+        for (uint32_t j = 0; j < n; j++) {
+            for (const HoistSample& s : runs[j].samples) {
+                if (!passes_of.count(s.target)) continue;
+                const auto m = maker.find(HoistPlan::Key(s.target, s.version));
+                if (!s.diffuse || !s.world || m == maker.end() || m->second >= j)
+                    bad.insert(s.target);
+            }
+        }
+        for (const auto& [target, list] : passes_of) {
+            if (list.size() < 2 || list.size() > max_layers || bad.count(target)) continue;
+            const uint32_t count = uint32_t(list.size());
+            for (uint32_t k = 0; k < count; k++) {
+                const uint32_t layer = k + 1 == count ? 0 : k + 1;
+                plan.layer[list[k]] = layer;
+                plan.layer_of[HoistPlan::Key(target, runs[list[k]].version)] = layer;
+            }
+            plan.layers[target] = count;
+        }
+    }
+    uint32_t world = n;
+    for (uint32_t i = 0; i < n && hoist; i++)
+        if (!runs[i].pass && runs[i].world) {
+            world = i;
+            break;
+        }
+    for (uint32_t i = 0; i < std::min(world, n); i++) plan.order.push_back(i);
+    if (world == n) return plan;
+    auto renamed = [&](uint32_t t) { return plan.layers.count(t) != 0; };
+    // since the world's first run: what runs left in place made and sampled
+    std::unordered_set<uint32_t> stayed_made, observed;
+    std::vector<uint32_t> stayed;
+    for (uint32_t i = world; i < n; i++) {
+        const HoistRun& r = runs[i];
+        bool move = r.pass && r.movable;
+        for (const HoistSample& s : r.samples) {
+            if (!move) break;
+            if (renamed(s.target) && s.diffuse) {
+                const uint32_t m = maker.at(HoistPlan::Key(s.target, s.version));
+                if (m >= world && !plan.hoisted[m]) move = false;
+            } else if (stayed_made.count(s.target)) {
+                move = false;
+            }
+        }
+        if (move && !renamed(r.target) &&
+            (observed.count(r.target) || stayed_made.count(r.target)))
+            move = false;
+        if (move) {
+            plan.order.push_back(i);
+            plan.hoisted[i] = 1;
+            plan.passes_hoisted++;
+            plan.last_hoisted = i;
+            continue;
+        }
+        stayed.push_back(i);
+        if (r.pass) stayed_made.insert(r.target);
+        for (const HoistSample& s : r.samples)
+            if (!(renamed(s.target) && s.diffuse)) observed.insert(s.target);
+    }
+    plan.order.insert(plan.order.end(), stayed.begin(), stayed.end());
+    return plan;
+}
 
 // mesh.hlsl's VertexUniforms::instancing: x on, y the first world's index in
 // the bone buffer, z the instance index's low bits that aren't the world's

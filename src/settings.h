@@ -183,6 +183,7 @@ REXCVAR_DECLARE(bool, native_view_texture_filtering);
 REXCVAR_DECLARE(bool, native_view_hardware_sampling);
 REXCVAR_DECLARE(bool, native_view_shader_variants);
 REXCVAR_DECLARE(bool, native_view_instancing);
+REXCVAR_DECLARE(bool, native_view_hoist_passes);
 REXCVAR_DECLARE(double, native_view_render_scale);
 REXCVAR_DECLARE(std::string, native_view_rt_fallback);
 REXCVAR_DECLARE(bool, native_view_target_scale);

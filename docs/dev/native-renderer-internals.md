@@ -346,6 +346,31 @@ What each does, how it was measured and why it defaults as it does. The
   ms, and the GPU's world 1.6-1.7 to 1.0-1.2 ms; without it 570-890 draws to 370-420 and
   frames 1.9-2.1 to 1.7-1.8 ms. What `vr_show_all` still costs is mostly its ~95 texture
   passes a frame (and 86 command buffers, against 8 without it), not its draws.
+- `native_view_hoist_passes` (on): RB3's crowd (`WorldCrowd::DrawShowing`) draws each
+  character type's picture into one 256x512 target, draws that type's cards, and reuses the
+  target for the next: a version a type, 5 to 8 a frame in a song and 84 with `vr_show_all`,
+  each splitting the world's pass and (`native_view_mip_submits`) a submission of its own.
+  `gpu_view.h`'s `PlanHoist` gives a target several of a frame's passes draw a layer per
+  version (the newest in layer 0, so whatever reads it after this frame, or as a normal or
+  projected map, reads layer 0 as before; the rest in 1, 2..., the array made in steps of 8
+  layers and never shrunk while the target lives), and the cards read their version's
+  layer. It's only for targets every pass of which clears colour and depth, starts before
+  `post_boundary` and isn't carried, read only as a diffuse map by world draws after the
+  version is made, and with the inline mips (`DrawMips` draws one layer's). Passes then move
+  ahead of the world's first back-buffer run, in order, where nothing between reads what they
+  change (`HoistablePass`; Plan's stand-ins and anything before the world stay first), and the
+  moved ones submit once, after the last, so the GPU draws them while the world is recorded.
+  Not for a post frame drawing over the world drawn ahead. `native_view stats` counts
+  `passes_hoisted`, `rt_layers` and `rt_layers_mb`; DRED labels give the layer a pass draws
+  into. The same captured frames with it on and off (`capture`'s
+  `<name>.gpu.unhoisted.png`) had no pixel different, two in a song (8 versions) and one
+  with `vr_show_all` (84). In 20th Century Boy at arena_04 on the R9700 (600-frame stretches,
+  full frames, 1280x720): with `vr_show_all` record went from 4.6 to 2.2 ms, submit from 1.45
+  to 0.1 (86 submissions to 3), plan from 0.57 to 0.78 (planning the move), frames from
+  6.2-6.3 to 5.0 ms mean and 7.6 to 5.6 p95, and the GPU's world from 1.0-1.2 to 0.3-0.4 ms
+  (its total 2.9-3.1 to 2.2-2.3), for 58 MB of layers (96 of them); without it record 1.0 to
+  0.84, frames 1.72 to 1.64. At 4073x2291 with `vr_show_all` (the display went to 60 Hz, so
+  even/odd frames) post frames went from 8.3 to 7.0 ms and world frames from 6.4 to 5.3.
 - `native_view_render_scale` (debug, 1): the presented picture is drawn at that times the
   window's size (after `native_max_height`; `native_view.cpp`'s `ScaleRender`), with the
   screen-sized passes following (`ScaleForPicture`), and `present.hlsl` scales it to the

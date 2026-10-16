@@ -767,14 +767,17 @@ struct GpuRenderer::Impl {
     uint64_t serial = 0;
     bool texture_failure_logged = false;
 
-    // A texture pass's target, by DxTex: a one-layer RGBA8 2D array with mips
-    // (bound like any texture) plus depth; a shadow map's is plain R32_FLOAT
-    // 2D (mesh.hlsl's shadow_tex). Kept between frames (Evict); remade when
-    // its size changes.
+    // A texture pass's target, by DxTex: an RGBA8 2D array with mips (bound
+    // like any texture) plus depth; a shadow map's is plain R32_FLOAT 2D
+    // (mesh.hlsl's shadow_tex). One layer, or with hoist_passes a layer per
+    // version for a target several of a frame's passes draw (PlanHoist), the
+    // newest in layer 0; they share the one depth, each pass clearing it.
+    // Kept between frames (Evict); remade when its size changes or it needs
+    // more layers.
     struct Rt {
         SDL_GPUTexture* color = nullptr;
         SDL_GPUTexture* depth = nullptr;
-        uint32_t w = 0, h = 0, levels = 1;
+        uint32_t w = 0, h = 0, levels = 1, layers = 1;
         // the pass's size in the game; w x h unless drawn bigger
         // (soft_raster.h's PassTargetSize)
         uint32_t game_w = 0, game_h = 0;
@@ -911,10 +914,10 @@ struct GpuRenderer::Impl {
     // a render pass, its kSamplerBatch fragment samplers bound to white first
     SDL_GPURenderPass* BeginPass(SDL_GPUCommandBuffer* cmd, const SDL_GPUColorTargetInfo* ct,
                                  uint32_t targets, const SDL_GPUDepthStencilTargetInfo* dt);
-    // `texture`'s (w x h, one-layer RGBA8 array) levels 1 to levels - 1, as
+    // `texture`'s (w x h RGBA8 array) levels 1 to levels - 1 of `layer`, as
     // SDL's GenerateMipmaps blits them on Direct3D 12 (inline_mips_ok)
     void DrawMips(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* texture, uint32_t w, uint32_t h,
-                  uint32_t levels);
+                  uint32_t levels, uint32_t layer = 0);
     // one of the generated shaders, in `format` (DXBC or SPIR-V)
     SDL_GPUShader* MakeShader(SDL_GPUShaderFormat format, SDL_GPUShaderStage stage,
                               const unsigned char* dxbc, size_t dxbc_size,
@@ -997,13 +1000,16 @@ struct GpuRenderer::Impl {
     void LetTextureGo(Tex& tx);
     // mips counted as a third more (GpuStats::texture_array_mb)
     double TextureArrayMb() const;
-    // the target for texture pass `p`, remade if not w x h (PassTargetSize)
-    // or holding a shared depth `p` mustn't have; a new one without depth
-    // takes its size's shared depth if `share` (RasterOptions::premake_targets).
+    // the target for texture pass `p`, remade if not w x h (PassTargetSize),
+    // with fewer than `layers` layers (made with kRtLayerStep's multiple), or
+    // holding a shared depth `p` mustn't have; a new one without depth takes
+    // its size's shared depth if `share` (RasterOptions::premake_targets).
     // Null on failure.
-    Rt* TargetFor(const Pass& p, uint32_t w, uint32_t h, bool share);
+    Rt* TargetFor(const Pass& p, uint32_t w, uint32_t h, bool share, uint32_t layers = 1);
+    static constexpr uint32_t kRtLayerStep = 8;
     // makes `rt`'s textures (it has none); false on failure (logged once)
-    bool MakeRt(Rt& rt, uint32_t w, uint32_t h, uint32_t levels, bool shadow, bool share);
+    bool MakeRt(Rt& rt, uint32_t w, uint32_t h, uint32_t levels, bool shadow, bool share,
+                uint32_t layers = 1);
     SDL_GPUTexture* TakeSharedDepth(uint32_t w, uint32_t h);
     void DropSharedDepth(uint32_t w, uint32_t h);
     // between frames (GpuRenderer::Idle): announced targets and texture
@@ -1165,7 +1171,7 @@ SDL_GPURenderPass* GpuRenderer::Impl::BeginPass(SDL_GPUCommandBuffer* cmd,
 }
 
 void GpuRenderer::Impl::DrawMips(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* texture, uint32_t w,
-                                 uint32_t h, uint32_t levels) {
+                                 uint32_t h, uint32_t levels, uint32_t layer) {
     // SDL_GenerateMipmapsForGPUTexture's blits, call for call: a pass per
     // level, load DONT_CARE, the blit's viewport (the level's size, at least
     // 1), no scissor. Byte-identical to SDL's, odd sizes too. A level whose
@@ -1174,6 +1180,7 @@ void GpuRenderer::Impl::DrawMips(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* text
         SDL_GPUColorTargetInfo ct{};
         ct.texture = texture;
         ct.mip_level = l;
+        ct.layer_or_depth_plane = layer;
         ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
         ct.store_op = SDL_GPU_STOREOP_STORE;
         SDL_GPURenderPass* rp = BeginPass(cmd, &ct, 1, nullptr);
@@ -1183,7 +1190,7 @@ void GpuRenderer::Impl::DrawMips(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* text
         SDL_BindGPUGraphicsPipeline(rp, mip_pipeline);
         const SDL_GPUTextureSamplerBinding tb{texture, mip_sampler};
         SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
-        const uint32_t level[4] = {l - 1, 0, 0, 0};
+        const uint32_t level[4] = {l - 1, layer, 0, 0};
         SDL_PushGPUFragmentUniformData(cmd, 0, level, sizeof(level));
         SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
         SDL_EndGPURenderPass(rp);
@@ -2268,7 +2275,7 @@ const GpuRenderer::Impl::Tex* GpuRenderer::Impl::TextureFor(const Texture* t) {
 }
 
 GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, uint32_t h,
-                                                    bool share) {
+                                                    bool share, uint32_t layers) {
     Rt& rt = rts[p.tex_obj];
     UseRt(rt);
     rt.game_w = p.width;
@@ -2278,7 +2285,7 @@ GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, u
     const uint32_t levels = TargetLevels(p.num_mips, w, h, shadow);
     const bool may_share = SharesDepth(p.tex_type, shadow);
     if (rt.color && rt.w == w && rt.h == h && rt.levels == levels && rt.shadow == shadow &&
-        (may_share || !rt.depth_shared)) {
+        rt.layers >= layers && (may_share || !rt.depth_shared)) {
         if (rt.premade && walk_stats) walk_stats->premade_used++;
         rt.premade = false;
         return &rt;
@@ -2286,7 +2293,8 @@ GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, u
     const auto start = std::chrono::steady_clock::now();
     const bool resized = rt.color != nullptr;
     ReleaseRt(rt);
-    if (!MakeRt(rt, w, h, levels, shadow, share && may_share)) {
+    if (layers > 1) layers = (layers + kRtLayerStep - 1) / kRtLayerStep * kRtLayerStep;
+    if (!MakeRt(rt, w, h, levels, shadow, share && may_share, layers)) {
         rts.erase(p.tex_obj);
         return nullptr;
     }
@@ -2303,14 +2311,14 @@ GpuRenderer::Impl::Rt* GpuRenderer::Impl::TargetFor(const Pass& p, uint32_t w, u
 }
 
 bool GpuRenderer::Impl::MakeRt(Rt& rt, uint32_t w, uint32_t h, uint32_t levels, bool shadow,
-                               bool share) {
+                               bool share, uint32_t layers) {
     SDL_GPUTextureCreateInfo ti{};
     ti.type = shadow ? SDL_GPU_TEXTURETYPE_2D : SDL_GPU_TEXTURETYPE_2D_ARRAY;
     ti.format = shadow ? kShadowFormat : kColorFormat;
     ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
     ti.width = w;
     ti.height = h;
-    ti.layer_count_or_depth = 1;
+    ti.layer_count_or_depth = shadow ? 1 : layers;
     ti.num_levels = levels;
     rt.color = SDL_CreateGPUTexture(device, &ti);
     counts.textures++;
@@ -2322,6 +2330,7 @@ bool GpuRenderer::Impl::MakeRt(Rt& rt, uint32_t w, uint32_t h, uint32_t levels, 
         ti.format = kDepthFormat;
         ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
         ti.num_levels = 1;
+        ti.layer_count_or_depth = 1;
         rt.depth = SDL_CreateGPUTexture(device, &ti);
     }
     // (set first: the failure's ReleaseRt gives a shared depth back by size)
@@ -2338,6 +2347,7 @@ bool GpuRenderer::Impl::MakeRt(Rt& rt, uint32_t w, uint32_t h, uint32_t levels, 
         return false;
     }
     rt.levels = levels;
+    rt.layers = shadow ? 1 : layers;
     rt.shadow = shadow;
     return true;
 }
@@ -2377,7 +2387,7 @@ void GpuRenderer::Impl::ReleaseRt(Rt& rt) {
     else if (rt.depth) SDL_ReleaseGPUTexture(device, rt.depth);
     rt.color = rt.depth = nullptr;
     rt.w = rt.h = 0;
-    rt.levels = 1;
+    rt.levels = rt.layers = 1;
     rt.shadow = false;
     rt.depth_shared = false;
     rt.premade = false;
@@ -3552,7 +3562,78 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     proj_source.assign(frame.draws.size(), kSourceNone);
     for (auto& v : normal_source) v.assign(frame.draws.size(), kSourceNone);
     spot_draw.assign(frame.draws.size(), kSpotNone);
-    const std::vector<PassRun> runs = PlanPasses(frame, o);
+    std::vector<PassRun> runs = PlanPasses(frame, o);
+    // RasterOptions::hoist_passes (gpu_view.h's PlanHoist): renamed targets'
+    // layers, and the runs reordered, passes ahead of the world; not for a
+    // post frame drawing over the world drawn ahead. Per run as reordered:
+    // the layer a pass draws into, whether it moved, and the last that did
+    // (where the moved passes are submitted); per draw, the layer its
+    // diffuse render target is read from.
+    HoistPlan hoist;
+    std::vector<uint32_t> run_layer(runs.size(), 0);
+    std::vector<uint8_t> run_hoisted(runs.size(), 0);
+    size_t last_hoisted_run = SIZE_MAX;
+    std::vector<uint32_t> diffuse_layer(frame.draws.size(), 0);
+    if (o.hoist_passes && !ahead_end && !frame.passes.empty()) {
+        std::vector<HoistRun> hruns(runs.size());
+        for (size_t r = 0; r < runs.size(); r++) {
+            const PassRun& run = runs[r];
+            HoistRun& h = hruns[r];
+            h.pass = run.pass != nullptr;
+            h.world = !run.pass && run.first < frame.post_boundary;
+            bool special = false;
+            for (size_t d = run.first; d < run.end; d++) {
+                const DrawItem& it = frame.draws[d];
+                if (!DrawnIn(run, frame, it, o)) continue;
+                const ShadeState* state = shade::ShadeOf(frame, it);
+                if (run.pass && (spot::SpotBlur(it, state, *run.pass) || IsSpotCone(it, state) ||
+                                 SoftBlur(frame, it, state, *run.pass) ||
+                                 IsSoftParticle(it, state)))
+                    special = true;
+                const bool world = d < frame.post_boundary;
+                // what it reads of a render target; its own reads black
+                auto add = [&](const Texture* t, bool diffuse) {
+                    if (!t || !t->tex_obj || (run.pass && t->tex_obj == run.pass->tex_obj))
+                        return;
+                    h.samples.push_back({t->tex_obj, t->version, diffuse, world});
+                };
+                if (o.textures && it.tex && SamplesDiffuse(it) && IsPassTarget(it.tex.get()))
+                    add(it.tex.get(), true);
+                add(ProjectedTargetOf(state), false);
+                add(ShadowMapOf(state), false);
+                add(MapTargetOf(state, kMapNormal), false);
+                add(MapTargetOf(state, kMapDetailNormal), false);
+            }
+            if (!run.pass) continue;
+            const Pass& p = *run.pass;
+            h.target = p.tex_obj;
+            h.version = p.version;
+            const bool carried =
+                size_t(run.pass - frame.passes.data()) < size_t(frame.passes_carried);
+            special = special || p.tex_type == kTexTypeShadowMap ||
+                      p.tex_type == kTexTypeDepthVolume || p.tex_type == kTexTypeDensityMap ||
+                      p.tex_obj == frame.post_consts.soft_surface[0] ||
+                      p.tex_obj == frame.post_consts.soft_surface[1];
+            h.movable = HoistablePass(carried, run.first < frame.post_boundary,
+                                      PassClearFlags(frame, p), (p.tex_type & kTexTypeNoZ) != 0,
+                                      special);
+        }
+        // layers need each layer's mips drawn alone (DrawMips), not SDL's
+        // GenerateMipmaps, which makes every layer's
+        hoist = PlanHoist(hruns, o.inline_mips && inline_mips_ok, true, kMaxTextureLayers);
+        std::vector<PassRun> ordered;
+        ordered.reserve(runs.size());
+        for (size_t k = 0; k < hoist.order.size(); k++) {
+            const uint32_t i = hoist.order[k];
+            ordered.push_back(runs[i]);
+            run_layer[k] = hoist.layer[i];
+            run_hoisted[k] = hoist.hoisted[i];
+            if (i == hoist.last_hoisted) last_hoisted_run = k;
+        }
+        runs = std::move(ordered);
+        st.passes_hoisted = hoist.passes_hoisted;
+        for (const auto& [target, layers] : hoist.layers) st.rt_layers += layers;
+    }
     run_clear.assign(runs.size(), 0);
     uint32_t pool_vert_count = 0, pool_index_count = 0;
     // in the arena already, into it from the last frame's pool, or into this
@@ -3619,7 +3700,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         if (run.pass) {
             uint32_t tw, th;
             PassTargetSize(frame, *run.pass, o, tw, th);
-            target = TargetFor(*run.pass, tw, th, o.premake_targets);
+            const auto renamed = hoist.layers.find(run.pass->tex_obj);
+            target = TargetFor(*run.pass, tw, th, o.premake_targets,
+                               renamed == hoist.layers.end() ? 1 : renamed->second);
             if (!target) continue;
             // RasterOptions::keep_carried: a pass the game drew in an earlier
             // frame, whose version the target holds (versions count each draw
@@ -3700,6 +3783,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     const bool self = run.pass && run.pass->tex_obj == tex.tex_obj;
                     if (!self && f != rts.end() && f->second.drawn && !f->second.shadow) {
                         source = kSourceRt;
+                        diffuse_layer[d] = hoist.LayerOf(tex.tex_obj, tex.version);
                         UseRt(f->second);
                     } else if (!self && o.rt_guest_pixels && !tex.rgba.empty()) {
                         source = kSourceTexture;
@@ -4617,6 +4701,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // texture pass's target
     uint32_t density_obj = 0;
     const Rt* pass_rt = nullptr;
+    uint32_t pass_layer = 0;  // the layer it draws into (PlanHoist)
 
     // one draw into the open pass; `no_z`: target without depth;
     // `shadow_depth`: into a shadow map, depth alone
@@ -4725,7 +4810,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             case kSourceRt: {
                 const Rt& rt = rts[it.tex->tex_obj];
                 // a render target is a texture of its own, its whole size
-                tex[kSlotDiffuse] = {rt.color, 0, rt.w, rt.h, rt.levels, false, 0u, true};
+                tex[kSlotDiffuse] = {rt.color, diffuse_layer[d], rt.w, rt.h, rt.levels,
+                                     false, 0u, true};
                 break;
             }
             case kSourceBlack: tex[kSlotDiffuse] = {black, 0, 1, 1}; break;
@@ -4963,11 +5049,12 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 if (pu.tex_size[t][0])
                     textures += fmt::format(" {}:{}x{}/{}", t, pu.tex_size[t][0],
                                             pu.tex_size[t][1], pu.tex_sampler[t][3]);
-            label(fmt::format("draw {} {}: mesh {:#x} into {:#x}, {} indices, {} vertices, {} "
-                              "bones, {} instances, blend {}, alpha {}, {} samples, shade {}, "
-                              "rect {}, textures{}, layers {} {} {} {} {}",
+            label(fmt::format("draw {} {}: mesh {:#x} into {:#x} layer {}, {} indices, {} "
+                              "vertices, {} bones, {} instances, blend {}, alpha {}, {} samples, "
+                              "shade {}, rect {}, textures{}, layers {} {} {} {} {}",
                               d, cone ? "spot cone" : soft ? "soft particle" : "mesh", it.mesh,
-                              it.target, it.geom->indices.size(), it.geom->verts.size(),
+                              it.target, it.target ? pass_layer : 0, it.geom->indices.size(),
+                              it.geom->verts.size(),
                               it.bones.size(), instances, blend, int(alpha), pass_samples,
                               it.shade, it.rect_shader, textures, pu.tex_layer[0],
                               pu.tex_layer[1], pu.tex_layer[2], pu.tex_layer[3],
@@ -5057,6 +5144,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         const Pass& p = *run.pass;
         const Rt& rt = rts[p.tex_obj];
         pass_rt = &rt;
+        pass_layer = rt.shadow ? 0 : run_layer[r];
         if (p.tex_type == kTexTypeDensityMap) density_obj = p.tex_obj;
         const bool no_z = (p.tex_type & kTexTypeNoZ) != 0;
         // a shadow map's colour is its depth (clip z/w), both cleared to the
@@ -5074,6 +5162,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         auto begin_rt = [&](bool first) {
             SDL_GPUColorTargetInfo ct{};
             ct.texture = rt.color;
+            ct.layer_or_depth_plane = pass_layer;
             const uint32_t c = (p.clear_flags & 0x0f) ? ArgbToRgba(p.clear_color) : 0;
             ct.clear_color = {float(c & 0xff) / 255.0f, float(c >> 8 & 0xff) / 255.0f,
                               float(c >> 16 & 0xff) / 255.0f, float(c >> 24) / 255.0f};
@@ -5199,12 +5288,15 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 // same texels as SDL's blits, but through BeginPass so the
                 // sampler heap stays on kSamplerBatch's step
                 MarkTime(cmd, gpu_timing::kMips);
-                DrawMips(cmd, rt.color, rt.w, rt.h, rt.levels);
+                DrawMips(cmd, rt.color, rt.w, rt.h, rt.levels, pass_layer);
                 // or on in the frame's (native_view_mip_submits): with AMD's
                 // Direct3D 12 driver 9 or 10 command buffers a frame swing
                 // between big and small recordings, and a list reset after
-                // that sometimes maps new command memory (6.5 ms in a VM)
-                next = !o.mip_submits || next_part();
+                // that sometimes maps new command memory (6.5 ms in a VM).
+                // Passes moved ahead of the world submit once, after the last
+                // of them, which the GPU draws while the world is recorded.
+                next = !o.mip_submits || (run_hoisted[r] && r != last_hoisted_run) ||
+                       next_part();
             } else {
                 // SDL's blits bind one sampler each, which on Direct3D 12
                 // would put the heap off kSamplerBatch's step (BeginPass), so
@@ -5223,6 +5315,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                             SDL_GetError());
                 return false;
             }
+        } else if (r == last_hoisted_run && o.mip_submits && !next_part()) {
+            REXLOG_WARN("native view gpu: the passes moved ahead didn't submit ({})",
+                        SDL_GetError());
+            return false;
         }
     }
     if (!resolved && !resolve()) return false;
@@ -5741,8 +5837,9 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
         // colour (RGBA8, or a shadow map's R32_FLOAT) and D32 depth, a
         // shared one counted once (below)
         const double pixels = double(rt.w) * rt.h;
-        stats.rts_mb +=
-            pixels * 4 * ((rt.levels > 1 ? 4.0 / 3 : 1) + (rt.depth_shared ? 0 : 1)) / 1048576;
+        const double layer_mb = pixels * 4 * (rt.levels > 1 ? 4.0 / 3 : 1) / 1048576;
+        stats.rts_mb += layer_mb * rt.layers + (rt.depth_shared ? 0 : pixels * 4 / 1048576);
+        stats.rt_layers_mb += layer_mb * (rt.layers - 1);
         if (rt.premade) stats.premade_unused++;
     }
     for (const auto& [size, d] : impl_->shared_depths)

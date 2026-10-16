@@ -884,6 +884,12 @@ REXCVAR_DEFINE_BOOL(native_view_instancing, true, "Band3/Advanced/Native rendere
     "cards) as one instanced draw: the same picture for much less CPU time. Off draws each "
     "by itself, to compare");
 
+REXCVAR_DEFINE_BOOL(native_view_hoist_passes, true, "Band3/Advanced/Native renderer",
+    "Draw the pictures RB3 draws into one texture again and again in a frame (the crowd's, "
+    "one per kind of character) each into a layer of its own, ahead of the world, so the "
+    "world draws in one go: the same picture for less CPU time. Off draws them where the "
+    "game does, to compare");
+
 REXCVAR_DEFINE_DOUBLE(native_view_render_scale, 1.0, "Band3/Advanced/Native renderer",
     "For measuring: the native renderer draws its picture at this times the window's size "
     "(after native_max_height), its screen-sized passes with it, and the window shows it "
