@@ -80,7 +80,8 @@ TEST_CASE("each category's sections are the redesign's, in order") {
     CHECK(Sections(Category::kGame) == Names{"Folders", "Profile", "Startup"});
     CHECK(Sections(Category::kGameplay) == Names{"Speed", "Unlocks", "Song list", "Venue"});
     CHECK(Sections(Category::kDisplay) == Names{"Screen", "Smoothness"});
-    CHECK(Sections(Category::kGraphics) == Names{"Renderer", "Quality", "Effects", "Timing"});
+    CHECK(Sections(Category::kGraphics) ==
+          Names{"Renderer", "Quality", "Effects", "Timing", "Performance"});
     CHECK(Sections(Category::kAudio) == Names{"Output", "Microphones"});
     CHECK(Sections(Category::kControllers) == Names{"Instruments", "Menus", "Sticks", "Delay"});
     CHECK(Sections(Category::kMidi) == Names{"Drums", "Keyboard"});

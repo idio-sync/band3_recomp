@@ -853,9 +853,10 @@ const std::set<std::string> kEveryRenderer = {
     "monitor", "fullscreen", "resolution", "present_letterbox", "frame_cap", "renderer",
     "rnd_sync", "background_fps", "disable_hair_shader", "disable_approximate_lights",
     "debug_overlay", "force_self_shadow"};
-const std::set<std::string> kNativeRows = {"native_fill_window", "native_view_msaa",
-                                           "native_anisotropic", "native_max_height",
-                                           "native_view_shadow_scale", "native_present_pacing"};
+const std::set<std::string> kNativeRows = {
+    "native_fill_window",       "native_view_msaa",        "native_anisotropic",
+    "native_max_height",        "native_view_shadow_scale", "native_present_pacing",
+    "native_world_ahead_auto",  "native_world_ahead",      "native_deferred_decode_threads"};
 const std::set<std::string> kEmulatedRows = {"resolution_scale", "swap_post_effect",
                                              "anisotropic_override", "vsync",
                                              "compress_character_textures"};
@@ -878,7 +879,8 @@ TEST_CASE("Display and Graphics show each group only for the renderers it applie
     CHECK(SectionsOf(SettingTable(), Category::kDisplay) ==
           std::vector<std::string_view>{"Screen", "Smoothness"});
     CHECK(SectionsOf(SettingTable(), Category::kGraphics) ==
-          std::vector<std::string_view>{"Renderer", "Quality", "Effects", "Timing"});
+          std::vector<std::string_view>{"Renderer", "Quality", "Effects", "Timing",
+                                        "Performance"});
 }
 
 TEST_CASE("the Smoothness section says what its rows cost and to calibrate again") {
@@ -945,6 +947,24 @@ TEST_CASE("renderer offers native, emulated and both on Windows and Linux") {
         INFO(c.value);
         CHECK(elsewhere.Offered(c));
     }
+}
+
+TEST_CASE("drawing the world ahead shows on Windows only") {
+    // Linux's upload path never draws it ahead (native_upload_pipeline)
+    GraphicsTab windows("native");
+    GraphicsTab linux_tab("native");
+    linux_tab.f.env.windows = false;
+    linux_tab.model.emplace(SettingTable(), linux_tab.f.env, linux_tab.f.store);
+    for (const char* cvar : {"native_world_ahead_auto", "native_world_ahead"}) {
+        INFO(cvar);
+        const Setting* row = FindSetting(SettingTable(), cvar);
+        REQUIRE(row);
+        CHECK(windows.model->Visible(*row));
+        CHECK_FALSE(linux_tab.model->Visible(*row));
+    }
+    const Setting* threads = FindSetting(SettingTable(), "native_deferred_decode_threads");
+    REQUIRE(threads);
+    CHECK(linux_tab.model->Visible(*threads));
 }
 
 TEST_CASE("Save removes the retired emulated_gpu's key") {

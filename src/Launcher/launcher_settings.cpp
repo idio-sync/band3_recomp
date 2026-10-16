@@ -92,6 +92,9 @@ constexpr Choice kShadowScales[] = {
 // native_max_height's: the most lines drawn, a taller window's picture scaled up
 constexpr Choice kNativeHeights[] = {
     {"0", "Window's size"},
+    {"360", "360p"},
+    {"480", "480p"},
+    {"540", "540p"},
     {"720", "720p"},
     {"1080", "1080p"},
     {"1440", "1440p"},
@@ -129,6 +132,9 @@ constexpr Choice kFrameCaps[] = {
 };
 
 constexpr Choice kBackgroundFps[] = {{"0", "Venue's own"}};
+
+// native_deferred_decode_threads': 0 decodes on the renderer's own thread
+constexpr Choice kDecodeThreads[] = {{"0", "Off"}};
 
 constexpr Choice kControllerTypes[] = {
     {"-1", "Game's pick"},
@@ -364,6 +370,27 @@ constexpr Setting kSettings[] = {
      .widget = kCheckbox, .shown_when = kWithoutFrameCap, .renderers = kWithEmulatedGpu,
      .about = "The emulated GPU waits for the display's refresh. Only with the frame rate cap "
               "off."},
+    // on Linux the upload path (native_upload_pipeline, on by default) never
+    // draws the world ahead, so the two rows would do nothing there
+    {.cvar = "native_world_ahead_auto", .category = kGraphics, .section = "Performance",
+     .label = "Draw ahead on integrated GPUs", .widget = kCheckbox, .renderers = kWithNative,
+     .windows_only = true,
+     .about = "On a laptop's or a handheld's graphics, draws the venue right after each world "
+              "frame, so the next frame has less to do: fewer repeated frames and a little less "
+              "delay. Off leaves it to the row below."},
+    {.cvar = "native_world_ahead", .category = kGraphics, .section = "Performance",
+     .label = "Draw ahead on every GPU", .widget = kCheckbox, .renderers = kWithNative,
+     .windows_only = true,
+     .note = "Experimental. On a fast graphics card at a high refresh rate it can repeat more "
+             "frames; band3 checks every few seconds and keeps whichever repeats fewer",
+     .about = "Draws the venue ahead on any graphics card, not just integrated ones: worth a "
+              "try on an older or slower card."},
+    {.cvar = "native_deferred_decode_threads", .category = kGraphics, .section = "Performance",
+     .label = "Texture decode threads", .widget = kIntStepper, .choices = kDecodeThreads,
+     .range = Range{0, 3, 1}, .renderers = kWithNative,
+     .about = "Threads that unpack a song's or a camera cut's new textures and meshes, so the "
+              "picture holds for less time. On a processor with four threads or fewer, 1 or "
+              "Off leaves more of it to the game."},
 
     // Audio
     {.cvar = "audio_maxqframes", .category = kAudio, .section = "Output",
