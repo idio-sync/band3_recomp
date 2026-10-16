@@ -1035,7 +1035,10 @@ void SettingsScreen::DrawRows(ImDrawList* dl, ImGuiIO& io) {
         std::string short_path;
         if (!look.value_caps && !typing_here && value.find_first_of("\\/") != std::string::npos) {
             const TextStyle vs = kPlain(text::kValue);
-            short_path = ShortPath(value, (max.x - min.x) * 0.48f, [&](std::string_view s) { return TextWidth(vs, s); });
+            // a Windows path with Windows' separators, as the launcher writes them
+            std::string shown = value;
+            if (shown.size() > 2 && shown[1] == ':') std::ranges::replace(shown, '/', '\\');
+            short_path = ShortPath(shown, (max.x - min.x) * 0.48f, [&](std::string_view s) { return TextWidth(vs, s); });
             look.value = short_path;
         }
         DrawRow(dl, min, max, look, skin_);

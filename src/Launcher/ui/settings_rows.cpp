@@ -337,6 +337,18 @@ std::vector<Section> CategoryRows(const SettingsModel& model, Category category,
             section.rows.insert(section.rows.begin(),
                                 ControlRow(Control::kVideosList, "Music Videos screen"));
         }
+        // rows locked for this run say so under the band, not only once picked
+        if (!section.note) {
+            std::string locked;
+            Lock why = Lock::kNone;
+            for (const Row& r : section.rows) {
+                if (!r.setting || r.kind == RowKind::kControl || !model.IsLocked(r.setting->cvar)) continue;
+                if (why == Lock::kNone) why = model.LockOf(r.setting->cvar);
+                if (r.kind != RowKind::kSetting || locked.find(r.label) != std::string::npos) continue;
+                locked += (locked.empty() ? "" : ", ") + r.label;
+            }
+            if (!locked.empty()) section.note = std::string(LockReason(why)) + " for this run: " + locked + ".";
+        }
         if (!section.rows.empty() || section.note) out.push_back(std::move(section));
     }
 

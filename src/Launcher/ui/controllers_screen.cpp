@@ -223,7 +223,7 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
             help = {{HelpButton::kB, "Stop test"}};
         } else {
             // its own Back button, not B (on a guitar, the red fret)
-            help = {{HelpButton::kBack, "On it: stop test"}, {HelpButton::kB, "On another: stop test"}};
+            help = {{HelpButton::kBack, "Stop test"}, {HelpButton::kB, "Stop (another controller)"}};
         }
     } else {
         const bool device = selected_ < int(entries_.size());

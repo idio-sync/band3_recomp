@@ -306,3 +306,20 @@ TEST_CASE("the lights' tries carry their note") {
     REQUIRE(it != sections.end());
     CHECK(it->note);
 }
+TEST_CASE("a section says which of its rows are locked, and why") {
+    Screen s;
+    {
+        const auto sections = s.Rows(Category::kGame);
+        const auto folders = std::ranges::find(sections, std::string("Folders"), &Section::name);
+        REQUIRE(folders != sections.end());
+        CHECK_FALSE(folders->note);
+    }
+    s.env.cvars["user_data_root"].lock = Lock::kCommandLine;
+    s.Build();
+    const auto sections = s.Rows(Category::kGame);
+    const auto folders = std::ranges::find(sections, std::string("Folders"), &Section::name);
+    REQUIRE(folders != sections.end());
+    REQUIRE(folders->note);
+    CHECK(folders->note->find("command line") != std::string::npos);
+    CHECK(folders->note->find("User data folder") != std::string::npos);
+}

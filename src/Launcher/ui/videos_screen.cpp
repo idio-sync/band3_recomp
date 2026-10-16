@@ -699,10 +699,19 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
                 {HelpButton::kY, "Sync again"}};
     } else if (current && current->kind == Item::kFindAll) {
         const video::YtDlpState yt = video::YtDlpNow(false);
-        help = {{HelpButton::kA, "Select"}, {HelpButton::kB, back},
+        // A: Start, Pause or Go on, as the row says; why it waits while it does
+        help = {{HelpButton::kA, current->blocked ? std::string("Details") : current->right}, {HelpButton::kB, back},
                 {HelpButton::kY, !yt.checking && yt.version.empty() ? "Get yt-dlp" : "Update yt-dlp"}};
     } else {
-        help = {{HelpButton::kA, "Select"}, {HelpButton::kB, back}};
+        // A says what the row does
+        const char* a = "Select";
+        if (current && (current->kind == Item::kGetYtDlp || current->kind == Item::kSettings ||
+                        current->kind == Item::kFolder || current->kind == Item::kUnmatched)) {
+            a = "Open";
+        } else if (current && current->kind == Item::kFilter) {
+            a = "Change";
+        }
+        help = {{HelpButton::kA, a}, {HelpButton::kB, back}};
         // jumping by letter, once there are songs to jump through
         if (!library_.Songs().empty()) help.push_back({HelpButton::kBumpers, "Letter"});
     }
