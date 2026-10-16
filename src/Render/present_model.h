@@ -171,10 +171,30 @@ class PresentSlots {
 // the game presented it: the second slowest of recent frames (one hitch
 // doesn't hold back the rest), capped at the game's frame interval less 1 ms.
 // Slower frames publish when drawn. Worker thread only.
+//
+// With a slew (SetSlew; native_view.cpp sets the frame cap's
+// kNudgePerFrameNs while native_phase_lock steers), the delay moves toward
+// that by at most the slew a frame, and TakeDelayChange says how far it
+// moved, for the cap's beat to move as far the other way: frames then keep
+// reaching the window at the same point between paints while the delay
+// changes. Taken at once, a slow frame leaving the history moved the delay
+// several ms in one frame, frames reached the window a ms or two before
+// their paint, and the phase lock, which corrects every 30 frames, took a
+// second or two to find the slack again (at 60 Hz on a Steam Deck, most of
+// the repeated frames left).
 class PublishPacer {
  public:
     static constexpr int kHistory = 8;
     static constexpr int64_t kMs = 1000000;  // a millisecond in nanoseconds
+
+    // 0 (the default): the delay is the second slowest at once
+    void SetSlew(int64_t slew_ns) { slew_ns_ = std::max<int64_t>(0, slew_ns); }
+    // how far the delay moved since the last call (later if positive)
+    int64_t TakeDelayChange() {
+        const int64_t change = change_ns_;
+        change_ns_ = 0;
+        return change;
+    }
 
     // When to publish capture `frame`, presented at `presented_ns` and drawn
     // by `now_ns` (steady-clock nanoseconds); never before `now_ns`.
@@ -202,11 +222,25 @@ class PublishPacer {
             }
         }
         int64_t delay = count_ >= 2 ? second : own;
-        delay = std::min(delay, std::max<int64_t>(0, interval_ns_ - kMs));
+        const int64_t most = std::max<int64_t>(0, interval_ns_ - kMs);
+        delay = std::min(delay, most);
+        if (slew_ns_ > 0 && has_delay_) {
+            const int64_t step = std::clamp(delay - delay_ns_, -slew_ns_, slew_ns_);
+            const int64_t slewed = std::min(delay_ns_ + step, most);
+            change_ns_ += slewed - delay_ns_;
+            delay = slewed;
+        }
+        delay_ns_ = delay;
+        has_delay_ = true;
         return std::max(now_ns, presented_ns + delay);
     }
     int64_t IntervalNs() const { return interval_ns_; }
-    void Reset() { *this = PublishPacer{}; }
+    // keeps the slew
+    void Reset() {
+        const int64_t slew = slew_ns_;
+        *this = PublishPacer{};
+        slew_ns_ = slew;
+    }
 
  private:
     int64_t own_ns_[kHistory] = {};
@@ -215,6 +249,10 @@ class PublishPacer {
     uint64_t last_frame_ = 0;
     int64_t last_presented_ns_ = 0;
     int64_t interval_ns_ = 16666667;  // 60 Hz until measured
+    int64_t slew_ns_ = 0;
+    int64_t delay_ns_ = 0;  // the last frame's
+    bool has_delay_ = false;
+    int64_t change_ns_ = 0;  // not yet taken
 };
 
 // Whether the world is drawn ahead (native_world_ahead; AheadChooser then

@@ -143,6 +143,9 @@ int64_t Nanoseconds(std::chrono::steady_clock::time_point t) {
 
 // for present_stats' publish latency; defined with the paints below
 void NotePublished(std::chrono::steady_clock::time_point presented);
+// the display's period while native_phase_lock steers the cap, else 0;
+// defined with the paints below
+int64_t PhaseLockPeriodNs();
 
 // A native_present_trace line, kept until present_stats reads the stretch
 // (TakePresentTrace) rather than logged as it happens: a line a frame and a
@@ -856,7 +859,14 @@ class Renderer {
                 pacer.Reset();
                 pacer_generation = d.generation;
             }
-            return pacer.Due(d.cap->frame, Nanoseconds(d.presented), done_ns);
+            // while the phase lock steers, the delay's changes go to the
+            // cap's beat the other way (PublishPacer::SetSlew)
+            const bool locked = PhaseLockPeriodNs() != 0;
+            pacer.SetSlew(locked ? pacing::kNudgePerFrameNs : 0);
+            const int64_t due = pacer.Due(d.cap->frame, Nanoseconds(d.presented), done_ns);
+            const int64_t change = pacer.TakeDelayChange();
+            if (locked && change) pacing::NudgeBeat(-change);
+            return due;
         };
         while (true) {
             stall_watch::SetWorker(stall_watch::Worker::kWaiting);

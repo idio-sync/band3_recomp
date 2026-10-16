@@ -354,6 +354,49 @@ TEST_CASE("the pacer never holds a frame past the game's next one, and lets a hi
     CHECK(p.Due(1, kFrame, kFrame + 2 * kMs) == kFrame + 2 * kMs);
 }
 
+TEST_CASE("with a slew, the delay moves a little a frame and says how far") {
+    PublishPacer p;
+    p.SetSlew(250000);
+    constexpr int64_t kFrame = 16666667;
+    uint64_t f = 1;
+    // the first frame's delay is taken at once (nothing to move from)
+    p.Due(f, int64_t(f) * kFrame, int64_t(f) * kFrame + 4 * kMs);
+    CHECK(p.TakeDelayChange() == 0);
+    // frames now take 14 ms: the delay climbs 0.25 ms a frame, and what it
+    // moved adds up to the move
+    int64_t moved = 0, presented = 0, due = 0;
+    for (f = 2; f <= 60; f++) {
+        presented = int64_t(f) * kFrame;
+        due = p.Due(f, presented, presented + 14 * kMs);
+        const int64_t change = p.TakeDelayChange();
+        CHECK(change >= 0);
+        CHECK(change <= 250000);
+        moved += change;
+    }
+    CHECK(moved == 10 * kMs);
+    CHECK(due == presented + 14 * kMs);
+    // the slow frames leave the history (the second slowest is fast from
+    // the 7th fast frame): the delay comes down as slowly
+    for (int i = 0; i < 15; i++, f++) {
+        presented = int64_t(f) * kFrame;
+        p.Due(f, presented, presented + 4 * kMs);
+    }
+    CHECK(p.TakeDelayChange() == -9 * 250000);
+    presented = int64_t(f) * kFrame;
+    CHECK(p.Due(f, presented, presented + 4 * kMs) == presented + 14 * kMs - 10 * 250000);
+    // a frame slower than the delay still goes when drawn
+    f++;
+    presented = int64_t(f) * kFrame;
+    CHECK(p.Due(f, presented, presented + 15 * kMs) == presented + 15 * kMs);
+    // a reset keeps the slew; its first frame is taken at once again
+    p.Reset();
+    p.Due(1, kFrame, kFrame + 2 * kMs);
+    CHECK(p.TakeDelayChange() == 0);
+    p.Due(2, 2 * kFrame, 2 * kFrame + 12 * kMs);
+    p.Due(3, 3 * kFrame, 3 * kFrame + 12 * kMs);
+    CHECK(p.TakeDelayChange() == 250000);
+}
+
 TEST_CASE("at 120 Hz, pipelined frames go out a frame apart and never past the next frame") {
     // The worker learns its frame is done when a poll of its fence finds it
     // (native_view.cpp's kFencePoll), up to a millisecond after the GPU
