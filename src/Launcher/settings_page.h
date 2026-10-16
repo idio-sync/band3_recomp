@@ -15,6 +15,7 @@
 #include "game_data_check.h"
 #include "launcher_settings.h"
 #include "mic_meter.h"
+#include "src/Lights/stagekit.h"
 #include "videos_tab.h"
 
 namespace band3::launcher {
@@ -198,9 +199,11 @@ private:
     std::set<std::string, std::less<>> custom_rows_;
 
     // the Lights tab's test controls: the device they're for (its row's key;
-    // every device when empty), and the colour the LED buttons light
+    // every device when empty), the colour the LED buttons light, and how long
+    // Test lights holds each colour, in seconds
     std::optional<std::string> lights_target_;
     uint8_t lights_colour_ = 0x80;
+    float lights_hold_s_ = band3::lights::kColourCheckHoldMs / 1000.0f;
 
     VideosTab videos_;
 

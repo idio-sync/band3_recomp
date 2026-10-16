@@ -135,7 +135,14 @@ TEST_CASE("the colour check lights each colour, then turns everything off") {
     CHECK(steps[2].command == Command{kPatternAll, kBlue});
     CHECK(steps[3].command == Command{kPatternAll, kYellow});
     CHECK(steps.back().command == kAllOffCommand);
-    for (size_t i = 0; i + 1 < steps.size(); i++) CHECK(steps[i].delay_ms > 0);
+    for (size_t i = 0; i + 1 < steps.size(); i++) CHECK(steps[i].delay_ms == kColourCheckHoldMs);
+}
+
+TEST_CASE("the colour check holds each colour as long as it's asked to") {
+    const auto steps = ColourCheck(30000);
+    REQUIRE(steps.size() == 5);
+    for (size_t i = 0; i + 1 < steps.size(); i++) CHECK(steps[i].delay_ms == 30000);
+    CHECK(steps.back().delay_ms == 0);
 }
 
 TEST_CASE("the chase alternates odd and even LEDs, then turns everything off") {

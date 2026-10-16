@@ -26,11 +26,6 @@ std::optional<uint16_t> GuidWord(std::string_view guid, size_t index) {
     return static_cast<uint16_t>(*low | *high << 8);
 }
 
-constexpr Step kColourCheck[] = {
-    {{kPatternAll, kRed}, 600},    {{kPatternAll, kGreen}, 600}, {{kPatternAll, kBlue}, 600},
-    {{kPatternAll, kYellow}, 600}, {kAllOffCommand, 0},
-};
-
 constexpr Step kChase[] = {
     {{kPatternOdds, kRed}, 250},   {{kPatternEvens, kRed}, 250},
     {{kPatternOdds, kGreen}, 250}, {{kPatternEvens, kGreen}, 250},
@@ -122,7 +117,13 @@ Rumble XInputRumble(Command command) {
             static_cast<uint16_t>(command.right << 8 | 0xFF)};
 }
 
-std::span<const Step> ColourCheck() { return kColourCheck; }
+std::vector<Step> ColourCheck(int hold_ms) {
+    return {{{kPatternAll, kRed}, hold_ms},
+            {{kPatternAll, kGreen}, hold_ms},
+            {{kPatternAll, kBlue}, hold_ms},
+            {{kPatternAll, kYellow}, hold_ms},
+            {kAllOffCommand, 0}};
+}
 std::span<const Step> Chase() { return kChase; }
 
 }  // namespace band3::lights

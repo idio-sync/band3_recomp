@@ -4,6 +4,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
 // The Rock Band Stage Kit's commands, as JoypadStageKitSetRaw(left, right) sends
 // them: `right` says what to set and `left` is the colour's mask of eight LEDs.
@@ -103,8 +104,9 @@ struct Step {
     Command command;
     int delay_ms = 0;
 };
-// each colour in turn, then off: the Test lights button
-std::span<const Step> ColourCheck();
+// each colour in turn, held for hold_ms, then off: the Test lights button
+inline constexpr int kColourCheckHoldMs = 600;
+std::vector<Step> ColourCheck(int hold_ms = kColourCheckHoldMs);
 // odd and even LEDs alternating in red, green and blue, then off
 std::span<const Step> Chase();
 

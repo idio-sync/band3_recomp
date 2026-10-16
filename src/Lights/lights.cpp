@@ -651,7 +651,8 @@ void PlayScene(std::span<const Step> steps, const std::optional<std::string>& ke
     std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
     if (!g_started) return;
     StopScene();
-    g_scene.thread = std::thread([steps, key] {
+    // the scene's own copy: the steps may be built for this one call
+    g_scene.thread = std::thread([steps = std::vector<Step>(steps.begin(), steps.end()), key] {
         for (const Step& step : steps) {
             SendTest(step.command, key);
             std::unique_lock<std::mutex> wait(g_scene.mutex);
@@ -661,6 +662,11 @@ void PlayScene(std::span<const Step> steps, const std::optional<std::string>& ke
             }
         }
     });
+}
+
+void StopPlaying() {
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    StopScene();
 }
 
 std::string LastSent() {

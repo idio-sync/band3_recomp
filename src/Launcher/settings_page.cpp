@@ -349,12 +349,20 @@ void SettingsPage::DrawLights() {
     ImGui::Dummy(ImVec2(0, Px(14)));
     SectionHeading("Test lights");
     const auto send = [&](uint8_t left, uint8_t right) { SendTest({left, right}, lights_target_); };
-    if (ImGui::Button("Test lights")) PlayScene(ColourCheck(), lights_target_);
+    if (ImGui::Button("Test lights")) {
+        PlayScene(ColourCheck(static_cast<int>(std::lround(lights_hold_s_ * 1000))), lights_target_);
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(Px(150));
+    if (ImGui::InputFloat("##hold", &lights_hold_s_, 1.0f, 10.0f, "%.1f s")) {
+        lights_hold_s_ = std::clamp(lights_hold_s_, 0.1f, 600.0f);
+    }
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
     {
         FontScope font(kSmallSize);
-        ImGui::TextColored(kMuted, "Each colour in turn, then everything off.");
+        ImGui::TextColored(kMuted, "Each colour in turn for that long, then everything off. "
+                                   "All off stops it early.");
     }
 
     const float label_width = Px(90);
@@ -375,7 +383,10 @@ void SettingsPage::DrawLights() {
     ImGui::SameLine();
     if (ImGui::Button("Off##strobe")) send(0, kStrobeOff);
     ImGui::SameLine(0, Px(24));
-    if (ImGui::Button("All off")) send(kAllOffCommand.left, kAllOffCommand.right);
+    if (ImGui::Button("All off")) {
+        StopPlaying();
+        send(kAllOffCommand.left, kAllOffCommand.right);
+    }
 
     label("Colour");
     constexpr std::pair<const char*, uint8_t> kColours[] = {
