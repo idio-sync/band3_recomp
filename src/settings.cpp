@@ -884,6 +884,14 @@ REXCVAR_DEFINE_BOOL(native_view_instancing, true, "Band3/Advanced/Native rendere
     "cards) as one instanced draw: the same picture for much less CPU time. Off draws each "
     "by itself, to compare");
 
+REXCVAR_DEFINE_DOUBLE(native_view_render_scale, 1.0, "Band3/Advanced/Native renderer",
+    "For measuring: the native renderer draws its picture at this times the window's size "
+    "(after native_max_height), its screen-sized passes with it, and the window shows it "
+    "scaled to fit, to see what the GPU does at a size the window can't reach (VR's eyes). "
+    "1 = the window's size")
+    .range(0.25, 4.0)
+    .debug_only();
+
 REXCVAR_DEFINE_STRING(native_view_rt_fallback, "guest", "Band3/Advanced/Native renderer",
     "What the native view's capture keeps of a texture RB3 draws at runtime (outfits, the "
     "crowd, blurs): guest also decodes what guest memory holds, right only with "

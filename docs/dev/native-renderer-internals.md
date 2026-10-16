@@ -346,6 +346,22 @@ What each does, how it was measured and why it defaults as it does. The
   ms, and the GPU's world 1.6-1.7 to 1.0-1.2 ms; without it 570-890 draws to 370-420 and
   frames 1.9-2.1 to 1.7-1.8 ms. What `vr_show_all` still costs is mostly its ~95 texture
   passes a frame (and 86 command buffers, against 8 without it), not its draws.
+- `native_view_render_scale` (debug, 1): the presented picture is drawn at that times the
+  window's size (after `native_max_height`; `native_view.cpp`'s `ScaleRender`), with the
+  screen-sized passes following (`ScaleForPicture`), and `present.hlsl` scales it to the
+  window (bilinear, so a smaller picture is aliased). It's read each frame, so `set` changes
+  it at once, the targets and outputs remade as at a resize; `native_view stats` and
+  `screenshot native` give the drawn size. It's for measuring the GPU at sizes a window
+  can't reach: 3.182 at 1280x720 is 4073x2291, 9.33 MP, two 2160x2160 eyes; 2.25 is
+  2880x1620, one eye. In 20th Century Boy at arena_04 on the R9700 (600-frame stretches,
+  means), the GPU's frame went from 0.66-0.71 ms at 1280x720 to 1.34 at one eye's pixels and
+  2.36-2.51 at two (world 0.22-0.26 to 0.73-0.80, post 0.09 to 0.46, overlay 0.07-0.10 to
+  0.60); with `vr_show_all`, from 2.72-2.85 to 4.11 and 4.51-5.21 (world 0.92-1.03 to
+  1.48-2.12). The CPU's record, submit and plan don't change with the size, so frames grow
+  only by the GPU wait: 1.7-1.9 to 3.5 ms without `vr_show_all`, 6.0-6.3 to 7.9-8.3 with
+  it. `native_view_mip_submits` off at 9.33 MP with `vr_show_all` cut submits from 86 to 2,
+  record from 4.5 to 2.4 ms and submit from 1.4 to 0.07, but the GPU started later: the
+  wait went from 3.0 to 5.7 ms and the frame from 8.3 to 8.9.
 
 ## native_view stats: by_kind and residency
 

@@ -466,6 +466,23 @@ void CapHeight(RasterOptions& o) {
     o.height = uint32_t(max_h);
 }
 
+// native_view_render_scale (debug): the picture drawn at that times its size,
+// after CapHeight, which the presenter scales to the window (present.hlsl,
+// bilinear, so a smaller picture is aliased), to measure the GPU at sizes the
+// window can't reach. Screen-sized passes follow (ScaleForPicture). Read each
+// frame: a change remakes the targets and outputs as a resize does.
+void ScaleRender(RasterOptions& o) {
+    const double s = REXCVAR_GET(native_view_render_scale);
+    if (s == 1.0) return;
+    // Direct3D 12's largest 2D texture
+    constexpr double kMaxSide = 16384;
+    auto scaled = [&](uint32_t v) {
+        return uint32_t(std::clamp(std::lround(double(v) * s), 1L, long(kMaxSide)));
+    };
+    o.width = scaled(o.width);
+    o.height = scaled(o.height);
+}
+
 class Renderer {
  public:
     static Renderer& Get() {
@@ -568,6 +585,7 @@ class Renderer {
         o.width = present_w_;
         o.height = present_h_;
         CapHeight(o);
+        ScaleRender(o);
         width = o.width;
         height = o.height;
         return true;
@@ -704,6 +722,15 @@ class Renderer {
         s.gpu = live_drew_gpu_.value_or(gpu_);
         s.width = present_ ? present_w_ : options_.width;
         s.height = present_ ? present_h_ : options_.height;
+        // presenting, the size native_view_render_scale draws it at
+        if (present_) {
+            RasterOptions drawn;
+            drawn.width = s.width;
+            drawn.height = s.height;
+            ScaleRender(drawn);
+            s.width = drawn.width;
+            s.height = drawn.height;
+        }
         s.post = options_.post;
         // capturing, and the frame number, stop with the last user
         if (users_ > 0 && frame > live_base_) s.captured = frame - live_base_;
@@ -866,6 +893,7 @@ class Renderer {
                     o.width = present_w_;
                     o.height = present_h_;
                     CapHeight(o);
+                    ScaleRender(o);
                     band3::aspect::CurrentOverlayEdge(o.overlay_edge);
                     // the in-song HUD under the track runs past 16:9's bottom
                     // by design; show it whole rather than stretched
