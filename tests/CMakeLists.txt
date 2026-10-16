@@ -29,6 +29,7 @@ add_executable(band3_tests
     instruments_test.cpp
     gpu_residency_test.cpp
     gpu_submit_test.cpp
+    gpu_instancing_test.cpp
     target_premake_test.cpp
     camera_cut_test.cpp
     guest_memory_file_test.cpp

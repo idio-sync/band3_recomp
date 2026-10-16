@@ -328,6 +328,24 @@ What each does, how it was measured and why it defaults as it does. The
   venues captured off, on, off, on had no venue pixel different among those that held still;
   at 1080p repeated frames went from 54 to 23 per 28 s and post frames' GPU wait p50 from
   10.9 to 9.2 ms.
+- `native_view_instancing` (on): a run of consecutive draws that differ only in world (a
+  multimesh's instances, which `CaptureMultiMesh` unrolls into a draw each: the crowd's
+  cards) is one instanced draw. The plan walk folds each into the run's head
+  (`gpu_view.h`'s `SameInstanceState` and `InstanceRuns`: the very next index, the same
+  geometry, texture, shade state, target, camera, blend, depth, cull, draw mode, view and
+  colour, not skinned, not a DrawRect quad, cone, soft particle or blur, never past
+  `post_boundary` or across a pass run) and puts the worlds in the bone buffer;
+  `mesh.hlsl`'s `World()` reads instance `SV_InstanceID >> instancing.z` from
+  `instancing.y`, where `z`, 0 now, leaves room for a stereo eye in the low bit. The record
+  skips the folded draws; `native_view stats` counts `instanced_draws` and
+  `instances_merged`. The same captured frames drawn with it on and off (`capture`'s
+  `<name>.gpu.uninstanced.png`) had no pixel different, with `vr_show_all` and without. In
+  20th Century Boy at arena_04 on the R9700 (two runs, stretches of 600 frames, means):
+  with `vr_show_all` draws went from 5,290-5,440 to 750-780 a frame, record 6.5-6.9 to
+  4.5-4.6 ms, submit 1.6-1.8 to 1.4, plan 0.84-0.86 to 0.55-0.56, frames 8.0-8.3 to 6.1-6.4
+  ms, and the GPU's world 1.6-1.7 to 1.0-1.2 ms; without it 570-890 draws to 370-420 and
+  frames 1.9-2.1 to 1.7-1.8 ms. What `vr_show_all` still costs is mostly its ~95 texture
+  passes a frame (and 86 command buffers, against 8 without it), not its draws.
 
 ## native_view stats: by_kind and residency
 

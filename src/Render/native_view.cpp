@@ -146,6 +146,8 @@ void NotePublished(std::chrono::steady_clock::time_point presented);
 
 void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.draws += g.draws;
+    sum.instanced_draws += g.instanced_draws;
+    sum.instances_merged += g.instances_merged;
     sum.skipped += g.skipped;
     sum.uploads += g.uploads;
     sum.passes += g.passes;
@@ -878,6 +880,7 @@ class Renderer {
                 o.filtering = REXCVAR_GET(native_view_texture_filtering);
                 o.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
                 o.shader_variants = REXCVAR_GET(native_view_shader_variants);
+                o.instancing = REXCVAR_GET(native_view_instancing);
                 o.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
                 // drawn frame after frame, so these have the frames before
                 o.trails = true;

@@ -285,6 +285,7 @@ public:
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
         options.shader_variants = REXCVAR_GET(native_view_shader_variants);
+        options.instancing = REXCVAR_GET(native_view_instancing);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
@@ -391,6 +392,7 @@ public:
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
         options.shader_variants = REXCVAR_GET(native_view_shader_variants);
+        options.instancing = REXCVAR_GET(native_view_instancing);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
@@ -453,13 +455,26 @@ public:
         // and, sampling the textures as it did before the game's samplers,
         // nearest at level 0, <name>.gpu.nearest.png: the same frame without
         // them, to see what they change
+        options.view = render::RasterView::kFinal;
         if (options.filtering) {
-            options.view = render::RasterView::kFinal;
             options.filtering = false;
             render::GpuStats nearest_stats;
             if (render::GpuRenderer::Get().RenderFrame(frame, options, rgba, nearest_stats))
                 render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
                                   (file + ".gpu.nearest.png"))
+                                     .string(),
+                                 rgba, options.width, options.height);
+            options.filtering = true;
+        }
+        // and with native_view_instancing on, each draw by itself,
+        // <name>.gpu.uninstanced.png: the same frame, which should be the
+        // same picture
+        if (options.instancing) {
+            options.instancing = false;
+            render::GpuStats uninstanced_stats;
+            if (render::GpuRenderer::Get().RenderFrame(frame, options, rgba, uninstanced_stats))
+                render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
+                                  (file + ".gpu.uninstanced.png"))
                                      .string(),
                                  rgba, options.width, options.height);
         }
@@ -1123,6 +1138,8 @@ private:
                       {"composed", double(k.composed)},
                       {"shows_kept", double(k.shows_kept)},
                       {"draws", double(g.draws)},
+                      {"instanced_draws", double(g.instanced_draws)},
+                      {"instances_merged", double(g.instances_merged)},
                       {"world_draws", double(g.world_draws)},
                       {"ahead_gated", double(g.ahead_gated)},
                       {"ahead_used", double(g.ahead_used)},

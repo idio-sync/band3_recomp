@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -73,6 +74,9 @@ namespace band3::render {
 
 struct GpuStats {
     uint32_t draws = 0;
+    // of draws, those drawn instanced (InstanceRuns), and the capture's draws
+    // folded into them (not in draws)
+    uint32_t instanced_draws = 0, instances_merged = 0;
     uint32_t skipped = 0;   // draws it couldn't do (no geometry, or no pipeline)
     uint32_t uploads = 0;   // meshes and textures sent to the GPU this frame
     uint32_t passes = 0;    // texture passes drawn
@@ -225,6 +229,67 @@ struct GpuStats {
 // draws since the last submission (nothing for the GPU to start on).
 inline bool SubmitAtResolve(uint32_t submit_points, bool aside, uint32_t draws_since_submit) {
     return submit_points >= 1 && !aside && draws_since_submit > 0;
+}
+
+// Instancing (RasterOptions::instancing, native_view_instancing). RB3's
+// multimeshes (the crowd's cards: ~4,400 a frame with vr_show_all) reach the
+// capture as one draw per instance, each its prototype with its own world
+// (scene_capture.cpp's CaptureMultiMesh). The plan walk folds a run of
+// consecutive such draws into its first, the run's head, drawn once with an
+// instance per draw: the worlds go into the bone buffer from the head's
+// instance_base, and mesh.hlsl's VSMain reads each instance's there in place
+// of `world`. Nothing is reordered: only draws next to each other in the
+// capture, kept by the walk, with all but their world the same.
+//
+// Whether two draws differ only in world: the same geometry, texture, shade
+// state and everything PackShade, the pipeline and the placement read. Not
+// skinned (bones place those), DrawRect quads or mip downsamples.
+inline bool SameInstanceState(const DrawItem& a, const DrawItem& b) {
+    return a.geom && a.geom.get() == b.geom.get() && a.tex.get() == b.tex.get() &&
+           a.shade == b.shade && a.target == b.target && a.cam == b.cam && a.blend == b.blend &&
+           a.z_mode == b.z_mode && a.prelit == b.prelit && a.alpha_cut == b.alpha_cut &&
+           a.alpha_threshold == b.alpha_threshold && a.cull == b.cull &&
+           a.draw_mode == b.draw_mode && a.rect_shader < 0 && b.rect_shader < 0 &&
+           a.mip_level == 0 && b.mip_level == 0 && a.bones.empty() && b.bones.empty() &&
+           std::memcmp(&a.view_proj, &b.view_proj, sizeof(a.view_proj)) == 0 &&
+           std::memcmp(a.color, b.color, sizeof(a.color)) == 0;
+}
+
+// The walk's runs of instances. It calls Start as each PassRun begins and Add
+// for each draw it keeps, in order, with whether that draw may be instanced at
+// all (`eligible`: instancing on, not a cone, soft particle or blur, and a
+// back-buffer draw before post_boundary, as the overlay's InOverlayCut reads
+// each draw's world). A draw joins the open run if it's the very next index
+// after the run's last and SameInstanceState as its head; Add then returns the
+// head's index. Otherwise it returns kNoHead, and the draw starts a run of its
+// own if eligible (a run of one is a plain draw) or closes the open one.
+struct InstanceRuns {
+    static constexpr uint32_t kNoHead = ~0u;
+    uint32_t head = kNoHead, last = 0;
+    void Start() { head = kNoHead; }
+    uint32_t Add(const std::vector<DrawItem>& draws, uint32_t d, bool eligible) {
+        if (!eligible) {
+            head = kNoHead;
+            return kNoHead;
+        }
+        if (head != kNoHead && d == last + 1 && SameInstanceState(draws[head], draws[d])) {
+            last = d;
+            return head;
+        }
+        head = last = d;
+        return kNoHead;
+    }
+};
+
+// mesh.hlsl's VertexUniforms::instancing: x on, y the first world's index in
+// the bone buffer, z the instance index's low bits that aren't the world's
+// (0 now: SV_InstanceID >> z picks the world). Stereo instance doubling would
+// draw 2n instances with z 1 and pick the eye by SV_InstanceID & 1.
+inline void PackInstancing(uint32_t count, uint32_t base, uint32_t out[4]) {
+    out[0] = count > 1 ? 1u : 0u;
+    out[1] = count > 1 ? base : 0u;
+    out[2] = 0;
+    out[3] = 0;
 }
 
 // GPU residency between frames, by frame serial (one per frame drawn and per

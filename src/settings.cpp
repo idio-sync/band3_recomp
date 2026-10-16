@@ -879,6 +879,11 @@ REXCVAR_DEFINE_BOOL(native_view_shader_variants, true, "Band3/Advanced/Native re
     "features those materials don't use left out: the same picture for less GPU time. Off "
     "draws every material with the one shader that does them all");
 
+REXCVAR_DEFINE_BOOL(native_view_instancing, true, "Band3/Advanced/Native renderer",
+    "Draw runs of the same mesh that differ only in where each one stands (the crowd's "
+    "cards) as one instanced draw: the same picture for much less CPU time. Off draws each "
+    "by itself, to compare");
+
 REXCVAR_DEFINE_STRING(native_view_rt_fallback, "guest", "Band3/Advanced/Native renderer",
     "What the native view's capture keeps of a texture RB3 draws at runtime (outfits, the "
     "crowd, blurs): guest also decodes what guest memory holds, right only with "

@@ -167,6 +167,10 @@ struct RasterOptions {
     // GPU (native_view_shader_variants): draws whose shading fits one of
     // PSMain's variants (build_shaders.py's MESH_VARIANTS) use it
     bool shader_variants = false;
+    // GPU (native_view_instancing): runs of draws that differ only in world
+    // (a multimesh's instances) drawn as one instanced draw (gpu_view.h's
+    // InstanceRuns)
+    bool instancing = false;
     // GPU (native_gpu_draw_profile), with gpu_timestamps: a timestamp before
     // each back-buffer world draw, into GpuStats::draw_times
     bool gpu_draw_profile = false;

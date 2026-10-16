@@ -126,9 +126,12 @@ struct VertexUniforms {
     float depth_map[4];
     // RasterOptions::overlay_edge for a whole-picture overlay draw; 1 1 otherwise
     float overlay_edge[4] = {1.0f, 1.0f, 0.0f, 0.0f};
+    // an instanced draw's worlds in the bone buffer (gpu_view.h's
+    // PackInstancing); 0 for any other
+    uint32_t instancing[4] = {};
     shade::ShadeParams shade;
 };
-static_assert(sizeof(VertexUniforms) == 192 + sizeof(shade::ShadeParams));
+static_assert(sizeof(VertexUniforms) == 208 + sizeof(shade::ShadeParams));
 
 void SetDepthMap(const DepthMap& d, float out[4]) {
     out[0] = d.p;
@@ -849,6 +852,10 @@ struct GpuRenderer::Impl {
     std::vector<ArrayCopy> array_copies;  // arrays that grew, old into new
     std::vector<Mat4> frame_bones;
     std::vector<uint32_t> bone_base;  // per draw, where its bones start
+    // per draw (InstanceRuns): 0 folded into an earlier draw, 1 a plain draw,
+    // n the head of n instances, whose worlds start at instance_base in
+    // frame_bones
+    std::vector<uint32_t> instance_count, instance_base;
     std::vector<shade::ShadeParams> shades;  // per draw
     std::vector<uint32_t> cams_seen;
     // per draw, what its diffuse texture and its projected light's s5 sample
@@ -3537,6 +3544,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     array_copies.clear();
     frame_bones.clear();
     bone_base.assign(frame.draws.size(), 0);
+    instance_count.assign(frame.draws.size(), 1);
+    instance_base.assign(frame.draws.size(), 0);
+    InstanceRuns instance_runs;
     shades.resize(frame.draws.size());
     diffuse_source.assign(frame.draws.size(), kSourceNone);
     proj_source.assign(frame.draws.size(), kSourceNone);
@@ -3632,6 +3642,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             if ((clear & 0x30) || fresh) run_clear[r] |= kRunClearDepth;
             st.passes++;
         }
+        instance_runs.Start();
         for (size_t d = run.first; d < run.end; d++) {
             const DrawItem& it = frame.draws[d];
             if (!DrawnIn(run, frame, it, o)) continue;
@@ -3656,6 +3667,22 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 continue;
             }
             if (run.pass && IsSoftParticle(it, state)) spot_draw[d] = kSoftParticle;
+            // the next of a run of instances: its world goes after the
+            // head's, and the head's planning stands for it
+            const bool instanceable = o.instancing && spot_draw[d] == kSpotNone &&
+                                      (run.pass || d < frame.post_boundary);
+            const uint32_t head = instance_runs.Add(frame.draws, uint32_t(d), instanceable);
+            if (head != InstanceRuns::kNoHead) {
+                if (instance_count[head] == 1) {
+                    instance_base[head] = uint32_t(frame_bones.size());
+                    frame_bones.push_back(frame.draws[head].world);
+                }
+                instance_count[head]++;
+                instance_count[d] = 0;
+                frame_bones.push_back(it.world);
+                continue;
+            }
+            instance_count[d] = 1;
             use_mesh(it.geom);
             if (Skinned(it, o)) {
                 bone_base[d] = uint32_t(frame_bones.size());
@@ -4597,6 +4624,15 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     const DepthMap& depth_map = DepthMap{}, bool overlay_edge = false) {
         const DrawItem& it = frame.draws[d];
         const Mesh& m = meshes[it.geom.get()];
+        // a run's head draws its instances (InstanceRuns)
+        const uint32_t instances = instance_count[d];
+        auto count_draw = [&] {
+            st.draws++;
+            if (instances > 1) {
+                st.instanced_draws++;
+                st.instances_merged += instances - 1;
+            }
+        };
         const int blend = BlendFor(it, o);
         const CullWinding cull = CullFor(it, o);
         if (cull == CullWinding::kAll) return;
@@ -4636,18 +4672,20 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             vu.shadow_depth = 1;
             ClipOffset(it, bound_viewport[2], bound_viewport[3], vu.clip_offset);
             SetDepthMap(depth_map, vu.depth_map);
+            PackInstancing(instances, instance_base[d], vu.instancing);
             vu.shade = shades[d];
             timed_uniform([&] { SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu)); });
             if (o.gpu_labels)
                 label(fmt::format("draw {} shadow depth: mesh {:#x} into {:#x}, {} indices, {} "
-                                  "vertices, {} bones",
+                                  "vertices, {} bones, {} instances",
                                   d, it.mesh, it.target, it.geom->indices.size(),
-                                  it.geom->verts.size(), it.bones.size()));
+                                  it.geom->verts.size(), it.bones.size(), instances));
             timed_first([&] {
-                SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
-                                             m.first_index, int32_t(m.first_vertex), 0);
+                SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3),
+                                             instances, m.first_index, int32_t(m.first_vertex),
+                                             0);
             });
-            st.draws++;
+            count_draw();
             return;
         }
 
@@ -4877,6 +4915,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             vu.overlay_edge[0] = o.overlay_edge[0];
             vu.overlay_edge[1] = o.overlay_edge[1];
         }
+        PackInstancing(instances, instance_base[d], vu.instancing);
         vu.shade = sp;
         timed_uniform([&] { SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu)); });
         PixelUniforms pu{};
@@ -4925,19 +4964,20 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     textures += fmt::format(" {}:{}x{}/{}", t, pu.tex_size[t][0],
                                             pu.tex_size[t][1], pu.tex_sampler[t][3]);
             label(fmt::format("draw {} {}: mesh {:#x} into {:#x}, {} indices, {} vertices, {} "
-                              "bones, blend {}, alpha {}, {} samples, shade {}, rect {}, "
-                              "textures{}, layers {} {} {} {} {}",
+                              "bones, {} instances, blend {}, alpha {}, {} samples, shade {}, "
+                              "rect {}, textures{}, layers {} {} {} {} {}",
                               d, cone ? "spot cone" : soft ? "soft particle" : "mesh", it.mesh,
                               it.target, it.geom->indices.size(), it.geom->verts.size(),
-                              it.bones.size(), blend, int(alpha), pass_samples, it.shade,
-                              it.rect_shader, textures, pu.tex_layer[0], pu.tex_layer[1],
-                              pu.tex_layer[2], pu.tex_layer[3], pu.tex_layer[4]));
+                              it.bones.size(), instances, blend, int(alpha), pass_samples,
+                              it.shade, it.rect_shader, textures, pu.tex_layer[0],
+                              pu.tex_layer[1], pu.tex_layer[2], pu.tex_layer[3],
+                              pu.tex_layer[4]));
         }
         timed_first([&] {
-            SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3), 1,
-                                         m.first_index, int32_t(m.first_vertex), 0);
+            SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3),
+                                         instances, m.first_index, int32_t(m.first_vertex), 0);
         });
-        st.draws++;
+        count_draw();
     };
 
     cams_seen.clear();
@@ -4952,6 +4992,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 const DrawItem& it = frame.draws[d];
                 if (!DrawnToBackBuffer(it) || (shows_kept && d < frame.post_boundary)) continue;
                 if (d < ahead_end) continue;
+                // drawn as an instance of its run's head, whose camera it
+                // shares (no depth clear between them)
+                if (!instance_count[d]) continue;
                 if (!resolved && d >= frame.post_boundary && !resolve()) return false;
                 if (resolved && (o.view != RasterView::kFinal || pre_pass || ahead_pass)) break;
                 bool clear_depth = false;
@@ -5057,6 +5100,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         for (size_t d = run.first; d < run.end; d++) {
             const DrawItem& it = frame.draws[d];
             if (!DrawnIn(run, frame, it, o)) continue;
+            if (!instance_count[d]) continue;  // an instance of its run's head
             if (spot_draw[d] == kSpotConeSkipped) {
                 st.skipped++;
                 continue;
