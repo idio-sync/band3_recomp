@@ -144,6 +144,25 @@ int64_t Nanoseconds(std::chrono::steady_clock::time_point t) {
 // for present_stats' publish latency; defined with the paints below
 void NotePublished(std::chrono::steady_clock::time_point presented);
 
+// A native_present_trace line, kept until present_stats reads the stretch
+// (TakePresentTrace) rather than logged as it happens: a line a frame and a
+// paint from the worker and the UI thread delayed the frames being timed.
+// Steady-clock ns. Defined with the paints below.
+struct PresentTraceEntry {
+    bool paint = false;
+    uint64_t frame = 0;  // capture frame, or the serial a paint shows
+    int kind = 0;        // FrameKind, frames only
+    // frames: the game's Present, the worker taking it, submission, the GPU
+    // done, published (`at`); paints: the frame's Present and the paint (`at`)
+    int64_t presented = 0, taken = 0, submitted = 0, done = 0, at = 0;
+    float record_ms = 0, wait_ms = 0;
+    // frames: FrameCapture::Cost's capture time on the game's thread and the
+    // game's frame time, and what capture copied
+    float capture_ms = 0, game_ms = 0;
+    uint32_t draws = 0, new_shades = 0, copied_kb = 0;
+};
+void AddPresentTrace(const PresentTraceEntry& e);
+
 void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.draws += g.draws;
     sum.skipped += g.skipped;
@@ -783,7 +802,7 @@ class Renderer {
         uint32_t width = 0, height = 0;
         bool done = true;
         // steady-clock ns; due_ns is -1 until done
-        int64_t submitted_ns = 0, done_ns = 0, due_ns = -1;
+        int64_t taken_ns = 0, submitted_ns = 0, done_ns = 0, due_ns = -1;
     };
 
     void Run() {
@@ -1095,6 +1114,7 @@ class Renderer {
             }
             stall_watch::SetWorker(stall_watch::Worker::kRecording);
             Drawn d;
+            d.taken_ns = Nanoseconds(std::chrono::steady_clock::now());
             d.cap = cap;
             d.presented = presented;
             d.generation = generation;
@@ -1389,13 +1409,25 @@ class Renderer {
         // redraws aren't timed
         if (to_window && d.new_frame) {
             if (REXCVAR_GET(native_present_trace)) {
-                static constexpr const char* kKinds[] = {"world", "post", "between", "full"};
-                REXLOG_INFO("present trace: frame {} {} presented {} submitted {} done {} "
-                            "published {} record {:.2f} wait {:.2f}",
-                            d.cap->frame, kKinds[int(KindOf(*d.cap))], Nanoseconds(d.presented),
-                            d.submitted_ns, d.done_ns,
-                            Nanoseconds(std::chrono::steady_clock::now()), d.gs.record_ms,
-                            d.gs.wait_ms);
+                PresentTraceEntry e;
+                e.frame = d.cap->frame;
+                e.kind = int(KindOf(*d.cap));
+                e.presented = Nanoseconds(d.presented);
+                e.taken = d.taken_ns;
+                e.submitted = d.submitted_ns;
+                e.done = d.done_ns;
+                e.at = Nanoseconds(std::chrono::steady_clock::now());
+                e.record_ms = float(d.gs.record_ms);
+                e.wait_ms = float(d.gs.wait_ms);
+                uint64_t hooks_ns = 0;
+                for (uint64_t ns : d.cap->cost.hook_ns) hooks_ns += ns;
+                e.capture_ms = float(hooks_ns / 1e6);
+                e.game_ms = float(d.cap->cost.game_ns / 1e6);
+                e.draws = d.cap->cost.draws;
+                e.new_shades = d.cap->cost.new_shades;
+                e.copied_kb = uint32_t(
+                    (d.cap->cost.geom_copy_bytes + d.cap->cost.tex_copy_bytes) >> 10);
+                AddPresentTrace(e);
             }
             NotePublished(d.presented);
         }
@@ -1730,6 +1762,11 @@ std::string g_present_path;
 // native_phase_lock's, under g_paints_mutex
 pacing::PhaseLock g_phase;
 
+// native_present_trace's, under g_paints_mutex; about 18 minutes at 120 a
+// second, after which lines are dropped
+constexpr size_t kPresentTraceMax = size_t(1) << 17;
+std::vector<PresentTraceEntry> g_present_trace;
+
 // The display's period while native_phase_lock can steer the cap: the cap at
 // a fixed rate within 0.5% of the display's; else 0
 int64_t PhaseLockPeriodNs() {
@@ -1756,10 +1793,37 @@ void NotePaint(std::chrono::steady_clock::time_point now, bool native, int sourc
                                           REXCVAR_GET(native_phase_lock_slack), 1e9 / period) /
                                       100);
     }
-    if (native && REXCVAR_GET(native_present_trace))
-        REXLOG_INFO("present trace: paint at {} shows {} presented {}", Nanoseconds(now), serial,
-                    presented_ns);
+    if (native && REXCVAR_GET(native_present_trace)) {
+        PresentTraceEntry e;
+        e.paint = true;
+        e.frame = serial;
+        e.presented = presented_ns;
+        e.at = Nanoseconds(now);
+        AddPresentTrace(e);
+    }
     if (nudge) pacing::NudgeBeat(nudge);
+}
+
+void AddPresentTrace(const PresentTraceEntry& e) {
+    std::lock_guard lock(g_paints_mutex);
+    if (g_present_trace.size() < kPresentTraceMax) g_present_trace.push_back(e);
+}
+
+// the lines kept since the last call, in the order they were added
+void LogPresentTrace(const std::vector<PresentTraceEntry>& trace) {
+    static constexpr const char* kKinds[] = {"world", "post", "between", "full"};
+    for (const PresentTraceEntry& e : trace) {
+        if (e.paint)
+            REXLOG_INFO("present trace: paint at {} shows {} presented {}", e.at, e.frame,
+                        e.presented);
+        else
+            REXLOG_INFO("present trace: frame {} {} presented {} submitted {} done {} "
+                        "published {} record {:.2f} wait {:.2f} taken {} capture {:.2f} game "
+                        "{:.2f} draws {} new_shades {} copied_kb {}",
+                        e.frame, kKinds[e.kind & 3], e.presented, e.submitted, e.done, e.at,
+                        e.record_ms, e.wait_ms, e.taken, e.capture_ms, e.game_ms, e.draws,
+                        e.new_shades, e.copied_kb);
+    }
 }
 
 void NotePublished(std::chrono::steady_clock::time_point presented) {
@@ -2404,14 +2468,21 @@ bool InSong() { return g_in_song.load(std::memory_order_relaxed); }
 PresentPaintStats GetPresentPaintStats(bool reset) {
     const bool presenting = Renderer::Get().Presenting();
     PresentPaintStats out;
-    std::lock_guard lock(g_paints_mutex);
-    out.log = g_paints.Log();
-    out.since = g_paints_since;
-    if (presenting) out.path = g_present_path;
-    if (reset) {
-        g_paints.Reset();
-        g_paints_since = std::chrono::steady_clock::now();
+    std::vector<PresentTraceEntry> trace;
+    {
+        std::lock_guard lock(g_paints_mutex);
+        out.log = g_paints.Log();
+        out.since = g_paints_since;
+        if (presenting) out.path = g_present_path;
+        if (reset) {
+            g_paints.Reset();
+            g_paints_since = std::chrono::steady_clock::now();
+        }
+        trace.swap(g_present_trace);
     }
+    // the stretch's trace goes to the log once it's over; a reset's is
+    // what came before, not asked for
+    if (!reset) LogPresentTrace(trace);
     return out;
 }
 

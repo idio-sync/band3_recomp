@@ -669,9 +669,11 @@ REXCVAR_DEFINE_BOOL(native_present_pacing, true, "Band3/Advanced/Native renderer
 
 REXCVAR_DEFINE_BOOL(native_present_trace, false, "Band3/Advanced/Native renderer",
     "With the native picture shown, log each frame the native renderer hands the window (its "
-    "Present, submission, finish and publishing times, in steady-clock ns, and its record and "
-    "GPU wait ms) and each paint (its time, and the frame it shows), to tell why a frame was "
-    "shown twice or skipped. About 120 lines a second");
+    "Present, the worker taking it, its submission, finish and publishing, in steady-clock ns, "
+    "and its record and GPU wait ms) and each paint (its time, and the frame it shows), to tell why "
+    "a frame was shown twice or skipped. Kept in memory and logged when the harness's "
+    "present_stats reads the stretch (a reset drops them), so logging doesn't hold up the "
+    "frames; about 120 lines a second");
 
 REXCVAR_DEFINE_BOOL(native_phase_lock, true, "Band3/Advanced/Native renderer",
     "With the native picture shown and the frame cap at a fixed rate (display or a number "
