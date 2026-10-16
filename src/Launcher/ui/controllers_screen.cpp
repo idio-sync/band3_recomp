@@ -122,7 +122,7 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         const float value_room = TextWidth(kCaps(text::kValue), look.value) / page.scale + 40;
         PaintText(dl, page.At(x, y + 3), kPlain(text::kRow), text_color, e.name,
                   Px(kRowsRight - kRowsLeft - 58 - value_room));
-        PaintText(dl, page.At(x, y + 26), kCaps(16), selected ? color::kOnYellow : color::kMuted, e.kind_label,
+        PaintText(dl, page.At(x, y + 26), kCaps(18), selected ? color::kOnYellow : color::kMuted, e.kind_label,
                   Px(kRowsRight - kRowsLeft - 58 - value_room));
         if (!testing && ImGui::IsMouseHoveringRect(min, max)) {
             if (input_.MouseMoved()) selected_ = i;
@@ -178,9 +178,9 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         PaintText(dl, page.At(px, py), kCaps(26), color::kText, e.name, Px(pw));
         py += 34;
         if (testing == e.id) {
-            PaintText(dl, page.At(px, py), kCaps(19), color::kInfo, "Testing - play it");
+            PaintText(dl, page.At(px, py), kCaps(20), color::kInfo, "Testing - play it");
         } else {
-            PaintText(dl, page.At(px, py), kCaps(19), color::kMuted, e.kind_label + " - " + PlayerLabel(e.player),
+            PaintText(dl, page.At(px, py), kCaps(20), color::kMuted, e.kind_label + " - " + PlayerLabel(e.player),
                       Px(pw));
         }
         py += 26;
@@ -202,7 +202,7 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         py += 12;
         // the live view, laid out with ImGui in the theme's type
         ImGui::SetCursorScreenPos(page.At(px, py));
-        PushThemeFont(kPlain(18));
+        PushThemeFont(kPlain(20));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.95f, 0.95f, 1));
         if (ImGui::BeginChild("##live", ImVec2(Px(pw), page.At(0, 628).y - page.At(0, py).y),
                               ImGuiChildFlags_None,

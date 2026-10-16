@@ -62,6 +62,48 @@ ImU32 DashColor(HelpButton button) {
     return color::kFretOrange;
 }
 
+// the controller's own name for a button: its letter, or LB/RB and Start
+const char* PadName(HelpButton button) {
+    switch (button) {
+    case HelpButton::kA: return "A";
+    case HelpButton::kB: return "B";
+    case HelpButton::kX: return "X";
+    case HelpButton::kY: return "Y";
+    case HelpButton::kBumpers: return "LB/RB";
+    case HelpButton::kStart: break;
+    }
+    return "Start";
+}
+
+bool FaceButton(HelpButton button) {
+    return button == HelpButton::kA || button == HelpButton::kB || button == HelpButton::kX ||
+           button == HelpButton::kY;
+}
+
+// a pad button as the controller shows it: a coloured face button with its
+// letter (not the colour alone, which colour-blind players can't tell
+// apart), or a dark pill for LB/RB and Start; returns its width
+float DrawPadMark(ImDrawList* dl, ImVec2 pos, float height, HelpButton button) {
+    if (!FaceButton(button)) return DrawKeyCap(dl, pos, PadName(button), height, true);
+    const float r = height * 0.5f;
+    const ImVec2 c(pos.x + r, pos.y + r);
+    const ImU32 fill = DashColor(button);
+    dl->AddCircleFilled(c, r, fill);
+    dl->AddCircle(c, r - Px(0.5f), IM_COL32(0, 0, 0, 90), 0, std::max(1.0f, Px(1)));
+    // dark letters on the light buttons, white on the dark ones
+    const bool light = button == HelpButton::kA || button == HelpButton::kY;
+    const TextStyle style = kCaps(text::kKey);
+    const char* letter = PadName(button);
+    PaintText(dl, ImVec2(c.x - TextWidth(style, letter) * 0.5f, c.y - Px(text::kKey) * 0.5f), style,
+              light ? IM_COL32(16, 16, 10, 255) : IM_COL32(255, 255, 255, 255), letter);
+    return height;
+}
+
+float PadMarkWidth(HelpButton button, float height) {
+    if (FaceButton(button)) return height;
+    return std::max(height, TextWidth(kCaps(text::kKey), PadName(button)) + Px(12));
+}
+
 const char* KeyName(HelpButton button) {
     switch (button) {
     case HelpButton::kA: return "Enter";
@@ -349,7 +391,8 @@ int DrawHelpBar(ImDrawList* dl, ImVec2 min, ImVec2 max, std::span<const HelpItem
     // fixed slots, as the overshell's, as wide as the widest item needs
     float slot = Px(196);
     for (const HelpItem& item : items) {
-        const float mark = keyboard ? TextWidth(kCaps(text::kKey), KeyName(item.button)) + Px(24) : Px(18);
+        const float mark = keyboard ? TextWidth(kCaps(text::kKey), KeyName(item.button)) + Px(24)
+                                    : PadMarkWidth(item.button, Px(24));
         slot = std::max(slot, mark + Px(10) + TextWidth(label, item.label) + Px(36));
     }
     int hovered = -1;
@@ -360,9 +403,7 @@ int DrawHelpBar(ImDrawList* dl, ImVec2 min, ImVec2 max, std::span<const HelpItem
         if (keyboard) {
             x += DrawKeyCap(dl, ImVec2(x, cy - Px(11)), KeyName(item.button), Px(22));
         } else {
-            dl->AddRectFilled(ImVec2(x, cy - Px(3.5f)), ImVec2(x + Px(18), cy + Px(3.5f)),
-                              DashColor(item.button), Px(1));
-            x += Px(18);
+            x += DrawPadMark(dl, ImVec2(x, cy - Px(12)), Px(24), item.button);
         }
         x += Px(10);
         x += PaintText(dl, ImVec2(x, cy - Px(text::kHelp) * 0.5f), label, color::kText, item.label);

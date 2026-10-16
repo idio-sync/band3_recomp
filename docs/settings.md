@@ -37,7 +37,7 @@ switch category, and the panel on the right says what the setting picked does.
 Some of the categories:
 
 - **Game** has the folders (**Game data folder** opens Find Rock Band 3), the profile, and
-  **Startup**, with **Show this screen at startup** ([When it opens](#when-it-opens)).
+  **Startup**, with **Open the launcher at startup** ([When it opens](#when-it-opens)).
 - **Display** has the window's settings, and **Smoothness** the ones that trade lag ([Playing
   with the least lag](#playing-with-the-least-lag)).
   - **Fill the window** (on by default) draws the game at the window's shape with the native
@@ -93,18 +93,18 @@ folder in a window...** opens the system's folder window instead.
 - when the game data folder doesn't look like Rock Band 3's (the menu's card says where it
   looked);
 - when Shift is held as band3 starts (Windows only), or with `--launcher`;
-- otherwise only if **Show this screen at startup** (Settings > Game) was on when the settings
+- otherwise only if **Open the launcher at startup** (Settings > Game) was on when the settings
   were last saved. It starts off, so after the first Play band3 goes straight into the game.
 
 It never opens when RB3E's `rb3e_relaunch_game` restarts the game, nor for a [test
 harness](test-harness.md) run unless started with `--launcher`. To get it back, hold Shift,
-start with `--launcher`, or turn on **Show this screen at startup** in the in-game settings. On
+start with `--launcher`, or turn on **Open the launcher at startup** in the in-game settings. On
 a Steam Deck in Game Mode, add `--launcher` to band3's launch options in Steam for one start.
 
 ### What it saves
 
 Leaving Settings, or Play, saves to `band3.toml` beside the executable: only the settings that
-differ from their default, plus **Show this screen at startup**, keeping the file's other lines.
+differ from their default, plus **Open the launcher at startup**, keeping the file's other lines.
 Folders inside the install are saved as relative paths, so the install still moves as one
 folder.
 
@@ -342,7 +342,7 @@ old yt-dlp stops finding videos.
   cover, a visualizer, an "audio" upload or an auto-generated art track isn't taken without
   asking. For the rest, the sound alone is fetched first (a few MB) and matched against the
   song's; the first that surely matches has its picture fetched (up to
-  `music_video_max_height` lines, 60 fps where there is with `music_video_prefer_60fps`),
+  `music_video_max_height` lines, 60 fps when there is with `music_video_prefer_60fps`),
   checked for one that moves (an "audio" upload's still picture matches the song perfectly),
   saved as `<shortname>.<ext>` and synced. yt-dlp's FFmpeg isn't needed: the sound and the
   picture are never merged (`music_video_keep_audio` keeps the sound, for aligning again).

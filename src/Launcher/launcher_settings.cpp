@@ -13,7 +13,7 @@ namespace band3::launcher {
 
 namespace {
 
-// the "Show this screen at startup" row (ShowAtStartup)
+// the "Open the launcher at startup" row (ShowAtStartup)
 constexpr std::string_view kShowLauncher = "show_launcher";
 
 // Choices
@@ -208,8 +208,8 @@ constexpr Setting kSettings[] = {
      .about = "Keeps every finished song's results (score, stars, notes hit) for the web "
               "page's History tab. Songs played on autoplay aren't kept."},
     {.cvar = "show_launcher", .category = kGame, .section = "Startup",
-     .label = "Show this screen at startup", .widget = kCheckbox,
-     .about = "Off starts the game straight away. To see this screen again, hold Shift as "
+     .label = "Open the launcher at startup", .widget = kCheckbox,
+     .about = "Off starts the game straight away. To see the launcher again, hold Shift as "
               "band3 starts, or start it with --launcher."},
     {.cvar = "fast_start", .category = kGame, .section = "Startup",
      .label = "Skip the splash screens", .widget = kCheckbox,
@@ -504,10 +504,10 @@ constexpr Setting kSettings[] = {
      .about = "The largest picture a video is downloaded at. Larger ones take more space and "
               "decoding."},
     {.cvar = "music_video_prefer_60fps", .category = kVideos, .section = "Finding videos",
-     .label = "60 fps where there is", .widget = kCheckbox,
-     .about = "Downloads a video's 60 fps picture where it has one."},
+     .label = "Download 60 fps videos", .widget = kCheckbox,
+     .about = "Downloads a video's 60 fps picture when it has one; off, its 30 fps one."},
     {.cvar = "music_video_auto_accept", .category = kVideos, .section = "Finding videos",
-     .label = "Take sure matches", .widget = kCheckbox,
+     .label = "Accept clear matches", .widget = kCheckbox,
      .about = "Takes a video without asking when it's surely the song's. Off, every song's "
               "results wait for you to choose."},
     {.cvar = "music_video_keep_audio", .category = kVideos, .section = "Finding videos",

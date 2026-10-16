@@ -307,7 +307,8 @@ void LauncherDialog::Play() {
     hub_->ShowBox(ui::Box{
         .title = "Rock Band 3 not found",
         .lines = {"Game data folder: " + (root.empty() ? std::string("none set") : rex::path_to_utf8(root)),
-                  std::string(DescribeProblem(check.problem))},
+                  std::string(DescribeProblem(check.problem)),
+                  "Play anyway starts band3 regardless, but without the game it can't run."},
         .options = {"Find Rock Band 3", "Play anyway", "Cancel"},
         .cancel = 2,
         .chosen = [this](int choice) {

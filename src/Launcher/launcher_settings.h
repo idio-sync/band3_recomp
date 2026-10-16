@@ -412,7 +412,7 @@ public:
     // its row is a password (kPassword): its value isn't shown or logged
     bool Secret(std::string_view cvar) const;
 
-    // The "Show this screen at startup" row (Game > Startup), saved as
+    // The "Open the launcher at startup" row (Game > Startup), saved as
     // show_launcher. show_launcher is on by default, so a first run shows the
     // launcher, but the row starts on only when band3.toml has show_launcher =
     // true: the player turned it on before. Off otherwise, so Play then leaves
@@ -452,7 +452,7 @@ private:
     std::set<std::string, std::less<>> edited_;
     // the values when last saved or loaded
     std::map<std::string, std::string, std::less<>> saved_;
-    // the "Show this screen at startup" row, and its value when last saved or loaded
+    // the "Open the launcher at startup" row, and its value when last saved or loaded
     bool show_at_startup_ = false;
     bool saved_show_at_startup_ = false;
 };

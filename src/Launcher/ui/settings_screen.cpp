@@ -1091,6 +1091,8 @@ void SettingsScreen::Paragraph(ImDrawList* dl, std::string_view text, float x, f
 }
 
 void SettingsScreen::DrawPanel(ImDrawList* dl) {
+    // over the game, nothing of it shows through the panel's text
+    if (over_game_) dl->AddRectFilled(At(kPanelLeft, kPanelTop), At(kPanelRight, kPanelBottom), IM_COL32(3, 6, 20, 235));
     ui::DrawPanel(dl, At(kPanelLeft, kPanelTop), At(kPanelRight, kPanelBottom), skin_);
     float y = kBodyTop;
     dl->PushClipRect(At(kPanelLeft, kPanelTop), At(kPanelRight, kBodyBottom + 10), true);
@@ -1136,7 +1138,7 @@ void SettingsScreen::DrawCategoryDetail(ImDrawList* dl, float x, float& y, float
         }
         PaintText(dl, At(x, y + 5), kCaps(text::kBody), color::kText, s.name, Px(name_room));
         y += 30;
-        const TextStyle names_style = kPlain(18);
+        const TextStyle names_style = kPlain(20);
         const std::vector<std::string> lines = WrapText(names_style, names, Px(width));
         for (size_t i = 0; i < lines.size() && i < preview_lines; i++) {
             std::string line = lines[i];
@@ -1146,7 +1148,7 @@ void SettingsScreen::DrawCategoryDetail(ImDrawList* dl, float x, float& y, float
                 line += "\xE2\x80\xA6";
             }
             PaintText(dl, At(x, y), names_style, color::kMuted, line, Px(width));
-            y += 22;
+            y += 24;
         }
         y += 6;
         dl->AddLine(At(x, y), At(x + width, y), color::kHairline);
@@ -1169,7 +1171,7 @@ void SettingsScreen::DrawCategoryDetail(ImDrawList* dl, float x, float& y, float
     for (const Row* r : changed) {
         if (y > kBodyBottom - 28) break;
         const std::string value = RowValue(*r);
-        const TextStyle style = kPlain(18);
+        const TextStyle style = kPlain(20);
         const float vw = std::min(TextWidth(style, value), Px(width * 0.45f));
         PaintText(dl, ImVec2(At(x + width, 0).x - vw, At(0, y + 5).y), style, color::kText, value, Px(width * 0.45f));
         PaintText(dl, At(x, y + 5), style, color::kMuted, r->label, Px(width) - vw - Px(12));
@@ -1337,22 +1339,22 @@ void SettingsScreen::DrawRowDetail(ImDrawList* dl, const Row& row, float x, floa
         }
         if (generated) {
             y += 10;
-            PaintText(dl, At(x, y), kPlain(18), color::kMuted, cvar + " in band3.toml", Px(width));
+            PaintText(dl, At(x, y), kPlain(20), color::kMuted, cvar + " in band3.toml", Px(width));
             y += 22;
         }
     } else if (row.kind == RowKind::kControl) {
         if (row.control == Control::kLowestDelay && !undo_.empty()) {
             y += 12;
-            PaintText(dl, At(x, y), kCaps(19), color::kGood, "Just changed");
+            PaintText(dl, At(x, y), kCaps(20), color::kGood, "Just changed");
             y += 28;
             for (const auto& [cvar, old] : undo_) {
                 const Setting* s = model_.Find(cvar);
                 if (!s) continue;
                 const Row r{.kind = RowKind::kSetting, .setting = s, .label = std::string(s->label)};
-                PaintText(dl, At(x, y), kPlain(18), color::kMuted, r.label, Px(width * 0.55f));
+                PaintText(dl, At(x, y), kPlain(20), color::kMuted, r.label, Px(width * 0.55f));
                 const std::string now = RowValue(r);
-                const float vw = TextWidth(kPlain(18), now);
-                PaintText(dl, ImVec2(At(x + width, 0).x - vw, At(0, y).y), kPlain(18), color::kText, now);
+                const float vw = TextWidth(kPlain(20), now);
+                PaintText(dl, ImVec2(At(x + width, 0).x - vw, At(0, y).y), kPlain(20), color::kText, now);
                 y += 26;
             }
         }
@@ -1372,9 +1374,9 @@ void SettingsScreen::DrawRowDetail(ImDrawList* dl, const Row& row, float x, floa
             }
             for (const lights::DeviceRow& d : devices) {
                 if (y > kBodyBottom - 40) break;
-                PaintText(dl, At(x, y), kPlain(19), color::kText, d.kind + "  " + d.name, Px(width));
+                PaintText(dl, At(x, y), kPlain(20), color::kText, d.kind + "  " + d.name, Px(width));
                 y += 23;
-                PaintText(dl, At(x, y), kPlain(18), d.online ? color::kMuted : color::kWarn, d.detail, Px(width));
+                PaintText(dl, At(x, y), kPlain(20), d.online ? color::kMuted : color::kWarn, d.detail, Px(width));
                 y += 26;
             }
             if (const std::string last = lights::LastSent(); !last.empty()) {
@@ -1508,6 +1510,16 @@ void SettingsScreen::DrawHelp(ImDrawList* dl, ImGuiIO& io) {
     const bool play = host_.where == Where::kLauncher && !typing_ && !box_;
     const int hovered = DrawHelpBar(dl, ImVec2(0, At(0, kHelpTop).y), ImVec2(io.DisplaySize.x, io.DisplaySize.y),
                                     items, keyboard_hints_, play, skin_);
+    if (host_.where == Where::kInGame && !typing_ && !box_) {
+        // in game, Start (F5) is back to the game from anywhere in here
+        const char* hint = keyboard_hints_ ? "F5 returns to the game" : "Start returns to the game";
+        const TextStyle style = kCaps(20);
+        const float bar_top = At(0, kHelpTop).y;
+        PaintText(dl,
+                  ImVec2(io.DisplaySize.x - Px(28) - TextWidth(style, hint),
+                         (bar_top + io.DisplaySize.y) * 0.5f - Px(20) * 0.5f),
+                  style, color::kSoft, hint);
+    }
     if (hovered < 0 || !ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return;
     if (hovered == kHelpPlay) {
         Handle(Action::kPlay);

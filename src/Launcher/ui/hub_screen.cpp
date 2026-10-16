@@ -177,7 +177,7 @@ void HubScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
     const int hovered = DrawHelpBar(dl, bar_min, io.DisplaySize, help, input_.Keyboard(), false, skin_);
     if (found && !box_) {
         const char* hint = input_.Keyboard() ? "F5 plays from any screen" : "Start plays from any screen";
-        const TextStyle style = kCaps(19);
+        const TextStyle style = kCaps(20);
         const float w = TextWidth(style, hint);
         PaintText(dl, ImVec2(io.DisplaySize.x - Px(28) - w, (bar_min.y + io.DisplaySize.y) * 0.5f - Px(19) * 0.5f),
                   style, IM_COL32(195, 199, 210, 255), hint);
@@ -246,8 +246,8 @@ void HubScreen::DrawCardFacts(ImDrawList* dl, const Page& page, bool found, floa
         PaintText(dl, ImVec2(at(x + width, 0).x - vw, at(0, y + 7).y), key, color::kBad, none);
         dl->AddCircleFilled(ImVec2(at(x + width, 0).x - vw - Px(12), at(0, y + 18).y), Px(5), color::kBad);
         y += 40;
-        PaintText(dl, at(x, y), kPlain(18), color::kMuted, fit_root(kPlain(18)));
-        y += 22;
+        PaintText(dl, at(x, y), kPlain(20), color::kMuted, fit_root(kPlain(20)));
+        y += 24;
         return;
     }
 
@@ -263,7 +263,7 @@ void HubScreen::DrawCardFacts(ImDrawList* dl, const Page& page, bool found, floa
         PaintText(dl, ImVec2(at(x + width, 0).x - vw, at(0, y + 7).y), key, color::kText, found_text);
         dl->AddCircleFilled(ImVec2(at(x + width, 0).x - vw - Px(12), at(0, y + 18).y), Px(5), color::kGood);
         y += 34;
-        PaintText(dl, at(x, y), kPlain(18), color::kMuted, fit_root(kPlain(18)));
+        PaintText(dl, at(x, y), kPlain(20), color::kMuted, fit_root(kPlain(20)));
         y += 26;
         dl->AddLine(at(x, y), at(x + width, y), color::kHairline);
     }
@@ -310,10 +310,10 @@ void HubScreen::DrawCardFacts(ImDrawList* dl, const Page& page, bool found, floa
     for (auto it = icons.rbegin(); it != icons.rend() && ix > x + 170; ++it) {
         if (it->column < 0) {
             // a gamepad: no icon of its own in RB3's sheet, so a PAD pill
-            const float pw = TextWidth(kCaps(16), "Pad") / page.scale + 16;
+            const float pw = TextWidth(kCaps(18), "Pad") / page.scale + 16;
             const ImVec2 pmin = at(ix + 30 - pw, y + 9), pmax = at(ix + 30, y + 35);
             dl->AddRect(pmin, pmax, color::kSoft, Px(13), 0, Px(2));
-            PaintText(dl, ImVec2((pmin.x + pmax.x - TextWidth(kCaps(16), "Pad")) * 0.5f, at(0, y + 13).y), kCaps(16),
+            PaintText(dl, ImVec2((pmin.x + pmax.x - TextWidth(kCaps(18), "Pad")) * 0.5f, at(0, y + 13).y), kCaps(18),
                       color::kSoft, "Pad");
             ix -= pw + 6;
             continue;
@@ -327,7 +327,7 @@ void HubScreen::DrawCardFacts(ImDrawList* dl, const Page& page, bool found, floa
 
     if (last) {
         y += 12;
-        PaintText(dl, at(x, y), kCaps(19), color::kMuted, "Last played");
+        PaintText(dl, at(x, y), kCaps(20), color::kMuted, "Last played");
         y += 26;
         const float tw = PaintText(dl, at(x, y), kPlain(22), color::kText, last->title, Px(width * 0.7f));
         PaintText(dl, ImVec2(at(x, 0).x + tw + Px(10), at(0, y + 1).y), kPlain(20), IM_COL32(191, 195, 207, 255),

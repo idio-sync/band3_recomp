@@ -30,7 +30,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ca
 
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
-| `show_launcher`<br>Show this screen at startup | `true` | `true`, `false` | Show the launcher, band3's setup screen, before the game starts. Off, band3 starts the game straight away; hold Shift as it starts, or start it with --launcher, to see the launcher anyway *Applies at the next start.* |
+| `show_launcher`<br>Open the launcher at startup | `true` | `true`, `false` | Show the launcher, band3's setup screen, before the game starts. Off, band3 starts the game straight away; hold Shift as it starts, or start it with --launcher, to see the launcher anyway *Applies at the next start.* |
 | `fast_start`<br>Skip the splash screens | `false` | `true`, `false` | Skip the splash screens once the game has finished initializing *Applies at the next start.* |
 | `autosave`<br>Autosave | `true` | `true`, `false` | Let the game autosave profiles, after songs and setlist edits. Off, they're only saved from the options menu, e.g. to test with autoplay without touching your profile |
 | `disable_metamusic`<br>Menu music | `false` | `true`, `false` | Disable the background menu music *Applies at the next start.* |
@@ -216,8 +216,8 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ca
 | `music_video_ytdlp_path`<br>yt-dlp program | *(empty)* | text | yt-dlp, which finds and downloads songs' music videos from the Music Videos screen: its program file (yt-dlp.exe). Empty looks for yt-dlp on PATH. band3 doesn't come with it: get it from github.com/yt-dlp/yt-dlp |
 | `music_video_ytdlp_args`<br>More yt-dlp options | *(empty)* | text | More yt-dlp options for finding and downloading music videos, as typed on its command line, e.g. --cookies-from-browser firefox for videos YouTube asks to sign in for |
 | `music_video_max_height`<br>Picture size | `1080` | `480` 480p, `720` 720p, `1080` 1080p, `1440` 1440p, `2160` 4K | The tallest picture a downloaded music video has, in lines: 480, 720, 1080, 1440 or 2160. Taller ones take more space and decoding |
-| `music_video_prefer_60fps`<br>60 fps where there is | `true` | `true`, `false` | Download a music video's 60 fps picture where it has one (music_video_full_rate plays it at 60); off, its 30 fps one |
-| `music_video_auto_accept`<br>Take sure matches | `true` | `true`, `false` | When finding music videos, take one without asking when it's surely the song's: its title, channel and length look right and its sound matches the song's. Off, every song's results wait on the Music Videos screen for you to choose |
+| `music_video_prefer_60fps`<br>Download 60 fps videos | `true` | `true`, `false` | Download a music video's 60 fps picture where it has one (music_video_full_rate plays it at 60); off, its 30 fps one |
+| `music_video_auto_accept`<br>Accept clear matches | `true` | `true`, `false` | When finding music videos, take one without asking when it's surely the song's: its title, channel and length look right and its sound matches the song's. Off, every song's results wait on the Music Videos screen for you to choose |
 | `music_video_keep_audio`<br>Keep the videos' sound | `false` | `true`, `false` | Keep a downloaded music video's sound (in the videos folder's .sync folder), so it can be aligned again with its song; band3 plays the video under the game's own sound, so it's otherwise deleted once the video is synced |
 
 ## Lights

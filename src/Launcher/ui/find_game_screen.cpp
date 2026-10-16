@@ -1,12 +1,13 @@
 #include "find_game_screen.h"
-#include "hub_model.h"
 #include <algorithm>
+#include <format>
 #include <mutex>
 #include <thread>
 #include <rex/filesystem.h>
 #include "src/Launcher/game_data_check.h"
 #include "src/Launcher/game_search.h"
 #include "src/Launcher/launcher_style.h"
+#include "hub_model.h"
 #include "widgets.h"
 
 namespace band3::launcher::ui {
@@ -92,7 +93,8 @@ std::vector<FindGameScreen::Item> FindGameScreen::Items() const {
     }
     out.push_back({Item::kBand, done ? "Found on this PC" : "Searching this PC..."});
     for (const fs::path& path : found) out.push_back({Item::kFound, Shown(path), path, true});
-    if (done && found.empty()) out.push_back({Item::kNote, "No copy found: open a drive below, or search again"});
+    if (done && found.empty()) out.push_back({Item::kNote, std::format("None within {} folders of a drive's top: open one below, or choose a folder in a window",
+                                                   SearchLimits{}.depth)});
     out.push_back({Item::kBand, "Browse"});
     for (const fs::path& root : roots_) out.push_back({Item::kDrive, Shown(root), root});
     out.push_back({Item::kChoose, "Choose a folder in a window..."});
@@ -194,7 +196,7 @@ void FindGameScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
     } else {
         std::lock_guard lock(search_->mutex);
         strip = !search_->done ? "Searching this PC... " + Thousands(search_->looked_in.load()) + " folders"
-                               : search_->found.empty() ? std::string("Searched this PC: no copy found")
+                               : search_->found.empty() ? std::format("Searched {} {}: no copy found", roots_.size(), roots_.size() == 1 ? "drive" : "drives")
                                : "Searched this PC: " + std::to_string(search_->found.size()) +
                                      (search_->found.size() == 1 ? " copy found" : " copies found");
     }
@@ -290,7 +292,7 @@ void FindGameScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         heading(current->label);
         para("Open folders until one says Game found.", body);
         py += 8;
-        para("No Rock Band 3 in this one itself. The game's folder has a folder named gen in it, holding "
+        para("Rock Band 3 isn't in this folder itself. The game's folder has a folder named gen in it, holding "
              "main_xbox.hdr.",
              color::kMuted);
     } else {

@@ -1,11 +1,11 @@
 #include "videos_screen.h"
-#include "hub_model.h"
 #include <SDL3/SDL_misc.h>
 #include <rex/filesystem.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <format>
+#include "hub_model.h"
 #include "keyboard_panel.h"
 #include "src/Launcher/launcher_style.h"
 #include "src/Video/video_fetch.h"
@@ -103,7 +103,7 @@ std::vector<VideosScreen::Item> VideosScreen::Items() const {
     } else {
         // what it waits on, before it can run
         const video::YtDlpState yt = video::YtDlpNow(false);
-        const char* waits = library_.Songs().empty()           ? "Play once first"
+        const char* waits = library_.Songs().empty()           ? "Start the game once first"
                             : !yt.checking && yt.version.empty() ? "Needs yt-dlp"
                                                                  : "";
         out.push_back({Item::kFindAll, "Find videos for every song", -1, waits});
@@ -349,7 +349,7 @@ void VideosScreen::Activate(const Item& item) {
         }
         if (library_.Songs().empty()) {
             ShowBox(Box{.title = "No songs yet",
-                        .lines = {"band3 lists your songs once the game has read them: play once, then come back."},
+                        .lines = {"band3 lists your songs once the game has read them: start the game once, then come back."},
                         .options = {"OK"},
                         .cancel = 0});
             return;
@@ -704,6 +704,8 @@ void VideosScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_gam
 }
 
 void VideosScreen::DrawPanel(ImDrawList* dl, const Page& page, const Item* item) {
+    // over the game, nothing of it shows through the panel's text
+    if (over_game_) dl->AddRectFilled(page.At(906, 30), page.At(1256, 650), IM_COL32(3, 6, 20, 235));
     ui::DrawPanel(dl, page.At(906, 30), page.At(1256, 650), skin_);
     const float x = kBodyLeft, width = kBodyWidth;
     float y = 56;
@@ -743,9 +745,9 @@ void VideosScreen::DrawPanel(ImDrawList* dl, const Page& page, const Item* item)
         }
     };
     const auto kv = [&](std::string_view key, std::string_view value, ImU32 value_color) {
-        PaintText(dl, page.At(x, y + 5), kCaps(19), color::kMuted, key);
-        const float vw = std::min(TextWidth(kPlain(19), value), Px(width * 0.62f));
-        PaintText(dl, ImVec2(page.At(x + width, 0).x - vw, page.At(0, y + 5).y), kPlain(19), value_color, value,
+        PaintText(dl, page.At(x, y + 5), kCaps(20), color::kMuted, key);
+        const float vw = std::min(TextWidth(kPlain(20), value), Px(width * 0.62f));
+        PaintText(dl, ImVec2(page.At(x + width, 0).x - vw, page.At(0, y + 5).y), kPlain(20), value_color, value,
                   Px(width * 0.62f));
         dl->AddLine(page.At(x, y + 30), page.At(x + width, y + 30), color::kHairline);
         y += 30;
@@ -771,7 +773,7 @@ void VideosScreen::DrawPanel(ImDrawList* dl, const Page& page, const Item* item)
             kv("None found", std::to_string(p.none), color::kText);
             kv("Failed", std::to_string(p.failed), color::kBad);
         } else if (library_.Songs().empty()) {
-            para("band3 lists your songs once the game has read them: play once, then come back to find their "
+            para("band3 lists your songs once the game has read them: start the game once, then come back to find their "
                  "videos.",
                  body);
             y += 10;
