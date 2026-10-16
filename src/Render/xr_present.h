@@ -57,7 +57,9 @@ struct Stats {
     // the display period
     uint64_t late = 0;
     double wait_ms = 0;     // in xrWaitFrame, summed
-    double render_ms[2] = {0, 0};  // each eye's GPU drawing (GpuStats::ms), summed
+    // each eye's drawing: the CPU's up to submitting (GpuStats::ms), the GPU's
+    // (native_gpu_timestamps' gpu_total_ms), and RePose's copy, summed
+    double render_ms[2] = {0, 0}, gpu_ms[2] = {0, 0}, repose_ms[2] = {0, 0};
     double present_ms = 0;  // acquiring, drawing into and releasing the images, summed
     double frame_ms = 0;    // xrBeginFrame to xrEndFrame, summed
     bool srgb_view = false;  // the images are typed sRGB: present.hlsl's linear variant
@@ -82,7 +84,7 @@ class Session {
     // ALL_SHADER_RESOURCE, finished on the GPU) into its swapchain and ends
     // the frame with them; with null eyes, ends it without a layer.
     bool Present(const FrameViews& f, void* const eye[2], double begin_to_present_ms);
-    void AddRenderMs(int eye, double ms);
+    void AddRenderMs(int eye, double ms, double gpu_ms, double repose_ms);
     Stats GetStats();
     // native_view stats' `xr` block, counted from the last StartMeasuring
     // (the harness's `native_view on`); "" while `vr` was never on

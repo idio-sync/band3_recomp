@@ -73,6 +73,7 @@
 #include "src/Render/gpu_view.h"
 #include "src/Render/native_view.h"
 #include "src/Render/png_writer.h"
+#include "src/Render/post_model.h"
 #include "src/Render/scene_capture.h"
 #include "src/Render/sync_gpu/native_only.h"
 #include "src/Render/sync_gpu/sync_graphics_system.h"
@@ -422,6 +423,33 @@ public:
             return;
         }
         out.gpu_path = path.string();
+        // with `vr` running, the frame from each eye of the last VR frame, as
+        // the headset's are drawn (native_view.cpp's VrFrame), into
+        // <name>.gpu.L.png and <name>.gpu.R.png
+        render::vr::Eye eyes[2];
+        uint32_t eye_w = 0, eye_h = 0;
+        if (render::xr::Session::Get().LastEyes(eyes, eye_w, eye_h)) {
+            render::RasterOptions eo = options;
+            eo.width = eye_w;
+            eo.height = eye_h;
+            render::ScaleForPicture(eo);
+            eo.msaa = 1;
+            eo.velocity = false;
+            eo.post_only = render::post::kPostXfm | render::post::kPostBloom |
+                           render::post::kPostGlare;
+            eo.skip_overlay = true;
+            for (int e = 0; e < 2; e++) {
+                render::FrameCapture eye_frame;
+                render::vr::RePose(frame, eyes[e], eye_frame);
+                std::vector<uint32_t> eye_rgba;
+                render::GpuStats eye_stats;
+                if (render::GpuRenderer::Get().RenderFrame(eye_frame, eo, eye_rgba, eye_stats))
+                    render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
+                                      (file + (e ? ".gpu.R.png" : ".gpu.L.png")))
+                                         .string(),
+                                     eye_rgba, eye_w, eye_h);
+            }
+        }
         out.gpu_ms = stats.ms;
         out.gpu_wait_ms = stats.wait_ms;
         out.gpu_passes = stats.passes;

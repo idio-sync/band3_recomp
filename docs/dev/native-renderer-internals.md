@@ -371,6 +371,35 @@ What each does, how it was measured and why it defaults as it does. The
   (its total 2.9-3.1 to 2.2-2.3), for 58 MB of layers (96 of them); without it record 1.0 to
   0.84, frames 1.72 to 1.64. At 4073x2291 with `vr_show_all` (the display went to 60 Hz, so
   even/odd frames) post frames went from 8.3 to 7.0 ms and world frames from 6.4 to 5.3.
+- `vr` (debug, off, restart; Windows): the native renderer's picture in a headset through
+  OpenXR (`xr_present.h`). `openxr_loader.dll` is loaded at run time (the usual search path,
+  else SteamVR's `bin\win64`), never linked, and only with `vr` on; the session is bound
+  (`XR_KHR_D3D12_enable`) to the SDK's device and direct queue, two swapchains of the
+  runtime's recommended size, drawn by `present.hlsl` on band3's own command list on that
+  queue (typeless images get a UNORM view, bytes verbatim; typed sRGB ones
+  `PSPresentLinear`). Once the session runs, `xrWaitFrame` paces the native renderer's worker
+  (`VrFrame`): each frame re-poses the newest capture for each eye (`vr_pose.h`'s `RePose`:
+  the world camera's draws get the eye's view and `EyeProjection` of the captured
+  projection, their shades cloned with the eye's position and billboard axes), draws both
+  into the eye output slots (`GpuRenderer::EyeSlot`; the left into a window slot when one is
+  free, published as the window's picture) without the overlay (`skip_overlay`), the world
+  drawn ahead, kept buffers, motion blur, DOF or the spotlights' haze, then presents them and
+  ends the frame with a projection layer. `vr_anchor` places the head's LOCAL space in the
+  venue (default above and behind arena_04's front crowd; empty follows the game camera),
+  `vr_world_scale` scales it, `vr_fake_pose` turns the head slowly for a headset that doesn't
+  move. `native_view stats` has an `xr` block, and `capture` writes `<name>.gpu.L.png` and
+  `.gpu.R.png` from the last VR frame's eyes. Particles stay flat to the game camera and the
+  crowd's impostor pictures are the game camera's view. On SteamVR 2.17.10's null driver
+  (1852x2056 an eye, 90 Hz) the session reaches SYNCHRONIZED but never VISIBLE: the null
+  headset is idle (activity level 0), so `shouldRender` stays off and `xrWaitFrame` gives ~33
+  frames a second; the eyes are drawn and submitted anyway. Its first session after SteamVR
+  starts is ended for SteamVR's room setup, which terminates band3. Per frame, 20th Century
+  Boy at arena_04 on the R9700 (600-frame stretches): without `vr_show_all` each eye 0.56-0.88
+  ms of CPU to submission, 0.62-0.81 ms of GPU, RePose's copy 0.11-0.18 ms, xrWaitFrame's
+  return to xrEndFrame 4.1-4.4 ms; with it 2.7-3.0 ms of CPU, 2.9-3.5 of GPU and 0.6-0.8 for
+  RePose an eye, 12.3-12.8 ms a frame, over 90 Hz's 11.1 (late 82-87% of frames): each eye
+  draws the crowd's ~85 impostor passes again. The eyes' pictures differ by a 2-pixel shift
+  at the stage, as a 63 mm IPD at ~20 m gives.
 - `native_view_render_scale` (debug, 1): the presented picture is drawn at that times the
   window's size (after `native_max_height`; `native_view.cpp`'s `ScaleRender`), with the
   screen-sized passes following (`ScaleForPicture`), and `present.hlsl` scales it to the

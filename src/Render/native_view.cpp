@@ -974,7 +974,7 @@ class Renderer {
                     if (WaitFlight(*flight, nullptr)) PublishFlight(*flight, rgba);
                     flight.reset();
                 }
-                VrFrame(o, generation, presenting, decode_pending_ms);
+                VrFrame(o, generation, presenting, decode_pending_ms, rgba);
                 continue;
             }
             if (gpu && !gpu_kind) gpu_kind = GpuRenderer::Get().Kind();
@@ -1246,12 +1246,17 @@ class Renderer {
 
     // One of the runtime's frames (the `vr` setting, xr_present.h): its
     // views, then both eyes into the headset
+    //
+    // Each eye is the newest capture re-posed (vr_pose.h's RePose) from where
+    // that eye is: LOCAL space placed in the venue by vr_anchor (empty: the
+    // game camera's point, facing where it looks), drawn at the swapchain's
+    // size without the overlay, the world drawn ahead, kept buffers, motion
+    // blur, DOF or the spotlights' haze. The left eye goes into one of the
+    // window's slots when one is free and is published as the window's
+    // picture; else, and the right always, into the eye slots.
     void VrFrame(const RasterOptions& o, uint64_t generation, bool presenting,
-                 double& decode_pending_ms) {
-        (void)o;
-        (void)generation;
-        (void)presenting;
-        (void)decode_pending_ms;
+                 double& decode_pending_ms, std::vector<uint32_t>& rgba) {
+        using Clock = std::chrono::steady_clock;
         xr::Session& xs = xr::Session::Get();
         xr::FrameViews f;
         stall_watch::SetWorker(stall_watch::Worker::kWaiting);
@@ -1259,10 +1264,137 @@ class Renderer {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             return;
         }
-        // no pictures yet: each eye cleared to a colour of its own
-        void* const eyes[2] = {nullptr, nullptr};
-        xs.Present(f, eyes, 0);
+        const auto begin = Clock::now();
+        auto since_begin = [&] {
+            return std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
+        };
+        stall_watch::SetWorker(stall_watch::Worker::kRecording);
+        Clock::time_point presented;
+        double decode_ms = 0;
+        SetDecodeThreads(uint32_t(REXCVAR_GET(native_deferred_decode_threads)));
+        std::shared_ptr<const FrameCapture> cap = LatestCapture(presented, &decode_ms);
+        decode_pending_ms += decode_ms;
+        void* eyes[2] = {nullptr, nullptr};
+        if (!cap) {
+            // nothing captured yet: the eyes' colours
+            xs.Present(f, eyes, since_begin());
+            return;
+        }
+        vr::Anchor anchor;
+        const std::string anchor_text = REXCVAR_GET(vr_anchor);
+        if (anchor_text.empty() || !vr::ParseAnchor(anchor_text, anchor)) {
+            const WorldCamera wc = WorldCameraOf(*cap);
+            freecam::Pose game{};
+            Mat4 proj{};
+            if (wc.valid && freecam::Decompose(wc.view_proj, game, proj))
+                anchor = vr::AnchorFromCamera(game);
+        }
+        const float scale = float(REXCVAR_GET(vr_world_scale));
+        RasterOptions eo = o;
+        eo.width = xs.Width();
+        eo.height = xs.Height();
+        ScaleForPicture(eo);
+        eo.world_ahead = false;
+        eo.post_buffer = false;
+        eo.pre_buffer = false;
+        eo.trails = false;
+        eo.post_history = nullptr;
+        eo.msaa = 1;
+        eo.velocity = false;
+        eo.post_only = post::kPostXfm | post::kPostBloom | post::kPostGlare;
+        eo.skip_overlay = true;
+        eo.gpu_no_wait = true;
+        eo.output_readback = false;
+        eo.gpu_draw_profile = false;
+        eo.overlay_edge[0] = eo.overlay_edge[1] = 1.0f;
+        eo.overlay_cut[0] = eo.overlay_cut[1] = 0.0f;
+        int left_slot = -1;
+        if (presenting) {
+            std::lock_guard lock(mutex_);
+            left_slot = slots_.Acquire();
+        }
+        const int slot[2] = {left_slot >= 0 ? left_slot : GpuRenderer::EyeSlot(0),
+                             GpuRenderer::EyeSlot(1)};
+        vr::Eye eye[2];
+        std::shared_ptr<FrameCapture> eye_cap[2];
+        Drawn d[2];
+        double repose_ms[2] = {0, 0};
+        for (int e = 0; e < 2; e++) {
+            eye[e].pose = vr::EyePose(f.pose[e], anchor, scale);
+            eye[e].fov = f.fov[e];
+            const auto repose_start = Clock::now();
+            eye_cap[e] = std::make_shared<FrameCapture>();
+            vr::RePose(*cap, eye[e], *eye_cap[e]);
+            repose_ms[e] =
+                std::chrono::duration<double, std::milli>(Clock::now() - repose_start).count();
+            d[e].drew_output =
+                GpuRenderer::Get().RenderFrameToOutput(*eye_cap[e], eo, slot[e], d[e].out, d[e].gs);
+            if (e == 0 && left_slot >= 0 && d[e].drew_output) {
+                std::lock_guard lock(mutex_);
+                slots_.Submitted(left_slot);
+            }
+        }
+        xs.NoteEyes(eye);
+        // both finished on SDL's queue before the SDK's samples them
+        stall_watch::SetWorker(stall_watch::Worker::kGpuWait);
+        for (int e = 0; e < 2; e++) {
+            if (!d[e].drew_output) continue;
+            const auto from = Clock::now();
+            while (!GpuRenderer::Get().OutputDone(slot[e], &d[e].gs)) {
+                if (Clock::now() - from > kGpuHung) {
+                    REXLOG_WARN("vr: an eye wasn't finished after {} ms", kGpuHung.count());
+                    d[e].drew_output = false;
+                    break;
+                }
+                std::this_thread::sleep_for(kFencePoll);
+            }
+            if (d[e].drew_output && d[e].out.d3d12_resource) eyes[e] = d[e].out.d3d12_resource;
+            xs.AddRenderMs(e, d[e].gs.ms, d[e].gs.gpu_timed ? d[e].gs.gpu_total_ms : 0,
+                           repose_ms[e]);
+        }
+        if (left_slot >= 0) {
+            std::lock_guard lock(mutex_);
+            slots_.Finished(left_slot);
+        }
+        // a missing eye shows its colour rather than the other's picture
+        xs.Present(f, eyes, since_begin());
+        // the left eye as the window's picture, and as RGBA for a screenshot
+        // or F9's window
+        bool want_rgba;
+        {
+            std::lock_guard lock(mutex_);
+            want_rgba = image_wanted_ || dialog_open_;
+        }
+        Drawn& w = d[0];
+        if (!w.drew_output || (left_slot < 0 && !want_rgba)) {
+            if (left_slot >= 0) {
+                std::lock_guard lock(mutex_);
+                slots_.Abandon(left_slot);
+            }
+            return;
+        }
+        if (want_rgba) {
+            uint32_t rw = 0, rh = 0;
+            w.want_rgba = GpuRenderer::Get().DownloadOutput(slot[0], rgba, rw, rh);
+        }
+        w.cap = eye_cap[0];
+        w.presented = presented;
+        w.generation = generation;
+        w.presenting = presenting;
+        w.new_frame = cap->frame != vr_last_frame_;
+        vr_last_frame_ = cap->frame;
+        w.slot = left_slot;
+        w.drew_gpu = true;
+        w.width = eo.width;
+        w.height = eo.height;
+        w.camera = cuts_.Next(*cap);
+        w.gs.decode_ms = decode_pending_ms;
+        w.gs.ms += decode_pending_ms;
+        decode_pending_ms = 0;
+        PublishDrawn(w, w.want_rgba ? &rgba : nullptr);
     }
+    // the capture the last VR frame drew, for Drawn::new_frame
+    uint64_t vr_last_frame_ = 0;
 
     // One fence check; when finished, marks the slot finished and un-holds
     // the worker.

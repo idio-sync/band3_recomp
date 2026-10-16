@@ -45,7 +45,7 @@ uint32_t Session::Width() const { return 0; }
 uint32_t Session::Height() const { return 0; }
 bool Session::WaitFrame(FrameViews&) { return false; }
 bool Session::Present(const FrameViews&, void* const[2], double) { return false; }
-void Session::AddRenderMs(int, double) {}
+void Session::AddRenderMs(int, double, double, double) {}
 Stats Session::GetStats() { return {}; }
 bool Session::LastEyes(vr::Eye[2], uint32_t&, uint32_t&) { return false; }
 void Session::NoteEyes(const vr::Eye[2]) {}
@@ -707,9 +707,11 @@ bool Session::Present(const FrameViews& f, void* const eye[2], double begin_to_p
     return drawn;
 }
 
-void Session::AddRenderMs(int eye, double ms) {
+void Session::AddRenderMs(int eye, double ms, double gpu_ms, double repose_ms) {
     std::lock_guard lock(impl_->stats_mutex);
     impl_->stats.render_ms[eye & 1] += ms;
+    impl_->stats.gpu_ms[eye & 1] += gpu_ms;
+    impl_->stats.repose_ms[eye & 1] += repose_ms;
 }
 
 Stats Session::GetStats() {
@@ -743,12 +745,16 @@ std::string Session::MeasuredJson() {
         "{{\"state\":{},\"runtime\":{},\"system\":{},\"width\":{},\"height\":{},"
         "\"display_period_ms\":{:.3f},\"frames\":{},\"skipped\":{},\"hidden\":{},\"late\":{},"
         "\"wait_ms_per_frame\":{:.3f},\"render_ms_per_frame\":[{:.3f},{:.3f}],"
+        "\"gpu_ms_per_frame\":[{:.3f},{:.3f}],\"repose_ms_per_frame\":[{:.3f},{:.3f}],"
         "\"present_ms_per_frame\":{:.3f},\"frame_ms_per_frame\":{:.3f},\"srgb_view\":{}}}",
         text(now.state), text(now.runtime), text(now.system), now.width, now.height,
         double(now.display_period_ns) / 1e6, frames, now.skipped - from.skipped,
         now.hidden - from.hidden, now.late - from.late, per(now.wait_ms, from.wait_ms, ended),
         per(now.render_ms[0], from.render_ms[0], frames),
         per(now.render_ms[1], from.render_ms[1], frames),
+        per(now.gpu_ms[0], from.gpu_ms[0], frames), per(now.gpu_ms[1], from.gpu_ms[1], frames),
+        per(now.repose_ms[0], from.repose_ms[0], frames),
+        per(now.repose_ms[1], from.repose_ms[1], frames),
         per(now.present_ms, from.present_ms, ended), per(now.frame_ms, from.frame_ms, ended),
         now.srgb_view ? "true" : "false");
 }
