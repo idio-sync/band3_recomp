@@ -181,7 +181,8 @@ band3 stands on the work of these projects:
   [inih](https://github.com/benhoyt/inih) (INI parsing),
   [miniupnpc](https://github.com/miniupnp/miniupnp) (UPnP port mapping),
   [stb_image_write](https://github.com/nothings/stb) (album art),
-  [libvorbis](https://xiph.org/vorbis/) (the songs' inverse MDCT, as the game's copy computes it),
+  [libvorbis](https://xiph.org/vorbis/) and [libogg](https://xiph.org/ogg/) (the songs' inverse
+  MDCT and codebook decoding, as the game's copies compute them),
   [QR Code generator](https://github.com/nayuki/QR-Code-generator) (the web page's QR code),
   [doctest](https://github.com/doctest/doctest) (unit tests),
   [Tracy](https://github.com/wolfpld/tracy) (profiling), and SDL3 through the ReXGlue SDK.

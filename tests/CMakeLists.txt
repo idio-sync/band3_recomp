@@ -107,6 +107,7 @@ add_executable(band3_tests
     xapo_params_test.cpp
     audio_idle_test.cpp
     vorbis_mdct_test.cpp
+    vorbis_codebook_test.cpp
     launcher_start_test.cpp
     launcher_ui_test.cpp
     launcher_settings_test.cpp
@@ -140,6 +141,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
     ${BAND3_ROOT}/src/Audio/mic_fx.cpp
     ${BAND3_ROOT}/src/Audio/vorbis_mdct.cpp
+    ${BAND3_ROOT}/src/Audio/vorbis_codebook.cpp
     ${BAND3_ROOT}/src/Content/ark_archive.cpp
     ${BAND3_ROOT}/src/Content/package_scan.cpp
     ${BAND3_ROOT}/src/Content/stfs_reader.cpp

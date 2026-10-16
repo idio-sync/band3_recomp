@@ -34,6 +34,8 @@ void SendTest(Command command, const std::optional<std::string>& key);
 // plays a scene (ColourCheck, Chase) on a device or all of them, in place of
 // one already playing
 void PlayScene(std::span<const Step> steps, const std::optional<std::string>& key);
+// stops the scene playing, if one is, where it is
+void StopPlaying();
 // the last test command in words, and where it went; empty before one
 std::string LastSent();
 

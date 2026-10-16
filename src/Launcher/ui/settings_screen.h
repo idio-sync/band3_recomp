@@ -207,6 +207,8 @@ private:
     std::optional<std::string> lights_target_;
     int lights_colour_ = 0;
     int lights_led_ = 0;
+    // how long the colour check holds each colour: an index into kHolds
+    int lights_hold_ = 0;
     int lights_pattern_ = 0;
     int lights_fog_ = 0;
     int lights_strobe_ = 0;

@@ -91,6 +91,13 @@ bool Slider(const Row& row) {
 // the Lights' test rows' choices
 constexpr const char* kFogNames[] = {"Off", "On"};
 constexpr const char* kStrobeNames[] = {"Off", "Slow", "Medium", "Fast", "Fastest"};
+// the colour check's hold per colour, in ms: the usual 0.6 s, up to long
+// enough to place the kits
+constexpr std::pair<const char*, int> kHolds[] = {
+    {"0.6 s", lights::kColourCheckHoldMs}, {"1 s", 1000}, {"2 s", 2000},     {"5 s", 5000},
+    {"10 s", 10000},                       {"30 s", 30000}, {"1 min", 60000}, {"2 min", 120000},
+    {"5 min", 300000},                     {"10 min", 600000},
+};
 constexpr std::pair<const char*, uint8_t> kColours[] = {
     {"Red", lights::kRed}, {"Green", lights::kGreen}, {"Blue", lights::kBlue}, {"Yellow", lights::kYellow}};
 constexpr std::pair<const char*, uint8_t> kPatterns[] = {
@@ -210,6 +217,7 @@ std::string SettingsScreen::RowValue(const Row& row) const {
         case Control::kFog: return kFogNames[lights_fog_];
         case Control::kStrobe: return kStrobeNames[lights_strobe_];
         case Control::kLightsColour: return kColours[lights_colour_].first;
+        case Control::kLightsHold: return kHolds[lights_hold_].first;
         case Control::kLeds: return std::to_string(lights_led_ + 1);
         case Control::kPattern: return kPatterns[lights_pattern_].first;
         case Control::kLightsOff: return "Send";
@@ -505,7 +513,11 @@ void SettingsScreen::RunControl(const Row& row, int delta) {
         break;
     }
     case Control::kLightsCheck:
-        if (delta == 0) PlayScene(ColourCheck(), lights_target_);
+        if (delta == 0) PlayScene(ColourCheck(kHolds[lights_hold_].second), lights_target_);
+        break;
+    case Control::kLightsHold:
+        lights_hold_ = delta == 0 ? Wrap(lights_hold_, 1, int(std::size(kHolds)))
+                                  : std::clamp(lights_hold_ + delta, 0, int(std::size(kHolds)) - 1);
         break;
     case Control::kFog:
         lights_fog_ = delta == 0 ? 1 - lights_fog_ : std::clamp(lights_fog_ + delta, 0, 1);
@@ -530,7 +542,11 @@ void SettingsScreen::RunControl(const Row& row, int delta) {
         if (delta == 0) PlayScene(Chase(), lights_target_);
         break;
     case Control::kLightsOff:
-        if (delta == 0) SendTest(kAllOffCommand, lights_target_);
+        if (delta == 0) {
+            // a colour check still playing stops too
+            lights::StopPlaying();
+            SendTest(kAllOffCommand, lights_target_);
+        }
         break;
     }
 }
@@ -1022,7 +1038,7 @@ void SettingsScreen::DrawRows(ImDrawList* dl, ImGuiIO& io) {
         look.value_caps = toggle || action;
         look.action = action;
         const bool steps = r.kind == RowKind::kControl
-                               ? (r.control == Control::kLightsDevice || r.control == Control::kFog ||
+                               ? (r.control == Control::kLightsDevice || r.control == Control::kLightsHold || r.control == Control::kFog ||
                                   r.control == Control::kStrobe || r.control == Control::kLightsColour ||
                                   r.control == Control::kLeds || r.control == Control::kPattern)
                                : (!Choices(model_, r, devices_.Lists()).empty() || Slider(r) ||
@@ -1233,6 +1249,10 @@ void SettingsScreen::DrawRowDetail(ImDrawList* dl, const Row& row, float x, floa
             break;
         case Control::kLightsDevice: about = "Which Stage Kit the rows below test. All kits tests every one."; break;
         case Control::kLightsCheck: about = "Lights each colour in turn, then turns them off."; break;
+        case Control::kLightsHold:
+            about = "How long Colour check holds each colour: long enough to place the kits, if you like. All off "
+                    "stops it early.";
+            break;
         case Control::kFog: about = "Runs the fog machine, or stops it."; break;
         case Control::kStrobe: about = "The strobe, at a speed, now."; break;
         case Control::kLightsColour: about = "The colour the LED and Pattern rows light."; break;

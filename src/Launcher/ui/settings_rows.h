@@ -43,6 +43,8 @@ enum class Control {
     // the Lights' test rows: which kit, then what to send it
     kLightsDevice,
     kLightsCheck,
+    // how long the colour check holds each colour
+    kLightsHold,
     kFog,
     kStrobe,
     kLightsColour,
