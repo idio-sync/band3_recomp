@@ -21,7 +21,8 @@
 VK_SAMPLER VK_BINDING(0, 2) Texture2DArray<float4> source_tex : register(t0, space2);
 VK_SAMPLER VK_BINDING(0, 2) SamplerState source_sampler : register(s0, space2);
 
-// level.x: the level read
+// level.x: the level read; y: the layer, read and drawn (a target's version's,
+// gpu_view.h's PlanHoist)
 VK_BINDING(0, 3) cbuffer MipUniforms : register(b0, space3) {
     uint4 level;
 };
@@ -41,7 +42,7 @@ MipIn VSMip(uint id : SV_VertexID) {
     return o;
 }
 
-// SDL's BlitFrom2DArray, uv offset 0, scale 1, layer 0
+// SDL's BlitFrom2DArray, uv offset 0, scale 1, layer level.y
 float4 PSMip(MipIn i) : SV_Target0 {
-    return source_tex.SampleLevel(source_sampler, float3(i.uv, 0.0), float(level.x));
+    return source_tex.SampleLevel(source_sampler, float3(i.uv, float(level.y)), float(level.x));
 }

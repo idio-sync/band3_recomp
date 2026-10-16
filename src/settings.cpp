@@ -597,6 +597,11 @@ REXCVAR_DEFINE_BOOL(native_camera_shake, true, "Band3/Advanced/Game code",
     "Use the frame-rate independent camera shake replacement")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(vr_show_all, false, "Band3/Advanced/Game code",
+    "Experimental, for VR: draw the whole world in every camera shot, ignoring what each "
+    "shot hides and what lies outside the game's camera")
+    .debug_only();
+
 REXCVAR_DEFINE_BOOL(audio_xapo_nonblocking, true, "Band3/Advanced/Game code",
     "Answer the game's checks of whether each sound effect is still playing (dozens a frame, "
     "through its voice's effect parameters) with the newest result the audio thread set, "
@@ -875,6 +880,51 @@ REXCVAR_DEFINE_BOOL(native_view_shader_variants, true, "Band3/Advanced/Native re
     "Draw the common venue materials with smaller versions of the mesh shader, each with the "
     "features those materials don't use left out: the same picture for less GPU time. Off "
     "draws every material with the one shader that does them all");
+
+REXCVAR_DEFINE_BOOL(native_view_instancing, true, "Band3/Advanced/Native renderer",
+    "Draw runs of the same mesh that differ only in where each one stands (the crowd's "
+    "cards) as one instanced draw: the same picture for much less CPU time. Off draws each "
+    "by itself, to compare");
+
+REXCVAR_DEFINE_BOOL(native_view_hoist_passes, true, "Band3/Advanced/Native renderer",
+    "Draw the pictures RB3 draws into one texture again and again in a frame (the crowd's, "
+    "one per kind of character) each into a layer of its own, ahead of the world, so the "
+    "world draws in one go: the same picture for less CPU time. Off draws them where the "
+    "game does, to compare");
+
+REXCVAR_DEFINE_BOOL(vr, false, "Band3/Advanced/Native renderer",
+    "Experimental: show the native renderer's picture in a VR headset through OpenXR "
+    "(Windows), each eye drawn from where it is in the venue, without the track and the HUD. "
+    "Needs the native renderer and an OpenXR runtime, such as SteamVR, which starting it "
+    "opens; the window shows the left eye")
+    .lifecycle(Lifecycle::kRequiresRestart)
+    .debug_only();
+
+REXCVAR_DEFINE_STRING(vr_anchor, "0,-1250,520,0", "Band3/Advanced/Native renderer",
+    "With vr: where the headset's starting point is in the venue, as x,y,z in inches (x right, "
+    "y towards the stage, z up) and a turn in degrees, counterclockwise seen from above (0 "
+    "faces the stage); the default is above and behind the crowd in front of the stage. "
+    "Empty follows the game's camera, facing where it looks")
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_world_scale, 1.0, "Band3/Advanced/Native renderer",
+    "With vr: how much smaller the venue looks than life size, so a head's movement goes "
+    "this many times as far in it. 1 = life size")
+    .range(0.1, 100.0)
+    .debug_only();
+
+REXCVAR_DEFINE_BOOL(vr_fake_pose, false, "Band3/Advanced/Native renderer",
+    "With vr: turn the head slowly from side to side instead of where the headset says it "
+    "is, to test without one (SteamVR's null driver doesn't move)")
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(native_view_render_scale, 1.0, "Band3/Advanced/Native renderer",
+    "For measuring: the native renderer draws its picture at this times the window's size "
+    "(after native_max_height), its screen-sized passes with it, and the window shows it "
+    "scaled to fit, to see what the GPU does at a size the window can't reach (VR's eyes). "
+    "1 = the window's size")
+    .range(0.25, 4.0)
+    .debug_only();
 
 REXCVAR_DEFINE_STRING(native_view_rt_fallback, "guest", "Band3/Advanced/Native renderer",
     "What the native view's capture keeps of a texture RB3 draws at runtime (outfits, the "

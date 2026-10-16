@@ -73,10 +73,13 @@
 #include "src/Render/gpu_view.h"
 #include "src/Render/native_view.h"
 #include "src/Render/png_writer.h"
+#include "src/Render/post_model.h"
 #include "src/Render/scene_capture.h"
 #include "src/Render/sync_gpu/native_only.h"
 #include "src/Render/sync_gpu/sync_graphics_system.h"
 #include "src/Render/sync_gpu/sync_monitor.h"
+#include "src/Render/vr_pose.h"
+#include "src/Render/xr_present.h"
 #include "src/settings.h"
 #include "game_state.h"
 #include "test_commands.h"
@@ -285,6 +288,8 @@ public:
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
         options.shader_variants = REXCVAR_GET(native_view_shader_variants);
+        options.instancing = REXCVAR_GET(native_view_instancing);
+        options.hoist_passes = REXCVAR_GET(native_view_hoist_passes);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
@@ -391,6 +396,8 @@ public:
         options.filtering = REXCVAR_GET(native_view_texture_filtering);
         options.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
         options.shader_variants = REXCVAR_GET(native_view_shader_variants);
+        options.instancing = REXCVAR_GET(native_view_instancing);
+        options.hoist_passes = REXCVAR_GET(native_view_hoist_passes);
         options.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
         options.bc_textures = REXCVAR_GET(native_bc_textures);
         options.r8_textures = REXCVAR_GET(native_r8_textures);
@@ -416,6 +423,33 @@ public:
             return;
         }
         out.gpu_path = path.string();
+        // with `vr` running, the frame from each eye of the last VR frame, as
+        // the headset's are drawn (native_view.cpp's VrFrame), into
+        // <name>.gpu.L.png and <name>.gpu.R.png
+        render::vr::Eye eyes[2];
+        uint32_t eye_w = 0, eye_h = 0;
+        if (render::xr::Session::Get().LastEyes(eyes, eye_w, eye_h)) {
+            render::RasterOptions eo = options;
+            eo.width = eye_w;
+            eo.height = eye_h;
+            render::ScaleForPicture(eo);
+            eo.msaa = 1;
+            eo.velocity = false;
+            eo.post_only = render::post::kPostXfm | render::post::kPostBloom |
+                           render::post::kPostGlare;
+            eo.skip_overlay = true;
+            for (int e = 0; e < 2; e++) {
+                render::FrameCapture eye_frame;
+                render::vr::RePose(frame, eyes[e], eye_frame);
+                std::vector<uint32_t> eye_rgba;
+                render::GpuStats eye_stats;
+                if (render::GpuRenderer::Get().RenderFrame(eye_frame, eo, eye_rgba, eye_stats))
+                    render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
+                                      (file + (e ? ".gpu.R.png" : ".gpu.L.png")))
+                                         .string(),
+                                     eye_rgba, eye_w, eye_h);
+            }
+        }
         out.gpu_ms = stats.ms;
         out.gpu_wait_ms = stats.wait_ms;
         out.gpu_passes = stats.passes;
@@ -453,13 +487,38 @@ public:
         // and, sampling the textures as it did before the game's samplers,
         // nearest at level 0, <name>.gpu.nearest.png: the same frame without
         // them, to see what they change
+        options.view = render::RasterView::kFinal;
         if (options.filtering) {
-            options.view = render::RasterView::kFinal;
             options.filtering = false;
             render::GpuStats nearest_stats;
             if (render::GpuRenderer::Get().RenderFrame(frame, options, rgba, nearest_stats))
                 render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
                                   (file + ".gpu.nearest.png"))
+                                     .string(),
+                                 rgba, options.width, options.height);
+            options.filtering = true;
+        }
+        // and with native_view_instancing on, each draw by itself,
+        // <name>.gpu.uninstanced.png: the same frame, which should be the
+        // same picture
+        if (options.instancing) {
+            options.instancing = false;
+            render::GpuStats uninstanced_stats;
+            if (render::GpuRenderer::Get().RenderFrame(frame, options, rgba, uninstanced_stats))
+                render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
+                                  (file + ".gpu.uninstanced.png"))
+                                     .string(),
+                                 rgba, options.width, options.height);
+            options.instancing = true;
+        }
+        // and with native_view_hoist_passes on, the passes where the game
+        // draws them, <name>.gpu.unhoisted.png: the same picture expected
+        if (options.hoist_passes) {
+            options.hoist_passes = false;
+            render::GpuStats unhoisted_stats;
+            if (render::GpuRenderer::Get().RenderFrame(frame, options, rgba, unhoisted_stats))
+                render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
+                                  (file + ".gpu.unhoisted.png"))
                                      .string(),
                                  rgba, options.width, options.height);
         }
@@ -530,6 +589,7 @@ public:
             if (auto* sync = render::sync_gpu::Active())
                 out.emulated_gpu.sync = SyncGpu(sync->Stats(), measure_sync_);
         }
+        out.xr_json = render::xr::Session::Get().MeasuredJson();
         return out;
     }
 
@@ -964,6 +1024,7 @@ private:
         const double cp_ms = CpThreadMs();
         // renderer native: the sync-only GPU's numbers too
         auto* sync = render::sync_gpu::Active();
+        render::xr::Session::Get().StartMeasuring();
         std::lock_guard lock(measure_mutex_);
         measure_start_ = Clock::now();
         measure_frame_ = frame;
@@ -1123,12 +1184,17 @@ private:
                       {"composed", double(k.composed)},
                       {"shows_kept", double(k.shows_kept)},
                       {"draws", double(g.draws)},
+                      {"instanced_draws", double(g.instanced_draws)},
+                      {"instances_merged", double(g.instances_merged)},
                       {"world_draws", double(g.world_draws)},
                       {"ahead_gated", double(g.ahead_gated)},
                       {"ahead_used", double(g.ahead_used)},
                       {"ahead_fallback_passes", double(g.ahead_fallback_passes)},
                       {"passes", double(g.passes)},
                       {"passes_kept", double(g.passes_kept)},
+                      {"passes_hoisted", double(g.passes_hoisted)},
+                      {"rt_layers", double(g.rt_layers)},
+                      {"rt_layers_mb", g.rt_layers_mb},
                       {"pre_passes", double(g.pre_passes)},
                       {"pre_submits", double(g.pre_submits)},
                       {"pre_targets_made", double(g.pre_targets_made)},

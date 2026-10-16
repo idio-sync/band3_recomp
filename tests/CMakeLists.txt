@@ -29,6 +29,9 @@ add_executable(band3_tests
     instruments_test.cpp
     gpu_residency_test.cpp
     gpu_submit_test.cpp
+    gpu_instancing_test.cpp
+    gpu_hoist_test.cpp
+    vr_pose_test.cpp
     target_premake_test.cpp
     camera_cut_test.cpp
     guest_memory_file_test.cpp
@@ -235,6 +238,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Render/shade_model.cpp
     ${BAND3_ROOT}/src/Render/soft_raster.cpp
     ${BAND3_ROOT}/src/Render/spot_model.cpp
+    ${BAND3_ROOT}/src/Render/vr_pose.cpp
     ${BAND3_ROOT}/src/Render/sync_gpu/sync_cp.cpp
     ${BAND3_ROOT}/src/Render/sync_gpu/sync_monitor.cpp
     ${BAND3_ROOT}/src/Test/game_state.cpp

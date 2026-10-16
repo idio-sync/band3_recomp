@@ -42,6 +42,10 @@ VK_BINDING(0, 1) cbuffer VertexUniforms : register(b0, space1) {
     float4 depth_map;
     // where 16:9 ends in clip xy (RasterOptions::overlay_edge); 1 1 off
     float4 overlay_edge;
+    // an instanced draw (gpu_view.h's InstanceRuns): x on, y its first world's
+    // index in bones, z SV_InstanceID's low bits that aren't the world's (0;
+    // room for a stereo eye). Instance i's world replaces `world`.
+    uint4 instancing;
     ShadeParams vs_shade;
 };
 
@@ -121,6 +125,7 @@ struct VertexIn {
     VK_LOCATION(4) uint4 bone : TEXCOORD4;
     VK_LOCATION(5) float4 weight : TEXCOORD5;
     VK_LOCATION(6) float4 tan : TEXCOORD6;  // w the handedness
+    uint instance : SV_InstanceID;
 };
 
 struct PixelIn {
@@ -138,10 +143,19 @@ struct PixelIn {
     float2 clip : TEXCOORD10;  // before clip_offset, for RefractUv
 };
 
-float4x4 Bone(uint i) {
-    const uint at = (bone_base + i) * 64;
+// the bone buffer's matrix i
+float4x4 BoneMatrix(uint i) {
+    const uint at = i * 64;
     return float4x4(asfloat(bones.Load4(at)), asfloat(bones.Load4(at + 16)),
                     asfloat(bones.Load4(at + 32)), asfloat(bones.Load4(at + 48)));
+}
+
+float4x4 Bone(uint i) { return BoneMatrix(bone_base + i); }
+
+// the draw's world, or with instancing its instance's
+float4x4 World(uint instance) {
+    if (instancing.x == 0u) return world;
+    return BoneMatrix(instancing.y + (instance >> instancing.z));
 }
 
 // native_fill_window: a vertex past 16:9 (edge, clip xy) moves out to the
@@ -165,6 +179,7 @@ PixelIn VSMain(VertexIn v) {
         tangent = f.u;
     }
     float3 wp = 0, wn = 0, wd = 0, wu = 0;
+    const float4x4 world_m = World(v.instance);
     if (skinned != 0) {
         float total = 0;
         [unroll] for (int k = 0; k < 4; k++) {
@@ -185,15 +200,15 @@ PixelIn VSMain(VertexIn v) {
             wu = mul(float4(tangent, 0), b).xyz;
         }
     } else if ((vs_shade.flags.x & kShadeBillboard) != 0u) {
-        wp = Billboard(vs_shade, v.pos) + world[3].xyz;
+        wp = Billboard(vs_shade, v.pos) + world_m[3].xyz;
         wn = Billboard(vs_shade, nrm);
         wd = Billboard(vs_shade, dir);
         wu = Billboard(vs_shade, tangent);
     } else {
-        wp = mul(float4(v.pos, 1), world).xyz;
-        wn = mul(float4(nrm, 0), world).xyz;
-        wd = mul(float4(dir, 0), world).xyz;
-        wu = mul(float4(tangent, 0), world).xyz;
+        wp = mul(float4(v.pos, 1), world_m).xyz;
+        wn = mul(float4(nrm, 0), world_m).xyz;
+        wd = mul(float4(dir, 0), world_m).xyz;
+        wu = mul(float4(tangent, 0), world_m).xyz;
     }
     float4 clip = mul(float4(wp, 1), view_proj);
     clip.xy = StretchEdges(clip, overlay_edge.xy);

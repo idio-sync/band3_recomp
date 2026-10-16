@@ -328,6 +328,94 @@ What each does, how it was measured and why it defaults as it does. The
   venues captured off, on, off, on had no venue pixel different among those that held still;
   at 1080p repeated frames went from 54 to 23 per 28 s and post frames' GPU wait p50 from
   10.9 to 9.2 ms.
+- `native_view_instancing` (on): a run of consecutive draws that differ only in world (a
+  multimesh's instances, which `CaptureMultiMesh` unrolls into a draw each: the crowd's
+  cards) is one instanced draw. The plan walk folds each into the run's head
+  (`gpu_view.h`'s `SameInstanceState` and `InstanceRuns`: the very next index, the same
+  geometry, texture, shade state, target, camera, blend, depth, cull, draw mode, view and
+  colour, not skinned, not a DrawRect quad, cone, soft particle or blur, never past
+  `post_boundary` or across a pass run) and puts the worlds in the bone buffer;
+  `mesh.hlsl`'s `World()` reads instance `SV_InstanceID >> instancing.z` from
+  `instancing.y`, where `z`, 0 now, leaves room for a stereo eye in the low bit. The record
+  skips the folded draws; `native_view stats` counts `instanced_draws` and
+  `instances_merged`. The same captured frames drawn with it on and off (`capture`'s
+  `<name>.gpu.uninstanced.png`) had no pixel different, with `vr_show_all` and without. In
+  20th Century Boy at arena_04 on the R9700 (two runs, stretches of 600 frames, means):
+  with `vr_show_all` draws went from 5,290-5,440 to 750-780 a frame, record 6.5-6.9 to
+  4.5-4.6 ms, submit 1.6-1.8 to 1.4, plan 0.84-0.86 to 0.55-0.56, frames 8.0-8.3 to 6.1-6.4
+  ms, and the GPU's world 1.6-1.7 to 1.0-1.2 ms; without it 570-890 draws to 370-420 and
+  frames 1.9-2.1 to 1.7-1.8 ms. What `vr_show_all` still costs is mostly its ~95 texture
+  passes a frame (and 86 command buffers, against 8 without it), not its draws.
+- `native_view_hoist_passes` (on): RB3's crowd (`WorldCrowd::DrawShowing`) draws each
+  character type's picture into one 256x512 target, draws that type's cards, and reuses the
+  target for the next: a version a type, 5 to 8 a frame in a song and 84 with `vr_show_all`,
+  each splitting the world's pass and (`native_view_mip_submits`) a submission of its own.
+  `gpu_view.h`'s `PlanHoist` gives a target several of a frame's passes draw a layer per
+  version (the newest in layer 0, so whatever reads it after this frame, or as a normal or
+  projected map, reads layer 0 as before; the rest in 1, 2..., the array made in steps of 8
+  layers and never shrunk while the target lives), and the cards read their version's
+  layer. It's only for targets every pass of which clears colour and depth, starts before
+  `post_boundary` and isn't carried, read only as a diffuse map by world draws after the
+  version is made, and with the inline mips (`DrawMips` draws one layer's). Passes then move
+  ahead of the world's first back-buffer run, in order, where nothing between reads what they
+  change (`HoistablePass`; Plan's stand-ins and anything before the world stay first), and the
+  moved ones submit once, after the last, so the GPU draws them while the world is recorded.
+  Not for a post frame drawing over the world drawn ahead. `native_view stats` counts
+  `passes_hoisted`, `rt_layers` and `rt_layers_mb`; DRED labels give the layer a pass draws
+  into. The same captured frames with it on and off (`capture`'s
+  `<name>.gpu.unhoisted.png`) had no pixel different, two in a song (8 versions) and one
+  with `vr_show_all` (84). In 20th Century Boy at arena_04 on the R9700 (600-frame stretches,
+  full frames, 1280x720): with `vr_show_all` record went from 4.6 to 2.2 ms, submit from 1.45
+  to 0.1 (86 submissions to 3), plan from 0.57 to 0.78 (planning the move), frames from
+  6.2-6.3 to 5.0 ms mean and 7.6 to 5.6 p95, and the GPU's world from 1.0-1.2 to 0.3-0.4 ms
+  (its total 2.9-3.1 to 2.2-2.3), for 58 MB of layers (96 of them); without it record 1.0 to
+  0.84, frames 1.72 to 1.64. At 4073x2291 with `vr_show_all` (the display went to 60 Hz, so
+  even/odd frames) post frames went from 8.3 to 7.0 ms and world frames from 6.4 to 5.3.
+- `vr` (debug, off, restart; Windows): the native renderer's picture in a headset through
+  OpenXR (`xr_present.h`). `openxr_loader.dll` is loaded at run time (the usual search path,
+  else SteamVR's `bin\win64`), never linked, and only with `vr` on; the session is bound
+  (`XR_KHR_D3D12_enable`) to the SDK's device and direct queue, two swapchains of the
+  runtime's recommended size, drawn by `present.hlsl` on band3's own command list on that
+  queue (typeless images get a UNORM view, bytes verbatim; typed sRGB ones
+  `PSPresentLinear`). Once the session runs, `xrWaitFrame` paces the native renderer's worker
+  (`VrFrame`): each frame re-poses the newest capture for each eye (`vr_pose.h`'s `RePose`:
+  the world camera's draws get the eye's view and `EyeProjection` of the captured
+  projection, their shades cloned with the eye's position and billboard axes), draws both
+  into the eye output slots (`GpuRenderer::EyeSlot`; the left into a window slot when one is
+  free, published as the window's picture) without the overlay (`skip_overlay`), the world
+  drawn ahead, kept buffers, motion blur, DOF or the spotlights' haze, then presents them and
+  ends the frame with a projection layer. `vr_anchor` places the head's LOCAL space in the
+  venue (default above and behind arena_04's front crowd; empty follows the game camera),
+  `vr_world_scale` scales it, `vr_fake_pose` turns the head slowly for a headset that doesn't
+  move. `native_view stats` has an `xr` block, and `capture` writes `<name>.gpu.L.png` and
+  `.gpu.R.png` from the last VR frame's eyes. Particles stay flat to the game camera and the
+  crowd's impostor pictures are the game camera's view. On SteamVR 2.17.10's null driver
+  (1852x2056 an eye, 90 Hz) the session reaches SYNCHRONIZED but never VISIBLE: the null
+  headset is idle (activity level 0), so `shouldRender` stays off and `xrWaitFrame` gives ~33
+  frames a second; the eyes are drawn and submitted anyway. Its first session after SteamVR
+  starts is ended for SteamVR's room setup, which terminates band3. Per frame, 20th Century
+  Boy at arena_04 on the R9700 (600-frame stretches): without `vr_show_all` each eye 0.56-0.88
+  ms of CPU to submission, 0.62-0.81 ms of GPU, RePose's copy 0.11-0.18 ms, xrWaitFrame's
+  return to xrEndFrame 4.1-4.4 ms; with it 2.7-3.0 ms of CPU, 2.9-3.5 of GPU and 0.6-0.8 for
+  RePose an eye, 12.3-12.8 ms a frame, over 90 Hz's 11.1 (late 82-87% of frames): each eye
+  draws the crowd's ~85 impostor passes again. The eyes' pictures differ by a 2-pixel shift
+  at the stage, as a 63 mm IPD at ~20 m gives.
+- `native_view_render_scale` (debug, 1): the presented picture is drawn at that times the
+  window's size (after `native_max_height`; `native_view.cpp`'s `ScaleRender`), with the
+  screen-sized passes following (`ScaleForPicture`), and `present.hlsl` scales it to the
+  window (bilinear, so a smaller picture is aliased). It's read each frame, so `set` changes
+  it at once, the targets and outputs remade as at a resize; `native_view stats` and
+  `screenshot native` give the drawn size. It's for measuring the GPU at sizes a window
+  can't reach: 3.182 at 1280x720 is 4073x2291, 9.33 MP, two 2160x2160 eyes; 2.25 is
+  2880x1620, one eye. In 20th Century Boy at arena_04 on the R9700 (600-frame stretches,
+  means), the GPU's frame went from 0.66-0.71 ms at 1280x720 to 1.34 at one eye's pixels and
+  2.36-2.51 at two (world 0.22-0.26 to 0.73-0.80, post 0.09 to 0.46, overlay 0.07-0.10 to
+  0.60); with `vr_show_all`, from 2.72-2.85 to 4.11 and 4.51-5.21 (world 0.92-1.03 to
+  1.48-2.12). The CPU's record, submit and plan don't change with the size, so frames grow
+  only by the GPU wait: 1.7-1.9 to 3.5 ms without `vr_show_all`, 6.0-6.3 to 7.9-8.3 with
+  it. `native_view_mip_submits` off at 9.33 MP with `vr_show_all` cut submits from 86 to 2,
+  record from 4.5 to 2.4 ms and submit from 1.4 to 0.07, but the GPU started later: the
+  wait went from 3.0 to 5.7 ms and the frame from 8.3 to 8.9.
 
 ## native_view stats: by_kind and residency
 

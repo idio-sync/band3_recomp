@@ -945,6 +945,7 @@ std::string NativeViewJson(const NativeViewStats& s) {
     out += buf;
     out += ",\"capture\":" + CaptureCostJson(s.capture);
     out += ",\"emulated_gpu\":" + EmulatedGpuJson(s.emulated_gpu);
+    if (!s.xr_json.empty()) out += ",\"xr\":" + s.xr_json;
     out += ",\"by_kind\":" + ByKindJson(s.by_kind);  // {} while it's off
     out += '}';
     return out;

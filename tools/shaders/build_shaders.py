@@ -150,6 +150,8 @@ SHADERS = [
     ("present.hlsl", "present_shaders.gen.h", [
         ("kPresentVertex", "VSPresent", "vs_5_1", None, None),
         ("kPresentPixel", "PSPresent", "ps_5_1", None, None),
+        # VR's eyes into a typed sRGB swapchain (xr_present.cpp)
+        ("kPresentPixelLinear", "PSPresentLinear", "ps_5_1", None, None),
     ]),
 ]
 

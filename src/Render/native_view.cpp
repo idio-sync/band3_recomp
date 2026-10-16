@@ -15,6 +15,8 @@
 #include "src/Render/present_model.h"
 #include "src/Render/renderer_switch.h"
 #include "src/Render/sync_gpu/native_only.h"
+#include "src/Render/vr_pose.h"
+#include "src/Render/xr_present.h"
 #include "src/crash_trace.h"
 #include "src/settings.h"
 #include "src/stall_watch.h"
@@ -168,10 +170,15 @@ void AddPresentTrace(const PresentTraceEntry& e);
 
 void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.draws += g.draws;
+    sum.instanced_draws += g.instanced_draws;
+    sum.instances_merged += g.instances_merged;
     sum.skipped += g.skipped;
     sum.uploads += g.uploads;
     sum.passes += g.passes;
     sum.passes_kept += g.passes_kept;
+    sum.passes_hoisted += g.passes_hoisted;
+    sum.rt_layers += g.rt_layers;
+    sum.rt_layers_mb += g.rt_layers_mb;
     sum.rt_missing += g.rt_missing;
     sum.ms += g.ms;
     sum.wait_ms += g.wait_ms;
@@ -486,6 +493,23 @@ void CapHeight(RasterOptions& o) {
     o.height = uint32_t(max_h);
 }
 
+// native_view_render_scale (debug): the picture drawn at that times its size,
+// after CapHeight, which the presenter scales to the window (present.hlsl,
+// bilinear, so a smaller picture is aliased), to measure the GPU at sizes the
+// window can't reach. Screen-sized passes follow (ScaleForPicture). Read each
+// frame: a change remakes the targets and outputs as a resize does.
+void ScaleRender(RasterOptions& o) {
+    const double s = REXCVAR_GET(native_view_render_scale);
+    if (s == 1.0) return;
+    // Direct3D 12's largest 2D texture
+    constexpr double kMaxSide = 16384;
+    auto scaled = [&](uint32_t v) {
+        return uint32_t(std::clamp(std::lround(double(v) * s), 1L, long(kMaxSide)));
+    };
+    o.width = scaled(o.width);
+    o.height = scaled(o.height);
+}
+
 class Renderer {
  public:
     static Renderer& Get() {
@@ -588,6 +612,7 @@ class Renderer {
         o.width = present_w_;
         o.height = present_h_;
         CapHeight(o);
+        ScaleRender(o);
         width = o.width;
         height = o.height;
         return true;
@@ -724,6 +749,15 @@ class Renderer {
         s.gpu = live_drew_gpu_.value_or(gpu_);
         s.width = present_ ? present_w_ : options_.width;
         s.height = present_ ? present_h_ : options_.height;
+        // presenting, the size native_view_render_scale draws it at
+        if (present_) {
+            RasterOptions drawn;
+            drawn.width = s.width;
+            drawn.height = s.height;
+            ScaleRender(drawn);
+            s.width = drawn.width;
+            s.height = drawn.height;
+        }
         s.post = options_.post;
         // capturing, and the frame number, stop with the last user
         if (users_ > 0 && frame > live_base_) s.captured = frame - live_base_;
@@ -893,6 +927,7 @@ class Renderer {
                     o.width = present_w_;
                     o.height = present_h_;
                     CapHeight(o);
+                    ScaleRender(o);
                     band3::aspect::CurrentOverlayEdge(o.overlay_edge);
                     // the in-song HUD under the track runs past 16:9's bottom
                     // by design; show it whole rather than stretched
@@ -907,6 +942,8 @@ class Renderer {
                 o.filtering = REXCVAR_GET(native_view_texture_filtering);
                 o.hardware_sampling = REXCVAR_GET(native_view_hardware_sampling);
                 o.shader_variants = REXCVAR_GET(native_view_shader_variants);
+                o.instancing = REXCVAR_GET(native_view_instancing);
+                o.hoist_passes = REXCVAR_GET(native_view_hoist_passes);
                 o.msaa = uint32_t(REXCVAR_GET(native_view_msaa));
                 // drawn frame after frame, so these have the frames before
                 o.trails = true;
@@ -958,6 +995,17 @@ class Renderer {
             // native_world_ahead, or by itself on an integrated GPU or a Steam
             // Deck (native_world_ahead_auto); not with either pipeline, which
             // wait differently. Logged once the GPU draws, and as it changes.
+            // VR (xr_present.h): once the session runs, the runtime paces the
+            // worker (xrWaitFrame) and each of its frames draws both eyes;
+            // only on the zero-copy path, whose outputs it samples in place
+            if (gpu && zero_copy && xr::Session::Get().Update(REXCVAR_GET(vr))) {
+                if (flight) {
+                    if (WaitFlight(*flight, nullptr)) PublishFlight(*flight, rgba);
+                    flight.reset();
+                }
+                VrFrame(o, generation, presenting, decode_pending_ms, rgba);
+                continue;
+            }
             if (gpu && !gpu_kind) gpu_kind = GpuRenderer::Get().Kind();
             const bool ahead_setting = REXCVAR_GET(native_world_ahead);
             const bool ahead_auto = REXCVAR_GET(native_world_ahead_auto);
@@ -1225,6 +1273,158 @@ class Renderer {
             else PublishDrawn(d, d.want_rgba ? &rgba : nullptr);
         }
     }
+
+    // One of the runtime's frames (the `vr` setting, xr_present.h): its
+    // views, then both eyes into the headset
+    //
+    // Each eye is the newest capture re-posed (vr_pose.h's RePose) from where
+    // that eye is: LOCAL space placed in the venue by vr_anchor (empty: the
+    // game camera's point, facing where it looks), drawn at the swapchain's
+    // size without the overlay, the world drawn ahead, kept buffers, motion
+    // blur, DOF or the spotlights' haze. The left eye goes into one of the
+    // window's slots when one is free and is published as the window's
+    // picture; else, and the right always, into the eye slots.
+    void VrFrame(const RasterOptions& o, uint64_t generation, bool presenting,
+                 double& decode_pending_ms, std::vector<uint32_t>& rgba) {
+        using Clock = std::chrono::steady_clock;
+        xr::Session& xs = xr::Session::Get();
+        xr::FrameViews f;
+        stall_watch::SetWorker(stall_watch::Worker::kWaiting);
+        if (!xs.WaitFrame(f)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            return;
+        }
+        const auto begin = Clock::now();
+        auto since_begin = [&] {
+            return std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
+        };
+        stall_watch::SetWorker(stall_watch::Worker::kRecording);
+        Clock::time_point presented;
+        double decode_ms = 0;
+        SetDecodeThreads(uint32_t(REXCVAR_GET(native_deferred_decode_threads)));
+        std::shared_ptr<const FrameCapture> cap = LatestCapture(presented, &decode_ms);
+        decode_pending_ms += decode_ms;
+        void* eyes[2] = {nullptr, nullptr};
+        if (!cap) {
+            // nothing captured yet: the eyes' colours
+            xs.Present(f, eyes, since_begin());
+            return;
+        }
+        vr::Anchor anchor;
+        const std::string anchor_text = REXCVAR_GET(vr_anchor);
+        if (anchor_text.empty() || !vr::ParseAnchor(anchor_text, anchor)) {
+            const WorldCamera wc = WorldCameraOf(*cap);
+            freecam::Pose game{};
+            Mat4 proj{};
+            if (wc.valid && freecam::Decompose(wc.view_proj, game, proj))
+                anchor = vr::AnchorFromCamera(game);
+        }
+        const float scale = float(REXCVAR_GET(vr_world_scale));
+        RasterOptions eo = o;
+        eo.width = xs.Width();
+        eo.height = xs.Height();
+        ScaleForPicture(eo);
+        eo.world_ahead = false;
+        eo.post_buffer = false;
+        eo.pre_buffer = false;
+        eo.trails = false;
+        eo.post_history = nullptr;
+        eo.msaa = 1;
+        eo.velocity = false;
+        eo.post_only = post::kPostXfm | post::kPostBloom | post::kPostGlare;
+        eo.skip_overlay = true;
+        eo.gpu_no_wait = true;
+        eo.output_readback = false;
+        eo.gpu_draw_profile = false;
+        eo.overlay_edge[0] = eo.overlay_edge[1] = 1.0f;
+        eo.overlay_cut[0] = eo.overlay_cut[1] = 0.0f;
+        int left_slot = -1;
+        if (presenting) {
+            std::lock_guard lock(mutex_);
+            left_slot = slots_.Acquire();
+        }
+        const int slot[2] = {left_slot >= 0 ? left_slot : GpuRenderer::EyeSlot(0),
+                             GpuRenderer::EyeSlot(1)};
+        vr::Eye eye[2];
+        std::shared_ptr<FrameCapture> eye_cap[2];
+        Drawn d[2];
+        double repose_ms[2] = {0, 0};
+        for (int e = 0; e < 2; e++) {
+            eye[e].pose = vr::EyePose(f.pose[e], anchor, scale);
+            eye[e].fov = f.fov[e];
+            const auto repose_start = Clock::now();
+            eye_cap[e] = std::make_shared<FrameCapture>();
+            vr::RePose(*cap, eye[e], *eye_cap[e]);
+            repose_ms[e] =
+                std::chrono::duration<double, std::milli>(Clock::now() - repose_start).count();
+            d[e].drew_output =
+                GpuRenderer::Get().RenderFrameToOutput(*eye_cap[e], eo, slot[e], d[e].out, d[e].gs);
+            if (e == 0 && left_slot >= 0 && d[e].drew_output) {
+                std::lock_guard lock(mutex_);
+                slots_.Submitted(left_slot);
+            }
+        }
+        xs.NoteEyes(eye);
+        // both finished on SDL's queue before the SDK's samples them
+        stall_watch::SetWorker(stall_watch::Worker::kGpuWait);
+        for (int e = 0; e < 2; e++) {
+            if (!d[e].drew_output) continue;
+            const auto from = Clock::now();
+            while (!GpuRenderer::Get().OutputDone(slot[e], &d[e].gs)) {
+                if (Clock::now() - from > kGpuHung) {
+                    REXLOG_WARN("vr: an eye wasn't finished after {} ms", kGpuHung.count());
+                    d[e].drew_output = false;
+                    break;
+                }
+                std::this_thread::sleep_for(kFencePoll);
+            }
+            if (d[e].drew_output && d[e].out.d3d12_resource) eyes[e] = d[e].out.d3d12_resource;
+            xs.AddRenderMs(e, d[e].gs.ms, d[e].gs.gpu_timed ? d[e].gs.gpu_total_ms : 0,
+                           repose_ms[e]);
+        }
+        if (left_slot >= 0) {
+            std::lock_guard lock(mutex_);
+            slots_.Finished(left_slot);
+        }
+        // a missing eye shows its colour rather than the other's picture
+        xs.Present(f, eyes, since_begin());
+        // the left eye as the window's picture, and as RGBA for a screenshot
+        // or F9's window
+        bool want_rgba;
+        {
+            std::lock_guard lock(mutex_);
+            want_rgba = image_wanted_ || dialog_open_;
+        }
+        Drawn& w = d[0];
+        if (!w.drew_output || (left_slot < 0 && !want_rgba)) {
+            if (left_slot >= 0) {
+                std::lock_guard lock(mutex_);
+                slots_.Abandon(left_slot);
+            }
+            return;
+        }
+        if (want_rgba) {
+            uint32_t rw = 0, rh = 0;
+            w.want_rgba = GpuRenderer::Get().DownloadOutput(slot[0], rgba, rw, rh);
+        }
+        w.cap = eye_cap[0];
+        w.presented = presented;
+        w.generation = generation;
+        w.presenting = presenting;
+        w.new_frame = cap->frame != vr_last_frame_;
+        vr_last_frame_ = cap->frame;
+        w.slot = left_slot;
+        w.drew_gpu = true;
+        w.width = eo.width;
+        w.height = eo.height;
+        w.camera = cuts_.Next(*cap);
+        w.gs.decode_ms = decode_pending_ms;
+        w.gs.ms += decode_pending_ms;
+        decode_pending_ms = 0;
+        PublishDrawn(w, w.want_rgba ? &rgba : nullptr);
+    }
+    // the capture the last VR frame drew, for Drawn::new_frame
+    uint64_t vr_last_frame_ = 0;
 
     // One fence check; when finished, marks the slot finished and un-holds
     // the worker.
@@ -2100,6 +2300,8 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
             // DRED on device removal, either renderer; the only place band3
             // has the SDK's device from the start
             crash_trace::WatchD3D12Device(d3d12.GetDevice(), d3d12.GetDirectQueue());
+            // the `vr` setting's OpenXR session binds to them (xr_present.h)
+            xr::SetDevice(d3d12.GetDevice(), d3d12.GetDirectQueue());
             // RasterOptions::gpu_labels
             crash_trace::SetIndexedDrawNamer([](uint32_t before, uint32_t total) {
                 return GpuRenderer::Get().DescribeIndexedDraw(before, total);

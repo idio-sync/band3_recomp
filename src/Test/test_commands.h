@@ -133,6 +133,9 @@ struct NativeViewStats {
     // the texture passes recorded while capture was off, in the same time:
     // whether that's on (native_view_record_targets), passes the game drew,
     // those recorded, their draws, and the game thread's time recording them
+    // with `vr`: the OpenXR session's numbers as a JSON object (xr_present.h's
+    // MeasuredJson), left out when empty
+    std::string xr_json;
     bool rt_on = false;
     uint64_t rt_passes = 0;
     uint64_t rt_recorded = 0;
