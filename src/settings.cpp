@@ -921,7 +921,8 @@ REXCVAR_DEFINE_BOOL(native_view_hoist_passes, true, "Band3/Advanced/Native rende
 
 REXCVAR_DEFINE_BOOL(vr, false, "Band3/Advanced/Native renderer",
     "Experimental: show the native renderer's picture in a VR headset through OpenXR "
-    "(Windows), each eye drawn from where it is in the venue, without the track and the HUD. "
+    "(Windows), each eye drawn from where it is in the venue, the track, the HUD and the menus "
+    "on a panel in front of you (vr_hud). "
     "Needs the native renderer and an OpenXR runtime, such as SteamVR, which starting it "
     "opens; the window shows the left eye")
     .lifecycle(Lifecycle::kRequiresRestart)
@@ -943,6 +944,35 @@ REXCVAR_DEFINE_DOUBLE(vr_world_scale, 1.0, "Band3/Advanced/Native renderer",
 REXCVAR_DEFINE_BOOL(vr_fake_pose, false, "Band3/Advanced/Native renderer",
     "With vr: turn the head slowly from side to side instead of where the headset says it "
     "is, to test without one (SteamVR's null driver doesn't move)")
+    .debug_only();
+
+REXCVAR_DEFINE_BOOL(vr_hud, true, "Band3/Advanced/Native renderer",
+    "With vr: show the track, the HUD and the menus on a flat panel in front of you, as the "
+    "game draws them. Off shows the venue alone. Takes effect at once")
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_hud_distance, 1.8, "Band3/Advanced/Native renderer",
+    "With vr_hud: how far ahead of you the panel hangs, in metres, from where you faced at the "
+    "last recenter. Takes effect at once")
+    .range(0.3, 20.0)
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_hud_below, 0.25, "Band3/Advanced/Native renderer",
+    "With vr_hud: how far below your eyes the panel's centre is, in metres (negative raises "
+    "it); the panel tilts back to face you. Takes effect at once")
+    .range(-5.0, 5.0)
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_hud_width, 55.0, "Band3/Advanced/Native renderer",
+    "With vr_hud: how wide the panel looks, in degrees across from where you are; its height "
+    "follows at 16:9. Takes effect at once")
+    .range(10.0, 160.0)
+    .debug_only();
+
+REXCVAR_DEFINE_BOOL(vr_hud_recenter, false, "Band3/Advanced/Native renderer",
+    "With vr_hud: a button: each change of this setting (either way) moves the panel back in "
+    "front of where you face now. The panel is also placed where you first faced, and again "
+    "when the headset's own recenter moves its seated position")
     .debug_only();
 
 REXCVAR_DEFINE_DOUBLE(native_view_render_scale, 1.0, "Band3/Advanced/Native renderer",

@@ -1763,9 +1763,10 @@ TEST_CASE("VR's HUD panel draws the overlay alone over transparent black, alpha 
     CHECK(hud[1 * 8 + 7] == 0u);
 }
 
-TEST_CASE("VR's HUD panel: a REFRACT_WORLD draw has nothing behind it; from draw 0 it's the frame") {
+TEST_CASE("VR's HUD panel: a REFRACT_WORLD draw reads black behind it; from draw 0 it's the frame") {
     // over the red world, a half grey REFRACT_WORLD quad: the panel has no
-    // picture behind it, so it's drawn its own colour
+    // world behind it, so it reads black, its colour times black, still
+    // covering (its alpha the draw's), as on the GPU (no_depth)
     FrameCapture f;
     f.shades = {FlatShade(false), FlatShade(false)};
     f.shades[1].options |= 1ull << 46;
@@ -1777,7 +1778,12 @@ TEST_CASE("VR's HUD panel: a REFRACT_WORLD draw has nothing behind it; from draw
     o.part = BackBufferPart::kHud;
     std::vector<uint32_t> rgba, whole;
     Rasterize(f, o, rgba);
-    CHECK(rgba[1 * 8 + 3] == 0xff808080u);
+    CHECK(rgba[1 * 8 + 3] == 0xff000000u);
+    // multisampled the same
+    o.msaa = 2;
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 3] == 0xff000000u);
+    o.msaa = Small().msaa;
     // a panel from draw 0 (vr_pose.h's HudBoundary: a menu the eyes can't
     // see) is the whole frame as the game draws it, refraction and all,
     // opaque; the eyes then draw nothing but the clear colour

@@ -385,19 +385,44 @@ What each does, how it was measured and why it defaults as it does. The
   free, published as the window's picture) without the overlay (`BackBufferPart::kEyes`), the world
   drawn ahead, kept buffers, motion blur, DOF or the spotlights' haze, then presents them and
   ends the frame with a projection layer. The overlay's draws (`soft_raster.h`'s `OnHud`, from
-  `vr_pose.h`'s `HudBoundary`: `post_boundary`, or 0 for a frame the eyes can't see) can be
+  `vr_pose.h`'s `HudBoundary`: `post_boundary`, or 0 for a frame the eyes can't see) are
   drawn alone as the HUD panel (`BackBufferPart::kHud`): transparent black, alpha as
-  coverage, premultiplied (`native_view_replay --overlay-only`, `--split-check`); not shown
-  in the headset yet. `vr_anchor` places the head's LOCAL space in the
+  coverage, premultiplied, REFRACT_WORLD draws reading black (`native_view_replay
+  --overlay-only`, `--split-check`). With `vr_hud` (on) `VrFrame` draws it from the capture
+  itself (not re-posed) into the HUD output slot (`GpuRenderer::HudSlot`) at the eyes' size
+  with `native_view_msaa`, only when the capture is new and the SDK's queue has copied the
+  last one out (`Session::HudFree`); `xr_present.cpp` copies it (`present.hlsl`'s
+  `PSPresentHud`, alpha kept; into images the runtime reads as sRGB, typed so or typeless in
+  an sRGB swapchain as SteamVR's are, `PSPresentHudLinear` through an sRGB view decodes the
+  covered part unpremultiplied and premultiplies again, so partly covered pixels aren't
+  darkened) into a third swapchain of the eyes' format and
+  size, shown as an `XrCompositionLayerQuad` in LOCAL space after the projection layer,
+  `XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT` alone (premultiplied). Frames without
+  a new picture submit the layer with the image last released. It hangs where
+  `vr::HudPlacement` puts it (16:9, `vr_hud_distance` 1.8 m ahead, `vr_hud_below` 0.25 m
+  down, `vr_hud_width` 55 degrees across, all read each frame) from the head pose of the
+  first located frame, taken again when `vr_hud_recenter` changes or the runtime moves LOCAL
+  space (`XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING`). A frame whose panel starts at
+  0 (Play a Show's intro, the calibration screens) puts the whole picture on it, opaque, and
+  the eyes are the clear colour (black). The `xr` block's `hud` has its `renders`, `copies`,
+  `layers`, `recenters` and its drawing's CPU and GPU ms per picture and per frame; `capture`
+  writes `<name>.gpu.hud.png` (premultiplied colour and coverage alpha) with `.gpu.L.png`, which
+  `native_view_replay <cap> out.png --overlay-only --diff <name>.gpu.hud.png` sets the CPU's
+  against. On the null driver (2026-10-17) the CPU's and GPU's panels matched to a mean 0.03
+  to 0.23 of 255 (alpha 0.00 to 0.04), and in 20th Century Boy at arena_04 a picture cost
+  0.27 ms of CPU to submission and 0.25 ms of GPU (0.62 for Play a Show's whole frame);
+  xrBeginFrame to xrEndFrame went from 3.83 ms without the panel to 4.23-4.45 with it.
+  `vr_anchor` places the head's LOCAL space in the
   venue (default above and behind arena_04's front crowd; empty follows the game camera),
   `vr_world_scale` scales it, `vr_fake_pose` turns the head slowly for a headset that doesn't
   move. `native_view stats` has an `xr` block, and `capture` writes `<name>.gpu.L.png` and
-  `.gpu.R.png` from the last VR frame's eyes. Particles stay flat to the game camera and the
+  `.gpu.R.png` from the last VR frame's eyes (and `.gpu.hud.png`, above). Particles stay flat to the game camera and the
   crowd's impostor pictures are the game camera's view. On SteamVR 2.17.10's null driver
   (1852x2056 an eye, 90 Hz) the session reaches SYNCHRONIZED but never VISIBLE: the null
   headset is idle (activity level 0), so `shouldRender` stays off and `xrWaitFrame` gives ~33
   frames a second; the eyes are drawn and submitted anyway. Its first session after SteamVR
-  starts is ended for SteamVR's room setup, which terminates band3. Per frame, 20th Century
+  starts is ended for SteamVR's room setup, which terminates band3 (on 2026-10-17 that one
+  went VISIBLE and FOCUSED for a second first, the quad layer accepted). Per frame, 20th Century
   Boy at arena_04 on the R9700 (600-frame stretches): without `vr_show_all` each eye 0.56-0.88
   ms of CPU to submission, 0.62-0.81 ms of GPU, RePose's copy 0.11-0.18 ms, xrWaitFrame's
   return to xrEndFrame 4.1-4.4 ms; with it 2.7-3.0 ms of CPU, 2.9-3.5 of GPU and 0.6-0.8 for

@@ -1337,7 +1337,9 @@ class Renderer {
     // ahead, kept buffers, motion blur, DOF or the spotlights' haze. The
     // left eye goes into one of the window's slots when one is free and is
     // published as the window's picture; else, and the right always, into
-    // the eye slots.
+    // the eye slots. The HUD's draws go onto the HUD panel (vr_hud), the
+    // capture itself drawn BackBufferPart::kHud into the HUD slot when it's
+    // new, and xr_present.cpp's quad layer shows it over the eyes.
     void VrFrame(const RasterOptions& o, uint64_t generation, bool presenting,
                  double& decode_pending_ms, std::vector<uint32_t>& rgba) {
         using Clock = std::chrono::steady_clock;
@@ -1361,7 +1363,7 @@ class Renderer {
         void* eyes[2] = {nullptr, nullptr};
         if (!cap) {
             // nothing captured yet: the eyes' colours
-            xs.Present(f, eyes, since_begin());
+            xs.Present(f, eyes, nullptr, since_begin());
             return;
         }
         vr::Anchor anchor;
@@ -1387,6 +1389,10 @@ class Renderer {
         eo.velocity = false;
         eo.post_only = post::kPostXfm | post::kPostBloom | post::kPostGlare;
         eo.part = BackBufferPart::kEyes;
+        // the HUD panel's draws from post_boundary on, or all of them for a
+        // frame the eyes can't see (no DoPostProcess, no world camera): the
+        // panel is then the whole picture and the eyes the clear colour
+        eo.hud_from = vr::HudBoundary(*cap);
         eo.gpu_no_wait = true;
         eo.output_readback = false;
         eo.gpu_draw_profile = false;
@@ -1419,29 +1425,56 @@ class Renderer {
             }
         }
         xs.NoteEyes(eye);
-        // both finished on SDL's queue before the SDK's samples them
+        // The HUD panel (vr_hud): the capture as it is, not re-posed (the
+        // panel hangs flat in front of the head), its HUD draws alone
+        // (BackBufferPart::kHud) at the eyes' size with the window's MSAA,
+        // into the HUD slot. Only for a capture it hasn't drawn yet, and once
+        // the SDK's queue has copied the last picture out of the slot; else
+        // the panel's image stays as it is.
+        Drawn hd;
+        const int hud_slot = GpuRenderer::HudSlot();
+        const bool want_hud = REXCVAR_GET(vr_hud);
+        if (!want_hud) vr_hud_frame_ = -1;
+        if (want_hud && int64_t(cap->frame) != vr_hud_frame_ && xs.HudFree()) {
+            RasterOptions ho = eo;
+            ho.part = BackBufferPart::kHud;
+            ho.msaa = o.msaa;
+            hd.drew_output = GpuRenderer::Get().RenderFrameToOutput(*cap, ho, hud_slot, hd.out,
+                                                                   hd.gs);
+            if (hd.drew_output) vr_hud_frame_ = int64_t(cap->frame);
+        }
+        // each finished on SDL's queue before the SDK's samples it
         stall_watch::SetWorker(stall_watch::Worker::kGpuWait);
-        for (int e = 0; e < 2; e++) {
-            if (!d[e].drew_output) continue;
+        auto finish = [&](Drawn& dr, int s, const char* what) {
             const auto from = Clock::now();
-            while (!GpuRenderer::Get().OutputDone(slot[e], &d[e].gs)) {
+            while (!GpuRenderer::Get().OutputDone(s, &dr.gs)) {
                 if (Clock::now() - from > kGpuHung) {
-                    REXLOG_WARN("vr: an eye wasn't finished after {} ms", kGpuHung.count());
-                    d[e].drew_output = false;
-                    break;
+                    REXLOG_WARN("vr: {} wasn't finished after {} ms", what, kGpuHung.count());
+                    dr.drew_output = false;
+                    return;
                 }
                 std::this_thread::sleep_for(kFencePoll);
             }
+        };
+        for (int e = 0; e < 2; e++) {
+            if (!d[e].drew_output) continue;
+            finish(d[e], slot[e], "an eye");
             if (d[e].drew_output && d[e].out.d3d12_resource) eyes[e] = d[e].out.d3d12_resource;
             xs.AddRenderMs(e, d[e].gs.ms, d[e].gs.gpu_timed ? d[e].gs.gpu_total_ms : 0,
                            repose_ms[e]);
+        }
+        void* hud = nullptr;
+        if (hd.drew_output) {
+            finish(hd, hud_slot, "the HUD panel");
+            if (hd.drew_output) hud = hd.out.d3d12_resource;
+            xs.AddHudMs(hd.gs.ms, hd.gs.gpu_timed ? hd.gs.gpu_total_ms : 0);
         }
         if (left_slot >= 0) {
             std::lock_guard lock(mutex_);
             slots_.Finished(left_slot);
         }
         // a missing eye shows its colour rather than the other's picture
-        xs.Present(f, eyes, since_begin());
+        xs.Present(f, eyes, hud, since_begin());
         // the left eye as the window's picture, and as RGBA for a screenshot
         // or F9's window
         bool want_rgba;
@@ -1479,6 +1512,8 @@ class Renderer {
     }
     // the capture the last VR frame drew, for Drawn::new_frame
     uint64_t vr_last_frame_ = 0;
+    // the capture the HUD panel's picture is of (-1 none)
+    int64_t vr_hud_frame_ = -1;
 
     // One fence check; when finished, marks the slot finished and un-holds
     // the worker.

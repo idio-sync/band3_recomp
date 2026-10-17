@@ -154,6 +154,9 @@ SHADERS = [
         ("kPresentPixel", "PSPresent", "ps_5_1", None, None),
         # VR's eyes into a typed sRGB swapchain (xr_present.cpp)
         ("kPresentPixelLinear", "PSPresentLinear", "ps_5_1", None, None),
+        # VR's HUD panel into its quad layer's image, alpha kept
+        ("kPresentPixelHud", "PSPresentHud", "ps_5_1", None, None),
+        ("kPresentPixelHudLinear", "PSPresentHudLinear", "ps_5_1", None, None),
     ]),
 ]
 

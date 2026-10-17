@@ -4414,8 +4414,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // until a multisampled overlay pass resolves into `color`
     SDL_GPUTexture* picture = color;
     // the picture as resolved, for the overlay's REFRACT_WORLD draws: the
-    // post buffer if it's that already, else `behind`
-    SDL_GPUTexture* behind_now = behind;
+    // post buffer if it's that already, else `behind`; the HUD panel's,
+    // with no world under them, read black (soft_raster.cpp's Run)
+    SDL_GPUTexture* behind_now = hud ? no_depth : behind;
     bool depth_fresh = false;  // the open pass's depth is cleared and untouched
     // The overlay's samples (OverlaySamples) as the device draws them; 1
     // draws into `color` over the world's depth. A capture from before
@@ -4726,9 +4727,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     };
 
     // whether an overlay draw reads the picture behind it, so the resolve
-    // keeps a copy; the HUD panel's draw their own colour (draw())
+    // keeps a copy; the HUD panel's read black (behind_now), never resolving
     bool refracts = false;
-    for (size_t d = frame.post_boundary; d < frame.draws.size() && !refracts && !hud; d++) {
+    for (size_t d = frame.post_boundary; d < frame.draws.size() && !refracts; d++) {
         const DrawItem& it = frame.draws[d];
         refracts = DrawnToBackBuffer(it) && RefractsWorld(shade::ShadeOf(frame, it));
     }
@@ -5627,7 +5628,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             REXLOG_WARN("native view gpu: couldn't read the frame back ({})", SDL_GetError());
             return false;
         }
-        // alpha is the resolve's 0xff throughout
+        // alpha is the resolve's 0xff throughout, but for VR's HUD panel's
+        // coverage (PSGammaAlpha)
         rgba->resize(size_t(width) * height);
         std::memcpy(rgba->data(), px, rgba->size() * sizeof(uint32_t));
         SDL_UnmapGPUTransferBuffer(device, readback);

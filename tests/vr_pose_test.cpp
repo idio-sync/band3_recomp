@@ -363,3 +363,39 @@ TEST_CASE("the HUD panel goes where the head faced at the recenter, its yaw alon
     Turned(h.pose, 0, 1, 0, up);
     CheckVec(up, 0, 1, 0);
 }
+
+TEST_CASE("the recenter's head is between the eyes, facing their way") {
+    // both turned 40 degrees left about +y, 64 mm apart along that turn's
+    // right; the right eye's quaternion the same turn negated
+    const float a = 40 * kPi / 180;
+    vr::XrPose left, right;
+    left.q[1] = std::sin(a / 2);
+    left.q[3] = std::cos(a / 2);
+    for (int i = 0; i < 4; i++) right.q[i] = -left.q[i];
+    const float r[3] = {std::cos(a), 0, -std::sin(a)};
+    for (int i = 0; i < 3; i++) {
+        left.p[i] = (i == 1 ? 1.6f : 0) - 0.032f * r[i];
+        right.p[i] = (i == 1 ? 1.6f : 0) + 0.032f * r[i];
+    }
+    const vr::XrPose h = vr::HeadPose(left, right);
+    CheckVec(h.p, 0, 1.6f, 0);
+    float fwd[3], want[3];
+    Turned(h, 0, 0, -1, fwd);
+    Turned(left, 0, 0, -1, want);
+    CheckVec(fwd, want[0], want[1], want[2]);
+    // the panel then hangs where that head looks
+    vr::HudLayout l;
+    l.distance = 2;
+    l.below = 0;
+    const vr::HudQuad q = vr::HudPlacement(l, h);
+    CheckVec(q.pose.p, 2 * want[0], 1.6f, 2 * want[2]);
+}
+
+TEST_CASE("a setting as a button fires on each change, not on the first value seen") {
+    vr::ChangeTrigger t;
+    CHECK_FALSE(t.Fired(true));  // saved as true: no recenter at launch
+    CHECK_FALSE(t.Fired(true));
+    CHECK(t.Fired(false));
+    CHECK_FALSE(t.Fired(false));
+    CHECK(t.Fired(true));
+}

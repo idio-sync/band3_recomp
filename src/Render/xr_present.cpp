@@ -44,8 +44,10 @@ bool Session::Update(bool) { return false; }
 uint32_t Session::Width() const { return 0; }
 uint32_t Session::Height() const { return 0; }
 bool Session::WaitFrame(FrameViews&) { return false; }
-bool Session::Present(const FrameViews&, void* const[2], double) { return false; }
+bool Session::Present(const FrameViews&, void* const[2], void*, double) { return false; }
+bool Session::HudFree() { return true; }
 void Session::AddRenderMs(int, double, double, double) {}
+void Session::AddHudMs(double, double) {}
 Stats Session::GetStats() { return {}; }
 bool Session::LastEyes(vr::Eye[2], uint32_t&, uint32_t&) { return false; }
 void Session::NoteEyes(const vr::Eye[2]) {}
@@ -144,20 +146,24 @@ struct Session::Impl {
     XrSessionState state = XR_SESSION_STATE_UNKNOWN;
     bool running = false;  // between xrBeginSession and xrEndSession
     uint32_t width = 0, height = 0;
-    struct Eye {
+    // a swapchain: each eye's, and the HUD panel's at the same size
+    struct Chain {
         XrSwapchain swapchain = XR_NULL_HANDLE;
         std::vector<ComPtr<ID3D12Resource>> images;
         ComPtr<ID3D12DescriptorHeap> rtvs;  // one per image
-    } eyes[2];
+    } eyes[2], hud;
     // the present: present.hlsl into the images, on band3's command list on
-    // the SDK's queue; per frame in flight an allocator and two SRVs, reused
-    // once `fence` passes its value
+    // the SDK's queue; per frame in flight an allocator and kSrvs SRVs (the
+    // eyes', the panel's), reused once `fence` passes its value
     ID3D12Device* device = nullptr;
     ID3D12CommandQueue* queue = nullptr;
     ComPtr<ID3D12RootSignature> root;
     ComPtr<ID3D12PipelineState> pipeline;
+    // the panel's: present.hlsl's PSPresentHud (or its linear variant), alpha kept
+    ComPtr<ID3D12PipelineState> hud_pipeline;
     ComPtr<ID3D12DescriptorHeap> srvs;
     UINT srv_size = 0, rtv_size = 0;
+    static constexpr int kSrvs = 3;
     static constexpr int kInFlight = 3;
     ComPtr<ID3D12CommandAllocator> allocators[kInFlight];
     UINT64 allocator_value[kInFlight] = {};
@@ -167,6 +173,23 @@ struct Session::Impl {
     UINT64 fence_value = 0;
     uint64_t presents = 0;
     bool srgb_view = false;
+    // the HUD panel's images through an sRGB view (MakeSwapchains)
+    bool hud_srgb_view = false;
+    // the panel: `fence`'s value once its last picture is copied out of the
+    // output (HudFree); whether an image was ever released, which its layer
+    // needs
+    UINT64 hud_copy_value = 0;
+    bool hud_released = false;
+    // an image of its never came back (logged): the panel's left as it is
+    bool hud_failed = false;
+    bool hud_logged = false;  // its first frame's ending, logged
+    // the head pose the panel hangs from (HudPlacement), taken at the first
+    // located frame and again at a recenter: vr_hud_recenter's change, or the
+    // runtime moving LOCAL space, from its frame at recenter_after on
+    bool have_head = false, recenter = false;
+    int64_t recenter_after = 0;
+    vr::XrPose head;
+    vr::ChangeTrigger recenter_setting;
 
     // made on a thread of its own (the runtime may take seconds to start)
     std::thread maker;
@@ -331,7 +354,10 @@ bool Session::Impl::MakeSwapchains() {
             format = want;
     if (!format) return Fail("the runtime offers no RGBA8 swapchain");
     rtv_size = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-    for (Eye& e : eyes) {
+    // the panel's as the eyes': its picture is drawn at their size, texel
+    // for texel, and goes in as theirs do
+    for (Chain* chain : {&eyes[0], &eyes[1], &hud}) {
+        Chain& e = *chain;
         XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
         ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
         ci.format = format;
@@ -358,13 +384,25 @@ bool Session::Impl::MakeSwapchains() {
             e.images.emplace_back(tex);
             // The picture's bytes are display values: into a typeless image
             // as UNORM, verbatim; into a typed sRGB one through its sRGB
-            // view, decoded first (present.hlsl's PSPresentLinear)
+            // view, decoded first (present.hlsl's PSPresentLinear). The HUD
+            // panel's premultiplied colour must reach the compositor
+            // premultiplied in linear light, which bytes verbatim aren't
+            // where they're partly covered: into any image the runtime reads
+            // as sRGB (typed so, or typeless in an sRGB swapchain) through an
+            // sRGB view, by PSPresentHudLinear.
             const DXGI_FORMAT res = tex->GetDesc().Format;
+            const bool srgb =
+                res == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ||
+                (chain == &hud && res == DXGI_FORMAT_R8G8B8A8_TYPELESS &&
+                 format == int64_t(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB));
             D3D12_RENDER_TARGET_VIEW_DESC rd{};
             rd.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-            rd.Format = res == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
-                                                               : DXGI_FORMAT_R8G8B8A8_UNORM;
-            srgb_view = rd.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+            rd.Format = srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
+            (chain == &hud ? hud_srgb_view : srgb_view) = srgb;
+            if (i == 0 && chain == &hud)
+                REXLOG_INFO("vr: swapchains of DXGI format {}, images of {}; the HUD panel's "
+                            "through a{} view",
+                            format, int(res), srgb ? "n sRGB" : " UNORM");
             D3D12_CPU_DESCRIPTOR_HANDLE h = e.rtvs->GetCPUDescriptorHandleForHeapStart();
             h.ptr += SIZE_T(i) * rtv_size;
             device->CreateRenderTargetView(tex, &rd, h);
@@ -372,6 +410,7 @@ bool Session::Impl::MakeSwapchains() {
     }
     std::lock_guard lock(stats_mutex);
     stats.srgb_view = srgb_view;
+    stats.hud_srgb_view = hud_srgb_view;
     return true;
 }
 
@@ -429,9 +468,18 @@ bool Session::Impl::MakePresent() {
     pd.SampleDesc.Count = 1;
     if (FAILED(device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pipeline))))
         return Fail("no present pipeline");
+    // the panel's keeps its alpha, which the quad layer blends by
+    pd.PS = hud_srgb_view
+                ? D3D12_SHADER_BYTECODE{kPresentPixelHudLinearDxbc,
+                                        sizeof(kPresentPixelHudLinearDxbc)}
+                : D3D12_SHADER_BYTECODE{kPresentPixelHudDxbc, sizeof(kPresentPixelHudDxbc)};
+    pd.RTVFormats[0] =
+        hud_srgb_view ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
+    if (FAILED(device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&hud_pipeline))))
+        return Fail("no present pipeline for the HUD panel");
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    hd.NumDescriptors = 2 * kInFlight;
+    hd.NumDescriptors = kSrvs * kInFlight;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&srvs))))
         return Fail("no SRV heap");
@@ -474,6 +522,14 @@ void Session::Impl::PollEvents() {
                 running = false;
                 failed = true;
                 REXLOG_WARN("vr: the runtime ended the session; VR is off");
+            }
+        } else if (e.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
+            // the headset's own recenter (SteamVR's seated position): LOCAL
+            // space moves to the head, and the panel goes in front again
+            const auto& c = reinterpret_cast<const XrEventDataReferenceSpaceChangePending&>(e);
+            if (c.referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL) {
+                recenter = true;
+                recenter_after = c.changeTime;
             }
         } else if (e.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
             running = false;
@@ -555,6 +611,7 @@ bool Session::WaitFrame(FrameViews& f) {
         f.fov[e] = {fov.angleLeft, fov.angleRight, fov.angleUp, fov.angleDown};
         if ((vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) &&
             (vs.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT)) {
+            f.located = true;
             const XrPosef& v = views[e].pose;
             p.q[0] = v.orientation.x;
             p.q[1] = v.orientation.y;
@@ -582,11 +639,34 @@ bool Session::WaitFrame(FrameViews& f) {
             const float right[3] = {e ? 0.032f : -0.032f, 0, 0};
             vr::Rotate(q, right, p.p);
         }
+        f.located = true;
+    }
+    // the HUD panel's head: at the first located frame, then at a recenter
+    if (m.recenter_setting.Fired(REXCVAR_GET(vr_hud_recenter))) {
+        m.recenter = true;
+        m.recenter_after = 0;
+    }
+    if (f.located && (!m.have_head || (m.recenter && f.display_time >= m.recenter_after))) {
+        m.head = vr::HeadPose(f.pose[0], f.pose[1]);
+        REXLOG_INFO("vr: the HUD panel {}, the head at {:.2f},{:.2f},{:.2f} m",
+                    m.have_head ? "recentred" : "placed", m.head.p[0], m.head.p[1], m.head.p[2]);
+        if (m.have_head) {
+            std::lock_guard lock(m.stats_mutex);
+            m.stats.recenters++;
+        }
+        m.have_head = true;
+        m.recenter = false;
     }
     return true;
 }
 
-bool Session::Present(const FrameViews& f, void* const eye[2], double begin_to_present_ms) {
+bool Session::HudFree() {
+    Impl& m = *impl_;
+    return !m.fence || m.fence->GetCompletedValue() >= m.hud_copy_value;
+}
+
+bool Session::Present(const FrameViews& f, void* const eye[2], void* hud,
+                      double begin_to_present_ms) {
     Impl& m = *impl_;
     const auto start = std::chrono::steady_clock::now();
     XrCompositionLayerProjectionView views[2] = {{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
@@ -594,6 +674,8 @@ bool Session::Present(const FrameViews& f, void* const eye[2], double begin_to_p
     // drawn even when the runtime says it won't show them (shouldRender off,
     // as SteamVR's idle null headset keeps it): counted apart
     bool drawn = true;
+    // the panel's image acquired, and drawn with the new picture
+    bool hud_acquired = false, hud_drawn = false;
     if (drawn) {
         // the frame in flight this allocator and these SRVs had
         const int k = int(m.presents % Impl::kInFlight);
@@ -612,36 +694,61 @@ bool Session::Present(const FrameViews& f, void* const eye[2], double begin_to_p
                 drawn = false;
             }
         }
+        // The panel's image only for a new picture, and only with the eyes';
+        // without one the image last released stays up
+        uint32_t hud_index = 0;
+        if (drawn && hud && !m.hud_failed) {
+            XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+            XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+            wi.timeout = 100000000;  // 100 ms
+            hud_acquired = XR_SUCCEEDED(m.acquire_image(m.hud.swapchain, &ai, &hud_index));
+            // an image may be released only once waited for: one the
+            // compositor never gives up leaves the panel as it is, for good
+            XrResult r = XR_ERROR_RUNTIME_FAILURE;
+            for (int tries = 0; hud_acquired && tries < 3; tries++) {
+                r = m.wait_image(m.hud.swapchain, &wi);
+                if (r != XR_TIMEOUT_EXPIRED) break;
+            }
+            hud_drawn = hud_acquired && r == XR_SUCCESS;
+            if (!hud_drawn) {
+                REXLOG_WARN("vr: couldn't get the HUD panel's swapchain image ({}); the panel "
+                            "stays as it is",
+                            int(r));
+                m.hud_failed = true;
+            }
+        }
         if (drawn) {
             m.allocators[k]->Reset();
             m.list->Reset(m.allocators[k].Get(), nullptr);
             ID3D12DescriptorHeap* heaps[] = {m.srvs.Get()};
             m.list->SetDescriptorHeaps(1, heaps);
             m.list->SetGraphicsRootSignature(m.root.Get());
-            m.list->SetPipelineState(m.pipeline.Get());
             m.list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            for (int e = 0; e < 2; e++) {
-                D3D12_CPU_DESCRIPTOR_HANDLE rtv =
-                    m.eyes[e].rtvs->GetCPUDescriptorHandleForHeapStart();
-                rtv.ptr += SIZE_T(index[e]) * m.rtv_size;
+            // output `tex` into image `image` of `chain` by `pipeline`, through
+            // this frame's SRV `srv`
+            auto copy = [&](Impl::Chain& chain, uint32_t image, ID3D12Resource* tex, int srv,
+                            ID3D12PipelineState* pipeline) {
+                D3D12_CPU_DESCRIPTOR_HANDLE rtv = chain.rtvs->GetCPUDescriptorHandleForHeapStart();
+                rtv.ptr += SIZE_T(image) * m.rtv_size;
                 // no picture: the left eye dark red, the right dark blue
-                if (!eye[e]) {
+                if (!tex) {
                     const float colour[2][4] = {{0.4f, 0, 0, 1}, {0, 0, 0.4f, 1}};
-                    m.list->ClearRenderTargetView(rtv, colour[e], 0, nullptr);
-                    continue;
+                    m.list->ClearRenderTargetView(rtv, colour[srv & 1], 0, nullptr);
+                    return;
                 }
-                auto* tex = static_cast<ID3D12Resource*>(eye[e]);
                 const D3D12_RESOURCE_DESC td = tex->GetDesc();
                 D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
                 sd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
                 sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
                 sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
                 sd.Texture2D.MipLevels = 1;
+                const int slot = Impl::kSrvs * k + srv;
                 D3D12_CPU_DESCRIPTOR_HANDLE cpu = m.srvs->GetCPUDescriptorHandleForHeapStart();
-                cpu.ptr += SIZE_T(2 * k + e) * m.srv_size;
+                cpu.ptr += SIZE_T(slot) * m.srv_size;
                 m.device->CreateShaderResourceView(tex, &sd, cpu);
                 D3D12_GPU_DESCRIPTOR_HANDLE gpu = m.srvs->GetGPUDescriptorHandleForHeapStart();
-                gpu.ptr += UINT64(2 * k + e) * m.srv_size;
+                gpu.ptr += UINT64(slot) * m.srv_size;
+                m.list->SetPipelineState(pipeline);
                 m.list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
                 const D3D12_VIEWPORT vp{0, 0, float(m.width), float(m.height), 0, 1};
                 m.list->RSSetViewports(1, &vp);
@@ -656,18 +763,30 @@ bool Session::Present(const FrameViews& f, void* const eye[2], double begin_to_p
                 m.list->SetGraphicsRoot32BitConstants(0, 8, c, 0);
                 m.list->SetGraphicsRootDescriptorTable(1, gpu);
                 m.list->DrawInstanced(3, 1, 0, 0);
-            }
+            };
+            for (int e = 0; e < 2; e++)
+                copy(m.eyes[e], index[e], static_cast<ID3D12Resource*>(eye[e]), e,
+                     m.pipeline.Get());
+            if (hud_drawn)
+                copy(m.hud, hud_index, static_cast<ID3D12Resource*>(hud), 2,
+                     m.hud_pipeline.Get());
             m.list->Close();
             ID3D12CommandList* lists[] = {m.list.Get()};
             m.queue->ExecuteCommandLists(1, lists);
             m.queue->Signal(m.fence.Get(), ++m.fence_value);
             m.allocator_value[k] = m.fence_value;
+            // the panel's output may be drawn again once this passes (HudFree)
+            if (hud_drawn) m.hud_copy_value = m.fence_value;
             m.presents++;
         }
         // released whether drawn or not: what was acquired goes back
         for (int e = 0; e < 2; e++) {
             XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
             m.release_image(m.eyes[e].swapchain, &ri);
+        }
+        if (hud_drawn) {
+            XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+            if (XR_SUCCEEDED(m.release_image(m.hud.swapchain, &ri))) m.hud_released = true;
         }
         for (int e = 0; e < 2; e++) {
             views[e].pose.orientation = {f.pose[e].q[0], f.pose[e].q[1], f.pose[e].q[2],
@@ -682,17 +801,48 @@ bool Session::Present(const FrameViews& f, void* const eye[2], double begin_to_p
     layer.space = m.local;
     layer.viewCount = 2;
     layer.views = views;
+    // The HUD panel over the eyes, once its image was ever released (the
+    // last released is what the layer shows), where the cvars say: read each
+    // frame, so they change it at once. Premultiplied colour: blended by its
+    // alpha, not unpremultiplied first.
+    const bool show_hud = drawn && m.hud_released && REXCVAR_GET(vr_hud);
+    XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    if (show_hud) {
+        vr::HudLayout l;
+        l.distance = float(REXCVAR_GET(vr_hud_distance));
+        l.below = float(REXCVAR_GET(vr_hud_below));
+        l.width_deg = float(REXCVAR_GET(vr_hud_width));
+        const vr::HudQuad q = vr::HudPlacement(l, m.head);
+        quad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        quad.space = m.local;
+        quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        quad.subImage.swapchain = m.hud.swapchain;
+        quad.subImage.imageRect = {{0, 0}, {int32_t(m.width), int32_t(m.height)}};
+        quad.pose.orientation = {q.pose.q[0], q.pose.q[1], q.pose.q[2], q.pose.q[3]};
+        quad.pose.position = {q.pose.p[0], q.pose.p[1], q.pose.p[2]};
+        quad.size = {q.size[0], q.size[1]};
+    }
     const XrCompositionLayerBaseHeader* layers[] = {
-        reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer)};
+        reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer),
+        reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad)};
     XrFrameEndInfo ei{XR_TYPE_FRAME_END_INFO};
     ei.displayTime = f.display_time;
     ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-    ei.layerCount = drawn ? 1 : 0;
+    ei.layerCount = drawn ? (show_hud ? 2 : 1) : 0;
     ei.layers = drawn ? layers : nullptr;
     const XrResult r = m.end_frame(m.session, &ei);
     const double present_ms = MsSince(start);
+    if (show_hud && XR_SUCCEEDED(r) && !m.hud_logged) {
+        m.hud_logged = true;
+        REXLOG_INFO("vr: the HUD panel's quad layer is up: {:.2f} x {:.2f} m at "
+                    "{:.2f},{:.2f},{:.2f} m",
+                    quad.size.width, quad.size.height, quad.pose.position.x,
+                    quad.pose.position.y, quad.pose.position.z);
+    }
     {
         std::lock_guard lock(m.stats_mutex);
+        if (hud_drawn) m.stats.hud_copies++;
+        if (show_hud) m.stats.hud_layers++;
         (drawn ? m.stats.frames : m.stats.skipped)++;
         if (!f.render) m.stats.hidden++;
         m.stats.present_ms += present_ms;
@@ -701,7 +851,7 @@ bool Session::Present(const FrameViews& f, void* const eye[2], double begin_to_p
         if (f.display_period > 0 && frame_ms > double(f.display_period) / 1e6) m.stats.late++;
     }
     if (XR_FAILED(r)) {
-        REXLOG_WARN("vr: xrEndFrame failed ({})", int(r));
+        REXLOG_WARN("vr: xrEndFrame failed ({}, {} layers)", int(r), ei.layerCount);
         return false;
     }
     return drawn;
@@ -712,6 +862,13 @@ void Session::AddRenderMs(int eye, double ms, double gpu_ms, double repose_ms) {
     impl_->stats.render_ms[eye & 1] += ms;
     impl_->stats.gpu_ms[eye & 1] += gpu_ms;
     impl_->stats.repose_ms[eye & 1] += repose_ms;
+}
+
+void Session::AddHudMs(double ms, double gpu_ms) {
+    std::lock_guard lock(impl_->stats_mutex);
+    impl_->stats.hud_renders++;
+    impl_->stats.hud_render_ms += ms;
+    impl_->stats.hud_gpu_ms += gpu_ms;
 }
 
 Stats Session::GetStats() {
@@ -741,12 +898,25 @@ std::string Session::MeasuredJson() {
         for (char c : s) o += c == '"' || c == '\\' ? '\'' : c;
         return o + q;
     };
+    // the HUD panel: its pictures' drawing per picture, and spread over every
+    // frame as the eyes' are, to set beside theirs
+    const uint64_t renders = now.hud_renders - from.hud_renders;
+    const std::string hud = fmt::format(
+        "{{\"renders\":{},\"copies\":{},\"layers\":{},\"recenters\":{},"
+        "\"render_ms_per_render\":{:.3f},\"gpu_ms_per_render\":{:.3f},"
+        "\"render_ms_per_frame\":{:.3f},\"gpu_ms_per_frame\":{:.3f},\"srgb_view\":{}}}",
+        renders, now.hud_copies - from.hud_copies, now.hud_layers - from.hud_layers,
+        now.recenters - from.recenters, per(now.hud_render_ms, from.hud_render_ms, renders),
+        per(now.hud_gpu_ms, from.hud_gpu_ms, renders),
+        per(now.hud_render_ms, from.hud_render_ms, frames),
+        per(now.hud_gpu_ms, from.hud_gpu_ms, frames), now.hud_srgb_view ? "true" : "false");
     return fmt::format(
         "{{\"state\":{},\"runtime\":{},\"system\":{},\"width\":{},\"height\":{},"
         "\"display_period_ms\":{:.3f},\"frames\":{},\"skipped\":{},\"hidden\":{},\"late\":{},"
         "\"wait_ms_per_frame\":{:.3f},\"render_ms_per_frame\":[{:.3f},{:.3f}],"
         "\"gpu_ms_per_frame\":[{:.3f},{:.3f}],\"repose_ms_per_frame\":[{:.3f},{:.3f}],"
-        "\"present_ms_per_frame\":{:.3f},\"frame_ms_per_frame\":{:.3f},\"srgb_view\":{}}}",
+        "\"present_ms_per_frame\":{:.3f},\"frame_ms_per_frame\":{:.3f},\"srgb_view\":{},"
+        "\"hud\":{}}}",
         text(now.state), text(now.runtime), text(now.system), now.width, now.height,
         double(now.display_period_ns) / 1e6, frames, now.skipped - from.skipped,
         now.hidden - from.hidden, now.late - from.late, per(now.wait_ms, from.wait_ms, ended),
@@ -756,7 +926,7 @@ std::string Session::MeasuredJson() {
         per(now.repose_ms[0], from.repose_ms[0], frames),
         per(now.repose_ms[1], from.repose_ms[1], frames),
         per(now.present_ms, from.present_ms, ended), per(now.frame_ms, from.frame_ms, ended),
-        now.srgb_view ? "true" : "false");
+        now.srgb_view ? "true" : "false", hud);
 }
 
 bool Session::LastEyes(vr::Eye eyes[2], uint32_t& width, uint32_t& height) {

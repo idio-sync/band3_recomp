@@ -221,4 +221,41 @@ inline HudQuad HudPlacement(const HudLayout& l, const XrPose& head) {
     return h;
 }
 
+// The head between two eyes' poses, for HudPlacement's recenter: the
+// midpoint, facing the way they do (their quaternions' normalized sum, the
+// right's sign matched to the left's: q and -q are one turn)
+inline XrPose HeadPose(const XrPose& left, const XrPose& right) {
+    XrPose h;
+    const float dot = left.q[0] * right.q[0] + left.q[1] * right.q[1] +
+                      left.q[2] * right.q[2] + left.q[3] * right.q[3];
+    const float sign = dot < 0 ? -1.0f : 1.0f;
+    float len = 0;
+    for (int i = 0; i < 4; i++) {
+        h.q[i] = left.q[i] + sign * right.q[i];
+        len += h.q[i] * h.q[i];
+    }
+    len = std::sqrt(len);
+    if (len > 1e-6f) {
+        for (float& c : h.q) c /= len;
+    } else {
+        for (int i = 0; i < 4; i++) h.q[i] = left.q[i];
+    }
+    for (int i = 0; i < 3; i++) h.p[i] = (left.p[i] + right.p[i]) / 2;
+    return h;
+}
+
+// A setting used as a button (vr_hud_recenter): each change of its value
+// from the one last seen fires once; the first value seen only sets the
+// start, so the value it was saved with doesn't fire at launch
+struct ChangeTrigger {
+    bool seen = false;
+    bool last = false;
+    bool Fired(bool value) {
+        const bool fired = seen && value != last;
+        seen = true;
+        last = value;
+        return fired;
+    }
+};
+
 }  // namespace band3::render::vr

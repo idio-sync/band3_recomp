@@ -44,3 +44,38 @@ float4 PSPresentLinear(PresentIn i) : SV_Target0 {
     const float3 c = PSPresent(i).rgb;
     return float4(SrgbToLinear(c.r), SrgbToLinear(c.g), SrgbToLinear(c.b), 1.0);
 }
+
+// VR's HUD panel into its quad layer's image (xr_present.cpp): as PSPresent
+// but its alpha kept, the coverage its colour is premultiplied by
+// (gpu_view.h's HUD panel), and clear outside the rectangle
+float4 PSPresentHud(PresentIn i) : SV_Target0 {
+    const float2 p = i.pos.xy - rect.xy;
+    if (any(p < 0.0) || any(p >= rect.zw)) return float4(0.0, 0.0, 0.0, 0.0);
+    if (frame_size.z != 0.0) return frame_tex.Load(int3(int2(p), 0));
+    return frame_tex.SampleLevel(frame_sampler, p / rect.zw, 0.0);
+}
+
+// Into an image the compositor reads as sRGB (typed so, or typeless in an
+// sRGB swapchain), through an sRGB view that encodes what it's given; the
+// compositor decodes and blends in linear light. Decoding premultiplied
+// display values as they are (bytes verbatim) would darken
+// every partly covered pixel (decode(c a) is less than decode(c) a), so the
+// covered part goes in unpremultiplied, decoded, premultiplied again, and
+// colour beyond alpha (additive light, which premultiplied colour holds only
+// by adding: alpha 0 with colour) decoded by itself and added. Covered and
+// clear pixels come back as their bytes, as the eyes' do.
+float3 PremultipliedToLinear(float3 c, float a) {
+    const float3 covered = min(c, a);
+    const float3 added = c - covered;
+    float3 lin = float3(SrgbToLinear(added.r), SrgbToLinear(added.g), SrgbToLinear(added.b));
+    if (a > 0.0) {
+        const float3 s = covered / a;
+        lin += float3(SrgbToLinear(s.r), SrgbToLinear(s.g), SrgbToLinear(s.b)) * a;
+    }
+    return lin;
+}
+
+float4 PSPresentHudLinear(PresentIn i) : SV_Target0 {
+    const float4 c = PSPresentHud(i);
+    return float4(PremultipliedToLinear(c.rgb, c.a), c.a);
+}

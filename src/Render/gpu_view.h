@@ -632,10 +632,14 @@ class GpuRenderer {
     // (present_model.h's PresentSlots). False as RenderFrame.
     static constexpr int kOutputs = 4;
     // and two more for VR's eyes (xr_present.h), drawn the same way but
-    // never the window's: slots kOutputs and kOutputs + 1 (EyeSlot)
+    // never the window's: slots kOutputs and kOutputs + 1 (EyeSlot); and
+    // one for VR's HUD panel (BackBufferPart::kHud, its alpha kept), after
+    // them (HudSlot)
     static constexpr int kEyeOutputs = 2;
-    static constexpr int kSlots = kOutputs + kEyeOutputs;
+    static constexpr int kHudOutputs = 1;
+    static constexpr int kSlots = kOutputs + kEyeOutputs + kHudOutputs;
     static constexpr int EyeSlot(int eye) { return kOutputs + eye; }
+    static constexpr int HudSlot() { return kOutputs + kEyeOutputs; }
     bool RenderFrameToOutput(const FrameCapture& frame, const RasterOptions& options, int slot,
                              GpuOutput& out, GpuStats& stats);
     // Whether the GPU has finished `slot`'s last frame; never waits (SDL_gpu's

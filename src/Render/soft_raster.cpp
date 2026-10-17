@@ -1157,7 +1157,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     // the resolved picture, kept if an overlay draw refracts
     std::vector<uint32_t> behind;
     bool refracts = false;
-    for (size_t i = frame.post_boundary; i < frame.draws.size() && !refracts && !hud; i++) {
+    for (size_t i = frame.post_boundary; i < frame.draws.size() && !refracts; i++) {
         const DrawItem& it = frame.draws[i];
         refracts = DrawnToBackBuffer(it) && RefractsWorld(shade::ShadeOf(frame, it));
     }
@@ -1281,11 +1281,19 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
         }
     };
     // The HUD panel starts in the overlay, transparent black with depth
-    // cleared (every sample, multisampled); its REFRACT_WORLD draws, with
-    // nothing behind, draw their own colour (DrawOne)
+    // cleared (every sample, multisampled). Its REFRACT_WORLD draws (the
+    // score box's glass, the song list's panes) read a black picture: the
+    // world they'd tint isn't under them, and over the eyes their colour
+    // times black, at their alpha, darkens the venue as the game's glass
+    // does, where their own colour would wash it out.
     if (hud) {
         back = &overlay;
         overlay.alpha = TargetAlpha::kCoverage;
+        if (refracts) {
+            // as gpu_view.cpp's 1x1 no_depth (its alpha is never read)
+            behind.assign(pixels, kTransparentBlack);
+            overlay.behind = behind.data();
+        }
         if (samples > 1) {
             ms_color.assign(pixels * samples, kTransparentBlack);
             ms_depth.assign(pixels * samples, 0.0f);

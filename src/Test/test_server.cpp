@@ -442,6 +442,7 @@ public:
             eo.post_only = render::post::kPostXfm | render::post::kPostBloom |
                            render::post::kPostGlare;
             eo.part = render::BackBufferPart::kEyes;
+            eo.hud_from = render::vr::HudBoundary(frame);
             for (int e = 0; e < 2; e++) {
                 render::FrameCapture eye_frame;
                 render::vr::RePose(frame, eyes[e], eye_frame);
@@ -452,6 +453,23 @@ public:
                                       (file + (e ? ".gpu.R.png" : ".gpu.L.png")))
                                          .string(),
                                      eye_rgba, eye_w, eye_h);
+            }
+            // and with vr_hud, the HUD panel as VrFrame draws it, at the eyes'
+            // size and the window's MSAA: <name>.gpu.hud.png, its colour
+            // premultiplied and its alpha the coverage the quad layer blends
+            // by (native_view_replay --overlay-only --diff sets the CPU's
+            // against it)
+            if (REXCVAR_GET(vr_hud)) {
+                render::RasterOptions ho = eo;
+                ho.part = render::BackBufferPart::kHud;
+                ho.msaa = options.msaa;
+                std::vector<uint32_t> hud_rgba;
+                render::GpuStats hud_stats;
+                if (render::GpuRenderer::Get().RenderFrame(frame, ho, hud_rgba, hud_stats))
+                    render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
+                                      (file + ".gpu.hud.png"))
+                                         .string(),
+                                     hud_rgba, eye_w, eye_h);
             }
         }
         out.gpu_ms = stats.ms;

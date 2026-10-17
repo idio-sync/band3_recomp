@@ -20,6 +20,18 @@
 // native_view.cpp's worker drives the frames (Session::Update, then
 // WaitFrame / Present per frame) once the session runs; the game thread is
 // untouched.
+//
+// The HUD panel (vr_hud; vr_pose.h's HudBoundary) is a third swapchain, the
+// eyes' format and size, shown as a quad layer (XrCompositionLayerQuad) in
+// LOCAL space over the eyes' projection layer, blended by its alpha
+// (premultiplied: present.hlsl's PSPresentHud; into images the runtime reads
+// as sRGB, PSPresentHudLinear through an sRGB view, so partly covered pixels
+// stay premultiplied in linear light). It hangs where
+// vr::HudPlacement puts it from a head pose taken at the first frame the
+// views were located, again at each recenter (vr_hud_recenter, or the
+// runtime moving LOCAL space). Its image is drawn only when the worker has
+// a new panel picture; frames in between show the image last released, as
+// a quad layer may.
 
 #include <cstdint>
 #include <string>
@@ -38,6 +50,9 @@ struct FrameViews {
     int64_t display_time = 0;    // XrTime, ns
     int64_t display_period = 0;  // ns
     bool render = false;         // shouldRender
+    // the views' poses are the headset's (or vr_fake_pose's); else a
+    // stand-in head at the origin
+    bool located = false;
     vr::XrPose pose[2];
     vr::Fov fov[2];
 };
@@ -63,6 +78,14 @@ struct Stats {
     double present_ms = 0;  // acquiring, drawing into and releasing the images, summed
     double frame_ms = 0;    // xrBeginFrame to xrEndFrame, summed
     bool srgb_view = false;  // the images are typed sRGB: present.hlsl's linear variant
+    // the HUD panel's images are drawn through an sRGB view (typed sRGB, or
+    // typeless in an sRGB swapchain): PSPresentHudLinear
+    bool hud_srgb_view = false;
+    // the HUD panel: pictures drawn (AddHudMs) and their drawing as the
+    // eyes' (CPU to submitting, GPU), summed; pictures copied into its
+    // image; frames ended with its quad layer; recenters
+    uint64_t hud_renders = 0, hud_copies = 0, hud_layers = 0, recenters = 0;
+    double hud_render_ms = 0, hud_gpu_ms = 0;
 };
 
 class Session {
@@ -82,9 +105,17 @@ class Session {
     bool WaitFrame(FrameViews& f);
     // Draws each eye's output (an ID3D12Resource gpu_view's outputs keep in
     // ALL_SHADER_RESOURCE, finished on the GPU) into its swapchain and ends
-    // the frame with them; with null eyes, ends it without a layer.
-    bool Present(const FrameViews& f, void* const eye[2], double begin_to_present_ms);
+    // the frame with them; with null eyes, ends it without a layer. `hud`, a
+    // new HUD panel picture (an output likewise), goes into the panel's
+    // image; null keeps the image last drawn. With vr_hud the frame ends
+    // with the panel's quad layer over the eyes once it has an image.
+    bool Present(const FrameViews& f, void* const eye[2], void* hud, double begin_to_present_ms);
+    // whether the HUD panel's output may be drawn again: the SDK's queue has
+    // finished copying the last picture out of it (nothing else orders it
+    // after SDL's queue). Never waits.
+    bool HudFree();
     void AddRenderMs(int eye, double ms, double gpu_ms, double repose_ms);
+    void AddHudMs(double ms, double gpu_ms);
     Stats GetStats();
     // native_view stats' `xr` block, counted from the last StartMeasuring
     // (the harness's `native_view on`); "" while `vr` was never on
