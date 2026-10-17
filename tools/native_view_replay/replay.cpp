@@ -164,7 +164,9 @@
 // picture (kEyes) and puts the panel over it, into out.split.png, against
 // the whole frame drawn at once (the "metrics:" line): the split should
 // draw every draw once, so they differ only where blending clamps or by
-// rounding (--no-gamma: a ramp goes over each picture apart).
+// rounding (--no-gamma: a ramp goes over each picture apart). With --diff,
+// --overlay-only draws the panel to set against a GPU picture of it (its
+// premultiplied colour; the metrics leave alpha out).
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
@@ -1568,7 +1570,8 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    if (overlay_only) {
+    // with --diff, the panel against a GPU picture of it (below)
+    if (overlay_only && diff_with.empty()) {
         // VR's HUD panel (soft_raster.h's BackBufferPart::kHud): its colour
         // as stored, premultiplied (so over black), and its alpha as grey
         const uint32_t from = hud_from >= 0 ? uint32_t(hud_from) : vr::HudBoundary(*fc);
@@ -1712,6 +1715,10 @@ int main(int argc, char** argv) {
     auto rasterize_at = [&](uint32_t w, uint32_t h, std::vector<uint32_t>& out) {
         o.width = w;
         o.height = h;
+        if (overlay_only) {
+            o.part = BackBufferPart::kHud;
+            o.hud_from = hud_from >= 0 ? uint32_t(hud_from) : vr::HudBoundary(*fc);
+        }
         FrameCapture f = *fc;
         if (transpose)
             for (DrawItem& d : f.draws) d.view_proj = Transpose(d.view_proj);
