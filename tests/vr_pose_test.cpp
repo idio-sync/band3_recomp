@@ -252,16 +252,114 @@ TEST_CASE("RePose without a perspective world camera leaves the frame as it is")
     CHECK(std::memcmp(&out.draws[0].view_proj, &in.draws[0].view_proj, sizeof(Mat4)) == 0);
 }
 
-TEST_CASE("skip_overlay leaves out the back buffer's draws from post_boundary on") {
+TEST_CASE("the eyes and the HUD panel split the back buffer's draws, each drawn once") {
     FrameCapture f;
     f.post_boundary = 10;
     RasterOptions o;
-    CHECK_FALSE(SkipsOverlay(o, f, 12));
-    o.skip_overlay = true;
-    CHECK_FALSE(SkipsOverlay(o, f, 9));
-    CHECK(SkipsOverlay(o, f, 10));
-    CHECK(SkipsOverlay(o, f, 500));
-    // a frame without post-processing has no overlay to leave out
+    auto part = [&](BackBufferPart p, size_t d) {
+        o.part = p;
+        return DrawnInPart(o, f, d);
+    };
+    // the whole frame draws all
+    CHECK(part(BackBufferPart::kAll, 9));
+    CHECK(part(BackBufferPart::kAll, 12));
+    // from post_boundary on, the HUD's; before it, the eyes'
+    for (size_t d : {0, 9, 10, 500}) {
+        CAPTURE(d);
+        CHECK(part(BackBufferPart::kEyes, d) != part(BackBufferPart::kHud, d));
+        CHECK(part(BackBufferPart::kHud, d) == (d >= 10));
+    }
+    // hud_from moves the split: 0 puts all of it on the panel
+    o.hud_from = 0;
+    CHECK(part(BackBufferPart::kHud, 0));
+    CHECK_FALSE(part(BackBufferPart::kEyes, 9));
+    o.part = BackBufferPart::kHud;
+    CHECK_FALSE(OverlayOnly(o, f));  // the whole frame, drawn as usual
+    o.hud_from = FrameCapture::kNoPost;
+    CHECK(OverlayOnly(o, f));
+    // a frame without post-processing has no overlay to split off
     f.post_boundary = FrameCapture::kNoPost;
-    CHECK_FALSE(SkipsOverlay(o, f, 500));
+    CHECK(part(BackBufferPart::kEyes, 500));
+    CHECK_FALSE(part(BackBufferPart::kHud, 500));
+}
+
+TEST_CASE("the HUD panel starts at post_boundary, or at 0 where the eyes can't see the frame") {
+    Mat4 vp_a, vp_hud;
+    FrameCapture f = Frame(vp_a, vp_hud);
+    CHECK(vr::HudBoundary(f) == 4);
+    // no DoPostProcess (some menus): all of it on the panel
+    f.post_boundary = FrameCapture::kNoPost;
+    CHECK(vr::HudBoundary(f) == 0);
+    // no perspective world camera for RePose (a flat menu)
+    f.post_boundary = 4;
+    for (size_t d = 0; d < 4; d++) f.draws[d].view_proj = Mat4{};
+    CHECK(vr::HudBoundary(f) == 0);
+}
+
+namespace {
+
+// the quaternion's turn of v, as Rotate's
+void Turned(const vr::XrPose& p, float x, float y, float z, float out[3]) {
+    const float v[3] = {x, y, z};
+    vr::Rotate(p.q, v, out);
+}
+
+}  // namespace
+
+TEST_CASE("the HUD panel hangs ahead and below, tilted to face the eyes, its width by angle") {
+    vr::HudLayout l;
+    l.distance = 1.8f;
+    l.below = 0.3f;
+    l.width_deg = 55;
+    vr::XrPose head;
+    head.p[1] = 1.6f;  // eyes 1.6 m up, facing -z
+    const vr::HudQuad h = vr::HudPlacement(l, head);
+    CheckVec(h.pose.p, 0, 1.3f, -1.8f);
+    // 55 degrees across at 1.8 m: 2 * 1.8 * tan(27.5), 16:9
+    CHECK(h.size[0] == doctest::Approx(1.874f).epsilon(1e-3));
+    CHECK(h.size[0] == doctest::Approx(2 * 1.8f * std::tan(27.5f * kPi / 180)));
+    CHECK(h.size[1] == doctest::Approx(h.size[0] * 9 / 16));
+    // its normal (+z) points back at the eyes, tilted up by atan(below /
+    // distance); its right stays level
+    float n[3], right[3];
+    Turned(h.pose, 0, 0, 1, n);
+    const float tilt = std::atan2(0.3f, 1.8f);
+    CheckVec(n, 0, std::sin(tilt), std::cos(tilt));
+    const float to_eye[3] = {head.p[0] - h.pose.p[0], head.p[1] - h.pose.p[1],
+                             head.p[2] - h.pose.p[2]};
+    CHECK(freecam::Dot3(n, to_eye) == doctest::Approx(freecam::Len3(to_eye)));
+    Turned(h.pose, 1, 0, 0, right);
+    CheckVec(right, 1, 0, 0);
+    // a width in metres instead, and another aspect
+    l.width_m = 2;
+    l.aspect = 4.0f / 3;
+    const vr::HudQuad m = vr::HudPlacement(l, head);
+    CHECK(m.size[0] == doctest::Approx(2));
+    CHECK(m.size[1] == doctest::Approx(1.5f));
+}
+
+TEST_CASE("the HUD panel goes where the head faced at the recenter, its yaw alone") {
+    vr::HudLayout l;
+    l.distance = 2;
+    l.below = 0;
+    // turned 90 degrees left (about +y) and pitched down 30: the panel
+    // stands level ahead on the left, at the eyes' height
+    vr::XrPose head;
+    head.p[0] = 0.5f;
+    head.p[1] = 1.7f;
+    head.p[2] = -0.2f;
+    const float yaw[4] = {0, std::sin(kPi / 4), 0, std::cos(kPi / 4)};
+    const float pitch[4] = {std::sin(-kPi / 12), 0, 0, std::cos(-kPi / 12)};
+    // q = yaw * pitch
+    head.q[0] = yaw[3] * pitch[0];
+    head.q[1] = yaw[1] * pitch[3];
+    head.q[2] = -yaw[1] * pitch[0];
+    head.q[3] = yaw[3] * pitch[3];
+    const vr::HudQuad h = vr::HudPlacement(l, head);
+    CheckVec(h.pose.p, 0.5f - 2, 1.7f, -0.2f);
+    float n[3], up[3];
+    Turned(h.pose, 0, 0, 1, n);
+    CheckVec(n, 1, 0, 0);  // back toward the head, along +x
+    Turned(h.pose, 0, 1, 0, up);
+    CheckVec(up, 0, 1, 0);
 }

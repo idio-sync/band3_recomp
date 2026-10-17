@@ -1333,10 +1333,11 @@ class Renderer {
     // Each eye is the newest capture re-posed (vr_pose.h's RePose) from where
     // that eye is: LOCAL space placed in the venue by vr_anchor (empty: the
     // game camera's point, facing where it looks), drawn at the swapchain's
-    // size without the overlay, the world drawn ahead, kept buffers, motion
-    // blur, DOF or the spotlights' haze. The left eye goes into one of the
-    // window's slots when one is free and is published as the window's
-    // picture; else, and the right always, into the eye slots.
+    // size without the HUD's draws (BackBufferPart::kEyes), the world drawn
+    // ahead, kept buffers, motion blur, DOF or the spotlights' haze. The
+    // left eye goes into one of the window's slots when one is free and is
+    // published as the window's picture; else, and the right always, into
+    // the eye slots.
     void VrFrame(const RasterOptions& o, uint64_t generation, bool presenting,
                  double& decode_pending_ms, std::vector<uint32_t>& rgba) {
         using Clock = std::chrono::steady_clock;
@@ -1385,7 +1386,7 @@ class Renderer {
         eo.msaa = 1;
         eo.velocity = false;
         eo.post_only = post::kPostXfm | post::kPostBloom | post::kPostGlare;
-        eo.skip_overlay = true;
+        eo.part = BackBufferPart::kEyes;
         eo.gpu_no_wait = true;
         eo.output_readback = false;
         eo.gpu_draw_profile = false;
@@ -2489,7 +2490,8 @@ class NativePresentDrawer : public rex::ui::UIDrawer {
         active_ = true;
         passes_dropped_on_ = GetGpuSkipStats().passes_dropped;
         // make pipelines now rather than stall the worker's first frame
-        if (UpdateGpu()) GpuRenderer::Get().Prewarm(uint32_t(REXCVAR_GET(native_view_msaa)));
+        if (UpdateGpu())
+            GpuRenderer::Get().Prewarm(uint32_t(REXCVAR_GET(native_view_msaa)), REXCVAR_GET(vr));
         const bool zero_copy = ChoosePath();
         // size from the window, as a paint may be long in coming (minimized)
         const uint32_t w = window_ ? window_->GetActualPhysicalWidth() : 0;

@@ -78,8 +78,10 @@ VK_SAMPLER VK_BINDING(8, 2) Texture2DArray<float4> detail_tex : register(t8, spa
 VK_SAMPLER VK_BINDING(8, 2) SamplerState detail_sampler : register(s8, space2);
 
 // pixel_flags.x: SrcAlpha and SrcAlphaAdd premultiply in FinishMesh, after
-// the clamp the target would do
+// the clamp the target would do; kAlphaOne, a Src draw into VR's HUD panel
+// (gpu_view.cpp's AlphaMode::kCoverage), covers its pixel: alpha 1
 static const uint kPremultiply = 1;
+static const uint kAlphaOne = 2;
 
 VK_BINDING(0, 3) cbuffer PixelUniforms : register(b0, space3) {
     ShadeParams ps_shade;
@@ -89,7 +91,7 @@ VK_BINDING(0, 3) cbuffer PixelUniforms : register(b0, space3) {
     // xy, smaller than the layer: the first five in that order, then shadow,
     // normal, detail
     uint4 tex_size[8];
-    // x: kPremultiply; y: bit per map (tex_layer's order) for DXN kept as BC5;
+    // x: kPremultiply, kAlphaOne; y: bit per map (tex_layer's order) for DXN kept as BC5;
     // z, w: R8 maps' expand codes, a byte each, maps 0-3 in z, 4-6 in w
     uint4 pixel_flags;
     // PackSampler's, in tex_layer's order
@@ -417,6 +419,7 @@ float4 FinishMesh(float4 c) {
     // clamp first, as a UNORM target would before blending (soft_raster.cpp's
     // Blend())
     if ((pixel_flags.x & kPremultiply) != 0u) c.rgb = saturate(c.rgb) * saturate(c.a);
+    if ((pixel_flags.x & kAlphaOne) != 0u) c.a = 1.0;
     return c;
 }
 

@@ -441,7 +441,7 @@ public:
             eo.velocity = false;
             eo.post_only = render::post::kPostXfm | render::post::kPostBloom |
                            render::post::kPostGlare;
-            eo.skip_overlay = true;
+            eo.part = render::BackBufferPart::kEyes;
             for (int e = 0; e < 2; e++) {
                 render::FrameCapture eye_frame;
                 render::vr::RePose(frame, eyes[e], eye_frame);

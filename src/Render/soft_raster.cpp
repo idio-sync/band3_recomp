@@ -66,11 +66,12 @@ void Dir(const float d[3], const Mat4& m, float out[3]) {
 }
 
 // picture: alpha stays 1; texture: blended by the colour's factors; scene:
-// as RB3's back buffer (WritesSceneAlpha)
-enum class TargetAlpha { kOpaque, kTexture, kScene };
+// as RB3's back buffer (WritesSceneAlpha); VR's HUD panel (BackBufferPart):
+// coverage
+enum class TargetAlpha { kOpaque, kTexture, kScene, kCoverage };
 
 // see Blend()
-enum class AlphaRule { kOpaque, kColorFactors, kKeep, kMax };
+enum class AlphaRule { kOpaque, kColorFactors, kKeep, kMax, kCoverage };
 
 struct Target {
     uint32_t w, h;
@@ -372,8 +373,11 @@ void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3
 }
 
 // Colour by the material's blend mode; alpha by `alpha`: 1, blended by the
-// colour's factors (a texture's), kept, or RB3's back buffer's ONE ONE MAX
-// where the mode blends (not Src). Colour and alpha are clamped to 0..1
+// colour's factors (a texture's), kept, RB3's back buffer's ONE ONE MAX
+// where the mode blends (not Src), or coverage (the HUD panel's,
+// premultiplied as the colour is: Src covers, SrcAlpha and PreMultAlpha
+// cover by a over what's there, the others leave it, so additive light adds
+// colour at alpha 0). Colour and alpha are clamped to 0..1
 // first, as an 8-bit target clamps its blender's input (so before SrcAlpha
 // scales); the menus' blue header only matches this way. gpu_view.cpp's
 // UNORM target and mesh.hlsl's FinishMesh agree.
@@ -416,6 +420,18 @@ uint32_t Blend(int mode, const float s[4], uint32_t dst, AlphaRule alpha) {
                 case 6: o[3] = d[3] * a; break;
                 case 7: o[3] = a + d[3] * (1.0f - a); break;
                 default: o[3] = a; break;
+            }
+            break;
+        case AlphaRule::kCoverage:
+            switch (mode) {
+                case 3:
+                case 7: o[3] = a + d[3] * (1.0f - a); break;
+                case 0:
+                case 2:
+                case 4:
+                case 5:
+                case 6: o[3] = d[3]; break;
+                default: o[3] = 1.0f; break;  // Src
             }
             break;
     }
@@ -887,6 +903,7 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
         case TargetAlpha::kScene:
             ds.alpha = WritesSceneAlpha(state) ? AlphaRule::kMax : AlphaRule::kKeep;
             break;
+        case TargetAlpha::kCoverage: ds.alpha = AlphaRule::kCoverage; break;
     }
     switch (it.z_mode) {
         case 0: ds.z_test = false; ds.z_equal_passes = false; ds.z_write = false; break;
@@ -1001,7 +1018,7 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
     if (also) needed.insert(also);
     // the composite reads the depth volume and the soft-particle surface
     post::PostPlan post_plan;
-    if (o.post && o.view == RasterView::kFinal &&
+    if (o.post && o.view == RasterView::kFinal && !OverlayOnly(o, f) &&
         post::PlanPost(f, o.post_only, post_plan, o.grain, o.velocity)) {
         if (post_plan.composite.flags.x & post::kPostSpot) needed.insert(post_plan.spot_volume);
         if (post_plan.composite.flags.x & post::kPostSoft) needed.insert(post_plan.soft);
@@ -1031,6 +1048,8 @@ std::vector<PassRun> Plan(const FrameCapture& f, const RasterOptions& o, uint32_
         for (uint32_t d = first; d < end; d++) {
             const DrawItem& it = f.draws[d];
             if (texture ? !DrawnInTexturePass(it) : !DrawnToBackBuffer(it)) continue;
+            // the other VR picture's draws need nothing here
+            if (!texture && !DrawnInPart(o, f, d)) continue;
             if (o.textures && IsPassTarget(it.tex.get()) && SamplesDiffuse(it)) {
                 needed.insert(it.tex->tex_obj);
                 stand_in(it.tex.get(), d);
@@ -1119,7 +1138,9 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     RasterStats st;
     const size_t pixels = size_t(o.width) * o.height;
     const uint32_t clear = ClearRgba(frame);
-    rgba.assign(pixels, clear);
+    // VR's HUD panel drawn overlay-only (OverlayOnly): no world, nothing behind
+    const bool hud = OverlayOnly(o, frame);
+    rgba.assign(pixels, hud ? kTransparentBlack : clear);
     if (ids) ids->assign(pixels, -1);
     std::vector<float> depth(pixels, 0.0f);
     // world into the scene target (alpha 0); overlay into the picture
@@ -1136,17 +1157,17 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     // the resolved picture, kept if an overlay draw refracts
     std::vector<uint32_t> behind;
     bool refracts = false;
-    for (size_t i = frame.post_boundary; i < frame.draws.size() && !refracts; i++) {
+    for (size_t i = frame.post_boundary; i < frame.draws.size() && !refracts && !hud; i++) {
         const DrawItem& it = frame.draws[i];
         refracts = DrawnToBackBuffer(it) && RefractsWorld(shade::ShadeOf(frame, it));
     }
     post::PostPlan post_plan;
-    const bool post_on = o.post && o.view == RasterView::kFinal &&
+    const bool post_on = o.post && o.view == RasterView::kFinal && !hud &&
                          post::PlanPost(frame, o.post_only, post_plan, o.grain, o.velocity);
     // RasterOptions::post_buffer: a post frame's picture, shown in place of
     // the (undrawn) world by following frames that post-process nothing
     post::PostHistory* const kept =
-        o.post_buffer && o.view == RasterView::kFinal ? o.post_history : nullptr;
+        o.post_buffer && o.view == RasterView::kFinal && !hud ? o.post_history : nullptr;
     const bool shows_kept = kept && ShowsPostBuffer(frame) && kept->picture_w == o.width &&
                             kept->picture_h == o.height &&
                             PostBufferFor(frame, kept->picture_frame);
@@ -1156,7 +1177,7 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     // world drawn kPreBufferPasses times first; black for scene-target views
     // and texture dumps. This frame's world is kept in turn.
     std::vector<uint32_t> world_behind;
-    const bool world_refracts = !shows_kept && WorldRefracts(frame);
+    const bool world_refracts = !hud && !shows_kept && WorldRefracts(frame);
     post::PostHistory* const pre_kept =
         world_refracts && !pre && o.pre_buffer && o.view == RasterView::kFinal ? o.post_history
                                                                                : nullptr;
@@ -1259,6 +1280,20 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
             std::fill(depth.begin(), depth.end(), 0.0f);
         }
     };
+    // The HUD panel starts in the overlay, transparent black with depth
+    // cleared (every sample, multisampled); its REFRACT_WORLD draws, with
+    // nothing behind, draw their own colour (DrawOne)
+    if (hud) {
+        back = &overlay;
+        overlay.alpha = TargetAlpha::kCoverage;
+        if (samples > 1) {
+            ms_color.assign(pixels * samples, kTransparentBlack);
+            ms_depth.assign(pixels * samples, 0.0f);
+            overlay.samples = samples;
+            overlay.ms_color = ms_color.data();
+            overlay.ms_depth = ms_depth.data();
+        }
+    }
     std::vector<ClipVert> cv;
     std::unordered_set<uint32_t> cams_seen;
     uint32_t last_cam = 0;
@@ -1273,6 +1308,8 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                 if (!DrawnToBackBuffer(it) || (shows_kept && i < frame.post_boundary)) continue;
                 if (back == &world && i >= frame.post_boundary) resolve(true);
                 if (back == &overlay && (o.view != RasterView::kFinal || pre)) break;
+                // the other VR picture's (OnHud)
+                if (!DrawnInPart(o, frame, i)) continue;
                 // DrawRect quads have no camera of their own
                 if (it.rect_shader < 0) {
                     if (o.clear_depth_per_camera && !layout.cameras && it.cam != last_cam &&

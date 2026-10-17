@@ -29,7 +29,9 @@
 // viewports with them, their blurs' taps over the texels the game's cover;
 // and that the overlay is multisampled as RB3's is (RasterOptions::msaa: an
 // edge pixel the mean of its samples, each with its own depth), the world
-// not.
+// not; and that VR's HUD panel (BackBufferPart::kHud) is the overlay alone
+// over transparent black with its coverage as alpha, which over the eyes'
+// picture gives the whole frame.
 
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -1706,4 +1708,87 @@ TEST_CASE("on the song list, an overlay draw within the cut's band is cut at 16:
     f.draws[1] = Item(Quad(-0.75f, 0.75f, kGreen), 0);
     Rasterize(f, o, rgba);
     for (int x = 1; x < 8; x++) CHECK(rgba[1 * 8 + x] == kGreen);
+}
+
+TEST_CASE("VR's HUD panel draws the overlay alone over transparent black, alpha its coverage") {
+    // the world red; the overlay: opaque green (Src) over columns 0-1, half
+    // white (SrcAlpha) over 2-3, blue added over 4-5, a grey Multiply over
+    // 0-1; nothing over 6-7
+    FrameCapture f;
+    DrawItem half = Item(Quad(-0.5f, 0, 0x80ffffffu), 0);
+    half.blend = 3;
+    DrawItem add = Item(Quad(0, 0.5f, 0xffff0000u), 0);
+    add.blend = 2;
+    DrawItem mul = Item(Quad(-1, -0.5f, 0xff808080u), 0);
+    mul.blend = 6;
+    f.draws = {Item(Quad(-1, 1, kRed), 0), Item(Quad(-1, -0.5f, kGreen), 0), half, add, mul};
+    f.passes = {BackBuffer(0, 5)};
+    f.post_boundary = 1;
+    RasterOptions o = Small();
+    o.post = false;
+    o.msaa = 1;
+    RasterOptions ho = o;
+    ho.part = BackBufferPart::kHud;
+    std::vector<uint32_t> hud, eyes, whole;
+    Rasterize(f, ho, hud);
+    // premultiplied: Src covers; SrcAlpha its alpha over what's there; Add
+    // and Multiply leave the alpha, so the added blue shows at alpha 0
+    CHECK(hud[1 * 8 + 1] == 0xff008000u);  // green times the grey, still opaque
+    CHECK(hud[1 * 8 + 3] == 0x80808080u);
+    CHECK(hud[1 * 8 + 5] == 0x00ff0000u);
+    CHECK(hud[1 * 8 + 7] == 0u);
+    // the eyes leave the overlay out; the panel over them is the whole frame
+    RasterOptions eo = o;
+    eo.part = BackBufferPart::kEyes;
+    Rasterize(f, eo, eyes);
+    Rasterize(f, o, whole);
+    for (int x = 0; x < 8; x++) {
+        CAPTURE(x);
+        CHECK(eyes[1 * 8 + x] == kRed);
+        const uint32_t h = hud[1 * 8 + x], e = eyes[1 * 8 + x], w = whole[1 * 8 + x];
+        for (int c = 0; c < 3; c++) {
+            const int over = int(h >> (8 * c) & 0xff) +
+                             int(((e >> (8 * c) & 0xff) * (255 - (h >> 24)) + 127) / 255);
+            CHECK(std::abs(std::min(over, 255) - int(w >> (8 * c) & 0xff)) <= 1);
+        }
+    }
+    // multisampled, every sample starts transparent: pixel 2's samples are
+    // the green's (1.75, alpha 255) and the half white's (2.25, 128); pixel
+    // 6's the added blue's and nothing, both alpha 0
+    ho.msaa = 2;
+    Rasterize(f, ho, hud);
+    CHECK((hud[1 * 8 + 1] >> 24) == 255);
+    CHECK((hud[1 * 8 + 2] >> 24) == 192);
+    CHECK(hud[1 * 8 + 6] == 0x00800000u);
+    CHECK(hud[1 * 8 + 7] == 0u);
+}
+
+TEST_CASE("VR's HUD panel: a REFRACT_WORLD draw has nothing behind it; from draw 0 it's the frame") {
+    // over the red world, a half grey REFRACT_WORLD quad: the panel has no
+    // picture behind it, so it's drawn its own colour
+    FrameCapture f;
+    f.shades = {FlatShade(false), FlatShade(false)};
+    f.shades[1].options |= 1ull << 46;
+    f.draws = {Shaded(-1, 1, kRed, 0, 1), Shaded(-1, 1, 0xff808080u, 1, 1)};
+    f.passes = {BackBuffer(0, 2)};
+    f.post_boundary = 1;
+    RasterOptions o = Small();
+    o.post = false;
+    o.part = BackBufferPart::kHud;
+    std::vector<uint32_t> rgba, whole;
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 3] == 0xff808080u);
+    // a panel from draw 0 (vr_pose.h's HudBoundary: a menu the eyes can't
+    // see) is the whole frame as the game draws it, refraction and all,
+    // opaque; the eyes then draw nothing but the clear colour
+    o.hud_from = 0;
+    Rasterize(f, o, rgba);
+    RasterOptions all = o;
+    all.part = BackBufferPart::kAll;
+    Rasterize(f, all, whole);
+    CHECK(rgba == whole);
+    CHECK(rgba[1 * 8 + 3] == 0xff000080u);  // red 255 * 128 / 255
+    o.part = BackBufferPart::kEyes;
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 3] == 0xff202020u);
 }

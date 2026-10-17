@@ -54,6 +54,13 @@
 // (SDL_GPU_STOREOP_RESOLVE_AND_STORE). Where the device can't draw that
 // count, the other of 2 and 4, else 1 (logged).
 //
+// VR's HUD panel (soft_raster.h's BackBufferPart::kHud, OverlayOnly) skips
+// the world and the resolve: its targets start cleared to transparent black
+// (no PSOverlayStart), its draws' alpha is coverage (gpu_view.cpp's
+// AlphaMode::kCoverage, mesh.hlsl's kAlphaOne) and gamma.hlsl's
+// PSGammaAlpha keeps it; its pipelines are made once VR wants them
+// (PrewarmHud).
+//
 // With the native picture shown, the gamma pass writes one of kOutputs
 // textures the SDK's presenter samples in place, no readback: on Windows
 // SDL_gpu's D3D12 device is the SDK's own (one device per adapter per
@@ -597,8 +604,9 @@ class GpuRenderer {
     // Makes every pipeline (overlay's at 2 samples and overlay_samples) and
     // the upload buffer once, on the UI thread as the native renderer turns
     // on, so the first frames don't wait. Later pipelines are logged
-    // ("pipeline made after warm-up").
-    void Prewarm(uint32_t overlay_samples);
+    // ("pipeline made after warm-up"). With `hud` (the `vr` setting), VR's
+    // HUD panel's too, which a first HUD frame otherwise makes.
+    void Prewarm(uint32_t overlay_samples, bool hud = false);
     // The worker, waiting for a capture, once Prewarm has run. The first
     // time it grows SDL_gpu's Direct3D 12 pools (command buffers and their
     // fences, uniform buffers, descriptor heap pairs) to what a song's

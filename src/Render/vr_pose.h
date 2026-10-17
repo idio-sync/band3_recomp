@@ -2,8 +2,11 @@
 
 // VR's eyes for the native renderer (the `vr` setting, xr_present.h): where
 // each eye is in the venue and what it sees, and a captured frame re-posed
-// for one (RePose). No OpenXR here: XR's poses and fields of view come in as
-// plain numbers, so this is the same on every platform and unit-tested.
+// for one (RePose); and the HUD panel, the frame's other draws (the track,
+// the HUD, menus) as a quad in front of the head: which draws are its
+// (HudBoundary) and where it hangs (HudPlacement). No OpenXR here: XR's
+// poses and fields of view come in as plain numbers, so this is the same on
+// every platform and unit-tested.
 //
 // Units and axes: Milo's are inches (kUnitsPerMetre) with x right, y forward,
 // z up; OpenXR's metres with x right, y up, -z forward, so XR (x, y, z) is
@@ -16,6 +19,8 @@
 #include <cstdlib>
 #include <string>
 
+#include "src/Render/camera_cut.h"
+#include "src/Render/frame_compose.h"
 #include "src/Render/free_cam.h"
 #include "src/Render/scene_capture.h"
 
@@ -149,5 +154,71 @@ struct RePoseStats {
 // draws (the track, the HUD, shadow maps' lights) stay as they are. `in` is
 // left unchanged. Without a perspective world camera, `out` is `in` as is.
 RePoseStats RePose(const FrameCapture& in, const Eye& eye, FrameCapture& out);
+
+// Where the HUD panel's draws start in `fc` (RasterOptions::hud_from,
+// soft_raster.h's OnHud): post_boundary, or 0, the whole picture on the
+// panel, where the eyes can't see the frame from where they are: no
+// DoPostProcess (some menu frames, frame_compose.h's ProcKnown) or no
+// perspective world camera for RePose. The eyes then show the clear colour,
+// not the flat picture stretched across them.
+inline uint32_t HudBoundary(const FrameCapture& fc) {
+    if (!ProcKnown(fc)) return 0;
+    const WorldCamera cam = WorldCameraOf(fc);
+    freecam::Pose pose{};
+    Mat4 proj{};
+    if (!cam.valid || !freecam::Decompose(cam.view_proj, pose, proj)) return 0;
+    return fc.post_boundary;
+}
+
+// The HUD panel's quad layer (XrCompositionLayerQuad) in LOCAL space: in
+// front of the head as it faced at the recenter, `distance` metres ahead
+// along the floor and `below` metres under the eyes, tilted back to face
+// them. Its pose's -z (the quad's back) points away from the eyes: the quad
+// faces +z, toward them, at a tilt of atan(below / distance) about its x.
+struct HudLayout {
+    float distance = 1.8f;  // metres ahead
+    float below = 0.25f;    // metres below the eyes
+    float width_deg = 55;   // across, seen from the eyes at `distance`; used without width_m
+    float width_m = 0;      // across in metres; 0: from width_deg
+    float aspect = 16.0f / 9.0f;  // the picture's, width over height
+};
+
+struct HudQuad {
+    XrPose pose;
+    float size[2] = {0, 0};  // XrExtent2Df: width, height in metres
+};
+
+// `head` is the recenter's head pose in LOCAL space (its position the eyes'
+// midpoint); only its yaw (turn about XR's +y) is kept, so the panel stands
+// level whatever the head's pitch and roll were
+inline HudQuad HudPlacement(const HudLayout& l, const XrPose& head) {
+    HudQuad h;
+    // the head's back (+z, opposite its forward) turned by its quaternion,
+    // flattened onto the floor: the yaw about +y, from +z
+    const float back[3] = {0, 0, 1};
+    float f[3];
+    Rotate(head.q, back, f);
+    float yaw = std::atan2(f[0], f[2]);
+    if (!(std::fabs(f[0]) + std::fabs(f[2]) > 1e-6f)) yaw = 0;  // looking straight up or down
+    // the panel's centre: ahead of the head on the floor's plane, below it
+    const float s = std::sin(yaw), c = std::cos(yaw);
+    h.pose.p[0] = head.p[0] - s * l.distance;
+    h.pose.p[1] = head.p[1] - l.below;
+    h.pose.p[2] = head.p[2] - c * l.distance;
+    // yaw about +y, then the tilt back about the panel's own x (its top edge
+    // away from the eyes, its normal up toward them: -tilt): q = yaw * tilt
+    const float tilt = std::atan2(l.below, l.distance);
+    const float qy[4] = {0, std::sin(yaw / 2), 0, std::cos(yaw / 2)};
+    const float qx[4] = {-std::sin(tilt / 2), 0, 0, std::cos(tilt / 2)};
+    h.pose.q[0] = qy[3] * qx[0] + qy[0] * qx[3] + qy[1] * qx[2] - qy[2] * qx[1];
+    h.pose.q[1] = qy[3] * qx[1] - qy[0] * qx[2] + qy[1] * qx[3] + qy[2] * qx[0];
+    h.pose.q[2] = qy[3] * qx[2] + qy[0] * qx[1] - qy[1] * qx[0] + qy[2] * qx[3];
+    h.pose.q[3] = qy[3] * qx[3] - qy[0] * qx[0] - qy[1] * qx[1] - qy[2] * qx[2];
+    const float width =
+        l.width_m > 0 ? l.width_m : 2 * l.distance * std::tan(l.width_deg * 3.14159265f / 360);
+    h.size[0] = width;
+    h.size[1] = l.aspect > 0 ? width / l.aspect : width;
+    return h;
+}
 
 }  // namespace band3::render::vr

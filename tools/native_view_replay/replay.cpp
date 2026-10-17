@@ -21,6 +21,7 @@
 //                               [--no-grain] [--no-velocity | --no-velocity-objects]
 //                               [--no-gamma | --gamma-from <other.cap>]
 //                               [--scale <f>] [--shadow-scale <f>] [--msaa 1|2|4]
+//                               [--overlay-only | --split-check] [--hud-from <draw>]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
 // and inside the frustum with the matrix as captured and transposed (the back
@@ -154,6 +155,16 @@
 // --msaa draws the overlay (the draws from post-processing on: the track, the
 // HUD) with that many samples a pixel, averaged (RasterOptions::msaa,
 // native_view_msaa): 2, the default, as RB3 does, 4 smoother, 1 none.
+// --overlay-only draws VR's HUD panel (soft_raster.h's BackBufferPart::kHud):
+// the back buffer's draws from vr_pose.h's HudBoundary on (--list's "vr hud:"
+// line; --hud-from another draw), no world, over transparent black, its
+// premultiplied colour to out.png and its alpha (coverage) as grey to
+// out.alpha.png, with how much of it is clear, solid, partly covered, and
+// colour at alpha 0 (additive light). --split-check also draws the eyes'
+// picture (kEyes) and puts the panel over it, into out.split.png, against
+// the whole frame drawn at once (the "metrics:" line): the split should
+// draw every draw once, so they differ only where blending clamps or by
+// rounding (--no-gamma: a ramp goes over each picture apart).
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
@@ -178,6 +189,7 @@
 #include "src/Render/shade_model.h"
 #include "src/Render/soft_raster.h"
 #include "src/Render/free_cam.h"
+#include "src/Render/vr_pose.h"
 
 using namespace band3::render;
 
@@ -626,6 +638,13 @@ void PrintPassSummary(const FrameCapture& fc) {
                     (unsigned long long)fc.game_frame);
     else
         std::printf("composed: no, the world is the frame's own\n");
+    // VR's split of the back buffer (vr_pose.h's HudBoundary)
+    const uint32_t hud = vr::HudBoundary(fc);
+    std::printf("vr hud: from draw %u%s\n", hud,
+                hud == 0 && !fc.draws.empty()
+                    ? (ProcKnown(fc) ? " (no perspective world camera: all of it)"
+                                     : " (no post-processing: all of it)")
+                    : "");
 }
 
 // the largest difference between two runs of floats
@@ -1148,6 +1167,8 @@ int main(int argc, char** argv) {
     bool sized = false;
     float scale = 0;  // --scale's, 0 none
     bool free_cam = false, world_only = false;
+    bool overlay_only = false, split_check = false;
+    long hud_from = -1;  // --hud-from's, -1 vr::HudBoundary's
     float free_eye[3] = {}, free_at[3] = {}, free_wider = 1;
     for (int i = 3; i < argc; i++) {
         const std::string a = argv[i];
@@ -1262,6 +1283,9 @@ int main(int argc, char** argv) {
         else if (a == "--free-wider" && i + 1 < argc) free_wider = std::strtof(argv[++i], nullptr);
         else if (a == "--free-hfov" && i + 1 < argc) free_wider = -std::strtof(argv[++i], nullptr);
         else if (a == "--world-only") world_only = true;
+        else if (a == "--overlay-only") overlay_only = true;
+        else if (a == "--split-check") overlay_only = split_check = true;
+        else if (a == "--hud-from" && i + 1 < argc) hud_from = std::strtol(argv[++i], nullptr, 0);
     }
     if (free_cam || world_only) ApplyFreeCam(*fc, free_cam, free_eye, free_at, free_wider, world_only);
 
@@ -1541,6 +1565,78 @@ int main(int argc, char** argv) {
                     argv[2], alpha_path.c_str(), dump_rt, w, h,
                     100.0 * double(opaque) / double(px.size()), rs.passes, rs.draws,
                     rs.rt_missing, rs.ms);
+        return 0;
+    }
+
+    if (overlay_only) {
+        // VR's HUD panel (soft_raster.h's BackBufferPart::kHud): its colour
+        // as stored, premultiplied (so over black), and its alpha as grey
+        const uint32_t from = hud_from >= 0 ? uint32_t(hud_from) : vr::HudBoundary(*fc);
+        RasterOptions ho = o;
+        ho.part = BackBufferPart::kHud;
+        ho.hud_from = from;
+        std::vector<uint32_t> hud;
+        const RasterStats rs = Rasterize(*fc, ho, hud);
+        std::vector<uint32_t> px(hud.size()), alpha(hud.size());
+        // clear: alpha 0 and black; solid: alpha 1; glow: colour at alpha 0
+        // (additive); over: colour brighter than alpha allows, which
+        // premultiplied colour can't be except by adding
+        size_t clear = 0, solid = 0, partial = 0, glow = 0, over = 0;
+        for (size_t i = 0; i < hud.size(); i++) {
+            const uint32_t c = hud[i], a = c >> 24;
+            const uint32_t peak = std::max({c & 0xff, c >> 8 & 0xff, c >> 16 & 0xff});
+            if (a == 0 && peak == 0) clear++;
+            else if (a == 0) glow++;
+            else if (a == 0xff) solid++;
+            else partial++;
+            if (a && peak > a) over++;
+            alpha[i] = a | a << 8 | a << 16 | 0xff000000u;
+            px[i] = c | 0xff000000u;
+        }
+        std::string alpha_path = argv[2];
+        alpha_path = alpha_path.substr(0, alpha_path.size() - 4) + ".alpha.png";
+        WritePng(argv[2], px, o.width, o.height);
+        WritePng(alpha_path, alpha, o.width, o.height);
+        const double n = double(std::max<size_t>(hud.size(), 1)) / 100.0;
+        std::printf("%s (and %s): the HUD panel from draw %u of %zu (post_boundary %d), %ux%u; "
+                    "%.1f%% clear, %.1f%% solid, %.1f%% partly covered, %.1f%% colour at "
+                    "alpha 0, %.1f%% colour above alpha; %u draws, %u texture passes, %.1f ms\n",
+                    argv[2], alpha_path.c_str(), from, fc->draws.size(),
+                    ProcKnown(*fc) ? int(fc->post_boundary) : -1, o.width, o.height,
+                    double(clear) / n, double(solid) / n, double(partial) / n, double(glow) / n,
+                    double(over) / n, rs.draws, rs.passes, rs.ms);
+        if (!split_check) return 0;
+        // the eyes' picture (kEyes, the same split) with the panel over it,
+        // premultiplied, against the whole frame drawn at once: the split
+        // draws each draw once. Not equal where blending clamps (Add over a
+        // bright world) or with a gamma ramp (it goes over each picture).
+        RasterOptions eo = o;
+        eo.part = BackBufferPart::kEyes;
+        eo.hud_from = from;
+        std::vector<uint32_t> eyes, whole;
+        Rasterize(*fc, eo, eyes);
+        Rasterize(*fc, o, whole);
+        std::vector<uint32_t> composite(hud.size());
+        for (size_t i = 0; i < hud.size(); i++) {
+            const uint32_t h = hud[i], e = eyes[i];
+            const uint32_t inv = 255 - (h >> 24);
+            uint32_t r = 0xff000000u;
+            for (int k = 0; k < 3; k++) {
+                const uint32_t v = (h >> (8 * k) & 0xff) + ((e >> (8 * k) & 0xff) * inv + 127) / 255;
+                r |= std::min(v, 255u) << (8 * k);
+            }
+            composite[i] = r;
+        }
+        std::string split_path = argv[2];
+        split_path = split_path.substr(0, split_path.size() - 4) + ".split.png";
+        WritePng(split_path, composite, o.width, o.height);
+        WritePng(split_path.substr(0, split_path.size() - 10) + ".eyes.png", eyes, o.width,
+                 o.height);
+        const DiffStats ds = Measure(whole, composite, o.width, o.height, 1, crop);
+        std::printf("%s: the eyes' picture with the panel over it; against the whole frame: mean "
+                    "difference %.2f of 255, %.2f%% of pixels off by more than 8\n",
+                    split_path.c_str(), ds.mean, ds.over8);
+        PrintDiffStats(ds, crop);
         return 0;
     }
 

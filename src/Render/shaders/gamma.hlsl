@@ -1,5 +1,7 @@
 // The GPU backend's display gamma pass (gamma_ramp.h's GammaLut) over the
-// finished picture, overlay included, with post.hlsl's VSFullscreen.
+// finished picture, overlay included, with post.hlsl's VSFullscreen: alpha 1
+// (PSGamma), or VR's HUD panel's alpha kept (PSGammaAlpha), its colour
+// premultiplied by it.
 //
 // Registers follow SDL_gpu's layout as post.hlsl's do: pixel resources in
 // space2, pixel uniforms in space3.
@@ -27,12 +29,22 @@ struct GammaIn {
     float4 pos : SV_Position;
 };
 
-float4 PSGamma(GammaIn i) : SV_Target0 {
-    const float3 c = color_tex.Load(int3(int2(i.pos.xy), 0)).rgb;
+float3 Graded(float3 c) {
     // exact 8-bit values in and out
     const uint3 v = uint3(saturate(c) * 255.0 + 0.5);
     const uint r = lut[v.r >> 2u][v.r & 3u] & 0xffu;
     const uint g = (lut[v.g >> 2u][v.g & 3u] >> 8u) & 0xffu;
     const uint b = (lut[v.b >> 2u][v.b & 3u] >> 16u) & 0xffu;
-    return float4(float3(r, g, b) / 255.0, 1.0);
+    return float3(r, g, b) / 255.0;
+}
+
+float4 PSGamma(GammaIn i) : SV_Target0 {
+    return float4(Graded(color_tex.Load(int3(int2(i.pos.xy), 0)).rgb), 1.0);
+}
+
+// As soft_raster.cpp's ApplyGammaLut: the ramp on the stored (premultiplied)
+// colour, alpha as it is
+float4 PSGammaAlpha(GammaIn i) : SV_Target0 {
+    const float4 c = color_tex.Load(int3(int2(i.pos.xy), 0));
+    return float4(Graded(c.rgb), c.a);
 }

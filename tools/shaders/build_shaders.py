@@ -136,6 +136,8 @@ SHADERS = [
     ("gamma.hlsl", "gamma_shaders.gen.h", [
         ("kGammaPixel", "PSGamma", "ps_5_1", "ps_6_0",
          {("ubos", "GammaUniforms", 3, 0), ("textures", "color_tex", 2, 0)}),
+        ("kGammaAlphaPixel", "PSGammaAlpha", "ps_5_1", "ps_6_0",
+         {("ubos", "GammaUniforms", 3, 0), ("textures", "color_tex", 2, 0)}),
     ]),
     # a texture pass's mips, each level from the one above as SDL's blits
     # make them

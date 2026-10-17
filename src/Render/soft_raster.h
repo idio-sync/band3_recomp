@@ -42,6 +42,11 @@
 // Texture passes, the world and its depth stay 1x. Like GPU MSAA: per-sample
 // colour and depth at D3D's standard positions (kSamplePositions), shaded
 // once at the pixel centre, averaged at the frame's end.
+//
+// VR splits the back buffer's draws (RasterOptions::part, OnHud): the eyes
+// draw the world, the HUD panel the rest into a picture of its own, cleared
+// to transparent black, its alpha what covers each pixel (premultiplied, so
+// additive gems keep alpha 0), for a compositor to put over the eyes.
 
 namespace band3::render {
 
@@ -52,6 +57,17 @@ struct PostHistory;
 // the picture, or the scene target's alpha or depth (DepthViewGrey) at
 // post_boundary, without the overlay
 enum class RasterView { kFinal, kSceneAlpha, kSceneDepth };
+
+// VR's two pictures of one frame (vr_pose.h): the back buffer's draws split
+// between the eyes and the HUD panel by OnHud, each drawn by one of them.
+// kHud draws its draws alone, overlay-only (OverlayOnly): no world, no
+// resolve or post-processing, starting from transparent black (colour and
+// depth 0), its alpha coverage (premultiplied, AlphaRule kCoverage in
+// soft_raster.cpp, AlphaMode::kCoverage in gpu_view.cpp), kept through
+// gamma. A panel from draw 0 is the whole frame, drawn as kAll is (its
+// post-processing and REFRACT_WORLD draws as the game has them), opaque.
+// kHud with a scene-target view draws nothing.
+enum class BackBufferPart : uint8_t { kAll, kEyes, kHud };
 
 struct RasterOptions;
 struct DrawItem;
@@ -175,9 +191,12 @@ struct RasterOptions {
     // layer per version, and passes move ahead of the world where that
     // changes nothing (gpu_view.h's PlanHoist)
     bool hoist_passes = false;
-    // GPU, VR's eyes (vr_pose.h): the back buffer's draws from post_boundary
-    // on (the track, the HUD) left out (SkipsOverlay)
-    bool skip_overlay = false;
+    // VR (vr_pose.h): the eyes leave out the HUD's draws (the track, the HUD,
+    // menus: OnHud), the HUD panel draws them alone (BackBufferPart)
+    BackBufferPart part = BackBufferPart::kAll;
+    // where the HUD's draws start (HudFrom): kNoPost, post_boundary; 0 puts
+    // the whole picture on the HUD (vr::HudBoundary)
+    uint32_t hud_from = FrameCapture::kNoPost;
     // GPU (native_gpu_draw_profile), with gpu_timestamps: a timestamp before
     // each back-buffer world draw, into GpuStats::draw_times
     bool gpu_draw_profile = false;
@@ -222,9 +241,32 @@ struct RasterOptions {
     bool clock_keep = false;
 };
 
-// RasterOptions::skip_overlay: whether back-buffer draw `d` is left out
-inline bool SkipsOverlay(const RasterOptions& o, const FrameCapture& f, size_t d) {
-    return o.skip_overlay && d >= f.post_boundary;
+// RasterOptions::hud_from as a draw index (kNoPost: none is the HUD's)
+inline uint32_t HudFrom(const RasterOptions& o, const FrameCapture& f) {
+    return o.hud_from != FrameCapture::kNoPost ? o.hud_from : f.post_boundary;
+}
+
+// Whether back-buffer draw `d` is the HUD panel's, the one split of VR's
+// pictures (BackBufferPart) so each draw is drawn once: from HudFrom on. The
+// eyes' own draws past it (a 3D highway: the track cameras' draws in the
+// eyes) would be told apart here, by its camera.
+inline bool OnHud(const RasterOptions& o, const FrameCapture& f, size_t d) {
+    return d >= HudFrom(o, f);
+}
+
+// whether this picture is the HUD panel drawn overlay-only (BackBufferPart);
+// from draw 0 it's the whole frame, drawn as usual
+inline bool OverlayOnly(const RasterOptions& o, const FrameCapture& f) {
+    return o.part == BackBufferPart::kHud && HudFrom(o, f) > 0;
+}
+
+// whether this picture (RasterOptions::part) draws back-buffer draw `d`
+inline bool DrawnInPart(const RasterOptions& o, const FrameCapture& f, size_t d) {
+    switch (o.part) {
+        case BackBufferPart::kEyes: return !OnHud(o, f, d);
+        case BackBufferPart::kHud: return OnHud(o, f, d);
+        default: return true;
+    }
 }
 
 inline bool DrawnByOptions(const FrameCapture& f, const DrawItem& d, const RasterOptions& o) {

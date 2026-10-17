@@ -159,9 +159,9 @@ struct PixelUniforms {
     // width and height: the five before the normal map, then the shadow
     // map's, the normal map's and the detail map's
     uint32_t tex_size[8][4];
-    // x: kPremultiply; y: bit per map (tex_layer's order) for DXN kept as BC5;
-    // z, w: R8 maps' expand codes, a byte each, 0 for the rest (mesh.hlsl's
-    // MapTexel)
+    // x: kPremultiply, kAlphaOne; y: bit per map (tex_layer's order) for DXN
+    // kept as BC5; z, w: R8 maps' expand codes, a byte each, 0 for the rest
+    // (mesh.hlsl's MapTexel)
     uint32_t flags[4];
     // sample_model.h's PackSampler, in tex_layer's order
     uint32_t tex_sampler[8][4];
@@ -169,7 +169,7 @@ struct PixelUniforms {
 static_assert(sizeof(PixelUniforms) == sizeof(shade::ShadeParams) + 304);
 
 // mesh.hlsl's pixel_flags.x
-enum : uint32_t { kPremultiply = 1 };
+enum : uint32_t { kPremultiply = 1, kAlphaOne = 2 };
 
 // RasterOptions::gpu_labels: an indexed draw as DescribeIndexedDraw tells it,
 // kept as numbers so the frame only copies them; the text is made for a hang
@@ -258,10 +258,16 @@ enum : int {
 static_assert(kBlendPreMultAlpha < 8, "Pipeline()'s key keeps the mode in 3 bits");
 
 // What a draw's pipeline does with its target's alpha: leaves it, blends it
-// by the colour's factors (into a texture), or as RB3's back buffer does
-// (WritesSceneAlpha: ONE ONE MAX where it blends)
-enum class AlphaMode { kNone, kTexture, kScene };
-constexpr int kNumAlphaModes = 3;
+// by the colour's factors (into a texture), as RB3's back buffer does
+// (WritesSceneAlpha: ONE ONE MAX where it blends), or as coverage (VR's HUD
+// panel, soft_raster.cpp's AlphaRule::kCoverage: Src 1 from the shader,
+// kAlphaOne; SrcAlpha and PreMultAlpha ONE INVSRCALPHA; the rest keep it)
+enum class AlphaMode { kNone, kTexture, kScene, kCoverage };
+// Pipeline()'s key keeps it in 2 bits
+constexpr int kNumAlphaModes = 4;
+static_assert(kNumAlphaModes <= 4);
+// every frame's; kCoverage is only the HUD panel's (PrewarmHud)
+constexpr int kNumFrameAlphaModes = 3;
 
 // mesh.hlsl's PSMain, PSSpotCone, PSSoftParticle, PSShadowDepth (R32_FLOAT
 // target, LESS against depth cleared to the pass's clear_z, no blend)
@@ -534,6 +540,9 @@ struct GpuRenderer::Impl {
     // gamma.hlsl's: the display gamma ramp over the finished picture
     SDL_GPUShader* gamma_shader = nullptr;
     SDL_GPUGraphicsPipeline* gamma_pipeline = nullptr;
+    // the HUD panel's (OverlayOnly): the ramp on rgb, its alpha kept
+    SDL_GPUShader* gamma_alpha_shader = nullptr;
+    SDL_GPUGraphicsPipeline* gamma_alpha_pipeline = nullptr;
     // mips.hlsl's: texture pass mips drawn inline (RasterOptions::inline_mips)
     // as SDL's GenerateMipmaps does on Direct3D 12 (inline_mips_ok only).
     // mip_sampler has no LOD clamp; linear_sampler's pins level 0.
@@ -552,6 +561,8 @@ struct GpuRenderer::Impl {
     // after it is one it missed, which a frame waited for (logged)
     std::atomic<bool> warm{false};
     bool warmed_up = false;
+    // PrewarmHud has run: VR's HUD panel's pipelines, made only with `vr`
+    bool hud_warm = false;
     // RasterOptions::gpu_labels: the last frame submitted and its indexed
     // draws in order, a list per command buffer (DescribeIndexedDraw)
     std::mutex draw_log_mutex;
@@ -1002,8 +1013,12 @@ struct GpuRenderer::Impl {
     void ReleaseTargets();
     // makes every pipeline a frame can ask for (the overlay's at
     // DeviceSamples(overlay_samples)) and the usual upload buffer, so no
-    // frame stalls on them
-    void Prewarm(uint32_t overlay_samples);
+    // frame stalls on them; with `hud`, PrewarmHud's too
+    void Prewarm(uint32_t overlay_samples, bool hud);
+    // VR's HUD panel's pipelines (AlphaMode::kCoverage, single-sampled
+    // without PSMain's variants and at the overlay's samples), which other
+    // frames never ask for
+    void PrewarmHud(uint32_t overlay_samples);
     // SDL_gpu's Direct3D 12 pools, grown only when a frame finds them empty,
     // and never shrunk: command buffers (a command list and allocator, ~7 ms
     // each on the R9700 in its VM), their fences (made at submit, ~6.5 ms),
@@ -1394,6 +1409,9 @@ bool GpuRenderer::Impl::Create() {
     gamma_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kGammaPixelDxbc,
                               sizeof(kGammaPixelDxbc), kGammaPixelSpirv, sizeof(kGammaPixelSpirv),
                               "PSGamma", 1, 0, 1);
+    gamma_alpha_shader = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, kGammaAlphaPixelDxbc,
+                                    sizeof(kGammaAlphaPixelDxbc), kGammaAlphaPixelSpirv,
+                                    sizeof(kGammaAlphaPixelSpirv), "PSGammaAlpha", 1, 0, 1);
     for (int v = 0; v < kNumMeshVariants; v++) {
         const MeshVariantDef& def = kMeshVariantDefs[v];
         pixel_variants[v] = MakeShader(format, SDL_GPU_SHADERSTAGE_FRAGMENT, def.dxbc,
@@ -1405,7 +1423,7 @@ bool GpuRenderer::Impl::Create() {
         !fullscreen_shader || !resolve_shader || !overlay_start_shader || !downsample_shader ||
         !blur_shader ||
         !glare_shader || !composite_shader || !composite_history_shader || !velocity_shader ||
-        !velocity_object_vs || !velocity_object_ps || !gamma_shader)
+        !velocity_object_vs || !velocity_object_ps || !gamma_shader || !gamma_alpha_shader)
         return false;
     resolve_pipeline = MakeFullscreenPipeline(resolve_shader, "resolve");
     downsample_pipeline = MakeFullscreenPipeline(downsample_shader, "downsample");
@@ -1418,10 +1436,11 @@ bool GpuRenderer::Impl::Create() {
     for (int c = 0; c < 3; c++)
         velocity_object_pipelines[c] = MakeVelocityObjectPipeline(CullWinding(c));
     gamma_pipeline = MakeFullscreenPipeline(gamma_shader, "gamma");
+    gamma_alpha_pipeline = MakeFullscreenPipeline(gamma_alpha_shader, "gamma with alpha");
     if (!resolve_pipeline || !downsample_pipeline || !blur_pipeline || !glare_pipeline ||
         !composite_pipeline || !composite_history_pipeline || !velocity_pipeline ||
         !velocity_object_pipelines[0] || !velocity_object_pipelines[1] ||
-        !velocity_object_pipelines[2] || !gamma_pipeline)
+        !velocity_object_pipelines[2] || !gamma_pipeline || !gamma_alpha_pipeline)
         return false;
     // Direct3D 12 and Vulkan both should
     depth_sampled = SDL_GPUTextureSupportsFormat(
@@ -1576,7 +1595,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
         for (SDL_GPUGraphicsPipeline* p :
              {resolve_pipeline, downsample_pipeline, blur_pipeline, glare_pipeline,
               composite_pipeline, composite_history_pipeline, velocity_pipeline, gamma_pipeline,
-              velocity_object_pipelines[0], velocity_object_pipelines[1],
+              gamma_alpha_pipeline, velocity_object_pipelines[0], velocity_object_pipelines[1],
               velocity_object_pipelines[2], mip_pipeline})
             if (p) SDL_ReleaseGPUGraphicsPipeline(device, p);
         for (SDL_GPUShader*& sh : pixel_variants) {
@@ -1588,8 +1607,8 @@ void GpuRenderer::Impl::Release(bool stop_video) {
                                   overlay_start_shader,
                                   downsample_shader, blur_shader, glare_shader, composite_shader,
                                   composite_history_shader, velocity_shader, velocity_object_vs,
-                                  velocity_object_ps, gamma_shader, mip_vertex_shader,
-                                  mip_shader})
+                                  velocity_object_ps, gamma_shader, gamma_alpha_shader,
+                                  mip_vertex_shader, mip_shader})
             if (sh) SDL_ReleaseGPUShader(device, sh);
         if (sampler) SDL_ReleaseGPUSampler(device, sampler);
         if (linear_sampler) SDL_ReleaseGPUSampler(device, linear_sampler);
@@ -1624,6 +1643,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     pipelines.clear();
     warm = false;
     warmed_up = false;
+    hud_warm = false;
     pools_warm = false;
     device = nullptr;
     vertex_shader = pixel_shader = spot_shader = soft_shader = shadow_shader = nullptr;
@@ -1639,12 +1659,13 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     ms_fallback_logged = 0;
     ms_failure_logged = false;
     downsample_shader = blur_shader = glare_shader = composite_shader = gamma_shader = nullptr;
+    gamma_alpha_shader = nullptr;
     composite_history_shader = velocity_shader = velocity_object_vs = velocity_object_ps =
         nullptr;
     for (auto& p : velocity_object_pipelines) p = nullptr;
     resolve_pipeline = downsample_pipeline = blur_pipeline = glare_pipeline = nullptr;
     composite_pipeline = composite_history_pipeline = velocity_pipeline = nullptr;
-    gamma_pipeline = nullptr;
+    gamma_pipeline = gamma_alpha_pipeline = nullptr;
     mip_vertex_shader = mip_shader = nullptr;
     mip_pipeline = nullptr;
     mip_sampler = nullptr;
@@ -1699,7 +1720,8 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
     SDL_GPUColorComponentFlags mask =
         SDL_GPU_COLORCOMPONENT_R | SDL_GPU_COLORCOMPONENT_G | SDL_GPU_COLORCOMPONENT_B;
     if (blend == kBlendDest) mask = 0;
-    if (alpha == AlphaMode::kTexture && blend != kBlendDest) mask |= SDL_GPU_COLORCOMPONENT_A;
+    if ((alpha == AlphaMode::kTexture || alpha == AlphaMode::kCoverage) && blend != kBlendDest)
+        mask |= SDL_GPU_COLORCOMPONENT_A;
     if (alpha == AlphaMode::kScene) mask |= SDL_GPU_COLORCOMPONENT_A;
     bs.color_write_mask = mask;
     bs.color_blend_op = SDL_GPU_BLENDOP_ADD;
@@ -1755,6 +1777,17 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
         bs.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
         bs.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
         bs.alpha_blend_op = SDL_GPU_BLENDOP_MAX;
+    }
+    // the HUD panel's coverage: Src writes the shader's alpha, 1
+    // (kAlphaOne); SrcAlpha and PreMultAlpha a + d (1 - a), as premultiplied
+    // colour is; Add, SrcAlphaAdd, Subtract and Multiply keep it (Dest
+    // writes nothing)
+    if (alpha == AlphaMode::kCoverage && bs.enable_blend) {
+        const bool covers = blend == kBlendSrcAlpha || blend == kBlendPreMultAlpha;
+        bs.src_alpha_blendfactor = covers ? SDL_GPU_BLENDFACTOR_ONE : SDL_GPU_BLENDFACTOR_ZERO;
+        bs.dst_alpha_blendfactor =
+            covers ? SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA : SDL_GPU_BLENDFACTOR_ONE;
+        bs.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
     }
     // soft_raster.cpp's Target::zw
     const bool shadow = pixel == PixelKind::kShadowDepth;
@@ -1901,17 +1934,20 @@ bool GpuRenderer::Impl::EnsureOverlayTargets(uint32_t samples) {
     return true;
 }
 
-void GpuRenderer::Impl::Prewarm(uint32_t overlay_samples) {
+// Prewarm's: RulesFor's, blending on and off
+constexpr DepthRules kPrewarmRules[] = {{false, false, false}, {true, true, false},
+                                        {false, false, true},  {true, true, true},
+                                        {true, false, true}};
+
+void GpuRenderer::Impl::Prewarm(uint32_t overlay_samples, bool hud) {
     warm = true;
     const auto start = std::chrono::steady_clock::now();
-    // RulesFor's, blending on and off; culling none, D3DCULL_CW (RndMat's
-    // cull flag) or D3DCULL_CCW (reflections, with several blends and alphas)
-    constexpr DepthRules kRules[] = {{false, false, false}, {true, true, false},
-                                     {false, false, true},  {true, true, true},
-                                     {true, false, true}};
+    // culling none, D3DCULL_CW (RndMat's cull flag) or D3DCULL_CCW
+    // (reflections, with several blends and alphas)
+    const auto& kRules = kPrewarmRules;
     for (CullWinding cull :
          {CullWinding::kNone, CullWinding::kClockwise, CullWinding::kCounterClockwise})
-        for (int alpha = 0; alpha < kNumAlphaModes; alpha++)
+        for (int alpha = 0; alpha < kNumFrameAlphaModes; alpha++)
             for (int blend = kBlendDest; blend <= kBlendPreMultAlpha; blend++)
                 for (const DepthRules& r : kRules) Pipeline(blend, r, AlphaMode(alpha), cull);
     // spotlight cones: Add into the depthless depth volume (RenderConeDefs
@@ -1927,7 +1963,7 @@ void GpuRenderer::Impl::Prewarm(uint32_t overlay_samples) {
     for (int v = 0; v < shaders::kNumMeshVariants; v++)
         for (CullWinding cull :
              {CullWinding::kNone, CullWinding::kClockwise, CullWinding::kCounterClockwise})
-            for (int alpha = 0; alpha < kNumAlphaModes; alpha++)
+            for (int alpha = 0; alpha < kNumFrameAlphaModes; alpha++)
                 for (int blend = kBlendDest; blend <= kBlendPreMultAlpha; blend++)
                     for (const DepthRules& r : kRules)
                         Pipeline(blend, r, AlphaMode(alpha), cull, PixelKind::kMesh, 1, v);
@@ -1949,6 +1985,7 @@ void GpuRenderer::Impl::Prewarm(uint32_t overlay_samples) {
                 for (const DepthRules& r : kRules)
                     Pipeline(blend, r, AlphaMode::kNone, cull, PixelKind::kMesh, samples);
     }
+    if (hud) PrewarmHud(overlay_samples);
     if (upload_size < kInitialUploadBytes) {
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
         SDL_GPUTransferBufferCreateInfo tbi{};
@@ -1962,6 +1999,27 @@ void GpuRenderer::Impl::Prewarm(uint32_t overlay_samples) {
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                           start).count());
     warmed_up = true;
+}
+
+void GpuRenderer::Impl::PrewarmHud(uint32_t overlay_samples) {
+    hud_warm = true;
+    const auto start = std::chrono::steady_clock::now();
+    const size_t before = pipelines.size();
+    // made ahead, not missed: Pipeline() doesn't log them
+    const bool was_warmed_up = std::exchange(warmed_up, false);
+    // single-sampled (no variants: the draw's MeshVariantFor isn't asked),
+    // and at the game's 2 samples and the setting's, as Prewarm's overlay
+    for (uint32_t samples : {1u, DeviceSamples(2), DeviceSamples(overlay_samples)})
+        for (CullWinding cull :
+             {CullWinding::kNone, CullWinding::kClockwise, CullWinding::kCounterClockwise})
+            for (int blend = kBlendDest; blend <= kBlendPreMultAlpha; blend++)
+                for (const DepthRules& r : kPrewarmRules)
+                    Pipeline(blend, r, AlphaMode::kCoverage, cull, PixelKind::kMesh, samples);
+    warmed_up = was_warmed_up;
+    REXLOG_INFO("native view gpu: {} pipelines for VR's HUD panel in {:.1f} ms",
+                pipelines.size() - before,
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                          start).count());
 }
 
 void GpuRenderer::Impl::WarmPools() {
@@ -3499,9 +3557,13 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     r8_now = r8_format && o.r8_textures;
     // where the last pass, the gamma ramp's, puts the finished frame
     SDL_GPUTexture* const output = slot >= 0 ? outputs[slot].texture : graded;
+    // VR's HUD panel drawn overlay-only (soft_raster.h's OverlayOnly): no
+    // world, resolve or post-processing; transparent black under it, alpha
+    // its coverage (AlphaMode::kCoverage), kept by the gamma pass
+    const bool hud = OverlayOnly(o, frame);
     // RasterOptions::post_buffer: frames that post-process nothing show the
     // kept picture instead of drawing their world
-    const bool kept_buffer = o.post_buffer && o.view == RasterView::kFinal;
+    const bool kept_buffer = o.post_buffer && o.view == RasterView::kFinal && !hud;
     const bool shows_kept = kept_buffer && ShowsPostBuffer(frame) && post_buffer.tex &&
                             post_buffer.w == width && post_buffer.h == height &&
                             PostBufferFor(frame, post_buffer.game_frame);
@@ -3511,8 +3573,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // RasterOptions::world_ahead: the previous Render (serial is still its)
     // drew this composed post frame's world into the scene target, so draws
     // [0, composed_world_end) are skipped and it goes on from the resolve
-    const bool uses_ahead = !ahead_pass && !pre_pass && o.world_ahead && frame.composed &&
-                            frame.composed_world_end && !shows_kept &&
+    const bool uses_ahead = !ahead_pass && !pre_pass && !hud && o.world_ahead &&
+                            frame.composed && frame.composed_world_end && !shows_kept &&
                             o.view == RasterView::kFinal && ahead_was.serial &&
                             ahead_was.serial == serial &&
                             ahead_was.world_frame == frame.world_frame &&
@@ -3524,7 +3586,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // else the world drawn kPreBufferPasses times first, each its own Render,
     // as Rasterize() does; black (no_depth) where neither. This frame's world
     // is kept in turn.
-    const bool world_refracts = !shows_kept && !uses_ahead && WorldRefracts(frame);
+    const bool world_refracts = !hud && !shows_kept && !uses_ahead && WorldRefracts(frame);
     const bool keeps_pre =
         world_refracts && !pre_pass && o.pre_buffer && o.view == RasterView::kFinal;
     SDL_GPUTexture* world_behind = no_depth;
@@ -3776,7 +3838,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             if (!run.pass && shows_kept && d < frame.post_boundary) continue;
             if (!run.pass && (d < ahead_end || (ahead_pass && d >= frame.post_boundary)))
                 continue;
-            if (!run.pass && SkipsOverlay(o, frame, d)) continue;
+            // the other VR picture's (soft_raster.h's OnHud)
+            if (!run.pass && !DrawnInPart(o, frame, d)) continue;
             if (!run.pass && d < frame.post_boundary) st.world_draws++;
             const ShadeState* state = shade::ShadeOf(frame, it);
             // depth volume blurs read a copy of it, not the quad's texture;
@@ -4359,14 +4422,19 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // cameras were kept draws its overlay over the world's depth, which the
     // overlay's start must sample: single-sampled if it can't.
     SDL_GPUTexture* const world_depth = depth_sampled ? depth : no_depth;
+    // The HUD panel needs neither: its targets start cleared (begin_back).
     uint32_t overlay_samples = DeviceSamples(OverlaySamples(o));
     if (overlay_samples > 1 &&
-        ((!layout.cameras && !depth_sampled) || !EnsureOverlayTargets(overlay_samples) ||
-         !OverlayStartPipeline(overlay_samples) || !OverlayStartPipeline(overlay_samples, false)))
+        ((!hud && !layout.cameras && !depth_sampled) || !EnsureOverlayTargets(overlay_samples) ||
+         (!hud && (!OverlayStartPipeline(overlay_samples) ||
+                   !OverlayStartPipeline(overlay_samples, false)))))
         overlay_samples = 1;
     bool overlay_start = false;  // the overlay's targets are yet to be started
-    // the scene's alpha 0
-    const uint32_t clear_rgba = ClearRgba(frame);
+    // the HUD panel has no world: it starts as the overlay, at transparent
+    // black and depth 0 (the first begin_back's clears)
+    resolved = hud;
+    // the scene's alpha 0; the HUD panel's transparent black
+    const uint32_t clear_rgba = hud ? 0u : ClearRgba(frame);
     const SDL_FColor clear_color = {float(clear_rgba & 0xff) / 255.0f,
                                     float(clear_rgba >> 8 & 0xff) / 255.0f,
                                     float(clear_rgba >> 16 & 0xff) / 255.0f, 0.0f};
@@ -4470,7 +4538,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // then the composite into the picture
     post::PostPlan post_plan;
     const auto post_plan_start = Clock::now();
-    bool post_on = o.post && o.view == RasterView::kFinal &&
+    bool post_on = o.post && o.view == RasterView::kFinal && !hud &&
                    post::PlanPost(frame, o.post_only, post_plan, o.grain, o.velocity);
     st.post_plan_ms = ms_since(post_plan_start);
     // without sampled depth DOF would blur everything: left out
@@ -4658,9 +4726,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     };
 
     // whether an overlay draw reads the picture behind it, so the resolve
-    // keeps a copy
+    // keeps a copy; the HUD panel's draw their own colour (draw())
     bool refracts = false;
-    for (size_t d = frame.post_boundary; d < frame.draws.size() && !refracts; d++) {
+    for (size_t d = frame.post_boundary; d < frame.draws.size() && !refracts && !hud; d++) {
         const DrawItem& it = frame.draws[d];
         refracts = DrawnToBackBuffer(it) && RefractsWorld(shade::ShadeOf(frame, it));
     }
@@ -4967,7 +5035,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
         // native_view_shader_variants: PSMain's variant for the flags as
         // they stand now, and its maps' samplers
-        if (o.shader_variants && kind == PixelKind::kMesh && pass_samples == 1) {
+        // (not the HUD panel's coverage: PrewarmHud makes none for them)
+        if (o.shader_variants && kind == PixelKind::kMesh && pass_samples == 1 &&
+            alpha != AlphaMode::kCoverage) {
             bool shader_filters = false;
             for (int s : {kSlotDiffuse, kSlotSpecular, kSlotGlow, kSlotNormal, kSlotDetail})
                 if (tex[s].texture && (packed_sampler[s][0] & kSampleFiltered) &&
@@ -5083,6 +5153,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 std::memcpy(pu.tex_sampler[s >= kSlotNormal ? s - 2 : s], packed_sampler[s],
                             sizeof(packed_sampler[s]));
         pu.flags[0] = blend == kBlendSrcAlpha || blend == kBlendSrcAlphaAdd ? kPremultiply : 0;
+        // coverage: Src covers whatever the material's alpha
+        if (alpha == AlphaMode::kCoverage && blend == kBlendSrc) pu.flags[0] |= kAlphaOne;
         // DXN kept as BC5, in tex_layer's order: y copied to z and w as
         // DecodeBlock has it (mesh.hlsl's MapTexel; a head's normal map pass
         // reads the alpha)
@@ -5147,10 +5219,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 // shares (no depth clear between them)
                 if (!instance_count[d]) continue;
                 if (!resolved && d >= frame.post_boundary && !resolve()) return false;
-                // VR's eyes leave out the overlay (SkipsOverlay)
-                if (resolved && (o.view != RasterView::kFinal || pre_pass || ahead_pass ||
-                                 o.skip_overlay))
-                    break;
+                if (resolved && (o.view != RasterView::kFinal || pre_pass || ahead_pass)) break;
+                // the other VR picture's (soft_raster.h's OnHud)
+                if (!DrawnInPart(o, frame, d)) continue;
                 bool clear_depth = false;
                 // DrawRect quads have no camera
                 if (it.rect_shader < 0) {
@@ -5178,7 +5249,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     SDL_SetGPUViewport(pass, &v);
                     std::copy(std::begin(vp), std::end(vp), bound_viewport);
                 }
-                AlphaMode alpha = AlphaMode::kNone;
+                AlphaMode alpha = hud ? AlphaMode::kCoverage : AlphaMode::kNone;
                 if (!resolved && WritesSceneAlpha(shade::ShadeOf(frame, it)))
                     alpha = AlphaMode::kScene;
                 // whole-picture overlay camera draws reach the edges
@@ -5389,6 +5460,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
     }
     if (!resolved && !resolve()) return false;
+    // a HUD panel nothing drew is cleared all the same
+    if (hud && !back_begun) begin_back(true);
     end_pass();
 
     // The world ahead is submitted without a fence of its own: the next
@@ -5440,7 +5513,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
         ct.store_op = SDL_GPU_STOREOP_STORE;
         SDL_GPURenderPass* rp = BeginPass(cmd, &ct, 1, nullptr);
-        SDL_BindGPUGraphicsPipeline(rp, gamma_pipeline);
+        // the HUD panel keeps its alpha; every other picture's is 1
+        SDL_BindGPUGraphicsPipeline(rp, hud ? gamma_alpha_pipeline : gamma_pipeline);
         const SDL_GPUTextureSamplerBinding tb{picture, sampler};
         SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
         SDL_PushGPUFragmentUniformData(cmd, 0, packed, sizeof(packed));
@@ -5797,11 +5871,11 @@ std::string GpuRenderer::DescribeIndexedDraw(uint32_t before, uint32_t total) {
                        sizes, impl_->draw_log_frame);
 }
 
-void GpuRenderer::Prewarm(uint32_t overlay_samples) {
+void GpuRenderer::Prewarm(uint32_t overlay_samples, bool hud) {
     // checked without waiting out a frame
     if (impl_->warm) return;
     std::lock_guard lock(impl_->mutex);
-    if (impl_->device && !impl_->warm) impl_->Prewarm(overlay_samples);
+    if (impl_->device && !impl_->warm) impl_->Prewarm(overlay_samples, hud);
 }
 
 bool GpuRenderer::Idle(const RasterOptions& options) {
@@ -5860,7 +5934,10 @@ bool GpuRenderer::Draw(const FrameCapture& frame, const RasterOptions& options, 
                        std::vector<uint32_t>* rgba, GpuStats& stats) {
     if (!impl_->device) return false;
     // before the clock starts: device setup, not frame time
-    if (!impl_->warm) impl_->Prewarm(OverlaySamples(options));
+    if (!impl_->warm) impl_->Prewarm(OverlaySamples(options), false);
+    // VR's HUD panel's, once it's first drawn (`vr` turned on in game)
+    if (options.part == BackBufferPart::kHud && !impl_->hud_warm)
+        impl_->PrewarmHud(OverlaySamples(options));
     const auto start = std::chrono::steady_clock::now();
     stats = GpuStats{};
     // without R32_FLOAT targets, SHADOW_BUFFER draws are lit, as on the CPU

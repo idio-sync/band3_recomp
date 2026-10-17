@@ -382,9 +382,13 @@ What each does, how it was measured and why it defaults as it does. The
   the world camera's draws get the eye's view and `EyeProjection` of the captured
   projection, their shades cloned with the eye's position and billboard axes), draws both
   into the eye output slots (`GpuRenderer::EyeSlot`; the left into a window slot when one is
-  free, published as the window's picture) without the overlay (`skip_overlay`), the world
+  free, published as the window's picture) without the overlay (`BackBufferPart::kEyes`), the world
   drawn ahead, kept buffers, motion blur, DOF or the spotlights' haze, then presents them and
-  ends the frame with a projection layer. `vr_anchor` places the head's LOCAL space in the
+  ends the frame with a projection layer. The overlay's draws (`soft_raster.h`'s `OnHud`, from
+  `vr_pose.h`'s `HudBoundary`: `post_boundary`, or 0 for a frame the eyes can't see) can be
+  drawn alone as the HUD panel (`BackBufferPart::kHud`): transparent black, alpha as
+  coverage, premultiplied (`native_view_replay --overlay-only`, `--split-check`); not shown
+  in the headset yet. `vr_anchor` places the head's LOCAL space in the
   venue (default above and behind arena_04's front crowd; empty follows the game camera),
   `vr_world_scale` scales it, `vr_fake_pose` turns the head slowly for a headset that doesn't
   move. `native_view stats` has an `xr` block, and `capture` writes `<name>.gpu.L.png` and
