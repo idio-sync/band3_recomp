@@ -103,7 +103,9 @@ TEST_CASE("a category lists its sections' visible rows, under their labels") {
     REQUIRE(game.size() == 3);
     CHECK(game[0].name == "Folders");
     CHECK(Labels(game[0]) == std::vector<std::string>{"Game data folder", "Song folders",
-                                                      "User data folder", "Settings file"});
+                                                      "User data folder",
+                                                      "Allow writes to the game folder",
+                                                      "Settings file"});
     CHECK(game[0].rows.back().kind == RowKind::kControl);
     CHECK(game[0].rows.back().control == Control::kSettingsFile);
     // MIDI's port rows show once the kit is on

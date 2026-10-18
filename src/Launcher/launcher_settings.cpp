@@ -198,6 +198,10 @@ constexpr Setting kSettings[] = {
      .label = "User data folder", .widget = kPath, .launcher_only = true,
      .about = "Where your saves, profiles and score history are kept. Default keeps them "
               "beside band3."},
+    {.cvar = "allow_game_relative_writes", .category = kGame, .section = "Folders",
+     .label = "Allow writes to the game folder", .widget = kCheckbox,
+     .about = "Lets the game and its mods write files to paths relative to the game data "
+              "folder. Off, those writes are refused."},
     {.cvar = "username", .category = kGame, .section = "Profile", .label = "Profile name",
      .widget = kText,
      .about = "The name your profile goes by wherever the game asks for one, online too, up "

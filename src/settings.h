@@ -230,8 +230,9 @@ namespace band3::settings {
 
 // band3's defaults for SDK settings, set at startup when nothing else set them
 // (Band3App::OnPostInitLogging): a shorter audio queue than the SDK's 8 (4,
-// the fewest it takes: it raises less to 4), and a window rather than the
-// SDK's fullscreen (the launcher, which opens first, switches it). The
+// the fewest it takes: it raises less to 4), a window rather than the
+// SDK's fullscreen (the launcher, which opens first, switches it), and writes
+// allowed to paths relative to the game folder, which the SDK refuses. The
 // launcher and the settings reference show them as the defaults.
 struct StartupDefault {
     std::string_view cvar;
@@ -242,6 +243,7 @@ inline constexpr StartupDefault kStartupDefaults[] = {
     {"fullscreen", "false"},
     {"window_width", "1280"},
     {"window_height", "720"},
+    {"allow_game_relative_writes", "true"},
 };
 
 // Reads the retired emulated_gpu into renderer (src/Render/renderer_mode.h's
