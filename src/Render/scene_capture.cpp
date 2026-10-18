@@ -656,6 +656,8 @@ struct MultiMeshDrawing {
     uint32_t mat = 0;
 };
 thread_local MultiMeshDrawing g_multimesh_drawing;
+// MeshOwnerScope's: what's drawing on this thread (kind 0 nothing marked)
+thread_local MeshOwner g_mesh_owner;
 // native_view_rt_fallback
 std::atomic<bool> g_rt_fallback_guest{true};
 // guest_formats.h's DecodeSampler anisotropy: native_anisotropic, or the
@@ -1084,6 +1086,14 @@ void PushDraw(State& s, Sink& sink, DrawItem&& item) {
             fc.passes.push_back(p);
         }
         fc.passes.back().draw_count++;
+        // the band's and crowds' meshes, each once (a mesh's passes and a
+        // multimesh's instances come together)
+        const MeshOwner& o = g_mesh_owner;
+        if (o.kind && item.mesh &&
+            (fc.mesh_owners.empty() || fc.mesh_owners.back().mesh != item.mesh) &&
+            std::none_of(fc.mesh_owners.begin(), fc.mesh_owners.end(),
+                         [&](const MeshOwner& m) { return m.mesh == item.mesh; }))
+            fc.mesh_owners.push_back({item.mesh, o.owner, o.kind});
     } else if (!g_enabled.load(std::memory_order_relaxed)) {
         g_rec_draws.fetch_add(1, std::memory_order_relaxed);
     }
@@ -2729,6 +2739,12 @@ void ReleaseCapture() {
     std::lock_guard lock(g_users_mutex);
     if (g_users > 0 && --g_users == 0) g_enabled.store(false);
 }
+
+MeshOwnerScope::MeshOwnerScope(uint8_t kind, uint32_t owner) : before_(g_mesh_owner) {
+    g_mesh_owner = {0, owner, kind};
+}
+
+MeshOwnerScope::~MeshOwnerScope() { g_mesh_owner = before_; }
 
 std::shared_ptr<const FrameCapture> CaptureHeldFrame(const std::function<void()>& while_held,
                                                      std::chrono::milliseconds timeout,

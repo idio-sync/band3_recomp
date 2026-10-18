@@ -640,6 +640,19 @@ struct VelocityObject {
     std::vector<float> rows;  // 4 floats a row
 };
 
+// What drew a mesh to the back buffer, for VR's fixed viewpoints
+// (vr_venue.h): a band member (BandCharacter::DrawLodOrShadow) or a crowd
+// (WorldCrowd::DrawShowing, its cards and 3D characters), as
+// src/Hooks/vr_view.cpp marks those calls (MeshOwnerScope). Each mesh once
+// a frame, `owner` the guest object.
+inline constexpr uint8_t kOwnerBand = 1;
+inline constexpr uint8_t kOwnerCrowd = 2;
+struct MeshOwner {
+    uint32_t mesh = 0;
+    uint32_t owner = 0;
+    uint8_t kind = 0;
+};
+
 struct FrameCapture {
     uint64_t frame = 0;
     uint64_t game_frame = 0;  // Present calls before this frame's
@@ -738,6 +751,9 @@ struct FrameCapture {
     // the back-buffer cameras selected, each once; none in old captures,
     // which clear depth per camera (RasterOptions::clear_depth_per_camera)
     std::vector<CameraView> cameras;
+    // the back buffer's meshes the band and the crowds drew (MeshOwner); a
+    // composed frame has its world frame's; none in old captures
+    std::vector<MeshOwner> mesh_owners;
     // CaptureProfile's counts on the game's thread from the previous frame's
     // end to this one's (so Present's hook time is the previous frame's), in
     // Hook order, and the game's frame time Present to Present. A composed
@@ -871,6 +887,20 @@ CaptureProfile CaptureProfileSince(const CaptureProfile& now, const CaptureProfi
 // capture runs only while acquired; each Acquire is matched by a Release
 void AcquireCapture();
 void ReleaseCapture();
+
+// The meshes drawn to the back buffer on this thread while one lives are
+// `owner`'s (FrameCapture::mesh_owners); the one before is back as it ends.
+// Cheap when capture is off: two thread-local stores.
+class MeshOwnerScope {
+ public:
+    MeshOwnerScope(uint8_t kind, uint32_t owner);
+    ~MeshOwnerScope();
+    MeshOwnerScope(const MeshOwnerScope&) = delete;
+    MeshOwnerScope& operator=(const MeshOwnerScope&) = delete;
+
+ private:
+    MeshOwner before_;
+};
 
 // For a render check: waits for the next captured frame whose world matches
 // the game's picture (frame_compose.h's PresentsCapturedWorld; for frames that

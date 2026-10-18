@@ -38,6 +38,7 @@
 //   NOIS  FrameCapture::noise_map's TEXS index (-1 none) and its TexSampler
 //   VOBJ  FrameCapture::velocity_objects: GEOM index, mesh, cull, skinned,
 //         palette entries, VS c0..c7, PS c8, both palettes' rows
+//   OWNR  FrameCapture::mesh_owners: mesh, owner, kind
 // A section newer than this reader is skipped, except GEOM, TEXS and DRAW,
 // which fail the load. A missing optional section reads as empty: no post,
 // gamma, mips, cameras (depth cleared per camera), noise or velocity objects,
@@ -77,6 +78,7 @@ constexpr uint32_t kSecSamplers = FourCC("SMPL");
 constexpr uint32_t kSecCameras = FourCC("CAMS");
 constexpr uint32_t kSecNoise = FourCC("NOIS");
 constexpr uint32_t kSecVelocity = FourCC("VOBJ");
+constexpr uint32_t kSecOwners = FourCC("OWNR");
 constexpr uint32_t kFrameVersion = 1;
 constexpr uint32_t kGeometryVersion = 2;
 constexpr uint32_t kTexturesVersion = 1;
@@ -90,6 +92,7 @@ constexpr uint32_t kSamplersVersion = 1;
 constexpr uint32_t kCamerasVersion = 1;
 constexpr uint32_t kNoiseVersion = 1;
 constexpr uint32_t kVelocityVersion = 1;
+constexpr uint32_t kOwnersVersion = 1;
 
 // TEXS: where a texture's pixels are
 constexpr int32_t kOwnPixels = -1;  // they follow
@@ -601,6 +604,15 @@ bool SaveCapture(const std::string& path, const FrameCapture& fc) {
     }
     w.End(sec);
 
+    sec = w.Begin(kSecOwners, kOwnersVersion);
+    w.Put<uint32_t>(uint32_t(fc.mesh_owners.size()));
+    for (const MeshOwner& o : fc.mesh_owners) {
+        w.Put<uint32_t>(o.mesh);
+        w.Put<uint32_t>(o.owner);
+        w.Put<uint8_t>(o.kind);
+    }
+    w.End(sec);
+
     const std::string tmp = path + ".tmp";
     FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) return false;
@@ -659,6 +671,7 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                                : id == kSecCameras  ? kCamerasVersion
                                : id == kSecNoise    ? kNoiseVersion
                                : id == kSecVelocity ? kVelocityVersion
+                               : id == kSecOwners   ? kOwnersVersion
                                                     : 0;
         if (version > known || version == 0) {
             if (core) return nullptr;
@@ -888,6 +901,15 @@ std::shared_ptr<FrameCapture> LoadCapture(const std::string& path) {
                 if (floats != size_t(v.bones) * 3 * 2 * 4) return nullptr;
                 v.rows.resize(floats);
                 r.Raw(v.rows.data(), floats * sizeof(float));
+            }
+        } else if (id == kSecOwners) {
+            uint32_t count;
+            if (!r.Count(count, 9)) return nullptr;
+            fc->mesh_owners.resize(count);
+            for (MeshOwner& o : fc->mesh_owners) {
+                o.mesh = r.Get<uint32_t>();
+                o.owner = r.Get<uint32_t>();
+                o.kind = r.Get<uint8_t>();
             }
         } else if (id == kSecSamplers) {
             const uint32_t each = r.Get<uint32_t>();

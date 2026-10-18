@@ -1169,3 +1169,32 @@ TEST_CASE("a capture keeps the motion blur's object pass, and one from before ha
     CHECK(back->velocity_objects.empty());
     CHECK(back->draws.size() == fc.draws.size());
 }
+
+TEST_CASE("a capture keeps which meshes the band and crowds drew, and one from before has none") {
+    FrameCapture fc = MakePassFrame();
+    fc.mesh_owners.push_back({0x1000, 0x5000, kOwnerBand});
+    fc.mesh_owners.push_back({0x2000, 0x7000, kOwnerCrowd});
+    const std::string path = TempPath("band3_capture_file_owners_test.cap");
+    REQUIRE(SaveCapture(path, fc));
+    auto back = LoadCapture(path);
+    REQUIRE(back);
+    REQUIRE(back->mesh_owners.size() == 2);
+    CHECK(back->mesh_owners[0].mesh == 0x1000);
+    CHECK(back->mesh_owners[0].owner == 0x5000);
+    CHECK(back->mesh_owners[0].kind == kOwnerBand);
+    CHECK(back->mesh_owners[1].kind == kOwnerCrowd);
+
+    // without OWNR (a capture from before it): none
+    std::vector<uint8_t> data = ReadAll(path);
+    const size_t at = FindSection(data, "OWNR");
+    REQUIRE(at != std::string::npos);
+    uint64_t size;
+    std::memcpy(&size, data.data() + at + 8, 8);
+    data.erase(data.begin() + std::ptrdiff_t(at), data.begin() + std::ptrdiff_t(at + 16 + size));
+    WriteAll(path, data);
+    back = LoadCapture(path);
+    std::remove(path.c_str());
+    REQUIRE(back);
+    CHECK(back->mesh_owners.empty());
+    CHECK(back->draws.size() == fc.draws.size());
+}

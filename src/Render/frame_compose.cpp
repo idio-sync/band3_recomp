@@ -171,6 +171,8 @@ std::shared_ptr<FrameCapture> ComposeFrame(const FrameCapture& world, const Fram
     fc.cameras = world.cameras;
     for (const CameraView& c : frame.cameras)
         if (!CameraOf(fc, c.cam)) fc.cameras.push_back(c);
+    // the band and crowds are the world's
+    fc.mesh_owners = world.mesh_owners;
 
     fc.shades.reserve(world.shades.size() + frame.shades.size());
     fc.shades.Append(world.shades);

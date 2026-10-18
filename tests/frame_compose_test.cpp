@@ -423,3 +423,15 @@ TEST_CASE("the pool keeps at most kPooledFrames waiting") {
     held.clear();
     CHECK(PooledFrameCount() == kPooledFrames);
 }
+
+TEST_CASE("a composed frame's band and crowd meshes are its world frame's") {
+    FrameCapture world = WorldFrame();
+    world.mesh_owners.push_back({2, 0x5000, kOwnerBand});
+    FrameCapture post = PostFrame();
+    post.mesh_owners.push_back({14, 0x6000, kOwnerCrowd});
+    auto fc = ComposeFrame(world, post);
+    REQUIRE(fc);
+    REQUIRE(fc->mesh_owners.size() == 1);
+    CHECK(fc->mesh_owners[0].mesh == 2);
+    CHECK(fc->mesh_owners[0].kind == kOwnerBand);
+}
