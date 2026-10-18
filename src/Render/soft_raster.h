@@ -46,8 +46,11 @@
 // VR splits the back buffer's draws (RasterOptions::part, OnHud): the eyes
 // draw the world, the HUD panel the rest into a picture of its own, cleared
 // to transparent black, its alpha what covers each pixel (premultiplied, so
-// additive gems keep alpha 0), for a compositor to put over the eyes; its
-// RefractsWorld draws read black.
+// additive gems keep alpha 0), for a compositor to put over the eyes. What
+// tints the picture behind it can only darken it there, by one alpha: its
+// RefractsWorld draws (glass) and Multiply draws cover but for what they let
+// through (shade.hlsli's HudGlassTransmit, HudTransmit); a Multiply's hue
+// is added by a pass of its own (HudMultiplyHue), a guess at the picture.
 
 namespace band3::render {
 
@@ -65,9 +68,12 @@ enum class RasterView { kFinal, kSceneAlpha, kSceneDepth };
 // resolve or post-processing, starting from transparent black (colour and
 // depth 0), its alpha coverage (premultiplied, AlphaRule kCoverage in
 // soft_raster.cpp, AlphaMode::kCoverage in gpu_view.cpp), kept through
-// gamma; REFRACT_WORLD draws read a black picture behind them, with no world
-// there. A panel from draw 0 is the whole frame, drawn as kAll is (its
-// post-processing and REFRACT_WORLD draws as the game has them), opaque.
+// gamma; REFRACT_WORLD draws, with no world there, are shaded with the
+// picture behind them black and white, and their alpha covers but for what
+// they let through, as Multiply draws' does (soft_raster.cpp's FinishHud;
+// Add and SrcAlphaAdd glass read black). A panel from draw 0 is the whole
+// frame, drawn as kAll is (its post-processing and REFRACT_WORLD draws as
+// the game has them), opaque.
 // kHud with a scene-target view draws nothing.
 enum class BackBufferPart : uint8_t { kAll, kEyes, kHud };
 

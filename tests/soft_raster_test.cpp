@@ -31,7 +31,8 @@
 // edge pixel the mean of its samples, each with its own depth), the world
 // not; and that VR's HUD panel (BackBufferPart::kHud) is the overlay alone
 // over transparent black with its coverage as alpha, which over the eyes'
-// picture gives the whole frame.
+// picture gives the whole frame, its glass (REFRACT_WORLD) and Multiply
+// draws covering but for what they let through.
 
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -1763,10 +1764,28 @@ TEST_CASE("VR's HUD panel draws the overlay alone over transparent black, alpha 
     CHECK(hud[1 * 8 + 7] == 0u);
 }
 
-TEST_CASE("VR's HUD panel: a REFRACT_WORLD draw reads black behind it; from draw 0 it's the frame") {
+namespace {
+
+// the panel `hud` premultiplied over the eyes' picture, pixel i, as the
+// compositor puts it; whether that's within 1 of the whole frame's
+bool OverIsWhole(const std::vector<uint32_t>& hud, const std::vector<uint32_t>& eyes,
+                 const std::vector<uint32_t>& whole, size_t i) {
+    const uint32_t h = hud[i], e = eyes[i], w = whole[i];
+    for (int c = 0; c < 3; c++) {
+        const int over =
+            int(h >> (8 * c) & 0xff) + int(((e >> (8 * c) & 0xff) * (255 - (h >> 24)) + 127) / 255);
+        if (std::abs(std::min(over, 255) - int(w >> (8 * c) & 0xff)) > 1) return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+TEST_CASE("VR's HUD panel: a REFRACT_WORLD draw covers but for what it lets through") {
     // over the red world, a half grey REFRACT_WORLD quad: the panel has no
-    // world behind it, so it reads black, its colour times black, still
-    // covering (its alpha the draw's), as on the GPU (no_depth)
+    // world behind it, so the glass is shaded with behind black (its colour,
+    // 0) and white (half grey): it lets half through, alpha 1 - .502, and
+    // over the eyes' red that's the game's frame, red times half grey
     FrameCapture f;
     f.shades = {FlatShade(false), FlatShade(false)};
     f.shades[1].options |= 1ull << 46;
@@ -1776,25 +1795,87 @@ TEST_CASE("VR's HUD panel: a REFRACT_WORLD draw reads black behind it; from draw
     RasterOptions o = Small();
     o.post = false;
     o.part = BackBufferPart::kHud;
-    std::vector<uint32_t> rgba, whole;
+    std::vector<uint32_t> rgba, whole, eyes;
     Rasterize(f, o, rgba);
-    CHECK(rgba[1 * 8 + 3] == 0xff000000u);
-    // multisampled the same
-    o.msaa = 2;
+    CHECK(rgba[1 * 8 + 3] == 0x7f000000u);
+    RasterOptions eo = o, all = o;
+    eo.part = BackBufferPart::kEyes;
+    all.part = BackBufferPart::kAll;
+    Rasterize(f, eo, eyes);
+    Rasterize(f, all, whole);
+    CHECK(whole[1 * 8 + 3] == 0xff000080u);
+    CHECK(OverIsWhole(rgba, eyes, whole, 1 * 8 + 3));
+    // single-sampled the same
+    o.msaa = 1;
     Rasterize(f, o, rgba);
-    CHECK(rgba[1 * 8 + 3] == 0xff000000u);
+    CHECK(rgba[1 * 8 + 3] == 0x7f000000u);
     o.msaa = Small().msaa;
+
+    // SrcAlpha glass at half alpha: its colour (0 with behind black) times
+    // that alpha, covering half of what it would, .5 (1 - .502); over the
+    // panel's transparent black that's the game's .5 (.502 red) + .5 red
+    f.draws[1] = Shaded(-1, 1, 0x80808080u, 1, 3);
+    Rasterize(f, o, rgba);
+    CHECK(rgba[1 * 8 + 3] == 0x40000000u);
+    Rasterize(f, eo, eyes);
+    Rasterize(f, all, whole);
+    CHECK(whole[1 * 8 + 3] == 0xff0000bfu);
+    CHECK(OverIsWhole(rgba, eyes, whole, 1 * 8 + 3));
+    f.draws[1] = Shaded(-1, 1, 0xff808080u, 1, 1);
     // a panel from draw 0 (vr_pose.h's HudBoundary: a menu the eyes can't
     // see) is the whole frame as the game draws it, refraction and all,
     // opaque; the eyes then draw nothing but the clear colour
     o.hud_from = 0;
     Rasterize(f, o, rgba);
-    RasterOptions all = o;
-    all.part = BackBufferPart::kAll;
-    Rasterize(f, all, whole);
+    RasterOptions frame_o = o;
+    frame_o.part = BackBufferPart::kAll;
+    Rasterize(f, frame_o, whole);
     CHECK(rgba == whole);
     CHECK(rgba[1 * 8 + 3] == 0xff000080u);  // red 255 * 128 / 255
     o.part = BackBufferPart::kEyes;
     Rasterize(f, o, rgba);
     CHECK(rgba[1 * 8 + 3] == 0xff202020u);
+}
+
+TEST_CASE("VR's HUD panel: a Multiply draw covers but for what it lets through, adding its hue") {
+    // over the white world, a grey (128) Multiply quad: it lets half through
+    // (alpha 1 - .502), no colour, which over the eyes is the game's frame
+    FrameCapture f;
+    f.draws = {Item(Quad(-1, 1, 0xffffffffu), 0), Item(Quad(-1, 1, 0xff808080u), 0)};
+    f.draws[1].blend = 6;
+    f.passes = {BackBuffer(0, 2)};
+    f.post_boundary = 1;
+    RasterOptions o = Small();
+    o.post = false;
+    o.msaa = 1;
+    RasterOptions ho = o, eo = o;
+    ho.part = BackBufferPart::kHud;
+    eo.part = BackBufferPart::kEyes;
+    std::vector<uint32_t> hud, eyes, whole;
+    Rasterize(f, ho, hud);
+    Rasterize(f, eo, eyes);
+    Rasterize(f, o, whole);
+    CHECK(hud[1 * 8 + 3] == 0x7f000000u);
+    CHECK(OverIsWhole(hud, eyes, whole, 1 * 8 + 3));
+    // blue (0 0 128): it lets the mean through, 1/3 of .502 (alpha 212), so
+    // the eyes' white darkens as much as the game's does, but grey; its hue
+    // pass first adds the blue above that mean as if behind it were
+    // kHudHueLevel (.3) grey: (.502 - .167) * .3 / .502 = .2 (51), which the
+    // Multiply pass then multiplies by .502 (26)
+    f.draws[1] = Item(Quad(-1, 1, 0xff800000u), 0);
+    f.draws[1].blend = 6;
+    Rasterize(f, ho, hud);
+    CHECK(hud[1 * 8 + 3] == 0xd41a0000u);
+    // multisampled the same
+    ho.msaa = 2;
+    Rasterize(f, ho, hud);
+    CHECK(hud[1 * 8 + 3] == 0xd41a0000u);
+    // over what the panel already covers, the Multiply is exact and adds no
+    // hue: opaque green under it stays opaque, its green times the blue's 0
+    f.draws = {Item(Quad(-1, 1, 0xffffffffu), 0), Item(Quad(-1, 1, kGreen), 0),
+               Item(Quad(-1, 1, 0xff800000u), 0)};
+    f.draws[2].blend = 6;
+    f.passes = {BackBuffer(0, 3)};
+    Rasterize(f, ho, hud);
+    CHECK(hud[1 * 8 + 3] == 0xff000000u);
 }

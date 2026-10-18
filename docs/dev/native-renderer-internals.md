@@ -387,8 +387,15 @@ What each does, how it was measured and why it defaults as it does. The
   ends the frame with a projection layer. The overlay's draws (`soft_raster.h`'s `OnHud`, from
   `vr_pose.h`'s `HudBoundary`: `post_boundary`, or 0 for a frame the eyes can't see) are
   drawn alone as the HUD panel (`BackBufferPart::kHud`): transparent black, alpha as
-  coverage, premultiplied, REFRACT_WORLD draws reading black (`native_view_replay
-  --overlay-only`, `--split-check`). With `vr_hud` (on) `VrFrame` draws it from the capture
+  coverage, premultiplied (`native_view_replay --overlay-only`, `--split-check`). Draws that
+  tint what's behind them can only darken it there, by one alpha: REFRACT_WORLD glass (its
+  output affine in the picture behind: shaded with it black and white) and Multiply cover but
+  for the mean of what they let through (`shade.hlsli`'s `HudGlassTransmit`, `HudTransmit`),
+  Multiply's colour still multiplying the panel's own, and a pass of its own before it adds
+  its hue where the panel is clear, as if behind were 0.3 grey (`HudMultiplyHue`). On the
+  song list (2026-10-18) that took `--split-check`'s mean from 5.3 to 3.1 of 255 and under
+  the album art from 7.0 to 2.0; the menus' tinted header and footer bars stay the largest
+  difference. With `vr_hud` (on) `VrFrame` draws it from the capture
   itself (not re-posed) into the HUD output slot (`GpuRenderer::HudSlot`) at the eyes' size
   with `native_view_msaa`, only when the capture is new and the SDK's queue has copied the
   last one out (`Session::HudFree`); `xr_present.cpp` copies it (`present.hlsl`'s

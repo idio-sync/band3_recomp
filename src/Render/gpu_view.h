@@ -57,7 +57,8 @@
 // VR's HUD panel (soft_raster.h's BackBufferPart::kHud, OverlayOnly) skips
 // the world and the resolve: its targets start cleared to transparent black
 // (no PSOverlayStart), its draws' alpha is coverage (gpu_view.cpp's
-// AlphaMode::kCoverage, mesh.hlsl's kAlphaOne) and gamma.hlsl's
+// AlphaMode::kCoverage, mesh.hlsl's kAlphaOne; its glass and Multiply draws
+// cover but for what they let through, kHudGlass, kHudMultiply) and gamma.hlsl's
 // PSGammaAlpha keeps it; its pipelines are made once VR wants them
 // (PrewarmHud).
 //

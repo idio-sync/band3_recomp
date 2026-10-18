@@ -159,9 +159,9 @@ struct PixelUniforms {
     // width and height: the five before the normal map, then the shadow
     // map's, the normal map's and the detail map's
     uint32_t tex_size[8][4];
-    // x: kPremultiply, kAlphaOne; y: bit per map (tex_layer's order) for DXN
-    // kept as BC5; z, w: R8 maps' expand codes, a byte each, 0 for the rest
-    // (mesh.hlsl's MapTexel)
+    // x: kPremultiply, kAlphaOne, kHudGlass, kHudMultiply, kHudHue; y: bit per map
+    // (tex_layer's order) for DXN kept as BC5; z, w: R8 maps' expand codes, a
+    // byte each, 0 for the rest (mesh.hlsl's MapTexel)
     uint32_t flags[4];
     // sample_model.h's PackSampler, in tex_layer's order
     uint32_t tex_sampler[8][4];
@@ -169,7 +169,13 @@ struct PixelUniforms {
 static_assert(sizeof(PixelUniforms) == sizeof(shade::ShadeParams) + 304);
 
 // mesh.hlsl's pixel_flags.x
-enum : uint32_t { kPremultiply = 1, kAlphaOne = 2 };
+enum : uint32_t {
+    kPremultiply = 1,
+    kAlphaOne = 2,
+    kHudGlass = 4,
+    kHudMultiply = 8,
+    kHudHue = 16
+};
 
 // RasterOptions::gpu_labels: an indexed draw as DescribeIndexedDraw tells it,
 // kept as numbers so the frame only copies them; the text is made for a hang
@@ -260,13 +266,16 @@ static_assert(kBlendPreMultAlpha < 8, "Pipeline()'s key keeps the mode in 3 bits
 // What a draw's pipeline does with its target's alpha: leaves it, blends it
 // by the colour's factors (into a texture), as RB3's back buffer does
 // (WritesSceneAlpha: ONE ONE MAX where it blends), or as coverage (VR's HUD
-// panel, soft_raster.cpp's AlphaRule::kCoverage: Src 1 from the shader,
-// kAlphaOne; SrcAlpha and PreMultAlpha ONE INVSRCALPHA; the rest keep it)
-enum class AlphaMode { kNone, kTexture, kScene, kCoverage };
-// Pipeline()'s key keeps it in 2 bits
-constexpr int kNumAlphaModes = 4;
-static_assert(kNumAlphaModes <= 4);
-// every frame's; kCoverage is only the HUD panel's (PrewarmHud)
+// panel, soft_raster.cpp's AlphaRule::kCoverage: Src the shader's, 1 from
+// kAlphaOne or a glass draw's from kHudGlass; SrcAlpha, PreMultAlpha and
+// Multiply ONE INVSRCALPHA; the rest keep it), or a Multiply's hue pass in
+// that panel (kCoverageHue: AlphaRule::kCoverageHue, mesh.hlsl's kHudHue)
+enum class AlphaMode { kNone, kTexture, kScene, kCoverage, kCoverageHue };
+// Pipeline()'s key keeps it in 3 bits
+constexpr int kNumAlphaModes = 5;
+static_assert(kNumAlphaModes <= 8);
+// every frame's; kCoverage and kCoverageHue are only the HUD panel's
+// (PrewarmHud)
 constexpr int kNumFrameAlphaModes = 3;
 
 // mesh.hlsl's PSMain, PSSpotCone, PSSoftParticle, PSShadowDepth (R32_FLOAT
@@ -1692,8 +1701,8 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
                                                      AlphaMode alpha, CullWinding cull,
                                                      PixelKind pixel, uint32_t samples,
                                                      int variant) {
-    const int key = (variant + 1) << 14 | SampleBits(samples) << 12 | int(pixel) << 10 |
-                    int(cull) << 8 | int(alpha) << 6 | blend << 3 | rules.Key();
+    const int key = (variant + 1) << 15 | SampleBits(samples) << 13 | int(pixel) << 11 |
+                    int(cull) << 9 | int(alpha) << 6 | blend << 3 | rules.Key();
     if (auto it = pipelines.find(key); it != pipelines.end()) return it->second;
     const auto start = std::chrono::steady_clock::now();
 
@@ -1779,14 +1788,23 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
         bs.alpha_blend_op = SDL_GPU_BLENDOP_MAX;
     }
     // the HUD panel's coverage: Src writes the shader's alpha, 1
-    // (kAlphaOne); SrcAlpha and PreMultAlpha a + d (1 - a), as premultiplied
-    // colour is; Add, SrcAlphaAdd, Subtract and Multiply keep it (Dest
-    // writes nothing)
+    // (kAlphaOne) or a glass draw's (kHudGlass); SrcAlpha, PreMultAlpha and
+    // Multiply (kHudMultiply's alpha) a + d (1 - a), as premultiplied colour
+    // is; Add, SrcAlphaAdd and Subtract keep it (Dest writes nothing)
     if (alpha == AlphaMode::kCoverage && bs.enable_blend) {
-        const bool covers = blend == kBlendSrcAlpha || blend == kBlendPreMultAlpha;
+        const bool covers =
+            blend == kBlendSrcAlpha || blend == kBlendPreMultAlpha || blend == kBlendMultiply;
         bs.src_alpha_blendfactor = covers ? SDL_GPU_BLENDFACTOR_ONE : SDL_GPU_BLENDFACTOR_ZERO;
         bs.dst_alpha_blendfactor =
             covers ? SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA : SDL_GPU_BLENDFACTOR_ONE;
+        bs.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    }
+    // a Multiply's hue pass in the panel: its colour where the panel doesn't
+    // cover yet, alpha kept (soft_raster.cpp's AlphaRule::kCoverageHue)
+    if (alpha == AlphaMode::kCoverageHue) {
+        factors(SDL_GPU_BLENDFACTOR_ONE_MINUS_DST_ALPHA, SDL_GPU_BLENDFACTOR_ONE,
+                SDL_GPU_BLENDFACTOR_ZERO, SDL_GPU_BLENDFACTOR_ONE);
+        bs.color_blend_op = SDL_GPU_BLENDOP_ADD;
         bs.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
     }
     // soft_raster.cpp's Target::zw
@@ -1852,7 +1870,8 @@ SDL_GPUGraphicsPipeline* GpuRenderer::Impl::Pipeline(int blend, const DepthRules
 }
 
 SDL_GPUGraphicsPipeline* GpuRenderer::Impl::OverlayStartPipeline(uint32_t samples, bool depth) {
-    const int key = 1 << 16 | (depth ? 0 : 1 << 17) | SampleBits(samples);
+    // above any Pipeline() key, whose variant field reaches bit 17
+    const int key = 1 << 28 | (depth ? 0 : 1 << 27) | SampleBits(samples);
     if (auto it = pipelines.find(key); it != pipelines.end()) return it->second;
     const auto start = std::chrono::steady_clock::now();
     SDL_GPUColorTargetDescription target{};
@@ -2011,10 +2030,15 @@ void GpuRenderer::Impl::PrewarmHud(uint32_t overlay_samples) {
     // and at the game's 2 samples and the setting's, as Prewarm's overlay
     for (uint32_t samples : {1u, DeviceSamples(2), DeviceSamples(overlay_samples)})
         for (CullWinding cull :
-             {CullWinding::kNone, CullWinding::kClockwise, CullWinding::kCounterClockwise})
+             {CullWinding::kNone, CullWinding::kClockwise, CullWinding::kCounterClockwise}) {
             for (int blend = kBlendDest; blend <= kBlendPreMultAlpha; blend++)
                 for (const DepthRules& r : kPrewarmRules)
                     Pipeline(blend, r, AlphaMode::kCoverage, cull, PixelKind::kMesh, samples);
+            // Multiply's hue pass, depth not written (Render's draw)
+            for (const DepthRules& r : kPrewarmRules)
+                Pipeline(kBlendMultiply, {r.test, r.equal_passes, false},
+                         AlphaMode::kCoverageHue, cull, PixelKind::kMesh, samples);
+        }
     warmed_up = was_warmed_up;
     REXLOG_INFO("native view gpu: {} pipelines for VR's HUD panel in {:.1f} ms",
                 pipelines.size() - before,
@@ -4415,7 +4439,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     SDL_GPUTexture* picture = color;
     // the picture as resolved, for the overlay's REFRACT_WORLD draws: the
     // post buffer if it's that already, else `behind`; the HUD panel's,
-    // with no world under them, read black (soft_raster.cpp's Run)
+    // with no world under them, read black, or none (kHudGlass)
     SDL_GPUTexture* behind_now = hud ? no_depth : behind;
     bool depth_fresh = false;  // the open pass's depth is cleared and untouched
     // The overlay's samples (OverlaySamples) as the device draws them; 1
@@ -5156,6 +5180,15 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         pu.flags[0] = blend == kBlendSrcAlpha || blend == kBlendSrcAlphaAdd ? kPremultiply : 0;
         // coverage: Src covers whatever the material's alpha
         if (alpha == AlphaMode::kCoverage && blend == kBlendSrc) pu.flags[0] |= kAlphaOne;
+        // the panel's glass and Multiply draws (mesh.hlsl's kHudGlass,
+        // kHudMultiply; soft_raster.cpp's FinishHud); glass that only adds
+        // reads black (behind_now)
+        if (alpha == AlphaMode::kCoverage) {
+            if ((sp.flags.x & shade::kShadeRefract) &&
+                (blend == kBlendSrc || blend == kBlendSrcAlpha || blend == kBlendPreMultAlpha))
+                pu.flags[0] |= kHudGlass;
+            if (blend == kBlendMultiply) pu.flags[0] |= kHudMultiply;
+        }
         // DXN kept as BC5, in tex_layer's order: y copied to z and w as
         // DecodeBlock has it (mesh.hlsl's MapTexel; a head's normal map pass
         // reads the alpha)
@@ -5170,6 +5203,22 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                       kSlotNormal, kSlotDetail}) {
             const uint32_t k = s >= kSlotNormal ? s - 2 : s;
             pu.flags[2 + k / 4] |= tex[s].r8 << (8 * (k % 4));
+        }
+        // the panel's Multiply adds its hue first, by a pipeline of its own
+        // that writes no depth (soft_raster.cpp's Run; mesh.hlsl's kHudHue)
+        if (pu.flags[0] & kHudMultiply) {
+            DepthRules hue_rules = RulesFor(it, o, no_z);
+            hue_rules.write = false;
+            if (SDL_GPUGraphicsPipeline* hue = Pipeline(blend, hue_rules, AlphaMode::kCoverageHue,
+                                                        cull, kind, pass_samples)) {
+                PixelUniforms hu = pu;
+                hu.flags[0] = (hu.flags[0] & ~kHudMultiply) | kHudHue;
+                SDL_BindGPUGraphicsPipeline(pass, hue);
+                SDL_PushGPUFragmentUniformData(cmd, 0, &hu, sizeof(hu));
+                SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3),
+                                             instances, m.first_index, int32_t(m.first_vertex), 0);
+                SDL_BindGPUGraphicsPipeline(pass, pipeline);
+            }
         }
         timed_uniform([&] { SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu)); });
 

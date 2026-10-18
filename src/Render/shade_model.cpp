@@ -206,6 +206,19 @@ void RescaleShadowCoord(ShadeParams& sp, uint32_t game_w, uint32_t game_h, uint3
 
 bool AlphaCutCpu(const ShadeParams& sp, float alpha) { return AlphaCut(sp, alpha); }
 
+float HudTransmitCpu(const float c[3]) { return HudTransmit(float3{c[0], c[1], c[2]}); }
+
+float HudGlassTransmitCpu(const float at0[3], const float at1[3]) {
+    return HudGlassTransmit(float3{at0[0], at0[1], at0[2]}, float3{at1[0], at1[1], at1[2]});
+}
+
+void HudMultiplyHueCpu(const float c[3], float out[3]) {
+    const float3 r = HudMultiplyHue(float3{c[0], c[1], c[2]});
+    out[0] = r.x;
+    out[1] = r.y;
+    out[2] = r.z;
+}
+
 float SoftFadeCpu(float far_plane, float inv_w, float w) {
     return SoftFade(SoftSceneDepth(far_plane, inv_w), w);
 }

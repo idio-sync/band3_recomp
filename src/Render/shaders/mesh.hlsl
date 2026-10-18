@@ -79,9 +79,18 @@ VK_SAMPLER VK_BINDING(8, 2) SamplerState detail_sampler : register(s8, space2);
 
 // pixel_flags.x: SrcAlpha and SrcAlphaAdd premultiply in FinishMesh, after
 // the clamp the target would do; kAlphaOne, a Src draw into VR's HUD panel
-// (gpu_view.cpp's AlphaMode::kCoverage), covers its pixel: alpha 1
+// (gpu_view.cpp's AlphaMode::kCoverage), covers its pixel: alpha 1. In the
+// panel too (soft_raster.cpp's FinishHud): kHudGlass, a REFRACT_WORLD draw
+// (Src, SrcAlpha, PreMultAlpha), is shaded with behind black and white and
+// covers but for what it lets through (HudGlassTransmit); kHudMultiply, a
+// Multiply draw, covers but for what its colour lets through (HudTransmit),
+// and kHudHue, its pass before, adds its hue (HudMultiplyHue). Any other
+// REFRACT_WORLD draw there reads black (gpu_view.cpp's no_depth).
 static const uint kPremultiply = 1;
 static const uint kAlphaOne = 2;
+static const uint kHudGlass = 4;
+static const uint kHudMultiply = 8;
+static const uint kHudHue = 16;
 
 VK_BINDING(0, 3) cbuffer PixelUniforms : register(b0, space3) {
     ShadeParams ps_shade;
@@ -350,8 +359,9 @@ float4 BehindTexel(float2 uv) {
     return top + (bottom - top) * t.y;
 }
 
-// before FinishMesh
-float4 MeshColor(PixelIn i) {
+// before FinishMesh; transmit, a kHudGlass draw's (else 0)
+float4 MeshColor(PixelIn i, out float transmit) {
+    transmit = 0.0;
     const ShadeParams sp = PixelShade();
     const uint f = sp.flags.x;
     // before anything branches; RasterTri works out the same ones
@@ -395,7 +405,11 @@ float4 MeshColor(PixelIn i) {
             gobo = MapTexel(ProjTexel(gobo_tex, puv, tex_layer[1].x, tex_size[4].xy), 4);
     }
     float4 behind = float4(1, 1, 1, 1);
-    if ((f & kShadeRefract) != 0u)
+    // (PSMain's variants fix kShadeRefract off, so leave this out)
+    const bool glass = (f & kShadeRefract) != 0u && (pixel_flags.x & kHudGlass) != 0u;
+    if (glass)
+        behind = float4(0, 0, 0, 0);
+    else if ((f & kShadeRefract) != 0u)
         behind = BehindTexel(RefractUv(sp, i.clip, i.depth, normal));
     Lighting vertex;
     vertex.diffuse = i.light_diffuse;
@@ -410,20 +424,38 @@ float4 MeshColor(PixelIn i) {
                                      shadow_tex.Load(int3(int(t.x.w), int(t.y.w), 0)));
         lit = ShadowLit(t, stored);
     }
-    return ShadePixel(sp, i.wpos, i.nrm, i.tan, i.bitan, i.color, texel, spec_map, glow,
-                      normal, detail, behind, i.depth, i.ao_sh, proj, gobo, lit, vertex);
-}
-
-float4 FinishMesh(float4 c) {
-    if (AlphaCut(PixelShade(), c.a)) discard;
-    // clamp first, as a UNORM target would before blending (soft_raster.cpp's
-    // Blend())
-    if ((pixel_flags.x & kPremultiply) != 0u) c.rgb = saturate(c.rgb) * saturate(c.a);
-    if ((pixel_flags.x & kAlphaOne) != 0u) c.a = 1.0;
+    const float4 c = ShadePixel(sp, i.wpos, i.nrm, i.tan, i.bitan, i.color, texel, spec_map,
+                                glow, normal, detail, behind, i.depth, i.ao_sh, proj, gobo, lit,
+                                vertex);
+    if (glass) {
+        const float4 at1 =
+            ShadePixel(sp, i.wpos, i.nrm, i.tan, i.bitan, i.color, texel, spec_map, glow, normal,
+                       detail, float4(1, 1, 1, 1), i.depth, i.ao_sh, proj, gobo, lit, vertex);
+        transmit = HudGlassTransmit(c.rgb, at1.rgb);
+    }
     return c;
 }
 
-float4 PSMain(PixelIn i) : SV_Target0 { return FinishMesh(MeshColor(i)); }
+float4 FinishMesh(float4 c, float transmit) {
+    if (AlphaCut(PixelShade(), c.a)) discard;
+    if ((pixel_flags.x & kHudHue) != 0u) return float4(HudMultiplyHue(c.rgb), 0.0);
+    if ((pixel_flags.x & kHudMultiply) != 0u) c.a = 1.0 - HudTransmit(c.rgb);
+    // the glass's own alpha, before its colour is scaled by it
+    const float a = saturate(c.a);
+    // clamp first, as a UNORM target would before blending (soft_raster.cpp's
+    // Blend())
+    if ((pixel_flags.x & kPremultiply) != 0u) c.rgb = saturate(c.rgb) * a;
+    if ((pixel_flags.x & kAlphaOne) != 0u) c.a = 1.0;
+    if ((pixel_flags.x & kHudGlass) != 0u)
+        c.a = ((pixel_flags.x & kAlphaOne) != 0u ? 1.0 : a) * (1.0 - transmit);
+    return c;
+}
+
+float4 PSMain(PixelIn i) : SV_Target0 {
+    float transmit;
+    const float4 c = MeshColor(i, transmit);
+    return FinishMesh(c, transmit);
+}
 
 // RndShadowMap::PrepShadow's draws (draw mode 1): clip z/w into R32_FLOAT
 float PSShadowDepth(PixelIn i) : SV_Target0 { return i.pos.z; }
@@ -460,7 +492,8 @@ float4 PSSpotCone(PixelIn i) : SV_Target0 {
 
 // IsSoftParticle draws, as soft_raster.cpp's SoftPixelFade
 float4 PSSoftParticle(PixelIn i) : SV_Target0 {
-    float4 c = MeshColor(i);
+    float transmit;
+    float4 c = MeshColor(i, transmit);
     c.a *= SoftFade(SoftSceneDepth(spot.depth_range.y, SceneInvW(ScreenUv(i.pos))), i.depth);
-    return FinishMesh(c);
+    return FinishMesh(c, transmit);
 }

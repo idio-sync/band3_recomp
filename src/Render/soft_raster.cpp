@@ -71,7 +71,7 @@ void Dir(const float d[3], const Mat4& m, float out[3]) {
 enum class TargetAlpha { kOpaque, kTexture, kScene, kCoverage };
 
 // see Blend()
-enum class AlphaRule { kOpaque, kColorFactors, kKeep, kMax, kCoverage };
+enum class AlphaRule { kOpaque, kColorFactors, kKeep, kMax, kCoverage, kCoverageHue };
 
 struct Target {
     uint32_t w, h;
@@ -152,6 +152,19 @@ struct DrawState {
     // the pixel's clip position (RefractUv)
     TexView behind;
     float view[4] = {};
+    // VR's HUD panel (AlphaRule::kCoverage), which has no picture behind:
+    // hud_refract, a REFRACT_WORLD draw shaded with behind black; hud_glass,
+    // one of those (Src, SrcAlpha, PreMultAlpha) shaded again with behind
+    // white for what it lets through (HudGlassTransmit); hud_multiply, a
+    // Multiply draw, and hud_hue its hue pass before it (HudMultiplyHue).
+    // FinishHud makes their alpha cover by it, and premultiplies a SrcAlpha
+    // glass draw's colour (hud_premultiply), which then blends as
+    // PreMultAlpha.
+    bool hud_refract = false;
+    bool hud_glass = false;
+    bool hud_premultiply = false;
+    bool hud_multiply = false;
+    bool hud_hue = false;
     // PackSampler'd samplers; lod: any is the game's, needing uv derivatives
     uint32_t samp_tex[4], samp_spec[4], samp_glow[4], samp_normal[4], samp_detail[4];
     bool lod = false;
@@ -311,13 +324,15 @@ void Read(const TexView& t, const uint32_t s[4], const float uv[2], const float 
 
 // u, b: a normal-mapped draw's tangent and bitangent. With ds.lod, quad holds
 // the uvs ddx_fine and ddy_fine difference (RasterTri): the pixel's row pair
-// in its 2x2 quad, then its column pair.
+// in its 2x2 quad, then its column pair. A HUD glass draw's transmittance
+// goes to `transmit` (DrawState::hud_glass).
 void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3],
            const float vc[4], const float wp[3], float depth, const float ao[2],
            const float ld[3], const float la[3], const float u[3], const float b[3],
-           const float quad[8], float out[4]) {
+           const float quad[8], float out[4], float& transmit) {
     float texel[4] = {1, 1, 1, 1}, spec_map[4] = {1, 1, 1, 1}, glow[4] = {0, 0, 0, 0};
     float behind[4] = {1, 1, 1, 1};
+    if (ds.hud_refract) behind[0] = behind[1] = behind[2] = behind[3] = 0;
     float d[4] = {0, 0, 0, 0};
     if (ds.lod) {
         d[0] = quad[2] - quad[0];
@@ -370,17 +385,57 @@ void Shade(const DrawState& ds, int x, int y, const float uv[2], const float n[3
         ds.shadow ? shade::ShadowLitCpu(ds.shade, wp, ds.shadow, ds.shadow_w, ds.shadow_h) : 1.0f;
     shade::ShadePixelCpu(ds.shade, wp, n, vc, texel, spec_map, glow, behind, depth, ao, ld, la,
                          out, proj, gobo, lit, ds.normal_map ? &nm : nullptr);
+    if (ds.hud_glass) {
+        const float white[4] = {1, 1, 1, 1};
+        float at1[4];
+        shade::ShadePixelCpu(ds.shade, wp, n, vc, texel, spec_map, glow, white, depth, ao, ld,
+                             la, at1, proj, gobo, lit, ds.normal_map ? &nm : nullptr);
+        transmit = shade::HudGlassTransmitCpu(out, at1);
+    }
+}
+
+// mesh.hlsl's FinishMesh in VR's HUD panel, after the alpha cut: the alpha
+// Blend()'s kCoverage writes or blends by. Src covers (1); a glass draw
+// covers but for what it lets through, `transmit`: Src 1 - transmit,
+// SrcAlpha and PreMultAlpha their alpha times that, SrcAlpha's colour
+// premultiplied here (DrawOne blends it as PreMultAlpha); Multiply covers
+// but for what its colour lets through (shade.hlsli's HudTransmit), its
+// colour still multiplying the panel's; its hue pass adds HudMultiplyHue
+// (AlphaRule::kCoverageHue).
+void FinishHud(const DrawState& ds, float transmit, float col[4]) {
+    // Blend()'s Src: RndMat's Screen, Lighten and Darken too
+    const bool src = ds.blend < 0 || ds.blend == 1 || ds.blend > 7;
+    if (ds.hud_hue) {
+        const float c[3] = {col[0], col[1], col[2]};
+        shade::HudMultiplyHueCpu(c, col);
+    } else if (ds.hud_multiply) {
+        col[3] = 1.0f - shade::HudTransmitCpu(col);
+    } else if (ds.hud_glass) {
+        const float a = std::clamp(col[3], 0.0f, 1.0f);
+        if (src) {
+            col[3] = 1.0f - transmit;
+        } else {
+            // SrcAlpha's (blend 7 by now) as mesh.hlsl's kPremultiply
+            if (ds.hud_premultiply)
+                for (int i = 0; i < 3; i++) col[i] = std::clamp(col[i], 0.0f, 1.0f) * a;
+            col[3] = a * (1.0f - transmit);
+        }
+    } else if (src) {
+        col[3] = 1.0f;
+    }
 }
 
 // Colour by the material's blend mode; alpha by `alpha`: 1, blended by the
 // colour's factors (a texture's), kept, RB3's back buffer's ONE ONE MAX
 // where the mode blends (not Src), or coverage (the HUD panel's,
-// premultiplied as the colour is: Src covers, SrcAlpha and PreMultAlpha
-// cover by a over what's there, the others leave it, so additive light adds
-// colour at alpha 0). Colour and alpha are clamped to 0..1
-// first, as an 8-bit target clamps its blender's input (so before SrcAlpha
-// scales); the menus' blue header only matches this way. gpu_view.cpp's
-// UNORM target and mesh.hlsl's FinishMesh agree.
+// premultiplied as the colour is: Src writes a, SrcAlpha, PreMultAlpha and
+// Multiply cover by a over what's there, the others leave it, so additive
+// light adds colour at alpha 0; FinishHud sets a), or a HUD Multiply's hue
+// pass (kCoverageHue: colour added where it doesn't cover yet, alpha kept,
+// whatever the mode). Colour and alpha are clamped to 0..1 first, as an
+// 8-bit target clamps its blender's input (so before SrcAlpha scales); the
+// menus' blue header only matches this way. gpu_view.cpp's UNORM target and
+// mesh.hlsl's FinishMesh agree.
 // RndMat's Screen, Lighten and Darken (8..10) are drawn as Src: NgMat's
 // SetupShader sets no blend for them (rb3-xenon Mat_NG.cpp), so the 360
 // never shows them.
@@ -404,6 +459,8 @@ uint32_t Blend(int mode, const float s[4], uint32_t dst, AlphaRule alpha) {
             case 0: o[i] = d[i]; break;  // Dest
             default: o[i] = c[i]; break;  // Src
         }
+        // a HUD Multiply's hue pass: ONE_MINUS_DST_ALPHA ONE, alpha kept
+        if (alpha == AlphaRule::kCoverageHue) o[i] = d[i] + c[i] * (1.0f - d[3]);
     }
     switch (alpha) {
         case AlphaRule::kOpaque: o[3] = 1.0f; break;
@@ -425,15 +482,16 @@ uint32_t Blend(int mode, const float s[4], uint32_t dst, AlphaRule alpha) {
         case AlphaRule::kCoverage:
             switch (mode) {
                 case 3:
+                case 6:
                 case 7: o[3] = a + d[3] * (1.0f - a); break;
                 case 0:
                 case 2:
                 case 4:
-                case 5:
-                case 6: o[3] = d[3]; break;
-                default: o[3] = 1.0f; break;  // Src
+                case 5: o[3] = d[3]; break;
+                default: o[3] = a; break;  // Src
             }
             break;
+        case AlphaRule::kCoverageHue: o[3] = d[3]; break;
     }
     uint32_t r = 0;
     for (int i = 0; i < 4; i++)
@@ -525,13 +583,17 @@ void RasterTri(const ClipVert& a, const ClipVert& b, const ClipVert& c, const Dr
             for (int i = 0; i < 3; i++) tu[i] = q0 * a.u[i] + q1 * b.u[i] + q2 * c.u[i];
             for (int i = 0; i < 3; i++) tb[i] = q0 * a.b[i] + q1 * b.b[i] + q2 * c.b[i];
         }
+        float transmit = 0;
         if (ds.spot) {
             SpotPixel(ds, t, x, y, wp, 1.0f / z, col);
         } else {
-            Shade(ds, x, y, uv, n, vc, wp, 1.0f / z, ao, ld, la, tu, tb, quad, col);
+            Shade(ds, x, y, uv, n, vc, wp, 1.0f / z, ao, ld, la, tu, tb, quad, col, transmit);
             if (ds.soft) col[3] *= SoftPixelFade(ds, t, x, y, 1.0f / z);
         }
-        return !shade::AlphaCutCpu(ds.shade, col[3]);
+        if (shade::AlphaCutCpu(ds.shade, col[3])) return false;
+        if (ds.alpha == AlphaRule::kCoverage || ds.alpha == AlphaRule::kCoverageHue)
+            FinishHud(ds, transmit, col);
+        return true;
     };
     auto passes = [&](float dz, float d) {
         return !ds.z_test || (ds.z_equal_passes ? !(dz < d * 0.9999f) : !(dz <= d));
@@ -742,7 +804,7 @@ TexView NormalMap(const ShadeState* state, int map, const RasterOptions& o, cons
 void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const RasterOptions& o,
              const RtTargets& rts, Target& t, RasterStats& st, std::vector<ClipVert>& cv,
              const TexView& density = {}, const DepthMap& depth = {},
-             const float* overlay_edge = nullptr) {
+             const float* overlay_edge = nullptr, bool hud_hue = false) {
     const Geometry& g = *it.geom;
     const bool skinned = o.skinning && !it.bones.empty();
     DrawState ds;
@@ -817,8 +879,14 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
     ds.per_vertex = (ds.shade.flags.x & shade::kShadePerVertex) != 0;
     ds.normal_map = (ds.shade.flags.x & shade::kShadeNormalMap) != 0;
     // REFRACT_WORLD reads the resolved picture, or in the world the
-    // pre-process buffer (Run's world_behind)
-    if (ds.shade.flags.x & shade::kShadeRefract) {
+    // pre-process buffer (Run's world_behind); in VR's HUD panel, none
+    // (hud_refract, below): it's shaded with behind black, and white, its
+    // refract map's offset left out
+    const bool hud = t.alpha == TargetAlpha::kCoverage;
+    if (hud && (ds.shade.flags.x & shade::kShadeRefract)) {
+        ds.hud_refract = true;
+        ds.shade.flags.x &= ~shade::kShadeRefractMap;
+    } else if (ds.shade.flags.x & shade::kShadeRefract) {
         if (t.behind) {
             ds.behind = {t.w, t.h, t.behind};
             ds.view[0] = t.vx;
@@ -905,6 +973,18 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
             break;
         case TargetAlpha::kCoverage: ds.alpha = AlphaRule::kCoverage; break;
     }
+    // the HUD panel's tinting draws (FinishHud): glass that covers (Src,
+    // SrcAlpha, PreMultAlpha; Add's and SrcAlphaAdd's only add their colour
+    // with behind black) and Multiply
+    if (hud) {
+        const int b = ds.blend;
+        ds.hud_glass = ds.hud_refract && (b < 0 || b == 1 || b == 3 || b == 7 || b > 7);
+        ds.hud_premultiply = ds.hud_glass && b == 3;
+        if (ds.hud_premultiply) ds.blend = 7;
+        ds.hud_multiply = b == 6 && !hud_hue;
+        ds.hud_hue = hud_hue;
+        if (hud_hue) ds.alpha = AlphaRule::kCoverageHue;
+    }
     switch (it.z_mode) {
         case 0: ds.z_test = false; ds.z_equal_passes = false; ds.z_write = false; break;
         case 2: ds.z_test = true; ds.z_equal_passes = true; ds.z_write = false; break;
@@ -917,6 +997,8 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
         ds.z_write = true;
     }
     if (t.no_z) ds.z_test = ds.z_write = false;
+    // the Multiply pass after it tests the same depth
+    if (hud_hue) ds.z_write = false;
     for (size_t i = 0; i + 2 < g.indices.size(); i += 3)
         ClipAndRaster(cv[g.indices[i]], cv[g.indices[i + 1]], cv[g.indices[i + 2]], ds, t, st);
     st.draws++;
@@ -1282,18 +1364,13 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
     };
     // The HUD panel starts in the overlay, transparent black with depth
     // cleared (every sample, multisampled). Its REFRACT_WORLD draws (the
-    // score box's glass, the song list's panes) read a black picture: the
-    // world they'd tint isn't under them, and over the eyes their colour
-    // times black, at their alpha, darkens the venue as the game's glass
-    // does, where their own colour would wash it out.
+    // score box's glass, the song list's panes) have no picture to read: the
+    // world they'd tint isn't under them but behind the panel, in the eyes,
+    // so they cover it but for what they'd let through (DrawOne's
+    // hud_glass).
     if (hud) {
         back = &overlay;
         overlay.alpha = TargetAlpha::kCoverage;
-        if (refracts) {
-            // as gpu_view.cpp's 1x1 no_depth (its alpha is never read)
-            behind.assign(pixels, kTransparentBlack);
-            overlay.behind = behind.data();
-        }
         if (samples > 1) {
             ms_color.assign(pixels * samples, kTransparentBlack);
             ms_depth.assign(pixels * samples, 0.0f);
@@ -1347,6 +1424,11 @@ RasterStats Run(const FrameCapture& frame, const RasterOptions& o, std::vector<u
                     back->x1 = std::min(back->x1, int(std::lround((1 + e) / 2 * float(o.width))));
                 }
                 const float* edge = overlay_whole && !cut ? o.overlay_edge : nullptr;
+                // the HUD panel's Multiply draws add their hue first
+                // (HudMultiplyHue)
+                if (hud && o.blending && it.blend == 6)
+                    DrawOne(it, int32_t(i), shade::ShadeOf(frame, it), o, rts, *back, st, cv, {},
+                            dm, edge, true);
                 DrawOne(it, int32_t(i), shade::ShadeOf(frame, it), o, rts, *back, st, cv, {}, dm,
                         edge);
             }

@@ -481,6 +481,41 @@ float4 ShadePixel(SHADE_IN(ShadeParams) sp, float3 p, float3 n, float3 u, float3
     return float4(rgb.x, rgb.y, rgb.z, alpha);
 }
 
+// VR's HUD panel (soft_raster.h's BackBufferPart::kHud) is premultiplied
+// colour and one alpha over the eyes' picture, so a draw that tints what's
+// behind it can only scale it, by one transmittance, 0..1.
+//
+// A REFRACT_WORLD draw is affine in the picture behind (ShadePixel scales
+// texel by it; all after is affine per channel), so it lets through its
+// colour with behind 1 less with behind 0, each clamped as the target would:
+// the mean of the channels (its glass is grey).
+//
+// A Multiply draw lets through its colour: the mean of its channels, so the
+// menus' blue header and footer (0 0 .5) darken the picture behind as much as
+// the game's do. Its colour still multiplies the panel's own (DST_COLOR),
+// exactly: the pause box's tint over the track. Its hue over the picture
+// behind (the channels above the mean) is added as colour by a pass of its
+// own first (HudMultiplyHue), where the panel doesn't cover yet
+// (ONE_MINUS_DST_ALPHA), as if that picture were kHudHueLevel grey; divided
+// by the colour, which the Multiply pass then multiplies it by. The level is
+// a guess at the picture; .3 set the song list's, setlist browser's and
+// results' panels closest to the game's frame (native_view_replay
+// --split-check, against 0, .2, .4 and .5).
+float HudTransmit(float3 c) {
+    const float3 t = saturate(c);
+    return (t.x + t.y + t.z) * (1.0f / 3.0f);
+}
+float HudGlassTransmit(float3 at0, float3 at1) {
+    return HudTransmit(saturate(at1) - saturate(at0));
+}
+static const float kHudHueLevel = 0.3f;
+float HudHueChannel(float s, float k) { return s > k ? (s - k) * kHudHueLevel / s : 0.0f; }
+float3 HudMultiplyHue(float3 c) {
+    const float3 s = saturate(c);
+    const float k = HudTransmit(s);
+    return float3(HudHueChannel(s.x, k), HudHueChannel(s.y, k), HudHueChannel(s.z, k));
+}
+
 // A soft particle (IsSoftParticle; PS 66C00A7A56838997,
 // softparticle_survey.md 2) fades its alpha over the last 48 units of view
 // depth before the scene. The game reads s9's depth back by c89; the native

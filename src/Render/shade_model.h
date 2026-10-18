@@ -90,6 +90,10 @@ void ShadePixelCpu(const ShadeParams& sp, const float p[3], const float n[3], co
                    const float proj[4] = nullptr, const float gobo[4] = nullptr,
                    float lit = 1.0f, const NormalMapInputs* normal_map = nullptr);
 bool AlphaCutCpu(const ShadeParams& sp, float alpha);
+// HudTransmit(c), HudGlassTransmit(at0, at1), HudMultiplyHue(c): colours' rgb
+float HudTransmitCpu(const float c[3]);
+float HudGlassTransmitCpu(const float at0[3], const float at1[3]);
+void HudMultiplyHueCpu(const float c[3], float out[3]);
 // SoftFade(SoftSceneDepth(far_plane, inv_w), w)
 float SoftFadeCpu(float far_plane, float inv_w, float w);
 
