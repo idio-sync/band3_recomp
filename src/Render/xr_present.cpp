@@ -65,6 +65,7 @@ vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_s
     in.hud_layout.distance = float(REXCVAR_GET(vr_hud_distance));
     in.hud_layout.below = float(REXCVAR_GET(vr_hud_below));
     in.hud_layout.width_deg = float(REXCVAR_GET(vr_hud_width));
+    in.window_width_deg = float(REXCVAR_GET(vr_window_width));
     in.dim = float(REXCVAR_GET(vr_window_dim));
     in.world_scale = float(REXCVAR_GET(vr_world_scale));
     return vr::ResolveFrame(vp, in);
@@ -1031,10 +1032,12 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
         m.window_logged = true;
         const vr::WindowFrame& w = layout.window_frame;
         REXLOG_INFO("vr: the game camera's window is up: {:.2f} x {:.2f} m at {:.2f} m ({:.1f} "
-                    "x {:.1f} degrees), the panel {}, {} dark quads",
-                    w.size[0], w.size[1], w.distance, layout.game_fov.hfov * 57.29578f,
-                    layout.game_fov.vfov * 57.29578f,
-                    layout.hud_in_window ? "in it" : "on its own place",
+                    "degrees across), the game's {:.1f} x {:.1f} degrees in it ({:.2f}x), the "
+                    "panel {}, {} dark quads",
+                    w.size[0], w.size[1], w.distance,
+                    2 * std::atan2(w.size[0] / 2, w.distance) * 57.29578f,
+                    layout.game_fov.hfov * 57.29578f, layout.game_fov.vfov * 57.29578f,
+                    layout.magnify, layout.hud_in_window ? "in it" : "on its own place",
                     show_frames ? layout.frame_quads : 0);
     }
     {

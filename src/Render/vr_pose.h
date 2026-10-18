@@ -6,9 +6,10 @@
 // the HUD, menus) as a quad in front of the head: which draws are its
 // (HudBoundary) and where it hangs (HudPlacement); and the game camera's
 // window (vr_viewpoint game_camera, and every menu): the head stands where the
-// game's camera is and sees the venue through a window in LOCAL space the
-// size of the camera's view (WindowFrame, WindowEyePose), dark around it
-// (FrameQuads); and each frame's choice of all that (ResolveFrame). No OpenXR
+// game's camera is and sees the venue through a window in LOCAL space of a
+// fixed size (vr_window_width) that the camera's view fills (WindowFrame,
+// WindowEye), dark around it (FrameQuads); and each frame's choice of all
+// that (ResolveFrame). No OpenXR
 // here: XR's poses and fields of view come in as plain numbers, so this is the
 // same on every platform and unit-tested.
 //
@@ -136,11 +137,17 @@ inline Anchor AnchorFromCamera(const freecam::Pose& cam) {
     return a;
 }
 
-// An eye for RePose: where it is and what it sees
+// An eye for RePose: where it is and what it sees. Its view is View(pose),
+// or `view` with has_view (WindowEye's, which isn't a rigid camera's); the
+// shades still get `pose`'s point and axes.
 struct Eye {
     freecam::Pose pose;
     Fov fov;
+    bool has_view = false;
+    Mat4 view{};
 };
+
+inline Mat4 EyeView(const Eye& e) { return e.has_view ? e.view : freecam::View(e.pose); }
 
 struct RePoseStats {
     bool ok = false;  // a perspective world camera was found
@@ -152,7 +159,7 @@ struct RePoseStats {
 // `in` seen from `eye`: a copy of it whose world camera (WorldCameraOf, the
 // back buffer's camera with the most draws before post_boundary) is the eye.
 // Every draw drawn with that camera's view_proj, in any pass, gets the eye's
-// (its view times EyeProjection of the camera's projection), and the shades
+// (EyeView times EyeProjection of the camera's projection), and the shades
 // they use are cloned (the source's are shared, never changed) with the
 // eye's position and, for billboards, its axes (VS c16..c18). Other cameras'
 // draws (the track, the HUD, shadow maps' lights) stay as they are. `in` is
@@ -283,21 +290,26 @@ inline GameFov GameFovOf(const Mat4& proj) {
 
 // The game camera's window: a rectangle in LOCAL space, `distance` metres
 // straight ahead of the head at the recenter, at its eyes' height, turned by
-// its yaw alone (level and upright whatever the head's pitch and roll), and
-// the size the game camera's view is at that distance, so the head there sees
-// through it exactly what the game's picture shows. Its pose as a quad's:
-// +z toward the head.
+// its yaw alone (level and upright whatever the head's pitch and roll),
+// `width` radians across seen from there (vr_window_width) and the game's
+// picture's aspect high (kWindowAspect: RB3 draws 16:9 whatever the camera).
+// Its size doesn't follow the game camera's field of view, so it stays put at
+// cuts; the camera's view is fitted to it instead (WindowEye). Its pose as a
+// quad's: +z toward the head.
+inline constexpr float kWindowAspect = 16.0f / 9.0f;
+
 struct WindowFrame {
     XrPose pose;
     float distance = 0;
     float size[2] = {0, 0};  // width, height in metres
 };
 
-inline WindowFrame WindowPlacement(const XrPose& head, float distance, const GameFov& fov) {
+inline WindowFrame WindowPlacement(const XrPose& head, float distance, float width,
+                                   float aspect = kWindowAspect) {
     WindowFrame w;
     w.distance = distance;
-    w.size[0] = 2 * distance * std::tan(fov.hfov / 2);
-    w.size[1] = 2 * distance * std::tan(fov.vfov / 2);
+    w.size[0] = 2 * distance * std::tan(width / 2);
+    w.size[1] = aspect > 0 ? w.size[0] / aspect : w.size[0];
     HudLayout l;
     l.distance = distance;
     l.below = 0;
@@ -306,18 +318,76 @@ inline WindowFrame WindowPlacement(const XrPose& head, float distance, const Gam
     return w;
 }
 
-// An eye's pose in the venue through the window: the window is the game
-// camera's picture, so the head at the recenter is the game camera, and
-// moving the head moves the eye with the window's axes as the camera's
-// (right its right, up its up, the window's -z its forward), `units_per_metre`
-// venue units to the metre. With r the eye in the window's frame
-// (R_w^T (p - c_w)), the eye is at game.eye + u (r.x right + r.y up +
-// (D - r.z) fwd), and turns as the head turns from facing the window. The
-// eye's field of view stays the headset's: RePose gives it its own
-// projection, so the window shows the game's picture from the head's place
-// at the recenter, and the venue moves behind it (parallax) as the head moves.
-inline freecam::Pose WindowEyePose(const XrPose& eye, const WindowFrame& w,
-                                   const freecam::Pose& game, float units_per_metre) {
+// What the window shows. From the head at the recenter the window is the game's
+// picture, whatever the camera's field of view: the venue is magnified
+// k = tan(width / 2) / tan(hfov / 2) times against a true window that size
+// (a 35-degree menu camera in a 100-degree window: 3.8; a 79-degree song
+// shot: 1.45). It is a true window onto the venue squeezed k times along the
+// camera's forward. In the window's frame (metres; x right, y up, z toward
+// the head, which is at (0, 0, D) at the recenter), the venue's point X, at
+// d = X - C from the game camera C with right R, up U and forward F, is at
+//
+//     ( d.R / sx,  d.U / sy,  D - d.F / sz )      (VenueToWindow)
+//
+// with sx = u, u the venue's units a metre (39.37 times vr_world_scale), so
+// across the venue is life size and the eyes are the user's IPD apart in it;
+// sz = k u along the camera's forward; and sy = sz D tan(vfov / 2) / (the
+// window's half height), u as well when the camera's picture has the window's
+// aspect. The window's plane (z = 0) is the plane k u D ahead of the camera
+// and its edges are the frustum's there, so from (0, 0, D) the window maps
+// exactly onto the game's picture (clip -1..1 both ways), and from anywhere
+// else each eye sees exactly that squeezed venue through a true window: the
+// head moving a metre moves the eye u across and k u along the forward, with
+// the parallax a window gives. The squeeze is the approximation: a point Z
+// units ahead of the camera looks Z / (k u) metres away, k times nearer than
+// at life size, and is life size across, so the stereo depth of the scene is
+// flattened k times (as a long lens flattens it; a camera wider than the
+// window, k < 1, deepens it instead).
+struct WindowScale {
+    float sx = 1, sy = 1, sz = 1;  // venue units a metre: across, up, forward
+};
+
+inline WindowScale WindowScaleOf(const WindowFrame& w, const GameFov& fov, float u) {
+    WindowScale s{u, u, u};
+    const float tx = std::tan(fov.hfov / 2), ty = std::tan(fov.vfov / 2);
+    const float a = w.size[0] / 2, b = w.size[1] / 2;
+    if (tx > 0 && w.distance > 0 && a > 0) s.sz = u * a / (w.distance * tx);
+    if (ty > 0 && b > 0) s.sy = s.sz * w.distance * ty / b;
+    return s;
+}
+
+// k, the venue's magnification against a true window (1 without a field of view)
+inline float WindowMagnify(const WindowScale& s) { return s.sx > 0 ? s.sz / s.sx : 1; }
+
+inline void VenueToWindow(const WindowFrame& w, const freecam::Pose& game, const WindowScale& s,
+                          const float x[3], float out[3]) {
+    const float d[3] = {x[0] - game.eye[0], x[1] - game.eye[1], x[2] - game.eye[2]};
+    out[0] = freecam::Dot3(d, game.right) / s.sx;
+    out[1] = freecam::Dot3(d, game.up) / s.sy;
+    out[2] = w.distance - freecam::Dot3(d, game.fwd) / s.sz;
+}
+
+// a point in the window's frame in LOCAL space
+inline void WindowToLocal(const WindowFrame& w, const float p[3], float out[3]) {
+    float t[3];
+    Rotate(w.pose.q, p, t);
+    for (int c = 0; c < 3; c++) out[c] = w.pose.p[c] + t[c];
+}
+
+// An eye through the window: its view is the venue put in LOCAL space by
+// VenueToWindow and seen from where the eye is (XR's pose, LOCAL), scaled by
+// sz so that from the head at the recenter a point's depth is its distance
+// ahead of the game camera, as the captured projection's near and far planes
+// have it; its field of view stays the headset's (RePose gives it its own
+// projection). Its pose, for the shades, is the venue point VenueToWindow
+// puts at the eye (game.eye + sx r.x R + sy r.y U - sz (r.z - D) F, r the
+// eye in the window's frame) with the camera's axes turned as the eye is from
+// facing the window (rigid: billboards face it, unsqueezed).
+inline Eye WindowEye(const XrPose& eye, const Fov& fov, const WindowFrame& w,
+                     const freecam::Pose& game, const GameFov& game_fov, float units_per_metre) {
+    const WindowScale s = WindowScaleOf(w, game_fov, units_per_metre);
+    Eye e;
+    e.fov = fov;
     float inv[4];
     Conjugate(w.pose.q, inv);
     // the eye's place in the window's frame
@@ -325,27 +395,51 @@ inline freecam::Pose WindowEyePose(const XrPose& eye, const WindowFrame& w,
                           eye.p[2] - w.pose.p[2]};
     float r[3];
     Rotate(inv, rel, r);
+    for (int c = 0; c < 3; c++)
+        e.pose.eye[c] = game.eye[c] + s.sx * r[0] * game.right[c] + s.sy * r[1] * game.up[c] -
+                        s.sz * (r[2] - w.distance) * game.fwd[c];
     // the window's axes x, y, z as the venue's: right, up, -forward
     auto venue = [&](const float v[3], float out[3]) {
         for (int c = 0; c < 3; c++)
             out[c] = v[0] * game.right[c] + v[1] * game.up[c] - v[2] * game.fwd[c];
     };
-    freecam::Pose p{};
-    const float from_cam[3] = {r[0], r[1], r[2] - w.distance};
-    float moved[3];
-    venue(from_cam, moved);
-    for (int c = 0; c < 3; c++) p.eye[c] = game.eye[c] + units_per_metre * moved[c];
     // the eye's axes (XR's +x right, -z forward, +y up) in the window's frame
     float turn[4];
     QuatMul(inv, eye.q, turn);
     const float axes[3][3] = {{1, 0, 0}, {0, 0, -1}, {0, 1, 0}};
-    float* out[3] = {p.right, p.fwd, p.up};
+    float* out[3] = {e.pose.right, e.pose.fwd, e.pose.up};
     for (int i = 0; i < 3; i++) {
         float a[3];
         Rotate(turn, axes[i], a);
         venue(a, out[i]);
     }
-    return p;
+    // The view, row vectors: the venue's axes and origin each to the eye's
+    // camera space (Milo's: x right, y forward, z up), times sz. The axes
+    // through the linear part alone, so no large numbers are subtracted.
+    float eye_inv[4];
+    Conjugate(eye.q, eye_inv);
+    auto camera = [&](const float local[3], float out3[3]) {
+        float v[3];
+        Rotate(eye_inv, local, v);
+        out3[0] = v[0] * s.sz;
+        out3[1] = -v[2] * s.sz;
+        out3[2] = v[1] * s.sz;
+    };
+    for (int i = 0; i < 3; i++) {
+        const float dir[3] = {game.right[i] / s.sx, game.up[i] / s.sy, -game.fwd[i] / s.sz};
+        float local[3];
+        Rotate(w.pose.q, dir, local);
+        camera(local, e.view.m[i]);
+    }
+    const float origin[3] = {0, 0, 0};
+    float win[3], local[3];
+    VenueToWindow(w, game, s, origin, win);
+    WindowToLocal(w, win, local);
+    for (int c = 0; c < 3; c++) local[c] -= eye.p[c];
+    camera(local, e.view.m[3]);
+    e.view.m[3][3] = 1;
+    e.has_view = true;
+    return e;
 }
 
 // The dark around the window (vr_window_dim): a box of quads about the head
@@ -354,8 +448,9 @@ inline freecam::Pose WindowEyePose(const XrPose& eye, const WindowFrame& w,
 // so that from anywhere in it every way but through the window is covered,
 // each way by one quad alone (quad layers have no depth: they cover in the
 // order they're given, so none may cover the window). The face reaches
-// kFrameReach times the window's distance each way, the box as far behind
-// the head. Each quad's +z faces into the box.
+// kFrameReach times the window's distance each way (further for a window
+// wider than that), the box as far behind the head. Each quad's +z faces into
+// the box.
 inline constexpr int kFrameQuads = 9;
 inline constexpr float kFrameReach = 3;
 
@@ -370,7 +465,7 @@ inline XrPose InWindow(const WindowFrame& w, const float p[3], const float q[4])
 }
 
 inline int FrameQuads(const WindowFrame& w, HudQuad out[kFrameQuads]) {
-    const float s = kFrameReach * w.distance;
+    const float s = std::fmax(kFrameReach * w.distance, 1.5f * std::fmax(w.size[0], w.size[1]) / 2);
     // the window's half size, kept inside the face
     const float hx = std::fmin(w.size[0] / 2, s * 0.99f), hy = std::fmin(w.size[1] / 2, s * 0.99f);
     const float back = w.distance + s;  // the back face's z
@@ -458,8 +553,9 @@ struct FrameInputs {
     bool in_song = false;
     bool hud = true;       // vr_hud
     bool hud_in_window = false;
-    HudLayout hud_layout;  // the panel's own place (vr_hud_*)
-    float dim = 1;         // vr_window_dim
+    HudLayout hud_layout;  // the panel's own place (vr_hud_*); its distance the window's
+    float window_width_deg = 100;  // vr_window_width
+    float dim = 1;                 // vr_window_dim
     float world_scale = 1;
 };
 
@@ -474,6 +570,7 @@ struct FrameLayout {
     Eye eyes[2];
     GameFov game_fov;
     WindowFrame window_frame;
+    float magnify = 1;  // the window's k (WindowMagnify)
     // the HUD panel: shown, where, and whether that's the window itself
     bool hud = false;
     bool hud_in_window = false;
@@ -499,12 +596,12 @@ inline FrameLayout ResolveFrame(const Viewpoint& vp, const FrameInputs& in) {
     l.hud_quad = HudPlacement(in.hud_layout, in.head);
     if (l.window) {
         l.game_fov = GameFovOf(in.proj);
-        l.window_frame = WindowPlacement(in.head, in.hud_layout.distance, l.game_fov);
-        for (int e = 0; e < 2; e++) {
-            l.eyes[e].pose = WindowEyePose(in.views[e], l.window_frame, in.game,
-                                           kUnitsPerMetre * in.world_scale);
-            l.eyes[e].fov = in.fov[e];
-        }
+        l.window_frame = WindowPlacement(in.head, in.hud_layout.distance,
+                                         in.window_width_deg * 3.14159265f / 180);
+        const float u = kUnitsPerMetre * in.world_scale;
+        l.magnify = WindowMagnify(WindowScaleOf(l.window_frame, l.game_fov, u));
+        for (int e = 0; e < 2; e++)
+            l.eyes[e] = WindowEye(in.views[e], in.fov[e], l.window_frame, in.game, l.game_fov, u);
         if (!in.in_song || in.hud_in_window) {
             l.hud_in_window = true;
             l.hud_quad.pose = l.window_frame.pose;

@@ -193,13 +193,16 @@ std::string VrLayoutJson(const render::vr::FrameLayout& l, const render::xr::Fra
             pixels(l.hud_quad, *centre, centre_size, centre_size));
     return std::format(
         "{{\"source\":\"{}\",\"hud_boundary\":{},\"window\":{},\"eyes_black\":{},\"fade\":{:.3f},"
-        "\"hfov\":{:.2f},\"vfov\":{:.2f},\"distance\":{:.3f},\"window_size\":[{:.4f},{:.4f}],"
+        "\"hfov\":{:.2f},\"vfov\":{:.2f},\"window_deg\":{:.2f},\"magnify\":{:.3f},"
+        "\"distance\":{:.3f},\"window_size\":[{:.4f},{:.4f}],"
         "\"window_pose\":{},\"head\":{},\"hud\":\"{}\",\"hud_size\":[{:.4f},{:.4f}],"
         "\"hud_pose\":{},\"frame_quads\":{},\"dim\":{:.3f},\"eye_size\":[{},{}],"
         "\"window_px\":{},\"hud_px\":{}{}}}",
         headset ? "headset" : "stand_in", l.hud_boundary, l.window ? "true" : "false",
         l.eyes_black ? "true" : "false", fade, l.game_fov.hfov * 57.2957795f,
-        l.game_fov.vfov * 57.2957795f, w.distance, w.size[0], w.size[1], pose(w.pose),
+        l.game_fov.vfov * 57.2957795f,
+        w.distance > 0 ? 2 * std::atan2(w.size[0] / 2, w.distance) * 57.2957795f : 0.0f,
+        l.magnify, w.distance, w.size[0], w.size[1], pose(w.pose),
         pose(views.head), hud, l.hud_quad.size[0], l.hud_quad.size[1], pose(l.hud_quad.pose),
         l.frame_quads, l.dim, eye_w, eye_h,
         l.window ? pixels(window, views, eye_w, eye_h) : "[]",
@@ -490,7 +493,7 @@ public:
         // with `vr` on, the frame from each eye as the headset's are drawn
         // (native_view.cpp's VrFrame): xr::LayoutFor of this capture with the
         // last VR frame's views, or without a session a stand-in head at
-        // LOCAL's origin facing -z, both eyes at it, 90 degrees each way. Into
+        // LOCAL's origin facing -z, both eyes at it, 60 degrees each way. Into
         // <name>.gpu.L.png and <name>.gpu.R.png (black where the headset's
         // are, the fade left out); the capture's own camera with the eyes'
         // draws alone, at its size (<name>.gpu.eyes.png: what the window in
@@ -504,10 +507,13 @@ public:
             uint32_t eye_w = 0, eye_h = 0;
             const bool headset =
                 render::xr::Session::Get().LastFrame(views, fade, eye_w, eye_h);
+            // the stand-in's and the centre eye's: 60 degrees each way, wider
+            // than vr_window_width's default 100 across
+            constexpr float kHalf = 1.0471976f;
             if (!headset) {
                 for (int e = 0; e < 2; e++) {
                     views.pose[e] = {};
-                    views.fov[e] = {-0.7853982f, 0.7853982f, 0.7853982f, -0.7853982f};
+                    views.fov[e] = {-kHalf, kHalf, kHalf, -kHalf};
                 }
                 views.have_head = true;
                 views.head = {};
@@ -524,7 +530,7 @@ public:
                     centre.pose[e].p[1] = views.head.p[1];
                     centre.pose[e].p[2] = views.head.p[2];
                     for (int k = 0; k < 4; k++) centre.pose[e].q[k] = layout.window_frame.pose.q[k];
-                    centre.fov[e] = {-0.7853982f, 0.7853982f, 0.7853982f, -0.7853982f};
+                    centre.fov[e] = {-kHalf, kHalf, kHalf, -kHalf};
                 }
             }
             out.vr = VrLayoutJson(layout, views, headset, fade, eye_w, eye_h,

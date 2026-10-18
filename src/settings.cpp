@@ -930,11 +930,20 @@ REXCVAR_DEFINE_BOOL(vr, false, "Band3/Advanced/Native renderer",
 
 REXCVAR_DEFINE_STRING(vr_viewpoint, "game_camera", "Band3/Advanced/Native renderer",
     "With vr: where you are in the venue during songs. game_camera: where the game's camera "
-    "is, seeing the venue in 3D through a window the size of the game's picture, dark around "
-    "it, fading to black at each cut. front_row, on_stage, venue: not made yet; they use "
+    "is, seeing the venue in 3D through a window that the game's picture fills "
+    "(vr_window_width), dark around it, fading to black at each cut. front_row, on_stage, "
+    "venue: not made yet; they use "
     "vr_anchor's place for now. Menus are always seen through the game camera's window. Takes "
     "effect at once")
     .allowed({"game_camera", "front_row", "on_stage", "venue"})
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_window_width, 100.0, "Band3/Advanced/Native renderer",
+    "With vr: how wide the game camera's window looks, in degrees across from where you were "
+    "at the last recenter, its height following at 16:9. It stays this size at every cut: "
+    "the game's picture fills it, so a narrow shot is magnified and its depth flattened, as "
+    "a long lens does. Takes effect at once")
+    .range(20.0, 150.0)
     .debug_only();
 
 REXCVAR_DEFINE_DOUBLE(vr_window_dim, 1.0, "Band3/Advanced/Native renderer",
@@ -982,8 +991,8 @@ REXCVAR_DEFINE_BOOL(vr_hud, true, "Band3/Advanced/Native renderer",
 
 REXCVAR_DEFINE_DOUBLE(vr_hud_distance, 1.8, "Band3/Advanced/Native renderer",
     "With vr_hud: how far ahead of you the panel and the game camera's window hang, in "
-    "metres, from where you faced at the last recenter. The window's size follows from the "
-    "game's field of view, so further away it's bigger. Takes effect at once")
+    "metres, from where you faced at the last recenter. The window's size follows from "
+    "vr_window_width, so further away it's bigger. Takes effect at once")
     .range(0.3, 20.0)
     .debug_only();
 

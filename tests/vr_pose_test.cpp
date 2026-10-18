@@ -438,10 +438,10 @@ TEST_CASE("the game's field of view from its projection") {
     CHECK(f.vfov == doctest::Approx(2 * std::atan(9.0f / 16)));
 }
 
-TEST_CASE("the window is the game's view at its distance, level and straight ahead") {
-    const vr::WindowFrame w = vr::WindowPlacement(StandingHead(), 1.8f, Fov348());
-    // 2 * 1.8 * tan(17.4 degrees)
-    CHECK(w.size[0] == doctest::Approx(1.128f).epsilon(1e-3));
+TEST_CASE("the window is vr_window_width across at its distance, 16:9, level and straight ahead") {
+    const vr::WindowFrame w = vr::WindowPlacement(StandingHead(), 1.8f, 100 * kPi / 180);
+    // 2 * 1.8 * tan(50 degrees)
+    CHECK(w.size[0] == doctest::Approx(4.290f).epsilon(1e-3));
     CHECK(w.size[1] == doctest::Approx(w.size[0] * 9 / 16));
     CheckVec(w.pose.p, 0, 1.6f, -1.8f);
     float n[3], up[3];
@@ -454,50 +454,250 @@ TEST_CASE("the window is the game's view at its distance, level and straight ahe
     const float pitch[4] = {std::sin(-0.2f), 0, 0, std::cos(-0.2f)};
     const float roll[4] = {0, 0, std::sin(0.15f), std::cos(0.15f)};
     vr::QuatMul(pitch, roll, tipped.q);
-    const vr::WindowFrame t = vr::WindowPlacement(tipped, 1.8f, Fov348());
+    const vr::WindowFrame t = vr::WindowPlacement(tipped, 1.8f, 100 * kPi / 180);
     CheckVec(t.pose.p, 0, 1.6f, -1.8f);
     Turned(t.pose, 0, 1, 0, up);
     CheckVec(up, 0, 1, 0);
 }
 
-TEST_CASE("through the window the head at the recenter is the game camera") {
-    const float eye[3] = {120, -900, 300}, at[3] = {-40, -500, 260};
-    const freecam::Pose game = freecam::LookAt(eye, at);
+namespace {
+
+// a captured projection `hfov` radians across at 16:9, depth as GameProj's
+Mat4 ProjFor(float hfov) {
+    Mat4 p = GameProj();
+    p.m[0][0] = 1 / std::tan(hfov / 2);
+    p.m[2][1] = p.m[0][0] * 16 / 9;
+    return p;
+}
+
+// `x` (the venue) through vp, to normalized x, y and w
+void VenueNdc(const Mat4& vp, const float x[3], float& nx, float& ny, float* w = nullptr) {
+    float c[4];
+    freecam::Transform(x, vp, c);
+    nx = c[0] / c[3];
+    ny = c[1] / c[3];
+    if (w) *w = c[3];
+}
+
+// a LOCAL point in `eye`'s picture, normalized (-1..1 across its field of view)
+bool LocalNdc(const vr::XrPose& eye, const vr::Fov& fov, const float p[3], float& nx, float& ny) {
+    float x, y;
+    if (!vr::EyePixel(eye, fov, 2, 2, p, x, y)) return false;
+    nx = x - 1;
+    ny = 1 - y;
+    return true;
+}
+
+// an eye's view_proj, as RePose gives it
+Mat4 EyeVp(const vr::Eye& e, const Mat4& proj) {
+    return freecam::Mul(vr::EyeView(e), vr::EyeProjection(proj, e.fov));
+}
+
+// a venue point at game-picture position (nx, ny), `z` units ahead of `game`
+void InPicture(const freecam::Pose& game, const vr::GameFov& f, float nx, float ny, float z,
+               float out[3]) {
+    const float tx = std::tan(f.hfov / 2), ty = std::tan(f.vfov / 2);
+    for (int c = 0; c < 3; c++)
+        out[c] = game.eye[c] + z * (nx * tx * game.right[c] + ny * ty * game.up[c] + game.fwd[c]);
+}
+
+}  // namespace
+
+TEST_CASE("from the head at the recenter the window is the game's picture, at any field of view") {
+    const float eye[3] = {0, -1000, 400}, at[3] = {50, -500, 200};  // pitched down
+    const vr::Fov fov{-1.0f, 0.9f, 0.95f, -1.05f};  // asymmetric, as headsets are
+    for (float hfov_deg : {34.8f, 79.0f, 110.0f}) {
+        for (float roll : {0.0f, 0.3f}) {
+            CAPTURE(hfov_deg);
+            CAPTURE(roll);
+            const freecam::Pose game = Rolled(eye, at, roll);
+            const Mat4 proj = ProjFor(hfov_deg * kPi / 180);
+            const vr::GameFov gf = vr::GameFovOf(proj);
+            // the head turned 30 degrees left at the recenter; the eye there,
+            // looking a little off the window's middle
+            vr::XrPose head = StandingHead();
+            head.q[1] = std::sin(kPi / 12);
+            head.q[3] = std::cos(kPi / 12);
+            const vr::WindowFrame w = vr::WindowPlacement(head, 1.8f, 100 * kPi / 180);
+            vr::XrPose look = head;
+            const float off[4] = {std::sin(0.05f), std::sin(0.08f), 0, 1};
+            float q[4];
+            vr::QuatMul(head.q, off, q);
+            const float len = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+            for (int k = 0; k < 4; k++) look.q[k] = q[k] / len;
+            const vr::Eye e = vr::WindowEye(look, fov, w, game, gf, vr::kUnitsPerMetre);
+            CheckVec(e.pose.eye, eye[0], eye[1], eye[2], 1e-3f);
+            const Mat4 vp = EyeVp(e, proj);
+            // every point of the game's picture, near or far, is where the
+            // window's point at that place of it is: the window is the
+            // picture, clip -1..1 its edges
+            for (float nx : {-1.0f, -0.4f, 0.0f, 0.7f, 1.0f}) {
+                for (float ny : {-1.0f, 0.3f, 1.0f}) {
+                    for (float z : {30.0f, 400.0f, 5000.0f}) {
+                        float x[3];
+                        InPicture(game, gf, nx, ny, z, x);
+                        const float on_window[3] = {nx * w.size[0] / 2, ny * w.size[1] / 2, 0};
+                        float local[3];
+                        vr::WindowToLocal(w, on_window, local);
+                        float ex, ey, wx, wy;
+                        VenueNdc(vp, x, ex, ey);
+                        REQUIRE(LocalNdc(look, fov, local, wx, wy));
+                        CHECK(ex == doctest::Approx(wx).epsilon(1e-3));
+                        CHECK(ey == doctest::Approx(wy).epsilon(1e-3));
+                    }
+                }
+            }
+            // facing the window square on, a point's depth is its distance
+            // ahead of the camera, as the game's projection has it
+            const vr::Eye square = vr::WindowEye(head, fov, w, game, gf, vr::kUnitsPerMetre);
+            float x[3], nx, ny, dw;
+            InPicture(game, gf, 0.3f, -0.2f, 750, x);
+            VenueNdc(EyeVp(square, proj), x, nx, ny, &dw);
+            CHECK(dw == doctest::Approx(750).epsilon(1e-3));
+        }
+    }
+}
+
+TEST_CASE("the window stays one size whatever the game's field of view; the picture's magnified") {
+    Mat4 vp_a, vp_hud;
+    FrameCapture f = Frame(vp_a, vp_hud);
+    vr::FrameInputs in;
+    in.head = StandingHead();
+    for (int e = 0; e < 2; e++) {
+        in.views[e] = in.head;
+        in.fov[e] = {-0.9f, 0.9f, 0.9f, -0.9f};
+    }
+    in.hud_boundary = vr::HudBoundary(f);
+    in.camera = freecam::Decompose(vp_a, in.game, in.proj);
+    REQUIRE(in.camera);
+    in.window_width_deg = 100;
+    vr::Viewpoint vp;
+    float size[2] = {0, 0};
+    for (float hfov_deg : {35.0f, 63.0f, 79.0f}) {
+        CAPTURE(hfov_deg);
+        in.proj = ProjFor(hfov_deg * kPi / 180);
+        const vr::FrameLayout l = vr::ResolveFrame(vp, in);
+        REQUIRE(l.window);
+        if (size[0] == 0) {
+            size[0] = l.window_frame.size[0];
+            size[1] = l.window_frame.size[1];
+        }
+        CHECK(l.window_frame.size[0] == doctest::Approx(size[0]));
+        CHECK(l.window_frame.size[1] == doctest::Approx(size[1]));
+        // k = tan(50) / tan(hfov / 2): 3.78 at 35 degrees, 1.45 at 79
+        CHECK(l.magnify ==
+              doctest::Approx(std::tan(50 * kPi / 180) / std::tan(hfov_deg * kPi / 360)));
+        // the menu panel lies on it, the same rectangle
+        CHECK(l.hud_in_window);
+        CHECK(l.hud_quad.size[0] == doctest::Approx(size[0]));
+        CHECK(l.hud_quad.size[1] == doctest::Approx(size[1]));
+    }
+    CHECK(size[0] == doctest::Approx(2 * 1.8f * std::tan(50 * kPi / 180)));
+    // wider asked for, wider made
+    in.window_width_deg = 120;
+    CHECK(vr::ResolveFrame(vp, in).window_frame.size[0] ==
+          doctest::Approx(2 * 1.8f * std::tan(60 * kPi / 180)));
+}
+
+TEST_CASE("leaning and stepping through the window: the squeezed venue seen as through a window") {
+    const float cam[3] = {120, -900, 300}, at[3] = {-40, -500, 260};
+    const freecam::Pose game = Rolled(cam, at, 0.2f);
+    const Mat4 proj = ProjFor(40 * kPi / 180);
+    const vr::GameFov gf = vr::GameFovOf(proj);
     const vr::XrPose head = StandingHead();
-    const vr::WindowFrame w = vr::WindowPlacement(head, 1.8f, Fov348());
-    const freecam::Pose p = vr::WindowEyePose(head, w, game, vr::kUnitsPerMetre);
-    CheckVec(p.eye, eye[0], eye[1], eye[2], 1e-3f);
-    CheckVec(p.right, game.right[0], game.right[1], game.right[2]);
-    CheckVec(p.fwd, game.fwd[0], game.fwd[1], game.fwd[2]);
-    CheckVec(p.up, game.up[0], game.up[1], game.up[2]);
-    // leaning 0.1 m right moves the eye 3.937 units along the camera's right
+    const vr::WindowFrame w = vr::WindowPlacement(head, 1.8f, 100 * kPi / 180);
+    const float u = vr::kUnitsPerMetre * 2;  // vr_world_scale 2
+    const vr::WindowScale s = vr::WindowScaleOf(w, gf, u);
+    const float k = vr::WindowMagnify(s);
+    CHECK(k == doctest::Approx(std::tan(50 * kPi / 180) / std::tan(20 * kPi / 180)));
+    CHECK(s.sx == doctest::Approx(u));  // life size across
+    CHECK(s.sy == doctest::Approx(u));  // and up, the picture being 16:9 too
+    CHECK(s.sz == doctest::Approx(k * u));
+    const vr::Fov fov{-0.9f, 0.9f, 0.9f, -0.9f};
+    // leaning 0.1 m right moves the eye u / 10 along the camera's right
     vr::XrPose lean = head;
     lean.p[0] += 0.1f;
-    const freecam::Pose l = vr::WindowEyePose(lean, w, game, vr::kUnitsPerMetre);
-    CheckVec(l.eye, eye[0] + 3.937f * game.right[0], eye[1] + 3.937f * game.right[1],
-             eye[2] + 3.937f * game.right[2], 1e-3f);
-    // stepping toward the window goes forward, a world scale further
+    const vr::Eye l = vr::WindowEye(lean, fov, w, game, gf, u);
+    CheckVec(l.pose.eye, cam[0] + 0.1f * u * game.right[0], cam[1] + 0.1f * u * game.right[1],
+             cam[2] + 0.1f * u * game.right[2], 1e-3f);
+    // stepping 0.5 m toward the window goes k times further forward
     vr::XrPose step = head;
     step.p[2] -= 0.5f;
-    const freecam::Pose s = vr::WindowEyePose(step, w, game, vr::kUnitsPerMetre * 2);
-    const float fwd = 0.5f * 39.37f * 2;
-    CheckVec(s.eye, eye[0] + fwd * game.fwd[0], eye[1] + fwd * game.fwd[1],
-             eye[2] + fwd * game.fwd[2], 1e-3f);
+    const vr::Eye st = vr::WindowEye(step, fov, w, game, gf, u);
+    const float fwd = 0.5f * k * u;
+    CheckVec(st.pose.eye, cam[0] + fwd * game.fwd[0], cam[1] + fwd * game.fwd[1],
+             cam[2] + fwd * game.fwd[2], 1e-3f);
+    // from either, every venue point is where its squeezed place in LOCAL
+    // space is: exact for the squeezed venue (points in front of the eye:
+    // stepped 0.5 m in, those under 0.5 k u = 129 units ahead of the camera
+    // are behind it)
+    for (const vr::XrPose* from : {&lean, &step}) {
+        const vr::Eye e = vr::WindowEye(*from, fov, w, game, gf, u);
+        const Mat4 vp = EyeVp(e, proj);
+        for (float z : {300.0f, 900.0f, 4000.0f}) {
+            float x[3], win[3], local[3], ex, ey, wx, wy;
+            InPicture(game, gf, 0.5f, -0.3f, z, x);
+            vr::VenueToWindow(w, game, s, x, win);
+            vr::WindowToLocal(w, win, local);
+            VenueNdc(vp, x, ex, ey);
+            REQUIRE(LocalNdc(*from, fov, local, wx, wy));
+            CHECK(ex == doctest::Approx(wx).epsilon(1e-3));
+            CHECK(ey == doctest::Approx(wy).epsilon(1e-3));
+        }
+    }
+    // the plane k u D ahead of the camera is the window's: its points stay
+    // on the window's (same place in the picture) however the head moves,
+    // and what's beyond moves with the head, as through a window
+    float plane[3], beyond[3];
+    InPicture(game, gf, 0, 0, k * u * 1.8f, plane);
+    InPicture(game, gf, 0, 0, 6 * k * u * 1.8f, beyond);
+    const Mat4 vp_lean = EyeVp(l, proj);
+    float on_window[3];
+    const float centre[3] = {0, 0, 0};
+    vr::WindowToLocal(w, centre, on_window);
+    float px, py, bx, by, wx, wy;
+    VenueNdc(vp_lean, plane, px, py);
+    REQUIRE(LocalNdc(lean, fov, on_window, wx, wy));
+    CHECK(px == doctest::Approx(wx).epsilon(1e-3));
+    VenueNdc(vp_lean, beyond, bx, by);
+    CHECK(bx > px);  // leant right: the far point is right of the window's middle
+}
+
+TEST_CASE("the eyes are the user's IPD apart in the venue, whatever the magnification") {
+    const float cam[3] = {0, -1000, 400}, at[3] = {50, -500, 200};
+    const freecam::Pose game = freecam::LookAt(cam, at);
+    const vr::XrPose head = StandingHead();
+    const vr::WindowFrame w = vr::WindowPlacement(head, 1.8f, 100 * kPi / 180);
+    const vr::Fov fov{-0.9f, 0.9f, 0.9f, -0.9f};
+    for (float hfov_deg : {30.0f, 80.0f}) {
+        const vr::GameFov gf = vr::GameFovOf(ProjFor(hfov_deg * kPi / 180));
+        vr::XrPose l = head, r = head;
+        l.p[0] -= 0.032f;
+        r.p[0] += 0.032f;
+        const vr::Eye el = vr::WindowEye(l, fov, w, game, gf, vr::kUnitsPerMetre);
+        const vr::Eye er = vr::WindowEye(r, fov, w, game, gf, vr::kUnitsPerMetre);
+        const float d[3] = {er.pose.eye[0] - el.pose.eye[0], er.pose.eye[1] - el.pose.eye[1],
+                            er.pose.eye[2] - el.pose.eye[2]};
+        CHECK(freecam::Len3(d) == doctest::Approx(0.064f * 39.37f));
+        CHECK(freecam::Dot3(d, game.right) == doctest::Approx(0.064f * 39.37f));
+    }
 }
 
 TEST_CASE("a pitched and rolled game camera: the user's up is the camera's, the window level") {
     const float eye[3] = {0, -1000, 400}, at[3] = {50, -500, 200};  // pitched down
     const freecam::Pose game = Rolled(eye, at, 0.3f);
+    const vr::GameFov gf = Fov348();
     // the head turned 30 degrees left at the recenter: the window is too
     vr::XrPose head = StandingHead();
     head.q[1] = std::sin(kPi / 12);
     head.q[3] = std::cos(kPi / 12);
-    const vr::WindowFrame w = vr::WindowPlacement(head, 1.8f, Fov348());
+    const vr::WindowFrame w = vr::WindowPlacement(head, 1.8f, 100 * kPi / 180);
     float up[3];
     Turned(w.pose, 0, 1, 0, up);
     CheckVec(up, 0, 1, 0);
+    const vr::Fov fov{-0.9f, 0.9f, 0.9f, -0.9f};
     // at the head the camera exactly, rolled and pitched as it is
-    const freecam::Pose p = vr::WindowEyePose(head, w, game, vr::kUnitsPerMetre);
+    const freecam::Pose p = vr::WindowEye(head, fov, w, game, gf, vr::kUnitsPerMetre).pose;
     CheckVec(p.eye, eye[0], eye[1], eye[2], 1e-3f);
     CheckVec(p.up, game.up[0], game.up[1], game.up[2]);
     CheckVec(p.right, game.right[0], game.right[1], game.right[2]);
@@ -505,7 +705,7 @@ TEST_CASE("a pitched and rolled game camera: the user's up is the camera's, the 
     // camera's up, not the venue's
     vr::XrPose rise = head;
     rise.p[1] += 0.1f;
-    const freecam::Pose r = vr::WindowEyePose(rise, w, game, vr::kUnitsPerMetre);
+    const freecam::Pose r = vr::WindowEye(rise, fov, w, game, gf, vr::kUnitsPerMetre).pose;
     CheckVec(r.eye, eye[0] + 3.937f * game.up[0], eye[1] + 3.937f * game.up[1],
              eye[2] + 3.937f * game.up[2], 1e-3f);
     // looking 20 degrees left of the window turns from the camera's forward
@@ -513,10 +713,34 @@ TEST_CASE("a pitched and rolled game camera: the user's up is the camera's, the 
     vr::XrPose look = head;
     const float left[4] = {0, std::sin(kPi / 18), 0, std::cos(kPi / 18)};
     vr::QuatMul(left, head.q, look.q);
-    const freecam::Pose k = vr::WindowEyePose(look, w, game, vr::kUnitsPerMetre);
+    const freecam::Pose k = vr::WindowEye(look, fov, w, game, gf, vr::kUnitsPerMetre).pose;
     CHECK(freecam::Dot3(k.fwd, game.fwd) == doctest::Approx(std::cos(kPi / 9)));
     CHECK(freecam::Dot3(k.fwd, game.right) == doctest::Approx(-std::sin(kPi / 9)));
     CHECK(freecam::Dot3(k.up, game.up) == doctest::Approx(1));
+}
+
+TEST_CASE("RePose takes the window's view where an eye has one") {
+    Mat4 vp_a, vp_hud;
+    const FrameCapture in = Frame(vp_a, vp_hud);
+    freecam::Pose game{};
+    Mat4 proj{};
+    REQUIRE(freecam::Decompose(vp_a, game, proj));
+    const vr::XrPose head = StandingHead();
+    const vr::WindowFrame w = vr::WindowPlacement(head, 1.8f, 100 * kPi / 180);
+    vr::XrPose left = head;
+    left.p[0] -= 0.032f;
+    const vr::Eye e = vr::WindowEye(left, {-0.9f, 0.9f, 0.9f, -0.9f}, w, game,
+                                    vr::GameFovOf(proj), vr::kUnitsPerMetre);
+    REQUIRE(e.has_view);
+    FrameCapture out;
+    REQUIRE(vr::RePose(in, e, out).ok);
+    const Mat4 want = EyeVp(e, proj);
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++)
+            CHECK(std::fabs(out.draws[0].view_proj.m[r][c] - want.m[r][c]) <
+                  1e-3f * (1 + std::fabs(want.m[r][c])));
+    CheckVec(out.shades[size_t(out.draws[0].shade)].eye, e.pose.eye[0], e.pose.eye[1],
+             e.pose.eye[2], 1e-3f);
 }
 
 namespace {
@@ -545,7 +769,7 @@ TEST_CASE("the dark around the window: every way but through it covered once, fa
     vr::XrPose head = StandingHead();
     head.q[1] = std::sin(0.3f);  // turned
     head.q[3] = std::cos(0.3f);
-    const vr::WindowFrame w = vr::WindowPlacement(head, 1.8f, Fov348());
+    const vr::WindowFrame w = vr::WindowPlacement(head, 1.8f, 34.8f * kPi / 180);
     vr::HudQuad q[vr::kFrameQuads];
     REQUIRE(vr::FrameQuads(w, q) == vr::kFrameQuads);
     // each faces the head: its normal toward the box's inside
@@ -701,7 +925,7 @@ TEST_CASE("the window's corners in an eye's picture") {
     // an eye at the head, 90 degrees each way, 1000 pixels square: the
     // window 34.8 degrees across in the middle, tan(17.4) of half across
     const vr::XrPose head = StandingHead();
-    const vr::WindowFrame w = vr::WindowPlacement(head, 1.8f, Fov348());
+    const vr::WindowFrame w = vr::WindowPlacement(head, 1.8f, 34.8f * kPi / 180);
     vr::HudQuad q;
     q.pose = w.pose;
     q.size[0] = w.size[0];

@@ -179,7 +179,7 @@ class Session {
 };
 
 // The frame's layout for `fc` seen with `f`'s views: vr_pose.h's ResolveFrame
-// with the settings (vr_viewpoint, vr_hud*, vr_window_dim, vr_world_scale,
+// with the settings (vr_viewpoint, vr_hud*, vr_window_width, vr_window_dim, vr_world_scale,
 // vr_anchor) and `in_song` (native_view.h: InSong and SongScreen), its fade 0. A
 // vr_viewpoint not made yet is logged once and seen from vr_anchor. Any
 // thread; every platform.

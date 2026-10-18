@@ -7,9 +7,11 @@ vr_pose.h's HudBoundary) at the game's size, <name>.gpu.eyes.png, the HUD
 panel's picture, <name>.gpu.hud.png, and the layout, <name>.vr.json: whether
 the eyes look through the game camera's window or are black, the window's
 corners in the left eye's picture (`window_px`), the panel's (`hud_px`) and
-where it goes (`hud`: window, own, off), the dark's alpha (`dim`), the fade.
+where it goes (`hud`: window, own, off), the dark's alpha (`dim`), the fade,
+and the window's width (`window_deg`, vr_window_width) and how much the game's
+picture is magnified to fill it (`magnify`, vr_pose.h's WindowMagnify).
 Without a VR session the eyes are a stand-in's: the head at LOCAL space's
-origin, both eyes at it, 90 degrees each way, so the left eye sees the window
+origin, both eyes at it, 60 degrees each way, so the left eye sees the window
 square on from where the game camera is. With a headset the capture adds such
 an eye at the recenter's head, <name>.gpu.C.png (the layout's `centre`), and
 the window is checked in that.
@@ -21,7 +23,8 @@ For each name this:
              .gpu.eyes.png box-filtered to the quad's size: mean difference,
              % of pixels off by more than 16 in their largest channel, and the
              worst cell of a 4x4 grid. Seen from the head at the recenter the
-             window is the game camera, so these are small (post effects drawn
+             window is the game camera's picture whatever its size, so these
+             are small (post effects drawn
              at another size differ a little); `shifted` is the quad moved a
              tenth of its width, what a misplaced window would score.
              <name>.vr.window.png has the two side by side
@@ -131,7 +134,8 @@ def check(prefix, max_mean):
     with open(prefix + ".vr.json") as f:
         layout = json.load(f)
     head = (f"{name}: {layout['source']} hud_boundary {layout['hud_boundary']} "
-            f"hfov {layout['hfov']:.1f} vfov {layout['vfov']:.1f} window "
+            f"hfov {layout['hfov']:.1f} vfov {layout['vfov']:.1f} in a "
+            f"{layout.get('window_deg', 0):.0f}-degree window ({layout.get('magnify', 1):.2f}x) "
             f"{layout['window_size'][0]:.3f} x {layout['window_size'][1]:.3f} m at "
             f"{layout['distance']:.2f} m, fade {layout['fade']:.2f}, hud {layout['hud']}")
     ok = True

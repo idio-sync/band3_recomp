@@ -439,14 +439,24 @@ What each does, how it was measured and why it defaults as it does. The
   The game camera's window (`vr_viewpoint` game_camera, the default, and every menu in any
   viewpoint; `vr_pose.h`'s `ResolveFrame`, chosen per frame by `xr::LayoutFor`): the head at
   the recenter stands where the game's camera is. The window is a rectangle in LOCAL space
-  `vr_hud_distance` ahead of that head at eye height, turned by its yaw alone, the size the
-  game camera's view is there (`GameFovOf`: `2 atan(1 / proj.m[0][0])` across,
-  `proj.m[2][1]` up and down, so 34.8 degrees is 1.128 m wide at 1.8 m); each eye is the
-  game camera moved by the eye's place in the window's frame (`WindowEyePose`: window x, y,
-  -z as the camera's right, up, forward, 39.37 units a metre times `vr_world_scale`) with
-  the headset's own field of view, so the window shows exactly the game's picture from the
-  recenter's head and the venue moves behind it as the head does, level in the room
-  whatever the camera's pitch and roll. Around it nine quad layers of one 8x8 swapchain
+  `vr_hud_distance` ahead of that head at eye height, turned by its yaw alone,
+  `vr_window_width` (100) degrees across from there and 16:9 (4.29 x 2.41 m at 1.8 m),
+  the same at every cut. The game camera's view (`GameFovOf`: `2 atan(1 / proj.m[0][0])`
+  across, `proj.m[2][1]` up and down) fills it: the eyes see a true window onto the venue
+  squeezed along the camera's forward (`WindowEye`, `VenueToWindow`: across and up 39.37
+  units a metre times `vr_world_scale`, so the eyes are the user's IPD apart in the venue,
+  along the forward k times that, k = tan(width / 2) / tan(hfov / 2), 1.44 for a 79-degree
+  song shot, 2.8 for the 46-degree main hub, 8.5 for a 16-degree close-up). From the
+  recenter's head the window is exactly the game's picture; elsewhere the parallax is
+  exactly that squeezed venue's, so leaning moves the eye u a metre across and k u along
+  the forward, and the stereo depth is flattened k times (a point Z units ahead looks
+  Z / (k u) metres away). Each eye's view is that map into LOCAL then the eye's pose,
+  scaled by k u so depth from the recenter's head is the camera's (`Eye::view`, which
+  `RePose` uses), with the headset's own field of view; the window is level in the room
+  whatever the camera's pitch and roll, the picture in it rolled as the game's is. On the
+  Steam Frame (2026-10-18) the left eye's field of view is about 59 degrees out and 50 in,
+  so a 100-degree window reaches each eye's inner edge from the recentred head. Around it
+  nine quad layers of one 8x8 swapchain
   cleared black at `vr_window_dim`'s alpha (`FrameQuads`: four strips tiling the window's
   plane around it out to 3 times its distance, and the four sides and back of the box they
   make, so every way out of the box but through the window is covered once) go between
