@@ -429,6 +429,31 @@ What each does, how it was measured and why it defaults as it does. The
   RePose an eye, 12.3-12.8 ms a frame, over 90 Hz's 11.1 (late 82-87% of frames): each eye
   draws the crowd's ~85 impostor passes again. The eyes' pictures differ by a 2-pixel shift
   at the stage, as a 63 mm IPD at ~20 m gives.
+  Each runtime frame's timing (`vr_timing.h`'s `FrameTiming`) is kept in a ring of the last
+  8,192 (about 68 s at 120 Hz), which the harness's `vr_frames [name]` writes as CSV to
+  `logs/vr_frames-<name>.csv` beside the exe: in ms from xrWaitFrame's return, xrBeginFrame's
+  return, the views located, each eye's and the panel's submission, the GPU done (the
+  `OutputDone` waits, eyes and panel apart), `Present`'s start, then its steps (the command
+  allocator's fence, acquiring and waiting for the eyes' images and the panel's, recording and
+  submitting the copies, releasing, xrEndFrame) and xrEndFrame's return; the time in
+  xrWaitFrame, the steps from the frame before's wake and `predictedDisplayTime`, the display
+  time less the wake (with `XR_KHR_win32_convert_performance_counter_time`, which band3 asks
+  for where the runtime has it), the capture drawn (its age since the game's Present, the
+  game's frame time, whether it's the one the frame before drew, game frames skipped, those
+  published by Present), each eye's CPU, GPU (`native_gpu_timestamps`) and RePose ms, and the
+  window's picture (published after xrEndFrame, the left eye; the next xrWaitFrame waits on
+  it). The `xr` block's `late` is as before: WaitFrame's return (xrBeginFrame and
+  xrLocateViews done) to xrEndFrame's return over the display period, the CPU's part of the
+  frame without xrWaitFrame's wait; it doesn't say the runtime showed the frame late. Beside
+  it: `missed` (the display time moved on 1.5 periods or more since the frame before's: the
+  runtime showed a refresh without a new frame) and `slots_missed`, `over_period`
+  (xrWaitFrame's return to xrEndFrame's over the period), `late_wakes` (xrWaitFrame returned
+  1.5 periods or more after the frame before's), `repeats`, `behind_newer` and `slow`; and
+  `timing`, the frames recorded since `native_view on` (as far as the ring reaches) split
+  into `late` and `on_time`, each with those counts and every part's `p50`, `p95`, `p99`
+  and `max`. A frame that ended 1.5 periods or more after its wake, or missed a slot, is
+  logged with its breakdown (`vr: slow frame ...`), at most one a second with the count
+  since.
 - `native_view_render_scale` (debug, 1): the presented picture is drawn at that times the
   window's size (after `native_max_height`; `native_view.cpp`'s `ScaleRender`), with the
   screen-sized passes following (`ScaleForPicture`), and `present.hlsl` scales it to the

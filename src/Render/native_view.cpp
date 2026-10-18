@@ -1339,7 +1339,9 @@ class Renderer {
     // published as the window's picture; else, and the right always, into
     // the eye slots. The HUD's draws go onto the HUD panel (vr_hud), the
     // capture itself drawn BackBufferPart::kHud into the HUD slot when it's
-    // new, and xr_present.cpp's quad layer shows it over the eyes.
+    // new, and xr_present.cpp's quad layer shows it over the eyes. The frame's
+    // timing (f.timing, vr_timing.h) goes to Session::Record once the window
+    // has its picture, the next xrWaitFrame waiting on that too.
     void VrFrame(const RasterOptions& o, uint64_t generation, bool presenting,
                  double& decode_pending_ms, std::vector<uint32_t>& rgba) {
         using Clock = std::chrono::steady_clock;
@@ -1354,6 +1356,9 @@ class Renderer {
         auto since_begin = [&] {
             return std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
         };
+        // the frame's timing (vr_timing.h): ms from xrWaitFrame's return
+        vr::FrameTiming& t = f.timing;
+        auto at = [&] { return double(Nanoseconds(Clock::now()) - t.wake_ns) / 1e6; };
         stall_watch::SetWorker(stall_watch::Worker::kRecording);
         Clock::time_point presented;
         double decode_ms = 0;
@@ -1364,8 +1369,18 @@ class Renderer {
         if (!cap) {
             // nothing captured yet: the eyes' colours
             xs.Present(f, eyes, nullptr, since_begin());
+            xs.Record(t);
             return;
         }
+        t.capture = cap->frame;
+        t.capture_age_ms =
+            std::chrono::duration<double, std::milli>(Clock::now() - presented).count();
+        t.game_ms = double(cap->cost.game_ns) / 1e6;
+        t.repeat = cap->frame == vr_timed_frame_;
+        t.captures_skipped = vr_timed_frame_ && cap->frame > vr_timed_frame_
+                                 ? uint32_t(cap->frame - vr_timed_frame_ - 1)
+                                 : 0;
+        vr_timed_frame_ = cap->frame;
         vr::Anchor anchor;
         const std::string anchor_text = REXCVAR_GET(vr_anchor);
         if (anchor_text.empty() || !vr::ParseAnchor(anchor_text, anchor)) {
@@ -1419,6 +1434,7 @@ class Renderer {
                 std::chrono::duration<double, std::milli>(Clock::now() - repose_start).count();
             d[e].drew_output =
                 GpuRenderer::Get().RenderFrameToOutput(*eye_cap[e], eo, slot[e], d[e].out, d[e].gs);
+            if (d[e].drew_output) t.eye_submitted_ms[e] = at();
             if (e == 0 && left_slot >= 0 && d[e].drew_output) {
                 std::lock_guard lock(mutex_);
                 slots_.Submitted(left_slot);
@@ -1441,38 +1457,53 @@ class Renderer {
             ho.msaa = o.msaa;
             hd.drew_output = GpuRenderer::Get().RenderFrameToOutput(*cap, ho, hud_slot, hd.out,
                                                                    hd.gs);
-            if (hd.drew_output) vr_hud_frame_ = int64_t(cap->frame);
+            if (hd.drew_output) {
+                vr_hud_frame_ = int64_t(cap->frame);
+                t.hud = true;
+                t.hud_submitted_ms = at();
+            }
         }
         // each finished on SDL's queue before the SDK's samples it
         stall_watch::SetWorker(stall_watch::Worker::kGpuWait);
+        // the ms it waited
         auto finish = [&](Drawn& dr, int s, const char* what) {
             const auto from = Clock::now();
             while (!GpuRenderer::Get().OutputDone(s, &dr.gs)) {
                 if (Clock::now() - from > kGpuHung) {
                     REXLOG_WARN("vr: {} wasn't finished after {} ms", what, kGpuHung.count());
                     dr.drew_output = false;
-                    return;
+                    break;
                 }
                 std::this_thread::sleep_for(kFencePoll);
             }
+            return std::chrono::duration<double, std::milli>(Clock::now() - from).count();
         };
         for (int e = 0; e < 2; e++) {
             if (!d[e].drew_output) continue;
-            finish(d[e], slot[e], "an eye");
+            t.eyes_wait_ms += finish(d[e], slot[e], "an eye");
             if (d[e].drew_output && d[e].out.d3d12_resource) eyes[e] = d[e].out.d3d12_resource;
-            xs.AddRenderMs(e, d[e].gs.ms, d[e].gs.gpu_timed ? d[e].gs.gpu_total_ms : 0,
-                           repose_ms[e]);
+            const double gpu_ms = d[e].gs.gpu_timed ? d[e].gs.gpu_total_ms : 0;
+            xs.AddRenderMs(e, d[e].gs.ms, gpu_ms, repose_ms[e]);
+            t.eye_cpu_ms[e] = d[e].gs.ms;
+            t.eye_gpu_ms[e] = gpu_ms;
+            t.repose_ms[e] = repose_ms[e];
         }
         void* hud = nullptr;
         if (hd.drew_output) {
-            finish(hd, hud_slot, "the HUD panel");
+            t.hud_wait_ms = finish(hd, hud_slot, "the HUD panel");
             if (hd.drew_output) hud = hd.out.d3d12_resource;
-            xs.AddHudMs(hd.gs.ms, hd.gs.gpu_timed ? hd.gs.gpu_total_ms : 0);
+            t.hud_cpu_ms = hd.gs.ms;
+            t.hud_gpu_ms = hd.gs.gpu_timed ? hd.gs.gpu_total_ms : 0;
+            xs.AddHudMs(t.hud_cpu_ms, t.hud_gpu_ms);
         }
+        t.gpu_done_ms = at();
         if (left_slot >= 0) {
             std::lock_guard lock(mutex_);
             slots_.Finished(left_slot);
         }
+        // game frames the eyes are behind as they go to the headset
+        const uint64_t newest = LatestCaptureFrame();
+        t.newer = newest > cap->frame ? uint32_t(newest - cap->frame) : 0;
         // a missing eye shows its colour rather than the other's picture
         xs.Present(f, eyes, hud, since_begin());
         // the left eye as the window's picture, and as RGBA for a screenshot
@@ -1488,8 +1519,10 @@ class Renderer {
                 std::lock_guard lock(mutex_);
                 slots_.Abandon(left_slot);
             }
+            xs.Record(t);
             return;
         }
+        const auto window_start = Clock::now();
         if (want_rgba) {
             uint32_t rw = 0, rh = 0;
             w.want_rgba = GpuRenderer::Get().DownloadOutput(slot[0], rgba, rw, rh);
@@ -1509,9 +1542,15 @@ class Renderer {
         w.gs.ms += decode_pending_ms;
         decode_pending_ms = 0;
         PublishDrawn(w, w.want_rgba ? &rgba : nullptr);
+        t.window = true;
+        t.window_ms =
+            std::chrono::duration<double, std::milli>(Clock::now() - window_start).count();
+        xs.Record(t);
     }
     // the capture the last VR frame drew, for Drawn::new_frame
     uint64_t vr_last_frame_ = 0;
+    // the capture the last VR frame's eyes drew, for FrameTiming::repeat
+    uint64_t vr_timed_frame_ = 0;
     // the capture the HUD panel's picture is of (-1 none)
     int64_t vr_hud_frame_ = -1;
 

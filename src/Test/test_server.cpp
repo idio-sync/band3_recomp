@@ -28,6 +28,7 @@
 #include <ctime>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -613,6 +614,23 @@ public:
         }
         out.xr_json = render::xr::Session::Get().MeasuredJson();
         return out;
+    }
+
+    // the VR frames' timing ring, written whole (a header alone without VR)
+    std::string VrFrames(const std::string& name, VrFramesInfo& out) override {
+        render::xr::Session& xs = render::xr::Session::Get();
+        out.state = xs.GetStats().state;
+        const std::string csv = xs.FramesCsv(out.frames);
+        const std::filesystem::path dir = rex::filesystem::GetExecutableFolder() / "logs";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        const std::filesystem::path path =
+            dir / ("vr_frames-" + (name.empty() ? TimestampName() : name) + ".csv");
+        std::ofstream file(path, std::ios::binary);
+        file << csv;
+        if (!file.good()) return "couldn't write " + path.string();
+        out.path = path.string();
+        return {};
     }
 
     // the window's paints as the native renderer's drawer timed them, and

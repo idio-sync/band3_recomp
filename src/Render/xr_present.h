@@ -32,11 +32,17 @@
 // runtime moving LOCAL space). Its image is drawn only when the worker has
 // a new panel picture; frames in between show the image last released, as
 // a quad layer may.
+//
+// Each runtime frame's timing (vr_timing.h's FrameTiming) is filled by
+// WaitFrame, the worker's VrFrame and Present, and handed to Record, which
+// keeps it in a ring for the harness's `vr_frames` (FramesCsv), counts it in
+// the stats and logs a slow one (at most one a second).
 
 #include <cstdint>
 #include <string>
 
 #include "src/Render/vr_pose.h"
+#include "src/Render/vr_timing.h"
 
 namespace band3::render::xr {
 
@@ -55,6 +61,9 @@ struct FrameViews {
     bool located = false;
     vr::XrPose pose[2];
     vr::Fov fov[2];
+    // where the frame's time goes: WaitFrame starts it, the worker and
+    // Present fill their parts, Record keeps it
+    vr::FrameTiming timing;
 };
 
 // for native_view stats' `xr` block
@@ -68,9 +77,20 @@ struct Stats {
     // of all ended, those the runtime said it wouldn't show (shouldRender
     // off: the session isn't visible, as with SteamVR's idle null headset)
     uint64_t hidden = 0;
-    // frames whose drawing (xrBeginFrame to xrEndFrame) took longer than
-    // the display period
+    // frames whose drawing took longer than the display period: from
+    // WaitFrame's return (xrBeginFrame and xrLocateViews done) to xrEndFrame's
+    // return, the CPU's part of the frame without xrWaitFrame's wait. Whether
+    // the runtime then showed it late is `missed`.
     uint64_t late = 0;
+    // Record's (vr_timing.h's Classify): frames recorded (the last one's
+    // index); the runtime's display time moving on 1.5 periods or more, and
+    // the refreshes so missed; xrWaitFrame's return to xrEndFrame's over the
+    // period; xrWaitFrame returning 1.5 periods or more after the frame
+    // before's; eyes drawn from the capture the frame before drew; eyes
+    // drawn from a capture with newer ones published by Present; and logged
+    // as slow (or would have been but for the rate limit)
+    uint64_t recorded = 0, missed = 0, slots_missed = 0, over_period = 0, late_wakes = 0;
+    uint64_t repeats = 0, behind = 0, slow = 0;
     double wait_ms = 0;     // in xrWaitFrame, summed
     // each eye's drawing: the CPU's up to submitting (GpuStats::ms), the GPU's
     // (native_gpu_timestamps' gpu_total_ms), and RePose's copy, summed
@@ -108,8 +128,16 @@ class Session {
     // the frame with them; with null eyes, ends it without a layer. `hud`, a
     // new HUD panel picture (an output likewise), goes into the panel's
     // image; null keeps the image last drawn. With vr_hud the frame ends
-    // with the panel's quad layer over the eyes once it has an image.
-    bool Present(const FrameViews& f, void* const eye[2], void* hud, double begin_to_present_ms);
+    // with the panel's quad layer over the eyes once it has an image. Fills
+    // f.timing's Present part.
+    bool Present(FrameViews& f, void* const eye[2], void* hud, double begin_to_present_ms);
+    // Worker, once a frame's done (after the window's picture): classifies
+    // `t` against the frame before, counts it, keeps it in the ring and logs
+    // it if slow
+    void Record(vr::FrameTiming& t);
+    // the ring's frames (the last vr::kRingFrames), oldest first, as
+    // vr_timing.h's CSV; `frames` says how many
+    std::string FramesCsv(uint64_t& frames);
     // whether the HUD panel's output may be drawn again: the SDK's queue has
     // finished copying the last picture out of it (nothing else orders it
     // after SDL's queue). Never waits.

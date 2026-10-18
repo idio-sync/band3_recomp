@@ -44,7 +44,12 @@ bool Session::Update(bool) { return false; }
 uint32_t Session::Width() const { return 0; }
 uint32_t Session::Height() const { return 0; }
 bool Session::WaitFrame(FrameViews&) { return false; }
-bool Session::Present(const FrameViews&, void* const[2], void*, double) { return false; }
+bool Session::Present(FrameViews&, void* const[2], void*, double) { return false; }
+void Session::Record(vr::FrameTiming&) {}
+std::string Session::FramesCsv(uint64_t& frames) {
+    frames = 0;
+    return vr::CsvHeader();
+}
 bool Session::HudFree() { return true; }
 void Session::AddRenderMs(int, double, double, double) {}
 void Session::AddHudMs(double, double) {}
@@ -105,6 +110,15 @@ double MsSince(std::chrono::steady_clock::time_point t) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
 }
 
+int64_t SteadyNs(std::chrono::steady_clock::time_point t) {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
+}
+
+// ms from a FrameTiming's wake (steady-clock ns) to now
+double MsFromWake(int64_t wake_ns) {
+    return double(SteadyNs(std::chrono::steady_clock::now()) - wake_ns) / 1e6;
+}
+
 }  // namespace
 
 void SetDevice(void* d3d12_device, void* d3d12_queue) {
@@ -138,6 +152,10 @@ struct Session::Impl {
     PFN_xrBeginFrame begin_frame = nullptr;
     PFN_xrEndFrame end_frame = nullptr;
     PFN_xrLocateViews locate_views = nullptr;
+    // XR_KHR_win32_convert_performance_counter_time, where the runtime has
+    // it: FrameTiming::display_in_ms
+    PFN_xrConvertTimeToWin32PerformanceCounterKHR to_qpc = nullptr;
+    LARGE_INTEGER qpc_frequency{};
 
     XrInstance instance = XR_NULL_HANDLE;
     XrSystemId system = XR_NULL_SYSTEM_ID;
@@ -198,6 +216,13 @@ struct Session::Impl {
 
     std::mutex stats_mutex;
     Stats stats, measured_from;
+    // Record's: the frames' timings (under stats_mutex), the frame before's
+    // (the worker's), and the slow-frame log's limit
+    vr::FrameRing ring;
+    vr::FrameTiming last_timing;
+    uint64_t timing_frames = 0;
+    std::chrono::steady_clock::time_point slow_logged{};
+    uint64_t slow_unlogged = 0;
     bool have_eyes = false;
     vr::Eye last_eyes[2];
     std::chrono::steady_clock::time_point fake_start = std::chrono::steady_clock::now();
@@ -250,13 +275,29 @@ bool Session::Impl::Make() {
     if (!LoadLoader()) return Fail("no OpenXR loader (openxr_loader.dll)");
     PFN_xrCreateInstance create_instance = nullptr;
     if (!Load("xrCreateInstance", create_instance)) return Fail("the OpenXR loader is broken");
-    const char* extensions[] = {XR_KHR_D3D12_ENABLE_EXTENSION_NAME};
+    // and, for the frames' timing only, XrTime as QueryPerformanceCounter's
+    // where the runtime offers it
+    bool convert_time = false;
+    PFN_xrEnumerateInstanceExtensionProperties enumerate_extensions = nullptr;
+    if (XR_SUCCEEDED(get_proc(XR_NULL_HANDLE, "xrEnumerateInstanceExtensionProperties",
+                              reinterpret_cast<PFN_xrVoidFunction*>(&enumerate_extensions))) &&
+        enumerate_extensions) {
+        uint32_t n = 0;
+        enumerate_extensions(nullptr, 0, &n, nullptr);
+        std::vector<XrExtensionProperties> props(n, {XR_TYPE_EXTENSION_PROPERTIES});
+        const char* want = XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME;
+        if (n && XR_SUCCEEDED(enumerate_extensions(nullptr, n, &n, props.data())))
+            for (const XrExtensionProperties& p : props)
+                convert_time |= std::strcmp(p.extensionName, want) == 0;
+    }
+    const char* extensions[] = {XR_KHR_D3D12_ENABLE_EXTENSION_NAME,
+                                XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME};
     XrInstanceCreateInfo ici{XR_TYPE_INSTANCE_CREATE_INFO};
     std::memcpy(ici.applicationInfo.applicationName, "band3", sizeof("band3"));
     std::memcpy(ici.applicationInfo.engineName, "band3", sizeof("band3"));
     ici.applicationInfo.applicationVersion = 1;
     ici.applicationInfo.apiVersion = XR_API_VERSION_1_0;
-    ici.enabledExtensionCount = 1;
+    ici.enabledExtensionCount = convert_time ? 2 : 1;
     ici.enabledExtensionNames = extensions;
     SetState("starting the runtime");
     XrResult r = create_instance(&ici, &instance);
@@ -278,6 +319,11 @@ bool Session::Impl::Make() {
         !Load("xrBeginFrame", begin_frame) || !Load("xrEndFrame", end_frame) ||
         !Load("xrLocateViews", locate_views))
         return Fail("the runtime lacks a function band3 needs");
+    if (convert_time &&
+        (XR_FAILED(get_proc(instance, "xrConvertTimeToWin32PerformanceCounterKHR",
+                            reinterpret_cast<PFN_xrVoidFunction*>(&to_qpc))) ||
+         !QueryPerformanceFrequency(&qpc_frequency)))
+        to_qpc = nullptr;
     XrInstanceProperties ip{XR_TYPE_INSTANCE_PROPERTIES};
     if (XR_SUCCEEDED(get_instance_properties(instance, &ip))) {
         std::lock_guard lock(stats_mutex);
@@ -320,8 +366,9 @@ bool Session::Impl::Make() {
     r = create_space(session, &rsci, &local);
     if (XR_FAILED(r)) return Fail(fmt::format("xrCreateReferenceSpace failed ({})", int(r)));
     if (!MakeSwapchains() || !MakePresent()) return false;
-    REXLOG_INFO("vr: {} on {}, {}x{} an eye{}", stats.runtime, stats.system, width, height,
-                srgb_view ? " (sRGB images)" : "");
+    REXLOG_INFO("vr: {} on {}, {}x{} an eye{}{}", stats.runtime, stats.system, width, height,
+                srgb_view ? " (sRGB images)" : "",
+                to_qpc ? "" : "; no XrTime conversion, so no display_in_ms");
     SetState("idle");
     made = true;
     return true;
@@ -571,7 +618,10 @@ bool Session::WaitFrame(FrameViews& f) {
     XrFrameState fs{XR_TYPE_FRAME_STATE};
     const auto wait_start = std::chrono::steady_clock::now();
     XrResult r = m.wait_frame(m.session, &wi, &fs);
-    const double waited = MsSince(wait_start);
+    const auto woke = std::chrono::steady_clock::now();
+    LARGE_INTEGER woke_qpc{};
+    if (m.to_qpc) QueryPerformanceCounter(&woke_qpc);
+    const double waited = std::chrono::duration<double, std::milli>(woke - wait_start).count();
     if (XR_FAILED(r)) {
         REXLOG_WARN("vr: xrWaitFrame failed ({})", int(r));
         return false;
@@ -582,6 +632,20 @@ bool Session::WaitFrame(FrameViews& f) {
         REXLOG_WARN("vr: xrBeginFrame failed ({})", int(r));
         return false;
     }
+    vr::FrameTiming& t = f.timing;
+    t = {};
+    t.index = ++m.timing_frames;
+    t.wake_ns = SteadyNs(woke);
+    t.display_time_ns = fs.predictedDisplayTime;
+    t.period_ns = fs.predictedDisplayPeriod;
+    t.should_render = fs.shouldRender == XR_TRUE;
+    t.wait_ms = waited;
+    t.begun_ms = MsSince(woke);
+    LARGE_INTEGER display_qpc{};
+    if (m.to_qpc && m.qpc_frequency.QuadPart &&
+        XR_SUCCEEDED(m.to_qpc(m.instance, fs.predictedDisplayTime, &display_qpc)))
+        t.display_in_ms = double(display_qpc.QuadPart - woke_qpc.QuadPart) * 1000.0 /
+                          double(m.qpc_frequency.QuadPart);
     f.display_time = fs.predictedDisplayTime;
     f.display_period = fs.predictedDisplayPeriod;
     f.render = fs.shouldRender == XR_TRUE;
@@ -657,6 +721,7 @@ bool Session::WaitFrame(FrameViews& f) {
         m.have_head = true;
         m.recenter = false;
     }
+    t.located_ms = MsSince(woke);
     return true;
 }
 
@@ -665,10 +730,20 @@ bool Session::HudFree() {
     return !m.fence || m.fence->GetCompletedValue() >= m.hud_copy_value;
 }
 
-bool Session::Present(const FrameViews& f, void* const eye[2], void* hud,
+bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
                       double begin_to_present_ms) {
     Impl& m = *impl_;
     const auto start = std::chrono::steady_clock::now();
+    vr::FrameTiming& t = f.timing;
+    t.present_ms = MsFromWake(t.wake_ns);
+    // each step's ms, from `from` on
+    auto lap = [](std::chrono::steady_clock::time_point& from) {
+        const auto now = std::chrono::steady_clock::now();
+        const double ms = std::chrono::duration<double, std::milli>(now - from).count();
+        from = now;
+        return ms;
+    };
+    auto step = start;
     XrCompositionLayerProjectionView views[2] = {{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
                                                  {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
     // drawn even when the runtime says it won't show them (shouldRender off,
@@ -683,6 +758,7 @@ bool Session::Present(const FrameViews& f, void* const eye[2], void* hud,
             m.fence->SetEventOnCompletion(m.allocator_value[k], m.fence_event);
             WaitForSingleObject(m.fence_event, 1000);
         }
+        t.fence_wait_ms = lap(step);
         uint32_t index[2] = {};
         for (int e = 0; e < 2 && drawn; e++) {
             XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
@@ -694,6 +770,7 @@ bool Session::Present(const FrameViews& f, void* const eye[2], void* hud,
                 drawn = false;
             }
         }
+        t.acquire_ms = lap(step);
         // The panel's image only for a new picture, and only with the eyes';
         // without one the image last released stays up
         uint32_t hud_index = 0;
@@ -717,6 +794,7 @@ bool Session::Present(const FrameViews& f, void* const eye[2], void* hud,
                 m.hud_failed = true;
             }
         }
+        t.hud_acquire_ms = lap(step);
         if (drawn) {
             m.allocators[k]->Reset();
             m.list->Reset(m.allocators[k].Get(), nullptr);
@@ -779,6 +857,7 @@ bool Session::Present(const FrameViews& f, void* const eye[2], void* hud,
             if (hud_drawn) m.hud_copy_value = m.fence_value;
             m.presents++;
         }
+        t.copy_ms = lap(step);
         // released whether drawn or not: what was acquired goes back
         for (int e = 0; e < 2; e++) {
             XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -788,6 +867,7 @@ bool Session::Present(const FrameViews& f, void* const eye[2], void* hud,
             XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
             if (XR_SUCCEEDED(m.release_image(m.hud.swapchain, &ri))) m.hud_released = true;
         }
+        t.release_ms = lap(step);
         for (int e = 0; e < 2; e++) {
             views[e].pose.orientation = {f.pose[e].q[0], f.pose[e].q[1], f.pose[e].q[2],
                                          f.pose[e].q[3]};
@@ -830,7 +910,11 @@ bool Session::Present(const FrameViews& f, void* const eye[2], void* hud,
     ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     ei.layerCount = drawn ? (show_hud ? 2 : 1) : 0;
     ei.layers = drawn ? layers : nullptr;
+    step = std::chrono::steady_clock::now();
     const XrResult r = m.end_frame(m.session, &ei);
+    t.end_frame_ms = lap(step);
+    t.ended_ms = MsFromWake(t.wake_ns);
+    t.layer = drawn && XR_SUCCEEDED(r);
     const double present_ms = MsSince(start);
     if (show_hud && XR_SUCCEEDED(r) && !m.hud_logged) {
         m.hud_logged = true;
@@ -871,6 +955,51 @@ void Session::AddHudMs(double ms, double gpu_ms) {
     impl_->stats.hud_gpu_ms += gpu_ms;
 }
 
+void Session::Record(vr::FrameTiming& t) {
+    Impl& m = *impl_;
+    vr::Classify(t, m.last_timing.index ? &m.last_timing : nullptr);
+    m.last_timing = t;
+    {
+        std::lock_guard lock(m.stats_mutex);
+        m.ring.Push(t);
+        Stats& s = m.stats;
+        s.recorded = t.index;
+        s.missed += t.missed;
+        s.slots_missed += t.slots_missed;
+        s.over_period += t.over_period;
+        s.late_wakes += t.late_wake;
+        s.repeats += t.repeat;
+        s.behind += t.newer > 0;
+        s.slow += t.slow;
+    }
+    if (!t.slow) return;
+    // at most one a second, saying how many weren't
+    const auto now = std::chrono::steady_clock::now();
+    if (now - m.slow_logged < std::chrono::seconds(1)) {
+        m.slow_unlogged++;
+        return;
+    }
+    REXLOG_INFO("vr: slow {}{}", vr::Breakdown(t),
+                m.slow_unlogged ? fmt::format(" ({} more slow since the last logged)",
+                                              m.slow_unlogged)
+                                : std::string());
+    m.slow_logged = now;
+    m.slow_unlogged = 0;
+}
+
+std::string Session::FramesCsv(uint64_t& frames) {
+    std::vector<vr::FrameTiming> all;
+    {
+        std::lock_guard lock(impl_->stats_mutex);
+        all = impl_->ring.Since(0);
+    }
+    frames = all.size();
+    std::string out = vr::CsvHeader();
+    out.reserve(out.size() + all.size() * 400);
+    for (const vr::FrameTiming& t : all) out += vr::CsvRow(t);
+    return out;
+}
+
 Stats Session::GetStats() {
     std::lock_guard lock(impl_->stats_mutex);
     return impl_->stats;
@@ -884,10 +1013,14 @@ void Session::StartMeasuring() {
 std::string Session::MeasuredJson() {
     if (!impl_->started) return {};
     Stats now, from;
+    std::vector<vr::FrameTiming> timed;
     {
         std::lock_guard lock(impl_->stats_mutex);
         now = impl_->stats;
         from = impl_->measured_from;
+        // those of the ring recorded since (all of them, if the ring has
+        // wrapped since)
+        timed = impl_->ring.Since(from.recorded);
     }
     const uint64_t frames = now.frames - from.frames;
     const uint64_t ended = frames + now.skipped - from.skipped;
@@ -916,7 +1049,8 @@ std::string Session::MeasuredJson() {
         "\"wait_ms_per_frame\":{:.3f},\"render_ms_per_frame\":[{:.3f},{:.3f}],"
         "\"gpu_ms_per_frame\":[{:.3f},{:.3f}],\"repose_ms_per_frame\":[{:.3f},{:.3f}],"
         "\"present_ms_per_frame\":{:.3f},\"frame_ms_per_frame\":{:.3f},\"srgb_view\":{},"
-        "\"hud\":{}}}",
+        "\"hud\":{},\"missed\":{},\"slots_missed\":{},\"over_period\":{},\"late_wakes\":{},"
+        "\"repeats\":{},\"behind_newer\":{},\"slow\":{},\"timing\":{}}}",
         text(now.state), text(now.runtime), text(now.system), now.width, now.height,
         double(now.display_period_ns) / 1e6, frames, now.skipped - from.skipped,
         now.hidden - from.hidden, now.late - from.late, per(now.wait_ms, from.wait_ms, ended),
@@ -926,7 +1060,10 @@ std::string Session::MeasuredJson() {
         per(now.repose_ms[0], from.repose_ms[0], frames),
         per(now.repose_ms[1], from.repose_ms[1], frames),
         per(now.present_ms, from.present_ms, ended), per(now.frame_ms, from.frame_ms, ended),
-        now.srgb_view ? "true" : "false", hud);
+        now.srgb_view ? "true" : "false", hud, now.missed - from.missed,
+        now.slots_missed - from.slots_missed, now.over_period - from.over_period,
+        now.late_wakes - from.late_wakes, now.repeats - from.repeats, now.behind - from.behind,
+        now.slow - from.slow, vr::TimingJson(timed));
 }
 
 bool Session::LastEyes(vr::Eye eyes[2], uint32_t& width, uint32_t& height) {

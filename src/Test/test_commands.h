@@ -252,6 +252,15 @@ struct NativeViewStats {
     std::vector<Kind> by_kind;
 };
 
+// `vr_frames`: the VR frames' timing ring (xr_present.h's FramesCsv) written
+// as CSV: where, how many frames, and the session's state ("off" while `vr`
+// never started)
+struct VrFramesInfo {
+    std::string path;
+    uint64_t frames = 0;
+    std::string state;
+};
+
 // The window's pacing (`present_stats`), since its numbers last started over:
 // every paint of the window, whichever renderer drew it, and the game's own
 // frames in the same time
@@ -440,6 +449,9 @@ public:
     virtual std::string NativeViewOn(uint32_t width, uint32_t height, bool sized, bool post) = 0;
     virtual void NativeViewOff() = 0;
     virtual NativeViewStats NativeView() = 0;
+    // the VR frames' timing ring as CSV, into logs/vr_frames-<name>.csv beside
+    // the exe (an empty name picks one); returns an error, or empty
+    virtual std::string VrFrames(const std::string& name, VrFramesInfo& out) = 0;
     // the window's pacing since it last started over; `reset` starts it over
     // once read
     virtual PresentStats Present(bool reset) = 0;

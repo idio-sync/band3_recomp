@@ -990,6 +990,22 @@ std::string NativeView(TestTarget& target, const std::vector<std::string_view>& 
     return Error(target, "usage: native_view on [<width>x<height>] [nopost]|off|stats");
 }
 
+// `vr_frames [name]`: the VR frames' timing (the last few thousand) as CSV;
+// the summary of them is native_view stats' `xr` block's `timing`
+std::string VrFramesCommand(TestTarget& target, const std::vector<std::string_view>& args) {
+    std::string name;
+    if (std::string error = FileNameArg(target, args, name); !error.empty()) return error;
+    VrFramesInfo info;
+    if (std::string error = target.VrFrames(name, info); !error.empty())
+        return Error(target, error);
+    std::string fields = "\"path\":";
+    AppendJsonString(fields, info.path);
+    fields += ",\"frames\":" + std::to_string(info.frames);
+    fields += ",\"vr\":";
+    AppendJsonString(fields, info.state);
+    return Ok(fields);
+}
+
 std::string Set(TestTarget& target, std::string_view line,
                 const std::vector<std::string_view>& args) {
     if (args.size() < 3) return Error(target, "usage: set <setting> <value>");
@@ -1649,6 +1665,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "port_mapping_status") return PortMappingStatus(target, args);
     if (verb == "native_view") return NativeView(target, args);
     if (verb == "present_stats") return PresentStatsCommand(target, args);
+    if (verb == "vr_frames") return VrFramesCommand(target, args);
     if (verb == "quit") {
         target.Quit();
         return Ok();

@@ -235,6 +235,18 @@ public:
     }
     void NativeViewOff() override { view = NativeViewStats{}; }
     NativeViewStats NativeView() override { return view; }
+    // VR's timing ring: its frames, or why it couldn't be written
+    uint64_t vr_frames = 0;
+    std::string vr_frames_error;
+    std::string vr_frames_name;
+    std::string VrFrames(const std::string& name, VrFramesInfo& out) override {
+        if (!vr_frames_error.empty()) return vr_frames_error;
+        vr_frames_name = name;
+        out.path = "logs/vr_frames-" + (name.empty() ? std::string("auto") : name) + ".csv";
+        out.frames = vr_frames;
+        out.state = vr_frames ? "focused" : "off";
+        return {};
+    }
     PresentStats Present(bool reset) override {
         const PresentStats out = present;
         if (reset) {
@@ -1744,6 +1756,30 @@ TEST_CASE("present_stats reports the window's paints, the native frames and the 
     CHECK(Has(RunCommand("present_stats", game), "\"paints\":0"));
 
     for (const char* bad : {"present_stats now", "present_stats reset more", "p2 present_stats"}) {
+        CAPTURE(bad);
+        CHECK_FALSE(Ok(RunCommand(bad, game)));
+    }
+}
+
+TEST_CASE("vr_frames writes the VR frames' timing and says where, how many and VR's state") {
+    FakeGame game;
+    std::string reply = RunCommand("vr_frames", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"path\":\"logs/vr_frames-auto.csv\",\"frames\":0,\"vr\":\"off\""));
+    CHECK(game.vr_frames_name.empty());
+
+    game.vr_frames = 2048;
+    reply = RunCommand("vr_frames late_run", game);
+    CHECK(Has(reply,
+              "\"path\":\"logs/vr_frames-late_run.csv\",\"frames\":2048,\"vr\":\"focused\""));
+    CHECK(game.vr_frames_name == "late_run");
+
+    game.vr_frames_error = "couldn't write logs/vr_frames-x.csv";
+    reply = RunCommand("vr_frames x", game);
+    CHECK_FALSE(Ok(reply));
+    CHECK(Has(reply, "couldn't write"));
+    game.vr_frames_error.clear();
+    for (const char* bad : {"vr_frames a b", "vr_frames ../up", "p2 vr_frames"}) {
         CAPTURE(bad);
         CHECK_FALSE(Ok(RunCommand(bad, game)));
     }
