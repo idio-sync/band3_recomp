@@ -1475,7 +1475,11 @@ class Renderer {
                 t.hud_submitted_ms = at();
             }
         }
-        // each finished on SDL's queue before the SDK's samples it
+        // Each finished on SDL's queue before the SDK's samples it: the SDK's
+        // queue waits for SDL_gpu's fences (GpuRenderer::OutputFence) before
+        // its copies, so the images go to the runtime without the CPU waiting
+        // for the GPU; where a fence can't be had, the CPU waits first
+        // (OutputDone's loop), as it always did.
         stall_watch::SetWorker(stall_watch::Worker::kGpuWait);
         // the ms it waited
         auto finish = [&](Drawn& dr, int s, const char* what) {
@@ -1490,34 +1494,89 @@ class Renderer {
             }
             return std::chrono::duration<double, std::milli>(Clock::now() - from).count();
         };
+        xr::Session::QueueWait waits[xr::Session::kQueueWaits];
+        bool queue_wait = REXCVAR_GET(vr_gpu_queue_wait);
+        auto fence_of = [&](int s, xr::Session::QueueWait& w) {
+            w.fence = GpuRenderer::Get().OutputFence(s, w.value);
+            return w.fence != nullptr;
+        };
+        for (int e = 0; e < 2 && queue_wait; e++)
+            if (d[e].drew_output) queue_wait = fence_of(slot[e], waits[e]);
+        if (queue_wait && hd.drew_output) queue_wait = fence_of(hud_slot, waits[2]);
+        if (!queue_wait && REXCVAR_GET(vr_gpu_queue_wait) && !vr_fence_logged_) {
+            vr_fence_logged_ = true;
+            REXLOG_WARN("vr: no Direct3D 12 fence for an output (GpuRenderer::OutputFence); the "
+                        "CPU waits for the GPU before each frame goes to the headset");
+        }
+        if (!queue_wait) {
+            for (auto& w : waits) w = {};
+            for (int e = 0; e < 2; e++)
+                if (d[e].drew_output) t.eyes_wait_ms += finish(d[e], slot[e], "an eye");
+            if (hd.drew_output) t.hud_wait_ms = finish(hd, hud_slot, "the HUD panel");
+            t.gpu_done_ms = at();
+        }
+        for (int e = 0; e < 2; e++)
+            if (d[e].drew_output && d[e].out.d3d12_resource) eyes[e] = d[e].out.d3d12_resource;
+        void* hud = hd.drew_output ? hd.out.d3d12_resource : nullptr;
+        // game frames the eyes are behind as they go to the headset
+        const uint64_t newest = LatestCaptureFrame();
+        t.newer = newest > cap->frame ? uint32_t(newest - cap->frame) : 0;
+        // a missing eye shows its colour rather than the other's picture
+        xs.Present(f, eyes, hud, layout, since_begin(), waits);
+        // Off the frame's critical path now: the copies finished (and with
+        // them the waits on SDL_gpu's fences, which OutputDone then lets go,
+        // as SDL resets a fence it reuses), before the next frame draws into
+        // these outputs again. A GPU that doesn't finish holds the worker, as
+        // WaitFlight does.
+        if (t.queue_wait) {
+            const auto from = Clock::now();
+            bool held = false;
+            while (!xs.CopiesDone()) {
+                {
+                    std::lock_guard lock(mutex_);
+                    if (stop_) break;
+                }
+                const auto waited = Clock::now() - from;
+                if (!held && waited > kGpuHung) {
+                    held = true;
+                    REXLOG_WARN("vr: the GPU hasn't finished the eyes in {} ms; holding them",
+                                std::chrono::duration_cast<std::chrono::milliseconds>(waited)
+                                    .count());
+                }
+                pacing::SleepFor(held ? std::chrono::nanoseconds(kHeldPoll).count()
+                                      : std::chrono::nanoseconds(kFencePoll).count());
+            }
+            if (held) REXLOG_INFO("vr: the GPU finished the eyes; drawing again");
+            t.done_wait_ms =
+                std::chrono::duration<double, std::milli>(Clock::now() - from).count();
+            for (int e = 0; e < 2; e++)
+                if (d[e].drew_output) finish(d[e], slot[e], "an eye");
+            if (hd.drew_output) finish(hd, hud_slot, "the HUD panel");
+            t.gpu_done_ms = at();
+        } else if (queue_wait) {
+            // Present queued nothing (no images): settled on the CPU
+            for (int e = 0; e < 2; e++)
+                if (d[e].drew_output) t.eyes_wait_ms += finish(d[e], slot[e], "an eye");
+            if (hd.drew_output) t.hud_wait_ms = finish(hd, hud_slot, "the HUD panel");
+            t.gpu_done_ms = at();
+        }
         for (int e = 0; e < 2; e++) {
             if (!d[e].drew_output) continue;
-            t.eyes_wait_ms += finish(d[e], slot[e], "an eye");
-            if (d[e].drew_output && d[e].out.d3d12_resource) eyes[e] = d[e].out.d3d12_resource;
             const double gpu_ms = d[e].gs.gpu_timed ? d[e].gs.gpu_total_ms : 0;
             xs.AddRenderMs(e, d[e].gs.ms, gpu_ms, repose_ms[e]);
             t.eye_cpu_ms[e] = d[e].gs.ms;
             t.eye_gpu_ms[e] = gpu_ms;
             t.repose_ms[e] = repose_ms[e];
         }
-        void* hud = nullptr;
         if (hd.drew_output) {
-            t.hud_wait_ms = finish(hd, hud_slot, "the HUD panel");
-            if (hd.drew_output) hud = hd.out.d3d12_resource;
             t.hud_cpu_ms = hd.gs.ms;
             t.hud_gpu_ms = hd.gs.gpu_timed ? hd.gs.gpu_total_ms : 0;
             xs.AddHudMs(t.hud_cpu_ms, t.hud_gpu_ms);
         }
-        t.gpu_done_ms = at();
         if (left_slot >= 0) {
             std::lock_guard lock(mutex_);
             slots_.Finished(left_slot);
         }
-        // game frames the eyes are behind as they go to the headset
-        const uint64_t newest = LatestCaptureFrame();
-        t.newer = newest > cap->frame ? uint32_t(newest - cap->frame) : 0;
-        // a missing eye shows its colour rather than the other's picture
-        xs.Present(f, eyes, hud, layout, since_begin());
         // the left eye as the window's picture, and as RGBA for a screenshot
         // or F9's window
         bool want_rgba;
@@ -1565,6 +1624,8 @@ class Renderer {
     uint64_t vr_timed_frame_ = 0;
     // the capture the HUD panel's picture is of (-1 none)
     int64_t vr_hud_frame_ = -1;
+    // vr_gpu_queue_wait found no fence to wait on, logged once
+    bool vr_fence_logged_ = false;
     // the last VR frame's eyes: 0 black, 1 the window, 2 the anchor (-1
     // none yet); and the fade's start, in the runtime's display time
     int vr_kind_ = -1;

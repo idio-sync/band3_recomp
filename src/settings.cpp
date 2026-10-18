@@ -979,6 +979,12 @@ REXCVAR_DEFINE_DOUBLE(vr_world_scale, 1.0, "Band3/Advanced/Native renderer",
     .range(0.1, 100.0)
     .debug_only();
 
+REXCVAR_DEFINE_BOOL(vr_gpu_queue_wait, true, "Band3/Advanced/Native renderer",
+    "With vr: hand each frame to the headset as soon as its drawing is submitted, the copy into "
+    "the headset's images waiting for it on the GPU. Off, the CPU waits for the GPU to finish "
+    "the eyes and the panel first, as before, to compare. Takes effect at once")
+    .debug_only();
+
 REXCVAR_DEFINE_BOOL(vr_fake_pose, false, "Band3/Advanced/Native renderer",
     "With vr: turn the head slowly from side to side instead of where the headset says it "
     "is, to test without one (SteamVR's null driver doesn't move)")

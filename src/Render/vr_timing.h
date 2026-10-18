@@ -37,6 +37,11 @@ struct FrameTiming {
     // xr_present.cpp's WaitFrame: xrWaitFrame's return (steady clock ns),
     // its predictedDisplayTime (XrTime ns) and predictedDisplayPeriod
     int64_t wake_ns = 0, display_time_ns = 0, period_ns = 0;
+    // the headset's refresh (RefreshPeriod: the shortest period of late);
+    // `period_ns` is twice it or more while the runtime throttles band3 to
+    // every other refresh (`throttled`). 0: not known, period_ns stands in
+    int64_t refresh_ns = 0;
+    bool throttled = false;
     bool should_render = false;
     // since the frame before: its display time and its wake (kNone first)
     double display_step_ms = kNone, wake_step_ms = kNone;
@@ -62,10 +67,15 @@ struct FrameTiming {
     // the HUD panel's picture, when one was drawn this frame
     bool hud = false;
     double hud_submitted_ms = kNone, hud_cpu_ms = 0, hud_gpu_ms = 0;
-    // waiting for the GPU to finish (OutputDone's loop): the eyes, the panel;
-    // and when all were finished
+    // waiting for the GPU to finish before Present (OutputDone's loop): the
+    // eyes, the panel; and when all were finished (after xrEndFrame with
+    // queue_wait)
     double eyes_wait_ms = 0, hud_wait_ms = 0;
     double gpu_done_ms = kNone;
+    // the SDK's queue waited on SDL_gpu's fences instead (Present's waits),
+    // and after xrEndFrame the CPU waited this long for its copies to finish
+    bool queue_wait = false;
+    double done_wait_ms = 0;
 
     // xr_present.cpp's Present
     double present_ms = kNone;  // Present began
@@ -100,7 +110,36 @@ struct FrameTiming {
     bool slow = false;
 };
 
-inline double PeriodMs(const FrameTiming& t) { return double(t.period_ns) / 1e6; }
+// The headset's refresh period: the shortest predictedDisplayPeriod of the
+// last kWindow frames. SteamVR predicts twice the refresh (or more) while it
+// throttles a late app to every other refresh, so a frame's own period isn't
+// the refresh's: judged by it, those frames' steps of two refreshes looked on
+// time, and only the step back to one refresh counted as missed (2026-10-18,
+// the Steam Frame: 210 missed counted of 310 refreshes missed a minute).
+class RefreshPeriod {
+ public:
+    static constexpr size_t kWindow = 256;
+    // the period now, with this frame's
+    int64_t Add(int64_t period_ns) {
+        if (period_ns > 0) {
+            if (seen_.size() < kWindow) seen_.push_back(period_ns);
+            else seen_[next_++ % kWindow] = period_ns;
+        }
+        return Ns();
+    }
+    int64_t Ns() const {
+        return seen_.empty() ? 0 : *std::min_element(seen_.begin(), seen_.end());
+    }
+
+ private:
+    std::vector<int64_t> seen_;
+    size_t next_ = 0;
+};
+
+// the refresh's period: refresh_ns, else the frame's own
+inline double PeriodMs(const FrameTiming& t) {
+    return double(t.refresh_ns > 0 ? t.refresh_ns : t.period_ns) / 1e6;
+}
 // the measure `late` goes by
 inline double LocatedToEndMs(const FrameTiming& t) {
     return Has(t.ended_ms) && Has(t.located_ms) ? t.ended_ms - t.located_ms : kNone;
@@ -117,6 +156,7 @@ inline void Classify(FrameTiming& t, const FrameTiming* prev) {
     t.late = t.over_period = t.missed = t.late_wake = t.slow = false;
     t.slots_missed = 0;
     if (period <= 0) return;
+    t.throttled = double(t.period_ns) / 1e6 >= kSlowPeriods * period;
     const double located_to_end = LocatedToEndMs(t);
     t.late = Has(located_to_end) && located_to_end > period;
     t.over_period = Has(t.ended_ms) && t.ended_ms > period;
@@ -214,6 +254,7 @@ inline const std::vector<Part>& Parts() {
         {"eyes_wait_ms", [](const FrameTiming& t) { return t.capture ? t.eyes_wait_ms : kNone; }},
         {"hud_wait_ms", [](const FrameTiming& t) { return t.hud ? t.hud_wait_ms : kNone; }},
         {"gpu_done_ms", [](const FrameTiming& t) { return t.gpu_done_ms; }},
+        {"done_wait_ms", [](const FrameTiming& t) { return t.queue_wait ? t.done_wait_ms : kNone; }},
         {"present_ms", [](const FrameTiming& t) { return t.present_ms; }},
         {"fence_wait_ms", [](const FrameTiming& t) { return t.fence_wait_ms; }},
         {"acquire_ms", [](const FrameTiming& t) { return t.acquire_ms; }},
@@ -232,8 +273,10 @@ inline const std::vector<Part>& Parts() {
 // {"frames":n,"repeats":..,...,"parts":{"wait_ms":{"n":..,"p50":..},...}}
 inline std::string GroupJson(const std::vector<const FrameTiming*>& frames) {
     uint64_t repeats = 0, newer = 0, missed = 0, slots = 0, over = 0, late_wakes = 0, hud = 0,
-             window = 0, no_layer = 0;
+             window = 0, no_layer = 0, throttled = 0, queue_wait = 0;
     for (const FrameTiming* t : frames) {
+        throttled += t->throttled;
+        queue_wait += t->queue_wait;
         repeats += t->repeat;
         newer += t->newer > 0;
         missed += t->missed;
@@ -248,11 +291,13 @@ inline std::string GroupJson(const std::vector<const FrameTiming*>& frames) {
     std::snprintf(buf, sizeof(buf),
                   "{\"frames\":%zu,\"repeats\":%llu,\"behind_newer\":%llu,\"missed\":%llu,"
                   "\"slots_missed\":%llu,\"over_period\":%llu,\"late_wakes\":%llu,\"hud\":%llu,"
-                  "\"window\":%llu,\"no_layer\":%llu,\"parts\":{",
+                  "\"window\":%llu,\"no_layer\":%llu,\"throttled\":%llu,\"queue_wait\":%llu,"
+                  "\"parts\":{",
                   frames.size(), (unsigned long long)repeats, (unsigned long long)newer,
                   (unsigned long long)missed, (unsigned long long)slots, (unsigned long long)over,
                   (unsigned long long)late_wakes, (unsigned long long)hud,
-                  (unsigned long long)window, (unsigned long long)no_layer);
+                  (unsigned long long)window, (unsigned long long)no_layer,
+                  (unsigned long long)throttled, (unsigned long long)queue_wait);
     std::string out = buf;
     bool first = true;
     std::vector<double> values;
@@ -287,7 +332,8 @@ inline std::string CsvHeader() {
            "eye0_gpu_ms,eye1_gpu_ms,repose0_ms,repose1_ms,hud,hud_submitted_ms,hud_cpu_ms,"
            "hud_gpu_ms,eyes_wait_ms,hud_wait_ms,gpu_done_ms,present_ms,fence_wait_ms,acquire_ms,"
            "hud_acquire_ms,copy_ms,release_ms,end_frame_ms,ended_ms,located_to_end_ms,layer,"
-           "window,window_ms,late,over_period,missed,slots_missed,late_wake\n";
+           "window,window_ms,late,over_period,missed,slots_missed,late_wake,refresh_ms,throttled,"
+           "queue_wait,done_wait_ms\n";
 }
 
 inline std::string CsvRow(const FrameTiming& t) {
@@ -307,7 +353,7 @@ inline std::string CsvRow(const FrameTiming& t) {
     whole(t.index);
     std::snprintf(buf, sizeof(buf), "%.6f,", double(t.wake_ns) / 1e9);
     out += buf;
-    num(PeriodMs(t));
+    num(double(t.period_ns) / 1e6);  // the runtime's predicted period
     whole(t.should_render);
     num(t.display_step_ms);
     num(t.wake_step_ms);
@@ -348,7 +394,12 @@ inline std::string CsvRow(const FrameTiming& t) {
     whole(t.over_period);
     whole(t.missed);
     whole(t.slots_missed);
-    out += std::to_string(int(t.late_wake));
+    whole(t.late_wake);
+    num(PeriodMs(t));
+    whole(t.throttled);
+    whole(t.queue_wait);
+    std::snprintf(buf, sizeof(buf), "%.3f", t.done_wait_ms);
+    out += buf;
     out += '\n';
     return out;
 }
@@ -395,7 +446,12 @@ inline std::string Breakdown(const FrameTiming& t) {
         out += buf;
         add(" submitted %.2f", t.hud_submitted_ms);
     }
-    std::snprintf(buf, sizeof(buf), ", gpu wait %.2f", t.eyes_wait_ms + t.hud_wait_ms);
+    if (t.queue_wait) {
+        std::snprintf(buf, sizeof(buf), ", gpu waited on the queue (%.2f after xrEndFrame)",
+                      t.done_wait_ms);
+    } else {
+        std::snprintf(buf, sizeof(buf), ", gpu wait %.2f", t.eyes_wait_ms + t.hud_wait_ms);
+    }
     out += buf;
     add(" done %.2f", t.gpu_done_ms);
     add("; present at %.2f", t.present_ms);

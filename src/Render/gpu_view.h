@@ -648,6 +648,18 @@ class GpuRenderer {
     // with nothing in flight or no device. Once finished, fills `times` with
     // its GPU timings if it has them.
     bool OutputDone(int slot, GpuStats* times = nullptr);
+    // The Direct3D 12 fence SDL_gpu signals on its queue as `slot`'s last
+    // frame finishes, and the value it signals (SDL 3.4's
+    // D3D12_FENCE_SIGNAL_VALUE, 1), for a queue on the SDK's device to wait
+    // on (ID3D12CommandQueue::Wait) instead of the CPU polling OutputDone.
+    // Null with nothing in flight (finished and let go by OutputDone), no
+    // device, not Direct3D 12, or a fence that isn't as SDL 3.4.14 lays it
+    // out (checked each call: an ID3D12Fence on the SDK's device whose value
+    // is 0 or 1). It stays the slot's until OutputDone next finds it
+    // finished and lets it go, after which SDL resets it to 0 for its next
+    // submission: the caller must not let OutputDone run before the waiting
+    // queue has passed its wait.
+    void* OutputFence(int slot, uint64_t& value);
     // native_world_ahead: draws a world frame's world alone (texture passes,
     // back-buffer draws before post_boundary, kept pre-process buffer) into
     // the scene target, submitted without waiting, so the next composed post

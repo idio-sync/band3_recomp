@@ -506,7 +506,28 @@ What each does, how it was measured and why it defaults as it does. The
   into `late` and `on_time`, each with those counts and every part's `p50`, `p95`, `p99`
   and `max`. A frame that ended 1.5 periods or more after its wake, or missed a slot, is
   logged with its breakdown (`vr: slow frame ...`), at most one a second with the count
-  since.
+  since. The period frames are judged by is the headset's refresh (`RefreshPeriod`: the
+  shortest `predictedDisplayPeriod` of the last 256 frames): SteamVR predicts twice the
+  refresh while it throttles a late app to every other refresh, and judged by that a
+  throttled frame's two-refresh step looked on time. On the Steam Frame (2026-10-18, 120
+  Hz, the user's two 60 s runs) the old count said 210 and 257 missed where 310 and 391
+  refreshes were; `display_period_ms` is now the refresh, `predicted_period_ms` the last
+  predicted, and `throttled` the frames predicted 1.5 refreshes or more.
+  With `vr_gpu_queue_wait` (on) the CPU no longer waits for the eyes and the panel before
+  `Present`: `GpuRenderer::OutputFence` hands over the `ID3D12Fence` SDL 3.4.14 signals to 1
+  as each output's command buffer finishes (its `D3D12Fence`'s first member, checked each
+  time: an `ID3D12Fence` on the SDK's device at 0 or 1), the SDK's queue `Wait`s on them
+  before the copies, and the images are released and xrEndFrame called at once (OpenXR's
+  D3D12 binding needs the writes submitted to the session's queue, which they are). After
+  xrEndFrame the worker waits for the copies (`Session::CopiesDone`, `done_wait_ms`; past
+  2 s it holds, as `WaitFlight` does) and only then lets `OutputDone` release SDL's fences,
+  since SDL signals a fence back to 0 on the CPU when it reuses it and a queue that hadn't
+  reached its wait would then wait for the fence's next use. Without a fence it falls back to
+  the CPU's wait (logged once). In the song at arena_04 with SteamVR's session SYNCHRONIZED
+  (the Frame not worn, 2026-10-18, 60 s each in one session): located to xrEndFrame's
+  return p50 6.01 / p99 8.16 ms to 3.79 / 4.96, xrEndFrame 2.34 to 2.15 ms, refreshes missed
+  179 a minute to 3; the CPU's wait had been 1.6 ms for the eyes (p95 3.2) and 2.0 for the
+  panel (its 250 us polls sleeping to the timer's 1 ms and more).
 - `native_view_render_scale` (debug, 1): the presented picture is drawn at that times the
   window's size (after `native_max_height`; `native_view.cpp`'s `ScaleRender`), with the
   screen-sized passes following (`ScaleForPicture`), and `present.hlsl` scales it to the

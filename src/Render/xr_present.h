@@ -8,7 +8,10 @@
 // direct queue, which gpu_view's outputs already live on (SetDevice). Each
 // eye is a swapchain of the runtime's recommended size, drawn by present.hlsl
 // from that eye's output, on band3's own command list on the SDK's queue,
-// as native_view.cpp's D3D12Present draws the window.
+// as native_view.cpp's D3D12Present draws the window. That queue waits on
+// the GPU for SDL_gpu's fences before copying (Present's waits,
+// vr_gpu_queue_wait), so a frame goes to the runtime as soon as its drawing
+// is submitted; the worker checks the copies finished after xrEndFrame.
 //
 // The OpenXR loader (Apache-2.0, the runtime's own: SteamVR ships one) is
 // loaded at run time, never linked: openxr_loader.dll from the usual search
@@ -84,7 +87,9 @@ struct Stats {
     std::string state = "off";  // the session's state, or why there's none
     std::string runtime, system;
     uint32_t width = 0, height = 0;  // each eye's swapchain
-    int64_t display_period_ns = 0;
+    // the headset's refresh (vr_timing.h's RefreshPeriod), and the period
+    // the runtime last predicted, twice it or more while it throttles band3
+    int64_t display_period_ns = 0, predicted_period_ns = 0;
     uint64_t frames = 0;   // ended with the eyes' layer
     uint64_t skipped = 0;  // ended without (no swapchain image)
     // of all ended, those the runtime said it wouldn't show (shouldRender
@@ -104,6 +109,10 @@ struct Stats {
     // as slow (or would have been but for the rate limit)
     uint64_t recorded = 0, missed = 0, slots_missed = 0, over_period = 0, late_wakes = 0;
     uint64_t repeats = 0, behind = 0, slow = 0;
+    // frames the runtime predicted a throttled period for (vr_timing.h's
+    // FrameTiming::throttled), and those whose copies the SDK's queue waited
+    // on the GPU for (Present's waits) rather than the CPU
+    uint64_t throttled = 0, queue_waits = 0;
     double wait_ms = 0;     // in xrWaitFrame, summed
     // each eye's drawing: the CPU's up to submitting (GpuStats::ms), the GPU's
     // (native_gpu_timestamps' gpu_total_ms), and RePose's copy, summed
@@ -140,14 +149,28 @@ class Session {
     // tracking). False if the frame couldn't begin.
     bool WaitFrame(FrameViews& f);
     // Draws each eye's output (an ID3D12Resource gpu_view's outputs keep in
-    // ALL_SHADER_RESOURCE, finished on the GPU) into its swapchain and ends
-    // the frame with them (a null one dark red or blue). `hud`, a new HUD
-    // panel picture (an output likewise), goes into the panel's image; null
-    // keeps the image last drawn. `layout` says the rest: black eyes, their
-    // fade, the dark around the window, and the panel's quad layer over them
-    // all (once it has an image). Fills f.timing's Present part.
+    // ALL_SHADER_RESOURCE) into its swapchain and ends the frame with them (a
+    // null one dark red or blue). `hud`, a new HUD panel picture (an output
+    // likewise), goes into the panel's image; null keeps the image last
+    // drawn. `layout` says the rest: black eyes, their fade, the dark around
+    // the window, and the panel's quad layer over them all (once it has an
+    // image). The outputs are finished on the GPU, or `waits` (up to
+    // kQueueWaits, null fences skipped) are the fences SDL_gpu signals as
+    // they finish (GpuRenderer::OutputFence), which the SDK's queue waits on
+    // before its copies: the images are released and xrEndFrame called
+    // without the CPU waiting for the GPU (OpenXR's D3D12 binding asks only
+    // that their writes be submitted to the session's queue first). Fills
+    // f.timing's Present part, its queue_wait whether `waits` were queued.
+    static constexpr int kQueueWaits = 3;
+    struct QueueWait {
+        void* fence = nullptr;  // ID3D12Fence on the SDK's device
+        uint64_t value = 0;
+    };
     bool Present(FrameViews& f, void* const eye[2], void* hud, const vr::FrameLayout& layout,
-                 double begin_to_present_ms);
+                 double begin_to_present_ms, const QueueWait* waits = nullptr);
+    // whether the SDK's queue has finished the last Present's copies (and
+    // with them the waits queued before them). Never waits.
+    bool CopiesDone();
     // Worker, once a frame's done (after the window's picture): classifies
     // `t` against the frame before, counts it, keeps it in the ring and logs
     // it if slow

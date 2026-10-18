@@ -2803,6 +2803,17 @@ struct SdlD3D12Texture {
     ID3D12Resource* resource;
     // the SRV's staging descriptor and the reference count follow
 };
+// SDL 3.4.14's D3D12Fence: an SDL_GPUFence on Direct3D 12. SDL makes it at
+// D3D12_FENCE_UNSIGNALED_VALUE (0), its queue signals it to
+// D3D12_FENCE_SIGNAL_VALUE (1) after the command buffer's work, and it is
+// signalled back to 0 on the CPU only when reused, once every reference
+// (SubmitAndAcquireFence's is the caller's) is released.
+struct SdlD3D12Fence {
+    ID3D12Fence* handle;
+    HANDLE event;
+    // the reference count follows
+};
+constexpr UINT64 kSdlFenceSignalled = 1;
 
 #endif
 
@@ -5841,6 +5852,37 @@ bool GpuRenderer::OutputDone(int slot, GpuStats* times) {
     impl_->ReleaseFence(o);
     if (times) impl_->ReadTimes(slot, *times);
     return true;
+}
+
+void* GpuRenderer::OutputFence(int slot, uint64_t& value) {
+    value = 0;
+#ifdef _WIN32
+    if (slot < 0 || slot >= kSlots) return nullptr;
+    std::lock_guard lock(impl_->mutex);
+    const Impl::Output& o = impl_->outputs[slot];
+    if (!impl_->device || !o.fence || !impl_->present_device ||
+        std::strcmp(SDL_GetGPUDeviceDriver(impl_->device), "direct3d12") != 0)
+        return nullptr;
+    ID3D12Fence* fence = reinterpret_cast<const SdlD3D12Fence*>(o.fence)->handle;
+    if (!fence) return nullptr;
+    // the layout as read: an ID3D12Fence, on the SDK's device, at 0 or 1
+    ID3D12Fence* typed = nullptr;
+    if (FAILED(fence->QueryInterface(IID_PPV_ARGS(&typed))) || !typed) return nullptr;
+    const bool same_object = Identity(typed) == Identity(fence);
+    typed->Release();
+    ID3D12Device* fence_device = nullptr;
+    if (!same_object || FAILED(fence->GetDevice(IID_PPV_ARGS(&fence_device))) || !fence_device)
+        return nullptr;
+    const bool same_device =
+        Identity(fence_device) == Identity(static_cast<ID3D12Device*>(impl_->present_device));
+    fence_device->Release();
+    if (!same_device || fence->GetCompletedValue() > kSdlFenceSignalled) return nullptr;
+    value = kSdlFenceSignalled;
+    return fence;
+#else
+    (void)slot;
+    return nullptr;
+#endif
 }
 
 bool GpuRenderer::ReadOutputBack(int slot, std::vector<uint32_t>& rgba, uint32_t& width,

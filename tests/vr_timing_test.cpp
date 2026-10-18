@@ -195,3 +195,41 @@ TEST_CASE("a slow frame's breakdown names where its time went") {
     CHECK(Has(line, "1 newer game frames"));
     CHECK(Has(line, "window 0.40"));
 }
+
+TEST_CASE("the refresh is the shortest period of late, not a throttled frame's own") {
+    RefreshPeriod r;
+    CHECK(r.Ns() == 0);
+    CHECK(r.Add(2 * kPeriodNs) == 2 * kPeriodNs);  // nothing shorter seen yet
+    CHECK(r.Add(kPeriodNs) == kPeriodNs);
+    CHECK(r.Add(2 * kPeriodNs) == kPeriodNs);  // throttled: still the refresh
+    CHECK(r.Add(0) == kPeriodNs);              // no period: ignored
+    // a refresh rate changed for good: the old one leaves after the window
+    for (size_t i = 0; i < RefreshPeriod::kWindow; i++) r.Add(11111111);
+    CHECK(r.Ns() == 11111111);
+}
+
+TEST_CASE("a throttled frame's two-refresh step is missed refreshes against the refresh") {
+    // SteamVR throttling: the period predicted twice the refresh, display
+    // times two refreshes apart
+    FrameTiming prev = Frame(1, 0, 20, 4);
+    prev.refresh_ns = kPeriodNs;
+    Classify(prev, nullptr);
+    FrameTiming t = Frame(2, 16.667, 36.667, 4);
+    t.period_ns = 2 * kPeriodNs;
+    t.refresh_ns = kPeriodNs;
+    Classify(t, &prev);
+    CHECK(t.throttled);
+    CHECK(t.missed);
+    CHECK(t.slots_missed == 1);
+    // judged by its own period it looked on time, as before
+    t.refresh_ns = 0;
+    Classify(t, &prev);
+    CHECK_FALSE(t.missed);
+    CHECK_FALSE(t.throttled);
+    // the CSV's last columns: the refresh, throttled, the queue wait
+    t.refresh_ns = kPeriodNs;
+    t.queue_wait = true;
+    t.done_wait_ms = 0.25;
+    Classify(t, &prev);
+    CHECK(Has(CsvRow(t), ",8.333,1,1,0.250\n"));
+}

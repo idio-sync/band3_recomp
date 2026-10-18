@@ -82,9 +82,11 @@ bool Session::Update(bool) { return false; }
 uint32_t Session::Width() const { return 0; }
 uint32_t Session::Height() const { return 0; }
 bool Session::WaitFrame(FrameViews&) { return false; }
-bool Session::Present(FrameViews&, void* const[2], void*, const vr::FrameLayout&, double) {
+bool Session::Present(FrameViews&, void* const[2], void*, const vr::FrameLayout&, double,
+                      const QueueWait*) {
     return false;
 }
+bool Session::CopiesDone() { return true; }
 void Session::Record(vr::FrameTiming&) {}
 std::string Session::FramesCsv(uint64_t& frames) {
     frames = 0;
@@ -266,6 +268,7 @@ struct Session::Impl {
     // Record's: the frames' timings (under stats_mutex), the frame before's
     // (the worker's), and the slow-frame log's limit
     vr::FrameRing ring;
+    vr::RefreshPeriod refresh;  // WaitFrame's
     vr::FrameTiming last_timing;
     uint64_t timing_frames = 0;
     std::chrono::steady_clock::time_point slow_logged{};
@@ -688,6 +691,7 @@ bool Session::WaitFrame(FrameViews& f) {
     t.wake_ns = SteadyNs(woke);
     t.display_time_ns = fs.predictedDisplayTime;
     t.period_ns = fs.predictedDisplayPeriod;
+    t.refresh_ns = m.refresh.Add(fs.predictedDisplayPeriod);
     t.should_render = fs.shouldRender == XR_TRUE;
     t.wait_ms = waited;
     t.begun_ms = MsSince(woke);
@@ -702,7 +706,8 @@ bool Session::WaitFrame(FrameViews& f) {
     {
         std::lock_guard lock(m.stats_mutex);
         m.stats.wait_ms += waited;
-        m.stats.display_period_ns = fs.predictedDisplayPeriod;
+        m.stats.display_period_ns = t.refresh_ns;
+        m.stats.predicted_period_ns = fs.predictedDisplayPeriod;
     }
     XrViewLocateInfo li{XR_TYPE_VIEW_LOCATE_INFO};
     li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
@@ -782,8 +787,14 @@ bool Session::HudFree() {
     return !m.fence || m.fence->GetCompletedValue() >= m.hud_copy_value;
 }
 
+bool Session::CopiesDone() {
+    Impl& m = *impl_;
+    return !m.fence || m.fence->GetCompletedValue() >= m.fence_value;
+}
+
 bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
-                      const vr::FrameLayout& layout, double begin_to_present_ms) {
+                      const vr::FrameLayout& layout, double begin_to_present_ms,
+                      const QueueWait* waits) {
     Impl& m = *impl_;
     const auto start = std::chrono::steady_clock::now();
     vr::FrameTiming& t = f.timing;
@@ -938,6 +949,13 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
                 m.list->ClearRenderTargetView(rtv, colour, 0, nullptr);
             }
             m.list->Close();
+            // the outputs' drawing on SDL_gpu's queue, waited for on this one
+            // rather than on the CPU
+            for (int i = 0; waits && i < kQueueWaits; i++) {
+                if (!waits[i].fence) continue;
+                m.queue->Wait(static_cast<ID3D12Fence*>(waits[i].fence), waits[i].value);
+                t.queue_wait = true;
+            }
             ID3D12CommandList* lists[] = {m.list.Get()};
             m.queue->ExecuteCommandLists(1, lists);
             m.queue->Signal(m.fence.Get(), ++m.fence_value);
@@ -1052,7 +1070,8 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
         m.stats.present_ms += present_ms;
         const double frame_ms = begin_to_present_ms + present_ms;
         m.stats.frame_ms += frame_ms;
-        if (f.display_period > 0 && frame_ms > double(f.display_period) / 1e6) m.stats.late++;
+        const double period_ms = vr::PeriodMs(t);
+        if (period_ms > 0 && frame_ms > period_ms) m.stats.late++;
     }
     if (XR_FAILED(r)) {
         REXLOG_WARN("vr: xrEndFrame failed ({}, {} layers)", int(r), ei.layerCount);
@@ -1091,6 +1110,8 @@ void Session::Record(vr::FrameTiming& t) {
         s.repeats += t.repeat;
         s.behind += t.newer > 0;
         s.slow += t.slow;
+        s.throttled += t.throttled;
+        s.queue_waits += t.queue_wait;
     }
     if (!t.slow) return;
     // at most one a second, saying how many weren't
@@ -1171,7 +1192,8 @@ std::string Session::MeasuredJson() {
         "\"present_ms_per_frame\":{:.3f},\"frame_ms_per_frame\":{:.3f},\"srgb_view\":{},"
         "\"hud\":{},\"missed\":{},\"slots_missed\":{},\"over_period\":{},\"late_wakes\":{},"
         "\"repeats\":{},\"behind_newer\":{},\"slow\":{},\"window_frames\":{},"
-        "\"black_frames\":{},\"fades\":{},\"timing\":{}}}",
+        "\"black_frames\":{},\"fades\":{},\"predicted_period_ms\":{:.3f},\"throttled\":{},"
+        "\"queue_waits\":{},\"timing\":{}}}",
         text(now.state), text(now.runtime), text(now.system), now.width, now.height,
         double(now.display_period_ns) / 1e6, frames, now.skipped - from.skipped,
         now.hidden - from.hidden, now.late - from.late, per(now.wait_ms, from.wait_ms, ended),
@@ -1185,7 +1207,9 @@ std::string Session::MeasuredJson() {
         now.slots_missed - from.slots_missed, now.over_period - from.over_period,
         now.late_wakes - from.late_wakes, now.repeats - from.repeats, now.behind - from.behind,
         now.slow - from.slow, now.window_frames - from.window_frames,
-        now.black_frames - from.black_frames, now.fades - from.fades, vr::TimingJson(timed));
+        now.black_frames - from.black_frames, now.fades - from.fades,
+        double(now.predicted_period_ns) / 1e6, now.throttled - from.throttled,
+        now.queue_waits - from.queue_waits, vr::TimingJson(timed));
 }
 
 bool Session::LastFrame(FrameViews& f, float& fade, uint32_t& width, uint32_t& height) {

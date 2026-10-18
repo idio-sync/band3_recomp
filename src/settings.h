@@ -196,6 +196,7 @@ REXCVAR_DECLARE(int32_t, vr_cut_fade_ms);
 REXCVAR_DECLARE(bool, vr_hud_in_window);
 REXCVAR_DECLARE(std::string, vr_anchor);
 REXCVAR_DECLARE(double, vr_world_scale);
+REXCVAR_DECLARE(bool, vr_gpu_queue_wait);
 REXCVAR_DECLARE(bool, vr_fake_pose);
 REXCVAR_DECLARE(bool, vr_hud);
 REXCVAR_DECLARE(double, vr_hud_distance);
