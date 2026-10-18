@@ -528,6 +528,17 @@ What each does, how it was measured and why it defaults as it does. The
   return p50 6.01 / p99 8.16 ms to 3.79 / 4.96, xrEndFrame 2.34 to 2.15 ms, refreshes missed
   179 a minute to 3; the CPU's wait had been 1.6 ms for the eyes (p95 3.2) and 2.0 for the
   panel (its 250 us polls sleeping to the timer's 1 ms and more).
+  `vr_game_rate` (auto) runs the game at the headset's rate while a session runs: each VR
+  frame asks `pacing::VrGameCap` for a cap (auto: the refresh's own period, a number of Hz,
+  or off) and `pacing::SetVrCap` publishes it in place of frame_cap's (mode `vr`, logged
+  `Frame cap: 120.00 Hz for the VR headset`), the vsync handled as frame_cap's cap; the
+  worker clears it once no VR frames run. The phase lock doesn't steer it. With band3ctl's
+  `--frame_cap=60` overridden (2026-10-18, the song at arena_04, session SYNCHRONIZED): the
+  game at 120.2 fps, its thread ~2 ms of each 8.33 (present_stats' cap waited 6.36 ms a
+  frame on average), the world every 4 frames (30 fps), the song's clock 30,044 ms over
+  30,014 of wall clock (60 fps: 30,020 over 30,011), the eyes repeating a capture in 3% of
+  headset frames (50% at 60), located to xrEndFrame p50/p99 3.87/5.04 ms, 8 refreshes
+  missed a minute.
 - `native_view_render_scale` (debug, 1): the presented picture is drawn at that times the
   window's size (after `native_max_height`; `native_view.cpp`'s `ScaleRender`), with the
   screen-sized passes following (`ScaleForPicture`), and `present.hlsl` scales it to the

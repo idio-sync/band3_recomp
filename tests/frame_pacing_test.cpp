@@ -5,6 +5,7 @@
 // keeps its beat, starts it again after a hitch, and reads frame_cap.
 
 #include <doctest/doctest.h>
+#include <string>
 #include "src/Hooks/frame_pacing.h"
 
 using band3::pacing::WorldHalfFrames;
@@ -412,4 +413,34 @@ TEST_CASE("auto never paces, and a rate not known keeps pacing") {
     CHECK_FALSE(PacePublishing(FrameCapMode::kAuto, 0, 0));
     CHECK(PacePublishing(FrameCapMode::kFixed, 240, 0));
     CHECK(PacePublishing(FrameCapMode::kOff, 0, 120));
+}
+
+TEST_CASE("VR's game rate: the headset's refresh exactly, a number, or frame_cap's") {
+    using namespace band3::pacing;
+    // auto at a 120 Hz headset: its own period, to the nanosecond
+    const FrameCap a = VrGameCap("auto", 8333333);
+    CHECK(a.mode == FrameCapMode::kVr);
+    CHECK(a.period_ns == 8333333);
+    CHECK(a.hz == doctest::Approx(120).epsilon(1e-6));
+    CHECK(VrGameCap("auto", 11111111).hz == doctest::Approx(90).epsilon(1e-6));
+    // the refresh not known yet, or past what a cap takes: none
+    CHECK(VrGameCap("auto", 0).period_ns == 0);
+    CHECK(VrGameCap("auto", 1000000).period_ns == 0);  // 1000 Hz
+    // a number, kept to the cap's range, whatever the headset
+    const FrameCap n = VrGameCap("90", 8333333);
+    CHECK(n.mode == FrameCapMode::kVr);
+    CHECK(n.period_ns == 11111111);
+    CHECK(VrGameCap("1000", 8333333).hz == doctest::Approx(kMaxCapHz));
+    // off and the rest: frame_cap's as without VR
+    CHECK(VrGameCap("off", 8333333).period_ns == 0);
+    CHECK(VrGameCap("display", 8333333).period_ns == 0);
+    CHECK(VrGameCap("fast", 8333333).period_ns == 0);
+    CHECK(ValidVrGameRate("auto"));
+    CHECK(ValidVrGameRate("off"));
+    CHECK(ValidVrGameRate("72"));
+    CHECK_FALSE(ValidVrGameRate("display"));
+    CHECK_FALSE(ValidVrGameRate("fast"));
+    // the phase lock never steers it: it's paced by the headset, not the window
+    CHECK_FALSE(PhaseLockSteers(true, FrameCapMode::kVr, 120, 120));
+    CHECK(std::string(FrameCapModeName(FrameCapMode::kVr)) == "vr");
 }

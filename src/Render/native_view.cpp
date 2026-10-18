@@ -1056,6 +1056,11 @@ class Renderer {
                 VrFrame(o, generation, presenting, decode_pending_ms, rgba);
                 continue;
             }
+            // the game back on frame_cap's rate once no VR frames run
+            if (vr_cap_.period_ns > 0) {
+                vr_cap_ = {};
+                pacing::SetVrCap(vr_cap_);
+            }
             if (gpu && !gpu_kind) gpu_kind = GpuRenderer::Get().Kind();
             const bool ahead_setting = REXCVAR_GET(native_world_ahead);
             const bool ahead_auto = REXCVAR_GET(native_world_ahead_auto);
@@ -1359,6 +1364,14 @@ class Renderer {
         };
         // the frame's timing (vr_timing.h): ms from xrWaitFrame's return
         vr::FrameTiming& t = f.timing;
+        // the game at the headset's rate (vr_game_rate), so each refresh can
+        // have a new capture; set again only as it changes
+        const pacing::FrameCap game_cap =
+            pacing::VrGameCap(REXCVAR_GET(vr_game_rate), t.refresh_ns);
+        if (game_cap.period_ns != vr_cap_.period_ns) {
+            vr_cap_ = game_cap;
+            pacing::SetVrCap(game_cap);
+        }
         auto at = [&] { return double(Nanoseconds(Clock::now()) - t.wake_ns) / 1e6; };
         stall_watch::SetWorker(stall_watch::Worker::kRecording);
         Clock::time_point presented;
@@ -1626,6 +1639,8 @@ class Renderer {
     int64_t vr_hud_frame_ = -1;
     // vr_gpu_queue_wait found no fence to wait on, logged once
     bool vr_fence_logged_ = false;
+    // the game's cap for VR as last set (pacing::SetVrCap), none set
+    pacing::FrameCap vr_cap_;
     // the last VR frame's eyes: 0 black, 1 the window, 2 the anchor (-1
     // none yet); and the fade's start, in the runtime's display time
     int vr_kind_ = -1;

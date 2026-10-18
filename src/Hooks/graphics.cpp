@@ -226,6 +226,7 @@ struct CapState {
     std::function<void(std::function<void()>)> post_to_ui;
     FrameCapSetting setting;
     RefreshRate display;  // the last rate read
+    FrameCap vr;          // SetVrCap's, in place of the setting's while set
     FrameCap cap;         // what's published
     bool published = false;
 };
@@ -272,6 +273,11 @@ void LogCap(const FrameCap& cap, const FrameCapSetting& setting, RefreshRate dis
     case FrameCapMode::kFixed:
         REXLOG_INFO("Frame cap: {:.2f} Hz -> {:.3f} ms", cap.hz, ms);
         return;
+    case FrameCapMode::kVr:
+        REXLOG_INFO("Frame cap: {:.2f} Hz for the VR headset (vr_game_rate) -> {:.3f} ms, in "
+                    "place of frame_cap",
+                    cap.hz, ms);
+        return;
     case FrameCapMode::kOff: break;
     }
     if (setting.mode == FrameCapMode::kOff)
@@ -284,7 +290,9 @@ void LogCap(const FrameCap& cap, const FrameCapSetting& setting, RefreshRate dis
 // publishes the display's rate and what the setting comes to on it now,
 // logging the cap when that changes; whether the cap is on. g_cap.mutex held.
 bool Publish() {
-    const FrameCap cap = ResolveFrameCap(g_cap.setting, g_cap.display.num, g_cap.display.den);
+    const FrameCap cap = g_cap.vr.period_ns > 0
+                             ? g_cap.vr
+                             : ResolveFrameCap(g_cap.setting, g_cap.display.num, g_cap.display.den);
     g_display_hz.store(g_cap.display.den ? double(g_cap.display.num) / g_cap.display.den : 0,
                        std::memory_order_relaxed);
     if (!g_cap.published || cap.mode != g_cap.cap.mode || cap.period_ns != g_cap.cap.period_ns) {
@@ -387,6 +395,16 @@ void StopFrameCap() {
     }
     g_cap.wake.notify_all();
     if (poller.joinable()) poller.join();
+}
+
+void SetVrCap(const FrameCap& cap) {
+    std::lock_guard lock(g_cap.mutex);
+    if (cap.mode == g_cap.vr.mode && cap.period_ns == g_cap.vr.period_ns) return;
+    g_cap.vr = cap;
+    // the poller publishes it, and turns vsync off or back as the cap
+    // comes and goes, as for frame_cap's changes
+    g_cap.setting_changed = true;
+    g_cap.wake.notify_one();
 }
 
 namespace {

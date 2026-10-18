@@ -979,6 +979,14 @@ REXCVAR_DEFINE_DOUBLE(vr_world_scale, 1.0, "Band3/Advanced/Native renderer",
     .range(0.1, 100.0)
     .debug_only();
 
+REXCVAR_DEFINE_STRING(vr_game_rate, "auto", "Band3/Advanced/Native renderer",
+    "With vr, while the headset's session runs: the rate the game runs at, in place of "
+    "frame_cap. auto: the headset's refresh rate (120 on a 120 Hz headset), so the game's camera "
+    "and everything else moves with each refresh; a number of Hz (24 to 240); off: frame_cap's "
+    "as without VR. Takes effect at once")
+    .validator([](std::string_view v) { return band3::pacing::ValidVrGameRate(v); })
+    .debug_only();
+
 REXCVAR_DEFINE_BOOL(vr_gpu_queue_wait, true, "Band3/Advanced/Native renderer",
     "With vr: hand each frame to the headset as soon as its drawing is submitted, the copy into "
     "the headset's images waiting for it on the GPU. Off, the CPU waits for the GPU to finish "

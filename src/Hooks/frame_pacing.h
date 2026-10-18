@@ -133,7 +133,9 @@ private:
     uint64_t resets_ = 0;
 };
 
-enum class FrameCapMode { kOff, kDisplay, kAuto, kFixed };
+// kVr: the VR headset's rate while a session runs (vr_game_rate, VrGameCap),
+// in place of frame_cap's
+enum class FrameCapMode { kOff, kDisplay, kAuto, kFixed, kVr };
 
 struct FrameCapSetting {
     FrameCapMode mode = FrameCapMode::kOff;
@@ -164,6 +166,7 @@ inline const char* FrameCapModeName(FrameCapMode mode) {
     case FrameCapMode::kDisplay: return "display";
     case FrameCapMode::kAuto: return "auto";
     case FrameCapMode::kFixed: return "fixed";
+    case FrameCapMode::kVr: return "vr";
     case FrameCapMode::kOff: break;
     }
     return "off";
@@ -327,7 +330,36 @@ inline FrameCap ResolveFrameCap(FrameCapSetting setting, uint32_t refresh_num,
     return {};
 }
 
+// vr_game_rate: auto, off, or a number of Hz (kept to kMinCapHz..kMaxCapHz)
+inline bool ValidVrGameRate(std::string_view v) {
+    if (v == "auto" || v == "off") return true;
+    const auto fixed = ParseFrameCap(v);
+    return fixed && fixed->mode == FrameCapMode::kFixed;
+}
+
+// The cap while a VR session runs whose headset refreshes every `refresh_ns`
+// (0 unknown), for vr_game_rate `setting`: auto, the headset's own period
+// exactly, so each of its refreshes can have a new game frame; a number, that
+// rate; off (or auto with the refresh unknown) none, frame_cap's as without VR
+inline FrameCap VrGameCap(std::string_view setting, int64_t refresh_ns) {
+    if (setting == "auto") {
+        if (refresh_ns <= 0) return {};
+        const double hz = 1e9 / double(refresh_ns);
+        if (hz < kMinCapHz || hz > kMaxCapHz) return {};
+        return FrameCap{FrameCapMode::kVr, hz, refresh_ns};
+    }
+    const auto fixed = ParseFrameCap(setting);
+    if (!fixed || fixed->mode != FrameCapMode::kFixed) return {};
+    return FrameCap{FrameCapMode::kVr, fixed->hz, static_cast<int64_t>(std::llround(1e9 / fixed->hz))};
+}
+
 // The cap's running half, in graphics.cpp.
+
+// VR's cap (VrGameCap), set by the native renderer's worker as a session
+// runs and the headset's refresh is known, cleared (a FrameCap{}) as it
+// stops: while set it paces the game instead of frame_cap, turning the
+// SDK's vsync off as frame_cap's would. Any thread; logged as it changes.
+void SetVrCap(const FrameCap& cap);
 
 // Starts the cap at startup, once the GPU plugin is loaded and before the
 // runtime starts its vblank thread (Band3App::StartFrameCap): reads the display under `native_window`, turns the SDK's vsync
@@ -351,7 +383,7 @@ void PaceFrame();
 inline constexpr int64_t kNudgePerFrameNs = 250'000;
 void NudgeBeat(int64_t ns);
 
-// The rate the game runs at: the cap's while it's on, else refresh_rate
+// The rate the game runs at: the cap's (or VR's) while it's on, else refresh_rate
 // (video_mode_refresh_rate, 0 for the console's 60)
 double GameHz();
 
