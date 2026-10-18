@@ -55,6 +55,7 @@
 
 #include "src/Render/vr_pose.h"
 #include "src/Render/vr_timing.h"
+#include "src/Render/vr_venue.h"
 
 namespace band3::render::xr {
 
@@ -203,13 +204,21 @@ class Session {
 };
 
 // The frame's layout for `fc` seen with `f`'s views: vr_pose.h's ResolveFrame
-// with the settings (vr_viewpoint, vr_hud*, vr_window_width, vr_window_dim, vr_world_scale,
-// vr_anchor, vr_track_*) and `in_song` (native_view.h: InSong and SongScreen), its fade 0. A
-// vr_viewpoint not made yet is logged once and seen from vr_anchor. In songs
-// with vr_track_3d, the capture's track cameras (TrackCamerasOf), their poses
-// held by `hold` if given (a camera that moves anyway is logged, at most once
-// a second). Any thread; every platform.
+// with the settings (vr_viewpoint, vr_hud*, vr_window_width,
+// vr_window_max_squeeze, vr_window_dim, vr_world_scale, vr_anchor,
+// vr_viewpoint_offset, vr_crowd_clear, vr_track_*) and `in_song`
+// (native_view.h: InSong and SongScreen), its fade 0. A fixed vr_viewpoint
+// (front_row, on_stage, venue) is placed in the song's venue by
+// vr_venue.h's PresetAnchor, the venue found from the song's frames as they
+// come (VenueTracker, logged as it's found), vr_anchor's place until the band
+// is seen. In songs with vr_track_3d, the capture's track cameras
+// (TrackCamerasOf), their poses held by `hold` if given (a camera that moves
+// anyway is logged, at most once a second). Any thread; every platform.
 vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_song,
                           vr::TrackHold* hold = nullptr);
+
+// the song's venue as the fixed viewpoints last found it (none outside songs
+// before the first)
+vr::VenueRef CurrentVenue();
 
 }  // namespace band3::render::xr

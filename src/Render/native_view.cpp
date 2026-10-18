@@ -1336,9 +1336,10 @@ class Renderer {
     // views, then both eyes into the headset
     //
     // Each eye is the newest capture re-posed (vr_pose.h's RePose) from where
-    // that eye is (xr::LayoutFor): through the game camera's window, or with
-    // LOCAL space placed in the venue by vr_anchor, faded in after a cut
-    // (the cut found first, for every capture seen), drawn at the swapchain's
+    // that eye is (xr::LayoutFor): through the game camera's window, faded in
+    // after a cut (the cut found first, for every capture seen), or with
+    // LOCAL space placed in the venue by a fixed viewpoint (vr_venue.h),
+    // which cuts don't move, faded in as it's placed, drawn at the swapchain's
     // size without the HUD's draws (BackBufferPart::kEyes), the world drawn
     // ahead, kept buffers, motion blur, DOF or the spotlights' haze. In
     // songs the eyes draw the tracks too (vr_track_3d: RasterOptions::
@@ -1406,17 +1407,28 @@ class Renderer {
                                  : 0;
         vr_timed_frame_ = cap->frame;
         // where the eyes are and what the quads show (xr::LayoutFor), and
-        // the fade: from black at a cut, or as the eyes go between the
-        // window, the anchor and black, back to the picture over
-        // vr_cut_fade_ms of the runtime's display time
+        // the fade: from black at a cut through the window, as the eyes go
+        // between the window, the anchor and black, or as the anchor moves (a
+        // fixed viewpoint found in the venue, or another chosen: the game's
+        // cuts don't move it), back to the picture over vr_cut_fade_ms of the
+        // runtime's display time
         vr::FrameLayout layout =
             xr::LayoutFor(*cap, f, InSong() && SongScreen(), &vr_track_hold_);
         const int kind = layout.eyes_black ? 0 : layout.window ? 1 : 2;
-        if (cut.cut || (vr_kind_ >= 0 && kind != vr_kind_)) {
+        const vr::Anchor& a = layout.anchor;
+        const bool moved = kind == 2 && vr_kind_ == 2 && !layout.anchor_follows &&
+                           (std::fabs(a.pos[0] - vr_anchor_.pos[0]) +
+                                std::fabs(a.pos[1] - vr_anchor_.pos[1]) +
+                                std::fabs(a.pos[2] - vr_anchor_.pos[2]) >
+                            1 ||
+                            std::fabs(a.yaw - vr_anchor_.yaw) > 0.01f);
+        if ((cut.cut && (kind == 1 || layout.anchor_follows)) || moved ||
+            (vr_kind_ >= 0 && kind != vr_kind_)) {
             vr_fading_ = true;
             vr_fade_from_ = f.display_time;
         }
         vr_kind_ = kind;
+        vr_anchor_ = a;
         if (vr_fading_) {
             layout.fade = vr::CutFade(f.display_time - vr_fade_from_,
                                       double(REXCVAR_GET(vr_cut_fade_ms)));
@@ -1659,6 +1671,9 @@ class Renderer {
     int vr_kind_ = -1;
     bool vr_fading_ = false;
     int64_t vr_fade_from_ = 0;
+    // the last frame's anchor (FrameLayout::anchor), so a fixed viewpoint's
+    // moves fade
+    vr::Anchor vr_anchor_;
     // the song's track cameras held still (vr_pose.h's TrackHold)
     vr::TrackHold vr_track_hold_;
 

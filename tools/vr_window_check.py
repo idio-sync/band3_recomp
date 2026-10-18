@@ -36,6 +36,10 @@ For each name this:
              <name>.vr.window.png has the two side by side
   black      with `eyes_black` (no world the eyes can see), that both eye
              pictures are black, as the headset's are
+  anchor     from a fixed viewpoint (vr_viewpoint front_row, on_stage, venue: no
+             window), where the eyes are (`anchor`) and the song's venue as it
+             was found (`venue`: the band, the stage floor, the crowd); with
+             any eyes, the left eye's cost (`eye_cost`)
   tracks     that each track is in the eyes and gone from the panel: the
              panel's mean alpha inside the quad the track had in the game's
              picture (at most 0.15), and with the stand-in the left eye
@@ -241,7 +245,21 @@ def check(prefix, max_mean):
         Image.fromarray(np.concatenate([crop, world], axis=1).astype(np.uint8)).save(
             prefix + ".vr.window.png")
     else:
-        print(f"{head}\n  anchor: the eyes from vr_anchor's place, no window")
+        a = layout.get("anchor", [0, 0, 0, 0])
+        print(f"{head}\n  anchor: the eyes from {layout.get('viewpoint', 'vr_anchor')}'s place "
+              f"{a[0]:.0f},{a[1]:.0f},{a[2]:.0f} facing {a[3]:.0f} degrees, no window")
+        venue = layout.get("venue")
+        if venue and venue.get("members"):
+            print(f"  venue: {len(venue['members'])} band members, stage floor "
+                  f"{venue['centre'][2]:.0f}, toward the audience {venue['toward']} "
+                  f"({'crowd' if venue['toward_crowd'] else 'default'}), {venue['crowd']} crowd "
+                  f"points, {venue['crowd_ahead']} in front from {venue['crowd_front']:.0f} to "
+                  f"{venue['crowd_back']:.0f}, their floor {venue['audience_floor']:.0f}")
+    cost = layout.get("eye_cost")
+    if cost:
+        print(f"  left eye: RePose {cost['repose_ms']:.2f} ms, CPU {cost['ms']:.2f} ms, GPU "
+              f"{cost['gpu_ms']:.2f} ms, {cost['draws']} draws, {cost['crowd_cleared']} crowd "
+              f"draws cleared near the eye")
     ok &= track_check(prefix, layout)
     simulate(prefix, layout, left)
     return ok

@@ -8,6 +8,7 @@
 #include "src/Hooks/keyboard_search.h"
 #include "src/Hooks/music_video.h"
 #include "src/Hooks/mouse_hover.h"
+#include "src/Hooks/vr_view.h"
 #include "src/Net/home_assistant.h"
 #include "src/Net/http_server.h"
 #include "src/Test/game_state.h"
@@ -63,5 +64,6 @@ extern "C" REX_FUNC(App__DrawRegular)
     band3::keyboard_search::RunFrame(ctx, base);
     band3::mouse_hover::RunFrame(ctx, base);
     band3::music_video::RunFrame(base);
+    band3::vr_view::RunFrame(ctx, base);
     __imp__App__DrawRegular(ctx, base);
 }

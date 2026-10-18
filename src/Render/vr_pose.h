@@ -173,6 +173,11 @@ struct Eye {
     float dark_alpha = 0;
     // the quads' corners in LOCAL space (QuadCorners' order)
     float dark[kFrameQuads][4][3] = {};
+    // From a fixed viewpoint (vr_crowd_clear): the crowds' draws
+    // (FrameCapture::mesh_owners) standing within this many venue units of
+    // the eye across the floor are left out, so it isn't inside a card or a
+    // crowd member; 0 none
+    float crowd_clear = 0;
 };
 
 // the eyes' own dark draws' camera (Eye::fade, Eye::dark): no camera of
@@ -189,6 +194,8 @@ struct RePoseStats {
     // the eye's track cameras' draws moved, and those of theirs drawn with
     // another matrix (left as they were)
     uint32_t track_draws = 0, track_unmoved = 0;
+    // crowd draws left out near the eye (Eye::crowd_clear)
+    uint32_t crowd_cleared = 0;
 };
 
 // `in` seen from `eye`: a copy of it whose world camera (WorldCameraOf, the
@@ -205,9 +212,11 @@ struct RePoseStats {
 // where the game shows it end instead of reaching under the head. The eye's
 // own dark (Eye::fade, Eye::dark) goes in after the resolve, before the
 // tracks: black draws through kEyeDarkCam, alpha blended, no depth. Other
-// cameras' draws (the HUD, shadow maps' lights) stay as they are. `in` is
-// left unchanged. Without a perspective world camera, the world's draws are
-// left as they are.
+// cameras' draws (the HUD, shadow maps' lights) stay as they are. With
+// Eye::crowd_clear, the crowds' draws near the eye are squashed to a point
+// (drawn, but nothing shows: the draws and passes stay as they were). `in`
+// is left unchanged. Without a perspective world camera, the world's draws
+// are left as they are.
 RePoseStats RePose(const FrameCapture& in, const Eye& eye, FrameCapture& out);
 
 // `g` with its triangles cut to plane . (x, y, z, 1) >= 0 (in its own
@@ -638,16 +647,6 @@ inline WindowFrame WindowPlacement(const XrPose& head, float distance, float wid
 // at life size, and is life size across, so the stereo depth of the scene is
 // flattened k times (as a long lens flattens it; a camera wider than the
 // window, k < 1, deepens it instead).
-struct WindowScale {
-    float sx = 1, sy = 1, sz = 1;  // venue units a metre: across, up, forward
-};
-
-inline WindowScale WindowScaleOf(const WindowFrame& w, const GameFov& fov, float u,
-                                 float max_squeeze = 0) {
-    WindowScale s{u, u, u};
-    const float tx = std::tan(fov.hfov / 2), ty = std::tan(fov.vfov / 2);
-    const float a = w.size[0] / 2, b = w.size[1] / 2;
-    if (tx > 0 && w.distance > 0 && a > 0) s.sz = u * a / (w.distance * tx);
 //
 // A close-up's k is large (8.5 at 16 degrees) and its depth nearly flat, so
 // in songs the squeeze is capped (`max_squeeze`, vr_window_max_squeeze; 0 or
@@ -657,27 +656,28 @@ inline WindowScale WindowScaleOf(const WindowFrame& w, const GameFov& fov, float
 // a centred rectangle `picture` = max_squeeze / k of the window each way,
 // level, the window around it dark (PictureFrame), and the depth flattened
 // max_squeeze times at most.
-    if (ty > 0 && b > 0) s.sy = s.sz * w.distance * ty / b;
-    return s;
+struct WindowScale {
+    float sx = 1, sy = 1, sz = 1;  // venue units a metre: across, up, forward
     float picture = 1;             // the picture's share of the window, each way
+};
+
+inline WindowScale WindowScaleOf(const WindowFrame& w, const GameFov& fov, float u,
+                                 float max_squeeze = 0) {
+    WindowScale s{u, u, u};
+    const float tx = std::tan(fov.hfov / 2), ty = std::tan(fov.vfov / 2);
+    const float a = w.size[0] / 2, b = w.size[1] / 2;
+    if (tx > 0 && w.distance > 0 && a > 0) s.sz = u * a / (w.distance * tx);
+    if (ty > 0 && b > 0) s.sy = s.sz * w.distance * ty / b;
+    if (max_squeeze > 0 && s.sz > max_squeeze * u) {
+        s.picture = max_squeeze * u / s.sz;
+        s.sz = max_squeeze * u;
+    }
+    return s;
 }
 
 // k, the venue's magnification against a true window (1 without a field of view)
 inline float WindowMagnify(const WindowScale& s) { return s.sx > 0 ? s.sz / s.sx : 1; }
 
-inline void VenueToWindow(const WindowFrame& w, const freecam::Pose& game, const WindowScale& s,
-                          const float x[3], float out[3]) {
-    const float d[3] = {x[0] - game.eye[0], x[1] - game.eye[1], x[2] - game.eye[2]};
-    if (max_squeeze > 0 && s.sz > max_squeeze * u) {
-        s.picture = max_squeeze * u / s.sz;
-        s.sz = max_squeeze * u;
-    }
-    out[0] = freecam::Dot3(d, game.right) / s.sx;
-    out[1] = freecam::Dot3(d, game.up) / s.sy;
-    out[2] = w.distance - freecam::Dot3(d, game.fwd) / s.sz;
-}
-
-// a point in the window's frame in LOCAL space
 // the game's picture in the window: the window itself, or with a capped
 // squeeze the centred part of it the picture fills (WindowScale::picture)
 inline WindowFrame PictureFrame(const WindowFrame& w, float picture) {
@@ -689,6 +689,15 @@ inline WindowFrame PictureFrame(const WindowFrame& w, float picture) {
     return p;
 }
 
+inline void VenueToWindow(const WindowFrame& w, const freecam::Pose& game, const WindowScale& s,
+                          const float x[3], float out[3]) {
+    const float d[3] = {x[0] - game.eye[0], x[1] - game.eye[1], x[2] - game.eye[2]};
+    out[0] = freecam::Dot3(d, game.right) / s.sx;
+    out[1] = freecam::Dot3(d, game.up) / s.sy;
+    out[2] = w.distance - freecam::Dot3(d, game.fwd) / s.sz;
+}
+
+// a point in the window's frame in LOCAL space
 inline void WindowToLocal(const WindowFrame& w, const float p[3], float out[3]) {
     float t[3];
     Rotate(w.pose.q, p, t);
@@ -837,10 +846,10 @@ inline float CutFade(int64_t since_ns, double fade_ms) {
 }
 
 // Where the eyes are in the venue (the `vr_viewpoint` setting): the game
-// camera's window (game_camera), or one of the places in the venue
-// (front_row, on_stage, venue: not made yet, so LOCAL space where vr_anchor
-// says, as before the window). Menus are seen through the window whatever
-// this is.
+// camera's window (game_camera), or one of the fixed places in the venue
+// (front_row, on_stage, venue: vr_venue.h's PresetAnchor, found per venue;
+// vr_anchor's place until the song's venue is known), where the game's cuts
+// don't move the head. Menus are seen through the window whatever this is.
 enum class ViewMode { kGameCamera, kFrontRow, kOnStage, kVenue };
 
 inline bool ParseViewMode(const std::string& text, ViewMode& mode) {
@@ -859,6 +868,9 @@ struct Viewpoint {
     // where it looks (AnchorFromCamera) with `follow`
     Anchor anchor;
     bool follow = false;
+    // venue units around the eyes clear of the crowd from the anchor
+    // (Eye::crowd_clear)
+    float crowd_clear = 0;
 };
 
 // One frame's inputs: the views and the recenter's head (LOCAL), the
@@ -878,6 +890,7 @@ struct FrameInputs {
     bool hud_in_window = false;
     HudLayout hud_layout;  // the panel's own place (vr_hud_*); its distance the window's
     float window_width_deg = 100;  // vr_window_width
+    float max_squeeze = 2;         // vr_window_max_squeeze, in songs (WindowScaleOf)
     float dim = 1;                 // vr_window_dim
     float world_scale = 1;
     // the frame's track cameras (TrackCamerasOf, held by TrackHold), placed
@@ -890,13 +903,15 @@ struct FrameInputs {
     bool window_quads = false;
 };
 
-    float max_squeeze = 2;         // vr_window_max_squeeze, in songs (WindowScaleOf)
 // what the eyes show and where the quads go, for VrFrame and Present
 struct FrameLayout {
-    // the eyes through the game camera's window; else from the anchor, or
-    // black: the frame has no world the eyes can see (HudBoundary 0)
+    // the eyes through the game camera's window; else from the anchor
+    // (`anchor`), or black: the frame has no world the eyes can see
+    // (HudBoundary 0)
     bool window = false;
     bool eyes_black = false;
+    Anchor anchor;
+    bool anchor_follows = false;  // the game camera's (Viewpoint::follow): it cuts with it
     float fade = 0;  // the eyes darkened by this (CutFade), set by the caller
     uint32_t hud_boundary = 0;  // the frame's HudBoundary, the eyes' hud_from
     Eye eyes[2];
@@ -975,9 +990,12 @@ inline FrameLayout ResolveView(const Viewpoint& vp, const FrameInputs& in) {
     }
     Anchor a = vp.anchor;
     if (vp.follow && in.camera) a = AnchorFromCamera(in.game);
+    l.anchor = a;
+    l.anchor_follows = vp.follow && in.camera;
     for (int e = 0; e < 2; e++) {
         l.eyes[e].pose = EyePose(in.views[e], a, in.world_scale);
         l.eyes[e].fov = in.fov[e];
+        l.eyes[e].crowd_clear = l.eyes_black ? 0 : vp.crowd_clear;
     }
     return l;
 }

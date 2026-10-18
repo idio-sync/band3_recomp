@@ -32,6 +32,7 @@ add_executable(band3_tests
     gpu_instancing_test.cpp
     gpu_hoist_test.cpp
     vr_pose_test.cpp
+    vr_venue_test.cpp
     vr_timing_test.cpp
     target_premake_test.cpp
     camera_cut_test.cpp

@@ -659,6 +659,59 @@ public:
                                         median(took[v][1]), median(took[v][2]));
                 out.vr.insert(out.vr.size() - 1, cost + "}");
             }
+            // What the left eye costs as drawn (RePose, then the CPU's ms to
+            // the picture read back and the GPU's, timestamps on; medians of
+            // three after one left out) and the crowd draws it left out near
+            // a fixed viewpoint (`eye_cost`); where the eyes are (`viewpoint`,
+            // `anchor`: x, y, z, yaw in degrees) and the song's venue as the
+            // fixed viewpoints found it (`venue`, vr_venue.h's VenueRef)
+            {
+                std::string extra;
+                if (!layout.eyes_black) {
+                    render::RasterOptions timed = eo;
+                    timed.gpu_timestamps = true;
+                    double took[3][3] = {};
+                    uint32_t cleared = 0;
+                    for (int round = 0; round < 4; round++) {
+                        const auto from = std::chrono::steady_clock::now();
+                        render::FrameCapture eye_frame;
+                        cleared = render::vr::RePose(frame, layout.eyes[0], eye_frame).crowd_cleared;
+                        const double repose = std::chrono::duration<double, std::milli>(
+                                                  std::chrono::steady_clock::now() - from)
+                                                  .count();
+                        std::vector<uint32_t> px;
+                        render::GpuStats gs;
+                        render::GpuRenderer::Get().RenderFrame(eye_frame, timed, px, gs);
+                        if (round == 0) continue;
+                        took[0][round - 1] = repose;
+                        took[1][round - 1] = gs.ms;
+                        took[2][round - 1] = gs.gpu_timed ? gs.gpu_total_ms : -1;
+                    }
+                    for (auto& t : took) std::sort(t, t + 3);
+                    extra += std::format(",\"eye_cost\":{{\"repose_ms\":{:.3f},\"ms\":{:.3f},"
+                                         "\"gpu_ms\":{:.3f},\"draws\":{},\"crowd_cleared\":{}}}",
+                                         took[0][1], took[1][1], took[2][1], frame.draws.size(),
+                                         cleared);
+                }
+                const render::vr::Anchor& a = layout.anchor;
+                extra += std::format(",\"viewpoint\":\"{}\",\"anchor\":[{:.1f},{:.1f},{:.1f},{:.1f}]",
+                                     REXCVAR_GET(vr_viewpoint), a.pos[0], a.pos[1], a.pos[2],
+                                     a.yaw * 57.2957795f);
+                const render::vr::VenueRef v = render::xr::CurrentVenue();
+                std::string members = "[";
+                for (int m = 0; m < v.members; m++)
+                    members += std::format("{}[{:.1f},{:.1f},{:.1f}]", m ? "," : "",
+                                           v.member[m][0], v.member[m][1], v.member[m][2]);
+                extra += std::format(
+                    ",\"venue\":{{\"members\":{}],\"centre\":[{:.1f},{:.1f},{:.1f}],"
+                    "\"toward\":[{:.3f},{:.3f}],\"toward_crowd\":{},\"band_front\":{:.1f},"
+                    "\"band_back\":{:.1f},\"band_half\":{:.1f},\"crowd\":{},\"crowd_ahead\":{},"
+                    "\"crowd_front\":{:.1f},\"crowd_back\":{:.1f},\"audience_floor\":{:.1f}}}",
+                    members, v.centre[0], v.centre[1], v.centre[2], v.toward[0], v.toward[1],
+                    v.toward_crowd ? "true" : "false", v.band_front, v.band_back, v.band_half,
+                    v.crowd, v.crowd_ahead, v.crowd_front, v.crowd_back, v.audience_floor);
+                out.vr.insert(out.vr.size() - 1, extra);
+            }
             // and beside the pictures, for tools/vr_window_check.py
             std::ofstream(rex::filesystem::GetExecutableFolder() / "screenshots" /
                           (file + ".vr.json"))

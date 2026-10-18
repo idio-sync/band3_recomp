@@ -8,6 +8,7 @@
 #include <fmt/format.h>
 #include <rex/logging.h>
 
+#include "src/Render/vr_venue.h"
 #include "src/settings.h"
 
 #ifdef _WIN32
@@ -36,21 +37,77 @@
 
 namespace band3::render::xr {
 
+namespace {
+
+// the song's venue for the fixed viewpoints (vr_venue.h), from whichever
+// thread lays out a frame (VrFrame, the harness's capture)
+std::mutex g_venue_mutex;
+vr::VenueTracker g_venue;
+
+void LogVenue(const vr::VenueRef& r, float units) {
+    std::string members;
+    for (int m = 0; m < r.members; m++)
+        members += fmt::format("{}({:.0f},{:.0f},{:.0f})", m ? " " : "", r.member[m][0],
+                               r.member[m][1], r.member[m][2]);
+    std::string presets;
+    for (vr::ViewMode mode :
+         {vr::ViewMode::kFrontRow, vr::ViewMode::kOnStage, vr::ViewMode::kVenue}) {
+        vr::Anchor a;
+        if (vr::PresetAnchor(mode, r, {}, units, a))
+            presets += fmt::format(" {} {:.0f},{:.0f},{:.0f},{:.0f}", vr::ViewModeName(mode),
+                                   a.pos[0], a.pos[1], a.pos[2], a.yaw * 57.2957795f);
+    }
+    REXLOG_INFO("vr: the venue: {} band members {}; stage floor z {:.0f}, toward the audience "
+                "{:.2f},{:.2f} ({}); {} crowd points, {} in front from {:.0f} to {:.0f} units "
+                "ahead, their floor z {:.0f}; viewpoints (x,y,z,yaw):{}",
+                r.members, members, r.centre[2], r.toward[0], r.toward[1],
+                r.toward_crowd ? "the crowd's middle" : "-y, no crowd", r.crowd, r.crowd_ahead,
+                r.crowd_front, r.crowd_back, r.audience_floor, presets);
+}
+
+}  // namespace
+
+vr::VenueRef CurrentVenue() {
+    std::lock_guard lock(g_venue_mutex);
+    return g_venue.Ref();
+}
+
 vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_song,
                           vr::TrackHold* hold) {
     vr::Viewpoint vp;
     const std::string mode = REXCVAR_GET(vr_viewpoint);
     if (!vr::ParseViewMode(mode, vp.mode)) vp.mode = vr::ViewMode::kGameCamera;
     vp.window = vp.mode == vr::ViewMode::kGameCamera;
+    // a fixed place in the song's venue (vr_venue.h), found from the song's
+    // first frames with the band, vr_anchor's until then; forgotten outside
+    // songs and with the window, so it's found again
+    const float units = vr::kUnitsPerMetre * float(REXCVAR_GET(vr_world_scale));
+    vr::VenueRef ref;
+    {
+        std::lock_guard lock(g_venue_mutex);
+        if (g_venue.Next(fc, in_song && !vp.window)) LogVenue(g_venue.Ref(), units);
+        ref = g_venue.Ref();
+    }
     if (!vp.window) {
-        // once each time it's set to one
-        static std::atomic<int> logged{-1};
-        if (logged.exchange(int(vp.mode)) != int(vp.mode))
-            REXLOG_INFO("vr: vr_viewpoint {} isn't made yet; songs are seen from vr_anchor's "
-                        "place, menus through the game camera's window",
-                        mode);
-        const std::string anchor_text = REXCVAR_GET(vr_anchor);
-        vp.follow = anchor_text.empty() || !vr::ParseAnchor(anchor_text, vp.anchor);
+        vr::ViewOffset off;
+        const std::string off_text = REXCVAR_GET(vr_viewpoint_offset);
+        if (!off_text.empty() && !vr::ParseViewOffset(off_text, off)) {
+            static std::atomic<bool> warned{false};
+            if (!warned.exchange(true))
+                REXLOG_WARN("vr: vr_viewpoint_offset '{}' isn't right,ahead,up[,yaw]", off_text);
+            off = {};
+        }
+        if (!in_song || !vr::PresetAnchor(vp.mode, ref, off, units, vp.anchor)) {
+            // once each time it's set to one
+            static std::atomic<int> logged{-1};
+            if (in_song && logged.exchange(int(vp.mode)) != int(vp.mode))
+                REXLOG_INFO("vr: vr_viewpoint {}: no band found in the venue yet; seen from "
+                            "vr_anchor's place meanwhile",
+                            mode);
+            const std::string anchor_text = REXCVAR_GET(vr_anchor);
+            vp.follow = anchor_text.empty() || !vr::ParseAnchor(anchor_text, vp.anchor);
+        }
+        vp.crowd_clear = vr::CrowdClear(vp.mode, float(REXCVAR_GET(vr_crowd_clear)));
     }
     vr::FrameInputs in;
     for (int e = 0; e < 2; e++) {
@@ -68,6 +125,7 @@ vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_s
     in.hud_layout.below = float(REXCVAR_GET(vr_hud_below));
     in.hud_layout.width_deg = float(REXCVAR_GET(vr_hud_width));
     in.window_width_deg = float(REXCVAR_GET(vr_window_width));
+    in.max_squeeze = float(REXCVAR_GET(vr_window_max_squeeze));
     in.dim = float(REXCVAR_GET(vr_window_dim));
     in.world_scale = float(REXCVAR_GET(vr_world_scale));
     in.track.on = REXCVAR_GET(vr_track_3d);
@@ -125,7 +183,6 @@ void Session::NoteFrame(const FrameViews&, float) {}
 void Session::StartMeasuring() {}
 std::string Session::MeasuredJson() { return {}; }
 
-    in.max_squeeze = float(REXCVAR_GET(vr_window_max_squeeze));
 #else
 
 using Microsoft::WRL::ComPtr;

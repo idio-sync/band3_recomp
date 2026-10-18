@@ -1,11 +1,14 @@
 #include "src/Render/vr_pose.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <vector>
 
 #include "src/Render/camera_cut.h"
+#include "src/Render/vr_venue.h"
 
 namespace band3::render::vr {
 
@@ -305,6 +308,38 @@ void AddDark(const Eye& eye, FrameCapture& out) {
 
 }  // namespace
 
+namespace {
+
+// Whether draw `d` stands within `radius` of `eye` across the floor (x, y):
+// the middle of a few of its vertices in the world (a card's four; a crowd
+// card's instance world doesn't put its origin at the card)
+bool NearEye(const DrawItem& d, const float eye[3], float radius) {
+    if (!d.geom || d.geom->verts.empty()) return false;
+    const size_t n = d.geom->verts.size(), step = std::max<size_t>(1, n / 8);
+    float sum[2] = {0, 0};
+    int k = 0;
+    for (size_t i = 0; i < n; i += step, k++) {
+        float w[3];
+        freecam::WorldPos(d, d.geom->verts[i], w);
+        sum[0] += w[0];
+        sum[1] += w[1];
+    }
+    const float dx = sum[0] / float(k) - eye[0], dy = sum[1] / float(k) - eye[1];
+    return dx * dx + dy * dy < radius * radius;
+}
+
+// `d` drawn as a point where it stands: its world (or each bone) without its
+// axes, so every triangle is empty, while the draw and its pass stay
+void SquashDraw(DrawItem& d) {
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 4; c++) d.world.m[r][c] = 0;
+    for (Mat4& b : d.bones)
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 4; c++) b.m[r][c] = 0;
+}
+
+}  // namespace
+
 RePoseStats RePose(const FrameCapture& in, const Eye& eye, FrameCapture& out) {
     RePoseStats st;
     out = in;
@@ -318,11 +353,23 @@ RePoseStats RePose(const FrameCapture& in, const Eye& eye, FrameCapture& out) {
         const Mat4 old_vp = cam.view_proj;
         const Mat4 new_vp = freecam::Mul(EyeView(eye), EyeProjection(proj, eye.fov));
         std::vector<int32_t> clone(in.shades.size(), -1);
+        // the crowds' meshes, for Eye::crowd_clear
+        std::vector<uint32_t> crowd;
+        if (eye.crowd_clear > 0) {
+            for (const MeshOwner& o : in.mesh_owners)
+                if (o.kind == kOwnerCrowd) crowd.push_back(o.mesh);
+            std::sort(crowd.begin(), crowd.end());
+        }
         for (DrawItem& d : out.draws) {
             if (std::memcmp(&d.view_proj, &old_vp, sizeof(Mat4)) != 0) continue;
             d.view_proj = new_vp;
             st.draws_moved++;
             st.shades_cloned += CloneShade(in, out, d, eye.pose, clone);
+            if (!crowd.empty() && std::binary_search(crowd.begin(), crowd.end(), d.mesh) &&
+                NearEye(d, eye.pose.eye, eye.crowd_clear)) {
+                SquashDraw(d);
+                st.crowd_cleared++;
+            }
         }
     }
     // each track camera's draws as the eye sees the track, its shades their
@@ -433,6 +480,220 @@ TrackCams TrackCamerasOf(const FrameCapture& fc) {
         out.cams[out.count++] = t;
     }
     return out;
+}
+
+VenueRef VenueRefOf(const FrameCapture& fc) {
+    VenueRef r;
+    const WorldCamera cam = WorldCameraOf(fc);
+    if (!cam.valid || fc.mesh_owners.empty()) return r;
+    std::vector<MeshOwner> owners = fc.mesh_owners;
+    std::sort(owners.begin(), owners.end(),
+              [](const MeshOwner& a, const MeshOwner& b) { return a.mesh < b.mesh; });
+    const size_t end = fc.post_boundary == FrameCapture::kNoPost
+                           ? fc.draws.size()
+                           : std::min<size_t>(fc.post_boundary, fc.draws.size());
+    struct Box {
+        float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+        bool any = false;
+    };
+    // a draw's vertices in the world, about `samples` of them
+    auto box_of = [](const DrawItem& d, size_t samples, Box& b) {
+        const size_t n = d.geom->verts.size(), step = std::max<size_t>(1, n / samples);
+        for (size_t i = 0; i < n; i += step) {
+            float w[3];
+            freecam::WorldPos(d, d.geom->verts[i], w);
+            for (int c = 0; c < 3; c++) {
+                b.lo[c] = std::fmin(b.lo[c], w[c]);
+                b.hi[c] = std::fmax(b.hi[c], w[c]);
+            }
+            b.any = true;
+        }
+    };
+    Box band[kMaxMembers];
+    std::vector<std::array<float, 3>> crowd;
+    for (size_t i = 0; i < end; i++) {
+        const DrawItem& d = fc.draws[i];
+        if (d.target != 0 || d.rect_shader >= 0 || d.draw_mode != kDrawModeNormal || !d.geom ||
+            d.geom->verts.empty() || std::memcmp(&d.view_proj, &cam.view_proj, sizeof(Mat4)) != 0)
+            continue;
+        auto o = std::lower_bound(owners.begin(), owners.end(), d.mesh,
+                                  [](const MeshOwner& m, uint32_t mesh) { return m.mesh < mesh; });
+        if (o == owners.end() || o->mesh != d.mesh) continue;
+        if (o->kind == kOwnerBand) {
+            int m = 0;
+            while (m < r.members && r.owner[m] != o->owner) m++;
+            if (m == r.members) {
+                if (r.members == kMaxMembers) continue;
+                r.owner[r.members++] = o->owner;
+            }
+            // the feet are few of a body's vertices: enough samples to find them
+            box_of(d, 512, band[m]);
+        } else if (o->kind == kOwnerCrowd) {
+            // a card's four corners; a 3D crowd member's feet are few of
+            // its vertices, as a band member's
+            Box b;
+            box_of(d, d.bones.empty() ? 16 : 512, b);
+            if (b.any) crowd.push_back({(b.lo[0] + b.hi[0]) / 2, (b.lo[1] + b.hi[1]) / 2, b.lo[2]});
+        }
+    }
+    int kept = 0;
+    for (int m = 0; m < r.members; m++) {
+        if (!band[m].any) continue;
+        r.owner[kept] = r.owner[m];
+        r.member[kept][0] = (band[m].lo[0] + band[m].hi[0]) / 2;
+        r.member[kept][1] = (band[m].lo[1] + band[m].hi[1]) / 2;
+        r.member[kept][2] = band[m].lo[2];
+        kept++;
+    }
+    r.members = kept;
+    if (!kept) return r;
+    // the stage floor: the members' median feet (a member on a riser
+    // doesn't move it)
+    float feet[kMaxMembers];
+    for (int m = 0; m < kept; m++) {
+        feet[m] = r.member[m][2];
+        r.centre[0] += r.member[m][0] / float(kept);
+        r.centre[1] += r.member[m][1] / float(kept);
+    }
+    std::sort(feet, feet + kept);
+    r.centre[2] = feet[kept / 2];
+    // toward the crowd's middle, where there's a crowd off the band's middle
+    const float metre = kUnitsPerMetre;
+    r.crowd = int(crowd.size());
+    if (crowd.size() >= 10) {
+        double sum[2] = {0, 0};
+        for (const auto& p : crowd) {
+            sum[0] += p[0];
+            sum[1] += p[1];
+        }
+        const float d[2] = {float(sum[0] / double(crowd.size())) - r.centre[0],
+                            float(sum[1] / double(crowd.size())) - r.centre[1]};
+        const float len = std::sqrt(d[0] * d[0] + d[1] * d[1]);
+        if (len > 2 * metre) {
+            r.toward[0] = d[0] / len;
+            r.toward[1] = d[1] / len;
+            r.toward_crowd = true;
+        }
+    }
+    r.across[0] = -r.toward[1];
+    r.across[1] = r.toward[0];
+    auto depth = [&](const float* p) {
+        return (p[0] - r.centre[0]) * r.toward[0] + (p[1] - r.centre[1]) * r.toward[1];
+    };
+    auto across = [&](const float* p) {
+        return (p[0] - r.centre[0]) * r.across[0] + (p[1] - r.centre[1]) * r.across[1];
+    };
+    r.band_front = -1e30f;
+    r.band_back = 1e30f;
+    for (int m = 0; m < kept; m++) {
+        r.band_front = std::fmax(r.band_front, depth(r.member[m]));
+        r.band_back = std::fmin(r.band_back, depth(r.member[m]));
+        r.band_half = std::fmax(r.band_half, std::fabs(across(r.member[m])));
+    }
+    // the crowd in front of the band, as wide as it and 4 m either side, and
+    // of that the part straight ahead of the band's middle (2 m either side),
+    // where the front row stands: around a wide stage the crowd's wings can
+    // reach further forward than its middle
+    std::vector<float> ahead, middle, floor;
+    for (const auto& p : crowd) {
+        const float dp = depth(p.data()), side = std::fabs(across(p.data()));
+        if (dp <= r.band_front + 0.5f * metre || side >= r.band_half + 4 * metre) continue;
+        ahead.push_back(dp);
+        if (side < 2 * metre) {
+            middle.push_back(dp);
+            floor.push_back(p[2]);
+        }
+    }
+    if (ahead.size() >= 5) {
+        std::sort(ahead.begin(), ahead.end());
+        r.crowd_ahead = int(ahead.size());
+        r.crowd_back = ahead[(ahead.size() - 1) * 9 / 10];
+        // without a middle, the whole front's
+        if (middle.size() < 3) {
+            middle = ahead;
+            floor.clear();
+            for (const auto& p : crowd)
+                if (depth(p.data()) > r.band_front + 0.5f * metre &&
+                    std::fabs(across(p.data())) < r.band_half + 4 * metre)
+                    floor.push_back(p[2]);
+        }
+        std::sort(middle.begin(), middle.end());
+        std::sort(floor.begin(), floor.end());
+        // a few stray cards in front of the rest don't count
+        r.crowd_front = middle[(middle.size() - 1) / 50];
+        // never over the stage's: no venue's audience looks down on the band
+        r.audience_floor = std::fmin(floor[floor.size() / 2], r.centre[2]);
+    }
+    return r;
+}
+
+bool PresetAnchor(ViewMode mode, const VenueRef& r, const ViewOffset& off, float units,
+                  Anchor& out) {
+    if (mode == ViewMode::kGameCamera || !r.Valid()) return false;
+    const float metre = kUnitsPerMetre;
+    float depth = 0, side = 0, z = 0;
+    // facing the band (front_row, venue) or the audience (on_stage)
+    float face[2] = {-r.toward[0], -r.toward[1]};
+    if (mode == ViewMode::kFrontRow) {
+        depth = r.crowd_ahead ? r.crowd_front - 0.3f * metre : r.band_front + 5 * metre;
+        depth = std::fmax(depth, r.band_front + 2 * metre);
+        z = (r.crowd_ahead ? r.audience_floor : r.centre[2] - 1.2f * metre) + kEyeHeight * units;
+    } else if (mode == ViewMode::kOnStage) {
+        face[0] = r.toward[0];
+        face[1] = r.toward[1];
+        z = r.centre[2] + kEyeHeight * units;
+        // the members in depth and across, and the place sought among them
+        float at[kMaxMembers][2];
+        for (int m = 0; m < r.members; m++) {
+            const float d[2] = {r.member[m][0] - r.centre[0], r.member[m][1] - r.centre[1]};
+            at[m][0] = d[0] * r.toward[0] + d[1] * r.toward[1];
+            at[m][1] = d[0] * r.across[0] + d[1] * r.across[1];
+        }
+        // the band's front line (a drummer on a riser far upstage doesn't
+        // pull it back): the median member's depth
+        float depths[kMaxMembers];
+        for (int m = 0; m < r.members; m++) depths[m] = at[m][0];
+        std::sort(depths, depths + r.members);
+        const float line = r.members % 2 ? depths[r.members / 2]
+                                         : (depths[r.members / 2 - 1] + depths[r.members / 2]) / 2;
+        const float target = line + 0.5f * metre, step = 0.25f * metre;
+        float best = -1e30f;
+        depth = r.band_front + 0.5f * metre;
+        for (float dp = r.band_back; dp <= r.band_front + 0.5f * metre + 1e-3f; dp += step) {
+            for (float sd = -(r.band_half + metre); sd <= r.band_half + metre + 1e-3f; sd += step) {
+                // clear of every member, none of them between it and the
+                // audience (within 0.5 m and a widening cone ahead)
+                float nearest = 1e30f;
+                bool blocked = false;
+                for (int m = 0; m < r.members; m++) {
+                    nearest = std::fmin(nearest, std::hypot(dp - at[m][0], sd - at[m][1]));
+                    const float ahead = at[m][0] - dp;
+                    blocked |= ahead > 0 && std::fabs(at[m][1] - sd) < 0.5f * metre + 0.3f * ahead;
+                }
+                if (nearest < 0.9f * metre || blocked) continue;
+                const float score = std::fmin(nearest, 1.2f * metre) -
+                                    0.5f * std::fabs(dp - target) - 0.25f * std::fabs(sd);
+                if (score > best) {
+                    best = score;
+                    depth = dp;
+                    side = sd;
+                }
+            }
+        }
+    } else {
+        depth = r.crowd_ahead ? r.crowd_back + 2 * metre : r.band_front + 15 * metre;
+        const float rise =
+            std::fmin(std::fmax(0.35f * (depth - r.band_front), 2.5f * metre), 7 * metre);
+        z = r.centre[2] + rise;
+    }
+    // the facing's right (x right of y forward): (f.y, -f.x)
+    const float right[2] = {face[1], -face[0]};
+    for (int c = 0; c < 2; c++)
+        out.pos[c] = r.centre[c] + depth * r.toward[c] + side * r.across[c] +
+                     off.right * metre * right[c] + off.ahead * metre * face[c];
+    out.pos[2] = z + off.up * metre;
+    out.yaw = std::atan2(-face[0], face[1]) + off.yaw_deg * 3.14159265f / 180;
+    return true;
 }
 
 }  // namespace band3::render::vr

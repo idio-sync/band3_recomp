@@ -28,6 +28,7 @@
 #include "src/Hooks/frame_pacing.h"
 #include "src/Hooks/music_video.h"
 #include "src/Render/guest_formats.h"
+#include "src/Render/scene_capture.h"
 #include "src/Video/movie_planes.h"
 #include "src/Video/music_video.h"
 #include "src/settings.h"
@@ -205,6 +206,8 @@ extern "C" void __imp__BandCharacter__DrawLodOrShadow(PPCContext& ctx, uint8_t* 
 extern "C" REX_FUNC(BandCharacter__DrawLodOrShadow) {
     if (REXCVAR_GET(music_video_hide_band) && band3::video::MusicVideoShowing()) return;
     if (BlackShowing()) return;
+    // its meshes marked as the band's, for VR's fixed viewpoints (vr_view.cpp)
+    band3::render::MeshOwnerScope owner(band3::render::kOwnerBand, ctx.r3.u32);
     __imp__BandCharacter__DrawLodOrShadow(ctx, base);
 }
 

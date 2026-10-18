@@ -931,11 +931,26 @@ REXCVAR_DEFINE_BOOL(vr, false, "Band3/Advanced/Native renderer",
 REXCVAR_DEFINE_STRING(vr_viewpoint, "game_camera", "Band3/Advanced/Native renderer",
     "With vr: where you are in the venue during songs. game_camera: where the game's camera "
     "is, seeing the venue in 3D through a window that the game's picture fills "
-    "(vr_window_width), dark around it, fading to black at each cut. front_row, on_stage, "
-    "venue: not made yet; they use "
-    "vr_anchor's place for now. Menus are always seen through the game camera's window. Takes "
-    "effect at once")
+    "(vr_window_width), dark around it, fading to black at each cut. front_row: at the barrier "
+    "in front of the stage, facing the band; on_stage: among the band, facing the audience; "
+    "venue: behind and above the audience. Those three are found in each song's venue from "
+    "where the band and the crowd are, stay put whatever the game's camera does, and draw "
+    "the whole band and every crowd in every shot (as vr_show_all). Menus are always seen "
+    "through the game camera's window. Takes effect at once")
     .allowed({"game_camera", "front_row", "on_stage", "venue"})
+    .debug_only();
+
+REXCVAR_DEFINE_STRING(vr_viewpoint_offset, "", "Band3/Advanced/Native renderer",
+    "With vr and vr_viewpoint front_row, on_stage or venue: moves that place, as right,ahead,up "
+    "in metres from it (as it faces) and optionally a turn in degrees, counterclockwise seen "
+    "from above, e.g. 1,-0.5,0.3,15. Empty leaves it where it's found. Takes effect at once")
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_crowd_clear, 1.5, "Band3/Advanced/Native renderer",
+    "With vr and vr_viewpoint front_row, on_stage or venue: the crowd within this many metres "
+    "of your eyes across the floor isn't drawn, so you don't stand inside a crowd member's "
+    "picture. 0 draws all of it. Takes effect at once")
+    .range(0.0, 20.0)
     .debug_only();
 
 REXCVAR_DEFINE_DOUBLE(vr_window_width, 100.0, "Band3/Advanced/Native renderer",
@@ -944,6 +959,14 @@ REXCVAR_DEFINE_DOUBLE(vr_window_width, 100.0, "Band3/Advanced/Native renderer",
     "the game's picture fills it, so a narrow shot is magnified and its depth flattened, as "
     "a long lens does. Takes effect at once")
     .range(20.0, 150.0)
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_window_max_squeeze, 2.0, "Band3/Advanced/Native renderer",
+    "With vr, during songs: how much the game camera's window may flatten a narrow shot's "
+    "depth to fill it. A shot narrower than that allows (a close-up) fills only the middle of "
+    "the window instead, dark around it, its depth flattened this many times at most. 0 "
+    "fills the window at any shot. Menus always fill it. Takes effect at once")
+    .range(0.0, 20.0)
     .debug_only();
 
 REXCVAR_DEFINE_DOUBLE(vr_window_dim, 1.0, "Band3/Advanced/Native renderer",
@@ -961,14 +984,6 @@ REXCVAR_DEFINE_BOOL(vr_window_quads, false, "Band3/Advanced/Native renderer",
 
 REXCVAR_DEFINE_INT32(vr_cut_fade_ms, 120, "Band3/Advanced/Native renderer",
     "With vr: at each camera cut, and as the window comes and goes, the headset's picture goes "
-REXCVAR_DEFINE_DOUBLE(vr_window_max_squeeze, 2.0, "Band3/Advanced/Native renderer",
-    "With vr, during songs: how much the game camera's window may flatten a narrow shot's "
-    "depth to fill it. A shot narrower than that allows (a close-up) fills only the middle of "
-    "the window instead, dark around it, its depth flattened this many times at most. 0 "
-    "fills the window at any shot. Menus always fill it. Takes effect at once")
-    .range(0.0, 20.0)
-    .debug_only();
-
     "black and fades back in over this many milliseconds (the panel doesn't fade); 0 cuts "
     "straight. Takes effect at once")
     .range(0, 2000)
@@ -982,10 +997,11 @@ REXCVAR_DEFINE_BOOL(vr_hud_in_window, false, "Band3/Advanced/Native renderer",
     .debug_only();
 
 REXCVAR_DEFINE_STRING(vr_anchor, "0,-1250,520,0", "Band3/Advanced/Native renderer",
-    "With vr and a vr_viewpoint other than game_camera, during songs: where the headset's "
+    "With vr and a vr_viewpoint other than game_camera, during songs, until the song's venue "
+    "has been found (its band seen): where the headset's "
     "starting point is in the venue, as x,y,z in inches (x right, "
     "y towards the stage, z up) and a turn in degrees, counterclockwise seen from above (0 "
-    "faces the stage); the default is above and behind the crowd in front of the stage. "
+    "faces the stage); the default is above and behind arena_04's crowd in front of the stage. "
     "Empty follows the game's camera, facing where it looks")
     .debug_only();
 
