@@ -137,14 +137,29 @@ inline Anchor AnchorFromCamera(const freecam::Pose& cam) {
     return a;
 }
 
+// One track camera's draws seen from an eye (TrackEye): those drawn by camera
+// `cam` with `old_vp` get `view_proj` and the whole picture rather than the
+// camera's viewport, their shades `pose`'s point and axes
+inline constexpr int kMaxTrackCams = 4;
+
+struct TrackView {
+    uint32_t cam = 0;
+    Mat4 old_vp{};
+    Mat4 view_proj{};
+    freecam::Pose pose{};
+};
+
 // An eye for RePose: where it is and what it sees. Its view is View(pose),
 // or `view` with has_view (WindowEye's, which isn't a rigid camera's); the
-// shades still get `pose`'s point and axes.
+// shades still get `pose`'s point and axes. In songs each track camera's
+// draws are seen from it too (`tracks`).
 struct Eye {
     freecam::Pose pose;
     Fov fov;
     bool has_view = false;
     Mat4 view{};
+    int track_count = 0;
+    TrackView tracks[kMaxTrackCams];
 };
 
 inline Mat4 EyeView(const Eye& e) { return e.has_view ? e.view : freecam::View(e.pose); }
@@ -154,6 +169,9 @@ struct RePoseStats {
     uint32_t cam = 0;
     uint32_t draws_moved = 0, shades_cloned = 0;
     freecam::Pose game{};  // the game camera's pose
+    // the eye's track cameras' draws moved, and those of theirs drawn with
+    // another matrix (left as they were)
+    uint32_t track_draws = 0, track_unmoved = 0;
 };
 
 // `in` seen from `eye`: a copy of it whose world camera (WorldCameraOf, the
@@ -161,10 +179,24 @@ struct RePoseStats {
 // Every draw drawn with that camera's view_proj, in any pass, gets the eye's
 // (EyeView times EyeProjection of the camera's projection), and the shades
 // they use are cloned (the source's are shared, never changed) with the
-// eye's position and, for billboards, its axes (VS c16..c18). Other cameras'
-// draws (the track, the HUD, shadow maps' lights) stay as they are. `in` is
-// left unchanged. Without a perspective world camera, `out` is `in` as is.
+// eye's position and, for billboards, its axes (VS c16..c18). Likewise each
+// of the eye's track cameras' draws (Eye::tracks) gets its TrackView (a draw
+// with its own transform folded into its matrix, as the gems and beat lines
+// are, keeps it), the camera the whole picture, and is cut where the game's
+// picture ends below (the bottom of the camera's viewport, through its
+// captured matrix; CutAtPlane), so the track before the strikeline ends
+// where the game shows it end instead of reaching under the head. Other
+// cameras' draws (the HUD, shadow maps' lights) stay as they are. `in` is
+// left unchanged. Without a perspective world camera, the world's draws are
+// left as they are.
 RePoseStats RePose(const FrameCapture& in, const Eye& eye, FrameCapture& out);
+
+// `g` with its triangles cut to plane . (x, y, z, 1) >= 0 (in its own
+// space), new corners between the old; `g` itself if nothing is below it.
+// The last few cuts are kept per thread, so both eyes and frames after cut
+// the same mesh once.
+std::shared_ptr<const Geometry> CutAtPlane(const std::shared_ptr<const Geometry>& g,
+                                           const float plane[4]);
 
 // Where the HUD panel's draws start in `fc` (RasterOptions::hud_from,
 // soft_raster.h's OnHud): post_boundary, or 0, the whole picture on the
@@ -193,13 +225,12 @@ inline uint32_t HudBoundary(const FrameCapture& fc) {
 // HUD's camera's (z range ending before 1; none without one), listed in
 // fc.cameras with z range 0..1, a perspective camera (freecam::Decompose),
 // and either more than one such draw or its one draw's picture not covering
-// its viewport (the fade's does). One per player's track: 2 players' look the
-// same way from 7.7 units either side, in two viewports (998x720 at 0 and
-// 281); 4 parts' three are full-picture and turned 10 degrees apart. In
+// its viewport (the fade's does). One per player's track: 2 players' in two
+// viewports (998x720 at 0 and 281), their projections shifted out by as much
+// again (freecam::Decompose); 4 parts' three are full-picture and turned 10
+// degrees apart. In
 // order of their first draws; none without DoPostProcess. Menus' overlay
 // cameras can look the same: callers ask only in songs.
-inline constexpr int kMaxTrackCams = 4;
-
 struct TrackCamera {
     uint32_t cam = 0;
     Mat4 view_proj{};  // as captured: its draws are matched by it
@@ -240,18 +271,23 @@ struct HudQuad {
     float size[2] = {0, 0};  // XrExtent2Df: width, height in metres
 };
 
+// A head's yaw, its turn about XR's +y (counterclockwise from above, 0
+// facing -z): its back (+z, opposite its forward) turned by its quaternion,
+// flattened onto the floor; 0 looking straight up or down
+inline float HeadYaw(const XrPose& head) {
+    const float back[3] = {0, 0, 1};
+    float f[3];
+    Rotate(head.q, back, f);
+    if (!(std::fabs(f[0]) + std::fabs(f[2]) > 1e-6f)) return 0;
+    return std::atan2(f[0], f[2]);
+}
+
 // `head` is the recenter's head pose in LOCAL space (its position the eyes'
 // midpoint); only its yaw (turn about XR's +y) is kept, so the panel stands
 // level whatever the head's pitch and roll were
 inline HudQuad HudPlacement(const HudLayout& l, const XrPose& head) {
     HudQuad h;
-    // the head's back (+z, opposite its forward) turned by its quaternion,
-    // flattened onto the floor: the yaw about +y, from +z
-    const float back[3] = {0, 0, 1};
-    float f[3];
-    Rotate(head.q, back, f);
-    float yaw = std::atan2(f[0], f[2]);
-    if (!(std::fabs(f[0]) + std::fabs(f[2]) > 1e-6f)) yaw = 0;  // looking straight up or down
+    const float yaw = HeadYaw(head);
     // the panel's centre: ahead of the head on the floor's plane, below it
     const float s = std::sin(yaw), c = std::cos(yaw);
     h.pose.p[0] = head.p[0] - s * l.distance;
@@ -328,6 +364,205 @@ inline GameFov GameFovOf(const Mat4& proj) {
     if (proj.m[2][1] != 0) f.vfov = 2 * std::atan(1 / std::fabs(proj.m[2][1]));
     return f;
 }
+
+// The 3D highway (vr_track_3d): in songs each track (TrackCamerasOf) is an
+// object in LOCAL space in front of the head, seen by each eye from where it
+// is, with the stereo depth and parallax of a real one. RB3 lays a track out
+// with its strikeline at its origin (the smashers sit there; the
+// camera is 93.9 units from it, 22.6 above, looking 7 degrees down,
+// 36.6 degrees across, near 30, far 224 for one player). The track is put so
+// that `scale` of its units are a metre (30: its 19.6 units across are 0.65
+// m) and the strikeline is `forward` metres ahead of the head at the
+// recenter, along the floor, and `down` metres below its eyes. It lies as
+// the game lays it out, level, its far end raised `pitch` degrees from that
+// toward the eyes.
+struct TrackLayout {
+    bool on = true;        // vr_track_3d
+    float forward = 1.2f;  // vr_track_forward, metres
+    float down = 0.3f;     // vr_track_down, metres
+    float pitch = 0;       // vr_track_pitch, degrees
+    float scale = 30;      // vr_track_scale, track units a metre
+};
+
+// Where a track camera's frame is in LOCAL space (PlaceTracks): its point
+// and turn (a quad's axes: x right, y up, -z the camera's forward). Each
+// eye is placed against it as the camera is against the track (TrackEye).
+struct TrackPlace {
+    TrackCamera cam;
+    XrPose frame;
+};
+
+// a turn of `yaw` about XR's +y (counterclockwise from above), then `pitch`
+// about the turned x (positive looks up)
+inline void YawPitch(float yaw, float pitch, float q[4]) {
+    const float qy[4] = {0, std::sin(yaw / 2), 0, std::cos(yaw / 2)};
+    const float qx[4] = {std::sin(pitch / 2), 0, 0, std::cos(pitch / 2)};
+    QuatMul(qy, qx, q);
+}
+
+// a camera's pitch in radians, its forward above the floor (negative down)
+inline float CameraPitch(const freecam::Pose& p) {
+    return std::asin(std::fmax(-1.0f, std::fmin(1.0f, p.fwd[2])));
+}
+
+// The tracks' frames for `head`, the recenter's head (LOCAL; its yaw alone
+// is kept). The frames share one point, so the tracks keep the game's
+// layout, each where its camera shows it: the reference camera (the one
+// looking most nearly along the track, +y; the first of equals) has its
+// strikeline straight ahead at `forward` and `down`, and four parts'
+// cameras, turned 10 degrees apart, show their tracks turned apart too.
+// Each frame keeps its camera's own pitch plus `pitch` (so the track lies
+// level). A camera whose forward isn't the picture's middle (two players':
+// 998x720 viewports at either side, each projection shifted further out by
+// as much) has its frame moved aside by as much as that shift is at its
+// strikeline, so two players' tracks lie side by side, parallel, as the
+// picture has them. Returns how many, none with `on` off.
+inline int PlaceTracks(const TrackCams& t, const XrPose& head, const TrackLayout& l,
+                       TrackPlace out[kMaxTrackCams]) {
+    if (!l.on || t.count <= 0 || !(l.scale > 0)) return 0;
+    const float yaw = HeadYaw(head);
+    const float raise = l.pitch * 3.14159265f / 180;
+    int ref = 0;
+    float least = 1e9f;
+    for (int i = 0; i < t.count; i++) {
+        const float* f = t.cams[i].pose.fwd;
+        const float turned = std::fabs(std::atan2(-f[0], f[1]));
+        if (turned < least - 1e-4f) {
+            least = turned;
+            ref = i;
+        }
+    }
+    const freecam::Pose& r = t.cams[ref].pose;
+    // the strikeline (the origin) from the reference camera, in its axes
+    const float to[3] = {-r.eye[0], -r.eye[1], -r.eye[2]};
+    const float ahead = freecam::Dot3(to, r.fwd), above = freecam::Dot3(to, r.up);
+    float q[4];
+    YawPitch(yaw, CameraPitch(r) + raise, q);
+    // the frames' point: the strikeline's place less its offset from the
+    // camera, turned as the frame is (camera forward is the frame's -z)
+    const float s = std::sin(yaw), c = std::cos(yaw);
+    const float at[3] = {head.p[0] - s * l.forward, head.p[1] - l.down,
+                         head.p[2] - c * l.forward};
+    const float offset[3] = {0, above / l.scale, -ahead / l.scale};
+    float turned[3];
+    Rotate(q, offset, turned);
+    int n = 0;
+    for (int i = 0; i < t.count && i < kMaxTrackCams; i++) {
+        const TrackCamera& cam = t.cams[i];
+        TrackPlace& p = out[n++];
+        p.cam = cam;
+        YawPitch(yaw, CameraPitch(cam.pose) + raise, p.frame.q);
+        float aside[3] = {0, 0, 0};
+        if (cam.target_w && cam.target_h && cam.viewport[2] > 0 && cam.viewport[3] > 0 &&
+            cam.proj.m[1][3] != 0) {
+            const GameFov f = GameFovOf(cam.proj);
+            const float half_w = cam.viewport[2] / 2, half_h = cam.viewport[3] / 2;
+            // where the camera's forward is in the picture, from its middle,
+            // in the viewport's halves: the viewport's middle, and the
+            // projection's shift (freecam::Decompose) within it (y down)
+            const float ox = cam.proj.m[1][0] / cam.proj.m[1][3];
+            const float oy = cam.proj.m[1][1] / cam.proj.m[1][3];
+            const float dx = (cam.viewport[0] + half_w - float(cam.target_w) / 2) / half_w + ox;
+            const float dy = (cam.viewport[1] + half_h - float(cam.target_h) / 2) / half_h - oy;
+            // the picture's shift is the track's, at its strikeline's distance
+            const float to_i[3] = {-cam.pose.eye[0], -cam.pose.eye[1], -cam.pose.eye[2]};
+            const float d = freecam::Dot3(to_i, cam.pose.fwd) / l.scale;
+            aside[0] = d * dx * std::tan(f.hfov / 2);
+            aside[1] = -d * dy * std::tan(f.vfov / 2);
+        }
+        float moved[3];
+        Rotate(p.frame.q, aside, moved);
+        for (int k = 0; k < 3; k++) p.frame.p[k] = at[k] - turned[k] + moved[k];
+    }
+    return n;
+}
+
+// An eye's view of a track camera's draws (RePose): the eye placed against
+// the track as it is against the camera's frame (TrackPlace), `scale` units
+// a metre, its axes the camera's turned as the eye is from the frame; seen
+// with the eye's field of view (EyeProjection, the depth as captured: the
+// renderers have no far plane, and the track's far end is its own fade).
+inline TrackView TrackEye(const XrPose& eye, const Fov& fov, const TrackPlace& p, float scale) {
+    TrackView v;
+    v.cam = p.cam.cam;
+    v.old_vp = p.cam.view_proj;
+    const freecam::Pose& t = p.cam.pose;
+    float inv[4];
+    Conjugate(p.frame.q, inv);
+    const float rel[3] = {eye.p[0] - p.frame.p[0], eye.p[1] - p.frame.p[1],
+                          eye.p[2] - p.frame.p[2]};
+    float r[3];
+    Rotate(inv, rel, r);
+    // the frame's x, y, z (XR) as the camera's right, up and back
+    auto track = [&](const float a[3], float out[3]) {
+        for (int k = 0; k < 3; k++) out[k] = a[0] * t.right[k] + a[1] * t.up[k] - a[2] * t.fwd[k];
+    };
+    float moved[3];
+    track(r, moved);
+    for (int k = 0; k < 3; k++) v.pose.eye[k] = t.eye[k] + scale * moved[k];
+    float turn[4];
+    QuatMul(inv, eye.q, turn);
+    const float axes[3][3] = {{1, 0, 0}, {0, 0, -1}, {0, 1, 0}};  // right, forward, up
+    float* out[3] = {v.pose.right, v.pose.fwd, v.pose.up};
+    for (int i = 0; i < 3; i++) {
+        float a[3];
+        Rotate(turn, axes[i], a);
+        track(a, out[i]);
+    }
+    v.view_proj = freecam::Mul(freecam::View(v.pose), EyeProjection(p.cam.proj, fov));
+    return v;
+}
+
+// where a point of the track's (in its camera's world) is in LOCAL space,
+// TrackEye's placing undone
+inline void TrackToLocal(const TrackPlace& p, float scale, const float x[3], float out[3]) {
+    const freecam::Pose& t = p.cam.pose;
+    const float d[3] = {(x[0] - t.eye[0]) / scale, (x[1] - t.eye[1]) / scale,
+                        (x[2] - t.eye[2]) / scale};
+    const float in_frame[3] = {freecam::Dot3(d, t.right), freecam::Dot3(d, t.up),
+                               -freecam::Dot3(d, t.fwd)};
+    float turned[3];
+    Rotate(p.frame.q, in_frame, turned);
+    for (int k = 0; k < 3; k++) out[k] = p.frame.p[k] + turned[k];
+}
+
+// The track cameras held still through a song (native_view.cpp's VrFrame),
+// so the track stays put in front of the head whatever the game's camera
+// does: each slot's pose as first seen, taken again when its camera moves
+// more than kTrackMoved units or turns kTrackTurned degrees (a new layout),
+// or the number of tracks changes. Draws are still matched by each frame's
+// own matrices and drawn with its projections.
+inline constexpr float kTrackMoved = 1.0f;
+inline constexpr float kTrackTurned = 1.0f;
+
+class TrackHold {
+ public:
+    // `now` with the held poses; `moved` counts the slots taken again
+    TrackCams Hold(const TrackCams& now, int& moved) {
+        moved = 0;
+        if (now.count != held_.count) {
+            held_ = now;
+            return now;
+        }
+        TrackCams out = now;
+        for (int i = 0; i < now.count; i++) {
+            const freecam::Pose &a = held_.cams[i].pose, &b = now.cams[i].pose;
+            const float d[3] = {a.eye[0] - b.eye[0], a.eye[1] - b.eye[1], a.eye[2] - b.eye[2]};
+            const float cos_turn = std::fmin(freecam::Dot3(a.fwd, b.fwd), freecam::Dot3(a.up, b.up));
+            if (freecam::Len3(d) > kTrackMoved ||
+                cos_turn < std::cos(kTrackTurned * 3.14159265f / 180)) {
+                held_.cams[i] = now.cams[i];
+                moved++;
+            } else {
+                out.cams[i].pose = held_.cams[i].pose;
+            }
+        }
+        return out;
+    }
+
+ private:
+    TrackCams held_;
+};
 
 // The game camera's window: a rectangle in LOCAL space, `distance` metres
 // straight ahead of the head at the recenter, at its eyes' height, turned by
@@ -598,6 +833,10 @@ struct FrameInputs {
     float window_width_deg = 100;  // vr_window_width
     float dim = 1;                 // vr_window_dim
     float world_scale = 1;
+    // the frame's track cameras (TrackCamerasOf, held by TrackHold), placed
+    // in songs by `track` (vr_track_*)
+    TrackCams tracks;
+    TrackLayout track;
 };
 
 // what the eyes show and where the quads go, for VrFrame and Present
@@ -620,14 +859,20 @@ struct FrameLayout {
     int frame_quads = 0;
     HudQuad frame[kFrameQuads];
     float dim = 0;
+    // in songs with a world, the tracks in front of the head (PlaceTracks),
+    // which each eye sees (Eye::tracks) and the panel leaves out (EyeCamsOf)
+    int track_count = 0;
+    TrackPlace tracks[kMaxTrackCams];
 };
 
-// The frame's choice: through the window where the capture has a world
-// camera and it's a menu or `vp.window` (the panel in the window, as the
-// game's picture has it, in menus and with hud_in_window; on its own place in
-// songs, whose shots are wider than a comfortable panel); from the anchor in
-// songs otherwise; black eyes and the panel on its own place without a world.
-inline FrameLayout ResolveFrame(const Viewpoint& vp, const FrameInputs& in) {
+// RasterOptions::eye_cams for `l`'s eyes and panel (up to `max`): its track
+// cameras; the rest 0
+inline void EyeCamsOf(const FrameLayout& l, uint32_t* out, int max) {
+    for (int i = 0; i < max; i++) out[i] = i < l.track_count ? l.tracks[i].cam.cam : 0;
+}
+
+// ResolveFrame's choice of view, before the tracks
+inline FrameLayout ResolveView(const Viewpoint& vp, const FrameInputs& in) {
     FrameLayout l;
     l.hud_boundary = in.hud_boundary;
     const bool world = in.hud_boundary > 0 && in.camera;
@@ -658,6 +903,25 @@ inline FrameLayout ResolveFrame(const Viewpoint& vp, const FrameInputs& in) {
     for (int e = 0; e < 2; e++) {
         l.eyes[e].pose = EyePose(in.views[e], a, in.world_scale);
         l.eyes[e].fov = in.fov[e];
+    }
+    return l;
+}
+
+// The frame's choice: through the window where the capture has a world
+// camera and it's a menu or `vp.window` (the panel in the window, as the
+// game's picture has it, in menus and with hud_in_window; on its own place in
+// songs, whose shots are wider than a comfortable panel); from the anchor in
+// songs otherwise; black eyes and the panel on its own place without a world.
+// In songs with a world, whichever way the eyes see it, the tracks in front
+// of the head (PlaceTracks) and each eye's view of them (TrackEye).
+inline FrameLayout ResolveFrame(const Viewpoint& vp, const FrameInputs& in) {
+    FrameLayout l = ResolveView(vp, in);
+    if (!l.eyes_black && in.in_song)
+        l.track_count = PlaceTracks(in.tracks, in.head, in.track, l.tracks);
+    for (int e = 0; e < 2; e++) {
+        l.eyes[e].track_count = l.track_count;
+        for (int t = 0; t < l.track_count; t++)
+            l.eyes[e].tracks[t] = TrackEye(in.views[e], in.fov[e], l.tracks[t], in.track.scale);
     }
     return l;
 }

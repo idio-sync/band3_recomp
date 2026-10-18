@@ -960,8 +960,9 @@ REXCVAR_DEFINE_INT32(vr_cut_fade_ms, 120, "Band3/Advanced/Native renderer",
     .debug_only();
 
 REXCVAR_DEFINE_BOOL(vr_hud_in_window, false, "Band3/Advanced/Native renderer",
-    "With vr and vr_hud: during songs, show the track and the HUD in the game camera's window "
-    "where the game's picture has them, as menus are, instead of on the panel's own place "
+    "With vr and vr_hud: during songs, show the HUD (and the track, with vr_track_3d off) in "
+    "the game camera's window where the game's picture has them, as menus are, instead of on "
+    "the panel's own place "
     "(vr_hud_below, vr_hud_width). Takes effect at once")
     .debug_only();
 
@@ -999,8 +1000,8 @@ REXCVAR_DEFINE_BOOL(vr_fake_pose, false, "Band3/Advanced/Native renderer",
     .debug_only();
 
 REXCVAR_DEFINE_BOOL(vr_hud, true, "Band3/Advanced/Native renderer",
-    "With vr: show the track, the HUD and the menus on a flat panel in front of you, as the "
-    "game draws them. Off shows the venue alone. Takes effect at once")
+    "With vr: show the HUD and the menus (and the track, with vr_track_3d off) on a flat panel "
+    "in front of you, as the game draws them. Off shows the venue alone. Takes effect at once")
     .debug_only();
 
 REXCVAR_DEFINE_DOUBLE(vr_hud_distance, 1.8, "Band3/Advanced/Native renderer",
@@ -1027,6 +1028,39 @@ REXCVAR_DEFINE_BOOL(vr_hud_recenter, false, "Band3/Advanced/Native renderer",
     "With vr_hud: a button: each change of this setting (either way) moves the panel back in "
     "front of where you face now. The panel is also placed where you first faced, and again "
     "when the headset's own recenter moves its seated position")
+    .debug_only();
+
+REXCVAR_DEFINE_BOOL(vr_track_3d, true, "Band3/Advanced/Native renderer",
+    "With vr, during songs: show the track (the highway with its gems, smashers, Overdrive "
+    "meter and multiplier) as a 3D object in front of you, each eye seeing it from where it "
+    "is, instead of flat on the HUD panel. Each player's track keeps its place beside the "
+    "others' as on the screen. Takes effect at once")
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_track_forward, 1.2, "Band3/Advanced/Native renderer",
+    "With vr_track_3d: how far ahead of you the track's strikeline (where the gems are hit) "
+    "is, in metres along the floor, from where you faced at the last recenter. Takes effect "
+    "at once")
+    .range(0.2, 10.0)
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_track_down, 0.3, "Band3/Advanced/Native renderer",
+    "With vr_track_3d: how far below your eyes the track's strikeline is, in metres (negative "
+    "raises it). 0.3 at vr_track_forward 1.2 looks down onto it at the game's own angle, "
+    "14 degrees. Takes effect at once")
+    .range(-2.0, 3.0)
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_track_pitch, 0.0, "Band3/Advanced/Native renderer",
+    "With vr_track_3d: how far the track's far end is tilted up toward you, in degrees, from "
+    "lying level as the game lays it out (as a music stand tilts). Takes effect at once")
+    .range(-30.0, 80.0)
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_track_scale, 30.0, "Band3/Advanced/Native renderer",
+    "With vr_track_3d: how big the track is, as the game's units a metre: 30 makes it 0.65 m "
+    "across, a smaller number bigger. Takes effect at once")
+    .range(5.0, 200.0)
     .debug_only();
 
 REXCVAR_DEFINE_DOUBLE(native_view_render_scale, 1.0, "Band3/Advanced/Native renderer",

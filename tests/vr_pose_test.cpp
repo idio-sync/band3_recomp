@@ -904,12 +904,14 @@ TEST_CASE("the frame's choice: window, anchor or black, and the panel's place") 
 
 namespace {
 
-// a track camera's projection: `hfov` degrees across at 16:9, depth from
-// near to far as RB3's track cameras have it (z = a w + b, 0..1)
-Mat4 TrackProj(float hfov, float n, float f) {
+// a track camera's projection: `hfov` degrees across, 21.05 up and down (RB3's
+// track cameras'), depth from near to far as theirs (z = a w + b, 0..1),
+// shifted `shift` across (clip x += shift w)
+Mat4 TrackProj(float hfov, float n, float f, float shift = 0) {
     Mat4 p{};
     p.m[0][0] = 1 / std::tan(hfov * kPi / 360);
-    p.m[2][1] = p.m[0][0] * 16 / 9;
+    p.m[1][0] = shift;
+    p.m[2][1] = 1 / std::tan(21.05f * kPi / 360);
     p.m[1][2] = f / (f - n);
     p.m[3][2] = -n * f / (f - n);
     p.m[1][3] = 1;
@@ -1046,14 +1048,14 @@ TEST_CASE("the track cameras: one per player's track, never the HUD's, the fade'
     std::vector<SongCam> lone = one;
     lone[0].draws = 1;
     CHECK(vr::TrackCamerasOf(SongFrame(lone)).count == 1);
-    // two players (screen-mp2-25s): one matrix 7.7 units either side, in two
-    // viewports
-    const float l2[3] = {7.72f, -104.89f, 26.39f}, r2[3] = {-7.72f, -104.89f, 26.39f};
+    // two players (screen-mp2-25s): one place, in two viewports, each
+    // projection shifted out by its viewport's offset (0.2826 of its half)
+    const float e2[3] = {0, -104.82f, 26.39f};
     std::vector<SongCam> two = {
-        {0x25492BF8, TrackVp(l2, 0, 7, TrackProj(28.82f, 40.6f, 258)), {0, 0, 998, 720}, {0, 1},
-         52, track},
-        {0x2555D288, TrackVp(r2, 0, 7, TrackProj(28.82f, 40.6f, 258)), {281, 0, 998, 720}, {0, 1},
-         39, track}};
+        {0x25492BF8, TrackVp(e2, 0, 7, TrackProj(28.82f, 40.6f, 258, -0.2826f)),
+         {0, 0, 998, 720}, {0, 1}, 52, track},
+        {0x2555D288, TrackVp(e2, 0, 7, TrackProj(28.82f, 40.6f, 258, 0.2826f)),
+         {281, 0, 998, 720}, {0, 1}, 39, track}};
     HudFadePause(two, true);
     t = vr::TrackCamerasOf(SongFrame(two));
     REQUIRE(t.count == 2);
@@ -1061,6 +1063,10 @@ TEST_CASE("the track cameras: one per player's track, never the HUD's, the fade'
     CHECK(t.cams[1].cam == 0x2555D288);
     CHECK(t.cams[1].viewport[0] == 281);
     CHECK(t.cams[1].viewport[2] == 998);
+    // the shift isn't taken for a camera moved aside (freecam::Decompose)
+    CheckVec(t.cams[0].pose.eye, 0, -104.82f, 26.39f, 1e-3f);
+    CheckVec(t.cams[1].pose.right, 1, 0, 0);
+    CHECK(t.cams[0].proj.m[1][0] == doctest::Approx(-0.2826f).epsilon(1e-3));
     // four parts (screen-mp4-10s): three tracks turned 10 degrees apart; the
     // vocals' strip is the flat HUD's
     const float a4[3] = {2.63f, -122.14f, 29.54f}, b4[3] = {-2.71f, -122.35f, 28.71f},
@@ -1112,6 +1118,312 @@ TEST_CASE("in songs the eyes draw the track cameras' draws past the HUD's bounda
     o.hud_from = 0;
     CHECK(part(BackBufferPart::kHud, f.post_boundary + 1));
     CHECK_FALSE(part(BackBufferPart::kEyes, f.post_boundary + 1));
+}
+
+TEST_CASE("an off-centre projection splits into the camera where it is, the shift in proj") {
+    const float eye[3] = {0, -104.8f, 26.4f};
+    const Mat4 vp = TrackVp(eye, 0, 7, TrackProj(28.82f, 40.6f, 258, -0.2826f));
+    freecam::Pose pose{};
+    Mat4 proj{};
+    REQUIRE(freecam::Decompose(vp, pose, proj));
+    CheckVec(pose.eye, 0, -104.8f, 26.4f, 1e-3f);
+    CheckVec(pose.right, 1, 0, 0);
+    CHECK(freecam::Dot3(pose.right, pose.fwd) == doctest::Approx(0).epsilon(1e-5));
+    CHECK(proj.m[1][0] == doctest::Approx(-0.2826f).epsilon(1e-3));
+    CHECK(proj.m[0][0] == doctest::Approx(1 / std::tan(14.41f * kPi / 180)).epsilon(1e-3));
+}
+
+namespace {
+
+// one player's track camera, as crowd-10s has it
+vr::TrackCams OneTrack() {
+    const float e1[3] = {0, -91.82f, 22.6f};
+    std::vector<SongCam> one = {{0x25492B68, TrackVp(e1, 0, 7, TrackProj(36.56f, 30, 224)),
+                                 {0, 0, 1280, 720}, {0, 1}, 3, Rect(-9.8f, 9.8f, -50, 270)}};
+    HudFadePause(one, false);
+    return vr::TrackCamerasOf(SongFrame(one));
+}
+
+// the track's point x through an eye's TrackView, against its LOCAL place
+// through the eye itself: the same picture (normalized x, y)
+void CheckSeen(const vr::TrackPlace& p, const vr::TrackView& v, const vr::XrPose& eye,
+               const vr::Fov& fov, const float x[3]) {
+    float c[4];
+    freecam::Transform(x, v.view_proj, c);
+    REQUIRE(c[3] > 0);
+    float local[3], px = 0, py = 0;
+    vr::TrackToLocal(p, 30, x, local);
+    REQUIRE(vr::EyePixel(eye, fov, 2, 2, local, px, py));
+    CHECK(c[0] / c[3] == doctest::Approx(px - 1).epsilon(1e-3));
+    CHECK(c[1] / c[3] == doctest::Approx(1 - py).epsilon(1e-3));
+}
+
+}  // namespace
+
+TEST_CASE("the track in front of the head: its strikeline where asked, level, seen from each eye") {
+    const vr::TrackCams t = OneTrack();
+    REQUIRE(t.count == 1);
+    vr::XrPose head = StandingHead();
+    head.q[1] = std::sin(0.2f);  // turned 0.4 radians left
+    head.q[3] = std::cos(0.2f);
+    vr::TrackLayout l;  // 1.2 ahead, 0.3 down, 30 units a metre
+    vr::TrackPlace p[vr::kMaxTrackCams];
+    REQUIRE(vr::PlaceTracks(t, head, l, p) == 1);
+    // the strikeline (the origin) 1.2 m ahead along the head's yaw, 0.3 below
+    const float origin[3] = {0, 0, 0}, ahead[3] = {0, 100, 0}, side[3] = {9.8f, 0, 0};
+    float s[3], f[3], r[3];
+    vr::TrackToLocal(p[0], l.scale, origin, s);
+    CheckVec(s, -std::sin(0.4f) * 1.2f, 1.3f, -std::cos(0.4f) * 1.2f, 1e-3f);
+    // level, running away from the head, 0.65 m across
+    vr::TrackToLocal(p[0], l.scale, ahead, f);
+    CHECK(f[1] == doctest::Approx(1.3f).epsilon(1e-3));
+    CHECK(std::atan2(-(f[0] - s[0]), -(f[2] - s[2])) == doctest::Approx(0.4f).epsilon(1e-3));
+    vr::TrackToLocal(p[0], l.scale, side, r);
+    const float half[3] = {r[0] - s[0], r[1] - s[1], r[2] - s[2]};
+    CHECK(freecam::Len3(half) == doctest::Approx(9.8f / 30).epsilon(1e-3));
+    // tilted: the far end raised
+    l.pitch = 20;
+    REQUIRE(vr::PlaceTracks(t, head, l, p) == 1);
+    vr::TrackToLocal(p[0], l.scale, ahead, f);
+    CHECK(f[1] - 1.3f == doctest::Approx(100.0f / 30 * std::sin(20 * kPi / 180)).epsilon(1e-3));
+    l.pitch = 0;
+    REQUIRE(vr::PlaceTracks(t, head, l, p) == 1);
+    // each eye sees the track's points where they are in LOCAL space, from
+    // wherever it is and whichever way it looks
+    const vr::Fov fov{-0.9f, 0.8f, 0.85f, -0.95f};
+    for (float lean : {0.0f, 0.2f}) {
+        for (int e = 0; e < 2; e++) {
+            vr::XrPose eye = head;
+            eye.p[0] += (e ? 0.032f : -0.032f) + lean;
+            eye.p[2] -= lean;
+            const float look[4] = {std::sin(-0.15f), 0, 0, std::cos(-0.15f)};  // down
+            vr::QuatMul(head.q, look, eye.q);
+            const vr::TrackView v = vr::TrackEye(eye, fov, p[0], l.scale);
+            CHECK(v.cam == 0x25492B68);
+            CAPTURE(lean);
+            CAPTURE(e);
+            CheckSeen(p[0], v, eye, fov, origin);
+            CheckSeen(p[0], v, eye, fov, ahead);
+            CheckSeen(p[0], v, eye, fov, side);
+        }
+    }
+    // off: none
+    l.on = false;
+    CHECK(vr::PlaceTracks(t, head, l, p) == 0);
+}
+
+TEST_CASE("two players' tracks side by side and parallel, four parts' turned apart") {
+    const std::shared_ptr<Geometry> track = Rect(-9.8f, 9.8f, -50, 270);
+    const float e2[3] = {0, -104.82f, 26.39f};
+    std::vector<SongCam> two = {
+        {11, TrackVp(e2, 0, 7, TrackProj(28.82f, 40.6f, 258, -0.2826f)), {0, 0, 998, 720}, {0, 1},
+         5, track},
+        {12, TrackVp(e2, 0, 7, TrackProj(28.82f, 40.6f, 258, 0.2826f)), {281, 0, 998, 720},
+         {0, 1}, 5, track}};
+    HudFadePause(two, false);
+    const vr::TrackCams t2 = vr::TrackCamerasOf(SongFrame(two));
+    REQUIRE(t2.count == 2);
+    const vr::XrPose head = StandingHead();
+    vr::TrackLayout l;
+    vr::TrackPlace p[vr::kMaxTrackCams];
+    REQUIRE(vr::PlaceTracks(t2, head, l, p) == 2);
+    const float origin[3] = {0, 0, 0}, ahead[3] = {0, 100, 0};
+    float s[2][3], f[2][3];
+    for (int i = 0; i < 2; i++) {
+        vr::TrackToLocal(p[i], l.scale, origin, s[i]);
+        vr::TrackToLocal(p[i], l.scale, ahead, f[i]);
+    }
+    // where the picture has them: the shift (viewport and projection, 0.565
+    // of a viewport's half) through tan(14.41 degrees), at the strikeline's
+    // 107.3 units
+    const float across = 0.5652f * std::tan(14.41f * kPi / 180) * 107.26f / 30;
+    CHECK(s[0][0] == doctest::Approx(-across).epsilon(0.01));
+    CHECK(s[1][0] == doctest::Approx(across).epsilon(0.01));
+    CHECK(s[0][2] == doctest::Approx(-1.2f).epsilon(1e-3));
+    CHECK(s[1][2] == doctest::Approx(-1.2f).epsilon(1e-3));
+    // parallel
+    CHECK(f[0][0] - s[0][0] == doctest::Approx(0).epsilon(1e-3));
+    CHECK(f[1][0] - s[1][0] == doctest::Approx(0).epsilon(1e-3));
+    // four parts: the side cameras' tracks off to the sides, turned outward
+    // as their cameras are turned in
+    const float a4[3] = {2.63f, -122.14f, 29.54f}, b4[3] = {-2.71f, -122.35f, 28.71f},
+                c4[3] = {0, -123.01f, 29.69f};
+    const Mat4 p4 = TrackProj(36.56f, 50, 305);
+    std::vector<SongCam> four = {
+        {21, TrackVp(a4, -10, 6, p4), {0, 0, 1280, 720}, {0, 1}, 5, track},
+        {22, TrackVp(b4, 10, 6, p4), {0, 0, 1280, 720}, {0, 1}, 5, track},
+        {23, TrackVp(c4, 0, 6, p4), {0, 0, 1280, 720}, {0, 1}, 5, track}};
+    HudFadePause(four, false);
+    const vr::TrackCams t4 = vr::TrackCamerasOf(SongFrame(four));
+    REQUIRE(vr::PlaceTracks(t4, head, l, p) == 3);
+    float s4[3][3], f4[3][3];
+    for (int i = 0; i < 3; i++) {
+        vr::TrackToLocal(p[i], l.scale, origin, s4[i]);
+        vr::TrackToLocal(p[i], l.scale, ahead, f4[i]);
+    }
+    // the middle one (the reference, the least turned) straight ahead
+    CheckVec(s4[2], 0, 1.3f, -1.2f, 1e-3f);
+    CHECK(s4[0][0] < -0.5f);  // the camera turned right sees its track left
+    CHECK(s4[1][0] > 0.5f);
+    CHECK(s4[0][0] == doctest::Approx(-s4[1][0]).epsilon(0.05));
+    CHECK(f4[0][0] - s4[0][0] < 0);  // running out to the left
+    CHECK(f4[1][0] - s4[1][0] > 0);
+}
+
+TEST_CASE("RePose: the track's draws seen from the eye, folded ones too, cut below the picture") {
+    const float e1[3] = {0, -91.82f, 22.6f};
+    const Mat4 vp = TrackVp(e1, 0, 7, TrackProj(36.56f, 30, 224));
+    std::vector<SongCam> one = {
+        {0x25492B68, vp, {0, 0, 998, 720}, {0, 1}, 2, Rect(-9.8f, 9.8f, -50, 270)}};
+    HudFadePause(one, false);
+    FrameCapture f = SongFrame(one);
+    const uint32_t first = f.post_boundary + 1;
+    // a gem: its place folded into its matrix (a translation 40 along)
+    Mat4 move{};
+    for (int i = 0; i < 4; i++) move.m[i][i] = 1;
+    move.m[3][1] = 40;
+    f.draws[first + 1].view_proj = freecam::Mul(move, vp);
+    f.draws[first + 1].geom = Rect(-1, 1, -1, 1);
+    const vr::TrackCams t = vr::TrackCamerasOf(f);
+    REQUIRE(t.count == 1);
+    vr::TrackPlace p[vr::kMaxTrackCams];
+    REQUIRE(vr::PlaceTracks(t, StandingHead(), vr::TrackLayout{}, p) == 1);
+    vr::Eye eye;
+    eye.fov = {-0.9f, 0.9f, 0.9f, -0.9f};
+    eye.track_count = 1;
+    eye.tracks[0] = vr::TrackEye(StandingHead(), eye.fov, p[0], 30);
+    FrameCapture out;
+    const vr::RePoseStats st = vr::RePose(f, eye, out);
+    CHECK(st.track_draws == 2);
+    CHECK(st.track_unmoved == 0);
+    CHECK(std::memcmp(&out.draws[first].view_proj, &eye.tracks[0].view_proj, sizeof(Mat4)) == 0);
+    // the gem keeps its 40 along: its origin is the track's (0, 40, 0)
+    const float gem[3] = {0, 0, 0}, at40[3] = {0, 40, 0};
+    float a[4], b[4];
+    freecam::Transform(gem, out.draws[first + 1].view_proj, a);
+    freecam::Transform(at40, eye.tracks[0].view_proj, b);
+    for (int k = 0; k < 4; k++) CHECK(a[k] == doctest::Approx(b[k]).epsilon(1e-3));
+    // its camera the whole picture
+    const CameraView* cv = CameraOf(out, 0x25492B68);
+    REQUIRE(cv);
+    CHECK(cv->viewport[0] == 0);
+    CHECK(cv->viewport[2] == 1280);
+    // the surface cut where the game's picture ends below (clip y = -w):
+    // none of it below, some of it new
+    const Geometry& g = *out.draws[first].geom;
+    CHECK(g.verts.size() > 4);
+    float lowest = 1e9f;
+    for (size_t i = 0; i < g.indices.size(); i++) {
+        float c[4];
+        freecam::Transform(g.verts[g.indices[i]].pos, vp, c);
+        lowest = std::fmin(lowest, c[1] / c[3]);
+    }
+    CHECK(lowest == doctest::Approx(-1).epsilon(1e-3));
+    // the source untouched
+    CHECK(f.draws[first].geom->verts.size() == 4);
+    CHECK(CameraOf(f, 0x25492B68)->viewport[2] == 998);
+}
+
+TEST_CASE("a mesh cut at a plane keeps what's above it, its corners between the old") {
+    const auto g = Rect(0, 10, 0, 10);  // two triangles
+    // keep y >= 4: y - 4 >= 0
+    const float plane[4] = {0, 1, 0, -4};
+    const auto cut = vr::CutAtPlane(g, plane);
+    REQUIRE(cut != g);
+    float area = 0, lo = 1e9f;
+    for (size_t i = 0; i + 2 < cut->indices.size(); i += 3) {
+        const float* a = cut->verts[cut->indices[i]].pos;
+        const float* b = cut->verts[cut->indices[i + 1]].pos;
+        const float* c = cut->verts[cut->indices[i + 2]].pos;
+        area += std::fabs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2;
+        lo = std::fmin(lo, std::fmin(a[1], std::fmin(b[1], c[1])));
+    }
+    CHECK(area == doctest::Approx(60));
+    CHECK(lo == doctest::Approx(4));
+    // the same cut again is the one made (kept per thread)
+    CHECK(vr::CutAtPlane(g, plane) == cut);
+    // nothing below: the mesh itself
+    const float under[4] = {0, 1, 0, 1};
+    CHECK(vr::CutAtPlane(g, under) == g);
+}
+
+TEST_CASE("the track's cameras held still until one moves past the threshold") {
+    vr::TrackHold hold;
+    vr::TrackCams t = OneTrack();
+    int moved = 0;
+    vr::TrackCams h = hold.Hold(t, moved);
+    CHECK(moved == 0);
+    CheckVec(h.cams[0].pose.eye, 0, -91.82f, 22.6f, 1e-3f);
+    // a shake: held
+    vr::TrackCams shaken = t;
+    shaken.cams[0].pose.eye[2] += 0.5f;
+    h = hold.Hold(shaken, moved);
+    CHECK(moved == 0);
+    CHECK(h.cams[0].pose.eye[2] == doctest::Approx(22.6f));
+    // its matrix is still the frame's own, to match its draws
+    CHECK(std::memcmp(&h.cams[0].view_proj, &shaken.cams[0].view_proj, sizeof(Mat4)) == 0);
+    // moved further: taken again
+    shaken.cams[0].pose.eye[2] += 2;
+    h = hold.Hold(shaken, moved);
+    CHECK(moved == 1);
+    CHECK(h.cams[0].pose.eye[2] == doctest::Approx(25.1f));
+    // none (the song's over), then a song again: taken afresh
+    h = hold.Hold(vr::TrackCams{}, moved);
+    CHECK(h.count == 0);
+    h = hold.Hold(t, moved);
+    CHECK(moved == 0);
+    CHECK(h.cams[0].pose.eye[2] == doctest::Approx(22.6f));
+}
+
+TEST_CASE("the frame's tracks: in songs with a world, each eye's view of them") {
+    const float e1[3] = {0, -91.82f, 22.6f};
+    std::vector<SongCam> one = {{0x25492B68, TrackVp(e1, 0, 7, TrackProj(36.56f, 30, 224)),
+                                 {0, 0, 1280, 720}, {0, 1}, 3, Rect(-9.8f, 9.8f, -50, 270)}};
+    HudFadePause(one, false);
+    const FrameCapture f = SongFrame(one);
+    vr::FrameInputs in;
+    in.views[0].p[0] = -0.032f;
+    in.views[1].p[0] = 0.032f;
+    for (int e = 0; e < 2; e++) {
+        in.views[e].p[1] = 1.6f;
+        in.fov[e] = {-0.9f, 0.8f, 0.85f, -0.95f};
+    }
+    in.head = StandingHead();
+    in.hud_boundary = vr::HudBoundary(f);
+    REQUIRE(in.hud_boundary == f.post_boundary);
+    const WorldCamera wc = WorldCameraOf(f);
+    in.camera = freecam::Decompose(wc.view_proj, in.game, in.proj);
+    REQUIRE(in.camera);
+    in.tracks = vr::TrackCamerasOf(f);
+    in.in_song = true;
+    vr::FrameLayout l = vr::ResolveFrame(vr::Viewpoint{}, in);
+    CHECK(l.window);
+    REQUIRE(l.track_count == 1);
+    for (int e = 0; e < 2; e++) {
+        REQUIRE(l.eyes[e].track_count == 1);
+        CHECK(l.eyes[e].tracks[0].cam == 0x25492B68);
+    }
+    // the eyes 64 mm apart in the track's units: 1.92
+    const float* a = l.eyes[0].tracks[0].pose.eye;
+    const float* b = l.eyes[1].tracks[0].pose.eye;
+    const float d[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+    CHECK(freecam::Len3(d) == doctest::Approx(0.064f * 30).epsilon(1e-3));
+    uint32_t cams[RasterOptions::kEyeCams];
+    vr::EyeCamsOf(l, cams, RasterOptions::kEyeCams);
+    CHECK(cams[0] == 0x25492B68);
+    CHECK(cams[1] == 0);
+    // from the anchor too (a viewpoint not made yet)
+    vr::Viewpoint fixed;
+    fixed.window = false;
+    CHECK(vr::ResolveFrame(fixed, in).track_count == 1);
+    // menus, and frames the eyes can't see: none
+    in.in_song = false;
+    CHECK(vr::ResolveFrame(vr::Viewpoint{}, in).track_count == 0);
+    in.in_song = true;
+    in.hud_boundary = 0;
+    l = vr::ResolveFrame(vr::Viewpoint{}, in);
+    CHECK(l.track_count == 0);
+    CHECK(l.eyes[0].track_count == 0);
 }
 
 TEST_CASE("a cut's fade: black at the cut, back over the fade's length") {

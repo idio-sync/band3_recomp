@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 
 #include <fmt/format.h>
@@ -35,7 +36,8 @@
 
 namespace band3::render::xr {
 
-vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_song) {
+vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_song,
+                          vr::TrackHold* hold) {
     vr::Viewpoint vp;
     const std::string mode = REXCVAR_GET(vr_viewpoint);
     if (!vr::ParseViewMode(mode, vp.mode)) vp.mode = vr::ViewMode::kGameCamera;
@@ -68,6 +70,27 @@ vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_s
     in.window_width_deg = float(REXCVAR_GET(vr_window_width));
     in.dim = float(REXCVAR_GET(vr_window_dim));
     in.world_scale = float(REXCVAR_GET(vr_world_scale));
+    in.track.on = REXCVAR_GET(vr_track_3d);
+    in.track.forward = float(REXCVAR_GET(vr_track_forward));
+    in.track.down = float(REXCVAR_GET(vr_track_down));
+    in.track.pitch = float(REXCVAR_GET(vr_track_pitch));
+    in.track.scale = float(REXCVAR_GET(vr_track_scale));
+    if (in_song && in.track.on) in.tracks = vr::TrackCamerasOf(fc);
+    // held from the first frame that has them until there are none (or
+    // another count of them)
+    if (hold) {
+        int moved = 0;
+        in.tracks = hold->Hold(in.tracks, moved);
+        // at most once a second
+        static std::atomic<int64_t> logged{0};
+        const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count();
+        if (moved && logged.exchange(now) != now)
+            REXLOG_INFO("vr: {} of the {} track cameras moved more than {} units or {} "
+                        "degrees; the track is placed again",
+                        moved, in.tracks.count, vr::kTrackMoved, vr::kTrackTurned);
+    }
     return vr::ResolveFrame(vp, in);
 }
 

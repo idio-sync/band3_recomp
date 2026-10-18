@@ -61,23 +61,40 @@ inline Mat4 World(const Pose& p) {
 }
 
 // Splits vp into the camera's pose and its projection (proj = View(pose)^-1 * vp).
-// False if it isn't a perspective camera's (forward not a unit vector).
+// False if it isn't a perspective camera's (forward not a unit vector). An
+// off-centre projection (a lens shift: two players' track cameras, each
+// shifted toward its half of the picture) puts some of the forward axis in
+// columns 0 and 1 (clip x = sx x + ox y); that part is taken out to leave
+// the right and up axes, and stays in proj (m[1][0], m[1][1]).
 inline bool Decompose(const Mat4& vp, Pose& pose, Mat4& proj) {
-    float sx = 0, sy = 0, fl = 0;
+    float fl = 0;
+    for (int r = 0; r < 3; r++) fl += vp.m[r][3] * vp.m[r][3];
+    fl = std::sqrt(fl);
+    if (std::fabs(fl - 1) > 0.01f) return false;
+    for (int r = 0; r < 3; r++) pose.fwd[r] = vp.m[r][3] / fl;
+    // the shifts: columns 0 and 1 along the forward axis
+    float ox = 0, oy = 0;
     for (int r = 0; r < 3; r++) {
-        sx += vp.m[r][0] * vp.m[r][0];
-        sy += vp.m[r][1] * vp.m[r][1];
-        fl += vp.m[r][3] * vp.m[r][3];
+        ox += vp.m[r][0] * pose.fwd[r];
+        oy += vp.m[r][1] * pose.fwd[r];
     }
-    sx = std::sqrt(sx), sy = std::sqrt(sy), fl = std::sqrt(fl);
-    if (sx <= 0 || sy <= 0 || std::fabs(fl - 1) > 0.01f) return false;
+    float sx = 0, sy = 0;
     for (int r = 0; r < 3; r++) {
-        pose.right[r] = vp.m[r][0] / sx;
-        pose.up[r] = vp.m[r][1] / sy;
-        pose.fwd[r] = vp.m[r][3] / fl;
+        pose.right[r] = vp.m[r][0] - ox * pose.fwd[r];
+        pose.up[r] = vp.m[r][1] - oy * pose.fwd[r];
+        sx += pose.right[r] * pose.right[r];
+        sy += pose.up[r] * pose.up[r];
     }
-    // the translation row: vp.m[3][j] = -eye . axis_j (times the scale)
-    const float ex = -vp.m[3][0] / sx, ey = -vp.m[3][3] / fl, ez = -vp.m[3][1] / sy;
+    sx = std::sqrt(sx), sy = std::sqrt(sy);
+    if (!(sx > 0) || !(sy > 0)) return false;
+    for (int r = 0; r < 3; r++) {
+        pose.right[r] /= sx;
+        pose.up[r] /= sy;
+    }
+    // the translation row: vp.m[3][j] = -(eye . axis_j) times the scale,
+    // less the shift times eye . forward
+    const float ey = -vp.m[3][3] / fl;
+    const float ex = -(vp.m[3][0] + ox * ey) / sx, ez = -(vp.m[3][1] + oy * ey) / sy;
     for (int c = 0; c < 3; c++) pose.eye[c] = ex * pose.right[c] + ey * pose.fwd[c] + ez * pose.up[c];
     proj = Mul(World(pose), vp);
     return true;

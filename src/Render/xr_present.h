@@ -203,9 +203,12 @@ class Session {
 
 // The frame's layout for `fc` seen with `f`'s views: vr_pose.h's ResolveFrame
 // with the settings (vr_viewpoint, vr_hud*, vr_window_width, vr_window_dim, vr_world_scale,
-// vr_anchor) and `in_song` (native_view.h: InSong and SongScreen), its fade 0. A
-// vr_viewpoint not made yet is logged once and seen from vr_anchor. Any
-// thread; every platform.
-vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_song);
+// vr_anchor, vr_track_*) and `in_song` (native_view.h: InSong and SongScreen), its fade 0. A
+// vr_viewpoint not made yet is logged once and seen from vr_anchor. In songs
+// with vr_track_3d, the capture's track cameras (TrackCamerasOf), their poses
+// held by `hold` if given (a camera that moves anyway is logged, at most once
+// a second). Any thread; every platform.
+vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_song,
+                          vr::TrackHold* hold = nullptr);
 
 }  // namespace band3::render::xr

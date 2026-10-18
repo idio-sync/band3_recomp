@@ -23,6 +23,8 @@
 //                               [--scale <f>] [--shadow-scale <f>] [--msaa 1|2|4]
 //                               [--overlay-only | --split-check] [--hud-from <draw>]
 //                               [--track-eyes]
+//                               [--track-at x,y,z [--track-layout f,d,p,s]
+//                                [--look-down <deg>] [--track-far <y>]]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
 // and inside the frustum with the matrix as captured and transposed (the back
@@ -173,6 +175,17 @@
 // strikeline, is); with --track-eyes, --overlay-only and --split-check give
 // their draws to the eyes' picture (RasterOptions::eye_cams), as VR does in
 // songs, so the panel loses the track and the eyes' picture has it.
+// --track-at x,y,z draws VR's two eyes in a song without a headset
+// (vr_pose.h's ResolveFrame): a stand-in head 1.6 m up at LOCAL's origin
+// facing -z, moved x,y,z metres (lean to see the parallax), the eyes 64 mm
+// apart, 50 degrees each way (--size, else 800x800), looking --look-down
+// degrees down; the venue through the game camera's window and the tracks in
+// front (--track-layout forward,down,pitch,scale: the vr_track_* settings,
+// 1.2,0.3,0,30). Into out.L.png and out.R.png, the HUD panel without the
+// tracks into out.hud.png, and it prints where each track's strikeline,
+// edges, near end and the point --track-far units along it (106: where the
+// game's picture shows the track fade out) are from the head; --pick names
+// the draw at that pixel of the left eye.
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
@@ -671,6 +684,19 @@ void PrintPassSummary(const FrameCapture& fc) {
                     std::atan2(-t.pose.fwd[0], t.pose.fwd[1]) * deg, fov.hfov * deg,
                     fov.vfov * deg, a != 0 ? -b / a : 0.0f, a != 1 ? b / (1 - a) : 0.0f,
                     -freecam::Dot3(t.pose.eye, t.pose.fwd));
+        // its draws drawn with another matrix than its first's
+        std::string other;
+        for (size_t d = t.first_draw; d < fc.draws.size(); d++) {
+            const DrawItem& it = fc.draws[d];
+            if (it.cam != t.cam || it.target || it.rect_shader >= 0) continue;
+            if (std::memcmp(&it.view_proj, &t.view_proj, sizeof(Mat4)) == 0) continue;
+            float most = 0;
+            for (int r = 0; r < 4; r++)
+                for (int c = 0; c < 4; c++)
+                    most = std::max(most, std::fabs(it.view_proj.m[r][c] - t.view_proj.m[r][c]));
+            other += " #" + std::to_string(d) + " (" + std::to_string(most) + ")";
+        }
+        if (!other.empty()) std::printf("    with another matrix (off by up to):%s\n", other.c_str());
     }
 }
 
@@ -1195,6 +1221,10 @@ int main(int argc, char** argv) {
     float scale = 0;  // --scale's, 0 none
     bool free_cam = false, world_only = false;
     bool overlay_only = false, split_check = false, track_eyes = false;
+    // --track-at's head, metres from the stand-in's; --track-layout's; --look-down's degrees
+    bool track_at = false;
+    float track_head[3] = {}, look_down = 0, track_far = 106;
+    vr::TrackLayout track_layout;
     long hud_from = -1;  // --hud-from's, -1 vr::HudBoundary's
     float free_eye[3] = {}, free_at[3] = {}, free_wider = 1;
     for (int i = 3; i < argc; i++) {
@@ -1313,6 +1343,14 @@ int main(int argc, char** argv) {
         else if (a == "--overlay-only") overlay_only = true;
         else if (a == "--split-check") overlay_only = split_check = true;
         else if (a == "--track-eyes") track_eyes = true;
+        else if (a == "--track-at" && i + 1 < argc)
+            track_at = std::sscanf(argv[++i], "%f,%f,%f", &track_head[0], &track_head[1],
+                                   &track_head[2]) == 3;
+        else if (a == "--track-layout" && i + 1 < argc)
+            std::sscanf(argv[++i], "%f,%f,%f,%f", &track_layout.forward, &track_layout.down,
+                        &track_layout.pitch, &track_layout.scale);
+        else if (a == "--look-down" && i + 1 < argc) look_down = std::strtof(argv[++i], nullptr);
+        else if (a == "--track-far" && i + 1 < argc) track_far = std::strtof(argv[++i], nullptr);
         else if (a == "--hud-from" && i + 1 < argc) hud_from = std::strtol(argv[++i], nullptr, 0);
     }
     if (free_cam || world_only) ApplyFreeCam(*fc, free_cam, free_eye, free_at, free_wider, world_only);
@@ -1379,7 +1417,7 @@ int main(int argc, char** argv) {
     }
     PrintShadeSummary(*fc);
 
-    if (pick_x >= 0 && pick_y >= 0) {
+    if (pick_x >= 0 && pick_y >= 0 && !track_at) {
         if (uint32_t(pick_x) >= o.width || uint32_t(pick_y) >= o.height) {
             std::fprintf(stderr, "%d,%d is outside %ux%u\n", pick_x, pick_y, o.width, o.height);
             return 1;
@@ -1593,6 +1631,110 @@ int main(int argc, char** argv) {
                     argv[2], alpha_path.c_str(), dump_rt, w, h,
                     100.0 * double(opaque) / double(px.size()), rs.passes, rs.draws,
                     rs.rt_missing, rs.ms);
+        return 0;
+    }
+
+    if (track_at) {
+        // VR's eyes in a song (vr_pose.h's ResolveFrame), from a stand-in
+        // head standing at LOCAL's origin facing -z, moved by --track-at:
+        // the venue through the game camera's window and the tracks in
+        // front, each eye 32 mm to its side, 50 degrees each way
+        if (!sized) o.width = o.height = 800;
+        vr::FrameInputs in;
+        in.head.p[1] = 1.6f;
+        const float down = -look_down * 3.14159265f / 360;
+        for (int e = 0; e < 2; e++) {
+            in.views[e] = in.head;
+            in.views[e].p[0] += e ? 0.032f : -0.032f;
+            for (int k = 0; k < 3; k++) in.views[e].p[k] += track_head[k];
+            in.views[e].q[0] = std::sin(down);
+            in.views[e].q[3] = std::cos(down);
+            in.fov[e] = {-0.8727f, 0.8727f, 0.8727f, -0.8727f};
+        }
+        in.hud_boundary = vr::HudBoundary(*fc);
+        const WorldCamera wc = WorldCameraOf(*fc);
+        in.camera = wc.valid && freecam::Decompose(wc.view_proj, in.game, in.proj);
+        in.in_song = true;
+        in.dim = 1;
+        in.track = track_layout;
+        in.tracks = vr::TrackCamerasOf(*fc);
+        const vr::FrameLayout l = vr::ResolveFrame(vr::Viewpoint{}, in);
+        std::printf("track at: head %.2f,%.2f,%.2f m, looking %.0f degrees down; %d tracks, "
+                    "forward %.2f m, down %.2f m, pitch %.1f degrees, %.1f units a metre; "
+                    "window %s\n",
+                    track_head[0], track_head[1], track_head[2], look_down, l.track_count,
+                    track_layout.forward, track_layout.down, track_layout.pitch,
+                    track_layout.scale, l.window ? "yes" : "no");
+        // each track's strikeline (its origin), edges, near end (where the
+        // game's picture cuts it below: clip y = -w on its middle line) and
+        // a point `--track-far` units along it, from the head
+        for (int t = 0; t < l.track_count; t++) {
+            const vr::TrackPlace& p = l.tracks[t];
+            const Mat4& vp = p.cam.view_proj;
+            const float near_y = -(vp.m[3][1] + vp.m[3][3]) / (vp.m[1][1] + vp.m[1][3]);
+            const float pts[5][3] = {
+                {0, 0, 0}, {-9.8f, 0, 0}, {9.8f, 0, 0}, {0, near_y, 0}, {0, track_far, 0}};
+            float loc[5][3];
+            for (int k = 0; k < 5; k++) vr::TrackToLocal(p, track_layout.scale, pts[k], loc[k]);
+            auto from_head = [&](const float q[3], float out[3]) {
+                out[0] = -(q[2] - in.head.p[2]);  // ahead
+                out[1] = in.head.p[1] - q[1];     // below
+                out[2] = q[0] - in.head.p[0];     // across
+            };
+            float s[3], n[3], f[3];
+            from_head(loc[0], s);
+            from_head(loc[3], n);
+            from_head(loc[4], f);
+            const float w[3] = {loc[2][0] - loc[1][0], loc[2][1] - loc[1][1], loc[2][2] - loc[1][2]};
+            std::printf("  track %08X: strikeline %.2f m ahead, %.2f below, %.2f across (%.1f "
+                        "degrees down, %.2f m away), %.2f m wide (%.1f degrees); near end (y "
+                        "%.0f) %.2f m ahead, %.2f below; y %.0f %.2f m ahead, %.2f below, %.2f "
+                        "across (%.1f degrees down)\n",
+                        p.cam.cam, s[0], s[1], s[2], std::atan2(s[1], s[0]) * 57.29578f,
+                        freecam::Len3(s), freecam::Len3(w),
+                        2 * std::atan2(freecam::Len3(w) / 2, std::sqrt(s[0] * s[0] + s[1] * s[1])) *
+                            57.29578f,
+                        near_y, n[0], n[1], track_far, f[0], f[1], f[2],
+                        std::atan2(f[1], f[0]) * 57.29578f);
+        }
+        RasterOptions eo = o;
+        eo.velocity = false;
+        eo.post_only = post::kPostXfm | post::kPostBloom | post::kPostGlare;
+        eo.msaa = 1;
+        eo.part = BackBufferPart::kEyes;
+        eo.hud_from = l.hud_boundary;
+        vr::EyeCamsOf(l, eo.eye_cams, RasterOptions::kEyeCams);
+        const std::string base = std::string(argv[2]).substr(0, std::strlen(argv[2]) - 4);
+        for (int e = 0; e < 2; e++) {
+            FrameCapture ec;
+            const vr::RePoseStats rp = vr::RePose(*fc, l.eyes[e], ec);
+            std::vector<uint32_t> px;
+            std::vector<int32_t> ids;
+            const RasterStats rs = Rasterize(ec, eo, px, &ids);
+            // --pick: the draw that last wrote that pixel of the left eye
+            if (e == 0 && pick_x >= 0 && pick_y >= 0 && uint32_t(pick_x) < eo.width &&
+                uint32_t(pick_y) < eo.height) {
+                const int32_t id = ids[size_t(pick_y) * eo.width + size_t(pick_x)];
+                std::printf("pick %d,%d in the left eye: draw %d (camera %08X), colour %08X\n",
+                            pick_x, pick_y, id,
+                            id >= 0 ? ec.draws[size_t(id)].cam : 0u,
+                            px[size_t(pick_y) * eo.width + size_t(pick_x)]);
+            }
+            const std::string path = base + (e ? ".R.png" : ".L.png");
+            WritePng(path, px, eo.width, eo.height);
+            std::printf("%s: %u world draws and %u track draws moved (%u of the tracks' left), "
+                        "%u draws, %.1f ms\n",
+                        path.c_str(), rp.draws_moved, rp.track_draws, rp.track_unmoved, rs.draws,
+                        rs.ms);
+        }
+        // the panel: the HUD without the tracks, premultiplied over black
+        RasterOptions ho = eo;
+        ho.part = BackBufferPart::kHud;
+        ho.msaa = o.msaa;
+        std::vector<uint32_t> hud;
+        Rasterize(*fc, ho, hud);
+        for (uint32_t& p : hud) p |= 0xff000000u;
+        WritePng(base + ".hud.png", hud, ho.width, ho.height);
         return 0;
     }
 
