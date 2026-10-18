@@ -952,6 +952,13 @@ REXCVAR_DEFINE_DOUBLE(vr_window_dim, 1.0, "Band3/Advanced/Native renderer",
     .range(0.0, 1.0)
     .debug_only();
 
+REXCVAR_DEFINE_BOOL(vr_window_quads, false, "Band3/Advanced/Native renderer",
+    "With vr: the dark around the game camera's window, and the fade at each cut, as the "
+    "headset compositor's layers over the eyes' picture, as before the 3D track, to compare. "
+    "Off, the eyes draw them under the track, which can then reach past the window's edge and "
+    "doesn't fade at cuts. Takes effect at once")
+    .debug_only();
+
 REXCVAR_DEFINE_INT32(vr_cut_fade_ms, 120, "Band3/Advanced/Native renderer",
     "With vr: at each camera cut, and as the window comes and goes, the headset's picture goes "
     "black and fades back in over this many milliseconds (the panel doesn't fade); 0 cuts "

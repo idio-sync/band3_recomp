@@ -1343,7 +1343,9 @@ class Renderer {
     // ahead, kept buffers, motion blur, DOF or the spotlights' haze. In
     // songs the eyes draw the tracks too (vr_track_3d: RasterOptions::
     // eye_cams), each from where it is in front of the head, held still
-    // through the song (vr_track_hold_). The
+    // through the song (vr_track_hold_), over the eyes' own dark around the
+    // window and the cut's fade (vr_pose.h's Eye::dark; unless
+    // vr_window_quads). The
     // left eye goes into one of the window's slots when one is free and is
     // published as the window's picture; else, and the right always, into
     // the eye slots. The HUD's draws go onto the HUD panel (vr_hud), the
@@ -1420,6 +1422,10 @@ class Renderer {
                                       double(REXCVAR_GET(vr_cut_fade_ms)));
             vr_fading_ = layout.fade > 0;
         }
+        // drawn by the eyes under the tracks, which don't cut (Present then
+        // leaves the eyes as they are)
+        if (layout.fade_drawn)
+            for (vr::Eye& e : layout.eyes) e.fade = layout.fade;
         RasterOptions eo = o;
         eo.width = xs.Width();
         eo.height = xs.Height();

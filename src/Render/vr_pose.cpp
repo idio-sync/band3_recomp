@@ -196,6 +196,113 @@ void CutBelowPicture(DrawItem& d, const ShadeState* s) {
     d.geom = CutAtPlane(d.geom, plane);
 }
 
+// a quad's four corners and two triangles onto `g`
+void AddQuad(Geometry& g, const float corners[4][3]) {
+    const uint16_t base = uint16_t(g.verts.size());
+    for (int k = 0; k < 4; k++) {
+        Vertex v{};
+        for (int c = 0; c < 3; c++) v.pos[c] = corners[k][c];
+        v.color = 0xffffffffu;
+        g.verts.push_back(v);
+    }
+    g.indices.insert(g.indices.end(), {base, uint16_t(base + 1), uint16_t(base + 2), base,
+                                        uint16_t(base + 2), uint16_t(base + 3)});
+}
+
+// a black draw of `g` through `vp` at `alpha`, blended, without depth, by
+// kEyeDarkCam
+DrawItem DarkDraw(std::shared_ptr<const Geometry> g, const Mat4& vp, float alpha) {
+    DrawItem d{};
+    d.geom = std::move(g);
+    for (int i = 0; i < 4; i++) d.world.m[i][i] = 1;
+    d.view_proj = vp;
+    d.color[3] = alpha;
+    d.blend = 3;   // SrcAlpha
+    d.z_mode = 0;  // no depth test or write
+    d.prelit = true;
+    d.cam = kEyeDarkCam;
+    return d;
+}
+
+// The eye's own dark (Eye::fade, Eye::dark) into `out`, after the resolve
+// and before its first track draw (or last): the fade a quad over the whole
+// picture in clip space; the dark's quads in LOCAL space (metres, as
+// Milo's axes: XrToMilo) seen from the eye's XR pose with its field of view
+void AddDark(const Eye& eye, FrameCapture& out) {
+    if (out.post_boundary == FrameCapture::kNoPost || out.post_boundary > out.draws.size()) return;
+    std::vector<DrawItem> add;
+    if (eye.fade > 0) {
+        static const std::shared_ptr<const Geometry> picture = [] {
+            auto g = std::make_shared<Geometry>();
+            const float c[4][3] = {{-1, 1, 0.5f}, {1, 1, 0.5f}, {1, -1, 0.5f}, {-1, -1, 0.5f}};
+            AddQuad(*g, c);
+            return g;
+        }();
+        Mat4 identity{};
+        for (int i = 0; i < 4; i++) identity.m[i][i] = 1;
+        add.push_back(DarkDraw(picture, identity, std::fmin(eye.fade, 1.0f)));
+    }
+    if (eye.dark_count > 0 && eye.dark_alpha > 0) {
+        // both eyes see the same quads: made once
+        thread_local float last[kFrameQuads][4][3] = {};
+        thread_local int last_count = 0;
+        thread_local std::shared_ptr<const Geometry> quads;
+        if (!quads || last_count != eye.dark_count ||
+            std::memcmp(last, eye.dark, sizeof(last)) != 0) {
+            auto g = std::make_shared<Geometry>();
+            for (int q = 0; q < eye.dark_count && q < kFrameQuads; q++) {
+                float milo[4][3];
+                for (int k = 0; k < 4; k++) XrToMilo(eye.dark[q][k], 1, milo[k]);
+                AddQuad(*g, milo);
+            }
+            quads = g;
+            std::memcpy(last, eye.dark, sizeof(last));
+            last_count = eye.dark_count;
+        }
+        // metres: the eye's pose at 1/kUnitsPerMetre of the venue's scale;
+        // a centimetre to a kilometre
+        const freecam::Pose pose = EyePose(eye.xr, Anchor{}, 1 / kUnitsPerMetre);
+        Mat4 proj{};
+        const float n = 0.01f, f = 1000;
+        proj.m[1][2] = f / (f - n);
+        proj.m[3][2] = -n * f / (f - n);
+        proj.m[1][3] = 1;
+        add.push_back(DarkDraw(quads, freecam::Mul(freecam::View(pose), EyeProjection(proj, eye.fov)),
+                               eye.dark_alpha));
+    }
+    if (add.empty()) return;
+    // before the first track draw, after the resolve
+    size_t at = out.draws.size();
+    for (int t = 0; t < eye.track_count; t++)
+        for (size_t d = out.post_boundary; d < at; d++)
+            if (out.draws[d].cam == eye.tracks[t].cam && out.draws[d].target == 0 &&
+                out.draws[d].rect_shader < 0) {
+                at = d;
+                break;
+            }
+    out.draws.insert(out.draws.begin() + std::ptrdiff_t(at), add.begin(), add.end());
+    // Passes after them move on; the back buffer's run they're in (or end)
+    // takes them in, else one of their own
+    const uint32_t n = uint32_t(add.size());
+    bool taken = out.passes.empty();
+    for (Pass& p : out.passes) {
+        if (p.first_draw >= at && !(p.tex_obj == 0 && p.first_draw == at && !taken)) {
+            p.first_draw += n;
+        } else if (p.tex_obj == 0 && !taken && p.first_draw + p.draw_count >= at) {
+            p.draw_count += n;
+            taken = true;
+        }
+    }
+    if (!taken) {
+        Pass run{};
+        run.first_draw = uint32_t(at);
+        run.draw_count = n;
+        auto after = std::find_if(out.passes.begin(), out.passes.end(),
+                                  [&](const Pass& p) { return p.first_draw > at; });
+        out.passes.insert(after, run);
+    }
+}
+
 }  // namespace
 
 RePoseStats RePose(const FrameCapture& in, const Eye& eye, FrameCapture& out) {
@@ -253,6 +360,7 @@ RePoseStats RePose(const FrameCapture& in, const Eye& eye, FrameCapture& out) {
             c.viewport[3] = float(c.target_h);
         }
     }
+    AddDark(eye, out);
     return st;
 }
 

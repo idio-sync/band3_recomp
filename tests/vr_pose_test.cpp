@@ -1411,7 +1411,8 @@ TEST_CASE("the frame's tracks: in songs with a world, each eye's view of them") 
     uint32_t cams[RasterOptions::kEyeCams];
     vr::EyeCamsOf(l, cams, RasterOptions::kEyeCams);
     CHECK(cams[0] == 0x25492B68);
-    CHECK(cams[1] == 0);
+    CHECK(cams[1] == vr::kEyeDarkCam);
+    CHECK(cams[2] == 0);
     // from the anchor too (a viewpoint not made yet)
     vr::Viewpoint fixed;
     fixed.window = false;
@@ -1424,6 +1425,102 @@ TEST_CASE("the frame's tracks: in songs with a world, each eye's view of them") 
     l = vr::ResolveFrame(vr::Viewpoint{}, in);
     CHECK(l.track_count == 0);
     CHECK(l.eyes[0].track_count == 0);
+}
+
+TEST_CASE("the eyes draw the dark around the window and the cut's fade, under the tracks") {
+    const float e1[3] = {0, -91.82f, 22.6f};
+    std::vector<SongCam> one = {{0x25492B68, TrackVp(e1, 0, 7, TrackProj(36.56f, 30, 224)),
+                                 {0, 0, 1280, 720}, {0, 1}, 3, Rect(-9.8f, 9.8f, -50, 270)}};
+    HudFadePause(one, false);
+    FrameCapture f = SongFrame(one);
+    // a texture pass after the track (none in RB3's songs, but its draws'
+    // numbers must stay right)
+    Pass late{};
+    late.tex_obj = 0x99;
+    late.first_draw = uint32_t(f.draws.size() - 1);
+    late.draw_count = 1;
+    f.passes.push_back(late);
+    vr::FrameInputs in;
+    for (int e = 0; e < 2; e++) {
+        in.views[e] = StandingHead();
+        in.views[e].p[0] = e ? 0.032f : -0.032f;
+        in.fov[e] = {-0.9f, 0.9f, 0.9f, -0.9f};
+    }
+    in.head = StandingHead();
+    in.hud_boundary = vr::HudBoundary(f);
+    in.camera = freecam::Decompose(WorldCameraOf(f).view_proj, in.game, in.proj);
+    in.tracks = vr::TrackCamerasOf(f);
+    in.in_song = true;
+    in.dim = 0.8f;
+    vr::FrameLayout l = vr::ResolveFrame(vr::Viewpoint{}, in);
+    REQUIRE(l.window);
+    CHECK_FALSE(l.frame_layers);
+    CHECK(l.fade_drawn);
+    REQUIRE(l.eyes[0].dark_count == vr::kFrameQuads);
+    CHECK(l.eyes[0].dark_alpha == doctest::Approx(0.8f));
+    CheckVec(l.eyes[1].xr.p, 0.032f, 1.6f, 0);
+    // the eyes' quads are FrameQuads' (the first strip's corners)
+    float corners[4][3];
+    vr::QuadCorners(l.frame[0], corners);
+    CheckVec(l.eyes[0].dark[0][2], corners[2][0], corners[2][1], corners[2][2]);
+    vr::Eye eye = l.eyes[0];
+    eye.fade = 0.5f;
+    FrameCapture out;
+    vr::RePose(f, eye, out);
+    // two draws before the track's first: the fade, then the dark
+    const uint32_t first = f.post_boundary + 1;
+    REQUIRE(out.draws.size() == f.draws.size() + 2);
+    CHECK(out.draws[first].cam == vr::kEyeDarkCam);
+    CHECK(out.draws[first].color[3] == doctest::Approx(0.5f));
+    CHECK(out.draws[first + 1].cam == vr::kEyeDarkCam);
+    CHECK(out.draws[first + 1].color[3] == doctest::Approx(0.8f));
+    CHECK(out.draws[first + 1].blend == 3);
+    CHECK(out.draws[first + 1].z_mode == 0);
+    CHECK(out.draws[first + 2].cam == 0x25492B68);
+    CHECK(out.passes.back().first_draw == late.first_draw + 2);
+    // the dark's quads where FrameQuads put them, seen from the eye: a
+    // corner where the eye's picture has it
+    const Geometry& g = *out.draws[first + 1].geom;
+    REQUIRE(g.verts.size() == 4 * vr::kFrameQuads);
+    float c[4], px = 0, py = 0;
+    freecam::Transform(g.verts[2].pos, out.draws[first + 1].view_proj, c);
+    REQUIRE(vr::EyePixel(eye.xr, eye.fov, 2, 2, corners[2], px, py));
+    CHECK(c[0] / c[3] == doctest::Approx(px - 1).epsilon(1e-3));
+    CHECK(c[1] / c[3] == doctest::Approx(1 - py).epsilon(1e-3));
+    // the back buffer's runs (passes into texture 0) take them in: the one
+    // they're inserted into, or, with no tracks, the last one, at its end
+    FrameCapture runs = f;
+    runs.passes.clear();
+    Pass bb{};
+    bb.first_draw = 0;
+    bb.draw_count = uint32_t(f.draws.size());
+    runs.passes.push_back(bb);
+    vr::RePose(runs, eye, out);
+    REQUIRE(out.passes.size() == 1);
+    CHECK(out.passes[0].draw_count == f.draws.size() + 2);
+    vr::Eye flat = eye;
+    flat.track_count = 0;
+    vr::RePose(runs, flat, out);
+    CHECK(out.draws[f.draws.size()].cam == vr::kEyeDarkCam);
+    CHECK(out.passes[0].draw_count == f.draws.size() + 2);
+    // a texture pass last: the dark gets a run of its own after it
+    runs.passes.push_back(late);
+    runs.passes[0].draw_count = late.first_draw;
+    vr::RePose(runs, flat, out);
+    REQUIRE(out.passes.size() == 3);
+    CHECK(out.passes[0].draw_count == late.first_draw);
+    CHECK(out.passes[1].first_draw == late.first_draw);
+    CHECK(out.passes[2].tex_obj == 0);
+    CHECK(out.passes[2].first_draw == f.draws.size());
+    CHECK(out.passes[2].draw_count == 2);
+    // vr_window_quads: the compositor's layers and fade, the eyes draw none
+    in.window_quads = true;
+    l = vr::ResolveFrame(vr::Viewpoint{}, in);
+    CHECK(l.frame_layers);
+    CHECK_FALSE(l.fade_drawn);
+    CHECK(l.eyes[0].dark_count == 0);
+    vr::RePose(f, l.eyes[0], out);
+    CHECK(out.draws.size() == f.draws.size());
 }
 
 TEST_CASE("a cut's fade: black at the cut, back over the fade's length") {

@@ -38,8 +38,10 @@ For each name this:
              against the venue alone (.gpu.C.png) inside the track's quad,
              over 4 times what they differ by elsewhere in the window, plus 5
   sim        writes <name>.vr.sim.png: the left eye as the headset composes it,
-             the eyes faded by `fade`, the dark at `dim` around the window, and
-             the panel's picture (premultiplied) over it where `hud_px` says
+             the eyes faded by `fade`, the dark at `dim` around the window
+             (with `frame_layers`, vr_window_quads; else the eyes drew it),
+             and the panel's picture (premultiplied) over it where `hud_px`
+             says
 
 It exits 1 when a window's mean is over --max-mean (6), a black eye isn't, or
 a track check fails.
@@ -118,7 +120,8 @@ def simulate(prefix, layout, left):
     out = left[..., :3] * (1 - layout["fade"])
     if layout["eyes_black"]:
         out[:] = 0
-    if layout["window"] and layout["frame_quads"] > 0:
+    # the dark as quad layers (vr_window_quads); else the eyes drew it
+    if layout["window"] and layout["frame_quads"] > 0 and layout.get("frame_layers", True):
         inside = window_mask(out.shape, layout["window_px"])
         out[~inside] *= 1 - layout["dim"]
     hud_path = prefix + ".gpu.hud.png"

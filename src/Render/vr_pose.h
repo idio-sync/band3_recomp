@@ -149,10 +149,17 @@ struct TrackView {
     freecam::Pose pose{};
 };
 
+// the dark around the game camera's window as quads (FrameQuads)
+inline constexpr int kFrameQuads = 9;
+
 // An eye for RePose: where it is and what it sees. Its view is View(pose),
 // or `view` with has_view (WindowEye's, which isn't a rigid camera's); the
 // shades still get `pose`'s point and axes. In songs each track camera's
-// draws are seen from it too (`tracks`).
+// draws are seen from it too (`tracks`). The eye draws its own dark (its
+// draws through kEyeDarkCam, before the tracks): black over the picture at
+// `fade` (a cut's, CutFade), and the dark around the window, `dark_count` of
+// FrameQuads' quads at `dark_alpha` (vr_window_dim), seen from `xr`, its
+// pose in LOCAL space.
 struct Eye {
     freecam::Pose pose;
     Fov fov;
@@ -160,7 +167,17 @@ struct Eye {
     Mat4 view{};
     int track_count = 0;
     TrackView tracks[kMaxTrackCams];
+    XrPose xr;
+    float fade = 0;
+    int dark_count = 0;
+    float dark_alpha = 0;
+    // the quads' corners in LOCAL space (QuadCorners' order)
+    float dark[kFrameQuads][4][3] = {};
 };
+
+// the eyes' own dark draws' camera (Eye::fade, Eye::dark): no camera of
+// the game's, so drawn over the whole picture, depth as 1/w
+inline constexpr uint32_t kEyeDarkCam = 0xFFFFFFF0u;
 
 inline Mat4 EyeView(const Eye& e) { return e.has_view ? e.view : freecam::View(e.pose); }
 
@@ -185,7 +202,9 @@ struct RePoseStats {
 // are, keeps it), the camera the whole picture, and is cut where the game's
 // picture ends below (the bottom of the camera's viewport, through its
 // captured matrix; CutAtPlane), so the track before the strikeline ends
-// where the game shows it end instead of reaching under the head. Other
+// where the game shows it end instead of reaching under the head. The eye's
+// own dark (Eye::fade, Eye::dark) goes in after the resolve, before the
+// tracks: black draws through kEyeDarkCam, alpha blended, no depth. Other
 // cameras' draws (the HUD, shadow maps' lights) stay as they are. `in` is
 // left unchanged. Without a perspective world camera, the world's draws are
 // left as they are.
@@ -726,8 +745,9 @@ inline Eye WindowEye(const XrPose& eye, const Fov& fov, const WindowFrame& w,
 // order they're given, so none may cover the window). The face reaches
 // kFrameReach times the window's distance each way (further for a window
 // wider than that), the box as far behind the head. Each quad's +z faces into
-// the box.
-inline constexpr int kFrameQuads = 9;
+// the box. The eyes draw them themselves (Eye::dark) unless vr_window_quads
+// asks for quad layers, so the tracks in front of the head can reach past the
+// window's edge.
 inline constexpr float kFrameReach = 3;
 
 // a pose in the window's frame (x right, y up, z toward the head) in LOCAL space
@@ -837,6 +857,10 @@ struct FrameInputs {
     // in songs by `track` (vr_track_*)
     TrackCams tracks;
     TrackLayout track;
+    // vr_window_quads: the dark around the window as the compositor's quad
+    // layers over the eyes (and the cut's fade by the compositor), not drawn
+    // by the eyes
+    bool window_quads = false;
 };
 
 // what the eyes show and where the quads go, for VrFrame and Present
@@ -855,10 +879,15 @@ struct FrameLayout {
     bool hud = false;
     bool hud_in_window = false;
     HudQuad hud_quad;
-    // the dark around the window, black at `dim`'s alpha
+    // the dark around the window, black at `dim`'s alpha: drawn by the eyes
+    // (Eye::dark), or with frame_layers as quad layers (vr_window_quads)
     int frame_quads = 0;
     HudQuad frame[kFrameQuads];
     float dim = 0;
+    bool frame_layers = false;
+    // the eyes draw the cut's fade themselves (Eye::fade, set by the caller),
+    // under the tracks; else the compositor fades the eyes' whole picture
+    bool fade_drawn = false;
     // in songs with a world, the tracks in front of the head (PlaceTracks),
     // which each eye sees (Eye::tracks) and the panel leaves out (EyeCamsOf),
     // at track_scale units a metre (TrackToLocal)
@@ -868,10 +897,13 @@ struct FrameLayout {
 };
 
 // RasterOptions::eye_cams for `l`'s eyes and panel (up to `max`): its track
-// cameras; the rest 0
+// cameras and the eyes' dark (kEyeDarkCam); the rest 0
 inline void EyeCamsOf(const FrameLayout& l, uint32_t* out, int max) {
-    for (int i = 0; i < max; i++) out[i] = i < l.track_count ? l.tracks[i].cam.cam : 0;
+    for (int i = 0; i < max; i++)
+        out[i] = i < l.track_count ? l.tracks[i].cam.cam : i == l.track_count ? kEyeDarkCam : 0;
 }
+
+inline void QuadCorners(const HudQuad& q, float out[4][3]);
 
 // ResolveFrame's choice of view, before the tracks
 inline FrameLayout ResolveView(const Viewpoint& vp, const FrameInputs& in) {
@@ -915,16 +947,26 @@ inline FrameLayout ResolveView(const Viewpoint& vp, const FrameInputs& in) {
 // songs, whose shots are wider than a comfortable panel); from the anchor in
 // songs otherwise; black eyes and the panel on its own place without a world.
 // In songs with a world, whichever way the eyes see it, the tracks in front
-// of the head (PlaceTracks) and each eye's view of them (TrackEye).
+// of the head (PlaceTracks) and each eye's view of them (TrackEye). Unless
+// in.window_quads, the eyes draw the dark around the window themselves
+// (Eye::dark), and the cut's fade.
 inline FrameLayout ResolveFrame(const Viewpoint& vp, const FrameInputs& in) {
     FrameLayout l = ResolveView(vp, in);
     l.track_scale = in.track.scale;
     if (!l.eyes_black && in.in_song)
         l.track_count = PlaceTracks(in.tracks, in.head, in.track, l.tracks);
+    l.frame_layers = in.window_quads && l.frame_quads > 0;
+    l.fade_drawn = !in.window_quads && !l.eyes_black;
     for (int e = 0; e < 2; e++) {
-        l.eyes[e].track_count = l.track_count;
+        Eye& eye = l.eyes[e];
+        eye.xr = in.views[e];
+        eye.track_count = l.track_count;
         for (int t = 0; t < l.track_count; t++)
-            l.eyes[e].tracks[t] = TrackEye(in.views[e], in.fov[e], l.tracks[t], in.track.scale);
+            eye.tracks[t] = TrackEye(in.views[e], in.fov[e], l.tracks[t], in.track.scale);
+        if (in.window_quads || l.eyes_black) continue;
+        eye.dark_count = l.frame_quads;
+        eye.dark_alpha = l.dim;
+        for (int q = 0; q < l.frame_quads; q++) QuadCorners(l.frame[q], eye.dark[q]);
     }
     return l;
 }

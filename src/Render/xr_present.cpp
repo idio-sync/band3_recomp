@@ -75,6 +75,7 @@ vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_s
     in.track.down = float(REXCVAR_GET(vr_track_down));
     in.track.pitch = float(REXCVAR_GET(vr_track_pitch));
     in.track.scale = float(REXCVAR_GET(vr_track_scale));
+    in.window_quads = REXCVAR_GET(vr_window_quads);
     if (in_song && in.track.on) in.tracks = vr::TrackCamerasOf(fc);
     // held from the first frame that has them until there are none (or
     // another count of them)
@@ -884,7 +885,7 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
         // layers show the image last released
         uint32_t black_index = 0;
         bool black_drawn = false;
-        if (drawn && layout.frame_quads > 0 && !m.black_failed && m.black_alpha != layout.dim) {
+        if (drawn && layout.frame_layers && !m.black_failed && m.black_alpha != layout.dim) {
             XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
             XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
             wi.timeout = 100000000;  // 100 ms
@@ -959,7 +960,7 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
             };
             for (int e = 0; e < 2; e++)
                 copy(m.eyes[e], index[e], static_cast<ID3D12Resource*>(eye[e]), e,
-                     m.pipeline.Get(), layout.fade, layout.eyes_black);
+                     m.pipeline.Get(), layout.fade_drawn ? 0.0f : layout.fade, layout.eyes_black);
             if (hud_drawn)
                 copy(m.hud, hud_index, static_cast<ID3D12Resource*>(hud), 2,
                      m.hud_pipeline.Get(), 0, false);
@@ -1035,7 +1036,7 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
         return l;
     };
     XrCompositionLayerQuad frames[vr::kFrameQuads];
-    const bool show_frames = drawn && layout.frame_quads > 0 && m.black_alpha >= 0;
+    const bool show_frames = drawn && layout.frame_layers && m.black_alpha >= 0;
     if (show_frames) {
         for (int i = 0; i < layout.frame_quads && i < vr::kFrameQuads; i++) {
             frames[i] = quad_of(m.black, Impl::kBlackSize, Impl::kBlackSize, layout.frame[i]);
@@ -1074,12 +1075,14 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
         const vr::WindowFrame& w = layout.window_frame;
         REXLOG_INFO("vr: the game camera's window is up: {:.2f} x {:.2f} m at {:.2f} m ({:.1f} "
                     "degrees across), the game's {:.1f} x {:.1f} degrees in it ({:.2f}x), the "
-                    "panel {}, {} dark quads",
+                    "panel {}, the dark around it {}",
                     w.size[0], w.size[1], w.distance,
                     2 * std::atan2(w.size[0] / 2, w.distance) * 57.29578f,
                     layout.game_fov.hfov * 57.29578f, layout.game_fov.vfov * 57.29578f,
                     layout.magnify, layout.hud_in_window ? "in it" : "on its own place",
-                    show_frames ? layout.frame_quads : 0);
+                    show_frames            ? "as quad layers"
+                    : layout.frame_quads   ? "drawn by the eyes"
+                                           : "off");
     }
     {
         std::lock_guard lock(m.stats_mutex);

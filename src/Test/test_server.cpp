@@ -229,15 +229,15 @@ std::string VrLayoutJson(const render::vr::FrameLayout& l, const render::xr::Fra
         "\"hfov\":{:.2f},\"vfov\":{:.2f},\"window_deg\":{:.2f},\"magnify\":{:.3f},"
         "\"distance\":{:.3f},\"window_size\":[{:.4f},{:.4f}],"
         "\"window_pose\":{},\"head\":{},\"hud\":\"{}\",\"hud_size\":[{:.4f},{:.4f}],"
-        "\"hud_pose\":{},\"frame_quads\":{},\"dim\":{:.3f},\"eye_size\":[{},{}],"
-        "\"window_px\":{},\"hud_px\":{},\"tracks\":{}{}}}",
+        "\"hud_pose\":{},\"frame_quads\":{},\"frame_layers\":{},\"dim\":{:.3f},"
+        "\"eye_size\":[{},{}],\"window_px\":{},\"hud_px\":{},\"tracks\":{}{}}}",
         headset ? "headset" : "stand_in", l.hud_boundary, l.window ? "true" : "false",
         l.eyes_black ? "true" : "false", fade, l.game_fov.hfov * 57.2957795f,
         l.game_fov.vfov * 57.2957795f,
         w.distance > 0 ? 2 * std::atan2(w.size[0] / 2, w.distance) * 57.2957795f : 0.0f,
         l.magnify, w.distance, w.size[0], w.size[1], pose(w.pose),
         pose(views.head), hud, l.hud_quad.size[0], l.hud_quad.size[1], pose(l.hud_quad.pose),
-        l.frame_quads, l.dim, eye_w, eye_h,
+        l.frame_quads, l.frame_layers ? "true" : "false", l.dim, eye_w, eye_h,
         l.window ? pixels(window, views, eye_w, eye_h) : "[]",
         pixels(l.hud_quad, views, eye_w, eye_h), tracks, centre_json);
 }
@@ -528,7 +528,9 @@ public:
         // last VR frame's views, or without a session a stand-in head at
         // LOCAL's origin facing -z, both eyes at it, 60 degrees each way. Into
         // <name>.gpu.L.png and <name>.gpu.R.png (black where the headset's
-        // are, the fade left out; in songs with the tracks in front); the
+        // are, the fade left out; the dark around the window as the eyes
+        // draw it, unless vr_window_quads; in songs with the tracks in
+        // front); the
         // capture's own camera with the world's draws alone, at its size
         // (<name>.gpu.eyes.png: what the window in .gpu.L.png shows,
         // tools/vr_window_check.py); with a window, one eye as the
@@ -570,10 +572,6 @@ public:
             }
             out.vr = VrLayoutJson(layout, views, headset, fade, eye_w, eye_h,
                                   with_centre ? &centre : nullptr, kCentreSize);
-            // and beside the pictures, for tools/vr_window_check.py
-            std::ofstream(rex::filesystem::GetExecutableFolder() / "screenshots" /
-                          (file + ".vr.json"))
-                << out.vr;
             render::RasterOptions eo = options;
             eo.width = eye_w;
             eo.height = eye_h;
@@ -605,6 +603,54 @@ public:
             }
             // the world's draws alone: the venue the window shows
             const uint32_t no_cams[render::RasterOptions::kEyeCams] = {};
+            // With the tracks in the eyes, what they and the eyes' dark cost
+            // the left eye: its capture re-posed and drawn with them and
+            // without, by turns, GPU timestamps on, the first round left out;
+            // the medians of three (RePose's ms, the CPU's to the picture
+            // read back, the GPU's), as `vr`'s track_cost
+            if (layout.track_count > 0 && !layout.eyes_black) {
+                render::RasterOptions with = eo;
+                with.gpu_timestamps = true;
+                render::RasterOptions without = with;
+                std::copy(std::begin(no_cams), std::end(no_cams), without.eye_cams);
+                render::vr::Eye plain = layout.eyes[0];
+                plain.track_count = 0;
+                plain.dark_count = 0;
+                double took[2][3][3] = {};  // with, without; repose, cpu, gpu; round
+                for (int round = 0; round < 4; round++) {
+                    for (int v = 0; v < 2; v++) {
+                        const auto from = std::chrono::steady_clock::now();
+                        render::FrameCapture eye_frame;
+                        render::vr::RePose(frame, v ? plain : layout.eyes[0], eye_frame);
+                        const double repose = std::chrono::duration<double, std::milli>(
+                                                  std::chrono::steady_clock::now() - from)
+                                                  .count();
+                        std::vector<uint32_t> px;
+                        render::GpuStats gs;
+                        render::GpuRenderer::Get().RenderFrame(eye_frame, v ? without : with, px,
+                                                              gs);
+                        if (round == 0) continue;
+                        took[v][0][round - 1] = repose;
+                        took[v][1][round - 1] = gs.ms;
+                        took[v][2][round - 1] = gs.gpu_timed ? gs.gpu_total_ms : -1;
+                    }
+                }
+                auto median = [](double* x) {
+                    std::sort(x, x + 3);
+                    return x[1];
+                };
+                std::string cost = ",\"track_cost\":{";
+                for (int v = 0; v < 2; v++)
+                    cost += std::format("{}\"{}\":{{\"repose_ms\":{:.3f},\"ms\":{:.3f},"
+                                        "\"gpu_ms\":{:.3f}}}",
+                                        v ? "," : "", v ? "without" : "with", median(took[v][0]),
+                                        median(took[v][1]), median(took[v][2]));
+                out.vr.insert(out.vr.size() - 1, cost + "}");
+            }
+            // and beside the pictures, for tools/vr_window_check.py
+            std::ofstream(rex::filesystem::GetExecutableFolder() / "screenshots" /
+                          (file + ".vr.json"))
+                << out.vr;
             if (with_centre) {
                 render::RasterOptions co = eo;
                 co.width = co.height = kCentreSize;
@@ -612,6 +658,7 @@ public:
                 render::ScaleForPicture(co);
                 render::vr::FrameLayout cl = render::xr::LayoutFor(frame, centre, in_song);
                 cl.eyes[0].track_count = 0;
+                cl.eyes[0].dark_count = 0;
                 render::FrameCapture eye_frame;
                 render::vr::RePose(frame, cl.eyes[0], eye_frame);
                 std::vector<uint32_t> centre_rgba;
