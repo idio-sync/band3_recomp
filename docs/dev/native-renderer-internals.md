@@ -456,11 +456,14 @@ What each does, how it was measured and why it defaults as it does. The
   whatever the camera's pitch and roll, the picture in it rolled as the game's is. On the
   Steam Frame (2026-10-18) the left eye's field of view is about 59 degrees out and 50 in,
   so a 100-degree window reaches each eye's inner edge from the recentred head. Around it
-  nine quad layers of one 8x8 swapchain
-  cleared black at `vr_window_dim`'s alpha (`FrameQuads`: four strips tiling the window's
-  plane around it out to 3 times its distance, and the four sides and back of the box they
-  make, so every way out of the box but through the window is covered once) go between
-  the eyes' layer and the panel's. The panel lies on the window (its pose and size) in
+  is dark at `vr_window_dim`'s alpha: nine quads (`FrameQuads`: four strips tiling the
+  window's plane around it out to 3 times its distance, and the four sides and back of the
+  box they make, so every way out of the box but through the window is covered once),
+  which the eyes draw themselves after the resolve and before the tracks (`Eye::dark`,
+  black through `kEyeDarkCam`, alpha blended, no depth; `RePose`'s `AddDark`), so the 3D
+  track can reach past the window's edge. `vr_window_quads` shows them instead as quad
+  layers of one 8x8 swapchain between the eyes' layer and the panel's, as before, to
+  compare. The panel lies on the window (its pose and size) in
   menus, and on its own place (`HudPlacement`) during songs, which are `InSong()` and the
   screen up being `game_screen` or `practice_game_screen` (`SongScreen`, from
   `PresenceMgr::UpdatePresence`), so the loading vignette and results count as menus;
@@ -468,20 +471,59 @@ What each does, how it was measured and why it defaults as it does. The
   black eyes (Present's `eyes_black`) and the panel on its own place. `VrFrame` feeds every
   capture it sees to `CameraCuts` first; at a cut, or as the eyes change between window,
   anchor and black, they fade in from black over `vr_cut_fade_ms` of the runtime's display
-  time (`CutFade`, `present.hlsl`'s `frame_size.w`), the panel not. front_row, on_stage and
+  time (`CutFade`), the panel not: drawn by the eyes under the tracks, which don't cut
+  (`Eye::fade`, a black quad over the picture), or with `vr_window_quads` by
+  `present.hlsl`'s `frame_size.w` over the eyes' whole picture. front_row, on_stage and
   venue aren't made yet: songs then use `vr_anchor` as before (logged once). With `vr` on,
   `capture` writes the layout (`vr` in the reply, `<name>.vr.json`), `.gpu.L/.R.png` from
   the last VR frame's views (without a session a stand-in head at the origin, both eyes at
-  it, 90 degrees each way), `.gpu.C.png` (with a headset: an eye at the recenter's head
-  facing the window), and `.gpu.eyes.png` (the capture's camera, the eyes' draws alone), and
-  `tools/vr_window_check.py` sets the window's quad of the eye against the latter and
-  composes `<name>.vr.sim.png` as the compositor would. On SteamVR's null driver
+  it, 60 degrees each way), `.gpu.C.png` (with a window: an eye at the recenter's head
+  facing the window, the venue alone), and `.gpu.eyes.png` (the capture's camera, the
+  world's draws alone), and `tools/vr_window_check.py` sets the window's quad of the
+  centre eye against the latter and composes `<name>.vr.sim.png` as the compositor would. On SteamVR's null driver
   (2026-10-18; its head reports a 180-degree roll, so its pictures are upside down) the
   window matched the game camera's picture to a mean 0.8-4.2/255 on the vignettes, closet,
   music library, part select, loading, song and pause (moved a tenth of its width:
   7.6-36), but 16.3 on the main hub, where the eye lacks the 720p picture's bloom halos;
   Play a Show's intro was black eyes. `native_view stats`' `xr` block counts
-  `window_frames`, `black_frames` and `fades`.
+  `window_frames`, `black_frames`, `fades` and `track_frames`.
+  The 3D highway (`vr_track_3d`, on): in songs each eye draws the tracks from where it is,
+  as an object in front of the head, in the default window and from `vr_anchor` alike.
+  RB3 draws each track after post-processing with a camera of its own (z range 0..1),
+  before the flat HUD's 0..0.1 camera (score, stars, band meter, lyrics, the vocals'
+  strip), a full-picture fade quad's camera and, when it's up, the pause menu's; the
+  multiplier, the Overdrive meter, the hit text and the player's name ride on the track.
+  `vr_pose.h`'s `TrackCamerasOf` finds them: one for one player (93.9 units behind and
+  22.6 above the strikeline, the track's origin, looking 7 degrees down, 36.6 degrees
+  across), two for two players (998x720 viewports at either side, each projection
+  shifted out by as much again: `freecam::Decompose` takes an off-centre projection's
+  shift out of the axes, which read before as cameras 7.7 units aside), three for four
+  parts (turned 10 degrees apart; the vocals' strip is the flat HUD's). Their draws are
+  the eyes' (`RasterOptions::eye_cams`, `OnHud`): drawn after the resolve over the
+  venue, layered among themselves as in the game, never depth-tested against the venue,
+  and left off the panel. `PlaceTracks` puts each camera's frame in LOCAL space so the
+  reference track's strikeline is `vr_track_forward` (1.2 m) ahead of the recentred head
+  along the floor and `vr_track_down` (0.3 m) below its eyes, `vr_track_scale` (30) of
+  its units a metre, lying level as the game lays it out, its far end raised
+  `vr_track_pitch` degrees; two players' tracks are moved aside by the picture's shift at
+  their strikelines (side by side, parallel), four parts' keep their cameras' turn.
+  `TrackEye` gives each eye the camera's view from where it is against that frame and
+  `RePose` moves the cameras' draws to it (gems, beat lines and sustains fold their place
+  into their matrix, which is kept: `FoldedInto`), gives the camera the whole picture,
+  and cuts each draw where the game's picture ends below (`CutAtPlane`, a per-thread
+  cache), so the track's near end stops where the game's picture cuts it instead of
+  reaching under the head. The poses are held through the song (`TrackHold`; a camera
+  moving more than a unit or a degree is placed again, logged). The renderers have no
+  far plane: the track's far end is its own fade. At the defaults one player's track is
+  0.65 m wide and 29.6 degrees across at its strikeline, 1.24 m away and 14 degrees down
+  (the game's own angle onto it), its near end 0.53 m ahead, where the game's picture
+  fades it out (y 106) 4.73 m ahead and 3.6 degrees down; two players' strikelines 0.52
+  m either side, four parts' side tracks 0.82 m either side, 1.1 m ahead. The capture's
+  `track_cost` (the left eye drawn with and without them, timestamps on, stand-in, 1440x1440)
+  put the tracks and the eyes' dark at 0.10-0.23 ms of GPU an eye and 0.15-0.27 ms of
+  CPU (RePose 0.04-0.11 of it) in four song captures (2026-10-18, no headset). `native_view_replay --track-at x,y,z` draws both eyes
+  without a headset (a stand-in head moved by x,y,z for the parallax) and prints where
+  each track is; `--list` prints the track cameras, `--track-eyes` splits by them.
   Each runtime frame's timing (`vr_timing.h`'s `FrameTiming`) is kept in a ring of the last
   8,192 (about 68 s at 120 Hz), which the harness's `vr_frames [name]` writes as CSV to
   `logs/vr_frames-<name>.csv` beside the exe: in ms from xrWaitFrame's return, xrBeginFrame's
