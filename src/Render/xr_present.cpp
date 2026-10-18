@@ -1087,6 +1087,7 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
         if (show_hud) m.stats.hud_layers++;
         if (drawn && layout.window) m.stats.window_frames++;
         if (drawn && layout.eyes_black) m.stats.black_frames++;
+        if (drawn && layout.track_count > 0) m.stats.track_frames++;
         if (drawn && layout.fade >= 1) m.stats.fades++;
         (drawn ? m.stats.frames : m.stats.skipped)++;
         if (!f.render) m.stats.hidden++;
@@ -1215,8 +1216,8 @@ std::string Session::MeasuredJson() {
         "\"present_ms_per_frame\":{:.3f},\"frame_ms_per_frame\":{:.3f},\"srgb_view\":{},"
         "\"hud\":{},\"missed\":{},\"slots_missed\":{},\"over_period\":{},\"late_wakes\":{},"
         "\"repeats\":{},\"behind_newer\":{},\"slow\":{},\"window_frames\":{},"
-        "\"black_frames\":{},\"fades\":{},\"predicted_period_ms\":{:.3f},\"throttled\":{},"
-        "\"queue_waits\":{},\"timing\":{}}}",
+        "\"black_frames\":{},\"fades\":{},\"track_frames\":{},\"predicted_period_ms\":{:.3f},"
+        "\"throttled\":{},\"queue_waits\":{},\"timing\":{}}}",
         text(now.state), text(now.runtime), text(now.system), now.width, now.height,
         double(now.display_period_ns) / 1e6, frames, now.skipped - from.skipped,
         now.hidden - from.hidden, now.late - from.late, per(now.wait_ms, from.wait_ms, ended),
@@ -1231,7 +1232,7 @@ std::string Session::MeasuredJson() {
         now.late_wakes - from.late_wakes, now.repeats - from.repeats, now.behind - from.behind,
         now.slow - from.slow, now.window_frames - from.window_frames,
         now.black_frames - from.black_frames, now.fades - from.fades,
-        double(now.predicted_period_ns) / 1e6, now.throttled - from.throttled,
+        now.track_frames - from.track_frames, double(now.predicted_period_ns) / 1e6, now.throttled - from.throttled,
         now.queue_waits - from.queue_waits, vr::TimingJson(timed));
 }
 

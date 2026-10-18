@@ -860,9 +860,11 @@ struct FrameLayout {
     HudQuad frame[kFrameQuads];
     float dim = 0;
     // in songs with a world, the tracks in front of the head (PlaceTracks),
-    // which each eye sees (Eye::tracks) and the panel leaves out (EyeCamsOf)
+    // which each eye sees (Eye::tracks) and the panel leaves out (EyeCamsOf),
+    // at track_scale units a metre (TrackToLocal)
     int track_count = 0;
     TrackPlace tracks[kMaxTrackCams];
+    float track_scale = 30;
 };
 
 // RasterOptions::eye_cams for `l`'s eyes and panel (up to `max`): its track
@@ -916,6 +918,7 @@ inline FrameLayout ResolveView(const Viewpoint& vp, const FrameInputs& in) {
 // of the head (PlaceTracks) and each eye's view of them (TrackEye).
 inline FrameLayout ResolveFrame(const Viewpoint& vp, const FrameInputs& in) {
     FrameLayout l = ResolveView(vp, in);
+    l.track_scale = in.track.scale;
     if (!l.eyes_black && in.in_song)
         l.track_count = PlaceTracks(in.tracks, in.head, in.track, l.tracks);
     for (int e = 0; e < 2; e++) {

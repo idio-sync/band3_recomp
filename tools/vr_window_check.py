@@ -12,9 +12,11 @@ and the window's width (`window_deg`, vr_window_width) and how much the game's
 picture is magnified to fill it (`magnify`, vr_pose.h's WindowMagnify).
 Without a VR session the eyes are a stand-in's: the head at LOCAL space's
 origin, both eyes at it, 60 degrees each way, so the left eye sees the window
-square on from where the game camera is. With a headset the capture adds such
-an eye at the recenter's head, <name>.gpu.C.png (the layout's `centre`), and
-the window is checked in that.
+square on from where the game camera is. With a window the capture adds such
+an eye at the recenter's head with the venue alone (no tracks),
+<name>.gpu.C.png (the layout's `centre`), and the window is checked in that.
+In songs the eyes have the tracks in front (vr_track_3d), and `tracks` has
+each one's quad in the left eye's picture and in the panel's.
 
 For each name this:
 
@@ -30,11 +32,17 @@ For each name this:
              <name>.vr.window.png has the two side by side
   black      with `eyes_black` (no world the eyes can see), that both eye
              pictures are black, as the headset's are
+  tracks     that each track is in the eyes and gone from the panel: the
+             panel's mean alpha inside the quad the track had in the game's
+             picture (at most 0.15), and with the stand-in the left eye
+             against the venue alone (.gpu.C.png) inside the track's quad,
+             over 4 times what they differ by elsewhere in the window, plus 5
   sim        writes <name>.vr.sim.png: the left eye as the headset composes it,
              the eyes faded by `fade`, the dark at `dim` around the window, and
              the panel's picture (premultiplied) over it where `hud_px` says
 
-It exits 1 when a window's mean is over --max-mean (6) or a black eye isn't.
+It exits 1 when a window's mean is over --max-mean (6), a black eye isn't, or
+a track check fails.
 
   python tools/vr_window_check.py <screenshots>/hub <screenshots>/song
   python tools/vr_window_check.py <screenshots>/hub --max-mean 4
@@ -129,6 +137,56 @@ def simulate(prefix, layout, left):
     Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)).save(prefix + ".vr.sim.png")
 
 
+def track_check(prefix, layout):
+    """with the tracks in the eyes (vr_track_3d): each track's quad (from where
+    the game's picture cuts it below to 60 units along it) in the left eye
+    against the centre eye, which has the venue alone (the stand-in's left eye
+    is where the centre eye is, so they differ only by the tracks there), and
+    outside it in the window; and the panel's alpha where the track was in the
+    game's picture"""
+    tracks = layout.get("tracks") or []
+    if not tracks:
+        print("  tracks: none")
+        return True
+    ok = True
+    hud_path = prefix + ".gpu.hud.png"
+    hud = load(hud_path) if os.path.exists(hud_path) else None
+    same_eye = layout["source"] == "stand_in" and "centre" in layout and os.path.exists(
+        prefix + ".gpu.C.png")
+    if same_eye:
+        left, centre = load(prefix + ".gpu.L.png"), load(prefix + ".gpu.C.png")
+        same_eye = left.shape == centre.shape
+    if same_eye:
+        diff = np.abs(left[..., :3] - centre[..., :3]).max(axis=2)
+        anywhere = np.zeros(diff.shape, dtype=bool)
+        for t in tracks:
+            if None not in t["eye_px"][:4]:
+                anywhere |= window_mask(diff.shape, t["eye_px"][:4])
+        outside = ~anywhere
+        if layout["window"] and None not in layout["window_px"]:
+            outside &= window_mask(diff.shape, layout["window_px"])
+        out_mean = float(diff[outside].mean()) if outside.any() else 0.0
+    for t in tracks:
+        line = f"  track {t['cam']}:"
+        if hud is not None:
+            inside = window_mask(hud.shape, t["panel_px"][:4])
+            alpha = float(hud[..., 3][inside].mean() / 255) if inside.any() else 0.0
+            good = alpha <= 0.15
+            ok &= good
+            line += f" panel alpha where it was {alpha:.3f} {'ok' if good else 'NOT CLEAR'};"
+        if same_eye and None not in t["eye_px"][:4]:
+            inside = window_mask(diff.shape, t["eye_px"][:4])
+            in_mean = float(diff[inside].mean()) if inside.any() else 0.0
+            good = in_mean > 4 * out_mean + 5
+            ok &= good
+            line += (f" left eye against the venue alone: {in_mean:.1f} on it, {out_mean:.1f} "
+                     f"elsewhere in the window {'ok' if good else 'NOT THERE'}")
+        elif not same_eye:
+            line += " (the eyes against the venue alone: with the stand-in only)"
+        print(line)
+    return ok
+
+
 def check(prefix, max_mean):
     name = os.path.basename(prefix)
     with open(prefix + ".vr.json") as f:
@@ -172,6 +230,7 @@ def check(prefix, max_mean):
             prefix + ".vr.window.png")
     else:
         print(f"{head}\n  anchor: the eyes from vr_anchor's place, no window")
+    ok &= track_check(prefix, layout)
     simulate(prefix, layout, left)
     return ok
 

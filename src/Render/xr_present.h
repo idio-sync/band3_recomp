@@ -129,8 +129,9 @@ struct Stats {
     uint64_t hud_renders = 0, hud_copies = 0, hud_layers = 0, recenters = 0;
     double hud_render_ms = 0, hud_gpu_ms = 0;
     // frames ended with the eyes through the game camera's window, with
-    // black eyes (no world to see), and the cuts faded
-    uint64_t window_frames = 0, black_frames = 0, fades = 0;
+    // black eyes (no world to see), and the cuts faded; with the tracks in
+    // the eyes (vr_track_3d)
+    uint64_t window_frames = 0, black_frames = 0, fades = 0, track_frames = 0;
 };
 
 class Session {

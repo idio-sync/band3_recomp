@@ -154,8 +154,8 @@ double CpThreadMs() {
 // (metres), where the panel goes, the dark's quads, the eyes' picture size, and
 // the window's and the panel's corners in the left eye's picture (pixels from
 // its top left: top left, top right, bottom right, bottom left; [] for no
-// window, null for a corner behind the eye); with `centre`, the same corners
-// in its picture (`centre`: .gpu.C.png's eye)
+// window, null for a corner behind the eye), the tracks' (`tracks`, below);
+// with `centre`, the same corners in its picture (`centre`: .gpu.C.png's eye)
 std::string VrLayoutJson(const render::vr::FrameLayout& l, const render::xr::FrameViews& views,
                          bool headset, float fade, uint32_t eye_w, uint32_t eye_h,
                          const render::xr::FrameViews* centre, uint32_t centre_size) {
@@ -184,6 +184,39 @@ std::string VrLayoutJson(const render::vr::FrameLayout& l, const render::xr::Fra
     window.size[0] = w.size[0];
     window.size[1] = w.size[1];
     const char* hud = !l.hud ? "off" : l.hud_in_window ? "window" : "own";
+    // Each track (vr_track_3d): a quad on it, its edges from where the game's
+    // picture cuts it below to 60 units along it (the near half of what the
+    // game shows), then its strikeline's middle; in the left eye's picture
+    // (null behind the eye) and in the HUD panel's, the game's picture at
+    // the eyes' size, through the track camera's captured matrix and viewport
+    std::string tracks = "[";
+    for (int t = 0; t < l.track_count; t++) {
+        const render::vr::TrackPlace& p = l.tracks[t];
+        const render::Mat4& vp = p.cam.view_proj;
+        const float near_y = -(vp.m[3][1] + vp.m[3][3]) / (vp.m[1][1] + vp.m[1][3]);
+        const float pts[5][3] = {
+            {-9.8f, near_y, 0}, {9.8f, near_y, 0}, {9.8f, 60, 0}, {-9.8f, 60, 0}, {0, 0, 0}};
+        std::string eye_px = "[", panel_px = "[";
+        for (int k = 0; k < 5; k++) {
+            float local[3], x = 0, y = 0, c[4];
+            render::vr::TrackToLocal(p, l.track_scale, pts[k], local);
+            eye_px += k ? "," : "";
+            if (render::vr::EyePixel(views.pose[0], views.fov[0], eye_w, eye_h, local, x, y))
+                eye_px += std::format("[{:.2f},{:.2f}]", x, y);
+            else
+                eye_px += "null";
+            render::freecam::Transform(pts[k], vp, c);
+            const float sx = p.cam.target_w ? float(eye_w) / float(p.cam.target_w) : 1;
+            const float sy = p.cam.target_h ? float(eye_h) / float(p.cam.target_h) : 1;
+            const float* v = p.cam.viewport;
+            panel_px += std::format("{}[{:.2f},{:.2f}]", k ? "," : "",
+                                    (v[0] + (c[0] / c[3] + 1) / 2 * v[2]) * sx,
+                                    (v[1] + (1 - c[1] / c[3]) / 2 * v[3]) * sy);
+        }
+        tracks += std::format("{}{{\"cam\":\"{:08X}\",\"eye_px\":{}],\"panel_px\":{}]}}",
+                              t ? "," : "", p.cam.cam, eye_px, panel_px);
+    }
+    tracks += "]";
     std::string centre_json;
     if (centre)
         centre_json = std::format(
@@ -197,7 +230,7 @@ std::string VrLayoutJson(const render::vr::FrameLayout& l, const render::xr::Fra
         "\"distance\":{:.3f},\"window_size\":[{:.4f},{:.4f}],"
         "\"window_pose\":{},\"head\":{},\"hud\":\"{}\",\"hud_size\":[{:.4f},{:.4f}],"
         "\"hud_pose\":{},\"frame_quads\":{},\"dim\":{:.3f},\"eye_size\":[{},{}],"
-        "\"window_px\":{},\"hud_px\":{}{}}}",
+        "\"window_px\":{},\"hud_px\":{},\"tracks\":{}{}}}",
         headset ? "headset" : "stand_in", l.hud_boundary, l.window ? "true" : "false",
         l.eyes_black ? "true" : "false", fade, l.game_fov.hfov * 57.2957795f,
         l.game_fov.vfov * 57.2957795f,
@@ -206,7 +239,7 @@ std::string VrLayoutJson(const render::vr::FrameLayout& l, const render::xr::Fra
         pose(views.head), hud, l.hud_quad.size[0], l.hud_quad.size[1], pose(l.hud_quad.pose),
         l.frame_quads, l.dim, eye_w, eye_h,
         l.window ? pixels(window, views, eye_w, eye_h) : "[]",
-        pixels(l.hud_quad, views, eye_w, eye_h), centre_json);
+        pixels(l.hud_quad, views, eye_w, eye_h), tracks, centre_json);
 }
 
 // how often the server thread looks up from its sockets to see if it should stop
@@ -495,12 +528,14 @@ public:
         // last VR frame's views, or without a session a stand-in head at
         // LOCAL's origin facing -z, both eyes at it, 60 degrees each way. Into
         // <name>.gpu.L.png and <name>.gpu.R.png (black where the headset's
-        // are, the fade left out); the capture's own camera with the eyes'
-        // draws alone, at its size (<name>.gpu.eyes.png: what the window in
-        // .gpu.L.png shows, tools/vr_window_check.py); with a headset and a
-        // window, one eye as the stand-in's but at the recenter's head facing
-        // the window (<name>.gpu.C.png, the window square on: the game
-        // camera); the layout in the reply's `vr` and <name>.vr.json
+        // are, the fade left out; in songs with the tracks in front); the
+        // capture's own camera with the world's draws alone, at its size
+        // (<name>.gpu.eyes.png: what the window in .gpu.L.png shows,
+        // tools/vr_window_check.py); with a window, one eye as the
+        // stand-in's but at the recenter's head facing the window, the
+        // venue alone, without the tracks (<name>.gpu.C.png, the window
+        // square on: the game camera); the layout in the reply's `vr` and
+        // <name>.vr.json
         if (REXCVAR_GET(vr)) {
             render::xr::FrameViews views;
             float fade = 0;
@@ -523,7 +558,7 @@ public:
             const render::vr::FrameLayout layout = render::xr::LayoutFor(frame, views, in_song);
             constexpr uint32_t kCentreSize = 1440;
             render::xr::FrameViews centre = views;
-            const bool with_centre = headset && layout.window;
+            const bool with_centre = layout.window;
             if (with_centre) {
                 for (int e = 0; e < 2; e++) {
                     centre.pose[e].p[0] = views.head.p[0];
@@ -549,6 +584,7 @@ public:
                            render::post::kPostGlare;
             eo.part = render::BackBufferPart::kEyes;
             eo.hud_from = layout.hud_boundary;
+            render::vr::EyeCamsOf(layout, eo.eye_cams, render::RasterOptions::kEyeCams);
             for (int e = 0; e < 2; e++) {
                 std::vector<uint32_t> eye_rgba;
                 render::GpuStats eye_stats;
@@ -567,11 +603,15 @@ public:
                                          .string(),
                                      eye_rgba, eye_w, eye_h);
             }
+            // the world's draws alone: the venue the window shows
+            const uint32_t no_cams[render::RasterOptions::kEyeCams] = {};
             if (with_centre) {
                 render::RasterOptions co = eo;
                 co.width = co.height = kCentreSize;
+                std::copy(std::begin(no_cams), std::end(no_cams), co.eye_cams);
                 render::ScaleForPicture(co);
-                const render::vr::FrameLayout cl = render::xr::LayoutFor(frame, centre, in_song);
+                render::vr::FrameLayout cl = render::xr::LayoutFor(frame, centre, in_song);
+                cl.eyes[0].track_count = 0;
                 render::FrameCapture eye_frame;
                 render::vr::RePose(frame, cl.eyes[0], eye_frame);
                 std::vector<uint32_t> centre_rgba;
@@ -587,6 +627,7 @@ public:
                 render::RasterOptions wo = eo;
                 wo.width = options.width;
                 wo.height = options.height;
+                std::copy(std::begin(no_cams), std::end(no_cams), wo.eye_cams);
                 render::ScaleForPicture(wo);
                 std::vector<uint32_t> world_rgba;
                 render::GpuStats world_stats;

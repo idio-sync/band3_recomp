@@ -1340,7 +1340,10 @@ class Renderer {
     // LOCAL space placed in the venue by vr_anchor, faded in after a cut
     // (the cut found first, for every capture seen), drawn at the swapchain's
     // size without the HUD's draws (BackBufferPart::kEyes), the world drawn
-    // ahead, kept buffers, motion blur, DOF or the spotlights' haze. The
+    // ahead, kept buffers, motion blur, DOF or the spotlights' haze. In
+    // songs the eyes draw the tracks too (vr_track_3d: RasterOptions::
+    // eye_cams), each from where it is in front of the head, held still
+    // through the song (vr_track_hold_). The
     // left eye goes into one of the window's slots when one is free and is
     // published as the window's picture; else, and the right always, into
     // the eye slots. The HUD's draws go onto the HUD panel (vr_hud), the
@@ -1404,7 +1407,8 @@ class Renderer {
         // the fade: from black at a cut, or as the eyes go between the
         // window, the anchor and black, back to the picture over
         // vr_cut_fade_ms of the runtime's display time
-        vr::FrameLayout layout = xr::LayoutFor(*cap, f, InSong() && SongScreen());
+        vr::FrameLayout layout =
+            xr::LayoutFor(*cap, f, InSong() && SongScreen(), &vr_track_hold_);
         const int kind = layout.eyes_black ? 0 : layout.window ? 1 : 2;
         if (cut.cut || (vr_kind_ >= 0 && kind != vr_kind_)) {
             vr_fading_ = true;
@@ -1434,6 +1438,9 @@ class Renderer {
         // panel is then the whole picture, the eyes drawn with nothing (the
         // window's picture) and black in the headset
         eo.hud_from = layout.hud_boundary;
+        // in songs the tracks' draws are the eyes' too, each eye seeing them
+        // from where it is (RePose); the panel leaves them out
+        vr::EyeCamsOf(layout, eo.eye_cams, RasterOptions::kEyeCams);
         eo.gpu_no_wait = true;
         eo.output_readback = false;
         eo.gpu_draw_profile = false;
@@ -1646,6 +1653,8 @@ class Renderer {
     int vr_kind_ = -1;
     bool vr_fading_ = false;
     int64_t vr_fade_from_ = 0;
+    // the song's track cameras held still (vr_pose.h's TrackHold)
+    vr::TrackHold vr_track_hold_;
 
     // One fence check; when finished, marks the slot finished and un-holds
     // the worker.
