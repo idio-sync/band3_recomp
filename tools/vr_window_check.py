@@ -9,7 +9,10 @@ the eyes look through the game camera's window or are black, the window's
 corners in the left eye's picture (`window_px`), the panel's (`hud_px`) and
 where it goes (`hud`: window, own, off), the dark's alpha (`dim`), the fade,
 and the window's width (`window_deg`, vr_window_width) and how much the game's
-picture is magnified to fill it (`magnify`, vr_pose.h's WindowMagnify).
+picture is magnified to fill it (`magnify`, vr_pose.h's WindowMagnify). In songs
+a narrow shot's squeeze is capped (vr_window_max_squeeze): the picture then
+fills only the window's centre, `picture_scale` of it each way, its corners
+`picture_px`, the dark around it.
 Without a VR session the eyes are a stand-in's: the head at LOCAL space's
 origin, both eyes at it, 60 degrees each way, so the left eye sees the window
 square on from where the game camera is. With a window the capture adds such
@@ -20,7 +23,8 @@ each one's quad in the left eye's picture and in the panel's.
 
 For each name this:
 
-  window     takes the window's quad out of .gpu.L.png (or .gpu.C.png),
+  window     takes the picture's quad (the window's, or with a capped squeeze
+             its centre: `picture_px`) out of .gpu.L.png (or .gpu.C.png),
              upright whichever way the eye was turned, and sets it against
              .gpu.eyes.png box-filtered to the quad's size: mean difference,
              % of pixels off by more than 16 in their largest channel, and the
@@ -122,7 +126,7 @@ def simulate(prefix, layout, left):
         out[:] = 0
     # the dark as quad layers (vr_window_quads); else the eyes drew it
     if layout["window"] and layout["frame_quads"] > 0 and layout.get("frame_layers", True):
-        inside = window_mask(out.shape, layout["window_px"])
+        inside = window_mask(out.shape, layout.get("picture_px") or layout["window_px"])
         out[~inside] *= 1 - layout["dim"]
     hud_path = prefix + ".gpu.hud.png"
     corners = layout.get("hud_px") or []
@@ -166,8 +170,9 @@ def track_check(prefix, layout):
             if None not in t["eye_px"][:4]:
                 anywhere |= window_mask(diff.shape, t["eye_px"][:4])
         outside = ~anywhere
-        if layout["window"] and None not in layout["window_px"]:
-            outside &= window_mask(diff.shape, layout["window_px"])
+        picture = layout.get("picture_px") or layout["window_px"]
+        if layout["window"] and None not in picture:
+            outside &= window_mask(diff.shape, picture)
         out_mean = float(diff[outside].mean()) if outside.any() else 0.0
     for t in tracks:
         line = f"  track {t['cam']}:"
@@ -196,7 +201,8 @@ def check(prefix, max_mean):
         layout = json.load(f)
     head = (f"{name}: {layout['source']} hud_boundary {layout['hud_boundary']} "
             f"hfov {layout['hfov']:.1f} vfov {layout['vfov']:.1f} in a "
-            f"{layout.get('window_deg', 0):.0f}-degree window ({layout.get('magnify', 1):.2f}x) "
+            f"{layout.get('window_deg', 0):.0f}-degree window ({layout.get('magnify', 1):.2f}x, "
+            f"picture {layout.get('picture_scale', 1):.3f} of it) "
             f"{layout['window_size'][0]:.3f} x {layout['window_size'][1]:.3f} m at "
             f"{layout['distance']:.2f} m, fade {layout['fade']:.2f}, hud {layout['hud']}")
     ok = True
@@ -210,9 +216,12 @@ def check(prefix, max_mean):
     elif layout["window"]:
         # the head at the recenter: the stand-in's left eye, or a headset's
         # centre eye (.gpu.C.png)
-        eye, corners, size = left, layout["window_px"], layout["eye_size"]
+        eye, size = left, layout["eye_size"]
+        corners = layout.get("picture_px") or layout["window_px"]
         if "centre" in layout:
-            eye, corners = load(prefix + ".gpu.C.png"), layout["centre"]["window_px"]
+            centre = layout["centre"]
+            eye = load(prefix + ".gpu.C.png")
+            corners = centre.get("picture_px") or centre["window_px"]
             size = layout["centre"]["eye_size"]
         w = int(round(np.hypot(*np.subtract(corners[1], corners[0]))))
         h = int(round(np.hypot(*np.subtract(corners[3], corners[0]))))

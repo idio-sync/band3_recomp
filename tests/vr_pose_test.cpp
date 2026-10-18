@@ -599,6 +599,129 @@ TEST_CASE("the window stays one size whatever the game's field of view; the pict
           doctest::Approx(2 * 1.8f * std::tan(60 * kPi / 180)));
 }
 
+TEST_CASE("in songs a narrow shot's squeeze is capped: the picture the window's centre, dark around") {
+    Mat4 vp_a, vp_hud;
+    FrameCapture f = Frame(vp_a, vp_hud);
+    vr::FrameInputs in;
+    in.head = StandingHead();
+    for (int e = 0; e < 2; e++) {
+        in.views[e] = in.head;
+        in.fov[e] = {-0.9f, 0.9f, 0.9f, -0.9f};
+    }
+    in.hud_boundary = vr::HudBoundary(f);
+    in.camera = freecam::Decompose(vp_a, in.game, in.proj);
+    REQUIRE(in.camera);
+    in.window_width_deg = 100;
+    in.max_squeeze = 2;
+    in.dim = 1;
+    vr::Viewpoint vp;
+    const float tan50 = std::tan(50 * kPi / 180);
+    for (float hfov_deg : {79.0f, 35.0f, 16.0f}) {
+        CAPTURE(hfov_deg);
+        in.proj = ProjFor(hfov_deg * kPi / 180);
+        const float k = tan50 / std::tan(hfov_deg * kPi / 360);
+        in.in_song = true;
+        in.hud_in_window = false;
+        vr::FrameLayout l = vr::ResolveFrame(vp, in);
+        REQUIRE(l.window);
+        if (k <= 2) {
+            // a wide shot (79 degrees: k 1.44) is as before
+            CHECK(l.picture == 1);
+            CHECK(l.magnify == doctest::Approx(k));
+        } else {
+            // 35 degrees: k 3.78, the picture 0.53 of the window; 16: 8.5, 0.24
+            CHECK(l.picture == doctest::Approx(2 / k));
+            CHECK(l.magnify == doctest::Approx(2));
+        }
+        // the window itself keeps its size
+        CHECK(l.window_frame.size[0] == doctest::Approx(2 * 1.8f * tan50));
+        // the dark's face covers all but the picture: its strips' area is the
+        // face's less the picture's
+        REQUIRE(l.frame_quads == vr::kFrameQuads);
+        const float s = vr::kFrameReach * 1.8f;
+        float area = 0;
+        for (int i = 0; i < 4; i++) area += l.frame[i].size[0] * l.frame[i].size[1];
+        CHECK(area == doctest::Approx(4 * s * s - l.picture * l.picture * l.window_frame.size[0] *
+                                                      l.window_frame.size[1]));
+        // the song's HUD in the window lies on the picture
+        in.hud_in_window = true;
+        l = vr::ResolveFrame(vp, in);
+        CHECK(l.hud_quad.size[0] == doctest::Approx(l.picture * l.window_frame.size[0]));
+        CHECK(l.hud_quad.size[1] == doctest::Approx(l.picture * l.window_frame.size[1]));
+        // menus fill the window at any field of view, the panel on all of it
+        in.in_song = false;
+        l = vr::ResolveFrame(vp, in);
+        CHECK(l.picture == 1);
+        CHECK(l.magnify == doctest::Approx(k));
+        CHECK(l.hud_quad.size[0] == doctest::Approx(l.window_frame.size[0]));
+        // no cap asked for: songs fill it too
+        in.in_song = true;
+        in.max_squeeze = 0;
+        CHECK(vr::ResolveFrame(vp, in).picture == 1);
+        in.max_squeeze = 2;
+    }
+}
+
+TEST_CASE("a capped squeeze: from the recentred head the picture is cap / k of the window, level") {
+    const float eye[3] = {0, -1000, 400}, at[3] = {50, -500, 200};  // pitched down
+    const vr::Fov fov{-1.0f, 0.9f, 0.95f, -1.05f};
+    vr::XrPose head = StandingHead();
+    head.q[1] = std::sin(kPi / 12);  // turned 30 degrees left at the recenter
+    head.q[3] = std::cos(kPi / 12);
+    const vr::WindowFrame w = vr::WindowPlacement(head, 1.8f, 100 * kPi / 180);
+    for (float hfov_deg : {16.0f, 35.0f}) {
+        for (float roll : {0.0f, 0.3f}) {
+            CAPTURE(hfov_deg);
+            CAPTURE(roll);
+            const freecam::Pose game = Rolled(eye, at, roll);
+            const Mat4 proj = ProjFor(hfov_deg * kPi / 180);
+            const vr::GameFov gf = vr::GameFovOf(proj);
+            const vr::WindowScale s = vr::WindowScaleOf(w, gf, vr::kUnitsPerMetre, 2);
+            const float k = std::tan(50 * kPi / 180) / std::tan(hfov_deg * kPi / 360);
+            REQUIRE(s.picture == doctest::Approx(2 / k));
+            CHECK(s.sz == doctest::Approx(2 * vr::kUnitsPerMetre));
+            // the eyes stay the user's IPD apart, life size across
+            CHECK(s.sx == doctest::Approx(vr::kUnitsPerMetre));
+            const vr::Eye e = vr::WindowEye(head, fov, w, game, gf, vr::kUnitsPerMetre, 2);
+            CheckVec(e.pose.eye, eye[0], eye[1], eye[2], 1e-3f);
+            const Mat4 vp = EyeVp(e, proj);
+            // every point of the game's picture, near or far, is where the
+            // picture's rectangle (the window's, scaled about its centre) has
+            // it: the game's picture whole, smaller, upright; its horizon (ny
+            // 0) on the window's middle line
+            for (float nx : {-1.0f, -0.4f, 0.0f, 1.0f}) {
+                for (float ny : {-1.0f, 0.0f, 1.0f}) {
+                    for (float z : {30.0f, 400.0f, 5000.0f}) {
+                        float x[3];
+                        InPicture(game, gf, nx, ny, z, x);
+                        const float on_window[3] = {nx * s.picture * w.size[0] / 2,
+                                                    ny * s.picture * w.size[1] / 2, 0};
+                        float local[3];
+                        vr::WindowToLocal(w, on_window, local);
+                        float ex, ey, wx, wy;
+                        VenueNdc(vp, x, ex, ey);
+                        REQUIRE(LocalNdc(head, fov, local, wx, wy));
+                        CHECK(ex == doctest::Approx(wx).epsilon(1e-3));
+                        CHECK(ey == doctest::Approx(wy).epsilon(1e-3));
+                    }
+                }
+            }
+            // and the depth from there is still the distance ahead of the camera
+            float x[3], nx, ny, dw;
+            InPicture(game, gf, 0.3f, -0.2f, 750, x);
+            VenueNdc(vp, x, nx, ny, &dw);
+            CHECK(dw == doctest::Approx(750).epsilon(1e-3));
+        }
+    }
+    // a shot no narrower than the cap allows: as without it
+    const vr::GameFov wide = vr::GameFovOf(ProjFor(79 * kPi / 180));
+    const vr::WindowScale a = vr::WindowScaleOf(w, wide, vr::kUnitsPerMetre, 2);
+    const vr::WindowScale b = vr::WindowScaleOf(w, wide, vr::kUnitsPerMetre);
+    CHECK(a.picture == 1);
+    CHECK(a.sz == doctest::Approx(b.sz));
+    CHECK(a.sy == doctest::Approx(b.sy));
+}
+
 TEST_CASE("leaning and stepping through the window: the squeezed venue seen as through a window") {
     const float cam[3] = {120, -900, 300}, at[3] = {-40, -500, 260};
     const freecam::Pose game = Rolled(cam, at, 0.2f);

@@ -193,6 +193,7 @@ REXCVAR_DECLARE(std::string, vr_viewpoint);
 REXCVAR_DECLARE(double, vr_window_width);
 REXCVAR_DECLARE(double, vr_window_dim);
 REXCVAR_DECLARE(bool, vr_window_quads);
+REXCVAR_DECLARE(double, vr_window_max_squeeze);
 REXCVAR_DECLARE(int32_t, vr_cut_fade_ms);
 REXCVAR_DECLARE(bool, vr_hud_in_window);
 REXCVAR_DECLARE(std::string, vr_anchor);

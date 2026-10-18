@@ -961,6 +961,14 @@ REXCVAR_DEFINE_BOOL(vr_window_quads, false, "Band3/Advanced/Native renderer",
 
 REXCVAR_DEFINE_INT32(vr_cut_fade_ms, 120, "Band3/Advanced/Native renderer",
     "With vr: at each camera cut, and as the window comes and goes, the headset's picture goes "
+REXCVAR_DEFINE_DOUBLE(vr_window_max_squeeze, 2.0, "Band3/Advanced/Native renderer",
+    "With vr, during songs: how much the game camera's window may flatten a narrow shot's "
+    "depth to fill it. A shot narrower than that allows (a close-up) fills only the middle of "
+    "the window instead, dark around it, its depth flattened this many times at most. 0 "
+    "fills the window at any shot. Menus always fill it. Takes effect at once")
+    .range(0.0, 20.0)
+    .debug_only();
+
     "black and fades back in over this many milliseconds (the panel doesn't fade); 0 cuts "
     "straight. Takes effect at once")
     .range(0, 2000)

@@ -408,6 +408,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ca
 | `vr_window_dim` | `1` | `0` to `1` | With vr: how dark it is around the game camera's window, from 0 (the venue around it shows as it is) to 1 (black). Takes effect at once |
 | `vr_window_quads` | `false` | `true`, `false` | With vr: the dark around the game camera's window, and the fade at each cut, as the headset compositor's layers over the eyes' picture, as before the 3D track, to compare. Off, the eyes draw them under the track, which can then reach past the window's edge and doesn't fade at cuts. Takes effect at once |
 | `vr_window_width` | `100` | `20` to `150` | With vr: how wide the game camera's window looks, in degrees across from where you were at the last recenter, its height following at 16:9. It stays this size at every cut: the game's picture fills it, so a narrow shot is magnified and its depth flattened, as a long lens does. Takes effect at once |
+| `vr_window_max_squeeze` | `2` | `0` to `20` | With vr, during songs: how much the game camera's window may flatten a narrow shot's depth to fill it. A shot narrower than that allows (a close-up) fills only the middle of the window instead, dark around it, its depth flattened this many times at most. 0 fills the window at any shot. Menus always fill it. Takes effect at once |
 | `vr_world_scale` | `1` | `0.1` to `100` | With vr: how much smaller the venue looks than life size, so a head's movement goes this many times as far in it. 1 = life size |
 
 ### Scrobbling

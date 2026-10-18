@@ -642,13 +642,24 @@ struct WindowScale {
     float sx = 1, sy = 1, sz = 1;  // venue units a metre: across, up, forward
 };
 
-inline WindowScale WindowScaleOf(const WindowFrame& w, const GameFov& fov, float u) {
+inline WindowScale WindowScaleOf(const WindowFrame& w, const GameFov& fov, float u,
+                                 float max_squeeze = 0) {
     WindowScale s{u, u, u};
     const float tx = std::tan(fov.hfov / 2), ty = std::tan(fov.vfov / 2);
     const float a = w.size[0] / 2, b = w.size[1] / 2;
     if (tx > 0 && w.distance > 0 && a > 0) s.sz = u * a / (w.distance * tx);
+//
+// A close-up's k is large (8.5 at 16 degrees) and its depth nearly flat, so
+// in songs the squeeze is capped (`max_squeeze`, vr_window_max_squeeze; 0 or
+// less: none): sz is at most max_squeeze u, sy kept as the uncapped sz gives
+// it. The frustum's plane at the window is then max_squeeze u D ahead and
+// half max_squeeze D tx across: from the recenter's head the game's picture is
+// a centred rectangle `picture` = max_squeeze / k of the window each way,
+// level, the window around it dark (PictureFrame), and the depth flattened
+// max_squeeze times at most.
     if (ty > 0 && b > 0) s.sy = s.sz * w.distance * ty / b;
     return s;
+    float picture = 1;             // the picture's share of the window, each way
 }
 
 // k, the venue's magnification against a true window (1 without a field of view)
@@ -657,12 +668,27 @@ inline float WindowMagnify(const WindowScale& s) { return s.sx > 0 ? s.sz / s.sx
 inline void VenueToWindow(const WindowFrame& w, const freecam::Pose& game, const WindowScale& s,
                           const float x[3], float out[3]) {
     const float d[3] = {x[0] - game.eye[0], x[1] - game.eye[1], x[2] - game.eye[2]};
+    if (max_squeeze > 0 && s.sz > max_squeeze * u) {
+        s.picture = max_squeeze * u / s.sz;
+        s.sz = max_squeeze * u;
+    }
     out[0] = freecam::Dot3(d, game.right) / s.sx;
     out[1] = freecam::Dot3(d, game.up) / s.sy;
     out[2] = w.distance - freecam::Dot3(d, game.fwd) / s.sz;
 }
 
 // a point in the window's frame in LOCAL space
+// the game's picture in the window: the window itself, or with a capped
+// squeeze the centred part of it the picture fills (WindowScale::picture)
+inline WindowFrame PictureFrame(const WindowFrame& w, float picture) {
+    WindowFrame p = w;
+    if (picture > 0 && picture < 1) {
+        p.size[0] *= picture;
+        p.size[1] *= picture;
+    }
+    return p;
+}
+
 inline void WindowToLocal(const WindowFrame& w, const float p[3], float out[3]) {
     float t[3];
     Rotate(w.pose.q, p, t);
@@ -679,8 +705,9 @@ inline void WindowToLocal(const WindowFrame& w, const float p[3], float out[3]) 
 // eye in the window's frame) with the camera's axes turned as the eye is from
 // facing the window (rigid: billboards face it, unsqueezed).
 inline Eye WindowEye(const XrPose& eye, const Fov& fov, const WindowFrame& w,
-                     const freecam::Pose& game, const GameFov& game_fov, float units_per_metre) {
-    const WindowScale s = WindowScaleOf(w, game_fov, units_per_metre);
+                     const freecam::Pose& game, const GameFov& game_fov, float units_per_metre,
+                     float max_squeeze = 0) {
+    const WindowScale s = WindowScaleOf(w, game_fov, units_per_metre, max_squeeze);
     Eye e;
     e.fov = fov;
     float inv[4];
@@ -863,6 +890,7 @@ struct FrameInputs {
     bool window_quads = false;
 };
 
+    float max_squeeze = 2;         // vr_window_max_squeeze, in songs (WindowScaleOf)
 // what the eyes show and where the quads go, for VrFrame and Present
 struct FrameLayout {
     // the eyes through the game camera's window; else from the anchor, or
@@ -874,7 +902,11 @@ struct FrameLayout {
     Eye eyes[2];
     GameFov game_fov;
     WindowFrame window_frame;
-    float magnify = 1;  // the window's k (WindowMagnify)
+    float magnify = 1;  // the window's k (WindowMagnify), capped in songs
+    // the game's picture's share of the window each way (WindowScale::
+    // picture): 1, or less where a song's squeeze is capped, the dark then
+    // around the picture (PictureFrame) rather than the window
+    float picture = 1;
     // the HUD panel: shown, where, and whether that's the window itself
     bool hud = false;
     bool hud_in_window = false;
@@ -919,17 +951,26 @@ inline FrameLayout ResolveView(const Viewpoint& vp, const FrameInputs& in) {
         l.window_frame = WindowPlacement(in.head, in.hud_layout.distance,
                                          in.window_width_deg * 3.14159265f / 180);
         const float u = kUnitsPerMetre * in.world_scale;
-        l.magnify = WindowMagnify(WindowScaleOf(l.window_frame, l.game_fov, u));
+        // menus' pictures fill the window whatever their field of view, so
+        // the panel on it stays aligned with them
+        const float cap = in.in_song ? in.max_squeeze : 0;
+        const WindowScale s = WindowScaleOf(l.window_frame, l.game_fov, u, cap);
+        l.magnify = WindowMagnify(s);
+        l.picture = s.picture;
+        const WindowFrame picture = PictureFrame(l.window_frame, s.picture);
         for (int e = 0; e < 2; e++)
-            l.eyes[e] = WindowEye(in.views[e], in.fov[e], l.window_frame, in.game, l.game_fov, u);
+            l.eyes[e] =
+                WindowEye(in.views[e], in.fov[e], l.window_frame, in.game, l.game_fov, u, cap);
         if (!in.in_song || in.hud_in_window) {
             l.hud_in_window = true;
-            l.hud_quad.pose = l.window_frame.pose;
-            l.hud_quad.size[0] = l.window_frame.size[0];
-            l.hud_quad.size[1] = l.window_frame.size[1];
+            l.hud_quad.pose = picture.pose;
+            l.hud_quad.size[0] = picture.size[0];
+            l.hud_quad.size[1] = picture.size[1];
         }
         l.dim = in.dim < 0 ? 0 : in.dim > 1 ? 1 : in.dim;
-        if (l.dim > 0) l.frame_quads = FrameQuads(l.window_frame, l.frame);
+        // the dark reaches the picture's edge, so no clear colour shows
+        // around a capped one
+        if (l.dim > 0) l.frame_quads = FrameQuads(picture, l.frame);
         return l;
     }
     Anchor a = vp.anchor;

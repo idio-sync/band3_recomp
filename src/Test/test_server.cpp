@@ -151,8 +151,10 @@ double CpThreadMs() {
 // (xr::LayoutFor), from the headset's last views or the stand-in's: whether
 // the eyes are through the game camera's window or black, the fade, the
 // game's field of view in degrees, the window's size and pose in LOCAL space
-// (metres), where the panel goes, the dark's quads, the eyes' picture size, and
-// the window's and the panel's corners in the left eye's picture (pixels from
+// (metres), the game's picture's share of it each way (`picture_scale`, under
+// 1 where a song's squeeze is capped), where the panel goes, the dark's quads,
+// the eyes' picture size, and the window's, the picture's (`picture_px`) and
+// the panel's corners in the left eye's picture (pixels from
 // its top left: top left, top right, bottom right, bottom left; [] for no
 // window, null for a corner behind the eye), the tracks' (`tracks`, below);
 // with `centre`, the same corners in its picture (`centre`: .gpu.C.png's eye)
@@ -183,6 +185,11 @@ std::string VrLayoutJson(const render::vr::FrameLayout& l, const render::xr::Fra
     window.pose = w.pose;
     window.size[0] = w.size[0];
     window.size[1] = w.size[1];
+    // the game's picture in it: the window, or its centre where a song's
+    // squeeze is capped (`picture_scale`, vr_window_max_squeeze)
+    render::vr::HudQuad picture = window;
+    picture.size[0] *= l.picture;
+    picture.size[1] *= l.picture;
     const char* hud = !l.hud ? "off" : l.hud_in_window ? "window" : "own";
     // Each track (vr_track_3d): a quad on it, its edges from where the game's
     // picture cuts it below to 60 units along it (the near half of what the
@@ -220,25 +227,30 @@ std::string VrLayoutJson(const render::vr::FrameLayout& l, const render::xr::Fra
     std::string centre_json;
     if (centre)
         centre_json = std::format(
-            ",\"centre\":{{\"eye_size\":[{},{}],\"window_px\":{},\"hud_px\":{}}}",
+            ",\"centre\":{{\"eye_size\":[{},{}],\"window_px\":{},\"picture_px\":{},"
+            "\"hud_px\":{}}}",
             centre_size, centre_size,
             l.window ? pixels(window, *centre, centre_size, centre_size) : "[]",
+            l.window ? pixels(picture, *centre, centre_size, centre_size) : "[]",
             pixels(l.hud_quad, *centre, centre_size, centre_size));
     return std::format(
         "{{\"source\":\"{}\",\"hud_boundary\":{},\"window\":{},\"eyes_black\":{},\"fade\":{:.3f},"
         "\"hfov\":{:.2f},\"vfov\":{:.2f},\"window_deg\":{:.2f},\"magnify\":{:.3f},"
+        "\"picture_scale\":{:.4f},"
         "\"distance\":{:.3f},\"window_size\":[{:.4f},{:.4f}],"
         "\"window_pose\":{},\"head\":{},\"hud\":\"{}\",\"hud_size\":[{:.4f},{:.4f}],"
         "\"hud_pose\":{},\"frame_quads\":{},\"frame_layers\":{},\"dim\":{:.3f},"
-        "\"eye_size\":[{},{}],\"window_px\":{},\"hud_px\":{},\"tracks\":{}{}}}",
+        "\"eye_size\":[{},{}],\"window_px\":{},\"picture_px\":{},\"hud_px\":{},"
+        "\"tracks\":{}{}}}",
         headset ? "headset" : "stand_in", l.hud_boundary, l.window ? "true" : "false",
         l.eyes_black ? "true" : "false", fade, l.game_fov.hfov * 57.2957795f,
         l.game_fov.vfov * 57.2957795f,
         w.distance > 0 ? 2 * std::atan2(w.size[0] / 2, w.distance) * 57.2957795f : 0.0f,
-        l.magnify, w.distance, w.size[0], w.size[1], pose(w.pose),
+        l.magnify, l.picture, w.distance, w.size[0], w.size[1], pose(w.pose),
         pose(views.head), hud, l.hud_quad.size[0], l.hud_quad.size[1], pose(l.hud_quad.pose),
         l.frame_quads, l.frame_layers ? "true" : "false", l.dim, eye_w, eye_h,
         l.window ? pixels(window, views, eye_w, eye_h) : "[]",
+        l.window ? pixels(picture, views, eye_w, eye_h) : "[]",
         pixels(l.hud_quad, views, eye_w, eye_h), tracks, centre_json);
 }
 

@@ -125,6 +125,7 @@ void Session::NoteFrame(const FrameViews&, float) {}
 void Session::StartMeasuring() {}
 std::string Session::MeasuredJson() { return {}; }
 
+    in.max_squeeze = float(REXCVAR_GET(vr_window_max_squeeze));
 #else
 
 using Microsoft::WRL::ComPtr;
