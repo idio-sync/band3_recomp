@@ -33,6 +33,15 @@
 // a new panel picture; frames in between show the image last released, as
 // a quad layer may.
 //
+// What the eyes show and where the panel goes is VrFrame's choice each frame
+// (LayoutFor: vr_pose.h's ResolveFrame with the vr_* settings), handed to
+// Present: the eyes through the game camera's window, with the dark around
+// it as nine more quad layers between the eyes' and the panel's (one tiny
+// swapchain cleared black at vr_window_dim's alpha, cleared again as that
+// changes), and the panel in the window or on its own place; or black eyes
+// and the panel alone. The eyes fade in from black after a cut (PresentConstants'
+// frame_size.w); the panel doesn't.
+//
 // Each runtime frame's timing (vr_timing.h's FrameTiming) is filled by
 // WaitFrame, the worker's VrFrame and Present, and handed to Record, which
 // keeps it in a ring for the harness's `vr_frames` (FramesCsv), counts it in
@@ -61,6 +70,10 @@ struct FrameViews {
     bool located = false;
     vr::XrPose pose[2];
     vr::Fov fov[2];
+    // the head at the last recenter, which the panel and the window hang
+    // from; until the views were first located, between this frame's eyes
+    bool have_head = false;
+    vr::XrPose head;
     // where the frame's time goes: WaitFrame starts it, the worker and
     // Present fill their parts, Record keeps it
     vr::FrameTiming timing;
@@ -106,6 +119,9 @@ struct Stats {
     // image; frames ended with its quad layer; recenters
     uint64_t hud_renders = 0, hud_copies = 0, hud_layers = 0, recenters = 0;
     double hud_render_ms = 0, hud_gpu_ms = 0;
+    // frames ended with the eyes through the game camera's window, with
+    // black eyes (no world to see), and the cuts faded
+    uint64_t window_frames = 0, black_frames = 0, fades = 0;
 };
 
 class Session {
@@ -125,12 +141,13 @@ class Session {
     bool WaitFrame(FrameViews& f);
     // Draws each eye's output (an ID3D12Resource gpu_view's outputs keep in
     // ALL_SHADER_RESOURCE, finished on the GPU) into its swapchain and ends
-    // the frame with them; with null eyes, ends it without a layer. `hud`, a
-    // new HUD panel picture (an output likewise), goes into the panel's
-    // image; null keeps the image last drawn. With vr_hud the frame ends
-    // with the panel's quad layer over the eyes once it has an image. Fills
-    // f.timing's Present part.
-    bool Present(FrameViews& f, void* const eye[2], void* hud, double begin_to_present_ms);
+    // the frame with them (a null one dark red or blue). `hud`, a new HUD
+    // panel picture (an output likewise), goes into the panel's image; null
+    // keeps the image last drawn. `layout` says the rest: black eyes, their
+    // fade, the dark around the window, and the panel's quad layer over them
+    // all (once it has an image). Fills f.timing's Present part.
+    bool Present(FrameViews& f, void* const eye[2], void* hud, const vr::FrameLayout& layout,
+                 double begin_to_present_ms);
     // Worker, once a frame's done (after the window's picture): classifies
     // `t` against the frame before, counts it, keeps it in the ring and logs
     // it if slow
@@ -149,15 +166,23 @@ class Session {
     // (the harness's `native_view on`); "" while `vr` was never on
     void StartMeasuring();
     std::string MeasuredJson();
-    // the anchor and eyes of the last frame presented, for `capture`'s
-    // .gpu.L.png and .gpu.R.png; false before one
-    bool LastEyes(vr::Eye eyes[2], uint32_t& width, uint32_t& height);
-    void NoteEyes(const vr::Eye eyes[2]);
+    // the views of the last frame presented and its fade, for `capture`'s
+    // .gpu.L.png and .gpu.R.png (LayoutFor of the captured frame); false
+    // before one
+    bool LastFrame(FrameViews& f, float& fade, uint32_t& width, uint32_t& height);
+    void NoteFrame(const FrameViews& f, float fade);
 
  private:
     Session() = default;
     struct Impl;
     Impl* impl_ = nullptr;
 };
+
+// The frame's layout for `fc` seen with `f`'s views: vr_pose.h's ResolveFrame
+// with the settings (vr_viewpoint, vr_hud*, vr_window_dim, vr_world_scale,
+// vr_anchor) and `in_song` (native_view.h: InSong and SongScreen), its fade 0. A
+// vr_viewpoint not made yet is logged once and seen from vr_anchor. Any
+// thread; every platform.
+vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_song);
 
 }  // namespace band3::render::xr

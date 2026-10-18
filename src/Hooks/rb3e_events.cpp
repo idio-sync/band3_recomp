@@ -339,6 +339,7 @@ extern "C" REX_FUNC(PresenceMgr__UpdatePresence)
         uint32_t screen = Load32(base, kTheBandUI + kBandUI_CurrentScreen);
         uint32_t name = screen ? Load32(base, screen + kUIScreen_Name) : 0;
         band3::aspect::SetScreen(name ? GuestStr(base, name) : nullptr);
+        band3::render::SetScreenForVr(name ? GuestStr(base, name) : nullptr);
         if (name && events) {
             band3::events::SendString(band3::events::kScreenName, GuestStr(base, name));
         }

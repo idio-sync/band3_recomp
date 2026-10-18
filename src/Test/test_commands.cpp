@@ -580,6 +580,7 @@ std::string Capture(TestTarget& target, const std::vector<std::string_view>& arg
         fields += ",\"gpu_error\":";
         AppendJsonString(fields, info.gpu_error);
     }
+    if (!info.vr.empty()) fields += ",\"vr\":" + info.vr;
     return Ok(fields);
 }
 

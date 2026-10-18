@@ -1331,8 +1331,9 @@ class Renderer {
     // views, then both eyes into the headset
     //
     // Each eye is the newest capture re-posed (vr_pose.h's RePose) from where
-    // that eye is: LOCAL space placed in the venue by vr_anchor (empty: the
-    // game camera's point, facing where it looks), drawn at the swapchain's
+    // that eye is (xr::LayoutFor): through the game camera's window, or with
+    // LOCAL space placed in the venue by vr_anchor, faded in after a cut
+    // (the cut found first, for every capture seen), drawn at the swapchain's
     // size without the HUD's draws (BackBufferPart::kEyes), the world drawn
     // ahead, kept buffers, motion blur, DOF or the spotlights' haze. The
     // left eye goes into one of the window's slots when one is free and is
@@ -1367,11 +1368,16 @@ class Renderer {
         decode_pending_ms += decode_ms;
         void* eyes[2] = {nullptr, nullptr};
         if (!cap) {
-            // nothing captured yet: the eyes' colours
-            xs.Present(f, eyes, nullptr, since_begin());
+            // nothing captured yet: black eyes
+            vr::FrameLayout dark;
+            dark.eyes_black = true;
+            xs.Present(f, eyes, nullptr, dark, since_begin());
             xs.Record(t);
             return;
         }
+        // every capture the eyes see goes by the cuts, whether or not this
+        // frame reaches the window: a cut missed is a fade missed
+        const CameraCuts::Step cut = cuts_.Next(*cap);
         t.capture = cap->frame;
         t.capture_age_ms =
             std::chrono::duration<double, std::milli>(Clock::now() - presented).count();
@@ -1381,16 +1387,22 @@ class Renderer {
                                  ? uint32_t(cap->frame - vr_timed_frame_ - 1)
                                  : 0;
         vr_timed_frame_ = cap->frame;
-        vr::Anchor anchor;
-        const std::string anchor_text = REXCVAR_GET(vr_anchor);
-        if (anchor_text.empty() || !vr::ParseAnchor(anchor_text, anchor)) {
-            const WorldCamera wc = WorldCameraOf(*cap);
-            freecam::Pose game{};
-            Mat4 proj{};
-            if (wc.valid && freecam::Decompose(wc.view_proj, game, proj))
-                anchor = vr::AnchorFromCamera(game);
+        // where the eyes are and what the quads show (xr::LayoutFor), and
+        // the fade: from black at a cut, or as the eyes go between the
+        // window, the anchor and black, back to the picture over
+        // vr_cut_fade_ms of the runtime's display time
+        vr::FrameLayout layout = xr::LayoutFor(*cap, f, InSong() && SongScreen());
+        const int kind = layout.eyes_black ? 0 : layout.window ? 1 : 2;
+        if (cut.cut || (vr_kind_ >= 0 && kind != vr_kind_)) {
+            vr_fading_ = true;
+            vr_fade_from_ = f.display_time;
         }
-        const float scale = float(REXCVAR_GET(vr_world_scale));
+        vr_kind_ = kind;
+        if (vr_fading_) {
+            layout.fade = vr::CutFade(f.display_time - vr_fade_from_,
+                                      double(REXCVAR_GET(vr_cut_fade_ms)));
+            vr_fading_ = layout.fade > 0;
+        }
         RasterOptions eo = o;
         eo.width = xs.Width();
         eo.height = xs.Height();
@@ -1406,8 +1418,9 @@ class Renderer {
         eo.part = BackBufferPart::kEyes;
         // the HUD panel's draws from post_boundary on, or all of them for a
         // frame the eyes can't see (no DoPostProcess, no world camera): the
-        // panel is then the whole picture and the eyes the clear colour
-        eo.hud_from = vr::HudBoundary(*cap);
+        // panel is then the whole picture, the eyes drawn with nothing (the
+        // window's picture) and black in the headset
+        eo.hud_from = layout.hud_boundary;
         eo.gpu_no_wait = true;
         eo.output_readback = false;
         eo.gpu_draw_profile = false;
@@ -1425,8 +1438,7 @@ class Renderer {
         Drawn d[2];
         double repose_ms[2] = {0, 0};
         for (int e = 0; e < 2; e++) {
-            eye[e].pose = vr::EyePose(f.pose[e], anchor, scale);
-            eye[e].fov = f.fov[e];
+            eye[e] = layout.eyes[e];
             const auto repose_start = Clock::now();
             eye_cap[e] = std::make_shared<FrameCapture>();
             vr::RePose(*cap, eye[e], *eye_cap[e]);
@@ -1440,7 +1452,7 @@ class Renderer {
                 slots_.Submitted(left_slot);
             }
         }
-        xs.NoteEyes(eye);
+        xs.NoteFrame(f, layout.fade);
         // The HUD panel (vr_hud): the capture as it is, not re-posed (the
         // panel hangs flat in front of the head), its HUD draws alone
         // (BackBufferPart::kHud) at the eyes' size with the window's MSAA,
@@ -1505,7 +1517,7 @@ class Renderer {
         const uint64_t newest = LatestCaptureFrame();
         t.newer = newest > cap->frame ? uint32_t(newest - cap->frame) : 0;
         // a missing eye shows its colour rather than the other's picture
-        xs.Present(f, eyes, hud, since_begin());
+        xs.Present(f, eyes, hud, layout, since_begin());
         // the left eye as the window's picture, and as RGBA for a screenshot
         // or F9's window
         bool want_rgba;
@@ -1537,7 +1549,7 @@ class Renderer {
         w.drew_gpu = true;
         w.width = eo.width;
         w.height = eo.height;
-        w.camera = cuts_.Next(*cap);
+        w.camera = cut;
         w.gs.decode_ms = decode_pending_ms;
         w.gs.ms += decode_pending_ms;
         decode_pending_ms = 0;
@@ -1553,6 +1565,11 @@ class Renderer {
     uint64_t vr_timed_frame_ = 0;
     // the capture the HUD panel's picture is of (-1 none)
     int64_t vr_hud_frame_ = -1;
+    // the last VR frame's eyes: 0 black, 1 the window, 2 the anchor (-1
+    // none yet); and the fade's start, in the runtime's display time
+    int vr_kind_ = -1;
+    bool vr_fading_ = false;
+    int64_t vr_fade_from_ = 0;
 
     // One fence check; when finished, marks the slot finished and un-holds
     // the worker.
@@ -2815,6 +2832,15 @@ std::atomic<bool> g_in_song{false};
 }  // namespace
 void SetInSong(bool in_song) { g_in_song.store(in_song, std::memory_order_relaxed); }
 bool InSong() { return g_in_song.load(std::memory_order_relaxed); }
+
+std::atomic<bool> g_song_screen{false};
+
+void SetScreenForVr(const char* name) {
+    const std::string_view n = name ? name : "";
+    g_song_screen.store(n == "game_screen" || n == "practice_game_screen",
+                        std::memory_order_relaxed);
+}
+bool SongScreen() { return g_song_screen.load(std::memory_order_relaxed); }
 
 PresentPaintStats GetPresentPaintStats(bool reset) {
     const bool presenting = Renderer::Get().Presenting();

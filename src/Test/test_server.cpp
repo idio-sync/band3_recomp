@@ -147,6 +147,65 @@ double CpThreadMs() {
 #endif
 }
 
+// `capture`'s `vr`: the layout VR draws the captured frame with
+// (xr::LayoutFor), from the headset's last views or the stand-in's: whether
+// the eyes are through the game camera's window or black, the fade, the
+// game's field of view in degrees, the window's size and pose in LOCAL space
+// (metres), where the panel goes, the dark's quads, the eyes' picture size, and
+// the window's and the panel's corners in the left eye's picture (pixels from
+// its top left: top left, top right, bottom right, bottom left; [] for no
+// window, null for a corner behind the eye); with `centre`, the same corners
+// in its picture (`centre`: .gpu.C.png's eye)
+std::string VrLayoutJson(const render::vr::FrameLayout& l, const render::xr::FrameViews& views,
+                         bool headset, float fade, uint32_t eye_w, uint32_t eye_h,
+                         const render::xr::FrameViews* centre, uint32_t centre_size) {
+    auto pose = [](const render::vr::XrPose& p) {
+        return std::format("{{\"p\":[{:.4f},{:.4f},{:.4f}],\"q\":[{:.4f},{:.4f},{:.4f},{:.4f}]}}",
+                           p.p[0], p.p[1], p.p[2], p.q[0], p.q[1], p.q[2], p.q[3]);
+    };
+    auto pixels = [&](const render::vr::HudQuad& q, const render::xr::FrameViews& v,
+                      uint32_t w, uint32_t h) {
+        float c[4][3];
+        render::vr::QuadCorners(q, c);
+        std::string out = "[";
+        for (int i = 0; i < 4; i++) {
+            float x = 0, y = 0;
+            out += i ? "," : "";
+            if (render::vr::EyePixel(v.pose[0], v.fov[0], w, h, c[i], x, y))
+                out += std::format("[{:.2f},{:.2f}]", x, y);
+            else
+                out += "null";
+        }
+        return out + "]";
+    };
+    const render::vr::WindowFrame& w = l.window_frame;
+    render::vr::HudQuad window;
+    window.pose = w.pose;
+    window.size[0] = w.size[0];
+    window.size[1] = w.size[1];
+    const char* hud = !l.hud ? "off" : l.hud_in_window ? "window" : "own";
+    std::string centre_json;
+    if (centre)
+        centre_json = std::format(
+            ",\"centre\":{{\"eye_size\":[{},{}],\"window_px\":{},\"hud_px\":{}}}",
+            centre_size, centre_size,
+            l.window ? pixels(window, *centre, centre_size, centre_size) : "[]",
+            pixels(l.hud_quad, *centre, centre_size, centre_size));
+    return std::format(
+        "{{\"source\":\"{}\",\"hud_boundary\":{},\"window\":{},\"eyes_black\":{},\"fade\":{:.3f},"
+        "\"hfov\":{:.2f},\"vfov\":{:.2f},\"distance\":{:.3f},\"window_size\":[{:.4f},{:.4f}],"
+        "\"window_pose\":{},\"head\":{},\"hud\":\"{}\",\"hud_size\":[{:.4f},{:.4f}],"
+        "\"hud_pose\":{},\"frame_quads\":{},\"dim\":{:.3f},\"eye_size\":[{},{}],"
+        "\"window_px\":{},\"hud_px\":{}{}}}",
+        headset ? "headset" : "stand_in", l.hud_boundary, l.window ? "true" : "false",
+        l.eyes_black ? "true" : "false", fade, l.game_fov.hfov * 57.2957795f,
+        l.game_fov.vfov * 57.2957795f, w.distance, w.size[0], w.size[1], pose(w.pose),
+        pose(views.head), hud, l.hud_quad.size[0], l.hud_quad.size[1], pose(l.hud_quad.pose),
+        l.frame_quads, l.dim, eye_w, eye_h,
+        l.window ? pixels(window, views, eye_w, eye_h) : "[]",
+        pixels(l.hud_quad, views, eye_w, eye_h), centre_json);
+}
+
 // how often the server thread looks up from its sockets to see if it should stop
 constexpr std::chrono::milliseconds kStopCheck{200};
 // longer than any command could want, so one can't grow without bound
@@ -428,12 +487,52 @@ public:
             return;
         }
         out.gpu_path = path.string();
-        // with `vr` running, the frame from each eye of the last VR frame, as
-        // the headset's are drawn (native_view.cpp's VrFrame), into
-        // <name>.gpu.L.png and <name>.gpu.R.png
-        render::vr::Eye eyes[2];
-        uint32_t eye_w = 0, eye_h = 0;
-        if (render::xr::Session::Get().LastEyes(eyes, eye_w, eye_h)) {
+        // with `vr` on, the frame from each eye as the headset's are drawn
+        // (native_view.cpp's VrFrame): xr::LayoutFor of this capture with the
+        // last VR frame's views, or without a session a stand-in head at
+        // LOCAL's origin facing -z, both eyes at it, 90 degrees each way. Into
+        // <name>.gpu.L.png and <name>.gpu.R.png (black where the headset's
+        // are, the fade left out); the capture's own camera with the eyes'
+        // draws alone, at its size (<name>.gpu.eyes.png: what the window in
+        // .gpu.L.png shows, tools/vr_window_check.py); with a headset and a
+        // window, one eye as the stand-in's but at the recenter's head facing
+        // the window (<name>.gpu.C.png, the window square on: the game
+        // camera); the layout in the reply's `vr` and <name>.vr.json
+        if (REXCVAR_GET(vr)) {
+            render::xr::FrameViews views;
+            float fade = 0;
+            uint32_t eye_w = 0, eye_h = 0;
+            const bool headset =
+                render::xr::Session::Get().LastFrame(views, fade, eye_w, eye_h);
+            if (!headset) {
+                for (int e = 0; e < 2; e++) {
+                    views.pose[e] = {};
+                    views.fov[e] = {-0.7853982f, 0.7853982f, 0.7853982f, -0.7853982f};
+                }
+                views.have_head = true;
+                views.head = {};
+                eye_w = eye_h = 1440;
+            }
+            const bool in_song = render::InSong() && render::SongScreen();
+            const render::vr::FrameLayout layout = render::xr::LayoutFor(frame, views, in_song);
+            constexpr uint32_t kCentreSize = 1440;
+            render::xr::FrameViews centre = views;
+            const bool with_centre = headset && layout.window;
+            if (with_centre) {
+                for (int e = 0; e < 2; e++) {
+                    centre.pose[e].p[0] = views.head.p[0];
+                    centre.pose[e].p[1] = views.head.p[1];
+                    centre.pose[e].p[2] = views.head.p[2];
+                    for (int k = 0; k < 4; k++) centre.pose[e].q[k] = layout.window_frame.pose.q[k];
+                    centre.fov[e] = {-0.7853982f, 0.7853982f, 0.7853982f, -0.7853982f};
+                }
+            }
+            out.vr = VrLayoutJson(layout, views, headset, fade, eye_w, eye_h,
+                                  with_centre ? &centre : nullptr, kCentreSize);
+            // and beside the pictures, for tools/vr_window_check.py
+            std::ofstream(rex::filesystem::GetExecutableFolder() / "screenshots" /
+                          (file + ".vr.json"))
+                << out.vr;
             render::RasterOptions eo = options;
             eo.width = eye_w;
             eo.height = eye_h;
@@ -443,17 +542,53 @@ public:
             eo.post_only = render::post::kPostXfm | render::post::kPostBloom |
                            render::post::kPostGlare;
             eo.part = render::BackBufferPart::kEyes;
-            eo.hud_from = render::vr::HudBoundary(frame);
+            eo.hud_from = layout.hud_boundary;
             for (int e = 0; e < 2; e++) {
-                render::FrameCapture eye_frame;
-                render::vr::RePose(frame, eyes[e], eye_frame);
                 std::vector<uint32_t> eye_rgba;
                 render::GpuStats eye_stats;
-                if (render::GpuRenderer::Get().RenderFrame(eye_frame, eo, eye_rgba, eye_stats))
+                bool drew = layout.eyes_black;
+                if (layout.eyes_black) {
+                    eye_rgba.assign(size_t(eye_w) * eye_h, 0xFF000000u);
+                } else {
+                    render::FrameCapture eye_frame;
+                    render::vr::RePose(frame, layout.eyes[e], eye_frame);
+                    drew = render::GpuRenderer::Get().RenderFrame(eye_frame, eo, eye_rgba,
+                                                                  eye_stats);
+                }
+                if (drew)
                     render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
                                       (file + (e ? ".gpu.R.png" : ".gpu.L.png")))
                                          .string(),
                                      eye_rgba, eye_w, eye_h);
+            }
+            if (with_centre) {
+                render::RasterOptions co = eo;
+                co.width = co.height = kCentreSize;
+                render::ScaleForPicture(co);
+                const render::vr::FrameLayout cl = render::xr::LayoutFor(frame, centre, in_song);
+                render::FrameCapture eye_frame;
+                render::vr::RePose(frame, cl.eyes[0], eye_frame);
+                std::vector<uint32_t> centre_rgba;
+                render::GpuStats centre_stats;
+                if (render::GpuRenderer::Get().RenderFrame(eye_frame, co, centre_rgba,
+                                                           centre_stats))
+                    render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
+                                      (file + ".gpu.C.png"))
+                                         .string(),
+                                     centre_rgba, kCentreSize, kCentreSize);
+            }
+            if (layout.window) {
+                render::RasterOptions wo = eo;
+                wo.width = options.width;
+                wo.height = options.height;
+                render::ScaleForPicture(wo);
+                std::vector<uint32_t> world_rgba;
+                render::GpuStats world_stats;
+                if (render::GpuRenderer::Get().RenderFrame(frame, wo, world_rgba, world_stats))
+                    render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
+                                      (file + ".gpu.eyes.png"))
+                                         .string(),
+                                     world_rgba, wo.width, wo.height);
             }
             // and with vr_hud, the HUD panel as VrFrame draws it, at the eyes'
             // size and the window's MSAA: <name>.gpu.hud.png, its colour

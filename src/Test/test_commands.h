@@ -87,6 +87,9 @@ struct CaptureInfo {
     // drawing of the capture at that size too, as it draws the window's
     // (<name>.gpu.presented.png: replay --scale's to check), or empty
     std::string gpu_presented_path;
+    // with `vr` on, the layout VR draws the frame with, a JSON object
+    // (test_server.cpp's VrLayoutJson), or empty
+    std::string vr;
 };
 
 // the live native view (`native_view on`): F9's renderer without its window,

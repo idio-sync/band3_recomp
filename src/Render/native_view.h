@@ -54,6 +54,13 @@ namespace band3::render {
 void SetInSong(bool in_song);
 bool InSong();
 
+// Whether the screen up (rb3e_events.cpp's PresenceMgr::UpdatePresence, by
+// its UIScreen name) is a song's own, game_screen or practice_game_screen:
+// VR's song frames are InSong() and this (xr_present.h's LayoutFor), so the
+// vignette a song loads behind and its results are menus. Any thread.
+void SetScreenForVr(const char* name);
+bool SongScreen();
+
 class NativeViewDialog : public rex::ui::ImGuiDialog {
  public:
     using DrawerGetter = std::function<rex::ui::ImmediateDrawer*()>;

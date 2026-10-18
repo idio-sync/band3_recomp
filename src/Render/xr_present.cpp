@@ -1,10 +1,13 @@
 #include "src/Render/xr_present.h"
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 
 #include <fmt/format.h>
 #include <rex/logging.h>
+
+#include "src/settings.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -21,7 +24,6 @@
 
 #include "src/Render/gpu_view.h"
 #include "src/Render/shaders/present_shaders.gen.h"
-#include "src/settings.h"
 
 // the headers only: every function comes from the loader at run time
 #define XR_NO_PROTOTYPES
@@ -32,6 +34,41 @@
 #endif
 
 namespace band3::render::xr {
+
+vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_song) {
+    vr::Viewpoint vp;
+    const std::string mode = REXCVAR_GET(vr_viewpoint);
+    if (!vr::ParseViewMode(mode, vp.mode)) vp.mode = vr::ViewMode::kGameCamera;
+    vp.window = vp.mode == vr::ViewMode::kGameCamera;
+    if (!vp.window) {
+        // once each time it's set to one
+        static std::atomic<int> logged{-1};
+        if (logged.exchange(int(vp.mode)) != int(vp.mode))
+            REXLOG_INFO("vr: vr_viewpoint {} isn't made yet; songs are seen from vr_anchor's "
+                        "place, menus through the game camera's window",
+                        mode);
+        const std::string anchor_text = REXCVAR_GET(vr_anchor);
+        vp.follow = anchor_text.empty() || !vr::ParseAnchor(anchor_text, vp.anchor);
+    }
+    vr::FrameInputs in;
+    for (int e = 0; e < 2; e++) {
+        in.views[e] = f.pose[e];
+        in.fov[e] = f.fov[e];
+    }
+    in.head = f.have_head ? f.head : vr::HeadPose(f.pose[0], f.pose[1]);
+    in.hud_boundary = vr::HudBoundary(fc);
+    const WorldCamera wc = WorldCameraOf(fc);
+    in.camera = wc.valid && freecam::Decompose(wc.view_proj, in.game, in.proj);
+    in.in_song = in_song;
+    in.hud = REXCVAR_GET(vr_hud);
+    in.hud_in_window = REXCVAR_GET(vr_hud_in_window);
+    in.hud_layout.distance = float(REXCVAR_GET(vr_hud_distance));
+    in.hud_layout.below = float(REXCVAR_GET(vr_hud_below));
+    in.hud_layout.width_deg = float(REXCVAR_GET(vr_hud_width));
+    in.dim = float(REXCVAR_GET(vr_window_dim));
+    in.world_scale = float(REXCVAR_GET(vr_world_scale));
+    return vr::ResolveFrame(vp, in);
+}
 
 #ifndef _WIN32
 
@@ -44,7 +81,9 @@ bool Session::Update(bool) { return false; }
 uint32_t Session::Width() const { return 0; }
 uint32_t Session::Height() const { return 0; }
 bool Session::WaitFrame(FrameViews&) { return false; }
-bool Session::Present(FrameViews&, void* const[2], void*, double) { return false; }
+bool Session::Present(FrameViews&, void* const[2], void*, const vr::FrameLayout&, double) {
+    return false;
+}
 void Session::Record(vr::FrameTiming&) {}
 std::string Session::FramesCsv(uint64_t& frames) {
     frames = 0;
@@ -54,8 +93,8 @@ bool Session::HudFree() { return true; }
 void Session::AddRenderMs(int, double, double, double) {}
 void Session::AddHudMs(double, double) {}
 Stats Session::GetStats() { return {}; }
-bool Session::LastEyes(vr::Eye[2], uint32_t&, uint32_t&) { return false; }
-void Session::NoteEyes(const vr::Eye[2]) {}
+bool Session::LastFrame(FrameViews&, float&, uint32_t&, uint32_t&) { return false; }
+void Session::NoteFrame(const FrameViews&, float) {}
 void Session::StartMeasuring() {}
 std::string Session::MeasuredJson() { return {}; }
 
@@ -164,12 +203,19 @@ struct Session::Impl {
     XrSessionState state = XR_SESSION_STATE_UNKNOWN;
     bool running = false;  // between xrBeginSession and xrEndSession
     uint32_t width = 0, height = 0;
-    // a swapchain: each eye's, and the HUD panel's at the same size
+    // a swapchain: each eye's, the HUD panel's at the same size, and the
+    // dark around the window's, kBlackSize square
     struct Chain {
         XrSwapchain swapchain = XR_NULL_HANDLE;
         std::vector<ComPtr<ID3D12Resource>> images;
         ComPtr<ID3D12DescriptorHeap> rtvs;  // one per image
-    } eyes[2], hud;
+    } eyes[2], hud, black;
+    static constexpr uint32_t kBlackSize = 8;
+    // the alpha the dark's image was last cleared to (-1 never); whether an
+    // image of its never came back (logged), which leaves the window undarkened
+    float black_alpha = -1;
+    bool black_failed = false;
+    bool window_logged = false;  // the window's first frame, logged
     // the present: present.hlsl into the images, on band3's command list on
     // the SDK's queue; per frame in flight an allocator and kSrvs SRVs (the
     // eyes', the panel's), reused once `fence` passes its value
@@ -223,8 +269,9 @@ struct Session::Impl {
     uint64_t timing_frames = 0;
     std::chrono::steady_clock::time_point slow_logged{};
     uint64_t slow_unlogged = 0;
-    bool have_eyes = false;
-    vr::Eye last_eyes[2];
+    bool have_frame = false;
+    FrameViews last_frame;
+    float last_fade = 0;
     std::chrono::steady_clock::time_point fake_start = std::chrono::steady_clock::now();
 
     void SetState(const std::string& s) {
@@ -403,14 +450,14 @@ bool Session::Impl::MakeSwapchains() {
     rtv_size = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     // the panel's as the eyes': its picture is drawn at their size, texel
     // for texel, and goes in as theirs do
-    for (Chain* chain : {&eyes[0], &eyes[1], &hud}) {
+    for (Chain* chain : {&eyes[0], &eyes[1], &hud, &black}) {
         Chain& e = *chain;
         XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
         ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
         ci.format = format;
         ci.sampleCount = 1;
-        ci.width = width;
-        ci.height = height;
+        ci.width = chain == &black ? kBlackSize : width;
+        ci.height = chain == &black ? kBlackSize : height;
         ci.faceCount = 1;
         ci.arraySize = 1;
         ci.mipCount = 1;
@@ -445,7 +492,9 @@ bool Session::Impl::MakeSwapchains() {
             D3D12_RENDER_TARGET_VIEW_DESC rd{};
             rd.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
             rd.Format = srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
-            (chain == &hud ? hud_srgb_view : srgb_view) = srgb;
+            // the dark's is only ever cleared: black at an alpha, the same
+            // in either view
+            if (chain != &black) (chain == &hud ? hud_srgb_view : srgb_view) = srgb;
             if (i == 0 && chain == &hud)
                 REXLOG_INFO("vr: swapchains of DXGI format {}, images of {}; the HUD panel's "
                             "through a{} view",
@@ -721,6 +770,8 @@ bool Session::WaitFrame(FrameViews& f) {
         m.have_head = true;
         m.recenter = false;
     }
+    f.have_head = m.have_head;
+    f.head = m.head;
     t.located_ms = MsSince(woke);
     return true;
 }
@@ -731,7 +782,7 @@ bool Session::HudFree() {
 }
 
 bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
-                      double begin_to_present_ms) {
+                      const vr::FrameLayout& layout, double begin_to_present_ms) {
     Impl& m = *impl_;
     const auto start = std::chrono::steady_clock::now();
     vr::FrameTiming& t = f.timing;
@@ -794,6 +845,29 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
                 m.hud_failed = true;
             }
         }
+        // The dark's image, cleared again only as vr_window_dim changes: its
+        // layers show the image last released
+        uint32_t black_index = 0;
+        bool black_drawn = false;
+        if (drawn && layout.frame_quads > 0 && !m.black_failed && m.black_alpha != layout.dim) {
+            XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+            XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+            wi.timeout = 100000000;  // 100 ms
+            const bool acquired =
+                XR_SUCCEEDED(m.acquire_image(m.black.swapchain, &ai, &black_index));
+            XrResult r = XR_ERROR_RUNTIME_FAILURE;
+            for (int tries = 0; acquired && tries < 3; tries++) {
+                r = m.wait_image(m.black.swapchain, &wi);
+                if (r != XR_TIMEOUT_EXPIRED) break;
+            }
+            black_drawn = acquired && r == XR_SUCCESS;
+            if (!black_drawn) {
+                REXLOG_WARN("vr: couldn't get the window's dark swapchain image ({}); the window "
+                            "goes without it",
+                            int(r));
+                m.black_failed = true;
+            }
+        }
         t.hud_acquire_ms = lap(step);
         if (drawn) {
             m.allocators[k]->Reset();
@@ -803,11 +877,17 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
             m.list->SetGraphicsRootSignature(m.root.Get());
             m.list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             // output `tex` into image `image` of `chain` by `pipeline`, through
-            // this frame's SRV `srv`
+            // this frame's SRV `srv`, faded `fade` to black; or the image
+            // black, with `black`
             auto copy = [&](Impl::Chain& chain, uint32_t image, ID3D12Resource* tex, int srv,
-                            ID3D12PipelineState* pipeline) {
+                            ID3D12PipelineState* pipeline, float fade, bool black) {
                 D3D12_CPU_DESCRIPTOR_HANDLE rtv = chain.rtvs->GetCPUDescriptorHandleForHeapStart();
                 rtv.ptr += SIZE_T(image) * m.rtv_size;
+                if (black) {
+                    const float colour[4] = {0, 0, 0, 1};
+                    m.list->ClearRenderTargetView(rtv, colour, 0, nullptr);
+                    return;
+                }
                 // no picture: the left eye dark red, the right dark blue
                 if (!tex) {
                     const float colour[2][4] = {{0.4f, 0, 0, 1}, {0, 0, 0.4f, 1}};
@@ -833,21 +913,29 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
                 const D3D12_RECT sc{0, 0, LONG(m.width), LONG(m.height)};
                 m.list->RSSetScissorRects(1, &sc);
                 // present.hlsl's PresentConstants: the whole image, texel for
-                // texel when the output is its size
+                // texel when the output is its size, and the fade
                 const float c[8] = {0, 0, float(m.width), float(m.height), float(td.Width),
                                     float(td.Height),
                                     td.Width == m.width && td.Height == m.height ? 1.0f : 0.0f,
-                                    0};
+                                    fade};
                 m.list->SetGraphicsRoot32BitConstants(0, 8, c, 0);
                 m.list->SetGraphicsRootDescriptorTable(1, gpu);
                 m.list->DrawInstanced(3, 1, 0, 0);
             };
             for (int e = 0; e < 2; e++)
                 copy(m.eyes[e], index[e], static_cast<ID3D12Resource*>(eye[e]), e,
-                     m.pipeline.Get());
+                     m.pipeline.Get(), layout.fade, layout.eyes_black);
             if (hud_drawn)
                 copy(m.hud, hud_index, static_cast<ID3D12Resource*>(hud), 2,
-                     m.hud_pipeline.Get());
+                     m.hud_pipeline.Get(), 0, false);
+            // the dark: black, premultiplied, covering by vr_window_dim
+            if (black_drawn) {
+                D3D12_CPU_DESCRIPTOR_HANDLE rtv =
+                    m.black.rtvs->GetCPUDescriptorHandleForHeapStart();
+                rtv.ptr += SIZE_T(black_index) * m.rtv_size;
+                const float colour[4] = {0, 0, 0, layout.dim};
+                m.list->ClearRenderTargetView(rtv, colour, 0, nullptr);
+            }
             m.list->Close();
             ID3D12CommandList* lists[] = {m.list.Get()};
             m.queue->ExecuteCommandLists(1, lists);
@@ -867,6 +955,11 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
             XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
             if (XR_SUCCEEDED(m.release_image(m.hud.swapchain, &ri))) m.hud_released = true;
         }
+        if (black_drawn) {
+            XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+            if (XR_SUCCEEDED(m.release_image(m.black.swapchain, &ri))) m.black_alpha = layout.dim;
+            else m.black_failed = true;
+        }
         t.release_ms = lap(step);
         for (int e = 0; e < 2; e++) {
             views[e].pose.orientation = {f.pose[e].q[0], f.pose[e].q[1], f.pose[e].q[2],
@@ -881,34 +974,45 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
     layer.space = m.local;
     layer.viewCount = 2;
     layer.views = views;
-    // The HUD panel over the eyes, once its image was ever released (the
-    // last released is what the layer shows), where the cvars say: read each
-    // frame, so they change it at once. Premultiplied colour: blended by its
-    // alpha, not unpremultiplied first.
-    const bool show_hud = drawn && m.hud_released && REXCVAR_GET(vr_hud);
+    // the layers, bottom up: the eyes, the dark around the window, the panel
+    const XrCompositionLayerBaseHeader* layers[2 + vr::kFrameQuads] = {
+        reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer)};
+    uint32_t layer_count = 1;
+    // a quad layer of `chain`'s whole image, blended by its alpha
+    // (premultiplied colour: not unpremultiplied first)
+    auto quad_of = [&](const Impl::Chain& chain, uint32_t w, uint32_t h, const vr::HudQuad& q) {
+        XrCompositionLayerQuad l{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        l.space = m.local;
+        l.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        l.subImage.swapchain = chain.swapchain;
+        l.subImage.imageRect = {{0, 0}, {int32_t(w), int32_t(h)}};
+        l.pose.orientation = {q.pose.q[0], q.pose.q[1], q.pose.q[2], q.pose.q[3]};
+        l.pose.position = {q.pose.p[0], q.pose.p[1], q.pose.p[2]};
+        l.size = {q.size[0], q.size[1]};
+        return l;
+    };
+    XrCompositionLayerQuad frames[vr::kFrameQuads];
+    const bool show_frames = drawn && layout.frame_quads > 0 && m.black_alpha >= 0;
+    if (show_frames) {
+        for (int i = 0; i < layout.frame_quads && i < vr::kFrameQuads; i++) {
+            frames[i] = quad_of(m.black, Impl::kBlackSize, Impl::kBlackSize, layout.frame[i]);
+            layers[layer_count++] =
+                reinterpret_cast<const XrCompositionLayerBaseHeader*>(&frames[i]);
+        }
+    }
+    // The HUD panel over them all, once its image was ever released (the
+    // last released is what the layer shows), where the layout says
+    const bool show_hud = drawn && m.hud_released && layout.hud;
     XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
     if (show_hud) {
-        vr::HudLayout l;
-        l.distance = float(REXCVAR_GET(vr_hud_distance));
-        l.below = float(REXCVAR_GET(vr_hud_below));
-        l.width_deg = float(REXCVAR_GET(vr_hud_width));
-        const vr::HudQuad q = vr::HudPlacement(l, m.head);
-        quad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-        quad.space = m.local;
-        quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-        quad.subImage.swapchain = m.hud.swapchain;
-        quad.subImage.imageRect = {{0, 0}, {int32_t(m.width), int32_t(m.height)}};
-        quad.pose.orientation = {q.pose.q[0], q.pose.q[1], q.pose.q[2], q.pose.q[3]};
-        quad.pose.position = {q.pose.p[0], q.pose.p[1], q.pose.p[2]};
-        quad.size = {q.size[0], q.size[1]};
+        quad = quad_of(m.hud, m.width, m.height, layout.hud_quad);
+        layers[layer_count++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad);
     }
-    const XrCompositionLayerBaseHeader* layers[] = {
-        reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer),
-        reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad)};
     XrFrameEndInfo ei{XR_TYPE_FRAME_END_INFO};
     ei.displayTime = f.display_time;
     ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-    ei.layerCount = drawn ? (show_hud ? 2 : 1) : 0;
+    ei.layerCount = drawn ? layer_count : 0;
     ei.layers = drawn ? layers : nullptr;
     step = std::chrono::steady_clock::now();
     const XrResult r = m.end_frame(m.session, &ei);
@@ -923,10 +1027,23 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
                     quad.size.width, quad.size.height, quad.pose.position.x,
                     quad.pose.position.y, quad.pose.position.z);
     }
+    if (layout.window && drawn && XR_SUCCEEDED(r) && !m.window_logged) {
+        m.window_logged = true;
+        const vr::WindowFrame& w = layout.window_frame;
+        REXLOG_INFO("vr: the game camera's window is up: {:.2f} x {:.2f} m at {:.2f} m ({:.1f} "
+                    "x {:.1f} degrees), the panel {}, {} dark quads",
+                    w.size[0], w.size[1], w.distance, layout.game_fov.hfov * 57.29578f,
+                    layout.game_fov.vfov * 57.29578f,
+                    layout.hud_in_window ? "in it" : "on its own place",
+                    show_frames ? layout.frame_quads : 0);
+    }
     {
         std::lock_guard lock(m.stats_mutex);
         if (hud_drawn) m.stats.hud_copies++;
         if (show_hud) m.stats.hud_layers++;
+        if (drawn && layout.window) m.stats.window_frames++;
+        if (drawn && layout.eyes_black) m.stats.black_frames++;
+        if (drawn && layout.fade >= 1) m.stats.fades++;
         (drawn ? m.stats.frames : m.stats.skipped)++;
         if (!f.render) m.stats.hidden++;
         m.stats.present_ms += present_ms;
@@ -1050,7 +1167,8 @@ std::string Session::MeasuredJson() {
         "\"gpu_ms_per_frame\":[{:.3f},{:.3f}],\"repose_ms_per_frame\":[{:.3f},{:.3f}],"
         "\"present_ms_per_frame\":{:.3f},\"frame_ms_per_frame\":{:.3f},\"srgb_view\":{},"
         "\"hud\":{},\"missed\":{},\"slots_missed\":{},\"over_period\":{},\"late_wakes\":{},"
-        "\"repeats\":{},\"behind_newer\":{},\"slow\":{},\"timing\":{}}}",
+        "\"repeats\":{},\"behind_newer\":{},\"slow\":{},\"window_frames\":{},"
+        "\"black_frames\":{},\"fades\":{},\"timing\":{}}}",
         text(now.state), text(now.runtime), text(now.system), now.width, now.height,
         double(now.display_period_ns) / 1e6, frames, now.skipped - from.skipped,
         now.hidden - from.hidden, now.late - from.late, per(now.wait_ms, from.wait_ms, ended),
@@ -1063,24 +1181,25 @@ std::string Session::MeasuredJson() {
         now.srgb_view ? "true" : "false", hud, now.missed - from.missed,
         now.slots_missed - from.slots_missed, now.over_period - from.over_period,
         now.late_wakes - from.late_wakes, now.repeats - from.repeats, now.behind - from.behind,
-        now.slow - from.slow, vr::TimingJson(timed));
+        now.slow - from.slow, now.window_frames - from.window_frames,
+        now.black_frames - from.black_frames, now.fades - from.fades, vr::TimingJson(timed));
 }
 
-bool Session::LastEyes(vr::Eye eyes[2], uint32_t& width, uint32_t& height) {
+bool Session::LastFrame(FrameViews& f, float& fade, uint32_t& width, uint32_t& height) {
     std::lock_guard lock(impl_->stats_mutex);
-    if (!impl_->have_eyes) return false;
-    eyes[0] = impl_->last_eyes[0];
-    eyes[1] = impl_->last_eyes[1];
+    if (!impl_->have_frame) return false;
+    f = impl_->last_frame;
+    fade = impl_->last_fade;
     width = impl_->width;
     height = impl_->height;
     return true;
 }
 
-void Session::NoteEyes(const vr::Eye eyes[2]) {
+void Session::NoteFrame(const FrameViews& f, float fade) {
     std::lock_guard lock(impl_->stats_mutex);
-    impl_->last_eyes[0] = eyes[0];
-    impl_->last_eyes[1] = eyes[1];
-    impl_->have_eyes = true;
+    impl_->last_frame = f;
+    impl_->last_fade = fade;
+    impl_->have_frame = true;
 }
 
 #endif

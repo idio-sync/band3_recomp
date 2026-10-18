@@ -921,15 +921,44 @@ REXCVAR_DEFINE_BOOL(native_view_hoist_passes, true, "Band3/Advanced/Native rende
 
 REXCVAR_DEFINE_BOOL(vr, false, "Band3/Advanced/Native renderer",
     "Experimental: show the native renderer's picture in a VR headset through OpenXR "
-    "(Windows), each eye drawn from where it is in the venue, the track, the HUD and the menus "
-    "on a panel in front of you (vr_hud). "
+    "(Windows), each eye drawn from where it is in the venue (vr_viewpoint), the track, the HUD "
+    "and the menus on a panel in front of you (vr_hud). "
     "Needs the native renderer and an OpenXR runtime, such as SteamVR, which starting it "
     "opens; the window shows the left eye")
     .lifecycle(Lifecycle::kRequiresRestart)
     .debug_only();
 
+REXCVAR_DEFINE_STRING(vr_viewpoint, "game_camera", "Band3/Advanced/Native renderer",
+    "With vr: where you are in the venue during songs. game_camera: where the game's camera "
+    "is, seeing the venue in 3D through a window the size of the game's picture, dark around "
+    "it, fading to black at each cut. front_row, on_stage, venue: not made yet; they use "
+    "vr_anchor's place for now. Menus are always seen through the game camera's window. Takes "
+    "effect at once")
+    .allowed({"game_camera", "front_row", "on_stage", "venue"})
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_window_dim, 1.0, "Band3/Advanced/Native renderer",
+    "With vr: how dark it is around the game camera's window, from 0 (the venue around it "
+    "shows as it is) to 1 (black). Takes effect at once")
+    .range(0.0, 1.0)
+    .debug_only();
+
+REXCVAR_DEFINE_INT32(vr_cut_fade_ms, 120, "Band3/Advanced/Native renderer",
+    "With vr: at each camera cut, and as the window comes and goes, the headset's picture goes "
+    "black and fades back in over this many milliseconds (the panel doesn't fade); 0 cuts "
+    "straight. Takes effect at once")
+    .range(0, 2000)
+    .debug_only();
+
+REXCVAR_DEFINE_BOOL(vr_hud_in_window, false, "Band3/Advanced/Native renderer",
+    "With vr and vr_hud: during songs, show the track and the HUD in the game camera's window "
+    "where the game's picture has them, as menus are, instead of on the panel's own place "
+    "(vr_hud_below, vr_hud_width). Takes effect at once")
+    .debug_only();
+
 REXCVAR_DEFINE_STRING(vr_anchor, "0,-1250,520,0", "Band3/Advanced/Native renderer",
-    "With vr: where the headset's starting point is in the venue, as x,y,z in inches (x right, "
+    "With vr and a vr_viewpoint other than game_camera, during songs: where the headset's "
+    "starting point is in the venue, as x,y,z in inches (x right, "
     "y towards the stage, z up) and a turn in degrees, counterclockwise seen from above (0 "
     "faces the stage); the default is above and behind the crowd in front of the stage. "
     "Empty follows the game's camera, facing where it looks")
@@ -952,20 +981,22 @@ REXCVAR_DEFINE_BOOL(vr_hud, true, "Band3/Advanced/Native renderer",
     .debug_only();
 
 REXCVAR_DEFINE_DOUBLE(vr_hud_distance, 1.8, "Band3/Advanced/Native renderer",
-    "With vr_hud: how far ahead of you the panel hangs, in metres, from where you faced at the "
-    "last recenter. Takes effect at once")
+    "With vr_hud: how far ahead of you the panel and the game camera's window hang, in "
+    "metres, from where you faced at the last recenter. The window's size follows from the "
+    "game's field of view, so further away it's bigger. Takes effect at once")
     .range(0.3, 20.0)
     .debug_only();
 
 REXCVAR_DEFINE_DOUBLE(vr_hud_below, 0.25, "Band3/Advanced/Native renderer",
     "With vr_hud: how far below your eyes the panel's centre is, in metres (negative raises "
-    "it); the panel tilts back to face you. Takes effect at once")
+    "it), where it isn't in the game camera's window (songs, and screens with nothing of the "
+    "venue); the panel tilts back to face you. Takes effect at once")
     .range(-5.0, 5.0)
     .debug_only();
 
 REXCVAR_DEFINE_DOUBLE(vr_hud_width, 55.0, "Band3/Advanced/Native renderer",
-    "With vr_hud: how wide the panel looks, in degrees across from where you are; its height "
-    "follows at 16:9. Takes effect at once")
+    "With vr_hud: how wide the panel looks where it isn't in the game camera's window, in "
+    "degrees across from where you are; its height follows at 16:9. Takes effect at once")
     .range(10.0, 160.0)
     .debug_only();
 

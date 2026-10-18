@@ -11,7 +11,9 @@
 
 cbuffer PresentConstants : register(b0) {
     float4 rect;        // in back buffer pixels: x, y, w, h
-    float4 frame_size;  // w, h; z 1 when it matches rect
+    // w, h; z 1 when it matches rect; w how far the colour is faded to black
+    // (VR's eyes at a cut, xr_present.cpp; 0 elsewhere)
+    float4 frame_size;
 };
 
 Texture2D<float4> frame_tex : register(t0);
@@ -31,8 +33,9 @@ PresentIn VSPresent(uint id : SV_VertexID) {
 float4 PSPresent(PresentIn i) : SV_Target0 {
     const float2 p = i.pos.xy - rect.xy;
     if (any(p < 0.0) || any(p >= rect.zw)) return float4(0.0, 0.0, 0.0, 1.0);
-    if (frame_size.z != 0.0) return float4(frame_tex.Load(int3(int2(p), 0)).rgb, 1.0);
-    return float4(frame_tex.SampleLevel(frame_sampler, p / rect.zw, 0.0).rgb, 1.0);
+    const float keep = 1.0 - frame_size.w;
+    if (frame_size.z != 0.0) return float4(frame_tex.Load(int3(int2(p), 0)).rgb * keep, 1.0);
+    return float4(frame_tex.SampleLevel(frame_sampler, p / rect.zw, 0.0).rgb * keep, 1.0);
 }
 
 // VR's eyes into a typed sRGB swapchain image (xr_present.cpp), which encodes
