@@ -429,6 +429,42 @@ What each does, how it was measured and why it defaults as it does. The
   RePose an eye, 12.3-12.8 ms a frame, over 90 Hz's 11.1 (late 82-87% of frames): each eye
   draws the crowd's ~85 impostor passes again. The eyes' pictures differ by a 2-pixel shift
   at the stage, as a 63 mm IPD at ~20 m gives.
+  The game camera's window (`vr_viewpoint` game_camera, the default, and every menu in any
+  viewpoint; `vr_pose.h`'s `ResolveFrame`, chosen per frame by `xr::LayoutFor`): the head at
+  the recenter stands where the game's camera is. The window is a rectangle in LOCAL space
+  `vr_hud_distance` ahead of that head at eye height, turned by its yaw alone, the size the
+  game camera's view is there (`GameFovOf`: `2 atan(1 / proj.m[0][0])` across,
+  `proj.m[2][1]` up and down, so 34.8 degrees is 1.128 m wide at 1.8 m); each eye is the
+  game camera moved by the eye's place in the window's frame (`WindowEyePose`: window x, y,
+  -z as the camera's right, up, forward, 39.37 units a metre times `vr_world_scale`) with
+  the headset's own field of view, so the window shows exactly the game's picture from the
+  recenter's head and the venue moves behind it as the head does, level in the room
+  whatever the camera's pitch and roll. Around it nine quad layers of one 8x8 swapchain
+  cleared black at `vr_window_dim`'s alpha (`FrameQuads`: four strips tiling the window's
+  plane around it out to 3 times its distance, and the four sides and back of the box they
+  make, so every way out of the box but through the window is covered once) go between
+  the eyes' layer and the panel's. The panel lies on the window (its pose and size) in
+  menus, and on its own place (`HudPlacement`) during songs, which are `InSong()` and the
+  screen up being `game_screen` or `practice_game_screen` (`SongScreen`, from
+  `PresenceMgr::UpdatePresence`), so the loading vignette and results count as menus;
+  `vr_hud_in_window` puts it on the window in songs too. A frame with `HudBoundary` 0 gets
+  black eyes (Present's `eyes_black`) and the panel on its own place. `VrFrame` feeds every
+  capture it sees to `CameraCuts` first; at a cut, or as the eyes change between window,
+  anchor and black, they fade in from black over `vr_cut_fade_ms` of the runtime's display
+  time (`CutFade`, `present.hlsl`'s `frame_size.w`), the panel not. front_row, on_stage and
+  venue aren't made yet: songs then use `vr_anchor` as before (logged once). With `vr` on,
+  `capture` writes the layout (`vr` in the reply, `<name>.vr.json`), `.gpu.L/.R.png` from
+  the last VR frame's views (without a session a stand-in head at the origin, both eyes at
+  it, 90 degrees each way), `.gpu.C.png` (with a headset: an eye at the recenter's head
+  facing the window), and `.gpu.eyes.png` (the capture's camera, the eyes' draws alone), and
+  `tools/vr_window_check.py` sets the window's quad of the eye against the latter and
+  composes `<name>.vr.sim.png` as the compositor would. On SteamVR's null driver
+  (2026-10-18; its head reports a 180-degree roll, so its pictures are upside down) the
+  window matched the game camera's picture to a mean 0.8-4.2/255 on the vignettes, closet,
+  music library, part select, loading, song and pause (moved a tenth of its width:
+  7.6-36), but 16.3 on the main hub, where the eye lacks the 720p picture's bloom halos;
+  Play a Show's intro was black eyes. `native_view stats`' `xr` block counts
+  `window_frames`, `black_frames` and `fades`.
   Each runtime frame's timing (`vr_timing.h`'s `FrameTiming`) is kept in a ring of the last
   8,192 (about 68 s at 120 Hz), which the harness's `vr_frames [name]` writes as CSV to
   `logs/vr_frames-<name>.csv` beside the exe: in ms from xrWaitFrame's return, xrBeginFrame's
