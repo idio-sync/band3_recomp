@@ -107,6 +107,33 @@ const char* NameOf(uint16_t vendor, uint16_t product) {
     return "Rock Band instrument";
 }
 
+// Asks a PS3 keyboard or Pro Guitar for its keys or frets (see
+// Ps3ProEnableReports). PlasticBand doesn't know whether the device takes the
+// five short reports or one 40-byte one, so the long one is tried if the short
+// ones aren't accepted.
+void SendPs3ProEnable(SDL_hid_device* handle, const char* name) {
+    std::vector<uint8_t> whole{0x00};
+    bool sent = true;
+    for (const auto& report : Ps3ProEnableReports()) {
+        whole.insert(whole.end(), report.begin() + 1, report.end());
+        if (sent && SDL_hid_send_feature_report(handle, report.data(), report.size()) < 0) {
+            sent = false;
+        }
+    }
+    if (sent) {
+        REXLOG_INFO("HID instruments: asked {} to send its keys or frets", name);
+        return;
+    }
+    const std::string short_error = SDL_GetError();
+    if (SDL_hid_send_feature_report(handle, whole.data(), whole.size()) >= 0) {
+        REXLOG_INFO("HID instruments: asked {} to send its keys or frets (as one report)", name);
+        return;
+    }
+    REXLOG_WARN("HID instruments: couldn't ask {} to send its keys or frets ({}; {}), so only "
+                "its buttons may work",
+                name, short_error, SDL_GetError());
+}
+
 // a dongle's reports through SDL's HID API
 class HidSource final : public ReportSource {
 public:
@@ -331,6 +358,9 @@ private:
                                     info->product_id, SDL_GetError());
                     }
                     continue;
+                }
+                if (NeedsPs3ProEnable(info->vendor_id, *instrument)) {
+                    SendPs3ProEnable(handle, NameOf(info->vendor_id, info->product_id));
                 }
                 Open(*instrument, info->vendor_id, info->product_id, info->release_number,
                      info->path, std::make_unique<HidSource>(handle));

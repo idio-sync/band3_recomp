@@ -19,6 +19,9 @@ constexpr size_t kYellowVelocity = 11;
 constexpr size_t kRedVelocity = 12;
 constexpr size_t kGreenVelocity = 13;
 constexpr size_t kBlueVelocity = 14;
+// the keyboard's and Pro Guitar's ten bytes of 360-layout data, from the right
+// stick on
+constexpr size_t kProData = 5;
 
 // button bits
 constexpr uint16_t kSquare = 0x0001;
@@ -113,6 +116,43 @@ std::optional<Gamepad360> TranslatePs3Drums(std::span<const uint8_t> report, boo
     g.thumb_rx = velocity(kBlueVelocity, kButtonX, false);
     g.thumb_ry = velocity(kGreenVelocity, kButtonA, true);
     return g;
+}
+
+std::optional<Gamepad360> TranslatePs3ProInstrument(std::span<const uint8_t> report) {
+    const auto r = Body(report);
+    if (!r) return std::nullopt;
+    const uint16_t b = Buttons(*r);
+
+    Gamepad360 g;
+    g.buttons = DpadButtons(ReadHatSwitch((*r)[kHat]));
+    if (b & kSquare) g.buttons |= kButtonX;
+    if (b & kCross) g.buttons |= kButtonA;
+    if (b & kCircle) g.buttons |= kButtonB;
+    if (b & kTriangle) g.buttons |= kButtonY;
+    if (b & kSelect) g.buttons |= kBack;
+    if (b & kStartButton) g.buttons |= kStart;
+
+    auto word = [&](size_t offset) {
+        return static_cast<int16_t>((*r)[offset] | (*r)[offset + 1] << 8);
+    };
+    g.left_trigger = (*r)[kProData];
+    g.right_trigger = (*r)[kProData + 1];
+    g.thumb_lx = word(kProData + 2);
+    g.thumb_ly = word(kProData + 4);
+    g.thumb_rx = word(kProData + 6);
+    g.thumb_ry = word(kProData + 8);
+    return g;
+}
+
+std::span<const Ps3EnableReport> Ps3ProEnableReports() {
+    static constexpr Ps3EnableReport kReports[] = {
+        {0x00, 0xE9, 0x00, 0x89, 0x1B, 0x00, 0x00, 0x00, 0x02},
+        {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+        {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00},
+        {0x00, 0x00, 0x00, 0x89, 0x00, 0x00, 0x00, 0x00, 0x00},
+        {0x00, 0xE9, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    };
+    return kReports;
 }
 
 }

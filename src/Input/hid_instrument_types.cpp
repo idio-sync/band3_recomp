@@ -18,6 +18,21 @@ constexpr KnownHidInstrument kKnown[] = {
     {0x1BAD, 0x0005, kPs3DrumsRb1, "Wii Rock Band drums"},
     {0x1BAD, 0x3110, kPs3Drums, "Wii Rock Band 2 drums"},
     {0x1BAD, 0x3138, kPs3Drums, "Wii MIDI Pro Adapter (drums)"},
+    // the RB3 instruments, from PlasticBand's Pro Keyboard, Pro Guitar and MIDI
+    // Pro Adapter docs and RPCS3's usb_device.cpp (PRs #18796 and #19111);
+    // RPCS3 lists 0x2530/0x3530 as the Squier, which PlasticBand says has no USB
+    {0x12BA, 0x2330, kPs3Keys, "PS3 Rock Band 3 keyboard"},
+    {0x12BA, 0x2338, kPs3Keys, "PS3 MIDI Pro Adapter (keys)"},
+    {0x12BA, 0x2430, kPs3Mustang, "PS3 Rock Band 3 Mustang guitar"},
+    {0x12BA, 0x2438, kPs3Mustang, "PS3 MIDI Pro Adapter (Mustang)"},
+    {0x12BA, 0x2530, kPs3Squier, "PS3 Rock Band 3 Squier guitar"},
+    {0x12BA, 0x2538, kPs3Squier, "PS3 MIDI Pro Adapter (Squier)"},
+    {0x1BAD, 0x3330, kPs3Keys, "Wii Rock Band 3 keyboard"},
+    {0x1BAD, 0x3338, kPs3Keys, "Wii MIDI Pro Adapter (keys)"},
+    {0x1BAD, 0x3430, kPs3Mustang, "Wii Rock Band 3 Mustang guitar"},
+    {0x1BAD, 0x3438, kPs3Mustang, "Wii MIDI Pro Adapter (Mustang)"},
+    {0x1BAD, 0x3530, kPs3Squier, "Wii Rock Band 3 Squier guitar"},
+    {0x1BAD, 0x3538, kPs3Squier, "Wii MIDI Pro Adapter (Squier)"},
 
     {0x0738, 0x8261, kPs4Guitar, "PS4 MadCatz Stratocaster"},
     {0x0E6F, 0x0173, kPs4Guitar, "PS4 PDP Jaguar"},
@@ -79,11 +94,18 @@ std::optional<HidInstrumentType> IdentifyHidInstrument(uint16_t vendor, uint16_t
     return std::nullopt;
 }
 
+bool NeedsPs3ProEnable(uint16_t vendor, HidInstrumentType type) {
+    return vendor == 0x12BA && (type == kPs3Keys || type == kPs3Mustang || type == kPs3Squier);
+}
+
 const char* HidInstrumentTypeLabel(HidInstrumentType type) {
     switch (type) {
     case kPs3Guitar: return "a PS3/Wii guitar";
     case kPs3DrumsRb1: return "an RB1 PS3/Wii drum kit (no cymbals or velocity)";
     case kPs3Drums: return "a PS3/Wii drum kit";
+    case kPs3Keys: return "a PS3/Wii keyboard";
+    case kPs3Mustang: return "a PS3/Wii Mustang Pro Guitar";
+    case kPs3Squier: return "a PS3/Wii Squier Pro Guitar";
     case kPs4Guitar: return "a PS4 guitar";
     case kPs5Guitar: return "a PS5 guitar";
     case kPs4Drums: return "a PS4 drum kit";
@@ -104,6 +126,9 @@ Caps360 HidInstrumentCaps(HidInstrumentType type) {
     case kPs3Drums:
     case kPs4Drums:
     case kXboxOneDrums: return DrumCaps(true);
+    case kPs3Keys: return KeysCaps();
+    case kPs3Mustang: return ProGuitarCaps(ProGuitarModel::kMustang);
+    case kPs3Squier: return ProGuitarCaps(ProGuitarModel::kSquier);
     }
     return GuitarCaps(false);
 }
@@ -113,6 +138,9 @@ std::optional<Gamepad360> HidInstrumentTranslator::Translate(std::span<const uin
     case kPs3Guitar: return TranslatePs3Guitar(report, ps3_guitar_);
     case kPs3DrumsRb1: return TranslatePs3Drums(report, false);
     case kPs3Drums: return TranslatePs3Drums(report, true);
+    case kPs3Keys:
+    case kPs3Mustang:
+    case kPs3Squier: return TranslatePs3ProInstrument(report);
     case kPs4Guitar: return TranslatePs4Guitar(report);
     case kPs5Guitar: return TranslatePs5Guitar(report);
     case kPs4Drums: return TranslatePs4Drums(report);
