@@ -420,7 +420,8 @@ What each does, how it was measured and why it defaults as it does. The
   0.27 ms of CPU to submission and 0.25 ms of GPU (0.62 for Play a Show's whole frame);
   xrBeginFrame to xrEndFrame went from 3.83 ms without the panel to 4.23-4.45 with it.
   `vr_anchor` places the head's LOCAL space in the
-  venue (default above and behind arena_04's front crowd; empty follows the game camera),
+  venue for a fixed viewpoint until the song's venue is found (below; default above and
+  behind arena_04's front crowd; empty follows the game camera),
   `vr_world_scale` scales it, `vr_fake_pose` turns the head slowly for a headset that doesn't
   move. `native_view stats` has an `xr` block, and `capture` writes `<name>.gpu.L.png` and
   `.gpu.R.png` from the last VR frame's eyes (and `.gpu.hud.png`, above). Particles stay flat to the game camera and the
@@ -450,7 +451,15 @@ What each does, how it was measured and why it defaults as it does. The
   recenter's head the window is exactly the game's picture; elsewhere the parallax is
   exactly that squeezed venue's, so leaning moves the eye u a metre across and k u along
   the forward, and the stereo depth is flattened k times (a point Z units ahead looks
-  Z / (k u) metres away). Each eye's view is that map into LOCAL then the eye's pose,
+  Z / (k u) metres away). In songs `vr_window_max_squeeze` (2; 0 none, runtime) caps k: sz
+  is at most 2 u, sy as the uncapped sz gives it, so a shot narrower than that is the
+  game's picture whole, level and centred in the window, `max_squeeze / k` of it each way
+  (`WindowScale::picture`: 0.53 at 35 degrees, 0.24 at 16; the frustum's plane at the
+  window is then `max_squeeze u D` ahead), its depth flattened twice at most; the eyes'
+  dark reaches the picture's edge (`PictureFrame`) and a song's panel in the window
+  (`vr_hud_in_window`) lies on it. Menus fill the window at any field of view, their
+  panel on it. Cuts fade over a size change; a zoom within a shot past the cap shows as
+  the picture resizing. Each eye's view is that map into LOCAL then the eye's pose,
   scaled by k u so depth from the recenter's head is the camera's (`Eye::view`, which
   `RePose` uses), with the headset's own field of view; the window is level in the room
   whatever the camera's pitch and roll, the picture in it rolled as the game's is. On the
@@ -473,9 +482,57 @@ What each does, how it was measured and why it defaults as it does. The
   anchor and black, they fade in from black over `vr_cut_fade_ms` of the runtime's display
   time (`CutFade`), the panel not: drawn by the eyes under the tracks, which don't cut
   (`Eye::fade`, a black quad over the picture), or with `vr_window_quads` by
-  `present.hlsl`'s `frame_size.w` over the eyes' whole picture. front_row, on_stage and
-  venue aren't made yet: songs then use `vr_anchor` as before (logged once). With `vr` on,
-  `capture` writes the layout (`vr` in the reply, `<name>.vr.json`), `.gpu.L/.R.png` from
+  `present.hlsl`'s `frame_size.w` over the eyes' whole picture.
+  The fixed viewpoints (`vr_viewpoint` front_row, on_stage, venue; `vr_venue.h`): in songs
+  no window, no dark and no squeeze, the eyes posed from an anchor (`EyePose`) the game's
+  cuts don't move (no fade at a cut; one as the anchor is placed or moved, or the mode
+  changes), with the 3D highway and the panel on its own place as before; menus keep the
+  window. RB3's venues share no coordinates, so the anchor comes from what the game drew:
+  `src/Hooks/vr_view.cpp` marks the meshes `BandCharacter::DrawLodOrShadow` and
+  `WorldCrowd::DrawShowing` draw (`scene_capture.h`'s `MeshOwnerScope`,
+  `FrameCapture::mesh_owners`, kept in captures' OWNR section), and `VenueRefOf` takes the
+  world camera's draws of them: each member where its mesh stands (the middle across, its
+  lowest vertex up: the stage floor is the members' median), `toward` the audience from the
+  band's middle to the crowd's (-y without a crowd), and of the crowd in front of the band
+  (as wide as it and 4 m either side) the last row (90th percentile of depth) and, 2 m
+  either side of the band's middle, the first row (2nd percentile) and the audience's floor.
+  `PresetAnchor` places front_row on the band's middle line 0.3 m before the first row,
+  eyes 1.7 m (times `vr_world_scale`) over the audience's floor, facing the band; on_stage
+  on a 0.25 m grid among the band at least 0.9 m from every member, nearest the middle line
+  and 0.5 m downstage of the band's front line (the median member's depth), eyes 1.7 m over
+  the stage floor, facing the audience; venue 2 m behind the crowd's last row, 0.35 of its
+  distance from the band (2.5 to 7 m) above the stage floor, facing the band. Without a crowd
+  front_row is 5 m past the front-most member over a floor 1.2 m under the stage's, venue
+  15 m. `vr_viewpoint_offset` ("right,ahead,up[,yaw]", metres and degrees in the place's own
+  frame) moves it. `xr::LayoutFor`'s `VenueTracker` takes the reference from a song's frames
+  as they come, again only for more of the band or a first crowd, and forgets it outside
+  songs; each one found is logged with the three places (`vr: the venue: ...`). Until then
+  songs are seen from `vr_anchor`. In a song from a fixed viewpoint (with `vr` on)
+  `vr_view.cpp` draws the whole world in every shot as `vr_show_all` does (the hooks' test is
+  `vr_show_all` or a fixed viewpoint in a song, `RunFrame` once a frame), and as it starts
+  mid-shot undoes the shot that last hid things (`CamShot::UnHide`) and shows every crowd at
+  once. The crowds' draws within `vr_crowd_clear` (1.5 m) of an eye across the floor are
+  squashed to a point in its capture (`Eye::crowd_clear`, `RePose`: their world's or bones'
+  axes zeroed, so the draws and passes stay), so the eye isn't inside a card.
+  In 20th Century Boy (2026-10-18, captures with the stand-in head, no headset) the band
+  was four members everywhere: arena_04 stage floor z 256, audience 205, front_row at
+  5,-647,272, on_stage 41,-536,323, venue 10,-1082,436 (x,y,z; its drummer on a riser 11 m
+  upstage); small_club_01 stage 13 and audience level with it, -11,-54,80 / 23,30,80 /
+  -31,-333,139; big_club_04 stage 49, audience 5, -3,-278,72 / -39,-169,116 / 8,-701,228;
+  festival_01 stage 257, audience 182, -24,-735,248 / -28,-442,324 / -84,-1508,533, the
+  audience on -y in all four (the crowd's middle within 5 degrees of it). Switching to a
+  fixed viewpoint mid-song can find fewer members at first (shots hide members other ways
+  than their hide lists); the place is taken again, with a fade, as the rest are drawn.
+  What it costs: the native view's frames at 1600x900 (15 s each, the game at 60 fps) went
+  from 1.3-1.6 ms with the window to 5.0-5.8 ms from any of the three at arena_04,
+  big_club_04 and festival_01 (1.4 to 1.8 at small_club_01), and the capture's left eye at
+  1440x1440 from 0.7-1.1 ms of GPU (RePose 0.25-0.34 ms) to 2.3-3.5 ms (RePose 0.7-1.3 ms,
+  5,700-9,800 draws): the whole band and crowd every frame, each eye drawing the crowd's
+  impostor passes again, the cost work that's next. With `vr` on,
+  `capture` writes the layout (`vr` in the reply, `<name>.vr.json`: with `picture_scale` and
+  the picture's corners `picture_px`, the `viewpoint`, its `anchor`, the song's `venue` as
+  found, and `eye_cost`, the left eye's RePose, CPU to read back and GPU ms, medians of
+  three, with the crowd draws it cleared), `.gpu.L/.R.png` from
   the last VR frame's views (without a session a stand-in head at the origin, both eyes at
   it, 60 degrees each way), `.gpu.C.png` (with a window: an eye at the recenter's head
   facing the window, the venue alone), and `.gpu.eyes.png` (the capture's camera, the
