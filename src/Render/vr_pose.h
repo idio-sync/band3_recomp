@@ -181,6 +181,47 @@ inline uint32_t HudBoundary(const FrameCapture& fc) {
     return fc.post_boundary;
 }
 
+// The song's track cameras in `fc`: the 3D highway (the track's surface,
+// lanes, gems, smashers, OD meter, multiplier), which the eyes draw from
+// their own place in songs (RasterOptions::eye_cams, TrackEye) rather than
+// leaving it flat on the HUD panel. RB3 draws each track after
+// post-processing with a camera of its own, z range 0..1, in front of which
+// a 0..0.1 camera draws the flat HUD (score, stars, band meter, the vocals'
+// strip, lyrics), then a 0..1 camera one full-picture fade quad, then the
+// pause menu's 0..1 camera if it's up. So a track camera is one with
+// back-buffer mesh draws from post_boundary on, the first before the flat
+// HUD's camera's (z range ending before 1; none without one), listed in
+// fc.cameras with z range 0..1, a perspective camera (freecam::Decompose),
+// and either more than one such draw or its one draw's picture not covering
+// its viewport (the fade's does). One per player's track: 2 players' look the
+// same way from 7.7 units either side, in two viewports (998x720 at 0 and
+// 281); 4 parts' three are full-picture and turned 10 degrees apart. In
+// order of their first draws; none without DoPostProcess. Menus' overlay
+// cameras can look the same: callers ask only in songs.
+inline constexpr int kMaxTrackCams = 4;
+
+struct TrackCamera {
+    uint32_t cam = 0;
+    Mat4 view_proj{};  // as captured: its draws are matched by it
+    freecam::Pose pose{};
+    Mat4 proj{};
+    float viewport[4] = {};  // x, y, w, h in the back buffer's pixels
+    uint32_t target_w = 0, target_h = 0;
+    uint32_t first_draw = 0, draws = 0;
+};
+
+struct TrackCams {
+    int count = 0;
+    TrackCamera cams[kMaxTrackCams];
+    const TrackCamera* Find(uint32_t cam) const {
+        for (int i = 0; i < count; i++)
+            if (cams[i].cam == cam) return &cams[i];
+        return nullptr;
+    }
+};
+
+TrackCams TrackCamerasOf(const FrameCapture& fc);
+
 // The HUD panel's quad layer (XrCompositionLayerQuad) in LOCAL space: in
 // front of the head as it faced at the recenter, `distance` metres ahead
 // along the floor and `below` metres under the eyes, tilted back to face

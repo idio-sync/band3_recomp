@@ -44,7 +44,8 @@
 // once at the pixel centre, averaged at the frame's end.
 //
 // VR splits the back buffer's draws (RasterOptions::part, OnHud): the eyes
-// draw the world, the HUD panel the rest into a picture of its own, cleared
+// draw the world (in songs the track cameras' draws too, after the resolve:
+// RasterOptions::eye_cams), the HUD panel the rest into a picture of its own, cleared
 // to transparent black, its alpha what covers each pixel (premultiplied, so
 // additive gems keep alpha 0), for a compositor to put over the eyes. What
 // tints the picture behind it can only darken it there, by one alpha: its
@@ -205,6 +206,11 @@ struct RasterOptions {
     // where the HUD's draws start (HudFrom): kNoPost, post_boundary; 0 puts
     // the whole picture on the HUD (vr::HudBoundary)
     uint32_t hud_from = FrameCapture::kNoPost;
+    // VR in songs: cameras whose mesh draws past hud_from are the eyes' all
+    // the same (OnHud): the track cameras (vr::TrackCamerasOf), drawn by
+    // each eye from its own place. 0 is none.
+    static constexpr int kEyeCams = 6;
+    uint32_t eye_cams[kEyeCams] = {};
     // GPU (native_gpu_draw_profile), with gpu_timestamps: a timestamp before
     // each back-buffer world draw, into GpuStats::draw_times
     bool gpu_draw_profile = false;
@@ -254,12 +260,23 @@ inline uint32_t HudFrom(const RasterOptions& o, const FrameCapture& f) {
     return o.hud_from != FrameCapture::kNoPost ? o.hud_from : f.post_boundary;
 }
 
+// whether mesh draw `it` is through one of RasterOptions::eye_cams
+inline bool OnEyeCam(const RasterOptions& o, const DrawItem& it) {
+    if (it.rect_shader >= 0 || !it.cam) return false;
+    for (uint32_t c : o.eye_cams)
+        if (c == it.cam) return true;
+    return false;
+}
+
 // Whether back-buffer draw `d` is the HUD panel's, the one split of VR's
-// pictures (BackBufferPart) so each draw is drawn once: from HudFrom on. The
-// eyes' own draws past it (a 3D highway: the track cameras' draws in the
-// eyes) would be told apart here, by its camera.
+// pictures (BackBufferPart) so each draw is drawn once: from HudFrom on, but
+// for the eyes' own draws past it (RasterOptions::eye_cams: the 3D highway),
+// told apart by their camera. Those still come after the resolve, layered
+// over the world as the game layers them (depth cleared at the resolve).
+// A panel from draw 0 (the whole frame) keeps them.
 inline bool OnHud(const RasterOptions& o, const FrameCapture& f, size_t d) {
-    return d >= HudFrom(o, f);
+    const uint32_t from = HudFrom(o, f);
+    return d >= from && !(from > 0 && d < f.draws.size() && OnEyeCam(o, f.draws[d]));
 }
 
 // whether this picture is the HUD panel drawn overlay-only (BackBufferPart);

@@ -22,6 +22,7 @@
 //                               [--no-gamma | --gamma-from <other.cap>]
 //                               [--scale <f>] [--shadow-scale <f>] [--msaa 1|2|4]
 //                               [--overlay-only | --split-check] [--hud-from <draw>]
+//                               [--track-eyes]
 //
 // Prints, for each camera, how many of its vertices land in front of the camera
 // and inside the frustum with the matrix as captured and transposed (the back
@@ -166,13 +167,18 @@
 // draw every draw once, so they differ only where blending clamps or by
 // rounding (--no-gamma: a ramp goes over each picture apart). With --diff,
 // --overlay-only draws the panel to set against a GPU picture of it (its
-// premultiplied colour; the metrics leave alpha out).
+// premultiplied colour; the metrics leave alpha out). --list's "track cams"
+// are the song's track cameras (vr_pose.h's TrackCamerasOf: their pose,
+// field of view, near and far, and how far ahead the track's origin, its
+// strikeline, is); with --track-eyes, --overlay-only and --split-check give
+// their draws to the eyes' picture (RasterOptions::eye_cams), as VR does in
+// songs, so the panel loses the track and the eyes' picture has it.
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
 //     src/Render/soft_raster.cpp src/Render/shade_model.cpp src/Render/post_model.cpp
 //     src/Render/spot_model.cpp src/Render/capture_file.cpp src/Render/png_writer.cpp
-//     -o out/native_view_replay.exe
+//     src/Render/vr_pose.cpp -o out/native_view_replay.exe
 
 #include <algorithm>
 #include <cmath>
@@ -647,6 +653,25 @@ void PrintPassSummary(const FrameCapture& fc) {
                     ? (ProcKnown(fc) ? " (no perspective world camera: all of it)"
                                      : " (no post-processing: all of it)")
                     : "");
+    // and the track cameras the eyes draw in songs (vr_pose.h's TrackCamerasOf)
+    const vr::TrackCams tracks = vr::TrackCamerasOf(fc);
+    std::printf("track cams: %d\n", tracks.count);
+    for (int i = 0; i < tracks.count; i++) {
+        const vr::TrackCamera& t = tracks.cams[i];
+        const vr::GameFov fov = vr::GameFovOf(t.proj);
+        const float deg = 57.29578f;
+        // z = a w + b: near where z is 0, far where z is w
+        const float a = t.proj.m[1][2], b = t.proj.m[3][2];
+        std::printf("  track cam %08X viewport %.0f,%.0f %.0fx%.0f, %u mesh draws from #%u; eye "
+                    "%.2f %.2f %.2f, forward %.4f %.4f %.4f (pitch %.2f, yaw %.2f degrees), hfov "
+                    "%.2f vfov %.2f, near %.1f far %.1f; the origin %.2f ahead\n",
+                    t.cam, t.viewport[0], t.viewport[1], t.viewport[2], t.viewport[3], t.draws,
+                    t.first_draw, t.pose.eye[0], t.pose.eye[1], t.pose.eye[2], t.pose.fwd[0],
+                    t.pose.fwd[1], t.pose.fwd[2], std::asin(t.pose.fwd[2]) * deg,
+                    std::atan2(-t.pose.fwd[0], t.pose.fwd[1]) * deg, fov.hfov * deg,
+                    fov.vfov * deg, a != 0 ? -b / a : 0.0f, a != 1 ? b / (1 - a) : 0.0f,
+                    -freecam::Dot3(t.pose.eye, t.pose.fwd));
+    }
 }
 
 // the largest difference between two runs of floats
@@ -1169,7 +1194,7 @@ int main(int argc, char** argv) {
     bool sized = false;
     float scale = 0;  // --scale's, 0 none
     bool free_cam = false, world_only = false;
-    bool overlay_only = false, split_check = false;
+    bool overlay_only = false, split_check = false, track_eyes = false;
     long hud_from = -1;  // --hud-from's, -1 vr::HudBoundary's
     float free_eye[3] = {}, free_at[3] = {}, free_wider = 1;
     for (int i = 3; i < argc; i++) {
@@ -1287,6 +1312,7 @@ int main(int argc, char** argv) {
         else if (a == "--world-only") world_only = true;
         else if (a == "--overlay-only") overlay_only = true;
         else if (a == "--split-check") overlay_only = split_check = true;
+        else if (a == "--track-eyes") track_eyes = true;
         else if (a == "--hud-from" && i + 1 < argc) hud_from = std::strtol(argv[++i], nullptr, 0);
     }
     if (free_cam || world_only) ApplyFreeCam(*fc, free_cam, free_eye, free_at, free_wider, world_only);
@@ -1575,6 +1601,13 @@ int main(int argc, char** argv) {
         // VR's HUD panel (soft_raster.h's BackBufferPart::kHud): its colour
         // as stored, premultiplied (so over black), and its alpha as grey
         const uint32_t from = hud_from >= 0 ? uint32_t(hud_from) : vr::HudBoundary(*fc);
+        // with --track-eyes, the track cameras' draws are the eyes'
+        if (track_eyes) {
+            const vr::TrackCams tracks = vr::TrackCamerasOf(*fc);
+            for (int i = 0; i < tracks.count; i++) o.eye_cams[i] = tracks.cams[i].cam;
+            std::printf("track eyes: %d track cameras' draws in the eyes' picture\n",
+                        tracks.count);
+        }
         RasterOptions ho = o;
         ho.part = BackBufferPart::kHud;
         ho.hud_from = from;

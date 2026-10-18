@@ -902,6 +902,218 @@ TEST_CASE("the frame's choice: window, anchor or black, and the panel's place") 
     CHECK_FALSE(vr::ResolveFrame(vp, in).hud);
 }
 
+namespace {
+
+// a track camera's projection: `hfov` degrees across at 16:9, depth from
+// near to far as RB3's track cameras have it (z = a w + b, 0..1)
+Mat4 TrackProj(float hfov, float n, float f) {
+    Mat4 p{};
+    p.m[0][0] = 1 / std::tan(hfov * kPi / 360);
+    p.m[2][1] = p.m[0][0] * 16 / 9;
+    p.m[1][2] = f / (f - n);
+    p.m[3][2] = -n * f / (f - n);
+    p.m[1][3] = 1;
+    return p;
+}
+
+// a camera at `eye` turned `yaw` degrees (counterclockwise from above) and
+// pitched `pitch` down, as RB3's track cameras are
+Mat4 TrackVp(const float eye[3], float yaw, float pitch, const Mat4& proj) {
+    const float y = yaw * kPi / 180, p = pitch * kPi / 180;
+    const float at[3] = {eye[0] - std::sin(y) * std::cos(p) * 100,
+                         eye[1] + std::cos(y) * std::cos(p) * 100, eye[2] - std::sin(p) * 100};
+    return freecam::Mul(freecam::View(freecam::LookAt(eye, at)), proj);
+}
+
+// a flat rectangle in its draw's world, x0..x1 by y0..y1 at height 0
+std::shared_ptr<Geometry> Rect(float x0, float x1, float y0, float y1) {
+    auto g = std::make_shared<Geometry>();
+    const float xs[4] = {x0, x1, x1, x0}, ys[4] = {y0, y0, y1, y1};
+    for (int i = 0; i < 4; i++) {
+        Vertex v{};
+        v.pos[0] = xs[i];
+        v.pos[1] = ys[i];
+        g->verts.push_back(v);
+    }
+    g->indices = {0, 1, 2, 0, 2, 3};
+    return g;
+}
+
+struct SongCam {
+    uint32_t cam;
+    Mat4 vp;
+    float viewport[4];
+    float zrange[2];
+    int draws;
+    std::shared_ptr<Geometry> geom;
+};
+
+// A song's frame as RB3 draws it (crowd-10s, screen-mp2-25s, screen-mp4-10s
+// in out/): the world camera's draws, post_boundary, then each camera of
+// `after`'s draws in turn: the tracks', then HudFadePause's
+FrameCapture SongFrame(const std::vector<SongCam>& after) {
+    FrameCapture f;
+    const float eye[3] = {0, -1000, 200}, at[3] = {0, 0, 200};
+    const Mat4 world = freecam::Mul(freecam::View(freecam::LookAt(eye, at)), GameProj());
+    auto add = [&](uint32_t cam, const Mat4& vp, std::shared_ptr<Geometry> g) {
+        DrawItem d{};
+        d.view_proj = vp;
+        d.cam = cam;
+        d.geom = std::move(g);
+        for (int i = 0; i < 4; i++) d.world.m[i][i] = 1;
+        f.draws.push_back(d);
+    };
+    CameraView w{};
+    w.cam = 1;
+    w.viewport[2] = 1280;
+    w.viewport[3] = 720;
+    w.target_w = 1280;
+    w.target_h = 720;
+    w.zrange[0] = 0.1f;
+    f.cameras.push_back(w);
+    for (int i = 0; i < 5; i++) add(1, world, Rect(-50, 50, 0, 10));
+    f.post_boundary = uint32_t(f.draws.size());
+    f.proc_cmds = 7;
+    // the post-processing's own quads, into textures
+    DrawItem rect{};
+    rect.rect_shader = 3;
+    rect.target = 0x77;
+    f.draws.push_back(rect);
+    for (const SongCam& c : after) {
+        CameraView v{};
+        v.cam = c.cam;
+        for (int k = 0; k < 4; k++) v.viewport[k] = c.viewport[k];
+        v.target_w = 1280;
+        v.target_h = 720;
+        v.zrange[0] = c.zrange[0];
+        v.zrange[1] = c.zrange[1];
+        f.cameras.push_back(v);
+        for (int i = 0; i < c.draws; i++) add(c.cam, c.vp, c.geom);
+    }
+    return f;
+}
+
+// the cameras after the tracks: the flat HUD's, the fade's, the pause menu's
+void HudFadePause(std::vector<SongCam>& cams, bool pause) {
+    const float hud_eye[3] = {0, 0, 0};
+    cams.push_back({0x2520BFD8, TrackVp(hud_eye, 0, 0, TrackProj(60, 1, 1000)), {0, 0, 1280, 720},
+                    {0, 0.1f}, 42, Rect(-1, 1, 100, 100.1f)});
+    // the fade: one quad 768 ahead, far wider than the picture
+    const float fade_eye[3] = {0, -768, 0};
+    auto fade = std::make_shared<Geometry>();
+    for (int i = 0; i < 4; i++) {
+        Vertex v{};
+        v.pos[0] = (i == 1 || i == 2) ? 600.0f : -600.0f;
+        v.pos[2] = i >= 2 ? 600.0f : -600.0f;
+        fade->verts.push_back(v);
+    }
+    fade->indices = {0, 1, 2, 0, 2, 3};
+    cams.push_back({0x24F44910, TrackVp(fade_eye, 0, 0, TrackProj(60, 1, 1000)), {0, 0, 1280, 720},
+                    {0, 1}, 1, fade});
+    if (pause)
+        cams.push_back({0x2531A3D0, TrackVp(fade_eye, 0, 7, TrackProj(29, 4.6f, 4561)),
+                        {0, 0, 998, 720}, {0, 1}, 13, Rect(-100, 100, 0, 50)});
+}
+
+}  // namespace
+
+TEST_CASE("the track cameras: one per player's track, never the HUD's, the fade's or a menu's") {
+    const std::shared_ptr<Geometry> track = Rect(-9.8f, 9.8f, -50, 270);
+    // one player (crowd-10s): 36.6 degrees across, 7 down, 30..224
+    const float e1[3] = {0, -91.82f, 22.6f};
+    std::vector<SongCam> one = {
+        {0x25492B68, TrackVp(e1, 0, 7, TrackProj(36.56f, 30, 224)), {0, 0, 1280, 720}, {0, 1}, 48,
+         track}};
+    HudFadePause(one, false);
+    FrameCapture f = SongFrame(one);
+    vr::TrackCams t = vr::TrackCamerasOf(f);
+    REQUIRE(t.count == 1);
+    CHECK(t.cams[0].cam == 0x25492B68);
+    CHECK(t.cams[0].draws == 48);
+    CHECK(t.cams[0].first_draw == f.post_boundary + 1);
+    CheckVec(t.cams[0].pose.eye, 0, -91.82f, 22.6f, 1e-3f);
+    CHECK(std::asin(t.cams[0].pose.fwd[2]) * 180 / kPi == doctest::Approx(-7).epsilon(1e-3));
+    CHECK(t.cams[0].viewport[2] == 1280);
+    CHECK(t.Find(0x25492B68) == &t.cams[0]);
+    CHECK(t.Find(0x2520BFD8) == nullptr);
+    // the pause menu's camera after the HUD's: not a track's
+    std::vector<SongCam> paused = {one[0]};
+    HudFadePause(paused, true);
+    t = vr::TrackCamerasOf(SongFrame(paused));
+    REQUIRE(t.count == 1);
+    CHECK(t.cams[0].cam == 0x25492B68);
+    // a track camera's single draw that doesn't cover the picture is a track's
+    std::vector<SongCam> lone = one;
+    lone[0].draws = 1;
+    CHECK(vr::TrackCamerasOf(SongFrame(lone)).count == 1);
+    // two players (screen-mp2-25s): one matrix 7.7 units either side, in two
+    // viewports
+    const float l2[3] = {7.72f, -104.89f, 26.39f}, r2[3] = {-7.72f, -104.89f, 26.39f};
+    std::vector<SongCam> two = {
+        {0x25492BF8, TrackVp(l2, 0, 7, TrackProj(28.82f, 40.6f, 258)), {0, 0, 998, 720}, {0, 1},
+         52, track},
+        {0x2555D288, TrackVp(r2, 0, 7, TrackProj(28.82f, 40.6f, 258)), {281, 0, 998, 720}, {0, 1},
+         39, track}};
+    HudFadePause(two, true);
+    t = vr::TrackCamerasOf(SongFrame(two));
+    REQUIRE(t.count == 2);
+    CHECK(t.cams[0].cam == 0x25492BF8);
+    CHECK(t.cams[1].cam == 0x2555D288);
+    CHECK(t.cams[1].viewport[0] == 281);
+    CHECK(t.cams[1].viewport[2] == 998);
+    // four parts (screen-mp4-10s): three tracks turned 10 degrees apart; the
+    // vocals' strip is the flat HUD's
+    const float a4[3] = {2.63f, -122.14f, 29.54f}, b4[3] = {-2.71f, -122.35f, 28.71f},
+                c4[3] = {0, -123.01f, 29.69f};
+    const Mat4 p4 = TrackProj(36.56f, 50, 305);
+    std::vector<SongCam> four = {
+        {0x25499AB8, TrackVp(a4, -10, 6, p4), {0, 0, 1280, 720}, {0, 1}, 47, track},
+        {0x256F8848, TrackVp(b4, 10, 6, p4), {0, 0, 1280, 720}, {0, 1}, 40, track},
+        {0x25564148, TrackVp(c4, 0, 6, p4), {0, 0, 1280, 720}, {0, 1}, 41, track}};
+    HudFadePause(four, false);
+    t = vr::TrackCamerasOf(SongFrame(four));
+    REQUIRE(t.count == 3);
+    CHECK(t.cams[0].cam == 0x25499AB8);
+    CHECK(t.cams[2].cam == 0x25564148);
+    // without DoPostProcess, or without the flat HUD's camera: none
+    f.post_boundary = FrameCapture::kNoPost;
+    CHECK(vr::TrackCamerasOf(f).count == 0);
+    std::vector<SongCam> bare = {one[0]};
+    CHECK(vr::TrackCamerasOf(SongFrame(bare)).count == 0);
+}
+
+TEST_CASE("in songs the eyes draw the track cameras' draws past the HUD's boundary, the panel not") {
+    const float e1[3] = {0, -91.82f, 22.6f};
+    std::vector<SongCam> one = {{0x25492B68, TrackVp(e1, 0, 7, TrackProj(36.56f, 30, 224)),
+                                 {0, 0, 1280, 720}, {0, 1}, 3, Rect(-9.8f, 9.8f, -50, 270)}};
+    HudFadePause(one, false);
+    const FrameCapture f = SongFrame(one);
+    RasterOptions o;
+    o.hud_from = vr::HudBoundary(f);
+    REQUIRE(o.hud_from == f.post_boundary);
+    o.eye_cams[0] = vr::TrackCamerasOf(f).cams[0].cam;
+    auto part = [&](BackBufferPart p, size_t d) {
+        o.part = p;
+        return DrawnInPart(o, f, d);
+    };
+    for (size_t d = 0; d < f.draws.size(); d++) {
+        CAPTURE(d);
+        const bool track = f.draws[d].cam == 0x25492B68;
+        CHECK(part(BackBufferPart::kEyes, d) != part(BackBufferPart::kHud, d));
+        CHECK(part(BackBufferPart::kEyes, d) == (d < f.post_boundary || track));
+    }
+    // a DrawRect quad is never a camera's
+    FrameCapture r = f;
+    r.draws[f.post_boundary].cam = 0x25492B68;
+    r.draws[f.post_boundary].target = 0;
+    o.part = BackBufferPart::kHud;
+    CHECK(DrawnInPart(o, r, f.post_boundary));
+    // a panel from draw 0 (no world the eyes can see) is the whole frame
+    o.hud_from = 0;
+    CHECK(part(BackBufferPart::kHud, f.post_boundary + 1));
+    CHECK_FALSE(part(BackBufferPart::kEyes, f.post_boundary + 1));
+}
+
 TEST_CASE("a cut's fade: black at the cut, back over the fade's length") {
     CHECK(vr::CutFade(0, 120) == doctest::Approx(1));
     CHECK(vr::CutFade(30'000'000, 120) == doctest::Approx(0.75f));

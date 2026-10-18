@@ -1,5 +1,6 @@
 #include "src/Render/vr_pose.h"
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -52,6 +53,77 @@ RePoseStats RePose(const FrameCapture& in, const Eye& eye, FrameCapture& out) {
         d.shade = c;
     }
     return st;
+}
+
+TrackCams TrackCamerasOf(const FrameCapture& fc) {
+    TrackCams out;
+    if (fc.post_boundary == FrameCapture::kNoPost) return out;
+    // the candidates' draws, in order of their first
+    struct Seen {
+        uint32_t cam, first, draws;
+    };
+    std::vector<Seen> seen;
+    for (size_t d = fc.post_boundary; d < fc.draws.size(); d++) {
+        const DrawItem& it = fc.draws[d];
+        if (it.target != 0 || it.rect_shader >= 0) continue;
+        auto s = std::find_if(seen.begin(), seen.end(), [&](const Seen& e) { return e.cam == it.cam; });
+        if (s == seen.end())
+            seen.push_back({it.cam, uint32_t(d), 1});
+        else
+            s->draws++;
+    }
+    // the flat HUD's camera (z range 0..0.1): the tracks come before it, the
+    // pause menu's camera (one more 0..1) after
+    uint32_t hud_first = 0;
+    bool hud = false;
+    for (const Seen& s : seen) {
+        const CameraView* view = CameraOf(fc, s.cam);
+        if (view && view->zrange[1] < 1) {
+            hud = true;
+            hud_first = s.first;
+            break;
+        }
+    }
+    if (!hud) return out;
+    for (const Seen& s : seen) {
+        if (out.count == kMaxTrackCams || s.first > hud_first) break;
+        const CameraView* view = CameraOf(fc, s.cam);
+        if (!view || view->zrange[0] != 0 || view->zrange[1] != 1) continue;
+        TrackCamera t;
+        t.cam = s.cam;
+        t.view_proj = fc.draws[s.first].view_proj;
+        if (!freecam::Decompose(t.view_proj, t.pose, t.proj)) continue;
+        if (s.draws == 1) {
+            // one draw: the fade's quad covers the picture (clip -1.08..1.08
+            // across, -1.71..1.71 up); unknown geometry is taken for it
+            const DrawItem& it = fc.draws[s.first];
+            float lo[2] = {1e30f, 1e30f}, hi[2] = {-1e30f, -1e30f};
+            bool any = false;
+            if (it.geom) {
+                for (const Vertex& v : it.geom->verts) {
+                    float w[3], c[4];
+                    freecam::WorldPos(it, v, w);
+                    freecam::Transform(w, it.view_proj, c);
+                    if (!(c[3] > 0)) continue;
+                    any = true;
+                    for (int k = 0; k < 2; k++) {
+                        lo[k] = std::fmin(lo[k], c[k] / c[3]);
+                        hi[k] = std::fmax(hi[k], c[k] / c[3]);
+                    }
+                }
+            }
+            const float edge = 0.99f;
+            if (!any || (lo[0] <= -edge && hi[0] >= edge && lo[1] <= -edge && hi[1] >= edge))
+                continue;
+        }
+        for (int k = 0; k < 4; k++) t.viewport[k] = view->viewport[k];
+        t.target_w = view->target_w;
+        t.target_h = view->target_h;
+        t.first_draw = s.first;
+        t.draws = s.draws;
+        out.cams[out.count++] = t;
+    }
+    return out;
 }
 
 }  // namespace band3::render::vr
