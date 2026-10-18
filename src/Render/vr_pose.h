@@ -4,9 +4,13 @@
 // each eye is in the venue and what it sees, and a captured frame re-posed
 // for one (RePose); and the HUD panel, the frame's other draws (the track,
 // the HUD, menus) as a quad in front of the head: which draws are its
-// (HudBoundary) and where it hangs (HudPlacement). No OpenXR here: XR's
-// poses and fields of view come in as plain numbers, so this is the same on
-// every platform and unit-tested.
+// (HudBoundary) and where it hangs (HudPlacement); and the game camera's
+// window (vr_viewpoint game_camera, and every menu): the head stands where the
+// game's camera is and sees the venue through a window in LOCAL space the
+// size of the camera's view (WindowFrame, WindowEyePose), dark around it
+// (FrameQuads); and each frame's choice of all that (ResolveFrame). No OpenXR
+// here: XR's poses and fields of view come in as plain numbers, so this is the
+// same on every platform and unit-tested.
 //
 // Units and axes: Milo's are inches (kUnitsPerMetre) with x right, y forward,
 // z up; OpenXR's metres with x right, y up, -z forward, so XR (x, y, z) is
@@ -242,6 +246,311 @@ inline XrPose HeadPose(const XrPose& left, const XrPose& right) {
     }
     for (int i = 0; i < 3; i++) h.p[i] = (left.p[i] + right.p[i]) / 2;
     return h;
+}
+
+// q's inverse (a unit quaternion's conjugate)
+inline void Conjugate(const float q[4], float out[4]) {
+    out[0] = -q[0];
+    out[1] = -q[1];
+    out[2] = -q[2];
+    out[3] = q[3];
+}
+
+// a * b: b's turn, then a's
+inline void QuatMul(const float a[4], const float b[4], float out[4]) {
+    const float r[4] = {a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+                        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+                        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+                        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]};
+    for (int i = 0; i < 4; i++) out[i] = r[i];
+}
+
+// A captured camera's field of view in radians, across and up and down: its
+// projection's x scale (camera-space x to clip x, m[0][0]) and up scale
+// (camera-space z to clip y, m[2][1]: Milo's up is z), as replay.cpp's free
+// cam reports it. RB3's cameras are symmetric; an off-centre one's offset is
+// left out.
+struct GameFov {
+    float hfov = 0, vfov = 0;
+};
+
+inline GameFov GameFovOf(const Mat4& proj) {
+    GameFov f;
+    if (proj.m[0][0] != 0) f.hfov = 2 * std::atan(1 / std::fabs(proj.m[0][0]));
+    if (proj.m[2][1] != 0) f.vfov = 2 * std::atan(1 / std::fabs(proj.m[2][1]));
+    return f;
+}
+
+// The game camera's window: a rectangle in LOCAL space, `distance` metres
+// straight ahead of the head at the recenter, at its eyes' height, turned by
+// its yaw alone (level and upright whatever the head's pitch and roll), and
+// the size the game camera's view is at that distance, so the head there sees
+// through it exactly what the game's picture shows. Its pose as a quad's:
+// +z toward the head.
+struct WindowFrame {
+    XrPose pose;
+    float distance = 0;
+    float size[2] = {0, 0};  // width, height in metres
+};
+
+inline WindowFrame WindowPlacement(const XrPose& head, float distance, const GameFov& fov) {
+    WindowFrame w;
+    w.distance = distance;
+    w.size[0] = 2 * distance * std::tan(fov.hfov / 2);
+    w.size[1] = 2 * distance * std::tan(fov.vfov / 2);
+    HudLayout l;
+    l.distance = distance;
+    l.below = 0;
+    l.width_m = w.size[0] > 0 ? w.size[0] : 1;
+    w.pose = HudPlacement(l, head).pose;
+    return w;
+}
+
+// An eye's pose in the venue through the window: the window is the game
+// camera's picture, so the head at the recenter is the game camera, and
+// moving the head moves the eye with the window's axes as the camera's
+// (right its right, up its up, the window's -z its forward), `units_per_metre`
+// venue units to the metre. With r the eye in the window's frame
+// (R_w^T (p - c_w)), the eye is at game.eye + u (r.x right + r.y up +
+// (D - r.z) fwd), and turns as the head turns from facing the window. The
+// eye's field of view stays the headset's: RePose gives it its own
+// projection, so the window shows the game's picture from the head's place
+// at the recenter, and the venue moves behind it (parallax) as the head moves.
+inline freecam::Pose WindowEyePose(const XrPose& eye, const WindowFrame& w,
+                                   const freecam::Pose& game, float units_per_metre) {
+    float inv[4];
+    Conjugate(w.pose.q, inv);
+    // the eye's place in the window's frame
+    const float rel[3] = {eye.p[0] - w.pose.p[0], eye.p[1] - w.pose.p[1],
+                          eye.p[2] - w.pose.p[2]};
+    float r[3];
+    Rotate(inv, rel, r);
+    // the window's axes x, y, z as the venue's: right, up, -forward
+    auto venue = [&](const float v[3], float out[3]) {
+        for (int c = 0; c < 3; c++)
+            out[c] = v[0] * game.right[c] + v[1] * game.up[c] - v[2] * game.fwd[c];
+    };
+    freecam::Pose p{};
+    const float from_cam[3] = {r[0], r[1], r[2] - w.distance};
+    float moved[3];
+    venue(from_cam, moved);
+    for (int c = 0; c < 3; c++) p.eye[c] = game.eye[c] + units_per_metre * moved[c];
+    // the eye's axes (XR's +x right, -z forward, +y up) in the window's frame
+    float turn[4];
+    QuatMul(inv, eye.q, turn);
+    const float axes[3][3] = {{1, 0, 0}, {0, 0, -1}, {0, 1, 0}};
+    float* out[3] = {p.right, p.fwd, p.up};
+    for (int i = 0; i < 3; i++) {
+        float a[3];
+        Rotate(turn, axes[i], a);
+        venue(a, out[i]);
+    }
+    return p;
+}
+
+// The dark around the window (vr_window_dim): a box of quads about the head
+// whose front face is the window's plane with the window cut out of it, four
+// strips that tile the face around the window, and its four sides and back,
+// so that from anywhere in it every way but through the window is covered,
+// each way by one quad alone (quad layers have no depth: they cover in the
+// order they're given, so none may cover the window). The face reaches
+// kFrameReach times the window's distance each way, the box as far behind
+// the head. Each quad's +z faces into the box.
+inline constexpr int kFrameQuads = 9;
+inline constexpr float kFrameReach = 3;
+
+// a pose in the window's frame (x right, y up, z toward the head) in LOCAL space
+inline XrPose InWindow(const WindowFrame& w, const float p[3], const float q[4]) {
+    XrPose out;
+    float turned[3];
+    Rotate(w.pose.q, p, turned);
+    for (int c = 0; c < 3; c++) out.p[c] = w.pose.p[c] + turned[c];
+    QuatMul(w.pose.q, q, out.q);
+    return out;
+}
+
+inline int FrameQuads(const WindowFrame& w, HudQuad out[kFrameQuads]) {
+    const float s = kFrameReach * w.distance;
+    // the window's half size, kept inside the face
+    const float hx = std::fmin(w.size[0] / 2, s * 0.99f), hy = std::fmin(w.size[1] / 2, s * 0.99f);
+    const float back = w.distance + s;  // the back face's z
+    const float face[4] = {0, 0, 0, 1};
+    const float h = 0.70710678f;
+    // facing +x, -x, -y, +y, -z: turns about y and x
+    const float to_right[4] = {0, h, 0, h}, to_left[4] = {0, -h, 0, h};
+    const float down[4] = {h, 0, 0, h}, up[4] = {-h, 0, 0, h};
+    const float behind[4] = {0, 1, 0, 0};
+    struct Q {
+        float p[3];
+        const float* q;
+        float w, h;
+    } quads[kFrameQuads] = {
+        // the face: top and bottom strips the face's width, left and right
+        // the window's height between them
+        {{0, (hy + s) / 2, 0}, face, 2 * s, s - hy},
+        {{0, -(hy + s) / 2, 0}, face, 2 * s, s - hy},
+        {{-(hx + s) / 2, 0, 0}, face, s - hx, 2 * hy},
+        {{(hx + s) / 2, 0, 0}, face, s - hx, 2 * hy},
+        // the sides, from the face to the back: the left wall faces +x (its
+        // width along -z), the right -x, the ceiling -y (its height along
+        // +z), the floor +y
+        {{-s, 0, back / 2}, to_right, back, 2 * s},
+        {{s, 0, back / 2}, to_left, back, 2 * s},
+        {{0, s, back / 2}, down, 2 * s, back},
+        {{0, -s, back / 2}, up, 2 * s, back},
+        {{0, 0, back}, behind, 2 * s, 2 * s},
+    };
+    for (int i = 0; i < kFrameQuads; i++) {
+        out[i].pose = InWindow(w, quads[i].p, quads[i].q);
+        out[i].size[0] = quads[i].w;
+        out[i].size[1] = quads[i].h;
+    }
+    return kFrameQuads;
+}
+
+// How dark the eyes are after a cut (vr_cut_fade_ms): black at the cut, back
+// to the picture over `fade_ms`, as the time left over the whole (1 black,
+// 0 none)
+inline float CutFade(int64_t since_ns, double fade_ms) {
+    if (!(fade_ms > 0)) return 0;
+    if (since_ns < 0) since_ns = 0;
+    const double left = 1 - double(since_ns) / (fade_ms * 1e6);
+    return left <= 0 ? 0.0f : left >= 1 ? 1.0f : float(left);
+}
+
+// Where the eyes are in the venue (the `vr_viewpoint` setting): the game
+// camera's window (game_camera), or one of the places in the venue
+// (front_row, on_stage, venue: not made yet, so LOCAL space where vr_anchor
+// says, as before the window). Menus are seen through the window whatever
+// this is.
+enum class ViewMode { kGameCamera, kFrontRow, kOnStage, kVenue };
+
+inline bool ParseViewMode(const std::string& text, ViewMode& mode) {
+    if (text == "game_camera") mode = ViewMode::kGameCamera;
+    else if (text == "front_row") mode = ViewMode::kFrontRow;
+    else if (text == "on_stage") mode = ViewMode::kOnStage;
+    else if (text == "venue") mode = ViewMode::kVenue;
+    else return false;
+    return true;
+}
+
+struct Viewpoint {
+    ViewMode mode = ViewMode::kGameCamera;
+    bool window = true;  // songs too through the window; else from `anchor`
+    // LOCAL space's place in the venue, or the game camera's point facing
+    // where it looks (AnchorFromCamera) with `follow`
+    Anchor anchor;
+    bool follow = false;
+};
+
+// One frame's inputs: the views and the recenter's head (LOCAL), the
+// captured frame's HudBoundary and world camera, and the settings
+struct FrameInputs {
+    XrPose views[2];
+    Fov fov[2];
+    XrPose head;
+    uint32_t hud_boundary = 0;  // HudBoundary's
+    bool camera = false;        // a perspective world camera, split into these
+    freecam::Pose game{};
+    Mat4 proj{};
+    // a song is being played: RB3's Game exists and its screen is up
+    // (native_view.h's InSong and SongScreen), not its loading or results
+    bool in_song = false;
+    bool hud = true;       // vr_hud
+    bool hud_in_window = false;
+    HudLayout hud_layout;  // the panel's own place (vr_hud_*)
+    float dim = 1;         // vr_window_dim
+    float world_scale = 1;
+};
+
+// what the eyes show and where the quads go, for VrFrame and Present
+struct FrameLayout {
+    // the eyes through the game camera's window; else from the anchor, or
+    // black: the frame has no world the eyes can see (HudBoundary 0)
+    bool window = false;
+    bool eyes_black = false;
+    float fade = 0;  // the eyes darkened by this (CutFade), set by the caller
+    uint32_t hud_boundary = 0;  // the frame's HudBoundary, the eyes' hud_from
+    Eye eyes[2];
+    GameFov game_fov;
+    WindowFrame window_frame;
+    // the HUD panel: shown, where, and whether that's the window itself
+    bool hud = false;
+    bool hud_in_window = false;
+    HudQuad hud_quad;
+    // the dark around the window, black at `dim`'s alpha
+    int frame_quads = 0;
+    HudQuad frame[kFrameQuads];
+    float dim = 0;
+};
+
+// The frame's choice: through the window where the capture has a world
+// camera and it's a menu or `vp.window` (the panel in the window, as the
+// game's picture has it, in menus and with hud_in_window; on its own place in
+// songs, whose shots are wider than a comfortable panel); from the anchor in
+// songs otherwise; black eyes and the panel on its own place without a world.
+inline FrameLayout ResolveFrame(const Viewpoint& vp, const FrameInputs& in) {
+    FrameLayout l;
+    l.hud_boundary = in.hud_boundary;
+    const bool world = in.hud_boundary > 0 && in.camera;
+    l.eyes_black = !world;
+    l.window = world && (vp.window || !in.in_song);
+    l.hud = in.hud;
+    l.hud_quad = HudPlacement(in.hud_layout, in.head);
+    if (l.window) {
+        l.game_fov = GameFovOf(in.proj);
+        l.window_frame = WindowPlacement(in.head, in.hud_layout.distance, l.game_fov);
+        for (int e = 0; e < 2; e++) {
+            l.eyes[e].pose = WindowEyePose(in.views[e], l.window_frame, in.game,
+                                           kUnitsPerMetre * in.world_scale);
+            l.eyes[e].fov = in.fov[e];
+        }
+        if (!in.in_song || in.hud_in_window) {
+            l.hud_in_window = true;
+            l.hud_quad.pose = l.window_frame.pose;
+            l.hud_quad.size[0] = l.window_frame.size[0];
+            l.hud_quad.size[1] = l.window_frame.size[1];
+        }
+        l.dim = in.dim < 0 ? 0 : in.dim > 1 ? 1 : in.dim;
+        if (l.dim > 0) l.frame_quads = FrameQuads(l.window_frame, l.frame);
+        return l;
+    }
+    Anchor a = vp.anchor;
+    if (vp.follow && in.camera) a = AnchorFromCamera(in.game);
+    for (int e = 0; e < 2; e++) {
+        l.eyes[e].pose = EyePose(in.views[e], a, in.world_scale);
+        l.eyes[e].fov = in.fov[e];
+    }
+    return l;
+}
+
+// A point in LOCAL space in an eye's picture, in pixels from its top left
+// (`width` by `height`, its field of view `fov`); false behind the eye
+inline bool EyePixel(const XrPose& eye, const Fov& fov, uint32_t width, uint32_t height,
+                     const float p[3], float& x, float& y) {
+    float inv[4];
+    Conjugate(eye.q, inv);
+    const float rel[3] = {p[0] - eye.p[0], p[1] - eye.p[1], p[2] - eye.p[2]};
+    float v[3];
+    Rotate(inv, rel, v);
+    if (!(v[2] < 0)) return false;
+    const float tx = v[0] / -v[2], ty = v[1] / -v[2];
+    const float l = std::tan(fov.left), r = std::tan(fov.right);
+    const float u = std::tan(fov.up), d = std::tan(fov.down);
+    x = (tx - l) / (r - l) * float(width);
+    y = (u - ty) / (u - d) * float(height);
+    return true;
+}
+
+// a quad's corners in LOCAL space: top left, top right, bottom right, bottom left
+inline void QuadCorners(const HudQuad& q, float out[4][3]) {
+    const float sx[4] = {-1, 1, 1, -1}, sy[4] = {1, 1, -1, -1};
+    for (int i = 0; i < 4; i++) {
+        const float c[3] = {sx[i] * q.size[0] / 2, sy[i] * q.size[1] / 2, 0};
+        float t[3];
+        Rotate(q.pose.q, c, t);
+        for (int k = 0; k < 3; k++) out[i][k] = q.pose.p[k] + t[k];
+    }
 }
 
 // A setting used as a button (vr_hud_recenter): each change of its value
