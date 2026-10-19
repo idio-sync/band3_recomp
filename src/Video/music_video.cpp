@@ -64,7 +64,8 @@ public:
         song_time_ = song_time;
         // in a gap (a part of the song the video hasn't): black, and the
         // decoder waits where it is; a jump to another part is a seek
-        const std::optional<double> at = VideoTimeAt(*file_, song_time);
+        // picked by a clock that moves on evenly (SteadyClock)
+        const std::optional<double> at = VideoTimeAt(*file_, clock_.Step(song_time));
         if (!at) {
             out = Black(sizes);
             return true;
@@ -188,6 +189,7 @@ private:
     void Begin(std::string_view shortname, bool on) {
         LogStats();
         stats_ = {};
+        clock_.Reset();
         frame_rate_ = 0.0;
         shortname_ = shortname;
         file_ = on && !shortname.empty() ? FindVideo(VideoFolders(), shortname) : std::nullopt;
@@ -304,6 +306,7 @@ private:
                 continue;
             }
             const uint64_t epoch = epoch_;
+            decoder->ShrinkFor(sizes_.w, sizes_.h, fit_, kScreenAspect);
             lock.unlock();
             const bool got = decoder->Read(frame);
             lock.lock();
@@ -341,6 +344,7 @@ private:
     // the game's side: the song, its video, where the song is
     std::string shortname_;
     std::optional<VideoFile> file_;
+    SteadyClock clock_;  // the song's time, for picking frames by
     uint64_t song_ = 0;  // counts songs looked up, so the thread sees a new one
     double target_ = 0.0;
     double song_time_ = 0.0;  // Frame's last

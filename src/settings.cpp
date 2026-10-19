@@ -61,10 +61,10 @@ REXCVAR_DEFINE_BOOL(music_video_as_is, true, "Band3/Videos",
     "and trails are left off while it plays (and on the black background's black)");
 
 REXCVAR_DEFINE_BOOL(music_video_full_rate, true, "Band3/Videos",
-    "Play a music video faster than the venue's 30 fps (a 60 fps one) at its own frame rate: "
-    "the video venue is drawn that fast while it plays (as background_fps would, up to the "
-    "game's rate), which takes about twice the drawing and decoding. Off, it shows at the "
-    "venue's rate");
+    "Draw the venue every frame while a music video plays (at refresh rates past 60, the slowest "
+    "rate of 60 or more the video's divides), so each of its frames, at 24, 25, 30, 50 or 60 "
+    "fps, is held evenly and none is skipped; about twice the venue's drawing. Off, it shows at "
+    "the venue's rate (24 or 30 fps), which holds some frames longer and skips some");
 
 REXCVAR_DEFINE_BOOL(music_video_auto_sync, true, "Band3/Videos",
     "Find each music video's offset from its sound: when its song is picked, the song's "
@@ -92,8 +92,8 @@ REXCVAR_DEFINE_INT32(music_video_max_height, 1080, "Band3/Videos",
     .range(144, 4320);
 
 REXCVAR_DEFINE_BOOL(music_video_prefer_60fps, true, "Band3/Videos",
-    "Download a music video's 60 fps picture where it has one (music_video_full_rate plays "
-    "it at 60); off, its 30 fps one");
+    "Download a music video's 60 fps picture where it has one (music_video_full_rate shows "
+    "all of it); off, its 30 fps one");
 
 REXCVAR_DEFINE_BOOL(music_video_auto_accept, true, "Band3/Videos",
     "When finding music videos, take one without asking when it's surely the song's: its "

@@ -26,6 +26,21 @@ FitRects ComputeFit(float picture_aspect, float screen_aspect, Fit fit) {
     return r;
 }
 
+bool ShrunkSize(uint32_t sw, uint32_t sh, float pixel_aspect, Fit fit, float screen_aspect,
+                uint32_t w, uint32_t h, uint32_t& out_w, uint32_t& out_h) {
+    if (!sw || !sh || !w || !h) return false;
+    const FitRects r = ComputeFit(float(sw) * pixel_aspect / float(sh), screen_aspect, fit);
+    // fill cuts the picture: all of it, at the scale its cut fills the planes
+    const double tw = fit == Fit::kFill ? w / double(r.src[2] - r.src[0])
+                                        : w * double(r.dst[2] - r.dst[0]);
+    const double th = fit == Fit::kFill ? h / double(r.src[3] - r.src[1])
+                                        : h * double(r.dst[3] - r.dst[1]);
+    out_w = uint32_t(std::lround(tw));
+    out_h = uint32_t(std::lround(th));
+    if (!out_w || !out_h) return false;
+    return out_w < sw || out_h < sh;
+}
+
 namespace {
 
 // The taps along an axis of `out` texels, of which [d0, d1) show source
@@ -89,6 +104,30 @@ void Resample(const RgbFrame& frame, const FitRects& fit, uint32_t w, uint32_t h
     s.rgb.assign(size_t(w) * h * 3, 0.0f);
     const uint32_t sw = frame.width, sh = frame.height;
     if (!sw || !sh || frame.pixels.size() < size_t(sw) * sh) return;
+    // a picture the decoder scaled to the texels it covers (ShrunkSize), on
+    // whole ones: the tent at 1:1 weighs only the texel under each, a copy
+    const float dx0 = fit.dst[0] * w, dx1 = fit.dst[2] * w, dy0 = fit.dst[1] * h,
+                dy1 = fit.dst[3] * h;
+    const float sx0 = fit.src[0] * sw, sx1 = fit.src[2] * sw, sy0 = fit.src[1] * sh,
+                sy1 = fit.src[3] * sh;
+    auto whole = [](float v) { return std::abs(v - std::round(v)) < 1e-3f; };
+    if (whole(dx0) && whole(dx1) && whole(dy0) && whole(dy1) && whole(sx0) && whole(sx1) &&
+        whole(sy0) && whole(sy1) && std::lround(dx1 - dx0) == std::lround(sx1 - sx0) &&
+        std::lround(dy1 - dy0) == std::lround(sy1 - sy0)) {
+        const long x0 = std::lround(dx0), y0 = std::lround(dy0), cols = std::lround(dx1 - dx0),
+                   rows = std::lround(dy1 - dy0), fx = std::lround(sx0), fy = std::lround(sy0);
+        for (long y = 0; y < rows; y++) {
+            const uint32_t* src = frame.pixels.data() + size_t(fy + y) * sw + fx;
+            float* out = s.rgb.data() + (size_t(y0 + y) * w + x0) * 3;
+            for (long x = 0; x < cols; x++) {
+                const uint32_t p = src[x];
+                out[x * 3] = float((p >> 16) & 0xff);
+                out[x * 3 + 1] = float((p >> 8) & 0xff);
+                out[x * 3 + 2] = float(p & 0xff);
+            }
+        }
+        return;
+    }
     const Axis xs = MakeAxis(w, fit.dst[0] * w, fit.dst[2] * w, sw, fit.src[0] * sw,
                              fit.src[2] * sw);
     const Axis ys = MakeAxis(h, fit.dst[1] * h, fit.dst[3] * h, sh, fit.src[1] * sh,

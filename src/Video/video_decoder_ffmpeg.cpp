@@ -187,31 +187,52 @@ public:
 
     double FrameRate() const override { return frame_rate_; }
 
+    void ShrinkFor(uint32_t w, uint32_t h, Fit fit, float screen_aspect) override {
+        shrink_w_ = w;
+        shrink_h_ = h;
+        shrink_fit_ = fit;
+        shrink_aspect_ = screen_aspect;
+    }
+
 private:
     bool Convert(RgbFrame& out) {
         const int w = frame_->width, h = frame_->height;
         if (w <= 0 || h <= 0) return false;
         const auto format = AVPixelFormat(frame_->format);
-        sws_ = g_av->sws_getCachedContext(sws_, w, h, format, w, h, AV_PIX_FMT_BGRA, SWS_POINT,
-                                          nullptr, nullptr, nullptr);
+        const AVRational sar = frame_->sample_aspect_ratio.num
+                                   ? frame_->sample_aspect_ratio
+                                   : format_->streams[stream_]->sample_aspect_ratio;
+        const float pixel_aspect = sar.num > 0 && sar.den > 0 ? float(av_q2d(sar)) : 1.0f;
+        // shrunk by FFmpeg's scaler to what it covers, rather than whole and
+        // then by ToPlanes' (a 1080p video's conversion took most of a core
+        // at 60 fps)
+        uint32_t dw = uint32_t(w), dh = uint32_t(h);
+        if (!ShrunkSize(uint32_t(w), uint32_t(h), pixel_aspect, shrink_fit_, shrink_aspect_,
+                        shrink_w_, shrink_h_, dw, dh)) {
+            dw = uint32_t(w);
+            dh = uint32_t(h);
+        }
+        const bool scaled = dw != uint32_t(w) || dh != uint32_t(h);
+        sws_ = g_av->sws_getCachedContext(sws_, w, h, format, int(dw), int(dh), AV_PIX_FMT_BGRA,
+                                          scaled ? SWS_AREA : SWS_POINT, nullptr, nullptr,
+                                          nullptr);
         if (!sws_) return false;
         const int* matrix = g_av->sws_getCoefficients(SwsMatrix(frame_->colorspace, h));
         const bool full_range = frame_->color_range == AVCOL_RANGE_JPEG;
         g_av->sws_setColorspaceDetails(sws_, matrix, full_range,
                                        g_av->sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16,
                                        1 << 16);
-        out.width = uint32_t(w);
-        out.height = uint32_t(h);
-        out.pixels.resize(size_t(w) * h);
+        out.width = dw;
+        out.height = dh;
+        out.pixels.resize(size_t(dw) * dh);
         uint8_t* dst[4] = {reinterpret_cast<uint8_t*>(out.pixels.data()), nullptr, nullptr,
                            nullptr};
-        const int dst_stride[4] = {w * 4, 0, 0, 0};
-        if (g_av->sws_scale(sws_, frame_->data, frame_->linesize, 0, h, dst, dst_stride) != h)
+        const int dst_stride[4] = {int(dw) * 4, 0, 0, 0};
+        if (g_av->sws_scale(sws_, frame_->data, frame_->linesize, 0, h, dst, dst_stride) !=
+            int(dh))
             return false;
-        const AVRational sar = frame_->sample_aspect_ratio.num
-                                   ? frame_->sample_aspect_ratio
-                                   : format_->streams[stream_]->sample_aspect_ratio;
-        out.pixel_aspect = sar.num > 0 && sar.den > 0 ? float(av_q2d(sar)) : 1.0f;
+        // the same shape at its new size
+        out.pixel_aspect = pixel_aspect * float(w) * float(dh) / (float(h) * float(dw));
         int64_t ts = frame_->best_effort_timestamp;
         if (ts == AV_NOPTS_VALUE) ts = frame_->pts;
         out.time = ts == AV_NOPTS_VALUE ? 0.0 : double(ts - start_) * time_base_;
@@ -229,6 +250,10 @@ private:
     int64_t start_ = 0;
     // the file's read to its end; the decoder's last frames are coming out
     bool draining_ = false;
+    // ShrinkFor's; none (0) till then
+    uint32_t shrink_w_ = 0, shrink_h_ = 0;
+    Fit shrink_fit_ = Fit::kFit;
+    float shrink_aspect_ = 16.0f / 9.0f;
 };
 
 }

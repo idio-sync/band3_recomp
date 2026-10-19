@@ -204,6 +204,111 @@ TEST_CASE("a world drawn every frame at 60 keeps a 60 fps video's every frame") 
     CHECK(ShouldMake(5.0083, 5.0, 5.0, MinFrameGap(120)));
 }
 
+TEST_CASE("a picture is shrunk to what it covers of the planes") {
+    uint32_t w = 0, h = 0;
+    // 1080p onto 1280x720 planes
+    CHECK(ShrunkSize(1920, 1080, 1.0f, Fit::kFit, 16.0f / 9.0f, 1280, 720, w, h));
+    CHECK(w == 1280);
+    CHECK(h == 720);
+    // 4:3 with bars: the part between them
+    CHECK(ShrunkSize(1440, 1080, 1.0f, Fit::kFit, 16.0f / 9.0f, 1280, 720, w, h));
+    CHECK(w == 960);
+    CHECK(h == 720);
+    // fill: all of it, at the scale its cut fills the planes
+    CHECK(ShrunkSize(1440, 1080, 1.0f, Fit::kFill, 16.0f / 9.0f, 1280, 720, w, h));
+    CHECK(w == 1280);
+    CHECK(h == 960);
+    // no bigger already, or no planes yet: as it is
+    CHECK_FALSE(ShrunkSize(1280, 720, 1.0f, Fit::kFit, 16.0f / 9.0f, 1280, 720, w, h));
+    CHECK_FALSE(ShrunkSize(640, 360, 1.0f, Fit::kFit, 16.0f / 9.0f, 1280, 720, w, h));
+    CHECK_FALSE(ShrunkSize(1920, 1080, 1.0f, Fit::kFit, 16.0f / 9.0f, 0, 0, w, h));
+}
+
+TEST_CASE("a picture already the size it covers is copied texel for texel") {
+    RgbFrame f;
+    f.width = 96;
+    f.height = 72;
+    for (uint32_t y = 0; y < f.height; y++)
+        for (uint32_t x = 0; x < f.width; x++)
+            f.pixels.push_back(0xff000000u | (x * 2) << 16 | (y * 3) << 8 | ((x + y) & 0xff));
+    // a 4:3 picture between bars on 128x72 planes: 16 texels each side
+    PlaneSet p;
+    ToPlanes(f, Fit::kFit, 16.0f / 9.0f, 128, 72, 64, 36, p);
+    for (uint32_t y = 0; y < 72; y += 7) {
+        for (uint32_t x = 0; x < 96; x += 5) {
+            const uint32_t c = f.pixels[size_t(y) * 96 + x];
+            CHECK(p.y.Row(y)[16 + x] == RgbToY(float((c >> 16) & 0xff), float((c >> 8) & 0xff),
+                                               float(c & 0xff)));
+        }
+        CHECK(p.y.Row(y)[3] == kBlackY);
+    }
+    // the shrunk picture lands where the whole one did
+    RgbFrame big = Solid(1440, 1080, 0x3080c0), small = Solid(960, 720, 0x3080c0);
+    PlaneSet a, b;
+    ToPlanes(big, Fit::kFit, 16.0f / 9.0f, 1280, 720, 640, 360, a);
+    ToPlanes(small, Fit::kFit, 16.0f / 9.0f, 1280, 720, 640, 360, b);
+    CHECK(a.y.texels == b.y.texels);
+    CHECK(a.cr.texels == b.cr.texels);
+}
+
+namespace {
+// the frames a video at `fps` shows over `draws` draws 60 times a second,
+// picked by the song's time wobbling by `wobble` s (or by SteadyClock on it):
+// how many times a frame stayed for two draws, and how many were skipped
+struct Picks {
+    int repeats = 0, skips = 0;
+};
+Picks Pick(double fps, int draws, double wobble, bool steady) {
+    SteadyClock clock;
+    Picks p;
+    long last = -1;
+    uint32_t r = 12345;
+    for (int i = 0; i < draws; i++) {
+        r = r * 1103515245u + 12345u;
+        const double noise = wobble * (double((r >> 8) & 0xffff) / 65535.0 * 2 - 1);
+        double t = 10.0 + i / 60.0 + noise;
+        if (steady) t = clock.Step(t);
+        const long frame = long(std::floor((t + kEarly) * fps));
+        if (last >= 0) {
+            if (frame == last) p.repeats++;
+            if (frame > last + 1) p.skips += int(frame - last - 1);
+        }
+        last = frame;
+    }
+    return p;
+}
+}
+
+TEST_CASE("frames are picked by a clock that moves on evenly") {
+    // 59.94 fps drawn at 60 for a minute: about 3.6 frames shown twice, none
+    // skipped; picked by the wobbling time, many of each
+    const Picks plain = Pick(60000.0 / 1001, 3600, 0.0005, false);
+    const Picks steady = Pick(60000.0 / 1001, 3600, 0.0005, true);
+    CHECK(plain.skips > 5);
+    CHECK(steady.skips == 0);
+    CHECK(steady.repeats <= 4);
+    // 60 fps at 60: every frame once
+    const Picks sixty = Pick(60, 3600, 0.0005, true);
+    CHECK(sixty.skips == 0);
+    CHECK(sixty.repeats == 0);
+    // 24 fps: 2 and 3 draws by turns, so 36 of 60 draws a second repeat one
+    const Picks film = Pick(24, 3600, 0.0005, true);
+    CHECK(film.skips == 0);
+    CHECK(film.repeats == doctest::Approx(3600 - 24 * 60).epsilon(0.01));
+}
+
+TEST_CASE("the steady clock holds while paused and starts again on a jump") {
+    SteadyClock c;
+    double t = 0;
+    for (int i = 0; i < 100; i++) t = c.Step(5.0 + i / 60.0);
+    CHECK(t == doctest::Approx(5.0 + 99 / 60.0).epsilon(1e-4));
+    // paused
+    CHECK(c.Step(5.0 + 99 / 60.0) == doctest::Approx(t));
+    // a restart, and a seek ahead
+    CHECK(c.Step(0.0) == 0.0);
+    CHECK(c.Step(30.0) == 30.0);
+}
+
 TEST_CASE("video_start_time comes from the .ini, in seconds") {
     CHECK(ParseStartTime("") == 0.0);
     CHECK(ParseStartTime("[song]\r\nname = x\r\nvideo_start_time = 1500\r\n") ==

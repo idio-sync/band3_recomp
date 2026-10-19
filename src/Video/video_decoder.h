@@ -26,6 +26,9 @@ public:
     virtual bool Seek(double seconds) = 0;
     // its frames a second, as the file gives it (0: not known)
     virtual double FrameRate() const = 0;
+    // From now on, pictures shrunk to what they cover of planes of `w` x `h`
+    // (ShrunkSize) where the decoder can, keeping their shape (pixel_aspect)
+    virtual void ShrinkFor(uint32_t w, uint32_t h, Fit fit, float screen_aspect) {}
 };
 
 // Sets up and takes down decoding on the calling thread, around any

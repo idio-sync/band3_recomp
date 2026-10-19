@@ -52,6 +52,14 @@ FitRects ComputeFit(float picture_aspect, float screen_aspect, Fit fit);
 void ToPlanes(const RgbFrame& frame, Fit fit, float screen_aspect, uint32_t w, uint32_t h,
               uint32_t cw, uint32_t ch, PlaneSet& out);
 
+// The size to scale a `sw` x `sh` picture (pixels `pixel_aspect` wide) to
+// before ToPlanes for planes of `w` x `h`: the part of them it covers, so the
+// decoder's own scaler does the shrinking and ToPlanes only copies (or for
+// fill, the whole picture at the scale its cut shows at). False when it's no
+// bigger than that already, or it can't be told.
+bool ShrunkSize(uint32_t sw, uint32_t sh, float pixel_aspect, Fit fit, float screen_aspect,
+                uint32_t w, uint32_t h, uint32_t& out_w, uint32_t& out_h);
+
 // a plane at another size, nearest texel: for a frame made for planes that
 // have since changed size, until the next one is made for theirs
 Plane ResizeNearest(const Plane& src, uint32_t w, uint32_t h);

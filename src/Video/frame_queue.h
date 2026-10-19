@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <deque>
 #include <memory>
@@ -47,6 +48,60 @@ inline double MinFrameGap(double world_fps) {
 // while catching up, one frame this far apart is made anyway, so something
 // moves if the decoder can't keep up
 inline constexpr double kCatchUpGap = 0.25;
+
+// The song's time as the video's frames are picked by, read once a draw: it
+// moves on the same each draw (the mean of the song's own steps) and is drawn
+// a little toward the song's time, so a video frame's time near where the
+// draws fall is picked on one side of it for a while, then once on the other.
+// The song's time wobbles a fraction of a millisecond from draw to draw, and
+// picked by it a 59.94 or 60 fps video drawn 60 times a second showed a frame
+// twice and skipped the next by turns, many times a minute, where it drifts
+// across a draw. A pause holds it; a jump (a seek, a restart, a stall) or
+// drifting off by more than kSnap starts it again from the song's time.
+class SteadyClock {
+public:
+    static constexpr double kGain = 0.02;       // toward the song's time, each draw
+    static constexpr double kStepGain = 0.005;  // the mean step's, each draw
+    static constexpr int kLearn = 30;           // draws to learn the step over first
+    static constexpr double kSnap = 0.05;       // seconds off that start it again
+    static constexpr double kMaxStep = 0.1;
+
+    double Step(double t) {
+        if (!have_) {
+            have_ = true;
+            learned_ = 0;
+            total_ = 0;
+            return Restart(t);
+        }
+        const double d = t - last_;
+        last_ = t;
+        if (d < 0 || d > kMaxStep || std::abs(t - now_) > kSnap) return Restart(t);
+        // paused: held where it is
+        if (d == 0) return now_;
+        // the song's own time while the step's learned (a step learned from
+        // the first one or two, a wobble off, walked it away)
+        if (learned_ < kLearn) {
+            total_ += d;
+            if (++learned_ == kLearn) step_ = total_ / kLearn;
+            return now_ = t;
+        }
+        step_ += kStepGain * (d - step_);
+        now_ += step_;
+        now_ += kGain * (t - now_);
+        return now_;
+    }
+    void Reset() { have_ = false; }
+
+private:
+    double Restart(double t) {
+        last_ = now_ = t;
+        return t;
+    }
+    bool have_ = false;
+    int learned_ = 0;
+    double total_ = 0;
+    double last_ = 0, now_ = 0, step_ = 0;
+};
 
 class FrameQueue {
 public:

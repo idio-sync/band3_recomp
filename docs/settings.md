@@ -266,7 +266,7 @@ shortname as a song starts (`No music video for 20thcenturyboy in music_videos_f
 | `music_video_venue_chance` | `100` | how often, in percent, a song with a video goes to one of the seven video venues: 100 (always), 75, 50, 25, or 0 to leave the venue to the game. A forced venue and the Black Background modifier win. `forced_venue = video` puts every song in a video venue |
 | `music_video_hide_band` | on | the band isn't drawn while a video plays; cameras, lights and [Stage Kits](integrations.md#stage-kit-lights) go on as before |
 | `music_video_as_is` | on | the venue's colour filter, film grain, glow and trails are left off, so the video looks as it does in a player |
-| `music_video_full_rate` | on | a 60 fps video plays at 60 fps, drawing the venue that fast (up to the game's rate). Costs about twice the venue's drawing and decoding |
+| `music_video_full_rate` | on | the venue is drawn every frame while a music video plays (past 60 Hz, the slowest rate of 60 or more the video's divides), so 24, 25, 30, 50 and 60 fps videos show every frame, held evenly. Costs about twice the venue's drawing |
 | `music_video_fit` | `fit` | a video that isn't 16:9: `fit` with black bars, `fill` cutting its edges, or `stretch` |
 
 Turning `music_videos` off stops the video at once; on starts videos from the next song. A

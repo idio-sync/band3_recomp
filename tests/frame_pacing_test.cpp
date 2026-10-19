@@ -47,25 +47,40 @@ TEST_CASE("an unset refresh rate is the console's 60") {
     CHECK(WorldHalfFrames(0, 30, 0) == 4);
 }
 
-TEST_CASE("a music video faster than the background has it drawn at the video's rate") {
+TEST_CASE("a music video has its venue drawn so each frame is held evenly") {
     using band3::pacing::BackgroundFpsForVideo;
-    // 60 fps (and 59.94) in a 30 fps venue: every frame at 60 Hz
-    CHECK(BackgroundFpsForVideo(30, 0, 60) == 60);
-    CHECK(BackgroundFpsForVideo(30, 0, 59.94) == 60);
-    CHECK(WorldHalfFrames(60, 30, BackgroundFpsForVideo(30, 0, 59.94)) == 2);
-    // at 120 Hz, every other frame
-    CHECK(WorldHalfFrames(120, 30, BackgroundFpsForVideo(30, 0, 60)) == 4);
-    // no faster than background_fps already draws it
-    CHECK(BackgroundFpsForVideo(30, 90, 60) == 90);
-    CHECK(BackgroundFpsForVideo(30, 20, 60) == 60);
-    // a 30, 29.97 or 24 fps video leaves the venue's rate alone
-    CHECK(BackgroundFpsForVideo(30, 0, 30) == 0);
-    CHECK(BackgroundFpsForVideo(30, 0, 29.97) == 0);
-    CHECK(BackgroundFpsForVideo(30, 0, 23.976) == 0);
-    CHECK(BackgroundFpsForVideo(30, 45, 24) == 45);
-    // none playing, or a venue drawing every frame already
-    CHECK(BackgroundFpsForVideo(30, 0, 0) == 0);
-    CHECK(BackgroundFpsForVideo(0, 0, 60) == 0);
+    using band3::pacing::VideoWorldFps;
+    // at 60 Hz every frame, whatever the video's rate: 24 and 25 fps take 2
+    // and 3 refreshes a frame by turns, 30 two, 50 one and two, 60 one
+    for (double fps : {23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0}) {
+        CAPTURE(fps);
+        CHECK(VideoWorldFps(60, fps) == doctest::Approx(60));
+        CHECK(BackgroundFpsForVideo(30, 0, fps, 60) == 60);
+        CHECK(WorldHalfFrames(60, 30, BackgroundFpsForVideo(30, 0, fps, 60)) == 2);
+        CHECK(WorldHalfFrames(59.86, 24, BackgroundFpsForVideo(24, 0, fps, 59.86)) == 2);
+    }
+    // past 60 Hz, the slowest rate of 60 or more the video's divides
+    CHECK(VideoWorldFps(120, 30) == doctest::Approx(60));
+    CHECK(VideoWorldFps(120, 60) == doctest::Approx(60));
+    CHECK(VideoWorldFps(119.88, 29.97) == doctest::Approx(59.94));
+    CHECK(WorldHalfFrames(120, 30, BackgroundFpsForVideo(30, 0, 30, 120)) == 4);
+    CHECK(VideoWorldFps(240, 24) == doctest::Approx(120));
+    CHECK(VideoWorldFps(144, 24) == doctest::Approx(72));
+    // none: every frame
+    CHECK(VideoWorldFps(120, 24) == doctest::Approx(120));
+    CHECK(VideoWorldFps(120, 25) == doctest::Approx(120));
+    CHECK(VideoWorldFps(120, 50) == doctest::Approx(120));
+    CHECK(VideoWorldFps(144, 30) == doctest::Approx(144));
+    // a refresh rate under 60: every frame
+    CHECK(VideoWorldFps(50, 25) == doctest::Approx(50));
+    // no slower than background_fps already draws it
+    CHECK(BackgroundFpsForVideo(30, 90, 30, 120) == 90);
+    CHECK(BackgroundFpsForVideo(30, 20, 24, 60) == 60);
+    // none playing (or music_video_full_rate off), or a venue drawing every
+    // frame already
+    CHECK(BackgroundFpsForVideo(30, 0, 0, 60) == 0);
+    CHECK(BackgroundFpsForVideo(30, 45, 0, 60) == 45);
+    CHECK(BackgroundFpsForVideo(0, 0, 60, 60) == 0);
 }
 
 TEST_CASE("the longest period counts ProcCounter's odd half-frame") {

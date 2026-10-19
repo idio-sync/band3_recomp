@@ -34,16 +34,39 @@ inline int32_t WorldHalfFrames(double game_hz, int32_t venue_fps, int32_t backgr
     return static_cast<int32_t>(std::clamp(half_frames, 2.0, 2 * game_hz));
 }
 
+// The rate a venue showing a music video at `video_fps` is drawn at, for a
+// game at `game_hz` (music_video_full_rate). A video frame shows until the
+// first world frame at or after the next one's time, so for a whole number of
+// world frames: a world rate the video's divides (30 or 60 for a 30 fps
+// video) holds each frame equally long, and a slower one holds some longer
+// than others or skips some (24 fps for a 25 fps video, half-frames being all
+// SetEmulateFPS has, dropped one a second). So: every frame (holds as even as
+// the display allows: 2 and 3 refreshes for 24 or 25 fps at 60 Hz), or past
+// 60 Hz the slowest rate of 60 or more, in whole frames, that's a multiple of
+// the video's (60 for 30 fps at 120 Hz, 120 for 24 fps at 240 Hz).
+inline double VideoWorldFps(double game_hz, double video_fps) {
+    if (!(game_hz > 0)) game_hz = 60;
+    // at least 60, or every frame below that; 1% under, for 59.94 and the like
+    const double least = std::min(60.0, game_hz) * 0.99;
+    int frames = 1;
+    for (int n = 2; game_hz / n >= least; n++) {
+        const double ratio = game_hz / n / video_fps;
+        // 23.976 in 119.88, or 29.97 in 59.94, is as even as 24 in 120
+        if (std::round(ratio) >= 1 && std::abs(ratio - std::round(ratio)) <= 0.003 * ratio)
+            frames = n;
+    }
+    return game_hz / frames;
+}
+
 // background_fps while a song's music video plays at `video_fps` (0 for none,
-// or music_video_full_rate off): the video's rate when that's faster than the
-// background would be drawn otherwise (`background_fps`, or with that 0 the
-// venue's `venue_fps`), so each of its frames is drawn; else background_fps
+// or music_video_full_rate off) in a game at `game_hz`: VideoWorldFps, or
+// background_fps where that's faster; else background_fps
 inline int32_t BackgroundFpsForVideo(int32_t venue_fps, int32_t background_fps,
-                                     double video_fps) {
+                                     double video_fps, double game_hz) {
     if (!(video_fps > 0) || venue_fps <= 0) return background_fps;
-    const int32_t would_be = background_fps > 0 ? background_fps : venue_fps;
-    const int32_t video = static_cast<int32_t>(std::lround(std::min(video_fps, 240.0)));
-    return video > would_be ? video : background_fps;
+    const int32_t video =
+        static_cast<int32_t>(std::lround(std::min(VideoWorldFps(game_hz, video_fps), 240.0)));
+    return std::max(video, background_fps);
 }
 
 // The most frames apart the world is drawn now (ProcCounter's period, the

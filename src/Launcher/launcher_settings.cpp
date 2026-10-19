@@ -522,9 +522,9 @@ constexpr Setting kSettings[] = {
      .about = "Shows a video as it is, without the video venue's colour filter, grain and "
               "glow."},
     {.cvar = "music_video_full_rate", .category = kVideos, .section = "Playback",
-     .label = "Smooth 60 fps videos", .widget = kCheckbox,
-     .about = "Plays 60 fps videos at 60, which takes about twice the drawing. Off, at the "
-              "venue's 30."},
+     .label = "Smooth videos", .widget = kCheckbox,
+     .about = "Draws the venue every frame while a video plays, so each of its frames shows "
+              "evenly, which takes about twice the drawing. Off, at the venue's 24 or 30."},
     {.cvar = "music_video_auto_sync", .category = kVideos, .section = "Playback",
      .label = "Sync videos by themselves", .widget = kCheckbox,
      .about = "Matches each video's sound against its song's when the song is picked, and "

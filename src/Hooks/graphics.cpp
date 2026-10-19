@@ -116,11 +116,11 @@ extern "C" REX_FUNC(ProcCounter__SetEmulateFPS)
     const uint32_t counter = ctx.r3.u32;
     const int32_t fps = ctx.r4.s32;
     const double game_hz = band3::pacing::GameHz();
-    // a music video faster than the venue (music_video_full_rate) is drawn at
-    // its own rate
+    // a venue showing a music video (music_video_full_rate) is drawn fast
+    // enough to hold each of its frames evenly
     const double video_fps = band3::video::MusicVideoFrameRate();
-    const int32_t background_fps =
-        band3::pacing::BackgroundFpsForVideo(fps, REXCVAR_GET(background_fps), video_fps);
+    const int32_t background_fps = band3::pacing::BackgroundFpsForVideo(
+        fps, REXCVAR_GET(background_fps), video_fps, game_hz);
 
     const bool at_60 = !(game_hz > 0) || game_hz == 60;
     if (fps <= 0 || (at_60 && background_fps == 0)) {
