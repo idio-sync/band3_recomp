@@ -131,6 +131,7 @@ add_executable(band3_tests
     input_backend_test.cpp
     guitar_type_test.cpp
     xinput_caps_test.cpp
+    usb_driver_check_test.cpp
     device_view_test.cpp
     dred_report_test.cpp
     crash_report_test.cpp
@@ -175,6 +176,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Input/ps4_instruments.cpp
     ${BAND3_ROOT}/src/Input/song_pause.cpp
     ${BAND3_ROOT}/src/Input/song_state.cpp
+    ${BAND3_ROOT}/src/Input/usb_driver_check.cpp
     ${BAND3_ROOT}/src/Input/xinput_caps.cpp
     ${BAND3_ROOT}/src/Launcher/config_file.cpp
     ${BAND3_ROOT}/src/Launcher/device_names.cpp

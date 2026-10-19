@@ -7,6 +7,7 @@
 #include <rex/input/input_driver.h>
 #include "instruments.h"
 #include "hid_instrument_types.h"
+#include "usb_driver_check.h"
 
 // PlayStation and Wii Rock Band instruments (hid_instrument_types.h lists them),
 // read straight from their USB dongles with SDL's HID API, and on Windows Xbox
@@ -47,6 +48,10 @@ struct HidInstrumentStatus {
 
 // the instruments open right now
 std::vector<HidInstrumentStatus> HidInstrumentStatuses();
+
+// the known dongles plugged in under a driver SDL's HID API can't read
+// (usb_driver_check.h), as of the driver's last look, every few seconds
+std::vector<WrongDriverInstrument> HidInstrumentsOnOtherDrivers();
 
 // Records the instrument's raw reports for `length`, then saves them to
 // logs/hid-capture-<usb id>-<time>.txt (see hid_capture.h). False if the

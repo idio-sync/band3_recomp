@@ -221,6 +221,13 @@ void DrawConnectedInstruments() {
         return;
     }
 
+    for (const auto& wrong : HidInstrumentsOnOtherDrivers()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.3f, 1.0f));
+        ImGui::TextWrapped("%s", WrongDriverMessage(wrong).c_str());
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+    }
+
     const auto statuses = HidInstrumentStatuses();
     if (statuses.empty()) {
         ImGui::TextWrapped("No instruments found. Plug in a dongle, or connect an Xbox One "

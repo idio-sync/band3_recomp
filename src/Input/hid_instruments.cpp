@@ -23,6 +23,7 @@
 #include "hid_capture.h"
 #include "hid_instrument_types.h"
 #include "report_source.h"
+#include "usb_driver_check.h"
 #include "xinput_state.h"
 
 namespace band3::input {
@@ -40,6 +41,9 @@ constexpr uint64_t kDeviceIdBase = 0x4233484900000000ull;  // "B3HI"
 constexpr const char* kGuidPrefix = "band3-hid:";
 // how often to look for newly plugged dongles
 constexpr std::chrono::milliseconds kScanInterval{1000};
+// how often to look for known dongles on another driver (Zadig's), which
+// SDL's change count doesn't see come and go
+constexpr std::chrono::seconds kDriverCheckInterval{5};
 // a reader wakes at least this often to notice shutdown
 constexpr int kReadTimeoutMs = 100;
 // the vendors of every known instrument, to enumerate by
@@ -289,6 +293,11 @@ public:
         return out;
     }
 
+    std::vector<WrongDriverInstrument> WrongDriver() {
+        std::lock_guard<std::mutex> lock(devices_mutex_);
+        return wrong_driver_;
+    }
+
     bool StartCapture(uint64_t id, std::chrono::seconds length) {
         std::lock_guard<std::mutex> lock(devices_mutex_);
         Device* device = Find(static_cast<DeviceId>(id));
@@ -319,6 +328,7 @@ private:
     void ScanLoop() {
         uint32_t last_change = 0;
         bool first = true;
+        auto next_driver_check = std::chrono::steady_clock::now();
         std::unique_lock<std::mutex> lock(stop_mutex_);
         while (!stop_) {
             lock.unlock();
@@ -329,6 +339,11 @@ private:
                     first = false;
                     last_change = change;
                     Scan();
+                }
+                const auto now = std::chrono::steady_clock::now();
+                if (now >= next_driver_check) {
+                    next_driver_check = now + kDriverCheckInterval;
+                    CheckDrivers();
                 }
             }
             Reap();
@@ -367,6 +382,21 @@ private:
             }
             SDL_hid_free_enumeration(list);
         }
+    }
+
+    // notes the known dongles on another driver, logging each once
+    void CheckDrivers() {
+        auto found = FindInstrumentsOnOtherDrivers();
+        for (const auto& instrument : found) {
+            char key[48];
+            std::snprintf(key, sizeof(key), "%04X:%04X:%s", instrument.ids.vendor,
+                          instrument.ids.product, instrument.service.c_str());
+            if (wrong_driver_logged_.insert(key).second) {
+                REXLOG_WARN("HID instruments: {}", WrongDriverMessage(instrument));
+            }
+        }
+        std::lock_guard<std::mutex> lock(devices_mutex_);
+        wrong_driver_ = std::move(found);
     }
 
     // opens the Xbox One instruments GameInput saw connect
@@ -502,9 +532,12 @@ private:
 
     std::mutex devices_mutex_;
     std::vector<std::unique_ptr<Device>> devices_;
+    // the known dongles plugged in under another driver, as last checked
+    std::vector<WrongDriverInstrument> wrong_driver_;
 
     // scanner thread only
     std::set<std::string> open_failed_;
+    std::set<std::string> wrong_driver_logged_;
     // Xbox One instruments waiting for their last connection to be reaped
     std::vector<GipInstrument> gip_pending_;
 };
@@ -525,6 +558,12 @@ std::vector<HidInstrumentStatus> HidInstrumentStatuses() {
     std::lock_guard<std::mutex> lock(HidInstrumentDriver::driver_mutex());
     auto* driver = HidInstrumentDriver::driver();
     return driver ? driver->Statuses() : std::vector<HidInstrumentStatus>{};
+}
+
+std::vector<WrongDriverInstrument> HidInstrumentsOnOtherDrivers() {
+    std::lock_guard<std::mutex> lock(HidInstrumentDriver::driver_mutex());
+    auto* driver = HidInstrumentDriver::driver();
+    return driver ? driver->WrongDriver() : std::vector<WrongDriverInstrument>{};
 }
 
 bool StartHidCapture(uint64_t id, std::chrono::seconds length) {
