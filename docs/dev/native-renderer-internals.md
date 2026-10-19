@@ -384,7 +384,13 @@ What each does, how it was measured and why it defaults as it does. The
   into the eye output slots (`GpuRenderer::EyeSlot`; the left into a window slot when one is
   free, published as the window's picture) without the overlay (`BackBufferPart::kEyes`), the world
   drawn ahead, kept buffers, motion blur, DOF or the spotlights' haze, then presents them and
-  ends the frame with a projection layer. The overlay's draws (`soft_raster.h`'s `OnHud`, from
+  ends the frame with a projection layer. The eyes are drawn at `vr_eye_scale` (0.8) of the
+  swapchain's size from a fixed viewpoint and `vr_window_eye_scale` (1) through the window
+  (`vr_pose.h`'s `EyeScaleOf`, `EyeDrawSize`), and `present.hlsl` stretches them into the
+  images, bilinear; the HUD panel stays at the swapchain's size. At 0.8 (2115x2115 an eye on
+  the Steam Frame) the twelve fixed-viewpoint captures' eyes took 0.2-0.4 ms less GPU each
+  (the world and post-processing, about two thirds of the pixels; the texture passes are
+  their own size), the CPU the same; at 1 they're the pictures as before, pixel for pixel. The overlay's draws (`soft_raster.h`'s `OnHud`, from
   `vr_pose.h`'s `HudBoundary`: `post_boundary`, or 0 for a frame the eyes can't see) are
   drawn alone as the HUD panel (`BackBufferPart::kHud`): transparent black, alpha as
   coverage, premultiplied (`native_view_replay --overlay-only`, `--split-check`). Draws that

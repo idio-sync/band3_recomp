@@ -1689,3 +1689,20 @@ TEST_CASE("the window's corners in an eye's picture") {
     const float behind[3] = {0, 1.6f, 1};
     CHECK_FALSE(vr::EyePixel(head, fov, 1000, 1000, behind, x, y));
 }
+
+TEST_CASE("the eyes are drawn smaller where vr_eye_scale says, from a fixed viewpoint") {
+    vr::FrameLayout fixed;
+    vr::FrameLayout window;
+    window.window = true;
+    vr::FrameLayout black;
+    black.eyes_black = true;
+    CHECK(vr::EyeScaleOf(fixed, 0.8f, 1.0f) == 0.8f);
+    CHECK(vr::EyeScaleOf(window, 0.8f, 1.0f) == 1.0f);
+    CHECK(vr::EyeScaleOf(black, 0.8f, 0.9f) == 0.9f);
+    // the Steam Frame's 2644 an eye at 0.8: 2115, about two thirds the pixels
+    CHECK(vr::EyeDrawSize(2644, 0.8f) == 2115);
+    CHECK(vr::EyeDrawSize(1440, 1.0f) == 1440);
+    CHECK(vr::EyeDrawSize(1440, 0.5f) == 720);
+    CHECK(vr::EyeDrawSize(10, 0.5f) == 16);
+    CHECK(vr::EyeDrawSize(1440, 0.0f) == 1440);
+}

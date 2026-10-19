@@ -953,6 +953,20 @@ REXCVAR_DEFINE_DOUBLE(vr_crowd_clear, 1.5, "Band3/Advanced/Native renderer",
     .range(0.0, 20.0)
     .debug_only();
 
+REXCVAR_DEFINE_DOUBLE(vr_eye_scale, 0.8, "Band3/Advanced/Native renderer",
+    "With vr and vr_viewpoint front_row, on_stage or venue: each eye's picture is drawn at "
+    "this times the headset's size for it and stretched to fit, for less GPU time where the "
+    "whole band and every crowd are drawn (0.8: two thirds of the pixels, a little softer). "
+    "1 draws it at the headset's size. Takes effect at once")
+    .range(0.5, 1.5)
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_window_eye_scale, 1.0, "Band3/Advanced/Native renderer",
+    "With vr: as vr_eye_scale, while the eyes see the venue through the game camera's window "
+    "(vr_viewpoint game_camera, and every menu). Takes effect at once")
+    .range(0.5, 1.5)
+    .debug_only();
+
 REXCVAR_DEFINE_DOUBLE(vr_window_width, 100.0, "Band3/Advanced/Native renderer",
     "With vr: how wide the game camera's window looks, in degrees across from where you were "
     "at the last recenter, its height following at 16:9. It stays this size at every cut: "

@@ -583,8 +583,13 @@ public:
         vr = VrLayoutJson(layout, views, headset, fade, eye_w, eye_h,
                           with_centre ? &centre : nullptr, kCentreSize);
         render::RasterOptions eo = options;
-        eo.width = eye_w;
-        eo.height = eye_h;
+        // at vr_eye_scale or vr_window_eye_scale of the headset's size, as
+        // VrFrame draws them (their PNGs that size)
+        const float eye_scale =
+            render::vr::EyeScaleOf(layout, float(REXCVAR_GET(vr_eye_scale)),
+                                   float(REXCVAR_GET(vr_window_eye_scale)));
+        eo.width = render::vr::EyeDrawSize(eye_w, eye_scale);
+        eo.height = render::vr::EyeDrawSize(eye_h, eye_scale);
         render::ScaleForPicture(eo);
         eo.msaa = 1;
         eo.velocity = false;
@@ -598,7 +603,7 @@ public:
             render::GpuStats eye_stats;
             bool drew = layout.eyes_black;
             if (layout.eyes_black) {
-                eye_rgba.assign(size_t(eye_w) * eye_h, 0xFF000000u);
+                eye_rgba.assign(size_t(eo.width) * eo.height, 0xFF000000u);
             } else {
                 render::FrameCapture eye_frame;
                 render::vr::RePose(frame, layout.eyes[e], eye_frame);
@@ -609,7 +614,7 @@ public:
                 render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
                                   (file + (e ? ".gpu.R.png" : ".gpu.L.png")))
                                      .string(),
-                                 eye_rgba, eye_w, eye_h);
+                                 eye_rgba, eo.width, eo.height);
         }
         // the world's draws alone: the venue the window shows
         const uint32_t no_cams[render::RasterOptions::kEyeCams] = {};
@@ -658,7 +663,8 @@ public:
             vr.insert(vr.size() - 1, cost + "}");
         }
         // What the left eye costs as drawn (`eye_cost`), timestamps on, at
-        // the eyes' size and at the Steam Frame's (kFrameEye, `frame`), each
+        // the eyes' size and at the Steam Frame's (kFrameEye, `frame`), both
+        // at the eye scale (vr_eye_scale, vr_window_eye_scale), each
         // the medians of three rounds after one left out: RePose's ms, then
         // the eye's frame drawn (`first`) and at once again (`second`, as the
         // right eye's would be: what drawing the eye-independent texture
@@ -691,7 +697,7 @@ public:
                     render::RasterOptions timed = eo;
                     timed.gpu_timestamps = true;
                     if (z) {
-                        timed.width = timed.height = kFrameEye;
+                        timed.width = timed.height = render::vr::EyeDrawSize(kFrameEye, eye_scale);
                         render::ScaleForPicture(timed);
                     }
                     double repose[3] = {};
@@ -794,6 +800,9 @@ public:
             render::RasterOptions ho = eo;
             ho.part = render::BackBufferPart::kHud;
             ho.msaa = options.msaa;
+            ho.width = eye_w;
+            ho.height = eye_h;
+            render::ScaleForPicture(ho);
             std::vector<uint32_t> hud_rgba;
             render::GpuStats hud_stats;
             if (render::GpuRenderer::Get().RenderFrame(frame, ho, hud_rgba, hud_stats))

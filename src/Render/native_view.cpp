@@ -1439,8 +1439,13 @@ class Renderer {
         if (layout.fade_drawn)
             for (vr::Eye& e : layout.eyes) e.fade = layout.fade;
         RasterOptions eo = o;
-        eo.width = xs.Width();
-        eo.height = xs.Height();
+        // smaller than the headset's images where vr_eye_scale (a fixed
+        // viewpoint) or vr_window_eye_scale says, stretched into them as
+        // they're copied (xr_present.cpp's Present)
+        const float eye_scale = vr::EyeScaleOf(layout, float(REXCVAR_GET(vr_eye_scale)),
+                                               float(REXCVAR_GET(vr_window_eye_scale)));
+        eo.width = vr::EyeDrawSize(xs.Width(), eye_scale);
+        eo.height = vr::EyeDrawSize(xs.Height(), eye_scale);
         ScaleForPicture(eo);
         eo.world_ahead = false;
         eo.post_buffer = false;
@@ -1505,6 +1510,10 @@ class Renderer {
             RasterOptions ho = eo;
             ho.part = BackBufferPart::kHud;
             ho.msaa = o.msaa;
+            // the panel's at the headset's size whatever the eyes'
+            ho.width = xs.Width();
+            ho.height = xs.Height();
+            ScaleForPicture(ho);
             hd.drew_output = GpuRenderer::Get().RenderFrameToOutput(*cap, ho, hud_slot, hd.out,
                                                                    hd.gs);
             if (hd.drew_output) {

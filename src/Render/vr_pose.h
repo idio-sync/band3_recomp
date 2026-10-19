@@ -950,6 +950,21 @@ inline void EyeCamsOf(const FrameLayout& l, uint32_t* out, int max) {
         out[i] = i < l.track_count ? l.tracks[i].cam.cam : i == l.track_count ? kEyeDarkCam : 0;
 }
 
+// The eyes' pictures are drawn smaller than the headset's images and
+// stretched into them by the copy (present.hlsl): from a fixed viewpoint,
+// which draws the whole band and every crowd, `fixed` times the size
+// (vr_eye_scale), through the game camera's window `window` times
+// (vr_window_eye_scale)
+inline float EyeScaleOf(const FrameLayout& l, float fixed, float window) {
+    return l.window || l.eyes_black ? window : fixed;
+}
+// a side of the headset's image at `scale`, at least 16 pixels
+inline uint32_t EyeDrawSize(uint32_t size, float scale) {
+    if (!(scale > 0)) return size;
+    const long v = std::lround(double(size) * double(scale));
+    return uint32_t(v < 16 ? 16 : v);
+}
+
 inline void QuadCorners(const HudQuad& q, float out[4][3]);
 
 // ResolveFrame's choice of view, before the tracks
