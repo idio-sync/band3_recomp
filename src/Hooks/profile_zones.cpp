@@ -42,8 +42,8 @@ BAND3_PROFILE_ZONE(BandCharacter__DrawShowing, "RB3 BandCharacter::DrawShowing")
 BAND3_PROFILE_ZONE(Character__DrawShowing, "RB3 Character::DrawShowing")
 BAND3_PROFILE_ZONE(CharDriver__Poll, "RB3 CharDriver::Poll")
 
-// venue and crowd
-BAND3_PROFILE_ZONE(WorldDir__Poll, "RB3 WorldDir::Poll")
+// venue and crowd (WorldDir::Poll's zone is in world_poll.cpp, which hooks it
+// in every build)
 BAND3_PROFILE_ZONE(WorldDir__DrawShowing, "RB3 WorldDir::DrawShowing")
 BAND3_PROFILE_ZONE(WorldCrowd__Poll, "RB3 WorldCrowd::Poll")
 BAND3_PROFILE_ZONE(WorldCrowd__DrawShowing, "RB3 WorldCrowd::DrawShowing")

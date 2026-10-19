@@ -4,7 +4,10 @@
 #include "src/settings.h"
 #include <rex/logging.h>
 #include <algorithm>
+#include <bit>
 #include <chrono>
+#include "src/Hooks/frame_pacing.h"
+#include "src/Hooks/world_poll.h"
 
 // log_shake_timing: once a second, compares the game time the shake saw
 // with the wall clock. A ratio near 1 means TaskMgr::DeltaSeconds tracks real frame
@@ -34,11 +37,29 @@ static void LogShakeTiming(float dt) {
 	}
 }
 
-// how many 60 Hz frames this frame stands for; the original steps the shake once
-// per frame and assumes 60 of them a second. dt is the game's own frame delta, so
-// it is shared by every shot in a frame and 0 while paused (the shake then skips).
-static float FrameScale(float dt) {
+// RndPostProc::Current's holder, and the post-proc's emulate_fps
+static constexpr uint32_t kCurrentPostProc = 0x82CC27F0;
+static constexpr uint32_t kPostProc_EmulateFps = 0x168;
+
+// How many of the original's steps this call stands for. The original steps
+// the shake once per call by 1/fps: the venue's emulate_fps (30 in most), or
+// `default_fps` without one, assuming it's called that often. It's called
+// once per world poll (world_poll.h), every other frame at a venue's 30 but
+// every frame with background_fps 60, which shook twice as fast: inside a
+// poll this is the time since the last one over 1/fps (1 at the venue's own
+// rate). Outside one, dt (the game's own frame delta, shared by every shot in
+// a frame and 0 while paused, when the shake skips) in 60 Hz frames.
+static float FrameScale(uint8_t* base, float dt, float default_fps) {
 	if (REXCVAR_GET(log_shake_timing)) LogShakeTiming(dt);
+	if (const uint32_t frames = band3::world_poll::FramesSincePoll()) {
+		float fps = default_fps;
+		if (const uint32_t pp = REX_LOAD_U32(kCurrentPostProc)) {
+			const float emulate = std::bit_cast<float>(REX_LOAD_U32(pp + kPostProc_EmulateFps));
+			if (emulate > 0) fps = emulate;
+		}
+		const double hz = band3::pacing::GameHz() > 0 ? band3::pacing::GameHz() : 60.0;
+		return std::clamp(band3::world_poll::StepScale(frames, hz, fps), 0.0f, 16.0f);
+	}
 	return std::clamp(dt * 60.0f, 0.0f, 4.0f);
 }
 
@@ -109,7 +130,9 @@ extern "C" REX_FUNC(CamShot__Shake) {
 	ctx.lr = 0x824BDBB8;
 	TaskMgr__DeltaSeconds(ctx, base);
 	// declared before the first goto so no jump skips its initialization
-	const float frame_scale = FrameScale(float(ctx.f1.f64));
+	// k[3] is the fps the step assumes without an emulated rate (lis r11,-32255)
+	const float frame_scale = FrameScale(
+		base, float(ctx.f1.f64), std::bit_cast<float>(REX_LOAD_U32(0x82010000u + k[3])));
 
 	// lis r11,-32256
 	ctx.r11.s64 = -2113929216;
