@@ -22,6 +22,7 @@
 #include "gameinput_instruments.h"
 #include "hid_capture.h"
 #include "hid_instrument_types.h"
+#include "ps3_instruments.h"
 #include "report_source.h"
 #include "usb_driver_check.h"
 #include "winusb_instruments.h"
@@ -115,31 +116,29 @@ const char* NameOf(uint16_t vendor, uint16_t product) {
     return "Rock Band instrument";
 }
 
-// Asks a PS3 keyboard or Pro Guitar for its keys or frets (see
-// Ps3ProEnableReports). PlasticBand doesn't know whether the device takes the
-// five short reports or one 40-byte one, so the long one is tried if the short
-// ones aren't accepted.
+// asks a PS3 keyboard or Pro Guitar for its keys or frets (ps3_instruments.h)
 void SendPs3ProEnable(SDL_hid_device* handle, const char* name) {
-    std::vector<uint8_t> whole{0x00};
-    bool sent = true;
-    for (const auto& report : Ps3ProEnableReports()) {
-        whole.insert(whole.end(), report.begin() + 1, report.end());
-        if (sent && SDL_hid_send_feature_report(handle, report.data(), report.size()) < 0) {
-            sent = false;
-        }
-    }
-    if (sent) {
+    std::string errors;
+    const auto result = band3::input::SendPs3ProEnable([&](std::span<const uint8_t> report) {
+        if (SDL_hid_send_feature_report(handle, report.data(), report.size()) >= 0) return true;
+        errors += (errors.empty() ? "" : "; ") + std::string(SDL_GetError());
+        return false;
+    });
+    switch (result) {
+    case Ps3EnableResult::kWhole:
         REXLOG_INFO("HID instruments: asked {} to send its keys or frets", name);
         return;
-    }
-    const std::string short_error = SDL_GetError();
-    if (SDL_hid_send_feature_report(handle, whole.data(), whole.size()) >= 0) {
-        REXLOG_INFO("HID instruments: asked {} to send its keys or frets (as one report)", name);
+    case Ps3EnableResult::kSplit:
+        REXLOG_INFO("HID instruments: asked {} to send its keys or frets (as five reports, after "
+                    "{})",
+                    name, errors);
+        return;
+    case Ps3EnableResult::kFailed:
+        REXLOG_WARN("HID instruments: couldn't ask {} to send its keys or frets ({}), so only "
+                    "its buttons may work",
+                    name, errors);
         return;
     }
-    REXLOG_WARN("HID instruments: couldn't ask {} to send its keys or frets ({}; {}), so only "
-                "its buttons may work",
-                name, short_error, SDL_GetError());
 }
 
 // a dongle's reports through SDL's HID API

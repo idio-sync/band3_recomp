@@ -104,31 +104,29 @@ bool SetFeatureReport(WINUSB_INTERFACE_HANDLE usb, UCHAR interface_number,
            sent == data.size();
 }
 
-// as the HID path's SendPs3ProEnable (hid_instruments.cpp): the five short
-// reports, or the one long one if they aren't accepted
+// asks a PS3 keyboard or Pro Guitar for its keys or frets (ps3_instruments.h)
 void SendPs3ProEnable(WINUSB_INTERFACE_HANDLE usb, UCHAR interface_number, const std::string& name) {
-    std::vector<uint8_t> whole{0x00};
-    bool sent = true;
-    for (const auto& report : Ps3ProEnableReports()) {
-        whole.insert(whole.end(), report.begin() + 1, report.end());
-        if (sent && !SetFeatureReport(usb, interface_number, report.data(), report.size())) {
-            sent = false;
-        }
-    }
-    if (sent) {
+    std::string errors;
+    const auto result = band3::input::SendPs3ProEnable([&](std::span<const uint8_t> report) {
+        if (SetFeatureReport(usb, interface_number, report.data(), report.size())) return true;
+        errors += (errors.empty() ? "" : "; ") + ErrorText(GetLastError());
+        return false;
+    });
+    switch (result) {
+    case Ps3EnableResult::kWhole:
         REXLOG_INFO("HID instruments: asked {} to send its keys or frets (through WinUSB)", name);
         return;
-    }
-    const std::string short_error = ErrorText(GetLastError());
-    if (SetFeatureReport(usb, interface_number, whole.data(), whole.size())) {
-        REXLOG_INFO("HID instruments: asked {} to send its keys or frets (through WinUSB, as one "
-                    "report)",
-                    name);
+    case Ps3EnableResult::kSplit:
+        REXLOG_INFO("HID instruments: asked {} to send its keys or frets (through WinUSB, as five "
+                    "reports, after {})",
+                    name, errors);
+        return;
+    case Ps3EnableResult::kFailed:
+        REXLOG_WARN("HID instruments: couldn't ask {} to send its keys or frets through WinUSB "
+                    "({}), so only its buttons may work",
+                    name, errors);
         return;
     }
-    REXLOG_WARN("HID instruments: couldn't ask {} to send its keys or frets through WinUSB ({}; "
-                "{}), so only its buttons may work",
-                name, short_error, ErrorText(GetLastError()));
 }
 
 // a dongle's reports from its interrupt-in pipe

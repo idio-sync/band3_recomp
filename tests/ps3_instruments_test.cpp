@@ -343,6 +343,46 @@ TEST_CASE("the PS3 enable report is PlasticBand's 40 bytes in five reports") {
     CHECK(joined == std::vector<uint8_t>(std::begin(expected), std::end(expected)));
 }
 
+namespace {
+
+// what SendPs3ProEnable sent, and which sizes the device took
+struct EnableLog {
+    std::vector<std::vector<uint8_t>> sent;
+    size_t accepts_up_to = 64;
+    bool Send(std::span<const uint8_t> report) {
+        sent.emplace_back(report.begin(), report.end());
+        return report.size() <= accepts_up_to;
+    }
+};
+
+}
+
+TEST_CASE("the PS3 enable goes as one 40-byte report, as RB3 sends it") {
+    // RB3 enables keys with one wLength 40 SET_REPORT; a device takes 8-byte
+    // ones too (RB3's LED commands), so they mustn't be tried first
+    EnableLog log;
+    CHECK(SendPs3ProEnable([&](std::span<const uint8_t> r) { return log.Send(r); }) ==
+          Ps3EnableResult::kWhole);
+    REQUIRE(log.sent.size() == 1);
+    REQUIRE(log.sent[0].size() == 41);
+    CHECK(log.sent[0][0] == 0);     // report ID
+    CHECK(log.sent[0][3] == 0x89);  // what RPCS3 reads as "MIDI data enabled"
+}
+
+TEST_CASE("the PS3 enable falls back to five reports if the long one isn't taken") {
+    EnableLog log;
+    log.accepts_up_to = 9;
+    CHECK(SendPs3ProEnable([&](std::span<const uint8_t> r) { return log.Send(r); }) ==
+          Ps3EnableResult::kSplit);
+    REQUIRE(log.sent.size() == 6);
+    for (size_t i = 1; i < log.sent.size(); i++) CHECK(log.sent[i].size() == 9);
+
+    EnableLog none;
+    none.accepts_up_to = 0;
+    CHECK(SendPs3ProEnable([&](std::span<const uint8_t> r) { return none.Send(r); }) ==
+          Ps3EnableResult::kFailed);
+}
+
 TEST_CASE("a short PS3 keyboard report is dropped") {
     HidInstrumentTranslator t(HidInstrumentType::kPs3Keys);
     const std::array<uint8_t, 10> short_report{};

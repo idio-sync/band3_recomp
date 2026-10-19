@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include "instruments.h"
@@ -40,10 +41,20 @@ std::optional<Gamepad360> TranslatePs3Drums(std::span<const uint8_t> report, boo
 std::optional<Gamepad360> TranslatePs3ProInstrument(std::span<const uint8_t> report);
 
 // PS3 keyboards and Pro Guitars only send their buttons until they get this
-// 40-byte feature report (Wii ones send everything regardless). It is sent as
-// the five 8-byte reports, report ID first, that the Pro Guitar's
-// auto-calibration commands are known to work as; it shares their layout.
+// 40-byte feature report (Wii ones send everything regardless), here as five
+// 8-byte reports, report ID first.
 using Ps3EnableReport = std::array<uint8_t, 9>;
 std::span<const Ps3EnableReport> Ps3ProEnableReports();
+
+// how SendPs3ProEnable got the enable report across
+enum class Ps3EnableResult { kWhole, kSplit, kFailed };
+
+// Sends the enable report through `send`, which sends one feature report
+// (report ID first) and says whether the device took it. RB3 sends it as one
+// 40-byte SET_REPORT (RPCS3's RB3MidiKeyboard.cpp and RB3MidiGuitar.cpp), so
+// that goes first. The five 8-byte reports are only a fallback, for a HID
+// stack that won't send a report longer than the descriptor's: a device takes
+// those as RB3's 8-byte LED commands and stays without its keys or frets.
+Ps3EnableResult SendPs3ProEnable(const std::function<bool(std::span<const uint8_t>)>& send);
 
 }

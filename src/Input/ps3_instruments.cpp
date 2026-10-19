@@ -1,4 +1,5 @@
 #include "ps3_instruments.h"
+#include <vector>
 #include "hat_switch.h"
 
 namespace band3::input {
@@ -153,6 +154,18 @@ std::span<const Ps3EnableReport> Ps3ProEnableReports() {
         {0x00, 0xE9, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
     };
     return kReports;
+}
+
+Ps3EnableResult SendPs3ProEnable(const std::function<bool(std::span<const uint8_t>)>& send) {
+    std::vector<uint8_t> whole{0x00};
+    for (const auto& report : Ps3ProEnableReports()) {
+        whole.insert(whole.end(), report.begin() + 1, report.end());
+    }
+    if (send(whole)) return Ps3EnableResult::kWhole;
+    for (const auto& report : Ps3ProEnableReports()) {
+        if (!send(report)) return Ps3EnableResult::kFailed;
+    }
+    return Ps3EnableResult::kSplit;
 }
 
 }
