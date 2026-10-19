@@ -464,6 +464,15 @@ constexpr Setting kSettings[] = {
      .label = "Delay per controller type", .widget = kJoypadLag, .unit = "ms",
      .about = "The delay the game allows each kind of controller, for one that lags behind "
               "the rest. Empty keeps the game's own."},
+    {.cvar = "left_out_controllers", .category = kControllers, .section = "Players",
+     .label = "Left out of the band", .widget = kLeftOut,
+     .about = "Controllers that play no part in the game, so the others take the players. Pick "
+              "one to leave it out or bring it back. In game the other players keep their "
+              "places, and the game sees the one left out disconnect."},
+    {.cvar = "leave_out_deck_controls", .category = kControllers, .section = "Players",
+     .label = "Leave out the Deck's controls", .widget = kCheckbox, .deck_only = true,
+     .about = "While another controller is connected, the Deck's own controls play no part, "
+              "so a docked Deck doesn't take a player. Unplug the others and they play again."},
 
     // MIDI
     {.cvar = "midi_drums", .category = kMidi, .section = "Drums", .label = "MIDI drum kit",

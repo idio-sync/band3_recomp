@@ -13,7 +13,8 @@
 // What the Settings screen finds plugged in: the microphones, the MIDI ports
 // and the monitors, listed again every couple of seconds while a category
 // that picks one shows (listing starts SDL's audio, or walks every display
-// mode, which mustn't happen every frame), and a level meter on each mic
+// mode, which mustn't happen every frame), the controllers that could play
+// (left_out_controllers), and a level meter on each mic
 // slot's microphone while the Audio category shows it (the launcher's only:
 // in game the game is capturing from them). UI thread.
 
@@ -71,6 +72,7 @@ private:
     std::chrono::steady_clock::time_point next_mics_{};
     std::chrono::steady_clock::time_point next_midi_{};
     std::chrono::steady_clock::time_point next_monitors_{};
+    std::chrono::steady_clock::time_point next_controllers_{};
     std::array<SlotMeter, 3> meters_;
     bool audio_wanted_ = false;
     bool audio_held_ = false;

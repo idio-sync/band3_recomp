@@ -78,6 +78,8 @@ REXCVAR_DECLARE(bool, menu_shortcut);
 REXCVAR_DECLARE(bool, mouse_menus);
 REXCVAR_DECLARE(bool, keyboard_search);
 REXCVAR_DECLARE(std::string, joypad_lag);
+REXCVAR_DECLARE(std::string, left_out_controllers);
+REXCVAR_DECLARE(bool, leave_out_deck_controls);
 
 // Band3/Controllers/MIDI drums
 REXCVAR_DECLARE(bool, midi_drums);

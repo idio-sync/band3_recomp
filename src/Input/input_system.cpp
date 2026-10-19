@@ -8,6 +8,8 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <SDL3/SDL_guid.h>
+#include <SDL3/SDL_joystick.h>
 #include <rex/cvar.h>
 #include <rex/input/device_assignment.h>
 #include <rex/input/input_system.h>
@@ -48,6 +50,17 @@ bool IsStageKit(const DeviceInfo& device) {
     return lights::IsStageKitDevice(device.subtype, device.guid);
 }
 
+// a Steam Deck's own controls (leave_out_deck_controls), by SDL's name or the
+// USB ids in its guid
+bool IsDeckControls(const DeviceInfo& device) {
+    Uint16 vendor = 0, product = 0;
+    // an SDL GUID is 32 hex digits; anything else is some other driver's id
+    if (device.guid.size() == 32 && device.guid.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos) {
+        SDL_GetJoystickGUIDInfo(SDL_StringToGUID(device.guid.c_str()), &vendor, &product, nullptr, nullptr);
+    }
+    return IsSteamDeckControls(device.name, vendor, product);
+}
+
 DeviceKind KindOf(const DeviceInfo& device) {
     if (VirtualInstrumentPlayer(device)) return DeviceKind::kVirtual;
     if (IsStageKit(device)) return DeviceKind::kStageKit;
@@ -68,7 +81,9 @@ DeviceKind KindOf(const DeviceInfo& device) {
 //   pad that connects takes the lowest free player.
 // - SDL's copy of an instrument the HID driver reads is left out, and the other
 //   pads close up over its slot, as if it had never connected. So is a Stage
-//   Kit, which band3 lights itself.
+//   Kit, which band3 lights itself, and a controller the player left out
+//   (left_out_controllers), and a Steam Deck's own controls while another
+//   controller is connected (leave_out_deck_controls).
 // - the keyboard and other synthetic devices feed player 1, as in the SDK, unless
 //   a virtual instrument has player 1: then it has the slot to itself, so a type
 //   change empties the slot and RB3 reads the new type when it comes back (RB3
@@ -86,6 +101,10 @@ public:
         devices_ = devices;
         Assign();
     }
+
+    // The players again for the controllers left out: the others keep their
+    // players, as in game, where a player who moved would be another player
+    void Refresh() { Assign(); }
 
     // The players again for the same devices: which are SDL's copies of a HID
     // instrument depends on whether the HID driver runs, and the SDK only
@@ -124,15 +143,33 @@ public:
 private:
     void Assign() {
         const std::vector<DeviceInfo>& devices = devices_;
+        // the controllers left out: those the player named, and a Deck's own
+        // controls while another plays
+        const std::string left_out_list = REXCVAR_GET(left_out_controllers);
+        std::vector<bool> left_out(devices.size()), deck(devices.size());
+        bool another = false;
+        for (size_t i = 0; i < devices.size(); i++) {
+            const DeviceInfo& device = devices[i];
+            if (device.synthetic || VirtualInstrumentPlayer(device) || IsSdlCopyOfHidInstrument(device) ||
+                IsStageKit(device)) {
+                continue;
+            }
+            left_out[i] = IsLeftOut(left_out_list, LeftOutKey(device.name, device.guid));
+            deck[i] = IsDeckControls(device);
+            if (!left_out[i] && !deck[i]) another = true;
+        }
+        if (!another || !REXCVAR_GET(leave_out_deck_controls)) deck.assign(devices.size(), false);
+
         std::vector<SlotDevice> slots;
         slots.reserve(devices.size());
-        for (const auto& device : devices) {
+        for (size_t i = 0; i < devices.size(); i++) {
+            const DeviceInfo& device = devices[i];
             SlotDevice slot;
             if (auto seat = seats_.find(device.id); seat != seats_.end()) slot.seat = seat->second;
             if (int player = VirtualInstrumentPlayer(device)) {
                 slot.kind = SlotDevice::Kind::kVirtual;
                 slot.virtual_player = player;
-            } else if (IsSdlCopyOfHidInstrument(device) || IsStageKit(device)) {
+            } else if (IsSdlCopyOfHidInstrument(device) || IsStageKit(device) || left_out[i] || deck[i]) {
                 slot.kind = SlotDevice::Kind::kSkipped;
             } else if (device.synthetic) {
                 slot.kind = SlotDevice::Kind::kSynthetic;
@@ -147,6 +184,8 @@ private:
             seen[i].name = devices[i].name;
             seen[i].guid = devices[i].guid;
             seen[i].kind = KindOf(devices[i]);
+            seen[i].left_out = left_out[i];
+            seen[i].deck_aside = deck[i];
         }
         seats_.clear();
         for (uint32_t user = 0; user < kMaxGuestUsers; user++) {
@@ -279,6 +318,22 @@ struct MidiKeysConfig {
     bool operator==(const MidiKeysConfig&) const = default;
 };
 
+// what decides which controllers are left out of the band
+struct PlayerSettings {
+    std::string left_out;
+    bool deck_aside = true;
+
+    static PlayerSettings Current() {
+        return {REXCVAR_GET(left_out_controllers), REXCVAR_GET(leave_out_deck_controls)};
+    }
+    bool operator==(const PlayerSettings&) const = default;
+};
+
+// the input system's player assignment (it outlives the launcher's Built, as
+// the game's), and the settings it last assigned the players for
+PlayerAssignment* g_assignment = nullptr;
+PlayerSettings g_players;
+
 // how long the MIDI settings stay the same before the driver restarts for them
 constexpr std::chrono::milliseconds kMidiSettle{300};
 
@@ -370,6 +425,8 @@ Built Build() {
 
     auto assignment = std::make_unique<PlayerAssignment>();
     built.assignment = assignment.get();
+    g_assignment = assignment.get();
+    g_players = PlayerSettings::Current();
     built.system->SetDeviceAssignment(std::move(assignment));
     return built;
 }
@@ -395,6 +452,7 @@ void ApplySettings(bool settle) {
     const bool keys_due = settle ? built.keys_settle.Due(keys_wanted, built.keys_config, now)
                                  : !(keys_wanted == built.keys_config);
     built.FollowLive(MidiLive::Current());
+    FollowPlayerSettings();
     if (hid == built.hid_on && !midi_due && !keys_due) return;
     std::lock_guard<std::recursive_mutex> lock(InputLock());
     built.Follow(hid, midi_due ? wanted : built.midi_config,
@@ -460,6 +518,22 @@ bool InputBackendChanged() {
 }
 
 void ApplyInputSettings() { ApplySettings(true); }
+
+void FollowPlayerSettings() {
+    PlayerSettings wanted = PlayerSettings::Current();
+    if (wanted == g_players) return;
+    g_players = std::move(wanted);
+    if (!g_assignment) return;
+    std::lock_guard<std::recursive_mutex> lock(InputLock());
+    // before the game the others close up, as if it had never connected; in
+    // game they keep their players
+    if (g_ready) {
+        g_assignment->Refresh();
+    } else {
+        g_assignment->Reassign();
+    }
+    REXLOG_INFO("Input: assigned the players again for the controllers left out");
+}
 
 void ReadyInputForGame() {
     if (!g_prepared || g_ready) return;

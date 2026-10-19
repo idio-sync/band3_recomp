@@ -20,6 +20,18 @@ struct DeviceLists {
     std::vector<MidiPort> midi_ports;
     // empty where they can't be listed: then the setting's choices number them
     std::vector<Monitor> monitors;
+    // the controllers that could play, for left_out_controllers
+    struct Controller {
+        std::string name;
+        // input::LeftOutKey
+        std::string key;
+        // 1-4, 0 for none
+        int player = 0;
+        bool left_out = false;
+        // a Steam Deck's own controls, left out by leave_out_deck_controls
+        bool deck_aside = false;
+    };
+    std::vector<Controller> controllers;
 };
 
 enum class RowKind {

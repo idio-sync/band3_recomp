@@ -10,6 +10,7 @@
 #include <utility>
 #include "src/config.h"
 #include "src/Input/input_system.h"
+#include "src/Input/player_slots.h"
 #include "src/paths.h"
 #include "src/settings.h"
 #include "config_file.h"
@@ -89,6 +90,14 @@ LauncherDialog::LauncherDialog(rex::ui::ImGuiDrawer* imgui_drawer, LauncherHost 
             .back = [this] { Back(View::kTestControllers); },
             .back_label = [this] { return BackLabel(View::kTestControllers); },
             .play = [this] { Play(); },
+            .toggle_left_out =
+                [this](const std::string& key) {
+                    const std::string list =
+                        input::ToggleLeftOut(model_.Value("left_out_controllers"), key);
+                    // the input system assigns the players again next frame
+                    // (input::ApplyInputSettings)
+                    if (model_.Set("left_out_controllers", list)) Save();
+                },
         });
     videos_ = std::make_unique<ui::VideosScreen>(
         *skin_, ui::VideosHost{

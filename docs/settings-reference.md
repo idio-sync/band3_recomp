@@ -187,6 +187,8 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ca
 | Setting | Default | Takes | What it does |
 |---|---|---|---|
 | `joypad_lag`<br>Delay per controller type | *(empty)* | text | Change the extra lag the game builds in per controller type, as type=ms, comma separated (e.g. 5=20,8=30). type=ms/video/audio also sets the calibration tests' lag; a blank part keeps the game's. The Instrument Lab's Lag tab shows each player's type *Applies at the next start.* |
+| `left_out_controllers`<br>Left out of the band | *(empty)* | text | Controllers that play no part in the band, as name\|guid, separated by ';': they feed no player, as if they weren't connected, and the other controllers take the players. For a Steam Deck's own controls while it's docked. Test Controllers' X button sets it |
+| `leave_out_deck_controls`<br>Leave out the Deck's controls | `true` | `true`, `false` | While another controller is connected, leave a Steam Deck's own controls out of the band, so a docked Deck doesn't take a player. Unplug the others and they play again |
 
 ## MIDI
 

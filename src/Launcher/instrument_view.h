@@ -53,6 +53,14 @@ public:
         bool testable = false;
         // SDL's copy of a dongle instrument: listed, but there's nothing to test
         bool copy = false;
+        // it can be left out of the band (a real controller, instrument or MIDI
+        // device), and whether it is, under left_out_key (input::LeftOutKey)
+        bool can_leave_out = false;
+        bool left_out = false;
+        std::string left_out_key;
+        // a Steam Deck's own controls, left out by leave_out_deck_controls
+        // (then X doesn't change it)
+        bool deck_aside = false;
     };
     std::vector<Entry> Entries() const;
     bool Listed() const { return listed_; }

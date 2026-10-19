@@ -3,6 +3,9 @@
 #include <SDL3/SDL_init.h>
 #include <rex/logging.h>
 #include "device_lists.h"
+#include "device_view_model.h"
+#include "src/Input/input_system.h"
+#include "src/Input/player_slots.h"
 
 namespace band3::launcher {
 
@@ -26,6 +29,21 @@ void SettingsDevices::Refresh(const SettingsModel& model, Category category) {
         const Setting* s = model.Find(cvar);
         return s && model.Visible(*s);
     };
+    // a controller left out (here, or on Test Controllers) takes effect at once
+    input::FollowPlayerSettings();
+    if (category == Category::kControllers && shown("left_out_controllers") && now >= next_controllers_) {
+        // only a copy of the input system's list, so it's cheap to keep current
+        next_controllers_ = now + std::chrono::milliseconds(500);
+        lists_.controllers.clear();
+        for (const input::InputDevice& d : input::PlayerDevices()) {
+            if (!DrivesNavigation(d.kind) || d.kind == input::DeviceKind::kVirtual) continue;
+            lists_.controllers.push_back({.name = d.name.empty() ? "(unnamed)" : d.name,
+                                          .key = input::LeftOutKey(d.name, d.guid),
+                                          .player = d.player,
+                                          .left_out = d.left_out,
+                                          .deck_aside = d.deck_aside});
+        }
+    }
     const bool mics = category == Category::kAudio && shown("usb_mic_devices");
     audio_wanted_ = mics;
     if (mics) HoldAudio(true);

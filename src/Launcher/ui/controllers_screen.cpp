@@ -16,6 +16,11 @@ constexpr float kPanelLeft = 576, kPanelRight = 1256;
 // the settings rows after the devices
 constexpr int kSettingsRows = 2;
 
+// the player it feeds, or that it's left out
+std::string PlayerOf(const DevicePanel::Entry& e) {
+    return e.left_out || e.deck_aside ? "Left out" : PlayerLabel(e.player);
+}
+
 std::optional<IconCell> EntryIcon(const DevicePanel::Entry& e) {
     if (e.kind == input::DeviceKind::kMidiDrums) return IconCell{2, 0};
     if (e.kind == input::DeviceKind::kMidiKeys) return IconCell{3, 0};
@@ -46,6 +51,12 @@ void ControllersScreen::Handle(Action action) {
         selected_ = MoveSelection(selected_, action == Action::kUp ? -1 : 1, count, false);
         break;
     case Action::kSelect: Activate(selected_); break;
+    case Action::kSecondary:
+        if (selected_ < int(entries_.size())) {
+            const DevicePanel::Entry& e = entries_[size_t(selected_)];
+            if (e.can_leave_out && host_.toggle_left_out) host_.toggle_left_out(e.left_out_key);
+        }
+        break;
     case Action::kBack:
         if (host_.back) host_.back();
         break;
@@ -105,7 +116,7 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         const ImVec2 min = page.At(kRowsLeft, y), max = page.At(kRowsRight, y + kDeviceHeight);
         const bool selected = i == selected_;
         const bool dim = testing && testing != e.id;
-        const std::string player = PlayerLabel(e.player);
+        const std::string player = PlayerOf(e);
         RowLook look;
         look.label = "";
         look.value = player;
@@ -181,7 +192,7 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         if (testing == e.id) {
             PaintText(dl, page.At(px, py), kCaps(20), color::kInfo, "Testing - play it");
         } else {
-            PaintText(dl, page.At(px, py), kCaps(20), color::kMuted, e.kind_label + " - " + PlayerLabel(e.player),
+            PaintText(dl, page.At(px, py), kCaps(20), color::kMuted, e.kind_label + " - " + PlayerOf(e),
                       Px(pw));
         }
         py += 26;
@@ -198,7 +209,18 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
                                           "Start."
                                         : "It moves the menus itself, so it isn't tested on its own: what it "
                                           "presses lights up here as you use it.";
-        for (const std::string& line : WrapText(kPlain(text::kBody), what, Px(pw))) {
+        std::string about = what;
+        if (testing != e.id && e.deck_aside) {
+            about += " The Deck's own controls are left out of the band while another controller is "
+                     "connected (Settings > Controllers), so the others take the players. They still "
+                     "move these menus.";
+        } else if (testing != e.id && e.left_out) {
+            about += " Left out of the band: it plays no part in the game, and the other controllers take "
+                     "the players. It still moves these menus. X brings it back.";
+        } else if (testing != e.id && e.can_leave_out) {
+            about += " X leaves it out of the band, as for a docked Steam Deck's own controls.";
+        }
+        for (const std::string& line : WrapText(kPlain(text::kBody), about, Px(pw))) {
             PaintText(dl, page.At(px, py), kPlain(text::kBody), color::kBody, line);
             py += text::kBodyLine;
         }
@@ -229,13 +251,22 @@ void ControllersScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
         const bool device = selected_ < int(entries_.size());
         if (!device) help.push_back({HelpButton::kA, "Open"});
         else if (entries_[size_t(selected_)].testable) help.push_back({HelpButton::kA, "Test"});
+        if (device && entries_[size_t(selected_)].can_leave_out) {
+            help.push_back({HelpButton::kX, entries_[size_t(selected_)].left_out ? "Bring back" : "Leave out"});
+        }
         help.push_back({HelpButton::kB, host_.back_label ? host_.back_label() : std::string("Back to menu")});
     }
     const int hovered = DrawHelpBar(dl, ImVec2(0, page.At(0, 664).y), io.DisplaySize, help, input_.Keyboard(),
                                     !testing, skin_);
     if (hovered >= 0 && input_.Clicked()) {
         if (hovered == kHelpPlay) Handle(Action::kPlay);
-        else Handle(help[size_t(hovered)].button == HelpButton::kA ? Action::kSelect : Action::kBack);
+        else {
+            switch (help[size_t(hovered)].button) {
+            case HelpButton::kA: Handle(Action::kSelect); break;
+            case HelpButton::kX: Handle(Action::kSecondary); break;
+            default: Handle(Action::kBack); break;
+            }
+        }
     }
     EndScreen();
 }

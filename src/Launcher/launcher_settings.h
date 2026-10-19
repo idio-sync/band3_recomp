@@ -87,6 +87,9 @@ enum class Widget {
     // windowed / borderless / exclusive, over this setting (fullscreen) and its
     // companion (fullscreen_exclusive); see GetWindowMode and SetWindowMode
     kWindowMode,
+    // the controllers left out of the band (left_out_controllers): A lists
+    // the connected ones, and picking one leaves it out or brings it back
+    kLeftOut,
     // not drawn: another row's widget sets it (the companion)
     kNone,
 };

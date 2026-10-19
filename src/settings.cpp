@@ -340,6 +340,15 @@ REXCVAR_DEFINE_BOOL(keyboard_search, true, "Band3/Controllers",
     "controller buttons, and while the search is typed in, the arrows, Enter and Backspace "
     "edit it. Off during songs");
 
+REXCVAR_DEFINE_STRING(left_out_controllers, "", "Band3/Controllers",
+    "Controllers that play no part in the band, as name|guid, separated by ';': they feed no "
+    "player, as if they weren't connected, and the other controllers take the players. For a "
+    "Steam Deck's own controls while it's docked. Test Controllers' X button sets it");
+
+REXCVAR_DEFINE_BOOL(leave_out_deck_controls, true, "Band3/Controllers",
+    "While another controller is connected, leave a Steam Deck's own controls out of the band, "
+    "so a docked Deck doesn't take a player. Unplug the others and they play again");
+
 REXCVAR_DEFINE_STRING(joypad_lag, "", "Band3/Controllers",
     "Change the extra lag the game builds in per controller type, as type=ms, comma "
     "separated (e.g. 5=20,8=30). type=ms/video/audio also sets the calibration tests' lag; "

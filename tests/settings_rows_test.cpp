@@ -325,3 +325,42 @@ TEST_CASE("a section says which of its rows are locked, and why") {
     CHECK(folders->note->find("command line") != std::string::npos);
     CHECK(folders->note->find("User data folder") != std::string::npos);
 }
+TEST_CASE("the controllers left out: a list of the connected ones, each picked to toggle it") {
+    Screen s;
+    s.lists.controllers = {
+        {.name = "Steam Deck", .key = "Steam Deck|11", .player = 0, .deck_aside = true},
+        {.name = "Xbox Series X Controller", .key = "Xbox Series X Controller|22", .player = 1},
+        {.name = "Guitar", .key = "Guitar|33", .player = 0, .left_out = true},
+    };
+    s.store.values["left_out_controllers"] = "Guitar|33;Drums|44";
+    const Row row = s.Of("left_out_controllers");
+    CHECK(OpensList(row));
+    CHECK_FALSE(TypesText(row));
+    CHECK_FALSE(Stepped(*s.model, row, 1, s.lists));
+    CHECK(s.Value("left_out_controllers") == "Guitar, Drums, Steam Deck");
+
+    const auto choices = Choices(*s.model, row, s.lists);
+    REQUIRE(choices.size() == 4);
+    // the Deck setting's: picking it changes nothing here
+    CHECK(choices[0].label == "Steam Deck - Left out (Deck's controls)");
+    CHECK(choices[0].value == "Guitar|33;Drums|44");
+    CHECK(choices[1].label == "Xbox Series X Controller - Player 1");
+    CHECK(choices[1].value == "Guitar|33;Drums|44;Xbox Series X Controller|22");
+    CHECK(choices[2].label == "Guitar - Left out");
+    CHECK(choices[2].value == "Drums|44");
+    // one left out that isn't connected, to bring back
+    CHECK(choices[3].label == "Drums (not connected) - Left out");
+    CHECK(choices[3].value == "Guitar|33");
+    CHECK(std::ranges::none_of(choices, &ChoiceItem::current));
+
+    CHECK(ApplyValue(*s.model, row, choices[1].value));
+    CHECK(s.store.values["left_out_controllers"] == "Guitar|33;Drums|44;Xbox Series X Controller|22");
+}
+
+TEST_CASE("with no controllers and none left out, the list says so") {
+    Screen s;
+    CHECK(s.Value("left_out_controllers") == "None");
+    const auto choices = Choices(*s.model, s.Of("left_out_controllers"), s.lists);
+    REQUIRE(choices.size() == 1);
+    CHECK(choices[0].label == "No controllers found");
+}

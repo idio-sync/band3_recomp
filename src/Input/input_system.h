@@ -73,6 +73,13 @@ void ApplyInputSettings();
 // applies only once band3 restarts. False once the game has the system.
 bool InputBackendChanged();
 
+// Follows left_out_controllers and leave_out_deck_controls, which the
+// launcher and the in-game settings change: assigns the players again when
+// they changed. Before the game the other controllers close up over one left
+// out; in game they keep their players, and the game sees the one left out
+// disconnect. Cheap when nothing changed, so call it every frame (UI thread).
+void FollowPlayerSettings();
+
 // Play: applies the settings a last time and forgets which players the
 // launcher saw connected, so the game's first reads announce them as at a
 // start without the launcher (the SDK tells the game when a player connects,
@@ -87,6 +94,11 @@ struct InputDevice {
     DeviceKind kind = DeviceKind::kPad;
     // 1-4, or 0 when it feeds no player
     int player = 0;
+    // the player left it out of the band (left_out_controllers)
+    bool left_out = false;
+    // a Steam Deck's own controls, left out while another controller is
+    // connected (leave_out_deck_controls)
+    bool deck_aside = false;
 };
 
 // Every device the input system has, in connection order, with the player

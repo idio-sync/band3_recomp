@@ -13,6 +13,8 @@
 // tests one on its own: while it's tested its buttons only light the
 // drawing and don't move the menu (a guitar's red fret is B), the others
 // dim, and its own Back button (or B and Esc from anything else) stops the test.
+// X leaves a controller out of the band (a docked Steam Deck's own controls),
+// or brings it back.
 
 namespace band3::launcher::ui {
 
@@ -23,6 +25,9 @@ struct ControllersHost {
     // B's name in the help bar ("Back to menu" without one)
     std::function<std::string()> back_label;
     std::function<void()> play;
+    // leaves the device with this input::LeftOutKey out of the band, or brings
+    // it back (left_out_controllers), and saves
+    std::function<void(const std::string&)> toggle_left_out;
 };
 
 class ControllersScreen {

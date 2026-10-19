@@ -5,6 +5,7 @@
 #include <string>
 #include "src/Input/midi_drums_driver.h"
 #include "src/Input/midi_keys_driver.h"
+#include "src/Input/player_slots.h"
 #include "src/settings.h"
 #include "launcher_style.h"
 
@@ -163,6 +164,10 @@ std::vector<DevicePanel::Entry> DevicePanel::Entries() const {
         // the keyboard navigates by itself, so it's only shown, not tested
         e.testable = DrivesNavigation(d.kind);
         e.copy = d.kind == DeviceKind::kSdlCopy;
+        e.deck_aside = d.deck_aside;
+        e.can_leave_out = DrivesNavigation(d.kind) && d.kind != DeviceKind::kVirtual && !d.deck_aside;
+        e.left_out = d.left_out;
+        e.left_out_key = input::LeftOutKey(d.name, d.guid);
         out.push_back(std::move(e));
     }
     return out;

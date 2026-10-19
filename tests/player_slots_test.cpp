@@ -1,6 +1,7 @@
 // Checks which player each device feeds (src/Input/player_slots.cpp).
 
 #include <doctest/doctest.h>
+#include <ostream>
 #include <vector>
 #include "src/Input/player_slots.h"
 
@@ -125,4 +126,52 @@ TEST_CASE("the launcher reads a device on the last player it doesn't feed") {
     CHECK(ProbePlayer({false, true, true, true}) == 0);
     // can't happen (a device feeds one player at most), but stays in range
     CHECK(ProbePlayer({true, true, true, true}) == 3);
+}
+
+TEST_CASE("a controller left out is found by its name and guid, letter case aside") {
+    const std::string deck = LeftOutKey("Steam Deck", "03000000de2800000512000011010000");
+    CHECK(deck == "Steam Deck|03000000de2800000512000011010000");
+    const std::string list = "Xbox Series X Controller|abc; " + deck;
+    CHECK(IsLeftOut(list, "steam deck|03000000DE2800000512000011010000"));
+    CHECK_FALSE(IsLeftOut(list, LeftOutKey("Steam Deck", "ffff")));
+    CHECK_FALSE(IsLeftOut("", deck));
+}
+
+TEST_CASE("toggling a controller adds it, then takes it out again") {
+    const std::string deck = LeftOutKey("Steam Deck", "1234");
+    std::string list = ToggleLeftOut("", deck);
+    CHECK(list == deck);
+    list = ToggleLeftOut(list, LeftOutKey("Guitar", "5678"));
+    CHECK(list == "Steam Deck|1234;Guitar|5678");
+    CHECK(ToggleLeftOut(list, deck) == "Guitar|5678");
+    // stray separators and spaces from a hand-edited band3.toml go
+    CHECK(ToggleLeftOut(" ;Guitar|5678 ;; ", deck) == "Guitar|5678;Steam Deck|1234");
+}
+
+TEST_CASE("a name can't break the list") {
+    CHECK(LeftOutKey(" Pad; with|bars ", "1") == "Pad  with bars|1");
+}
+
+TEST_CASE("a left-out pad that connected first gives player 1 to the next pad") {
+    // the Deck's own controls, then the singer's Xbox pad and a guitar
+    const Players players = AssignPlayers({SkippedCopy(), Pad(), Pad()}, kNoneReserved);
+    CHECK(players[0] == std::vector<size_t>{1});
+    CHECK(players[1] == std::vector<size_t>{2});
+    CHECK(players[2].empty());
+}
+
+TEST_CASE("the list's keys and their names") {
+    const auto keys = LeftOutKeys(" Steam Deck|1234 ;;Guitar|5678");
+    REQUIRE(keys.size() == 2);
+    CHECK(keys[0] == "Steam Deck|1234");
+    CHECK(LeftOutName(keys[0]) == "Steam Deck");
+    CHECK(LeftOutName(keys[1]) == "Guitar");
+}
+
+TEST_CASE("a Steam Deck's own controls, by name or USB ids") {
+    CHECK(IsSteamDeckControls("Steam Deck", 0, 0));
+    CHECK(IsSteamDeckControls("Steam Deck Controller", 0, 0));
+    CHECK(IsSteamDeckControls("Steam Virtual Gamepad", 0x28de, 0x1205));
+    CHECK_FALSE(IsSteamDeckControls("Steam Virtual Gamepad", 0x28de, 0x11ff));
+    CHECK_FALSE(IsSteamDeckControls("Xbox Series X Controller", 0x045e, 0x0b12));
 }

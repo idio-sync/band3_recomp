@@ -6,6 +6,8 @@
 #include <cstdio>
 #include "src/Audio/usb_mic.h"
 #include "src/Input/midi_keys.h"
+#include "src/Input/player_slots.h"
+#include "src/Launcher/device_view_model.h"
 #include "src/Launcher/device_names.h"
 #include "src/paths.h"
 
@@ -201,6 +203,31 @@ std::vector<ChoiceItem> SettingChoices(const SettingsModel& model, const Setting
         add_typed(value + " (not connected)");
         break;
     }
+    case Widget::kLeftOut: {
+        // picking one leaves it out or brings it back: the list with it
+        // toggled. None is current, as any number can be left out.
+        for (const DeviceLists::Controller& c : lists.controllers) {
+            std::string label = c.name + " - ";
+            if (c.deck_aside) {
+                // the Deck setting's, which picking it here doesn't change
+                out.push_back({.label = label + "Left out (Deck's controls)", .value = value});
+                continue;
+            }
+            label += c.left_out ? "Left out" : PlayerLabel(c.player);
+            out.push_back({.label = std::move(label), .value = input::ToggleLeftOut(value, c.key)});
+        }
+        // those left out that aren't connected, to bring back
+        for (const std::string& key : input::LeftOutKeys(value)) {
+            const bool connected = std::ranges::any_of(lists.controllers, [&](const DeviceLists::Controller& c) {
+                return input::IsLeftOut(key, c.key);
+            });
+            if (connected) continue;
+            out.push_back({.label = std::string(input::LeftOutName(key)) + " (not connected) - Left out",
+                           .value = input::ToggleLeftOut(value, key)});
+        }
+        if (out.empty()) out.push_back({.label = "No controllers found", .value = value});
+        break;
+    }
     case Widget::kWindowMode: {
         const WindowMode mode = model.GetWindowMode();
         for (const auto& [m, label] : {std::pair{WindowMode::kWindowed, "Windowed"},
@@ -252,6 +279,16 @@ std::string SettingValue(const SettingsModel& model, const Setting& s, const Dev
     case Widget::kPercentSlider:
         return std::to_string(std::lround(AsFloat(value).value_or(0) * 100)) + "%";
     case Widget::kText: return value.empty() ? "Not set" : value;
+    case Widget::kLeftOut: {
+        std::string names;
+        for (const std::string& key : input::LeftOutKeys(value)) {
+            names += (names.empty() ? "" : ", ") + std::string(input::LeftOutName(key));
+        }
+        for (const DeviceLists::Controller& c : lists.controllers) {
+            if (c.deck_aside) names += (names.empty() ? "" : ", ") + c.name;
+        }
+        return names.empty() ? "None" : names;
+    }
     case Widget::kPassword: return value.empty() ? "Not set" : "Set";
     case Widget::kPath: {
         if (!value.empty()) return value;
@@ -457,6 +494,8 @@ std::optional<std::string> Stepped(const SettingsModel& model, const Row& row, i
         return Number(next);
     }
 
+    // a list of toggles, not of values to step through
+    if (row.setting->widget == Widget::kLeftOut) return std::nullopt;
     const std::vector<ChoiceItem> choices = Choices(model, row, lists);
     if (!choices.empty()) {
         const auto current = std::ranges::find_if(choices, &ChoiceItem::current);
@@ -554,7 +593,8 @@ bool OpensList(const Row& row) {
     case Widget::kResolution:
     case Widget::kMidiPort:
     case Widget::kComboText:
-    case Widget::kFolderList: return true;
+    case Widget::kFolderList:
+    case Widget::kLeftOut: return true;
     case Widget::kCombo: return row.setting->choices.size() > 6;
     default: return false;
     }
