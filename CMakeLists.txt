@@ -81,8 +81,9 @@ endif()
 # UDP sockets for the RB3E network events (src/Net/events.cpp)
 if(WIN32)
     target_link_libraries(band3 PRIVATE ws2_32)
-    # the device list, for dongles on Zadig's drivers (src/Input/usb_driver_check_windows.cpp)
-    target_link_libraries(band3 PRIVATE setupapi)
+    # the device list and WinUSB, for dongles on Zadig's drivers
+    # (src/Input/usb_driver_check_windows.cpp, winusb_instruments_windows.cpp)
+    target_link_libraries(band3 PRIVATE setupapi cfgmgr32 winusb)
     # symbol map, to resolve the frames src/crash_trace.cpp logs
     target_link_options(band3 PRIVATE "LINKER:/MAP:${CMAKE_BINARY_DIR}/band3.map")
     # band3.pdb with the public symbols (nothing is compiled with debug info),

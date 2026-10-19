@@ -24,6 +24,7 @@
 #include "hid_instrument_types.h"
 #include "report_source.h"
 #include "usb_driver_check.h"
+#include "winusb_instruments.h"
 #include "xinput_state.h"
 
 namespace band3::input {
@@ -41,9 +42,12 @@ constexpr uint64_t kDeviceIdBase = 0x4233484900000000ull;  // "B3HI"
 constexpr const char* kGuidPrefix = "band3-hid:";
 // how often to look for newly plugged dongles
 constexpr std::chrono::milliseconds kScanInterval{1000};
-// how often to look for known dongles on another driver (Zadig's), which
-// SDL's change count doesn't see come and go
-constexpr std::chrono::seconds kDriverCheckInterval{5};
+// how often to look through Windows' USB devices for known dongles on other
+// drivers (WinUSB, which band3 opens, or ones it can't read), which SDL's
+// change count doesn't see come and go
+constexpr std::chrono::seconds kUsbScanInterval{2};
+// the start of a WinUSB dongle's path, before its device instance id
+constexpr const char* kWinUsbPathPrefix = "winusb:";
 // a reader wakes at least this often to notice shutdown
 constexpr int kReadTimeoutMs = 100;
 // the vendors of every known instrument, to enumerate by
@@ -328,7 +332,7 @@ private:
     void ScanLoop() {
         uint32_t last_change = 0;
         bool first = true;
-        auto next_driver_check = std::chrono::steady_clock::now();
+        auto next_usb_scan = std::chrono::steady_clock::now();
         std::unique_lock<std::mutex> lock(stop_mutex_);
         while (!stop_) {
             lock.unlock();
@@ -340,11 +344,11 @@ private:
                     last_change = change;
                     Scan();
                 }
-                const auto now = std::chrono::steady_clock::now();
-                if (now >= next_driver_check) {
-                    next_driver_check = now + kDriverCheckInterval;
-                    CheckDrivers();
-                }
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= next_usb_scan) {
+                next_usb_scan = now + kUsbScanInterval;
+                ScanUsb();
             }
             Reap();
             OpenGipArrivals();
@@ -384,9 +388,33 @@ private:
         }
     }
 
-    // notes the known dongles on another driver, logging each once
-    void CheckDrivers() {
-        auto found = FindInstrumentsOnOtherDrivers();
+    // opens the known dongles on WinUSB that aren't open yet, and notes the
+    // ones on drivers band3 can't read, logging each once
+    void ScanUsb() {
+        const auto entries = ListKnownUsbInstruments();
+        for (const auto& entry : entries) {
+            if (!IsWinUsbService(entry.service)) continue;
+            const std::string path = kWinUsbPathPrefix + entry.instance;
+            if (IsOpen(path.c_str())) continue;
+            std::string error;
+            WinUsbInstrument opened = OpenWinUsbInstrument(entry, error);
+            // tried again every scan (RPCS3 may let go of it), said once
+            if (!opened.source) {
+                if (open_failed_.insert(path).second) {
+                    REXLOG_WARN("HID instruments: can't open {} ({:04X}:{:04X}) through WinUSB: {}",
+                                entry.name, entry.ids.vendor, entry.ids.product, error);
+                }
+                continue;
+            }
+            const auto instrument =
+                IdentifyHidInstrument(opened.vendor, opened.product, opened.release);
+            if (!instrument) continue;
+            REXLOG_INFO("HID instruments: reading {} through WinUSB", entry.name);
+            Open(*instrument, opened.vendor, opened.product, opened.release, path.c_str(),
+                 std::move(opened.source));
+        }
+
+        auto found = UnreadableInstruments(entries);
         for (const auto& instrument : found) {
             char key[48];
             std::snprintf(key, sizeof(key), "%04X:%04X:%s", instrument.ids.vendor,

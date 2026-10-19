@@ -52,23 +52,45 @@ bool IsHidReadableService(std::string_view service) {
     return EqualsNoCase(service, "HidUsb") || EqualsNoCase(service, "usbccgp");
 }
 
+bool IsWinUsbService(std::string_view service) { return EqualsNoCase(service, "WinUSB"); }
+
+std::vector<WrongDriverInstrument> UnreadableInstruments(std::span<const UsbInstrumentEntry> entries) {
+    const auto readable = [](const UsbInstrumentEntry& entry) {
+        return IsHidReadableService(entry.service) || IsWinUsbService(entry.service);
+    };
+    std::vector<WrongDriverInstrument> out;
+    for (const auto& entry : entries) {
+        if (readable(entry)) continue;
+        const bool sibling_readable = std::ranges::any_of(entries, [&](const UsbInstrumentEntry& other) {
+            return other.ids == entry.ids && readable(other);
+        });
+        const bool listed = std::ranges::any_of(out, [&](const WrongDriverInstrument& wrong) {
+            return wrong.ids == entry.ids && wrong.service == entry.service;
+        });
+        if (!sibling_readable && !listed) out.push_back({entry.ids, entry.name, entry.service});
+    }
+    return out;
+}
+
 std::string WrongDriverMessage(const WrongDriverInstrument& instrument) {
     char ids[16];
     std::snprintf(ids, sizeof(ids), "%04X:%04X", instrument.ids.vendor, instrument.ids.product);
     std::string message = instrument.name + " (" + ids + ") is plugged in, but ";
     if (instrument.service.empty()) {
         return message + "Windows has no driver for it, so band3 can't read it. band3 reads it "
-                         "through Windows' own HID driver: in Device Manager, uninstall the "
-                         "device, then unplug it and plug it back in.";
+                         "through Windows' own HID driver or Zadig's WinUSB: in Device Manager, "
+                         "uninstall the device, then unplug it and plug it back in.";
     }
-    const auto zadig = ZadigDriverLabel(instrument.service);
-    message += "it uses the " + std::string(zadig.value_or(instrument.service)) + " driver";
-    if (zadig) message += " (Zadig's, for RPCS3's USB passthrough)";
-    message += ", so band3 can't read it. band3 reads it through Windows' own HID driver: in "
-               "Device Manager, uninstall the device with \"Delete the driver software for this "
-               "device\" ticked, then unplug it and plug it back in.";
-    if (zadig) message += " (RPCS3's passthrough needs Zadig's driver again afterwards.)";
-    return message;
+    if (const auto zadig = ZadigDriverLabel(instrument.service)) {
+        return message + "it uses Zadig's " + std::string(*zadig) +
+               " driver, which band3 can't read. In Zadig, pick the device, choose WinUSB and "
+               "click Replace Driver: band3 reads WinUSB, and RPCS3's USB passthrough works "
+               "with it too.";
+    }
+    return message + "it uses the " + instrument.service +
+           " driver, so band3 can't read it. band3 reads it through Windows' own HID driver or "
+           "Zadig's WinUSB: in Device Manager, uninstall the device with \"Delete the driver "
+           "software for this device\" ticked, then unplug it and plug it back in.";
 }
 
 }

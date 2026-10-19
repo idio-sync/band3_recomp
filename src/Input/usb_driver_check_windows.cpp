@@ -7,15 +7,21 @@
 #endif
 #include <windows.h>
 #include <setupapi.h>
-#include <algorithm>
+#include <iterator>
 #include "hid_instrument_types.h"
 
 namespace band3::input {
 
 namespace {
 
-// one of a device's string properties, as plain ASCII (hardware ids and
-// service names are); the first string of a multi-string one
+// UTF-16 as plain ASCII, which hardware ids, instance ids and service names are
+std::string Ascii(const wchar_t* text) {
+    std::string out;
+    for (const wchar_t* c = text; *c; c++) out += *c < 0x80 ? static_cast<char>(*c) : '?';
+    return out;
+}
+
+// one of a device's string properties; the first string of a multi-string one
 std::string Property(HDEVINFO set, SP_DEVINFO_DATA& device, DWORD property) {
     wchar_t buffer[512] = {};
     if (!SetupDiGetDeviceRegistryPropertyW(set, &device, property, nullptr,
@@ -23,18 +29,22 @@ std::string Property(HDEVINFO set, SP_DEVINFO_DATA& device, DWORD property) {
                                            sizeof(buffer) - sizeof(wchar_t), nullptr)) {
         return {};
     }
-    std::string out;
-    for (const wchar_t* c = buffer; *c; c++) out += *c < 0x80 ? static_cast<char>(*c) : '?';
-    return out;
+    return Ascii(buffer);
+}
+
+std::string InstanceId(HDEVINFO set, SP_DEVINFO_DATA& device) {
+    wchar_t buffer[512] = {};
+    if (!SetupDiGetDeviceInstanceIdW(set, &device, buffer, static_cast<DWORD>(std::size(buffer) - 1),
+                                     nullptr)) {
+        return {};
+    }
+    return Ascii(buffer);
 }
 
 }
 
-std::vector<WrongDriverInstrument> FindInstrumentsOnOtherDrivers() {
-    std::vector<WrongDriverInstrument> found;
-    // ids with an entry under HID's driver (or a composite parent): a composite
-    // dongle's other interfaces may sit on other drivers without harm
-    std::vector<UsbIds> readable;
+std::vector<UsbInstrumentEntry> ListKnownUsbInstruments() {
+    std::vector<UsbInstrumentEntry> found;
     HDEVINFO set = SetupDiGetClassDevsW(nullptr, L"USB", nullptr, DIGCF_PRESENT | DIGCF_ALLCLASSES);
     if (set == INVALID_HANDLE_VALUE) return found;
     SP_DEVINFO_DATA device{};
@@ -44,19 +54,12 @@ std::vector<WrongDriverInstrument> FindInstrumentsOnOtherDrivers() {
         if (!ids) continue;
         for (const auto& known : KnownHidInstruments()) {
             if (known.vendor != ids->vendor || known.product != ids->product) continue;
-            std::string service = Property(set, device, SPDRP_SERVICE);
-            if (IsHidReadableService(service)) {
-                readable.push_back(*ids);
-            } else {
-                found.push_back({*ids, known.name, std::move(service)});
-            }
+            found.push_back({*ids, known.name, Property(set, device, SPDRP_SERVICE),
+                             InstanceId(set, device)});
             break;
         }
     }
     SetupDiDestroyDeviceInfoList(set);
-    std::erase_if(found, [&](const WrongDriverInstrument& instrument) {
-        return std::ranges::find(readable, instrument.ids) != readable.end();
-    });
     return found;
 }
 
@@ -66,7 +69,7 @@ std::vector<WrongDriverInstrument> FindInstrumentsOnOtherDrivers() {
 
 namespace band3::input {
 
-std::vector<WrongDriverInstrument> FindInstrumentsOnOtherDrivers() { return {}; }
+std::vector<UsbInstrumentEntry> ListKnownUsbInstruments() { return {}; }
 
 }
 

@@ -10,9 +10,10 @@
 #include "usb_driver_check.h"
 
 // PlayStation and Wii Rock Band instruments (hid_instrument_types.h lists them),
-// read straight from their USB dongles with SDL's HID API, and on Windows Xbox
-// One ones, read through GameInput (gameinput_instruments.h), all reported as
-// Xbox 360 instruments.
+// read straight from their USB dongles with SDL's HID API (or on Windows,
+// through WinUSB for the dongles Zadig put on it: winusb_instruments.h), and
+// on Windows Xbox One ones, read through GameInput (gameinput_instruments.h),
+// all reported as Xbox 360 instruments.
 // Turned on by the hid_instruments setting. On Linux the dongles' hidraw nodes
 // need to be readable, which usually takes a udev rule.
 
@@ -49,7 +50,7 @@ struct HidInstrumentStatus {
 // the instruments open right now
 std::vector<HidInstrumentStatus> HidInstrumentStatuses();
 
-// the known dongles plugged in under a driver SDL's HID API can't read
+// the known dongles plugged in under a driver band3 can't read
 // (usb_driver_check.h), as of the driver's last look, every few seconds
 std::vector<WrongDriverInstrument> HidInstrumentsOnOtherDrivers();
 
