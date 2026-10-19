@@ -110,6 +110,19 @@ TEST_CASE("nothing off the list, or on a row that can't be picked") {
     CHECK_FALSE(RowAt(rows, Box2{{200, 100}, {200, 300}}, {200, 150}));
 }
 
+TEST_CASE("a click picks a row past the band, but not an inactive one") {
+    auto rows = Rows(5);
+    const Box2 bounds = Bounds(5);
+    rows[3].pickable = false;
+    rows[4].pickable = false;
+    rows[4].clickable = false;
+    CHECK_FALSE(RowAt(rows, bounds, {300, 230}));
+    CHECK(RowAt(rows, bounds, {300, 230}, true) == 13);
+    CHECK_FALSE(RowAt(rows, bounds, {300, 290}, true));
+    // off the list is still nothing
+    CHECK_FALSE(RowAt(rows, bounds, {150, 230}, true));
+}
+
 TEST_CASE("a horizontal list and a grid pick the nearest cell") {
     std::vector<Row> across;
     for (int i = 0; i < 4; i++) across.push_back({.showing = i, .at = {100.0f + 100 * i, 50}});

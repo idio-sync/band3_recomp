@@ -34,6 +34,9 @@ struct HoverPointer {
     uint64_t moves = 0;
     int32_t x = 0, y = 0;
     uint32_t width = 0, height = 0;
+    // the move the last left click came with: a click selects the row under
+    // it even where pointing alone wouldn't
+    uint64_t select_move = 0;
 };
 
 // Game thread: the pointer, if it has moved since move `seen`
@@ -41,8 +44,9 @@ std::optional<HoverPointer> TakeHoverPointer(uint64_t seen);
 // Any thread: the pointer as last moved
 HoverPointer LastHoverPointer();
 // Game thread: the hover has acted on move `moves`; a click made with it can
-// now go to the game
-void HoverApplied(uint64_t moves);
+// now go to the game. `took_click`: the hover selected the row the left click
+// was on, so the click's A press is dropped rather than confirming it.
+void HoverApplied(uint64_t moves, bool took_click);
 
 // the player (0-3) the mouse's presses go to: the lowest connected
 uint32_t MouseMenuPlayer();

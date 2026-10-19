@@ -51,6 +51,16 @@ void MouseMenus::Clear() {
     scrolled_ = 0;
 }
 
+void MouseMenus::Drop(Button button) {
+    Key& key = KeyFor(button);
+    if (key.queued > 0) key.queued--;
+}
+
+bool MovedOnFromWheel(int32_t dx, int32_t dy, uint32_t window_height) {
+    const int64_t still = std::max<int64_t>(kMinStillPixels, window_height / 100);
+    return int64_t(dx) * dx + int64_t(dy) * dy > still * still;
+}
+
 uint16_t MouseMenus::Buttons(Clock::time_point now) {
     uint16_t buttons = 0;
     for (Key& key : keys_) {

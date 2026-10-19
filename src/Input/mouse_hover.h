@@ -64,6 +64,9 @@ struct Row {
     // a row that can be picked: active, and not fading in or out at the
     // list's ends, where the list scrolls on
     bool pickable = true;
+    // a row a click can pick: active. Outside the pickable band the list
+    // scrolls to it, once, where a still pointer would have it run on.
+    bool clickable = true;
 };
 
 struct Box2 {
@@ -77,7 +80,9 @@ struct Box2 {
 // middle, so the anchors are first moved together to centre them in the
 // bounds; the row then is the one whose anchor is nearest. That's the
 // band between the midpoints for a list, and the nearest cell for a grid.
-std::optional<int> RowAt(const std::vector<Row>& rows, const Box2& bounds, const Vec2& pointer);
+// `click`: a row a click can pick counts too.
+std::optional<int> RowAt(const std::vector<Row>& rows, const Box2& bounds, const Vec2& pointer,
+                         bool click = false);
 
 // how far RowAt moves the anchors to centre them in the bounds: a row's
 // middle is its anchor plus this

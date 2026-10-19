@@ -35,6 +35,9 @@ public:
     void Scroll(int32_t amount, int32_t per_notch);
     // forgets every press, held or waiting
     void Clear();
+    // takes back a click's press still waiting its turn, as when the click
+    // selected a row instead (src/Hooks/mouse_hover.cpp)
+    void Drop(Button button);
 
     // the XINPUT_GAMEPAD button bits pressed at `now`. Each call moves each
     // button on at most one step (a press starting or ending), so the game
@@ -65,5 +68,14 @@ private:
     // scrolled since the last whole notch
     int32_t scrolled_ = 0;
 };
+
+// A wheel notch moves the highlight off the row under the pointer; the hand
+// turning the wheel nudges the mouse, and the hover would move it straight
+// back. So after a notch the pointer counts as still until it has moved this
+// far from where it was, (dx, dy) in the window's pixels: a hundredth of the
+// window's height, and at least kMinStillPixels.
+constexpr int32_t kMinStillPixels = 6;
+bool MovedOnFromWheel(int32_t dx, int32_t dy, uint32_t window_height);
+
 
 }

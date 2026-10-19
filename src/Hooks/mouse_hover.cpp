@@ -33,7 +33,9 @@
 //   move to takes the focus (PanelDir::SetFocusComponent), as a press would.
 // Never while a player's overshell menu has the input, and only rows the
 // list can highlight without scrolling, so nothing runs on under a still
-// pointer.
+// pointer. A left click picks a row past them too: the list scrolls to it
+// once, and the click's A press is dropped, so it selects the row rather than
+// confirming the one highlighted before.
 //
 // Addresses and offsets are TU5's, from rb3-xenon (ui/UI.h, ui/UIList.h,
 // ui/UIListDir.cpp, ui/UIListWidget.h, ui/UIListState.h, ui/UIComponent.h,
@@ -314,7 +316,10 @@ std::optional<View> ListView(PPCContext& ctx, uint8_t* base, const PictureRect& 
             e.state != kWidgetInactive && e.alpha >= kOpaque && StaysPut(band, e.display);
         const bool highlighted = e.display == drawn->highlight_display;
         if (highlighted) view.highlighted = e.showing;
-        view.rows.push_back(Row{.showing = e.showing, .at = *at, .pickable = pickable});
+        view.rows.push_back(Row{.showing = e.showing,
+                                .at = *at,
+                                .pickable = pickable,
+                                .clickable = e.state != kWidgetInactive});
         view.report_rows.push_back(ReportRow{.display = e.display,
                                              .showing = e.showing,
                                              .data = e.data,
@@ -437,12 +442,20 @@ bool HoverAllowed(PPCContext& ctx, uint8_t* base) {
            !OvershellTakesInput(ctx, base) && !ContentRefreshing(ctx, base);
 }
 
-// selects the list's row under the pointer; whether the pointer is on the list
-bool HoverRow(PPCContext& ctx, uint8_t* base, const View& view, const Vec2& pointer) {
+// selects the list's row under the pointer; whether the pointer is on the
+// list. `click`: a left click came with the move, and may pick a row past
+// the band pointing alone can (took_click then).
+bool HoverRow(PPCContext& ctx, uint8_t* base, const View& view, const Vec2& pointer, bool click,
+              bool& took_click) {
     if (!view.bounds.Contains(pointer)) return false;
-    const auto row = input::mouse_hover::RowAt(view.rows, view.bounds, pointer);
+    auto row = input::mouse_hover::RowAt(view.rows, view.bounds, pointer);
+    if (!row && click) {
+        row = input::mouse_hover::RowAt(view.rows, view.bounds, pointer, true);
+        took_click = row && *row != view.highlighted;
+    }
     if (!row || *row == view.highlighted) return true;
-    REXLOG_DEBUG("mouse: hovering row {} of the list on {}", *row, ScreenName(base));
+    REXLOG_DEBUG("mouse: {} row {} of the list on {}", took_click ? "clicking" : "hovering", *row,
+                 ScreenName(base));
     PPCContext call = CallContext(ctx);
     call.r3.u64 = view.list;
     call.r4.s64 = *row;
@@ -462,18 +475,20 @@ uint32_t NavType(PPCContext& ctx, uint8_t* base) {
     return Load32(base, symbol);
 }
 
-void Hover(PPCContext& ctx, uint8_t* base, const input::HoverPointer& pointer) {
-    if (!HoverAllowed(ctx, base)) return;
+// whether a left click with the move selected a row (HoverRow's took_click)
+bool Hover(PPCContext& ctx, uint8_t* base, const input::HoverPointer& pointer, bool click) {
+    if (!HoverAllowed(ctx, base)) return false;
+    bool took_click = false;
     const PictureRect picture = PictureFor(pointer.width, pointer.height);
     const Vec2 at{float(pointer.x), float(pointer.y)};
     const uint32_t focus = FocusComponent(ctx, base);
     if (const auto view = ListView(ctx, base, picture, focus)) {
-        if (HoverRow(ctx, base, *view, at)) return;
+        if (HoverRow(ctx, base, *view, at, click, took_click)) return took_click;
     }
     uint32_t panel_dir = 0;
     const auto targets = FocusTargets(ctx, base, picture, focus, panel_dir);
     const uint32_t target = input::mouse_hover::TargetAt(targets, at);
-    if (!target || target == focus) return;
+    if (!target || target == focus) return took_click;
     REXLOG_DEBUG("mouse: hovering {} on {}", Describe(base, target), ScreenName(base));
     // PanelDir::SetFocusComponent(PanelDir*, UIComponent*, Symbol nav_type),
     // which tells the screen as a press would (UIComponentFocusChangeMsg)
@@ -484,7 +499,10 @@ void Hover(PPCContext& ctx, uint8_t* base, const input::HoverPointer& pointer) {
     call.r5.u64 = nav_type;
     PanelDir__SetFocusComponent(call, base);
     // a list taking the focus takes the row under the pointer too
-    if (const auto view = ListView(ctx, base, picture, target)) HoverRow(ctx, base, *view, at);
+    if (const auto view = ListView(ctx, base, picture, target)) {
+        HoverRow(ctx, base, *view, at, click, took_click);
+    }
+    return took_click;
 }
 
 bool ReportWanted() {
@@ -548,9 +566,11 @@ void RunFrame(PPCContext& ctx, uint8_t* base) {
 
     AnswerReport(ctx, base);
     if (!pointer) return;
+    // a left click since the last move acted on
+    const bool click = pointer->select_move > g_seen;
     g_seen = pointer->moves;
-    Hover(ctx, base, *pointer);
-    input::HoverApplied(pointer->moves);
+    const bool took_click = Hover(ctx, base, *pointer, click);
+    input::HoverApplied(pointer->moves, took_click);
 }
 
 std::optional<Report> RequestReport(uint32_t width, uint32_t height, std::chrono::milliseconds wait) {

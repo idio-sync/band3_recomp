@@ -118,7 +118,8 @@ std::vector<uint32_t> Joined(const std::vector<std::pair<uint32_t, uint32_t>>& l
     return joined;
 }
 
-std::optional<int> RowAt(const std::vector<Row>& rows, const Box2& bounds, const Vec2& pointer) {
+std::optional<int> RowAt(const std::vector<Row>& rows, const Box2& bounds, const Vec2& pointer,
+                         bool click) {
     if (rows.empty() || !(bounds.max.x > bounds.min.x) || !(bounds.max.y > bounds.min.y)) {
         return std::nullopt;
     }
@@ -137,7 +138,7 @@ std::optional<int> RowAt(const std::vector<Row>& rows, const Box2& bounds, const
             nearest = &row;
         }
     }
-    if (!nearest || !nearest->pickable) return std::nullopt;
+    if (!nearest || !(nearest->pickable || (click && nearest->clickable))) return std::nullopt;
     return nearest->showing;
 }
 

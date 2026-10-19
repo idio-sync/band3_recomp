@@ -42,6 +42,9 @@ struct Shared {
     // where the pointer last moved on the game, counted by `moves`, for the
     // hover (TakeHoverPointer)
     HoverPointer pointer;
+    // a wheel notch left the pointer still where it was, until it moves on
+    // (MovedOnFromWheel)
+    bool parked = false;
     // the last move the game thread has acted on (HoverApplied), and the move
     // a click came with: the click's presses wait for the game to act on it,
     // so it lands on the row under the pointer, not the one highlighted before
@@ -121,9 +124,14 @@ public:
         if (!button || !TakesClicks()) return;
         Shared& shared = State();
         std::lock_guard<std::mutex> lock(shared.mutex);
-        // a click with no move before it (a touch) still hovers first
+        // a click hovers first, as a move: with none before it (a touch), or
+        // on a pointer the wheel left still, its highlight moved off it
+        shared.parked = false;
+        const uint64_t before = shared.pointer.moves;
         MoveLocked(e);
+        if (shared.pointer.moves == before) shared.pointer.moves++;
         shared.click_move = shared.pointer.moves;
+        if (*button == MouseMenus::Button::kLeft) shared.pointer.select_move = shared.pointer.moves;
         shared.click_at = MouseMenus::Clock::now();
         shared.mouse.Press(*button);
     }
@@ -144,8 +152,10 @@ public:
 
     void OnMouseWheel(MouseEvent& e) override {
         if (!TakesClicks()) return;
-        std::lock_guard<std::mutex> lock(State().mutex);
-        State().mouse.Scroll(e.scroll_y(), static_cast<int32_t>(MouseEvent::kScrollPerDetent));
+        Shared& shared = State();
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        shared.mouse.Scroll(e.scroll_y(), static_cast<int32_t>(MouseEvent::kScrollPerDetent));
+        shared.parked = true;
     }
 
     void OnClosing(rex::ui::UIEvent&) override { Detach(); }
@@ -168,8 +178,13 @@ private:
 
     // with State().mutex held
     void MoveLocked(const MouseEvent& e) {
-        HoverPointer& pointer = State().pointer;
+        Shared& shared = State();
+        HoverPointer& pointer = shared.pointer;
         if (pointer.moves && pointer.x == e.x() && pointer.y == e.y()) return;
+        if (shared.parked) {
+            if (!MovedOnFromWheel(e.x() - pointer.x, e.y() - pointer.y, pointer.height)) return;
+            shared.parked = false;
+        }
         pointer.x = e.x();
         pointer.y = e.y();
         pointer.width = window_ ? window_->GetActualPhysicalWidth() : 0;
@@ -238,7 +253,15 @@ HoverPointer LastHoverPointer() {
     return shared.pointer;
 }
 
-void HoverApplied(uint64_t moves) { State().applied.store(moves); }
+void HoverApplied(uint64_t moves, bool took_click) {
+    Shared& shared = State();
+    // before the click's presses are let go to the game
+    if (took_click) {
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        shared.mouse.Drop(MouseMenus::Button::kLeft);
+    }
+    shared.applied.store(moves);
+}
 
 uint32_t MouseMenuPlayer() {
     Shared& shared = State();

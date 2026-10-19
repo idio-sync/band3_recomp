@@ -160,3 +160,28 @@ TEST_CASE("Clear forgets every press") {
     mouse.Release(Button::kLeft);
     CHECK(mouse.Buttons(t0 + 2s) == 0);
 }
+
+TEST_CASE("a dropped click never presses, and the next one does") {
+    MouseMenus mouse;
+    mouse.Press(Button::kLeft);
+    mouse.Drop(Button::kLeft);
+    CHECK(mouse.Buttons(t0) == 0);
+    mouse.Release(Button::kLeft);
+    CHECK(mouse.Buttons(t0 + 1s) == 0);
+    mouse.Press(Button::kLeft);
+    CHECK(mouse.Buttons(t0 + 2s) == xbox::kButtonA);
+    // a press already on isn't taken back
+    mouse.Drop(Button::kLeft);
+    CHECK(mouse.Buttons(t0 + 2s + kPoll) == xbox::kButtonA);
+}
+
+TEST_CASE("after a notch the pointer moves on only once it's moved far enough") {
+    // a hundredth of the window's height
+    CHECK_FALSE(MovedOnFromWheel(0, 11, 1100));
+    CHECK(MovedOnFromWheel(0, 12, 1100));
+    CHECK_FALSE(MovedOnFromWheel(-7, 8, 1100));
+    CHECK(MovedOnFromWheel(-8, 8, 1100));
+    // and at least kMinStillPixels in a small window
+    CHECK_FALSE(MovedOnFromWheel(kMinStillPixels, 0, 300));
+    CHECK(MovedOnFromWheel(kMinStillPixels + 1, 0, 300));
+}
