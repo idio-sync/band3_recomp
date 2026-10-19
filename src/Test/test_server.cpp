@@ -601,7 +601,46 @@ public:
         eo.part = render::BackBufferPart::kEyes;
         eo.hud_from = layout.hud_boundary;
         render::vr::EyeCamsOf(layout, eo.eye_cams, render::RasterOptions::kEyeCams);
-        for (int e = 0; e < 2; e++) {
+        // Both eyes as VrFrame draws them with vr_shared_eyes, where no
+        // session holds the eyes' outputs: from the capture itself in one go
+        // (RenderEyesToOutputs into them, waited for); the overrides' making
+        // into `make_ms`. False where VrFrame draws them one at a time.
+        auto both_eyes = [&](const render::RasterOptions& o, render::GpuStats gs[2],
+                             render::vr::EyeOverride ov[2], double* make_ms) {
+            if (headset || layout.eyes_black || !REXCVAR_GET(vr_shared_eyes)) return false;
+            const auto from = std::chrono::steady_clock::now();
+            const bool made = render::vr::EyeOverrideOf(frame, layout.eyes[0], ov[0]) &&
+                              render::vr::EyeOverrideOf(frame, layout.eyes[1], ov[1]);
+            if (make_ms)
+                *make_ms = std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - from)
+                               .count();
+            if (!made || !render::GpuRenderer::CanRenderEyes(frame, o)) return false;
+            render::RasterOptions waited = o;
+            waited.gpu_no_wait = false;
+            const render::vr::EyeOverride* const eyes[2] = {&ov[0], &ov[1]};
+            const int slots[2] = {render::GpuRenderer::EyeSlot(0), render::GpuRenderer::EyeSlot(1)};
+            render::GpuOutput out[2];
+            return render::GpuRenderer::Get().RenderEyesToOutputs(frame, waited, eyes, slots, out,
+                                                                  gs);
+        };
+        bool together = false;
+        {
+            render::GpuStats gs[2];
+            render::vr::EyeOverride ov[2];
+            together = both_eyes(eo, gs, ov, nullptr);
+            for (int e = 0; together && e < 2; e++) {
+                std::vector<uint32_t> eye_rgba;
+                uint32_t w = 0, h = 0;
+                if (render::GpuRenderer::Get().DownloadOutput(render::GpuRenderer::EyeSlot(e),
+                                                              eye_rgba, w, h))
+                    render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
+                                      (file + (e ? ".gpu.R.png" : ".gpu.L.png")))
+                                         .string(),
+                                     eye_rgba, w, h);
+            }
+        }
+        for (int e = 0; e < 2 && !together; e++) {
             std::vector<uint32_t> eye_rgba;
             render::GpuStats eye_stats;
             bool drew = layout.eyes_black;
@@ -719,7 +758,24 @@ public:
                     double repose[3] = {};
                     render::GpuStats first[3], second[3];
                     for (int round = 0; round < 4; round++) {
-                        // as VrFrame: from the capture itself where it can
+                        // both eyes in one go, as VrFrame draws them: the
+                        // first's stats (the plan, upload and its own
+                        // recording) as `first`, the second's as `second`,
+                        // `repose_ms` half the overrides' making
+                        {
+                            render::GpuStats pair[2];
+                            render::vr::EyeOverride ov[2];
+                            double make_ms = 0;
+                            if (both_eyes(timed, pair, ov, &make_ms)) {
+                                together = true;
+                                if (round == 0) continue;
+                                repose[round - 1] = make_ms / 2;
+                                first[round - 1] = std::move(pair[0]);
+                                second[round - 1] = std::move(pair[1]);
+                                continue;
+                            }
+                        }
+                        // else as VrFrame: from the capture itself where it can
                         // (vr_shared_eyes; `repose_ms` is then the
                         // override's making), else RePose's copy
                         const bool shared = REXCVAR_GET(vr_shared_eyes);
@@ -755,9 +811,11 @@ public:
                         cleared = render::vr::RePose(frame, layout.eyes[0], copy).crowd_cleared;
                     }
                     sizes[z] = std::format(
-                        "\"size\":[{},{}],\"repose_ms\":{:.3f},\"first\":{},\"second\":{}",
-                        timed.width, timed.height, Mid(repose[0], repose[1], repose[2]),
-                        EyeStatsJson(first), EyeStatsJson(second));
+                        "\"size\":[{},{}],\"together\":{},\"repose_ms\":{:.3f},\"first\":{},"
+                        "\"second\":{}",
+                        timed.width, timed.height, together ? "true" : "false",
+                        Mid(repose[0], repose[1], repose[2]), EyeStatsJson(first),
+                        EyeStatsJson(second));
                     // as before: the first picture's CPU and GPU at the eyes' size
                     if (!z)
                         sizes[z] += std::format(

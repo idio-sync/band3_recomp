@@ -1346,7 +1346,11 @@ class Renderer {
     // eye_cams), each from where it is in front of the head, held still
     // through the song (vr_track_hold_), over the eyes' own dark around the
     // window and the cut's fade (vr_pose.h's Eye::dark; unless
-    // vr_window_quads). The
+    // vr_window_quads). With vr_shared_eyes, eyes without that dark (a fixed
+    // viewpoint) are drawn from the capture itself (vr::EyeOverride), both in
+    // one go (GpuRenderer::RenderEyesToOutputs: one plan, the texture passes
+    // neither sees drawn once); the window's take RePose's copies, the right
+    // keeping the left's passes (RasterOptions::keep_eye_passes). The
     // left eye goes into one of the window's slots when one is free and is
     // published as the window's picture; else, and the right always, into
     // the eye slots. The HUD's draws go onto the HUD panel (vr_hud), the
@@ -1486,7 +1490,38 @@ class Renderer {
         // right keeping the left's drawing of the texture passes neither sees
         // itself (RasterOptions::keep_eye_passes)
         const bool shared = REXCVAR_GET(vr_shared_eyes);
-        for (int e = 0; e < 2; e++) {
+        // and where both eyes can be drawn from the capture itself, both in
+        // one go (GpuRenderer::RenderEyesToOutputs): one plan and upload,
+        // the texture passes neither sees drawn once, the left eye's world
+        // submitted before the right's is recorded
+        bool together = false;
+        if (shared && !layout.eyes_black) {
+            const auto start = Clock::now();
+            const bool made = vr::EyeOverrideOf(*cap, layout.eyes[0], vr_override_[0]) &&
+                              vr::EyeOverrideOf(*cap, layout.eyes[1], vr_override_[1]);
+            const double make_ms =
+                std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+            if (made && GpuRenderer::CanRenderEyes(*cap, eo)) {
+                const vr::EyeOverride* const ov[2] = {&vr_override_[0], &vr_override_[1]};
+                GpuOutput out[2];
+                GpuStats gs[2];
+                together = GpuRenderer::Get().RenderEyesToOutputs(*cap, eo, ov, slot, out, gs);
+                for (int e = 0; together && e < 2; e++) {
+                    eye[e] = layout.eyes[e];
+                    eye_cap[e] = cap;
+                    repose_ms[e] = make_ms / 2;
+                    d[e].drew_output = true;
+                    d[e].out = out[e];
+                    d[e].gs = gs[e];
+                    t.eye_submitted_ms[e] = at();
+                }
+                if (together && left_slot >= 0) {
+                    std::lock_guard lock(mutex_);
+                    slots_.Submitted(left_slot);
+                }
+            }
+        }
+        for (int e = 0; e < 2 && !together; e++) {
             eye[e] = layout.eyes[e];
             const auto repose_start = Clock::now();
             RasterOptions eye_o = eo;

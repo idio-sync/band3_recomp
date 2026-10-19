@@ -426,7 +426,24 @@ What each does, how it was measured and why it defaults as it does. The
   0.02-0.22 ms to make an eye against `RePose`'s 0.7-1.45, the walk 0.1-0.3 ms more
   (`EyeDrawOf`, the crowd's distances), and the eyes are the same pictures, pixel for
   pixel; the two eyes' CPU at 2644x2644 went from a mean 5.2 to 4.2 ms a frame
-  (6.4 before the passes were shared), the GPU 3.5 (4.7). The overlay's draws (`soft_raster.h`'s `OnHud`, from
+  (6.4 before the passes were shared), the GPU 3.5 (4.7).
+  Where both eyes have an override and `GpuRenderer::CanRenderEyes` (no kept buffers, world
+  ahead or trails, a world without REFRACT_WORLD draws, whose world passes before the frame
+  each eye would draw of its own) `VrFrame` draws them in one go
+  (`RenderEyesToOutputs`): `Render` takes the second eye (`Impl::SecondEye`), plans both in
+  one walk (`EyeDrawOf` per eye into `eye_drawn[2]`) and one upload, then records each
+  view in turn, each in a command buffer of its own with its own timings, output and
+  fence, the first's submitted before the second is recorded. The second view's own
+  instance worlds and bones go after the walk's where the crowd near its eye is squashed
+  otherwise; it records again only the texture passes it must (`redraw1`): those with a
+  draw it sees itself, every pass into a target several of the frame's passes draw into
+  one layer (a character's shadow map, NgLight's shadow: by the second view it holds only
+  its last version, which the earlier reads would see), and from those on every pass into
+  a target one of them draws or sampling one. Its stats are its recording alone
+  (`stats[1]`); the first's have the plan and the upload. On the twelve captures the eyes
+  are the same pictures, pixel for pixel (the first try, without the shadow maps' rule,
+  gave four right eyes with a band member's self-shadows of the last member's map), and
+  the two eyes' CPU went from a mean 4.2 to 3.7 ms a frame at 2644x2644 (the GPU 3.5). The overlay's draws (`soft_raster.h`'s `OnHud`, from
   `vr_pose.h`'s `HudBoundary`: `post_boundary`, or 0 for a frame the eyes can't see) are
   drawn alone as the HUD panel (`BackBufferPart::kHud`): transparent black, alpha as
   coverage, premultiplied (`native_view_replay --overlay-only`, `--split-check`). Draws that

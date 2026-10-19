@@ -665,6 +665,21 @@ class GpuRenderer {
     static constexpr int HudSlot() { return kOutputs + kEyeOutputs; }
     bool RenderFrameToOutput(const FrameCapture& frame, const RasterOptions& options, int slot,
                              GpuOutput& out, GpuStats& stats);
+    // VR's two eyes of one capture in one go (vr_shared_eyes): each as
+    // RenderFrameToOutput draws it with RasterOptions::eye_override
+    // `eyes[e]` into `slots[e]`, from one plan (one walk and upload, the
+    // texture passes neither eye sees drawn once), each eye's world and its
+    // own passes recorded, submitted and fenced apart, the first's first.
+    // stats[0] has the plan and the upload, stats[1] the second eye's
+    // recording and submitting alone. Only where CanRenderEyes; false as
+    // RenderFrame.
+    bool RenderEyesToOutputs(const FrameCapture& frame, const RasterOptions& options,
+                             const vr::EyeOverride* const eyes[2], const int slots[2],
+                             GpuOutput out[2], GpuStats stats[2]);
+    // whether `frame` drawn with `options` can be: no kept buffers, world
+    // ahead or trails, and a world without REFRACT_WORLD draws (whose world
+    // passes before the frame each eye draws of its own)
+    static bool CanRenderEyes(const FrameCapture& frame, const RasterOptions& options);
     // Whether the GPU has finished `slot`'s last frame; never waits (SDL_gpu's
     // wait has no timeout and the caller watches for hangs), so poll it. True
     // with nothing in flight or no device. Once finished, fills `times` with

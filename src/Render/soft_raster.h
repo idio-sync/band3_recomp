@@ -251,9 +251,11 @@ struct RasterOptions {
     bool keep_carried = false;
     // GPU, VR's second eye (vr_shared_eyes), drawn just after the first from
     // the same capture: a texture pass none of whose draws is seen through
-    // `eye_view_proj` (this eye's world camera, vr::RePose's) is the same for
-    // both, and isn't drawn again while its target's layer holds the version
-    // it makes, drawn with the same options (gpu_view.h's KeepsEyePass)
+    // `eye_view_proj` (the matrix the eye moves, as the frame drawn has it:
+    // vr::RePose's new one in its copy, the captured one with eye_override)
+    // is the same for both, and isn't drawn again while its target's layer
+    // holds the version it makes, drawn with the same options (gpu_view.h's
+    // KeepsEyePass)
     bool keep_eye_passes = false;
     Mat4 eye_view_proj{};
     // GPU, VR's eye drawn from the capture itself rather than vr::RePose's
