@@ -603,10 +603,12 @@ public:
         render::vr::EyeCamsOf(layout, eo.eye_cams, render::RasterOptions::kEyeCams);
         // Both eyes as VrFrame draws them with vr_shared_eyes, where no
         // session holds the eyes' outputs: from the capture itself in one go
-        // (RenderEyesToOutputs into them, waited for); the overrides' making
-        // into `make_ms`. False where VrFrame draws them one at a time.
+        // (RenderEyesToOutputs into them), waited for inside (`wait`, for
+        // the timings) or, as VrFrame, by polling OutputDone after; the
+        // overrides' making into `make_ms`. False where VrFrame draws them
+        // one at a time.
         auto both_eyes = [&](const render::RasterOptions& o, render::GpuStats gs[2],
-                             render::vr::EyeOverride ov[2], double* make_ms) {
+                             render::vr::EyeOverride ov[2], double* make_ms, bool wait) {
             if (headset || layout.eyes_black || !REXCVAR_GET(vr_shared_eyes)) return false;
             const auto from = std::chrono::steady_clock::now();
             const bool made = render::vr::EyeOverrideOf(frame, layout.eyes[0], ov[0]) &&
@@ -617,18 +619,23 @@ public:
                                .count();
             if (!made || !render::GpuRenderer::CanRenderEyes(frame, o)) return false;
             render::RasterOptions waited = o;
-            waited.gpu_no_wait = false;
+            waited.gpu_no_wait = !wait;
             const render::vr::EyeOverride* const eyes[2] = {&ov[0], &ov[1]};
             const int slots[2] = {render::GpuRenderer::EyeSlot(0), render::GpuRenderer::EyeSlot(1)};
             render::GpuOutput out[2];
-            return render::GpuRenderer::Get().RenderEyesToOutputs(frame, waited, eyes, slots, out,
-                                                                  gs);
+            if (!render::GpuRenderer::Get().RenderEyesToOutputs(frame, waited, eyes, slots, out,
+                                                                gs))
+                return false;
+            for (int e = 0; !wait && e < 2; e++)
+                while (!render::GpuRenderer::Get().OutputDone(slots[e], &gs[e]))
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            return true;
         };
         bool together = false;
         {
             render::GpuStats gs[2];
             render::vr::EyeOverride ov[2];
-            together = both_eyes(eo, gs, ov, nullptr);
+            together = both_eyes(eo, gs, ov, nullptr, false);
             for (int e = 0; together && e < 2; e++) {
                 std::vector<uint32_t> eye_rgba;
                 uint32_t w = 0, h = 0;
@@ -766,7 +773,7 @@ public:
                             render::GpuStats pair[2];
                             render::vr::EyeOverride ov[2];
                             double make_ms = 0;
-                            if (both_eyes(timed, pair, ov, &make_ms)) {
+                            if (both_eyes(timed, pair, ov, &make_ms, true)) {
                                 together = true;
                                 if (round == 0) continue;
                                 repose[round - 1] = make_ms / 2;
