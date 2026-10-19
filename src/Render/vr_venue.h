@@ -13,10 +13,13 @@
 // Venue units are Milo's inches (kUnitsPerMetre), x right, y forward, z up.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "src/Render/scene_capture.h"
 #include "src/Render/vr_pose.h"
@@ -24,6 +27,33 @@
 namespace band3::render::vr {
 
 inline constexpr int kMaxMembers = 8;
+
+// What stood in a fixed viewpoint's way where PresetAnchor first put it
+// (ClearPlaces, BlockedAt): geometry within kHeadClear of an eye, within
+// kHeadroom above the head, across its line of sight, or close in front
+// (kNearClear: a stage monitor at arm's length)
+inline constexpr uint8_t kBlockedHead = 1, kBlockedHeadroom = 2, kBlockedSight = 4,
+                         kBlockedNear = 8;
+
+// kBlocked* as words, for the log: "head+headroom", say
+inline std::string BlockedNames(uint8_t blocked) {
+    std::string s;
+    for (auto [bit, name] : {std::pair<uint8_t, const char*>{kBlockedHead, "head"},
+                             {kBlockedHeadroom, "headroom"},
+                             {kBlockedSight, "sight"},
+                             {kBlockedNear, "near"}})
+        if (blocked & bit) s += (s.empty() ? "" : "+") + std::string(name);
+    return s.empty() ? "nothing" : s;
+}
+
+// How ClearPlaces moved one fixed viewpoint: venue units, and what was in the
+// way before (kBlocked*) and after (none, unless no place within reach was
+// clear: the least blocked is kept)
+struct Cleared {
+    float shift[3] = {0, 0, 0};
+    uint8_t before = 0, after = 0;
+    bool tested = false;
+};
 
 // The venue as the band and the crowd lay it out (VenueRefOf). Each member
 // is where it stands: the middle of its drawn mesh across the floor, its
@@ -52,12 +82,94 @@ struct VenueRef {
     int crowd = 0;
     int crowd_ahead = 0;
     float crowd_front = 0, crowd_back = 0, audience_floor = 0;
+    // front_row's, on_stage's and venue's moves out of the world's geometry
+    // (ClearPlaces; none until it has looked), which PresetAnchor adds
+    Cleared cleared[3];
     bool Valid() const { return members > 0; }
 };
 
 // `fc`'s world camera's draws of the band and the crowds (mesh_owners); a
 // VenueRef without members if the band isn't in it
 VenueRef VenueRefOf(const FrameCapture& fc);
+
+// The world's triangles a fixed viewpoint keeps clear of (ObstaclesOf), in
+// the world, in runs of up to kRun of one draw's, each run with its box so a
+// query passes over the far ones
+class Obstacles {
+ public:
+    static constexpr uint32_t kRun = 32;
+    // the next triangles are a draw's (the band's, which lines of sight
+    // look past: they're what's looked at)
+    void Begin(bool band);
+    void Add(const float a[3], const float b[3], const float c[3]);
+    // whether a triangle comes within `radius` of `p`
+    bool Near(const float p[3], float radius) const;
+    // the same for triangles not the band's nor lying flat (kFlat: floors,
+    // decks), whose nearest point is ahead along `face` (unit, across the
+    // floor) within the cone of cosine `min_cos`
+    bool NearAhead(const float p[3], float radius, const float face[2], float min_cos) const;
+    // a triangle whose normal is this near up or down lies flat
+    static constexpr float kFlat = 0.9f;
+    // whether the segment from `a` to `b` crosses a triangle (not the
+    // band's with `past_band`)
+    bool Crosses(const float a[3], const float b[3], bool past_band) const;
+    size_t Triangles() const { return tris_.size(); }
+
+ private:
+    struct Run {
+        float lo[3], hi[3];
+        uint32_t first = 0, count = 0;
+        bool band = false;
+    };
+    std::vector<Run> runs_;
+    std::vector<std::array<float, 9>> tris_;
+    bool band_ = false;
+};
+
+// `fc`'s world camera's draws before post-processing, as Obstacles, of those
+// whose box comes within `reach` of one of `points`: the solid and
+// alpha-blended ones, the band's among them, but not the crowds' (squashed
+// near the eye: Eye::crowd_clear), additive light (beams, flares) or
+// billboards
+Obstacles ObstaclesOf(const FrameCapture& fc, const std::vector<std::array<float, 3>>& points,
+                      float reach);
+
+// The clearances ClearPlaces keeps, in the viewer's metres (`units`): no
+// triangle within kHeadClear of either eye (kIpd apart), none within
+// kHeadroom over the head, nothing but the band across the lines of sight
+// (to the band's middle at kChest over the stage floor, from front_row and
+// venue; straight ahead from on_stage, which faces the audience; and
+// kSightSpread to either side of it), their first kSightClear (venue's all
+// the way but the stage's last kStageSight: a beam or a balcony between it
+// and the band), and nothing standing (not lying flat: Obstacles::kFlat)
+// within kNearClear in front, kNearCone either side
+inline constexpr float kHeadClear = 0.3f, kIpd = 0.064f, kHeadroom = 0.5f, kSightClear = 1.0f;
+inline constexpr float kChest = 1.2f, kSightSpread = 0.26f;  // 15 degrees
+inline constexpr float kStageSight = 3.0f;
+inline constexpr float kNearClear = 0.75f, kNearCone = 0.61f;  // 35 degrees
+
+// What's in the way of a head at `eye` (venue units) facing `face` (along the
+// floor, unit) and looking at `look` (kBlocked*), its line of sight checked
+// for `sight` venue units (at most to `look`), `units` venue units a metre
+uint8_t BlockedAt(const Obstacles& o, const float eye[3], const float face[2], const float look[3],
+                  float sight, float units);
+
+// Each fixed viewpoint moved out of `o`'s geometry, into `r.cleared`: where
+// PresetAnchor puts it, else the nearest place clear of it (BlockedAt) of
+// those its mode may step to, `units` venue units a metre:
+//   front_row  back into the crowd (away from the stage) up to 2 m, 0.25 or
+//              0.5 m either side and up to 0.3 m up
+//   on_stage   upstage up to 1.5 m and 0.25 or 0.5 m either side, still 0.9 m
+//              from every member
+//   venue      back up to 3 m, and down (to the audience's floor's eye height
+//              at least) up to 2 m or up to 1 m: a low ceiling lowers it
+// without a clear one, the least blocked of them (the head worst, then the
+// headroom, the sight line, something close in front), the nearest of those.
+void ClearPlaces(const Obstacles& o, VenueRef& r, float units);
+
+// ClearPlaces with `fc`'s obstacles near the three places and along venue's
+// line of sight
+void ClearPlaces(const FrameCapture& fc, VenueRef& r, float units);
 
 // Moves a fixed viewpoint from where VenueRefOf puts it (vr_viewpoint_offset):
 // metres to its right, ahead and up, and degrees turned counterclockwise
@@ -112,7 +224,8 @@ inline constexpr float kEyeHeight = 1.7f;
 //              in front (15 m past the front-most member without one), raised
 //              0.35 of its distance from the band above the stage floor (2.5
 //              to 7 m), facing the band
-// then moved by `off`. False for game_camera or without members.
+// then moved out of the world's geometry (`r.cleared`, ClearPlaces') and by
+// `off`. False for game_camera or without members.
 bool PresetAnchor(ViewMode mode, const VenueRef& r, const ViewOffset& off, float units,
                   Anchor& out);
 
@@ -133,14 +246,17 @@ inline const char* ViewModeName(ViewMode m) {
 }
 
 // The reference a song's fixed viewpoints use (xr_present.cpp's LayoutFor):
-// taken from the song's frames as they come, kept for the song, and taken
-// again only from a frame with more of the band than it had (a member hidden
-// as the song began) or the crowd it lacked; forgotten when the song ends,
-// so the next song's venue is found afresh. `Next` returns whether the
-// reference changed.
+// taken from the song's frames seen from one (`fixed`: only then is the
+// whole band drawn in every shot) as they come, kept for the song (through
+// the game camera's window too), and taken again only from a frame with more
+// of the band than it had (a member hidden as the song began) or the crowd it
+// lacked; forgotten when the song ends, so the next song's venue is found
+// afresh. Each one taken is cleared of the frame's geometry (ClearPlaces), and
+// cleared again for another viewer's height (`units`, venue units a metre).
+// `Next` returns whether the reference changed.
 class VenueTracker {
  public:
-    bool Next(const FrameCapture& fc, bool in_song) {
+    bool Next(const FrameCapture& fc, bool in_song, bool fixed, float units) {
         if (!in_song) {
             in_song_ = false;
             return false;
@@ -150,6 +266,13 @@ class VenueTracker {
             ref_ = {};
             tried_band_ = 0;
             tried_crowd_ = false;
+        }
+        if (!fixed) return false;
+        // a taller or shorter viewer: the places looked at again
+        if (ref_.Valid() && units != units_) {
+            units_ = units;
+            ClearPlaces(fc, ref_, units);
+            return true;
         }
         // what the frame has, before working it out (once for each more
         // member, and once for a first crowd)
@@ -168,11 +291,13 @@ class VenueTracker {
         if (!more_band && !first_crowd) return false;
         tried_band_ = std::max(tried_band_, band);
         tried_crowd_ |= crowd && band > 0;
-        const VenueRef r = VenueRefOf(fc);
+        VenueRef r = VenueRefOf(fc);
         const bool better = r.members > ref_.members ||
                             (r.members == ref_.members && r.crowd > 0 && ref_.crowd == 0);
         if (!r.Valid() || !better) return false;
+        ClearPlaces(fc, r, units);
         ref_ = r;
+        units_ = units;
         return true;
     }
     const VenueRef& Ref() const { return ref_; }
@@ -180,6 +305,7 @@ class VenueTracker {
  private:
     bool in_song_ = false;
     VenueRef ref_;
+    float units_ = 0;
     int tried_band_ = 0;
     bool tried_crowd_ = false;
 };

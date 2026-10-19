@@ -211,7 +211,9 @@ PixelIn VSMain(VertexIn v) {
             wu = mul(float4(tangent, 0), b).xyz;
         }
     } else if ((vs_shade.flags.x & kShadeBillboard) != 0u) {
-        wp = Billboard(vs_shade, v.pos) + world_m[3].xyz;
+        // its corners scaled by the world's m[3][3]: 1, or 0 where VR's eye
+        // squashes a crowd card near it (vr::SquashMatrix)
+        wp = Billboard(vs_shade, v.pos) * world_m[3].w + world_m[3].xyz;
         wn = Billboard(vs_shade, nrm);
         wd = Billboard(vs_shade, dir);
         wu = Billboard(vs_shade, tangent);

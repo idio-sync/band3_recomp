@@ -19,7 +19,8 @@
 // in place, which the projected light's draws read; that a normal map a
 // texture pass draws (a head's) is that pass's target, which tilts the
 // normal of the draw after it in the frame its tangents give; that a
-// crowd billboard's quad is turned to the camera; that the back buffer starts
+// crowd billboard's quad is turned to the camera, and squashed with VR's
+// eye's squash (its world's m[3][3] 0) draws nothing; that the back buffer starts
 // as the frame's clear colour and its DrawRect quads are drawn, but the post
 // copy; and that a camera draws in its viewport, layered with the others by
 // their z ranges, with no depth clear between them (but in a capture from
@@ -44,6 +45,7 @@
 #include "src/Render/post_model.h"
 #include "src/Render/soft_raster.h"
 #include "src/Render/spot_model.h"
+#include "src/Render/vr_pose.h"
 
 using namespace band3::render;
 
@@ -660,6 +662,11 @@ TEST_CASE("a crowd billboard's quad, in its mesh's XZ, is turned to the camera")
     Rasterize(f, Small(), rgba);
     for (int y = 0; y < 4; y++)
         for (int x = 0; x < 8; x++) CHECK((rgba[y * 8 + x] == kGreen) == (x >= 4));
+    // squashed as VR's eye squashes a card by it (vr::SquashMatrix), it draws
+    // nothing: its corners are scaled by the world's m[3][3], not its axes
+    vr::SquashMatrix(f.draws[0].world);
+    Rasterize(f, Small(), rgba);
+    CHECK(std::count(rgba.begin(), rgba.end(), kGreen) == 0);
 }
 
 TEST_CASE("a mesh's edges land on the game's pixels, D3D9's; a DrawRect quad's on D3D10's") {

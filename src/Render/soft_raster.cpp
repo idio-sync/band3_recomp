@@ -937,9 +937,12 @@ void DrawOne(const DrawItem& it, int32_t index, const ShadeState* state, const R
                 if (ds.normal_map) Dir(tangent, it.bones[0], wu);
             }
         } else if (billboard) {
-            // turned to the camera at the instance's translation
+            // turned to the camera at the instance's translation, its corners
+            // scaled by m[3][3] (1, or 0 squashed: vr::SquashMatrix)
             const float zero[3] = {0, 0, 0};
-            shade::BillboardCpu(ds.shade, v.pos, it.world.m[3], wp);
+            const float s = it.world.m[3][3];
+            const float corner[3] = {v.pos[0] * s, v.pos[1] * s, v.pos[2] * s};
+            shade::BillboardCpu(ds.shade, corner, it.world.m[3], wp);
             shade::BillboardCpu(ds.shade, nrm, zero, wn);
             if (ao_sh) shade::BillboardCpu(ds.shade, dir, zero, wd);
             if (ds.normal_map) shade::BillboardCpu(ds.shade, tangent, zero, wu);

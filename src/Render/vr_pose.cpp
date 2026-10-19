@@ -334,6 +334,8 @@ bool NearEye(const DrawItem& d, const float eye[3], float radius) {
 void SquashMatrix(Mat4& m) {
     for (int r = 0; r < 3; r++)
         for (int c = 0; c < 4; c++) m.m[r][c] = 0;
+    // a billboard's corners' scale
+    m.m[3][3] = 0;
 }
 
 bool EyeOverrideOf(const FrameCapture& in, const Eye& eye, EyeOverride& out) {
@@ -742,12 +744,370 @@ bool PresetAnchor(ViewMode mode, const VenueRef& r, const ViewOffset& off, float
     }
     // the facing's right (x right of y forward): (f.y, -f.x)
     const float right[2] = {face[1], -face[0]};
+    const float* shift = r.cleared[int(mode) - int(ViewMode::kFrontRow)].shift;
     for (int c = 0; c < 2; c++)
-        out.pos[c] = r.centre[c] + depth * r.toward[c] + side * r.across[c] +
+        out.pos[c] = r.centre[c] + depth * r.toward[c] + side * r.across[c] + shift[c] +
                      off.right * metre * right[c] + off.ahead * metre * face[c];
-    out.pos[2] = z + off.up * metre;
+    out.pos[2] = z + shift[2] + off.up * metre;
     out.yaw = std::atan2(-face[0], face[1]) + off.yaw_deg * 3.14159265f / 180;
     return true;
+}
+
+namespace {
+
+// the point of triangle abc nearest p (Ericson, Real-Time Collision
+// Detection 5.1.5) into q, its squared distance
+float DistanceSq(const float* p, const float* a, const float* b, const float* c, float q[3]) {
+    float ab[3], ac[3], ap[3];
+    for (int k = 0; k < 3; k++) {
+        ab[k] = b[k] - a[k];
+        ac[k] = c[k] - a[k];
+        ap[k] = p[k] - a[k];
+    }
+    auto dot = [](const float* x, const float* y) { return x[0] * y[0] + x[1] * y[1] + x[2] * y[2]; };
+    auto at = [&](float v, float w) {
+        for (int k = 0; k < 3; k++) q[k] = a[k] + ab[k] * v + ac[k] * w;
+        const float d[3] = {p[0] - q[0], p[1] - q[1], p[2] - q[2]};
+        return dot(d, d);
+    };
+    const float d1 = dot(ab, ap), d2 = dot(ac, ap);
+    if (d1 <= 0 && d2 <= 0) return at(0, 0);
+    float bp[3], cp[3];
+    for (int k = 0; k < 3; k++) {
+        bp[k] = p[k] - b[k];
+        cp[k] = p[k] - c[k];
+    }
+    const float d3 = dot(ab, bp), d4 = dot(ac, bp);
+    if (d3 >= 0 && d4 <= d3) return at(1, 0);
+    const float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0 && d1 >= 0 && d3 <= 0) return at(d1 / (d1 - d3), 0);
+    const float d5 = dot(ab, cp), d6 = dot(ac, cp);
+    if (d6 >= 0 && d5 <= d6) return at(0, 1);
+    const float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0 && d2 >= 0 && d6 <= 0) return at(0, d2 / (d2 - d6));
+    const float va = d3 * d6 - d5 * d4;
+    if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
+        const float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return at(1 - w, w);
+    }
+    const float denom = 1 / (va + vb + vc);
+    return at(vb * denom, vc * denom);
+}
+
+// whether segment o + t d (t 0..1) crosses triangle abc (Moller-Trumbore),
+// either side
+bool SegmentCrosses(const float* o, const float* d, const float* a, const float* b, const float* c) {
+    float e1[3], e2[3];
+    for (int k = 0; k < 3; k++) {
+        e1[k] = b[k] - a[k];
+        e2[k] = c[k] - a[k];
+    }
+    const float p[3] = {d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2],
+                        d[0] * e2[1] - d[1] * e2[0]};
+    const float det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2];
+    if (std::fabs(det) < 1e-12f) return false;
+    const float inv = 1 / det;
+    const float s[3] = {o[0] - a[0], o[1] - a[1], o[2] - a[2]};
+    const float u = (s[0] * p[0] + s[1] * p[1] + s[2] * p[2]) * inv;
+    if (u < 0 || u > 1) return false;
+    const float q[3] = {s[1] * e1[2] - s[2] * e1[1], s[2] * e1[0] - s[0] * e1[2],
+                        s[0] * e1[1] - s[1] * e1[0]};
+    const float v = (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]) * inv;
+    if (v < 0 || u + v > 1) return false;
+    const float t = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) * inv;
+    return t >= 0 && t <= 1;
+}
+
+}  // namespace
+
+void Obstacles::Begin(bool band) {
+    band_ = band;
+    runs_.push_back({});
+    runs_.back().band = band;
+}
+
+void Obstacles::Add(const float a[3], const float b[3], const float c[3]) {
+    if (runs_.empty() || runs_.back().count == kRun) Begin(band_);
+    Run& run = runs_.back();
+    if (!run.count) {
+        run.first = uint32_t(tris_.size());
+        for (int k = 0; k < 3; k++) {
+            run.lo[k] = 1e30f;
+            run.hi[k] = -1e30f;
+        }
+    }
+    std::array<float, 9> t;
+    for (int k = 0; k < 3; k++) {
+        t[k] = a[k];
+        t[3 + k] = b[k];
+        t[6 + k] = c[k];
+        run.lo[k] = std::fmin(run.lo[k], std::fmin(a[k], std::fmin(b[k], c[k])));
+        run.hi[k] = std::fmax(run.hi[k], std::fmax(a[k], std::fmax(b[k], c[k])));
+    }
+    tris_.push_back(t);
+    run.count++;
+}
+
+bool Obstacles::Near(const float p[3], float radius) const {
+    return NearAhead(p, radius, nullptr, 0);
+}
+
+bool Obstacles::NearAhead(const float p[3], float radius, const float face[2],
+                          float min_cos) const {
+    const float r2 = radius * radius;
+    for (const Run& run : runs_) {
+        if (!run.count || (face && run.band)) continue;
+        float d2 = 0;
+        for (int k = 0; k < 3; k++) {
+            const float e = p[k] < run.lo[k] ? run.lo[k] - p[k] : p[k] > run.hi[k] ? p[k] - run.hi[k] : 0;
+            d2 += e * e;
+        }
+        if (d2 > r2) continue;
+        for (uint32_t i = run.first; i < run.first + run.count; i++) {
+            const float* t = tris_[i].data();
+            float q[3];
+            if (DistanceSq(p, t, t + 3, t + 6, q) > r2) continue;
+            if (!face) return true;
+            // a floor (or a deck, a table's top) underfoot isn't in the way
+            const float e1[3] = {t[3] - t[0], t[4] - t[1], t[5] - t[2]};
+            const float e2[3] = {t[6] - t[0], t[7] - t[1], t[8] - t[2]};
+            const float n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
+                                e1[0] * e2[1] - e1[1] * e2[0]};
+            const float nn = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            if (!(nn > 0) || std::fabs(n[2]) > kFlat * nn) continue;
+            // ahead across the floor, within the cone
+            const float d[2] = {q[0] - p[0], q[1] - p[1]};
+            const float dl = std::sqrt(d[0] * d[0] + d[1] * d[1]);
+            if (dl > 1e-3f && d[0] * face[0] + d[1] * face[1] >= min_cos * dl) return true;
+        }
+    }
+    return false;
+}
+
+bool Obstacles::Crosses(const float a[3], const float b[3], bool past_band) const {
+    const float d[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+    float lo[3], hi[3];
+    for (int k = 0; k < 3; k++) {
+        lo[k] = std::fmin(a[k], b[k]);
+        hi[k] = std::fmax(a[k], b[k]);
+    }
+    for (const Run& run : runs_) {
+        if (!run.count || (past_band && run.band)) continue;
+        bool apart = false;
+        for (int k = 0; k < 3; k++) apart |= run.hi[k] < lo[k] || run.lo[k] > hi[k];
+        if (apart) continue;
+        for (uint32_t i = run.first; i < run.first + run.count; i++) {
+            const float* t = tris_[i].data();
+            if (SegmentCrosses(a, d, t, t + 3, t + 6)) return true;
+        }
+    }
+    return false;
+}
+
+Obstacles ObstaclesOf(const FrameCapture& fc, const std::vector<std::array<float, 3>>& points,
+                      float reach) {
+    Obstacles o;
+    const WorldCamera cam = WorldCameraOf(fc);
+    if (!cam.valid) return o;
+    std::vector<MeshOwner> owners = fc.mesh_owners;
+    std::sort(owners.begin(), owners.end(),
+              [](const MeshOwner& a, const MeshOwner& b) { return a.mesh < b.mesh; });
+    const size_t end = fc.post_boundary == FrameCapture::kNoPost
+                           ? fc.draws.size()
+                           : std::min<size_t>(fc.post_boundary, fc.draws.size());
+    std::vector<std::array<float, 3>> world;
+    for (size_t i = 0; i < end; i++) {
+        const DrawItem& d = fc.draws[i];
+        if (d.target != 0 || d.rect_shader >= 0 || d.draw_mode != kDrawModeNormal || !d.geom ||
+            d.geom->verts.empty() || d.geom->indices.size() < 3 ||
+            std::memcmp(&d.view_proj, &cam.view_proj, sizeof(Mat4)) != 0)
+            continue;
+        // solid (RndMat::Blend Src), alpha blended (SrcAlpha, PreMultAlpha)
+        // or cut out; not light added on (Add, SrcAlphaAdd) or the rest
+        if (d.blend != 1 && d.blend != 3 && d.blend != 7 && !d.alpha_cut) continue;
+        if (d.shade >= 0 && size_t(d.shade) < fc.shades.size() &&
+            fc.shades[size_t(d.shade)].Option(shader_opt::kBillboard))
+            continue;
+        auto own = std::lower_bound(owners.begin(), owners.end(), d.mesh,
+                                    [](const MeshOwner& m, uint32_t mesh) { return m.mesh < mesh; });
+        const bool owned = own != owners.end() && own->mesh == d.mesh;
+        if (owned && own->kind == kOwnerCrowd) continue;
+        world.resize(d.geom->verts.size());
+        float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+        for (size_t v = 0; v < world.size(); v++) {
+            freecam::WorldPos(d, d.geom->verts[v], world[v].data());
+            for (int k = 0; k < 3; k++) {
+                lo[k] = std::fmin(lo[k], world[v][k]);
+                hi[k] = std::fmax(hi[k], world[v][k]);
+            }
+        }
+        bool near = false;
+        for (size_t p = 0; p < points.size() && !near; p++) {
+            float d2 = 0;
+            for (int k = 0; k < 3; k++) {
+                const float q = points[p][k];
+                const float e = q < lo[k] ? lo[k] - q : q > hi[k] ? q - hi[k] : 0;
+                d2 += e * e;
+            }
+            near = d2 <= reach * reach;
+        }
+        if (!near) continue;
+        o.Begin(owned && own->kind == kOwnerBand);
+        const std::vector<uint16_t>& ix = d.geom->indices;
+        for (size_t t = 0; t + 2 < ix.size(); t += 3) {
+            if (ix[t] >= world.size() || ix[t + 1] >= world.size() || ix[t + 2] >= world.size())
+                continue;
+            o.Add(world[ix[t]].data(), world[ix[t + 1]].data(), world[ix[t + 2]].data());
+        }
+    }
+    return o;
+}
+
+uint8_t BlockedAt(const Obstacles& o, const float eye[3], const float face[2], const float look[3],
+                  float sight, float units) {
+    uint8_t blocked = 0;
+    const float right[2] = {face[1], -face[0]};
+    const float half = kIpd / 2 * units;
+    for (int s = -1; s <= 1; s += 2) {
+        const float e[3] = {eye[0] + s * half * right[0], eye[1] + s * half * right[1], eye[2]};
+        if (o.Near(e, kHeadClear * units)) blocked |= kBlockedHead;
+    }
+    const float up[3] = {eye[0], eye[1], eye[2] + kHeadroom * units};
+    if (o.Crosses(eye, up, false)) blocked |= kBlockedHeadroom;
+    if (o.NearAhead(eye, kNearClear * units, face, std::cos(kNearCone))) blocked |= kBlockedNear;
+    // the line of sight and kSightSpread either side of it, across the floor
+    float d[3] = {look[0] - eye[0], look[1] - eye[1], look[2] - eye[2]};
+    const float len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (len > 1e-3f && sight > 0) {
+        const float reach = std::fmin(sight, len);
+        for (float& c : d) c *= reach / len;
+        for (int s = -1; s <= 1; s++) {
+            // turned about z by s * kSightSpread
+            const float cs = std::cos(s * kSightSpread), sn = std::sin(s * kSightSpread);
+            const float end[3] = {eye[0] + d[0] * cs - d[1] * sn, eye[1] + d[0] * sn + d[1] * cs,
+                                  eye[2] + d[2]};
+            if (o.Crosses(eye, end, true)) blocked |= kBlockedSight;
+        }
+    }
+    return blocked;
+}
+
+namespace {
+
+// how bad what's in the way is: the head worst, then the headroom, the
+// sight, something close in front
+int Badness(uint8_t blocked) {
+    return (blocked & kBlockedHead ? 8 : 0) + (blocked & kBlockedHeadroom ? 4 : 0) +
+           (blocked & kBlockedSight ? 2 : 0) + (blocked & kBlockedNear ? 1 : 0);
+}
+
+}  // namespace
+
+void ClearPlaces(const Obstacles& o, VenueRef& r, float units) {
+    for (Cleared& c : r.cleared) c = {};
+    if (!r.Valid()) return;
+    // the steps are the viewer's metres (vr_world_scale's)
+    const float metre = units;
+    // the band's middle at chest height, which front_row and venue look at
+    const float chest[3] = {r.centre[0], r.centre[1], r.centre[2] + kChest * units};
+    for (int m = 0; m < 3; m++) {
+        const ViewMode mode = ViewMode(int(ViewMode::kFrontRow) + m);
+        Anchor base;
+        if (!PresetAnchor(mode, r, {}, units, base)) continue;
+        const float face[2] = {-std::sin(base.yaw), std::cos(base.yaw)};
+        const float right[2] = {face[1], -face[0]};
+        // the steps this mode may take: back (against its facing), to its
+        // right, up; each step's cost the distance, sideways and down dearer
+        struct Step {
+            float back, side, up, cost;
+        };
+        std::vector<Step> steps;
+        auto add = [&](float back, float side, float up, float cost) {
+            steps.push_back({back, side, up, cost});
+        };
+        if (mode == ViewMode::kFrontRow) {
+            for (int b = 0; b <= 20; b++)
+                for (float side : {0.0f, -0.25f, 0.25f, -0.5f, 0.5f})
+                    for (float up : {0.0f, 0.15f, 0.3f})
+                        add(0.1f * b, side, up, 0.1f * b + 1.5f * std::fabs(side) + 2 * up);
+        } else if (mode == ViewMode::kOnStage) {
+            for (int b = 0; b <= 15; b++)
+                for (float side : {0.0f, -0.25f, 0.25f, -0.5f, 0.5f})
+                    add(0.1f * b, side, 0, 0.1f * b + 1.5f * std::fabs(side));
+        } else {
+            for (int b = 0; b <= 12; b++)
+                for (int u = -8; u <= 4; u++)
+                    add(0.25f * b, 0, 0.25f * u, 0.25f * b + (u < 0 ? 0.25f : 0.375f) * std::abs(u));
+        }
+        std::stable_sort(steps.begin(), steps.end(),
+                         [](const Step& a, const Step& b) { return a.cost < b.cost; });
+        // venue keeps a standing viewer's height over the audience's floor
+        const float lowest = (r.crowd_ahead ? r.audience_floor : r.centre[2] - 1.2f * kUnitsPerMetre) +
+                             kEyeHeight * units;
+        Cleared& out = r.cleared[m];
+        out.tested = true;
+        int best = 1 << 30;
+        for (const Step& s : steps) {
+            float eye[3];
+            for (int c = 0; c < 2; c++)
+                eye[c] = base.pos[c] + (-s.back * face[c] + s.side * right[c]) * metre;
+            eye[2] = base.pos[2] + s.up * metre;
+            if (mode == ViewMode::kVenue && s.up < 0 && eye[2] < lowest) continue;
+            if (mode == ViewMode::kOnStage) {
+                // still clear of the members, as PresetAnchor's grid keeps it
+                bool close = false;
+                for (int k = 0; k < r.members; k++)
+                    close |= std::hypot(eye[0] - r.member[k][0], eye[1] - r.member[k][1]) <
+                             0.9f * kUnitsPerMetre;
+                if (close) continue;
+            }
+            // on_stage looks out at the audience, the others at the band:
+            // from the venue's distance all the way, but for the stage's
+            // own last few metres (its monitors, mic stands, the kit)
+            float look[3] = {chest[0], chest[1], chest[2]};
+            if (mode == ViewMode::kOnStage)
+                for (int c = 0; c < 3; c++) look[c] = eye[c] + (c < 2 ? face[c] * 5 * metre : 0);
+            float sight = kSightClear * units;
+            if (mode == ViewMode::kVenue)
+                sight = std::hypot(look[0] - eye[0], look[1] - eye[1], look[2] - eye[2]) -
+                        kStageSight * units;
+            const uint8_t blocked = BlockedAt(o, eye, face, look, sight, units);
+            // the first step is PresetAnchor's place itself (cost 0)
+            if (s.cost == 0) out.before = blocked;
+            if (Badness(blocked) < best) {
+                best = Badness(blocked);
+                out.after = blocked;
+                for (int c = 0; c < 3; c++) out.shift[c] = eye[c] - base.pos[c];
+            }
+            if (!blocked) break;
+        }
+    }
+}
+
+void ClearPlaces(const FrameCapture& fc, VenueRef& r, float units) {
+    for (Cleared& c : r.cleared) c = {};
+    if (!r.Valid()) return;
+    // the farthest any step goes (venue's 3 m back and 2 m down) and what it
+    // then looks at around it
+    const float reach = (3.7f + kSightClear + kHeadClear) * units;
+    std::vector<std::array<float, 3>> at;
+    for (ViewMode mode : {ViewMode::kFrontRow, ViewMode::kOnStage, ViewMode::kVenue}) {
+        Anchor a;
+        if (!PresetAnchor(mode, r, {}, units, a)) continue;
+        at.push_back({a.pos[0], a.pos[1], a.pos[2]});
+        // and venue's whole line of sight to the band, a point every half
+        // reach, so a place it steps to sees what's along its own line
+        if (mode != ViewMode::kVenue) continue;
+        const float chest[3] = {r.centre[0], r.centre[1], r.centre[2] + kChest * units};
+        const float len = std::hypot(chest[0] - a.pos[0], chest[1] - a.pos[1], chest[2] - a.pos[2]);
+        const int steps = std::min(64, int(std::ceil(2 * len / reach)));
+        for (int s = 1; s <= steps; s++) {
+            const float t = float(s) / float(steps);
+            at.push_back({a.pos[0] + (chest[0] - a.pos[0]) * t, a.pos[1] + (chest[1] - a.pos[1]) * t,
+                          a.pos[2] + (chest[2] - a.pos[2]) * t});
+        }
+    }
+    ClearPlaces(ObstaclesOf(fc, at, reach), r, units);
 }
 
 }  // namespace band3::render::vr

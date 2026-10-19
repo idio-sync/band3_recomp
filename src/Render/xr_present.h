@@ -210,8 +210,9 @@ class Session {
 // (native_view.h: InSong and SongScreen), its fade 0. A fixed vr_viewpoint
 // (front_row, on_stage, venue) is placed in the song's venue by
 // vr_venue.h's PresetAnchor, the venue found from the song's frames as they
-// come (VenueTracker, logged as it's found), vr_anchor's place until the band
-// is seen. In songs with vr_track_3d, the capture's track cameras
+// come and its places moved out of the frame's geometry (VenueTracker,
+// ClearPlaces; logged as it's found, with each move), vr_anchor's place until
+// the band is seen. In songs with vr_track_3d, the capture's track cameras
 // (TrackCamerasOf), their poses held by `hold` if given (a camera that moves
 // anyway is logged, at most once a second). With `loaded` (a capture read
 // from a file, the harness's vr_eyes) the venue found so far is left alone

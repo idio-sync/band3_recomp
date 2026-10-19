@@ -868,20 +868,36 @@ public:
             extra += std::format(",\"viewpoint\":\"{}\",\"anchor\":[{:.1f},{:.1f},{:.1f},{:.1f}]",
                                  REXCVAR_GET(vr_viewpoint), a.pos[0], a.pos[1], a.pos[2],
                                  a.yaw * 57.2957795f);
-            const render::vr::VenueRef v =
-                loaded ? render::vr::VenueRefOf(frame) : render::xr::CurrentVenue();
+            render::vr::VenueRef v = render::xr::CurrentVenue();
+            if (loaded) {
+                v = render::vr::VenueRefOf(frame);
+                render::vr::ClearPlaces(
+                    frame, v, render::vr::kUnitsPerMetre * float(REXCVAR_GET(vr_world_scale)));
+            }
             std::string members = "[";
             for (int m = 0; m < v.members; m++)
                 members += std::format("{}[{:.1f},{:.1f},{:.1f}]", m ? "," : "",
                                        v.member[m][0], v.member[m][1], v.member[m][2]);
+            // each fixed viewpoint's move out of the world's geometry
+            // (ClearPlaces): venue units, what was in the way before and after
+            std::string cleared = "[";
+            for (int m = 0; m < 3; m++) {
+                const render::vr::Cleared& c = v.cleared[m];
+                cleared += std::format("{}{{\"shift\":[{:.1f},{:.1f},{:.1f}],\"before\":\"{}\","
+                                       "\"after\":\"{}\"}}",
+                                       m ? "," : "", c.shift[0], c.shift[1], c.shift[2],
+                                       render::vr::BlockedNames(c.before),
+                                       render::vr::BlockedNames(c.after));
+            }
             extra += std::format(
                 ",\"venue\":{{\"members\":{}],\"centre\":[{:.1f},{:.1f},{:.1f}],"
                 "\"toward\":[{:.3f},{:.3f}],\"toward_crowd\":{},\"band_front\":{:.1f},"
                 "\"band_back\":{:.1f},\"band_half\":{:.1f},\"crowd\":{},\"crowd_ahead\":{},"
-                "\"crowd_front\":{:.1f},\"crowd_back\":{:.1f},\"audience_floor\":{:.1f}}}",
+                "\"crowd_front\":{:.1f},\"crowd_back\":{:.1f},\"audience_floor\":{:.1f},"
+                "\"cleared\":{}]}}",
                 members, v.centre[0], v.centre[1], v.centre[2], v.toward[0], v.toward[1],
                 v.toward_crowd ? "true" : "false", v.band_front, v.band_back, v.band_half,
-                v.crowd, v.crowd_ahead, v.crowd_front, v.crowd_back, v.audience_floor);
+                v.crowd, v.crowd_ahead, v.crowd_front, v.crowd_back, v.audience_floor, cleared);
             vr.insert(vr.size() - 1, extra);
         }
         // and beside the pictures, for tools/vr_window_check.py
@@ -1001,7 +1017,9 @@ public:
             render::vr::ViewOffset off;
             render::vr::ParseViewOffset(REXCVAR_GET(vr_viewpoint_offset), off);
             const float units = render::vr::kUnitsPerMetre * float(REXCVAR_GET(vr_world_scale));
-            if (!render::vr::PresetAnchor(mode, render::vr::VenueRefOf(*frame), off, units, at))
+            render::vr::VenueRef ref = render::vr::VenueRefOf(*frame);
+            render::vr::ClearPlaces(*frame, ref, units);
+            if (!render::vr::PresetAnchor(mode, ref, off, units, at))
                 return "no band in " + name + "'s capture to place " +
                        REXCVAR_GET(vr_viewpoint) + " by; give an anchor";
         }

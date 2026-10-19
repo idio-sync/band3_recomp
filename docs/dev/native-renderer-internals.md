@@ -575,15 +575,43 @@ What each does, how it was measured and why it defaults as it does. The
   front_row is 5 m past the front-most member over a floor 1.2 m under the stage's, venue
   15 m. `vr_viewpoint_offset` ("right,ahead,up[,yaw]", metres and degrees in the place's own
   frame) moves it. `xr::LayoutFor`'s `VenueTracker` takes the reference from a song's frames
-  as they come, again only for more of the band or a first crowd, and forgets it outside
-  songs; each one found is logged with the three places (`vr: the venue: ...`). Until then
-  songs are seen from `vr_anchor`. In a song from a fixed viewpoint (with `vr` on)
+  seen from a fixed viewpoint as they come, again only for more of the band or a first
+  crowd, keeps it through the game camera's window and forgets it outside songs; each one
+  found is logged with the three places (`vr: the venue: ...`). Until then songs are seen
+  from `vr_anchor`. Each reference taken is cleared of the frame's geometry (`ClearPlaces`,
+  again for another `vr_world_scale`): `ObstaclesOf` takes the world camera's solid and
+  alpha-blended draws near the three places and along venue's line of sight (the band's
+  among them; not the crowds', squashed anyway, nor additive light or billboards) as world
+  triangles in runs of 32 with their boxes, and `BlockedAt` checks a place: nothing within
+  0.3 m of either eye (`kHeadClear`), within 0.5 m over the head (`kHeadroom`), across the
+  line of sight to the band's middle 1.2 m over the stage floor (straight ahead from
+  on_stage) and 15 degrees either side of it for its first metre (venue's all the way but
+  the stage's last 3 m), or standing (not lying flat: floors and decks don't count) within
+  0.75 m ahead, 35 degrees either side (`kNearClear`: a stage monitor at arm's length). A
+  place blocked steps, nearest first, as its mode may: front_row back into the crowd up to
+  2 m, 0.25 or 0.5 m sideways and up to 0.3 m up; on_stage upstage up to 1.5 m and sideways,
+  still 0.9 m from every member; venue back up to 3 m and down (to a standing viewer's
+  height over the audience) up to 2 m or up to 1 m. Without a clear one it keeps the least
+  blocked (head before headroom before sight before near), nearest. The move is in the log
+  line (`moved x,y,z m from near`) and the harness's `vr` JSON (`venue.cleared`); it costs
+  6 to 20 ms once per reference. In 20th Century Boy (2026-10-18): arena_04 front_row up to
+  0.4 m back from its stage monitors (2.6,-654.3,270.8), big_club_04 front_row 0.1 to 0.2 m
+  back and venue 2 m down from under the ceiling to see the band past a ceiling beam
+  (5.6,-700.7,144.4), festival_01 front_row 0.6 m back off the barrier (-22.9,-760.1,248.4),
+  small_club_01 venue lowered 0.25 m under its low ceiling; on_stage nowhere moved.
+  The black front_row eyes before it (arena_04, -1.3,-638.7,269.5) weren't the place but a
+  crowd card 2 cm from the eye that the squash below left whole: a billboard turns its quad
+  to the eye about the world's translation and ignores the world's axes, so zeroing them
+  didn't shrink it; `SquashMatrix` now also zeroes m[3][3], which scales a billboard's
+  corners (`mesh.hlsl`, `soft_raster.cpp`; 1 in every world the game gives, `ReadXfm`).
+  In a song from a fixed viewpoint (with `vr` on)
   `vr_view.cpp` draws the whole world in every shot as `vr_show_all` does (the hooks' test is
   `vr_show_all` or a fixed viewpoint in a song, `RunFrame` once a frame), and as it starts
   mid-shot undoes the shot that last hid things (`CamShot::UnHide`) and shows every crowd at
   once. The crowds' draws within `vr_crowd_clear` (1.5 m) of an eye across the floor are
   squashed to a point in its capture (`Eye::crowd_clear`, `RePose`: their world's or bones'
-  axes zeroed, so the draws and passes stay), so the eye isn't inside a card.
+  axes zeroed, and the world's m[3][3], which scales a billboard card's corners, so the
+  draws and passes stay), so the eye isn't inside a card.
   In 20th Century Boy (2026-10-18, captures with the stand-in head, no headset) the band
   was four members everywhere: arena_04 stage floor z 256, audience 205, front_row at
   5,-647,272, on_stage 41,-536,323, venue 10,-1082,436 (x,y,z; its drummer on a riser 11 m

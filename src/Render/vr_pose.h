@@ -295,7 +295,12 @@ std::shared_ptr<const Geometry> CutBelowPicture(const DrawItem& d, const ShadeSt
                                                 const Mat4& vp);
 
 // `d`'s world (or a bone) without its axes: drawn as a point where it stands,
-// every triangle empty (EyeDraw::squash)
+// every triangle empty (EyeDraw::squash). A billboard (the crowd's cards)
+// ignores its world's axes, turning its quad to the eye about the world's
+// translation; its corners are scaled by the world's m[3][3] instead
+// (mesh.hlsl, soft_raster.cpp), which a game's world always has 1 (ReadXfm)
+// and this makes 0, so a card squashes too rather than standing full size at
+// the eye.
 void SquashMatrix(Mat4& m);
 
 // whether `cam` is one of `v`'s track cameras, whose draws get the whole

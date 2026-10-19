@@ -53,9 +53,16 @@ void LogVenue(const vr::VenueRef& r, float units) {
     for (vr::ViewMode mode :
          {vr::ViewMode::kFrontRow, vr::ViewMode::kOnStage, vr::ViewMode::kVenue}) {
         vr::Anchor a;
-        if (vr::PresetAnchor(mode, r, {}, units, a))
-            presets += fmt::format(" {} {:.0f},{:.0f},{:.0f},{:.0f}", vr::ViewModeName(mode),
-                                   a.pos[0], a.pos[1], a.pos[2], a.yaw * 57.2957795f);
+        if (!vr::PresetAnchor(mode, r, {}, units, a)) continue;
+        presets += fmt::format(" {} {:.0f},{:.0f},{:.0f},{:.0f}", vr::ViewModeName(mode),
+                               a.pos[0], a.pos[1], a.pos[2], a.yaw * 57.2957795f);
+        // moved out of the world's geometry (ClearPlaces)
+        const vr::Cleared& c = r.cleared[int(mode) - int(vr::ViewMode::kFrontRow)];
+        if (c.before)
+            presets += fmt::format(" (moved {:.2f},{:.2f},{:.2f} m from {}{})",
+                                   c.shift[0] / units, c.shift[1] / units, c.shift[2] / units,
+                                   vr::BlockedNames(c.before),
+                                   c.after ? "; still " + vr::BlockedNames(c.after) : "");
     }
     REXLOG_INFO("vr: the venue: {} band members {}; stage floor z {:.0f}, toward the audience "
                 "{:.2f},{:.2f} ({}); {} crowd points, {} in front from {:.0f} to {:.0f} units "
@@ -85,7 +92,7 @@ vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_s
     vr::VenueRef ref;
     if (!loaded) {
         std::lock_guard lock(g_venue_mutex);
-        if (g_venue.Next(fc, in_song && !vp.window)) LogVenue(g_venue.Ref(), units);
+        if (g_venue.Next(fc, in_song, !vp.window, units)) LogVenue(g_venue.Ref(), units);
         ref = g_venue.Ref();
     }
     if (!vp.window && loaded) {
