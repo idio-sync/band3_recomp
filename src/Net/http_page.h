@@ -46,7 +46,7 @@ header {
 .bar { max-width: 760px; margin: 0 auto; display: flex; gap: 8px; align-items: center; }
 .bar + .bar { margin-top: 8px; }
 h1 { font-size: 18px; margin: 0 8px 0 0; white-space: nowrap; }
-#karaoke-link { color: var(--muted); text-decoration: none; font-size: 14px; white-space: nowrap; }
+#karaoke-link { color: var(--muted); text-decoration: none; font-size: 14px; white-space: nowrap; margin-left: 4px; }
 #karaoke-link:hover { color: var(--accent); }
 /* a dark tile in both themes: the icon's "3" is white */
 .logo {
@@ -92,12 +92,18 @@ a.button {
 .note[hidden] { display: none; }
 .tag.have { color: var(--accent); }
 button.dl { min-width: 104px; }
-/* newer versions of songs band3 downloaded, above RhythmVerse's songs */
-#rv-updates { margin-bottom: 12px; }
-#rv-updates[hidden] { display: none; }
-.updates-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0; font-size: 14px; color: var(--muted); }
-.updates-bar span { flex: 1; min-width: 12em; }
-.updates-bar button { padding: 7px 12px; }
+/* a count of things to do: updates, on their button and the RhythmVerse tab */
+.bubble {
+  display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 6px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-text); font-size: 12px; font-weight: 600;
+  line-height: 18px; text-align: center; vertical-align: 1px;
+}
+/* newer versions of songs band3 downloaded, in a sheet off the Updates button;
+   a row's difficulty is in its details, to keep the sheet short */
+.sheet ul { margin-top: 8px; }
+.sheet li > .meters { display: none; }
+/* the downloads' line above RhythmVerse's songs, and why they're not in the game */
+#rv-note button { background: none; color: var(--accent); font-weight: 500; padding: 0; }
 /* a song in more than one package: each copy, and whether the game has it */
 .dupe {
   display: grid; grid-template-columns: minmax(0, 1fr) auto auto; column-gap: 8px;
@@ -243,8 +249,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
   <div class="bar">
     <img class="logo" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABLElEQVR42sVX7Q6CMAzsNeW/PpvhJcVngwcgsf4RFNxYt3W4hIQAY9ePu7aQ+0ihNfdX8lzdMAWfS2KfOp2P2Aum9gsx608B0D2mQ0+2BgAClgBoCAi3jvt8u2TlgDpa/7FYN4moOSyA8SBrAuILGPYA1MLbnVZUe4wLrbYIVYx+m1BwSezfh2sp9488AK8MTHho9QIX/lgtDJj7azJU3ODwIJA4ANAZKwpCyK+yFVESMoxEum6GQ+JZ2fGmIeDddCBHNdmXfD5K2KT1iumD0FP/YfiacxKqUke8tUqsdT8navnPlVI2YzeNEADUioqFhvt7iXyAxI8WEKgVInFKpmKGcKGguA0nXKFqLsMJ14xVzSejbphqPZFszTizyCAj3qa+ELHxvFRscpXyBalCeV1YdpzwAAAAAElFTkSuQmCC">
     <h1>band3</h1>
-    <a id="karaoke-link" href="/karaoke" target="_blank" rel="noopener">Karaoke</a>
     <input id="search" type="search" placeholder="Search songs, artists, albums" autocomplete="off">
+    <a id="karaoke-link" href="/karaoke" target="_blank" rel="noopener">Karaoke</a>
   </div>
   <div class="bar">
     <div class="tabs" id="tabs" hidden>
@@ -274,6 +280,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
         <option value="length">Shortest</option>
       </select>
       <button id="rv-filter" class="plain">Filters</button>
+      <button id="rv-updates" class="plain" hidden>Updates</button>
     </span>
     <span id="count"></span>
   </div>
@@ -290,14 +297,6 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
     <ul id="hist-list"></ul>
   </section>
   <section id="rv" hidden>
-    <div id="rv-updates" hidden>
-      <div class="updates-bar">
-        <span id="rv-updates-text"></span>
-        <button class="plain" id="rv-check">Check for updates</button>
-        <button id="rv-update-all" hidden>Update all</button>
-      </div>
-      <ul id="rv-update-list"></ul>
-    </div>
     <div class="note" id="rv-note" hidden></div>
     <div id="rv-message"></div>
     <ul id="rv-list"></ul>
@@ -860,6 +859,7 @@ const rv = {
   folder: "",
   updates: null,     // /rv/updates' last answer
   updateRows: new Map(),  // as rows, for the updates' list
+  whyShown: false,   // why downloaded songs aren't in the game yet, asked once
 };
 const searchText = {library: "", rv: "", history: ""};
 
@@ -1081,6 +1081,7 @@ function libraryTag(s) {
   const d = rv.downloads.get(s.file_id);
   const downloaded = rvState(s) && rvState(s).state === "done";
   if (updateAvailable(s)) return ["Update available", "RhythmVerse has a newer version than the one band3 downloaded"];
+  if (updateDownloading(s)) return ["Updating", "Downloading RhythmVerse's newer version"];
   if (updatePending(s)) return ["Updated at next launch", "The newer version is downloaded; band3 puts it in place of the old one (kept as .replaced) when it next starts"];
   if (s.in_library || (d && d.in_library)) return ["In library", "The game has this song (by its song ID)"];
   if (downloaded) return ["Not in game yet", "The game adds it as it did songs from the store: in the Music Library, or after a song that's playing"];
@@ -1111,14 +1112,16 @@ function refreshRow(fileId) {
     const row = rows.get(fileId);
     if (row) row.li.replaceWith(rvRow(row.s, rows));
   }
-  showUpdatesBar();
+  showUpdatesCount();
 }
 
 // ---- updates: newer versions on RhythmVerse of songs band3 downloaded, found
-// by band3's check at launch, a search, or Check for updates (/rv/updates)
+// by band3's check at launch, a search, or Check for updates (/rv/updates), in
+// a sheet off the Updates button, so they don't push RhythmVerse's songs down
 let updatesTimer = null;
 
-function ago(seconds) {
+// as "3 hours ago" (the History tab's ago() is by the day)
+function since(seconds) {
   const s = Math.max(0, Date.now() / 1000 - seconds);
   if (s < 90) return "just now";
   if (s < 90 * 60) return Math.round(s / 60) + " minutes ago";
@@ -1126,31 +1129,74 @@ function ago(seconds) {
   return Math.round(s / 86400) + " days ago";
 }
 
-// what the check says, its buttons, and the count on the tab
-function showUpdatesBar() {
-  const u = rv.updates;
-  const available = u ? u.updates.filter(updateAvailable).length : 0;
-  $("tabs").children[1].textContent = available ? "RhythmVerse (" + available + ")" : "RhythmVerse";
-  if (!u) return;
-  const songs = u.downloads === 1 ? "the song" : "the " + u.downloads + " songs";
-  $("rv-updates-text").textContent = u.checking ? "Checking RhythmVerse for updates…"
-    : u.error ? "Couldn't check for updates: " + u.error
-    : available ? (available === 1 ? "1 update" : available + " updates") + " for songs band3 downloaded"
-    : u.updates.length ? "Updates downloaded, for band3's next launch"
-    : u.checked ? "No updates for " + songs + " band3 downloaded (checked " + ago(u.checked) + ")"
-    : "Not checked for updates yet";
-  $("rv-check").disabled = u.checking;
-  $("rv-check").textContent = u.checking ? "Checking…" : "Check for updates";
-  $("rv-update-all").hidden = available < 2;
+// a newer version being downloaded
+function updateDownloading(s) {
+  const d = rv.downloads.get(s.file_id);
+  return !!(d && d.update && (d.state === "queued" || d.state === "downloading"));
 }
 
-function showUpdates() {
+// a button's label, and a bubble with a count of things to do, if any
+function labelWithCount(button, text, n) {
+  button.textContent = text;
+  if (n) button.append(el("span", "bubble", n));
+}
+
+// the updates to download, counted on the Updates button and the tab
+function showUpdatesCount() {
   const u = rv.updates;
+  const available = u ? u.updates.filter(updateAvailable).length : 0;
+  labelWithCount(document.querySelector('#tabs [data-mode="rv"]'), "RhythmVerse", available);
   // nothing band3 downloaded, nothing to check
-  $("rv-updates").hidden = !u.downloads;
+  $("rv-updates").hidden = !u || !u.downloads;
+  labelWithCount($("rv-updates"), "Updates", available);
+}
+
+function updatesOpen() { return $("sheet").open && $("sheet").dataset.view === "updates"; }
+
+// what the check found: newer versions to download (or downloading), and the
+// ones downloaded for band3's next launch
+function showUpdatesSheet() {
+  const u = rv.updates;
+  const body = $("sheet-body");
+  body.replaceChildren(el("h2", "", "Updates"));
+  const songs = u.downloads === 1 ? "the song" : "the " + u.downloads + " songs";
+  body.append(el("div", "facts", u.checking ? "Checking RhythmVerse for updates…"
+    : u.error ? "Couldn't check for updates: " + u.error
+    : !u.checked ? "Not checked for updates yet."
+    : (u.updates.length ? "Checked " : "No updates for ") + songs + " band3 downloaded " +
+      (u.updates.length ? since(u.checked) + "." : "(checked " + since(u.checked) + ").")));
   rv.updateRows.clear();
-  $("rv-update-list").replaceChildren(...u.updates.map(s => rvRow(s, rv.updateRows)));
-  showUpdatesBar();
+  const newer = u.updates.filter(s => updateAvailable(s) || updateDownloading(s));
+  const ready = u.updates.filter(s => !updateAvailable(s) && !updateDownloading(s) && updatePending(s));
+  if (newer.length) {
+    const list = el("ul");
+    list.append(...newer.map(s => rvRow(s, rv.updateRows)));
+    body.append(el("h3", "", "Newer on RhythmVerse"), list);
+  }
+  if (ready.length) {
+    const list = el("ul");
+    list.append(...ready.map(s => rvRow(s, rv.updateRows)));
+    body.append(el("h3", "", "Ready at next launch"),
+                el("div", "facts", "The game has the old " + (ready.length === 1 ? "version" : "versions") +
+                  " open, so band3 puts the new " + (ready.length === 1 ? "one" : "ones") +
+                  " in place when it next starts, keeping the old beside it as .replaced."),
+                list);
+  }
+  const actions = el("div", "actions");
+  const close = el("button", "plain", "Close");
+  close.onclick = () => $("sheet").close();
+  const check = el("button", "plain", u.checking ? "Checking…" : "Check for updates");
+  check.disabled = u.checking;
+  check.onclick = checkUpdates;
+  actions.append(close, check);
+  const available = u.updates.filter(updateAvailable);
+  if (available.length > 1) {
+    const all = el("button", "", "Update all");
+    // band3 queues them, so all at once
+    all.onclick = () => Promise.all(available.map(s => download(s, true)));
+    actions.append(all);
+  }
+  body.append(actions);
 }
 
 // asked again every couple of seconds while a check runs
@@ -1163,11 +1209,12 @@ async function loadUpdates() {
   } catch (e) {
     return;
   }
-  showUpdates();
+  showUpdatesCount();
+  if (updatesOpen()) showUpdatesSheet();
   if (rv.updates.checking) updatesTimer = setTimeout(loadUpdates, 2000);
 }
 
-$("rv-check").onclick = async () => {
+async function checkUpdates() {
   try {
     const r = await fetch("/rv/check", {
       method: "POST", headers: {"Content-Type": "application/json"}, body: "{}",
@@ -1179,16 +1226,21 @@ $("rv-check").onclick = async () => {
   }
   rv.updates.checking = true;
   rv.updates.error = "";
-  showUpdatesBar();
+  if (updatesOpen()) showUpdatesSheet();
   clearTimeout(updatesTimer);
   updatesTimer = setTimeout(loadUpdates, 1000);
-};
+}
 
-$("rv-update-all").onclick = async () => {
-  for (const s of rv.updates.updates.filter(updateAvailable)) await download(s, true);
+$("rv-updates").onclick = () => {
+  $("sheet").dataset.view = "updates";
+  showUpdatesSheet();
+  if (!$("sheet").open) $("sheet").showModal();
+  loadUpdates();
 };
 
 function openRvSong(s) {
+  // in place of the updates, when it's one of them
+  $("sheet").dataset.view = "";
   const body = $("sheet-body");
   body.replaceChildren(rvArt(s, "cover"), el("h2", "", s.title),
                        el("div", "sub", [s.artist, s.album].filter(Boolean).join(" · ")));
@@ -1309,28 +1361,31 @@ async function pollDownloads() {
       refreshRow(d.file_id);
       busy = busy || d.state === "queued" || d.state === "downloading";
     }
-    const updates = res.downloads.filter(d => d.state === "done" && d.update).length;
+    // an update moving from newer to ready
+    if (updatesOpen()) showUpdatesSheet();
     const done = res.downloads.filter(d => d.state === "done" && !d.update);
     // in_library is null while the game's busy: still waiting, as far as anyone knows
     // only songs with a song ID can be seen joining the game
     const waiting = done.filter(d => d.song_id && !d.in_library).length;
-    const songs = n => n === 1 ? "1 song" : n + " songs";
-    const notes = [];
-    if (done.length) {
-      notes.push(songs(done.length) + " downloaded to " + rv.folder + ". " + (waiting
-        ? (done.length === 1 ? "It's not" : waiting === 1 ? "1 isn't" : waiting + " aren't") +
-          " in the game yet: " +
-          "the game adds songs as it did ones from the store, when you're in the Music Library (or once the song that's playing is over)."
+    // a line above the songs, and why on asking; updates are the Updates sheet's
+    const note = $("rv-note");
+    note.hidden = !done.length;
+    note.replaceChildren((done.length === 1 ? "1 song" : done.length + " songs") + " downloaded to " +
+      rv.folder + ". " + (waiting
+        ? (done.length === 1 ? "It's not" : waiting === 1 ? "1 isn't" : waiting + " aren't") + " in the game yet. "
         : (done.length === 1 ? "It's" : "They're") + " in the game."));
+    const why = "The game adds songs as it did ones from the store: when you're in the Music Library, " +
+                "or once the song that's playing is over.";
+    if (waiting && rv.whyShown) {
+      note.append(why);
+    } else if (waiting) {
+      const b = el("button", "", "Why?");
+      b.onclick = () => { rv.whyShown = true; b.replaceWith(why); };
+      note.append(b);
     }
-    if (updates) {
-      notes.push((updates === 1 ? "1 update" : updates + " updates") + " downloaded: the game has the " +
-        "old version open, so band3 puts the new one in place when it next starts, keeping the old " +
-        "one beside it as .replaced.");
-    }
-    $("rv-note").hidden = !notes.length;
-    $("rv-note").textContent = notes.join(" ");
-    // downloading, every second; waiting for the game, every few
+    // downloading, every second; waiting for the game, every few. One of
+    // these at a time, though downloads started together each ask
+    clearTimeout(downloadsTimer);
     if (!waiting) waitingSince = null;
     else if (waitingSince === null) waitingSince = Date.now();
     if (busy) downloadsTimer = setTimeout(pollDownloads, 1000);
