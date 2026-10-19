@@ -16,6 +16,7 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ca
 | `game_data_root`<br>Game data folder | *(empty)* | text | Override game data path *Applies at the next start.* |
 | `content_folders`<br>Song folders | `songs` | text | Folders RB3 reads DLC and custom songs from, without installing them, separated by '\|'. Subfolders count too. A relative folder is relative to band3_config.ini's folder (or band3's own folder if there is no ini) *Applies at the next start.* |
 | `user_data_root`<br>User data folder | *(empty)* | text | Override user data path *Applies at the next start.* |
+| `allow_game_relative_writes`<br>Allow writes to the game folder | `true` | `true`, `false` | Not useful to non-developers. Allows code to write to paths relative to game://. Used for generating test data to compare with original hardware. |
 
 ### Profile
 
