@@ -93,6 +93,10 @@ struct GpuStats {
     // carried texture passes left undrawn, their targets holding their
     // version already (RasterOptions::keep_carried)
     uint32_t passes_kept = 0;
+    // VR's second eye: texture passes it kept from the first's drawing
+    // (RasterOptions::keep_eye_passes), and those it drew itself because one
+    // of their draws is seen through its own camera
+    uint32_t passes_shared = 0, passes_eye = 0;
     // RasterOptions::hoist_passes (PlanHoist): passes moved ahead of the
     // world, and the layers this frame's renamed targets draw; after the
     // frame, MB of targets' layers past their first (mips a third more)
@@ -440,6 +444,21 @@ inline HoistPlan PlanHoist(const std::vector<HoistRun>& runs, bool rename, bool 
     }
     plan.order.insert(plan.order.end(), stayed.begin(), stayed.end());
     return plan;
+}
+
+// RasterOptions::keep_eye_passes: whether VR's second eye keeps the first
+// eye's drawing of a texture pass rather than drawing it again. Not if any of
+// its draws is seen through the eye's own camera (`sees_eye`: RePose moved
+// it), else if its target was drawn with these options (`drawn_key`, Render's
+// draw_key) and the layer it draws (PlanHoist's, 0 unrenamed) still holds the
+// version it makes. Versions count each draw into a target, so the same
+// version is the same picture; layer_version is empty until the target is
+// drawn, and cleared as it's remade.
+inline bool KeepsEyePass(bool sees_eye, bool drawn, uint64_t drawn_key, uint64_t draw_key,
+                         const std::vector<uint32_t>& layer_version, uint32_t layer,
+                         uint32_t version) {
+    return !sees_eye && drawn && drawn_key == draw_key && layer < layer_version.size() &&
+           layer_version[layer] == version;
 }
 
 // mesh.hlsl's VertexUniforms::instancing: x on, y the first world's index in

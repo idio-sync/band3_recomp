@@ -510,6 +510,7 @@ public:
             "\"uniform_slow_ms\":{:.3f},\"draw_slow_ms\":{:.3f},\"submits\":{:.0f},"
             "\"draws\":{:.0f},\"world_draws\":{:.0f},"
             "\"instanced_draws\":{:.0f},\"passes\":{:.0f},\"passes_kept\":{:.0f},"
+            "\"passes_shared\":{:.0f},\"passes_eye\":{:.0f},"
             "\"gpu_ms\":{:.3f},\"gpu\":{{\"world\":{:.3f},\"pass_other\":{:.3f},"
             "\"pass_shadow\":{:.3f},\"pass_spot\":{:.3f},\"mips\":{:.3f},\"post\":{:.3f},"
             "\"overlay\":{:.3f},\"gamma\":{:.3f},\"upload\":{:.3f},\"idle\":{:.3f}}}}}",
@@ -528,7 +529,9 @@ public:
             mid([](const GpuStats& g) { return g.world_draws; }),
             mid([](const GpuStats& g) { return g.instanced_draws; }),
             mid([](const GpuStats& g) { return g.passes; }),
-            mid([](const GpuStats& g) { return g.passes_kept; }), total, gpu({t::kWorld}),
+            mid([](const GpuStats& g) { return g.passes_kept; }),
+            mid([](const GpuStats& g) { return g.passes_shared; }),
+            mid([](const GpuStats& g) { return g.passes_eye; }), total, gpu({t::kWorld}),
             gpu({t::kPassOther}), gpu({t::kPassShadow}), gpu({t::kPassSpot, t::kPassBlur}),
             gpu({t::kMips}),
             gpu({t::kCopies, t::kVelocity, t::kDof, t::kBloom, t::kComposite}),
@@ -606,8 +609,13 @@ public:
                 eye_rgba.assign(size_t(eo.width) * eo.height, 0xFF000000u);
             } else {
                 render::FrameCapture eye_frame;
-                render::vr::RePose(frame, layout.eyes[e], eye_frame);
-                drew = render::GpuRenderer::Get().RenderFrame(eye_frame, eo, eye_rgba,
+                const render::vr::RePoseStats rs =
+                    render::vr::RePose(frame, layout.eyes[e], eye_frame);
+                // the right keeping the left's shared passes, as VrFrame's
+                render::RasterOptions eye_o = eo;
+                eye_o.keep_eye_passes = e == 1 && REXCVAR_GET(vr_shared_eyes);
+                eye_o.eye_view_proj = rs.view_proj;
+                drew = render::GpuRenderer::Get().RenderFrame(eye_frame, eye_o, eye_rgba,
                                                               eye_stats);
             }
             if (drew)
@@ -705,12 +713,20 @@ public:
                     for (int round = 0; round < 4; round++) {
                         const auto from = std::chrono::steady_clock::now();
                         render::FrameCapture eye_frame;
-                        cleared = render::vr::RePose(frame, layout.eyes[0], eye_frame).crowd_cleared;
+                        const render::vr::RePoseStats rs =
+                            render::vr::RePose(frame, layout.eyes[0], eye_frame);
+                        cleared = rs.crowd_cleared;
                         const double ms = std::chrono::duration<double, std::milli>(
                                               std::chrono::steady_clock::now() - from)
                                               .count();
+                        // the second as the right eye's, keeping the passes
+                        // the first drew that neither sees (vr_shared_eyes)
+                        render::RasterOptions again = timed;
+                        again.keep_eye_passes = REXCVAR_GET(vr_shared_eyes);
+                        again.eye_view_proj = rs.view_proj;
                         render::GpuStats gs[2];
-                        for (render::GpuStats& g : gs) draw_eye(eye_frame, timed, g);
+                        draw_eye(eye_frame, timed, gs[0]);
+                        draw_eye(eye_frame, again, gs[1]);
                         if (round == 0) continue;
                         repose[round - 1] = ms;
                         first[round - 1] = std::move(gs[0]);

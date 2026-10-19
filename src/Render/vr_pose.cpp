@@ -352,6 +352,7 @@ RePoseStats RePose(const FrameCapture& in, const Eye& eye, FrameCapture& out) {
         st.game = game;
         const Mat4 old_vp = cam.view_proj;
         const Mat4 new_vp = freecam::Mul(EyeView(eye), EyeProjection(proj, eye.fov));
+        st.view_proj = new_vp;
         std::vector<int32_t> clone(in.shades.size(), -1);
         // the crowds' meshes, for Eye::crowd_clear
         std::vector<uint32_t> crowd;

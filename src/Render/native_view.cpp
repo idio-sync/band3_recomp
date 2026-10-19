@@ -1480,15 +1480,23 @@ class Renderer {
         std::shared_ptr<FrameCapture> eye_cap[2];
         Drawn d[2];
         double repose_ms[2] = {0, 0};
+        // vr_shared_eyes: the right eye keeps the left's drawing of the
+        // texture passes neither sees itself (RasterOptions::keep_eye_passes)
+        const bool shared = REXCVAR_GET(vr_shared_eyes);
         for (int e = 0; e < 2; e++) {
             eye[e] = layout.eyes[e];
             const auto repose_start = Clock::now();
             eye_cap[e] = std::make_shared<FrameCapture>();
-            vr::RePose(*cap, eye[e], *eye_cap[e]);
+            const vr::RePoseStats rs = vr::RePose(*cap, eye[e], *eye_cap[e]);
             repose_ms[e] =
                 std::chrono::duration<double, std::milli>(Clock::now() - repose_start).count();
-            d[e].drew_output =
-                GpuRenderer::Get().RenderFrameToOutput(*eye_cap[e], eo, slot[e], d[e].out, d[e].gs);
+            RasterOptions eye_o = eo;
+            if (e == 1 && shared && d[0].drew_output) {
+                eye_o.keep_eye_passes = true;
+                eye_o.eye_view_proj = rs.view_proj;
+            }
+            d[e].drew_output = GpuRenderer::Get().RenderFrameToOutput(*eye_cap[e], eye_o, slot[e],
+                                                                      d[e].out, d[e].gs);
             if (d[e].drew_output) t.eye_submitted_ms[e] = at();
             if (e == 0 && left_slot >= 0 && d[e].drew_output) {
                 std::lock_guard lock(mutex_);

@@ -390,7 +390,22 @@ What each does, how it was measured and why it defaults as it does. The
   images, bilinear; the HUD panel stays at the swapchain's size. At 0.8 (2115x2115 an eye on
   the Steam Frame) the twelve fixed-viewpoint captures' eyes took 0.2-0.4 ms less GPU each
   (the world and post-processing, about two thirds of the pixels; the texture passes are
-  their own size), the CPU the same; at 1 they're the pictures as before, pixel for pixel. The overlay's draws (`soft_raster.h`'s `OnHud`, from
+  their own size), the CPU the same; at 1 they're the pictures as before, pixel for pixel.
+  With `vr_shared_eyes` (on) the right eye keeps what the left drew of each texture pass
+  that neither sees itself (`RasterOptions::keep_eye_passes`, `gpu_view.h`'s
+  `KeepsEyePass`): none of its draws has the eye's world `view_proj` (`RePoseStats::
+  view_proj`, so `RePose` moved none of them: the crowd's impostors, outfits, heads, shadow
+  maps and NgLight's shadow have cameras of their own), and its target's layer still holds
+  the version the pass makes (`Rt::layer_version`: a renamed target's passes each draw a
+  layer of their own), drawn with the same options; it's then counted
+  (`GpuStats::passes_shared`; `passes_eye` those with a draw the eye sees) and not drawn.
+  NgLight's shadow is three passes into one layer (its casters, then two blurs in place,
+  each a version), so only its last could be kept and the eye draws all three. On the
+  twelve fixed-viewpoint captures at 2644x2644 the right eye kept 84-110 of 88-117 passes
+  (small_club_01: 1 of 4-6), its recording 1.8-2.3 ms down to 0.55-0.9 and its GPU
+  2.2-3.6 ms to 0.8-1.7; through the window 9-10 of 12-13 passes, 0.1-0.2 ms less of
+  each. The right eye's pictures are the same as without it, pixel for pixel, on all
+  seventeen captures. The overlay's draws (`soft_raster.h`'s `OnHud`, from
   `vr_pose.h`'s `HudBoundary`: `post_boundary`, or 0 for a frame the eyes can't see) are
   drawn alone as the HUD panel (`BackBufferPart::kHud`): transparent black, alpha as
   coverage, premultiplied (`native_view_replay --overlay-only`, `--split-check`). Draws that

@@ -195,3 +195,20 @@ TEST_CASE("no world run: nothing moves") {
     CHECK(plan.order == std::vector<uint32_t>{0, 1});
     CHECK(plan.passes_hoisted == 0);
 }
+
+TEST_CASE("VR's second eye keeps a pass's picture only where the first eye's is the same") {
+    const std::vector<uint32_t> layers = {40, 37, 38, 39};  // newest in layer 0
+    // drawn by the first eye with the same options: kept, layer by layer
+    CHECK(KeepsEyePass(false, true, 7, 7, layers, 1, 37));
+    CHECK(KeepsEyePass(false, true, 7, 7, layers, 0, 40));
+    // a draw seen through the eye's own camera: each eye draws its own
+    CHECK_FALSE(KeepsEyePass(true, true, 7, 7, layers, 1, 37));
+    // the layer holds another version, or the target was remade, forgotten
+    // or drawn with other options
+    CHECK_FALSE(KeepsEyePass(false, true, 7, 7, layers, 1, 38));
+    CHECK_FALSE(KeepsEyePass(false, true, 7, 7, {}, 0, 40));
+    CHECK_FALSE(KeepsEyePass(false, false, 7, 7, layers, 0, 40));
+    CHECK_FALSE(KeepsEyePass(false, true, 6, 7, layers, 0, 40));
+    // a layer the target doesn't have
+    CHECK_FALSE(KeepsEyePass(false, true, 7, 7, layers, 4, 40));
+}

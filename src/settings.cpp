@@ -967,6 +967,13 @@ REXCVAR_DEFINE_DOUBLE(vr_window_eye_scale, 1.0, "Band3/Advanced/Native renderer"
     .range(0.5, 1.5)
     .debug_only();
 
+REXCVAR_DEFINE_BOOL(vr_shared_eyes, true, "Band3/Advanced/Native renderer",
+    "With vr: draw what both eyes see the same once a frame, for both (the pictures the game "
+    "draws into textures that neither eye sees itself: the crowd's, the outfits', the "
+    "shadows'): the same pictures for less CPU and GPU time. Off draws each eye whole, to "
+    "compare. Takes effect at once")
+    .debug_only();
+
 REXCVAR_DEFINE_DOUBLE(vr_window_width, 100.0, "Band3/Advanced/Native renderer",
     "With vr: how wide the game camera's window looks, in degrees across from where you were "
     "at the last recenter, its height following at 16:9. It stays this size at every cut: "

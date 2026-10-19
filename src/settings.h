@@ -194,6 +194,7 @@ REXCVAR_DECLARE(std::string, vr_viewpoint_offset);
 REXCVAR_DECLARE(double, vr_crowd_clear);
 REXCVAR_DECLARE(double, vr_eye_scale);
 REXCVAR_DECLARE(double, vr_window_eye_scale);
+REXCVAR_DECLARE(bool, vr_shared_eyes);
 REXCVAR_DECLARE(double, vr_window_width);
 REXCVAR_DECLARE(double, vr_window_max_squeeze);
 REXCVAR_DECLARE(double, vr_window_dim);

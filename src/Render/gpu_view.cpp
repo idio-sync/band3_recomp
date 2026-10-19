@@ -853,6 +853,9 @@ struct GpuRenderer::Impl {
         bool drawn = false;     // by a pass, this frame or before
         uint64_t drawn_in = 0;  // the frame a pass last drew it
         uint32_t version = 0;   // the version that pass made
+        // the version each layer holds, for keep_eye_passes (a renamed
+        // target's passes draw one each); empty until drawn
+        std::vector<uint32_t> layer_version;
         // the options it was drawn with (Render's draw_key), for keep_carried
         uint64_t drawn_key = 0;
         // the frame that last drew or sampled it, and when (frame_now)
@@ -2518,6 +2521,7 @@ void GpuRenderer::Impl::ReleaseRt(Rt& rt) {
     rt.depth_shared = false;
     rt.premade = false;
     rt.drawn = false;
+    rt.layer_version.clear();
 }
 
 bool GpuRenderer::Impl::Premake(const RasterOptions& o) {
@@ -3859,6 +3863,26 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 st.passes_kept++;
                 continue;
             }
+            // RasterOptions::keep_eye_passes: VR's second eye keeps what the
+            // first drew of a pass neither eye sees itself (gpu_view.h's
+            // KeepsEyePass)
+            if (o.keep_eye_passes) {
+                bool sees_eye = false;
+                for (size_t d = run.first; d < run.end && !sees_eye; d++)
+                    sees_eye = DrawnIn(run, frame, frame.draws[d], o) &&
+                               std::memcmp(&frame.draws[d].view_proj, &o.eye_view_proj,
+                                           sizeof(Mat4)) == 0;
+                if (sees_eye) st.passes_eye++;
+                if (KeepsEyePass(sees_eye, target->drawn, target->drawn_key, draw_key,
+                                 target->layer_version, target->shadow ? 0 : run_layer[r],
+                                 run.pass->version)) {
+                    target->drawn_in = serial;
+                    target->version = run.pass->version;
+                    UseRt(*target);
+                    st.passes_shared++;
+                    continue;
+                }
+            }
             const bool fresh = !target->drawn || target->drawn_in != serial;
             const uint32_t clear = PassClearFlags(frame, *run.pass);
             run_clear[r] = kRunDrawn;
@@ -4021,6 +4045,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             target->drawn_in = serial;
             target->version = run.pass->version;
             target->drawn_key = draw_key;
+            if (target->layer_version.size() != target->layers)
+                target->layer_version.assign(target->layers, 0);
+            const uint32_t layer = target->shadow ? 0 : run_layer[r];
+            if (layer < target->layers) target->layer_version[layer] = run.pass->version;
         }
     }
     // the composite's noise map

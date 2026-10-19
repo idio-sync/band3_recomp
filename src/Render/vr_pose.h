@@ -189,6 +189,7 @@ inline Mat4 EyeView(const Eye& e) { return e.has_view ? e.view : freecam::View(e
 struct RePoseStats {
     bool ok = false;  // a perspective world camera was found
     uint32_t cam = 0;
+    Mat4 view_proj{};  // the eye's, which its draws now have (ok)
     uint32_t draws_moved = 0, shades_cloned = 0;
     freecam::Pose game{};  // the game camera's pose
     // the eye's track cameras' draws moved, and those of theirs drawn with
