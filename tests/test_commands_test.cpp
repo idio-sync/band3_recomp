@@ -247,6 +247,14 @@ public:
         out.state = vr_frames ? "focused" : "off";
         return {};
     }
+    // vr_eyes: the names and anchor asked for
+    std::string vr_eyes_args;
+    std::string VrEyes(const std::string& name, const std::string& out,
+                       const std::string& anchor, std::string& vr_json) override {
+        vr_eyes_args = name + " " + out + " " + anchor;
+        vr_json = "{\"window\":false}";
+        return {};
+    }
     PresentStats Present(bool reset) override {
         const PresentStats out = present;
         if (reset) {
@@ -1780,6 +1788,21 @@ TEST_CASE("vr_frames writes the VR frames' timing and says where, how many and V
     CHECK(Has(reply, "couldn't write"));
     game.vr_frames_error.clear();
     for (const char* bad : {"vr_frames a b", "vr_frames ../up", "p2 vr_frames"}) {
+        CAPTURE(bad);
+        CHECK_FALSE(Ok(RunCommand(bad, game)));
+    }
+}
+
+TEST_CASE("vr_eyes draws a saved capture's eyes under another name, from an anchor if given") {
+    FakeGame game;
+    std::string reply = RunCommand("vr_eyes vp_arena_front vp_again", game);
+    CHECK(Ok(reply));
+    CHECK(Has(reply, "\"vr\":{\"window\":false}"));
+    CHECK(game.vr_eyes_args == "vp_arena_front vp_again ");
+    reply = RunCommand("vr_eyes vp_arena_front vp_again 5.3,-647.1,271.8,0.6", game);
+    CHECK(Ok(reply));
+    CHECK(game.vr_eyes_args == "vp_arena_front vp_again 5.3,-647.1,271.8,0.6");
+    for (const char* bad : {"vr_eyes", "vr_eyes a", "vr_eyes ../a b", "vr_eyes a b c d"}) {
         CAPTURE(bad);
         CHECK_FALSE(Ok(RunCommand(bad, game)));
     }

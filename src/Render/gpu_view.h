@@ -114,6 +114,9 @@ struct GpuStats {
     // all `submits` (command buffers: one more per texture pass with mips and
     // at the resolve, SubmitAtResolve), overlapping record_ms and wait_ms.
     double pre_ms = 0, plan_ms = 0, upload_ms = 0, record_ms = 0, submit_ms = 0, evict_ms = 0;
+    // of record_ms, the texture passes' (their draws, blurs, mips and the
+    // submissions after them)
+    double record_passes_ms = 0;
     uint32_t pre_passes = 0;
     uint32_t submits = 0;
     // record_ms's SDL_AcquireGPUCommandBuffer calls (the frame's first and

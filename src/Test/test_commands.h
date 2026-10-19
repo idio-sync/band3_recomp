@@ -455,6 +455,13 @@ public:
     // the VR frames' timing ring as CSV, into logs/vr_frames-<name>.csv beside
     // the exe (an empty name picks one); returns an error, or empty
     virtual std::string VrFrames(const std::string& name, VrFramesInfo& out) = 0;
+    // with `vr`: the capture `capture` saved as screenshots/<name>.cap drawn
+    // into VR's eyes as `capture` draws them, as <out>.gpu.L.png and the
+    // rest, laid out as in a song (a fixed viewpoint from `anchor`, "x,y,z,yaw",
+    // or with it empty where the capture's venue puts it); the layout's JSON
+    // into `vr_json`; returns an error, or empty
+    virtual std::string VrEyes(const std::string& name, const std::string& out,
+                               const std::string& anchor, std::string& vr_json) = 0;
     // the window's pacing since it last started over; `reset` starts it over
     // once read
     virtual PresentStats Present(bool reset) = 0;

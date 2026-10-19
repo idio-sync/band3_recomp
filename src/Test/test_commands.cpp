@@ -1007,6 +1007,21 @@ std::string VrFramesCommand(TestTarget& target, const std::vector<std::string_vi
     return Ok(fields);
 }
 
+// `vr_eyes <capture> <out> [x,y,z,yaw]`: a saved capture drawn into VR's
+// eyes again, as `capture` draws them, under another name
+std::string VrEyesCommand(TestTarget& target, const std::vector<std::string_view>& args) {
+    if (args.size() < 3 || args.size() > 4)
+        return Error(target, "usage: vr_eyes <capture> <out> [x,y,z,yaw]");
+    if (!IsFileName(args[1]) || !IsFileName(args[2]))
+        return Error(target, "a vr_eyes name is up to 64 letters, digits, _ and -");
+    std::string vr;
+    if (std::string error = target.VrEyes(std::string(args[1]), std::string(args[2]),
+                                          args.size() == 4 ? std::string(args[3]) : "", vr);
+        !error.empty())
+        return Error(target, error);
+    return Ok("\"vr\":" + (vr.empty() ? std::string("{}") : vr));
+}
+
 std::string Set(TestTarget& target, std::string_view line,
                 const std::vector<std::string_view>& args) {
     if (args.size() < 3) return Error(target, "usage: set <setting> <value>");
@@ -1667,6 +1682,7 @@ std::string RunCommand(std::string_view line, TestTarget& target) {
     if (verb == "native_view") return NativeView(target, args);
     if (verb == "present_stats") return PresentStatsCommand(target, args);
     if (verb == "vr_frames") return VrFramesCommand(target, args);
+    if (verb == "vr_eyes") return VrEyesCommand(target, args);
     if (verb == "quit") {
         target.Quit();
         return Ok();

@@ -5339,6 +5339,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             continue;
         }
         if (!(run_clear[r] & kRunDrawn)) continue;
+        const auto pass_start = Clock::now();
         end_pass();
         const Pass& p = *run.pass;
         const Rt& rt = rts[p.tex_obj];
@@ -5519,6 +5520,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                         SDL_GetError());
             return false;
         }
+        st.record_passes_ms += ms_since(pass_start);
     }
     if (!resolved && !resolve()) return false;
     // a HUD panel nothing drew is cleared all the same

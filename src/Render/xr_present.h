@@ -213,9 +213,11 @@ class Session {
 // come (VenueTracker, logged as it's found), vr_anchor's place until the band
 // is seen. In songs with vr_track_3d, the capture's track cameras
 // (TrackCamerasOf), their poses held by `hold` if given (a camera that moves
-// anyway is logged, at most once a second). Any thread; every platform.
+// anyway is logged, at most once a second). With `loaded` (a capture read
+// from a file, the harness's vr_eyes) the venue found so far is left alone
+// and a fixed viewpoint is seen from that anchor. Any thread; every platform.
 vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_song,
-                          vr::TrackHold* hold = nullptr);
+                          vr::TrackHold* hold = nullptr, const vr::Anchor* loaded = nullptr);
 
 // the song's venue as the fixed viewpoints last found it (none outside songs
 // before the first)

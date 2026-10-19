@@ -73,7 +73,7 @@ vr::VenueRef CurrentVenue() {
 }
 
 vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_song,
-                          vr::TrackHold* hold) {
+                          vr::TrackHold* hold, const vr::Anchor* loaded) {
     vr::Viewpoint vp;
     const std::string mode = REXCVAR_GET(vr_viewpoint);
     if (!vr::ParseViewMode(mode, vp.mode)) vp.mode = vr::ViewMode::kGameCamera;
@@ -83,12 +83,15 @@ vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_s
     // songs and with the window, so it's found again
     const float units = vr::kUnitsPerMetre * float(REXCVAR_GET(vr_world_scale));
     vr::VenueRef ref;
-    {
+    if (!loaded) {
         std::lock_guard lock(g_venue_mutex);
         if (g_venue.Next(fc, in_song && !vp.window)) LogVenue(g_venue.Ref(), units);
         ref = g_venue.Ref();
     }
-    if (!vp.window) {
+    if (!vp.window && loaded) {
+        vp.anchor = *loaded;
+        vp.crowd_clear = vr::CrowdClear(vp.mode, float(REXCVAR_GET(vr_crowd_clear)));
+    } else if (!vp.window) {
         vr::ViewOffset off;
         const std::string off_text = REXCVAR_GET(vr_viewpoint_offset);
         if (!off_text.empty() && !vr::ParseViewOffset(off_text, off)) {

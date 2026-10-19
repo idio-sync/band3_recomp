@@ -531,8 +531,7 @@ What each does, how it was measured and why it defaults as it does. The
   impostor passes again, the cost work that's next. With `vr` on,
   `capture` writes the layout (`vr` in the reply, `<name>.vr.json`: with `picture_scale` and
   the picture's corners `picture_px`, the `viewpoint`, its `anchor`, the song's `venue` as
-  found, and `eye_cost`, the left eye's RePose, CPU to read back and GPU ms, medians of
-  three, with the crowd draws it cleared), `.gpu.L/.R.png` from
+  found, and `eye_cost`, below, with the crowd draws it cleared), `.gpu.L/.R.png` from
   the last VR frame's views (without a session a stand-in head at the origin, both eyes at
   it, 60 degrees each way), `.gpu.C.png` (with a window: an eye at the recenter's head
   facing the window, the venue alone), and `.gpu.eyes.png` (the capture's camera, the
@@ -544,6 +543,27 @@ What each does, how it was measured and why it defaults as it does. The
   7.6-36), but 16.3 on the main hub, where the eye lacks the 720p picture's bloom halos;
   Play a Show's intro was black eyes. `native_view stats`' `xr` block counts
   `window_frames`, `black_frames`, `fades` and `track_frames`.
+  `eye_cost` is the left eye drawn as `VrFrame` draws it, GPU timestamps on, at the eyes'
+  size and at the Steam Frame's (2644x2644, `frame`), medians of three rounds after one
+  left out: RePose's ms, then the eye's frame drawn (`first`) and at once again (`second`,
+  as the right eye's would be), each with the CPU's parts (`plan_ms`, `upload_ms`,
+  `record_ms` and of it the texture passes' `record_passes_ms`, `submit_ms`, the slow SDL
+  calls), what it drew and the GPU's ms by part (`world`, `pass_other`, `pass_shadow`,
+  `pass_spot`, `mips`, `post` with the resolve's copies, `overlay`, `gamma`, `upload`,
+  `idle`; `gpu_ms` their total). Without a session it draws into the left eye's output
+  and waits for it; with one, which owns that output, it reads the picture back, whose
+  recording costs more (1.2-1.3 ms more at 1440x1440, more again at 2644). The
+  harness's `vr_eyes` draws a saved capture's eyes again with the settings as they
+  stand, so builds and settings compare on one frame (`out/vr/gen_vr_eyes.py` and
+  `eye_cost_table.py` in the VR worktree run the twelve fixed-viewpoint captures and five
+  of the window's). On the twelve (2026-10-18, stand-in head, no session), each eye cost,
+  at 2644x2644: CPU RePose 0.9-1.2 ms, plan 0.5-0.9, record 1.8-2.2 of which the texture
+  passes 1.3-1.7 (small_club_01: 0.5-0.7 record, 0.1 passes), submit 0.06-0.14; GPU
+  2.3-3.7 ms, of it the texture passes and their mips 1.5-2.0 (pass_other 0.9-1.2, mips
+  0.55-0.73: 84-113 crowd impostor passes), the world 0.46-1.27, post-processing 0.16-0.19.
+  At 1440x1440 the passes are the same and the world about half. The window's (five
+  captures): CPU RePose 0.1-0.2, record 0.2-0.6, GPU 0.7-1.1. The second drawing cost the
+  same as the first: each eye draws every texture pass again.
   The 3D highway (`vr_track_3d`, on): in songs each eye draws the tracks from where it is,
   as an object in front of the head, in the default window and from `vr_anchor` alike.
   RB3 draws each track after post-processing with a camera of its own (z range 0..1),
