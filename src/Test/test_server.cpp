@@ -817,12 +817,40 @@ public:
                         render::FrameCapture copy;
                         cleared = render::vr::RePose(frame, layout.eyes[0], copy).crowd_cleared;
                     }
+                    // At the Steam Frame's size, both eyes without bloom
+                    // and glare (post_only the colour matrix alone), to
+                    // weigh them (`no_bloom`: both eyes' GPU ms and of it
+                    // post-processing's, medians of three after one)
+                    std::string no_bloom;
+                    if (z) {
+                        render::RasterOptions plain = timed;
+                        plain.post_only = render::post::kPostXfm;
+                        double gpu[3] = {}, post[3] = {};
+                        bool measured = true;
+                        for (int round = 0; round < 4 && measured; round++) {
+                            render::GpuStats pair[2];
+                            render::vr::EyeOverride ov[2];
+                            measured = both_eyes(plain, pair, ov, nullptr, true);
+                            if (!measured || round == 0) continue;
+                            namespace t = render::gpu_timing;
+                            for (const render::GpuStats& g : pair) {
+                                gpu[round - 1] += g.gpu_total_ms;
+                                for (int part : {t::kCopies, t::kBloom, t::kComposite})
+                                    post[round - 1] += g.gpu_ms[part];
+                            }
+                        }
+                        if (measured)
+                            no_bloom = std::format(
+                                ",\"no_bloom\":{{\"gpu_ms\":{:.3f},\"post\":{:.3f}}}",
+                                Mid(gpu[0], gpu[1], gpu[2]), Mid(post[0], post[1], post[2]));
+                    }
                     sizes[z] = std::format(
                         "\"size\":[{},{}],\"together\":{},\"repose_ms\":{:.3f},\"first\":{},"
                         "\"second\":{}",
                         timed.width, timed.height, together ? "true" : "false",
                         Mid(repose[0], repose[1], repose[2]), EyeStatsJson(first),
                         EyeStatsJson(second));
+                    sizes[z] += no_bloom;
                     // as before: the first picture's CPU and GPU at the eyes' size
                     if (!z)
                         sizes[z] += std::format(

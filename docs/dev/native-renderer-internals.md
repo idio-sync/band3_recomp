@@ -443,7 +443,18 @@ What each does, how it was measured and why it defaults as it does. The
   (`stats[1]`); the first's have the plan and the upload. On the twelve captures the eyes
   are the same pictures, pixel for pixel (the first try, without the shadow maps' rule,
   gave four right eyes with a band member's self-shadows of the last member's map), and
-  the two eyes' CPU went from a mean 4.2 to 3.7 ms a frame at 2644x2644 (the GPU 3.5). The overlay's draws (`soft_raster.h`'s `OnHud`, from
+  the two eyes' CPU went from a mean 4.2 to 3.7 ms a frame at 2644x2644 (the GPU 3.5).
+  Two things tried there and left out (2026-10-18): leaving out each eye's crowd cards
+  wholly outside its picture (a conservative test of their corners, each eye its own
+  instance worlds) left the pictures the same, pixel for pixel, and culled 4,500 of 4,600
+  cards from front_row at arena_04 (all 8,344 at festival_01, 800-2,600 from on_stage and
+  venue), but those cards cost the GPU next to nothing off the picture (the world's GPU
+  time didn't move: 0.46 ms an eye at arena_04's front row) and only 16-37 draws fewer,
+  while the tests and the second set of worlds cost the plan 0.1-0.7 ms a frame
+  (`out/vr/step5_crowd_cull.patch` in the VR worktree); and dropping bloom and glare
+  from the eyes (`eye_cost`'s `frame.no_bloom`) saves 0.12-0.24 ms of GPU a frame at
+  2644x2644 (post-processing 0.31-0.37 ms for both eyes, 0.18-0.20 without), too little
+  for the halos they give, so they stay. The overlay's draws (`soft_raster.h`'s `OnHud`, from
   `vr_pose.h`'s `HudBoundary`: `post_boundary`, or 0 for a frame the eyes can't see) are
   drawn alone as the HUD panel (`BackBufferPart::kHud`): transparent black, alpha as
   coverage, premultiplied (`native_view_replay --overlay-only`, `--split-check`). Draws that
@@ -622,7 +633,8 @@ What each does, how it was measured and why it defaults as it does. The
   0.55-0.73: 84-113 crowd impostor passes), the world 0.46-1.27, post-processing 0.16-0.19.
   At 1440x1440 the passes are the same and the world about half. The window's (five
   captures): CPU RePose 0.1-0.2, record 0.2-0.6, GPU 0.7-1.1. The second drawing cost the
-  same as the first: each eye draws every texture pass again.
+  same as the first: each eye draws every texture pass again. `frame.no_bloom` is both eyes
+  drawn in one go at 2644x2644 without bloom and glare: their GPU ms and post-processing's.
   The 3D highway (`vr_track_3d`, on): in songs each eye draws the tracks from where it is,
   as an object in front of the head, in the default window and from `vr_anchor` alike.
   RB3 draws each track after post-processing with a camera of its own (z range 0..1),
