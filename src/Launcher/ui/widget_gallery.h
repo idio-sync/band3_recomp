@@ -10,10 +10,11 @@
 // the look and the navigation before the screens use them: a menu and a list
 // of rows to move through with a controller, the keyboard or the mouse, a
 // framed panel with text, chips, key caps and icons, and the help bar. F
-// swaps between the game's textures and the plain look drawn without them; K
-// swaps the help bar's controller and keyboard hints. The launcher shows it
-// in place of its page with Ctrl+Shift+G, or from the start with the
-// environment variable BAND3_LAUNCHER_GALLERY=1 (=plain for the plain look).
+// steps through the looks: the game's textures, the RB3 look drawn without
+// them, and Simple (theme.h's Look); K swaps the help bar's controller and
+// keyboard hints. The launcher shows it in place of its page with
+// Ctrl+Shift+G, or from the start with the environment variable
+// BAND3_LAUNCHER_GALLERY=1 (=plain, =simple to start in those looks).
 
 namespace band3::launcher::ui {
 
@@ -23,8 +24,9 @@ public:
 
     // the page, covering the window; `pads` this frame's controllers
     void Draw(ImGuiIO& io, std::span<const NavPad> pads);
-    // the plain look, drawn without the game's textures (as F swaps it)
-    void SetPlain(bool plain) { plain_ = plain; }
+    // the looks F steps through
+    enum class Shown { kRb3, kPlain, kSimple };
+    void SetShown(Shown shown) { shown_ = shown; }
 
 private:
     void Handle(Action action);
@@ -32,7 +34,7 @@ private:
     Skin& skin_;
     // a skin that never loads: the plain look
     Skin plain_skin_{nullptr};
-    bool plain_ = false;
+    Shown shown_ = Shown::kRb3;
     bool keyboard_ = false;
     PadActions pad_;
     // 0: the menu, 1: the rows

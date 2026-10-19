@@ -852,7 +852,7 @@ struct GraphicsTab {
 const std::set<std::string> kEveryRenderer = {
     "monitor", "fullscreen", "resolution", "present_letterbox", "frame_cap", "renderer",
     "rnd_sync", "background_fps", "disable_hair_shader", "disable_approximate_lights",
-    "debug_overlay", "force_self_shadow"};
+    "debug_overlay", "force_self_shadow", "launcher_style"};
 const std::set<std::string> kNativeRows = {
     "native_fill_window",       "native_view_msaa",        "native_anisotropic",
     "native_max_height",        "native_view_shadow_scale", "native_present_pacing",
@@ -878,7 +878,7 @@ TEST_CASE("Display and Graphics show each group only for the renderers it applie
           Union({kEveryRenderer, kNativeRows, kEmulatedRows, {"emulated_gpu_while_native"}}));
     // the groups have their own sections
     CHECK(SectionsOf(SettingTable(), Category::kDisplay) ==
-          std::vector<std::string_view>{"Screen", "Smoothness"});
+          std::vector<std::string_view>{"Screen", "Smoothness", "Menus"});
     CHECK(SectionsOf(SettingTable(), Category::kGraphics) ==
           std::vector<std::string_view>{"Renderer", "Quality", "Effects", "Timing",
                                         "Performance"});

@@ -122,6 +122,10 @@ const char* KeyName(HelpButton button) {
 }
 
 void DrawBackground(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin) {
+    if (SimpleLook()) {
+        dl->AddRectFilled(min, max, color::kFlatPage);
+        return;
+    }
     const ImVec2 size(max.x - min.x, max.y - min.y);
     dl->AddRectFilled(min, max, color::kNavyDeep);
     VGradient(dl, min, max, color::kNavy, color::kNavyDeep);
@@ -137,7 +141,7 @@ void DrawBackground(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin) {
     if (skin.Has(SkinPart::kGrain)) {
         const float tile = Px(384);
         dl->AddImage(skin.Texture(SkinPart::kGrain), min, max, ImVec2(0, 0),
-                     ImVec2(size.x / tile, size.y / tile), IM_COL32(110, 130, 230, 34));
+                     ImVec2(size.x / tile, size.y / tile), IM_COL32(110, 130, 230, 20));
     }
     if (skin.Has(SkinPart::kStreaks)) {
         const ImTextureRef streaks = skin.Texture(SkinPart::kStreaks);
@@ -160,20 +164,28 @@ void DrawBackground(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin) {
 }
 
 void DrawGameDim(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin) {
+    if (SimpleLook()) {
+        dl->AddRectFilled(min, max, color::kFlatGameDim);
+        return;
+    }
     const ImVec2 size(max.x - min.x, max.y - min.y);
     VGradient(dl, min, max, IM_COL32(4, 8, 34, 234), IM_COL32(2, 4, 20, 246));
     if (skin.Has(SkinPart::kGrain)) {
         const float tile = Px(384);
         dl->AddImage(skin.Texture(SkinPart::kGrain), min, max, ImVec2(0, 0),
-                     ImVec2(size.x / tile, size.y / tile), IM_COL32(110, 130, 230, 26));
+                     ImVec2(size.x / tile, size.y / tile), IM_COL32(110, 130, 230, 16));
     }
 }
 
 void DrawTitle(ImDrawList* dl, ImVec2 pos, std::string_view text, float size) {
-    PaintText(dl, pos, kCaps(size), color::kTitle, text);
+    PaintText(dl, pos, kCaps(size), SimpleLook() ? color::kFlatTitle : color::kTitle, text);
 }
 
 void DrawStrip(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin) {
+    if (SimpleLook()) {
+        dl->AddRectFilled(min, max, color::kFlatStrip);
+        return;
+    }
     if (skin.Has(SkinPart::kStrip)) {
         dl->AddImage(skin.Texture(SkinPart::kStrip), min, max, ImVec2(0, 0), ImVec2(1, 1),
                      IM_COL32(140, 140, 140, 255));
@@ -188,6 +200,10 @@ void DrawStrip(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin) {
 
 void DrawHighlight(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin, float rounding,
                    float alpha) {
+    if (SimpleLook()) {
+        dl->AddRectFilled(min, max, WithAlpha(color::kYellow, alpha), rounding);
+        return;
+    }
     if (skin.Has(SkinPart::kHighlight)) {
         dl->AddImageRounded(skin.Texture(SkinPart::kHighlight), min, max, ImVec2(0, 0), ImVec2(1, 1),
                             WithAlpha(IM_COL32_WHITE, alpha), rounding);
@@ -227,7 +243,18 @@ void DrawBand(ImDrawList* dl, ImVec2 min, ImVec2 max, std::string_view text, Ban
               const Skin& skin, bool selected, std::string_view right, bool dim) {
     const float w = max.x - min.x;
     ImU32 col = IM_COL32(238, 246, 248, 255);
-    if (selected && dim) {
+    if (SimpleLook()) {
+        if (selected && dim) {
+            dl->AddRectFilled(min, max, color::kFlatLocked);
+            col = color::kText;
+        } else if (selected) {
+            DrawHighlight(dl, min, max, skin);
+            col = color::kOnYellow;
+        } else {
+            dl->AddRectFilled(min, max, kind == BandKind::kAction ? color::kFlatAction : color::kFlatBand);
+            if (kind == BandKind::kAction && dim) col = WithAlpha(col, 0.45f);
+        }
+    } else if (selected && dim) {
         // a band that can't do anything yet: a grey bar, as a locked row's
         Gradient(dl, min, max, IM_COL32(150, 150, 160, 140), IM_COL32(110, 110, 120, 102));
         dl->AddLine(min, ImVec2(max.x, min.y), IM_COL32(255, 255, 255, 115), Px(2));
@@ -266,7 +293,14 @@ void DrawBand(ImDrawList* dl, ImVec2 min, ImVec2 max, std::string_view text, Ban
 
 void DrawRow(ImDrawList* dl, ImVec2 min, ImVec2 max, const RowLook& row, const Skin& skin) {
     const float h = max.y - min.y;
-    if (row.selected && row.locked) {
+    if (SimpleLook()) {
+        if (row.selected && row.locked) dl->AddRectFilled(min, max, color::kFlatLocked);
+        else if (row.selected) DrawHighlight(dl, min, max, skin);
+        else dl->AddRectFilled(min, max, color::kFlatRow);
+        // the rows kept apart by a line of the page
+        dl->AddLine(ImVec2(min.x, max.y - Px(0.5f)), ImVec2(max.x, max.y - Px(0.5f)), color::kFlatRowGap,
+                    std::max(1.0f, Px(1)));
+    } else if (row.selected && row.locked) {
         Gradient(dl, min, max, IM_COL32(150, 150, 160, 140), IM_COL32(110, 110, 120, 102));
         dl->AddLine(min, ImVec2(max.x, min.y), IM_COL32(255, 255, 255, 115), Px(2));
         dl->AddLine(ImVec2(min.x, max.y - Px(1)), ImVec2(max.x, max.y - Px(1)), IM_COL32(255, 255, 255, 115),
@@ -334,6 +368,14 @@ void DrawRow(ImDrawList* dl, ImVec2 min, ImVec2 max, const RowLook& row, const S
 }
 
 void DrawPanel(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin) {
+    if (SimpleLook()) {
+        // where the frame's inner edge is, so the text inside sits as it does in RB3's look
+        const float inset = Px(4);
+        const ImVec2 bmin(min.x + inset, min.y + inset), bmax(max.x - inset, max.y - inset);
+        dl->AddRectFilled(bmin, bmax, color::kFlatPanel, Px(6));
+        dl->AddRect(bmin, bmax, color::kFlatPanelEdge, Px(6), 0, std::max(1.0f, Px(1)));
+        return;
+    }
     const float inset = Px(9);
     const ImVec2 fmin(min.x + inset, min.y + inset), fmax(max.x - inset, max.y - inset);
     if (skin.Has(SkinPart::kFill)) {
@@ -343,10 +385,9 @@ void DrawPanel(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin) {
     }
     VGradient(dl, fmin, fmax, IM_COL32(4, 8, 22, 204), IM_COL32(2, 4, 14, 224));
     if (skin.Has(SkinPart::kFrame)) {
-        // the container's grey frame, tinted the overshell's blue
+        // the container's frame in its own grey, as the game shows it
         NineSliceBorder(dl, skin.Texture(SkinPart::kFrame), skin.Size(SkinPart::kFrame), min, max,
-                        skin.Size(SkinPart::kFrame).x * (52.0f / 512.0f), Px(26),
-                        IM_COL32(120, 175, 255, 255));
+                        skin.Size(SkinPart::kFrame).x * (52.0f / 512.0f), Px(26), IM_COL32_WHITE);
     } else {
         dl->AddRect(ImVec2(min.x + Px(4), min.y + Px(4)), ImVec2(max.x - Px(4), max.y - Px(4)),
                     color::kFrameBlue, Px(3), 0, Px(2));
@@ -380,6 +421,11 @@ float DrawKeyCap(ImDrawList* dl, ImVec2 pos, std::string_view text, float height
 }
 
 void DrawRule(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin) {
+    if (SimpleLook()) {
+        const float y = std::round((min.y + max.y) * 0.5f);
+        dl->AddLine(ImVec2(min.x, y), ImVec2(max.x, y), color::kFlatRule, std::max(1.0f, Px(1)));
+        return;
+    }
     if (skin.Has(SkinPart::kLineFade)) {
         dl->AddImage(skin.Texture(SkinPart::kLineFade), min, max, ImVec2(0, 0), ImVec2(1, 1),
                      IM_COL32(255, 255, 255, 128));
@@ -402,7 +448,8 @@ void DrawIcon(ImDrawList* dl, ImVec2 min, ImVec2 max, const Skin& skin, int colu
 
 int DrawHelpBar(ImDrawList* dl, ImVec2 min, ImVec2 max, std::span<const HelpItem> items, bool keyboard,
                 bool play, const Skin& skin) {
-    VGradient(dl, min, max, IM_COL32(6, 8, 28, 209), IM_COL32(4, 5, 18, 242));
+    if (SimpleLook()) dl->AddRectFilled(min, max, color::kFlatHelpBar);
+    else VGradient(dl, min, max, IM_COL32(6, 8, 28, 209), IM_COL32(4, 5, 18, 242));
     DrawRule(dl, ImVec2(min.x, min.y - Px(4)), ImVec2(max.x, min.y + Px(4)), skin);
 
     const TextStyle label = kCaps(text::kHelp);

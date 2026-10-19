@@ -13,6 +13,17 @@
 
 namespace band3::launcher::ui {
 
+// Which look the pieces draw (launcher_style): RB3's, textured and lit, or
+// Simple's solid colour boxes, for players who find the textures busy. The
+// layout, the type and the icons are the same in both.
+enum class Look { kRb3, kSimple };
+// set once a frame, before drawing, from launcher_style (LookFromSetting)
+void SetLook(Look look);
+Look CurrentLook();
+inline bool SimpleLook() { return CurrentLook() == Look::kSimple; }
+// launcher_style's value as a look: "simple" is Simple, anything else RB3's
+Look LookFromSetting(std::string_view value);
+
 // Colours
 
 namespace color {
@@ -51,6 +62,25 @@ inline constexpr ImU32 kFretRed = IM_COL32(216, 58, 58, 255);
 inline constexpr ImU32 kFretYellow = IM_COL32(230, 220, 31, 255);
 inline constexpr ImU32 kFretBlue = IM_COL32(47, 127, 224, 255);
 inline constexpr ImU32 kFretOrange = IM_COL32(240, 138, 29, 255);
+
+// Simple's solid colours (Look::kSimple)
+inline constexpr ImU32 kFlatPage = IM_COL32(8, 13, 40, 255);
+// over the running game: nearly opaque, so the game doesn't show through busily
+inline constexpr ImU32 kFlatGameDim = IM_COL32(8, 13, 40, 242);
+// a panel or a box, a step lighter than the page
+inline constexpr ImU32 kFlatPanel = IM_COL32(20, 28, 64, 255);
+inline constexpr ImU32 kFlatPanelEdge = IM_COL32(44, 56, 104, 255);
+inline constexpr ImU32 kFlatRow = IM_COL32(16, 23, 56, 255);
+// the line between rows: the page showing through
+inline constexpr ImU32 kFlatRowGap = kFlatPage;
+inline constexpr ImU32 kFlatBand = IM_COL32(36, 102, 116, 255);
+inline constexpr ImU32 kFlatAction = IM_COL32(52, 58, 84, 255);
+inline constexpr ImU32 kFlatLocked = IM_COL32(92, 94, 108, 255);
+inline constexpr ImU32 kFlatStrip = IM_COL32(64, 66, 74, 255);
+inline constexpr ImU32 kFlatRule = IM_COL32(255, 255, 255, 56);
+inline constexpr ImU32 kFlatHelpBar = IM_COL32(4, 7, 26, 255);
+// the big titles, solid rather than faded
+inline constexpr ImU32 kFlatTitle = kSoft;
 }
 
 // Text sizes, as line heights at 1280x720

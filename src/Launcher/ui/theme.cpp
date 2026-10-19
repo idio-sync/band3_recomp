@@ -50,7 +50,13 @@ ImFont* FontFor(const TextStyle& style, float px, bool title) {
 float LinePx(const TextStyle& style) { return Px(style.size); }
 float FontPx(const TextStyle& style) { return Px(style.size) * kFontToLine; }
 
+Look g_look = Look::kRb3;
+
 }
+
+void SetLook(Look look) { g_look = look; }
+Look CurrentLook() { return g_look; }
+Look LookFromSetting(std::string_view value) { return value == "simple" ? Look::kSimple : Look::kRb3; }
 
 void AddThemeFonts(ImFontAtlas* atlas) {
     g_full_ranges.assign(std::begin(kFullRanges), std::end(kFullRanges));

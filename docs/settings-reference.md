@@ -86,6 +86,12 @@ Every setting the launcher and the in-game settings (Escape > Settings) show, ca
 | `native_present_pacing`<br>Smooth frame pacing | `true` | `true`, `false` | With the native picture shown, publish each frame to the window a steady delay after the game presented it (about the slowest recent frame's), so frames that draw quickly (with even/odd rendering, every other one) don't reach a paint together with the one before; off publishes each as soon as it's drawn, to compare. Only while the game runs under 1.5 times the display's refresh rate, frame_cap isn't auto and native_phase_lock isn't steering the cap on a display of 100 Hz or more: faster, each refresh shows the newest frame anyway, auto's variable refresh display shows each as it comes, and there the phase lock already has each frame reach the window before its paint, so the delay would only add lag. Below 100 Hz the lock keeps it, as frames vary more against the refresh |
 | `debug_overlay`<br>FPS counter | `true` | `true`, `false` | Show band3's FPS counter: the game's frame rate (what frame_cap paces, and hit timing follows) and the window's, which the display's refresh rate holds back |
 
+### Menus
+
+| Setting | Default | Takes | What it does |
+|---|---|---|---|
+| `launcher_style`<br>Menu style | `rb3` | `rb3` Rock Band 3, `simple` Simple | How the launcher and the in-game settings (F4) look: rb3 draws them with Rock Band 3's own textures, simple with solid colour boxes on a plain background, easier to read |
+
 ## Graphics
 
 ### Renderer

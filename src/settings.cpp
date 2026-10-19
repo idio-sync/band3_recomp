@@ -167,6 +167,11 @@ REXCVAR_DEFINE_BOOL(show_launcher, true, "Band3/Game",
     "the launcher anyway")
     .lifecycle(Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_STRING(launcher_style, "rb3", "Band3/Game",
+    "How the launcher and the in-game settings (F4) look: rb3 draws them with Rock Band 3's "
+    "own textures, simple with solid colour boxes on a plain background, easier to read")
+    .allowed({"rb3", "simple"});
+
 // Band3/Graphics
 
 // native on Windows, emulated elsewhere: renderer_default.h says why it's

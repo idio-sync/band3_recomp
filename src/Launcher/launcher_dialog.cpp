@@ -108,10 +108,13 @@ LauncherDialog::LauncherDialog(rex::ui::ImGuiDrawer* imgui_drawer, LauncherHost 
                     .play = [this] { Play(); },
                 });
     gallery_ = std::make_unique<ui::WidgetGallery>(*skin_);
-    // 1 for the gallery, plain for it in the look drawn without the game's textures
+    // 1 for the gallery, plain for it in the look drawn without the game's textures,
+    // simple for it in the Simple look
     if (const char* gallery = std::getenv("BAND3_LAUNCHER_GALLERY")) {
-        show_gallery_ = std::string_view(gallery) == "1" || std::string_view(gallery) == "plain";
-        gallery_->SetPlain(std::string_view(gallery) == "plain");
+        const std::string_view which(gallery);
+        show_gallery_ = which == "1" || which == "plain" || which == "simple";
+        if (which == "plain") gallery_->SetShown(ui::WidgetGallery::Shown::kPlain);
+        if (which == "simple") gallery_->SetShown(ui::WidgetGallery::Shown::kSimple);
     }
     hub_->Show();
     if (const auto problem = ConfigFileProblem(host_.config_path)) {
@@ -237,6 +240,7 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
     ApplyStyle(style, Scale());
     skin_->Load(host_.game_data_root ? host_.game_data_root() : std::filesystem::path());
     skin_->Poll();
+    ui::SetLook(ui::LookFromSetting(REXCVAR_GET(launcher_style)));
     {
         FontScope font(kBodySize);
         if (stage_ == Stage::kEditing && ImGui::IsKeyPressed(ImGuiKey_G, false) && io.KeyCtrl &&

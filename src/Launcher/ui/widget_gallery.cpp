@@ -113,9 +113,11 @@ void WidgetGallery::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
     if (!from_keys.empty()) keyboard_ = true;
     for (Action a : from_pads) Handle(a);
     for (Action a : from_keys) Handle(a);
-    if (ImGui::IsKeyPressed(ImGuiKey_F, false)) plain_ = !plain_;
+    if (ImGui::IsKeyPressed(ImGuiKey_F, false)) shown_ = Shown((int(shown_) + 1) % 3);
     if (ImGui::IsKeyPressed(ImGuiKey_K, false)) keyboard_ = !keyboard_;
-    const Skin& skin = plain_ ? plain_skin_ : skin_;
+    const Skin& skin = shown_ == Shown::kPlain ? plain_skin_ : skin_;
+    // the gallery's own pick, over launcher_style's
+    SetLook(shown_ == Shown::kSimple ? Look::kSimple : Look::kRb3);
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
@@ -139,7 +141,9 @@ void WidgetGallery::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
     size_t parts = 0;
     for (size_t i = 0; i < kSkinPartCount; i++) parts += skin.Has(static_cast<SkinPart>(i));
     char strip[96];
-    std::snprintf(strip, sizeof(strip), "%s: %zu of %zu textures", plain_ ? "Plain look" : "RB3 look",
+    std::snprintf(strip, sizeof(strip), "%s: %zu of %zu textures", shown_ == Shown::kSimple  ? "Simple look"
+                  : shown_ == Shown::kPlain ? "Plain look"
+                                            : "RB3 look",
                   parts, kSkinPartCount);
     PaintText(dl, at(40, 100), kCaps(text::kStrip), color::kStripText, strip);
     if (!last_action_.empty()) {
@@ -224,7 +228,7 @@ void WidgetGallery::Draw(ImGuiIO& io, std::span<const NavPad> pads) {
     for (int i = 0; i < 4; i++) DrawIcon(dl, at(932 + i * 40.0f, py), at(962 + i * 40.0f, py + 30), skin, i, 0);
     DrawIcon(dl, at(1092, py), at(1122, py + 30), skin, 0, 2);
     py += 44;
-    PaintText(dl, at(932, py), kPlain(text::kBody), color::kMuted, "F: plain look   K: key hints");
+    PaintText(dl, at(932, py), kPlain(text::kBody), color::kMuted, "F: next look   K: key hints");
 
     const HelpItem help[] = {
         {HelpButton::kA, "Select"}, {HelpButton::kB, "Back"}, {HelpButton::kX, "Search"},

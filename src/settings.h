@@ -46,6 +46,7 @@ REXCVAR_DECLARE(bool, gold_on_all_difficulties);
 REXCVAR_DECLARE(bool, game_origin_icons);
 REXCVAR_DECLARE(std::string, content_folders);
 REXCVAR_DECLARE(bool, show_launcher);
+REXCVAR_DECLARE(std::string, launcher_style);
 
 // Band3/Graphics
 REXCVAR_DECLARE(std::string, renderer);

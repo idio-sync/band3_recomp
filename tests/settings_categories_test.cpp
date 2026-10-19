@@ -79,7 +79,7 @@ TEST_CASE("each category says in a line what it's for") {
 TEST_CASE("each category's sections are the redesign's, in order") {
     CHECK(Sections(Category::kGame) == Names{"Folders", "Profile", "Startup"});
     CHECK(Sections(Category::kGameplay) == Names{"Speed", "Unlocks", "Song list", "Venue"});
-    CHECK(Sections(Category::kDisplay) == Names{"Screen", "Smoothness"});
+    CHECK(Sections(Category::kDisplay) == Names{"Screen", "Smoothness", "Menus"});
     CHECK(Sections(Category::kGraphics) ==
           Names{"Renderer", "Quality", "Effects", "Timing", "Performance"});
     CHECK(Sections(Category::kAudio) == Names{"Output", "Microphones"});
@@ -120,6 +120,7 @@ TEST_CASE("the settings once generated into More settings have places of their o
 TEST_CASE("settings sit in the categories the redesign gave them") {
     const std::map<std::string_view, Category> places = {
         {"show_launcher", Category::kGame},
+        {"launcher_style", Category::kDisplay},
         {"score_history", Category::kGame},
         {"song_speed", Category::kGameplay},
         {"forced_venue", Category::kGameplay},

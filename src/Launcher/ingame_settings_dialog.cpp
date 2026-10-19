@@ -13,6 +13,7 @@
 #include "src/Input/xinput_state.h"
 #include "src/Render/native_view.h"
 #include "src/paths.h"
+#include "src/settings.h"
 #include "config_file.h"
 #include "launcher_style.h"
 
@@ -269,6 +270,7 @@ void InGameSettingsDialog::OnDraw(ImGuiIO& io) {
         }
         skin_->Load(host_.game_data_root ? host_.game_data_root() : std::filesystem::path());
         skin_->Poll();
+        ui::SetLook(ui::LookFromSetting(REXCVAR_GET(launcher_style)));
         if (view_ == View::kPause) {
             // the bind, when it isn't Escape (which the menu reads itself), goes back
             if (std::exchange(back_requested_, false) && !ImGui::IsKeyPressed(ImGuiKey_Escape, false) &&

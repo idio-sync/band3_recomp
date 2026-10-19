@@ -72,6 +72,9 @@ constexpr Choice kResolutions[] = {
 
 constexpr Choice kAspect[] = {{"true", "Keep 16:9"}, {"false", "Stretch"}};
 
+// ui/theme.h's Look
+constexpr Choice kMenuStyles[] = {{"rb3", "Rock Band 3"}, {"simple", "Simple"}};
+
 // renderer_mode.h's RendererLabel
 constexpr Choice kRenderers[] = {
     {"native", "Native"},
@@ -299,6 +302,10 @@ constexpr Setting kSettings[] = {
      .label = "FPS counter", .widget = kCheckbox,
      .about = "Shows band3's frame rate counter: the game's rate, which hit timing follows, "
               "and the window's."},
+    {.cvar = "launcher_style", .category = kDisplay, .section = "Menus", .label = "Menu style",
+     .widget = kCombo, .choices = kMenuStyles,
+     .about = "How these menus look. Rock Band 3 uses the game's own textures; Simple is solid "
+              "colour boxes on a plain background, easier to read."},
 
     // Graphics
     {.cvar = "renderer", .category = kGraphics, .section = "Renderer", .label = "Renderer",
