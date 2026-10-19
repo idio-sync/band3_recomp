@@ -228,3 +228,123 @@ TEST_CASE("PS3 instruments report as the matching 360 models") {
     CHECK(rb1.sub_type == kSubtypeDrums);
     CHECK_FALSE(SeesRb2Drums(rb1));
 }
+
+TEST_CASE("PS3 and Wii RB3 instruments are identified by USB id") {
+    CHECK(IdentifyHidInstrument(0x12BA, 0x2330, 0x0005) == HidInstrumentType::kPs3Keys);
+    CHECK(IdentifyHidInstrument(0x1BAD, 0x3330, 0x0005) == HidInstrumentType::kPs3Keys);
+    CHECK(IdentifyHidInstrument(0x12BA, 0x2338, 0x0001) == HidInstrumentType::kPs3Keys);
+    CHECK(IdentifyHidInstrument(0x1BAD, 0x3338, 0) == HidInstrumentType::kPs3Keys);
+    CHECK(IdentifyHidInstrument(0x12BA, 0x2430, 0) == HidInstrumentType::kPs3Mustang);
+    CHECK(IdentifyHidInstrument(0x1BAD, 0x3430, 0x0005) == HidInstrumentType::kPs3Mustang);
+    CHECK(IdentifyHidInstrument(0x12BA, 0x2438, 0) == HidInstrumentType::kPs3Mustang);
+    CHECK(IdentifyHidInstrument(0x1BAD, 0x3438, 0) == HidInstrumentType::kPs3Mustang);
+    CHECK(IdentifyHidInstrument(0x12BA, 0x2538, 0x0001) == HidInstrumentType::kPs3Squier);
+    CHECK(IdentifyHidInstrument(0x1BAD, 0x3538, 0) == HidInstrumentType::kPs3Squier);
+
+    // only the PS3 ones need asking for their keys and frets
+    CHECK(NeedsPs3ProEnable(0x12BA, HidInstrumentType::kPs3Keys));
+    CHECK(NeedsPs3ProEnable(0x12BA, HidInstrumentType::kPs3Mustang));
+    CHECK(NeedsPs3ProEnable(0x12BA, HidInstrumentType::kPs3Squier));
+    CHECK_FALSE(NeedsPs3ProEnable(0x1BAD, HidInstrumentType::kPs3Keys));
+    CHECK_FALSE(NeedsPs3ProEnable(0x12BA, HidInstrumentType::kPs3Guitar));
+}
+
+TEST_CASE("PS3 keyboard keys and velocities reach RB3's keyboard poll") {
+    // C1, B2 and C3 held; velocities for the first three held keys, overdrive,
+    // the stomp pedal down
+    const Report report = Report()
+                              .Buttons(kCross)
+                              .Hat(kHatUp)
+                              .Byte(5, 0x80)
+                              .Byte(6, 0x00)
+                              .Byte(7, 0x01)
+                              .Byte(8, 0x80 | 100)
+                              .Byte(9, 90)
+                              .Byte(10, 80)
+                              .Byte(13, 0x80)
+                              .Byte(14, 0xFF);
+    const Gamepad360 g = Translate(HidInstrumentType::kPs3Keys, report);
+    CHECK(g.buttons == (kA | kDpadUp));
+
+    const ProKeysRead read = ReadProKeys(EncodeProData(g));
+    for (int k = 0; k < kKeyCount; k++) {
+        CAPTURE(k);
+        CHECK(read.pressed[k] == (k == 0 || k == 23 || k == 24));
+    }
+    CHECK(read.velocity[0] == 100);
+    CHECK(read.velocity[23] == 90);
+    CHECK(read.velocity[24] == 80);
+    CHECK(read.stomp_pedal);
+    CHECK(read.expression_pedal == 0x7F);
+
+    // and it's what band3's own keytar encoding gives for the same keys
+    const KeysInputs keys = DecodeKeys(g);
+    CHECK(keys.overdrive);
+    CHECK(keys.keys[0] == 100);
+    CHECK(keys.keys[23] == 90);
+    CHECK(keys.keys[24] == 80);
+}
+
+TEST_CASE("PS3 Pro Guitar frets, strings and colors reach RB3's guitar poll") {
+    // low E 3, A 5, D 7, G 12, B open, high E 22, solo; low E, A and high E
+    // sounding; green and blue flags
+    const Report report = Report()
+                              .Buttons(kCircle | kStartPs3)
+                              .Byte(5, 0xA3)
+                              .Byte(6, 0x1C)
+                              .Byte(7, 0x0C)
+                              .Byte(8, 0xD8)
+                              .Byte(9, 0x80 | 64)
+                              .Byte(10, 50)
+                              .Byte(11, 0)
+                              .Byte(12, 0x80)
+                              .Byte(13, 0)
+                              .Byte(14, 100);
+    const Gamepad360 g = Translate(HidInstrumentType::kPs3Mustang, report);
+    CHECK(g.buttons == (kB | kStart));
+
+    const ProGuitarRead read = ReadProGuitar(EncodeProData(g));
+    CHECK(read.fret == std::array<int, 6>{22, 0, 12, 7, 5, 3});
+    CHECK(read.velocity == std::array<int, 6>{100, 0, 0, 0, 50, 64});
+    CHECK(read.fret_down == std::array<bool, 5>{true, false, false, true, false});
+    CHECK(read.solo);
+
+    ProGuitarInputs in;
+    in.frets = {3, 5, 7, 12, 0, 22};
+    in.velocities = {64, 50, 0, 0, 0, 100};
+    in.colors = {true, false, false, true, false};
+    in.solo = true;
+    Gamepad360 encoded = EncodeProGuitar(in);
+    encoded.buttons = g.buttons;
+    CHECK(g == encoded);
+}
+
+TEST_CASE("PS3 RB3 instruments report as the matching 360 models") {
+    const Caps360 keys = HidInstrumentCaps(HidInstrumentType::kPs3Keys);
+    CHECK(keys.sub_type == kSubtypeKeytar);
+    CHECK(SeesKeytar(keys));
+    CHECK(HidInstrumentCaps(HidInstrumentType::kPs3Mustang) ==
+          ProGuitarCaps(ProGuitarModel::kMustang));
+    CHECK(HidInstrumentCaps(HidInstrumentType::kPs3Squier) ==
+          ProGuitarCaps(ProGuitarModel::kSquier));
+}
+
+TEST_CASE("the PS3 enable report is PlasticBand's 40 bytes in five reports") {
+    const uint8_t expected[40] = {
+        0xE9, 0x00, 0x89, 0x1B, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x89, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xE9, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+    std::vector<uint8_t> joined;
+    for (const auto& report : Ps3ProEnableReports()) {
+        CHECK(report[0] == 0);  // report ID
+        joined.insert(joined.end(), report.begin() + 1, report.end());
+    }
+    CHECK(joined == std::vector<uint8_t>(std::begin(expected), std::end(expected)));
+}
+
+TEST_CASE("a short PS3 keyboard report is dropped") {
+    HidInstrumentTranslator t(HidInstrumentType::kPs3Keys);
+    const std::array<uint8_t, 10> short_report{};
+    CHECK_FALSE(t.Translate(short_report).has_value());
+}

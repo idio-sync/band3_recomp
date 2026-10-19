@@ -16,6 +16,9 @@ enum class HidInstrumentType {
     kPs3Guitar,     // PS3 and Wii guitars
     kPs3DrumsRb1,   // RB1 PS3 and Wii kits: no pad/cymbal flags, no velocity
     kPs3Drums,      // RB2-and-later PS3 and Wii kits, the MIDI Pro Adapter in drum mode
+    kPs3Keys,       // the PS3 and Wii RB3 keyboard, the MIDI Pro Adapter in keys mode
+    kPs3Mustang,    // the PS3 and Wii Mustang, the MIDI Pro Adapter in Mustang mode
+    kPs3Squier,     // the MIDI Pro Adapter in Squier mode (the Squier has no USB)
     kPs4Guitar,     // PS4 guitars, and the Riffmaster and CRKD SG in PS4 mode
     kPs5Guitar,     // the Riffmaster and CRKD SG in PS5 mode
     kPs4Drums,
@@ -45,6 +48,10 @@ std::optional<HidInstrumentType> IdentifyGipInstrument(uint16_t vendor, uint16_t
 // either of the above: the HID ids and the Xbox One ids don't overlap
 std::optional<HidInstrumentType> IdentifyInstrument(uint16_t vendor, uint16_t product,
                                                     uint16_t release);
+
+// whether the device needs Ps3ProEnableReports before it sends its keys or
+// frets: the PS3 keyboards, Pro Guitars and MIDI Pro Adapters in those modes
+bool NeedsPs3ProEnable(uint16_t vendor, HidInstrumentType type);
 
 // for the Instrument Lab, e.g. "a PS4 guitar"
 const char* HidInstrumentTypeLabel(HidInstrumentType type);
